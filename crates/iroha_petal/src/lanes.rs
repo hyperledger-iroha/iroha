@@ -1,13 +1,14 @@
 //! Lane codecs: bytes ⇄ transmitted cell states.
 //!
-//! A frame carries five lanes. Each lane is exactly one Reed–Solomon
-//! codeword, XOR-whitened with a fixed pseudo-random sequence so the picture
-//! is statistically balanced whatever the payload is:
+//! A frame carries five lanes, and four turn lanes on top of the field lanes (see
+//! [`crate::turns`]). Each lane is exactly one Reed–Solomon codeword, XOR-whitened with a fixed
+//! pseudo-random sequence so the picture is statistically balanced whatever the payload is:
 //!
 //! | lane | cells | codeword | data | parity |
 //! |------|-------|----------|------|--------|
 //! | `D` dots | 240 ring slots × 1 bit | 30 B | 19 B | 11 B |
 //! | `F0`–`F3` petals | 840 field cells of one sector × 1 bit | 105 B | 83 B | 22 B |
+//! | `T0`–`T3` turns | 360 lit petals of one sector × 2 bits | 90 B | 68 B | 22 B |
 //!
 //! Bit order is most-significant-bit first.
 
@@ -16,6 +17,7 @@ use crate::layout::{
 };
 use crate::prng::Xorshift32;
 use crate::rs::{ReedSolomon, RsError};
+use crate::turns::{TURN_WORD, carrier_order, carrier_position, carriers, turn_label};
 
 /// Length of an atom in bytes.
 pub const ATOM_LEN: usize = 16;
@@ -187,10 +189,14 @@ pub struct FrameCells {
     pub dots: [bool; TOTAL_SLOTS],
     /// Lit state of every field cell (spare cells are dark).
     pub petals: [bool; FIELD_CELLS],
+    /// Turn position (0–3, see [`crate::turns::turn_angle`]) of every field cell: zero for dark
+    /// petals and for lit petals that carry no turn bits.
+    pub turns: [u8; FIELD_CELLS],
 }
 
 impl FrameCells {
-    /// Builds the cells from the transmitted codewords of lane `D` and the four field lanes.
+    /// Builds the cells from the transmitted codewords of lane `D` and the four field lanes, with
+    /// every petal unturned (see [`Self::set_turns`]).
     ///
     /// # Panics
     /// Panics when a codeword has the wrong length.
@@ -214,7 +220,43 @@ impl FrameCells {
                 petals[cell] = word[bit / 8] >> (7 - bit % 8) & 1 == 1;
             }
         }
-        Self { dots, petals }
+        Self {
+            dots,
+            petals,
+            turns: [0; FIELD_CELLS],
+        }
+    }
+
+    /// Turns the carriers of every sector to show its transmitted turn codeword (see
+    /// [`crate::turns`]); a sector with too few lit petals stays unturned.
+    ///
+    /// # Panics
+    /// Panics when a codeword has the wrong length.
+    pub fn set_turns(&mut self, words: [&[u8]; SECTORS]) {
+        for (sector, word) in words.into_iter().enumerate() {
+            assert_eq!(word.len(), TURN_WORD);
+            for &cell in carrier_order(sector) {
+                self.turns[cell] = 0;
+            }
+            let Some(chosen) = carriers(&self.petals, sector) else {
+                continue;
+            };
+            for (index, cell) in chosen.into_iter().enumerate() {
+                self.turns[cell] = carrier_position(word, index);
+            }
+        }
+    }
+
+    /// Packs the turns of the carriers of sector `sector` into its turn codeword, or `None` when
+    /// the sector has too few lit petals to carry one.
+    #[must_use]
+    pub fn turn_word(&self, sector: usize) -> Option<[u8; TURN_WORD]> {
+        let chosen = carriers(&self.petals, sector)?;
+        let mut word = [0u8; TURN_WORD];
+        for (index, cell) in chosen.into_iter().enumerate() {
+            word[index / 4] |= turn_label(self.turns[cell]) << (6 - 2 * (index % 4));
+        }
+        Some(word)
     }
 
     /// Packs the data dots into a lane `D` codeword.

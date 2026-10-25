@@ -12,6 +12,11 @@
 //! the last [`MERGE_WINDOW`] shown frames. From the second such capture on, it
 //! merges them ([`merge_fields`]) and offers a recovered lane only when that
 //! lane's own header names the same frame.
+//!
+//! Every field lane a capture decodes also lets the session read the turn lane
+//! on top of it ([`read_turns`]). A turn lane is read once per shown frame: the
+//! session remembers the last [`TURN_MEMORY`] it read and does not look at those
+//! petals again.
 
 use std::collections::VecDeque;
 
@@ -25,6 +30,7 @@ use crate::layout::SECTORS;
 use crate::stream::{
     AssemblerLimits, Completed, LaneHeader, Progress, StreamAssembler, parse_atom_lane,
 };
+use crate::turns::{read_turns, turn_packet};
 
 /// How long a decoded pose stays usable for tracking the next frames.
 pub const TRACK_WINDOW_MS: u64 = 500;
@@ -32,6 +38,8 @@ pub const TRACK_WINDOW_MS: u64 = 500;
 pub const MERGE_WINDOW: usize = 6;
 /// Captures held per shown frame; a further capture replaces the oldest.
 pub const MERGE_CAPTURES: usize = 4;
+/// Turn lanes remembered as read (the four of each of the last [`MERGE_WINDOW`] shown frames).
+pub const TURN_MEMORY: usize = MERGE_WINDOW * SECTORS;
 
 /// Limits of a scan session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -78,6 +86,8 @@ pub struct ScanStats {
     pub merges: u32,
     /// Field lanes recovered by merging captures.
     pub merged_lanes: u32,
+    /// Turn lanes read (each at most once per shown frame).
+    pub turn_lanes: u32,
 }
 
 /// The result of offering one camera frame.
@@ -92,6 +102,9 @@ pub struct ScanOutcome {
     /// Field lanes recovered by merging this capture with earlier captures of its
     /// shown frame, as sector digits.
     pub merged: String,
+    /// Turn lanes read from this capture, as the sector digits of the field lanes
+    /// they ride on.
+    pub turned: String,
     /// Receive progress after this frame.
     pub progress: Progress,
     /// The finished payload, delivered exactly once.
@@ -143,6 +156,7 @@ pub struct ScanSession {
     last_rank: usize,
     last_pose: Option<(DecodedFrame, u64)>,
     held: VecDeque<Held>,
+    turned: VecDeque<(LaneHeader, u8)>,
 }
 
 impl ScanSession {
@@ -158,6 +172,7 @@ impl ScanSession {
             last_rank: 0,
             last_pose: None,
             held: VecDeque::new(),
+            turned: VecDeque::new(),
         }
     }
 
@@ -180,6 +195,7 @@ impl ScanSession {
         self.last_rank = 0;
         self.last_pose = None;
         self.held.clear();
+        self.turned.clear();
     }
 
     /// Offers one camera luma plane captured at monotonic time `now_ms`.
@@ -202,16 +218,17 @@ impl ScanSession {
         let result = tracked
             .ok_or(())
             .or_else(|()| decode(image, &self.limits.decode));
-        let (error, lanes, merged) = match &result {
+        let (error, lanes, merged, turned) = match &result {
             Ok(frame) => {
                 if frame.inferred_corner.is_some() {
                     self.stats.inferred += 1;
                 }
                 self.last_pose = Some((frame.clone(), now_ms));
                 let lanes = self.absorb(frame, now_ms);
-                (None, lanes, self.merge(image, frame))
+                let merged = self.merge(image, frame);
+                (None, lanes, merged, self.turn(image, frame))
             }
-            Err(error) => (Some(*error), String::new(), String::new()),
+            Err(error) => (Some(*error), String::new(), String::new(), String::new()),
         };
         if !matches!(
             error,
@@ -230,6 +247,7 @@ impl ScanSession {
             error,
             lanes,
             merged,
+            turned,
             progress,
             completed: self.assembler.take_completed(),
         }
@@ -246,8 +264,43 @@ impl ScanSession {
         frame.feed(&mut self.assembler);
         if previous_meta.is_some() && self.assembler.progress().meta != previous_meta {
             self.held.clear();
+            self.turned.clear();
         }
         lanes
+    }
+
+    /// Reads the turn lanes on top of the field lanes this capture decoded, except those already
+    /// read for their shown frame, and offers their atoms.
+    fn turn(&mut self, image: &Luma, frame: &DecodedFrame) -> String {
+        let mut skip = [true; SECTORS];
+        let mut headers = [None; SECTORS];
+        for (sector, field) in frame.fields.iter().enumerate() {
+            let Some(header) = field.as_ref().and_then(|f| lane_header(&f.data)) else {
+                continue;
+            };
+            headers[sector] = Some(header);
+            skip[sector] = self.turned.contains(&(header, sector as u8));
+        }
+        if skip.iter().all(|s| *s) {
+            return String::new();
+        }
+        let mut turned = String::new();
+        for (sector, result) in read_turns(image, frame, skip).into_iter().enumerate() {
+            let (Some(result), Some(header)) = (result, headers[sector]) else {
+                continue;
+            };
+            let Some(packet) = turn_packet(header, sector as u8, &result.data) else {
+                continue;
+            };
+            self.assembler.push_atoms(&packet);
+            if self.turned.len() == TURN_MEMORY {
+                self.turned.pop_front();
+            }
+            self.turned.push_back((header, sector as u8));
+            self.stats.turn_lanes += 1;
+            turned.push(Lane::Field(sector as u8).letter());
+        }
+        turned
     }
 
     /// Holds this capture's field evidence under its shown frame and, from the second
@@ -401,8 +454,35 @@ mod tests {
         assert_eq!(done.meta.kind, 2);
         let stats = session.stats();
         assert!(stats.readable > 0 && stats.lane_d > 0 && stats.field_lanes > 0);
-        // 5,000 bytes need 313 atoms: a clean camera reads them in 15 or 16 frames
-        assert!(stats.frames <= 17, "{stats:?}");
+        assert!(stats.turn_lanes > 0, "{stats:?}");
+        // 5,000 bytes need 313 atoms: the field lanes and lane D alone carry them in 15 or 16
+        // frames, the turn lanes on top in 9 or 10
+        assert!(stats.frames <= 11, "{stats:?}");
+    }
+
+    #[test]
+    fn a_turn_lane_is_read_once_per_shown_frame() {
+        let encoder = StreamEncoder::new(&payload(3000), 2).unwrap();
+        let config = camera(12.0);
+        let mut session = ScanSession::new(ScanLimits::default());
+        let shown = source(&encoder.cells(5));
+        let first = session.push(&capture(&shown, &CaptureConfig { seed: 1, ..config }), 0);
+        assert_eq!(first.lanes, "D0123");
+        assert_eq!(first.turned, "0123");
+        let again = session.push(&capture(&shown, &CaptureConfig { seed: 2, ..config }), 33);
+        assert_eq!((again.lanes.as_str(), again.turned.as_str()), ("D0123", ""));
+        assert_eq!(session.stats().turn_lanes, 4);
+        // the next shown frame's turn lanes are new
+        let next = session.push(
+            &capture(
+                &source(&encoder.cells(6)),
+                &CaptureConfig { seed: 3, ..config },
+            ),
+            83,
+        );
+        assert_eq!(next.turned, "0123");
+        session.reset();
+        assert!(session.turned.is_empty());
     }
 
     #[test]

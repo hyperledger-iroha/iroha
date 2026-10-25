@@ -1,8 +1,8 @@
-//! Writes the cross-SDK golden camera captures to `fixtures/petal/petal_captures_v2.json`.
+//! Writes the cross-SDK golden camera captures to `fixtures/petal/petal_captures_v3.json`.
 //!
 //! Each capture is a degraded 8-bit luma plane (zlib + base64) of one frame of
-//! the `one-pass` stream in `petal_stream_v2.json`, together with the decode
-//! result every conforming decoder must reach. Merge sets are several captures
+//! the `one-pass` stream in `petal_stream_v3.json`, together with the decode
+//! result every conforming decoder must reach, turn lanes included. Merge sets are several captures
 //! of one shown frame whose merge recovers field lanes none of them reads alone;
 //! the mixed set shows the rings of one frame over the petal field of the next, so
 //! a merge reads the other frame's lanes and a session must refuse them.
@@ -31,6 +31,7 @@ use iroha_petal::render::{RenderOptions, render};
 use iroha_petal::session::{ScanLimits, ScanSession};
 use iroha_petal::sim::{CaptureConfig, capture, fit_to_frame};
 use iroha_petal::stream::{LaneData, StreamEncoder};
+use iroha_petal::turns::{observed_turns, read_turns};
 
 const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
@@ -85,6 +86,8 @@ struct Case {
     barrel: Option<f64>,
     /// Lanes every conforming decoder must read (`D` and the sector digits).
     must: &'static str,
+    /// Turn lanes every conforming reader must read (sector digits).
+    must_turn: &'static str,
     note: &'static str,
 }
 
@@ -223,6 +226,7 @@ fn shoot_set(encoder: &StreamEncoder, set: &MergeSet) -> Vec<Luma> {
     let cells = FrameCells {
         dots: rings.dots,
         petals: field.petals,
+        turns: field.turns,
     };
     let source = render(
         &cells,
@@ -256,15 +260,63 @@ fn lanes(name: &str, frame: &DecodedFrame, truth: &LaneData) -> String {
 
 /// The `field_data` JSON array of a frame's truth.
 fn field_hex(truth: &LaneData) -> String {
+    hex_list(&truth.fields)
+}
+
+/// A JSON array of hex strings.
+fn hex_list(items: &[Vec<u8>]) -> String {
     format!(
         "[{}]",
-        truth
-            .fields
+        items
             .iter()
             .map(|f| format!("\"{}\"", hex(f)))
             .collect::<Vec<_>>()
             .join(", ")
     )
+}
+
+/// The turn lanes `frame` reads from `luma`, checked against `truth`, as sector digits, and a
+/// report of every decoded sector's turn errors (against the drawn turns) and corrections.
+fn turned(
+    name: &str,
+    luma: &Luma,
+    frame: &DecodedFrame,
+    truth: &LaneData,
+    cells: &FrameCells,
+) -> (String, String) {
+    let results = read_turns(luma, frame, [false; SECTORS]);
+    let mut letters = String::new();
+    for (sector, result) in results.iter().enumerate() {
+        if let Some(result) = result {
+            assert_eq!(
+                result.data, truth.turns[sector],
+                "{name}: turn lane {sector} decoded to wrong data"
+            );
+            letters.push(Lane::Field(u8::try_from(sector).expect("sector")).letter());
+        }
+    }
+    let Some(observed) = observed_turns(luma, frame) else {
+        return (letters, String::from("no carriers"));
+    };
+    let mut report = format!("blur {:.1}:", observed.blur);
+    let mut start = 0;
+    for (sector, field) in frame.fields.iter().enumerate() {
+        if field.is_none() {
+            continue;
+        }
+        let carriers = &observed.carriers[start..start + 360];
+        start += 360;
+        let errors = carriers
+            .iter()
+            .filter(|&&(cell, position, _)| cells.turns[cell] != position)
+            .count();
+        let fixed = results[sector].as_ref().map_or_else(
+            || "-".to_owned(),
+            |r| format!("{}e{}", r.corrected, r.erasures),
+        );
+        let _ = write!(report, " {sector}:{errors}err/{fixed}");
+    }
+    (letters, report)
 }
 
 /// Warps a capture with barrel distortion about the image centre, as a cheap lens does:
@@ -303,7 +355,7 @@ fn zlib64(luma: &Luma) -> String {
 
 fn main() {
     let path = std::env::args().nth(1).expect("output path");
-    // the stream every capture displays: identical to `one-pass` in petal_stream_v2.json
+    // the stream every capture displays: identical to `one-pass` in petal_stream_v3.json
     let mut rng = iroha_petal::prng::Xorshift32::new(2);
     let payload: Vec<u8> = (0..3000).map(|_| rng.next_byte()).collect();
     let encoder = StreamEncoder::new(&payload, 2).expect("stream");
@@ -323,6 +375,7 @@ fn main() {
             fit: true,
             barrel: None,
             must: "D0123",
+            must_turn: "0123",
             note: "ideal render, no camera",
         },
         Case {
@@ -343,6 +396,7 @@ fn main() {
             fit: true,
             barrel: None,
             must: "D0123",
+            must_turn: "0123",
             note: "sharp 720p, 37 degree rotation, mild tilt",
         },
         Case {
@@ -363,6 +417,7 @@ fn main() {
             fit: true,
             barrel: None,
             must: "D0123",
+            must_turn: "",
             note: "older phone: soft, noisy, barrel distortion, glare gradient",
         },
         Case {
@@ -386,6 +441,7 @@ fn main() {
             fit: true,
             barrel: None,
             must: "D",
+            must_turn: "",
             note: "out of focus 480p; a field lane must not be reported unless correct",
         },
         Case {
@@ -407,6 +463,7 @@ fn main() {
             fit: true,
             barrel: None,
             must: "D0123",
+            must_turn: "",
             note: "low-end preview resolution and soft focus",
         },
         Case {
@@ -425,6 +482,7 @@ fn main() {
             fit: true,
             barrel: None,
             must: "D0123",
+            must_turn: "0123",
             note: "horizontally mirrored preview (front camera)",
         },
         Case {
@@ -446,6 +504,7 @@ fn main() {
             fit: true,
             barrel: None,
             must: "D0123",
+            must_turn: "",
             note: "auto-exposure blows the petals out three-fold",
         },
         Case {
@@ -463,6 +522,7 @@ fn main() {
             fit: true,
             barrel: None,
             must: "D0123",
+            must_turn: "",
             note: "older phone in a bright room: reflections lift the black level by half the lit level",
         },
         Case {
@@ -480,6 +540,7 @@ fn main() {
             fit: true,
             barrel: None,
             must: "023",
+            must_turn: "012",
             note: "a band across the middle of the code in shadow (40 % light); finder levels cannot describe it, the local read does",
         },
         Case {
@@ -499,6 +560,7 @@ fn main() {
             fit: true,
             barrel: None,
             must: "D0123",
+            must_turn: "0123",
             note: "a thumb covers the bottom-left blossom; the fourth corner is inferred from the other three",
         },
         Case {
@@ -517,6 +579,7 @@ fn main() {
             fit: false,
             barrel: None,
             must: "D0123",
+            must_turn: "0123",
             note: "held too close: one corner of the code is outside the frame and is inferred",
         },
         Case {
@@ -539,6 +602,7 @@ fn main() {
             fit: true,
             barrel: Some(-0.2),
             must: "D0123",
+            must_turn: "",
             note: "a cheap wide lens: strong barrel distortion moves the outer petals off a plain pose; the decoder finds the distortion",
         },
     ];
@@ -577,12 +641,23 @@ fn main() {
             },
         );
         let distortion = decoded.as_ref().map_or(0.0, |f| f.pose.distortion);
+        let (turns, turn_report) = decoded.as_ref().map_or_else(
+            |_| (String::new(), String::from("-")),
+            |f| turned(case.name, &luma, f, &truth, &encoder.cells(case.frame)),
+        );
+        for required in case.must_turn.chars() {
+            assert!(
+                turns.contains(required),
+                "{}: reference reader lost required turn lane {required} (got {turns:?})",
+                case.name
+            );
+        }
         println!(
-            "{:<24} reference decoder reads lanes {flags:?} inferred {inferred:?} distortion {distortion:.3} (corrected/erased {margins})",
+            "{:<24} reference decoder reads lanes {flags:?} turns {turns:?} inferred {inferred:?} distortion {distortion:.3} (corrected/erased {margins}) (turns {turn_report})",
             case.name
         );
         entries.push(format!(
-            "    {{\n      \"name\": \"{}\", \"note\": \"{}\", \"stream\": \"one-pass\", \"frame\": {}, \"width\": {}, \"height\": {}, \"mirrored\": {},\n      \"must_decode\": \"{}\", \"reference_decoded\": \"{flags}\", \"inferred_corner\": {},\n      \"d_data\": \"{}\", \"field_data\": {},\n      \"luma_zlib_base64\": \"{}\"\n    }}",
+            "    {{\n      \"name\": \"{}\", \"note\": \"{}\", \"stream\": \"one-pass\", \"frame\": {}, \"width\": {}, \"height\": {}, \"mirrored\": {},\n      \"must_decode\": \"{}\", \"reference_decoded\": \"{flags}\", \"must_turn\": \"{}\", \"reference_turned\": \"{turns}\", \"inferred_corner\": {},\n      \"d_data\": \"{}\", \"field_data\": {}, \"turn_data\": {},\n      \"luma_zlib_base64\": \"{}\"\n    }}",
             case.name,
             case.note,
             case.frame,
@@ -590,9 +665,11 @@ fn main() {
             luma.height,
             case.mirrored,
             case.must,
+            case.must_turn,
             inferred.map_or_else(|| "null".to_string(), |c| c.to_string()),
             hex(&truth.d),
             field_hex(&truth),
+            hex_list(&truth.turns),
             zlib64(&luma)
         ));
     }
@@ -619,6 +696,7 @@ fn main() {
                 fit: true,
                 barrel: None,
                 must: "",
+                must_turn: "",
                 note: "",
             },
             Case {
@@ -636,6 +714,7 @@ fn main() {
                 fit: true,
                 barrel: None,
                 must: "",
+                must_turn: "",
                 note: "",
             },
             "D0123",
@@ -655,6 +734,7 @@ fn main() {
                 fit: true,
                 barrel: None,
                 must: "",
+                must_turn: "",
                 note: "",
             },
             Case {
@@ -671,6 +751,7 @@ fn main() {
                 fit: true,
                 barrel: None,
                 must: "",
+                must_turn: "",
                 note: "",
             },
             "D0123",
@@ -691,25 +772,34 @@ fn main() {
                 "{name}: tracking lost lane {required}"
             );
         }
+        let (turns, turn_report) = turned(name, &to, &followed, &truth, &encoder.cells(*frame + 1));
+        for required in must.chars().filter(char::is_ascii_digit) {
+            assert!(
+                turns.contains(required),
+                "{name}: tracking lost turn lane {required} (got {turns:?})"
+            );
+        }
         assert_eq!(
             followed.inferred_corner, *inferred,
             "{name}: inferred corner"
         );
         println!(
-            "{name:<24} tracking reads lanes {flags:?} inferred {:?}",
+            "{name:<24} tracking reads lanes {flags:?} turns {turns:?} inferred {:?} (turns {turn_report})",
             followed.inferred_corner
         );
         tracks.push(format!(
-            "    {{\n      \"name\": \"{name}\", \"note\": \"{note}\", \"stream\": \"one-pass\", \"from_frame\": {}, \"to_frame\": {}, \"width\": {}, \"height\": {},\n      \"must_track\": \"{must}\", \"reference_tracked\": \"{flags}\", \"inferred_corner\": {},\n      \"d_data\": \"{}\", \"field_data\": {},\n      \"from_luma_zlib_base64\": \"{}\",\n      \"to_luma_zlib_base64\": \"{}\"\n    }}",
+            "    {{\n      \"name\": \"{name}\", \"note\": \"{note}\", \"stream\": \"one-pass\", \"from_frame\": {}, \"to_frame\": {}, \"width\": {}, \"height\": {},\n      \"must_track\": \"{must}\", \"reference_tracked\": \"{flags}\", \"must_turn\": \"{}\", \"reference_turned\": \"{turns}\", \"inferred_corner\": {},\n      \"d_data\": \"{}\", \"field_data\": {}, \"turn_data\": {},\n      \"from_luma_zlib_base64\": \"{}\",\n      \"to_luma_zlib_base64\": \"{}\"\n    }}",
             frame,
             frame + 1,
             to.width,
             to.height,
+            must.chars().filter(char::is_ascii_digit).collect::<String>(),
             followed
                 .inferred_corner
                 .map_or_else(|| "null".to_string(), |c| c.to_string()),
             hex(&truth.d),
             field_hex(&truth),
+            hex_list(&truth.turns),
             zlib64(&from),
             zlib64(&to)
         ));
@@ -726,6 +816,7 @@ fn main() {
         let truth = LaneData {
             d: rings.d.clone(),
             fields: field.fields.clone(),
+            turns: field.turns.clone(),
         };
         let mut session = ScanSession::new(ScanLimits::default());
         let mut evidence = Vec::new();
@@ -858,7 +949,7 @@ fn main() {
         ));
     }
     let out = format!(
-        "{{\n  \"fixture_version\": 2,\n  \"format\": \"petal-captures-v2\",\n  \"payload_hex\": \"{}\",\n  \"payload_kind\": 2,\n  \"captures\": [\n{}\n  ],\n  \"tracks\": [\n{}\n  ],\n  \"merges\": [\n{}\n  ],\n  \"mixed_merges\": [\n{}\n  ],\n  \"negatives\": [\n{}\n  ]\n}}\n",
+        "{{\n  \"fixture_version\": 3,\n  \"format\": \"petal-captures-v3\",\n  \"payload_hex\": \"{}\",\n  \"payload_kind\": 2,\n  \"captures\": [\n{}\n  ],\n  \"tracks\": [\n{}\n  ],\n  \"merges\": [\n{}\n  ],\n  \"mixed_merges\": [\n{}\n  ],\n  \"negatives\": [\n{}\n  ]\n}}\n",
         hex(&payload),
         entries.join(",\n"),
         tracks.join(",\n"),

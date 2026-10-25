@@ -1,6 +1,7 @@
 //! Single-threaded decode cost of the reference decoder: a full search, a tracked read of the
-//! next frame, and a merge of three captures of one shown frame, for 720p (a modern and a legacy
-//! camera), 1080p and 480p captures and for a frame whose corner blossom a thumb covers.
+//! next frame, the turn lanes of a decoded frame, and a merge of three captures of one shown frame,
+//! for 720p (a modern and a legacy camera), 1080p and 480p captures and for a frame whose corner
+//! blossom a thumb covers.
 //!
 //! `cargo run --release -p iroha_petal --example decode_cost`
 //!
@@ -20,6 +21,7 @@ use iroha_petal::layout::{FINDER_CENTERS, SECTORS};
 use iroha_petal::render::{RenderOptions, render};
 use iroha_petal::sim::{CaptureConfig, capture, fit_to_frame};
 use iroha_petal::stream::StreamEncoder;
+use iroha_petal::turns::read_turns;
 
 /// Side of the rendered source frames in pixels.
 const SIZE: usize = 768;
@@ -109,11 +111,12 @@ fn main() {
         ("modern 720p, thumb over a blossom", modern_720p, true),
     ];
     println!(
-        "{:<34} {:>24} {:>24} {:>24}",
-        "capture", "full search", "tracked", "merge of 3 captures"
+        "{:<34} {:>24} {:>24} {:>24} {:>24}",
+        "capture", "full search", "tracked", "turn lanes", "merge of 3 captures"
     );
     for (name, base, covered) in cases {
-        let (mut full, mut tracked, mut merged) = (Vec::new(), Vec::new(), Vec::new());
+        let (mut full, mut tracked, mut turned, mut merged) =
+            (Vec::new(), Vec::new(), Vec::new(), Vec::new());
         let (now, next) = (shown(5, covered), shown(6, covered));
         for pose in 0..6u32 {
             let config = fit_to_frame(
@@ -154,6 +157,9 @@ fn main() {
                     "{name}: tracked {}",
                     followed.letters()
                 );
+                timed(&mut turned, || {
+                    read_turns(&this_frame, &first, [false; SECTORS])
+                });
                 timed(&mut merged, || {
                     let evidence: Vec<_> = repeats
                         .iter()
@@ -167,9 +173,10 @@ fn main() {
             }
         }
         println!(
-            "{name:<34} {:>24} {:>24} {:>24}",
+            "{name:<34} {:>24} {:>24} {:>24} {:>24}",
             summary(full),
             summary(tracked),
+            summary(turned),
             summary(merged)
         );
     }

@@ -1,8 +1,9 @@
-//! Decodes the golden camera captures in `fixtures/petal/petal_captures_v2.json`.
+//! Decodes the golden camera captures in `fixtures/petal/petal_captures_v3.json`.
 //!
-//! Every conforming decoder must read the lanes named in `must_decode`, must
-//! never report wrong data for any lane, must report the recorded inferred
-//! corner, must follow each tracking pair from its first frame into its second,
+//! Every conforming decoder must read the lanes named in `must_decode` and the
+//! turn lanes named in `must_turn`, must never report wrong data for any lane,
+//! must report the recorded inferred corner, must follow each tracking pair from
+//! its first frame into its second,
 //! must recover the `must_merge` field lanes of every merge set from the merge of
 //! its captures, must never let a session offer a lane of a mixed set, and must
 //! reject the negatives. The reference decoder reproduces every recorded result.
@@ -19,7 +20,8 @@ use iroha_petal::image::Luma;
 use iroha_petal::lanes::{Lane, decode_lane, encode_lane};
 use iroha_petal::layout::SECTORS;
 use iroha_petal::session::{ScanLimits, ScanSession, ScanStats};
-use iroha_petal::stream::{AssemblerLimits, StreamAssembler};
+use iroha_petal::stream::{AssemblerLimits, LaneHeader, StreamAssembler};
+use iroha_petal::turns::{read_turns, turn_packet};
 use norito::json::{self, Value};
 
 fn base64_decode(text: &str) -> Vec<u8> {
@@ -68,7 +70,7 @@ fn luma_at(entry: &Value, key: &str) -> Luma {
 
 fn load() -> Value {
     let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    path.push("../../fixtures/petal/petal_captures_v2.json");
+    path.push("../../fixtures/petal/petal_captures_v3.json");
     json::from_str(&std::fs::read_to_string(path).expect("fixture file")).expect("fixture json")
 }
 
@@ -111,6 +113,63 @@ fn text<'a>(entry: &'a Value, key: &str) -> &'a str {
     entry.get(key).and_then(Value::as_str).expect(key)
 }
 
+/// Reads the turn lanes of a decoded capture, checks them against the recorded data and the
+/// requirements, and returns their sector digits; their atoms go to `assembler` when given.
+fn read_turn_lanes(
+    name: &str,
+    image: &Luma,
+    frame: &DecodedFrame,
+    entry: &Value,
+    assembler: Option<&mut StreamAssembler>,
+) -> String {
+    let expected: Vec<Vec<u8>> = entry
+        .get("turn_data")
+        .and_then(Value::as_array)
+        .expect("turn data")
+        .iter()
+        .map(|data| hex::decode(data.as_str().expect("hex")).expect("hex"))
+        .collect();
+    let mut letters = String::new();
+    let mut packets = Vec::new();
+    for (sector, result) in read_turns(image, frame, [false; SECTORS])
+        .iter()
+        .enumerate()
+    {
+        let Some(result) = result else {
+            continue;
+        };
+        assert_eq!(
+            result.data, expected[sector],
+            "{name}: turn lane {sector} data"
+        );
+        let field = &frame.fields[sector]
+            .as_ref()
+            .expect("a turn lane rides on its field lane");
+        let header = LaneHeader {
+            tag: field.data[0],
+            frame: u16::from_be_bytes([field.data[1], field.data[2]]),
+        };
+        packets.push(turn_packet(header, sector as u8, &result.data).expect("turn check"));
+        letters.push(Lane::Field(sector as u8).letter());
+    }
+    if let Some(assembler) = assembler {
+        for packet in &packets {
+            assembler.push_atoms(packet);
+        }
+    }
+    let must = text(entry, "must_turn");
+    assert!(
+        must.chars().all(|letter| letters.contains(letter)),
+        "{name}: turned {letters:?}, must turn {must:?}"
+    );
+    assert_eq!(
+        letters,
+        text(entry, "reference_turned"),
+        "{name}: turn lanes read"
+    );
+    letters
+}
+
 #[test]
 fn golden_captures_decode_as_recorded() {
     let doc = load();
@@ -144,6 +203,7 @@ fn golden_captures_decode_as_recorded() {
             "{name}: inferred corner"
         );
         decoded.feed(&mut assembler);
+        read_turn_lanes(name, &image, &decoded, capture, Some(&mut assembler));
     }
     // captures of different frames of the same stream accumulate in one assembler
     assert!(assembler.progress().atoms_received > 100);
@@ -175,6 +235,13 @@ fn golden_tracks_follow_the_pose_into_the_next_frame() {
             followed.inferred_corner.map(u64::from),
             inferred,
             "{name}: inferred corner"
+        );
+        read_turn_lanes(
+            name,
+            &luma_at(pair, "to_luma_zlib_base64"),
+            &followed,
+            pair,
+            None,
         );
     }
 }

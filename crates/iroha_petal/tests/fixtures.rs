@@ -1,4 +1,4 @@
-//! Verifies `fixtures/petal/petal_stream_v2.json` against the reference codec.
+//! Verifies `fixtures/petal/petal_stream_v3.json` against the reference codec.
 //!
 //! The same file is the conformance suite of every SDK port; this test makes
 //! sure the file and the reference implementation cannot drift apart.
@@ -19,14 +19,19 @@ use iroha_petal::layout::{
 use iroha_petal::prng::Xorshift32;
 use iroha_petal::rs::ReedSolomon;
 use iroha_petal::stream::{
-    AssemblerLimits, FORMAT_VERSION, StreamAssembler, StreamEncoder, first_atom_id,
+    AssemblerLimits, FORMAT_VERSION, LaneHeader, StreamAssembler, StreamEncoder, first_atom_id,
     parse_atom_lane, parse_d_lane,
+};
+use iroha_petal::turns::{
+    TURN_ATOMS, TURN_BLURS, TURN_CARRIERS, TURN_ID_BASE, TURN_PARITY, TURN_POSITIONS, TURN_WORD,
+    carrier_order, decode_turn_lane_counted, encode_turn_lane, turn_first_id, turn_packet,
+    turn_template, turn_whitening,
 };
 use norito::json::{self, Value};
 
 fn fixture() -> Value {
     let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    path.push("../../fixtures/petal/petal_stream_v2.json");
+    path.push("../../fixtures/petal/petal_stream_v3.json");
     let text = std::fs::read_to_string(&path).expect("fixture file");
     json::from_str(&text).expect("fixture json")
 }
@@ -83,7 +88,7 @@ fn flags(bitmap: &[u8]) -> Vec<bool> {
 #[test]
 fn constants_and_layout_match() {
     let doc = fixture();
-    assert_eq!(number(&doc, "fixture_version"), 2);
+    assert_eq!(number(&doc, "fixture_version"), 3);
     let constants = field(&doc, "constants");
     assert_eq!(number(constants, "atom_len") as usize, ATOM_LEN);
     assert_eq!(number(constants, "d_parity") as usize, D_PARITY);
@@ -99,6 +104,16 @@ fn constants_and_layout_match() {
         number(constants, "format_version"),
         u64::from(FORMAT_VERSION)
     );
+    for (key, value) in [
+        ("turn_positions", TURN_POSITIONS),
+        ("turn_carriers", TURN_CARRIERS),
+        ("turn_word", TURN_WORD),
+        ("turn_parity", TURN_PARITY),
+        ("turn_atoms", TURN_ATOMS),
+    ] {
+        assert_eq!(number(constants, key) as usize, value, "{key}");
+    }
+    assert_eq!(number(constants, "turn_id_base"), u64::from(TURN_ID_BASE));
     let layout = field(&doc, "layout");
     let mask: Vec<&str> = array(layout, "mask")
         .iter()
@@ -115,6 +130,16 @@ fn constants_and_layout_match() {
         let expected: Vec<u64> = sector_cells(sector).iter().map(|&c| c as u64).collect();
         assert_eq!(
             numbers(cells.as_array().unwrap()),
+            expected,
+            "sector {sector}"
+        );
+    }
+    let orders = array(layout, "carrier_orders");
+    assert_eq!(orders.len(), SECTORS);
+    for (sector, order) in orders.iter().enumerate() {
+        let expected: Vec<u64> = carrier_order(sector).iter().map(|&c| c as u64).collect();
+        assert_eq!(
+            numbers(order.as_array().unwrap()),
             expected,
             "sector {sector}"
         );
@@ -164,6 +189,46 @@ fn checksums_prng_and_whitening_match() {
         assert_eq!(
             bytes(whitening, &format!("F{sector}")),
             Lane::Field(sector).whitening()
+        );
+        assert_eq!(
+            bytes(whitening, &format!("T{sector}")),
+            turn_whitening(sector)
+        );
+    }
+}
+
+#[test]
+fn turn_ids_and_reader_templates_match() {
+    let doc = fixture();
+    let ids = field(&doc, "turn_first_ids");
+    for ((frame, sector), id) in numbers(array(ids, "frames"))
+        .into_iter()
+        .zip(numbers(array(ids, "sectors")))
+        .zip(numbers(array(ids, "ids")))
+    {
+        assert_eq!(u64::from(turn_first_id(frame as u16, sector as u8)), id);
+    }
+    let reader = field(&doc, "turn_reader");
+    let blurs: Vec<f64> = array(reader, "blurs")
+        .iter()
+        .map(|v| v.as_f64().expect("blur"))
+        .collect();
+    assert_eq!(blurs, TURN_BLURS.to_vec());
+    let probes = array(reader, "template_probes");
+    assert_eq!(probes.len(), 6 * TURN_BLURS.len());
+    for probe in probes {
+        let value = |key: &str| field(probe, key).as_f64().expect(key);
+        let blur = TURN_BLURS
+            .iter()
+            .position(|&b| (b - value("blur")).abs() < 1e-12)
+            .expect("known blur");
+        let got = turn_template(blur, value("along"), value("across"));
+        assert!(
+            (got - value("value")).abs() < 1e-12,
+            "blur {} at ({}, {}): {got}",
+            value("blur"),
+            value("along"),
+            value("across")
         );
     }
 }
@@ -242,8 +307,25 @@ fn streams_encode_identically_and_reassemble() {
                 hex_list(frame, "field_data"),
                 "{name} frame {frame_no}"
             );
+            let turn_data = hex_list(frame, "turn_data");
+            assert_eq!(lanes.turns.to_vec(), turn_data, "{name} frame {frame_no}");
             let d_word = bytes(frame, "d_word");
             let field_words = hex_list(frame, "field_words");
+            let turn_words = hex_list(frame, "turn_words");
+            for (sector, word) in turn_words.iter().enumerate() {
+                assert_eq!(
+                    &encode_turn_lane(sector as u8, &turn_data[sector]),
+                    word,
+                    "{name} frame {frame_no} turn sector {sector}"
+                );
+                let header = LaneHeader {
+                    tag: meta.tag(),
+                    frame: frame_no,
+                };
+                let packet = turn_packet(header, sector as u8, &turn_data[sector])
+                    .unwrap_or_else(|| panic!("{name} frame {frame_no} turn check {sector}"));
+                assert_eq!(packet.first_id, turn_first_id(frame_no, sector as u8));
+            }
             assert_eq!(encode_lane(Lane::D, &lanes.d), d_word);
             for (sector, word) in field_words.iter().enumerate() {
                 assert_eq!(
@@ -252,7 +334,7 @@ fn streams_encode_identically_and_reassemble() {
                     "{name} frame {frame_no} sector {sector}"
                 );
             }
-            let cells = FrameCells::from_words(
+            let mut cells = FrameCells::from_words(
                 &d_word,
                 [
                     &field_words[0],
@@ -261,6 +343,14 @@ fn streams_encode_identically_and_reassemble() {
                     &field_words[3],
                 ],
             );
+            cells.set_turns([
+                &turn_words[0],
+                &turn_words[1],
+                &turn_words[2],
+                &turn_words[3],
+            ]);
+            let turns: String = cells.turns.iter().map(|t| char::from(b'0' + t)).collect();
+            assert_eq!(turns, text(frame, "turns"), "{name} frame {frame_no}");
             let lit: Vec<u64> = (0..cells.dots.len())
                 .filter(|&i| cells.dots[i])
                 .map(|i| i as u64)
@@ -273,22 +363,43 @@ fn streams_encode_identically_and_reassemble() {
             );
             assert_eq!(cells, encoder.cells(frame_no));
         }
-        // push every fixture frame through decode_lane + assembler
+        // push every fixture frame through decode_lane + assembler, with and without the turn
+        // lanes: the turn lanes finish the one-pass stream in fewer frames
         if name == "one-pass" {
-            let mut assembler = StreamAssembler::new(AssemblerLimits::default());
-            for frame in array(stream, "frames") {
-                let d = decode_lane(Lane::D, &bytes(frame, "d_word"), &[]).unwrap();
-                assembler.push_d_lane(&parse_d_lane(&d).unwrap());
-                for (sector, word) in hex_list(frame, "field_words").iter().enumerate() {
-                    let lane = Lane::Field(sector as u8);
-                    let data = decode_lane(lane, word, &[]).unwrap();
-                    assembler.push_atoms(&parse_atom_lane(lane, &data).unwrap());
+            let mut needed = [0usize; 2];
+            for (with_turns, needed) in [false, true].into_iter().zip(&mut needed) {
+                let mut assembler = StreamAssembler::new(AssemblerLimits::default());
+                for frame in array(stream, "frames") {
+                    *needed += 1;
+                    let d = decode_lane(Lane::D, &bytes(frame, "d_word"), &[]).unwrap();
+                    assembler.push_d_lane(&parse_d_lane(&d).unwrap());
+                    for (sector, word) in hex_list(frame, "field_words").iter().enumerate() {
+                        let lane = Lane::Field(sector as u8);
+                        let data = decode_lane(lane, word, &[]).unwrap();
+                        assembler.push_atoms(&parse_atom_lane(lane, &data).unwrap());
+                    }
+                    if with_turns {
+                        let header = LaneHeader {
+                            tag: meta.tag(),
+                            frame: number(frame, "frame") as u16,
+                        };
+                        for (sector, word) in hex_list(frame, "turn_words").iter().enumerate() {
+                            let (data, _) =
+                                decode_turn_lane_counted(sector as u8, word, &[]).unwrap();
+                            assembler
+                                .push_atoms(&turn_packet(header, sector as u8, &data).unwrap());
+                        }
+                    }
+                    if assembler.progress().complete {
+                        break;
+                    }
                 }
+                assert_eq!(
+                    assembler.take_completed().expect("complete").payload,
+                    payload
+                );
             }
-            assert_eq!(
-                assembler.take_completed().expect("complete").payload,
-                payload
-            );
+            assert!(needed[1] < needed[0], "{needed:?}");
         }
     }
 }

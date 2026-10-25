@@ -1014,7 +1014,8 @@ pub fn decode_at(image: &Luma, pose: Pose, options: &DecodeOptions) -> Option<De
 }
 
 /// Builds the cells a decoder believes it saw under `frame`'s pose, for diagnostics: every
-/// codeword thresholded as the first read of [`decode`] thresholds it (no local read).
+/// codeword thresholded as the first read of [`decode`] thresholds it (no local read). The petals
+/// are left unturned.
 #[must_use]
 pub fn observed_cells(
     image: &Luma,
@@ -1380,7 +1381,8 @@ mod tests {
         let options = DecodeOptions::default();
         let decoded = decode(&luma, &options).expect("decodes");
         let observed = observed_cells(&luma, &decoded, &options).expect("cells");
-        assert_eq!(observed, encoder.cells(3));
+        let drawn = encoder.cells(3);
+        assert_eq!((observed.dots, observed.petals), (drawn.dots, drawn.petals));
     }
 
     #[test]

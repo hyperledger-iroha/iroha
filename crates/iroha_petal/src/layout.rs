@@ -33,16 +33,18 @@ pub const FIELD_CELLS: usize = 3376;
 pub const SECTORS: usize = 4;
 /// Cells in each sector.
 pub const SECTOR_CELLS: usize = FIELD_CELLS / SECTORS;
-/// Radius of the disc a petal stands in for: decoders sample within it.
+/// Radius of the disc a petal stands in for: decoders sample within it, and no other petal,
+/// however it is turned, reaches into it.
 pub const PETAL_RADIUS: f32 = 4.6;
-/// Half the length of a drawn petal, along the outward radial direction.
-pub const PETAL_HALF_LENGTH: f32 = 5.2;
+/// Half the length of a drawn petal, along its axis (the outward radial direction, turned by the
+/// petal's turn, see [`crate::turns`]).
+pub const PETAL_HALF_LENGTH: f32 = 6.0;
 /// Half the width of a drawn petal.
-pub const PETAL_HALF_WIDTH: f32 = 4.3;
-/// Radius of the cosmetic notch cut into each petal tip.
-pub const PETAL_NOTCH_RADIUS: f32 = 1.3;
-/// Distance from a petal centre to its notch centre, outward.
-pub const PETAL_NOTCH_DISTANCE: f32 = 5.4;
+pub const PETAL_HALF_WIDTH: f32 = 3.73;
+/// Radius of the notch cut into each petal tip; it tells a petal from one turned by half a turn.
+pub const PETAL_NOTCH_RADIUS: f32 = 1.12;
+/// Distance from a petal centre to its notch centre, along its axis.
+pub const PETAL_NOTCH_DISTANCE: f32 = 6.24;
 
 const fn band_offsets() -> [usize; BAND_COUNT + 1] {
     let mut offsets = [0usize; BAND_COUNT + 1];
@@ -365,8 +367,8 @@ pub fn finder_lit(dx: f64, dy: f64) -> bool {
 }
 
 /// Returns whether the point `(dx, dy)`, relative to the centre of a petal that points along
-/// `angle`, is lit: an ellipse of half-length [`PETAL_HALF_LENGTH`] along the outward direction
-/// and half-width [`PETAL_HALF_WIDTH`], minus the cosmetic notch at its tip.
+/// `angle`, is lit: an ellipse of half-length [`PETAL_HALF_LENGTH`] along `angle` and half-width
+/// [`PETAL_HALF_WIDTH`], minus the notch at its tip.
 #[must_use]
 pub fn petal_lit(dx: f64, dy: f64, angle: f64) -> bool {
     let (sin, cos) = angle.sin_cos();
@@ -445,6 +447,7 @@ mod tests {
 
     #[test]
     fn petals_stay_clear_of_their_neighbours_and_the_rings() {
+        // a petal reaches at most its half-length from its centre, whichever way it is turned
         let outer = band_radius(BAND_COUNT - 1) + PETAL_HALF_LENGTH;
         assert!(outer + 10.0 < RING_RADII[0] - DOT_RADIUS);
         for cell in 0..FIELD_CELLS {
@@ -459,7 +462,7 @@ mod tests {
                 let (ox, oy) = cell_center(other);
                 let distance = ((x - ox).powi(2) + (y - oy).powi(2)).sqrt();
                 assert!(
-                    distance > 2.0 * f64::from(PETAL_RADIUS),
+                    distance > f64::from(PETAL_HALF_LENGTH + PETAL_RADIUS),
                     "cells {cell} and {other} are {distance} apart"
                 );
             }

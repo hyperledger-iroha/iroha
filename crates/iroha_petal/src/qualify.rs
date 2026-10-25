@@ -110,6 +110,8 @@ pub struct TrialOutcome {
     pub lane_d: u32,
     /// Field lanes decoded, summed over the frames (up to four per frame).
     pub field_lanes: u32,
+    /// Turn lanes read, summed over the frames (each at most once per shown frame).
+    pub turn_lanes: u32,
     /// Mean decode time per frame in milliseconds.
     pub mean_decode_ms: f64,
 }
@@ -169,6 +171,7 @@ pub fn run_stream_trial(payload: &[u8], kind: u8, trial: &StreamTrial) -> TrialO
         located: 0,
         lane_d: 0,
         field_lanes: 0,
+        turn_lanes: 0,
         mean_decode_ms: 0.0,
     };
     let mut index = 0u32;
@@ -237,6 +240,7 @@ pub fn run_stream_trial(payload: &[u8], kind: u8, trial: &StreamTrial) -> TrialO
         }
         outcome.lane_d += u32::from(result.lanes.contains('D'));
         outcome.field_lanes += result.lanes.chars().filter(char::is_ascii_digit).count() as u32;
+        outcome.turn_lanes += result.turned.len() as u32;
         if let Some(done) = result.completed {
             outcome.completed_at_s = Some(t);
             outcome.payload_matches = done.payload == payload;

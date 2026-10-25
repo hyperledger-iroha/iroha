@@ -1,11 +1,13 @@
 //! Monte-Carlo qualification of the decoder against simulated cameras.
 //!
-//! `cargo run --release -p iroha_petal --example qualify -- [trials] [filter] [--verbose]`
+//! `cargo run --release -p iroha_petal --example qualify -- [trials] [filter] [--verbose] [--threads N]`
 //!
-//! `--verbose` prints one line per trial (pose and the lanes that decoded).
+//! `--verbose` prints one line per trial (pose and the lanes that decoded); `--threads` runs that
+//! many trials at once (default: every core).
 //!
-//! Columns: frames with any lane, frames with lane `D`, field lanes read (of four per frame),
-//! payload bytes per frame, decode time, and pixels per petal pitch (12.5 canvas units).
+//! Columns: frames with any lane, frames with lane `D`, field lanes read (of four per frame), turn
+//! lanes read (of four per frame), payload bytes per frame, decode time (turn lanes included), and
+//! pixels per petal pitch (12.5 canvas units).
 #[path = "support/count.rs"]
 mod count;
 #[path = "support/floor.rs"]
@@ -26,9 +28,10 @@ use iroha_petal::locate::locate;
 use iroha_petal::render::{RenderOptions, render};
 use iroha_petal::sim::{CaptureConfig, capture, fit_to_frame, pixels_per_unit};
 use iroha_petal::stream::StreamEncoder;
+use iroha_petal::turns::read_turns;
 
 /// Lane `D` decoded, field lanes decoded, decode milliseconds, finders located.
-type TrialResult = (bool, usize, f64, bool);
+type TrialResult = (bool, usize, f64, bool, usize);
 
 #[derive(Clone)]
 struct Scenario {
@@ -134,17 +137,30 @@ fn scenarios() -> Vec<Scenario> {
 
 fn main() {
     let verbose = std::env::args().any(|a| a == "--verbose");
+    let mut threads = std::thread::available_parallelism().map_or(4, usize::from);
+    let mut positional = Vec::new();
     let mut args = std::env::args().skip(1).filter(|a| a != "--verbose");
+    while let Some(arg) = args.next() {
+        if arg == "--threads" {
+            threads = args
+                .next()
+                .and_then(|v| v.parse().ok())
+                .filter(|n: &usize| *n > 0)
+                .expect("--threads needs a positive count");
+        } else {
+            positional.push(arg);
+        }
+    }
+    let mut args = positional.into_iter();
     let trials: usize = args.next().and_then(|a| a.parse().ok()).unwrap_or(24);
     let filter = args.next();
     let payload: Vec<u8> = (0..900u32)
         .map(|i| (i.wrapping_mul(2_654_435_761) >> 11).to_le_bytes()[0])
         .collect();
     let encoder = StreamEncoder::new(&payload, 2).expect("payload");
-    let threads = std::thread::available_parallelism().map_or(4, usize::from);
     println!(
-        "{:<34} {:>6} {:>6} {:>6} {:>6} {:>7} {:>8}",
-        "scenario", "any%", "D%", "F%", "B/frm", "ms/dec", "px/petal"
+        "{:<34} {:>6} {:>6} {:>6} {:>6} {:>6} {:>7} {:>8}",
+        "scenario", "any%", "D%", "F%", "T%", "B/frm", "ms/dec", "px/petal"
     );
     for scenario in scenarios() {
         if filter
@@ -192,6 +208,12 @@ fn main() {
                         let located = locate(&image).is_some();
                         let t0 = Instant::now();
                         let outcome = decode(&image, &DecodeOptions::default());
+                        let turns = outcome.as_ref().map_or(0, |frame| {
+                            read_turns(&image, frame, [false; 4])
+                                .iter()
+                                .filter(|t| t.is_some())
+                                .count()
+                        });
                         let ms = t0.elapsed().as_secs_f64() * 1000.0;
                         let (d, fields) = outcome.as_ref().map_or((false, 0), |frame| {
                             (
@@ -210,7 +232,10 @@ fn main() {
                                     .map(|f| (f.letters(), f.rotation, f.mirrored))
                             );
                         }
-                        results.lock().unwrap().push((d, fields, ms, located));
+                        results
+                            .lock()
+                            .unwrap()
+                            .push((d, fields, ms, located, turns));
                     }
                 });
             }
@@ -223,16 +248,19 @@ fn main() {
             100.0 * count_as_f64(results.iter().filter(|r| f(r)).count()) / n
         };
         let field_lanes: usize = results.iter().map(|r| r.1).sum();
-        // payload bytes per capture: 80 per field lane, 16 for lane D on three frames in four
-        let field_bytes = 80.0 * count_as_f64(field_lanes);
+        let turn_lanes: usize = results.iter().map(|r| r.4).sum();
+        // payload bytes per capture: 80 per field lane, 64 per turn lane, 16 for lane D on three
+        // frames in four
+        let field_bytes = count_as_f64(80 * field_lanes + 64 * turn_lanes);
         let dot_bytes = 12.0 * count_as_f64(results.iter().filter(|r| r.0).count());
         let bytes = (field_bytes + dot_bytes) / n;
         println!(
-            "{:<34} {:>6.0} {:>6.0} {:>6.0} {:>6.0} {:>7.1} {:>6.1}px  loc {:>3.0}%  ({:.0}s)",
+            "{:<34} {:>6.0} {:>6.0} {:>6.0} {:>6.0} {:>6.0} {:>7.1} {:>6.1}px  loc {:>3.0}%  ({:.0}s)",
             scenario.name,
             pct(&|r| r.0 || r.1 > 0),
             pct(&|r| r.0),
             25.0 * count_as_f64(field_lanes) / n,
+            25.0 * count_as_f64(turn_lanes) / n,
             bytes,
             results.iter().map(|r| r.2).sum::<f64>() / n,
             mean_scale * 12.5,

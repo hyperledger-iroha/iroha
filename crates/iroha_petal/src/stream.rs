@@ -6,7 +6,10 @@
 //! fourth frame (`frame % 4 == 0`), when lane `D` carries the stream *beacon*
 //! instead, so a receiver can join at any frame within a fraction of a second.
 //! Atom ids run contiguously over the atoms actually sent (see
-//! [`first_atom_id`]). Any single readable lane is useful on its own.
+//! [`first_atom_id`]). Any single readable lane is useful on its own. On top of
+//! every field lane, the turns of its lit petals carry four more atoms from the
+//! repair range (see [`crate::turns`]), so a sharp camera reads up to 37 atoms
+//! (592 bytes) a frame.
 //!
 //! Lane data layouts (all big-endian):
 //!
@@ -14,6 +17,8 @@
 //!   payload CRC-32C.
 //! * field lanes and non-beacon `D`: `atoms…` (16 bytes each).
 //! * beacon `D`: `version:u8, kind:u8, len:u24, crc:u32`, zero padded.
+//! * turn lanes: `atoms… check:u32`, where the check binds the atoms to the header
+//!   of the field lane they ride on.
 
 use std::collections::VecDeque;
 
@@ -24,9 +29,10 @@ use crate::lanes::{
     LANE_HEADER_LEN, Lane, encode_lane,
 };
 use crate::layout::SECTORS;
+use crate::turns::{TURN_ATOMS, encode_turn_lane, turn_data, turn_first_id};
 
-/// Version/profile byte of the beacon: format version 2, layout profile 0.
-pub const FORMAT_VERSION: u8 = 0x20;
+/// Version/profile byte of the beacon: format version 3, layout profile 0.
+pub const FORMAT_VERSION: u8 = 0x30;
 /// Largest payload a beacon can describe (`u24`).
 pub const MAX_PAYLOAD_LEN: usize = (1 << 24) - 1;
 /// Default receiver payload limit; override with [`AssemblerLimits`].
@@ -271,10 +277,14 @@ impl StreamEncoder {
             .collect()
     }
 
-    /// The data bytes of every lane of `frame`.
+    /// The data bytes of every lane of `frame`, turn lanes included.
     #[must_use]
     pub fn lane_data(&self, frame: u16) -> LaneData {
         let header = [self.meta.tag(), (frame >> 8) as u8, frame as u8];
+        let lane_header = LaneHeader {
+            tag: self.meta.tag(),
+            frame,
+        };
         let build = |lane: Lane, body: Vec<u8>| {
             let mut data = header.to_vec();
             data.extend_from_slice(&body);
@@ -294,7 +304,15 @@ impl StreamEncoder {
             build(Lane::D, self.atoms(lane_first_id(Lane::D, frame), D_ATOMS))
         };
         debug_assert!(fields.iter().all(|f| f.len() == FIELD_DATA));
-        LaneData { d, fields }
+        let turns = core::array::from_fn(|s| {
+            let sector = s as u8;
+            turn_data(
+                lane_header,
+                sector,
+                &self.atoms(turn_first_id(frame, sector), TURN_ATOMS),
+            )
+        });
+        LaneData { d, fields, turns }
     }
 
     /// The transmitted codewords of `frame`.
@@ -304,14 +322,15 @@ impl StreamEncoder {
         LaneData {
             d: encode_lane(Lane::D, &data.d),
             fields: core::array::from_fn(|s| encode_lane(Lane::FIELDS[s], &data.fields[s])),
+            turns: core::array::from_fn(|s| encode_turn_lane(s as u8, &data.turns[s])),
         }
     }
 
-    /// Every cell of `frame`, ready to render.
+    /// Every cell of `frame`, lit and turned, ready to render.
     #[must_use]
     pub fn cells(&self, frame: u16) -> FrameCells {
         let words = self.words(frame);
-        FrameCells::from_words(
+        let mut cells = FrameCells::from_words(
             &words.d,
             [
                 &words.fields[0],
@@ -319,7 +338,14 @@ impl StreamEncoder {
                 &words.fields[2],
                 &words.fields[3],
             ],
-        )
+        );
+        cells.set_turns([
+            &words.turns[0],
+            &words.turns[1],
+            &words.turns[2],
+            &words.turns[3],
+        ]);
+        cells
     }
 }
 
@@ -330,6 +356,8 @@ pub struct LaneData {
     pub d: Vec<u8>,
     /// The field lanes, sector 0 first.
     pub fields: [Vec<u8>; SECTORS],
+    /// The turn lanes, sector 0 first.
+    pub turns: [Vec<u8>; SECTORS],
 }
 
 impl LaneData {
@@ -769,10 +797,12 @@ mod tests {
         assert_eq!(beacon.meta, encoder.meta());
         assert_eq!(beacon.header.frame, 512);
         assert!(parse_d_lane(&d[..11]).is_none());
-        // the retired format 1 (katakana tiles) is refused
-        let mut bad = d.clone();
-        bad[3] = 0x10;
-        assert!(parse_d_lane(&bad).is_none());
+        // the retired formats 1 (katakana tiles) and 2 (unturned petals) are refused
+        for retired in [0x10, 0x20] {
+            let mut bad = d.clone();
+            bad[3] = retired;
+            assert!(parse_d_lane(&bad).is_none());
+        }
         // non-beacon frames carry an atom instead
         let d = encoder.lane_data(513).d;
         assert!(matches!(parse_d_lane(&d), Some(DLane::Atoms(_))));

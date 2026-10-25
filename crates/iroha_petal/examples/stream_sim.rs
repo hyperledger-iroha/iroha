@@ -2,11 +2,13 @@
 //! camera watching it (frame blending and rolling-shutter tearing included).
 //!
 //! `cargo run --release -p iroha_petal --example stream_sim -- [trials] [payload bytes] [display fps] [cameras]
-//! [--camera-fps N] [--exposure-ms N] [--readout-ms N]`
+//! [--camera-fps N] [--exposure-ms N] [--readout-ms N] [--threads N]`
 //!
 //! `cameras` is a comma-separated list of camera names (default: all). `--camera-fps` models a
 //! decoder that keeps up with only that many camera frames a second (default 30), `--readout-ms`
-//! a rolling shutter that reads the rows out over that time (default 0: every row at once).
+//! a rolling shutter that reads the rows out over that time (default 0: every row at once), and
+//! `--threads` runs that many trials at once (default: every core). `T/F%` is the turn lanes read
+//! per field lane decoded.
 #[path = "support/count.rs"]
 mod count;
 
@@ -65,12 +67,22 @@ fn main() {
     let mut positional = Vec::new();
     // unset options keep `StreamTrial::typical` exactly
     let (mut camera_fps, mut exposure_ms, mut readout_ms) = (None, None, None);
+    let mut threads = None;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         let target = match arg.as_str() {
             "--camera-fps" => &mut camera_fps,
             "--exposure-ms" => &mut exposure_ms,
             "--readout-ms" => &mut readout_ms,
+            "--threads" => {
+                threads = Some(
+                    args.next()
+                        .and_then(|v| v.parse::<usize>().ok())
+                        .filter(|v| *v > 0)
+                        .expect("--threads needs a positive count"),
+                );
+                continue;
+            }
             _ => {
                 positional.push(arg);
                 continue;
@@ -104,10 +116,11 @@ fn main() {
         readout_ms.unwrap_or(0.0)
     );
     println!(
-        "{:<10} {:>6} {:>8} {:>8} {:>8} {:>7} {:>9} {:>7}",
-        "camera", "done%", "mean s", "p50 s", "p90 s", "false", "ms/frame", "F%"
+        "{:<10} {:>6} {:>8} {:>8} {:>8} {:>7} {:>9} {:>7} {:>7}",
+        "camera", "done%", "mean s", "p50 s", "p90 s", "false", "ms/frame", "F%", "T/F%"
     );
-    let threads = std::thread::available_parallelism().map_or(4, usize::from);
+    let threads =
+        threads.unwrap_or_else(|| std::thread::available_parallelism().map_or(4, usize::from));
     for name in CameraModel::NAMES {
         if filter
             .as_ref()
@@ -155,8 +168,9 @@ fn main() {
             .count();
         let (frames, field_lanes) =
             frame_totals(&outcomes).expect("aggregate frame counts fit u64");
+        let turn_lanes: u64 = outcomes.iter().map(|o| u64::from(o.turn_lanes)).sum();
         println!(
-            "{:<10} {:>6.0} {:>8.1} {:>8.1} {:>8.1} {:>7} {:>9.1} {:>6.0}%",
+            "{:<10} {:>6.0} {:>8.2} {:>8.2} {:>8.2} {:>7} {:>9.1} {:>6.0}% {:>6.0}%",
             name,
             100.0 * completed / n,
             times.iter().sum::<f64>() / completed.max(1.0),
@@ -164,7 +178,8 @@ fn main() {
             percentile(&times, 90),
             wrong,
             outcomes.iter().map(|o| o.mean_decode_ms).sum::<f64>() / n,
-            25.0 * count_as_f64(field_lanes) / count_as_f64(frames.max(1))
+            25.0 * count_as_f64(field_lanes) / count_as_f64(frames.max(1)),
+            100.0 * count_as_f64(turn_lanes) / count_as_f64(field_lanes.max(1))
         );
     }
 }
@@ -244,6 +259,7 @@ mod tests {
             located: 0,
             lane_d: 0,
             field_lanes: u32::MAX,
+            turn_lanes: 0,
             mean_decode_ms: 0.0,
         };
         assert_eq!(frame_totals(&[]), Some((0, 0)));

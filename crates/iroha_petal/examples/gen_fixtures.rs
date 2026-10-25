@@ -1,4 +1,4 @@
-//! Writes the cross-SDK golden vectors to `fixtures/petal/petal_stream_v2.json`.
+//! Writes the cross-SDK golden vectors to `fixtures/petal/petal_stream_v3.json`.
 //!
 //! `cargo run -p iroha_petal --example gen_fixtures -- <output path>`
 use std::fmt::Write as _;
@@ -18,6 +18,10 @@ use iroha_petal::prng::Xorshift32;
 use iroha_petal::render::Palette;
 use iroha_petal::rs::ReedSolomon;
 use iroha_petal::stream::{FORMAT_VERSION, StreamEncoder, first_atom_id};
+use iroha_petal::turns::{
+    TURN_ATOMS, TURN_BLURS, TURN_CARRIERS, TURN_ID_BASE, TURN_PARITY, TURN_POSITIONS, TURN_WORD,
+    carrier_order, turn_first_id, turn_template, turn_whitening,
+};
 
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().fold(String::new(), |mut out, b| {
@@ -56,11 +60,11 @@ fn payload(len: usize, seed: u32) -> Vec<u8> {
 fn main() {
     let path = std::env::args().nth(1).expect("output path");
     let mut out = String::new();
-    out.push_str("{\n  \"fixture_version\": 2,\n  \"format\": \"petal-stream-v2\",\n");
+    out.push_str("{\n  \"fixture_version\": 3,\n  \"format\": \"petal-stream-v3\",\n");
     // constants
     let _ = writeln!(
         out,
-        "  \"constants\": {{\"canvas\": {CANVAS}, \"atom_len\": {ATOM_LEN}, \"d_word\": {D_WORD}, \"d_parity\": {D_PARITY}, \"field_word\": {FIELD_WORD}, \"field_parity\": {FIELD_PARITY}, \"field_atoms\": {FIELD_ATOMS}, \"sectors\": {SECTORS}, \"atoms_per_frame\": {ATOMS_PER_FRAME}, \"field_cells\": {FIELD_CELLS}, \"beacon_interval\": 4, \"format_version\": {FORMAT_VERSION}}},"
+        "  \"constants\": {{\"canvas\": {CANVAS}, \"atom_len\": {ATOM_LEN}, \"d_word\": {D_WORD}, \"d_parity\": {D_PARITY}, \"field_word\": {FIELD_WORD}, \"field_parity\": {FIELD_PARITY}, \"field_atoms\": {FIELD_ATOMS}, \"sectors\": {SECTORS}, \"atoms_per_frame\": {ATOMS_PER_FRAME}, \"field_cells\": {FIELD_CELLS}, \"beacon_interval\": 4, \"format_version\": {FORMAT_VERSION}, \"turn_positions\": {TURN_POSITIONS}, \"turn_carriers\": {TURN_CARRIERS}, \"turn_word\": {TURN_WORD}, \"turn_parity\": {TURN_PARITY}, \"turn_atoms\": {TURN_ATOMS}, \"turn_id_base\": {TURN_ID_BASE}}},"
     );
     // layout
     let roles = slot_roles();
@@ -71,9 +75,10 @@ fn main() {
         .filter(|&i| roles[i] == SlotRole::Guard)
         .collect();
     let sectors: Vec<String> = (0..SECTORS).map(|s| list(sector_cells(s))).collect();
+    let orders: Vec<String> = (0..SECTORS).map(|s| list(carrier_order(s))).collect();
     let _ = writeln!(
         out,
-        "  \"layout\": {{\n    \"finder_centers\": {},\n    \"band_inner\": {BAND_INNER},\n    \"band_spacing\": {BAND_SPACING},\n    \"band_slots\": {},\n    \"petal_radius\": {PETAL_RADIUS},\n    \"petal_half_length\": {PETAL_HALF_LENGTH},\n    \"petal_half_width\": {PETAL_HALF_WIDTH},\n    \"petal_notch_radius\": {PETAL_NOTCH_RADIUS},\n    \"petal_notch_distance\": {PETAL_NOTCH_DISTANCE},\n    \"sector_cells\": [{}],\n    \"mask\": [{}],\n    \"mask_origin\": {MASK_ORIGIN},\n    \"mask_pitch\": {MASK_PITCH},\n    \"backdrop_radius\": {BACKDROP_RADIUS},\n    \"light_cells_hex\": \"{}\",\n    \"ring_radii\": {},\n    \"ring_slots\": {},\n    \"dot_radius\": {DOT_RADIUS},\n    \"data_slots\": {},\n    \"gate_slots\": {},\n    \"guard_slots\": {}\n  }},",
+        "  \"layout\": {{\n    \"finder_centers\": {},\n    \"band_inner\": {BAND_INNER},\n    \"band_spacing\": {BAND_SPACING},\n    \"band_slots\": {},\n    \"petal_radius\": {PETAL_RADIUS},\n    \"petal_half_length\": {PETAL_HALF_LENGTH},\n    \"petal_half_width\": {PETAL_HALF_WIDTH},\n    \"petal_notch_radius\": {PETAL_NOTCH_RADIUS},\n    \"petal_notch_distance\": {PETAL_NOTCH_DISTANCE},\n    \"sector_cells\": [{}],\n    \"carrier_orders\": [{}],\n    \"mask\": [{}],\n    \"mask_origin\": {MASK_ORIGIN},\n    \"mask_pitch\": {MASK_PITCH},\n    \"backdrop_radius\": {BACKDROP_RADIUS},\n    \"light_cells_hex\": \"{}\",\n    \"ring_radii\": {},\n    \"ring_slots\": {},\n    \"dot_radius\": {DOT_RADIUS},\n    \"data_slots\": {},\n    \"gate_slots\": {},\n    \"guard_slots\": {}\n  }},",
         list(
             &FINDER_CENTERS
                 .iter()
@@ -82,6 +87,7 @@ fn main() {
         ),
         list(&BAND_SLOTS),
         sectors.join(",\n      "),
+        orders.join(",\n      "),
         MASK.iter()
             .map(|r| format!("\"{r}\""))
             .collect::<Vec<_>>()
@@ -133,7 +139,7 @@ fn main() {
         mix32(0x1234_5678)
     );
     // whitening
-    let whitening: Vec<String> = Lane::ALL
+    let mut whitening: Vec<String> = Lane::ALL
         .iter()
         .map(|lane| {
             let name = match lane {
@@ -143,6 +149,10 @@ fn main() {
             format!("\"{name}\": \"{}\"", hex(&lane.whitening()))
         })
         .collect();
+    whitening.extend((0..SECTORS).map(|s| {
+        let sector = u8::try_from(s).expect("sector fits u8");
+        format!("\"T{sector}\": \"{}\"", hex(&turn_whitening(sector)))
+    }));
     let _ = writeln!(out, "  \"whitening\": {{{}}},", whitening.join(", "));
     // reed-solomon
     let mut rs_cases = Vec::new();
@@ -151,6 +161,7 @@ fn main() {
         (22, 83, 2),
         (11, 19, 4),
         (2, 5, 5),
+        (22, 68, 6),
     ] {
         let data = payload(len, seed);
         let word = ReedSolomon::new(nsym).encode(&data);
@@ -193,6 +204,38 @@ fn main() {
         "  \"first_atom_ids\": {{\"frames\": [0, 1, 2, 3, 4, 5, 8, 100, 65535], \"ids\": {}}},",
         list(&ids)
     );
+    // turn lane ids
+    let turn_cases: [(u16, u8); 5] = [(0, 0), (0, 3), (1, 2), (517, 1), (65535, 3)];
+    let _ = writeln!(
+        out,
+        "  \"turn_first_ids\": {{\"frames\": {}, \"sectors\": {}, \"ids\": {}}},",
+        list(&turn_cases.map(|c| c.0)),
+        list(&turn_cases.map(|c| c.1)),
+        list(&turn_cases.map(|(frame, sector)| turn_first_id(frame, sector)))
+    );
+    // the turn reader's templates at a few points of every blur
+    let mut probes = Vec::new();
+    for (blur, sigma) in TURN_BLURS.iter().enumerate() {
+        for (along, across) in [
+            (0.0, 0.0),
+            (5.5, 0.0),
+            (6.1, 0.9),
+            (-3.3, 2.2),
+            (0.37, -4.11),
+            (8.0, 8.0),
+        ] {
+            probes.push(format!(
+                "{{\"blur\": {sigma:?}, \"along\": {along:?}, \"across\": {across:?}, \"value\": {:?}}}",
+                turn_template(blur, along, across)
+            ));
+        }
+    }
+    let _ = writeln!(
+        out,
+        "  \"turn_reader\": {{\"blurs\": {}, \"template_probes\": [\n    {}\n  ]}},",
+        list(&TURN_BLURS.map(|b| format!("{b:?}"))),
+        probes.join(",\n    ")
+    );
     // streams
     let mut streams = Vec::new();
     for (name, len, seed, kind, frames) in [
@@ -224,12 +267,15 @@ fn main() {
                         .join(", ")
                 )
             };
+            let turns: String = cells.turns.iter().map(|t| char::from(b'0' + t)).collect();
             frame_json.push(format!(
-                "      {{\"frame\": {frame}, \"d_data\": \"{}\", \"field_data\": {}, \"d_word\": \"{}\", \"field_words\": {}, \"lit_dots\": {}, \"lit_petals_hex\": \"{}\"}}",
+                "      {{\"frame\": {frame}, \"d_data\": \"{}\", \"field_data\": {}, \"turn_data\": {}, \"d_word\": \"{}\", \"field_words\": {}, \"turn_words\": {}, \"lit_dots\": {}, \"lit_petals_hex\": \"{}\", \"turns\": \"{turns}\"}}",
                 hex(&lanes.d),
                 quoted(&lanes.fields),
+                quoted(&lanes.turns),
                 hex(&words.d),
                 quoted(&words.fields),
+                quoted(&words.turns),
                 list(&(0..cells.dots.len()).filter(|&i| cells.dots[i]).collect::<Vec<_>>()),
                 hex(&bitmap(cells.petals.iter().copied()))
             ));

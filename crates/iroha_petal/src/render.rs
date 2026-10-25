@@ -1,11 +1,12 @@
 //! Reference software renderer.
 //!
 //! The picture is black, with four sakura-blossom finders in the canvas corners,
-//! three dotted rings, and inside them a field of petals on concentric bands. A
-//! lit petal whose centre lies inside the `天` is drawn in the light colour, the
-//! others in sakura pink, over a faint backdrop of the `天` itself, so the
-//! character shows through the storm of petals. Platform SDKs may draw with their
-//! own 2D APIs as long as geometry and polarity match this renderer.
+//! three dotted rings, and inside them a field of petals on concentric bands, each
+//! lit petal turned about its centre by its turn. A lit petal whose centre lies
+//! inside the `天` is drawn in the light colour, the others in sakura pink, over a
+//! faint backdrop of the `天` itself, so the character shows through the storm of
+//! petals. Platform SDKs may draw with their own 2D APIs as long as geometry,
+//! turns and polarity match this renderer.
 
 use crate::image::Rgb;
 use crate::lanes::FrameCells;
@@ -15,6 +16,7 @@ use crate::layout::{
     RING_SLOTS, band_phase, band_radius, cell_angle, cell_center, cell_light, finder_lit, in_mask,
     petal_lit, ring_offset,
 };
+use crate::turns::turn_angle;
 
 /// Colours of the picture.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -86,7 +88,8 @@ impl Shader<'_> {
                     continue;
                 }
                 let (cx, cy) = cell_center(cell);
-                if petal_lit(x - cx, y - cy, cell_angle(cell)) {
+                let angle = cell_angle(cell) + turn_angle(self.cells.turns[cell]);
+                if petal_lit(x - cx, y - cy, angle) {
                     return Some(if cell_light(cell) {
                         self.palette.light
                     } else {

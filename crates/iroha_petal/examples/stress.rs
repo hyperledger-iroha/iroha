@@ -5,7 +5,10 @@
 //! (banding from display PWM or exposure beating, applied in linear light after capture) and
 //! counts, over random poses, the frames in which each lane decodes.
 //!
-//! `cargo run --release -p iroha_petal --example stress -- [trials] [filter]`
+//! `cargo run --release -p iroha_petal --example stress -- [trials] [filter] [--threads N]`
+//!
+//! Columns: frames with any lane, frames with lane `D`, field lanes read (of four per frame), turn
+//! lanes read (of four per frame), and payload bytes per frame.
 #[path = "support/count.rs"]
 mod count;
 #[path = "support/floor.rs"]
@@ -25,6 +28,7 @@ use iroha_petal::image::Luma;
 use iroha_petal::render::{RenderOptions, render};
 use iroha_petal::sim::{CaptureConfig, capture, fit_to_frame};
 use iroha_petal::stream::StreamEncoder;
+use iroha_petal::turns::read_turns;
 
 struct Rng(u64);
 impl Rng {
@@ -143,7 +147,21 @@ fn band(image: &mut Luma, depth: f64, period: f64, rng: &mut Rng) {
 }
 
 fn main() {
+    let mut threads = std::thread::available_parallelism().map_or(4, usize::from);
+    let mut positional = Vec::new();
     let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        if arg == "--threads" {
+            threads = args
+                .next()
+                .and_then(|v| v.parse().ok())
+                .filter(|n: &usize| *n > 0)
+                .expect("--threads needs a positive count");
+        } else {
+            positional.push(arg);
+        }
+    }
+    let mut args = positional.into_iter();
     let trials: usize = args.next().and_then(|a| a.parse().ok()).unwrap_or(30);
     let filter = args.next();
     let payload: Vec<u8> = (0..900u32)
@@ -155,10 +173,9 @@ fn main() {
         ("legacy 720p", CaptureConfig::legacy(), 15.0),
         ("worst 480p", CaptureConfig::worst(), 22.0),
     ];
-    let threads = std::thread::available_parallelism().map_or(4, usize::from);
     println!(
-        "{:<26} {:<12} {:>5} {:>5} {:>5} {:>5}",
-        "condition", "camera", "any%", "D%", "F%", "B/frm"
+        "{:<26} {:<12} {:>5} {:>5} {:>5} {:>5} {:>5}",
+        "condition", "camera", "any%", "D%", "F%", "T%", "B/frm"
     );
     for (name, stress) in stress_rows() {
         if filter.as_ref().is_some_and(|f| !name.contains(f.as_str())) {
@@ -166,7 +183,7 @@ fn main() {
         }
         for (camera, base, tilt) in &cameras {
             let next = AtomicUsize::new(0);
-            let tally = std::sync::Mutex::new([0usize; 4]);
+            let tally = std::sync::Mutex::new([0usize; 5]);
             std::thread::scope(|scope| {
                 for _ in 0..threads {
                     scope.spawn(|| {
@@ -254,12 +271,17 @@ fn main() {
                             }
                             if let Ok(f) = decode(&image, &DecodeOptions::default()) {
                                 let fields = f.fields.iter().filter(|l| l.is_some()).count();
+                                let turns = read_turns(&image, &f, [false; 4])
+                                    .iter()
+                                    .filter(|t| t.is_some())
+                                    .count();
                                 let d = f.d.is_some();
                                 let mut t = tally.lock().expect("tally");
                                 t[0] += usize::from(d || fields > 0);
                                 t[1] += usize::from(d);
                                 t[2] += fields;
-                                t[3] += 80 * fields + 12 * usize::from(d);
+                                t[3] += 80 * fields + 64 * turns + 12 * usize::from(d);
+                                t[4] += turns;
                             }
                         }
                     });
@@ -268,12 +290,13 @@ fn main() {
             let t = tally.into_inner().expect("tally");
             let pct = |n: usize| 100.0 * count_as_f64(n) / count_as_f64(trials);
             println!(
-                "{:<26} {:<12} {:>5.0} {:>5.0} {:>5.0} {:>5.0}",
+                "{:<26} {:<12} {:>5.0} {:>5.0} {:>5.0} {:>5.0} {:>5.0}",
                 name,
                 camera,
                 pct(t[0]),
                 pct(t[1]),
                 pct(t[2]) / 4.0,
+                pct(t[4]) / 4.0,
                 count_as_f64(t[3]) / count_as_f64(trials)
             );
         }

@@ -1,9 +1,10 @@
 //! Petal Stream: the Sakura-storm optical transport.
 //!
-//! A Petal frame is a square image whose data lives in five independent
-//! lanes: the dots on three concentric rings (lane `D`), and a storm of 3,376
-//! petals on concentric bands inside them, cut into four sectors (lanes
-//! `F0`–`F3`), each petal lit or dark. The petals inside the SORA `天` are
+//! A Petal frame is a square image whose data lives in independent lanes: the
+//! dots on three concentric rings (lane `D`), and a storm of 3,376 petals on
+//! concentric bands inside them, cut into four sectors (lanes `F0`–`F3`), each
+//! petal lit or dark. On top of each field lane, the way its lit petals are
+//! turned carries a turn lane (`T0`–`T3`). The petals inside the SORA `天` are
 //! drawn white and the others pink, over a faint `天`. Every lane is one
 //! Reed–Solomon codeword, so any lane that reads cleanly yields fountain-coded
 //! payload atoms.
@@ -37,3 +38,4 @@ pub mod rs;
 pub mod session;
 pub mod sim;
 pub mod stream;
+pub mod turns;

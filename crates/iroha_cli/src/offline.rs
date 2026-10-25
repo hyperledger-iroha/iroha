@@ -14,6 +14,7 @@ use iroha_petal::{
     render::{RenderOptions, render},
     session::{ScanLimits, ScanSession},
     stream::{AssemblerLimits, DEFAULT_MAX_PAYLOAD_LEN, DLane, MAX_PAYLOAD_LEN, StreamEncoder},
+    turns::{observed_turns, read_turns},
 };
 use norito::derive::JsonSerialize;
 use std::{
@@ -22,10 +23,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
-const ENCODE_SCHEMA: &str = "iroha.offline.petal.encode.v2";
-const DECODE_SCHEMA: &str = "iroha.offline.petal.decode.v2";
-const INSPECT_SCHEMA: &str = "iroha.offline.petal.inspect.v2";
-const SIMULATE_SCHEMA: &str = "iroha.offline.petal.simulate.v2";
+const ENCODE_SCHEMA: &str = "iroha.offline.petal.encode.v3";
+const DECODE_SCHEMA: &str = "iroha.offline.petal.decode.v3";
+const INSPECT_SCHEMA: &str = "iroha.offline.petal.inspect.v3";
+const SIMULATE_SCHEMA: &str = "iroha.offline.petal.simulate.v3";
 const DEFAULT_SIZE: u32 = 1_024;
 const MIN_SIZE: u32 = 256;
 const MAX_SIZE: u32 = 4_096;
@@ -227,6 +228,8 @@ struct DecodeReport {
     field_lanes: u64,
     /// Field lanes recovered by merging captures of one shown frame.
     merged_field_lanes: u64,
+    /// Turn lanes read (each at most once per shown frame).
+    turn_lanes: u64,
     completed_at_frame: Option<u64>,
     payload_bytes: Option<u64>,
     kind: Option<u8>,
@@ -237,7 +240,8 @@ struct DecodeReport {
 
 #[derive(Clone, Debug, JsonSerialize)]
 struct LaneReport {
-    /// `D` for the rings, `0`–`3` for the field sectors.
+    /// `D` for the rings, `0`–`3` for the field sectors (or, among the turn lanes, the sector whose
+    /// petals' turns carry them).
     lane: String,
     corrected_bytes: u64,
     erased_bytes: u64,
@@ -258,6 +262,10 @@ struct InspectReport {
     lens_distortion: Option<f64>,
     /// The lanes that passed their Reed–Solomon check.
     lanes: Vec<LaneReport>,
+    /// The turn lanes that passed their Reed–Solomon and identity checks.
+    turn_lanes: Vec<LaneReport>,
+    /// The blur (Gaussian σ in canvas units) that fits the petals best; turns read below 2.5.
+    turn_blur: Option<f64>,
     frame_counter: Option<u16>,
     beacon_kind: Option<u8>,
     beacon_payload_bytes: Option<u64>,
@@ -279,6 +287,8 @@ struct SimulateReport {
     effective_payload_bytes_per_second: Option<f64>,
     /// Field lanes read per frame, as a share of the four.
     field_lane_share: f64,
+    /// Turn lanes read per field lane read.
+    turn_lane_share: f64,
     mean_decode_milliseconds: f64,
 }
 
@@ -398,10 +408,11 @@ impl Run for DecodeArgs {
         let report = self.decode()?;
         let text = match (&report.completed_at_frame, &report.payload_bytes) {
             (Some(at), Some(bytes)) => format!(
-                "reassembled {bytes} bytes after {} frame(s) (lane D read in {} frames, {} field lanes)",
+                "reassembled {bytes} bytes after {} frame(s) (lane D read in {} frames, {} field lanes, {} turn lanes)",
                 at + 1,
                 report.lane_d_frames,
-                report.field_lanes
+                report.field_lanes,
+                report.turn_lanes
             ),
             _ => format!(
                 "incomplete: collected {}/{} independent atoms",
@@ -458,6 +469,7 @@ impl DecodeArgs {
             lane_d_frames: 0,
             field_lanes: 0,
             merged_field_lanes: 0,
+            turn_lanes: 0,
             completed_at_frame: None,
             payload_bytes: None,
             kind: None,
@@ -491,6 +503,7 @@ impl DecodeArgs {
         report.lane_d_frames = u64::from(stats.lane_d);
         report.field_lanes = u64::from(stats.field_lanes);
         report.merged_field_lanes = u64::from(stats.merged_lanes);
+        report.turn_lanes = u64::from(stats.turn_lanes);
         Ok(report)
     }
 }
@@ -499,9 +512,15 @@ impl Run for InspectArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let report = self.inspect()?;
         let lanes: String = report.lanes.iter().map(|lane| lane.lane.as_str()).collect();
+        let turns: String = report
+            .turn_lanes
+            .iter()
+            .map(|lane| lane.lane.as_str())
+            .collect();
         let text = match &report.error {
             Some(error) => format!("no lane decoded: {error}"),
-            None => format!("lanes decoded: {lanes}"),
+            None if turns.is_empty() => format!("lanes decoded: {lanes}; no turn lane"),
+            None => format!("lanes decoded: {lanes}; turn lanes: {turns}"),
         };
         let readable = !lanes.is_empty();
         print_with_optional_text(context, Some(text), &report)?;
@@ -530,6 +549,8 @@ impl InspectArgs {
             inferred_corner: None,
             lens_distortion: None,
             lanes: Vec::new(),
+            turn_lanes: Vec::new(),
+            turn_blur: None,
             frame_counter: None,
             beacon_kind: None,
             beacon_payload_bytes: None,
@@ -552,6 +573,18 @@ impl InspectArgs {
                         })
                     })
                     .collect();
+                report.turn_lanes = read_turns(&luma, &frame, [false; 4])
+                    .iter()
+                    .zip(Lane::FIELDS)
+                    .filter_map(|(result, lane)| {
+                        result.as_ref().map(|r| LaneReport {
+                            lane: lane.letter().to_string(),
+                            corrected_bytes: r.corrected as u64,
+                            erased_bytes: r.erasures as u64,
+                        })
+                    })
+                    .collect();
+                report.turn_blur = observed_turns(&luma, &frame).map(|turns| turns.blur);
                 match frame.d_lane() {
                     Some(DLane::Beacon(beacon)) => {
                         report.frame_counter = Some(beacon.header.frame);
@@ -583,14 +616,15 @@ impl Run for SimulateArgs {
         let report = self.simulate()?;
         let text = match report.completion_seconds_mean {
             Some(mean) => format!(
-                "{}: {}/{} trials completed {} bytes in {:.1} s on average ({:.0} B/s, {:.0} % of the field lanes read)",
+                "{}: {}/{} trials completed {} bytes in {:.1} s on average ({:.0} B/s, {:.0} % of the field lanes read, {:.0} % of those with their turns)",
                 report.camera,
                 report.completed,
                 report.trials,
                 report.payload_bytes,
                 mean,
                 report.effective_payload_bytes_per_second.unwrap_or(0.0),
-                report.field_lane_share * 100.0
+                report.field_lane_share * 100.0,
+                report.turn_lane_share * 100.0
             ),
             None => format!("{}: no trial completed within the horizon", report.camera),
         };
@@ -666,6 +700,7 @@ impl SimulateArgs {
         let mean = (!times.is_empty()).then(|| times.iter().sum::<f64>() / times.len() as f64);
         let frames: u64 = outcomes.iter().map(|o| u64::from(o.frames)).sum();
         let field_lanes: u64 = outcomes.iter().map(|o| u64::from(o.field_lanes)).sum();
+        let turn_lanes: u64 = outcomes.iter().map(|o| u64::from(o.turn_lanes)).sum();
         Ok(SimulateReport {
             schema: SIMULATE_SCHEMA.to_owned(),
             camera: self.camera.clone(),
@@ -682,6 +717,7 @@ impl SimulateArgs {
             completion_seconds_worst: times.last().copied(),
             effective_payload_bytes_per_second: mean.map(|m| payload.len() as f64 / m),
             field_lane_share: field_lanes as f64 / (4 * frames.max(1)) as f64,
+            turn_lane_share: turn_lanes as f64 / field_lanes.max(1) as f64,
             mean_decode_milliseconds: outcomes.iter().map(|o| o.mean_decode_ms).sum::<f64>()
                 / outcomes.len().max(1) as f64,
         })
@@ -887,6 +923,13 @@ mod tests {
         assert!(report.error.is_none(), "{:?}", report.error);
         let lanes: String = report.lanes.iter().map(|lane| lane.lane.as_str()).collect();
         assert_eq!(lanes, "D0123");
+        let turns: String = report
+            .turn_lanes
+            .iter()
+            .map(|lane| lane.lane.as_str())
+            .collect();
+        assert_eq!(turns, "0123");
+        assert!(report.turn_blur.is_some_and(|blur| blur < 2.5));
         assert_eq!(report.frame_counter, Some(0));
         assert_eq!(report.beacon_kind, Some(2));
         assert_eq!(report.beacon_payload_bytes, Some(100));
