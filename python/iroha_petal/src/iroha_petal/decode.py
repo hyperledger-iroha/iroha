@@ -1275,7 +1275,8 @@ def observed_cells(
 ) -> Optional[FrameCells]:
     """Build the cells a decoder believes it saw under ``frame``'s pose, for diagnostics:
     every codeword thresholded as the first read of :func:`decode_frame` thresholds it
-    (no local read)."""
+    (no local read). The petals are left unturned
+    (:func:`~iroha_petal.turns.observed_turns` reports the turns)."""
     if options is None:
         options = DecodeOptions()
     evidence = field_evidence(image, frame, options)

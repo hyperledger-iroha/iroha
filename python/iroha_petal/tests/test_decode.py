@@ -303,9 +303,11 @@ class DecodeTest(unittest.TestCase):
     def test_observed_cells_match_the_drawn_cells_of_a_clean_render(self) -> None:
         image = setup(3)
         decoded = decode_frame(image)
-        self.assertEqual(
-            observed_cells(image, decoded), encoder(decode_test_payload(), KIND).cells(3)
-        )
+        observed = observed_cells(image, decoded)
+        drawn = encoder(decode_test_payload(), KIND).cells(3)
+        self.assertEqual((observed.dots, observed.petals), (drawn.dots, drawn.petals))
+        # the observed petals are left unturned
+        self.assertEqual(set(observed.turns), {0})
 
     def test_garbage_images_never_crash_or_decode(self) -> None:
         rng = Xorshift32(99)

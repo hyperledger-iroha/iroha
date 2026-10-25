@@ -16,6 +16,15 @@ lane headers name, for the last :data:`MERGE_WINDOW` shown frames. From the
 second such capture on, it merges them
 (:func:`~iroha_petal.decode.merge_fields`) and offers a recovered lane only
 when that lane's own header names the same frame.
+
+Every field lane a capture decodes also lets the session read the turn lane on
+top of it (:func:`~iroha_petal.turns.read_turns`). A turn lane is tried once per
+shown frame: the session remembers the last :data:`TURN_MEMORY` it tried and does
+not look at those petals again. Reading turns costs a slow phone core several
+times a frame's decode, so after a try that reads no turn lane (a camera too
+soft or too shaky for the turns) the session passes over the next captures that
+would try one, one more after every such try, at most :data:`TURN_BACKOFF`,
+until a try reads a lane again.
 """
 
 from __future__ import annotations
@@ -46,11 +55,14 @@ from .stream import (
     StreamAssembler,
     parse_atom_lane,
 )
+from .turns import read_turns, turn_packet
 
 __all__ = [
     "TRACK_WINDOW_MS",
     "MERGE_WINDOW",
     "MERGE_CAPTURES",
+    "TURN_MEMORY",
+    "TURN_BACKOFF",
     "ScanLimits",
     "ScanStats",
     "ScanOutcome",
@@ -63,6 +75,11 @@ TRACK_WINDOW_MS = 500
 MERGE_WINDOW = 6
 #: Captures held per shown frame; a further capture replaces the oldest.
 MERGE_CAPTURES = 4
+#: Turn lanes remembered as tried (the four of each of the last :data:`MERGE_WINDOW` shown
+#: frames).
+TURN_MEMORY = MERGE_WINDOW * SECTORS
+#: Most captures passed over after tries that read no turn lane.
+TURN_BACKOFF = 8
 
 
 @dataclass(frozen=True)
@@ -101,6 +118,10 @@ class ScanStats:
     merges: int = 0
     #: Field lanes recovered by merging captures.
     merged_lanes: int = 0
+    #: Turn lanes tried (each at most once per shown frame).
+    turn_tries: int = 0
+    #: Turn lanes read.
+    turn_lanes: int = 0
 
 
 @dataclass(frozen=True)
@@ -120,6 +141,9 @@ class ScanOutcome:
     #: Field lanes recovered by merging this capture with earlier captures of its
     #: shown frame, as sector digits.
     merged: str = ""
+    #: Turn lanes read from this capture, as the sector digits of the field lanes they
+    #: ride on.
+    turned: str = ""
 
 
 @dataclass
@@ -167,6 +191,12 @@ class ScanSession:
         self._last_rank = 0
         self._last_pose: Optional[Tuple[DecodedFrame, int]] = None
         self._held: Deque[_Held] = deque()
+        #: The turn lanes tried, oldest first: ``(header, sector)``.
+        self._tried: Deque[Tuple[LaneHeader, int]] = deque()
+        #: Tries in a row that read no turn lane (at most :data:`TURN_BACKOFF`).
+        self._turn_misses = 0
+        #: Captures that would try a turn lane still to pass over.
+        self._turn_wait = 0
 
     @property
     def limits(self) -> ScanLimits:
@@ -182,12 +212,20 @@ class ScanSession:
         return self._assembler.progress()
 
     def reset(self) -> None:
-        """Drop all partial state."""
+        """Drop all partial state, including the pose used for tracking, held captures, the
+        turn lanes tried and any back-off."""
         self._assembler.reset()
         self._started_ms = None
         self._last_rank = 0
         self._last_pose = None
         self._held.clear()
+        self._forget_turns()
+
+    def _forget_turns(self) -> None:
+        """Forget the turn lanes tried and any back-off."""
+        self._tried.clear()
+        self._turn_misses = 0
+        self._turn_wait = 0
 
     def push(self, image: Luma, now_ms: int) -> ScanOutcome:
         """Offer one camera luma plane captured at monotonic time ``now_ms``.
@@ -205,6 +243,7 @@ class ScanSession:
         error: Optional[DecodeErrorKind] = None
         lanes = ""
         merged = ""
+        turned = ""
         frame: Optional[DecodedFrame] = None
         last_pose = self._last_pose
         if last_pose is not None and max(now_ms - last_pose[1], 0) <= TRACK_WINDOW_MS:
@@ -222,6 +261,7 @@ class ScanSession:
             self._last_pose = (frame, now_ms)
             lanes = self._absorb(frame)
             merged = self._merge(image, frame)
+            turned = self._turn(image, frame)
         if error not in (DecodeErrorKind.NO_FINDERS, DecodeErrorKind.UNSUPPORTED_IMAGE):
             self._stats = replace(self._stats, located=self._stats.located + 1)
         progress = self._assembler.progress()
@@ -236,6 +276,7 @@ class ScanSession:
             error=error,
             lanes=lanes,
             merged=merged,
+            turned=turned,
             progress=progress,
             completed=self._assembler.take_completed(),
         )
@@ -261,11 +302,55 @@ class ScanSession:
         )
         previous_meta = self._assembler.progress().meta
         frame.feed(self._assembler)
-        # Tags are only eight bits: held evidence and done flags belong to the full stream
-        # identity. Captures that preceded the first beacon remain useful.
+        # Tags are only eight bits: held evidence, done flags and the turn lanes tried belong
+        # to the full stream identity. Captures that preceded the first beacon remain useful.
         if previous_meta is not None and self._assembler.progress().meta != previous_meta:
             self._held.clear()
+            self._forget_turns()
         return lanes
+
+    def _turn(self, image: Luma, frame: DecodedFrame) -> str:
+        """Tries the turn lanes on top of the field lanes this capture decoded, except those
+        already tried for their shown frame, and offers the atoms of those it reads; after
+        tries that read nothing it passes over the next captures that would try one (see
+        the module documentation)."""
+        skip = [True] * SECTORS
+        headers: List[Optional[LaneHeader]] = [None] * SECTORS
+        for sector, result in enumerate(frame.fields):
+            header = None if result is None else _lane_header(result.data)
+            if header is None:
+                continue
+            headers[sector] = header
+            skip[sector] = (header, sector) in self._tried
+        if all(skip):
+            return ""
+        if self._turn_wait > 0:
+            self._turn_wait -= 1
+            return ""
+        tried = self._tried
+        for sector, header in enumerate(headers):
+            if not skip[sector] and header is not None:
+                if len(tried) == TURN_MEMORY:
+                    tried.popleft()
+                tried.append((header, sector))
+                self._stats = replace(self._stats, turn_tries=self._stats.turn_tries + 1)
+        turned = ""
+        for sector, result in enumerate(read_turns(image, frame, skip)):
+            header = headers[sector]
+            if result is None or header is None:
+                continue
+            packet = turn_packet(header, sector, result.data)
+            if packet is None:
+                continue
+            self._assembler.push_atoms(packet)
+            self._stats = replace(self._stats, turn_lanes=self._stats.turn_lanes + 1)
+            turned += FIELD_LANES[sector].letter
+        if turned:
+            self._turn_misses = 0
+        else:
+            self._turn_misses = min(self._turn_misses + 1, TURN_BACKOFF)
+            self._turn_wait = self._turn_misses
+        return turned
 
     def _merge(self, image: Luma, frame: DecodedFrame) -> str:
         """Holds this capture's field evidence under its shown frame and, from the second

@@ -238,8 +238,11 @@ class LayoutTest(unittest.TestCase):
             self.assertLess(abs(ty - (CENTER + (x - CENTER))), 1e-9)
 
     def test_petals_stay_clear_of_their_neighbours_and_the_rings(self) -> None:
+        # a petal reaches at most its half-length from its centre, whichever way it is turned
         outer = band_radius(BAND_COUNT - 1) + PETAL_HALF_LENGTH
         self.assertLess(outer + 10.0, RING_RADII[0] - DOT_RADIUS)
+        # the reference adds the two single-precision constants in single precision
+        clearance = struct.unpack("<f", struct.pack("<f", PETAL_HALF_LENGTH + PETAL_RADIUS))[0]
         for cell in range(FIELD_CELLS):
             x, y = cell_center(cell)
             band, _ = cell_band_slot(cell)
@@ -251,7 +254,7 @@ class LayoutTest(unittest.TestCase):
                 ox, oy = cell_center(other)
                 distance = math.sqrt((x - ox) * (x - ox) + (y - oy) * (y - oy))
                 self.assertGreater(
-                    distance, 2.0 * PETAL_RADIUS, f"cells {cell} and {other} are {distance} apart"
+                    distance, clearance, f"cells {cell} and {other} are {distance} apart"
                 )
 
     def test_the_light_cells_draw_the_character(self) -> None:
@@ -313,10 +316,10 @@ class LayoutTest(unittest.TestCase):
 
     def test_petal_constants_are_the_reference_single_precision_values(self) -> None:
         self.assertEqual(PETAL_RADIUS, 4.599999904632568)
-        self.assertEqual(PETAL_HALF_LENGTH, 5.199999809265137)
-        self.assertEqual(PETAL_HALF_WIDTH, 4.300000190734863)
-        self.assertEqual(PETAL_NOTCH_RADIUS, 1.2999999523162842)
-        self.assertEqual(PETAL_NOTCH_DISTANCE, 5.400000095367432)
+        self.assertEqual(PETAL_HALF_LENGTH, 6.0)
+        self.assertEqual(PETAL_HALF_WIDTH, 3.7300000190734863)
+        self.assertEqual(PETAL_NOTCH_RADIUS, 1.1200000047683716)
+        self.assertEqual(PETAL_NOTCH_DISTANCE, 6.239999771118164)
 
     def test_finder_blossom_shape(self) -> None:
         self.assertTrue(finder_lit(0.0, 0.0))
@@ -330,10 +333,19 @@ class LayoutTest(unittest.TestCase):
         tip = PETAL_NOTCH_DISTANCE
         self.assertFalse(petal_lit(tip * math.cos(0.3), tip * math.sin(0.3), 0.3))
         self.assertFalse(petal_lit(0.0, 10.0, 0.0))
-        # longer along its outward direction than across it
+        # longer along its axis than across it
         self.assertTrue(petal_lit(-5.0, 0.0, 0.0))
         self.assertFalse(petal_lit(0.0, -5.0, 0.0))
         self.assertTrue(petal_lit(0.0, -5.0, math.pi / 2.0))
+        # the notch tells a petal from one turned by half a turn: inside the ellipse at the
+        # tip, outside it at the other end
+        self.assertFalse(petal_lit(5.6, 0.0, 0.0))
+        self.assertTrue(petal_lit(-5.6, 0.0, 0.0))
+        self.assertTrue(petal_lit(5.6, 0.0, math.pi))
+        # a petal reaches its half-length and no further, whichever way it is turned
+        self.assertTrue(petal_lit(5.0, 0.0, 0.0))
+        self.assertFalse(petal_lit(-6.01, 0.0, 0.0))
+        self.assertFalse(petal_lit(0.0, 3.8, 0.0))
 
     def test_cell_lookups_validate_their_index(self) -> None:
         self.assertEqual(cell_band_slot(0), (0, 0))

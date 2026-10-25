@@ -3,7 +3,8 @@
 
 """Lane codecs: bytes to and from transmitted cell states.
 
-A frame carries five lanes. Each lane is exactly one Reed-Solomon codeword,
+A frame carries five lanes, and four turn lanes on top of the field lanes (see
+:mod:`iroha_petal.turns`). Each lane is exactly one Reed-Solomon codeword,
 XOR-whitened with a fixed pseudo-random sequence so the picture is
 statistically balanced whatever the payload is:
 
@@ -12,6 +13,7 @@ lane       cells                                    codeword  data   parity
 =========  =======================================  ========  =====  ======
 D          240 ring slots x 1 bit                   30 B      19 B   11 B
 F0 ... F3  840 field cells of one sector x 1 bit    105 B     83 B   22 B
+T0 ... T3  360 lit petals of one sector x 2 bits    90 B      68 B   22 B
 =========  =======================================  ========  =====  ======
 
 Bit order is most-significant-bit first.
@@ -206,6 +208,8 @@ _ROLE_KINDS = tuple(role.kind for role in slot_roles())
 _ROLE_BITS = tuple(role.bit for role in slot_roles())
 #: The bit-carrying cells of every sector, in bit order.
 _SECTOR_BITS = tuple(sector_cells(sector)[:_FIELD_BITS] for sector in range(SECTORS))
+#: Every field cell unturned.
+_UNTURNED = (0,) * FIELD_CELLS
 
 
 @dataclass(frozen=True)
@@ -216,21 +220,32 @@ class FrameCells:
     dots: Tuple[bool, ...]
     #: Lit state of every field cell (spare cells are dark).
     petals: Tuple[bool, ...]
+    #: Turn position (0-3, see :func:`~iroha_petal.turns.turn_angle`) of every field cell:
+    #: zero for dark petals and for lit petals that carry no turn bits. Empty (the
+    #: default) means every petal is unturned.
+    turns: Tuple[int, ...] = ()
 
     def __post_init__(self) -> None:
         dots = tuple(bool(v) for v in self.dots)
         petals = tuple(bool(v) for v in self.petals)
+        turns = tuple(int(v) for v in self.turns) or _UNTURNED
         if len(dots) != TOTAL_SLOTS:
             raise ValueError("a frame has exactly 296 ring slots")
         if len(petals) != FIELD_CELLS:
             raise ValueError("a frame has exactly 3376 field cells")
+        if len(turns) != FIELD_CELLS:
+            raise ValueError("a frame turns exactly 3376 field cells")
+        if min(turns) < 0 or max(turns) > 3:
+            raise ValueError("a turn position is within 0..=3")
         object.__setattr__(self, "dots", dots)
         object.__setattr__(self, "petals", petals)
+        object.__setattr__(self, "turns", turns)
 
     @classmethod
     def from_words(cls, d: bytes, fields: Sequence[bytes]) -> "FrameCells":
         """Build the cells from the transmitted codewords of lane ``D`` and the four
-        field lanes (sector 0 first)."""
+        field lanes (sector 0 first), with every petal unturned (see
+        :meth:`with_turns`)."""
         if len(d) != D_WORD:
             raise ValueError("lane D codeword length mismatch")
         if len(fields) != SECTORS or any(len(word) != FIELD_WORD for word in fields):
@@ -266,4 +281,43 @@ class FrameCells:
         for bit, cell in enumerate(_SECTOR_BITS[sector]):
             if petals[cell]:
                 word[bit >> 3] |= 1 << (7 - (bit & 7))
+        return bytes(word)
+
+    def with_turns(self, words: Sequence[bytes]) -> "FrameCells":
+        """The same cells with the carriers of every sector turned to show its transmitted
+        turn codeword (sector 0 first, see :mod:`iroha_petal.turns`); a sector with too
+        few lit petals stays unturned.
+
+        Raises :class:`ValueError` when a codeword has the wrong length.
+        """
+        # imported here: the turns module builds on this one
+        from .turns import TURN_WORD, carrier_order, carrier_position, carriers
+
+        if len(words) != SECTORS or any(len(word) != TURN_WORD for word in words):
+            raise ValueError("a frame has four turn codewords of 90 bytes")
+        turns = list(self.turns)
+        for sector, word in enumerate(words):
+            for cell in carrier_order(sector):
+                turns[cell] = 0
+            chosen = carriers(self.petals, sector)
+            if chosen is None:
+                continue
+            for index, cell in enumerate(chosen):
+                turns[cell] = carrier_position(word, index)
+        return FrameCells(self.dots, self.petals, tuple(turns))
+
+    def turn_word(self, sector: int) -> Optional[bytes]:
+        """Pack the turns of the carriers of sector ``sector`` into its turn codeword, or
+        ``None`` when the sector has too few lit petals to carry one."""
+        from .turns import TURN_WORD, carriers, turn_label
+
+        if not 0 <= sector < SECTORS:
+            raise IndexError("sector out of range")
+        chosen = carriers(self.petals, sector)
+        if chosen is None:
+            return None
+        word = bytearray(TURN_WORD)
+        turns = self.turns
+        for index, cell in enumerate(chosen):
+            word[index >> 2] |= turn_label(turns[cell]) << (6 - 2 * (index & 3))
         return bytes(word)

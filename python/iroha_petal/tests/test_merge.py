@@ -170,11 +170,12 @@ class MergeTest(unittest.TestCase):
                     ["decode", "--input-dir", str(frames), "--output", str(root / "out.bin")]
                 )
         self.assertEqual(status, 1)  # these captures contain one shown frame, not a whole stream
-        # the second capture's merge recovers lane 0, the third's lanes 1 and 3, the last's 2
+        # the second capture's merge recovers lane 0, the third's lane 1, the last's 2 and 3
+        # (as the reference session reads these captures)
         self.assertIn("01.pgm: D (tracked) (merged 0);", err.getvalue())
-        self.assertIn("02.pgm: D (tracked) (merged 13);", err.getvalue())
-        self.assertIn("03.pgm: D (tracked) (merged 2);", err.getvalue())
-        self.assertIn("0 field lanes; 3 merges, 4 merged field lanes", err.getvalue())
+        self.assertIn("02.pgm: D (tracked) (merged 1);", err.getvalue())
+        self.assertIn("03.pgm: D (tracked) (merged 23);", err.getvalue())
+        self.assertIn("0 field lanes, 0 turn lanes; 3 merges, 4 merged field lanes", err.getvalue())
 
     def test_a_merge_never_offers_atoms_of_another_shown_frame(self) -> None:
         session = ScanSession()

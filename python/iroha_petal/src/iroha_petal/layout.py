@@ -12,7 +12,7 @@ a fixed table.
 
 The Rust reference stores the layout constants as ``f32`` and widens them to
 ``f64`` where it computes. Most of them are exact small integers; the petal
-constants (``4.6``, ``5.2``, ...) are not, so they hold here the widened
+constants (``4.6``, ``3.73``, ...) are not, so they hold here the widened
 single-precision values the reference computes with (``PETAL_RADIUS`` is
 ``4.599999904632568``). :func:`slot_center` evaluates its trigonometry in single
 precision like the reference.
@@ -118,18 +118,20 @@ FIELD_CELLS = 3376
 SECTORS = 4
 #: Cells in each sector.
 SECTOR_CELLS = FIELD_CELLS // SECTORS
-#: Radius of the disc a petal stands in for: decoders sample within it
-#: (``4.6`` in single precision).
+#: Radius of the disc a petal stands in for: decoders sample within it, and no other
+#: petal, however it is turned, reaches into it (``4.6`` in single precision).
 PETAL_RADIUS = _f32(4.6)
-#: Half the length of a drawn petal, along the outward radial direction
-#: (``5.2`` in single precision).
-PETAL_HALF_LENGTH = _f32(5.2)
-#: Half the width of a drawn petal (``4.3`` in single precision).
-PETAL_HALF_WIDTH = _f32(4.3)
-#: Radius of the cosmetic notch cut into each petal tip (``1.3`` in single precision).
-PETAL_NOTCH_RADIUS = _f32(1.3)
-#: Distance from a petal centre to its notch centre, outward (``5.4`` in single precision).
-PETAL_NOTCH_DISTANCE = _f32(5.4)
+#: Half the length of a drawn petal, along its axis (the outward radial direction, turned
+#: by the petal's turn, see :mod:`iroha_petal.turns`).
+PETAL_HALF_LENGTH = _f32(6.0)
+#: Half the width of a drawn petal (``3.73`` in single precision).
+PETAL_HALF_WIDTH = _f32(3.73)
+#: Radius of the notch cut into each petal tip; it tells a petal from one turned by half a
+#: turn (``1.12`` in single precision).
+PETAL_NOTCH_RADIUS = _f32(1.12)
+#: Distance from a petal centre to its notch centre, along its axis (``6.24`` in single
+#: precision).
+PETAL_NOTCH_DISTANCE = _f32(6.24)
 
 
 def _band_offsets() -> Tuple[int, ...]:
@@ -526,9 +528,8 @@ def petal_lit(dx: float, dy: float, angle: float) -> bool:
     """Return whether the point ``(dx, dy)``, relative to the centre of a petal that
     points along ``angle``, is lit.
 
-    A petal is an ellipse of half-length :data:`PETAL_HALF_LENGTH` along the outward
-    direction and half-width :data:`PETAL_HALF_WIDTH`, minus the cosmetic notch at its
-    tip.
+    A petal is an ellipse of half-length :data:`PETAL_HALF_LENGTH` along ``angle`` and
+    half-width :data:`PETAL_HALF_WIDTH`, minus the notch at its tip.
     """
     sin = math.sin(angle)
     cos = math.cos(angle)

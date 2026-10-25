@@ -1,7 +1,7 @@
 # Copyright 2026 Hyperledger Iroha Contributors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Conformance with the shared golden vectors in ``fixtures/petal/petal_stream_v2.json``."""
+"""Conformance with the shared golden vectors in ``fixtures/petal/petal_stream_v3.json``."""
 
 from __future__ import annotations
 
@@ -58,11 +58,28 @@ from iroha_petal.rs import ReedSolomon
 from iroha_petal.stream import (
     BEACON_INTERVAL,
     FORMAT_VERSION,
+    LaneHeader,
     StreamAssembler,
     StreamEncoder,
     first_atom_id,
     parse_atom_lane,
     parse_d_lane,
+)
+from iroha_petal.turns import (
+    TURN_ATOMS,
+    TURN_BLURS,
+    TURN_CARRIERS,
+    TURN_ID_BASE,
+    TURN_PARITY,
+    TURN_POSITIONS,
+    TURN_WORD,
+    carrier_order,
+    decode_turn_lane_counted,
+    encode_turn_lane,
+    turn_first_id,
+    turn_packet,
+    turn_template,
+    turn_whitening,
 )
 
 
@@ -83,8 +100,8 @@ class FixtureTest(unittest.TestCase):
 
     def test_constants_and_layout_match(self) -> None:
         doc = self.doc
-        self.assertEqual(doc["fixture_version"], 2)
-        self.assertEqual(doc["format"], "petal-stream-v2")
+        self.assertEqual(doc["fixture_version"], 3)
+        self.assertEqual(doc["format"], "petal-stream-v3")
         constants = doc["constants"]
         self.assertEqual(constants["canvas"], CANVAS)
         self.assertEqual(constants["atom_len"], ATOM_LEN)
@@ -98,6 +115,15 @@ class FixtureTest(unittest.TestCase):
         self.assertEqual(constants["field_cells"], FIELD_CELLS)
         self.assertEqual(constants["beacon_interval"], BEACON_INTERVAL)
         self.assertEqual(constants["format_version"], FORMAT_VERSION)
+        for key, value in (
+            ("turn_positions", TURN_POSITIONS),
+            ("turn_carriers", TURN_CARRIERS),
+            ("turn_word", TURN_WORD),
+            ("turn_parity", TURN_PARITY),
+            ("turn_atoms", TURN_ATOMS),
+            ("turn_id_base", TURN_ID_BASE),
+        ):
+            self.assertEqual(constants[key], value, key)
         layout = doc["layout"]
         self.assertEqual(layout["finder_centers"], [v for c in FINDER_CENTERS for v in c])
         self.assertEqual((layout["band_inner"], layout["band_spacing"]), (BAND_INNER, BAND_SPACING))
@@ -115,6 +141,10 @@ class FixtureTest(unittest.TestCase):
         self.assertEqual(len(sectors), SECTORS)
         for sector, cells in enumerate(sectors):
             self.assertEqual(cells, list(sector_cells(sector)), f"sector {sector}")
+        orders = layout["carrier_orders"]
+        self.assertEqual(len(orders), SECTORS)
+        for sector, order in enumerate(orders):
+            self.assertEqual(order, list(carrier_order(sector)), f"sector {sector}")
         self.assertEqual(tuple(layout["mask"]), MASK)
         self.assertEqual((layout["mask_origin"], layout["mask_pitch"]), (MASK_ORIGIN, MASK_PITCH))
         self.assertEqual(layout["backdrop_radius"], BACKDROP_RADIUS)
@@ -147,9 +177,29 @@ class FixtureTest(unittest.TestCase):
         for case in prng["mix32"]:
             self.assertEqual(mix32(case["in"]), case["out"])
         whitening = self.doc["whitening"]
-        self.assertEqual(sorted(whitening), sorted(lane.value for lane in Lane))
+        turn_lanes = [f"T{sector}" for sector in range(SECTORS)]
+        self.assertEqual(sorted(whitening), sorted([lane.value for lane in Lane] + turn_lanes))
         for lane in Lane:
             self.assertEqual(lane.whitening().hex(), whitening[lane.value], lane)
+        for sector, name in enumerate(turn_lanes):
+            self.assertEqual(turn_whitening(sector).hex(), whitening[name], name)
+
+    def test_turn_ids_and_reader_templates_match(self) -> None:
+        ids = self.doc["turn_first_ids"]
+        for frame, sector, atom_id in zip(ids["frames"], ids["sectors"], ids["ids"]):
+            self.assertEqual(turn_first_id(frame, sector), atom_id, (frame, sector))
+        reader = self.doc["turn_reader"]
+        self.assertEqual(tuple(reader["blurs"]), TURN_BLURS)
+        probes = reader["template_probes"]
+        self.assertEqual(len(probes), 6 * len(TURN_BLURS))
+        for probe in probes:
+            blur = TURN_BLURS.index(probe["blur"])
+            got = turn_template(blur, probe["along"], probe["across"])
+            self.assertLess(
+                abs(got - probe["value"]),
+                1e-12,
+                f"blur {probe['blur']} at ({probe['along']}, {probe['across']}): {got}",
+            )
 
     def test_reed_solomon_vectors_encode_and_correct(self) -> None:
         for case in self.doc["reed_solomon"]:
@@ -196,32 +246,61 @@ class FixtureTest(unittest.TestCase):
                 lanes = encoder.lane_data(number)
                 self.assertEqual(lanes.d.hex(), frame["d_data"], label)
                 self.assertEqual([f.hex() for f in lanes.fields], frame["field_data"], label)
+                turn_data = [bytes.fromhex(data) for data in frame["turn_data"]]
+                self.assertEqual(list(lanes.turns), turn_data, label)
                 d_word = bytes.fromhex(frame["d_word"])
                 field_words = [bytes.fromhex(word) for word in frame["field_words"]]
+                turn_words = [bytes.fromhex(word) for word in frame["turn_words"]]
+                header = LaneHeader(meta.tag, number)
+                for sector, word in enumerate(turn_words):
+                    self.assertEqual(
+                        encode_turn_lane(sector, turn_data[sector]), word, f"{label} T{sector}"
+                    )
+                    packet = turn_packet(header, sector, turn_data[sector])
+                    self.assertIsNotNone(packet, f"{label} turn check {sector}")
+                    self.assertEqual(packet.first_id, turn_first_id(number, sector))
                 self.assertEqual(encode_lane(Lane.D, lanes.d), d_word, label)
                 for lane, word in zip(FIELD_LANES, field_words):
                     self.assertEqual(encode_lane(lane, lanes.lane(lane)), word, f"{label} {lane}")
                     self.assertEqual(decode_lane(lane, word), lanes.lane(lane), f"{label} {lane}")
-                cells = FrameCells.from_words(d_word, field_words)
+                cells = FrameCells.from_words(d_word, field_words).with_turns(turn_words)
+                turns = "".join(str(turn) for turn in cells.turns)
+                self.assertEqual(turns, frame["turns"], label)
                 lit = [i for i, on in enumerate(cells.dots) if on]
                 self.assertEqual(lit, frame["lit_dots"], label)
                 self.assertEqual(
                     list(cells.petals), flags(bytes.fromhex(frame["lit_petals_hex"])), label
                 )
                 self.assertEqual(cells, encoder.cells(number), label)
-            # push every fixture frame through decode_lane + assembler
+            # push every fixture frame through decode_lane + assembler, with and without the
+            # turn lanes: the turn lanes finish the one-pass stream in fewer frames
             if name == "one-pass":
-                assembler = StreamAssembler()
-                for frame in stream["frames"]:
-                    d = decode_lane(Lane.D, bytes.fromhex(frame["d_word"]))
-                    assembler.push_d_lane(parse_d_lane(d))
-                    for lane, word in zip(FIELD_LANES, frame["field_words"]):
-                        data_bytes = decode_lane(lane, bytes.fromhex(word))
-                        assembler.push_atoms(parse_atom_lane(lane, data_bytes))
-                completed = assembler.take_completed()
-                self.assertIsNotNone(completed)
-                self.assertEqual(completed.payload, data)
-                self.assertEqual(completed.meta.kind, stream["kind"])
+                needed = []
+                for with_turns in (False, True):
+                    assembler = StreamAssembler()
+                    count = 0
+                    for frame in stream["frames"]:
+                        count += 1
+                        d = decode_lane(Lane.D, bytes.fromhex(frame["d_word"]))
+                        assembler.push_d_lane(parse_d_lane(d))
+                        for lane, word in zip(FIELD_LANES, frame["field_words"]):
+                            data_bytes = decode_lane(lane, bytes.fromhex(word))
+                            assembler.push_atoms(parse_atom_lane(lane, data_bytes))
+                        if with_turns:
+                            header = LaneHeader(meta.tag, frame["frame"])
+                            for sector, word in enumerate(frame["turn_words"]):
+                                data_bytes, _ = decode_turn_lane_counted(
+                                    sector, bytes.fromhex(word)
+                                )
+                                assembler.push_atoms(turn_packet(header, sector, data_bytes))
+                        if assembler.progress().complete:
+                            break
+                    completed = assembler.take_completed()
+                    self.assertIsNotNone(completed)
+                    self.assertEqual(completed.payload, data)
+                    self.assertEqual(completed.meta.kind, stream["kind"])
+                    needed.append(count)
+                self.assertLess(needed[1], needed[0], needed)
 
 
 if __name__ == "__main__":

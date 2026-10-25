@@ -1,15 +1,16 @@
 # Copyright 2026 Hyperledger Iroha Contributors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Golden camera captures in ``fixtures/petal/petal_captures_v2.json``.
+"""Golden camera captures in ``fixtures/petal/petal_captures_v3.json``.
 
-Every conforming decoder must read the lanes named in ``must_decode``, must
-never report wrong data for any lane, must report the recorded inferred corner,
-must follow each tracking pair from its first frame into its second, must
-recover the ``must_merge`` field lanes of every merge set from the merge of its
-captures, must never let a session offer a lane of a mixed set, and must reject
-the negatives. This port follows the reference operation by operation, so it is
-also held to the exact lanes the reference read (``reference_decoded``,
+Every conforming decoder must read the lanes named in ``must_decode`` and the
+turn lanes named in ``must_turn``, must never report wrong data for any lane,
+must report the recorded inferred corner, must follow each tracking pair from
+its first frame into its second, must recover the ``must_merge`` field lanes of
+every merge set from the merge of its captures, must never let a session offer
+a lane of a mixed set, and must reject the negatives. This port follows the
+reference operation by operation, so it is also held to the exact lanes the
+reference read (``reference_decoded``, ``reference_turned``,
 ``reference_tracked`` and ``reference_merged``).
 """
 
@@ -32,6 +33,7 @@ from petal_test_support import (
 from iroha_petal import (
     DECODE_ORDER,
     DecodeError,
+    LaneHeader,
     RenderOptions,
     ScanSession,
     StreamAssembler,
@@ -41,8 +43,10 @@ from iroha_petal import (
     encode_lane,
     field_evidence,
     merge_fields,
+    read_turns,
     render_frame,
     track_frame,
+    turn_packet,
 )
 
 #: Generous per-capture budget for plain CPython (the port takes well under a second).
@@ -66,6 +70,36 @@ CAPTURE_NAMES = [
 
 #: The tracking pairs of the fixture, in order.
 TRACK_NAMES = ["steady-hand-540p", "thumb-arrives-540p"]
+
+
+def read_turn_lanes(test: unittest.TestCase, name: str, image, frame, entry: dict, assembler=None):
+    """Reads the turn lanes of a decoded capture, checks them against the recorded data and
+    the requirements, and returns their sector digits and how long the read took; their
+    atoms go to ``assembler`` when given."""
+    expected = [bytes.fromhex(data) for data in entry["turn_data"]]
+    started = time.perf_counter()
+    results = read_turns(image, frame)
+    elapsed = time.perf_counter() - started
+    letters = ""
+    packets = []
+    for sector, result in enumerate(results):
+        if result is None:
+            continue
+        test.assertEqual(result.data, expected[sector], f"{name}: turn lane {sector} data")
+        field = frame.fields[sector]
+        test.assertIsNotNone(field, f"{name}: a turn lane rides on its field lane")
+        header = LaneHeader(field.data[0], (field.data[1] << 8) | field.data[2])
+        packet = turn_packet(header, sector, result.data)
+        test.assertIsNotNone(packet, f"{name}: turn check {sector}")
+        packets.append(packet)
+        letters += str(sector)
+    if assembler is not None:
+        for packet in packets:
+            assembler.push_atoms(packet)
+    for letter in entry["must_turn"]:
+        test.assertIn(letter, letters, f"{name}: turned {letters!r}, must turn {letter}")
+    test.assertEqual(letters, entry["reference_turned"], f"{name}: turn lanes read")
+    return letters, elapsed
 
 
 def merge_set(test: unittest.TestCase, entry: dict):
@@ -110,7 +144,8 @@ class CaptureTest(unittest.TestCase):
         cls.doc = captures_fixture()
 
     def test_the_fixture_carries_its_captures_tracks_merges_and_negatives(self) -> None:
-        self.assertEqual(self.doc["fixture_version"], 2)
+        self.assertEqual(self.doc["fixture_version"], 3)
+        self.assertEqual(self.doc["format"], "petal-captures-v3")
         self.assertEqual([c["name"] for c in self.doc["captures"]], CAPTURE_NAMES)
         self.assertEqual([t["name"] for t in self.doc["tracks"]], TRACK_NAMES)
         self.assertEqual([m["name"] for m in self.doc["merges"]], ["noisy-480p"])
@@ -143,18 +178,70 @@ class CaptureTest(unittest.TestCase):
             self.assertEqual(
                 decoded.inferred_corner, capture["inferred_corner"], f"{name}: inferred corner"
             )
-            timings.append(
-                (name, image.width, image.height, read, decoded.pose.distortion, elapsed)
-            )
             decoded.feed(assembler)
+            turned, turn_elapsed = read_turn_lanes(self, name, image, decoded, capture, assembler)
+            self.assertLess(turn_elapsed, TIME_BUDGET_S, f"{name}: turns took {turn_elapsed:.1f} s")
+            timings.append(
+                (
+                    name,
+                    image.width,
+                    image.height,
+                    read,
+                    turned,
+                    decoded.pose.distortion,
+                    elapsed,
+                    turn_elapsed,
+                )
+            )
         # captures of different frames of the same stream accumulate in one assembler
         self.assertGreater(assembler.progress().atoms_received, 100)
-        for name, width, height, read, distortion, elapsed in timings:
+        for name, width, height, read, turned, distortion, elapsed, turn_elapsed in timings:
             sys.stderr.write(
-                f"\n  {name:<22} {width}x{height} lanes {read:<5} k {distortion:+.3f} "
-                f"{elapsed:.2f} s"
+                f"\n  {name:<22} {width}x{height} lanes {read:<5} turns {turned:<4} "
+                f"k {distortion:+.3f} {elapsed:.2f} s + {turn_elapsed:.2f} s"
             )
         sys.stderr.write("\n")
+
+    def test_the_golden_turn_lanes_cover_the_cameras_the_spec_names(self) -> None:
+        turned = {c["name"]: c["reference_turned"] for c in self.doc["captures"]}
+        # the sharp cameras, the mirrored, covered and cut-off captures read every turn lane;
+        # the over-exposed capture reads two; the soft, blurred, veiled and distorted none
+        for name in (
+            "clean-512",
+            "modern-720p-rotated",
+            "selfie-mirrored-540p",
+            "hidden-corner-540p",
+            "cut-corner-720p",
+            "shadow-band-540p",
+        ):
+            self.assertEqual(turned[name], "0123", name)
+        self.assertEqual(turned["overexposed-540p"], "12")
+        for name in (
+            "legacy-540p-tilted",
+            "soft-480p-blur1.9",
+            "small-480p",
+            "veiled-720p",
+            "barrel-480p",
+        ):
+            self.assertEqual(turned[name], "", name)
+        for pair in self.doc["tracks"]:
+            self.assertEqual(pair["reference_turned"], "0123", pair["name"])
+        by_name = {c["name"]: c for c in self.doc["captures"]}
+        # the shadow band reads its turn lanes with 3 to 9 corrections, exactly as the
+        # reference reads them
+        image = luma_of(by_name["shadow-band-540p"])
+        results = read_turns(image, decode_frame(image))
+        self.assertEqual(
+            [(r.corrected, r.erasures) for r in results], [(5, 0), (6, 0), (3, 0), (9, 0)]
+        )
+        # the over-exposed capture reads two, each at the limit of its Reed-Solomon code
+        # (22 parity bytes: twice the errors plus the erasures)
+        image = luma_of(by_name["overexposed-540p"])
+        results = read_turns(image, decode_frame(image))
+        read = [(r.corrected, r.erasures) for r in results if r is not None]
+        self.assertEqual(read, [(11, 0), (12, 2)])
+        for corrected, erasures in read:
+            self.assertEqual(2 * (corrected - erasures) + erasures, 22)
 
     def test_the_cheap_lens_needs_the_distortion_search(self) -> None:
         by_name = {c["name"]: c for c in self.doc["captures"]}
@@ -185,9 +272,15 @@ class CaptureTest(unittest.TestCase):
             self.assertEqual(
                 (followed.rotation, followed.mirrored), (previous.rotation, previous.mirrored)
             )
-            timings.append((name, read, elapsed))
-        for name, read, elapsed in timings:
-            sys.stderr.write(f"\n  {name:<22} tracked lanes {read:<5} {elapsed:.2f} s")
+            turned, turn_elapsed = read_turn_lanes(
+                self, name, luma_of(pair, "to_luma_zlib_base64"), followed, pair
+            )
+            timings.append((name, read, turned, elapsed, turn_elapsed))
+        for name, read, turned, elapsed, turn_elapsed in timings:
+            sys.stderr.write(
+                f"\n  {name:<22} tracked lanes {read:<5} turns {turned:<4} {elapsed:.2f} s "
+                f"+ {turn_elapsed:.2f} s"
+            )
         sys.stderr.write("\n")
 
     def test_golden_merge_sets_recover_lanes_no_capture_reads_alone(self) -> None:
@@ -246,24 +339,29 @@ class CaptureTest(unittest.TestCase):
 
         def recorded(frame: int) -> dict:
             lanes = encoder.lane_data(frame)
-            return {"d_data": lanes.d.hex(), "field_data": [f.hex() for f in lanes.fields]}
+            return {
+                "d_data": lanes.d.hex(),
+                "field_data": [f.hex() for f in lanes.fields],
+                "turn_data": [t.hex() for t in lanes.turns],
+            }
 
         for capture in self.doc["captures"]:
             self.assertEqual(
-                {key: capture[key] for key in ("d_data", "field_data")},
+                {key: capture[key] for key in ("d_data", "field_data", "turn_data")},
                 recorded(capture["frame"]),
                 capture["name"],
             )
         for pair in self.doc["tracks"]:
             self.assertEqual(
-                {key: pair[key] for key in ("d_data", "field_data")},
+                {key: pair[key] for key in ("d_data", "field_data", "turn_data")},
                 recorded(pair["to_frame"]),
                 pair["name"],
             )
         for entry in self.doc["merges"]:
+            lanes = recorded(entry["frame"])
             self.assertEqual(
                 {key: entry[key] for key in ("d_data", "field_data")},
-                recorded(entry["frame"]),
+                {key: lanes[key] for key in ("d_data", "field_data")},
                 entry["name"],
             )
         for entry in self.doc["mixed_merges"]:

@@ -56,11 +56,12 @@ class CliTest(unittest.TestCase):
             self.assertEqual(status, 0, err)
             self.assertEqual((root / "out.bin").read_bytes(), data)
             self.assertIn("kind 5", out)
-            # the frames share one pose, so every frame after the first follows it
-            self.assertIn(f"{frames[3].name}: D0123; rank 0/0", err)
-            self.assertIn(f"{frames[1].name}: D0123 (tracked)", err)
+            # the frames share one pose, so every frame after the first follows it; the turn
+            # lane of every field lane is read too
+            self.assertIn(f"{frames[3].name}: D0123 (turn lanes 0123); rank 0/0", err)
+            self.assertIn(f"{frames[1].name}: D0123 (tracked) (turn lanes 0123)", err)
             self.assertIn("frames: 3 read, 3 located, 3 readable, 2 tracked", err)
-            self.assertIn("lane D read in 3 frames, 12 field lanes; 0 merges", err)
+            self.assertIn("lane D read in 3 frames, 12 field lanes, 12 turn lanes; 0 merges", err)
 
     def test_decode_reports_incomplete_streams(self) -> None:
         data = payload(2_000, 78)
@@ -114,15 +115,34 @@ class CliTest(unittest.TestCase):
             write_image(path, luma_of(capture))
             status, out, _ = run("inspect", str(path))
             self.assertEqual(status, 0)
-            self.assertIn("lanes decoded: D0123", out)
+            # a 480p camera too soft for the turns: the turn reader fits a blur of 3.2 and stops
+            self.assertIn("lanes decoded: D0123; no turn lane", out)
+            self.assertIn("turn blur: 3.2 canvas units", out)
             self.assertIn("lane D: ok", out)
             self.assertIn("lane 0: ok", out)
             self.assertIn("lane 3: ok", out)
+            self.assertNotIn("turn lane 0", out)
             self.assertIn("rotation 3", out)
             self.assertIn("lens distortion: +0.000", out)
             self.assertIn(capture["d_data"], out)
             self.assertIn(capture["field_data"][2], out)
             self.assertNotIn("inferred corner", out)
+            sharp = next(c for c in captures_fixture()["captures"] if c["name"] == "clean-512")
+            clean = Path(directory) / "clean.png"
+            write_image(clean, luma_of(sharp))
+            status, out, _ = run("inspect", str(clean))
+            self.assertEqual(status, 0)
+            self.assertIn("lanes decoded: D0123; turn lanes: 0123", out)
+            self.assertIn("turn blur: 1 canvas units", out)
+            for sector in range(4):
+                self.assertIn(
+                    f"turn lane {sector}: ok (0 corrected, 0 erased) {sharp['turn_data'][sector]}",
+                    out,
+                )
+            # the turn lanes' repair atoms: 2^31 + 16 frame + 4 sector
+            first = (1 << 31) + 16 * sharp["frame"]
+            self.assertIn(f"ids {first}..{first + 3}", out)
+            self.assertIn(f"ids {first + 12}..{first + 15}", out)
             barrel = next(c for c in captures_fixture()["captures"] if c["name"] == "barrel-480p")
             lens = Path(directory) / "lens.png"
             write_image(lens, luma_of(barrel))
@@ -136,7 +156,7 @@ class CliTest(unittest.TestCase):
             write_image(shaded, luma_of(shadow))
             status, out, _ = run("inspect", str(shaded))
             self.assertEqual(status, 0)
-            self.assertIn("lanes decoded: 0123", out)
+            self.assertIn("lanes decoded: 0123; turn lanes: 0123", out)
             self.assertIn("lane D: not decoded", out)
             hidden = next(
                 c for c in captures_fixture()["captures"] if c["name"] == "hidden-corner-540p"

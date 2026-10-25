@@ -4,10 +4,11 @@
 """Reference software renderer and a platform-neutral draw list.
 
 The picture is black, with four sakura-blossom finders in the canvas corners,
-three dotted rings, and inside them a field of petals on concentric bands. A
-lit petal whose centre lies inside the ``天`` is drawn in the light colour, the
-others in sakura pink, over a faint backdrop of the ``天`` itself, so the
-character shows through the storm of petals.
+three dotted rings, and inside them a field of petals on concentric bands, each
+lit petal turned about its centre by its turn. A lit petal whose centre lies
+inside the ``天`` is drawn in the light colour, the others in sakura pink, over a
+faint backdrop of the ``天`` itself, so the character shows through the storm of
+petals.
 
 :func:`render_frame` reproduces the Rust reference renderer pixel for pixel:
 every supersample is shaded by the same predicates in the same IEEE double
@@ -19,7 +20,7 @@ petal tip, is shaded by the reference's own petal search.
 
 :func:`draw_list` describes the same frame as shapes for vector backends
 (canvas, SVG, Core Graphics, ...). Platform renderers may use their own 2D
-APIs as long as geometry and polarity match the reference.
+APIs as long as geometry, turns and polarity match the reference.
 """
 
 from __future__ import annotations
@@ -73,6 +74,7 @@ from .layout import (
     petal_lit,
     ring_offset,
 )
+from .turns import TURN_POSITIONS, turn_angle
 
 __all__ = [
     "Color",
@@ -119,13 +121,21 @@ class RenderOptions:
 # Sample colour codes painted before the colour lookup.
 _BACKGROUND, _LIGHT, _PINK, _BACKDROP = 0, 1, 2, 3
 
-_CELL_COS = tuple(math.cos(cell_angle(cell)) for cell in range(FIELD_CELLS))
-_CELL_SIN = tuple(math.sin(cell_angle(cell)) for cell in range(FIELD_CELLS))
+#: The axis of every field cell's petal at every turn position (the outward direction plus
+#: the turn), ``[cell * 4 + turn]``.
+_AXIS = tuple(
+    cell_angle(cell) + turn_angle(turn)
+    for cell in range(FIELD_CELLS)
+    for turn in range(TURN_POSITIONS)
+)
+_AXIS_COS = tuple(math.cos(angle) for angle in _AXIS)
+_AXIS_SIN = tuple(math.sin(angle) for angle in _AXIS)
 _CELL_CODE = tuple(_LIGHT if cell_light(cell) else _PINK for cell in range(FIELD_CELLS))
 _NOTCH_RADIUS_SQUARED = PETAL_NOTCH_RADIUS * PETAL_NOTCH_RADIUS
 #: Samples this close to a petal tip are shaded by the reference's petal search: only
 #: there can its band test (``|radius - band radius| <= half-length``) disagree with the
-#: petal's own ellipse.
+#: petal's own ellipse, however the petal is turned (a point of the ellipse within this
+#: distance of the tips along its axis lies less than the half-length from its centre).
 _TIP = PETAL_HALF_LENGTH - 0.01
 
 
@@ -136,9 +146,11 @@ def _round(value: float) -> float:
     return round_half_away(value)
 
 
-def _petal_code(petals: Sequence[bool], x: float, y: float) -> Optional[int]:
+def _petal_code(cells: FrameCells, x: float, y: float) -> Optional[int]:
     """The reference's petal search for the canvas sample ``(x, y)``: the colour code of
-    the first lit petal that covers it, or ``None``."""
+    the first lit petal that covers it, turned by its turn, or ``None``."""
+    petals = cells.petals
+    turns = cells.turns
     dx = x - CENTER
     dy = y - CENTER
     radius = math.sqrt(dx * dx + dy * dy)
@@ -160,7 +172,7 @@ def _petal_code(petals: Sequence[bool], x: float, y: float) -> Optional[int]:
             if not petals[cell]:
                 continue
             cx, cy = cell_center(cell)
-            if petal_lit(x - cx, y - cy, cell_angle(cell)):
+            if petal_lit(x - cx, y - cy, cell_angle(cell) + turn_angle(turns[cell])):
                 return _CELL_CODE[cell]
     return None
 
@@ -242,10 +254,11 @@ def _paint_backdrop(coords: Sequence[float], codes: bytearray) -> None:
 
 
 def _paint_petals(cells: FrameCells, coords: Sequence[float], codes: bytearray) -> None:
-    """Every lit petal over its ellipse; contested and tip samples are shaded by the
-    reference's petal search."""
+    """Every lit petal over its ellipse along its turned axis; contested and tip samples
+    are shaded by the reference's petal search."""
     span = len(coords)
     petals = cells.petals
+    turns = cells.turns
     a = PETAL_HALF_LENGTH
     b = PETAL_HALF_WIDTH
     a2 = a * a
@@ -256,8 +269,9 @@ def _paint_petals(cells: FrameCells, coords: Sequence[float], codes: bytearray) 
         if not petals[cell]:
             continue
         cx, cy = cell_center(cell)
-        cos = _CELL_COS[cell]
-        sin = _CELL_SIN[cell]
+        axis = cell * TURN_POSITIONS + turns[cell]
+        cos = _AXIS_COS[axis]
+        sin = _AXIS_SIN[axis]
         code = _CELL_CODE[cell]
         # the ellipse's quadratic in dx for a row at dy: qa dx^2 + qb dx + qc <= 0; the
         # bounds only choose the samples to test, with a margin
@@ -299,7 +313,7 @@ def _paint_petals(cells: FrameCells, coords: Sequence[float], codes: bytearray) 
         j, i = divmod(index, span)
         x = coords[i]
         y = coords[j]
-        resolved = _petal_code(petals, x, y)
+        resolved = _petal_code(cells, x, y)
         if resolved is None:
             dx = x - CENTER
             dy = y - CENTER
@@ -451,8 +465,8 @@ class BackdropCell:
 @dataclass(frozen=True)
 class PetalShape:
     """One lit petal: an ellipse of :attr:`DrawList.petal_half_length` along ``angle``
-    (the outward direction) and :attr:`DrawList.petal_half_width` across it, centred on
-    the field cell, minus the cosmetic notch at its tip."""
+    (its axis: the outward direction plus its turn) and :attr:`DrawList.petal_half_width`
+    across it, centred on the field cell, minus the notch at its tip."""
 
     #: Field cell (``0..3376``).
     index: int
@@ -460,7 +474,8 @@ class PetalShape:
     x: float
     #: Centre ``y``.
     y: float
-    #: Outward direction in radians, clockwise on screen from 3 o'clock.
+    #: The petal's axis in radians, clockwise on screen from 3 o'clock: the cell's outward
+    #: direction plus its turn (see :func:`~iroha_petal.turns.turn_angle`).
     angle: float
     #: Whether the petal lies inside the ``天`` (light) or not (pink).
     light: bool
@@ -472,7 +487,14 @@ class PetalShape:
 class DrawList:
     """Shapes of one frame in canvas units (``0..1024``), in painting order: background,
     then the backdrop cells clipped to :attr:`backdrop_clip`, the lit petals, the lit
-    dots and the finders."""
+    dots and the finders.
+
+    Every petal is an ellipse along its axis minus its notch (a disc of
+    :attr:`petal_notch_radius` centred :attr:`petal_notch_distance` along the axis), which
+    must be drawn: it tells a petal from one turned by half a turn, and the turn reader's
+    templates include it. Petals are small (12 x 7.5 units): draw them antialiased, at 768
+    pixels or more.
+    """
 
     #: Canvas side in design units.
     canvas: float
@@ -484,31 +506,66 @@ class DrawList:
     backdrop_clip: Circle
     #: Every lit petal in field-cell order.
     petals: Tuple[PetalShape, ...]
-    #: Half the length of a petal, along its outward direction.
+    #: Half the length of a petal, along its axis.
     petal_half_length: float
     #: Half the width of a petal.
     petal_half_width: float
-    #: Radius of the notch cut into a petal tip (renderers may omit the notch).
+    #: Radius of the notch cut into a petal tip (always drawn).
     petal_notch_radius: float
-    #: Distance from a petal centre to its notch centre, outward.
+    #: Distance from a petal centre to its notch centre, along its axis.
     petal_notch_distance: float
     #: Every lit ring dot (gates included), filled pink.
     dots: Tuple[Circle, ...]
     #: The four corner finders, clockwise from the top-left one.
     finders: Tuple[FinderShape, ...]
 
+    def petal_outline(self) -> str:
+        """The SVG path data of the petal outline in its own frame (``x`` along its axis,
+        the centre at the origin): the ellipse the long way round from one edge of the
+        notch to the other, then the notch's inner arc back."""
+        a = self.petal_half_length
+        b = self.petal_half_width
+        r = self.petal_notch_radius
+        d = self.petal_notch_distance
+        # (a cos t - d)^2 + (b sin t)^2 = r^2 is a quadratic in cos t
+        qa = a * a - b * b
+        qb = -2.0 * a * d
+        qc = d * d + b * b - r * r
+        cos = None
+        discriminant = qb * qb - 4.0 * qa * qc
+        if qa != 0.0 and discriminant >= 0.0:
+            root = math.sqrt(discriminant)
+            cos = next(
+                (
+                    c
+                    for c in ((-qb - root) / (2.0 * qa), (-qb + root) / (2.0 * qa))
+                    if -1.0 < c < 1.0
+                ),
+                None,
+            )
+        if r <= 0.0 or cos is None:
+            # the notch does not cut the outline
+            return (
+                f"M {_svg_number(a)} 0 A {_svg_number(a)} {_svg_number(b)} 0 1 1 "
+                f"{_svg_number(-a)} 0 A {_svg_number(a)} {_svg_number(b)} 0 1 1 {_svg_number(a)} 0 Z"
+            )
+        x = _svg_number(a * cos)
+        y = _svg_number(b * math.sqrt(1.0 - cos * cos))
+        return (
+            f"M {x} {y} A {_svg_number(a)} {_svg_number(b)} 0 1 1 {x} -{y} "
+            f"A {_svg_number(r)} {_svg_number(r)} 0 0 0 {x} {y} Z"
+        )
+
     def to_svg(self, size: Optional[int] = None) -> str:
-        """Serialise the draw list as a standalone SVG document (the petal notches are
-        omitted)."""
+        """Serialise the draw list as a standalone SVG document; every petal is drawn
+        notched along its turned axis, and SVG renderers antialias it."""
         side = self.canvas if size is None else size
         p = self.palette
 
         def rgb(color: Color) -> str:
             return "#%02x%02x%02x" % tuple(color)
 
-        def num(value: float) -> str:
-            text = ("%.4f" % value).rstrip("0").rstrip(".")
-            return text if text not in ("", "-0") else "0"
+        num = _svg_number
 
         def circle(c: Circle) -> str:
             return f'<circle cx="{num(c.x)}" cy="{num(c.y)}" r="{num(c.radius)}"/>'
@@ -518,7 +575,8 @@ class DrawList:
             f'<svg xmlns="http://www.w3.org/2000/svg" width="{num(side)}" height="{num(side)}" '
             f'viewBox="0 0 {num(self.canvas)} {num(self.canvas)}">',
             f'<rect width="{num(self.canvas)}" height="{num(self.canvas)}" fill="{rgb(p.background)}"/>',
-            f'<defs><clipPath id="backdrop">{circle(clip)}</clipPath></defs>',
+            f'<defs><clipPath id="backdrop">{circle(clip)}</clipPath>'
+            f'<path id="petal" d="{self.petal_outline()}"/></defs>',
             f'<g fill="{rgb(p.backdrop)}" clip-path="url(#backdrop)">',
         ]
         for cell in self.backdrop:
@@ -527,16 +585,13 @@ class DrawList:
                 f'height="{num(cell.size)}"/>'
             )
         parts.append("</g>")
-        rx = num(self.petal_half_length)
-        ry = num(self.petal_half_width)
         for light in (True, False):
             parts.append(f'<g fill="{rgb(p.light if light else p.pink)}">')
             for petal in self.petals:
                 if petal.light is light:
-                    x, y = num(petal.x), num(petal.y)
                     parts.append(
-                        f'<ellipse cx="{x}" cy="{y}" rx="{rx}" ry="{ry}" '
-                        f'transform="rotate({num(math.degrees(petal.angle))} {x} {y})"/>'
+                        f'<use href="#petal" transform="translate({num(petal.x)} {num(petal.y)}) '
+                        f'rotate({num(math.degrees(petal.angle))})"/>'
                     )
             parts.append("</g>")
         parts.append(f'<g fill="{rgb(p.pink)}">')
@@ -550,6 +605,12 @@ class DrawList:
             parts.extend(circle(c) for c in finder.notches)
         parts.append("</g></svg>")
         return "\n".join(parts) + "\n"
+
+
+def _svg_number(value: float) -> str:
+    """``value`` with at most four decimals, for SVG attributes."""
+    text = ("%.4f" % value).rstrip("0").rstrip(".")
+    return text if text not in ("", "-0") else "0"
 
 
 _BACKDROP_CELLS = tuple(
@@ -590,7 +651,7 @@ def draw_list(cells: FrameCells, palette: Optional[Palette] = None) -> DrawList:
                     index=cell,
                     x=x,
                     y=y,
-                    angle=cell_angle(cell),
+                    angle=cell_angle(cell) + turn_angle(cells.turns[cell]),
                     light=light,
                     color=palette.light if light else palette.pink,
                 )

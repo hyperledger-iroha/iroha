@@ -6,11 +6,12 @@
 * ``encode`` renders numbered frames of a payload stream (PNG, PGM or SVG).
 * ``decode`` feeds image files (any order) through a :class:`ScanSession` and
   writes the reassembled payload; it reports the lanes each frame read (``D``
-  and the field sectors ``0``-``3``), how many frames were read by tracking the
-  previous pose, how many had a hidden corner blossom and which field lanes
-  merging recovered.
+  and the field sectors ``0``-``3``), the turn lanes it read (by the digit of
+  their field lane), how many frames were read by tracking the previous pose,
+  how many had a hidden corner blossom and which field lanes merging recovered.
 * ``inspect`` reports what one image decodes to: the orientation, a hidden
-  (inferred) corner blossom, the lens distortion and every lane.
+  (inferred) corner blossom, the lens distortion, every lane and turn lane, and
+  the blur the turn reader fits.
 
 No network and no camera access: frames are files.
 """
@@ -27,7 +28,8 @@ from .lanes import DECODE_ORDER
 from .pngio import read_luma, write_image
 from .render import RenderOptions, draw_list, render_frame
 from .session import ScanSession
-from .stream import AtomPacket, Beacon, StreamEncoder, StreamError
+from .stream import AtomPacket, Beacon, LaneHeader, StreamEncoder, StreamError
+from .turns import observed_turns, read_turns, turn_packet
 
 __all__ = ["main"]
 
@@ -101,6 +103,8 @@ def _decode(args: argparse.Namespace) -> int:
             status += " (one corner blossom is hidden)"
         if outcome.merged:
             status += f" (merged {outcome.merged})"
+        if outcome.turned:
+            status += f" (turn lanes {outcome.turned})"
         progress = outcome.progress
         if not args.quiet:
             print(
@@ -114,7 +118,8 @@ def _decode(args: argparse.Namespace) -> int:
         print(
             f"frames: {stats.frames} read, {stats.located} located, {stats.readable} readable, "
             f"{stats.tracked} tracked, {stats.inferred} with a hidden corner blossom; "
-            f"lane D read in {stats.lane_d} frames, {stats.field_lanes} field lanes; "
+            f"lane D read in {stats.lane_d} frames, {stats.field_lanes} field lanes, "
+            f"{stats.turn_lanes} turn lanes; "
             f"{stats.merges} merges, {stats.merged_lanes} merged field lanes",
             file=sys.stderr,
         )
@@ -159,7 +164,16 @@ def _inspect(args: argparse.Namespace) -> int:
     ):
         px, py = pose.apply(x, y)
         print(f"  {name}: ({px:.1f}, {py:.1f})")
-    print(f"lanes decoded: {frame.lanes or '-'}")
+    turns = read_turns(image, frame)
+    turned = "".join(str(sector) for sector, result in enumerate(turns) if result is not None)
+    print(
+        f"lanes decoded: {frame.lanes or '-'}; "
+        + (f"turn lanes: {turned}" if turned else "no turn lane")
+    )
+    observed = observed_turns(image, frame)
+    if observed is not None:
+        # the turn lanes are read up to a fitted blur of 2.5 canvas units
+        print(f"turn blur: {observed.blur:g} canvas units")
     for lane in DECODE_ORDER:
         result = frame.lane(lane)
         if result is None:
@@ -169,6 +183,12 @@ def _inspect(args: argparse.Namespace) -> int:
                 f"lane {lane.letter}: ok ({result.corrected} corrected, {result.erasures} erased) "
                 f"{result.data.hex()}"
             )
+    for sector, result in enumerate(turns):
+        if result is not None:
+            print(
+                f"turn lane {sector}: ok ({result.corrected} corrected, {result.erasures} erased) "
+                f"{result.data.hex()}"
+            )
     lane = frame.d_lane()
     if isinstance(lane, Beacon):
         meta = lane.meta
@@ -176,7 +196,15 @@ def _inspect(args: argparse.Namespace) -> int:
             f"beacon: frame {lane.header.frame}, kind {meta.kind}, length {meta.length}, "
             f"crc32c 0x{meta.crc:08x}"
         )
-    for packet in frame.atom_packets():
+    packets = list(frame.atom_packets())
+    for sector, result in enumerate(turns):
+        field = frame.fields[sector]
+        if result is not None and field is not None:
+            header = LaneHeader(field.data[0], (field.data[1] << 8) | field.data[2])
+            packet = turn_packet(header, sector, result.data)
+            if packet is not None:
+                packets.append(packet)
+    for packet in packets:
         assert isinstance(packet, AtomPacket)
         last = packet.first_id + len(packet.atoms) - 1
         print(

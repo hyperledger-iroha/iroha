@@ -38,16 +38,29 @@ from iroha_petal.layout import (
     ring_offset,
     slot_center,
 )
-from iroha_petal.render import Palette, RenderOptions, draw_list, render_frame
+from iroha_petal.render import Palette, RenderOptions, _svg_number, draw_list, render_frame
+from iroha_petal.stream import LaneHeader
+from iroha_petal.turns import TURN_ATOMS, encode_turn_lane, turn_angle, turn_data
 
 
 def cells(seed: int) -> FrameCells:
+    """Cells of arbitrary lane data, the carriers turned to show arbitrary turn lanes."""
     d = bytes(((b * 13) & 0xFF) ^ seed for b in range(D_DATA))
     fields = [
         encode_lane(lane, bytes(((b * 17 + s) & 0xFF) ^ seed for b in range(FIELD_DATA)))
         for s, lane in enumerate(FIELD_LANES)
     ]
-    return FrameCells.from_words(encode_lane(Lane.D, d), fields)
+    turns = [
+        encode_turn_lane(
+            s,
+            turn_data(
+                LaneHeader(seed, 9), s, bytes(((b * 29 + s) & 0xFF) ^ seed for b in range(64))
+            ),
+        )
+        for s in range(len(FIELD_LANES))
+    ]
+    assert TURN_ATOMS * 16 == 64
+    return FrameCells.from_words(encode_lane(Lane.D, d), fields).with_turns(turns)
 
 
 def _round(value: float) -> float:
@@ -92,7 +105,7 @@ def literal_shade(frame: FrameCells, palette: Palette, x: float, y: float):
                 if not frame.petals[cell]:
                     continue
                 cx, cy = cell_center(cell)
-                if petal_lit(x - cx, y - cy, cell_angle(cell)):
+                if petal_lit(x - cx, y - cy, cell_angle(cell) + turn_angle(frame.turns[cell])):
                     return palette.light if cell_light(cell) else palette.pink
         if in_mask(x, y):
             return palette.backdrop
@@ -163,9 +176,10 @@ class RenderTest(unittest.TestCase):
 
     def test_the_painter_matches_a_literal_port_of_the_reference_shader(self) -> None:
         # the renderer paints shape by shape; the reference shades sample by sample in
-        # priority order. Rows through the finders, the rings, the backdrop and the petals of
-        # every band must agree pixel for pixel.
+        # priority order. Rows through the finders, the rings, the backdrop and the turned
+        # petals of every band must agree pixel for pixel.
         frame = cells(4)
+        self.assertEqual(set(frame.turns), {0, 1, 2, 3})
         palette = Palette()
         for size, s, rows in (
             (1024, 1, (70, 300, 512, 515, 700)),
@@ -221,19 +235,24 @@ class DrawListTest(unittest.TestCase):
         self.assertEqual((first.x, first.y, first.size), (182.0 + 33.0 * 4, 182.0, 33.0))
         clip = shapes.backdrop_clip
         self.assertEqual((clip.x, clip.y, clip.radius), (512.0, 512.0, 390.0))
-        # the lit petals, in cell order, with their outward angle and colour class
+        # the lit petals, in cell order, along their axis (the outward direction plus the
+        # turn), with their colour class
         palette = Palette()
         lit = [cell for cell in range(FIELD_CELLS) if frame.petals[cell]]
         self.assertEqual([petal.index for petal in shapes.petals], lit)
+        turned = 0
         for petal in shapes.petals:
             self.assertEqual((petal.x, petal.y), cell_center(petal.index))
-            self.assertEqual(petal.angle, cell_angle(petal.index))
+            turn = frame.turns[petal.index]
+            self.assertEqual(petal.angle, cell_angle(petal.index) + turn_angle(turn))
+            turned += turn != 0
             self.assertEqual(petal.light, cell_light(petal.index))
             self.assertEqual(petal.color, palette.light if petal.light else palette.pink)
-        self.assertAlmostEqual(shapes.petal_half_length, 5.2, places=6)
-        self.assertAlmostEqual(shapes.petal_half_width, 4.3, places=6)
-        self.assertAlmostEqual(shapes.petal_notch_radius, 1.3, places=6)
-        self.assertAlmostEqual(shapes.petal_notch_distance, 5.4, places=6)
+        self.assertGreater(turned, 4 * 360 * 6 // 10)
+        self.assertAlmostEqual(shapes.petal_half_length, 6.0, places=6)
+        self.assertAlmostEqual(shapes.petal_half_width, 3.73, places=6)
+        self.assertAlmostEqual(shapes.petal_notch_radius, 1.12, places=6)
+        self.assertAlmostEqual(shapes.petal_notch_distance, 6.24, places=6)
         # the lit dots
         lit_dots = [i for i, on in enumerate(frame.dots) if on]
         self.assertEqual(len(shapes.dots), len(lit_dots))
@@ -256,10 +275,40 @@ class DrawListTest(unittest.TestCase):
         self.assertEqual(len(circles), 4 * 11 + len(shapes.dots) + 1)
         rects = root.findall(f".//{namespace}rect")
         self.assertEqual(len(rects), 1 + len(shapes.backdrop))
-        ellipses = root.findall(f".//{namespace}ellipse")
-        self.assertEqual(len(ellipses), sum(frame.petals))
-        self.assertEqual(ellipses[0].get("rx"), "5.2")
-        self.assertEqual(ellipses[0].get("ry"), "4.3")
+        # every petal is the notched outline, moved to its cell and turned to its axis
+        outline = root.find(f".//{namespace}defs/{namespace}path")
+        self.assertEqual(outline.get("id"), "petal")
+        self.assertEqual(
+            outline.get("d"),
+            "M 5.7724 1.0177 A 6 3.73 0 1 1 5.7724 -1.0177 A 1.12 1.12 0 0 0 5.7724 1.0177 Z",
+        )
+        uses = root.findall(f".//{namespace}use")
+        self.assertEqual(len(uses), sum(frame.petals))
+        # the light petals come first, in cell order
+        ordered = [petal for petal in shapes.petals if petal.light]
+        ordered += [petal for petal in shapes.petals if not petal.light]
+        for use, petal in zip(uses, ordered):
+            self.assertEqual(use.get("href"), "#petal")
+            self.assertEqual(
+                use.get("transform"),
+                f"translate({_svg_number(petal.x)} {_svg_number(petal.y)}) "
+                f"rotate({_svg_number(math.degrees(petal.angle))})",
+            )
+
+    def test_the_notched_outline_is_the_petal_of_the_reference(self) -> None:
+        # the outline leaves the ellipse where the notch cuts it: both on the ellipse and on
+        # the notch's circle
+        shapes = draw_list(cells(7))
+        parts = shapes.petal_outline().split()
+        x, y = float(parts[1]), float(parts[2])
+        a, b = shapes.petal_half_length, shapes.petal_half_width
+        self.assertAlmostEqual((x / a) ** 2 + (y / b) ** 2, 1.0, places=3)
+        r, d = shapes.petal_notch_radius, shapes.petal_notch_distance
+        self.assertAlmostEqual(math.hypot(x - d, y), r, places=3)
+        # points inside the outline are lit by the reference's predicate, the notch is not
+        self.assertTrue(petal_lit(5.0, 0.0, 0.0))
+        self.assertFalse(petal_lit(5.5, 0.0, 0.0))
+        self.assertTrue(petal_lit(-5.5, 0.0, 0.0))
 
 
 if __name__ == "__main__":

@@ -7,11 +7,13 @@ from __future__ import annotations
 
 import math
 import unittest
+from dataclasses import replace
 
 from petal_test_support import (
     camera_homography,
     capture,
     captures_fixture,
+    encoder,
     luma_of,
     payload,
     rendered,
@@ -20,10 +22,16 @@ from petal_test_support import (
 from iroha_petal import (
     FINDER_CENTERS,
     TRACK_WINDOW_MS,
+    TURN_BACKOFF,
+    TURN_MEMORY,
     DecodeErrorKind,
+    FrameCells,
+    LaneHeader,
     Luma,
+    RenderOptions,
     ScanLimits,
     ScanSession,
+    render_frame,
 )
 
 WIDTH, HEIGHT = 640, 480
@@ -33,6 +41,17 @@ def camera_frame(data: bytes, kind: int, frame: int, rotation_deg: float = 20.0)
     source = rendered(data, kind, frame, 512, 2).to_luma()
     pose = camera_homography(WIDTH, HEIGHT, 0.8, rotation_deg, tilt=0.15)
     return capture(source, pose, WIDTH, HEIGHT, noise_seed=frame + 1)
+
+
+def source(cells: FrameCells) -> Luma:
+    """A shown frame: ``cells`` rendered at 512 pixels, 2 x 2 supersampled."""
+    return render_frame(cells, RenderOptions(size=512, supersample=2)).to_luma()
+
+
+def shoot(shown: Luma, seed: int, rotation_deg: float = 12.0) -> Luma:
+    """One camera capture of a shown frame, with the sensor noise of ``seed``."""
+    pose = camera_homography(WIDTH, HEIGHT, 0.8, rotation_deg, tilt=0.15)
+    return capture(shown, pose, WIDTH, HEIGHT, noise_seed=seed)
 
 
 class SessionTest(unittest.TestCase):
@@ -89,11 +108,65 @@ class SessionTest(unittest.TestCase):
         self.assertGreater(stats.readable, 0)
         self.assertGreater(stats.lane_d, 0)
         self.assertGreater(stats.field_lanes, 0)
+        self.assertGreater(stats.turn_lanes, 0, stats)
         self.assertEqual(stats.frames, frame + 1)
         self.assertEqual(stats.located, stats.frames)
-        # 1 500 bytes need 94 atoms: a clean camera reads them in five frames
-        self.assertLessEqual(stats.frames, 6, stats)
+        # 1 500 bytes need 94 atoms: the field lanes and lane D alone carry them in five
+        # frames, the turn lanes on top in three
+        self.assertLessEqual(stats.frames, 4, stats)
         self.assertTrue(session.progress().complete)
+
+    def test_a_turn_lane_is_read_once_per_shown_frame(self) -> None:
+        stream = encoder(payload(3000, 3), 2)
+        session = ScanSession(ScanLimits())
+        shown = source(stream.cells(5))
+        first = session.push(shoot(shown, 1), 0)
+        self.assertEqual((first.lanes, first.turned), ("D0123", "0123"))
+        again = session.push(shoot(shown, 2), 33)
+        self.assertEqual((again.lanes, again.turned), ("D0123", ""))
+        self.assertEqual(session.stats().turn_lanes, 4)
+        # the next shown frame's turn lanes are new
+        following = session.push(shoot(source(stream.cells(6)), 3), 83)
+        self.assertEqual(following.turned, "0123")
+        self.assertEqual((session.stats().turn_tries, session.stats().turn_lanes), (8, 8))
+        session.reset()
+        self.assertEqual(len(session._tried), 0)
+        # the session remembers the last TURN_MEMORY turn lanes it tried
+        session._tried.extend((LaneHeader(0, frame), 0) for frame in range(TURN_MEMORY))
+        self.assertEqual(session.push(shoot(shown, 4), 200).turned, "0123")
+        self.assertEqual(len(session._tried), TURN_MEMORY)
+        self.assertEqual(session._tried[0], (LaneHeader(0, 4), 0))
+        self.assertEqual(session._tried[-1], (LaneHeader(stream.meta.tag, 5), 3))
+
+    def test_tries_that_read_nothing_back_off(self) -> None:
+        stream = encoder(payload(3000, 3), 2)
+        session = ScanSession(ScanLimits())
+        tried_at = []
+        for frame in range(1, 31):
+            # unturned petals: every field lane reads, no turn lane ever does
+            unturned = replace(stream.cells(frame), turns=())
+            before = session.stats().turn_tries
+            outcome = session.push(shoot(source(unturned), frame), frame * 83)
+            self.assertTrue(outcome.lanes.endswith("0123"), f"frame {frame}: {outcome.lanes}")
+            self.assertEqual(outcome.turned, "")
+            if session.stats().turn_tries > before:
+                tried_at.append(frame)
+        # after the n-th try that reads nothing, the next min(n, 8) captures that would try
+        # are passed over
+        self.assertEqual(tried_at, [1, 3, 6, 10, 15, 21, 28])
+        self.assertEqual((session._turn_misses, session._turn_wait), (7, 5))
+        self.assertLessEqual(session._turn_misses, TURN_BACKOFF)
+        # a try that reads a lane ends the back-off
+        session._turn_wait = 0
+        outcome = session.push(shoot(source(stream.cells(31)), 31), 31 * 83)
+        self.assertEqual(outcome.turned, "0123")
+        self.assertEqual(session._turn_misses, 0)
+        outcome = session.push(shoot(source(stream.cells(32)), 32), 32 * 83)
+        self.assertEqual(outcome.turned, "0123")
+        # a reset forgets the tries and the back-off
+        session._turn_misses, session._turn_wait = 3, 3
+        session.reset()
+        self.assertEqual((len(session._tried), session._turn_misses, session._turn_wait), (0, 0, 0))
 
     def test_idle_sessions_forget_partial_streams(self) -> None:
         data = payload(12_000, 3)
@@ -130,7 +203,7 @@ class SessionTest(unittest.TestCase):
         session = ScanSession()
         outcome = session.push(Luma(320, 240), 5)
         self.assertIsNone(outcome.completed)
-        self.assertEqual((outcome.lanes, outcome.merged), ("", ""))
+        self.assertEqual((outcome.lanes, outcome.merged, outcome.turned), ("", "", ""))
         self.assertEqual(session.stats().frames, 1)
         self.assertEqual(session.stats().located, 0)
         outcome = session.push(Luma(10, 10), 6)

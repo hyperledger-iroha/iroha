@@ -9,6 +9,7 @@ import unittest
 
 from petal_test_support import payload
 
+from iroha_petal.fountain import encode_atom, split_payload
 from iroha_petal.lanes import ATOM_LEN, DECODE_ORDER, FIELD_LANES, Lane, decode_lane
 from iroha_petal.prng import Xorshift32
 from iroha_petal.stream import (
@@ -31,6 +32,7 @@ from iroha_petal.stream import (
     parse_atom_lane,
     parse_d_lane,
 )
+from iroha_petal.turns import TURN_DATA, decode_turn_lane_counted, turn_packet
 
 
 def feed_frame(assembler: StreamAssembler, encoder: StreamEncoder, frame: int, lanes) -> None:
@@ -207,14 +209,14 @@ class StreamTest(unittest.TestCase):
         encoder = StreamEncoder(payload(77, 9), 3)
         d = encoder.lane_data(512).d
         self.assertEqual(d[3], FORMAT_VERSION)
-        self.assertEqual(FORMAT_VERSION, 0x20)
+        self.assertEqual(FORMAT_VERSION, 0x30)
         beacon = parse_d_lane(d)
         self.assertIsInstance(beacon, Beacon)
         self.assertEqual(beacon.meta, encoder.meta)
         self.assertEqual(beacon.header.frame, 512)
         self.assertIsNone(parse_d_lane(d[:11]))
-        # the retired format 1 (katakana tiles) is refused
-        for version in (0x10, 0x21):
+        # the retired formats 1 (katakana tiles) and 2 (unturned petals) are refused
+        for version in (0x10, 0x20, 0x31):
             bad = bytearray(d)
             bad[3] = version
             self.assertIsNone(parse_d_lane(bytes(bad)), hex(version))
@@ -271,8 +273,49 @@ class StreamTest(unittest.TestCase):
         cells = encoder.cells(3)
         self.assertEqual(cells.d_word(), words.d)
         self.assertEqual(tuple(cells.field_word(s) for s in range(4)), words.fields)
+        self.assertEqual(tuple(cells.turn_word(s) for s in range(4)), words.turns)
         with self.assertRaises(ValueError):
             encoder.lane_data(70_000)
+
+    def test_turn_lanes_carry_repair_atoms_bound_to_their_field_lane(self) -> None:
+        data = payload(500, 8)
+        encoder = StreamEncoder(data, 1)
+        lanes = encoder.lane_data(6)
+        header = LaneHeader(encoder.meta.tag, 6)
+        source = split_payload(data)
+        for sector, turn in enumerate(lanes.turns):
+            self.assertEqual(len(turn), TURN_DATA)
+            packet = turn_packet(header, sector, turn)
+            self.assertEqual(packet.first_id, (1 << 31) + 16 * 6 + 4 * sector)
+            self.assertEqual(packet.header, header)
+            for k, atom in enumerate(packet.atoms):
+                self.assertEqual(atom, encode_atom(source, encoder.meta.crc, packet.first_id + k))
+            # the check names the field lane's stream, frame and sector
+            self.assertIsNone(turn_packet(LaneHeader(header.tag, 7), sector, turn))
+            self.assertIsNone(turn_packet(header, (sector + 1) % 4, turn))
+        # the words carry the turn lanes too, whitened per sector
+        words = encoder.words(6)
+        for sector, word in enumerate(words.turns):
+            self.assertEqual(decode_turn_lane_counted(sector, word), (lanes.turns[sector], 0))
+
+    def test_turn_lanes_finish_a_stream_sooner(self) -> None:
+        data = payload(3_000, 2)
+        encoder = StreamEncoder(data, 2)
+        needed = []
+        for with_turns in (False, True):
+            assembler = StreamAssembler()
+            frame = 0
+            while not assembler.progress().complete:
+                feed_frame(assembler, encoder, frame, ALL)
+                if with_turns:
+                    header = LaneHeader(encoder.meta.tag, frame)
+                    for sector, turn in enumerate(encoder.lane_data(frame).turns):
+                        assembler.push_atoms(turn_packet(header, sector, turn))
+                frame += 1
+            self.assertEqual(assembler.take_completed().payload, data)
+            needed.append(frame)
+        # 188 atoms: 10 frames of field lanes and lane D, 6 with the turn lanes on top
+        self.assertEqual(needed, [10, 6])
 
 
 class StreamSoakTest(unittest.TestCase):

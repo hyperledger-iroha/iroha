@@ -3,13 +3,14 @@
 
 """Petal Stream: the Sakura-storm optical transport, in pure Python.
 
-A Petal frame (format 2) is a square image whose data lives in five
-independent lanes: the dots on three concentric rings (lane ``D``), and a storm
-of 3,376 petals on concentric bands inside them, cut into four sectors (lanes
-``F0``-``F3``), each petal lit or dark. The petals inside the SORA ``天`` are
-drawn white and the others pink, over a faint ``天``. Every lane is one
-Reed-Solomon codeword, so any lane that reads cleanly yields fountain-coded
-payload atoms.
+A Petal frame (format 3) is a square image whose data lives in independent
+lanes: the dots on three concentric rings (lane ``D``), and a storm of 3,376
+petals on concentric bands inside them, cut into four sectors (lanes
+``F0``-``F3``), each petal lit or dark. On top of each field lane, the way its
+lit petals are turned carries a turn lane (``T0``-``T3``, see
+:mod:`iroha_petal.turns`). The petals inside the SORA ``天`` are drawn white and
+the others pink, over a faint ``天``. Every lane is one Reed-Solomon codeword,
+so any lane that reads cleanly yields fountain-coded payload atoms.
 
 Sender::
 
@@ -93,7 +94,15 @@ from .render import (
     render_frame,
 )
 from .rs import ReedSolomon, RsError, RsErrorKind
-from .session import TRACK_WINDOW_MS, ScanLimits, ScanOutcome, ScanSession, ScanStats
+from .session import (
+    TRACK_WINDOW_MS,
+    TURN_BACKOFF,
+    TURN_MEMORY,
+    ScanLimits,
+    ScanOutcome,
+    ScanSession,
+    ScanStats,
+)
 from .stream import (
     BEACON_INTERVAL,
     DEFAULT_MAX_PAYLOAD_LEN,
@@ -119,6 +128,35 @@ from .stream import (
     parse_atom_lane,
     parse_d_lane,
 )
+from .turns import (
+    TURN_ATOMS,
+    TURN_BITS,
+    TURN_BLURS,
+    TURN_CARRIERS,
+    TURN_CHECK_LEN,
+    TURN_DATA,
+    TURN_ID_BASE,
+    TURN_PARITY,
+    TURN_POSITIONS,
+    TURN_WORD,
+    ObservedTurns,
+    carrier_order,
+    carrier_position,
+    carriers,
+    decode_turn_lane_counted,
+    encode_turn_lane,
+    observed_turns,
+    read_turns,
+    turn_angle,
+    turn_check,
+    turn_data,
+    turn_first_id,
+    turn_label,
+    turn_packet,
+    turn_position,
+    turn_template,
+    turn_whitening,
+)
 
 __version__ = "0.1.0"
 
@@ -139,6 +177,18 @@ __all__ = [
     "MAX_PAYLOAD_LEN",
     "SECTORS",
     "TRACK_WINDOW_MS",
+    "TURN_ATOMS",
+    "TURN_BACKOFF",
+    "TURN_BITS",
+    "TURN_BLURS",
+    "TURN_CARRIERS",
+    "TURN_CHECK_LEN",
+    "TURN_DATA",
+    "TURN_ID_BASE",
+    "TURN_MEMORY",
+    "TURN_PARITY",
+    "TURN_POSITIONS",
+    "TURN_WORD",
     "AssemblerLimits",
     "AtomPacket",
     "BackdropCell",
@@ -163,6 +213,7 @@ __all__ = [
     "LaneHeader",
     "LaneResult",
     "Luma",
+    "ObservedTurns",
     "Palette",
     "PetalShape",
     "Pose",
@@ -185,6 +236,9 @@ __all__ = [
     "StreamMeta",
     "Xorshift32",
     "atoms_in_frame",
+    "carrier_order",
+    "carrier_position",
+    "carriers",
     "cell_angle",
     "cell_center",
     "cell_light",
@@ -195,11 +249,13 @@ __all__ = [
     "decode_lane",
     "decode_lane_counted",
     "decode_png",
+    "decode_turn_lane_counted",
     "draw_list",
     "encode_atom",
     "encode_lane",
     "encode_pgm",
     "encode_png",
+    "encode_turn_lane",
     "field_evidence",
     "finder_lit",
     "first_atom_id",
@@ -213,10 +269,12 @@ __all__ = [
     "merge_fields",
     "mix32",
     "observed_cells",
+    "observed_turns",
     "parse_atom_lane",
     "parse_d_lane",
     "petal_lit",
     "read_luma",
+    "read_turns",
     "render_frame",
     "sector_cells",
     "slot_center",
@@ -224,5 +282,14 @@ __all__ = [
     "split_payload",
     "split_slot",
     "track_frame",
+    "turn_angle",
+    "turn_check",
+    "turn_data",
+    "turn_first_id",
+    "turn_label",
+    "turn_packet",
+    "turn_position",
+    "turn_template",
+    "turn_whitening",
     "write_image",
 ]

@@ -35,14 +35,14 @@ from iroha_petal import (  # noqa: E402
 
 @functools.lru_cache(maxsize=None)
 def stream_fixture() -> dict:
-    """``fixtures/petal/petal_stream_v2.json``."""
-    return json.loads((FIXTURES / "petal_stream_v2.json").read_text(encoding="utf-8"))
+    """``fixtures/petal/petal_stream_v3.json``."""
+    return json.loads((FIXTURES / "petal_stream_v3.json").read_text(encoding="utf-8"))
 
 
 @functools.lru_cache(maxsize=None)
 def captures_fixture() -> dict:
-    """``fixtures/petal/petal_captures_v2.json``."""
-    return json.loads((FIXTURES / "petal_captures_v2.json").read_text(encoding="utf-8"))
+    """``fixtures/petal/petal_captures_v3.json``."""
+    return json.loads((FIXTURES / "petal_captures_v3.json").read_text(encoding="utf-8"))
 
 
 def luma_of(entry: dict, key: str = "luma_zlib_base64") -> Luma:

@@ -9,14 +9,19 @@ the four field lanes five atoms, and lane ``D`` one atom, except on every
 fourth frame (``frame % 4 == 0``), when lane ``D`` carries the stream *beacon*
 instead, so a receiver can join at any frame within a fraction of a second.
 Atom ids run contiguously over the atoms actually sent (see
-:func:`first_atom_id`). Any single readable lane is useful on its own.
+:func:`first_atom_id`). Any single readable lane is useful on its own. On top of
+every field lane, the turns of its lit petals carry four more atoms from the
+repair range (see :mod:`iroha_petal.turns`), so a sharp camera reads up to 37
+atoms (592 bytes) a frame.
 
 Lane data layouts (all big-endian):
 
-* every lane starts with ``tag:u8, frame:u16``; ``tag`` is the low byte of the
-  payload CRC-32C.
+* every lane but the turn lanes starts with ``tag:u8, frame:u16``; ``tag`` is
+  the low byte of the payload CRC-32C.
 * field lanes and non-beacon ``D``: ``atoms...`` (16 bytes each).
 * beacon ``D``: ``version:u8, kind:u8, len:u24, crc:u32``, zero padded.
+* turn lanes: ``atoms... check:u32``, where the check binds the atoms to the
+  header of the field lane they ride on.
 """
 
 from __future__ import annotations
@@ -68,8 +73,8 @@ __all__ = [
     "StreamAssembler",
 ]
 
-#: Version/profile byte of the beacon: format version 2, layout profile 0.
-FORMAT_VERSION = 0x20
+#: Version/profile byte of the beacon: format version 3, layout profile 0.
+FORMAT_VERSION = 0x30
 #: Largest payload a beacon can describe (``u24``).
 MAX_PAYLOAD_LEN = (1 << 24) - 1
 #: Default receiver payload limit; override with :class:`AssemblerLimits`.
@@ -201,6 +206,8 @@ class LaneData:
     d: bytes
     #: The field lanes, sector 0 first.
     fields: Tuple[bytes, ...]
+    #: The turn lanes, sector 0 first.
+    turns: Tuple[bytes, ...]
 
     def lane(self, lane: Lane) -> bytes:
         """The bytes of ``lane``."""
@@ -284,7 +291,10 @@ class StreamEncoder:
         return b"".join(encode_atom(self._source, crc, (first_id + i) & _U32) for i in range(count))
 
     def lane_data(self, frame: int) -> LaneData:
-        """The data bytes of every lane of ``frame``."""
+        """The data bytes of every lane of ``frame``, turn lanes included."""
+        # imported here: the turns module builds on this one
+        from .turns import TURN_ATOMS, turn_data, turn_first_id
+
         _check_frame(frame)
         header = bytes((self._meta.tag, frame >> 8, frame & 0xFF))
         fields = tuple(
@@ -301,20 +311,28 @@ class StreamEncoder:
             d = header + body
         else:
             d = header + self._atoms(lane_first_id(Lane.D, frame), D_ATOMS)
-        return LaneData(d=d, fields=fields)
+        lane_header = LaneHeader(self._meta.tag, frame)
+        turns = tuple(
+            turn_data(lane_header, sector, self._atoms(turn_first_id(frame, sector), TURN_ATOMS))
+            for sector in range(SECTORS)
+        )
+        return LaneData(d=d, fields=fields, turns=turns)
 
     def words(self, frame: int) -> LaneData:
         """The transmitted codewords of ``frame``."""
+        from .turns import encode_turn_lane
+
         data = self.lane_data(frame)
         return LaneData(
             d=encode_lane(Lane.D, data.d),
             fields=tuple(encode_lane(lane, data.lane(lane)) for lane in FIELD_LANES),
+            turns=tuple(encode_turn_lane(sector, data.turns[sector]) for sector in range(SECTORS)),
         )
 
     def cells(self, frame: int) -> FrameCells:
-        """Every cell of ``frame``, ready to render."""
+        """Every cell of ``frame``, lit and turned, ready to render."""
         words = self.words(frame)
-        return FrameCells.from_words(words.d, words.fields)
+        return FrameCells.from_words(words.d, words.fields).with_turns(words.turns)
 
 
 @dataclass(frozen=True)
