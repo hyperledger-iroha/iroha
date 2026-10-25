@@ -21,15 +21,20 @@ code:
 | Mark | What it is | Role |
 | --- | --- | --- |
 | **Sakura finders** | Four solid five-petal blossoms in the canvas corners | Locate the code in a camera frame and give the perspective; any three suffice when a thumb, a glare or the frame edge hides one. |
-| **Petal field** | 3,376 petals on 34 concentric bands, each lit or dark | One bit per petal, in four sectors (lanes `F0`–`F3`). Petals inside the SORA `天` are drawn white, the others pink, over a faint `天`, so the character shows through the storm. |
+| **Petal field** | 3,376 petals on 34 concentric bands, each lit or dark, and turned | One bit per petal, in four sectors (lanes `F0`–`F3`). On top of each sector, the first 360 of its lit petals are turned by 0°, 45°, 90° or 135° about their centres: two more bits each, one *turn lane* per sector (`T0`–`T3`). Petals inside the SORA `天` are drawn white, the others pink, over a faint `天`, so the character shows through the storm. |
 | **Three dotted rings** | 88, 100 and 108 dot slots at radii 405, 440 and 475 | Which slots are lit carries 240 bits (lane `D`). Fixed *gates* at 3, 6 and 9 o'clock (none at 12) are always lit. |
 
 Each lane is exactly one Reed–Solomon codeword over GF(256), so the lanes fail independently:
 
 * lane `D` (big isolated dots) is the most robust: it survives defocus of 4 px at 720p and carries
   the stream beacon;
-* the four field lanes carry 96 % of the payload. A petal is read by its brightness alone, with no
-  shape to recognise, so the field survives blur that would defeat a QR code of the same size.
+* the four field lanes carry most of the payload. A petal is read by its brightness alone, with no
+  shape to recognise, so the field survives blur that would defeat a QR code of the same size;
+* the four turn lanes carry 64 more payload bytes per field lane, read from the shape of the lit
+  petals once their field lane has said which petals are lit. A turned petal stays inside its own
+  cell, so the turns cost the field nothing; a camera that resolves the petals' shapes (a 720p
+  camera at arm's length) reads them as well, and a blurrier one reads the rest of the frame as
+  before.
 
 Every lane carries fountain-coded payload atoms, so **any one readable lane is useful by itself**
 and the stream completes from whatever mixture of lanes and frames the camera manages to read.
@@ -45,8 +50,9 @@ message as the payload. A Payment carrier is at most 12,182 bytes (84-byte `IPM1
 12,098-byte carrier), which the measurements in §8 use; Petal carries any such message whole (§5.5:
 the default receiver limit is 65 536 bytes).
 
-This is format 2. Format 1 (a `天`-shaped field of 256 katakana tiles) is retired; its beacon
-version `0x10` is refused (§5.3).
+This is format 3. Format 2 (the same field with rounder, unturned petals) and format 1 (a
+`天`-shaped field of 256 katakana tiles) are retired; their beacon versions `0x20` and `0x10` are
+refused (§5.3).
 
 ## 2. Frame geometry (normative)
 
@@ -103,11 +109,14 @@ slot. The first 840 cells of a sector carry the 105 bytes of its lane (§3); the
 and always dark. The field, the sectors and the bit order map onto themselves under every quarter
 turn.
 
-**Petals.** A lit cell is drawn as a petal: an ellipse of half-length 5.2 along the outward radial
-direction `θ` and half-width 4.3, centred on the cell, minus a cosmetic notch (a disc of radius 1.3
-centred 5.4 units outward from the cell centre). Decoders sample inside the disc of radius 4.6
-around the cell centre and rely on nothing else; renderers may omit the notch. A dark cell is not
-drawn.
+**Petals.** A lit cell is drawn as a petal: an ellipse of half-length 6.0 along its *axis* and
+half-width 3.73, centred on the cell, minus a notch (a disc of radius 1.12 centred 6.24 units along
+the axis from the cell centre). The axis is the outward radial direction `θ` turned clockwise by the
+cell's turn (§3.3), which is 0 for every petal that carries no turn bits. Renderers must draw the
+notch: the turn reader's templates include it. A petal reaches at most 6.0 units from its centre
+whichever way it is turned, and no two cell centres are closer than 11 units, so no petal reaches
+into another cell's disc of radius 4.6 around its centre, which is all the field lanes sample. A
+dark cell is not drawn.
 
 **The `天`.** The 20 × 20 lattice whose cell `(col, row)` spans `[182 + 33·col, 182 + 33·(col+1))`
 horizontally and likewise vertically carries the `天` mask, listed row 0 (top) first:
@@ -168,6 +177,7 @@ first 240 remaining slots in flat order (ring 0 slots ascending, then ring 1, th
   most significant bit first.
 * **Lanes `F0`–`F3`**, 105 bytes each: bit `b` of lane `Fs` is `1` iff cell `b` of sector `s`'s bit
   order is lit. Byte `j` holds bits `8j … 8j+7`, most significant bit first.
+* **Lanes `T0`–`T3`**, 90 bytes each: see §3.3.
 
 ### 3.2 Codewords
 
@@ -177,6 +187,7 @@ The transmitted bytes of a lane are `RS(data ‖ parity) XOR whitening`.
 | --- | --- | --- | --- | --- |
 | `D` | 30 B | 19 B | 11 B | 5 wrong bytes, or 11 erased |
 | `F0`–`F3` | 105 B | 83 B | 22 B | 11 wrong bytes, or 22 erased |
+| `T0`–`T3` | 90 B | 68 B | 22 B | 11 wrong bytes, or 22 erased |
 
 **Reed–Solomon.** GF(256) with primitive polynomial `x⁸+x⁴+x³+x²+1` (`0x11D`), `α = 2`. The generator is
 `∏_{i=0}^{nsym-1}(x − αⁱ)` (first root `α⁰`), the code is systematic with the data bytes first and the
@@ -188,9 +199,29 @@ syndromes before accepting it.
 statistically balanced whatever the payload is (about half the petals are lit). The generator is
 xorshift32 (`x ^= x << 13; x ^= x >> 17; x ^= x << 5`, a zero seed becomes `0xDEADBEEF`); each output
 byte is the top byte (`x >> 24`) of the state after an update. Seeds: `D = 0x444F5453`,
-`Fs = 0x50455430 + s`. The first `word length` bytes of the sequence are used; the sequences are in the
-fixture. A codeword read under the wrong sector's whitening fails its check, so a decoder that reads
-the field in a wrong orientation reads nothing.
+`Fs = 0x50455430 + s`, `Ts = 0x54524E30 + s`. The first `word length` bytes of the sequence are used;
+the sequences are in the fixture. A codeword read under the wrong sector's whitening fails its
+check, so a decoder that reads the field in a wrong orientation reads nothing.
+
+### 3.3 Turn lanes
+
+Once a field lane is read, the decoder knows exactly which petals of its sector are lit, and the
+turn lane on top of it uses them:
+
+* **Carrier order.** Sector `s`'s carrier order is its 840 codeword cells (the first 840 of its bit
+  order) shuffled by Fisher–Yates with xorshift32 seeded `0x4F524430 + s` ("ORD0" … "ORD3"): for `i`
+  from 839 down to 1, positions `i` and `next_u32() mod (i + 1)` swap, where `next_u32()` is the
+  state after an update (§3.2). The orders are in the fixture.
+* **Carriers.** The carriers of sector `s` are the first 360 lit cells (per lane `Fs`) in its carrier
+  order. A sector with fewer than 360 lit cells (about one sector in 60 000) has no carriers and no
+  turn lane.
+* **Turns.** Carrier `j` (`0 … 359`) shows bits `2j` and `2j + 1` of the transmitted turn codeword
+  (byte `⌊j/4⌋`, most significant bits first) as a two-bit label `L`. Its *turn position* is
+  `p = L ^ (L >> 1)` (so `L` is the Gray code of `p`: neighbouring turns differ in one bit, 135° and
+  0° included), and its petal is turned clockwise by `π·p/4` (0°, 45°, 90° or 135°) from its outward
+  direction. Every other petal is unturned.
+* **Codeword.** The turn lane is one Reed–Solomon codeword of 90 bytes, 68 data and 22 parity
+  (§3.2), XOR-whitened with the sequence `Ts`; its data layout is in §5.3.
 
 ## 4. Atoms and the fountain code (normative)
 
@@ -230,22 +261,33 @@ those with `f mod 4 = 0`). Atom ids are contiguous over the atoms actually sent:
 frame `f` has id `21·f − ⌈f / 4⌉`; lane `Fs` starts `5s` later and lane `D` 20 later. (65536 is
 divisible by 4, so ids repeat cleanly when the counter wraps.)
 
+The turn lane `Ts` of frame `f` carries four atoms with ids `2³¹ + 16·f + 4·s` to `2³¹ + 16·f + 4·s + 3`:
+repair atoms only, in a range the field lanes and lane `D` never reach (their ids stay below
+`21 · 65 536`). A frame thus carries up to 37 atoms (592 bytes), 36.75 on average.
+
 ### 5.3 Lane data layouts (big-endian)
 
-Every lane starts with a 3-byte header `tag:u8, frame:u16`. Then:
+Every lane but the turn lanes starts with a 3-byte header `tag:u8, frame:u16`. Then:
 
 * lanes `F0`–`F3`: five atoms (80 B) → 83 B;
 * lane `D`, non-beacon frame: one atom → 19 B;
-* lane `D`, beacon frame (`f mod 4 = 0`): `version:u8 (=0x20), kind:u8, len:u24, crc:u32` followed by 7 zero bytes → 19 B.
+* lane `D`, beacon frame (`f mod 4 = 0`): `version:u8 (=0x30), kind:u8, len:u24, crc:u32` followed by 7 zero bytes → 19 B;
+* lanes `T0`–`T3`: four atoms (64 B), then `check:u32` → 68 B. A turn lane has no header of its own: it
+  rides on the field lane of its sector, whose header names the stream and the frame, and `check` is
+  the CRC-32C of `tag:u8, frame:u16, sector:u8` (that header and the sector) followed by the four
+  atoms. A decoder accepts a turn lane only when the check matches the header of the field lane it was
+  read on.
 
-`version` = `0x20` means format version 2, layout profile 0; anything else is rejected (format 1's
-`0x10` included).
+`version` = `0x30` means format version 3, layout profile 0; anything else is rejected (format 2's
+`0x20` and format 1's `0x10` included).
 
 ### 5.4 Sender
 
 Send frames `f = f₀, f₀+1, …` at 8–15 frames per second; **12 is the default**: a camera reads practically every frame at
-12 fps, and a phone's slowest cores keep up with its 30 fps camera (§8). The sender repeats until the user stops it; the first `⌈K / 20.75⌉` frames carry every source atom once and the rest are repair
-atoms. There is no back-channel; if the receiver needs an acknowledgement it uses its own stream.
+12 fps, and a phone's slowest cores decode at least 12 of its camera frames a second, about one capture per shown frame (§8).
+The sender repeats until the user stops it; the first `⌈K / 20.75⌉` frames carry every source atom once in their field lanes
+and lane `D`, and everything else, the turn lanes included, is repair atoms. There is no back-channel; if the receiver needs an
+acknowledgement it uses its own stream.
 
 ### 5.5 Receiver (assembler)
 
@@ -259,6 +301,7 @@ atoms. There is no back-channel; if the receiver needs an acknowledgement it use
   is discarded and counted as an integrity failure while the stream continues.
 * Only lane `D` carries the beacon, so a receiver needs to read lane `D` of at least one beacon frame
   to start; atoms read earlier are buffered, not lost. Lane `D` is the most robust lane.
+* Turn lane atoms enter only through a turn lane whose check matches its field lane's header (§5.3).
 * A completed stream is delivered exactly once; further frames of the same stream are ignored.
 * Sessions forget a partial stream after an idle timeout (default 30 s) or an absolute timeout (default 180 s).
 
@@ -267,8 +310,9 @@ atoms. There is no back-channel; if the receiver needs an acknowledgement it use
 Any 2D API may draw a frame as long as geometry, polarity and colours match §2. The reference
 software renderer (`render.rs`) shades each sample in this order: finders, ring dots, petals, the
 backdrop `天`, background, with 2×2 or 3×3 supersampling. SDKs additionally expose a platform-neutral
-*draw list* (finder discs and notches, backdrop cells, lit petals with centre, angle and colour,
-lit dots) so a native canvas can play a stream without per-pixel work.
+*draw list* (finder discs and notches, backdrop cells, lit petals with centre, angle (the outward
+direction plus the turn) and colour, lit dots) so a native canvas can play a stream without per-pixel
+work. Petals are small (12 × 7.5 units): draw them antialiased, notch included, at 768 px or more.
 
 Display guidance: full screen brightness, a black surround, the whole square visible, no overlays
 within one finder diameter of the finders, animation at 12 fps (§5.4). A frame must stay up for at least
@@ -368,6 +412,54 @@ The reference algorithm, which the golden captures are calibrated to:
    capture order, then divided by the number of captures) and reads the field lanes not yet read from the mean as in steps 5 and 7,
    local read included. The session offers a merged lane only when its own header names the frame it was merged for, and counts
    merges and merged lanes apart from single-capture lanes. Merging one capture reads exactly what that capture read alone.
+9. **Turn lanes.** The turn lanes are read from a capture whose field lanes decoded on their own (merged lanes are not used).
+   A scan session tries a turn lane once per shown frame: it remembers the last 24 `(tag, frame, sector)` it tried, read or
+   not (the four sectors of the last 6 shown frames, cleared with the held evidence when the stream changes), and passes
+   those sectors over. Reading turns costs a slow phone core several times a frame's decode (§8), so after a try that reads
+   no turn lane the session passes over the next captures that would try one: one capture after the first such try in a row,
+   two after the second, and so on up to 8, until a try reads a lane (which resets the count). The order within a capture:
+   sectors already tried are passed over; when none is left nothing happens; when captures are still to be passed over, one
+   is used up and nothing happens; otherwise every remaining decoded sector is recorded as tried and then read.
+   1. *Carriers.* The lit cells of every decoded sector come from re-encoding its field lane (§3), and its carriers from §3.3.
+      The carriers of every decoded sector are decided below, so that each carrier's neighbours are modelled at their own
+      turns; only the sectors not passed over are decoded in step 8.
+   2. *Windows.* A carrier's window is 13 × 13 samples one canvas unit apart in its petal's outward frame: `a` along the outward
+      direction `θ`, `b` across it, `a, b = −6 … 6`, stored by rows of `b` and columns of `a`. With `o` the image point of the
+      window's centre and `u = pose(centre + (cos θ, sin θ)) − o`, `v = pose(centre + (−sin θ, cos θ)) − o`, sample `(a, b)` is the
+      bilinear luma at `(o + b·v) + a·u`. A window is *normalised*: its 17th smallest sample (the 10th percentile of 169)
+      becomes 0 and its 166th smallest (the 98th) becomes 1 (a span below one grey level counts as one), clamped to −0.2 … 1.2.
+   3. *Warp.* The pose is good enough for brightness but not for shapes: a lens model or homography error of a unit moves a
+      petal against its window. For every 17th carrier (carriers `0, 17, 34, …` in order, sector by sector) the normalised
+      window centred on the cell gives a *centroid*: every sample weighs `clamp(level, 0, 1) · g(a − eₐ) · g(b − e_b)` with
+      `g(t) = exp(−t² / (2·2.6²))`, from `(eₐ, e_b) = (0, 0)` recomputed three times (stopping when the weights sum to zero).
+      The centroid's canvas offset `(eₐ cos θ − e_b sin θ, eₐ sin θ + e_b cos θ)` is fitted, per axis, by the least-squares
+      cubic in `x = (X − 512)/384`, `y = (Y − 512)/384` at the cell centres `(X, Y)`, with the monomials
+      `1, x, y, x², xy, y², x³, x²y, xy², y³` (normal equations summed in sample order, 10⁻⁶ added to the diagonal,
+      Gauss–Jordan elimination with partial pivoting, a pivot below 10⁻¹² skipping its column). Every carrier's window is then
+      sampled centred on its cell centre plus the fitted offset, and normalised.
+   4. *Templates and kernels.* The template of blur `σ` (`σ = 1.0, 1.4, 1.9, 2.5, 3.2, 4.0` canvas units) is the unturned
+      petal of §2.3 tabulated on 73 × 73 cells: cell `(i, j)` covers `along = −9 + i/4`, `across = −9 + j/4`, and its coverage is
+      the share of the 4 × 4 points `(along + (m − 1.5)/16, across + (n − 1.5)/16)` inside the petal. The coverage is blurred by
+      a Gaussian truncated at `⌈3σ / 0.25⌉` cells (weights `exp(−(k/4)² / (2σ²))` normalised by their sum, cells outside the
+      table counting as zero), first along `i`, then along `j`. A template value is the bilinear interpolation of the table, and
+      0 outside `−9 ≤ along, across < 9`. The *kernel* of turn position `p` is the template on the window grid turned by
+      `φ = π·p/4`, weighted: `w(a, b) · T(a cos φ + b sin φ, −a sin φ + b cos φ)` with `w(a, b) = exp(−(a² + b²) / (2·3.6²))`.
+      A window's *score* for `p` is the sum of window × kernel; its best position is the highest score (ties to the lower `p`),
+      and its *lead* is the best score minus the next highest.
+   5. *Neighbours.* The lit cells (of decoded sectors) within 19 units of a carrier, itself excluded, are its neighbours. A
+      neighbour is modelled by the template turned to its own axis (its outward direction plus its turn, 0 when it carries
+      none), added to or subtracted from a window at the grid points within 9.5 units of the neighbour's centre.
+   6. *Blur.* For every 17th carrier and each blur in turn, the model is the carrier's template at its best position plus its
+      neighbours at theirs (each carrier neighbour at the best position of its own window, under the same blur), and the
+      sample scores `Σ w·x·m / max(√(Σ w·m² · Σ w·x²), 10⁻⁹)` over the window `x` and the model `m`. The blur with the largest
+      sum fits best (ties to the sharper). From a fitted blur of 3.2 on, the camera cannot resolve the turns and the reader
+      stops.
+   7. *Turns.* Under the next wider blur than the fitted one (4.0 stays 4.0), every carrier takes the best position of its own
+      window; then, carrier by carrier in order, it takes the best position of its window minus its neighbours at their latest
+      positions, with that window's lead as its confidence.
+   8. *Codeword.* The positions give the labels `p ^ (p >> 1)`, packed as in §3.3, and a byte's confidence is the least of its
+      four carriers'. Reed–Solomon with erasures as in step 7 (0, 2, 5, 7 and 11 erasures), accepting the first word whose
+      check (§5.3) matches the sector's field lane header.
 
 **Tracking.** A scan session that decoded a frame reads the next ones by following that pose instead of searching the
 whole image, as long as the pose is at most 500 ms old. Each corner finder is re-found from where the previous pose puts it:
@@ -382,117 +474,127 @@ from the previous frame's distortion.
 
 The constants above are what the ports use; they may be tuned together with the fixtures. Decoding is not bit-reproducible
 across platforms (it uses the platform's `sin`, `cos`, `exp` and `atan2`): conformance means the golden captures decode to the
-recorded lanes, never that two platforms produce identical floating-point intermediates.
+recorded lanes, never that two platforms produce identical floating-point intermediates. The turn reader's templates are in the
+fixture as probes (§10) so that a port can check its tables.
 
 ## 8. Qualification
 
 All numbers below are from the camera simulator in `crates/iroha_petal/src/sim.rs`
 (perspective and rotation, lens distortion, area integration, defocus blur, bloom, auto-exposure clipping,
 ambient light and gradients, vignetting, sensor noise, sharpening, 8-bit quantisation, frame blending and tearing).
-They are evidence from a model, **not** device measurements. A modern phone at 720p sees about 7.5 px per petal
-pitch, a 480p preview about 4.7.
+They are evidence from a model, **not** device measurements. It captures luma only, with in-camera sharpening but no
+denoising, display subpixels or video compression, which the turn lanes depend on more than the field lanes do. A modern
+720p camera in these runs sees about 6.4 px per petal pitch (12.5 canvas units), the harshest 480p preset 4.0.
 
-Per-frame decode rates (`qualify`, 40 random poses per row, rotation 0–360°, tilt up to 12° unless stated). "Field" is the
-share of the four field lanes read; "B/frame" the payload bytes a capture yields (80 per field lane, 16 for lane `D` on three
-frames in four); format 1 for comparison:
+Per-frame decode rates (`qualify`, 40 random poses per row, rotation 0–360°, tilt up to 12° unless stated). "Field" and
+"Turn" are the shares of the four field lanes and of the four turn lanes read; "B/frame" the payload bytes a capture yields
+(80 per field lane, 64 per turn lane, 16 for lane `D` on three frames in four); format 2 for comparison:
 
-| Condition | Any lane | `D` | Field | B/frame | Format 1 B/frame |
-| --- | --- | --- | --- | --- | --- |
-| modern 720p | 100 % | 100 % | 100 % | 332 | 109 |
-| legacy 720p, σ 1.3 px, noise 6, tilt 15°, barrel distortion | 100 % | 100 % | 100 % | 332 | 109 |
-| 480p, fill 0.5–0.9, σ 1.2 px (2.9–4.2 px per petal) | 100 % | 100 % | 100 % | 332 | 29–67 |
-| 720p blur σ 0.7 / 1.4 / 1.8 / 2.2 px | 100 % | 100 % | 100 % | 332 | 109 / 109 / 71 / 29 |
-| 720p defocus σ 2.6 / 3.2 / 4.0 px | 100 % | 100 % | 98 / 41 / 0 % | 324 / 142 / 12 | 29 |
-| 480p defocus σ 2.0 / 2.6 / 3.2 px | 100 % | 100 % | 48 / 0 / 0 % | 164 / 12 / 12 | 29 / 29 / 22 |
-| 720p noise 3–13 levels | 100 % | 100 % | 100 % | 332 | 109 |
-| 720p tilt ≤ 25° / 35° / 45° | 100 / 100 / 82 % | same | 100 / 100 / 82 % | 332 / 332 / 274 | 109 / 107 / 94 |
-| harshest preset (480p, σ 1.7, hand shake, tilt 22°, bloom, ambient 10 %, barrel) | 100 % | 100 % | 42 % | 148 | 29 |
+| Condition | Any lane | `D` | Field | Turn | B/frame | Format 2 B/frame |
+| --- | --- | --- | --- | --- | --- | --- |
+| modern 720p | 100 % | 100 % | 100 % | 100 % | 588 | 332 |
+| legacy 720p, σ 1.3 px, noise 6, tilt 15°, barrel distortion | 100 % | 100 % | 100 % | 52 % | 466 | 332 |
+| 480p, fill 0.5–0.9, σ 1.2 px (2.9–4.2 px per petal) | 100 % | 100 % | 100 % | 0–1 % | 332–334 | 332 |
+| 720p blur σ 0.7 / 1.0 / 1.4 / 1.8 / 2.2 px | 100 % | 100 % | 100 % | 100 / 99 / 43 / 0 / 0 % | 588 / 586 / 442 / 332 / 332 | 332 |
+| 720p defocus σ 2.6 / 3.2 / 4.0 px | 100 % | 100 % | 97 / 37 / 0 % | 0 % | 322 / 130 / 12 | 324 / 142 / 12 |
+| 480p defocus σ 2.0 / 2.6 / 3.2 px | 100 % | 100 % | 46 / 0 / 0 % | 0 % | 158 / 12 / 12 | 164 / 12 / 12 |
+| 720p noise 3 / 6 / 9 / 13 levels, σ 1.2 px | 100 % | 100 % | 100 % | 89 / 82 / 66 / 51 % | 559 / 542 / 502 / 462 | 332 |
+| 720p tilt ≤ 0° / 15° / 25° / 35° / 45°, σ 1.2 px | 100 / 100 / 100 / 100 / 82 % | same | same | 91 / 78 / 60 / 38 / 23 % | 566 / 532 / 486 / 428 / 333 | 332 / 332 / 332 / 332 / 274 |
+| harshest preset (480p, σ 1.7, hand shake, tilt 22°, bloom, ambient 10 %, barrel) | 100 % | 100 % | 39 % | 0 % | 138 | 148 |
 
-The field reads wherever the camera resolves about 3 px per petal and the blur stays below about a third of the petal pitch;
-the rings carry on alone beyond that (deep defocus), at 12 B per frame against format 1's 29. A modern or legacy camera
-reads every lane of every capture, three times format 1's payload per frame.
+The field reads wherever the camera resolves about 3 px per petal and the blur stays below about a third of the petal pitch,
+as in format 2 (the narrower petals cost the harshest preset 3 points of field lanes). The turn lanes need the petals'
+shapes: a 720p camera with up to about 1 px of blur reads them all, 1.4 px reads 43 % of them, and 480p previews and blurrier
+cameras read none; noise and tilt cost some (13 levels of noise leave half, a 45° tilt a quarter).
 
-Light, motion and framing that are not nominal (`stress` example, 24 poses per cell; each cell lists a modern 720p / a
-legacy 720p / the harshest 480p camera; light levels are fractions of the lit level; hand shake is a linear blur of the given
-length). The last column is format 1's katakana lane `K`, which carried most of its payload:
+Light, motion and framing that are not nominal (`stress` example, 24 poses per cell; each cell lists a modern 720p / a legacy
+720p / the harshest 480p camera; light levels are fractions of the lit level; hand shake is a linear blur of the given
+length):
 
-| Condition | Any lane | `D` | Field | B/frame | Format 1 `K` |
-| --- | --- | --- | --- | --- | --- |
-| veiling light 0.35 / 0.5 | 100 / 100 / 100 % | 100 / 100 / 100 % | 100 / 100 / 30–5 % | 332 / 332 / 109–29 | 100 / 98–100 / 0 % |
-| auto-exposure gain 1.5× / 2× too high | 100 / 100 / 100 % | 100 / 100 / 100 % | 100 / 100 / 46–47 % | 332 / 332 / 159–162 | 100 / 78–100 / 0 % |
-| auto-exposure gain 3× too high | 100 / 100 / 100 % | 100 / 100 / 100 % | 100 / 100 / 0 % | 332 / 332 / 12 | 100 / 0 / 0 % |
-| illumination gradient equal to the lit level | 100 / 100 / 46 % | 100 / 100 / 42 % | 100 / 100 / 4 % | 332 / 332 / 18 | 100 / 90 / 0 % |
-| glare 0.5 × lit, σ 120 px | 100 / 100 / 88 % | 100 / 100 / 83 % | 100 / 100 / 17 % | 332 / 332 / 63 | 100 / 100 / 0 % |
-| glare 1.0 × lit, σ 120 px | 100 / 92 / 12 % | 75 / 71 / 8 % | 100 / 75 / 1 % | 329 / 248 / 4 | 100 / 60 / 0 % |
-| banding (display PWM) 30 % deep, 30 px period | 100 / 100 / 100 % | 100 / 100 / 100 % | 100 / 100 / 14 % | 332 / 332 / 55 | 100 / 98 / 0 % |
-| banding 50 % deep, 80 px period | 100 / 96 / 25 % | 100 / 75 / 8 % | 59 / 52 / 7 % | 202 / 176 / 24 | 8 / 0 / 0 % |
-| hand shake 4 px | 100 / 100 / 100 % | 100 / 100 / 100 % | 100 / 100 / 15 % | 332 / 332 / 59 | 60 / 12 / 0 % |
-| hand shake 9 px | 100 / 100 / 100 % | 100 / 100 / 100 % | 84 / 83 / 0 % | 282 / 279 / 12 | 0 / 0 / 0 % |
-| hand shake 14 px | 100 / 100 / 79 % | 100 / 100 / 79 % | 0 / 0 / 0 % | 12 / 12 / 10 | not measured |
-| a thumb over one corner blossom | 100 / 100 / 58 % | 100 / 100 / 58 % | 100 / 100 / 29 % | 332 / 332 / 100 | 100 / 95 / 0 % |
-| a glare spot on one corner blossom | 96 / 100 / 83 % | 96 / 100 / 83 % | 96 / 100 / 30 % | 318 / 332 / 107 | 95 / 5 / 0 % |
-| one corner outside the frame | 100 / 100 / 71 % | 100 / 100 / 71 % | 100 / 100 / 15 % | 332 / 332 / 55 | 98 / 95 / 0 % |
+| Condition | Any lane | `D` | Field | Turn | B/frame | Format 2 B/frame |
+| --- | --- | --- | --- | --- | --- | --- |
+| veiling light 0.35 / 0.5 | 100 / 100 / 100 % | 100 / 100 / 100 % | 100 / 100 / 28–4 % | 100 / 38–10 / 0 % | 588 / 428–359 / 102–25 | 332 / 332 / 109–29 |
+| auto-exposure gain 1.5× / 2× too high | 100 / 100 / 100 % | 100 / 100 / 100 % | 100 / 100 / 46–44 % | 100 / 50–18 / 0 % | 588 / 460–377 / 159–152 | 332 / 332 / 159–162 |
+| auto-exposure gain 3× too high | 100 / 100 / 100 % | 100 / 100 / 100 % | 100 / 100 / 0 % | 100 / 0 / 0 % | 588 / 332 / 12 | 332 / 332 / 12 |
+| illumination gradient equal to the lit level | 100 / 100 / 42 % | 100 / 100 / 42 % | 100 / 100 / 2 % | 100 / 15 / 0 % | 588 / 369 / 12 | 332 / 332 / 18 |
+| glare 0.5 × lit, σ 120 px | 100 / 100 / 88 % | 100 / 100 / 83 % | 100 / 100 / 12 % | 100 / 44 / 0 % | 588 / 444 / 50 | 332 / 332 / 63 |
+| glare 1.0 × lit, σ 120 px | 100 / 92 / 8 % | 75 / 71 / 8 % | 100 / 76 / 0 % | 97 / 28 / 0 % | 577 / 324 / 1 | 329 / 248 / 4 |
+| banding (display PWM) 30 % deep, 30 px period | 100 / 100 / 100 % | 100 / 100 / 100 % | 100 / 100 / 14 % | 100 / 49 / 0 % | 588 / 457 / 55 | 332 / 332 / 55 |
+| banding 50 % deep, 80 px period | 100 / 96 / 29 % | 100 / 79 / 12 % | 53 / 50 / 7 % | 35 / 7 / 0 % | 273 / 188 / 25 | 202 / 176 / 24 |
+| hand shake 2 px | 100 / 100 / 100 % | 100 / 100 / 100 % | 100 / 100 / 32 % | 26 / 0 / 0 % | 399 / 332 / 115 | not measured |
+| hand shake 4 px | 100 / 100 / 100 % | 100 / 100 / 100 % | 100 / 100 / 11 % | 4 / 0 / 0 % | 343 / 332 / 49 | 332 / 332 / 59 |
+| hand shake 9 px | 100 / 100 / 100 % | 100 / 100 / 100 % | 79 / 77 / 0 % | 0 % | 265 / 259 / 12 | 282 / 279 / 12 |
+| hand shake 14 px | 100 / 100 / 79 % | 100 / 100 / 79 % | 0 / 0 / 0 % | 0 % | 12 / 12 / 10 | 12 / 12 / 10 |
+| a thumb over one corner blossom | 100 / 100 / 58 % | 100 / 100 / 58 % | 100 / 100 / 29 % | 100 / 53 / 0 % | 588 / 468 / 100 | 332 / 332 / 100 |
+| a glare spot on one corner blossom | 96 / 100 / 83 % | 96 / 100 / 83 % | 96 / 100 / 29 % | 73 / 33 / 0 % | 505 / 417 / 103 | 318 / 332 / 107 |
+| one corner outside the frame | 100 / 100 / 71 % | 100 / 100 / 71 % | 100 / 100 / 12 % | 99 / 65 / 0 % | 585 / 497 / 48 | 332 / 332 / 55 |
 
-The field survives the lighting problems old cameras actually have, through the normalised read and the local read of §7 step
-5: a legacy camera three times over-exposed reads every field lane where format 1 lost lane `K` entirely, and veiling light, a
-gradient as strong as the lit level or a 0.5 glare cost it nothing. A covered, glared or cut-off corner blossom costs at most
-4 % of the field at 720p, and the harshest 480p preset reads a share of the field in 11 of these 14 conditions, where format 1
-read only lane `D`. Hand shake costs the field from about 9 px of blur on (83–84 % of lanes, where `K` was gone) and all of it
-at 14 px; display banding 50 % deep with an 80 px period costs about half the field lanes (`K` read 0–8 %). Lane `D` is still
-the lane that holds longest, but its dots are smaller than format 1's (radius 9 against 11), and under deep banding it reads
-less: 75 % against 98 % on the legacy camera, 8 % against 28 % on the 480p preset. A deep glare or wide, deep banding defeats
-every lane in the frames it covers: that is why the stream is rateless and frames are shown for several camera frames.
+Lane `D` and the field lanes fare as in format 2 within a few points: the field survives the lighting problems old cameras
+have, through the normalised read and the local read of §7 step 5. On the sharp camera the turn lanes add 77 % to the yield
+through veiling light, over-exposure, a gradient as strong as the lit level, banding 30 % deep and a covered or cut-off
+blossom; on the older camera they add up to half, less as the light worsens and nothing at three times over-exposure. Hand
+shake is what turns cannot stand: 2 px of motion blur leave a quarter of them on the sharp camera and 4 px almost none, while
+the field lanes read up to about 9 px as before. A deep glare or wide, deep banding defeats every lane in the frames it covers:
+that is why the stream is rateless and frames are shown for several camera frames.
 
 End to end (`stream_sim`: 30 fps camera, 1/60 s exposure with blending/tearing, random pose, 8 trials per row, received
 through a scan session that tracks the pose; seconds to complete, mean) for the largest KAGEMUSHA Payment (12,182 bytes) and,
 after the slash, a Request-sized message (2,132 bytes). The slower decoders see only that many camera frames a second; the
-rolling shutters expose the rows one after another over the readout time:
+rolling shutters expose the rows one after another over the readout time. Rows with three figures list the sharp, older and
+soft 720p cameras:
 
 | Camera | 8 fps | 10 fps | 12 fps | 15 fps |
 | --- | --- | --- | --- | --- |
-| modern, legacy and soft 720p | 4.5 / 0.7 s | 3.6 / 0.6 s | 3.0 / 0.5 s | 2.4 / 0.4 s |
-| harshest 480p preset | 6.0 / 1.0 s | 5.2 / 0.9 s | 4.9 / 0.9 s | 5.3 / 1.1 s |
-| 720p, decoder keeping up with 20 camera frames a second | not run | 3.6 s | 3.0 s | 2.4 s |
-| 720p, decoder keeping up with 15 camera frames a second | 4.5 s | 3.6 s | 3.0 s | 2.4 s |
-| 720p, decoder keeping up with 10 camera frames a second | 4.5 s | 3.6 s | 3.7 s | not run |
-| 720p, rolling shutter, 20 ms readout, 8 ms exposure | 4.5 s | not run | 3.0 s | 2.4 s |
-| 720p, rolling shutter, 30 ms readout, 16 ms exposure | 4.5 s | not run | 3.0 s | 2.4 s |
+| sharp 720p | 2.46 / 0.33 s | 1.99 / 0.26 s | 1.65 / 0.23 s | 1.32 / 0.18 s |
+| older 720p | 2.73 / 0.40 s | 2.39 / 0.34 s | 1.87 / 0.29 s | 1.53 / 0.22 s |
+| soft 720p | 4.46 / 0.71 s | 3.57 / 0.56 s | 2.98 / 0.48 s | 2.38 / 0.38 s |
+| harshest 480p preset | 6.32 / 1.08 s | 5.70 / 1.04 s | 5.76 / 1.02 s | 6.31 / 1.29 s |
+| 720p, decoder keeping up with 20 camera frames a second | 2.47 / 2.86 / 4.47 s | 1.98 / 2.31 / 3.58 s | 1.66 / 1.91 / 2.98 s | 1.39 / 1.62 / 2.40 s |
+| 720p, decoder keeping up with 15 camera frames a second | 2.51 / 2.82 / 4.48 s | 2.00 / 2.40 / 3.58 s | 1.67 / 1.90 / 3.00 s | 1.33 / 1.59 / 2.40 s |
+| 720p, decoder keeping up with 10 camera frames a second | 2.50 / 2.89 / 4.50 s | 2.00 / 2.39 / 3.60 s | 2.07 / 2.43 / 3.75 s | 2.12 / 2.49 / 3.84 s |
+| 720p, rolling shutter, 20 ms readout, 8 ms exposure | 2.47 / 2.77 / 4.46 s | not run | 1.65 / 1.83 / 2.98 s | 1.36 / 1.63 / 2.38 s |
+| 720p, rolling shutter, 30 ms readout, 16 ms exposure | 2.48 / 2.80 / 4.45 s | not run | 1.65 / 1.83 / 2.97 s | 1.37 / 1.63 / 2.40 s |
+| format 2, the three 720p cameras | 4.5 / 0.7 s | 3.6 / 0.6 s | 3.0 / 0.5 s | 2.4 / 0.4 s |
+| format 2, harshest 480p preset | 6.0 / 1.0 s | 5.2 / 0.9 s | 4.9 / 0.9 s | 5.3 / 1.1 s |
 | animated QR (Apple Vision), 720p cameras | 6.4 / 1.2 s | 5.1 s | 4.3 s | 3.4 s |
 
-Every trial completed and none delivered a wrong payload. A 720p camera reads practically every lane of every frame, so a
-payload completes after the frames its atoms need, 37 for 12,182 bytes (762 atoms at 20.75 per frame), at any display rate up
-to 15 fps, under both rolling shutters, and with a decoder that keeps up with only 15 camera frames a second. A decoder slower
-than the display skips frames and loses nothing else: keeping up with 10 camera frames a second it still completes in 3.7 s at
-12 fps, faster than the 4.5 s of 8 fps. On the harshest 480p preset 12 fps is the fastest rate; 15 fps leaves fewer captures
-per shown frame and takes 5.3 s.
+Every trial completed and none delivered a wrong payload. At the default 12 fps a Payment takes 1.65 s on a sharp camera and
+1.9 s on an older one, against 3.0 s for format 2 and 6.4 s for the apps' animated QR at its 8 fps; a soft camera, whose turns
+are unreadable, takes the 3.0 s of format 2. The turn lanes keep their lead with a decoder that keeps up with only 15 camera
+frames a second and under both rolling shutters. A decoder that keeps up with only 10 camera frames a second does best at a 10
+fps display (2.0 s on the sharp camera) and still completes at 12 fps in 2.07 s, faster than the 2.5 s of 8 fps. The harshest
+480p preset pays for the narrower petals: over 24 paired trials (the same seeds through format 2 and format 3) it took 12.8 s
+on average and 3.6 s in the median, against 11.0 s and 3.5 s. No trial was faster with format 3 and eight took the same time;
+the three slowest (79, 43 and 30 s with format 2) took 83, 58 and 43 s and make up three quarters of the difference.
 
 The QR row is the same cameras and timeline watching the apps' animated QR stream: `IRQR` frames as ZXing draws them at ECC M,
 version 13, 256-byte shards with Cauchy Reed–Solomon parity, the QR box 1.25 times the petal canvas, carrying the message body
-without its 84-byte header (12,098 and 2,048 bytes), read by Apple Vision's barcode detector (`VNDetectBarcodesRequest`;
-modern and legacy cameras, 6 trials per rate above 8 fps; the soft camera matches at 8 fps). On the harshest 480p preset one
-QR trial in eight completed within 90 s. Format 1 needed 14.1 s and 2.4 s at 8 fps (20.3 s and 3.5 s on the soft camera, 54.5 s
-and 9.6 s on the 480p preset). At every display rate format 2 takes about 30 % less time than animated QR: its frames carry
-332 payload bytes against 256, and the camera reads practically all of them against 90–96 % of the QR frames. At the default
-12 frames a second a Payment takes 3.0 s, against 6.4 s for the apps' animated QR at its 8 frames a second (4.5 s for petals
-at the same 8 fps).
+without its 84-byte header (12,098 and 2,048 bytes), read by Apple Vision's barcode detector (`VNDetectBarcodesRequest`; modern
+and legacy cameras, 6 trials per rate above 8 fps; the soft camera matches at 8 fps). On the harshest 480p preset one QR trial
+in eight completed within 90 s.
 
 Decode cost (`decode_cost` example; one thread of an Apple M4 Max, the fastest of 18 runs while other work kept the machine
-busy): at 1280×720 a full search takes 5.2 ms and tracking the pose of the previous frame 0.6 ms (the legacy camera with
-barrel distortion 4.4 and 0.6 ms; 1920×1080 9.9 and 0.8 ms; 640×480 1.9 and 0.4 ms). A frame whose corner blossom a thumb
-covers costs 15.2 ms the first time (the corner search against the rings) and 2.6 ms per tracked frame. A merge of three
-captures costs 0.7 ms. Through a scan session the simulated 30 fps camera costs 0.8–2.9 ms per camera frame on the 720p
-cameras and 6–10 ms on the 480p preset. Format 1 needed about 7.5 ms for a full search, 2 ms for a tracked frame and 21 ms
-with a hidden corner. Ports are expected to stay within a factor of 20 of the reference.
+busy):
+
+| Capture | Full search | Tracked | Turn lanes | Merge of 3 captures |
+| --- | --- | --- | --- | --- |
+| modern 720p | 5.2 ms | 0.5 ms | 5.2 ms | 0.7 ms |
+| legacy 720p, barrel distortion | 4.5 ms | 0.5 ms | 4.9 ms | 0.7 ms |
+| modern 1080p | 9.5 ms | 0.7 ms | 4.5 ms | 0.7 ms |
+| 480p, blur 1.2 px | 1.9 ms | 0.4 ms | 3.2 ms | 0.6 ms |
+| modern 720p, a thumb over a blossom | 14.4 ms | 2.4 ms | 4.7 ms | 0.6 ms |
+
+Reading the turn lanes costs about ten times a tracked frame's decode. A scan session therefore tries each turn lane once per
+shown frame and backs off on a camera whose turns it cannot read (§7 step 9). On a desktop the Kotlin and Swift ports read a
+capture's turn lanes in 5–9 ms; ports are expected to stay within a factor of 20 of the reference.
 
 On a phone: a Pixel 6 held to its four Cortex-A55 cores at 1.8 GHz (`taskset 0f`; the core type that budget 4 GB phones pair
 with a few faster ones), running the Kotlin SDK on ART, decoded the camera frames of simulated trials (12,182 bytes, one pose)
-through a scan session that, as CameraX's analyser does, takes only the newest camera frame whenever it is free. The older
-720p camera costs 16 ms per camera frame after warm-up (the first full search 85 ms), so all 30 camera frames a second are
-decoded and the Payment completes in 2.98 s at 12 fps and 4.48 s at 8 fps, on the same camera frame as the reference decoder
-fed the same frames. The harshest 480p preset costs 59 ms per frame, because its field lanes need the distortion search, the
-local read and merges; about 17 camera frames a second are decoded, and 12 fps still completes first: 5.0–5.2 s against
-5.5–6.1 s at 8 fps. One of the phone's X1 cores takes 1.4 ms per frame. The frames came from the simulator: no camera or
-display was in this loop.
+through a scan session that, as CameraX's analyser does, takes only the newest camera frame whenever it is free. A capture
+costs about 16 ms, and about 80 ms when it tries turn lanes. The Payment completed in 1.82 s on the sharp camera (13–15 camera
+frames a second decoded), 2.50 s on the older one (13 a second) and 3.08 s on the soft one (26 a second, the back-off passing
+most of its tries over; 3.36 s without it), against about 3.0 s for format 2 on the same phone. The frames came from the
+simulator: no camera or display was in this loop.
 
 Run the evidence yourself:
 
@@ -502,7 +604,7 @@ cargo run --release -p iroha_petal --example stress -- 24             # light, m
 cargo run --release -p iroha_petal --example stream_sim -- 8 12182 12 # end to end at the default 12 fps
 cargo run --release -p iroha_petal --example stream_sim -- 8 12182 12 modern,legacy,soft --camera-fps 10
 cargo run --release -p iroha_petal --example stream_sim -- 8 12182 12 modern --readout-ms 30 --exposure-ms 16
-cargo run --release -p iroha_petal --example decode_cost              # decode time
+cargo run --release -p iroha_petal --example decode_cost              # decode time, turn lanes included
 iroha offline petal simulate --camera legacy --bytes 12182 --fps 12   # end to end, through the CLI
 ```
 
@@ -516,34 +618,42 @@ iroha offline petal simulate --camera modern|legacy|soft|worst --bytes 12182 --f
 ```
 
 `encode` writes `frame_0000.png …` (or one looping `stream.gif` with the `offline-visual-codecs` feature) and
-`manifest.json` (`iroha.offline.petal.encode.v2`). `decode` reads PNG frames in file-name order from a
-directory — frames extracted from a screen recording work. `inspect` prints which lanes decode, the orientation, the lens
-distortion and the beacon of one frame.
+`manifest.json` (`iroha.offline.petal.encode.v3`). `decode` reads PNG frames in file-name order from a
+directory — frames extracted from a screen recording work — and reports the turn lanes it read. `inspect` prints which lanes
+and turn lanes decode, the blur the turn reader fits, the orientation, the lens distortion and the beacon of one frame.
 
 ## 10. Fixtures and conformance
 
-* `fixtures/petal/petal_stream_v2.json` — constants, layout tables (finders, band slots, every sector's cell order, the
-  `天` mask and the light cells, rings, data, gate and guard slots), palette, CRC-32C, xorshift32/`mix32`, whitening,
-  Reed–Solomon vectors, fountain masks, the atom-id schedule, and for three streams (`tiny`, `one-pass`, `wrap`) the lane
-  data, transmitted words, lit dots and lit petals of every listed frame. Encoders must reproduce all of it bit for bit.
-* `fixtures/petal/petal_captures_v2.json` — twelve degraded camera luma planes (zlib + base64, row-major 8-bit) of the
-  `one-pass` stream with `must_decode` lanes, the lanes the reference decoder reads (`reference_decoded`), the expected lane
-  data, a `mirrored` flag and the `inferred_corner` (null, or the canonical index of a hidden corner blossom); two tracking
-  pairs (`tracks`: a first frame to decode and a second frame to read by tracking its pose, with `must_track`,
-  `reference_tracked` and `inferred_corner`); one merge set (`merges`: four 480p captures of one shown frame under one pose,
-  each with its own sensor noise, with per-capture `must_decode` and `reference_decoded`, `must_merge` for the field lanes the
-  merge of §7 step 8 must recover although no capture reads them alone, and `reference_merged`); one mixed set
-  (`mixed_merges`: four captures whose rings show `frame` and whose petal field shows `petals_frame`, with `reference_merged`
-  for what the merge of their field evidence reads); and two negatives. Lanes are named by letters: `D` and the sector digits
-  `0`–`3`. A decoder must read the required lanes, must never return a lane with wrong data, must reject the negatives, and
-  conforming ports reproduce `reference_decoded`, `reference_tracked`, `reference_merged` and the inferred corners exactly. A
-  scan session fed the captures of a merge set in order (30 fps) must recover its `must_merge` lanes, and fed a mixed set it
-  must merge but never offer a lane, since the merged lanes name `petals_frame`. The captures cover a sharp and a rotated
-  camera, an older soft camera with barrel distortion, two blurred 480p cameras, a mirrored front camera, over-exposure,
-  veiling light, a shadow band that only the local read gets through, a covered blossom and a corner outside the frame (both
-  inferred), and a cheap lens whose barrel distortion the decoder must search for.
-* Regenerate with `cargo run -p iroha_petal --example gen_fixtures -- fixtures/petal/petal_stream_v2.json` and
-  `cargo run --release -p iroha_petal --example gen_captures -- fixtures/petal/petal_captures_v2.json`; `cargo test -p iroha_petal`
+* `fixtures/petal/petal_stream_v3.json` — constants, layout tables (finders, band slots, every sector's cell order and
+  carrier order, the `天` mask and the light cells, rings, data, gate and guard slots), palette, CRC-32C,
+  xorshift32/`mix32`, whitening (lanes `D`, `F0`–`F3` and `T0`–`T3`), Reed–Solomon vectors, fountain masks, the atom-id
+  schedules of the field and turn lanes, probes of the turn reader's templates (`turn_reader`: every blur at six points),
+  and for three streams (`tiny`, `one-pass`, `wrap`) the lane data and transmitted words of every lane (turn lanes
+  included), the lit dots, the lit petals and the turn position of every cell (`turns`, one digit per cell) of every listed
+  frame. Encoders must reproduce all of it bit for bit, and a port's templates must match the probes to 10⁻¹².
+* `fixtures/petal/petal_captures_v3.json` — twelve degraded camera luma planes (zlib + base64, row-major 8-bit) of the
+  `one-pass` stream with `must_decode` lanes, the lanes the reference decoder reads (`reference_decoded`), `must_turn` and
+  `reference_turned` for the turn lanes (§7 step 9, read with no sector passed over), the expected lane data (`turn_data`
+  for the turn lanes), a `mirrored` flag and the `inferred_corner` (null, or the canonical index of a hidden corner blossom);
+  two tracking pairs (`tracks`: a first frame to decode and a second frame to read by tracking its pose, with `must_track`,
+  `reference_tracked`, `must_turn`, `reference_turned` and `inferred_corner`); one merge set (`merges`: four 480p captures of
+  one shown frame under one pose, each with its own sensor noise, with per-capture `must_decode` and `reference_decoded`,
+  `must_merge` for the field lanes the merge of §7 step 8 must recover although no capture reads them alone, and
+  `reference_merged`); one mixed set (`mixed_merges`: four captures whose rings show `frame` and whose petal field shows
+  `petals_frame`, with `reference_merged` for what the merge of their field evidence reads); and two negatives. Lanes are named
+  by letters: `D` and the sector digits `0`–`3` (a turn lane by the digit of its field lane). A decoder must read the
+  required lanes, must never return a lane with wrong data, must reject the negatives, and conforming ports reproduce
+  `reference_decoded`, `reference_turned`, `reference_tracked`, `reference_merged` and the inferred corners exactly. A scan
+  session fed the captures of a merge set in order (30 fps) must recover its `must_merge` lanes, and fed a mixed set it must
+  merge but never offer a lane, since the merged lanes name `petals_frame`. The captures cover a sharp and a rotated camera,
+  an older soft camera with barrel distortion, two blurred 480p cameras, a mirrored front camera, over-exposure, veiling
+  light, a shadow band that only the local read gets through, a covered blossom and a corner outside the frame (both
+  inferred), and a cheap lens whose barrel distortion the decoder must search for. The sharp cameras, the mirrored, covered
+  and cut-off captures and both tracking pairs read every turn lane; the shadow band reads them with 3 to 9 corrections; the
+  over-exposed capture reads two, each at the limit of its Reed–Solomon code (a strict check of a port's arithmetic); the
+  soft, blurred, veiled and distorted captures read none.
+* Regenerate with `cargo run -p iroha_petal --example gen_fixtures -- fixtures/petal/petal_stream_v3.json` and
+  `cargo run --release -p iroha_petal --example gen_captures -- fixtures/petal/petal_captures_v3.json`; `cargo test -p iroha_petal`
   fails if the files and the reference drift apart.
 
 Implementations: Rust (`crates/iroha_petal`, `iroha offline petal`), Swift (`IrohaSwift`), Kotlin/Java (`kotlin/core-jvm`,
@@ -557,7 +667,10 @@ Implementations: Rust (`crates/iroha_petal`, `iroha offline petal`), Swift (`Iro
   random byte confidences, one decoding of lane `D` accepts 3 in 40 000 (0.0075 %) and of a field lane none in 40 000. (Lane `D`
   used to try a seventh erasure; that accepted 0.4 % of random words.) The stream layer absorbs what is left: lane headers carry
   the stream tag (a stranger passes with probability 1/256) and the payload CRC-32C is verified before delivery, so a false
-  accept costs at most an integrity reset, never a wrong payload.
+  accept costs at most an integrity reset, never a wrong payload. A turn lane has the field lanes' 22 parity bytes on a shorter
+  word and must also match its 32-bit check, which binds it to the stream tag, frame and sector of the field lane it was read
+  on, so a misread turn lane (or one read under a wrong field lane) passes with probability about 2⁻³² on top of the
+  Reed–Solomon odds.
 * The payload CRC-32C and the Reed–Solomon codes detect corruption, not forgery. A screen in front of the camera can always show
   garbage or a different stream; the application must authenticate the payload (KAGEMUSHA messages carry their own proofs and
   signatures) and must not treat a completed Petal stream as authentic.
@@ -568,3 +681,7 @@ Implementations: Rust (`crates/iroha_petal`, `iroha offline petal`), Swift (`Iro
 
 * TODO: physical-device qualification of the matrices in §8, including the OLED/PWM and rolling-shutter effects, the
   exposure-compensation guidance, and the 12 fps default with a real camera on an older 4 GB Android phone.
+* TODO: check the turn lanes with real cameras and screens. The simulator has no denoising, display subpixels or video
+  compression, and a phone's noise reduction and sharpening may smear or ring the petal outlines the turn reader matches;
+  hand shake of 2 px already costs three quarters of them in simulation. A camera that cannot read turns still reads the
+  field and completes as format 2 does, with the scan session's back-off limiting the cost of failed tries.
