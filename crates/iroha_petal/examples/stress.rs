@@ -158,7 +158,7 @@ fn main() {
     let threads = std::thread::available_parallelism().map_or(4, usize::from);
     println!(
         "{:<26} {:<12} {:>5} {:>5} {:>5} {:>5}",
-        "condition", "camera", "any%", "P%", "K%", "D%"
+        "condition", "camera", "any%", "D%", "F%", "B/frm"
     );
     for (name, stress) in stress_rows() {
         if filter.as_ref().is_some_and(|f| !name.contains(f.as_str())) {
@@ -253,12 +253,13 @@ fn main() {
                                 band(&mut image, depth, period, &mut rng);
                             }
                             if let Ok(f) = decode(&image, &DecodeOptions::default()) {
-                                let (p, k, d) = (f.p.is_some(), f.k.is_some(), f.d.is_some());
+                                let fields = f.fields.iter().filter(|l| l.is_some()).count();
+                                let d = f.d.is_some();
                                 let mut t = tally.lock().expect("tally");
-                                t[0] += usize::from(p || k || d);
-                                t[1] += usize::from(p);
-                                t[2] += usize::from(k);
-                                t[3] += usize::from(d);
+                                t[0] += usize::from(d || fields > 0);
+                                t[1] += usize::from(d);
+                                t[2] += fields;
+                                t[3] += 80 * fields + 12 * usize::from(d);
                             }
                         }
                     });
@@ -272,8 +273,8 @@ fn main() {
                 camera,
                 pct(t[0]),
                 pct(t[1]),
-                pct(t[2]),
-                pct(t[3])
+                pct(t[2]) / 4.0,
+                count_as_f64(t[3]) / count_as_f64(trials)
             );
         }
     }

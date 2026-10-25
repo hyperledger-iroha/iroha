@@ -1,19 +1,19 @@
 //! Lane codecs: bytes ⇄ transmitted cell states.
 //!
-//! A frame carries three lanes. Each lane is exactly one Reed–Solomon
+//! A frame carries five lanes. Each lane is exactly one Reed–Solomon
 //! codeword, XOR-whitened with a fixed pseudo-random sequence so the picture
 //! is statistically balanced whatever the payload is:
 //!
 //! | lane | cells | codeword | data | parity |
 //! |------|-------|----------|------|--------|
-//! | `P` polarity | 256 tiles × 1 bit | 32 B | 19 B | 13 B |
-//! | `K` katakana | 256 tiles × 4 bits | 128 B | 83 B | 45 B |
 //! | `D` dots | 240 ring slots × 1 bit | 30 B | 19 B | 11 B |
+//! | `F0`–`F3` petals | 840 field cells of one sector × 1 bit | 105 B | 83 B | 22 B |
 //!
-//! Bit order is most-significant-bit first; lane `K` packs the first tile of a
-//! pair into the high nibble.
+//! Bit order is most-significant-bit first.
 
-use crate::layout::{D_BITS, SlotRole, TILE_COUNT, TOTAL_SLOTS, data_slots, slot_roles};
+use crate::layout::{
+    D_BITS, FIELD_CELLS, SECTORS, SlotRole, TOTAL_SLOTS, data_slots, sector_cells, slot_roles,
+};
 use crate::prng::Xorshift32;
 use crate::rs::{ReedSolomon, RsError};
 
@@ -21,62 +21,67 @@ use crate::rs::{ReedSolomon, RsError};
 pub const ATOM_LEN: usize = 16;
 /// Bytes of the per-lane header (`tag`, `frame` high, `frame` low).
 pub const LANE_HEADER_LEN: usize = 3;
-/// Atoms carried by lane `P`.
-pub const P_ATOMS: usize = 1;
 /// Atoms carried by lane `D` on frames that do not carry a beacon.
 pub const D_ATOMS: usize = 1;
-/// Atoms carried by lane `K`.
-pub const K_ATOMS: usize = 5;
-/// Most atoms one frame can carry (lanes `P`, `D` and `K`).
-pub const ATOMS_PER_FRAME: usize = P_ATOMS + D_ATOMS + K_ATOMS;
+/// Atoms carried by each field lane.
+pub const FIELD_ATOMS: usize = 5;
+/// Most atoms one frame can carry (the four field lanes and lane `D`).
+pub const ATOMS_PER_FRAME: usize = SECTORS * FIELD_ATOMS + D_ATOMS;
 
-/// Codeword length of lane `P` in bytes.
-pub const P_WORD: usize = TILE_COUNT / 8;
-/// Codeword length of lane `K` in bytes.
-pub const K_WORD: usize = TILE_COUNT / 2;
 /// Codeword length of lane `D` in bytes.
 pub const D_WORD: usize = D_BITS / 8;
-/// Parity bytes of lane `P`.
-pub const P_PARITY: usize = 13;
-/// Parity bytes of lane `K`.
-pub const K_PARITY: usize = 45;
 /// Parity bytes of lane `D`.
 pub const D_PARITY: usize = 11;
-/// Data bytes of lane `P`.
-pub const P_DATA: usize = P_WORD - P_PARITY;
-/// Data bytes of lane `K`.
-pub const K_DATA: usize = K_WORD - K_PARITY;
 /// Data bytes of lane `D`.
 pub const D_DATA: usize = D_WORD - D_PARITY;
+/// Codeword length of a field lane in bytes.
+pub const FIELD_WORD: usize = 105;
+/// Parity bytes of a field lane.
+pub const FIELD_PARITY: usize = 22;
+/// Data bytes of a field lane.
+pub const FIELD_DATA: usize = FIELD_WORD - FIELD_PARITY;
+/// Field cells of a sector that carry no bit (they stay dark).
+pub const SPARE_SECTOR_CELLS: usize = FIELD_CELLS / SECTORS - FIELD_WORD * 8;
 
 const _: () = {
-    assert!(P_DATA == LANE_HEADER_LEN + P_ATOMS * ATOM_LEN);
-    assert!(K_DATA == LANE_HEADER_LEN + K_ATOMS * ATOM_LEN);
     assert!(D_DATA == LANE_HEADER_LEN + D_ATOMS * ATOM_LEN);
+    assert!(FIELD_DATA == LANE_HEADER_LEN + FIELD_ATOMS * ATOM_LEN);
+    assert!(FIELD_WORD * 8 <= FIELD_CELLS / SECTORS);
 };
 
-/// One of the three data lanes of a frame.
+/// One of the five data lanes of a frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Lane {
-    /// Light/dark polarity of the tiles.
-    P,
-    /// Katakana glyph of each tile.
-    K,
     /// Dots on the three rings.
     D,
+    /// The petals of field sector `0..4`.
+    Field(u8),
 }
 
 impl Lane {
     /// All lanes in decode order.
-    pub const ALL: [Self; 3] = [Self::P, Self::D, Self::K];
+    pub const ALL: [Self; 5] = [
+        Self::D,
+        Self::Field(0),
+        Self::Field(1),
+        Self::Field(2),
+        Self::Field(3),
+    ];
+
+    /// The four field lanes.
+    pub const FIELDS: [Self; SECTORS] = [
+        Self::Field(0),
+        Self::Field(1),
+        Self::Field(2),
+        Self::Field(3),
+    ];
 
     /// Codeword length in bytes.
     #[must_use]
     pub const fn word_len(self) -> usize {
         match self {
-            Self::P => P_WORD,
-            Self::K => K_WORD,
             Self::D => D_WORD,
+            Self::Field(_) => FIELD_WORD,
         }
     }
 
@@ -84,9 +89,8 @@ impl Lane {
     #[must_use]
     pub const fn parity_len(self) -> usize {
         match self {
-            Self::P => P_PARITY,
-            Self::K => K_PARITY,
             Self::D => D_PARITY,
+            Self::Field(_) => FIELD_PARITY,
         }
     }
 
@@ -96,11 +100,28 @@ impl Lane {
         self.word_len() - self.parity_len()
     }
 
+    /// Atoms carried (lane `D`: on frames without a beacon).
+    #[must_use]
+    pub const fn atoms(self) -> usize {
+        match self {
+            Self::D => D_ATOMS,
+            Self::Field(_) => FIELD_ATOMS,
+        }
+    }
+
+    /// The letter that names the lane in reports: `D`, or the sector digit `0`–`3`.
+    #[must_use]
+    pub const fn letter(self) -> char {
+        match self {
+            Self::D => 'D',
+            Self::Field(sector) => (b'0' + sector) as char,
+        }
+    }
+
     const fn whitening_seed(self) -> u32 {
         match self {
-            Self::P => 0x5045_5441, // "PETA"
-            Self::K => 0x4B41_4E41, // "KANA"
-            Self::D => 0x444F_5453, // "DOTS"
+            Self::D => 0x444F_5453,                             // "DOTS"
+            Self::Field(sector) => 0x5045_5430 + sector as u32, // "PET0" … "PET3"
         }
     }
 
@@ -162,35 +183,20 @@ pub fn decode_lane_counted(
 /// Every cell of one frame: what a renderer draws and a decoder samples.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FrameCells {
-    /// Polarity of each tile; `true` is a light tile.
-    pub light: [bool; TILE_COUNT],
-    /// Glyph symbol (`0..16`) of each tile.
-    pub glyph: [u8; TILE_COUNT],
     /// Lit state of every ring slot, gate dots included.
     pub dots: [bool; TOTAL_SLOTS],
+    /// Lit state of every field cell (spare cells are dark).
+    pub petals: [bool; FIELD_CELLS],
 }
 
 impl FrameCells {
-    /// Builds the cells from the three transmitted codewords.
+    /// Builds the cells from the transmitted codewords of lane `D` and the four field lanes.
     ///
     /// # Panics
     /// Panics when a codeword has the wrong length.
     #[must_use]
-    pub fn from_words(p: &[u8], k: &[u8], d: &[u8]) -> Self {
-        assert_eq!(p.len(), P_WORD);
-        assert_eq!(k.len(), K_WORD);
+    pub fn from_words(d: &[u8], fields: [&[u8]; SECTORS]) -> Self {
         assert_eq!(d.len(), D_WORD);
-        let mut light = [false; TILE_COUNT];
-        let mut glyph = [0u8; TILE_COUNT];
-        for tile in 0..TILE_COUNT {
-            light[tile] = p[tile / 8] >> (7 - tile % 8) & 1 == 1;
-            let byte = k[tile / 2];
-            glyph[tile] = if tile % 2 == 0 {
-                byte >> 4
-            } else {
-                byte & 0x0F
-            };
-        }
         let mut dots = [false; TOTAL_SLOTS];
         for (slot, role) in slot_roles().into_iter().enumerate() {
             dots[slot] = match role {
@@ -201,30 +207,14 @@ impl FrameCells {
                 SlotRole::Guard | SlotRole::Spare => false,
             };
         }
-        Self { light, glyph, dots }
-    }
-
-    /// Packs the polarity cells into a lane `P` codeword.
-    #[must_use]
-    pub fn p_word(&self) -> [u8; P_WORD] {
-        let mut word = [0u8; P_WORD];
-        for (tile, &light) in self.light.iter().enumerate() {
-            if light {
-                word[tile / 8] |= 1 << (7 - tile % 8);
+        let mut petals = [false; FIELD_CELLS];
+        for (sector, word) in fields.into_iter().enumerate() {
+            assert_eq!(word.len(), FIELD_WORD);
+            for (bit, &cell) in sector_cells(sector).iter().take(FIELD_WORD * 8).enumerate() {
+                petals[cell] = word[bit / 8] >> (7 - bit % 8) & 1 == 1;
             }
         }
-        word
-    }
-
-    /// Packs the glyph cells into a lane `K` codeword.
-    #[must_use]
-    pub fn k_word(&self) -> [u8; K_WORD] {
-        let mut word = [0u8; K_WORD];
-        for (tile, &glyph) in self.glyph.iter().enumerate() {
-            let nibble = glyph & 0x0F;
-            word[tile / 2] |= if tile % 2 == 0 { nibble << 4 } else { nibble };
-        }
-        word
+        Self { dots, petals }
     }
 
     /// Packs the data dots into a lane `D` codeword.
@@ -238,18 +228,36 @@ impl FrameCells {
         }
         word
     }
+
+    /// Packs the petals of sector `sector` into its field codeword.
+    #[must_use]
+    pub fn field_word(&self, sector: usize) -> [u8; FIELD_WORD] {
+        let mut word = [0u8; FIELD_WORD];
+        for (bit, &cell) in sector_cells(sector).iter().take(FIELD_WORD * 8).enumerate() {
+            if self.petals[cell] {
+                word[bit / 8] |= 1 << (7 - bit % 8);
+            }
+        }
+        word
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn field_data(seed: u8) -> Vec<u8> {
+        (0..FIELD_DATA as u8)
+            .map(|b| b.wrapping_mul(37) ^ seed)
+            .collect()
+    }
+
     #[test]
     fn lane_sizes_are_consistent() {
-        assert_eq!(P_WORD, 32);
-        assert_eq!(K_WORD, 128);
         assert_eq!(D_WORD, 30);
-        assert_eq!((P_DATA, K_DATA, D_DATA), (19, 83, 19));
+        assert_eq!((D_DATA, FIELD_DATA), (19, 83));
+        assert_eq!(SPARE_SECTOR_CELLS, 4);
+        assert_eq!(ATOMS_PER_FRAME, 21);
     }
 
     #[test]
@@ -264,41 +272,52 @@ mod tests {
                 "{lane:?} ones {ones}/{bits}"
             );
         }
+        assert_ne!(Lane::Field(0).whitening(), Lane::Field(1).whitening());
     }
 
     #[test]
     fn lanes_roundtrip_through_cells() {
-        let p_data: Vec<u8> = (0..P_DATA as u8).collect();
-        let k_data: Vec<u8> = (0..K_DATA as u8).map(|b| b.wrapping_mul(37)).collect();
         let d_data: Vec<u8> = (0..D_DATA as u8).map(|b| b ^ 0xA5).collect();
-        let (p, k, d) = (
-            encode_lane(Lane::P, &p_data),
-            encode_lane(Lane::K, &k_data),
-            encode_lane(Lane::D, &d_data),
-        );
-        let cells = FrameCells::from_words(&p, &k, &d);
-        assert_eq!(cells.p_word().as_slice(), p.as_slice());
-        assert_eq!(cells.k_word().as_slice(), k.as_slice());
+        let d = encode_lane(Lane::D, &d_data);
+        let fields: Vec<Vec<u8>> = (0..SECTORS as u8)
+            .map(|s| encode_lane(Lane::Field(s), &field_data(s)))
+            .collect();
+        let cells = FrameCells::from_words(&d, [&fields[0], &fields[1], &fields[2], &fields[3]]);
         assert_eq!(cells.d_word().as_slice(), d.as_slice());
-        assert_eq!(decode_lane(Lane::P, &cells.p_word(), &[]).unwrap(), p_data);
-        assert_eq!(decode_lane(Lane::K, &cells.k_word(), &[]).unwrap(), k_data);
         assert_eq!(decode_lane(Lane::D, &cells.d_word(), &[]).unwrap(), d_data);
+        for (s, field) in fields.iter().enumerate() {
+            assert_eq!(cells.field_word(s).as_slice(), field.as_slice());
+            assert_eq!(
+                decode_lane(Lane::Field(s as u8), &cells.field_word(s), &[]).unwrap(),
+                field_data(s as u8)
+            );
+        }
+        // the spare cells at the end of every sector stay dark
+        for s in 0..SECTORS {
+            for &cell in &sector_cells(s)[FIELD_WORD * 8..] {
+                assert!(!cells.petals[cell]);
+            }
+        }
     }
 
     #[test]
-    fn all_zero_data_still_lights_roughly_half_the_cells() {
+    fn all_zero_data_still_lights_about_half_the_petals() {
+        let zero = vec![0u8; FIELD_DATA];
+        let fields: Vec<Vec<u8>> = (0..SECTORS as u8)
+            .map(|s| encode_lane(Lane::Field(s), &zero))
+            .collect();
         let cells = FrameCells::from_words(
-            &encode_lane(Lane::P, &[0; P_DATA]),
-            &encode_lane(Lane::K, &[0; K_DATA]),
             &encode_lane(Lane::D, &[0; D_DATA]),
+            [&fields[0], &fields[1], &fields[2], &fields[3]],
         );
-        let lit = cells.light.iter().filter(|l| **l).count();
-        assert!((90..=166).contains(&lit), "{lit} light tiles");
+        let lit = cells.petals.iter().filter(|l| **l).count();
+        assert!((1300..=2050).contains(&lit), "{lit} lit petals");
     }
 
     #[test]
     fn gate_dots_are_always_lit_and_guards_dark() {
-        let cells = FrameCells::from_words(&[0xFF; P_WORD], &[0xFF; K_WORD], &[0xFF; D_WORD]);
+        let field = [0xFFu8; FIELD_WORD];
+        let cells = FrameCells::from_words(&[0xFF; D_WORD], [&field, &field, &field, &field]);
         for (slot, role) in slot_roles().into_iter().enumerate() {
             match role {
                 SlotRole::Gate | SlotRole::Data(_) => assert!(cells.dots[slot]),
@@ -309,29 +328,27 @@ mod tests {
 
     #[test]
     fn counted_decoding_reports_the_rewritten_positions() {
-        let data: Vec<u8> = (0..P_DATA as u8).collect();
-        let clean = encode_lane(Lane::P, &data);
+        let data = field_data(9);
+        let clean = encode_lane(Lane::Field(2), &data);
         assert_eq!(
-            decode_lane_counted(Lane::P, &clean, &[]).unwrap(),
+            decode_lane_counted(Lane::Field(2), &clean, &[]).unwrap(),
             (data.clone(), 0)
         );
         let mut damaged = clean;
-        for position in [0, 7, 19, 31] {
+        for position in [0, 7, 19, 31, 60, 104] {
             damaged[position] ^= 0xC3;
         }
         assert_eq!(
-            decode_lane_counted(Lane::P, &damaged, &[]).unwrap(),
-            (data, 4)
+            decode_lane_counted(Lane::Field(2), &damaged, &[]).unwrap(),
+            (data, 6)
         );
     }
 
     #[test]
-    fn decode_survives_burst_damage_to_a_lane() {
-        let k_data: Vec<u8> = (0..K_DATA as u8).collect();
-        let mut word = encode_lane(Lane::K, &k_data);
-        for byte in word.iter_mut().take(K_PARITY / 2) {
-            *byte ^= 0x5A;
+    fn a_word_decoded_under_another_sector_is_refused() {
+        let word = encode_lane(Lane::Field(0), &field_data(1));
+        for lane in [Lane::Field(1), Lane::Field(2), Lane::Field(3)] {
+            assert!(decode_lane(lane, &word, &[]).is_err());
         }
-        assert_eq!(decode_lane(Lane::K, &word, &[]).unwrap(), k_data);
     }
 }

@@ -3,6 +3,9 @@
 //! `cargo run --release -p iroha_petal --example qualify -- [trials] [filter] [--verbose]`
 //!
 //! `--verbose` prints one line per trial (pose and the lanes that decoded).
+//!
+//! Columns: frames with any lane, frames with lane `D`, field lanes read (of four per frame),
+//! payload bytes per frame, decode time, and pixels per petal pitch (12.5 canvas units).
 #[path = "support/count.rs"]
 mod count;
 #[path = "support/floor.rs"]
@@ -24,7 +27,8 @@ use iroha_petal::render::{RenderOptions, render};
 use iroha_petal::sim::{CaptureConfig, capture, fit_to_frame, pixels_per_unit};
 use iroha_petal::stream::StreamEncoder;
 
-type TrialResult = (bool, bool, bool, f64, bool);
+/// Lane `D` decoded, field lanes decoded, decode milliseconds, finders located.
+type TrialResult = (bool, usize, f64, bool);
 
 #[derive(Clone)]
 struct Scenario {
@@ -140,7 +144,7 @@ fn main() {
     let threads = std::thread::available_parallelism().map_or(4, usize::from);
     println!(
         "{:<34} {:>6} {:>6} {:>6} {:>6} {:>7} {:>8}",
-        "scenario", "any%", "P%", "K%", "D%", "ms/dec", "px/tile"
+        "scenario", "any%", "D%", "F%", "B/frm", "ms/dec", "px/petal"
     );
     for scenario in scenarios() {
         if filter
@@ -189,8 +193,11 @@ fn main() {
                         let t0 = Instant::now();
                         let outcome = decode(&image, &DecodeOptions::default());
                         let ms = t0.elapsed().as_secs_f64() * 1000.0;
-                        let (p, k, d) = outcome.as_ref().map_or((false, false, false), |frame| {
-                            (frame.p.is_some(), frame.k.is_some(), frame.d.is_some())
+                        let (d, fields) = outcome.as_ref().map_or((false, 0), |frame| {
+                            (
+                                frame.d.is_some(),
+                                frame.fields.iter().filter(|f| f.is_some()).count(),
+                            )
                         });
                         if verbose {
                             println!(
@@ -198,16 +205,12 @@ fn main() {
                                 config.rotation_deg,
                                 config.tilt_x_deg,
                                 config.tilt_y_deg,
-                                outcome.as_ref().map(|f| (
-                                    f.p.is_some(),
-                                    f.k.is_some(),
-                                    f.d.is_some(),
-                                    f.rotation,
-                                    f.mirrored
-                                ))
+                                outcome
+                                    .as_ref()
+                                    .map(|f| (f.letters(), f.rotation, f.mirrored))
                             );
                         }
-                        results.lock().unwrap().push((p, k, d, ms, located));
+                        results.lock().unwrap().push((d, fields, ms, located));
                     }
                 });
             }
@@ -219,16 +222,21 @@ fn main() {
         let pct = |f: &dyn Fn(&TrialResult) -> bool| {
             100.0 * count_as_f64(results.iter().filter(|r| f(r)).count()) / n
         };
+        let field_lanes: usize = results.iter().map(|r| r.1).sum();
+        // payload bytes per capture: 80 per field lane, 16 for lane D on three frames in four
+        let field_bytes = 80.0 * count_as_f64(field_lanes);
+        let dot_bytes = 12.0 * count_as_f64(results.iter().filter(|r| r.0).count());
+        let bytes = (field_bytes + dot_bytes) / n;
         println!(
-            "{:<34} {:>6.0} {:>6.0} {:>6.0} {:>6.0} {:>7.0} {:>6.1}px  loc {:>3.0}%  ({:.0}s)",
+            "{:<34} {:>6.0} {:>6.0} {:>6.0} {:>6.0} {:>7.1} {:>6.1}px  loc {:>3.0}%  ({:.0}s)",
             scenario.name,
-            pct(&|r| r.0 || r.1 || r.2),
+            pct(&|r| r.0 || r.1 > 0),
             pct(&|r| r.0),
-            pct(&|r| r.1),
-            pct(&|r| r.2),
-            results.iter().map(|r| r.3).sum::<f64>() / n,
-            mean_scale * 29.0,
-            pct(&|r| r.4),
+            25.0 * count_as_f64(field_lanes) / n,
+            bytes,
+            results.iter().map(|r| r.2).sum::<f64>() / n,
+            mean_scale * 12.5,
+            pct(&|r| r.3),
             started.elapsed().as_secs_f64()
         );
     }

@@ -1,13 +1,15 @@
 //! Offline commands: finalized registration packaging and Petal Stream optical handoff.
 //!
-//! Petal Stream is the animated `天` / katakana / dotted-ring transport
-//! specified in `specs/petal_stream.md` and implemented by `iroha_petal`.
+//! Petal Stream is the animated sakura-petal transport (a storm of petals over a
+//! faint `天`, inside dotted rings) specified in `specs/petal_stream.md` and
+//! implemented by `iroha_petal`.
 use crate::{Run, RunContext, cli_output::print_with_optional_text};
 use clap::{Args, Subcommand, ValueEnum};
 use eyre::{Result, WrapErr, eyre};
 use iroha_petal::{
     decode::{DecodeOptions, decode},
     image::Luma,
+    lanes::Lane,
     qualify::{CameraModel, StreamTrial, TrialOutcome, run_stream_trial},
     render::{RenderOptions, render},
     session::{ScanLimits, ScanSession},
@@ -20,10 +22,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
-const ENCODE_SCHEMA: &str = "iroha.offline.petal.encode.v1";
-const DECODE_SCHEMA: &str = "iroha.offline.petal.decode.v1";
-const INSPECT_SCHEMA: &str = "iroha.offline.petal.inspect.v1";
-const SIMULATE_SCHEMA: &str = "iroha.offline.petal.simulate.v1";
+const ENCODE_SCHEMA: &str = "iroha.offline.petal.encode.v2";
+const DECODE_SCHEMA: &str = "iroha.offline.petal.decode.v2";
+const INSPECT_SCHEMA: &str = "iroha.offline.petal.inspect.v2";
+const SIMULATE_SCHEMA: &str = "iroha.offline.petal.simulate.v2";
 const DEFAULT_SIZE: u32 = 1_024;
 const MIN_SIZE: u32 = 256;
 const MAX_SIZE: u32 = 4_096;
@@ -129,7 +131,7 @@ pub(crate) struct EncodeArgs {
     /// Square frame size in pixels.
     #[arg(long, default_value_t = DEFAULT_SIZE)]
     size: u32,
-    /// Playback rate in frames per second (recommended 6–12; used for the GIF delay and the manifest).
+    /// Playback rate in frames per second (recommended 8–15; used for the GIF delay and the manifest).
     #[arg(long, default_value_t = DEFAULT_FPS)]
     fps: u16,
     /// Output format.
@@ -220,9 +222,11 @@ struct DecodeReport {
     frames_tracked: u64,
     /// Frames read with one corner blossom hidden and inferred.
     frames_inferred: u64,
-    lane_p_frames: u64,
-    lane_k_frames: u64,
     lane_d_frames: u64,
+    /// Field lanes read, summed over the frames (up to four per frame).
+    field_lanes: u64,
+    /// Field lanes recovered by merging captures of one shown frame.
+    merged_field_lanes: u64,
     completed_at_frame: Option<u64>,
     payload_bytes: Option<u64>,
     kind: Option<u8>,
@@ -233,6 +237,8 @@ struct DecodeReport {
 
 #[derive(Clone, Debug, JsonSerialize)]
 struct LaneReport {
+    /// `D` for the rings, `0`–`3` for the field sectors.
+    lane: String,
     corrected_bytes: u64,
     erased_bytes: u64,
 }
@@ -248,9 +254,10 @@ struct InspectReport {
     mirrored: Option<bool>,
     /// Canonical index of a corner blossom that was hidden and inferred (0 top-left, clockwise).
     inferred_corner: Option<u8>,
-    lane_p: Option<LaneReport>,
-    lane_k: Option<LaneReport>,
-    lane_d: Option<LaneReport>,
+    /// Radial lens distortion of the decoded pose (0 = none, negative is barrel).
+    lens_distortion: Option<f64>,
+    /// The lanes that passed their Reed–Solomon check.
+    lanes: Vec<LaneReport>,
     frame_counter: Option<u16>,
     beacon_kind: Option<u8>,
     beacon_payload_bytes: Option<u64>,
@@ -270,7 +277,8 @@ struct SimulateReport {
     completion_seconds_median: Option<f64>,
     completion_seconds_worst: Option<f64>,
     effective_payload_bytes_per_second: Option<f64>,
-    lane_k_frame_share: f64,
+    /// Field lanes read per frame, as a share of the four.
+    field_lane_share: f64,
     mean_decode_milliseconds: f64,
 }
 
@@ -390,11 +398,10 @@ impl Run for DecodeArgs {
         let report = self.decode()?;
         let text = match (&report.completed_at_frame, &report.payload_bytes) {
             (Some(at), Some(bytes)) => format!(
-                "reassembled {bytes} bytes after {} frame(s) (lane P/K/D read in {}/{}/{} frames)",
+                "reassembled {bytes} bytes after {} frame(s) (lane D read in {} frames, {} field lanes)",
                 at + 1,
-                report.lane_p_frames,
-                report.lane_k_frames,
-                report.lane_d_frames
+                report.lane_d_frames,
+                report.field_lanes
             ),
             _ => format!(
                 "incomplete: collected {}/{} independent atoms",
@@ -448,9 +455,9 @@ impl DecodeArgs {
             frames_readable: 0,
             frames_tracked: 0,
             frames_inferred: 0,
-            lane_p_frames: 0,
-            lane_k_frames: 0,
             lane_d_frames: 0,
+            field_lanes: 0,
+            merged_field_lanes: 0,
             completed_at_frame: None,
             payload_bytes: None,
             kind: None,
@@ -481,9 +488,9 @@ impl DecodeArgs {
         report.frames_readable = u64::from(stats.readable);
         report.frames_tracked = u64::from(stats.tracked);
         report.frames_inferred = u64::from(stats.inferred);
-        report.lane_p_frames = u64::from(stats.lane_p);
-        report.lane_k_frames = u64::from(stats.lane_k);
         report.lane_d_frames = u64::from(stats.lane_d);
+        report.field_lanes = u64::from(stats.field_lanes);
+        report.merged_field_lanes = u64::from(stats.merged_lanes);
         Ok(report)
     }
 }
@@ -491,15 +498,7 @@ impl DecodeArgs {
 impl Run for InspectArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let report = self.inspect()?;
-        let lanes: String = [
-            ("P", &report.lane_p),
-            ("K", &report.lane_k),
-            ("D", &report.lane_d),
-        ]
-        .iter()
-        .filter(|(_, lane)| lane.is_some())
-        .map(|(letter, _)| *letter)
-        .collect();
+        let lanes: String = report.lanes.iter().map(|lane| lane.lane.as_str()).collect();
         let text = match &report.error {
             Some(error) => format!("no lane decoded: {error}"),
             None => format!("lanes decoded: {lanes}"),
@@ -529,9 +528,8 @@ impl InspectArgs {
             rotation_quarter_turns: None,
             mirrored: None,
             inferred_corner: None,
-            lane_p: None,
-            lane_k: None,
-            lane_d: None,
+            lens_distortion: None,
+            lanes: Vec::new(),
             frame_counter: None,
             beacon_kind: None,
             beacon_payload_bytes: None,
@@ -540,18 +538,20 @@ impl InspectArgs {
         match decode(&luma, &DecodeOptions::default()) {
             Err(error) => report.error = Some(error.to_string()),
             Ok(frame) => {
-                let lane = |result: &Option<iroha_petal::decode::LaneResult>| {
-                    result.as_ref().map(|r| LaneReport {
-                        corrected_bytes: r.corrected as u64,
-                        erased_bytes: r.erasures as u64,
-                    })
-                };
                 report.rotation_quarter_turns = Some(frame.rotation);
                 report.mirrored = Some(frame.mirrored);
                 report.inferred_corner = frame.inferred_corner;
-                report.lane_p = lane(&frame.p);
-                report.lane_k = lane(&frame.k);
-                report.lane_d = lane(&frame.d);
+                report.lens_distortion = Some(frame.pose.distortion);
+                report.lanes = Lane::ALL
+                    .into_iter()
+                    .filter_map(|lane| {
+                        frame.lane(lane).map(|r| LaneReport {
+                            lane: lane.letter().to_string(),
+                            corrected_bytes: r.corrected as u64,
+                            erased_bytes: r.erasures as u64,
+                        })
+                    })
+                    .collect();
                 match frame.d_lane() {
                     Some(DLane::Beacon(beacon)) => {
                         report.frame_counter = Some(beacon.header.frame);
@@ -583,14 +583,14 @@ impl Run for SimulateArgs {
         let report = self.simulate()?;
         let text = match report.completion_seconds_mean {
             Some(mean) => format!(
-                "{}: {}/{} trials completed {} bytes in {:.1} s on average ({:.0} B/s, lane K in {:.0} % of frames)",
+                "{}: {}/{} trials completed {} bytes in {:.1} s on average ({:.0} B/s, {:.0} % of the field lanes read)",
                 report.camera,
                 report.completed,
                 report.trials,
                 report.payload_bytes,
                 mean,
                 report.effective_payload_bytes_per_second.unwrap_or(0.0),
-                report.lane_k_frame_share * 100.0
+                report.field_lane_share * 100.0
             ),
             None => format!("{}: no trial completed within the horizon", report.camera),
         };
@@ -665,7 +665,7 @@ impl SimulateArgs {
         times.sort_by(f64::total_cmp);
         let mean = (!times.is_empty()).then(|| times.iter().sum::<f64>() / times.len() as f64);
         let frames: u64 = outcomes.iter().map(|o| u64::from(o.frames)).sum();
-        let k_frames: u64 = outcomes.iter().map(|o| u64::from(o.lanes[1])).sum();
+        let field_lanes: u64 = outcomes.iter().map(|o| u64::from(o.field_lanes)).sum();
         Ok(SimulateReport {
             schema: SIMULATE_SCHEMA.to_owned(),
             camera: self.camera.clone(),
@@ -681,7 +681,7 @@ impl SimulateArgs {
             completion_seconds_median: times.get(times.len().saturating_sub(1) / 2).copied(),
             completion_seconds_worst: times.last().copied(),
             effective_payload_bytes_per_second: mean.map(|m| payload.len() as f64 / m),
-            lane_k_frame_share: k_frames as f64 / frames.max(1) as f64,
+            field_lane_share: field_lanes as f64 / (4 * frames.max(1)) as f64,
             mean_decode_milliseconds: outcomes.iter().map(|o| o.mean_decode_ms).sum::<f64>()
                 / outcomes.len().max(1) as f64,
         })
@@ -855,7 +855,7 @@ mod tests {
     fn decode_reports_incomplete_streams() {
         let dir = tempdir().expect("tempdir");
         let input = dir.path().join("payload.bin");
-        fs::write(&input, sample_payload(900)).expect("write payload");
+        fs::write(&input, sample_payload(3_000)).expect("write payload");
         let frames = dir.path().join("frames");
         let mut args = encode_args(&input, &frames);
         args.frames = 3;
@@ -885,7 +885,8 @@ mod tests {
         .inspect()
         .expect("inspect");
         assert!(report.error.is_none(), "{:?}", report.error);
-        assert!(report.lane_p.is_some() && report.lane_k.is_some() && report.lane_d.is_some());
+        let lanes: String = report.lanes.iter().map(|lane| lane.lane.as_str()).collect();
+        assert_eq!(lanes, "D0123");
         assert_eq!(report.frame_counter, Some(0));
         assert_eq!(report.beacon_kind, Some(2));
         assert_eq!(report.beacon_payload_bytes, Some(100));
@@ -900,7 +901,7 @@ mod tests {
         write_png_rgb(&blank, &vec![0u8; 128 * 128 * 3], 128).expect("png");
         let report = InspectArgs { input: blank }.inspect().expect("inspect");
         assert!(report.error.is_some());
-        assert!(report.lane_p.is_none() && report.lane_d.is_none());
+        assert!(report.lanes.is_empty());
     }
 
     #[test]

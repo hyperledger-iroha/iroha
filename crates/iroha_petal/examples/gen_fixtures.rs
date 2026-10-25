@@ -1,19 +1,23 @@
-//! Writes the cross-SDK golden vectors to `fixtures/petal/petal_stream_v1.json`.
+//! Writes the cross-SDK golden vectors to `fixtures/petal/petal_stream_v2.json`.
 //!
 //! `cargo run -p iroha_petal --example gen_fixtures -- <output path>`
 use std::fmt::Write as _;
 
 use iroha_petal::crc::crc32c;
 use iroha_petal::fountain::{mask_words, mix32};
-use iroha_petal::glyphs::{GLYPH_CHARS, STROKE_WIDTH, STROKES, TEMPLATES};
-use iroha_petal::lanes::{Lane, encode_lane};
+use iroha_petal::lanes::{
+    ATOM_LEN, ATOMS_PER_FRAME, D_PARITY, D_WORD, FIELD_ATOMS, FIELD_PARITY, FIELD_WORD, Lane,
+};
 use iroha_petal::layout::{
-    CANVAS, DOT_RADIUS, FINDER_CENTERS, MASK, RING_RADII, RING_SLOTS, SlotRole, TILE_ORIGIN,
-    TILE_PITCH, TILE_SIZE, TILES, data_slots, slot_roles,
+    BACKDROP_RADIUS, BAND_INNER, BAND_SLOTS, BAND_SPACING, CANVAS, DOT_RADIUS, FIELD_CELLS,
+    FINDER_CENTERS, MASK, MASK_ORIGIN, MASK_PITCH, PETAL_HALF_LENGTH, PETAL_HALF_WIDTH,
+    PETAL_NOTCH_DISTANCE, PETAL_NOTCH_RADIUS, PETAL_RADIUS, RING_RADII, RING_SLOTS, SECTORS,
+    SlotRole, cell_light, data_slots, sector_cells, slot_roles,
 };
 use iroha_petal::prng::Xorshift32;
+use iroha_petal::render::Palette;
 use iroha_petal::rs::ReedSolomon;
-use iroha_petal::stream::{StreamEncoder, first_atom_id};
+use iroha_petal::stream::{FORMAT_VERSION, StreamEncoder, first_atom_id};
 
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().fold(String::new(), |mut out, b| {
@@ -33,6 +37,17 @@ fn list<T: ToString>(items: &[T]) -> String {
     )
 }
 
+/// Packs one flag per field cell into bytes, cell 0 in the most significant bit of byte 0.
+fn bitmap(flags: impl Iterator<Item = bool>) -> Vec<u8> {
+    let mut out = vec![0u8; FIELD_CELLS.div_ceil(8)];
+    for (cell, flag) in flags.enumerate() {
+        if flag {
+            out[cell / 8] |= 1 << (7 - cell % 8);
+        }
+    }
+    out
+}
+
 fn payload(len: usize, seed: u32) -> Vec<u8> {
     let mut rng = Xorshift32::new(seed);
     (0..len).map(|_| rng.next_byte()).collect()
@@ -41,15 +56,11 @@ fn payload(len: usize, seed: u32) -> Vec<u8> {
 fn main() {
     let path = std::env::args().nth(1).expect("output path");
     let mut out = String::new();
-    out.push_str("{\n  \"fixture_version\": 1,\n  \"format\": \"petal-stream-v1\",\n");
+    out.push_str("{\n  \"fixture_version\": 2,\n  \"format\": \"petal-stream-v2\",\n");
     // constants
     let _ = writeln!(
         out,
-        "  \"constants\": {{\"canvas\": {CANVAS}, \"tile_origin\": {TILE_ORIGIN}, \"tile_pitch\": {TILE_PITCH}, \"tile_size\": {TILE_SIZE}, \"dot_radius\": {DOT_RADIUS}, \"atom_len\": {}, \"p_word\": 32, \"k_word\": 128, \"d_word\": 30, \"p_parity\": {}, \"k_parity\": {}, \"d_parity\": {}, \"beacon_interval\": 4, \"format_version\": 16}},",
-        iroha_petal::lanes::ATOM_LEN,
-        iroha_petal::lanes::P_PARITY,
-        iroha_petal::lanes::K_PARITY,
-        iroha_petal::lanes::D_PARITY
+        "  \"constants\": {{\"canvas\": {CANVAS}, \"atom_len\": {ATOM_LEN}, \"d_word\": {D_WORD}, \"d_parity\": {D_PARITY}, \"field_word\": {FIELD_WORD}, \"field_parity\": {FIELD_PARITY}, \"field_atoms\": {FIELD_ATOMS}, \"sectors\": {SECTORS}, \"atoms_per_frame\": {ATOMS_PER_FRAME}, \"field_cells\": {FIELD_CELLS}, \"beacon_interval\": 4, \"format_version\": {FORMAT_VERSION}}},"
     );
     // layout
     let roles = slot_roles();
@@ -59,49 +70,37 @@ fn main() {
     let guards: Vec<usize> = (0..roles.len())
         .filter(|&i| roles[i] == SlotRole::Guard)
         .collect();
+    let sectors: Vec<String> = (0..SECTORS).map(|s| list(sector_cells(s))).collect();
     let _ = writeln!(
         out,
-        "  \"layout\": {{\n    \"mask\": [{}],\n    \"tiles_col_row\": {},\n    \"ring_radii\": {},\n    \"ring_slots\": {},\n    \"finder_centers\": {},\n    \"data_slots\": {},\n    \"gate_slots\": {},\n    \"guard_slots\": {}\n  }},",
-        MASK.iter()
-            .map(|r| format!("\"{r}\""))
-            .collect::<Vec<_>>()
-            .join(", "),
-        list(
-            &TILES
-                .iter()
-                .flat_map(|&(c, r)| [u32::from(c), u32::from(r)])
-                .collect::<Vec<_>>()
-        ),
-        list(&RING_RADII),
-        list(&RING_SLOTS),
+        "  \"layout\": {{\n    \"finder_centers\": {},\n    \"band_inner\": {BAND_INNER},\n    \"band_spacing\": {BAND_SPACING},\n    \"band_slots\": {},\n    \"petal_radius\": {PETAL_RADIUS},\n    \"petal_half_length\": {PETAL_HALF_LENGTH},\n    \"petal_half_width\": {PETAL_HALF_WIDTH},\n    \"petal_notch_radius\": {PETAL_NOTCH_RADIUS},\n    \"petal_notch_distance\": {PETAL_NOTCH_DISTANCE},\n    \"sector_cells\": [{}],\n    \"mask\": [{}],\n    \"mask_origin\": {MASK_ORIGIN},\n    \"mask_pitch\": {MASK_PITCH},\n    \"backdrop_radius\": {BACKDROP_RADIUS},\n    \"light_cells_hex\": \"{}\",\n    \"ring_radii\": {},\n    \"ring_slots\": {},\n    \"dot_radius\": {DOT_RADIUS},\n    \"data_slots\": {},\n    \"gate_slots\": {},\n    \"guard_slots\": {}\n  }},",
         list(
             &FINDER_CENTERS
                 .iter()
                 .flat_map(|&(x, y)| [x, y])
                 .collect::<Vec<_>>()
         ),
+        list(&BAND_SLOTS),
+        sectors.join(",\n      "),
+        MASK.iter()
+            .map(|r| format!("\"{r}\""))
+            .collect::<Vec<_>>()
+            .join(", "),
+        hex(&bitmap((0..FIELD_CELLS).map(cell_light))),
+        list(&RING_RADII),
+        list(&RING_SLOTS),
         list(&data_slots()),
         list(&gates),
         list(&guards)
     );
-    // glyphs
-    let strokes: Vec<String> = STROKES
-        .iter()
-        .map(|glyph| {
-            let polylines: Vec<String> = glyph
-                .iter()
-                .map(|stroke| list(&stroke.iter().flat_map(|&(x, y)| [x, y]).collect::<Vec<_>>()))
-                .collect();
-            format!("[{}]", polylines.join(", "))
-        })
-        .collect();
-    let templates: Vec<String> = TEMPLATES.iter().map(|t| list(t)).collect();
+    let palette = Palette::default();
     let _ = writeln!(
         out,
-        "  \"glyphs\": {{\n    \"chars\": \"{}\",\n    \"stroke_width\": {STROKE_WIDTH},\n    \"strokes\": [{}],\n    \"templates\": [{}]\n  }},",
-        GLYPH_CHARS.iter().collect::<String>(),
-        strokes.join(", "),
-        templates.join(",\n      ")
+        "  \"palette\": {{\"background\": {}, \"light\": {}, \"pink\": {}, \"backdrop\": {}}},",
+        list(&palette.background),
+        list(&palette.light),
+        list(&palette.pink),
+        list(&palette.backdrop)
     );
     // crc32c
     let crc_cases: Vec<&[u8]> = vec![
@@ -134,19 +133,22 @@ fn main() {
         mix32(0x1234_5678)
     );
     // whitening
-    let _ = writeln!(
-        out,
-        "  \"whitening\": {{\"P\": \"{}\", \"K\": \"{}\", \"D\": \"{}\"}},",
-        hex(&Lane::P.whitening()),
-        hex(&Lane::K.whitening()),
-        hex(&Lane::D.whitening())
-    );
+    let whitening: Vec<String> = Lane::ALL
+        .iter()
+        .map(|lane| {
+            let name = match lane {
+                Lane::D => "D".to_owned(),
+                Lane::Field(sector) => format!("F{sector}"),
+            };
+            format!("\"{name}\": \"{}\"", hex(&lane.whitening()))
+        })
+        .collect();
+    let _ = writeln!(out, "  \"whitening\": {{{}}},", whitening.join(", "));
     // reed-solomon
     let mut rs_cases = Vec::new();
     for (nsym, len, seed) in [
         (10usize, 16usize, 1u32),
-        (13, 19, 2),
-        (45, 83, 3),
+        (22, 83, 2),
         (11, 19, 4),
         (2, 5, 5),
     ] {
@@ -197,7 +199,7 @@ fn main() {
         ("tiny", 13usize, 1u32, 1u8, vec![0u16, 1, 2, 3, 4]),
         (
             "one-pass",
-            700,
+            3000,
             2,
             2,
             vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
@@ -209,21 +211,27 @@ fn main() {
         let meta = encoder.meta();
         let mut frame_json = Vec::new();
         for &frame in &frames {
-            let (p, k, d) = encoder.lane_data(frame);
+            let lanes = encoder.lane_data(frame);
+            let words = encoder.words(frame);
             let cells = encoder.cells(frame);
+            let quoted = |items: &[Vec<u8>]| {
+                format!(
+                    "[{}]",
+                    items
+                        .iter()
+                        .map(|i| format!("\"{}\"", hex(i)))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            };
             frame_json.push(format!(
-                "      {{\"frame\": {frame}, \"p_data\": \"{}\", \"k_data\": \"{}\", \"d_data\": \"{}\", \"p_word\": \"{}\", \"k_word\": \"{}\", \"d_word\": \"{}\", \"glyphs\": \"{}\", \"lit_dots\": {}}}",
-                hex(&p),
-                hex(&k),
-                hex(&d),
-                hex(&encode_lane(Lane::P, &p)),
-                hex(&encode_lane(Lane::K, &k)),
-                hex(&encode_lane(Lane::D, &d)),
-                cells.glyph.iter().fold(String::new(), |mut acc, g| {
-                    let _ = write!(acc, "{g:x}");
-                    acc
-                }),
-                list(&(0..cells.dots.len()).filter(|&i| cells.dots[i]).collect::<Vec<_>>())
+                "      {{\"frame\": {frame}, \"d_data\": \"{}\", \"field_data\": {}, \"d_word\": \"{}\", \"field_words\": {}, \"lit_dots\": {}, \"lit_petals_hex\": \"{}\"}}",
+                hex(&lanes.d),
+                quoted(&lanes.fields),
+                hex(&words.d),
+                quoted(&words.fields),
+                list(&(0..cells.dots.len()).filter(|&i| cells.dots[i]).collect::<Vec<_>>()),
+                hex(&bitmap(cells.petals.iter().copied()))
             ));
         }
         streams.push(format!(

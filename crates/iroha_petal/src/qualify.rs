@@ -1,10 +1,10 @@
 //! End-to-end stream trials against the simulated camera.
 //!
 //! One trial plays a stream on a virtual screen at `display_fps`, films it with
-//! a virtual phone camera (frame blending and rolling-shutter tearing whenever
-//! an exposure straddles a frame change) and runs the frames through a
-//! [`ScanSession`] until the payload arrives or
-//! the horizon is reached. Operators use it through `iroha offline petal
+//! a virtual phone camera (frame blending and tearing whenever an exposure
+//! straddles a frame change, or a rolling shutter that exposes the rows one
+//! after another) and runs the frames through a [`ScanSession`] until the
+//! payload arrives or the horizon is reached. Operators use it through `iroha offline petal
 //! simulate`; the repository's qualification examples use it too.
 
 use std::collections::HashMap;
@@ -66,6 +66,10 @@ pub struct StreamTrial {
     pub camera_fps: f64,
     /// Exposure time of one camera frame in seconds.
     pub exposure_s: f64,
+    /// Rolling-shutter readout from the first to the last row, in seconds: row `r` starts its
+    /// exposure `r / height` of it after row 0. Zero exposes every row at once, and a frame that
+    /// straddles a frame change is blended or torn as a whole.
+    pub readout_s: f64,
     /// Give up after this many seconds.
     pub horizon_s: f64,
     /// Seed for pose, phase and noise.
@@ -83,6 +87,7 @@ impl StreamTrial {
             display_fps: 8.0,
             camera_fps: 30.0,
             exposure_s: 1.0 / 60.0,
+            readout_s: 0.0,
             horizon_s: 90.0,
             seed,
             render_size: 768,
@@ -101,8 +106,10 @@ pub struct TrialOutcome {
     pub frames: u32,
     /// Frames in which a code was located.
     pub located: u32,
-    /// Frames in which lane `P`, `K`, `D` decoded.
-    pub lanes: [u32; 3],
+    /// Frames in which lane `D` decoded.
+    pub lane_d: u32,
+    /// Field lanes decoded, summed over the frames (up to four per frame).
+    pub field_lanes: u32,
     /// Mean decode time per frame in milliseconds.
     pub mean_decode_ms: f64,
 }
@@ -160,7 +167,8 @@ pub fn run_stream_trial(payload: &[u8], kind: u8, trial: &StreamTrial) -> TrialO
         payload_matches: false,
         frames: 0,
         located: 0,
-        lanes: [0; 3],
+        lane_d: 0,
+        field_lanes: 0,
         mean_decode_ms: 0.0,
     };
     let mut index = 0u32;
@@ -176,7 +184,36 @@ pub fn run_stream_trial(payload: &[u8], kind: u8, trial: &StreamTrial) -> TrialO
             .seed
             .wrapping_mul(1000)
             .wrapping_add(u64::from(index));
-        let image = if first == last {
+        let image = if trial.readout_s > 0.0 {
+            // rows before a frame change show the old frame, rows after it the new one and rows
+            // whose exposure straddles it a blend of both
+            let shots: Vec<Luma> = (first..=slot(t + trial.readout_s + trial.exposure_s))
+                .map(|frame| grab(frame, &cfg))
+                .collect();
+            let (width, height) = (shots[0].width, shots[0].height);
+            let mut data = vec![0u8; width * height];
+            for (row, out) in data.chunks_exact_mut(width).enumerate() {
+                let start = t + trial.readout_s * row as f64 / height as f64;
+                let (a, b) = (slot(start), slot(start + trial.exposure_s));
+                let line =
+                    |frame: u16| &shots[usize::from(frame - first)].data[row * width..][..width];
+                if a == b {
+                    out.copy_from_slice(line(a));
+                } else {
+                    let boundary = f64::from(b) / trial.display_fps - phase;
+                    let share =
+                        ((start + trial.exposure_s - boundary) / trial.exposure_s).clamp(0.0, 1.0);
+                    for ((o, &x), &y) in out.iter_mut().zip(line(a)).zip(line(b)) {
+                        *o = (f64::from(x) * (1.0 - share) + f64::from(y) * share).round() as u8;
+                    }
+                }
+            }
+            Luma {
+                width,
+                height,
+                data,
+            }
+        } else if first == last {
             grab(first, &cfg)
         } else {
             let boundary = (f64::from(last) / trial.display_fps - phase).max(t);
@@ -198,11 +235,8 @@ pub fn run_stream_trial(payload: &[u8], kind: u8, trial: &StreamTrial) -> TrialO
         ) {
             outcome.located += 1;
         }
-        for (lane, letter) in ['P', 'K', 'D'].into_iter().enumerate() {
-            if result.lanes.contains(letter) {
-                outcome.lanes[lane] += 1;
-            }
-        }
+        outcome.lane_d += u32::from(result.lanes.contains('D'));
+        outcome.field_lanes += result.lanes.chars().filter(char::is_ascii_digit).count() as u32;
         if let Some(done) = result.completed {
             outcome.completed_at_s = Some(t);
             outcome.payload_matches = done.payload == payload;
@@ -233,7 +267,29 @@ mod tests {
         let finished = outcome.completed_at_s.expect("payload arrives");
         assert!(finished < 5.0, "took {finished} s");
         assert!(outcome.payload_matches);
-        assert!(outcome.lanes[2] > 0);
+        assert!(outcome.lane_d > 0 && outcome.field_lanes > 0);
+    }
+
+    #[test]
+    fn a_rolling_shutter_camera_receives_a_small_payload() {
+        let payload: Vec<u8> = (0..120u16).map(|i| (i * 7) as u8).collect();
+        let mut camera = CameraModel::named("modern").unwrap();
+        camera.config.width = 480;
+        camera.config.height = 360;
+        let trial = StreamTrial {
+            display_fps: 12.0,
+            exposure_s: 0.008,
+            readout_s: 0.03,
+            horizon_s: 20.0,
+            render_size: 384,
+            ..StreamTrial::typical(camera, 6)
+        };
+        let outcome = run_stream_trial(&payload, 2, &trial);
+        assert!(
+            outcome.completed_at_s.is_some_and(|t| t < 5.0),
+            "{outcome:?}"
+        );
+        assert!(outcome.payload_matches);
     }
 
     #[test]

@@ -809,10 +809,10 @@ mod tests {
             (found.x - 36.0).abs() < 1.5 && (found.y - 36.0).abs() < 1.5,
             "{found:?}"
         );
-        // nothing bright near the centre of the canvas corner gap
+        // nothing bright in the canvas corner gap between a blossom and the rings
         let empty = Finder {
-            x: 140.0,
-            y: 36.0,
+            x: 100.0,
+            y: 15.0,
             size: 30.0,
         };
         assert!(follow(&luma, empty).is_none());
