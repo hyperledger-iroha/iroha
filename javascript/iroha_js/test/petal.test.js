@@ -2298,7 +2298,7 @@ test("a session receives a payload from simulated captures", () => {
   assert.ok(stats.frames <= 11, JSON.stringify(stats));
 });
 
-test("a turn lane is read once per shown frame", () => {
+test("a turn lane is tried once per shown frame", () => {
   const encoder = new PetalStreamEncoder(payload(3000, 3), 2);
   const session = new PetalScanSession();
   const camera = (source, seed) => cameraCapture(source, { width: 640, height: 480, rotationDeg: 12, seed });
@@ -2311,15 +2311,41 @@ test("a turn lane is read once per shown frame", () => {
   // the next shown frame's turn lanes are new
   const next = session.push(camera(renderLuma(encoder.cells(6), 512, 2), 3), 83);
   assert.equal(next.turned, "0123");
-  assert.equal(session.stats().turnLanes, 8);
+  assert.deepEqual([session.stats().turnTries, session.stats().turnLanes], [8, 8]);
   session.reset();
-  assert.equal(session._turned.length, 0);
-  // the session remembers the last TURN_MEMORY turn lanes it read
-  session._turned = Array.from({ length: TURN_MEMORY }, (_, frame) => ({ tag: 0, frame, sector: 0 }));
+  assert.equal(session._tried.length, 0);
+  // the session remembers the last TURN_MEMORY turn lanes it tried
+  session._tried = Array.from({ length: TURN_MEMORY }, (_, frame) => ({ tag: 0, frame, sector: 0 }));
   assert.equal(session.push(camera(shown, 4), 200).turned, "0123");
-  assert.equal(session._turned.length, TURN_MEMORY);
-  assert.deepEqual(session._turned[0], { tag: 0, frame: 4, sector: 0 });
-  assert.deepEqual(session._turned.at(-1), { tag: encoder.meta.tag, frame: 5, sector: 3 });
+  assert.equal(session._tried.length, TURN_MEMORY);
+  assert.deepEqual(session._tried[0], { tag: 0, frame: 4, sector: 0 });
+  assert.deepEqual(session._tried.at(-1), { tag: encoder.meta.tag, frame: 5, sector: 3 });
+});
+
+test("tries that read nothing back off", () => {
+  const encoder = new PetalStreamEncoder(payload(3000, 3), 2);
+  const camera = (source, seed) => cameraCapture(source, { width: 640, height: 480, rotationDeg: 12, seed });
+  // unturned petals: every field lane reads, no turn lane ever does
+  const unturned = (frame) => {
+    const cells = encoder.cells(frame);
+    return renderLuma(new PetalFrameCells(cells.dots, cells.petals), 512, 2);
+  };
+  const session = new PetalScanSession();
+  const triedAt = [];
+  for (let frame = 1; frame <= 30; frame += 1) {
+    const before = session.stats().turnTries;
+    const outcome = session.push(camera(unturned(frame), frame), frame * 83);
+    assert.ok(outcome.lanes.endsWith("0123"), `frame ${frame}`);
+    assert.equal(outcome.turned, "");
+    if (session.stats().turnTries > before) triedAt.push(frame);
+  }
+  // after the n-th try that reads nothing, the next min(n, 8) captures that would try are passed over
+  assert.deepEqual(triedAt, [1, 3, 6, 10, 15, 21, 28]);
+  // a try that reads a lane ends the back-off
+  session._turnWait = 0;
+  assert.equal(session.push(camera(renderLuma(encoder.cells(31), 512, 2), 31), 31 * 83).turned, "0123");
+  assert.equal(session._turnMisses, 0);
+  assert.equal(session.push(camera(renderLuma(encoder.cells(32), 512, 2), 32), 32 * 83).turned, "0123");
 });
 
 test("a steady camera is tracked after the first frame", () => {
@@ -2792,7 +2818,7 @@ test("a scan session reads the recorded lanes of every golden capture", () => {
     assert.deepEqual([stats.tracked, stats.inferred], [0, capture.inferred_corner === null ? 0 : 1], capture.name);
     assert.equal(stats.turnLanes, capture.reference_turned.length, capture.name);
     if (capture.reference_turned === "0123") {
-      // the same shown frame again: its turn lanes were read and are not looked at again
+      // the same shown frame again: its turn lanes were tried and are not looked at again
       assert.equal(session.push(image, 33).turned, "", capture.name);
       assert.equal(session.stats().turnLanes, 4, capture.name);
     }

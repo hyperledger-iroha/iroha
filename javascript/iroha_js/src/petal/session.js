@@ -13,9 +13,13 @@
 // names the same frame.
 //
 // Every field lane a capture decodes also lets the session read the turn lane
-// on top of it (`readTurns`). A turn lane is read once per shown frame: the
-// session remembers the last `TURN_MEMORY` it read and does not look at those
-// petals again.
+// on top of it (`readTurns`). A turn lane is tried once per shown frame: the
+// session remembers the last `TURN_MEMORY` it tried and does not look at those
+// petals again. Reading turns costs a slow phone core several times a frame's
+// decode, so after a try that reads no turn lane (a camera too soft or too
+// shaky for the turns) the session passes over the next captures that would
+// try one, one more after every such try, at most `TURN_BACKOFF`, until a try
+// reads a lane again.
 
 import {
   DEFAULT_DECODE_OPTIONS,
@@ -44,6 +48,8 @@ export const MERGE_WINDOW = 6;
 export const MERGE_CAPTURES = 4;
 /** Turn lanes remembered as read (the four of each of the last `MERGE_WINDOW` shown frames). */
 export const TURN_MEMORY = MERGE_WINDOW * SECTORS;
+/** Most captures passed over after tries that read no turn lane. */
+export const TURN_BACKOFF = 8;
 
 /** The header every lane starts with, or `null` for data too short to hold one. */
 function laneHeader(data) {
@@ -124,7 +130,7 @@ export class PetalScanSession {
     this._assembler = new PetalStreamAssembler(this._limits.assembler);
     this._stats = {
       frames: 0, located: 0, readable: 0, laneD: 0, fieldLanes: 0,
-      tracked: 0, inferred: 0, merges: 0, mergedLanes: 0, turnLanes: 0,
+      tracked: 0, inferred: 0, merges: 0, mergedLanes: 0, turnTries: 0, turnLanes: 0,
     };
     this._startedMs = null;
     this._progressMs = 0;
@@ -133,8 +139,12 @@ export class PetalScanSession {
     this._lastPose = null;
     /** Captures held for merging: `{shown, evidence, done}` per shown frame, oldest first. */
     this._held = [];
-    /** The turn lanes read: `{tag, frame, sector}`, oldest first, at most `TURN_MEMORY`. */
-    this._turned = [];
+    /** The turn lanes tried: `{tag, frame, sector}`, oldest first, at most `TURN_MEMORY`. */
+    this._tried = [];
+    /** Tries in a row that read no turn lane (at most `TURN_BACKOFF`). */
+    this._turnMisses = 0;
+    /** Captures still to pass over before the next try. */
+    this._turnWait = 0;
   }
 
   /** The limits in force. */
@@ -150,8 +160,8 @@ export class PetalScanSession {
    * frames read by tracking the previous pose instead of a full search
    * (`tracked`) and frames read with one corner finder hidden and inferred
    * (`inferred`), merges of two or more captures of one shown frame and the
-   * field lanes they recovered (`merges`, `mergedLanes`), and turn lanes read
-   * (`turnLanes`, each at most once per shown frame).
+   * field lanes they recovered (`merges`, `mergedLanes`), and turn lanes tried
+   * (`turnTries`, each at most once per shown frame) and read (`turnLanes`).
    */
   stats() {
     return Object.freeze({ ...this._stats });
@@ -172,7 +182,14 @@ export class PetalScanSession {
     this._lastRank = 0;
     this._lastPose = null;
     this._held = [];
-    this._turned = [];
+    this._forgetTurns();
+  }
+
+  /** Forgets the turn lanes tried and any back-off. */
+  _forgetTurns() {
+    this._tried = [];
+    this._turnMisses = 0;
+    this._turnWait = 0;
   }
 
   /**
@@ -260,11 +277,11 @@ export class PetalScanSession {
     const previousMeta = this._assembler.progress().meta;
     frame.feed(this._assembler);
     // An eight-bit tag may collide across streams; done flags, evidence and
-    // the turn lanes read belong to the full stream identity. Captures held
+    // the turn lanes tried belong to the full stream identity. Captures held
     // before the first beacon are kept.
     if (previousMeta !== null && !sameMeta(this._assembler.progress().meta, previousMeta)) {
       this._held = [];
-      this._turned = [];
+      this._forgetTurns();
     }
     return lanes;
   }
@@ -281,12 +298,23 @@ export class PetalScanSession {
       const header = field === null ? null : laneHeader(field.data);
       if (header === null) continue;
       headers[sector] = header;
-      skip[sector] = this._turned.some(
-        (read) => read.tag === header.tag && read.frame === header.frame && read.sector === sector,
+      skip[sector] = this._tried.some(
+        (tried) => tried.tag === header.tag && tried.frame === header.frame && tried.sector === sector,
       );
     }
     if (skip.every(Boolean)) {
       return "";
+    }
+    if (this._turnWait > 0) {
+      this._turnWait -= 1;
+      return "";
+    }
+    for (let sector = 0; sector < SECTORS; sector += 1) {
+      const header = headers[sector];
+      if (skip[sector] || header === null) continue;
+      if (this._tried.length === TURN_MEMORY) this._tried.shift();
+      this._tried.push({ tag: header.tag, frame: header.frame, sector });
+      this._stats.turnTries += 1;
     }
     let turned = "";
     readTurns(image, frame, skip).forEach((result, sector) => {
@@ -296,11 +324,15 @@ export class PetalScanSession {
         return;
       }
       this._assembler.pushAtoms(packet);
-      if (this._turned.length === TURN_MEMORY) this._turned.shift();
-      this._turned.push({ tag: header.tag, frame: header.frame, sector });
       this._stats.turnLanes += 1;
       turned += laneLetter(FIELD_LANES[sector]);
     });
+    if (turned === "") {
+      this._turnMisses = Math.min(this._turnMisses + 1, TURN_BACKOFF);
+      this._turnWait = this._turnMisses;
+    } else {
+      this._turnMisses = 0;
+    }
     return turned;
   }
 

@@ -201,14 +201,14 @@ test("petal session: a stream switch with the same short tag discards old merge 
     session._absorb(previous);
     session._merge(oldImage, previous);
     assert.ok(session._held.length > 0);
-    session._turned.push({ tag: old.meta.tag, frame: 0, sector: 1 });
+    session._tried.push({ tag: old.meta.tag, frame: 0, sector: 1 });
     session._absorb(newPartial);
     assert.deepEqual(session.progress().meta, old.meta, "one conflicting beacon cannot switch streams");
-    assert.equal(session._turned.length, 1);
+    assert.equal(session._tried.length, 1);
     session._absorb(newPartial);
     assert.deepEqual(session.progress().meta, fresh.meta);
     assert.equal(session._held.length, 0, "an accepted stream switch discards held evidence");
-    assert.equal(session._turned.length, 0, "and forgets the turn lanes read, which share the short tag");
+    assert.equal(session._tried.length, 0, "and forgets the turn lanes tried, which share the short tag");
     assert.equal(session._merge(newImage, newPartial), "");
     assert.equal(session._held[0].evidence.length, 1);
     assert.ok(session._held[0].done.every((done) => !done));

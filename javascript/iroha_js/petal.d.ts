@@ -157,8 +157,10 @@ export const PETAL_TURNS: {
   readonly idBase: 2147483648;
   /** Gaussian blurs (sigma in canvas units) the turn reader fits: 1.0, 1.4, 1.9, 2.5, 3.2, 4.0. */
   readonly blurs: readonly number[];
-  /** Turn lanes a scan session remembers as read (the four of each of the last six shown frames). */
+  /** Turn lanes a scan session remembers as tried (the four of each of the last six shown frames). */
   readonly memory: 24;
+  /** Most captures a scan session passes over after tries that read no turn lane. */
+  readonly backoff: 8;
 };
 
 /** Colours of the picture. */
@@ -1006,7 +1008,9 @@ export interface PetalScanStats {
   readonly merges: number;
   /** Field lanes recovered by merging captures. */
   readonly mergedLanes: number;
-  /** Turn lanes read (each at most once per shown frame). */
+  /** Turn lanes tried (each at most once per shown frame). */
+  readonly turnTries: number;
+  /** Turn lanes read. */
   readonly turnLanes: number;
 }
 
@@ -1034,12 +1038,13 @@ export class PetalScanSession {
   readonly limits: PetalResolvedScanLimits;
   stats(): PetalScanStats;
   progress(): PetalProgress;
-  /** Drops all partial state, including the pose used for tracking and the turn lanes read. */
+  /** Drops all partial state, including the pose used for tracking and the turn lanes tried. */
   reset(): void;
   /**
    * Offers one camera luma plane captured at monotonic time `nowMs`. While the last decoded pose
    * is at most {@link PETAL_TRACK_WINDOW_MS} old, the code is first tracked from it. The turn lanes
-   * on top of the field lanes it decodes are read, each once per shown frame.
+   * on top of the field lanes it decodes are tried, each once per shown frame; after tries that read
+   * nothing the session passes over up to eight captures before it tries again.
    */
   push(image: PetalLumaLike, nowMs: number): PetalScanOutcome;
 }

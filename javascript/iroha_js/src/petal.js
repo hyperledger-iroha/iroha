@@ -67,7 +67,7 @@ import {
 } from "./petal/layout.js";
 import { DEFAULT_DECODE_OPTIONS } from "./petal/decode.js";
 import { DEFAULT_PALETTE } from "./petal/render.js";
-import { DEFAULT_SCAN_LIMITS, TRACK_WINDOW_MS, TURN_MEMORY } from "./petal/session.js";
+import { DEFAULT_SCAN_LIMITS, TRACK_WINDOW_MS, TURN_BACKOFF, TURN_MEMORY } from "./petal/session.js";
 import {
   BEACON_INTERVAL,
   DEFAULT_MAX_PAYLOAD_LEN,
@@ -250,6 +250,7 @@ export const PETAL_TURNS = deepFreeze({
   idBase: TURN_ID_BASE,
   blurs: TURN_BLURS.slice(),
   memory: TURN_MEMORY,
+  backoff: TURN_BACKOFF,
 });
 
 /** Stream-level constants of the wire format and the receiver defaults. */

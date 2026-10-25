@@ -20,8 +20,9 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
   one) with radial lens distortion, searched while field lanes stay unread; unread sectors are read again
   from local levels, `fieldEvidence` and `mergeFields` average repeated captures of one shown frame,
   `readTurns` reads the turn lanes of a decoded capture (`observedTurns` and `turnTemplate` for
-  diagnostics and conformance), and `PetalScanSession` reads each turn lane once per shown frame and
-  counts `fieldLanes`, `mergedLanes` and `turnLanes` (`outcome.turned`). Draw-list petals carry their axis
+  diagnostics and conformance), and `PetalScanSession` tries each turn lane once per shown frame,
+  backs off after tries that read nothing, and counts `fieldLanes`, `mergedLanes`, `turnTries` and
+  `turnLanes` (`outcome.turned`). Draw-list petals carry their axis
   (the outward direction plus the turn). The player defaults to 12 fps and draws petals turned, notched
   and antialiased. The unit suite checks `fixtures/petal/petal_stream_v3.json` and
   `petal_captures_v3.json` exactly.

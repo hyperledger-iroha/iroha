@@ -383,10 +383,13 @@ the held captures, and accepts a recovered lane only if its own header names
 that frame. `outcome.merged` lists newly recovered field lanes (sector digits);
 `stats().merges` and `mergedLanes` count attempts and recoveries. Every field
 lane a capture decodes also lets the session read the turn lane on top of it,
-once per shown frame: the session remembers the last 24 turn lanes it read and
-does not look at those petals again. `outcome.turned` lists the turn lanes read
-(the sector digits of their field lanes) and `stats().turnLanes` counts them.
-Reset and receive timeouts clear held evidence and the turn lanes read.
+once per shown frame: the session remembers the last 24 turn lanes it tried and
+does not look at those petals again, and after tries that read nothing (a camera
+too soft or too shaky for the turns) it passes over up to eight captures before
+it tries again, because reading turns costs a slow phone core several times a
+frame's decode. `outcome.turned` lists the turn lanes read (the sector digits of
+their field lanes); `stats().turnTries` and `turnLanes` count tries and lanes
+read. Reset and receive timeouts clear held evidence and the turn lanes tried.
 Lower-level pieces are exported as well:
 `decodePetalFrame`, `decodePetalFrameAt` and `trackPetalFrame`, `PetalPose`,
 `fieldEvidence` and `mergeFields`, `readTurns` (with `observedTurns` and
