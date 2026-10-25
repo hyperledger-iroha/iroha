@@ -4,7 +4,7 @@ using Hyperledger.Iroha.Petal;
 
 namespace Hyperledger.Iroha.Sdk.Tests;
 
-/// <summary>Luma buffers, homographies, PNG output, the renderer, the draw list and finder location.</summary>
+/// <summary>Luma buffers, homographies and poses, PNG output, the renderer, the draw list and finder location.</summary>
 public sealed class PetalImageTests
 {
     [Fact]
@@ -110,6 +110,36 @@ public sealed class PetalImageTests
     }
 
     [Fact]
+    public void AFittedPoseTakesItsSourcePointsOntoDistortedImagePoints()
+    {
+        PetalPoint[] source = [new(72.0, 72.0), new(952.0, 72.0), new(952.0, 952.0), new(72.0, 952.0)];
+        PetalPoint[] destination = [new(380.0, 90.0), new(900.0, 110.0), new(880.0, 640.0), new(360.0, 620.0)];
+        foreach (var distortion in new[] { 0.0, -0.08, 0.03 })
+        {
+            var pose = PetalPose.Fit(source, destination, distortion, 1280, 720);
+            Assert.NotNull(pose);
+            Assert.Equal(distortion, pose.Value.Distortion);
+            Assert.Equal(new PetalPoint(640.0, 360.0), pose.Value.Center);
+            Assert.Equal(1024.0 * 1024.0, pose.Value.Scale2);
+            for (var i = 0; i < 4; i++)
+            {
+                var mapped = pose.Value.Apply(source[i].X, source[i].Y);
+                Assert.True(Math.Abs(mapped.X - destination[i].X) < 1e-3 && Math.Abs(mapped.Y - destination[i].Y) < 1e-3, $"{distortion}");
+            }
+        }
+
+        // barrel distortion pulls a mid-edge point toward the image centre
+        var plain = PetalPose.Fit(source, destination, 0.0, 1280, 720)!.Value;
+        var barrel = PetalPose.Fit(source, destination, -0.08, 1280, 720)!.Value;
+        Assert.True(Math.Abs(plain.Apply(512.0, 72.0).X - barrel.Apply(512.0, 72.0).X) < 5.0);
+        Assert.Equal(new PetalPoint(3.0, 4.0), PetalPose.Plain(PetalHomography.Identity).Apply(3.0, 4.0));
+        // without distortion the homography is fitted to c + (p − c), exactly as the reference does
+        PetalPoint[] centred = [.. destination.Select(static p => new PetalPoint(640.0 + (p.X - 640.0), 360.0 + (p.Y - 360.0)))];
+        Assert.Equal(PetalHomography.FromPoints(source, centred), plain.Homography);
+        Assert.Null(PetalPose.Fit(source, source[..3], 0.0, 100, 100));
+    }
+
+    [Fact]
     public void PngChecksumsMatchKnownValues()
     {
         Assert.Equal(0xCBF4_3926u, ~PetalPng.Crc32("123456789"u8));
@@ -157,29 +187,30 @@ public sealed class PetalImageTests
     }
 
     [Fact]
-    public void LightTilesAreBrightAndDarkTilesAreMostlyBlack()
+    public void LitPetalsAreDrawnInTheirColourAndDarkCellsShowTheBackdrop()
     {
         var frame = Cells(2);
-        var image = PetalRenderer.Render(frame, new PetalRenderOptions { Size = 512, Supersample = 2 });
-        const double scale = 512.0 / 1024.0;
-        var light = new List<double>();
-        var dark = new List<double>();
-        for (var tile = 0; tile < PetalLayout.TileCount; tile++)
+        var image = PetalRenderer.Render(frame, new PetalRenderOptions { Size = 1024, Supersample = 1 });
+        var palette = PetalPalette.Default;
+        var counts = new int[4];
+        for (var cell = 0; cell < PetalLayout.FieldCells; cell++)
         {
-            var c = PetalLayout.TileCenter(tile);
-            var (x0, y0) = ((int)((c.X - 10.0) * scale), (int)((c.Y - 10.0) * scale));
-            var sum = 0;
-            for (var j = 0; j < 10; j++)
+            var (x, y) = PetalLayout.CellCenter(cell);
+            var at = ((int)y * 1024 + (int)x) * 3;
+            var pixel = new PetalColor(image.Data[at], image.Data[at + 1], image.Data[at + 2]);
+            var (expected, kind) = (frame.Petals[cell], PetalLayout.CellLight(cell)) switch
             {
-                for (var i = 0; i < 10; i++)
-                    sum += image.Data[((y0 + j) * 512 + x0 + i) * 3];
-            }
-
-            (frame.Light[tile] ? light : dark).Add(sum / 100.0);
+                (true, true) => (palette.Light, 0),
+                (true, false) => (palette.Pink, 1),
+                (false, _) when PetalLayout.InMask(Math.Floor(x) + 0.5, Math.Floor(y) + 0.5) => (palette.Backdrop, 2),
+                _ => (palette.Background, 3),
+            };
+            Assert.True(expected == pixel, $"cell {cell}: {pixel}, expected {expected}");
+            counts[kind]++;
         }
 
-        // bold glyphs ink the middle of every tile, so only the ordering is stable
-        Assert.True(light.Average() > dark.Average() + 25.0, $"light {light.Average()} dark {dark.Average()}");
+        // every kind of cell occurs
+        Assert.All(counts, static count => Assert.True(count > 100));
     }
 
     [Fact]
@@ -211,8 +242,12 @@ public sealed class PetalImageTests
         Assert.Throws<ArgumentOutOfRangeException>(() => new PetalRenderOptions { Size = 0 });
         Assert.Throws<ArgumentOutOfRangeException>(() => new PetalRenderOptions { Supersample = 5 });
         Assert.Equal(new PetalColor(245, 175, 208), PetalPalette.Default.Pink);
+        Assert.Equal(new PetalColor(25, 24, 24), PetalPalette.Default.Backdrop);
         Assert.Equal(PetalPalette.Default.Light, PetalRenderer.Shade(Cells(1), 72.0, 72.0));
         Assert.Equal(PetalPalette.Default.Background, PetalRenderer.Shade(Cells(1), 2.0, 1000.0));
+        // a dark frame shows the faint 天 inside the rings and black elsewhere
+        Assert.Equal(PetalPalette.Default.Backdrop, PetalRenderer.Shade(new PetalFrameCells(), 512.0, 190.0));
+        Assert.Equal(PetalPalette.Default.Background, PetalRenderer.Shade(new PetalFrameCells(), 512.0, 350.0));
     }
 
     [Fact]
@@ -222,23 +257,39 @@ public sealed class PetalImageTests
         var list = PetalDrawList.Create(cells);
         Assert.Equal(1024.0, PetalDrawList.CanvasSize);
         Assert.Equal(4, list.Finders.Count);
-        Assert.Equal(PetalLayout.TileCount, list.Tiles.Count);
-        Assert.Equal(cells.Dots.Count(static d => d), list.Dots.Count);
         var finder = list.Finders[0];
         Assert.Equal(new PetalPoint(72.0, 72.0), finder.Center);
         Assert.Equal(5, finder.PetalCenters.Count);
         Assert.True(Math.Abs(finder.PetalCenters[0].X - 72.0) < 1e-9 && Math.Abs(finder.PetalCenters[0].Y - 38.0) < 1e-9);
         Assert.True(Math.Abs(finder.NotchCenters[0].Y - 12.0) < 1e-9);
-        var tile = list.Tiles[37];
-        Assert.Equal(PetalLayout.TileCenter(37), tile.Center);
-        Assert.Equal(cells.Light[37], tile.Light);
-        Assert.Equal(cells.Glyph[37], tile.Glyph);
-        Assert.Equal(25.0, tile.Size);
-        Assert.Equal(3.0, tile.CornerRadius);
-        Assert.Equal(6.5 * 23.0 / 32.0, tile.StrokeWidth, 12);
-        var first = PetalGlyphs.Strokes(tile.Glyph)[0][0];
-        Assert.Equal(tile.GlyphBoxX + first.X * 23.0 / 32.0, tile.GlyphStrokes[0][0].X, 12);
-        Assert.All(list.Dots, static dot => Assert.Equal(11.0, dot.Radius));
+        // the backdrop is every # cell of the 天 lattice
+        Assert.Equal(PetalLayout.Mask.Sum(static row => row.Count(static c => c == '#')), list.BackdropCells.Count);
+        var top = list.BackdropCells[0];
+        Assert.Equal((4, 0), (top.Column, top.Row));
+        Assert.Equal((182.0 + 4 * 33.0, 182.0, 33.0), (top.X, top.Y, top.Size));
+        Assert.All(list.BackdropCells, static cell => Assert.Equal('#', PetalLayout.Mask[cell.Row][cell.Column]));
+        // lit petals in cell order, with the outward angle and colour class of their cell
+        Assert.Equal(cells.Petals.Count(static p => p), list.Petals.Count);
+        Assert.Equal(
+            Enumerable.Range(0, PetalLayout.FieldCells).Where(cell => cells.Petals[cell]),
+            list.Petals.Select(static petal => petal.Cell));
+        foreach (var petal in list.Petals)
+        {
+            Assert.Equal(PetalLayout.CellCenter(petal.Cell), petal.Center);
+            Assert.Equal(PetalLayout.CellAngle(petal.Cell), petal.Angle);
+            Assert.Equal(PetalLayout.CellLight(petal.Cell), petal.Light);
+        }
+
+        Assert.Equal(cells.Dots.Count(static d => d), list.Dots.Count);
+        Assert.All(list.Dots, static dot => Assert.Equal(9.0, dot.Radius));
+        Assert.All(list.Dots, dot => Assert.True(cells.Dots[PetalLayout.RingOffset(dot.Ring) + dot.Slot]));
+        Assert.Equal((double)PetalLayout.PetalHalfLength, PetalDrawList.PetalHalfLength);
+        Assert.Equal((double)PetalLayout.PetalHalfWidth, PetalDrawList.PetalHalfWidth);
+        Assert.Equal((double)PetalLayout.PetalNotchRadius, PetalDrawList.PetalNotchRadius);
+        Assert.Equal((double)PetalLayout.PetalNotchDistance, PetalDrawList.PetalNotchDistance);
+        // the finder and backdrop shapes are shared between frames
+        Assert.Same(list.Finders, PetalDrawList.Create(Cells(5)).Finders);
+        Assert.Same(list.BackdropCells, PetalDrawList.Create(Cells(5)).BackdropCells);
     }
 
     [Fact]
@@ -265,11 +316,8 @@ public sealed class PetalImageTests
 
         Assert.True(close >= size * size * 99 / 100, $"only {close} of {size * size} pixels agree");
         var decoded = PetalDecoder.Decode(vector.ToLuma());
-        Assert.True(decoded.Success);
-        var (p, k, d) = encoder.LaneData(frame);
-        Assert.Equal(p, decoded.Frame.P?.Data);
-        Assert.Equal(k, decoded.Frame.K?.Data);
-        Assert.Equal(d, decoded.Frame.D?.Data);
+        Assert.True(decoded.Success, decoded.Error.ToString());
+        PetalTestSupport.AssertAllLanes(decoded.Frame, encoder.LaneData(frame), "draw list");
         // scale and offset place the frame anywhere on a larger surface
         var offset = new RasterCanvas(300, 200, 1);
         PetalDrawList.Create(cells).Draw(offset, 0.125, 100.0, 50.0);
@@ -433,8 +481,8 @@ public sealed class PetalImageTests
         var found = PetalLocator.Follow(luma, new PetalFinder(48.0, 27.0, 60.0));
         Assert.NotNull(found);
         Assert.True(Math.Abs(found.Value.X - 36.0) < 1.5 && Math.Abs(found.Value.Y - 36.0) < 1.5, $"{found}");
-        // nothing bright near the centre of the canvas corner gap
-        Assert.Null(PetalLocator.Follow(luma, new PetalFinder(140.0, 36.0, 30.0)));
+        // nothing bright in the canvas corner gap between a blossom and the rings
+        Assert.Null(PetalLocator.Follow(luma, new PetalFinder(100.0, 15.0, 30.0)));
         // absurd expectations (a broken pose) are refused and never overflow
         foreach (var (x, y, size) in new[]
         {
@@ -476,15 +524,16 @@ public sealed class PetalImageTests
         Assert.DoesNotContain(true, PetalLocator.AdaptiveBinarize(new PetalLuma(64, 64), 0.12));
     }
 
+    /// <summary>The frame cells of the reference renderer tests: lane data derived from <paramref name="seed"/>.</summary>
     private static PetalFrameCells Cells(byte seed)
     {
-        var p = Enumerable.Range(0, PetalLanes.PDataLength).Select(b => unchecked((byte)(b * 31 + seed))).ToArray();
-        var k = Enumerable.Range(0, PetalLanes.KDataLength).Select(b => unchecked((byte)((b * 17) ^ seed))).ToArray();
         var d = Enumerable.Range(0, PetalLanes.DDataLength).Select(b => unchecked((byte)((b * 13) ^ seed))).ToArray();
-        return PetalFrameCells.FromWords(
-            PetalLanes.EncodeLane(PetalLane.P, p),
-            PetalLanes.EncodeLane(PetalLane.K, k),
-            PetalLanes.EncodeLane(PetalLane.D, d));
+        var fields = Enumerable.Range(0, PetalLayout.Sectors)
+            .Select(sector => PetalLanes.EncodeLane(
+                PetalLanes.Field(sector),
+                Enumerable.Range(0, PetalLanes.FieldDataLength).Select(b => unchecked((byte)((b * 17 + sector) ^ seed))).ToArray()))
+            .ToArray();
+        return PetalFrameCells.FromWords(PetalLanes.EncodeLane(PetalLane.D, d), fields);
     }
 
     private static byte[] DecodePng(byte[] png, out int width, out int height, out int channels)
@@ -534,51 +583,28 @@ public sealed class PetalImageTests
     private sealed class RasterCanvas(int width, int height, int supersample) : IPetalCanvas
     {
         private readonly PetalColor[] samples = new PetalColor[width * height * supersample * supersample];
-        private readonly Stack<(double X0, double Y0, double X1, double Y1)> clips = new();
+        private readonly Stack<(double X, double Y, double Radius)> clips = new();
 
         public void FillRectangle(double x, double y, double w, double h, PetalColor color) =>
             Paint(x, y, x + w, y + h, color, (px, py) => px >= x && px < x + w && py >= y && py < y + h);
-
-        public void FillRoundedRectangle(double x, double y, double w, double h, double cornerRadius, PetalColor color)
-        {
-            var (cx, cy) = (x + w / 2.0, y + h / 2.0);
-            Paint(x, y, x + w, y + h, color, (px, py) =>
-            {
-                var (ax, ay) = (Math.Abs(px - cx), Math.Abs(py - cy));
-                if (ax > w / 2.0 || ay > h / 2.0)
-                    return false;
-                var (ex, ey) = (ax - (w / 2.0 - cornerRadius), ay - (h / 2.0 - cornerRadius));
-                return ex <= 0.0 || ey <= 0.0 || ex * ex + ey * ey <= cornerRadius * cornerRadius;
-            });
-        }
 
         public void FillCircle(double centerX, double centerY, double radius, PetalColor color) =>
             Paint(centerX - radius, centerY - radius, centerX + radius, centerY + radius, color,
                 (px, py) => (px - centerX) * (px - centerX) + (py - centerY) * (py - centerY) <= radius * radius);
 
-        public void StrokePolyline(ReadOnlySpan<PetalPoint> points, double strokeWidth, PetalColor color)
+        public void FillEllipse(double centerX, double centerY, double radiusAlong, double radiusAcross, double angle, PetalColor color)
         {
-            var copy = points.ToArray();
-            var half = strokeWidth / 2.0;
-            var (x0, y0, x1, y1) = (copy.Min(static p => p.X) - half, copy.Min(static p => p.Y) - half, copy.Max(static p => p.X) + half, copy.Max(static p => p.Y) + half);
-            Paint(x0, y0, x1, y1, color, (px, py) =>
+            var (sin, cos) = (Math.Sin(angle), Math.Cos(angle));
+            var reach = Math.Max(radiusAlong, radiusAcross);
+            Paint(centerX - reach, centerY - reach, centerX + reach, centerY + reach, color, (px, py) =>
             {
-                for (var i = 0; i + 1 < copy.Length; i++)
-                {
-                    var (a, b) = (copy[i], copy[i + 1]);
-                    var (dx, dy) = (b.X - a.X, b.Y - a.Y);
-                    var lengthSquared = dx * dx + dy * dy;
-                    var t = lengthSquared == 0.0 ? 0.0 : Math.Clamp(((px - a.X) * dx + (py - a.Y) * dy) / lengthSquared, 0.0, 1.0);
-                    var (ex, ey) = (px - (a.X + t * dx), py - (a.Y + t * dy));
-                    if (ex * ex + ey * ey <= half * half)
-                        return true;
-                }
-
-                return false;
+                var (dx, dy) = (px - centerX, py - centerY);
+                var (along, across) = ((dx * cos + dy * sin) / radiusAlong, (-dx * sin + dy * cos) / radiusAcross);
+                return along * along + across * across <= 1.0;
             });
         }
 
-        public void PushClip(double x, double y, double w, double h) => clips.Push((x, y, x + w, y + h));
+        public void PushCircleClip(double centerX, double centerY, double radius) => clips.Push((centerX, centerY, radius));
 
         public void PopClip() => clips.Pop();
 
@@ -620,7 +646,7 @@ public sealed class PetalImageTests
                             if (clips.Count > 0)
                             {
                                 var clip = clips.Peek();
-                                if (x <= clip.X0 || x >= clip.X1 || y <= clip.Y0 || y >= clip.Y1)
+                                if ((x - clip.X) * (x - clip.X) + (y - clip.Y) * (y - clip.Y) > clip.Radius * clip.Radius)
                                     continue;
                             }
 

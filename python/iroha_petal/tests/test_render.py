@@ -11,27 +11,107 @@ import xml.etree.ElementTree as ElementTree
 
 import petal_test_support  # noqa: F401  (puts src on sys.path)
 
-from iroha_petal.glyphs import STROKES
-from iroha_petal.lanes import D_DATA, K_DATA, P_DATA, FrameCells, Lane, encode_lane
+from iroha_petal._numeric import round_half_away
+from iroha_petal.lanes import D_DATA, FIELD_DATA, FIELD_LANES, FrameCells, Lane, encode_lane
 from iroha_petal.layout import (
+    BACKDROP_RADIUS,
+    BAND_COUNT,
+    BAND_OFFSETS,
+    BAND_SLOTS,
+    DOT_RADIUS,
+    FIELD_CELLS,
     FINDER_CENTERS,
+    FINDER_OUTER,
+    MASK,
+    PETAL_HALF_LENGTH,
+    RING_RADII,
     RING_SLOTS,
-    TILE_COUNT,
     TOTAL_SLOTS,
+    band_phase,
+    band_radius,
+    cell_angle,
+    cell_center,
+    cell_light,
+    finder_lit,
+    in_mask,
+    petal_lit,
     ring_offset,
     slot_center,
-    tile_center,
 )
 from iroha_petal.render import Palette, RenderOptions, draw_list, render_frame
 
 
 def cells(seed: int) -> FrameCells:
-    p = bytes((b * 31 + seed) & 0xFF for b in range(P_DATA))
-    k = bytes(((b * 17) & 0xFF) ^ seed for b in range(K_DATA))
     d = bytes(((b * 13) & 0xFF) ^ seed for b in range(D_DATA))
-    return FrameCells.from_words(
-        encode_lane(Lane.P, p), encode_lane(Lane.K, k), encode_lane(Lane.D, d)
-    )
+    fields = [
+        encode_lane(lane, bytes(((b * 17 + s) & 0xFF) ^ seed for b in range(FIELD_DATA)))
+        for s, lane in enumerate(FIELD_LANES)
+    ]
+    return FrameCells.from_words(encode_lane(Lane.D, d), fields)
+
+
+def _round(value: float) -> float:
+    return -round_half_away(-value) if value < 0.0 else round_half_away(value)
+
+
+def literal_shade(frame: FrameCells, palette: Palette, x: float, y: float):
+    """The reference renderer's ``Shader::shade``, line by line."""
+    for fx, fy in FINDER_CENTERS:
+        dx, dy = x - fx, y - fy
+        if math.sqrt(dx * dx + dy * dy) <= FINDER_OUTER:
+            return palette.light if finder_lit(dx, dy) else palette.background
+    dx, dy = x - 512.0, y - 512.0
+    radius = math.sqrt(dx * dx + dy * dy)
+    theta = math.atan2(dy, dx)
+    if theta < 0.0:
+        theta += math.tau
+    for ring in range(3):
+        ring_radius = RING_RADII[ring]
+        if abs(radius - ring_radius) > DOT_RADIUS:
+            continue
+        slots = RING_SLOTS[ring]
+        slot = int(_round(theta / math.tau * slots)) % slots
+        if not frame.dots[ring_offset(ring) + slot]:
+            continue
+        angle = math.tau * slot / slots
+        px, py = ring_radius * math.cos(angle), ring_radius * math.sin(angle)
+        if math.sqrt((dx - px) * (dx - px) + (dy - py) * (dy - py)) <= DOT_RADIUS:
+            return palette.pink
+    if radius <= BACKDROP_RADIUS:
+        nearest = _round((radius - 16.0) / 11.0)
+        for band in (nearest - 1.0, nearest, nearest + 1.0):
+            if band < 0.0 or band >= BAND_COUNT:
+                continue
+            b = int(band)
+            if abs(radius - band_radius(b)) > PETAL_HALF_LENGTH:
+                continue
+            slots = float(BAND_SLOTS[b])
+            around = int(_round(theta / math.tau * slots - band_phase(b)))
+            for slot in (around - 1, around, around + 1):
+                cell = BAND_OFFSETS[b] + slot % BAND_SLOTS[b]
+                if not frame.petals[cell]:
+                    continue
+                cx, cy = cell_center(cell)
+                if petal_lit(x - cx, y - cy, cell_angle(cell)):
+                    return palette.light if cell_light(cell) else palette.pink
+        if in_mask(x, y):
+            return palette.backdrop
+    return palette.background
+
+
+def literal_pixel(frame: FrameCells, palette: Palette, px: int, py: int, size: int, s: int):
+    """One pixel of the reference renderer: the rounded mean of its ``s x s`` samples."""
+    unit = 1024.0 / size
+    acc = [0, 0, 0]
+    for sy in range(s):
+        for sx in range(s):
+            x = (px + (sx + 0.5) / s) * unit
+            y = (py + (sy + 0.5) / s) * unit
+            colour = literal_shade(frame, palette, x, y)
+            for k in range(3):
+                acc[k] += colour[k]
+    n = s * s
+    return tuple((value + n // 2) // n for value in acc)
 
 
 class RenderTest(unittest.TestCase):
@@ -50,22 +130,21 @@ class RenderTest(unittest.TestCase):
         )
         self.assertEqual(at(2, 255), 0)
 
-    def test_light_tiles_are_bright_and_dark_tiles_are_mostly_black(self) -> None:
+    def test_lit_petals_are_drawn_in_their_colour_and_dark_cells_show_the_backdrop(self) -> None:
         frame = cells(2)
-        image = render_frame(frame, RenderOptions(size=512, supersample=2))
-        scale = 512.0 / 1024.0
-        light, dark = [], []
-        for tile in range(TILE_COUNT):
-            cx, cy = tile_center(tile)
-            x0, y0 = int((cx - 10.0) * scale), int((cy - 10.0) * scale)
-            total = sum(
-                image.data[((y0 + j) * 512 + x0 + i) * 3] for j in range(10) for i in range(10)
-            )
-            (light if frame.light[tile] else dark).append(total / 100.0)
-        light_mean = sum(light) / len(light)
-        dark_mean = sum(dark) / len(dark)
-        # bold glyphs ink the middle of every tile, so only the ordering is stable
-        self.assertGreater(light_mean, dark_mean + 25.0)
+        image = render_frame(frame, RenderOptions(size=1024, supersample=1))
+        palette = Palette()
+        for cell in range(FIELD_CELLS):
+            x, y = cell_center(cell)
+            at = (int(y) * 1024 + int(x)) * 3
+            pixel = tuple(image.data[at : at + 3])
+            if frame.petals[cell]:
+                expected = palette.light if cell_light(cell) else palette.pink
+            elif in_mask(math.floor(x) + 0.5, math.floor(y) + 0.5):
+                expected = palette.backdrop
+            else:
+                expected = palette.background
+            self.assertEqual(pixel, expected, f"cell {cell}")
 
     def test_lit_dots_are_drawn_and_unlit_slots_are_black(self) -> None:
         frame = cells(3)
@@ -82,18 +161,41 @@ class RenderTest(unittest.TestCase):
                 checked += 1
         self.assertEqual(checked, TOTAL_SLOTS)
 
+    def test_the_painter_matches_a_literal_port_of_the_reference_shader(self) -> None:
+        # the renderer paints shape by shape; the reference shades sample by sample in
+        # priority order. Rows through the finders, the rings, the backdrop and the petals of
+        # every band must agree pixel for pixel.
+        frame = cells(4)
+        palette = Palette()
+        for size, s, rows in (
+            (1024, 1, (70, 300, 512, 515, 700)),
+            (768, 2, (54, 200, 383)),
+            (512, 3, (36, 256, 400)),
+        ):
+            image = render_frame(frame, RenderOptions(size=size, supersample=s))
+            for py in rows:
+                for px in range(size):
+                    at = (py * size + px) * 3
+                    self.assertEqual(
+                        tuple(image.data[at : at + 3]),
+                        literal_pixel(frame, palette, px, py, size, s),
+                        f"size {size}x{s}: pixel ({px}, {py})",
+                    )
+
     def test_options_are_validated_and_the_palette_is_applied(self) -> None:
         with self.assertRaises(ValueError):
             render_frame(cells(1), RenderOptions(size=0))
         with self.assertRaises(ValueError):
             render_frame(cells(1), RenderOptions(size=64, supersample=5))
-        palette = Palette(background=(10, 20, 30), light=(200, 100, 50))
+        palette = Palette(background=(10, 20, 30), light=(200, 100, 50), backdrop=(1, 2, 3))
         frame = cells(4)
         image = render_frame(frame, RenderOptions(size=128, supersample=1, palette=palette))
         self.assertEqual(tuple(image.data[0:3]), (10, 20, 30))
         # the finder core is filled with the light colour
         at = (9 * 128 + 9) * 3
         self.assertEqual(tuple(image.data[at : at + 3]), (200, 100, 50))
+        # the backdrop colour shows where the 天 has no lit petal
+        self.assertIn(b"\x01\x02\x03", bytes(image.data))
 
 
 class DrawListTest(unittest.TestCase):
@@ -113,30 +215,33 @@ class DrawListTest(unittest.TestCase):
             self.assertEqual(up.radius, 26.0)
             self.assertAlmostEqual(finder.notches[0].y, fy - 60.0, places=9)
             self.assertEqual(finder.notches[0].radius, 6.0)
-        self.assertEqual(len(shapes.tiles), TILE_COUNT)
+        # the backdrop: every `#` lattice cell, clipped to the disc of radius 390
+        self.assertEqual(len(shapes.backdrop), sum(line.count("#") for line in MASK))
+        first = shapes.backdrop[0]
+        self.assertEqual((first.x, first.y, first.size), (182.0 + 33.0 * 4, 182.0, 33.0))
+        clip = shapes.backdrop_clip
+        self.assertEqual((clip.x, clip.y, clip.radius), (512.0, 512.0, 390.0))
+        # the lit petals, in cell order, with their outward angle and colour class
         palette = Palette()
-        for tile in shapes.tiles:
-            cx, cy = tile_center(tile.index)
-            self.assertEqual((tile.x, tile.y, tile.size), (cx - 12.5, cy - 12.5, 25.0))
-            self.assertEqual(tile.corner_radius, 3.0)
-            self.assertEqual(tile.light, frame.light[tile.index])
-            self.assertEqual(tile.glyph, frame.glyph[tile.index])
-            self.assertEqual(tile.fill, palette.light if tile.light else None)
-            self.assertEqual(tile.glyph_color, palette.ink if tile.light else palette.pink)
-            self.assertEqual(tile.glyph_box, (cx - 11.5, cy - 11.5, 23.0))
-            self.assertAlmostEqual(tile.stroke_width, 6.5 * 23.0 / 32.0)
-            self.assertEqual(len(tile.strokes), len(STROKES[tile.glyph]))
-            gx, gy, side = tile.glyph_box
-            for stroke in tile.strokes:
-                for x, y in stroke:
-                    self.assertTrue(gx <= x <= gx + side and gy <= y <= gy + side)
-        lit = [i for i, on in enumerate(frame.dots) if on]
-        self.assertEqual(len(shapes.dots), len(lit))
-        for dot, flat in zip(shapes.dots, lit):
-            ring = 0 if flat < 80 else 1 if flat < 172 else 2
+        lit = [cell for cell in range(FIELD_CELLS) if frame.petals[cell]]
+        self.assertEqual([petal.index for petal in shapes.petals], lit)
+        for petal in shapes.petals:
+            self.assertEqual((petal.x, petal.y), cell_center(petal.index))
+            self.assertEqual(petal.angle, cell_angle(petal.index))
+            self.assertEqual(petal.light, cell_light(petal.index))
+            self.assertEqual(petal.color, palette.light if petal.light else palette.pink)
+        self.assertAlmostEqual(shapes.petal_half_length, 5.2, places=6)
+        self.assertAlmostEqual(shapes.petal_half_width, 4.3, places=6)
+        self.assertAlmostEqual(shapes.petal_notch_radius, 1.3, places=6)
+        self.assertAlmostEqual(shapes.petal_notch_distance, 5.4, places=6)
+        # the lit dots
+        lit_dots = [i for i, on in enumerate(frame.dots) if on]
+        self.assertEqual(len(shapes.dots), len(lit_dots))
+        for dot, flat in zip(shapes.dots, lit_dots):
+            ring = 0 if flat < 88 else 1 if flat < 188 else 2
             x, y = slot_center(ring, flat - ring_offset(ring))
             self.assertLess(math.hypot(dot.x - x, dot.y - y), 1e-3)
-            self.assertEqual(dot.radius, 11.0)
+            self.assertEqual(dot.radius, 9.0)
 
     def test_svg_output_is_well_formed(self) -> None:
         frame = cells(6)
@@ -147,11 +252,14 @@ class DrawListTest(unittest.TestCase):
         self.assertEqual(root.tag, namespace + "svg")
         self.assertEqual(root.get("width"), "512")
         circles = root.findall(f".//{namespace}circle")
-        self.assertEqual(len(circles), 4 * 11 + len(shapes.dots))
+        # finders (core, five petals, five notches), lit dots and the backdrop clip
+        self.assertEqual(len(circles), 4 * 11 + len(shapes.dots) + 1)
         rects = root.findall(f".//{namespace}rect")
-        self.assertEqual(len(rects), 1 + sum(frame.light))
-        polylines = root.findall(f".//{namespace}polyline")
-        self.assertEqual(len(polylines), sum(len(STROKES[g]) for g in frame.glyph))
+        self.assertEqual(len(rects), 1 + len(shapes.backdrop))
+        ellipses = root.findall(f".//{namespace}ellipse")
+        self.assertEqual(len(ellipses), sum(frame.petals))
+        self.assertEqual(ellipses[0].get("rx"), "5.2")
+        self.assertEqual(ellipses[0].get("ry"), "4.3")
 
 
 if __name__ == "__main__":

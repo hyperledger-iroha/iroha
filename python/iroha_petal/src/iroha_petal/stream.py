@@ -4,9 +4,9 @@
 """Payload streams: the sender-side :class:`StreamEncoder` and the
 receiver-side :class:`StreamAssembler`.
 
-Every frame carries a handful of fountain atoms, one lane at a time: lane ``P``
-one atom, lane ``K`` five, and lane ``D`` one atom, except on every fourth
-frame (``frame % 4 == 0``), when lane ``D`` carries the stream *beacon*
+Every frame carries a handful of fountain atoms, one lane at a time: each of
+the four field lanes five atoms, and lane ``D`` one atom, except on every
+fourth frame (``frame % 4 == 0``), when lane ``D`` carries the stream *beacon*
 instead, so a receiver can join at any frame within a fraction of a second.
 Atom ids run contiguously over the atoms actually sent (see
 :func:`first_atom_id`). Any single readable lane is useful on its own.
@@ -15,7 +15,7 @@ Lane data layouts (all big-endian):
 
 * every lane starts with ``tag:u8, frame:u16``; ``tag`` is the low byte of the
   payload CRC-32C.
-* lanes ``P``, ``K`` and non-beacon ``D``: ``atoms...`` (16 bytes each).
+* field lanes and non-beacon ``D``: ``atoms...`` (16 bytes each).
 * beacon ``D``: ``version:u8, kind:u8, len:u24, crc:u32``, zero padded.
 """
 
@@ -30,15 +30,17 @@ from .crc import crc32c
 from .fountain import FountainDecoder, encode_atom, split_payload
 from .lanes import (
     ATOM_LEN,
+    ATOMS_PER_FRAME,
     D_ATOMS,
     D_DATA,
-    K_ATOMS,
+    FIELD_ATOMS,
+    FIELD_LANES,
     LANE_HEADER_LEN,
-    P_ATOMS,
     FrameCells,
     Lane,
     encode_lane,
 )
+from .layout import SECTORS
 
 __all__ = [
     "FORMAT_VERSION",
@@ -48,6 +50,7 @@ __all__ = [
     "is_beacon_frame",
     "atoms_in_frame",
     "first_atom_id",
+    "lane_first_id",
     "StreamErrorKind",
     "StreamError",
     "StreamMeta",
@@ -55,6 +58,7 @@ __all__ = [
     "Beacon",
     "AtomPacket",
     "DLane",
+    "LaneData",
     "parse_atom_lane",
     "parse_d_lane",
     "StreamEncoder",
@@ -64,8 +68,8 @@ __all__ = [
     "StreamAssembler",
 ]
 
-#: Version/profile byte of the beacon: format version 1, layout profile 0.
-FORMAT_VERSION = 0x10
+#: Version/profile byte of the beacon: format version 2, layout profile 0.
+FORMAT_VERSION = 0x20
 #: Largest payload a beacon can describe (``u24``).
 MAX_PAYLOAD_LEN = (1 << 24) - 1
 #: Default receiver payload limit; override with :class:`AssemblerLimits`.
@@ -91,8 +95,8 @@ def is_beacon_frame(frame: int) -> bool:
 def atoms_in_frame(frame: int) -> int:
     """Fountain atoms carried by ``frame``."""
     if is_beacon_frame(frame):
-        return P_ATOMS + K_ATOMS
-    return P_ATOMS + D_ATOMS + K_ATOMS
+        return ATOMS_PER_FRAME - D_ATOMS
+    return ATOMS_PER_FRAME
 
 
 def first_atom_id(frame: int) -> int:
@@ -102,16 +106,16 @@ def first_atom_id(frame: int) -> int:
     beacon frames with one atom fewer.
     """
     f = _check_frame(frame)
-    return f * (P_ATOMS + D_ATOMS + K_ATOMS) - (f + BEACON_INTERVAL - 1) // BEACON_INTERVAL
+    return f * ATOMS_PER_FRAME - (f + BEACON_INTERVAL - 1) // BEACON_INTERVAL
 
 
-def _lane_first_id(lane: Lane, frame: int) -> int:
+def lane_first_id(lane: Lane, frame: int) -> int:
+    """Fountain id of the first atom ``lane`` carries in ``frame``: the field lanes come
+    first, in sector order, then lane ``D``."""
     base = first_atom_id(frame)
-    if lane is Lane.P:
-        return base
     if lane is Lane.D:
-        return base + P_ATOMS
-    return base + P_ATOMS + (0 if is_beacon_frame(frame) else D_ATOMS)
+        return base + SECTORS * FIELD_ATOMS
+    return base + FIELD_LANES.index(lane) * FIELD_ATOMS
 
 
 class StreamErrorKind(enum.Enum):
@@ -189,6 +193,22 @@ class AtomPacket:
 DLane = Union[Beacon, AtomPacket]
 
 
+@dataclass(frozen=True)
+class LaneData:
+    """The bytes of every lane of one frame: lane data, or transmitted codewords."""
+
+    #: Lane ``D``.
+    d: bytes
+    #: The field lanes, sector 0 first.
+    fields: Tuple[bytes, ...]
+
+    def lane(self, lane: Lane) -> bytes:
+        """The bytes of ``lane``."""
+        if lane is Lane.D:
+            return self.d
+        return self.fields[FIELD_LANES.index(lane)]
+
+
 def _parse_header(data: bytes) -> LaneHeader:
     return LaneHeader(tag=data[0], frame=(data[1] << 8) | data[2])
 
@@ -198,20 +218,14 @@ def _parse_atoms(lane: Lane, data: bytes, header: LaneHeader, count: int) -> Ato
         bytes(data[LANE_HEADER_LEN + i * ATOM_LEN : LANE_HEADER_LEN + (i + 1) * ATOM_LEN])
         for i in range(count)
     )
-    return AtomPacket(header=header, first_id=_lane_first_id(lane, header.frame), atoms=atoms)
+    return AtomPacket(header=header, first_id=lane_first_id(lane, header.frame), atoms=atoms)
 
 
 def parse_atom_lane(lane: Lane, data: bytes) -> Optional[AtomPacket]:
-    """Parse the data bytes of lane ``P`` or lane ``K``."""
-    if lane is Lane.P:
-        count = P_ATOMS
-    elif lane is Lane.K:
-        count = K_ATOMS
-    else:
+    """Parse the data bytes of a field lane."""
+    if lane is Lane.D or len(data) != lane.data_len:
         return None
-    if len(data) != lane.data_len:
-        return None
-    return _parse_atoms(lane, data, _parse_header(data), count)
+    return _parse_atoms(lane, data, _parse_header(data), FIELD_ATOMS)
 
 
 def parse_d_lane(data: bytes) -> Optional[DLane]:
@@ -269,12 +283,13 @@ class StreamEncoder:
         crc = self._meta.crc
         return b"".join(encode_atom(self._source, crc, (first_id + i) & _U32) for i in range(count))
 
-    def lane_data(self, frame: int) -> Tuple[bytes, bytes, bytes]:
-        """The data bytes of every lane of ``frame``: ``(P, K, D)``."""
+    def lane_data(self, frame: int) -> LaneData:
+        """The data bytes of every lane of ``frame``."""
         _check_frame(frame)
         header = bytes((self._meta.tag, frame >> 8, frame & 0xFF))
-        p = header + self._atoms(_lane_first_id(Lane.P, frame), P_ATOMS)
-        k = header + self._atoms(_lane_first_id(Lane.K, frame), K_ATOMS)
+        fields = tuple(
+            header + self._atoms(lane_first_id(lane, frame), FIELD_ATOMS) for lane in FIELD_LANES
+        )
         if is_beacon_frame(frame):
             meta = self._meta
             body = (
@@ -285,17 +300,21 @@ class StreamEncoder:
             body += bytes(D_DATA - LANE_HEADER_LEN - len(body))
             d = header + body
         else:
-            d = header + self._atoms(_lane_first_id(Lane.D, frame), D_ATOMS)
-        return p, k, d
+            d = header + self._atoms(lane_first_id(Lane.D, frame), D_ATOMS)
+        return LaneData(d=d, fields=fields)
 
-    def words(self, frame: int) -> Tuple[bytes, bytes, bytes]:
-        """The transmitted codewords of ``frame``: ``(P, K, D)``."""
-        p, k, d = self.lane_data(frame)
-        return encode_lane(Lane.P, p), encode_lane(Lane.K, k), encode_lane(Lane.D, d)
+    def words(self, frame: int) -> LaneData:
+        """The transmitted codewords of ``frame``."""
+        data = self.lane_data(frame)
+        return LaneData(
+            d=encode_lane(Lane.D, data.d),
+            fields=tuple(encode_lane(lane, data.lane(lane)) for lane in FIELD_LANES),
+        )
 
     def cells(self, frame: int) -> FrameCells:
         """Every cell of ``frame``, ready to render."""
-        return FrameCells.from_words(*self.words(frame))
+        words = self.words(frame)
+        return FrameCells.from_words(words.d, words.fields)
 
 
 @dataclass(frozen=True)
@@ -305,7 +324,7 @@ class AssemblerLimits:
     #: Largest payload the receiver accepts.
     max_payload_len: int = DEFAULT_MAX_PAYLOAD_LEN
     #: Atoms buffered while waiting for the first beacon (0 drops them).
-    max_pending_atoms: int = 128
+    max_pending_atoms: int = 512
 
 
 @dataclass(frozen=True)

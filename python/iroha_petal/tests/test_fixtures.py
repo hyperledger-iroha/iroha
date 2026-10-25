@@ -1,46 +1,59 @@
 # Copyright 2026 Hyperledger Iroha Contributors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Conformance with the shared golden vectors in ``fixtures/petal/petal_stream_v1.json``."""
+"""Conformance with the shared golden vectors in ``fixtures/petal/petal_stream_v2.json``."""
 
 from __future__ import annotations
 
+import struct
 import unittest
 
 from petal_test_support import stream_fixture
 
 from iroha_petal import crc32c
 from iroha_petal.fountain import mask_words, mix32
-from iroha_petal.glyphs import GLYPH_CHARS, STROKE_WIDTH, STROKES, TEMPLATES
 from iroha_petal.lanes import (
     ATOM_LEN,
+    ATOMS_PER_FRAME,
     D_PARITY,
     D_WORD,
-    K_PARITY,
-    K_WORD,
-    P_PARITY,
-    P_WORD,
+    FIELD_ATOMS,
+    FIELD_LANES,
+    FIELD_PARITY,
+    FIELD_WORD,
     FrameCells,
     Lane,
     decode_lane,
     encode_lane,
 )
 from iroha_petal.layout import (
+    BACKDROP_RADIUS,
+    BAND_INNER,
+    BAND_SLOTS,
+    BAND_SPACING,
     CANVAS,
     DOT_RADIUS,
+    FIELD_CELLS,
     FINDER_CENTERS,
     MASK,
+    MASK_ORIGIN,
+    MASK_PITCH,
+    PETAL_HALF_LENGTH,
+    PETAL_HALF_WIDTH,
+    PETAL_NOTCH_DISTANCE,
+    PETAL_NOTCH_RADIUS,
+    PETAL_RADIUS,
     RING_RADII,
     RING_SLOTS,
-    TILE_ORIGIN,
-    TILE_PITCH,
-    TILE_SIZE,
-    TILES,
+    SECTORS,
     SlotKind,
+    cell_light,
     data_slots,
+    sector_cells,
     slot_roles,
 )
 from iroha_petal.prng import Xorshift32
+from iroha_petal.render import Palette
 from iroha_petal.rs import ReedSolomon
 from iroha_petal.stream import (
     BEACON_INTERVAL,
@@ -53,6 +66,16 @@ from iroha_petal.stream import (
 )
 
 
+def flags(bitmap: bytes) -> list:
+    """One flag per field cell, cell 0 in the most significant bit of byte 0."""
+    return [(bitmap[cell >> 3] >> (7 - (cell & 7))) & 1 == 1 for cell in range(FIELD_CELLS)]
+
+
+def single(value: float) -> float:
+    """``value`` rounded to single precision, as the reference stores its constants."""
+    return struct.unpack("<f", struct.pack("<f", value))[0]
+
+
 class FixtureTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -60,31 +83,46 @@ class FixtureTest(unittest.TestCase):
 
     def test_constants_and_layout_match(self) -> None:
         doc = self.doc
-        self.assertEqual(doc["fixture_version"], 1)
-        self.assertEqual(doc["format"], "petal-stream-v1")
+        self.assertEqual(doc["fixture_version"], 2)
+        self.assertEqual(doc["format"], "petal-stream-v2")
         constants = doc["constants"]
         self.assertEqual(constants["canvas"], CANVAS)
-        self.assertEqual(constants["tile_origin"], TILE_ORIGIN)
-        self.assertEqual(constants["tile_pitch"], TILE_PITCH)
-        self.assertEqual(constants["tile_size"], TILE_SIZE)
-        self.assertEqual(constants["dot_radius"], DOT_RADIUS)
         self.assertEqual(constants["atom_len"], ATOM_LEN)
+        self.assertEqual((constants["d_word"], constants["d_parity"]), (D_WORD, D_PARITY))
         self.assertEqual(
-            (constants["p_word"], constants["k_word"], constants["d_word"]),
-            (P_WORD, K_WORD, D_WORD),
+            (constants["field_word"], constants["field_parity"], constants["field_atoms"]),
+            (FIELD_WORD, FIELD_PARITY, FIELD_ATOMS),
         )
-        self.assertEqual(
-            (constants["p_parity"], constants["k_parity"], constants["d_parity"]),
-            (P_PARITY, K_PARITY, D_PARITY),
-        )
+        self.assertEqual(constants["sectors"], SECTORS)
+        self.assertEqual(constants["atoms_per_frame"], ATOMS_PER_FRAME)
+        self.assertEqual(constants["field_cells"], FIELD_CELLS)
         self.assertEqual(constants["beacon_interval"], BEACON_INTERVAL)
         self.assertEqual(constants["format_version"], FORMAT_VERSION)
         layout = doc["layout"]
+        self.assertEqual(layout["finder_centers"], [v for c in FINDER_CENTERS for v in c])
+        self.assertEqual((layout["band_inner"], layout["band_spacing"]), (BAND_INNER, BAND_SPACING))
+        self.assertEqual(layout["band_slots"], list(BAND_SLOTS))
+        # the petal constants are single-precision values in the reference
+        for key, value in (
+            ("petal_radius", PETAL_RADIUS),
+            ("petal_half_length", PETAL_HALF_LENGTH),
+            ("petal_half_width", PETAL_HALF_WIDTH),
+            ("petal_notch_radius", PETAL_NOTCH_RADIUS),
+            ("petal_notch_distance", PETAL_NOTCH_DISTANCE),
+        ):
+            self.assertEqual(single(layout[key]), value, key)
+        sectors = layout["sector_cells"]
+        self.assertEqual(len(sectors), SECTORS)
+        for sector, cells in enumerate(sectors):
+            self.assertEqual(cells, list(sector_cells(sector)), f"sector {sector}")
         self.assertEqual(tuple(layout["mask"]), MASK)
-        self.assertEqual(layout["tiles_col_row"], [v for tile in TILES for v in tile])
+        self.assertEqual((layout["mask_origin"], layout["mask_pitch"]), (MASK_ORIGIN, MASK_PITCH))
+        self.assertEqual(layout["backdrop_radius"], BACKDROP_RADIUS)
+        light = flags(bytes.fromhex(layout["light_cells_hex"]))
+        self.assertEqual(light, [cell_light(cell) for cell in range(FIELD_CELLS)])
         self.assertEqual(layout["ring_slots"], list(RING_SLOTS))
         self.assertEqual(layout["ring_radii"], list(RING_RADII))
-        self.assertEqual(layout["finder_centers"], [v for c in FINDER_CENTERS for v in c])
+        self.assertEqual(layout["dot_radius"], DOT_RADIUS)
         self.assertEqual(layout["data_slots"], list(data_slots()))
         roles = slot_roles()
         self.assertEqual(
@@ -94,17 +132,11 @@ class FixtureTest(unittest.TestCase):
             layout["guard_slots"], [i for i, r in enumerate(roles) if r.kind is SlotKind.GUARD]
         )
 
-    def test_glyph_alphabet_strokes_and_templates_match(self) -> None:
-        glyphs = self.doc["glyphs"]
-        self.assertEqual(glyphs["chars"], GLYPH_CHARS)
-        self.assertAlmostEqual(glyphs["stroke_width"], STROKE_WIDTH, delta=1e-9)
-        self.assertEqual(len(glyphs["strokes"]), len(STROKES))
-        for glyph, polylines in enumerate(glyphs["strokes"]):
-            ours = [[v for point in stroke for v in point] for stroke in STROKES[glyph]]
-            self.assertEqual(polylines, ours, f"glyph {glyph}")
-        self.assertEqual(len(glyphs["templates"]), len(TEMPLATES))
-        for glyph, row in enumerate(glyphs["templates"]):
-            self.assertEqual(tuple(row), TEMPLATES[glyph], f"glyph {glyph}")
+    def test_palette_matches(self) -> None:
+        palette = self.doc["palette"]
+        ours = Palette()
+        for key in ("background", "light", "pink", "backdrop"):
+            self.assertEqual(tuple(palette[key]), getattr(ours, key), key)
 
     def test_checksums_prng_and_whitening_match(self) -> None:
         for case in self.doc["crc32c"]:
@@ -115,8 +147,9 @@ class FixtureTest(unittest.TestCase):
         for case in prng["mix32"]:
             self.assertEqual(mix32(case["in"]), case["out"])
         whitening = self.doc["whitening"]
+        self.assertEqual(sorted(whitening), sorted(lane.value for lane in Lane))
         for lane in Lane:
-            self.assertEqual(lane.whitening().hex(), whitening[lane.value])
+            self.assertEqual(lane.whitening().hex(), whitening[lane.value], lane)
 
     def test_reed_solomon_vectors_encode_and_correct(self) -> None:
         for case in self.doc["reed_solomon"]:
@@ -160,21 +193,21 @@ class FixtureTest(unittest.TestCase):
             for frame in stream["frames"]:
                 number = frame["frame"]
                 label = f"{name} frame {number}"
-                p, k, d = encoder.lane_data(number)
-                self.assertEqual(p.hex(), frame["p_data"], label)
-                self.assertEqual(k.hex(), frame["k_data"], label)
-                self.assertEqual(d.hex(), frame["d_data"], label)
-                pw = bytes.fromhex(frame["p_word"])
-                kw = bytes.fromhex(frame["k_word"])
-                dw = bytes.fromhex(frame["d_word"])
-                self.assertEqual(encode_lane(Lane.P, p), pw, label)
-                self.assertEqual(encode_lane(Lane.K, k), kw, label)
-                self.assertEqual(encode_lane(Lane.D, d), dw, label)
-                self.assertEqual(decode_lane(Lane.K, kw), k, label)
-                cells = FrameCells.from_words(pw, kw, dw)
-                self.assertEqual("".join("%x" % g for g in cells.glyph), frame["glyphs"], label)
+                lanes = encoder.lane_data(number)
+                self.assertEqual(lanes.d.hex(), frame["d_data"], label)
+                self.assertEqual([f.hex() for f in lanes.fields], frame["field_data"], label)
+                d_word = bytes.fromhex(frame["d_word"])
+                field_words = [bytes.fromhex(word) for word in frame["field_words"]]
+                self.assertEqual(encode_lane(Lane.D, lanes.d), d_word, label)
+                for lane, word in zip(FIELD_LANES, field_words):
+                    self.assertEqual(encode_lane(lane, lanes.lane(lane)), word, f"{label} {lane}")
+                    self.assertEqual(decode_lane(lane, word), lanes.lane(lane), f"{label} {lane}")
+                cells = FrameCells.from_words(d_word, field_words)
                 lit = [i for i, on in enumerate(cells.dots) if on]
                 self.assertEqual(lit, frame["lit_dots"], label)
+                self.assertEqual(
+                    list(cells.petals), flags(bytes.fromhex(frame["lit_petals_hex"])), label
+                )
                 self.assertEqual(cells, encoder.cells(number), label)
             # push every fixture frame through decode_lane + assembler
             if name == "one-pass":
@@ -182,8 +215,8 @@ class FixtureTest(unittest.TestCase):
                 for frame in stream["frames"]:
                     d = decode_lane(Lane.D, bytes.fromhex(frame["d_word"]))
                     assembler.push_d_lane(parse_d_lane(d))
-                    for lane, key in ((Lane.P, "p_word"), (Lane.K, "k_word")):
-                        data_bytes = decode_lane(lane, bytes.fromhex(frame[key]))
+                    for lane, word in zip(FIELD_LANES, frame["field_words"]):
+                        data_bytes = decode_lane(lane, bytes.fromhex(word))
                         assembler.push_atoms(parse_atom_lane(lane, data_bytes))
                 completed = assembler.take_completed()
                 self.assertIsNotNone(completed)

@@ -3,11 +3,13 @@
 
 """Petal Stream: the Sakura-storm optical transport, in pure Python.
 
-A Petal frame is a square image whose data lives in three independent lanes:
-the light/dark polarity of 256 tiles shaped like the SORA ``天`` (lane ``P``),
-the katakana glyph drawn in each tile (lane ``K``) and the dots on three
-concentric rings (lane ``D``). Every lane is one Reed-Solomon codeword, so any
-lane that reads cleanly yields fountain-coded payload atoms.
+A Petal frame (format 2) is a square image whose data lives in five
+independent lanes: the dots on three concentric rings (lane ``D``), and a storm
+of 3,376 petals on concentric bands inside them, cut into four sectors (lanes
+``F0``-``F3``), each petal lit or dark. The petals inside the SORA ``天`` are
+drawn white and the others pink, over a faint ``天``. Every lane is one
+Reed-Solomon codeword, so any lane that reads cleanly yields fountain-coded
+payload atoms.
 
 Sender::
 
@@ -33,24 +35,25 @@ from .decode import (
     DecodeError,
     DecodeErrorKind,
     DecodeOptions,
+    FieldEvidence,
     LaneResult,
     decode_frame,
     decode_frame_at,
+    field_evidence,
+    merge_fields,
     observed_cells,
-    tile_match_error,
     track_frame,
 )
 from .fountain import FountainDecoder, encode_atom, mask_len, mask_words, mix32, split_payload
-from .glyphs import GLYPH_CHARS, GLYPH_COUNT, STROKES, TEMPLATES, generate_templates, is_inked
-from .image import Homography, Luma, Rgb
+from .image import Homography, Luma, Pose, Rgb
 from .lanes import (
     ATOM_LEN,
     D_DATA,
     D_WORD,
-    K_DATA,
-    K_WORD,
-    P_DATA,
-    P_WORD,
+    DECODE_ORDER,
+    FIELD_DATA,
+    FIELD_LANES,
+    FIELD_WORD,
     FrameCells,
     Lane,
     decode_lane,
@@ -58,28 +61,34 @@ from .lanes import (
     encode_lane,
 )
 from .layout import (
+    FIELD_CELLS,
     FINDER_CENTERS,
     MASK,
-    TILES,
+    SECTORS,
     SlotKind,
     SlotRole,
+    cell_angle,
+    cell_center,
+    cell_light,
     data_slots,
     finder_lit,
+    petal_lit,
+    sector_cells,
     slot_center,
     slot_roles,
     split_slot,
-    tile_center,
 )
 from .locate import Finder, FinderSet, locate, locate_candidates
 from .pngio import decode_png, encode_pgm, encode_png, image_to_luma, read_luma, write_image
 from .prng import Xorshift32
 from .render import (
+    BackdropCell,
     Circle,
     DrawList,
     FinderShape,
     Palette,
+    PetalShape,
     RenderOptions,
-    TileShape,
     draw_list,
     render_frame,
 )
@@ -95,6 +104,7 @@ from .stream import (
     Beacon,
     Completed,
     DLane,
+    LaneData,
     LaneHeader,
     Progress,
     StreamAssembler,
@@ -105,6 +115,7 @@ from .stream import (
     atoms_in_frame,
     first_atom_id,
     is_beacon_frame,
+    lane_first_id,
     parse_atom_lane,
     parse_d_lane,
 )
@@ -116,23 +127,21 @@ __all__ = [
     "BEACON_INTERVAL",
     "D_DATA",
     "D_WORD",
+    "DECODE_ORDER",
     "DEFAULT_MAX_PAYLOAD_LEN",
+    "FIELD_CELLS",
+    "FIELD_DATA",
+    "FIELD_LANES",
+    "FIELD_WORD",
     "FINDER_CENTERS",
     "FORMAT_VERSION",
-    "GLYPH_CHARS",
-    "GLYPH_COUNT",
-    "K_DATA",
-    "K_WORD",
     "MASK",
     "MAX_PAYLOAD_LEN",
-    "P_DATA",
-    "P_WORD",
-    "STROKES",
-    "TEMPLATES",
-    "TILES",
+    "SECTORS",
     "TRACK_WINDOW_MS",
     "AssemblerLimits",
     "AtomPacket",
+    "BackdropCell",
     "Beacon",
     "Circle",
     "Completed",
@@ -142,6 +151,7 @@ __all__ = [
     "DecodeOptions",
     "DecodedFrame",
     "DrawList",
+    "FieldEvidence",
     "Finder",
     "FinderSet",
     "FinderShape",
@@ -149,10 +159,13 @@ __all__ = [
     "FrameCells",
     "Homography",
     "Lane",
+    "LaneData",
     "LaneHeader",
     "LaneResult",
     "Luma",
     "Palette",
+    "PetalShape",
+    "Pose",
     "Progress",
     "ReedSolomon",
     "RenderOptions",
@@ -170,9 +183,11 @@ __all__ = [
     "StreamError",
     "StreamErrorKind",
     "StreamMeta",
-    "TileShape",
     "Xorshift32",
     "atoms_in_frame",
+    "cell_angle",
+    "cell_center",
+    "cell_light",
     "crc32c",
     "data_slots",
     "decode_frame",
@@ -185,28 +200,29 @@ __all__ = [
     "encode_lane",
     "encode_pgm",
     "encode_png",
+    "field_evidence",
     "finder_lit",
     "first_atom_id",
-    "generate_templates",
     "image_to_luma",
     "is_beacon_frame",
-    "is_inked",
+    "lane_first_id",
     "locate",
     "locate_candidates",
     "mask_len",
     "mask_words",
+    "merge_fields",
     "mix32",
     "observed_cells",
     "parse_atom_lane",
     "parse_d_lane",
+    "petal_lit",
     "read_luma",
     "render_frame",
+    "sector_cells",
     "slot_center",
     "slot_roles",
     "split_payload",
     "split_slot",
-    "tile_center",
-    "tile_match_error",
     "track_frame",
     "write_image",
 ]

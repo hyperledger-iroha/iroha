@@ -8,7 +8,7 @@ namespace Hyperledger.Iroha.Petal;
 /// </summary>
 /// <remarks>
 /// Frame output is bit-identical to the Rust reference encoder (pinned by
-/// <c>fixtures/petal/petal_stream_v1.json</c>). The frame counter wraps at
+/// <c>fixtures/petal/petal_stream_v2.json</c>). The frame counter wraps at
 /// 65536 on a beacon frame, so atom ids repeat cleanly.
 /// </remarks>
 public sealed class PetalStreamEncoder
@@ -51,13 +51,17 @@ public sealed class PetalStreamEncoder
 
     /// <summary>The data bytes of every lane of <paramref name="frame"/>.</summary>
     /// <param name="frame">Frame counter.</param>
-    /// <returns>Lane data for <c>P</c> (19 B), <c>K</c> (83 B) and <c>D</c> (19 B).</returns>
-    public (byte[] P, byte[] K, byte[] D) LaneData(ushort frame)
+    /// <returns>Lane data for <c>D</c> (19 B) and the four field lanes (83 B each).</returns>
+    public PetalLaneData LaneData(ushort frame)
     {
-        var p = NewLane(PetalLane.P, frame);
-        WriteAtoms(p, PetalStream.LaneFirstId(PetalLane.P, frame), PetalLanes.PAtoms);
-        var k = NewLane(PetalLane.K, frame);
-        WriteAtoms(k, PetalStream.LaneFirstId(PetalLane.K, frame), PetalLanes.KAtoms);
+        var fields = new byte[PetalLayout.Sectors][];
+        foreach (var lane in PetalLanes.Fields)
+        {
+            var data = NewLane(lane, frame);
+            WriteAtoms(data, PetalStream.LaneFirstId(lane, frame), PetalLanes.FieldAtoms);
+            fields[PetalLanes.Sector(lane)] = data;
+        }
+
         var d = NewLane(PetalLane.D, frame);
         if (PetalStream.IsBeaconFrame(frame))
         {
@@ -74,29 +78,25 @@ public sealed class PetalStreamEncoder
             WriteAtoms(d, PetalStream.LaneFirstId(PetalLane.D, frame), PetalLanes.DAtoms);
         }
 
-        return (p, k, d);
+        return new PetalLaneData(d, fields);
     }
 
     /// <summary>The transmitted (whitened Reed–Solomon) codewords of <paramref name="frame"/>.</summary>
     /// <param name="frame">Frame counter.</param>
-    /// <returns>Codewords for <c>P</c> (32 B), <c>K</c> (128 B) and <c>D</c> (30 B).</returns>
-    public (byte[] P, byte[] K, byte[] D) Words(ushort frame)
+    /// <returns>Codewords for <c>D</c> (30 B) and the four field lanes (105 B each).</returns>
+    public PetalLaneData Words(ushort frame)
     {
-        var (p, k, d) = LaneData(frame);
-        return (
-            PetalLanes.EncodeLane(PetalLane.P, p),
-            PetalLanes.EncodeLane(PetalLane.K, k),
-            PetalLanes.EncodeLane(PetalLane.D, d));
+        var data = LaneData(frame);
+        var fields = new byte[PetalLayout.Sectors][];
+        for (var sector = 0; sector < fields.Length; sector++)
+            fields[sector] = PetalLanes.EncodeLane(PetalLanes.Field(sector), data.Fields[sector]);
+        return new PetalLaneData(PetalLanes.EncodeLane(PetalLane.D, data.D), fields);
     }
 
     /// <summary>Every cell of <paramref name="frame"/>, ready to render.</summary>
     /// <param name="frame">Frame counter.</param>
     /// <returns>The frame cells.</returns>
-    public PetalFrameCells Cells(ushort frame)
-    {
-        var (p, k, d) = Words(frame);
-        return PetalFrameCells.FromWords(p, k, d);
-    }
+    public PetalFrameCells Cells(ushort frame) => PetalFrameCells.FromWords(Words(frame));
 
     private byte[] NewLane(PetalLane lane, ushort frame)
     {

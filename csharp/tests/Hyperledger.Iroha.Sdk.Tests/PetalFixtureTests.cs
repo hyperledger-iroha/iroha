@@ -5,7 +5,7 @@ namespace Hyperledger.Iroha.Sdk.Tests;
 
 /// <summary>
 /// Conformance against the shared golden vectors in
-/// <c>fixtures/petal/petal_stream_v1.json</c> (every section).
+/// <c>fixtures/petal/petal_stream_v2.json</c> (every section).
 /// </summary>
 public sealed class PetalFixtureTests
 {
@@ -14,21 +14,19 @@ public sealed class PetalFixtureTests
     [Fact]
     public void ConstantsMatch()
     {
-        Assert.Equal(1, PetalTestSupport.Number(Doc, "fixture_version"));
-        Assert.Equal("petal-stream-v1", Doc.GetProperty("format").GetString());
+        Assert.Equal(2, PetalTestSupport.Number(Doc, "fixture_version"));
+        Assert.Equal("petal-stream-v2", Doc.GetProperty("format").GetString());
         var constants = Doc.GetProperty("constants");
         Assert.Equal(PetalLayout.Canvas, constants.GetProperty("canvas").GetDouble());
-        Assert.Equal(PetalLayout.TileOrigin, constants.GetProperty("tile_origin").GetDouble());
-        Assert.Equal(PetalLayout.TilePitch, constants.GetProperty("tile_pitch").GetDouble());
-        Assert.Equal(PetalLayout.TileSize, constants.GetProperty("tile_size").GetDouble());
-        Assert.Equal(PetalLayout.DotRadius, constants.GetProperty("dot_radius").GetDouble());
         Assert.Equal(PetalLanes.AtomLength, PetalTestSupport.Number(constants, "atom_len"));
-        Assert.Equal(PetalLanes.PWordLength, PetalTestSupport.Number(constants, "p_word"));
-        Assert.Equal(PetalLanes.KWordLength, PetalTestSupport.Number(constants, "k_word"));
         Assert.Equal(PetalLanes.DWordLength, PetalTestSupport.Number(constants, "d_word"));
-        Assert.Equal(PetalLanes.PParityLength, PetalTestSupport.Number(constants, "p_parity"));
-        Assert.Equal(PetalLanes.KParityLength, PetalTestSupport.Number(constants, "k_parity"));
         Assert.Equal(PetalLanes.DParityLength, PetalTestSupport.Number(constants, "d_parity"));
+        Assert.Equal(PetalLanes.FieldWordLength, PetalTestSupport.Number(constants, "field_word"));
+        Assert.Equal(PetalLanes.FieldParityLength, PetalTestSupport.Number(constants, "field_parity"));
+        Assert.Equal(PetalLanes.FieldAtoms, PetalTestSupport.Number(constants, "field_atoms"));
+        Assert.Equal(PetalLayout.Sectors, PetalTestSupport.Number(constants, "sectors"));
+        Assert.Equal(PetalLanes.AtomsPerFrame, PetalTestSupport.Number(constants, "atoms_per_frame"));
+        Assert.Equal(PetalLayout.FieldCells, PetalTestSupport.Number(constants, "field_cells"));
         Assert.Equal(PetalStream.BeaconInterval, PetalTestSupport.Number(constants, "beacon_interval"));
         Assert.Equal(PetalStream.FormatVersion, PetalTestSupport.Number(constants, "format_version"));
     }
@@ -38,54 +36,54 @@ public sealed class PetalFixtureTests
     {
         var layout = Doc.GetProperty("layout");
         Assert.Equal(
-            layout.GetProperty("mask").EnumerateArray().Select(static row => row.GetString()!),
-            PetalLayout.Mask);
-        var expectedTiles = Enumerable.Range(0, PetalLayout.TileCount)
-            .SelectMany(static i =>
-            {
-                var (column, row) = PetalLayout.Tile(i);
-                return new long[] { column, row };
-            });
-        Assert.Equal(expectedTiles, PetalTestSupport.Numbers(layout, "tiles_col_row"));
-        Assert.Equal(PetalLayout.RingSlots.Select(static n => (long)n), PetalTestSupport.Numbers(layout, "ring_slots"));
-        Assert.Equal(PetalLayout.RingRadii, layout.GetProperty("ring_radii").EnumerateArray().Select(static v => v.GetDouble()));
-        Assert.Equal(
             PetalLayout.FinderCenters.SelectMany(static p => new[] { p.X, p.Y }),
             layout.GetProperty("finder_centers").EnumerateArray().Select(static v => v.GetDouble()));
+        Assert.Equal(PetalLayout.BandInner, layout.GetProperty("band_inner").GetDouble());
+        Assert.Equal(PetalLayout.BandSpacing, layout.GetProperty("band_spacing").GetDouble());
+        Assert.Equal(PetalLayout.BandSlots.Select(static n => (long)n), PetalTestSupport.Numbers(layout, "band_slots"));
+        // the petal dimensions are single precision in the reference, so they compare as floats
+        Assert.Equal(PetalLayout.PetalRadius, (float)layout.GetProperty("petal_radius").GetDouble());
+        Assert.Equal(PetalLayout.PetalHalfLength, (float)layout.GetProperty("petal_half_length").GetDouble());
+        Assert.Equal(PetalLayout.PetalHalfWidth, (float)layout.GetProperty("petal_half_width").GetDouble());
+        Assert.Equal(PetalLayout.PetalNotchRadius, (float)layout.GetProperty("petal_notch_radius").GetDouble());
+        Assert.Equal(PetalLayout.PetalNotchDistance, (float)layout.GetProperty("petal_notch_distance").GetDouble());
+        var sectors = layout.GetProperty("sector_cells").EnumerateArray().ToArray();
+        Assert.Equal(PetalLayout.Sectors, sectors.Length);
+        for (var sector = 0; sector < sectors.Length; sector++)
+        {
+            Assert.Equal(
+                PetalLayout.SectorCellOrder(sector).Select(static c => (long)c),
+                sectors[sector].EnumerateArray().Select(static v => v.GetInt64()));
+        }
+
+        Assert.Equal(
+            layout.GetProperty("mask").EnumerateArray().Select(static row => row.GetString()!),
+            PetalLayout.Mask);
+        Assert.Equal(PetalLayout.MaskOrigin, layout.GetProperty("mask_origin").GetDouble());
+        Assert.Equal(PetalLayout.MaskPitch, layout.GetProperty("mask_pitch").GetDouble());
+        Assert.Equal(PetalLayout.BackdropRadius, layout.GetProperty("backdrop_radius").GetDouble());
+        Assert.Equal(
+            PetalTestSupport.Flags(PetalTestSupport.Hex(layout, "light_cells_hex")),
+            Enumerable.Range(0, PetalLayout.FieldCells).Select(PetalLayout.CellLight));
+        Assert.Equal(PetalLayout.RingRadii, layout.GetProperty("ring_radii").EnumerateArray().Select(static v => v.GetDouble()));
+        Assert.Equal(PetalLayout.RingSlots.Select(static n => (long)n), PetalTestSupport.Numbers(layout, "ring_slots"));
+        Assert.Equal(PetalLayout.DotRadius, layout.GetProperty("dot_radius").GetDouble());
         Assert.Equal(PetalLayout.DataSlots().Select(static s => (long)s), PetalTestSupport.Numbers(layout, "data_slots"));
         Assert.Equal(PetalLayout.GateSlots.Select(static s => (long)s), PetalTestSupport.Numbers(layout, "gate_slots"));
         Assert.Equal(PetalLayout.GuardSlots.Select(static s => (long)s), PetalTestSupport.Numbers(layout, "guard_slots"));
     }
 
     [Fact]
-    public void GlyphAlphabetStrokesAndTemplatesMatch()
+    public void PaletteMatches()
     {
-        var glyphs = Doc.GetProperty("glyphs");
-        Assert.Equal(PetalGlyphs.Characters, glyphs.GetProperty("chars").GetString());
-        Assert.Equal(PetalGlyphs.StrokeWidth, glyphs.GetProperty("stroke_width").GetDouble(), 9);
-        var strokes = glyphs.GetProperty("strokes").EnumerateArray().ToArray();
-        Assert.Equal(PetalGlyphs.GlyphCount, strokes.Length);
-        for (var glyph = 0; glyph < PetalGlyphs.GlyphCount; glyph++)
+        var palette = Doc.GetProperty("palette");
+        PetalColor Colour(string key)
         {
-            var polylines = strokes[glyph].EnumerateArray().ToArray();
-            var ours = PetalGlyphs.Strokes(glyph);
-            Assert.Equal(polylines.Length, ours.Count);
-            for (var s = 0; s < polylines.Length; s++)
-            {
-                Assert.Equal(
-                    polylines[s].EnumerateArray().Select(static v => v.GetDouble()),
-                    ours[s].SelectMany(static p => new[] { p.X, p.Y }));
-            }
+            var rgb = PetalTestSupport.Numbers(palette, key);
+            return new PetalColor((byte)rgb[0], (byte)rgb[1], (byte)rgb[2]);
         }
 
-        var templates = glyphs.GetProperty("templates").EnumerateArray().ToArray();
-        Assert.Equal(PetalGlyphs.GlyphCount, templates.Length);
-        for (var glyph = 0; glyph < templates.Length; glyph++)
-        {
-            Assert.Equal(
-                templates[glyph].EnumerateArray().Select(static v => (byte)v.GetInt32()),
-                PetalGlyphs.Template(glyph).ToArray());
-        }
+        Assert.Equal(PetalPalette.Default, new PetalPalette(Colour("background"), Colour("light"), Colour("pink"), Colour("backdrop")));
     }
 
     [Fact]
@@ -112,9 +110,9 @@ public sealed class PetalFixtureTests
         }
 
         var whitening = Doc.GetProperty("whitening");
-        Assert.Equal(PetalTestSupport.Hex(whitening, "P"), PetalLanes.Whitening(PetalLane.P));
-        Assert.Equal(PetalTestSupport.Hex(whitening, "K"), PetalLanes.Whitening(PetalLane.K));
         Assert.Equal(PetalTestSupport.Hex(whitening, "D"), PetalLanes.Whitening(PetalLane.D));
+        for (var sector = 0; sector < PetalLayout.Sectors; sector++)
+            Assert.Equal(PetalTestSupport.Hex(whitening, $"F{sector}"), PetalLanes.Whitening(PetalLanes.Field(sector)));
     }
 
     [Fact]
@@ -159,7 +157,9 @@ public sealed class PetalFixtureTests
     [Fact]
     public void StreamsEncodeIdenticallyAndReassemble()
     {
-        foreach (var stream in Doc.GetProperty("streams").EnumerateArray())
+        var streams = Doc.GetProperty("streams").EnumerateArray().ToArray();
+        Assert.Equal(["tiny", "one-pass", "wrap"], streams.Select(static stream => stream.GetProperty("name").GetString()));
+        foreach (var stream in streams)
         {
             var name = stream.GetProperty("name").GetString()!;
             var payload = PetalTestSupport.Hex(stream, "payload_hex");
@@ -173,24 +173,27 @@ public sealed class PetalFixtureTests
             foreach (var frame in stream.GetProperty("frames").EnumerateArray())
             {
                 var number = (ushort)PetalTestSupport.Number(frame, "frame");
-                var (p, k, d) = encoder.LaneData(number);
-                Assert.True(PetalTestSupport.Hex(frame, "p_data").AsSpan().SequenceEqual(p), $"{name} frame {number} p");
-                Assert.True(PetalTestSupport.Hex(frame, "k_data").AsSpan().SequenceEqual(k), $"{name} frame {number} k");
-                Assert.True(PetalTestSupport.Hex(frame, "d_data").AsSpan().SequenceEqual(d), $"{name} frame {number} d");
-                var (pw, kw, dw) = (PetalTestSupport.Hex(frame, "p_word"), PetalTestSupport.Hex(frame, "k_word"), PetalTestSupport.Hex(frame, "d_word"));
-                Assert.Equal(pw, PetalLanes.EncodeLane(PetalLane.P, p));
-                Assert.Equal(kw, PetalLanes.EncodeLane(PetalLane.K, k));
-                Assert.Equal(dw, PetalLanes.EncodeLane(PetalLane.D, d));
-                var words = encoder.Words(number);
-                Assert.Equal(pw, words.P);
-                Assert.Equal(kw, words.K);
-                Assert.Equal(dw, words.D);
-                var cells = PetalFrameCells.FromWords(pw, kw, dw);
-                Assert.Equal(frame.GetProperty("glyphs").GetString(), string.Concat(cells.Glyph.Select(static g => g.ToString("x"))));
+                var lanes = encoder.LaneData(number);
+                Assert.True(PetalTestSupport.Hex(frame, "d_data").AsSpan().SequenceEqual(lanes.D), $"{name} frame {number} d");
+                var fieldData = PetalTestSupport.HexList(frame, "field_data");
+                Assert.Equal(PetalLayout.Sectors, fieldData.Length);
+                for (var sector = 0; sector < PetalLayout.Sectors; sector++)
+                    Assert.True(fieldData[sector].AsSpan().SequenceEqual(lanes.Fields[sector]), $"{name} frame {number} field {sector}");
+                var dWord = PetalTestSupport.Hex(frame, "d_word");
+                var fieldWords = PetalTestSupport.HexList(frame, "field_words");
+                Assert.Equal(dWord, PetalLanes.EncodeLane(PetalLane.D, lanes.D));
+                for (var sector = 0; sector < PetalLayout.Sectors; sector++)
+                    Assert.Equal(fieldWords[sector], PetalLanes.EncodeLane(PetalLanes.Field(sector), lanes.Fields[sector]));
+                Assert.Equal(new PetalLaneData(dWord, fieldWords), encoder.Words(number));
+                var cells = PetalFrameCells.FromWords(dWord, fieldWords);
                 Assert.Equal(
                     PetalTestSupport.Numbers(frame, "lit_dots"),
                     Enumerable.Range(0, cells.Dots.Length).Where(i => cells.Dots[i]).Select(static i => (long)i));
+                Assert.Equal(PetalTestSupport.Flags(PetalTestSupport.Hex(frame, "lit_petals_hex")), cells.Petals);
                 Assert.Equal(cells, encoder.Cells(number));
+                Assert.Equal(dWord, cells.DWord());
+                for (var sector = 0; sector < PetalLayout.Sectors; sector++)
+                    Assert.Equal(fieldWords[sector], cells.FieldWord(sector));
             }
 
             // push every fixture frame through lane decoding and the assembler
@@ -201,9 +204,11 @@ public sealed class PetalFixtureTests
                 {
                     Assert.True(PetalLanes.TryDecodeLane(PetalLane.D, PetalTestSupport.Hex(frame, "d_word"), [], out var d));
                     assembler.PushDLane(PetalStream.ParseDLane(d)!);
-                    foreach (var (lane, key) in new[] { (PetalLane.P, "p_word"), (PetalLane.K, "k_word") })
+                    var fieldWords = PetalTestSupport.HexList(frame, "field_words");
+                    for (var sector = 0; sector < PetalLayout.Sectors; sector++)
                     {
-                        Assert.True(PetalLanes.TryDecodeLane(lane, PetalTestSupport.Hex(frame, key), [], out var data));
+                        var lane = PetalLanes.Field(sector);
+                        Assert.True(PetalLanes.TryDecodeLane(lane, fieldWords[sector], [], out var data));
                         assembler.PushAtoms(PetalStream.ParseAtomLane(lane, data)!);
                     }
                 }
@@ -223,10 +228,11 @@ public sealed class PetalFixtureTests
             var frame = stream.GetProperty("frames").EnumerateArray().Last();
             var number = (ushort)PetalTestSupport.Number(frame, "frame");
             var result = PetalDecoder.Decode(PetalTestSupport.RenderLuma(encoder, number, 512, 2));
-            Assert.True(result.Success);
-            Assert.Equal(PetalTestSupport.Hex(frame, "p_data"), result.Frame.P?.Data);
-            Assert.Equal(PetalTestSupport.Hex(frame, "k_data"), result.Frame.K?.Data);
-            Assert.Equal(PetalTestSupport.Hex(frame, "d_data"), result.Frame.D?.Data);
+            Assert.True(result.Success, result.Error.ToString());
+            PetalTestSupport.AssertAllLanes(
+                result.Frame,
+                new PetalLaneData(PetalTestSupport.Hex(frame, "d_data"), PetalTestSupport.HexList(frame, "field_data")),
+                stream.GetProperty("name").GetString()!);
         }
     }
 }

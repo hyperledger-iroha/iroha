@@ -1,12 +1,14 @@
 # Copyright 2026 Hyperledger Iroha Contributors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Frame decoding on rendered frames, transformed frames and garbage images, hidden
-corner blossoms, the ``天`` ranking and tracking."""
+"""Frame decoding on rendered frames, transformed frames and garbage images: the field
+read (two-means thresholds, local read, lens-distortion search), hidden corner blossoms,
+tracking and the Reed-Solomon erasure schedule."""
 
 from __future__ import annotations
 
 import dataclasses
+import math
 import unittest
 from unittest import mock
 
@@ -17,66 +19,65 @@ from petal_test_support import (
     rotate90,
     rotate180,
     rotate270,
-    tile_lanes,
 )
 
 from iroha_petal import (
     D_DATA,
-    D_WORD,
+    FIELD_CELLS,
+    FIELD_DATA,
+    FIELD_LANES,
     FINDER_CENTERS,
-    K_DATA,
-    P_DATA,
-    P_WORD,
     Beacon,
     DecodeError,
     DecodeErrorKind,
     DecodeOptions,
+    FieldEvidence,
     Finder,
-    FrameCells,
     Homography,
     Lane,
     Luma,
-    RenderOptions,
+    Pose,
     RsError,
     RsErrorKind,
     StreamAssembler,
     Xorshift32,
+    cell_center,
+    cell_light,
     decode_frame,
     decode_frame_at,
     encode_lane,
+    field_evidence,
     locate,
+    merge_fields,
     observed_cells,
-    render_frame,
-    tile_center,
-    tile_match_error,
+    sector_cells,
     track_frame,
 )
 from iroha_petal._numeric import round_half_away
 from iroha_petal.decode import (
-    _EMPTY_CELLS,
-    _build_patterns,
+    _DISTORTION_STEPS,
+    _NOT_SKIPPED,
+    _PETAL_SPREAD,
     _canonical_corner,
-    _classify,
     _decode_with_erasures,
-    _hypotheses,
-    _mask_score,
-    _patch_levels,
+    _field_levels,
+    _fit_pose,
+    _local_levels,
+    _neighbourhoods,
     _projector,
-    _read_tile_lanes,
-    _read_tiles,
-    _read_tiles_normalised,
+    _read_field_at,
+    _read_sectors,
     _reference_levels,
     _refine_inferred_corner,
-    _rescale,
-    _rescaled_patterns,
     _ring_brightness,
-    _sample_patches,
+    _two_means,
 )
+from iroha_petal.layout import BAND_OFFSETS, cell_band_slot
 
 KIND = 2
 
 #: The words the reference accepts in its scan of 40 000 random words per lane (trial number:
-#: erasures, rewritten bytes, data): three of lane D, none of lane P.
+#: erasures, rewritten bytes, data): three of lane D, none of a field lane.
 SCAN_ACCEPTED_D = {
     9827: (5, 8, "c0300c3dfecddbccf0a64620e94c3fd1828690"),
     12427: (5, 8, "1e2795eb69f8b6bf6dd8da502f87aec4998df8"),
@@ -93,21 +94,10 @@ def lane_data(frame: int):
     return encoder(decode_test_payload(), KIND).lane_data(frame)
 
 
-def render_homography() -> Homography:
-    """The exact canvas-to-pixel homography of the 768-pixel test renders."""
-    canonical = [(float(x), float(y)) for x, y in FINDER_CENTERS]
+def render_pose() -> Pose:
+    """The exact canvas-to-pixel pose of the 768-pixel test renders."""
     scale = 768.0 / 1024.0
-    pixels = [(x * scale, y * scale) for x, y in canonical]
-    homography = Homography.from_points(canonical, pixels)
-    assert homography is not None
-    return homography
-
-
-def clean_patches(frame: int):
-    """A clean 768-pixel render with the exact canvas-to-pixel homography and its raw patches."""
-    luma = setup(frame)
-    h = render_homography()
-    return luma, h, _sample_patches(_projector(luma, h))
+    return Pose.plain(Homography((scale, 0.0, 0.0, 0.0, scale, 0.0, 0.0, 0.0, 1.0)))
 
 
 def hidden_blossom(frame: int, corner: int) -> Luma:
@@ -164,14 +154,44 @@ def padded(image: Luma, pad: int) -> Luma:
     return Luma(width, image.height + 2 * pad, b"".join(rows))
 
 
-def distort(patches):
-    """Gives every tile its own gain and offset, as under glare, shadows and saturation."""
-    distorted = []
-    for tile, raw in enumerate(patches):
-        gain = 0.35 + 0.65 * ((tile * 37 % 101) / 100.0)
-        offset = 5.0 + float(tile * 53 % 61)
-        distorted.append([gain * value + offset for value in raw])
-    return distorted
+def barrel(image: Luma, k: float) -> Luma:
+    """The image warped by barrel distortion about its centre, as a cheap lens does: pixel
+    ``p`` shows what an undistorted camera saw at ``c + (p - c) / (1 + k r^2 / s^2)``."""
+    w, h = image.width, image.height
+    cx, cy = w / 2.0, h / 2.0
+    side = 0.8 * float(max(w, h))
+    scale2 = side * side
+    out = bytearray(w * h)
+    sample = image.sample
+    for y in range(h):
+        dy = y + 0.5 - cy
+        for x in range(w):
+            dx = x + 0.5 - cx
+            # invert p_d = c + u (1 + k |u|^2/s^2) for the undistorted offset u
+            ux, uy = dx, dy
+            for _ in range(8):
+                f = 1.0 + k * (ux * ux + uy * uy) / scale2
+                ux = dx / f
+                uy = dy / f
+            out[y * w + x] = int(round_half_away(sample(cx + ux, cy + uy)))
+    return Luma(w, h, bytes(out))
+
+
+def shadow_band(image: Luma, factor: float, first: int, last: int) -> Luma:
+    """The image with the columns ``first * width / 100 .. last * width / 100`` dimmed to
+    ``factor`` of their level (a shadow band across the code)."""
+    width = image.width
+    dim = bytes(int(round_half_away(float(v) * factor)) for v in range(256))
+    rows = []
+    lo, hi = width * first // 100, width * last // 100
+    for row in range(image.height):
+        line = bytes(image.data[row * width : (row + 1) * width])
+        rows.append(line[:lo] + line[lo:hi].translate(dim) + line[hi:])
+    return Luma(width, image.height, b"".join(rows))
+
+
+def field_letters(fields) -> str:
+    return "".join(str(s) for s, result in enumerate(fields) if result is not None)
 
 
 class DecodeTest(unittest.TestCase):
@@ -180,19 +200,29 @@ class DecodeTest(unittest.TestCase):
             decode_frame(image, options)
         self.assertIs(caught.exception.kind, kind)
 
+    def assert_all_lanes(self, decoded, truth, name: str) -> None:
+        self.assertEqual(decoded.d.data if decoded.d else None, truth.d, f"{name}: lane D")
+        for sector, (result, expected) in enumerate(zip(decoded.fields, truth.fields)):
+            self.assertEqual(
+                result.data if result else None, expected, f"{name}: field lane {sector}"
+            )
+
     def test_clean_render_decodes_every_lane(self) -> None:
         decoded = decode_frame(setup(5))
-        p, k, d = lane_data(5)
-        self.assertEqual(decoded.p.data, p)
-        self.assertEqual(decoded.k.data, k)
-        self.assertEqual(decoded.d.data, d)
+        self.assert_all_lanes(decoded, lane_data(5), "clean")
         self.assertEqual((decoded.rotation, decoded.mirrored), (0, False))
-        self.assertEqual((decoded.lanes, decoded.lanes_ok), ("PKD", 3))
-        self.assertEqual((decoded.p.erasures, decoded.p.corrected), (0, 0))
+        self.assertEqual((decoded.lanes, decoded.lanes_ok), ("D0123", 5))
+        # a clean render needs no lens distortion (exactly zero, not merely small)
+        self.assertEqual(math.copysign(1.0, decoded.pose.distortion), 1.0)
+        self.assertEqual(decoded.pose.distortion, 0.0)
+        for result in decoded.fields:
+            self.assertEqual((result.erasures, result.corrected), (0, 0))
+        self.assertEqual(decoded.lane(Lane.F2), decoded.fields[2])
+        self.assertIs(decoded.lane(Lane.D), decoded.d)
 
     def test_rotated_and_mirrored_renders_decode_with_the_right_orientation(self) -> None:
         image = setup(7)
-        p, _, d = lane_data(7)
+        truth = lane_data(7)
         cases = (
             ("rot90", rotate90(image), 1, False),
             ("rot180", rotate180(image), 2, False),
@@ -205,51 +235,49 @@ class DecodeTest(unittest.TestCase):
             decoded = decode_frame(transformed)
             self.assertEqual(decoded.mirrored, mirrored, name)
             self.assertEqual(decoded.rotation, rotation, f"{name} rotation")
-            self.assertEqual(decoded.d.data, d, f"{name} lane D")
-            self.assertEqual(decoded.p.data, p, f"{name} lane P")
+            self.assert_all_lanes(decoded, truth, name)
         with self.assertRaises(DecodeError) as caught:
             decode_frame(image.mirrored(), DecodeOptions(try_mirrored=False))
         self.assertIs(caught.exception.kind, DecodeErrorKind.NO_ORIENTATION)
 
-    def test_lane_k_alone_is_enough_to_accept_an_orientation(self) -> None:
-        stream = encoder(decode_test_payload(), KIND)
-        _, k_word, _ = stream.words(5)
-        # lanes P and D are junk (not codewords); only the katakana lane carries data
-        rng = Xorshift32(7)
-        junk_p = bytes(rng.next_byte() for _ in range(P_WORD))
-        junk_d = bytes(rng.next_byte() for _ in range(D_WORD))
-        cells = FrameCells.from_words(junk_p, k_word, junk_d)
-        image = render_frame(cells, RenderOptions(size=768, supersample=2)).to_luma()
-        decoded = decode_frame(image)
-        self.assertEqual(decoded.lanes, "K")
-        self.assertEqual(decoded.k.data, stream.lane_data(5)[1])
-        self.assertEqual((decoded.rotation, decoded.mirrored), (0, False))
+    def test_the_field_alone_tells_the_orientation_when_the_rings_are_gone(self) -> None:
+        # black out the ring band: no gates, no lane D; a wrong quarter turn reads permuted
+        # petals that no field codeword accepts
+        luma = setup(9)
+        n = luma.width
+        scale = n / 1024.0
+        data = bytearray(luma.data)
+        for y in range(n):
+            dy = (y + 0.5) / scale - 512.0
+            for x in range(n):
+                dx = (x + 0.5) / scale - 512.0
+                if 392.0 <= math.sqrt(dx * dx + dy * dy) <= 490.0:
+                    data[y * n + x] = 0
+        # the reference's rotation: out(x, y) = in(y, n - 1 - x)
+        rotated = rotate90(Luma(n, n, bytes(data)))
+        decoded = decode_frame(rotated)
+        self.assertIsNone(decoded.d)
+        self.assertEqual(decoded.rotation, 1)
+        for result, expected in zip(decoded.fields, lane_data(9).fields):
+            self.assertEqual(result.data if result else None, expected)
 
     def test_corrected_counts_rewritten_bytes_not_just_erasures(self) -> None:
-        data = bytes(range(P_DATA))
-        word = bytearray(encode_lane(Lane.P, data))
-        for position in (2, 11, 30):
+        data = bytes(range(FIELD_DATA))
+        lane = Lane.F1
+        word = bytearray(encode_lane(lane, data))
+        for position in (2, 11, 30, 77):
             word[position] ^= 0x5A
-        result = _decode_with_erasures(Lane.P, bytes(word), [1.0] * len(word))
-        self.assertIsNotNone(result, "three errors fit")
+        result = _decode_with_erasures(lane, bytes(word), [1.0] * len(word))
+        self.assertIsNotNone(result, "four errors fit")
         self.assertEqual(result.data, data)
-        self.assertEqual((result.erasures, result.corrected), (0, 3))
+        self.assertEqual((result.erasures, result.corrected), (0, 4))
         # with the damaged bytes flagged as least confident, they become erasures
         flagged = [1.0] * len(word)
-        for position in (2, 11, 30):
+        for position in (2, 11, 30, 77):
             flagged[position] = 0.0
-        result = _decode_with_erasures(Lane.P, bytes(word), flagged)
+        result = _decode_with_erasures(lane, bytes(word), flagged)
         self.assertEqual(result.data, data)
-        self.assertGreaterEqual(result.corrected, 3)
-        # too much damage for the zero-erasure attempt: the least confident bytes
-        # become erasures and still count as rewritten
-        for position in (4, 5, 6, 7):
-            word[position] ^= 0x33
-            flagged[position] = 0.0
-        result = _decode_with_erasures(Lane.P, bytes(word), flagged)
-        self.assertEqual(result.data, data)
-        self.assertGreater(result.erasures, 0)
-        self.assertGreaterEqual(result.corrected, 7)
+        self.assertGreaterEqual(result.corrected, 4)
 
     def test_blank_frames_report_no_finders(self) -> None:
         self.assert_error(Luma(320, 240), DecodeErrorKind.NO_FINDERS)
@@ -263,14 +291,21 @@ class DecodeTest(unittest.TestCase):
         broken = Luma(100, 100)
         broken.data = bytes(5)
         self.assert_error(broken, unsupported)
+        identity = Pose.plain(Homography.IDENTITY)
+        self.assertIsNone(decode_frame_at(Luma(8, 8), identity))
         # a buffer that does not match the stated size must not reach the sampler
-        self.assertIsNone(decode_frame_at(broken, Homography.IDENTITY))
+        self.assertIsNone(decode_frame_at(broken, identity))
         decoded = decode_frame(setup(5))
         self.assertIsNone(observed_cells(broken, decoded))
-        self.assertIsNone(tile_match_error(broken, decoded))
-        huge = Luma(5_000, 3_000)
-        self.assert_error(huge, unsupported)
-        self.assertIsNone(decode_frame_at(Luma(8, 8), Homography.IDENTITY))
+        self.assertIsNone(field_evidence(broken, decoded))
+        self.assert_error(Luma(5_000, 3_000), unsupported)
+
+    def test_observed_cells_match_the_drawn_cells_of_a_clean_render(self) -> None:
+        image = setup(3)
+        decoded = decode_frame(image)
+        self.assertEqual(
+            observed_cells(image, decoded), encoder(decode_test_payload(), KIND).cells(3)
+        )
 
     def test_garbage_images_never_crash_or_decode(self) -> None:
         rng = Xorshift32(99)
@@ -300,7 +335,7 @@ class DecodeTest(unittest.TestCase):
 
     def test_random_blob_scenes_never_crash(self) -> None:
         # Scenes with several random bright ellipses (some finder-sized) on noise:
-        # exercises the locator, quad selection and homography on degenerate layouts.
+        # exercises the locator, quad selection and pose fitting on degenerate layouts.
         rng = Xorshift32(2024)
         for scene in range(60):
             w = 160 + rng.next_u32() % 400
@@ -326,34 +361,32 @@ class DecodeTest(unittest.TestCase):
             self.assertEqual(frame.lanes_ok, 0, f"scene {scene} produced lane data from blobs")
 
     def test_a_large_hidden_region_never_reads_wrong_data(self) -> None:
-        # the whole bottom-right quarter is gone: rings and tiles with it
+        # the whole bottom-right quarter is gone: rings and petals with it
         image = setup(2)
         n = image.width
         data = bytearray(image.data)
         for y in range(n * 3 // 4, n):
             data[y * n + n * 3 // 4 : y * n + n] = bytes(n - n * 3 // 4)
-        p, k, d = lane_data(2)
+        truth = lane_data(2)
         try:
             frame = decode_frame(Luma(n, n, bytes(data)))
         except DecodeError:
             return
-        for lane, truth in ((frame.p, p), (frame.k, k), (frame.d, d)):
-            if lane is not None:
-                self.assertEqual(lane.data, truth)
+        for lane in Lane:
+            result = frame.lane(lane)
+            if result is not None:
+                self.assertEqual(result.data, truth.lane(lane), lane)
 
     def test_known_pose_decoding_reads_every_lane(self) -> None:
         image = setup(4)
-        scale = image.width / 1024.0
-        pose = Homography((scale, 0.0, 0.0, 0.0, scale, 0.0, 0.0, 0.0, 1.0))
-        decoded = decode_frame_at(image, pose)
+        decoded = decode_frame_at(image, render_pose())
         self.assertIsNotNone(decoded)
-        self.assertEqual(decoded.lanes, "PKD")
-        p, k, d = lane_data(4)
-        self.assertEqual((decoded.p.data, decoded.k.data, decoded.d.data), (p, k, d))
+        self.assertEqual(decoded.lanes, "D0123")
+        self.assert_all_lanes(decoded, lane_data(4), "known pose")
         beacon = decoded.beacon()
         self.assertIsInstance(beacon, Beacon)
         self.assertEqual(beacon.meta, encoder(decode_test_payload(), KIND).meta)
-        self.assertIsNone(decode_frame_at(Luma(320, 240), pose), "weak reference levels")
+        self.assertIsNone(decode_frame_at(Luma(320, 240), render_pose()), "weak reference levels")
 
     def test_frames_feed_an_assembler(self) -> None:
         stream = encoder(decode_test_payload(), KIND)
@@ -361,7 +394,7 @@ class DecodeTest(unittest.TestCase):
         for frame in range(stream.systematic_frames()):
             decoded = decode_frame(setup(frame))
             packets = decoded.atom_packets()
-            self.assertEqual(sum(len(p.atoms) for p in packets), 6 if frame % 4 == 0 else 7)
+            self.assertEqual(sum(len(p.atoms) for p in packets), 20 if frame % 4 == 0 else 21)
             decoded.feed(assembler)
         completed = assembler.take_completed()
         self.assertIsNotNone(completed)
@@ -370,38 +403,30 @@ class DecodeTest(unittest.TestCase):
     def test_max_side_downscales_large_inputs_and_keeps_pixel_coordinates(self) -> None:
         image = rendered(decode_test_payload(), KIND, 5, 1024, 1).to_luma()
         decoded = decode_frame(image, max_side=512)
-        self.assertEqual(decoded.lanes, "PKD")
+        self.assertEqual(decoded.lanes, "D0123")
         for canvas in ((512.0, 512.0), (72.0, 72.0), (952.0, 952.0)):
-            x, y = decoded.homography.apply(*canvas)
+            x, y = decoded.pose.apply(*canvas)
             self.assertLess(abs(x - canvas[0]), 2.0)
             self.assertLess(abs(y - canvas[1]), 2.0)
         with self.assertRaises(ValueError):
             decode_frame(image, max_side=10)
-
-    def test_diagnostics_report_the_cells_seen(self) -> None:
-        image = setup(5)
-        decoded = decode_frame(image)
-        cells = observed_cells(image, decoded)
-        self.assertEqual(cells, encoder(decode_test_payload(), KIND).cells(5))
-        error = tile_match_error(image, decoded)
-        self.assertGreaterEqual(error, 0.0)
-        self.assertLess(error, 0.5)
 
 
 class ErasureScheduleTest(unittest.TestCase):
     """How many erasures each lane's Reed-Solomon decoding is allowed to try."""
 
     def test_random_words_are_almost_never_accepted(self) -> None:
-        # Reed-Solomon with erasures can accept a word that is not a transmission. Lane D has only
-        # 11 parity bytes, so its schedule stops at five erasures (at seven it let through about
-        # one random word in 250) and lane P stops at six. The reference scans 40 000 xorshift32
-        # words per lane (lane D, then lane P from the same generator), each followed by one
-        # byte-valued confidence per position, and accepts exactly SCAN_ACCEPTED_D and no word of
-        # lane P. Both full scans take about 40 s here and the port reproduces them exactly; this
-        # runs the first 12 500 words of lane D and the first 2 000 of lane P.
+        # Reed-Solomon with erasures can accept a word that is not a transmission. Lane D has
+        # only 11 parity bytes, so its schedule stops at five erasures; a field lane has 22 and
+        # stops at eleven. The reference scans 40 000 xorshift32 words per lane (lane D, then
+        # field lane 0 from the same generator), each followed by one byte-valued confidence per
+        # position (many ties, so the ranking must be stable), and accepts exactly
+        # SCAN_ACCEPTED_D and no word of the field lane. The full scans take a few minutes in
+        # CPython and this port reproduces them exactly; this runs the first 10 000 words of
+        # lane D and the first 1 000 of the field lane.
         scan = 40_000
         rng = Xorshift32(0x5EED)
-        for lane, run in ((Lane.D, 12_500), (Lane.P, 2_000)):
+        for lane, run in ((Lane.D, 10_000), (Lane.F0, 1_000)):
             length = lane.word_len
             accepted = {}
             for trial in range(run):
@@ -412,18 +437,17 @@ class ErasureScheduleTest(unittest.TestCase):
                     accepted[trial] = (result.erasures, result.corrected, result.data.hex())
             if lane is Lane.D:
                 expected = {t: v for t, v in SCAN_ACCEPTED_D.items() if t < run}
-                # leave the generator where the reference's scan of lane P starts
+                # leave the generator where the reference's scan of the field lane starts
                 for _ in range((scan - run) * 2 * length):
                     rng.next_u32()
             else:
                 expected = {}
             self.assertEqual(accepted, expected, f"lane {lane.name} of {run} random words")
 
-    def test_only_lane_k_uses_two_thirds_of_its_parity_as_erasures(self) -> None:
-        # damaged bytes: `flagged` of them marked least confident, two more hidden. With the extra
-        # erasure step of the old schedule the decoder would repair them (2*2 + flagged parity
-        # bytes); the capped schedule must refuse instead of risking a wrong codeword.
-        for lane, flagged in ((Lane.D, 7), (Lane.P, 8)):
+    def test_erasures_stop_at_half_the_parity(self) -> None:
+        # damaged bytes: `flagged` of them marked least confident, two more hidden: beyond half
+        # the parity the decoder must refuse instead of risking a wrong codeword
+        for lane, flagged in ((Lane.D, 7), (Lane.F2, 16)):
             data = bytes(range(lane.data_len))
             word = encode_lane(lane, data)
             damaged = bytearray(word)
@@ -433,40 +457,26 @@ class ErasureScheduleTest(unittest.TestCase):
                 confidence[position] = 0.0
             damaged[20] ^= 0x3C
             damaged[21] ^= 0x3C
-            result = _decode_with_erasures(lane, bytes(damaged), confidence)
-            self.assertIsNone(result, f"lane {lane.name}")
+            self.assertIsNone(
+                _decode_with_erasures(lane, bytes(damaged), confidence), f"lane {lane.name}"
+            )
             # half the parity flagged plus one hidden error stays comfortably repairable
             damaged = bytearray(word)
             confidence = [1.0] * len(damaged)
             for position in range(lane.parity_len // 2):
                 damaged[position] ^= 0xA5
                 confidence[position] = 0.0
-            damaged[20] ^= 0x3C
+            damaged[24] ^= 0x3C
             result = _decode_with_erasures(lane, bytes(damaged), confidence)
             self.assertIsNotNone(result, f"lane {lane.name} repairable")
             self.assertEqual(result.data, data, f"lane {lane.name}")
             self.assertLessEqual(result.erasures, lane.parity_len // 2, f"lane {lane.name}")
-        # lane K keeps the two-thirds step: 30 flagged bytes plus 7 hidden errors need it
-        # (2*7 + 30 = 44 of 45 parity bytes)
-        data = bytes(range(K_DATA))
-        damaged = bytearray(encode_lane(Lane.K, data))
-        confidence = [1.0] * len(damaged)
-        for position in range(30):
-            damaged[position] ^= 0xA5
-            confidence[position] = 0.0
-        for position in range(60, 67):
-            damaged[position] ^= 0x3C
-        result = _decode_with_erasures(Lane.K, bytes(damaged), confidence)
-        self.assertIsNotNone(result, "30 erasures")
-        self.assertEqual((result.data, result.erasures), (data, 30))
 
     def test_each_lane_tries_its_own_erasure_counts(self) -> None:
-        # integer eighths, quarters, thirds and halves of the parity; two thirds only for K
-        expected = {
-            Lane.D: [0, 1, 2, 3, 5],
-            Lane.P: [0, 1, 3, 4, 6],
-            Lane.K: [0, 5, 11, 15, 22, 30],
-        }
+        # integer eighths, quarters, thirds and halves of the parity
+        expected = {Lane.D: [0, 1, 2, 3, 5]}
+        for lane in FIELD_LANES:
+            expected[lane] = [0, 2, 5, 7, 11]
         for lane, counts in expected.items():
             tried = []
 
@@ -480,11 +490,9 @@ class ErasureScheduleTest(unittest.TestCase):
             self.assertEqual(tried, counts, f"lane {lane.name}")
 
     def test_equal_confidences_are_erased_in_position_order(self) -> None:
-        # Every tile the normalised read erases has confidence exactly 0, so ties are the rule, and
-        # the ranking must be stable or ports disagree about which bytes are erased. Three damaged
-        # bytes at the front plus four hidden ones fit lane D only if exactly the first three
-        # positions are erased (3 erasures + 4 errors = all 11 parity bytes): a step that erased
-        # the last positions instead would see seven errors.
+        # Ties must be broken by position or ports disagree about which bytes are erased.
+        # Three damaged bytes at the front plus four hidden ones fit lane D only if exactly the
+        # first three positions are erased (3 erasures + 4 errors = all 11 parity bytes).
         data = bytes(range(D_DATA))
         word = bytearray(encode_lane(Lane.D, data))
         for position in (0, 1, 2, 20, 21, 22, 23):
@@ -495,231 +503,252 @@ class ErasureScheduleTest(unittest.TestCase):
         self.assertEqual((result.data, result.erasures, result.corrected), (data, 3, 7))
 
 
-class TileReadTest(unittest.TestCase):
-    """The level read and the normalised read of the tile lanes."""
+class FieldReadTest(unittest.TestCase):
+    """The field read: levels, two-means thresholds, the local read and the distortion
+    search."""
 
-    def test_sampled_patches_are_the_mean_of_four_bilinear_samples_per_cell(self) -> None:
-        # an arbitrary but deterministic texture, so that no two samples coincide
-        side = 256
-        image = Luma(
-            side,
-            side,
-            bytes((x * 7 + y * 13 + x * y % 11) % 256 for y in range(side) for x in range(side)),
-        )
-        scale = side / 1024.0
-        pose = Homography((scale, 0.01, 1.5, -0.01, scale, 2.5, 1e-5, 2e-5, 1.0))
-        patches = _sample_patches(_projector(image, pose))
-        self.assertEqual((len(patches), {len(p) for p in patches}), (256, {64}))
-        cell = 23.0 / 8.0
-        for tile in (0, 37, 128, 255):
-            cx, cy = tile_center(tile)
-            for v in range(8):
-                for u in range(8):
-                    gx = cx - 23.0 / 2.0 + (u + 0.5) * cell
-                    gy = cy - 23.0 / 2.0 + (v + 0.5) * cell
-                    total = 0.0
-                    for ox, oy in ((-0.25, -0.25), (0.25, -0.25), (-0.25, 0.25), (0.25, 0.25)):
-                        px, py = pose.apply(gx + ox * cell, gy + oy * cell)
-                        total += image.sample(px, py)
-                    self.assertEqual(patches[tile][v * 8 + u], total / 4.0, (tile, v, u))
-
-    def test_level_and_normalised_reads_agree_on_a_clean_render(self) -> None:
-        luma, h, patches = clean_patches(5)
-        p_data, k_data, _ = lane_data(5)
-        sigmas = DecodeOptions().template_sigmas
-        reference = _reference_levels(_projector(luma, h))
-        self.assertIsNotNone(reference)
-        for name, reads in (
-            ("level", _read_tiles(patches, reference, sigmas)),
-            ("normalised", _read_tiles_normalised(patches, sigmas)),
-        ):
-            p, k = tile_lanes(reads)
-            self.assertIsNotNone(p, f"{name}: lane P")
-            self.assertIsNotNone(k, f"{name}: lane K")
-            self.assertEqual((p.data, p.corrected), (p_data, 0), name)
-            self.assertEqual((k.data, k.corrected), (k_data, 0), name)
-
-    def test_normalised_read_cancels_gain_and_offset_per_tile(self) -> None:
-        luma, h, patches = clean_patches(5)
-        p_data, k_data, _ = lane_data(5)
-        sigmas = DecodeOptions().template_sigmas
-        distorted = distort(patches)
-        reference = _reference_levels(_projector(luma, h))
-        self.assertIsNotNone(reference)
-        p, _ = tile_lanes(_read_tiles(distorted, reference, sigmas))
-        self.assertIsNone(
-            p, "the level read must not survive this distortion, or the test proves nothing"
-        )
-        p, k = tile_lanes(_read_tiles_normalised(distorted, sigmas))
-        self.assertIsNotNone(p, "lane P")
-        self.assertIsNotNone(k, "lane K")
-        self.assertEqual((p.data, k.data), (p_data, k_data))
-
-    def test_normalised_read_erases_tiles_that_lost_their_contrast(self) -> None:
-        _, _, patches = clean_patches(5)
-        patches[5] = [100.0] * 64
-        patches[9] = [30.0] * 64
-        reads = _read_tiles_normalised(patches, DecodeOptions().template_sigmas)
-        for tile in (5, 9):
-            self.assertLess(abs(reads[tile].polarity_margin), 1e-12, f"tile {tile}")
-            self.assertLess(abs(reads[tile].glyph_margin), 1e-12, f"tile {tile}")
-        self.assertGreater(reads[6].polarity_margin, 0.0)
-        self.assertGreater(reads[6].glyph_margin, 0.0)
-
-    def test_normalised_read_does_not_amplify_contrast_below_one_level(self) -> None:
-        _, _, patches = clean_patches(5)
-        sigmas = DecodeOptions().template_sigmas
-        sharp = _read_tiles_normalised(patches, sigmas)[6]
-        # the same tile squeezed into a total contrast of 0.3 luma levels: the span floor of
-        # one level stops it from being stretched back into a perfect match
-        low, high = _patch_levels(patches[6])
-        patches[6] = [100.0 + 0.3 * (value - low) / (high - low) for value in patches[6]]
-        faint = _read_tiles_normalised(patches, sigmas)[6]
-        self.assertLess(sharp.error, 0.5)
-        self.assertGreater(faint.error, 5.0)
-        self.assertEqual((faint.polarity_margin, faint.glyph_margin), (0.0, 0.0))
-
-    def test_patch_levels_ignore_the_extreme_cells(self) -> None:
-        values = [10.0] * 64
-        for i in range(32):
-            values[i] = 200.0 + float(i % 3)
-        values[0] = 255.0  # one hot cell
-        values[63] = 0.0  # one dead cell
-        low, high = _patch_levels(values)
-        self.assertLess(abs(low - 10.0), 1e-12)
-        self.assertTrue(200.0 <= high <= 202.0)
-        scaled = _rescale(values, 1.0)
-        self.assertTrue(all(-0.25 <= v <= 1.25 for v in scaled))
-        # a flat patch stays flat instead of dividing by nothing
-        self.assertTrue(all(abs(v) < 1e-12 for v in _rescale([7.0] * 64, 1.0)))
-
-    def test_patch_levels_pick_the_sixth_and_fifty_seventh_sorted_cell(self) -> None:
-        self.assertEqual(_patch_levels([float(i) for i in range(64)]), (6.0, 57.0))
-        # the order of the cells does not matter, only their ranks
-        shuffled = [float(i * 17 % 64) for i in range(64)]
-        self.assertEqual(sorted(shuffled), [float(i) for i in range(64)])
-        self.assertEqual(_patch_levels(shuffled), (6.0, 57.0))
-
-    def test_patch_levels_rank_nan_cells_last_like_total_cmp(self) -> None:
+    def test_two_means_splits_two_clusters_and_survives_one(self) -> None:
+        values = [0.05] * 40 + [0.9] * 60
+        threshold = _two_means(values)
+        self.assertTrue(0.3 < threshold < 0.6, threshold)
+        self.assertLess(abs(_two_means([0.4] * 10) - 0.4), 1e-12)
+        self.assertEqual(_two_means([0.0] * 3 + [1.0]), 0.5)
         nan = float("nan")
-        # a plain sort would leave leading NaNs in front and shift both ranks
-        values = [nan] * 4 + [float(i) for i in range(60)]
-        self.assertEqual(_patch_levels(values), (6.0, 57.0))
+        self.assertTrue(math.isnan(_two_means([nan, 1.0, 0.0])))
 
-    def test_weak_tiles_are_judged_against_the_median_contrast(self) -> None:
-        _, _, patches = clean_patches(5)
-        # Sorted by contrast, the median (element 128) is the single tile of span 40; a
-        # quarter of it is 10. Tiles of span 8 are weak, those of span 11 and above are not.
-        spans = [8.0] * 125 + [11.0] * 3 + [40.0] + [400.0] * 127
-        self.assertEqual(len(spans), 256)
-        shaped = []
-        for raw, span in zip(patches, spans):
-            low, high = _patch_levels(raw)
-            shaped.append([100.0 + span * (value - low) / (high - low) for value in raw])
-        reads = _read_tiles_normalised(shaped, DecodeOptions().template_sigmas)
-        for tile, span in enumerate(spans):
-            weak = (reads[tile].polarity_margin, reads[tile].glyph_margin) == (0.0, 0.0)
-            self.assertEqual(weak, span == 8.0, f"tile {tile} with span {span}")
-
-    def test_rescaled_templates_span_their_own_contrast(self) -> None:
-        for sigma in DecodeOptions().template_sigmas:
-            plain = _build_patterns(sigma)
-            rescaled = _rescaled_patterns(sigma)
-            self.assertEqual(len(rescaled), 32)
-            for before, after in zip(plain, rescaled):
-                self.assertEqual(_patch_levels(after), (0.0, 1.0), f"sigma {sigma}")
-                self.assertTrue(all(-0.25 <= v <= 1.25 for v in after), f"sigma {sigma}")
-                self.assertNotEqual(before, after, f"sigma {sigma}")
-
-    def test_classify_compares_against_rescaled_templates_only_when_asked(self) -> None:
-        sigmas = (0.5,)
-        not_erased = [False] * 256
-        for rescale_templates in (False, True):
-            templates = (_rescaled_patterns if rescale_templates else _build_patterns)(0.5)
-            # every tile shows one of the 32 templates exactly: that template must win, with no error
-            patches = [list(templates[tile % 32]) for tile in range(256)]
-            reads = _classify(patches, sigmas, rescale_templates, not_erased)
-            self.assertEqual(len(reads), 256)
-            for tile, read in enumerate(reads):
-                expected = (tile % 32 >= 16, tile % 16, 0.0)
-                self.assertEqual(
-                    (read.light, read.glyph, read.error),
-                    expected,
-                    f"rescale_templates={rescale_templates} tile {tile}",
-                )
-            # the other template set does not explain these patches exactly
-            other = _classify(patches, sigmas, not rescale_templates, not_erased)
-            self.assertTrue(any(read.error > 0.0 for read in other))
-
-    def test_shadowed_part_of_a_render_decodes_through_the_normalised_read(self) -> None:
-        p_data, k_data, _ = lane_data(5)
+    def test_field_levels_are_five_point_means_normalised_by_the_finders(self) -> None:
         image = setup(5)
-        width = image.width
-        dim = bytes(int(round_half_away(float(v) * 0.3)) for v in range(256))
-        rows = []
-        for row in range(image.height):
-            line = bytes(image.data[row * width : (row + 1) * width])
-            first, last = width * 7 // 20, width * 3 // 5
-            rows.append(line[:first] + line[first:last].translate(dim) + line[last:])
-        luma = Luma(width, image.height, b"".join(rows))
-        # the finder levels cannot describe a step in the light: the level read loses lane K
-        h = render_homography()
-        project = _projector(luma, h)
+        distorted = Pose.fit(
+            [(float(x), float(y)) for x, y in FINDER_CENTERS],
+            [(x * 0.75 + 3.0, y * 0.75 - 2.0) for x, y in FINDER_CENTERS],
+            -0.07,
+            image.width,
+            image.height,
+        )
+        for pose in (render_pose(), distorted):
+            project = _projector(image, pose)
+            reference = _reference_levels(project)
+            self.assertIsNotNone(reference)
+            levels = _field_levels(project, reference)
+            self.assertEqual(len(levels), FIELD_CELLS)
+            spread = 0.4 * 4.599999904632568
+            self.assertEqual(_PETAL_SPREAD, spread)
+            for cell in range(0, FIELD_CELLS, 97):
+                x, y = cell_center(cell)
+                total = 0.0
+                for dx, dy in (
+                    (0.0, 0.0),
+                    (spread, 0.0),
+                    (-spread, 0.0),
+                    (0.0, spread),
+                    (0.0, -spread),
+                ):
+                    total += image.sample(*pose.apply(x + dx, y + dy))
+                lit, dark = reference.at(x, y)
+                self.assertEqual(levels[cell], (total / 5.0 - dark) / (lit - dark), cell)
+
+    def test_neighbourhoods_are_the_cells_within_32_units_in_index_order(self) -> None:
+        table = _neighbourhoods()
+        self.assertEqual(len(table), FIELD_CELLS)
+        for cell in range(0, FIELD_CELLS, 13):
+            x, y = cell_center(cell)
+            band, _ = cell_band_slot(cell)
+            first = BAND_OFFSETS[max(band - 3, 0)]
+            last = BAND_OFFSETS[min(band + 4, 34)]
+            expected = []
+            for other in range(first, last):
+                ox, oy = cell_center(other)
+                if (ox - x) * (ox - x) + (oy - y) * (oy - y) <= 1024.0:
+                    expected.append(other)
+            self.assertEqual(table[cell], tuple(expected), cell)
+            self.assertIn(cell, table[cell])
+        # nothing outside the six neighbouring bands is ever that close
+        for cell in (0, 500, 1700, FIELD_CELLS - 1):
+            x, y = cell_center(cell)
+            near = []
+            for other in range(FIELD_CELLS):
+                ox, oy = cell_center(other)
+                if (ox - x) * (ox - x) + (oy - y) * (oy - y) <= 1024.0:
+                    near.append(other)
+            self.assertEqual(table[cell], tuple(near))
+
+    def test_local_levels_rescale_each_cell_by_its_neighbourhood(self) -> None:
+        levels = [float(cell % 7) for cell in range(FIELD_CELLS)]
+        local = _local_levels(levels)
+        table = _neighbourhoods()
+        for cell in (0, 9, 1234, 3000):
+            values = sorted(levels[o] for o in table[cell])
+            ends = max(min(5, len(values) // 2), 1)
+            low = values[0]
+            for v in values[1:ends]:
+                low += v
+            low /= ends
+            high = values[len(values) - ends]
+            for v in values[len(values) - ends + 1 :]:
+                high += v
+            high /= ends
+            self.assertEqual(local[cell], (levels[cell] - low) / max(high - low, 0.05))
+        # a flat neighbourhood has a span of 0.05
+        flat = _local_levels([0.3] * FIELD_CELLS)
+        self.assertTrue(all(abs(v) < 1e-12 for v in flat))
+        # a gain and an offset common to a neighbourhood cancel
+        scaled = _local_levels([0.25 * v + 3.0 for v in levels])
+        for cell in (0, 9, 1234, 3000):
+            self.assertAlmostEqual(scaled[cell], local[cell], places=9)
+
+    def test_a_shadow_band_is_read_through_the_local_read(self) -> None:
+        # a band across the middle of the code in deep shadow: the finder levels cannot
+        # describe a step in the light, so the level read loses every field lane, and the
+        # local read gets them all back
+        luma = shadow_band(setup(5), 0.45, 40, 60)
+        project = _projector(luma, render_pose())
         reference = _reference_levels(project)
         self.assertIsNotNone(reference)
-        reads = _read_tiles(_sample_patches(project), reference, DecodeOptions().template_sigmas)
-        _, k = tile_lanes(reads)
-        self.assertIsNone(k)
+        levels = _field_levels(project, reference)
+        level_read, _ = _read_sectors(levels, _NOT_SKIPPED)
+        self.assertEqual(field_letters(level_read), "")
+        local_read, _ = _read_sectors(_local_levels(levels), _NOT_SKIPPED)
+        self.assertEqual(field_letters(local_read), "0123")
         decoded = decode_frame(luma)
-        self.assertIsNotNone(decoded.p)
-        self.assertIsNotNone(decoded.k)
-        self.assertEqual(decoded.p.data, p_data)
-        self.assertEqual(decoded.k.data, k_data)
+        truth = lane_data(5)
+        self.assertEqual(field_letters(decoded.fields), "0123")
+        for result, expected in zip(decoded.fields, truth.fields):
+            self.assertEqual(result.data, expected)
+        # a known pose reads the same field lanes, local read included
+        known = decode_frame_at(luma, render_pose())
+        self.assertEqual(known.fields, decoded.fields)
 
-    def test_the_normalised_read_runs_only_for_missing_lanes(self) -> None:
-        luma, h, patches = clean_patches(5)
-        p_data, k_data, _ = lane_data(5)
-        sigmas = DecodeOptions().template_sigmas
-        reference = _reference_levels(_projector(luma, h))
-        self.assertIsNotNone(reference)
-        with mock.patch(
-            "iroha_petal.decode._read_tiles_normalised", wraps=_read_tiles_normalised
-        ) as normalised:
-            p, k = _read_tile_lanes(patches, reference, sigmas)
-            self.assertEqual((p.data, k.data), (p_data, k_data))
-            normalised.assert_not_called()
-            # per-tile gain and offset break the level read (see the test above)
-            p, k = _read_tile_lanes(distort(patches), reference, sigmas)
-            self.assertEqual((p.data, k.data), (p_data, k_data))
-            normalised.assert_called_once()
+    def test_lens_distortion_is_found_when_the_plain_pose_misses_the_petals(self) -> None:
+        # a small, strongly distorted picture: 480 px of code with the corner blossoms far out
+        luma = setup(6)
+        small = bytearray(640 * 480)
+        data = luma.data
+        for y in range(384):
+            r0 = 2 * y * 768
+            r1 = r0 + 768
+            for x in range(384):
+                total = (
+                    data[r0 + 2 * x]
+                    + data[r0 + 2 * x + 1]
+                    + data[r1 + 2 * x]
+                    + data[r1 + 2 * x + 1]
+                )
+                small[(y + 48) * 640 + x + 128] = (total + 2) // 4
+        distorted = barrel(Luma(640, 480, bytes(small)), -0.12)
+        quad = locate(distorted)
+        self.assertIsNotNone(quad, "four finders")
+        # the plain pose misses petals at the edge of the field
+        pose = _fit_pose(distorted, [(f.x, f.y) for f in quad], 0.0)
+        plain = decode_frame_at(distorted, pose)
+        self.assertIsNotNone(plain)
+        self.assertIn(None, plain.fields, plain.lanes)
+        decoded = decode_frame(distorted)
+        self.assertLess(decoded.pose.distortion, 0.0)
+        truth = lane_data(6)
+        self.assertEqual(decoded.d.data if decoded.d else None, truth.d)
+        for result, expected in zip(decoded.fields, truth.fields):
+            self.assertEqual(result.data if result else None, expected)
 
-    def test_degenerate_patches_and_poses_never_crash_the_tile_reads(self) -> None:
-        sigmas = DecodeOptions().template_sigmas
-        nan = float("nan")
-        # NaN patches match nothing: no reads at all, as in the reference
-        self.assertEqual(_read_tiles_normalised([[nan] * 64 for _ in range(256)], sigmas), [])
-        # a flat frame carries no contrast: nothing decodes
-        flat = _read_tiles_normalised([[7.0] * 64 for _ in range(256)], sigmas)
-        self.assertEqual(tile_lanes(flat), (None, None))
-        # poses that map everything to NaN reach the tile reads and must not raise
-        image = setup(2)
-        for pose in (Homography((nan,) * 9), Homography((0.0,) * 9)):
-            decoded = decode_frame_at(image, pose)
-            self.assertTrue(decoded is None or decoded.lanes_ok == 0)
+    def test_the_pose_that_lands_on_the_petals_separates_them_best(self) -> None:
+        image = setup(5)
+        dst = [(x * 0.75, y * 0.75) for x, y in FINDER_CENTERS]
+        plain = _read_field_at(image, dst, 0.0, None)
+        self.assertEqual(plain.decoded, 4)
+        self.assertGreater(plain.separation, 0.0)
+        for step in _DISTORTION_STEPS:
+            read = _read_field_at(image, dst, step, None)
+            self.assertIsNotNone(read)
+            self.assertEqual(read.pose.distortion, step)
+            # more lanes, then a clearer separation
+            self.assertLess(read.separation, plain.separation, step)
+            self.assertTrue(plain.better_than(read), step)
+            self.assertFalse(read.better_than(read))
+
+    def test_merging_one_capture_reads_the_field_lanes_decode_read(self) -> None:
+        for name, image in (("clean", setup(5)), ("hidden corner", hidden_blossom(2, 3))):
+            frame = decode_frame(image)
+            self.assertNotIn(None, frame.fields, name)
+            evidence = field_evidence(image, frame)
+            self.assertIsNotNone(evidence, name)
+            self.assertEqual(merge_fields([evidence]), frame.fields, name)
+
+    def test_averaging_captures_cancels_their_independent_noise(self) -> None:
+        image = setup(5)
+        truth = lane_data(5)
+        frame = decode_frame(image)
+        clean = field_evidence(image, frame)
+        rng = Xorshift32(9)
+        # uniform noise of +-0.6 of the lit level per cell: about one bit in eight flips in
+        # one capture, far more than a field codeword corrects
+        captures = [
+            FieldEvidence([v + (float(rng.next_byte()) - 127.5) / 213.0 for v in clean.levels])
+            for _ in range(4)
+        ]
+        for capture in captures:
+            self.assertEqual(
+                merge_fields([capture]),
+                (None,) * 4,
+                "one noisy capture must not read a field lane, or the test proves nothing",
+            )
+        merged = merge_fields(captures)
+        for sector, (result, expected) in enumerate(zip(merged, truth.fields)):
+            self.assertEqual(result.data if result else None, expected, f"sector {sector}")
+        # skipped sectors are not read
+        skipped = merge_fields(captures, (True, False, True, True))
+        self.assertIsNone(skipped[0])
+        self.assertIsNotNone(skipped[1])
+        self.assertIsNone(skipped[2])
+
+    def test_evidence_needs_a_usable_image_and_a_real_corner(self) -> None:
+        image = setup(5)
+        frame = decode_frame(image)
+        self.assertIsNone(field_evidence(Luma(20, 20), frame))
+        self.assertIsNone(field_evidence(image, dataclasses.replace(frame, inferred_corner=7)))
+        self.assertEqual(merge_fields([]), (None, None, None, None))
+        with self.assertRaises(ValueError):
+            FieldEvidence([0.0] * 3)
+
+    def test_light_and_pink_petals_are_thresholded_apart(self) -> None:
+        cells = encoder(decode_test_payload(), KIND).cells(5)
+        truth = lane_data(5)
+        # ideal levels: every sector reads, and every cell sits 0.5 from the threshold
+        ideal = [1.0 if lit else 0.0 for lit in cells.petals]
+        results, separation = _read_sectors(ideal, _NOT_SKIPPED)
+        self.assertEqual([r.data if r else None for r in results], list(truth.fields))
+        self.assertEqual(separation, 0.5)
+        # skipped sectors are not read, and the separation covers the sectors read
+        results, separation = _read_sectors(ideal, (True, False, True, True))
+        self.assertEqual(field_letters(results), "1")
+        self.assertEqual(separation, 0.5)
+        # the light petals of the 天 are much brighter than the pink ones: a dark light
+        # petal can be brighter than a lit pink one, so one threshold per codeword fails
+        light = [cell_light(cell) for cell in range(FIELD_CELLS)]
+        uneven = [
+            (1.0 if lit else 0.35) if is_light else (0.3 if lit else 0.0)
+            for lit, is_light in zip(cells.petals, light)
+        ]
+        results, _ = _read_sectors(uneven, _NOT_SKIPPED)
+        self.assertEqual([r.data if r else None for r in results], list(truth.fields))
+        values = [uneven[c] for c in sector_cells(0)[:840]]
+        threshold = _two_means(values)
+        lit_pink = [
+            cell for cell in sector_cells(0)[:840] if cells.petals[cell] and not light[cell]
+        ]
+        self.assertTrue(all(uneven[cell] < threshold for cell in lit_pink))
 
 
 class HiddenCornerTest(unittest.TestCase):
-    """Three blossoms forming a corner, the inferred fourth and the ``天`` ranking."""
+    """Three blossoms forming a corner and the inferred fourth."""
 
     def test_a_hidden_blossom_is_inferred_and_every_lane_still_reads(self) -> None:
-        p, k, d = lane_data(2)
+        truth = lane_data(2)
         for corner in range(4):
             decoded = decode_frame(hidden_blossom(2, corner))
             self.assertEqual(decoded.inferred_corner, corner, f"corner {corner}")
             self.assertEqual((decoded.rotation, decoded.mirrored), (0, False), f"corner {corner}")
-            self.assertEqual(decoded.p.data if decoded.p else None, p, f"corner {corner} lane P")
-            self.assertEqual(decoded.k.data if decoded.k else None, k, f"corner {corner} lane K")
-            self.assertEqual(decoded.d.data if decoded.d else None, d, f"corner {corner} lane D")
+            self.assertEqual(decoded.d.data if decoded.d else None, truth.d, f"corner {corner}")
+            for result, expected in zip(decoded.fields, truth.fields):
+                self.assertEqual(result.data if result else None, expected, f"corner {corner}")
 
     def test_the_inferred_corner_is_reported_in_code_coordinates_when_mirrored(self) -> None:
         # hide the top-right blossom of the code, then mirror the picture: the hidden
@@ -727,7 +756,7 @@ class HiddenCornerTest(unittest.TestCase):
         decoded = decode_frame(hidden_blossom(3, 1).mirrored())
         self.assertTrue(decoded.mirrored)
         self.assertEqual(decoded.inferred_corner, 1)
-        self.assertEqual(decoded.d.data if decoded.d else None, lane_data(3)[2])
+        self.assertEqual(decoded.d.data if decoded.d else None, lane_data(3).d)
 
     def test_canonical_corners_follow_the_hypothesis_enumeration(self) -> None:
         # the hypothesis (rotation, mirrored) sends quad corner `(i + r) % 4` (or
@@ -738,27 +767,9 @@ class HiddenCornerTest(unittest.TestCase):
                 self.assertEqual(_canonical_corner((i + rotation) % 4, rotation, False), i)
                 self.assertEqual(_canonical_corner((rotation + 4 - i) % 4, rotation, True), i)
 
-    def test_the_tian_mask_tells_the_quarter_turns_apart(self) -> None:
-        self.assertEqual(len(_EMPTY_CELLS), 400 - 256)
-        image = setup(5)
-        quad = locate(image)
-        self.assertIsNotNone(quad, "four finders")
-        by_rotation = [None] * 4
-        for rotation, mirrored, h in _hypotheses(quad, True):
-            project = _projector(image, h)
-            reference = _reference_levels(project)
-            self.assertIsNotNone(reference, "levels")
-            if not mirrored:
-                by_rotation[rotation] = _mask_score(project, reference)
-        # upright wins clearly over the three other quarter turns
-        for rotation in range(1, 4):
-            self.assertGreater(by_rotation[0], by_rotation[rotation] + 0.1, by_rotation)
-
     def test_inferred_levels_extrapolate_the_other_three_corners(self) -> None:
         image = setup(5)
-        scale = 768.0 / 1024.0
-        pose = Homography((scale, 0.0, 0.0, 0.0, scale, 0.0, 0.0, 0.0, 1.0))
-        project = _projector(image, pose)
+        project = _projector(image, render_pose())
         seen = _reference_levels(project)
         self.assertIsNotNone(seen)
         for corner in range(4):
@@ -773,14 +784,14 @@ class HiddenCornerTest(unittest.TestCase):
                 high = max(truth[n1], truth[opposite], truth[n2])
                 self.assertEqual(levels[corner], min(max(parallelogram, low), high))
         # a hidden corner on a blank picture still has no contrast at the others
-        self.assertIsNone(_reference_levels(_projector(Luma(768, 768), pose), 2))
+        self.assertIsNone(_reference_levels(_projector(Luma(768, 768), render_pose()), 2))
 
     def test_the_rings_pull_an_inferred_corner_into_place(self) -> None:
         image = hidden_blossom(2, 2)
         scale = 768.0 / 1024.0
         truth = [Finder(x * scale, y * scale, 90.0) for x, y in FINDER_CENTERS]
         # start 12 pixels off: the ring search pulls the corner most of the way back (the
-        # ring dots are 16 pixels wide here, so the brightness has a plateau a few pixels
+        # ring dots are 13.5 pixels wide here, so the brightness has a plateau a few pixels
         # wide and the first of its brightest points wins)
         corners = list(truth)
         corners[2] = Finder(truth[2].x + 9.0, truth[2].y - 8.0, 90.0)
@@ -795,25 +806,6 @@ class HiddenCornerTest(unittest.TestCase):
         self.assertGreater(_ring_brightness(image, better), _ring_brightness(image, points))
         # a degenerate quad has no pose
         self.assertIsNone(_ring_brightness(image, [(1.0, 1.0)] * 4))
-
-
-class TrackingTest(unittest.TestCase):
-    """Following a code from the previous frame's pose."""
-
-    def test_tracking_follows_a_small_movement_and_gives_up_on_a_jump(self) -> None:
-        image = padded(setup(6), 100)
-        first = decode_frame(image)
-        p, k, d = lane_data(6)
-        followed = track_frame(shifted(image, 9, -6), first)
-        self.assertIsNotNone(followed, "tracks a 9 px move")
-        self.assertEqual(followed.p.data if followed.p else None, p)
-        self.assertEqual(followed.k.data if followed.k else None, k)
-        self.assertEqual(followed.d.data if followed.d else None, d)
-        self.assertIsNone(followed.inferred_corner)
-        # more than a finder diameter: tracking refuses, a full decode is needed
-        jumped = shifted(image, 95, 0)
-        self.assertIsNone(track_frame(jumped, first))
-        decode_frame(jumped)
 
     def test_an_inferred_corner_needs_contrast_too(self) -> None:
         def level_card(levels):
@@ -830,7 +822,7 @@ class TrackingTest(unittest.TestCase):
                         data[y * 1024 + px - radius : y * 1024 + px + radius + 1] = bytes(
                             [value] * (2 * radius + 1)
                         )
-            return _projector(Luma(1024, 1024, bytes(data)), Homography.IDENTITY)
+            return _projector(Luma(1024, 1024, bytes(data)), Pose.plain(Homography.IDENTITY))
 
         # even light: the hidden corner (3) gets levels between the others'
         even = _reference_levels(level_card([(230, 30), (220, 25), (210, 20), (0, 0)]), 3)
@@ -843,11 +835,56 @@ class TrackingTest(unittest.TestCase):
         seen = level_card([(60, 45), (250, 20), (200, 185), (240, 20)])
         self.assertIsNotNone(_reference_levels(seen))
 
+
+class TrackingTest(unittest.TestCase):
+    """Following a code from the previous frame's pose."""
+
+    def test_tracking_follows_a_small_movement_and_gives_up_on_a_jump(self) -> None:
+        image = padded(setup(6), 100)
+        first = decode_frame(image)
+        truth = lane_data(6)
+        followed = track_frame(shifted(image, 9, -6), first)
+        self.assertIsNotNone(followed, "tracks a 9 px move")
+        self.assertEqual(followed.d.data if followed.d else None, truth.d)
+        for result, expected in zip(followed.fields, truth.fields):
+            self.assertEqual(result.data if result else None, expected)
+        self.assertIsNone(followed.inferred_corner)
+        # more than a finder diameter: tracking refuses, a full decode is needed
+        jumped = shifted(image, 95, 0)
+        self.assertIsNone(track_frame(jumped, first))
+        decode_frame(jumped)
+
+    def test_tracking_starts_the_distortion_search_from_the_previous_pose(self) -> None:
+        image = setup(4)
+        first = decode_frame(image)
+        canonical = [(float(x), float(y)) for x, y in FINDER_CENTERS]
+        points = [first.pose.apply(x, y) for x, y in canonical]
+        bent = Pose.fit(canonical, points, -0.04, image.width, image.height)
+        self.assertIsNotNone(bent)
+        tried = []
+        read_field_at = _read_field_at
+
+        def spy(image_, dst, distortion, inferred):
+            tried.append(distortion)
+            return read_field_at(image_, dst, distortion, inferred)
+
+        with mock.patch("iroha_petal.decode._read_field_at", side_effect=spy):
+            followed = track_frame(image, dataclasses.replace(first, pose=bent))
+            self.assertIsNotNone(followed)
+            self.assertEqual(tried[0], -0.04)
+            for distortion, step in zip(tried[1:], _DISTORTION_STEPS):
+                self.assertEqual(distortion, -0.04 + step)
+            # a full decode starts from a plain pose
+            tried.clear()
+            decode_frame(image)
+            self.assertEqual(tried[0], 0.0)
+        self.assertEqual((followed.rotation, followed.mirrored), (first.rotation, first.mirrored))
+
     def test_broken_poses_are_refused_without_crashing(self) -> None:
         image = setup(4)
         previous = decode_frame(image)
-        # a good pose that names a corner that does not exist
         self.assertIsNotNone(track_frame(image, previous))
+        # a good pose that names a corner that does not exist
         for corner in (4, 255, -1):
             named = dataclasses.replace(previous, inferred_corner=corner)
             self.assertIsNone(track_frame(image, named), corner)
@@ -857,12 +894,14 @@ class TrackingTest(unittest.TestCase):
             Homography((inf, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0)),
         ]
         for broken in non_finite:
-            self.assertIsNone(decode_frame_at(image, broken))
+            self.assertIsNone(decode_frame_at(image, Pose.plain(broken)))
         # the last one makes every finder far larger than the image
         huge = Homography((50.0, 0.0, 0.0, 0.0, 50.0, 0.0, 0.0, 0.0, 1.0))
         for broken in non_finite + [huge]:
             for inferred in (None, 2):
-                stale = dataclasses.replace(previous, homography=broken, inferred_corner=inferred)
+                stale = dataclasses.replace(
+                    previous, pose=Pose.plain(broken), inferred_corner=inferred
+                )
                 self.assertIsNone(track_frame(image, stale), (broken, inferred))
         # an unusable image is refused before any work
         self.assertIsNone(track_frame(Luma(40, 40), previous))
@@ -874,7 +913,7 @@ class TrackingTest(unittest.TestCase):
         followed = track_frame(moved, first)
         self.assertIsNotNone(followed, "tracks with three blossoms")
         self.assertEqual(followed.inferred_corner, 3)
-        self.assertEqual(followed.d.data if followed.d else None, lane_data(4)[2])
+        self.assertEqual(followed.d.data if followed.d else None, lane_data(4).d)
         self.assertEqual((followed.rotation, followed.mirrored), (first.rotation, first.mirrored))
 
     def test_a_blossom_that_reappears_is_seen_again(self) -> None:
@@ -885,7 +924,7 @@ class TrackingTest(unittest.TestCase):
         followed = track_frame(shifted(setup(4), 4, -3), first)
         self.assertIsNotNone(followed, "tracks")
         self.assertIsNone(followed.inferred_corner)
-        self.assertEqual(followed.d.data if followed.d else None, lane_data(4)[2])
+        self.assertEqual(followed.d.data if followed.d else None, lane_data(4).d)
         # still covered: still inferred
         followed = track_frame(shifted(covered, 4, -3), first)
         self.assertIsNotNone(followed, "tracks")

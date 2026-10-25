@@ -3,16 +3,19 @@
 
 """Reference software renderer and a platform-neutral draw list.
 
-The picture is black, with four blossom finders in the canvas corners and a
-``天``-shaped field of 256 tiles inside three dotted rings. A light tile is a
-pale rounded square with a near-black katakana; a dark tile is empty except
-for its sakura-pink katakana.
+The picture is black, with four sakura-blossom finders in the canvas corners,
+three dotted rings, and inside them a field of petals on concentric bands. A
+lit petal whose centre lies inside the ``天`` is drawn in the light colour, the
+others in sakura pink, over a faint backdrop of the ``天`` itself, so the
+character shows through the storm of petals.
 
 :func:`render_frame` reproduces the Rust reference renderer pixel for pixel:
 every supersample is shaded by the same predicates in the same IEEE double
-arithmetic. It only evaluates samples near something that is drawn (finders,
-tile squares and lit dots), which is equivalent because every other sample is
-background.
+arithmetic. It paints each drawn shape only over the samples near it (the
+backdrop row by row, every lit petal over its own ellipse, every lit dot and
+finder over its disc), which is equivalent because the finders, the rings and
+the field never overlap; a sample that two petals claim, or that sits at a
+petal tip, is shaded by the reference's own petal search.
 
 :func:`draw_list` describes the same frame as shapes for vector backends
 (canvas, SVG, Core Graphics, ...). Platform renderers may use their own 2D
@@ -21,41 +24,54 @@ APIs as long as geometry and polarity match the reference.
 
 from __future__ import annotations
 
-import functools
 import math
 from bisect import bisect_left, bisect_right
 from dataclasses import dataclass, field
 from itertools import repeat
 from operator import add, floordiv
-from typing import List, Optional, Sequence, Tuple
+from typing import List, Optional, Sequence, Set, Tuple
 
 from ._numeric import round_half_away
-from .glyphs import GLYPH_COUNT, GLYPH_GRID, STROKE_WIDTH, STROKES
 from .image import Rgb
 from .lanes import FrameCells
 from .layout import (
+    BACKDROP_RADIUS,
+    BAND_COUNT,
+    BAND_INNER,
+    BAND_OFFSETS,
+    BAND_SLOTS,
+    BAND_SPACING,
     CANVAS,
     CENTER,
     DOT_RADIUS,
+    FIELD_CELLS,
     FINDER_CENTERS,
     FINDER_CORE,
     FINDER_NOTCH_RADIUS,
     FINDER_OUTER,
     FINDER_PETAL_RADIUS,
-    GLYPH_BOX,
+    MASK,
+    MASK_GRID,
+    MASK_ORIGIN,
+    MASK_PITCH,
+    PETAL_HALF_LENGTH,
+    PETAL_HALF_WIDTH,
+    PETAL_NOTCH_DISTANCE,
+    PETAL_NOTCH_RADIUS,
     RING_COUNT,
     RING_RADII,
     RING_SLOTS,
-    TILE_COUNT,
-    TILE_ORIGIN,
-    TILE_PITCH,
-    TILE_SIZE,
-    TILES,
+    band_phase,
+    band_radius,
+    cell_angle,
+    cell_center,
+    cell_light,
     finder_lit,
     finder_notch_centers,
     finder_petal_centers,
+    in_mask,
+    petal_lit,
     ring_offset,
-    tile_center,
 )
 
 __all__ = [
@@ -63,18 +79,15 @@ __all__ = [
     "Palette",
     "RenderOptions",
     "render_frame",
-    "TILE_CORNER_RADIUS",
     "Circle",
     "FinderShape",
-    "TileShape",
+    "BackdropCell",
+    "PetalShape",
     "DrawList",
     "draw_list",
 ]
 
 Color = Tuple[int, int, int]
-
-#: Corner radius of a tile's rounded square, in design units.
-TILE_CORNER_RADIUS = 3.0
 
 
 @dataclass(frozen=True)
@@ -83,12 +96,12 @@ class Palette:
 
     #: Background.
     background: Color = (0, 0, 0)
-    #: Light tile fill and finders.
+    #: Finders and the petals inside the ``天``.
     light: Color = (250, 235, 244)
-    #: Sakura pink of dots and of glyphs on dark tiles.
+    #: Sakura pink of the ring dots and of the petals outside the ``天``.
     pink: Color = (245, 175, 208)
-    #: Glyph colour on a light tile.
-    ink: Color = (20, 4, 14)
+    #: The faint ``天`` drawn under the petals (a tenth of the light colour).
+    backdrop: Color = (25, 24, 24)
 
 
 @dataclass(frozen=True)
@@ -104,56 +117,52 @@ class RenderOptions:
 
 
 # Sample colour codes painted before the colour lookup.
-_BACKGROUND, _LIGHT, _PINK, _INK = 0, 1, 2, 3
+_BACKGROUND, _LIGHT, _PINK, _BACKDROP = 0, 1, 2, 3
 
-_BITMAP_N = 128
+_CELL_COS = tuple(math.cos(cell_angle(cell)) for cell in range(FIELD_CELLS))
+_CELL_SIN = tuple(math.sin(cell_angle(cell)) for cell in range(FIELD_CELLS))
+_CELL_CODE = tuple(_LIGHT if cell_light(cell) else _PINK for cell in range(FIELD_CELLS))
+_NOTCH_RADIUS_SQUARED = PETAL_NOTCH_RADIUS * PETAL_NOTCH_RADIUS
+#: Samples this close to a petal tip are shaded by the reference's petal search: only
+#: there can its band test (``|radius - band radius| <= half-length``) disagree with the
+#: petal's own ellipse.
+_TIP = PETAL_HALF_LENGTH - 0.01
 
 
-@functools.lru_cache(maxsize=None)
-def _glyph_bitmaps() -> Tuple[bytes, ...]:
-    """128x128 ink bitmaps of every glyph over the glyph design grid.
+def _round(value: float) -> float:
+    """Rust's ``f64::round`` (halves away from zero) for finite values."""
+    if value < 0.0:
+        return -round_half_away(-value)
+    return round_half_away(value)
 
-    Pixel ``(u, v)`` is inked when its centre lies within half a stroke width
-    of a stroke segment, exactly as the reference's ``is_inked``. Segments are
-    tested only near their bounding box, which cannot change the result.
-    """
-    n = _BITMAP_N
-    radius = STROKE_WIDTH / 2.0
-    reach = radius + 0.25  # generous: anything farther is certainly not inked
-    coords = [(i + 0.5) / n * GLYPH_GRID for i in range(n)]
-    out = []
-    for glyph in range(GLYPH_COUNT):
-        bitmap = bytearray(n * n)
-        for stroke in STROKES[glyph]:
-            for (ax, ay), (bx, by) in zip(stroke, stroke[1:]):
-                dx = bx - ax
-                dy = by - ay
-                length_sq = dx * dx + dy * dy
-                u_lo = bisect_left(coords, min(ax, bx) - reach)
-                u_hi = bisect_right(coords, max(ax, bx) + reach)
-                v_lo = bisect_left(coords, min(ay, by) - reach)
-                v_hi = bisect_right(coords, max(ay, by) + reach)
-                for v in range(v_lo, v_hi):
-                    y = coords[v]
-                    base = v * n
-                    for u in range(u_lo, u_hi):
-                        if bitmap[base + u]:
-                            continue
-                        x = coords[u]
-                        if length_sq == 0.0:
-                            t = 0.0
-                        else:
-                            t = ((x - ax) * dx + (y - ay) * dy) / length_sq
-                            if t < 0.0:
-                                t = 0.0
-                            elif t > 1.0:
-                                t = 1.0
-                        ex = x - (ax + t * dx)
-                        ey = y - (ay + t * dy)
-                        if math.sqrt(ex * ex + ey * ey) <= radius:
-                            bitmap[base + u] = 1
-        out.append(bytes(bitmap))
-    return tuple(out)
+
+def _petal_code(petals: Sequence[bool], x: float, y: float) -> Optional[int]:
+    """The reference's petal search for the canvas sample ``(x, y)``: the colour code of
+    the first lit petal that covers it, or ``None``."""
+    dx = x - CENTER
+    dy = y - CENTER
+    radius = math.sqrt(dx * dx + dy * dy)
+    theta = math.atan2(dy, dx)
+    if theta < 0.0:
+        theta += math.tau
+    reach = PETAL_HALF_LENGTH
+    nearest = _round((radius - BAND_INNER) / BAND_SPACING)
+    for band in (nearest - 1.0, nearest, nearest + 1.0):
+        if band < 0.0 or band >= BAND_COUNT:
+            continue
+        b = int(band)
+        if abs(radius - band_radius(b)) > reach:
+            continue
+        slots = BAND_SLOTS[b]
+        around = int(_round(theta / math.tau * slots - band_phase(b)))
+        for slot in (around - 1, around, around + 1):
+            cell = BAND_OFFSETS[b] + slot % slots
+            if not petals[cell]:
+                continue
+            cx, cy = cell_center(cell)
+            if petal_lit(x - cx, y - cy, cell_angle(cell)):
+                return _CELL_CODE[cell]
+    return None
 
 
 def _ring_is_pink(dx: float, dy: float, dots: Sequence[bool]) -> bool:
@@ -178,8 +187,169 @@ def _ring_is_pink(dx: float, dy: float, dots: Sequence[bool]) -> bool:
     return False
 
 
-def _paint(cells: FrameCells, coords: Sequence[float], codes: bytearray) -> None:
+def _paint_backdrop(coords: Sequence[float], codes: bytearray) -> None:
+    """The ``#`` lattice cells inside :data:`BACKDROP_RADIUS`."""
     span = len(coords)
+    offsets = [x - CENTER for x in coords]
+    # the lattice column of every sample column (`in_mask`), as one pattern per mask row
+    columns = []
+    for x in coords:
+        col = int((x - MASK_ORIGIN) / MASK_PITCH) if x >= MASK_ORIGIN else MASK_GRID
+        columns.append(col if col < MASK_GRID else MASK_GRID)
+    patterns = [
+        bytes(_BACKDROP if col < MASK_GRID and line[col] == "#" else _BACKGROUND for col in columns)
+        for line in MASK
+    ]
+    middle = bisect_left(offsets, 0.0)
+
+    def inside(i: int, dy2: float) -> bool:
+        dx = offsets[i]
+        return math.sqrt(dx * dx + dy2) <= BACKDROP_RADIUS
+
+    for j, y in enumerate(coords):
+        if y < MASK_ORIGIN:
+            continue
+        row = int((y - MASK_ORIGIN) / MASK_PITCH)
+        if row >= MASK_GRID:
+            continue
+        dy = y - CENTER
+        dy2 = dy * dy
+        # the samples within the radius form one run around the column nearest the centre
+        if middle < span and inside(middle, dy2):
+            m = middle
+        elif middle > 0 and inside(middle - 1, dy2):
+            m = middle - 1
+        else:
+            continue
+        lo, hi = 0, m
+        while lo < hi:
+            mid = (lo + hi) // 2
+            if inside(mid, dy2):
+                hi = mid
+            else:
+                lo = mid + 1
+        first = lo
+        lo, hi = m, span - 1
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            if inside(mid, dy2):
+                lo = mid
+            else:
+                hi = mid - 1
+        last = lo
+        base = j * span
+        codes[base + first : base + last + 1] = patterns[row][first : last + 1]
+
+
+def _paint_petals(cells: FrameCells, coords: Sequence[float], codes: bytearray) -> None:
+    """Every lit petal over its ellipse; contested and tip samples are shaded by the
+    reference's petal search."""
+    span = len(coords)
+    petals = cells.petals
+    a = PETAL_HALF_LENGTH
+    b = PETAL_HALF_WIDTH
+    a2 = a * a
+    b2 = b * b
+    notch = PETAL_NOTCH_DISTANCE
+    special: Set[int] = set()
+    for cell in range(FIELD_CELLS):
+        if not petals[cell]:
+            continue
+        cx, cy = cell_center(cell)
+        cos = _CELL_COS[cell]
+        sin = _CELL_SIN[cell]
+        code = _CELL_CODE[cell]
+        # the ellipse's quadratic in dx for a row at dy: qa dx^2 + qb dx + qc <= 0; the
+        # bounds only choose the samples to test, with a margin
+        qa = cos * cos / a2 + sin * sin / b2
+        cross = cos * sin * (1.0 / a2 - 1.0 / b2)
+        tall = math.sqrt(a2 * sin * sin + b2 * cos * cos) + 0.05
+        for j in range(bisect_left(coords, cy - tall), bisect_right(coords, cy + tall)):
+            dy = coords[j] - cy
+            qb = 2.0 * dy * cross
+            qc = dy * dy * (sin * sin / a2 + cos * cos / b2) - 1.0
+            disc = qb * qb - 4.0 * qa * qc
+            half = math.sqrt(disc) / (2.0 * qa) if disc > 0.0 else 0.0
+            middle = -qb / (2.0 * qa)
+            base = j * span
+            for i in range(
+                bisect_left(coords, cx + middle - half - 0.05),
+                bisect_right(coords, cx + middle + half + 0.05),
+            ):
+                dx = coords[i] - cx
+                along = dx * cos + dy * sin
+                across = -dx * sin + dy * cos
+                u = along / a
+                v = across / b
+                if u * u + v * v > 1.0:
+                    continue
+                tip = along - notch
+                if not tip * tip + across * across > _NOTCH_RADIUS_SQUARED:
+                    continue
+                index = base + i
+                if along > _TIP or along < -_TIP:
+                    special.add(index)
+                    continue
+                current = codes[index]
+                if current == _LIGHT or current == _PINK:
+                    special.add(index)
+                else:
+                    codes[index] = code
+    for index in special:
+        j, i = divmod(index, span)
+        x = coords[i]
+        y = coords[j]
+        resolved = _petal_code(petals, x, y)
+        if resolved is None:
+            dx = x - CENTER
+            dy = y - CENTER
+            inside = math.sqrt(dx * dx + dy * dy) <= BACKDROP_RADIUS
+            resolved = _BACKDROP if inside and in_mask(x, y) else _BACKGROUND
+        codes[index] = resolved
+
+
+def _paint(cells: FrameCells, coords: Sequence[float], codes: bytearray) -> None:
+    # The finders, the ring dots and the field (petals over the backdrop) occupy disjoint
+    # parts of the canvas, so painting each over its own samples shades every sample as
+    # the reference's priority order (finders, dots, petals, backdrop) does.
+    span = len(coords)
+    _paint_backdrop(coords, codes)
+    _paint_petals(cells, coords, codes)
+    # ring dots: paint around every lit slot. Near a slot only that slot's dot can be drawn
+    # (slots are 29 units apart, rings 35), and a sample well inside its disc passes every
+    # test of the reference's ring search, so only the rim needs the search itself.
+    dots = cells.dots
+    reach = DOT_RADIUS + 1.0
+    inner = DOT_RADIUS - 1e-6
+    offsets = [x - CENTER for x in coords]
+    for ring in range(RING_COUNT):
+        slots = RING_SLOTS[ring]
+        ring_radius = RING_RADII[ring]
+        offset = ring_offset(ring)
+        for slot in range(slots):
+            if not dots[offset + slot]:
+                continue
+            angle = math.tau * slot / slots
+            px = ring_radius * math.cos(angle)
+            py = ring_radius * math.sin(angle)
+            cols = range(
+                bisect_left(coords, CENTER + px - reach), bisect_right(coords, CENTER + px + reach)
+            )
+            for j in range(
+                bisect_left(coords, CENTER + py - reach), bisect_right(coords, CENTER + py + reach)
+            ):
+                dy = offsets[j]
+                ey = dy - py
+                ey2 = ey * ey
+                base = j * span
+                for i in cols:
+                    dx = offsets[i]
+                    ex = dx - px
+                    distance = math.sqrt(ex * ex + ey2)
+                    if distance > DOT_RADIUS:
+                        continue
+                    if distance <= inner or _ring_is_pink(dx, dy, dots):
+                        codes[base + i] = _PINK
     # finders: the disc of radius FINDER_OUTER belongs to the blossom
     outer = FINDER_OUTER
     for fx, fy in FINDER_CENTERS:
@@ -192,68 +362,8 @@ def _paint(cells: FrameCells, coords: Sequence[float], codes: bytearray) -> None
             base = j * span
             for i in cols:
                 dx = coords[i] - fx
-                if math.sqrt(dx * dx + dy2) <= outer and finder_lit(dx, dy):
-                    codes[base + i] = _LIGHT
-    # tiles: only the rounded square of a tile cell is ever drawn
-    half = TILE_SIZE / 2.0
-    straight = half - TILE_CORNER_RADIUS
-    corner_sq = TILE_CORNER_RADIUS * TILE_CORNER_RADIUS
-    box_half = GLYPH_BOX / 2.0
-    box = 2.0 * box_half
-    last = _BITMAP_N - 1
-
-    def lattice_samples(index: int) -> List[Tuple[int, float, float, int]]:
-        centre = TILE_ORIGIN + TILE_PITCH * (index + 0.5)
-        out = []
-        for i in range(bisect_left(coords, centre - half), bisect_right(coords, centre + half)):
-            d = coords[i] - centre
-            a = abs(d)
-            if a > half:
-                continue
-            u = int((d + box_half) / box * _BITMAP_N) if a < box_half else -1
-            out.append((i, d, a, min(u, last)))
-        return out
-
-    lattice = [lattice_samples(index) for index in range(20)]
-    bitmaps = _glyph_bitmaps()
-    for tile, (col, row) in enumerate(TILES):
-        light = cells.light[tile]
-        bitmap = bitmaps[cells.glyph[tile]]
-        plain = _LIGHT if light else _BACKGROUND
-        inked = _INK if light else _PINK
-        columns = lattice[col]
-        for j, _, ay, v in lattice[row]:
-            base = j * span
-            cy = ay - straight
-            row_bits = v * _BITMAP_N if v >= 0 else -1
-            for i, _, ax, u in columns:
-                cx = ax - straight
-                if not (cx <= 0.0 or cy <= 0.0 or cx * cx + cy * cy <= corner_sq):
-                    continue
-                if row_bits >= 0 and u >= 0 and bitmap[row_bits + u]:
-                    codes[base + i] = inked
-                elif plain:
-                    codes[base + i] = plain
-    # ring dots: paint around every lit slot
-    dots = cells.dots
-    reach = DOT_RADIUS + 1.0
-    for ring in range(RING_COUNT):
-        slots = RING_SLOTS[ring]
-        ring_radius = RING_RADII[ring]
-        offset = ring_offset(ring)
-        for slot in range(slots):
-            if not dots[offset + slot]:
-                continue
-            angle = math.tau * slot / slots
-            px = CENTER + ring_radius * math.cos(angle)
-            py = CENTER + ring_radius * math.sin(angle)
-            cols = range(bisect_left(coords, px - reach), bisect_right(coords, px + reach))
-            for j in range(bisect_left(coords, py - reach), bisect_right(coords, py + reach)):
-                dy = coords[j] - CENTER
-                base = j * span
-                for i in cols:
-                    if _ring_is_pink(coords[i] - CENTER, dy, dots):
-                        codes[base + i] = _PINK
+                if math.sqrt(dx * dx + dy2) <= outer:
+                    codes[base + i] = _LIGHT if finder_lit(dx, dy) else _BACKGROUND
 
 
 def render_frame(cells: FrameCells, options: Optional[RenderOptions] = None) -> Rgb:
@@ -274,7 +384,7 @@ def render_frame(cells: FrameCells, options: Optional[RenderOptions] = None) -> 
     codes = bytearray(span * span)
     _paint(cells, coords, codes)
     palette = options.palette
-    colours = (palette.background, palette.light, palette.pink, palette.ink)
+    colours = (palette.background, palette.light, palette.pink, palette.backdrop)
     tables = [bytes(c[k] for c in colours) + bytes(252) for k in range(3)]
     n = s * s
     half = n // 2
@@ -326,52 +436,70 @@ class FinderShape:
 
 
 @dataclass(frozen=True)
-class TileShape:
-    """One data tile and its katakana."""
+class BackdropCell:
+    """One ``#`` cell of the ``天`` mask lattice, a square filled with the backdrop colour
+    and clipped to :attr:`DrawList.backdrop_clip`."""
 
-    #: Tile index (``0..256``) in row-major mask order.
-    index: int
-    #: Left edge of the rounded square.
+    #: Left edge.
     x: float
-    #: Top edge of the rounded square.
+    #: Top edge.
     y: float
-    #: Side of the rounded square (25 units).
+    #: Side (the 33-unit lattice pitch).
     size: float
-    #: Corner radius of the rounded square (3 units).
-    corner_radius: float
-    #: Whether the tile is light (filled) or dark (background).
+
+
+@dataclass(frozen=True)
+class PetalShape:
+    """One lit petal: an ellipse of :attr:`DrawList.petal_half_length` along ``angle``
+    (the outward direction) and :attr:`DrawList.petal_half_width` across it, centred on
+    the field cell, minus the cosmetic notch at its tip."""
+
+    #: Field cell (``0..3376``).
+    index: int
+    #: Centre ``x``.
+    x: float
+    #: Centre ``y``.
+    y: float
+    #: Outward direction in radians, clockwise on screen from 3 o'clock.
+    angle: float
+    #: Whether the petal lies inside the ``天`` (light) or not (pink).
     light: bool
-    #: Glyph symbol ``0..16`` (see :data:`~iroha_petal.glyphs.GLYPH_CHARS`).
-    glyph: int
-    #: Fill of the rounded square, ``None`` for a dark tile.
-    fill: Optional[Color]
-    #: Colour of the glyph strokes (ink on light tiles, pink on dark tiles).
-    glyph_color: Color
-    #: Glyph box ``(x, y, side)``; strokes are clipped to it.
-    glyph_box: Tuple[float, float, float]
-    #: Stroke polylines in canvas units, drawn with round caps and joins.
-    strokes: Tuple[Tuple[Tuple[float, float], ...], ...]
-    #: Stroke width in canvas units (6.5/32 of the glyph box).
-    stroke_width: float
+    #: Fill colour.
+    color: Color
 
 
 @dataclass(frozen=True)
 class DrawList:
-    """Shapes of one frame in canvas units (``0..1024``), in painting order."""
+    """Shapes of one frame in canvas units (``0..1024``), in painting order: background,
+    then the backdrop cells clipped to :attr:`backdrop_clip`, the lit petals, the lit
+    dots and the finders."""
 
     #: Canvas side in design units.
     canvas: float
     #: Colours.
     palette: Palette
-    #: The four corner finders, clockwise from the top-left one.
-    finders: Tuple[FinderShape, ...]
-    #: Every tile in index order.
-    tiles: Tuple[TileShape, ...]
+    #: The ``#`` cells of the mask lattice, row-major.
+    backdrop: Tuple[BackdropCell, ...]
+    #: The disc the backdrop is clipped to (radius 390 about the canvas centre).
+    backdrop_clip: Circle
+    #: Every lit petal in field-cell order.
+    petals: Tuple[PetalShape, ...]
+    #: Half the length of a petal, along its outward direction.
+    petal_half_length: float
+    #: Half the width of a petal.
+    petal_half_width: float
+    #: Radius of the notch cut into a petal tip (renderers may omit the notch).
+    petal_notch_radius: float
+    #: Distance from a petal centre to its notch centre, outward.
+    petal_notch_distance: float
     #: Every lit ring dot (gates included), filled pink.
     dots: Tuple[Circle, ...]
+    #: The four corner finders, clockwise from the top-left one.
+    finders: Tuple[FinderShape, ...]
 
     def to_svg(self, size: Optional[int] = None) -> str:
-        """Serialise the draw list as a standalone SVG document."""
+        """Serialise the draw list as a standalone SVG document (the petal notches are
+        omitted)."""
         side = self.canvas if size is None else size
         p = self.palette
 
@@ -385,40 +513,51 @@ class DrawList:
         def circle(c: Circle) -> str:
             return f'<circle cx="{num(c.x)}" cy="{num(c.y)}" r="{num(c.radius)}"/>'
 
+        clip = self.backdrop_clip
         parts = [
             f'<svg xmlns="http://www.w3.org/2000/svg" width="{num(side)}" height="{num(side)}" '
             f'viewBox="0 0 {num(self.canvas)} {num(self.canvas)}">',
             f'<rect width="{num(self.canvas)}" height="{num(self.canvas)}" fill="{rgb(p.background)}"/>',
-            f'<g fill="{rgb(p.light)}">',
+            f'<defs><clipPath id="backdrop">{circle(clip)}</clipPath></defs>',
+            f'<g fill="{rgb(p.backdrop)}" clip-path="url(#backdrop)">',
         ]
+        for cell in self.backdrop:
+            parts.append(
+                f'<rect x="{num(cell.x)}" y="{num(cell.y)}" width="{num(cell.size)}" '
+                f'height="{num(cell.size)}"/>'
+            )
+        parts.append("</g>")
+        rx = num(self.petal_half_length)
+        ry = num(self.petal_half_width)
+        for light in (True, False):
+            parts.append(f'<g fill="{rgb(p.light if light else p.pink)}">')
+            for petal in self.petals:
+                if petal.light is light:
+                    x, y = num(petal.x), num(petal.y)
+                    parts.append(
+                        f'<ellipse cx="{x}" cy="{y}" rx="{rx}" ry="{ry}" '
+                        f'transform="rotate({num(math.degrees(petal.angle))} {x} {y})"/>'
+                    )
+            parts.append("</g>")
+        parts.append(f'<g fill="{rgb(p.pink)}">')
+        parts.extend(circle(c) for c in self.dots)
+        parts.append(f'</g><g fill="{rgb(p.light)}">')
         for finder in self.finders:
             parts.append(circle(finder.core))
             parts.extend(circle(c) for c in finder.petals)
         parts.append(f'</g><g fill="{rgb(p.background)}">')
         for finder in self.finders:
             parts.extend(circle(c) for c in finder.notches)
-        parts.append("</g>")
-        for tile in self.tiles:
-            if tile.fill is not None:
-                parts.append(
-                    f'<rect x="{num(tile.x)}" y="{num(tile.y)}" width="{num(tile.size)}" '
-                    f'height="{num(tile.size)}" rx="{num(tile.corner_radius)}" fill="{rgb(tile.fill)}"/>'
-                )
-            gx, gy, gs = tile.glyph_box
-            parts.append(
-                f'<svg x="{num(gx)}" y="{num(gy)}" width="{num(gs)}" height="{num(gs)}" '
-                f'viewBox="{num(gx)} {num(gy)} {num(gs)} {num(gs)}" overflow="hidden">'
-                f'<g fill="none" stroke="{rgb(tile.glyph_color)}" stroke-width="{num(tile.stroke_width)}" '
-                f'stroke-linecap="round" stroke-linejoin="round">'
-            )
-            for stroke in tile.strokes:
-                points = " ".join(f"{num(x)},{num(y)}" for x, y in stroke)
-                parts.append(f'<polyline points="{points}"/>')
-            parts.append("</g></svg>")
-        parts.append(f'<g fill="{rgb(p.pink)}">')
-        parts.extend(circle(c) for c in self.dots)
         parts.append("</g></svg>")
         return "\n".join(parts) + "\n"
+
+
+_BACKDROP_CELLS = tuple(
+    BackdropCell(MASK_ORIGIN + MASK_PITCH * col, MASK_ORIGIN + MASK_PITCH * row, MASK_PITCH)
+    for row, line in enumerate(MASK)
+    for col, mark in enumerate(line)
+    if mark == "#"
+)
 
 
 def draw_list(cells: FrameCells, palette: Optional[Palette] = None) -> DrawList:
@@ -441,35 +580,21 @@ def draw_list(cells: FrameCells, palette: Optional[Palette] = None) -> DrawList:
                 ),
             )
         )
-    half = TILE_SIZE / 2.0
-    box_half = GLYPH_BOX / 2.0
-    scale = GLYPH_BOX / GLYPH_GRID
-    tiles = []
-    for index in range(TILE_COUNT):
-        cx, cy = tile_center(index)
-        light = cells.light[index]
-        glyph = cells.glyph[index]
-        gx = cx - box_half
-        gy = cy - box_half
-        tiles.append(
-            TileShape(
-                index=index,
-                x=cx - half,
-                y=cy - half,
-                size=TILE_SIZE,
-                corner_radius=TILE_CORNER_RADIUS,
-                light=light,
-                glyph=glyph,
-                fill=palette.light if light else None,
-                glyph_color=palette.ink if light else palette.pink,
-                glyph_box=(gx, gy, GLYPH_BOX),
-                strokes=tuple(
-                    tuple((gx + x * scale, gy + y * scale) for x, y in stroke)
-                    for stroke in STROKES[glyph]
-                ),
-                stroke_width=STROKE_WIDTH * scale,
+    petals = []
+    for cell in range(FIELD_CELLS):
+        if cells.petals[cell]:
+            x, y = cell_center(cell)
+            light = cell_light(cell)
+            petals.append(
+                PetalShape(
+                    index=cell,
+                    x=x,
+                    y=y,
+                    angle=cell_angle(cell),
+                    light=light,
+                    color=palette.light if light else palette.pink,
+                )
             )
-        )
     dots = []
     for ring in range(RING_COUNT):
         slots = RING_SLOTS[ring]
@@ -487,7 +612,13 @@ def draw_list(cells: FrameCells, palette: Optional[Palette] = None) -> DrawList:
     return DrawList(
         canvas=CANVAS,
         palette=palette,
-        finders=tuple(finders),
-        tiles=tuple(tiles),
+        backdrop=_BACKDROP_CELLS,
+        backdrop_clip=Circle(CENTER, CENTER, BACKDROP_RADIUS),
+        petals=tuple(petals),
+        petal_half_length=PETAL_HALF_LENGTH,
+        petal_half_width=PETAL_HALF_WIDTH,
+        petal_notch_radius=PETAL_NOTCH_RADIUS,
+        petal_notch_distance=PETAL_NOTCH_DISTANCE,
         dots=tuple(dots),
+        finders=tuple(finders),
     )

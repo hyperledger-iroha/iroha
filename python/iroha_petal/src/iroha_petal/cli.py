@@ -5,10 +5,12 @@
 
 * ``encode`` renders numbered frames of a payload stream (PNG, PGM or SVG).
 * ``decode`` feeds image files (any order) through a :class:`ScanSession` and
-  writes the reassembled payload; it reports how many frames were read by
-  tracking the previous pose and how many had a hidden corner blossom.
-* ``inspect`` reports what one image decodes to, including a hidden (inferred)
-  corner blossom.
+  writes the reassembled payload; it reports the lanes each frame read (``D``
+  and the field sectors ``0``-``3``), how many frames were read by tracking the
+  previous pose, how many had a hidden corner blossom and which field lanes
+  merging recovered.
+* ``inspect`` reports what one image decodes to: the orientation, a hidden
+  (inferred) corner blossom, the lens distortion and every lane.
 
 No network and no camera access: frames are files.
 """
@@ -21,6 +23,7 @@ from pathlib import Path
 from typing import List, Optional, Sequence
 
 from .decode import DecodeError, decode_frame
+from .lanes import DECODE_ORDER
 from .pngio import read_luma, write_image
 from .render import RenderOptions, draw_list, render_frame
 from .session import ScanSession
@@ -29,6 +32,8 @@ from .stream import AtomPacket, Beacon, StreamEncoder, StreamError
 __all__ = ["main"]
 
 _IMAGE_SUFFIXES = (".png", ".pgm", ".ppm")
+#: The default display rate of a Petal stream, in frames per second.
+_DEFAULT_FPS = 8
 
 
 def _encode(args: argparse.Namespace) -> int:
@@ -108,8 +113,9 @@ def _decode(args: argparse.Namespace) -> int:
     if not args.quiet:
         print(
             f"frames: {stats.frames} read, {stats.located} located, {stats.readable} readable, "
-            f"{stats.tracked} tracked, {stats.inferred} with a hidden corner blossom, "
-            f"{stats.merges} merges, {stats.merged_p} merged P, {stats.merged_k} merged K",
+            f"{stats.tracked} tracked, {stats.inferred} with a hidden corner blossom; "
+            f"lane D read in {stats.lane_d} frames, {stats.field_lanes} field lanes; "
+            f"{stats.merges} merges, {stats.merged_lanes} merged field lanes",
             file=sys.stderr,
         )
     if completed is None:
@@ -135,13 +141,15 @@ def _inspect(args: argparse.Namespace) -> int:
     except DecodeError as error:
         print(f"no decode: {error.kind.name.lower()} ({error})")
         return 1
-    m = frame.homography.m
+    pose = frame.pose
     print(f"orientation: rotation {frame.rotation} quarter turns, mirrored {frame.mirrored}")
     if frame.inferred_corner is not None:
         # canonical index: 0 top-left, 1 top-right, 2 bottom-right, 3 bottom-left
         corner = ("top-left", "top-right", "bottom-right", "bottom-left")[frame.inferred_corner]
         print(f"inferred corner: {frame.inferred_corner} ({corner} blossom hidden)")
-    print("homography (canvas -> pixels):")
+    print(f"lens distortion: {pose.distortion:+.3f} (0 is none, negative is barrel)")
+    m = pose.homography.m
+    print("homography (canvas -> undistorted pixels):")
     for row in range(3):
         print("  " + "  ".join(f"{m[row * 3 + col]: .6g}" for col in range(3)))
     for name, (x, y) in (
@@ -149,13 +157,18 @@ def _inspect(args: argparse.Namespace) -> int:
         ("top-left finder", (72.0, 72.0)),
         ("bottom-right finder", (952.0, 952.0)),
     ):
-        px, py = frame.homography.apply(x, y)
+        px, py = pose.apply(x, y)
         print(f"  {name}: ({px:.1f}, {py:.1f})")
-    for letter, result in (("P", frame.p), ("K", frame.k), ("D", frame.d)):
+    print(f"lanes decoded: {frame.lanes or '-'}")
+    for lane in DECODE_ORDER:
+        result = frame.lane(lane)
         if result is None:
-            print(f"lane {letter}: not decoded")
+            print(f"lane {lane.letter}: not decoded")
         else:
-            print(f"lane {letter}: ok ({result.erasures} erasures) {result.data.hex()}")
+            print(
+                f"lane {lane.letter}: ok ({result.corrected} corrected, {result.erasures} erased) "
+                f"{result.data.hex()}"
+            )
     lane = frame.d_lane()
     if isinstance(lane, Beacon):
         meta = lane.meta
@@ -209,8 +222,9 @@ def _parser() -> argparse.ArgumentParser:
     decode.add_argument(
         "--frame-interval-ms",
         type=int,
-        default=100,
-        help="timestamp spacing between frames for the session timeouts (default 100)",
+        default=1000 // _DEFAULT_FPS,
+        help="timestamp spacing between frames for the session timeouts "
+        f"(default {1000 // _DEFAULT_FPS}: the {_DEFAULT_FPS} fps display rate)",
     )
     decode.add_argument("--quiet", action="store_true", help="do not report every frame")
     decode.set_defaults(handler=_decode)

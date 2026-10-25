@@ -160,15 +160,77 @@ public sealed class PetalDLane
     }
 }
 
+/// <summary>The bytes of every lane of one frame: lane data, or transmitted codewords.</summary>
+public sealed class PetalLaneData : IEquatable<PetalLaneData>
+{
+    private readonly byte[][] fields;
+
+    /// <summary>Creates the bytes of one frame.</summary>
+    /// <param name="d">Lane <c>D</c>.</param>
+    /// <param name="fields">The four field lanes, sector 0 first.</param>
+    /// <exception cref="ArgumentException">There are not exactly four field lanes.</exception>
+    public PetalLaneData(byte[] d, IReadOnlyList<byte[]> fields)
+    {
+        ArgumentNullException.ThrowIfNull(d);
+        ArgumentNullException.ThrowIfNull(fields);
+        if (fields.Count != PetalLayout.Sectors)
+            throw new ArgumentException("A frame has four field lanes.", nameof(fields));
+        var copies = new byte[PetalLayout.Sectors][];
+        for (var sector = 0; sector < copies.Length; sector++)
+            copies[sector] = fields[sector] ?? throw new ArgumentNullException(nameof(fields));
+        D = d;
+        this.fields = copies;
+        Fields = Array.AsReadOnly(copies);
+    }
+
+    /// <summary>Lane <c>D</c>.</summary>
+    public byte[] D { get; }
+
+    /// <summary>The field lanes, sector 0 first.</summary>
+    public IReadOnlyList<byte[]> Fields { get; }
+
+    /// <summary>The bytes of <paramref name="lane"/>.</summary>
+    /// <param name="lane">The lane.</param>
+    /// <returns>The lane's bytes.</returns>
+    public byte[] Lane(PetalLane lane) => PetalLanes.IsField(lane) ? fields[PetalLanes.Sector(lane)] : D;
+
+    /// <inheritdoc />
+    public bool Equals(PetalLaneData? other)
+    {
+        if (other is null || !D.AsSpan().SequenceEqual(other.D))
+            return false;
+        for (var sector = 0; sector < fields.Length; sector++)
+        {
+            if (!fields[sector].AsSpan().SequenceEqual(other.fields[sector]))
+                return false;
+        }
+
+        return true;
+    }
+
+    /// <inheritdoc />
+    public override bool Equals(object? obj) => Equals(obj as PetalLaneData);
+
+    /// <inheritdoc />
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        hash.AddBytes(D);
+        foreach (var field in fields)
+            hash.AddBytes(field);
+        return hash.ToHashCode();
+    }
+}
+
 /// <summary>
 /// Petal payload-stream framing shared by <see cref="PetalStreamEncoder"/> and
 /// <see cref="PetalStreamAssembler"/>.
 /// </summary>
 /// <remarks>
 /// <para>
-/// Every frame carries a handful of fountain atoms: lane <c>P</c> one atom,
-/// lane <c>K</c> five, and lane <c>D</c> one atom — except on every fourth
-/// frame (<c>frame % 4 == 0</c>), when lane <c>D</c> carries the stream beacon
+/// Every frame carries a handful of fountain atoms: each of the four field
+/// lanes five atoms, and lane <c>D</c> one atom — except on every fourth frame
+/// (<c>frame % 4 == 0</c>), when lane <c>D</c> carries the stream beacon
 /// instead, so a receiver can join at any frame within a fraction of a second.
 /// Atom ids run contiguously over the atoms actually sent (see
 /// <see cref="FirstAtomId"/>). Any single readable lane is useful on its own.
@@ -176,15 +238,16 @@ public sealed class PetalDLane
 /// <para>
 /// Lane data layouts (all big-endian): every lane starts with
 /// <c>tag:u8, frame:u16</c> where <c>tag</c> is the low byte of the payload
-/// CRC-32C; lanes <c>P</c>, <c>K</c> and non-beacon <c>D</c> continue with
-/// 16-byte atoms; the beacon continues with
-/// <c>version:u8, kind:u8, len:u24, crc:u32</c>, zero padded.
+/// CRC-32C; the field lanes and non-beacon <c>D</c> continue with 16-byte
+/// atoms; the beacon continues with <c>version:u8, kind:u8, len:u24, crc:u32</c>,
+/// zero padded.
 /// </para>
 /// </remarks>
 public static class PetalStream
 {
-    /// <summary>Version/profile byte of the beacon: format version 1, layout profile 0.</summary>
-    public const byte FormatVersion = 0x10;
+    /// <summary>Version/profile byte of the beacon: format version 2, layout profile 0.</summary>
+    /// <remarks>Any other version is refused, the retired format 1 (<c>0x10</c>) included.</remarks>
+    public const byte FormatVersion = 0x20;
 
     /// <summary>Largest payload a beacon can describe (<c>u24</c>).</summary>
     public const int MaxPayloadLength = (1 << 24) - 1;
@@ -205,10 +268,10 @@ public static class PetalStream
 
     /// <summary>Fountain atoms carried by <paramref name="frame"/>.</summary>
     /// <param name="frame">Frame counter.</param>
-    /// <returns>6 on beacon frames, otherwise 7.</returns>
+    /// <returns>20 on beacon frames, otherwise 21.</returns>
     public static int AtomsInFrame(ushort frame) => IsBeaconFrame(frame)
-        ? PetalLanes.PAtoms + PetalLanes.KAtoms
-        : PetalLanes.PAtoms + PetalLanes.DAtoms + PetalLanes.KAtoms;
+        ? PetalLanes.AtomsPerFrame - PetalLanes.DAtoms
+        : PetalLanes.AtomsPerFrame;
 
     /// <summary>Fountain id of the first atom of <paramref name="frame"/>.</summary>
     /// <remarks>
@@ -224,36 +287,27 @@ public static class PetalStream
     }
 
     /// <summary>Fountain id of the first atom <paramref name="lane"/> carries on <paramref name="frame"/>.</summary>
+    /// <remarks>The field lanes come first, in sector order, then lane <c>D</c>.</remarks>
     /// <param name="lane">The lane.</param>
     /// <param name="frame">Frame counter.</param>
     /// <returns>The lane's first atom id.</returns>
     public static uint LaneFirstId(PetalLane lane, ushort frame)
     {
         var start = FirstAtomId(frame);
-        return lane switch
-        {
-            PetalLane.P => start,
-            PetalLane.D => start + PetalLanes.PAtoms,
-            PetalLane.K => start + (uint)(PetalLanes.PAtoms + (IsBeaconFrame(frame) ? 0 : PetalLanes.DAtoms)),
-            _ => throw new ArgumentOutOfRangeException(nameof(lane)),
-        };
+        return PetalLanes.IsField(lane)
+            ? start + (uint)(PetalLanes.Sector(lane) * PetalLanes.FieldAtoms)
+            : start + (uint)(PetalLayout.Sectors * PetalLanes.FieldAtoms);
     }
 
-    /// <summary>Parses the data bytes of lane <c>P</c> or lane <c>K</c>.</summary>
+    /// <summary>Parses the data bytes of a field lane.</summary>
     /// <param name="lane">The lane (<c>D</c> is rejected).</param>
     /// <param name="data">Decoded lane data.</param>
     /// <returns>The atoms, or <see langword="null"/> for lane <c>D</c> or a wrong length.</returns>
     public static PetalAtomPacket? ParseAtomLane(PetalLane lane, ReadOnlySpan<byte> data)
     {
-        var count = lane switch
-        {
-            PetalLane.P => PetalLanes.PAtoms,
-            PetalLane.K => PetalLanes.KAtoms,
-            _ => 0,
-        };
-        if (count == 0 || data.Length != PetalLanes.DataLength(lane))
+        if (!PetalLanes.IsField(lane) || data.Length != PetalLanes.DataLength(lane))
             return null;
-        return ParseAtoms(lane, data, ParseHeader(data), count);
+        return ParseAtoms(lane, data, ParseHeader(data), PetalLanes.FieldAtoms);
     }
 
     /// <summary>Parses the data bytes of lane <c>D</c>.</summary>

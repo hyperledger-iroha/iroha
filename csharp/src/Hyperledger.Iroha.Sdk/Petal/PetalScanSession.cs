@@ -62,26 +62,22 @@ public sealed record PetalScanLimits
 /// <param name="Frames">Camera frames offered.</param>
 /// <param name="Located">Frames in which a code was located, whether or not a lane could be read.</param>
 /// <param name="Readable">Frames in which at least one lane decoded.</param>
-/// <param name="LaneP">Lane <c>P</c> successes.</param>
-/// <param name="LaneK">Lane <c>K</c> successes.</param>
 /// <param name="LaneD">Lane <c>D</c> successes.</param>
+/// <param name="FieldLanes">Field lane successes (up to four per frame).</param>
 /// <param name="Tracked">Frames read by tracking the previous pose instead of a full search.</param>
-/// <param name="Merges">Attempts to average two or more captures.</param>
-/// <param name="MergedP">Missing P lanes recovered by averaging.</param>
-/// <param name="MergedK">Missing K lanes recovered by averaging.</param>
 /// <param name="Inferred">Frames read with one corner finder hidden and inferred (a hint to move a thumb or the phone).</param>
+/// <param name="Merges">Merges of two or more captures of one shown frame.</param>
+/// <param name="MergedLanes">Field lanes recovered by merging captures.</param>
 public readonly record struct PetalScanStats(
     uint Frames,
     uint Located,
     uint Readable,
-    uint LaneP,
-    uint LaneK,
     uint LaneD,
+    uint FieldLanes,
     uint Tracked,
     uint Inferred,
     uint Merges,
-    uint MergedP,
-    uint MergedK);
+    uint MergedLanes);
 
 /// <summary>The result of offering one camera frame.</summary>
 public sealed class PetalScanOutcome
@@ -102,10 +98,16 @@ public sealed class PetalScanOutcome
     /// </summary>
     public PetalDecodeError? Error { get; }
 
-    /// <summary>Lanes that decoded, as letters from <c>"PKD"</c>.</summary>
+    /// <summary>
+    /// Lanes that decoded in this capture alone, as letters: <c>D</c> and the sector digits
+    /// <c>0</c>–<c>3</c>.
+    /// </summary>
     public string Lanes { get; }
 
-    /// <summary>Lanes recovered by averaging captures, as letters from <c>"PK"</c>.</summary>
+    /// <summary>
+    /// Field lanes recovered by merging this capture with earlier captures of its shown frame,
+    /// as sector digits.
+    /// </summary>
     public string Merged { get; }
 
     /// <summary>Receive progress after this frame.</summary>
@@ -127,11 +129,21 @@ public sealed class PetalScanOutcome
 /// pose is older than <see cref="TrackWindowMilliseconds"/>.
 /// </para>
 /// <para>
+/// A camera sees each shown frame two to four times, and noise, display banding or
+/// hand shake can cost every one of those captures a field lane. When a capture reads
+/// some lane but not every field lane, the session keeps its
+/// <see cref="PetalFieldEvidence"/> under the shown frame its decoded lane headers name
+/// (a capture whose lanes name different frames is not kept), for the last
+/// <see cref="MergeWindow"/> shown frames and at most <see cref="MergeCaptures"/>
+/// captures each. From the second such capture on, it merges them
+/// (<see cref="PetalDecoder.MergeFields"/>) and offers a recovered lane only when that
+/// lane's own header names the same frame. Replacing the active stream drops the held
+/// evidence.
+/// </para>
+/// <para>
 /// A half-received stream is forgotten after <see cref="PetalScanLimits.IdleTimeout"/>
 /// without new independent atoms, or <see cref="PetalScanLimits.AbsoluteTimeout"/>
-/// after it started. Partial tile reads are averaged across at most four captures of
-/// each of six shown frames; independently decoded lane headers must agree, and a
-/// recovered lane must name the same frame. Instances are not thread-safe; see
+/// after it started. Instances are not thread-safe; see
 /// <see cref="PetalCameraAnalyzer"/> for a camera-callback wrapper.
 /// </para>
 /// </remarks>
@@ -140,23 +152,13 @@ public sealed class PetalScanSession
     /// <summary>How long (in milliseconds) a decoded pose stays usable for tracking the next frames.</summary>
     public const long TrackWindowMilliseconds = 500;
 
-    /// <summary>Maximum number of shown-frame sets retained.</summary>
+    /// <summary>Shown frames whose captures are held for merging.</summary>
     public const int MergeWindow = 6;
-    /// <summary>Maximum captures retained per shown frame; further captures replace the oldest.</summary>
+
+    /// <summary>Captures held per shown frame; a further capture replaces the oldest.</summary>
     public const int MergeCaptures = 4;
 
-    private sealed class Held(PetalLaneHeader shown)
-    {
-        public PetalLaneHeader Shown { get; } = shown;
-        public List<PetalTileEvidence> Evidence { get; } = new();
-        public bool PDone { get; set; }
-        public bool KDone { get; set; }
-    }
-
     private readonly List<Held> held = new();
-    private uint merges;
-    private uint mergedP;
-    private uint mergedK;
     private readonly PetalStreamAssembler assembler;
     private long? startedMs;
     private long progressMs;
@@ -164,11 +166,12 @@ public sealed class PetalScanSession
     private uint frames;
     private uint located;
     private uint readable;
-    private uint laneP;
-    private uint laneK;
     private uint laneD;
+    private uint fieldLanes;
     private uint tracked;
     private uint inferred;
+    private uint merges;
+    private uint mergedLanes;
     private PetalDecodedFrame? lastPose;
     private long lastPoseMs;
 
@@ -184,12 +187,12 @@ public sealed class PetalScanSession
     public PetalScanLimits Limits { get; }
 
     /// <summary>Diagnostic counters.</summary>
-    public PetalScanStats Stats => new(frames, located, readable, laneP, laneK, laneD, tracked, inferred, merges, mergedP, mergedK);
+    public PetalScanStats Stats => new(frames, located, readable, laneD, fieldLanes, tracked, inferred, merges, mergedLanes);
 
     /// <summary>Current progress.</summary>
     public PetalProgress Progress => assembler.Progress;
 
-    /// <summary>Drops all partial state and the pose used for tracking (counters are kept).</summary>
+    /// <summary>Drops all partial state, the held captures and the pose used for tracking (counters are kept).</summary>
     public void Reset()
     {
         assembler.Reset();
@@ -245,15 +248,18 @@ public sealed class PetalScanSession
         return new PetalScanOutcome(result.Error, lanes, merged, progress, assembler.TakeCompleted());
     }
 
-    private string Absorb(PetalDecodedFrame frame)
+    /// <summary>Counts the lanes of a decoded frame and feeds them to the assembler.</summary>
+    internal string Absorb(PetalDecodedFrame frame)
     {
-        if (frame.P is not null)
-            laneP++;
-        if (frame.K is not null)
-            laneK++;
+        var lanes = frame.Lanes;
         if (frame.D is not null)
             laneD++;
-        var lanes = frame.Lanes;
+        foreach (var field in frame.Fields)
+        {
+            if (field is not null)
+                fieldLanes++;
+        }
+
         if (lanes.Length > 0)
             readable++;
         var previousMeta = assembler.Progress.Meta;
@@ -263,28 +269,15 @@ public sealed class PetalScanSession
         return lanes;
     }
 
-    private static PetalLaneHeader? ShownFrame(PetalDecodedFrame frame)
-    {
-        PetalLaneHeader? shown = null;
-        foreach (var lane in new[] { frame.D, frame.P, frame.K })
-        {
-            if (lane is null)
-                continue;
-            if (lane.Data.Length < 3)
-                return null;
-            var header = new PetalLaneHeader(lane.Data[0], (ushort)((lane.Data[1] << 8) | lane.Data[2]));
-            if (shown is { } previous && previous != header)
-                return null;
-            shown = header;
-        }
-        return shown;
-    }
-
+    /// <summary>
+    /// Holds this capture's field evidence under its shown frame and, from the second capture
+    /// on, merges the held captures of that frame.
+    /// </summary>
     internal string Merge(PetalLuma image, PetalDecodedFrame frame)
     {
         if (ShownFrame(frame) is not { } shown)
             return string.Empty;
-        var item = held.FirstOrDefault(h => h.Shown == shown);
+        var item = held.Find(h => h.Shown == shown);
         if (item is null)
         {
             if (held.Count == MergeWindow)
@@ -292,14 +285,16 @@ public sealed class PetalScanSession
             item = new Held(shown);
             held.Add(item);
         }
-        item.PDone |= frame.P is not null;
-        item.KDone |= frame.K is not null;
-        if (item.PDone && item.KDone)
+
+        for (var sector = 0; sector < PetalLayout.Sectors; sector++)
+            item.Done[sector] |= frame.Fields[sector] is not null;
+        if (item.AllDone)
         {
             item.Evidence.Clear();
             return string.Empty;
         }
-        if (PetalDecoder.TileEvidence(image, frame, Limits.Decode) is not { } evidence)
+
+        if (PetalDecoder.FieldEvidence(image, frame, Limits.Decode) is not { } evidence)
             return string.Empty;
         if (item.Evidence.Count == MergeCaptures)
             item.Evidence.RemoveAt(0);
@@ -307,33 +302,68 @@ public sealed class PetalScanSession
         if (item.Evidence.Count < 2)
             return string.Empty;
         merges++;
-        var (p, k) = PetalDecoder.MergeTiles(item.Evidence, Limits.Decode);
+        var results = PetalDecoder.MergeFields(item.Evidence, item.Done);
         var merged = string.Empty;
-        foreach (var (letter, lane, result) in new[] { ("P", PetalLane.P, p), ("K", PetalLane.K, k) })
+        foreach (var lane in PetalLanes.Fields)
         {
-            var done = lane == PetalLane.P ? item.PDone : item.KDone;
-            if (done || result is null || PetalStream.ParseAtomLane(lane, result.Data) is not { } packet || packet.Header != shown)
+            var sector = PetalLanes.Sector(lane);
+            if (results[sector] is not { } result || PetalStream.ParseAtomLane(lane, result.Data) is not { } packet)
                 continue;
-            if (lane == PetalLane.P)
-            {
-                item.PDone = true;
-                mergedP++;
-            }
-            else
-            {
-                item.KDone = true;
-                mergedK++;
-            }
+            // a merge offers only atoms of the shown frame it was made for
+            if (packet.Header != shown)
+                continue;
+            item.Done[sector] = true;
             assembler.PushAtoms(packet);
-            merged += letter;
+            mergedLanes++;
+            merged += PetalLanes.Letter(lane);
         }
-        if (item.PDone && item.KDone)
+
+        if (item.AllDone)
             item.Evidence.Clear();
         return merged;
+    }
+
+    /// <summary>The captures held for merging, oldest shown frame first (diagnostics and tests).</summary>
+    internal IReadOnlyList<Held> HeldFrames => held;
+
+    /// <summary>
+    /// The shown frame every decoded lane header of <paramref name="frame"/> names;
+    /// <see langword="null"/> when no lane decoded or the lanes of a torn capture name different
+    /// frames.
+    /// </summary>
+    private static PetalLaneHeader? ShownFrame(PetalDecodedFrame frame)
+    {
+        PetalLaneHeader? shown = null;
+        foreach (var lane in PetalLanes.DecodeOrder)
+        {
+            if (frame.Lane(lane) is not { } result)
+                continue;
+            if (result.Data.Length < PetalLanes.LaneHeaderLength)
+                return null;
+            var header = new PetalLaneHeader(result.Data[0], (ushort)((result.Data[1] << 8) | result.Data[2]));
+            if (shown is { } previous && previous != header)
+                return null;
+            shown = header;
+        }
+
+        return shown;
     }
 
     /// <summary>Saturating <c>now - since</c> (Rust <c>u64::saturating_sub</c>).</summary>
     private static ulong Elapsed(long now, long since) => now <= since ? 0 : unchecked((ulong)now - (ulong)since);
 
     private static ulong WholeMilliseconds(TimeSpan timeout) => (ulong)(timeout.Ticks / TimeSpan.TicksPerMillisecond);
+
+    /// <summary>The captures of one shown frame held for merging.</summary>
+    internal sealed class Held(PetalLaneHeader shown)
+    {
+        public PetalLaneHeader Shown { get; } = shown;
+
+        public List<PetalFieldEvidence> Evidence { get; } = new();
+
+        /// <summary>The field lanes already read from this shown frame, sector 0 first.</summary>
+        public bool[] Done { get; } = new bool[PetalLayout.Sectors];
+
+        public bool AllDone => Array.TrueForAll(Done, static done => done);
+    }
 }

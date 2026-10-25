@@ -15,7 +15,7 @@ from pathlib import Path
 
 from petal_test_support import SRC_DIR, captures_fixture, luma_of, payload
 
-from iroha_petal.cli import main
+from iroha_petal.cli import _parser, main
 from iroha_petal.pngio import write_image
 
 
@@ -42,8 +42,9 @@ class CliTest(unittest.TestCase):
             )  # fmt: skip
             self.assertEqual(status, 0, out)
             frames = sorted((root / "frames").iterdir())
-            # 7 source atoms fit in 2 systematic frames; the default doubles that
+            # 7 source atoms fit in one systematic frame; the default doubles that, at least 4
             self.assertEqual([f.name for f in frames], [f"frame_{i:04d}.png" for i in range(4)])
+            self.assertIn("1 systematic frames", out)
             # frames may arrive in any order
             status, out, err = run(
                 "decode",
@@ -56,8 +57,10 @@ class CliTest(unittest.TestCase):
             self.assertEqual((root / "out.bin").read_bytes(), data)
             self.assertIn("kind 5", out)
             # the frames share one pose, so every frame after the first follows it
-            self.assertIn(f"{frames[1].name}: PKD (tracked)", err)
+            self.assertIn(f"{frames[3].name}: D0123; rank 0/0", err)
+            self.assertIn(f"{frames[1].name}: D0123 (tracked)", err)
             self.assertIn("frames: 3 read, 3 located, 3 readable, 2 tracked", err)
+            self.assertIn("lane D read in 3 frames, 12 field lanes; 0 merges", err)
 
     def test_decode_reports_incomplete_streams(self) -> None:
         data = payload(2_000, 78)
@@ -111,11 +114,30 @@ class CliTest(unittest.TestCase):
             write_image(path, luma_of(capture))
             status, out, _ = run("inspect", str(path))
             self.assertEqual(status, 0)
-            self.assertIn("lane P: ok", out)
+            self.assertIn("lanes decoded: D0123", out)
             self.assertIn("lane D: ok", out)
+            self.assertIn("lane 0: ok", out)
+            self.assertIn("lane 3: ok", out)
             self.assertIn("rotation 3", out)
-            self.assertIn(capture["p_data"], out)
+            self.assertIn("lens distortion: +0.000", out)
+            self.assertIn(capture["d_data"], out)
+            self.assertIn(capture["field_data"][2], out)
             self.assertNotIn("inferred corner", out)
+            barrel = next(c for c in captures_fixture()["captures"] if c["name"] == "barrel-480p")
+            lens = Path(directory) / "lens.png"
+            write_image(lens, luma_of(barrel))
+            status, out, _ = run("inspect", str(lens))
+            self.assertEqual(status, 0)
+            self.assertIn("lens distortion: -0.120", out)
+            shadow = next(
+                c for c in captures_fixture()["captures"] if c["name"] == "shadow-band-540p"
+            )
+            shaded = Path(directory) / "shadow.png"
+            write_image(shaded, luma_of(shadow))
+            status, out, _ = run("inspect", str(shaded))
+            self.assertEqual(status, 0)
+            self.assertIn("lanes decoded: 0123", out)
+            self.assertIn("lane D: not decoded", out)
             hidden = next(
                 c for c in captures_fixture()["captures"] if c["name"] == "hidden-corner-540p"
             )
@@ -129,6 +151,11 @@ class CliTest(unittest.TestCase):
             status, out, _ = run("inspect", str(blank))
             self.assertEqual(status, 1)
             self.assertIn("no_finders", out)
+
+    def test_decode_spaces_frames_at_the_default_display_rate(self) -> None:
+        # frames are timestamped as shown at the default 8 fps unless told otherwise
+        args = _parser().parse_args(["decode", "--output", "out.bin"])
+        self.assertEqual(args.frame_interval_ms, 125)
 
     def test_module_entry_point_runs(self) -> None:
         result = subprocess.run(

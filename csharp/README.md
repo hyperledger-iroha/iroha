@@ -476,11 +476,14 @@ four-validator, hardware or release-qualification evidence.
 in the Sakura-storm look) that moves an opaque byte payload from a screen to a phone.
 The stream carries bytes only; this SDK has no peer-message codec. A KAGEMUSHA
 wallet V1 sender plays one `IPM1` message with its IPM1 kind as the stream `kind`
-([wallet wire §6](../specs/kagemusha_wallet_wire_v1.md)). Each frame carries three independent
-Reed–Solomon lanes of fountain-coded atoms — tile polarity (`P`), katakana
-glyphs (`K`) and ring dots (`D`, which carries the stream beacon every fourth
-frame) — so any readable lane of any frame adds progress. A payload is released
-only after its CRC-32C matches the beacon.
+([wallet wire §6](../specs/kagemusha_wallet_wire_v1.md)). Frames use format 2
+([Petal Stream spec](../specs/petal_stream.md)): each carries five independent
+Reed–Solomon lanes of fountain-coded atoms — the 3,376 petals of the field, cut
+into four sectors (`F0`–`F3`, `PetalLanes.Field(sector)`), and the ring dots (`D`,
+which carries the stream beacon every fourth frame) — so any readable lane of any
+frame adds progress. Reports name the lanes `D` and `0`–`3`. Petals inside the `天`
+are drawn light and the others pink, over a faint `天`. A payload is released only
+after its CRC-32C matches the beacon.
 
 ```csharp
 // Sender: draw frames at 8 fps through an IPetalCanvas adapter over the
@@ -496,23 +499,26 @@ analyzer.AnalyzeYPlane(yPlane, width, height, rowStride, pixelStride, timestampM
 
 `PetalDecoder.Decode` reports `UnsupportedImage`, `NoFinders` or
 `NoOrientation` through `PetalDecodeResult` and never throws on image content.
-Lanes `P` and `K` are first read against the light and dark levels measured at
-the finders; a lane that does not decode is retried from a normalised read that
-rescales every tile patch and glyph template by its own contrast, which cancels
-most over-exposure, veiling light, glare and shadow instead of losing the turbo
-lane. `PetalScanSession` also averages up to four captures of each of six shown
-frames to recover missing tile lanes. Independently decoded headers must agree,
-and recovered lane headers must name that frame. `PetalScanOutcome.Merged` and
-`PetalScanStats.Merges`, `MergedP` and `MergedK` report this recovery separately
-from individual captures; reset and stream timeouts discard held evidence.
-`PetalDecoder.TileEvidence` and `MergeTiles` expose the same low-level read.
+Every petal is one bit: its level, normalised by the light and dark levels measured
+at the finders, is compared with a two-means threshold of its sector and colour
+class. When a plain pose leaves a field lane unread, the decoder searches the pose
+for radial lens distortion (`PetalPose.Distortion`), then reads the sectors still
+unread from local levels that rescale every petal by its 32-unit neighbourhood,
+which cancels shadows, glare, banding and veiling light. `PetalScanSession` follows
+the code from frame to frame and also averages the field evidence of up to four
+captures of each of six shown frames to recover missing field lanes. Independently
+decoded headers must agree, and recovered lane headers must name that frame.
+`PetalScanOutcome.Merged` and `PetalScanStats.Merges` and `MergedLanes` report this
+recovery separately from individual captures (`LaneD`, `FieldLanes`); reset and
+stream timeouts discard held evidence. `PetalDecoder.FieldEvidence` and
+`MergeFields` expose the same low-level read.
 `PetalScanSession`, `PetalStreamAssembler` and `PetalRenderer`/`PetalDrawList`
 expose the lower layers, and `PetalPng` writes inspection images. Memory and
 work are bounded by `PetalDecodeOptions.MaxPixels` (12 MP) and
-`PetalAssemblerLimits` (64 KiB payloads, 128 pending atoms). Encoder output is
+`PetalAssemblerLimits` (64 KiB payloads, 512 pending atoms). Encoder output is
 bit-identical to Rust, and the decoder repeats the reference's IEEE double
 operations in the same order. The shared fixtures
-`fixtures/petal/petal_stream_v1.json` and `petal_captures_v1.json` pin both. Run
+`fixtures/petal/petal_stream_v2.json` and `petal_captures_v2.json` pin both. Run
 the Petal tests through the same built xUnit v3 runner:
 
 ```bash

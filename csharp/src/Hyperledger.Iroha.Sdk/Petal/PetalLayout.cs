@@ -27,13 +27,15 @@ public enum PetalSlotKind
 public readonly record struct PetalSlotRole(PetalSlotKind Kind, int DataBit);
 
 /// <summary>
-/// Normative Petal frame geometry.
+/// Normative Petal frame geometry (format 2).
 /// </summary>
 /// <remarks>
 /// All coordinates are design units on a square canvas of <see cref="Canvas"/>
 /// units with the origin at the top-left and <c>y</c> growing downward. A
 /// renderer scales the canvas to any pixel size; a decoder maps camera pixels
-/// back to design units. Cell order is defined by integer indices only.
+/// back to design units. Nothing depends on floating-point rounding for bit
+/// placement: cell order is defined by integer indices only, and the slot count
+/// of every band is a fixed table.
 /// </remarks>
 public static class PetalLayout
 {
@@ -43,35 +45,63 @@ public static class PetalLayout
     /// <summary>Canvas centre coordinate on both axes.</summary>
     public const double Center = 512.0;
 
-    /// <summary>Number of tile lattice columns and rows.</summary>
-    public const int TileGrid = 20;
+    /// <summary>Number of petal bands (concentric rings of field cells).</summary>
+    public const int BandCount = 34;
 
-    /// <summary>Canvas coordinate of the lattice's left and top edge.</summary>
-    public const double TileOrigin = 222.0;
+    /// <summary>Radius of band 0.</summary>
+    public const double BandInner = 16.0;
 
-    /// <summary>Lattice pitch in design units.</summary>
-    public const double TilePitch = 29.0;
+    /// <summary>Radial distance between consecutive bands.</summary>
+    public const double BandSpacing = 11.0;
 
-    /// <summary>Side of a drawn tile in design units (pitch minus a 4-unit gutter).</summary>
-    public const double TileSize = 25.0;
+    /// <summary>Number of field cells.</summary>
+    public const int FieldCells = 3376;
 
-    /// <summary>Corner radius of a drawn tile in design units.</summary>
-    public const double TileCornerRadius = 3.0;
+    /// <summary>Angular sectors of the field; each is one lane codeword.</summary>
+    public const int Sectors = 4;
 
-    /// <summary>Side of the square glyph box inside a tile.</summary>
-    public const double GlyphBox = 23.0;
+    /// <summary>Cells in each sector.</summary>
+    public const int SectorCells = FieldCells / Sectors;
 
-    /// <summary>Number of data tiles in the <c>天</c> mask.</summary>
-    public const int TileCount = 256;
+    /// <summary>Radius of the disc a petal stands in for: decoders sample within it.</summary>
+    /// <remarks>
+    /// The petal dimensions are single precision, as in the reference; sampling and rendering
+    /// widen them exactly to double (4.6 becomes 4.599999904632568).
+    /// </remarks>
+    public const float PetalRadius = 4.6f;
+
+    /// <summary>Half the length of a drawn petal, along the outward radial direction (single precision).</summary>
+    public const float PetalHalfLength = 5.2f;
+
+    /// <summary>Half the width of a drawn petal (single precision).</summary>
+    public const float PetalHalfWidth = 4.3f;
+
+    /// <summary>Radius of the cosmetic notch cut into each petal tip (single precision).</summary>
+    public const float PetalNotchRadius = 1.3f;
+
+    /// <summary>Distance from a petal centre to its notch centre, outward (single precision).</summary>
+    public const float PetalNotchDistance = 5.4f;
+
+    /// <summary>Number of lattice columns and rows of the <c>天</c> mask.</summary>
+    public const int MaskGrid = 20;
+
+    /// <summary>Canvas coordinate of the mask lattice's left and top edge.</summary>
+    public const double MaskOrigin = 182.0;
+
+    /// <summary>Mask lattice pitch in design units.</summary>
+    public const double MaskPitch = 33.0;
+
+    /// <summary>Radius beyond which the <c>天</c> backdrop is not drawn.</summary>
+    public const double BackdropRadius = 390.0;
 
     /// <summary>Number of concentric dot rings.</summary>
     public const int RingCount = 3;
 
     /// <summary>Radius of a drawn ring dot.</summary>
-    public const double DotRadius = 11.0;
+    public const double DotRadius = 9.0;
 
     /// <summary>Total dot slots over the three rings.</summary>
-    public const int TotalSlots = 80 + 92 + 104;
+    public const int TotalSlots = 88 + 100 + 108;
 
     /// <summary>Number of lane <c>D</c> bits carried by the rings.</summary>
     public const int DBits = 240;
@@ -93,6 +123,17 @@ public static class PetalLayout
 
     /// <summary>Outer radius of a finder blossom (tip of a petal).</summary>
     public const double FinderOuter = 60.0;
+
+    /// <summary>
+    /// Cells on each band, inner band first: <c>4 · round(2π r / 50)</c> for the band radius
+    /// <c>r</c>, about one cell every 12.5 units. Every count is a multiple of four, so the four
+    /// sectors split each band evenly. The table, not the formula, is normative.
+    /// </summary>
+    private static readonly int[] BandSlotCounts =
+    [
+        8, 12, 20, 24, 32, 36, 40, 48, 52, 56, 64, 68, 76, 80, 84, 92, 96, 104, 108, 112, 120, 124,
+        128, 136, 140, 148, 152, 156, 164, 168, 172, 180, 184, 192,
+    ];
 
     private static readonly string[] MaskRows =
     [
@@ -118,9 +159,9 @@ public static class PetalLayout
         ".....##########.....",
     ];
 
-    private static readonly int[] RingSlotCounts = [80, 92, 104];
-    private static readonly float[] RingRadiiSingle = [360.0f, 410.0f, 460.0f];
-    private static readonly double[] RingRadiiValues = [360.0, 410.0, 460.0];
+    private static readonly int[] RingSlotCounts = [88, 100, 108];
+    private static readonly float[] RingRadiiSingle = [405.0f, 440.0f, 475.0f];
+    private static readonly double[] RingRadiiValues = [405.0, 440.0, 475.0];
 
     /// <summary>Dots per gate (right, bottom, left) and ring; there is deliberately no top gate.</summary>
     private static readonly int[,] GateDotCounts = { { 1, 1, 3 }, { 2, 2, 2 }, { 1, 2, 2 } };
@@ -133,9 +174,17 @@ public static class PetalLayout
         new(72.0, 952.0),
     ];
 
-    private static readonly byte[] TileColumns = new byte[TileCount];
-    private static readonly byte[] TileRows = new byte[TileCount];
-    private static readonly PetalPoint[] TileCenters = new PetalPoint[TileCount];
+    private static readonly int[] BandOffsetValues = new int[BandCount + 1];
+    private static readonly int[] CellBands = new int[FieldCells];
+    private static readonly int[] CellSlots = new int[FieldCells];
+    private static readonly double[] CellAngles = new double[FieldCells];
+    private static readonly double[] CellCosines = new double[FieldCells];
+    private static readonly double[] CellSines = new double[FieldCells];
+    private static readonly double[] CellXs = new double[FieldCells];
+    private static readonly double[] CellYs = new double[FieldCells];
+    private static readonly bool[] CellLights = new bool[FieldCells];
+    private static readonly int[] SectorOrderValues = new int[FieldCells];
+    private static readonly IReadOnlyList<int>[] SectorOrderViews = new IReadOnlyList<int>[Sectors];
     private static readonly PetalSlotRole[] Roles;
     private static readonly int[] DataSlotIndices;
     private static readonly int[] GateSlotIndices;
@@ -144,29 +193,49 @@ public static class PetalLayout
 
     static PetalLayout()
     {
-        var count = 0;
-        for (var row = 0; row < TileGrid; row++)
+        for (var band = 0; band < BandCount; band++)
         {
-            for (var column = 0; column < TileGrid; column++)
+            if (BandSlotCounts[band] % Sectors != 0)
+                throw new InvalidOperationException("Band slot counts are multiples of four.");
+            BandOffsetValues[band + 1] = BandOffsetValues[band] + BandSlotCounts[band];
+        }
+
+        if (BandOffsetValues[BandCount] != FieldCells)
+            throw new InvalidOperationException("The band table must hold every field cell.");
+        for (var band = 0; band < BandCount; band++)
+        {
+            double radius = BandRadius(band);
+            for (var slot = 0; slot < BandSlotCounts[band]; slot++)
             {
-                if (MaskRows[row][column] != '#')
-                    continue;
-                TileColumns[count] = (byte)column;
-                TileRows[count] = (byte)row;
-                count++;
+                var cell = BandOffsetValues[band] + slot;
+                CellBands[cell] = band;
+                CellSlots[cell] = slot;
+                // Exactly the reference `cell_angle` and `cell_center`, in double precision.
+                var angle = Math.Tau * (slot + BandPhase(band)) / BandSlotCounts[band];
+                CellAngles[cell] = angle;
+                CellCosines[cell] = Math.Cos(angle);
+                CellSines[cell] = Math.Sin(angle);
+                CellXs[cell] = Center + radius * CellCosines[cell];
+                CellYs[cell] = Center + radius * CellSines[cell];
+                CellLights[cell] = InMask(CellXs[cell], CellYs[cell]);
             }
         }
 
-        if (count != TileCount)
-            throw new InvalidOperationException("The Petal mask must contain exactly 256 tiles.");
-        for (var tile = 0; tile < TileCount; tile++)
+        var at = 0;
+        for (var sector = 0; sector < Sectors; sector++)
         {
-            // Exact in binary floating point: multiples of 0.5 below 1024.
-            TileCenters[tile] = new PetalPoint(
-                TileOrigin + TilePitch * (TileColumns[tile] + 0.5),
-                TileOrigin + TilePitch * (TileRows[tile] + 0.5));
+            for (var band = 0; band < BandCount; band++)
+            {
+                var quarter = BandSlotCounts[band] / Sectors;
+                for (var slot = sector * quarter; slot < (sector + 1) * quarter; slot++)
+                    SectorOrderValues[at++] = BandOffsetValues[band] + slot;
+            }
+
+            SectorOrderViews[sector] = Array.AsReadOnly(SectorOrderValues[(sector * SectorCells)..((sector + 1) * SectorCells)]);
         }
 
+        if (at != FieldCells)
+            throw new InvalidOperationException("Every field cell belongs to exactly one sector.");
         Roles = BuildSlotRoles();
         DataSlotIndices = new int[DBits];
         var gates = new List<int>();
@@ -196,12 +265,23 @@ public static class PetalLayout
         }
     }
 
-    /// <summary>The <c>天</c> silhouette, one string per lattice row from top to bottom; <c>#</c> marks a data tile.</summary>
+    /// <summary>
+    /// The <c>天</c> silhouette, one string per lattice row from top to bottom; <c>#</c> marks a
+    /// lattice cell inside the character.
+    /// </summary>
     /// <remarks>
-    /// The mask is mirror-symmetric left to right and not symmetric top to
-    /// bottom, so it also tells a decoder which way is up.
+    /// Petals whose centre lies in a <c>#</c> cell are drawn in the light colour, the others in
+    /// pink, and the <c>#</c> cells inside <see cref="BackdropRadius"/> are drawn as a faint
+    /// backdrop, so the character shows through the petals. The mask is mirror-symmetric left
+    /// to right and not top to bottom.
     /// </remarks>
     public static IReadOnlyList<string> Mask { get; } = Array.AsReadOnly(MaskRows);
+
+    /// <summary>Cells on each band, inner band first (the normative table).</summary>
+    public static IReadOnlyList<int> BandSlots { get; } = Array.AsReadOnly(BandSlotCounts);
+
+    /// <summary>Index of the first cell of every band, followed by <see cref="FieldCells"/>.</summary>
+    public static IReadOnlyList<int> BandOffsets { get; } = Array.AsReadOnly(BandOffsetValues);
 
     /// <summary>Ring radii in design units, inner to outer.</summary>
     public static IReadOnlyList<double> RingRadii { get; } = Array.AsReadOnly(RingRadiiValues);
@@ -218,23 +298,106 @@ public static class PetalLayout
     /// <summary>Flat slot indices of the always-dark guard slots, ascending.</summary>
     public static IReadOnlyList<int> GuardSlots => Array.AsReadOnly(GuardSlotIndices);
 
-    /// <summary>Lattice <c>(Column, Row)</c> of data tile <paramref name="index"/> (row-major order).</summary>
-    /// <param name="index">Tile index, 0 to 255.</param>
-    /// <returns>The lattice coordinates.</returns>
-    public static (int Column, int Row) Tile(int index)
+    /// <summary>Radius of band <paramref name="band"/>: <c>16 + 11·band</c>.</summary>
+    /// <param name="band">Band index, 0 to 33.</param>
+    /// <returns>The band radius in design units.</returns>
+    public static double BandRadius(int band)
     {
-        CheckTile(index);
-        return (TileColumns[index], TileRows[index]);
+        CheckBand(band);
+        return BandInner + BandSpacing * band;
     }
 
-    /// <summary>Canvas coordinates of the centre of tile <paramref name="index"/>.</summary>
-    /// <param name="index">Tile index, 0 to 255.</param>
-    /// <returns>The tile centre.</returns>
-    public static PetalPoint TileCenter(int index)
+    /// <summary>
+    /// Fraction of a slot by which band <paramref name="band"/> is turned: odd bands sit half a
+    /// slot over, so neighbouring bands interleave.
+    /// </summary>
+    /// <param name="band">Band index.</param>
+    /// <returns><c>0.5</c> on odd bands, otherwise <c>0</c>.</returns>
+    public static double BandPhase(int band) => band % 2 == 1 ? 0.5 : 0.0;
+
+    /// <summary>Band and slot of field cell <paramref name="cell"/>.</summary>
+    /// <param name="cell">Field cell index, 0 to 3375.</param>
+    /// <returns>The band and the slot within it.</returns>
+    public static (int Band, int Slot) CellBandSlot(int cell)
     {
-        CheckTile(index);
-        return TileCenters[index];
+        CheckCell(cell);
+        return (CellBands[cell], CellSlots[cell]);
     }
+
+    /// <summary>
+    /// Angle (radians, clockwise on screen from 3 o'clock) of the centre of field cell
+    /// <paramref name="cell"/>: <c>2π (slot + phase) / n</c>.
+    /// </summary>
+    /// <param name="cell">Field cell index.</param>
+    /// <returns>The angle; also the outward direction of the cell's petal.</returns>
+    public static double CellAngle(int cell)
+    {
+        CheckCell(cell);
+        return CellAngles[cell];
+    }
+
+    /// <summary>Canvas coordinates of the centre of field cell <paramref name="cell"/>.</summary>
+    /// <param name="cell">Field cell index.</param>
+    /// <returns>The cell centre (double precision, as the reference computes it).</returns>
+    public static PetalPoint CellCenter(int cell)
+    {
+        CheckCell(cell);
+        return new PetalPoint(CellXs[cell], CellYs[cell]);
+    }
+
+    /// <summary>Whether field cell <paramref name="cell"/> lies inside the <c>天</c> (drawn in the light colour).</summary>
+    /// <param name="cell">Field cell index.</param>
+    /// <returns><see langword="true"/> for a light cell, <see langword="false"/> for a pink one.</returns>
+    public static bool CellLight(int cell)
+    {
+        CheckCell(cell);
+        return CellLights[cell];
+    }
+
+    /// <summary>
+    /// The cells of sector <paramref name="sector"/> in bit order: band by band from the centre
+    /// out, and within a band in ascending slot order.
+    /// </summary>
+    /// <remarks>
+    /// Sector <c>s</c> holds slots <c>s·n/4 … (s+1)·n/4 − 1</c> of every band of <c>n</c> slots.
+    /// The first <c>8 ×</c> <see cref="PetalLanes.FieldWordLength"/> cells carry the sector's
+    /// codeword; the rest are spare and stay dark.
+    /// </remarks>
+    /// <param name="sector">Sector index, 0 to 3.</param>
+    /// <returns>The <see cref="SectorCells"/> cell indices.</returns>
+    public static IReadOnlyList<int> SectorCellOrder(int sector)
+    {
+        if ((uint)sector >= Sectors)
+            throw new ArgumentOutOfRangeException(nameof(sector));
+        return SectorOrderViews[sector];
+    }
+
+    /// <summary>Whether the canvas point <c>(x, y)</c> lies inside the <c>天</c> mask.</summary>
+    /// <param name="x">Canvas x.</param>
+    /// <param name="y">Canvas y.</param>
+    /// <returns><see langword="true"/> when the point lies in a <c>#</c> lattice cell.</returns>
+    public static bool InMask(double x, double y)
+    {
+        if (x < MaskOrigin || y < MaskOrigin)
+            return false;
+        var column = LatticeIndex((x - MaskOrigin) / MaskPitch);
+        var row = LatticeIndex((y - MaskOrigin) / MaskPitch);
+        return column < MaskGrid && row < MaskGrid && MaskRows[row][column] == '#';
+    }
+
+    /// <summary>
+    /// Returns whether the point <c>(dx, dy)</c>, relative to the centre of a petal that points
+    /// along <paramref name="angle"/>, is lit.
+    /// </summary>
+    /// <remarks>
+    /// A petal is an ellipse of half-length <see cref="PetalHalfLength"/> along the outward
+    /// direction and half-width <see cref="PetalHalfWidth"/>, minus the cosmetic notch at its tip.
+    /// </remarks>
+    /// <param name="dx">Horizontal offset from the petal centre.</param>
+    /// <param name="dy">Vertical offset from the petal centre.</param>
+    /// <param name="angle">Outward direction of the petal (radians, clockwise from 3 o'clock).</param>
+    /// <returns><see langword="true"/> when the point is inside the petal.</returns>
+    public static bool PetalLit(double dx, double dy, double angle) => PetalLit(dx, dy, Math.Sin(angle), Math.Cos(angle));
 
     /// <summary>Dots in gate <paramref name="gate"/> (0 right, 1 bottom, 2 left) on ring <paramref name="ring"/>.</summary>
     /// <param name="gate">Gate index.</param>
@@ -333,6 +496,12 @@ public static class PetalLayout
     /// <summary>Shared ring slot count table.</summary>
     internal static ReadOnlySpan<int> RingSlotTable => RingSlotCounts;
 
+    /// <summary>Shared band slot count table.</summary>
+    internal static ReadOnlySpan<int> BandSlotTable => BandSlotCounts;
+
+    /// <summary>Shared band offset table (<see cref="BandCount"/> + 1 entries).</summary>
+    internal static ReadOnlySpan<int> BandOffsetTable => BandOffsetValues;
+
     /// <summary>Shared gate slot table.</summary>
     internal static ReadOnlySpan<int> GateSlotTable => GateSlotIndices;
 
@@ -345,11 +514,43 @@ public static class PetalLayout
     /// <summary>Shared lane <c>D</c> bit-to-slot table (no copy).</summary>
     internal static ReadOnlySpan<int> DataSlotTable => DataSlotIndices;
 
+    /// <summary>Precomputed cell centres, angles, their cosines and sines, and light flags (decoder and renderer hot paths).</summary>
+    internal static ReadOnlySpan<double> CellXTable => CellXs;
+
+    internal static ReadOnlySpan<double> CellYTable => CellYs;
+
+    internal static ReadOnlySpan<double> CellAngleTable => CellAngles;
+
+    internal static ReadOnlySpan<double> CellCosineTable => CellCosines;
+
+    internal static ReadOnlySpan<double> CellSineTable => CellSines;
+
+    internal static ReadOnlySpan<bool> CellLightTable => CellLights;
+
+    internal static ReadOnlySpan<int> CellBandTable => CellBands;
+
+    /// <summary>The cells of every sector in bit order: sector <c>s</c> occupies <c>[s·844, (s+1)·844)</c>.</summary>
+    internal static ReadOnlySpan<int> SectorOrderTable => SectorOrderValues;
+
     /// <summary>Precomputed slot centre by flat index (decoder hot path).</summary>
     internal static PetalPoint SlotCenterFlat(int flat) => SlotCenters[flat];
 
-    /// <summary>Precomputed tile centre (decoder hot path).</summary>
-    internal static PetalPoint TileCenterUnchecked(int index) => TileCenters[index];
+    /// <summary><see cref="PetalLit(double, double, double)"/> with the sine and cosine of the angle already taken.</summary>
+    internal static bool PetalLit(double dx, double dy, double sin, double cos)
+    {
+        // The reference widens its single-precision petal constants to double.
+        const double halfLength = PetalHalfLength;
+        const double halfWidth = PetalHalfWidth;
+        const double notch = PetalNotchDistance;
+        const double notchRadius = PetalNotchRadius;
+        var along = dx * cos + dy * sin;
+        var across = -dx * sin + dy * cos;
+        var (u, v) = (along / halfLength, across / halfWidth);
+        if (u * u + v * v > 1.0)
+            return false;
+        var tip = along - notch;
+        return tip * tip + across * across > notchRadius * notchRadius;
+    }
 
     /// <summary>Gate dots then guard slots of one ring, as the reference's private <c>gate_slots</c>.</summary>
     internal static (List<int> Gates, List<int> Guards) GateSlotsOfRing(int ring)
@@ -376,6 +577,14 @@ public static class PetalLayout
         }
 
         return (gates, guards);
+    }
+
+    /// <summary>Rust <c>value as usize</c> for a lattice coordinate, saturated at <see cref="MaskGrid"/>.</summary>
+    private static int LatticeIndex(double value)
+    {
+        if (double.IsNaN(value))
+            return 0;
+        return value < MaskGrid ? (int)value : MaskGrid;
     }
 
     private static PetalSlotRole[] BuildSlotRoles()
@@ -414,10 +623,16 @@ public static class PetalLayout
         return new PetalPoint(x, y);
     }
 
-    private static void CheckTile(int index)
+    private static void CheckBand(int band)
     {
-        if ((uint)index >= TileCount)
-            throw new ArgumentOutOfRangeException(nameof(index));
+        if ((uint)band >= BandCount)
+            throw new ArgumentOutOfRangeException(nameof(band));
+    }
+
+    private static void CheckCell(int cell)
+    {
+        if ((uint)cell >= FieldCells)
+            throw new ArgumentOutOfRangeException(nameof(cell));
     }
 
     private static void CheckRing(int ring)

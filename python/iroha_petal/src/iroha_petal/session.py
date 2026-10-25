@@ -6,30 +6,38 @@
 After a frame decodes, the next frames are first read by tracking the code from
 its last pose (:func:`~iroha_petal.decode.track_frame`), which skips the finder
 search; a full :func:`~iroha_petal.decode.decode_frame` runs when tracking fails
-or the last pose is older than :data:`TRACK_WINDOW_MS`. Repeated captures whose
-independently decoded lane headers agree are averaged to recover missing tile
-lanes, keeping at most four captures of six shown frames.
+or the last pose is older than :data:`TRACK_WINDOW_MS`.
+
+A camera sees each shown frame two to four times, and noise, display banding or
+hand shake can cost every one of those captures a field lane. When a capture
+reads some lane but not every field lane, the session keeps its
+:class:`~iroha_petal.decode.FieldEvidence` under the shown frame its decoded
+lane headers name, for the last :data:`MERGE_WINDOW` shown frames. From the
+second such capture on, it merges them
+(:func:`~iroha_petal.decode.merge_fields`) and offers a recovered lane only
+when that lane's own header names the same frame.
 """
 
 from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass, field, replace
-from typing import Deque, Optional, Tuple
+from typing import Deque, List, Optional, Tuple
 
 from .decode import (
     DecodedFrame,
     DecodeError,
     DecodeErrorKind,
     DecodeOptions,
-    _TileEvidence,
-    _merge_tiles,
-    _tile_evidence,
+    FieldEvidence,
     decode_frame,
+    field_evidence,
+    merge_fields,
     track_frame,
 )
 from .image import Luma
-from .lanes import Lane
+from .lanes import DECODE_ORDER, FIELD_LANES
+from .layout import SECTORS
 from .stream import (
     AssemblerLimits,
     Completed,
@@ -39,13 +47,21 @@ from .stream import (
     parse_atom_lane,
 )
 
-__all__ = ["TRACK_WINDOW_MS", "ScanLimits", "ScanStats", "ScanOutcome", "ScanSession"]
+__all__ = [
+    "TRACK_WINDOW_MS",
+    "MERGE_WINDOW",
+    "MERGE_CAPTURES",
+    "ScanLimits",
+    "ScanStats",
+    "ScanOutcome",
+    "ScanSession",
+]
 
 #: How long a decoded pose stays usable for tracking the next frames.
 TRACK_WINDOW_MS = 500
 #: Shown frames whose captures are held for merging.
 MERGE_WINDOW = 6
-#: Captures per shown frame; further captures replace the oldest.
+#: Captures held per shown frame; a further capture replaces the oldest.
 MERGE_CAPTURES = 4
 
 
@@ -73,22 +89,18 @@ class ScanStats:
     located: int = 0
     #: Frames in which at least one lane decoded.
     readable: int = 0
-    #: Lane ``P`` successes.
-    lane_p: int = 0
-    #: Lane ``K`` successes.
-    lane_k: int = 0
     #: Lane ``D`` successes.
     lane_d: int = 0
+    #: Field lane successes (up to four per frame).
+    field_lanes: int = 0
     #: Frames read by tracking the previous pose instead of a full search.
     tracked: int = 0
     #: Frames read with one corner finder hidden and inferred.
     inferred: int = 0
     #: Merges of two or more captures of one shown frame.
     merges: int = 0
-    #: Lane ``P`` reads recovered by merging captures.
-    merged_p: int = 0
-    #: Lane ``K`` reads recovered by merging captures.
-    merged_k: int = 0
+    #: Field lanes recovered by merging captures.
+    merged_lanes: int = 0
 
 
 @dataclass(frozen=True)
@@ -98,35 +110,45 @@ class ScanOutcome:
     #: Why the frame produced nothing, when it did not. ``NO_ORIENTATION``
     #: means a code was located but no lane could be read (too far, too blurry).
     error: Optional[DecodeErrorKind]
-    #: Lanes that decoded, as letters from ``"PKD"``.
+    #: Lanes that decoded in this capture alone, as letters: ``D`` and the sector
+    #: digits ``0``-``3``.
     lanes: str
     #: Receive progress after this frame.
     progress: Progress
     #: The finished payload, delivered exactly once.
     completed: Optional[Completed]
-    #: Tile lanes newly recovered by merging, as letters from ``"PK"``.
+    #: Field lanes recovered by merging this capture with earlier captures of its
+    #: shown frame, as sector digits.
     merged: str = ""
 
 
 @dataclass
 class _Held:
-    """The bounded captures of one independently identified shown frame."""
+    """The captures of one shown frame held for merging."""
 
     shown: LaneHeader
-    evidence: Deque[_TileEvidence] = field(default_factory=deque)
-    p_done: bool = False
-    k_done: bool = False
+    evidence: Deque[FieldEvidence] = field(default_factory=deque)
+    done: List[bool] = field(default_factory=lambda: [False] * SECTORS)
+
+
+def _lane_header(data: bytes) -> Optional[LaneHeader]:
+    """The header every lane starts with."""
+    if len(data) < 3:
+        return None
+    return LaneHeader(data[0], (data[1] << 8) | data[2])
 
 
 def _shown_frame(frame: DecodedFrame) -> Optional[LaneHeader]:
-    """Require every independently decoded lane to name the same shown frame."""
+    """The shown frame every decoded lane header of ``frame`` names; ``None`` when no
+    lane decoded or the lanes of a torn capture name different frames."""
     shown = None
-    for lane in (frame.d, frame.p, frame.k):
-        if lane is None:
+    for lane in DECODE_ORDER:
+        result = frame.lane(lane)
+        if result is None:
             continue
-        if len(lane.data) < 3:
+        header = _lane_header(result.data)
+        if header is None:
             return None
-        header = LaneHeader(lane.data[0], int.from_bytes(lane.data[1:3], "big"))
         if shown is not None and shown != header:
             return None
         shown = header
@@ -228,8 +250,26 @@ class ScanSession:
         """
         return self.push(Luma.from_strided(width, height, stride, plane), now_ms)
 
+    def _absorb(self, frame: DecodedFrame) -> str:
+        lanes = frame.lanes
+        stats = self._stats
+        self._stats = replace(
+            stats,
+            lane_d=stats.lane_d + (frame.d is not None),
+            field_lanes=stats.field_lanes + sum(1 for f in frame.fields if f is not None),
+            readable=stats.readable + (1 if lanes else 0),
+        )
+        previous_meta = self._assembler.progress().meta
+        frame.feed(self._assembler)
+        # Tags are only eight bits: held evidence and done flags belong to the full stream
+        # identity. Captures that preceded the first beacon remain useful.
+        if previous_meta is not None and self._assembler.progress().meta != previous_meta:
+            self._held.clear()
+        return lanes
+
     def _merge(self, image: Luma, frame: DecodedFrame) -> str:
-        """Average only captures keyed by an independently decoded lane header."""
+        """Holds this capture's field evidence under its shown frame and, from the second
+        capture on, merges the held captures of that frame."""
         shown = _shown_frame(frame)
         if shown is None:
             return ""
@@ -239,12 +279,14 @@ class ScanSession:
                 self._held.popleft()
             held = _Held(shown)
             self._held.append(held)
-        held.p_done |= frame.p is not None
-        held.k_done |= frame.k is not None
-        if held.p_done and held.k_done:
+        done = held.done
+        for sector, result in enumerate(frame.fields):
+            if result is not None:
+                done[sector] = True
+        if all(done):
             held.evidence.clear()
             return ""
-        evidence = _tile_evidence(image, frame, self._limits.decode)
+        evidence = field_evidence(image, frame, self._limits.decode)
         if evidence is None:
             return ""
         if len(held.evidence) == MERGE_CAPTURES:
@@ -253,38 +295,19 @@ class ScanSession:
         if len(held.evidence) < 2:
             return ""
         self._stats = replace(self._stats, merges=self._stats.merges + 1)
-        p, k = _merge_tiles(list(held.evidence), self._limits.decode)
+        results = merge_fields(list(held.evidence), tuple(done))
         merged = ""
-        for letter, lane, result, done, counter in (
-            ("P", Lane.P, p, "p_done", "merged_p"),
-            ("K", Lane.K, k, "k_done", "merged_k"),
-        ):
-            packet = parse_atom_lane(lane, result.data) if result is not None else None
-            if getattr(held, done) or packet is None or packet.header != shown:
+        for sector, (lane, result) in enumerate(zip(FIELD_LANES, results)):
+            if result is None:
                 continue
-            setattr(held, done, True)
+            packet = parse_atom_lane(lane, result.data)
+            # a merge offers only atoms of the shown frame it was made for
+            if packet is None or packet.header != shown:
+                continue
+            done[sector] = True
             self._assembler.push_atoms(packet)
-            self._stats = replace(self._stats, **{counter: getattr(self._stats, counter) + 1})
-            merged += letter
-        if held.p_done and held.k_done:
+            self._stats = replace(self._stats, merged_lanes=self._stats.merged_lanes + 1)
+            merged += lane.letter
+        if all(done):
             held.evidence.clear()
         return merged
-
-    def _absorb(self, frame: DecodedFrame) -> str:
-        lanes = frame.lanes
-        stats = self._stats
-        self._stats = replace(
-            stats,
-            lane_p=stats.lane_p + (frame.p is not None),
-            lane_k=stats.lane_k + (frame.k is not None),
-            lane_d=stats.lane_d + (frame.d is not None),
-            readable=stats.readable + (1 if lanes else 0),
-        )
-        previous_meta = self._assembler.progress().meta
-        frame.feed(self._assembler)
-        current_meta = self._assembler.progress().meta
-        # Tags are only eight bits. Evidence and done flags belong to the full
-        # stream identity; captures preceding the first beacon remain useful.
-        if previous_meta is not None and current_meta != previous_meta:
-            self._held.clear()
-        return lanes

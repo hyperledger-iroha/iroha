@@ -37,22 +37,24 @@ def camera_frame(data: bytes, kind: int, frame: int, rotation_deg: float = 20.0)
 
 class SessionTest(unittest.TestCase):
     def test_a_steady_camera_is_tracked_after_the_first_frame(self) -> None:
-        data = payload(300, 3)
+        data = payload(3000, 3)
         session = ScanSession(ScanLimits())
         for frame in range(6):
-            outcome = session.push(camera_frame(data, 2, frame, rotation_deg=8.0), frame * 125)
+            outcome = session.push(camera_frame(data, 2, frame, rotation_deg=8.0), frame * 100)
             self.assertIsNone(outcome.error, f"frame {frame}")
+            self.assertEqual(outcome.lanes, "D0123", f"frame {frame}")
         stats = session.stats()
         self.assertEqual(stats.readable, 6)
         self.assertEqual(stats.tracked, 5, "every frame after the first follows the pose")
         self.assertEqual(stats.inferred, 0)
+        self.assertEqual((stats.lane_d, stats.field_lanes), (6, 24))
         # a pause longer than the tracking window forces a full search again
-        session.push(camera_frame(data, 2, 6, rotation_deg=8.0), 5 * 125 + TRACK_WINDOW_MS + 1)
+        session.push(camera_frame(data, 2, 6, rotation_deg=8.0), 5 * 100 + TRACK_WINDOW_MS + 1)
         self.assertEqual(session.stats().tracked, 5)
         self.assertEqual(session.stats().readable, 7)
         # a reset forgets the pose as well
         session.reset()
-        session.push(camera_frame(data, 2, 7, rotation_deg=8.0), 5 * 125 + TRACK_WINDOW_MS + 2)
+        session.push(camera_frame(data, 2, 7, rotation_deg=8.0), 5 * 100 + TRACK_WINDOW_MS + 2)
         self.assertEqual(session.stats().tracked, 5)
         self.assertEqual(session.stats().readable, 8)
 
@@ -71,7 +73,7 @@ class SessionTest(unittest.TestCase):
         self.assertEqual((session.stats().inferred, session.stats().tracked), (2, 1))
 
     def test_a_session_receives_a_payload_from_simulated_captures(self) -> None:
-        data = payload(500, 3)
+        data = payload(1_500, 3)
         session = ScanSession(ScanLimits())
         done = None
         for frame in range(40):
@@ -86,12 +88,15 @@ class SessionTest(unittest.TestCase):
         stats = session.stats()
         self.assertGreater(stats.readable, 0)
         self.assertGreater(stats.lane_d, 0)
+        self.assertGreater(stats.field_lanes, 0)
         self.assertEqual(stats.frames, frame + 1)
         self.assertEqual(stats.located, stats.frames)
+        # 1 500 bytes need 94 atoms: a clean camera reads them in five frames
+        self.assertLessEqual(stats.frames, 6, stats)
         self.assertTrue(session.progress().complete)
 
     def test_idle_sessions_forget_partial_streams(self) -> None:
-        data = payload(4_000, 3)
+        data = payload(12_000, 3)
         session = ScanSession(ScanLimits(idle_timeout_ms=1_000))
         session.push(camera_frame(data, 1, 0, rotation_deg=0.0), 0)
         self.assertGreater(session.progress().rank, 0)
@@ -125,7 +130,7 @@ class SessionTest(unittest.TestCase):
         session = ScanSession()
         outcome = session.push(Luma(320, 240), 5)
         self.assertIsNone(outcome.completed)
-        self.assertEqual(outcome.lanes, "")
+        self.assertEqual((outcome.lanes, outcome.merged), ("", ""))
         self.assertEqual(session.stats().frames, 1)
         self.assertEqual(session.stats().located, 0)
         outcome = session.push(Luma(10, 10), 6)
@@ -138,7 +143,7 @@ class SessionTest(unittest.TestCase):
         self.assertIsNotNone(session.progress().meta)
         # frame 2 carries no beacon: after the reset its atoms wait for one
         outcome = session.push(camera_frame(data, 1, 2, rotation_deg=0.0), 1_000)
-        self.assertEqual(outcome.lanes, "PKD")
+        self.assertEqual(outcome.lanes, "D0123")
         self.assertIsNone(outcome.progress.meta)
         self.assertEqual(outcome.progress.rank, 0)
 

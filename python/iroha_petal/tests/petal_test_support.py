@@ -23,27 +23,26 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from iroha_petal import (  # noqa: E402
+    DECODE_ORDER,
     Homography,
-    Lane,
     Luma,
     RenderOptions,
     StreamEncoder,
     Xorshift32,
     render_frame,
 )
-from iroha_petal.decode import _decode_with_erasures, _tile_words  # noqa: E402
 
 
 @functools.lru_cache(maxsize=None)
 def stream_fixture() -> dict:
-    """``fixtures/petal/petal_stream_v1.json``."""
-    return json.loads((FIXTURES / "petal_stream_v1.json").read_text(encoding="utf-8"))
+    """``fixtures/petal/petal_stream_v2.json``."""
+    return json.loads((FIXTURES / "petal_stream_v2.json").read_text(encoding="utf-8"))
 
 
 @functools.lru_cache(maxsize=None)
 def captures_fixture() -> dict:
-    """``fixtures/petal/petal_captures_v1.json``."""
-    return json.loads((FIXTURES / "petal_captures_v1.json").read_text(encoding="utf-8"))
+    """``fixtures/petal/petal_captures_v2.json``."""
+    return json.loads((FIXTURES / "petal_captures_v2.json").read_text(encoding="utf-8"))
 
 
 def luma_of(entry: dict, key: str = "luma_zlib_base64") -> Luma:
@@ -52,13 +51,27 @@ def luma_of(entry: dict, key: str = "luma_zlib_base64") -> Luma:
     return Luma(entry["width"], entry["height"], data)
 
 
-def tile_lanes(reads) -> tuple:
-    """Lanes ``P`` and ``K`` (or ``None``) that Reed-Solomon decoding gets from tile reads."""
-    (p_word, p_conf), (k_word, k_conf) = _tile_words(reads)
-    return (
-        _decode_with_erasures(Lane.P, p_word, p_conf),
-        _decode_with_erasures(Lane.K, k_word, k_conf),
-    )
+def truth(entry: dict) -> dict:
+    """The recorded data of every lane of a fixture entry, by lane: ``D``, then the four
+    field lanes."""
+    recorded = [bytes.fromhex(entry["d_data"])]
+    recorded += [bytes.fromhex(data) for data in entry["field_data"]]
+    return dict(zip(DECODE_ORDER, recorded))
+
+
+def read_lanes(test, name: str, frame, recorded: dict) -> str:
+    """Checks every decoded lane of ``frame`` against the recorded data and returns the
+    lane letters."""
+    for lane, expected in recorded.items():
+        result = frame.lane(lane)
+        if result is not None:
+            test.assertEqual(result.data, expected, f"{name}: lane {lane.letter} data")
+    return frame.lanes
+
+
+def letters(fields) -> str:
+    """The sector digits of the field lanes that decoded."""
+    return "".join(str(sector) for sector, result in enumerate(fields) if result is not None)
 
 
 def payload(length: int, seed: int) -> bytes:
@@ -68,8 +81,8 @@ def payload(length: int, seed: int) -> bytes:
 
 
 def decode_test_payload() -> bytes:
-    """The 300-byte payload of the reference decoder tests."""
-    return bytes(((i * 2_654_435_761) & 0xFFFFFFFF) >> 11 & 0xFF for i in range(300))
+    """The 3000-byte payload of the reference decoder tests."""
+    return bytes(((i * 2_654_435_761) & 0xFFFFFFFF) >> 11 & 0xFF for i in range(3000))
 
 
 class Lcg:

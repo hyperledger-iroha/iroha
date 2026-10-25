@@ -2,7 +2,7 @@ using Hyperledger.Iroha.Petal;
 
 namespace Hyperledger.Iroha.Sdk.Tests;
 
-/// <summary>Ports of the Rust unit tests of the pure Petal codecs (crc, prng, rs, layout, glyphs, lanes, fountain).</summary>
+/// <summary>Ports of the Rust unit tests of the pure Petal codecs (crc, prng, rs, layout, lanes, fountain).</summary>
 public sealed class PetalCodecTests
 {
     [Fact]
@@ -157,37 +157,132 @@ public sealed class PetalCodecTests
     }
 
     [Fact]
-    public void MaskHas256MirrorSymmetricTilesAndShowsWhichWayIsUp()
+    public void MaskIsMirrorSymmetricAndShowsWhichWayIsUp()
     {
-        Assert.Equal(PetalLayout.TileGrid, PetalLayout.Mask.Count);
-        var count = 0;
+        Assert.Equal(PetalLayout.MaskGrid, PetalLayout.Mask.Count);
         foreach (var row in PetalLayout.Mask)
         {
-            Assert.Equal(PetalLayout.TileGrid, row.Length);
-            for (var column = 0; column < PetalLayout.TileGrid / 2; column++)
-                Assert.Equal(row[column], row[PetalLayout.TileGrid - 1 - column]);
-            count += row.Count(static c => c == '#');
+            Assert.Equal(PetalLayout.MaskGrid, row.Length);
+            for (var column = 0; column < PetalLayout.MaskGrid / 2; column++)
+                Assert.True(row[column] == row[PetalLayout.MaskGrid - 1 - column], $"row {row} not mirrored");
         }
 
-        Assert.Equal(PetalLayout.TileCount, count);
-        Assert.NotEqual(PetalLayout.Mask[0], PetalLayout.Mask[PetalLayout.TileGrid - 1]);
+        Assert.NotEqual(PetalLayout.Mask[0], PetalLayout.Mask[PetalLayout.MaskGrid - 1]);
     }
 
     [Fact]
-    public void TilesAreRowMajorAndInsideTheCanvas()
+    public void BandsHoldEveryCellAndSplitIntoEqualSectors()
     {
-        var previous = (Column: 0, Row: 0);
-        for (var index = 0; index < PetalLayout.TileCount; index++)
+        Assert.Equal(PetalLayout.FieldCells, PetalLayout.BandOffsets[PetalLayout.BandCount]);
+        Assert.Equal(PetalLayout.BandCount + 1, PetalLayout.BandOffsets.Count);
+        var seen = new bool[PetalLayout.FieldCells];
+        for (var sector = 0; sector < PetalLayout.Sectors; sector++)
         {
-            var tile = PetalLayout.Tile(index);
-            if (index > 0)
-                Assert.True(tile.Row > previous.Row || (tile.Row == previous.Row && tile.Column > previous.Column));
-            previous = tile;
-            var center = PetalLayout.TileCenter(index);
-            Assert.InRange(center.X, 0.0, PetalLayout.Canvas - 1e-9);
-            Assert.InRange(center.Y, 0.0, PetalLayout.Canvas - 1e-9);
-            Assert.Equal(PetalLayout.TileOrigin + PetalLayout.TilePitch * (tile.Column + 0.5), center.X);
+            var cells = PetalLayout.SectorCellOrder(sector);
+            Assert.Equal(PetalLayout.SectorCells, cells.Count);
+            foreach (var cell in cells)
+            {
+                Assert.False(seen[cell], $"cell {cell} in two sectors");
+                seen[cell] = true;
+                // a cell sits in its own quarter turn (odd bands lean half a slot forward)
+                var (band, slot) = PetalLayout.CellBandSlot(cell);
+                var quarter = PetalLayout.BandSlots[band] / PetalLayout.Sectors;
+                Assert.Equal(sector, slot / quarter);
+                var turn = PetalLayout.CellAngle(cell) / Math.Tau * PetalLayout.Sectors;
+                Assert.True(turn > sector - 1e-9 && turn < sector + 1.0, $"cell {cell} turn {turn}");
+            }
+
+            // bit order: band by band from the centre out, ascending slot within a band
+            for (var i = 1; i < cells.Count; i++)
+                Assert.True(cells[i] > cells[i - 1]);
         }
+
+        Assert.All(seen, static s => Assert.True(s));
+        Assert.Throws<ArgumentOutOfRangeException>(() => PetalLayout.SectorCellOrder(4));
+        Assert.Throws<ArgumentOutOfRangeException>(() => PetalLayout.CellCenter(PetalLayout.FieldCells));
+        Assert.Equal((33, 191), PetalLayout.CellBandSlot(PetalLayout.FieldCells - 1));
+        Assert.Equal((1, 0), PetalLayout.CellBandSlot(8));
+    }
+
+    [Fact]
+    public void BandSlotsFollowThePitchRule()
+    {
+        for (var band = 0; band < PetalLayout.BandCount; band++)
+        {
+            var raw = Math.Tau * PetalLayout.BandRadius(band) / 50.0;
+            Assert.Equal(4 * Math.Max((int)PetalMath.RoundHalfAwayFromZero(raw), 1), PetalLayout.BandSlots[band]);
+            Assert.Equal(16.0 + 11.0 * band, PetalLayout.BandRadius(band));
+            Assert.Equal(band % 2 == 1 ? 0.5 : 0.0, PetalLayout.BandPhase(band));
+        }
+    }
+
+    [Fact]
+    public void CellCentresFollowTheBandFormulaInDoublePrecision()
+    {
+        for (var cell = 0; cell < PetalLayout.FieldCells; cell++)
+        {
+            var (band, slot) = PetalLayout.CellBandSlot(cell);
+            var angle = Math.Tau * (slot + PetalLayout.BandPhase(band)) / PetalLayout.BandSlots[band];
+            Assert.Equal(angle, PetalLayout.CellAngle(cell));
+            var radius = PetalLayout.BandRadius(band);
+            Assert.Equal(new PetalPoint(512.0 + radius * Math.Cos(angle), 512.0 + radius * Math.Sin(angle)), PetalLayout.CellCenter(cell));
+            var center = PetalLayout.CellCenter(cell);
+            Assert.Equal(PetalLayout.InMask(center.X, center.Y), PetalLayout.CellLight(cell));
+        }
+
+        // the single-precision petal constants widen exactly, as the reference widens them
+        Assert.Equal(4.599999904632568359375, (double)PetalLayout.PetalRadius);
+        Assert.Equal(0.4 * 4.599999904632568359375, 0.4 * PetalLayout.PetalRadius);
+    }
+
+    [Fact]
+    public void TheFieldMapsOntoItselfUnderAQuarterTurn()
+    {
+        const double c = PetalLayout.Center;
+        for (var cell = 0; cell < PetalLayout.FieldCells; cell++)
+        {
+            var (band, slot) = PetalLayout.CellBandSlot(cell);
+            var n = PetalLayout.BandSlots[band];
+            var turned = PetalLayout.BandOffsets[band] + (slot + n / 4) % n;
+            var (x, y) = PetalLayout.CellCenter(cell);
+            var (tx, ty) = PetalLayout.CellCenter(turned);
+            // a quarter turn clockwise on screen about the centre
+            Assert.True(Math.Abs(tx - (c - (y - c))) < 1e-9 && Math.Abs(ty - (c + (x - c))) < 1e-9, $"cell {cell}");
+        }
+    }
+
+    [Fact]
+    public void PetalsStayClearOfTheirNeighboursAndTheRings()
+    {
+        var outer = PetalLayout.BandRadius(PetalLayout.BandCount - 1) + PetalLayout.PetalHalfLength;
+        Assert.True(outer + 10.0 < PetalLayout.RingRadii[0] - PetalLayout.DotRadius);
+        for (var cell = 0; cell < PetalLayout.FieldCells; cell++)
+        {
+            var (x, y) = PetalLayout.CellCenter(cell);
+            var (band, _) = PetalLayout.CellBandSlot(cell);
+            var first = PetalLayout.BandOffsets[Math.Max(band - 1, 0)];
+            var last = PetalLayout.BandOffsets[Math.Min(band + 2, PetalLayout.BandCount)];
+            for (var other = first; other < last; other++)
+            {
+                if (other == cell)
+                    continue;
+                var (ox, oy) = PetalLayout.CellCenter(other);
+                var distance = Math.Sqrt((x - ox) * (x - ox) + (y - oy) * (y - oy));
+                Assert.True(distance > 2.0 * PetalLayout.PetalRadius, $"cells {cell} and {other} are {distance} apart");
+            }
+        }
+    }
+
+    [Fact]
+    public void TheLightCellsDrawTheCharacter()
+    {
+        var light = Enumerable.Range(0, PetalLayout.FieldCells).Count(PetalLayout.CellLight);
+        Assert.InRange(light, 1200, 2399);
+        Assert.True(PetalLayout.InMask(512.0, 190.0), "the top bar");
+        Assert.False(PetalLayout.InMask(512.0, 350.0), "the gap under the second bar");
+        Assert.False(PetalLayout.InMask(181.9, 512.0));
+        Assert.False(PetalLayout.InMask(182.0 + 20 * 33.0, 512.0));
+        Assert.False(PetalLayout.InMask(double.PositiveInfinity, 512.0));
     }
 
     [Fact]
@@ -197,9 +292,9 @@ public sealed class PetalCodecTests
         Assert.Equal(PetalLayout.TotalSlots, roles.Length);
         Assert.Equal(PetalLayout.DBits, roles.Count(static r => r.Kind == PetalSlotKind.Data));
         Assert.Equal(4 + 5 + 7, roles.Count(static r => r.Kind == PetalSlotKind.Gate));
+        Assert.Equal(18, roles.Count(static r => r.Kind == PetalSlotKind.Guard));
         Assert.Equal(PetalLayout.DBits, PetalLayout.DataSlots().Length);
-        // the two spare slots are the last non-reserved slots of the outer ring
-        Assert.Equal(2, roles.Count(static r => r.Kind == PetalSlotKind.Spare));
+        Assert.Equal(PetalLayout.TotalSlots - PetalLayout.DBits - 16 - 18, roles.Count(static r => r.Kind == PetalSlotKind.Spare));
         Assert.Equal(PetalLayout.GateSlots, Enumerable.Range(0, roles.Length).Where(i => roles[i].Kind == PetalSlotKind.Gate));
         Assert.Equal(PetalLayout.GuardSlots, Enumerable.Range(0, roles.Length).Where(i => roles[i].Kind == PetalSlotKind.Guard));
         var dataSlots = PetalLayout.DataSlots();
@@ -228,28 +323,31 @@ public sealed class PetalCodecTests
             var distance = Math.Sqrt(Math.Pow(finder.X - PetalLayout.Center, 2) + Math.Pow(finder.Y - PetalLayout.Center, 2));
             Assert.True(distance - PetalLayout.FinderOuter > outermost + 20.0);
         }
+    }
 
-        var farthest = 0.0;
-        for (var tile = 0; tile < PetalLayout.TileCount; tile++)
-        {
-            var c = PetalLayout.TileCenter(tile);
-            var h = PetalLayout.TileSize / 2.0;
-            foreach (var (x, y) in new[] { (c.X - h, c.Y - h), (c.X + h, c.Y - h), (c.X - h, c.Y + h), (c.X + h, c.Y + h) })
-                farthest = Math.Max(farthest, Math.Sqrt(Math.Pow(x - PetalLayout.Center, 2) + Math.Pow(y - PetalLayout.Center, 2)));
-        }
-
-        Assert.True(farthest + 10.0 < PetalLayout.RingRadii[0] - PetalLayout.DotRadius);
+    [Fact]
+    public void APetalIsLitAtItsCentreAndNotchedAtItsTip()
+    {
+        Assert.True(PetalLayout.PetalLit(0.0, 0.0, 0.3));
+        double tip = PetalLayout.PetalNotchDistance;
+        Assert.False(PetalLayout.PetalLit(tip * Math.Cos(0.3), tip * Math.Sin(0.3), 0.3));
+        Assert.False(PetalLayout.PetalLit(0.0, 10.0, 0.0));
+        // half-length 5.2 along the petal, half-width 4.3 across it
+        Assert.True(PetalLayout.PetalLit(0.0, 4.2, 0.0));
+        Assert.False(PetalLayout.PetalLit(0.0, 4.4, 0.0));
+        Assert.True(PetalLayout.PetalLit(-5.1, 0.0, 0.0));
+        Assert.False(PetalLayout.PetalLit(-5.3, 0.0, 0.0));
     }
 
     [Fact]
     public void SlotCentersFollowTheSinglePrecisionReference()
     {
-        Assert.Equal(new PetalPoint(872.0, 512.0), PetalLayout.SlotCenter(0, 0));
+        Assert.Equal(new PetalPoint(917.0, 512.0), PetalLayout.SlotCenter(0, 0));
         // the slot angles use the single-precision TAU of the reference (`f32::consts::TAU`),
         // not twice a rounded single-precision pi, which is one ulp lower
         Assert.Equal(0x40C9_0FDB, BitConverter.SingleToInt32Bits(MathF.Tau));
         Assert.Equal((2, 0), PetalLayout.SplitSlot(PetalLayout.RingOffset(2)));
-        Assert.Equal((1, 91), PetalLayout.SplitSlot(PetalLayout.RingOffset(2) - 1));
+        Assert.Equal((1, 99), PetalLayout.SplitSlot(PetalLayout.RingOffset(2) - 1));
         for (var ring = 0; ring < PetalLayout.RingCount; ring++)
         {
             for (var slot = 0; slot < PetalLayout.RingSlots[ring]; slot++)
@@ -275,78 +373,33 @@ public sealed class PetalCodecTests
         Assert.False(PetalLayout.FinderLit(70.0, 0.0));
     }
 
-    [Fact]
-    public void CheckedInTemplatesMatchTheStrokeDefinitions()
-    {
-        var generated = PetalGlyphs.GenerateTemplates();
-        for (var glyph = 0; glyph < PetalGlyphs.GlyphCount; glyph++)
-            Assert.Equal(PetalGlyphs.Template(glyph).ToArray(), generated[glyph]);
-        Assert.Equal(16, PetalGlyphs.Characters.Length);
-    }
-
-    [Fact]
-    public void EveryGlyphHasInkInsideTheDesignGrid()
-    {
-        for (var glyph = 0; glyph < PetalGlyphs.GlyphCount; glyph++)
-        {
-            var total = 0;
-            foreach (var value in PetalGlyphs.Template(glyph))
-                total += value;
-            Assert.True(total > 255 * 6, $"glyph {glyph} has too little ink");
-            foreach (var stroke in PetalGlyphs.Strokes(glyph))
-            {
-                Assert.True(stroke.Count >= 2);
-                foreach (var point in stroke)
-                {
-                    Assert.InRange(point.X, 2.0, 30.0);
-                    Assert.InRange(point.Y, 2.0, 30.0);
-                }
-            }
-        }
-    }
-
-    [Fact]
-    public void GlyphsArePairwiseDistinctUnderBlur()
-    {
-        static double[] Feature(int glyph)
-        {
-            var values = PetalGlyphs.Template(glyph).ToArray().Select(static c => (double)c).ToArray();
-            var mean = values.Sum() / values.Length;
-            var centered = values.Select(v => v - mean).ToArray();
-            var norm = Math.Sqrt(centered.Sum(static v => v * v));
-            return centered.Select(v => v / norm).ToArray();
-        }
-
-        for (var a = 0; a < PetalGlyphs.GlyphCount; a++)
-        {
-            for (var b = a + 1; b < PetalGlyphs.GlyphCount; b++)
-            {
-                var dot = Feature(a).Zip(Feature(b), static (x, y) => x * y).Sum();
-                Assert.True(1.0 - dot > 0.2, $"glyphs {a} and {b} are too similar: {1.0 - dot}");
-            }
-        }
-    }
+    private static byte[] FieldData(byte seed) =>
+        Enumerable.Range(0, PetalLanes.FieldDataLength).Select(b => unchecked((byte)((b * 37) ^ seed))).ToArray();
 
     [Fact]
     public void LaneSizesAreConsistent()
     {
-        Assert.Equal(32, PetalLanes.PWordLength);
-        Assert.Equal(128, PetalLanes.KWordLength);
         Assert.Equal(30, PetalLanes.DWordLength);
-        Assert.Equal((19, 83, 19), (PetalLanes.PDataLength, PetalLanes.KDataLength, PetalLanes.DDataLength));
+        Assert.Equal((19, 83), (PetalLanes.DDataLength, PetalLanes.FieldDataLength));
+        Assert.Equal(105, PetalLanes.FieldWordLength);
+        Assert.Equal(4, PetalLanes.SpareSectorCells);
+        Assert.Equal(21, PetalLanes.AtomsPerFrame);
         foreach (var lane in PetalLanes.DecodeOrder)
+            Assert.Equal(PetalLanes.LaneHeaderLength + PetalLanes.AtomLength * PetalLanes.Atoms(lane), PetalLanes.DataLength(lane));
+        Assert.Equal([PetalLane.D, PetalLane.F0, PetalLane.F1, PetalLane.F2, PetalLane.F3], PetalLanes.DecodeOrder);
+        Assert.Equal([PetalLane.F0, PetalLane.F1, PetalLane.F2, PetalLane.F3], PetalLanes.Fields);
+        Assert.Equal("D0123", string.Concat(PetalLanes.DecodeOrder.Select(PetalLanes.Letter)));
+        for (var sector = 0; sector < PetalLayout.Sectors; sector++)
         {
-            Assert.Equal(
-                PetalLanes.LaneHeaderLength + PetalLanes.AtomLength * lane switch
-                {
-                    PetalLane.P => PetalLanes.PAtoms,
-                    PetalLane.K => PetalLanes.KAtoms,
-                    _ => PetalLanes.DAtoms,
-                },
-                PetalLanes.DataLength(lane));
+            var lane = PetalLanes.Field(sector);
+            Assert.True(PetalLanes.IsField(lane));
+            Assert.Equal(sector, PetalLanes.Sector(lane));
         }
 
-        Assert.Equal([PetalLane.P, PetalLane.D, PetalLane.K], PetalLanes.DecodeOrder);
+        Assert.False(PetalLanes.IsField(PetalLane.D));
+        Assert.Throws<ArgumentOutOfRangeException>(() => PetalLanes.Sector(PetalLane.D));
+        Assert.Throws<ArgumentOutOfRangeException>(() => PetalLanes.Field(4));
+        Assert.Throws<ArgumentOutOfRangeException>(() => PetalLanes.WordLength((PetalLane)5));
     }
 
     [Fact]
@@ -356,55 +409,63 @@ public sealed class PetalCodecTests
         {
             var a = PetalLanes.Whitening(lane);
             Assert.Equal(a, PetalLanes.Whitening(lane));
+            Assert.Equal(PetalLanes.WordLength(lane), a.Length);
             var ones = a.Sum(static b => System.Numerics.BitOperations.PopCount(b));
             var bits = a.Length * 8;
             Assert.True(ones > bits * 38 / 100 && ones < bits * 62 / 100, $"{lane} ones {ones}/{bits}");
         }
+
+        Assert.NotEqual(PetalLanes.Whitening(PetalLane.F0), PetalLanes.Whitening(PetalLane.F1));
     }
 
     [Fact]
     public void LanesRoundtripThroughCells()
     {
-        var pData = Enumerable.Range(0, PetalLanes.PDataLength).Select(static b => (byte)b).ToArray();
-        var kData = Enumerable.Range(0, PetalLanes.KDataLength).Select(static b => unchecked((byte)(b * 37))).ToArray();
         var dData = Enumerable.Range(0, PetalLanes.DDataLength).Select(static b => (byte)(b ^ 0xA5)).ToArray();
-        var (p, k, d) = (
-            PetalLanes.EncodeLane(PetalLane.P, pData),
-            PetalLanes.EncodeLane(PetalLane.K, kData),
-            PetalLanes.EncodeLane(PetalLane.D, dData));
-        var cells = PetalFrameCells.FromWords(p, k, d);
-        Assert.Equal(p, cells.PWord());
-        Assert.Equal(k, cells.KWord());
+        var d = PetalLanes.EncodeLane(PetalLane.D, dData);
+        var fields = Enumerable.Range(0, PetalLayout.Sectors)
+            .Select(static s => PetalLanes.EncodeLane(PetalLanes.Field(s), FieldData((byte)s)))
+            .ToArray();
+        var cells = PetalFrameCells.FromWords(d, fields);
         Assert.Equal(d, cells.DWord());
-        Assert.True(PetalLanes.TryDecodeLane(PetalLane.P, cells.PWord(), [], out var decodedP));
-        Assert.True(PetalLanes.TryDecodeLane(PetalLane.K, cells.KWord(), [], out var decodedK));
         Assert.True(PetalLanes.TryDecodeLane(PetalLane.D, cells.DWord(), [], out var decodedD));
-        Assert.Equal(pData, decodedP);
-        Assert.Equal(kData, decodedK);
         Assert.Equal(dData, decodedD);
+        for (var sector = 0; sector < PetalLayout.Sectors; sector++)
+        {
+            Assert.Equal(fields[sector], cells.FieldWord(sector));
+            Assert.True(PetalLanes.TryDecodeLane(PetalLanes.Field(sector), cells.FieldWord(sector), [], out var decoded));
+            Assert.Equal(FieldData((byte)sector), decoded);
+        }
+
+        // the spare cells at the end of every sector stay dark
+        for (var sector = 0; sector < PetalLayout.Sectors; sector++)
+        {
+            foreach (var cell in PetalLayout.SectorCellOrder(sector).Skip(PetalLanes.FieldWordLength * 8))
+                Assert.False(cells.Petals[cell]);
+        }
+
+        Assert.Equal(cells, PetalFrameCells.FromWords(new PetalLaneData(d, fields)));
         Assert.Equal(cells, cells.Clone());
         Assert.Equal(cells.GetHashCode(), cells.Clone().GetHashCode());
     }
 
     [Fact]
-    public void AllZeroDataStillLightsRoughlyHalfTheCells()
+    public void AllZeroDataStillLightsAboutHalfThePetals()
     {
-        var cells = PetalFrameCells.FromWords(
-            PetalLanes.EncodeLane(PetalLane.P, new byte[PetalLanes.PDataLength]),
-            PetalLanes.EncodeLane(PetalLane.K, new byte[PetalLanes.KDataLength]),
-            PetalLanes.EncodeLane(PetalLane.D, new byte[PetalLanes.DDataLength]));
-        var lit = cells.Light.Count(static l => l);
-        Assert.InRange(lit, 90, 166);
+        var zero = new byte[PetalLanes.FieldDataLength];
+        var fields = Enumerable.Range(0, PetalLayout.Sectors).Select(s => PetalLanes.EncodeLane(PetalLanes.Field(s), zero)).ToArray();
+        var cells = PetalFrameCells.FromWords(PetalLanes.EncodeLane(PetalLane.D, new byte[PetalLanes.DDataLength]), fields);
+        var lit = cells.Petals.Count(static l => l);
+        Assert.InRange(lit, 1300, 2050);
     }
 
     [Fact]
     public void GateDotsAreAlwaysLitAndGuardsDark()
     {
-        var full = (byte)0xFF;
+        var field = Enumerable.Repeat((byte)0xFF, PetalLanes.FieldWordLength).ToArray();
         var cells = PetalFrameCells.FromWords(
-            Enumerable.Repeat(full, PetalLanes.PWordLength).ToArray(),
-            Enumerable.Repeat(full, PetalLanes.KWordLength).ToArray(),
-            Enumerable.Repeat(full, PetalLanes.DWordLength).ToArray());
+            Enumerable.Repeat((byte)0xFF, PetalLanes.DWordLength).ToArray(),
+            [field, field, field, field]);
         var roles = PetalLayout.SlotRoles();
         for (var slot = 0; slot < roles.Length; slot++)
         {
@@ -416,40 +477,53 @@ public sealed class PetalCodecTests
     [Fact]
     public void CountedDecodingReportsTheRewrittenPositions()
     {
-        var data = Enumerable.Range(0, PetalLanes.PDataLength).Select(static b => (byte)b).ToArray();
-        var clean = PetalLanes.EncodeLane(PetalLane.P, data);
-        Assert.True(PetalLanes.TryDecodeLane(PetalLane.P, clean, [], out var decoded, out var corrected));
+        var data = FieldData(9);
+        var clean = PetalLanes.EncodeLane(PetalLane.F2, data);
+        Assert.True(PetalLanes.TryDecodeLane(PetalLane.F2, clean, [], out var decoded, out var corrected));
         Assert.Equal(data, decoded);
         Assert.Equal(0, corrected);
         var damaged = (byte[])clean.Clone();
-        foreach (var position in new[] { 0, 7, 19, 31 })
+        foreach (var position in new[] { 0, 7, 19, 31, 60, 104 })
             damaged[position] ^= 0xC3;
-        Assert.True(PetalLanes.TryDecodeLane(PetalLane.P, damaged, [], out decoded, out corrected));
+        Assert.True(PetalLanes.TryDecodeLane(PetalLane.F2, damaged, [], out decoded, out corrected));
         Assert.Equal(data, decoded);
-        Assert.Equal(4, corrected);
-        Assert.False(PetalLanes.TryDecodeLane(PetalLane.P, damaged, [0, 0], out _, out corrected));
+        Assert.Equal(6, corrected);
+        Assert.False(PetalLanes.TryDecodeLane(PetalLane.F2, damaged, [0, 0], out _, out corrected));
         Assert.Equal(0, corrected);
+    }
+
+    [Fact]
+    public void AWordDecodedUnderAnotherSectorIsRefused()
+    {
+        var word = PetalLanes.EncodeLane(PetalLane.F0, FieldData(1));
+        foreach (var lane in new[] { PetalLane.F1, PetalLane.F2, PetalLane.F3 })
+            Assert.False(PetalLanes.TryDecodeLane(lane, word, [], out _), $"{lane}");
     }
 
     [Fact]
     public void LaneDecodeSurvivesBurstDamage()
     {
-        var kData = Enumerable.Range(0, PetalLanes.KDataLength).Select(static b => (byte)b).ToArray();
-        var word = PetalLanes.EncodeLane(PetalLane.K, kData);
-        for (var i = 0; i < PetalLanes.KParityLength / 2; i++)
+        var data = FieldData(3);
+        var word = PetalLanes.EncodeLane(PetalLane.F1, data);
+        for (var i = 0; i < PetalLanes.FieldParityLength / 2; i++)
             word[i] ^= 0x5A;
-        Assert.True(PetalLanes.TryDecodeLane(PetalLane.K, word, [], out var data));
-        Assert.Equal(kData, data);
+        Assert.True(PetalLanes.TryDecodeLane(PetalLane.F1, word, [], out var decoded));
+        Assert.Equal(data, decoded);
     }
 
     [Fact]
     public void LaneCodecsRejectWrongShapes()
     {
-        Assert.Throws<ArgumentException>(() => PetalLanes.EncodeLane(PetalLane.P, new byte[18]));
+        var field = new byte[PetalLanes.FieldWordLength];
+        Assert.Throws<ArgumentException>(() => PetalLanes.EncodeLane(PetalLane.D, new byte[18]));
+        Assert.Throws<ArgumentException>(() => PetalLanes.EncodeLane(PetalLane.F0, new byte[PetalLanes.DDataLength]));
         Assert.False(PetalLanes.TryDecodeLane(PetalLane.D, new byte[29], [], out _));
-        Assert.Throws<ArgumentException>(() => PetalFrameCells.FromWords(new byte[31], new byte[128], new byte[30]));
-        Assert.Throws<ArgumentException>(() => PetalFrameCells.FromWords(new byte[32], new byte[127], new byte[30]));
-        Assert.Throws<ArgumentException>(() => PetalFrameCells.FromWords(new byte[32], new byte[128], new byte[31]));
+        Assert.False(PetalLanes.TryDecodeLane(PetalLane.F3, new byte[PetalLanes.DWordLength], [], out _));
+        Assert.Throws<ArgumentException>(() => PetalFrameCells.FromWords(new byte[31], [field, field, field, field]));
+        Assert.Throws<ArgumentException>(() => PetalFrameCells.FromWords(new byte[30], [field, field, field]));
+        Assert.Throws<ArgumentException>(() => PetalFrameCells.FromWords(new byte[30], [field, field, field, new byte[104]]));
+        Assert.Throws<ArgumentException>(() => new PetalLaneData(new byte[19], [field]));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new PetalFrameCells().FieldWord(4));
     }
 
     [Fact]
