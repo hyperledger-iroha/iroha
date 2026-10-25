@@ -510,12 +510,16 @@ mod tests {
         // Initial instruction boundaries require the committed network root scope.
         // This fixture is a Global chain with a dynamically added DPN dataspace.
         {
-            let mut parameters = state.world.parameters.block();
-            parameters
-                .set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
+            let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+                .expect("funded parameter fixture block");
+            crate::state::set_parameter_cell_for_testing(
+                &mut parameters,
+                crate::sumeragi::lanes::routing::test_support::metadata(
                     iroha_data_model::block::consensus::SumeragiRootScope::Global,
-                ))
-                .expect("valid fixture parameters");
+                ),
+                state.world.sccp_committee_generations.allocation_budget(),
+            )
+            .expect("valid fixture parameters");
             parameters.commit();
         }
         // This isolated committed catalog fixture follows the native runtime reader tests.
@@ -545,9 +549,7 @@ mod tests {
         {
             let mut world = state.world.block();
             world
-                .parameters
-                .get_mut()
-                .set_parameter(iroha_data_model::parameter::Parameter::Custom(
+                .set_parameter_for_testing(iroha_data_model::parameter::Parameter::Custom(
                     catalog.into_custom_parameter().unwrap(),
                 ))
                 .expect("valid fixture parameters");

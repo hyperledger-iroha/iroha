@@ -392,7 +392,11 @@ execution remain unqualified. Executable metadata freshness passes on its
 recorded cut. Current workspace, merged-candidate, release and O7 timing
 qualification remain open. The
 [optimization goals](specs/compile_bloat_optimization_goals.md) retain all seven
-completion criteria and separate pinned-runner resource requirements.
+broader completion criteria and the six local build goals. The local profiler
+has a valid five-sample zero-rebuild baseline and verified dev/test dependency
+reuse. Concurrent Core/FHE edits invalidated the candidate comparison; current
+consumer requalification and matched speedup measurements remain open. Separate
+pinned-runner resource requirements are unchanged.
 
 Ordinary recursive credential generation is blocked by the Eq circuit requiring
 8,584 advice columns against the 1,024-column limit. The complete-circuit

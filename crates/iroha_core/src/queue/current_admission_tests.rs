@@ -102,10 +102,13 @@ fn current_admission_preserves_original_input_across_direct_queue_boundaries() {
 #[test]
 fn current_admission_rejects_actual_multiroute_before_queue_custody() {
     let (_, time) = TimeSource::new_mock(Duration::default());
-    let fixture = nexus_routing_fixture_with_nexus(test_nexus_for_routes(&[
-        (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-        (LaneId::new(1), DataSpaceId::new(7)),
-    ]));
+    let fixture = nexus_routing_fixture_with_nexus(
+        test_nexus_for_routes(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (LaneId::new(1), DataSpaceId::new(7)),
+        ]),
+        zero_rate_routing_fees(),
+    );
     let signed = TransactionBuilder::new(
         *fixture.state.network_id_ref(),
         fixture.authority_id.clone(),
@@ -201,6 +204,7 @@ fn current_payload_selects_full_block_gas_call_with_idle_catalog_route() {
         [Account::new(authority_id.clone()).build(&authority_id)],
         [],
     );
+    let world = world_with_explicit_queue_fees(world, zero_rate_routing_fees());
     let mut config = TestChainConfig::new(world, 1000);
     config.nexus = Some(nexus);
     config
@@ -483,9 +487,15 @@ fn governed_lane_commitment_keeps_original_input_and_required_approval_refusals(
         governance_rules: Some(rules.clone()),
         privacy_commitments: Vec::new(),
     };
-    queue.install_lane_manifests_for_testing(&Arc::new(LaneManifestRegistry::from_statuses(
-        BTreeMap::from([(LaneId::SINGLE, status)]),
-    )));
+    queue
+        .install_lane_manifests_for_testing(
+            &Arc::new(LaneManifestRegistry::from_statuses(BTreeMap::from([(
+                LaneId::SINGLE,
+                status,
+            )]))),
+            &state.ivm_execution_budget(),
+        )
+        .expect("original fixture pool admits privacy projection");
     let contract = iroha_data_model::smart_contract::ContractAddress::derive(
         state.network_id_ref(),
         &authority,
@@ -625,6 +635,7 @@ fn native_lane_candidates_preserve_complete_sealed_reveal_and_pending_identity()
         [Account::new(authority_id.clone()).build(&authority_id)],
         [],
     );
+    let world = world_with_explicit_queue_fees(world, zero_rate_routing_fees());
     let mut config = TestChainConfig::new(world, 1000);
     config.nexus = Some(nexus);
     config
@@ -770,17 +781,59 @@ fn ordinary_sccp_admission_needs_no_history_but_exempt_shapes_bind_original_time
 
     let (state, time) = current_admission_queue_fixture();
     {
-        let mut fees = state.nexus_snapshot().fees;
+        let mut fees = state
+            .world
+            .parameters
+            .view()
+            .get()
+            .root_fees()
+            .expect("fixture has an explicit committed root fee policy")
+            .clone();
         fees.base_fee = Quantity::from(1_u32);
         {
-            let mut parameters = state.world.parameters.block();
-            parameters
-                .set_parameter(iroha_data_model::parameter::Parameter::Custom(
+            // Admit only the original parameter cell's new physical generations and
+            // publication identity, leaving every other World's MV cut untouched.
+            let budget = state.world.sccp_committee_generations.allocation_budget();
+            let [current, undo] = mv::cell::Cell::<
+                crate::pipeline_gas_policy::RetainedStateParameters,
+                iroha_allocation::AllocationCharge,
+            >::allocation_layouts();
+            let successor_layout = mv::cell::CellPublicationSuccessor::allocation_layout();
+            let mut reservation = budget
+                .try_reserve_layouts([current, undo, successor_layout])
+                .expect("fixture parameter cell capacity");
+            let charges = mv::cell::CellAllocationCharges::new(
+                reservation.try_split(current).expect("current generation"),
+                reservation.try_split(undo).expect("undo generation"),
+            );
+            let backing = mv::cell::CellGenerationBacking::try_from_charges(budget, charges)
+                .unwrap_or_else(|_| panic!("funded fixture parameter generations"));
+            let successor = mv::cell::CellPublicationSuccessor::try_from_charge(
+                budget,
+                reservation
+                    .try_split(successor_layout)
+                    .expect("publication identity"),
+            )
+            .unwrap_or_else(|_| panic!("funded fixture parameter successor"));
+            let mut acquisition = state
+                .world
+                .parameters
+                .try_block_acquisition_with_backing(backing, successor, budget)
+                .unwrap_or_else(|_| panic!("fixture uses the original parameter pool"));
+            acquisition
+                .try_initialize(mv::BlockMode::Ordinary)
+                .expect("fixture parameter cell acquisition");
+            let mut parameters = mv::BlockAcquisition::into_block(acquisition);
+            crate::state::set_parameter_cell_for_testing(
+                &mut parameters,
+                iroha_data_model::parameter::Parameter::Custom(
                     fees.clone()
                         .into_custom_parameter()
                         .expect("explicit fixture policy"),
-                ))
-                .expect("valid fixture monetary projection");
+                ),
+                budget,
+            )
+            .expect("valid fixture monetary projection");
             parameters.commit();
         }
     }

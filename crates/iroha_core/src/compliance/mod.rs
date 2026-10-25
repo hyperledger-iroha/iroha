@@ -9,7 +9,7 @@
 pub(crate) mod authority;
 
 use crate::{
-    interlane::LanePrivacyRegistryHandle,
+    interlane::LanePrivacyRegistry,
     secure_file_metadata::{self, SecureMetadata},
 };
 use iroha_crypto::{Hash, privacy::LaneCommitmentId};
@@ -583,7 +583,7 @@ pub struct LaneComplianceContext<'a> {
     /// Capability tags attached to the transaction or manifest.
     pub capability_tags: &'a [String],
     /// Snapshot of the privacy commitment registry, if available.
-    pub lane_privacy_registry: Option<LanePrivacyRegistryHandle>,
+    pub lane_privacy_registry: Option<LanePrivacyRegistry>,
     /// Commitments proven by attached lane privacy witnesses.
     pub verified_privacy_commitments: &'a BTreeSet<LaneCommitmentId>,
 }
@@ -1283,7 +1283,9 @@ mod tests {
                 MerkleCommitment::from_root_bytes([0xAA; 32], 8),
             )],
         }];
-        let registry = LanePrivacyRegistry::from_statuses(&statuses);
+        let privacy_budget = iroha_allocation::AllocationBudget::new(1024 * 1024);
+        let registry = LanePrivacyRegistry::try_from_statuses(&statuses, &privacy_budget)
+            .expect("original explicit compliance fixture pool");
         let ctx = LaneComplianceContext {
             lane_id: LaneId::SINGLE,
             dataspace_id: DataSpaceId::UNIVERSAL,
@@ -1291,7 +1293,7 @@ mod tests {
             authority_domains: &[],
             uaid: None,
             capability_tags: &[],
-            lane_privacy_registry: Some(Arc::new(registry)),
+            lane_privacy_registry: Some(registry),
             verified_privacy_commitments: &EMPTY_PRIVACY_COMMITMENTS,
         };
         let mut verified = BTreeSet::new();

@@ -16,10 +16,10 @@ state_test! { sync startup_sumeragi_key_policy_matches_canonical_state_without_m
     assert_eq!(norito::json::to_value(&state).expect("State after validation"), before);
     let hash = crate::snapshot::canonical_state_snapshot_hash(&state).expect("stable valid fixture snapshot");
     {
-        let mut parameters = state.world.parameters.block();
-        let mut consensus = parameters.sumeragi().clone();
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world).expect("fund original parameter Cell acquisition");
+        let mut consensus = parameters.get().sumeragi().clone();
         consensus.key_allowed_algorithms.reverse();
-        parameters.set_sumeragi(consensus);
+        crate::state::set_sumeragi_cell_for_testing(&mut parameters, consensus, state.world.sccp_committee_generations.allocation_budget()).expect("valid fixture consensus parameters");
         parameters.commit();
     }
     let before = norito::json::to_value(&state).expect("equivalent algorithm order");
@@ -375,7 +375,7 @@ state_test! { sync snapshot_runtime_catalog_restart_authenticates_full_configure
     state.canonical_runtime.replace_current_preserving_predecessor(current_runtime);
     {
         let mut world = state.world.block();
-        world.parameters.get_mut().set_parameter(
+        world.set_parameter_for_testing(
             iroha_data_model::parameter::Parameter::Custom(
                 runtime.into_custom_parameter().expect("valid protected catalog"),
             ),

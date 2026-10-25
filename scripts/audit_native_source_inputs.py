@@ -14,7 +14,9 @@ storage using that build's host sha2 rlib; no Cargo build or download is run.
 RUSTC, when set, selects the same compiler used for the native build.
 """
 from pathlib import Path
-import argparse, ast, hashlib, json, os, re, shlex, subprocess, tarfile, tempfile
+import argparse, ast, hashlib, json, os, re, runpy, shlex, subprocess, tarfile, tempfile
+
+checked_stamp = runpy.run_path(str(Path(__file__).with_name('cargo_local_source_identity.py')))['checked_stamp']
 
 ROOT = Path(__file__).resolve().parents[1]
 DRIVER = ROOT / 'scripts/native_source_snapshot.rs'
@@ -527,6 +529,7 @@ def audit(args, events, depfiles, out_dirs, artifacts, snapshot_tool,
     census = set()
     generated_identity = set()
     absent_watchers = set()
+    local_stamps = set()
     identity_records = []
     for out in sorted(out_dirs):
         identity = out / 'native_source_identity.rs'
@@ -538,19 +541,34 @@ def audit(args, events, depfiles, out_dirs, artifacts, snapshot_tool,
         if digest != expected:
             raise ValueError(f'Compiled digest mismatch: {out}')
         rescan = out / 'native-source-rescan-required'
-        if rescan.exists() or rescan.is_symlink():
-            raise ValueError(f'Intentionally absent rescan watcher exists: {rescan}')
         watched = set()
         declared_watches = set()
+        local_census = set()
         for line in (out.parent / 'output').read_text().splitlines():
             if line.startswith('cargo:rerun-if-changed='):
                 p = Path(line.split('=', 1)[1])
                 declared_watches.add(p)
                 if p.is_file():
                     watched.add(p.resolve(strict=True))
-        if rescan not in declared_watches:
-            raise ValueError('Selected plonk build did not declare its exact rescan watcher')
-        absent_watchers.add(rescan)
+            elif line.startswith('cargo:iroha-plonk-source-input='):
+                local_census.add(Path(line.split('=', 1)[1]))
+        stamps = {path for path in declared_watches
+                  if path.name == 'snapshot-v1' and path.parent.name == '.iroha-local-source'}
+        if rescan in declared_watches:
+            if rescan.exists() or rescan.is_symlink():
+                raise ValueError(f'Intentionally absent rescan watcher exists: {rescan}')
+            if stamps or local_census:
+                raise ValueError(f'Mixed conservative and local source watchers: {rescan}')
+            absent_watchers.add(rescan)
+        elif len(stamps) == 1:
+            stamp = next(iter(stamps))
+            checked_stamp(stamp, ROOT, actual_before, actual_watched)
+            if declared_watches != {stamp} or local_census != actual_watched:
+                raise ValueError('Local source build census differs from the maintained evaluator')
+            local_stamps.add(stamp)
+            watched = {path.resolve(strict=True) for path in local_census if path.is_file()}
+        else:
+            raise ValueError('Selected plonk build lacks its exact rescan watcher or checked local source stamp')
         if watched != {p for p in actual_watched if p.is_file()}:
             raise ValueError('Actual source census and selected build-script census differ')
         if not {BUILD_RS, HELPER}.issubset(watched):
@@ -565,10 +583,13 @@ def audit(args, events, depfiles, out_dirs, artifacts, snapshot_tool,
     observed_canonical_generated = set()
     canonical, external, omitted, exceptions = set(), set(), set(), set()
     observed_absent_watchers = set()
+    observed_local_stamps = set()
     for depfile in sorted(depfiles):
         for path in inputs(depfile, absent_watchers):
             if path in absent_watchers:
                 observed_absent_watchers.add(path)
+            elif path in local_stamps:
+                observed_local_stamps.add(path)
             elif not path.is_relative_to(ROOT):
                 external.add(path)
             elif path in external_generated:
@@ -586,6 +607,8 @@ def audit(args, events, depfiles, out_dirs, artifacts, snapshot_tool,
     actual_after, watched_after = actual_snapshot(snapshot_tool.resolve(strict=True))
     if actual_after != actual_before or watched_after != actual_watched:
         raise ValueError('Source inputs changed during containment audit')
+    for path in local_stamps:
+        checked_stamp(path, ROOT, actual_after, watched_after)
     for path in observed_canonical_generated:
         if sha(path) != canonical_generated[path]['sha256']:
             raise ValueError(f'Canonical generated output changed during audit: {path}')
@@ -604,6 +627,7 @@ def audit(args, events, depfiles, out_dirs, artifacts, snapshot_tool,
         'externalBuildScriptsWithoutGeneratedSource':external_no_source,
         'canonicalGeneratedInputs':[canonical_generated[p] for p in sorted(observed_canonical_generated)],
         'absentBuildWatchExceptions': [{'path':str(p),'relationship':'Exact selected plonk OUT_DIR marker explicitly declared by the maintained build.rs to force source membership rescan. Deliberately absent Cargo watcher, not a Rust source input.'} for p in sorted(observed_absent_watchers)],
+        'localBuildWatchInputs': [{'path':str(p), 'sha256':sha(p), 'relationship':'Private local build-tool coordination stamp checked against the complete maintained source census. This is not release or runtime authentication.'} for p in sorted(observed_local_stamps)],
         'generatedExceptions': [{'path': str(p), 'sha256': sha(p),
             'relationship': ('Finite strict-generated registry DATA, sole deliberate data exclusion; source freshness is checked by the consuming registry.' if p == GENERATED else
                 'Generated only by included iroha_plonk/build.rs + build_support/source_identity.rs from the actual complete census. Target labels are diagnostic; target support is a separate predicate.')} for p in sorted(exceptions)],

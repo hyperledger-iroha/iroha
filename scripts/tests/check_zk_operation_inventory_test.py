@@ -204,6 +204,8 @@ class Registry(Base):
                           "SetAssetFiLinkV1", "TransferToLinkedFiV1")),
             ("asset_uid_enrollment", ("ActivateAssetUidEnrollmentV1",
                                       "SetAssetUidSystemAccountV1")),
+            ("asset_escrow_scope", ("InitializeAssetEscrowReadScopeV1",)),
+            ("asset_fi_context", ("AssertAssetFiContextV1", "AssertAssetFiTransferReceiptV1")),
         ):
             self.assertEqual(INVENTORY["registry"]["modules"][module]["scope"], "out")
             path = f"crates/iroha_core/src/smartcontracts/isi/{module}.rs"
@@ -862,6 +864,7 @@ def small_selection(inventory: dict) -> dict:
     section["selector_census"]["roots"] = ["crates/iroha_core/src/smartcontracts/isi/kaigi", "crates/iroha_core_zk/src/verification.rs",
                                            "crates/iroha_core/src/smartcontracts/isi/ram_lfe.rs", "crates/iroha_core/src/smartcontracts/isi/game.rs",
                                            "crates/iroha_core_privacy/src/privacy_state.rs", "crates/iroha_core/src/state.rs",
+                                           "crates/iroha_core/src/pipeline_gas_policy/retained.rs",
                                            "crates/iroha_core/src/smartcontracts/ivm/host.rs", "crates/iroha_data_model/src/proof.rs",
                                            "crates/iroha_torii/src/routing.rs"]
     section["source_inclusion_census"]["roots"] = ["crates/iroha_core_privacy/src/execution_proofs"]
@@ -880,6 +883,16 @@ class GuaranteeSelection(Base):
 
     def test_small_baseline_is_clean(self) -> None:
         self.assert_clean(run("check_guarantee_selection", self.small))
+
+    def test_retained_policy_key_copy_remains_in_the_named_key_census(self) -> None:
+        path = "crates/iroha_core/src/pipeline_gas_policy/retained.rs"
+        rows = self.small["guarantee_selection"]["selector_census"]["occurrences"]
+        matching = [row for row in rows if row["path"] == path and row["token"] == "kaigi_policy_key"]
+        self.assertEqual(matching, [{"token": "kaigi_policy_key", "path": path,
+                                     "count": 6, "site": "kaigi.policy_named_key"}])
+        overrides = replaced(path, "&source.zk.proofs.kaigi_authorization_vk,", "&None,")
+        self.assert_fails(run("check_guarantee_selection", self.small, overrides),
+                          f"`kaigi_policy_key` occurs 5 times in {path}, recorded 6")
 
     def test_new_registry_read_fails(self) -> None:
         path = "crates/iroha_core/src/smartcontracts/isi/ram_lfe.rs"

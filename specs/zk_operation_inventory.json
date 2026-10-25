@@ -838,6 +838,14 @@
    "account_recovery": {"scope": "out", "reason": "Account recovery; signatures and policy, no proof relation."},
    "alias_setup": {"scope": "out", "reason": "Alias leases; no proof relation."},
    "asset_alias": {"scope": "out", "reason": "Asset aliases; no proof relation."},
+   "asset_escrow_scope": {
+    "scope": "out",
+    "reason": "Owner-only, one-use initialization derives the escrow scope from canonical native escrow rows and checks the asset incarnation and zero revision. It accepts no caller-supplied count or proof and invokes no ZK/FHE verifier."
+   },
+   "asset_fi_context": {
+    "scope": "out",
+    "reason": "Owner-authorized assertions compare the current FI snapshot or retained historical FI receipt with its complete canonical public hash, binding request, challenge and block floor. They carry no private-witness proof, call no ZK/FHE verifier and change no monetary or approval state; freshness remains the proof consumer's responsibility."
+   },
    "asset_transfer_control": {"scope": "out", "reason": "Transfer controls; no proof relation."},
    "consensus_keys": {"scope": "out", "reason": "Consensus key lifecycle; proofs of possession and threshold certificates belong to specs/sumeragi.md."},
    "content": {"scope": "out", "reason": "Content bundles; no proof relation."},
@@ -6518,7 +6526,7 @@
        "path": "crates/iroha_core/src/smartcontracts/isi/privacy/role_dispatch_tests.rs",
        "test": "every_role_enters_its_own_branch_of_the_single_handler"
       },
-      {"path": "crates/iroha_core/src/executor.rs", "test": "initial_executor_routes_native_privacy_corridor_to_core"}
+      {"path": "crates/iroha_core/src/executor_tests.rs", "test": "initial_executor_routes_native_privacy_corridor_to_core"}
      ]
     },
     {
@@ -6575,7 +6583,7 @@
      "tests": [
       {"path": "crates/iroha_core/src/smartcontracts/isi/world.rs", "test": "register_vk_reserves_every_exact12_privacy_circuit_label"},
       {
-       "path": "crates/iroha_core/src/smartcontracts/ivm/host.rs",
+       "path": "crates/iroha_core/src/smartcontracts/ivm/host_tests.rs",
        "test": "set_verifying_keys_rejects_exact12_privacy_ids_during_state_rehydration"
       },
       {"path": "crates/iroha_data_model/src/zk.rs", "test": "open_verify_admission_reserves_every_exact12_privacy_namespace_and_retired_version"}
@@ -9852,9 +9860,9 @@
     }
    ],
    "tests": [
-    {"path": "crates/iroha_core/src/executor.rs", "test": "preverify_and_dedup_across_transactions_in_block"},
-    {"path": "crates/iroha_core/src/executor.rs", "test": "preverify_attachments_enforce_verifying_key_height_window"},
-    {"path": "crates/iroha_core/src/executor.rs", "test": "preverify_attachments_reject_non_production_backend_labels_before_vk_lookup"}
+    {"path": "crates/iroha_core/src/executor_tests.rs", "test": "preverify_and_dedup_across_transactions_in_block"},
+    {"path": "crates/iroha_core/src/executor_tests.rs", "test": "preverify_attachments_enforce_verifying_key_height_window"},
+    {"path": "crates/iroha_core/src/executor_tests.rs", "test": "preverify_attachments_reject_non_production_backend_labels_before_vk_lookup"}
    ],
    "references": [
     {"inventory": "resource", "key": "bounds/proof.proof_box_max_encoded_bytes"}
@@ -12153,6 +12161,7 @@
      "site": "race.source_hash_profile"
     },
     {"token": "inline_key", "path": "crates/iroha_data_model/src/proof.rs", "count": 1, "site": "generic.verify_proof_registry_key"},
+    {"token": "kaigi_policy_key", "path": "crates/iroha_core/src/pipeline_gas_policy/retained.rs", "count": 6, "site": "kaigi.policy_named_key"},
     {
      "token": "kaigi_policy_key",
      "path": "crates/iroha_core/src/smartcontracts/isi/kaigi/privacy.rs",

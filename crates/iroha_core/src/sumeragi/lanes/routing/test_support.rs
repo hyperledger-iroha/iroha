@@ -33,10 +33,14 @@ pub(crate) fn metadata(scope: SumeragiRootScope) -> Parameter {
 /// Component World with explicit structural root metadata for the requested scope.
 pub(crate) fn world(scope: SumeragiRootScope) -> World {
     let world = World::new();
-    let mut parameters = world.parameters.block();
-    parameters
-        .set_parameter(metadata(scope))
-        .expect("valid fixture parameters");
+    let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
+        .expect("original parameter-only fixture block");
+    crate::state::set_parameter_cell_for_testing(
+        &mut parameters,
+        metadata(scope),
+        world.sccp_committee_generations.allocation_budget(),
+    )
+    .expect("valid fixture parameters");
     parameters.commit();
     world
 }

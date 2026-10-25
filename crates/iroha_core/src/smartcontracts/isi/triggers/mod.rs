@@ -1299,9 +1299,7 @@ pub mod isi {
                 .expect("parameter name");
             transaction
                 .world
-                .parameters_mut_for_testing()
-                .get_mut()
-                .set_parameter(Parameter::Custom(CustomParameter::new(
+                .set_parameter_for_testing(Parameter::Custom(CustomParameter::new(
                     name,
                     Json::new(64_u64),
                 )))
@@ -3602,9 +3600,7 @@ mod tests {
         let id = CustomParameterId::from_str("max_metadata_value_bytes").unwrap();
         let param = Parameter::Custom(CustomParameter::new(id, Json::new(4u32)));
         stx.world
-            .parameters
-            .get_mut()
-            .set_parameter(param)
+            .set_parameter_for_testing(param)
             .expect("valid fixture parameters");
         let mut metadata = Metadata::default();
         metadata.insert("oversized".parse().unwrap(), Json::new("0123456789"));

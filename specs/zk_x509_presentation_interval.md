@@ -53,12 +53,13 @@ canonical API.
 
 - `canonical` sites take their verdict or their chosen window from the
   definition. In every build: statement validation, authoritative-state
-  admission and the verifier's public shape. Compiled with the prover only
+  admission, the verifier's public shape and the strict DER-to-bounds helper
+  `privacy_engines::zk_x509::presentation::derive_zk_x509_presentation_bounds_v1`.
+  The helper and native reference relation use one complete strict certificate
+  and CRL parser. Compiled with the prover only
   (`cfg(any(test, feature = "privacy-release-evidence"))`, recorded under
-  `build_gates`): the native reference relation, the DER-to-bounds helper
-  `derive_zk_x509_presentation_bounds_v1`, the release fixtures, and prover
-  preflight, which calls state admission and the native relation. An ordinary
-  build contains none of those four.
+  `build_gates`): the native reference relation, release fixtures and prover
+  preflight, which calls state admission and the native relation.
 - `in-relation` sites (the DER/RFC 5280 AIR and its numeric relation slots) are
   deliberately independent formulations: one lower and one upper slot per
   certificate, a strict `nextUpdate` slot and a `thisUpdate + 300` slot. Tests
@@ -74,10 +75,16 @@ certificate validity periods are private, so only the proof binds them: a
 window past a private certificate expiry passes state admission and is
 rejected by the relation.
 
-No SDK builds an X509 statement today. A builder added with X.5 parses the
-validity fields, then calls the definition (Rust) or reproduces the shared
-vectors (other languages), and must be added to the site inventory. X.5 also
-owns shipping the DER-to-bounds helper together with the holder prover.
+No SDK builds an X509 statement today. Ordinary Rust holder preflight accepts
+the exact leaf-first certificate DER path and complete CRL DER, validates the
+closed encoding profile, and calls the canonical interval definition. Typed
+failures have one public owner, `privacy_engines::zk_x509::errors`. A successful
+bounds result does not authenticate signatures, certificate path linkage,
+governance, revocation or possession, and does not establish proof validity.
+The native reference relation performs those separate checks. Any SDK builder
+added with X.5 must use this helper or reproduce the shared vectors in its own
+language and be added to the site inventory. Full holder/native builder,
+prover integration and endpoint privacy policy remain X.5 work.
 
 ## Holder privacy
 
@@ -100,6 +107,11 @@ X.5 policy.
 - `cargo test -p iroha_data_model --test zk_x509_presentation_interval` —
   definition, vectors, exhaustive boundary grid, deadline, the latest-expiry
   regression, the disclosure predicate and the deferred-site boundary grid.
+- `cargo test -p iroha_core_privacy --test zk_x509_presentation_bounds` —
+  ordinary-build public API over genuinely signed two- and three-certificate
+  paths, every inclusive certificate endpoint, exclusive CRL `nextUpdate`,
+  freshness, malformed/deep/oversized DER, calendar boundaries and valid retry.
+  Run without `privacy-release-evidence`; the library dependency has no test cfg.
 - `cargo test -p iroha_core_privacy --lib presentation_interval_tests` —
   genuinely signed paths with the earliest expiry and latest `notBefore` at
   the leaf, intermediate and root; boundary equality; one-second overflow;
@@ -133,8 +145,11 @@ What the site check does and does not establish:
   `from_crl(...)` containing the block second for every block second within the
   RFC 5280 calendar; the definition additionally rejects a later second. X.6
   owns the migration and end-to-end deadline budgeting.
-- The DER-to-bounds helper and prover preflight are absent from ordinary
-  builds until X.5 ships the holder prover.
+- The ordinary DER-to-bounds helper is interval preflight only. The native
+  reference relation, release fixtures and prover preflight remain gated;
+  this extraction does not ship a holder prover or complete X.5/S.1. Existing
+  parser list allocations are bounded but not fallibly admitted, and native
+  build/test qualification and physical-device qualification remain required.
 
 ## Local holder scheduling budget (X.6 component)
 

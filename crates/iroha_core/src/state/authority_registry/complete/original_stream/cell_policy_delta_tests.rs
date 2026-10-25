@@ -220,24 +220,25 @@ fn frozen_policy_block(
     change_catalog: bool,
 ) -> StateBlock<'_> {
     {
-        let mut parameters = state.world.parameters.block();
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+            .expect("fund original parameter Cell acquisition");
         let fees = iroha_config::parameters::defaults::nexus::fees::genesis_policy();
-        parameters
-            .get_mut()
-            .set_parameter(iroha_data_model::parameter::Parameter::Custom(
-                fees.into_custom_parameter().unwrap(),
-            ))
-            .unwrap();
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            iroha_data_model::parameter::Parameter::Custom(fees.into_custom_parameter().unwrap()),
+            state.world.sccp_committee_generations.allocation_budget(),
+        )
+        .unwrap();
         // These projection controls start with a complete original policy cut;
         // the separate genesis-undo controls retain their genuinely absent policy.
-        parameters
-            .get_mut()
-            .set_parameter(
-                crate::sumeragi::test_chain::crypto_fixture_policy()
-                    .into_parameter()
-                    .expect("canonical original projection crypto policy"),
-            )
-            .expect("install the projection fixture's original crypto policy");
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            crate::sumeragi::test_chain::crypto_fixture_policy()
+                .into_parameter()
+                .expect("canonical original projection crypto policy"),
+            state.world.sccp_committee_generations.allocation_budget(),
+        )
+        .expect("install the projection fixture's original crypto policy");
         parameters.commit();
     }
     let mut block = state.block(header(1));

@@ -298,10 +298,11 @@ fn vrf_fixture_state(
         .rebuild_global_beacon_pulse_slots()
         .expect("unique fixture pulse slots");
     {
-        let mut parameters = world.parameters.block();
-        parameters
-            .get_mut()
-            .set_parameter(Parameter::Custom(
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
+            .expect("funded parameter fixture block");
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            Parameter::Custom(
                 SumeragiNposParameters {
                     epoch_length_blocks: NonZeroU64::new(FIXTURE_EPOCH_LENGTH)
                         .expect("non-zero fixture epoch"),
@@ -311,8 +312,10 @@ fn vrf_fixture_state(
                     ..SumeragiNposParameters::default()
                 }
                 .into_custom_parameter(),
-            ))
-            .expect("valid fixture NPoS parameters");
+            ),
+            world.sccp_committee_generations.allocation_budget(),
+        )
+        .expect("valid fixture NPoS parameters");
         parameters.commit();
     }
     let mut state = State::new_with_chain_and_network_id_for_testing(

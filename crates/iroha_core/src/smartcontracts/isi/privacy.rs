@@ -9329,6 +9329,7 @@ mod tests {
         let original_pointer = bytes.as_ptr();
         let original_bytes = bytes.clone();
         let mut block = state.block(activation_execution_header(&state));
+        let original_refusal;
         {
             let mut transaction = block.transaction();
             grant_governance(&mut transaction);
@@ -9360,6 +9361,7 @@ mod tests {
                 original.kind(),
                 norito::core::DecodeLocalRefusalKind::EnclosingLimit
             );
+            original_refusal = original.clone();
             assert!(
                 retained.allocation_refusal().is_none(),
                 "no fabricated pool release source"
@@ -9378,7 +9380,21 @@ mod tests {
             source.attachments().unwrap().occurrences()[0].bytes,
             original_bytes
         );
-        let mut retry = block.transaction();
+        // The original local refusal remains latched on its carrier. A new child
+        // of that carrier cannot turn the failed attempt into a fresh one.
+        match block.try_transaction() {
+            Err(crate::state::StateStorageAdmissionError::RootScopeDecode(original)) => {
+                assert_eq!(original, original_refusal);
+            }
+            Err(other) => panic!("original root-scope refusal changed: {other:?}"),
+            Ok(_) => panic!("refused carrier must not grant a fresh child"),
+        }
+        assert_eq!(block.committed_fragment_count(), 0);
+        drop(block);
+        // Retry the unchanged signed source against the same State predecessor,
+        // with a fresh execution carrier after abandoning the refused one.
+        let mut retry_block = state.block(activation_execution_header(&state));
+        let mut retry = retry_block.transaction();
         grant_governance(&mut retry);
         let mut custody = AttachmentCustody::new(&source).unwrap();
         Executor::Initial

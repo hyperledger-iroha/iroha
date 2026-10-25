@@ -667,9 +667,7 @@ fn commit_custom_parameter_for_snapshot(
     let mut transaction = block.transaction();
     transaction
         .world
-        .parameters
-        .get_mut()
-        .set_parameter(iroha_data_model::parameter::Parameter::Custom(parameter))
+        .set_parameter_for_testing(iroha_data_model::parameter::Parameter::Custom(parameter))
         .expect("valid fixture parameters");
     transaction.apply();
     block

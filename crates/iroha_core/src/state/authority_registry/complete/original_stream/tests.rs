@@ -548,9 +548,7 @@ fn validated_original_with_crypto_source(
     let fees = iroha_config::parameters::defaults::nexus::fees::genesis_policy();
     block
         .world
-        .parameters
-        .get_mut()
-        .set_parameter(iroha_data_model::parameter::Parameter::Custom(
+        .set_parameter_for_testing(iroha_data_model::parameter::Parameter::Custom(
             fees.into_custom_parameter().unwrap(),
         ))
         .unwrap();
@@ -563,9 +561,7 @@ fn validated_original_with_crypto_source(
         .unwrap();
     block
         .world
-        .parameters
-        .get_mut()
-        .set_parameter(crypto_policy.into_parameter().unwrap())
+        .set_parameter_for_testing(crypto_policy.into_parameter().unwrap())
         .unwrap();
     let budget = state.ivm_execution_budget();
     let occupied = budget

@@ -1,4 +1,6 @@
 //! `World`-related ISI implementations.
+#[path = "world/parameter_policy_admission.rs"]
+mod parameter_policy_admission;
 #[path = "world/parameter_validation.rs"]
 mod parameter_validation;
 use super::prelude::*;
@@ -5672,20 +5674,14 @@ pub mod isi {
                 }),
             )
         })?;
-        let previous = {
-            let parameters = state_transaction.world.parameters.get_mut();
-            let previous = parameters.custom().get(next.id()).cloned();
-            parameters
-                .set_parameter(Parameter::Custom(next.clone()))
-                .expect("validation fee registry is not a pipeline fee parameter");
-            previous
-        };
+        let parameter = Parameter::Custom(next);
+        let prepared = state_transaction
+            .prepare_parameter_change(&parameter, None, None)
+            .map_err(|original| state_transaction.parameter_change_instruction_error(original))?;
         state_transaction
             .world
-            .emit_events(Some(ConfigurationEvent::Changed(ParameterChanged {
-                old_value: Parameter::Custom(previous.unwrap_or_else(|| next.clone())),
-                new_value: Parameter::Custom(next),
-            })));
+            .install_parameter_change(prepared)
+            .map_err(|original| state_transaction.parameter_change_instruction_error(original))?;
         Ok(true)
     }
     fn ensure_contract_subject_binding(
@@ -8817,25 +8813,18 @@ pub mod isi {
                         }),
                     )
                 })?;
-                let previous = state_transaction
-                    .world
-                    .parameters
-                    .get_mut()
-                    .custom()
-                    .get(next.id())
-                    .cloned();
+                let parameter = Parameter::Custom(next);
+                let prepared = state_transaction
+                    .prepare_parameter_change(&parameter, None, None)
+                    .map_err(|original| {
+                        state_transaction.parameter_change_instruction_error(original)
+                    })?;
                 state_transaction
                     .world
-                    .parameters
-                    .get_mut()
-                    .set_parameter(Parameter::Custom(next.clone()))
-                    .expect("Parliament registry is not a pipeline validity parameter");
-                state_transaction
-                    .world
-                    .emit_events(Some(ConfigurationEvent::Changed(ParameterChanged {
-                        old_value: Parameter::Custom(previous.unwrap_or_else(|| next.clone())),
-                        new_value: Parameter::Custom(next),
-                    })));
+                    .install_parameter_change(prepared)
+                    .map_err(|original| {
+                        state_transaction.parameter_change_instruction_error(original)
+                    })?;
                 Ok(())
             }
         }
@@ -16971,13 +16960,6 @@ pub mod isi {
             Ok(())
         }
     }
-    fn parse_config_asset_definition_id(
-        world: &impl crate::state::WorldReadOnly,
-        raw: &str,
-        now_ms: u64,
-    ) -> Option<AssetDefinitionId> {
-        crate::block::parse_asset_definition_literal_with_world(world, raw, now_ms)
-    }
     fn is_permission_domain_associated(
         permission: &Permission,
         domain_id: &DomainId,
@@ -17644,40 +17626,10 @@ pub mod isi {
                     )
                     .into());
                 }
-                if parse_config_asset_definition_id(
-                    &state_transaction.world,
-                    &state_transaction
-                        .nexus
-                        .fees
-                        .fee_asset_id
-                        .canonical_address(),
-                    state_transaction.block_unix_timestamp_ms(),
-                )
-                .is_some_and(|configured| &configured == asset_definition_id)
-                {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        format!(
-                            "cannot unregister domain {domain_id}: asset definition {asset_definition_id} is the immutable committed root fee currency"
-                        )
-                        .into(),
-                    )
-                    .into());
-                }
-                if parse_config_asset_definition_id(
-                    &state_transaction.world,
-                    &state_transaction.nexus.staking.stake_asset_id,
-                    state_transaction.block_unix_timestamp_ms(),
-                )
-                .is_some_and(|configured| &configured == asset_definition_id)
-                {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        format!(
-                            "cannot unregister domain {domain_id}: asset definition {asset_definition_id} is configured as nexus staking asset definition (`nexus.staking.stake_asset_id`); update nexus config first"
-                        )
-                        .into(),
-                    )
-                    .into());
-                }
+                crate::smartcontracts::isi::domain::isi::ensure_asset_definition_not_retained_by_monetary_policy(
+                    state_transaction,
+                    asset_definition_id,
+                )?;
                 if let Some((agreement_id, _)) = state_transaction
                     .world
                     .repo_agreements
@@ -18203,20 +18155,6 @@ pub mod isi {
                         .map_err(invalid_smart_contract_parameter)?;
                 }
                 if state_transaction._curr_block.is_genesis()
-                    && custom.id() == &iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::parameter_id()
-                {
-                    let selected = norito::core::classify_decode_attempt(|| {
-                        iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::from_payload(custom.payload())
-                    }).map_err(|error| {
-                        state_transaction.attempt_error_to_instruction_error(
-                            crate::execution_attempt::canonical_decode_attempt_error(error, |error| invalid_smart_contract_parameter(error.to_string())),
-                        )
-                    })?;
-                    if state_transaction.world.parameters.get().crypto_policy() != Some(&selected) {
-                        return Err(invalid_smart_contract_parameter("genesis instruction changes or invents its authenticated initial crypto policy"));
-                    }
-                }
-                if state_transaction._curr_block.is_genesis()
                     && custom.id() == &iroha_data_model::block::consensus::PublicLaneStakingPolicy::parameter_id()
                 {
                     state_transaction
@@ -18268,44 +18206,47 @@ pub mod isi {
                         ),
                     ));
                 }
-                match iroha_data_model::nexus::NexusCatalogTransitionV1::from_custom_parameter(
-                    custom,
-                ) {
-                    Ok(Some(payload)) => state_transaction
-                        .stage_consensus_catalog_transition(&payload)
-                        .map_err(|err| {
-                            InstructionExecutionError::InvalidParameter(
-                                InvalidParameterError::SmartContract(format!(
-                                    "invalid Nexus catalog transition: {err}"
-                                )),
-                            )
-                        })?,
+                match crate::state::nexus_catalog_validation_attempt(|| {
+                    iroha_data_model::nexus::NexusCatalogTransitionV1::from_custom_parameter(custom)
+                }) {
+                    // This typed command changes the two protected catalog/native owners.
+                    // It is not a retained parameter value: successful staging returns here
+                    // without storing the command or emitting a generic Configuration event.
+                    Ok(Some(payload)) => {
+                        return state_transaction
+                            .stage_consensus_catalog_transition(&payload)
+                            .map_err(|err| match err {
+                                crate::state::LaneLifecycleError::ParameterDeferred(original) => {
+                                    state_transaction.attempt_error_to_instruction_error(
+                                        crate::execution_attempt::ExecutionAttemptError::Deferred(
+                                            original,
+                                        ),
+                                    )
+                                }
+                                completed => InstructionExecutionError::InvalidParameter(
+                                    InvalidParameterError::SmartContract(format!(
+                                        "invalid Nexus catalog transition: {completed}"
+                                    )),
+                                ),
+                            });
+                    }
                     Ok(None) => {}
-                    Err(err) => {
-                        return Err(InstructionExecutionError::InvalidParameter(
-                            InvalidParameterError::SmartContract(format!(
-                                "invalid Nexus catalog transition payload: {err}"
-                            )),
+                    Err(error) => {
+                        return Err(state_transaction.attempt_error_to_instruction_error(
+                            error.map_rejection(|completed| {
+                                InstructionExecutionError::InvalidParameter(
+                                    InvalidParameterError::SmartContract(format!(
+                                        "invalid Nexus catalog transition payload: {completed}"
+                                    )),
+                                )
+                            }),
                         ));
                     }
                 }
                 validate_alias_dataspace_bootstrap_grant(custom, state_transaction)?;
-                // The committed ZK validity policy is an ordinary authorized
-                // parameter. A malformed or incoherent payload, or one that strands
-                // committed pending transitions, is rejected from the instruction
-                // bytes and committed State alone, identically on every validator.
-                // An accepted change governs the next block.
-                crate::zk_validity_policy::validate_set_parameter(
-                    custom,
-                    state_transaction
-                        .world
-                        .confidential_policy_transition_counts
-                        .iter()
-                        .map(|(effective_height, count)| (*effective_height, *count)),
-                )
-                .map_err(|error| invalid_smart_contract_parameter(error.to_string()))?;
-                // The atomic parameter owner validates fraud admission, pipeline limits and fee
-                // fields below, preserving an original local decoder refusal.
+                // The admitted parameter successor below validates ZK/fraud/pipeline
+                // structure and pending confidential transitions. Decoding here
+                // would erase original local refusal before that owner observes it.
                 validate_hijiri_parameters(custom, state_transaction)?;
                 validate_da_ingest_admission_policy(custom, state_transaction)?;
                 validate_reputation_archive_retention_request(custom, state_transaction)?;
@@ -18352,307 +18293,223 @@ pub mod isi {
                     }
                 }
             }
-            macro_rules! set_parameter {
-                ($($container:ident($param:ident.$field:ident) => $single:ident::$variant:ident),* $(,)?) => {
-                    match self.inner().clone() { $(
-                        Parameter::$container(iroha_data_model::parameter::$single::$variant(next)) => {
-                            let params = state_transaction.world.parameters.get_mut();
-                            let prev_value = params.$param.$field;
-                            let prev_param = Parameter::$container(
-                                iroha_data_model::parameter::$single::$variant(prev_value),
-                            );
-                            let new_param = Parameter::$container(
-                                iroha_data_model::parameter::$single::$variant(next),
-                            );
-                            let result = params.set_parameter(new_param.clone());
-                            result.map_err(|error| {
-                                state_transaction.attempt_error_to_instruction_error(
-                                    crate::execution_attempt::norito_decode_attempt_error(error, |error| {
-                                        invalid_smart_contract_parameter(error.to_string())
-                                    }),
+            let mut genesis_cadence = None;
+            let mut root_fee_scope = None;
+            if let Parameter::Custom(next) = self.inner() {
+                if iroha_data_model::validation_fee::is_reserved_validation_fee_parameter_id(
+                    next.id(),
+                ) {
+                    return Err(InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            "validation-fee governance parameters can only be changed by an enacted SORA Parliament proposal"
+                                .to_owned(),
+                        ),
+                    ));
+                }
+                if next.id().name().as_ref() == "consensus_handshake_meta" {
+                    if state_transaction.block_height() != 1 {
+                        return Err(InstructionExecutionError::InvalidParameter(
+                            InvalidParameterError::SmartContract(
+                                "signed consensus handshake metadata is immutable after genesis"
+                                    .to_owned(),
+                            ),
+                        ));
+                    }
+                    let pool = state_transaction
+                        .world
+                        .sccp_committee_generations
+                        .allocation_budget()
+                        .clone();
+                    let admitted =
+                        crate::pipeline_gas_policy::ParameterIngressAttemptError::observe(|| {
+                            super::parameter_policy_admission::handshake(next.payload(), &pool)
+                        })
+                        .map_err(|original| {
+                            super::parameter_policy_admission::instruction_error(
+                                state_transaction,
+                                original,
+                                super::parameter_policy_admission::PolicyInput::Handshake,
+                            )
+                        })?;
+                    let metadata = admitted.get();
+                    if super::sccp::params::exists(&*state_transaction.world) {
+                        super::sccp::params::validate_epoch(
+                            state_transaction
+                                .world
+                                .parameters
+                                .get()
+                                .sumeragi()
+                                .epoch_length_blocks
+                                .get(),
+                            metadata.block_cadence_ms.get(),
+                        )
+                        .map_err(|error| invalid_smart_contract_parameter(&error.to_string()))?;
+                    }
+                    genesis_cadence = Some(metadata.block_cadence_ms);
+                }
+                if next.id()
+                    == &iroha_data_model::isi::settlement::FxCorridorPolicyRegistry::parameter_id()
+                {
+                    return Err(InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            "the reserved FX corridor policy registry can only be changed by SetFxCorridorPolicy"
+                                .to_owned(),
+                        ),
+                    ));
+                }
+                if next.id().name().as_ref() == "max_contract_code_bytes" {
+                    let cap_bytes = norito::core::classify_decode_attempt(|| {
+                        next.payload().try_into_any_norito::<u64>()
+                    })
+                    .map_err(|original| {
+                        state_transaction.attempt_error_to_instruction_error(
+                            crate::execution_attempt::canonical_decode_attempt_error(
+                                original,
+                                |_| {
+                                    invalid_smart_contract_parameter(
+                                        "max_contract_code_bytes must be a Norito u64",
+                                    )
+                                },
+                            ),
+                        )
+                    })?;
+                    if cap_bytes > MAX_PORTABLE_CONTRACT_CODE_BYTES {
+                        return Err(invalid_smart_contract_parameter(format!(
+                            "max_contract_code_bytes exceeds the portable consensus limit: {cap_bytes} > {MAX_PORTABLE_CONTRACT_CODE_BYTES}"
+                        )));
+                    }
+                    validate_pending_contract_uploads_against_cap(cap_bytes, state_transaction)?;
+                }
+                if next.id().name().as_ref()
+                    == iroha_data_model::parameter::system::SumeragiNposParameters::PARAMETER_ID_STR
+                {
+                    let pool = state_transaction
+                        .world
+                        .sccp_committee_generations
+                        .allocation_budget()
+                        .clone();
+                    let admitted =
+                        crate::pipeline_gas_policy::ParameterIngressAttemptError::observe(|| {
+                            super::parameter_policy_admission::npos(next.payload(), &pool)
+                        })
+                        .map_err(|original| {
+                            super::parameter_policy_admission::instruction_error(
+                                state_transaction,
+                                original,
+                                super::parameter_policy_admission::PolicyInput::IncomingNpos,
+                            )
+                        })?;
+                    let npos = admitted.get();
+                    if !state_transaction._curr_block.is_genesis()
+                        && !state_transaction
+                            .world
+                            .parameters
+                            .get()
+                            .custom()
+                            .contains_key(next.id())
+                    {
+                        return Err(invalid_smart_contract_parameter(
+                            "network XOR and NPoS authority must be installed by authenticated genesis",
+                        ));
+                    }
+                    if let Some(previous_custom) = state_transaction
+                        .world
+                        .parameters
+                        .get()
+                        .custom()
+                        .get(next.id())
+                    {
+                        let previous_owner =
+                            crate::pipeline_gas_policy::ParameterIngressAttemptError::observe(
+                                || {
+                                    super::parameter_policy_admission::npos(
+                                        previous_custom.payload(),
+                                        &pool,
+                                    )
+                                },
+                            )
+                            .map_err(|original| {
+                                super::parameter_policy_admission::instruction_error(
+                                    state_transaction,
+                                    original,
+                                    super::parameter_policy_admission::PolicyInput::InstalledNpos,
                                 )
                             })?;
-                            state_transaction.world.emit_events(
-                                Some(ConfigurationEvent::Changed(ParameterChanged {
-                                    old_value: prev_param,
-                                    new_value: new_param,
-                                }))
-                            );
-                        })*
-                        Parameter::Custom(next) => {
-                            if iroha_data_model::validation_fee::is_reserved_validation_fee_parameter_id(
-                                next.id(),
-                            ) {
-                                return Err(InstructionExecutionError::InvalidParameter(
-                                    InvalidParameterError::SmartContract(
-                                        "validation-fee governance parameters can only be changed by an enacted SORA Parliament proposal"
-                                            .to_owned(),
-                                    ),
-                                ));
-                            }
-                            if next.id()
-                                == &iroha_data_model::parameter::system::consensus_metadata::handshake_meta_id()
-                            {
-                                if state_transaction.block_height() != 1 {
-                                    return Err(InstructionExecutionError::InvalidParameter(
-                                        InvalidParameterError::SmartContract(
-                                            "signed consensus handshake metadata is immutable after genesis"
-                                                .to_owned(),
-                                        ),
-                                    ));
-                                }
-                                let metadata: iroha_data_model::parameter::system::ConsensusHandshakeMetadata = next
-                                    .payload()
-                                    .try_into_any()
-                                    .map_err(|error| {
-                                        InstructionExecutionError::InvalidParameter(
-                                            InvalidParameterError::SmartContract(format!(
-                                                "invalid signed consensus handshake metadata payload: {error}"
-                                            )),
-                                        )
-                                    })?;
-                                metadata.validate().map_err(|error| {
-                                    InstructionExecutionError::InvalidParameter(
-                                        InvalidParameterError::SmartContract(format!(
-                                            "invalid signed consensus handshake metadata: {error}"
-                                        )),
-                                    )
-                                })?;
-                                if super::sccp::params::exists(&*state_transaction.world) {
-                                    super::sccp::params::validate_epoch(
-                                        state_transaction.world.parameters.get().sumeragi().epoch_length_blocks.get(),
-                                        metadata.block_cadence_ms.get(),
-                                    ).map_err(|error| invalid_smart_contract_parameter(&error.to_string()))?;
-                                }
-                                let parameters = state_transaction.world.parameters.get_mut();
-                                let mut consensus = parameters.sumeragi().clone();
-                                consensus.block_cadence_ms = metadata.block_cadence_ms;
-                                parameters.set_sumeragi(consensus);
-                            }
-                            if next.id()
-                                == &iroha_data_model::isi::settlement::FxCorridorPolicyRegistry::parameter_id()
-                            {
-                                return Err(InstructionExecutionError::InvalidParameter(
-                                    InvalidParameterError::SmartContract(
-                                        "the reserved FX corridor policy registry can only be changed by SetFxCorridorPolicy"
-                                            .to_owned(),
-                                    ),
-                                ));
-                            }
-                            let contract_code_cap_id = iroha_data_model::parameter::CustomParameterId(
-                                "max_contract_code_bytes"
-                                    .parse()
-                                    .expect("static contract code cap parameter id"),
-                            );
-                            if next.id() == &contract_code_cap_id {
-                                let cap_bytes = next
-                                    .payload()
-                                    .try_into_any_norito::<u64>()
-                                    .map_err(|_| {
-                                        invalid_smart_contract_parameter(
-                                            "max_contract_code_bytes must be a Norito u64",
-                                        )
-                                    })?;
-                                if cap_bytes > MAX_PORTABLE_CONTRACT_CODE_BYTES {
-                                    return Err(invalid_smart_contract_parameter(format!(
-                                        "max_contract_code_bytes exceeds the portable consensus limit: {cap_bytes} > {MAX_PORTABLE_CONTRACT_CODE_BYTES}"
-                                    )));
-                                }
-                                validate_pending_contract_uploads_against_cap(
-                                    cap_bytes,
-                                    state_transaction,
-                                )?;
-                            }
-                            if next.id()
-                                == &iroha_data_model::parameter::system::SumeragiNposParameters::parameter_id()
-                            {
-                                let payload =
-                                    norito::json::from_str::<norito::json::Value>(
-                                        next.payload().get(),
-                                    )
-                                    .map_err(|error| {
-                                        InstructionExecutionError::InvalidParameter(
-                                            InvalidParameterError::SmartContract(format!(
-                                                "invalid signed NPoS parameter payload: {error}"
-                                            )),
-                                        )
-                                    })?;
-                                // The typed decoder validates all reconfiguration bounds as one
-                                // group. Preflight explicit numeric zeroes so callers retain the
-                                // exact governed field diagnostic; typed decoding below still
-                                // rejects missing, unknown, or mistyped fields.
-                                for field in [
-                                    "finality_margin_blocks",
-                                    "evidence_horizon_blocks",
-                                    "activation_lag_blocks",
-                                    "slashing_delay_blocks",
-                                ] {
-                                    if payload.get(field).and_then(norito::json::Value::as_u64)
-                                        == Some(0)
-                                    {
-                                        return Err(InstructionExecutionError::InvalidParameter(
-                                            InvalidParameterError::SmartContract(format!(
-                                                "SumeragiNposParameters.reconfig.{field} must be greater than zero"
-                                            )),
-                                        ));
-                                    }
-                                }
-                                let npos = norito::json::value::from_value::<
-                                    iroha_data_model::parameter::system::SumeragiNposParameters,
-                                >(payload)
-                                .map_err(|error| {
-                                    InstructionExecutionError::InvalidParameter(
-                                        InvalidParameterError::SmartContract(format!(
-                                            "invalid signed NPoS parameter payload: {error}"
-                                        )),
-                                    )
-                                })?;
-                                npos.validate().map_err(|error| {
-                                    InstructionExecutionError::InvalidParameter(
-                                        InvalidParameterError::SmartContract(format!(
-                                            "invalid signed NPoS parameters: {error}"
-                                        )),
-                                    )
-                                })?;
-                                if !state_transaction._curr_block.is_genesis()
-                                    && !state_transaction.world.parameters.get().custom().contains_key(next.id()) {
-                                    return Err(invalid_smart_contract_parameter(
-                                        "network XOR and NPoS authority must be installed by authenticated genesis",
-                                    ));
-                                }
-                                if let Some(previous_custom) = state_transaction
-                                    .world
-                                    .parameters
-                                    .get()
-                                    .custom()
-                                    .get(next.id())
-                                {
-                                    let previous = iroha_data_model::parameter::system::SumeragiNposParameters::from_custom_parameter(previous_custom)
-                                        .map_err(|error| match crate::execution_attempt::json_decode_attempt_error(error, |error| invalid_smart_contract_parameter(&error.to_string())) {
-                                            crate::execution_attempt::ExecutionAttemptError::Rejected(error) => error,
-                                            crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => { let _ = state_transaction.defer_execution(reason); invalid_smart_contract_parameter("local NPoS policy read did not complete") },
-                                        })?
-                                        .ok_or_else(|| {
-                                            InstructionExecutionError::InvalidParameter(
-                                                InvalidParameterError::SmartContract(
-                                                    "installed signed NPoS parameters are invalid"
-                                                        .to_owned(),
-                                                ),
-                                            )
-                                        })?;
-                                    if npos.xor_asset_definition_id != previous.xor_asset_definition_id {
-                                        return Err(InstructionExecutionError::InvalidParameter(
-                                            InvalidParameterError::SmartContract(
-                                                "SumeragiNposParameters.xor_asset_definition_id is immutable after installation".to_owned(),
-                                            ),
-                                        ));
-                                    }
-                                    if npos.evidence_horizon_blocks
-                                        != previous.evidence_horizon_blocks
-                                    {
-                                        return Err(InstructionExecutionError::InvalidParameter(
-                                            InvalidParameterError::SmartContract(format!(
-                                                "SumeragiNposParameters.reconfig.evidence_horizon_blocks is immutable after installation: {} -> {}",
-                                                previous.evidence_horizon_blocks,
-                                                npos.evidence_horizon_blocks,
-                                            )),
-                                        ));
-                                    }
-                                    if npos.slashing_delay_blocks != previous.slashing_delay_blocks {
-                                        return Err(InstructionExecutionError::InvalidParameter(
-                                            InvalidParameterError::SmartContract(format!(
-                                                "SumeragiNposParameters.reconfig.slashing_delay_blocks is immutable after installation: {} -> {}",
-                                                previous.slashing_delay_blocks,
-                                                npos.slashing_delay_blocks,
-                                            )),
-                                        ));
-                                    }
-                                    if npos.epoch_length_blocks != previous.epoch_length_blocks {
-                                        return Err(InstructionExecutionError::InvalidParameter(
-                                            InvalidParameterError::SmartContract(format!(
-                                                "SumeragiNposParameters.reconfig.epoch_length_blocks is immutable after installation: {} -> {}",
-                                                previous.epoch_length_blocks,
-                                                npos.epoch_length_blocks,
-                                            )),
-                                        ));
-                                    }
-                                }
-                            }
-                            let is_genesis = state_transaction._curr_block.is_genesis();
-                            let root_fee_scope = if next.id() == &iroha_data_model::block::consensus::RootFeePolicy::parameter_id() {
-                                Some(crate::sumeragi::lanes::routing::read_routing_root_scope(&*state_transaction.world)
-                                    .map_err(|reason| state_transaction.attempt_error_to_instruction_error(crate::execution_attempt::ExecutionAttemptError::Deferred(reason)))?
-                                    // H1 may author this slot before its metadata slot. The native
-                                    // genesis validator checks the complete signed root after execution.
-                                    .or_else(|| is_genesis.then_some(iroha_data_model::block::consensus::SumeragiRootScope::Global))
-                                    .ok_or_else(|| invalid_smart_contract_parameter("root fee update requires signed root scope"))?)
-                            } else { None };
-                            let previous = {
-                                let params = state_transaction.world.parameters.get_mut();
-                                let previous = params.custom().get(next.id()).cloned();
-                                // Capture the parser's original resource owner before its
-                                // admission observer retires; diagnostic projection must not
-                                // turn a local refusal into an executed rejection.
-                                let result = norito::core::classify_decode_attempt(|| match root_fee_scope {
-                                    Some(scope) => params.set_parameter_for_root(Parameter::Custom(next.clone()), scope, is_genesis),
-                                    None => params.set_parameter(Parameter::Custom(next.clone())),
-                                });
-                                result.map_err(|error| {
-                                    state_transaction.attempt_error_to_instruction_error(
-                                        crate::execution_attempt::canonical_decode_attempt_error(error, |error| {
-                                            invalid_smart_contract_parameter(error.to_string())
-                                        }),
-                                    )
-                                })?;
-                                previous
-                            };
-                            state_transaction.world.emit_events(Some(
-                                ConfigurationEvent::Changed(ParameterChanged {
-                                    old_value: Parameter::Custom(
-                                        previous.unwrap_or_else(|| next.clone()),
-                                    ),
-                                    new_value: Parameter::Custom(next),
-                                }),
+                        let previous = previous_owner.get();
+                        if npos.xor_asset_definition_id != previous.xor_asset_definition_id {
+                            return Err(InstructionExecutionError::InvalidParameter(
+                                InvalidParameterError::SmartContract(
+                                    "SumeragiNposParameters.xor_asset_definition_id is immutable after installation".to_owned(),
+                                ),
+                            ));
+                        }
+                        if npos.evidence_horizon_blocks != previous.evidence_horizon_blocks {
+                            return Err(InstructionExecutionError::InvalidParameter(
+                                InvalidParameterError::SmartContract(format!(
+                                    "SumeragiNposParameters.reconfig.evidence_horizon_blocks is immutable after installation: {} -> {}",
+                                    previous.evidence_horizon_blocks, npos.evidence_horizon_blocks,
+                                )),
+                            ));
+                        }
+                        if npos.slashing_delay_blocks != previous.slashing_delay_blocks {
+                            return Err(InstructionExecutionError::InvalidParameter(
+                                InvalidParameterError::SmartContract(format!(
+                                    "SumeragiNposParameters.reconfig.slashing_delay_blocks is immutable after installation: {} -> {}",
+                                    previous.slashing_delay_blocks, npos.slashing_delay_blocks,
+                                )),
+                            ));
+                        }
+                        if npos.epoch_length_blocks != previous.epoch_length_blocks {
+                            return Err(InstructionExecutionError::InvalidParameter(
+                                InvalidParameterError::SmartContract(format!(
+                                    "SumeragiNposParameters.reconfig.epoch_length_blocks is immutable after installation: {} -> {}",
+                                    previous.epoch_length_blocks, npos.epoch_length_blocks,
+                                )),
                             ));
                         }
                     }
+                }
+                let is_genesis = state_transaction._curr_block.is_genesis();
+                root_fee_scope = if next.id()
+                    == &iroha_data_model::block::consensus::RootFeePolicy::parameter_id()
+                {
+                    Some(
+                        crate::sumeragi::lanes::routing::read_routing_root_scope(
+                            &*state_transaction.world,
+                        )
+                        .map_err(|reason| {
+                            state_transaction.attempt_error_to_instruction_error(
+                                crate::execution_attempt::ExecutionAttemptError::Deferred(reason),
+                            )
+                        })?
+                        // H1 may author this slot before its metadata slot. The native
+                        // genesis validator checks the complete signed root after execution.
+                        .or_else(|| {
+                            is_genesis.then_some(
+                                iroha_data_model::block::consensus::SumeragiRootScope::Global,
+                            )
+                        })
+                        .ok_or_else(|| {
+                            invalid_smart_contract_parameter(
+                                "root fee update requires signed root scope",
+                            )
+                        })?,
+                    )
+                } else {
+                    None
                 };
             }
-            // Keep execution exhaustive like Parameters::set_parameter: a new
-            // governed variant must update State and emit its configuration event.
-            set_parameter!(
-                Sumeragi(sumeragi.max_clock_drift_ms) => SumeragiParameter::MaxClockDriftMs,
-                Sumeragi(sumeragi.due_work_max_lag_ms) => SumeragiParameter::DueWorkMaxLagMs,
-                Sumeragi(sumeragi.payload_retry_interval_ms) => SumeragiParameter::PayloadRetryIntervalMs,
-                Sumeragi(sumeragi.exec_budget_ms) => SumeragiParameter::ExecBudgetMs,
-                Sumeragi(sumeragi.apply_budget_ms) => SumeragiParameter::ApplyBudgetMs,
-                Sumeragi(sumeragi.max_block_bytes) => SumeragiParameter::MaxBlockBytes,
-                Sumeragi(sumeragi.epoch_length_blocks) => SumeragiParameter::EpochLengthBlocks,
-                Sumeragi(sumeragi.demotion_window) => SumeragiParameter::DemotionWindow,
-                Block(block.max_transactions) => BlockParameter::MaxTransactions,
-                Block(block.max_time_trigger_invocations) => BlockParameter::MaxTimeTriggerInvocations,
-                Block(block.execution_output) => BlockParameter::ExecutionOutput,
-                Block(block.fastpq_source) => BlockParameter::FastpqSource,
-                Transaction(transaction.max_signatures) => TransactionParameter::MaxSignatures,
-                Transaction(transaction.max_instructions) => TransactionParameter::MaxInstructions,
-                Transaction(transaction.ivm_bytecode_size) => TransactionParameter::IvmBytecodeSize,
-                Transaction(transaction.max_tx_bytes) => TransactionParameter::MaxTxBytes,
-                Transaction(transaction.max_decompressed_bytes) => TransactionParameter::MaxDecompressedBytes,
-                Transaction(transaction.max_metadata_depth) => TransactionParameter::MaxMetadataDepth,
-                Transaction(transaction.max_time_to_live_ms) => TransactionParameter::MaxTimeToLiveMs,
-                Transaction(transaction.require_height_ttl) => TransactionParameter::RequireHeightTtl,
-                Transaction(transaction.require_sequence) => TransactionParameter::RequireSequence,
-                SmartContract(smart_contract.fuel) => SmartContractParameter::Fuel,
-                SmartContract(smart_contract.memory) => SmartContractParameter::Memory,
-                SmartContract(smart_contract.execution_depth) => SmartContractParameter::ExecutionDepth,
-                SmartContract(smart_contract.max_output_items) => SmartContractParameter::MaxOutputItems,
-                SmartContract(smart_contract.max_output_bytes) => SmartContractParameter::MaxOutputBytes,
-                Executor(executor.fuel) => SmartContractParameter::Fuel,
-                Executor(executor.memory) => SmartContractParameter::Memory,
-                Executor(executor.execution_depth) => SmartContractParameter::ExecutionDepth,
-                Executor(executor.max_output_items) => SmartContractParameter::MaxOutputItems,
-                Executor(executor.max_output_bytes) => SmartContractParameter::MaxOutputBytes,
-            );
+            let prepared = state_transaction
+                .prepare_parameter_change(self.inner(), genesis_cadence, root_fee_scope)
+                .map_err(|original| {
+                    state_transaction.parameter_change_instruction_error(original)
+                })?;
+            state_transaction
+                .world
+                .install_parameter_change(prepared)
+                .map_err(|original| {
+                    state_transaction.parameter_change_instruction_error(original)
+                })?;
             Ok(())
         }
     }
@@ -23376,6 +23233,14 @@ AccountEvent::PermissionRemoved(change))
                 Kura::blank_kura_for_testing(),
                 LiveQueryStore::start_test(),
             )
+        }
+
+        // Only retirement component cases author monetary policy here. General and
+        // signed-genesis fixtures retain their own explicit source and currency.
+        fn monetary_retirement_state() -> State {
+            let mut state = blank_state();
+            crate::smartcontracts::isi::domain::monetary_test_support::install(&mut state.world);
+            state
         }
 
         // Ordinary executor cases own a signed original root before H2 dispatch.
@@ -29035,7 +28900,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             assert_eq!(ended.status, KaigiStatus::Ended);
         });
         world_test!(unregister_domain_preserves_global_account_records_and_owned_foreign_nfts {
-            let state = blank_state();
+            let state = monetary_retirement_state();
             let domain_id: DomainId =
                 DomainId::try_new("cleanup", "universal").expect("domain id parses");
             let other_domain_id: DomainId =
@@ -29134,7 +28999,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             );
         });
         world_test!(unregister_domain_keeps_aliases_in_same_named_foreign_dataspace {
-            let state = blank_state();
+            let state = monetary_retirement_state();
             let global_domain_id: DomainId =
                 DomainId::try_new("billing", "universal").expect("domain id parses");
             let retail_domain_id: DomainId =
@@ -29232,7 +29097,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             );
         });
         world_test!(unregister_domain_removes_assets_with_definitions_in_other_domains {
-            let state = blank_state();
+            let state = monetary_retirement_state();
             let domain_id: DomainId = DomainId::try_new("defs", "universal").expect("domain id parses");
             let holder_domain: DomainId =
                 DomainId::try_new("holder", "universal").expect("domain id parses");
@@ -29350,7 +29215,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             );
         });
         world_test!(unregister_domain_preserves_surviving_account_foreign_ownerships {
-            let state = blank_state();
+            let state = monetary_retirement_state();
             let domain_id: DomainId =
                 DomainId::try_new("cleanup", "universal").expect("domain id parses");
             let foreign_domain: DomainId =
@@ -29410,7 +29275,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
         #[test]
         fn unregister_domain_allows_surviving_accounts_used_by_global_config_and_invalid_literals()
         {
-            let mut state = blank_state();
+            let mut state = monetary_retirement_state();
             let domain_id: DomainId =
                 DomainId::try_new("cleanup", "universal").expect("domain id parses");
             let account_id = AccountId::new(checked_keypair().public_key().clone());
@@ -29439,8 +29304,20 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                 &mut stx,
                 "register account in cleanup domain",
             );
-            stx.nexus.fees.fee_sink_account_id = account_id.clone();
-            stx.nexus.staking.stake_escrow_account_id = account_id.to_string();
+            let mut policy = crate::smartcontracts::isi::domain::monetary_test_support::fees();
+            policy.fee_sink_account_id = account_id.clone();
+            stx.world
+                .set_parameter_for_testing(iroha_data_model::parameter::Parameter::Custom(
+                    policy.into_custom_parameter().unwrap(),
+                ))
+                .unwrap();
+            let mut policy = crate::smartcontracts::isi::domain::monetary_test_support::staking();
+            policy.stake_escrow_account_id = account_id.clone();
+            stx.world
+                .set_parameter_for_testing(iroha_data_model::parameter::Parameter::Custom(
+                    policy.into_custom_parameter().unwrap(),
+                ))
+                .unwrap();
             Unregister::domain(domain_id.clone()).expect_execute(
                 &ALICE_ID,
                 &mut stx,
@@ -29456,7 +29333,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             );
         }
         world_test!(unregister_domain_preserves_configured_canonical_account {
-            let state = blank_state();
+            let state = monetary_retirement_state();
             let remove_domain: DomainId =
                 DomainId::try_new("cleanup", "universal").expect("domain id parses");
             let retained_domain: DomainId =
@@ -29484,7 +29361,11 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                 .into();
             Grant::account_permission(permission.clone(), holder_id.clone())
                 .expect_execute(&ALICE_ID, &mut stx, "grant account-target permission");
-            stx.nexus.fees.fee_sink_account_id = account_id.clone();
+            let mut policy = crate::smartcontracts::isi::domain::monetary_test_support::fees();
+            policy.fee_sink_account_id = account_id.clone();
+            stx.world.set_parameter_for_testing(
+                iroha_data_model::parameter::Parameter::Custom(policy.into_custom_parameter().unwrap()),
+            ).unwrap();
             Unregister::domain(remove_domain.clone())
                 .expect_execute(&ALICE_ID, &mut stx, "removing an unrelated domain should preserve canonical account state");
             assert!(
@@ -29511,7 +29392,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
         #[test]
         fn unregister_domain_rejects_when_domain_asset_definition_has_foreign_repo_agreement_state()
         {
-            let state = blank_state();
+            let state = monetary_retirement_state();
             let domain_id: DomainId =
                 DomainId::try_new("cleanup", "universal").expect("domain id parses");
             let foreign_domain: DomainId =
@@ -29602,7 +29483,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             );
         }
         world_test!(unregister_domain_rejects_when_domain_asset_definition_has_settlement_receipt {
-            let state = blank_state();
+            let state = monetary_retirement_state();
             let domain_id =
                 DomainId::try_new("cleanup", "universal").expect("cleanup domain id parses");
             let foreign_domain =
@@ -29678,7 +29559,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
         });
 
         world_test!(unregister_domain_preserves_pinned_staking_custody_after_config_change {
-            let state = blank_state();
+            let state = monetary_retirement_state();
             let domain_id = DomainId::try_new("custody", "universal").unwrap();
             state_transaction!(state, block, state_block, stx);
             Register::domain(Domain::new(domain_id.clone()))
@@ -29694,10 +29575,14 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                 Some(domain_id.clone()),
             ))
             .expect_execute(&ALICE_ID, &mut stx, "register pinned stake definition");
-            stx.nexus.staking.stake_asset_id = AssetDefinitionId::derive_from_components(
+            let mut policy = crate::smartcontracts::isi::domain::monetary_test_support::staking();
+            policy.stake_asset_id = AssetDefinitionId::derive_from_components(
                 DomainId::try_new("replacement", "universal").unwrap(),
                 "stake".parse().unwrap(),
-            ).to_string();
+            );
+            stx.world.set_parameter_for_testing(
+                iroha_data_model::parameter::Parameter::Custom(policy.into_custom_parameter().unwrap()),
+            ).unwrap();
             let key = (LaneId::SINGLE, ALICE_ID.clone());
             let asset = AssetId::new(definition.clone(), ALICE_ID.clone());
             stx.world.public_lane_stake_custody.insert(key.clone(), (asset.clone(), Quantity::one()));
@@ -29722,7 +29607,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
         });
 
         world_test!(unregister_domain_retained_asset_refusal_preserves_permissions_and_endorsements_in_same_transaction {
-            let mut state = blank_state();
+            let mut state = monetary_retirement_state();
             let domain_id = DomainId::try_new("retained", "universal")
                 .expect("retained asset domain");
             let definition_id = AssetDefinitionId::derive_from_components(
@@ -29781,7 +29666,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             assert!(stx.world.take_external_events().is_empty());
         });
         world_test!(unregister_domain_rejects_when_domain_asset_definition_is_governance_voting_asset {
-            let mut state = blank_state();
+            let mut state = monetary_retirement_state();
             let domain_id: DomainId =
                 DomainId::try_new("cleanup", "universal").expect("domain id parses");
             let voting_def = AssetDefinitionId::derive_from_components(
@@ -29816,7 +29701,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             );
         });
         world_test!(unregister_domain_rejects_immutable_governance_lock_custody_after_config_change {
-            let state = blank_state();
+            let state = monetary_retirement_state();
             let domain_id: DomainId =
                 DomainId::try_new("custody", "universal").expect("domain id parses");
             state_transaction!(state, block, state_block, stx);
@@ -29870,7 +29755,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             );
         });
         world_test!(unregister_domain_rejects_retained_moderation_policy_after_config_change {
-            let state = blank_state();
+            let state = monetary_retirement_state();
             let domain_id: DomainId =
                 DomainId::try_new("moderation", "universal").expect("domain id parses");
             state_transaction!(state, block, state_block, stx);
@@ -29934,7 +29819,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
         #[test]
         fn unregister_domain_rejects_when_domain_asset_definition_is_governance_viral_reward_asset()
         {
-            let mut state = blank_state();
+            let mut state = monetary_retirement_state();
             let domain_id: DomainId =
                 DomainId::try_new("cleanup", "universal").expect("domain id parses");
             let reward_def = AssetDefinitionId::derive_from_components(
@@ -29980,7 +29865,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             );
         }
         world_test!(unregister_domain_rejects_when_domain_asset_definition_is_oracle_reward_asset {
-            let mut state = blank_state();
+            let mut state = monetary_retirement_state();
             let domain_id: DomainId =
                 DomainId::try_new("cleanup", "universal").expect("domain id parses");
             let reward_def = AssetDefinitionId::derive_from_components(
@@ -30012,7 +29897,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             );
         });
         world_test!(unregister_domain_rejects_when_domain_asset_definition_is_nexus_fee_asset {
-            let state = blank_state();
+            let state = monetary_retirement_state();
             let domain_id: DomainId =
                 DomainId::try_new("cleanup", "universal").expect("domain id parses");
             state_transaction!(state, block, state_block, stx);
@@ -30029,7 +29914,11 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                 Some(domain_id.clone()),
             ))
             .expect_execute(&ALICE_ID, &mut stx, "register cleanup-domain asset definition");
-            stx.nexus.fees.fee_asset_id = fee_def.clone();
+            let mut policy = crate::smartcontracts::isi::domain::monetary_test_support::fees();
+            policy.fee_asset_id = fee_def.clone();
+            stx.world.set_parameter_for_testing(
+                iroha_data_model::parameter::Parameter::Custom(policy.into_custom_parameter().unwrap()),
+            ).unwrap();
             let err = Unregister::domain(domain_id.clone())
                 .expect_execute_err(&ALICE_ID, &mut stx, "domain unregister must reject nexus fee asset-definition removal");
             let err_string = format!("{err:?}");
@@ -30044,7 +29933,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             );
         });
         world_test!(unregister_domain_rejects_when_domain_asset_definition_is_nexus_staking_asset {
-            let state = blank_state();
+            let state = monetary_retirement_state();
             let domain_id: DomainId =
                 DomainId::try_new("cleanup", "universal").expect("domain id parses");
             state_transaction!(state, block, state_block, stx);
@@ -30061,11 +29950,15 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                 Some(domain_id.clone()),
             ))
             .expect_execute(&ALICE_ID, &mut stx, "register cleanup-domain asset definition");
-            stx.nexus.staking.stake_asset_id = stake_def.to_string();
+            let mut policy = crate::smartcontracts::isi::domain::monetary_test_support::staking();
+            policy.stake_asset_id = stake_def.clone();
+            stx.world.set_parameter_for_testing(
+                iroha_data_model::parameter::Parameter::Custom(policy.into_custom_parameter().unwrap()),
+            ).unwrap();
             let err = Unregister::domain(domain_id.clone())
                 .expect_execute_err(&ALICE_ID, &mut stx, "domain unregister must reject nexus staking asset-definition removal");
             let err_string = format!("{err:?}");
-            assert_contains!(err_string, "nexus staking asset definition", "error should explain nexus staking-asset conflict: {err_string}");
+            assert_contains!(err_string, "committed staking asset definition", "error should explain committed staking-asset conflict: {err_string}");
             assert!(
                 stx.world.domains.get(&domain_id).is_some(),
                 "cleanup domain should remain after rejected unregister"
@@ -30076,7 +29969,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             );
         });
         world_test!(unregister_domain_preserves_accounts_with_active_settlement_and_oracle_state {
-            let state = blank_state();
+            let state = monetary_retirement_state();
             let domain_id: DomainId =
                 DomainId::try_new("cleanup", "universal").expect("domain id parses");
             let external_domain: DomainId =
@@ -30246,7 +30139,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             );
         });
         world_test!(unregister_domain_preserves_accounts_with_active_governance_and_storage_audit_state {
-            let state = blank_state();
+            let state = monetary_retirement_state();
             let network_id = *state.network_id_ref();
             let domain_id: DomainId =
                 DomainId::try_new("cleanup", "universal").expect("domain id parses");
@@ -30420,7 +30313,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             );
         });
         world_test!(unregister_domain_removes_associated_permissions_from_accounts_and_roles {
-            let state = blank_state();
+            let state = monetary_retirement_state();
             let domain_id: DomainId =
                 DomainId::try_new("kingdom", "universal").expect("domain id parses");
             state_transaction!(state, block, state_block, stx);
@@ -30502,7 +30395,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
         #[test]
         fn unregister_domain_preserves_account_target_permissions_for_surviving_accounts_and_roles()
         {
-            let state = blank_state();
+            let state = monetary_retirement_state();
             let domain_id: DomainId =
                 DomainId::try_new("cleanup", "universal").expect("domain id parses");
             state_transaction!(state, block, state_block, stx);
@@ -30581,7 +30474,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             );
         }
         world_test!(unregister_domain_preserves_other_domain_permissions_for_same_subject {
-            let state = blank_state();
+            let state = monetary_retirement_state();
             let domain_id: DomainId =
                 DomainId::try_new("cleanup", "universal").expect("domain id parses");
             let retained_domain_id: DomainId =
@@ -30649,7 +30542,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             );
         });
         world_test!(unregister_domain_preserves_foreign_nft_permissions_for_surviving_accounts_and_roles {
-            let state = blank_state();
+            let state = monetary_retirement_state();
             let domain_id: DomainId =
                 DomainId::try_new("cleanup", "world").expect("domain id parses");
             let foreign_domain_id: DomainId =
@@ -30728,7 +30621,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             );
         });
         world_test!(unregister_domain_clears_endorsements_and_policy {
-            let state = blank_state();
+            let state = monetary_retirement_state();
             let domain_id: DomainId =
                 DomainId::try_new("endorsed", "world").expect("domain id parses");
             state_transaction!(state, block, state_block, stx);
@@ -32212,10 +32105,11 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             let mut state_block = state.block(block.as_ref().header());
             {
                 let mut stx = state_block.transaction();
-                let params = stx.world.parameters.get_mut();
-                let mut consensus = params.sumeragi().clone();
+                let mut consensus = stx.world.parameters.get().sumeragi().clone();
                 consensus.key_activation_lead_blocks = 2;
-                params.set_sumeragi(consensus);
+                stx.world
+                    .set_sumeragi_for_testing(consensus)
+                    .expect("explicit fixture consensus parameters");
                 stx.apply();
             }
             crate::status::reset_peer_key_policy_counters_for_tests();
@@ -33754,7 +33648,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             ));
             assert!(stx.world.parameters.get().custom().get(&parameter_id).is_none());
             // An already committed exact grant remains retryable after its authorized creation.
-            stx.world.parameters.get_mut().set_parameter(Parameter::Custom(custom.clone())).expect("valid fixture parameters");
+            stx.world.set_parameter_for_testing(Parameter::Custom(custom.clone())).expect("valid fixture parameters");
             SetParameter::new(Parameter::Custom(custom.clone()))
                 .expect_execute(&ALICE_ID, &mut stx, "installed exact grant retry does not mutate SNS ownership");
             assert_eq!(stx.world.parameters.get().custom().get(&parameter_id), Some(&custom));
@@ -33815,13 +33709,13 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                     .find(|old| core::mem::discriminant(old) == core::mem::discriminant(&next))
                     .expect("each governed transaction variant has a current value");
                 let next_parameter = Parameter::Transaction(next);
-                let mut expected_parameters = stx.world.parameters.get().clone();
+                let mut expected_parameters = stx.world.parameters.get().get().clone();
                 expected_parameters.set_parameter(next_parameter.clone()).expect("valid fixture parameters");
                 let internal_before = stx.world.internal_event_buf.len();
                 let external_before = stx.world.external_event_buf.len();
                 SetParameter::new(next_parameter.clone())
                     .expect_execute(&ALICE_ID, &mut stx, "every governed transaction variant executes");
-                assert_eq!(stx.world.parameters.get(), &expected_parameters,
+                assert_eq!(stx.world.parameters.get().get(), &expected_parameters,
                     "execution must change the requested field and preserve all other policy");
                 assert_eq!(stx.world.internal_event_buf.len(), internal_before + 1);
                 assert_eq!(stx.world.external_event_buf.len(), external_before + 1);
@@ -34287,7 +34181,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             let state = blank_state();
             {
                 let mut world = state.world.block();
-                world.parameters.get_mut().set_parameter(Parameter::Custom(
+                world.set_parameter_for_testing(Parameter::Custom(
                     SumeragiNposParameters::default().into_custom_parameter(),
                 )).expect("valid fixture parameters");
                 world.commit();
@@ -35650,10 +35544,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                 ),
                 Json::new(vec!["universal".to_owned()]),
             );
-            stx.world
-                .parameters
-                .get_mut()
-                .set_parameter(Parameter::Custom(protected)).expect("valid fixture parameters");
+            stx.world.set_parameter_for_testing(Parameter::Custom(protected)).expect("valid fixture parameters");
             let rotation = scode::CommitContractDeployment {
                 expected_deploy_nonce: 1,
                 contract_address: address_at_nonce_1.clone(),
@@ -35707,10 +35598,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                 ),
                 Json::new("apps"),
             );
-            stx.world
-                .parameters
-                .get_mut()
-                .set_parameter(Parameter::Custom(parameter)).expect("valid fixture parameters");
+            stx.world.set_parameter_for_testing(Parameter::Custom(parameter)).expect("valid fixture parameters");
             let contract_address = ContractAddress::derive(
                 stx.network_id(),
                 &ALICE_ID,
@@ -35751,10 +35639,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                 ),
                 Json::new(vec!["universal".to_owned()]),
             );
-            stx.world
-                .parameters
-                .get_mut()
-                .set_parameter(Parameter::Custom(protected)).expect("valid fixture parameters");
+            stx.world.set_parameter_for_testing(Parameter::Custom(protected)).expect("valid fixture parameters");
             grant_contract_lifecycle_authority(&mut stx, &ALICE_ID);
             let code_hash = Hash::new(b"protected-contract");
             let manifest = ContractManifest {

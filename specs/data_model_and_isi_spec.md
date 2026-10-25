@@ -30,7 +30,7 @@ IDs have stable string forms with `Display`/`FromStr` round‑trip. Name rules f
 - `NftId` — `nft$domain`. NFT: `{ id, content: Metadata, owned_by }`. Code: `crates/iroha_data_model/src/nft.rs`.
 - `RoleId` — `name`. Role: `{ id, permissions: BTreeSet<Permission> }` with builder `NewRole { inner: Role, grant_to }`. Code: `crates/iroha_data_model/src/role.rs`.
 - `Permission` — `{ name: Ident, payload: Json }`. Code: `crates/iroha_data_model/src/permission.rs`.
-- `PeerId`/`Peer` — peer identity (public key) and address. Code: `crates/iroha_data_model/src/peer.rs`.
+- `PeerId`/`Peer` — peer identity (public key) and address. Code: `crates/iroha_model_base/src/peer.rs` and `peer/endpoint.rs`; ledger registration traits remain in `crates/iroha_data_model/src/peer.rs`.
 - `TriggerId` — `name`. Trigger: `{ id, action }`. Action: `{ executable, repeats, authority, filter, metadata }`. Code: `crates/iroha_data_model/src/trigger/`.
 - `Metadata` — `BTreeMap<Name, Json>` with checked insert/remove. Code: `crates/iroha_model_base/src/metadata.rs`.
 - Subscription pattern (application layer): plans are `AssetDefinition` entries with `subscription_plan` metadata; subscriptions are `Nft` records with `subscription` metadata; billing is executed by time triggers referencing subscription NFTs. See `specs/subscriptions_api.md` and `crates/iroha_data_model/src/subscription.rs`.

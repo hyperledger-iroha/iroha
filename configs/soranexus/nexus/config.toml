@@ -48,8 +48,7 @@ feature_bits = 0b11
 [nexus]
 lane_count = 3
 
-[nexus.staking]
-stake_asset_id = "xor#universal"
+# Monetary staking terms are committed in the genesis public_lane_staking_v1 parameter.
 
 # Lanes are logical execution queues; they do not define server topology.
 [[nexus.lane_catalog]]

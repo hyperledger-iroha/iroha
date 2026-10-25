@@ -508,9 +508,7 @@ pub(crate) fn seed_npos_policy_for_tests(
     };
     state_transaction
         .world
-        .parameters
-        .get_mut()
-        .set_parameter(iroha_data_model::parameter::Parameter::Custom(
+        .set_parameter_for_testing(iroha_data_model::parameter::Parameter::Custom(
             policy.into_custom_parameter(),
         ))
         .expect("valid fixture parameters");

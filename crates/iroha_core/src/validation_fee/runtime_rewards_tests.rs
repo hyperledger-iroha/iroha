@@ -96,10 +96,7 @@ fn prepare_scheduled_reward_fixture(
     two_validators: bool,
 ) -> ScheduledRewardFixture {
     let deployer = account(55);
-    let config = crate::sumeragi::test_chain::TestChainConfig::new(
-        validation_fee_payout_world(&deployer),
-        EARNING_TIME - 30_000,
-    );
+    let config = validation_fee_payout_config(&deployer, EARNING_TIME - 30_000);
     let (mut chain, _, _, _) =
         signed_original_fixtures::signed_fee_registry_root_fixture_with_config(config);
     while chain.height() < 19 {

@@ -42674,7 +42674,7 @@ mod cursor_mode_tests {
         policy.query_stored_min_gas_units = 200;
         {
             let mut world = state.world.block();
-            world.parameters.get_mut().set_parameter(
+            world.set_parameter_for_testing(
                 iroha_data_model::parameter::Parameter::Custom(policy.into_custom_parameter()),
             ).expect("commit stored cursor gas admission policy");
             world.commit();
@@ -43089,9 +43089,7 @@ pub mod validation_fee_torii_ingress_tests {
         // its signed genesis still declares the actual permissioned consensus mode.
         let mut initial = world.block();
         initial
-            .parameters
-            .get_mut()
-            .set_parameter(Parameter::Custom(
+            .set_parameter_for_testing(Parameter::Custom(
                 iroha_data_model::parameter::system::SumeragiNposParameters::default()
                     .into_custom_parameter(),
             ))

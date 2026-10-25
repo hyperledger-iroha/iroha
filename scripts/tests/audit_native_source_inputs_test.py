@@ -70,6 +70,45 @@ def test_selected_inputs_and_exact_generated_exceptions_pass(selected):
         str(selected.identity), str(audit.GENERATED)}
 
 
+def local_source_stamp(selected):
+    import cargo_local_source_identity as local
+    directory = local.private_directory(selected.root / 'target')
+    stamp = directory / 'snapshot-v1'
+    local.update_stamp(stamp, f'{local.STAMP_HEADER}\nroot={str(selected.root).encode().hex()}\n'
+                       f'digest={selected.digest}\nwatches={local.watch_digest(selected.watched)}\n')
+    selected.build_output.write_text('cargo:rerun-if-changed=' + str(stamp) + '\n' + ''.join(
+        'cargo:iroha-plonk-source-input=' + str(path) + '\n' for path in sorted(selected.watched)))
+    selected.depfile.write_text(selected.depfile.read_text().replace(str(selected.watcher), str(stamp)))
+    return stamp
+
+
+def test_local_preflight_stamp_keeps_complete_independent_source_audit(selected):
+    stamp = local_source_stamp(selected)
+    selected.run()
+    result = json.loads(selected.args.output.read_text())
+    assert result['passed'] is True
+    assert result['absentBuildWatchExceptions'] == []
+    assert [entry['path'] for entry in result['localBuildWatchInputs']] == [str(stamp)]
+
+
+@pytest.mark.parametrize('change', ['digest', 'census', 'permission', 'link'])
+def test_local_preflight_stamp_cannot_weaken_source_audit(selected, change):
+    stamp = local_source_stamp(selected)
+    if change == 'digest':
+        stamp.write_text(stamp.read_text().replace(selected.digest, 'cd' * 32))
+    elif change == 'census':
+        selected.build_output.write_text(selected.build_output.read_text().replace(
+            'cargo:iroha-plonk-source-input=' + str(selected.source) + '\n', ''))
+    elif change == 'permission':
+        stamp.chmod(0o644)
+    else:
+        original = stamp.with_name('original')
+        stamp.rename(original)
+        stamp.symlink_to(original)
+    with pytest.raises(ValueError):
+        selected.run()
+
+
 @pytest.mark.parametrize('relative', ['python/unrelated/input.json',
                                      'target/release/build/unknown/out/source.rs'])
 def test_omitted_canonical_or_unknown_generated_input_fails(selected, relative):

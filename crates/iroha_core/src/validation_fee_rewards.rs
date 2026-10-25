@@ -1760,6 +1760,14 @@ mod tests {
         );
         let mut block = state.block(header);
         let mut stx = block.transaction();
+        // This component test seeds its local conversion policy explicitly; it does not
+        // claim original signed genesis or pass this World to a chain constructor.
+        stx.world
+            .set_parameter_for_testing(iroha_data_model::parameter::Parameter::Custom(
+                iroha_data_model::parameter::system::SumeragiNposParameters::default()
+                    .into_custom_parameter(),
+            ))
+            .expect("funded local conversion policy");
         let initial = ValidationFeeRewardsState {
             pending_sbd_total: 2000,
             service_height: 9,

@@ -1791,6 +1791,16 @@ def test_token_issuance_policy_reads_cannot_be_reordered_or_move_outside_worker(
 
 
 @pytest.mark.parametrize("relative", [
+    "crates/iroha_core/src/executor_tests.rs",
+    "crates/iroha_core/src/executor_privacy_occurrence_tests.rs",
+    "crates/iroha_core/src/executor/attachment_custody.rs",
+    "crates/iroha_core/src/executor/attachment_custody/tests.rs",
+    "crates/iroha_core/src/executor/attachment_custody/pgc_bootstrap.rs",
+    "crates/iroha_core/src/executor/attachment_custody/pgc_bootstrap/tests.rs",
+    "crates/iroha_core/src/executor/attachment_direct.rs",
+    "crates/iroha_core/src/executor/executable_source.rs",
+    "crates/iroha_core/src/executor/signed_source_observation.rs",
+    "crates/iroha_core/src/executor/root_scope/tests/decode_refusal.rs",
     "crates/iroha_core/src/executor_stream_token_gateway_direct_source_tests.rs",
     "crates/iroha_core/src/executor_stream_token_gateway_permission_tests.rs",
     "crates/iroha_core/src/executor_stream_token_gateway_check_permission_tests.rs",
@@ -1826,6 +1836,39 @@ def test_root_fee_owner_seals_the_current_module_and_full_source(tmp_path: Path)
             tmp_path, reviewed[0], observed_inventory=changed,
         )
     )
+
+
+def test_attachment_custody_closure_seals_nested_production_and_test_owners(tmp_path: Path) -> None:
+    """Conventional nested modules stay sealed even without a boundary call."""
+    module = load_guard_module()
+    core = tmp_path / "crates/iroha_core/src"
+    sources = {
+        "executor.rs": "mod attachment_custody;\n",
+        "executor/attachment_custody.rs": "pub(crate) mod pgc_bootstrap;\n#[cfg(test)]\nmod tests;\n",
+        "executor/attachment_custody/tests.rs": "fn custody_test() { original_assertion(); }\n",
+        "executor/attachment_custody/pgc_bootstrap.rs": "#[cfg(test)]\nmod tests;\nfn bootstrap() { original_policy(); }\n",
+        "executor/attachment_custody/pgc_bootstrap/tests.rs": "fn bootstrap_test() { original_assertion(); }\n",
+    }
+    for relative, source in sources.items():
+        path = core / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(source, encoding="utf-8")
+    closure, failures = module.torii_rust_source_closure(tmp_path)
+    assert failures == []
+    assert set(closure) == {(core / relative).resolve() for relative in sources}
+    reviewed = module.torii_boundary_inventory(tmp_path, closure)
+    for relative, source in sources.items():
+        path = core / relative
+        path.write_text(source + "fn changed_without_boundary() {}\n", encoding="utf-8")
+        changed = module.torii_boundary_inventory(tmp_path)
+        assert changed[2] == reviewed[2]
+        assert any(
+            "source inventory drifted" in failure
+            for failure in module.closed_torii_boundary_inventory_failures(
+                tmp_path, reviewed[0], observed_inventory=changed,
+            )
+        ), relative
+        path.write_text(source, encoding="utf-8")
 
 
 @pytest.mark.parametrize("declaration", (

@@ -76,9 +76,25 @@ fn rejected_genesis_outputs_fail_before_schedule_finalization() {
         LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
     ));
     let authenticated = authenticate_genesis_block_intents(&source, &account).unwrap();
+    let mut initial_policies = Some(authenticated.initial_policies(&source).unwrap());
+    let generation = state.state_view_generation();
     let (mut overlay, recorder) = state
-        .block_with_recorded_pristine_carrier_stage(&source, |_| Ok::<_, String>(()), |error| error)
+        .block_with_recorded_pristine_carrier_stage(
+            &source,
+            |overlay| {
+                // Use the same original-source bootstrap as native genesis validation.
+                crate::block::genesis_policies::GenesisPolicies::install(
+                    &mut initial_policies,
+                    &source,
+                    overlay,
+                    &state,
+                    generation,
+                )
+            },
+            ValidBlock::execution_context_error,
+        )
         .unwrap();
+    assert!(initial_policies.is_none());
     let error = overlay
         .execute_and_seal_ordinary_outputs::<String>(
             &mut source,
@@ -89,7 +105,7 @@ fn rejected_genesis_outputs_fail_before_schedule_finalization() {
     let crate::state::ExecutionOutputSealError::RejectedGenesis(rejection) = error else {
         panic!("expected the actual retained output rejection: {error:?}");
     };
-    assert_eq!(rejection.output_index, expected_index);
+    assert_eq!(rejection.output_index, expected_index, "{rejection:?}");
     assert!(matches!(
         rejection.reason.as_ref(),
         TransactionRejectionReason::Validation(

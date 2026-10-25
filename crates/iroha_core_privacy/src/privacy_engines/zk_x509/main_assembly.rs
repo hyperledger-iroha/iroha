@@ -23,6 +23,7 @@ use super::{
         certificate_slot_2_active_v1, rfc5280_io_witnesses_v1, trace_bytes_v1,
     },
     der_stark::{ZkX509DerStarkBaseV1, ZkX509DerStarkErrorV1, build_zk_x509_der_stark_base_v1},
+    errors::ZkX509RelationErrorV1,
     io_air::{
         IoAccessV1, ZkX509IoAirErrorV1, ZkX509IoChannelDeclarationV1, ZkX509IoChannelWitnessV1,
         ZkX509IoSegmentRoleV1, build_zk_x509_io_base_tables_v1,
@@ -50,10 +51,7 @@ use super::{
         ZkX509ProjectionTraceV1, ZkX509ProjectionWitnessV1, build_zk_x509_projection_trace_v1,
         projection_io_witnesses_v1,
     },
-    relation::{
-        ZkX509GovernanceV1, ZkX509RelationErrorV1, ZkX509RelationOutputV1,
-        validate_reference_relation_v1,
-    },
+    relation::{ZkX509GovernanceV1, ZkX509RelationOutputV1, validate_reference_relation_v1},
     rfc5280_stark::{
         ZkX509Rfc5280StarkBaseMaterialV1, ZkX509Rfc5280StarkErrorV1,
         build_zk_x509_rfc5280_stark_base_material_v1,

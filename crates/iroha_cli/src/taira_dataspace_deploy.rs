@@ -416,7 +416,7 @@ impl ManifestV1 {
             &self.dataspace.descriptor,
             &iroha_config::parameters::actual::GovernanceCatalog::default(),
         )
-        .map_err(|error| eyre!("invalid native lane manifest: {error}"))?;
+        .wrap_err("invalid native lane manifest")?;
         require(
             self.lane_manifest.manifest
                 == lane_manifest::generate(&self.lane.alias, &self.finality)?,
@@ -3185,6 +3185,36 @@ mod tests {
             fee_quote: quote,
             alias_plan: None,
         }
+    }
+
+    #[test]
+    fn manifest_validation_retains_native_error_in_report_chain() {
+        use iroha_core::governance::manifest::LaneManifestError;
+
+        let original = manifest();
+        for (field, value, semantic) in [
+            ("lane", norito::json!("another-lane"), true),
+            ("unknown", norito::json!(true), false),
+        ] {
+            let mut candidate = original.clone();
+            let mut native: json::Value =
+                json::from_str(candidate.lane_manifest.manifest.get()).unwrap();
+            native.as_object_mut().unwrap().insert(field.into(), value);
+            candidate.lane_manifest.manifest = Json::new(native);
+            let error = candidate.validate().expect_err("native manifest rejection");
+            let cause = error
+                .downcast_ref::<LaneManifestError>()
+                .expect("the original typed native cause survives CLI context");
+            assert_eq!(error.to_string(), "invalid native lane manifest");
+            if semantic {
+                assert!(matches!(cause, LaneManifestError::Invalid(_)));
+            } else {
+                assert!(matches!(cause, LaneManifestError::Json(_)));
+            }
+        }
+        original
+            .validate()
+            .expect("same original deployment manifest");
     }
 
     #[test]

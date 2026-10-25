@@ -685,9 +685,7 @@ mod tests {
         // StateViewError. Both the initial and retained reader use the real Core decoder.
         let mut world = app.state.world.block();
         world
-            .parameters
-            .get_mut()
-            .set_parameter(Parameter::Custom(CustomParameter::new(
+            .set_parameter_for_testing(Parameter::Custom(CustomParameter::new(
                 NexusRuntimeCatalogV1::parameter_id(),
                 iroha_primitives::json::Json::new(norito::json!({"version": 255})),
             )))

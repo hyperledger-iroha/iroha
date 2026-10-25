@@ -300,6 +300,19 @@ fn offline_threshold_exposes_custody_metadata_without_a_production_opening_path(
         "instance",
         "remaining",
         "take_share",
+        "new",
+        "context",
+        "instance",
+        "participants",
+        "identity",
+        "reason",
+        "into_parts",
+        "context",
+        "instance",
+        "participant",
+        "selection_identity",
+        "secret_buffer_bytes",
+        "try_into_subset_additive",
     ];
     expected.sort_unstable();
     assert_eq!(functions, expected);
@@ -308,6 +321,12 @@ fn offline_threshold_exposes_custody_metadata_without_a_production_opening_path(
     assert!(production.contains("material: Option<DealerMaterial>"));
     assert!(!production.contains("impl Clone for SecretKeyShare"));
     assert!(!production.contains("impl Clone for DealerKeyShares"));
+    assert!(!production.contains("impl Clone for SubsetSecretKeyShare"));
+    assert!(!production.contains("impl Clone for ThresholdShareConversionError"));
+    assert!(production.contains("share: SecretKeyShare"));
+    assert!(production.contains("participants: &'a [u16]"));
+    assert!(production.contains("words: self.words"));
+    assert!(production.contains("self.reason, self.share"));
     assert!(!production.contains("#[derive(Clone)]"));
     assert!(production.contains(
         "#[cfg(any(test, feature = \"bgv-test-fixtures\"))]\n    pub(super) fn words_for_fixture"
@@ -318,4 +337,7 @@ fn offline_threshold_exposes_custody_metadata_without_a_production_opening_path(
     let fixtures = read(&crate_root().join("src/bgv/fixtures.rs"));
     assert!(fixtures.contains("pub fn threshold_share_words"));
     assert!(fixtures.contains("pub fn threshold_dealer"));
+    assert!(fixtures.contains("pub fn threshold_subset_share_words"));
+    assert!(fixtures.contains("pub fn threshold_share_buffer_address"));
+    assert!(fixtures.contains("pub fn threshold_subset_share_buffer_address"));
 }

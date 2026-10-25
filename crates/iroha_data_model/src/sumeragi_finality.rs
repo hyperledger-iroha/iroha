@@ -1656,7 +1656,7 @@ impl ProofCrypto {
         validators: &[FinalityValidator],
     ) -> Result<(Self, Committee), FinalityError> {
         need(
-            crate::block::consensus::is_valid_committee_size(validators.len()),
+            iroha_model_base::topology::is_valid_committee_size(validators.len()),
             "committee must have exact first-release global voting geometry",
         )?;
         let mut keys = BTreeMap::new();
@@ -1837,8 +1837,22 @@ mod configuration_fingerprint_tests {
     #[test]
     fn explicit_parameters_reject_every_missing_and_repeated_signed_field() {
         let fixture = test_fixtures::NativeFinalityFixture::new_with_explicit_parameters();
-        let parameters: Vec<_> = SumeragiParameters::default().parameters().collect();
-        assert_eq!(parameters.len(), 7);
+        let defaults = SumeragiParameters::default();
+        let parameters: Vec<_> = defaults.parameters().collect();
+        assert_eq!(parameters.len(), 8);
+        assert_eq!(
+            parameters,
+            [
+                SumeragiParameter::MaxClockDriftMs(defaults.max_clock_drift_ms),
+                SumeragiParameter::DueWorkMaxLagMs(defaults.due_work_max_lag_ms),
+                SumeragiParameter::PayloadRetryIntervalMs(defaults.payload_retry_interval_ms),
+                SumeragiParameter::ExecBudgetMs(defaults.exec_budget_ms),
+                SumeragiParameter::ApplyBudgetMs(defaults.apply_budget_ms),
+                SumeragiParameter::MaxBlockBytes(defaults.max_block_bytes),
+                SumeragiParameter::EpochLengthBlocks(defaults.epoch_length_blocks),
+                SumeragiParameter::DemotionWindow(defaults.demotion_window),
+            ]
+        );
         let expected = consensus_configuration_fingerprint(fixture.genesis()).unwrap();
         assert_eq!(
             expected,

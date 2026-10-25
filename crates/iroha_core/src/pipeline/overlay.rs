@@ -3781,14 +3781,12 @@ pub(crate) mod test_support {
     use iroha_model_base::chain::ChainId;
 
     /// Component fixture with explicit committed global-root metadata.
-    pub(crate) fn with_global_root(world: crate::state::World) -> crate::state::World {
-        let mut parameters = world.parameters.block();
-        parameters
-            .set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
+    pub(crate) fn with_global_root(mut world: crate::state::World) -> crate::state::World {
+        world
+            .set_parameter_for_testing(crate::sumeragi::lanes::routing::test_support::metadata(
                 iroha_data_model::block::consensus::SumeragiRootScope::Global,
             ))
             .expect("valid fixture parameters");
-        parameters.commit();
         world
     }
 

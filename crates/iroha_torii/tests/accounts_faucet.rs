@@ -197,8 +197,26 @@ fn build_faucet_test_context_with_authority(
         let account_id = AccountId::new(key_pair.public_key().clone());
         Account::new(account_id.clone()).build(&account_id)
     }));
-    let staking = iroha_config::parameters::actual::NexusStaking::default();
-    let stake_asset_id: AssetDefinitionId = staking.stake_asset_id.parse().expect("stake asset");
+    let mut native_config = iroha_core::sumeragi::test_chain::TestChainConfig::new(
+        World::new(),
+        u64::try_from(
+            (iroha_primitives::time::TimeSource::new_system().get_unix_time()).as_millis(),
+        )
+        .expect("fixture time fits"),
+    );
+    let staking = native_config
+        .genesis_parameters
+        .iter()
+        .find_map(|parameter| match parameter {
+            Parameter::Custom(custom)
+                if custom.id() == &iroha_data_model::block::consensus::PublicLaneStakingPolicy::parameter_id() =>
+            {
+                Some(iroha_data_model::block::consensus::PublicLaneStakingPolicy::from_custom_parameter(custom).unwrap())
+            }
+            _ => None,
+        })
+        .expect("one explicitly authored original staking policy");
+    let stake_asset_id = staking.stake_asset_id.clone();
     let stake_domain = Domain::new(DomainId::try_new("nexus", "universal").expect("stake domain"))
         .build(&authority_id);
     let stake_definition = AssetDefinition::numeric(
@@ -208,8 +226,7 @@ fn build_faucet_test_context_with_authority(
         None,
     )
     .build(&authority_id);
-    let escrow_id =
-        AccountId::parse_encoded(&staking.stake_escrow_account_id).expect("stake escrow");
+    let escrow_id = staking.stake_escrow_account_id.clone();
     accounts.push(Account::new(escrow_id.clone()).build(&escrow_id));
     let stake_assets = validator_keys.iter().map(|key_pair| {
         Asset::new(
@@ -222,24 +239,18 @@ fn build_faucet_test_context_with_authority(
     });
     let chain_id = iroha_model_base::chain::ChainId::from("test-chain");
     let _network_id = iroha_torii::test_utils::signed_query_network_id();
-    let world = World::with_assets(
+    let mut world = World::with_assets(
         [domain, stake_domain],
         accounts,
         [asset_definition, stake_definition],
         stake_assets,
         [],
     );
-    {
-        let mut block = world.block();
-        block
-            .parameters
-            .get_mut()
-            .set_parameter(Parameter::Custom(
-                SumeragiNposParameters::default().into_custom_parameter(),
-            ))
-            .expect("valid default consensus parameters");
-        block.commit();
-    }
+    world
+        .set_parameter_for_testing(Parameter::Custom(
+            SumeragiNposParameters::default().into_custom_parameter(),
+        ))
+        .expect("valid default consensus parameters");
     if let Some(selector) = faucet_selector {
         if selector != canonical_selector {
             let alias: AssetDefinitionAlias = selector.parse().expect("asset alias");
@@ -296,15 +307,19 @@ fn build_faucet_test_context_with_authority(
             .into(),
         );
     }
-    let mut native_chain = fixtures::commit_genesis_fixture(
-        world,
-        chain_id.clone(),
-        &authority_kp,
-        seed_instructions,
-        Some(validator_keys),
-        iroha_primitives::time::TimeSource::new_system(),
-    );
+    native_config.world = world;
+    native_config.chain_id = chain_id.clone();
+    native_config.genesis_key = authority_kp.clone();
+    native_config.genesis_instructions = seed_instructions;
+    native_config.validator_keys = Some(validator_keys);
+    let mut native_chain =
+        iroha_core::sumeragi::test_chain::CertifiedTestChain::start(native_config)
+            .expect("original signed fixture genesis");
     let state = native_chain.state().clone();
+    assert_eq!(
+        state.view().world().parameters().staking_policy(),
+        Some(&staking)
+    );
     let kura = native_chain.kura().clone();
     let network_id = native_chain.network_id();
     let nexus = state.nexus_snapshot();

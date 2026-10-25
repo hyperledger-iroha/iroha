@@ -487,9 +487,7 @@ mod tests {
         for invalid in [zero_seed, invalid_windows] {
             let mut tx = block.transaction();
             tx.world
-                .parameters_mut_for_testing()
-                .get_mut()
-                .set_parameter(Parameter::Custom(invalid.into_custom_parameter()))
+                .set_parameter_for_testing(Parameter::Custom(invalid.into_custom_parameter()))
                 .expect("valid fixture parameters");
             let error = super::sumeragi_npos_diagnostics(&tx.world)
                 .expect_err("malformed original NPoS policy must remain terminal");

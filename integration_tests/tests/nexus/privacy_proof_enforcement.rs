@@ -20,7 +20,7 @@ use iroha_data_model::{
 };
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_test_samples::ALICE_ID;
-use std::{collections::BTreeSet, sync::Arc};
+use std::collections::BTreeSet;
 #[test]
 fn lane_privacy_proof_allows_compliance() -> Result<()> {
     let lane_id = LaneId::new(5);
@@ -45,7 +45,9 @@ fn lane_privacy_proof_allows_compliance() -> Result<()> {
             MerkleCommitment::new(merkle_root, 8),
         )],
     };
-    let registry = LanePrivacyRegistry::from_statuses(&[manifest]);
+    let privacy_budget = iroha_allocation::AllocationBudget::new(1024 * 1024);
+    let registry = LanePrivacyRegistry::try_from_statuses(&[manifest], &privacy_budget)
+        .expect("original explicit proof/compliance fixture pool");
     // Attach a matching privacy proof and verify it against the registry.
     let proof = LanePrivacyProof {
         commitment_id,
@@ -90,7 +92,7 @@ fn lane_privacy_proof_allows_compliance() -> Result<()> {
         authority_domains: &[],
         uaid: None,
         capability_tags: &[],
-        lane_privacy_registry: Some(Arc::new(registry.clone())),
+        lane_privacy_registry: Some(registry.clone()),
         verified_privacy_commitments: &verified_set,
     };
     assert!(matches!(

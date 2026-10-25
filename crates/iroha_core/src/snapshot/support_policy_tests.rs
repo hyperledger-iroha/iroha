@@ -1137,7 +1137,7 @@ async fn canonical_wsv_hash_uses_current_mv_cell_values() {
     let state = state_factory();
     let before = canonical_state_snapshot_bytes_for_tests(&state);
     {
-        let mut parameters = state.world.parameters.block();
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world).unwrap();
         let current = parameters.get().clone();
         *parameters.get_mut() = current;
         parameters.commit();
@@ -1167,14 +1167,19 @@ async fn canonical_wsv_hash_uses_current_mv_cell_values() {
 async fn canonical_wsv_hash_sorts_sumeragi_key_algorithm_set() {
     let state = state_factory();
     {
-        let mut parameters = state.world.parameters.block();
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world).unwrap();
         let mut consensus = parameters.sumeragi().clone();
         consensus.key_allowed_algorithms = vec![
             Algorithm::Secp256k1,
             Algorithm::Ed25519,
             Algorithm::Secp256k1,
         ];
-        parameters.set_sumeragi(consensus);
+        crate::state::set_sumeragi_cell_for_testing(
+            &mut parameters,
+            consensus,
+            state.world.sccp_committee_generations.allocation_budget(),
+        )
+        .expect("fund the exact authored consensus key policy");
         parameters.commit();
     }
     let first = canonical_state_snapshot_bytes_for_tests(&state);
@@ -1185,10 +1190,15 @@ async fn canonical_wsv_hash_sorts_sumeragi_key_algorithm_set() {
         Hash::new(&first),
     );
     {
-        let mut parameters = state.world.parameters.block();
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world).unwrap();
         let mut consensus = parameters.sumeragi().clone();
         consensus.key_allowed_algorithms = vec![Algorithm::Ed25519, Algorithm::Secp256k1];
-        parameters.set_sumeragi(consensus);
+        crate::state::set_sumeragi_cell_for_testing(
+            &mut parameters,
+            consensus,
+            state.world.sccp_committee_generations.allocation_budget(),
+        )
+        .expect("fund the exact authored consensus key policy");
         parameters.commit();
     }
     let second = canonical_state_snapshot_bytes_for_tests(&state);

@@ -254,7 +254,7 @@ fn verify_input(
                 .iter()
                 .zip(&roster)
                 .all(|(seat, peer)| seat.id() == *peer)
-            && iroha_data_model::block::consensus::is_valid_committee_size(roster.len()),
+            && iroha_model_base::topology::is_valid_committee_size(roster.len()),
         "rotation processes must match every exact frozen 3f+1 seat in order"
     );
     let observed = selected.observed_height();

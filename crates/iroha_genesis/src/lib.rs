@@ -53,13 +53,17 @@ use iroha_config::parameters::defaults::confidential::RULES_VERSION;
 #[cfg(test)]
 use iroha_crypto::Algorithm;
 use iroha_crypto::{Hash, HashOf, KeyPair, PublicKey, bls_normal_pop_verify};
-use iroha_data_model::isi::register::RegisterBox;
+use iroha_data_model::prelude::*;
+use iroha_data_model::proof::VerifyingKeyId;
+use iroha_data_model::proof::VerifyingKeyRecord;
+use iroha_data_model::transaction::DEFAULT_TRANSACTION_TIME_TO_LIVE;
+use iroha_data_model::transaction::FeePaymentIntent;
 use iroha_data_model::{
     block::{
         BlockHeader, SignedBlock,
-        consensus::{ConsensusGenesisModeParams, ConsensusGenesisParams, NposGenesisParams},
         consensus::{
-            MAX_VALIDATORS_PER_HEIGHT, SumeragiGenesisContextParameters, is_valid_committee_size,
+            ConsensusGenesisModeParams, ConsensusGenesisParams, NposGenesisParams,
+            SumeragiGenesisContextParameters,
         },
     },
     confidential::{
@@ -68,7 +72,8 @@ use iroha_data_model::{
     crypto_admission_policy::CryptoAdmissionPolicyV1,
     da::commitment::DaProofPolicyBundle,
     isi::{
-        InstructionRegistry, Register, SetParameter, register::RegisterPeerWithPop,
+        InstructionRegistry, Register, SetParameter,
+        register::{RegisterBox, RegisterPeerWithPop},
         set_instruction_registry, verifying_keys,
     },
     parameter::{
@@ -79,16 +84,15 @@ use iroha_data_model::{
             SumeragiNposParameters, SumeragiParameters, confidential_metadata, consensus_metadata,
         },
     },
-    prelude::*,
-    proof::{VerifyingKeyId, VerifyingKeyRecord},
-    transaction::{DEFAULT_TRANSACTION_TIME_TO_LIVE, FeePaymentIntent},
 };
+use iroha_model_base::topology::{MAX_VALIDATORS_PER_HEIGHT, is_valid_committee_size};
 use iroha_primitives::json::Json;
 use iroha_schema::IntoSchema;
 use norito::{
     codec::{Decode, Encode},
     derive::{JsonDeserialize, JsonSerialize},
 };
+pub use staking_policy_authoring::default_staking_policy;
 use std::{
     collections::{BTreeMap, BTreeSet},
     convert::TryFrom,

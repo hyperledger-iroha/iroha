@@ -975,10 +975,13 @@ mod tests {
         let npos = SumeragiNposParameters::default();
         let asset = AssetId::new(npos.xor_asset_definition_id.clone(), ALICE_ID.clone());
         {
-            let mut parameters = world.parameters.block();
-            parameters
-                .set_parameter(Parameter::Custom(npos.into_custom_parameter()))
-                .expect("valid fixture parameters");
+            let mut parameters = crate::state::parameter_cell_block_for_testing(&world).unwrap();
+            crate::state::set_parameter_cell_for_testing(
+                &mut parameters,
+                Parameter::Custom(npos.into_custom_parameter()),
+                world.sccp_committee_generations.allocation_budget(),
+            )
+            .expect("valid fixture parameters");
             parameters.commit();
         }
         let self_key = (lane, ALICE_ID.clone(), ALICE_ID.clone());

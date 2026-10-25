@@ -3118,8 +3118,7 @@ pub fn app_with_root_scope_for_handler_test(world: World, private: bool) -> Shar
     let mut transaction = block.transaction();
     transaction
         .world_mut_for_testing()
-        .parameters_mut_for_testing()
-        .set_parameter(Parameter::Custom(CustomParameter::new(
+        .set_parameter_for_testing(Parameter::Custom(CustomParameter::new(
             consensus_metadata::handshake_meta_id(),
             Json::new(metadata),
         )))

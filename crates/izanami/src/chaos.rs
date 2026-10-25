@@ -2299,8 +2299,19 @@ fn make_network_builder_with_sorafs(
         .pipeline_time
         .unwrap_or_else(default_izanami_pipeline_time);
     builder = builder.with_block_cadence(pipeline_time);
+    let staking_policy = config
+        .nexus
+        .as_ref()
+        .map(instructions::nexus_staking_policy)
+        .transpose()?;
     if let Some(profile) = &config.nexus {
         builder = builder.with_config_table(profile.config_layer.clone());
+        builder = builder.with_genesis_staking_policy(
+            staking_policy
+                .as_ref()
+                .expect("selected profile policy")
+                .clone(),
+        );
         let gas_account = instructions::nexus_gas_account_id()?;
         let mut root_fees = profile.root_fees.clone();
         root_fees.fee_sink_account_id = gas_account.clone();
@@ -2310,19 +2321,10 @@ fn make_network_builder_with_sorafs(
         )));
         let gas_account_id = gas_account.to_string();
         builder = builder.with_config_layer(move |layer| {
-            layer
-                .write(
-                    ["pipeline", "gas", "tech_account_id"],
-                    gas_account_id.clone(),
-                )
-                .write(
-                    ["nexus", "staking", "stake_escrow_account_id"],
-                    gas_account_id.clone(),
-                )
-                .write(
-                    ["nexus", "staking", "slash_sink_account_id"],
-                    gas_account_id.clone(),
-                );
+            layer.write(
+                ["pipeline", "gas", "tech_account_id"],
+                gas_account_id.clone(),
+            );
         });
     }
     if let Some(profile) = config.nexus.as_ref() {
@@ -2335,8 +2337,7 @@ fn make_network_builder_with_sorafs(
                 config.peer_count,
                 profile.bootstrap_public_lanes.as_slice(),
                 npos_params.min_self_bond(),
-                &profile.stake_asset_id,
-                &instructions::nexus_gas_account_id()?,
+                staking_policy.as_ref().expect("selected profile policy"),
             )?);
     }
     if let Ok(filter) = std::env::var("RUST_LOG") {
@@ -2529,7 +2530,7 @@ fn extract_nexus_bootstrap_post_topology(
             instructions::peer_keypair(index)?.public_key().clone(),
         ));
     }
-    let stake_asset = profile.stake_asset_id.clone();
+    let stake_asset = profile.staking_policy.stake_asset_id.clone();
     let fee_asset = profile.fee_asset_id.clone();
     let mut neutral_tx = Vec::new();
     let mut stake_tx = Vec::new();
@@ -7756,7 +7757,7 @@ mod tests {
                     .downcast_ref::<RegisterBox>()
                     .is_some_and(|register| match register {
                         RegisterBox::AssetDefinition(definition) => {
-                            definition.object.id == profile.stake_asset_id
+                            definition.object.id == profile.staking_policy.stake_asset_id
                                 || definition.object.id == profile.fee_asset_id
                         }
                         _ => false,
@@ -7818,7 +7819,10 @@ mod tests {
                     .push(definition.object.id.clone());
             }
         }
-        for asset_id in [&profile.stake_asset_id, &profile.fee_asset_id] {
+        for asset_id in [
+            &profile.staking_policy.stake_asset_id,
+            &profile.fee_asset_id,
+        ] {
             let txs = registrations.get(asset_id).cloned().unwrap_or_default();
             let tx_details: Vec<_> = txs
                 .iter()
@@ -10769,11 +10773,15 @@ mod tests {
             config.nexus.as_ref().unwrap().fee_asset_id
         );
         let expected_gas_account = expected_gas.to_string();
-        for path in [
-            &["pipeline", "gas", "tech_account_id"][..],
-            &["nexus", "staking", "stake_escrow_account_id"][..],
-            &["nexus", "staking", "slash_sink_account_id"][..],
-        ] {
+        let staking =
+            iroha_data_model::block::consensus::PublicLaneStakingPolicy::from_parameters(&params)?;
+        assert_eq!(
+            staking,
+            instructions::nexus_staking_policy(config.nexus.as_ref().unwrap())?
+        );
+        assert_eq!(staking.stake_escrow_account_id, expected_gas);
+        assert_eq!(staking.slash_sink_account_id, expected_gas);
+        for path in [&["pipeline", "gas", "tech_account_id"][..]] {
             let actual = layers.iter().rev().find_map(|layer| read_str(layer, path));
             assert_eq!(
                 actual.as_deref(),

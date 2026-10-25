@@ -61,6 +61,7 @@ impl StateBlock<'_> {
         let captured_digest =
             iroha_config::parameters::actual::nexus_consensus_policy_digest_with_runtime_policies(
                 &self.runtime_policy.nexus,
+                self.world.parameters.get_before_block().root_fees(),
                 self.runtime_policy
                     .compliance
                     .as_deref()
@@ -75,6 +76,7 @@ impl StateBlock<'_> {
         let working_digest =
             iroha_config::parameters::actual::nexus_consensus_policy_digest_with_runtime_policies(
                 &self.nexus,
+                self.world.parameters.get_before_block().root_fees(),
                 self.lane_compliance
                     .as_deref()
                     .map(LaneComplianceEngine::consensus_policy_digest),
@@ -235,17 +237,13 @@ impl StateBlock<'_> {
             ));
         }
         let manifests = if let Some(catalog) = &pending.runtime_catalog {
-            Arc::new(
-                self.runtime_policy
-                    .manifests
-                    .with_runtime_additions(
-                        &catalog.manifests,
-                        &expected.updated_catalog,
-                        &expected.updated_dataspace_catalog,
-                        &predecessor.governance,
-                    )
-                    .map_err(runtime_catalog_invalid)?,
-            )
+            Arc::new(runtime_catalog_manifest_registry(
+                self.runtime_policy.manifests.as_ref(),
+                &catalog.manifests,
+                &expected.updated_catalog,
+                &expected.updated_dataspace_catalog,
+                &predecessor.governance,
+            )?)
         } else {
             rebind_lane_manifests_for_lifecycle(
                 self.runtime_policy.manifests.as_ref(),

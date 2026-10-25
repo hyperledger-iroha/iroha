@@ -1138,7 +1138,7 @@
      "name": "committed_gas_schedule_prices_a_real_proof_identically_on_every_node"
     },
     {
-     "path": "crates/iroha_core/src/smartcontracts/ivm/host.rs",
+     "path": "crates/iroha_core/src/smartcontracts/ivm/host_tests.rs",
      "name": "unaffordable_proof_instruction_preserves_queue_and_verification_latch"
     },
     {

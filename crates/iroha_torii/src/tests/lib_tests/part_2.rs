@@ -274,7 +274,9 @@ fn declare_onboarding_dpn_permissions_for_test(app: &SharedAppState) {
         permissions,
         current.schema().clone(),
     );
-    world.apply_executor_data_model(model);
+    world
+        .apply_executor_data_model(model)
+        .expect("valid fixture executor data model before onboarding permission publication");
     stx.apply();
     block
         .commit_world_overlay_for_testing()
@@ -962,9 +964,7 @@ fn install_recipient_lookup_policy_for_test(app: &SharedAppState) {
     let mut block = app.state.block(header);
     block
         .world
-        .parameters
-        .get_mut()
-        .set_parameter(Parameter::Custom(registry.into_custom_parameter()))
+        .set_parameter_for_testing(Parameter::Custom(registry.into_custom_parameter()))
         .expect("install the recipient lookup policy fixture");
     block
         .commit_world_overlay_for_testing()

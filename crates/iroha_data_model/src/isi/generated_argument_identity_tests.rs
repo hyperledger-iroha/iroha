@@ -8,12 +8,12 @@ use crate::{
     asset::{Asset, AssetDefinition},
     domain::Domain,
     nft::{Nft, NftId},
-    peer::Peer,
     permission::Permission,
     role::{Role, RoleId},
     rwa::Rwa,
     trigger::Trigger,
 };
+use iroha_model_base::peer::Peer;
 
 fn assert_marker<T>(nominal: &str, captured_hash: Option<[u8; 16]>)
 where

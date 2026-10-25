@@ -261,8 +261,14 @@ fn prepare_imported_return_fixture(
     // This is the current genesis-pinned Global XOR definition at scale nine,
     // not a separately named fixture currency. The fixture's signed genesis
     // authenticates its World before any instance or ordinary call exists.
-    let world = crate::validation_fee::tests::validation_fee_payout_world(authority);
-    let state = Box::new(contract_test_state_with_world(authority, world));
+    let config = crate::validation_fee::tests::validation_fee_payout_config(authority, 0);
+    let state = Box::new(signed_contract_host_state(config));
+    grant_named_permission_to_account(
+        &state,
+        authority,
+        authority.clone(),
+        "CanManageSmartContractCode",
+    );
     assert!(state.committed_height() >= 1);
     let xor = state
         .view()

@@ -997,9 +997,7 @@ fn trigger_component_window_preserves_original_policy_and_refuses_unsupported_he
     let original_cap = original_config.params.max_block_bytes;
     changed
         .world
-        .parameters
-        .get_mut()
-        .set_parameter(Parameter::Sumeragi(SumeragiParameter::MaxBlockBytes(
+        .set_parameter_for_testing(Parameter::Sumeragi(SumeragiParameter::MaxBlockBytes(
             NonZeroU32::new(original_cap - 1).unwrap(),
         )))
         .expect("nonzero changed component cap");

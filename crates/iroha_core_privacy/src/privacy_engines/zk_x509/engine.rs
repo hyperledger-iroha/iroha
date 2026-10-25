@@ -14,11 +14,9 @@ use super::{
     codec::{ZkX509WitnessCodecErrorV1, ZkX509WitnessV1},
     credential_pre_aux::ZkX509CredentialPreAuxErrorV1,
     credential_stark::encode_zk_x509_credential_envelope_v1,
+    errors::ZkX509RelationErrorV1,
     main_assembly::{ZkX509MainAssemblyErrorV1, build_zk_x509_main_trace_assembly_v1},
-    relation::{
-        ZkX509GovernanceV1, ZkX509RelationErrorV1, ZkX509RelationOutputV1,
-        validate_reference_relation_v1,
-    },
+    relation::{ZkX509GovernanceV1, ZkX509RelationOutputV1, validate_reference_relation_v1},
     stark::{
         ZkX509StarkErrorV1, commit_zk_x509_main_base_phase_v1_with_rng, finish_joint_main_ca_v1,
     },

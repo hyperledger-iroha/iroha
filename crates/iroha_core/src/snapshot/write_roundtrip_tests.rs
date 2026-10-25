@@ -1325,17 +1325,31 @@ async fn signed_snapshot_roundtrip_preserves_every_sccp_map() {
     let store_dir = tmp_root.path().join("snapshot");
     let mut state = state_factory();
     let parameters = iroha_data_model::sccp::params::SccpParametersV1::taira_default();
-    let mut nexus = state.nexus_snapshot();
-    nexus.staking.unbonding_delay = std::time::Duration::from_millis(
-        parameters
-            .committee_validity_ms
-            .checked_add(parameters.forgery_evidence_grace_ms)
-            .expect("fixture liability interval fits"),
+    let mut monetary = crate::sumeragi::test_chain::staking_fixture_policy(
+        SumeragiNposParameters::default().xor_asset_definition_id,
     );
-    nexus.staking.max_slash_bps = 1;
-    // The original writer and restore both use this exact pinned policy; a
-    // default delay cannot cover the retained generations' complete liability.
-    state.install_pre_genesis_nexus_for_testing(nexus);
+    monetary.unbonding_delay_ms = parameters
+        .committee_validity_ms
+        .checked_add(parameters.forgery_evidence_grace_ms)
+        .expect("fixture liability interval fits");
+    monetary.max_slash_bps = 1;
+    // This is an explicit pre-chain snapshot component fixture, not signed genesis.
+    // Writer and restore use the same admitted parameter; node settings supply no policy.
+    state
+        .world
+        .set_parameter_for_testing(Parameter::Custom(
+            monetary.clone().into_custom_parameter().unwrap(),
+        ))
+        .expect("admit the complete SCCP liability policy before writing its snapshot");
+    assert_eq!(
+        state
+            .world
+            .view()
+            .parameters()
+            .require_staking_policy()
+            .unwrap(),
+        &monetary,
+    );
     for seed in [1, 2] {
         let mut block = state.world.block();
         crate::smartcontracts::isi::sccp::test_support::populate_every_sccp_map(
@@ -1384,6 +1398,11 @@ async fn signed_snapshot_roundtrip_preserves_every_sccp_map() {
     crate::state::sccp_snapshot_state::serialize_envelope(&restored.world, &mut restored_envelope);
     assert_eq!(restored_envelope, original_envelope);
     let world = restored.world.view();
+    assert_eq!(world.parameters().staking_policy(), Some(&monetary));
+    assert_eq!(
+        world.parameters().require_staking_policy().unwrap(),
+        &monetary
+    );
     assert_eq!(world.sccp_committee_generations().len(), 2);
     assert_eq!(world.sccp_anchor_chunks().len(), 2);
     assert_eq!(world.sccp_anchor_open().as_slice().len(), 1);

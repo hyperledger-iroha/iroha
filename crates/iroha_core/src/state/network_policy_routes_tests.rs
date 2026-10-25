@@ -44,16 +44,14 @@ fn state() -> State {
     };
     policy.validate().expect("valid native policy fixture");
     // Component setup supplies committed native policy/state, not a certificate substitute.
-    let mut parameters = world.parameters.view().get().clone();
-    parameters
-        .set_parameter(Parameter::Custom(policy.into_custom_parameter()))
+    world
+        .set_parameter_for_testing(Parameter::Custom(policy.into_custom_parameter()))
         .expect("valid fixture parameters");
-    parameters
-        .set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
+    world
+        .set_parameter_for_testing(crate::sumeragi::lanes::routing::test_support::metadata(
             SumeragiRootScope::Global,
         ))
         .expect("valid fixture parameters");
-    world.parameters = mv::cell::Cell::new(parameters);
     let mut lanes = SumeragiLaneState::default();
     lanes.upsert(SumeragiLaneRecord {
         da_layout: iroha_sumeragi::availability::recommended_data_availability_layout(),
@@ -731,9 +729,9 @@ fn ordinary_capture_requires_immutable_metadata_even_with_valid_lane_policy() {
     let state = state();
     let source = carrier(vec![input(&state, "no scope fallback")]);
     before_effects(&state, &source, false, |block| {
-        let mut parameters = block.world.parameters.get().clone();
-        parameters
-            .set_parameter(Parameter::Custom(
+        block
+            .world
+            .set_parameter_for_testing(Parameter::Custom(
                 iroha_data_model::parameter::custom::CustomParameter::new(
                     iroha_data_model::parameter::system::consensus_metadata::handshake_meta_id(),
                     iroha_primitives::json::Json::from_norito_value_ref(
@@ -743,7 +741,6 @@ fn ordinary_capture_requires_immutable_metadata_even_with_valid_lane_policy() {
                 ),
             ))
             .expect("valid fixture parameters");
-        *block.world.parameters.get_mut() = parameters;
         let budget = AllocationBudget::new(1024 * 1024);
         let mut owner = CapturedNetworkPolicyRoutes::reserve(&source, &budget).unwrap();
         owner

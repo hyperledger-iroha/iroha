@@ -16,7 +16,6 @@ use iroha_data_model::isi::error::{AssetTransferAdmissionError, InstructionEvalu
 use iroha_data_model::isi::{ResolvedSettlementMovement, SettlementDetails};
 use iroha_data_model::{
     asset::{AssetBalancePolicy, AssetBalanceScope, AssetId},
-    events::data::prelude::{ConfigurationEvent, ParameterChanged},
     isi::{
         error::{InstructionExecutionError, InvalidParameterError},
         settlement::{
@@ -402,24 +401,13 @@ fn fx_corridor_escrow_account(
         &policy.destination_asset_definition_id,
     )
 }
-fn persist_fx_policy_registry(
+fn prepare_fx_policy_registry(
     stx: &mut StateTransaction<'_, '_>,
     registry: FxCorridorPolicyRegistry,
-) {
-    let next = registry.into_custom_parameter();
-    let previous = {
-        let parameters = stx.world.parameters.get_mut();
-        let previous = parameters.custom().get(next.id()).cloned();
-        parameters
-            .set_parameter(Parameter::Custom(next.clone()))
-            .expect("FX corridor registry is not a pipeline fee parameter");
-        previous.unwrap_or_else(|| next.clone())
-    };
-    stx.world
-        .emit_events(Some(ConfigurationEvent::Changed(ParameterChanged {
-            old_value: Parameter::Custom(previous),
-            new_value: Parameter::Custom(next),
-        })));
+) -> Result<crate::state::PreparedParameterChange, Error> {
+    let next = Parameter::Custom(registry.into_custom_parameter());
+    stx.prepare_parameter_change(&next, None, None)
+        .map_err(|original| stx.parameter_change_instruction_error(original))
 }
 fn validate_fx_oracle_evidence(
     stx: &StateTransaction<'_, '_>,
@@ -936,7 +924,10 @@ impl Execute for SetFxCorridorPolicy {
             )));
         }
         registry.upsert(self.policy);
-        persist_fx_policy_registry(stx, registry);
+        let prepared = prepare_fx_policy_registry(stx, registry)?;
+        stx.world
+            .install_parameter_change(prepared)
+            .map_err(|original| stx.parameter_change_instruction_error(original))?;
         Ok(())
     }
 }
@@ -1108,6 +1099,12 @@ impl Execute for SettleFxCorridor {
                 },
             }),
         );
+        registry.usage.insert(policy.policy_id.clone(), next_usage);
+        // Admit the complete successor and its notifications before asset effects.
+        let next = Parameter::Custom(registry.into_custom_parameter());
+        let prepared_registry = stx
+            .prepare_fx_usage_parameter_change(&next)
+            .map_err(|original| stx.parameter_change_instruction_error(original))?;
         execute_native_fx_numeric_asset_pair(
             stx,
             authority,
@@ -1119,8 +1116,9 @@ impl Execute for SettleFxCorridor {
             destination_leg.quantity().clone(),
             &policy,
         )?;
-        registry.usage.insert(policy.policy_id.clone(), next_usage);
-        persist_fx_policy_registry(stx, registry);
+        stx.world
+            .install_parameter_change(prepared_registry)
+            .map_err(|original| stx.parameter_change_instruction_error(original))?;
         stx.world
             .settlement_receipts
             .insert(self.settlement_id.clone(), receipt);
@@ -1434,6 +1432,8 @@ mod tests {
     mod atomic;
     #[path = "namespace_tests.rs"]
     mod namespace;
+    #[path = "parameter_publication_tests.rs"]
+    mod parameter_publication;
     use super::*;
     use crate::{kura::Kura, prelude::World, query::store::LiveQueryStore, state::State};
     use iroha_data_model::{
@@ -1698,6 +1698,18 @@ mod tests {
             ],
             [],
         );
+        // Explicit component authority for the Ed25519 fixture and deterministic escrow.
+        let crypto = iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+            iroha_crypto::Algorithm::Ed25519,
+        ])
+        .expect("FX fixture crypto policy");
+        world
+            .set_parameter_for_testing(
+                crypto
+                    .into_parameter()
+                    .expect("FX fixture crypto parameter"),
+            )
+            .expect("fund the FX fixture crypto policy");
         world.account_permissions.insert(
             ALICE_ID.clone(),
             BTreeSet::from([Permission::from(CanSetFxCorridorPolicy {

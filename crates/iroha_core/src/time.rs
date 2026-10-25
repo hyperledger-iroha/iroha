@@ -14,8 +14,8 @@
 //! from authenticating samples until the original clock recovers.
 use crate::IrohaNetwork;
 use iroha_config::parameters::actual::NtsEnforcementMode;
-use iroha_data_model::peer::Peer;
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
+use iroha_model_base::peer::Peer;
 use iroha_primitives::time::NativeContinuousReading;
 use norito::codec::{Decode, Encode};
 use std::{

@@ -24,8 +24,10 @@ thread_local! {
 }
 use core::str::FromStr;
 use iroha_crypto::{Hash as CryptoHash, HashOf, PublicKey};
-pub use iroha_data_model::account::AccountId;
-pub use iroha_data_model::prelude::{AssetDefinitionId, Mintable, NftId, Peer};
+pub use iroha_data_model::{
+    account::AccountId,
+    prelude::{AssetDefinitionId, Mintable, NftId},
+};
 use iroha_data_model::{
     asset::{AssetBalanceScope, AssetId},
     isi::{smart_contract_code as scode, transfer::TransferAssetBatch},
@@ -38,6 +40,7 @@ use iroha_data_model::{
 };
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::name::Name;
+pub use iroha_model_base::peer::Peer;
 use iroha_model_base::state_path::StatePath;
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 #[cfg(test)]

@@ -24,37 +24,8 @@ use iroha_core::{
     tx::AcceptedTransaction,
 };
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature, SignatureOf};
-use iroha_data_model::{
-    NetworkId, Registrable, ValidationFail,
-    account::{Account, AccountAlias, AccountId},
-    asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId},
-    block::{BlockHeader, BlockSignature, SignedBlock},
-    consensus::{ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus},
-    domain::Domain,
-    events::{
-        pipeline::{BlockEvent, BlockStatus, TransactionEvent, TransactionStatus},
-        trigger_completed::TriggerCompletedOutcome,
-    },
-    isi::{Grant, Log, Register, RegisterPeerWithPop, consensus_keys::RegisterConsensusKey},
-    level::Level,
-    nexus::{AxtRejectReason, UniversalAccountId},
-    parameter::{Parameter, system::SumeragiNposParameters},
-    peer::Peer,
-    permission::Permission,
-    soranet::privacy_metrics::{
-        SoranetPrivacyEventHandshakeSuccessV1, SoranetPrivacyEventKindV1, SoranetPrivacyEventV1,
-        SoranetPrivacyModeV1, SoranetPrivacyPrioShareV1,
-    },
-    transaction::{
-        ExecutionStep,
-        error::TransactionRejectionReason,
-        signed::{
-            SealedTransactionReveal, SignedTransaction, TransactionBuilder, TransactionEntrypoint,
-            TransactionSignature, compute_sealed_transaction_commitment,
-        },
-    },
-    trigger::{DataTriggerSequence, DataTriggerStep, TriggerId},
-};
+use iroha_data_model::{NetworkId, Registrable, ValidationFail, account::{Account, AccountAlias, AccountId}, asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId}, block::{BlockHeader, BlockSignature, SignedBlock}, consensus::{ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus}, domain::Domain, events::{pipeline::{BlockEvent, BlockStatus, TransactionEvent, TransactionStatus}, trigger_completed::TriggerCompletedOutcome}, isi::{Grant, Log, Register, RegisterPeerWithPop, consensus_keys::RegisterConsensusKey}, level::Level, nexus::{AxtRejectReason, UniversalAccountId}, parameter::{Parameter, system::SumeragiNposParameters}, permission::Permission, soranet::privacy_metrics::{SoranetPrivacyEventHandshakeSuccessV1, SoranetPrivacyEventKindV1, SoranetPrivacyEventV1, SoranetPrivacyModeV1, SoranetPrivacyPrioShareV1}, transaction::{ExecutionStep, error::TransactionRejectionReason, signed::{SealedTransactionReveal, SignedTransaction, TransactionBuilder, TransactionEntrypoint, TransactionSignature, compute_sealed_transaction_commitment}}, trigger::{DataTriggerSequence, DataTriggerStep, TriggerId}};
+use iroha_model_base::peer::Peer;
 use iroha_executor_data_model::permission::account::{
     AccountAliasPermissionScope, CanResolveAccountAlias,
 };
@@ -682,9 +653,7 @@ fn configure_nexus_fee_admission_for_test(
     {
         let mut world = state.world.block();
         world
-            .parameters
-            .get_mut()
-            .set_parameter(iroha_data_model::parameter::Parameter::Custom(
+            .set_parameter_for_testing(iroha_data_model::parameter::Parameter::Custom(
                 nexus
                     .fees
                     .clone()
@@ -696,7 +665,10 @@ fn configure_nexus_fee_admission_for_test(
     }
     state.set_nexus(nexus.clone()).expect("apply nexus config");
     let state_view = app_state.state.view();
-    app_state.queue.reconfigure_nexus(&nexus, &state_view, None);
+    app_state
+        .queue
+        .reconfigure_nexus(&nexus, &state_view, None)
+        .expect("original State pool admits Queue privacy projection");
 }
 pub fn multiple_dataspace_nexus_for_test() -> iroha_config::parameters::actual::Nexus {
     let secondary_dataspace = DataSpaceId::new(1);
@@ -959,7 +931,10 @@ pub fn configure_multiple_dataspace_routes_for_test(app: &mut SharedAppState) {
     let state = Arc::get_mut(&mut app_state.state).expect("unique state");
     assert_initial_nexus_catalog_for_test(state, &nexus);
     let state_view = app_state.state.view();
-    app_state.queue.reconfigure_nexus(&nexus, &state_view, None);
+    app_state
+        .queue
+        .reconfigure_nexus(&nexus, &state_view, None)
+        .expect("original State pool admits Queue privacy projection");
 }
 pub fn configure_private_ingress_routes_for_test(
     app: &mut SharedAppState,
@@ -1011,7 +986,10 @@ pub fn configure_private_ingress_routes_for_test(
         ],
     );
     let state_view = app_mut.state.view();
-    app_mut.queue.reconfigure_nexus(&nexus, &state_view, None);
+    app_mut
+        .queue
+        .reconfigure_nexus(&nexus, &state_view, None)
+        .expect("original State pool admits Queue privacy projection");
     (restricted_lane, restricted_dataspace)
 }
 /// Execute the original local four-validator committee before decorating offline foreign routes.
@@ -1201,7 +1179,10 @@ pub fn configure_private_ingress_with_offline_foreign_route_for_test(
         ],
     );
     let state_view = app_mut.state.view();
-    app_mut.queue.reconfigure_nexus(&nexus, &state_view, None);
+    app_mut
+        .queue
+        .reconfigure_nexus(&nexus, &state_view, None)
+        .expect("original State pool admits Queue privacy projection");
     drop(state_view);
     // The peer bindings activate at height one. A committed journal entry makes
     // the same authority height available to the immutable routing state view.
@@ -2239,7 +2220,9 @@ fn mk_app_state_for_tests_with_world_and_options_and_network_id_and_nexus(
     let queue = Arc::new(Queue::from_config(queue_cfg, events.clone()));
     if has_configured_catalog {
         let state_view = state.view();
-        queue.reconfigure_nexus(&state.nexus_snapshot(), &state_view, None);
+        queue
+            .reconfigure_nexus(&state.nexus_snapshot(), &state_view, None)
+            .expect("original State pool admits Queue privacy projection");
     }
     let pipeline_status_cache = Arc::new(PipelineStatusCache::new());
     // Minimal Kiso and peers provider (mocked to avoid spawning the full actor in tests)

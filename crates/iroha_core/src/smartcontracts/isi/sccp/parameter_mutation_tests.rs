@@ -29,7 +29,9 @@ fn sccp_refuses_short_epoch_before_mutating_consensus_parameters() {
     let mut consensus = stx.world.parameters.get().sumeragi().clone();
     consensus.epoch_length_blocks = NonZeroU64::new(3_600).unwrap();
     consensus.block_cadence_ms = NonZeroU64::new(1_000).unwrap();
-    stx.world.parameters.get_mut().set_sumeragi(consensus);
+    stx.world
+        .set_sumeragi_for_testing(consensus)
+        .expect("explicit fixture consensus parameters");
     let before = stx.world.parameters.get().clone();
     let update = |epoch| {
         SetParameter::new(Parameter::Sumeragi(SumeragiParameter::EpochLengthBlocks(
@@ -67,7 +69,9 @@ fn genesis_cadence_rewrite_cannot_break_an_already_initialized_sccp_epoch() {
     let mut consensus = stx.world.parameters.get().sumeragi().clone();
     consensus.epoch_length_blocks = NonZeroU64::new(3_600).unwrap();
     consensus.block_cadence_ms = NonZeroU64::new(1_000).unwrap();
-    stx.world.parameters.get_mut().set_sumeragi(consensus);
+    stx.world
+        .set_sumeragi_for_testing(consensus)
+        .expect("explicit fixture consensus parameters");
     let Parameter::Custom(original) =
         crate::sumeragi::lanes::routing::test_support::metadata(SumeragiRootScope::Global)
     else {

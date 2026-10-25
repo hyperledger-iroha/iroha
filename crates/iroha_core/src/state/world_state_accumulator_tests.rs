@@ -544,9 +544,7 @@ fn unwitnessed_role_and_parameter_changes_change_the_root() {
         WorldStateAccumulator::capture(&block).unwrap().root()
     );
     block
-        .parameters
-        .get_mut()
-        .set_parameter(Parameter::Block(BlockParameter::MaxTransactions(
+        .set_parameter_for_testing(Parameter::Block(BlockParameter::MaxTransactions(
             std::num::NonZeroU64::new(7).unwrap(),
         )))
         .expect("valid fixture parameters");

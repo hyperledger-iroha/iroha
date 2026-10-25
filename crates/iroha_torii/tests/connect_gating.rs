@@ -392,7 +392,7 @@ fn connect_config_fixture_uses_checked_key_generation() {
 fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::actual::Root {
     use iroha_config::parameters::defaults;
     use iroha_crypto::streaming::StreamingKeyMaterial;
-    use iroha_data_model::peer::Peer;
+    use iroha_model_base::peer::Peer;
 
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
 

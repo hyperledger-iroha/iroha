@@ -31,26 +31,25 @@ fn fixture_with_bob_balance(
     definition: AssetDefinitionId,
     bob_balance: Option<Quantity>,
 ) -> (State, AssetId, AssetId) {
-    let state = State::new_for_testing(
+    let mut state = State::new_for_testing(
         World::default(),
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     );
-    let mut fees = state.nexus_snapshot().fees;
+    let mut fees = iroha_config::parameters::defaults::nexus::fees::genesis_policy();
     fees.base_fee = Quantity::zero();
     fees.per_byte_fee = Quantity::zero();
     fees.per_instruction_fee = Quantity::zero();
     fees.per_gas_unit_fee = Quantity::zero();
     {
-        let mut parameters = state.world.parameters.block();
-        parameters
-            .set_parameter(iroha_data_model::parameter::Parameter::Custom(
+        state
+            .world
+            .set_parameter_for_testing(iroha_data_model::parameter::Parameter::Custom(
                 fees.clone()
                     .into_custom_parameter()
                     .expect("explicit fixture policy"),
             ))
             .expect("valid fixture monetary projection");
-        parameters.commit();
     }
 
     let domain = DomainId::try_new("quantity-capture", "universal").unwrap();
@@ -106,7 +105,21 @@ fn authenticate_quantity_state(component: State) -> State {
         test_chain::{CertifiedTestChain, TestChainConfig},
     };
     let nexus = component.nexus_snapshot();
+    let fees = component
+        .world
+        .parameters
+        .view()
+        .get()
+        .root_fees()
+        .expect("quantity fixture explicitly authored its original fees")
+        .clone();
     let mut config = TestChainConfig::new(component.world, 0);
+    config
+        .genesis_parameters
+        .push(iroha_data_model::parameter::Parameter::Custom(
+            fees.into_custom_parameter()
+                .expect("explicit signed quantity fee policy"),
+        ));
     config.chain_id = component.chain_id;
     config.pipeline = component.pipeline;
     config.governance = Some(component.gov);
@@ -179,7 +192,17 @@ fn quantity_fixture_preserves_balances_and_original_authenticated_network_root()
             .total_quantity(),
         &Quantity::from(10_u32)
     );
-    assert!(state.nexus_snapshot().fees.base_fee.is_zero());
+    assert!(
+        state
+            .world
+            .parameters
+            .view()
+            .get()
+            .root_fees()
+            .expect("explicit fixture root fee policy")
+            .base_fee
+            .is_zero()
+    );
     assert!(crate::sumeragi::lanes::routing::committed_root_scope(view.world()).is_some());
 }
 
@@ -751,12 +774,15 @@ fn body_and_real_pipeline_fee_replace_one_complete_entry_counter() {
         }],
     };
     {
-        let mut parameters = state.world.parameters.block();
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+            .expect("fund original parameter Cell acquisition");
         for parameter in crate::pipeline_gas_policy::parameters_for_testing(gas) {
-            parameters
-                .get_mut()
-                .set_parameter(parameter)
-                .expect("valid fixture parameters");
+            crate::state::set_parameter_cell_for_testing(
+                &mut parameters,
+                parameter,
+                state.world.sccp_committee_generations.allocation_budget(),
+            )
+            .expect("valid fixture parameters");
         }
         parameters.commit();
     }
@@ -819,7 +845,8 @@ fn capture_capacity_refusal_keeps_exact_prefix_counters_and_original_business_re
     use iroha_data_model::parameter::{BlockParameter, FastpqSourcePolicyV1, Parameter};
     let (state, alice, _) = fixture();
     {
-        let mut parameters = state.world.parameters.block();
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+            .expect("fund original parameter Cell acquisition");
         let previous = parameters.get().block().fastpq_source();
         let mut intrinsic = previous.intrinsic;
         intrinsic.max_transcripts = 1;
@@ -831,10 +858,12 @@ fn capture_capacity_refusal_keeps_exact_prefix_counters_and_original_business_re
             1,
         )
         .unwrap();
-        parameters
-            .get_mut()
-            .set_parameter(Parameter::Block(BlockParameter::FastpqSource(policy)))
-            .expect("valid fixture parameters");
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            Parameter::Block(BlockParameter::FastpqSource(policy)),
+            state.world.sccp_committee_generations.allocation_budget(),
+        )
+        .expect("valid fixture parameters");
         parameters.commit();
     }
     let (source, call) = source(
@@ -983,19 +1012,30 @@ fn sponsored_burn_fixture() -> (
         transaction.apply();
         setup.commit_world_overlay_for_testing().unwrap();
     }
-    let mut fees = state.nexus_snapshot().fees;
+    let mut fees = state
+        .world
+        .parameters
+        .view()
+        .get()
+        .root_fees()
+        .expect("explicit fixture root fee policy")
+        .clone();
     fees.fee_asset_id = custody.definition().clone();
     fees.sponsor_vault_custody_account_id = BOB_ID.clone();
     fees.base_fee = Quantity::from(2_u32);
     {
-        let mut parameters = state.world.parameters.block();
-        parameters
-            .set_parameter(iroha_data_model::parameter::Parameter::Custom(
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+            .expect("fund original parameter Cell acquisition");
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            iroha_data_model::parameter::Parameter::Custom(
                 fees.clone()
                     .into_custom_parameter()
                     .expect("explicit fixture policy"),
-            ))
-            .expect("valid fixture monetary projection");
+            ),
+            state.world.sccp_committee_generations.allocation_budget(),
+        )
+        .expect("valid fixture monetary projection");
         parameters.commit();
     }
 
@@ -1004,7 +1044,13 @@ fn sponsored_burn_fixture() -> (
         assert_eq!(
             crate::block::resolve_network_xor_asset_definition(
                 view.world(),
-                &view.nexus.fees.fee_asset_id.canonical_address(),
+                &view
+                    .world()
+                    .parameters()
+                    .root_fees()
+                    .expect("explicit fixture root fee policy")
+                    .fee_asset_id
+                    .canonical_address(),
                 u64::try_from(
                     quantity_successor_header(&state)
                         .creation_time()
@@ -1129,17 +1175,28 @@ fn actual_signed_sponsor_debit_captures_exact_custody_balance_and_supply() {
 fn sponsor_business_capability_without_original_signed_source_cannot_capture() {
     let (state, custody, program_id, instruction) = sponsored_burn_fixture();
     {
-        let mut fees = state.nexus_snapshot().fees;
+        let mut fees = state
+            .world
+            .parameters
+            .view()
+            .get()
+            .root_fees()
+            .expect("explicit fixture root fee policy")
+            .clone();
         fees.base_fee = Quantity::zero();
         {
-            let mut parameters = state.world.parameters.block();
-            parameters
-                .set_parameter(iroha_data_model::parameter::Parameter::Custom(
+            let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+                .expect("fund original parameter Cell acquisition");
+            crate::state::set_parameter_cell_for_testing(
+                &mut parameters,
+                iroha_data_model::parameter::Parameter::Custom(
                     fees.clone()
                         .into_custom_parameter()
                         .expect("explicit fixture policy"),
-                ))
-                .expect("valid fixture monetary projection");
+                ),
+                state.world.sccp_committee_generations.allocation_budget(),
+            )
+            .expect("valid fixture monetary projection");
             parameters.commit();
         }
     }
@@ -3171,26 +3228,25 @@ fn account_removal_without_balance_does_not_invent_a_zero_burn() {
 /// Original setup precedes the authentic signed genesis, including each lifecycle
 /// and derived index. The source under test is a real signed native instruction.
 fn retirement_fixture() -> (State, DomainId, Vec<AssetId>, AssetDefinitionId, AssetId) {
-    let state = State::new_for_testing(
+    let mut state = State::new_for_testing(
         World::default(),
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     );
-    let mut fees = state.nexus_snapshot().fees;
+    let mut fees = iroha_config::parameters::defaults::nexus::fees::genesis_policy();
     fees.base_fee = Quantity::zero();
     fees.per_byte_fee = Quantity::zero();
     fees.per_instruction_fee = Quantity::zero();
     fees.per_gas_unit_fee = Quantity::zero();
     {
-        let mut parameters = state.world.parameters.block();
-        parameters
-            .set_parameter(iroha_data_model::parameter::Parameter::Custom(
+        state
+            .world
+            .set_parameter_for_testing(iroha_data_model::parameter::Parameter::Custom(
                 fees.clone()
                     .into_custom_parameter()
                     .expect("explicit fixture policy"),
             ))
             .expect("valid fixture monetary projection");
-        parameters.commit();
     }
 
     let domain = DomainId::try_new("retirement", "universal").unwrap();

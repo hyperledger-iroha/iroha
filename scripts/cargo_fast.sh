@@ -42,6 +42,8 @@ Options:
   --no-incremental        Set CARGO_INCREMENTAL=0 (also automatic with sccache)
   --stable-local-metadata Set VERGEN_GIT_SHA=local-fast-build
                           Reject an inherited IROHA_GIT_COMMIT_HASH before Cargo
+                          On Unix, preserve PLONK freshness through complete local
+                          source preflights after a matching evaluator is built
   --zero-debug            Set CARGO_PROFILE_{DEV,TEST}_DEBUG=0
   --linker MODE           Linker: off (default)|auto|mold|lld|ld.lld|zld|ld64.lld|<path>
                           Explicit modes must pass the native compiler probe
@@ -55,6 +57,7 @@ Options:
 
 Environment:
   CARGO_FAST_TARGET_ROOT  Override the root used by --target-slot
+  CARGO_FAST_TIMINGS=1    Report local source-preflight and Cargo phase timings
 
 Examples:
   scripts/cargo_fast.sh -- check -p irohad
@@ -81,6 +84,10 @@ zero_debug=false
 print_env_only=false
 node_set=false
 cargo_driver="cargo"
+
+# This context belongs only to the private child runner below. Never forward a
+# caller-supplied or stale local stamp into ordinary or authenticated builds.
+unset CARGO_FAST_NATIVE_SOURCE_CONTEXT
 
 declare -a cargo_args
 cargo_args=()
@@ -631,4 +638,10 @@ printf ' %q' "${cargo_driver}" "${cargo_args[@]}"
 printf '\n'
 # Replace this shell so it never rereads a changed script after a long build.
 cd -- "${REPO_ROOT}"
+if [[ "${stable_local_metadata}" == true ]] && [[ "$(uname -s)" != MINGW* ]] \
+	&& [[ "$(uname -s)" != MSYS* ]] \
+	&& [[ "$(uname -s)" != CYGWIN* ]]; then
+	exec python3 "${SCRIPT_DIR}/cargo_local_source_identity.py" \
+		--source-root "${REPO_ROOT}" --cargo-driver "${cargo_driver}" -- "${cargo_args[@]}"
+fi
 exec "${cargo_driver}" "${cargo_args[@]}"

@@ -973,9 +973,7 @@ async fn torii_proxy_candidate_peers_fail_closed_when_bindings_are_missing() {
     let mut block = app.state.block(header);
     block
         .world
-        .parameters
-        .get_mut()
-        .set_parameter(Parameter::Custom(
+        .set_parameter_for_testing(Parameter::Custom(
             SumeragiNposParameters::default().into_custom_parameter(),
         ))
         .expect("install the committed NPoS fixture parameters");

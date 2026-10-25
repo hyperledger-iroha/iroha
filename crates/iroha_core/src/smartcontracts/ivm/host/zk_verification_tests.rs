@@ -769,9 +769,7 @@ fn committed_native_proof_limit_accepts_exact_bound_and_rejects_one_more() {
         {
             let mut block = world.block();
             block
-                .parameters
-                .get_mut()
-                .set_parameter(Parameter::Custom(policy.into_custom_parameter()))
+                .set_parameter_for_testing(Parameter::Custom(policy.into_custom_parameter()))
                 .expect("valid fixture parameters");
             block.commit();
         }

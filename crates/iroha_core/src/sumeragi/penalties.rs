@@ -34,7 +34,7 @@ use iroha_crypto::{ChargedPublicKey, Hash, PublicKey, PublicKeyAllocationError};
 use iroha_data_model::{
     block::{
         BlockHeader,
-        consensus::{EvidencePenaltyStatus, EvidenceScope},
+        consensus::{EvidencePenaltyStatus, EvidenceScope, PublicLaneStakingPolicyError},
     },
     consensus::{
         NposConsensusEffects, NposConsensusSlashAction, NposMarkConsensusEvidenceAppliedAction,
@@ -464,6 +464,10 @@ impl<'a> PenaltyApplier<'a> {
             ));
         }
         let world = view.world();
+        let staking = world
+            .parameters()
+            .staking_policy()
+            .ok_or(PublicLaneStakingPolicyError::MissingParameter)?;
         let slashing_delay =
             crate::sumeragi::epoch::parameters::resolve_npos_slashing_delay_blocks_from_world(
                 world,
@@ -546,8 +550,8 @@ impl<'a> PenaltyApplier<'a> {
             .map_err(EvidencePreparationError::Admission)?;
         let exposure_index = PublicLaneStakeIndex::from_world(
             world,
-            view.nexus.staking.max_stake_shares_per_validator.get(),
-            view.nexus.staking.max_pending_unbonds_per_share.get(),
+            staking.max_stake_shares_per_validator.get(),
+            staking.max_pending_unbonds_per_share.get(),
             stake_budget,
         )
         .wrap_err("failed to index slashable public-lane stake exposure")?;
@@ -646,7 +650,7 @@ impl<'a> PenaltyApplier<'a> {
         Ok(ParentPenaltySnapshot {
             pending,
             sccp_pending,
-            max_slash_bps: view.nexus.staking.max_slash_bps,
+            max_slash_bps: staking.max_slash_bps,
             validator_map: candidates_map,
             stake_index: exposure_index,
             #[cfg(test)]
@@ -965,10 +969,11 @@ pub(crate) fn validate_npos_consensus_effects_after_execution(
         .iter()
         .any(|action| matches!(action, NposPenaltyAction::ConsensusSlash(_)))
         .then(|| {
+            let staking = tx.staking_monetary_policy()?;
             PublicLaneStakeIndex::from_world(
                 &tx.world,
-                tx.nexus.staking.max_stake_shares_per_validator.get(),
-                tx.nexus.staking.max_pending_unbonds_per_share.get(),
+                staking.max_stake_shares_per_validator.get(),
+                staking.max_pending_unbonds_per_share.get(),
                 tx.stake_index_budget,
             )
         })
@@ -1267,6 +1272,17 @@ fn penalty_staking_fixture_header() -> BlockHeader {
     )
 }
 
+/// Complete author input for the penalty fixture's selected currency and custody.
+#[cfg(test)]
+pub(crate) fn penalty_staking_fixture_policy()
+-> iroha_data_model::block::consensus::PublicLaneStakingPolicy {
+    let (asset, escrow, sink) = penalty_staking_fixture_ids();
+    let mut policy = crate::sumeragi::test_chain::staking_fixture_policy(asset);
+    policy.stake_escrow_account_id = escrow;
+    policy.slash_sink_account_id = sink;
+    policy
+}
+
 /// Install the governed stake asset and distinct escrow/slash-sink accounts used by
 /// Sumeragi penalty tests.
 ///
@@ -1286,13 +1302,14 @@ pub(crate) fn configure_penalty_staking_state_for_tests(state: &mut State) {
         escrow, slash_sink,
         "penalty fixture must exercise an actual escrow-to-sink movement"
     );
-    let mut nexus = state.nexus_snapshot();
-    nexus.staking.stake_asset_id = asset_definition.to_string();
-    nexus.staking.stake_escrow_account_id = escrow.to_string();
-    nexus.staking.slash_sink_account_id = slash_sink.to_string();
     state
-        .set_nexus(nexus)
-        .expect("install penalty staking custody configuration");
+        .world
+        .set_parameter_for_testing(iroha_data_model::parameter::Parameter::Custom(
+            penalty_staking_fixture_policy()
+                .into_custom_parameter()
+                .expect("valid explicit penalty staking policy"),
+        ))
+        .expect("author penalty staking custody policy before block construction");
 
     let mut state_block = state.block(penalty_staking_fixture_header());
     let mut transaction = state_block.transaction();
@@ -1563,6 +1580,7 @@ mod tests {
                 slashing_delay_blocks: 1,
                 ..SumeragiNposParameters::default()
             }),
+            penalty_staking_fixture_policy(),
             |network| {
                 let seed = fresh_state();
                 let nexus = seed.nexus_snapshot();
@@ -1780,16 +1798,32 @@ mod tests {
         add_validator_record_on_lane(state, LaneId::SINGLE, peer)
     }
 
-    fn install_one_block_delay_npos(state: &State) {
-        let mut parameters = state.world.parameters.block();
+    fn install_one_block_delay_npos(state: &mut State) {
         let npos = SumeragiNposParameters {
             slashing_delay_blocks: 1,
             ..SumeragiNposParameters::default()
         };
-        parameters
-            .set_parameter(Parameter::Custom(npos.into_custom_parameter()))
+        state
+            .world
+            .set_parameter_for_testing(Parameter::Custom(npos.into_custom_parameter()))
             .expect("valid fixture parameters");
-        parameters.commit();
+    }
+    fn update_staking_fixture_policy(
+        state: &mut State,
+        update: impl FnOnce(&mut iroha_data_model::block::consensus::PublicLaneStakingPolicy),
+    ) {
+        let mut policy = state
+            .view()
+            .world()
+            .parameters()
+            .staking_policy()
+            .expect("fixture already authors staking policy")
+            .clone();
+        update(&mut policy);
+        state
+            .world
+            .set_parameter_for_testing(Parameter::Custom(policy.into_custom_parameter().unwrap()))
+            .expect("replace explicit policy before the next fixture block");
     }
     fn penalty_header(height: u64) -> BlockHeader {
         BlockHeader::new(
@@ -1826,8 +1860,8 @@ mod tests {
     }
     #[test]
     fn parent_snapshot_two_pass_stake_index_retains_exact_exposure() {
-        let state = native_penalty_state();
-        install_one_block_delay_npos(&state);
+        let mut state = native_penalty_state();
+        install_one_block_delay_npos(&mut state);
         let peers = roster();
         let first = add_validator_record(&state, &peers[0]);
         let second = add_validator_record(&state, &peers[1]);
@@ -1979,8 +2013,8 @@ mod tests {
     }
     #[test]
     fn parent_stake_index_backing_refusal_preserves_source_and_retries_after_release() {
-        let state = native_penalty_state();
-        install_one_block_delay_npos(&state);
+        let mut state = native_penalty_state();
+        install_one_block_delay_npos(&mut state);
         let peers = roster();
         let validator = add_validator_record(&state, &peers[0]);
         let share_key = (LaneId::SINGLE, validator.clone(), validator.clone());
@@ -2064,8 +2098,8 @@ mod tests {
     }
     #[test]
     fn parent_snapshot_rejects_corrupt_stake_share_outside_candidate_set() {
-        let state = native_penalty_state();
-        install_one_block_delay_npos(&state);
+        let mut state = native_penalty_state();
+        install_one_block_delay_npos(&mut state);
         let validator = AccountId::new(
             KeyPair::try_from_seed(vec![0xA6; 32], Algorithm::Ed25519)
                 .expect("deterministic corrupt-share validator")
@@ -2113,8 +2147,8 @@ mod tests {
     }
     #[test]
     fn parent_snapshot_rejects_orphan_stake_share_aggregate() {
-        let state = native_penalty_state();
-        install_one_block_delay_npos(&state);
+        let mut state = native_penalty_state();
+        install_one_block_delay_npos(&mut state);
         let validator = AccountId::new(
             KeyPair::try_from_seed(vec![0xA8; 32], Algorithm::Ed25519)
                 .expect("deterministic orphan-share validator")
@@ -2136,10 +2170,11 @@ mod tests {
 
         let view = state.view();
         let empty_budget = AllocationBudget::new(0);
+        let staking = view.world().parameters().staking_policy().unwrap();
         let preflight_error = match PublicLaneStakeIndex::from_world(
             view.world(),
-            view.nexus.staking.max_stake_shares_per_validator.get(),
-            view.nexus.staking.max_pending_unbonds_per_share.get(),
+            staking.max_stake_shares_per_validator.get(),
+            staking.max_pending_unbonds_per_share.get(),
             &empty_budget,
         ) {
             Ok(_) => panic!("an orphan stake-share group must fail before allocation"),
@@ -2172,12 +2207,10 @@ mod tests {
     #[test]
     fn parent_snapshot_enforces_stake_share_and_pending_unbond_caps() {
         let mut share_capped_state = fresh_state();
-        share_capped_state
-            .nexus
-            .get_mut()
-            .staking
-            .max_stake_shares_per_validator = NonZeroU32::new(1).expect("non-zero stake-share cap");
-        install_one_block_delay_npos(&share_capped_state);
+        update_staking_fixture_policy(&mut share_capped_state, |policy| {
+            policy.max_stake_shares_per_validator = NonZeroU32::new(1).unwrap();
+        });
+        install_one_block_delay_npos(&mut share_capped_state);
         let peers = roster();
         let validator = add_validator_record(&share_capped_state, &peers[0]);
         let delegator = AccountId::new(
@@ -2213,13 +2246,10 @@ mod tests {
         );
 
         let mut pending_capped_state = fresh_state();
-        pending_capped_state
-            .nexus
-            .get_mut()
-            .staking
-            .max_pending_unbonds_per_share =
-            NonZeroU32::new(1).expect("non-zero pending-unbond cap");
-        install_one_block_delay_npos(&pending_capped_state);
+        update_staking_fixture_policy(&mut pending_capped_state, |policy| {
+            policy.max_pending_unbonds_per_share = NonZeroU32::new(1).unwrap();
+        });
+        install_one_block_delay_npos(&mut pending_capped_state);
         let validator = add_validator_record(&pending_capped_state, &peers[0]);
         let key = (LaneId::SINGLE, validator.clone(), validator);
         let mut block = pending_capped_state.world.public_lane_stake_shares.block();
@@ -2256,14 +2286,14 @@ mod tests {
     }
     #[test]
     fn parent_snapshot_enforces_retained_validator_capacity() {
-        let state = native_penalty_state();
+        let mut state = native_penalty_state();
         // This negative fixture exceeds the retained, consensus-visible owner
         // capacity. Changing the local Nexus cache cannot change that policy.
         let mut runtime = state.canonical_runtime.block();
         runtime.get_mut().owner_policy.max_validators = 1;
         runtime.commit();
         assert_eq!(state.nexus_snapshot().staking.max_validators.get(), 1);
-        install_one_block_delay_npos(&state);
+        install_one_block_delay_npos(&mut state);
         let peers = roster();
         add_validator_record(&state, &peers[0]);
         add_validator_record(&state, &peers[1]);
@@ -2285,8 +2315,8 @@ mod tests {
     }
     #[test]
     fn parent_snapshot_rejects_non_canonical_pending_unbond() {
-        let state = native_penalty_state();
-        install_one_block_delay_npos(&state);
+        let mut state = native_penalty_state();
+        install_one_block_delay_npos(&mut state);
         let peers = roster();
         let validator = add_validator_record(&state, &peers[0]);
         let key = (LaneId::SINGLE, validator.clone(), validator);
@@ -2324,8 +2354,8 @@ mod tests {
     }
     #[test]
     fn parent_snapshot_rejects_non_validator_self_stake_account() {
-        let state = native_penalty_state();
-        install_one_block_delay_npos(&state);
+        let mut state = native_penalty_state();
+        install_one_block_delay_npos(&mut state);
         let peers = roster();
         let validator = add_validator_record(&state, &peers[0]);
         let foreign_stake_account = AccountId::new(
@@ -2343,10 +2373,11 @@ mod tests {
 
         let view = state.view();
         let empty_budget = AllocationBudget::new(0);
+        let staking = view.world().parameters().staking_policy().unwrap();
         let preflight_error = match PublicLaneStakeIndex::from_world(
             view.world(),
-            view.nexus.staking.max_stake_shares_per_validator.get(),
-            view.nexus.staking.max_pending_unbonds_per_share.get(),
+            staking.max_stake_shares_per_validator.get(),
+            staking.max_pending_unbonds_per_share.get(),
             &empty_budget,
         ) {
             Ok(_) => panic!("a foreign stake account must fail before allocation"),
@@ -2374,8 +2405,8 @@ mod tests {
     }
     #[test]
     fn parent_snapshot_rejects_validator_totals_that_disagree_with_index() {
-        let state = native_penalty_state();
-        install_one_block_delay_npos(&state);
+        let mut state = native_penalty_state();
+        install_one_block_delay_npos(&mut state);
         let peers = roster();
         let validator = add_validator_record(&state, &peers[0]);
         let key = (LaneId::SINGLE, validator);
@@ -2403,8 +2434,8 @@ mod tests {
     }
     #[test]
     fn admitted_native_attribution_does_not_require_a_kura_reread() {
-        let state = native_penalty_state();
-        install_one_block_delay_npos(&state);
+        let mut state = native_penalty_state();
+        install_one_block_delay_npos(&mut state);
         let evidence = fixture_vote_evidence(1, 0);
         let key = insert_evidence(&state, evidence, 1);
         let applier = PenaltyApplier::new(
@@ -2426,8 +2457,8 @@ mod tests {
     }
     #[test]
     fn parent_penalty_plan_retains_only_due_evidence_metadata() {
-        let state = native_penalty_state();
-        install_one_block_delay_npos(&state);
+        let mut state = native_penalty_state();
+        install_one_block_delay_npos(&mut state);
         let frozen_roster = roster();
         let due = insert_evidence(&state, fixture_vote_evidence(1, 0), 1);
         let terminal = insert_evidence(&state, fixture_vote_evidence(2, 1), 1);
@@ -2629,8 +2660,8 @@ mod tests {
 
     #[test]
     fn validator_map_refusal_preserves_due_evidence_and_committed_escrow_until_retry() {
-        let state = native_penalty_state();
-        install_one_block_delay_npos(&state);
+        let mut state = native_penalty_state();
+        install_one_block_delay_npos(&mut state);
         let peer = roster().remove(1);
         let validator = add_validator_record(&state, &peer);
         let due = insert_evidence(&state, fixture_vote_evidence(1, 0), 1);
@@ -2818,8 +2849,8 @@ mod tests {
     #[test]
     fn validator_map_account_clone_refusal_keeps_counter_custody_and_original_slash_outcome() {
         use norito::core::{DecodeLocalRefusalKind, PreparedDecodeWorkspace};
-        let state = native_penalty_state();
-        install_one_block_delay_npos(&state);
+        let mut state = native_penalty_state();
+        install_one_block_delay_npos(&mut state);
         let peer = roster().remove(1);
         let validator = add_validator_record(&state, &peer);
         let due = insert_evidence(&state, fixture_vote_evidence(1, 0), 1);
@@ -3083,8 +3114,8 @@ mod tests {
             std::mem::align_of::<PendingPenaltyEntry>()
         );
 
-        let state = native_penalty_state();
-        install_one_block_delay_npos(&state);
+        let mut state = native_penalty_state();
+        install_one_block_delay_npos(&mut state);
         let due = insert_evidence(&state, fixture_vote_evidence(1, 0), 1);
         let original = state
             .world
@@ -3161,8 +3192,8 @@ mod tests {
         use std::{task::Context, time::Duration};
 
         for state_admission in [false, true] {
-            let state = native_penalty_state();
-            install_one_block_delay_npos(&state);
+            let mut state = native_penalty_state();
+            install_one_block_delay_npos(&mut state);
             let due = insert_evidence(&state, fixture_vote_evidence(1, 0), 1);
             let original = state
                 .world
@@ -3313,8 +3344,8 @@ mod tests {
 
     #[test]
     fn pending_penalty_peer_key_allocator_refusal_preserves_original_source_and_retries() {
-        let state = native_penalty_state();
-        install_one_block_delay_npos(&state);
+        let mut state = native_penalty_state();
+        install_one_block_delay_npos(&mut state);
         let due = insert_evidence(&state, fixture_vote_evidence(1, 0), 1);
         let view = state.view();
         let original = view
@@ -3435,8 +3466,8 @@ mod tests {
     fn pending_penalty_peer_key_refusal_preserves_source_and_retries_after_original_release() {
         use iroha_allocation::AllocationRefusal;
 
-        let state = native_penalty_state();
-        install_one_block_delay_npos(&state);
+        let mut state = native_penalty_state();
+        install_one_block_delay_npos(&mut state);
         let due = insert_evidence(&state, fixture_vote_evidence(1, 0), 1);
         let original = state
             .world
@@ -3505,8 +3536,8 @@ mod tests {
     }
     #[test]
     fn derived_slash_targets_frozen_roster_even_when_live_topology_diverges() {
-        let state = native_penalty_state();
-        install_one_block_delay_npos(&state);
+        let mut state = native_penalty_state();
+        install_one_block_delay_npos(&mut state);
         let frozen_roster = roster();
         set_commit_topology(
             &state,
@@ -3590,8 +3621,8 @@ mod tests {
     }
     #[test]
     fn multiple_due_evidence_records_slash_only_remaining_custody() {
-        let state = native_penalty_state();
-        install_one_block_delay_npos(&state);
+        let mut state = native_penalty_state();
+        install_one_block_delay_npos(&mut state);
         let frozen_roster = roster();
         let offender = frozen_roster[1].clone();
         let validator = add_validator_record(&state, &offender);
@@ -3675,8 +3706,8 @@ mod tests {
     }
     #[test]
     fn evidence_cannot_slash_a_peer_tenure_activated_after_the_offence() {
-        let state = native_penalty_state();
-        install_one_block_delay_npos(&state);
+        let mut state = native_penalty_state();
+        install_one_block_delay_npos(&mut state);
         let frozen_roster = roster();
         let offender = frozen_roster[1].clone();
         let validator = add_validator_record(&state, &offender);
@@ -3719,8 +3750,8 @@ mod tests {
     }
     #[test]
     fn multiple_due_evidence_for_fully_slashed_signer_is_sequential_and_terminal() {
-        let state = native_penalty_state();
-        install_one_block_delay_npos(&state);
+        let mut state = native_penalty_state();
+        install_one_block_delay_npos(&mut state);
         let frozen_roster = roster();
         let offender = frozen_roster[1].clone();
         let validator = add_validator_record(&state, &offender);
@@ -3783,8 +3814,8 @@ mod tests {
     }
     #[test]
     fn consensus_penalty_ignores_singleton_non_owner_shared_dataspace_projection() {
-        let state = fresh_state_with_shared_public_staking_lanes();
-        install_one_block_delay_npos(&state);
+        let mut state = fresh_state_with_shared_public_staking_lanes();
+        install_one_block_delay_npos(&mut state);
         let frozen_roster = roster();
         let offender = frozen_roster[1].clone();
         let validator = add_validator_record_on_lane(&state, LaneId::new(1), &offender);
@@ -3823,8 +3854,8 @@ mod tests {
     }
     #[test]
     fn post_execution_lane_retirement_rejects_the_entire_consensus_penalty_bundle() {
-        let state = native_penalty_state();
-        install_one_block_delay_npos(&state);
+        let mut state = native_penalty_state();
+        install_one_block_delay_npos(&mut state);
         let frozen_roster = roster();
         let offender = frozen_roster[1].clone();
         let validator = add_validator_record(&state, &offender);
@@ -3874,8 +3905,8 @@ mod tests {
     }
     #[test]
     fn post_execution_evidence_terminalization_rejects_slash_and_mark_atomically() {
-        let state = native_penalty_state();
-        install_one_block_delay_npos(&state);
+        let mut state = native_penalty_state();
+        install_one_block_delay_npos(&mut state);
         let frozen_roster = roster();
         let offender = frozen_roster[1].clone();
         let validator = add_validator_record(&state, &offender);
@@ -3941,8 +3972,8 @@ mod tests {
     }
     #[test]
     fn post_execution_penalty_validation_cannot_write_an_active_global_witness() {
-        let state = native_penalty_state();
-        install_one_block_delay_npos(&state);
+        let mut state = native_penalty_state();
+        install_one_block_delay_npos(&mut state);
         let frozen_roster = roster();
         let offender = frozen_roster[1].clone();
         add_validator_record(&state, &offender);
@@ -3983,8 +4014,8 @@ mod tests {
     }
     #[test]
     fn committed_consensus_penalty_cannot_publish_transaction_execution_evidence() {
-        let state = native_penalty_state();
-        install_one_block_delay_npos(&state);
+        let mut state = native_penalty_state();
+        install_one_block_delay_npos(&mut state);
         let frozen_roster = roster();
         let offender = frozen_roster[1].clone();
         add_validator_record(&state, &offender);
@@ -4047,9 +4078,9 @@ mod tests {
                 SumeragiLaneStakeBinding,
             },
         };
-        let state = native_penalty_state();
-        install_one_block_delay_npos(&state);
-        state.nexus.write().staking.max_slash_bps = 1_000;
+        let mut state = native_penalty_state();
+        install_one_block_delay_npos(&mut state);
+        update_staking_fixture_policy(&mut state, |policy| policy.max_slash_bps = 1_000);
         let owner = LaneId::new(42);
         let validator = add_validator_record_on_lane(&state, owner, &roster()[1]);
         let view = state.view();
@@ -4453,8 +4484,8 @@ mod tests {
     }
     #[test]
     fn unsupported_sccp_scope_cannot_create_native_penalty_or_empty_offender_marker() {
-        let state = native_penalty_state();
-        install_one_block_delay_npos(&state);
+        let mut state = native_penalty_state();
+        install_one_block_delay_npos(&mut state);
         let key = insert_evidence(&state, fixture_vote_evidence(1, 0), 1);
         for retain_signer in [true, false] {
             let view = state.view();
@@ -4637,8 +4668,8 @@ mod tests {
     #[test]
     fn action_demand_reserves_one_marker_slot_per_retained_record() {
         use iroha_data_model::block::consensus::EvidenceOffender;
-        let state = native_penalty_state();
-        install_one_block_delay_npos(&state);
+        let mut state = native_penalty_state();
+        install_one_block_delay_npos(&mut state);
         let key = insert_evidence(&state, fixture_vote_evidence(1, 0), 1);
         // Attribute every roster signer to the one retained record: four pending rows.
         {
@@ -4704,5 +4735,83 @@ mod tests {
                 .count(),
             1
         );
+    }
+    #[test]
+    fn penalty_parent_requires_committed_staking_before_local_allocation() {
+        let mut state = State::new_for_testing(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        install_one_block_delay_npos(&mut state);
+        let view = state.view();
+        assert!(view.world().parameters().staking_policy().is_none());
+        let budget = AllocationBudget::new(0);
+        let error = match PenaltyApplier::parent_snapshot(&view, 2, &budget, &budget) {
+            Ok(_) => panic!("missing original policy must never use a local default"),
+            Err(error) => error,
+        };
+        assert!(matches!(
+            error.downcast_ref::<PublicLaneStakingPolicyError>(),
+            Some(PublicLaneStakingPolicyError::MissingParameter)
+        ));
+        assert_eq!(budget.reserved_bytes(), 0);
+    }
+
+    #[test]
+    fn penalty_snapshot_uses_its_original_parameter_cut_after_successor_commit() {
+        let mut state = fresh_state();
+        install_one_block_delay_npos(&mut state);
+        let original = state.view();
+        let before = original
+            .world()
+            .parameters()
+            .staking_policy()
+            .unwrap()
+            .clone();
+        let mut policy = before.clone();
+        policy.max_slash_bps = 321;
+        policy.max_stake_shares_per_validator = NonZeroU32::new(1).unwrap();
+        policy.max_pending_unbonds_per_share = NonZeroU32::new(1).unwrap();
+        let mut block = state.block(penalty_header(2));
+        let mut transaction = block.transaction();
+        transaction
+            .world
+            .set_parameter_for_testing(Parameter::Custom(policy.into_custom_parameter().unwrap()))
+            .unwrap();
+        transaction.apply();
+        block.commit_world_overlay_for_testing().unwrap();
+        let successor = state.view();
+        assert_eq!(
+            original.world().parameters().staking_policy().unwrap(),
+            &before
+        );
+        assert_eq!(
+            successor
+                .world()
+                .parameters()
+                .staking_policy()
+                .unwrap()
+                .max_slash_bps,
+            321
+        );
+        let original_plan = PenaltyApplier::parent_snapshot(
+            &original,
+            2,
+            state.evidence_preparation_budget(),
+            state.stake_index_budget(),
+        )
+        .unwrap();
+        let successor_plan = PenaltyApplier::parent_snapshot(
+            &successor,
+            2,
+            state.evidence_preparation_budget(),
+            state.stake_index_budget(),
+        )
+        .unwrap();
+        assert_eq!(original_plan.max_slash_bps, before.max_slash_bps);
+        assert_eq!(successor_plan.max_slash_bps, 321);
+        assert!(original_plan.pending.as_slice().is_empty());
+        assert!(successor_plan.pending.as_slice().is_empty());
     }
 }

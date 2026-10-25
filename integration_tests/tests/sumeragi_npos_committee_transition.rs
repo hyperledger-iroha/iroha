@@ -218,7 +218,7 @@ struct Operator {
 
 fn exact_quorum(seats: usize) -> Result<u32> {
     ensure!(
-        iroha::data_model::block::consensus::is_valid_committee_size(seats),
+        iroha_model_base::topology::is_valid_committee_size(seats),
         "not an exact 3f+1 roster within the supported 4..31 seats"
     );
     let faults = (seats - 1) / 3;

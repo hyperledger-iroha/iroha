@@ -169,12 +169,43 @@ def test_site_inventory_matches_the_source_tree() -> None:
         path for path, chosen in roles.items() if "deferred" in chosen
     }
     assert set(inventory["roles"]) == set(ORACLE["SITE_ROLES"])
-    # The DER-to-bounds helper and prover preflight are recorded as gated.
+    # The reference relation and prover preflight remain recorded as gated.
     relation = "crates/iroha_core_privacy/src/privacy_engines/zk_x509/relation.rs"
     assert 'feature = "privacy-release-evidence"' in inventory["build_gates"][relation][
         "declaration"
     ][0]
     assert inventory["build_gates"][relation]["declaration"][-1] == "pub mod relation;"
+
+
+
+def test_holder_bounds_are_ordinary_while_reference_and_prover_stay_gated() -> None:
+    inventory = _inventory()
+    prefix = "crates/iroha_core_privacy/src/privacy_engines/"
+    helper = prefix + "zk_x509/presentation.rs"
+    assert inventory["sites"][helper] == ["canonical"]
+    assert helper not in inventory["build_gates"]
+    assert inventory["sites"][
+        "crates/iroha_core_privacy/tests/zk_x509_presentation_bounds.rs"
+    ] == ["test"]
+    # Inspect the actual declarations, including the shared parser and errors.
+    # A preceding item's attributes end at its semicolon, not at a blank line.
+    for path, declarations in (
+        (prefix + "mod.rs", ("pub mod zk_x509;",)),
+        (prefix + "zk_x509/mod.rs", (
+            "mod certificate;", "pub(crate) mod der;",
+            "pub mod errors;", "pub mod presentation;",
+        )),
+    ):
+        source = ORACLE["read_site"](path)
+        for declaration in declarations:
+            assert source.count(declaration) == 1
+            attributes = source.split(declaration)[0].rsplit(";", 1)[-1]
+            assert "#[cfg" not in attributes, (path, declaration)
+    assert set(inventory["build_gates"]) == {
+        prefix + "zk_x509/relation.rs",
+        prefix + "zk_x509/relation/release_fixture.rs",
+        prefix + "zk_x509/engine.rs",
+    }
 
 
 def test_site_scan_keeps_paths_with_whitespace_whole(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -434,7 +465,7 @@ def test_build_gates_are_checked_against_the_declaring_source() -> None:
             return text.replace(gated, "#[doc(hidden)]\npub mod relation;")
         return text
 
-    # Shipping the relation module (X.5) must update the inventory and the spec.
+    # Changing the reference gate must update the inventory and the spec.
     assert problems(found, inventory, read=ungated) == [
         f"{relation}: build gate changed in {module}; update the inventory "
         "and specs/zk_x509_presentation_interval.md"

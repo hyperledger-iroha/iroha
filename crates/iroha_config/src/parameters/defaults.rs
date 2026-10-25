@@ -3622,41 +3622,12 @@ pub mod nexus {
         /// Slot-bound deadline for proofs/DA bundles to arrive before a transaction aborts.
         pub const WINDOW_SLOTS: u16 = 2;
     }
-    /// Public-lane staking defaults.
+    /// Public-lane validator capacity defaults. Monetary policy has no node defaults.
     pub mod staking {
-        use super::super::{NonZeroU32, Quantity};
+        use super::super::NonZeroU32;
         use nonzero_ext::nonzero;
-        use std::time::Duration;
-        /// Minimum bonded stake required to register a validator (asset base units).
-        pub fn min_validator_stake() -> Quantity {
-            Quantity::from(1_u64)
-        }
         /// Maximum number of validators allowed per lane.
         pub const MAX_VALIDATORS: NonZeroU32 = nonzero!(32_u32);
-        /// Maximum number of stake-share rows retained for one validator.
-        pub const MAX_STAKE_SHARES_PER_VALIDATOR: NonZeroU32 = nonzero!(256_u32);
-        /// Maximum number of pending unbond requests retained in one stake share.
-        pub const MAX_PENDING_UNBONDS_PER_SHARE: NonZeroU32 = nonzero!(8_u32);
-        /// Minimum delay between scheduling and finalising unbonds.
-        pub const UNBONDING_DELAY: Duration = Duration::from_secs(0);
-        /// Maximum slash ratio (basis points, `10_000` = 100%).
-        pub const MAX_SLASH_BPS: u16 = 10_000;
-        /// Escrow account that custodies bonded stake.
-        pub const STAKE_ESCROW_ACCOUNT_ID: &str = super::fees::FEE_SINK_ACCOUNT_ID;
-        /// Account that receives slashed stake (treasury/burn sink).
-        pub const SLASH_SINK_ACCOUNT_ID: &str = super::fees::FEE_SINK_ACCOUNT_ID;
-        /// Canonical XOR asset used by both staking and Nexus fees.
-        pub fn stake_asset_id() -> String {
-            super::fees::fee_asset_id()
-        }
-        /// Escrow account that custodies bonded stake.
-        pub fn stake_escrow_account_id() -> String {
-            STAKE_ESCROW_ACCOUNT_ID.to_string()
-        }
-        /// Account that receives slashed stake (treasury/burn sink).
-        pub fn slash_sink_account_id() -> String {
-            SLASH_SINK_ACCOUNT_ID.to_string()
-        }
     }
     /// Universal fee schedule defaults.
     pub mod fees {

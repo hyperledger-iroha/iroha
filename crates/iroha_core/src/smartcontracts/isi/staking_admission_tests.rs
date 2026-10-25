@@ -35,6 +35,24 @@ fn original_npos_staking_state(policy: SumeragiNposParameters) -> State {
         .push(Parameter::Sumeragi(SumeragiParameter::EpochLengthBlocks(
             length,
         )));
+    let fee_parameter = iroha_data_model::parameter::Parameter::Custom(
+        nexus
+            .fees
+            .clone()
+            .into_custom_parameter()
+            .expect("canonical signed fixture fee policy"),
+    );
+    if let Some(slot) = config.genesis_parameters.iter_mut().find(|parameter| {
+        matches!(
+            parameter,
+            iroha_data_model::parameter::Parameter::Custom(value)
+                if value.id() == &iroha_data_model::block::consensus::RootFeePolicy::parameter_id()
+        )
+    }) {
+        *slot = fee_parameter;
+    } else {
+        config.genesis_parameters.push(fee_parameter);
+    }
     config.nexus = Some(nexus);
     let account = AccountId::new(config.genesis_key.public_key().clone());
     let mode = config.consensus_mode;
@@ -209,7 +227,9 @@ fn initial_executor_candidate_bonds_after_key_lead_without_joining_current_topol
     let (validator, _, escrow, definition) = prepare_accounts(&mut stx);
     let mut consensus = stx.world.parameters.sumeragi().clone();
     consensus.key_activation_lead_blocks = 7;
-    stx.world.parameters.get_mut().set_sumeragi(consensus);
+    stx.world
+        .set_sumeragi_for_testing(consensus)
+        .expect("valid fixture consensus family");
     let peer_key = checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let candidate = signed_candidate(&stx, &validator, &peer_key, 1000, LaneId::new(42));
     let peer = candidate.registration.peer_id.clone();
@@ -619,11 +639,21 @@ fn candidate_requires_committed_schedule_and_rejects_expired_tenure_consent() {
             .to_string()
             .contains("consent targets activation height")
     );
-    stx.world
-        .parameters
-        .get_mut()
-        .remove_custom_parameter(&SumeragiNposParameters::parameter_id())
-        .expect("optional fixture parameter removal");
+    {
+        // Intentionally missing-policy fixture; retain a complete owned graph
+        // before replacing only this transaction's parameter value.
+        let mut authored = stx.world.parameters.get().get().clone();
+        let removed = authored
+            .remove_custom_parameter(&SumeragiNposParameters::parameter_id())
+            .expect("optional fixture parameter removal");
+        let retained = crate::pipeline_gas_policy::RetainedStateParameters::try_copy_for_testing(
+            &authored,
+            stx.world.sccp_committee_generations.allocation_budget(),
+        )
+        .expect("funded missing-policy fixture");
+        *stx.world.parameters.get_mut() = retained;
+        removed
+    };
     let error = candidate
         .execute(&validator, &mut stx)
         .expect_err("missing committed schedule");
@@ -689,14 +719,15 @@ fn participant_binding_does_not_enter_global_pool_even_with_validator_key() {
 
 #[test]
 fn participant_exit_and_unbonds_keep_reserved_custody_until_liability_ends() {
-    let mut state = setup_state();
+    let mut policy = committed_staking_fixture_policy();
+    policy.min_validator_stake = 1000_u64.into();
+    let mut state = setup_state_with_staking_policy(policy);
     set_epoch_length(&mut state, 6);
     let mut block = state.block(block_header_with_height(2));
     let mut stx = block.transaction_for_callback_testing();
     let (validator, delegator, escrow, definition) = prepare_accounts(&mut stx);
     let lane_id = LaneId::new(42);
-    stx.nexus.staking.min_validator_stake = 1000_u64.into();
-    stx.nexus.staking.unbonding_delay = Duration::ZERO;
+
     RegisterPublicLaneValidator::new(
         lane_id,
         validator.clone(),
@@ -847,7 +878,21 @@ fn self_bond_restores_minimum_without_rewriting_candidate_identity() {
         .peer_id
         .clone();
     // A governance minimum increase may be met by a further exact self bond.
-    stx.nexus.staking.min_validator_stake = 2000_u64.into();
+    let mut successor = stx.staking_monetary_policy().unwrap().clone();
+    successor.min_validator_stake = 2000_u64.into();
+    stx.world
+        .set_parameter_for_testing(Parameter::Custom(
+            successor.into_custom_parameter().unwrap(),
+        ))
+        .unwrap();
+    stx.apply();
+    block.commit_world_overlay_for_testing().unwrap();
+    let mut block = state.block(block_header_with_height(3));
+    let mut stx = block.transaction_for_callback_testing();
+    assert_eq!(
+        stx.staking_monetary_policy().unwrap().min_validator_stake,
+        Quantity::from(2000_u64)
+    );
     BondPublicLaneStake {
         monetary_plan: fixture_bond_plan(
             &stx,

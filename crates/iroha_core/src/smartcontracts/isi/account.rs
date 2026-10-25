@@ -2193,6 +2193,18 @@ pub mod query {
             let query_handle = LiveQueryStore::start_test();
             let mut world = World::default();
             seed_authority_account(&mut world, &ALICE_ID);
+            // This isolated component fixture authors its predecessor policy explicitly.
+            // It does not claim original signed genesis or consensus publication.
+            world
+                .set_parameter_for_testing(
+                    iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                        iroha_crypto::Algorithm::Ed25519,
+                    ])
+                    .unwrap()
+                    .into_parameter()
+                    .unwrap(),
+                )
+                .expect("explicit component account crypto policy");
             State::new(world, kura, query_handle)
         }
         fn new_state_with_authority_and_domain_lease(domain_id: &DomainId) -> State {
@@ -2201,6 +2213,18 @@ pub mod query {
             let mut world = World::default();
             seed_authority_account(&mut world, &ALICE_ID);
             seed_domain_name_lease(&mut world, &ALICE_ID, domain_id);
+            // This isolated component fixture authors its predecessor policy explicitly.
+            // It does not claim original signed genesis or consensus publication.
+            world
+                .set_parameter_for_testing(
+                    iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                        iroha_crypto::Algorithm::Ed25519,
+                    ])
+                    .unwrap()
+                    .into_parameter()
+                    .unwrap(),
+                )
+                .expect("explicit component account crypto policy");
             State::new(world, kura, query_handle)
         }
         fn root_alias(label: &str) -> AccountAlias {

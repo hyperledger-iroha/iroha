@@ -31,30 +31,30 @@ use std::num::{NonZeroU32, NonZeroU64};
 
 fn state(row_bytes: u64) -> State {
     // Execution still derives authority from committed genesis metadata.
-    let state = State::new_for_testing(
+    let mut state = State::new_for_testing(
         crate::sumeragi::lanes::routing::test_support::world(
             iroha_data_model::block::consensus::SumeragiRootScope::Global,
         ),
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     );
-    let mut parameters = state.world.parameters.block();
+
     let mut policy = ExecutionOutputPolicyV1::bootstrap();
     policy.max_output_bytes = row_bytes;
     policy.max_pipeline_triggers = 0;
     policy.max_time_invocations = 1;
     policy.validate().expect("feasible fixture policy");
-    parameters
-        .get_mut()
-        .set_parameter(Parameter::Block(BlockParameter::ExecutionOutput(policy)))
+    state
+        .world
+        .set_parameter_for_testing(Parameter::Block(BlockParameter::ExecutionOutput(policy)))
         .expect("valid fixture parameters");
-    parameters
-        .get_mut()
-        .set_parameter(Parameter::Block(BlockParameter::MaxTimeTriggerInvocations(
+    state
+        .world
+        .set_parameter_for_testing(Parameter::Block(BlockParameter::MaxTimeTriggerInvocations(
             NonZeroU32::MIN,
         )))
         .expect("valid fixture parameters");
-    parameters.commit();
+
     state
 }
 
@@ -106,9 +106,23 @@ fn output_fixture_config(
 ) -> crate::sumeragi::test_chain::TestChainConfig {
     use crate::sumeragi::test_chain::TestChainConfig;
     let nexus = component.nexus_snapshot();
+    // Author the exact configured fixture policy in the signed source. A blank
+    // component has an explicit test-author default, never runtime authority.
+    let fees = component
+        .world
+        .parameters
+        .view()
+        .get()
+        .root_fees()
+        .cloned()
+        .unwrap_or_else(iroha_config::parameters::defaults::nexus::fees::genesis_policy);
     let crypto = component.crypto.read().as_ref().clone();
     let block_parameters = component.world.parameters.view().block();
     let mut config = TestChainConfig::new(component.world, 0);
+    config.genesis_parameters.push(Parameter::Custom(
+        fees.into_custom_parameter()
+            .expect("explicit signed output fee policy"),
+    ));
     // Genesis materializes a complete parameter snapshot. Carry the tested limits
     // in that signed source rather than replacing them with the builder defaults.
     config.genesis_parameters.extend([
@@ -761,28 +775,28 @@ fn receipt_source(
         [Asset::new(source_asset.clone(), 10u32)],
         [],
     );
-    let state = State::new_for_testing(
+    let mut state = State::new_for_testing(
         world,
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     );
-    let mut parameters = state.world.parameters.block();
+
     let mut policy = ExecutionOutputPolicyV1::bootstrap();
     policy.max_output_bytes = row_bytes;
     policy.max_pipeline_triggers = 0;
     policy.max_time_invocations = 1;
     policy.validate().expect("finite receipt fixture policy");
-    parameters
-        .get_mut()
-        .set_parameter(Parameter::Block(BlockParameter::ExecutionOutput(policy)))
+    state
+        .world
+        .set_parameter_for_testing(Parameter::Block(BlockParameter::ExecutionOutput(policy)))
         .expect("valid fixture parameters");
-    parameters
-        .get_mut()
-        .set_parameter(Parameter::Block(BlockParameter::MaxTimeTriggerInvocations(
+    state
+        .world
+        .set_parameter_for_testing(Parameter::Block(BlockParameter::MaxTimeTriggerInvocations(
             NonZeroU32::MIN,
         )))
         .expect("valid fixture parameters");
-    parameters.commit();
+
     let state = authenticate_output_state(state);
 
     // A legal long leg identity makes actual receipts exceed the minimum
@@ -1193,9 +1207,7 @@ fn poisoned_carrier_refuses_consensus_world_application() {
     let fragments = block.committed_fragment_count();
     let mut tx = block.transaction();
     tx.world
-        .parameters
-        .get_mut()
-        .set_parameter(Parameter::Block(BlockParameter::MaxTransactions(
+        .set_parameter_for_testing(Parameter::Block(BlockParameter::MaxTransactions(
             NonZeroU64::new(7).unwrap(),
         )))
         .expect("valid fixture parameters");

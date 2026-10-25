@@ -506,9 +506,7 @@ mod tests {
         };
         let mut world = state.world.block();
         world
-            .parameters
-            .get_mut()
-            .set_parameter(iroha_data_model::parameter::Parameter::Custom(
+            .set_parameter_for_testing(iroha_data_model::parameter::Parameter::Custom(
                 policy.into_custom_parameter(),
             ))
             .expect("valid committed query policy");

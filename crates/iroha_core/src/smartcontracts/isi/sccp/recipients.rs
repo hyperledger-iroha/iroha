@@ -341,11 +341,14 @@ mod tests {
             iroha_crypto::Algorithm::Ed25519,
         ])
         .unwrap();
-        let mut parameters = state.world.parameters.block();
-        parameters
-            .get_mut()
-            .set_parameter(policy.into_parameter().unwrap())
-            .unwrap();
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+            .expect("funded parameter fixture block");
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            policy.into_parameter().unwrap(),
+            state.world.sccp_committee_generations.allocation_budget(),
+        )
+        .unwrap();
         parameters.commit();
         let mut block = state.block(header(2));
         let stx = block.transaction();

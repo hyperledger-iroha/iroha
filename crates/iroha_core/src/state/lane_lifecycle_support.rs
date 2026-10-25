@@ -445,6 +445,8 @@ impl DaPinIntentIndexPruneKeys {
 struct PendingAutoscaleLaneLifecycle {
     catalog_update: LaneLifecycleCatalogUpdate,
     updated_lane_manifests: LaneManifestRegistryHandle,
+    // The exact admitted projection is carried through apply and carrier publication.
+    updated_lane_privacy: LanePrivacyRegistry,
     plan: iroha_data_model::nexus::LaneLifecyclePlan,
     transition: PendingAutoscaleTransition,
     transition_height: u64,

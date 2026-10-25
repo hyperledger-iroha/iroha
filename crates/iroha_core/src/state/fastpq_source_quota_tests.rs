@@ -23,13 +23,16 @@ fn header() -> BlockHeader {
 #[test]
 fn invalid_source_policy_is_retained_without_lifecycle_or_publication() {
     let state = state();
-    let mut parameters = state.world.parameters.block();
+    let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+        .expect("fund original parameter Cell acquisition");
     let mut profile = parameters.get().block().fastpq_source();
     profile.block.max_executed_entries = 0;
-    parameters
-        .get_mut()
-        .set_parameter(Parameter::Block(BlockParameter::FastpqSource(profile)))
-        .expect("valid fixture parameters");
+    crate::state::set_parameter_cell_for_testing(
+        &mut parameters,
+        Parameter::Block(BlockParameter::FastpqSource(profile)),
+        state.world.sccp_committee_generations.allocation_budget(),
+    )
+    .expect("valid fixture parameters");
     parameters.commit();
     let mut block = state.merge_preexecution_block(header());
     assert!(!block.start_of_block_effects_applied);
@@ -56,9 +59,7 @@ fn invalid_source_policy_is_retained_without_lifecycle_or_publication() {
         let mut transaction = block.transaction();
         transaction
             .world
-            .parameters
-            .get_mut()
-            .set_parameter(Parameter::Block(BlockParameter::MaxTimeTriggerInvocations(
+            .set_parameter_for_testing(Parameter::Block(BlockParameter::MaxTimeTriggerInvocations(
                 nonzero!(1_u32),
             )))
             .expect("valid fixture parameters");
@@ -96,11 +97,14 @@ fn invalid_source_policy_refuses_both_result_constructors_before_pristine_callba
     // Retain the malformed policy as both current and predecessor, so the
     // replacement constructor validates its own actual reverted source too.
     for _ in 0..2 {
-        let mut parameters = state.world.parameters.block();
-        parameters
-            .get_mut()
-            .set_parameter(Parameter::Block(BlockParameter::FastpqSource(invalid)))
-            .unwrap();
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+            .expect("fund original parameter Cell acquisition");
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            Parameter::Block(BlockParameter::FastpqSource(invalid)),
+            state.world.sccp_committee_generations.allocation_budget(),
+        )
+        .unwrap();
         parameters.commit();
     }
     let before = std::cell::Cell::new(false);
@@ -132,11 +136,14 @@ fn invalid_source_policy_refuses_both_result_constructors_before_pristine_callba
     );
     // Both failed owners release their writers; a corrected committed source
     // acquires a fresh block rather than reopening either poisoned attempt.
-    let mut parameters = state.world.parameters.block();
-    parameters
-        .get_mut()
-        .set_parameter(Parameter::Block(BlockParameter::FastpqSource(valid)))
-        .unwrap();
+    let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+        .expect("fund original parameter Cell acquisition");
+    crate::state::set_parameter_cell_for_testing(
+        &mut parameters,
+        Parameter::Block(BlockParameter::FastpqSource(valid)),
+        state.world.sccp_committee_generations.allocation_budget(),
+    )
+    .unwrap();
     parameters.commit();
     let fresh = state.try_block(header()).unwrap();
     assert!(fresh.execution_output_plan.is_none());

@@ -40,15 +40,15 @@ fn successful_claim_fee_exemption_uses_exact_account_identity() {
     let (_, mut nexus, _, payload) = multi_component_fee_quote_fixture();
     let authority = payload.authority;
     let (other_authority, _) = gen_account_in("fee_quote_other");
-    assert!(!successful_claim_fee_authority_allowed(&nexus, &authority));
+    assert!(!successful_claim_fee_authority_allowed(&nexus.fees, &authority));
     nexus
         .fees
         .successful_claim_fee_exempt_authorities
         .try_insert(authority.clone())
         .expect("fixture fee exemption");
-    assert!(successful_claim_fee_authority_allowed(&nexus, &authority));
+    assert!(successful_claim_fee_authority_allowed(&nexus.fees, &authority));
     assert!(!successful_claim_fee_authority_allowed(
-        &nexus,
+        &nexus.fees,
         &other_authority
     ));
 }
@@ -118,7 +118,7 @@ fn original_claim_metadata_refusal_defers_fee_quote_and_retries_exact_payload() 
     // Otherwise an earlier root-scope decode refusal could mask an erased claim refusal.
     let original_reader = norito::with_decode_limits_scope(
         norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 32),
-        || successful_claim_fee_exempt_payload(&world.view(), &nexus, &payload, 50).unwrap_err(),
+        || successful_claim_fee_exempt_payload(&world.view(), &nexus.fees, &payload, 50).unwrap_err(),
     );
     assert_eq!(
         original_reader.reason(),
@@ -203,7 +203,7 @@ fn original_claim_alias_refusal_after_metadata_defers_fee_quote_and_retries() {
     let metadata_prefix = minimum_prefix(false);
     let original_reader = norito::with_decode_limits_scope(
         norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, metadata_prefix, 32),
-        || successful_claim_fee_exempt_payload(&world.view(), &nexus, &payload, 50).unwrap_err(),
+        || successful_claim_fee_exempt_payload(&world.view(), &nexus.fees, &payload, 50).unwrap_err(),
     );
     assert_eq!(
         original_reader.reason(),
@@ -449,9 +449,8 @@ fn fee_quote_prices_a_proof_instruction_with_the_committed_gas_schedule() {
         .validate()
         .expect("a policy that differs in gas is valid");
     {
-        let mut parameters = world.parameters.block();
-        parameters
-            .set_parameter(Parameter::Custom(policy.clone().into_custom_parameter()))
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&world).unwrap();
+        crate::state::set_parameter_cell_for_testing(&mut parameters, Parameter::Custom(policy.clone().into_custom_parameter()), world.sccp_committee_generations.allocation_budget())
             .expect("valid fixture parameters");
         parameters.commit();
     }

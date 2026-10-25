@@ -36,7 +36,10 @@ fn complete(block: &StateBlock<'_>) -> bool {
 }
 fn assert_free(state: &State) {
     assert_eq!(state.publication_fences_available_for_test(), (true, true));
-    drop(state.world.parameters.block());
+    drop(
+        crate::state::parameter_cell_block_for_testing(&state.world)
+            .expect("funded original parameter-only fixture block"),
+    );
     drop(state.canonical_runtime.block());
     drop(state.transactions.block());
 }

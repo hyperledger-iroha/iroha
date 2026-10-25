@@ -31,8 +31,7 @@ fn setup_world_with_account(algo: Algorithm) -> (State, AccountId, NetworkId, Ke
             iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![algo])
                 .unwrap();
         block
-            .parameters
-            .set_parameter(policy.into_parameter().unwrap())
+            .set_parameter_for_testing(policy.into_parameter().unwrap())
             .unwrap();
         block.commit();
     }

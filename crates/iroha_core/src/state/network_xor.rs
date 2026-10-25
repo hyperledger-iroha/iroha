@@ -85,11 +85,14 @@ mod tests {
         let xor = parameters.xor_asset_definition_id.clone();
         let mut world = World::with([], [Account::new(ALICE_ID.clone()).build(&ALICE_ID)], []);
         {
-            let mut policy = world.parameters.block();
-            policy
-                .get_mut()
-                .set_parameter(Parameter::Custom(parameters.into_custom_parameter()))
-                .expect("valid fixture parameters");
+            let mut policy = crate::state::parameter_cell_block_for_testing(&world)
+                .expect("funded original parameter-only fixture block");
+            crate::state::set_parameter_cell_for_testing(
+                &mut policy,
+                Parameter::Custom(parameters.into_custom_parameter()),
+                world.sccp_committee_generations.allocation_budget(),
+            )
+            .expect("valid fixture parameters");
             policy.commit();
         }
         for (spec, scope) in [

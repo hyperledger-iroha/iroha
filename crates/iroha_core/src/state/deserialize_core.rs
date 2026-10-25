@@ -14,6 +14,12 @@ std::thread_local! {
 /// Snapshot syntax is distinct from a local refusal by the original State pool.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum StateRestoreError {
+    /// Original complete parameter graph/control custody refused restoration.
+    #[error(transparent)]
+    Parameters(parameter_cell::ParameterCellRestoreError),
+    /// Original empty World initialization failed before replay.
+    #[error(transparent)]
+    WorldInitialization(#[from] WorldConstructionError),
     /// World authority must come from original signed-genesis and certified-history replay.
     #[error(
         "native World restoration requires fresh-State signed-genesis and certified-history replay"
@@ -102,40 +108,25 @@ fn validate_resource_policy_versions(
     Ok(())
 }
 
-/// Apply L1 to each complete original World cut under explicitly supplied replay policy.
-/// Snapshot fields are structural claims; neither defaults nor a current-only check can
-/// authenticate the genesis staking policy or an undo generation's liability window.
+/// Apply L1 to the committed monetary policy of each complete original World cut.
+/// Current and undo generations each retain their own policy; replay configuration
+/// is not monetary authority and cannot substitute for a missing committed owner.
 fn validate_sccp_policy_versions(
     world: &World,
-    replay_nexus: Option<&iroha_config::parameters::actual::Nexus>,
     execution_budget: &iroha_allocation::AllocationBudget,
 ) -> Result<(), StateRestoreError> {
-    fn validate(
-        cut: &(impl WorldReadOnly + ?Sized),
-        replay_nexus: Option<&iroha_config::parameters::actual::Nexus>,
-        field: &str,
-    ) -> Result<(), StateRestoreError> {
-        use crate::smartcontracts::isi::sccp::params;
-        let Some(parameters) = params::parameters(cut) else {
-            return Ok(());
-        };
-        // TODO: authenticate genesis-pinned staking custody in the native replay owner.
-        // Refuse config-free SCCP restore instead of substituting process defaults.
-        let policy = replay_nexus.ok_or_else(|| json::Error::InvalidField {
-            field: field.to_owned(),
-            message: "SCCP restore requires explicit original replay staking policy".to_owned(),
-        })?;
-        params::validate_staking_policy(cut, &parameters, &policy.staking).map_err(|error| {
-            json::Error::InvalidField {
+    fn validate(cut: &(impl WorldReadOnly + ?Sized), field: &str) -> Result<(), StateRestoreError> {
+        crate::smartcontracts::isi::sccp::params::validate_committed_staking_policy(cut).map_err(
+            |error| json::Error::InvalidField {
                 field: field.to_owned(),
                 message: error.to_string(),
-            }
-        })?;
+            },
+        )?;
         Ok(())
     }
-    validate(&world.view(), replay_nexus, "state.sccp.staking_policy")?;
+    validate(&world.view(), "state.sccp.staking_policy")?;
     let previous = world.try_block_and_revert(execution_budget)?;
-    validate(&previous, replay_nexus, "state.sccp.staking_policy.revert")
+    validate(&previous, "state.sccp.staking_policy.revert")
 }
 
 #[cfg(test)]
@@ -843,20 +834,29 @@ mod state_snapshot_decode_error_tests {
         };
         use std::num::{NonZeroU32, NonZeroU64};
         let mut overlay = world.block();
-        let parameters = overlay.parameters.get_mut();
-        parameters.replace(Parameters::default()).unwrap();
+        // This caller owns a pristine component fixture. Build the same complete
+        // canonical value before funding and publishing its immutable successor.
+        let mut authored = Parameters::default();
         if lower_caps {
-            parameters
-                .set_parameter(Parameter::Transaction(TransactionParameter::MaxTxBytes(
-                    NonZeroU64::new(3 * 1024 * 1024).unwrap(),
-                )))
-                .unwrap();
-            parameters
-                .set_parameter(Parameter::Sumeragi(SumeragiParameter::MaxBlockBytes(
-                    NonZeroU32::new(4 * 1024 * 1024).unwrap(),
-                )))
-                .unwrap();
+            authored.set_parameter(Parameter::Transaction(TransactionParameter::MaxTxBytes(
+                NonZeroU64::new(3 * 1024 * 1024).unwrap(),
+            )));
+            authored.set_parameter(Parameter::Sumeragi(SumeragiParameter::MaxBlockBytes(
+                NonZeroU32::new(4 * 1024 * 1024).unwrap(),
+            )));
         }
+        let authored = crate::pipeline_gas_policy::StateParameters::try_from(authored).unwrap();
+        let pool = world.sccp_committee_generations.allocation_budget();
+        let prepared = overlay
+            .parameters
+            .get()
+            .prepare_replace(&authored, pool)
+            .unwrap();
+        let successor = prepared
+            .into_successor(overlay.parameters.get(), pool)
+            .map_err(|(_prepared, original)| original)
+            .unwrap();
+        *overlay.parameters.get_mut() = successor;
         let mut limits = PrivacyConsensusLimitsV1::taira_default();
         if lower_privacy {
             limits.max_proof_bytes_per_action = 2 * 1024 * 1024;
@@ -975,8 +975,12 @@ mod state_snapshot_decode_error_tests {
     fn canonical_parameters_cell_restores_validated_fee_projection() {
         let receiver = iroha_test_samples::ALICE_ID.to_string();
         let canonical = fee_parameters_snapshot(&receiver);
-        let restored = take_parameters_cell(&mut parameters_map(&canonical), "parameters")
-            .expect("canonical original Parameters cell restores its derived fee projection");
+        let restored = take_parameters_cell(
+            &mut parameters_map(&canonical),
+            "parameters",
+            &scalar_cell_custody::default_budget(),
+        )
+        .expect("canonical original Parameters cell restores its derived fee projection");
         assert_eq!(restored.view().gas().tech_account_id, receiver);
         assert_eq!(json::to_json(&restored).unwrap(), canonical);
     }
@@ -987,20 +991,35 @@ mod state_snapshot_decode_error_tests {
         let mut map = parameters_map(&canonical);
         let limits = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX);
         let error = norito::with_decode_limits_scope(limits, || {
-            take_parameters_cell(&mut map, "parameters")
-                .err()
-                .expect("original decode budget refuses restore")
+            take_parameters_cell(
+                &mut map,
+                "parameters",
+                &scalar_cell_custody::default_budget(),
+            )
+            .err()
+            .expect("original decode budget refuses restore")
         });
         assert!(matches!(error, StateRestoreError::ExecutionDeferred(_)));
-        assert!(take_parameters_cell(&mut parameters_map(&canonical), "parameters").is_ok());
+        assert!(
+            take_parameters_cell(
+                &mut parameters_map(&canonical),
+                "parameters",
+                &scalar_cell_custody::default_budget()
+            )
+            .is_ok()
+        );
     }
 
     #[test]
     fn parameters_cell_restore_rejects_malformed_fee_as_serialization() {
         let malformed = fee_parameters_snapshot("alias@domain");
-        let error = take_parameters_cell(&mut parameters_map(&malformed), "parameters")
-            .err()
-            .expect("malformed committed receiver cannot create a StateParameters owner");
+        let error = take_parameters_cell(
+            &mut parameters_map(&malformed),
+            "parameters",
+            &scalar_cell_custody::default_budget(),
+        )
+        .err()
+        .expect("malformed committed receiver cannot create a StateParameters owner");
         assert!(matches!(
             error,
             StateRestoreError::Serialization(json::Error::InvalidField { ref field, .. })
@@ -1457,7 +1476,7 @@ impl KuraSeed {
                 message: error.to_string(),
             })?;
         validate_resource_policy_versions(&world, committed_height, &self.execution_budget)?;
-        validate_sccp_policy_versions(&world, replay_nexus.as_ref(), &self.execution_budget)?;
+        validate_sccp_policy_versions(&world, &self.execution_budget)?;
         crate::privacy_state::validate_privacy_activations_at_committed_height_v1(
             &world.privacy_activations.view(),
             committed_height,
@@ -2774,18 +2793,45 @@ fn take_ram_lfe_program_policies(
 fn take_parameters_cell(
     map: &mut SnapshotJsonMap<'_>,
     key: &str,
-) -> Result<Cell<StateParameters>, StateRestoreError> {
+    execution_budget: &iroha_allocation::AllocationBudget,
+) -> Result<Cell<RetainedStateParameters, iroha_allocation::AllocationCharge>, StateRestoreError> {
     let source = map
         .remove(key)
         .ok_or_else(|| json::Error::missing_field(key))?;
-    source.decode_canonical_value().map_err(|error| {
-        crate::execution_attempt::json_decode_attempt_error(error, |error| {
-            json::Error::InvalidField {
+    let result = match source {
+        SnapshotJsonField::Borrowed { raw } => parameter_cell::restore(raw, execution_budget),
+        #[cfg(test)]
+        SnapshotJsonField::Owned(value) => {
+            // Authored test Value has no authenticated original byte order. Its
+            // rendering belongs to fixture construction, never production ingress.
+            let authored = json::to_json(&value)?;
+            parameter_cell::restore_authored_fixture(&authored, execution_budget)
+        }
+    };
+    result.map_err(|error| {
+        use crate::pipeline_gas_policy::{ParameterIngressAttemptError, ParameterIngressError};
+        use parameter_cell::ParameterCellRestoreError;
+        let invalid = |reason: String| {
+            StateRestoreError::Serialization(json::Error::InvalidField {
                 field: key.to_owned(),
-                message: error.to_string(),
+                message: reason,
+            })
+        };
+        match error {
+            ParameterCellRestoreError::Ingress(ParameterIngressAttemptError::Codec(original)) => {
+                match original.into_local_refusal() {
+                    Ok(refusal) => StateRestoreError::ExecutionDeferred(refusal.into()),
+                    Err(invalid_source) => invalid(invalid_source.to_string()),
+                }
             }
-        })
-        .into()
+            ParameterCellRestoreError::Ingress(ParameterIngressAttemptError::Original(
+                error @ (ParameterIngressError::Pipeline(_)
+                | ParameterIngressError::Fraud(_)
+                | ParameterIngressError::Zk(_)
+                | ParameterIngressError::Staking(_)),
+            )) => invalid(error.to_string()),
+            original => StateRestoreError::Parameters(original),
+        }
     })
 }
 fn take_topology_cell(

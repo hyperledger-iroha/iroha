@@ -196,12 +196,16 @@ pub fn world_with_test_domains() -> World {
     let world = World::with([domain], [account], []);
     // This component fixture needs explicit routing metadata; it has no signed
     // genesis, certified history or native publication authority.
-    let mut parameters = world.parameters.block();
-    parameters
-        .set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
+    let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
+        .expect("funded original parameter-only fixture block");
+    crate::state::set_parameter_cell_for_testing(
+        &mut parameters,
+        crate::sumeragi::lanes::routing::test_support::metadata(
             iroha_data_model::block::consensus::SumeragiRootScope::Global,
-        ))
-        .expect("valid fixture parameters");
+        ),
+        world.sccp_committee_generations.allocation_budget(),
+    )
+    .expect("valid fixture parameters");
     parameters.commit();
     world
 }
@@ -219,9 +223,15 @@ struct NexusRoutingFixture {
     authority_keypair: KeyPair,
 }
 fn nexus_routing_fixture() -> NexusRoutingFixture {
-    nexus_routing_fixture_with_nexus(Nexus::default())
+    nexus_routing_fixture_with_nexus(
+        Nexus::default(),
+        iroha_config::parameters::defaults::nexus::fees::genesis_policy(),
+    )
 }
-fn nexus_routing_fixture_with_nexus(nexus: Nexus) -> NexusRoutingFixture {
+fn nexus_routing_fixture_with_nexus(
+    nexus: Nexus,
+    fees: iroha_data_model::block::consensus::RootFeePolicy,
+) -> NexusRoutingFixture {
     let (authority_id, authority_keypair) = gen_account_in("wonderland");
     let domain_id = DomainId::try_new("wonderland", "universal").expect("domain id");
     let domain = Domain::new(domain_id).build(&authority_id);
@@ -229,12 +239,25 @@ fn nexus_routing_fixture_with_nexus(nexus: Nexus) -> NexusRoutingFixture {
     let world = World::with([domain], [authority], []);
     // This component fixture needs explicit routing metadata; it has no signed
     // genesis, certified history or native publication authority.
-    let mut parameters = world.parameters.block();
-    parameters
-        .set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
+    let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
+        .expect("funded original parameter-only fixture block");
+    crate::state::set_parameter_cell_for_testing(
+        &mut parameters,
+        crate::sumeragi::lanes::routing::test_support::metadata(
             iroha_data_model::block::consensus::SumeragiRootScope::Global,
-        ))
-        .expect("valid fixture parameters");
+        ),
+        world.sccp_committee_generations.allocation_budget(),
+    )
+    .expect("valid fixture parameters");
+    crate::state::set_parameter_cell_for_testing(
+        &mut parameters,
+        iroha_data_model::parameter::Parameter::Custom(
+            fees.into_custom_parameter()
+                .expect("valid complete queue fixture fee policy"),
+        ),
+        world.sccp_committee_generations.allocation_budget(),
+    )
+    .expect("explicit complete routing fixture fee policy");
     parameters.commit();
     let state = State::new_with_nexus_for_testing(world, nexus, LiveQueryStore::start_test());
     NexusRoutingFixture {
@@ -307,13 +330,13 @@ fn route_plan_with_state_syncs_queue_router_to_fresh_default_lane() {
     nexus.autoscale.enabled = false;
     nexus.lane_catalog = (*fresh_lanes).clone();
     nexus.dataspace_catalog = (*fresh_dataspaces).clone();
-    nexus.fees.base_fee = Quantity::zero();
-    nexus.fees.per_byte_fee = Quantity::zero();
-    nexus.fees.per_instruction_fee = Quantity::zero();
-    nexus.fees.per_gas_unit_fee = Quantity::zero();
     nexus.routing_policy.default_lane = fresh.lane_id;
     nexus.routing_policy.default_dataspace = fresh.dataspace_id;
-    let state = State::new_with_nexus_for_testing(world_with_test_domains(), nexus, query_handle);
+    let state = State::new_with_nexus_for_testing(
+        world_with_explicit_queue_fees(world_with_test_domains(), zero_rate_routing_fees()),
+        nexus,
+        query_handle,
+    );
     let queue = Queue::test(config_factory(), &time_source);
     assert_eq!(
         queue.routing_policy.read().default_lane,
@@ -360,13 +383,13 @@ fn push_in_view_syncs_queue_router_to_fresh_default_lane() {
     nexus.lane_config =
         iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
     nexus.dataspace_catalog = (*fresh_dataspaces).clone();
-    nexus.fees.base_fee = Quantity::zero();
-    nexus.fees.per_byte_fee = Quantity::zero();
-    nexus.fees.per_instruction_fee = Quantity::zero();
-    nexus.fees.per_gas_unit_fee = Quantity::zero();
     nexus.routing_policy.default_lane = fresh.lane_id;
     nexus.routing_policy.default_dataspace = fresh.dataspace_id;
-    let state = State::new_with_nexus_for_testing(world_with_test_domains(), nexus, query_handle);
+    let state = State::new_with_nexus_for_testing(
+        world_with_explicit_queue_fees(world_with_test_domains(), zero_rate_routing_fees()),
+        nexus,
+        query_handle,
+    );
     let queue = Queue::test(config_factory(), &time_source);
     assert_eq!(
         queue.routing_policy.read().default_lane,
@@ -434,7 +457,9 @@ fn route_plan_with_state_rejects_stale_policy_even_when_old_lane_still_exists() 
         matcher: current_rule.matcher,
     }];
     let queue = Queue::test(config_factory(), &time_source);
-    queue.reconfigure_nexus_with_state(&stale_nexus, &state, None);
+    queue
+        .reconfigure_nexus_with_state(&stale_nexus, &state, None)
+        .expect("original State pool admits Queue privacy projection");
     assert!(
         queue
             .routing_policy
@@ -500,7 +525,9 @@ fn precomputed_state_routing_plan_rejects_stale_policy_even_when_old_lane_still_
         matcher,
     }];
     let queue = Queue::test(config_factory(), &time_source);
-    queue.reconfigure_nexus_with_state(&stale_nexus, &state, None);
+    queue
+        .reconfigure_nexus_with_state(&stale_nexus, &state, None)
+        .expect("original State pool admits Queue privacy projection");
     let tx = accepted_tx_by_someone(&time_source);
     let hash = tx.hash_as_entrypoint();
     let stale_plan = RoutingPlan::single(old_route);

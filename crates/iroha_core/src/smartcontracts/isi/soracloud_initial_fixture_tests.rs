@@ -153,7 +153,7 @@ fn state_with_soracloud_permission_on_chain(
     // It still has no authenticated root; Initial-executor tests apply signed genesis below.
     {
         let mut seed = world.block();
-        seed.parameters.set_parameter(
+        seed.set_parameter_for_testing(
             iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
                 iroha_crypto::Algorithm::Ed25519,
                 iroha_crypto::Algorithm::Secp256k1,

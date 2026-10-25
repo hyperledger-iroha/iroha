@@ -2712,10 +2712,11 @@ through the on-chain parameter path; validators and executor upgrades must
 never replace consensus-owned values with local TOML or executor defaults.
 
 **SCCP liability (application layer; target, `specs/sccp.md` §4.8–§4.9; not yet implemented).**
-While SCCP exists, the genesis-pinned staking policy MUST satisfy
-`nexus.staking.unbonding_delay_ms ≥ committee_validity_ms + forgery_evidence_grace_ms` and
-`nexus.staking.max_slash_bps ≥ 1`; genesis, `irohad` start-up and the SCCP parameter path enforce
-it. `FinalizePublicLaneUnbond`, zero-custody pruning and a replacing re-registration are refused
+While SCCP exists, the committed `PublicLaneStakingPolicy` MUST satisfy
+`unbonding_delay_ms ≥ committee_validity_ms + forgery_evidence_grace_ms` and
+`max_slash_bps ≥ 1` for current parameters and every retained generation. Genesis,
+`irohad` start-up, the SCCP parameter path and authorized staking-policy changes
+validate this requirement against the original typed parameter owner before publication. `FinalizePublicLaneUnbond`, zero-custody pruning and a replacing re-registration are refused
 while an SCCP committee generation that contained the validator is liable, or while an SCCP
 forgery record naming it is pending. SCCP forgery records are applied by the same penalty
 pipeline after `slashing_delay_blocks`, but they are self-contained (§3.6): the offence height is

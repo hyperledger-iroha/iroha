@@ -266,7 +266,6 @@ use iroha_data_model::{
     isi::settlement::{FxCorridorPolicy, FxCorridorPolicyRegistry},
     nexus::{FeeRejectionCode, FeeSponsorProgramId},
     nft::NftId,
-    peer::Peer,
     permission::Permission,
     query::{CommittedTransaction, SignedQuery},
     rwa::RwaId,
@@ -299,6 +298,7 @@ use iroha_model_base::chain::ChainId;
 #[cfg(feature = "app_api")]
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::name::Name;
+use iroha_model_base::peer::Peer;
 use iroha_model_base::peer::PeerId;
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 #[cfg(feature = "app_api")]

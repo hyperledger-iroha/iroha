@@ -67,6 +67,12 @@ pub enum WorldStateSnapshotError {
     /// Exact AMX validation or checked permission-comparison refusal.
     #[error("World snapshot AMX original: {0}")]
     Amx(#[from] iroha_data_model::sumeragi_amx::AmxError),
+    /// Original protected catalog decoder or structural failure at the certified read boundary.
+    #[error("World snapshot catalog original: {0}")]
+    Catalog(#[from] iroha_data_model::nexus::NexusCatalogValidationError),
+    /// Original catalog projection outcome, including its already classified local refusal.
+    #[error("World snapshot catalog projection: {0}")]
+    CatalogProjection(#[source] crate::state::LaneLifecycleError),
     /// A stable original State view has advanced or not yet reached the requested height.
     #[error(
         "World snapshot cut changed from requested height {requested_height} to observed {observed_height}"

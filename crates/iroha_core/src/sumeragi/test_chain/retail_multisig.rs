@@ -491,11 +491,11 @@ fn install_monthly_policy(
     registry.validate().unwrap();
     transaction
         .world
-        .parameters
-        .get_mut()
-        .set_parameter(Parameter::Custom(registry.into_custom_parameter().expect(
-            "validation-fee fixture registry fits the canonical JSON parameter",
-        )))
+        .set_parameter_for_testing(Parameter::Custom(
+            registry
+                .into_custom_parameter()
+                .expect("validation-fee fixture registry fits the canonical JSON parameter"),
+        ))
         .expect("valid fixture parameters");
     let record = RetailFeeAccountStateV1::enroll(source.clone(), START, 1000).unwrap();
     crate::retail_fee::write_account(&mut transaction.world, &record).unwrap();
@@ -516,7 +516,9 @@ pub fn native_retail_multisig_transfer_fixture() -> NativeRetailMultisigTransfer
     // Author it in signed genesis, with the exact matching consensus mode.
     config.consensus_mode = SumeragiConsensusMode::Npos;
     config.genesis_parameters = vec![
-        Parameter::Sumeragi(SumeragiParameter::EpochLengthBlocks(npos.epoch_length_blocks)),
+        Parameter::Sumeragi(SumeragiParameter::EpochLengthBlocks(
+            npos.epoch_length_blocks,
+        )),
         Parameter::Custom(npos.into_custom_parameter()),
     ];
     let genesis_key = config.genesis_key.clone();
@@ -719,9 +721,15 @@ mod tests {
         .unwrap()
         .unwrap();
         assert_eq!(binding.xor_asset_id, parameters.xor_asset_definition_id);
-        let definition = view.world().asset_definition(&binding.xor_asset_id).unwrap();
+        let definition = view
+            .world()
+            .asset_definition(&binding.xor_asset_id)
+            .unwrap();
         assert_eq!(definition.spec().scale(), Some(9));
-        assert_eq!(definition.balance_scope_policy(), AssetBalancePolicy::Global);
+        assert_eq!(
+            definition.balance_scope_policy(),
+            AssetBalancePolicy::Global
+        );
         assert!(fixture.assessment.retail_enrolled);
         assert_ne!(fixture.assessment.state_commitment, [0; 32]);
         drop(view);

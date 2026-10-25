@@ -56,19 +56,24 @@ fn fixture(
 ) -> (State, SignedBlock) {
     let state = authenticated_state(row_bytes);
     {
-        let mut parameters = state.world.parameters.block();
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+            .expect("fund original parameter Cell acquisition");
         let mut policy = parameters.get().block().execution_output();
         policy.max_time_invocations = maximum;
-        parameters
-            .get_mut()
-            .set_parameter(Parameter::Block(BlockParameter::ExecutionOutput(policy)))
-            .expect("valid fixture parameters");
-        parameters
-            .get_mut()
-            .set_parameter(Parameter::Block(BlockParameter::MaxTimeTriggerInvocations(
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            Parameter::Block(BlockParameter::ExecutionOutput(policy)),
+            state.world.sccp_committee_generations.allocation_budget(),
+        )
+        .expect("valid fixture parameters");
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            Parameter::Block(BlockParameter::MaxTimeTriggerInvocations(
                 NonZeroU32::new(maximum).unwrap(),
-            )))
-            .expect("valid fixture parameters");
+            )),
+            state.world.sccp_committee_generations.allocation_budget(),
+        )
+        .expect("valid fixture parameters");
         parameters.commit();
     }
     {
@@ -917,22 +922,27 @@ mod retry_and_periodic {
         let state = Arc::clone(&history.state);
         assert!(Arc::ptr_eq(&state, &history.state));
         {
-            let mut parameters = state.world.parameters.block();
+            let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+                .expect("fund original parameter Cell acquisition");
             let mut policy = ExecutionOutputPolicyV1::bootstrap();
             policy.max_output_bytes = 65_536;
             policy.max_pipeline_triggers = 0;
             policy.max_time_invocations = 3;
             policy.validate().unwrap();
-            parameters
-                .get_mut()
-                .set_parameter(Parameter::Block(BlockParameter::ExecutionOutput(policy)))
-                .expect("valid fixture parameters");
-            parameters
-                .get_mut()
-                .set_parameter(Parameter::Block(BlockParameter::MaxTimeTriggerInvocations(
+            crate::state::set_parameter_cell_for_testing(
+                &mut parameters,
+                Parameter::Block(BlockParameter::ExecutionOutput(policy)),
+                state.world.sccp_committee_generations.allocation_budget(),
+            )
+            .expect("valid fixture parameters");
+            crate::state::set_parameter_cell_for_testing(
+                &mut parameters,
+                Parameter::Block(BlockParameter::MaxTimeTriggerInvocations(
                     NonZeroU32::new(3).unwrap(),
-                )))
-                .expect("valid fixture parameters");
+                )),
+                state.world.sccp_committee_generations.allocation_budget(),
+            )
+            .expect("valid fixture parameters");
             parameters.commit();
         }
         {

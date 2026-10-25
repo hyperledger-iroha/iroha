@@ -625,7 +625,14 @@ fn committed_fee_update_uses_predecessor_for_entire_block_and_survives_replay() 
     use crate::state::StateReadOnly as _;
     use iroha_data_model::{isi::SetParameter, parameter::Parameter};
     let mut chain = CertifiedTestChain::start(fee_update_config()).unwrap();
-    let before = chain.state().view().nexus().fees.clone();
+    let before = chain
+        .state()
+        .view()
+        .world()
+        .parameters()
+        .root_fees()
+        .unwrap()
+        .clone();
     let mut next = before.clone();
     next.base_fee = 2_u32.into();
     next.fee_sink_account_id = recipient();
@@ -664,7 +671,10 @@ fn committed_fee_update_uses_predecessor_for_entire_block_and_survives_replay() 
         balance(&chain, principal(), recipient()),
         250_000_u32.into()
     );
-    assert_eq!(chain.state().view().nexus().fees, next);
+    assert_eq!(
+        chain.state().view().world().parameters().root_fees(),
+        Some(&next),
+    );
     let mut second = intent(&chain, "successor-root-fee-update");
     // This distinct successor is first executed at H3; the shared fixture's H2
     // expiry belongs to the earlier payment and cannot authorize this one.
@@ -718,7 +728,10 @@ fn committed_fee_update_uses_predecessor_for_entire_block_and_survives_replay() 
     );
     assert_eq!(replay.committed(2).result(), original.result());
     assert_eq!(replay.committed(3).result(), last.result());
-    assert_eq!(replay.state().view().nexus().fees, next);
+    assert_eq!(
+        replay.state().view().world().parameters().root_fees(),
+        Some(&next),
+    );
     assert_eq!(balance(&replay, fee_asset(), account()), 96_u32.into());
     assert_eq!(
         balance(&replay, principal(), recipient()),
@@ -732,7 +745,14 @@ fn paid_root_fee_identity_updates_are_rejected_without_replacing_committed_custo
     use iroha_data_model::{isi::SetParameter, parameter::Parameter};
     for change_currency in [true, false] {
         let mut chain = CertifiedTestChain::start(fee_update_config()).unwrap();
-        let before = chain.state().view().nexus().fees.clone();
+        let before = chain
+            .state()
+            .view()
+            .world()
+            .parameters()
+            .root_fees()
+            .unwrap()
+            .clone();
         let mut invalid = before.clone();
         if change_currency {
             invalid.fee_asset_id = principal();
@@ -774,7 +794,10 @@ fn paid_root_fee_identity_updates_are_rejected_without_replacing_committed_custo
             .expect("actual rejected execution retains its fee");
         assert_eq!(receipt.fee_amount, Quantity::one());
         assert_eq!(receipt.schedule.base_fee, Quantity::one());
-        assert_eq!(chain.state().view().nexus().fees, before);
+        assert_eq!(
+            chain.state().view().world().parameters().root_fees(),
+            Some(&before),
+        );
         assert_eq!(balance(&chain, fee_asset(), account()), 99_u32.into());
         assert_eq!(
             balance(&chain, principal(), account()),
@@ -791,7 +814,10 @@ fn paid_root_fee_identity_updates_are_rejected_without_replacing_committed_custo
             "rejected update recovery requires no later traffic"
         );
         assert_eq!(replay.committed(2).result(), original.result());
-        assert_eq!(replay.state().view().nexus().fees, before);
+        assert_eq!(
+            replay.state().view().world().parameters().root_fees(),
+            Some(&before),
+        );
         assert_eq!(balance(&replay, fee_asset(), account()), 99_u32.into());
         assert_eq!(
             balance(&replay, principal(), account()),

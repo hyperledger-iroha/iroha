@@ -24,8 +24,11 @@ fn resident_prepare(
     state: &State,
     transaction: AcceptedTransaction<'static>,
 ) -> PreparedQueueAdmission {
+    let mut retired = QueuePrivacyRetirements::default();
     let view = state.view();
-    queue.sync_nexus_routing_with_view(&view);
+    queue
+        .sync_nexus_routing_with_view(&view, &mut retired)
+        .expect("original State pool admits the actual routing refresh");
     let plan = queue
         .router
         .read()
@@ -42,6 +45,7 @@ fn resident_prepare(
             checked,
             plan,
             &mut access,
+            &mut retired,
             #[cfg(feature = "telemetry")]
             view.telemetry,
         )

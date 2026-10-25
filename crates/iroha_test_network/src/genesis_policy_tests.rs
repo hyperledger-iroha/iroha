@@ -54,7 +54,7 @@ fn fixture_with_instructions(
         None,
         Some(iroha_core::state::default_genesis_confidential_policy_hash()),
         None,
-        default_test_network_staking_policy(),
+        config::default_test_network_staking_policy(),
     )
 }
 

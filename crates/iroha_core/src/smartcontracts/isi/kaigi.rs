@@ -4630,7 +4630,20 @@ mod tests {
     {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
-        let state = State::new(World::default(), kura, query);
+        let mut world = World::default();
+        // This isolated component fixture authors its predecessor policy explicitly.
+        // It does not claim original signed genesis or consensus publication.
+        world
+            .set_parameter_for_testing(
+                iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                    iroha_crypto::Algorithm::Ed25519,
+                ])
+                .unwrap()
+                .into_parameter()
+                .unwrap(),
+            )
+            .expect("explicit component account crypto policy");
+        let state = State::new(world, kura, query);
         let header = iroha_data_model::block::BlockHeader::new(
             NonZeroU64::new(1).expect("non-zero height"),
             None,
@@ -4655,15 +4668,24 @@ mod tests {
             .iter()
             .cloned()
             .map(|account| Account::new(account).build(&ALICE_ID));
-        let state = State::new(
-            World::with(
-                [seeded_domain],
-                seeded_accounts,
-                std::iter::empty::<AssetDefinition>(),
-            ),
-            kura,
-            query,
+        let mut world = World::with(
+            [seeded_domain],
+            seeded_accounts,
+            std::iter::empty::<AssetDefinition>(),
         );
+        // This isolated component fixture authors its predecessor policy explicitly.
+        // It does not claim original signed genesis or consensus publication.
+        world
+            .set_parameter_for_testing(
+                iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                    iroha_crypto::Algorithm::Ed25519,
+                ])
+                .unwrap()
+                .into_parameter()
+                .unwrap(),
+            )
+            .expect("explicit component account crypto policy");
+        let state = State::new(world, kura, query);
         let header = iroha_data_model::block::BlockHeader::new(
             NonZeroU64::new(1).expect("non-zero height"),
             None,
@@ -7710,9 +7732,7 @@ mod tests {
                 .parse()
                 .expect("metadata limit parameter id");
             stx.world
-                .parameters
-                .get_mut()
-                .set_parameter(Parameter::Custom(CustomParameter::new(
+                .set_parameter_for_testing(Parameter::Custom(CustomParameter::new(
                     limit_id,
                     Json::new(1_u64),
                 )))

@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::{
+    interlane::LanePrivacyRegistry,
     state::World,
     sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
 };
@@ -699,11 +700,11 @@ fn certified_world_cut_survives_equivalent_and_refused_manifest_refresh() {
         // A new materialization of the exact source is what each watcher tick supplies.
         let equivalent = Arc::new(original.rebind(&nexus.lane_catalog, &nexus.governance));
         assert!(!Arc::ptr_eq(&original, &equivalent));
-        assert!(state.install_lane_manifests_if_consensus_compatible(&equivalent));
+        assert!(state.install_lane_manifests_if_consensus_compatible(&equivalent).is_ok());
         assert_proof();
         assert_eq!(state.state_view_generation(), generation);
         assert!(Arc::ptr_eq(&state.lane_manifests.read(), &original));
-        assert!(Arc::ptr_eq(&state.lane_privacy_registry.read(), &privacy));
+        assert!(LanePrivacyRegistry::ptr_eq(&state.lane_privacy_registry.read(), &privacy));
 
         let directory = tempfile::tempdir().unwrap();
         let alias = &nexus.lane_catalog.lanes()[0].alias;
@@ -729,11 +730,11 @@ fn certified_world_cut_survives_equivalent_and_refused_manifest_refresh() {
                 .unwrap(),
         );
         for rejected in [changed, Arc::new(LaneManifestRegistry::default())] {
-            assert!(!state.install_lane_manifests_if_consensus_compatible(&rejected));
+            assert!(state.install_lane_manifests_if_consensus_compatible(&rejected).is_err());
             assert_proof();
             assert_eq!(state.state_view_generation(), generation);
             assert!(Arc::ptr_eq(&state.lane_manifests.read(), &original));
-            assert!(Arc::ptr_eq(&state.lane_privacy_registry.read(), &privacy));
+            assert!(LanePrivacyRegistry::ptr_eq(&state.lane_privacy_registry.read(), &privacy));
         }
     }
     // A real native successor still retires the former cut. No generation check is relaxed.
@@ -843,7 +844,7 @@ fn replayed_world_cut_survives_exact_startup_queue_handoff_without_another_block
     assert_proof();
     assert_eq!(state.state_view_generation(), generation);
     assert!(Arc::ptr_eq(&state.lane_manifests.read(), &original));
-    assert!(Arc::ptr_eq(&state.lane_privacy_registry.read(), &privacy));
+    assert!(LanePrivacyRegistry::ptr_eq(&state.lane_privacy_registry.read(), &privacy));
     assert_eq!(
         replay.height(),
         2,

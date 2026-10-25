@@ -1,7 +1,7 @@
 use crate::common;
 use common::assemble_syscalls;
 use iroha_crypto::Hash;
-use iroha_data_model::peer::Peer;
+use iroha_model_base::peer::Peer;
 use ivm::{
     IVM, Memory, PointerType,
     mock_wsv::{AccountId, MockWorldStateView, WsvHost},

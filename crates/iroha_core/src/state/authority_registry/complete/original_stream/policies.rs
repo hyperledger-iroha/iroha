@@ -207,7 +207,7 @@ pub(super) fn append(
         let current = nexus_policy::BorrowedNexusPolicy::new(
             &fields.runtime_policy.nexus,
             current_runtime,
-            current_parameters.effective_root_fees(),
+            current_parameters.root_fees(),
             current_digest,
             Some(current_manifests.baseline_consensus_policy_digest()),
         )
@@ -215,7 +215,7 @@ pub(super) fn append(
         let before = nexus_policy::BorrowedNexusPolicy::new(
             &fields.runtime_policy.nexus,
             before_runtime,
-            before_parameters.effective_root_fees(),
+            before_parameters.root_fees(),
             before_digest,
             Some(before_manifests.baseline_consensus_policy_digest()),
         )

@@ -39,133 +39,78 @@ use iroha_data_model::account::NewAccount;
 use iroha_data_model::account::address::AccountAddress;
 use iroha_data_model::account::address::AccountAddressError;
 use iroha_data_model::account::address::{ChainDiscriminantGuard, chain_discriminant};
-use iroha_data_model::asset::AssetDefinitionAlias;
-use iroha_data_model::asset::AssetTransferAvailability;
-use iroha_data_model::asset::AssetTransferControlWindow;
-use iroha_data_model::asset::AssetTransferLimit;
-use iroha_data_model::asset::definition::AssetDefinition;
-use iroha_data_model::asset::definition::NewAssetDefinition;
-use iroha_data_model::asset::id::AssetDefinitionId;
-use iroha_data_model::asset::id::AssetId;
-use iroha_data_model::asset::validate_asset_transfer_availability_reason;
-use iroha_data_model::domain::Domain;
-use iroha_data_model::domain::NewDomain;
-use iroha_data_model::escrow::EscrowId;
-use iroha_data_model::governance::types::AbiVersion;
-use iroha_data_model::governance::types::ContractAbiHash;
-use iroha_data_model::governance::types::ContractCodeHash;
-use iroha_data_model::isi::Burn;
-use iroha_data_model::isi::BurnBox;
-use iroha_data_model::isi::CreateKaigi;
-use iroha_data_model::isi::CustomInstruction;
-use iroha_data_model::isi::EndKaigi;
-use iroha_data_model::isi::ExecuteTrigger;
-use iroha_data_model::isi::Grant;
-use iroha_data_model::isi::GrantBox;
-use iroha_data_model::isi::Instruction as InstructionTrait;
-use iroha_data_model::isi::InstructionBox;
-use iroha_data_model::isi::JoinKaigi;
-use iroha_data_model::isi::LeaveKaigi;
-use iroha_data_model::isi::Mint;
-use iroha_data_model::isi::MintBox;
-use iroha_data_model::isi::RecordKaigiUsage;
-use iroha_data_model::isi::Register;
-use iroha_data_model::isi::RegisterBox;
-use iroha_data_model::isi::RegisterDataspaceAssetDefinition;
-use iroha_data_model::isi::RegisterKaigiRelay;
-use iroha_data_model::isi::RegisterPeerWithPop;
-use iroha_data_model::isi::RemoveKeyValue;
-use iroha_data_model::isi::ReportKaigiRelayHealth;
-use iroha_data_model::isi::SetAssetDefinitionAlias;
-use iroha_data_model::isi::SetKaigiRelayManifest;
-use iroha_data_model::isi::SetKeyValue;
-use iroha_data_model::isi::SetKeyValueBox;
-use iroha_data_model::isi::SetParameter;
-use iroha_data_model::isi::Transfer;
-use iroha_data_model::isi::TransferAssetBatch;
-use iroha_data_model::isi::TransferBox;
-use iroha_data_model::isi::Unregister;
-use iroha_data_model::isi::UnregisterBox;
-use iroha_data_model::isi::UnregisterKaigiRelay;
-use iroha_data_model::isi::asset_transfer_control::SetAssetTransferAvailability;
-use iroha_data_model::isi::asset_transfer_control::SetAssetTransferBlacklist;
-use iroha_data_model::isi::asset_transfer_control::SetAssetTransferControl;
-use iroha_data_model::isi::escrow::CancelAssetLock;
-use iroha_data_model::isi::governance::CastZkBallot;
-use iroha_data_model::isi::governance::ProposeDeployContract;
-use iroha_data_model::isi::governance::ProposeValidationFeePolicy;
-use iroha_data_model::isi::governance::RegisterCitizen;
-use iroha_data_model::isi::ministry::SubmitAgendaProposal;
-use iroha_data_model::isi::rwa::ForceTransferRwa;
-use iroha_data_model::isi::rwa::FreezeRwa;
-use iroha_data_model::isi::rwa::HoldRwa;
-use iroha_data_model::isi::rwa::MergeRwas;
-use iroha_data_model::isi::rwa::RedeemRwa;
-use iroha_data_model::isi::rwa::RegisterRwa;
-use iroha_data_model::isi::rwa::ReleaseRwa;
-use iroha_data_model::isi::rwa::RwaInstructionBox;
-use iroha_data_model::isi::rwa::SetRwaControls;
-use iroha_data_model::isi::rwa::TransferRwa;
-use iroha_data_model::isi::rwa::UnfreezeRwa;
-use iroha_data_model::isi::settlement::DvpIsi;
-use iroha_data_model::isi::settlement::FundFxCorridorEscrow;
-use iroha_data_model::isi::settlement::PvpIsi;
-use iroha_data_model::isi::settlement::RefundFxCorridorEscrow;
-use iroha_data_model::isi::settlement::SetFxCorridorPolicy;
-use iroha_data_model::isi::settlement::SettleFxCorridor;
-use iroha_data_model::isi::settlement::SettlementInstructionBox;
-use iroha_data_model::isi::smart_contract_code::CancelSmartContractCodeUpload;
-use iroha_data_model::isi::smart_contract_code::RegisterSmartContractBytes;
-use iroha_data_model::isi::smart_contract_code::RegisterSmartContractCode;
-use iroha_data_model::isi::smart_contract_code::RemoveSmartContractBytes;
-use iroha_data_model::isi::social::CancelTwitterEscrow;
-use iroha_data_model::isi::social::ClaimTwitterFollowReward;
-use iroha_data_model::isi::social::SendToTwitter;
-use iroha_data_model::isi::zk::CancelConfidentialPolicyTransition;
-use iroha_data_model::isi::zk::CreateElection;
-use iroha_data_model::isi::zk::FinalizeElection;
-use iroha_data_model::isi::zk::RegisterZkAsset;
-use iroha_data_model::isi::zk::ScheduleConfidentialPolicyTransition;
-use iroha_data_model::isi::zk::SubmitBallot;
-use iroha_data_model::kaigi::KaigiId;
-use iroha_data_model::kaigi::KaigiParticipantCommitment;
-use iroha_data_model::kaigi::KaigiParticipantNullifier;
-use iroha_data_model::kaigi::KaigiRelayHealthStatus;
-use iroha_data_model::kaigi::KaigiRelayRegistration;
-use iroha_data_model::kaigi::scalar::KaigiAuthorizationScalarV1;
-use iroha_data_model::ministry::AgendaProposalV1;
-use iroha_data_model::nft::NewNft;
-use iroha_data_model::nft::Nft;
-use iroha_data_model::nft::NftId;
-use iroha_data_model::oracle::KeyedHash;
-use iroha_data_model::parameter::CustomParameter;
-use iroha_data_model::parameter::Parameter;
-use iroha_data_model::peer::Peer;
-use iroha_data_model::permission::Permission;
-use iroha_data_model::role::NewRole;
-use iroha_data_model::role::Role;
-use iroha_data_model::role::RoleId;
-use iroha_data_model::rwa::NewRwa;
-use iroha_data_model::rwa::RwaControlPolicy;
-use iroha_data_model::rwa::RwaId;
-use iroha_data_model::rwa::RwaParentRef;
-use iroha_data_model::smart_contract::manifest::ContractManifest;
-use iroha_data_model::trigger::Trigger;
-use iroha_data_model::trigger::TriggerId;
-use iroha_data_model::trigger::action::Action;
-use iroha_data_model::validation_fee::ValidationFeePolicyV1;
-use iroha_model_base::domain::DomainId;
-use iroha_model_base::metadata::Metadata;
-use iroha_model_base::name::Name;
-use iroha_model_base::peer::PeerId;
-use iroha_primitives::json::Json;
-use iroha_primitives::numeric::Quantity;
-use norito::core as norito_core;
-use norito::json;
-use std::fmt;
-use std::panic::AssertUnwindSafe;
-use std::panic::catch_unwind;
-use std::str::FromStr;
+use iroha_data_model::{
+    asset::{
+        AssetDefinitionAlias, AssetTransferAvailability, AssetTransferControlWindow,
+        AssetTransferLimit,
+        definition::{AssetDefinition, NewAssetDefinition},
+        id::{AssetDefinitionId, AssetId},
+        validate_asset_transfer_availability_reason,
+    },
+    domain::{Domain, NewDomain},
+    escrow::EscrowId,
+    governance::types::{AbiVersion, ContractAbiHash, ContractCodeHash},
+    isi::{
+        Burn, BurnBox, CreateKaigi, CustomInstruction, EndKaigi, ExecuteTrigger, Grant, GrantBox,
+        Instruction as InstructionTrait, InstructionBox, JoinKaigi, LeaveKaigi, Mint, MintBox,
+        RecordKaigiUsage, Register, RegisterBox, RegisterDataspaceAssetDefinition,
+        RegisterKaigiRelay, RegisterPeerWithPop, RemoveKeyValue, ReportKaigiRelayHealth,
+        SetAssetDefinitionAlias, SetKaigiRelayManifest, SetKeyValue, SetKeyValueBox, SetParameter,
+        Transfer, TransferAssetBatch, TransferBox, Unregister, UnregisterBox, UnregisterKaigiRelay,
+        asset_transfer_control::{
+            SetAssetTransferAvailability, SetAssetTransferBlacklist, SetAssetTransferControl,
+        },
+        escrow::CancelAssetLock,
+        governance::{
+            CastZkBallot, ProposeDeployContract, ProposeValidationFeePolicy, RegisterCitizen,
+        },
+        ministry::SubmitAgendaProposal,
+        rwa::{
+            ForceTransferRwa, FreezeRwa, HoldRwa, MergeRwas, RedeemRwa, RegisterRwa, ReleaseRwa,
+            RwaInstructionBox, SetRwaControls, TransferRwa, UnfreezeRwa,
+        },
+        settlement::{
+            DvpIsi, FundFxCorridorEscrow, PvpIsi, RefundFxCorridorEscrow, SetFxCorridorPolicy,
+            SettleFxCorridor, SettlementInstructionBox,
+        },
+        smart_contract_code::{
+            CancelSmartContractCodeUpload, RegisterSmartContractBytes, RegisterSmartContractCode,
+            RemoveSmartContractBytes,
+        },
+        social::{CancelTwitterEscrow, ClaimTwitterFollowReward, SendToTwitter},
+        zk::{
+            CancelConfidentialPolicyTransition, CreateElection, FinalizeElection, RegisterZkAsset,
+            ScheduleConfidentialPolicyTransition, SubmitBallot,
+        },
+    },
+    kaigi::{
+        KaigiId, KaigiParticipantCommitment, KaigiParticipantNullifier, KaigiRelayHealthStatus,
+        KaigiRelayRegistration, scalar::KaigiAuthorizationScalarV1,
+    },
+    ministry::AgendaProposalV1,
+    nft::{NewNft, Nft, NftId},
+    oracle::KeyedHash,
+    parameter::{CustomParameter, Parameter},
+    permission::Permission,
+    role::{NewRole, Role, RoleId},
+    rwa::{NewRwa, RwaControlPolicy, RwaId, RwaParentRef},
+    smart_contract::manifest::ContractManifest,
+    trigger::{Trigger, TriggerId, action::Action},
+    validation_fee::ValidationFeePolicyV1,
+};
+use iroha_model_base::{
+    domain::DomainId,
+    metadata::Metadata,
+    name::Name,
+    peer::{Peer, PeerId},
+};
+use iroha_primitives::{json::Json, numeric::Quantity};
+use norito::{core as norito_core, json};
+use std::{
+    fmt,
+    panic::{AssertUnwindSafe, catch_unwind},
+    str::FromStr,
+};
 
 macro_rules! norito_json {
     ({ $($key:literal : $value:expr),+ $(,)? }) => {{

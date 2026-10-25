@@ -8441,7 +8441,6 @@ mod tests {
             AgendaProposalSubmitter, AgendaProposalSummary, AgendaProposalTarget, AgendaProposalV1,
         },
         nft::NftId,
-        peer::Peer,
         proof::{ProofAttachment, ProofBox, VerifyingKeyId},
         rwa::{NewRwa, RwaControlPolicy, RwaId, RwaParentRef},
         smart_contract::manifest::{
@@ -8459,10 +8458,12 @@ mod tests {
             ValidationFeeTreasuryPayoutBindingV1, initial_validation_fee_amount,
         },
     };
-    use iroha_model_base::domain::DomainId;
-    use iroha_model_base::metadata::Metadata;
-    use iroha_model_base::name::Name;
-    use iroha_model_base::peer::PeerId;
+    use iroha_model_base::{
+        domain::DomainId,
+        metadata::Metadata,
+        name::Name,
+        peer::{Peer, PeerId},
+    };
     use iroha_service_model::soranet::{AnonymityPolicy, RolloutPhase, TransportPolicy};
     use norito::{
         DeserializePayload,

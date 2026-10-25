@@ -12,9 +12,45 @@ adjacent code.
 | O2: Extract state-free privacy verification | In progress | Privacy owns state-free verification while Core retains state authority; original proof/wire fixtures and ordinary coverage remain; native/Python/JS graphs exclude validator execution; current repaired regressions and ordinary suite pass. |
 | O3: Extract state-free timed-OVN verification | Complete | Evidence, casting archive and TLE verification have a separate owner; Core retains authenticated constructors, state reads and signers; bridge tests preserve authorization and replay checks. |
 | O4: Isolate executable build metadata | Complete | Thin daemon/CLI packages supply compiled identity to metadata-free libraries; executable names/features remain coherent; the authenticated two-build metadata check preserves library freshness on its recorded source cut. |
-| O5: Remove production parsing of large test bodies | Complete | Four cohesive P2P/compiler/model test modules moved without dropping tests or fixtures; source guards and preserved runtime harnesses pass. |
+| O5: Remove production parsing of large test bodies | Complete | Six cohesive P2P/compiler/model/Core test modules moved without dropping tests or fixtures; Core executor and IVM-host tests use sibling files that preserve relative fixture paths and test namespaces. Current-source runtime qualification remains under O6. |
 | O6: Complete current-source validation | In progress | Norito/IVM-only, feature, dependency and target guards, focused tests and applicable workspace lint/test gates pass on the current candidate; unresolved external failures are recorded. |
 | O7: Measure improvements | In progress | One warm same-package check records actual timing, source/toolchain and competing load against the September 27 observation; further extraction requires measured benefit. |
+
+## Active local build goals
+
+These goals prioritize developer builds on the current development host. They
+require no CI adoption or workflow changes. Work proceeds in the order below;
+the existing release memory and cross-platform qualification goals remain
+separate. Preserve unrelated working-tree changes and coordinate repairs with
+the owners of the current parameter and fee-policy work.
+
+| Goal | Owner | Status | Completion criteria |
+| --- | --- | --- | --- |
+| L1: Restore successful local builds | Core/configuration owners | Repaired and passing on the recorded cut; current Core/FHE edits require requalification | Resolve the nine Core compilation errors observed in the current consumer check without changing intended fee, parameter or custody behavior. The same consumer library/binary check succeeds, and Core library-test targets compile, including the extracted executor and IVM-host tests. Reproduce current failures before repairing them; an earlier error count is not a fixed acceptance inventory. |
+| L2: Reconcile source inventories | Source-guard/component owners | Complete: both current full suites and all 1,312 reviewed source fingerprints | Resolve the six reported panic-recovery and operation-inventory test failures through reviewed source classifications, paths and counts. Both affected script test modules pass with existing assertions and coverage retained; do not bypass checks or accept unreviewed inventory regeneration. |
+| L3: Establish a repeatable local baseline | Build tooling | Recorded: five zero-rebuild checks and actual dev/test reuse; new source cut needs a fresh matched baseline | Record the source snapshot, toolchain, exact command, features, profile, environment, persistent target and competing load. After warm-up, five identical successful local checks show zero rebuilt Cargo artifacts. Report median and worst end-to-end time, source-preflight time and Cargo time separately. Repeat the build-to-test dependency-reuse check with the actual dev/test profiles. |
+| L4: Reduce source-preflight overhead | PLONK/build tooling | Scanner improvements implemented and tested; candidate timing invalidated by concurrent source edits | Reduce median warm no-op command time by at least 30% against L3 on the same host and source workload; the initial observation is approximately 25 seconds, not an accepted comparison baseline. Profile discovery, hashing and receipt validation before changing them. Preserve complete before/after source capture, source-drift refusal, evaluator verification, direct-Cargo behavior and native input-audit coverage. All freshness, membership, symlink and mode-transition regressions pass. |
+| L5: Qualify the smaller compilation boundaries | Model/Core/Swarm owners | Recorded passes: 245-package Swarm graph, Peer semantics and all 336 moved test names; changed Core tests need a current runtime pass | Swarm's normal graph excludes the aggregate model and PLONK, and ordinary library checks skip the native-source preflight. Peer wire, schema, registration and identity semantics pass alongside affected consumers. All moved Core tests remain discoverable under their original names and relative fixture paths; execute representative tests after L1. Compare the resolved package inventory with the current 245-package normal/build graph and explain any growth. |
+| L6: Improve real edit-to-check loops | Build/component owners | Three owner and three model baseline samples recorded; matched candidate measurements remain open | Measure one focused owner edit and one upstream model edit using matched baseline/candidate commands, features, profiles and warm targets, with at least three successful samples per case. Report median time, compiler-unit timings, peak memory and cache growth. Retain further refactoring only when it gives a repeatable measured benefit without reducing behavior, test coverage or source-integrity checks. |
+
+L1 and L2 unblock integrated validation. L3 establishes the comparison for L4
+and L6; L5 preserves the implemented dependency and parsing improvements.
+Changes to profiles, features or target selection are separate experiments,
+not no-op cache misses. Never delete the existing warm cache to manufacture a
+comparison, and never interrupt another Cargo process. Use the local commands
+in [build identity](../docs/build_identity.md) and keep raw validation transcripts
+outside this goals document.
+
+The active local goal is complete when L1–L6 satisfy their criteria on one
+successful current candidate. Historical timings, static source moves and
+focused passes alone do not establish the end-to-end improvement.
+
+The [local validation note](../docs/validation/local-build-efficiency.md) records
+the accepted baseline and qualification scope. Resume the matched experiments
+only with stable source membership and no competing builds; concurrent edits
+must not be reverted or silently excluded to manufacture a comparison.
+
+## Existing ownership and qualification scope
 
 The ownership changes are implemented. Current-source qualification remains
 open. IVM and its artifact admission use the compiler-free
@@ -24,6 +60,16 @@ IVM. Privacy and timed-OVN verification have state-free owners; Core retains
 committed-state reads and authenticated authority. Thin executables own build
 metadata. Shared operation journaling has one owner consumed directly by Wallet,
 SCCP, services and daemon, with signing and finality retained by consumers.
+
+Local iteration reuses a persistent Cargo target with incremental dev/test
+profiles and explicit stable development metadata. PLONK's local source
+preflight preserves full input discovery while avoiding no-op recompilation;
+direct Cargo retains conservative rescanning. Foundational peer endpoints and
+committee geometry now belong to `iroha_model_base`, allowing Swarm's normal
+build graph to exclude the aggregate model and its proof stack. Ledger
+registration traits remain in `iroha_data_model`, and the captured peer wire
+identity is unchanged. These are source and dependency improvements; timing
+qualification remains under O7.
 
 The recorded signed validation baseline is `4486aa78661b8f289d21238e034fc2ece10600d8`.
 Recorded static source-graph discovery lists 124 workspace members; it does not

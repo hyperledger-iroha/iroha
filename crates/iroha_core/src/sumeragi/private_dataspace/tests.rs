@@ -70,16 +70,23 @@ fn world(
         record.encode(),
     );
     {
-        let mut parameters = world.parameters.block();
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
+            .expect("original parameter-only fixture block");
         if let Some(scope) = scope {
-            parameters
-                .set_parameter(test_support::metadata(scope))
-                .expect("valid fixture parameters");
+            crate::state::set_parameter_cell_for_testing(
+                &mut parameters,
+                test_support::metadata(scope),
+                world.sccp_committee_generations.allocation_budget(),
+            )
+            .expect("valid fixture parameters");
         }
         if let Some(policy) = admission {
-            parameters
-                .set_parameter(Parameter::Custom(policy.into_custom_parameter().unwrap()))
-                .expect("valid fixture parameters");
+            crate::state::set_parameter_cell_for_testing(
+                &mut parameters,
+                Parameter::Custom(policy.into_custom_parameter().unwrap()),
+                world.sccp_committee_generations.allocation_budget(),
+            )
+            .expect("valid fixture parameters");
         }
         parameters.commit();
     }

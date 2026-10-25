@@ -731,7 +731,10 @@ fn retained_state_late_world_busy_recovers_all_original_cursors_before_retry() {
         assert_eq!(original.world.musubi_public_directory.len(), 1);
         // These actual acquisitions precede the held last World Cell in the
         // publication inventory and must have been recovered after its refusal.
-        drop(state.world.parameters.block());
+        drop(
+            crate::state::parameter_cell_block_for_testing(&state.world)
+                .expect("funded original parameter-only fixture block"),
+        );
         drop(state.canonical_runtime.block());
         drop(state.transactions.block());
         assert!(state.state_write_lock.try_lock().is_some());
@@ -767,7 +770,8 @@ fn retained_state_equal_value_component_advance_never_rebases_original_predecess
     let generation = state.state_view_generation();
     // A component-only test publication keeps its value and State scalar equal,
     // but replaces the exact lower predecessor. Equal values grant no authority.
-    let other = state.world.parameters.block();
+    let other = crate::state::parameter_cell_block_for_testing(&state.world)
+        .expect("funded original parameter-only fixture block");
     other.commit();
     assert_eq!(state.state_view_generation(), generation);
     assert!(matches!(
@@ -1074,7 +1078,10 @@ fn retained_state_successful_musubi_validation_survives_late_writer_refusal() {
             assert!(state.state_commit_lock.try_lock().is_some());
             assert!(state.world.musubi_public_directory.view().is_empty());
             assert_eq!(state.transactions.latest_height(), 0);
-            drop(state.world.parameters.block());
+            drop(
+                crate::state::parameter_cell_block_for_testing(&state.world)
+                    .expect("funded original parameter-only fixture block"),
+            );
             drop(state.canonical_runtime.block());
             drop(state.transactions.block());
         }
@@ -1459,7 +1466,10 @@ fn retained_canonical_merge_cell_busy_recovers_original_cursors_before_retry() {
         assert_eq!(original.world.musubi_public_directory.len(), 1);
         // These actual acquisitions precede the held last World Cell in the
         // publication inventory and must have been recovered after its refusal.
-        drop(state.world.parameters.block());
+        drop(
+            crate::state::parameter_cell_block_for_testing(&state.world)
+                .expect("funded original parameter-only fixture block"),
+        );
         drop(state.canonical_runtime.block());
         drop(state.transactions.block());
         assert!(state.state_write_lock.try_lock().is_some());

@@ -11,7 +11,7 @@ use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
     smartcontracts::isi::sccp::{commitment, light_clients},
-    state::{State, StateTransaction, World},
+    state::{State, StateTransaction, World, WorldReadOnly},
 };
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
@@ -861,16 +861,38 @@ async fn committee_routes_report_current_records_and_reject_zero_or_absent_gener
         SumeragiNposParameters::default().into_custom_parameter(),
     ));
     config.genesis_block_cadence_ms = NonZeroU64::new(1_000).unwrap();
-    let mut nexus = iroha_config::parameters::actual::Nexus::default();
-    nexus.staking.unbonding_delay = std::time::Duration::from_millis(
-        parameters.committee_validity_ms + parameters.forgery_evidence_grace_ms,
+    let mut staking = config
+        .genesis_parameters
+        .iter()
+        .find_map(|parameter| match parameter {
+            Parameter::Custom(custom)
+                if custom.id() == &iroha_data_model::block::consensus::PublicLaneStakingPolicy::parameter_id() =>
+            {
+                Some(iroha_data_model::block::consensus::PublicLaneStakingPolicy::from_custom_parameter(custom).unwrap())
+            }
+            _ => None,
+        })
+        .expect("one explicitly authored original staking policy");
+    staking.unbonding_delay_ms = parameters
+        .committee_validity_ms
+        .checked_add(parameters.forgery_evidence_grace_ms)
+        .unwrap();
+    staking.max_slash_bps = 10_000;
+    let policy_id = iroha_data_model::block::consensus::PublicLaneStakingPolicy::parameter_id();
+    let mut original_slots = config.genesis_parameters.iter_mut().filter(
+        |parameter| matches!(parameter, Parameter::Custom(custom) if custom.id() == &policy_id),
     );
-    nexus.staking.max_slash_bps = 10_000;
+    *original_slots.next().expect("original policy slot") =
+        Parameter::Custom(staking.clone().into_custom_parameter().unwrap());
+    assert!(
+        original_slots.next().is_none(),
+        "exactly one original policy"
+    );
     // Capture each original G1 member from its genuine global staking registration.
     // Pre-existing fixture balances fund the normal signed genesis monetary plan.
     let owner = AccountId::new(config.genesis_key.public_key().clone());
-    let definition: AssetDefinitionId = nexus.staking.stake_asset_id.parse().unwrap();
-    let escrow = AccountId::parse_encoded(&nexus.staking.stake_escrow_account_id).unwrap();
+    let definition: AssetDefinitionId = staking.stake_asset_id.clone();
+    let escrow = staking.stake_escrow_account_id.clone();
     let amount = iroha_crypto::numeric::Quantity::from(1_000_u32);
     let validators = iroha_core::sumeragi::test_chain::fixture_validators();
     let accounts = validators
@@ -921,7 +943,6 @@ async fn committee_routes_report_current_records_and_reject_zero_or_absent_gener
             .into(),
         );
     }
-    config.nexus = Some(nexus);
     config.genesis_instructions.push(
         InitializeSccpV1 {
             parameters,
@@ -931,6 +952,10 @@ async fn committee_routes_report_current_records_and_reject_zero_or_absent_gener
     );
     let chain = CertifiedTestChain::start(config).expect("initialize genuine SCCP genesis");
     let state = chain.state();
+    assert_eq!(
+        state.view().world().parameters().staking_policy(),
+        Some(&staking)
+    );
     let mut keys = chain
         .validators()
         .iter()

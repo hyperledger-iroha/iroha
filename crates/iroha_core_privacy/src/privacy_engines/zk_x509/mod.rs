@@ -18,6 +18,7 @@ pub(crate) mod accumulator_stark;
 pub(crate) mod air;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) mod allocation_payload;
+mod certificate;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) mod codec;
 mod composition_masking;
@@ -25,13 +26,14 @@ mod credential_joint;
 pub(crate) mod credential_pre_aux;
 #[doc(hidden)]
 pub mod credential_stark;
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) mod der;
 pub(crate) mod der_air;
 pub(crate) mod der_limits;
 pub(crate) mod der_stark;
 #[doc(hidden)]
 pub mod engine;
+/// Typed failures of strict X.509 parsing and reference validation.
+pub mod errors;
 pub(crate) mod fixed_algebraic;
 pub(crate) mod fixed_algebraic_p256;
 pub(crate) mod fixed_algebraic_sha;
@@ -51,6 +53,8 @@ pub(crate) mod p256_scalar_bit_bus;
 pub(crate) mod p256_trace;
 pub(crate) mod p256_value_bus;
 pub(crate) mod p256_window_air;
+/// Ordinary holder-side bounds derived from exact signed DER intervals.
+pub mod presentation;
 mod private_table;
 #[doc(hidden)]
 pub mod profile;

@@ -199,22 +199,49 @@ impl GenesisStakingPolicy {
         Ok(())
     }
 
-    /// Decode into the unpublished combined candidate; this grants no State authority.
-    /// The caller retains both original capabilities until every policy succeeds.
+    /// Prepare the complete unpublished original-pool successor from the exact
+    /// selected instruction. This retains no uncharged custom clone and grants
+    /// no State authority; the combined caller validates both capabilities first.
     pub(super) fn initialize_candidate(
         &self,
-        owner: &mut crate::pipeline_gas_policy::StateParameters,
-    ) -> Result<(), BlockValidationError> {
+        owner: &crate::pipeline_gas_policy::RetainedStateParameters,
+        block: &SignedBlock,
+        budget: &iroha_allocation::AllocationBudget,
+    ) -> Result<crate::pipeline_gas_policy::RetainedStateParameters, BlockValidationError> {
+        use crate::pipeline_gas_policy::ParameterIngressAttemptError;
         if owner.staking_policy().is_some() {
             return Err(invalid(
                 "pre-genesis State already contains a staking monetary policy",
             ));
         }
-        norito::core::classify_decode_attempt(|| {
-            owner.set_parameter(Parameter::Custom(self.parameter.clone()))
+        let original = block
+            .external_transactions()
+            .nth(self.coordinate.0)
+            .and_then(|transaction| match transaction.instructions() {
+                Executable::Instructions(instructions) => instructions.get(self.coordinate.1),
+                _ => None,
+            })
+            .and_then(|instruction| instruction.as_any().downcast_ref::<SetParameter>())
+            .filter(
+                |set| matches!(set.inner(), Parameter::Custom(custom) if custom == &self.parameter),
+            )
+            .ok_or_else(|| invalid("initial policy source instruction changed"))?;
+        let actual = ParameterIngressAttemptError::observe(|| {
+            let prepared = owner.prepare_parameter(original.inner(), budget)?;
+            prepared
+                .into_successor(owner, budget)
+                .map_err(|(_prepared, original)| original.into())
+        });
+        actual.map_err(|original| {
+            match crate::state::parameter_ingress_attempt_error(original, |error| {
+                invalid(error.to_string())
+            }) {
+                ExecutionAttemptError::Rejected(error) => error,
+                ExecutionAttemptError::Deferred(original) => {
+                    BlockValidationError::ExecutionDeferred(original)
+                }
+            }
         })
-        .map_err(decoding)?;
-        Ok(())
     }
 
     /// Initialize only the same unpublished original empty-history overlay.
@@ -228,8 +255,15 @@ impl GenesisStakingPolicy {
         generation: u64,
     ) -> Result<(), BlockValidationError> {
         self.validate_installation(block, state, original, generation)?;
-        self.initialize_candidate(state.world.parameters.get_mut())?;
-        self.require_unchanged(state)
+        let next = self.initialize_candidate(
+            state.world.parameters.get(),
+            block,
+            state.world.sccp_committee_generations.allocation_budget(),
+        )?;
+        self.policy_for_parameters(&block.header(), &next)
+            .map_err(|_| invalid("candidate lost its original policy"))?;
+        *state.world.parameters.get_mut() = next;
+        Ok(())
     }
 
     /// A later genesis instruction cannot replace the authenticated initial value.

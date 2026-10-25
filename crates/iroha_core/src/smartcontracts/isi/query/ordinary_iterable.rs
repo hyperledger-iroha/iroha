@@ -1488,8 +1488,11 @@ fn bounded_current_fi_context_matches_native_snapshot_and_preserves_absent_obser
         use iroha_data_model::{asset::AssetBalancePolicy, prelude::*, query::{asset_fi::FindAssetFiTransferReceiptV1, parameters::FetchSize}};
         let owner = iroha_test_samples::ALICE_ID.clone();
         let definition: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc".parse().unwrap();
-        let state = State::new_for_testing(World::with([], [Account::new(owner.clone()).build(&owner)],
-            [AssetDefinition::numeric(definition.clone(), "DS", AssetBalancePolicy::DataspaceRestricted, None).build(&owner)]),
+        // A restricted definition must have a real owning domain even when the
+        // query under test will reject its balance policy before reading a row.
+        let domain = iroha_model_base::domain::DomainId::try_new("receipt", "paynet").unwrap();
+        let state = State::new_for_testing(World::with([Domain::new(domain.clone()).build(&owner)], [Account::new(owner.clone()).build(&owner)],
+            [AssetDefinition::numeric(definition.clone(), "DS", AssetBalancePolicy::DataspaceRestricted, Some(domain)).build(&owner)]),
             Kura::blank_kura_for_testing(), LiveQueryStore::start_test());
         let query = FindAssetFiTransferReceiptV1 { asset_definition_id: definition, account_id: owner, expected_incarnation: iroha_data_model::nexus::AxtAssetIncarnationV1::try_from_bytes(*Hash::new("receipt-incarnation").as_ref()).unwrap(), execution_call_hash: Hash::new("private-receipt"), transcript_index: 0 };
         let params = QueryParams { fetch_size: FetchSize::new(std::num::NonZeroU64::new(1)), ..QueryParams::default() };

@@ -39,6 +39,9 @@
     "crates/iroha_core_privacy/src/privacy_engines/zk_x509/merkle.rs": [
       "transport"
     ],
+    "crates/iroha_core_privacy/src/privacy_engines/zk_x509/presentation.rs": [
+      "canonical"
+    ],
     "crates/iroha_core_privacy/src/privacy_engines/zk_x509/profile.rs": [
       "transport"
     ],
@@ -84,6 +87,9 @@
     ],
     "crates/iroha_core_privacy/src/privacy_state.rs": [
       "canonical"
+    ],
+    "crates/iroha_core_privacy/tests/zk_x509_presentation_bounds.rs": [
+      "test"
     ],
     "crates/iroha_data_model/src/isi/privacy.rs": [
       "test"
@@ -233,7 +239,7 @@
         "#[doc(hidden)]",
         "pub mod relation;"
       ],
-      "note": "The native reference relation and `derive_zk_x509_presentation_bounds_v1` are compiled with the prover: tests and the `privacy-release-evidence` feature only. X.5 owns making the holder path ship."
+      "note": "The native reference relation remains compiled with the prover: tests and the `privacy-release-evidence` feature only. The shared strict DER-to-bounds helper has its ordinary-build owner in zk_x509/presentation.rs; holder proving remains open."
     },
     "crates/iroha_core_privacy/src/privacy_engines/zk_x509/relation/release_fixture.rs": {
       "declared_in": "crates/iroha_core_privacy/src/privacy_engines/zk_x509/relation.rs",

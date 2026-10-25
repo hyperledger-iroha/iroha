@@ -254,9 +254,7 @@ fn installation_decoder_refusal_keeps_original_state_and_changed_overlay_cannot_
             GenesisStakingPolicy::install(&mut initial, &block, overlay, &state, generation)?;
             overlay
                 .world
-                .parameters
-                .get_mut()
-                .set_parameter(parameter(2_000))
+                .set_parameter_for_testing(parameter(2_000))
                 .unwrap();
             assert!(overlay.transaction().staking_monetary_policy().is_err());
             {
@@ -471,9 +469,7 @@ fn header_and_unpublished_current_policy_cannot_replace_retained_genesis_authori
         let mut overlay = state.block(block.header());
         overlay
             .world
-            .parameters
-            .get_mut()
-            .set_parameter(parameter(1_000))
+            .set_parameter_for_testing(parameter(1_000))
             .unwrap();
         assert!(overlay.genesis_staking_policy.is_none());
         assert!(overlay.world.parameters.get().staking_policy().is_some());
@@ -667,9 +663,17 @@ fn second_policy_decoder_refusal_keeps_both_original_capabilities_and_pristine_s
                 usize::MAX,
                 usize::MAX,
             ));
-            let mut scratch = overlay.world.parameters.get().clone();
-            warm.with(|| crypto.initialize_candidate(&mut scratch))
+            let predecessor = overlay.world.parameters.get().clone();
+            let scratch = warm
+                .with(|| {
+                    crypto.initialize_candidate(
+                        &predecessor,
+                        &block,
+                        overlay.world.sccp_committee_generations.allocation_budget(),
+                    )
+                })
                 .unwrap();
+            assert!(predecessor.same_version(overlay.world.parameters.get()));
             assert!(scratch.crypto_policy().is_some());
             assert!(scratch.staking_policy().is_none());
             let crypto_bytes = warm.consumed_allocated_bytes();
@@ -731,4 +735,108 @@ fn second_policy_decoder_refusal_keeps_both_original_capabilities_and_pristine_s
         before
     );
     assert_eq!(state.state_view_generation(), generation);
+}
+
+#[test]
+fn combined_initialization_pool_refusal_keeps_both_capabilities_and_retries() {
+    use crate::block::genesis_policies::GenesisPolicies;
+
+    let state = state();
+    let crypto = crate::sumeragi::test_chain::crypto_fixture_policy();
+    let block = source(vec![vec![
+        SetParameter::new(crypto.clone().into_parameter().unwrap()).into(),
+        instruction(1_000),
+    ]]);
+    let original = authenticate_genesis_block_intents(&block, &SAMPLE_GENESIS_ACCOUNT_ID).unwrap();
+    let mut selected = Some(original.initial_policies(&block).unwrap());
+    let source_bytes = block.canonical_wire().unwrap();
+    let before = crate::snapshot::canonical_state_snapshot_bytes(&state);
+    let generation = state.state_view_generation();
+    let overlay = state
+        .block_with_recorded_pristine_carrier_stage(
+            &block,
+            |overlay| {
+                let predecessor = overlay.world.parameters.get().clone();
+                let capability = std::ptr::from_ref(selected.as_ref().unwrap());
+                let budget = overlay
+                    .world
+                    .sccp_committee_generations
+                    .allocation_budget()
+                    .clone();
+                let limit = budget.limit_bytes();
+                let held = budget.reserved_bytes();
+                budget.set_limit_bytes(held);
+                let result =
+                    GenesisPolicies::install(&mut selected, &block, overlay, &state, generation);
+                budget.set_limit_bytes(limit);
+                let BlockValidationError::ExecutionDeferred(error) = result.unwrap_err() else {
+                    panic!("original finite-pool initialization refusal required")
+                };
+                assert!(matches!(error.allocation_refusal(), Some(
+                iroha_allocation::AllocationRefusal::Capacity {
+                    requested_bytes, reserved_bytes, limit_bytes, ..
+                }
+            ) if *requested_bytes > 0 && *reserved_bytes == held && *limit_bytes == held));
+                assert!(error.decode_refusal().is_none());
+                assert!(error.allocator_refusal().is_none());
+                assert_eq!(budget.reserved_bytes(), held);
+                assert!(predecessor.same_version(overlay.world.parameters.get()));
+                assert!(std::ptr::eq(capability, selected.as_ref().unwrap()));
+                assert!(overlay.genesis_crypto_policy.is_none());
+                assert!(overlay.genesis_staking_policy.is_none());
+                assert_eq!(
+                    block.canonical_wire().unwrap().as_framed(),
+                    source_bytes.as_framed()
+                );
+                GenesisPolicies::install(&mut selected, &block, overlay, &state, generation)?;
+                assert!(selected.is_none());
+                assert!(overlay.genesis_crypto_policy.is_some());
+                assert!(overlay.genesis_staking_policy.is_some());
+                assert_eq!(
+                    overlay.world.parameters.get().crypto_policy(),
+                    Some(&crypto)
+                );
+                assert_eq!(
+                    overlay.world.parameters.get().staking_policy(),
+                    Some(&policy(1_000))
+                );
+                overlay
+                    .genesis_crypto_policy
+                    .as_ref()
+                    .unwrap()
+                    .require_unchanged(overlay)?;
+                overlay
+                    .genesis_staking_policy
+                    .as_ref()
+                    .unwrap()
+                    .require_unchanged(overlay)?;
+                Ok(())
+            },
+            invalid,
+        )
+        .unwrap();
+    drop(overlay);
+    assert_eq!(
+        crate::snapshot::canonical_state_snapshot_bytes(&state),
+        before
+    );
+    assert_eq!(state.state_view_generation(), generation);
+    assert!(
+        state
+            .world
+            .parameters
+            .view()
+            .get()
+            .crypto_policy()
+            .is_none()
+    );
+    assert!(
+        state
+            .world
+            .parameters
+            .view()
+            .get()
+            .staking_policy()
+            .is_none()
+    );
 }

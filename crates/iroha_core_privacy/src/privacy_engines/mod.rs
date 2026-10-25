@@ -31,7 +31,8 @@ pub mod zk_ace_stark;
 pub mod zk_ams;
 // The native prover and its RFC 5280 reference machinery are consumed by the
 // internal test harness and the opt-in release-evidence runner; their roots are
-// gated to those builds so normal node builds compile only the verifier.
+// gated to those builds. Ordinary builds also expose strict DER interval
+// preflight for holders; it does not authenticate a credential or produce a proof.
 #[doc(hidden)]
 pub mod zk_x509;
 use self::fcmp_plus_plus::{FcmpNativeErrorV1, FcmpOutputTupleV1};

@@ -19,7 +19,9 @@ pub use crate::sumeragi::evidence::record::{
 use crate::governance::manifest::lane_uses_reserved_autoscale_metadata;
 use crate::governance::parliament::{ParliamentDecisionModeV1, ParliamentReducerErrorV1};
 /// Canonical parameter MV value with inseparable validated pipeline fee and limit policies.
-pub use crate::pipeline_gas_policy::StateParameters;
+pub use crate::pipeline_gas_policy::{
+    ParameterIngressError, ParameterRetentionError, RetainedStateParameters, StateParameters,
+};
 use crate::private_settlement::{
     carrier::{PrivateSettlementCarrierBindingErrorV1, PrivateSettlementCarrierBindingV1},
     global_state::{
@@ -491,7 +493,7 @@ use crate::{
         manifest::{LaneManifestRegistry, LaneManifestRegistryHandle, ManifestValidatorBinding},
         timed_ovn::{TimedOvnEvidenceError, TimedOvnLifecycleStateV1},
     },
-    interlane::{LanePrivacyRegistry, LanePrivacyRegistryHandle},
+    interlane::LanePrivacyRegistry,
     kura::Kura,
     nexus::space_directory::{
         AccountScopeDirectoryEntry, SpaceDirectoryManifestRecord, SpaceDirectoryManifestSet,
@@ -1550,6 +1552,12 @@ use scalar_cell_custody::ScalarCellFixtureBlock;
 
 // Execution-pool cells reserve their original capacity; other fields start empty.
 macro_rules! initial_world_field {
+    (parameters, $execution:ident) => {{
+        let controls =
+            mv::cell::CellInitialization::<RetainedStateParameters>::try_reserve($execution)?;
+        let value = RetainedStateParameters::try_protocol_default($execution)?;
+        controls.initialize(value, None)
+    }};
     (sccp_reconciliations, $execution:ident) => {
         sccp_reconciliation_store::Records::try_new_admitted($execution.clone())?
     };
@@ -1621,7 +1629,7 @@ impl WorldData {
     /// Construct the empty World census from the caller's original execution pool.
     fn try_new_with_execution_budget(
         execution_budget: &iroha_allocation::AllocationBudget,
-    ) -> Result<Self, mv::storage::AdmittedStorageError> {
+    ) -> Result<Self, WorldConstructionError> {
         Ok(with_world_overlay_fields!(initial_world, execution_budget))
     }
 }
@@ -3006,6 +3014,9 @@ impl EvidencePreparationError {
 /// Errors surfaced when applying lane lifecycle updates.
 #[derive(Debug, ThisError)]
 pub enum LaneLifecycleError {
+    /// Original finite-pool, allocator or decoder refusal while preparing catalog or privacy owners.
+    #[error(transparent)]
+    ParameterDeferred(crate::execution_attempt::ExecutionDeferred),
     /// The original committed NPoS policy is invalid or its local read is unfinished.
     #[error(transparent)]
     NposPolicy(#[from] crate::execution_attempt::ExecutionAttemptError<String>),
@@ -3102,11 +3113,6 @@ pub enum LaneLifecycleError {
         /// Pending-progress invariant that blocks retirement.
         reason: &'static str,
     },
-    /// The local staking selector must name the signed network asset.
-    #[error(
-        "invalid nexus.staking.stake_asset_id; expected a canonical asset definition id or exact xor#universal alias"
-    )]
-    NexusStakeAssetIdInvalid,
     /// Dataspace default sponsor program references a dataspace absent from the catalog.
     #[error("nexus dataspace fee sponsor program references unknown dataspace {0}")]
     DataspaceFeeSponsorProgramUnknownDataspace(DataSpaceId),
@@ -3920,6 +3926,12 @@ enum ParliamentTimedOvnResourceReservationErrorV1 {
 /// This error does not authenticate a complete State or fund its nested graphs.
 #[derive(Debug, thiserror::Error)]
 pub enum WorldConstructionError {
+    /// Original complete parameter graph admission refused before entity initialization.
+    #[error(transparent)]
+    Parameters(#[from] ParameterIngressError),
+    /// Original current/undo publication controls refused before parameter decoding.
+    #[error(transparent)]
+    ParameterCell(#[from] mv::cell::CellInitializationError),
     /// Original initial-cell admission refused before consuming entity iterators.
     #[error("World storage initialization refused: {0}")]
     Storage(#[source] mv::storage::AdmittedStorageError),
@@ -3955,8 +3967,23 @@ impl From<String> for WorldConstructionError {
 #[derive(Default)]
 pub struct World(Box<WorldData>);
 
+#[cfg(any(test, feature = "iroha-core-tests"))]
+mod parameter_fixture;
 #[cfg(test)]
 mod world_construction_tests;
+#[cfg(any(test, feature = "iroha-core-tests"))]
+pub use parameter_fixture::{
+    ParameterFixtureError, parameter_cell_block_and_revert_for_testing,
+    parameter_cell_block_for_testing, set_parameter_cell_for_testing,
+    set_sumeragi_cell_for_testing,
+};
+#[cfg(test)]
+mod executor_parameter_publication_tests;
+mod parameter_acquisition;
+mod parameter_cell;
+mod parameter_publication;
+pub(crate) use parameter_cell::ParameterCellRestoreError;
+pub(crate) use parameter_publication::{PreparedParameterChange, parameter_ingress_attempt_error};
 
 impl std::ops::Deref for World {
     type Target = WorldData;
@@ -3993,7 +4020,7 @@ impl json::FastJsonWrite for World {
 #[derive(JsonSerialize)]
 pub struct WorldData {
     /// Iroha on-chain parameters.
-    pub(crate) parameters: Cell<StateParameters>,
+    pub(crate) parameters: Cell<RetainedStateParameters, iroha_allocation::AllocationCharge>,
     /// Identifications of discovered peers.
     pub(crate) peers: Cell<Peers>,
     /// Lag-2 Sumeragi height-configuration schedule `(t, t + 1, t + 2)` (`specs/sumeragi.md`
@@ -4957,7 +4984,7 @@ pub struct WorldBlockFields<'world> {
     #[norito(skip)]
     pub(crate) dataspace_catalog: iroha_data_model::nexus::DataSpaceCatalog,
     /// Iroha on-chain parameters.
-    pub parameters: CellField<'world, StateParameters>,
+    pub parameters: CellField<'world, RetainedStateParameters, iroha_allocation::AllocationCharge>,
     /// Identifications of discovered peers.
     pub(crate) peers: CellField<'world, Peers>,
     /// Lag-2 Sumeragi height-configuration schedule `(t, t + 1, t + 2)` (`specs/sumeragi.md`
@@ -6694,7 +6721,12 @@ pub struct WorldTransaction<'block, 'world> {
     /// Publish the transaction's derived catalog only when its World changes are applied.
     dataspace_catalog_sink: &'block mut iroha_data_model::nexus::DataSpaceCatalog,
     /// Iroha on-chain parameters.
-    pub(crate) parameters: CellTransaction<'block, 'world, StateParameters>,
+    pub(crate) parameters: CellTransaction<
+        'block,
+        'world,
+        RetainedStateParameters,
+        iroha_allocation::AllocationCharge,
+    >,
     /// Identifications of discovered peers.
     pub(crate) peers: CellTransaction<'block, 'world, Peers>,
     /// Lag-2 Sumeragi height-configuration schedule `(t, t + 1, t + 2)` (`specs/sumeragi.md`
@@ -7838,6 +7870,24 @@ impl<'block> WorldTransaction<'block, '_> {
             }
         }
         self.axt_last_authorization_identities = current;
+    }
+
+    fn prepare_axt_lane_incarnation_transitions(
+        &self,
+        previous: &BTreeMap<LaneId, Hash>,
+        next: &BTreeMap<LaneId, Hash>,
+    ) -> BTreeSet<DataSpaceId> {
+        let mut transitioned = self.axt_authorization_transitioned.clone();
+        transitioned.extend(
+            self.axt_policies
+                .view()
+                .iter()
+                .filter(|(_, policy)| {
+                    previous.get(&policy.target_lane) != next.get(&policy.target_lane)
+                })
+                .map(|(dataspace, _)| *dataspace),
+        );
+        transitioned
     }
 
     fn mark_axt_lane_incarnation_transitions(
@@ -8991,7 +9041,7 @@ pub struct WorldView<'world> {
     /// Dataspace alias catalog used to qualify domain-backed aliases.
     pub(crate) dataspace_catalog: iroha_data_model::nexus::DataSpaceCatalog,
     /// Iroha on-chain parameters.
-    pub(crate) parameters: CellView<'world, StateParameters>,
+    pub(crate) parameters: CellView<'world, RetainedStateParameters>,
     /// Identifications of discovered peers.
     pub(crate) peers: CellView<'world, Peers>,
     /// Lag-2 Sumeragi height-configuration schedule `(t, t + 1, t + 2)` (`specs/sumeragi.md`
@@ -12344,7 +12394,7 @@ pub struct State {
     /// One-shot local phase latch for provisional emergency Fast startup.
     provisional_emergency_lane_manifests_consumed: bool,
     /// Lane privacy commitment registry derived from governance manifests.
-    pub lane_privacy_registry: PublicationRwLock<LanePrivacyRegistryHandle>,
+    pub lane_privacy_registry: PublicationRwLock<LanePrivacyRegistry>,
     /// Optional lane compliance engine (consensus-critical when configured).
     lane_compliance: parking_lot::RwLock<Option<Arc<LaneComplianceEngine>>>,
     /// Serializes initial DA hydration and every explicit rewind rebuild.
@@ -12878,7 +12928,7 @@ pub struct StateBlockFields<'state> {
     /// Lane governance manifest registry snapshot for this block.
     pub lane_manifests: LaneManifestRegistryHandle,
     /// Lane privacy commitment registry snapshot for this block.
-    pub lane_privacy_registry: LanePrivacyRegistryHandle,
+    pub lane_privacy_registry: LanePrivacyRegistry,
     /// Optional lane compliance engine snapshot for this block.
     pub lane_compliance: Option<Arc<LaneComplianceEngine>>,
     /// Fraud monitoring configuration snapshot for this block.
@@ -14204,7 +14254,7 @@ pub struct StateTransaction<'block, 'state> {
     /// Parent block manifest snapshot published with accepted lifecycle geometry.
     block_lane_manifests: &'block mut LaneManifestRegistryHandle,
     /// Parent block privacy snapshot published with accepted lifecycle manifests.
-    block_lane_privacy_registry: &'block mut LanePrivacyRegistryHandle,
+    block_lane_privacy_registry: &'block mut LanePrivacyRegistry,
     /// Parent block incarnation map updated only when this transaction is applied.
     block_lane_incarnations: &'block mut BTreeMap<LaneId, Hash>,
     /// Parent block incarnation lineage updated only when this transaction is applied.
@@ -14218,7 +14268,7 @@ pub struct StateTransaction<'block, 'state> {
     /// Lane governance manifest registry snapshot for this transaction.
     pub lane_manifests: LaneManifestRegistryHandle,
     /// Lane privacy commitment registry snapshot for this transaction.
-    pub lane_privacy_registry: LanePrivacyRegistryHandle,
+    pub lane_privacy_registry: LanePrivacyRegistry,
     /// Optional lane compliance engine snapshot for this transaction.
     pub lane_compliance: Option<Arc<LaneComplianceEngine>>,
     /// Fraud monitoring configuration snapshot for this transaction.
@@ -14505,6 +14555,20 @@ impl<'block, 'state> StateTransaction<'block, 'state> {
         }
     }
 
+    /// Borrow the exact ordinary predecessor fee policy without a local mirror.
+    /// Pending changes and applied sibling transactions cannot alter this borrow.
+    /// # Errors
+    /// Missing original fees remain invalid; genesis uses its explicit installed source.
+    pub(crate) fn root_fee_policy(
+        &self,
+    ) -> Result<&iroha_data_model::block::consensus::RootFeePolicy, &'static str> {
+        self.world
+            .parameters
+            .get_before_block()
+            .root_fees()
+            .ok_or("original committed root fee policy is absent")
+    }
+
     /// Authenticate an actual genesis assignment against its retained original source.
     /// A height-one header and an equal transaction-local value cannot create this authority.
     pub(crate) fn require_genesis_staking_parameter(
@@ -14745,7 +14809,7 @@ pub struct StateQueryView<'state> {
     pub world: WorldView<'state>,
     /// Original undo value captured with current Parameters in the same publication generation.
     /// `None` denotes an unchanged latest block, not missing policy history.
-    parameters_before_latest_block: CellView<'state, Option<StateParameters>>,
+    parameters_before_latest_block: CellView<'state, Option<RetainedStateParameters>>,
     /// Snapshot of committed block hashes.
     pub block_hashes: BlockHashesView<'state>,
     /// Topology used to commit latest block.
@@ -15432,16 +15496,16 @@ fn bounded_global_committee_size(
     let configured = world
         .sumeragi_npos_parameters()?
         .and_then(|params| usize::try_from(params.max_validators()).ok())
-        .unwrap_or(iroha_data_model::block::consensus::MAX_VALIDATORS_PER_HEIGHT);
+        .unwrap_or(iroha_model_base::topology::MAX_VALIDATORS_PER_HEIGHT);
     let capped = available_candidates
         .min(configured)
-        .min(iroha_data_model::block::consensus::MAX_VALIDATORS_PER_HEIGHT);
-    if capped < iroha_data_model::block::consensus::MIN_VALIDATORS_PER_HEIGHT {
+        .min(iroha_model_base::topology::MAX_VALIDATORS_PER_HEIGHT);
+    if capped < iroha_model_base::topology::MIN_VALIDATORS_PER_HEIGHT {
         return Ok(None);
     }
     let committee_size = capped - (capped - 1) % 3;
     Ok(
-        iroha_data_model::block::consensus::is_valid_committee_size(committee_size)
+        iroha_model_base::topology::is_valid_committee_size(committee_size)
             .then_some(committee_size),
     )
 }
@@ -15504,6 +15568,11 @@ pub(crate) fn epoch_validator_candidate_peer_ids_from_world<I>(
 where
     I: IntoIterator<Item = PeerId>,
 {
+    // This World is the caller's immutable selection cut. An uninitialized
+    // policy cannot elect validators, and no local recipe can supply one.
+    let Ok(monetary) = world.parameters().require_staking_policy() else {
+        return Vec::new();
+    };
     let mut records: Vec<_> = world
         .public_lane_validators()
         .iter()
@@ -15567,7 +15636,7 @@ where
             }
             let Ok(meets_min) = crate::smartcontracts::isi::staking::meets_min_stake(
                 &record.self_stake,
-                &nexus.staking.min_validator_stake,
+                &monetary.min_validator_stake,
             ) else {
                 continue;
             };
@@ -15628,7 +15697,7 @@ where
         .filter_map(|record| {
             let Ok(meets_min) = crate::smartcontracts::isi::staking::meets_min_stake(
                 &record.self_stake,
-                &nexus.staking.min_validator_stake,
+                &monetary.min_validator_stake,
             ) else {
                 return None;
             };
@@ -15651,6 +15720,35 @@ where
     candidates.sort();
     candidates.dedup();
     candidates
+}
+
+/// Author an explicit pre-chain monetary threshold for a component fixture.
+#[cfg(test)]
+fn set_staking_minimum_for_test(world: &mut World, minimum: u64) {
+    let mut policy = world
+        .parameters
+        .view()
+        .staking_policy()
+        .cloned()
+        .unwrap_or_else(|| {
+            crate::sumeragi::test_chain::staking_fixture_policy(
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                    iroha_model_base::domain::DomainId::parse_fully_qualified(
+                        "universal.universal",
+                    )
+                    .expect("fixture domain"),
+                    "xor".parse().expect("fixture currency"),
+                ),
+            )
+        });
+    policy.min_validator_stake = minimum.into();
+    world
+        .set_parameter_for_testing(iroha_data_model::parameter::Parameter::Custom(
+            policy
+                .into_custom_parameter()
+                .expect("authored fixture monetary policy"),
+        ))
+        .expect("funded fixture monetary policy");
 }
 
 /// Resolve an epoch validator committee using one already-authenticated seed.
@@ -16326,6 +16424,7 @@ mod stake_snapshot_tests {
         assert_eq!(mismatched.deactivation_height, None);
     }
     include!("state/restored_staking_owner_tests.rs");
+    include!("state/retained_staking_authority_tests.rs");
     #[test]
     fn public_lane_snapshot_ignores_stale_geometry_for_removed_catalog_lane() {
         let kura = crate::kura::Kura::blank_kura_for_testing();
@@ -16346,7 +16445,7 @@ mod stake_snapshot_tests {
         .expect("stale geometry catalog");
         {
             let nexus = state.nexus.get_mut();
-            nexus.staking.min_validator_stake = 1_u64.into();
+            set_staking_minimum_for_test(&mut state.world, 1);
             nexus.staking.public_validator_mode = LaneValidatorMode::StakeElected;
             nexus.lane_catalog = LaneCatalog::new(
                 NonZeroU32::new(1).expect("nonzero lane count"),
@@ -16409,10 +16508,7 @@ mod stake_snapshot_tests {
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
         let mut state = State::new(World::default(), std::sync::Arc::clone(&kura), query);
-        {
-            let nexus = state.nexus.get_mut();
-            nexus.staking.min_validator_stake = 500_u64.into();
-        }
+        set_staking_minimum_for_test(&mut state.world, 500);
         let active_kp = crate::state::checked_keypair();
         let exited_kp = crate::state::checked_keypair();
         let extra_active_keypairs: Vec<_> =
@@ -16463,10 +16559,7 @@ mod stake_snapshot_tests {
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
         let mut state = State::new(World::default(), std::sync::Arc::clone(&kura), query);
-        {
-            let nexus = state.nexus.get_mut();
-            nexus.staking.min_validator_stake = 100_u64.into();
-        }
+        set_staking_minimum_for_test(&mut state.world, 100);
         let active_kp = crate::state::checked_keypair();
         let stale_kp = crate::state::checked_keypair();
         let extra_active_keypairs: Vec<_> =
@@ -16520,10 +16613,7 @@ mod stake_snapshot_tests {
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
         let mut state = State::new(World::default(), std::sync::Arc::clone(&kura), query);
-        {
-            let nexus = state.nexus.get_mut();
-            nexus.staking.min_validator_stake = 100_u64.into();
-        }
+        set_staking_minimum_for_test(&mut state.world, 100);
         let present_kp = crate::state::checked_keypair();
         let missing_kp = crate::state::checked_keypair();
         let extra_present_keypairs: Vec<_> =
@@ -16574,7 +16664,7 @@ mod stake_snapshot_tests {
         let mut state = State::new(World::default(), std::sync::Arc::clone(&kura), query);
         {
             let nexus = state.nexus.get_mut();
-            nexus.staking.min_validator_stake = 1_u64.into();
+            set_staking_minimum_for_test(&mut state.world, 1);
             nexus.staking.max_validators = NonZeroU32::new(4).expect("nonzero validator limit");
         }
         let validator_keys: Vec<_> = (0..4).map(|_| crate::state::checked_keypair()).collect();
@@ -16688,10 +16778,7 @@ mod stake_snapshot_tests {
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
         let mut state = State::new(World::default(), std::sync::Arc::clone(&kura), query);
-        {
-            let nexus = state.nexus.get_mut();
-            nexus.staking.min_validator_stake = 100_u64.into();
-        }
+        set_staking_minimum_for_test(&mut state.world, 100);
         let keypairs: Vec<KeyPair> = (0..4).map(|_| crate::state::checked_keypair()).collect();
         let mut wb = state.world.block();
         {
@@ -16734,10 +16821,7 @@ mod stake_snapshot_tests {
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
         let mut state = State::new(World::default(), std::sync::Arc::clone(&kura), query);
-        {
-            let nexus = state.nexus.get_mut();
-            nexus.staking.min_validator_stake = 100_u64.into();
-        }
+        set_staking_minimum_for_test(&mut state.world, 100);
         let restricted_dataspace = DataSpaceId::new(1);
         let lane_catalog = LaneCatalog::new(
             NonZeroU32::new(2).expect("nonzero lane count"),
@@ -16857,7 +16941,7 @@ mod stake_snapshot_tests {
             nexus.lane_catalog = lane_catalog.clone();
             nexus.lane_config = DerivedLaneConfig::from_catalog(&lane_catalog);
             nexus.staking.public_validator_mode = LaneValidatorMode::StakeElected;
-            nexus.staking.min_validator_stake = 1_u64.into();
+            set_staking_minimum_for_test(&mut state.world, 1);
             nexus.staking.max_validators = NonZeroU32::new(4).expect("nonzero validator limit");
         }
         let peer_a_key = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
@@ -16941,10 +17025,7 @@ mod stake_snapshot_tests {
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
         let mut state = State::new(World::default(), std::sync::Arc::clone(&kura), query);
-        {
-            let nexus = state.nexus.get_mut();
-            nexus.staking.min_validator_stake = 100_u64.into();
-        }
+        set_staking_minimum_for_test(&mut state.world, 100);
         let live_kp = crate::state::checked_keypair();
         let expired_kp = crate::state::checked_keypair();
         let extra_live_keypairs: Vec<_> = (0..3).map(|_| crate::state::checked_keypair()).collect();
@@ -17008,10 +17089,7 @@ mod stake_snapshot_tests {
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
         let mut state = State::new(World::default(), std::sync::Arc::clone(&kura), query);
-        {
-            let nexus = state.nexus.get_mut();
-            nexus.staking.min_validator_stake = 1_u64.into();
-        }
+        set_staking_minimum_for_test(&mut state.world, 1);
         let kp = crate::state::checked_keypair();
         let validator = DMAccountId::of(kp.public_key().clone());
         let mut wb = state.world.block();
@@ -17037,10 +17115,7 @@ mod stake_snapshot_tests {
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
         let mut state = State::new(World::default(), std::sync::Arc::clone(&kura), query);
-        {
-            let nexus = state.nexus.get_mut();
-            nexus.staking.min_validator_stake = 1_u64.into();
-        }
+        set_staking_minimum_for_test(&mut state.world, 1);
         let restricted_dataspace = DataSpaceId::new(1);
         let lane_catalog = LaneCatalog::new(
             NonZeroU32::new(2).expect("nonzero lane count"),
@@ -17122,7 +17197,7 @@ mod stake_snapshot_tests {
         let query = crate::query::store::LiveQueryStore::start_test();
         let mut state = State::new(World::default(), std::sync::Arc::clone(&kura), query);
         let mut nexus = state.nexus_snapshot();
-        nexus.staking.min_validator_stake = 1_u64.into();
+        set_staking_minimum_for_test(&mut state.world, 1);
         nexus.staking.public_validator_mode = LaneValidatorMode::AdminManaged;
         nexus.staking.restricted_validator_mode = LaneValidatorMode::AdminManaged;
         state
@@ -17147,7 +17222,7 @@ mod stake_snapshot_tests {
         let mut state = State::new(World::default(), std::sync::Arc::clone(&kura), query);
         {
             let nexus = state.nexus.get_mut();
-            nexus.staking.min_validator_stake = 1_u64.into();
+            set_staking_minimum_for_test(&mut state.world, 1);
             nexus.staking.public_validator_mode = LaneValidatorMode::StakeElected;
         }
         let mut wb = state.world.block();
@@ -17175,7 +17250,7 @@ mod stake_snapshot_tests {
         let mut state = State::new(World::default(), std::sync::Arc::clone(&kura), query);
         {
             let nexus = state.nexus.get_mut();
-            nexus.staking.min_validator_stake = 1_000_u64.into();
+            set_staking_minimum_for_test(&mut state.world, 1_000);
             nexus.staking.public_validator_mode = LaneValidatorMode::StakeElected;
         }
         let keypairs: Vec<_> = (0..4).map(|_| crate::state::checked_keypair()).collect();
@@ -17209,10 +17284,15 @@ mod sumeragi_timing_tests {
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), Arc::clone(&kura), query);
-        let mut parameters = state.world.parameters.block();
+        let mut parameters = parameter_cell_block_for_testing(&state.world).unwrap();
         let mut consensus = parameters.sumeragi().clone();
         consensus.block_cadence_ms = NonZeroU64::new(1_000).expect("test cadence must be non-zero");
-        parameters.set_sumeragi(consensus);
+        set_sumeragi_cell_for_testing(
+            &mut parameters,
+            consensus,
+            state.world.sccp_committee_generations.allocation_budget(),
+        )
+        .unwrap();
         parameters.commit();
         assert_eq!(state.sumeragi_block_cadence(), Duration::from_secs(1));
     }
@@ -19813,8 +19893,16 @@ impl World {
         ) = {
             let reverted_citizens = self.citizens.block_and_revert();
             let reverted_locks = self.governance_locks.block_and_revert();
-            let reverted_parameters = self.parameters.block_and_revert();
-            let previous_policy = reverted_parameters.get().block();
+            // Exclusive &mut World ownership prevents publication while these
+            // immutable EBR views join the current and retained predecessor.
+            // An absent predecessor means unchanged current, exactly as Replace.
+            let current_parameters = self.parameters.view();
+            let reverted_parameters = self.parameters.predecessor_view();
+            let previous_policy = reverted_parameters
+                .get()
+                .as_ref()
+                .unwrap_or_else(|| current_parameters.get())
+                .block();
             previous_policy
                 .fastpq_source()
                 .validate(previous_policy.execution_output())?;
@@ -20905,7 +20993,7 @@ macro_rules! world_ro_accessors {
     (configuration, $mode:ident) => {
         world_ro_accessors!(@items $mode;
             /// Committed parameters and their validated execution projections.
-            cell_ref parameters: StateParameters;
+            cell_ref parameters: RetainedStateParameters;
             /// Lag-2 Sumeragi height-configuration schedule (read-only).
             cell_ref consensus_schedule: crate::sumeragi::schedule::RetainedConsensusSchedule;
             /// Dataspace alias catalog used to qualify domain-scoped aliases.
@@ -23069,19 +23157,48 @@ impl<'block> WorldTransaction<'block, '_> {
 impl WorldTransaction<'_, '_> {
     /// Update the executor data model, purge permissions it no longer declares, and synchronize
     /// derived parameter defaults.
-    pub fn apply_executor_data_model(&mut self, mut executor_data_model: ExecutorDataModel) {
+    ///
+    /// # Errors
+    /// Returns the original admission refusal or invalid parameter before any
+    /// model, permission or parameter mutation. A caller must retain a local
+    /// refusal as unfinished execution rather than a completed rejection.
+    pub fn apply_executor_data_model(
+        &mut self,
+        mut executor_data_model: ExecutorDataModel,
+    ) -> Result<
+        (),
+        crate::execution_attempt::ExecutionAttemptError<
+            crate::pipeline_gas_policy::ParameterIngressError,
+        >,
+    > {
+        if executor_data_model
+            .parameters()
+            .iter()
+            .any(|(id, value)| id != value.id())
+        {
+            return Err(crate::execution_attempt::ExecutionAttemptError::Rejected(
+                crate::pipeline_gas_policy::ParameterIngressError::ExecutorParameterIdentity,
+            ));
+        }
         // Consensus-owned parameters are written only by a validated
         // `SetParameter`; an executor data model can neither declare, replace
         // nor retire them.
-        let consensus_parameters: Vec<_> = executor_data_model
-            .parameters
-            .keys()
-            .filter(|id| is_consensus_owned_custom_parameter(id))
-            .cloned()
-            .collect();
-        for id in &consensus_parameters {
-            executor_data_model.parameters.remove(id);
-        }
+        let pool = self.sccp_committee_generations.allocation_budget();
+        let successor = crate::pipeline_gas_policy::ParameterIngressAttemptError::observe(|| {
+            executor_data_model
+                .parameters
+                .try_retain_authoring(|parameter| {
+                    !is_consensus_owned_custom_parameter(parameter.id())
+                })
+                .map_err(ParameterIngressError::from)?;
+            let prepared = self.prepare_parameters_from_executor(&executor_data_model)?;
+            prepared
+                .into_successor(self.parameters.get(), pool)
+                .map_err(|(_prepared, original)| original.into())
+        })
+        .map_err(|original| parameter_ingress_attempt_error(original, |original| original))?;
+        // Preparation/refusal above leaves every World owner untouched. The
+        // existing permission-table mutation remains its separate storage owner.
         let declared_permissions = executor_data_model.permissions().clone();
         let permission_is_declared = |permission: &Permission| {
             declared_permissions
@@ -23118,8 +23235,9 @@ impl WorldTransaction<'_, '_> {
                     .retain(|permission, _| permission_is_declared(permission));
             }
         }
-        let prev = core::mem::replace(self.executor_data_model.get_mut(), executor_data_model);
-        self.update_parameters_from_executor(&prev);
+        *self.executor_data_model.get_mut() = executor_data_model;
+        *self.parameters.get_mut() = successor;
+        Ok(())
     }
     fn add_account_alias_to_reverse_index(&mut self, account_id: &AccountId, label: &AccountAlias) {
         if self.account_aliases_by_account.get(account_id).is_none() {
@@ -23310,79 +23428,56 @@ impl WorldTransaction<'_, '_> {
         self.refresh_account_scope_directory_entry(account_id);
         labels
     }
-    fn update_parameters_from_executor(&mut self, prev_executor_data_model: &ExecutorDataModel) {
-        let new_model = self.executor_data_model.get().clone();
-        let prev_parameters = prev_executor_data_model.parameters();
-        let new_parameters = new_model.parameters();
-        if prev_parameters == new_parameters {
-            return;
-        }
-        let prev_ids: BTreeSet<_> = prev_parameters
-            .keys()
-            .filter(|id| !is_consensus_owned_custom_parameter(id))
-            .cloned()
-            .collect();
-        let new_ids: BTreeSet<_> = new_parameters
-            .keys()
-            .filter(|id| !is_consensus_owned_custom_parameter(id))
-            .cloned()
-            .collect();
-        let removed: Vec<_> = prev_ids.difference(&new_ids).cloned().collect();
-        let added: Vec<_> = new_ids.difference(&prev_ids).cloned().collect();
-        let shared: Vec<_> = prev_ids.intersection(&new_ids).cloned().collect();
-        let params = self.parameters.get_mut();
-        for id in &removed {
-            params
-                .remove_custom_parameter(id)
-                .expect("executor reconciliation excludes mandatory committed policies");
-        }
-        if !removed.is_empty() {
-            iroha_logger::trace!(
-                ?removed,
-                "Removed custom parameters no longer present in the executor data model"
-            );
-        }
-        for id in &added {
-            if let Some(default_value) = new_parameters.get(id) {
-                params
-                    .set_parameter(iroha_data_model::parameter::Parameter::Custom(
-                        default_value.clone(),
-                    ))
-                    .expect("executor parameters exclude committed fee policy");
-            }
-        }
-        if !added.is_empty() {
-            iroha_logger::trace!(
-                ?added,
-                "Inserted new custom parameters introduced by the executor data model"
-            );
-        }
-        for id in &shared {
-            let Some(old_default) = prev_parameters.get(id) else {
+    /// Reconcile borrowed sorted defaults into a complete unpublished graph.
+    /// Consensus-owned custom entries are excluded even if a previous executor
+    /// model contained them. Explicit non-default chain values remain retained.
+    fn prepare_parameters_from_executor(
+        &self,
+        new_model: &ExecutorDataModel,
+    ) -> Result<
+        crate::pipeline_gas_policy::PreparedParameters,
+        crate::pipeline_gas_policy::ParameterIngressError,
+    > {
+        let pool = self.sccp_committee_generations.allocation_budget();
+        let predecessor = self.parameters.get();
+        let old_defaults = self.executor_data_model.get().parameters();
+        let new_defaults = new_model.parameters();
+        let mut candidate = predecessor.clone();
+        // Walk the existing maps by reference: no cloned model, ID set, or
+        // unadmitted intermediate CustomParameter is required.
+        for id in old_defaults.keys() {
+            if is_consensus_owned_custom_parameter(id) || new_defaults.contains_key(id) {
                 continue;
+            }
+            let prepared = candidate.prepare_custom_removal(id, pool)?;
+            candidate = prepared
+                .into_successor(&candidate, pool)
+                .map_err(|(_prepared, original)| original)?;
+        }
+        for (id, next) in new_defaults {
+            if is_consensus_owned_custom_parameter(id) {
+                continue;
+            }
+            let replace = match old_defaults.get(id) {
+                None => true,
+                Some(previous) => {
+                    previous != next
+                        && candidate
+                            .custom()
+                            .get(id)
+                            .is_none_or(|current| current == previous)
+                }
             };
-            let Some(new_default) = new_parameters.get(id) else {
-                continue;
-            };
-            if old_default == new_default {
-                continue;
-            }
-            let should_update = params
-                .custom
-                .get(id)
-                .is_none_or(|current_value| current_value == old_default);
-            if should_update {
-                params
-                    .set_parameter(iroha_data_model::parameter::Parameter::Custom(
-                        new_default.clone(),
-                    ))
-                    .expect("executor parameters exclude committed fee policy");
-                iroha_logger::trace!(
-                    ?id,
-                    "Updated custom parameter to executor's new default value"
-                );
+            if replace {
+                let prepared = candidate.prepare_custom_parameter(next, pool)?;
+                candidate = prepared
+                    .into_successor(&candidate, pool)
+                    .map_err(|(_prepared, original)| original)?;
             }
         }
+        predecessor
+            .prepare_admitted(candidate, pool)
+            .map_err(|(_candidate, original)| original.into())
     }
     /// Ensure metadata entry exists for the given asset and return a mutable reference to it.
     ///
@@ -26011,13 +26106,6 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             mutably_borrowed: BTreeSet::new(),
         }
     }
-    /// Provides mutable access to on-chain parameters for direct test-state seeding.
-    #[doc(hidden)]
-    pub fn parameters_mut_for_testing(
-        &mut self,
-    ) -> &mut CellTransaction<'block, 'world, StateParameters> {
-        &mut self.parameters
-    }
     /// Test helper: get mutable access to stored proof records for direct seeding.
     pub fn proofs_mut_for_testing(
         &mut self,
@@ -26123,18 +26211,30 @@ impl State {
         if self.world.parameters.view().get().root_fees().is_some() {
             return;
         }
-        let mut fees = self.nexus.get_mut().fees.clone();
+        let mut fees = iroha_config::parameters::defaults::nexus::fees::genesis_policy();
         fees.base_fee = Quantity::zero();
         fees.per_byte_fee = Quantity::zero();
         fees.per_instruction_fee = Quantity::zero();
         fees.per_gas_unit_fee = Quantity::zero();
-        let mut parameters = self.world.parameters.block();
-        parameters
-            .set_parameter(iroha_data_model::parameter::Parameter::Custom(
-                fees.into_custom_parameter()
-                    .expect("explicit free test policy"),
-            ))
-            .expect("valid free test policy");
+        // One funded physical acquisition kernel serves both this explicit
+        // constructor and the test-only parameter Cell entry. No runtime read
+        // receives a default or local monetary overlay.
+        let budget = self.world.sccp_committee_generations.allocation_budget();
+        let mut parameters =
+            parameter_acquisition::original_block(&self.world, mv::BlockMode::Ordinary)
+                .expect("original funded fixture parameter Cell");
+        let parameter = iroha_data_model::parameter::Parameter::Custom(
+            fees.into_custom_parameter()
+                .expect("explicit free test policy"),
+        );
+        let prepared = parameters
+            .get()
+            .prepare_parameter(&parameter, budget)
+            .expect("funded complete free test policy");
+        let next = prepared
+            .into_successor(parameters.get(), budget)
+            .unwrap_or_else(|_| panic!("fixture successor binds original parameters"));
+        *parameters.get_mut() = next;
         parameters.commit();
     }
     /// Snapshot the current Nexus configuration.
@@ -26163,9 +26263,7 @@ impl State {
         let runtime = self.canonical_runtime.view();
         let parameters = self.world.parameters.view();
         let projection = runtime_catalog_from_parameters(parameters.get()).and_then(|catalog| {
-            runtime
-                .nexus_projection_with_catalog(&self.nexus.read(), catalog.as_ref())
-                .map(|nexus| crate::pipeline_gas_policy::with_root_fees(nexus, parameters.get()))
+            runtime.nexus_projection_with_catalog(&self.nexus.read(), catalog.as_ref())
         });
         if !is_stable_state_view_generation(generation_before, self.state_view_generation()) {
             return Ok(None);
@@ -27955,7 +28053,7 @@ impl State {
             da_pin_intents: PublicationRwLock::try_new(DaPinStore::default(), &execution_budget).map_err(StateStorageAdmissionError::World)?,
             lane_manifests: PublicationRwLock::try_new(Arc::new(LaneManifestRegistry::empty()), &execution_budget).map_err(StateStorageAdmissionError::World)?,
             provisional_emergency_lane_manifests_consumed: false,
-            lane_privacy_registry: PublicationRwLock::try_new(Arc::new(LanePrivacyRegistry::empty()), &execution_budget).map_err(StateStorageAdmissionError::World)?,
+            lane_privacy_registry: PublicationRwLock::try_new(LanePrivacyRegistry::empty(), &execution_budget).map_err(StateStorageAdmissionError::World)?,
             lane_compliance: parking_lot::RwLock::new(None),
             da_index_hydration_fence: parking_lot::Mutex::new(()),
             da_indexes_hydrated: PublicationRwLock::try_new(None, &execution_budget).map_err(StateStorageAdmissionError::World)?,
@@ -31275,7 +31373,7 @@ impl State {
     /// policy, so one attempt cannot join policy and limits from different publications.
     #[track_caller]
     #[must_use]
-    pub fn transaction_admission_parameters(&self) -> CellView<'_, StateParameters> {
+    pub fn transaction_admission_parameters(&self) -> CellView<'_, RetainedStateParameters> {
         self.world.parameters.view()
     }
     #[cfg(test)]
@@ -31620,7 +31718,6 @@ impl State {
                 lineage: _,
                 samples: _,
                 manifests: lane_manifests,
-                privacy: _,
             } = projection;
             world.dataspace_catalog = nexus.dataspace_catalog.clone();
             let total_wait = total_start.elapsed();
@@ -31931,23 +32028,27 @@ impl State {
                 "provisional emergency lane manifests require the one-shot pre-authentication phase",
             ));
         }
-        self.provisional_emergency_lane_manifests_consumed = true;
         self.install_unchecked_lane_manifests_in_publication(&Arc::new(
             LaneManifestRegistry::provisional_empty_for_emergency_fast_startup(),
-        ));
+        ))?;
+        self.provisional_emergency_lane_manifests_consumed = true;
         Ok(())
     }
     /// Install an arbitrary registry for isolated tests and fixture generation.
     /// This method is absent from ordinary shipping binaries.
     #[cfg(any(test, feature = "iroha-core-tests"))]
-    pub fn install_lane_manifests_for_testing(&self, manifests: &LaneManifestRegistryHandle) {
-        self.install_unchecked_lane_manifests_in_publication(manifests);
+    pub fn install_lane_manifests_for_testing(&self, manifests: &LaneManifestRegistryHandle) -> LanePrivacyRegistry {
+        self.install_unchecked_lane_manifests_in_publication(manifests)
+            .expect("fixture privacy projection fits the original State pool")
     }
     fn install_unchecked_lane_manifests_in_publication(
         &self,
         manifests: &LaneManifestRegistryHandle,
-    ) {
-        let privacy = Arc::new(LanePrivacyRegistry::from_manifest_registry(manifests));
+    ) -> Result<LanePrivacyRegistry, LaneLifecycleError> {
+        let pool = self.ivm_execution_budget();
+        pool.with_deferred_refund_notifications(|_| {
+        let privacy = LanePrivacyRegistry::try_from_manifest_registry(manifests, &pool)
+            .map_err(LaneLifecycleError::ParameterDeferred)?;
         let manifests = Arc::clone(manifests);
         let mut publication_notice = self.state_view_publication();
         let mut releases = LaneLifecycleReleases::new(self);
@@ -31956,16 +32057,18 @@ impl State {
         let publication = publication_notice.begin();
         self.install_prepared_lane_manifests_in_publication(
             manifests,
-            privacy,
+            privacy.clone(),
             &publication,
             &mut releases,
         );
+        Ok(privacy)
+        })
     }
     /// Publish manifest and privacy projections inside one existing State generation.
     fn install_prepared_lane_manifests_in_publication(
         &self,
         manifests: LaneManifestRegistryHandle,
-        privacy: LanePrivacyRegistryHandle,
+        privacy: LanePrivacyRegistry,
         _publication: &StateViewGenerationWriteGuard<'_>,
         releases: &mut LaneLifecycleReleases<'_>,
     ) {
@@ -32404,12 +32507,15 @@ impl State {
             .map(|candidate| candidate.id)
             .collect();
         let canonical_owner = stake_source_lanes.iter().next().copied();
+        let Ok(monetary) = world.parameters().require_staking_policy() else {
+            return Vec::new();
+        };
         let Some(stake_candidates) = lane_authority::live_stake_candidates_for_lanes(
             world,
             lane_id,
             &stake_source_lanes,
             canonical_owner,
-            &nexus.staking.min_validator_stake,
+            &monetary.min_validator_stake,
             nexus.staking.max_validators.get(),
             proposal_height,
         ) else {
@@ -32657,13 +32763,19 @@ impl State {
     /// parameters may only change through canonical execution, never local startup configuration.
     pub fn set_sumeragi_parameters(&mut self, sumeragi: impl Into<self::SumeragiPolicyConfig>) {
         let policy = sumeragi.into();
-        let mut params_block = self.world.parameters.block();
+        let mut params_block =
+            parameter_cell_block_for_testing(&self.world).expect("fixture parameter acquisition");
         let mut sys = params_block.sumeragi.clone();
         sys.key_activation_lead_blocks = policy.key_activation_lead_blocks;
         sys.key_overlap_grace_blocks = policy.key_overlap_grace_blocks;
         sys.key_expiry_grace_blocks = policy.key_expiry_grace_blocks;
         sys.key_allowed_algorithms = policy.key_allowed_algorithms.iter().copied().collect();
-        params_block.set_sumeragi(sys);
+        set_sumeragi_cell_for_testing(
+            &mut params_block,
+            sys,
+            self.world.sccp_committee_generations.allocation_budget(),
+        )
+        .expect("valid fixture consensus policy");
         params_block.commit();
     }
     /// Verify that empty-state replay can recover the configured-primary geometry.
@@ -33115,18 +33227,9 @@ impl State {
             &dataspace_aliases,
             &dataspace_ids,
         )?;
-        if let Some(params) = self.world.view().sumeragi_npos_parameters()? {
-            // Staking configuration still has its existing authenticated XOR pin.
-            let selector = &nexus.staking.stake_asset_id;
-            if selector != "xor#universal"
-                && AssetDefinitionId::parse_address_literal(selector)
-                    .ok()
-                    .as_ref()
-                    != Some(&params.xor_asset_definition_id)
-            {
-                return Err(LaneLifecycleError::NexusStakeAssetIdInvalid);
-            }
-        }
+        // Local staking settings contain only validator modes and committee capacity.
+        // Monetary identity and bounds stay in the original committed parameter owner;
+        // this catalog/configuration update must neither select nor replace them.
         for dataspace_id in nexus.dataspace_fee_sponsor_program_ids.keys() {
             if !dataspace_ids.contains(dataspace_id) {
                 return Err(
@@ -33689,6 +33792,8 @@ impl State {
         refresh_axt_policies: bool,
         allow_autoscale_managed_changes: bool,
     ) -> core::result::Result<(), LaneLifecycleError> {
+        let pool = self.ivm_execution_budget();
+        pool.with_deferred_refund_notifications(|_| {
         const STATE_VIEW_LOCK_THRESHOLD: Duration = Duration::from_millis(10);
         let mut publication_notice = self.state_view_publication();
         let mut releases = LaneLifecycleReleases::new(self);
@@ -33790,9 +33895,10 @@ impl State {
                 )?;
                 (lifecycle_update, updated_lane_manifests)
             };
-            let updated_lane_privacy = Arc::new(LanePrivacyRegistry::from_manifest_registry(
+            let updated_lane_privacy = LanePrivacyRegistry::try_from_manifest_registry(
                 &updated_lane_manifests,
-            ));
+                &self.ivm_execution_budget(),
+            ).map_err(LaneLifecycleError::ParameterDeferred)?;
             let active_reset_lanes = Self::active_reset_lanes(
                 &lifecycle_update.lanes_to_reset,
                 &lifecycle_update.updated_lane_config,
@@ -33919,6 +34025,7 @@ impl State {
             }
         }
         Ok(())
+        })
     }
     /// Apply an internally managed autoscale lifecycle plan in a test fixture.
     ///
@@ -34206,22 +34313,20 @@ impl State {
         expected_update.previous_dataspace_catalog = nexus.dataspace_catalog.clone();
         expected_update.updated_dataspace_catalog = prospective_nexus.dataspace_catalog.clone();
         let committed_lane_manifests = if let Some(runtime) = &pending.runtime_catalog {
-            Arc::new(
-                releases
-                    .manifests
-                    .try_read_or_wait()
-                    .map_err(|wait| LaneLifecycleError::PublicationBusy {
-                        field: "lane_manifests",
-                        wait,
-                    })?
-                    .with_runtime_additions(
-                        &runtime.manifests,
-                        &expected_update.updated_catalog,
-                        &prospective_nexus.dataspace_catalog,
-                        &nexus.governance,
-                    )
-                    .map_err(runtime_catalog_invalid)?,
-            )
+            // Publication contention retains its own wait owner outside codec observation.
+            let baseline = releases.manifests.try_read_or_wait().map_err(|wait| {
+                LaneLifecycleError::PublicationBusy {
+                    field: "lane_manifests",
+                    wait,
+                }
+            })?;
+            Arc::new(runtime_catalog_manifest_registry(
+                baseline.as_ref(),
+                &runtime.manifests,
+                &expected_update.updated_catalog,
+                &prospective_nexus.dataspace_catalog,
+                &nexus.governance,
+            )?)
         } else {
             rebind_lane_manifests_for_lifecycle(
                 releases
@@ -36877,6 +36982,7 @@ pub(crate) fn compute_genesis_confidential_policy_hash(
 /// of these identifiers, or stops declaring it, leaves the committed value
 /// untouched. Identifier families with a reserved prefix are covered by
 /// [`is_consensus_owned_custom_parameter`].
+#[cfg(test)]
 pub(crate) fn consensus_owned_custom_parameter_ids()
 -> Vec<iroha_data_model::parameter::CustomParameterId> {
     use iroha_data_model::{
@@ -36921,18 +37027,50 @@ pub(crate) fn consensus_owned_custom_parameter_ids()
     ids
 }
 /// Whether `id` names a custom parameter that only a validated `SetParameter`
-/// may write: one of [`consensus_owned_custom_parameter_ids`], or a member of
+/// may write: a fixed typed protocol identifier, or a member of
 /// a reserved identifier family (alias dataspace bootstrap grants, Hijiri
 /// account risks).
 pub(crate) fn is_consensus_owned_custom_parameter(
     id: &iroha_data_model::parameter::CustomParameterId,
 ) -> bool {
+    use iroha_data_model::{
+        account::admission::AccountAdmissionPolicy,
+        block::consensus::{PublicLaneStakingPolicy, RootFeePolicy},
+        da::ingest::DaIngestAdmissionPolicyV1,
+        hijiri::HijiriParametersV1,
+        isi::settlement::FxCorridorPolicyRegistry,
+        nexus::{LaneLifecycleParameterV1, NexusCatalogTransitionV1, NexusRuntimeCatalogV1},
+        sumeragi_lanes::SumeragiLanePolicy,
+        validation_fee::ValidationFeePolicyRegistryV1,
+    };
+    let name = id.name().as_ref();
+    // Borrow static identity bytes before any admission attempt. In particular,
+    // do not construct typed IDs or lazily initialize their heap backing here.
     iroha_data_model::alias_setup::AliasDataspaceBootstrapGrantV1::is_parameter_id(id)
-        || id
-            .name()
-            .as_ref()
-            .starts_with(iroha_data_model::hijiri::HIJIRI_ACCOUNT_RISK_PARAMETER_PREFIX_V1)
-        || consensus_owned_custom_parameter_ids().contains(id)
+        || name.starts_with(iroha_data_model::hijiri::HIJIRI_ACCOUNT_RISK_PARAMETER_PREFIX_V1)
+        || [
+            SumeragiNposParameters::PARAMETER_ID_STR,
+            crate::zk_validity_policy::ZkValidityPolicyV1::PARAMETER_ID_STR,
+            crate::pipeline_validity_policy::PipelineValidityPolicyV1::PARAMETER_ID_STR,
+            crate::fraud_admission_policy::FraudAdmissionPolicyV1::PARAMETER_ID_STR,
+            iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::PARAMETER_ID_STR,
+            SumeragiLanePolicy::PARAMETER_ID_STR,
+            DaIngestAdmissionPolicyV1::PARAMETER_ID_STR,
+            NexusRuntimeCatalogV1::PARAMETER_ID_STR,
+            NexusCatalogTransitionV1::PARAMETER_ID_STR,
+            LaneLifecycleParameterV1::PARAMETER_ID_STR,
+            "validator_committee_operation_v1",
+            HijiriParametersV1::PARAMETER_ID_STR,
+            "private_dataspace_admission_v1",
+            FxCorridorPolicyRegistry::PARAMETER_ID_STR,
+            ValidationFeePolicyRegistryV1::PARAMETER_ID_STR,
+            AccountAdmissionPolicy::PARAMETER_ID_STR,
+            RootFeePolicy::PARAMETER_ID_STR,
+            PublicLaneStakingPolicy::PARAMETER_ID_STR,
+            "parliament_candidate_testing_v1",
+            iroha_data_model::sorafs::reputation::REPUTATION_FINALIZED_ARCHIVE_RETENTION_REQUEST_PARAMETER_ID_V1,
+        ].contains(&name)
+        || crate::pipeline_gas_policy::PARAMETER_NAMES.contains(&name)
 }
 
 #[cfg(test)]
@@ -37001,6 +37139,21 @@ mod consensus_owned_parameter_tests {
         assert!(!is_consensus_owned_custom_parameter(&own));
     }
 
+    #[test]
+    fn consensus_identity_classification_makes_no_native_allocation_request() {
+        let ids = protected_ids();
+        let unrelated: CustomParameterId = "executor_owned_setting".parse().unwrap();
+        assert_eq!(
+            crate::test_allocations::allocations_during(|| {
+                for id in &ids {
+                    assert!(is_consensus_owned_custom_parameter(id));
+                }
+                assert!(!is_consensus_owned_custom_parameter(&unrelated));
+            }),
+            0
+        );
+    }
+
     fn state_over(world: World) -> State {
         State::new_for_testing(
             world,
@@ -37039,9 +37192,8 @@ mod consensus_owned_parameter_tests {
                 ),
                 "public_lane_staking_v1" => {
                     Json::new(crate::sumeragi::test_chain::staking_fixture_policy(
-                        iroha_config::parameters::defaults::nexus::staking::stake_asset_id()
-                            .parse()
-                            .expect("explicit fixture staking asset"),
+                        iroha_data_model::parameter::system::SumeragiNposParameters::default()
+                            .xor_asset_definition_id,
                     ))
                 }
                 "root_fees_v1" => {
@@ -37060,9 +37212,7 @@ mod consensus_owned_parameter_tests {
             let mut transaction = block.transaction();
             transaction
                 .world
-                .parameters
-                .get_mut()
-                .set_parameter(Parameter::Custom(committed.clone()))
+                .set_parameter_for_testing(Parameter::Custom(committed.clone()))
                 .expect("valid fixture parameters");
             // A migrated executor declares the identifier with another value,
             // next to a parameter of its own.
@@ -37071,7 +37221,10 @@ mod consensus_owned_parameter_tests {
             declares
                 .parameters
                 .insert(CustomParameter::new(own.clone(), Json::new("default")));
-            transaction.world.apply_executor_data_model(declares);
+            transaction
+                .world
+                .apply_executor_data_model(declares)
+                .unwrap();
             assert_eq!(
                 transaction.world.parameters.get().custom().get(&id),
                 Some(&committed),
@@ -37100,7 +37253,8 @@ mod consensus_owned_parameter_tests {
             // A later migration stops declaring both.
             transaction
                 .world
-                .apply_executor_data_model(ExecutorDataModel::default());
+                .apply_executor_data_model(ExecutorDataModel::default())
+                .unwrap();
             assert_eq!(
                 transaction.world.parameters.get().custom().get(&id),
                 Some(&committed),
@@ -37127,7 +37281,7 @@ mod consensus_owned_parameter_tests {
             assert!(transaction.parameters.get().custom().get(&id).is_none());
             let mut declares = ExecutorDataModel::default();
             declares.parameters.insert(attacker);
-            transaction.apply_executor_data_model(declares);
+            transaction.apply_executor_data_model(declares).unwrap();
             assert!(
                 transaction.parameters.get().custom().get(&id).is_none(),
                 "{id:?} must not be inserted"
@@ -37141,9 +37295,8 @@ mod consensus_owned_parameter_tests {
 
         let id = PublicLaneStakingPolicy::parameter_id();
         let policy = crate::sumeragi::test_chain::staking_fixture_policy(
-            iroha_config::parameters::defaults::nexus::staking::stake_asset_id()
-                .parse()
-                .expect("explicit fixture staking asset"),
+            iroha_data_model::parameter::system::SumeragiNposParameters::default()
+                .xor_asset_definition_id,
         );
         let committed = policy
             .clone()
@@ -37160,13 +37313,11 @@ mod consensus_owned_parameter_tests {
         let mut block = world.block();
         let mut transaction = block.transaction_without_telemetry(LaneConfig::default(), 0);
         transaction
-            .parameters
-            .get_mut()
-            .set_parameter(Parameter::Custom(committed.clone()))
+            .set_parameter_for_testing(Parameter::Custom(committed.clone()))
             .expect("install original typed owner");
         let mut declaration = ExecutorDataModel::default();
         declaration.parameters.insert(attacker);
-        transaction.apply_executor_data_model(declaration);
+        transaction.apply_executor_data_model(declaration).unwrap();
         assert_eq!(
             transaction.parameters.get().custom().get(&id),
             Some(&committed)
@@ -37179,7 +37330,9 @@ mod consensus_owned_parameter_tests {
                 .get(&id)
                 .is_none()
         );
-        transaction.apply_executor_data_model(ExecutorDataModel::default());
+        transaction
+            .apply_executor_data_model(ExecutorDataModel::default())
+            .unwrap();
         assert_eq!(
             transaction.parameters.get().custom().get(&id),
             Some(&committed)
@@ -37192,9 +37345,8 @@ mod consensus_owned_parameter_tests {
 
         let id = PublicLaneStakingPolicy::parameter_id();
         let committed = crate::sumeragi::test_chain::staking_fixture_policy(
-            iroha_config::parameters::defaults::nexus::staking::stake_asset_id()
-                .parse()
-                .expect("explicit fixture staking asset"),
+            iroha_data_model::parameter::system::SumeragiNposParameters::default()
+                .xor_asset_definition_id,
         )
         .into_custom_parameter()
         .expect("valid policy");
@@ -37202,9 +37354,7 @@ mod consensus_owned_parameter_tests {
         let mut block = world.block();
         let mut transaction = block.transaction_without_telemetry(LaneConfig::default(), 0);
         transaction
-            .parameters
-            .get_mut()
-            .set_parameter(Parameter::Custom(committed.clone()))
+            .set_parameter_for_testing(Parameter::Custom(committed.clone()))
             .expect("install original typed owner");
         // An adversarial prior declaration must not cause reconciliation to invoke
         // removal on the mandatory owner, even when the new schema drops that ID.
@@ -37213,7 +37363,9 @@ mod consensus_owned_parameter_tests {
             .get_mut()
             .parameters
             .insert(committed.clone());
-        transaction.apply_executor_data_model(ExecutorDataModel::default());
+        transaction
+            .apply_executor_data_model(ExecutorDataModel::default())
+            .unwrap();
         assert_eq!(
             transaction.parameters.get().custom().get(&id),
             Some(&committed)
@@ -37576,6 +37728,7 @@ fn compute_execution_policy_digest_v1(
     pipeline: &iroha_config::parameters::actual::Pipeline,
     oracle: &iroha_config::parameters::actual::Oracle,
     nexus: &iroha_config::parameters::actual::Nexus,
+    original_fees: Option<&iroha_data_model::block::consensus::RootFeePolicy>,
     lane_manifests: &LaneManifestRegistry,
     lane_compliance: Option<&LaneComplianceEngine>,
     fraud_monitoring: &iroha_config::parameters::actual::FraudMonitoring,
@@ -37590,6 +37743,7 @@ fn compute_execution_policy_digest_v1(
     let nexus_policy_digest =
         iroha_config::parameters::actual::nexus_consensus_policy_digest_with_runtime_policies(
             nexus,
+            original_fees,
             compliance_policy_digest,
             Some(lane_manifests.baseline_consensus_policy_digest()),
         )?;
@@ -37654,14 +37808,12 @@ impl State {
         // The committed ZK and pipeline validity policies, as every view and block reads them.
         let zk = self.zk_snapshot();
         let pipeline = self.pipeline_snapshot();
-        let nexus = crate::pipeline_gas_policy::with_root_fees(
-            nexus.clone(),
-            self.world.parameters.view().get(),
-        );
+        let parameters = self.world.parameters.view();
         compute_execution_policy_digest_v1(
             &pipeline,
             &self.oracle,
-            &nexus,
+            nexus,
+            parameters.get().root_fees(),
             lane_manifests,
             lane_compliance,
             &self.fraud_monitoring_snapshot(),
@@ -37691,14 +37843,12 @@ impl StateBlock<'_> {
             self.fraud_monitoring.clone(),
             self.world.parameters.get(),
         );
-        let authored_nexus = crate::pipeline_gas_policy::with_root_fees(
-            self.nexus.clone(),
-            self.world.parameters.get(),
-        );
+
         compute_execution_policy_digest_v1(
             &self.pipeline,
             &self.oracle,
-            &authored_nexus,
+            &self.nexus,
+            self.world.parameters.get().root_fees(),
             self.lane_manifests.as_ref(),
             self.lane_compliance.as_deref(),
             &authored_fraud,
@@ -37725,6 +37875,7 @@ impl StateBlock<'_> {
             &self.pipeline,
             &self.oracle,
             &self.nexus,
+            self.world.parameters.get_before_block().root_fees(),
             self.lane_manifests.as_ref(),
             self.lane_compliance.as_deref(),
             &self.fraud_monitoring,
@@ -38962,7 +39113,7 @@ impl<'state> StateBlock<'state> {
         let sccp_verifier_work_after_block = fields.sccp_verifier_work_in_block;
         let nexus = fields.nexus.clone();
         let lane_manifests = Arc::clone(&fields.lane_manifests);
-        let lane_privacy_registry = Arc::clone(&fields.lane_privacy_registry);
+        let lane_privacy_registry = fields.lane_privacy_registry.clone();
         let lane_incarnations = fields.lane_incarnations.clone();
         let lane_incarnation_lineage = fields.lane_incarnation_lineage.clone();
         let lane_incarnation_activation_heights =
@@ -42178,10 +42329,12 @@ impl StateTransaction<'_, '_> {
             &lifecycle_update.updated_catalog,
             &self.nexus.governance,
         )?;
-        self.lane_manifests = Arc::clone(&updated_lane_manifests);
-        self.lane_privacy_registry = Arc::new(LanePrivacyRegistry::from_manifest_registry(
+        let updated_lane_privacy = LanePrivacyRegistry::try_from_manifest_registry(
             updated_lane_manifests.as_ref(),
-        ));
+            self.world.sccp_committee_generations.allocation_budget(),
+        ).map_err(LaneLifecycleError::ParameterDeferred)?;
+        self.lane_manifests = Arc::clone(&updated_lane_manifests);
+        self.lane_privacy_registry = updated_lane_privacy.clone();
         self.world.mark_axt_lane_incarnation_transitions(
             &self.lane_incarnations,
             &lifecycle_update.updated_lane_incarnations,
@@ -42196,6 +42349,7 @@ impl StateTransaction<'_, '_> {
         self.pending_lane_lifecycle = Some(PendingAutoscaleLaneLifecycle {
             catalog_update: lifecycle_update,
             updated_lane_manifests,
+            updated_lane_privacy,
             plan: payload.plan.clone(),
             transition: PendingAutoscaleTransition::Manual,
             transition_height: block_height,
@@ -43122,9 +43276,7 @@ impl StateTransaction<'_, '_> {
         if let Some(pending) = pending_lane_lifecycle {
             *block_nexus = nexus.clone();
             *block_lane_manifests = Arc::clone(&pending.updated_lane_manifests);
-            *block_lane_privacy_registry = Arc::new(LanePrivacyRegistry::from_manifest_registry(
-                pending.updated_lane_manifests.as_ref(),
-            ));
+            *block_lane_privacy_registry = pending.updated_lane_privacy.clone();
             *block_lane_incarnations = lane_incarnations;
             *block_lane_incarnation_lineage = lane_incarnation_lineage;
             *block_lane_incarnation_activation_heights = lane_incarnation_activation_heights;
@@ -43155,7 +43307,7 @@ impl StateTransaction<'_, '_> {
                         payer = %payer_id,
                         fee_amount = %amount,
                         asset = %asset_id,
-                        sink = %nexus.fees.fee_sink_account_id,
+                        sink = ?world.parameters.get_before_block().root_fees().map(|fees| &fees.fee_sink_account_id),
                         "nexus fee charged"
                     );
                     crate::status::record_nexus_fee_event(crate::status::NexusFeeEvent::Charged {

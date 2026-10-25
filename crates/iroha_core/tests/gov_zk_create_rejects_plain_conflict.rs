@@ -22,7 +22,20 @@ fn create_election_rejects_plain_conflict() {
     let domain = Domain::new(domain_id.clone()).build(&iroha_test_samples::ALICE_ID);
     let account =
         Account::new(iroha_test_samples::ALICE_ID.clone()).build(&iroha_test_samples::ALICE_ID);
-    let world = World::with([domain], [account], Vec::<AssetDefinition>::new());
+    let mut world = World::with([domain], [account], Vec::<AssetDefinition>::new());
+    // Explicit prerequisite for this isolated component, not signed-genesis authority.
+    // The funding helper still executes ordinary account admission without defaults.
+    let policy = iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+        iroha_crypto::Algorithm::Ed25519,
+    ])
+    .expect("explicit governance component signing algorithm");
+    world
+        .set_parameter_for_testing(
+            policy
+                .into_parameter()
+                .expect("canonical governance component policy"),
+        )
+        .expect("admit the governance component's original policy");
     let state = State::new_for_testing(world, kura, query_handle);
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut sblock = state.block(header);

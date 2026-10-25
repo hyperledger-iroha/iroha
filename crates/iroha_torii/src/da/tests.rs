@@ -1450,9 +1450,7 @@ fn seed_da_admission_parameter(app: &crate::SharedAppState, parameter: CustomPar
     let mut transaction = block.transaction();
     transaction
         .world_mut_for_testing()
-        .parameters_mut_for_testing()
-        .get_mut()
-        .set_parameter(Parameter::Custom(parameter))
+        .set_parameter_for_testing(Parameter::Custom(parameter))
         .expect("valid fixture parameters");
     transaction.apply();
     block

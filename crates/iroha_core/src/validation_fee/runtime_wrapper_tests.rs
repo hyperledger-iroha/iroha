@@ -17,10 +17,7 @@ fn wrapper_chain() -> (crate::sumeragi::test_chain::CertifiedTestChain, AccountI
     let deployer = account(55);
     // Use the actual default block policy from the signed original genesis.
     // The production wrapper, nested DLMM and byte charge must fit it unchanged.
-    let config = crate::sumeragi::test_chain::TestChainConfig::new(
-        validation_fee_payout_world(&deployer),
-        1_000,
-    );
+    let config = validation_fee_payout_config(&deployer, 1_000);
     let (chain, deployer, _, _) =
         signed_original_fixtures::signed_fee_registry_root_fixture_with_config(config);
     (chain, deployer)

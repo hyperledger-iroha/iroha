@@ -42,7 +42,7 @@ pub(crate) struct ExecutionFeeMeter {
     dataspace: Option<DataSpaceId>,
     index: Option<u64>,
     gas_policy: iroha_config::parameters::actual::Gas,
-    nexus_fees: iroha_data_model::block::consensus::RootFeePolicy,
+    parameters: crate::pipeline_gas_policy::RetainedStateParameters,
     tx_bytes_len: usize,
     exemption: ExecutionFeeExemption,
     work: Option<ExecutionFeeWork>,
@@ -89,7 +89,9 @@ impl StateTransaction<'_, '_> {
             dataspace: self.current_dataspace_id,
             index: self.current_entrypoint_index,
             gas_policy: self.pipeline.gas.clone(),
-            nexus_fees: self.nexus.fees.clone(),
+            // Share the exact committed predecessor; local authoring recipes and
+            // transaction-local parameter writes cannot select monetary policy.
+            parameters: root_fees::execution_parameters(self).clone(),
             tx_bytes_len,
             exemption,
             work: None,
@@ -190,6 +192,9 @@ impl ExecutionFeeSettlement {
                 != Some(iroha_crypto::Hash::from(transaction.hash_as_entrypoint()))
             || state.last_tx_gas_used != 0
             || state.execution_fee_meter.is_some()
+            || !meter
+                .parameters
+                .same_version(root_fees::execution_parameters(state))
         {
             return Err(ExecutionFeeSettlementError::Owner(
                 "rejection fee record differs from its exact fresh source overlay".into(),
@@ -198,8 +203,14 @@ impl ExecutionFeeSettlement {
         let work = meter.work.ok_or_else(|| {
             ExecutionFeeSettlementError::Owner("fee settlement lost its actual direct work".into())
         })?;
+        // The charge routine below borrows this same predecessor owner. Keep the
+        // local authoring recipe untouched, including the zero-charge return.
+        let nexus_fees = meter.parameters.root_fees().ok_or_else(|| {
+            ExecutionFeeSettlementError::Owner(
+                "rejection fee record has no original committed root fee policy".into(),
+            )
+        })?;
         state.pipeline.gas = meter.gas_policy;
-        state.nexus.fees = meter.nexus_fees;
         let on_success_only = meter.exemption == ExecutionFeeExemption::ExemptOnSuccess;
         // A root exempt on success was admitted without a fee quote, so its rejection tail
         // reserved no PipelineGas transfer: its failure is charged the Nexus fee only.
@@ -211,16 +222,12 @@ impl ExecutionFeeSettlement {
             .map(|limit| limit.asset_definition_id.canonical_address())
             .filter(|_| !on_success_only);
         let pipeline_charge =
-            should_charge_pipeline_gas_asset(false, &state.nexus.fees, gas_asset.as_deref())
+            should_charge_pipeline_gas_asset(false, nexus_fees, gas_asset.as_deref())
                 && gas_asset.is_some()
                 && work.gas != 0;
-        let nexus_charge = compute_nexus_fee_amount(
-            &state.nexus.fees,
-            meter.tx_bytes_len,
-            work.instructions,
-            work.gas,
-        )
-        .map_err(ExecutionFeeSettlementError::Charge)?;
+        let nexus_charge =
+            compute_nexus_fee_amount(nexus_fees, meter.tx_bytes_len, work.instructions, work.gas)
+                .map_err(ExecutionFeeSettlementError::Charge)?;
         if !pipeline_charge && nexus_charge.is_zero() {
             return Ok(false);
         }
@@ -228,7 +235,7 @@ impl ExecutionFeeSettlement {
             .fee_payment_intent()
             .sponsor_program()
             .map(|(id, _)| id.clone());
-        if should_charge_pipeline_gas_asset(false, &state.nexus.fees, gas_asset.as_deref())
+        if should_charge_pipeline_gas_asset(false, nexus_fees, gas_asset.as_deref())
             && let Some(asset) = gas_asset
         {
             Executor::charge_pipeline_gas_asset_fee(

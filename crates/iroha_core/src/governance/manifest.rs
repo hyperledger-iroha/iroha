@@ -39,6 +39,52 @@ use std::{
     str::{self, FromStr},
     sync::Arc,
 };
+/// Owned failure while parsing or deriving a runtime lane manifest.
+///
+/// Local codec failures keep their original scope identity. Semantic and fixed
+/// protocol-bound failures remain invalid input; they do not create admission
+/// refusals. Consumers must observe the actual operation before its codec scopes.
+#[derive(Debug, thiserror::Error)]
+pub enum LaneManifestError {
+    /// Invalid manifest semantics or a fixed first-release source bound.
+    #[error("invalid lane manifest: {0}")]
+    Invalid(String),
+    /// Original native JSON parser or writer error.
+    #[error("lane manifest JSON: {0}")]
+    Json(#[source] json::Error),
+    /// Original native decoder error returned by an enclosing consumer.
+    #[error("lane manifest codec: {0}")]
+    Codec(#[source] norito::Error),
+}
+
+impl From<String> for LaneManifestError {
+    fn from(reason: String) -> Self {
+        Self::Invalid(reason)
+    }
+}
+
+impl LaneManifestError {
+    /// Move an original codec cause into the caller's existing admission observer.
+    ///
+    /// This neither observes an operation nor reconstructs provenance. Malformed
+    /// JSON and semantic input errors remain owned by this error without formatting.
+    ///
+    /// # Errors
+    /// Returns this unchanged error when it is not an original native decoder
+    /// cause or JSON resource report. No allocation occurs during the transfer.
+    pub fn into_decode_error(self) -> Result<norito::Error, Self> {
+        match self {
+            Self::Json(
+                original @ (json::Error::ScopedDecodeResource(_)
+                | json::Error::DecodeResource(_)
+                | json::Error::AllocationFailed),
+            ) => Ok(original.into_core_error()),
+            Self::Codec(original) => Ok(original),
+            original => Err(original),
+        }
+    }
+}
+
 /// First-release byte ceiling for one active lane manifest source.
 const LANE_MANIFEST_MAX_BYTES_V1: usize = 256 * 1024;
 /// First-release byte ceiling for the optional governance catalog overlay.
@@ -1106,7 +1152,13 @@ impl LaneManifestRegistry {
         let parsed = match Self::parse_bounded_manifest_json(&raw, budget) {
             Ok(parsed) => parsed,
             Err(err) => {
-                return Self::invalid_manifest_source_with_digest(path, err, raw_digest);
+                // TODO: startup's infallible frozen-source cache retains only a
+                // diagnostic. It cannot transport runtime admission ownership.
+                return Self::invalid_manifest_source_with_digest(
+                    path,
+                    err.to_string(),
+                    raw_digest,
+                );
             }
         };
         // Do not retain raw and canonical copies at the same time.
@@ -1261,12 +1313,12 @@ impl LaneManifestRegistry {
     fn parse_bounded_manifest_json(
         raw: &[u8],
         budget: &mut ManifestSourceLoadBudget,
-    ) -> Result<NativeLaneManifestV1, String> {
+    ) -> Result<NativeLaneManifestV1, LaneManifestError> {
         let raw = str::from_utf8(raw)
             .map_err(|err| format!("manifest source is not valid UTF-8: {err}"))?;
         let footprint = Self::preflight_manifest_json(raw.as_bytes(), MANIFEST_JSON_LIMITS_V1)?;
         budget.charge_json(footprint)?;
-        json::from_json(raw).map_err(|err| format!("manifest JSON parse error: {err}"))
+        json::from_json(raw).map_err(LaneManifestError::Json)
     }
     fn parse_bounded_governance_overlay_json(
         raw: &[u8],
@@ -2430,6 +2482,13 @@ impl LaneManifestRegistry {
     /// Retrieve the quorum declared for `lane_id`, if present.
     pub fn lane_quorum(&self, lane_id: LaneId) -> Option<u32> {
         self.lane_rules(lane_id).and_then(|rules| rules.quorum)
+    }
+    /// Borrow the original manifest statuses in ascending lane order.
+    ///
+    /// Runtime projections can inspect the installed statuses without copying
+    /// their unrelated source paths, governance rules or validator bindings.
+    pub(crate) fn iter_statuses(&self) -> impl Iterator<Item = &LaneManifestStatus> + Clone {
+        self.statuses.values()
     }
     /// Snapshot the current manifest statuses for all lanes.
     #[must_use]

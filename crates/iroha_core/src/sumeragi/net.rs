@@ -932,7 +932,7 @@ pub fn spawn_ingress(
 #[cfg(test)]
 mod tests {
     use iroha_crypto::{Algorithm, KeyPair};
-    use iroha_data_model::peer::Peer;
+    use iroha_model_base::peer::Peer;
     use iroha_p2p::network::message::ClassifyTopic;
     use iroha_sumeragi::availability::{AvailabilityFrame, RowBytes};
     use iroha_sumeragi::{

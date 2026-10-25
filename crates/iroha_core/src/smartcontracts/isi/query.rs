@@ -774,8 +774,12 @@ impl SortableQueryOutput for AssetEscrowRecord {
 }
 impl SortableQueryOutput for iroha_data_model::asset::uid::AssetUidPolicyViewV1 {
     type TiebreakKey = [u8; 32];
-    fn get_metadata_sorting_key(&self, _key: &Name) -> Option<&Json> { None }
-    fn tiebreak_key(&self) -> Self::TiebreakKey { self.policy.uid }
+    fn get_metadata_sorting_key(&self, _key: &Name) -> Option<&Json> {
+        None
+    }
+    fn tiebreak_key(&self) -> Self::TiebreakKey {
+        self.policy.uid
+    }
     fn bounded_tiebreak_key_len(&self, limit: u64) -> Result<u64, Error> {
         bounded_bare_encoded_len(&self.policy.uid, limit)
     }
@@ -3095,9 +3099,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         {
             let mut block = world.block();
             block
-                .parameters
-                .get_mut()
-                .set_parameter(Parameter::Custom(policy.into_custom_parameter()))
+                .set_parameter_for_testing(Parameter::Custom(policy.into_custom_parameter()))
                 .expect("valid fixture parameters");
             block.commit();
         }
@@ -8530,35 +8532,65 @@ mod tests {
 
 impl SortableQueryOutput for iroha_data_model::asset::fi_link::AssetFiRelationshipViewV1 {
     type TiebreakKey = ();
-    fn get_metadata_sorting_key(&self, _key: &Name) -> Option<&Json> { None }
-    fn tiebreak_key(&self) -> Self::TiebreakKey { () }
-    fn bounded_tiebreak_key_len(&self, limit: u64) -> Result<u64, Error> { bounded_bare_encoded_len(&(), limit) }
+    fn get_metadata_sorting_key(&self, _key: &Name) -> Option<&Json> {
+        None
+    }
+    fn tiebreak_key(&self) -> Self::TiebreakKey {
+        ()
+    }
+    fn bounded_tiebreak_key_len(&self, limit: u64) -> Result<u64, Error> {
+        bounded_bare_encoded_len(&(), limit)
+    }
 }
 
 impl SortableQueryOutput for iroha_data_model::asset::uid_enrollment::AssetUidEnrollmentViewV1 {
     type TiebreakKey = ();
-    fn get_metadata_sorting_key(&self, _key: &Name) -> Option<&Json> { None }
-    fn tiebreak_key(&self) -> Self::TiebreakKey { () }
-    fn bounded_tiebreak_key_len(&self, limit: u64) -> Result<u64, Error> { bounded_bare_encoded_len(&(), limit) }
+    fn get_metadata_sorting_key(&self, _key: &Name) -> Option<&Json> {
+        None
+    }
+    fn tiebreak_key(&self) -> Self::TiebreakKey {
+        ()
+    }
+    fn bounded_tiebreak_key_len(&self, limit: u64) -> Result<u64, Error> {
+        bounded_bare_encoded_len(&(), limit)
+    }
 }
 
 impl SortableQueryOutput for iroha_data_model::escrow::scoped::AssetEscrowScopeOriginalV1 {
     type TiebreakKey = ();
-    fn get_metadata_sorting_key(&self, _key: &Name) -> Option<&Json> { None }
-    fn tiebreak_key(&self) -> Self::TiebreakKey { () }
-    fn bounded_tiebreak_key_len(&self, limit: u64) -> Result<u64, Error> { bounded_bare_encoded_len(&(), limit) }
+    fn get_metadata_sorting_key(&self, _key: &Name) -> Option<&Json> {
+        None
+    }
+    fn tiebreak_key(&self) -> Self::TiebreakKey {
+        ()
+    }
+    fn bounded_tiebreak_key_len(&self, limit: u64) -> Result<u64, Error> {
+        bounded_bare_encoded_len(&(), limit)
+    }
 }
 
 impl SortableQueryOutput for iroha_data_model::asset::fi_link::AssetFiTransferReceiptV1 {
     type TiebreakKey = ();
-    fn get_metadata_sorting_key(&self, _key: &Name) -> Option<&Json> { None }
-    fn tiebreak_key(&self) -> Self::TiebreakKey { () }
-    fn bounded_tiebreak_key_len(&self, limit: u64) -> Result<u64, Error> { bounded_bare_encoded_len(&(), limit) }
+    fn get_metadata_sorting_key(&self, _key: &Name) -> Option<&Json> {
+        None
+    }
+    fn tiebreak_key(&self) -> Self::TiebreakKey {
+        ()
+    }
+    fn bounded_tiebreak_key_len(&self, limit: u64) -> Result<u64, Error> {
+        bounded_bare_encoded_len(&(), limit)
+    }
 }
 
 impl SortableQueryOutput for iroha_data_model::asset::fi_context::AssetFiContextSnapshotV1 {
     type TiebreakKey = ();
-    fn get_metadata_sorting_key(&self, _key: &Name) -> Option<&Json> { None }
-    fn tiebreak_key(&self) -> Self::TiebreakKey { () }
-    fn bounded_tiebreak_key_len(&self, limit: u64) -> Result<u64, Error> { bounded_bare_encoded_len(&(), limit) }
+    fn get_metadata_sorting_key(&self, _key: &Name) -> Option<&Json> {
+        None
+    }
+    fn tiebreak_key(&self) -> Self::TiebreakKey {
+        ()
+    }
+    fn bounded_tiebreak_key_len(&self, limit: u64) -> Result<u64, Error> {
+        bounded_bare_encoded_len(&(), limit)
+    }
 }

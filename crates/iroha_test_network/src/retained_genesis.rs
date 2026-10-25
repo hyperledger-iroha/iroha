@@ -261,6 +261,7 @@ impl NetworkBuilder {
                 && self.observer_p2p_bootstrap.is_none()
                 && self.observer_slow_reader_relays.is_none()
                 && self.custom_genesis.is_none()
+                && self.genesis_staking_policy.is_none()
                 && self.genesis_isi.iter().all(Vec::is_empty)
                 && self.genesis_post_topology_isi.iter().all(Vec::is_empty)
                 && self.genesis_post_bootstrap_isi.iter().all(Vec::is_empty)
@@ -374,6 +375,7 @@ impl NetworkBuilder {
             genesis_key_pair: None,
             genesis_isi: Vec::new(),
             genesis_post_topology_isi: Vec::new(),
+            generated_staking_policy: None,
             cached_genesis: OnceLock::new(),
             generated_genesis_manifest: OnceLock::new(),
             retained_genesis: Some(genesis),
@@ -670,6 +672,9 @@ mod tests {
             }),
             Box::new(|recipe| recipe.block_cadence = Some(Duration::from_secs(37))),
             Box::new(|recipe| recipe.ivm_fuel = IvmFuelConfig::Auto),
+            Box::new(|recipe| {
+                recipe.genesis_staking_policy = Some(config::default_test_network_staking_policy())
+            }),
             Box::new(|recipe| recipe.genesis_key_pair = ALICE_KEYPAIR.clone()),
             Box::new(|recipe| recipe.genesis_committee_keys_for_global_peers = true),
             Box::new(|recipe| recipe.auto_populate_trusted_peer_pops = false),

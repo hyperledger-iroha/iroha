@@ -17,9 +17,9 @@ use iroha_core::{
     state::{State, World, derive_committee_key_id},
     sumeragi::network_topology::Topology as CoreTopology,
 };
-use iroha_crypto::{Hash, KeyPair, SignatureOf};
+use iroha_crypto::{Algorithm, Hash, KeyPair, SignatureOf};
 use iroha_data_model::{
-    Registrable as _,
+    Identifiable as _, Registrable as _,
     account::{Account, AccountId},
     asset::{AssetDefinitionId, definition::AssetDefinition, id::AssetId},
     block::consensus::{ConsensusMode as WireConsensusMode, SumeragiGenesisContextParameters},
@@ -257,6 +257,7 @@ pub(crate) fn genesis_unexecuted_with_keypair_and_post_topology(
     topology: UniqueVec<PeerId>,
     topology_entries: Vec<GenesisTopologyEntry>,
     genesis_key_pair: KeyPair,
+    staking_policy: iroha_data_model::block::consensus::PublicLaneStakingPolicy,
 ) -> GenesisBlock {
     init_instruction_registry();
     build_minimal_genesis_unexecuted_with_post_topology(
@@ -274,7 +275,7 @@ pub(crate) fn genesis_unexecuted_with_keypair_and_post_topology(
         None,
         Some(iroha_core::state::default_genesis_confidential_policy_hash()),
         None,
-        default_test_network_staking_policy(),
+        staking_policy,
     )
     .0
 }
@@ -312,6 +313,7 @@ pub(crate) fn genesis_with_keypair_and_post_topology_with_policies(
         consensus_mode_override,
         confidential_policy_hash,
         None,
+        default_test_network_staking_policy(),
     )
     .0
 }
@@ -332,6 +334,7 @@ pub(crate) fn genesis_with_keypair_and_post_topology_with_policies_and_staged_ha
     consensus_mode_override: Option<SumeragiConsensusMode>,
     confidential_policy_hash: Option<[u8; 32]>,
     preview_cadence_ms: Option<std::num::NonZeroU64>,
+    staking_policy: iroha_data_model::block::consensus::PublicLaneStakingPolicy,
 ) -> (
     GenesisBlock,
     StagedGenesisPolicyHashes,
@@ -355,6 +358,7 @@ pub(crate) fn genesis_with_keypair_and_post_topology_with_policies_and_staged_ha
         consensus_mode_override,
         confidential_policy_hash,
         preview_cadence_ms,
+        staking_policy,
     )
 }
 fn strip_handshake_metadata_transactions(transactions: &mut [Vec<InstructionBox>]) {
@@ -481,6 +485,7 @@ fn build_minimal_genesis_with_post_topology(
         consensus_mode_override,
         confidential_policy_hash,
         None,
+        default_test_network_staking_policy(),
     )
     .0
 }
@@ -501,6 +506,7 @@ fn build_minimal_genesis_with_post_topology_and_staged_hash(
     consensus_mode_override: Option<SumeragiConsensusMode>,
     confidential_policy_hash: Option<[u8; 32]>,
     preview_cadence_ms: Option<std::num::NonZeroU64>,
+    staking_policy: iroha_data_model::block::consensus::PublicLaneStakingPolicy,
 ) -> (
     GenesisBlock,
     StagedGenesisPolicyHashes,
@@ -539,7 +545,7 @@ fn build_minimal_genesis_with_post_topology_and_staged_hash(
             consensus_mode_override,
             confidential_policy_hash,
             preview_cadence_ms,
-            default_test_network_staking_policy(),
+            staking_policy,
         );
     genesis_policy::execute_generated_genesis(
         block,
@@ -588,10 +594,10 @@ fn build_minimal_genesis_unexecuted(
     );
     (block, account, peers, key_pair)
 }
-fn default_test_network_staking_policy()
+pub(crate) fn default_test_network_staking_policy()
 -> iroha_data_model::block::consensus::PublicLaneStakingPolicy {
     let fees = iroha_config::parameters::defaults::nexus::fees::genesis_policy();
-    crate::genesis_support::staking_policy(
+    iroha_genesis::default_staking_policy(
         fees.fee_asset_id,
         fees.fee_sink_account_id.clone(),
         fees.fee_sink_account_id,
@@ -692,6 +698,10 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
     } else {
         GenesisBuilder::new_without_executor(chain.clone(), ivm_dir.clone(), genesis_crypto_policy)
     };
+    let staking_accounts = [
+        staking_policy.stake_escrow_account_id.clone(),
+        staking_policy.slash_sink_account_id.clone(),
+    ];
     builder = builder
         .with_staking_policy(staking_policy)
         .expect("explicit test-network staking author");
@@ -767,6 +777,32 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
         .domain(and_domain_id.clone())
         .asset(may_name, NumericSpec::default())
         .finish_domain();
+    let mut registered_accounts = [
+        genesis_id.clone(),
+        alice_id.clone(),
+        bob_id.clone(),
+        carpenter_id.clone(),
+    ]
+    .into_iter()
+    .collect::<std::collections::BTreeSet<_>>();
+    for instruction in extra_transactions
+        .iter()
+        .chain(&post_topology_transactions)
+        .flatten()
+    {
+        if let Some(iroha_data_model::isi::RegisterBox::Account(register)) =
+            instruction
+                .as_any()
+                .downcast_ref::<iroha_data_model::isi::RegisterBox>()
+        {
+            registered_accounts.insert(register.object().id().clone());
+        }
+    }
+    for account in staking_accounts {
+        if registered_accounts.insert(account.clone()) {
+            builder = builder.append_instruction(Register::account(Account::new(account)));
+        }
+    }
     let wonderland_domain =
         DomainId::parse_fully_qualified("wonderland.universal").expect("wonderland domain id");
     let garden_domain = DomainId::parse_fully_qualified("garden_of_live_flowers.universal")
@@ -1499,14 +1535,8 @@ fn resolve_preexec_nexus_config(
             iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
         nexus.dataspace_catalog = dataspace_catalog;
     }
-    if !has_authoritative_nexus {
-        // Direct fixture calls have no resolved runtime config. Keep their
-        // account literals unambiguous, but never rewrite an authoritative Nexus
-        // snapshot because the signed Nexus/AMX context commitment must match peer startup.
-        let gas_account = ALICE_ID.to_string();
-        nexus.staking.stake_escrow_account_id = gas_account.clone();
-        nexus.staking.slash_sink_account_id = gas_account;
-    }
+    // Monetary custody belongs to the original signed staking policy. Resolving
+    // the node-local topology must not synthesize or rewrite monetary selectors.
     Ok(nexus)
 }
 fn install_preexec_lane_manifests(
@@ -2622,11 +2652,10 @@ mod tests {
     fn populate_genesis_results_accepts_block_proof_policies() {
         use iroha_data_model::nexus::{LaneCatalog, LaneConfig};
         use iroha_model_base::topology::LaneId;
-        use std::num::NonZeroU32;
         init_instruction_registry();
         let bls = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let (topology, entries) = genesis_committee_with_key(&bls);
-        let lane_count = NonZeroU32::new(2).expect("non-zero lane count");
+        let lane_count = std::num::NonZeroU32::new(2).expect("non-zero lane count");
         let lane0 = LaneConfig {
             id: LaneId::from_lane_index(0, lane_count).expect("lane 0 id"),
             alias: "alpha".to_string(),
@@ -2730,7 +2759,6 @@ mod tests {
             transaction::error::TransactionRejectionReason,
         };
         use iroha_model_base::topology::LaneId;
-        use std::num::NonZeroU32;
 
         init_instruction_registry();
         let _profile = iroha_data_model::account::address::ChainDiscriminantGuard::enter(
@@ -2757,17 +2785,9 @@ mod tests {
         authored_policy.stake_escrow_account_id = escrow_account.clone();
         authored_policy.slash_sink_account_id = escrow_account.clone();
         authored_policy.min_validator_stake = stake_amount.clone();
-        let nexus = ActualNexus {
-            staking: iroha_config::parameters::actual::NexusStaking {
-                stake_asset_id: stake_asset_id.to_string(),
-                stake_escrow_account_id: escrow_account.to_string(),
-                slash_sink_account_id: escrow_account.to_string(),
-                min_validator_stake: stake_amount.clone(),
-                max_validators: NonZeroU32::new(4).unwrap(),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
+        // Custody and monetary limits have one author: the signed genesis policy.
+        // Optional pre-execution config supplies the same runtime defaults in either case.
+        let nexus = ActualNexus::default();
         let mut resources = vec![
             Register::account(Account::new(escrow_account.clone())).into(),
             Register::asset_definition(AssetDefinition::new(
@@ -2863,15 +2883,37 @@ mod tests {
             WireConsensusMode::Npos
         );
         let original_wire = block.0.encode_wire().unwrap();
-        let mut different_local_config = nexus.clone();
-        different_local_config.staking.stake_asset_id = AssetDefinitionId::derive_from_components(
-            DomainId::try_new("wonderland", "universal").unwrap(),
-            "rose".parse().unwrap(),
-        )
-        .to_string();
-        different_local_config.staking.stake_escrow_account_id = BOB_ID.to_string();
-        different_local_config.staking.slash_sink_account_id = BOB_ID.to_string();
-        for config in [None, Some(&different_local_config)] {
+        assert_eq!(
+            crate::genesis_staking::original_policy(
+                block
+                    .0
+                    .external_transactions()
+                    .filter_map(|transaction| match transaction.instructions() {
+                        Executable::Instructions(instructions) => Some(instructions.iter()),
+                        _ => None,
+                    })
+                    .flatten(),
+            )
+            .unwrap(),
+            Some(authored_policy.clone()),
+            "the signed original retains every authored staking term"
+        );
+        assert_eq!(
+            iroha_data_model::block::consensus::PublicLaneStakingPolicy::from_parameters(
+                &manifest.effective_parameters().unwrap(),
+            )
+            .unwrap(),
+            authored_policy,
+            "the manifest retains every field of the explicit monetary author",
+        );
+        assert_ne!(
+            authored_policy.stake_escrow_account_id,
+            super::default_test_network_staking_policy().stake_escrow_account_id,
+            "the successful execution must exercise authored nondefault custody",
+        );
+        // Monetary overrides are absent from node-local Nexus configuration. Both
+        // fixture resolution paths must execute the same original signed author.
+        for config in [None, Some(&nexus)] {
             let executed = super::populate_genesis_results(
                 &block,
                 &genesis_account,
@@ -2880,7 +2922,9 @@ mod tests {
                 config,
                 None,
             )
-            .expect("local Nexus monetary values cannot override the signed staking author");
+            .expect(
+                "staking authority comes from the signed original with or without runtime config",
+            );
             assert!(
                 executed
                     .output_results()
@@ -2916,16 +2960,29 @@ mod tests {
         ));
         assert_eq!(executed.hash(), block.0.hash());
         assert_eq!(block.0.encode_wire().unwrap(), original_wire);
-        for change_custody in [true, false] {
-            let mut changed_policy = authored_policy.clone();
-            let expected_cause = if change_custody {
-                changed_policy.stake_escrow_account_id = BOB_ID.clone();
-                "staking monetary plan does not match its exact current transfer and custody state"
-            } else {
-                changed_policy.min_validator_stake =
-                    stake_amount.checked_add(&1_u64.into()).unwrap();
-                "initial stake below committed minimum amount"
-            };
+        let mut changed_custody = authored_policy.clone();
+        changed_custody.stake_escrow_account_id = BOB_ID.clone();
+        let mut changed_minimum = authored_policy.clone();
+        changed_minimum.min_validator_stake = stake_amount.checked_add(&1_u64.into()).unwrap();
+        let mut changed_asset = authored_policy.clone();
+        changed_asset.stake_asset_id = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "rose".parse().unwrap(),
+        );
+        for (changed_policy, expected_cause) in [
+            (
+                changed_custody,
+                "staking monetary plan does not match its exact current transfer and custody state",
+            ),
+            (
+                changed_minimum,
+                "initial stake below committed minimum amount",
+            ),
+            (
+                changed_asset,
+                "staking or reward asset differs from the committed network XOR identity",
+            ),
+        ] {
             let mut parameters = manifest.effective_parameters().unwrap();
             parameters.set_parameter(Parameter::Custom(
                 changed_policy.into_custom_parameter().unwrap(),
@@ -2953,6 +3010,11 @@ mod tests {
                 )
                 .unwrap();
             let changed_wire = proposal.0.encode_wire().unwrap();
+            assert_ne!(proposal.0.hash(), block.0.hash());
+            assert!(super::genesis_signature_is_canonical(
+                &proposal.0,
+                &genesis_key_pair,
+            ));
             let report = super::populate_genesis_results(
                 &proposal,
                 &genesis_account,
@@ -2961,7 +3023,9 @@ mod tests {
                 Some(&nexus),
                 None,
             )
-            .expect_err("changed signed custody or bounds must reject the original monetary plan");
+            .expect_err(
+                "changed signed asset, custody or bounds must reject the original monetary plan",
+            );
             let error = report
                 .downcast_ref::<Box<BlockValidationError>>()
                 .expect("native block validation refusal");
@@ -3037,6 +3101,43 @@ mod tests {
             "labeled genesis accounts should not fail SNS lease checks"
         );
     }
+    #[test]
+    fn preexec_nexus_resolution_preserves_local_staking_topology() {
+        use iroha_config::parameters::actual::{LaneValidatorMode, NexusStaking};
+        use std::num::NonZeroU32;
+
+        let defaults = NexusStaking::default();
+        let resolved = super::resolve_preexec_nexus_config(None, None).unwrap();
+        assert_eq!(
+            resolved.staking.public_validator_mode,
+            defaults.public_validator_mode
+        );
+        assert_eq!(
+            resolved.staking.restricted_validator_mode,
+            defaults.restricted_validator_mode,
+        );
+        assert_eq!(resolved.staking.max_validators, defaults.max_validators);
+
+        let authored = NexusStaking {
+            public_validator_mode: LaneValidatorMode::AdminManaged,
+            restricted_validator_mode: LaneValidatorMode::StakeElected,
+            max_validators: NonZeroU32::new(4).unwrap(),
+        };
+        let source = ActualNexus {
+            staking: authored,
+            ..Default::default()
+        };
+        let resolved = super::resolve_preexec_nexus_config(Some(&source), None).unwrap();
+        for actual in [&source.staking, &resolved.staking] {
+            assert_eq!(actual.public_validator_mode, authored.public_validator_mode);
+            assert_eq!(
+                actual.restricted_validator_mode,
+                authored.restricted_validator_mode
+            );
+            assert_eq!(actual.max_validators, authored.max_validators);
+        }
+    }
+
     #[test]
     fn preexec_overrides_recompute_lane_config_from_policies() {
         use iroha_data_model::da::commitment::{DaProofPolicy, DaProofPolicyBundle, DaProofScheme};

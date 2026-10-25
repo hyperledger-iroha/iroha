@@ -309,7 +309,12 @@ fn release_inbound(
     let sink = if fee == 0 {
         None
     } else {
-        let sink = state_transaction.nexus.fees.fee_sink_account_id.clone();
+        // An applied sibling or pending policy cannot redirect this block's fee.
+        let sink = state_transaction
+            .root_fee_policy()
+            .map_err(refuse)?
+            .fee_sink_account_id
+            .clone();
         match state_transaction.world.account(&sink) {
             Ok(_) => Some(sink),
             Err(_) => {

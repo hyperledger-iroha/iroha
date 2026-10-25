@@ -88,9 +88,21 @@ mod tests {
     fn original_staking_history_refusal_maps_to_http_capacity_and_same_source_retries() {
         let key = KeyPair::from_seed(vec![0x31; 32], Algorithm::Ed25519);
         let owner = AccountId::new(key.public_key().clone());
-        let staking = iroha_config::parameters::actual::NexusStaking::default();
-        let definition: AssetDefinitionId = staking.stake_asset_id.parse().unwrap();
-        let escrow = AccountId::parse_encoded(&staking.stake_escrow_account_id).unwrap();
+        let mut config = TestChainConfig::new(World::new(), 1_000);
+        let staking = config
+            .genesis_parameters
+            .iter()
+            .find_map(|parameter| match parameter {
+                Parameter::Custom(custom)
+                    if custom.id() == &iroha_data_model::block::consensus::PublicLaneStakingPolicy::parameter_id() =>
+                {
+                    Some(iroha_data_model::block::consensus::PublicLaneStakingPolicy::from_custom_parameter(custom).unwrap())
+                }
+                _ => None,
+            })
+            .expect("one explicitly authored original staking policy");
+        let definition = staking.stake_asset_id.clone();
+        let escrow = staking.stake_escrow_account_id.clone();
         let mut keys = (0x71..=0x74)
             .map(|seed| KeyPair::from_seed(vec![seed; 32], Algorithm::BlsNormal))
             .collect::<Vec<_>>();
@@ -116,7 +128,7 @@ mod tests {
             )],
             [],
         );
-        let mut config = TestChainConfig::new(world, 1_000);
+        config.world = world;
         config.validator_keys = Some(keys);
         config.consensus_mode = SumeragiConsensusMode::Npos;
         config.genesis_parameters.push(Parameter::Custom(
@@ -124,6 +136,7 @@ mod tests {
         ));
         let chain = CertifiedTestChain::start(config).unwrap();
         let view = chain.state().view();
+        assert_eq!(view.world().parameters().staking_policy(), Some(&staking));
         let request = PublicLanePreparationRequestV1 {
             lane_id: LaneId::SINGLE,
             valid_for_blocks: 1,

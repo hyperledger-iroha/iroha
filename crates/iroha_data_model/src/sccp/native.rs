@@ -211,7 +211,7 @@ impl SccpForgeryRecordV1 {
         if self.generation == 0 || self.start_height == 0 {
             return Err(SccpNativeDataError::ZeroGenerationCoordinate);
         }
-        let maximum = crate::block::consensus::MAX_VALIDATORS_PER_HEIGHT;
+        let maximum = iroha_model_base::topology::MAX_VALIDATORS_PER_HEIGHT;
         if self.offenders.is_empty() || self.offenders.len() > maximum {
             return Err(SccpNativeDataError::OffenderCount);
         }

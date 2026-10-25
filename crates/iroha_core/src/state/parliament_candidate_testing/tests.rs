@@ -383,18 +383,11 @@ async fn candidate_testing_genesis_output_seal_rejects_omission_injection_and_ch
     let original = prepared.genesis.block();
     let mut block = prepared.state.block(original.header());
     assert!(validate_genesis_output(original, &block).is_err());
-    block
-        .world
-        .parameters
-        .get_mut()
-        .set_parameter(parameter())
-        .unwrap();
+    block.world.set_parameter_for_testing(parameter()).unwrap();
     assert!(validate_genesis_output(original, &block).is_ok());
     block
         .world
-        .parameters
-        .get_mut()
-        .set_parameter(Parameter::Custom(CustomParameter::new(
+        .set_parameter_for_testing(Parameter::Custom(CustomParameter::new(
             ParliamentCandidateTestingPolicyV1::parameter_id().clone(),
             Json::new("substitution"),
         )))
@@ -405,12 +398,7 @@ async fn candidate_testing_genesis_output_seal_rejects_omission_injection_and_ch
     let source = absent.genesis.block();
     let mut block = absent.state.block(source.header());
     assert!(validate_genesis_output(source, &block).is_ok());
-    block
-        .world
-        .parameters
-        .get_mut()
-        .set_parameter(parameter())
-        .unwrap();
+    block.world.set_parameter_for_testing(parameter()).unwrap();
     assert!(validate_genesis_output(source, &block).is_err());
 }
 
@@ -431,9 +419,7 @@ fn candidate_testing_codec_refusals_stay_deferred_and_invalid_policy_stays_rejec
 async fn candidate_testing_preseeded_same_value_never_replaces_original_installation() {
     for selected in [false, true] {
         let mut cfg = config(selected);
-        let mut parameters = cfg.world.parameters.view().get().clone();
-        parameters.set_parameter(parameter()).unwrap();
-        cfg.world.parameters = mv::cell::Cell::new(parameters);
+        cfg.world.set_parameter_for_testing(parameter()).unwrap();
         // The real preparation owner executes original native genesis, even though it
         // discards the overlay while deriving signed policy commitments.
         let failure = CertifiedTestChain::prepare(cfg).unwrap_err();

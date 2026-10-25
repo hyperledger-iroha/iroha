@@ -53,39 +53,40 @@ use iroha_model_base::peer::PeerId;
 use iroha_primitives::numeric::Numeric;
 use std::num::NonZeroU64;
 
-/// Return a blank test [`State`].
+/// Return a blank test State with explicit ordinary crypto authoring only.
 pub(crate) fn blank_state() -> State {
-    let state = State::new_for_testing(
-        World::default(),
-        Kura::blank_kura_for_testing(),
-        LiveQueryStore::start_test(),
-    );
+    blank_state_with_staking(None)
+}
+
+/// Construct a component State after the caller explicitly chooses its original
+/// staking input. This creates no authenticated genesis policy capability.
+pub(crate) fn blank_state_with_staking(
+    staking: Option<iroha_data_model::block::consensus::PublicLaneStakingPolicy>,
+) -> State {
+    let mut world = World::default();
     let policy = iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(
         Algorithm::ALL.to_vec(),
     )
     .unwrap();
-    let mut parameters = state.world.parameters.block();
-    parameters
-        .get_mut()
-        .set_parameter(policy.into_parameter().unwrap())
+    world
+        .set_parameter_for_testing(policy.into_parameter().unwrap())
         .unwrap();
-    parameters.commit();
-    state
+    if let Some(staking) = staking {
+        world
+            .set_parameter_for_testing(iroha_data_model::parameter::Parameter::Custom(
+                staking.into_custom_parameter().unwrap(),
+            ))
+            .unwrap();
+    }
+    State::new_for_testing(
+        world,
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    )
 }
 
-/// `nexus.staking.unbonding_delay` of the SCCP staking profile in milliseconds (21 d): the
-/// smallest delay that meets the staking floor L1 for the Taira default parameters
-/// (`specs/sccp.md` §4.8).
+/// Original component fixture delay that meets the Taira SCCP liability floor.
 pub(crate) const SCCP_UNBONDING_DELAY_MS: u64 = 1_814_400_000;
-
-/// Give the node staking policy of `state_transaction` the SCCP unbonding delay, as an
-/// SCCP-enabled staking profile does.
-pub(crate) fn set_sccp_staking_profile(
-    state_transaction: &mut crate::state::StateTransaction<'_, '_>,
-) {
-    state_transaction.nexus.staking.unbonding_delay =
-        core::time::Duration::from_millis(SCCP_UNBONDING_DELAY_MS);
-}
 
 /// Return a header at `height` with creation time `height × 4 s`.
 pub(crate) fn header(height: u64) -> BlockHeader {
@@ -664,11 +665,13 @@ pub(crate) fn funded_xor_state(holder: &AccountId, balance: u128) -> State {
         Algorithm::ALL.to_vec(),
     )
     .unwrap();
-    let mut parameters = state.world.parameters.block();
-    parameters
-        .get_mut()
-        .set_parameter(policy.into_parameter().unwrap())
-        .unwrap();
+    let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world).unwrap();
+    crate::state::set_parameter_cell_for_testing(
+        &mut parameters,
+        policy.into_parameter().unwrap(),
+        state.world.sccp_committee_generations.allocation_budget(),
+    )
+    .unwrap();
     parameters.commit();
     state
 }

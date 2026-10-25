@@ -73,7 +73,9 @@ fn build_app_with_api_token(api_token: Option<&str>) -> NexusHarness {
     ));
     {
         let view = state.view();
-        queue.reconfigure_nexus(&state.nexus_snapshot(), &view, None);
+        queue
+            .reconfigure_nexus(&state.nexus_snapshot(), &view, None)
+            .expect("original State pool admits Queue privacy projection");
     }
     let torii =
         fixtures::ToriiHarness::new_without_telemetry(&cfg, &kura, &state, &queue, events_sender);

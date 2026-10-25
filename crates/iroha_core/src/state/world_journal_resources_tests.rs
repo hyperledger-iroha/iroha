@@ -350,9 +350,8 @@ fn world_shell_refund_wake_observes_released_original_world_on_capture_refusal()
     let reservation = WorldJournalShellReservation::try_reserve(&budget).unwrap();
     let world = Arc::new(World::default());
     let mut original_probe = Some(
-        world
-            .parameters
-            .block()
+        crate::state::parameter_cell_block_for_testing(&world)
+            .expect("funded original parameter-only fixture block")
             .try_detach(|_| Ok::<_, ()>(()))
             .unwrap(),
     );

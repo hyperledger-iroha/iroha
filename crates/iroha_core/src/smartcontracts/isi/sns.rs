@@ -775,17 +775,27 @@ mod tests {
     }
     fn configure_test_fee_asset(state: &State, asset: &AssetDefinitionId) {
         {
-            let mut fees = state.nexus_snapshot().fees;
+            let mut fees = state
+                .world
+                .parameters
+                .view()
+                .root_fees()
+                .expect("original fixture fee policy")
+                .clone();
             fees.fee_asset_id = asset.clone();
             {
-                let mut parameters = state.world.parameters.block();
-                parameters
-                    .set_parameter(iroha_data_model::parameter::Parameter::Custom(
+                let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+                    .expect("funded parameter fixture block");
+                crate::state::set_parameter_cell_for_testing(
+                    &mut parameters,
+                    iroha_data_model::parameter::Parameter::Custom(
                         fees.clone()
                             .into_custom_parameter()
                             .expect("explicit fixture policy"),
-                    ))
-                    .expect("valid fixture monetary projection");
+                    ),
+                    state.world.sccp_committee_generations.allocation_budget(),
+                )
+                .expect("valid fixture monetary projection");
                 parameters.commit();
             }
         }
@@ -1271,6 +1281,22 @@ mod tests {
         let mut config = TestChainConfig::new(world, 0);
         let mut nexus = iroha_config::parameters::actual::Nexus::default();
         nexus.fees.fee_asset_id = payment_asset.clone();
+        let fee_parameter = iroha_data_model::parameter::Parameter::Custom(
+            nexus
+                .fees
+                .clone()
+                .into_custom_parameter()
+                .expect("canonical signed fixture fee policy"),
+        );
+        if let Some(slot) = config.genesis_parameters.iter_mut().find(|parameter| matches!(
+            parameter,
+            iroha_data_model::parameter::Parameter::Custom(value)
+                if value.id() == &iroha_data_model::block::consensus::RootFeePolicy::parameter_id()
+        )) {
+            *slot = fee_parameter;
+        } else {
+            config.genesis_parameters.push(fee_parameter);
+        }
         config.nexus = Some(nexus);
         let genesis_account = AccountId::new(config.genesis_key.public_key().clone());
         let consensus_mode = config.consensus_mode;
@@ -3561,17 +3587,27 @@ mod tests {
             LiveQueryStore::start_test(),
         );
         {
-            let mut fees = state.nexus_snapshot().fees;
+            let mut fees = state
+                .world
+                .parameters
+                .view()
+                .root_fees()
+                .expect("original fixture fee policy")
+                .clone();
             fees.fee_asset_id = payment_asset_definition_id.clone();
             {
-                let mut parameters = state.world.parameters.block();
-                parameters
-                    .set_parameter(iroha_data_model::parameter::Parameter::Custom(
+                let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+                    .expect("funded parameter fixture block");
+                crate::state::set_parameter_cell_for_testing(
+                    &mut parameters,
+                    iroha_data_model::parameter::Parameter::Custom(
                         fees.clone()
                             .into_custom_parameter()
                             .expect("explicit fixture policy"),
-                    ))
-                    .expect("valid fixture monetary projection");
+                    ),
+                    state.world.sccp_committee_generations.allocation_budget(),
+                )
+                .expect("valid fixture monetary projection");
                 parameters.commit();
             }
         }
@@ -3668,17 +3704,27 @@ mod tests {
             LiveQueryStore::start_test(),
         );
         {
-            let mut fees = state.nexus_snapshot().fees;
+            let mut fees = state
+                .world
+                .parameters
+                .view()
+                .root_fees()
+                .expect("original fixture fee policy")
+                .clone();
             fees.fee_asset_id = payment_asset_definition_id.clone();
             {
-                let mut parameters = state.world.parameters.block();
-                parameters
-                    .set_parameter(iroha_data_model::parameter::Parameter::Custom(
+                let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+                    .expect("funded parameter fixture block");
+                crate::state::set_parameter_cell_for_testing(
+                    &mut parameters,
+                    iroha_data_model::parameter::Parameter::Custom(
                         fees.clone()
                             .into_custom_parameter()
                             .expect("explicit fixture policy"),
-                    ))
-                    .expect("valid fixture monetary projection");
+                    ),
+                    state.world.sccp_committee_generations.allocation_budget(),
+                )
+                .expect("valid fixture monetary projection");
                 parameters.commit();
             }
         }
@@ -4106,6 +4152,22 @@ mod tests {
         nexus.fees.per_byte_fee = Quantity::zero();
         nexus.fees.per_instruction_fee = Quantity::zero();
         nexus.fees.per_gas_unit_fee = Quantity::zero();
+        let fee_parameter = iroha_data_model::parameter::Parameter::Custom(
+            nexus
+                .fees
+                .clone()
+                .into_custom_parameter()
+                .expect("canonical signed fixture fee policy"),
+        );
+        if let Some(slot) = config.genesis_parameters.iter_mut().find(|parameter| matches!(
+            parameter,
+            iroha_data_model::parameter::Parameter::Custom(value)
+                if value.id() == &iroha_data_model::block::consensus::RootFeePolicy::parameter_id()
+        )) {
+            *slot = fee_parameter;
+        } else {
+            config.genesis_parameters.push(fee_parameter);
+        }
         config.nexus = Some(nexus);
         let mut chain = CertifiedTestChain::start(config).unwrap();
         {

@@ -266,7 +266,7 @@ fn preflight_offender_object(parser: &mut Parser<'_>) -> Result<(), Error> {
                 let excessive = false;
                 #[cfg(not(all(test, sumeragi_core_mutation = "HC906")))]
                 let excessive = sequence.total_entries()
-                    > iroha_data_model::block::consensus::MAX_VALIDATORS_PER_HEIGHT;
+                    > iroha_model_base::topology::MAX_VALIDATORS_PER_HEIGHT;
                 if excessive {
                     let parser = sequence.parser();
                     let byte = parser.position();

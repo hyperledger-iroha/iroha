@@ -3213,7 +3213,7 @@ mod tests {
         };
         ($state:ident, $block:ident, $transaction:ident, $world:expr, $chain_id:expr, $height:expr, $creation_time_ms:expr) => {
             let $state = State::new_with_chain(
-                $world,
+                component_world_for_multisig($world),
                 Kura::blank_kura_for_testing(),
                 LiveQueryStore::start_test(),
                 ChainId::from($chain_id),
@@ -4616,7 +4616,7 @@ mod tests {
     #[test]
     fn rekey_account_id_migrates_acquired_unbound_and_binding_cleared_leases() {
         let state = State::new_with_chain(
-            World::new(),
+            component_world_for_multisig(World::new()),
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
             ChainId::from("multisig-rekey-unbound-alias-leases"),
@@ -4966,7 +4966,7 @@ mod tests {
             for old_account in accounts {
                 let new_account = new_account_id(&checked_keypair());
                 let state = State::new_with_chain(
-                    World::new(),
+                    component_world_for_multisig(World::new()),
                     Kura::blank_kura_for_testing(),
                     LiveQueryStore::start_test(),
                     ChainId::from("immutable-settlement-rekey"),
@@ -6189,7 +6189,7 @@ mod tests {
             norito::codec::Encode::encode(&lease),
         );
         let state = State::new_with_chain(
-            world,
+            component_world_for_multisig(world),
             kura,
             query_handle,
             ChainId::from("multisig-repair-from-controller"),
@@ -7868,7 +7868,7 @@ seiyaku TriggerDispatch { permission Admin;
         let mut world = World::new();
         seed_domain_name_lease(&mut world, &owner_id, &domain_id);
         let state = State::new_with_chain(
-            world,
+            component_world_for_multisig(world),
             kura,
             query_handle,
             ChainId::from("replace-single-to-multisig"),
@@ -7934,7 +7934,7 @@ seiyaku TriggerDispatch { permission Admin;
         let mut world = World::new();
         seed_domain_name_lease(&mut world, &signer1_id, &domain_id);
         let state = State::new_with_chain(
-            world,
+            component_world_for_multisig(world),
             kura,
             query_handle,
             ChainId::from("replace-multisig-to-single"),
@@ -7999,7 +7999,7 @@ seiyaku TriggerDispatch { permission Admin;
         let mut world = World::new();
         seed_domain_name_lease(&mut world, &signer1_id, &domain_id);
         let state = State::new_with_chain(
-            world,
+            component_world_for_multisig(world),
             kura,
             query_handle,
             ChainId::from("replace-multisig-to-multisig"),

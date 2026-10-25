@@ -13,7 +13,7 @@ fn generated_staking_policy_is_authored_once_with_selected_custody_and_liability
     let (public_key, _) =
         generate_genesis_key_pair(Some(b"explicit-localnet-staking"), GENESIS_SEED).unwrap();
     for sccp_enabled in [false, true] {
-        let expected = localnet_staking_policy(&public_key, sccp_enabled);
+        let expected = localnet_staking_policy(&public_key, None, sccp_enabled).unwrap();
         assert_eq!(expected.stake_asset_id, localnet_xor_asset_definition_id());
         assert_eq!(
             expected.stake_escrow_account_id,
@@ -35,7 +35,7 @@ fn generated_staking_policy_is_authored_once_with_selected_custody_and_liability
             &public_key,
             SumeragiConsensusMode::Npos,
             "explicit-localnet-staking",
-            sccp_enabled,
+            localnet_staking_policy(&public_key, None, sccp_enabled).unwrap(),
         )
         .unwrap();
         assert_eq!(
@@ -60,8 +60,13 @@ fn parameter_overrides_preserve_original_staking_and_fee_authority() {
         SumeragiConsensusMode::Permissioned,
         SumeragiConsensusMode::Npos,
     ] {
-        let original =
-            generate_raw_genesis(&public_key, mode, "parameter-delta-authority", false).unwrap();
+        let original = generate_raw_genesis(
+            &public_key,
+            mode,
+            "parameter-delta-authority",
+            localnet_staking_policy(&public_key, None, false).unwrap(),
+        )
+        .unwrap();
         let before = original.effective_parameters().unwrap();
         let staking = PublicLaneStakingPolicy::from_parameters(&before).unwrap();
         let fees = RootFeePolicy::from_parameters(&before).unwrap().unwrap();
@@ -123,7 +128,7 @@ fn parent_admission_is_explicit_and_exclusive_to_global_localnets() {
         &genesis_public_key,
         SumeragiConsensusMode::Permissioned,
         chain_id,
-        false,
+        localnet_staking_policy(&genesis_public_key, None, false).unwrap(),
     )
     .unwrap();
     let policy_id = PrivateDataspaceAdmissionPolicy::parameter_id();
@@ -194,7 +199,7 @@ fn asset_extension_preserves_global_prefix_and_scoped_home_owners() {
         &genesis_public_key,
         SumeragiConsensusMode::Npos,
         PUBLIC_TAIRA_CHAIN_ID,
-        false,
+        localnet_staking_policy(&genesis_public_key, None, false).unwrap(),
     )
     .unwrap();
     let asset = AssetSpec {
@@ -368,7 +373,7 @@ fn localnet_signed_topology_establishes_exact_bls_generation_zero() {
         &public,
         SumeragiConsensusMode::Permissioned,
         "generation-fixture",
-        false,
+        localnet_staking_policy(&public, None, false).unwrap(),
     )
     .unwrap();
     let raw = append_peer_pop(raw, &peers).unwrap();
@@ -1428,7 +1433,7 @@ fn localnet_genesis_for_opts_and_client(
         &genesis_public_key,
         opts.consensus_mode,
         DEFAULT_CHAIN_ID,
-        false,
+        localnet_staking_policy(&genesis_public_key, opts.sora_profile, false).unwrap(),
     )
     .expect("generate raw genesis");
     if opts.extra_accounts > 0 || !assets.is_empty() {
@@ -2378,7 +2383,7 @@ fn localnet_requires_explicit_bls_membership_without_rewriting_policy() {
                 .expect("canonical authored list"),
         )
         .with_sumeragi_context_parameters(SumeragiGenesisContextParameters::recommended())
-        .with_staking_policy(localnet_staking_policy(&public_key, false))
+        .with_staking_policy(localnet_staking_policy(&public_key, None, false).unwrap())
         .expect("explicit fixture staking authority")
         .build_raw()
         .expect("explicit source")
@@ -3224,18 +3229,18 @@ fn permissioned_localnet_registers_support_accounts_without_staking() {
         .get("nexus")
         .and_then(toml::Value::as_table)
         .expect("nexus table");
-    let staking = nexus
-        .get("staking")
-        .and_then(toml::Value::as_table)
-        .expect("nexus staking table");
-    for key in ["stake_escrow_account_id", "slash_sink_account_id"] {
-        let literal = staking
-            .get(key)
-            .and_then(toml::Value::as_str)
-            .expect("staking account literal");
+    assert!(
+        !nexus.contains_key("staking"),
+        "no generated node monetary policy"
+    );
+    let policy = PublicLaneStakingPolicy::from_parameters(&parameters).unwrap();
+    for (role, account) in [
+        ("stake escrow", &policy.stake_escrow_account_id),
+        ("slash sink", &policy.slash_sink_account_id),
+    ] {
         assert!(
-            registered_accounts.contains(literal),
-            "{key} must name an account registered in genesis"
+            registered_accounts.contains(&account_id_runtime_literal(account, None)),
+            "original {role} must be registered in genesis"
         );
     }
     assert!(!nexus.contains_key("fees"));
@@ -3373,19 +3378,10 @@ fn localnet_npos_validator_roster_and_quorum_match_peer_count() {
         .map(|register| register.validator.clone())
         .collect();
     assert_eq!(actual, expected, "validator roster should match peers");
-    let staking = &peer_cfg["nexus"]["staking"];
-    let stake_asset_id = AssetDefinitionId::parse_address_literal(
-        staking["stake_asset_id"]
-            .as_str()
-            .expect("configured stake asset"),
-    )
-    .expect("canonical stake asset");
-    let escrow_account_id = AccountId::parse_encoded(
-        staking["stake_escrow_account_id"]
-            .as_str()
-            .expect("configured stake escrow"),
-    )
-    .expect("canonical stake escrow");
+    assert!(peer_cfg["nexus"].get("staking").is_none());
+    let policy = localnet_bootstrap_staking_policy(&manifest).unwrap();
+    let stake_asset_id = &policy.stake_asset_id;
+    let escrow_account_id = &policy.stake_escrow_account_id;
     for register in &validators {
         assert_eq!(
             register.monetary_plan,
@@ -3418,7 +3414,7 @@ fn localnet_npos_election_ceiling_matches_generated_committee() {
             npos.epoch_length_blocks(),
             parameters.sumeragi().epoch_length_blocks
         );
-        assert!(iroha_data_model::block::consensus::is_valid_committee_size(
+        assert!(iroha_model_base::topology::is_valid_committee_size(
             usize::try_from(npos.max_validators()).expect("bounded committee")
         ));
     }

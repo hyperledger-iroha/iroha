@@ -878,9 +878,8 @@ fn validation_fee_proposals_bind_committed_global_network_xor() {
     });
     let world = World::with([], [], definitions);
     {
-        let mut committed = world.parameters.block();
-        committed
-            .set_parameter(Parameter::Custom(parameters.into_custom_parameter()))
+        let mut committed = crate::state::parameter_cell_block_for_testing(&world).unwrap();
+        crate::state::set_parameter_cell_for_testing(&mut committed, Parameter::Custom(parameters.into_custom_parameter()), world.sccp_committee_generations.allocation_budget())
             .expect("valid fixture parameters");
         committed.commit();
     }

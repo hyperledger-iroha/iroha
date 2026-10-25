@@ -231,8 +231,7 @@ mod committed_crypto_policy_admission {
         if let Some(policy) = policy {
             let mut block = world.block();
             block
-                .parameters
-                .set_parameter(policy.into_parameter().unwrap())
+                .set_parameter_for_testing(policy.into_parameter().unwrap())
                 .unwrap();
             block.commit();
         }
@@ -352,8 +351,7 @@ mod committed_crypto_policy_admission {
             CryptoAdmissionPolicyV1::new(vec![iroha_crypto::Algorithm::Secp256k1]).unwrap();
         let mut block = world.block();
         block
-            .parameters
-            .set_parameter(policy.clone().into_parameter().unwrap())
+            .set_parameter_for_testing(policy.clone().into_parameter().unwrap())
             .unwrap();
         block.commit();
         crate::test_utils::author_ready_fixture_crypto_policy(&mut world);

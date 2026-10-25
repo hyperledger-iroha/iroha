@@ -51,11 +51,14 @@ fn custody_pool(count: usize) -> (World, ValidatorElectionPolicyV1, Vec<KeyPair>
     };
     let policy = ValidatorElectionPolicyV1::from_npos_parameters(&parameters).unwrap();
     {
-        let mut entry = world.parameters.block();
-        entry
-            .get_mut()
-            .set_parameter(Parameter::Custom(parameters.into_custom_parameter()))
-            .expect("valid fixture parameters");
+        let mut entry = crate::state::parameter_cell_block_for_testing(&world)
+            .expect("funded fixture parameter cell");
+        crate::state::set_parameter_cell_for_testing(
+            &mut entry,
+            Parameter::Custom(parameters.into_custom_parameter()),
+            world.sccp_committee_generations.allocation_budget(),
+        )
+        .expect("valid fixture parameters");
         entry.commit();
     }
     let escrow = AccountId::new(keys[0].public_key().clone());
@@ -189,15 +192,18 @@ fn frozen_floors_and_exit_obligations_do_not_follow_mutable_configuration() {
         .public_lane_validators
         .insert((LaneId::SINGLE, owner), record);
     {
-        let mut entry = world.parameters.block();
+        let mut entry = crate::state::parameter_cell_block_for_testing(&world)
+            .expect("funded fixture parameter cell");
         let changed = SumeragiNposParameters {
             min_self_bond: Quantity::from(1000_u64),
             ..Default::default()
         };
-        entry
-            .get_mut()
-            .set_parameter(Parameter::Custom(changed.into_custom_parameter()))
-            .expect("valid fixture parameters");
+        crate::state::set_parameter_cell_for_testing(
+            &mut entry,
+            Parameter::Custom(changed.into_custom_parameter()),
+            world.sccp_committee_generations.allocation_budget(),
+        )
+        .expect("valid fixture parameters");
         entry.commit();
     }
     let view = world.view();

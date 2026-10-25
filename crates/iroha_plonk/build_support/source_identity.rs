@@ -51,6 +51,19 @@ fn package_roots(entries: &BTreeMap<String, Entry>) -> BTreeSet<String> {
         .collect()
 }
 
+// Find the longest package prefix at an exact slash boundary. Walking the
+// spelling's ancestors preserves ownership without scanning every package root.
+fn package_owner<'a>(name: &str, packages: &'a BTreeSet<String>) -> Option<&'a String> {
+    let mut ancestor = name;
+    while let Some((parent, _)) = ancestor.rsplit_once('/') {
+        if let Some(package) = packages.get(parent) {
+            return Some(package);
+        }
+        ancestor = parent;
+    }
+    None
+}
+
 // Classify known formats without normalizing the exact path used by the census.
 // A dotfile with no extension and any unknown extension remain unknown formats.
 fn has_extension(name: &str, extension: &str) -> bool {
@@ -65,10 +78,7 @@ fn selected(name: &str, packages: &BTreeSet<String>) -> bool {
         || EXTERNAL_INPUT_ROOTS
             .iter()
             .any(|prefix| name.starts_with(prefix))
-        || packages.iter().any(|package| {
-            name.strip_prefix(package)
-                .is_some_and(|rest| rest.starts_with('/'))
-        })
+        || package_owner(name, packages).is_some()
     {
         return true;
     }
@@ -191,6 +201,32 @@ fn relative_reference(base: &Path, value: &str) -> Option<String> {
     relative_name(parts.to_str()?.as_bytes()).ok()
 }
 
+// Keep the old conservative token matching and token-family order, including
+// matches in comments, strings and longer identifiers. Searching delimiter
+// characters avoids repeated slow substring scans in unoptimized build scripts.
+fn literal_references(source: &str) -> Vec<&str> {
+    let tokens = ["include", "include_str", "include_bytes"];
+    let mut macros: [Vec<&str>; 3] = std::array::from_fn(|_| Vec::new());
+    for (index, _) in source.match_indices('!') {
+        let before = source[..index].trim_end();
+        let Some(kind) = tokens.iter().position(|token| before.ends_with(token)) else {
+            continue;
+        };
+        let tail = source[index + 1..].trim_start();
+        if tail.starts_with('(') {
+            macros[kind].push(&tail[..tail.find(';').unwrap_or(tail.len())]);
+        }
+    }
+    let mut references: Vec<_> = macros.into_iter().flatten().collect();
+    for (index, _) in source.match_indices('#') {
+        let tail = &source[index..];
+        if tail.starts_with("#[path") {
+            references.push(&tail[..tail.find(']').unwrap_or(tail.len())]);
+        }
+    }
+    references
+}
+
 // Conservative restoration, not a Rust parser or a proof of compiler closure.
 // Literal include/path references (including doc attributes and concat! fragments) may
 // bring an otherwise unrelated owner back into the census. False positives are
@@ -215,29 +251,14 @@ fn restore_references(
         }
         let (path, _) = regular_file(root, &name)?;
         let source = fs::read_to_string(path).map_err(|_| "unreadable native source input")?;
+        let references = literal_references(&source);
+        if references.is_empty() {
+            continue;
+        }
         let parent = Path::new(&name)
             .parent()
             .ok_or("native source has no parent")?;
-        let package = packages
-            .iter()
-            .filter(|package| name.starts_with(&format!("{package}/")))
-            .max_by_key(|package| package.len());
-        let mut references = Vec::new();
-        for token in ["include", "include_str", "include_bytes"] {
-            for (index, _) in source.match_indices(token) {
-                let tail = source[index + token.len()..].trim_start();
-                let Some(tail) = tail.strip_prefix('!').map(str::trim_start) else {
-                    continue;
-                };
-                if tail.starts_with('(') {
-                    references.push(&tail[..tail.find(';').unwrap_or(tail.len())]);
-                }
-            }
-        }
-        for (index, _) in source.match_indices("#[path") {
-            let tail = &source[index..];
-            references.push(&tail[..tail.find(']').unwrap_or(tail.len())]);
-        }
+        let package = package_owner(&name, packages);
         for value in references
             .iter()
             .flat_map(|source| source.split('"').skip(1).step_by(2))
@@ -583,4 +604,243 @@ pub fn supported_target(arch: &str, os: &str, width: &str, endian: &str) -> bool
                 )
                 | ("arm", "android", "32")
         )
+}
+
+#[cfg(test)]
+mod reference_tests {
+    use super::literal_references;
+
+    fn reference_extraction_oracle(source: &str) -> Vec<&str> {
+        let mut references = Vec::new();
+        for token in ["include", "include_str", "include_bytes"] {
+            for (index, _) in source.match_indices(token) {
+                let tail = source[index + token.len()..].trim_start();
+                let Some(tail) = tail.strip_prefix('!').map(str::trim_start) else {
+                    continue;
+                };
+                if tail.starts_with('(') {
+                    references.push(&tail[..tail.find(';').unwrap_or(tail.len())]);
+                }
+            }
+        }
+        for (index, _) in source.match_indices("#[path") {
+            let tail = &source[index..];
+            references.push(&tail[..tail.find(']').unwrap_or(tail.len())]);
+        }
+        references
+    }
+
+    #[test]
+    fn extraction_preserves_reference_order_and_conservative_false_positives() {
+        let examples = [
+            r##"include_bytes!("third"); include!("first"); include_str!("second"); #[path = "last"] mod m;"##,
+            r##"// include!("comment");
+const TEXT: &str = "include_str!(\"quoted\");";
+#[pathology = "false-positive"] struct Any;
+"##,
+            r##"include!(concat!(env!("CARGO_MANIFEST_DIR"), "/file.rs"));
+include_bytes!("semicolon;inside"); #[path = "bracket]inside"]
+include_str!("unterminated""##,
+            "include \u{2003}!\u{a0}(\"unicode\"); include\u{200b}!(\"not-whitespace\");",
+            r##"includeinclude!("overlap"); include_bytesinclude_str!("nested-name");
+notinclude!("suffix"); include!!("double-bang");
+include!("include_str!(\"nested-string\");");"##,
+            r##"#[path = "one"] #[path="two"] # [path="unmatched"]
+#[path #[path="nested"] #[path = "unterminated""##,
+        ];
+        for source in examples {
+            assert_eq!(
+                literal_references(source),
+                reference_extraction_oracle(source),
+                "{source:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn extraction_matches_reference_grammar_across_token_boundaries() {
+        for prefix in [
+            "",
+            "pre",
+            "include",
+            "include_str",
+            "include_bytes",
+            "é",
+            "#!",
+        ] {
+            for token in [
+                "include",
+                "include_str",
+                "include_bytes",
+                "include_strange",
+                "INCLUDE",
+            ] {
+                for before in [
+                    "", " ", "\n", "\r\n", "\t", "\u{a0}", "\u{2003}", "\u{200b}",
+                ] {
+                    for bang in ["!", "!!", "! /* comment */", "", "!\n"] {
+                        for after in ["", " ", "\u{2003}"] {
+                            for tail in [
+                                "(\"file\");",
+                                "[\"file\"];",
+                                "{\"file\"};",
+                                "(\"semi;colon\")",
+                            ] {
+                                let source = format!("{prefix}{token}{before}{bang}{after}{tail}");
+                                assert_eq!(
+                                    literal_references(&source),
+                                    reference_extraction_oracle(&source),
+                                    "{source:?}"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod owner_lookup_tests {
+    use super::*;
+
+    fn linear_owner_oracle<'a>(name: &str, packages: &'a BTreeSet<String>) -> Option<&'a String> {
+        packages
+            .iter()
+            .filter(|package| name.starts_with(&format!("{package}/")))
+            .max_by_key(|package| package.len())
+    }
+
+    fn linear_selection_oracle(name: &str, packages: &BTreeSet<String>) -> bool {
+        if name == SWIFT_OUTPUT_LINK
+            || EXTERNAL_INPUTS.contains(&name)
+            || EXTERNAL_INPUT_ROOTS
+                .iter()
+                .any(|prefix| name.starts_with(prefix))
+            || packages.iter().any(|package| {
+                name.strip_prefix(package)
+                    .is_some_and(|rest| rest.starts_with('/'))
+            })
+        {
+            return true;
+        }
+        if name == OPTIONAL_DOCS || CLIENT_ROOTS.iter().any(|prefix| name.starts_with(prefix)) {
+            return false;
+        }
+        !(has_extension(name, "md")
+            && (!name.contains('/') || name.starts_with("docs/") || name.starts_with("specs/")))
+    }
+
+    #[test]
+    fn manifest_roots_keep_strict_parent_and_nested_package_ownership() {
+        let entries = [
+            "Cargo.toml",
+            "native/Cargo.toml",
+            "native/child/Cargo.toml",
+            "kotlin/bridge/Cargo.toml",
+            "docs/native/Cargo.toml",
+        ]
+        .into_iter()
+        .map(|name| (name.to_owned(), Entry::File))
+        .collect();
+        let packages = package_roots(&entries);
+        assert!(
+            !packages.contains(""),
+            "the workspace root is not a blanket package owner"
+        );
+        for (name, expected) in [
+            ("Cargo.toml", None),
+            ("native", None),
+            ("native/Cargo.toml", Some("native")),
+            ("native/child", Some("native")),
+            ("native/child/Cargo.toml", Some("native/child")),
+            ("native/child/src/lib.rs", Some("native/child")),
+            ("native_suffix/src/lib.rs", None),
+            ("kotlin/bridge/README.md", Some("kotlin/bridge")),
+            ("docs/native/README.MD", Some("docs/native")),
+        ] {
+            assert_eq!(
+                package_owner(name, &packages).map(String::as_str),
+                expected,
+                "{name}"
+            );
+        }
+        assert!(selected("kotlin/bridge/README.md", &packages));
+        assert!(selected("docs/native/README.MD", &packages));
+        assert!(!selected("kotlin/README.md", &packages));
+        assert!(!selected("docs/README.md", &packages));
+    }
+
+    #[test]
+    fn ancestor_lookup_and_selection_match_linear_oracles() {
+        let roots = [
+            "",
+            "native",
+            "native/child",
+            "native/child/grandchild",
+            "native_suffix",
+            "docs/native",
+            "kotlin/bridge",
+            "é",
+            "é/所有者",
+            "trailing/",
+        ];
+        let names = [
+            "",
+            "/",
+            "/Cargo.toml",
+            "Cargo.toml",
+            "README.md",
+            "README.MD",
+            ".md",
+            "native",
+            "native/",
+            "native/Cargo.toml",
+            "native/child",
+            "native/child/",
+            "native/child/Cargo.toml",
+            "native/child/grandchild/src/lib.rs",
+            "native_suffix/src/lib.rs",
+            "native_suffixed/src/lib.rs",
+            "native//source.rs",
+            "docs/native",
+            "docs/native/README.MD",
+            "docs/README.md",
+            "specs/README.md",
+            "kotlin/bridge/README.md",
+            "kotlin/README.md",
+            "é/所有者/src/lib.rs",
+            "é/所有者",
+            "é/所有者suffix/a.rs",
+            "trailing//source.rs",
+            "trailing/source.rs",
+            "iroha-docs",
+            "iroha-docs/file.rs",
+            "javascript/iroha_js/test/fixtures/new.bin",
+            "norito.md",
+            "IrohaSwift/NoritoBridge.xcframework",
+            "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift",
+        ];
+        for mask in 0..1_u16 << roots.len() {
+            let packages = roots
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| mask & (1 << index) != 0)
+                .map(|(_, root)| (*root).to_owned())
+                .collect();
+            for name in names {
+                assert_eq!(
+                    package_owner(name, &packages),
+                    linear_owner_oracle(name, &packages),
+                    "owner mismatch for {name:?} and {packages:?}"
+                );
+                assert_eq!(
+                    selected(name, &packages),
+                    linear_selection_oracle(name, &packages),
+                    "selection mismatch for {name:?} and {packages:?}"
+                );
+            }
+        }
+    }
 }

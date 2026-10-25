@@ -1,10 +1,9 @@
 # Iroha foundational model
 
 `iroha_model_base` owns canonical `chain::ChainId`, `domain::DomainId`, `name::Name`,
-`state_path::StatePath`, `metadata::{Metadata, Path}`, `error::ParseError` and
-`topology::{DataSpaceId, LaneId, ShardId, LaneIdError}` and `peer::PeerId`.
-Import these types directly
-from their owning modules.
+`state_path::StatePath`, `metadata::{Metadata, Path}`, `error::ParseError`,
+`topology::{DataSpaceId, LaneId, ShardId, LaneIdError}` and `peer::{PeerId, Peer}`.
+Import these types directly from their owning modules.
 Ledger entities, instructions, queries, account registration and network/block
 composition remain in `iroha_data_model`.
 
@@ -25,13 +24,22 @@ require canonical wire spellings and preserve decode-allocation accounting.
 Domain entities, registration and `IdBox` composition remain in the aggregate.
 
 Topology identities own their numeric validation, JSON and binary codecs, schema
-identities and applicable storage keys. Lane and dataspace catalogs, lifecycle
+identities and applicable storage keys. Lane and data space catalogs, lifecycle
 policy, the `sumeragi_lane_policy`, ledger traits and `IdBox` composition remain in the aggregate.
 
 Peer identity owns the public-key wrapper, canonical binary/JSON decoding and
 JSON object keys. Supported cryptographic algorithms remain owned by
 `iroha_crypto`; the base requests its JSON surface.
-The ledger `Peer` entity and its address/identity composition remain in the aggregate.
+`Peer` owns the endpoint address, parsing and codecs alongside its identity. Equality,
+ordering, hashing and borrowed map lookup use only `PeerId`, so an endpoint change
+does not replace a registered identity. Ledger `Identifiable` and `Registered`
+implementations remain in the aggregate. The `topology` module also owns the
+first-release committee geometry shared by model admission and deployment tools.
+
+`iroha_swarm` consumes these owners directly: normal builds no longer compile the
+aggregate ledger model or its Sumeragi and proof-engine dependencies. Its
+configuration integration tests still exercise the complete model through the
+existing `iroha_config` development dependency.
 
 Metadata retains its canonical sequence-of-tuples binary layout, duplicate-key
 rejection, decode-allocation accounting and streaming serializer. Its owner tests

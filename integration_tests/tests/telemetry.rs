@@ -1,7 +1,8 @@
 //! Telemetry and metrics surface integration tests.
 use eyre::ensure;
 use iroha_core::sumeragi::consensus::NPOS_TAG;
-use iroha_data_model::{Level, isi::Log, peer::Peer};
+use iroha_data_model::{Level, isi::Log};
+use iroha_model_base::peer::Peer;
 use iroha_test_network::NetworkBuilder;
 use std::collections::{HashMap, HashSet};
 use tokio::runtime::Runtime;

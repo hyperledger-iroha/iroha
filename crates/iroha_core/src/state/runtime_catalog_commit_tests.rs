@@ -42,9 +42,7 @@ fn staged_catalog_fixture(
 fn install_fixture_runtime(state: &State, runtime: NexusRuntimeCatalogV1) {
     let mut world = state.world.block();
     world
-        .parameters
-        .get_mut()
-        .set_parameter(iroha_data_model::parameter::Parameter::Custom(
+        .set_parameter_for_testing(iroha_data_model::parameter::Parameter::Custom(
             runtime.into_custom_parameter().unwrap(),
         ))
         .expect("valid fixture parameters");
@@ -91,9 +89,7 @@ fn runtime_catalog_readback_tracks_committed_state_and_rejects_malformed_paramet
         assert_eq!(state.view().runtime_catalog_hash().unwrap(), Some(second));
         let mut world = state.world.block();
         world
-            .parameters
-            .get_mut()
-            .set_parameter(iroha_data_model::parameter::Parameter::Custom(
+            .set_parameter_for_testing(iroha_data_model::parameter::Parameter::Custom(
                 iroha_data_model::parameter::CustomParameter::new(
                     NexusRuntimeCatalogV1::parameter_id(),
                     iroha_primitives::json::Json::new(norito::json!({"version": 255})),
@@ -232,9 +228,7 @@ fn runtime_catalog_final_overlay_rejects_unstaged_changed_and_removed_parameter(
         changed.dataspaces[0].descriptor.description = Some("late catalog change".to_owned());
         transaction
             .world
-            .parameters
-            .get_mut()
-            .set_parameter(iroha_data_model::parameter::Parameter::Custom(
+            .set_parameter_for_testing(iroha_data_model::parameter::Parameter::Custom(
                 changed.into_custom_parameter().unwrap(),
             ))
             .expect("valid fixture parameters");
@@ -249,12 +243,22 @@ fn runtime_catalog_final_overlay_rejects_unstaged_changed_and_removed_parameter(
             )
             .is_err()
         );
-        transaction
-            .world
-            .parameters
-            .get_mut()
-            .remove_custom_parameter(&NexusRuntimeCatalogV1::parameter_id())
-            .expect("optional fixture parameter removal");
+        {
+            let budget = transaction
+                .world
+                .sccp_committee_generations
+                .allocation_budget();
+            let prepared = transaction
+                .world
+                .parameters
+                .get()
+                .prepare_custom_removal(&NexusRuntimeCatalogV1::parameter_id(), budget)
+                .expect("optional fixture parameter removal");
+            let successor = prepared
+                .into_successor(transaction.world.parameters.get(), budget)
+                .expect("same original optional parameter source");
+            *transaction.world.parameters.get_mut() = successor;
+        }
         assert!(
             validate_runtime_catalog_block_overlay(
                 transaction.world.parameters.get_before_block(),
@@ -415,11 +419,18 @@ fn runtime_catalog_final_overlay_rejects_removal_and_unchanged_malformed_state()
             3,
         )
         .unwrap();
-        block
-            .parameters
-            .get_mut()
-            .remove_custom_parameter(&NexusRuntimeCatalogV1::parameter_id())
-            .expect("optional fixture parameter removal");
+        {
+            let budget = block.sccp_committee_generations.allocation_budget();
+            let prepared = block
+                .parameters
+                .get()
+                .prepare_custom_removal(&NexusRuntimeCatalogV1::parameter_id(), budget)
+                .expect("optional fixture parameter removal");
+            let successor = prepared
+                .into_successor(block.parameters.get(), budget)
+                .expect("same original optional parameter source");
+            *block.parameters.get_mut() = successor;
+        }
         let removed_parameters = block.parameters.get().clone();
         let original_parameters = block.parameters.get_before_block().clone();
         let error = validate_runtime_catalog_block_overlay(
@@ -441,9 +452,7 @@ fn runtime_catalog_final_overlay_rejects_removal_and_unchanged_malformed_state()
         assert_eq!(norito::json::to_json(&state.world).unwrap(), world_before);
         let mut world = state.world.block();
         world
-            .parameters
-            .get_mut()
-            .set_parameter(iroha_data_model::parameter::Parameter::Custom(
+            .set_parameter_for_testing(iroha_data_model::parameter::Parameter::Custom(
                 iroha_data_model::parameter::CustomParameter::new(
                     NexusRuntimeCatalogV1::parameter_id(),
                     iroha_primitives::json::Json::new(norito::json!({"version": 255})),
@@ -580,9 +589,7 @@ fn runtime_catalog_startup_reconstructs_manifest_without_files_and_preserves_pol
         );
         let mut world = state.world.block();
         world
-            .parameters
-            .get_mut()
-            .set_parameter(iroha_data_model::parameter::Parameter::Custom(
+            .set_parameter_for_testing(iroha_data_model::parameter::Parameter::Custom(
                 iroha_data_model::parameter::CustomParameter::new(
                     NexusRuntimeCatalogV1::parameter_id(),
                     iroha_primitives::json::Json::new(norito::json!({"version": 255})),
@@ -647,9 +654,7 @@ fn runtime_catalog_replacement_uses_its_retained_parameter_predecessor() {
         )
         .expect("an untouched replacement retains its actual pre-catalog predecessor");
         replacement
-            .parameters
-            .get_mut()
-            .set_parameter(iroha_data_model::parameter::Parameter::Custom(
+            .set_parameter_for_testing(iroha_data_model::parameter::Parameter::Custom(
                 live.clone().unwrap().into_custom_parameter().unwrap(),
             ))
             .expect("valid fixture parameters");

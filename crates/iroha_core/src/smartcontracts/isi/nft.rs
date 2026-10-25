@@ -1,6 +1,24 @@
 //! This module contains [`Nft`] instructions and queries implementations.
 use super::prelude::*;
 use iroha_telemetry::metrics;
+/// Seed the explicit Ed25519 policy for NFT component fixtures that register accounts.
+/// This is pre-block fixture state, not authenticated signed-genesis evidence.
+#[cfg(test)]
+fn nft_account_fixture_world() -> crate::state::World {
+    let mut world = crate::state::World::default();
+    let policy = iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+        iroha_crypto::Algorithm::Ed25519,
+    ])
+    .expect("explicit NFT fixture crypto policy");
+    world
+        .set_parameter_for_testing(
+            policy
+                .into_parameter()
+                .expect("encode explicit NFT fixture crypto policy"),
+        )
+        .expect("retain explicit NFT fixture crypto policy before the block");
+    world
+}
 /// ISI module contains all instructions related to NFTs:
 /// - register/unregister NFT
 /// - update metadata
@@ -370,7 +388,11 @@ pub mod isi {
         fn unregister_nft_removes_associated_permissions_from_accounts_and_roles() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = State::new(
+                super::super::nft_account_fixture_world(),
+                kura,
+                query_handle,
+            );
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
@@ -438,7 +460,11 @@ pub mod isi {
         fn transfer_nft_rejects_authority_without_ownership() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = State::new(
+                super::super::nft_account_fixture_world(),
+                kura,
+                query_handle,
+            );
             let users_domain: DomainId =
                 DomainId::try_new("users", "universal").expect("domain id");
             let user1 = checked_account_id();
@@ -480,7 +506,11 @@ pub mod isi {
         fn transfer_nft_allows_nft_domain_owner() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = State::new(
+                super::super::nft_account_fixture_world(),
+                kura,
+                query_handle,
+            );
             let users_domain: DomainId =
                 DomainId::try_new("users", "universal").expect("domain id");
             let user1 = checked_account_id();
@@ -1011,7 +1041,11 @@ pub mod query {
         fn nft_owner_index_tracks_register_transfer_and_unregister() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = State::new(
+                super::super::nft_account_fixture_world(),
+                kura,
+                query_handle,
+            );
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();

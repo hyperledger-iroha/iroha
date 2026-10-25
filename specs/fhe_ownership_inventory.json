@@ -19,7 +19,8 @@
    "generated_consumers": "Schemas, fixtures and inventories with a generator or reader as evidence.",
    "file_groups": "Every file the scan finds, classified by component and role."
   },
-  "scan_scope": "Every tracked or unignored file is scanned except the paths under scan.excluded_paths (this file, its checker and the plan ledger). A Markdown file is listed only when it names the RAM-LFE HKDF backend. Outside the arithmetic scopes, arithmetic that matches no detection pattern is not inventoried: other proof-field arithmetic (Pasta, BN254, the remaining Goldilocks owners that specs/fastpq/shared_backend_inventory.json lists), signature and curve arithmetic, and erasure coding."
+  "scan_scope": "Every tracked or unignored file is scanned except the paths under scan.excluded_paths (this file, its checker and the plan ledger). A Markdown file is listed only when it names the RAM-LFE HKDF backend. Outside the arithmetic scopes, arithmetic that matches no detection pattern is not inventoried: other proof-field arithmetic (Pasta, BN254, the remaining Goldilocks owners that specs/fastpq/shared_backend_inventory.json lists), signature and curve arithmetic, and erasure coding.",
+  "C.4": "Adds offline dealer-assisted sharing of an existing RNS-BGV key, explicit public context and sharing-instance identities, and opaque clearing custody. A canonical borrowed subset plan converts one local share in place into an opaque subset-additive owner; invalid conversion returns the original unmodified owner. No threshold decryption, reusable online custody, DKG, malicious-party proof, retry-security or qualified parameter claim."
  },
  "observed": {
   "base_commit": "7e93d3e0495017db7c606dc72c7ac9180792d696",
@@ -1599,7 +1600,8 @@
       "crates/iroha_fhe/src/bgv/poly.rs": ["RnsPoly::negate", "RnsPoly::sub_assign"],
       "crates/iroha_fhe/src/constant_time.rs": ["CenteredCrt3::reconstruct_mod_target", "FixedModulus::canonicalize_i64", "FixedModulus::sub"],
       "crates/iroha_fhe/src/ntt_plan.rs": ["NegacyclicPlan::forward", "NegacyclicPlan::inverse"],
-      "crates/iroha_fhe/src/rns_chain.rs": ["CongruentScaleDown::apply", "RnsBasis::digits_to_target"]
+      "crates/iroha_fhe/src/rns_chain.rs": ["CongruentScaleDown::apply", "RnsBasis::digits_to_target"],
+      "crates/iroha_fhe/src/bgv/threshold.rs": ["ThresholdSelection::coefficient"]
      }
     },
     {
@@ -1622,7 +1624,7 @@
       "crates/iroha_core_privacy/src/privacy_engines/bootle_lantern/ring.rs": ["ApplicationPolynomialV1::scale_centered", "ProofPolynomialV1::scale_canonical_unchecked", "multiply_negacyclic_crt_ntt_v1"],
       "crates/iroha_fhe/src/bgv/cipher.rs": ["PublicKey::encrypt_from_coins"],
       "crates/iroha_fhe/src/bgv/keys.rs": ["SwitchingKey::from_coins", "masked_error"],
-      "crates/iroha_fhe/src/bgv/threshold.rs": ["DealerKeyShares::take_share"],
+      "crates/iroha_fhe/src/bgv/threshold.rs": ["DealerKeyShares::take_share", "SecretKeyShare::try_into_subset_additive", "ThresholdSelection::coefficient"],
       "crates/iroha_fhe/src/constant_time.rs": ["CenteredCrt3::reconstruct_mod_target", "FixedModulus::mul", "FixedModulus::power"],
       "crates/iroha_fhe/src/ntt_plan.rs": ["NegacyclicPlan::new", "NegacyclicPlan::pointwise_mul_add_assign", "NegacyclicPlan::pointwise_mul_assign"]
      }
@@ -1632,7 +1634,7 @@
      "symbol": "FixedModulus::power",
      "role": "canonical",
      "callers_exhaustive": true,
-     "callers": {"crates/iroha_fhe/src/constant_time.rs": ["FixedModulus::pow"]}
+     "callers": {"crates/iroha_fhe/src/constant_time.rs": ["FixedModulus::pow"], "crates/iroha_fhe/src/bgv/threshold.rs": ["ThresholdSelection::coefficient"]}
     },
     {
      "path": "crates/iroha_fhe/src/constant_time.rs",
@@ -3562,10 +3564,10 @@
   {
    "id": "rns_bgv.offline_threshold_custody",
    "scheme": "rns_bgv",
-   "component": "Offline dealer-assisted Shamir sharing of an existing key and opaque secret-share custody",
+   "component": "Offline dealer-assisted Shamir custody and local canonical-subset additive conversion",
    "tasks": ["C.4"],
    "executes": ["ring_arithmetic"],
-   "note": "Consumes a complete key, samples independent polynomials per main and special prime, and evaluates shares through the canonical FixedModulus owner. Public metadata binds profile, key context, epoch, threshold, roster and fresh sharing instance; selection validates metadata only. No public reconstruction, share codec, threshold decryption, DKG, malicious-party proof or network integration; no profile is qualified.",
+   "note": "Consumes a complete key, samples independent polynomials per main and special prime, and evaluates shares through the canonical FixedModulus owner. Public metadata binds profile, key context, epoch, threshold, roster and fresh sharing instance. A borrowed canonical subset plan binds its exact participants; local conversion uses the existing buffer and modular kernels, returning the original unmodified owner on metadata refusal. Selection and conversion are not algebraic share proofs. No public reconstruction, share codec, threshold decryption, reusable online custody, DKG, retry-security, malicious-party proof or network integration; no profile is qualified.",
    "path": "crates/iroha_fhe/src/bgv/threshold.rs",
    "symbols": []
   },
@@ -6220,16 +6222,36 @@
      "SecretKeyShare::instance",
      "SecretKeyShare::participant",
      "SecretKeyShare::secret_buffer_bytes",
+     "SecretKeyShare::try_into_subset_additive",
+     "SubsetSecretKeyShare::context",
+     "SubsetSecretKeyShare::fmt",
+     "SubsetSecretKeyShare::instance",
+     "SubsetSecretKeyShare::participant",
+     "SubsetSecretKeyShare::secret_buffer_bytes",
+     "SubsetSecretKeyShare::selection_identity",
      "ThresholdContext::epoch",
      "ThresholdContext::identity",
      "ThresholdContext::key_context",
      "ThresholdContext::new",
      "ThresholdContext::participants",
      "ThresholdContext::threshold",
-     "ThresholdContext::validate_selection_metadata"
+     "ThresholdContext::validate_selection_metadata",
+     "ThresholdSelection::coefficient",
+     "ThresholdSelection::context",
+     "ThresholdSelection::identity",
+     "ThresholdSelection::instance",
+     "ThresholdSelection::new",
+     "ThresholdSelection::participants",
+     "ThresholdShareConversionError::fmt",
+     "ThresholdShareConversionError::into_parts",
+     "ThresholdShareConversionError::reason",
+     "ThresholdShareConversionError::source"
     ]
    },
-   "test_gated": {"rns_bgv.threshold_fixture": ["SecretKeyShare::words_for_fixture"], "rns_bgv.unit_tests": ["mod tests"]}
+   "test_gated": {
+    "rns_bgv.threshold_fixture": ["SecretKeyShare::words_for_fixture", "SubsetSecretKeyShare::words_for_fixture"],
+    "rns_bgv.unit_tests": ["mod tests"]
+   }
   },
   {"path": "crates/iroha_fhe/src/constant_time.rs", "production": {}, "test_gated": {"shared.unit_tests": ["mod tests"]}},
   {"path": "crates/iroha_fhe/src/key_switch.rs", "production": {}, "test_gated": {"shared.unit_tests": ["mod tests"]}},

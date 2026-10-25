@@ -10,9 +10,9 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+# Compose peer topology without compiling the aggregate ledger/proof model.
 iroha_model_base = { workspace = true }
 iroha_crypto = { workspace = true, default-features = false, features = ["node-crypto"] }
-iroha_data_model = { workspace = true, default-features = false, features = ["application-model"] }
 iroha_primitives.workspace = true
 path-absolutize.workspace = true
 displaydoc.workspace = true

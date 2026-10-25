@@ -6202,7 +6202,6 @@ mod tests {
             DataSpaceMetadata, LaneConfig, ManifestVersion, UniversalAccountId,
         },
         oracle::KeyedHash,
-        peer::Peer,
         prelude::TransactionBuilder,
         trigger::prelude::{Action, Repeats, Trigger, TriggerId},
     };
@@ -6210,6 +6209,7 @@ mod tests {
     use iroha_data_model::{
         events::data::sorafs::SorafsProofHealthAlert, sorafs::capacity::ProviderId,
     };
+    use iroha_model_base::peer::Peer;
     use iroha_model_base::peer::PeerId;
     use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
     use iroha_primitives::{

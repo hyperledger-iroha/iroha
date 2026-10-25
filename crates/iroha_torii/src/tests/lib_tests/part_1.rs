@@ -2276,7 +2276,10 @@ fn configure_recipient_lookup_sbp_dataspace_for_test(
     let state = Arc::get_mut(&mut app_state.state).expect("unique state");
     crate::tests_runtime_handlers::assert_initial_nexus_catalog_for_test(state, &nexus);
     let state_view = app_state.state.view();
-    app_state.queue.reconfigure_nexus(&nexus, &state_view, None);
+    app_state
+        .queue
+        .reconfigure_nexus(&nexus, &state_view, None)
+        .expect("original State pool admits Queue privacy projection");
 }
 fn onboarding_alias_test_world(authority: &AccountId, domain_owner: &AccountId) -> World {
     let mut accounts = vec![Account::new(authority.clone()).build(authority)];

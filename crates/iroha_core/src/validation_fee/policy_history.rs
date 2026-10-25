@@ -118,13 +118,20 @@ fn compact(stx: &mut StateTransaction<'_, '_>) -> Attempt<bool> {
     let next = next.into_custom_parameter().map_err(|error| {
         crate::execution_attempt::norito_decode_attempt_error(error, |error| error.to_string())
     })?;
-    stx.world
-        .parameters
-        .get_mut()
-        .set_parameter(Parameter::Custom(next))
-        .map_err(|error| {
-            crate::execution_attempt::norito_decode_attempt_error(error, |error| error.to_string())
-        })?;
+    let pool = stx.world.sccp_committee_generations.allocation_budget();
+    let successor = crate::pipeline_gas_policy::ParameterIngressAttemptError::observe(|| {
+        let current = stx.world.parameters.get();
+        current
+            .prepare_parameter(&Parameter::Custom(next), pool)?
+            .into_successor(current, pool)
+            .map_err(|(_prepared, original)| original.into())
+    })
+    .map_err(|original| {
+        crate::state::parameter_ingress_attempt_error(original, |invalid| invalid.to_string())
+    })?;
+    // Native maintenance changes only retained custody. It is not a user
+    // SetParameter instruction and must not emit Configuration events.
+    *stx.world.parameters.get_mut() = successor;
     Ok(true)
 }
 
@@ -426,5 +433,96 @@ mod tests {
         );
         validate_retained_history(&restarted.state().view(), &registry, restarted.height())
             .unwrap();
+    }
+    #[test]
+    fn original_compaction_graph_refusal_preserves_both_versions_and_emits_no_events() {
+        use crate::pipeline_gas_policy::RetainedStateParameters;
+        use crate::test_allocations::refuse_one_layout_during;
+
+        let chain = archived_revision_fixture();
+        let original_state = crate::snapshot::canonical_state_snapshot_hash(chain.state()).unwrap();
+        let proposal = chain.proposal(Some(NOW + 2), Vec::new());
+        let state = std::sync::Arc::clone(chain.state());
+        let mut block = state.block(proposal.header());
+        let original = block.world.parameters.get().clone();
+        let predecessor = block.world.parameters.get_before_block().clone();
+        let fragments = block.committed_fragment_count();
+        let external = block.world.pending_external_events().to_vec();
+        let layout = RetainedStateParameters::graph_allocation_layout_for_testing();
+        {
+            // Acquire the real transaction before refusing the later graph shell.
+            let mut stx = block.transaction();
+            let pool = stx
+                .world
+                .sccp_committee_generations
+                .allocation_budget()
+                .clone();
+            let held = pool.reserved_bytes();
+            let internal = stx.world.internal_event_buf.len();
+            let events = stx.world.external_event_buf.len();
+            let (result, observed) = refuse_one_layout_during(layout, || compact(&mut stx));
+            assert!(
+                observed,
+                "the actual compaction graph allocation must be attempted"
+            );
+            let Err(ExecutionAttemptError::Deferred(refused)) = result else {
+                panic!("physical compaction refusal must remain a deferred attempt");
+            };
+            assert!(matches!(
+                refused.allocator_refusal().unwrap().shared_error(),
+                Some(iroha_allocation::PrepaidSharedError::Allocator { requested_bytes })
+                    if *requested_bytes == layout.size()
+            ));
+            assert!(refused.allocation_refusal().is_none());
+            assert!(refused.decode_refusal().is_none());
+            let returned = crate::execution_attempt::ExecutionDeferred::try_from_vm_error(
+                refused.into_vm_error(),
+            )
+            .unwrap();
+            assert!(matches!(
+                returned.allocator_refusal().unwrap().shared_error(),
+                Some(iroha_allocation::PrepaidSharedError::Allocator { requested_bytes })
+                    if *requested_bytes == layout.size()
+            ));
+            assert!(original.same_version(stx.world.parameters.get()));
+            assert!(predecessor.same_version(stx.world.parameters.get_before_block()));
+            assert_eq!(stx.world.internal_event_buf.len(), internal);
+            assert_eq!(stx.world.external_event_buf.len(), events);
+            assert_eq!(pool.reserved_bytes(), held);
+
+            // A finite refusal is owned by this same execution pool, not a new
+            // decoder budget. Restoring that pool permits the same source retry.
+            let limit = pool.limit_bytes();
+            pool.set_limit_bytes(held);
+            let finite = compact(&mut stx);
+            pool.set_limit_bytes(limit);
+            let Err(ExecutionAttemptError::Deferred(refused)) = finite else {
+                panic!("the original finite execution pool must refuse compaction");
+            };
+            assert!(refused.allocation_refusal().is_some());
+            assert!(refused.allocator_refusal().is_none());
+            assert!(original.same_version(stx.world.parameters.get()));
+            assert_eq!(pool.reserved_bytes(), held);
+            assert!(compact(&mut stx).unwrap());
+            assert!(!original.same_version(stx.world.parameters.get()));
+            assert!(predecessor.same_version(stx.world.parameters.get_before_block()));
+            assert_eq!(stx.world.internal_event_buf.len(), internal);
+            assert_eq!(stx.world.external_event_buf.len(), events);
+            // Drop the accepted child too: neither retry nor refusal publishes.
+        }
+        assert!(original.same_version(block.world.parameters.get()));
+        assert!(predecessor.same_version(block.world.parameters.get_before_block()));
+        assert_eq!(block.committed_fragment_count(), fragments);
+        assert_eq!(block.world.pending_external_events(), external.as_slice());
+        process(&mut block).unwrap();
+        assert!(!original.same_version(block.world.parameters.get()));
+        assert!(predecessor.same_version(block.world.parameters.get_before_block()));
+        assert_eq!(block.committed_fragment_count(), fragments + 1);
+        assert_eq!(block.world.pending_external_events(), external.as_slice());
+        drop(block);
+        assert_eq!(
+            crate::snapshot::canonical_state_snapshot_hash(chain.state()).unwrap(),
+            original_state
+        );
     }
 }

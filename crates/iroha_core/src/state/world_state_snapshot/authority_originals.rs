@@ -54,6 +54,15 @@ fn require_key(snapshot: &WorldStateSnapshotV1, field: &str, key: Hash) -> Resul
         })
 }
 
+/// Keep the original catalog cause until the certified reader's caller chooses its response.
+fn decode_account_runtime_catalog(
+    parameter: &iroha_data_model::parameter::CustomParameter,
+) -> Result<iroha_data_model::nexus::NexusRuntimeCatalogV1, WorldStateSnapshotError> {
+    iroha_data_model::nexus::NexusRuntimeCatalogV1::from_custom_parameter(parameter)
+        .map_err(WorldStateSnapshotError::Catalog)?
+        .ok_or_else(|| "World authority protected catalog identity differs".into())
+}
+
 fn complete_keys<'a, K: norito::codec::Encode + 'a>(
     snapshot: &WorldStateSnapshotV1,
     field: &str,
@@ -535,7 +544,7 @@ impl State {
         self.with_native_world_state_snapshot_cut_v1(tip, Some(authority), budget, |snapshot, world| {
             require_target(snapshot, "world.parameters", WorldStateElementKindV1::Cell, None,
                 hash_value(world.parameters.get())?)?;
-            let _parameter_identity_charge = budget.try_reserve_bytes(1024).map_err(|e| e.to_string())?;
+            let _parameter_identity_charge = budget.try_reserve_bytes(1024)?;
             let parameter = world.parameters.get().custom().get(
                 &iroha_data_model::nexus::NexusRuntimeCatalogV1::parameter_id()
             ).ok_or("World authority account alias requires the original committed runtime catalog; default or process-only catalog is not authority")?;
@@ -544,9 +553,8 @@ impl State {
             // Reserve that documented ceiling before invoking the actual decoder.
             let decode_bytes = iroha_data_model::nexus::MAX_NEXUS_RUNTIME_CATALOG_BYTES
                 .checked_mul(16).ok_or("World authority catalog decode bound overflows")?;
-            let _decode_charge = budget.try_reserve_bytes(decode_bytes).map_err(|e| e.to_string())?;
-            let runtime = iroha_data_model::nexus::NexusRuntimeCatalogV1::from_custom_parameter(parameter)
-                .map_err(|e| e.to_string())?.ok_or("World authority protected catalog identity differs")?;
+            let _decode_charge = budget.try_reserve_bytes(decode_bytes)?;
+            let runtime = decode_account_runtime_catalog(parameter)?;
             let configured = self.nexus.read();
             let baseline = &configured.configured_dataspace_catalog;
             let count = baseline.entries().len().checked_add(runtime.dataspaces.len())
@@ -569,13 +577,13 @@ impl State {
                 .and_then(|v| v.checked_add(payload_bytes.checked_mul(4)?))
                 .and_then(|v| v.checked_add(count.checked_mul(2048)?))
                 .ok_or("World authority catalog original allocation bound overflows")?;
-            let _catalog_charge = budget.try_reserve_bytes(clone_bytes).map_err(|e| e.to_string())?;
+            let _catalog_charge = budget.try_reserve_bytes(clone_bytes)?;
             let manifests = self.lane_manifests.read();
             if runtime.baseline_manifests_hash != Hash::prehashed(manifests.baseline_consensus_policy_digest()) {
                 return Err("World authority committed catalog differs from immutable native manifest baseline".into());
             }
             let catalog = crate::state::runtime_catalog_dataspaces(baseline, Some(&runtime))
-                .map_err(|e| e.to_string())?;
+                .map_err(WorldStateSnapshotError::CatalogProjection)?;
             consume_account(snapshot, world, name, &catalog, budget, consume).map_err(WorldStateSnapshotError::from)
         })
     }

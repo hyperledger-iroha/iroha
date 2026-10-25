@@ -401,9 +401,10 @@ split-debuginfo = "unpacked"
 # Keep test harnesses from producing enormous debug-heavy Linux artifacts.
 # Use `CARGO_PROFILE_TEST_DEBUG=line-tables-only` when debugging tests.
 debug = 0
-# Keep long workspace test runs from retaining large incremental-query caches
-# on WSL and memory-constrained VMs. Override locally with `CARGO_INCREMENTAL=1`.
-incremental = false
+# Reuse the same dependency artifacts and incremental queries as local builds.
+# Constrained or deliberately cold runs can set `CARGO_INCREMENTAL=0` (or use
+# scripts/cargo_fast.sh --no-incremental) without changing the workspace profile.
+incremental = true
 
 [profile.test.build-override]
 debug = 0

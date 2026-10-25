@@ -515,7 +515,6 @@ fn prepare_fresh(
         })
         .collect::<Vec<_>>();
     let owner_literal = owner.account_id.to_string();
-    let gas_literal = gas.to_string();
     let render = |render_root: &Path, index: usize, identity| -> Result<Zeroizing<String>> {
         let paths = LocalnetPeerStoragePaths::new(render_root, index);
         let raw = render_peer_config(
@@ -545,7 +544,6 @@ fn prepare_fresh(
             None,
             None,
             None,
-            &gas_literal,
             localnet_tx_gossip_overrides(LOCALNET_PIPELINE_TIME_MS),
             None,
             None,
@@ -748,7 +746,7 @@ pub fn private_fee_policy(
         fee_asset_id: private_fee_asset(spec)?,
         fee_sink_account_id: gas_account.clone(),
         sponsor_vault_custody_account_id: gas_account.clone(),
-        successful_claim_fee_exempt_authorities: BTreeSet::new(),
+        successful_claim_fee_exempt_authorities: Default::default(),
         base_fee: "0.001".parse()?,
         per_byte_fee: Quantity::zero(),
         per_instruction_fee: "0.001".parse()?,
@@ -784,7 +782,7 @@ fn private_genesis(
         ])
         .expect("explicit canonical genesis producer policy"),
     )
-    .with_staking_policy(crate::genesis::default_staking_policy(
+    .with_staking_policy(iroha_genesis::default_staking_policy(
         private_fee_asset(spec)?,
         gas.clone(),
         gas.clone(),
@@ -971,7 +969,7 @@ mod tests {
             &peers,
         )
         .unwrap();
-        let expected = crate::genesis::default_staking_policy(
+        let expected = iroha_genesis::default_staking_policy(
             private_fee_asset(&spec).unwrap(),
             gas.clone(),
             gas,
@@ -1283,7 +1281,7 @@ mod tests {
                     &manifest.effective_parameters().unwrap(),
                 )
                 .unwrap(),
-                crate::genesis::default_staking_policy(
+                iroha_genesis::default_staking_policy(
                     private_fee_asset(&spec).unwrap(),
                     localnet_gas_account_id(client.key_pair.public_key()),
                     localnet_gas_account_id(client.key_pair.public_key()),

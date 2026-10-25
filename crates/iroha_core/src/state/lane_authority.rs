@@ -263,7 +263,6 @@ pub(super) fn inputs_from_nexus(
             dataspace_id,
             autoscale_validator_set,
             validator_mode,
-            minimum_stake: nexus.staking.min_validator_stake.clone(),
             max_validators: nexus.staking.max_validators.get(),
         },
         manifest_authority_lanes,
@@ -300,12 +299,13 @@ fn live_dataspace_stake_candidates(
     inputs: &ResolvedLaneAuthorityInputs,
     block_height: u64,
 ) -> Option<Vec<(AccountId, PeerId, Quantity)>> {
+    let monetary = world.parameters().require_staking_policy().ok()?;
     live_stake_candidates_for_lanes(
         world,
         target_lane,
         &inputs.staking_authority_lanes,
         inputs.staking_owner_lane,
-        &inputs.bounded.minimum_stake,
+        &monetary.min_validator_stake,
         inputs.bounded.max_validators,
         block_height,
     )
@@ -438,10 +438,13 @@ pub(super) fn validator_accounts_with_inputs(
             iroha_config::parameters::actual::LaneValidatorMode::StakeElected
         )
     {
+        let Ok(monetary) = world.parameters().require_staking_policy() else {
+            return Vec::new();
+        };
         return bounded_authority::stake_elected_validator_accounts(
             world,
             lane_id,
-            &inputs.bounded.minimum_stake,
+            &monetary.min_validator_stake,
             inputs.bounded.max_validators,
             block_height,
         );
@@ -501,10 +504,14 @@ pub(super) fn peer_pool_with_inputs(
             iroha_config::parameters::actual::LaneValidatorMode::StakeElected
         )
     {
+        let monetary = world
+            .parameters()
+            .require_staking_policy()
+            .map_err(|_| ())?;
         return Ok(bounded_authority::stake_elected_peer_ids(
             world,
             lane_id,
-            &inputs.bounded.minimum_stake,
+            &monetary.min_validator_stake,
             inputs.bounded.max_validators,
             block_height,
         ));

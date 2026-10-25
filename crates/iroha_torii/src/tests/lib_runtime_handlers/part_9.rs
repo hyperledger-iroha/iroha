@@ -1530,8 +1530,7 @@ async fn node_capabilities_http_bootstraps_without_registered_account() {
     .expect("explicit public capability fixture policy");
     let mut block = world.block();
     block
-        .parameters
-        .set_parameter(policy.into_parameter().expect("canonical fixture policy"))
+        .set_parameter_for_testing(policy.into_parameter().expect("canonical fixture policy"))
         .expect("author policy before State construction");
     block.commit();
     let kura = Kura::blank_kura_for_testing();

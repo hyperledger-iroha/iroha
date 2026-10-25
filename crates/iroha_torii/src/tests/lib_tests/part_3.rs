@@ -3365,9 +3365,7 @@ async fn proof_retention_status_reports_the_committed_retention_policy() {
         let mut block = app.state.block(header);
         let mut stx = block.transaction();
         stx.world
-            .parameters_mut_for_testing()
-            .get_mut()
-            .set_parameter(Parameter::Custom(policy.clone().into_custom_parameter()))
+            .set_parameter_for_testing(Parameter::Custom(policy.clone().into_custom_parameter()))
             .expect("valid fixture parameters");
         stx.apply();
         block

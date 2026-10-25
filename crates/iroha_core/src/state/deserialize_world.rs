@@ -7434,19 +7434,24 @@ mod validation_fee_registry_restore_tests {
                 .insert(ballot_attempt_id, lifecycle);
         }
         {
-            let mut parameters = world.parameters.block();
-            parameters
-                .get_mut()
-                .set_parameter(Parameter::Custom(npos.into_custom_parameter()))
-                .expect("valid fixture parameters");
-            parameters
-                .get_mut()
-                .set_parameter(Parameter::Custom(
+            let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
+                .expect("funded original parameter-only fixture block");
+            crate::state::set_parameter_cell_for_testing(
+                &mut parameters,
+                Parameter::Custom(npos.into_custom_parameter()),
+                world.sccp_committee_generations.allocation_budget(),
+            )
+            .expect("valid fixture parameters");
+            crate::state::set_parameter_cell_for_testing(
+                &mut parameters,
+                Parameter::Custom(
                     registry.clone().into_custom_parameter().expect(
                         "validation-fee fixture registry fits the canonical JSON parameter",
                     ),
-                ))
-                .expect("valid fixture parameters");
+                ),
+                world.sccp_committee_generations.allocation_budget(),
+            )
+            .expect("valid fixture parameters");
             parameters.commit();
         }
         (world, registry)
@@ -8196,7 +8201,7 @@ fn decode_world_fields(
     if !cfg!(all(test, sumeragi_core_mutation = "HC930")) {
         map.require_source_order(canonical_world_field_order(), "world")?;
     }
-    let parameters = take_parameters_cell(&mut map, "parameters")?;
+    let parameters = take_parameters_cell(&mut map, "parameters", execution_budget)?;
     let peers: Cell<Peers> = take_required(&mut map, "peers")?;
     let consensus_schedule = take_native_consensus_schedule(&mut map, execution_budget)?;
     // Derived from the restored World: accelerated restoration recomputes it by a cold capture
@@ -9284,12 +9289,12 @@ fn parse_world(
     proof_tag_index::rebuild(&mut world)?;
     verifying_key_index::validate_verifying_key_index(&world)?;
     validate_asset_transfer_control_persistence_v1(&world)?;
-    crate::smartcontracts::isi::escrow::controlled::validate_persistence(&world.view()).map_err(|error| {
-        json::Error::InvalidField {
+    crate::smartcontracts::isi::escrow::controlled::validate_persistence(&world.view()).map_err(
+        |error| json::Error::InvalidField {
             field: "world.smart_contract_state.asset_lock_control_v1".to_owned(),
             message: error.to_string(),
-        }
-    })?;
+        },
+    )?;
     super::asset_uid::validate_persistence(&world.view()).map_err(|error| {
         json::Error::InvalidField {
             field: "world.smart_contract_state.asset_uid_v1".to_owned(),
@@ -10045,7 +10050,7 @@ fn build_state(
             .map_err(StateStorageAdmissionError::World)?,
         provisional_emergency_lane_manifests_consumed: false,
         lane_privacy_registry: PublicationRwLock::try_new(
-            Arc::new(LanePrivacyRegistry::empty()),
+            LanePrivacyRegistry::empty(),
             &execution_budget,
         )
         .map_err(StateStorageAdmissionError::World)?,
@@ -10140,8 +10145,14 @@ fn build_state(
             state.project_canonical_runtime(runtime.get(), &world)
         }
         .map_err(|error| MergeLedgerCommitError::ExecutionStatePublication(error.to_string()))?;
+        // The read projection above owns no privacy copy. Admit exactly once
+        // after its physical read guards retire and before either installation.
+        let privacy = LanePrivacyRegistry::try_from_manifest_registry(
+            &projection.manifests,
+            &state.ivm_execution_budget(),
+        ).map_err(MergeLedgerCommitError::ExecutionDeferred)?;
         *state.lane_manifests.get_mut() = projection.manifests;
-        *state.lane_privacy_registry.get_mut() = projection.privacy;
+        *state.lane_privacy_registry.get_mut() = privacy;
     }
     crate::sumeragi::evidence::validate_persisted_records(&state)
         .map_err(crate::sumeragi::evidence::restoration_failure)?;
@@ -11814,9 +11825,13 @@ mod decode_tests {
         let mut map = json::native::Map::new();
         map.insert("parameters".to_owned(), canonical);
         let mut map = SnapshotJsonMap::from_owned(map);
-        let parsed = take_parameters_cell(&mut map, "parameters")
-            .expect("canonical parameters MV envelope must be accepted");
-        assert_eq!(&**parsed.view().get(), &expected);
+        let parsed = take_parameters_cell(
+            &mut map,
+            "parameters",
+            &scalar_cell_custody::default_budget(),
+        )
+        .expect("canonical parameters MV envelope must be accepted");
+        assert_eq!(&***parsed.view().get(), &expected);
     }
     #[test]
     fn borrowed_snapshot_map_rejects_duplicates_and_noncanonical_order() {
@@ -12492,9 +12507,13 @@ mod decode_tests {
         let mut map = json::native::Map::new();
         map.insert("parameters".to_owned(), json::Value::Object(legacy_map));
         let mut map = SnapshotJsonMap::from_owned(map);
-        let error = take_parameters_cell(&mut map, "parameters")
-            .err()
-            .expect("legacy blocks-only parameters envelope must be rejected");
+        let error = take_parameters_cell(
+            &mut map,
+            "parameters",
+            &scalar_cell_custody::default_budget(),
+        )
+        .err()
+        .expect("legacy blocks-only parameters envelope must be rejected");
         assert!(
             error.to_string().contains("parameters"),
             "unexpected diagnostic: {error}"

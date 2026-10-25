@@ -266,8 +266,7 @@ fn bound_contract_validation_retains_scope_error_before_incomplete_binding() {
     transaction.world.contract_subject_bindings.remove(address);
     transaction
         .world
-        .parameters
-        .set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
+        .set_parameter_for_testing(crate::sumeragi::lanes::routing::test_support::metadata(
             iroha_data_model::block::consensus::SumeragiRootScope::Dataspace {
                 parent_network_id: state.network_id,
                 dataspace_id: DataSpaceId::new(7),
@@ -303,8 +302,7 @@ fn bound_contract_validation_preserves_malformed_scope_rejections() {
     for payload in ["null", "{}", "false", "\"global\""] {
         transaction
             .world
-            .parameters
-            .set_parameter(Parameter::Custom(CustomParameter::new(
+            .set_parameter_for_testing(Parameter::Custom(CustomParameter::new(
                 handshake_meta_id(),
                 payload
                     .parse::<iroha_primitives::json::Json>()

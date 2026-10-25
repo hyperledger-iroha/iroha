@@ -94,7 +94,6 @@ use iroha_core::{
         store,
     },
     state::{State, StateReadOnly, WorldReadOnly},
-    tx::AcceptedTransaction,
 };
 use iroha_crypto::KeyPair;
 use iroha_data_model::{
@@ -617,19 +616,10 @@ fn submit_transaction_at(
         .wrap_err("rebuild quoted SCCP transaction")?
         .try_sign(key.private_key())
         .map_err(|error| eyre::eyre!("sign SCCP transaction: {error:?}"))?;
-    let (max_clock_drift, transaction_params) = {
+    let accepted = {
         let world = state.world_view();
-        let params = world.parameters();
-        (params.sumeragi().max_clock_drift(), params.transaction())
-    };
-    let crypto = state.crypto();
-    let accepted = AcceptedTransaction::accept(
-        transaction,
-        state.network_id_ref(),
-        max_clock_drift,
-        transaction_params,
-        crypto.as_ref(),
-    )
+        crate::accept_internal_transaction(transaction, state.network_id_ref(), &world)
+    }
     .wrap_err("accept SCCP transaction")?;
     queue
         .push_with_lane_with_state(accepted, state)
@@ -1758,12 +1748,18 @@ mod tests {
         {
             let mut block = world.block();
             block
-                .parameters
-                .set_parameter(Parameter::Custom(CustomParameter::new(
+                .set_parameter_for_testing(Parameter::Custom(CustomParameter::new(
                     consensus_metadata::handshake_meta_id(),
                     iroha_primitives::json::Json::new(metadata),
                 )))
                 .expect("install the signed SCCP handshake fixture");
+            block
+                .set_parameter_for_testing(
+                    crate::daemon_fixture_crypto_policy()
+                        .into_parameter()
+                        .expect("canonical ordinary crypto policy parameter"),
+                )
+                .expect("commit the SCCP fixture's explicit ordinary signing policy");
             block.commit();
         }
         let state = Arc::new(State::new_for_testing(

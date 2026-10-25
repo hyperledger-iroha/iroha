@@ -198,7 +198,7 @@ fn operator_preparation_refuses_unpinned_genesis_key_and_network_before_signing(
         ])
         .expect("explicit canonical genesis producer policy"),
     )
-    .with_staking_policy(crate::genesis::default_staking_policy(
+    .with_staking_policy(iroha_genesis::default_staking_policy(
         iroha_config::parameters::defaults::nexus::fees::fee_asset_id()
             .parse()
             .unwrap(),

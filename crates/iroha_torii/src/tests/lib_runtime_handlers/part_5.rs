@@ -1952,7 +1952,10 @@ fn native_ingress_app_with_config_for_test(
     unique.kura = chain.kura().clone();
     {
         let view = unique.state.view();
-        unique.queue.reconfigure_nexus(view.nexus(), &view, None);
+        unique
+            .queue
+            .reconfigure_nexus(view.nexus(), &view, None)
+            .expect("original State pool admits Queue privacy projection");
     }
     unique.local_peer_id = Some(PeerId::new(validator.public_key().clone()));
     unique.torii_proxy_bridge_signer = validator;
@@ -2192,7 +2195,10 @@ fn native_ingress_with_registered_route_peers_and_chain_for_test(
     unique.local_peer_id = Some(PeerId::new(members[0].1.public_key().clone()));
     unique.torii_proxy_bridge_signer = members[0].1.clone();
     let view = unique.state.view();
-    unique.queue.reconfigure_nexus(view.nexus(), &view, None);
+    unique
+        .queue
+        .reconfigure_nexus(view.nexus(), &view, None)
+        .expect("original State pool admits Queue privacy projection");
     drop(view);
     (app, chain, genesis_key)
 }

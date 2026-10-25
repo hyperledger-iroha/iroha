@@ -206,7 +206,7 @@ mod tests {
 
     fn manifest(cadence: u64) -> RawGenesisTransaction {
         let custody = iroha_config::parameters::defaults::governance::bond_escrow_account_id();
-        let mut staking = super::super::default_staking_policy(
+        let mut staking = iroha_genesis::default_staking_policy(
             SumeragiNposParameters::default().xor_asset_definition_id,
             custody.clone(),
             custody,

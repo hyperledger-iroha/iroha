@@ -94,7 +94,7 @@ impl<'a> Committee<'a> {
             out.peers[out.len] = Some(peer);
             out.len += 1;
         }
-        if !iroha_data_model::block::consensus::is_valid_committee_size(out.len)
+        if !iroha_model_base::topology::is_valid_committee_size(out.len)
             || !out.keys[..out.len].is_sorted_by(|a, b| a < b)
         {
             return Err(GenerationError::Degraded(Degraded::InvalidInputs));

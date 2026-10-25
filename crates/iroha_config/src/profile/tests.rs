@@ -225,11 +225,17 @@ fn sora_nexus_v1_literals_are_the_defaults_for_discriminant_369() {
     let custody = protocol_custody_account(ProfileId::SoraNexusV1)
         .to_i105_for_discriminant(369)
         .unwrap();
-    for key in [
-        "nexus.staking.stake_escrow_account_id",
-        "nexus.staking.slash_sink_account_id",
+    for account in [
+        &profile
+            .genesis_recipe()
+            .public_lane_staking
+            .stake_escrow_account_id,
+        &profile
+            .genesis_recipe()
+            .public_lane_staking
+            .slash_sink_account_id,
     ] {
-        assert_eq!(string_at(static_config, key), custody, "{key}");
+        assert_eq!(account.to_i105_for_discriminant(369).unwrap(), custody);
     }
     for account in [
         &profile.genesis_recipe().root_fees.fee_sink_account_id,
@@ -276,11 +282,19 @@ fn sora_nexus_v1_literals_are_the_defaults_for_discriminant_369() {
         asset("universal.universal")
     );
     assert_eq!(
-        string_at(static_config, "nexus.staking.stake_asset_id"),
-        defaults::nexus::staking::stake_asset_id()
+        profile
+            .genesis_recipe()
+            .public_lane_staking
+            .stake_asset_id
+            .canonical_address(),
+        defaults::nexus::fees::fee_asset_id()
     );
     assert_eq!(
-        string_at(static_config, "nexus.staking.stake_asset_id"),
+        profile
+            .genesis_recipe()
+            .public_lane_staking
+            .stake_asset_id
+            .canonical_address(),
         asset("universal.universal")
     );
 }
@@ -588,7 +602,8 @@ fn digests_are_pinned() {
     let profile = sora();
     // The first-release profile admits complete 17 MiB transaction-gossip frames.
     // Pipeline fee and ZK validity policies belong to committed parameters.
-    // The static SCCP staking policy binds 21-day unbonding and 10000-bps maximum slashing.
+    // The signed staking recipe binds 21-day unbonding and 10000-bps maximum slashing.
+    // TODO: regenerate this exact consensus digest with the native owner after the coordinated cut.
     // The root fee policy is part of the signed genesis recipe (`[genesis_recipe.root_fees]`),
     // with sponsor-vault custody and an explicit, empty fee-exemption set.
     assert_eq!(
@@ -608,62 +623,37 @@ fn compiled_sccp_staking_policy_is_bound_into_consensus_digest() {
     let profile = sora();
     let consensus = profile.consensus_digest(4).unwrap();
     let policy = profile.policy_digest().unwrap();
-    for (key, required, altered) in [
-        (
-            "nexus.staking.unbonding_delay_ms",
-            1_814_400_000,
-            1_814_399_999,
-        ),
-        ("nexus.staking.max_slash_bps", 10_000, 9_999),
-    ] {
-        assert_eq!(integer_at(&profile.static_config, key), required, "{key}");
-        // Change one typed consensus input at a time without changing any policy leaf.
-        // This clone tests hashing sensitivity; it is never admitted as a node profile.
+    let original = &profile.genesis_recipe.public_lane_staking;
+    assert_eq!(original.unbonding_delay_ms, 1_814_400_000);
+    assert_eq!(original.max_slash_bps, 10_000);
+    for field in ["unbonding_delay_ms", "max_slash_bps"] {
         let mut changed = profile.clone();
-        set(
-            &mut changed.static_config,
-            key,
-            toml::Value::Integer(altered),
-        );
-        assert_ne!(changed.consensus_digest(4).unwrap(), consensus, "{key}");
-        assert_eq!(changed.policy_digest().unwrap(), policy, "{key}");
+        let staking = &mut changed.genesis_recipe.public_lane_staking;
+        match field {
+            "unbonding_delay_ms" => staking.unbonding_delay_ms -= 1,
+            "max_slash_bps" => staking.max_slash_bps -= 1,
+            _ => unreachable!(),
+        }
+        assert_ne!(changed.consensus_digest(4).unwrap(), consensus, "{field}");
+        assert_eq!(changed.policy_digest().unwrap(), policy, "{field}");
     }
-
-    // Removing the two staking leaves must change the current consensus input, and
-    // restoring exactly those leaves must recover it. Other signed profile fields can
-    // evolve independently; the full-profile golden is pinned in `digests_are_pinned`.
-    // This altered clone is never admitted as a node profile.
-    let mut omitted = profile.clone();
-    let staking = omitted
-        .static_config
-        .get_mut("nexus")
-        .unwrap()
-        .as_table_mut()
-        .unwrap()
-        .get_mut("staking")
-        .unwrap()
-        .as_table_mut()
-        .unwrap();
-    assert_eq!(
-        staking.remove("unbonding_delay_ms"),
-        Some(toml::Value::Integer(1_814_400_000))
-    );
-    assert_eq!(
-        staking.remove("max_slash_bps"),
-        Some(toml::Value::Integer(10_000))
-    );
-    assert_ne!(omitted.consensus_digest(4).unwrap(), consensus);
-    assert_eq!(omitted.policy_digest().unwrap(), policy);
-
-    for (key, value) in [
-        ("nexus.staking.unbonding_delay_ms", 1_814_400_000),
-        ("nexus.staking.max_slash_bps", 10_000),
-    ] {
-        set(&mut omitted.static_config, key, toml::Value::Integer(value));
-    }
-    assert_eq!(omitted.static_config, profile.static_config);
-    assert_eq!(omitted.consensus_digest(4).unwrap(), consensus);
-    assert_eq!(omitted.policy_digest().unwrap(), policy);
+    let mut altered = profile.clone();
+    altered
+        .genesis_recipe
+        .public_lane_staking
+        .unbonding_delay_ms = 0;
+    altered.genesis_recipe.public_lane_staking.max_slash_bps = 0;
+    assert_ne!(altered.consensus_digest(4).unwrap(), consensus);
+    assert_eq!(altered.policy_digest().unwrap(), policy);
+    altered
+        .genesis_recipe
+        .public_lane_staking
+        .unbonding_delay_ms = original.unbonding_delay_ms;
+    altered.genesis_recipe.public_lane_staking.max_slash_bps = original.max_slash_bps;
+    assert_eq!(altered.static_config, profile.static_config);
+    assert_eq!(altered.genesis_recipe, profile.genesis_recipe);
+    assert_eq!(altered.consensus_digest(4).unwrap(), consensus);
+    assert_eq!(altered.policy_digest().unwrap(), policy);
 }
 
 #[test]
@@ -1172,4 +1162,70 @@ fn table_helpers_merge_and_enumerate() {
     assert_eq!(to_usize(7), 7);
     assert_eq!(parse_consensus_mode("npos"), Some(ConsensusMode::Npos));
     assert_eq!(parse_consensus_mode("other"), None);
+}
+
+#[test]
+fn signed_staking_recipe_survives_fee_exemption_authoring_and_duplicate_retry() {
+    let base = sora();
+    let original = parse_profile_text(ProfileId::SoraNexusV1).unwrap();
+    let mut accounts = [
+        keyless_role_account(ProfileId::SoraNexusV1, KeylessRole::ALL[0]),
+        keyless_role_account(ProfileId::SoraNexusV1, KeylessRole::ALL[1]),
+    ];
+    accounts.sort();
+    assert_ne!(accounts[0], accounts[1]);
+    let literals: Vec<_> = accounts
+        .iter()
+        .map(|account| {
+            account
+                .to_i105_for_discriminant(base.chain_discriminant())
+                .unwrap()
+        })
+        .collect();
+    let mut authored = original.clone();
+    set(
+        &mut authored,
+        "genesis_recipe.root_fees.successful_claim_fee_exempt_authorities",
+        toml::Value::Array(
+            literals
+                .iter()
+                .rev()
+                .cloned()
+                .map(toml::Value::String)
+                .collect(),
+        ),
+    );
+    let loaded = Profile::from_table(ProfileId::SoraNexusV1, authored.clone()).unwrap();
+    let mut expected_fees = base.genesis_recipe.root_fees.clone();
+    expected_fees.successful_claim_fee_exempt_authorities =
+        iroha_data_model::block::consensus::RootFeeExemptions::try_from_iter(accounts).unwrap();
+    assert_eq!(loaded.genesis_recipe.root_fees, expected_fees);
+    assert_eq!(
+        loaded.genesis_recipe.public_lane_staking,
+        base.genesis_recipe.public_lane_staking,
+    );
+    let mut duplicate = authored.clone();
+    set(
+        &mut duplicate,
+        "genesis_recipe.root_fees.successful_claim_fee_exempt_authorities",
+        toml::Value::Array(vec![
+            toml::Value::String(literals[0].clone()),
+            toml::Value::String(literals[0].clone()),
+        ]),
+    );
+    assert_eq!(
+        Profile::from_table(ProfileId::SoraNexusV1, duplicate).unwrap_err(),
+        ProfileError::Malformed {
+            profile: ProfileId::SoraNexusV1,
+            message: "genesis fee exemptions repeat an account".to_owned(),
+        },
+    );
+    let retry = Profile::from_table(ProfileId::SoraNexusV1, authored).unwrap();
+    assert_eq!(retry.genesis_recipe, loaded.genesis_recipe);
+    assert_eq!(
+        Profile::from_table(ProfileId::SoraNexusV1, original)
+            .unwrap()
+            .genesis_recipe,
+        base.genesis_recipe,
+    );
 }
