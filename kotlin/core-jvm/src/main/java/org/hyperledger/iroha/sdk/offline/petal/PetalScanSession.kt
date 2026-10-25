@@ -47,21 +47,25 @@ class PetalScanStats internal constructor(
     val merges: Long,
     /** Field lanes recovered by merging captures. */
     val mergedLanes: Long,
-    /** Turn lanes read (each at most once per shown frame). */
+    /** Turn lanes tried (each at most once per shown frame). */
+    val turnTries: Long,
+    /** Turn lanes read. */
     val turnLanes: Long,
 ) {
     override fun equals(other: Any?): Boolean = other is PetalScanStats && frames == other.frames &&
         located == other.located && readable == other.readable && laneD == other.laneD &&
         fieldLanes == other.fieldLanes && tracked == other.tracked && inferred == other.inferred &&
-        merges == other.merges && mergedLanes == other.mergedLanes && turnLanes == other.turnLanes
+        merges == other.merges && mergedLanes == other.mergedLanes && turnTries == other.turnTries &&
+        turnLanes == other.turnLanes
 
     override fun hashCode(): Int =
         (31 * frames + located + 7 * readable + 11 * laneD + 13 * fieldLanes + 17 * tracked + 19 * inferred +
-            23 * merges + 29 * mergedLanes + 37 * turnLanes).hashCode()
+            23 * merges + 29 * mergedLanes + 41 * turnTries + 37 * turnLanes).hashCode()
 
     override fun toString(): String =
         "PetalScanStats(frames=$frames, located=$located, readable=$readable, laneD=$laneD, fieldLanes=$fieldLanes, " +
-            "tracked=$tracked, inferred=$inferred, merges=$merges, mergedLanes=$mergedLanes, turnLanes=$turnLanes)"
+            "tracked=$tracked, inferred=$inferred, merges=$merges, mergedLanes=$mergedLanes, " +
+            "turnTries=$turnTries, turnLanes=$turnLanes)"
 }
 
 /** The result of offering one camera frame. */
@@ -103,9 +107,12 @@ class PetalScanOutcome internal constructor(
  * and offers a recovered lane only when that lane's own header names the same frame.
  *
  * Every field lane a capture decodes also lets the session read the turn lane on top of it
- * ([PetalTurns.readTurns]). A turn lane is read once per shown frame: the session remembers the
- * last [TURN_MEMORY] it read (cleared with the held evidence when the stream changes) and does not
- * look at those petals again.
+ * ([PetalTurns.readTurns]). A turn lane is tried once per shown frame: the session remembers the
+ * last [TURN_MEMORY] it tried (cleared with the held evidence when the stream changes) and does not
+ * look at those petals again. Reading turns costs a slow phone core several times a frame's decode,
+ * so after a try that reads no turn lane (a camera too soft or too shaky for the turns) the session
+ * passes over the next captures that would try one, one more after every such try, at most
+ * [TURN_BACKOFF], until a try reads a lane again.
  *
  * Thread-safe: calls are serialised, so a camera analyzer thread may push while a UI thread reads.
  */
@@ -129,6 +136,7 @@ class PetalScanSession @JvmOverloads constructor(
     private var inferred = 0L
     private var merges = 0L
     private var mergedLanes = 0L
+    private var turnTries = 0L
     private var turnLanes = 0L
 
     /** Captures of one shown frame; bounded by [MERGE_CAPTURES]. */
@@ -143,11 +151,18 @@ class PetalScanSession @JvmOverloads constructor(
 
     internal val held = ArrayDeque<Held>()
 
-    /** A turn lane read: the header of the field lane it rides on and its sector. */
-    internal class Turned(val header: PetalLaneHeader, val sector: Int)
+    /** A turn lane tried: the header of the field lane it rides on and its sector. */
+    internal class Tried(val header: PetalLaneHeader, val sector: Int)
 
-    /** The turn lanes read last, oldest first; bounded by [TURN_MEMORY]. */
-    internal val turned = ArrayDeque<Turned>()
+    /** The turn lanes tried last, oldest first; bounded by [TURN_MEMORY]. */
+    internal val tried = ArrayDeque<Tried>()
+
+    /** Tries in a row that read no turn lane (at most [TURN_BACKOFF]). */
+    internal var turnMisses = 0
+        private set
+
+    /** Captures still to pass over before the next try. */
+    internal var turnWait = 0
 
     private val turnSkip = BooleanArray(PetalLayout.SECTORS)
     private val turnHeaders = arrayOfNulls<PetalLaneHeader>(PetalLayout.SECTORS)
@@ -156,7 +171,7 @@ class PetalScanSession @JvmOverloads constructor(
     /** Diagnostic counters. */
     @Synchronized
     fun stats(): PetalScanStats = PetalScanStats(
-        frames, located, readable, laneD, fieldLanes, tracked, inferred, merges, mergedLanes, turnLanes,
+        frames, located, readable, laneD, fieldLanes, tracked, inferred, merges, mergedLanes, turnTries, turnLanes,
     )
 
     /** Current progress. */
@@ -171,7 +186,14 @@ class PetalScanSession @JvmOverloads constructor(
         lastRank = 0
         lastPose = null
         held.clear()
-        turned.clear()
+        forgetTurns()
+    }
+
+    /** Forgets the turn lanes tried and any back-off. */
+    private fun forgetTurns() {
+        tried.clear()
+        turnMisses = 0
+        turnWait = 0
     }
 
     /** Offers one camera luma plane captured at monotonic time [nowMillis] (non-negative). */
@@ -226,14 +248,15 @@ class PetalScanSession @JvmOverloads constructor(
         // Keep pre-beacon evidence when the first stream identity is learned.
         if (previousMeta != null && assembler.progress().meta != previousMeta) {
             held.clear()
-            turned.clear()
+            forgetTurns()
         }
         return lanes
     }
 
     /**
-     * Reads the turn lanes on top of the field lanes this capture decoded, except those already
-     * read for their shown frame, and offers their atoms.
+     * Tries the turn lanes on top of the field lanes this capture decoded, except those already
+     * tried for their shown frame, and offers the atoms of those it reads; after tries that read
+     * nothing it passes over the next captures that would try one (see the class docs).
      */
     internal fun turn(image: PetalLuma, frame: PetalDecodedFrame): String {
         var all = true
@@ -242,10 +265,21 @@ class PetalScanSession @JvmOverloads constructor(
             turnHeaders[sector] = null
             val header = frame.field(sector)?.let { laneHeader(it.dataView) } ?: continue
             turnHeaders[sector] = header
-            turnSkip[sector] = turned.any { it.sector == sector && it.header == header }
+            turnSkip[sector] = tried.any { it.sector == sector && it.header == header }
             if (!turnSkip[sector]) all = false
         }
         if (all) return ""
+        if (turnWait > 0) {
+            turnWait -= 1
+            return ""
+        }
+        for (sector in 0 until PetalLayout.SECTORS) {
+            val header = turnHeaders[sector] ?: continue
+            if (turnSkip[sector]) continue
+            if (tried.size == TURN_MEMORY) tried.removeFirst()
+            tried.addLast(Tried(header, sector))
+            turnTries += 1
+        }
         workspace.turnReader.read(image, frame, turnSkip, turnResults)
         val letters = StringBuilder(PetalLayout.SECTORS)
         for (sector in 0 until PetalLayout.SECTORS) {
@@ -253,10 +287,14 @@ class PetalScanSession @JvmOverloads constructor(
             val header = turnHeaders[sector] ?: continue
             val packet = PetalTurns.turnPacket(header, sector, result.dataView) ?: continue
             assembler.pushAtoms(packet)
-            if (turned.size == TURN_MEMORY) turned.removeFirst()
-            turned.addLast(Turned(header, sector))
             turnLanes += 1
             letters.append(PetalLane.field(sector).letter)
+        }
+        if (letters.isEmpty()) {
+            turnMisses = minOf(turnMisses + 1, TURN_BACKOFF)
+            turnWait = turnMisses
+        } else {
+            turnMisses = 0
         }
         return letters.toString()
     }
@@ -331,7 +369,10 @@ class PetalScanSession @JvmOverloads constructor(
         /** Captures held per shown frame; a further capture replaces the oldest. */
         const val MERGE_CAPTURES = 4
 
-        /** Turn lanes remembered as read (the four of each of the last [MERGE_WINDOW] shown frames). */
+        /** Turn lanes remembered as tried (the four of each of the last [MERGE_WINDOW] shown frames). */
         const val TURN_MEMORY = MERGE_WINDOW * PetalLayout.SECTORS
+
+        /** Most captures passed over after tries that read no turn lane. */
+        const val TURN_BACKOFF = 8
     }
 }

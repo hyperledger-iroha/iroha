@@ -798,10 +798,13 @@ in its own outward frame along a cubic correction of the pose fitted to the
 carriers' centroids, the reader fits the blur that best explains the carriers
 and their lit neighbours (and stops when the camera is too soft to show turns),
 and every carrier takes the turn whose template matches best once its
-neighbours, at their own turns, are subtracted. A turn lane is read once per
-shown frame: the session remembers the last 24 it read, `outcome.turned` names
-the turn lanes of a capture by the digits of their field lanes and
-`stats().turnLanes` counts them. `PetalTurns.observedTurns` reports the fitted
+neighbours, at their own turns, are subtracted. A turn lane is tried once per
+shown frame: the session remembers the last 24 it tried, and after tries that
+read nothing (a camera too soft or too shaky for the turns) it passes over up
+to eight captures before it tries again, because reading turns costs a slow
+phone core several times a frame's decode. `outcome.turned` names the turn
+lanes of a capture by the digits of their field lanes, and `stats().turnTries`
+and `stats().turnLanes` count the tries and the lanes read. `PetalTurns.observedTurns` reports the fitted
 blur and every carrier's decided turn for diagnostics, and
 `PetalFrameCells.turn`, `withTurns` and `turnWord` expose the turns of a frame.
 In the reference simulation format 3 moves a 12 KB Payment in 1.65 s at the

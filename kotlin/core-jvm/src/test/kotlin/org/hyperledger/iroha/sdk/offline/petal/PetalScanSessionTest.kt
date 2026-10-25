@@ -79,14 +79,47 @@ class PetalScanSessionTest {
         // the next shown frame's turn lanes are new
         val next = session.push(PetalCameraSimulator.capture(render(encoder, 6), config.copy(seed = 3)), 83)
         assertEquals("0123", next.turned)
+        assertEquals(8L, session.stats().turnTries)
         assertEquals(8L, session.stats().turnLanes)
         // the memory holds the four turn lanes of each of the last six shown frames
-        assertEquals(8, session.turned.size)
+        assertEquals(8, session.tried.size)
         for (frame in 7 until 13) session.push(render(encoder, frame).toLuma(), 83L + 33 * (frame - 6))
-        assertEquals(PetalScanSession.TURN_MEMORY, session.turned.size)
-        assertTrue(session.turned.all { it.header.frame >= 7 })
+        assertEquals(PetalScanSession.TURN_MEMORY, session.tried.size)
+        assertTrue(session.tried.all { it.header.frame >= 7 })
         session.reset()
-        assertTrue(session.turned.isEmpty())
+        assertTrue(session.tried.isEmpty())
+    }
+
+    @Test
+    fun triesThatReadNothingBackOff() {
+        val encoder = PetalStreamEncoder(payload(3000), 2)
+        // unturned petals: every field lane reads, no turn lane ever does
+        fun unturned(frame: Int): PetalRgb {
+            val words = encoder.words(frame)
+            val cells = PetalFrameCells.fromWords(
+                words.laneView(PetalLane.D),
+                List(PetalLayout.SECTORS) { words.laneView(PetalLane.field(it)) },
+            )
+            return PetalRenderer.render(cells, PetalRenderOptions(512, 2))
+        }
+        val config = camera(12.0)
+        val session = PetalScanSession()
+        val triedAt = ArrayList<Int>()
+        for (frame in 1..30) {
+            val before = session.stats().turnTries
+            val outcome = session.push(PetalCameraSimulator.capture(unturned(frame), config.copy(seed = frame.toLong())), frame * 83L)
+            assertTrue(outcome.lanes.endsWith("0123"), "frame $frame")
+            assertEquals("", outcome.turned)
+            if (session.stats().turnTries > before) triedAt += frame
+        }
+        // after the n-th try that reads nothing, the next min(n, 8) captures that would try are
+        // passed over
+        assertEquals(listOf(1, 3, 6, 10, 15, 21, 28), triedAt)
+        // a try that reads a lane ends the back-off
+        session.turnWait = 0
+        assertEquals("0123", session.push(PetalCameraSimulator.capture(render(encoder, 31), config.copy(seed = 31)), 31 * 83L).turned)
+        assertEquals(0, session.turnMisses)
+        assertEquals("0123", session.push(PetalCameraSimulator.capture(render(encoder, 32), config.copy(seed = 32)), 32 * 83L).turned)
     }
 
     @Test
@@ -292,7 +325,7 @@ class PetalScanSessionTest {
             session.absorb(newPartial)
             assertEquals(new.meta, session.progress().meta)
             assertTrue(session.held.isEmpty())
-            assertTrue(session.turned.isEmpty(), "a new stream forgets the turn lanes read")
+            assertTrue(session.tried.isEmpty(), "a new stream forgets the turn lanes tried")
             assertEquals("", session.merge(newImage, newPartial))
             assertEquals(1, session.held.first.evidence.size)
             assertTrue(session.held.first.done.none { it })
