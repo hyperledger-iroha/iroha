@@ -2511,7 +2511,13 @@ impl Builtin {
             Self::TransferDomain => S::new(&["AccountId", "DomainId|Name", "AccountId"], "()"),
             Self::RegisterAccount | Self::UnregisterAccount => S::new(&["AccountId"], "()"),
             Self::RegisterAsset => S::new(
-                &["AssetDefinitionId", "string", "NumericSpec", "Mintable"],
+                &[
+                    "AssetDefinitionId",
+                    "string",
+                    "NumericSpec",
+                    "Mintable",
+                    "DomainId",
+                ],
                 "()",
             ),
             Self::UnregisterAsset => S::new(&["AssetDefinitionId"], "()"),
@@ -2537,15 +2543,32 @@ impl Builtin {
                 S::new(&["AccountId", "Permission"], "()")
             }
             Self::AssetLockOpen => S::new(
-                &["bytes", "AccountId", "AccountId", "AssetDefinitionId", "quantity", "int", "int", "int"],
+                &[
+                    "bytes",
+                    "AccountId",
+                    "AccountId",
+                    "AssetDefinitionId",
+                    "quantity",
+                    "int",
+                    "int",
+                    "int",
+                ],
                 "AccountId",
             ),
             Self::AssetLockDrawdown => S::new(&["bytes", "quantity", "quantity"], "()"),
             Self::AssetLockCancel => S::new(&["bytes", "quantity"], "()"),
             Self::AssetLockExpire => S::new(&["bytes"], "()"),
-            Self::AssetUidHoldingQuote => S::new(&["AssetDefinitionId", "AccountId", "quantity"], "AssetUidHoldingQuote"),
-            Self::TransferToLinkedFi => S::new(&["AssetDefinitionId", "AccountId", "quantity", "int", "int"], "()"),
-            Self::AssetLockDrawdownWaterfall => S::new(&["bytes", "quantity", "quantity", "int", "int"], "()"),
+            Self::AssetUidHoldingQuote => S::new(
+                &["AssetDefinitionId", "AccountId", "quantity"],
+                "AssetUidHoldingQuote",
+            ),
+            Self::TransferToLinkedFi => S::new(
+                &["AssetDefinitionId", "AccountId", "quantity", "int", "int"],
+                "()",
+            ),
+            Self::AssetLockDrawdownWaterfall => {
+                S::new(&["bytes", "quantity", "quantity", "int", "int"], "()")
+            }
             Self::AssetLockCancelWaterfall => S::new(&["bytes", "quantity", "int", "int"], "()"),
             Self::AssetLockExpireWaterfall => S::new(&["bytes", "int", "int"], "()"),
             Self::FiLinkRevision => S::new(&["AssetDefinitionId", "AccountId", "AccountId"], "int"),
@@ -2778,9 +2801,13 @@ impl Builtin {
             Self::RegisterDomain | Self::UnregisterDomain => signature.with_names(&["domain"]),
             Self::TransferDomain => signature.with_names(&["source", "domain", "destination"]),
             Self::RegisterAccount | Self::UnregisterAccount => signature.with_names(&["account"]),
-            Self::RegisterAsset => {
-                signature.with_names(&["asset_definition", "name", "spec", "mintable"])
-            }
+            Self::RegisterAsset => signature.with_names(&[
+                "asset_definition",
+                "name",
+                "spec",
+                "mintable",
+                "owning_domain",
+            ]),
             Self::UnregisterAsset => signature.with_names(&["asset_definition"]),
             Self::RegisterPeer | Self::UnregisterPeer => signature.with_names(&["peer"]),
             // The Json trigger specification and the Name of a registered
@@ -2800,19 +2827,52 @@ impl Builtin {
             | Self::GrantContractPermission
             | Self::RevokeContractPermission => signature.with_names(&["account", "permission"]),
             Self::AssetLockOpen => signature.with_names(&[
-                "key", "source", "destination", "asset_definition", "amount",
-                "release_until_ms", "cancel_not_before_ms", "expires_at_ms",
+                "key",
+                "source",
+                "destination",
+                "asset_definition",
+                "amount",
+                "release_until_ms",
+                "cancel_not_before_ms",
+                "expires_at_ms",
             ]),
-            Self::AssetLockDrawdown => signature.with_names(&["key", "amount", "expected_remaining"]),
+            Self::AssetLockDrawdown => {
+                signature.with_names(&["key", "amount", "expected_remaining"])
+            }
             Self::AssetLockCancel => signature.with_names(&["key", "expected_remaining"]),
             Self::AssetLockExpire => signature.with_names(&["key"]),
-            Self::AssetUidHoldingQuote => signature.with_names(&["asset_definition", "account", "incoming"]),
-            Self::TransferToLinkedFi => signature.with_names(&["asset_definition", "account", "amount", "policy_revision", "link_revision"]),
-            Self::AssetLockDrawdownWaterfall => signature.with_names(&["key", "amount", "expected_remaining", "policy_revision", "link_revision"]),
-            Self::AssetLockCancelWaterfall => signature.with_names(&["key", "expected_remaining", "policy_revision", "link_revision"]),
-            Self::AssetLockExpireWaterfall => signature.with_names(&["key", "policy_revision", "link_revision"]),
-            Self::FiLinkRevision => signature.with_names(&["asset_definition", "account", "expected_fi"]),
-            Self::AssetSameUid => signature.with_names(&["asset_definition", "source", "destination"]),
+            Self::AssetUidHoldingQuote => {
+                signature.with_names(&["asset_definition", "account", "incoming"])
+            }
+            Self::TransferToLinkedFi => signature.with_names(&[
+                "asset_definition",
+                "account",
+                "amount",
+                "policy_revision",
+                "link_revision",
+            ]),
+            Self::AssetLockDrawdownWaterfall => signature.with_names(&[
+                "key",
+                "amount",
+                "expected_remaining",
+                "policy_revision",
+                "link_revision",
+            ]),
+            Self::AssetLockCancelWaterfall => signature.with_names(&[
+                "key",
+                "expected_remaining",
+                "policy_revision",
+                "link_revision",
+            ]),
+            Self::AssetLockExpireWaterfall => {
+                signature.with_names(&["key", "policy_revision", "link_revision"])
+            }
+            Self::FiLinkRevision => {
+                signature.with_names(&["asset_definition", "account", "expected_fi"])
+            }
+            Self::AssetSameUid => {
+                signature.with_names(&["asset_definition", "source", "destination"])
+            }
             Self::EscrowOpenOffer => {
                 signature.with_names(&["offer", "asset_definition", "amount", "evidence"])
             }
@@ -3544,33 +3604,81 @@ mod tests {
     #[test]
     fn controlled_lock_registry_is_typed_namespaced_and_effectful() {
         for (builtin, syscall, count) in [
-            (Builtin::AssetLockOpen, ivm_abi::syscalls::SYSCALL_ASSET_LOCK_OPEN, 8),
-            (Builtin::AssetLockDrawdown, ivm_abi::syscalls::SYSCALL_ASSET_LOCK_DRAWDOWN, 3),
-            (Builtin::AssetLockCancel, ivm_abi::syscalls::SYSCALL_ASSET_LOCK_CANCEL, 2),
-            (Builtin::AssetLockExpire, ivm_abi::syscalls::SYSCALL_ASSET_LOCK_EXPIRE, 1),
-            (Builtin::TransferToLinkedFi, ivm_abi::syscalls::SYSCALL_TRANSFER_TO_LINKED_FI, 5),
-            (Builtin::AssetLockDrawdownWaterfall, ivm_abi::syscalls::SYSCALL_ASSET_LOCK_DRAWDOWN_WATERFALL, 5),
-            (Builtin::AssetLockCancelWaterfall, ivm_abi::syscalls::SYSCALL_ASSET_LOCK_CANCEL_WATERFALL, 4),
-            (Builtin::AssetLockExpireWaterfall, ivm_abi::syscalls::SYSCALL_ASSET_LOCK_EXPIRE_WATERFALL, 3),
+            (
+                Builtin::AssetLockOpen,
+                ivm_abi::syscalls::SYSCALL_ASSET_LOCK_OPEN,
+                8,
+            ),
+            (
+                Builtin::AssetLockDrawdown,
+                ivm_abi::syscalls::SYSCALL_ASSET_LOCK_DRAWDOWN,
+                3,
+            ),
+            (
+                Builtin::AssetLockCancel,
+                ivm_abi::syscalls::SYSCALL_ASSET_LOCK_CANCEL,
+                2,
+            ),
+            (
+                Builtin::AssetLockExpire,
+                ivm_abi::syscalls::SYSCALL_ASSET_LOCK_EXPIRE,
+                1,
+            ),
+            (
+                Builtin::TransferToLinkedFi,
+                ivm_abi::syscalls::SYSCALL_TRANSFER_TO_LINKED_FI,
+                5,
+            ),
+            (
+                Builtin::AssetLockDrawdownWaterfall,
+                ivm_abi::syscalls::SYSCALL_ASSET_LOCK_DRAWDOWN_WATERFALL,
+                5,
+            ),
+            (
+                Builtin::AssetLockCancelWaterfall,
+                ivm_abi::syscalls::SYSCALL_ASSET_LOCK_CANCEL_WATERFALL,
+                4,
+            ),
+            (
+                Builtin::AssetLockExpireWaterfall,
+                ivm_abi::syscalls::SYSCALL_ASSET_LOCK_EXPIRE_WATERFALL,
+                3,
+            ),
         ] {
             let spec = builtin.spec();
             assert_eq!(Builtin::from_source_name(spec.name), Some(builtin));
             assert_eq!(Builtin::from_source_name(builtin.name()), None);
             assert_eq!(spec.signature.parameters.len(), count);
             assert_eq!(spec.signature.parameter_names.len(), count);
-            assert_eq!(spec.signature.return_type,
-                if builtin == Builtin::AssetLockOpen { "AccountId" } else { "()" });
+            assert_eq!(
+                spec.signature.return_type,
+                if builtin == Builtin::AssetLockOpen {
+                    "AccountId"
+                } else {
+                    "()"
+                }
+            );
             assert_eq!(spec.syscall, Some(syscall));
             assert_eq!(spec.effects, BuiltinEffects::HOST);
             assert_eq!(spec.access, BuiltinAccess::LedgerWrite);
             assert!(!ivm_abi::syscalls::is_generic_program_syscall_allowed(
-                ivm_abi::SyscallPolicy::AbiV1, syscall
+                ivm_abi::SyscallPolicy::AbiV1,
+                syscall
             ));
         }
-        assert_eq!(Builtin::AssetLockOpen.signature().parameters, &[
-            "bytes", "AccountId", "AccountId", "AssetDefinitionId",
-            "quantity", "int", "int", "int",
-        ]);
+        assert_eq!(
+            Builtin::AssetLockOpen.signature().parameters,
+            &[
+                "bytes",
+                "AccountId",
+                "AccountId",
+                "AssetDefinitionId",
+                "quantity",
+                "int",
+                "int",
+                "int",
+            ]
+        );
     }
 
     #[test]
@@ -4056,11 +4164,23 @@ mod tests {
         let spec = Builtin::RegisterAsset.spec();
         assert_eq!(
             spec.signature.parameters,
-            &["AssetDefinitionId", "string", "NumericSpec", "Mintable"]
+            &[
+                "AssetDefinitionId",
+                "string",
+                "NumericSpec",
+                "Mintable",
+                "DomainId"
+            ]
         );
         assert_eq!(
             spec.signature.parameter_names,
-            &["asset_definition", "name", "spec", "mintable"]
+            &[
+                "asset_definition",
+                "name",
+                "spec",
+                "mintable",
+                "owning_domain"
+            ]
         );
         assert_eq!(
             spec.operation_syscalls,
@@ -4275,27 +4395,52 @@ mod tests {
         assert_eq!(spec.name, "ledger::fi::link_revision");
         assert_eq!(Builtin::from_source_name(spec.name), Some(builtin));
         assert_eq!(Builtin::from_source_name(builtin.name()), None);
-        assert_eq!(spec.signature.parameters, &["AssetDefinitionId", "AccountId", "AccountId"]);
-        assert_eq!(spec.signature.parameter_names, &["asset_definition", "account", "expected_fi"]);
+        assert_eq!(
+            spec.signature.parameters,
+            &["AssetDefinitionId", "AccountId", "AccountId"]
+        );
+        assert_eq!(
+            spec.signature.parameter_names,
+            &["asset_definition", "account", "expected_fi"]
+        );
         assert_eq!(spec.signature.return_type, "int");
         assert_eq!(spec.effects, BuiltinEffects::NONE);
         assert_eq!(spec.access, BuiltinAccess::LedgerRead);
-        assert_eq!(spec.syscall, Some(ivm_abi::syscalls::SYSCALL_ASSET_FI_LINK_REVISION));
-        assert!(!ivm_abi::syscalls::is_generic_program_syscall_allowed(ivm_abi::SyscallPolicy::AbiV1, ivm_abi::syscalls::SYSCALL_ASSET_FI_LINK_REVISION));
+        assert_eq!(
+            spec.syscall,
+            Some(ivm_abi::syscalls::SYSCALL_ASSET_FI_LINK_REVISION)
+        );
+        assert!(!ivm_abi::syscalls::is_generic_program_syscall_allowed(
+            ivm_abi::SyscallPolicy::AbiV1,
+            ivm_abi::syscalls::SYSCALL_ASSET_FI_LINK_REVISION
+        ));
     }
 
     #[test]
     fn same_uid_is_exact_reader_granted_boolean_ledger_read() {
-        let builtin=Builtin::AssetSameUid;let spec=builtin.spec();
-        assert_eq!(spec.name,"ledger::asset::same_uid");
-        assert_eq!(Builtin::from_source_name(spec.name),Some(builtin));
-        assert_eq!(Builtin::from_source_name(builtin.name()),None);
-        assert_eq!(spec.signature.parameters,&["AssetDefinitionId","AccountId","AccountId"]);
-        assert_eq!(spec.signature.parameter_names,&["asset_definition","source","destination"]);
-        assert_eq!(spec.signature.return_type,"bool");
-        assert_eq!(spec.effects,BuiltinEffects::NONE);assert_eq!(spec.access,BuiltinAccess::LedgerRead);
-        assert_eq!(spec.syscall,Some(ivm_abi::syscalls::SYSCALL_ASSET_SAME_UID));
-        assert!(!ivm_abi::syscalls::is_generic_program_syscall_allowed(ivm_abi::SyscallPolicy::AbiV1,ivm_abi::syscalls::SYSCALL_ASSET_SAME_UID));
+        let builtin = Builtin::AssetSameUid;
+        let spec = builtin.spec();
+        assert_eq!(spec.name, "ledger::asset::same_uid");
+        assert_eq!(Builtin::from_source_name(spec.name), Some(builtin));
+        assert_eq!(Builtin::from_source_name(builtin.name()), None);
+        assert_eq!(
+            spec.signature.parameters,
+            &["AssetDefinitionId", "AccountId", "AccountId"]
+        );
+        assert_eq!(
+            spec.signature.parameter_names,
+            &["asset_definition", "source", "destination"]
+        );
+        assert_eq!(spec.signature.return_type, "bool");
+        assert_eq!(spec.effects, BuiltinEffects::NONE);
+        assert_eq!(spec.access, BuiltinAccess::LedgerRead);
+        assert_eq!(
+            spec.syscall,
+            Some(ivm_abi::syscalls::SYSCALL_ASSET_SAME_UID)
+        );
+        assert!(!ivm_abi::syscalls::is_generic_program_syscall_allowed(
+            ivm_abi::SyscallPolicy::AbiV1,
+            ivm_abi::syscalls::SYSCALL_ASSET_SAME_UID
+        ));
     }
-
 }

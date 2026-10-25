@@ -10,7 +10,7 @@ fn kotodama_register_account_and_unregister_asset() {
         kotoage fn main() authorize(ManageEntities) {
           ledger::domain::register(domain: DomainId::parse("default.universal"));
           ledger::account::register(account: AccountId::parse("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"));
-          ledger::asset::register(asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), name: "ROSE", spec: NumericSpec::integer(), mintable: Mintable::Once);
+          ledger::asset::register(asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), name: "ROSE", spec: NumericSpec::integer(), mintable: Mintable::Once, owning_domain: DomainId::parse("default.universal"));
           ledger::asset::unregister(asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"));
           ledger::account::unregister(account: AccountId::parse("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"));
         }
@@ -30,7 +30,6 @@ fn kotodama_register_account_and_unregister_asset() {
     wsv.add_account_unchecked(caller.clone());
     wsv.grant_permission(&caller, PermissionToken::RegisterDomain);
     wsv.grant_permission(&caller, PermissionToken::RegisterAccount);
-    wsv.grant_permission(&caller, PermissionToken::RegisterAssetDefinition);
     let host = WsvHost::new_with_subject(wsv, caller.clone());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);

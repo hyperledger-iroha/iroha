@@ -10,6 +10,7 @@ seiyaku RegisterAndMint {
             name: "ROSE",
             spec: NumericSpec::integer(),
             mintable: Mintable::Once,
+            owning_domain: DomainId::parse("default.universal"),
         );
         // Mint 250 ROSE to Alice; `Mintable::Once` rejects any later mint.
         let to = AccountId::parse("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV");

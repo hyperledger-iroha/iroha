@@ -107,8 +107,32 @@ Torii listener access controls still apply. `GET /v1/node/capabilities` is publi
 as well: `getNodeCapabilities()` reads it without credentials, and the
 transaction preflight caches only a successful, matching probe.
 
-Ordinary source-checkout unit tests can use a separate current Debug N-API
-producer. From the repository root, select the worktree's existing warm Cargo
+Run the complete source-checkout unit profile with a current authenticated Debug
+N-API artifact from the SDK directory:
+
+```bash
+npm run test:local -- --target-dir /absolute/iroha/target/cargo-fast/<existing-lane>
+```
+
+The runner requires macOS, Python 3.12, full Xcode selected through
+`DEVELOPER_DIR` or `xcode-select`, stock Rust 1.93.1 and Node. Select an existing
+canonical Cargo lane under `target/cargo-fast` or `target/qualification`; the
+runner does not create a Cargo target. It builds the current native artifact,
+verifies custody, runs the entire `unit` profile and verifies the same producer
+record again even when tests fail. Logs and native evidence remain in a private
+`target/qualification/js-*` directory. When sccache is available, the runner
+first probes the stock compiler using a short private temporary directory so
+daemon startup sockets fit macOS path limits. That startup directory stays
+available to the daemon; its path is recorded alongside the logs. Inherited native artifact selectors
+and non-Debug native profiles are rejected. The unit profile includes provenance
+and SoraFS coverage; the one-GiB heavy profile and live Torii integration remain
+separate provisioned checks.
+
+Keep native source inputs unchanged until the final verification finishes. If
+other work is editing those inputs, run in a separate Git worktree with its own
+Cargo lane so concurrent edits cannot invalidate the artifact during tests.
+
+To invoke the same producer directly from the repository root, select the worktree's existing warm Cargo
 lane and create a private run directory under this checkout's
 `target/qualification`. The producer and loader require the artifact to remain
 in that canonical subtree; `mktemp -d` creates the owned mode `0700` parent:
@@ -131,8 +155,11 @@ current canonical Python 3.12 and Node executables, stock Rust 1.93.1 tools,
 and the selected Xcode's macOS SDK, clang and Apple linker. The producer uses
 locked, offline Cargo with one job, incremental compilation disabled and zero
 Debug symbols; it creates no additional Cargo target.
-The producer uses sccache's persistent server mode so its private compiler
-scratch path does not overflow macOS's per-process Unix socket path limit.
+Cargo freshly probes the pinned compiler instead of reusing cached compiler
+probe failures from an earlier run.
+The producer uses sccache's persistent server mode. For direct invocations,
+start or reuse the daemon from short temporary scratch before entering the
+retained artifact path; its startup notification socket also has a macOS path limit.
 It retains the actual compiler JSON, complete dep-info after Cargo's natural successful terminal, original source
 and native build inputs, exact tools, and independently copied emitted bytes.
 The real Node consumer checks the current ABI and required exports before the
@@ -234,10 +261,12 @@ surface is then captured as an immutable runtime dependency; later environment
 changes and mutable `globalThis` overrides cannot retarget it. The registry
 publishes one executable tree, `dist/`; development
 `src/` and `scripts/` copies stay in the source checkout. The registry artifact includes only
-two portable, offline examples: `recipes/iso_bridge_builder.mjs` and
-`recipes/nexus_app_transfer.mjs`. The wider recipe catalog is kept in the
-source repository where its native and live-service prerequisites are
-available.
+two examples: `recipes/iso_bridge_builder.mjs` and
+`recipes/nexus_app_transfer.mjs`, together with the ISO builder's required
+configuration helper, `recipes/iso_bridge_context.mjs`. Both examples require a
+matching verified native binding for canonical account validation; the ISO builder
+also requires it when only generating XML. The wider recipe catalog is kept in the
+source repository where its native and live-service prerequisites are available.
 
 `build:dist` publishes the JavaScript source tree. `prepack` builds that tree,
 and `test:pack-install` verifies exact source/distribution parity and the package's
@@ -3603,8 +3632,9 @@ non-compliant interbank payloads.
 
 The `recipes/iso_bridge_builder.mjs` example wires those helpers into a CLI that
 requires retained UETR/native terms from environment variables or a JSON config
-file, prints the generated XML, and optionally submits with a runtime operator
-signer when `ISO_SUBMIT=1`. Sample payment builders also require caller-owned
+file, validates settlement accounts through the verified native binding, prints
+the generated XML, and optionally submits with a runtime operator signer when
+`ISO_SUBMIT=1`. Sample payment builders also require caller-owned
 `uetr` and `nexusSettlement`; only demo envelope fields receive defaults.
 
 ## Contract Deployment Helpers

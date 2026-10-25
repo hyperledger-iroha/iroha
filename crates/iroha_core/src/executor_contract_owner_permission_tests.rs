@@ -617,3 +617,162 @@ fn scoped_permission_delegation_requires_current_declaration_and_exact_instance(
         "ownership does not permit misspelled or retired declarations"
     );
 }
+
+#[test]
+fn contract_runtime_delegates_only_its_exact_asset_and_trigger_capabilities() {
+    for executor in [
+        super::Executor::Initial,
+        bundled_default_user_provided_executor(),
+    ] {
+        let owner = checked_account_id();
+        let recipient = checked_account_id();
+        let (state, address) = owner_permission_state(&owner, &recipient);
+        let subject = address.subject_id();
+        let context = ContractRuntimeExecutionContext {
+            contract_subject: subject.clone(),
+            contract_address: address.clone(),
+            contract_alias: None,
+            entrypoint: "write_value".to_owned(),
+        };
+        let mut block = state.block(BlockHeader::new(
+            nonzero!(2_u64),
+            state.view().latest_block_hash(),
+            None,
+            0,
+            0,
+        ));
+        let mut tx = block.transaction();
+        let definition = AssetDefinitionId::from_uuid_bytes([
+            0xa8, 0xa8, 0xa8, 0xa8, 0xa8, 0xa8, 0x48, 0xa8, 0xa8, 0xa8, 0xa8, 0xa8, 0xa8, 0xa8,
+            0xa8, 0xa8,
+        ])
+        .unwrap();
+        let trigger_id: TriggerId = "contract_owned_trigger".parse().unwrap();
+        let foreign_trigger_id: TriggerId = "foreign_owned_trigger".parse().unwrap();
+        for (id, authority) in [(&trigger_id, &subject), (&foreign_trigger_id, &owner)] {
+            tx.world.add_account_permission(
+                authority,
+                executor_permission::trigger::CanRegisterTrigger {
+                    authority: authority.clone(),
+                }
+                .into(),
+            );
+            Register::trigger(Trigger::new(
+                id.clone(),
+                Action::new(
+                    Vec::<InstructionBox>::new(),
+                    Repeats::Indefinitely,
+                    authority.clone(),
+                    ExecuteTriggerEventFilter::new()
+                        .for_trigger(id.clone())
+                        .under_authority(authority.clone()),
+                )
+                .unwrap(),
+            ))
+            .execute(authority, &mut tx)
+            .unwrap();
+        }
+        let allowed: [Permission; 3] = [
+            executor_permission::asset::CanTransferAsset {
+                asset: AssetId::new(definition.clone(), subject.clone()),
+            }
+            .into(),
+            executor_permission::trigger::CanExecuteTrigger {
+                trigger: trigger_id.clone(),
+            }
+            .into(),
+            executor_permission::trigger::CanModifyTriggerMetadata {
+                trigger: trigger_id,
+            }
+            .into(),
+        ];
+        for permission in allowed {
+            executor
+                .execute_instruction_with_contract_runtime_context(
+                    &mut tx,
+                    &subject,
+                    Grant::account_permission(permission.clone(), recipient.clone()).into(),
+                    Some(&context),
+                )
+                .expect("active contract delegates only its exact owned capability");
+            assert!(authority_has_permission(&tx.world, &recipient, &permission).unwrap());
+            executor
+                .execute_borrowed_overlay_instruction(
+                    &mut tx,
+                    &subject,
+                    &Revoke::account_permission(permission.clone(), recipient.clone()).into(),
+                    Some(&context),
+                )
+                .expect("same native owner revokes exact capability through borrowed path");
+            assert!(!authority_has_permission(&tx.world, &recipient, &permission).unwrap());
+        }
+        let denied: [Permission; 7] = [
+            executor_permission::asset::CanTransferAsset {
+                asset: AssetId::new(definition.clone(), owner.clone()),
+            }
+            .into(),
+            executor_permission::asset::CanTransferAssetWithDefinition {
+                asset_definition: definition,
+            }
+            .into(),
+            executor_permission::trigger::CanExecuteTrigger {
+                trigger: foreign_trigger_id.clone(),
+            }
+            .into(),
+            executor_permission::trigger::CanModifyTriggerMetadata {
+                trigger: foreign_trigger_id,
+            }
+            .into(),
+            executor_permission::trigger::CanExecuteTrigger {
+                trigger: "missing_trigger".parse().unwrap(),
+            }
+            .into(),
+            Permission::new("CanTransferAsset".to_owned(), Json::new(())),
+            Permission::new("CanExecuteTrigger".to_owned(), Json::new(())),
+        ];
+        for permission in denied {
+            // Holding somebody else's exact token does not permit its redelegation.
+            tx.world
+                .add_account_permission(&subject, permission.clone());
+            for instruction in [
+                Grant::account_permission(permission.clone(), recipient.clone()).into(),
+                Revoke::account_permission(permission.clone(), recipient.clone()).into(),
+            ] {
+                assert!(matches!(
+                    executor.execute_instruction_with_contract_runtime_context(
+                        &mut tx,
+                        &subject,
+                        instruction,
+                        Some(&context),
+                    ),
+                    Err(ValidationFail::NotPermitted(_))
+                ));
+            }
+            assert!(!authority_has_permission(&tx.world, &recipient, &permission).unwrap());
+        }
+        tx.world.contract_subject_addresses.remove(subject.clone());
+        let exact: Permission = executor_permission::asset::CanTransferAsset {
+            asset: AssetId::new(
+                AssetDefinitionId::from_uuid_bytes([
+                    0xa8, 0xa8, 0xa8, 0xa8, 0xa8, 0xa8, 0x48, 0xa8, 0xa8, 0xa8, 0xa8, 0xa8, 0xa8,
+                    0xa8, 0xa8, 0xa8,
+                ])
+                .unwrap(),
+                subject.clone(),
+            ),
+        }
+        .into();
+        assert!(
+            matches!(
+                executor.execute_instruction_with_contract_runtime_context(
+                    &mut tx,
+                    &subject,
+                    Grant::account_permission(exact, recipient).into(),
+                    Some(&context),
+                ),
+                Err(ValidationFail::NotPermitted(_))
+            ),
+            "an unbound subject cannot delegate"
+        );
+    }
+}

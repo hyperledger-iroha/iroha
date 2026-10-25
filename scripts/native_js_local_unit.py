@@ -230,6 +230,9 @@ def environment(root, config, output):
     return {"HOME": str(Path.home()), "PATH": tool_path(config),
             "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8", "TMPDIR": str(temporary),
             "RUSTC": config["rustc"], "RUSTDOC": config["rustdoc"],
+            # Cargo retains failed rustc -vV probes in a warm target. Re-query
+            # the pinned compiler so a repaired wrapper startup is observed.
+            "CARGO_CACHE_RUSTC_INFO": "0",
             "SDKROOT": config["sdk"], "MACOSX_DEPLOYMENT_TARGET": "13.0",
             "DEVELOPER_DIR": config["developer_dir"], "NODE_OPTIONS": "",
             # Client-side sccache creates a per-process Unix socket under TMPDIR;

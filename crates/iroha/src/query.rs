@@ -3,6 +3,7 @@
 mod asynchronous;
 mod escrow_scope;
 mod fi_context;
+mod fi_transfer_receipt;
 mod transaction_details_candidate;
 use crate::{
     client::{APPLICATION_NORITO, Client, QueryResult, ResponseReport, join_torii_url},

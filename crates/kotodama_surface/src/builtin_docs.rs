@@ -305,7 +305,7 @@ pub const BUILTIN_DOCS: &[(&str, &str)] = &[
     ),
     (
         "ledger::asset::register",
-        "Register an asset definition with its display name, numeric spec and mintability.",
+        "Register an asset definition with its display name, numeric spec, mintability and explicit owning domain.",
     ),
     (
         "ledger::asset::set_holding_limit",
@@ -331,10 +331,22 @@ pub const BUILTIN_DOCS: &[(&str, &str)] = &[
         "ledger::asset::unregister",
         "Unregister an asset definition.",
     ),
-    ("ledger::asset_lock::cancel", "Refund a controlled native lock subject to its immutable cancellation window."),
-    ("ledger::asset_lock::drawdown", "Draw down a controlled native lock with an exact remaining-balance check."),
-    ("ledger::asset_lock::expire", "Refund an expired controlled native lock through its original controller."),
-    ("ledger::asset_lock::open", "Fund a native lock from its payer under the executing contract and immutable deadlines."),
+    (
+        "ledger::asset_lock::cancel",
+        "Refund a controlled native lock subject to its immutable cancellation window.",
+    ),
+    (
+        "ledger::asset_lock::drawdown",
+        "Draw down a controlled native lock with an exact remaining-balance check.",
+    ),
+    (
+        "ledger::asset_lock::expire",
+        "Refund an expired controlled native lock through its original controller.",
+    ),
+    (
+        "ledger::asset_lock::open",
+        "Fund a native lock from its payer under the executing contract and immutable deadlines.",
+    ),
     ("ledger::domain::register", "Register a ledger domain."),
     (
         "ledger::domain::transfer",

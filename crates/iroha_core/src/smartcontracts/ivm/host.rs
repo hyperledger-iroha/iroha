@@ -9,16 +9,16 @@
 //! Helper syscalls that do not touch WSV are forwarded to the IVM default host.
 mod contract_calls;
 pub(crate) mod contract_event;
-mod native_events;
 mod controlled_asset_locks;
 mod controlled_waterfall;
+mod fi_link_revision;
 mod linked_fi;
+mod native_events;
 #[cfg(test)]
 #[path = "host/native_fi_waterfall_tests.rs"]
 mod native_fi_waterfall_tests;
-mod fi_link_revision;
-mod same_uid;
 mod prepared_verifying_key_memo;
+mod same_uid;
 mod tlv_transport;
 mod uid_holding_quote;
 
@@ -174,7 +174,6 @@ const OPAQUE_SYSTEM_CONTRACT_STATE_PREFIXES: &[&str] = &[
     crate::state::asset_uid_enrollment::ENROLLMENT_ROOT,
     crate::state::asset_uid_enrollment::SYSTEM_ROOT,
     crate::state::asset_uid_reader::READER_ROOT,
-
     crate::state::asset_uid::POLICY_ROOT,
     crate::state::asset_uid::BINDING_ROOT,
     crate::state::asset_uid::USAGE_ROOT,
@@ -1694,7 +1693,10 @@ pub trait QueryStateRefOps {
         incoming: &Quantity,
         budget: QueryExecutionBudget,
     ) -> Result<
-        (iroha_data_model::asset::uid::AssetUidHoldingQuoteV1, QueryExecutionStats),
+        (
+            iroha_data_model::asset::uid::AssetUidHoldingQuoteV1,
+            QueryExecutionStats,
+        ),
         ivm::VMError,
     >;
     /// Read an exact current owner-approved FI-link revision after expected-FI equality.
@@ -1717,8 +1719,12 @@ pub trait QueryStateRefOps {
     /// Rejects absent/nonretail/invalid membership, foreign frame or revoked grant;
     /// preserves canonical decode and local resource refusal provenance.
     fn same_uid(
-        &self, authority: &AccountId, context: &ContractRuntimeExecutionContext,
-        definition: &AssetDefinitionId, source: &AccountId, destination: &AccountId,
+        &self,
+        authority: &AccountId,
+        context: &ContractRuntimeExecutionContext,
+        definition: &AssetDefinitionId,
+        source: &AccountId,
+        destination: &AccountId,
         budget: QueryExecutionBudget,
     ) -> Result<(bool, QueryExecutionStats), ivm::VMError>;
     /// Load an asset definition's exact incarnation and require that it was
@@ -2447,21 +2453,32 @@ impl QueryStateRefOps for QueryStateRef<'_, '_, '_> {
         incoming: &Quantity,
         budget: QueryExecutionBudget,
     ) -> Result<
-        (iroha_data_model::asset::uid::AssetUidHoldingQuoteV1, QueryExecutionStats),
+        (
+            iroha_data_model::asset::uid::AssetUidHoldingQuoteV1,
+            QueryExecutionStats,
+        ),
         ivm::VMError,
     > {
         self.read_uid_holding_quote(authority, context, definition, account, incoming, budget)
     }
     fn fi_link_revision(
-        &self, authority: &AccountId, context: &ContractRuntimeExecutionContext,
-        definition: &AssetDefinitionId, account: &AccountId, expected_fi: &AccountId,
+        &self,
+        authority: &AccountId,
+        context: &ContractRuntimeExecutionContext,
+        definition: &AssetDefinitionId,
+        account: &AccountId,
+        expected_fi: &AccountId,
         budget: QueryExecutionBudget,
     ) -> Result<(u64, QueryExecutionStats), ivm::VMError> {
         self.read_fi_link_revision(authority, context, definition, account, expected_fi, budget)
     }
     fn same_uid(
-        &self, authority: &AccountId, context: &ContractRuntimeExecutionContext,
-        definition: &AssetDefinitionId, source: &AccountId, destination: &AccountId,
+        &self,
+        authority: &AccountId,
+        context: &ContractRuntimeExecutionContext,
+        definition: &AssetDefinitionId,
+        source: &AccountId,
+        destination: &AccountId,
         budget: QueryExecutionBudget,
     ) -> Result<(bool, QueryExecutionStats), ivm::VMError> {
         self.read_same_uid(authority, context, definition, source, destination, budget)
@@ -10239,7 +10256,8 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 // ----------------- Asset quantity ISIs via pointer-ABI -----------------
                 ivm::syscalls::SYSCALL_REGISTER_ASSET => {
                     // r10 = &AssetDefinitionId, r11 = &Blob UTF-8 display name,
-                    // r12 = numeric-spec word, r13 = mintability word. The data-model
+                    // r12 = numeric-spec word, r13 = mintability word, r14 = &DomainId.
+                    // The explicit immutable home is authorized by the executor. The data-model
                     // `ivm_registration::decode_registration` decoder is shared with
                     // every host.
                     let id: AssetDefinitionId = Self::decode_tlv_typed(
@@ -10254,12 +10272,14 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                             vm.register(13),
                         )
                         .map_err(|_| ivm::VMError::DecodeError)?;
+                    let owning_domain: DomainId =
+                        Self::decode_tlv_typed(vm, vm.register(14), PointerType::DomainId)?;
                     let definition = AssetDefinition::new(
                         id,
                         registration.name,
                         registration.spec,
                         iroha_data_model::asset::AssetBalancePolicy::Global,
-                        None,
+                        Some(owning_domain),
                     )
                     .with_mintable(registration.mintable);
                     let isi = Register::asset_definition(definition);
@@ -10486,12 +10506,16 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 | ivm::syscalls::SYSCALL_ASSET_LOCK_EXPIRE_WATERFALL => {
                     self.controlled_asset_lock_with_waterfall(vm, number)
                 }
-                ivm::syscalls::SYSCALL_ASSET_FI_LINK_REVISION => self.execute_fi_link_revision(vm, number),
+                ivm::syscalls::SYSCALL_ASSET_FI_LINK_REVISION => {
+                    self.execute_fi_link_revision(vm, number)
+                }
                 ivm::syscalls::SYSCALL_ASSET_SAME_UID => self.execute_same_uid(vm, number),
                 ivm::syscalls::SYSCALL_ASSET_LOCK_OPEN
                 | ivm::syscalls::SYSCALL_ASSET_LOCK_DRAWDOWN
                 | ivm::syscalls::SYSCALL_ASSET_LOCK_CANCEL
-                | ivm::syscalls::SYSCALL_ASSET_LOCK_EXPIRE => self.controlled_asset_lock(vm, number),
+                | ivm::syscalls::SYSCALL_ASSET_LOCK_EXPIRE => {
+                    self.controlled_asset_lock(vm, number)
+                }
                 // ----------------- Native asset escrow ISIs via pointer-ABI -----------------
                 ivm::syscalls::SYSCALL_ESCROW_OPEN_OFFER => {
                     let escrow_ptr = vm.register(10);
@@ -14175,6 +14199,9 @@ seiyaku PrivilegedBinding { permission CanAdministerContract;
             13,
             iroha_data_model::asset::definition::ivm_registration::mintable_word(mintable),
         );
+        let owning_domain = DomainId::try_new("issuer", "universal").unwrap();
+        let domain = store_tlv(&mut vm, PointerType::DomainId, &norito_blob(&owning_domain));
+        vm.set_register(14, domain);
         let res = host.syscall(ivm::syscalls::SYSCALL_REGISTER_ASSET, &mut vm);
         let expected = InstructionBox::from(Register::asset_definition(
             AssetDefinition::new(
@@ -14182,7 +14209,7 @@ seiyaku PrivilegedBinding { permission CanAdministerContract;
                 "Rose",
                 spec,
                 iroha_data_model::asset::AssetBalancePolicy::Global,
-                None,
+                Some(owning_domain),
             )
             .with_mintable(mintable),
         ));
@@ -14194,6 +14221,32 @@ seiyaku PrivilegedBinding { permission CanAdministerContract;
         );
         assert_eq!(host.queued, vec![expected]);
     }
+    #[test]
+    fn register_asset_syscall_requires_the_owning_domain_pointer() {
+        let mut vm = ivm::IVM::new(1_000);
+        let mut host = CoreHost::new(fixture_account("alice"));
+        let asset = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("issuer", "universal").unwrap(),
+            "coin".parse().unwrap(),
+        );
+        let id = store_tlv(
+            &mut vm,
+            PointerType::AssetDefinitionId,
+            &norito_blob(&asset),
+        );
+        let name = store_tlv(&mut vm, PointerType::Blob, b"Coin");
+        vm.set_register(10, id);
+        vm.set_register(11, name);
+        vm.set_register(12, 0);
+        vm.set_register(13, 0);
+        vm.set_register(14, 0);
+        assert!(
+            host.syscall(ivm::syscalls::SYSCALL_REGISTER_ASSET, &mut vm)
+                .is_err()
+        );
+        assert!(host.queued.is_empty());
+    }
+
     #[test]
     fn register_asset_syscall_rejects_malformed_registration_words() {
         let asset_def: AssetDefinitionId =

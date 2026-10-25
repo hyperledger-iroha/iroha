@@ -31,7 +31,7 @@ import {
   REQUIRED_NATIVE_EXPORTS,
   REQUIRED_NATIVE_EXPORT_RESULTS,
 } from "../scripts/copy-native.mjs";
-import { verifyNativeBinding } from "../src/native.js";
+import { getNativeBinding, verifyNativeBinding } from "../src/native.js";
 
 const PLATFORM = "linux";
 const ARCH = "x64";
@@ -1734,7 +1734,7 @@ test("native publication rejects dirty or stale source provenance", async (t) =>
 test(
   "required-export probe loads a real addon through the recovery-compatible private suffix",
   (t) => {
-    const nativePath = path.resolve("native", NATIVE_FILENAME);
+    const nativePath = path.resolve(process.env.IROHA_JS_NATIVE_DIR || "native", NATIVE_FILENAME);
     assert.equal(
       existsSync(nativePath),
       true,
@@ -1743,10 +1743,15 @@ test(
     const root = mkdtempSync(path.join(os.tmpdir(), "iroha-js-native-dlopen-probe-"));
     t.after(() => rmSync(root, { recursive: true, force: true }));
     const staged = path.join(root, `${NATIVE_FILENAME}.next`);
-    copyFileSync(nativePath, staged);
-    // This test isolates the loader path from the release export contract so a
-    // locally cached addon from an older compatible build cannot make the
-    // focused unit suite ambient-state dependent.
+    const nativeHash = createHash("sha256").update(readFileSync(nativePath)).digest("hex");
+    getNativeBinding();
+    const loaded = process.report.getReport().sharedObjects.filter(
+      (image) => path.basename(image) === `${nativeHash}.node`,
+    );
+    assert.equal(loaded.length, 1, "exactly one authenticated selected native image must be loaded");
+    copyFileSync(loaded[0], staged);
+    // Exercise suffix loading with the verified selected image. The restricted
+    // export probe does not grant release qualification.
     assert.doesNotThrow(() =>
       probeNativeBindingExports(staged, ["noritoEncodeInstruction"]),
     );

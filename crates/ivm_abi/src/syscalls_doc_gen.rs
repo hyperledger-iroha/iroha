@@ -18,7 +18,7 @@ pub static DOCS: &[crate::syscalls::SyscallDoc] = &[
     crate::syscalls::SyscallDoc { number: 24, args: "r10=&AccountId, r11=&Json", ret: "u64=0", gas: "asset:gas/G_rm_sig@ivm.core/v2" },
     crate::syscalls::SyscallDoc { number: 25, args: "r10=&AccountId, r11=quorum:u64", ret: "u64=0", gas: "asset:gas/G_set_quorum@ivm.core/v2" },
     crate::syscalls::SyscallDoc { number: 26, args: "r10=&AccountId, r11=&Name, r12=&Json", ret: "u64=0", gas: "asset:gas/G_set_detail@ivm.core/v2 + bytes(val)" },
-    crate::syscalls::SyscallDoc { number: 32, args: "r10=&AssetDefinitionId, r11=&Blob(name), r12=numeric_spec:u64, r13=mintability:u64", ret: "u64=0", gas: "asset:gas/G_reg_asset@ivm.core/v2" },
+    crate::syscalls::SyscallDoc { number: 32, args: "r10=&AssetDefinitionId, r11=&Blob(name), r12=numeric_spec:u64, r13=mintability:u64, r14=&DomainId(owning domain)", ret: "u64=0", gas: "asset:gas/G_reg_asset@ivm.core/v2" },
     crate::syscalls::SyscallDoc { number: 33, args: "r10=&AssetDefinitionId", ret: "u64=0", gas: "asset:gas/G_unreg_asset@ivm.core/v2" },
     crate::syscalls::SyscallDoc { number: 34, args: "r10=&AccountId, r11=&AssetDefinitionId, r12=&Quantity", ret: "u64=0", gas: "asset:gas/G_mint@ivm.core/v2" },
     crate::syscalls::SyscallDoc { number: 35, args: "r10=&AccountId, r11=&AssetDefinitionId, r12=&Quantity", ret: "u64=0", gas: "asset:gas/G_burn@ivm.core/v2" },

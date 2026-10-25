@@ -1976,6 +1976,7 @@ fn ensure_contract_entrypoint_authorization_mutation_allowed(
     Ok(())
 }
 fn ensure_contract_runtime_permission_mutation_allowed(
+    world: &impl WorldReadOnly,
     authority: &AccountId,
     instruction: &InstructionBox,
     contract_runtime_context: Option<&ContractRuntimeExecutionContext>,
@@ -2002,25 +2003,52 @@ fn ensure_contract_runtime_permission_mutation_allowed(
     let Some(PermissionOrRoleMutation::AccountPermission { permission, .. }) = mutation else {
         return Ok(());
     };
-    let scoped =
-        executor_permission::smart_contract::CanUseContractPermission::try_from(permission)
-            .map_err(|_| {
-                ValidationFail::NotPermitted(
-            "deployed contracts may grant or revoke only exact CanUseContractPermission tokens"
-                .to_owned(),
-        )
-            })?;
     if authority != &context.contract_subject
-        || scoped.contract != context.contract_address
-        || scoped.contract.subject_id() != *authority
         || context.contract_address.subject_id() != context.contract_subject
     {
         return Err(ValidationFail::NotPermitted(
-            "deployed contract permission mutation must be bound to its immutable subject, address, and a declared instance permission"
+            "deployed contract permission mutation must be bound to its immutable subject and address"
                 .to_owned(),
         ));
     }
-    Ok(())
+    if let Ok(scoped) =
+        executor_permission::smart_contract::CanUseContractPermission::try_from(permission)
+    {
+        if scoped.contract == context.contract_address {
+            return Ok(());
+        }
+    } else if let Ok(transfer) = executor_permission::asset::CanTransferAsset::try_from(permission)
+    {
+        // A contract can delegate custody of one exact balance that it owns.
+        // Possessing a caller's transfer token never permits redelegating it.
+        // The normal executor still validates the native token and grant/revoke.
+        if transfer.asset.account() == &context.contract_subject
+            && valid_contract_runtime_subject(world, authority, Some(context))
+        {
+            return Ok(());
+        }
+    }
+    let trigger = executor_permission::trigger::CanModifyTriggerMetadata::try_from(permission)
+        .map(|token| token.trigger)
+        .or_else(|_| {
+            executor_permission::trigger::CanExecuteTrigger::try_from(permission)
+                .map(|token| token.trigger)
+        });
+    if let Ok(trigger) = trigger {
+        use crate::smartcontracts::isi::triggers::set::SetReadOnly as _;
+        if valid_contract_runtime_subject(world, authority, Some(context))
+            && world
+                .triggers()
+                .inspect_by_id(&trigger, |action| action.authority() == authority)
+                == Some(true)
+        {
+            return Ok(());
+        }
+    }
+    Err(ValidationFail::NotPermitted(
+        "deployed contracts may grant or revoke only exact own-instance CanUseContractPermission, own-source CanTransferAsset, or own-trigger CanModifyTriggerMetadata/CanExecuteTrigger tokens"
+            .to_owned(),
+    ))
 }
 fn parse_account_id_literal(
     world: &impl WorldReadOnly,
@@ -8320,6 +8348,7 @@ impl Executor {
             &instruction,
         )?;
         ensure_contract_runtime_permission_mutation_allowed(
+            &state_transaction.world,
             authority,
             &instruction,
             contract_runtime_context,
@@ -8387,6 +8416,7 @@ impl Executor {
             instruction,
         )?;
         ensure_contract_runtime_permission_mutation_allowed(
+            &state_transaction.world,
             authority,
             instruction,
             contract_runtime_context,
@@ -21213,9 +21243,7 @@ fn native_fi_context_query_is_exact_current_asset_owner_only() {
             matches!(
                 result,
                 Err(ValidationFail::NotPermitted(ref message))
-                    if message.contains(
-                        "deployed contracts may grant or revoke only exact CanUseContractPermission tokens"
-                    )
+                    if message.contains("deployed contract")
             ),
             "contract alias must not bypass the common permission boundary: {result:?}"
         );

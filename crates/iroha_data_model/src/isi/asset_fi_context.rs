@@ -61,23 +61,16 @@ isi! {
         pub minimum_block_hash: [u8;32],
     }
 }
+// The field list is forwarded as raw tokens: the shared slice decoder must see the `[u8; N]` syntax to
+// read the encoder's direct raw byte-array members; a `ty` fragment would make them look canonical.
 macro_rules! assertion_instruction {
-    ($ty:ident, $wire:literal, {$($field:ident : $field_ty:ty),+ $(,)?}) => {
+    ($ty:ident, $wire:literal, {$($fields:tt)+}) => {
         impl $ty {
             /// Canonical first-release instruction wire identity.
             pub const WIRE_ID: &'static str = $wire;
         }
         impl crate::seal::Instruction for $ty {}
-        impl<'a> norito::core::DecodeFromSlice<'a> for $ty {
-            fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-                let flags = norito::core::effective_decode_flags().unwrap_or_else(norito::core::default_encode_flags);
-                let mut offset = 0usize;
-                $(let $field = super::decode_aos_canonical_field::<$field_ty>(super::read_aos_field(bytes, &mut offset, flags)?, flags)?;)+
-                if offset != bytes.len() { return Err(norito::core::Error::LengthMismatch); }
-                norito::core::note_payload_access(bytes, offset);
-                Ok((Self { $($field,)+ }, offset))
-            }
-        }
+        crate::isi::impl_aos_decode_from_slice!($ty { $($fields)+ });
     };
 }
 assertion_instruction!(AssertAssetFiContextV1, "iroha.asset.fi.context.assert.v1", {
@@ -309,5 +302,81 @@ mod tests {
             .replace(",\"controller\":null", "");
         assert_ne!(json, missing);
         assert!(norito::json::from_str::<AssetFiContextSnapshotV1>(&missing).is_err());
+    }
+
+    #[test]
+    fn fi_assertion_raw_byte_fields_reject_wrong_widths_and_nested_array_encodings() {
+        use norito::core::{
+            DecodeFlagsGuard, Error, SerializePayload, header_flags,
+            read_len_from_slice_with_flags, serialize_to_buffer, write_len_to_vec_with_flags,
+        };
+
+        fn check<T>(value: T, raw_fields: &[usize], field_count: usize, flags: u8)
+        where
+            T: SerializePayload + PartialEq + core::fmt::Debug,
+            for<'a> T: DecodeFromSlice<'a>,
+        {
+            let _flags = DecodeFlagsGuard::enter(flags);
+            let mut wire = Vec::new();
+            serialize_to_buffer(&value, &mut wire).unwrap();
+            let (decoded, used) = T::decode_from_slice(&wire).unwrap();
+            assert_eq!(decoded, value);
+            assert_eq!(used, wire.len());
+
+            // Walk actual field prefixes rather than locating repeated digest
+            // bytes. Keep all other fields byte-identical in every mutation.
+            let mut offset = 0usize;
+            let mut spans = Vec::new();
+            while offset < wire.len() {
+                let prefix = offset;
+                let (length, header) =
+                    read_len_from_slice_with_flags(&wire[offset..], flags).unwrap();
+                let body = offset.checked_add(header).unwrap();
+                let end = body.checked_add(length).unwrap();
+                assert!(end <= wire.len());
+                spans.push((prefix, body, end));
+                offset = end;
+            }
+            assert_eq!(spans.len(), field_count);
+            assert_eq!(offset, wire.len());
+
+            for &field in raw_fields {
+                let (prefix, body, end) = spans[field];
+                let original = &wire[body..end];
+                assert_eq!(original.len(), 32);
+                let short = original[..31].to_vec();
+                let mut long = original.to_vec();
+                long.push(0xa5);
+                let mut element_framed = Vec::new();
+                let array: [u8; 32] = original.try_into().unwrap();
+                serialize_to_buffer(&array, &mut element_framed).unwrap();
+                assert_ne!(element_framed.as_slice(), original);
+
+                for replacement in [short, long, element_framed] {
+                    let mut malformed = wire[..prefix].to_vec();
+                    write_len_to_vec_with_flags(
+                        &mut malformed,
+                        u64::try_from(replacement.len()).unwrap(),
+                        flags,
+                    );
+                    malformed.extend_from_slice(&replacement);
+                    malformed.extend_from_slice(&wire[end..]);
+                    assert!(
+                        matches!(T::decode_from_slice(&malformed), Err(Error::LengthMismatch)),
+                        "raw field {field}, flags {flags:#x}, replacement width {}",
+                        replacement.len(),
+                    );
+                }
+            }
+        }
+
+        for flags in [0, header_flags::COMPACT_LEN] {
+            for transfer in [false, true] {
+                // expected_uid, request_sha256, challenge, minimum_block_hash.
+                check(test_values::current(transfer), &[2, 4, 5, 7], 8, flags);
+            }
+            // request_sha256, challenge, minimum_block_hash.
+            check(test_values::historical(), &[6, 7, 9], 10, flags);
+        }
     }
 }

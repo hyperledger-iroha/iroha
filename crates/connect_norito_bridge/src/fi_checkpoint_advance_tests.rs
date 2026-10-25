@@ -184,9 +184,8 @@ fn native_advance_enforces_existing_frame_count_and_aggregate_bounds_before_deco
 #[test]
 fn native_advance_rejects_genuine_private_root_even_when_all_original_pins_match() {
     use iroha_crypto::{Hash, HashOf};
-    use iroha_data_model::{
-        nexus::DataSpaceId, sumeragi_finality::test_fixtures::NativeFinalityFixture,
-    };
+    use iroha_data_model::sumeragi_finality::test_fixtures::NativeFinalityFixture;
+    use iroha_model_base::topology::DataSpaceId;
     let parent = NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
         b"advance parent fixture",
     )));

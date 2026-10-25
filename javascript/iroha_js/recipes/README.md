@@ -3,10 +3,11 @@
 This source-checkout directory hosts JavaScript snippets that illustrate common
 `@iroha/iroha-js` workflows. Each example favours deterministic Norito payloads
 and mirrors the validation logic exported by the SDK. The portable registry
-tarball includes only `iso_bridge_builder.mjs` and `nexus_app_transfer.mjs`;
+tarball includes only `iso_bridge_builder.mjs`, its required configuration helper
+`iso_bridge_context.mjs`, and `nexus_app_transfer.mjs`;
 examples that require a source checkout, credentials, or a live Torii endpoint
-are identified below. The Nexus recipe requires the verified native host even
-when installed from that tarball.
+are identified below. The Nexus and ISO builder recipes require the verified
+native host even when installed from that tarball.
 
 ## batching.mjs
 
@@ -139,6 +140,9 @@ Environment variables:
 - Accepts overrides via environment variables or a JSON config
   (`ISO_BUILDER_CONFIG=/path/to/options.json`) so you can feed the script with
   production reference data.
+- Requires the verified native binding to validate canonical settlement account
+  identities, including when `ISO_DRY_RUN=1`. Without it, the recipe fails before
+  emitting XML or submitting a payment.
 - Prints the generated payload by default and submits it to Torii when
   `ISO_SUBMIT=1`, reusing the same wait options as `iso_bridge.mjs`.
 
@@ -146,6 +150,7 @@ Run with:
 
 ```bash
 npm install
+npm run build:native
 ISO_BUILDER_CONFIG=/path/to/retained-payment.json \
   node ./recipes/iso_bridge_builder.mjs
 ```

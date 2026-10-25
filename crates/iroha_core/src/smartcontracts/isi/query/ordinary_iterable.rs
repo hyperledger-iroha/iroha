@@ -1418,7 +1418,7 @@ fn bounded_current_fi_context_matches_native_snapshot_and_preserves_absent_obser
         let state = State::new_for_testing(world, Kura::blank_kura_for_testing(), LiveQueryStore::start_test());
         let query = FindAssetFiTransferReceiptV1 { asset_definition_id: definition.clone(), account_id: wallet.clone(), expected_incarnation: iroha_data_model::nexus::AxtAssetIncarnationV1::try_from_bytes(*Hash::new("receipt-incarnation").as_ref()).unwrap(), execution_call_hash: Hash::new("receipt-query"), transcript_index: 0 };
         let params = QueryParams { fetch_size: FetchSize::new(NonZeroU64::new(1)), ..QueryParams::default() };
-        let limits = trigger_test_limits(16_384);
+        let limits = fi_context_test_limits(16_384);
         let (mut rows, stats) = asset_fi_receipt::collect(&query, &params, OrdinaryCursorMode::Ephemeral, limits, &state.view()).unwrap();
         assert!(rows.next().is_none());
         assert_eq!(stats.processed_items(), 1, "missing lookup still pays for its inspection");
@@ -1488,12 +1488,27 @@ fn bounded_current_fi_context_matches_native_snapshot_and_preserves_absent_obser
         use iroha_data_model::{asset::AssetBalancePolicy, prelude::*, query::{asset_fi::FindAssetFiTransferReceiptV1, parameters::FetchSize}};
         let owner = iroha_test_samples::ALICE_ID.clone();
         let definition: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc".parse().unwrap();
-        let state = State::new_for_testing(World::with([], [Account::new(owner.clone()).build(&owner)],
-            [AssetDefinition::numeric(definition.clone(), "DS", AssetBalancePolicy::DataspaceRestricted, None).build(&owner)]),
+        let domain = iroha_model_base::domain::DomainId::try_new("receipts", "universal").unwrap();
+        let state = State::new_for_testing(World::with([Domain::new(domain.clone()).build(&owner)], [Account::new(owner.clone()).build(&owner)],
+            [AssetDefinition::numeric(definition.clone(), "DS", AssetBalancePolicy::DataspaceRestricted, Some(domain)).build(&owner)]),
             Kura::blank_kura_for_testing(), LiveQueryStore::start_test());
         let query = FindAssetFiTransferReceiptV1 { asset_definition_id: definition, account_id: owner, expected_incarnation: iroha_data_model::nexus::AxtAssetIncarnationV1::try_from_bytes(*Hash::new("receipt-incarnation").as_ref()).unwrap(), execution_call_hash: Hash::new("private-receipt"), transcript_index: 0 };
         let params = QueryParams { fetch_size: FetchSize::new(std::num::NonZeroU64::new(1)), ..QueryParams::default() };
-        assert!(asset_fi_receipt::collect(&query, &params, OrdinaryCursorMode::Ephemeral, trigger_test_limits(16_384), &state.view()).is_err());
+        // A malformed matching receipt must not be read for a non-Global asset.
+        let key = crate::state::asset_fi::receipt::key(
+            &query.asset_definition_id,
+            &query.account_id,
+            &query.execution_call_hash,
+            query.transcript_index,
+        );
+        { let mut world = state.world.block();
+          world.smart_contract_state.insert(key, vec![0; 32]);
+          world.commit(); }
+        assert!(matches!(
+            asset_fi_receipt::collect(&query, &params, OrdinaryCursorMode::Ephemeral, fi_context_test_limits(16_384), &state.view()),
+            Err(crate::execution_attempt::ExecutionAttemptError::Rejected(Error::Conversion(message)))
+                if message == "FI receipt lookup requires a Global asset definition"
+        ), "non-Global definition is refused before malformed private rows are read");
     }
 
     #[test]
