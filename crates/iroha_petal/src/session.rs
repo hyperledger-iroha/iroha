@@ -14,9 +14,13 @@
 //! lane's own header names the same frame.
 //!
 //! Every field lane a capture decodes also lets the session read the turn lane
-//! on top of it ([`read_turns`]). A turn lane is read once per shown frame: the
-//! session remembers the last [`TURN_MEMORY`] it read and does not look at those
-//! petals again.
+//! on top of it ([`read_turns`]). A turn lane is tried once per shown frame: the
+//! session remembers the last [`TURN_MEMORY`] it tried and does not look at those
+//! petals again. Reading turns costs a slow phone core several times a frame's
+//! decode, so after a try that reads no turn lane (a camera too soft or too
+//! shaky for the turns) the session passes over the next captures that would
+//! try one, one more after every such try, at most [`TURN_BACKOFF`], until a
+//! try reads a lane again.
 
 use std::collections::VecDeque;
 
@@ -38,8 +42,10 @@ pub const TRACK_WINDOW_MS: u64 = 500;
 pub const MERGE_WINDOW: usize = 6;
 /// Captures held per shown frame; a further capture replaces the oldest.
 pub const MERGE_CAPTURES: usize = 4;
-/// Turn lanes remembered as read (the four of each of the last [`MERGE_WINDOW`] shown frames).
+/// Turn lanes remembered as tried (the four of each of the last [`MERGE_WINDOW`] shown frames).
 pub const TURN_MEMORY: usize = MERGE_WINDOW * SECTORS;
+/// Most captures passed over after tries that read no turn lane.
+pub const TURN_BACKOFF: usize = 8;
 
 /// Limits of a scan session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -86,7 +92,9 @@ pub struct ScanStats {
     pub merges: u32,
     /// Field lanes recovered by merging captures.
     pub merged_lanes: u32,
-    /// Turn lanes read (each at most once per shown frame).
+    /// Turn lanes tried (each at most once per shown frame).
+    pub turn_tries: u32,
+    /// Turn lanes read.
     pub turn_lanes: u32,
 }
 
@@ -156,7 +164,9 @@ pub struct ScanSession {
     last_rank: usize,
     last_pose: Option<(DecodedFrame, u64)>,
     held: VecDeque<Held>,
-    turned: VecDeque<(LaneHeader, u8)>,
+    tried: VecDeque<(LaneHeader, u8)>,
+    turn_misses: usize,
+    turn_wait: usize,
 }
 
 impl ScanSession {
@@ -172,7 +182,9 @@ impl ScanSession {
             last_rank: 0,
             last_pose: None,
             held: VecDeque::new(),
-            turned: VecDeque::new(),
+            tried: VecDeque::new(),
+            turn_misses: 0,
+            turn_wait: 0,
         }
     }
 
@@ -195,7 +207,14 @@ impl ScanSession {
         self.last_rank = 0;
         self.last_pose = None;
         self.held.clear();
-        self.turned.clear();
+        self.forget_turns();
+    }
+
+    /// Forgets the turn lanes tried and any back-off.
+    fn forget_turns(&mut self) {
+        self.tried.clear();
+        self.turn_misses = 0;
+        self.turn_wait = 0;
     }
 
     /// Offers one camera luma plane captured at monotonic time `now_ms`.
@@ -264,13 +283,14 @@ impl ScanSession {
         frame.feed(&mut self.assembler);
         if previous_meta.is_some() && self.assembler.progress().meta != previous_meta {
             self.held.clear();
-            self.turned.clear();
+            self.forget_turns();
         }
         lanes
     }
 
-    /// Reads the turn lanes on top of the field lanes this capture decoded, except those already
-    /// read for their shown frame, and offers their atoms.
+    /// Tries the turn lanes on top of the field lanes this capture decoded, except those already
+    /// tried for their shown frame, and offers the atoms of those it reads; after tries that read
+    /// nothing it passes over the next captures that would try one (see the module docs).
     fn turn(&mut self, image: &Luma, frame: &DecodedFrame) -> String {
         let mut skip = [true; SECTORS];
         let mut headers = [None; SECTORS];
@@ -279,10 +299,23 @@ impl ScanSession {
                 continue;
             };
             headers[sector] = Some(header);
-            skip[sector] = self.turned.contains(&(header, sector as u8));
+            skip[sector] = self.tried.contains(&(header, sector as u8));
         }
         if skip.iter().all(|s| *s) {
             return String::new();
+        }
+        if self.turn_wait > 0 {
+            self.turn_wait -= 1;
+            return String::new();
+        }
+        for (sector, header) in headers.iter().enumerate() {
+            if let (false, Some(header)) = (skip[sector], header) {
+                if self.tried.len() == TURN_MEMORY {
+                    self.tried.pop_front();
+                }
+                self.tried.push_back((*header, sector as u8));
+                self.stats.turn_tries += 1;
+            }
         }
         let mut turned = String::new();
         for (sector, result) in read_turns(image, frame, skip).into_iter().enumerate() {
@@ -293,12 +326,14 @@ impl ScanSession {
                 continue;
             };
             self.assembler.push_atoms(&packet);
-            if self.turned.len() == TURN_MEMORY {
-                self.turned.pop_front();
-            }
-            self.turned.push_back((header, sector as u8));
             self.stats.turn_lanes += 1;
             turned.push(Lane::Field(sector as u8).letter());
+        }
+        if turned.is_empty() {
+            self.turn_misses = (self.turn_misses + 1).min(TURN_BACKOFF);
+            self.turn_wait = self.turn_misses;
+        } else {
+            self.turn_misses = 0;
         }
         turned
     }
@@ -481,8 +516,58 @@ mod tests {
             83,
         );
         assert_eq!(next.turned, "0123");
+        assert_eq!(
+            (session.stats().turn_tries, session.stats().turn_lanes),
+            (8, 8)
+        );
         session.reset();
-        assert!(session.turned.is_empty());
+        assert!(session.tried.is_empty());
+    }
+
+    #[test]
+    fn tries_that_read_nothing_back_off() {
+        let encoder = StreamEncoder::new(&payload(3000), 2).unwrap();
+        // unturned petals: every field lane reads, no turn lane ever does
+        let unturned = |frame: u16| {
+            let mut cells = encoder.cells(frame);
+            cells.turns = [0; crate::layout::FIELD_CELLS];
+            source(&cells)
+        };
+        let config = camera(12.0);
+        let mut session = ScanSession::new(ScanLimits::default());
+        let mut tried_at = Vec::new();
+        for frame in 1..=30u16 {
+            let before = session.stats().turn_tries;
+            let image = capture(
+                &unturned(frame),
+                &CaptureConfig {
+                    seed: u64::from(frame),
+                    ..config
+                },
+            );
+            let outcome = session.push(&image, u64::from(frame) * 83);
+            assert!(outcome.lanes.ends_with("0123"), "frame {frame}");
+            assert_eq!(outcome.turned, "");
+            if session.stats().turn_tries > before {
+                tried_at.push(frame);
+            }
+        }
+        // after the n-th try that reads nothing, the next min(n, 8) captures that would try are
+        // passed over
+        assert_eq!(tried_at, [1, 3, 6, 10, 15, 21, 28]);
+        // a try that reads a lane ends the back-off
+        session.turn_wait = 0;
+        let image = capture(
+            &source(&encoder.cells(31)),
+            &CaptureConfig { seed: 31, ..config },
+        );
+        assert_eq!(session.push(&image, 31 * 83).turned, "0123");
+        assert_eq!(session.turn_misses, 0);
+        let image = capture(
+            &source(&encoder.cells(32)),
+            &CaptureConfig { seed: 32, ..config },
+        );
+        assert_eq!(session.push(&image, 32 * 83).turned, "0123");
     }
 
     #[test]
