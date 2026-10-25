@@ -18,22 +18,25 @@ import org.hyperledger.iroha.sdk.offline.petal.PetalTestSupport.number
 import org.hyperledger.iroha.sdk.offline.petal.PetalTestSupport.text
 
 /**
- * Decodes the golden camera captures in `fixtures/petal/petal_captures_v2.json`.
+ * Decodes the golden camera captures in `fixtures/petal/petal_captures_v3.json`.
  *
- * Every conforming decoder must read the lanes named in `must_decode`, must
- * never report wrong data for any lane, must report the recorded inferred
- * corner, must follow each tracking pair from its first frame into its second,
- * must recover the `must_merge` field lanes of every merge set from the merge of
- * its captures, must never let a session offer a lane of a mixed set, and must
- * reject the negatives. This port mirrors the reference arithmetic, so it must
- * also read exactly the lanes the reference read (`reference_decoded`,
+ * Every conforming decoder must read the lanes named in `must_decode` and the
+ * turn lanes named in `must_turn`, must never report wrong data for any lane,
+ * must report the recorded inferred corner, must follow each tracking pair from
+ * its first frame into its second, must recover the `must_merge` field lanes of
+ * every merge set from the merge of its captures, must never let a session offer
+ * a lane of a mixed set, and must reject the negatives. This port mirrors the
+ * reference arithmetic, so it must also read exactly the lanes and turn lanes
+ * the reference read (`reference_decoded`, `reference_turned`,
  * `reference_tracked`, `reference_merged`). Two captures (`hidden-corner-540p`,
  * `cut-corner-720p`) only decode through an inferred corner, `shadow-band-540p`
  * needs the local read for one field lane and `barrel-480p` the lens distortion
- * search, so they prove that all three are implemented faithfully.
+ * search, so they prove that all three are implemented faithfully; the sharp,
+ * mirrored, covered and cut-off captures and both tracking pairs read every turn
+ * lane, and the soft, blurred, veiled and distorted ones none.
  */
 class PetalCaptureFixtureTest {
-    private val doc: JsonObject = PetalTestSupport.loadFixture("petal_captures_v2.json")
+    private val doc: JsonObject = PetalTestSupport.loadFixture("petal_captures_v3.json")
 
     private fun lumaOf(entry: JsonObject, key: String = "luma_zlib_base64", sizes: JsonObject = entry): PetalLuma {
         val data = PetalTestSupport.inflateBase64(entry.text(key))
@@ -61,10 +64,43 @@ class PetalCaptureFixtureTest {
         return frame.lanes
     }
 
+    /**
+     * Reads the turn lanes of a decoded capture (no sector skipped), checks them against the
+     * recorded data and the requirements, and returns their sector digits; their atoms go to
+     * [assembler] when given.
+     */
+    private fun readTurnLanes(
+        name: String,
+        image: PetalLuma,
+        frame: PetalDecodedFrame,
+        entry: JsonObject,
+        assembler: PetalStreamAssembler?,
+    ): String {
+        val expected = entry.array("turn_data").map { PetalTestSupport.hex(it.jsonPrimitive.content) }
+        assertEquals(PetalLayout.SECTORS, expected.size)
+        val letters = StringBuilder()
+        val packets = ArrayList<PetalAtomPacket>()
+        for ((sector, result) in PetalTurns.readTurns(image, frame).withIndex()) {
+            if (result == null) continue
+            assertContentEquals(expected[sector], result.data, "$name: turn lane $sector data")
+            val field = assertNotNull(frame.field(sector), "$name: a turn lane rides on its field lane").data
+            val header = PetalLaneHeader(field[0].toInt() and 0xFF, ((field[1].toInt() and 0xFF) shl 8) or (field[2].toInt() and 0xFF))
+            packets += assertNotNull(PetalTurns.turnPacket(header, sector, result.data), "$name: turn check $sector")
+            letters.append(PetalLane.field(sector).letter)
+        }
+        if (assembler != null) for (packet in packets) assembler.pushAtoms(packet)
+        val must = entry.text("must_turn")
+        assertTrue(must.all { it in letters }, "$name: turned $letters, must turn $must")
+        assertEquals(entry.text("reference_turned"), letters.toString(), "$name: turn lanes read by the reference")
+        return letters.toString()
+    }
+
     @Test
     fun goldenCapturesDecodeAsRecorded() {
         val assembler = PetalStreamAssembler()
-        val report = StringBuilder("Petal golden captures (Kotlin/JVM decode times of decodes 1, 2, 3 and the best of 6):\n")
+        val report = StringBuilder(
+            "Petal golden captures (Kotlin/JVM decode times of decodes 1, 2, 3 and the best of 6; turn reads 1 and the best of 6):\n",
+        )
         assertEquals(12, doc.array("captures").size)
         for (element in doc.array("captures")) {
             val capture = element.jsonObject
@@ -81,6 +117,9 @@ class PetalCaptureFixtureTest {
             assertEquals(capture.text("reference_decoded"), read, "$name: lanes read by the reference")
             assertEquals(inferredCornerOf(capture), decoded.inferredCorner, "$name: inferred corner")
             decoded.feed(assembler)
+            val turnStarted = System.nanoTime()
+            val turned = readTurnLanes(name, image, decoded, capture, assembler)
+            val firstTurn = (System.nanoTime() - turnStarted) / 1e6
             // timing: the JIT warms up over the first decodes
             val timings = DoubleArray(6)
             timings[0] = first
@@ -90,12 +129,21 @@ class PetalCaptureFixtureTest {
                 timings[run] = (System.nanoTime() - again) / 1e6
                 assertEquals(decoded.lanes, assertNotNull(repeated.frame).lanes, "$name: decoding is deterministic")
             }
+            val reader = PetalTurnReader()
+            val results = arrayOfNulls<PetalLaneResult>(PetalLayout.SECTORS)
+            var turnBest = Double.MAX_VALUE
+            repeat(6) {
+                val again = System.nanoTime()
+                reader.read(image, decoded, BooleanArray(PetalLayout.SECTORS), results)
+                turnBest = minOf(turnBest, (System.nanoTime() - again) / 1e6)
+                assertEquals(turned, results.withIndex().filter { it.value != null }.joinToString("") { "${it.index}" }, "$name: deterministic")
+            }
             report.append(
                 String.format(
-                    "  %-22s %4dx%-4d lanes %-5s (reference %-5s, required %-5s)  " +
-                        "#1 %6.1f ms  #2 %6.1f ms  #3 %6.1f ms  best %6.1f ms%n",
-                    name, image.width, image.height, decoded.lanes, capture.text("reference_decoded"), must,
-                    timings[0], timings[1], timings[2], timings.minOrNull()!!,
+                    "  %-22s %4dx%-4d lanes %-5s (reference %-5s, required %-5s) turned %-4s  " +
+                        "#1 %6.1f ms  #2 %6.1f ms  #3 %6.1f ms  best %6.1f ms  turns #1 %6.1f ms  best %6.1f ms%n",
+                    name, image.width, image.height, decoded.lanes, capture.text("reference_decoded"), must, turned,
+                    timings[0], timings[1], timings[2], timings.minOrNull()!!, firstTurn, turnBest,
                 ),
             )
         }
@@ -124,6 +172,7 @@ class PetalCaptureFixtureTest {
             assertEquals(inferredCornerOf(pair), followed.inferredCorner, "$name: inferred corner")
             assertEquals(previous.rotation, followed.rotation, "$name: tracking keeps the orientation")
             assertEquals(previous.mirrored, followed.mirrored, "$name: tracking keeps the mirror flag")
+            val turned = readTurnLanes(name, to, followed, pair, null)
             // timing: tracking skips the finder search
             var decodeBest = Double.MAX_VALUE
             var trackBest = Double.MAX_VALUE
@@ -137,8 +186,8 @@ class PetalCaptureFixtureTest {
             }
             report.append(
                 String.format(
-                    "  %-22s lanes %-5s (reference %-5s) inferred %-4s  decode %6.1f ms  track %6.1f ms%n",
-                    name, followed.lanes, pair.text("reference_tracked"), followed.inferredCorner, decodeBest, trackBest,
+                    "  %-22s lanes %-5s (reference %-5s) turned %-4s inferred %-4s  decode %6.1f ms  track %6.1f ms%n",
+                    name, followed.lanes, pair.text("reference_tracked"), turned, followed.inferredCorner, decodeBest, trackBest,
                 ),
             )
         }
@@ -209,6 +258,8 @@ class PetalCaptureFixtureTest {
             assertEquals(referenceSessionMerges.getValue(name), sessionMerged, "$name: lanes the session merged")
             assertEquals(3L, stats.merges, name)
             assertEquals(sessionMerged.length.toLong(), stats.mergedLanes, name)
+            // merged lanes are not single-capture reads: no turn lane rides on them
+            assertEquals(0L, stats.turnLanes, name)
         }
     }
 
@@ -236,7 +287,8 @@ class PetalCaptureFixtureTest {
 
     /**
      * What the Rust reference read from a capture: the `decode` pose (homography and distortion
-     * bits), the orientation and corrected/erasures per lane.
+     * bits), the orientation, corrected/erasures per lane and per turn lane (`read_turns` with no
+     * sector skipped) and the blur its turn reader fitted (an index into [PetalTurns.TURN_BLURS]).
      */
     private class ReferenceReading(
         val homographyBits: List<String>,
@@ -244,13 +296,17 @@ class PetalCaptureFixtureTest {
         val rotation: Int,
         val mirrored: Boolean,
         val lanes: String,
+        val turnLanes: String,
+        val fittedBlur: Int,
     )
 
     /**
-     * Intermediates dumped from the Rust reference (`iroha_petal::decode::decode` and `track` on
-     * these captures, macOS/arm64). The spec does not require bit-identical intermediates across
-     * platforms; this port follows the reference's IEEE double order of operations with
-     * deterministic `StrictMath`, and pinning the values guards it against arithmetic drift.
+     * Intermediates dumped from the Rust reference (`iroha_petal::decode::decode`, `track` and
+     * `turns::read_turns` on these captures, macOS/arm64). The spec does not require
+     * bit-identical intermediates across platforms; this port follows the reference's IEEE double
+     * order of operations with deterministic `StrictMath`, and pinning the values guards it
+     * against arithmetic drift. (The turn reader's tables use `exp`, whose last bit can differ
+     * between libraries: one of the 36 template probes differs by one ulp, and no decision does.)
      */
     private val referenceReadings = mapOf(
         "clean-512" to ReferenceReading(
@@ -259,7 +315,7 @@ class PetalCaptureFixtureTest {
                 "3ef049ad824b297f", "3fe000713cf8436d", "bfa25a1ee0979718",
                 "3e618583a96052df", "3e83c8d1e38b8d87", "3ff0000000000000",
             ),
-            "0000000000000000", 0, false, "D:0/0 0:0/0 1:0/0 2:0/0 3:0/0",
+            "0000000000000000", 0, false, "D:0/0 0:0/0 1:0/0 2:0/0 3:0/0", "0:0/0 1:0/0 2:0/0 3:0/0", 0,
         ),
         "modern-720p-rotated" to ReferenceReading(
             listOf(
@@ -267,7 +323,7 @@ class PetalCaptureFixtureTest {
                 "3fd31e4350d1fab6", "3fd90bc0e054b289", "401fa98edc6722ca",
                 "3f0531825a194e74", "3f0952cfffe823bd", "3ff0000000000000",
             ),
-            "0000000000000000", 0, false, "D:0/0 0:0/0 1:0/0 2:0/0 3:0/0",
+            "0000000000000000", 0, false, "D:0/0 0:0/0 1:0/0 2:0/0 3:0/0", "0:0/0 1:0/0 2:0/0 3:0/0", 2,
         ),
         "legacy-540p-tilted" to ReferenceReading(
             listOf(
@@ -275,7 +331,7 @@ class PetalCaptureFixtureTest {
                 "bfbd1d31346c0af9", "bfd5ee9ec53642d5", "40806d13d3424e99",
                 "3f181867e97a353c", "3f1c8f0bd33f6f2b", "3ff0000000000000",
             ),
-            "0000000000000000", 2, false, "D:0/0 0:0/0 1:0/0 2:0/0 3:0/0",
+            "0000000000000000", 2, false, "D:0/0 0:0/0 1:0/0 2:0/0 3:0/0", "0:- 1:- 2:- 3:-", 3,
         ),
         "soft-480p-blur1.9" to ReferenceReading(
             listOf(
@@ -283,7 +339,7 @@ class PetalCaptureFixtureTest {
                 "3fd12a3a40cd55ce", "bfc1506d167c0179", "406287e0ff7c8401",
                 "bf1c535776e1421a", "bf1651400c81b6b8", "3ff0000000000000",
             ),
-            "0000000000000000", 1, false, "D:0/0 0:4/0 1:1/0 2:9/0 3:3/0",
+            "0000000000000000", 1, false, "D:0/0 0:2/0 1:4/0 2:9/0 3:3/0", "0:- 1:- 2:- 3:-", 5,
         ),
         "small-480p" to ReferenceReading(
             listOf(
@@ -291,7 +347,7 @@ class PetalCaptureFixtureTest {
                 "bfd5ba00c1379c29", "3fb746496cce8cf7", "4076f4121d6166b4",
                 "3e81d4a64a782cba", "be889c51d6a579d5", "3ff0000000000000",
             ),
-            "0000000000000000", 3, false, "D:0/0 0:0/0 1:0/0 2:0/0 3:0/0",
+            "0000000000000000", 3, false, "D:0/0 0:0/0 1:0/0 2:0/0 3:0/0", "0:- 1:- 2:- 3:-", 4,
         ),
         "selfie-mirrored-540p" to ReferenceReading(
             listOf(
@@ -299,7 +355,7 @@ class PetalCaptureFixtureTest {
                 "3fba9a2775678d05", "3fd8200887a075e5", "4032cff70cb4d374",
                 "3e6748fdc5046750", "bf031d9551fa441e", "3ff0000000000000",
             ),
-            "0000000000000000", 1, true, "D:0/0 0:0/0 1:0/0 2:0/0 3:0/0",
+            "0000000000000000", 1, true, "D:0/0 0:0/0 1:0/0 2:0/0 3:0/0", "0:0/0 1:0/0 2:0/0 3:0/0", 2,
         ),
         "overexposed-540p" to ReferenceReading(
             listOf(
@@ -307,7 +363,7 @@ class PetalCaptureFixtureTest {
                 "3fc7b9b113e0c080", "3fd5d77052143a84", "40153ac09a8d4a13",
                 "3f01f32d5951d0d3", "3f064ea70c6c15c4", "3ff0000000000000",
             ),
-            "0000000000000000", 0, false, "D:0/0 0:0/0 1:0/0 2:0/0 3:0/0",
+            "0000000000000000", 0, false, "D:0/0 0:0/0 1:0/0 2:0/0 3:0/0", "0:- 1:11/0 2:12/2 3:-", 3,
         ),
         "veiled-720p" to ReferenceReading(
             listOf(
@@ -315,15 +371,15 @@ class PetalCaptureFixtureTest {
                 "bfdf4c0483869f56", "bfc0abb61dcb3107", "40861c3f23cfa28a",
                 "3f18fb7538983040", "3f1d73cd71131e4f", "3ff0000000000000",
             ),
-            "0000000000000000", 3, false, "D:0/0 0:0/0 1:0/0 2:0/0 3:0/0",
+            "0000000000000000", 3, false, "D:0/0 0:0/0 1:0/0 2:0/0 3:0/0", "0:- 1:- 2:- 3:-", 2,
         ),
         "shadow-band-540p" to ReferenceReading(
             listOf(
-                "3fdca538e11da295", "bfb004877d8c02dc", "4071aea40fdafb40",
-                "3fb018a5dbbfc99c", "3fdca5e8c8992a24", "402174bb612d31e1",
-                "be72988a6f06101b", "3e9d945954d11544", "3ff0000000000000",
+                "3fdc6a34efaeb430", "bfafc710429cedb6", "4071c80378c4d449",
+                "3fafeec8afdd7598", "3fdc6aeb254cc3ce", "4025a9168e8b7aed",
+                "be734d2367f3656f", "3e9d792aec1568a1", "3ff0000000000000",
             ),
-            "bfaeb851eb851eb8", 0, false, "D:- 0:4/0 1:15/11 2:10/0 3:10/0",
+            "0000000000000000", 0, false, "D:- 0:0/0 1:15/11 2:10/0 3:11/0", "0:5/0 1:6/0 2:3/0 3:9/0", 2,
         ),
         "hidden-corner-540p" to ReferenceReading(
             listOf(
@@ -331,7 +387,7 @@ class PetalCaptureFixtureTest {
                 "3fc35575e4fa5208", "bfd800a93c46417d", "4078c99382115a81",
                 "3f03552435ecb4b5", "3f0a1af003e9bb76", "3ff0000000000000",
             ),
-            "0000000000000000", 2, false, "D:0/0 0:0/0 1:0/0 2:0/0 3:0/0",
+            "0000000000000000", 2, false, "D:0/0 0:0/0 1:0/0 2:0/0 3:0/0", "0:0/0 1:0/0 2:0/0 3:0/0", 2,
         ),
         "cut-corner-720p" to ReferenceReading(
             listOf(
@@ -339,7 +395,7 @@ class PetalCaptureFixtureTest {
                 "3fd645375d87ddff", "3fd6463abc465805", "405683498e879027",
                 "be74a1623ba56aed", "3e70d67aeacce137", "3ff0000000000000",
             ),
-            "0000000000000000", 1, false, "D:0/0 0:0/0 1:0/0 2:0/0 3:0/0",
+            "0000000000000000", 1, false, "D:0/0 0:0/0 1:0/0 2:0/0 3:0/0", "0:0/0 1:0/0 2:0/0 3:0/0", 1,
         ),
         "barrel-480p" to ReferenceReading(
             listOf(
@@ -347,7 +403,7 @@ class PetalCaptureFixtureTest {
                 "3fbe3425a47829ba", "3fd566875cad8e50", "402c1c2da56b7f9d",
                 "3e72f7bdaf03187f", "3f0835d13ba8f65b", "3ff0000000000000",
             ),
-            "bfbeb851eb851eb8", 0, false, "D:0/0 0:0/0 1:0/0 2:0/0 3:0/0",
+            "bfbeb851eb851eb8", 0, false, "D:0/0 0:0/0 1:0/0 2:1/0 3:0/0", "0:- 1:- 2:- 3:-", 3,
         ),
     )
 
@@ -358,7 +414,7 @@ class PetalCaptureFixtureTest {
                 "3fc8fc4b89815f46", "3fd483207d176319", "401d0986f9303303",
                 "3e5153069e35fd1f", "3f01806a07e11c54", "3ff0000000000000",
             ),
-            "0000000000000000", 0, false, "D:0/0 0:0/0 1:0/0 2:0/0 3:0/0",
+            "0000000000000000", 0, false, "D:0/0 0:0/0 1:0/0 2:0/0 3:0/0", "0:1/0 1:0/0 2:0/0 3:0/0", 2,
         ),
         "thumb-arrives-540p" to ReferenceReading(
             listOf(
@@ -366,17 +422,18 @@ class PetalCaptureFixtureTest {
                 "3fc9223ae4f7f44e", "3fd57317a9c8b75c", "40161e5a7d6f1043",
                 "3e9affe577aca827", "3f0371e6ae3c42b8", "3ff0000000000000",
             ),
-            "0000000000000000", 0, false, "D:0/0 0:0/0 1:0/0 2:0/0 3:0/0",
+            "0000000000000000", 0, false, "D:0/0 0:0/0 1:0/0 2:0/0 3:0/0", "0:1/0 1:0/0 2:0/0 3:0/0", 2,
         ),
     )
+
     /** The four-capture merge of each merge set as the Rust reference reads it (`merge_fields`). */
     private val referenceMerges = mapOf(
-        "noisy-480p" to "0:2/0 1:6/0 2:11/0 3:8/0",
-        "mixed-frames-480p" to "0:7/0 1:11/0 2:- 3:6/0",
+        "noisy-480p" to "0:6/0 1:7/0 2:16/11 3:11/0",
+        "mixed-frames-480p" to "0:7/0 1:7/0 2:- 3:7/0",
     )
 
     /** The lanes a reference `ScanSession` merges from the noisy set, in the order it offers them. */
-    private val referenceSessionMerges = mapOf("noisy-480p" to "0132")
+    private val referenceSessionMerges = mapOf("noisy-480p" to "0123")
 
     private fun bits(value: Double): String = String.format("%016x", java.lang.Double.doubleToRawLongBits(value))
 
@@ -385,12 +442,21 @@ class PetalCaptureFixtureTest {
             "${lane.letter}:" + (frame.lane(lane)?.let { "${it.corrected}/${it.erasures}" } ?: "-")
         }
 
-    private fun assertReading(name: String, expected: ReferenceReading, frame: PetalDecodedFrame) {
+    private fun turnCounts(results: List<PetalLaneResult?>): String =
+        results.withIndex().joinToString(" ") { (sector, result) ->
+            "$sector:" + (result?.let { "${it.corrected}/${it.erasures}" } ?: "-")
+        }
+
+    private fun assertReading(name: String, expected: ReferenceReading, image: PetalLuma, frame: PetalDecodedFrame) {
         assertEquals(expected.homographyBits, frame.pose.homography.toArray().map(::bits), "$name: homography")
         assertEquals(expected.distortionBits, bits(frame.pose.distortion), "$name: lens distortion")
         assertEquals(expected.rotation, frame.rotation, "$name: rotation")
         assertEquals(expected.mirrored, frame.mirrored, "$name: mirrored")
         assertEquals(expected.lanes, laneCounts(frame), "$name: corrected/erasures per lane")
+        assertEquals(expected.turnLanes, turnCounts(PetalTurns.readTurns(image, frame)), "$name: corrected/erasures per turn lane")
+        val observed = assertNotNull(PetalTurns.observedTurns(image, frame), "$name: carriers")
+        assertEquals(PetalTurns.TURN_BLURS[expected.fittedBlur], observed.blur, "$name: fitted blur")
+        assertEquals(PetalLayout.SECTORS * PetalTurns.TURN_CARRIERS, observed.carriers.size, "$name: carriers")
     }
 
     @Test
@@ -398,18 +464,18 @@ class PetalCaptureFixtureTest {
         for (element in doc.array("captures")) {
             val capture = element.jsonObject
             val name = capture.text("name")
-            assertReading(name, referenceReadings.getValue(name), assertNotNull(PetalDecoder.decode(lumaOf(capture)).frame, name))
+            val image = lumaOf(capture)
+            assertReading(name, referenceReadings.getValue(name), image, assertNotNull(PetalDecoder.decode(image).frame, name))
         }
         for (element in doc.array("tracks")) {
             val pair = element.jsonObject
             val name = pair.text("name")
             val previous = assertNotNull(PetalDecoder.decode(lumaOf(pair, "from_luma_zlib_base64")).frame, name)
-            val followed = assertNotNull(PetalDecoder.track(lumaOf(pair, "to_luma_zlib_base64"), previous), name)
-            assertReading(name, referenceTracks.getValue(name), followed)
+            val to = lumaOf(pair, "to_luma_zlib_base64")
+            assertReading(name, referenceTracks.getValue(name), to, assertNotNull(PetalDecoder.track(to, previous), name))
         }
-        // the lens distortion search found the barrel and the shadow band's best pose
+        // the lens distortion search found the barrel
         assertTrue(referenceReadings.getValue("barrel-480p").distortionBits != bits(0.0))
-        assertTrue(referenceReadings.getValue("shadow-band-540p").distortionBits != bits(0.0))
     }
 
     @Test
@@ -454,9 +520,17 @@ class PetalCaptureFixtureTest {
     fun recordedLaneDataIsAValidCodewordOfItsStream() {
         val payload = PetalTestSupport.hex(doc.text("payload_hex"))
         val encoder = PetalStreamEncoder(payload, doc.number("payload_kind").toInt())
-        val stream = PetalTestSupport.loadFixture("petal_stream_v2.json").array("streams")
+        val stream = PetalTestSupport.loadFixture("petal_stream_v3.json").array("streams")
             .map { it.jsonObject }.single { it.text("name") == "one-pass" }
         assertContentEquals(stream.hexBytes("payload_hex"), payload)
+        fun checkTurns(name: String, entry: JsonObject, data: PetalFrameLanes) {
+            val turns = entry.array("turn_data").map { PetalTestSupport.hex(it.jsonPrimitive.content) }
+            for (sector in 0 until PetalLayout.SECTORS) {
+                assertContentEquals(turns[sector], data.turn(sector), "$name T$sector")
+                val word = PetalTurns.encodeTurnLane(sector, turns[sector])
+                assertContentEquals(turns[sector], PetalTurns.decodeTurnLaneCounted(sector, word).data)
+            }
+        }
         for (element in doc.array("captures")) {
             val capture = element.jsonObject
             val data = encoder.laneData(capture.number("frame").toInt())
@@ -464,6 +538,7 @@ class PetalCaptureFixtureTest {
                 assertContentEquals(expected, data.lane(lane), "${capture.text("name")} $lane")
                 assertContentEquals(expected, PetalLanes.decodeLane(lane, PetalLanes.encodeLane(lane, expected)))
             }
+            checkTurns(capture.text("name"), capture, data)
         }
         // the lane data of a tracking pair is that of its second frame
         for (element in doc.array("tracks")) {
@@ -471,6 +546,7 @@ class PetalCaptureFixtureTest {
             assertEquals(pair.number("from_frame") + 1, pair.number("to_frame"))
             val data = encoder.laneData(pair.number("to_frame").toInt())
             for ((lane, expected) in truth(pair)) assertContentEquals(expected, data.lane(lane), "${pair.text("name")} $lane")
+            checkTurns(pair.text("name"), pair, data)
         }
         // a merge set records the lanes of its shown frame; a mixed set its rings' frame and petals' frame
         for (element in doc.array("merges")) {

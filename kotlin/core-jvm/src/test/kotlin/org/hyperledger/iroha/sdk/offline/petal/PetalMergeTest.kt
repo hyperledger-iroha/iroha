@@ -43,9 +43,9 @@ class PetalMergeTest {
             val capture = assertNotNull(PetalLuma.fromRaw(image.width, image.height, data))
             val frame = assertNotNull(PetalDecoder.decode(capture).frame, name)
             assertTrue(frame.fields.any { it != null }, name)
-            // the shadowed columns cost two field lanes, exactly as the reference decoder reads them
-            // (after a lens search that settles on k = −0.015); the hard edge also defeats the local read
-            if (name == "shadow") assertEquals("D13" to -0.015, frame.lanes to frame.pose.distortion)
+            // the shadowed columns cost a field lane, exactly as the reference decoder reads them
+            // (after a lens search that keeps k = 0); the hard edge also defeats the local read
+            if (name == "shadow") assertEquals("D123" to 0.0, frame.lanes to frame.pose.distortion)
             assertEquals(frame.fields, merge(listOf(evidence(capture, frame))).toList(), "$name: field lanes, including correction counts")
         }
     }

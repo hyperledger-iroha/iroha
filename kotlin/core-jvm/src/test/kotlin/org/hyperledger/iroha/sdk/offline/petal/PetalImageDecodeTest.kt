@@ -541,7 +541,12 @@ class PetalImageDecodeTest {
         val (encoder, rgb) = setup(3)
         val luma = rgb.toLuma()
         val decoded = assertNotNull(PetalDecoder.decode(luma).frame, "decodes")
-        assertEquals(encoder.cells(3), PetalDecoder.observedCells(luma, decoded))
+        val observed = assertNotNull(PetalDecoder.observedCells(luma, decoded))
+        val drawn = encoder.cells(3)
+        assertContentEquals(drawn.dots(), observed.dots())
+        assertContentEquals(drawn.petals(), observed.petals())
+        // the observed petals are left unturned
+        assertEquals(PetalFrameCells.of(drawn.dots(), drawn.petals()), observed)
     }
 
     @Test
@@ -990,12 +995,13 @@ class PetalImageDecodeTest {
 
     @Test
     fun softwareRendersAreByteIdenticalToTheReference() {
-        // CRC-32C of the Rust reference `render` output for frames of a 700-byte stream.
+        // CRC-32C of the Rust reference `render` output for frames of a 700-byte stream (turned
+        // petals included).
         val encoder = PetalStreamEncoder(PetalTestSupport.payload(700, 2), 2)
         val expected = listOf(
-            Triple(0, PetalRenderOptions(512, 2), 0x72A6_EC3B),
-            Triple(1, PetalRenderOptions(300, 3), 0x501C_4D37),
-            Triple(6, PetalRenderOptions(777, 4), 0x9175_B0A4.toInt()),
+            Triple(0, PetalRenderOptions(512, 2), 0xAE28_7F3E.toInt()),
+            Triple(1, PetalRenderOptions(300, 3), 0x6C85_D69E),
+            Triple(6, PetalRenderOptions(777, 4), 0xDED1_68E1.toInt()),
         )
         for ((frame, options, crc) in expected) {
             val rgb = PetalRenderer.render(encoder.cells(frame), options)

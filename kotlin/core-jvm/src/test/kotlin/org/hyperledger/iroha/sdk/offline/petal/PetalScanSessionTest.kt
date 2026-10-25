@@ -57,9 +57,36 @@ class PetalScanSessionTest {
         assertEquals(2, completed.meta.kind)
         val stats = session.stats()
         assertTrue(stats.readable > 0 && stats.laneD > 0 && stats.fieldLanes > 0, "$stats")
-        // 5,000 bytes need 313 atoms: a clean camera reads them in 15 or 16 frames
-        assertTrue(stats.frames <= 17, "$stats")
+        assertTrue(stats.turnLanes > 0, "$stats")
+        // 5,000 bytes need 313 atoms: the field lanes and lane D alone carry them in 15 or 16
+        // frames, the turn lanes on top in 9 or 10
+        assertTrue(stats.frames <= 11, "$stats")
         assertTrue(session.progress().complete)
+    }
+
+    @Test
+    fun aTurnLaneIsReadOncePerShownFrame() {
+        val encoder = PetalStreamEncoder(payload(3000), 2)
+        val config = camera(12.0)
+        val session = PetalScanSession()
+        val shown = render(encoder, 5)
+        val first = session.push(PetalCameraSimulator.capture(shown, config.copy(seed = 1)), 0)
+        assertEquals("D0123", first.lanes)
+        assertEquals("0123", first.turned)
+        val again = session.push(PetalCameraSimulator.capture(shown, config.copy(seed = 2)), 33)
+        assertEquals("D0123" to "", again.lanes to again.turned)
+        assertEquals(4L, session.stats().turnLanes)
+        // the next shown frame's turn lanes are new
+        val next = session.push(PetalCameraSimulator.capture(render(encoder, 6), config.copy(seed = 3)), 83)
+        assertEquals("0123", next.turned)
+        assertEquals(8L, session.stats().turnLanes)
+        // the memory holds the four turn lanes of each of the last six shown frames
+        assertEquals(8, session.turned.size)
+        for (frame in 7 until 13) session.push(render(encoder, frame).toLuma(), 83L + 33 * (frame - 6))
+        assertEquals(PetalScanSession.TURN_MEMORY, session.turned.size)
+        assertTrue(session.turned.all { it.header.frame >= 7 })
+        session.reset()
+        assertTrue(session.turned.isEmpty())
     }
 
     @Test
@@ -260,10 +287,12 @@ class PetalScanSessionTest {
             session.absorb(previous)
             session.merge(oldImage, previous)
             assertTrue(session.held.isNotEmpty())
+            assertEquals("0123", session.turn(oldImage, oldFull))
             session.absorb(newPartial)
             session.absorb(newPartial)
             assertEquals(new.meta, session.progress().meta)
             assertTrue(session.held.isEmpty())
+            assertTrue(session.turned.isEmpty(), "a new stream forgets the turn lanes read")
             assertEquals("", session.merge(newImage, newPartial))
             assertEquals(1, session.held.first.evidence.size)
             assertTrue(session.held.first.done.none { it })

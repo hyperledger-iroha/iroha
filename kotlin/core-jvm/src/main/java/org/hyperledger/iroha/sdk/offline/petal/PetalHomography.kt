@@ -226,6 +226,24 @@ class PetalPose(
         return doubleArrayOf(centerX + dx * factor, centerY + dy * factor)
     }
 
+    /** [apply] without allocating: writes `x'` and `y'` to `out[offset]` and `out[offset + 1]`. */
+    internal fun applyInto(x: Double, y: Double, out: DoubleArray, offset: Int) {
+        val m = homography.m
+        val w = m[6] * x + m[7] * y + m[8]
+        val ux = (m[0] * x + m[1] * y + m[2]) / w
+        val uy = (m[3] * x + m[4] * y + m[5]) / w
+        if (distortion == 0.0) {
+            out[offset] = ux
+            out[offset + 1] = uy
+            return
+        }
+        val dx = ux - centerX
+        val dy = uy - centerY
+        val factor = 1.0 + distortion * (dx * dx + dy * dy) / scale2
+        out[offset] = centerX + dx * factor
+        out[offset + 1] = centerY + dy * factor
+    }
+
     override fun equals(other: Any?): Boolean = other is PetalPose && homography == other.homography &&
         distortion == other.distortion && centerX == other.centerX && centerY == other.centerY && scale2 == other.scale2
 

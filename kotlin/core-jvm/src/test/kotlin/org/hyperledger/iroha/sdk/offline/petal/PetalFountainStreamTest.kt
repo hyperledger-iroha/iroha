@@ -407,11 +407,13 @@ class PetalFountainStreamTest {
         assertEquals(encoder.meta, beacon.meta)
         assertEquals(512, beacon.header.frame)
         assertNull(PetalStream.parseDLane(d.copyOf(11)))
-        assertEquals(0x20, d[3].toInt())
-        // the retired format 1 (katakana tiles) is refused
-        val bad = d.copyOf()
-        bad[3] = 0x10
-        assertNull(PetalStream.parseDLane(bad))
+        assertEquals(0x30, d[3].toInt())
+        // the retired formats 1 (katakana tiles) and 2 (unturned petals) are refused
+        for (retired in intArrayOf(0x10, 0x20)) {
+            val bad = d.copyOf()
+            bad[3] = retired.toByte()
+            assertNull(PetalStream.parseDLane(bad))
+        }
         // non-beacon frames carry an atom instead
         val atoms = assertNotNull(PetalStream.parseDLane(encoder.laneData(513).d())).atoms
         assertNotNull(atoms)

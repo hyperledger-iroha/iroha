@@ -16,7 +16,7 @@ enum class PetalSlotRole {
 }
 
 /**
- * Normative Petal frame geometry (format 2).
+ * Normative Petal frame geometry (format 3).
  *
  * All coordinates are *design units* on a square canvas of [CANVAS] units with
  * the origin at the top-left and `y` growing downward. A renderer scales the
@@ -49,20 +49,26 @@ object PetalLayout {
     /** Cells in each sector. */
     const val SECTOR_CELLS = FIELD_CELLS / SECTORS
 
-    /** Radius of the disc a petal stands in for: decoders sample within it. */
+    /**
+     * Radius of the disc a petal stands in for: decoders sample within it, and no other petal,
+     * however it is turned, reaches into it.
+     */
     const val PETAL_RADIUS = 4.6
 
-    /** Half the length of a drawn petal, along the outward radial direction. */
-    const val PETAL_HALF_LENGTH = 5.2
+    /**
+     * Half the length of a drawn petal, along its axis (the outward radial direction, turned by the
+     * petal's turn, see [PetalTurns]).
+     */
+    const val PETAL_HALF_LENGTH = 6.0
 
     /** Half the width of a drawn petal. */
-    const val PETAL_HALF_WIDTH = 4.3
+    const val PETAL_HALF_WIDTH = 3.73
 
-    /** Radius of the cosmetic notch cut into each petal tip. */
-    const val PETAL_NOTCH_RADIUS = 1.3
+    /** Radius of the notch cut into each petal tip; it tells a petal from one turned by half a turn. */
+    const val PETAL_NOTCH_RADIUS = 1.12
 
-    /** Distance from a petal centre to its notch centre, outward. */
-    const val PETAL_NOTCH_DISTANCE = 5.4
+    /** Distance from a petal centre to its notch centre, along its axis. */
+    const val PETAL_NOTCH_DISTANCE = 6.24
 
     /** Number of lattice columns and rows of the `天` mask. */
     const val MASK_GRID = 20
@@ -161,10 +167,10 @@ object PetalLayout {
      * rendering use those values widened to double, exactly as it does.
      */
     internal val PETAL_RADIUS_EXACT = 4.6f.toDouble()
-    internal val PETAL_HALF_LENGTH_EXACT = 5.2f.toDouble()
-    internal val PETAL_HALF_WIDTH_EXACT = 4.3f.toDouble()
-    internal val PETAL_NOTCH_RADIUS_EXACT = 1.3f.toDouble()
-    internal val PETAL_NOTCH_DISTANCE_EXACT = 5.4f.toDouble()
+    internal val PETAL_HALF_LENGTH_EXACT = 6.0f.toDouble()
+    internal val PETAL_HALF_WIDTH_EXACT = 3.73f.toDouble()
+    internal val PETAL_NOTCH_RADIUS_EXACT = 1.12f.toDouble()
+    internal val PETAL_NOTCH_DISTANCE_EXACT = 6.24f.toDouble()
 
     /** Index of the first cell of every band (and the total at the end). */
     internal val BAND_OFFSETS = IntArray(BAND_COUNT + 1)
@@ -458,8 +464,8 @@ object PetalLayout {
 
     /**
      * Returns whether the point `(dx, dy)`, relative to the centre of a petal that points along
-     * [angle], is lit: an ellipse of half-length [PETAL_HALF_LENGTH] along the outward direction
-     * and half-width [PETAL_HALF_WIDTH], minus the cosmetic notch at its tip.
+     * [angle], is lit: an ellipse of half-length [PETAL_HALF_LENGTH] along [angle] and half-width
+     * [PETAL_HALF_WIDTH], minus the notch at its tip.
      */
     @JvmStatic
     fun petalLit(dx: Double, dy: Double, angle: Double): Boolean =

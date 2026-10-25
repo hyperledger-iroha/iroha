@@ -167,7 +167,8 @@ class PetalDecodeResult internal constructor(
  * After a frame decodes, [track] reads the next ones from its pose without the
  * finder search (what [PetalScanSession] does within 500 ms). The session also
  * averages the field levels of captures of the same shown frame to recover
- * field lanes lost to noise or display banding.
+ * field lanes lost to noise or display banding, and reads the turn lanes on top
+ * of the field lanes a capture decoded ([PetalTurns.readTurns]).
  *
  * All functions are thread-safe. [PetalScanSession] reuses scratch buffers
  * between frames; direct calls allocate their own.
@@ -289,9 +290,10 @@ object PetalDecoder {
 
     /**
      * Builds the cells the decoder believes it saw under [frame]'s pose, for diagnostics: every
-     * codeword thresholded as the first read of [decode] thresholds it (no local read). Returns
-     * `null` when the image is unusable, the frame names a corner that does not exist or the
-     * finder levels under that pose are too weak.
+     * codeword thresholded as the first read of [decode] thresholds it (no local read). The petals
+     * are left unturned ([PetalTurns.observedTurns] reports the turns). Returns `null` when the
+     * image is unusable, the frame names a corner that does not exist or the finder levels under
+     * that pose are too weak.
      */
     @JvmStatic
     @JvmOverloads

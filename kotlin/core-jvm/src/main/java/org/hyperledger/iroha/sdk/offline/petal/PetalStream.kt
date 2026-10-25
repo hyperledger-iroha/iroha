@@ -8,20 +8,27 @@ package org.hyperledger.iroha.sdk.offline.petal
  * fourth frame (`frame % 4 == 0`), when lane `D` carries the stream *beacon*
  * instead, so a receiver can join at any frame within a fraction of a second.
  * Atom ids run contiguously over the atoms actually sent (see [firstAtomId]).
- * Any single readable lane is useful on its own.
+ * Any single readable lane is useful on its own. On top of every field lane,
+ * the turns of its lit petals carry four more atoms from the repair range (see
+ * [PetalTurns]), so a sharp camera reads up to 37 atoms (592 bytes) a frame.
  *
  * Lane data layouts (all big-endian):
  *
- * * every lane starts with `tag:u8, frame:u16`; `tag` is the low byte of the
- *   payload CRC-32C.
+ * * every lane but the turn lanes starts with `tag:u8, frame:u16`; `tag` is the
+ *   low byte of the payload CRC-32C.
  * * field lanes and non-beacon `D`: `atoms…` (16 bytes each).
  * * beacon `D`: `version:u8, kind:u8, len:u24, crc:u32`, zero padded.
+ * * turn lanes: `atoms… check:u32`, where the check binds the atoms to the
+ *   header of the field lane they ride on.
  *
  * Frame numbers are `u16` values (`0..65535`) and wrap.
  */
 object PetalStream {
-    /** Version/profile byte of the beacon: format version 2, layout profile 0. */
-    const val FORMAT_VERSION = 0x20
+    /**
+     * Version/profile byte of the beacon: format version 3, layout profile 0. Beacons of the
+     * retired formats 2 (`0x20`, unturned petals) and 1 (`0x10`, katakana tiles) are refused.
+     */
+    const val FORMAT_VERSION = 0x30
 
     /** Largest payload a beacon can describe (`u24`). */
     const val MAX_PAYLOAD_LEN = (1 shl 24) - 1
@@ -246,13 +253,18 @@ class PetalDLane internal constructor(
     }
 }
 
-/** The bytes of every lane of one frame (lane `D` and the four field lanes): lane data or transmitted codewords. */
+/**
+ * The bytes of every lane of one frame (lane `D`, the four field lanes and the four turn lanes):
+ * lane data or transmitted codewords.
+ */
 class PetalFrameLanes internal constructor(
     private val dBytes: ByteArray,
     private val fieldBytes: Array<ByteArray>,
+    private val turnBytes: Array<ByteArray>,
 ) {
     init {
         require(fieldBytes.size == PetalLayout.SECTORS) { "a frame has ${PetalLayout.SECTORS} field lanes" }
+        require(turnBytes.size == PetalLayout.SECTORS) { "a frame has ${PetalLayout.SECTORS} turn lanes" }
     }
 
     /** Lane `D` bytes (a copy). */
@@ -267,17 +279,30 @@ class PetalFrameLanes internal constructor(
     /** The field lanes, sector 0 first (copies). */
     fun fields(): List<ByteArray> = java.util.Collections.unmodifiableList(fieldBytes.map { it.copyOf() })
 
+    /** The bytes of the turn lane on top of the field lane of sector [sector] (`0..3`, a copy). */
+    fun turn(sector: Int): ByteArray {
+        require(sector in 0 until PetalLayout.SECTORS) { "sector index out of range" }
+        return turnBytes[sector].copyOf()
+    }
+
+    /** The turn lanes, sector 0 first (copies). */
+    fun turns(): List<ByteArray> = java.util.Collections.unmodifiableList(turnBytes.map { it.copyOf() })
+
     /** The bytes of [lane] (a copy). */
     fun lane(lane: PetalLane): ByteArray = laneView(lane).copyOf()
 
     internal fun laneView(lane: PetalLane): ByteArray = if (lane.isField) fieldBytes[lane.sector] else dBytes
 
+    internal fun turnView(sector: Int): ByteArray = turnBytes[sector]
+
     override fun equals(other: Any?): Boolean = other is PetalFrameLanes && dBytes.contentEquals(other.dBytes) &&
-        fieldBytes.indices.all { fieldBytes[it].contentEquals(other.fieldBytes[it]) }
+        fieldBytes.indices.all { fieldBytes[it].contentEquals(other.fieldBytes[it]) } &&
+        turnBytes.indices.all { turnBytes[it].contentEquals(other.turnBytes[it]) }
 
     override fun hashCode(): Int {
         var hash = dBytes.contentHashCode()
         for (field in fieldBytes) hash = 31 * hash + field.contentHashCode()
+        for (turn in turnBytes) hash = 31 * hash + turn.contentHashCode()
         return hash
     }
 }
@@ -317,7 +342,7 @@ class PetalStreamEncoder(payload: ByteArray, kind: Int) {
         frames
     }
 
-    /** The data bytes of every lane of [frame] (`0..65535`). */
+    /** The data bytes of every lane of [frame] (`0..65535`), turn lanes included. */
     fun laneData(frame: Int): PetalFrameLanes {
         PetalStream.checkFrame(frame)
         val mask = IntArray(PetalFountain.maskLength(k))
@@ -340,10 +365,16 @@ class PetalStreamEncoder(payload: ByteArray, kind: Int) {
         } else {
             fillAtoms(d, PetalStream.laneFirstId(PetalLane.D, frame), PetalLanes.D_ATOMS, mask)
         }
-        return PetalFrameLanes(d, fields)
+        val header = PetalLaneHeader(meta.tag, frame)
+        val turns = Array(PetalLayout.SECTORS) { sector ->
+            val atoms = ByteArray(PetalTurns.TURN_ATOMS * PetalLanes.ATOM_LEN)
+            fillAtoms(atoms, 0, PetalTurns.turnFirstId(frame, sector), PetalTurns.TURN_ATOMS, mask)
+            PetalTurns.turnData(header, sector, atoms)
+        }
+        return PetalFrameLanes(d, fields, turns)
     }
 
-    /** The transmitted (whitened) codewords of every lane of [frame]. */
+    /** The transmitted (whitened) codewords of every lane of [frame], turn lanes included. */
     fun words(frame: Int): PetalFrameLanes {
         val data = laneData(frame)
         return PetalFrameLanes(
@@ -352,16 +383,19 @@ class PetalStreamEncoder(payload: ByteArray, kind: Int) {
                 val lane = PetalLane.field(sector)
                 PetalLanes.encodeLane(lane, data.laneView(lane))
             },
+            Array(PetalLayout.SECTORS) { sector -> PetalTurns.encodeTurnLane(sector, data.turnView(sector)) },
         )
     }
 
-    /** Every cell of [frame], ready to render. */
+    /** Every cell of [frame], lit and turned, ready to render. */
     fun cells(frame: Int): PetalFrameCells {
         val words = words(frame)
-        return PetalFrameCells.fromWords(
+        val cells = PetalFrameCells.fromWords(
             words.laneView(PetalLane.D),
             List(PetalLayout.SECTORS) { words.laneView(PetalLane.field(it)) },
         )
+        PetalFrameCells.setTurns(cells.petalView, cells.turnView, List(PetalLayout.SECTORS) { words.turnView(it) })
+        return cells
     }
 
     private fun laneBytes(lane: PetalLane, frame: Int): ByteArray = ByteArray(lane.dataLength).also {
@@ -370,17 +404,13 @@ class PetalStreamEncoder(payload: ByteArray, kind: Int) {
         it[2] = frame.toByte()
     }
 
-    private fun fillAtoms(lane: ByteArray, firstId: Int, count: Int, mask: IntArray) {
+    private fun fillAtoms(lane: ByteArray, firstId: Int, count: Int, mask: IntArray) =
+        fillAtoms(lane, PetalLanes.LANE_HEADER_LEN, firstId, count, mask)
+
+    /** Writes atoms [firstId] … `firstId + count − 1` back to back into [out] from [offset]. */
+    private fun fillAtoms(out: ByteArray, offset: Int, firstId: Int, count: Int, mask: IntArray) {
         for (index in 0 until count) {
-            PetalFountain.encodeAtomInto(
-                source,
-                k,
-                meta.crc,
-                firstId + index,
-                mask,
-                lane,
-                PetalLanes.LANE_HEADER_LEN + index * PetalLanes.ATOM_LEN,
-            )
+            PetalFountain.encodeAtomInto(source, k, meta.crc, firstId + index, mask, out, offset + index * PetalLanes.ATOM_LEN)
         }
     }
 }

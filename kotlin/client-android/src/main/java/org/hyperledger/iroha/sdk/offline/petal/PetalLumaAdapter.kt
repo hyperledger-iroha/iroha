@@ -52,9 +52,10 @@ import java.nio.ByteBuffer
  *
  * Camera2 `ImageReader` images in `YUV_420_888` go through [fromImage].
  * Decode on a background thread. The reference decoder needs about 5 ms for a
- * full search of a 1280×720 frame and under 1 ms to track it; measure the
- * target device and fall back to 640×480 only when it decodes fewer than 5
- * frames per second at 720p.
+ * full search of a 1280×720 frame and under 1 ms to track it, and its turn
+ * reader 2 to 7 ms for the first capture of each shown frame whose field lanes
+ * decode; measure the target device and fall back to 640×480 only when it
+ * decodes fewer than 5 frames per second at 720p.
  *
  * Push every analysed frame into the same [PetalScanSession]: after a frame
  * decodes, the session tracks the code from its pose (about a tenth of the

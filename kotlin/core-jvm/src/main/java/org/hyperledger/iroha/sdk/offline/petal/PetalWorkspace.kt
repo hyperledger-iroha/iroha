@@ -61,6 +61,12 @@ internal class PetalWorkspace {
     val meanLevels: DoubleArray
         get() = mean ?: DoubleArray(PetalLayout.FIELD_CELLS).also { mean = it }
 
+    private var turns: PetalTurnReader? = null
+
+    /** The turn reader and its carrier windows (about 2 MB once a capture has turn lanes to read). */
+    val turnReader: PetalTurnReader
+        get() = turns ?: PetalTurnReader().also { turns = it }
+
     /** The levels of the bit cells of the sector being read, in bit order. */
     val sectorValues = DoubleArray(PetalLanes.FIELD_BITS)
 

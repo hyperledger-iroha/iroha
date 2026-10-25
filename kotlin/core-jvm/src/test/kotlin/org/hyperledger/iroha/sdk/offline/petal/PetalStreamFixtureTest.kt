@@ -4,6 +4,7 @@ import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertTrue
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.double
 import kotlinx.serialization.json.jsonObject
@@ -16,9 +17,9 @@ import org.hyperledger.iroha.sdk.offline.petal.PetalTestSupport.obj
 import org.hyperledger.iroha.sdk.offline.petal.PetalTestSupport.text
 import org.hyperledger.iroha.sdk.offline.petal.PetalTestSupport.u32
 
-/** Conformance with every section of the shared `fixtures/petal/petal_stream_v2.json`. */
+/** Conformance with every section of the shared `fixtures/petal/petal_stream_v3.json`. */
 class PetalStreamFixtureTest {
-    private val doc: JsonObject = PetalTestSupport.loadFixture("petal_stream_v2.json")
+    private val doc: JsonObject = PetalTestSupport.loadFixture("petal_stream_v3.json")
 
     /** One flag per field cell, cell 0 in the most significant bit of byte 0. */
     private fun flags(bitmap: ByteArray): BooleanArray =
@@ -30,8 +31,8 @@ class PetalStreamFixtureTest {
 
     @Test
     fun formatAndConstantsMatch() {
-        assertEquals(2L, doc.number("fixture_version"))
-        assertEquals("petal-stream-v2", doc.text("format"))
+        assertEquals(3L, doc.number("fixture_version"))
+        assertEquals("petal-stream-v3", doc.text("format"))
         val constants = doc.obj("constants")
         assertEquals(PetalLayout.CANVAS, constants.number("canvas").toDouble())
         assertEquals(PetalLanes.ATOM_LEN.toLong(), constants.number("atom_len"))
@@ -45,6 +46,12 @@ class PetalStreamFixtureTest {
         assertEquals(PetalLayout.FIELD_CELLS.toLong(), constants.number("field_cells"))
         assertEquals(PetalStream.BEACON_INTERVAL.toLong(), constants.number("beacon_interval"))
         assertEquals(PetalStream.FORMAT_VERSION.toLong(), constants.number("format_version"))
+        assertEquals(PetalTurns.TURN_POSITIONS.toLong(), constants.number("turn_positions"))
+        assertEquals(PetalTurns.TURN_CARRIERS.toLong(), constants.number("turn_carriers"))
+        assertEquals(PetalTurns.TURN_WORD.toLong(), constants.number("turn_word"))
+        assertEquals(PetalTurns.TURN_PARITY.toLong(), constants.number("turn_parity"))
+        assertEquals(PetalTurns.TURN_ATOMS.toLong(), constants.number("turn_atoms"))
+        assertEquals(constants.number("turn_id_base"), u32(PetalTurns.TURN_ID_BASE))
     }
 
     @Test
@@ -74,6 +81,15 @@ class PetalStreamFixtureTest {
                 sectors[sector].longs(),
                 PetalLayout.sectorCells(sector).map { it.toLong() }.toLongArray(),
                 "sector $sector",
+            )
+        }
+        val orders = layout.array("carrier_orders")
+        assertEquals(PetalLayout.SECTORS, orders.size)
+        for (sector in 0 until PetalLayout.SECTORS) {
+            assertContentEquals(
+                orders[sector].longs(),
+                PetalTurns.carrierOrder(sector).map { it.toLong() }.toLongArray(),
+                "carrier order of sector $sector",
             )
         }
         assertEquals(PetalLayout.MASK, layout.array("mask").map { it.jsonPrimitive.content })
@@ -125,6 +141,36 @@ class PetalStreamFixtureTest {
         val whitening = doc.obj("whitening")
         assertContentEquals(whitening.hexBytes("D"), PetalLane.D.whitening())
         for (lane in PetalLane.FIELDS) assertContentEquals(whitening.hexBytes("F${lane.sector}"), lane.whitening(), "$lane")
+        for (sector in 0 until PetalLayout.SECTORS) {
+            assertContentEquals(whitening.hexBytes("T$sector"), PetalTurns.turnWhitening(sector), "T$sector")
+        }
+    }
+
+    @Test
+    fun turnIdsAndReaderTemplatesMatch() {
+        val ids = doc.obj("turn_first_ids")
+        val frames = ids.array("frames").longs()
+        val sectors = ids.array("sectors").longs()
+        val expected = ids.array("ids").longs()
+        assertEquals(frames.size, expected.size)
+        for (index in frames.indices) {
+            assertEquals(
+                expected[index],
+                u32(PetalTurns.turnFirstId(frames[index].toInt(), sectors[index].toInt())),
+                "frame ${frames[index]} sector ${sectors[index]}",
+            )
+        }
+        val reader = doc.obj("turn_reader")
+        assertEquals(PetalTurns.TURN_BLURS, reader.array("blurs").map { it.jsonPrimitive.double })
+        val probes = reader.array("template_probes")
+        assertEquals(6 * PetalTurns.TURN_BLURS.size, probes.size)
+        for (element in probes) {
+            val probe = element.jsonObject
+            val blur = PetalTurns.TURN_BLURS.indexOfFirst { Math.abs(it - probe.real("blur")) < 1e-12 }
+            assertTrue(blur >= 0, "known blur ${probe.real("blur")}")
+            val got = PetalTurns.turnTemplate(blur, probe.real("along"), probe.real("across"))
+            assertEquals(probe.real("value"), got, 1e-12, "blur ${probe.real("blur")} at (${probe.real("along")}, ${probe.real("across")})")
+        }
     }
 
     @Test
@@ -191,8 +237,14 @@ class PetalStreamFixtureTest {
                 for (sector in 0 until PetalLayout.SECTORS) {
                     assertContentEquals(fieldData[sector], data.field(sector), "$name frame $frameNumber F$sector")
                 }
+                val turnData = frame.hexList("turn_data")
+                assertEquals(PetalLayout.SECTORS, turnData.size)
+                for (sector in 0 until PetalLayout.SECTORS) {
+                    assertContentEquals(turnData[sector], data.turn(sector), "$name frame $frameNumber T$sector")
+                }
                 val dWord = frame.hexBytes("d_word")
                 val fieldWords = frame.hexList("field_words")
+                val turnWords = frame.hexList("turn_words")
                 assertContentEquals(dWord, PetalLanes.encodeLane(PetalLane.D, data.d()))
                 val words = encoder.words(frameNumber)
                 assertContentEquals(dWord, words.d())
@@ -201,26 +253,52 @@ class PetalStreamFixtureTest {
                     assertContentEquals(word, PetalLanes.encodeLane(lane, data.lane(lane)), "$name frame $frameNumber $lane")
                     assertContentEquals(word, words.lane(lane), "$name frame $frameNumber $lane")
                 }
-                val cells = PetalFrameCells.fromWords(dWord, fieldWords)
+                val header = PetalLaneHeader(meta.tag, frameNumber)
+                for (sector in 0 until PetalLayout.SECTORS) {
+                    val word = turnWords[sector]
+                    assertContentEquals(word, PetalTurns.encodeTurnLane(sector, turnData[sector]), "$name frame $frameNumber turn sector $sector")
+                    assertContentEquals(word, words.turn(sector), "$name frame $frameNumber turn sector $sector")
+                    val packet = assertNotNull(PetalTurns.turnPacket(header, sector, turnData[sector]), "$name frame $frameNumber turn check $sector")
+                    assertEquals(PetalTurns.turnFirstId(frameNumber, sector), packet.firstId)
+                    assertEquals(PetalTurns.TURN_ATOMS, packet.atomCount)
+                }
+                val cells = PetalFrameCells.fromWords(dWord, fieldWords).withTurns(turnWords)
+                val turns = String(CharArray(PetalLayout.FIELD_CELLS) { '0' + cells.turn(it) })
+                assertEquals(frame.text("turns"), turns, "$name frame $frameNumber turns")
                 val lit = (0 until PetalLayout.TOTAL_SLOTS).filter { cells.isDotLit(it) }.map { it.toLong() }
                 assertContentEquals(frame.array("lit_dots").longs(), lit.toLongArray(), "$name frame $frameNumber dots")
                 assertContentEquals(flags(frame.hexBytes("lit_petals_hex")), cells.petals(), "$name frame $frameNumber petals")
                 assertEquals(cells, encoder.cells(frameNumber))
+                for (sector in 0 until PetalLayout.SECTORS) assertContentEquals(turnWords[sector], cells.turnWord(sector))
             }
-            // push every fixture frame through decodeLane + the assembler
+            // push every fixture frame through decodeLane + the assembler, with and without the
+            // turn lanes: the turn lanes finish the one-pass stream in fewer frames
             if (name == "one-pass") {
-                val assembler = PetalStreamAssembler()
-                for (frameElement in stream.array("frames")) {
-                    val frame = frameElement.jsonObject
-                    val d = PetalLanes.decodeLane(PetalLane.D, frame.hexBytes("d_word"))
-                    assembler.pushDLane(assertNotNull(PetalStream.parseDLane(d)))
-                    val fieldWords = frame.hexList("field_words")
-                    for (lane in PetalLane.FIELDS) {
-                        val data = PetalLanes.decodeLane(lane, fieldWords[lane.sector])
-                        assembler.pushAtoms(assertNotNull(PetalStream.parseAtomLane(lane, data)))
+                val needed = IntArray(2)
+                for ((index, withTurns) in listOf(false, true).withIndex()) {
+                    val assembler = PetalStreamAssembler()
+                    for (frameElement in stream.array("frames")) {
+                        val frame = frameElement.jsonObject
+                        needed[index] += 1
+                        val d = PetalLanes.decodeLane(PetalLane.D, frame.hexBytes("d_word"))
+                        assembler.pushDLane(assertNotNull(PetalStream.parseDLane(d)))
+                        val fieldWords = frame.hexList("field_words")
+                        for (lane in PetalLane.FIELDS) {
+                            val data = PetalLanes.decodeLane(lane, fieldWords[lane.sector])
+                            assembler.pushAtoms(assertNotNull(PetalStream.parseAtomLane(lane, data)))
+                        }
+                        if (withTurns) {
+                            val header = PetalLaneHeader(meta.tag, frame.number("frame").toInt())
+                            for ((sector, word) in frame.hexList("turn_words").withIndex()) {
+                                val data = PetalTurns.decodeTurnLaneCounted(sector, word).data
+                                assembler.pushAtoms(assertNotNull(PetalTurns.turnPacket(header, sector, data)))
+                            }
+                        }
+                        if (assembler.progress().complete) break
                     }
+                    assertContentEquals(payload, assertNotNull(assembler.takeCompleted()).payload)
                 }
-                assertContentEquals(payload, assertNotNull(assembler.takeCompleted()).payload)
+                assertTrue(needed[1] < needed[0], needed.contentToString())
             }
         }
     }

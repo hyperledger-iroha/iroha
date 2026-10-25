@@ -12,9 +12,10 @@ import android.view.View
  * It is framework-agnostic: use it from XML layouts, from code, or from
  * Jetpack Compose through `AndroidView`. Call [setStream], then [start]; the
  * view keeps the screen on while it plays and pauses its timer while it is
- * detached from a window. Frames are encoded on the UI thread (about 0.1 ms per
- * frame for a 12 KB payload on a desktop JVM) and drawn by a
- * [PetalCanvasRenderer], one path per colour. Use from the UI thread only.
+ * detached from a window. Frames are encoded on the UI thread (about 0.5 ms per
+ * frame for a 12 KB payload on a desktop JVM, the turn lanes' repair atoms
+ * included) and drawn by a [PetalCanvasRenderer], one path per colour, every
+ * lit petal turned and notched. Use from the UI thread only.
  */
 class PetalStreamView @JvmOverloads constructor(
     context: Context,

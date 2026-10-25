@@ -739,15 +739,19 @@ newly signed Load transaction with that identity is rejected.
 
 Petal Stream (`org.hyperledger.iroha.sdk.offline.petal`) is the animated
 "streaming QR" used to hand an offline payload such as an `IPM1` peer message
-from one screen to a phone camera. Each square frame (format 2) shows four
+from one screen to a phone camera. Each square frame (format 3) shows four
 sakura-blossom finders, a field of 3,376 petals on 34 concentric bands cut into
 four sectors (field lanes `F0`–`F3`, one bit per petal; petals inside the SORA
 `天` are drawn light over a faint `天`, the others pink) and three dotted rings
-(lane `D`). Every lane is one whitened GF(256) Reed–Solomon codeword carrying
-fountain-coded 16-byte atoms, and every fourth frame's lane `D` carries the
-stream beacon, so any readable lane of any frame helps and lost frames only cost
-time. The Kotlin port is pure JVM in `core-jvm` and follows the normative Rust
-crate `crates/iroha_petal`; encoding is bit-identical to it.
+(lane `D`). On top of each field lane, the first 360 of its lit petals (in a
+fixed shuffled order) are turned by 0°, 45°, 90° or 135° about their centres:
+two more bits each, one turn lane per sector (`T0`–`T3`) carrying four atoms
+whose check binds them to their field lane's header. Every lane is one whitened
+GF(256) Reed–Solomon codeword carrying fountain-coded 16-byte atoms, and every
+fourth frame's lane `D` carries the stream beacon, so any readable lane of any
+frame helps and lost frames only cost time. The Kotlin port is pure JVM in
+`core-jvm` and follows the normative Rust crate `crates/iroha_petal`; encoding
+and rendering are bit-identical to it.
 
 ```kotlin
 // Sender: frame n of the endless stream, drawn natively or in software.
@@ -787,23 +791,42 @@ frame counter share evidence; a recovered lane must name that same shown frame.
 `stats().mergedLanes` count averaging and its recoveries (`stats().laneD` and
 `stats().fieldLanes` count single-capture reads). A frame only gains missing
 lanes. Reset and accepted stream metadata replacement drop held evidence;
-learning the first beacon preserves pre-beacon captures. In simulation format 2
-moves a 12 KB Payment in about 3 s at the default 12 fps (4.5 s at 8 fps, where
-animated QR takes 6.4 s), and a phone's Cortex-A55 core decodes a 720p camera
-frame in about 16 ms; see `specs/petal_stream.md` §8.
+learning the first beacon preserves pre-beacon captures.
+Every field lane a capture decodes on its own also lets the session read the
+turn lane on top of it (`PetalTurns.readTurns`): each carrier petal is sampled
+in its own outward frame along a cubic correction of the pose fitted to the
+carriers' centroids, the reader fits the blur that best explains the carriers
+and their lit neighbours (and stops when the camera is too soft to show turns),
+and every carrier takes the turn whose template matches best once its
+neighbours, at their own turns, are subtracted. A turn lane is read once per
+shown frame: the session remembers the last 24 it read, `outcome.turned` names
+the turn lanes of a capture by the digits of their field lanes and
+`stats().turnLanes` counts them. `PetalTurns.observedTurns` reports the fitted
+blur and every carrier's decided turn for diagnostics, and
+`PetalFrameCells.turn`, `withTurns` and `turnWord` expose the turns of a frame.
+In the reference simulation format 3 moves a 12 KB Payment in 1.65 s at the
+default 12 fps on a sharp 720p camera and 1.8 s on an older one (3.0 s where the
+camera is too soft for the turns; animated QR takes 4.3 s at 12 fps and 6.4 s
+at its 8 fps). On a desktop JVM the turn reader takes a few milliseconds per
+capture, less than the reference reader on the same machine, and about a third
+of that when it finds the camera too soft; see `specs/petal_stream.md` §8 for
+the phone measurements of the field decode.
 `PetalStreamAssembler` and `PetalScanSession` bound pending atoms, payload
 size (64 KiB by default) and stream lifetime (30 s idle, 180 s absolute), and
 deliver a payload only after its CRC-32C matches the beacon. `client-android`
-adds `PetalStreamView`, `PetalCanvasRenderer` (one path per colour, petal
-shapes cached) and the dependency-free `PetalLumaAdapter` (CameraX
+adds `PetalStreamView`, `PetalCanvasRenderer` (one path per colour, every lit
+petal antialiased, turned and notched: the notch tells a petal from one turned
+by half a turn) and the dependency-free `PetalLumaAdapter` (CameraX
 `ImageAnalysis`, Camera2 `ImageReader` and Camera1 NV21 previews); they use
 API 19 or older platform calls.
 
-The tests check every section of `../fixtures/petal/petal_stream_v2.json`,
-decode the golden camera captures of `../fixtures/petal/petal_captures_v2.json`
-with exactly the lanes, inferred corners, poses and Reed–Solomon corrections the
-reference reads, track its golden frame pairs, recover the missing lanes of its
-noisy merge set, and refuse lanes from mixed-frame captures:
+The tests check every section of `../fixtures/petal/petal_stream_v3.json`
+(carrier orders, turn whitening, turn atom ids and the turn reader's template
+probes included), decode the golden camera captures of
+`../fixtures/petal/petal_captures_v3.json` with exactly the lanes, turn lanes,
+inferred corners, poses and Reed–Solomon corrections the reference reads, track
+its golden frame pairs, recover the missing lanes of its noisy merge set, and
+refuse lanes from mixed-frame captures:
 
 ```bash
 ./gradlew :core-jvm:test --tests '*Petal*' --console=plain

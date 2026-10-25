@@ -112,6 +112,37 @@ final class PetalJavaConsumerTest {
   }
 
   @Test
+  void javaReadsTheTurnLanesOfACapture() {
+    final PetalStreamEncoder encoder = new PetalStreamEncoder(payload(3000), 2);
+    final PetalLuma luma = PetalRenderer.render(encoder.cells(5), new PetalRenderOptions(512, 2)).toLuma();
+    final PetalDecodedFrame decoded = PetalDecoder.decode(luma).getFrame();
+    assertNotNull(decoded);
+    final List<PetalLaneResult> turns = PetalTurns.readTurns(luma, decoded);
+    assertEquals(4, turns.size());
+    for (int sector = 0; sector < 4; sector++) {
+      assertArrayEquals(encoder.laneData(5).turn(sector), turns.get(sector).getData());
+      final byte[] field = decoded.field(sector).getData();
+      final PetalLaneHeader header = new PetalLaneHeader(field[0] & 0xFF, ((field[1] & 0xFF) << 8) | (field[2] & 0xFF));
+      final PetalAtomPacket packet = PetalTurns.turnPacket(header, sector, turns.get(sector).getData());
+      assertNotNull(packet);
+      assertEquals(PetalTurns.turnFirstId(5, sector), packet.getFirstId());
+    }
+    final List<PetalLaneResult> skipped = PetalTurns.readTurns(luma, decoded, new boolean[] {true, true, false, true});
+    assertNull(skipped.get(0));
+    assertNotNull(skipped.get(2));
+    final PetalObservedTurns observed = PetalTurns.observedTurns(luma, decoded);
+    assertNotNull(observed);
+    assertEquals(4 * PetalTurns.TURN_CARRIERS, observed.getCarriers().size());
+    assertEquals(Integer.MIN_VALUE, PetalTurns.TURN_ID_BASE);
+    assertEquals(90, PetalTurns.TURN_WORD);
+    // a session reads each turn lane of a shown frame once
+    final PetalScanSession session = new PetalScanSession();
+    assertEquals("0123", session.push(luma, 0L).getTurned());
+    assertEquals("", session.push(luma, 33L).getTurned());
+    assertEquals(4L, session.stats().getTurnLanes());
+  }
+
+  @Test
   void javaReadsTheCodecAndDrawListSurface() {
     final byte[] data = new byte[PetalLanes.FIELD_DATA];
     final PetalLane lane = PetalLane.field(2);
@@ -134,7 +165,11 @@ final class PetalJavaConsumerTest {
     assertEquals(PetalLayout.isLightCell(petals.get(0).getCell()), petals.get(0).getLight());
     assertFalse(list.getBackdropCells().isEmpty());
     assertEquals(PetalLayout.BACKDROP_RADIUS, PetalDrawList.BACKDROP_RADIUS);
-    assertEquals(5.2, PetalDrawList.PETAL_HALF_LENGTH);
+    assertEquals(6.0, PetalDrawList.PETAL_HALF_LENGTH);
+    assertEquals(3.73, PetalDrawList.PETAL_HALF_WIDTH);
+    final PetalDrawPetal first = petals.get(0);
+    assertEquals(
+        PetalLayout.cellAngle(first.getCell()) + PetalTurns.turnAngle(first.getTurn()), first.getAngle());
     final PetalDLane dLane = PetalStream.parseDLane(encoder.laneData(4).d());
     assertNotNull(dLane);
     assertTrue(dLane.isBeacon());

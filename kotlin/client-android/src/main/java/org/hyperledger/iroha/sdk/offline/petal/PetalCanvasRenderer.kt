@@ -12,12 +12,14 @@ import android.graphics.RectF
  * The frame is painted into the square `(left, top, left + size, top + size)`
  * in the order [PetalDrawList] documents: background, finder blossoms (discs
  * then petal notches), the faint `天` backdrop clipped to its disc, the lit
- * petals, then the lit ring dots. Each colour is one path draw: the finder and
- * backdrop paths are built once, every field cell's notched petal is built the
- * first time it lights up, and a frame only gathers the lit petals and dots
- * into reused paths, so once the petals are built drawing allocates nothing.
- * Uses API 19 or older graphics calls (`Path.op` for the clipped backdrop and
- * the petal notch). Not thread-safe: draw from the UI (or one render) thread.
+ * petals, then the lit ring dots. Every petal is drawn antialiased with its
+ * notch, along its axis (its outward direction plus its turn): the notch tells a
+ * petal from one turned by half a turn, and the turn reader's templates include
+ * it. Each colour is one path draw: the finder and backdrop paths and the
+ * notched unit petal are built once, and a frame only gathers the lit petals
+ * (the unit petal turned and moved into place) and dots into reused paths, so
+ * drawing allocates nothing. Uses API 19 or older graphics calls (`Path.op` for
+ * the clipped backdrop). Not thread-safe: draw from the UI (or one render) thread.
  */
 class PetalCanvasRenderer {
     private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
@@ -32,12 +34,7 @@ class PetalCanvasRenderer {
     private var backdropSource: List<PetalRect>? = null
 
     /** One petal pointing along `+x` and centred on the origin, minus its notch. */
-    private val unitPetal = Path()
-
-    /** The petal shape of every field cell, and the petal it was built from. */
-    private val petalShapes = arrayOfNulls<Path>(PetalLayout.FIELD_CELLS)
-    private val petalOwners = arrayOfNulls<PetalDrawPetal>(PetalLayout.FIELD_CELLS)
-    private val scratchPetal = Path()
+    private val unitPetal = notchedPetal()
     private val placement = Matrix()
 
     private val lightPetals = Path()
@@ -45,19 +42,6 @@ class PetalCanvasRenderer {
     private val dots = Path()
 
     init {
-        val halfLength = PetalDrawList.PETAL_HALF_LENGTH.toFloat()
-        val halfWidth = PetalDrawList.PETAL_HALF_WIDTH.toFloat()
-        val oval = Path().apply { addOval(RectF(-halfLength, -halfWidth, halfLength, halfWidth), Path.Direction.CW) }
-        val notch = Path().apply {
-            addCircle(
-                PetalDrawList.PETAL_NOTCH_DISTANCE.toFloat(),
-                0f,
-                PetalDrawList.PETAL_NOTCH_RADIUS.toFloat(),
-                Path.Direction.CW,
-            )
-        }
-        // the notch is cosmetic: a plain ellipse is a valid petal when the boolean operation fails
-        if (!unitPetal.op(oval, notch, Path.Op.DIFFERENCE)) unitPetal.set(oval)
         val center = PetalDrawList.CANVAS.toFloat() / 2f
         backdropClip.addCircle(center, center, PetalDrawList.BACKDROP_RADIUS.toFloat(), Path.Direction.CW)
     }
@@ -91,7 +75,12 @@ class PetalCanvasRenderer {
 
         lightPetals.rewind()
         pinkPetals.rewind()
-        for (petal in drawList.petals) (if (petal.light) lightPetals else pinkPetals).addPath(petalShape(petal))
+        for (petal in drawList.petals) {
+            // the unit petal turned to the petal's axis, then moved to its centre
+            placement.setRotate(Math.toDegrees(petal.angle).toFloat())
+            placement.postTranslate(petal.centerX.toFloat(), petal.centerY.toFloat())
+            (if (petal.light) lightPetals else pinkPetals).addPath(unitPetal, placement)
+        }
         fill.color = opaque(palette.light)
         canvas.drawPath(lightPetals, fill)
         fill.color = opaque(palette.pink)
@@ -128,28 +117,36 @@ class PetalCanvasRenderer {
         }
     }
 
-    /** The shape of [petal]: cached per field cell, rebuilt only for a petal object it was not built from. */
-    private fun petalShape(petal: PetalDrawPetal): Path {
-        val cell = petal.cell
-        if (cell !in 0 until PetalLayout.FIELD_CELLS) {
-            place(petal, scratchPetal)
-            return scratchPetal
-        }
-        if (petalOwners[cell] === petal) return petalShapes[cell]!!
-        val shape = petalShapes[cell] ?: Path().also { petalShapes[cell] = it }
-        place(petal, shape)
-        petalOwners[cell] = petal
-        return shape
-    }
-
-    /** Writes the unit petal turned to [petal]'s outward direction and moved to its centre into [into]. */
-    private fun place(petal: PetalDrawPetal, into: Path) {
-        placement.setRotate(Math.toDegrees(petal.angle).toFloat())
-        placement.postTranslate(petal.centerX.toFloat(), petal.centerY.toFloat())
-        unitPetal.transform(placement, into)
-    }
-
     private companion object {
         fun opaque(rgb: Int): Int = rgb or 0xFF00_0000.toInt()
+
+        /**
+         * The petal of `specs/petal_stream.md` §2.3 in its own frame, built from two arcs so that
+         * no boolean path operation can lose its notch: the ellipse of half-length
+         * [PetalDrawList.PETAL_HALF_LENGTH] along `+x` and half-width
+         * [PetalDrawList.PETAL_HALF_WIDTH], the long way round from one point where the notch (a
+         * disc of radius [PetalDrawList.PETAL_NOTCH_RADIUS] centred
+         * [PetalDrawList.PETAL_NOTCH_DISTANCE] along `+x`) meets it to the other, then the notch's
+         * arc back inside the ellipse. Arc angles of an oval are parametric: the point at angle `t`
+         * is `(a cos t, b sin t)`.
+         */
+        fun notchedPetal(): Path {
+            val a = PetalDrawList.PETAL_HALF_LENGTH
+            val b = PetalDrawList.PETAL_HALF_WIDTH
+            val d = PetalDrawList.PETAL_NOTCH_DISTANCE
+            val r = PetalDrawList.PETAL_NOTCH_RADIUS
+            // the notch circle meets the ellipse where x²(1 − b²/a²) − 2dx + d² + b² − r² = 0
+            val qa = 1.0 - b * b / (a * a)
+            val qc = d * d + b * b - r * r
+            val x = (2.0 * d - Math.sqrt(4.0 * d * d - 4.0 * qa * qc)) / (2.0 * qa)
+            val y = b * Math.sqrt(1.0 - x * x / (a * a))
+            val ellipseStart = Math.toDegrees(Math.atan2(y / b, x / a)).toFloat()
+            val notchHalf = Math.toDegrees(Math.atan2(y, d - x)).toFloat()
+            return Path().apply {
+                arcTo(RectF(-a.toFloat(), -b.toFloat(), a.toFloat(), b.toFloat()), ellipseStart, 360f - 2f * ellipseStart, true)
+                arcTo(RectF((d - r).toFloat(), -r.toFloat(), (d + r).toFloat(), r.toFloat()), 180f + notchHalf, -2f * notchHalf, false)
+                close()
+            }
+        }
     }
 }

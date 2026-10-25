@@ -47,19 +47,21 @@ class PetalScanStats internal constructor(
     val merges: Long,
     /** Field lanes recovered by merging captures. */
     val mergedLanes: Long,
+    /** Turn lanes read (each at most once per shown frame). */
+    val turnLanes: Long,
 ) {
     override fun equals(other: Any?): Boolean = other is PetalScanStats && frames == other.frames &&
         located == other.located && readable == other.readable && laneD == other.laneD &&
         fieldLanes == other.fieldLanes && tracked == other.tracked && inferred == other.inferred &&
-        merges == other.merges && mergedLanes == other.mergedLanes
+        merges == other.merges && mergedLanes == other.mergedLanes && turnLanes == other.turnLanes
 
     override fun hashCode(): Int =
         (31 * frames + located + 7 * readable + 11 * laneD + 13 * fieldLanes + 17 * tracked + 19 * inferred +
-            23 * merges + 29 * mergedLanes).hashCode()
+            23 * merges + 29 * mergedLanes + 37 * turnLanes).hashCode()
 
     override fun toString(): String =
         "PetalScanStats(frames=$frames, located=$located, readable=$readable, laneD=$laneD, fieldLanes=$fieldLanes, " +
-            "tracked=$tracked, inferred=$inferred, merges=$merges, mergedLanes=$mergedLanes)"
+            "tracked=$tracked, inferred=$inferred, merges=$merges, mergedLanes=$mergedLanes, turnLanes=$turnLanes)"
 }
 
 /** The result of offering one camera frame. */
@@ -73,6 +75,8 @@ class PetalScanOutcome internal constructor(
     val lanes: String,
     /** Field lanes recovered by merging this capture with earlier captures of its shown frame, as sector digits. */
     val merged: String,
+    /** Turn lanes read from this capture, as the sector digits of the field lanes they ride on. */
+    val turned: String,
     /** Receive progress after this frame. */
     val progress: PetalProgress,
     /** The finished payload, delivered exactly once. */
@@ -98,6 +102,11 @@ class PetalScanOutcome internal constructor(
  * each of the last [MERGE_WINDOW] shown frames. From the second such capture on, it averages them
  * and offers a recovered lane only when that lane's own header names the same frame.
  *
+ * Every field lane a capture decodes also lets the session read the turn lane on top of it
+ * ([PetalTurns.readTurns]). A turn lane is read once per shown frame: the session remembers the
+ * last [TURN_MEMORY] it read (cleared with the held evidence when the stream changes) and does not
+ * look at those petals again.
+ *
  * Thread-safe: calls are serialised, so a camera analyzer thread may push while a UI thread reads.
  */
 class PetalScanSession @JvmOverloads constructor(
@@ -120,6 +129,7 @@ class PetalScanSession @JvmOverloads constructor(
     private var inferred = 0L
     private var merges = 0L
     private var mergedLanes = 0L
+    private var turnLanes = 0L
 
     /** Captures of one shown frame; bounded by [MERGE_CAPTURES]. */
     internal class Held(val shown: PetalLaneHeader) {
@@ -133,10 +143,20 @@ class PetalScanSession @JvmOverloads constructor(
 
     internal val held = ArrayDeque<Held>()
 
+    /** A turn lane read: the header of the field lane it rides on and its sector. */
+    internal class Turned(val header: PetalLaneHeader, val sector: Int)
+
+    /** The turn lanes read last, oldest first; bounded by [TURN_MEMORY]. */
+    internal val turned = ArrayDeque<Turned>()
+
+    private val turnSkip = BooleanArray(PetalLayout.SECTORS)
+    private val turnHeaders = arrayOfNulls<PetalLaneHeader>(PetalLayout.SECTORS)
+    private val turnResults = arrayOfNulls<PetalLaneResult>(PetalLayout.SECTORS)
+
     /** Diagnostic counters. */
     @Synchronized
     fun stats(): PetalScanStats = PetalScanStats(
-        frames, located, readable, laneD, fieldLanes, tracked, inferred, merges, mergedLanes,
+        frames, located, readable, laneD, fieldLanes, tracked, inferred, merges, mergedLanes, turnLanes,
     )
 
     /** Current progress. */
@@ -151,6 +171,7 @@ class PetalScanSession @JvmOverloads constructor(
         lastRank = 0
         lastPose = null
         held.clear()
+        turned.clear()
     }
 
     /** Offers one camera luma plane captured at monotonic time [nowMillis] (non-negative). */
@@ -181,6 +202,7 @@ class PetalScanSession @JvmOverloads constructor(
         }
         val lanes = if (frame != null) absorb(frame) else ""
         val merged = if (frame != null) merge(image, frame) else ""
+        val turnedLanes = if (frame != null) turn(image, frame) else ""
         if (result.error != PetalDecodeError.NO_FINDERS && result.error != PetalDecodeError.UNSUPPORTED_IMAGE) {
             located += 1
         }
@@ -190,7 +212,7 @@ class PetalScanSession @JvmOverloads constructor(
             if (startedMillis == null) startedMillis = nowMillis
         }
         lastRank = progress.rank
-        return PetalScanOutcome(result.error, lanes, merged, progress, assembler.takeCompleted())
+        return PetalScanOutcome(result.error, lanes, merged, turnedLanes, progress, assembler.takeCompleted())
     }
 
     internal fun absorb(frame: PetalDecodedFrame): String {
@@ -202,8 +224,41 @@ class PetalScanSession @JvmOverloads constructor(
         frame.feed(assembler)
         // A short tag can collide: accepted metadata replacement starts a new capture cache.
         // Keep pre-beacon evidence when the first stream identity is learned.
-        if (previousMeta != null && assembler.progress().meta != previousMeta) held.clear()
+        if (previousMeta != null && assembler.progress().meta != previousMeta) {
+            held.clear()
+            turned.clear()
+        }
         return lanes
+    }
+
+    /**
+     * Reads the turn lanes on top of the field lanes this capture decoded, except those already
+     * read for their shown frame, and offers their atoms.
+     */
+    internal fun turn(image: PetalLuma, frame: PetalDecodedFrame): String {
+        var all = true
+        for (sector in 0 until PetalLayout.SECTORS) {
+            turnSkip[sector] = true
+            turnHeaders[sector] = null
+            val header = frame.field(sector)?.let { laneHeader(it.dataView) } ?: continue
+            turnHeaders[sector] = header
+            turnSkip[sector] = turned.any { it.sector == sector && it.header == header }
+            if (!turnSkip[sector]) all = false
+        }
+        if (all) return ""
+        workspace.turnReader.read(image, frame, turnSkip, turnResults)
+        val letters = StringBuilder(PetalLayout.SECTORS)
+        for (sector in 0 until PetalLayout.SECTORS) {
+            val result = turnResults[sector] ?: continue
+            val header = turnHeaders[sector] ?: continue
+            val packet = PetalTurns.turnPacket(header, sector, result.dataView) ?: continue
+            assembler.pushAtoms(packet)
+            if (turned.size == TURN_MEMORY) turned.removeFirst()
+            turned.addLast(Turned(header, sector))
+            turnLanes += 1
+            letters.append(PetalLane.field(sector).letter)
+        }
+        return letters.toString()
     }
 
     /**
@@ -251,15 +306,17 @@ class PetalScanSession @JvmOverloads constructor(
         var shown: PetalLaneHeader? = null
         for (lane in PetalLane.ALL) {
             val bytes = frame.lane(lane)?.dataView ?: continue
-            if (bytes.size < 3) return null
-            val header = PetalLaneHeader(
-                bytes[0].toInt() and 0xFF,
-                ((bytes[1].toInt() and 0xFF) shl 8) or (bytes[2].toInt() and 0xFF),
-            )
+            val header = laneHeader(bytes) ?: return null
             if (shown != null && shown != header) return null
             shown = header
         }
         return shown
+    }
+
+    /** The header every lane starts with; `null` for fewer than three bytes. */
+    private fun laneHeader(bytes: ByteArray): PetalLaneHeader? {
+        if (bytes.size < 3) return null
+        return PetalLaneHeader(bytes[0].toInt() and 0xFF, ((bytes[1].toInt() and 0xFF) shl 8) or (bytes[2].toInt() and 0xFF))
     }
 
     private fun saturatingElapsed(now: Long, since: Long): Long = if (now > since) now - since else 0L
@@ -273,5 +330,8 @@ class PetalScanSession @JvmOverloads constructor(
 
         /** Captures held per shown frame; a further capture replaces the oldest. */
         const val MERGE_CAPTURES = 4
+
+        /** Turn lanes remembered as read (the four of each of the last [MERGE_WINDOW] shown frames). */
+        const val TURN_MEMORY = MERGE_WINDOW * PetalLayout.SECTORS
     }
 }

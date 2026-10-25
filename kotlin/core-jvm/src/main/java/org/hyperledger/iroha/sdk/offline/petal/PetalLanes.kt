@@ -3,12 +3,15 @@ package org.hyperledger.iroha.sdk.offline.petal
 /**
  * One of the five data lanes of a Petal frame: lane `D` (the dots on the three
  * rings) or the field lane of one petal sector ([F0]–[F3]). Each lane is exactly
- * one Reed–Solomon codeword, XOR-whitened with a fixed xorshift32 sequence.
+ * one Reed–Solomon codeword, XOR-whitened with a fixed xorshift32 sequence. On
+ * top of every field lane, the turns of its lit petals carry a turn lane
+ * (`T0`–`T3`, see [PetalTurns]), named by the digit of its field lane.
  *
  * | lane | cells | codeword | data | parity |
  * |------|-------|----------|------|--------|
  * | `D` dots | 240 ring slots × 1 bit | 30 B | 19 B | 11 B |
  * | `F0`–`F3` petals | 840 field cells of one sector × 1 bit | 105 B | 83 B | 22 B |
+ * | `T0`–`T3` turns | 360 lit petals of one sector × 2 bits | 90 B | 68 B | 22 B |
  */
 enum class PetalLane(
     /** The letter that names the lane in reports: `D`, or the sector digit `0`–`3`. */
@@ -191,13 +194,15 @@ object PetalLanes {
 }
 
 /**
- * Every cell of one frame: what a renderer draws and a decoder samples.
+ * Every cell of one frame: what a renderer draws and a decoder samples: which ring slots and
+ * petals are lit, and how every petal is turned (see [PetalTurns]).
  *
  * Immutable: arrays are copied on construction and access.
  */
 class PetalFrameCells internal constructor(
     private val dotCells: BooleanArray,
     private val petalCells: BooleanArray,
+    private val turnCells: ByteArray,
 ) {
     /** Whether flat ring slot [slot] is lit (gate dots included). */
     fun isDotLit(slot: Int): Boolean = dotCells[slot]
@@ -205,13 +210,52 @@ class PetalFrameCells internal constructor(
     /** Whether field cell [cell] carries a lit petal (spare cells are dark). */
     fun isPetalLit(cell: Int): Boolean = petalCells[cell]
 
+    /**
+     * Turn position (`0..3`, see [PetalTurns.turnAngle]) of field cell [cell]: zero for dark
+     * petals and for lit petals that carry no turn bits.
+     */
+    fun turn(cell: Int): Int = turnCells[cell].toInt()
+
     /** Lit state of every ring slot, gate dots included. */
     fun dots(): BooleanArray = dotCells.copyOf()
 
     /** Lit state of every field cell. */
     fun petals(): BooleanArray = petalCells.copyOf()
 
+    /** Turn position of every field cell. */
+    fun turns(): ByteArray = turnCells.copyOf()
+
     internal val petalView: BooleanArray get() = petalCells
+
+    internal val turnView: ByteArray get() = turnCells
+
+    /**
+     * These cells with the carriers of every sector turned to show its transmitted turn codeword
+     * ([words], [PetalTurns.TURN_WORD] bytes each, sector 0 first; see [PetalTurns]): the
+     * reference's `set_turns`. A sector with too few lit petals stays unturned.
+     */
+    fun withTurns(words: List<ByteArray>): PetalFrameCells {
+        require(words.size == PetalLayout.SECTORS && words.all { it.size == PetalTurns.TURN_WORD }) {
+            "turn lane codeword length mismatch"
+        }
+        val turns = turnCells.copyOf()
+        setTurns(petalCells, turns, words)
+        return PetalFrameCells(dotCells, petalCells, turns)
+    }
+
+    /**
+     * Packs the turns of the carriers of sector [sector] (`0..3`) into its turn codeword, or
+     * `null` when the sector has too few lit petals to carry one.
+     */
+    fun turnWord(sector: Int): ByteArray? {
+        val chosen = PetalTurns.carriers(petalCells, sector) ?: return null
+        val word = ByteArray(PetalTurns.TURN_WORD)
+        for ((index, cell) in chosen.withIndex()) {
+            val label = PetalTurns.turnLabel(turnCells[cell].toInt())
+            word[index / 4] = (word[index / 4].toInt() or (label shl (6 - 2 * (index % 4)))).toByte()
+        }
+        return word
+    }
 
     /** Packs the data dots into a lane `D` codeword. */
     fun dWord(): ByteArray {
@@ -238,20 +282,33 @@ class PetalFrameCells internal constructor(
     }
 
     override fun equals(other: Any?): Boolean = other is PetalFrameCells &&
-        dotCells.contentEquals(other.dotCells) && petalCells.contentEquals(other.petalCells)
+        dotCells.contentEquals(other.dotCells) && petalCells.contentEquals(other.petalCells) &&
+        turnCells.contentEquals(other.turnCells)
 
-    override fun hashCode(): Int = 31 * dotCells.contentHashCode() + petalCells.contentHashCode()
+    override fun hashCode(): Int =
+        31 * (31 * dotCells.contentHashCode() + petalCells.contentHashCode()) + turnCells.contentHashCode()
 
     companion object {
-        /** Builds cells from explicit values: [PetalLayout.TOTAL_SLOTS] dot states and [PetalLayout.FIELD_CELLS] petal states. */
+        /**
+         * Builds cells from explicit values: [PetalLayout.TOTAL_SLOTS] dot states,
+         * [PetalLayout.FIELD_CELLS] petal states and, optionally, as many turn positions (`0..3`;
+         * every petal unturned when omitted).
+         */
         @JvmStatic
-        fun of(dots: BooleanArray, petals: BooleanArray): PetalFrameCells {
+        @JvmOverloads
+        fun of(dots: BooleanArray, petals: BooleanArray, turns: ByteArray? = null): PetalFrameCells {
             require(dots.size == PetalLayout.TOTAL_SLOTS) { "frame cells need ${PetalLayout.TOTAL_SLOTS} dots" }
             require(petals.size == PetalLayout.FIELD_CELLS) { "frame cells need ${PetalLayout.FIELD_CELLS} petals" }
-            return PetalFrameCells(dots.copyOf(), petals.copyOf())
+            require(turns == null || (turns.size == PetalLayout.FIELD_CELLS && turns.all { it in 0 until PetalTurns.TURN_POSITIONS })) {
+                "frame cells need ${PetalLayout.FIELD_CELLS} turn positions of 0..3"
+            }
+            return PetalFrameCells(dots.copyOf(), petals.copyOf(), turns?.copyOf() ?: ByteArray(PetalLayout.FIELD_CELLS))
         }
 
-        /** Builds the cells from the transmitted codewords of lane `D` and the four field lanes (sector 0 first). */
+        /**
+         * Builds the cells from the transmitted codewords of lane `D` and the four field lanes
+         * (sector 0 first), with every petal unturned (see [withTurns]).
+         */
         @JvmStatic
         fun fromWords(d: ByteArray, fields: List<ByteArray>): PetalFrameCells {
             require(d.size == PetalLanes.D_WORD) { "lane D codeword length mismatch" }
@@ -277,7 +334,25 @@ class PetalFrameCells internal constructor(
                     petals[PetalLayout.SECTOR_ORDER[base + bit]] = ((word[bit / 8].toInt() ushr (7 - bit % 8)) and 1) == 1
                 }
             }
-            return PetalFrameCells(dots, petals)
+            return PetalFrameCells(dots, petals, ByteArray(PetalLayout.FIELD_CELLS))
+        }
+
+        /**
+         * Turns the carriers of every sector in [turns] to show the transmitted turn codeword of
+         * [words]: the sector's codeword cells are unturned first, and a sector with too few lit
+         * petals stays so.
+         */
+        internal fun setTurns(petals: BooleanArray, turns: ByteArray, words: List<ByteArray>) {
+            val chosen = IntArray(PetalTurns.TURN_CARRIERS)
+            for (sector in 0 until PetalLayout.SECTORS) {
+                val word = words[sector]
+                val base = sector * PetalLayout.SECTOR_CELLS
+                for (bit in 0 until PetalLanes.FIELD_BITS) turns[PetalLayout.SECTOR_ORDER[base + bit]] = 0
+                if (!PetalTurns.fillCarriers(petals, sector, chosen, 0)) continue
+                for (index in 0 until PetalTurns.TURN_CARRIERS) {
+                    turns[chosen[index]] = PetalTurns.carrierPosition(word, index).toByte()
+                }
+            }
         }
     }
 }

@@ -323,6 +323,7 @@ class PetalCodecTest {
 
     @Test
     fun petalsStayClearOfTheirNeighboursAndTheRings() {
+        // a petal reaches at most its half-length from its centre, whichever way it is turned
         val outer = PetalLayout.bandRadius(PetalLayout.BAND_COUNT - 1) + PetalLayout.PETAL_HALF_LENGTH
         assertTrue(outer + 10.0 < PetalLayout.ringRadius(0) - PetalLayout.DOT_RADIUS)
         for (cell in 0 until PetalLayout.FIELD_CELLS) {
@@ -333,7 +334,8 @@ class PetalCodecTest {
                 if (other == cell) continue
                 val neighbour = PetalLayout.cellCenter(other)
                 val distance = Math.hypot(center[0] - neighbour[0], center[1] - neighbour[1])
-                assertTrue(distance > 2.0 * PetalLayout.PETAL_RADIUS, "cells $cell and $other are $distance apart")
+                val clearance = (PetalLayout.PETAL_HALF_LENGTH.toFloat() + PetalLayout.PETAL_RADIUS.toFloat()).toDouble()
+                assertTrue(distance > clearance, "cells $cell and $other are $distance apart")
             }
         }
     }
@@ -399,7 +401,10 @@ class PetalCodecTest {
         val tip = PetalLayout.PETAL_NOTCH_DISTANCE
         assertTrue(!PetalLayout.petalLit(tip * Math.cos(0.3), tip * Math.sin(0.3), 0.3))
         assertTrue(!PetalLayout.petalLit(0.0, 10.0, 0.0))
-        // longer along its outward direction (half-length 5.2, the notch from 4.1) than across it (4.3)
-        assertTrue(PetalLayout.petalLit(4.0, 0.0, 0.0) && !PetalLayout.petalLit(0.0, 4.5, 0.0))
+        // longer along its axis (half-length 6.0, the notch from 5.12) than across it (3.73)
+        assertTrue(PetalLayout.petalLit(5.0, 0.0, 0.0) && !PetalLayout.petalLit(0.0, 3.9, 0.0))
+        assertTrue(!PetalLayout.petalLit(5.5, 0.0, 0.0), "the notch")
+        // a petal turned by half a turn differs only by its notch
+        assertTrue(PetalLayout.petalLit(-5.5, 0.0, 0.0) && !PetalLayout.petalLit(-5.5, 0.0, Math.PI))
     }
 }

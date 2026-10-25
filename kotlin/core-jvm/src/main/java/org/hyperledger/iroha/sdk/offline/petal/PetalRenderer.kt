@@ -52,11 +52,12 @@ class PetalRenderOptions @JvmOverloads constructor(
  * Reference software renderer: equivalent to the Rust `render` module.
  *
  * The picture is black, with four sakura-blossom finders in the canvas corners,
- * three dotted rings, and inside them a field of petals on concentric bands. A
- * lit petal whose centre lies inside the `天` is drawn in the light colour, the
- * others in sakura pink, over a faint backdrop of the `天` itself, so the
- * character shows through the storm of petals. Platform code may draw with its
- * own 2D API from a [PetalDrawList] as long as geometry and polarity match.
+ * three dotted rings, and inside them a field of petals on concentric bands, each
+ * lit petal turned about its centre by its turn. A lit petal whose centre lies
+ * inside the `天` is drawn in the light colour, the others in sakura pink, over a
+ * faint backdrop of the `天` itself, so the character shows through the storm of
+ * petals. Platform code may draw with its own 2D API from a [PetalDrawList] as
+ * long as geometry, turns and polarity match.
  */
 object PetalRenderer {
     /** Renders one frame into an RGB image. */
@@ -67,6 +68,22 @@ object PetalRenderer {
         val s = options.supersample
         val palette = options.palette
         val petals = cells.petalView
+        // the axis of every lit petal: its outward direction plus its turn
+        val turns = cells.turnView
+        val sin = DoubleArray(PetalLayout.FIELD_CELLS)
+        val cos = DoubleArray(PetalLayout.FIELD_CELLS)
+        for (cell in 0 until PetalLayout.FIELD_CELLS) {
+            if (!petals[cell]) continue
+            if (turns[cell].toInt() == 0) {
+                sin[cell] = PetalLayout.CELL_SIN[cell]
+                cos[cell] = PetalLayout.CELL_COS[cell]
+            } else {
+                val angle = PetalLayout.CELL_ANGLE[cell] + PetalTurns.turnAngle(turns[cell].toInt())
+                sin[cell] = StrictMath.sin(angle)
+                cos[cell] = StrictMath.cos(angle)
+            }
+        }
+        val axes = Axes(sin, cos)
         val unit = PetalLayout.CANVAS / size.toDouble()
         val data = ByteArray(size * size * 3)
         val n = s * s
@@ -79,7 +96,7 @@ object PetalRenderer {
                     for (sx in 0 until s) {
                         val x = (px.toDouble() + (sx.toDouble() + 0.5) / s.toDouble()) * unit
                         val y = (py.toDouble() + (sy.toDouble() + 0.5) / s.toDouble()) * unit
-                        val colour = shade(cells, petals, palette, x, y)
+                        val colour = shade(cells, petals, axes, palette, x, y)
                         r += colour ushr 16
                         g += (colour ushr 8) and 0xFF
                         b += colour and 0xFF
@@ -100,8 +117,19 @@ object PetalRenderer {
     fun drawList(cells: PetalFrameCells, palette: PetalPalette = PetalPalette.DEFAULT): PetalDrawList =
         PetalDrawList.of(cells, palette)
 
+    /** Sine and cosine of the axis of every lit petal. */
+    private class Axes(val sin: DoubleArray, val cos: DoubleArray)
+
     /** The colour of the lit petal that covers `(x, y)`, or `-1`. */
-    private fun petal(petals: BooleanArray, palette: PetalPalette, x: Double, y: Double, radius: Double, theta: Double): Int {
+    private fun petal(
+        petals: BooleanArray,
+        axes: Axes,
+        palette: PetalPalette,
+        x: Double,
+        y: Double,
+        radius: Double,
+        theta: Double,
+    ): Int {
         val reach = PetalLayout.PETAL_HALF_LENGTH_EXACT
         val nearest = PetalNumerics.roundHalfAway((radius - PetalLayout.BAND_INNER) / PetalLayout.BAND_SPACING)
         for (offset in -1..1) {
@@ -115,19 +143,14 @@ object PetalRenderer {
             for (step in -1..1) {
                 val cell = PetalLayout.BAND_OFFSETS[band] + Math.floorMod(around + step, count)
                 if (!petals[cell]) continue
-                val lit = PetalLayout.petalLit(
-                    x - PetalLayout.CELL_X[cell],
-                    y - PetalLayout.CELL_Y[cell],
-                    PetalLayout.CELL_SIN[cell],
-                    PetalLayout.CELL_COS[cell],
-                )
+                val lit = PetalLayout.petalLit(x - PetalLayout.CELL_X[cell], y - PetalLayout.CELL_Y[cell], axes.sin[cell], axes.cos[cell])
                 if (lit) return if (PetalLayout.CELL_LIGHT[cell]) palette.light else palette.pink
             }
         }
         return -1
     }
 
-    private fun shade(cells: PetalFrameCells, petals: BooleanArray, palette: PetalPalette, x: Double, y: Double): Int {
+    private fun shade(cells: PetalFrameCells, petals: BooleanArray, axes: Axes, palette: PetalPalette, x: Double, y: Double): Int {
         // finders
         for (finder in 0 until 4) {
             val dx = x - PetalLayout.finderCenterX(finder)
@@ -155,7 +178,7 @@ object PetalRenderer {
         }
         // petals, then the faint 天 under them
         if (radius <= PetalLayout.BACKDROP_RADIUS) {
-            val colour = petal(petals, palette, x, y, radius, theta)
+            val colour = petal(petals, axes, palette, x, y, radius, theta)
             if (colour >= 0) return colour
             if (PetalLayout.inMask(x, y)) return palette.backdrop
         }
@@ -186,17 +209,22 @@ class PetalRect(
 )
 
 /** One lit petal of a [PetalDrawList], in canvas design units. */
-class PetalDrawPetal(
+class PetalDrawPetal @JvmOverloads constructor(
     /** Field cell index (`0..3375`). */
     val cell: Int,
     /** Centre `x`. */
     val centerX: Double,
     /** Centre `y`. */
     val centerY: Double,
-    /** Outward direction of the petal: radians, clockwise on the screen from 3 o'clock. */
+    /**
+     * Axis of the petal: its outward direction plus its turn ([turn]), in radians, clockwise on
+     * the screen from 3 o'clock.
+     */
     val angle: Double,
     /** Whether the petal lies inside the `天` and is drawn in the light colour (pink otherwise). */
     val light: Boolean,
+    /** Turn position (`0..3`) included in [angle]; `0` for a petal that carries no turn bits. */
+    val turn: Int = 0,
 )
 
 /**
@@ -210,11 +238,13 @@ class PetalDrawPetal(
  *    [PetalPalette.light], then [finderNotches] with the background colour;
  * 3. fill [backdropCells] with [PetalPalette.backdrop], clipped to the disc of
  *    radius [BACKDROP_RADIUS] around the canvas centre (a circular clip is fine);
- * 4. fill every one of [petals] in [petalColor]: an ellipse centred on the petal
- *    with half-length [PETAL_HALF_LENGTH] along [PetalDrawPetal.angle] and
- *    half-width [PETAL_HALF_WIDTH], minus the cosmetic notch (a disc of radius
- *    [PETAL_NOTCH_RADIUS] centred [PETAL_NOTCH_DISTANCE] outward from the petal
- *    centre), which may be omitted;
+ * 4. fill every one of [petals] in [petalColor], antialiased: an ellipse centred
+ *    on the petal with half-length [PETAL_HALF_LENGTH] along
+ *    [PetalDrawPetal.angle] (the outward direction plus the turn) and half-width
+ *    [PETAL_HALF_WIDTH], minus the notch (a disc of radius [PETAL_NOTCH_RADIUS]
+ *    centred [PETAL_NOTCH_DISTANCE] along the axis from the petal centre). The
+ *    notch must be drawn: it tells a petal from one turned by half a turn, and
+ *    the turn reader's templates include it;
  * 5. fill [dots] with [PetalPalette.pink].
  *
  * The finder and backdrop lists and the petal and dot shapes are shared between
@@ -244,25 +274,31 @@ class PetalDrawList private constructor(
         /** Radius of the disc around the canvas centre that clips the backdrop. */
         const val BACKDROP_RADIUS = PetalLayout.BACKDROP_RADIUS
 
-        /** Half the length of a petal, along its outward direction. */
+        /** Half the length of a petal, along its axis. */
         const val PETAL_HALF_LENGTH = PetalLayout.PETAL_HALF_LENGTH
 
         /** Half the width of a petal. */
         const val PETAL_HALF_WIDTH = PetalLayout.PETAL_HALF_WIDTH
 
-        /** Radius of the cosmetic notch at a petal tip. */
+        /** Radius of the notch at a petal tip. */
         const val PETAL_NOTCH_RADIUS = PetalLayout.PETAL_NOTCH_RADIUS
 
-        /** Distance from a petal centre to its notch centre, outward. */
+        /** Distance from a petal centre to its notch centre, along its axis. */
         const val PETAL_NOTCH_DISTANCE = PetalLayout.PETAL_NOTCH_DISTANCE
 
         private val FINDER_DISCS: List<PetalCircle>
         private val FINDER_NOTCHES: List<PetalCircle>
         private val BACKDROP_CELLS: List<PetalRect>
 
-        /** The petal of every field cell and the dot of every ring slot, shared by all lists. */
+        /** The unturned petal of every field cell and the dot of every ring slot, shared by all lists. */
         private val CELL_PETALS: Array<PetalDrawPetal>
         private val SLOT_DOTS: Array<PetalCircle>
+
+        /**
+         * The turned petals (turn `t` of cell `c` at `3c + t − 1`), shared by all lists and made on
+         * first use: they are immutable, so a racing thread at worst makes an equal one.
+         */
+        private val TURNED_PETALS = arrayOfNulls<PetalDrawPetal>(PetalLayout.FIELD_CELLS * (PetalTurns.TURN_POSITIONS - 1))
 
         init {
             val discs = ArrayList<PetalCircle>()
@@ -320,13 +356,28 @@ class PetalDrawList private constructor(
             }
         }
 
+        /** The shared petal of [cell] at turn position [turn]. */
+        private fun petal(cell: Int, turn: Int): PetalDrawPetal {
+            if (turn == 0) return CELL_PETALS[cell]
+            val index = cell * (PetalTurns.TURN_POSITIONS - 1) + turn - 1
+            return TURNED_PETALS[index] ?: PetalDrawPetal(
+                cell,
+                PetalLayout.CELL_X[cell],
+                PetalLayout.CELL_Y[cell],
+                PetalLayout.CELL_ANGLE[cell] + PetalTurns.turnAngle(turn),
+                PetalLayout.CELL_LIGHT[cell],
+                turn,
+            ).also { TURNED_PETALS[index] = it }
+        }
+
         /** Builds the draw list of [cells]. */
         @JvmStatic
         @JvmOverloads
         fun of(cells: PetalFrameCells, palette: PetalPalette = PetalPalette.DEFAULT): PetalDrawList {
             val lit = cells.petalView
+            val turns = cells.turnView
             val petals = ArrayList<PetalDrawPetal>(PetalLayout.FIELD_CELLS / 2)
-            for (cell in 0 until PetalLayout.FIELD_CELLS) if (lit[cell]) petals += CELL_PETALS[cell]
+            for (cell in 0 until PetalLayout.FIELD_CELLS) if (lit[cell]) petals += petal(cell, turns[cell].toInt())
             val dots = ArrayList<PetalCircle>()
             for (flat in 0 until PetalLayout.TOTAL_SLOTS) if (cells.isDotLit(flat)) dots += SLOT_DOTS[flat]
             return PetalDrawList(
