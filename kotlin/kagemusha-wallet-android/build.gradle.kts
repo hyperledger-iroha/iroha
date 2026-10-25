@@ -122,6 +122,7 @@ publishing {
 
 dependencies {
     api(project(":client-android"))
+    implementation(libs.serialization.json) // Fold telemetry reading only.
     coreLibraryDesugaring(libs.desugar.jdk.libs)
     testImplementation(kotlin("test"))
     testImplementation(libs.coroutines.core.jvm)
