@@ -84,6 +84,7 @@ mod tests {
             operation: None,
             stage: None,
             ordinal: 0,
+            stages: Some(1),
             outcome: state::FoldOutcomeV1::Folded,
             phases: [std::time::Duration::ZERO; state::FoldPhaseV1::COUNT],
             verification: Default::default(),

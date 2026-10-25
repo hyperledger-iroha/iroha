@@ -5,14 +5,15 @@ import Foundation
 /// Unload or Request readiness, and the snapshot's folded head remains the only completion.
 ///
 /// Native folds each released head through an ordered schedule of sub-proofs that ends in Ω. It
-/// records every turn that selected one with the head's sequence, its operation and the ordinal it
-/// worked on, which is the head's durable sub-proof count when the turn began; a turn cancelled by
-/// a payment therefore still says where the head stands. Native does not report a schedule's
-/// length, so callers pass sub-proofs per head by operation name, such as the `schedules` that
-/// earlier readings of the same installed producer catalog showed.
+/// records every turn that selected one with the head's sequence, its operation, the ordinal it
+/// worked on, which is the head's durable sub-proof count when the turn began, and, once the turn
+/// read the head's schedule, the head's whole schedule with Ω (`stages`). A turn cancelled by a
+/// payment therefore still says where its head stands and how far it has to go. A head Native has
+/// not started has no record, so callers pass sub-proofs per head by operation name for those
+/// heads, such as the `schedules` that earlier readings of the same owner showed.
 public struct KagemushaWalletFoldProgressV1: Equatable, Sendable {
   /// The telemetry schema this reading accepts.
-  public static let schema = "iroha.kagemusha.fold-metrics.v2"
+  public static let schema = "iroha.kagemusha.fold-metrics.v3"
   /// The running sub-proof never counts as more than this share of one before Native records it.
   public static let runningShareMaximum = 0.9
   /// Only the snapshot's folded head completes a wait.
@@ -28,6 +29,7 @@ public struct KagemushaWalletFoldProgressV1: Equatable, Sendable {
     let operation: String?
     let stage: String?
     let ordinal: UInt32
+    let stages: UInt32?
     let outcome: String
     /// The turn left a durable sub-proof, proved now or adopted from an interrupted publication.
     var durable: Bool { KagemushaWalletFoldProgressV1.durableOutcomes.contains(outcome) }
@@ -39,7 +41,7 @@ public struct KagemushaWalletFoldProgressV1: Equatable, Sendable {
   public let sampledNativeMicros: UInt64
   /// The head Native is folding as of this reading: the last turn's, or the next one after its Ω; nil before a turn.
   public let head: UInt64?
-  /// Sub-proofs per head by operation name: each retained Ω's ordinal plus one, the largest per operation.
+  /// Sub-proofs per head by operation name: the largest schedule a retained turn of that operation reported.
   public let schedules: [String: Int]
   /// Mean wall time of the last eight proved sub-proofs on this phone, or nil before one.
   public let subProofMicros: UInt64?
@@ -50,9 +52,9 @@ public struct KagemushaWalletFoldProgressV1: Equatable, Sendable {
     self.turns = turns
     head = turns.last.map { $0.folded ? $0.sequence &+ 1 : $0.sequence }
     var schedules: [String: Int] = [:]
-    for turn in turns where turn.folded {
-      guard let operation = turn.operation else { continue }
-      schedules[operation] = max(schedules[operation] ?? 0, Int(turn.ordinal) + 1)
+    for turn in turns {
+      guard let operation = turn.operation, let stages = turn.stages else { continue }
+      schedules[operation] = max(schedules[operation] ?? 0, Int(stages))
     }
     self.schedules = schedules
     let proved = turns.filter { $0.outcome == "checkpoint" || $0.outcome == "folded" }.suffix(Self.paceTurns)
@@ -80,25 +82,34 @@ public struct KagemushaWalletFoldProgressV1: Equatable, Sendable {
   ///
   /// `backlog` counts the released heads still needing folds, as the latest snapshot reports it.
   /// `running` says Native's worker is proving now. `firstHead` is the `head` of the reading that
-  /// began the caller's wait; every head folded since then counts in full, from its own Ω.
-  /// `schedules` gives sub-proofs per head by operation name. A head whose size is unknown counts
-  /// as the largest known schedule, so an estimate can only shrink once the head is identified,
-  /// and no head is counted finished before its Ω. Nil when nothing is known yet: no turn, no
-  /// schedule or no backlog.
+  /// began the caller's wait; every head folded since then counts in full, from its own Ω. The
+  /// current head counts at the schedule its turns reported. `schedules` gives sub-proofs per head
+  /// by operation name for heads without one: the current head counts by its operation, if a turn
+  /// named it, and every later head as the largest schedule. No head is counted finished before its
+  /// Ω. Nil when nothing is known yet: no turn, no backlog, or no size for a head still to fold.
   public func estimate(backlog: UInt64, running: Bool, firstHead: UInt64, schedules: [String: Int]) -> Estimate? {
-    guard let last = turns.last, let head, let largest = schedules.values.filter({ $0 > 0 }).max().map(UInt64.init),
-          backlog > 0 else { return nil }
+    guard let last = turns.last, let head, backlog > 0 else { return nil }
+    let largest = schedules.values.filter { $0 > 0 }.max().map(UInt64.init)
     let done: UInt64 = last.folded ? 0 : UInt64(last.ordinal) + (last.durable ? 1 : 0)
-    let operation = turns.last { $0.sequence == head && $0.operation != nil }?.operation
-    let known = operation.flatMap { schedules[$0] }.flatMap { $0 > 0 ? UInt64($0) : nil }
-    let size = max(known ?? largest, done + 1)
+    let ofHead = turns.filter { $0.sequence == head }
+    // Native's own schedule for a head it has started; otherwise the head's operation, or the largest.
+    let operation = ofHead.last { $0.operation != nil }?.operation
+    let named = operation.flatMap { schedules[$0] }.flatMap { $0 > 0 ? UInt64($0) : nil }
+    guard let known = ofHead.last(where: { $0.stages != nil })?.stages.map(UInt64.init) ?? named ?? largest else {
+      return nil
+    }
+    let size = max(known, done + 1)
     var omegas: [UInt64: UInt64] = [:]
     for turn in turns where turn.folded && turn.sequence >= firstHead && turn.sequence < head {
       omegas[turn.sequence] = max(omegas[turn.sequence] ?? 0, UInt64(turn.ordinal) + 1)
     }
     let earlier = omegas.values.reduce(0, +)
     // Later heads are counted at the largest schedule; the bound keeps the sum exact.
-    let later = min(backlog - 1, UInt64.max / 4 / largest) * largest
+    var later: UInt64 = 0
+    if backlog > 1 {
+      guard let largest else { return nil }
+      later = min(backlog - 1, UInt64.max / 4 / largest) * largest
+    }
     let remaining = size - done + later
     let pace = subProofMicros.flatMap { $0 > 0 ? $0 : nil }
     var share = 0.0
@@ -124,13 +135,14 @@ public struct KagemushaWalletFoldProgressV1: Equatable, Sendable {
     let operation: String?
     let stage: String?
     let ordinal: UInt32
+    let stages: UInt32?
     let outcome: String
 
     private enum CodingKeys: String, CodingKey {
-      case startedNativeMicros, endedNativeMicros, sequence, operation, stage, ordinal, outcome
+      case startedNativeMicros, endedNativeMicros, sequence, operation, stage, ordinal, stages, outcome
     }
 
-    // Every field is required; only operation and stage may be null.
+    // Every field is required; only operation, stage and stages may be null.
     init(from decoder: Decoder) throws {
       let fields = try decoder.container(keyedBy: CodingKeys.self)
       startedNativeMicros = try fields.decode(UInt64.self, forKey: .startedNativeMicros)
@@ -139,6 +151,7 @@ public struct KagemushaWalletFoldProgressV1: Equatable, Sendable {
       operation = try fields.decode(String?.self, forKey: .operation)
       stage = try fields.decode(String?.self, forKey: .stage)
       ordinal = try fields.decode(UInt32.self, forKey: .ordinal)
+      stages = try fields.decode(UInt32?.self, forKey: .stages)
       outcome = try fields.decode(String.self, forKey: .outcome)
     }
   }
@@ -149,12 +162,14 @@ public struct KagemushaWalletFoldProgressV1: Equatable, Sendable {
       throw KagemushaWalletErrorV1.invalidNativeOutput
     }
     let turns = try wire.records.map { record -> Turn in
+      // A schedule always ends in Ω, so a reported one has at least one sub-proof.
       guard record.startedNativeMicros <= record.endedNativeMicros,
             record.endedNativeMicros <= wire.sampledNativeMicros,
+            record.stages != 0,
             outcomes.contains(record.outcome) else { throw KagemushaWalletErrorV1.invalidNativeOutput }
       return Turn(startedNativeMicros: record.startedNativeMicros, endedNativeMicros: record.endedNativeMicros,
                   sequence: record.sequence, operation: record.operation, stage: record.stage,
-                  ordinal: record.ordinal, outcome: record.outcome)
+                  ordinal: record.ordinal, stages: record.stages, outcome: record.outcome)
     }
     return KagemushaWalletFoldProgressV1(sampledNativeMicros: wire.sampledNativeMicros, turns: turns)
   }

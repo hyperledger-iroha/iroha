@@ -2127,7 +2127,7 @@ int32_t connect_norito_kagemusha_wallet_setup_v1(uint64_t handle, const connect_
 // Selector3 exact prepared Load request: KWLPV1\0\0 frame <=65756 bytes, or exactly
 // KWLNV1\0\0 (8 bytes) for absent selected plan only. Selectors1..3 use nonzero32.
 // Selector4 fold metrics (empty identity): UTF-8 JSON <=131072 bytes with schema
-// iroha.kagemusha.fold-metrics.v2. In-memory public counts/timings only, no custody
+// iroha.kagemusha.fold-metrics.v3. In-memory public counts/timings only, no custody
 // acquisition, fold cancellation or authority; unknown/closing handles fail closed.
 // startedNativeMicros/endedNativeMicros and sampledNativeMicros share a process-local
 // monotonic origin. They are observation-only, not wall time or completion authority.

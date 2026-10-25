@@ -818,7 +818,7 @@ pub(crate) fn credit(id: u64, credit: &[u8], payment: &[u8]) -> Result<Response>
 /// Observation-only fold telemetry of one open wallet handle: its last 64 sub-proofs with
 /// phase times, verification/memo counts, outcome, cancellation cause and process peak RSS,
 /// plus cumulative counts and the last16 Native execution/speculation observations
-/// (`to_json` gives schema `iroha.kagemusha.fold-metrics.v2`). In memory only: never
+/// (`to_json` gives schema `iroha.kagemusha.fold-metrics.v3`). In memory only: never
 /// persisted or signed, and no admission, scheduling or error path reads it. Host and
 /// component-harness access and selector4 of the bounded C/JNI observation API; the kind-29
 /// background status keeps its byte-free shape.

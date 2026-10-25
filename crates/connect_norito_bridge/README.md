@@ -79,7 +79,7 @@ unprovisioned runtime fails unavailable. Full real-wallet and physical-device
 qualification remain open.
 
 Observation selector 4 takes an empty identity and returns diagnostic UTF-8 JSON
-(`iroha.kagemusha.fold-metrics.v2`) in DATA kind 12 with zero sequence/detail. Its
+(`iroha.kagemusha.fold-metrics.v3`) in DATA kind 12 with zero sequence/detail. Its
 131,072-byte limit is specific to this selector; financial DATA limits do not change.
 The open, non-closing handle is still required. The call reads only the bounded
 background log, acquires no custody and does not cancel or schedule proofs. Unknown
@@ -144,6 +144,9 @@ clears the retained suffix while counters preserve visible loss. Poisoned log
 locks recover their observation state. JSON allocation belongs only to selector4,
 never the return path of a monetary operation.
 
+Fold `ordinal` is the head's durable sub-proof count when the turn began and `stages`
+the head's whole schedule with Ω, or null for a turn that ended before reading it;
+together they say how far a head's fold has come.
 Fold `micros` retains its eight enclosing phases. Each row also has `verification`
 counter deltas (including verification/generator memo hits) and nested `engineMicros`
 for `key_import`, `key_rebuild`, `witness`, `prove`, `self_verify` and `commit`.

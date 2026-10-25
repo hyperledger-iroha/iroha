@@ -5,14 +5,14 @@ final class KagemushaWalletFoldProgressV1Tests: XCTestCase {
   // Fold telemetry readings only; no owner, proof or readiness is involved.
   private struct Row {
     let started: UInt64, ended: UInt64, sequence: UInt64
-    let operation: String?, stage: String?, ordinal: UInt64, outcome: String
+    let operation: String?, stage: String?, ordinal: UInt64, stages: UInt64?, outcome: String
   }
   private let second: UInt64 = 1_000_000
 
   private func row(_ started: UInt64, _ ended: UInt64, _ sequence: UInt64, _ operation: String?, _ stage: String?,
-                   _ ordinal: UInt64, _ outcome: String) -> Row {
+                   _ ordinal: UInt64, _ stages: UInt64?, _ outcome: String) -> Row {
     Row(started: started * second, ended: ended * second, sequence: sequence, operation: operation, stage: stage,
-        ordinal: ordinal, outcome: outcome)
+        ordinal: ordinal, stages: stages, outcome: outcome)
   }
 
   private func name(_ value: String?) -> String { value.map { "\"\($0)\"" } ?? "null" }
@@ -22,8 +22,8 @@ final class KagemushaWalletFoldProgressV1Tests: XCTestCase {
     let records = rows.map {
       "{\"startedNativeMicros\":\($0.started),\"endedNativeMicros\":\($0.ended),\"sequence\":\($0.sequence),"
         + "\"operation\":\(name($0.operation)),\"stage\":\(name($0.stage)),\"ordinal\":\($0.ordinal),"
-        + "\"outcome\":\"\($0.outcome)\",\"cause\":null,\"ingests\":0,\"peakRssBytes\":null,"
-        + "\"micros\":{\"prove\":\(Int64($0.ended) - Int64($0.started))}}"
+        + "\"stages\":\($0.stages.map(String.init) ?? "null"),\"outcome\":\"\($0.outcome)\",\"cause\":null,\"ingests\":0,"
+        + "\"peakRssBytes\":null,\"micros\":{\"prove\":\(Int64($0.ended) - Int64($0.started))}}"
     }.joined(separator: ",")
     return "{\"schema\":\"\(schema)\",\"sampledNativeMicros\":\(sampled * second),\"counts\":{\"subProofs\":\(rows.count)},"
       + "\"processScratch\":{\"limitBytes\":1,\"inUseBytes\":0,\"peakBytes\":0},\"processPeakRssBytes\":null,"
@@ -35,24 +35,25 @@ final class KagemushaWalletFoldProgressV1Tests: XCTestCase {
   }
 
   private var loadThenReceive: [Row] {
-    [row(0, 20, 1, "load", "q", 0, "checkpoint"),
-     row(20, 40, 1, "load", "a", 1, "checkpoint"),
-     row(40, 60, 1, "load", "omega", 2, "folded"),
-     row(60, 90, 2, "receive", "q", 0, "checkpoint")]
+    [row(0, 20, 1, "load", "q", 0, 3, "checkpoint"),
+     row(20, 40, 1, "load", "a", 1, 3, "checkpoint"),
+     row(40, 60, 1, "load", "omega", 2, 3, "folded"),
+     row(60, 90, 2, "receive", "q", 0, 12, "checkpoint")]
   }
 
-  func testLearnsTheHeadSchedulesAndPaceFromProvedTurns() throws {
+  func testLearnsTheHeadSchedulesAndPaceFromItsTurns() throws {
     let reading = try progress(100, loadThenReceive)
     XCTAssertEqual(reading.sampledNativeMicros, 100 * second)
     XCTAssertEqual(reading.head, 2)
-    XCTAssertEqual(reading.schedules, ["load": 3])
+    XCTAssertEqual(reading.schedules, ["load": 3, "receive": 12])
     XCTAssertEqual(reading.subProofMicros, 22_500_000)
     XCTAssertNil(try progress(10, []).head)
   }
 
   func testCountsTheCurrentHeadAndEveryHeadFoldedSinceTheWaitBegan() throws {
     let reading = try progress(100, loadThenReceive)
-    let schedules = ["load": 3, "receive": 12]
+    // The Receive head's own turn says it needs twelve; no schedule passed in names receive.
+    let schedules = ["load": 3]
     let whole = try XCTUnwrap(reading.estimate(backlog: 1, running: true, firstHead: 1, schedules: schedules))
     XCTAssertEqual(whole.proved, 4)
     XCTAssertEqual(whole.remaining, 11)
@@ -71,12 +72,12 @@ final class KagemushaWalletFoldProgressV1Tests: XCTestCase {
 
   func testAWaitThatBeganMidHeadNeverDropsThatHeadsEarlierSubProofs() throws {
     let schedules = ["load": 3, "send": 5]
-    let loading = [row(0, 20, 1, "load", "q", 0, "checkpoint"), row(20, 40, 1, "load", "a", 1, "checkpoint")]
+    let loading = [row(0, 20, 1, "load", "q", 0, 3, "checkpoint"), row(20, 40, 1, "load", "a", 1, 3, "checkpoint")]
     // The wait begins with two of the Load head's three sub-proofs done and a Send head behind it.
     let start = try XCTUnwrap(try progress(50, loading).estimate(backlog: 2, running: false, firstHead: 1, schedules: schedules))
     XCTAssertEqual(start.fraction, 0.25, accuracy: 1e-9)
-    let sending = try progress(80, loading + [row(40, 60, 1, "load", "omega", 2, "folded"),
-                                              row(60, 80, 2, "send", "q", 0, "checkpoint")])
+    let sending = try progress(80, loading + [row(40, 60, 1, "load", "omega", 2, 3, "folded"),
+                                              row(60, 80, 2, "send", "q", 0, 5, "checkpoint")])
     let after = try XCTUnwrap(sending.estimate(backlog: 1, running: false, firstHead: 1, schedules: schedules))
     XCTAssertEqual(after.proved, 4)
     XCTAssertEqual(after.fraction, 0.5, accuracy: 1e-9)
@@ -84,11 +85,11 @@ final class KagemushaWalletFoldProgressV1Tests: XCTestCase {
 
   func testAFoldedHeadMovesToTheNextHeadAtTheLargestSchedule() throws {
     let reading = try progress(55, [
-      row(0, 10, 5, "send", "q", 0, "checkpoint"),
-      row(10, 20, 5, "send", "a", 1, "checkpoint"),
-      row(20, 30, 5, "send", "w", 2, "checkpoint"),
-      row(30, 40, 5, "send", "a", 3, "checkpoint"),
-      row(40, 50, 5, "send", "omega", 4, "folded")])
+      row(0, 10, 5, "send", "q", 0, 5, "checkpoint"),
+      row(10, 20, 5, "send", "a", 1, 5, "checkpoint"),
+      row(20, 30, 5, "send", "w", 2, 5, "checkpoint"),
+      row(30, 40, 5, "send", "a", 3, 5, "checkpoint"),
+      row(40, 50, 5, "send", "omega", 4, 5, "folded")])
     XCTAssertEqual(reading.schedules, ["send": 5])
     XCTAssertEqual(reading.head, 6)
     let estimate = try XCTUnwrap(reading.estimate(backlog: 2, running: false, firstHead: 5,
@@ -99,22 +100,31 @@ final class KagemushaWalletFoldProgressV1Tests: XCTestCase {
     XCTAssertEqual(estimate.remainingMicros, 400 * second)
   }
 
+  func testAHeadsOwnScheduleIsExactWhenItsOperationRanLongerBefore() throws {
+    // ArchiveSent folds in 17 or 20 sub-proofs; the head's own turn says which.
+    let reading = try progress(100, [row(0, 10, 8, "archive_sent", "a", 8, 17, "checkpoint")])
+    let estimate = try XCTUnwrap(reading.estimate(backlog: 2, running: false, firstHead: 8, schedules: ["archive_sent": 20]))
+    XCTAssertEqual(estimate.proved, 9)
+    XCTAssertEqual(estimate.remaining, 8 + 20) // this head's other eight, the next head at the largest
+    XCTAssertEqual(estimate.fraction, 9.0 / 37, accuracy: 1e-9)
+  }
+
   func testACancelledTurnStillSaysWhereItsHeadStands() throws {
     let reading = try progress(80, [
-      row(0, 20, 7, "receive", "q", 0, "checkpoint"),
-      row(20, 40, 7, "receive", "q", 1, "checkpoint"),
-      row(40, 60, 7, "receive", "a", 2, "checkpoint"),
-      row(60, 70, 7, "receive", "w", 3, "cancelled"),
-      // Cancelled before its released step was read: the head's earlier turns name it.
-      row(70, 70, 7, nil, nil, 3, "cancelled")])
-    let estimate = try XCTUnwrap(reading.estimate(backlog: 1, running: false, firstHead: 7, schedules: ["receive": 12]))
+      row(0, 20, 7, "receive", "q", 0, 12, "checkpoint"),
+      row(20, 40, 7, "receive", "q", 1, 12, "checkpoint"),
+      row(40, 60, 7, "receive", "a", 2, 12, "checkpoint"),
+      row(60, 70, 7, "receive", "w", 3, 12, "cancelled"),
+      // Cancelled before its released step was read: the head's earlier turns name it and its schedule.
+      row(70, 70, 7, nil, nil, 3, nil, "cancelled")])
+    let estimate = try XCTUnwrap(reading.estimate(backlog: 1, running: false, firstHead: 7, schedules: [:]))
     XCTAssertEqual(estimate.proved, 3)
     XCTAssertEqual(estimate.remaining, 9)
     XCTAssertEqual(estimate.fraction, 0.25, accuracy: 1e-9)
   }
 
   func testAHeadPastItsKnownScheduleIsNeverCountedDone() throws {
-    let reading = try progress(30, [row(0, 20, 9, "receive", "a", 12, "checkpoint")])
+    let reading = try progress(30, [row(0, 20, 9, "receive", "a", 12, nil, "checkpoint")])
     let estimate = try XCTUnwrap(reading.estimate(backlog: 1, running: false, firstHead: 9, schedules: ["receive": 12]))
     XCTAssertEqual(estimate.proved, 13)
     XCTAssertEqual(estimate.remaining, 1)
@@ -122,22 +132,21 @@ final class KagemushaWalletFoldProgressV1Tests: XCTestCase {
   }
 
   func testOnlyTheSnapshotCompletesAWait() throws {
-    let reading = try progress(1000, [row(0, 10, 3, "x", "a", 998, "checkpoint")])
-    let estimate = try XCTUnwrap(reading.estimate(backlog: 1, running: true, firstHead: 3, schedules: ["x": 1000]))
+    let reading = try progress(1000, [row(0, 10, 3, "x", "a", 998, 1000, "checkpoint")])
+    let estimate = try XCTUnwrap(reading.estimate(backlog: 1, running: true, firstHead: 3, schedules: [:]))
     XCTAssertEqual(estimate.runningShare, KagemushaWalletFoldProgressV1.runningShareMaximum)
     XCTAssertEqual(estimate.fraction, KagemushaWalletFoldProgressV1.fractionMaximum)
   }
 
   func testAdoptedTurnsAreDurableButOnlyAnOmegaFoldsAHead() throws {
     let reading = try progress(50, [
-      row(0, 1, 4, "load", nil, 0, "adopted"),
-      row(1, 2, 4, "load", "omega", 2, "adopted"),
-      row(2, 3, 5, "unload", nil, 1, "adopted")])
+      row(0, 1, 4, "load", nil, 0, 3, "adopted"),
+      row(1, 2, 4, "load", "omega", 2, 3, "adopted"),
+      row(2, 3, 5, "unload", nil, 1, 3, "adopted")])
     // Adopted bytes were never proved here: they set no pace.
     XCTAssertNil(reading.subProofMicros)
-    XCTAssertEqual(reading.schedules, ["load": 3])
-    let estimate = try XCTUnwrap(reading.estimate(backlog: 1, running: true, firstHead: 4,
-                                                  schedules: ["load": 3, "unload": 3]))
+    XCTAssertEqual(reading.schedules, ["load": 3, "unload": 3])
+    let estimate = try XCTUnwrap(reading.estimate(backlog: 1, running: true, firstHead: 4, schedules: [:]))
     XCTAssertEqual(estimate.runningShare, 0)
     XCTAssertNil(estimate.remainingMicros)
     XCTAssertEqual(estimate.proved, 5) // load's three sub-proofs, from its Ω, and unload's first two
@@ -146,27 +155,39 @@ final class KagemushaWalletFoldProgressV1Tests: XCTestCase {
 
   func testNothingKnownIsNoEstimate() throws {
     XCTAssertNil(try progress(10, []).estimate(backlog: 1, running: true, firstHead: 1, schedules: ["load": 3]))
-    let reading = try progress(30, [row(0, 20, 1, "load", "q", 0, "checkpoint")])
-    XCTAssertNil(reading.estimate(backlog: 1, running: true, firstHead: 1, schedules: [:]))
-    XCTAssertNil(reading.estimate(backlog: 1, running: true, firstHead: 1, schedules: ["load": 0]))
-    XCTAssertNil(reading.estimate(backlog: 0, running: true, firstHead: 1, schedules: ["load": 3]))
+    // Cancelled after its step was read but before its schedule: no size for the head.
+    let unsized = try progress(30, [row(0, 20, 1, "load", nil, 0, nil, "cancelled")])
+    XCTAssertNil(unsized.estimate(backlog: 1, running: true, firstHead: 1, schedules: [:]))
+    XCTAssertNil(unsized.estimate(backlog: 1, running: true, firstHead: 1, schedules: ["load": 0]))
+    // A sized head says nothing about the heads behind it.
+    let sized = try progress(30, [row(0, 20, 1, "load", "q", 0, 3, "checkpoint")])
+    XCTAssertNil(sized.estimate(backlog: 2, running: true, firstHead: 1, schedules: [:]))
+    XCTAssertNil(sized.estimate(backlog: 0, running: true, firstHead: 1, schedules: ["load": 3]))
   }
 
   func testManyLaterHeadsStayExact() throws {
-    let reading = try progress(30, [row(0, 20, 1, "receive", "q", 0, "checkpoint")])
+    let reading = try progress(30, [row(0, 20, 1, "receive", "q", 0, 12, "checkpoint")])
     let estimate = try XCTUnwrap(reading.estimate(backlog: .max, running: false, firstHead: 1, schedules: ["receive": 12]))
     XCTAssertGreaterThan(estimate.remaining, 0)
     XCTAssertTrue((0...KagemushaWalletFoldProgressV1.fractionMaximum).contains(estimate.fraction))
   }
 
   func testRefusesMalformedOrForeignTelemetry() {
-    let good = row(0, 20, 1, "load", "q", 0, "checkpoint")
+    let good = row(0, 20, 1, "load", "q", 0, 3, "checkpoint")
     let inputs = [
-      "", "[]", "{}", telemetry(30, [good], schema: "iroha.kagemusha.fold-metrics.v1"),
+      "", "[]", "{}",
+      // A Native without schedules in its records.
+      telemetry(30, [good], schema: "iroha.kagemusha.fold-metrics.v2").replacingOccurrences(of: ",\"stages\":3", with: ""),
+      telemetry(30, [good], schema: "iroha.kagemusha.fold-metrics.v2"),
       telemetry(10, [good]), // ended after the sample
-      telemetry(30, [row(20, 10, 1, "load", "q", 0, "checkpoint")]),
-      telemetry(30, [row(0, 20, 1, "load", "q", 0, "finished")]),
-      telemetry(30, [row(0, 20, 1, "load", "q", 4_294_967_296, "checkpoint")]),
+      telemetry(30, [row(20, 10, 1, "load", "q", 0, 3, "checkpoint")]),
+      telemetry(30, [row(0, 20, 1, "load", "q", 0, 3, "finished")]),
+      telemetry(30, [row(0, 20, 1, "load", "q", 4_294_967_296, 3, "checkpoint")]),
+      telemetry(30, [row(0, 20, 1, "load", "q", 0, 0, "checkpoint")]),
+      telemetry(30, [row(0, 20, 1, "load", "q", 0, 4_294_967_296, "checkpoint")]),
+      telemetry(30, [good]).replacingOccurrences(of: ",\"stages\":3", with: ""),
+      telemetry(30, [good]).replacingOccurrences(of: "\"stages\":3", with: "\"stages\":\"3\""),
+      telemetry(30, [good]).replacingOccurrences(of: "\"stages\":3", with: "\"stages\":-3"),
       telemetry(30, [good]).replacingOccurrences(of: "\"sequence\":1", with: "\"sequence\":\"1\""),
       telemetry(30, [good]).replacingOccurrences(of: "\"sequence\":1", with: "\"sequence\":-1"),
       telemetry(30, [good]).replacingOccurrences(of: "\"operation\":\"load\"", with: "\"operation\":7"),
@@ -178,5 +199,12 @@ final class KagemushaWalletFoldProgressV1Tests: XCTestCase {
         XCTAssertEqual($0 as? KagemushaWalletErrorV1, .invalidNativeOutput)
       }
     }
+  }
+
+  func testTheLargestScheduleNativeCanReportStillCounts() throws {
+    let reading = try progress(30, [row(0, 20, 1, "load", "q", 0, 4_294_967_295, "checkpoint")])
+    let estimate = try XCTUnwrap(reading.estimate(backlog: 1, running: false, firstHead: 1, schedules: [:]))
+    XCTAssertEqual(estimate.proved, 1)
+    XCTAssertEqual(estimate.remaining, 4_294_967_294)
   }
 }

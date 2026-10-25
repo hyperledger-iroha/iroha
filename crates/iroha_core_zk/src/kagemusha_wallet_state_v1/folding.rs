@@ -614,6 +614,8 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
             self.proofs
                 .fold_schedule(&step, predecessor.as_ref(), view.as_mut())?
         };
+        // Observation only: the head's checkpoints and its Ω.
+        turn.stages(schedule.len() + 1);
         for layout in &schedule {
             layout.record_limit()?;
         }
