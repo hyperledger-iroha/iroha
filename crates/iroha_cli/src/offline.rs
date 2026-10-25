@@ -29,7 +29,7 @@ const SIMULATE_SCHEMA: &str = "iroha.offline.petal.simulate.v2";
 const DEFAULT_SIZE: u32 = 1_024;
 const MIN_SIZE: u32 = 256;
 const MAX_SIZE: u32 = 4_096;
-const DEFAULT_FPS: u16 = 8;
+const DEFAULT_FPS: u16 = 12;
 const MAX_FPS: u16 = 30;
 const MAX_RENDERED_FRAMES: u16 = 4_096;
 const MAX_SIMULATION_TRIALS: u32 = 1_000;
@@ -813,7 +813,7 @@ mod tests {
             frames: 0,
             first_frame: 0,
             size: 512,
-            fps: 8,
+            fps: 12,
             format: EncodeFormat::Png,
         }
     }

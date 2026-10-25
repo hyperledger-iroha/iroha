@@ -153,9 +153,9 @@ class CliTest(unittest.TestCase):
             self.assertIn("no_finders", out)
 
     def test_decode_spaces_frames_at_the_default_display_rate(self) -> None:
-        # frames are timestamped as shown at the default 8 fps unless told otherwise
+        # frames are timestamped as shown at the default 12 fps unless told otherwise
         args = _parser().parse_args(["decode", "--output", "out.bin"])
-        self.assertEqual(args.frame_interval_ms, 125)
+        self.assertEqual(args.frame_interval_ms, 83)
 
     def test_module_entry_point_runs(self) -> None:
         result = subprocess.run(

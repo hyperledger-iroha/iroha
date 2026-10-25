@@ -752,7 +752,7 @@ crate `crates/iroha_petal`; encoding is bit-identical to it.
 ```kotlin
 // Sender: frame n of the endless stream, drawn natively or in software.
 val encoder = PetalStreamEncoder(payload, kind)
-petalStreamView.setStream(encoder)           // client-android View, 8 fps by default
+petalStreamView.setStream(encoder)           // client-android View, 12 fps by default
 petalStreamView.start()
 val list = PetalDrawList.of(encoder.cells(n)) // vector shapes for other canvases
 val rgb = PetalRenderer.render(encoder.cells(n), PetalRenderOptions(1024, 3))
@@ -788,9 +788,9 @@ frame counter share evidence; a recovered lane must name that same shown frame.
 `stats().fieldLanes` count single-capture reads). A frame only gains missing
 lanes. Reset and accepted stream metadata replacement drop held evidence;
 learning the first beacon preserves pre-beacon captures. In simulation format 2
-moves a 12 KB Payment in about 4.5 s at the default 8 fps against 6.4 s for
-animated QR (3 s at 12 fps, which awaits physical qualification); see
-`specs/petal_stream.md` §8.
+moves a 12 KB Payment in about 3 s at the default 12 fps (4.5 s at 8 fps, where
+animated QR takes 6.4 s), and a phone's Cortex-A55 core decodes a 720p camera
+frame in about 16 ms; see `specs/petal_stream.md` §8.
 `PetalStreamAssembler` and `PetalScanSession` bound pending atoms, payload
 size (64 KiB by default) and stream lifetime (30 s idle, 180 s absolute), and
 deliver a payload only after its CRC-32C matches the beacon. `client-android`

@@ -13,7 +13,7 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
   frames carry `fields` and a `PetalPose` (`decodePetalFrameAt` takes one) with radial lens distortion,
   searched while field lanes stay unread; unread sectors are read again from local levels, `fieldEvidence`
   and `mergeFields` average repeated captures of one shown frame, and `PetalScanSession` counts
-  `fieldLanes` and `mergedLanes`. The player still defaults to 8 fps (12 reads fully in simulation only).
+  `fieldLanes` and `mergedLanes`. The player defaults to 12 fps.
   The unit suite checks `fixtures/petal/petal_stream_v2.json` and `petal_captures_v2.json` exactly.
 - Added the asset movement feed of `GET /v1/assets/{definition_id}/movements`: `assetMovements(definitionId)`
   on `ToriiClient` and `ToriiBrowserClient` is a history collection of every committed movement of the

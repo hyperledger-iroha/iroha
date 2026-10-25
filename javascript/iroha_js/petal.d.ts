@@ -909,8 +909,7 @@ export interface PetalStreamPlayerOptions {
   readonly encoder: { cells(frame: number): PetalFrameCells };
   readonly context: PetalCanvasContext;
   /**
-   * Frames per second (default 8 until physical qualification supports more; 12 reads fully in
-   * simulation only). Keep it at or below half the camera frame rate.
+   * Frames per second (default 12). Keep it at or below half the camera frame rate.
    */
   readonly fps?: number;
   /** Drawn side in pixels (default: the smaller canvas side). */

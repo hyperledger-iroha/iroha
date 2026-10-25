@@ -19,8 +19,8 @@ namespace Hyperledger.Iroha.Petal;
 /// </remarks>
 public sealed class PetalFramePlayer
 {
-    /// <summary>Default display rate, the rate used by the reference stream simulation.</summary>
-    public const double DefaultFramesPerSecond = 8.0;
+    /// <summary>Default display rate: 12 frames a second, of which a 30 fps camera reads practically every frame.</summary>
+    public const double DefaultFramesPerSecond = 12.0;
 
     private readonly object gate = new();
     private int cachedFrame = -1;

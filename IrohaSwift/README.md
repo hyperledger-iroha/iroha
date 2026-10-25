@@ -895,8 +895,7 @@ shared fixtures `fixtures/petal/petal_stream_v2.json` and
 `fixtures/petal/petal_captures_v2.json`.
 
 ```swift
-// Sender: play an IPM1 message at the default 8 fps (12 fps reads fully in
-// simulation and awaits physical qualification). Payloads may be up to
+// Sender: play an IPM1 message at the default 12 fps. Payloads may be up to
 // 16 MiB - 1; receivers accept 64 KiB by default. `kind` is application-defined.
 let encoder = try PetalStreamEncoder(payload: message.encoded, kind: 1)
 PetalStreamView(encoder: encoder)                    // IrohaSwiftTransferUI

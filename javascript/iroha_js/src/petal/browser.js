@@ -213,10 +213,10 @@ function frameScheduler(requestFrame, cancelFrame) {
 
 /**
  * Plays a Petal stream on a Canvas 2D context, advancing frames at `fps`
- * with `requestAnimationFrame`. The default of 8 frames per second stays
- * until physical qualification supports more (12 fps reads fully in
- * simulation only); a frame must stay up for at least two camera frames, so
- * keep `fps` at or below half the camera frame rate.
+ * with `requestAnimationFrame`, by default 12 frames per second, of which a
+ * 30 fps camera reads practically every frame; a frame must stay up for at
+ * least two camera frames, so keep `fps` at or below half the camera frame
+ * rate.
  */
 export class PetalStreamPlayer {
   /**
@@ -240,7 +240,7 @@ export class PetalStreamPlayer {
     }
     this._encoder = encoder;
     this._context = context;
-    this._fps = options.fps ?? 8;
+    this._fps = options.fps ?? 12;
     petalPlayerFrame(0, 0, this._fps);
     this._size = options.size;
     this._x = options.x ?? 0;

@@ -486,7 +486,7 @@ are drawn light and the others pink, over a faint `天`. A payload is released o
 after its CRC-32C matches the beacon.
 
 ```csharp
-// Sender: draw frames at 8 fps through an IPetalCanvas adapter over the
+// Sender: draw frames at the default 12 fps through an IPetalCanvas adapter over the
 // platform canvas (SkiaSharp, MAUI ICanvas, WPF DrawingContext, ...).
 var player = new PetalFramePlayer(new PetalStreamEncoder(payload, kind: 2));
 player.Draw(canvasAdapter, clock.Elapsed, side: viewSizeInPixels);

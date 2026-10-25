@@ -33,7 +33,7 @@ __all__ = ["main"]
 
 _IMAGE_SUFFIXES = (".png", ".pgm", ".ppm")
 #: The default display rate of a Petal stream, in frames per second.
-_DEFAULT_FPS = 8
+_DEFAULT_FPS = 12
 
 
 def _encode(args: argparse.Namespace) -> int:

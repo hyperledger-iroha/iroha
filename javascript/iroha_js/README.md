@@ -323,8 +323,7 @@ petals on 34 concentric bands, white inside the SORA `天` and pink outside it.
 The ring dots (lane `D`) and the lit petals of the field's four sectors (lanes
 `F0`-`F3`) are five independent Reed-Solomon codewords carrying fountain-coded
 16-byte atoms, so any readable lane of any frame helps and lost frames only cost
-time. The player shows 8 frames per second by default; 12 reads fully in
-simulation and waits for physical qualification.
+time. The player shows 12 frames per second by default.
 
 The module is a port of the `iroha_petal` Rust reference: the encoder is
 bit-exact and the decoder follows the reference step by step. It is pure
@@ -343,7 +342,6 @@ const encoder = new PetalStreamEncoder(payloadBytes, /* kind */ 2);
 const player = new PetalStreamPlayer({
   encoder,
   context: canvas.getContext("2d"),
-  fps: 8,
 });
 player.start();
 

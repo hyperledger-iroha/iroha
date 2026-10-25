@@ -64,7 +64,7 @@ centre, outward angle and light or pink colour; each an ellipse of half-length
 centred 5.4 units outward, which renderers may omit and `to_svg` does) and lit
 dots (radius 9). The default palette is background `(0, 0, 0)`, light
 `(250, 235, 244)`, pink `(245, 175, 208)` and backdrop `(25, 24, 24)`. Show the
-frames at 8 frames a second, the default display rate.
+frames at 12 frames a second, the default display rate.
 
 ## Receiving
 
@@ -151,7 +151,7 @@ python3 -m iroha_petal inspect frames/frame_0004.png
 count). `decode` reads PNG (8-bit grey, grey + alpha, RGB, RGBA, palette;
 non-interlaced) and binary PGM/PPM frames, downscales frames larger than
 `--max-side` (default 1280), timestamps them `--frame-interval-ms` apart
-(default 125, the 8 fps display rate), reports the lanes each frame read (`D` and
+(default 83, the 12 fps display rate), reports the lanes each frame read (`D` and
 the sector digits `0`-`3`), marks frames read by tracking and frames with a
 hidden corner blossom and recovered field lanes, prints the session counters
 (lane `D` frames, field lanes, merges and merged field lanes), and exits with status 1 if

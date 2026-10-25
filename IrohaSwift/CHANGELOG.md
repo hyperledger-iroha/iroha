@@ -11,7 +11,8 @@ All notable changes to `IrohaSwift` are documented in this file.
   lens-distortion search (`PetalPose`) and `PetalDecoder.fieldEvidence`/`mergeFields`;
   `PetalScanStats` counts `laneD`, `fieldLanes` and `mergedLanes`; `PetalDrawList` lists the
   `天` backdrop and lit petals. `PetalGlyphs` and the tile APIs are removed. Fixtures:
-  `petal_stream_v2.json` and `petal_captures_v2.json`.
+  `petal_stream_v2.json` and `petal_captures_v2.json`. `PetalStreamView.defaultFramesPerSecond`
+  is 12.
 
 - 2026-10-18: Bridge ABI 30 (no ABI 29 compatibility). Removed the Parliament timed-OVN/TLE
   wallet and client APIs: the native casting-proof, registration and ballot wallet functions

@@ -2459,12 +2459,12 @@ test("the stream player draws frames on animation ticks", () => {
   player.drawFrame(70000);
   assert.equal(player.frame, 70000 % 65536);
   assert.throws(() => new PetalStreamPlayer({ encoder: {}, context }), TypeError);
-  // the default rate is 8 frames per second until physical qualification supports more
+  // the default rate is 12 frames per second: frame 1 starts after 83.3 ms
   const ticks = [];
   const drawn = [];
   const defaults = new PetalStreamPlayer({ encoder, context, requestAnimationFrame: (callback) => ticks.push(callback), onFrame: (frame) => drawn.push(frame) });
   defaults.start();
-  for (const time of [0, 124, 125, 250]) ticks.shift()(time);
+  for (const time of [0, 83, 84, 167]) ticks.shift()(time);
   assert.deepEqual(drawn, [0, 1, 2]);
   defaults.stop();
 });

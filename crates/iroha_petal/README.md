@@ -3,8 +3,8 @@
 Reference implementation of **Petal Stream**, Iroha's animated optical transport: a storm of 3,376
 sakura petals on concentric bands (white inside the SORA `天`, pink outside, over a faint `天`),
 inside three dotted rings, framed by four sakura-blossom finders. A phone camera reads the animation
-and reassembles the payload: a 12 KB KAGEMUSHA Payment in 4.5 seconds at the default 8 frames a second
-(animated QR at the same rate takes 6.4 s). The wire format, geometry and receiver rules are specified in
+and reassembles the payload: a 12 KB KAGEMUSHA Payment in 3 seconds at the default 12 frames a second
+(4.5 s at 8 fps, where animated QR takes 6.4 s). The wire format, geometry and receiver rules are specified in
 [`specs/petal_stream.md`](../../specs/petal_stream.md).
 
 The crate is `std`-only and has no runtime dependencies.
@@ -22,7 +22,7 @@ The crate is `std`-only and has no runtime dependencies.
 cargo test -p iroha_petal                                   # unit tests + golden fixtures + golden captures
 cargo run --release -p iroha_petal --example qualify -- 40  # per-frame decode matrix over camera conditions
 cargo run --release -p iroha_petal --example stress -- 24   # light, motion and hidden-corner stress
-cargo run --release -p iroha_petal --example stream_sim -- 8 12182 8    # end to end, the largest KAGEMUSHA Payment at 8 fps
+cargo run --release -p iroha_petal --example stream_sim -- 8 12182 12   # end to end, the largest KAGEMUSHA Payment at 12 fps
 cargo run --release -p iroha_petal --example stream_sim -- 8 12182 12 modern --camera-fps 10 --readout-ms 20   # slow decoder, rolling shutter
 cargo run --release -p iroha_petal --example decode_cost                 # single-threaded decode time
 cargo run -p iroha_petal --example gen_fixtures -- fixtures/petal/petal_stream_v2.json

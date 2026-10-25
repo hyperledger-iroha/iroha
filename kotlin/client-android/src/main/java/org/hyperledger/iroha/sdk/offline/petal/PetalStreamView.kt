@@ -34,8 +34,7 @@ class PetalStreamView @JvmOverloads constructor(
         }
 
     /**
-     * Display rate in frames per second (`0 < fps <= 60`, default 8). Format 2 is qualified in
-     * simulation at 12 fps; the default stays at 8 until physical devices confirm a faster rate.
+     * Display rate in frames per second (`0 < fps <= 60`, default [DEFAULT_FRAMES_PER_SECOND]).
      */
     var framesPerSecond: Double = DEFAULT_FRAMES_PER_SECOND
         set(value) {
@@ -132,7 +131,11 @@ class PetalStreamView @JvmOverloads constructor(
 
     private fun frameIntervalMillis(): Long = Math.max(1L, Math.round(1000.0 / framesPerSecond))
 
-    private companion object {
-        const val DEFAULT_FRAMES_PER_SECOND = 8.0
+    companion object {
+        /**
+         * Default display rate: 12 frames a second, of which a 30 fps camera reads practically
+         * every frame (`specs/petal_stream.md` §5.4).
+         */
+        const val DEFAULT_FRAMES_PER_SECOND = 12.0
     }
 }

@@ -90,7 +90,7 @@ final class PetalCoreGraphicsRendererTests: XCTestCase {
         XCTAssertEqual(PetalStreamView.frameNumber(elapsed: .infinity, framesPerSecond: 8, startFrame: 9), 9)
         XCTAssertEqual(PetalStreamView.frameNumber(elapsed: 1, framesPerSecond: 1_000), 60, "rate is clamped to 60 fps")
         XCTAssertEqual(PetalStreamView.frameNumber(elapsed: 1, framesPerSecond: -5), 1, "rate is clamped to 1 fps")
-        XCTAssertEqual(PetalStreamView.frameNumber(elapsed: 1, framesPerSecond: .nan), 8)
+        XCTAssertEqual(PetalStreamView.frameNumber(elapsed: 1, framesPerSecond: .nan), 12, "an invalid rate plays the default")
     }
 
     /// Render the actual SwiftUI hierarchy on every supported Apple deployment target.

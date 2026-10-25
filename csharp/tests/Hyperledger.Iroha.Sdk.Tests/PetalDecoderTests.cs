@@ -973,11 +973,11 @@ public sealed class PetalDecoderTests
     }
 
     [Fact]
-    public void FramePlayerAdvancesAtEightFramesPerSecondAndWrapsTheFrameCounter()
+    public void FramePlayerDefaultsToTwelveFramesPerSecondAdvancesAtItsRateAndWrapsTheFrameCounter()
     {
         var encoder = new PetalStreamEncoder(PetalTestSupport.Payload(100, 1), 1);
-        Assert.Equal(8.0, PetalFramePlayer.DefaultFramesPerSecond);
-        Assert.Equal(8.0, new PetalFramePlayer(encoder).FramesPerSecond);
+        Assert.Equal(12.0, PetalFramePlayer.DefaultFramesPerSecond);
+        Assert.Equal(12.0, new PetalFramePlayer(encoder).FramesPerSecond);
         var player = new PetalFramePlayer(encoder, 8.0, 65_534);
         Assert.Equal(65_534, player.FrameAt(TimeSpan.Zero));
         Assert.Equal(65_534, player.FrameAt(TimeSpan.FromSeconds(-3)));
@@ -1016,7 +1016,7 @@ public sealed class PetalDecoderTests
         var cache = new Dictionary<ushort, PetalLuma>();
         for (var tick = 0; tick < 200 && completed is null; tick++)
         {
-            // a 30 fps camera watching an 8 fps display
+            // a 30 fps camera watching the default 12 fps display
             var elapsed = TimeSpan.FromSeconds(tick / 30.0);
             var frame = player.FrameAt(elapsed);
             if (!cache.TryGetValue(frame, out var luma))

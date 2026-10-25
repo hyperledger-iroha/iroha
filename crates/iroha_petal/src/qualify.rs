@@ -79,12 +79,12 @@ pub struct StreamTrial {
 }
 
 impl StreamTrial {
-    /// A typical phone: 30 fps camera, 1/60 s exposure, 8 fps animation.
+    /// A typical phone: 30 fps camera, 1/60 s exposure, and the default 12 fps animation.
     #[must_use]
     pub fn typical(camera: CameraModel, seed: u64) -> Self {
         Self {
             camera,
-            display_fps: 8.0,
+            display_fps: 12.0,
             camera_fps: 30.0,
             exposure_s: 1.0 / 60.0,
             readout_s: 0.0,

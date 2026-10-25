@@ -92,7 +92,7 @@ fn main() {
     let fps: f64 = positional
         .next()
         .and_then(|a| a.parse().ok())
-        .unwrap_or(8.0);
+        .unwrap_or(12.0);
     let filter = positional.next();
     if let Some(last) = trials.checked_sub(1) {
         trial_seeds(last).expect("requested trial range exceeds deterministic seed arithmetic");

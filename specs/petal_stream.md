@@ -243,9 +243,8 @@ Every lane starts with a 3-byte header `tag:u8, frame:u16`. Then:
 
 ### 5.4 Sender
 
-Send frames `f = f₀, f₀+1, …` at 8–15 frames per second; **8 is the default** until physical qualification
-(§12) supports more (12 and 15 fps read fully in simulation, §8). The sender repeats until
-the user stops it; the first `⌈K / 20.75⌉` frames carry every source atom once and the rest are repair
+Send frames `f = f₀, f₀+1, …` at 8–15 frames per second; **12 is the default**: a camera reads practically every frame at
+12 fps, and a phone's slowest cores keep up with its 30 fps camera (§8). The sender repeats until the user stops it; the first `⌈K / 20.75⌉` frames carry every source atom once and the rest are repair
 atoms. There is no back-channel; if the receiver needs an acknowledgement it uses its own stream.
 
 ### 5.5 Receiver (assembler)
@@ -272,7 +271,7 @@ backdrop `天`, background, with 2×2 or 3×3 supersampling. SDKs additionally e
 lit dots) so a native canvas can play a stream without per-pixel work.
 
 Display guidance: full screen brightness, a black surround, the whole square visible, no overlays
-within one finder diameter of the finders, animation at 8 fps (§5.4). A frame must stay up for at least
+within one finder diameter of the finders, animation at 12 fps (§5.4). A frame must stay up for at least
 two camera frames: 15 fps is the most a 30 fps camera reads (§8).
 
 ## 7. Decoding
@@ -473,8 +472,9 @@ without its 84-byte header (12,098 and 2,048 bytes), read by Apple Vision's barc
 modern and legacy cameras, 6 trials per rate above 8 fps; the soft camera matches at 8 fps). On the harshest 480p preset one
 QR trial in eight completed within 90 s. Format 1 needed 14.1 s and 2.4 s at 8 fps (20.3 s and 3.5 s on the soft camera, 54.5 s
 and 9.6 s on the 480p preset). At every display rate format 2 takes about 30 % less time than animated QR: its frames carry
-332 payload bytes against 256, and the camera reads practically all of them against 90–96 % of the QR frames. At the apps' 8
-frames a second a Payment takes 4.5 s against QR's 6.4 s; at 12 fps, 3.0 s.
+332 payload bytes against 256, and the camera reads practically all of them against 90–96 % of the QR frames. At the default
+12 frames a second a Payment takes 3.0 s, against 6.4 s for the apps' animated QR at its 8 frames a second (4.5 s for petals
+at the same 8 fps).
 
 Decode cost (`decode_cost` example; one thread of an Apple M4 Max, the fastest of 18 runs while other work kept the machine
 busy): at 1280×720 a full search takes 5.2 ms and tracking the pose of the previous frame 0.6 ms (the legacy camera with
@@ -484,25 +484,35 @@ captures costs 0.7 ms. Through a scan session the simulated 30 fps camera costs 
 cameras and 6–10 ms on the 480p preset. Format 1 needed about 7.5 ms for a full search, 2 ms for a tracked frame and 21 ms
 with a hidden corner. Ports are expected to stay within a factor of 20 of the reference.
 
+On a phone: a Pixel 6 held to its four Cortex-A55 cores at 1.8 GHz (`taskset 0f`; the core type that budget 4 GB phones pair
+with a few faster ones), running the Kotlin SDK on ART, decoded the camera frames of simulated trials (12,182 bytes, one pose)
+through a scan session that, as CameraX's analyser does, takes only the newest camera frame whenever it is free. The older
+720p camera costs 16 ms per camera frame after warm-up (the first full search 85 ms), so all 30 camera frames a second are
+decoded and the Payment completes in 2.98 s at 12 fps and 4.48 s at 8 fps, on the same camera frame as the reference decoder
+fed the same frames. The harshest 480p preset costs 59 ms per frame, because its field lanes need the distortion search, the
+local read and merges; about 17 camera frames a second are decoded, and 12 fps still completes first: 5.0–5.2 s against
+5.5–6.1 s at 8 fps. One of the phone's X1 cores takes 1.4 ms per frame. The frames came from the simulator: no camera or
+display was in this loop.
+
 Run the evidence yourself:
 
 ```
 cargo run --release -p iroha_petal --example qualify -- 40            # per-frame matrix
 cargo run --release -p iroha_petal --example stress -- 24             # light, motion and hidden-corner matrix
-cargo run --release -p iroha_petal --example stream_sim -- 8 12182 8  # end to end at 8 fps
+cargo run --release -p iroha_petal --example stream_sim -- 8 12182 12 # end to end at the default 12 fps
 cargo run --release -p iroha_petal --example stream_sim -- 8 12182 12 modern,legacy,soft --camera-fps 10
 cargo run --release -p iroha_petal --example stream_sim -- 8 12182 12 modern --readout-ms 30 --exposure-ms 16
 cargo run --release -p iroha_petal --example decode_cost              # decode time
-iroha offline petal simulate --camera legacy --bytes 12182 --fps 8    # end to end, through the CLI
+iroha offline petal simulate --camera legacy --bytes 12182 --fps 12   # end to end, through the CLI
 ```
 
 ## 9. CLI
 
 ```
-iroha offline petal encode   --input payload.bin --output out/ --kind 3 [--frames N] [--size 1024] [--fps 8] [--format png|gif]
+iroha offline petal encode   --input payload.bin --output out/ --kind 3 [--frames N] [--size 1024] [--fps 12] [--format png|gif]
 iroha offline petal decode   --input-dir out/ --output payload.out
 iroha offline petal inspect  --input out/frame_0000.png
-iroha offline petal simulate --camera modern|legacy|soft|worst --bytes 12182 --fps 8 --trials 4
+iroha offline petal simulate --camera modern|legacy|soft|worst --bytes 12182 --fps 12 --trials 4
 ```
 
 `encode` writes `frame_0000.png …` (or one looping `stream.gif` with the `offline-visual-codecs` feature) and
@@ -557,4 +567,4 @@ Implementations: Rust (`crates/iroha_petal`, `iroha offline petal`), Swift (`Iro
 ## 12. Open work
 
 * TODO: physical-device qualification of the matrices in §8, including the OLED/PWM and rolling-shutter effects, the
-  exposure-compensation guidance, and 12 fps on an older Android camera before the default rises.
+  exposure-compensation guidance, and the 12 fps default with a real camera on an older 4 GB Android phone.
