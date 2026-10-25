@@ -353,7 +353,7 @@ impl ProofManagedNoteStarkAdapterV1 for ClassedRaceAdapterV1<'_> {
         .map_err(|_| ProofManagedNoteStarkErrorV1::InvalidProfile)
     }
     fn trace_log2_v1(&self) -> u8 {
-        self.compiled.trace_size().ilog2() as u8
+        u8::try_from(self.compiled.trace_size().ilog2()).expect("word-size logarithm fits a byte")
     }
     fn base_width_v1(&self) -> usize {
         NOTE_COPY_WIDTH_V1 + self.compiled.width()
@@ -375,7 +375,10 @@ impl ProofManagedNoteStarkAdapterV1 for ClassedRaceAdapterV1<'_> {
             ],
             sigma: (0..self.compiled.trace_size())
                 .map(|row| {
-                    std::array::from_fn(|column| (row * NOTE_COPY_WIDTH_V1 + column + 1) as u32)
+                    std::array::from_fn(|column| {
+                        u32::try_from(row * NOTE_COPY_WIDTH_V1 + column + 1)
+                            .expect("bounded circuit index")
+                    })
                 })
                 .collect(),
         })
@@ -413,8 +416,7 @@ impl ProofManagedNoteStarkAdapterV1 for ClassedRaceAdapterV1<'_> {
     }
     fn profile_constraint_residues_v1(
         &self,
-        current: &[F],
-        next: &[F],
+        (current, next): (&[F], &[F]),
         _: &[F],
         _: &[F],
         fixed: &[F],
@@ -466,9 +468,9 @@ fn witness_columns(
 /// trace or envelope limits, and native proof construction or self-verification
 /// failures.
 pub fn prove_classed_race_v1(
-    request: ClassedRaceProverRequestV1,
+    request: &ClassedRaceProverRequestV1,
 ) -> Result<ExecutionProofEnvelopeV1, ExecutionProofErrorV1> {
-    let mut payload = payload_from_request(&request)?;
+    let mut payload = payload_from_request(request)?;
     let adapter = ClassedRaceAdapterV1::new(&request.statement, &payload)?;
     let columns = witness_columns(&adapter)?;
     payload.stark_bytes = prove_proof_managed_note_stark_v1(&adapter, &columns)?;

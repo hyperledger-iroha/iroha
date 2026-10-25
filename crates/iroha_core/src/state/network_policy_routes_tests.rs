@@ -194,7 +194,7 @@ fn native_ordering_lane_uses_independently_resolved_physical_policy() {
             unreachable!()
         };
         let mut tx = block.transaction();
-        StateBlock::validate_stateful_admission(signed, &mut tx, native, token, None).unwrap();
+        StateBlock::validate_stateful_admission(signed, &mut tx, native, &(token), None).unwrap();
         assert_eq!(tx.current_lane_id, Some(LaneId::new(1)));
         assert_eq!(tx.current_dataspace_id, Some(DataSpaceId::UNIVERSAL));
     });
@@ -632,7 +632,7 @@ fn missing_governed_and_private_physical_manifests_cannot_use_native_number_coll
             };
             let mut tx = block.transaction();
             assert!(matches!(
-                StateBlock::validate_stateful_admission(signed, &mut tx, native, token, None),
+                StateBlock::validate_stateful_admission(signed, &mut tx, native, &(token), None),
                 Err(TransactionRejectionReason::Validation(_))
             ));
             assert_eq!(tx.current_lane_id, Some(native.lane_id));

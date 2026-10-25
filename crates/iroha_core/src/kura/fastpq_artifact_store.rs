@@ -350,7 +350,7 @@ impl Kura {
             KIND,
         )?;
         sync_artifact_file(&file).map_err(|error| Error::IO(error, path.clone()))?;
-        self.sync_bound_evidence_namespace(&namespace, KIND)?;
+        Self::sync_bound_evidence_namespace(&namespace, KIND)?;
         self.verify_bound_open_regular_file_exact_bytes_after_namespace_mutation_locked(
             &namespace,
             &path,
@@ -597,7 +597,9 @@ impl Kura {
                 return Err(invalid(path, "FASTPQ artifact filename is not canonical"));
             };
             let temporary = name == TEMPORARY;
-            if !temporary {
+            if temporary {
+                inventory.temporary = true;
+            } else {
                 if !stable_name(name) {
                     return Err(invalid(path, "FASTPQ object filename is not canonical"));
                 }
@@ -608,8 +610,6 @@ impl Kura {
                         "FASTPQ stable artifact count exceeds its cap",
                     ));
                 }
-            } else {
-                inventory.temporary = true;
             }
             let metadata = Self::regular_sidecar_metadata_for(&self.store_root, &path, &directory)?
                 .ok_or_else(|| {
@@ -661,7 +661,7 @@ impl Kura {
         // based solely on their presence or apparent proof structure.
         Self::remove_bound_progress_file_if_matches(namespace, &path, &file, &metadata)
             .map_err(|error| Error::IO(error, path))?;
-        self.sync_bound_evidence_namespace(namespace, KIND)
+        Self::sync_bound_evidence_namespace(namespace, KIND)
     }
 }
 

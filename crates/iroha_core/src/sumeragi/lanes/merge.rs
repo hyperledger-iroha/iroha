@@ -31,7 +31,7 @@ use super::{LaneBatch, ProposalReadScope, lane_policy, routing::GLOBAL_LANE};
 pub use crate::sumeragi::payload::MergeProposal;
 use crate::{
     state::{
-        State, StateReadOnly, StateReadOnlyWithTransactions, WorldReadOnly,
+        State, StateReadOnly, StateReadOnlyWithTransactions, StateView, WorldReadOnly,
         is_stable_state_view_generation,
     },
     tx::AcceptedTransaction,
@@ -272,6 +272,10 @@ impl Expansion<'_> {
     }
     /// Consume the original expansion after native proposal-wire validation, preserving
     /// the original proposal on refusal and moving the exact lane step into execution.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     pub(crate) fn apply(
         self,
         proposal: SignedBlock,
@@ -360,10 +364,10 @@ pub fn expand<'state>(
     })
 }
 
-fn expand_from_view<'state, V: StateReadOnlyWithTransactions>(
+fn expand_from_view<'state>(
     state: &'state State,
     generation: u64,
-    view: &V,
+    view: &StateView<'_>,
     proposal: &SignedBlock,
     source: &dyn LaneBlockSource,
     wait: Duration,
@@ -459,7 +463,7 @@ fn expand_from_view<'state, V: StateReadOnlyWithTransactions>(
         )));
     }
     let mut identities = MergeIdentityIndex::new(own, &candidates, &state.ivm_execution_budget())?;
-    let admission = Admissibility::of(view);
+    let admission = Admissibility::of(view)?;
     let mut expansion = Expansion {
         state,
         generation,
@@ -521,7 +525,7 @@ fn expand_from_view<'state, V: StateReadOnlyWithTransactions>(
 }
 
 /// The work identity checked by global static validation. This is distinct from
-/// the original carrier hash retained in LaneResult and Expansion.
+/// the original carrier hash retained in `LaneResult` and Expansion.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum MergeWorkIdentity {
     Signed(HashOf<SignedTransaction>),
@@ -806,22 +810,27 @@ fn load(
 
 /// The per-transaction checks a block applies (`ValidBlock` static validation): a merged
 /// transaction failing one is dropped instead of invalidating the global block.
-struct Admissibility {
+struct Admissibility<'policy> {
     network: iroha_data_model::NetworkId,
     max_clock_drift: Duration,
     limits: iroha_data_model::parameter::TransactionParameters,
-    crypto: std::sync::Arc<iroha_config::parameters::actual::Crypto>,
+    policy: &'policy iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1,
 }
 
-impl Admissibility {
-    fn of(view: &impl StateReadOnly) -> Self {
-        let parameters = view.world().parameters();
-        Self {
+impl<'policy> Admissibility<'policy> {
+    fn of(view: &'policy StateView<'_>) -> Result<Self, MergeError> {
+        let parameters = view.world().transaction_admission_parameters();
+        let policy = parameters.require_crypto_policy().map_err(|_| {
+            MergeError::RoutingDeferred(
+                ivm::error::ExecutionDeferral::CryptoAdmissionPolicyUnavailable.into(),
+            )
+        })?;
+        Ok(Self {
             network: *view.network_id(),
             max_clock_drift: parameters.sumeragi().max_clock_drift(),
             limits: parameters.transaction(),
-            crypto: view.crypto(),
-        }
+            policy,
+        })
     }
 
     fn admits(&self, tx: &TransactionEntrypoint, block: &SignedBlock) -> Result<bool, MergeError> {
@@ -837,7 +846,7 @@ impl Admissibility {
             &self.network,
             self.max_clock_drift,
             self.limits,
-            &self.crypto,
+            self.policy,
             now,
             false,
         ) {
@@ -847,7 +856,10 @@ impl Admissibility {
                     crate::tx::anonymous_ballot_unavailable(),
                 ));
             }
-            Err(_) => return Ok(false),
+            Err(error) => match error.into_execution_deferred() {
+                Ok(original) => return Err(MergeError::RoutingDeferred(original)),
+                Err(_completed) => return Ok(false),
+            },
         }
         match tx {
             TransactionEntrypoint::SealedCommitment(commitment) => {

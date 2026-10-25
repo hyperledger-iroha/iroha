@@ -85,7 +85,7 @@ pub(super) async fn live_network(
     (network, address, replay_root)
 }
 
-fn prepared_root(chain: &Chain) -> (Arc<State>, Arc<Kura>, Prepared) {
+fn prepared_root(chain: &NodeTestChain) -> (Arc<State>, Arc<Kura>, Prepared) {
     let kura = Kura::blank_kura_for_testing();
     let state = empty_state(&chain.chain_id, &chain.genesis, &kura);
     let prepared = prepare(PrepareInputs {
@@ -100,7 +100,7 @@ fn prepared_root(chain: &Chain) -> (Arc<State>, Arc<Kura>, Prepared) {
 }
 
 fn inputs(
-    chain: &Chain,
+    chain: &NodeTestChain,
     dir: &std::path::Path,
     network: IrohaNetwork,
 ) -> StartInputs<P2pNet<IrohaNetwork>> {

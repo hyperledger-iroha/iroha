@@ -15,7 +15,7 @@ use iroha_data_model::block::{
 // The completed body occupies its original prepaid shared shell, never an inline block.
 // Field order destroys that body/control before raw bytes, source and the original pool.
 // No additional control allocation or nested DTO graph clone is introduced here.
-pub(crate) struct NativeCarrierAcquisition<'kura> {
+pub struct NativeCarrierAcquisition<'kura> {
     decoded: Option<SharedSignedBlock>,
     decoder: Option<PreparedSignedBlockSignaturesDecode>,
     shell: Option<ReservedSharedSignedBlock>,

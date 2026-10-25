@@ -351,10 +351,10 @@ pub fn write_planned(
 /// See [`plan`] and [`write_planned`].
 pub fn record_outbound_message(
     state_transaction: &mut StateTransaction<'_, '_>,
-    args: OutboundRecordArgsV1,
+    args: &OutboundRecordArgsV1,
 ) -> Result<[u8; 32], Error> {
-    let planned = plan(state_transaction, &args)?;
-    write_planned(state_transaction, &args, planned)
+    let planned = plan(state_transaction, args)?;
+    write_planned(state_transaction, args, planned)
 }
 
 #[cfg(test)]
@@ -403,6 +403,16 @@ mod tests {
             )],
             [],
         );
+        // Component registrations use an explicit policy authored before the block snapshot.
+        let mut parameters = world.parameters.block();
+        parameters
+            .set_parameter(
+                crate::sumeragi::test_chain::crypto_fixture_policy()
+                    .into_parameter()
+                    .expect("canonical fixture crypto policy"),
+            )
+            .expect("install fixture crypto policy");
+        parameters.commit();
         State::new_for_testing(
             world,
             Kura::blank_kura_for_testing(),
@@ -411,14 +421,14 @@ mod tests {
     }
 
     /// Inject existing state with a native generation and Bidirectional Ethereum revision.
-    /// This does not establish the currently blocked RegisterRoute or launch requirements.
+    /// This does not establish the currently blocked `RegisterRoute` or launch requirements.
     fn setup(stx: &mut StateTransaction<'_, '_>, max_wrapped_supply: u128) {
         store::parameters::set(stx, Some(SccpParametersV1::taira_default()));
         escrow::create_route_escrows(stx).expect("escrows");
         crate::smartcontracts::isi::sccp::test_support::install_generation(
             stx,
             1,
-            sample_generation_at(1, 1),
+            &(sample_generation_at(1, 1)),
         )
         .expect("generation");
         store::committee_current::set(stx, 1);
@@ -771,13 +781,13 @@ mod tests {
             .clone();
         let id = record_outbound_message(
             &mut stx,
-            OutboundRecordArgsV1 {
+            &(OutboundRecordArgsV1 {
                 network: SccpNetworkV1::EthereumMainnet,
                 revision: 1,
                 amount: ONE_XOR,
                 sender: escrow,
                 recipient: vec![0x22; 20],
-            },
+            }),
         )
         .expect("bounce");
         let route =

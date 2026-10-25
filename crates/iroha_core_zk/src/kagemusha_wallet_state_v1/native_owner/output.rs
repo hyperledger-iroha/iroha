@@ -363,7 +363,7 @@ mod tests {
     }
 
     fn metadata_marker(
-        marker: KagemushaWalletMarkerV1,
+        marker: &KagemushaWalletMarkerV1,
         completion_digest: [u8; 32],
     ) -> crate::kagemusha_wallet_advance_v1::KagemushaWalletMarkerRecordV1 {
         use crate::kagemusha_wallet_advance_v1::{
@@ -404,7 +404,7 @@ mod tests {
             state: step.frozen.capsule.head_marker_state(),
         };
         (
-            SlotStatus::Pending(metadata_marker(marker, [0; 32])),
+            SlotStatus::Pending(metadata_marker(&marker, [0; 32])),
             step.frozen.credential,
         )
     }
@@ -416,12 +416,14 @@ mod tests {
         let mut marker = *pending.marker().unwrap().marker();
         marker.generation += 1;
         let released = SlotStatus::Released(metadata_marker(
-            marker,
+            &marker,
             received().retained.completion_digest,
         ));
         assert!(metadata_custody(&released, &credential).is_ok());
-        let enrollment =
-            SlotStatus::Enrollment(metadata_marker(fixture("KagemushaWalletMarkerV1"), [0; 32]));
+        let enrollment = SlotStatus::Enrollment(metadata_marker(
+            &fixture("KagemushaWalletMarkerV1"),
+            [0; 32],
+        ));
         assert!(metadata_custody(&enrollment, &fixture("KagemushaWalletCredentialV1")).is_ok());
         // The custody bracket still distinguishes Pending from Released and generation changes.
         assert_ne!(pending, released);
@@ -466,7 +468,7 @@ mod tests {
             SlotStatus::Empty,
             SlotStatus::IntentOnly,
             SlotStatus::SlotAbandoned,
-            SlotStatus::Terminal(metadata_marker(marker, [0; 32])),
+            SlotStatus::Terminal(metadata_marker(&marker, [0; 32])),
         ] {
             assert!(metadata_custody(&status, &credential).is_err());
         }

@@ -11,7 +11,7 @@ thread_local! {
 
 // One private test-only boundary, after the actual native entry-lock outcome exists.
 // Production has no hook or additional public API.
-pub(super) fn after_entry_lock<T>(result: Result<T>) -> Result<T> {
+pub fn after_entry_lock<T>(result: Result<T>) -> Result<T> {
     let hook = AFTER_ENTRY_LOCK.with(|slot| slot.borrow_mut().take());
     if let Some(hook) = hook {
         hook();

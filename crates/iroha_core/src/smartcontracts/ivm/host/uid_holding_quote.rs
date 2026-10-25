@@ -77,7 +77,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             .ok_or(ivm::VMError::NotImplemented { syscall })?;
         // The native helper validates the installed controller and explicit reader grant.
         // The outer transaction's human signer cannot substitute for that controller.
-        let (quote, stats) = state.uid_holding_quote(
+        let (quote, execution_stats) = state.uid_holding_quote(
             &self.effect_authority(),
             context,
             &definition,
@@ -90,8 +90,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             vm,
             gas_remaining,
             &gas_context,
-            stats.processed_items(),
-            stats.processed_bytes(),
+            execution_stats.processed_items(),
+            execution_stats.processed_bytes(),
             prepared.encoded_bytes()?,
         )?;
         let table = prepared.materialize(vm)?;

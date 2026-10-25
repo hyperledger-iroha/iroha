@@ -74,6 +74,7 @@ fn every_empty_batch_variant() -> Vec<QueryOutputBatchBox> {
         QueryOutputBatchBox::AssetFiTransferReceiptV1(Vec::new()),
         QueryOutputBatchBox::AssetFiContextSnapshotV1(Vec::new()),
         QueryOutputBatchBox::AssetUidEnrollmentViewV1(Vec::new()),
+        QueryOutputBatchBox::AssetEscrowScopeOriginalV1(Vec::new()),
     ]
 }
 #[test]

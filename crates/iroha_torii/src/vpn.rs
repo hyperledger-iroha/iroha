@@ -834,8 +834,8 @@ fn build_quote_id(
     hasher.update(&current_ms.to_be_bytes());
     *hasher.finalize().as_bytes()
 }
-fn tx_instr_from_box(boxed: InstructionBox) -> VpnTxInstructionDto {
-    let (wire_id, framed) = iroha_data_model::isi::framed_instruction_payload(&boxed)
+fn tx_instr_from_box(boxed: &InstructionBox) -> VpnTxInstructionDto {
+    let (wire_id, framed) = iroha_data_model::isi::framed_instruction_payload(boxed)
         .expect("instruction must have a canonical V1 wire identifier and Norito frame");
     VpnTxInstructionDto {
         wire_id: wire_id.to_owned(),
@@ -848,7 +848,7 @@ fn settle_lease_instruction(
     voucher: VpnUsageVoucherV1,
 ) -> VpnTxInstructionDto {
     let instruction: InstructionBox = SettleVpnLease::new(lease_id, relay_receipt, voucher).into();
-    tx_instr_from_box(instruction)
+    tx_instr_from_box(&(instruction))
 }
 fn validate_quote_record_projection(
     record: &VpnQuoteRecord,
@@ -1073,7 +1073,7 @@ fn open_lease_instruction(
 ) -> Result<VpnTxInstructionDto, Error> {
     validate_quote_record_projection(record, expected_network_id)?;
     let instruction: InstructionBox = OpenVpnLeaseEscrow::new(record.signed_quote.clone()).into();
-    Ok(tx_instr_from_box(instruction))
+    Ok(tx_instr_from_box(&(instruction)))
 }
 fn ensure_vpn_quote_operator_authorized(
     app: &SharedAppState,
@@ -1515,12 +1515,12 @@ fn insert_session_locked(
         // GET reconstructs the same session directly from WSV.
         return Ok(false);
     }
-    if let Some(collision) = app.vpn_sessions.get(&record.session_id) {
-        if collision.account_id != record.account_id || collision.lease_id != record.lease_id {
-            return Err(not_permitted_error(
-                "vpn session identifier collides with another account",
-            ));
-        }
+    if let Some(collision) = app.vpn_sessions.get(&record.session_id)
+        && (collision.account_id != record.account_id || collision.lease_id != record.lease_id)
+    {
+        return Err(not_permitted_error(
+            "vpn session identifier collides with another account",
+        ));
     }
     if let Some(existing) = existing {
         if state.settling_session_ids.contains(&existing.session_id) {
@@ -2508,6 +2508,10 @@ pub async fn handle_create_vpn_session(
     let _cached = insert_session_locked(&app, &mut vpn_state, record, admission_ms)?;
     Ok((StatusCode::CREATED, crate::utils::JsonBody(response)).into_response())
 }
+#[expect(
+    clippy::unused_async,
+    reason = "HTTP handlers retain a Future interface for route registration and shared async callers"
+)]
 pub async fn handle_get_vpn_session(
     app: SharedAppState,
     method: &Method,
@@ -2550,6 +2554,10 @@ pub async fn handle_get_vpn_session(
     }
     Ok(crate::utils::JsonBody(response_from_record(&record)).into_response())
 }
+#[expect(
+    clippy::unused_async,
+    reason = "HTTP handlers retain a Future interface for route registration and shared async callers"
+)]
 pub async fn handle_list_vpn_receipts(
     app: SharedAppState,
     method: &Method,
@@ -2567,6 +2575,10 @@ pub async fn handle_list_vpn_receipts(
     let total = u64::try_from(items.len()).unwrap_or(u64::MAX);
     Ok(crate::utils::JsonBody(VpnReceiptListResponseDto { items, total }).into_response())
 }
+#[expect(
+    clippy::unused_async,
+    reason = "HTTP handlers retain a Future interface for route registration and shared async callers"
+)]
 pub async fn handle_submit_vpn_receipt(
     app: SharedAppState,
     method: &Method,

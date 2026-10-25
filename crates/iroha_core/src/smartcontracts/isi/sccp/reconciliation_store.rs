@@ -82,17 +82,12 @@ pub type Due = mv::storage::Storage<DueKey, (), Mode>;
 pub fn valid_record(key: &Key, value: &SccpReconciliationStateV1) -> bool {
     valid_key(key)
         && value.closes_at_ms > value.opened_at_ms
-        && match value.rho {
-            None => value.settled_face == 0,
-            Some(ratio) => {
-                ratio.denominator > 0
-                    && ratio.backing <= ratio.denominator
-                    && (ratio.backing.checked_add(value.forged_supply) == Some(ratio.denominator)
-                        || (ratio.backing == 0
-                            && value.forged_supply == 0
-                            && ratio.denominator == 1))
-            }
-        }
+        && value.rho.map_or(value.settled_face == 0, |ratio| {
+            ratio.denominator > 0
+                && ratio.backing <= ratio.denominator
+                && (ratio.backing.checked_add(value.forged_supply) == Some(ratio.denominator)
+                    || (ratio.backing == 0 && value.forged_supply == 0 && ratio.denominator == 1))
+        })
 }
 /// Only real external networks and nonzero revisions own reconciliation state.
 #[must_use]
@@ -252,8 +247,8 @@ pub fn earliest_due(world: &(impl WorldReadOnly + ?Sized), time_ms: u64) -> Opti
         .sccp_reconciliation_due()
         .iter()
         .next()
-        .filter(|(key, _)| key.0 <= time_ms)
-        .map(|(key, _)| *key)
+        .filter(|(key, ())| key.0 <= time_ms)
+        .map(|(key, ())| *key)
 }
 
 /// Rebuild the ordered deadline index from exact current and predecessor canonical records.
@@ -284,10 +279,10 @@ pub(crate) fn rebuild_due(
                 .current()
                 .get(key)
                 .and_then(|value| due(key, value));
-            if current_due != old_due {
-                if let Some(current) = current_due {
-                    undo(current, None)?;
-                }
+            if current_due != old_due
+                && let Some(current) = current_due
+            {
+                undo(current, None)?;
             }
             if let Some(old) = old_due {
                 undo(old, Some(()))?;

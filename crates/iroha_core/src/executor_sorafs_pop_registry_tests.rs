@@ -1,4 +1,4 @@
-/// Initial PoP registry admission preserves governed issuer, signature and monotonic state checks.
+/// Initial `PoP` registry admission preserves governed issuer, signature and monotonic state checks.
 mod sorafs_pop_registry_admission {
     use super::*;
     use crate::{executor::Executor, smartcontracts::ValidSingularQuery};

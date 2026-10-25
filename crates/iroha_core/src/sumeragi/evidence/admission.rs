@@ -530,7 +530,7 @@ fn decode_candidate_source(
 /// The State owns one bounded original request. A newer publication cancels the obsolete cut;
 /// a competing request cannot replace in-progress native acquisition from the same cut.
 #[derive(Default)]
-pub(crate) struct AdmissionCache {
+pub struct AdmissionCache {
     pending: Option<AdmissionRead>,
     pub(super) restore: Option<super::restoration::RestorationRead>,
 }
@@ -547,27 +547,42 @@ pub(super) fn retryable(error: &EvidenceAdmissionError) -> bool {
         );
     }
     match error {
-        EvidenceAdmissionError::Policy(crate::execution_attempt::ExecutionAttemptError::Deferred(_)) => true,
         EvidenceAdmissionError::Source(error) => matches!(
-            error.io_kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+            error.io_kind(),
+            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
         ),
-        EvidenceAdmissionError::History(crate::execution_attempt::ExecutionAttemptError::Deferred(_)) => true,
-        EvidenceAdmissionError::History(crate::execution_attempt::ExecutionAttemptError::Rejected(
-            QueryExecutionFail::GasBudgetExceeded | QueryExecutionFail::CapacityLimit
-            // Kura still returns Option for this body read. Absence at a committed hash
-            // is pending, never evidence of corruption or a reason to blame the proof.
-            | QueryExecutionFail::CanonicalHistory(CanonicalHistoryError::BodyUnavailable { .. })
-        )) => true,
-        EvidenceAdmissionError::Storage(crate::state::sccp_forgery_custody::ForgeryStorageError::Storage(
-            mv::storage::AdmittedStorageError::Busy { .. }
-            | mv::storage::AdmittedStorageError::Allocation(AllocationRefusal::Capacity { .. } | AllocationRefusal::ExceedsLimit { .. })
-            | mv::storage::AdmittedStorageError::Allocator { .. }
-        ) | crate::state::sccp_forgery_custody::ForgeryStorageError::Codec(_)) => true,
-        EvidenceAdmissionError::Preparation(
-            EvidencePreparationError::Admission(AllocationRefusal::Capacity { .. } | AllocationRefusal::ExceedsLimit { .. })
+        EvidenceAdmissionError::Policy(
+            crate::execution_attempt::ExecutionAttemptError::Deferred(_),
+        )
+        | EvidenceAdmissionError::History(
+            crate::execution_attempt::ExecutionAttemptError::Deferred(_)
+            | crate::execution_attempt::ExecutionAttemptError::Rejected(
+                QueryExecutionFail::GasBudgetExceeded
+                | QueryExecutionFail::CapacityLimit
+                // Kura still returns Option for this body read. Absence at a committed hash
+                // is pending, never evidence of corruption or a reason to blame the proof.
+                | QueryExecutionFail::CanonicalHistory(CanonicalHistoryError::BodyUnavailable {
+                    ..
+                }),
+            ),
+        )
+        | EvidenceAdmissionError::Storage(
+            crate::state::sccp_forgery_custody::ForgeryStorageError::Storage(
+                mv::storage::AdmittedStorageError::Busy { .. }
+                | mv::storage::AdmittedStorageError::Allocation(
+                    AllocationRefusal::Capacity { .. } | AllocationRefusal::ExceedsLimit { .. },
+                )
+                | mv::storage::AdmittedStorageError::Allocator { .. },
+            )
+            | crate::state::sccp_forgery_custody::ForgeryStorageError::Codec(_),
+        )
+        | EvidenceAdmissionError::Preparation(
+            EvidencePreparationError::Admission(
+                AllocationRefusal::Capacity { .. } | AllocationRefusal::ExceedsLimit { .. },
+            )
             | EvidencePreparationError::Allocator { .. }
             | EvidencePreparationError::DecodeResource(_)
-            | EvidencePreparationError::OriginalHistoryPending
+            | EvidencePreparationError::OriginalHistoryPending,
         ) => true,
         _ => false,
     }

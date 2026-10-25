@@ -29,10 +29,10 @@ fn prefix_bytes(mut length: usize) -> usize {
 ///
 /// Each commitment is 128 raw bytes plus a two-byte field prefix; each required
 /// body is a 16-byte record plus a one-byte prefix. Both vectors have u64 counts.
-/// A positive integral bond uses K minimal signed bytes plus BigInt's fixed u32
+/// A positive integral bond uses K minimal signed bytes plus `BigInt`'s fixed u32
 /// length and Numeric's two field prefixes/four-byte scale: Quantity = 10 + K.
 /// Body context = 118; sortition = 49 + K; lifecycle = 81; capacity = 40;
-/// binding = 126; frozen policy = 306 + 17N + K + prefix_bytes(8 + 17N).
+/// binding = 126; frozen policy = 306 + 17N + K + `prefix_bytes(8 + 17N)`.
 /// Framing those fields and adding the 40-byte header gives the expression below.
 fn context_frame_bytes(seats: usize, required_bodies: usize, bond_signed_bytes: usize) -> usize {
     803 + 130 * seats
@@ -184,7 +184,7 @@ fn envelope_width_is_fixed_for_every_vote_choice() {
     const EXPECTED: usize = 40 + (1 + 32) + (3 + 233_379);
     assert_eq!(EXPECTED, 233_455);
     for (index, vote) in BallotChoiceV1::ALL.into_iter().enumerate() {
-        let value = envelope(vote, index as u8);
+        let value = envelope(vote, u8::try_from(index).expect("vote index fits u8"));
         assert_eq!(
             value.encode_canonical_bounded().expect("envelope").len(),
             EXPECTED

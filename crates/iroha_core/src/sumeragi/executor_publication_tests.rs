@@ -192,8 +192,17 @@ pub(super) fn with_worker_chain_and_clock(
     );
 }
 
+type WorkerChainCallback<'a> = &'a mut (
+            dyn FnMut(
+    &CertifiedTestChain,
+    &mut Worker<'_>,
+    &KuraBlockStore,
+    &mut tokio::sync::broadcast::Receiver<EventBox>,
+) + 'a
+        );
+
 /// Construct the same signed fixture once per binary rather than per callback type.
-/// The borrowed adapter retains each original FnOnce closure without another allocation.
+/// The borrowed adapter retains each original `FnOnce` closure without another allocation.
 #[inline(never)]
 fn with_worker_chain_erased(
     chain: &CertifiedTestChain,
@@ -201,12 +210,7 @@ fn with_worker_chain_erased(
     lane_blocks: Arc<dyn crate::sumeragi::lanes::merge::LaneBlockSource>,
     time_source: iroha_primitives::time::TimeSource,
     isolated_source: bool,
-    test: &mut dyn FnMut(
-        &CertifiedTestChain,
-        &mut Worker<'_>,
-        &KuraBlockStore,
-        &mut tokio::sync::broadcast::Receiver<EventBox>,
-    ),
+    test: WorkerChainCallback<'_>,
 ) {
     assert_eq!(chain.validators().len(), 4);
     let (_, certificate, _) = startup::stored_genesis(chain.state()).unwrap().unwrap();
@@ -486,7 +490,11 @@ fn original_staking_payload_worker_retains_pool_refusal_and_exact_queued_retry()
                 &chain.network_id(),
                 Duration::from_secs(1),
                 chain.state().view().world().parameters().transaction(),
-                &iroha_config::parameters::actual::Crypto::default(),
+                &iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                    iroha_crypto::Algorithm::Ed25519,
+                    iroha_crypto::Algorithm::Secp256k1,
+                ])
+                .expect("this stateless fixture explicitly selects Ed25519 and Secp256k1"),
                 &time,
             )
             .unwrap();
@@ -666,7 +674,11 @@ pub(super) fn proposal_with_transactions(
                 &chain.network_id(),
                 Duration::from_secs(1),
                 view.world().parameters().transaction(),
-                &iroha_config::parameters::actual::Crypto::default(),
+                &iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                    iroha_crypto::Algorithm::Ed25519,
+                    iroha_crypto::Algorithm::Secp256k1,
+                ])
+                .expect("this stateless fixture explicitly selects Ed25519 and Secp256k1"),
                 &time,
             )
             .unwrap()
@@ -2265,7 +2277,11 @@ fn quarantine_requires_the_exact_control_free_transaction_rejection_hash() {
             &chain.network_id(),
             Duration::from_secs(1),
             chain.state().view().world().parameters().transaction(),
-            &iroha_config::parameters::actual::Crypto::default(),
+            &iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                iroha_crypto::Algorithm::Ed25519,
+                iroha_crypto::Algorithm::Secp256k1,
+            ])
+            .expect("this stateless fixture explicitly selects Ed25519 and Secp256k1"),
             &time,
         )
         .unwrap();
@@ -2629,7 +2645,7 @@ fn native_certificate_refusals_retain_original_execution_until_exact_publication
     }
 }
 
-/// Every certificate allocation boundary also preserves the genuine NPoS boundary execution.
+/// Every certificate allocation boundary also preserves the genuine `NPoS` boundary execution.
 #[test]
 fn boundary_certificate_refusals_retain_original_preimage_authority_and_exact_quorum() {
     for part in 1..=3 {
@@ -3712,7 +3728,11 @@ fn original_lane_policy_proposal_refusal_retains_worker_owner_and_exact_queued_r
                 &chain.network_id(),
                 Duration::from_secs(1),
                 chain.state().view().world().parameters().transaction(),
-                &iroha_config::parameters::actual::Crypto::default(),
+                &iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                    iroha_crypto::Algorithm::Ed25519,
+                    iroha_crypto::Algorithm::Secp256k1,
+                ])
+                .expect("this stateless fixture explicitly selects Ed25519 and Secp256k1"),
                 &time,
             )
             .unwrap();
@@ -4165,7 +4185,11 @@ fn global_build_carries_a_transaction_of_the_payload_limit_less_the_reserve() {
                     &chain.network_id(),
                     Duration::from_secs(1),
                     chain.state().view().world().parameters().transaction(),
-                    &iroha_config::parameters::actual::Crypto::default(),
+                    &iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                        iroha_crypto::Algorithm::Ed25519,
+                        iroha_crypto::Algorithm::Secp256k1,
+                    ])
+                    .expect("this stateless fixture explicitly selects Ed25519 and Secp256k1"),
                     &time,
                 )
                 .expect("within the transaction cap")

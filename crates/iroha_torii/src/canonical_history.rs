@@ -112,13 +112,13 @@ pub fn permanent_refusal(
         // A retry can start from authenticated checkpoints recorded by this or another
         // attempt, so cumulative ancestry work does not prove the query can never fit.
         DecodeResourceError::TotalAllocationExceeded { .. }
-        | DecodeResourceError::TotalElementsExceeded { .. } => None,
+        | DecodeResourceError::TotalElementsExceeded { .. }
+        | DecodeResourceError::AllocationFailed { .. } => None,
         DecodeResourceError::NestingDepthExceeded { depth, limit, .. } => Some((
             "nesting depth",
             u64::try_from(depth).ok()?,
             u64::try_from(limit).ok()?,
         )),
-        DecodeResourceError::AllocationFailed { .. } => None,
     }
 }
 
@@ -219,7 +219,7 @@ pub fn signed_calls(
 /// Resolve a unique ordinary signed submission from exact authenticated history.
 /// Reveals and internal invocations cannot impersonate an external submission.
 ///
-/// Its callers are background SoraFS forwarders with no request: the carrier is read through
+/// Its callers are background `SoraFS` forwarders with no request: the carrier is read through
 /// State/checkpoint ancestry under a background owner, retained through the projection.
 /// Every refusal, a busy history pool included, stays an error the forwarder reports as
 /// unavailable and retries on a later scan.
@@ -396,10 +396,10 @@ mod tests {
             .set_execution_outputs(
                 outputs,
                 2,
-                Default::default(),
+                std::collections::BTreeMap::default(),
                 vec![],
-                Default::default(),
-                Default::default(),
+                iroha_data_model::nexus::AxtPolicySnapshot::default(),
+                std::collections::BTreeSet::default(),
                 &iroha_data_model::block::output_budget::ExecutionOutputLimits {
                     max_outputs: 16,
                     max_output_bytes: 1024 * 1024,

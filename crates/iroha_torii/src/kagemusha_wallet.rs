@@ -111,7 +111,7 @@ fn ledger_finality_unavailable() -> Error {
 }
 /// Only an input absent from its committed block is an absence. Limits, storage, a missing
 /// output join and local decoder refusals are retryable unavailability, never a verdict.
-fn ledger_entry_error(error: BlockProofError) -> Error {
+fn ledger_entry_error(error: &BlockProofError) -> Error {
     if matches!(error, BlockProofError::EntrypointNotFound { .. }) {
         ledger_entry_not_committed()
     } else {
@@ -466,7 +466,7 @@ async fn ledger_read(
                             &history,
                             |owner| owner.is_attempt_of(&caller, &scheme, &wallet),
                         )
-                        .map_err(ledger_entry_error)?
+                        .map_err(|value| ledger_entry_error(&value))?
                         .ok_or_else(ledger_entry_not_committed)?;
                     crate::kagemusha_wallet_finality::ledger_evidence(
                         &state.view(),
@@ -488,7 +488,7 @@ async fn ledger_read(
                     // One bounded body read: no output copy and no Merkle path.
                     let owner = state
                         .kagemusha_ledger_entry_owner(height, entry_hash, limits, &history)
-                        .map_err(ledger_entry_error)?;
+                        .map_err(|value| ledger_entry_error(&value))?;
                     require_ledger_attempt(&owner, &caller, &scheme, &wallet)?;
                     crate::kagemusha_wallet_finality::epoch_boundary(
                         &state.view(),
@@ -937,10 +937,12 @@ mod tests {
         let height = NonZeroU64::new(3).unwrap();
         let entry_hash = HashOf::from_untyped_unchecked(Hash::prehashed([0x55; 32]));
         // An input absent from its block, and an entry absent from the index.
-        refusals.push(ledger_entry_error(BlockProofError::EntrypointNotFound {
-            entry_hash,
-            block_height: height,
-        }));
+        refusals.push(ledger_entry_error(
+            &(BlockProofError::EntrypointNotFound {
+                entry_hash,
+                block_height: height,
+            }),
+        ));
         refusals.push(ledger_entry_not_committed());
         let mut observed = Vec::new();
         for refusal in refusals {
@@ -988,7 +990,7 @@ mod tests {
             },
             BlockProofError::MissingResults(height),
         ] {
-            let response = ledger_entry_error(error).into_response();
+            let response = ledger_entry_error(&(error)).into_response();
             assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
             assert_eq!(
                 response.headers()["x-iroha-reject-code"],

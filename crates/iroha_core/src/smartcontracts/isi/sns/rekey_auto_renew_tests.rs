@@ -126,8 +126,10 @@ impl RekeyFixture {
             .view()
             .world()
             .asset(&AssetId::of(self.payment.clone(), owner.clone()))
-            .map(|value| value.value().clone().into_inner())
-            .unwrap_or_else(|_| Quantity::zero())
+            .map_or_else(
+                |_| Quantity::zero(),
+                |value| value.value().clone().into_inner(),
+            )
     }
 
     fn assert_original_rekey(&self) {
@@ -308,7 +310,7 @@ fn original_rekey_fixture_with_source_policy(
         (
             crate::sns::quote_resolved_name_registration(
                 view.world(),
-                selector,
+                &(selector),
                 &old_owner,
                 1,
                 None,
@@ -456,7 +458,7 @@ fn signed_rekey_current_owner_can_replace_stale_auto_renew_configuration() {
         let expiry = lease.expires_at_ms;
         let quote = crate::sns::quote_resolved_name_renewal(
             view.world(),
-            selector,
+            &(selector),
             expiry,
             expiry + iroha_data_model::alias_setup::ALIAS_LEASE_YEAR_MS,
             expiry - 1_000,
@@ -847,8 +849,10 @@ fn signed_rekey_larger_owner_cannot_exceed_committed_native_renewal_allowance() 
         block
             .world
             .asset(&AssetId::of(fixture.payment.clone(), owner.clone()))
-            .map(|asset| asset.value().clone().into_inner())
-            .unwrap_or_else(|_| Quantity::zero())
+            .map_or_else(
+                |_| Quantity::zero(),
+                |asset| asset.value().clone().into_inner(),
+            )
     };
     assert_eq!(balance(&fixture.current_owner), owner_before);
     assert_eq!(balance(&fixture.collector), collector_before);

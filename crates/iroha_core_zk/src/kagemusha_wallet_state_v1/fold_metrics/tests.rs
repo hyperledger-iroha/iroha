@@ -219,7 +219,7 @@ fn the_log_keeps_the_last_records_and_counts_every_one() {
                 .copied()
                 .map_or(FoldOutcomeV1::Failed, FoldOutcomeV1::Cancelled),
         };
-        metrics.record(record(ordinal, outcome, Duration::from_micros(10)));
+        metrics.record(&record(ordinal, outcome, Duration::from_micros(10)));
     }
     assert_eq!(metrics.records().len(), FOLD_METRICS_RECORDS_V1);
     assert_eq!(metrics.records().front().unwrap().ordinal, 6);
@@ -254,7 +254,7 @@ fn log_line_carries_only_fixed_names_whole_microseconds_counts_and_bytes() {
         phases[phase.index()] = Duration::from_micros(micros);
     }
     phases[FoldPhaseV1::Prove.index()] += Duration::from_nanos(999);
-    metrics.record(FoldSubProofV1 {
+    metrics.record(&FoldSubProofV1 {
         started_native_micros: 0,
         ended_native_micros: 0,
         sequence: 7,
@@ -268,7 +268,7 @@ fn log_line_carries_only_fixed_names_whole_microseconds_counts_and_bytes() {
         peak_rss_bytes: Some(4096),
         ingests: 0,
     });
-    metrics.record(FoldSubProofV1 {
+    metrics.record(&FoldSubProofV1 {
         started_native_micros: 0,
         ended_native_micros: 0,
         sequence: 7,
@@ -282,7 +282,7 @@ fn log_line_carries_only_fixed_names_whole_microseconds_counts_and_bytes() {
         peak_rss_bytes: None,
         ingests: 0,
     });
-    metrics.record(FoldSubProofV1 {
+    metrics.record(&FoldSubProofV1 {
         started_native_micros: 0,
         ended_native_micros: 0,
         sequence: 8,
@@ -477,10 +477,10 @@ fn maximal_public_records_fit_the_mobile_diagnostic_bound() {
         sigma_publish: Duration::MAX,
     };
     for _ in 0..FOLD_METRICS_RECORDS_V1 {
-        metrics.record(maximum);
+        metrics.record(&maximum);
     }
     for _ in 0..NATIVE_WORK_RECORDS_V1 + 3 {
-        metrics.record_native_work(NativeWorkRecordV1 {
+        metrics.record_native_work(&NativeWorkRecordV1 {
             started_native_micros: u64::MAX,
             ended_native_micros: u64::MAX,
             kind: NativeWorkKindV1::Fold,
@@ -592,7 +592,7 @@ fn native_work_records_are_observation_only_and_count_the_calling_thread() {
     assert_eq!(record.verification.proofs.decides, 1);
     assert_eq!(record.work.commit, Duration::ZERO);
     let mut log = FoldMetricsV1::default();
-    log.record_native_work(record);
+    log.record_native_work(&record);
     assert_eq!(log.counts().sub_proofs, 0);
     assert_eq!(log.native_work_count(), 1);
     assert_eq!(log.native_work().front(), Some(&record));
@@ -611,8 +611,8 @@ fn native_and_fold_marks_share_the_observation_clock_and_precede_sampling() {
     assert!(fold.started_native_micros <= fold.ended_native_micros);
     assert!(fold.ended_native_micros <= native.ended_native_micros);
     let mut log = FoldMetricsV1::default();
-    log.record(fold);
-    log.record_native_work(native);
+    log.record(&fold);
+    log.record_native_work(&native);
     let json: norito::json::Value = norito::json::from_slice(log.to_json().as_bytes()).unwrap();
     let object = json.as_object().unwrap();
     let sampled = object["sampledNativeMicros"].as_u64().unwrap();

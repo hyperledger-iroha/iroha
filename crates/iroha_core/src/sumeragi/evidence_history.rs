@@ -3,7 +3,7 @@
 //! Signed report bytes carry no authority context. This reader authenticates the subject
 //! configuration from its executed parent's successor slot, the parent's configuration from
 //! its predecessor, and every demotion header through the original State tip. It never reads
-//! the node-local CommitQC. The returned observation alone cannot publish monetary effects.
+//! the node-local `CommitQC`. The returned observation alone cannot publish monetary effects.
 //!
 //! Pending observation, canonical block admission, pristine finality effects and restored
 //! evidence use this original-history verifier. TODO(S8 release blocker): retain all decoded
@@ -20,7 +20,7 @@ use iroha_data_model::block::consensus::EvidenceScope;
 
 mod funded_attribution;
 use funded_attribution::{AttributionFields, FundedOffenders};
-pub(crate) use funded_attribution::{FundedEvidenceAttribution, restore_attribution};
+pub use funded_attribution::{FundedEvidenceAttribution, restore_attribution};
 use iroha_data_model::query::error::QueryExecutionFail;
 use iroha_sumeragi::{
     api::CommittedTip,
@@ -35,7 +35,7 @@ use crate::state::{NativeExecutionTip, StateReadOnly, WorldReadOnly};
 
 /// Authentication failure keeps local source failures distinct from invalid signed reports.
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum NativeEvidenceError {
+pub enum NativeEvidenceError {
     /// Original history is missing, corrupt or refused by the supplied source budget.
     #[error("native evidence history: {0}")]
     History(crate::execution_attempt::ExecutionAttemptError<QueryExecutionFail>),
@@ -56,7 +56,7 @@ pub(crate) enum NativeEvidenceError {
 /// Original-history attribution. Private fields prevent decode from granting admission.
 /// Finality application must bind the retained observation to its original State cut.
 #[derive(Debug)]
-pub(crate) struct VerifiedNativeEvidence {
+pub struct VerifiedNativeEvidence {
     scope: EvidenceScope,
     tip: NativeExecutionTip,
     instance: Hash32,
@@ -83,7 +83,7 @@ impl VerifiedNativeEvidence {
             offenders,
             safety_violation,
         } = self;
-        offenders.into_attribution(AttributionFields {
+        offenders.into_attribution(&AttributionFields {
             scope,
             instance: instance.0,
             height,
@@ -144,7 +144,7 @@ impl VerifiedNativeEvidence {
 }
 
 /// Claimed subject only; callers must authenticate it independently before using it.
-pub(crate) fn subject(evidence: &Evidence) -> (Hash32, u64, u64) {
+pub fn subject(evidence: &Evidence) -> (Hash32, u64, u64) {
     match evidence {
         Evidence::ProposalEquivocation(first, _) => (first.instance, first.height, first.view),
         Evidence::VoteEquivocation(first, _) => (first.instance, first.height, first.view),
@@ -169,8 +169,8 @@ fn position(height: u64) -> Result<NonZeroUsize, NativeEvidenceError> {
 /// Every physical frame traversed from the tip is charged before reading, including frames
 /// above the requested interval. A current-height observation may target tip+1; an admitting
 /// block must separately enforce that the offence precedes its own height and the signed
-/// evidence horizon. No World committee lookup or supplied HeightContext is accepted.
-pub(crate) fn verify_from_state(
+/// evidence horizon. No World committee lookup or supplied `HeightContext` is accepted.
+pub fn verify_from_state(
     state: &impl StateReadOnly,
     evidence: &Evidence,
     before_read: impl FnMut(
@@ -227,8 +227,7 @@ pub(crate) fn verify_from_state(
     let parent_height = height - 1;
     let grandparent_height = (parent_height > GENESIS_HEIGHT).then(|| parent_height - 1);
     let first = interval
-        .map(|(first, _)| first)
-        .unwrap_or(parent_height)
+        .map_or(parent_height, |(first, _)| first)
         .min(grandparent_height.unwrap_or(parent_height));
     let mut parent = None;
     let mut grandparent = None;
@@ -380,7 +379,7 @@ pub(crate) fn verify_from_state(
 
 mod lane;
 mod lane_read;
-pub(crate) use lane_read::LaneEvidenceRead;
+pub use lane_read::LaneEvidenceRead;
 
 #[cfg(test)]
 mod tests;

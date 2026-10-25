@@ -68,7 +68,7 @@ fn finalized_admission_revocation_and_tombstones_share_one_native_history() {
     let revoke = f.revocation();
     f.commit(
         |tx| {
-            assert!(apply(Action::Revoke(native::encode(&revoke).unwrap()), tx).unwrap());
+            assert!(apply(&(Action::Revoke(native::encode(&revoke).unwrap())), tx).unwrap());
         },
         true,
     );
@@ -81,7 +81,7 @@ fn finalized_admission_revocation_and_tombstones_share_one_native_history() {
     let original = f.envelope.clone();
     f.commit(
         |tx| {
-            assert!(apply(Action::Admit(native::encode(&original).unwrap()), tx).is_err());
+            assert!(apply(&(Action::Admit(native::encode(&original).unwrap())), tx).is_err());
             assert!(
                 governed_head(
                     tx.world(),
@@ -122,16 +122,16 @@ fn renewal_requires_exact_predecessor_and_follows_governed_council_rotation() {
         |tx| {
             assert!(
                 apply(
-                    Action::ConfigureCouncil(native::encode(&policy).unwrap()),
+                    &(Action::ConfigureCouncil(native::encode(&policy).unwrap())),
                     tx
                 )
                 .unwrap()
             );
             let mut wrong = renewal.clone();
             wrong.previous_envelope_digest[0] ^= 1;
-            assert!(apply(Action::Renew(native::encode(&wrong).unwrap()), tx).is_err());
-            assert!(apply(Action::Renew(native::encode(&renewal).unwrap()), tx).unwrap());
-            assert!(apply(Action::Renew(native::encode(&renewal).unwrap()), tx).is_err());
+            assert!(apply(&(Action::Renew(native::encode(&wrong).unwrap())), tx).is_err());
+            assert!(apply(&(Action::Renew(native::encode(&renewal).unwrap())), tx).unwrap());
+            assert!(apply(&(Action::Renew(native::encode(&renewal).unwrap())), tx).is_err());
         },
         true,
     );
@@ -218,20 +218,20 @@ fn initial_policy_and_signed_claim_substitution_are_rejected_before_any_write() 
             skipped.predecessor_policy_digest = Some([1; 32]);
             assert!(
                 apply(
-                    Action::ConfigureCouncil(native::encode(&skipped).unwrap()),
+                    &(Action::ConfigureCouncil(native::encode(&skipped).unwrap())),
                     tx
                 )
                 .is_err()
             );
             assert!(native::read_head(tx.world(), None).unwrap().is_none());
             apply(
-                Action::ConfigureCouncil(native::encode(&policy).unwrap()),
+                &(Action::ConfigureCouncil(native::encode(&policy).unwrap())),
                 tx,
             )
             .unwrap();
             let mut substituted = envelope.clone();
             substituted.policy_digest[0] ^= 1;
-            assert!(apply(Action::Admit(native::encode(&substituted).unwrap()), tx).is_err());
+            assert!(apply(&(Action::Admit(native::encode(&substituted).unwrap())), tx).is_err());
             assert!(
                 native::read_head(
                     tx.world(),
@@ -258,7 +258,7 @@ fn rollback_to_retained_head_is_rejected_and_full_history_preserves_emergency_re
                 native::path(None, AdmissionHistoryPathV1::HistoryBytes),
                 native::encode(&PROVIDER_ADMISSION_HISTORY_MAX_BYTES_V1).unwrap(),
             );
-            assert!(apply(Action::Revoke(native::encode(&revoke).unwrap()), tx).unwrap());
+            assert!(apply(&(Action::Revoke(native::encode(&revoke).unwrap())), tx).unwrap());
             let latest = tx
                 .world
                 .smart_contract_state

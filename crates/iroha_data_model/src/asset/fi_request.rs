@@ -50,13 +50,13 @@ pub struct NormalizedAssetFiContextRequestV1 {
     pub declared_uid_controller: Option<Option<ContractAddress>>,
     /// Exact canonical base wallet scope, retaining all sponsor and route fields.
     pub wallet_scope_canonical: Vec<u8>,
-    /// Complete native LinkApproval target; Transfer needs a new request version.
+    /// Complete native `LinkApproval` target; Transfer needs a new request version.
     pub target: AssetFiContextTargetV1,
 }
 
 type Object = BTreeMap<String, Value>;
 
-/// Normalize the complete independently selected twelve-field LinkApproval target.
+/// Normalize the complete independently selected twelve-field `LinkApproval` target.
 /// This yields comparison inputs only; it does not authenticate ledger state.
 ///
 /// # Errors
@@ -72,7 +72,7 @@ pub fn normalize_asset_fi_link_target_v1(value: &Value) -> Result<SetAssetFiLink
     link_target(object(value)?)
 }
 
-/// Normalize one exact, closed, canonical iOS or Android LinkApproval request.
+/// Normalize one exact, closed, canonical iOS or Android `LinkApproval` request.
 ///
 /// Rejects duplicate/unknown fields, numeric coercions, reserialized originals,
 /// mismatched nested identities and unsupported kinds. Full `u64` values are
@@ -184,10 +184,10 @@ pub fn normalize_asset_fi_context_request_v1(
             return Err("FI target differs from retained FI account".into());
         }
         let uid_controller = optional_controller(binding, "uidController")?;
-        if let Some(controller) = &target.link.controller {
-            if uid_controller.as_ref() != Some(controller) {
-                return Err("FI target differs from retained UID controller".into());
-            }
+        if let Some(controller) = &target.link.controller
+            && uid_controller.as_ref() != Some(controller)
+        {
+            return Err("FI target differs from retained UID controller".into());
         }
         Some(uid_controller)
     } else {
@@ -498,7 +498,7 @@ pub(crate) fn fixture_request_v1(ios: bool) -> Vec<u8> {
     });
     let target = norito::json!({
         "assetDefinitionId": (asset.clone()), "accountId": (wallet.clone()), "fiAccountId": (fi.clone()),
-        "referenceDigest": ("33".repeat(32)), "fiRevision": 9007199254740993_u64,
+        "referenceDigest": ("33".repeat(32)), "fiRevision": 9_007_199_254_740_993_u64,
         "attestationRevision": 2, "revision": 3, "expectedPolicyRevision": 4,
         "enabled": true, "controller": null, "waterfall": false, "reverseWaterfall": false
     });
@@ -512,7 +512,7 @@ pub(crate) fn fixture_request_v1(ios: bool) -> Vec<u8> {
             "binding": {"schema": "boi.wallet-fi-context.v1", "walletScope": scope,
                 "runtimeManifestDigest": ("44".repeat(32)), "uid": ("55".repeat(32)),
                 "fiParticipant": "fi-fixture", "fiAccountId": fi, "uidController": null},
-            "ownerKeyIdentity": "protected-key-generation-7", "minimumCertifiedHeight": 9007199254740993_u64,
+            "ownerKeyIdentity": "protected-key-generation-7", "minimumCertifiedHeight": 9_007_199_254_740_993_u64,
             "challengeHex": ("66".repeat(32)), "target": target
         })
     } else {
@@ -521,7 +521,7 @@ pub(crate) fn fixture_request_v1(ios: bool) -> Vec<u8> {
             "runtimeManifestDigest": ("44".repeat(32)), "ownerKeyIdentity": "protected-key-generation-7",
             "networkId": network, "chainId": "fi-parser-fixture", "assetDefinitionId": asset,
             "walletAccount": wallet, "uid": ("55".repeat(32)), "fiParticipant": "fi-fixture",
-            "referenceDigest": ("33".repeat(32)), "minimumCertifiedHeight": 9007199254740993_u64,
+            "referenceDigest": ("33".repeat(32)), "minimumCertifiedHeight": 9_007_199_254_740_993_u64,
             "challengeHex": ("66".repeat(32)), "target": target
         })
     };
@@ -559,7 +559,7 @@ mod tests {
         assert_eq!(ios.network_id, android.network_id);
         assert_eq!(ios.wallet, android.wallet);
         assert_eq!(ios.asset_id, android.asset_id);
-        assert_eq!(ios.minimum_height, 9007199254740993);
+        assert_eq!(ios.minimum_height, 9_007_199_254_740_993);
         assert_eq!(ios.challenge, [0x66; 32]);
         assert_eq!(ios.uid, [0x55; 32]);
         assert_eq!(ios.runtime_manifest_sha256, [0x44; 32]);
@@ -570,7 +570,7 @@ mod tests {
         let AssetFiContextTargetV1::LinkApproval(approval) = ios.target else {
             panic!("wrong kind");
         };
-        assert_eq!(approval.link.fi_revision, 9007199254740993);
+        assert_eq!(approval.link.fi_revision, 9_007_199_254_740_993);
         assert_eq!(approval.link.attestation_revision, 2);
         assert_eq!(approval.link.revision, 3);
         assert_eq!(approval.expected_policy_revision, 4);

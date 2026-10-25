@@ -157,11 +157,12 @@ fn missing_genesis_authority_is_created_by_its_original_signed_registration() {
         &key,
         &validators,
         Vec::new(),
-        Vec::new(),
-        SumeragiConsensusMode::Permissioned,
-        iroha_data_model::block::consensus::SumeragiRootScope::Global,
-        1000,
-        std::num::NonZeroU64::MIN,
+        vec![authored_staking_fixture_parameter()],
+        (
+            SumeragiConsensusMode::Permissioned,
+            iroha_data_model::block::consensus::SumeragiRootScope::Global,
+        ),
+        (1000, std::num::NonZeroU64::MIN),
     )
     .unwrap();
     // Express a supported raw manifest whose first transaction is the exact account

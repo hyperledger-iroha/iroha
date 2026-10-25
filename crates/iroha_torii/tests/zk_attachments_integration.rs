@@ -170,7 +170,7 @@ async fn attachments_post_get_list_delete_roundtrip() {
         iroha_torii::json_entry("backend", "demo"),
         iroha_torii::json_entry(
             "proof",
-            iroha_torii::json_object(vec![iroha_torii::json_entry("bytes", vec![7u8, 8u8, 9u8])]),
+            &iroha_torii::json_object(vec![iroha_torii::json_entry("bytes", &vec![7u8, 8u8, 9u8])]),
         ),
     ]);
     let body_json = norito::json::to_string(&body_json_value).expect("serialize attachment json");

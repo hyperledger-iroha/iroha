@@ -19,14 +19,14 @@ pub struct ResourceUsage {
 }
 
 /// Raw process instruction counters; validity is checked by the public probe.
-pub(crate) struct ProcessInstructionCounters {
+pub struct ProcessInstructionCounters {
     pub process_id: u32,
     pub process_start_abstime: u64,
     pub instructions: u64,
 }
 
 /// An unavailable process instruction counter, without a numeric substitute.
-pub(crate) enum InstructionCounterError {
+pub enum InstructionCounterError {
     #[cfg(any(test, not(all(target_os = "macos", target_arch = "aarch64"))))]
     Unsupported,
     #[cfg(any(test, all(target_os = "macos", target_arch = "aarch64")))]
@@ -387,8 +387,7 @@ pub fn resource_usage() -> Option<ResourceUsage> {
 }
 
 /// Process-wide retired instructions on the supported diagnostic host.
-pub(crate) fn process_instructions() -> Result<ProcessInstructionCounters, InstructionCounterError>
-{
+pub fn process_instructions() -> Result<ProcessInstructionCounters, InstructionCounterError> {
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     {
         unix::process_instructions()

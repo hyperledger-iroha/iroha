@@ -127,6 +127,8 @@ struct Prepared {
     seed: Option<FoldSeed>,
 }
 
+type PreparedFoldTurn = ControlFlow<FoldTurnStatusV1, (Prepared, Box<dyn NativeFoldJobV1>)>;
+
 impl FoldJobV1 {
     /// Prove the prepared sub-proof; call it without the wallet owner. A payment, activity or
     /// close signal cancels it at a cooperative boundary and releases its work; an ingest or
@@ -155,8 +157,8 @@ impl FoldJobV1 {
                 // released; the proved job keeps only its publication identity.
                 let (ingests, publication) = guard.release(retained);
                 Ok(ProvedFoldV1 {
-                    ingests,
                     turn,
+                    ingests,
                     prepared,
                     progress,
                     publication,
@@ -546,7 +548,7 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
         guard: &FoldGuard,
         turn: &mut FoldTurnV1,
         retained: Option<FoldRetentionV1>,
-    ) -> Result<ControlFlow<FoldTurnStatusV1, (Prepared, Box<dyn NativeFoldJobV1>)>, Error> {
+    ) -> Result<PreparedFoldTurn, Error> {
         let (manifest_digest, manifest) = match self.sync_manifest() {
             Ok(selected) => selected,
             // Selected custody must finish its frozen operation before any fold can start.
@@ -693,7 +695,7 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
             &mut prepared,
             progress,
             Some(existing),
-            adopted,
+            adopted.as_deref(),
             Some(&guard.token),
         )?;
         Ok(ControlFlow::Break(FoldTurnStatusV1::of(
@@ -781,7 +783,7 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
         prepared: &mut Prepared,
         progress: FoldProgress,
         existing: Option<&[u8]>,
-        adopted: Option<Vec<u8>>,
+        adopted: Option<&[u8]>,
         cancellation: Option<&Cancellation>,
     ) -> Result<FoldStatus, Error> {
         let (sequence, ordinal) = (prepared.sequence, prepared.ordinal);
@@ -834,7 +836,7 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
                 // archive or manifest effect. An adopted record was verified above; reuse
                 // requires its exact canonical lineage bytes.
                 let verified = lineage.bytes();
-                if adopted.as_ref() != Some(&verified) {
+                if adopted != Some(verified.as_slice()) {
                     self.proofs.verify_lineage(&lineage, cancellation)?;
                 }
                 fold_metrics::enter(FoldPhaseV1::Publish);
@@ -953,7 +955,7 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
         }
         let status = KagemushaWalletCreditStatusV1 {
             version: 1,
-            statement: step.frozen.capsule.body().statement.clone(),
+            statement: step.frozen.capsule.body().statement,
             proof_digest: valid(step.frozen.capsule.proof_digest())?,
             receipt: step.retained.record.receipt,
             lineage: fold.record.lineage,

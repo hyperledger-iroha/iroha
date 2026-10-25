@@ -246,26 +246,29 @@ mod witness {
         }
     }
 
-    fn coefficients(a: u64, b: u64) -> (u64, u64) {
-        if b == 1 {
+    fn coefficients(left: u64, right: u64) -> (u64, u64) {
+        if right == 1 {
             return (0, 1);
         }
-        let (mut x, mut y) = (i128::from(a), i128::from(b));
+        let (mut dividend, mut divisor) = (i128::from(left), i128::from(right));
         let (mut old, mut current) = (1_i128, 0_i128);
         // At most 93 Euclidean steps for the full 64-bit domain. Candidate
-        // construction is test-only and is not a constant-time custody claim.
+        // construction is test-only and is not left constant-time custody claim.
         for _ in 0..93 {
-            if y != 0 {
-                let q = x / y;
-                (x, y) = (y, x - q * y);
-                (old, current) = (current, old - q * current);
+            if divisor != 0 {
+                let quotient = dividend / divisor;
+                (dividend, divisor) = (divisor, dividend - quotient * divisor);
+                (old, current) = (current, old - quotient * current);
             }
         }
-        assert_eq!((x, y), (1, 0));
-        let u = u64::try_from((-old).rem_euclid(i128::from(b))).unwrap();
-        let numerator = u128::from(u) * u128::from(a) + 1;
-        assert_eq!(numerator % u128::from(b), 0);
-        (u, u64::try_from(numerator / u128::from(b)).unwrap())
+        assert_eq!((dividend, divisor), (1, 0));
+        let coefficient = u64::try_from((-old).rem_euclid(i128::from(right))).unwrap();
+        let numerator = u128::from(coefficient) * u128::from(left) + 1;
+        assert_eq!(numerator % u128::from(right), 0);
+        (
+            coefficient,
+            u64::try_from(numerator / u128::from(right)).unwrap(),
+        )
     }
 
     pub(super) fn repack(bank: &mut [F]) {
@@ -321,22 +324,22 @@ mod witness {
     }
 
     pub(in super::super) fn fill(bank: &mut [F], left: u64, right: u64) {
-        let (a, b) = (
+        let (left_magnitude, right_magnitude) = (
             u64::cast_signed(left).unsigned_abs(),
             u64::cast_signed(right).unsigned_abs(),
         );
-        let (mut g, mut rest) = (a, b);
+        let (mut gcd, mut rest) = (left_magnitude, right_magnitude);
         for _ in 0..93 {
             if rest != 0 {
-                (g, rest) = (rest, g % rest);
+                (gcd, rest) = (rest, gcd % rest);
             }
         }
         assert_eq!(rest, 0);
         let mut payload = [F::ZERO; PAYLOAD];
-        for (offset, value) in [(A, a), (B, b), (RESULT, g)] {
+        for (offset, value) in [(A, left_magnitude), (B, right_magnitude), (RESULT, gcd)] {
             digits(&mut payload, offset, WORD, value);
         }
-        for (operand, raw, magnitude) in [(0, left, a), (1, right, b)] {
+        for (operand, raw, magnitude) in [(0, left, left_magnitude), (1, right, right_magnitude)] {
             let sign = raw >> 63;
             let mut borrow = 0_i128;
             for index in 0..4 {
@@ -346,24 +349,36 @@ mod witness {
                 assert_eq!(residual % (1 << 16), 0);
                 borrow = -residual / (1 << 16);
                 assert!((0..=1).contains(&borrow));
-                payload[MAGNITUDE_BORROWS + operand * 4 + index] = F(borrow as u64);
+                payload[MAGNITUDE_BORROWS + operand * 4 + index] = F(u64::from_le_bytes(
+                    i128::to_le_bytes(borrow)[..8]
+                        .try_into()
+                        .expect("low-byte width"),
+                ));
             }
             assert_eq!(borrow, i128::from(sign));
         }
-        if b != 0 {
-            let (normal_a, normal_b) = (a / g, b / g);
-            let (u, v) = coefficients(normal_a, normal_b);
-            for (offset, value) in [(NORMAL_A, normal_a), (NORMAL_B, normal_b), (U, u), (V, v)] {
+        if right_magnitude != 0 {
+            let (normal_a, normal_b) = (left_magnitude / gcd, right_magnitude / gcd);
+            let (left_coefficient, right_coefficient) = coefficients(normal_a, normal_b);
+            for (offset, value) in [
+                (NORMAL_A, normal_a),
+                (NORMAL_B, normal_b),
+                (U, left_coefficient),
+                (V, right_coefficient),
+            ] {
                 digits(&mut payload, offset, WORD, value);
             }
-            for (product, normalized, original) in [(0, normal_a, a), (1, normal_b, b)] {
+            for (product, normalized, original) in [
+                (0, normal_a, left_magnitude),
+                (1, normal_b, right_magnitude),
+            ] {
                 let mut carry = 0_u64;
                 for index in 0..8 {
                     let sum =
                         (0..4)
                             .filter(|i| index >= *i && index - *i < 4)
                             .fold(carry, |sum, i| {
-                                sum + ((g >> (16 * i)) & 0xffff)
+                                sum + ((gcd >> (16 * i)) & 0xffff)
                                     * ((normalized >> (16 * (index - i))) & 0xffff)
                             });
                     assert_eq!(
@@ -392,11 +407,11 @@ mod witness {
             for index in 0..8 {
                 let mut sum = carry - i128::from(index == 0);
                 for i in (0..4).filter(|i| index >= *i && index - *i < 4) {
-                    let j = index - i;
-                    sum += i128::from((v >> (16 * i)) & 0xffff)
-                        * i128::from((normal_b >> (16 * j)) & 0xffff);
-                    sum -= i128::from((u >> (16 * i)) & 0xffff)
-                        * i128::from((normal_a >> (16 * j)) & 0xffff);
+                    let other_limb = index - i;
+                    sum += i128::from((right_coefficient >> (16 * i)) & 0xffff)
+                        * i128::from((normal_b >> (16 * other_limb)) & 0xffff);
+                    sum -= i128::from((left_coefficient >> (16 * i)) & 0xffff)
+                        * i128::from((normal_a >> (16 * other_limb)) & 0xffff);
                 }
                 assert_eq!(sum % (1 << 16), 0);
                 carry = sum / (1 << 16);
@@ -406,17 +421,27 @@ mod witness {
                         &mut payload,
                         BEZOUT_CARRIES + index * 10,
                         10,
-                        (carry + (1 << 18)) as u64,
+                        u64::from_le_bytes(
+                            i128::to_le_bytes(carry + (1 << 18))[..8]
+                                .try_into()
+                                .expect("low-byte width"),
+                        ),
                     );
                 } else {
                     assert_eq!(carry, 0);
                 }
             }
-            digits(&mut payload, DIFFERENCE, WORD, u.wrapping_sub(normal_b));
+            digits(
+                &mut payload,
+                DIFFERENCE,
+                WORD,
+                left_coefficient.wrapping_sub(normal_b),
+            );
             let mut borrow = 0;
             for index in 0..4 {
                 borrow = u64::from(
-                    ((u >> (16 * index)) & 0xffff) < ((normal_b >> (16 * index)) & 0xffff) + borrow,
+                    ((left_coefficient >> (16 * index)) & 0xffff)
+                        < ((normal_b >> (16 * index)) & 0xffff) + borrow,
                 );
                 payload[STRICT_BORROWS + index] = F(borrow);
             }
@@ -455,17 +480,29 @@ mod tests {
     // after replacing normalized words. A wrong Bezout integer has a retained
     // nonzero low-limb residue; no candidate host check may hide that attack.
     fn replace_normalized(bank: &mut [F], words: [u64; 5]) {
-        let [g, a, b, u, v] = words;
-        for (offset, value) in [(RESULT, g), (NORMAL_A, a), (NORMAL_B, b), (U, u), (V, v)] {
+        let [
+            gcd,
+            normalized_left,
+            normalized_right,
+            left_coefficient,
+            right_coefficient,
+        ] = words;
+        for (offset, value) in [
+            (RESULT, gcd),
+            (NORMAL_A, normalized_left),
+            (NORMAL_B, normalized_right),
+            (U, left_coefficient),
+            (V, right_coefficient),
+        ] {
             write_digits(bank, offset, WORD, value);
         }
-        for (product, normalized) in [(0, a), (1, b)] {
+        for (product, normalized) in [(0, normalized_left), (1, normalized_right)] {
             let mut carry = 0_u64;
             for index in 0..7 {
                 let sum = (0..4)
                     .filter(|i| index >= *i && index - *i < 4)
                     .fold(carry, |sum, i| {
-                        sum + ((g >> (16 * i)) & 0xffff)
+                        sum + ((gcd >> (16 * i)) & 0xffff)
                             * ((normalized >> (16 * (index - i))) & 0xffff)
                     });
                 carry = sum >> 16;
@@ -476,9 +513,11 @@ mod tests {
         for index in 0..7 {
             let mut sum = carry - i128::from(index == 0);
             for i in (0..4).filter(|i| index >= *i && index - *i < 4) {
-                let j = index - i;
-                sum += i128::from((v >> (16 * i)) & 0xffff) * i128::from((b >> (16 * j)) & 0xffff);
-                sum -= i128::from((u >> (16 * i)) & 0xffff) * i128::from((a >> (16 * j)) & 0xffff);
+                let other_limb = index - i;
+                sum += i128::from((right_coefficient >> (16 * i)) & 0xffff)
+                    * i128::from((normalized_right >> (16 * other_limb)) & 0xffff);
+                sum -= i128::from((left_coefficient >> (16 * i)) & 0xffff)
+                    * i128::from((normalized_left >> (16 * other_limb)) & 0xffff);
             }
             carry = sum.div_euclid(1 << 16);
             assert!((-(1 << 18)..(1 << 18)).contains(&carry));
@@ -486,14 +525,25 @@ mod tests {
                 bank,
                 BEZOUT_CARRIES + index * 10,
                 10,
-                (carry + (1 << 18)) as u64,
+                u64::from_le_bytes(
+                    i128::to_le_bytes(carry + (1 << 18))[..8]
+                        .try_into()
+                        .expect("low-byte width"),
+                ),
             );
         }
-        write_digits(bank, DIFFERENCE, WORD, u.wrapping_sub(b));
+        write_digits(
+            bank,
+            DIFFERENCE,
+            WORD,
+            left_coefficient.wrapping_sub(normalized_right),
+        );
         let mut borrow = 0;
         for index in 0..4 {
-            borrow =
-                u64::from(((u >> (16 * index)) & 0xffff) < ((b >> (16 * index)) & 0xffff) + borrow);
+            borrow = u64::from(
+                ((left_coefficient >> (16 * index)) & 0xffff)
+                    < ((normalized_right >> (16 * index)) & 0xffff) + borrow,
+            );
             bank[POOL[STRICT_BORROWS + index]] = F(borrow);
         }
         witness::repack(bank);

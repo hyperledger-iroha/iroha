@@ -868,7 +868,9 @@ Root {
             },
             fee_sink_account_id: sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV,
             sponsor_vault_custody_account_id: sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT,
-            successful_claim_fee_exempt_authorities: {},
+            successful_claim_fee_exempt_authorities: RootFeeExemptions(
+                [],
+            ),
             base_fee: Quantity(
                 Numeric {
                     mantissa: 0,
@@ -2021,15 +2023,7 @@ Root {
         enable_sm_openssl_preview: false,
         sm_intrinsics: Auto,
         default_hash: "blake2b-256",
-        allowed_signing: [
-            Ed25519,
-            Secp256k1,
-        ],
         sm2_distid_default: "1234567812345678",
-        allowed_curve_ids: [
-            1,
-            4,
-        ],
     },
     settlement: Settlement {
         router: Router {

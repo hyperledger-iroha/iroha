@@ -45,12 +45,12 @@ struct Source {
     reads: AtomicUsize,
 }
 impl PrivateSettlementContextSource for Source {
-    fn fetch<'a>(
-        &'a self,
+    fn fetch(
+        &self,
         height: u64,
         selectors: PrivateSettlementContextRequestV1,
     ) -> WorkflowFuture<
-        'a,
+        '_,
         std::result::Result<PrivateSettlementContextsProofV1, OneCallPrivateSettlementError>,
     > {
         Box::pin(async move {
@@ -259,7 +259,8 @@ fn request(
 async fn private_onecall_cold_reopen_preserves_context_before_wallet_and_never_fetches_replacement()
 {
     let mut native = NativeFinalityFixture::start("private-onecall-cold-context");
-    let mut builder = client_with_base_url("http://context.invalid/".parse().unwrap()).to_builder();
+    let mut builder =
+        client_with_base_url(&"http://context.invalid/".parse().unwrap()).to_builder();
     builder.network_id = native.network_id();
     builder.chain = native.chain_id().parse().unwrap();
     let client = builder.build().unwrap();
@@ -436,7 +437,8 @@ impl PrivateSettlementWallet for HeldWallet {
 #[tokio::test(flavor = "current_thread")]
 async fn private_onecall_cancelled_wallet_worker_keeps_original_round_lease_until_exit() {
     let mut native = NativeFinalityFixture::start("private-onecall-cancel-custody");
-    let mut builder = client_with_base_url("http://context.invalid/".parse().unwrap()).to_builder();
+    let mut builder =
+        client_with_base_url(&"http://context.invalid/".parse().unwrap()).to_builder();
     builder.network_id = native.network_id();
     builder.chain = native.chain_id().parse().unwrap();
     let client = builder.build().unwrap();
@@ -561,7 +563,7 @@ async fn private_onecall_all_public_intent_bindings_precede_every_wallet_effect(
     for changed_policy in [false, true] {
         let mut native = NativeFinalityFixture::start("private-onecall-public-binding");
         let mut builder =
-            client_with_base_url("http://context.invalid/".parse().unwrap()).to_builder();
+            client_with_base_url(&"http://context.invalid/".parse().unwrap()).to_builder();
         builder.network_id = native.network_id();
         builder.chain = native.chain_id().parse().unwrap();
         let client = builder.build().unwrap();
@@ -683,7 +685,8 @@ async fn private_onecall_all_public_intent_bindings_precede_every_wallet_effect(
 #[tokio::test(flavor = "current_thread")]
 async fn private_onecall_fresh_readonly_recovery_has_no_journal_or_wallet_effects() {
     let native = NativeFinalityFixture::start("private-onecall-cold-context");
-    let mut builder = client_with_base_url("http://context.invalid/".parse().unwrap()).to_builder();
+    let mut builder =
+        client_with_base_url(&"http://context.invalid/".parse().unwrap()).to_builder();
     builder.network_id = native.network_id();
     builder.chain = native.chain_id().parse().unwrap();
     let client = builder.build().unwrap();
@@ -865,7 +868,7 @@ async fn private_onecall_original_failure_category_survives_store_reopen_without
     ] {
         let mut native = NativeFinalityFixture::start("private-preparation-classification");
         let mut builder =
-            client_with_base_url("http://context.invalid/".parse().unwrap()).to_builder();
+            client_with_base_url(&"http://context.invalid/".parse().unwrap()).to_builder();
         builder.network_id = native.network_id();
         builder.chain = native.chain_id().parse().unwrap();
         let client = builder.build().unwrap();

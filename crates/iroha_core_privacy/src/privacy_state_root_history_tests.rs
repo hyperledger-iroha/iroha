@@ -11,7 +11,7 @@ fn root_history_prunes_independently_per_namespace() {
     let record = root_provenance();
     let independent_namespace = pgc_namespace(0xE1);
     for epoch in 1..=2_048 {
-        let root_byte = (epoch % 251 + 1) as u8;
+        let root_byte = u8::try_from(epoch % 251 + 1).expect("root byte is below 252");
         roots.insert(
             x509_root_key(
                 PrivacyRootRoleV1::CertificateAuthorityMembership,

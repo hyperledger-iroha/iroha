@@ -96,6 +96,7 @@ fn outcome(value: Result<()>) -> std::result::Result<(), String> {
 
 #[test]
 fn local_census_keeps_native_leaf_order_and_reduces_actual_ancestry_brackets() {
+    use operation_scope_tests::Point as Leaf;
     let _resources = crate::managed::native_test_guard();
     let (_fixture, history) = shared_snapshot_tests::history_with_bodies(3);
     let native = history
@@ -121,7 +122,6 @@ fn local_census_keeps_native_leaf_order_and_reduces_actual_ancestry_brackets() {
     assert_eq!(old_records, new_records);
     assert!(new_records[0] > 0 && new_records[1] > 0);
     assert_eq!(old_leaves, new_leaves);
-    use operation_scope_tests::Point as Leaf;
     assert_eq!(
         new_leaves,
         [
@@ -161,6 +161,14 @@ fn local_census_keeps_native_leaf_order_and_reduces_actual_ancestry_brackets() {
 
 #[test]
 fn local_census_inherited_and_late_decode_owners_keep_original_work_and_errors() {
+    fn with_native_work<T>(read: impl FnOnce() -> T) -> (T, iroha_fs::CustodyWorkV1) {
+        let before = iroha_fs::CustodyWorkV1::current_thread();
+        let result = read();
+        (
+            result,
+            iroha_fs::CustodyWorkV1::current_thread().since(before),
+        )
+    }
     let _resources = crate::managed::native_test_guard();
     let (_fixture, history) = shared_snapshot_tests::history_with_bodies(3);
     let native = history
@@ -171,14 +179,6 @@ fn local_census_inherited_and_late_decode_owners_keep_original_work_and_errors()
     let snapshot = SnapshotReadPass {
         head: &history.bodies.last().unwrap().snapshots,
     };
-    fn with_native_work<T>(read: impl FnOnce() -> T) -> (T, iroha_fs::CustodyWorkV1) {
-        let before = iroha_fs::CustodyWorkV1::current_thread();
-        let result = read();
-        (
-            result,
-            iroha_fs::CustodyWorkV1::current_thread().since(before),
-        )
-    }
     let run = |original, allocation| {
         norito::core::with_decode_limits_measured(limits(allocation), || {
             with_native_work(|| {
@@ -234,18 +234,14 @@ fn local_census_persistent_original_owners_override_ordinary_result_and_restore(
                 let changed = path.clone();
                 let displaced = moved.clone();
                 let hook: Hook = Box::new(move || {
-                    match attack {
-                        "permission" => {
-                            fs::set_permissions(&changed, fs::Permissions::from_mode(0o755))
-                                .unwrap()
-                        }
-                        _ => {
-                            fs::rename(&changed, &displaced).unwrap();
-                            if attack == "replacement" {
-                                fs::create_dir(&changed).unwrap();
-                                fs::set_permissions(&changed, fs::Permissions::from_mode(0o700))
-                                    .unwrap();
-                            }
+                    if attack == "permission" {
+                        fs::set_permissions(&changed, fs::Permissions::from_mode(0o755)).unwrap()
+                    } else {
+                        fs::rename(&changed, &displaced).unwrap();
+                        if attack == "replacement" {
+                            fs::create_dir(&changed).unwrap();
+                            fs::set_permissions(&changed, fs::Permissions::from_mode(0o700))
+                                .unwrap();
                         }
                     }
                     if semantic_error {
@@ -256,16 +252,13 @@ fn local_census_persistent_original_owners_override_ordinary_result_and_restore(
                 });
                 let (result, counts) =
                     observe(false, Some(hook), || native.test_local_census(&snapshot));
-                match attack {
-                    "permission" => {
-                        fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap()
+                if attack == "permission" {
+                    fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap()
+                } else {
+                    if attack == "replacement" {
+                        fs::remove_dir(&path).unwrap();
                     }
-                    _ => {
-                        if attack == "replacement" {
-                            fs::remove_dir(&path).unwrap();
-                        }
-                        fs::rename(&moved, &path).unwrap();
-                    }
+                    fs::rename(&moved, &path).unwrap();
                 }
                 assert_eq!((counts.root, counts.operation), (1, 1));
                 assert!(matches!(result, Err(Error::Io(_))), "{attack}: {result:?}");
@@ -749,20 +742,19 @@ fn graph_local_census_closes_original_native_owners_on_success_and_inner_error()
                             move |point| {
                                 if !once && point == Point::Inventory {
                                     once = true;
-                                    match attack {
-                                        "permission" => fs::set_permissions(
+                                    if attack == "permission" {
+                                        fs::set_permissions(
                                             &changed,
                                             fs::Permissions::from_mode(0o755),
-                                        )?,
-                                        _ => {
-                                            fs::rename(&changed, &displaced)?;
-                                            if attack == "replacement" {
-                                                fs::create_dir(&changed)?;
-                                                fs::set_permissions(
-                                                    &changed,
-                                                    fs::Permissions::from_mode(0o700),
-                                                )?;
-                                            }
+                                        )?
+                                    } else {
+                                        fs::rename(&changed, &displaced)?;
+                                        if attack == "replacement" {
+                                            fs::create_dir(&changed)?;
+                                            fs::set_permissions(
+                                                &changed,
+                                                fs::Permissions::from_mode(0o700),
+                                            )?;
                                         }
                                     }
                                     if ordinary_error {
@@ -774,16 +766,13 @@ fn graph_local_census_closes_original_native_owners_on_success_and_inner_error()
                             || native.test_require_current(6).0,
                         )
                     });
-                    match attack {
-                        "permission" => {
-                            fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap()
+                    if attack == "permission" {
+                        fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap()
+                    } else {
+                        if attack == "replacement" {
+                            fs::remove_dir(&path).unwrap();
                         }
-                        _ => {
-                            if attack == "replacement" {
-                                fs::remove_dir(&path).unwrap();
-                            }
-                            fs::rename(&held, &path).unwrap();
-                        }
+                        fs::rename(&held, &path).unwrap();
                     }
                     // The full snapshot exit outranks the local operation/root result.
                     // Renaming an old body changes its container names (also when an empty

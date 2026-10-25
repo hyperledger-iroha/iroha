@@ -220,8 +220,8 @@ fn deployment_peer_clients_reject_runtime_chain_pin_mismatch_before_io() {
     let routes: Vec<_> = (9100..9104)
         .map(|port| format!("http://127.0.0.1:{port}/"))
         .collect();
-    let routed = peer_clients(&context, &trust, &routes).unwrap();
-    for (client, origin) in routed.iter().zip(&routes) {
+    let selected_clients = peer_clients(&context, &trust, &routes).unwrap();
+    for (client, origin) in selected_clients.iter().zip(&routes) {
         assert_eq!(client.to_builder().torii_url.as_str(), origin);
     }
     assert_eq!(
@@ -378,7 +378,7 @@ fn deployment_peer_reads_join_all_workers_and_report_first_error() {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     let finished = AtomicUsize::new(0);
-    let result = read_four_peers(&[(); 4], 369, |index, _| -> Result<()> {
+    let result = read_four_peers(&[(); 4], 369, |index, ()| -> Result<()> {
         finished.fetch_add(1, Ordering::SeqCst);
         Err(eyre!("peer error {index}"))
     });
@@ -394,7 +394,7 @@ fn deployment_peer_reads_inherit_configured_address_profile() {
     use iroha_data_model::account::address::{ChainDiscriminantGuard, chain_discriminant};
 
     let _caller_profile = ChainDiscriminantGuard::enter(0);
-    let profiles = read_four_peers(&[(); 4], 369, |_, _| Ok(chain_discriminant()))
+    let profiles = read_four_peers(&[(); 4], 369, |_, ()| Ok(chain_discriminant()))
         .expect("worker address profiles");
     assert_eq!(profiles, vec![369; 4]);
     assert_eq!(chain_discriminant(), 0, "caller override must remain local");
@@ -405,7 +405,7 @@ fn deployment_peer_reads_recover_worker_panic_after_joining_all() {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     let finished = AtomicUsize::new(0);
-    let result = read_four_peers(&[(); 4], 369, |index, _| {
+    let result = read_four_peers(&[(); 4], 369, |index, ()| {
         assert_ne!(index, 1, "injected peer worker panic");
         finished.fetch_add(1, Ordering::SeqCst);
         Ok(())
@@ -435,6 +435,10 @@ fn deployment_carrier_results_require_exact_bytes_before_publication() {
     );
 }
 
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "Fixture responses use the same optional shape as absent peer status"
+)]
 fn peer_progress_status(scope: &str, kind: &str) -> Option<PipelineTransactionStatusResponse> {
     Some(PipelineTransactionStatusResponse {
         hash: "ab".repeat(32),
@@ -469,7 +473,8 @@ fn deployment_peer_progress_requires_valid_complete_status_pair() {
     for local in invalid {
         for global in [None, queued.clone()] {
             assert!(
-                peer_carrier_progress("pending", &hash, &global, &local, 9).is_err(),
+                peer_carrier_progress("pending", &hash, (global).as_ref(), (local).as_ref(), 9)
+                    .is_err(),
                 "a pending or absent global response must not hide malformed local status"
             );
         }
@@ -482,17 +487,30 @@ fn deployment_peer_progress_retries_only_pending_or_newer_carrier() {
     let global = peer_progress_status("global", "Applied");
     let local = peer_progress_status("local", "Applied");
     assert!(matches!(
-        peer_carrier_progress("pending", &hash, &None, &local, 9).unwrap(),
+        peer_carrier_progress("pending", &hash, None, (local).as_ref(), 9).unwrap(),
         PeerRead::Pending
     ));
     assert!(matches!(
-        peer_carrier_progress("applied_verification_pending", &hash, &global, &local, 9).unwrap(),
+        peer_carrier_progress(
+            "applied_verification_pending",
+            &hash,
+            (global).as_ref(),
+            (local).as_ref(),
+            9
+        )
+        .unwrap(),
         PeerRead::Pending
     ));
     for tip in [10, 11] {
         assert!(matches!(
-            peer_carrier_progress("applied_verification_pending", &hash, &global, &local, tip)
-                .unwrap(),
+            peer_carrier_progress(
+                "applied_verification_pending",
+                &hash,
+                (global).as_ref(),
+                (local).as_ref(),
+                tip
+            )
+            .unwrap(),
             PeerRead::Verified(10)
         ));
     }
@@ -501,22 +519,24 @@ fn deployment_peer_progress_retries_only_pending_or_newer_carrier() {
             peer_carrier_progress(
                 "failed",
                 &hash,
-                &None,
-                &peer_progress_status("local", kind),
+                None,
+                (peer_progress_status("local", kind)).as_ref(),
                 9
             )
             .is_err()
         );
     }
     for state in ["failed", "unknown", "pending"] {
-        assert!(peer_carrier_progress(state, &hash, &global, &local, 9).is_err());
+        assert!(
+            peer_carrier_progress(state, &hash, (global).as_ref(), (local).as_ref(), 9).is_err()
+        );
     }
 }
 
 #[test]
 fn deployment_peer_progress_never_masks_fixed_worker_errors() {
     for fixed_peer in [0, 1, 3] {
-        let result = read_four_peers(&[(); 4], 369, |index, _| -> Result<PeerRead<()>> {
+        let result = read_four_peers(&[(); 4], 369, |index, ()| -> Result<PeerRead<()>> {
             if index == fixed_peer {
                 Err(eyre!("fixed invalid proof"))
             } else {
@@ -594,7 +614,7 @@ fn deployment_attestation_progress_joins_all_peers_and_preserves_fixed_errors() 
     use std::sync::atomic::{AtomicUsize, Ordering};
     for fixed_peer in [0, 1, 2, 3] {
         let reads = AtomicUsize::new(0);
-        let result = read_four_peers(&[(); 4], 369, |index, _| {
+        let result = read_four_peers(&[(); 4], 369, |index, ()| {
             reads.fetch_add(1, Ordering::SeqCst);
             peer_attestation_progress::<()>(if index == fixed_peer {
                 Err(eyre!("fixed malformed attestation"))
@@ -668,7 +688,7 @@ fn completion_requires_the_selected_running_native_dataspace_lane() {
     let instance = iroha_core::sumeragi::lanes::lane_instance(
         &iroha_core::sumeragi::crypto::BlsCrypto::new(),
         &manifest.network_id,
-        &manifest.finality.chain.to_string(),
+        manifest.finality.chain.as_ref(),
         &record,
     );
     let live = SumeragiLaneStatus {
@@ -784,8 +804,8 @@ fn deployment_route_override_is_only_admitted_for_read_only_status() {
         for peer in &trust.peers {
             argv.extend(["--verification-peer-url", peer.torii_origin.as_str()]);
         }
-        let args = crate::Args::try_parse_from(argv).unwrap();
-        let crate::Command::Dataspace(command) = args.command else {
+        let parsed = crate::Args::try_parse_from(argv).unwrap();
+        let crate::Command::Dataspace(command) = parsed.command else {
             panic!("dataspace command")
         };
         assert_eq!(

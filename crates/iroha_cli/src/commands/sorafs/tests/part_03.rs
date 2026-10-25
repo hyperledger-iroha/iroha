@@ -294,7 +294,7 @@ fn incentives_open_dispute_produces_payload() {
         .expect("write instruction");
     let dispute_file = NamedTempFile::new().expect("dispute file");
     let dispute_path = dispute_file.path().to_path_buf();
-    let mut argv = vec![
+    let mut command_line = vec![
         "open-dispute".to_owned(),
         "--instruction".to_owned(),
         instruction_file.path().to_string_lossy().into_owned(),
@@ -309,11 +309,11 @@ fn incentives_open_dispute_produces_payload() {
         "--norito-out".to_owned(),
         dispute_path.to_string_lossy().into_owned(),
     ];
-    let args = DisputeCli::try_parse_from(&argv)
+    let args = DisputeCli::try_parse_from(&command_line)
         .expect("dispute authoring needs no treasury account")
         .args;
-    argv.extend(["--treasury-account".to_owned(), sample_account_literal("treasury")]);
-    assert!(DisputeCli::try_parse_from(&argv).is_err());
+    command_line.extend(["--treasury-account".to_owned(), sample_account_literal("treasury")]);
+    assert!(DisputeCli::try_parse_from(&command_line).is_err());
     let mut ctx = TestContext::new();
     args.run(&mut ctx).expect("open dispute runs");
     assert_eq!(ctx.outputs().len(), 1, "expected JSON output");

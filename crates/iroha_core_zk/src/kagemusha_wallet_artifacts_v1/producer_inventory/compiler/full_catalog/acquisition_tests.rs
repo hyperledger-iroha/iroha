@@ -98,7 +98,7 @@ impl Selection {
         Ok(())
     }
 
-    fn require_inventory(self, error: WalletSourcesErrorV1) {
+    fn require_inventory(self, error: &WalletSourcesErrorV1) {
         assert!(!error.is_cancelled());
         assert!(!error.is_unavailable());
         match self {
@@ -113,7 +113,7 @@ impl Selection {
         }
     }
 
-    fn require_unavailable(self, error: WalletSourcesErrorV1) {
+    fn require_unavailable(self, error: &WalletSourcesErrorV1) {
         assert!(!error.is_cancelled());
         assert!(error.is_unavailable());
         match self {
@@ -222,7 +222,7 @@ fn exercise(
     for cap in [row_cap, byte_cap] {
         let mut observed = Observed::new(source, None);
         selected.require_inventory(
-            selected
+            &selected
                 .acquire(qualified, &mut observed, cap, None)
                 .unwrap_err(),
         );
@@ -253,11 +253,11 @@ fn exercise(
                 .unwrap_err();
             match fault {
                 Fault::Missing => {
-                    selected.require_unavailable(error);
+                    selected.require_unavailable(&error);
                     assert!(!observed.flipped.get());
                 }
                 Fault::Changed => {
-                    selected.require_inventory(error);
+                    selected.require_inventory(&error);
                     assert!(observed.flipped.get(), "actual selected stream changed");
                 }
             }

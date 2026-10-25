@@ -1,6 +1,6 @@
-//! Helpers for resolving SoraFS manifests by their blinded CID representations.
+//! Helpers for resolving `SoraFS` manifests by their blinded CID representations.
 //!
-//! The gateway ingests daily salt announcements published by the SoraNet Salt Council. Requests can
+//! The gateway ingests daily salt announcements published by the `SoraNet` Salt Council. Requests can
 //! then reference manifests using a BLAKE3 digest derived from the salt and canonical CID instead
 //! of exposing the raw identifier on the wire.
 use hex::FromHex;
@@ -1020,7 +1020,7 @@ impl EpochBloom {
             bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15],
         ]);
         if h2 == 0 {
-            h2 = 0x9e3779b97f4a7c15;
+            h2 = 0x9e37_79b9_7f4a_7c15;
         }
         std::array::from_fn(|index| {
             let position = h1.wrapping_add((index as u64).wrapping_mul(h2)) & self.mask;
@@ -1380,7 +1380,9 @@ mod tests {
         ));
 
         let dir = tempfile::tempdir().expect("tempdir");
-        for epoch in 0..=MAX_SALT_ANNOUNCEMENT_FILES_V1 as u32 {
+        for epoch in 0..=u32::try_from(MAX_SALT_ANNOUNCEMENT_FILES_V1)
+            .expect("bounded fixture or protocol constant fits u32")
+        {
             write_announcement(dir.path(), epoch, epoch.checked_sub(1), SALT_ALPHA);
         }
         assert!(matches!(

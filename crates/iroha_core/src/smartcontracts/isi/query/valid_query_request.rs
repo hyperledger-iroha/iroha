@@ -110,7 +110,7 @@ impl ValidQueryRequest {
         live_query_store: &LiveQueryStoreHandle,
         state: &impl StateReadOnly,
         authority: &AccountId,
-        replay_state: Weak<State>,
+        replay_state: &Weak<State>,
     ) -> Result<QueryResponse, Error> {
         self.execute_stored_and_bind_revalidation(
             live_query_store,
@@ -120,7 +120,7 @@ impl ValidQueryRequest {
             None,
         )
     }
-    /// Execute a validated stored query with an owning replay state and the
+    /// Execute a validated stored query with a replay state handle and the
     /// client-provided budget for the initial `Start` request.
     ///
     /// # Errors
@@ -131,7 +131,7 @@ impl ValidQueryRequest {
         live_query_store: &LiveQueryStoreHandle,
         state: &impl StateReadOnly,
         authority: &AccountId,
-        replay_state: Weak<State>,
+        replay_state: &Weak<State>,
         stored_start_budget: Option<u64>,
     ) -> Result<QueryResponse, Error> {
         self.execute_stored_and_bind_revalidation(
@@ -147,7 +147,7 @@ impl ValidQueryRequest {
         live_query_store: &LiveQueryStoreHandle,
         state: &impl StateReadOnly,
         authority: &AccountId,
-        replay_state: Option<Weak<State>>,
+        replay_state: Option<&Weak<State>>,
         stored_start_budget: Option<u64>,
     ) -> Result<QueryResponse, Error> {
         if let Some(ordinary_limits) = self.limits.ordinary_execution_limits {
@@ -193,7 +193,7 @@ impl ValidQueryRequest {
         live_query_store: &LiveQueryStoreHandle,
         state: &impl StateReadOnly,
         authority: &AccountId,
-        replay_state: Option<Weak<State>>,
+        replay_state: Option<&Weak<State>>,
         stored_start_budget: Option<u64>,
     ) -> Result<QueryResponse, Error> {
         let Self { request, limits } = self;
@@ -242,7 +242,7 @@ impl ValidQueryRequest {
                             live_query_store,
                             authority,
                             $stored_cursor_budget,
-                            replay_state.clone(),
+                            replay_state.cloned(),
                             source_stats,
                         )?;
                         return Ok(QueryResponse::Iterable(output));
@@ -462,16 +462,16 @@ impl ValidQueryRequest {
                             .decode::<SelectorTuple<CommittedTransaction>>(selector_bytes)?;
                         let output = handle_find_transactions_stored(
                             state,
-                            pred,
+                            &(pred),
                             sel,
                             params,
                             limits,
                             live_query_store,
                             authority,
                             stored_cursor_budget,
-                            replay_state.clone(),
+                            replay_state.cloned(),
                         )?;
-                        return Ok(QueryResponse::Iterable(output));
+                        Ok(QueryResponse::Iterable(output))
                     }
                     QueryItemKind::SignedBlock => run_query!(
                         iroha_data_model::block::SignedBlock,
@@ -523,7 +523,7 @@ impl ValidQueryRequest {
                                         live_query_store,
                                         authority,
                                         stored_cursor_budget,
-                                        replay_state.clone(),
+                                        replay_state.cloned(),
                                         source_stats,
                                     )?;
                                     return Ok(QueryResponse::Iterable(output));
@@ -566,10 +566,10 @@ impl ValidQueryRequest {
                             live_query_store,
                             authority,
                             stored_cursor_budget,
-                            replay_state.clone(),
+                            replay_state.cloned(),
                             source_stats,
                         )?;
-                        return Ok(QueryResponse::Iterable(output));
+                        Ok(QueryResponse::Iterable(output))
                     }
                     QueryItemKind::AssetEscrowRecord => run_query!(
                         iroha_data_model::escrow::AssetEscrowRecord,
@@ -1098,13 +1098,13 @@ impl ValidQueryRequest {
                             .decode::<SelectorTuple<CommittedTransaction>>(selector_bytes)?;
                         let (output, processed_items) = handle_find_transactions_ephemeral(
                             state,
-                            pred,
+                            &(pred),
                             sel,
                             params,
                             limits,
                             budget_items,
                         )?;
-                        return Ok((QueryResponse::Iterable(output), processed_items));
+                        Ok((QueryResponse::Iterable(output), processed_items))
                     }
                     QueryItemKind::SignedBlock => run_query!(
                         iroha_data_model::block::SignedBlock,
@@ -1198,7 +1198,7 @@ impl ValidQueryRequest {
                                 budget_items,
                                 source_stats,
                             )?;
-                        return Ok((QueryResponse::Iterable(output), processed_items));
+                        Ok((QueryResponse::Iterable(output), processed_items))
                     }
                     QueryItemKind::AssetEscrowRecord => run_query!(
                         iroha_data_model::escrow::AssetEscrowRecord,

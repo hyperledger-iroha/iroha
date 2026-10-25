@@ -1,4 +1,4 @@
-//! Fixed descriptor launch using posix_spawn file actions and bounded private socket pipes.
+//! Fixed descriptor launch using `posix_spawn` file actions and bounded private socket pipes.
 // This narrow POSIX boundary owns descriptors and child status; individual calls document safety.
 #![allow(unsafe_code)]
 
@@ -34,10 +34,8 @@ fn ready(fd: i32, events: i16, deadline: Instant) -> Result<()> {
         let remaining = deadline
             .checked_duration_since(Instant::now())
             .ok_or(Error::Unavailable)?;
-        let milliseconds = remaining
-            .as_millis()
-            .saturating_add(1)
-            .min(i32::MAX as u128) as i32;
+        let milliseconds =
+            i32::try_from(remaining.as_millis().saturating_add(1)).unwrap_or(i32::MAX);
         let mut descriptor = libc::pollfd {
             fd,
             events,
@@ -417,7 +415,10 @@ mod tests {
         let independent = File::options().read(true).write(true).open(path).unwrap();
         assert!(independent.try_lock().is_err());
         for payload in [b"exact original".as_slice(), &[0; 4096]] {
-            let mut frame = (payload.len() as u32).to_le_bytes().to_vec();
+            let mut frame = u32::try_from(payload.len())
+                .expect("fixture frame length fits u32")
+                .to_le_bytes()
+                .to_vec();
             frame.extend_from_slice(payload);
             assert_eq!(
                 process.exchange(&frame, Duration::from_secs(5)).unwrap(),

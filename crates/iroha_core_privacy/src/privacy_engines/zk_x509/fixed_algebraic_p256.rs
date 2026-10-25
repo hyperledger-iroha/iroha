@@ -360,10 +360,10 @@ pub fn zk_x509_p256_fixed_algebraic_schedule_for_registration_v1(
 }
 #[cfg(test)]
 /// Borrow one registration's fixed slice from a combined algebraic opening.
-pub fn zk_x509_p256_fixed_algebraic_row_for_registration_v1<'a>(
-    combined: &'a [F],
+pub fn zk_x509_p256_fixed_algebraic_row_for_registration_v1(
+    combined: &[F],
     registration: P256MainRegistrationV1,
-) -> Result<&'a [F], ZkX509P256FixedAlgebraicErrorV1> {
+) -> Result<&[F], ZkX509P256FixedAlgebraicErrorV1> {
     if combined.len() != ZK_X509_P256_FIXED_ALGEBRAIC_WIDTH_V1 {
         return Err(ZkX509P256FixedAlgebraicErrorV1::Topology);
     }
@@ -1566,12 +1566,12 @@ fn compile_writer_fixed_v1(
         push_point_series_v1(builder, event, &active[slot])?;
         push_point_series_v1(builder, event + 1, &active[slot])?;
         push_point_series_v1(builder, event + 2, &addresses[slot])?;
-        for selector in 0..4 {
-            selectors[slot][selector].sort_unstable_by_key(|(row, _)| *row);
+        for (selector, points) in selectors[slot].iter_mut().enumerate() {
+            points.sort_unstable_by_key(|(row, _)| *row);
             push_point_series_v1(
                 builder,
                 slice_start + EXECUTION_WRITER_MULTIPLICITY_START_V1 + slot * 4 + selector,
-                &selectors[slot][selector],
+                points,
             )?;
         }
     }
@@ -2716,8 +2716,11 @@ impl ZkX509P256FixedAlgebraicScheduleV1 {
     }
     /// Exact combined fixed width in canonical child order.
     #[cfg(test)]
-    pub(crate) const fn width_v1(&self) -> u16 {
-        ZK_X509_P256_FIXED_ALGEBRAIC_WIDTH_V1 as u16
+    pub(crate) fn width_v1(&self) -> u16 {
+        self.children
+            .iter()
+            .map(ZkX509FixedAlgebraicScheduleV1::width_v1)
+            .sum()
     }
     /// Digest binding compiler semantics and every ordered child descriptor.
     pub(crate) const fn descriptor_digest_v1(&self) -> PrivacyOuterDigestV1 {
@@ -3162,9 +3165,13 @@ mod tests {
                 }
             }
         }
-        for operation in P256_FINAL_OPERATION_START_V1..P256_ARITHMETIC_OPERATIONS_V1 {
-            let relative = (operation - P256_FINAL_OPERATION_START_V1) as u64;
-            call_values[operation] = F(9_000_001 + relative * relative);
+        for (relative, value) in call_values
+            [P256_FINAL_OPERATION_START_V1..P256_ARITHMETIC_OPERATIONS_V1]
+            .iter_mut()
+            .enumerate()
+        {
+            let relative = u64::try_from(relative).expect("operation index fits u64");
+            *value = F(9_000_001 + relative * relative);
         }
         let call_plan =
             compile_p256_operation_sequence_plan_v1(&call_values).expect("call-affine topology");
@@ -3644,7 +3651,9 @@ mod tests {
             for (word, id) in [47_usize, 48, 52, 53].into_iter().enumerate() {
                 assert_eq!(
                     p256_selected_input_writer_id_v1(word).unwrap(),
-                    Some(P256ValueIdV1(id as u32))
+                    Some(P256ValueIdV1(
+                        u32::try_from(id).expect("protocol-bounded index fits u32")
+                    ))
                 );
                 for limb in 0..P256_VALUE_BUS_LIMBS_V1 {
                     let ordinal =
@@ -4099,7 +4108,14 @@ mod tests {
             state = state
                 .wrapping_mul(6_364_136_223_846_793_005)
                 .wrapping_add(1_442_695_040_888_963_407);
-            rows.insert((state as usize) & (P256_ARITHMETIC_AGGREGATE_TRACE_SIZE_V1 - 1));
+            rows.insert(
+                usize::try_from(
+                    state
+                        & u64::try_from(P256_ARITHMETIC_AGGREGATE_TRACE_SIZE_V1 - 1)
+                            .expect("trace size fits u64"),
+                )
+                .expect("masked trace row fits usize"),
+            );
         }
         let mut actual = [F::ZERO; ZK_X509_P256_FIXED_ALGEBRAIC_WIDTH_V1];
         for row in rows {
@@ -4246,7 +4262,7 @@ mod tests {
         for (slot, query) in queries.into_iter().enumerate() {
             assert_eq!(
                 selected_opening_linear_combination_v1(openings.row_v1(slot).expect("opening row")),
-                lde[query as usize],
+                lde[usize::try_from(query).expect("protocol-bounded index fits usize")],
                 "coset FFT query {query}"
             );
         }
@@ -4406,8 +4422,10 @@ mod tests {
                         step,
                     } if usize::from(column) == global_column => {
                         for row in start..end {
-                            actual[row as usize] =
-                                actual[row as usize].add(start_value.add(step.mul(F(row - start))));
+                            actual[usize::try_from(row)
+                                .expect("protocol-bounded index fits usize")] = actual
+                                [usize::try_from(row).expect("protocol-bounded index fits usize")]
+                            .add(start_value.add(step.mul(F(row - start))));
                         }
                     }
                     ZkX509FixedAlgebraicAtomV1::Repeated {
@@ -4420,14 +4438,19 @@ mod tests {
                     } if usize::from(column) == global_column => {
                         for occurrence in 0..count {
                             let row = first + occurrence * stride;
-                            actual[row as usize] =
-                                actual[row as usize].add(start_value.add(step.mul(F(occurrence))));
+                            actual[usize::try_from(row)
+                                .expect("protocol-bounded index fits usize")] = actual
+                                [usize::try_from(row).expect("protocol-bounded index fits usize")]
+                            .add(start_value.add(step.mul(F(occurrence))));
                         }
                     }
                     ZkX509FixedAlgebraicAtomV1::Sparse { column, row, value }
                         if usize::from(column) == global_column =>
                     {
-                        actual[row as usize] = actual[row as usize].add(value);
+                        actual[usize::try_from(row).expect("protocol-bounded index fits usize")] =
+                            actual
+                                [usize::try_from(row).expect("protocol-bounded index fits usize")]
+                            .add(value);
                     }
                     _ => {}
                 }

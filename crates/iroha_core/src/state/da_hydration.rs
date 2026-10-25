@@ -138,7 +138,6 @@ impl HydratedDaIndexes {
 impl State {
     /// Publish one successfully rebuilt DA projection while every component is write-locked.
     fn publish_hydrated_da_indexes(
-        &self,
         hydrated: HydratedDaIndexes,
         releases: &mut LaneLifecycleReleases<'_>,
     ) {
@@ -226,7 +225,7 @@ impl State {
                 self.build_da_indexes_from_kura(None, &mut releases)
                     .map(|mut hydrated| {
                         hydrated.pin_intents = self.da_pin_cache_from_world(&mut releases.world);
-                        self.publish_hydrated_da_indexes(hydrated, &mut releases);
+                        Self::publish_hydrated_da_indexes(hydrated, &mut releases);
                         if persist_journal {
                             self.persist_hydrated_da_shard_cursor_journal(&mut releases);
                         }
@@ -272,7 +271,7 @@ impl State {
             let result = self
                 .build_da_indexes_from_kura(Some(target_height), releases)
                 .map(|hydrated| {
-                    self.publish_hydrated_da_indexes(hydrated, releases);
+                    Self::publish_hydrated_da_indexes(hydrated, releases);
                     self.persist_hydrated_da_shard_cursor_journal(releases);
                 });
             if let Err(err) = &result {
@@ -516,7 +515,7 @@ impl State {
                 }
             }
             if let Some(bundle) = block.as_ref().da_pin_intents() {
-                let _ = self.ingest_committed_pin_intents_from_kura_into(
+                let _ = Self::ingest_committed_pin_intents_from_kura_into(
                     &nexus,
                     &mut hydrated.pin_intents,
                     &hydrated.shard_cursors,

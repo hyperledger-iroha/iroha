@@ -34,7 +34,10 @@ fn array<'a>(value: &'a Value, key: &str) -> Result<&'a Vec<Value>> {
         .ok_or_else(|| eyre!("missing array {key}"))
 }
 
-pub(in super::super) fn validate_records(candidate: &Candidate, records: &[Value]) -> Result<()> {
+pub(in super::super) fn validate_records(
+    candidate: &PreparedCandidate,
+    records: &[Value],
+) -> Result<()> {
     let [result, request, checks, binary, source, transfer, completed] = records else {
         return Err(eyre!("missing qualification records"));
     };
@@ -316,7 +319,7 @@ pub(in super::super) fn validate_records(candidate: &Candidate, records: &[Value
     Ok(())
 }
 
-pub(super) fn admit(candidate: &Candidate) -> Result<Vec<Pin>> {
+pub(super) fn admit(candidate: &PreparedCandidate) -> Result<Vec<Pin>> {
     validate_lower_hex("candidate commit", &candidate.commit, 40)?;
     validate_lower_hex("candidate tree", &candidate.tree, 40)?;
     need(

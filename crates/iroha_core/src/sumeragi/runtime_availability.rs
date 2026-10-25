@@ -29,7 +29,7 @@ use crate::{
     state::{State, StateReadOnly, StateViewReleases, WorldReadOnly},
 };
 
-pub(crate) mod history;
+pub mod history;
 mod selection;
 use history::HistoryScan;
 

@@ -610,7 +610,7 @@ fn refund_active_vpn_lease(
     record.refunded_fee = record.lease_fee.clone();
     state_transaction
         .world
-        .put_vpn_lease(record)
+        .put_vpn_lease(&(record))
         .map_err(validation_err)?;
     Ok(())
 }
@@ -750,7 +750,7 @@ impl Execute for OpenVpnLeaseEscrow {
         };
         state_transaction
             .world
-            .put_vpn_lease(record)
+            .put_vpn_lease(&(record))
             .map_err(validation_err)?;
         Ok(())
     }
@@ -822,7 +822,7 @@ impl Execute for SettleVpnLease {
         record.refunded_fee = refund_fee;
         state_transaction
             .world
-            .put_vpn_lease(record)
+            .put_vpn_lease(&(record))
             .map_err(validation_err)?;
         Ok(())
     }
@@ -1473,10 +1473,10 @@ mod tests {
         let mut transaction =
             block.transaction_without_telemetry(LaneConfig::default(), /* block height */ 1);
         transaction
-            .put_vpn_lease(first)
+            .put_vpn_lease(&(first))
             .expect("first typed address claim is available");
         let error = transaction
-            .put_vpn_lease(second)
+            .put_vpn_lease(&(second))
             .expect_err("second active lease must not alias the same address slot");
         assert!(error.contains("address slot"), "unexpected error: {error}");
     }
@@ -1502,7 +1502,7 @@ mod tests {
         let mut transaction = block.transaction();
         transaction
             .world
-            .put_vpn_lease(active.clone())
+            .put_vpn_lease(&(active.clone()))
             .expect("active lease is indexed");
         assert!(is_active_vpn_client(
             &transaction.world,
@@ -1517,7 +1517,7 @@ mod tests {
         );
         transaction
             .world
-            .put_vpn_lease(terminal)
+            .put_vpn_lease(&(terminal))
             .expect("terminal transition releases active claims");
         assert!(
             transaction
@@ -1539,7 +1539,7 @@ mod tests {
         ));
         let error = transaction
             .world
-            .put_vpn_lease(active)
+            .put_vpn_lease(&(active))
             .expect_err("terminal VPN lease must not be resurrected");
         assert!(error.contains("terminal status back to active"));
     }
@@ -1564,14 +1564,14 @@ mod tests {
         let mut transaction =
             block.transaction_without_telemetry(LaneConfig::default(), /* block height */ 1);
         let error = transaction
-            .put_vpn_lease(forged)
+            .put_vpn_lease(&(forged))
             .expect_err("retained quote substitution must fail before indexing");
         assert!(
             error.contains("invalid operator quote"),
             "unexpected error: {error}"
         );
         let error = transaction
-            .put_vpn_lease(impossible_open)
+            .put_vpn_lease(&(impossible_open))
             .expect_err("lease opening outside the signed interval must fail");
         assert!(
             error.contains("opened outside"),
@@ -1596,7 +1596,7 @@ mod tests {
             let mut block = world.block();
             let mut transaction = block
                 .transaction_without_telemetry(LaneConfig::default(), /* block height */ 1);
-            transaction.put_vpn_lease(record).map(|_| ())
+            transaction.put_vpn_lease(&(record)).map(|_| ())
         };
         insert_fresh(canonical.clone()).expect("canonical quote must rebuild");
         let assert_rejected = |record, expected: &str| {
@@ -1806,7 +1806,7 @@ mod tests {
             let mut block = world.block();
             let mut transaction = block
                 .transaction_without_telemetry(LaneConfig::default(), /* block height */ 1);
-            transaction.put_vpn_lease(record).map(|_| ())
+            transaction.put_vpn_lease(&(record)).map(|_| ())
         };
         insert_fresh(settled.clone()).expect("canonical settled lease must rebuild");
         let mut wrong_account = settled.clone();

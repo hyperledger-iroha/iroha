@@ -128,8 +128,8 @@ async fn zk_roots_endpoint_returns_200_for_registered_asset_without_shielded_sta
         }),
     );
     let body_value = iroha_torii::json_object(vec![
-        iroha_torii::json_entry("asset_id", asset_id),
-        iroha_torii::json_entry("max", 10u64),
+        iroha_torii::json_entry("asset_id", &asset_id),
+        iroha_torii::json_entry("max", &10u64),
     ]);
     let body = norito::json::to_string(&body_value).expect("serialize roots request");
     let req = http::Request::builder()
@@ -186,8 +186,8 @@ async fn zk_roots_endpoint_returns_404_for_missing_asset() {
     )
     .to_string();
     let body_value = iroha_torii::json_object(vec![
-        iroha_torii::json_entry("asset_id", missing_asset_id),
-        iroha_torii::json_entry("max", 10u64),
+        iroha_torii::json_entry("asset_id", &missing_asset_id),
+        iroha_torii::json_entry("max", &10u64),
     ]);
     let body = norito::json::to_string(&body_value).expect("serialize roots request");
     let req = http::Request::builder()
@@ -215,7 +215,7 @@ async fn zk_roots_endpoint_returns_404_for_missing_asset_alias() {
     );
     let body_value = iroha_torii::json_object(vec![
         iroha_torii::json_entry("asset_id", "rose#missing"),
-        iroha_torii::json_entry("max", 10u64),
+        iroha_torii::json_entry("max", &10u64),
     ]);
     let body = norito::json::to_string(&body_value).expect("serialize roots request");
     let req = http::Request::builder()
@@ -241,7 +241,7 @@ async fn zk_roots_endpoint_returns_403_for_invalid_asset_selector() {
     );
     let body_value = iroha_torii::json_object(vec![
         iroha_torii::json_entry("asset_id", "prefix:not-a-real-selector"),
-        iroha_torii::json_entry("max", 10u64),
+        iroha_torii::json_entry("max", &10u64),
     ]);
     let body = norito::json::to_string(&body_value).expect("serialize roots request");
     let req = http::Request::builder()
@@ -267,7 +267,7 @@ async fn zk_roots_endpoint_returns_403_for_blank_asset_selector() {
     );
     let body_value = iroha_torii::json_object(vec![
         iroha_torii::json_entry("asset_id", "   "),
-        iroha_torii::json_entry("max", 10u64),
+        iroha_torii::json_entry("max", &10u64),
     ]);
     let body = norito::json::to_string(&body_value).expect("serialize roots request");
     let req = http::Request::builder()
@@ -321,7 +321,7 @@ async fn zk_vote_tally_endpoint_enforces_canonical_selector_for_json_and_norito(
         let json =
             norito::json::to_string(&iroha_torii::json_object(vec![iroha_torii::json_entry(
                 "election_id",
-                election_id.clone(),
+                &election_id.clone(),
             )]))
             .expect("serialize JSON tally request");
         let norito = norito::to_bytes(&dto).expect("encode Norito tally request");
@@ -347,7 +347,7 @@ async fn zk_vote_tally_endpoint_enforces_canonical_selector_for_json_and_norito(
         let json =
             norito::json::to_string(&iroha_torii::json_object(vec![iroha_torii::json_entry(
                 "election_id",
-                election_id,
+                &election_id,
             )]))
             .expect("serialize valid tally request");
         let request = http::Request::builder()

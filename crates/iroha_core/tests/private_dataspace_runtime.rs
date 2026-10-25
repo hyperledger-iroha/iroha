@@ -639,8 +639,7 @@ fn runtime_private_dataspace_executes_concrete_work_after_certified_activation()
         &anchors,
         &history,
         &record.merged,
-        &block,
-        &qc,
+        (&block, &qc),
     )
     .expect("authenticate and reproduce actual lane admission");
     let mut forged = qc.clone();
@@ -653,8 +652,7 @@ fn runtime_private_dataspace_executes_concrete_work_after_certified_activation()
             &anchors,
             &history,
             &record.merged,
-            &block,
-            &forged
+            (&block, &forged)
         )
         .is_err(),
         "a forged certificate cannot qualify the private work"

@@ -171,8 +171,8 @@ fn parity<C: PastaCurve>() {
                     .num_threads(workers)
                     .build()
                     .unwrap();
-                let prove = |key: &ProvingKey<C>, witness: &Witness<C::ScalarExt>| {
-                    let owned = Witness {
+                let generate_proof = |key: &ProvingKey<C>, witness: &Witness<C::ScalarExt>| {
+                    let cloned_witness = Witness {
                         advice: witness.advice.clone(),
                         instances: witness.instances.clone(),
                     };
@@ -180,15 +180,15 @@ fn parity<C: PastaCurve>() {
                         create_proof_owned(
                             &params,
                             key,
-                            owned,
+                            cloned_witness,
                             ProverRandomness::fixed_seed_for_tests([83; 32]),
                             ProverConfig::default(),
                         )
                     })
                     .unwrap()
                 };
-                let expected = prove(&expected_key, &expected_witness);
-                let actual = prove(&actual_key, &actual_witness);
+                let expected = generate_proof(&expected_key, &expected_witness);
+                let actual = generate_proof(&actual_key, &actual_witness);
                 assert_eq!(actual, expected);
                 verify_full(
                     &params,
@@ -218,8 +218,9 @@ impl WipeProbe {
         });
         Self
     }
-    fn assert_wiped(&self, expected: usize) {
+    fn assert_wiped(self, expected: usize) {
         assert_eq!(WIPED_WITNESS.with(Cell::get), Some((expected, true)));
+        drop(self);
     }
 }
 impl Drop for WipeProbe {
@@ -395,7 +396,6 @@ fn cancellation<C: PastaCurve>() {
         .is_cancelled()
     );
     wipe.assert_wiped(2 * (1 << 6));
-    drop(wipe);
     let (key, witness) = rebuild_key_and_witness_v2_cancellable(
         &params,
         &source,

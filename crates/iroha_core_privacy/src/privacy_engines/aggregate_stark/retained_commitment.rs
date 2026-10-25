@@ -223,7 +223,9 @@ impl<'a> SelectedRowCommitmentV1<'a> {
         if digest_streams.capacity() != selected_count {
             return Err(AggregateStarkErrorV1::AllocationFailure);
         }
-        let catalog = context.catalog_v1();
+        let catalog =
+            crate::privacy_engines::transparent_stark::TransparentStarkDigestContextV1::catalog_v1(
+            );
         let domain = context
             .domain_v1(&catalog, leaf_role, b"vector-row-leaf", 0, 0, 0)
             .map_err(map_transparent_error_v1)?;

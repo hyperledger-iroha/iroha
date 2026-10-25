@@ -562,9 +562,9 @@ where
     }
 }
 impl CatalogMethodRouter<SharedAppState, ToriiDefaultAuthentication> {
-    /// Install the exact-account SoraCloud command boundary before extraction.
+    /// Install the exact-account `SoraCloud` command boundary before extraction.
     ///
-    /// Every SoraCloud `POST` is mounted through this method. The middleware
+    /// Every `SoraCloud` `POST` is mounted through this method. The middleware
     /// authenticates the exact bounded body, applies per-account rate and
     /// in-flight admission, and only then permits the typed handler extractor
     /// to run.
@@ -737,7 +737,7 @@ impl CatalogMethodRouter<SharedAppState, ToriiDefaultAuthentication> {
                 .layer(admission),
         }
     }
-    /// Apply exact operator authentication and the SoraNet collector guard before body decoding.
+    /// Apply exact operator authentication and the `SoraNet` collector guard before body decoding.
     ///
     /// Exact NetworkId-bound operator authentication runs first. The secondary
     /// guard then fails closed unless the source belongs to an allowed network
@@ -1314,6 +1314,16 @@ mod tests {
     }
     #[tokio::test]
     async fn complete_manifest_matches_registered_routes_and_keeps_get_exact() {
+        const GATEWAY: RouteDescriptor = RouteDescriptor::new(
+            "test.any_gateway",
+            HttpMethod::Any,
+            "/v1/tests/gateway",
+            ApiSurface::Protocol,
+            Listener::Torii,
+            RouteEffect::ReadOnly,
+            AdmissionPolicy::Public,
+        );
+
         let mut builder =
             RouterBuilder::new((), RouteCatalog::new(ROUTES), EnabledFeatures::none())
                 .expect("valid catalog");
@@ -1440,15 +1450,6 @@ mod tests {
             "http.cors_preflight"
         );
 
-        const GATEWAY: RouteDescriptor = RouteDescriptor::new(
-            "test.any_gateway",
-            HttpMethod::Any,
-            "/v1/tests/gateway",
-            ApiSurface::Protocol,
-            Listener::Torii,
-            RouteEffect::ReadOnly,
-            AdmissionPolicy::Public,
-        );
         let mut gateway =
             RouterBuilder::new((), RouteCatalog::new(&[GATEWAY]), EnabledFeatures::none())
                 .expect("valid protocol gateway catalog");
@@ -1747,6 +1748,8 @@ mod tests {
     #[cfg(feature = "app_api")]
     #[tokio::test]
     async fn canonical_body_route_uses_declared_extractor_limit_and_preserves_narrower_limits() {
+        const LIMIT: usize = 3 * 1024 * 1024;
+
         use crate::utils::extractors::NoritoJson;
         use axum::{Extension, extract::DefaultBodyLimit};
         use std::sync::Arc;
@@ -1762,7 +1765,7 @@ mod tests {
         let app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world(
             crate::tests_runtime_handlers::world_with_account(&account),
         );
-        const LIMIT: usize = 3 * 1024 * 1024;
+
         for (body_bytes, inner_limit, expected_status) in [
             (LIMIT - 1, None, StatusCode::NO_CONTENT),
             (LIMIT, None, StatusCode::NO_CONTENT),
@@ -1926,6 +1929,8 @@ mod tests {
     #[cfg(feature = "app_api")]
     #[tokio::test]
     async fn optional_canonical_body_route_keeps_exact_bounds_and_authentication() {
+        const LIMIT: usize = 3 * 1024 * 1024;
+
         use crate::utils::extractors::NoritoJson;
         use axum::Extension;
         use std::sync::Arc;
@@ -1941,7 +1946,7 @@ mod tests {
         let app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world(
             crate::tests_runtime_handlers::world_with_account(&account),
         );
-        const LIMIT: usize = 3 * 1024 * 1024;
+
         let calls = Arc::new(AtomicUsize::new(0));
         let signed_calls = Arc::new(AtomicUsize::new(0));
         let handler_calls = Arc::clone(&calls);
@@ -2038,6 +2043,17 @@ mod tests {
     #[cfg(feature = "app_api")]
     #[tokio::test]
     async fn canonical_body_zero_limit_get_rejects_nonempty_bodies() {
+        const ROUTE: RouteDescriptor = RouteDescriptor::new(
+            "test.zero_body_account",
+            HttpMethod::Get,
+            "/v1/tests/zero-body-account",
+            ApiSurface::Public,
+            Listener::Torii,
+            RouteEffect::ReadOnly,
+            AdmissionPolicy::AuthenticatedAccount,
+        )
+        .with_authentication(AuthenticationPolicy::CanonicalAccountSignature);
+
         use axum::{Extension, extract::DefaultBodyLimit};
         use std::sync::Arc;
 
@@ -2052,16 +2068,7 @@ mod tests {
         let app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world(
             crate::tests_runtime_handlers::world_with_account(&account),
         );
-        const ROUTE: RouteDescriptor = RouteDescriptor::new(
-            "test.zero_body_account",
-            HttpMethod::Get,
-            "/v1/tests/zero-body-account",
-            ApiSurface::Public,
-            Listener::Torii,
-            RouteEffect::ReadOnly,
-            AdmissionPolicy::AuthenticatedAccount,
-        )
-        .with_authentication(AuthenticationPolicy::CanonicalAccountSignature);
+
         let calls = Arc::new(AtomicUsize::new(0));
         let handler_calls = Arc::clone(&calls);
         let mut builder = RouterBuilder::new(

@@ -1,7 +1,7 @@
 //! Current-Omega local verifier/decoder differential, requiring retained real proof bytes.
 //!
 //! This calls the actual private native transport helper and public circuit components.
-//! Its test-only joins do not exercise AProofPlan, IncomingTransportPlan::verify or the
+//! Its test-only joins do not exercise `AProofPlan`, `IncomingTransportPlan::verify` or the
 //! complete Receive/Archive operation. The paired proof-lib incoming test consumes
 //! these exact native outputs. TODO: qualify complete operations separately.
 //!

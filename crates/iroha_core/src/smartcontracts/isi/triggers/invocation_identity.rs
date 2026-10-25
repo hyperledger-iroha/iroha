@@ -29,7 +29,7 @@ const ACTION_DOMAIN: &[u8] = b"iroha:trigger-use:action:v1\0";
 /// # Errors
 /// Rejects missing/wrong-kind actions, invalid registration, forbidden pipeline
 /// retry state, missing/substituted IVM storage and canonical encoding failures.
-pub(crate) fn pipeline_trigger_use_v1(
+pub fn pipeline_trigger_use_v1(
     store: &impl SetReadOnly,
     id: &TriggerId,
     applying_height: u64,
@@ -56,7 +56,7 @@ pub(crate) fn pipeline_trigger_use_v1(
 /// # Errors
 /// Rejects missing/wrong-kind actions, invalid registration, missing/substituted
 /// IVM storage and canonical encoding failures.
-pub(crate) fn time_trigger_use_v1(
+pub fn time_trigger_use_v1(
     store: &impl SetReadOnly,
     id: &TriggerId,
     applying_height: u64,

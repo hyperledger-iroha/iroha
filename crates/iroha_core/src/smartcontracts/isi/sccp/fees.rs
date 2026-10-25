@@ -75,9 +75,7 @@ pub(crate) fn exempt_class_from(
             .filter(|time| super::keepalive::due_from(source, 0, *time) == Ok(true))
             .map(|_| SccpExemptClassV1::Keepalive);
     }
-    if source.parameters().is_none() {
-        return None;
-    }
+    source.parameters()?;
     let class = admission::exempt_shape(payload)?;
     let eligible = match class {
         SccpExemptClassV1::Keepalive => {

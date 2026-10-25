@@ -87,7 +87,11 @@ fn sccp_executed_genesis_rejects_work_budgets_that_starve_pause_enactment() {
             parameters.commit();
         }
         let result = validate_executed_genesis(&world.view(), &context);
-        if !(minimum..=maximum).contains(&units) {
+        if (minimum..=maximum).contains(&units) {
+            result.unwrap_or_else(|error| {
+                panic!("the inclusive {minimum}..={maximum} range supports SCCP progress: {units}: {error:?}")
+            });
+        } else {
             assert!(
                 matches!(result,
                     Err(crate::execution_attempt::ExecutionAttemptError::Rejected(
@@ -96,10 +100,6 @@ fn sccp_executed_genesis_rejects_work_budgets_that_starve_pause_enactment() {
                 ),
                 "genesis must reject budgets outside the current ticket, draw, six-conclusion and enactment range\nunits={units}, result={result:?}"
             );
-        } else {
-            result.unwrap_or_else(|error| {
-                panic!("the inclusive {minimum}..={maximum} range supports SCCP progress: {units}: {error:?}")
-            });
         }
     }
 }
@@ -274,6 +274,7 @@ fn executed_genesis_requires_committed_fee_policy_without_defaults() {
         let mut parameters = world.parameters.block();
         let policy = parameters
             .remove_custom_parameter(&RootFeePolicy::parameter_id())
+            .expect("root fee policy removal is permitted")
             .expect("registered world has a committed fee policy");
         parameters.commit();
         policy

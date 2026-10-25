@@ -436,9 +436,21 @@ fn signing_key_rejects_hardlinks_and_nonregular_descriptors_without_reading_them
     fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
     fs::hard_link(&path, directory.path().join("alias")).unwrap();
     let file = File::open(&path).unwrap();
-    assert!(inherited_signing_key(file.as_raw_fd() as u32, key.public_key()).is_err());
+    assert!(
+        inherited_signing_key(
+            u32::try_from(file.as_raw_fd()).expect("owned descriptor is nonnegative"),
+            key.public_key()
+        )
+        .is_err()
+    );
     let file = File::open(directory.path()).unwrap();
-    assert!(inherited_signing_key(file.as_raw_fd() as u32, key.public_key()).is_err());
+    assert!(
+        inherited_signing_key(
+            u32::try_from(file.as_raw_fd()).expect("owned descriptor is nonnegative"),
+            key.public_key()
+        )
+        .is_err()
+    );
 }
 
 #[cfg(unix)]
@@ -690,8 +702,10 @@ fn preseed_timeout_is_required_and_has_its_own_physical_work_bound() {
 #[test]
 fn candidate_runtime_scope_requires_disabled_core_and_exact_full_owner() {
     use iroha_config::parameters::actual::SoracloudRuntimeInrou;
-    let mut runtime = SoracloudRuntimeInrou::default();
-    runtime.enabled = false;
+    let mut runtime = SoracloudRuntimeInrou {
+        enabled: false,
+        ..SoracloudRuntimeInrou::default()
+    };
     assert!(
         validate_candidate_inrou_scope(
             QualificationScopeV1::CoreTestnet,

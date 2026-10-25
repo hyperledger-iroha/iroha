@@ -491,9 +491,9 @@ mod tests {
                     slash.monetary_plan.destination_asset
                 );
             }
-            let mut changed = valid.clone();
-            changed.push(change);
-            assert!(validator_bindings(&changed, &trust.peers).is_err());
+            let mut mutated = valid.clone();
+            mutated.push(change);
+            assert!(validator_bindings(&mutated, &trust.peers).is_err());
         }
     }
 }

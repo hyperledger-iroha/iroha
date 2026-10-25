@@ -23,7 +23,8 @@ fn build_bfv_full_bootstrap_stark_test_prover_input_materials()
         norito::decode_canonical(bytes).expect("decode canonical two-slot arithmetic material");
     for (slot, material) in materials.iter().enumerate() {
         assert_eq!(
-            material.proof_input_material.witness_material.slot_index, slot as u32,
+            material.proof_input_material.witness_material.slot_index,
+            u32::try_from(slot).expect("two-slot fixture index fits u32"),
             "conformance material retains both distinct execution statements",
         );
         iroha_crypto::validate_bfv_full_bootstrap_execution_prover_input_material_v1(material)
@@ -121,10 +122,7 @@ fn bfv_full_bootstrap_air_transcript_label_is_canonical_base_label() {
             base,
             BFV_FULL_BOOTSTRAP_STARK_AIR_TRANSCRIPT_LABEL_ATTEMPTS - 1
         ),
-        format!(
-            "{}:{}",
-            base, BFV_FULL_BOOTSTRAP_STARK_AIR_TRANSCRIPT_LABEL_ATTEMPTS
-        ),
+        format!("{base}:{BFV_FULL_BOOTSTRAP_STARK_AIR_TRANSCRIPT_LABEL_ATTEMPTS}"),
         format!("{base}:+1"),
         format!("{base}:1 "),
         format!("{base}:1:2"),
@@ -742,13 +740,11 @@ fn bfv_full_bootstrap_air_prover_binds_statement_and_public_openings() {
         .is_none(),
         "private BFV public-padding context must not replay openings under a leading-whitespace delayed placeholder trace-material digest"
     );
-    for separator_spelled_trace_material_digest in
-        separator_spelled_trace_material_digests.iter().copied()
-    {
+    for separator_spelled_trace_material_digest in &separator_spelled_trace_material_digests {
         let separator_spelled_trace_context =
             StarkAirVerificationContext::BfvFullBootstrapPublicPadding {
                 statement_hash: &material.proof_input_material.statement_hash,
-                trace_material_digest: &separator_spelled_trace_material_digest,
+                trace_material_digest: separator_spelled_trace_material_digest,
                 slot_index: witness.slot_index,
                 bound_mode: witness.bound_mode,
             };
@@ -776,14 +772,12 @@ fn bfv_full_bootstrap_air_prover_binds_statement_and_public_openings() {
         );
     }
     for delayed_separator_spelled_trace_material_digest in
-        delayed_separator_spelled_trace_material_digests
-            .iter()
-            .copied()
+        &delayed_separator_spelled_trace_material_digests
     {
         let delayed_separator_spelled_trace_context =
             StarkAirVerificationContext::BfvFullBootstrapPublicPadding {
                 statement_hash: &material.proof_input_material.statement_hash,
-                trace_material_digest: &delayed_separator_spelled_trace_material_digest,
+                trace_material_digest: delayed_separator_spelled_trace_material_digest,
                 slot_index: witness.slot_index,
                 bound_mode: witness.bound_mode,
             };
@@ -1322,8 +1316,10 @@ fn bfv_full_bootstrap_air_verifier_limits_are_enforced() {
         norito::decode_from_bytes(bytes).expect("decode BFV STARK envelope");
     let air = envelope.proof.air.as_ref().expect("BFV AIR section");
     let witness = &material.proof_input_material.witness_material;
-    let mut tight_envelope_bytes = StarkVerifierLimits::default();
-    tight_envelope_bytes.max_envelope_bytes = bytes.len().saturating_sub(1);
+    let tight_envelope_bytes = StarkVerifierLimits {
+        max_envelope_bytes: bytes.len().saturating_sub(1),
+        ..StarkVerifierLimits::default()
+    };
     assert!(
         !verify_stark_fri_bfv_full_bootstrap_air_envelope_with_limits(
             bytes,
@@ -1344,9 +1340,10 @@ fn bfv_full_bootstrap_air_verifier_limits_are_enforced() {
         ),
         "BFV public-padding verifier must honor envelope byte limits"
     );
-    let mut tight_transcript_label = StarkVerifierLimits::default();
-    tight_transcript_label.max_transcript_label_len =
-        envelope.transcript_label.len().saturating_sub(1);
+    let tight_transcript_label = StarkVerifierLimits {
+        max_transcript_label_len: envelope.transcript_label.len().saturating_sub(1),
+        ..StarkVerifierLimits::default()
+    };
     assert!(
         !verify_stark_fri_bfv_full_bootstrap_air_envelope_with_limits(
             bytes,
@@ -1367,8 +1364,10 @@ fn bfv_full_bootstrap_air_verifier_limits_are_enforced() {
         ),
         "BFV public-padding verifier must honor transcript-label limits"
     );
-    let mut tight_queries = StarkVerifierLimits::default();
-    tight_queries.max_queries = envelope.proof.queries.len().saturating_sub(1);
+    let tight_queries = StarkVerifierLimits {
+        max_queries: envelope.proof.queries.len().saturating_sub(1),
+        ..StarkVerifierLimits::default()
+    };
     assert!(
         !verify_stark_fri_bfv_full_bootstrap_air_envelope_with_limits(
             bytes,
@@ -1389,8 +1388,10 @@ fn bfv_full_bootstrap_air_verifier_limits_are_enforced() {
         ),
         "BFV public-padding verifier must honor query-count limits"
     );
-    let mut tight_air_width = StarkVerifierLimits::default();
-    tight_air_width.max_air_width = usize::from(air.trace_width).saturating_sub(1);
+    let tight_air_width = StarkVerifierLimits {
+        max_air_width: usize::from(air.trace_width).saturating_sub(1),
+        ..StarkVerifierLimits::default()
+    };
     assert!(
         !verify_stark_fri_bfv_full_bootstrap_air_envelope_with_limits(
             bytes,
@@ -1411,8 +1412,10 @@ fn bfv_full_bootstrap_air_verifier_limits_are_enforced() {
         ),
         "BFV public-padding verifier must honor AIR width limits"
     );
-    let mut tight_merkle_depth = StarkVerifierLimits::default();
-    tight_merkle_depth.max_merkle_depth = usize::from(envelope.params.n_log2).saturating_sub(1);
+    let tight_merkle_depth = StarkVerifierLimits {
+        max_merkle_depth: usize::from(envelope.params.n_log2).saturating_sub(1),
+        ..StarkVerifierLimits::default()
+    };
     assert!(
         !verify_stark_fri_bfv_full_bootstrap_air_envelope_with_limits(
             bytes,
@@ -1656,7 +1659,7 @@ fn synthesized_envelope_rejects_unsupported_fold_arity() {
     let err = synthesize_stark_fri_envelope_bytes(params, "IROHA-TEST-STARK".to_owned())
         .expect_err("unsupported fold_arity must fail");
     assert!(
-        err.to_string().contains("fold_arity"),
+        err.contains("fold_arity"),
         "error should mention fold_arity, got: {err}"
     );
 }
@@ -1674,7 +1677,7 @@ fn synthesized_envelope_rejects_blowup_larger_than_domain() {
     let err = synthesize_stark_fri_envelope_bytes(params, "IROHA-TEST-STARK".to_owned())
         .expect_err("blowup_log2 larger than n_log2 must fail");
     assert!(
-        err.to_string().contains("blowup factor"),
+        err.contains("blowup factor"),
         "error should mention blowup factor, got: {err}"
     );
 }

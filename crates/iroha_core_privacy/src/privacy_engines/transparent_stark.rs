@@ -20,7 +20,7 @@ pub use super::privacy_outer_hash::{PrivacyOuterDigestV1, PrivacyOuterProofFamil
 use super::privacy_outer_hash::{
     PrivacyOuterDomainPrefixV1, PrivacyOuterDomainV1, PrivacyOuterFrameV1,
 };
-use iroha_data_model::privacy::{PRIVACY_EXACT12_CATALOG_COMMITMENT_WORDS_V1, PrivacyProtocolIdV1};
+use iroha_data_model::privacy::{PRIVACY_EXACT12_CATALOG_COMMITMENT_BYTES_V1, PrivacyProtocolIdV1};
 use rand::TryRngCore;
 use rayon::prelude::*;
 use std::collections::BTreeMap;
@@ -88,16 +88,16 @@ impl TransparentStarkDigestContextV1 {
         }
     }
     /// Proof byte ceiling is an admission bound, independent of cryptographic geometry.
-    pub(crate) fn maximum_proof_bytes_v1(self) -> usize {
+    pub(crate) fn maximum_proof_bytes_v1() -> usize {
         iroha_data_model::privacy::TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1 as usize
     }
-    pub(crate) fn catalog_v1(self) -> [u8; 48] {
+    pub(crate) fn catalog_v1() -> [u8; 32] {
         exact12_catalog_commitment_bytes_v1()
     }
     /// Borrow a checked canonical domain while its catalog backing remains alive.
     pub(crate) fn domain_v1<'a>(
         self,
-        catalog: &'a [u8; 48],
+        catalog: &'a [u8; 32],
         role: &'a [u8],
         phase: &'a [u8],
         level: u64,
@@ -105,7 +105,7 @@ impl TransparentStarkDigestContextV1 {
         counter: u64,
     ) -> Result<PrivacyOuterDomainV1<'a>, TransparentStarkErrorV1> {
         self.validate()?;
-        if *catalog != self.catalog_v1()
+        if *catalog != crate::privacy_engines::transparent_stark::TransparentStarkDigestContextV1::catalog_v1()
             || role.is_empty()
             || phase.is_empty()
             || u16::try_from(role.len()).is_err()
@@ -204,7 +204,7 @@ impl GoldilocksFieldV1 {
     /// congruent `2^32 - 1`; the final value needs at most one subtraction.
     /// This is exact for every `u128`, not only products of canonical residues.
     pub(crate) fn reduce(value: u128) -> Self {
-        let low = value as u64;
+        let low = u64::try_from(value & u128::from(u64::MAX)).expect("low limb fits u64");
         let high = (value >> 64) as u64;
         let high_high = high >> 32;
         let high_low = high & GOLDILOCKS_EPSILON_V1;
@@ -1478,10 +1478,8 @@ pub fn masked_trace_lde_column_v1<R: TryRngCore>(
         mask.coefficients(),
     )
 }
-fn exact12_catalog_commitment_bytes_v1() -> [u8; 48] {
-    fastpq_isi::GoldilocksDigest384V1::new(PRIVACY_EXACT12_CATALOG_COMMITMENT_WORDS_V1)
-        .expect("the pinned Exact12 catalog commitment is canonical")
-        .to_le_bytes()
+fn exact12_catalog_commitment_bytes_v1() -> [u8; 32] {
+    PRIVACY_EXACT12_CATALOG_COMMITMENT_BYTES_V1
 }
 
 /// Hash one fully typed native-STARK frame with the opaque SHA3-384 digest.
@@ -1502,7 +1500,8 @@ pub fn privacy_outer_digest_frame_v1(
     {
         return Err(TransparentStarkErrorV1::InvalidDigestDomain);
     }
-    let catalog = context.catalog_v1();
+    let catalog =
+        crate::privacy_engines::transparent_stark::TransparentStarkDigestContextV1::catalog_v1();
     PrivacyOuterFrameV1::new(
         PrivacyOuterDomainV1 {
             catalog: &catalog,
@@ -1527,12 +1526,11 @@ pub fn privacy_outer_last_field_stream_v1(
     context: TransparentStarkDigestContextV1,
     role: &[u8],
     phase: &[u8],
-    level: u64,
-    index: u64,
-    counter: u64,
+    position: (u64, u64, u64),
     prefix_fields: &[&[u8]],
     final_field_len: usize,
 ) -> Result<PrivacyOuterLastFieldStreamV1, TransparentStarkErrorV1> {
+    let (level, index, counter) = position;
     context.validate()?;
     if role.is_empty()
         || phase.is_empty()
@@ -1541,7 +1539,8 @@ pub fn privacy_outer_last_field_stream_v1(
     {
         return Err(TransparentStarkErrorV1::InvalidDigestDomain);
     }
-    let catalog = context.catalog_v1();
+    let catalog =
+        crate::privacy_engines::transparent_stark::TransparentStarkDigestContextV1::catalog_v1();
     PrivacyOuterLastFieldStreamV1::new(
         PrivacyOuterDomainV1 {
             catalog: &catalog,
@@ -1906,7 +1905,9 @@ impl TransparentTranscriptV1 {
             return Ok(Vec::new());
         }
         self.context.validate()?;
-        let catalog = self.context.catalog_v1();
+        let catalog =
+            crate::privacy_engines::transparent_stark::TransparentStarkDigestContextV1::catalog_v1(
+            );
         let domain =
             self.context
                 .domain_v1(&catalog, TRANSCRIPT_FP4_CHALLENGE_DOMAIN_V1, label, 0, 0, 0)?;
@@ -2230,7 +2231,8 @@ pub fn grind_nonce_v1(
         return Err(TransparentStarkErrorV1::InvalidGrinding);
     }
     context.validate()?;
-    let catalog = context.catalog_v1();
+    let catalog =
+        crate::privacy_engines::transparent_stark::TransparentStarkDigestContextV1::catalog_v1();
     let prefix = PrivacyOuterDomainPrefixV1::new(context.domain_v1(
         &catalog,
         GRINDING_DOMAIN_V1,
@@ -2411,7 +2413,7 @@ mod tests {
                 base = base * base % modulus;
                 exponent >>= 1;
             }
-            result as u64
+            u64::try_from(result).expect("reduced reference residue")
         }
         let mut values = (0..=1024_u64).collect::<Vec<_>>();
         values.extend((GOLDILOCKS_MODULUS_V1 - 256)..GOLDILOCKS_MODULUS_V1);
@@ -3650,7 +3652,7 @@ mod tests {
         ] {
             for nonce in [[0; 32], [0xa7; 32]] {
                 let context = TransparentStarkDigestContextV1::x509_scoped_v1(nonce, family);
-                let catalog = context.catalog_v1();
+                let catalog = crate::privacy_engines::transparent_stark::TransparentStarkDigestContextV1::catalog_v1();
                 let domain = context
                     .domain_v1(&catalog, b"scope-leaf", b"scope-phase", 2, 11, 7)
                     .unwrap();
@@ -3681,9 +3683,7 @@ mod tests {
                     context,
                     b"scope-leaf",
                     b"scope-phase",
-                    2,
-                    11,
-                    7,
+                    (2, 11, 7),
                     &[b"prefix"],
                     payload.len(),
                 )

@@ -311,7 +311,7 @@ fn build_fixture<R: TryCryptoRng + ?Sized>(
         .zip(positions)
         .zip(paths)
         .map(|(((input_note, secret), position), path)| {
-            PqMaspInputWitnessV1::new(input_note, secret, position, path)
+            PqMaspInputWitnessV1::new(input_note, secret, position, &path)
                 .map_err(|_| PqMaspReleaseFixtureErrorV1)
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -410,7 +410,7 @@ pub fn pq_masp_release_successor_replay_fixture_v1(
         input.note.clone(),
         input.nullifier_secret,
         input.leaf_position,
-        successor_path,
+        &successor_path,
     )
     .map_err(|_| PqMaspReleaseFixtureErrorV1)?;
     let witness = PqMaspWitnessV1::new(vec![replay_input], vec![output.clone()])

@@ -672,7 +672,7 @@ async fn run_contract_view_response_in_test_overlay(
     // public routed-read authority; this fixture intentionally has no certified committee.
     let request = json::from_str(&body).expect("view DTO");
     let (status, bytes) =
-        iroha_torii::handle_post_contract_view(app.state.clone(), iroha_torii::NoritoJson(request))
+        iroha_torii::handle_post_contract_view(&(app.state), iroha_torii::NoritoJson(request))
             .expect("local contract view");
     (
         status,

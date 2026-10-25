@@ -506,14 +506,14 @@ impl PreparedOperationV1 {
 /// wallet owner (design §5.1, Payment row). It holds no plan, custody, signing or Advance
 /// capability: execute derives again from its durable plan and uses the σ only through
 /// [`PreparedOperationV1::freeze_speculated`] for an identical statement and relation.
-pub(crate) struct SpeculativeSendStepV1 {
+pub struct SpeculativeSendStepV1 {
     selector: u8,
     step: Box<MonetaryStepV1>,
 }
 
 /// A `σ_send` proved speculatively for one exact statement and relation. DATA only: it is
 /// never signed or retained durably.
-pub(crate) struct SpeculativeSigmaV1 {
+pub struct SpeculativeSigmaV1 {
     statement: KagemushaWalletStatementV1,
     relation: iroha_kagemusha_proof::witness::SigmaRelation,
     sigma: KagemushaWalletStepProofV1,
@@ -522,9 +522,9 @@ pub(crate) struct SpeculativeSigmaV1 {
 #[cfg(test)]
 impl SpeculativeSigmaV1 {
     /// Test support: a σ DATA value with no proof authority, for review slot tests.
-    pub(crate) fn for_test(statement: KagemushaWalletStatementV1, bytes: Vec<u8>) -> Self {
+    pub(crate) fn for_test(statement: &KagemushaWalletStatementV1, bytes: Vec<u8>) -> Self {
         Self {
-            statement,
+            statement: *statement,
             relation: iroha_kagemusha_proof::witness::SigmaRelation::SEND,
             sigma: KagemushaWalletStepProofV1 { bytes },
         }

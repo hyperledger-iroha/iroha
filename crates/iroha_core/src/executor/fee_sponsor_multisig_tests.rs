@@ -188,12 +188,10 @@ fn admitted(
     resolve_fee_sponsor_program(
         &tx.world,
         &tx.nexus,
-        &f.program,
-        1,
+        (&f.program, 1),
         &f.beneficiary,
         payload,
-        Some(DataSpaceId::UNIVERSAL),
-        10,
+        (Some(DataSpaceId::UNIVERSAL), 10),
         RuleContext::admission(500),
     )
 }

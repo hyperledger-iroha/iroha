@@ -19,7 +19,7 @@ use std::sync::{Mutex, OnceLock};
 
 /// Typed native producer failure retaining the original arithmetic or verifier cause.
 #[derive(Debug)]
-pub(crate) enum NativeProverError {
+pub enum NativeProverError {
     /// Original verifier initialization failure.
     Init(NativeVerifierInitError),
     /// Original proving key construction failure.
@@ -57,9 +57,7 @@ impl std::error::Error for NativeProverError {
             Self::Key(original) => Some(original),
             Self::Prove(original) => Some(original),
             Self::Verify(original) => Some(original),
-            Self::Input(_) => None,
-            Self::Invariant(_) => None,
-            Self::CachePoisoned => None,
+            Self::Input(_) | Self::Invariant(_) | Self::CachePoisoned => None,
         }
     }
 }

@@ -142,6 +142,17 @@ mod tests {
     /// This constructs a complete adversarial assignment, without reusing the
     /// host selector branch that assumes an ordinary Boolean input.
     fn field_assignment(air: &IntegerAirV1, input: F) -> Vec<F> {
+        fn read(value: &[i64], nodes: &[F], input: F) -> F {
+            match value[0] {
+                0 => field(value[1]),
+                2 => nodes[usize::try_from(value[1]).expect("bounded fixture value")],
+                3 => {
+                    assert_eq!(value[1], 0);
+                    input
+                }
+                _ => panic!("unexpected fixed operand in selector fixture"),
+            }
+        }
         let outputs = (0..air.width())
             .map(|index| Value {
                 source: Source::Column(index),
@@ -150,17 +161,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let (nodes, outputs) = air.export_graph(&outputs);
-        fn read(value: &[i64], nodes: &[F], input: F) -> F {
-            match value[0] {
-                0 => field(value[1]),
-                2 => nodes[value[1] as usize],
-                3 => {
-                    assert_eq!(value[1], 0);
-                    input
-                }
-                _ => panic!("unexpected fixed operand in selector fixture"),
-            }
-        }
+
         let mut fields = Vec::new();
         for node in nodes {
             let operands = node[1..]

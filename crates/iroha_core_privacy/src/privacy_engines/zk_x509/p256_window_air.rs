@@ -102,6 +102,10 @@ impl P256WindowCoordinateV1 {
 /// Exact projective point bytes used to build a selector witness.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "Coordinate field names explicitly identify the big-endian input encoding."
+)]
 pub struct P256WindowPointV1 {
     /// Canonical x-coordinate.
     pub(crate) x_be: [u8; 32],
@@ -256,7 +260,8 @@ impl P256WindowTraceV1 {
                 if value > u64::from(u16::MAX) {
                     return Err(P256WindowAirErrorV1::ExternalRange);
                 }
-                limbs[coordinate.index()][limb] = value as u16;
+                limbs[coordinate.index()][limb] =
+                    u16::try_from(value).map_err(|_| P256WindowAirErrorV1::ExternalRange)?;
             }
         }
         Ok(P256WindowPointV1 {
@@ -293,7 +298,7 @@ pub enum P256WindowAirErrorV1 {
 pub fn build_p256_window_trace_v1(
     scalar: P256WindowScalarV1,
     window: u8,
-    table: [P256WindowPointV1; P256_WINDOW_CANDIDATES_V1],
+    table: &[P256WindowPointV1; P256_WINDOW_CANDIDATES_V1],
     bits_be: [u8; 4],
 ) -> Result<P256WindowTraceV1, P256WindowAirErrorV1> {
     if window >= 64 || bits_be.iter().any(|bit| *bit > 1) {
@@ -317,7 +322,10 @@ pub fn build_p256_window_trace_v1(
         } else {
             F::ZERO
         };
-        let prefixes = match_prefixes_v1(bits_be.map(|bit| F(u64::from(bit))), candidate as u8);
+        let prefixes = match_prefixes_v1(
+            bits_be.map(|bit| F(u64::from(bit))),
+            u8::try_from(candidate).expect("protocol-bounded index fits u8"),
+        );
         for chunk in 0..P256_WINDOW_ROWS_PER_POINT_V1 {
             let mut row = [F::ZERO; P256_WINDOW_BASE_WIDTH_V1];
             row[ACCUMULATOR..ACCUMULATOR + accumulator.len()].copy_from_slice(&accumulator);
@@ -379,17 +387,15 @@ pub fn p256_window_external_address_v1(
         P256WindowRowKindV1::Output { chunk } => (usize::from(chunk), None),
     };
     let (coordinate, limb) = packed_limb_v1(chunk, slot)?;
-    Ok(match candidate {
-        Some(candidate) => P256WindowExternalAddressV1::Candidate {
+    let limb = u8::try_from(limb).expect("protocol-bounded index fits u8");
+    Ok(candidate.map_or(
+        P256WindowExternalAddressV1::Output { coordinate, limb },
+        |candidate| P256WindowExternalAddressV1::Candidate {
             candidate,
             coordinate,
-            limb: limb as u8,
+            limb,
         },
-        None => P256WindowExternalAddressV1::Output {
-            coordinate,
-            limb: limb as u8,
-        },
-    })
+    ))
 }
 /// Return one committed external limb for pointwise value-bus equality.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -492,20 +498,17 @@ pub fn evaluate_p256_window_row_constraints_v1(
                 let accumulator = coordinate.index() * P256_WINDOW_COORDINATE_LIMBS_V1 + limb;
                 residues.push(base[EXTERNAL + slot].sub(base[ACCUMULATOR + accumulator]));
             }
-            match next {
-                Some(next) => {
-                    for index in 0..48 {
-                        residues.push(next[ACCUMULATOR + index].sub(base[ACCUMULATOR + index]));
-                    }
-                    residues.push(next[SELECTED_COUNT].sub(base[SELECTED_COUNT]));
-                    append_bit_transition_residues_v1(&mut residues, base, next);
+            if let Some(next) = next {
+                for index in 0..48 {
+                    residues.push(next[ACCUMULATOR + index].sub(base[ACCUMULATOR + index]));
                 }
-                None => {
-                    if chunk != 15 {
-                        return Err(P256WindowAirErrorV1::Topology);
-                    }
-                    residues.push(base[SELECTED_COUNT].sub(F::ONE));
+                residues.push(next[SELECTED_COUNT].sub(base[SELECTED_COUNT]));
+                append_bit_transition_residues_v1(&mut residues, base, next);
+            } else {
+                if chunk != 15 {
+                    return Err(P256WindowAirErrorV1::Topology);
                 }
+                residues.push(base[SELECTED_COUNT].sub(F::ONE));
             }
         }
     }
@@ -716,11 +719,11 @@ fn stark_window_matching_bit_v1<A: PolynomialAirFieldV1>(bit: A, expected: A) ->
 pub fn evaluate_p256_window_stark_residues_v1(
     current: &[F; P256_WINDOW_BASE_WIDTH_V1],
     next: &[F; P256_WINDOW_BASE_WIDTH_V1],
-    current_aux: &[F; P256_WINDOW_STARK_AUX_WIDTH_V1],
-    next_aux: &[F; P256_WINDOW_STARK_AUX_WIDTH_V1],
+    current_aux: [F; P256_WINDOW_STARK_AUX_WIDTH_V1],
+    next_aux: [F; P256_WINDOW_STARK_AUX_WIDTH_V1],
     fixed: &[F; P256_WINDOW_STARK_FIXED_WIDTH_V1],
 ) -> Result<Vec<F>, P256WindowAirErrorV1> {
-    evaluate_p256_window_stark_residues_over_field_v1(current, next, current_aux, next_aux, fixed)
+    evaluate_p256_window_stark_residues_over_field_v1(current, next, &current_aux, &next_aux, fixed)
 }
 /// Shared numeric window polynomial over the base or extension field.
 pub fn evaluate_p256_window_stark_residues_over_field_v1<A: PolynomialAirFieldV1>(
@@ -892,8 +895,9 @@ mod tests {
     #[test]
     fn owned_window_erasure_covers_drop_and_partially_built_batch() {
         use super::super::private_table::inspection::observe_v1;
-        let trace = build_p256_window_trace_v1(P256WindowScalarV1::U1, 0, table_v1(), [1, 0, 1, 0])
-            .unwrap();
+        let trace =
+            build_p256_window_trace_v1(P256WindowScalarV1::U1, 0, &table_v1(), [1, 0, 1, 0])
+                .unwrap();
         assert_eq!(
             format!("{trace:?}"),
             "P256WindowTraceV1 { <private trace redacted> }"
@@ -921,9 +925,15 @@ mod tests {
         let mut y = [0_u8; 32];
         let mut z = [0_u8; 32];
         for index in 0..32 {
-            x[index] = tag.wrapping_mul(17).wrapping_add(index as u8);
-            y[index] = tag.wrapping_mul(29).wrapping_add((2 * index) as u8);
-            z[index] = tag.wrapping_mul(43).wrapping_add((3 * index) as u8);
+            x[index] = tag
+                .wrapping_mul(17)
+                .wrapping_add(u8::try_from(index).expect("protocol-bounded index fits u8"));
+            y[index] = tag
+                .wrapping_mul(29)
+                .wrapping_add(u8::try_from(2 * index).expect("protocol-bounded index fits u8"));
+            z[index] = tag
+                .wrapping_mul(43)
+                .wrapping_add(u8::try_from(3 * index).expect("protocol-bounded index fits u8"));
         }
         P256WindowPointV1 {
             x_be: x,
@@ -932,13 +942,17 @@ mod tests {
         }
     }
     fn table_v1() -> [P256WindowPointV1; 16] {
-        core::array::from_fn(|candidate| point_v1(candidate as u8))
+        core::array::from_fn(|candidate| {
+            point_v1(u8::try_from(candidate).expect("protocol-bounded index fits u8"))
+        })
     }
     fn bits_v1(candidate: usize) -> [u8; 4] {
-        core::array::from_fn(|bit| ((candidate >> (3 - bit)) & 1) as u8)
+        core::array::from_fn(|bit| {
+            u8::try_from((candidate >> (3 - bit)) & 1).expect("protocol-bounded index fits u8")
+        })
     }
     fn trace_v1(candidate: usize) -> P256WindowTraceV1 {
-        build_p256_window_trace_v1(P256WindowScalarV1::U1, 37, table_v1(), bits_v1(candidate))
+        build_p256_window_trace_v1(P256WindowScalarV1::U1, 37, &table_v1(), bits_v1(candidate))
             .expect("valid selector")
     }
     #[test]
@@ -961,7 +975,8 @@ mod tests {
                     let expected_packed = (row % 16) * 3 + slot;
                     let expected_coordinate =
                         P256WindowCoordinateV1::from_index(expected_packed / 16).unwrap();
-                    let expected_limb = (expected_packed % 16) as u8;
+                    let expected_limb =
+                        u8::try_from(expected_packed % 16).expect("protocol-bounded index fits u8");
                     match address {
                         P256WindowExternalAddressV1::Candidate {
                             candidate,
@@ -1094,11 +1109,11 @@ mod tests {
             Err(P256WindowAirErrorV1::Index)
         );
         assert_eq!(
-            build_p256_window_trace_v1(P256WindowScalarV1::U1, 64, table_v1(), [0; 4],),
+            build_p256_window_trace_v1(P256WindowScalarV1::U1, 64, &table_v1(), [0; 4],),
             Err(P256WindowAirErrorV1::Index)
         );
         assert_eq!(
-            build_p256_window_trace_v1(P256WindowScalarV1::U1, 0, table_v1(), [0, 0, 0, 2],),
+            build_p256_window_trace_v1(P256WindowScalarV1::U1, 0, &table_v1(), [0, 0, 0, 2],),
             Err(P256WindowAirErrorV1::Index)
         );
     }
@@ -1119,8 +1134,8 @@ mod tests {
             let residues = evaluate_p256_window_stark_residues_v1(
                 &base[row],
                 &base[next],
-                &aux[row],
-                &aux[next],
+                aux[row],
+                aux[next],
                 &fixed[row],
             )?;
             if residues.len() != P256_WINDOW_STARK_CONSTRAINT_COUNT_V1
@@ -1139,7 +1154,7 @@ mod tests {
                 build_p256_window_trace_v1(
                     scalar,
                     window,
-                    table_v1(),
+                    &table_v1(),
                     bits_v1((index * 11 + 7) % P256_WINDOW_CANDIDATES_V1),
                 )
                 .expect("canonical batch window"),
@@ -1168,8 +1183,8 @@ mod tests {
             let residues = evaluate_p256_window_stark_residues_v1(
                 &trace.base[row],
                 &trace.base[next],
-                &trace.aux[row],
-                &trace.aux[next],
+                trace.aux[row],
+                trace.aux[next],
                 fixed_row,
             )
             .expect("canonical batch opening");
@@ -1241,16 +1256,16 @@ mod tests {
         let rejects = |base: &[[F; P256_WINDOW_BASE_WIDTH_V1]]| {
             (0..P256_WINDOW_STARK_TRACE_SIZE_V1).any(|row| {
                 let next = (row + 1) % P256_WINDOW_STARK_TRACE_SIZE_V1;
-                match evaluate_p256_window_stark_residues_v1(
+                evaluate_p256_window_stark_residues_v1(
                     &base[row],
                     &base[next],
-                    &aux[row],
-                    &aux[next],
+                    aux[row],
+                    aux[next],
                     &fixed[row],
-                ) {
-                    Ok(residues) => residues.iter().any(|residue| *residue != F::ZERO),
-                    Err(_) => true,
-                }
+                )
+                .map_or(true, |residues| {
+                    residues.iter().any(|residue| *residue != F::ZERO)
+                })
             })
         };
         let selected_row = 13 * P256_WINDOW_ROWS_PER_POINT_V1 + 7;
@@ -1276,7 +1291,7 @@ mod tests {
         let mut bad_aux = zero_aux;
         bad_aux[0] = F::ONE;
         let residues = evaluate_p256_window_stark_residues_v1(
-            &base[0], &base[1], &bad_aux, &zero_aux, &fixed[0],
+            &base[0], &base[1], bad_aux, zero_aux, &fixed[0],
         )
         .expect("canonical nonzero auxiliary");
         assert!(residues.iter().any(|residue| *residue != F::ZERO));
@@ -1286,8 +1301,8 @@ mod tests {
         let residues = evaluate_p256_window_stark_residues_v1(
             &base[row],
             &base[row + 1],
-            &zero_aux,
-            &zero_aux,
+            zero_aux,
+            zero_aux,
             &wrong_fixed,
         )
         .expect("canonical substituted fixed row");
@@ -1298,8 +1313,8 @@ mod tests {
             evaluate_p256_window_stark_residues_v1(
                 &noncanonical,
                 &base[1],
-                &zero_aux,
-                &zero_aux,
+                zero_aux,
+                zero_aux,
                 &fixed[0],
             ),
             Err(P256WindowAirErrorV1::Constraint)

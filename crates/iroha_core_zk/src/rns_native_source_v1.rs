@@ -190,8 +190,8 @@ impl ZkAmsMkheRnsNativeSourceProviderV1 for CoreZkAmsMkheRnsNativeSourceProvider
         layout: ZkAmsMkheRnsNativeSourceLayoutV1,
     ) -> Result<Self::Writer, ZkAmsMkheRnsNativeSourceErrorV1> {
         layout.validate()?;
-        let main_layout = spool_layout_v1(layout, ZkAmsMkheRnsNativeSourceArenaV1::Main)?;
-        let nonce_layout = spool_layout_v1(layout, ZkAmsMkheRnsNativeSourceArenaV1::Nonce)?;
+        let main_layout = spool_layout_v1(&layout, ZkAmsMkheRnsNativeSourceArenaV1::Main)?;
+        let nonce_layout = spool_layout_v1(&layout, ZkAmsMkheRnsNativeSourceArenaV1::Nonce)?;
         let main = ConfidentialSpoolWriterV1::create_in_v1(&self.directory, main_layout)
             .map_err(map_spool_error_v1)?;
         let nonce = ConfidentialSpoolWriterV1::create_in_v1(&self.directory, nonce_layout)
@@ -305,14 +305,15 @@ impl ZkAmsMkheRnsNativeSourceSnapshotV1 for CoreZkAmsMkheRnsNativeSourceSnapshot
         let panic_on_next_read = core::mem::take(&mut self.panic_on_next_read);
         let mut guard = CoreZkAmsMkheRnsNativePairReadGuardV1::new(self);
         #[cfg(test)]
-        if panic_on_next_read {
-            panic!("injected Core RNS-native pair read unwind");
-        }
+        assert!(
+            !panic_on_next_read,
+            "injected Core RNS-native pair read unwind"
+        );
         #[cfg(test)]
-        let result = match injected_read_error {
-            Some(error) => Err(error),
-            None => guard.read_selected_v1(arena, slot, expected_context),
-        };
+        let result = injected_read_error.map_or_else(
+            || guard.read_selected_v1(arena, slot, expected_context),
+            Err,
+        );
         #[cfg(not(test))]
         let result = guard.read_selected_v1(arena, slot, expected_context);
         let inner = match result {
@@ -370,7 +371,7 @@ fn read_error_poisons_v1(error: ConfidentialSpoolErrorV1) -> bool {
 
 #[cfg(test)]
 fn spool_layout_v1(
-    layout: ZkAmsMkheRnsNativeSourceLayoutV1,
+    layout: &ZkAmsMkheRnsNativeSourceLayoutV1,
     arena: ZkAmsMkheRnsNativeSourceArenaV1,
 ) -> Result<ConfidentialSpoolLayoutV1, ZkAmsMkheRnsNativeSourceErrorV1> {
     ConfidentialSpoolLayoutV1::new_v1(

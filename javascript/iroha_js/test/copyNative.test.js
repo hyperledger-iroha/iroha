@@ -21,7 +21,7 @@ import {
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
   probeNativeBindingExports,
@@ -1734,17 +1734,21 @@ test("native publication rejects dirty or stale source provenance", async (t) =>
 test(
   "required-export probe loads a real addon through the recovery-compatible private suffix",
   (t) => {
-    const nativePath = path.resolve(process.env.IROHA_JS_NATIVE_DIR || "native", NATIVE_FILENAME);
+    // Authenticate the selected artifact before exercising its verified snapshot.
+    const binding = getNativeBinding();
+    assert.equal(typeof binding.noritoEncodeInstruction, "function");
+    const nativePath = process.env.IROHA_JS_NATIVE_DIR
+      ? path.resolve(process.env.IROHA_JS_NATIVE_DIR, NATIVE_FILENAME)
+      : fileURLToPath(new URL(`../native/${NATIVE_FILENAME}`, import.meta.url));
     assert.equal(
       existsSync(nativePath),
       true,
-      `native addon is required at ${nativePath}; run \`npm run build:native\``,
+      `the selected authenticated native addon must exist at ${nativePath}`,
     );
     const root = mkdtempSync(path.join(os.tmpdir(), "iroha-js-native-dlopen-probe-"));
     t.after(() => rmSync(root, { recursive: true, force: true }));
     const staged = path.join(root, `${NATIVE_FILENAME}.next`);
     const nativeHash = createHash("sha256").update(readFileSync(nativePath)).digest("hex");
-    getNativeBinding();
     const loaded = process.report.getReport().sharedObjects.filter(
       (image) => path.basename(image) === `${nativeHash}.node`,
     );

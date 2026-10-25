@@ -72,8 +72,10 @@ fn exact_original_extension_counts_force_leaf_eku_and_critical_boolean_positions
             for ordinal in 0..5 {
                 let count = if role == ZkX509Rfc5280GrammarRoleV1::CertificateExtensions {
                     4 + u64::from(document == 0)
+                } else if ordinal < 2 {
+                    2
                 } else {
-                    if ordinal < 2 { 2 } else { 3 }
+                    3
                 };
                 let mut row = active_zero_row_v1();
                 row[BASE_DOCUMENT] = F(document);

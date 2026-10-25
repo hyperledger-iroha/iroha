@@ -69,6 +69,10 @@ pub(super) fn validate_invocation(invocation: &str) -> Result<()> {
 }
 
 /// Consume both original output owners only after the real reply writer flushes.
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Consume both original output owners only after verifying and flushing the terminal receipt; they cannot be reused for another receipt."
+)]
 pub(super) fn emit(
     args: &Args,
     scheduled: usize,

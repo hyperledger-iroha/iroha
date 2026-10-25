@@ -1,4 +1,4 @@
-//! Supervised Torii runtime for durable native SoraFS reserve/rent transactions.
+//! Supervised Torii runtime for durable native `SoraFS` reserve/rent transactions.
 //!
 //! The durable [`sorafs_node::reserve_transaction_forwarder`] is the only local delivery state.
 //! Reserve policy, provider state, movements, appeals, and transaction outcomes are read from one
@@ -1128,50 +1128,46 @@ pub async fn run_sorafs_reserve_transaction_forwarder_scan(
     }
     let policy = state.sorafs_node.config().reserve_worker_policy();
     if policy.enabled() {
-        match collect_generated_reserve_operations_in_one_finalized_view(
+        if let Ok(batch) = collect_generated_reserve_operations_in_one_finalized_view(
             state,
             cursor.after_provider_id,
             policy,
         ) {
-            Ok(batch) => {
-                cursor.after_provider_id = batch.next_after_provider_id;
-                for candidate in batch.candidates {
-                    match state
-                        .sorafs_node
-                        .enqueue_reserve_transaction(candidate.operation, &candidate.context)
-                    {
-                        Ok(ReserveTransactionEnqueueResultV1::Inserted { .. }) => {
-                            scan.generated = scan.generated.saturating_add(1);
-                        }
-                        Ok(ReserveTransactionEnqueueResultV1::Existing { .. }) => {
-                            scan.generation_replayed = scan.generation_replayed.saturating_add(1);
-                        }
-                        Err(_) => {
-                            scan.generation_deferred = scan.generation_deferred.saturating_add(1);
-                            warn!(
-                                "failed to durably enqueue generated native SoraFS reserve/rent work"
-                            );
-                        }
+            cursor.after_provider_id = batch.next_after_provider_id;
+            for candidate in batch.candidates {
+                match state
+                    .sorafs_node
+                    .enqueue_reserve_transaction(candidate.operation, &candidate.context)
+                {
+                    Ok(ReserveTransactionEnqueueResultV1::Inserted { .. }) => {
+                        scan.generated = scan.generated.saturating_add(1);
+                    }
+                    Ok(ReserveTransactionEnqueueResultV1::Existing { .. }) => {
+                        scan.generation_replayed = scan.generation_replayed.saturating_add(1);
+                    }
+                    Err(_) => {
+                        scan.generation_deferred = scan.generation_deferred.saturating_add(1);
+                        warn!(
+                            "failed to durably enqueue generated native SoraFS reserve/rent work"
+                        );
                     }
                 }
             }
-            Err(_) => {
-                scan.generation_deferred = scan.generation_deferred.saturating_add(1);
-                warn!(
-                    "failed to derive native SoraFS reserve/rent work from one finalized ledger view"
-                );
-            }
+        } else {
+            scan.generation_deferred = scan.generation_deferred.saturating_add(1);
+            warn!(
+                "failed to derive native SoraFS reserve/rent work from one finalized ledger view"
+            );
         }
     }
-    let pending = match state
+    let pending = if let Ok(pending) = state
         .sorafs_node
         .pending_reserve_transactions_after(cursor.after_sequence, policy.scan_batch_limit())
     {
-        Ok(pending) => pending,
-        Err(_) => {
-            warn!("failed to load durable native SoraFS reserve/rent transactions");
-            return scan;
-        }
+        pending
+    } else {
+        warn!("failed to load durable native SoraFS reserve/rent transactions");
+        return scan;
     };
     for delivery in pending {
         cursor.after_sequence = Some(delivery.sequence);
@@ -1233,7 +1229,7 @@ pub async fn run_sorafs_reserve_transaction_forwarder_scan(
         let exact_transaction_hash = exact_transaction.as_ref().map(SignedTransaction::hash);
         let local_evidence_before = exact_transaction_hash.as_ref().is_some_and(|hash| {
             let queue_pending = state.queue.contains_pending_hash(
-                iroha_core::tx::external_entrypoint_hash_from_signed_hash(hash.clone()),
+                iroha_core::tx::external_entrypoint_hash_from_signed_hash(*hash),
                 &state.state,
             );
             let cache_kind = state
@@ -1260,7 +1256,7 @@ pub async fn run_sorafs_reserve_transaction_forwarder_scan(
         );
         let local_evidence_after = exact_transaction_hash.as_ref().is_some_and(|hash| {
             let queue_pending = state.queue.contains_pending_hash(
-                iroha_core::tx::external_entrypoint_hash_from_signed_hash(hash.clone()),
+                iroha_core::tx::external_entrypoint_hash_from_signed_hash(*hash),
                 &state.state,
             );
             let cache_kind = state
@@ -1532,35 +1528,34 @@ async fn submit_sorafs_reserve_transaction(
     if transaction.network_id() != Some(state.state.network_id_ref()) {
         return ReserveTransactionSubmissionResultV1::Deferred;
     }
-    let accepted = match crate::routing::accept_transaction_for_ingress(
-        state.state.clone(),
+    let accepted = if let Ok(accepted) = crate::routing::accept_transaction_for_ingress(
+        &(state.state),
         transaction.clone(),
         &state.telemetry,
     ) {
-        Ok(accepted) => accepted,
-        Err(_) => {
-            let exact = state
-                .sorafs_node
-                .begin_reserve_transaction_submission(operation_id);
-            if !exact
-                .as_ref()
-                .is_ok_and(|bytes| bytes == &transaction_bytes)
-            {
-                return ReserveTransactionSubmissionResultV1::Deferred;
-            }
-            let Some(finalized_cursor) = current_reserve_finalized_cursor(state) else {
-                return ReserveTransactionSubmissionResultV1::Deferred;
-            };
-            return if state
-                .sorafs_node
-                .mark_reserve_transaction_rejected(operation_id, finalized_cursor)
-                .is_ok()
-            {
-                ReserveTransactionSubmissionResultV1::Rejected
-            } else {
-                ReserveTransactionSubmissionResultV1::Deferred
-            };
+        accepted
+    } else {
+        let exact = state
+            .sorafs_node
+            .begin_reserve_transaction_submission(operation_id);
+        if !exact
+            .as_ref()
+            .is_ok_and(|bytes| bytes == &transaction_bytes)
+        {
+            return ReserveTransactionSubmissionResultV1::Deferred;
         }
+        let Some(finalized_cursor) = current_reserve_finalized_cursor(state) else {
+            return ReserveTransactionSubmissionResultV1::Deferred;
+        };
+        return if state
+            .sorafs_node
+            .mark_reserve_transaction_rejected(operation_id, finalized_cursor)
+            .is_ok()
+        {
+            ReserveTransactionSubmissionResultV1::Rejected
+        } else {
+            ReserveTransactionSubmissionResultV1::Deferred
+        };
     };
     let routing_plan = match state
         .queue
@@ -1582,8 +1577,8 @@ async fn submit_sorafs_reserve_transaction(
     }
     let disposition = if crate::should_execute_route_locally(state.as_ref(), routing_decision) {
         match crate::routing::push_accepted_transaction_for_ingress_with_routing_plan(
-            state.queue.clone(),
-            state.state.clone(),
+            &(state.queue),
+            &(state.state),
             accepted,
             Some(routing_plan),
         ) {
@@ -2147,11 +2142,8 @@ mod tests {
                 &expected,
                 true,
                 [
-                    (expected.clone(), ReserveCommittedExternalOutcomeV1::Applied),
-                    (
-                        expected.clone(),
-                        ReserveCommittedExternalOutcomeV1::Rejected
-                    ),
+                    (expected, ReserveCommittedExternalOutcomeV1::Applied),
+                    (expected, ReserveCommittedExternalOutcomeV1::Rejected),
                 ]
             ),
             ReserveAuthoritativeTransactionOutcomeV1::Unavailable

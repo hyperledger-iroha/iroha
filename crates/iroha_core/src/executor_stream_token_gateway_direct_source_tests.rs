@@ -367,7 +367,7 @@ mod gateway_direct_source {
                 tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
                 tx.current_direct_stream_token_gateway_instruction_index = Some(77);
                 let result = Executor::Initial
-                    .execute_transaction(&mut tx, &ALICE_ID, source, &mut IvmCache::new())
+                    .execute_transaction(&mut tx, &ALICE_ID, &source, &mut IvmCache::new())
                     .map_err(crate::execution_attempt::expect_completed_rejection);
                 assert_eq!(result.is_err(), rejected, "mixed={mixed}: {result:?}");
                 assert!(tx.last_tx_gas_used > 0, "the authored set reached dispatch");
@@ -386,17 +386,15 @@ mod gateway_direct_source {
         let mut tx = block.transaction();
         tx.current_direct_stream_token_gateway_instruction_index = Some(77);
         assert!(
-            Executor::Initial
-                .execute_contract_invocation(
-                    &mut tx,
-                    &ALICE_ID,
-                    &call(&state),
-                    &mut IvmCache::new(),
-                    50_000_000,
-                    1_000,
-                    None,
-                )
-                .is_err()
+            Executor::execute_contract_invocation(
+                &mut tx,
+                &ALICE_ID,
+                &call(&state),
+                &mut IvmCache::new(),
+                (50_000_000, 1_000),
+                None,
+            )
+            .is_err()
         );
         assert_eq!(
             tx.current_direct_stream_token_gateway_instruction_index,

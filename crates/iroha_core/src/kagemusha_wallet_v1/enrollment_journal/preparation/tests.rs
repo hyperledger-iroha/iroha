@@ -5,7 +5,7 @@ const CONFIGURATION: [u8; 32] = [31; 32];
 const INCARNATION: [u8; 32] = [41; 32];
 const EXCHANGE: [u8; 32] = [42; 32];
 
-pub(crate) fn response(packet: &VerifierExchangeV1, outcome: &str) -> Vec<u8> {
+pub fn response(packet: &VerifierExchangeV1, outcome: &str) -> Vec<u8> {
     let bytes = &packet.frame()[4..];
     let request: norito::json::Value = norito::json::from_slice(bytes).unwrap();
     let value = norito::json!({
@@ -26,7 +26,7 @@ pub(crate) fn response(packet: &VerifierExchangeV1, outcome: &str) -> Vec<u8> {
     frame
 }
 
-pub(crate) fn prepare(
+pub fn prepare(
     journal: &mut EnrollmentJournalV1,
     attempt: &mut EnrollmentAttemptV1,
     dispatch: &PreKeyDispatchV1,
@@ -217,7 +217,7 @@ fn changed_original_or_preparation_acknowledgment_cannot_admit_an_attempt() {
         journal
             .directory
             .write_atomic(
-                &filename(&attempt.selection().key).unwrap(),
+                filename(&attempt.selection().key).unwrap(),
                 &bytes,
                 PublishMode::Replace,
             )
@@ -231,7 +231,7 @@ fn changed_original_or_preparation_acknowledgment_cannot_admit_an_attempt() {
         journal
             .directory
             .write_atomic(
-                &filename(&attempt.selection().key).unwrap(),
+                filename(&attempt.selection().key).unwrap(),
                 &attempt.original,
                 PublishMode::Replace,
             )

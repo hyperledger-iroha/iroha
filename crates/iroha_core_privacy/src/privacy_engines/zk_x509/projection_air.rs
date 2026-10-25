@@ -1099,7 +1099,7 @@ fn compile_fixed_trace_v1(
             sigma[index] = identity[successor];
         }
     }
-    if sigma.iter().any(|value| *value == F::ZERO) {
+    if sigma.contains(&F::ZERO) {
         return Err(ZkX509ProjectionAirErrorV1::Topology);
     }
     Ok(ZkX509ProjectionFixedTraceV1 {
@@ -1172,12 +1172,11 @@ fn chain_spki_byte_v1(
     witness
         .chain_spki_der
         .get(certificate)
-        .map(|spki| {
+        .map_or(Ok(0), |spki| {
             spki.get(offset)
                 .copied()
                 .ok_or(ZkX509ProjectionAirErrorV1::Shape)
         })
-        .unwrap_or(Ok(0))
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn set_byte_v1(row: &mut [F; ZK_X509_PROJECTION_BASE_WIDTH_V1], value: u8) {
@@ -1315,10 +1314,13 @@ fn fill_input_row_v1(
     Ok(row)
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
+type ProjectionSourceMaterialV1 = (u8, bool, Option<(usize, usize, usize)>);
+
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn source_token_material_v1(
     token: ZkX509ProjectionSourceTokenV1,
     witness: &ZkX509ProjectionWitnessV1,
-) -> Result<(u8, bool, Option<(usize, usize, usize)>), ZkX509ProjectionAirErrorV1> {
+) -> Result<ProjectionSourceMaterialV1, ZkX509ProjectionAirErrorV1> {
     match token {
         ZkX509ProjectionSourceTokenV1::Constant(value) => Ok((value, true, None)),
         ZkX509ProjectionSourceTokenV1::Spki {
@@ -1389,18 +1391,18 @@ fn source_token_material_v1(
     }
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
+type ProjectionBaseMaterialV1 = (
+    ZkX509ProjectionBaseTraceV1,
+    PrivateTableV1<Vec<u8>>,
+    PrivateTableV1<[u8; 32]>,
+);
+
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn build_base_trace_v1(
     fixed: &ZkX509ProjectionFixedTraceV1,
     invocations: &[InvocationSpecV1],
     witness: &ZkX509ProjectionWitnessV1,
-) -> Result<
-    (
-        ZkX509ProjectionBaseTraceV1,
-        PrivateTableV1<Vec<u8>>,
-        PrivateTableV1<[u8; 32]>,
-    ),
-    ZkX509ProjectionAirErrorV1,
-> {
+) -> Result<ProjectionBaseMaterialV1, ZkX509ProjectionAirErrorV1> {
     let mut rows = PrivateTableV1::new(Vec::new(), zeroize_field_rows_v1);
     rows.try_reserve_exact(fixed.rows.len())
         .map_err(|_| ZkX509ProjectionAirErrorV1::Resource)?;
@@ -2213,11 +2215,9 @@ fn constrain_length_row_v1(
             current[LENGTH_ACC_AFTER],
             current[DECLARED_LENGTH],
         );
-        if next_is_variable {
-            if let Some(next) = next {
-                add_residue_v1(residues, next[DECLARED_LENGTH], current[DECLARED_LENGTH]);
-                add_zero_v1(residues, next[REGION_BEFORE]);
-            }
+        if next_is_variable && let Some(next) = next {
+            add_residue_v1(residues, next[DECLARED_LENGTH], current[DECLARED_LENGTH]);
+            add_zero_v1(residues, next[REGION_BEFORE]);
         }
     } else if let Some(next) = next {
         add_residue_v1(residues, next[LENGTH_ACC_BEFORE], current[LENGTH_ACC_AFTER]);
@@ -2245,12 +2245,10 @@ fn constrain_variable_row_v1(
     }
     if last {
         add_residue_v1(residues, current[REGION_AFTER], current[DECLARED_LENGTH]);
-    } else if same_next_group {
-        if let Some(next) = next {
-            add_residue_v1(residues, next[REGION_BEFORE], current[REGION_AFTER]);
-            add_residue_v1(residues, next[DECLARED_LENGTH], current[DECLARED_LENGTH]);
-            add_zero_v1(residues, next[USED].mul(F::ONE.sub(current[USED])));
-        }
+    } else if same_next_group && let Some(next) = next {
+        add_residue_v1(residues, next[REGION_BEFORE], current[REGION_AFTER]);
+        add_residue_v1(residues, next[DECLARED_LENGTH], current[DECLARED_LENGTH]);
+        add_zero_v1(residues, next[USED].mul(F::ONE.sub(current[USED])));
     }
 }
 #[cfg(test)]
@@ -3380,10 +3378,10 @@ pub mod tests {
         let witness = ZkX509ProjectionWitnessV1 {
             chain_spki_der: vec![
                 (0..ZK_X509_PROJECTION_SPKI_DER_BYTES_V1)
-                    .map(|offset| 0x20_u8.wrapping_add(offset as u8))
+                    .map(|offset| 0x20_u8.wrapping_add(offset.to_le_bytes()[0]))
                     .collect(),
                 (0..ZK_X509_PROJECTION_SPKI_DER_BYTES_V1)
-                    .map(|offset| 0x80_u8.wrapping_add(offset as u8))
+                    .map(|offset| 0x80_u8.wrapping_add(offset.to_le_bytes()[0]))
                     .collect(),
             ],
             leaf_serial: vec![1, 0xA4, 0x5C],
@@ -3574,7 +3572,7 @@ pub mod tests {
         let mut depth_three = witness.clone();
         depth_three.chain_spki_der.push(
             (0..ZK_X509_PROJECTION_SPKI_DER_BYTES_V1)
-                .map(|offset| 0xC0_u8.wrapping_add(offset as u8))
+                .map(|offset| 0xC0_u8.wrapping_add(offset.to_le_bytes()[0]))
                 .collect(),
         );
         let depth_three_trace = build_zk_x509_projection_trace_v1(&statement, &depth_three)
@@ -3652,14 +3650,14 @@ pub mod tests {
         let fixed =
             compile_zk_x509_projection_stark_fixed_rows_v1(&statement).expect("numeric fixed rows");
         assert_eq!(fixed.len(), ZK_X509_PROJECTION_TRACE_SIZE_V1);
-        for index in 0..ZK_X509_PROJECTION_TRACE_SIZE_V1 {
+        for (index, fixed_row) in fixed.iter().enumerate() {
             let next = (index + 1) % ZK_X509_PROJECTION_TRACE_SIZE_V1;
             let residues = evaluate_zk_x509_projection_stark_residues_v1(
                 &trace.base.rows[index],
                 &trace.base.rows[next],
                 &aux.rows[index],
                 &aux.rows[next],
-                &fixed[index],
+                fixed_row,
                 challenges,
             )
             .expect("numeric residues");

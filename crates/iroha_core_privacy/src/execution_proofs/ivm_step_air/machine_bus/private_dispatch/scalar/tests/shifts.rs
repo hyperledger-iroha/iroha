@@ -137,7 +137,12 @@ fn native_private_shift_register_amounts_tags_aliases_and_zero_match() {
                 checked_native(
                     enc::encode_rr(opcode, 4, 2, 3),
                     &[
-                        (2, values[amount as usize % values.len()], tag),
+                        (
+                            2,
+                            values[usize::try_from(amount).expect("bounded fixture value")
+                                % values.len()],
+                            tag,
+                        ),
                         (3, amount, tag),
                     ],
                 );
@@ -203,9 +208,7 @@ fn native_private_rotate_immediates_are_unsigned_and_never_read_raw_byte_registe
         assert_eq!(first.0.packets.fields, second.0.packets.fields);
         let mut read = first.clone();
         read.0.packets.fields[SCALAR_RIGHT] = event(
-            Space::Register,
-            0,
-            255,
+            (Space::Register, 0, 255),
             0,
             0,
             false,

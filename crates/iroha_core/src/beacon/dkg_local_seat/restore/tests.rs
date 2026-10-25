@@ -35,8 +35,7 @@ fn original_clock(chain: &CertifiedTestChain, clock: &mut NativeJournalCursor, h
 fn context(
     authority: &AuthenticatedGlobalBeaconDkgAttemptV1,
     clock: &NativeJournalCursor,
-    phase: u16,
-    seat: u16,
+    (phase, seat): (u16, u16),
     signer: &KeyPair,
     output: &[u8],
     input: [u8; 32],
@@ -49,19 +48,19 @@ fn context(
     authority
         .checkpoint_context(
             clock,
-            phase,
-            seat,
+            (phase, seat),
             signer,
-            "software-provider",
-            7,
-            Hash::new(output).into(),
-            input,
-            if phase == 1 {
-                [0; 32]
-            } else {
-                Hash::new(previous).into()
-            },
-            Hash::new(intent).into(),
+            ("software-provider", 7),
+            (
+                Hash::new(output).into(),
+                input,
+                if phase == 1 {
+                    [0; 32]
+                } else {
+                    Hash::new(previous).into()
+                },
+                Hash::new(intent).into(),
+            ),
         )
         .unwrap()
 }
@@ -114,7 +113,7 @@ fn original_with_capsule_corruption(corrupt_capsule: bool) -> Original {
     }
     let commitments = reducer.public_snapshot().unwrap().record().clone();
     let public1 = local[0].publication_frame().unwrap().to_vec();
-    let ctx1 = context(&authority, &clock, 1, 1, &keys[0], &public1, [0; 32], &[]);
+    let ctx1 = context(&authority, &clock, (1, 1), &keys[0], &public1, [0; 32], &[]);
     let private1 = local[0]
         .seal_private_checkpoint(&ctx1, &keys[0])
         .unwrap()
@@ -138,7 +137,13 @@ fn original_with_capsule_corruption(corrupt_capsule: bool) -> Original {
     let public2 = local[0].delivery_frame(&commitments).unwrap().to_vec();
     let input2 = local[0].checkpoint_input_hash(2, &commitments).unwrap();
     let ctx2 = context(
-        &authority, &clock, 2, 1, &keys[0], &public2, input2, &private1,
+        &authority,
+        &clock,
+        (2, 1),
+        &keys[0],
+        &public2,
+        input2,
+        &private1,
     );
     let private2 = local[0]
         .seal_private_checkpoint(&ctx2, &keys[0])
@@ -191,7 +196,13 @@ fn original_with_capsule_corruption(corrupt_capsule: bool) -> Original {
     }
     let input3 = local[0].checkpoint_input_hash(3, &deliveries).unwrap();
     let ctx3 = context(
-        &authority, &clock, 3, 1, &keys[0], &public3, input3, &private2,
+        &authority,
+        &clock,
+        (3, 1),
+        &keys[0],
+        &public3,
+        input3,
+        &private2,
     );
     let private3 = if corrupt_capsule {
         // Deliberately use the component seal API: the forward local producer
@@ -336,8 +347,7 @@ fn actual_native_heads_restore_original_delivery_then_acceptance_without_signing
                     .restore_delivered(
                         &original.contexts[1],
                         &original.commitments,
-                        delivery.publication().unwrap(),
-                        &original.public[1],
+                        (delivery.publication().unwrap(), &original.public[1]),
                         &original.private[1],
                         &original.signer,
                         norito::canonical_decode_limits(original.private[1].len()),
@@ -378,8 +388,7 @@ fn actual_native_heads_restore_original_delivery_then_acceptance_without_signing
         .restore_accepted(
             &original.contexts[2],
             &original.deliveries,
-            acceptance.publication().unwrap(),
-            &original.public[2],
+            (acceptance.publication().unwrap(), &original.public[2]),
             &original.private[2],
             &original.signer,
             norito::canonical_decode_limits(original.private[2].len()),
@@ -409,8 +418,7 @@ fn actual_native_heads_restore_original_delivery_then_acceptance_without_signing
                     .restore_accepted(
                         &original.contexts[2],
                         &original.deliveries,
-                        acceptance.publication().unwrap(),
-                        &original.public[2],
+                        (acceptance.publication().unwrap(), &original.public[2]),
                         &original.private[2],
                         &original.signer,
                         norito::canonical_decode_limits(original.private[2].len()),
@@ -652,8 +660,7 @@ fn original_delivery_refusal_keeps_public_prefix_source_chain_and_same_private_b
         .restore_delivered(
             &original.contexts[1],
             &original.commitments,
-            bank.publication().unwrap(),
-            &original.public[1],
+            (bank.publication().unwrap(), &original.public[1]),
             &original.private[1],
             &original.signer,
             narrow,
@@ -700,8 +707,7 @@ fn original_delivery_refusal_keeps_public_prefix_source_chain_and_same_private_b
             restored = Some(local.restore_delivered(
                 &original.contexts[1],
                 &original.commitments,
-                bank.publication().unwrap(),
-                &original.public[1],
+                (bank.publication().unwrap(), &original.public[1]),
                 &original.private[1],
                 &original.signer,
                 norito::canonical_decode_limits(original.private[1].len()),
@@ -763,8 +769,7 @@ fn original_signed_output_corruption_is_refused_before_consuming_any_prepaid_row
         .restore_delivered(
             &original.contexts[1],
             &original.commitments,
-            &corrupted,
-            &original.public[1],
+            (&corrupted, &original.public[1]),
             &original.private[1],
             &original.signer,
             norito::canonical_decode_limits(original.private[1].len()),
@@ -785,8 +790,7 @@ fn original_signed_output_corruption_is_refused_before_consuming_any_prepaid_row
         .restore_delivered(
             &original.contexts[1],
             &original.commitments,
-            bank.publication().unwrap(),
-            &original.public[1],
+            (bank.publication().unwrap(), &original.public[1]),
             &original.private[1],
             &original.signer,
             norito::canonical_decode_limits(original.private[1].len()),
@@ -840,8 +844,7 @@ fn original_signed_capsule_relation_is_checked_before_any_accepted_owner_or_row_
         .restore_delivered(
             &original.contexts[1],
             &original.commitments,
-            delivery.publication().unwrap(),
-            &original.public[1],
+            (delivery.publication().unwrap(), &original.public[1]),
             &original.private[1],
             &original.signer,
             norito::canonical_decode_limits(original.private[1].len()),
@@ -872,8 +875,7 @@ fn original_signed_capsule_relation_is_checked_before_any_accepted_owner_or_row_
                 .restore_accepted(
                     &original.contexts[2],
                     &original.deliveries,
-                    acceptance.publication().unwrap(),
-                    &original.public[2],
+                    (acceptance.publication().unwrap(), &original.public[2]),
                     &original.private[2],
                     &original.signer,
                     norito::canonical_decode_limits(original.private[2].len()),
@@ -956,8 +958,7 @@ fn original_accepted_share_and_ciphertext_owners_refund_exact_pool_after_consume
         .restore_delivered(
             &original.contexts[1],
             &original.commitments,
-            delivery.publication().unwrap(),
-            &original.public[1],
+            (delivery.publication().unwrap(), &original.public[1]),
             &original.private[1],
             &original.signer,
             norito::canonical_decode_limits(original.private[1].len()),
@@ -969,8 +970,7 @@ fn original_accepted_share_and_ciphertext_owners_refund_exact_pool_after_consume
         .restore_accepted(
             &original.contexts[2],
             &original.deliveries,
-            acceptance.publication().unwrap(),
-            &original.public[2],
+            (acceptance.publication().unwrap(), &original.public[2]),
             &original.private[2],
             &original.signer,
             norito::canonical_decode_limits(original.private[2].len()),

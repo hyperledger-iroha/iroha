@@ -161,9 +161,9 @@ pub fn verify_lane_entry(
     anchors: &impl AnchorView,
     history: &LaneChainView,
     predecessor: &SumeragiLaneFrontier,
-    body: &AvailableBody,
-    qc: &Qc,
+    receipt: (&AvailableBody, &Qc),
 ) -> Result<LaneResult, LaneEntryError> {
+    let (body, qc) = receipt;
     let config = verify_lane_certificate(record, network, chain_id, predecessor, body, qc)?;
     let checks = StatelessChecks::new(*network);
     let Admission::Valid(result) = admit(

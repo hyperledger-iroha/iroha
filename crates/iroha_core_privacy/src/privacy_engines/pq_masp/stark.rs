@@ -566,14 +566,14 @@ impl ProofManagedNoteStarkAdapterV1 for PqMaspStarkAdapterV1<'_> {
     }
     fn profile_constraint_residues_v1(
         &self,
-        current_base: &[F],
-        next_base: &[F],
+        base_rows: (&[F], &[F]),
         current_aux: &[F],
         next_aux: &[F],
         fixed: &[F],
         _copy_challenges: NoteCopyChallengesV1,
         _profile_challenges: &Self::ProfileChallenges,
     ) -> Result<Vec<F>, ProofManagedNoteStarkErrorV1> {
+        let (current_base, next_base) = base_rows;
         pq_masp_profile_constraint_residues_inner_v1(
             current_base,
             next_base,
@@ -757,17 +757,18 @@ mod tests {
             "valid statement, binding and outer authorization must reach the inner verifier"
         );
     }
-    fn prepared_columns(
-        statement: &PqMaspStarkStatementV1,
-        witness: &PqMaspWitnessV1,
-        transcript_domain: &'static [u8],
-    ) -> (
+    type PreparedColumnsV1 = (
         super::super::air::PqMaspBaseTraceV1,
         Vec<Vec<F>>,
         Vec<Vec<F>>,
         Vec<Vec<F>>,
         NoteCopyChallengesV1,
-    ) {
+    );
+    fn prepared_columns(
+        statement: &PqMaspStarkStatementV1,
+        witness: &PqMaspWitnessV1,
+        transcript_domain: &'static [u8],
+    ) -> PreparedColumnsV1 {
         let trace = super::super::air::build_pq_masp_base_trace_v1(statement, witness)
             .expect("canonical PQ-MASP trace");
         let base = pq_masp_base_columns_v1(&trace).expect("base columns");

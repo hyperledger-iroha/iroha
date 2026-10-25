@@ -516,12 +516,12 @@ fn original_signer_requires_matching_height_and_in_range_roster() {
     let NativeEvidence::VoteEquivocation(first, second) = vote_pair(&chain, 1, 0) else {
         unreachable!()
     };
-    let mut wrong_height = first.clone();
+    let mut wrong_height = first;
     wrong_height.height += 1;
     assert!(
         super::super::evidence_history::verify_from_state(
             &chain.state().view(),
-            &NativeEvidence::VoteEquivocation(wrong_height, second.clone()),
+            &NativeEvidence::VoteEquivocation(wrong_height, second),
             |_, _| Ok(())
         )
         .is_err()

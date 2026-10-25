@@ -123,7 +123,7 @@ impl RetainedGenesis {
         let params = iroha_core::sumeragi::consensus::consensus_genesis_params_from_parameters(
             mode,
             &parameter_state,
-            metadata.sumeragi_context.clone(),
+            metadata.sumeragi_context,
         )
         .map_err(|error| eyre!(error))?;
         let profile = ConsensusBootstrapProfile {
@@ -199,10 +199,12 @@ impl RetainedGenesis {
             &original,
             &AccountId::new(self.originals.public_key.clone()),
             topology,
-            Some(&config.pipeline),
-            Some(&config.nexus),
-            Some(&config.zk),
-            Some(config),
+            crate::config::GenesisRuntimeConfig {
+                pipeline_config: Some(&config.pipeline),
+                nexus_config: Some(&config.nexus),
+                zk_config: Some(&config.zk),
+                runtime_config: Some(config),
+            },
         )?;
         // Native validation authenticates the proposal and computes its outputs.
         // Outputs are secondary state, not signed proposal content: a valid
@@ -733,10 +735,12 @@ mod tests {
             &original,
             &AccountId::new(originals.public_key.clone()),
             &topology,
-            Some(&actual.pipeline),
-            Some(&actual.nexus),
-            Some(&actual.zk),
-            Some(&actual),
+            crate::config::GenesisRuntimeConfig {
+                pipeline_config: Some(&actual.pipeline),
+                nexus_config: Some(&actual.nexus),
+                zk_config: Some(&actual.zk),
+                runtime_config: Some(&actual),
+            },
         )?;
         assert!(
             executed.has_results(),

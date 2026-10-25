@@ -80,7 +80,7 @@ fn format_native_evidence_summary(idx: usize, item: &SumeragiNativeEvidenceAudit
         item.consensus_admitted_height,
     );
     if let Some(height) = penalty_height {
-        summary.push_str(&format!(" penalty_height={height}"));
+        let _ = write!(summary, " penalty_height={height}");
     }
     summary
 }

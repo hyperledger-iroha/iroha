@@ -71,6 +71,10 @@ pub(in crate::state) struct CapturedMembershipTables {
 
 /// Required source-work policy for the grouped catalog reader; there is no default.
 #[derive(Clone, Copy)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "The max prefix distinguishes resource ceilings from observed counts"
+)]
 pub(in crate::state) struct MembershipWorkLimits {
     /// Every physical latest/history entry inspection, including filtered rows.
     pub(in crate::state) max_row_visits: usize,
@@ -145,6 +149,10 @@ impl CapturedMembershipTables {
 }
 
 /// Required group policy plus the aggregate's remaining row admission.
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 pub(super) fn capture_membership_group_once(
     state: &State,
     tables: LeafLimits,
@@ -163,6 +171,10 @@ pub(super) fn capture_membership_group_once(
     )
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 fn remaining_allowance(
     current: &Builder<'_>,
     rollback: &Builder<'_>,
@@ -185,6 +197,10 @@ fn remaining_allowance(
 }
 
 /// No writer or row borrow escapes the original pool's synchronous refund scope.
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 fn capture_from_storage(
     storage: &TransactionsStorage,
     budget: &AllocationBudget,
@@ -208,6 +224,10 @@ struct EncodedMembership<'budget> {
 }
 
 impl EncodedMembership<'_> {
+    #[expect(
+        clippy::result_large_err,
+        reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+    )]
     fn finish(
         self,
         budget: &AllocationBudget,
@@ -226,6 +246,10 @@ impl EncodedMembership<'_> {
 }
 
 /// Shared canonical row encoder; source admission and source retirement stay with its caller.
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 fn encode_membership<'budget>(
     frontier: u64,
     original_surface: TransactionsPublicationSurface,
@@ -289,6 +313,10 @@ fn encode_membership<'budget>(
 }
 
 // The private observation point retains existing real waiter/unwind controls.
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 fn capture_observed(
     storage: &TransactionsStorage,
     budget: &AllocationBudget,
@@ -317,13 +345,17 @@ fn capture_observed(
 /// Capture the exact admitted original successor as one pair with its frontier.
 ///
 /// No committed view, physical writer or row set is reacquired. The caller must
-/// keep its existing StatePublication execution-pool refund batch through sibling
+/// keep its existing `StatePublication` execution-pool refund batch through sibling
 /// writer retirement and any provisional-node drop. This token checks pool identity
 /// only: it does not transfer or enforce retention of the enclosing refund batch.
 /// Detached fields return `None` until the original publication slot is prepared.
 /// This is a scoped encoding prerequisite, never complete State/finality authority.
 /// TODO: compose every canonical cell, checked relation and authenticated history
 /// with this original group before complete State publication/recovery.
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 pub(in crate::state) fn capture_original_membership_group_once(
     block: &crate::state::StateBlock<'_>,
     scope: &AllocationScope<'_>,
@@ -377,6 +409,10 @@ pub(in crate::state) fn capture_original_membership_group_once(
 }
 
 /// Capture scoped membership only; generation stability is not finality evidence.
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 fn capture_transaction_membership_tables_once(
     state: &State,
     limits: MembershipCaptureLimits,

@@ -1702,7 +1702,11 @@ fn modular_inverse_power_of_two_v1(
     value: usize,
     modulus: usize,
 ) -> Result<usize, ZkX509FixedAlgebraicErrorV1> {
-    if modulus < 2 || !modulus.is_power_of_two() || value == 0 || value >= modulus || value % 2 == 0
+    if modulus < 2
+        || !modulus.is_power_of_two()
+        || value == 0
+        || value >= modulus
+        || value.is_multiple_of(2)
     {
         return Err(ZkX509FixedAlgebraicErrorV1::InternalInvariant);
     }
@@ -2103,10 +2107,9 @@ impl ZkX509FixedAlgebraicOpeningsV1 {
         &self,
         query_index: u64,
     ) -> Result<Option<&[F]>, ZkX509FixedAlgebraicErrorV1> {
-        match self.query_indices.binary_search(&query_index) {
-            Ok(slot) => self.row_v1(slot).map(Some),
-            Err(_) => Ok(None),
-        }
+        self.query_indices
+            .binary_search(&query_index)
+            .map_or(Ok(None), |slot| self.row_v1(slot).map(Some))
     }
 }
 #[cfg(test)]
@@ -2727,7 +2730,7 @@ mod tests {
             references_end: 1,
             total_occurrences: 9,
         };
-        assert_eq!(9 * 8, 64 + 1 * 8);
+        assert_eq!(9 * 8, 64 + 8);
         assert_eq!(repeated_stride_uses_table_v1(tied, 8, 64), Ok(false));
         assert_eq!(
             repeated_stride_uses_table_v1(

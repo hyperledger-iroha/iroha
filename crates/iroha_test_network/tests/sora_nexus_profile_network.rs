@@ -329,7 +329,7 @@ fn profile_manifest(
         npos.evidence_horizon_blocks = epoch;
         npos.slashing_delay_blocks = epoch;
         npos.validate().map_err(|error| eyre!(error))?;
-        typed.custom.insert(id, npos.into_custom_parameter());
+        typed.custom.insert(npos.into_custom_parameter());
         *parameters = json::value::to_value(&typed)?;
     }
     transactions.retain(|transaction| {

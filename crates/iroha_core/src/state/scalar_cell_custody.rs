@@ -36,12 +36,12 @@ pub(super) fn default_budget() -> AllocationBudget {
 }
 
 #[cfg(test)]
-pub(crate) fn fixture(value: u64) -> Cell<u64, AllocationCharge> {
+pub fn fixture(value: u64) -> Cell<u64, AllocationCharge> {
     initialize(value, &default_budget()).expect("fixture scalar original initial capacity")
 }
 
 #[cfg(test)]
-pub(crate) trait ScalarCellFixtureBlock {
+pub trait ScalarCellFixtureBlock {
     fn block(&self) -> mv::cell::Block<'_, u64, AllocationCharge>;
 }
 #[cfg(test)]

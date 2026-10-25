@@ -11,6 +11,10 @@ use std::io;
 #[derive(Debug, thiserror::Error)]
 #[error("exact original lane I/O failure")]
 struct OriginalFailure;
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Independent storage fault axes are combined by these test fixtures."
+)]
 struct Source {
     wait_error: bool,
     read_error: bool,

@@ -205,7 +205,7 @@ impl core::fmt::Debug for P256EcdsaTraceMaterialV1 {
             .debug_struct("P256EcdsaTraceMaterialV1")
             .field("role", &self.role)
             .field("private_material", &"<redacted>")
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -588,6 +588,12 @@ impl P256TopologyCompilerV1 {
         modulus: ZkX509P256ModulusV1,
         kind: P256InitialValueKindV1,
     ) -> Result<usize, P256TraceCompilerErrorV1> {
+        self.values
+            .try_reserve(1)
+            .map_err(|_| P256TraceCompilerErrorV1::Resource)?;
+        self.initial_handles
+            .try_reserve(1)
+            .map_err(|_| P256TraceCompilerErrorV1::Resource)?;
         let index = self.initial_handles.len();
         let handle = self.values.len();
         self.values.push(TopologyValueRecordV1 {
@@ -1119,7 +1125,7 @@ impl P256EcdsaCircuitV1 for P256TopologyCompilerV1 {
         Ok(core::array::from_fn(|global_be| P256TopologyScalarBitV1 {
             source: scalar,
             role,
-            global_be: global_be as u16,
+            global_be: u16::try_from(global_be).expect("256-bit index fits u16"),
         }))
     }
     fn constrain_low_s_v1(&mut self, scalar: Self::Scalar) -> Result<(), Self::Error> {
@@ -1985,8 +1991,13 @@ impl P256WindowCircuitV1 for P256TraceCompilerV1 {
                 P256InitialValueKindV1::Input,
             )?,
         ];
-        let trace = build_p256_window_trace_v1(role, window as u8, candidate_points, bit_values)
-            .map_err(|_| P256TraceCompilerErrorV1::WindowTopology)?;
+        let trace = build_p256_window_trace_v1(
+            role,
+            u8::try_from(window).map_err(|_| P256TraceCompilerErrorV1::WindowTopology)?,
+            &candidate_points,
+            bit_values,
+        )
+        .map_err(|_| P256TraceCompilerErrorV1::WindowTopology)?;
         if self.windows.len() == self.windows.capacity() {
             return Err(P256TraceCompilerErrorV1::Resource);
         }
@@ -2126,7 +2137,7 @@ impl P256EcdsaCircuitV1 for P256TraceCompilerV1 {
         Ok(core::array::from_fn(|global_be| P256ScalarBitV1 {
             source: scalar,
             role,
-            global_be: global_be as u16,
+            global_be: u16::try_from(global_be).expect("256-bit index fits u16"),
             value: (record.value_be[global_be / 8] >> (7 - global_be % 8)) & 1,
         }))
     }
@@ -2253,13 +2264,13 @@ mod tests {
         signature: Signature,
     ) -> P256EcdsaWitnessV1 {
         let encoded = key.verifying_key().to_encoded_point(false);
-        let mut public_key_x_be = [0_u8; 32];
-        let mut public_key_y_be = [0_u8; 32];
-        public_key_x_be.copy_from_slice(encoded.x().expect("x"));
-        public_key_y_be.copy_from_slice(encoded.y().expect("y"));
+        let mut horizontal = [0_u8; 32];
+        let mut vertical = [0_u8; 32];
+        horizontal.copy_from_slice(encoded.x().expect("x"));
+        vertical.copy_from_slice(encoded.y().expect("y"));
         P256EcdsaWitnessV1 {
-            public_key_x_be,
-            public_key_y_be,
+            public_key_x_be: horizontal,
+            public_key_y_be: vertical,
             r_be: signature.r().to_bytes().into(),
             s_be: signature.s().to_bytes().into(),
             digest_be,
@@ -2270,7 +2281,12 @@ mod tests {
         P256EcdsaAssignedV1<P256ScalarValueV1, P256BaseValueV1>,
     ) {
         let key = signing_key_v1(73);
-        let digest = core::array::from_fn(|index| (index as u8).wrapping_mul(37).wrapping_add(11));
+        let digest = core::array::from_fn(|index| {
+            u8::try_from(index)
+                .expect("digest byte index fits u8")
+                .wrapping_mul(37)
+                .wrapping_add(11)
+        });
         let signature: Signature = key.sign_prehash(&digest).expect("sign");
         let signature = signature.normalize_s().unwrap_or(signature);
         let topology = compile_p256_ecdsa_topology_v1(P256EcdsaRoleV1::WalletOwnership).unwrap();
@@ -2321,12 +2337,18 @@ mod tests {
         assert_eq!(material.low_s.len(), 1);
         assert!(material.boolean_bridges.is_empty());
         for (index, initial) in material.initial_values.iter().enumerate() {
-            assert_eq!(initial.id, P256ValueIdV1(index as u32));
+            assert_eq!(
+                initial.id,
+                P256ValueIdV1(u32::try_from(index).expect("initial value index fits u32"))
+            );
         }
         for (index, operation) in material.linked_operations.iter().enumerate() {
             assert_eq!(
                 operation.c,
-                P256ValueIdV1((material.initial_values.len() + index) as u32)
+                P256ValueIdV1(
+                    u32::try_from(material.initial_values.len() + index)
+                        .expect("value index fits u32")
+                )
             );
             assert!(operation.a.0 < operation.c.0);
             assert!(operation.b.0 < operation.c.0);
@@ -2337,7 +2359,7 @@ mod tests {
             } else {
                 P256WindowScalarV1::U2
             };
-            let index = (ordinal % 64) as u8;
+            let index = u8::try_from(ordinal % 64).expect("window index fits u8");
             window
                 .trace
                 .validate_for_v1(role, index)
@@ -2345,9 +2367,13 @@ mod tests {
             assert_eq!(
                 window.scalar_source_operation,
                 if role == P256WindowScalarV1::U1 {
-                    material.assigned.u1.0 - material.initial_values.len() as u32
+                    material.assigned.u1.0
+                        - u32::try_from(material.initial_values.len())
+                            .expect("initial value count fits u32")
                 } else {
-                    material.assigned.u2.0 - material.initial_values.len() as u32
+                    material.assigned.u2.0
+                        - u32::try_from(material.initial_values.len())
+                            .expect("initial value count fits u32")
                 }
             );
         }

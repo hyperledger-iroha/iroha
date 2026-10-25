@@ -14,7 +14,7 @@ fn retention_restart_rejects_extra_crash_candidate_without_cleanup() {
     archive.insert(second.clone()).expect("insert second");
     archive.insert(third.clone()).expect("insert third");
     let (_prior_fence, _prior_prepared, prior_proposal) =
-        prepared_compaction_for_test(&archive, second.key.clone());
+        prepared_compaction_for_test(&archive, second.key);
     let authority = TestRetentionAuthority::new();
     let binding = authority.binding();
     let prior_approval = ProviderIngestFinalizedArchiveRetentionApprovalRecordV1::try_new(
@@ -28,7 +28,7 @@ fn retention_restart_rejects_extra_crash_candidate_without_cleanup() {
     let prior_outcome = compact_for_test(&archive, second.key);
     archive.insert(fourth.clone()).expect("insert fourth");
     let (_approved_fence, approved_prepared, approved_proposal) =
-        prepared_compaction_for_test(&archive, third.key.clone());
+        prepared_compaction_for_test(&archive, third.key);
     let (_extra_fence, extra_prepared, _extra_proposal) =
         prepared_compaction_for_test(&archive, fourth.key);
     let approval = ProviderIngestFinalizedArchiveRetentionApprovalRecordV1::try_new(
@@ -94,7 +94,7 @@ fn retention_prepare_ambiguous_cas_and_exact_readback_gate_publication() {
     archive.insert(first).expect("insert first");
     archive.insert(second.clone()).expect("insert second");
     archive.insert(third).expect("insert suffix");
-    let (_fence, prepared, proposal) = prepared_compaction_for_test(&archive, second.key.clone());
+    let (_fence, prepared, proposal) = prepared_compaction_for_test(&archive, second.key);
     assert_eq!(
         fs::read_dir(archive_root(&directory).join(CHECKPOINTS_DIRECTORY))
             .expect("read checkpoint namespace")
@@ -153,7 +153,7 @@ fn unchanged_equivocating_and_rollback_authorities_never_publish() {
     let second = advance_projection(&first, 8);
     archive.insert(first).expect("insert first");
     archive.insert(second.clone()).expect("insert second");
-    let (fence, _prepared, proposal) = prepared_compaction_for_test(&archive, second.key.clone());
+    let (fence, _prepared, proposal) = prepared_compaction_for_test(&archive, second.key);
     let authority = TestRetentionAuthority::new();
     let binding = authority.binding();
     let approval = ProviderIngestFinalizedArchiveRetentionApprovalRecordV1::try_new(
@@ -175,12 +175,9 @@ fn unchanged_equivocating_and_rollback_authorities_never_publish() {
         ),
         Err(ProviderIngestFinalizedArchiveErrorV1::RetentionAuthorityCasUnchanged)
     ));
-    let competing_proposal = ProviderIngestFinalizedArchiveCompactionProposalV1::try_new(
-        fence.clone(),
-        [0xE1; 32],
-        [0xE2; 32],
-    )
-    .expect("construct competing proposal");
+    let competing_proposal =
+        ProviderIngestFinalizedArchiveCompactionProposalV1::try_new(fence, [0xE1; 32], [0xE2; 32])
+            .expect("construct competing proposal");
     let competing = ProviderIngestFinalizedArchiveRetentionApprovalRecordV1::try_new(
         1,
         binding.qualification(),
@@ -333,7 +330,7 @@ fn exact_replay_pagination_and_provider_index_isolation_are_deterministic() {
         archive
             .activation_floor(&first.key.network_id)
             .expect("activation floor"),
-        Some(first.key.clone())
+        Some(first.key)
     );
     assert_eq!(
         archive
@@ -376,7 +373,7 @@ fn exact_replay_pagination_and_provider_index_isolation_are_deterministic() {
         page_one.rows[0].finalized_anchor,
         first.key.finalized_anchor()
     );
-    let cursor = page_one.next_cursor.clone().expect("second page cursor");
+    let cursor = page_one.next_cursor.expect("second page cursor");
     let page_two = archive
         .read_provider_page(&first.key, PROVIDER_A, Some(&cursor), 1)
         .expect("second provider A page");

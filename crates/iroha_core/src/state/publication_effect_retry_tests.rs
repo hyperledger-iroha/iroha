@@ -131,28 +131,25 @@ fn check_original_index_contention(writer: bool) {
                 if commands.send(()).is_err() {
                     break;
                 }
-                match response_rx.recv_timeout(Duration::from_secs(5)) {
-                    Ok(observation) => {
-                        if let StatePublicationOutcome::Deferred(
-                            TransactionsBlockError::PublicationBusy(wait),
-                        ) = &observation.outcome
-                        {
-                            waits.push(wait.clone());
-                        }
-                        observations.push(observation);
-                        unchanged.push(
-                            original_writers_are_free(&state)
-                                && state.state_view_generation() == generation
-                                && state.transactions.latest_height() == 0
-                                && state.world.musubi_public_directory.view().is_empty()
-                                && state.world.try_block(&budget).is_ok()
-                                && budget.same_pool(&state.ivm_execution_budget()),
-                        );
+                if let Ok(observation) = response_rx.recv_timeout(Duration::from_secs(5)) {
+                    if let StatePublicationOutcome::Deferred(
+                        TransactionsBlockError::PublicationBusy(wait),
+                    ) = &observation.outcome
+                    {
+                        waits.push(wait.clone());
                     }
-                    Err(_) => {
-                        returned_before_release = false;
-                        break;
-                    }
+                    observations.push(observation);
+                    unchanged.push(
+                        original_writers_are_free(&state)
+                            && state.state_view_generation() == generation
+                            && state.transactions.latest_height() == 0
+                            && state.world.musubi_public_directory.view().is_empty()
+                            && state.world.try_block(&budget).is_ok()
+                            && budget.same_pool(&state.ivm_execution_budget()),
+                    );
+                } else {
+                    returned_before_release = false;
+                    break;
                 }
             }
             let mut pending = expected

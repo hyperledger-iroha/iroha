@@ -13,7 +13,7 @@ use crate::nexus::space_directory::{AxtIssuerResolutionError, resolve_axt_issuer
 /// Failure to confirm the issuer claims against the current transaction view.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 #[allow(dead_code)]
-pub(crate) enum AxtCurrentIssuerErrorV1 {
+pub enum AxtCurrentIssuerErrorV1 {
     /// A positive consensus ledger slot is required for spend application.
     #[error("AXT issuer verification requires a positive consensus ledger slot")]
     ZeroLedgerSlot,

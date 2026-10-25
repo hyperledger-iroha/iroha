@@ -37,6 +37,7 @@ use super::{
         expand_proof_matrix_v1,
     },
 };
+use core::ops::{Add, Sub};
 use sha3::{Digest, Sha3_256};
 use thiserror::Error;
 use zeroize::{Zeroize, Zeroizing};
@@ -245,18 +246,31 @@ impl core::fmt::Debug for QuadraticEquationV1<'_> {
             .finish_non_exhaustive()
     }
 }
+/// Owned transcript-derived inputs used to compile the public quadratic equation.
+pub struct QuadraticPublicInputsV1 {
+    pub(crate) projection_r: Box<[i8]>,
+    pub(crate) projection_r_prime: Box<[i8]>,
+    pub(crate) z3: Box<[ProofPolynomialV1; PROJECTION_POLYNOMIALS_V1]>,
+    pub(crate) z4: Box<[ProofPolynomialV1; PROJECTION_POLYNOMIALS_V1]>,
+    pub(crate) h: Box<[ProofPolynomialV1; 2]>,
+    pub(crate) schwartz_weights: Box<[u64]>,
+    pub(crate) equation_multipliers: Box<[ProofPolynomialV1; COMBINED_QUADRATIC_EQUATIONS_V1]>,
+}
 impl<'a> QuadraticEquationV1<'a> {
     /// Construct one fully shaped public equation.
     pub(crate) fn new(
         relation: &'a BootleLanternApplicationRelationV1,
-        projection_r: Box<[i8]>,
-        projection_r_prime: Box<[i8]>,
-        z3: Box<[ProofPolynomialV1; PROJECTION_POLYNOMIALS_V1]>,
-        z4: Box<[ProofPolynomialV1; PROJECTION_POLYNOMIALS_V1]>,
-        h: Box<[ProofPolynomialV1; 2]>,
-        schwartz_weights: Box<[u64]>,
-        equation_multipliers: Box<[ProofPolynomialV1; COMBINED_QUADRATIC_EQUATIONS_V1]>,
+        inputs: QuadraticPublicInputsV1,
     ) -> Result<Self, ToolboxErrorV1> {
+        let QuadraticPublicInputsV1 {
+            projection_r,
+            projection_r_prime,
+            z3,
+            z4,
+            h,
+            schwartz_weights,
+            equation_multipliers,
+        } = inputs;
         let expected_r = PROJECTION_COORDINATES_V1
             .checked_mul(50 * APPLICATION_RING_DEGREE_V1)
             .ok_or(ToolboxErrorV1::ArithmeticOverflow)?;
@@ -526,8 +540,10 @@ impl<'a> QuadraticEquationV1<'a> {
         ]);
         let evaluate = |compiler: &SchwartzAccumulatorCompilerV1| {
             compiler.evaluate(
-                &beta3,
-                &beta4,
+                ProjectionScalarsV1 {
+                    beta3: &beta3,
+                    beta4: &beta4,
+                },
                 &scalar_relations,
                 s3.polynomials(),
                 &s4,
@@ -584,17 +600,22 @@ impl<'a> QuadraticEquationV1<'a> {
             }))
     }
 }
+#[derive(Clone, Copy)]
+struct ProjectionScalarsV1<'a> {
+    beta3: &'a ProofPolynomialV1,
+    beta4: &'a ProofPolynomialV1,
+}
 impl SchwartzAccumulatorCompilerV1 {
     fn evaluate(
         &self,
-        beta3: &ProofPolynomialV1,
-        beta4: &ProofPolynomialV1,
+        beta: ProjectionScalarsV1<'_>,
         scalar_relations: &[ProofPolynomialV1; SCALAR_QUADRATIC_RELATIONS_V1],
         s3: &[ProofPolynomialV1; 50],
         s4: &[ProofPolynomialV1; APPLICATION_ROWS_V1],
         y3: &[ProofPolynomialV1],
         y4: &[ProofPolynomialV1],
     ) -> Result<ProofPolynomialV1, ToolboxErrorV1> {
+        let ProjectionScalarsV1 { beta3, beta4 } = beta;
         let mut accumulator = Zeroizing::new(
             beta3
                 .multiply(self.beta3_shape_weights.automorphism())
@@ -615,25 +636,25 @@ impl SchwartzAccumulatorCompilerV1 {
             s4,
             self.projection_r_prime_weights.as_ref(),
         )?);
-        let projected_y4 = Zeroizing::new(ring_inner_product_v1(
+        let random_projection = Zeroizing::new(ring_inner_product_v1(
             y4,
             self.coordinate4_weights.as_ref(),
         )?);
         *accumulator = (*accumulator)
             .add(beta4.multiply(*projected_s4))
-            .add(*projected_y4)
+            .add(*random_projection)
             .sub(self.public_z4_accumulator);
         let projected_s3 = Zeroizing::new(ring_inner_product_v1(
             s3,
             self.projection_r_weights.as_ref(),
         )?);
-        let projected_y3 = Zeroizing::new(ring_inner_product_v1(
+        let relation_projection = Zeroizing::new(ring_inner_product_v1(
             y3,
             self.coordinate3_weights.as_ref(),
         )?);
         *accumulator = (*accumulator)
             .add(beta3.multiply(*projected_s3))
-            .add(*projected_y3)
+            .add(*relation_projection)
             .sub(self.public_z3_accumulator);
         Ok(*accumulator)
     }
@@ -654,7 +675,7 @@ fn compile_schwartz_accumulators_v1(
             .get(start..start + EVALUATION_CONSTRAINTS_V1)
             .ok_or(ToolboxErrorV1::InvalidShape)?;
         let beta3_shape_weights =
-            polynomial_from_coefficients_v1(core::array::from_fn(|coefficient| {
+            polynomial_from_coefficients_v1(&core::array::from_fn(|coefficient| {
                 if coefficient == 0 {
                     0
                 } else {
@@ -662,7 +683,7 @@ fn compile_schwartz_accumulators_v1(
                 }
             }))?;
         let beta4_shape_weights =
-            polynomial_from_coefficients_v1(core::array::from_fn(|coefficient| {
+            polynomial_from_coefficients_v1(&core::array::from_fn(|coefficient| {
                 if coefficient == 0 {
                     0
                 } else {
@@ -720,7 +741,7 @@ fn coordinate_weight_polynomials_v1(
             [start..start + APPLICATION_RING_DEGREE_V1]
             .try_into()
             .map_err(|_| ToolboxErrorV1::InvalidShape)?;
-        polynomials.push(polynomial_from_coefficients_v1(coefficients)?);
+        polynomials.push(polynomial_from_coefficients_v1(&coefficients)?);
     }
     polynomials
         .into_boxed_slice()
@@ -755,7 +776,7 @@ fn compress_projection_rows_v1<const POLYNOMIALS: usize>(
                 }
             })
         });
-        polynomials.push(polynomial_from_coefficients_v1(coefficients)?);
+        polynomials.push(polynomial_from_coefficients_v1(&coefficients)?);
     }
     polynomials
         .into_boxed_slice()
@@ -778,12 +799,12 @@ fn ring_inner_product_v1(
         }))
 }
 fn polynomial_from_coefficients_v1(
-    coefficients: [u64; APPLICATION_RING_DEGREE_V1],
+    coefficients: &[u64; APPLICATION_RING_DEGREE_V1],
 ) -> Result<ProofPolynomialV1, ToolboxErrorV1> {
     ProofPolynomialV1::new(coefficients).map_err(|_| ToolboxErrorV1::InternalInvariant)
 }
 fn binary_relation_polynomial_v1(polynomials: &[ProofPolynomialV1]) -> ProofPolynomialV1 {
-    let ones = ProofPolynomialV1::new([1; APPLICATION_RING_DEGREE_V1])
+    let ones = ProofPolynomialV1::new(&[1; APPLICATION_RING_DEGREE_V1])
         .expect("one is a canonical proof-field residue");
     polynomials
         .iter()
@@ -798,7 +819,7 @@ fn norm_slack_relation_polynomial_v1(
     bound: u64,
 ) -> Result<ProofPolynomialV1, ToolboxErrorV1> {
     let mut power = 1_u64;
-    let powers = polynomial_from_coefficients_v1(core::array::from_fn(|_| {
+    let powers = polynomial_from_coefficients_v1(&core::array::from_fn(|_| {
         let current = power;
         power = add_mod(power, power);
         current
@@ -1088,14 +1109,14 @@ fn norm_slack_equation(
 }
 fn binary_expansion_polynomial(value: u64) -> ProofPolynomialV1 {
     let coefficients = Zeroizing::new(core::array::from_fn(|index| (value >> index) & 1));
-    ProofPolynomialV1::new(*coefficients).expect("binary residues are canonical")
+    ProofPolynomialV1::new(&coefficients).expect("binary residues are canonical")
 }
 #[cfg(test)]
 fn polynomial_at_zero_and_half(zero: u64, half: u64) -> Result<ProofPolynomialV1, ToolboxErrorV1> {
     let mut coefficients = [0_u64; APPLICATION_RING_DEGREE_V1];
     coefficients[0] = zero;
     coefficients[APPLICATION_RING_DEGREE_V1 / 2] = half;
-    ProofPolynomialV1::new(coefficients).map_err(|_| ToolboxErrorV1::InternalInvariant)
+    ProofPolynomialV1::new(&coefficients).map_err(|_| ToolboxErrorV1::InternalInvariant)
 }
 #[cfg(test)]
 fn ternary_dot(row: &[i8], vector: &[u64]) -> u64 {
@@ -1168,7 +1189,7 @@ mod tests {
     fn projected_norm_witness_keeps_exact_order_and_zeroizing_heap_custody() {
         let short = ShortWitnessV1 {
             polynomials: boxed_polynomial_array_from_fn_v1(|row| {
-                ProofPolynomialV1::from_centered_coefficients(core::array::from_fn(|column| {
+                ProofPolynomialV1::from_centered_coefficients(&core::array::from_fn(|column| {
                     i64::try_from(1 + row * APPLICATION_RING_DEGREE_V1 + column)
                         .expect("fixed witness geometry fits i64")
                 }))
@@ -1252,7 +1273,7 @@ mod tests {
                 let mut beta_coefficients = [0_i64; APPLICATION_RING_DEGREE_V1];
                 beta_coefficients[0] = beta3_sign;
                 beta_coefficients[APPLICATION_RING_DEGREE_V1 / 2] = beta4_sign;
-                let beta = ProofPolynomialV1::from_centered_coefficients(beta_coefficients);
+                let beta = ProofPolynomialV1::from_centered_coefficients(&beta_coefficients);
                 let (beta3, beta4) = beta_polynomials_v1(&beta).expect("fixed inverse");
                 assert_eq!(beta3.centered_coefficient(0), beta3_sign);
                 assert_eq!(beta4.centered_coefficient(0), beta4_sign);
@@ -1271,7 +1292,7 @@ mod tests {
         let mut noisy = [0_i64; APPLICATION_RING_DEGREE_V1];
         noisy[1] = 7;
         let (beta3, beta4) =
-            beta_polynomials_v1(&ProofPolynomialV1::from_centered_coefficients(noisy))
+            beta_polynomials_v1(&ProofPolynomialV1::from_centered_coefficients(&noisy))
                 .expect("fixed inverse");
         assert!(
             beta3.coefficients()[1..]
@@ -1294,16 +1315,16 @@ mod tests {
         );
         let mut non_binary = [0_u64; APPLICATION_RING_DEGREE_V1];
         non_binary[17] = 2;
-        let non_binary = ProofPolynomialV1::new(non_binary).expect("canonical");
+        let non_binary = ProofPolynomialV1::new(&non_binary).expect("canonical");
         assert_ne!(binary_inner_product(&[non_binary]), 0);
     }
     #[test]
     fn sigma_trace_preserves_and_packs_exact_checked_coefficients() {
         let polynomial =
-            ProofPolynomialV1::from_centered_coefficients(core::array::from_fn(|index| {
+            ProofPolynomialV1::from_centered_coefficients(&core::array::from_fn(|index| {
                 i64::try_from(index).expect("ring index fits i64") * 17 - 411
             }));
-        let other = ProofPolynomialV1::from_centered_coefficients(core::array::from_fn(|index| {
+        let other = ProofPolynomialV1::from_centered_coefficients(&core::array::from_fn(|index| {
             701 - i64::try_from(index).expect("ring index fits i64") * 29
         }));
         let trace = trace_sigma_minus_one_v1(&polynomial).expect("fixed inverse of two");
@@ -1321,7 +1342,7 @@ mod tests {
         challenge_coefficients[0] = 1;
         challenge_coefficients[1] = 1;
         challenge_coefficients[APPLICATION_RING_DEGREE_V1 - 1] = -1;
-        let challenge = ProofPolynomialV1::from_centered_coefficients(challenge_coefficients);
+        let challenge = ProofPolynomialV1::from_centered_coefficients(&challenge_coefficients);
         assert_eq!(challenge, challenge.automorphism());
         assert_eq!(
             trace_sigma_minus_one_v1(&challenge.multiply(polynomial))
@@ -1360,7 +1381,7 @@ mod tests {
         challenge_coefficients[0] = 1;
         challenge_coefficients[1] = 1;
         challenge_coefficients[APPLICATION_RING_DEGREE_V1 - 1] = -1;
-        let challenge = ProofPolynomialV1::from_centered_coefficients(challenge_coefficients);
+        let challenge = ProofPolynomialV1::from_centered_coefficients(&challenge_coefficients);
         assert_eq!(challenge, challenge.automorphism());
         let old_map = |polynomial| {
             polynomial_at_zero_and_half(binary_inner_product(&[polynomial]), 0)
@@ -1376,7 +1397,7 @@ mod tests {
         expected[APPLICATION_RING_DEGREE_V1 - 1] = 1;
         assert_eq!(
             old_recovered,
-            ProofPolynomialV1::from_centered_coefficients(expected)
+            ProofPolynomialV1::from_centered_coefficients(&expected)
         );
         assert!(!old_recovered.is_zero());
         let lifted_map = |polynomial| {

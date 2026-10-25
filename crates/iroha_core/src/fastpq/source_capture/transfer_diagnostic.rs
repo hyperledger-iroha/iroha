@@ -3,7 +3,7 @@ use super::*;
 
 /// Local summary of independently supplied transfer preparation inputs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct TransferArchiveDiagnostic {
+pub struct TransferArchiveDiagnostic {
     /// Supplied diagnostic network/height, without native authority.
     pub(crate) source: FastpqSourceStatementContextV1,
     /// Complete supplied input position count.
@@ -17,7 +17,7 @@ pub(crate) struct TransferArchiveDiagnostic {
 }
 /// One prepared transfer statement observation, not a D7 leaf.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct TransferEntryDiagnostic {
+pub struct TransferEntryDiagnostic {
     /// Supplied diagnostic source.
     pub(crate) source: FastpqSourceStatementContextV1,
     /// Prepared statement ordinal.
@@ -39,7 +39,7 @@ pub(crate) struct TransferEntryDiagnostic {
 }
 /// Prepare the live transfer relation under explicit fixture construction bounds.
 /// Does not emit a source manifest, D7 write, opening, certificate or authority.
-pub(crate) fn prepare_transfer_archive_diagnostic(
+pub fn prepare_transfer_archive_diagnostic(
     source: FastpqSourceStatementContextV1,
     entries: &[FastpqSourceExecutionEntryV1],
     slot: u64,

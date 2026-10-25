@@ -82,11 +82,11 @@ fn sorafs_provider_governance_proposer_must_be_a_fully_bonded_citizen() {
 }
 #[test]
 fn contract_subject_binding_materializes_missing_account_and_preserves_existing_account() {
-    let state = State::new_for_testing(
+    let state = component_state_with_crypto_policy(State::new_for_testing(
         World::default(),
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
-    );
+    ));
     let header = BlockHeader::new(
         NonZeroU64::new(1).expect("nonzero height"),
         None,
@@ -414,6 +414,10 @@ impl VerifiedFeeSponsorProofFixtures {
         }
     }
 
+    #[expect(
+        clippy::map_unwrap_or,
+        reason = "Clone the cached owner before the fallback mutably inserts into the same locked entries vector."
+    )]
     fn get_or_produce(
         &self,
         batch: &fastpq_prover::TransitionBatch,
@@ -422,20 +426,19 @@ impl VerifiedFeeSponsorProofFixtures {
     ) -> Vec<u8> {
         let proof = {
             let mut entries = self.entries.lock().expect("fee-sponsor fixture lookup");
-            if let Some(entry) = entries
+            entries
                 .iter()
                 .find(|entry| &entry.batch == batch && &entry.binding == binding)
-            {
-                std::sync::Arc::clone(&entry.proof)
-            } else {
-                let proof = std::sync::Arc::new(std::sync::OnceLock::new());
-                entries.push(VerifiedFeeSponsorProofFixture {
-                    batch: batch.clone(),
-                    binding: binding.clone(),
-                    proof: std::sync::Arc::clone(&proof),
-                });
-                proof
-            }
+                .map(|entry| std::sync::Arc::clone(&entry.proof))
+                .unwrap_or_else(|| {
+                    let proof = std::sync::Arc::new(std::sync::OnceLock::new());
+                    entries.push(VerifiedFeeSponsorProofFixture {
+                        batch: batch.clone(),
+                        binding: binding.clone(),
+                        proof: std::sync::Arc::clone(&proof),
+                    });
+                    proof
+                })
         };
         // OnceLock retains only a successful initialization. A genuine producer
         // panic propagates to its test and leaves this exact request retryable.
@@ -784,7 +787,7 @@ fn verified_fee_sponsor_registration_fixture(
         batch_hash: source_tx_commitment,
         deltas: vec![delta],
         authority_digest: Hash::new(
-            &norito::encode_canonical(&*ALICE_ID).expect("canonical funding authority"),
+            norito::encode_canonical(&*ALICE_ID).expect("canonical funding authority"),
         ),
         poseidon_preimage_digest: Some(digest),
     }];
@@ -1077,8 +1080,22 @@ fn assert_initial_genesis_fee_sponsor_lifecycle(authored_custody: bool) {
             FeeSponsorProgram, FeeSponsorProgramId, FeeSponsorProgramLifecycle, FeeSponsorVaultKey,
         },
     };
+    let bootstrap_custody =
+        iroha_config::parameters::defaults::nexus::fees::sponsor_vault_custody_account_id();
+    let custody = if authored_custody {
+        let key =
+            iroha_crypto::KeyPair::try_from_seed(vec![0x75; 32], iroha_crypto::Algorithm::Ed25519)
+                .expect("deterministic custody test key");
+        AccountId::new(key.public_key().clone())
+    } else {
+        bootstrap_custody.clone()
+    };
+    // Seed canonical accounts while retaining an absent ordinary crypto policy.
+    // The original signed genesis below owns its policy installation.
+    let accounts = [ALICE_ID.clone(), BOB_ID.clone(), custody.clone()]
+        .map(|account| Account::new(account).build(&ALICE_ID));
     let state = State::new_for_testing(
-        World::default(),
+        World::with([], accounts, []),
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     );
@@ -1091,27 +1108,11 @@ fn assert_initial_genesis_fee_sponsor_lifecycle(authored_custody: bool) {
     );
     let mut block = state.block(header);
     let mut stx = block.transaction();
-    let bootstrap_custody = stx.nexus.fees.sponsor_vault_custody_account_id.clone();
-    let custody = if authored_custody {
-        let key =
-            iroha_crypto::KeyPair::try_from_seed(vec![0x75; 32], iroha_crypto::Algorithm::Ed25519)
-                .expect("deterministic custody test key");
-        AccountId::new(key.public_key().clone())
-    } else {
-        bootstrap_custody.clone()
-    };
     let mut authored_policy = stx.nexus.fees.clone();
     authored_policy.sponsor_vault_custody_account_id = custody.clone();
     if authored_custody {
         assert_ne!(custody, bootstrap_custody);
         assert!(stx.world.account(&bootstrap_custody).is_err());
-    }
-    for account in [ALICE_ID.clone(), BOB_ID.clone(), custody.clone()] {
-        if stx.world.account(&account).is_err() {
-            Register::account(Account::new(account))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("register genesis fee sponsor fixture account");
-        }
     }
     let asset_definition_id: AssetDefinitionId = "66owaQmAQMuHxPzxUN3bqZ6FJfDa"
         .parse()
@@ -1863,11 +1864,11 @@ fn post_genesis_fund_mismatch_preserves_balances_vault_and_transcripts() {
         isi::nexus::FundFeeSponsorProgram,
         nexus::{FeeSponsorProgram, FeeSponsorProgramId, FeeSponsorVaultKey},
     };
-    let state = State::new_for_testing(
+    let state = component_state_with_crypto_policy(State::new_for_testing(
         World::default(),
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
-    );
+    ));
     let header = iroha_data_model::block::BlockHeader::new(
         NonZeroU64::new(2).expect("nonzero height"),
         None,
@@ -1954,11 +1955,11 @@ fn fee_sponsor_program_rejects_unregistered_payout_account() {
         isi::nexus::CreateFeeSponsorProgram,
         nexus::{FeeSponsorProgram, FeeSponsorProgramId},
     };
-    let state = State::new_for_testing(
+    let state = component_state_with_crypto_policy(State::new_for_testing(
         World::default(),
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
-    );
+    ));
     let header = iroha_data_model::block::BlockHeader::new(
         NonZeroU64::new(1).expect("nonzero height"),
         None,
@@ -2014,11 +2015,11 @@ fn fee_sponsor_withdrawal_is_owner_only_and_pays_registered_account() {
         permission::Permissions,
     };
     use iroha_executor_data_model::permission::nexus::CanManageFeeSponsorProgram;
-    let state = State::new_for_testing(
+    let state = component_state_with_crypto_policy(State::new_for_testing(
         World::default(),
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
-    );
+    ));
     let header = iroha_data_model::block::BlockHeader::new(
         NonZeroU64::new(1).expect("nonzero height"),
         None,
@@ -2497,7 +2498,7 @@ fn install_retained_validation_fee_unregister_fixture(
             effective_from_ms: 1_793_451_600_000,
             notice_published_at_ms: 1_790_859_600_000,
             schema_version: VALIDATION_FEE_POLICY_SCHEMA_VERSION,
-            network_id: network_id.clone(),
+            network_id,
             policy_version: 1,
             previous_policy_hash: None,
             ds_asset_id: policy_ds_asset_id,
@@ -2609,7 +2610,7 @@ fn register_validation_fee_fixture_asset(
 
 #[test]
 fn enacted_policy_reward_custody_references_are_pinned_without_conversion_lifecycle() {
-    blank_test_state_transaction!(state, block, stx);
+    component_test_state_transaction!(state, block, stx);
     bootstrap_alice_account(&mut stx);
     let fixture_domain = DomainId::try_new("vfcustody", "universal").expect("fixture domain");
     let policy_ds = AssetDefinitionId::derive_from_components(
@@ -2759,7 +2760,7 @@ fn non_enacted_validation_fee_proposal_statuses_do_not_pin_payout_references() {
         crate::state::GovernanceProposalStatus::Superseded,
         crate::state::GovernanceProposalStatus::ExecutionFailed,
     ] {
-        blank_test_state_transaction!(state, block, stx);
+        component_test_state_transaction!(state, block, stx);
         bootstrap_alice_account(&mut stx);
         let fixture_domain = DomainId::try_new("vfunpinned", "universal").expect("fixture domain");
         let policy_ds = AssetDefinitionId::derive_from_components(
@@ -2818,7 +2819,7 @@ fn non_enacted_validation_fee_proposal_statuses_do_not_pin_payout_references() {
 
 #[test]
 fn enacted_validation_fee_account_references_reject_unregister_atomically() {
-    blank_test_state_transaction!(state, block, stx);
+    component_test_state_transaction!(state, block, stx);
     bootstrap_alice_account(&mut stx);
     let fixture_domain = DomainId::try_new("vfaccount", "universal").expect("fixture domain");
     let fixture = install_retained_validation_fee_unregister_fixture(
@@ -2903,7 +2904,7 @@ fn enacted_validation_fee_account_references_reject_unregister_atomically() {
 
 #[test]
 fn enacted_validation_fee_asset_references_reject_unregister_atomically() {
-    blank_test_state_transaction!(state, block, stx);
+    component_test_state_transaction!(state, block, stx);
     bootstrap_alice_account(&mut stx);
     let fixture_domain = DomainId::try_new("vfasset", "universal").expect("fixture domain");
     let policy_ds = AssetDefinitionId::derive_from_components(
@@ -2983,7 +2984,7 @@ fn enacted_validation_fee_asset_references_reject_unregister_atomically() {
 
 #[test]
 fn enacted_validation_fee_asset_references_reject_containing_domain_unregister_atomically() {
-    blank_test_state_transaction!(state, block, stx);
+    component_test_state_transaction!(state, block, stx);
     bootstrap_alice_account(&mut stx);
     let policy_domain = DomainId::try_new("vfpolicy", "universal").expect("policy domain");
     let payout_ds_domain = DomainId::try_new("vfpayoutds", "universal").expect("payout DS domain");
@@ -3154,7 +3155,7 @@ fn signed_payout_scope_refusal_cannot_publish_a_parliament_terminal_outcome() {
             prefix_bytes,
             32,
         );
-        norito::with_decode_limits_scope(limits, &prefix);
+        norito::with_decode_limits_scope(limits, prefix);
         let producer_refusal = norito::with_decode_limits_scope(limits, || {
             prefix();
             crate::smartcontracts::code::fetch_bound_contract_record(

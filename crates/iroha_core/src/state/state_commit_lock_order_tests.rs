@@ -409,7 +409,7 @@ fn infallible_state_block_refuses_capacity_without_waiting_or_changing_state() {
     budget.set_limit_bytes(retained);
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     assert!(matches!(
-        state.try_block(header.clone()),
+        state.try_block(header),
         Err(StateBlockStartError::Storage(
             StateStorageAdmissionError::World(mv::storage::AdmittedStorageError::Allocation(
                 iroha_allocation::AllocationRefusal::Capacity { .. }
@@ -453,7 +453,7 @@ fn infallible_state_block_refuses_original_writer_poison_without_waiting() {
     let generation = state.state_view_generation();
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     assert!(matches!(
-        state.try_block(header.clone()),
+        state.try_block(header),
         Err(StateBlockStartError::Storage(
             StateStorageAdmissionError::World(mv::storage::AdmittedStorageError::Poisoned { .. })
         ))

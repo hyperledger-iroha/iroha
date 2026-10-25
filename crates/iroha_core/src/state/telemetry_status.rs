@@ -5,12 +5,12 @@ use super::{BlockHeader, Hash, HashOf, State, is_stable_state_view_generation};
 use iroha_config::parameters::actual::LaneRoutingPolicy;
 
 /// Internal scheduling quantum; never a second memory pool or runtime mode.
-pub(crate) const STATUS_CLASSIFICATION_BLOCKS: usize = 64;
+pub const STATUS_CLASSIFICATION_BLOCKS: usize = 64;
 const JOURNAL_DOMAIN: &[u8] = b"iroha:telemetry:classified-journal:v1\0";
 
 /// One immutable applied target, including the routing policy from its generation.
 #[derive(Clone, Debug)]
-pub(crate) struct TelemetryStatusTarget {
+pub struct TelemetryStatusTarget {
     pub(crate) height: usize,
     pub(crate) tip: Option<HashOf<BlockHeader>>,
     #[cfg(any(test, feature = "telemetry"))]
@@ -19,7 +19,7 @@ pub(crate) struct TelemetryStatusTarget {
 
 /// Fixed-size witness for one bounded suffix of the captured State journal.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct TelemetryJournalChunk {
+pub struct TelemetryJournalChunk {
     pub(crate) start: usize,
     pub(crate) end: usize,
     pub(crate) checkpoint: Option<HashOf<BlockHeader>>,
@@ -29,7 +29,7 @@ pub(crate) struct TelemetryJournalChunk {
 
 /// Source failures never authorize partial or substituted classification.
 #[derive(Clone, Copy, Debug, thiserror::Error)]
-pub(crate) enum TelemetryStatusSourceError {
+pub enum TelemetryStatusSourceError {
     #[error("State publication is busy")]
     Busy,
     #[error("State journal publication is poisoned")]
@@ -54,7 +54,7 @@ impl From<concread::bptree::OwnedWriteError> for TelemetryStatusSourceError {
 
 /// Stream an unambiguous domain, half-open zero-based range and ordered rows.
 /// Each row contains its one-based fixed-width u64 height and 32-byte header hash.
-pub(crate) fn write_telemetry_journal_prefix(
+pub fn write_telemetry_journal_prefix(
     writer: &mut dyn std::io::Write,
     start: usize,
     end: usize,
@@ -67,7 +67,7 @@ pub(crate) fn write_telemetry_journal_prefix(
 }
 
 /// Write one exact journal position; no native-endian or variable-width ambiguity.
-pub(crate) fn write_telemetry_journal_row(
+pub fn write_telemetry_journal_row(
     writer: &mut dyn std::io::Write,
     height: usize,
     hash: HashOf<BlockHeader>,

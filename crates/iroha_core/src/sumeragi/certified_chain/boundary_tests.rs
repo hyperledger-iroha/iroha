@@ -1,6 +1,6 @@
 //! Historical certification transcripts with genuine BLS votes and threshold pulses.
 //! These fixtures verify exact BLS quorums and authenticated scheduling transitions.
-//! They do not execute NPoS State transitions or establish monetary qualification.
+//! They do not execute `NPoS` State transitions or establish monetary qualification.
 
 use super::*;
 use crate::state::WorldReadOnly as _;
@@ -381,7 +381,11 @@ fn build_history_with_epoch_length(
             &network,
             Duration::from_secs(1),
             world.view().world().parameters().transaction(),
-            &iroha_config::parameters::actual::Crypto::default(),
+            &iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                iroha_crypto::Algorithm::Ed25519,
+                iroha_crypto::Algorithm::Secp256k1,
+            ])
+            .expect("this stateless fixture explicitly selects Ed25519 and Secp256k1"),
             &time_source,
         )
         .unwrap();

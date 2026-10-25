@@ -4,10 +4,13 @@
 fn output_normalization_matches_each_fixed_role_channel_offset_and_direction() {
     let challenges = challenges_v1();
     for count in 0..=4_u8 {
-        let mut shape = ZkX509Rfc5280StarkShapeV1::default();
-        shape.disclosed_attribute_count = count;
+        let mut shape = ZkX509Rfc5280StarkShapeV1 {
+            disclosed_attribute_count: count,
+            ..ZkX509Rfc5280StarkShapeV1::default()
+        };
         for index in 0..usize::from(count) {
-            shape.disclosed_attribute_indices[index] = index as u8;
+            shape.disclosed_attribute_indices[index] =
+                u8::try_from(index).expect("fixture value fits u8");
         }
         let schedule = compile_zk_x509_rfc5280_stark_fixed_schedule_v1(shape).unwrap();
         let mut census = [[0_usize; OUTPUT_ROLE_COUNT_V1]; 2];
@@ -89,7 +92,7 @@ fn actual_rfc_output_witnesses_have_exact_normalized_receiver_products() {
     let trace = canonical_trace_v1();
     let shape = build_zk_x509_rfc5280_stark_shape_v1(&trace).unwrap();
     let schedule = compile_zk_x509_rfc5280_stark_fixed_schedule_v1(shape).unwrap();
-    let roles = output_roles_v1(&trace).unwrap();
+    let roles = output_roles_v1(&trace);
     let witnesses = rfc5280_io_witnesses_v1(&trace, 0).unwrap();
     let challenges = challenges_v1();
     let mut producer = [[F::ONE; 4]; OUTPUT_ROLE_COUNT_V1];
@@ -172,9 +175,13 @@ fn normalized_output_products_and_private_endpoints_support_zero_factors() {
     let mut product = [F::ONE; 4];
     for value in [7, 9, 11] {
         row[BASE_VALUE] = F(value);
-        for lane in 0..4 {
-            product[lane] = product[lane].mul(output_role_product_factor_v1(
-                &row, 0, false, lane, &challenges,
+        for (lane, target) in product.iter_mut().enumerate() {
+            *target = target.mul(output_role_product_factor_v1(
+                &row,
+                0,
+                false,
+                lane,
+                &challenges,
             ));
         }
     }
@@ -199,18 +206,14 @@ fn normalized_output_factor_is_affine_in_arbitrary_fp4_openings() {
     use crate::privacy_engines::transparent_stark::GoldilocksFp4V1 as E;
     let challenges = challenges_v1();
     let row = core::array::from_fn(|i| E::canonical([i as u64 + 1, 3, 5, 7]).unwrap());
-    for role in 0..OUTPUT_ROLE_COUNT_V1 {
+    for (role, &endpoint) in OUTPUT_CONSUMER_ENDPOINTS_V1.iter().enumerate() {
         for lane in 0..4 {
             let c = challenges.tuple[lane];
-            let expected = E::from_base(
-                F(80)
-                    .mul(c[0])
-                    .add(F(OUTPUT_CONSUMER_ENDPOINTS_V1[role]).mul(c[3])),
-            )
-            .add(row[BASE_ROLE].mul_base(c[1]))
-            .add(row[BASE_INSTANCE].mul_base(c[2]))
-            .add(row[BASE_OFFSET].mul_base(c[5]))
-            .add(row[BASE_VALUE].mul_base(c[6]));
+            let expected = E::from_base(F(80).mul(c[0]).add(F(endpoint).mul(c[3])))
+                .add(row[BASE_ROLE].mul_base(c[1]))
+                .add(row[BASE_INSTANCE].mul_base(c[2]))
+                .add(row[BASE_OFFSET].mul_base(c[5]))
+                .add(row[BASE_VALUE].mul_base(c[6]));
             assert_eq!(
                 output_role_product_factor_v1(&row, role, false, lane, &challenges),
                 expected

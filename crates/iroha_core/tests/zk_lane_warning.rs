@@ -6,6 +6,7 @@ use iroha_crypto::streaming::TransportCapabilityResolutionSnapshot;
 use iroha_data_model::events::pipeline::PipelineEventBox;
 use norito::streaming::{CapabilityFlags, HpkeSuite, PrivacyBucketGranularity};
 use std::num::NonZeroU64;
+use tokio::time::{Duration, Instant, sleep};
 #[tokio::test]
 async fn zk_lane_emits_warning_on_rejected_trace() {
     // Register a local events sender to capture warnings
@@ -47,27 +48,24 @@ async fn zk_lane_emits_warning_on_rejected_trace() {
         "zk lane must accept tasks when started"
     );
     // Expect a Pipeline::Warning with kind = "zk_trace_rejected" soon
-    use tokio::time::{Duration, Instant, sleep};
     let deadline = Instant::now() + Duration::from_millis(500);
     let mut warned = false;
     while Instant::now() < deadline {
         if let Ok(ev) = rx.try_recv() {
             match ev {
-                iroha_data_model::events::EventBox::Pipeline(pb) => {
-                    if let PipelineEventBox::Warning(w) = pb {
-                        if w.kind == "zk_trace_rejected" {
-                            warned = true;
-                            break;
-                        }
-                    }
+                iroha_data_model::events::EventBox::Pipeline(PipelineEventBox::Warning(w))
+                    if w.kind == "zk_trace_rejected" =>
+                {
+                    warned = true;
+                    break;
                 }
                 iroha_data_model::events::EventBox::PipelineBatch(batch) => {
                     for pb in batch {
-                        if let PipelineEventBox::Warning(w) = pb {
-                            if w.kind == "zk_trace_rejected" {
-                                warned = true;
-                                break;
-                            }
+                        if let PipelineEventBox::Warning(w) = pb
+                            && w.kind == "zk_trace_rejected"
+                        {
+                            warned = true;
+                            break;
                         }
                     }
                     if warned {
@@ -113,7 +111,7 @@ fn zk_task_digest_reflects_transport_metadata() {
     assert_ne!(base_digest, with_flags.digest());
     // Ensure both metadata fields together still produce deterministic digests.
     let mut combined = make_base();
-    combined.transport_capabilities = with_transport.transport_capabilities.clone();
+    combined.transport_capabilities = with_transport.transport_capabilities;
     combined.negotiated_capabilities = with_flags.negotiated_capabilities;
     assert_ne!(base_digest, combined.digest());
 }

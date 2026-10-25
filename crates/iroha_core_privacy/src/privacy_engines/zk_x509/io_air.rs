@@ -300,6 +300,14 @@ pub fn build_zk_x509_io_trace_v1(
     trace.validate(challenges)?;
     Ok(trace)
 }
+/// Channel declarations and the private execution and address-sorted tables.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+type IoBaseTablesV1 = (
+    Vec<ZkX509IoChannelDeclarationV1>,
+    PrivateTableV1<IoAccessV1>,
+    PrivateTableV1<IoAccessV1>,
+);
+
 /// Construct the challenge-independent endpoint and address-sorted tables.
 ///
 /// A STARK prover commits these tables before deriving the permutation challenges. Keeping this
@@ -307,14 +315,7 @@ pub fn build_zk_x509_io_trace_v1(
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(super) fn build_zk_x509_io_base_tables_v1(
     witnesses: &[ZkX509IoChannelWitnessV1],
-) -> Result<
-    (
-        Vec<ZkX509IoChannelDeclarationV1>,
-        PrivateTableV1<IoAccessV1>,
-        PrivateTableV1<IoAccessV1>,
-    ),
-    ZkX509IoAirErrorV1,
-> {
+) -> Result<IoBaseTablesV1, ZkX509IoAirErrorV1> {
     let declarations: Vec<_> = witnesses
         .iter()
         .map(|witness| witness.declaration.clone())
@@ -323,7 +324,7 @@ pub(super) fn build_zk_x509_io_base_tables_v1(
     if witnesses.len() != declarations.len() {
         return Err(ZkX509IoAirErrorV1::Topology);
     }
-    let capacity = byte_memory_capacity_v1()?;
+    let capacity = byte_memory_capacity_v1();
     let expected_rows = declarations
         .iter()
         .try_fold(0_usize, |rows, declaration| {
@@ -360,11 +361,7 @@ pub(super) fn build_zk_x509_io_base_tables_v1(
         (
             access.channel.0,
             access.offset.0,
-            if access.is_write == F::ONE {
-                0_u8
-            } else {
-                1_u8
-            },
+            u8::from(access.is_write != F::ONE),
             access.endpoint,
         )
     });
@@ -643,7 +640,10 @@ fn validate_sorted_v1(
             && current.is_write == F::ONE
         {
             let previous_channel = declarations
-                .get(previous.channel.0 as usize)
+                .get(
+                    usize::try_from(previous.channel.0)
+                        .map_err(|_| ZkX509IoAirErrorV1::SortedMemory)?,
+                )
                 .ok_or(ZkX509IoAirErrorV1::SortedMemory)?;
             if previous.offset.0 + 1 != u64::from(previous_channel.byte_len) {
                 return Err(ZkX509IoAirErrorV1::SortedMemory);
@@ -762,8 +762,8 @@ fn compress_access_v1(access: IoAccessV1, challenge: ZkX509IoLaneChallengesV1) -
         .add(challenge.value.mul(access.value))
         .add(challenge.is_write.mul(access.is_write))
 }
-pub fn byte_memory_capacity_v1() -> Result<usize, ZkX509IoAirErrorV1> {
-    Ok(ZK_X509_IO_FIXED_CAPACITY_ROWS_V1)
+pub const fn byte_memory_capacity_v1() -> usize {
+    ZK_X509_IO_FIXED_CAPACITY_ROWS_V1
 }
 #[cfg(test)]
 mod tests {
@@ -813,16 +813,17 @@ mod tests {
         value: &[u8],
         public: bool,
     ) -> ZkX509IoChannelWitnessV1 {
+        let consumer_count = consumers.len();
         ZkX509IoChannelWitnessV1 {
             declaration: ZkX509IoChannelDeclarationV1 {
                 channel,
                 producer,
-                consumers: consumers.clone(),
-                byte_len: value.len() as u32,
+                consumers,
+                byte_len: u32::try_from(value.len()).expect("fixture value fits u32"),
                 public_value: public.then(|| value.to_vec()),
             },
             producer_value: value.to_vec(),
-            consumer_values: vec![value.to_vec(); consumers.len()],
+            consumer_values: vec![value.to_vec(); consumer_count],
         }
     }
     pub(super) fn valid_witnesses() -> Vec<ZkX509IoChannelWitnessV1> {
@@ -979,7 +980,7 @@ mod tests {
         let trace =
             build_zk_x509_io_trace_v1(&witnesses, challenges()).expect("bounded document I/O");
         assert_eq!(trace.rows(), 32_768);
-        assert!(trace.rows() <= byte_memory_capacity_v1().expect("byte-memory capacity"));
+        assert!(trace.rows() <= byte_memory_capacity_v1());
         let capacity_bytes = 64 * 1_024;
         let witnesses = vec![witness(
             0,

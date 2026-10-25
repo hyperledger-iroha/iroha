@@ -3,7 +3,7 @@
 use super::*;
 
 /// Reconcile durable reward history as well as live staking and fee backing at a restore cut.
-pub(crate) fn validate_public_lane_stake_reserves_for_restore(
+pub fn validate_public_lane_stake_reserves_for_restore(
     world: &impl WorldReadOnly,
 ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<String>> {
     crate::validation_fee_rewards::validate_fee_reward_history(world)
@@ -12,7 +12,7 @@ pub(crate) fn validate_public_lane_stake_reserves_for_restore(
 }
 
 /// Reconcile pinned custody with all bonded and pending shares and exact asset backing.
-pub(crate) fn validate_public_lane_stake_reserves(
+pub fn validate_public_lane_stake_reserves(
     world: &impl WorldReadOnly,
 ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<String>> {
     crate::validation_fee_rewards::validate_fee_custody_backing(world)

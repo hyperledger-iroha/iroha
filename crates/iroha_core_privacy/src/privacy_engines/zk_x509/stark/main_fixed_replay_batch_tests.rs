@@ -30,7 +30,9 @@ fn maximum_arithmetic_fixed_sets_preserve_every_coefficient_and_registration() {
     let pre_aux = ZkX509CredentialMainPreAuxV1::fixture_for_test_v1(
         [0x81; 32],
         assembly.verifier_profile.compiled_profile_digest,
-        core::array::from_fn(|index| digest(index as u8 + 1)),
+        core::array::from_fn(|index| {
+            digest(u8::try_from(index).expect("fixture value fits u8") + 1)
+        }),
     );
     let binding = derive_zk_x509_credential_pre_aux_binding_v1(
         pre_aux,
@@ -49,7 +51,7 @@ fn maximum_arithmetic_fixed_sets_preserve_every_coefficient_and_registration() {
     });
     let p256 = P256MainBaseSourceV1::new_v1(&assembly).unwrap();
     let source = MainLog19BoundTraceGroupSourceV1::bind_from_phase_v1(
-        &layout, &assembly, sha, p256, binding,
+        &layout, &assembly, sha, p256, &binding,
     )
     .unwrap();
 

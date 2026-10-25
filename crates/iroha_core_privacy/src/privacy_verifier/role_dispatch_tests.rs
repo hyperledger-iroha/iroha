@@ -55,9 +55,9 @@ fn verifier_arm_of(error: &PrivacyVerificationErrorV1) -> Option<PrivacyProtocol
             Protocol::IrohaIvmPrivateNoteStarkV1
         }
         Error::PqMaspState(_) | Error::NativePqMasp(_) => Protocol::PqMaspStarkV1,
-        Error::AnonymousPgcState(_) | Error::NativeAnonymousPgc(_) => {
-            Protocol::AnonymousPgcKOutOfNV1
-        }
+        Error::AnonymousPgcState(_)
+        | Error::AnonymousPgcRoot { .. }
+        | Error::NativeAnonymousPgc(_) => Protocol::AnonymousPgcKOutOfNV1,
         Error::BootleLanternState(_) | Error::NativeBootleLantern(_) => {
             Protocol::IrohaBootleLanternAnoncredV1
         }
@@ -68,6 +68,31 @@ fn verifier_arm_of(error: &PrivacyVerificationErrorV1) -> Option<PrivacyProtocol
         | Error::EffectRoleMismatch(_)
         | Error::CanonicalEncoding(_) => return None,
     })
+}
+
+/// Root recomputation failures remain the PGC verifier's typed refusal.
+#[test]
+fn pgc_root_refusals_are_classified_as_the_pgc_verifier_arm() {
+    for code in [
+        PrivacyAnonymousPgcStateFailureCodeV1::CurrentRootRecomputationFailed,
+        PrivacyAnonymousPgcStateFailureCodeV1::NextRootRecomputationFailed,
+    ] {
+        let error = PrivacyVerificationErrorV1::AnonymousPgcRoot {
+            code,
+            source: crate::privacy_state::PrivacyPgcAccountStateRootErrorV1::ZeroEpoch,
+        };
+        assert_eq!(
+            verifier_arm_of(&error),
+            Some(PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1)
+        );
+        assert!(matches!(
+            error,
+            PrivacyVerificationErrorV1::AnonymousPgcRoot {
+                code: retained_code,
+                source: crate::privacy_state::PrivacyPgcAccountStateRootErrorV1::ZeroEpoch,
+            } if retained_code == code
+        ));
+    }
 }
 
 /// Every role enters the one dispatch and leaves it either through the native
@@ -380,13 +405,13 @@ fn assert_effect_seals_only_for_its_role(
     use crate::privacy_dispatch::{PrivacyRoleEffectClassV1, privacy_role_dispatch_row_v1};
     let digest = PrivacyStatementDigestV1::new([0x77; 32]);
     for role in PrivacyActionRoleV1::ALL {
-        let belongs = match owner {
-            Some(owner) => owner == role,
-            None => {
+        let belongs = owner.map_or_else(
+            || {
                 privacy_role_dispatch_row_v1(role).effect_class
                     == PrivacyRoleEffectClassV1::VerifyOnly
-            }
-        };
+            },
+            |owner| owner == role,
+        );
         assert_eq!(effect.discharges_role_v1(role), belongs, "{role}");
         match VerifiedPrivacyEffectsV1::seal_v1(role, digest, 3, 77, effect.clone()) {
             Ok(sealed) => {

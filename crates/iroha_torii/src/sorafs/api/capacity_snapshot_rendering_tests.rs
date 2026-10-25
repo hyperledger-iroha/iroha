@@ -9,7 +9,7 @@ fn snapshot_to_json_renders_counts() {
         registered_epoch: 1,
         valid_from_epoch: 2,
         valid_until_epoch: 3,
-        declaration_json: json_object(vec![json_entry("version", 1u64)]),
+        declaration_json: json_object(vec![json_entry("version", &(1u64))]),
         metadata_json: Value::Object(Map::new()),
     };
     let ledger = RegistryFeeLedgerEntry {

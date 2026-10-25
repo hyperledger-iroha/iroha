@@ -181,9 +181,7 @@ fn native_aux_cache_clears_full_rows_and_terminals_on_drop_error_and_unwind() {
                 let result = std::panic::catch_unwind(|| {
                     ShaNativeAuxCacheV1::build_v1(3, 0, |visitor| {
                         visitor(0, row(0));
-                        if mode == 2 {
-                            panic!("exercise private cache unwind");
-                        }
+                        assert!(mode != 2, "exercise private cache unwind");
                         Err(Error::Resource)
                     })
                 });

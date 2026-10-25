@@ -12,16 +12,16 @@ use iroha_plonk::{
     verifier::{VerifyError, verify_full},
 };
 
-pub(super) fn check<F: PastaField, C: Circuit<F>>(
+pub fn check<F: PastaField, C: Circuit<F>>(
     k: u32,
     circuit: &C,
-    public: Vec<Vec<F>>,
+    public: &[Vec<F>],
 ) -> Result<CheckReport<F>, Error> {
-    check_circuit(circuit, k, &public, CheckMode::Strict)
+    check_circuit(circuit, k, public, CheckMode::Strict)
 }
 
 /// Test-only compiled native proof material; never registered or admitted.
-pub(super) struct NativeProof {
+pub struct NativeProof {
     params: PinnedParams<Eq>,
     key: ProvingKey<Eq>,
 }

@@ -1,7 +1,7 @@
 //! Complete World state accumulator: the World state roots of the execution result `R`
 //! (`specs/sumeragi.md` §4.1, Appendix E, E51).
 //!
-//! The accumulator is an incremental homomorphic multiset hash (LtHash16) over every canonical
+//! The accumulator is an incremental homomorphic multiset hash (`LtHash16`) over every canonical
 //! World entry that the exhaustive authority registry declares, including the trigger owner's
 //! authoritative stores. Derived indexes and local delivery buffers are excluded by the same
 //! registry, so the accumulator commits to exactly the independent World authority.
@@ -49,8 +49,8 @@ use iroha_data_model::sumeragi_finality::{
 use mv::{Key, Value, storage::StorageReadOnly};
 use norito::codec::Encode;
 
-/// Number of 16-bit lanes of the accumulator (LtHash16, 2 KiB of state).
-pub(crate) const LANES: usize = 1024;
+/// Number of 16-bit lanes of the accumulator (`LtHash16`, 2 KiB of state).
+pub const LANES: usize = 1024;
 const LANE_BYTES: usize = 2 * LANES;
 const SCHEMA_START: &[u8] = b"iroha:world-state:schema:start:v1\0";
 const SCHEMA_FIELD: &[u8] = b"iroha:world-state:schema:field:v1\0";
@@ -66,7 +66,7 @@ const CELL: u8 = 1;
 /// heap, so the World overlays that embed this cell (and its per-transaction undo slot) stay
 /// small.
 #[derive(Clone, PartialEq, Eq)]
-pub(crate) struct WorldStateAccumulator {
+pub struct WorldStateAccumulator {
     lanes: Box<[u16; LANES]>,
     entries: u64,
 }
@@ -748,4 +748,4 @@ mod world_state_snapshot;
 pub use world_state_snapshot::{ProviderAdmissionSnapshotOriginalsV1, WorldStateSnapshotError};
 
 #[path = "world_state_cut.rs"]
-pub(crate) mod world_state_cut;
+pub mod world_state_cut;

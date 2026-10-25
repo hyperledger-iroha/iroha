@@ -34,7 +34,7 @@ const SCHEMA: &str = "iroha.cli.prepared-instruction-transaction.v1";
 
 /// Exact private journal selected for preparation, submission, or read-only recovery.
 #[derive(Debug, clap::Args)]
-pub(crate) struct JournalArgs {
+pub struct JournalArgs {
     /// Owner-private operation directory. Preparation refuses any existing directory.
     #[arg(long, value_name = "DIRECTORY")]
     journal: PathBuf,
@@ -136,7 +136,7 @@ fn endpoint_identity(config: &Config) -> Result<String> {
 }
 
 /// Reject ignored transaction modifiers before loading runtime credentials.
-pub(crate) fn validate_globals(args: &Args) -> Result<()> {
+pub fn validate_globals(args: &Args) -> Result<()> {
     use crate::transaction::Command as Tx;
     let preparing = match &args.command {
         Command::Tx(Tx::Prepare(_)) => true,
@@ -166,7 +166,7 @@ pub(crate) fn validate_globals(args: &Args) -> Result<()> {
 }
 
 /// Quote and sign one instruction transaction without making a submission request.
-pub(crate) fn prepare<C: RunContext>(args: JournalArgs, context: &mut C) -> Result<()> {
+pub fn prepare<C: RunContext>(args: &JournalArgs, context: &mut C) -> Result<()> {
     let instructions: Vec<InstructionBox> = crate::parse_json_stdin(context)?;
     ensure!(
         !instructions.is_empty(),
@@ -199,16 +199,20 @@ pub(crate) fn prepare<C: RunContext>(args: JournalArgs, context: &mut C) -> Resu
 }
 
 /// Dispatch only the original unattempted envelope; any previous attempt is recovered read-only.
-pub(crate) fn submit<C: RunContext>(args: JournalArgs, context: &mut C) -> Result<()> {
+pub fn submit<C: RunContext>(args: &JournalArgs, context: &mut C) -> Result<()> {
     run_retained(args, context, true)
 }
 
 /// Observe the original envelope without signing/submitting transactions or writing journal records.
-pub(crate) fn resume<C: RunContext>(args: JournalArgs, context: &mut C) -> Result<()> {
+pub fn resume<C: RunContext>(args: &JournalArgs, context: &mut C) -> Result<()> {
     run_retained(args, context, false)
 }
 
-fn run_retained<C: RunContext>(args: JournalArgs, context: &mut C, may_submit: bool) -> Result<()> {
+fn run_retained<C: RunContext>(
+    args: &JournalArgs,
+    context: &mut C,
+    may_submit: bool,
+) -> Result<()> {
     let journal = Journal::open(&args.journal)?;
     let operation: PreparedOperation = journal.read_operation()?;
     let transaction = operation.validate(context.config())?;
@@ -383,7 +387,7 @@ fn recover(
     Ok(observation)
 }
 
-pub(crate) fn verify_committed(
+pub fn verify_committed(
     expected: &SignedTransaction,
     details: &PipelineTransactionDetailsResponse,
 ) -> Result<()> {

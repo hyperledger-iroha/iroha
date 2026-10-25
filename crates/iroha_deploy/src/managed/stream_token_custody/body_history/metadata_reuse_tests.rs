@@ -43,6 +43,7 @@ fn outcome(result: Result<()>) -> std::result::Result<(), String> {
 
 #[test]
 fn terminal_image_reuse_keeps_fresh_reads_and_inventory_order_with_fewer_actual_decoders() {
+    use operation_scope_tests::Point as Leaf;
     let _resources = crate::managed::native_test_guard();
     let (_fixture, history) = shared_snapshot_tests::history_with_bodies(2);
     let native = history
@@ -70,7 +71,6 @@ fn terminal_image_reuse_keeps_fresh_reads_and_inventory_order_with_fewer_actual_
     new.unwrap();
     assert_eq!(old_native, new_native);
     assert_eq!(old_leaves, new_leaves);
-    use operation_scope_tests::Point as Leaf;
     assert_eq!(
         new_leaves,
         [

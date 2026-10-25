@@ -126,7 +126,7 @@ pub enum TxCommand {
     /// Roll back the active stage of an oracle feed change.
     #[command(name = "rollback-change")]
     RollbackChange(RollbackChangeTx),
-    /// Submit a native DeFi oracle attestation.
+    /// Submit a native `DeFi` oracle attestation.
     #[command(name = "attest-defi")]
     AttestDefi(AttestDefiTx),
     /// Record a Twitter binding attestation.
@@ -158,7 +158,7 @@ pub enum QueryCommand {
     /// List Twitter bindings by UAID from a Norito JSON UAID file.
     #[command(name = "twitter-bindings")]
     TwitterBindings(TwitterBindingsQuery),
-    /// Fetch latest DeFi oracle attestation by domain and subject id.
+    /// Fetch latest `DeFi` oracle attestation by domain and subject id.
     #[command(name = "defi-attestation")]
     DefiAttestation(DefiAttestationQuery),
 }
@@ -335,7 +335,7 @@ pub struct TwitterBindingsQuery {
 }
 #[derive(Args, Debug)]
 pub struct DefiAttestationQuery {
-    /// DeFi oracle domain (`1=perps_market`, `2=options_series`,
+    /// `DeFi` oracle domain (`1=perps_market`, `2=options_series`,
     /// `3=options_shout`, `4=cover_policy`).
     #[arg(long)]
     domain: u32,
@@ -1325,7 +1325,7 @@ mod tests {
         std::fs::write(&path, b"{not valid norito json").expect("write invalid json fixture");
         path
     }
-    fn assert_failed_to_parse(error: eyre::Report) {
+    fn assert_failed_to_parse(error: &eyre::Report) {
         let rendered = format!("{error:?}");
         assert!(
             rendered.contains("failed to parse"),
@@ -1611,7 +1611,7 @@ mod tests {
             let err = command
                 .run(&mut ctx)
                 .expect_err("malformed JSON must reject before building an instruction");
-            assert_failed_to_parse(err);
+            assert_failed_to_parse(&err);
             assert!(
                 ctx.printed.is_empty(),
                 "failed command should not emit output instructions"
@@ -1673,7 +1673,7 @@ mod tests {
         })
         .run(&mut ctx)
         .expect_err("malformed UAID JSON must reject before a query result is printed");
-        assert_failed_to_parse(err);
+        assert_failed_to_parse(&err);
         assert!(ctx.printed.is_empty());
     }
     #[test]

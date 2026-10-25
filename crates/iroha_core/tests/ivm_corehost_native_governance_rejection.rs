@@ -123,7 +123,7 @@ fn generic_native_verification_cannot_authorize_vendor_ballot() {
     let vk_record_for_state = vk_record.clone();
     let mut vk_map = BTreeMap::new();
     vk_map.insert(VerifyingKeyId::new(backend_label, "vk_ballot"), vk_record);
-    host.set_verifying_keys(vk_map).expect("set registry");
+    host.set_verifying_keys(&(vk_map)).expect("set registry");
     host.set_zk_config(&state.zk_snapshot());
     vm.set_host(host);
     // Grant authority permissions and register verifying keys in the WSV for governance plumbing.

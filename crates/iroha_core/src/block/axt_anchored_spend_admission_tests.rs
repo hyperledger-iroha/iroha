@@ -230,9 +230,9 @@ fn signed_envelope(spend: AxtAnchoredSpendV1) -> AxtEnvelopeRecord {
 #[test]
 fn local_fastpq_allocation_refusal_defers_without_axt_reject_reason() {
     let deferred = map_axt_fastpq_error(
-        fastpq_prover::Error::LocalAllocationUnavailable {
+        &(fastpq_prover::Error::LocalAllocationUnavailable {
             context: "axt test allocation",
-        },
+        }),
         "FASTPQ verification failed",
         1,
         DataSpaceId::new(7),
@@ -244,7 +244,7 @@ fn local_fastpq_allocation_refusal_defers_without_axt_reject_reason() {
             if reason.reason() == ivm::error::ExecutionDeferral::AllocationUnavailable
     ));
     let invalid = map_axt_fastpq_error(
-        fastpq_prover::Error::CommitmentMismatch,
+        &(fastpq_prover::Error::CommitmentMismatch),
         "FASTPQ verification failed",
         1,
         DataSpaceId::new(7),

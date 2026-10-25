@@ -128,6 +128,10 @@ fn state() -> State {
     state
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 fn accounts(
     state: &State,
     limits: LeafLimits,
@@ -136,6 +140,10 @@ fn accounts(
     FIRST_RESERVED.set(state.ivm_execution_budget().reserved_bytes());
     super::super::capture_accounts_table_once(state, limits)
 }
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 fn aliases(
     state: &State,
     limits: LeafLimits,
@@ -388,6 +396,10 @@ fn busy_source_work_and_pair_row_refusals_reclaim_preceding_native_nodes() {
     assert!(state.transactions.try_membership_observation().is_ok());
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 fn rejected(
     state: &State,
     limits: LeafLimits,
@@ -395,6 +407,10 @@ fn rejected(
     drop(aliases(state, limits)?);
     Err(LeafError::PayloadLimit)
 }
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 fn mismatched(
     state: &State,
     limits: LeafLimits,
@@ -402,6 +418,10 @@ fn mismatched(
     drop(aliases(state, limits)?);
     super::super::capture_accounts_table_once(state, limits)
 }
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 fn changed_generation(
     state: &State,
     limits: LeafLimits,

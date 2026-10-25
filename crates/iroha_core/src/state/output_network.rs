@@ -14,7 +14,7 @@ use crate::{
     state::contract_event_journal::DrainedContractEvents,
     state::network_policy_routes::CapturedNetworkPolicyRoute,
     tx::{
-        AcceptedTransaction, execution_rejection_from_admission_failure,
+        AcceptedTransaction, execution_attempt_from_admission_failure,
         rejected_transaction_gas_is_accountable,
     },
 };
@@ -156,26 +156,34 @@ impl<'source> ExecutionOutputProducer<'_, '_, 'source> {
                     signed,
                     parameters.sumeragi().max_clock_drift(),
                     account,
-                    &self.state.crypto,
                     validation_time,
                 )
                 .map(|()| AcceptedTransaction::new_unchecked_entrypoint(Cow::Borrowed(input)))
-                .map_err(execution_rejection_from_admission_failure)
+                .map_err(execution_attempt_from_admission_failure)
             } else {
                 AcceptedTransaction::accept_borrowed_entrypoint_at_time(
                     input,
                     &self.state.network_id,
                     parameters.sumeragi().max_clock_drift(),
                     parameters.transaction(),
-                    &self.state.crypto,
+                    self.state.crypto_admission_policy().map_err(|_| {
+                        ExecutionAttemptError::Deferred(
+                            ivm::error::ExecutionDeferral::LocalInvariantViolation.into(),
+                        )
+                    })?,
                     validation_time,
                     signatures_prechecked,
                 )
-                .map_err(execution_rejection_from_admission_failure)
+                .map_err(execution_attempt_from_admission_failure)
             };
+            // A local refusal has no transaction verdict and must leave before
+            // time/fraud filtering can replace it or any Network row can be stored.
             let admission = match admission {
                 Ok(accepted) => Ok(accepted),
-                Err(rejection) => Err(rejection.map_err(ExecutionAttemptError::Deferred)?),
+                Err(ExecutionAttemptError::Rejected(completed)) => Err(completed),
+                Err(ExecutionAttemptError::Deferred(original)) => {
+                    return Err(ExecutionAttemptError::Deferred(original));
+                }
             };
             let admission = if genesis_account.is_none() {
                 if let Some(signed) = signed_source(input) {
@@ -192,21 +200,22 @@ impl<'source> ExecutionOutputProducer<'_, '_, 'source> {
                         let telemetry = Some(self.state.telemetry);
                         #[cfg(not(feature = "telemetry"))]
                         let telemetry = None;
-                        let fraud = if let Some(physical) = policy_route.physical() {
-                            let physical = physical.decision();
-                            crate::tx::enforce_fraud_policy(
-                                &self.state.fraud_monitoring,
-                                signed.metadata(),
-                                telemetry,
-                                &crate::tx::LaneAssignment {
-                                    lane_id: physical.lane_id,
-                                    dataspace_id: physical.dataspace_id,
-                                    dataspace_catalog: &self.state.nexus.dataspace_catalog,
-                                },
-                            )
-                        } else {
-                            Ok(())
-                        };
+                        let fraud = policy_route.physical().map_or_else(
+                            || Ok(()),
+                            |physical| {
+                                let physical = physical.decision();
+                                crate::tx::enforce_fraud_policy(
+                                    &self.state.fraud_monitoring,
+                                    signed.metadata(),
+                                    telemetry,
+                                    &crate::tx::LaneAssignment {
+                                        lane_id: physical.lane_id,
+                                        dataspace_id: physical.dataspace_id,
+                                        dataspace_catalog: &self.state.nexus.dataspace_catalog,
+                                    },
+                                )
+                            },
+                        );
                         fraud.and(admission)
                     }
                 } else {
@@ -370,7 +379,7 @@ impl<'source> ExecutionOutputProducer<'_, '_, 'source> {
             u64::from(input_index),
             self.source.header().height().get(),
             routing,
-            policy_route,
+            &(policy_route),
             admitted,
             frozen.genesis.as_ref(),
             quarantine == QuarantineAdmission::Overflow,
@@ -403,7 +412,7 @@ fn execute_network_attempt_with_amx<'attempt>(
     execution_index: u64,
     height: u64,
     routing: RoutingDecision,
-    policy_route: CapturedNetworkPolicyRoute,
+    policy_route: &CapturedNetworkPolicyRoute,
     admitted: Result<AcceptedTransaction<'_>, TransactionRejectionReason>,
     genesis: Option<&crate::block::AuthenticatedGenesisTransaction>,
     quarantine_overflow: bool,
@@ -878,7 +887,8 @@ fn bind_source(
     transaction.current_entrypoint_index = Some(index);
     transaction.current_network_entrypoint_hash = Some(input.hash());
     transaction.tx_call_hash = Some(Hash::from(input.execution_call_hash()));
-    transaction.current_tx_hash = signed_source(input).map(|signed| signed.hash());
+    transaction.current_tx_hash =
+        signed_source(input).map(iroha_data_model::transaction::SignedTransaction::hash);
     transaction.current_lane_id = Some(route.lane_id);
     transaction.current_dataspace_id = Some(route.dataspace_id);
     transaction.world.current_dataspace_id = Some(route.dataspace_id);
@@ -898,7 +908,8 @@ fn require_source(
     if transaction.current_entrypoint_index != Some(index)
         || transaction.current_network_entrypoint_hash != Some(input.hash())
         || transaction.tx_call_hash != Some(Hash::from(input.execution_call_hash()))
-        || transaction.current_tx_hash != signed_source(input).map(|signed| signed.hash())
+        || transaction.current_tx_hash
+            != signed_source(input).map(iroha_data_model::transaction::SignedTransaction::hash)
         || transaction.current_lane_id != Some(route.lane_id)
         || transaction.current_dataspace_id != Some(route.dataspace_id)
         || transaction.world.current_dataspace_id != Some(route.dataspace_id)
@@ -954,10 +965,14 @@ pub(super) mod fee_decode_test_scope {
     }
 
     /// Restore the test scope even when a causal assertion unwinds.
-    pub(crate) struct Guard;
+    pub struct Guard;
 
     impl Guard {
         /// Observe the actual fee invocation and its transaction-local refusal.
+        #[expect(
+            clippy::unused_self,
+            reason = "The thread-bound guard must remain borrowed while accessing its scoped test observer"
+        )]
         pub(crate) fn observe(&self) -> (usize, Option<RefusalObservation>) {
             PROBE.with(|probe| {
                 let probe = probe.borrow();
@@ -973,7 +988,7 @@ pub(super) mod fee_decode_test_scope {
     }
 
     /// Limit original fee decoders only while this test-thread guard is alive.
-    pub(crate) fn refuse_actual_fee_decode() -> Guard {
+    pub fn refuse_actual_fee_decode() -> Guard {
         PROBE.with(|probe| {
             let mut probe = probe.borrow_mut();
             assert!(!probe.enabled, "fee decoder probe cannot nest");
@@ -1027,10 +1042,14 @@ pub(super) mod penalty_decode_test_scope {
     }
 
     /// Restore the test scope even when a causal assertion unwinds.
-    pub(crate) struct Guard;
+    pub struct Guard;
 
     impl Guard {
         /// Observe the actual penalty invocation and its transaction-local refusal.
+        #[expect(
+            clippy::unused_self,
+            reason = "The thread-bound guard must remain borrowed while accessing its scoped test observer"
+        )]
         pub(crate) fn observe(&self) -> (usize, Option<RefusalObservation>) {
             PROBE.with(|probe| {
                 let probe = probe.borrow();
@@ -1046,7 +1065,7 @@ pub(super) mod penalty_decode_test_scope {
     }
 
     /// Limit original penalty decoders only while this test-thread guard is alive.
-    pub(crate) fn refuse_actual_penalty_decode() -> Guard {
+    pub fn refuse_actual_penalty_decode() -> Guard {
         PROBE.with(|probe| {
             let mut probe = probe.borrow_mut();
             assert!(!probe.enabled, "penalty decoder probe cannot nest");

@@ -90,7 +90,7 @@ impl AuthenticatedGlobalBeaconDkgAttemptV1 {
     /// Authenticate signed H1 authorization, without attributing any execution result.
     ///
     /// The independently configured network must match the actual signed body.
-    /// Signed native NPoS parameters own the cutoff and exact original roster.
+    /// Signed native `NPoS` parameters own the cutoff and exact original roster.
     ///
     /// # Errors
     /// Rejects a foreign body, bad signature, malformed epoch, mode or closed windows.
@@ -264,11 +264,12 @@ impl AuthenticatedGlobalBeaconDkgAttemptV1 {
         public: &super::super::ValidatedGlobalThresholdBeaconSessionV1,
         seat: u16,
         lifecycle: &KeyPair,
-        provider_handle: &str,
-        provider_revision: u64,
-        accepted_checkpoint_hash: [u8; 32],
-        accepted_head_hash: [u8; 32],
-        extraction_intent_hash: [u8; 32],
+        (provider_handle, provider_revision): (&str, u64),
+        (accepted_checkpoint_hash, accepted_head_hash, extraction_intent_hash): (
+            [u8; 32],
+            [u8; 32],
+            [u8; 32],
+        ),
     ) -> Result<VerifiedGlobalBeaconDkgAggregateContextV1, LocalGlobalThresholdBeaconDkgErrorV1>
     {
         let source = self.finalized_source(clock, public)?;
@@ -339,15 +340,15 @@ impl AuthenticatedGlobalBeaconDkgAttemptV1 {
     pub fn checkpoint_context(
         &self,
         clock: &NativeJournalCursor,
-        phase: u16,
-        seat: u16,
+        (phase, seat): (u16, u16),
         lifecycle: &KeyPair,
-        provider_handle: &str,
-        provider_revision: u64,
-        public_output_hash: [u8; 32],
-        phase_input_hash: [u8; 32],
-        previous_checkpoint_hash: [u8; 32],
-        producer_intent_hash: [u8; 32],
+        (provider_handle, provider_revision): (&str, u64),
+        (public_output_hash, phase_input_hash, previous_checkpoint_hash, producer_intent_hash): (
+            [u8; 32],
+            [u8; 32],
+            [u8; 32],
+            [u8; 32],
+        ),
     ) -> Result<VerifiedGlobalBeaconDkgCheckpointContextV1, LocalGlobalThresholdBeaconDkgErrorV1>
     {
         let foreign_clock = clock.network_id() != self.session.network_id

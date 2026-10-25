@@ -89,6 +89,10 @@ pub(super) struct TableSelection {
     pub(super) limits: LeafLimits,
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 impl TableSelection {
     /// Select canonical tables with native keys and declared V1 value schemas.
     pub(super) fn new(ids: &[&str], limits: LeafLimits) -> Result<Self, LeafError> {

@@ -83,7 +83,6 @@ async fn handle(
         admission,
         "native resource names state worker failed",
         move || {
-            let _memory = memory;
             let view = state.view();
             let height = u64::try_from(view.height()).map_err(|_| unavailable())?;
             if height < 2 {
@@ -199,7 +198,7 @@ async fn handle(
                     },
                 )
                 .map_err(|_| unavailable())?;
-            body.memory = Some(_memory);
+            body.memory = Some(memory);
             let content_type = match format {
                 ResponseFormat::Norito => "application/x-norito",
                 ResponseFormat::Json => "application/json",

@@ -49,14 +49,20 @@ fn check_expression(native: &NativeInvocation, window: usize, word: u32, left: u
     let second = &native.packets()[start + 18];
     let output = &native.packets()[start + 19];
     assert!(first.enabled());
-    assert_eq!(first.index(), wide::rs1(word) as u32);
+    assert_eq!(
+        first.index(),
+        u32::try_from(wide::rs1(word)).expect("bounded fixture value")
+    );
     assert_eq!(value(first, false), left);
     assert_eq!(first.before(), first.after());
     assert_eq!(first.before_private(), 0);
     assert_eq!(first.after_private(), 0);
     assert_eq!(second.enabled(), REGISTER.contains(&wide::opcode(word)));
     if second.enabled() {
-        assert_eq!(second.index(), wide::rs2(word) as u32);
+        assert_eq!(
+            second.index(),
+            u32::try_from(wide::rs2(word)).expect("bounded fixture value")
+        );
         assert_eq!(
             value(second, false),
             amount,
@@ -72,7 +78,10 @@ fn check_expression(native: &NativeInvocation, window: usize, word: u32, left: u
     let destination = wide::rd(word);
     assert_eq!(output.enabled(), destination != 0);
     if destination != 0 {
-        assert_eq!(output.index(), destination as u32);
+        assert_eq!(
+            output.index(),
+            u32::try_from(destination).expect("bounded fixture value")
+        );
         assert_eq!(
             value(output, true),
             expected(wide::opcode(word), left, amount)
@@ -120,7 +129,7 @@ fn every_register_count_keeps_full_original_bits_and_signed_shift_semantics() {
                 body.push(enc::encode_literal(
                     wide::memory::LDI64,
                     5,
-                    (index + 1) as u16,
+                    u16::try_from(index + 1).expect("bounded fixture value"),
                 ));
                 body.extend(REGISTER.map(|opcode| instruction(opcode, 6, 4, 5)));
             }

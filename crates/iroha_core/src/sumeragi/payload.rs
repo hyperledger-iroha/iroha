@@ -519,17 +519,17 @@ fn current_sccp_forgery(
     match forgery::verify_for_proposal(view, parent, evidence, time_ms, budget) {
         Ok(()) => Ok(true),
         Err(error) if error.is_protocol_rejection() => Ok(false),
-        Err(error) => Err(error
-            .into_local_refusal()
-            .map(|original| match original {
+        Err(error) => Err(error.into_local_refusal().map_or_else(
+            |_| invalid_source(),
+            |original| match original {
                 forgery::ForgeryLocalRefusal::Storage(original) => {
                     PayloadError::SccpForgeryPreparation(original)
                 }
                 forgery::ForgeryLocalRefusal::Execution(original) => {
                     PayloadError::SccpForgeryDeferred(original)
                 }
-            })
-            .unwrap_or_else(|_| invalid_source())),
+            },
+        )),
     }
 }
 
@@ -607,17 +607,20 @@ fn build_at(
     };
     if height > 2 {
         let view = state.view();
-        let original = match parent_service {
-            Some(prepared) => prepared.proposal_original(&view, assembly.parent),
-            None => super::certified_chain::CertifiedChain::new_for_parent_service(&view)
-                .and_then(|reader| reader.parent_service_proposal_original(assembly.parent)),
-        }
-        .map_err(|error| match error {
-            super::certified_chain::ParentServiceError::Deferred(reason) => {
-                PayloadError::RoutingDeferred(reason)
-            }
-            error => PayloadError::ParentService(error.to_string()),
-        })?;
+        let original = parent_service
+            .map_or_else(
+                || {
+                    super::certified_chain::CertifiedChain::new_for_parent_service(&view)
+                        .and_then(|reader| reader.parent_service_proposal_original(assembly.parent))
+                },
+                |prepared| prepared.proposal_original(&view, assembly.parent),
+            )
+            .map_err(|error| match error {
+                super::certified_chain::ParentServiceError::Deferred(reason) => {
+                    PayloadError::RoutingDeferred(reason)
+                }
+                error => PayloadError::ParentService(error.to_string()),
+            })?;
         effects
             .get_or_insert_with(Default::default)
             .parent_service_commit_qc = Some(original);
@@ -1250,7 +1253,11 @@ mod tests {
             &chain.network_id(),
             Duration::from_secs(1),
             view.world().parameters().transaction(),
-            &iroha_config::parameters::actual::Crypto::default(),
+            &iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                iroha_crypto::Algorithm::Ed25519,
+                iroha_crypto::Algorithm::Secp256k1,
+            ])
+            .expect("this stateless fixture explicitly selects Ed25519 and Secp256k1"),
             &clock,
         )
         .unwrap();

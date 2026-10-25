@@ -20,6 +20,10 @@ pub enum P256EcdsaRoleV1 {
 }
 /// Private values required for one exact ECDSA equation.
 #[derive(Clone, Copy, PartialEq, Eq)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "Every fixed-width witness field explicitly identifies its big-endian encoding."
+)]
 pub struct P256EcdsaWitnessV1 {
     /// Affine public-key x-coordinate.
     pub(crate) public_key_x_be: [u8; 32],
@@ -541,13 +545,13 @@ mod tests {
     }
     fn witness_for(key: &SigningKey, digest: [u8; 32], signature: Signature) -> P256EcdsaWitnessV1 {
         let encoded = key.verifying_key().to_encoded_point(false);
-        let mut public_key_x_be = [0_u8; 32];
-        let mut public_key_y_be = [0_u8; 32];
-        public_key_x_be.copy_from_slice(encoded.x().expect("x"));
-        public_key_y_be.copy_from_slice(encoded.y().expect("y"));
+        let mut horizontal = [0_u8; 32];
+        let mut vertical = [0_u8; 32];
+        horizontal.copy_from_slice(encoded.x().expect("x"));
+        vertical.copy_from_slice(encoded.y().expect("y"));
         P256EcdsaWitnessV1 {
-            public_key_x_be,
-            public_key_y_be,
+            public_key_x_be: horizontal,
+            public_key_y_be: vertical,
             r_be: signature.r().to_bytes().into(),
             s_be: signature.s().to_bytes().into(),
             digest_be: digest,
@@ -584,7 +588,11 @@ mod tests {
     #[test]
     fn typed_input_source_preserves_the_exact_native_witness_schedule() {
         let key = signing_key(7);
-        let digest = core::array::from_fn(|index| (index as u8).wrapping_mul(29).wrapping_add(3));
+        let digest = core::array::from_fn(|index| {
+            (u8::try_from(index).expect("protocol-bounded index fits u8"))
+                .wrapping_mul(29)
+                .wrapping_add(3)
+        });
         let signature: Signature = key.sign_prehash(&digest).expect("signature");
         let signature = signature.normalize_s().unwrap_or(signature);
         let witness = witness_for(&key, digest, signature);
@@ -604,8 +612,10 @@ mod tests {
             let mut digest = [0_u8; 32];
             for (index, byte) in digest.iter_mut().enumerate() {
                 *byte = seed
-                    .wrapping_mul(index as u8 + 17)
-                    .rotate_left((index % 8) as u32);
+                    .wrapping_mul(u8::try_from(index).expect("protocol-bounded index fits u8") + 17)
+                    .rotate_left(
+                        u32::try_from(index % 8).expect("protocol-bounded index fits u32"),
+                    );
             }
             let signature: Signature = key.sign_prehash(&digest).expect("prehash signature");
             let signature = signature.normalize_s().unwrap_or(signature);

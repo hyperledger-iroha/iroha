@@ -1,4 +1,4 @@
-//! Policy and security primitives for the SoraFS gateway service.
+//! Policy and security primitives for the `SoraFS` gateway service.
 mod acme;
 mod compliance;
 mod controller;

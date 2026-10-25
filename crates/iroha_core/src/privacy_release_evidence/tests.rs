@@ -456,7 +456,7 @@ fn vega_public_action_builder_fails_closed_with_an_otherwise_valid_fixture() {
     )
     .expect("canonical Vega action witness material");
     let result = prepare_vega_privacy_action_with_rng_v1(
-        vega_release_transaction_context_v1().expect("canonical transaction context"),
+        &vega_release_transaction_context_v1().expect("canonical transaction context"),
         fixture.public_input,
         witness_material,
         &fixture.device_signing_key,
@@ -582,6 +582,10 @@ fn privacy_release_rayon_pool_fresh_process_child_v1() {
     assert_eq!(PRIVACY_RELEASE_STAGE_STACK_BYTES_V1, 8 * 1024 * 1024);
     initialize_privacy_release_rayon_pool_v1().expect("initialize exact release Rayon pool");
     let worker_stack_probes = rayon::broadcast(|_| {
+        #[expect(
+            clippy::large_stack_arrays,
+            reason = "the worker probe must exceed the hostile one-MiB stack to verify the release stack override"
+        )]
         let stack_probe = [0xA5_u8; 2 * 1024 * 1024];
         assert_eq!(stack_probe[0], 0xA5);
         assert_eq!(stack_probe[stack_probe.len() - 1], 0xA5);
@@ -1027,8 +1031,8 @@ fn zk_x509_public_evidence_binds_the_exact_validated_input_shape() {
     let context =
         crate::privacy_engines::zk_x509::relation::release_fixture::reference_statement_context_v1(
         );
-    let canonical = build_zk_x509_release_fixture_v1(context.clone(), false)
-        .expect("canonical X.509 release fixture");
+    let canonical =
+        build_zk_x509_release_fixture_v1(context, false).expect("canonical X.509 release fixture");
     let maximum =
         build_zk_x509_release_fixture_v1(context, true).expect("maximum X.509 release fixture");
     canonical
@@ -1054,12 +1058,12 @@ fn zk_x509_public_evidence_binds_the_exact_validated_input_shape() {
     );
     let statement_material = b"canonical-statement".to_vec();
     let canonical_material = zk_x509_release_public_statement_material_v1(
-        statement_material.clone(),
+        &(statement_material.clone()),
         canonical.resource_shape,
     )
     .expect("canonical shape material");
     let maximum_material = zk_x509_release_public_statement_material_v1(
-        statement_material.clone(),
+        &(statement_material.clone()),
         maximum.resource_shape,
     )
     .expect("maximum shape material");
@@ -1097,7 +1101,7 @@ fn zk_x509_public_evidence_binds_the_exact_validated_input_shape() {
     let mut invalid_shape = maximum.resource_shape;
     invalid_shape.crl_der_length = 0;
     assert_eq!(
-        zk_x509_release_public_statement_material_v1(statement_material, invalid_shape,),
+        zk_x509_release_public_statement_material_v1(&statement_material, invalid_shape,),
         Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)
     );
 }

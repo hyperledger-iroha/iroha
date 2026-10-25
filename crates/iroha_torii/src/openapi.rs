@@ -1,4 +1,4 @@
-//! Static authority for Torii's OpenAPI description.
+//! Static authority for Torii's `OpenAPI` description.
 //!
 //! The package-local document is an exact mirror of the canonical release
 //! artifact. Torii parses it once with Norito JSON, installs the catalog's
@@ -13,11 +13,11 @@ use iroha_torii_shared::route_catalog::{
 };
 use norito::json::{Map, Value};
 use std::{collections::BTreeMap, sync::LazyLock};
-/// OpenAPI operation extension consumed by the MCP policy bridge.
+/// `OpenAPI` operation extension consumed by the MCP policy bridge.
 pub(crate) const TOOL_EFFECT_EXTENSION: &str = "x-iroha-tool-effect";
-/// OpenAPI operation extension carrying the catalog's versioned authentication contract.
+/// `OpenAPI` operation extension carrying the catalog's versioned authentication contract.
 pub(crate) const ROUTE_AUTH_EXTENSION: &str = "x-iroha-route-auth";
-/// Package-local source authority for Torii's OpenAPI contract.
+/// Package-local source authority for Torii's `OpenAPI` contract.
 const CANONICAL_OPENAPI_JSON: &str = include_str!("../assets/openapi/torii.json");
 static COMPILED_OPENAPI_SPEC: LazyLock<Value> = LazyLock::new(|| {
     let mut document: Value = norito::json::from_str(CANONICAL_OPENAPI_JSON)
@@ -238,7 +238,7 @@ fn ensure_catalog_security_schemes(document: &mut Value) {
     }
 }
 
-/// Borrow the feature-pruned OpenAPI document cached for this binary.
+/// Borrow the feature-pruned `OpenAPI` document cached for this binary.
 #[must_use]
 pub(crate) fn compiled_spec() -> &'static Value {
     LazyLock::force(&COMPILED_OPENAPI_SPEC)
@@ -248,7 +248,7 @@ pub(crate) fn compiled_spec() -> &'static Value {
 pub(crate) fn compiled_spec_json() -> &'static str {
     LazyLock::force(&COMPILED_OPENAPI_JSON).as_str()
 }
-/// Return an owned copy of the feature-pruned OpenAPI document.
+/// Return an owned copy of the feature-pruned `OpenAPI` document.
 #[must_use]
 pub fn generate_spec() -> Value {
     compiled_spec().clone()

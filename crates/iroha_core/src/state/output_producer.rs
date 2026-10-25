@@ -68,6 +68,10 @@ pub(in crate::state) struct FinalizedExecutionOutputs {
 
 /// Owns both the State borrow and its only mutable output budget. It cannot be
 /// moved to another State or used recursively while the continuation is live.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Independent pipeline and time phases retain their own started flags alongside terminal failure and completion"
+)]
 struct ExecutionOutputProducer<'owner, 'state, 'source> {
     state: &'owner mut StateBlock<'state>,
     source: ExecutionSource<'source>,
@@ -319,7 +323,7 @@ impl<'owner, 'state, 'source> ExecutionOutputProducer<'owner, 'state, 'source> {
 
 /// Transaction plus non-WSV rollback guards. Restores ZK dedup on pre-apply
 /// unwind; witness overlays roll back on drop without resetting the recorder.
-/// An interruption during apply invalidates the whole still-gated StateBlock.
+/// An interruption during apply invalidates the whole still-gated `StateBlock`.
 struct OutputTransaction<'block, 'state> {
     transaction: Option<StateTransaction<'block, 'state>>,
     witness: Option<crate::exec_witness::ExecWitnessOverlay>,
@@ -412,7 +416,7 @@ impl CompletedOutputWork {
 
 #[path = "output_seal.rs"]
 mod seal;
-pub(crate) use seal::{ExecutionOutputSealError, ExecutionOutputSealMetadata};
+pub use seal::{ExecutionOutputSealError, ExecutionOutputSealMetadata};
 
 #[path = "output_internal.rs"]
 mod internal;
@@ -713,8 +717,13 @@ impl ExecutionOutputProducer<'_, '_, '_> {
                 .as_ref()
                 .ok_or("source capacity was not frozen")?
                 .as_ref()
-                .map_err(|error| error.clone())?
-                .verify_ordinary_entries(sources.entries().iter().map(|source| source.call()))?;
+                .map_err(std::clone::Clone::clone)?
+                .verify_ordinary_entries(
+                    sources
+                        .entries()
+                        .iter()
+                        .map(super::OwnedExecutionSource::call),
+                )?;
         }
         self.state
             .fields

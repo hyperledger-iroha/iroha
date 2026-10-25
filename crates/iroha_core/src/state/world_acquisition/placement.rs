@@ -55,7 +55,7 @@ impl<'world> OriginalWorldFields<'world> {
     ///
     /// # Safety
     /// `target` must satisfy `write_next`'s exact same-allocation field/frontier
-    /// contract. The enclosing WorldPlacement retains this source and all sibling
+    /// contract. The enclosing `WorldPlacement` retains this source and all sibling
     /// acquisitions until the initialized marker has been recorded.
     #[allow(unsafe_code)]
     #[inline(never)]
@@ -94,7 +94,7 @@ impl<'world> OriginalWorldFields<'world> {
     /// `target` must be that next field's aligned projection into this owner's
     /// original backing. It must not overlap a previously initialized field.
     /// No reference to the incomplete whole World may be created. Caller must
-    /// retain WorldPlacement until every field and its initialized marker is set.
+    /// retain `WorldPlacement` until every field and its initialized marker is set.
     #[allow(unsafe_code)]
     #[inline(never)]
     pub(in crate::state) unsafe fn write_next<T>(&mut self, target: *mut T, value: T) {
@@ -183,7 +183,7 @@ std::thread_local! {
 #[cfg(test)]
 fn after_field_placement(initialized: usize) {
     assert!(
-        FAIL_AFTER_FIELD.with(|value| value.get()) != Some(initialized),
+        FAIL_AFTER_FIELD.with(std::cell::Cell::get) != Some(initialized),
         "injected original field placement failure"
     );
 }

@@ -14,7 +14,7 @@ fn restore(text: &str, world: &mut World) -> Result<(), json::Error> {
     json::from_json::<SnapshotServiceState>(text)?.restore(world)
 }
 
-pub(crate) fn service_world() -> World {
+pub fn service_world() -> World {
     let world = World::default();
     let provider = ProviderId::new([7; 32]);
     let dispute = CapacityDisputeId::new([8; 32]);

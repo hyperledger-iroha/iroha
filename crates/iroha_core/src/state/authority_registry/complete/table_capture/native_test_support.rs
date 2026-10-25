@@ -60,12 +60,7 @@ macro_rules! capture_controls {
             let proof = snapshot.prove_raw_range(&start, &end, 1, 4096).unwrap();
             let verified = CanonicalTableLeafSet::verify_paired_raw_range(
                 TABLE,
-                limits(),
-                &snapshot.root(),
-                &snapshot.lookup_root(),
-                &snapshot.ordered_root(),
-                &start,
-                &end,
+                limits(),(&snapshot.root(), &snapshot.lookup_root(), &snapshot.ordered_root()),(&start, &end),
                 1,
                 4096,
                 &proof,
@@ -105,12 +100,7 @@ macro_rules! capture_controls {
             assert!(matches!(
                 CanonicalTableLeafSet::verify_paired_raw_range(
                     TABLE,
-                    limits(),
-                    &snapshot.root(),
-                    &omitted.lookup_root(),
-                    &omitted.ordered_root(),
-                    &start,
-                    &end,
+                    limits(),(&snapshot.root(), &omitted.lookup_root(), &omitted.ordered_root()),(&start, &end),
                     0,
                     12,
                     &omission,

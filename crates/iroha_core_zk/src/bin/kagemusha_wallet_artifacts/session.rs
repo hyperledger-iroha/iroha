@@ -282,6 +282,9 @@ fn compact_input(header: &Value, payload: &Value, maximum: usize) -> io::Result<
         URL_SAFE_NO_PAD.encode(p.as_bytes())
     )))
 }
+/// Zeroized session token and device proof.
+type SessionCredentials = (Zeroizing<Vec<u8>>, Zeroizing<Vec<u8>>);
+
 fn issue(
     scope: &Scope,
     request: &Request,
@@ -289,7 +292,7 @@ fn issue(
     dpop: &SigningKey,
     now: u64,
     jti: &str,
-) -> io::Result<(Zeroizing<Vec<u8>>, Zeroizing<Vec<u8>>)> {
+) -> io::Result<SessionCredentials> {
     if !text_valid(&request.subject, 512)
         || !uuid(&request.registered_device_id)
         || !uuid(jti)
@@ -369,7 +372,7 @@ fn issue(
 fn point_from_request(request: &Request) -> io::Result<KagemushaDevicePublicKeyV1> {
     point(&request.dpop_public_key_hex)
 }
-pub(super) fn run(path: &str) -> io::Result<()> {
+pub fn run(path: &str) -> io::Result<()> {
     let source = Original::open(path, REQUEST_MAX, None)?;
     parse(&source.bytes, REQUEST_MAX, false)?;
     let request: Request = checked(json::from_slice(&source.bytes), "closed session request")?;

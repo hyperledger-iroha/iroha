@@ -334,7 +334,7 @@ fn json_line(source: &str, policy: Policy, fs: &str, operation: &str, c: &Counte
     )
 }
 
-fn provider_unit_costs<F: KagemushaWalletFsV1 + Clone>(fs: F, label: &str, policy: Policy) {
+fn provider_unit_costs<F: KagemushaWalletFsV1 + Clone>(fs: &F, label: &str, policy: Policy) {
     let seed = 0x5c;
     let mut recorded = Vec::new();
     let mut line = |operation: &str, c: &Counters| {
@@ -376,7 +376,7 @@ fn provider_unit_costs<F: KagemushaWalletFsV1 + Clone>(fs: F, label: &str, polic
     drop(capsule);
     let record = vec![7; 160];
     for (operation, key) in [("archive_put_new", [8; 32]), ("archive_put_retry", [8; 32])] {
-        let (_, c) = Counters::observe(|| {
+        let ((), c) = Counters::observe(|| {
             provider
                 .with_archive(&slot, |archive| archive.write_record(&key, &record))
                 .expect("put")
@@ -469,7 +469,7 @@ fn provider_unit_costs<F: KagemushaWalletFsV1 + Clone>(fs: F, label: &str, polic
 fn storage_baseline_provider_unit_costs() {
     for policy in [Policy::NotRequired, Policy::Keychain] {
         let (fs, _) = sim_store();
-        provider_unit_costs(fs, "sim", policy);
+        provider_unit_costs(&fs, "sim", policy);
         let temp = tempfile::tempdir().expect("tempdir");
         let root = temp.path().join("custody");
         assert_eq!(
@@ -477,7 +477,7 @@ fn storage_baseline_provider_unit_costs() {
             Outcome::Published
         );
         provider_unit_costs(
-            KagemushaWalletStdFsV1::open(&root).expect("std root"),
+            &KagemushaWalletStdFsV1::open(&root).expect("std root"),
             "std",
             policy,
         );

@@ -9,7 +9,8 @@ fn genesis_monetary_scope_requires_exact_height_without_npos_parameters() {
     stx.world
         .parameters
         .get_mut()
-        .remove_custom_parameter(&SumeragiNposParameters::parameter_id());
+        .remove_custom_parameter(&SumeragiNposParameters::parameter_id())
+        .expect("optional fixture parameter removal");
     assert!(
         stx.world
             .sumeragi_npos_parameters()
@@ -68,7 +69,7 @@ fn fixture_transfer_plan(
     }
 }
 
-pub(crate) fn fixture_registration_plan(
+pub fn fixture_registration_plan(
     stx: &StateTransaction<'_, '_>,
     lane: LaneId,
     staker: &AccountId,
@@ -94,7 +95,7 @@ pub(crate) fn fixture_registration_plan(
     )
 }
 
-pub(crate) fn fixture_bond_plan(
+pub fn fixture_bond_plan(
     stx: &StateTransaction<'_, '_>,
     lane: LaneId,
     validator: &AccountId,
@@ -126,7 +127,7 @@ pub(crate) fn fixture_bond_plan(
     )
 }
 
-pub(crate) fn fixture_unbond_plan(
+pub fn fixture_unbond_plan(
     stx: &StateTransaction<'_, '_>,
     lane: LaneId,
     validator: &AccountId,
@@ -168,7 +169,7 @@ pub(crate) fn fixture_unbond_plan(
     )
 }
 
-pub(crate) fn fixture_slash_plan(
+pub fn fixture_slash_plan(
     stx: &StateTransaction<'_, '_>,
     lane: LaneId,
     validator: &AccountId,

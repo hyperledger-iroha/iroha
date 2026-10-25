@@ -207,6 +207,7 @@ impl WordRegion<'_, '_> {
         block_len: &Word<8>,
         flags: &Word<8>,
     ) -> Result<[Word<8>; 16], Error> {
+        const PERMUTATION: [usize; 16] = [2, 6, 3, 10, 7, 0, 4, 13, 1, 11, 12, 5, 9, 14, 15, 8];
         let mut state = Vec::with_capacity(16);
         state.extend(chaining.iter().map(Word::duplicate));
         for value in [0x6a09_e667, 0xbb67_ae85, 0x3c6e_f372, 0xa54f_f53a] {
@@ -217,7 +218,6 @@ impl WordRegion<'_, '_> {
         state.push(flags.duplicate());
         let zero = self.load::<8>(0, true)?;
         let mut schedule: [usize; 16] = std::array::from_fn(|i| i);
-        const PERMUTATION: [usize; 16] = [2, 6, 3, 10, 7, 0, 4, 13, 1, 11, 12, 5, 9, 14, 15, 8];
         for _ in 0..7 {
             for (i, [a, b, c, d]) in [
                 [0, 4, 8, 12],
@@ -260,7 +260,7 @@ impl WordRegion<'_, '_> {
             .faults
             .iter()
             .find(|fault| fault.row == row && fault.column == column)
-            .map_or(Scalar::from(value), |fault| fault.value);
+            .map_or_else(|| Scalar::from(value), |fault| fault.value);
         Ok(self
             .region
             .assign_advice(self.config.advice[column], row, Value::known(value))?
@@ -393,7 +393,7 @@ impl WordRegion<'_, '_> {
         b: Option<&Word<N>>,
         bits: u32,
     ) -> Result<Word<N>, Error> {
-        let bits = bits % ((4 * N) as u32);
+        let bits = bits % u32::try_from(4 * N).map_err(|_| Error::Synthesis)?;
         let whole = (bits / 4) as usize;
         let remainder = bits % 4;
         if remainder == 0 {
@@ -402,7 +402,11 @@ impl WordRegion<'_, '_> {
                 return self.rotate_xor(&xored, None, bits);
             }
             let value = Zeroizing::new(if N == 8 {
-                u64::from((*a.value as u32).rotate_right(bits))
+                u64::from(
+                    u32::try_from(*a.value & u64::from(u32::MAX))
+                        .expect("masked 32-bit word")
+                        .rotate_right(bits),
+                )
             } else {
                 a.value.rotate_right(bits)
             });
@@ -413,7 +417,11 @@ impl WordRegion<'_, '_> {
         }
         let input = Zeroizing::new(*a.value ^ b.map_or(0, |word| *word.value));
         let output = Zeroizing::new(if N == 8 {
-            u64::from((*input as u32).rotate_right(bits))
+            u64::from(
+                u32::try_from(*input & u64::from(u32::MAX))
+                    .expect("masked 32-bit word")
+                    .rotate_right(bits),
+            )
         } else {
             input.rotate_right(bits)
         });

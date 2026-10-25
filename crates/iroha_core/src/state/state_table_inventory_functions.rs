@@ -142,12 +142,6 @@ pub(super) const STATE_HASH_FUNCTIONS: &[StateHashFunction] = &[
         UseOwner::Roots(&["execution_witness_roots", "fee_evidence_record_root"]),
     ),
     function(
-        "crates/iroha_core/src/query/topology_authority.rs",
-        "digest",
-        1,
-        UseOwner::Other(Use::Record, RECORD_IDENTITY),
-    ),
-    function(
         "crates/iroha_core/src/retail_fee/native_maintenance.rs",
         "into_entries",
         1,
@@ -738,7 +732,7 @@ pub(super) const STATE_HASH_FUNCTIONS: &[StateHashFunction] = &[
         1,
         UseOwner::Other(
             Use::Record,
-            "Returns the existing nonzero UID from one native retail binding after checking its exact account, asset definition and policy membership. It computes no digest over State and supplies no independent State-read authority",
+            "Reads the retained nonzero retail UID after exact account, binding and policy membership checks and institutional exclusion; the equality query computes no digest or State root",
         ),
     ),
     function(

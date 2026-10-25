@@ -235,7 +235,7 @@ impl Fixture {
         } else {
             let index = index - FIXED_PORTS;
             let cell = self.packets.scan.get_mut(index / 2);
-            if index % 2 == 0 {
+            if index.is_multiple_of(2) {
                 cell.child = packet;
             } else {
                 cell.copyback = packet;

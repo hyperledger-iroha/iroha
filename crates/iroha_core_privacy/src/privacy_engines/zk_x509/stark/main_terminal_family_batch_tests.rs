@@ -51,7 +51,7 @@ fn mask_index_v1(column: ColumnV1) -> usize {
 fn masks_v1() -> Vec<Vec<F>> {
     (0..8)
         .map(|column| {
-            (0..MASK_DEGREE + 1)
+            (0..=MASK_DEGREE)
                 .map(|index| F((31 * index + column + 1) as u64))
                 .collect()
         })
@@ -63,6 +63,10 @@ fn alphas_v1() -> [E; 4] {
 fn policy_v1() -> main_bounded_transform::MainBoundedTransformPolicyV1 {
     main_bounded_transform::MainBoundedTransformPolicyV1::for_test_v1(1 << 19, 8)
 }
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "the test adapter implements the fallible transform callback contract"
+)]
 fn transform_v1(
     words: &mut [Vec<u64>],
     root: u64,
@@ -85,7 +89,13 @@ fn canonical_families_cover_only_existing_grouped_sources_and_preserve_request_o
     let plan = MainTerminalLinkPlanV1::new_v1(&layout).unwrap();
     let widths = family_widths_v1(&plan, &layout).unwrap();
     assert_eq!(&widths[..16], &[1; 16], "DER/RFC stays scalar");
-    assert_eq!(widths.iter().filter(|&&width| width == 4).count(), 35);
+    assert_eq!(
+        widths
+            .iter()
+            .map(|&width| usize::from(width == 4))
+            .sum::<usize>(),
+        35
+    );
     assert_eq!(364 - 3 * 35, 259);
     for (index, link) in plan.links.iter().enumerate() {
         for (side, column) in [Some(link.left), link.right].into_iter().enumerate() {
@@ -416,7 +426,7 @@ fn batched_mixed_domains_points_and_asymmetric_sides_match_scalar_check_order() 
         .map(|column| {
             (
                 (column.group, column.column),
-                (0..MASK_DEGREE + 1)
+                (0..=MASK_DEGREE)
                     .map(|index| F((index * 31 + column.group * 17 + column.column + 1) as u64))
                     .collect::<Vec<_>>(),
             )
@@ -565,7 +575,9 @@ fn native_terminal_family_batches_match_scalar_production_sources() {
         ZkX509CredentialMainPreAuxV1::fixture_for_test_v1(
             [0x81; 32],
             assembly.verifier_profile.compiled_profile_digest,
-            core::array::from_fn(|index| digest(index as u8 + 1)),
+            core::array::from_fn(|index| {
+                digest(u8::try_from(index).expect("fixture value fits u8") + 1)
+            }),
         ),
         digest(0x91),
         digest(0xa1),
@@ -576,7 +588,7 @@ fn native_terminal_family_batches_match_scalar_production_sources() {
         main_log19_sha_base_sources_v1(&assembly.sha_schedule, &assembly.sha_witnesses).unwrap();
     let p256 = P256MainBaseSourceV1::new_v1(&assembly).unwrap();
     let bound = MainLog19BoundTraceGroupSourceV1::bind_from_phase_v1(
-        &layout, &assembly, sha, p256, binding,
+        &layout, &assembly, sha, p256, &binding,
     )
     .unwrap();
     let mut projection = MainProjectionTraceGroupSourceV1::for_main_v1(
@@ -588,9 +600,9 @@ fn native_terminal_family_batches_match_scalar_production_sources() {
     let mut io =
         MainIoTraceGroupSourceV1::for_main_v1(&layout, &fixture.statement, &assembly.io).unwrap();
     projection
-        .bind_challenges_v1(binding.main_post_base())
+        .bind_challenges_v1(&binding.main_post_base())
         .unwrap();
-    io.bind_challenges_v1(binding.main_post_base()).unwrap();
+    io.bind_challenges_v1(&binding.main_post_base()).unwrap();
     let sources = MainTraceReplaySourcesV1::Bound {
         log19: &bound,
         projection: &projection,

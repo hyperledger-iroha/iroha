@@ -8,7 +8,7 @@ use std::sync::Mutex;
 
 /// The exact native archive publication seam at which the owning child exits.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Boundary {
+pub enum Boundary {
     /// The certified carrier and State have published, but no archive write began.
     BeforeWrite,
     /// The complete stage was written and synced, before its canonical link.
@@ -20,12 +20,12 @@ pub(crate) enum Boundary {
 }
 
 /// Distinct from libtest success or assertion failure, proving the seam was reached.
-pub(crate) const EXIT_CODE: i32 = 86;
+pub const EXIT_CODE: i32 = 86;
 
 static ARMED: Mutex<Option<(String, Boundary)>> = Mutex::new(None);
 
 /// Exact canonical and staged record filenames for the observed original carrier.
-pub(crate) fn record_names(height: u64, hash: HashOf<BlockHeader>) -> (String, String) {
+pub fn record_names(height: u64, hash: HashOf<BlockHeader>) -> (String, String) {
     (
         RecordName::new(height, hash, false).as_str().to_owned(),
         RecordName::new(height, hash, true).as_str().to_owned(),
@@ -33,7 +33,7 @@ pub(crate) fn record_names(height: u64, hash: HashOf<BlockHeader>) -> (String, S
 }
 
 /// Arm one exact original carrier in this disposable child process.
-pub(crate) fn arm(height: u64, hash: HashOf<BlockHeader>, boundary: Boundary) {
+pub fn arm(height: u64, hash: HashOf<BlockHeader>, boundary: Boundary) {
     let mut armed = ARMED.lock().expect("process crash control is not poisoned");
     assert!(armed.is_none(), "one crash seam per disposable child");
     *armed = Some((

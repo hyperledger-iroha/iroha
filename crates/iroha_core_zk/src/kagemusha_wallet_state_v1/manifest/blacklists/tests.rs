@@ -1,6 +1,6 @@
 //! Local blacklist custody over the coordinator test harness: native authentication of the
 //! complete signed list, monotonic replacement, repair and exact readback. Lists here are
-//! signed by the public vector RegulatoryPolicy key. Proofs are the harness's explicit mocks,
+//! signed by the public vector `RegulatoryPolicy` key. Proofs are the harness's explicit mocks,
 //! so no native Send, Request or Payment admission runs in these tests.
 
 use super::*;
@@ -21,7 +21,7 @@ fn account(value: u128) -> [u8; 32] {
     kagemusha_wallet_field_from_u128_v1(value)
 }
 
-/// The golden RegulatoryPolicy certificate and its public vector key.
+/// The golden `RegulatoryPolicy` certificate and its public vector key.
 fn regulator() -> (KagemushaWalletSignerCertificateV1, SigningKey) {
     let all = vectors();
     let row = all["keys"]
@@ -102,13 +102,15 @@ fn derived_list(
         &step.frozen.capsule.body().successor_state,
         KagemushaWalletOperationKindV1::Send,
         None,
-        manifest.issued_requests,
-        manifest.direct_anchors,
-        manifest.finality_epochs,
-        if before_advance {
-            manifest.blacklist
-        } else {
-            None
+        crate::kagemusha_wallet_state_v1::preparation_custody::PreparationSelectionV1 {
+            issued: manifest.issued_requests,
+            anchors: manifest.direct_anchors,
+            epochs: manifest.finality_epochs,
+            blacklist: if before_advance {
+                manifest.blacklist
+            } else {
+                None
+            },
         },
     )?
     .local_blacklist()

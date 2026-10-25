@@ -64,8 +64,7 @@ fn asset_balance_or_zero(tx: &StateTransaction<'_, '_>, id: &AssetId) -> Quantit
     tx.world
         .assets
         .get(id)
-        .map(|asset| asset.as_ref().clone())
-        .unwrap_or_else(Quantity::zero)
+        .map_or_else(Quantity::zero, |asset| asset.as_ref().clone())
 }
 
 fn seed_prepared_test_orchard_reserve(
@@ -318,11 +317,13 @@ fn prepared_batch_transfer_rechecks_new_privacy_reserve_custody_at_apply() {
         source_id.clone(),
         destination_id.clone(),
         Quantity::one(),
-        NumericAssetTransferScopePolicy::Ambient,
-        NumericAssetTransferAuthorityPolicy::UserSource,
-        NumericAssetTransferSourcePolicy::User,
-        NumericAssetTransferControlPolicy::StakingUnbond,
-        NumericAssetDestinationAdmissionPolicy::ExistingAccount,
+        NumericAssetTransferPolicy {
+            scope_policy: NumericAssetTransferScopePolicy::Ambient,
+            authority_policy: NumericAssetTransferAuthorityPolicy::UserSource,
+            source_policy: NumericAssetTransferSourcePolicy::User,
+            control_policy: NumericAssetTransferControlPolicy::StakingUnbond,
+            destination_admission: NumericAssetDestinationAdmissionPolicy::ExistingAccount,
+        },
     )
     .expect("ungoverned source can be prepared without a control update");
     seed_prepared_test_orchard_reserve(&mut transaction, &source_id);
@@ -917,9 +918,7 @@ fn exact_same_account_scope_transfer_rebuilds_all_holder_indexes_after_source_ex
             &transaction.world.asset_definition_holders,
             &definition
         )
-        .cloned()
-        .collect::<std::collections::BTreeSet<_>>()
-        .contains(&ALICE_ID)
+        .any(|x| x == &*ALICE_ID)
     );
     assert_eq!(
         crate::state::range_bounds::index_members(
@@ -936,9 +935,7 @@ fn exact_same_account_scope_transfer_rebuilds_all_holder_indexes_after_source_ex
             &transaction.world.asset_definition_nonzero_holders,
             &definition
         )
-        .cloned()
-        .collect::<std::collections::BTreeSet<_>>()
-        .contains(&ALICE_ID)
+        .any(|x| x == &*ALICE_ID)
     );
     assert_eq!(
         transaction
@@ -982,18 +979,14 @@ fn exact_pair_rechecks_destination_before_touching_source_or_its_indexes() {
             &transaction.world.asset_definition_assets,
             &definition
         )
-        .cloned()
-        .collect::<std::collections::BTreeSet<_>>()
-        .contains(&source)
+        .any(|x| x == &source)
     );
     assert!(
         crate::state::range_bounds::index_members(
             &transaction.world.asset_definition_nonzero_holders,
             &definition
         )
-        .cloned()
-        .collect::<std::collections::BTreeSet<_>>()
-        .contains(&ALICE_ID)
+        .any(|x| x == &*ALICE_ID)
     );
 }
 
@@ -1050,11 +1043,11 @@ fn original_supply_preparation_is_read_only_and_consumes_exact_balance_then_tota
         if expected == 0 {
             assert!(transaction.world.assets.get(&source).is_none());
             assert!(
-                !transaction
+                transaction
                     .world
                     .asset_definition_nonzero_holders
                     .get(&(definition.clone(), ALICE_ID.clone()))
-                    .is_some()
+                    .is_none()
             );
         }
         drop(transaction);
@@ -1271,9 +1264,7 @@ fn funded_turnstile_apply_rechecks_deposit_owner_and_consumes_exact_delta_once()
         unreachable!()
     };
     *funded_allowance = Quantity::from(4_u32);
-    tx.world
-        .privacy_commitments
-        .insert(key.clone(), unbacked.clone());
+    tx.world.privacy_commitments.insert(key, unbacked.clone());
     let error = tx
         .world
         .apply_prechecked_numeric_asset_transfer_delta_exact(

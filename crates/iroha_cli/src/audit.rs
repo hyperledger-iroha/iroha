@@ -253,13 +253,8 @@ impl WitnessArgs {
     }
     fn decode_value_json(bytes: &[u8]) -> Result<norito::json::Value> {
         match String::from_utf8(bytes.to_vec()) {
-            Ok(s) => {
-                if let Ok(v) = norito::json::from_str::<norito::json::Value>(&s) {
-                    Ok(v)
-                } else {
-                    Ok(norito::json::Value::String(s))
-                }
-            }
+            Ok(s) => norito::json::from_str::<norito::json::Value>(&s)
+                .map_or_else(|_| Ok(norito::json::Value::String(s)), Ok),
             Err(_) => json_object(vec![("raw_hex", json_value(&hex::encode(bytes))?)]),
         }
     }
@@ -280,36 +275,46 @@ impl WitnessArgs {
             ))
         };
         match tag {
-            0xA1 => split_once(rest)
-                .map(|(acc, name)| format!("account.detail:{acc}:{name}"))
-                .unwrap_or_else(|| format!("hex:{}", hex::encode(key))),
-            0xA2 => split_once(rest)
-                .map(|(dom, name)| format!("domain.detail:{dom}:{name}"))
-                .unwrap_or_else(|| format!("hex:{}", hex::encode(key))),
-            0xA3 => split_once(rest)
-                .map(|(nft, name)| format!("nft.detail:{nft}:{name}"))
-                .unwrap_or_else(|| format!("hex:{}", hex::encode(key))),
-            0xA4 => split_once(rest)
-                .map(|(ad, name)| format!("asset_def.detail:{ad}:{name}"))
-                .unwrap_or_else(|| format!("hex:{}", hex::encode(key))),
-            0xB1 => String::from_utf8(rest.to_vec())
-                .map(|id| format!("asset:{id}"))
-                .unwrap_or_else(|_| format!("hex:{}", hex::encode(key))),
-            0xB2 => String::from_utf8(rest.to_vec())
-                .map(|id| format!("asset_def.total:{id}"))
-                .unwrap_or_else(|_| format!("hex:{}", hex::encode(key))),
-            0xC1 => split_once(rest)
-                .map(|(acc, role)| format!("role.binding:{acc}:{role}"))
-                .unwrap_or_else(|| format!("hex:{}", hex::encode(key))),
-            0xC2 => String::from_utf8(rest.to_vec())
-                .map(|role| format!("role:{role}"))
-                .unwrap_or_else(|_| format!("hex:{}", hex::encode(key))),
-            0xC3 => split_once(rest)
-                .map(|(acc, perm)| format!("perm.account:{acc}:{perm}"))
-                .unwrap_or_else(|| format!("hex:{}", hex::encode(key))),
-            0xC4 => split_once(rest)
-                .map(|(role, perm)| format!("perm.role:{role}:{perm}"))
-                .unwrap_or_else(|| format!("hex:{}", hex::encode(key))),
+            0xA1 => split_once(rest).map_or_else(
+                || format!("hex:{}", hex::encode(key)),
+                |(acc, name)| format!("account.detail:{acc}:{name}"),
+            ),
+            0xA2 => split_once(rest).map_or_else(
+                || format!("hex:{}", hex::encode(key)),
+                |(dom, name)| format!("domain.detail:{dom}:{name}"),
+            ),
+            0xA3 => split_once(rest).map_or_else(
+                || format!("hex:{}", hex::encode(key)),
+                |(nft, name)| format!("nft.detail:{nft}:{name}"),
+            ),
+            0xA4 => split_once(rest).map_or_else(
+                || format!("hex:{}", hex::encode(key)),
+                |(ad, name)| format!("asset_def.detail:{ad}:{name}"),
+            ),
+            0xB1 => String::from_utf8(rest.to_vec()).map_or_else(
+                |_| format!("hex:{}", hex::encode(key)),
+                |id| format!("asset:{id}"),
+            ),
+            0xB2 => String::from_utf8(rest.to_vec()).map_or_else(
+                |_| format!("hex:{}", hex::encode(key)),
+                |id| format!("asset_def.total:{id}"),
+            ),
+            0xC1 => split_once(rest).map_or_else(
+                || format!("hex:{}", hex::encode(key)),
+                |(acc, role)| format!("role.binding:{acc}:{role}"),
+            ),
+            0xC2 => String::from_utf8(rest.to_vec()).map_or_else(
+                |_| format!("hex:{}", hex::encode(key)),
+                |role| format!("role:{role}"),
+            ),
+            0xC3 => split_once(rest).map_or_else(
+                || format!("hex:{}", hex::encode(key)),
+                |(acc, perm)| format!("perm.account:{acc}:{perm}"),
+            ),
+            0xC4 => split_once(rest).map_or_else(
+                || format!("hex:{}", hex::encode(key)),
+                |(role, perm)| format!("perm.role:{role}:{perm}"),
+            ),
             _ => format!("hex:{}", hex::encode(key)),
         }
     }
@@ -330,7 +335,7 @@ impl WitnessArgs {
                 return true;
             };
             if label.len() <= fs.prefix.len()
-                || &label.as_bytes()[fs.prefix.len()..fs.prefix.len() + 1] != b":"
+                || &label.as_bytes()[fs.prefix.len()..=fs.prefix.len()] != b":"
             {
                 return false;
             }
@@ -419,27 +424,27 @@ fn expand_filter_specs(spec: &str) -> Vec<FilterSpec> {
 fn glob_match(pattern: &str, text: &str) -> bool {
     let mut pi = 0usize;
     let mut ti = 0usize;
-    let mut star_pi: Option<usize> = None;
-    let mut star_ti = 0usize;
+    let mut wildcard_pattern: Option<usize> = None;
+    let mut wildcard_position = 0usize;
     let pat = pattern.as_bytes();
-    let txt = text.as_bytes();
-    while ti < txt.len() {
-        if pi < pat.len() && (pat[pi] == b'?' || pat[pi] == txt[ti]) {
+    let input = text.as_bytes();
+    while ti < input.len() {
+        if pi < pat.len() && (pat[pi] == b'?' || pat[pi] == input[ti]) {
             pi += 1;
             ti += 1;
             continue;
         }
         if pi < pat.len() && pat[pi] == b'*' {
-            star_pi = Some(pi);
+            wildcard_pattern = Some(pi);
             pi += 1;
-            star_ti = ti;
+            wildcard_position = ti;
             continue;
         }
-        if let Some(sp) = star_pi {
+        if let Some(sp) = wildcard_pattern {
             pi = sp + 1;
-            star_ti += 1;
-            ti = star_ti;
-            if ti > txt.len() {
+            wildcard_position += 1;
+            ti = wildcard_position;
+            if ti > input.len() {
                 return false;
             }
             continue;

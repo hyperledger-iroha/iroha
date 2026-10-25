@@ -465,7 +465,7 @@ fn torii_proxy_attempt_timeout_uses_route_budget_for_queries() {
         );
         let owned = norito::to_bytes(&(
             "torii:proxy:v1",
-            process_session.clone(),
+            process_session,
             ingress_peer.clone(),
             7_u64,
             request.clone(),
@@ -613,10 +613,10 @@ async fn certified_transaction_batch_invalid_later_signature_does_not_admit_pref
         State(app.clone()),
         HeaderMap::new(),
         transaction_batch_body_for_test(
-            [&tx1, &tx2]
+            &([&tx1, &tx2]
                 .into_iter()
                 .map(iroha_version::codec::EncodeVersioned::encode_versioned)
-                .collect(),
+                .collect()),
         ),
     )
     .await
@@ -1204,11 +1204,35 @@ async fn current_native_ingress_revalidates_expiry_and_current_signing_policy() 
         error,
         Error::AcceptTransaction(AcceptTransactionFail::TransactionExpired { .. })
     ));
-    let mut crypto = app.state.crypto().as_ref().clone();
-    crypto
-        .allowed_signing
-        .retain(|algorithm| *algorithm != Algorithm::Ed25519);
-    app.state.set_crypto(crypto);
+    let policy = iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+        Algorithm::Secp256k1,
+    ])
+    .expect("explicit committed policy excludes this Ed25519 signer");
+    let next_height = app
+        .state
+        .latest_block_header_fast()
+        .map_or(1, |header| header.height().get().saturating_add(1));
+    let mut block = app.state.block(BlockHeader::new(
+        NonZeroU64::new(next_height).expect("non-zero fixture height"),
+        None,
+        None,
+        0,
+        0,
+    ));
+    let mut policy_transaction = block.transaction();
+    policy_transaction
+        .world_mut_for_testing()
+        .parameters_mut_for_testing()
+        .set_parameter(
+            policy
+                .into_parameter()
+                .expect("canonical replacement policy"),
+        )
+        .expect("replace original committed policy");
+    policy_transaction.apply();
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit replacement signing policy without changing transaction history");
     let error = post_signed_transaction_for_test(app.clone(), HeaderMap::new(), &transaction)
         .await
         .expect_err("pending identity cannot bypass the current signing policy");

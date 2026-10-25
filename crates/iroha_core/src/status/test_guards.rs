@@ -115,21 +115,6 @@ pub(crate) fn try_reentrant_test_guard(lock: &'static OnceLock<TestLock>) -> Opt
     }
 }
 #[cfg(test)]
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct NexusFeeTestLock;
-#[cfg(test)]
-pub(crate) struct NexusFeeTestGuard {
-    _guard: TestLockGuard,
-}
-#[cfg(test)]
-impl NexusFeeTestLock {
-    pub(crate) fn lock(self) -> Result<NexusFeeTestGuard, std::convert::Infallible> {
-        Ok(NexusFeeTestGuard {
-            _guard: reentrant_test_guard(&OPERATOR_STATUS_TEST_LOCK),
-        })
-    }
-}
-#[cfg(test)]
 /// Serialize process-wide operator status mutations with tests that need a
 /// stable clear/publish/observe window.
 ///

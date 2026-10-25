@@ -13,9 +13,11 @@ fn hex(bytes: &[u8; 32]) -> Hex {
 fn definition(definition: &AssetDefinitionId) -> Result<Hex, norito::Error> {
     let mut text = std::io::Cursor::new([0_u8; 64]);
     write!(&mut text, "{definition}").map_err(|_| norito::Error::LengthMismatch)?;
-    Ok(hex(
-        Hash::new(&text.get_ref()[..text.position() as usize]).as_ref()
-    ))
+    Ok(hex(Hash::new(
+        &text.get_ref()
+            [..usize::try_from(text.position()).expect("fixed stack cursor position fits usize")],
+    )
+    .as_ref()))
 }
 fn account(text: &str) -> Hex {
     hex(Hash::new(text.as_bytes()).as_ref())
@@ -35,8 +37,11 @@ fn key_text(root: &str, components: &[Hex]) -> Result<std::io::Cursor<[u8; 384]>
     Ok(text)
 }
 fn spelling(text: &std::io::Cursor<[u8; 384]>) -> &str {
-    core::str::from_utf8(&text.get_ref()[..text.position() as usize])
-        .expect("native key roots and hex components are ASCII")
+    core::str::from_utf8(
+        &text.get_ref()
+            [..usize::try_from(text.position()).expect("fixed stack cursor position fits usize")],
+    )
+    .expect("native key roots and hex components are ASCII")
 }
 fn key(root: &str, components: &[Hex]) -> Result<StatePath, norito::Error> {
     let text = key_text(root, components)?;
@@ -52,7 +57,7 @@ fn native_key(root: &str, components: &[Hex]) -> StatePath {
         .parse()
         .expect("fixed native key is valid")
 }
-pub(crate) fn uid_binding_native(def: &AssetDefinitionId, account_text: &str) -> StatePath {
+pub fn uid_binding_native(def: &AssetDefinitionId, account_text: &str) -> StatePath {
     native_key(
         super::asset_uid::BINDING_ROOT,
         &[
@@ -61,13 +66,13 @@ pub(crate) fn uid_binding_native(def: &AssetDefinitionId, account_text: &str) ->
         ],
     )
 }
-pub(crate) fn uid_policy_native(def: &AssetDefinitionId, uid: &[u8; 32]) -> StatePath {
+pub fn uid_policy_native(def: &AssetDefinitionId, uid: &[u8; 32]) -> StatePath {
     native_key(
         super::asset_uid::POLICY_ROOT,
         &[definition(def).expect("fixed definition fits"), hex(uid)],
     )
 }
-pub(crate) fn fi_native(def: &AssetDefinitionId, fi_text: &str) -> StatePath {
+pub fn fi_native(def: &AssetDefinitionId, fi_text: &str) -> StatePath {
     native_key(
         super::asset_fi::FI_ROOT,
         &[
@@ -76,7 +81,7 @@ pub(crate) fn fi_native(def: &AssetDefinitionId, fi_text: &str) -> StatePath {
         ],
     )
 }
-pub(crate) fn attestation_native(
+pub fn attestation_native(
     def: &AssetDefinitionId,
     account_text: &str,
     fi_text: &str,
@@ -92,7 +97,7 @@ pub(crate) fn attestation_native(
         ],
     )
 }
-pub(crate) fn link_native(def: &AssetDefinitionId, account_text: &str) -> StatePath {
+pub fn link_native(def: &AssetDefinitionId, account_text: &str) -> StatePath {
     native_key(
         super::asset_fi::LINK_ROOT,
         &[
@@ -101,7 +106,7 @@ pub(crate) fn link_native(def: &AssetDefinitionId, account_text: &str) -> StateP
         ],
     )
 }
-pub(crate) fn uid_binding(
+pub fn uid_binding(
     def: &AssetDefinitionId,
     account_text: &str,
 ) -> Result<StatePath, norito::Error> {
@@ -110,19 +115,16 @@ pub(crate) fn uid_binding(
         &[definition(def)?, account(account_text)],
     )
 }
-pub(crate) fn uid_policy(
-    def: &AssetDefinitionId,
-    uid: &[u8; 32],
-) -> Result<StatePath, norito::Error> {
+pub fn uid_policy(def: &AssetDefinitionId, uid: &[u8; 32]) -> Result<StatePath, norito::Error> {
     key(super::asset_uid::POLICY_ROOT, &[definition(def)?, hex(uid)])
 }
-pub(crate) fn fi(def: &AssetDefinitionId, fi_text: &str) -> Result<StatePath, norito::Error> {
+pub fn fi(def: &AssetDefinitionId, fi_text: &str) -> Result<StatePath, norito::Error> {
     key(
         super::asset_fi::FI_ROOT,
         &[definition(def)?, account(fi_text)],
     )
 }
-pub(crate) fn attestation(
+pub fn attestation(
     def: &AssetDefinitionId,
     account_text: &str,
     fi_text: &str,
@@ -138,10 +140,7 @@ pub(crate) fn attestation(
         ],
     )
 }
-pub(crate) fn link(
-    def: &AssetDefinitionId,
-    account_text: &str,
-) -> Result<StatePath, norito::Error> {
+pub fn link(def: &AssetDefinitionId, account_text: &str) -> Result<StatePath, norito::Error> {
     key(
         super::asset_fi::LINK_ROOT,
         &[definition(def)?, account(account_text)],

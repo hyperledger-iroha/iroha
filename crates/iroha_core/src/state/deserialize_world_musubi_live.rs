@@ -85,7 +85,7 @@ pub(super) fn validate_musubi_live_projections(
     .map_err(Into::into)
 }
 
-/// Verify one World cut's live Musubi availability against its SoraFS evidence.
+/// Verify one World cut's live Musubi availability against its `SoraFS` evidence.
 ///
 /// The publication owner calls this after its last deterministic World write;
 /// restore calls it separately for the current and rollback-visible cuts.

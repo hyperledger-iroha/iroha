@@ -72,10 +72,10 @@ pub struct ForgeryHoldQuery {
     /// Optional nonzero revision; requires network.
     #[norito(default)]
     pub revision: Option<String>,
-    /// Cursor network; requires after_revision.
+    /// Cursor network; requires `after_revision`.
     #[norito(default)]
     pub after_network: Option<String>,
-    /// Cursor revision; requires after_network.
+    /// Cursor revision; requires `after_network`.
     #[norito(default)]
     pub after_revision: Option<String>,
     /// Row limit in 1..=64, default 64.
@@ -137,7 +137,7 @@ fn hold_query(query: &ForgeryHoldQuery) -> Result<SccpForgeryHoldQuery, Response
         network,
         revision,
         after,
-        limit: limit as usize,
+        limit: usize::try_from(limit).expect("validated page limit fits usize"),
     })
 }
 
@@ -289,16 +289,16 @@ fn rotations(query: &RotationsQuery) -> Result<Selection, Response> {
     }
     Ok(Selection::Rotations {
         after,
-        limit: limit as usize,
+        limit: usize::try_from(limit).expect("validated page limit fits usize"),
     })
 }
 
-pub(super) fn source_error(error: SccpNativeReadError) -> Response {
+pub(super) fn source_error(error: &SccpNativeReadError) -> Response {
     use iroha_core::sumeragi::finality::NativeCommitCertificateReadErrorV1;
     use iroha_data_model::sumeragi_finality::{
         CommitmentError, certified_result::CertifiedResultError,
     };
-    let (status, code) = match &error {
+    let (status, code) = match error {
         SccpNativeReadError::Request(_) => (StatusCode::BAD_REQUEST, "sccp_invalid_query"),
         SccpNativeReadError::NotFound(_) => (StatusCode::NOT_FOUND, "sccp_not_found"),
         SccpNativeReadError::Pruned(_) => (StatusCode::GONE, "sccp_pruned"),
@@ -425,8 +425,8 @@ async fn serve(
     let key = crate::rate_limit_key(&headers, Some(remote.ip()), route.path(), principal);
     crate::rate_limit_requests_with_cost(&app, &key, crate::FINALITY_HEAVY_QUERY_RATE_COST).await?;
     let mut admission = crate::acquire_query_admission(app.as_ref(), true).await?;
-    if admission._fanout_memory.is_none() {
-        admission._fanout_memory = Some(match crate::try_acquire_new_query_fanout_memory(&app) {
+    if admission.fanout_memory.is_none() {
+        admission.fanout_memory = Some(match crate::try_acquire_new_query_fanout_memory(&app) {
             Ok(reservation) => reservation,
             Err(response) => return Ok(response),
         });
@@ -580,7 +580,7 @@ async fn serve(
         match output {
             Ok(response) => response,
             Err(error) => Ok(PreparedResponse {
-                response: source_error(error),
+                response: source_error(&(error)),
                 bytes: 0,
             }),
         }

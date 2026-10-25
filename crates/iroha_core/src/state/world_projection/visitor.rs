@@ -6,7 +6,7 @@ use super::*;
 /// Each owner supplies the hash of its actual borrowed value, excluding caches.
 /// Field owners retain immutable access to the same journal through execution
 /// and freeze; this visitor never borrows execution or publication authority.
-pub(crate) trait WorldProjection {
+pub trait WorldProjection {
     /// Owner-specific errors retain local resource custody through this visitor.
     type Error: From<String>;
     fn append_storage_with<K: Key + Encode, V: Value, M: mv::storage::StorageMode<K, V>>(

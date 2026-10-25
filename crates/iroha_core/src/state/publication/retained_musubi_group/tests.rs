@@ -1,4 +1,4 @@
-//! Actual StatePublication retains every original physical Musubi map on refusal.
+//! Actual `StatePublication` retains every original physical Musubi map on refusal.
 //!
 //! These controls prove exact retained revision EBR allocation identity alongside
 //! the fourteen physical pairs. Ordered descriptor controls also compare complete
@@ -1336,7 +1336,7 @@ fn original_musubi_group_revision_reader_refusal_retains_completed_tables_and_ex
 // Independent test-only overlay over the actual original pair. This allocates
 // outside the observed production kernel; it grants no source or State authority.
 fn original_predecessor_pointers<K: mv::Key, V: mv::Value>(
-    images: mv::storage::FrozenStorageImages<'_, K, V>,
+    images: &mv::storage::FrozenStorageImages<'_, K, V>,
 ) -> Vec<usize> {
     let mut expected: std::collections::BTreeMap<K, usize> = images
         .current_entries()
@@ -1367,56 +1367,58 @@ fn original_musubi_group_retained_predecessor_descriptors_use_exact_pair_and_sco
         let mut block = pending(&state, proposal.header(), replacement);
         let budget = state.ivm_execution_budget();
         let expected: [Vec<usize>; 14] = [
-            original_predecessor_pointers(block.world.musubi_archives.frozen_images().unwrap()),
+            original_predecessor_pointers(&(block.world.musubi_archives.frozen_images().unwrap())),
             original_predecessor_pointers(
-                block
+                &(block
                     .world
                     .musubi_archive_availability
                     .frozen_images()
-                    .unwrap(),
+                    .unwrap()),
             ),
             original_predecessor_pointers(
-                block
+                &(block
                     .world
                     .musubi_archive_locations
                     .frozen_images()
-                    .unwrap(),
+                    .unwrap()),
             ),
             original_predecessor_pointers(
-                block.world.musubi_locations_by_pin.frozen_images().unwrap(),
+                &(block.world.musubi_locations_by_pin.frozen_images().unwrap()),
             ),
             original_predecessor_pointers(
-                block
+                &(block
                     .world
                     .musubi_locations_by_provider
                     .frozen_images()
-                    .unwrap(),
+                    .unwrap()),
             ),
             original_predecessor_pointers(
-                block
+                &(block
                     .world
                     .musubi_locations_by_replication_order
                     .frozen_images()
-                    .unwrap(),
+                    .unwrap()),
             ),
-            original_predecessor_pointers(block.world.musubi_packages.frozen_images().unwrap()),
+            original_predecessor_pointers(&(block.world.musubi_packages.frozen_images().unwrap())),
             original_predecessor_pointers(
-                block
+                &(block
                     .world
                     .musubi_provider_bundle_attestations
                     .frozen_images()
-                    .unwrap(),
+                    .unwrap()),
             ),
             original_predecessor_pointers(
-                block.world.musubi_public_directory.frozen_images().unwrap(),
+                &(block.world.musubi_public_directory.frozen_images().unwrap()),
             ),
-            original_predecessor_pointers(block.world.musubi_releases.frozen_images().unwrap()),
+            original_predecessor_pointers(&(block.world.musubi_releases.frozen_images().unwrap())),
             original_predecessor_pointers(
-                block.world.musubi_resolver_index.frozen_images().unwrap(),
+                &(block.world.musubi_resolver_index.frozen_images().unwrap()),
             ),
-            original_predecessor_pointers(block.world.pin_manifests.frozen_images().unwrap()),
-            original_predecessor_pointers(block.world.provider_owners.frozen_images().unwrap()),
-            original_predecessor_pointers(block.world.replication_orders.frozen_images().unwrap()),
+            original_predecessor_pointers(&(block.world.pin_manifests.frozen_images().unwrap())),
+            original_predecessor_pointers(&(block.world.provider_owners.frozen_images().unwrap())),
+            original_predecessor_pointers(
+                &(block.world.replication_orders.frozen_images().unwrap()),
+            ),
         ];
         if !replacement {
             assert!(expected.iter().any(|rows| !rows.is_empty()));

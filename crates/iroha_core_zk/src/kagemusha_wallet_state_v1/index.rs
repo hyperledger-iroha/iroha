@@ -13,6 +13,9 @@ use crate::kagemusha_wallet_advance_v1::{
 pub const INDEX_VALUE_LIMIT: usize = 512;
 const NODE_LIMIT: usize = INDEX_VALUE_LIMIT + archive::METADATA_BOUND;
 
+/// One exact index key and its retained leaf value.
+pub type IndexEntry = ([u8; 32], Vec<u8>);
+
 /// Content-addressed durable storage. Production implementations use the scoped G2 archive
 /// capability; the authenticated current marker chooses the manifest containing index roots.
 pub trait ObjectStore {
@@ -354,7 +357,7 @@ impl IndexRoot {
         self,
         store: &mut impl ObjectWorkspace,
         key: &[u8; 32],
-    ) -> Result<Option<([u8; 32], Vec<u8>)>, Error> {
+    ) -> Result<Option<IndexEntry>, Error> {
         let _walk = IndexWalkV1::start(false);
         let mut root = self.0;
         let mut minimum = 0;

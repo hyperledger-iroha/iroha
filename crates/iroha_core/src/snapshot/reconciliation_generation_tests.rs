@@ -81,10 +81,10 @@ async fn ordinary_snapshot_hash_reconcile_rejects_ahead_suffix_without_mutation(
     let kura_config = kura_config_for_snapshot_test(&kura_store_dir, nonzero!(1_usize));
     let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&kura_config, &lane_config)
         .expect("kura init");
-    let mut state = state_factory_with_kura(Arc::clone(&kura));
+    let mut state = state_factory_with_kura(&kura);
     let block = signed_block_with_transaction(accepted_log_transaction("canonical"));
     let canonical_hash = block.hash();
-    store_block_and_mark_state_height(&mut state, &kura, block);
+    store_block_and_mark_state_height(&mut state, &kura, &(block));
     let extra_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x22; 32]));
     let hashes = vec![canonical_hash, extra_hash];
     let error = reconcile_snapshot_hash_height_with_kura(&hashes, 1, &kura)
@@ -128,9 +128,9 @@ async fn ordinary_snapshot_hash_reconcile_rejects_ahead_suffix_without_mutation(
 #[tokio::test]
 async fn snapshot_hash_reconcile_rejects_forged_prefix_before_extending_suffix() {
     let kura = Kura::blank_kura_for_testing();
-    let mut state = state_factory_with_kura(Arc::clone(&kura));
+    let mut state = state_factory_with_kura(&kura);
     let block = signed_block_with_transaction(accepted_log_transaction("canonical"));
-    store_block_and_mark_state_height(&mut state, &kura, block);
+    store_block_and_mark_state_height(&mut state, &kura, &(block));
     let canonical_hash = kura
         .block_hash_at_height(nonzero!(1_usize))
         .expect("canonical Kura prefix hash");
@@ -188,7 +188,7 @@ async fn ordinary_signed_snapshot_rejects_kura_tail_loss_without_mutation() {
         Kura::open_test_kura_with_configured_lane_config(&tail_loss_kura_config, &lane_config)
             .expect("tail-loss Kura init");
     assert_eq!(initial_height, 0);
-    drop(state_factory_with_kura(Arc::clone(&tail_loss_kura)));
+    drop(state_factory_with_kura(&tail_loss_kura));
     tail_loss_kura
         .store_block(block1.clone())
         .expect("persist retained prefix block");
@@ -463,15 +463,15 @@ async fn emergency_fast_rejects_native_snapshot_before_world_or_journal_restore(
 #[tokio::test]
 async fn snapshot_hash_reconcile_rejects_non_latest_mismatch() {
     let kura = Kura::blank_kura_for_testing();
-    let mut state = state_factory_with_kura(Arc::clone(&kura));
+    let mut state = state_factory_with_kura(&kura);
     let block1 = signed_block_after_transaction(accepted_log_transaction("first"), None);
-    store_block_and_mark_state_height(&mut state, &kura, block1.clone());
+    store_block_and_mark_state_height(&mut state, &kura, &(block1.clone()));
     let block2 =
         signed_block_after_transaction(accepted_log_transaction("second"), Some(block1.as_ref()));
-    store_block_and_mark_state_height(&mut state, &kura, block2.clone());
+    store_block_and_mark_state_height(&mut state, &kura, &(block2.clone()));
     let block3 =
         signed_block_after_transaction(accepted_log_transaction("third"), Some(block2.as_ref()));
-    store_block_and_mark_state_height(&mut state, &kura, block3.clone());
+    store_block_and_mark_state_height(&mut state, &kura, &(block3.clone()));
     let mut snapshot_hashes = state.committed_block_hashes_snapshot();
     snapshot_hashes[1] = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x44; 32]));
     let err = reconcile_snapshot_hashes_with_kura(&snapshot_hashes, &kura)
@@ -490,15 +490,15 @@ async fn emergency_fast_snapshot_reconcile_checks_only_the_terminal_boundary() {
     let mut kura_config = kura_config_for_snapshot_test(&kura_store_dir, nonzero!(1_usize));
     let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&kura_config, &lane_config)
         .expect("strict Kura init");
-    let mut state = state_factory_with_kura(Arc::clone(&kura));
+    let mut state = state_factory_with_kura(&kura);
     let block1 = signed_block_after_transaction(accepted_log_transaction("first"), None);
-    store_block_and_mark_state_height(&mut state, &kura, block1.clone());
+    store_block_and_mark_state_height(&mut state, &kura, &(block1.clone()));
     let block2 =
         signed_block_after_transaction(accepted_log_transaction("second"), Some(block1.as_ref()));
-    store_block_and_mark_state_height(&mut state, &kura, block2.clone());
+    store_block_and_mark_state_height(&mut state, &kura, &(block2.clone()));
     let block3 =
         signed_block_after_transaction(accepted_log_transaction("third"), Some(block2.as_ref()));
-    store_block_and_mark_state_height(&mut state, &kura, block3.clone());
+    store_block_and_mark_state_height(&mut state, &kura, &(block3.clone()));
     let mut snapshot_hashes = state.committed_block_hashes_snapshot();
     let canonical_tip = snapshot_hashes[2];
     let configured_catalog_hash = kura
@@ -564,12 +564,12 @@ async fn emergency_fast_snapshot_reconcile_checks_only_the_terminal_boundary() {
 #[tokio::test]
 async fn snapshot_hash_reconcile_rejects_latest_mismatch_without_mutation() {
     let kura = Kura::blank_kura_for_testing();
-    let mut state = state_factory_with_kura(Arc::clone(&kura));
+    let mut state = state_factory_with_kura(&kura);
     let block1 = signed_block_after_transaction(accepted_log_transaction("first"), None);
-    store_block_and_mark_state_height(&mut state, &kura, block1.clone());
+    store_block_and_mark_state_height(&mut state, &kura, &(block1.clone()));
     let block2 =
         signed_block_after_transaction(accepted_log_transaction("second"), Some(block1.as_ref()));
-    store_block_and_mark_state_height(&mut state, &kura, block2.clone());
+    store_block_and_mark_state_height(&mut state, &kura, &(block2.clone()));
     let mut snapshot_hashes = state.committed_block_hashes_snapshot();
     snapshot_hashes[1] = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x55; 32]));
     let state_height_before = state.committed_height();
@@ -597,15 +597,15 @@ async fn snapshot_hash_reconcile_rejects_latest_mismatch_without_mutation() {
 #[tokio::test]
 async fn audited_snapshot_hash_reconcile_rejects_every_divergent_existing_hash() {
     let kura = Kura::blank_kura_for_testing();
-    let mut state = state_factory_with_kura(Arc::clone(&kura));
+    let mut state = state_factory_with_kura(&kura);
     let block1 = signed_block_after_transaction(accepted_log_transaction("first"), None);
-    store_block_and_mark_state_height(&mut state, &kura, block1.clone());
+    store_block_and_mark_state_height(&mut state, &kura, &(block1.clone()));
     let block2 =
         signed_block_after_transaction(accepted_log_transaction("second"), Some(block1.as_ref()));
-    store_block_and_mark_state_height(&mut state, &kura, block2.clone());
+    store_block_and_mark_state_height(&mut state, &kura, &(block2.clone()));
     let block3 =
         signed_block_after_transaction(accepted_log_transaction("third"), Some(block2.as_ref()));
-    store_block_and_mark_state_height(&mut state, &kura, block3.clone());
+    store_block_and_mark_state_height(&mut state, &kura, &(block3.clone()));
     let mut snapshot_hashes = state.committed_block_hashes_snapshot();
     snapshot_hashes[1] = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x66; 32]));
     snapshot_hashes[2] = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x77; 32]));

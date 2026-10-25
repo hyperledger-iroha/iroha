@@ -55,12 +55,12 @@ mod retention;
 mod stages;
 
 #[cfg(test)]
-pub(crate) use retention::{FoldRetentionCountsV1, perturb_retained_key_for_test};
+pub use retention::{FoldRetentionCountsV1, perturb_retained_key_for_test};
 
 /// Metadata-only execution owner; the admitted wallet retains the only original store.
 /// A prepared job holds its own copy, which shares the installed sources.
 #[derive(Clone)]
-pub(crate) struct NativeFoldWorkerV1 {
+pub struct NativeFoldWorkerV1 {
     installed: Arc<InstalledVerifierPackV1>,
     sources: Arc<QualifiedWalletSourcesV1>,
     read: ReadConfig,
@@ -76,7 +76,7 @@ pub(crate) struct NativeFoldWorkerV1 {
     clippy::large_enum_variant,
     reason = "bounded operation input is moved into the active native session"
 )]
-pub(crate) enum OperationInputsV1 {
+pub enum OperationInputsV1 {
     Bootstrap(bootstrap::Inputs),
     Load(load::Inputs),
     Send(send::Inputs),
@@ -86,7 +86,11 @@ pub(crate) enum OperationInputsV1 {
     Refresh(refresh::Inputs),
 }
 
-pub(crate) enum NativeStageProgressV1 {
+#[expect(
+    clippy::large_enum_variant,
+    reason = "a terminal stage transfers its admitted inline proof inputs without an extra allocation"
+)]
+pub enum NativeStageProgressV1 {
     Checkpoint(PrivateArchiveBytes),
     Terminal(omega::Input),
 }
@@ -123,7 +127,7 @@ fn proof_result<T, E: crate::kagemusha_wallet_proofs_v1::NativeProofError>(
         }
     })
 }
-fn artifact(error: WalletSourcesErrorV1) -> Error {
+fn artifact(error: &WalletSourcesErrorV1) -> Error {
     if error.is_cancelled() {
         Error::Cancelled
     } else if error.is_unavailable() {
@@ -246,7 +250,10 @@ impl NativeFoldWorkerV1 {
                 q_checkpoint::Layout::new(
                     stage,
                     key,
-                    stage == 0 && q.sigma().is_some_and(|sigma| sigma.requires_private_fold()),
+                    stage == 0
+                        && q.sigma().is_some_and(
+                            iroha_kagemusha_proof::q_sigma::QSigmaPlan::requires_private_fold,
+                        ),
                 )
                 .map(|l| l.custody)
             })
@@ -351,7 +358,7 @@ impl NativeFoldWorkerV1 {
         let owner = self
             .sources
             .bind_omega_cancellable(self.read, Some(cancellation.prover_token()))
-            .map_err(artifact)?;
+            .map_err(|error| artifact(&error))?;
         cancellation.check()?;
         fold_metrics::enter(FoldPhaseV1::Prove);
         let tape = fresh_fold_tape::<Eq>(cancellation.prover_token())?;

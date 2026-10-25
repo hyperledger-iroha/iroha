@@ -2,7 +2,7 @@
 
 #[derive(Debug, Clone, norito::json::JsonSerialize, norito::json::JsonDeserialize)]
 #[norito(deny_unknown_fields)]
-pub(crate) struct VkSubmissionJson {
+pub struct VkSubmissionJson {
     pub(crate) backend: String,
     pub(crate) name: String,
     pub(crate) version: u32,

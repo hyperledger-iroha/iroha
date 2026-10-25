@@ -202,7 +202,7 @@ mod tests;
 /// bit of the retained preparation identity in the key of a retained state, so the next
 /// prepare must take its cold path in the same call. `false` for any other value.
 #[cfg(test)]
-pub(crate) fn perturb_retained_key_for_test(value: &mut FoldRetentionV1) -> bool {
+pub fn perturb_retained_key_for_test(value: &mut FoldRetentionV1) -> bool {
     let Some(retained) = value.downcast_mut::<RetainedFoldV1>() else {
         return false;
     };
@@ -218,7 +218,7 @@ pub(crate) fn perturb_retained_key_for_test(value: &mut FoldRetentionV1) -> bool
 /// both to `Cancelled`; the genuine fold helpers require zero. They decide nothing.
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct FoldRetentionCountsV1 {
+pub struct FoldRetentionCountsV1 {
     pub(crate) derivations: u64,
     pub(crate) warm: u64,
     pub(crate) restores: u64,

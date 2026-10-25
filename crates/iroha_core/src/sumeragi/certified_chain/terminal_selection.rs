@@ -68,7 +68,7 @@ impl<'kura> OriginalReceipt<'kura> {
             // Borrow the same original body through a retained verification stage. A late
             // result-slot refusal must not refund the earlier receipt slot and satisfy this
             // operation's own release wait. Nested decoding keeps its original limits.
-            if let Err(cause) = self.frame.initialize(
+            self.frame.initialize(
                 self.body
                     .as_ref()
                     .expect("original acquired carrier")
@@ -77,15 +77,7 @@ impl<'kura> OriginalReceipt<'kura> {
                 prefix.tip.root_scope(),
                 &mut prefix.validation,
                 budget,
-            ) {
-                #[cfg(all(test, sumeragi_core_mutation = "HC232"))]
-                if matches!(&cause, ExecutionAttemptError::Deferred(_)) {
-                    // Deliberately retire only the pending verification slots. Source,
-                    // body, decoder limits, authentication and refusal identity remain.
-                    self.frame = AdmittedFrameRead::default();
-                }
-                return Err(cause);
-            }
+            )?;
             self.committed = Some(self.frame.take_committed());
             self.body = None;
         }

@@ -32,7 +32,7 @@ fn host_arguments_and_global_butterfly_partition_match_kernel_contract() {
             let half = 1_u64 << stage;
             let step = goldilocks_pow(root, rows >> (stage + 1));
             let stride = goldilocks_pow(step, LANES);
-            let mut visits = vec![0_u8; rows as usize];
+            let mut visits = vec![0_u8; usize::try_from(rows).unwrap()];
             for group in 0..(rows / 2).div_ceil(BUTTERFLIES_PER_GROUP) {
                 for lane in 0..LANES {
                     let mut butterfly = group * BUTTERFLIES_PER_GROUP + lane;
@@ -45,8 +45,8 @@ fn host_arguments_and_global_butterfly_partition_match_kernel_contract() {
                         let offset = butterfly & (half - 1);
                         let low = (butterfly - offset) * 2 + offset;
                         assert!(low + half < rows);
-                        visits[low as usize] += 1;
-                        visits[(low + half) as usize] += 1;
+                        visits[usize::try_from(low).unwrap()] += 1;
+                        visits[usize::try_from(low + half).unwrap()] += 1;
                         assert_eq!(twiddle, goldilocks_pow(step, offset));
                         twiddle = if offset + LANES >= half {
                             first
@@ -253,7 +253,7 @@ fn factorized_stage_exponents_and_stride_preserve_every_public_schedule_boundary
                     let exponent = offset << shift;
                     assert!(exponent < 1_u64 << 31);
                     assert_eq!(
-                        factorized_lookup(&table, exponent as u32),
+                        factorized_lookup(&table, u32::try_from(exponent).unwrap()),
                         goldilocks_pow(stages[stage as usize], offset)
                     );
                 }
@@ -261,7 +261,7 @@ fn factorized_stage_exponents_and_stride_preserve_every_public_schedule_boundary
                     let exponent = LANES << shift;
                     assert!(exponent <= 1_u64 << 31);
                     assert_eq!(
-                        factorized_lookup(&table, exponent as u32),
+                        factorized_lookup(&table, u32::try_from(exponent).unwrap()),
                         goldilocks_pow(stages[stage as usize], LANES)
                     );
                 }

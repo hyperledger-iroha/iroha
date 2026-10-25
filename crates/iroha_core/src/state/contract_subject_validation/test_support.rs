@@ -12,23 +12,23 @@ use iroha_data_model::{
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 
 /// Existing independent V1 vector with eight rejected candidate points.
-pub(crate) fn address() -> ContractAddress {
+pub fn address() -> ContractAddress {
     "irohac1qyqqqqqqqqqqqqpze5aq5vfxha4qlvu4q80e0ff4yesw50c37z96q"
         .parse()
         .unwrap()
 }
 /// A distinct admitted contract address.
-pub(crate) fn other_address() -> ContractAddress {
+pub fn other_address() -> ContractAddress {
     "irohac1qyqqqqqqqqqqqq8y2pcrtkxvkrn5nt74kjjkjcst6kc56qcqa2dqp"
         .parse()
         .unwrap()
 }
 /// Minimal retained direct binding.
-pub(crate) fn binding() -> ContractSubjectBinding {
+pub fn binding() -> ContractSubjectBinding {
     ContractSubjectBinding::new_direct(&address(), ALICE_ID.clone())
 }
 /// Current and predecessor start from the same valid inactive binding.
-pub(crate) fn world() -> World {
+pub fn world() -> World {
     let mut world = World::default();
     let address = address();
     let binding = binding();
@@ -44,7 +44,7 @@ pub(crate) fn world() -> World {
     world
 }
 /// Use the production constructor before any test injects index corruption.
-pub(crate) fn state() -> State {
+pub fn state() -> State {
     State::new_for_testing(
         world(),
         Kura::blank_kura_for_testing(),

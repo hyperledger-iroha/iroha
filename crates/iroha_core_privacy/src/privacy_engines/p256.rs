@@ -417,27 +417,26 @@ impl TranscriptV1 {
         label: &[u8],
         ordinal: u32,
     ) -> Result<CanonicalScalarV1, P256EngineError> {
-        if label.len() > usize::from(u16::MAX) {
-            return Err(P256EngineError::TranscriptFieldTooLarge);
-        }
+        let label_len =
+            u16::try_from(label.len()).map_err(|_| P256EngineError::TranscriptFieldTooLarge)?;
         let state: [u8; 32] = self.hasher.clone().finalize().into();
         for retry in 0..MAX_REJECTION_ATTEMPTS {
             let mut hash = Sha256::new();
             hash.update(CHALLENGE_DOMAIN_V1);
             hash.update(state);
-            hash.update((label.len() as u16).to_be_bytes());
+            hash.update(label_len.to_be_bytes());
             hash.update(label);
             hash.update(ordinal.to_be_bytes());
             hash.update(retry.to_be_bytes());
             let candidate: [u8; 32] = hash.finalize().into();
-            if let Ok(scalar) = scalar_from_bytes(candidate) {
-                if !bool::from(scalar.is_zero()) {
-                    let canonical = CanonicalScalarV1::from_scalar(scalar);
-                    self.append_message(b"challenge_label", label)?;
-                    self.append_message(b"challenge_ordinal", &ordinal.to_be_bytes())?;
-                    self.append_message(b"challenge_scalar", canonical.as_bytes())?;
-                    return Ok(canonical);
-                }
+            if let Ok(scalar) = scalar_from_bytes(candidate)
+                && !bool::from(scalar.is_zero())
+            {
+                let canonical = CanonicalScalarV1::from_scalar(scalar);
+                self.append_message(b"challenge_label", label)?;
+                self.append_message(b"challenge_ordinal", &ordinal.to_be_bytes())?;
+                self.append_message(b"challenge_scalar", canonical.as_bytes())?;
+                return Ok(canonical);
             }
         }
         Err(P256EngineError::RejectionSamplingExhausted)
@@ -475,10 +474,10 @@ where
         }
         let parsed = scalar_from_bytes(candidate);
         candidate.zeroize();
-        if let Ok(scalar) = parsed {
-            if !bool::from(scalar.is_zero()) {
-                return Ok(scalar);
-            }
+        if let Ok(scalar) = parsed
+            && !bool::from(scalar.is_zero())
+        {
+            return Ok(scalar);
         }
     }
     Err(P256EngineError::RejectionSamplingExhausted)
@@ -566,7 +565,9 @@ mod tests {
         }
         fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), rand_core_06::Error> {
             for (index, byte) in destination.iter_mut().enumerate() {
-                *byte = ((index % 16) as u8).wrapping_mul(17).wrapping_add(5);
+                *byte = ((index % 16).to_le_bytes()[0])
+                    .wrapping_mul(17)
+                    .wrapping_add(5);
             }
             Ok(())
         }
@@ -752,6 +753,7 @@ mod tests {
     }
     #[test]
     fn transcript_rejects_missing_or_inconsistent_bindings() {
+        type BindingMutationV1 = (&'static str, fn(&mut TranscriptBindingV1<'_>));
         let mut zero_network = binding();
         zero_network.network_id = &[0; 32];
         assert!(matches!(
@@ -778,7 +780,7 @@ mod tests {
             zero_genesis.validate(),
             Err(P256EngineError::NetworkGenesisMismatch)
         );
-        let zeroing_mutations: [(&str, fn(&mut TranscriptBindingV1<'_>)); 7] = [
+        let zeroing_mutations: [BindingMutationV1; 7] = [
             ("statement_digest", |binding| {
                 binding.statement_digest = [0; 32]
             }),

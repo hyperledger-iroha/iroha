@@ -112,7 +112,7 @@ where
     );
 }
 
-pub(crate) fn shapes<T>(owner: &str, variant: &str, value: &T)
+pub fn shapes<T>(owner: &str, variant: &str, value: &T)
 where
     T: Clone + NoritoSerialize + for<'de> NoritoDeserialize<'de>,
 {

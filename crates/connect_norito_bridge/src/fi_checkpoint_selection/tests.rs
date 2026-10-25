@@ -19,7 +19,7 @@ fn fixture() -> (SumeragiFinalityCheckpoint, Vec<u8>, [u8; 32], [u8; 32]) {
         checkpoint.chain_id(),
     )
     .unwrap();
-    let sha = sha256(&bytes).into();
+    let sha = sha256(&bytes);
     let context = *tip.context_id().as_ref();
     (checkpoint, bytes, sha, context)
 }
@@ -62,30 +62,10 @@ fn checkpoint_selection_refuses_foreign_pins_network_chain_and_bytes() {
     assert!(verify(&bytes, sha, 2, context, other.network_id(), chain).is_err());
     let mut trailing = bytes.clone();
     trailing.push(0);
-    assert!(
-        verify(
-            &trailing,
-            sha256(&trailing).into(),
-            2,
-            context,
-            network,
-            chain
-        )
-        .is_err()
-    );
-    assert!(verify(&[], sha256([]).into(), 2, context, network, chain).is_err());
+    assert!(verify(&trailing, sha256(&trailing), 2, context, network, chain).is_err());
+    assert!(verify(&[], sha256([]), 2, context, network, chain).is_err());
     let malformed = b"not a canonical checkpoint";
-    assert!(
-        verify(
-            malformed,
-            sha256(malformed).into(),
-            2,
-            context,
-            network,
-            chain
-        )
-        .is_err()
-    );
+    assert!(verify(malformed, sha256(malformed), 2, context, network, chain).is_err());
 }
 
 #[test]
@@ -112,7 +92,7 @@ fn checkpoint_selection_refuses_authenticated_private_root() {
             &bytes,
             private.network_id(),
             private.chain_id(),
-            sha256(&bytes).into(),
+            sha256(&bytes),
             tip.height(),
             *tip.context_id().as_ref()
         )

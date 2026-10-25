@@ -316,6 +316,10 @@ pub fn executing_profiles(
 /// # Errors
 ///
 /// Rejects when this release lacks an active version.
+#[expect(
+    clippy::result_large_err,
+    reason = "SCCP refusal retains the original execution or validation owner without allocating during rejection"
+)]
 pub fn admission_profiles(
     world: &(impl WorldReadOnly + ?Sized),
     height: u64,
@@ -735,7 +739,7 @@ fn apply_delta(
 /// Fails when the guard does not match, or the advance does not verify (a conflict with stored
 /// data points to `ReportSccpLightClientEquivocationV1`).
 pub fn execute_advance(
-    instruction: AdvanceSccpLightClientV1,
+    instruction: &AdvanceSccpLightClientV1,
     _authority: &AccountId,
     state_transaction: &mut StateTransaction<'_, '_>,
 ) -> Result<(), Error> {
@@ -777,7 +781,7 @@ pub fn execute_advance(
 ///
 /// Fails when the evidence does not prove an equivocation.
 pub fn execute_report_equivocation(
-    instruction: ReportSccpLightClientEquivocationV1,
+    instruction: &ReportSccpLightClientEquivocationV1,
     _authority: &AccountId,
     state_transaction: &mut StateTransaction<'_, '_>,
 ) -> Result<(), Error> {
@@ -885,6 +889,10 @@ pub fn keeper_advance_eligible(instruction: &AdvanceSccpLightClientV1) -> bool {
 /// Rejects an advance of an uninstalled light client or with a stale expected state hash, an
 /// advance that does not verify, an advance that would not move the head, and any advance
 /// while this release lacks an active profile version.
+#[expect(
+    clippy::result_large_err,
+    reason = "SCCP refusal retains the original execution or validation owner without allocating during rejection"
+)]
 pub fn preverify_keeper_advance(
     world: &(impl WorldReadOnly + ?Sized),
     view: &(impl super::admission::SccpAdmissionView + ?Sized),
@@ -1034,7 +1042,7 @@ mod tests {
         let limit = budget.limit_bytes();
         let before = budget.reserved_bytes();
         budget.set_limit_bytes(before);
-        let result = execute_advance(advance_frame(false), &authority(1), &mut stx);
+        let result = execute_advance(&(advance_frame(false)), &authority(1), &mut stx);
         budget.set_limit_bytes(limit);
         assert!(result.is_err());
         assert!(
@@ -1125,16 +1133,20 @@ mod tests {
         let proof = SccpSourceProofBytesV1::new(vec![1, 2, 3]).expect("bounded proof");
         verify_source_proof(&mut stx, SccpNetworkV1::EthereumMainnet, &proof)
             .expect_err("not installed");
-        let error = execute_advance(SampleInstructions::advance(), &authority(1), &mut stx)
+        let error = execute_advance(&(SampleInstructions::advance()), &authority(1), &mut stx)
             .expect_err("not installed");
         assert!(error.to_string().contains("not installed"), "{error}");
-        execute_report_equivocation(SampleInstructions::equivocation(), &authority(1), &mut stx)
-            .expect_err("not installed");
+        execute_report_equivocation(
+            &(SampleInstructions::equivocation()),
+            &authority(1),
+            &mut stx,
+        )
+        .expect_err("not installed");
     }
 
     /// Return a decodable advance frame of `network`: an empty Ethereum update list, or an
     /// empty `Backfill` segment.
-    pub(crate) fn advance_frame(backfill: bool) -> AdvanceSccpLightClientV1 {
+    pub fn advance_frame(backfill: bool) -> AdvanceSccpLightClientV1 {
         use iroha_sccp::light_client::{
             ethereum::{EthereumHeaderSegmentV1, EthereumLcAdvanceV1},
             proof::{SccpLcAdvanceV1, SccpLcSegmentV1},
@@ -1292,7 +1304,7 @@ mod tests {
             stx.reserve_sccp_verifier_work(&oversized),
             Err("max_proof_bytes_per_proof")
         );
-        let error = execute_advance(SampleInstructions::advance(), &authority(1), &mut stx)
+        let error = execute_advance(&(SampleInstructions::advance()), &authority(1), &mut stx)
             .expect_err("not installed");
         assert!(error.to_string().contains("not installed"), "{error}");
     }
@@ -1336,7 +1348,7 @@ mod tests {
         let mut advance = SampleInstructions::advance();
         store::light_clients::insert(&mut stx, advance.network, installed(100)).expect("lc");
         advance.expected_state_hash = Some([9; 32]);
-        let error = execute_advance(advance, &authority(1), &mut stx).expect_err("stale");
+        let error = execute_advance(&(advance), &authority(1), &mut stx).expect_err("stale");
         assert!(error.to_string().contains("moved"), "{error}");
     }
 
@@ -1783,7 +1795,7 @@ mod tests {
             &mut stx,
             &SccpInstallTrustedCheckpointActionV1 {
                 network: ton,
-                ..action.clone()
+                ..action
             },
             [1; 32],
         )
@@ -1816,7 +1828,7 @@ mod tests {
             store::light_client_checkpoints::get(&*stx.world, &(network, 5)).map(|c| c.origin),
             Some(SccpLcCheckpointOriginV1::Parliament)
         );
-        let mut conflicting = action.clone();
+        let mut conflicting = action;
         conflicting.checkpoint.block_hash = [9; 32];
         install_checkpoint(&mut stx, &conflicting, [2; 32]).expect_err("conflict");
 

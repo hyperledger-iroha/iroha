@@ -197,7 +197,7 @@ fn bind_account_label_in_dataspace(
         .set_label(Some(label.clone()));
     state_transaction
         .world
-        .insert_account_alias_binding(label.clone(), account_id.clone());
+        .insert_account_alias_binding(&(label.clone()), &(account_id.clone()));
     state_transaction.world.replace_account_rekey_record(
         iroha_data_model::account::rekey::AccountRekeyRecord::new(
             label.clone(),
@@ -429,10 +429,35 @@ fn initial_executor_runs_multisig_flow() {
                 if instructions.iter().eq(core::iter::once(&instruction)))
         })
         .expect("original singleton multisig registration input");
-    let mut block = prepared
+    let original = crate::block::authenticate_genesis_block_intents(source, &signer1_id)
+        .expect("authenticate original multisig genesis policies");
+    let mut policies = Some(
+        original
+            .initial_policies(source)
+            .expect("select policies from original signed genesis"),
+    );
+    let generation = prepared.state.state_view_generation();
+    // The same recorder owns pristine policy installation and the tested instruction.
+    let (mut block, recording) = prepared
         .state
-        .block_with_pristine_carrier_stage(source, |_| Ok::<_, String>(()))
+        .block_with_recorded_pristine_carrier_stage(
+            source,
+            |overlay| {
+                crate::block::genesis_policies::GenesisPolicies::install(
+                    &mut policies,
+                    source,
+                    overlay,
+                    &prepared.state,
+                    generation,
+                )
+                .map_err(|error| error.to_string())
+            },
+            |error| error,
+        )
         .expect("capture original multisig bootstrap carrier");
+    block
+        .require_original_execution_recorder()
+        .expect("original recorder owns installed genesis policies");
     let mut state_transaction = block
         .transaction_for_original_genesis_testing(source, index, &signer1_id, &instruction)
         .expect("authenticate original multisig bootstrap instruction");
@@ -486,4 +511,10 @@ fn initial_executor_runs_multisig_flow() {
             .expect("stored spec must include expected signatory subject");
         assert_eq!(actual_weight, *expected_weight);
     }
+    drop(state_transaction);
+    block
+        .require_original_execution_recorder()
+        .expect("original recorder retained through multisig assertions");
+    drop(block);
+    drop(recording);
 }

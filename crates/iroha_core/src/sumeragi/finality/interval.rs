@@ -3,7 +3,7 @@
 //! This Core producer is a request-sized custody primitive, not a response cache or
 //! HTTP admission. Configured identity and an immutable captured State hash generation
 //! come from its caller. Signed genesis and every original authority/QC/availability
-//! check remain in CertifiedChain. A digest only joins freshly read physical bytes
+//! check remain in `CertifiedChain`. A digest only joins freshly read physical bytes
 //! to those completed checks; it never authenticates a frame independently.
 //!
 //! A State-owned source also carries the node's bounded ladder of completed prefixes.
@@ -516,12 +516,11 @@ fn build_interval_in_cache_scope(
             // Original request graphs retire before returning their workspace credit.
             // A retained authority keeps its independently prepaid State source owner.
             drop(cursor);
-            if let Some((checkpoints, budget, checkpoint)) = checkpoint {
-                if let Err(original) = checkpoints.retain(checkpoint, budget) {
-                    if cache_refusal.is_none() {
-                        cache_refusal = Some(original);
-                    }
-                }
+            if let Some((checkpoints, budget, checkpoint)) = checkpoint
+                && let Err(original) = checkpoints.retain(checkpoint, budget)
+                && cache_refusal.is_none()
+            {
+                cache_refusal = Some(original);
             }
             Ok(NativeFinalityProofInterval {
                 proofs,

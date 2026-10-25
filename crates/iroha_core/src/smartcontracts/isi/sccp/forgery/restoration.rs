@@ -97,7 +97,7 @@ fn verification_error(error: ForgeryVerificationError) -> Error {
         _ => invalid("restored SCCP evidence fails its original recorded relation"),
     }
 }
-/// The original signed-genesis policy is immutable by the SetParameter rule. Its admitted
+/// The original signed-genesis policy is immutable by the `SetParameter` rule. Its admitted
 /// decoder owns all nested allocation; the restored World policy is never read here.
 fn delay(source: &SccpCarrier, budget: &AllocationBudget) -> Result<Option<u64>, Error> {
     let mut found = None;
@@ -105,7 +105,7 @@ fn delay(source: &SccpCarrier, budget: &AllocationBudget) -> Result<Option<u64>,
         let Executable::Instructions(instructions) = transaction.instructions() else {
             return Err(invalid("genesis policy is not explicit"));
         };
-        for instruction in instructions.iter() {
+        for instruction in instructions {
             let Some(set) = instruction.as_any().downcast_ref::<SetParameter>() else {
                 continue;
             };
@@ -226,7 +226,7 @@ struct Progress {
 /// Provisional source reducer. Its only record-sized backing contains derived scalar facts;
 /// immutable graph comparison borrows snapshot claims and never promotes them to authority.
 /// No public value or installation grant escapes before the reader seals the complete tip.
-pub(crate) struct SccpRestore {
+pub struct SccpRestore {
     facts: facts::Facts,
     records: ChargedBuffer<RecordFact>,
     parent: Option<Parent>,
@@ -308,29 +308,27 @@ impl SccpRestore {
                     TransactionEntrypoint::SealedCommitment(_)
                     | TransactionEntrypoint::AnonymousBallot(_) => None,
                 };
-                if let Some(transaction) = transaction {
-                    if let Executable::Instructions(instructions) = transaction.instructions() {
-                        let instructions: &[iroha_data_model::isi::InstructionBox] = instructions;
-                        if let [only] = instructions {
-                            if let Some(submit) =
-                                only.as_any().downcast_ref::<SubmitSccpForgeryEvidenceV1>()
-                            {
-                                let output_index = u32::try_from(index)
-                                    .map_err(|_| invalid("Network index overflows"))?;
-                                let (_, output) = source
-                                    .block()
-                                    .network_output_at(output_index)
-                                    .ok_or_else(|| invalid("Submit lacks exact Network output"))?;
-                                if output.result.is_ok() {
-                                    transaction
-                                        .verify_signature()
-                                        .map_err(|_| invalid("Submit signature differs"))?;
-                                    let admission = self.prepare(
-                                        source, submit, instance, network, budget, state,
-                                    )?;
-                                    self.install(admission, h)?;
-                                }
-                            }
+                if let Some(transaction) = transaction
+                    && let Executable::Instructions(instructions) = transaction.instructions()
+                {
+                    let instructions: &[iroha_data_model::isi::InstructionBox] = instructions;
+                    if let [only] = instructions
+                        && let Some(submit) =
+                            only.as_any().downcast_ref::<SubmitSccpForgeryEvidenceV1>()
+                    {
+                        let output_index =
+                            u32::try_from(index).map_err(|_| invalid("Network index overflows"))?;
+                        let (_, output) = source
+                            .block()
+                            .network_output_at(output_index)
+                            .ok_or_else(|| invalid("Submit lacks exact Network output"))?;
+                        if output.result.is_ok() {
+                            transaction
+                                .verify_signature()
+                                .map_err(|_| invalid("Submit signature differs"))?;
+                            let admission =
+                                self.prepare(source, submit, instance, network, budget, state)?;
+                            self.install(admission, h)?;
                         }
                     }
                 }
@@ -364,20 +362,19 @@ impl SccpRestore {
                 if index < self.progress.mark_index {
                     continue;
                 }
-                if let NposPenaltyAction::MarkConsensusEvidenceApplied(mark) = action {
-                    if let Some(record) = self
+                if let NposPenaltyAction::MarkConsensusEvidenceApplied(mark) = action
+                    && let Some(record) = self
                         .records
                         .as_mut_slice()
                         .iter_mut()
                         .find(|record| record.key == mark.evidence_key)
-                    {
-                        if record.marked || mark.height != record.due || h != record.due {
-                            return Err(invalid(
-                                "SCCP penalty mark has a foreign carrier or duplicate",
-                            ));
-                        }
-                        record.marked = true;
+                {
+                    if record.marked || mark.height != record.due || h != record.due {
+                        return Err(invalid(
+                            "SCCP penalty mark has a foreign carrier or duplicate",
+                        ));
                     }
+                    record.marked = true;
                 }
                 self.progress.mark_index = index.checked_add(1).ok_or(Preparation::Invariant)?;
             }
@@ -568,10 +565,7 @@ impl SccpRestore {
                 source,
                 submit,
                 &generation,
-                instance,
-                &qc,
-                rule,
-                selected,
+                (instance, &qc, rule, selected),
                 record,
             )
         })?;
@@ -603,15 +597,19 @@ impl SccpRestore {
             .ok_or_else(|| invalid("snapshot omits original permanent record"))?;
         check(current)?;
         if h < self.tip {
-            let previous = match snapshot.revert_map().get(id) {
-                Some(value) => value.as_ref(),
-                None => Some(current),
-            }
-            .ok_or_else(|| invalid("undo omits original permanent record"))?;
+            let previous = snapshot
+                .revert_map()
+                .get(id)
+                .map_or(Some(current), |value| value.as_ref())
+                .ok_or_else(|| invalid("undo omits original permanent record"))?;
             check(previous)?;
         }
         Ok(())
     }
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "Installation consumes the original admitted record and its reserved offender keys"
+    )]
     fn install(&mut self, admission: Admission, h: u64) -> Result<(), Error> {
         if self.records.as_slice().len() == self.records.capacity() {
             return Err(invalid("snapshot permanent record set is incomplete"));
@@ -747,10 +745,7 @@ fn check_immutable(
     source: &SccpCarrier,
     submit: &SubmitSccpForgeryEvidenceV1,
     generation: &RetainedSccpGeneration,
-    instance: Hash32,
-    qc: &QcFixedV1,
-    rule: SccpForgeryRuleV1,
-    selected: u32,
+    (instance, qc, rule, selected): (Hash32, &QcFixedV1, SccpForgeryRuleV1, u32),
     record: &RetainedEvidenceRecord,
 ) -> Result<(), Error> {
     let RecordedEvidenceV1::SccpForgery(material) = &record.evidence else {

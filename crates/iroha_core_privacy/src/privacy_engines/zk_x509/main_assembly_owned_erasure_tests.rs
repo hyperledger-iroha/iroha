@@ -162,9 +162,7 @@ fn extracted_projection_witness_clears_partial_disclosures_and_owned_success() {
         let (result, observed) = inspection::observe_v1(|| {
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let _owned = owned;
-                if unwind {
-                    panic!("injected projection-witness transfer unwind");
-                }
+                assert!(!unwind, "injected projection-witness transfer unwind")
             }))
         });
         assert_eq!(result.is_err(), unwind);

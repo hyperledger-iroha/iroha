@@ -82,18 +82,6 @@ impl From<StateBlockStartError<MergeLedgerCommitError>> for MergeLedgerCommitErr
     }
 }
 
-/// Fixed local categories retained by the JSON execution-root decoder.
-/// JSON exposes these categories without the binary decoder's numeric counters.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
-pub enum RootScopeDecodeRefusal {
-    /// The inherited decode scope refused allocation or structural work.
-    #[error("execution-root metadata decode budget refused")]
-    Budget,
-    /// The physical allocator refused the decoder's requested storage.
-    #[error("execution-root metadata allocation refused")]
-    Allocator,
-}
-
 /// Local State storage or protocol decoder refusal; never a verdict on consensus data.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum StateStorageAdmissionError {
@@ -113,8 +101,8 @@ pub enum StateStorageAdmissionError {
     #[error("local native AMX graph refusal: {0}")]
     NativeAmx(crate::sumeragi::amx::NativeAmxAdmissionError),
     /// The original execution-root metadata decoder refused before instruction authority existed.
-    #[error(transparent)]
-    RootScopeDecode(RootScopeDecodeRefusal),
+    #[error("local execution-root decoder resource refusal: {0}")]
+    RootScopeDecode(#[source] norito::core::DecodeLocalRefusal),
 }
 
 impl StateStorageAdmissionError {
@@ -125,13 +113,14 @@ impl StateStorageAdmissionError {
             Self::SccpForgery(sccp_forgery_custody::ForgeryStorageError::Storage(e)) => {
                 e.release_wait()
             }
-            Self::SccpForgery(_) => None,
             Self::SccpEvidence(error) => error.release_wait(),
             Self::NativeAmx(crate::sumeragi::amx::NativeAmxAdmissionError::Admission(
                 iroha_allocation::AllocationRefusal::Capacity { release, .. },
             )) => Some(release),
-            Self::NativeAmx(_) => None,
-            Self::AmxDecode(_) | Self::RootScopeDecode(_) => None,
+            Self::SccpForgery(_)
+            | Self::NativeAmx(_)
+            | Self::AmxDecode(_)
+            | Self::RootScopeDecode(_) => None,
         }
     }
 }
@@ -254,7 +243,6 @@ impl BlockHashes {
             .map(BlockHashPolicy)
     }
     fn admission_error(
-        &self,
         error: MapAdmissionError<iroha_allocation::AllocationRefusal>,
         wait: iroha_allocation::release::ReleaseWait,
     ) -> BlockHashAdmissionError {
@@ -272,7 +260,7 @@ impl BlockHashes {
         initial: impl IntoIterator<Item = HashOf<BlockHeader>>,
         budget: iroha_allocation::AllocationBudget,
     ) -> Result<Self, BlockHashAdmissionError> {
-        budget.with_deferred_refund_notifications(|_| {
+        budget.clone().with_deferred_refund_notifications(|_| {
             let control_layout = ChargedBlockHashMap::layout();
             let mut control_reservation = budget
                 .try_reserve(control_layout)
@@ -288,7 +276,7 @@ impl BlockHashes {
             .map_err(BlockHashAdmissionError::Capacity)?;
             let owner = Self {
                 inner: BlockHashStorage::Owned(ChargedBlockHashMap::new(map, control_charge)),
-                budget: budget.clone(),
+                budget,
                 released: iroha_allocation::release::ReleaseNotification::default(),
                 committed_height: AtomicUsize::new(0),
             };
@@ -299,7 +287,7 @@ impl BlockHashes {
                     .try_insert_admitted_with_footprint(index, hash, |existing, additional| {
                         owner.admit_successor(existing, additional)
                     })
-                    .map_err(|(_, error)| owner.admission_error(error, wait))?;
+                    .map_err(|(_, error)| Self::admission_error(error, wait))?;
                 debug_assert!(old.is_none());
                 let writer = map
                     .try_write_owned(work)
@@ -358,7 +346,7 @@ impl BlockHashes {
                 Ok(writer) => writer,
                 Err((acquired, (_, error))) => {
                     drop(acquired);
-                    return Err(self.admission_error(error, wait));
+                    return Err(Self::admission_error(error, wait));
                 }
             };
             let (work, _) = writer.release_with(|(writer, previous)| (writer.detach(), previous));

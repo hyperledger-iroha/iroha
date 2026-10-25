@@ -10,7 +10,7 @@ use iroha_crypto::{Hash, KeyPair};
 use iroha_data_model::{
     NetworkId,
     account::AccountId,
-    block::SignedBlock,
+    block::{SignedBlock, consensus::PublicLaneStakingPolicy},
     isi::InstructionBox,
     parameter::{
         Parameter,
@@ -50,7 +50,7 @@ pub(super) fn npos_genesis_parameters(npos: Option<SumeragiNposParameters>) -> V
 ///
 /// # Errors
 /// Any rejection other than the policy mismatch, with the failing execution outputs.
-pub(crate) fn staged_genesis_policies(
+pub fn staged_genesis_policies(
     genesis: SignedBlock,
     topology: &Topology,
     genesis_account: &AccountId,
@@ -107,19 +107,21 @@ pub(crate) fn staged_genesis_policies(
 /// `configured` returns a fresh, fully configured State with no committed block for the given
 /// network. The provisional State and its network identity are discarded; the returned State
 /// belongs to the returned genesis, which [`startup::apply_genesis`] accepts unchanged. The
-/// consensus mode is `NPoS` exactly when `npos` is supplied.
+/// consensus mode is `NPoS` exactly when the supplied policies include `NPoS` parameters.
+/// The staking policy is explicit author input and is included in the original signed parameters.
 ///
 /// # Errors
 /// The genesis cannot be built or signed, or original native execution rejects it.
-pub(crate) fn signed_genesis_fixture_for_state(
+pub fn signed_genesis_fixture_for_state(
     chain_id: &ChainId,
     genesis_key: &KeyPair,
     validators: &[(PeerId, Vec<u8>)],
     instructions: Vec<InstructionBox>,
     genesis_time_ms: u64,
-    npos: Option<SumeragiNposParameters>,
+    policies: (Option<SumeragiNposParameters>, PublicLaneStakingPolicy),
     mut configured: impl FnMut(NetworkId) -> State,
 ) -> Result<(SignedBlock, State), String> {
+    let (npos, staking) = policies;
     let mode = if npos.is_some() {
         ConsensusMode::Npos
     } else {
@@ -130,11 +132,17 @@ pub(crate) fn signed_genesis_fixture_for_state(
         genesis_key,
         validators,
         instructions,
-        npos_genesis_parameters(npos),
-        mode.into(),
-        iroha_data_model::block::consensus::SumeragiRootScope::Global,
-        genesis_time_ms,
-        std::num::NonZeroU64::MIN,
+        npos_genesis_parameters(npos)
+            .into_iter()
+            .chain([Parameter::Custom(staking.into_custom_parameter().map_err(
+                |error| format!("authored fixture staking policy: {error}"),
+            )?)])
+            .collect(),
+        (
+            mode.into(),
+            iroha_data_model::block::consensus::SumeragiRootScope::Global,
+        ),
+        (genesis_time_ms, std::num::NonZeroU64::MIN),
     )?;
     let account = AccountId::new(genesis_key.public_key().clone());
     let topology = Topology::new(
@@ -254,7 +262,14 @@ mod tests {
             &validators,
             Vec::new(),
             1_000,
-            None,
+            (
+                None,
+                super::super::staking_fixture_policy(
+                    iroha_config::parameters::defaults::nexus::staking::stake_asset_id()
+                        .parse()
+                        .unwrap(),
+                ),
+            ),
             configured,
         )
         .unwrap();

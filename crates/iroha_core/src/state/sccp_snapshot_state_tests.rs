@@ -37,7 +37,7 @@ fn original_allocation_refusal(error: &StateRestoreError) -> &AllocationRefusal 
 }
 
 /// Return a World whose every SCCP map and cell holds a current value and an undo record.
-pub(crate) fn sccp_world() -> World {
+pub fn sccp_world() -> World {
     let world = World::default();
     let budget = world.sccp_committee_generations.allocation_budget().clone();
     {

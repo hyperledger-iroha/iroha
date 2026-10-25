@@ -39,7 +39,11 @@ const PAIRED_ROOT: &[u8] = b"iroha:state-table-substrate:paired-root:v1\0";
 /// The caller supplies these limits independently of the original local pool.
 /// Proof output and metadata funding remain separate cutover obligations.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct LeafLimits {
+#[expect(
+    clippy::struct_field_names,
+    reason = "The max prefix distinguishes resource ceilings from observed counts"
+)]
+pub struct LeafLimits {
     /// Maximum number of explicitly selected tables.
     pub max_tables: usize,
     /// Maximum number of retained rows across those tables.
@@ -57,7 +61,7 @@ pub(crate) struct LeafLimits {
 
 /// A rejected scoped leaf operation never produces a partially published root.
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
-pub(crate) enum LeafError {
+pub enum LeafError {
     /// The requested field is absent from the typed State authority inventory.
     /// The caller retains its input; refusal must not copy an unbounded identity.
     #[error("unknown State authority field")]
@@ -161,15 +165,19 @@ fn find_field(fields: &'static [Field], id: &str) -> Option<&'static Field> {
         if field.id == id {
             return Some(field);
         }
-        if let Role::Canonical(Canonical::Owner(children)) = field.role {
-            if let Some(found) = find_field(children, id) {
-                return Some(found);
-            }
+        if let Role::Canonical(Canonical::Owner(children)) = field.role
+            && let Some(found) = find_field(children, id)
+        {
+            return Some(found);
         }
     }
     None
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 fn declared_table(id: &str) -> Result<&'static Field, LeafError> {
     let field = find_field(STATE_FIELDS, id).ok_or(LeafError::UnknownField)?;
     match field.role {
@@ -282,6 +290,10 @@ impl Write for TripleHashWriter<'_> {
 /// Hash one complete canonical encoding into both paired roots without
 /// materializing value-sized buffers. The raw digest detects a changing encoder
 /// between the length pass and the common second pass.
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 fn stream_bare_payload_digests<T: Encode>(
     value: &T,
     schema_identity: &str,
@@ -309,8 +321,8 @@ fn stream_bare_payload_digests<T: Encode>(
     if length > max_payload_bytes {
         return Err(LeafError::PayloadLimit);
     }
-    let first_raw =
-        first_raw.map_err(|error| EncodingError::io(EncodingOperation::MeasurePayload, error))?;
+    let first_raw = first_raw
+        .map_err(|error| EncodingError::io(EncodingOperation::MeasurePayload, &(error)))?;
     let length32 = u32::try_from(length).map_err(|_| LeafError::PayloadLimit)?;
     let length64 = u64::from(length32);
     let identity_len = u64::try_from(schema_identity.len()).map_err(|_| LeafError::PayloadLimit)?;
@@ -360,7 +372,7 @@ fn stream_bare_payload_digests<T: Encode>(
         .into());
     }
     let lookup_digest = lookup_digest
-        .map_err(|error| EncodingError::io(EncodingOperation::HashPairedValue, error))?;
+        .map_err(|error| EncodingError::io(EncodingOperation::HashPairedValue, &(error)))?;
     if second_raw != Some(first_raw) {
         return Err(EncodingError::new(
             EncodingOperation::HashPairedValue,
@@ -375,6 +387,10 @@ fn stream_bare_payload_digests<T: Encode>(
     ))
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 fn typed_bare_payload_digests<T: Encode + NoritoSchema>(
     table: &'static str,
     schema: Schema,
@@ -398,6 +414,10 @@ fn typed_bare_payload_digests<T: Encode + NoritoSchema>(
     stream_bare_payload_digests(value, &declared, max_payload_bytes)
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 fn semantic_bare_payload_digests<T: Encode>(
     table: &'static str,
     schema: Schema,
@@ -420,6 +440,10 @@ fn semantic_bare_payload_digests<T: Encode>(
     stream_bare_payload_digests(value, identity, max_payload_bytes)
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 fn typed_payload_hash<T: Encode + NoritoSchema>(
     table: &'static str,
     schema: Schema,
@@ -467,13 +491,17 @@ fn typed_payload_hash<T: Encode + NoritoSchema>(
         return Err(LeafError::PayloadLimit);
     }
     encoded.map_err(|error| EncodingError::codec(EncodingOperation::HashTypedPayload, error))?;
-    digest.map_err(|error| EncodingError::io(EncodingOperation::HashTypedPayload, error).into())
+    digest.map_err(|error| EncodingError::io(EncodingOperation::HashTypedPayload, &(error)).into())
 }
 
 #[path = "leaf/frame.rs"]
 mod frame;
 use frame::typed_bare_payload;
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 fn bare_payload_hash(
     table: &'static str,
     schema: Schema,
@@ -534,7 +562,7 @@ fn paired_root(table: &str, row_count: u64, lookup_root: Hash, ordered_root: Has
 /// supplied scoped root before checking the complete range proof. Hash intervals
 /// are not original Norito-key intervals or table-local ordering.
 #[derive(Clone, Debug)]
-pub(crate) struct CanonicalTableHashRangeProof {
+pub struct CanonicalTableHashRangeProof {
     map_root: Hash,
     range: MerkleMapRangeProof,
 }
@@ -544,7 +572,7 @@ pub(crate) struct CanonicalTableHashRangeProof {
 /// Selection, table schemas, key types, value types, and row count are bound.
 /// The caller must enumerate every selected table row from one immutable cut;
 /// this type does not certify that completeness itself.
-pub(crate) struct CanonicalTableLeafSet {
+pub struct CanonicalTableLeafSet {
     selection: TableSelection,
     leaves: MerkleMap,
 }
@@ -554,12 +582,16 @@ pub(crate) struct CanonicalTableLeafSet {
 /// The paired root binds a hashed lookup tree and raw-key ordered value
 /// digests. Full value bytes are not retained or disclosed by ranges. The
 /// caller still owns complete enumeration and finalized State authentication.
-pub(crate) struct CanonicalTablePairedSnapshot {
+pub struct CanonicalTablePairedSnapshot {
     lookup: CanonicalTableLeafSet,
     ordered: NoritoKeyDigestRangeTreeV1,
     root: Hash,
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 fn charge_digest_row(
     total: &mut usize,
     key_len: usize,
@@ -583,6 +615,10 @@ fn charge_digest_row(
 
 /// Admit both encoder passes before starting a full-value row. Key framing is
 /// separately bounded by the row count and per-key payload limit.
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 fn value_stream_bound(limits: LeafLimits, spent: u64) -> Result<usize, LeafError> {
     let remaining = limits
         .max_streamed_value_bytes
@@ -592,6 +628,10 @@ fn value_stream_bound(limits: LeafLimits, spent: u64) -> Result<usize, LeafError
     Ok(limits.max_payload_bytes.min(per_pass))
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 fn charge_streamed_value(
     spent: &mut u64,
     length: usize,
@@ -616,6 +656,10 @@ fn value_stream_error(error: LeafError, bound: usize, limits: LeafLimits) -> Lea
     }
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 impl CanonicalTablePairedSnapshot {
     /// Exact identity of the sole table whose retained rows own this pair.
     pub(crate) fn table_id(&self) -> &'static str {
@@ -679,6 +723,10 @@ pub(in crate::state) use paired::{
     RetainedSemanticRows, TypedPairedRowAllowance, TypedPairedRowError, TypedPairedTableBuilder,
 };
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 impl CanonicalTableLeafSet {
     /// Verify a selected-table lookup beneath an independent paired root.
     ///
@@ -724,11 +772,8 @@ impl CanonicalTableLeafSet {
     pub(crate) fn verify_paired_raw_range<'a>(
         table: &str,
         limits: LeafLimits,
-        expected_paired_root: &Hash,
-        lookup_root: &Hash,
-        ordered_root: &Hash,
-        start: &[u8],
-        end: &[u8],
+        (expected_paired_root, lookup_root, ordered_root): (&Hash, &Hash, &Hash),
+        (start, end): (&[u8], &[u8]),
         max_rows: usize,
         max_bytes: usize,
         proof: &'a NoritoKeyDigestRangeProofV1,

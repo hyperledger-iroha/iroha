@@ -68,38 +68,6 @@ impl<'a, W: WorldReadOnly + ?Sized> TopologyRowsV1<'a, W> {
             .is_some_and(|(key, _)| key.as_ref().starts_with(start.as_ref()))
     }
 
-    fn decode<T>(&self, bytes: &[u8], maximum: usize) -> Result<T, TopologyRowErrorV1>
-    where
-        T: NoritoSerialize + for<'de> NoritoDeserialize<'de>,
-    {
-        if bytes.is_empty() || bytes.len() > maximum {
-            return Err(TopologyRowErrorV1::CorruptHistory);
-        }
-        norito::decode_canonical_with_limits(
-            bytes,
-            norito::DecodeLimits::new(16 * 1024, maximum, 8192, 512 * 1024, 24),
-        )
-        .map_err(|_| TopologyRowErrorV1::CorruptHistory)
-    }
-
-    fn digest<T>(&self, domain: &[u8], value: &T) -> Result<[u8; 32], TopologyRowErrorV1>
-    where
-        T: NoritoSerialize,
-    {
-        if norito::canonical_frame_len(value).map_err(|_| TopologyRowErrorV1::CorruptHistory)?
-            > TOPOLOGY_HISTORY_MAX_BYTES_V1
-        {
-            return Err(TopologyRowErrorV1::CorruptHistory);
-        }
-        let bytes =
-            norito::encode_canonical(value).map_err(|_| TopologyRowErrorV1::CorruptHistory)?;
-        let mut hash = blake3::Hasher::new();
-        hash.update(domain);
-        hash.update(&(bytes.len() as u64).to_be_bytes());
-        hash.update(&bytes);
-        Ok(*hash.finalize().as_bytes())
-    }
-
     fn read_head_row<T>(
         &self,
         prefix: &str,
@@ -131,8 +99,8 @@ impl<'a, W: WorldReadOnly + ?Sized> TopologyRowsV1<'a, W> {
             return Err(TopologyRowErrorV1::CorruptHistory);
         }
         let bytes = rows.get(&path).ok_or(TopologyRowErrorV1::CorruptHistory)?;
-        let row = self.decode(bytes, maximum)?;
-        if self.digest(domain, &row)? != head.digest {
+        let row = decode_topology(bytes, maximum)?;
+        if topology_digest(domain, &row)? != head.digest {
             return Err(TopologyRowErrorV1::CorruptHistory);
         }
         Ok(Some(row))
@@ -215,7 +183,7 @@ impl<'a, W: WorldReadOnly + ?Sized> TopologyRowsV1<'a, W> {
             }
             return Ok(TopologyRetainedStateV1::empty());
         };
-        let root: TopologyRetainedStateV1 = self.decode(bytes, TOPOLOGY_RECORD_MAX_BYTES_V1)?;
+        let root: TopologyRetainedStateV1 = decode_topology(bytes, TOPOLOGY_RECORD_MAX_BYTES_V1)?;
         for (head, maximum) in [
             (root.control_head, TOPOLOGY_CONTROL_LIMIT_V1),
             (root.operation_head, 2 * TOPOLOGY_OPERATION_LIMIT_V1),
@@ -301,8 +269,8 @@ impl<'a, W: WorldReadOnly + ?Sized> TopologyRowsV1<'a, W> {
                 Err(TopologyRowErrorV1::CorruptHistory)
             };
         };
-        let revision: u64 = self.decode(slot, TOPOLOGY_RECORD_MAX_BYTES_V1)?;
-        let admitted: u64 = self.decode(admission, TOPOLOGY_RECORD_MAX_BYTES_V1)?;
+        let revision: u64 = decode_topology(slot, TOPOLOGY_RECORD_MAX_BYTES_V1)?;
+        let admitted: u64 = decode_topology(admission, TOPOLOGY_RECORD_MAX_BYTES_V1)?;
         if admitted == 0
             || revision < admitted
             || revision > root.operation_head.revision
@@ -323,7 +291,7 @@ impl<'a, W: WorldReadOnly + ?Sized> TopologyRowsV1<'a, W> {
             || (revision != admitted
                 && (current.outcome == TopologyOutcomeV1::Reserved
                     || current.predecessor_digest
-                        != self.digest(b"iroha.sorafs.topology.operation.v1\0", &original)?))
+                        != topology_digest(b"iroha.sorafs.topology.operation.v1\0", &original)?))
         {
             return Err(TopologyRowErrorV1::CorruptHistory);
         }
@@ -334,7 +302,7 @@ impl<'a, W: WorldReadOnly + ?Sized> TopologyRowsV1<'a, W> {
             return Err(TopologyRowErrorV1::CorruptHistory);
         }
         if revision == root.operation_head.revision
-            && self.digest(b"iroha.sorafs.topology.operation.v1\0", &current)?
+            && topology_digest(b"iroha.sorafs.topology.operation.v1\0", &current)?
                 != root.operation_head.digest
         {
             return Err(TopologyRowErrorV1::CorruptHistory);
@@ -351,7 +319,7 @@ impl<'a, W: WorldReadOnly + ?Sized> TopologyRowsV1<'a, W> {
             .smart_contract_state()
             .get(&self.path(&format!("operation_revision_{revision:020}")))
             .ok_or(TopologyRowErrorV1::CorruptHistory)?;
-        let row: TopologyOperationRecordV1 = self.decode(bytes, TOPOLOGY_RECORD_MAX_BYTES_V1)?;
+        let row: TopologyOperationRecordV1 = decode_topology(bytes, TOPOLOGY_RECORD_MAX_BYTES_V1)?;
         if row.revision != revision {
             return Err(TopologyRowErrorV1::CorruptHistory);
         }
@@ -379,7 +347,7 @@ pub(crate) fn current_control_state_v1(
         return Ok(None);
     };
     let control: SignerCustodyControlStateV1 =
-        rows.decode(&record.control_state, SIGNER_CUSTODY_CONTROL_MAX_BYTES_V1)?;
+        decode_topology(&record.control_state, SIGNER_CUSTODY_CONTROL_MAX_BYTES_V1)?;
     control
         .validate()
         .map_err(|_| TopologyRowErrorV1::CorruptHistory)?;
@@ -397,6 +365,37 @@ pub(crate) fn current_control_state_v1(
         return Err(TopologyRowErrorV1::CorruptHistory);
     }
     Ok(Some((record, control)))
+}
+
+fn decode_topology<T>(bytes: &[u8], maximum: usize) -> Result<T, TopologyRowErrorV1>
+where
+    T: NoritoSerialize + for<'de> NoritoDeserialize<'de>,
+{
+    if bytes.is_empty() || bytes.len() > maximum {
+        return Err(TopologyRowErrorV1::CorruptHistory);
+    }
+    norito::decode_canonical_with_limits(
+        bytes,
+        norito::DecodeLimits::new(16 * 1024, maximum, 8192, 512 * 1024, 24),
+    )
+    .map_err(|_| TopologyRowErrorV1::CorruptHistory)
+}
+
+fn topology_digest<T>(domain: &[u8], value: &T) -> Result<[u8; 32], TopologyRowErrorV1>
+where
+    T: NoritoSerialize,
+{
+    if norito::canonical_frame_len(value).map_err(|_| TopologyRowErrorV1::CorruptHistory)?
+        > TOPOLOGY_HISTORY_MAX_BYTES_V1
+    {
+        return Err(TopologyRowErrorV1::CorruptHistory);
+    }
+    let bytes = norito::encode_canonical(value).map_err(|_| TopologyRowErrorV1::CorruptHistory)?;
+    let mut hash = blake3::Hasher::new();
+    hash.update(domain);
+    hash.update(&(bytes.len() as u64).to_be_bytes());
+    hash.update(&bytes);
+    Ok(*hash.finalize().as_bytes())
 }
 
 #[cfg(test)]
@@ -518,8 +517,7 @@ mod tests {
             let view = world.view();
             let rows = TopologyRowsV1::new(&view, "production-primary").unwrap();
             (
-                rows.digest(b"iroha.sorafs.topology.operation.v1\0", &original)
-                    .unwrap(),
+                topology_digest(b"iroha.sorafs.topology.operation.v1\0", &original).unwrap(),
                 rows.path("operation_revision_00000000000000000001"),
                 rows.path("operation_revision_00000000000000000002"),
                 rows.path("history_revision_00000000000000000001"),
@@ -539,10 +537,9 @@ mod tests {
         }
         let (operation_digest, history_one, history_two, history_digest) = {
             let view = world.view();
-            let rows = TopologyRowsV1::new(&view, "production-primary").unwrap();
-            let operation_digest = rows
-                .digest(b"iroha.sorafs.topology.operation.v1\0", &last)
-                .unwrap();
+            TopologyRowsV1::new(&view, "production-primary").unwrap();
+            let operation_digest =
+                topology_digest(b"iroha.sorafs.topology.operation.v1\0", &last).unwrap();
             let first = TopologyHistoryEntryV1 {
                 revision: 1,
                 predecessor_digest: [0; 32],
@@ -563,9 +560,8 @@ mod tests {
                     digest: original_digest,
                 },
             };
-            let first_digest = rows
-                .digest(b"iroha.sorafs.topology.history.v1\0", &first)
-                .unwrap();
+            let first_digest =
+                topology_digest(b"iroha.sorafs.topology.history.v1\0", &first).unwrap();
             let second = terminal.then(|| TopologyHistoryEntryV1 {
                 revision: 2,
                 predecessor_digest: first_digest,
@@ -590,8 +586,7 @@ mod tests {
                 },
             });
             let history_digest = second.as_ref().map_or(first_digest, |value| {
-                rows.digest(b"iroha.sorafs.topology.history.v1\0", value)
-                    .unwrap()
+                topology_digest(b"iroha.sorafs.topology.history.v1\0", value).unwrap()
             });
             (operation_digest, first, second, history_digest)
         };
@@ -666,8 +661,7 @@ mod tests {
             (
                 rows.path("retained"),
                 rows.path("history_revision_00000000000000000001"),
-                rows.digest(b"iroha.sorafs.topology.history.v1\0", &history)
-                    .unwrap(),
+                topology_digest(b"iroha.sorafs.topology.history.v1\0", &history).unwrap(),
             )
         };
         let mut root = TopologyRetainedStateV1::empty();
@@ -860,10 +854,8 @@ mod tests {
         let digest = {
             let world = World::new();
             let view = world.view();
-            TopologyRowsV1::new(&view, "production-primary")
-                .unwrap()
-                .digest(b"iroha.sorafs.topology.control.v1\0", &record)
-                .unwrap()
+            TopologyRowsV1::new(&view, "production-primary").unwrap();
+            topology_digest(b"iroha.sorafs.topology.control.v1\0", &record).unwrap()
         };
         let mut world = locally_consistent_history(
             TopologyHeadV1 {
@@ -951,10 +943,8 @@ mod tests {
         let digest = {
             let world = World::new();
             let view = world.view();
-            TopologyRowsV1::new(&view, "production-primary")
-                .unwrap()
-                .digest(b"iroha.sorafs.topology.control.v1\0", &record)
-                .unwrap()
+            TopologyRowsV1::new(&view, "production-primary").unwrap();
+            topology_digest(b"iroha.sorafs.topology.control.v1\0", &record).unwrap()
         };
         let mut world = locally_consistent_history(
             TopologyHeadV1 {
@@ -1154,9 +1144,7 @@ mod tests {
             third.context.execution = execution_at(4);
             root.history_head = TopologyHeadV1 {
                 revision: 3,
-                digest: rows
-                    .digest(b"iroha.sorafs.topology.history.v1\0", &third)
-                    .unwrap(),
+                digest: topology_digest(b"iroha.sorafs.topology.history.v1\0", &third).unwrap(),
             };
             root.last_execution = Some(third.context.execution.clone());
             (

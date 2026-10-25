@@ -80,6 +80,10 @@ pub trait LaneTransactions: Send + Sync {
     ///
     /// Returns a selection error when candidate routing or source access cannot
     /// complete, including future-only work that requires the clock to advance.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     fn candidates(
         &self,
         height: u64,
@@ -97,6 +101,10 @@ pub trait LaneTransactions: Send + Sync {
     /// # Errors
     /// Returns the original publication refusal when source access or admission cannot
     /// complete; the caller retains the same selected source for a later retry.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     fn lease_is_current(
         &self,
         lease: &Self::Lease,
@@ -282,18 +290,16 @@ impl<A: AnchorSource, C: TransactionCheck + Send, T: LaneTransactions> LaneExecu
     /// # Errors
     /// A stored block that is missing or whose payload is not a lane batch.
     pub fn begin_recover(
-        record: SumeragiLaneRecord,
-        config: HeightConfig,
-        instance: Hash32,
-        anchors: Arc<A>,
-        checks: C,
-        transactions: Option<Arc<T>>,
+        configured_instance: (SumeragiLaneRecord, HeightConfig, Hash32),
+        services: (Arc<A>, C, Option<Arc<T>>),
         genesis_hash: Hash32,
         store: Arc<dyn BlockStore>,
         crypto: SharedCrypto,
         budget: AllocationBudget,
         time_source: iroha_primitives::time::TimeSource,
     ) -> LaneRecovery<A, C, T> {
+        let (record, config, instance) = configured_instance;
+        let (anchors, checks, transactions) = services;
         let tip = store.height();
         let next = tip
             .saturating_sub(LANE_DEDUP_WINDOW as u64)
@@ -302,7 +308,7 @@ impl<A: AnchorSource, C: TransactionCheck + Send, T: LaneTransactions> LaneExecu
         let genesis_result = super::lane_genesis_result(&record);
         LaneRecovery {
             executor: Self {
-                anchor_wait: Duration::from_millis(config.params.e_max.into()),
+                anchor_wait: Duration::from_millis(config.params.e_max),
                 record,
                 config,
                 crypto: Arc::clone(&crypto),
@@ -332,12 +338,20 @@ impl<A: AnchorSource, C: TransactionCheck + Send, T: LaneTransactions> LaneExecu
         }
     }
 
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     fn finish_payload(&mut self) -> Result<Option<PayloadBytes>, PublicationError> {
         self.finish_payload_with_encoder(|batch, mut writer| {
             norito::codec::encode_adaptive_into(batch, &mut writer).map(|_| ())
         })
     }
 
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     fn finish_built_payload(&mut self) -> Result<Option<BuiltPayload>, PublicationError> {
         let Some(payload) = self.finish_payload()? else {
             return Ok(None);
@@ -376,6 +390,10 @@ impl<A: AnchorSource, C: TransactionCheck + Send, T: LaneTransactions> LaneExecu
         Ok(Some(BuiltPayload { payload, admission }))
     }
 
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     fn proposal_batch_time(&self, batch: &LaneBatch) -> Result<Duration, PublicationError> {
         match self.anchors.applied_hash(batch.anchor_height) {
             Some(hash) if hash == batch.anchor_hash => {}
@@ -401,6 +419,10 @@ impl<A: AnchorSource, C: TransactionCheck + Send, T: LaneTransactions> LaneExecu
         Ok(batch.effective_time(time))
     }
 
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     fn recover_original_proposal_admission(
         &mut self,
         body: &AvailableBody,
@@ -479,6 +501,10 @@ impl<A: AnchorSource, C: TransactionCheck + Send, T: LaneTransactions> LaneExecu
         Ok(admission)
     }
 
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     fn retained_payload_is_current(&self) -> Result<bool, PublicationError> {
         if cfg!(all(test, sumeragi_core_mutation = "HC327")) {
             return Ok(true);
@@ -491,6 +517,10 @@ impl<A: AnchorSource, C: TransactionCheck + Send, T: LaneTransactions> LaneExecu
         }
     }
 
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     fn finish_payload_with_encoder(
         &mut self,
         encode: impl FnOnce(&LaneBatch, &mut dyn io::Write) -> Result<(), norito::Error>,
@@ -581,7 +611,7 @@ impl<A: AnchorSource, C: TransactionCheck + Send, T: LaneTransactions> LaneExecu
         &mut self,
         block: &AvailableBody,
         block_hash: &Hash32,
-        parent: ChainState,
+        parent: &ChainState,
         certified: bool,
     ) -> Result<ExecOutcome, AdmissionAttemptError> {
         if !block.admitted_to(&self.budget)
@@ -748,7 +778,7 @@ impl<A: AnchorSource, C: TransactionCheck + Send, T: LaneTransactions> LaneRecov
     /// Continue the same startup owner, preserving every completed prefix and partial read.
     ///
     /// # Errors
-    /// Returns this exact job on temporary refusal or corrupt historical data. Only WouldBlock
+    /// Returns this exact job on temporary refusal or corrupt historical data. Only `WouldBlock`
     /// is retryable; the caller reports other errors instead of starting from an empty state.
     #[allow(
         clippy::result_large_err,
@@ -908,7 +938,7 @@ impl<A: AnchorSource, C: TransactionCheck + Send, T: LaneTransactions> Executor
         let Some(parent) = self.parent_state(block) else {
             return Ok(None);
         };
-        match self.run(block, block_hash, parent, certified) {
+        match self.run(block, block_hash, &parent, certified) {
             Ok(ExecOutcome::Failed(reason)) => Err(PublicationError::Retryable(reason)),
             Ok(outcome) => Ok(Some(outcome)),
             Err(AdmissionAttemptError::ResourceDeferred(original)) => {
@@ -963,7 +993,7 @@ impl<A: AnchorSource, C: TransactionCheck + Send, T: LaneTransactions> Executor
                 "the committed lane block's parent is not applied".into(),
             ));
         };
-        match self.run(block, &hash, parent, true) {
+        match self.run(block, &hash, &parent, true) {
             Ok(ExecOutcome::Valid { result, .. }) => {
                 Ok((result == commit_qc.result).then_some(result))
             }
@@ -1233,10 +1263,10 @@ mod tests {
             ))
         }
 
-        fn retain_prefix(&self, _: &mut Self::Lease, _: usize) {}
+        fn retain_prefix(&self, (): &mut Self::Lease, _: usize) {}
         fn lease_is_current(
             &self,
-            _: &Self::Lease,
+            (): &Self::Lease,
             _: &iroha_allocation::AllocationBudget,
         ) -> Result<bool, crate::sumeragi::driver::traits::PublicationError> {
             Ok(true)
@@ -1422,12 +1452,8 @@ mod tests {
         let record = record();
         let config = lane_height_config(&record).expect("config");
         LaneExecutor::begin_recover(
-            record,
-            config,
-            Hash32([1; 32]),
-            Arc::clone(global),
-            Accept,
-            queue,
+            (record, config, Hash32([1; 32])),
+            (Arc::clone(global), Accept, queue),
             Hash32::ZERO,
             Arc::new(NoStore),
             Arc::new(BlsCrypto::new()),
@@ -1615,10 +1641,10 @@ mod tests {
                 }
             }
 
-            fn retain_prefix(&self, _: &mut Self::Lease, _: usize) {}
+            fn retain_prefix(&self, (): &mut Self::Lease, _: usize) {}
             fn lease_is_current(
                 &self,
-                _: &Self::Lease,
+                (): &Self::Lease,
                 _: &iroha_allocation::AllocationBudget,
             ) -> Result<bool, crate::sumeragi::driver::traits::PublicationError> {
                 Ok(true)
@@ -1817,10 +1843,10 @@ mod tests {
             Ok((selected, ()))
         }
 
-        fn retain_prefix(&self, _: &mut Self::Lease, _: usize) {}
+        fn retain_prefix(&self, (): &mut Self::Lease, _: usize) {}
         fn lease_is_current(
             &self,
-            _: &Self::Lease,
+            (): &Self::Lease,
             _: &iroha_allocation::AllocationBudget,
         ) -> Result<bool, crate::sumeragi::driver::traits::PublicationError> {
             Ok(true)
@@ -1909,10 +1935,10 @@ mod tests {
             ))
         }
 
-        fn retain_prefix(&self, _: &mut Self::Lease, _: usize) {}
+        fn retain_prefix(&self, (): &mut Self::Lease, _: usize) {}
         fn lease_is_current(
             &self,
-            _: &Self::Lease,
+            (): &Self::Lease,
             _: &iroha_allocation::AllocationBudget,
         ) -> Result<bool, crate::sumeragi::driver::traits::PublicationError> {
             Ok(true)

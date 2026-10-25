@@ -5,7 +5,7 @@ use concread::bptree::{BptreeMapPreparedCommit, OwnedWriteError};
 
 /// Exact original successor and both physical publication locks.
 /// Field order releases locks before notification or caller installation custody.
-pub(crate) struct PreparedBlockHashes<'target, Installation> {
+pub struct PreparedBlockHashes<'target, Installation> {
     owner: NativeLaneStateOwner,
     prepared: iroha_allocation::release::ReleaseGuard<
         'target,
@@ -19,7 +19,7 @@ pub(crate) struct PreparedBlockHashes<'target, Installation> {
     preflight_release: Option<iroha_allocation::release::DeferredRelease>,
 }
 /// Original abort notifications and resources after the hash writer unlocks.
-pub(crate) struct AbortedBlockHashes<Installation> {
+pub struct AbortedBlockHashes<Installation> {
     _owner: NativeLaneStateOwner,
     _release: [iroha_allocation::release::DeferredRelease; 2],
     _installation: Installation,
@@ -45,6 +45,10 @@ fn refusal<E>(
 impl DetachedBlockHashes {
     /// Standalone fixture adapter to the same caller-owned preparation kernel.
     /// Aggregate production callers retain the slot before invoking admission.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Refusal returns the original retained owner without an additional fallible error allocation"
+    )]
     pub(crate) fn try_prepare_publication<Installation, E>(
         self,
         target: &BlockHashes,
@@ -120,9 +124,10 @@ impl<'target, Installation> PreparedBlockHashes<'target, Installation> {
             preflight_release,
             ..
         } = self;
-        let published = prepared.map_preserving_release(|prepared| prepared.publish());
+        let published =
+            prepared.map_preserving_release(concread::bptree::BptreeMapPreparedCommit::publish);
         committed_height.store(height, Ordering::Release);
-        let retirement = published.release_retaining(|published| published.release());
+        let retirement = published.release_retaining(concread::bptree::BptreeMapPublished::release);
         PublishedBlockHashes {
             _retirement: retirement,
             _installation: installation,
@@ -131,7 +136,7 @@ impl<'target, Installation> PreparedBlockHashes<'target, Installation> {
     }
 }
 /// Released tree cleanup and wake custody. Drop after other publication fences.
-pub(crate) struct PublishedBlockHashes<'a, Installation> {
+pub struct PublishedBlockHashes<'a, Installation> {
     _retirement: iroha_allocation::release::ReleaseGuard<
         'a,
         concread::bptree::BptreeMapCommitRetirement<usize, HashOf<BlockHeader>, BlockHashMode>,

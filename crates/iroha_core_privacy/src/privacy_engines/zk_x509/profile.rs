@@ -202,7 +202,7 @@ pub(crate) const ZK_X509_FRI_BLOWUP_FACTOR_V1: u8 = 8;
 /// the shared blow-up is eight (log three), so every MAIN prover, verifier,
 /// fixed schedule, and resource calculation uses log 22.
 pub(crate) const ZK_X509_MAIN_COMMON_LDE_LOG2_V1: u8 =
-    ZK_X509_MAX_NATIVE_TRACE_LOG2_V1 + ZK_X509_FRI_BLOWUP_FACTOR_V1.ilog2() as u8;
+    ZK_X509_MAX_NATIVE_TRACE_LOG2_V1 + ZK_X509_FRI_BLOWUP_FACTOR_V1.ilog2().to_le_bytes()[0];
 /// Number of independent Fiat-Shamir query positions.
 pub(crate) const ZK_X509_FRI_QUERY_COUNT_V1: u8 = 136;
 /// Number of independently mixed composition lanes.
@@ -504,6 +504,10 @@ pub const fn zk_x509_native_release_expectation_digests_match_v1(
 }
 /// Closed checklist that must be true before activation can be compiled.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each independent readiness requirement must be checked before activation"
+)]
 pub(crate) struct ZkX509ReadinessV1 {
     /// Strict DER parser and RFC 5280 state machine are constrained.
     pub(crate) der_and_rfc5280_air: bool,
@@ -746,8 +750,9 @@ pub(crate) fn validate_profile_v1() -> Result<(), ZkX509ProfileErrorV1> {
     .map_err(|_| ZkX509ProfileErrorV1::InvalidStarkParameters)?;
     let main_fri = validate_fri_subproof_v1(
         ZK_X509_MAX_NATIVE_TRACE_LOG2_V1,
-        ZK_X509_FRI_BLOWUP_FACTOR_V1.ilog2() as u8,
-        ZK_X509_FRI_FINAL_POLYNOMIAL_LENGTH_V1.ilog2() as u8,
+        ZK_X509_FRI_BLOWUP_FACTOR_V1.ilog2().to_le_bytes()[0],
+        u8::try_from(ZK_X509_FRI_FINAL_POLYNOMIAL_LENGTH_V1.ilog2())
+            .expect("fixed profile value fits u8"),
         ZK_X509_FRI_TERMINAL_DEGREE_BOUND_V1,
         ZK_X509_FRI_ROUNDS_V1,
         ZK_X509_COMPOSITION_DEGREE_CHUNKS_V1,
@@ -781,7 +786,7 @@ pub(crate) fn validate_profile_v1() -> Result<(), ZkX509ProfileErrorV1> {
         || usize::from(ZK_X509_LDE_COLUMN_BATCH_V1)
             != super::super::aggregate_stark::MASKED_TRACE_LDE_COLUMN_BATCH_V1
         || ZK_X509_LDE_COLUMN_BATCH_V1 > ZK_X509_PHYSICAL_COMMITMENT_CHUNK_COLUMNS_V1
-        || ZK_X509_PHYSICAL_COMMITMENT_CHUNK_COLUMNS_V1 % ZK_X509_LDE_COLUMN_BATCH_V1 != 0
+        || !ZK_X509_PHYSICAL_COMMITMENT_CHUNK_COLUMNS_V1.is_multiple_of(ZK_X509_LDE_COLUMN_BATCH_V1)
         || streaming_lde_batch_bytes > ZK_X509_PROVER_PEAK_MEMORY_BYTES_V1
         || ZK_X509_PROVER_ADDRESS_SPACE_CEILING_BYTES_V1 < ZK_X509_PROVER_PEAK_MEMORY_BYTES_V1
         || ZK_X509_PROVER_TARGET_SECONDS_V1 == 0
@@ -840,7 +845,10 @@ pub(crate) fn validate_profile_v1() -> Result<(), ZkX509ProfileErrorV1> {
             .and_then(|bytes| bytes.checked_add(ZK_X509_MAIN_FRAME_BYTES_V1))
             .and_then(|bytes| {
                 bytes.checked_add(
-                    super::credential_stark::ZK_X509_CREDENTIAL_ENVELOPE_FRAMING_BYTES_V1 as u32,
+                    u32::try_from(
+                        super::credential_stark::ZK_X509_CREDENTIAL_ENVELOPE_FRAMING_BYTES_V1,
+                    )
+                    .expect("fixed profile value fits u32"),
                 )
             })
             != Some(ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1)

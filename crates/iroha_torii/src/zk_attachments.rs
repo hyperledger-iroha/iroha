@@ -553,10 +553,10 @@ fn ensure_dirs(tenant: &AttachmentTenant) -> std::io::Result<()> {
     ensure_direct_directory(&attachments_dir(tenant))
 }
 fn meta_path(tenant: &AttachmentTenant, id: &str) -> PathBuf {
-    attachments_dir(tenant).join(format!("{}.json", id))
+    attachments_dir(tenant).join(format!("{id}.json"))
 }
 fn bin_path(tenant: &AttachmentTenant, id: &str) -> PathBuf {
-    attachments_dir(tenant).join(format!("{}.bin", id))
+    attachments_dir(tenant).join(format!("{id}.bin"))
 }
 fn attachment_mutation_transaction_dir() -> PathBuf {
     base_dir().join(ATTACHMENT_MUTATION_TRANSACTION_DIR)
@@ -3683,7 +3683,7 @@ async fn handle_post_attachment_inner(
         .and_then(normalize_mime);
     let sanitize_start = Instant::now();
     let sanitize_result = sanitize_attachment(declared_type.clone(), body.clone(), admission).await;
-    let sanitize_ms = sanitize_start.elapsed().as_millis() as u64;
+    let sanitize_ms = u64::try_from(sanitize_start.elapsed().as_millis()).unwrap_or(u64::MAX);
     let telemetry = telemetry_handle();
     telemetry.with_metrics(|tel| tel.observe_torii_attachment_sanitize_ms(sanitize_ms));
     let sanitized = match sanitize_result {
@@ -3732,10 +3732,7 @@ async fn handle_post_attachment_inner(
         );
         return (
             StatusCode::PAYLOAD_TOO_LARGE,
-            format!(
-                "attachment exceeds per-tenant max bytes (>{} bytes)",
-                per_tenant_max_bytes
-            ),
+            format!("attachment exceeds per-tenant max bytes (>{per_tenant_max_bytes} bytes)"),
         )
             .into_response();
     }
@@ -4005,9 +4002,9 @@ pub struct AttachmentListQuery {
     pub id: Option<String>,
     /// Substring match on content type (case-sensitive).
     pub content_type: Option<String>,
-    /// Return only attachments with created_ms >= since_ms
+    /// Return only attachments with `created_ms` >= `since_ms`
     pub since_ms: Option<u64>,
-    /// Return only attachments with created_ms <= before_ms
+    /// Return only attachments with `created_ms` <= `before_ms`
     pub before_ms: Option<u64>,
     /// Require a ZK1 tag to be present (e.g., "PROF").
     pub has_tag: Option<String>,
@@ -4015,12 +4012,16 @@ pub struct AttachmentListQuery {
     pub limit: Option<u32>,
     /// Result offset (applied after sort)
     pub offset: Option<u32>,
-    /// Sort order: asc|desc (by created_ms)
+    /// Sort order: asc|desc (by `created_ms`)
     pub order: Option<String>,
     /// If true, return only ids (array of strings)
     pub ids_only: Option<bool>,
 }
 /// GET /v1/zk/attachments with filters
+#[expect(
+    clippy::unused_async,
+    reason = "HTTP handlers retain a Future interface for route registration and shared async callers"
+)]
 pub async fn handle_list_attachments_filtered(
     tenant: AttachmentTenant,
     NoritoQuery(q): NoritoQuery<AttachmentListQuery>,
@@ -4082,21 +4083,21 @@ pub async fn handle_list_attachments_filtered(
                     .into_response();
             }
         };
-        if let Some(ct) = q.content_type.as_deref() {
-            if !meta.content_type.contains(ct) {
-                continue;
-            }
-        }
-        if !q.since_ms.map_or(true, |since| meta.created_ms >= since) {
+        if let Some(ct) = q.content_type.as_deref()
+            && !meta.content_type.contains(ct)
+        {
             continue;
         }
-        if !q.before_ms.map_or(true, |before| meta.created_ms <= before) {
+        if q.since_ms.is_some_and(|since| meta.created_ms < since) {
             continue;
         }
-        if let Some(tag) = q.has_tag.as_deref() {
-            if !attachment_meta_has_tag(&meta, tag) {
-                continue;
-            }
+        if q.before_ms.is_some_and(|before| meta.created_ms > before) {
+            continue;
+        }
+        if let Some(tag) = q.has_tag.as_deref()
+            && !attachment_meta_has_tag(&meta, tag)
+        {
+            continue;
         }
         metas.push(meta);
     }
@@ -4133,6 +4134,10 @@ pub async fn handle_list_attachments_filtered(
         .unwrap()
 }
 /// GET /v1/zk/attachments/count — return number of attachments matching filters
+#[expect(
+    clippy::unused_async,
+    reason = "HTTP handlers retain a Future interface for route registration and shared async callers"
+)]
 pub async fn handle_count_attachments(
     tenant: AttachmentTenant,
     NoritoQuery(q): NoritoQuery<AttachmentListQuery>,
@@ -4194,21 +4199,21 @@ pub async fn handle_count_attachments(
                     .into_response();
             }
         };
-        if let Some(ct) = q.content_type.as_deref() {
-            if !meta.content_type.contains(ct) {
-                continue;
-            }
-        }
-        if !q.since_ms.map_or(true, |since| meta.created_ms >= since) {
+        if let Some(ct) = q.content_type.as_deref()
+            && !meta.content_type.contains(ct)
+        {
             continue;
         }
-        if !q.before_ms.map_or(true, |before| meta.created_ms <= before) {
+        if q.since_ms.is_some_and(|since| meta.created_ms < since) {
             continue;
         }
-        if let Some(tag) = q.has_tag.as_deref() {
-            if !attachment_meta_has_tag(&meta, tag) {
-                continue;
-            }
+        if q.before_ms.is_some_and(|before| meta.created_ms > before) {
+            continue;
+        }
+        if let Some(tag) = q.has_tag.as_deref()
+            && !attachment_meta_has_tag(&meta, tag)
+        {
+            continue;
         }
         count = count.saturating_add(1);
     }
@@ -4232,7 +4237,7 @@ fn attachment_meta_has_tag(meta: &AttachmentMeta, tag: &str) -> bool {
 fn needs_export_sanitization(meta: &AttachmentMeta) -> bool {
     meta.provenance
         .as_ref()
-        .map_or(true, |prov| prov.sanitizer.archive_depth > 0)
+        .is_none_or(|prov| prov.sanitizer.archive_depth > 0)
 }
 /// GET /v1/zk/attachments/{id} — return the stored attachment bytes.
 pub async fn handle_get_attachment(
@@ -4843,7 +4848,7 @@ fn decode_sanitizer_request_bytes(payload: &[u8]) -> Result<SanitizerRequest, Sa
     })
 }
 fn sanitizer_cpu_limit_secs(timeout: Duration) -> u64 {
-    let millis = timeout.as_millis().max(1) as u64;
+    let millis = u64::try_from(timeout.as_millis().max(1)).unwrap_or(u64::MAX);
     (millis.saturating_add(999) / 1000).max(1)
 }
 fn sanitizer_memory_limit_bytes(max_expanded_bytes: u64) -> u64 {

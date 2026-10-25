@@ -462,6 +462,10 @@ pub(super) enum AnchorWriteV1 {
 
 /// Mutable state of the fake platform.
 #[derive(Debug, Clone)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Independent simulator fault switches compose across custody failure scenarios."
+)]
 pub(super) struct FakeStateV1 {
     /// Payment keys by slot.
     pub(super) keys: BTreeMap<KagemushaWalletSlotIdV1, SigningKey>,
@@ -551,7 +555,7 @@ pub(super) struct FakeStateV1 {
 /// Fake platform: software P-256 keys with randomized signatures, an in-memory keychain and
 /// injectable unavailability. Clones share state; [`Self::fork`] copies it.
 #[derive(Debug, Clone)]
-pub(crate) struct FakePlatformV1 {
+pub struct FakePlatformV1 {
     state: Arc<Mutex<FakeStateV1>>,
 }
 
@@ -677,10 +681,11 @@ impl FakePlatformV1 {
         slot: &KagemushaWalletSlotIdV1,
         domain: iroha_data_model::kagemusha::KagemushaWalletSigningDomainV1,
     ) {
+        use iroha_data_model::kagemusha::KagemushaWalletSigningDomainV1 as Domain;
+
         let Some(fs) = state.guard.as_ref() else {
             return;
         };
-        use iroha_data_model::kagemusha::KagemushaWalletSigningDomainV1 as Domain;
         let expected = match domain {
             Domain::Receipt => super::KagemushaWalletMarkerPhaseV1::Selected,
             Domain::LedgerControl => super::KagemushaWalletMarkerPhaseV1::Terminal,
@@ -971,26 +976,21 @@ impl FakePlatformV1 {
             }
             let key = signing_key(state.next_key_seed);
             let public = public_key(&key);
-            match state.generate_unavailable {
-                Some(created) => {
-                    if created {
-                        state.keys.insert(*slot, key);
-                    }
-                    KagemushaWalletKeyGenerationV1::Unavailable(KagemushaWalletUnavailableV1::Io(5))
-                }
-                None => {
+            if let Some(created) = state.generate_unavailable {
+                if created {
                     state.keys.insert(*slot, key);
-                    state.generation_originals.insert(*slot, (*request, public));
-                    if state.lock_after_generation {
-                        state.storage = Err(KagemushaWalletUnavailableV1::Locked);
-                    }
-                    if state.generation_readback_unavailable {
-                        KagemushaWalletKeyGenerationV1::Unavailable(
-                            KagemushaWalletUnavailableV1::Busy,
-                        )
-                    } else {
-                        KagemushaWalletKeyGenerationV1::Generated(public)
-                    }
+                }
+                KagemushaWalletKeyGenerationV1::Unavailable(KagemushaWalletUnavailableV1::Io(5))
+            } else {
+                state.keys.insert(*slot, key);
+                state.generation_originals.insert(*slot, (*request, public));
+                if state.lock_after_generation {
+                    state.storage = Err(KagemushaWalletUnavailableV1::Locked);
+                }
+                if state.generation_readback_unavailable {
+                    KagemushaWalletKeyGenerationV1::Unavailable(KagemushaWalletUnavailableV1::Busy)
+                } else {
+                    KagemushaWalletKeyGenerationV1::Generated(public)
                 }
             }
         })
@@ -1325,7 +1325,7 @@ pub(super) fn bootstrapped_device(
 /// Provider over any filesystem `fs` (the simulator or a real root) after enrollment and
 /// Bootstrap of fixture `seed`, with its fake platform, slot and Bootstrap capsule. Storage
 /// measurements of the state owner use it; the platform has no simulator signing guard.
-pub(crate) fn bootstrapped_provider<F: super::KagemushaWalletFsV1>(
+pub fn bootstrapped_provider<F: super::KagemushaWalletFsV1>(
     fs: F,
     policy: KagemushaWalletAnchorPolicyV1,
     seed: u8,

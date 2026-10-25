@@ -129,7 +129,11 @@ test("staking transport rejects wrong media, missing binding, cancellation and u
 // the eventual response without relying on a cooperative callback.
 test("staking preparation original deadline cancels a slow body after late headers", { timeout: 2000 }, async (t) => {
   const f = fixture();
-  t.mock.timers.enable({ apis: ["setTimeout"] });
+  // Warm the optional module before measuring only dispatch and body timing.
+  await client(f, async () => response(f.responseBytes)).preparePublicLanePlan(f.request, f.xor);
+  // Keep native request preparation outside the real clock so a busy host cannot
+  // turn this body-deadline control into the separate late-header disposal case.
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 1_800_000_000_000 });
   // The client captures its deadline timer at module evaluation. Give this
   // regression its own module instance so every deadline uses the same clock.
   const { ToriiClient: ClockedToriiClient, LocalSigningContext: ClockedLocalSigningContext } =

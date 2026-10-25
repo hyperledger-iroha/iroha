@@ -9,10 +9,11 @@ fn selected_class(
     let mut selected = None;
     for (index, class) in classes.iter().enumerate() {
         if class.own.contains(&route.own)
-            && match route.incoming {
-                Some(incoming) => class.incoming.contains(&incoming),
-                None => class.incoming.is_empty(),
-            }
+            && route
+                .incoming
+                .map_or(class.incoming.is_empty(), |incoming| {
+                    class.incoming.contains(&incoming)
+                })
             && selected.replace(index).is_some()
         {
             return Err(CompilationErrorV1::Closure);
@@ -71,10 +72,11 @@ impl OfflineCompilerV1<'_> {
                 .filter(|(_, (variant, class))| {
                     *variant == route.variant
                         && class.own.contains(&route.own)
-                        && match route.incoming {
-                            Some(incoming) => class.incoming.contains(&incoming),
-                            None => class.incoming.is_empty(),
-                        }
+                        && route
+                            .incoming
+                            .map_or(class.incoming.is_empty(), |incoming| {
+                                class.incoming.contains(&incoming)
+                            })
                 })
                 .map(|(index, _)| index)
                 .collect();

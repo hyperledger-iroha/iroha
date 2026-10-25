@@ -241,7 +241,7 @@ fn fund(setup: &mut ExecutedKagemushaSetup, input: &Inputs) {
             .committed(4)
             .block()
             .external_transactions()
-            .map(|transaction| transaction.hash_as_entrypoint())
+            .map(iroha_data_model::transaction::SignedTransaction::hash_as_entrypoint)
             .collect::<Vec<_>>(),
         expected_order
     );

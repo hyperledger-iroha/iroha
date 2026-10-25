@@ -1,7 +1,7 @@
 //! Immutable original-pool custody of SCCP pause, panel and endorsement State graphs.
 //!
 //! Ordinary MV versions clone only the charged shared owner. Snapshot DTOs and new effects
-//! require exact admission of every backing, nested AccountId allocation, ledger and shell.
+//! require exact admission of every backing, nested `AccountId` allocation, ledger and shell.
 //! No BTreeMap/BTreeSet node is created for these payloads: canonical ordered buffers project
 //! the same wire layout. The enclosing State map/cell owners retain their existing accounting.
 
@@ -45,6 +45,7 @@ pub enum PauseRecordError {
 }
 
 #[derive(Default)]
+#[derive(Clone, Copy)]
 struct Demand {
     bytes: usize,
     charges: usize,
@@ -329,7 +330,7 @@ pub struct PausePanelBody {
     pub(crate) backup_id: [u8; 32],
 }
 
-/// Original funded panel graph. Canonical accepted ordering matches the Model BTreeSet.
+/// Original funded panel graph. Canonical accepted ordering matches the Model `BTreeSet`.
 #[derive(Clone)]
 pub struct RetainedSccpPausePanel(ChargedShared<RetainedPayload<PausePanelBody>>);
 
@@ -383,7 +384,7 @@ impl RetainedSccpPausePanel {
     }
 }
 
-/// Immutable endorsement entries, sorted by the canonical AccountId order.
+/// Immutable endorsement entries, sorted by the canonical `AccountId` order.
 #[derive(Debug, PartialEq, Eq)]
 pub struct FastPauseRoundBody {
     pub(crate) panel_id: [u8; 32],

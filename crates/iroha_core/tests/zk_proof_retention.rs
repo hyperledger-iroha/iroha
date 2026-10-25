@@ -1,8 +1,9 @@
 #![doc = "Ensure proof registry retention cap is enforced per backend."]
 #![cfg(feature = "zk-tests")]
 //! Ensure proof registry retention cap is enforced per backend.
-#[path = "common/zk_components.rs"]
-mod zk_components;
+use crate::root_scope_fixture;
+use crate::test_world;
+use crate::zk_components;
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
@@ -13,11 +14,7 @@ use iroha_data_model::prelude::*;
 use iroha_test_samples::ALICE_ID;
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
-#[path = "common/root_scope_fixture.rs"]
-mod root_scope_fixture;
 use zk_components::execute_isi_component;
-#[path = "common/world_fixture.rs"]
-mod test_world;
 fn native_pipa_r_vk_record(
     circuit_id: String,
     vk_box: iroha_data_model::proof::VerifyingKeyBox,
@@ -31,7 +28,7 @@ fn native_pipa_r_vk_record(
         iroha_crypto::Hash::new(public_inputs).into(),
         iroha_core_zk::hash_vk(&vk_box),
     );
-    record.vk_len = vk_box.bytes.len() as u32;
+    record.vk_len = u32::try_from(vk_box.bytes.len()).expect("fixture length fits u32");
     record.status = iroha_data_model::confidential::ConfidentialStatus::Active;
     record.key = Some(vk_box);
     record.gas_schedule_id = Some("native_pipa_r_default".into());
@@ -105,11 +102,11 @@ fn proof_records_pruned_to_cap_per_backend() {
             record: vk_record,
         }
         .into();
-        execute_isi_component(&mut stx, &ALICE_ID.clone(), reg_vk).expect("register vk");
+        execute_isi_component(&mut stx, &ALICE_ID.clone(), &(reg_vk)).expect("register vk");
         let attachment =
             iroha_data_model::proof::ProofAttachment::new_ref(backend.clone(), proof_box, vk_id);
         let verify: InstructionBox = iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
-        execute_isi_component(&mut stx, &ALICE_ID.clone(), verify).expect("verify proof");
+        execute_isi_component(&mut stx, &ALICE_ID.clone(), &(verify)).expect("verify proof");
         stx.apply();
     }
     block
@@ -206,7 +203,7 @@ fn manual_prune_instruction_applies_new_cap() {
     let mut stx = prune_block.transaction();
     let prune: InstructionBox =
         iroha_data_model::isi::zk::PruneProofs::new(Some(backend.clone())).into();
-    execute_isi_component(&mut stx, &ALICE_ID.clone(), prune).expect("prune proofs");
+    execute_isi_component(&mut stx, &ALICE_ID.clone(), &(prune)).expect("prune proofs");
     stx.apply();
     prune_block
         .commit_world_overlay_for_testing()

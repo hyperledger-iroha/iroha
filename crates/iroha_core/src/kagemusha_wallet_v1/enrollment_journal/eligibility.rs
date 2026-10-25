@@ -125,7 +125,9 @@ pub(super) fn validate_index(record: &Record) -> Result<()> {
             exchange.received_at_ms,
         )
         .map_err(|_| Invalid)?;
-        if refusal_of(response.body.decision).map(|refusal| refusal.code()) != Some(record.refusal)
+        if refusal_of(response.body.decision)
+            .map(iroha_data_model::kagemusha::KagemushaWalletEnrollmentRefusalV1::code)
+            != Some(record.refusal)
         {
             return Err(Invalid);
         }

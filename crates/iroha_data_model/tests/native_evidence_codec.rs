@@ -5,7 +5,7 @@ use iroha_data_model::block::consensus::{
     Evidence, EvidenceAttribution, EvidenceOffender, EvidencePenaltyStatus, EvidenceRecord,
     RecordedEvidenceV1,
 };
-use iroha_data_model::consensus::NposConsensusEffects;
+use iroha_data_model::consensus::{NposConsensusEffects, NposPenaltyActions};
 use iroha_model_base::peer::PeerId;
 use iroha_sumeragi::{
     message::{Evidence as NativeEvidence, MAX_EVIDENCE_FRAME_BYTES, Vote, VoteKind},
@@ -232,7 +232,7 @@ fn native_effects_require_parent_service_and_both_vectors_and_reject_retired_slo
         evidence_admissions: vec![
             Evidence::from_native(&native()).expect("original native admission"),
         ],
-        penalty_actions: Default::default(),
+        penalty_actions: NposPenaltyActions::default(),
     };
     assert!(!effects.is_empty());
     assert_eq!(

@@ -21,7 +21,7 @@ pub struct NativeExecutionTip(NativeExecutionTipRecord);
     Clone, Copy, Debug, PartialEq, Eq, norito::json::JsonSerialize, norito::json::JsonDeserialize,
 )]
 #[norito(deny_unknown_fields)]
-pub(crate) struct NativeExecutionTipRecord {
+pub struct NativeExecutionTipRecord {
     pub(crate) root_scope: iroha_data_model::block::consensus::SumeragiRootScope,
     pub(crate) height: u64,
     pub(crate) creation_time_ms: u64,
@@ -73,7 +73,7 @@ impl NativeExecutionTip {
 /// Complete fixed current/undo snapshot projection, still unauthenticated.
 #[derive(norito::json::JsonSerialize, norito::json::JsonDeserialize)]
 #[norito(deny_unknown_fields)]
-pub(crate) struct NativeExecutionTipSnapshot {
+pub struct NativeExecutionTipSnapshot {
     revert: Option<NativeExecutionTipUndo>,
     blocks: Option<NativeExecutionTipRecord>,
 }
@@ -85,7 +85,7 @@ struct NativeExecutionTipUndo {
     value: Option<NativeExecutionTipRecord>,
 }
 
-pub(crate) type TipCell = Cell<Option<NativeExecutionTip>, AllocationCharge>;
+pub type TipCell = Cell<Option<NativeExecutionTip>, AllocationCharge>;
 
 /// Reserve actual initial payload/control allocations before moving fixed values.
 pub(in crate::state) fn empty_cell(

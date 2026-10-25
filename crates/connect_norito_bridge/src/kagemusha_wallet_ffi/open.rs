@@ -63,9 +63,7 @@ impl<P: advance::KagemushaWalletPlatformV1 + 'static, S: OriginalSourceV1 + Send
             };
             // Authenticate before touching the retained owner. No provider, platform,
             // generation reply or outstanding vendor dispatch moves or is reconstructed.
-            runtime
-                .enrollment()?
-                .renew_session(session.config.clone())?;
+            runtime.enrollment()?.renew_session(&session.config)?;
             self.enrollment_session = Some(session);
             return Ok(Response {
                 kind: 39,
@@ -87,9 +85,7 @@ impl<P: advance::KagemushaWalletPlatformV1 + 'static, S: OriginalSourceV1 + Send
                     let Some(Phase::Ready(runtime)) = self.phase.as_mut() else {
                         return Err(Failure::code(CONFLICT));
                     };
-                    runtime
-                        .enrollment()?
-                        .renew_session(renewed.config.clone())?;
+                    runtime.enrollment()?.renew_session(&renewed.config)?;
                     self.enrollment_session = Some(renewed);
                 }
                 return Ok(Response {

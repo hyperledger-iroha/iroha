@@ -623,7 +623,7 @@ mod tests {
             alphas[index] = E::ONE;
             let inverse = z.sub(E::from_base(link.point)).inv().unwrap();
             let expected = slope(link.left)
-                .sub(link.right.map(&slope).unwrap_or(E::ZERO))
+                .sub(link.right.map_or(E::ZERO, &slope))
                 .mul(vanishing)
                 .mul(inverse);
             assert_eq!(
@@ -705,12 +705,9 @@ mod tests {
             base_plan.evaluate_base_v1(&base_groups, F(7), &alphas),
             Err(ZkX509StarkErrorV1::ConstraintOpening)
         );
-        for point in plan
-            .links
-            .iter()
-            .map(|link| link.point.0)
-            .collect::<std::collections::BTreeSet<_>>()
-        {
+        let mut points = std::collections::BTreeSet::new();
+        points.extend(plan.links.iter().map(|link| link.point.0));
+        for point in points {
             assert!(
                 plan.evaluate_with_v1(E::from_base(F(point)), &alphas, |_| Ok(E::ONE))
                     .is_err()

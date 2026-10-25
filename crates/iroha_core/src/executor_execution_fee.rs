@@ -8,7 +8,7 @@ use super::*;
 
 /// How the Nexus fee applies to one admitted signed body.
 #[derive(core::fmt::Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ExecutionFeeExemption {
+pub enum ExecutionFeeExemption {
     /// The ordinary fee applies whether the body succeeds or fails.
     Charged,
     /// No fee applies, whether the body succeeds or fails: the initial genesis bootstrap and
@@ -34,7 +34,7 @@ impl ExecutionFeeExemption {
 }
 
 /// Private meter for one admitted signed execution, never caller-supplied costs.
-pub(crate) struct ExecutionFeeMeter {
+pub struct ExecutionFeeMeter {
     source: iroha_crypto::HashOf<SignedTransaction>,
     proposal: iroha_crypto::HashOf<iroha_data_model::block::BlockHeader>,
     network: iroha_data_model::NetworkId,
@@ -56,12 +56,12 @@ struct ExecutionFeeWork {
 
 /// Consuming fee authority from an actual admitted and attempted signed body.
 /// It carries no business effects and cannot be cloned or built from a result.
-pub(crate) struct ExecutionFeeSettlement {
+pub struct ExecutionFeeSettlement {
     meter: ExecutionFeeMeter,
 }
 
 /// Distinguish a broken local owner from a legitimate fee-charge rejection.
-pub(crate) enum ExecutionFeeSettlementError {
+pub enum ExecutionFeeSettlementError {
     /// Retained authority cannot be applied to the supplied fresh overlay.
     Owner(String),
     /// The authenticated charge could not be applied; its overlay must roll back.
@@ -245,7 +245,7 @@ impl ExecutionFeeSettlement {
             state,
             transaction.authority(),
             transaction,
-            sponsor,
+            sponsor.as_ref(),
             meter.tx_bytes_len,
             work.instructions,
             work.gas,

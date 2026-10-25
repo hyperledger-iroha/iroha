@@ -221,7 +221,7 @@ impl core::fmt::Debug for ZkX509CaAccumulatorTraceV1 {
             .debug_struct("ZkX509CaAccumulatorTraceV1")
             .field("statement", &self.statement)
             .field("private_material", &"<redacted>")
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -264,7 +264,7 @@ impl ZkX509CaAccumulatorTraceV1 {
     /// Fixed native row count, including 8,088 canonical inactive rows.
     #[cfg(test)]
     pub(crate) const fn rows(&self) -> usize {
-        ZK_X509_CA_ACCUMULATOR_TRACE_ROWS_V1
+        self.rows.len()
     }
     /// Materialize one base row.
     pub(crate) fn base_row(
@@ -283,7 +283,7 @@ impl ZkX509CaAccumulatorTraceV1 {
     }
     /// Differentially rebuild and algebraically validate every row.
     pub(crate) fn validate(&self) -> Result<(), ZkX509AccumulatorAirErrorV1> {
-        let expected = compile_ca_accumulator_trace_v1(self.statement, self.witness)?;
+        let expected = compile_ca_accumulator_trace_v1(self.statement, &self.witness)?;
         if self != &expected {
             return Err(ZkX509AccumulatorAirErrorV1::Constraint);
         }
@@ -356,7 +356,7 @@ pub fn ca_accumulator_fixed_row_v1(
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub fn build_ca_accumulator_trace_v1(
     statement: ZkX509CaAccumulatorStatementV1,
-    witness: ZkX509CaAccumulatorWitnessV1,
+    witness: &ZkX509CaAccumulatorWitnessV1,
 ) -> Result<ZkX509CaAccumulatorTraceV1, ZkX509AccumulatorAirErrorV1> {
     let trace = compile_ca_accumulator_trace_v1(statement, witness)?;
     validate_ca_arithmetic_v1(&trace)?;
@@ -365,7 +365,7 @@ pub fn build_ca_accumulator_trace_v1(
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn compile_ca_accumulator_trace_v1(
     statement: ZkX509CaAccumulatorStatementV1,
-    witness: ZkX509CaAccumulatorWitnessV1,
+    witness: &ZkX509CaAccumulatorWitnessV1,
 ) -> Result<ZkX509CaAccumulatorTraceV1, ZkX509AccumulatorAirErrorV1> {
     if usize::from(witness.path.index) >= ZK_X509_CA_COMPACT_TREE_CAPACITY_V1 {
         return Err(ZkX509AccumulatorAirErrorV1::Index);
@@ -443,7 +443,7 @@ fn compile_ca_accumulator_trace_v1(
                 .checked_mul(256)
                 .and_then(|value| value.checked_add(u32::from(byte)))
                 .ok_or(ZkX509AccumulatorAirErrorV1::Resource)?
-        } else if message_offset % 4 == 0 {
+        } else if message_offset.is_multiple_of(4) {
             u32::from(byte)
         } else {
             word_acc
@@ -472,7 +472,7 @@ fn compile_ca_accumulator_trace_v1(
         .map_err(|_| ZkX509AccumulatorAirErrorV1::Topology)?;
     Ok(ZkX509CaAccumulatorTraceV1 {
         statement,
-        witness,
+        witness: *witness,
         rows,
         hash_witnesses,
     })
@@ -602,7 +602,7 @@ pub fn evaluate_ca_accumulator_base_constraints_v1(
     let same_word_to_next = F(u64::from(matches!(
         fixed.kind,
         ZkX509CaAccumulatorRowKindV1::RootSpkiByte(offset)
-            if (ZK_X509_CA_LEAF_SPKI_MESSAGE_OFFSET_V1 + usize::from(offset) + 1) % 4 != 0
+            if !(ZK_X509_CA_LEAF_SPKI_MESSAGE_OFFSET_V1 + usize::from(offset) + 1).is_multiple_of(4)
     )));
     let next_io_byte = next.map_or(F::ZERO, |next| next[CA_IO_BYTE]);
     let next_word_acc = next.map_or(F::ZERO, |next| next[CA_IO_WORD_ACC]);
@@ -713,7 +713,7 @@ mod tests {
     fn owned_ca_source_erasure_covers_drop_invalid_root_and_unwind() {
         use super::super::private_table::inspection;
         let (statement, witness) = fixture();
-        let original = build_ca_accumulator_trace_v1(statement, witness).unwrap();
+        let original = build_ca_accumulator_trace_v1(statement, &witness).unwrap();
         for mode in 0..3 {
             let trace = original.clone();
             let (result, observed) = inspection::observe_v1(|| {
@@ -740,7 +740,7 @@ mod tests {
         let mut wrong_root = statement;
         wrong_root.governed_root[0] ^= 1;
         let (result, observed) =
-            inspection::observe_v1(|| build_ca_accumulator_trace_v1(wrong_root, witness));
+            inspection::observe_v1(|| build_ca_accumulator_trace_v1(wrong_root, &witness));
         assert!(matches!(result, Err(ZkX509AccumulatorAirErrorV1::Root)));
         // Root comparison fails after all thirteen private path rows have been
         // written, before any final trace owner exists.
@@ -755,7 +755,7 @@ mod tests {
     #[test]
     fn compact_trace_is_exact_and_uses_only_thirteen_sha_calls() {
         let (statement, witness) = fixture();
-        let trace = build_ca_accumulator_trace_v1(statement, witness).expect("trace");
+        let trace = build_ca_accumulator_trace_v1(statement, &witness).expect("trace");
         trace.validate().expect("valid");
         assert_eq!(trace.rows(), 4_096);
         assert_eq!(trace.hash_witnesses.len(), 13);
@@ -773,7 +773,7 @@ mod tests {
             let message_offset = ZK_X509_CA_LEAF_SPKI_MESSAGE_OFFSET_V1 + offset;
             expected_word = if offset == 0 {
                 u32::from(ZK_X509_CA_LEAF_SPKI_PREFIX_BYTE_V1) * 256 + u32::from(byte)
-            } else if message_offset % 4 == 0 {
+            } else if message_offset.is_multiple_of(4) {
                 u32::from(byte)
             } else {
                 expected_word * 256 + u32::from(byte)
@@ -801,38 +801,38 @@ mod tests {
         let mut bad_index = witness;
         bad_index.path.index = 4_096;
         assert_eq!(
-            build_ca_accumulator_trace_v1(statement, bad_index),
+            build_ca_accumulator_trace_v1(statement, &bad_index),
             Err(ZkX509AccumulatorAirErrorV1::Index)
         );
         let mut bad_sibling = witness;
         bad_sibling.path.siblings[4][9] ^= 1;
         assert_eq!(
-            build_ca_accumulator_trace_v1(statement, bad_sibling),
+            build_ca_accumulator_trace_v1(statement, &bad_sibling),
             Err(ZkX509AccumulatorAirErrorV1::Root)
         );
         let mut swapped = witness;
         swapped.path.siblings.swap(2, 3);
         assert_eq!(
-            build_ca_accumulator_trace_v1(statement, swapped),
+            build_ca_accumulator_trace_v1(statement, &swapped),
             Err(ZkX509AccumulatorAirErrorV1::Root)
         );
         let mut bad_spki = witness;
         bad_spki.root_spki_der[17] ^= 1;
         assert_eq!(
-            build_ca_accumulator_trace_v1(statement, bad_spki),
+            build_ca_accumulator_trace_v1(statement, &bad_spki),
             Err(ZkX509AccumulatorAirErrorV1::Root)
         );
         let mut bad_root = statement;
         bad_root.governed_root[0] ^= 1;
         assert_eq!(
-            build_ca_accumulator_trace_v1(bad_root, witness),
+            build_ca_accumulator_trace_v1(bad_root, &witness),
             Err(ZkX509AccumulatorAirErrorV1::Root)
         );
     }
     #[test]
     fn every_base_cell_family_is_algebraically_live() {
         let (statement, witness) = fixture();
-        let trace = build_ca_accumulator_trace_v1(statement, witness).expect("trace");
+        let trace = build_ca_accumulator_trace_v1(statement, &witness).expect("trace");
         let root = byte_fields_v1(statement.governed_root);
         let mut rows = (0..ZK_X509_CA_ACCUMULATOR_TRACE_ROWS_V1)
             .map(|index| trace.base_row(index).expect("row"))
@@ -871,7 +871,7 @@ mod tests {
     #[test]
     fn root_spki_fields_are_independently_byte_range_constrained() {
         let (statement, witness) = fixture();
-        let trace = build_ca_accumulator_trace_v1(statement, witness).expect("trace");
+        let trace = build_ca_accumulator_trace_v1(statement, &witness).expect("trace");
         let root = byte_fields_v1(statement.governed_root);
         let row_index = ZK_X509_CA_ACCUMULATOR_IO_START_V1 + 17;
         let fixed = ca_accumulator_fixed_row_v1(row_index).expect("serialized byte");

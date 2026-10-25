@@ -30,7 +30,7 @@ fn original_source_rejects_raw_zero_definition_insertion() {
         let mut transaction = block.transaction();
         transaction
             .world
-            .insert_asset_definition_entry(id.clone(), definition);
+            .insert_asset_definition_entry(&(id.clone()), definition);
         transaction.apply();
         block.observe_quantity_block_journals();
         assert_eq!(

@@ -379,7 +379,10 @@ impl ProofManagedNoteStarkAdapterV1 for AluStepAdapter {
             policies: vec![[NoteCopyCellPolicyV1::Inactive; NOTE_COPY_WIDTH_V1]; TRACE_SIZE],
             sigma: (0..TRACE_SIZE)
                 .map(|row| {
-                    std::array::from_fn(|column| (row * NOTE_COPY_WIDTH_V1 + column + 1) as u32)
+                    std::array::from_fn(|column| {
+                        u32::try_from(row * NOTE_COPY_WIDTH_V1 + column + 1)
+                            .expect("bounded circuit index")
+                    })
                 })
                 .collect(),
         })
@@ -411,8 +414,7 @@ impl ProofManagedNoteStarkAdapterV1 for AluStepAdapter {
 
     fn profile_constraint_residues_v1(
         &self,
-        current: &[F],
-        _: &[F],
+        (current, _): (&[F], &[F]),
         _: &[F],
         _: &[F],
         fixed: &[F],

@@ -2407,7 +2407,8 @@ impl Builtin {
             | Self::ActivateContractInstance
             | Self::ZkVerifyBatch
             | Self::ZkVoteVerifyBallot
-            | Self::ZkVoteVerifyTally => S::new(&["bytes"], "()"),
+            | Self::ZkVoteVerifyTally
+            | Self::AssetLockExpire => S::new(&["bytes"], "()"),
             Self::StateHas | Self::VerifyProof => S::new(&["bytes"], "bool"),
             Self::StateLen | Self::StateCount | Self::BytesLen => S::new(&["bytes"], "int"),
             Self::VrfEpochSeed => S::new(&["int"], "Option<bytes>"),
@@ -2557,7 +2558,6 @@ impl Builtin {
             ),
             Self::AssetLockDrawdown => S::new(&["bytes", "quantity", "quantity"], "()"),
             Self::AssetLockCancel => S::new(&["bytes", "quantity"], "()"),
-            Self::AssetLockExpire => S::new(&["bytes"], "()"),
             Self::AssetUidHoldingQuote => S::new(
                 &["AssetDefinitionId", "AccountId", "quantity"],
                 "AssetUidHoldingQuote",

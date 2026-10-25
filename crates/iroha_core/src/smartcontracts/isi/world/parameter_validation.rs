@@ -20,13 +20,10 @@ pub(super) fn validate_ivm_heap_parameter(
     };
     if limit > iroha_data_model::parameter::system::IVM_HEAP_MAX_BYTES {
         return Err(InstructionExecutionError::InvalidParameter(
-            InvalidParameterError::SmartContract(
-                format!(
-                    "{name} exceeds the ABI V1 heap window: {limit} > {} bytes",
-                    iroha_data_model::parameter::system::IVM_HEAP_MAX_BYTES
-                )
-                .into(),
-            ),
+            InvalidParameterError::SmartContract(format!(
+                "{name} exceeds the ABI V1 heap window: {limit} > {} bytes",
+                iroha_data_model::parameter::system::IVM_HEAP_MAX_BYTES
+            )),
         ));
     }
     Ok(())

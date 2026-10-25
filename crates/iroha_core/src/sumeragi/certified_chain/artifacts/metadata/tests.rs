@@ -98,12 +98,14 @@ fn metadata_retains_exact_original_graph_through_moves_sharing_and_last_reader()
     assert_eq!(pool.reserved_bytes(), 0);
 }
 
-fn physical(error: CertificateReadError, layout: Layout) {
+fn physical(error: &CertificateReadError, layout: Layout) {
     assert!(
         matches!(error,
-        CertificateReadError::Admission(ByteAdmissionError::Buffer(ChargedBufferError::Allocator { requested_bytes }))
-        | CertificateReadError::Admission(ByteAdmissionError::ControlAllocation(iroha_allocation::PrepaidSharedError::Allocator { requested_bytes }))
-        if requested_bytes == layout.size()),
+        CertificateReadError::Admission(ByteAdmissionError::Buffer(ChargedBufferError::Allocator {
+requested_bytes }) |
+ByteAdmissionError::ControlAllocation(iroha_allocation::PrepaidSharedError::Allocator {
+requested_bytes }))
+        if *requested_bytes == layout.size()),
         "physical metadata failure never invents a capacity-release observation"
     );
 }
@@ -117,7 +119,7 @@ fn metadata_refuses_every_physical_layout_and_retires_partial_graphs() {
     for layout in header_layouts(&expected_header) {
         let (result, refused) = refuse_one_layout_during(layout, || header(&header_wire, &pool));
         assert!(refused, "the exact header allocation must be observed");
-        physical(result.unwrap_err(), layout);
+        physical(&result.unwrap_err(), layout);
         assert_eq!(pool.reserved_bytes(), 0);
         drop(header(&header_wire, &pool).unwrap());
         assert_eq!(pool.reserved_bytes(), 0);
@@ -125,7 +127,7 @@ fn metadata_refuses_every_physical_layout_and_retires_partial_graphs() {
     for layout in qc_layouts(&expected_qc) {
         let (result, refused) = refuse_one_layout_during(layout, || qc(&qc_wire, &pool));
         assert!(refused, "the exact quorum allocation must be observed");
-        physical(result.unwrap_err(), layout);
+        physical(&result.unwrap_err(), layout);
         assert_eq!(pool.reserved_bytes(), 0);
         drop(qc(&qc_wire, &pool).unwrap());
         assert_eq!(pool.reserved_bytes(), 0);
@@ -409,7 +411,7 @@ fn metadata_refuses_each_repeated_key_layout_and_unwinds_each_partial_prefix() {
     for index in 0..expected_header.skipped_leaders.len() {
         REFUSE_KEY.with(|selected| selected.set(Some(index)));
         physical(
-            header(&wire, &pool).unwrap_err(),
+            &header(&wire, &pool).unwrap_err(),
             Layout::array::<u8>(48).unwrap(),
         );
         assert_eq!(REFUSE_KEY.with(std::cell::Cell::get), None);
@@ -491,11 +493,11 @@ fn metadata_workspace_refuses_both_equal_layout_occurrences_and_refunds_original
     assert_eq!(layouts[0], layouts[1]);
     let pool = AllocationBudget::new(1 << 20);
     for is_header in [true, false] {
-        for occurrence in 0..2 {
+        for (occurrence, layout) in layouts.iter().copied().enumerate() {
             let mut observed = None;
             let successful = allocations_during(|| {
                 observed = Some(crate::test_allocations::refuse_layout_occurrence_during(
-                    layouts[occurrence],
+                    layout,
                     occurrence,
                     || {
                         if is_header {
@@ -515,7 +517,7 @@ fn metadata_workspace_refuses_both_equal_layout_occurrences_and_refunds_original
                 successful, occurrence,
                 "only preceding actual workspace controls were allocated"
             );
-            physical(result.unwrap_err(), layouts[occurrence]);
+            physical(&result.unwrap_err(), layout);
             assert_eq!(
                 pool.reserved_bytes(),
                 0,

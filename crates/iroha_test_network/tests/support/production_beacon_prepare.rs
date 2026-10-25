@@ -258,7 +258,7 @@ fn short_epoch_manifest(path: &Path) -> Result<()> {
         npos.evidence_horizon_blocks = super::epoch_retention::EPOCH_LENGTH;
         npos.slashing_delay_blocks = super::epoch_retention::EPOCH_LENGTH;
         npos.validate().map_err(|error| eyre!(error))?;
-        parameters.custom.insert(id, npos.into_custom_parameter());
+        parameters.custom.insert(npos.into_custom_parameter());
         *parameters_value = json::value::to_value(&parameters)?;
     }
     ensure!(

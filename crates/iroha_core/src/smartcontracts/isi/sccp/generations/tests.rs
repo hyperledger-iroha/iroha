@@ -736,7 +736,7 @@ fn current_generation_planning_rejects_before_start_and_after_recorded_end() {
         next_committee_root: ended.committee_root,
         successor_validity_ms: ended.validity_ms,
     });
-    install_generation(&mut stx, 2, ended.clone()).unwrap();
+    install_generation(&mut stx, 2, &(ended)).unwrap();
     let source = inputs(4, &peers, None);
     assert!(matches!(
         plan(&stx, &at(4, heartbeat + 1), Some(&source)),

@@ -21,13 +21,13 @@ pub use iroha_data_model::block::consensus::{Evidence, ExecKv, ExecWitness, Vali
 pub const PROTO_VERSION: u32 = iroha_data_model::sumeragi::PROTOCOL_VERSION as u32;
 /// Permissioned Sumeragi v1 handshake and signing-domain tag.
 pub const PERMISSIONED_TAG: &str = iroha_data_model::block::consensus::PERMISSIONED_TAG;
-/// NPoS Sumeragi v1 handshake and signing-domain tag.
+/// `NPoS` Sumeragi v1 handshake and signing-domain tag.
 pub const NPOS_TAG: &str = iroha_data_model::block::consensus::NPOS_TAG;
 use iroha_data_model::prelude::*;
 /// Compute the genesis-embedded consensus-parameters fingerprint.
 ///
 /// Mode, cadence, block bound, signed DA/Nexus context, and the
-/// genesis-selected NPoS election inputs are the complete canonical Norito
+/// genesis-selected `NPoS` election inputs are the complete canonical Norito
 /// projection for the first release.
 /// Native signed configuration reporting is derived by
 /// [`crate::sumeragi::node::consensus_configuration_fingerprint`].
@@ -47,7 +47,7 @@ pub fn compute_consensus_parameters_fingerprint(
 /// pass this carrier through the canonical fingerprint projection.
 ///
 /// # Errors
-/// Returns an error when NPoS mode lacks its signed election parameters.
+/// Returns an error when `NPoS` mode lacks its signed election parameters.
 pub fn consensus_genesis_params_from_parameters(
     mode: iroha_data_model::block::consensus::ConsensusMode,
     params: &iroha_data_model::parameter::Parameters,
@@ -173,7 +173,7 @@ mod tests {
         let display_name = iroha_model_base::chain::ChainId::from("shared-display-name");
         let chain = test_network_id("iroha:test:genesis-a");
         let fp = [9u8; 32];
-        let gate = HandshakeGate::local(chain.clone(), fp, PERMISSIONED_TAG);
+        let gate = HandshakeGate::local(chain, fp, PERMISSIONED_TAG);
         // OK path
         assert!(
             gate.validate_peer(&chain, PERMISSIONED_TAG, PROTO_VERSION, &fp)
@@ -216,8 +216,7 @@ mod tests {
             fp_permissioned, fp_npos,
             "fingerprints must differ across mode tags/domains"
         );
-        let gate_permissioned =
-            HandshakeGate::local(chain.clone(), fp_permissioned, PERMISSIONED_TAG);
+        let gate_permissioned = HandshakeGate::local(chain, fp_permissioned, PERMISSIONED_TAG);
         assert!(
             gate_permissioned
                 .validate_peer(&chain, PERMISSIONED_TAG, PROTO_VERSION, &fp_permissioned)
@@ -230,7 +229,7 @@ mod tests {
                 .is_err(),
             "permissioned gate should reject NPoS tag/fingerprint"
         );
-        let gate_npos = HandshakeGate::local(chain.clone(), fp_npos, NPOS_TAG);
+        let gate_npos = HandshakeGate::local(chain, fp_npos, NPOS_TAG);
         assert!(
             gate_npos
                 .validate_peer(&chain, NPOS_TAG, PROTO_VERSION, &fp_npos)
@@ -301,7 +300,7 @@ mod tests {
             .expect("baseline carrier must fingerprint");
         let f2 = compute_consensus_parameters_fingerprint(&p2)
             .expect("changed carrier must fingerprint");
-        let gate = HandshakeGate::local(chain.clone(), f1, PERMISSIONED_TAG);
+        let gate = HandshakeGate::local(chain, f1, PERMISSIONED_TAG);
         assert!(
             gate.validate_peer(&chain, PERMISSIONED_TAG, PROTO_VERSION, &f1)
                 .is_ok()

@@ -100,6 +100,10 @@ fn provisioning(
 
 // The fixture prepares explicit public output in the test's original pool. Local
 // failures are never turned into a successful rejection assertion.
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "This fixture consumes the secret provisioning owners and retires them after producing the credential."
+)]
 fn credential_fixture(
     network: NetworkId,
     handle: &str,

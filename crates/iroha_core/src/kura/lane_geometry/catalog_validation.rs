@@ -441,6 +441,13 @@ fn geometry_file_identity(metadata: &SecureMetadata) -> GeometryFileIdentity {
         }
     }
 }
+#[cfg_attr(
+    unix,
+    expect(
+        clippy::unnecessary_wraps,
+        reason = "Other platforms may refuse metadata without stable filesystem identity."
+    )
+)]
 fn checked_geometry_file_identity(
     metadata: &SecureMetadata,
     path: &Path,

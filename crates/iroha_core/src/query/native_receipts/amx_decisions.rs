@@ -5,6 +5,10 @@
 //! live until the funded Decision graph moves into its exact Settle instruction. Successful
 //! delivery may retain a Decision before Prepare; it is not proof of participant settlement.
 
+/// Test observer of the original instruction delivery.
+#[cfg(test)]
+type InstructionProbe<'a> = Box<dyn FnOnce(&InstructionBox) + 'a>;
+
 use iroha_allocation::{AllocationBudget, ChargedBuffer, ChargedBufferError};
 use iroha_data_model::{
     block::consensus::SumeragiRootScope,
@@ -38,6 +42,10 @@ pub enum NativeAmxDecisionRelayErrorV1 {
 
 /// Bounded source progress or the sole move-only Decision delivery.
 #[derive(Debug)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "The completed variant transfers the original funded relay or proof graph without an additional uncharged allocation"
+)]
 pub enum NativeAmxDecisionRelayPollV1 {
     /// The same original source or proof job made progress without delivering an instruction.
     Pending,
@@ -74,7 +82,7 @@ struct DecisionDelivery<'v, V: StateReadOnly> {
     absent: bool,
     complete: bool,
     #[cfg(test)]
-    instruction_probe: Option<Box<dyn FnOnce(&InstructionBox) + 'v>>,
+    instruction_probe: Option<InstructionProbe<'v>>,
 }
 
 /// Select the original Begin and Decision for one registered destination participant.
@@ -98,7 +106,11 @@ pub fn decision_amx_relay<V: StateReadOnly>(
             "Decision must follow its certified non-genesis Begin",
         ));
     }
-    if view.native_execution_tip().map(|tip| tip.root_scope()) != Some(SumeragiRootScope::Global) {
+    if view
+        .native_execution_tip()
+        .map(crate::state::native_execution_tip::NativeExecutionTip::root_scope)
+        != Some(SumeragiRootScope::Global)
+    {
         return Err(Error::Source(
             "Decision delivery requires the authenticated Global root",
         ));

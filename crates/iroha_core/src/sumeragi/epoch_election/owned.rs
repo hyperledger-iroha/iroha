@@ -25,7 +25,7 @@ use std::alloc::Layout;
 
 /// A local allocation refusal stays distinct from deterministic invalid boundary inputs.
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum BoundaryCaptureError {
+pub enum BoundaryCaptureError {
     /// A complete source or canonical materialization invariant was invalid.
     #[error("invalid native boundary: {0}")]
     Invalid(String),
@@ -89,7 +89,7 @@ struct FrozenPayload {
 
 /// Move-only pretransaction boundary capability; no caller can forge a raw Activate decision.
 /// It retains all actual model buffers and compact public keys in the original execution pool.
-pub(crate) struct FrozenEpochBoundary {
+pub struct FrozenEpochBoundary {
     payload: RetainedPayload<FrozenPayload>,
 }
 impl FrozenEpochBoundary {
@@ -721,7 +721,7 @@ impl<'a> SlotSource<'a> {
 
 /// Build a separate immutable World graph with original-pool deep allocation custody.
 /// Sharing this completed owner never clones its model vectors or compact public keys.
-pub(crate) fn retain_schedule(
+pub fn retain_schedule(
     source: &crate::sumeragi::schedule::ConsensusSchedule,
     budget: &AllocationBudget,
 ) -> Result<crate::sumeragi::schedule::RetainedConsensusSchedule, BoundaryCaptureError> {
@@ -744,7 +744,7 @@ pub(crate) fn retain_schedule(
 
 /// Prepare the separately owned World copy without first making an uncharged canonical clone.
 /// All source contexts stay borrowed from the original capture across local refusal.
-pub(crate) fn retain_outcome_schedule(
+pub fn retain_outcome_schedule(
     source: &crate::sumeragi::schedule::ScheduleOutcome,
     current_params: crate::sumeragi::schedule::ChainParamsRecord,
     after_params: crate::sumeragi::schedule::ChainParamsRecord,
@@ -866,7 +866,7 @@ fn retain_slots(
     unsafe_code,
     reason = "audited exact canonical allocation transfer with retained original-pool custody"
 )]
-pub(crate) fn capture_continuation(
+pub fn capture_continuation(
     current: &ValidatorEpochContextV1,
     height: u64,
     next: Option<&crate::sumeragi::schedule::ScheduledSlot>,

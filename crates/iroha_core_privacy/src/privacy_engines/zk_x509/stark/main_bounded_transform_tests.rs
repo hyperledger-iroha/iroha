@@ -58,7 +58,9 @@ fn fixed_staging_charges_word_capacities_beyond_complete_device_allowance() {
 fn outer_assembly_limit_and_source_reserves_remain_unchanged() {
     let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
     let plan = main_resources::MainProverBufferPlanV1::new_v1(&layout).unwrap();
-    let cap = super::super::super::super::profile::ZK_X509_PROVER_PEAK_MEMORY_BYTES_V1 as usize;
+    let cap =
+        usize::try_from(super::super::super::super::profile::ZK_X509_PROVER_PEAK_MEMORY_BYTES_V1)
+            .expect("fixture value fits usize");
     let source_limit = cap - plan.check_before_sources_v1(0).unwrap();
     let mask_scratch = core::mem::size_of::<E>();
     let link_owner =
@@ -152,9 +154,7 @@ fn partial_staging_allocation_failure_and_unwind_clear_actual_owners() {
                     column.reserve_exact(rows);
                     column.resize(rows, 9);
                     if calls == 2 {
-                        if unwind {
-                            panic!("injected fixed staging allocation unwind");
-                        }
+                        assert!(!unwind, "injected fixed staging allocation unwind");
                         return Err(ZkX509StarkErrorV1::AllocationFailure);
                     }
                     Ok(())
@@ -345,7 +345,12 @@ fn private_forward_adapter_matches_horner_and_preserves_separate_backend_counter
             let coefficients = (0..8)
                 .map(|column| {
                     (0..113)
-                        .map(|degree| F::reduce((column + 3 * degree * degree + 7) as u128))
+                        .map(|degree| {
+                            F::reduce(
+                                u128::try_from(column + 3 * degree * degree + 7)
+                                    .expect("positive fixture coefficient"),
+                            )
+                        })
                         .collect::<Vec<_>>()
                 })
                 .collect::<Vec<_>>();
@@ -621,13 +626,17 @@ fn inverse_only_adapter_matches_independent_dft_without_forward_or_diagonal() {
     let root = goldilocks_primitive_root_v1(5).unwrap();
     let inverse_root = root.inv().unwrap();
     let inverse_n = F(32).inv().unwrap();
-    let original = (0..8)
-        .map(|column| {
-            (0..32)
-                .map(|row| F((column * 101 + row * row + 3) as u64))
-                .collect::<Vec<_>>()
-        })
-        .collect::<Vec<_>>();
+    let original =
+        (0..8)
+            .map(|column| {
+                (0..32)
+                    .map(|row| {
+                        F(u64::try_from(column * 101 + row * row + 3)
+                            .expect("fixture value fits u64"))
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
     let expected = original
         .iter()
         .map(|values| {

@@ -160,10 +160,10 @@ fn offline_publication_uses_compact_original_byte_limit() {
     read.maximum_bytes = original.len();
     let mut disk = Memory::default();
     let mut compiler = OfflineCompilerV1::new(scope(), &mut disk, read, 1 << 30).unwrap();
-    let compiled = compiler.key(&source, &params, &key_config).unwrap();
-    assert_eq!(compiled.original.proving_key, BlobV1::of(&original));
+    let artifact = compiler.key(&source, &params, &key_config).unwrap();
+    assert_eq!(artifact.original.proving_key, BlobV1::of(&original));
     assert_eq!(
-        compiled.metadata.key().to_bytes(),
+        artifact.metadata.key().to_bytes(),
         generated.vk().to_bytes()
     );
     drop(compiler);

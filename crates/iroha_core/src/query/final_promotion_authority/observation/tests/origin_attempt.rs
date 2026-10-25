@@ -89,7 +89,7 @@ fn direct_final_promotion_origin_quota_clears_token_and_preserves_first_local_re
                 )
                 .unwrap();
             assert!(tx.current_direct_final_promotion_operation_origin.is_some());
-            if let Some(reason) = prior.clone() {
+            if let Some(reason) = prior {
                 let _ = tx.defer_execution(reason);
             }
             let refused = norito::with_decode_limits_scope(no_allocation(), || {
@@ -161,7 +161,7 @@ fn balance(block: &StateBlock<'_>, asset: &AssetDefinitionId, authority: &Accoun
 
 #[test]
 fn original_final_promotion_quota_refusal_has_no_output_fee_gas_or_overlay_and_retries() {
-    let _fee_guard = crate::status::nexus_fee_test_lock().lock().unwrap();
+    let _fee_guard = crate::status::operator_status_test_guard();
     for complete in [false, true] {
         let mut f = Fixture::with_fees();
         let (_, signed, source) = original(&mut f, complete);

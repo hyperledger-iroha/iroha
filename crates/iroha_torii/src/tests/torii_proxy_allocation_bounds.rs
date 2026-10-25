@@ -1,10 +1,10 @@
 /// Regression coverage for allocation bounds on every Torii proxy response.
 mod torii_proxy_allocation_bounds_tests {
-    use iroha_core::torii_proxy::{ToriiProxyHeaderV1, ToriiProxyHttpResponseV1};
     use super::{
         TORII_PROXY_MAX_HEADER_VALUE_BYTES_V1, TORII_PROXY_MAX_HEADERS_V1,
         bounded_torii_proxy_headers, validate_torii_proxy_snapshot_bounds,
     };
+    use iroha_core::torii_proxy::{ToriiProxyHeaderV1, ToriiProxyHttpResponseV1};
     #[test]
     fn rejects_oversized_body_before_delivery() {
         let snapshot = ToriiProxyHttpResponseV1 {

@@ -85,7 +85,7 @@ impl TryRngCore for OrderedEntropy<'_> {
             assert!(!self.unwind, "injected entropy unwind");
             return Err(std::io::Error::other("injected entropy failure"));
         }
-        if self.draws % (MASK_DEGREE + 1) == 0 {
+        if self.draws.is_multiple_of(MASK_DEGREE + 1) {
             self.events
                 .borrow_mut()
                 .push(format!("mask{}", self.draws / (MASK_DEGREE + 1)));
@@ -292,7 +292,11 @@ fn fused_geometry_capacity_and_quarantine_reject_before_source_or_entropy() {
         (3, 10, 1),
         (3, 13, 0),
         (3, 13, usize::from(u16::MAX) + 1),
-        (usize::BITS as u8, 63, 1),
+        (
+            u8::try_from(usize::BITS).expect("fixture value fits u8"),
+            63,
+            1,
+        ),
     ] {
         assert!(MainTraceMaskGroupV1::empty_v1(native, common, width).is_err());
     }

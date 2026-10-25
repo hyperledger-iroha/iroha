@@ -2,6 +2,7 @@
 
 use super::*;
 use iroha::{
+    config::sccp::SccpClientConfigUser,
     data_model::{
         sccp::light_client::{
             SccpLcCheckpointDataV1, SccpLcCheckpointOriginV1, SccpLcCheckpointV1, SccpLcHeadV1,
@@ -17,8 +18,8 @@ use iroha::{
 use iroha_sccp::{
     api::{
         SccpBlockRefV1, SccpCertificateV1, SccpFinalityConstantsV1, SccpLcCheckpointCoverV1,
-        SccpLcCheckpointEntryV1, SccpLcProfileStatusV1, SccpLightClientDetailV1,
-        SccpMessageProofBundleV1, SccpReadLimitsV1,
+        SccpLcCheckpointEntryV1, SccpLcCheckpointsSummaryV1, SccpLcProfileStatusV1,
+        SccpLcSetsSummaryV1, SccpLightClientDetailV1, SccpMessageProofBundleV1, SccpReadLimitsV1,
     },
     ethereum_source::{
         mpt_proof, mpt_root, rlp_encode_bytes, rlp_encode_list, rlp_encode_u64,
@@ -255,7 +256,7 @@ impl Fixture {
             (payload.nonce + 1) & 255
         };
         let mut word = [0u8; 32];
-        word[31 - bit as usize / 8] = 1 << (bit % 8);
+        word[31 - usize::try_from(bit).expect("storage bit fits usize") / 8] = 1 << (bit % 8);
         let storage = vec![(storage_key.to_vec(), rlp_encode_uint_bytes(&word))];
         let storage_root = mpt_root(&storage).unwrap();
         let account_key = keccak256(&[&CONTRACT]);
@@ -451,8 +452,8 @@ impl Fixture {
             usable: true,
             weak_subjectivity_deadline_ms: None,
             supported_until_ms: None,
-            sets: Default::default(),
-            checkpoints: Default::default(),
+            sets: SccpLcSetsSummaryV1::default(),
+            checkpoints: SccpLcCheckpointsSummaryV1::default(),
         };
         let mut checkpoint = self.checkpoint;
         if forge {
@@ -549,7 +550,7 @@ impl Fixture {
 
 fn destination(server: &RpcMock) -> crate::sccp::evm::EvmDestination {
     let mut config = iroha_sccp_wallet::config::SccpClientConfig::from_user(
-        Default::default(),
+        SccpClientConfigUser::default(),
         Path::new("unused-fixture-journal"),
     )
     .unwrap();
@@ -578,6 +579,15 @@ fn receipt_json(r: &EvmReceipt) -> Value {
 }
 
 fn message_bundle() -> (SccpMessageProofBundleV1, Vec<u8>) {
+    fn bytes(v: &Value) -> Vec<u8> {
+        hex::decode(v.as_str().unwrap().strip_prefix("0x").unwrap()).unwrap()
+    }
+    use iroha_sccp::v1::{
+        control::{ControlLeafV1, control_leaf},
+        hashes::transfer_leaf,
+        merkle::PromoteOddTree,
+    };
+
     // Retained published certificate material, not an invented opaque authority.
     // These adapter tests do not repeat the prior journal's bundle verification.
     let fixture: Value = norito::json::from_str(include_str!(concat!(
@@ -588,9 +598,7 @@ fn message_bundle() -> (SccpMessageProofBundleV1, Vec<u8>) {
     let scenario = &fixture["scenario"];
     let payload = &scenario["payloads"][1];
     let cert = &scenario["certificate_100"];
-    fn bytes(v: &Value) -> Vec<u8> {
-        hex::decode(v.as_str().unwrap().strip_prefix("0x").unwrap()).unwrap()
-    }
+
     let certificate = SccpCertificateV1 {
         height: 100,
         qc: bytes(&cert["qc"]).try_into().unwrap(),
@@ -604,11 +612,7 @@ fn message_bundle() -> (SccpMessageProofBundleV1, Vec<u8>) {
             .collect(),
     };
     certificate.check_shape().unwrap();
-    use iroha_sccp::v1::{
-        control::{ControlLeafV1, control_leaf},
-        hashes::transfer_leaf,
-        merkle::PromoteOddTree,
-    };
+
     let dest: [u8; 32] = bytes(&scenario["destination"]["destination_word"])
         .try_into()
         .unwrap();

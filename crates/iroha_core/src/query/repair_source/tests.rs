@@ -97,7 +97,7 @@ impl Fixture {
                     .provider_owners
                     .insert(ProviderId::new(source.proposal.provider_id), owner.clone());
                 enact_for_test(
-                    Action::Admit(norito::encode_canonical(&source).unwrap()),
+                    &(Action::Admit(norito::encode_canonical(&source).unwrap())),
                     tx,
                 );
                 let mut permissions = iroha_data_model::permission::Permissions::new();
@@ -261,7 +261,7 @@ fn permission_removal_pin_expiry_and_native_revocation_close_existing_lease() {
                     tx.world.pin_manifests.insert(digest, pin);
                 }
                 _ => enact_for_test(
-                    Action::Revoke(norito::encode_canonical(&revoke).unwrap()),
+                    &(Action::Revoke(norito::encode_canonical(&revoke).unwrap())),
                     tx,
                 ),
             },

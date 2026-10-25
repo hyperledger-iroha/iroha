@@ -21,7 +21,7 @@ const ENTRY_FRAMING: usize = 16;
 /// One bounded worker turn selected by the instance scheduler.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ServeRequest {
-    /// Consecutive signed manifests and CommitQCs from the committed store.
+    /// Consecutive signed manifests and `CommitQCs` from the committed store.
     Blocks {
         /// Authenticated requesting peer.
         to: PublicKey,
@@ -42,6 +42,10 @@ impl ServeRequest {
     ///
     /// Returns the original action unchanged when it is neither block serving
     /// nor payload work.
+    #[expect(
+        clippy::result_large_err,
+        reason = "A rejected conversion returns the original action without allocating."
+    )]
     pub fn from_action(action: Action) -> Result<Self, Action> {
         match action {
             Action::ServeBlocks {
@@ -147,9 +151,10 @@ impl ServeSched {
     pub fn push(&mut self, request: ServeRequest, now: Millis) -> bool {
         let to = match &request {
             ServeRequest::Blocks { to, .. } => to.clone(),
-            ServeRequest::Payload(work) => match &**work {
-                PayloadWork::Serve { to, .. } => to.clone(),
-                _ => {
+            ServeRequest::Payload(work) => {
+                if let PayloadWork::Serve { to, .. } = &**work {
+                    to.clone()
+                } else {
                     let ServeRequest::Payload(work) = request else {
                         unreachable!()
                     };
@@ -168,7 +173,7 @@ impl ServeSched {
                         if self.retain.as_ref().is_none_or(|(old, _)| *old <= *height) {
                             self.retain = Some((*height, keep.clone()));
                             self.work.retain(|work| !matches!(work, PayloadWork::Disseminate { body, .. }
-                                if body.source().height() == *height && !keep.contains(&body.source().block_hash())));
+                            if body.source().height() == *height && !keep.contains(&body.source().block_hash())));
                         }
                         return true;
                     }
@@ -188,7 +193,7 @@ impl ServeSched {
                     self.work.push_back(*work);
                     return true;
                 }
-            },
+            }
         };
         if !self.peers.contains_key(&to) && self.peers.len() >= self.limits.max_peers {
             let limits = self.limits;

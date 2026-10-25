@@ -245,7 +245,7 @@ fn paid(
 )]
 fn commit_checked(
     chain: &mut CertifiedTestChain,
-    signed: SignedTransaction,
+    signed: &SignedTransaction,
     rejected: Option<&str>,
     principal: Option<(&PublicLaneMonetaryPlanV1, bool)>,
     control: ControlWitness,
@@ -438,7 +438,7 @@ fn install_beacon(chain: &mut CertifiedTestChain, beacon: &Beacon, keys: &[KeyPa
         &administrator(),
         ApplyThresholdKeyLifecycleCertificateV1 { certificate }.into(),
     );
-    commit_checked(chain, signed, None, None, ControlWitness::empty());
+    commit_checked(chain, &signed, None, None, ControlWitness::empty());
 }
 
 fn advance(chain: &mut CertifiedTestChain, target: u64, beacon: &Beacon) {
@@ -498,7 +498,7 @@ fn advance(chain: &mut CertifiedTestChain, target: u64, beacon: &Beacon) {
             )
             .into(),
         );
-        commit_checked(chain, signed, None, None, control);
+        commit_checked(chain, &signed, None, None, control);
     }
 }
 
@@ -614,7 +614,7 @@ pub(super) fn finish_after_real_detector_penalty(
         let signed = paid(chain, &owner, candidate.into());
         commit_checked(
             chain,
-            signed,
+            &signed,
             None,
             Some((&plan, true)),
             ControlWitness::empty(),
@@ -640,13 +640,13 @@ pub(super) fn finish_after_real_detector_penalty(
     let denied = paid(chain, &operator(0), update.clone());
     commit_checked(
         chain,
-        denied,
+        &denied,
         Some("CanSetParameters"),
         None,
         ControlWitness::empty(),
     );
     let signed = paid(chain, &administrator(), update);
-    commit_checked(chain, signed, None, None, ControlWitness::empty());
+    commit_checked(chain, &signed, None, None, ControlWitness::empty());
     let EvidenceScope::Lane(scope) = expected_evidence.attribution.scope else {
         panic!("the original report belongs to the authenticated fixed lane")
     };
@@ -766,7 +766,7 @@ pub(super) fn finish_after_real_detector_penalty(
         ))
         .into(),
     );
-    commit_checked(chain, signed, None, None, ControlWitness::empty());
+    commit_checked(chain, &signed, None, None, ControlWitness::empty());
     let transition = chain
         .state()
         .view()
@@ -781,7 +781,7 @@ pub(super) fn finish_after_real_detector_penalty(
             .readiness_context(u32::try_from(index).expect("fixture value fits u32"))
             .unwrap();
         let peer = PeerId::new(key.public_key().clone());
-        let mut rebound = context.clone();
+        let mut rebound = context;
         rebound.transition_id[0] ^= 1;
         assert!(
             chain
@@ -820,7 +820,7 @@ pub(super) fn finish_after_real_detector_penalty(
             ))
             .into(),
         );
-        commit_checked(chain, signed, None, None, ControlWitness::empty());
+        commit_checked(chain, &signed, None, None, ControlWitness::empty());
         assert_eq!(
             chain
                 .committed(chain.height())
@@ -995,7 +995,7 @@ pub(super) fn finish_after_real_detector_penalty(
     );
     commit_checked(
         chain,
-        early,
+        &early,
         Some(&format!(
             "unbond request remains slashable through the pre-transaction effects at block height {liability_release}"
         )),
@@ -1051,7 +1051,7 @@ pub(super) fn finish_after_real_detector_penalty(
     let signed = paid(chain, offender, instruction.clone().into());
     commit_checked(
         chain,
-        signed.clone(),
+        &signed.clone(),
         None,
         Some((&plan, false)),
         ControlWitness::empty(),
@@ -1061,7 +1061,7 @@ pub(super) fn finish_after_real_detector_penalty(
     assert_ne!(fresh_replay.hash(), signed.hash());
     commit_checked(
         chain,
-        fresh_replay,
+        &fresh_replay,
         Some("validator has no retained positive stake custody"),
         None,
         ControlWitness::empty(),

@@ -67,8 +67,7 @@ impl SoracloudRuntime for CountingSoracloudRuntime {
                 handler_class: request
                     .handler
                     .as_ref()
-                    .map(|handler| handler.class)
-                    .unwrap_or(SoraServiceHandlerClassV1::Update),
+                    .map_or(SoraServiceHandlerClassV1::Update, |handler| handler.class),
                 request_commitment: request.mailbox_message.payload_commitment,
                 result_commitment: Hash::new(
                     format!("test-result:{}", request.mailbox_message.message_id).as_bytes(),

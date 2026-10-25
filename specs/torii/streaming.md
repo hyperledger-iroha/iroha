@@ -33,7 +33,8 @@ applied before subscriber filters and JSON/Norito projection.
 
 The native `/v1/blocks/stream` carries complete `SignedBlock` values and cannot
 be safely redacted. It therefore requires a canonical account signature from a
-caller that currently holds `CanReadAllLedgerData`. Event and Explorer streams
+caller that currently holds `CanReadAllLedgerData`. Admission reads that grant
+and the admitted route scope from one State view. Event and Explorer streams
 retain the admitted principal and route scope, re-evaluate account existence and
 permissions while open, and close with a generic authorization-revoked terminal
 error when that authority is removed. Static API-token rotation remains an

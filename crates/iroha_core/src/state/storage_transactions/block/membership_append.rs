@@ -237,10 +237,7 @@ impl<I: AppendIo> ReplayStore<I> {
                     Ok(count) if count <= FRAME_BYTES - written => written += count,
                     Ok(_) => return Err(io::Error::from(io::ErrorKind::InvalidData).into()),
                     Err(MembershipAppendStoreError::Io(error))
-                        if error.kind() == io::ErrorKind::Interrupted =>
-                    {
-                        continue;
-                    }
+                        if error.kind() == io::ErrorKind::Interrupted => {}
                     Err(error) => return Err(error),
                 }
             }
@@ -324,6 +321,10 @@ struct AppendInner<I> {
 }
 
 impl<I: AppendIo> AppendInner<I> {
+    #[expect(
+        clippy::result_large_err,
+        reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+    )]
     fn prepare(
         &mut self,
         prepared: &PreparedTransactionsBlock<'_>,
@@ -358,6 +359,10 @@ pub(in crate::state) struct PreparedMembershipAppend<'kura> {
     _charge: AllocationCharge,
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 impl<'kura> PreparedMembershipAppend<'kura> {
     /// Checked conservative physical demand of the actual bounded net changes.
     /// Repeated commits need zero records; no historical map scan is performed.

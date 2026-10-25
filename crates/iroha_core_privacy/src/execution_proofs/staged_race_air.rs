@@ -187,7 +187,7 @@ fn inverse_small(value: i64) -> F {
                 }
             })
             .collect()
-    })[value as usize]
+    })[usize::try_from(value).expect("bounded circuit index")]
 }
 impl StagedRaceAirV1 {
     pub(super) fn compile(
@@ -265,15 +265,18 @@ impl StagedRaceAirV1 {
         let (stage, left, right) = self.stages[phase];
         let final_row = (replay.frames.len() + 1) * phases;
         let mut fixed = vec![
-            tick.min(5_400) as i64,
+            i64::try_from(tick.min(5_400)).expect("bounded circuit index"),
             i64::from(tick < replay.frames.len()),
             i64::from(row == 0),
             i64::from(row + 1 < size),
             i64::from(row == final_row),
             i64::from(checkpoint.is_some_and(|tick| row == tick as usize * phases)),
-            i64::from(phase == 0 && tick < replay.frames.len() && tick % 6 == 0),
+            i64::from(phase == 0 && tick < replay.frames.len() && tick.is_multiple_of(6)),
         ];
-        let (rain, wind) = super::environment::weather(replay.track, tick.min(5_400) as u32);
+        let (rain, wind) = super::environment::weather(
+            replay.track,
+            u32::try_from(tick.min(5_400)).expect("bounded circuit index"),
+        );
         fixed.extend([rain, wind]);
         fixed.extend((0..STAGES).map(|index| i64::from(index == stage)));
         fixed.extend((0..self.players).map(|slot| i64::from(left == Some(slot))));
@@ -282,7 +285,10 @@ impl StagedRaceAirV1 {
             i64::from(
                 phase == 0
                     && replay.dnf_events.iter().any(|event| {
-                        event.tick as usize == tick && event.slots.contains(&(slot as u8))
+                        event.tick as usize == tick
+                            && event
+                                .slots
+                                .contains(&u8::try_from(slot).expect("bounded player slot"))
                     }),
             )
         }));
@@ -436,14 +442,13 @@ impl StagedRaceAirV1 {
             post_running = post_running.add(remains.mul(unfinished));
             for i in 0..7 {
                 let mut delta = F::ZERO;
-                for stage in 0..STAGES {
+                for (stage, selected) in stages.iter().enumerate() {
                     let l = self.packed.read(stage, self.outputs[stage][i], bank, fixed);
                     let r = self
                         .packed
                         .read(stage, self.outputs[stage][7 + i], bank, fixed);
-                    delta = delta.add(
-                        stages[stage].mul(left.mul(l.sub(car[i])).add(right.mul(r.sub(car[i])))),
-                    );
+                    delta = delta
+                        .add(selected.mul(left.mul(l.sub(car[i])).add(right.mul(r.sub(car[i])))));
                 }
                 if i == 6 {
                     delta = delta.add(event.mul(alive).mul(fixed[0].add(F::ONE).sub(car[6])));
@@ -463,8 +468,8 @@ impl StagedRaceAirV1 {
         }
         for index in 0..4 {
             let mut expected = F::ZERO;
-            for stage in 0..STAGES {
-                expected = expected.add(stages[stage].mul(self.packed.read(
+            for (stage, selected) in stages.iter().enumerate() {
+                expected = expected.add(selected.mul(self.packed.read(
                     stage,
                     self.outputs[stage][14 + index],
                     bank,
@@ -603,7 +608,12 @@ mod tests {
         for t in 0..6 {
             let line = |length: usize, salt: i64| {
                 (0..length)
-                    .map(|i| field((i as i64 * 19 + salt) * t + (i as i64 * 7 + salt * 3)))
+                    .map(|i| {
+                        field(
+                            (i64::try_from(i).expect("bounded fixture value") * 19 + salt) * t
+                                + (i64::try_from(i).expect("bounded fixture value") * 7 + salt * 3),
+                        )
+                    })
                     .collect::<Vec<_>>()
             };
             lines.push(air.residues(
@@ -690,7 +700,10 @@ mod full_duration_tests {
                         };
                         1 | 16
                             | steer
-                            | if (tick + slot as u32 * 11) % 90 < 25 {
+                            | if (tick + u32::try_from(slot).expect("bounded fixture value") * 11)
+                                % 90
+                                < 25
+                            {
                                 32
                             } else {
                                 0

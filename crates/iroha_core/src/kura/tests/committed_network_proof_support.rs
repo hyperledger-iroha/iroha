@@ -1,7 +1,7 @@
 // Original native execution and configured custody for State's finalized proof tests.
 
 /// Own one genuine native chain without rebuilding or recertifying its results.
-pub(crate) struct CommittedNetworkProofFixture {
+pub struct CommittedNetworkProofFixture {
     /// Exact production State which executed every retained block.
     pub(crate) state: Arc<State>,
     /// Physical store and execution journal published by the original native driver.

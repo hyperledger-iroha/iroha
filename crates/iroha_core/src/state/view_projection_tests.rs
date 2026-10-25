@@ -336,6 +336,18 @@ fn set_asset_metadata_inserts_value_and_event() {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let state = State::new(World::default(), kura, query);
+    {
+        let mut parameters = state.world.parameters.block();
+        parameters
+            .get_mut()
+            .set_parameter(
+                crate::sumeragi::test_chain::crypto_fixture_policy()
+                    .into_parameter()
+                    .expect("fixture crypto policy parameter"),
+            )
+            .expect("valid fixture crypto policy");
+        parameters.commit();
+    }
     let block = new_dummy_block_with_payload(|_| {});
     let mut state_block = state.block(block.as_ref().header());
     let mut stx = state_block.transaction();
@@ -393,6 +405,18 @@ fn remove_asset_metadata_emits_event_and_clears_entry() {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let state = State::new(World::default(), kura, query);
+    {
+        let mut parameters = state.world.parameters.block();
+        parameters
+            .get_mut()
+            .set_parameter(
+                crate::sumeragi::test_chain::crypto_fixture_policy()
+                    .into_parameter()
+                    .expect("fixture crypto policy parameter"),
+            )
+            .expect("valid fixture crypto policy");
+        parameters.commit();
+    }
     let block = new_dummy_block_with_payload(|_| {});
     let mut state_block = state.block(block.as_ref().header());
     let mut stx = state_block.transaction();

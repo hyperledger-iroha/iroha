@@ -13,7 +13,7 @@ struct Probe {
     second: Arc<TransactionsStorage>,
     calls: AtomicUsize,
     busy: AtomicUsize,
-    panic_after_probe: AtomicBool,
+    panic_after_observation: AtomicBool,
 }
 
 impl Wake for Probe {
@@ -31,7 +31,7 @@ impl Wake for Probe {
         );
         self.calls.fetch_add(1, Ordering::SeqCst);
         assert!(
-            !self.panic_after_probe.swap(false, Ordering::SeqCst),
+            !self.panic_after_observation.swap(false, Ordering::SeqCst),
             "injected membership wake panic after physical probes"
         )
     }
@@ -43,7 +43,7 @@ fn probe(first: &Arc<TransactionsStorage>, second: &Arc<TransactionsStorage>) ->
         second: Arc::clone(second),
         calls: AtomicUsize::new(0),
         busy: AtomicUsize::new(0),
-        panic_after_probe: AtomicBool::new(false),
+        panic_after_observation: AtomicBool::new(false),
     })
 }
 
@@ -389,7 +389,9 @@ fn membership_capture_wake_panic_keeps_other_original_release_healthy() {
     let release_registration_1 = crate::unit_test_support::release_registration(&second.budget);
     let first_probe = probe(&first, &second);
     let second_probe = probe(&first, &second);
-    first_probe.panic_after_probe.store(true, Ordering::SeqCst);
+    first_probe
+        .panic_after_observation
+        .store(true, Ordering::SeqCst);
     let first_observation = first.released.observe();
     let second_observation = second.released.observe();
     let mut first_wait = register(
@@ -591,13 +593,13 @@ fn membership_attached_refusal_and_panic_keep_original_sibling_until_joint_drop(
         assert_eq!(result.is_err(), failure == 2);
         assert_released(&mut first_wait, &first_probe);
         assert_released(&mut second_wait, &second_probe);
-        if failure != 2 {
+        if failure == 2 {
+            assert_eq!(first.view().get(&key(6)), Some(height(2)));
+        } else {
             assert!(Tip::ptr_eq(
                 &first.latest_block.load_full().unwrap(),
                 &first_tip
             ));
-        } else {
-            assert_eq!(first.view().get(&key(6)), Some(height(2)));
         }
         assert!(Tip::ptr_eq(
             &second.latest_block.load_full().unwrap(),

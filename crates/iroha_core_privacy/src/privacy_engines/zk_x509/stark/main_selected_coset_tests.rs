@@ -62,7 +62,7 @@ fn every_small_coset_selection_matches_horner_full_fft_and_worker_schedules() {
     for (native, common, mask_length) in [(2, 7, 81), (5, 12, 1816), (5, 15, 1816)] {
         let native_values = vec![F(17); 1usize << native];
         let mask = (0..mask_length)
-            .map(|i| F((i * 31 + 7) as u64))
+            .map(|i| F(u64::try_from(i * 31 + 7).expect("fixture value fits u64")))
             .collect::<Vec<_>>();
         let coefficients = Column::from_vec_v1(
             masked_trace_coefficients_with_mask_v1(&native_values, native, &mask).unwrap(),
@@ -125,9 +125,7 @@ fn scratch_and_compact_coordinate_storage_clear_on_success_and_unwind() {
             std::panic::catch_unwind(|| {
                 evaluate_with_v1(&coefficients, 4, 6, &selected, |scratch| {
                     assert!(scratch.iter().any(|value| *value != F::ZERO));
-                    if unwind {
-                        panic!("selected FFT after-scaling unwind");
-                    }
+                    assert!(!unwind, "selected FFT after-scaling unwind")
                 })
             })
         });
@@ -172,7 +170,7 @@ fn registered_native_domains_keep_high_mask_tail_and_all_selected_cut_rows() {
             .map(|i| F((i * 17 + 13) as u64))
             .collect::<Vec<_>>();
         let mask = (0..1816)
-            .map(|i| F((i * 29 + 7) as u64))
+            .map(|i| F(u64::try_from(i * 29 + 7).expect("fixture value fits u64")))
             .collect::<Vec<_>>();
         let coefficients = Column::from_vec_v1(
             masked_trace_coefficients_with_mask_v1(&values, native, &mask).unwrap(),
@@ -309,9 +307,7 @@ fn full_compact_cost_oracle_preserves_geometry_parity_and_clearing() {
             std::panic::catch_unwind(|| {
                 full_compact_reference_v1(&coefficients, 4, 6, &[0, 7, 63], |scratch| {
                     assert!(scratch.iter().any(|value| *value != F::ZERO));
-                    if unwind {
-                        panic!("full compact oracle after-transform unwind");
-                    }
+                    assert!(!unwind, "full compact oracle after-transform unwind")
                 })
             })
         });
@@ -447,7 +443,7 @@ fn selected_horner_matches_pruned_full_fft_and_public_worker_schedules() {
             .map(|row| F((17 * row + 3) as u64))
             .collect::<Vec<_>>();
         let mask = (0..mask_length)
-            .map(|degree| F((29 * degree + 7) as u64))
+            .map(|degree| F(u64::try_from(29 * degree + 7).expect("fixture value fits u64")))
             .collect::<Vec<_>>();
         let coefficients = Column::from_vec_v1(
             masked_trace_coefficients_with_mask_v1(&native_values, native, &mask).unwrap(),
@@ -524,9 +520,7 @@ fn selected_horner_validates_before_writes_and_clears_populated_output() {
                         let values =
                             evaluate_horner_with_v1(&coefficients, 4, 10, &selected, |output| {
                                 assert!(output.iter().any(|value| *value != F::ZERO));
-                                if unwind {
-                                    panic!("after populated Horner output");
-                                }
+                                assert!(!unwind, "after populated Horner output")
                             })
                             .unwrap();
                         assert_eq!(values.len(), selected.len());
@@ -701,7 +695,7 @@ fn selected_coarse_inner_schedule_preserves_values_validation_and_erasure() {
             .map(|row| F((17 * row + 3) as u64))
             .collect::<Vec<_>>();
         let mask = (0..mask_length)
-            .map(|degree| F((29 * degree + 7) as u64))
+            .map(|degree| F(u64::try_from(29 * degree + 7).expect("fixture value fits u64")))
             .collect::<Vec<_>>();
         let coefficients = Column::from_vec_v1(
             masked_trace_coefficients_with_mask_v1(&values, native, &mask).unwrap(),
@@ -770,9 +764,7 @@ fn selected_coarse_inner_schedule_preserves_values_validation_and_erasure() {
             std::panic::catch_unwind(|| {
                 evaluate_scheduled_with_v1::<false>(&coefficients, 4, 6, &[0, 7, 63], |scratch| {
                     assert!(scratch.iter().any(|value| *value != F::ZERO));
-                    if unwind {
-                        panic!("coarse selected transform after-scale unwind");
-                    }
+                    assert!(!unwind, "coarse selected transform after-scale unwind")
                 })
             })
         });
@@ -1069,7 +1061,7 @@ fn selected_production_coarse_schedule_matches_original_and_full_domain_oracle()
             .map(|row| F((17 * row + 1) as u64))
             .collect::<Vec<_>>();
         let mask = (0..1816)
-            .map(|degree| F((29 * degree + 3) as u64))
+            .map(|degree| F(u64::try_from(29 * degree + 3).expect("fixture value fits u64")))
             .collect::<Vec<_>>();
         let coefficients = Column::from_vec_v1(
             masked_trace_coefficients_with_mask_v1(&values, native, &mask).unwrap(),
@@ -1136,9 +1128,7 @@ fn selected_production_coarse_schedule_retains_validation_and_full_scratch_erasu
                     |scratch| {
                         assert_eq!(scratch.len(), rows);
                         assert!(scratch.iter().any(|value| *value != F::ZERO));
-                        if unwind {
-                            panic!("production coarse transform after-scale unwind");
-                        }
+                        assert!(!unwind, "production coarse transform after-scale unwind")
                     },
                 )
             })

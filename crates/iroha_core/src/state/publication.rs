@@ -32,7 +32,7 @@ pub(super) use retained_musubi_group::{
 
 /// Local result of attempting publication of the exact retained State.
 #[derive(Debug)]
-pub(crate) enum StatePublicationOutcome {
+pub enum StatePublicationOutcome {
     /// Every original State and post-publication effect completed once.
     Published,
     /// Local resource refusal before irreversible progress; this same owner may retry.
@@ -42,6 +42,10 @@ pub(crate) enum StatePublicationOutcome {
 }
 
 impl StatePublicationOutcome {
+    #[expect(
+        clippy::result_large_err,
+        reason = "Refusal returns the original retained owner without an additional fallible error allocation"
+    )]
     fn into_result(self) -> Result<(), TransactionsBlockError> {
         match self {
             Self::Published => Ok(()),
@@ -52,6 +56,10 @@ impl StatePublicationOutcome {
 
 /// All original detached effects and notices live beside, never inside a borrow of,
 /// the State fields. No physical guard borrows this struct across an attempt return.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Publication tracks independent readiness and physical-release facts for original owners"
+)]
 pub(super) struct StatePublication<'state> {
     // Captured from the same original block as the fields, never reloaded on retry.
     capture_policy: iroha_config::parameters::actual::StateCapture,
@@ -142,6 +150,10 @@ impl<'state> StatePublication<'state> {
     }
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Refusal returns the original retained owner without an additional fallible error allocation"
+)]
 impl<'state> StateBlock<'state> {
     /// Try the sole publication engine while retaining this original allocation.
     /// Only `Deferred` grants another attempt; callers never mutate a pending owner.
@@ -383,6 +395,8 @@ impl<'state> StateBlock<'state> {
         // armed through every refusal, preparation and publication unwind.
         let world_cut_capture = this.world_cut_capture.as_ref();
         let StateBlockFields {
+            genesis_crypto_policy: _genesis_crypto_policy,
+            genesis_staking_policy: _genesis_staking_policy,
             local_storage_refusal: _,
             _read_releases: _,
             // Keep the linear finality/output and native-source owners alive
@@ -560,17 +574,21 @@ impl<'state> StateBlock<'state> {
                     let generation = current_generation
                         .checked_add(2)
                         .ok_or(TransactionsBlockError::SnapshotObservationChanged)?;
-                    let prepared = match world_cut_pending.take() {
-                        Some(pending) => pending
-                            .try_share()
-                            .map_err(|(pending, error)| (Some(pending), error)),
-                        None => capture.prepare_retained(
-                            world,
-                            tip,
-                            generation,
-                            &state_ref.ivm_execution_budget(),
-                        ),
-                    };
+                    let prepared = world_cut_pending.take().map_or_else(
+                        || {
+                            capture.prepare_retained(
+                                world,
+                                tip,
+                                generation,
+                                &state_ref.ivm_execution_budget(),
+                            )
+                        },
+                        |pending| {
+                            pending
+                                .try_share()
+                                .map_err(|(pending, error)| (Some(pending), error))
+                        },
+                    );
                     match prepared {
                         Ok(capsule) => Some(capsule),
                         Err((pending, error)) => {
@@ -852,14 +870,19 @@ impl<'state> StateBlock<'state> {
                         .view()
                         .get(),
                 );
-            let autoscale_hold = if let Some(prepared) = lifecycle_effects.take() {
-                let autoscale_start = Instant::now();
-                *lifecycle_post_publication =
-                    Some(prepared.publish(state_ref, &mut effect_locks, &_view_generation, true));
-                autoscale_storage_hold + autoscale_start.elapsed()
-            } else {
-                autoscale_storage_hold
-            };
+            let autoscale_hold =
+                lifecycle_effects
+                    .take()
+                    .map_or(autoscale_storage_hold, |prepared| {
+                        let autoscale_start = Instant::now();
+                        *lifecycle_post_publication = Some(prepared.publish(
+                            state_ref,
+                            &mut effect_locks,
+                            &_view_generation,
+                            true,
+                        ));
+                        autoscale_storage_hold + autoscale_start.elapsed()
+                    });
             let da_commitments_hold = if let Some(effects) = da_effects.take() {
                 let da_start = Instant::now();
                 *da_post_publication = Some(effects.publish(
@@ -1110,7 +1133,7 @@ impl State {
 
 /// Test observation of the actual retained tiered snapshot payload.
 #[cfg(test)]
-pub(crate) struct PublicationCaptureProbe(Arc<tiered_publication::capture_observer::Counts>);
+pub struct PublicationCaptureProbe(Arc<tiered_publication::capture_observer::Counts>);
 #[cfg(test)]
 impl PublicationCaptureProbe {
     /// Number of original captures and completed owner retirements.
@@ -1221,7 +1244,7 @@ impl StateBlock<'_> {
         original
             .world_cut_pending
             .as_ref()
-            .map(|pending| pending.identity_for_test())
+            .map(super::world_projection::world_state_accumulator::world_state_cut::PendingCutCapsule::identity_for_test)
             .or_else(|| {
                 original
                     .world_cut

@@ -6,7 +6,7 @@ use iroha_wallet::{
 };
 /// Ordinary account bootstrap operations, independent of the public-reset coordinator.
 #[derive(Debug, clap::Subcommand)]
-pub(crate) enum AccountCommand {
+pub enum AccountCommand {
     /// Register the configured account and bind an operator-authorized alias.
     #[command(subcommand)]
     Onboard(OnboardCommand),
@@ -17,7 +17,7 @@ pub(crate) enum AccountCommand {
 
 /// Explicit phases of account onboarding.
 #[derive(Debug, clap::Subcommand)]
-pub(crate) enum OnboardCommand {
+pub enum OnboardCommand {
     /// Verify a sponsored receipt and save the exact transaction without submitting it.
     Prepare(OnboardPrepare),
     /// Submit only the exact saved transaction, or report its existing outcome.
@@ -28,7 +28,7 @@ pub(crate) enum OnboardCommand {
 
 /// Explicit phases of a faucet claim.
 #[derive(Debug, clap::Subcommand)]
-pub(crate) enum FaucetCommand {
+pub enum FaucetCommand {
     /// Solve the native proof of work and save the verified transaction without submitting it.
     Prepare(FaucetPrepare),
     /// Submit only the exact saved transaction, or report its existing outcome.
@@ -39,7 +39,7 @@ pub(crate) enum FaucetCommand {
 
 /// Shared immutable-journal selection and bounded request duration.
 #[derive(Debug, clap::Args)]
-pub(crate) struct JournalArgs {
+pub struct JournalArgs {
     /// Operation directory; preparation creates it privately and refuses to replace it.
     #[arg(long, value_name = "DIRECTORY")]
     journal: PathBuf,
@@ -81,7 +81,7 @@ struct TokenArgs {
 
 /// Trusted input for one sponsored account-and-alias preparation.
 #[derive(Debug, clap::Args)]
-pub(crate) struct OnboardPrepare {
+pub struct OnboardPrepare {
     #[command(flatten)]
     prepare: PrepareArgs,
     #[command(flatten)]
@@ -99,7 +99,7 @@ pub(crate) struct OnboardPrepare {
 
 /// Explicit submission of an already retained onboarding transaction.
 #[derive(Debug, clap::Args)]
-pub(crate) struct OnboardSubmit {
+pub struct OnboardSubmit {
     #[command(flatten)]
     journal: JournalArgs,
     #[command(flatten)]
@@ -108,7 +108,7 @@ pub(crate) struct OnboardSubmit {
 
 /// Trusted input for one faucet preparation.
 #[derive(Debug, clap::Args)]
-pub(crate) struct FaucetPrepare {
+pub struct FaucetPrepare {
     #[command(flatten)]
     prepare: PrepareArgs,
     /// Independently trusted faucet issuer from the deployment operator.
@@ -255,17 +255,17 @@ fn render_report<C: RunContext>(context: &mut C, report: &OperationReport) -> Re
             text("alias"),
             text("issuer")
         ))?;
-        if let Some(permissions) = value["permissions_requested"].as_array() {
-            if !permissions.is_empty() {
-                context.println(format!(
-                    "Permissions requested: {}",
-                    permissions
-                        .iter()
-                        .filter_map(Value::as_str)
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ))?;
-            }
+        if let Some(permissions) = value["permissions_requested"].as_array()
+            && !permissions.is_empty()
+        {
+            context.println(format!(
+                "Permissions requested: {}",
+                permissions
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ))?;
         }
         if value["owner_auto_renew_follow_up"].as_bool() == Some(true) {
             context.println("Alias auto-renew requires the separately signed owner follow-up recorded in the receipt.")?;

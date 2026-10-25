@@ -101,10 +101,10 @@ fn append_tile_with_cut_v1(
     let mut level = 0;
     while width > 1 {
         let global_start = first >> level;
-        if level == retained_commitment::CUT_LEVEL_V1 {
-            if let Some(cut) = cut.as_deref_mut() {
-                cut.capture_v1(global_start, &nodes[..width])?;
-            }
+        if level == retained_commitment::CUT_LEVEL_V1
+            && let Some(cut) = cut.as_deref_mut()
+        {
+            cut.capture_v1(global_start, &nodes[..width])?;
         }
         for (offset, &node) in nodes[..width].iter().enumerate() {
             accumulator.capture(level, global_start + offset, node)?;
@@ -118,18 +118,20 @@ fn append_tile_with_cut_v1(
             .enumerate()
             .map(|(offset, pair)| {
                 let index = (global_start >> 1) + offset;
-                match prefix.hash_at_with_counter(
-                    index as u64,
-                    0,
-                    &[pair[0].as_bytes(), pair[1].as_bytes()],
-                ) {
-                    Some(parent) => {
-                        pair[0] = parent;
-                        pair[1].zeroize_v1();
-                        None
-                    }
-                    None => Some((index, AggregateStarkErrorV1::InvalidLayout)),
-                }
+                prefix
+                    .hash_at_with_counter(
+                        index as u64,
+                        0,
+                        &[pair[0].as_bytes(), pair[1].as_bytes()],
+                    )
+                    .map_or(
+                        Some((index, AggregateStarkErrorV1::InvalidLayout)),
+                        |parent| {
+                            pair[0] = parent;
+                            pair[1].zeroize_v1();
+                            None
+                        },
+                    )
             })
             .reduce(|| None, first_error_v1);
         if let Some((_, error)) = failure {
@@ -145,10 +147,10 @@ fn append_tile_with_cut_v1(
         width /= 2;
         level += 1;
     }
-    if level == retained_commitment::CUT_LEVEL_V1 {
-        if let Some(cut) = cut {
-            cut.capture_v1(first >> level, &nodes[..1])?;
-        }
+    if level == retained_commitment::CUT_LEVEL_V1
+        && let Some(cut) = cut
+    {
+        cut.capture_v1(first >> level, &nodes[..1])?;
     }
     accumulator.append_subtree_v1(level, nodes[0])
 }

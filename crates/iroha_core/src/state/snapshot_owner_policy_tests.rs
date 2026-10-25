@@ -151,6 +151,17 @@ fn snapshot_owner_policy_fixture_with_stored_history(
         .set_nexus_from_config(configured.clone())
         .expect("install configured owner policy before genesis");
     let configured_predecessor = state.canonical_runtime.view().get().clone();
+    // This structural component never executes genesis. Author its explicit
+    // registration policy before the first block; native replay uses fresh Worlds.
+    let mut parameters = state.world.parameters.block();
+    parameters
+        .set_parameter(
+            crate::sumeragi::test_chain::crypto_fixture_policy()
+                .into_parameter()
+                .expect("canonical fixture crypto policy"),
+        )
+        .expect("install original fixture crypto policy");
+    parameters.commit();
     let (validator, keypair) = bls_account_in("snapshot-owner");
     let npos = SumeragiNposParameters::default();
     assert_eq!(

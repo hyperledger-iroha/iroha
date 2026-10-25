@@ -141,6 +141,10 @@ fn run(block: &mut StateBlock<'_>, source: &SignedBlock) {
     block.execute_ordinary_output_plan(source, None).unwrap();
 }
 
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "The fixture implements the production fallible callback contract"
+)]
 fn metadata(
     block: &mut StateBlock<'_>,
     source: &SignedBlock,

@@ -3,7 +3,7 @@
 /// Fixed source identity minted from an exact native proposal. This is not finality authority:
 /// the pristine schedule capture rechecks the instance, epoch and committed parent/result.
 /// No native Header/skipped-leader list or body allocation is cloned into this token.
-pub(crate) struct NativeHeaderSource<'state> {
+pub struct NativeHeaderSource<'state> {
     state: &'state State,
     generation: u64,
     header: BlockHeader,
@@ -16,6 +16,10 @@ pub(crate) struct NativeHeaderSource<'state> {
 }
 impl NativeHeaderSource<'_> {
     #[cfg(test)]
+    #[expect(
+        clippy::result_large_err,
+        reason = "Block validation propagates original resource and execution refusal owners without allocating an error box"
+    )]
     fn validate_body(&self, block: &SignedBlock) -> Result<(), BlockValidationError> {
         if !block.is_resultless_proposal()
             || block.header() != self.header
@@ -46,6 +50,10 @@ impl NativeHeaderSource<'_> {
 impl ValidBlock {
     /// Bind every original proposal byte to its actual native header before expansion or effects.
     /// The returned source does not authorize another body or replace schedule/certificate checks.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Block validation propagates original resource and execution refusal owners without allocating an error box"
+    )]
     pub(crate) fn native_header_source<'state>(
         block: &SignedBlock,
         state: &'state State,

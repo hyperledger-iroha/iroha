@@ -81,7 +81,7 @@ fn late_finisher_forfeit_request(all_forfeit: bool) -> RaceProverRequestV1 {
     let mut request = request(2);
     let mut state = initial_race_state_v1(request.replay.track, 2).unwrap();
     let mut frames = Vec::new();
-    while state.cars[0].finish_tick.is_none() || state.tick % 6 != 0 {
+    while state.cars[0].finish_tick.is_none() || !state.tick.is_multiple_of(6) {
         let frame = RaceInputFrameV1 {
             tick: state.tick,
             controls: vec![1 | 32, 0],
@@ -145,7 +145,7 @@ fn late_finisher_full_native_proof_verifies_and_wrong_profile_is_rejected() {
     }
     let ticks = request.replay.frames.len();
     let started = std::time::Instant::now();
-    let proof = prove_race_v1(request).expect("genuine corrected proof");
+    let proof = prove_race_v1(&request).expect("genuine corrected proof");
     eprintln!(
         "corrected stock proof: profile={} players=2 ticks={ticks} envelope_bytes={} prove_seconds={:.3}",
         proof.profile_id,
@@ -213,18 +213,19 @@ fn prove_with_test_entropy(request: &RaceProverRequestV1) -> ExecutionProofEnvel
 #[ignore = "genuine CPU parity proofs; set IROHA_EXECUTION_PARITY_REQUEST for a retained full request"]
 fn complete_proof_bytes_are_identical_across_cpu_thread_counts() {
     use std::{fs, path::PathBuf, time::Instant};
-    let request = if let Some(path) = std::env::var_os("IROHA_EXECUTION_PARITY_REQUEST") {
-        let bytes = fs::read(path).expect("retained request");
-        assert!(bytes.len() <= RACE_MAX_PROOF_BYTES_V1);
-        let mut remaining = bytes.as_slice();
-        let request = RaceProverRequestV1::decode(&mut remaining).expect("canonical request");
-        assert!(remaining.is_empty());
-        assert_eq!(request.encode(), bytes);
-        assert_eq!(request.manifest.profile_id, race_profile_id_v1());
-        request
-    } else {
-        request(2)
-    };
+    let request = std::env::var_os("IROHA_EXECUTION_PARITY_REQUEST").map_or_else(
+        || request(2),
+        |path| {
+            let bytes = fs::read(path).expect("retained request");
+            assert!(bytes.len() <= RACE_MAX_PROOF_BYTES_V1);
+            let mut remaining = bytes.as_slice();
+            let request = RaceProverRequestV1::decode(&mut remaining).expect("canonical request");
+            assert!(remaining.is_empty());
+            assert_eq!(request.encode(), bytes);
+            assert_eq!(request.manifest.profile_id, race_profile_id_v1());
+            request
+        },
+    );
     let output = std::env::var_os("IROHA_EXECUTION_PARITY_OUTPUT").map(PathBuf::from);
     if let Some(output) = &output {
         fs::create_dir_all(output).expect("qualification output");
@@ -466,7 +467,7 @@ fn fri_certificate_binds_every_actual_binary_fold() {
             trace_domains_are_smooth_subgroups: true,
             evaluation_domain_is_smooth_generator_coset: true,
             evaluation_domain_is_disjoint_from_trace_domains: true,
-            fold_count: folds as u8,
+            fold_count: u8::try_from(folds).expect("bounded fixture value"),
             terminal_log2: 10,
             terminal_degree_bound: 143,
             query_count: 136,
@@ -475,7 +476,7 @@ fn fri_certificate_binds_every_actual_binary_fold() {
             claimed_query_error_bits: 160,
         };
         let bound =
-            validate_affine_batched_fri_theorem2_v1(parameters, &layout, certificate.clone())
+            validate_affine_batched_fri_theorem2_v1(parameters, &layout, &certificate.clone())
                 .expect("every complete schedule qualifies the numeric theorem terms");
         assert_eq!(bound.query_error_bits, 160);
         assert_eq!(
@@ -491,7 +492,7 @@ fn fri_certificate_binds_every_actual_binary_fold() {
             let mut malformed = certificate.clone();
             malformed.affine_arities = arities;
             assert!(
-                validate_affine_batched_fri_theorem2_v1(parameters, &layout, malformed).is_err()
+                validate_affine_batched_fri_theorem2_v1(parameters, &layout, &malformed).is_err()
             );
         }
     }
@@ -533,6 +534,16 @@ fn staged_proof_wire_shape_has_explicit_admission_bounds() {
 
 #[test]
 fn maximum_duration_replay_and_typed_settlement_fit_the_execution_cap() {
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_core::execution_proofs::proof::tests::maximum_duration_replay_and_typed_settlement_fit_the_execution_cap::SettlementFields"
+    )]
+    #[derive(Encode)]
+    struct SettlementFields {
+        session_id: Hash,
+        proof: ExecutionProofEnvelopeV1,
+        outcome: GameOutcomeV1,
+    }
     use crate::execution_proofs::stark::aggregate_stark::{
         AggregateProofLayoutV1, AggregateTraceGroupLayoutV1,
         maximum_encoded_proof_with_deep_bytes_v1,
@@ -661,16 +672,7 @@ fn maximum_duration_replay_and_typed_settlement_fit_the_execution_cap() {
     let envelope_bound = proof.encode().len() + invitation_allowance + admission_allowance;
     // Build canonical field bytes without depending on the instruction's constructor API,
     // then decode and re-encode the real registered native ISI.
-    #[derive(norito::NoritoSchema)]
-    #[norito_schema(
-        name = "iroha_core::execution_proofs::proof::tests::maximum_duration_replay_and_typed_settlement_fit_the_execution_cap::SettlementFields"
-    )]
-    #[derive(Encode)]
-    struct SettlementFields {
-        session_id: Hash,
-        proof: ExecutionProofEnvelopeV1,
-        outcome: GameOutcomeV1,
-    }
+
     let fields = SettlementFields {
         session_id: request.statement.session_id,
         proof,
@@ -847,7 +849,7 @@ fn recomputed_successor_witness_cannot_forge_carry_transitions_or_padding() {
 #[ignore = "expensive native cryptographic qualification; run explicitly and record peak RSS/proof bytes"]
 fn real_native_proof_roundtrip_and_statement_adversaries() {
     let start = std::time::Instant::now();
-    let proof = prove_race_v1(request(2)).expect("genuine native execution proof");
+    let proof = prove_race_v1(&request(2)).expect("genuine native execution proof");
     eprintln!(
         "race proof bytes={} proving_seconds={:.3}",
         proof.proof_bytes.len(),

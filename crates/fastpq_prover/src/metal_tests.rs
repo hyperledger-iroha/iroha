@@ -589,9 +589,11 @@ fn poseidon_hash_columns_batches_multi_block_columns() {
     );
     let expected =
         crate::trace::hash_columns_cpu_batch_inputs(&domains, &columns).expect("cpu reference");
-    super::adaptive_scheduler()
-        .poseidon
-        .record_sample(4, domains.len() as u32, 0.0);
+    super::adaptive_scheduler().poseidon.record_sample(
+        4,
+        u32::try_from(domains.len()).unwrap(),
+        0.0,
+    );
     super::enable_kernel_stats(true);
     let Some(actual) = unwrap_or_skip(
         super::poseidon_hash_columns(&batch),
@@ -644,7 +646,7 @@ fn poseidon_hash_columns_batches_two_word_inputs() {
         .collect::<Vec<_>>();
     super::adaptive_scheduler()
         .poseidon
-        .record_sample(8, pairs.len() as u32, 0.0);
+        .record_sample(8, u32::try_from(pairs.len()).unwrap(), 0.0);
     super::enable_kernel_stats(true);
     let Some(actual) = unwrap_or_skip(
         super::poseidon_hash_columns(&batch),
@@ -735,8 +737,7 @@ fn column_batch_iterator_chunks_columns() {
 }
 #[test]
 fn column_batch_iterator_handles_zero_total_and_batch_size() {
-    let empty: Vec<_> = super::column_batch_ranges(0, 8).collect();
-    assert!(empty.is_empty());
+    assert_eq!(super::column_batch_ranges(0, 8).next(), None);
     let singletons: Vec<_> = super::column_batch_ranges(3, 0).collect();
     assert_eq!(singletons, vec![(0, 1), (1, 1), (2, 1)]);
 }
@@ -902,10 +903,13 @@ fn pooled_buffer_region_is_page_aligned_and_page_rounded() {
         let mut buffer = PooledBuffer::zeroed(logical_words).expect("allocate pooled buffer");
         let (pointer, byte_len) = buffer.metal_region();
         assert_eq!(pointer as usize % METAL_BUFFER_PAGE_BYTES, 0);
-        assert_eq!(byte_len as usize % METAL_BUFFER_PAGE_BYTES, 0);
-        assert!(byte_len as usize >= logical_words * mem::size_of::<u64>());
         assert_eq!(
-            byte_len as usize,
+            usize::try_from(byte_len).unwrap() % METAL_BUFFER_PAGE_BYTES,
+            0
+        );
+        assert!(usize::try_from(byte_len).unwrap() >= logical_words * mem::size_of::<u64>());
+        assert_eq!(
+            usize::try_from(byte_len).unwrap(),
             metal_buffer_page_count(logical_words) * METAL_BUFFER_PAGE_BYTES
         );
     }
@@ -1001,7 +1005,7 @@ fn queue_stats_capture_overlap() {
     let snapshot = state.snapshot(2);
     assert_eq!(snapshot.dispatch_count, 2);
     assert_eq!(snapshot.max_in_flight, 2);
-    assert_eq!(snapshot.overlap_ms, 1.0);
+    assert_eq!(snapshot.overlap_ms.to_bits(), 1.0_f64.to_bits());
 }
 #[test]
 fn bounded_ticket_window_drains_in_fifo_order() {
@@ -1099,7 +1103,7 @@ fn column_staging_stats_capture_events() {
     assert!((stats.fft().wait_ms - 2.0).abs() < f64::EPSILON);
     assert_eq!(stats.poseidon().batches, 1);
     assert!((stats.poseidon().flatten_ms - 3.0).abs() < f64::EPSILON);
-    assert_eq!(stats.poseidon().wait_ms, 0.0);
+    assert_eq!(stats.poseidon().wait_ms.to_bits(), 0.0_f64.to_bits());
     assert_eq!(stats.lde().batches, 0);
     let fft_samples = stats.fft_samples();
     assert_eq!(fft_samples.len(), 1);
@@ -1110,7 +1114,7 @@ fn column_staging_stats_capture_events() {
     assert_eq!(poseidon_samples.len(), 1);
     assert_eq!(poseidon_samples[0].batch, 0);
     assert!((poseidon_samples[0].flatten_ms - 3.0).abs() < f64::EPSILON);
-    assert_eq!(poseidon_samples[0].wait_ms, 0.0);
+    assert_eq!(poseidon_samples[0].wait_ms.to_bits(), 0.0_f64.to_bits());
     assert!(stats.lde_samples().is_empty());
 }
 #[test]
@@ -1278,7 +1282,7 @@ fn adaptive_batch_backs_off_after_slow_sample() {
     state.record_sample(2, 32, 1.0);
     let grown = state.select(2, 32, AdaptiveStateId::Fft);
     assert_eq!(grown.columns(), 4);
-    state.record_sample(4, 32, 2.0 * ADAPTIVE_BACKOFF_RATIO + 0.1);
+    state.record_sample(4, 32, 2.0_f64.mul_add(ADAPTIVE_BACKOFF_RATIO, 0.1));
     let backoff = state.select(2, 32, AdaptiveStateId::Fft);
     assert_eq!(backoff.columns(), 2);
 }
@@ -1287,7 +1291,7 @@ fn adaptive_batch_backoff_respects_minimum_floor() {
     let state = AdaptiveBatchState::new(3, 2.0);
     let selection = state.select(4, 64, AdaptiveStateId::Fft);
     assert_eq!(selection.columns(), 4);
-    state.record_sample(4, 64, 2.0 * ADAPTIVE_BACKOFF_RATIO + 0.1);
+    state.record_sample(4, 64, 2.0_f64.mul_add(ADAPTIVE_BACKOFF_RATIO, 0.1));
     let next = state.select(4, 64, AdaptiveStateId::Fft);
     assert_eq!(next.columns(), 3);
 }

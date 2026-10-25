@@ -46,6 +46,10 @@ fn governance_world_with_accounts(
         iroha_data_model::account::Account::new(escrow_account.clone()).build(escrow_account);
     let slash =
         iroha_data_model::account::Account::new(slash_account.clone()).build(escrow_account);
+    // Seed the separate citizenship custody before the later signed genesis.
+    // Ordinary crypto policy must remain absent until that genesis authenticates it.
+    let citizenship = iroha_data_model::account::Account::new(iroha_test_samples::BOB_ID.clone())
+        .build(escrow_account);
     let asset_def = AssetDefinition::numeric(
         voting_asset_id.clone(),
         "xor".to_owned(),
@@ -68,7 +72,7 @@ fn governance_world_with_accounts(
     );
     World::with_assets(
         [domain],
-        [alice_account, escrow, slash],
+        [alice_account, escrow, slash, citizenship],
         [asset_def],
         [alice_asset, escrow_asset, slash_asset],
         [],
@@ -254,11 +258,6 @@ fn double_vote_slashes_plain_lock() {
         ));
         // Citizenship has its own exact ten-unit bond in separate custody. Top up
         // that amount through the real mint so the ballot still starts with 1,000.
-        iroha_data_model::isi::Register::account(iroha_data_model::account::Account::new(
-            iroha_test_samples::BOB_ID.clone(),
-        ))
-        .execute(&ALICE_ID, &mut citizen_setup)
-        .expect("register separate citizenship custody");
         iroha_data_model::isi::Mint::asset_quantity(
             10_u64,
             AssetId::new(def_id.clone(), ALICE_ID.clone()),

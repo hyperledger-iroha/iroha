@@ -1,9 +1,9 @@
-//! Exact original subject/lifecycle/inverse custody from the frozen StateBlock.
+//! Exact original subject/lifecycle/inverse custody from the frozen `StateBlock`.
 //!
 //! Four actual native originals share the existing committed/startup relation.
 //! No artifact permission, execution effect, AXT or complete State authority is
 //! inferred. TODO: consume every checked output, cell/frontier and authenticated
-//! history together in the sole StatePublication and durable Kura owner.
+//! history together in the sole `StatePublication` and durable Kura owner.
 
 use super::{CanonicalTableLeafSet, CanonicalTablePairedSnapshot, LeafError, LeafLimits};
 use crate::{
@@ -68,6 +68,10 @@ impl<'frozen> Original<'frozen> {
 /// survive validation and encoding. Incomplete/foreign/mixed/released sources
 /// return None; local refusal preserves the same block for retry. No fresh view,
 /// source reconstruction, alternate pool or finalized authority is acquired.
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 pub(in crate::state) fn capture(
     block: &StateBlock<'_>,
     limits: LeafLimits,

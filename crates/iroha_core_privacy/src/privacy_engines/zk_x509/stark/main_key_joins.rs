@@ -38,504 +38,6 @@ struct BlockV1 {
     scale: F,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::privacy_engines::zk_x509::stark::tests::main_log19_statement_fixture_v1;
-
-    fn plan_v1(disclosures: usize) -> (AggregateProofLayoutV1, MainKeyJoinPlanV1) {
-        let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
-        let statement =
-            crate::privacy_engines::zk_x509::main_io::tests::statement_with_disclosures_v1(
-                disclosures,
-            );
-        let mut rfc_statement = main_log19_statement_fixture_v1();
-        rfc_statement.disclosed_attribute_indices = (0..disclosures as u8).collect();
-        let shape = ZkX509Rfc5280StarkShapeV1::from_statement(&rfc_statement).unwrap();
-        let plan = MainKeyJoinPlanV1::new_v1(&layout, &statement, shape).unwrap();
-        (layout, plan)
-    }
-    fn product_v1(a: &[F], b: &[F]) -> Vec<F> {
-        let mut out = vec![F::ZERO; a.len() + b.len() - 1];
-        for (i, x) in a.iter().enumerate() {
-            for (j, y) in b.iter().enumerate() {
-                out[i + j] = out[i + j].add(x.mul(*y));
-            }
-        }
-        out
-    }
-    fn public_block_v1(power: u8, count: usize) -> (BlockV1, Vec<F>, Vec<F>, Vec<F>) {
-        let column = ColumnV1 {
-            group: 0,
-            column: 0,
-            log: 19,
-        };
-        let b = BlockV1 {
-            source: column,
-            target: column,
-            start: F(11),
-            step: goldilocks_primitive_root_v1(19).unwrap(),
-            count,
-            power,
-            scale: F(13),
-        };
-        let target = vec![F(3), F(5), F(7), F(19)];
-        let mut divisor = vec![F::ONE];
-        let mut p = b.start;
-        for _ in 0..count {
-            divisor = product_v1(&divisor, &[F::ZERO.sub(p), F::ONE]);
-            p = p.mul(b.step);
-        }
-        let q = vec![F(23), F(29)];
-        let mut source = product_v1(&divisor, &q);
-        source.resize(source.len().max(3 * power as usize + 1), F::ZERO);
-        let mut cp = F::ONE;
-        for (j, v) in target.iter().enumerate() {
-            source[j * power as usize] = source[j * power as usize].add(v.mul(cp));
-            cp = cp.mul(b.scale);
-        }
-        (b, source, target, q)
-    }
-    #[test]
-    fn canonical_public_plan_covers_every_byte_and_both_selectors() {
-        for d in 0..=4 {
-            let (_, plan) = plan_v1(d);
-            assert_eq!(plan.blocks.len(), 12);
-            assert_eq!(plan.blocks.iter().map(|b| b.count).sum::<usize>(), 647);
-            for b in plan.blocks {
-                let target_root = goldilocks_primitive_root_v1(b.target.log).unwrap();
-                assert_eq!(
-                    b.step.pow(u128::from(b.power)),
-                    if b.count == 1 && b.power == 1 {
-                        F::ONE
-                    } else {
-                        target_root
-                    }
-                );
-                let mut x = b.start;
-                let first = b.scale.mul(x.pow(u128::from(b.power)));
-                for j in 0..b.count {
-                    assert_eq!(
-                        b.scale.mul(x.pow(u128::from(b.power))),
-                        first.mul(target_root.pow(j as u128))
-                    );
-                    x = x.mul(b.step);
-                }
-            }
-        }
-        let (_, plan) = plan_v1(0);
-        assert_eq!(
-            plan.blocks.map(|b| b.scale.0),
-            [
-                7_017_390_190_810_289_357,
-                17_503_853_696_544_898_926,
-                9_865_662_462_788_700_761,
-                9_722_880_242_497_423_035,
-                2_494_635_378_086_535_074,
-                9_417_717_310_630_869_886,
-                9_606_226_123_056_290_305,
-                16_567_939_589_808_255_578,
-                2_572_097_256_420_412_601,
-                3_184_775_124_554_532_950,
-                12_196_860_509_838_602_653,
-                1
-            ]
-        );
-    }
-    #[test]
-    fn exact_division_preserves_zero_bytes_and_detects_each_endpoint_mutation() {
-        for (power, count) in [(1, 1), (2, 65), (8, 64)] {
-            let (b, source, target, q) = public_block_v1(power, count);
-            let quotient = MainKeyJoinPlanV1::quotient_v1(b, &source, &target).unwrap();
-            assert_eq!(&quotient[..q.len()], q.as_slice());
-            assert!(quotient[q.len()..].iter().all(|x| *x == F::ZERO));
-            assert!(
-                MainKeyJoinPlanV1::quotient_v1(
-                    b,
-                    &vec![F::ZERO; source.len()],
-                    &vec![F::ZERO; target.len()]
-                )
-                .unwrap()
-                .iter()
-                .all(|x| *x == F::ZERO)
-            );
-            let mut points = Vec::new();
-            let mut point = b.start;
-            for _ in 0..count {
-                points.push(point);
-                point = point.mul(b.step);
-            }
-            for changed in 0..count {
-                let mut delta = vec![F::ONE];
-                for (i, p) in points.iter().enumerate() {
-                    if i != changed {
-                        delta = product_v1(&delta, &[F::ZERO.sub(*p), F::ONE]);
-                    }
-                }
-                let mut mutant = source.clone();
-                for (i, v) in delta.iter().enumerate() {
-                    mutant[i] = mutant[i].add(*v);
-                }
-                assert!(MainKeyJoinPlanV1::quotient_v1(b, &mutant, &target).is_err());
-            }
-        }
-    }
-    #[test]
-    fn arbitrary_fp4_lifting_matches_exact_coefficient_quotient() {
-        for (power, count) in [(1, 1), (2, 65), (8, 64)] {
-            let (b, source, target, q) = public_block_v1(power, count);
-            for z in [E::from_base(F(31)), E::canonical([31, 5, 17, 2]).unwrap()] {
-                let mut p = b.start;
-                let mut v = E::ONE;
-                for _ in 0..count {
-                    v = v.mul(z.sub(E::from_base(p)));
-                    p = p.mul(b.step);
-                }
-                let lhs = MainKeyJoinPlanV1::evaluate_coefficients_v1(&source, z)
-                    .sub(MainKeyJoinPlanV1::evaluate_coefficients_v1(
-                        &target,
-                        MainKeyJoinPlanV1::target_point_v1(b, z),
-                    ))
-                    .mul(v.inv().unwrap());
-                assert_eq!(lhs, MainKeyJoinPlanV1::evaluate_coefficients_v1(&q, z));
-            }
-        }
-    }
-    #[test]
-    fn point_admission_and_supplemental_ownership_are_exact() {
-        let (layout, plan) = plan_v1(0);
-        let shared = layout.as_shared().unwrap();
-        for bad in [
-            E::ZERO,
-            E::ONE,
-            E::from_base(F(7)),
-            E::from_base(goldilocks_primitive_root_v1(19).unwrap()),
-        ] {
-            assert!(!plan.admissible_v1(bad, &shared).unwrap());
-        }
-        let z = E::canonical([31, 5, 17, 2]).unwrap();
-        assert!(plan.admissible_v1(z, &shared).unwrap());
-        let values = [E::from_base(F(43)); OPENINGS_V1];
-        let mixes = [E::from_base(F(47)); OPENINGS_V1];
-        let extras = plan.supplemental_v1(z, &values, &mixes).unwrap();
-        assert_eq!(extras.capacity(), OPENINGS_V1);
-        for (i, e) in extras.iter().enumerate() {
-            let (column, point) = plan.opening_v1(i, z).unwrap();
-            assert_eq!(e.group, column.group);
-            assert_eq!(
-                e.column,
-                aggregate::AggregateSupplementalColumnV1::Base(column.column)
-            );
-            assert_eq!(e.point, point);
-            assert_eq!(e.value, values[i]);
-            assert_eq!(e.mix, mixes[i]);
-        }
-        assert!(plan.supplemental_v1(z, &values, &mixes[..10]).is_err());
-    }
-    #[test]
-    fn plan_and_all_openings_are_transcript_bound_before_mixing() {
-        let (_, plan) = plan_v1(0);
-        let fresh = || {
-            new_main_transcript_after_profile_validation_v1(
-                TEST_PROOF_INSTANCE_V1,
-                &[7; 32],
-                [8; 32],
-            )
-            .unwrap()
-        };
-        let expected = plan.derive_alphas_v1(&mut fresh()).unwrap();
-        assert_eq!(expected.len(), BLOCKS_V1);
-        assert_eq!(expected.capacity(), BLOCKS_V1);
-        for variant in 0..9 {
-            let (_, mut changed) = plan_v1(0);
-            match variant {
-                0 => changed.blocks.swap(0, 1),
-                1 => changed.blocks[0].source.column += 1,
-                2 => changed.blocks[0].target.column += 1,
-                3 => changed.blocks[0].count -= 1,
-                4 => changed.blocks[0].start = changed.blocks[0].start.add(F::ONE),
-                5 => changed.blocks[0].step = changed.blocks[0].step.add(F::ONE),
-                6 => changed.blocks[0].scale = changed.blocks[0].scale.add(F::ONE),
-                7 => changed.blocks[0].power = 8,
-                _ => changed.blocks[0].target.log -= 1,
-            }
-            assert_ne!(changed.derive_alphas_v1(&mut fresh()).unwrap(), expected);
-        }
-        let base_values = [E::from_base(F(43)); OPENINGS_V1];
-        let derive = |values: &[E; OPENINGS_V1]| {
-            let mut transcript = fresh();
-            MainKeyJoinPlanV1::absorb_openings_v1(values, &mut transcript).unwrap();
-            MainKeyJoinPlanV1::derive_mixes_v1(&mut transcript).unwrap()
-        };
-        let expected = derive(&base_values);
-        assert_eq!(expected.capacity(), OPENINGS_V1);
-        for i in 0..OPENINGS_V1 {
-            for limb in 0..4 {
-                let mut changed = base_values;
-                let mut words = changed[i].coefficients().map(F::value);
-                words[limb] += 1;
-                changed[i] = E::canonical(words).unwrap();
-                assert_ne!(derive(&changed), expected);
-            }
-        }
-        let mut actual = fresh();
-        let mut serial = actual;
-        let actual_values =
-            MainKeyJoinPlanV1::exact_challenges_v1(&mut actual, DOMAIN_V1, BLOCKS_V1).unwrap();
-        let serial_values: Vec<_> = (0..BLOCKS_V1)
-            .map(|_| serial.challenge_fp4(DOMAIN_V1).unwrap())
-            .collect();
-        assert_eq!(actual_values, serial_values);
-        assert_eq!(actual.state(), serial.state());
-        assert!(MainKeyJoinPlanV1::exact_challenges_v1(&mut fresh(), DOMAIN_V1, 13).is_err());
-    }
-
-    #[test]
-    fn target_mutations_and_wrong_root_power_cannot_satisfy_a_byte_block() {
-        for (power, count) in [(2, 65), (8, 64)] {
-            let (b, source, target, _) = public_block_v1(power, count);
-            let points = (0..count)
-                .map(|j| {
-                    b.scale
-                        .mul(b.start.mul(b.step.pow(j as u128)).pow(u128::from(power)))
-                })
-                .collect::<Vec<_>>();
-            for changed in 0..count {
-                let mut delta = vec![F::ONE];
-                for (j, p) in points.iter().enumerate() {
-                    if j != changed {
-                        delta = product_v1(&delta, &[F::ZERO.sub(*p), F::ONE]);
-                    }
-                }
-                let mut mutant = target.clone();
-                mutant.resize(mutant.len().max(delta.len()), F::ZERO);
-                for (i, coefficient) in delta.iter().enumerate() {
-                    mutant[i] = mutant[i].add(*coefficient);
-                }
-                assert!(MainKeyJoinPlanV1::quotient_v1(b, &source, &mutant).is_err());
-            }
-            let mut wrong_scale = b;
-            wrong_scale.scale = wrong_scale.scale.add(F::ONE);
-            assert!(MainKeyJoinPlanV1::quotient_v1(wrong_scale, &source, &target).is_err());
-            let mut wrong_power = b;
-            wrong_power.power = 1;
-            assert!(MainKeyJoinPlanV1::quotient_v1(wrong_power, &source, &target).is_err());
-        }
-    }
-
-    #[test]
-    fn replay_sharing_and_synthetic_division_have_complete_public_work_counts() {
-        let (_, plan) = plan_v1(4);
-        let io_column = plan.blocks[0].target;
-        assert!(
-            plan.blocks[..KEY_OPENINGS_V1]
-                .iter()
-                .all(|b| b.source == plan.blocks[0].source)
-        );
-        let io_count = plan.blocks[..KEY_OPENINGS_V1]
-            .iter()
-            .filter(|b| b.target == io_column)
-            .count();
-        assert_eq!(io_count, 6);
-        let streamed = plan.blocks[..KEY_OPENINGS_V1]
-            .iter()
-            .filter(|b| b.target != io_column)
-            .collect::<Vec<_>>();
-        assert_eq!(streamed.len(), 5);
-        for (i, b) in streamed.iter().enumerate() {
-            assert!(streamed[..i].iter().all(|other| other.target != b.target));
-        }
-        let replays_per_opening_phase = 1 + streamed.len();
-        let composition_replays = 1 + replays_per_opening_phase + 2 + 3;
-        assert_eq!(composition_replays + 2 * replays_per_opening_phase, 24);
-        let n = |log: u8| (1_usize << log) + MASK_DEGREE + 1;
-        let divisions: usize = plan
-            .blocks
-            .iter()
-            .map(|b| {
-                let numerator = n(b.source.log).max((n(b.target.log) - 1) * b.power as usize + 1);
-                numerator * b.count
-            })
-            .sum();
-        assert_eq!(divisions, 345_046_578);
-        assert_eq!(divisions + 5 * 8 * (32 * (n(16) - 1) + 1), 431_255_898);
-        let evaluation_steps: usize = plan.blocks[..KEY_OPENINGS_V1]
-            .iter()
-            .map(|b| n(b.target.log))
-            .sum();
-        assert_eq!(evaluation_steps, 1_920_520);
-        // Opening evaluation plus the DEEP synthetic-division recurrence. No
-        // duplicate Horner evaluation is performed in the second phase.
-        assert_eq!(2 * evaluation_steps, 3_841_040);
-        assert_eq!(evaluation_steps + 20 * n(16), 3_267_560);
-        let native_butterflies =
-            2 * ((1 << 19) / 2 * 19) + 3 * ((1 << 18) / 2 * 18) + 16 * ((1 << 16) / 2 * 16);
-        assert_eq!(native_butterflies, 25_427_968);
-        assert_eq!(native_butterflies + 3 * ((1 << 19) / 2 * 19), 40_370_176);
-        assert!((n(19) + n(18) + n(16)) * 8 <= 2 * n(19) * 8);
-    }
-
-    #[test]
-    fn complete_key_and_digest_opening_plan_has_sufficient_conditional_trace_masks() {
-        let (layout, mut plan) = plan_v1(4);
-        plan.check_mask_query_closure_v1().unwrap();
-        let z = E::canonical([31, 5, 17, 2]).unwrap();
-        let shared = layout.as_shared().unwrap();
-        assert!(plan.admissible_v1(z, &shared).unwrap());
-        for signature in 0..5 {
-            let owner = plan.blocks[2 * signature + 1].target;
-            let matching = (0..OPENINGS_V1)
-                .filter(|i| {
-                    let (other, _) = plan.opening_v1(*i, z).unwrap();
-                    other.group == owner.group && other.column == owner.column
-                })
-                .collect::<Vec<_>>();
-            assert_eq!(matching.len(), 5);
-            assert_eq!(matching[0], 2 * signature + 1);
-            assert_eq!(
-                &matching[1..],
-                &[
-                    11 + 4 * signature,
-                    12 + 4 * signature,
-                    13 + 4 * signature,
-                    14 + 4 * signature
-                ]
-            );
-        }
-        assert_eq!((2 + 5) * (QUERY_COUNT + 4), 980);
-        assert_eq!((2 + 6) * (QUERY_COUNT + 4), 1120);
-        const { assert!((2 + 6) * (QUERY_COUNT + 4) <= MASK_DEGREE + 1) };
-        let old_admitted = E::from_base(goldilocks_primitive_root_v1(24).unwrap());
-        assert!(
-            aggregate::deep_point_is_admissible_v1(old_admitted, AGGREGATE_PARAMETERS_V1, &shared)
-                .unwrap()
-        );
-        for block in &plan.blocks[..KEY_OPENINGS_V1] {
-            assert!(
-                aggregate::deep_point_is_admissible_v1(
-                    MainKeyJoinPlanV1::target_point_v1(*block, old_admitted),
-                    AGGREGATE_PARAMETERS_V1,
-                    &shared
-                )
-                .unwrap()
-            );
-        }
-        assert!(!plan.admissible_v1(old_admitted, &shared).unwrap());
-        for i in KEY_OPENINGS_V1..OPENINGS_V1 {
-            let (_, point) = plan.opening_v1(i, old_admitted).unwrap();
-            assert_eq!(point.pow(1 << 19), E::ONE);
-        }
-        let chunks =
-            super::super::super::super::composition_masking::QuotientChunkGeometryV1::new_v1(
-                &shared,
-                AGGREGATE_PARAMETERS_V1,
-            )
-            .unwrap();
-        let cap = shared.fri_degree_cap(AGGREGATE_PARAMETERS_V1).unwrap();
-        assert_eq!(cap - chunks.stride_v1(), QUERY_COUNT + 1);
-        assert_eq!(
-            shared
-                .fri_mask_coefficient_count(AGGREGATE_PARAMETERS_V1)
-                .unwrap(),
-            cap - 1
-        );
-        assert_eq!(32 * ((1 << 16) + MASK_DEGREE) - 8, 2_155_224);
-        assert!(
-            32 * ((1 << 16) + MASK_DEGREE) - 8
-                < chunks.stride_v1() * AGGREGATE_PARAMETERS_V1.composition_degree_chunks
-        );
-        assert_eq!(
-            chunks.stride_v1() * AGGREGATE_PARAMETERS_V1.composition_degree_chunks,
-            3_538_122
-        );
-        let concentrated = plan.blocks[0].target;
-        for block in &mut plan.blocks[..KEY_OPENINGS_V1] {
-            block.target = concentrated;
-        }
-        const { assert!((2 + KEY_OPENINGS_V1) * (QUERY_COUNT + 4) > MASK_DEGREE + 1) };
-        assert!(plan.check_mask_query_closure_v1().is_err());
-    }
-
-    #[test]
-    fn digest_contributions_cross_chunk_boundaries_without_truncation_or_partial_errors() {
-        let stride = 17;
-        let cap = 24;
-        let fresh = || {
-            (0..6)
-                .map(|_| {
-                    let mut column = Vec::new();
-                    column.try_reserve_exact(cap).unwrap();
-                    column
-                })
-                .collect::<Vec<Vec<E>>>()
-        };
-        let mut chunks = fresh();
-        let mut coefficients = vec![E::ZERO; 4 * stride - 3];
-        for index in [
-            0,
-            stride - 1,
-            stride,
-            2 * stride - 1,
-            2 * stride,
-            3 * stride,
-            4 * stride - 4,
-        ] {
-            coefficients[index] = E::canonical([index as u64 + 3, 5, 7, 11]).unwrap();
-        }
-        MainKeyJoinPlanV1::publish_chunks_v1(&mut chunks, &coefficients, stride, cap).unwrap();
-        for point in [E::from_base(F(13)), E::canonical([31, 5, 17, 2]).unwrap()] {
-            let eval = |values: &[E]| {
-                values
-                    .iter()
-                    .rev()
-                    .fold(E::ZERO, |v, c| v.mul(point).add(*c))
-            };
-            let recomposed = chunks.iter().enumerate().fold(E::ZERO, |v, (i, chunk)| {
-                v.add(eval(chunk).mul(point.pow((stride * i) as u128)))
-            });
-            assert_eq!(recomposed, eval(&coefficients));
-        }
-        assert!(chunks[..3].iter().all(|c| c.len() == stride));
-        assert_eq!(chunks[3].len(), stride - 3);
-        assert!(chunks[4..].iter().all(Vec::is_empty));
-        for failure in 0..4 {
-            let mut target = fresh();
-            target[0].push(E::from_base(F(29)));
-            if failure == 0 {
-                target[4] = Vec::new();
-            }
-            if failure == 1 {
-                target[4].resize(stride + 1, E::ZERO);
-            }
-            let before = target.clone();
-            let bad_length = vec![E::ZERO; stride * 6 + 1];
-            let input = if failure == 2 {
-                &bad_length
-            } else {
-                &coefficients
-            };
-            let attempt_stride = if failure == 3 { 0 } else { stride };
-            assert!(
-                MainKeyJoinPlanV1::publish_chunks_v1(&mut target, input, attempt_stride, cap)
-                    .is_err()
-            );
-            assert_eq!(target, before);
-        }
-    }
-
-    #[test]
-    fn full_degree_and_additional_owner_payload_are_bounded() {
-        assert_eq!(8 * ((1 << 16) + MASK_DEGREE) - 64, 538_744);
-        assert_eq!(2 * ((1 << 18) + MASK_DEGREE) - 65, 527_853);
-        assert_eq!(2 * ((1 << 18) + MASK_DEGREE) - 1, 527_917);
-        const { assert!(8 * ((1 << 16) + MASK_DEGREE) + 1 < 589_687) };
-        assert_eq!(MainKeyJoinPlanV1::PRIVATE_BYTES_V1, 99_391_016);
-        assert_eq!(MainKeyJoinPlanV1::public_owner_charge_v1(), 8_388_608);
-        assert_eq!(KEY_OPENINGS_V1 * core::mem::size_of::<E>(), 352);
-        assert_eq!(OPENINGS_V1 * core::mem::size_of::<E>(), 992);
-    }
-}
-
 /// Closed statement-only relation plan. No private values or endpoints enter it.
 pub(super) struct MainKeyJoinPlanV1 {
     blocks: [BlockV1; KEY_BLOCKS_V1],
@@ -1320,5 +822,504 @@ impl MainKeyJoinPlanV1 {
             *out = out.add(*v);
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::privacy_engines::zk_x509::stark::tests::main_log19_statement_fixture_v1;
+
+    fn plan_v1(disclosures: usize) -> (AggregateProofLayoutV1, MainKeyJoinPlanV1) {
+        let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
+        let statement =
+            crate::privacy_engines::zk_x509::main_io::tests::statement_with_disclosures_v1(
+                disclosures,
+            );
+        let mut rfc_statement = main_log19_statement_fixture_v1();
+        rfc_statement.disclosed_attribute_indices =
+            (0..u8::try_from(disclosures).expect("fixture value fits u8")).collect();
+        let shape = ZkX509Rfc5280StarkShapeV1::from_statement(&rfc_statement).unwrap();
+        let plan = MainKeyJoinPlanV1::new_v1(&layout, &statement, shape).unwrap();
+        (layout, plan)
+    }
+    fn product_v1(a: &[F], b: &[F]) -> Vec<F> {
+        let mut out = vec![F::ZERO; a.len() + b.len() - 1];
+        for (i, x) in a.iter().enumerate() {
+            for (j, y) in b.iter().enumerate() {
+                out[i + j] = out[i + j].add(x.mul(*y));
+            }
+        }
+        out
+    }
+    fn public_block_v1(power: u8, count: usize) -> (BlockV1, Vec<F>, Vec<F>, Vec<F>) {
+        let column = ColumnV1 {
+            group: 0,
+            column: 0,
+            log: 19,
+        };
+        let b = BlockV1 {
+            source: column,
+            target: column,
+            start: F(11),
+            step: goldilocks_primitive_root_v1(19).unwrap(),
+            count,
+            power,
+            scale: F(13),
+        };
+        let target = vec![F(3), F(5), F(7), F(19)];
+        let mut divisor = vec![F::ONE];
+        let mut p = b.start;
+        for _ in 0..count {
+            divisor = product_v1(&divisor, &[F::ZERO.sub(p), F::ONE]);
+            p = p.mul(b.step);
+        }
+        let q = vec![F(23), F(29)];
+        let mut source = product_v1(&divisor, &q);
+        source.resize(source.len().max(3 * power as usize + 1), F::ZERO);
+        let mut cp = F::ONE;
+        for (j, v) in target.iter().enumerate() {
+            source[j * power as usize] = source[j * power as usize].add(v.mul(cp));
+            cp = cp.mul(b.scale);
+        }
+        (b, source, target, q)
+    }
+    #[test]
+    fn canonical_public_plan_covers_every_byte_and_both_selectors() {
+        for d in 0..=4 {
+            let (_, plan) = plan_v1(d);
+            assert_eq!(plan.blocks.len(), 12);
+            assert_eq!(plan.blocks.iter().map(|b| b.count).sum::<usize>(), 647);
+            for b in plan.blocks {
+                let target_root = goldilocks_primitive_root_v1(b.target.log).unwrap();
+                assert_eq!(
+                    b.step.pow(u128::from(b.power)),
+                    if b.count == 1 && b.power == 1 {
+                        F::ONE
+                    } else {
+                        target_root
+                    }
+                );
+                let mut x = b.start;
+                let first = b.scale.mul(x.pow(u128::from(b.power)));
+                for j in 0..b.count {
+                    assert_eq!(
+                        b.scale.mul(x.pow(u128::from(b.power))),
+                        first.mul(target_root.pow(j as u128))
+                    );
+                    x = x.mul(b.step);
+                }
+            }
+        }
+        let (_, plan) = plan_v1(0);
+        assert_eq!(
+            plan.blocks.map(|b| b.scale.0),
+            [
+                7_017_390_190_810_289_357,
+                17_503_853_696_544_898_926,
+                9_865_662_462_788_700_761,
+                9_722_880_242_497_423_035,
+                2_494_635_378_086_535_074,
+                9_417_717_310_630_869_886,
+                9_606_226_123_056_290_305,
+                16_567_939_589_808_255_578,
+                2_572_097_256_420_412_601,
+                3_184_775_124_554_532_950,
+                12_196_860_509_838_602_653,
+                1
+            ]
+        );
+    }
+    #[test]
+    fn exact_division_preserves_zero_bytes_and_detects_each_endpoint_mutation() {
+        for (power, count) in [(1, 1), (2, 65), (8, 64)] {
+            let (b, source, target, q) = public_block_v1(power, count);
+            let quotient = MainKeyJoinPlanV1::quotient_v1(b, &source, &target).unwrap();
+            assert_eq!(&quotient[..q.len()], q.as_slice());
+            assert!(quotient[q.len()..].iter().all(|x| *x == F::ZERO));
+            assert!(
+                MainKeyJoinPlanV1::quotient_v1(
+                    b,
+                    &vec![F::ZERO; source.len()],
+                    &vec![F::ZERO; target.len()]
+                )
+                .unwrap()
+                .iter()
+                .all(|x| *x == F::ZERO)
+            );
+            let mut points = Vec::new();
+            let mut point = b.start;
+            for _ in 0..count {
+                points.push(point);
+                point = point.mul(b.step);
+            }
+            for changed in 0..count {
+                let mut delta = vec![F::ONE];
+                for (i, p) in points.iter().enumerate() {
+                    if i != changed {
+                        delta = product_v1(&delta, &[F::ZERO.sub(*p), F::ONE]);
+                    }
+                }
+                let mut mutant = source.clone();
+                for (i, v) in delta.iter().enumerate() {
+                    mutant[i] = mutant[i].add(*v);
+                }
+                assert!(MainKeyJoinPlanV1::quotient_v1(b, &mutant, &target).is_err());
+            }
+        }
+    }
+    #[test]
+    fn arbitrary_fp4_lifting_matches_exact_coefficient_quotient() {
+        for (power, count) in [(1, 1), (2, 65), (8, 64)] {
+            let (b, source, target, q) = public_block_v1(power, count);
+            for z in [E::from_base(F(31)), E::canonical([31, 5, 17, 2]).unwrap()] {
+                let mut p = b.start;
+                let mut v = E::ONE;
+                for _ in 0..count {
+                    v = v.mul(z.sub(E::from_base(p)));
+                    p = p.mul(b.step);
+                }
+                let lhs = MainKeyJoinPlanV1::evaluate_coefficients_v1(&source, z)
+                    .sub(MainKeyJoinPlanV1::evaluate_coefficients_v1(
+                        &target,
+                        MainKeyJoinPlanV1::target_point_v1(b, z),
+                    ))
+                    .mul(v.inv().unwrap());
+                assert_eq!(lhs, MainKeyJoinPlanV1::evaluate_coefficients_v1(&q, z));
+            }
+        }
+    }
+    #[test]
+    fn point_admission_and_supplemental_ownership_are_exact() {
+        let (layout, plan) = plan_v1(0);
+        let shared = layout.as_shared().unwrap();
+        for bad in [
+            E::ZERO,
+            E::ONE,
+            E::from_base(F(7)),
+            E::from_base(goldilocks_primitive_root_v1(19).unwrap()),
+        ] {
+            assert!(!plan.admissible_v1(bad, &shared).unwrap());
+        }
+        let z = E::canonical([31, 5, 17, 2]).unwrap();
+        assert!(plan.admissible_v1(z, &shared).unwrap());
+        let values = [E::from_base(F(43)); OPENINGS_V1];
+        let mixes = [E::from_base(F(47)); OPENINGS_V1];
+        let extras = plan.supplemental_v1(z, &values, &mixes).unwrap();
+        assert_eq!(extras.capacity(), OPENINGS_V1);
+        for (i, e) in extras.iter().enumerate() {
+            let (column, point) = plan.opening_v1(i, z).unwrap();
+            assert_eq!(e.group, column.group);
+            assert_eq!(
+                e.column,
+                aggregate::AggregateSupplementalColumnV1::Base(column.column)
+            );
+            assert_eq!(e.point, point);
+            assert_eq!(e.value, values[i]);
+            assert_eq!(e.mix, mixes[i]);
+        }
+        assert!(plan.supplemental_v1(z, &values, &mixes[..10]).is_err());
+    }
+    #[test]
+    fn plan_and_all_openings_are_transcript_bound_before_mixing() {
+        let (_, plan) = plan_v1(0);
+        let fresh = || {
+            new_main_transcript_after_profile_validation_v1(
+                TEST_PROOF_INSTANCE_V1,
+                &[7; 32],
+                [8; 32],
+            )
+            .unwrap()
+        };
+        let expected = plan.derive_alphas_v1(&mut fresh()).unwrap();
+        assert_eq!(expected.len(), BLOCKS_V1);
+        assert_eq!(expected.capacity(), BLOCKS_V1);
+        for variant in 0..9 {
+            let (_, mut changed) = plan_v1(0);
+            match variant {
+                0 => changed.blocks.swap(0, 1),
+                1 => changed.blocks[0].source.column += 1,
+                2 => changed.blocks[0].target.column += 1,
+                3 => changed.blocks[0].count -= 1,
+                4 => changed.blocks[0].start = changed.blocks[0].start.add(F::ONE),
+                5 => changed.blocks[0].step = changed.blocks[0].step.add(F::ONE),
+                6 => changed.blocks[0].scale = changed.blocks[0].scale.add(F::ONE),
+                7 => changed.blocks[0].power = 8,
+                _ => changed.blocks[0].target.log -= 1,
+            }
+            assert_ne!(changed.derive_alphas_v1(&mut fresh()).unwrap(), expected);
+        }
+        let base_values = [E::from_base(F(43)); OPENINGS_V1];
+        let derive = |values: &[E; OPENINGS_V1]| {
+            let mut transcript = fresh();
+            MainKeyJoinPlanV1::absorb_openings_v1(values, &mut transcript).unwrap();
+            MainKeyJoinPlanV1::derive_mixes_v1(&mut transcript).unwrap()
+        };
+        let expected = derive(&base_values);
+        assert_eq!(expected.capacity(), OPENINGS_V1);
+        for i in 0..OPENINGS_V1 {
+            for limb in 0..4 {
+                let mut changed = base_values;
+                let mut words = changed[i].coefficients().map(F::value);
+                words[limb] += 1;
+                changed[i] = E::canonical(words).unwrap();
+                assert_ne!(derive(&changed), expected);
+            }
+        }
+        let mut actual = fresh();
+        let mut serial = actual;
+        let actual_values =
+            MainKeyJoinPlanV1::exact_challenges_v1(&mut actual, DOMAIN_V1, BLOCKS_V1).unwrap();
+        let serial_values: Vec<_> = (0..BLOCKS_V1)
+            .map(|_| serial.challenge_fp4(DOMAIN_V1).unwrap())
+            .collect();
+        assert_eq!(actual_values, serial_values);
+        assert_eq!(actual.state(), serial.state());
+        assert!(MainKeyJoinPlanV1::exact_challenges_v1(&mut fresh(), DOMAIN_V1, 13).is_err());
+    }
+
+    #[test]
+    fn target_mutations_and_wrong_root_power_cannot_satisfy_a_byte_block() {
+        for (power, count) in [(2, 65), (8, 64)] {
+            let (b, source, target, _) = public_block_v1(power, count);
+            let points = (0..count)
+                .map(|j| {
+                    b.scale
+                        .mul(b.start.mul(b.step.pow(j as u128)).pow(u128::from(power)))
+                })
+                .collect::<Vec<_>>();
+            for changed in 0..count {
+                let mut delta = vec![F::ONE];
+                for (j, p) in points.iter().enumerate() {
+                    if j != changed {
+                        delta = product_v1(&delta, &[F::ZERO.sub(*p), F::ONE]);
+                    }
+                }
+                let mut mutant = target.clone();
+                mutant.resize(mutant.len().max(delta.len()), F::ZERO);
+                for (i, coefficient) in delta.iter().enumerate() {
+                    mutant[i] = mutant[i].add(*coefficient);
+                }
+                assert!(MainKeyJoinPlanV1::quotient_v1(b, &source, &mutant).is_err());
+            }
+            let mut wrong_scale = b;
+            wrong_scale.scale = wrong_scale.scale.add(F::ONE);
+            assert!(MainKeyJoinPlanV1::quotient_v1(wrong_scale, &source, &target).is_err());
+            let mut wrong_power = b;
+            wrong_power.power = 1;
+            assert!(MainKeyJoinPlanV1::quotient_v1(wrong_power, &source, &target).is_err());
+        }
+    }
+
+    #[test]
+    fn replay_sharing_and_synthetic_division_have_complete_public_work_counts() {
+        let (_, plan) = plan_v1(4);
+        let io_column = plan.blocks[0].target;
+        assert!(
+            plan.blocks[..KEY_OPENINGS_V1]
+                .iter()
+                .all(|b| b.source == plan.blocks[0].source)
+        );
+        let io_count = plan.blocks[..KEY_OPENINGS_V1]
+            .iter()
+            .filter(|b| b.target == io_column)
+            .count();
+        assert_eq!(io_count, 6);
+        let streamed = plan.blocks[..KEY_OPENINGS_V1]
+            .iter()
+            .filter(|b| b.target != io_column)
+            .collect::<Vec<_>>();
+        assert_eq!(streamed.len(), 5);
+        for (i, b) in streamed.iter().enumerate() {
+            assert!(streamed[..i].iter().all(|other| other.target != b.target));
+        }
+        let replays_per_opening_phase = 1 + streamed.len();
+        let composition_replays = 1 + replays_per_opening_phase + 2 + 3;
+        assert_eq!(composition_replays + 2 * replays_per_opening_phase, 24);
+        let n = |log: u8| (1_usize << log) + MASK_DEGREE + 1;
+        let divisions: usize = plan
+            .blocks
+            .iter()
+            .map(|b| {
+                let numerator = n(b.source.log).max((n(b.target.log) - 1) * b.power as usize + 1);
+                numerator * b.count
+            })
+            .sum();
+        assert_eq!(divisions, 345_046_578);
+        assert_eq!(divisions + 5 * 8 * (32 * (n(16) - 1) + 1), 431_255_898);
+        let evaluation_steps: usize = plan.blocks[..KEY_OPENINGS_V1]
+            .iter()
+            .map(|b| n(b.target.log))
+            .sum();
+        assert_eq!(evaluation_steps, 1_920_520);
+        // Opening evaluation plus the DEEP synthetic-division recurrence. No
+        // duplicate Horner evaluation is performed in the second phase.
+        assert_eq!(2 * evaluation_steps, 3_841_040);
+        assert_eq!(evaluation_steps + 20 * n(16), 3_267_560);
+        let native_butterflies =
+            2 * ((1 << 19) / 2 * 19) + 3 * ((1 << 18) / 2 * 18) + 16 * ((1 << 16) / 2 * 16);
+        assert_eq!(native_butterflies, 25_427_968);
+        assert_eq!(native_butterflies + 3 * ((1 << 19) / 2 * 19), 40_370_176);
+        assert!((n(19) + n(18) + n(16)) * 8 <= 2 * n(19) * 8);
+    }
+
+    #[test]
+    fn complete_key_and_digest_opening_plan_has_sufficient_conditional_trace_masks() {
+        let (layout, mut plan) = plan_v1(4);
+        plan.check_mask_query_closure_v1().unwrap();
+        let z = E::canonical([31, 5, 17, 2]).unwrap();
+        let shared = layout.as_shared().unwrap();
+        assert!(plan.admissible_v1(z, &shared).unwrap());
+        for signature in 0..5 {
+            let owner = plan.blocks[2 * signature + 1].target;
+            let matching = (0..OPENINGS_V1)
+                .filter(|i| {
+                    let (other, _) = plan.opening_v1(*i, z).unwrap();
+                    other.group == owner.group && other.column == owner.column
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(matching.len(), 5);
+            assert_eq!(matching[0], 2 * signature + 1);
+            assert_eq!(
+                &matching[1..],
+                &[
+                    11 + 4 * signature,
+                    12 + 4 * signature,
+                    13 + 4 * signature,
+                    14 + 4 * signature
+                ]
+            );
+        }
+        assert_eq!((2 + 5) * (QUERY_COUNT + 4), 980);
+        assert_eq!((2 + 6) * (QUERY_COUNT + 4), 1120);
+        const { assert!((2 + 6) * (QUERY_COUNT + 4) <= MASK_DEGREE + 1) };
+        let old_admitted = E::from_base(goldilocks_primitive_root_v1(24).unwrap());
+        assert!(
+            aggregate::deep_point_is_admissible_v1(old_admitted, AGGREGATE_PARAMETERS_V1, &shared)
+                .unwrap()
+        );
+        for block in &plan.blocks[..KEY_OPENINGS_V1] {
+            assert!(
+                aggregate::deep_point_is_admissible_v1(
+                    MainKeyJoinPlanV1::target_point_v1(*block, old_admitted),
+                    AGGREGATE_PARAMETERS_V1,
+                    &shared
+                )
+                .unwrap()
+            );
+        }
+        assert!(!plan.admissible_v1(old_admitted, &shared).unwrap());
+        for i in KEY_OPENINGS_V1..OPENINGS_V1 {
+            let (_, point) = plan.opening_v1(i, old_admitted).unwrap();
+            assert_eq!(point.pow(1 << 19), E::ONE);
+        }
+        let chunks =
+            super::super::super::super::composition_masking::QuotientChunkGeometryV1::new_v1(
+                &shared,
+                AGGREGATE_PARAMETERS_V1,
+            )
+            .unwrap();
+        let cap = shared.fri_degree_cap(AGGREGATE_PARAMETERS_V1).unwrap();
+        assert_eq!(cap - chunks.stride_v1(), QUERY_COUNT + 1);
+        assert_eq!(
+            shared
+                .fri_mask_coefficient_count(AGGREGATE_PARAMETERS_V1)
+                .unwrap(),
+            cap - 1
+        );
+        assert_eq!(32 * ((1 << 16) + MASK_DEGREE) - 8, 2_155_224);
+        assert!(
+            32 * ((1 << 16) + MASK_DEGREE) - 8
+                < chunks.stride_v1() * AGGREGATE_PARAMETERS_V1.composition_degree_chunks
+        );
+        assert_eq!(
+            chunks.stride_v1() * AGGREGATE_PARAMETERS_V1.composition_degree_chunks,
+            3_538_122
+        );
+        let concentrated = plan.blocks[0].target;
+        for block in &mut plan.blocks[..KEY_OPENINGS_V1] {
+            block.target = concentrated;
+        }
+        const { assert!((2 + KEY_OPENINGS_V1) * (QUERY_COUNT + 4) > MASK_DEGREE + 1) };
+        assert!(plan.check_mask_query_closure_v1().is_err());
+    }
+
+    #[test]
+    fn digest_contributions_cross_chunk_boundaries_without_truncation_or_partial_errors() {
+        let stride = 17;
+        let cap = 24;
+        let fresh = || {
+            (0..6)
+                .map(|_| {
+                    let mut column = Vec::new();
+                    column.try_reserve_exact(cap).unwrap();
+                    column
+                })
+                .collect::<Vec<Vec<E>>>()
+        };
+        let mut chunks = fresh();
+        let mut coefficients = vec![E::ZERO; 4 * stride - 3];
+        for index in [
+            0,
+            stride - 1,
+            stride,
+            2 * stride - 1,
+            2 * stride,
+            3 * stride,
+            4 * stride - 4,
+        ] {
+            coefficients[index] = E::canonical([index as u64 + 3, 5, 7, 11]).unwrap();
+        }
+        MainKeyJoinPlanV1::publish_chunks_v1(&mut chunks, &coefficients, stride, cap).unwrap();
+        for point in [E::from_base(F(13)), E::canonical([31, 5, 17, 2]).unwrap()] {
+            let eval = |values: &[E]| {
+                values
+                    .iter()
+                    .rev()
+                    .fold(E::ZERO, |v, c| v.mul(point).add(*c))
+            };
+            let recomposed = chunks.iter().enumerate().fold(E::ZERO, |v, (i, chunk)| {
+                v.add(eval(chunk).mul(point.pow((stride * i) as u128)))
+            });
+            assert_eq!(recomposed, eval(&coefficients));
+        }
+        assert!(chunks[..3].iter().all(|c| c.len() == stride));
+        assert_eq!(chunks[3].len(), stride - 3);
+        assert!(chunks[4..].iter().all(Vec::is_empty));
+        for failure in 0..4 {
+            let mut target = fresh();
+            target[0].push(E::from_base(F(29)));
+            if failure == 0 {
+                target[4] = Vec::new();
+            }
+            if failure == 1 {
+                target[4].resize(stride + 1, E::ZERO);
+            }
+            let before = target.clone();
+            let bad_length = vec![E::ZERO; stride * 6 + 1];
+            let input = if failure == 2 {
+                &bad_length
+            } else {
+                &coefficients
+            };
+            let attempt_stride = if failure == 3 { 0 } else { stride };
+            assert!(
+                MainKeyJoinPlanV1::publish_chunks_v1(&mut target, input, attempt_stride, cap)
+                    .is_err()
+            );
+            assert_eq!(target, before);
+        }
+    }
+
+    #[test]
+    fn full_degree_and_additional_owner_payload_are_bounded() {
+        assert_eq!(8 * ((1 << 16) + MASK_DEGREE) - 64, 538_744);
+        assert_eq!(2 * ((1 << 18) + MASK_DEGREE) - 65, 527_853);
+        assert_eq!(2 * ((1 << 18) + MASK_DEGREE) - 1, 527_917);
+        const { assert!(8 * ((1 << 16) + MASK_DEGREE) + 1 < 589_687) };
+        assert_eq!(MainKeyJoinPlanV1::PRIVATE_BYTES_V1, 99_391_016);
+        assert_eq!(MainKeyJoinPlanV1::public_owner_charge_v1(), 8_388_608);
+        assert_eq!(KEY_OPENINGS_V1 * core::mem::size_of::<E>(), 352);
+        assert_eq!(OPENINGS_V1 * core::mem::size_of::<E>(), 992);
     }
 }

@@ -125,6 +125,10 @@ fn key_digest(key: &Key) -> Digest {
     Digest::new_from_chunks(&[KEY_DOMAIN, key.as_ref()])
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 fn value_digest<E>(height: Value) -> Result<Digest, MembershipRootError<E>> {
     let height = u64::try_from(height.get()).map_err(|_| MembershipRootError::HeightOverflow)?;
     Ok(canonical_height_digest(height))
@@ -134,6 +138,10 @@ fn canonical_height_digest(height: u64) -> Digest {
     Digest::new_from_chunks(&[VALUE_DOMAIN, &height.to_le_bytes()])
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 fn retain_height<S: MembershipStore>(
     height: Value,
     store: &mut S,
@@ -149,6 +157,10 @@ fn retain_height<S: MembershipStore>(
     })
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 fn insert_captured_member<S: MembershipStore>(
     root: &mut MerkleMapRoot<S::NodeLocation>,
     key: &Key,
@@ -234,6 +246,10 @@ impl TransactionsBlock<'_> {
     /// Complete entry visits are admitted before store I/O. The caller retains
     /// the admitted store/workspace, including through failure or unwind. Errors
     /// leave only unreachable immutable provisional nodes.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+    )]
     pub(in crate::state) fn capture_committed_root<S: MembershipStore>(
         &self,
         max_row_visits: usize,
@@ -271,6 +287,10 @@ impl TransactionsBlock<'_> {
     }
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 impl PreparedTransactionsBlock<'_> {
     /// Prepare only this admitted owner's actual net membership changes.
     /// No current or historical key set is cloned. The capability's original
@@ -352,19 +372,25 @@ impl PreparedTransactionsBlock<'_> {
     }
 }
 
+type MembershipRootPublicationResult<N, Installation, Original> = Result<
+    (
+        CommittedMembershipRoot<N>,
+        PublishedTransactions<Installation>,
+    ),
+    (Original, PreparedMembershipRoot<N>),
+>;
+
 impl<Installation> PreparedDetachedTransactionsBlock<'_, Installation> {
     /// Publish the same root after the original detached writer was reacquired.
     /// Installation admission and cleanup keep their existing aggregate owner.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+    )]
     pub(in crate::state) fn publish_with_membership_root<N: Copy>(
         self,
         root: PreparedMembershipRoot<N>,
-    ) -> Result<
-        (
-            CommittedMembershipRoot<N>,
-            PublishedTransactions<Installation>,
-        ),
-        (Self, PreparedMembershipRoot<N>),
-    > {
+    ) -> MembershipRootPublicationResult<N, Installation, Self> {
         if !Identity::ptr_eq(&self.prepared.next_identity, &root.preparation) {
             return Err((self, root));
         }

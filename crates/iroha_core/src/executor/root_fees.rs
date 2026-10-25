@@ -61,7 +61,7 @@ pub(super) fn effective(
 ///
 /// # Errors
 /// Initial genesis must install its explicit root fee policy before using sponsor custody.
-pub(crate) fn sponsor_vault_custody<'a>(
+pub fn sponsor_vault_custody<'a>(
     state_transaction: &'a StateTransaction<'_, '_>,
 ) -> Result<&'a AccountId, InstructionExecutionError> {
     let policy = if is_initial_genesis_context(state_transaction) {
@@ -82,7 +82,7 @@ pub(crate) fn sponsor_vault_custody<'a>(
 
 /// Validate the complete committed policy for executed-genesis schedule admission.
 /// This borrows the existing projection; it never decodes parameters or selects local defaults.
-pub(crate) fn validate_committed(
+pub fn validate_committed(
     world: &impl WorldReadOnly,
 ) -> Result<(), ExecutionAttemptError<NexusFeeAdmissionError>> {
     let policy = world
@@ -266,7 +266,10 @@ mod tests {
         let state = State::new_with_nexus_for_testing(world, nexus, LiveQueryStore::start_test());
         if !with_policy {
             let mut parameters = state.world.parameters.block();
-            parameters.remove_custom_parameter(&RootFeePolicy::parameter_id());
+            parameters
+                .remove_custom_parameter(&RootFeePolicy::parameter_id())
+                .expect("root fee policy removal is permitted")
+                .expect("fixture authors the removed root fee policy");
             parameters.commit();
         }
         (state, ds, asset)
@@ -300,7 +303,9 @@ mod tests {
         tx.world
             .parameters
             .get_mut()
-            .remove_custom_parameter(&RootFeePolicy::parameter_id());
+            .remove_custom_parameter(&RootFeePolicy::parameter_id())
+            .expect("root fee policy removal is permitted")
+            .expect("fixture authors the removed root fee policy");
         assert!(sponsor_vault_custody(&tx).is_err());
         assert_eq!(tx.nexus.fees, frozen);
     }

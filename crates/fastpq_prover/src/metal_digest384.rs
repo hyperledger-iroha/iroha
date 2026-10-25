@@ -337,7 +337,7 @@ mod tests {
         let lengths = [0, 1, 7, 8, METAL_BUFFER_PAGE_BYTES - 3, 17, 96];
         let payloads = lengths.map(|len| {
             (0..len)
-                .map(|i| ((i * 73 + len) & 255) as u8)
+                .map(|i| u8::try_from((i * 73 + len) & 255).expect("masked byte"))
                 .collect::<Vec<_>>()
         });
         let jobs = payloads
@@ -546,7 +546,7 @@ mod tests {
             .map(|index| {
                 let len = [0, 7, 96, 2408, 8192][index % 5];
                 (0..len)
-                    .map(|byte| ((index * 17 + byte * 73) & 255) as u8)
+                    .map(|byte| u8::try_from((index * 17 + byte * 73) & 255).expect("masked byte"))
                     .collect::<Vec<_>>()
             })
             .collect::<Vec<_>>();
@@ -679,11 +679,11 @@ mod tests {
     fn digest384_air_row_batch_resource_diagnostic() {
         use std::{hint::black_box, time::Instant};
 
+        const COLUMNS: usize = 301;
         let _gpu_lane = crate::backend::acquire_gpu_lane();
         // These are complete 301-column normal DEEP row payloads, with canonical field
         // elements and distinct typed row indices. Prefix preparation remains
         // CPU work and is measured separately for both execution routes.
-        const COLUMNS: usize = 301;
         for job_count in [16, 64, 256] {
             let payloads: Vec<Vec<u8>> = (0..job_count)
                 .map(|row| {

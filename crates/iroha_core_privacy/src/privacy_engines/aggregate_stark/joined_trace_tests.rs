@@ -99,7 +99,8 @@ fn materialized_rows(
     let root = goldilocks_primitive_root_v1(plan.commitment_lde_log2).unwrap();
     (0..(1 << plan.commitment_lde_log2))
         .map(|index| {
-            let x = F(GOLDILOCKS_GENERATOR_V1).mul(root.pow(index as u128));
+            let x = F(GOLDILOCKS_GENERATOR_V1)
+                .mul(root.pow(u128::try_from(index).expect("fixture index")));
             polynomials
                 .iter()
                 .flat_map(|group| {
@@ -538,11 +539,13 @@ fn sampling_before_join_preserves_masks_source_order_and_early_rejection() {
             domains.digest_context,
             domains.base_leaf,
             domains.base_node,
-            group,
-            *native,
-            plan.commitment_lde_log2,
-            range.len(),
-            3,
+            MaskedTraceShapeV1 {
+                group,
+                native_trace_log2: *native,
+                lde_log2: plan.commitment_lde_log2,
+                width: range.len(),
+                mask_degree: 3,
+            },
             &[],
             &mut reference_rng,
             |column| Ok(source(column)),

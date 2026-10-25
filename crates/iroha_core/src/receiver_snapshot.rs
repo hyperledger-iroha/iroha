@@ -30,7 +30,7 @@ pub struct FastpqSourceOpeningBuildLimits {
 ///
 /// The leaves remain borrowed from the caller's exact archive. Neither this local
 /// result nor its computed root authenticates execution ownership or finality.
-pub(crate) struct FastpqOrdinarySourceArchive<'leaves> {
+pub struct FastpqOrdinarySourceArchive<'leaves> {
     /// Canonical manifest matching every supplied leaf and the fixed witness write.
     pub(crate) manifest: iroha_data_model::fastpq::FastpqOrdinarySourceStatementManifestV1,
     /// Complete validated leaf sequence, without an additional owned copy.
@@ -46,7 +46,7 @@ pub(crate) struct FastpqOrdinarySourceArchive<'leaves> {
 ///
 /// Separating preparation from [`Self::build`] lets a leaf-opening caller reject
 /// absent positions before cloning ordinary writes, preserving its existing order.
-pub(crate) struct PreparedFastpqOrdinarySourceArchive<'witness, 'leaves> {
+pub struct PreparedFastpqOrdinarySourceArchive<'witness, 'leaves> {
     witness: &'witness ExecWitness,
     target: &'witness iroha_data_model::block::consensus::ExecKv,
     manifest: iroha_data_model::fastpq::FastpqOrdinarySourceStatementManifestV1,
@@ -67,7 +67,7 @@ pub(crate) struct PreparedFastpqOrdinarySourceArchive<'witness, 'leaves> {
 /// # Errors
 /// Rejects exceeded bounds, malformed or duplicate reserved keys, noncanonical
 /// manifests, and inconsistent source context, complete leaf order or counts.
-pub(crate) fn prepare_fastpq_ordinary_source_archive_v1<'witness, 'leaves>(
+pub fn prepare_fastpq_ordinary_source_archive_v1<'witness, 'leaves>(
     witness: &'witness ExecWitness,
     source: iroha_data_model::fastpq::FastpqSourceStatementContextV1,
     expected_entries: &[iroha_data_model::fastpq::FastpqSourceExecutionEntryV1],
@@ -344,7 +344,7 @@ pub fn fastpq_ordinary_source_statement_opening_v1(
 }
 
 /// Construct the exact fixed-key validation-fee policy proof against the ordinary-write SMT.
-pub(crate) fn validation_fee_policy_witness_proof_v1(
+pub fn validation_fee_policy_witness_proof_v1(
     witness: &ExecWitness,
 ) -> Result<(ValidationFeePolicyWitnessProofV1, Hash), String> {
     let target_count = witness
@@ -387,7 +387,7 @@ pub(crate) fn validation_fee_policy_witness_proof_v1(
     Ok((proof, ordinary_root))
 }
 /// Construct the exact fixed-key Parliament timed-OVN casting proof against the ordinary-write SMT.
-pub(crate) fn parliament_timed_ovn_casting_witness_proof_v1(
+pub fn parliament_timed_ovn_casting_witness_proof_v1(
     witness: &ExecWitness,
 ) -> Result<(ParliamentTimedOvnCastingWitnessProofV1, Hash), String> {
     let target_count = witness
@@ -430,7 +430,7 @@ pub(crate) fn parliament_timed_ovn_casting_witness_proof_v1(
     Ok((proof, ordinary_root))
 }
 /// Retain the complete native fee corpus and its fixed root/count inclusion proof.
-pub(crate) fn fee_evidence_block_proof_v1(
+pub fn fee_evidence_block_proof_v1(
     witness: &ExecWitness,
 ) -> Result<
     (
@@ -446,7 +446,7 @@ pub(crate) fn fee_evidence_block_proof_v1(
 
 /// Build and fully verify the original fee corpus while preserving local
 /// canonical decode refusals; return its authenticated evaluated height as well.
-pub(crate) fn fee_evidence_block_proof_attempt_v1(
+pub fn fee_evidence_block_proof_attempt_v1(
     witness: &ExecWitness,
 ) -> Result<
     (
@@ -521,7 +521,7 @@ pub(crate) fn fee_evidence_block_proof_attempt_v1(
 }
 
 /// Build a fixed-depth ordinary-write proof for an already selected exact key/value.
-pub(crate) fn sparse_smt_siblings(inputs: &[KvPair], target: &KvPair) -> Result<Vec<Hash>, String> {
+pub fn sparse_smt_siblings(inputs: &[KvPair], target: &KvPair) -> Result<Vec<Hash>, String> {
     let empty = Hash::new([]);
     let target_path = hash_bytes(&target.key).to_vec();
     let mut raw_paths = BTreeMap::<Vec<u8>, Vec<u8>>::new();

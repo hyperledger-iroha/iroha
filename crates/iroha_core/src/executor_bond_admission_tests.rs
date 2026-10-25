@@ -723,9 +723,7 @@ mod bond_admission {
     /// carries: the bootstrap profile bounds the body, and the fee is charged separately.
     #[test]
     fn initial_fee_paying_claims_keep_the_sixteen_claim_bound() {
-        let _guard = crate::status::nexus_fee_test_lock()
-            .lock()
-            .expect("nexus fee test lock");
+        let _guard = crate::status::operator_status_test_guard();
         crate::status::reset_nexus_economics_for_tests();
         let mut fixture = Fixture::with_fees();
         let fee_asset = fixture.fee_asset.clone().expect("fees enabled");
@@ -805,7 +803,7 @@ mod bond_admission {
         let record = fixture.record();
         assert_eq!(record.state.lifecycle, BondLifecycle::Matured);
         assert!(
-            record.state.cashflows[2..usize::from(COUPONS) + 1]
+            record.state.cashflows[2..=usize::from(COUPONS)]
                 .iter()
                 .all(|cashflow| cashflow.status == BondCashflowStatus::Cancelled)
         );

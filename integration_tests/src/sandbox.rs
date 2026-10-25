@@ -79,8 +79,7 @@ impl SerializedNetwork {
         };
         if !shutdown_completed {
             eprintln!(
-                "warning: graceful test network shutdown did not complete within {:?}; falling back to drop cleanup",
-                SERIALIZED_NETWORK_SHUTDOWN_TIMEOUT
+                "warning: graceful test network shutdown did not complete within {SERIALIZED_NETWORK_SHUTDOWN_TIMEOUT:?}; falling back to drop cleanup"
             );
         }
         drop(network);
@@ -109,27 +108,27 @@ impl SerializedNetwork {
         let runtime_flavor = handle.as_ref().map(Handle::runtime_flavor);
         let inside_runtime = Handle::try_current().is_ok();
         let shutdown = move || {
-            let shutdown_completed = if let Some(handle) = handle.as_ref() {
-                if matches!(handle.runtime_flavor(), RuntimeFlavor::CurrentThread) {
-                    // Current-thread runtimes cannot be driven from another thread.
-                    shutdown_network_with_fresh_runtime(&network)
-                } else {
-                    handle.block_on(async {
-                        tokio::time::timeout(
-                            SERIALIZED_NETWORK_SHUTDOWN_TIMEOUT,
-                            network.shutdown(),
-                        )
-                        .await
-                        .is_ok()
-                    })
-                }
-            } else {
-                shutdown_network_with_fresh_runtime(&network)
-            };
+            let shutdown_completed = handle.as_ref().map_or_else(
+                || shutdown_network_with_fresh_runtime(&network),
+                |handle| {
+                    if matches!(handle.runtime_flavor(), RuntimeFlavor::CurrentThread) {
+                        // Current-thread runtimes cannot be driven from another thread.
+                        shutdown_network_with_fresh_runtime(&network)
+                    } else {
+                        handle.block_on(async {
+                            tokio::time::timeout(
+                                SERIALIZED_NETWORK_SHUTDOWN_TIMEOUT,
+                                network.shutdown(),
+                            )
+                            .await
+                            .is_ok()
+                        })
+                    }
+                },
+            );
             if !shutdown_completed {
                 eprintln!(
-                    "warning: graceful test network shutdown did not complete within {:?}; falling back to drop cleanup",
-                    SERIALIZED_NETWORK_SHUTDOWN_TIMEOUT
+                    "warning: graceful test network shutdown did not complete within {SERIALIZED_NETWORK_SHUTDOWN_TIMEOUT:?}; falling back to drop cleanup"
                 );
             }
             drop(network);
@@ -556,7 +555,7 @@ pub fn start_network_blocking_or_skip(
                     .wrap_err("network startup authoritative status-height barrier failed")
             });
         match attempt_result {
-            Ok(_) => {
+            Ok(()) => {
                 return Ok(Some((
                     SerializedNetwork::new_with_handle(network, guard, runtime.handle().clone()),
                     runtime,
@@ -570,8 +569,7 @@ pub fn start_network_blocking_or_skip(
                 drop(runtime);
                 if retry {
                     eprintln!(
-                        "warning: {context} fresh network startup attempt {attempt}/{network_start_attempts} failed with retryable error; rebuilding in {:?}: {err}",
-                        NETWORK_START_RETRY_DELAY
+                        "warning: {context} fresh network startup attempt {attempt}/{network_start_attempts} failed with retryable error; rebuilding in {NETWORK_START_RETRY_DELAY:?}: {err}"
                     );
                     std::thread::sleep(NETWORK_START_RETRY_DELAY);
                     continue;
@@ -659,7 +657,7 @@ pub async fn start_network_async_or_skip(
         }
         .await;
         match attempt_result {
-            Ok(_) => {
+            Ok(()) => {
                 return Ok(Some(SerializedNetwork::new(network, guard)));
             }
             Err(err) => {
@@ -669,8 +667,7 @@ pub async fn start_network_async_or_skip(
                 drop(network);
                 if retry {
                     eprintln!(
-                        "warning: {context} fresh network startup attempt {attempt}/{network_start_attempts} failed with retryable error; rebuilding in {:?}: {err}",
-                        NETWORK_START_RETRY_DELAY
+                        "warning: {context} fresh network startup attempt {attempt}/{network_start_attempts} failed with retryable error; rebuilding in {NETWORK_START_RETRY_DELAY:?}: {err}"
                     );
                     tokio::time::sleep(NETWORK_START_RETRY_DELAY).await;
                     continue;

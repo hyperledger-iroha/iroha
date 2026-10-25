@@ -344,7 +344,8 @@ pub(super) fn nodes(
         if spec.optional && cert2 == 0 {
             continue;
         }
-        let document = (spec.document + spec.cert2_coefficient * cert2) as usize;
+        let document = usize::try_from(spec.document + spec.cert2_coefficient * cert2)
+            .map_err(|_| ZkX509Rfc5280StarkErrorV1::Grammar)?;
         let role_instance = if spec.document_instance { document } else { 0 };
         let provenance = trace
             .semantic_provenance

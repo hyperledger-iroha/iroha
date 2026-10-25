@@ -14,7 +14,7 @@ fn descriptor_and_terminal_known_answer_are_pinned() {
     ];
     let challenges = challenges();
     let base = build_zk_x509_der_stark_base_v1(&[&nested]).expect("base");
-    let trace = build_zk_x509_der_stark_trace_v1(base, challenges).expect("trace");
+    let trace = build_zk_x509_der_stark_trace_v1(base, &challenges).expect("trace");
     let terminals = zk_x509_der_stark_terminals_v1(&trace).expect("terminals");
     assert_eq!(descriptor, ZK_X509_DER_STARK_AIR_DESCRIPTOR_SHA256_V1);
     assert_eq!(

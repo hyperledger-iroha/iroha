@@ -4,7 +4,7 @@
 //! keys and status membership are checked; proof contents, verifier admission,
 //! proof tags and historical finality remain with their separate owners.
 //! TODO: consume this scoped encoder with every canonical table/cell, original
-//! relation and authenticated history in StatePublication. Original predecessor
+//! relation and authenticated history in `StatePublication`. Original predecessor
 //! publication checks, complete scratch admission and durable node custody remain
 //! required before any complete State root or finalized anchor is exposed.
 
@@ -49,8 +49,12 @@ impl<'frozen> Original<'frozen> {
 /// `None` refuses incomplete, foreign, differently acquired or released original
 /// sources without opening a State view or consulting a replacement pool. Both
 /// original borrows survive validation and encoding. Work, row, byte and pool
-/// refusals are local operational results; the original StateBlock remains intact
+/// refusals are local operational results; the original `StateBlock` remains intact
 /// for retry. No State root, currentness or finality authority follows from success.
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 pub(in crate::state) fn capture(
     block: &StateBlock<'_>,
     limits: LeafLimits,

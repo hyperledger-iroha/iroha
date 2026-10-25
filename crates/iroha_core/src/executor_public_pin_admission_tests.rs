@@ -99,7 +99,7 @@ impl Fixture {
                 view.world()
                     .account_permissions()
                     .get(&authority)
-                    .is_none_or(|permissions| permissions.is_empty())
+                    .is_none_or(std::collections::BTreeSet::is_empty)
             );
         }
         Self {

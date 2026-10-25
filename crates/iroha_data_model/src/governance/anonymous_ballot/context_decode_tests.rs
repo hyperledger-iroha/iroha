@@ -22,8 +22,8 @@ fn observe(
     })
 }
 
-fn codec(error: norito::Error) -> BallotContextErrorV1 {
-    AnonymousBallotCodecErrorV1::codec(&error).into()
+fn codec(error: &norito::Error) -> BallotContextErrorV1 {
+    AnonymousBallotCodecErrorV1::codec(error).into()
 }
 
 fn field_range(payload: &[u8], index: usize) -> Range<usize> {
@@ -128,7 +128,7 @@ fn excessive_roster_counts_refuse_before_sequence_allocation() {
         let (result, usage) = observe(&forged_count(&frame, &[5], count));
         assert_eq!(
             result,
-            Err(codec(norito::Error::SequenceLengthExceeded {
+            Err(codec(&norito::Error::SequenceLengthExceeded {
                 length: count,
                 limit,
             }))
@@ -153,7 +153,7 @@ fn excessive_policy_counts_refuse_before_policy_sequence_allocation() {
         let (result, usage) = observe(&forged_count(&frame, &[7, 1], count));
         assert_eq!(
             result,
-            Err(codec(norito::Error::SequenceLengthExceeded {
+            Err(codec(&norito::Error::SequenceLengthExceeded {
                 length: count,
                 limit,
             }))
@@ -177,7 +177,7 @@ fn individually_bounded_sequences_cannot_exceed_the_combined_count() {
     let (result, usage) = observe(&frame);
     assert_eq!(
         result,
-        Err(codec(norito::Error::TotalElementsExceeded {
+        Err(codec(&norito::Error::TotalElementsExceeded {
             attempted: 1_011,
             limit: 1_010,
         }))

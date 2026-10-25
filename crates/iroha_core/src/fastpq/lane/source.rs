@@ -19,11 +19,15 @@ use iroha_data_model::fastpq::{
 
 /// One authenticated source owner; recovery joins are issued only by the archive verifier.
 /// This is the existing lane's source sum, not a second work queue or authority parser.
-pub(crate) enum SourceOwner {
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Both variants carry the original paid source owner; boxing would add an unbudgeted custody allocation"
+)]
+pub enum SourceOwner {
     Original(AdmittedFinalizedFastpqSource),
     Recovered(AuthenticatedRecoveredFastpqSource),
 }
-pub(crate) enum SourceEntry<'a> {
+pub enum SourceEntry<'a> {
     Original(CapturedQuantityEntry<'a>),
     Recovered {
         effects: &'a FastpqExecutionEffectsV1,
@@ -108,7 +112,7 @@ impl SourceOwner {
 
 /// Local refusal preserves the source; none changes block validity, D7 or native R.
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum SourceWorkError {
+pub enum SourceWorkError {
     /// Invalid local source position; this is never a capacity refusal.
     #[error("FASTPQ source identity: {0}")]
     Identity(&'static str),

@@ -34,7 +34,7 @@ fn exact_account_check_joins_real_finality_and_distinct_current_accounts() {
     let pending = f.pending();
     let signed = pending.signed_transaction().clone();
     let expected_hash = signed.hash_as_entrypoint();
-    assert_eq!(f.commit(NOW, vec![signed], true, true), [true]);
+    assert_eq!(f.commit(NOW, &[signed], true, true), [true]);
     let verified = pending.verify_finalized(|| Ok(interval(NOW, NOW))).unwrap();
     assert_eq!(verified.check_height(), 4);
     assert_eq!(verified.applied_floor().height, 4);
@@ -73,10 +73,15 @@ fn coherent_authenticated_descendant_cut_rechecks_current_authority() {
     let mut f = Fixture::new();
     let pending = f.pending();
     assert_eq!(
-        f.commit(NOW, vec![pending.signed_transaction().clone()], true, true),
+        f.commit(
+            NOW,
+            std::slice::from_ref(pending.signed_transaction()),
+            true,
+            true
+        ),
         [true]
     );
-    f.commit(NOW + 1, Vec::new(), true, true);
+    f.commit(NOW + 1, &[], true, true);
     let verified = pending
         .verify_finalized(|| Ok(interval(NOW + 1, NOW + 1)))
         .unwrap();
@@ -98,7 +103,7 @@ fn successful_check_cannot_hide_later_same_block_custody_revocation() {
     assert_eq!(
         f.commit(
             NOW,
-            vec![
+            &[
                 pending.signed_transaction().clone(),
                 f.sign(revoke.into(), 1, NOW)
             ],
@@ -125,7 +130,7 @@ fn rejection_result_is_not_a_successful_check_even_with_real_finality() {
     assert_eq!(
         f.commit(
             100_000,
-            vec![pending.signed_transaction().clone()],
+            std::slice::from_ref(pending.signed_transaction()),
             true,
             true
         ),
@@ -145,7 +150,12 @@ fn durable_check_without_actual_state_membership_is_not_observation() {
     let mut f = Fixture::new();
     let pending = f.pending();
     assert_eq!(
-        f.commit(NOW, vec![pending.signed_transaction().clone()], false, true),
+        f.commit(
+            NOW,
+            std::slice::from_ref(pending.signed_transaction()),
+            false,
+            true
+        ),
         [true]
     );
     assert_eq!(
@@ -162,7 +172,12 @@ fn applied_check_without_durable_finality_is_rejected() {
     let mut f = Fixture::new();
     let pending = f.pending();
     assert_eq!(
-        f.commit(NOW, vec![pending.signed_transaction().clone()], true, false),
+        f.commit(
+            NOW,
+            std::slice::from_ref(pending.signed_transaction()),
+            true,
+            false
+        ),
         [true]
     );
     assert_eq!(
@@ -194,7 +209,12 @@ fn independent_floor_hash_and_committee_context_cannot_come_from_candidate() {
         .unwrap();
         let signed = f.sign(prepared_instruction(&prepared), 2, NOW);
         let pending = prepared.bind_signed_transaction(signed).unwrap();
-        let results = f.commit(NOW, vec![pending.signed_transaction().clone()], true, true);
+        let results = f.commit(
+            NOW,
+            std::slice::from_ref(pending.signed_transaction()),
+            true,
+            true,
+        );
         assert_eq!(results, [!change_hash]);
         assert_eq!(
             pending
@@ -267,7 +287,12 @@ fn signing_and_terminal_verification_never_reset_the_one_use_interval() {
         Some(Error::Expired)
     );
     let mut pending = f.pending();
-    f.commit(NOW, vec![pending.signed_transaction().clone()], true, true);
+    f.commit(
+        NOW,
+        std::slice::from_ref(pending.signed_transaction()),
+        true,
+        true,
+    );
     pending.prepared.round.expire_for_test();
     assert_eq!(pending.ensure_live(), Err(Error::Expired));
     assert_eq!(
@@ -292,7 +317,12 @@ fn unavailable_or_invalid_eligibility_clock_fails_closed_after_proof() {
     ] {
         let mut f = Fixture::new();
         let pending = f.pending();
-        f.commit(NOW, vec![pending.signed_transaction().clone()], true, true);
+        f.commit(
+            NOW,
+            std::slice::from_ref(pending.signed_transaction()),
+            true,
+            true,
+        );
         assert_eq!(
             pending
                 .verify_finalized(|| now)
@@ -308,7 +338,12 @@ fn historical_future_dated_qc_cannot_stand_in_for_a_new_round() {
     let mut f = Fixture::new();
     let old = f.pending();
     assert_eq!(
-        f.commit(90_000, vec![old.signed_transaction().clone()], true, true),
+        f.commit(
+            90_000,
+            std::slice::from_ref(old.signed_transaction()),
+            true,
+            true
+        ),
         [true]
     );
     drop(old);
@@ -427,12 +462,12 @@ fn successful_check_rechecks_both_accounts_permissions_at_same_or_descendant_cut
                 transactions.push(revoke.clone());
             }
             assert!(
-                f.commit(NOW, transactions, true, true)
+                f.commit(NOW, &(transactions), true, true)
                     .iter()
                     .all(|result| *result)
             );
             if !same_block {
-                assert_eq!(f.commit(NOW + 1, vec![revoke], true, true), [true]);
+                assert_eq!(f.commit(NOW + 1, &[revoke], true, true), [true]);
             }
             assert_eq!(
                 pending
@@ -458,7 +493,12 @@ fn account_interval_requires_both_endpoints_after_native_enrollment_execution() 
         let mut f = Fixture::with_enrollment_time(2_000);
         let pending = f.pending();
         assert_eq!(
-            f.commit(NOW, vec![pending.signed_transaction().clone()], true, true),
+            f.commit(
+                NOW,
+                std::slice::from_ref(pending.signed_transaction()),
+                true,
+                true
+            ),
             [true]
         );
         let samples = std::cell::Cell::new(0);
@@ -551,7 +591,7 @@ fn prepared_account_observer_is_pinned_before_signing_and_preserved_through_fina
     assert_eq!(prepared.instruction(), &instruction);
     assert_eq!(signed.authority(), &expected_observer);
     let pending = prepared.bind_signed_transaction(signed.clone()).unwrap();
-    assert_eq!(f.commit(NOW, vec![signed], true, true), [true]);
+    assert_eq!(f.commit(NOW, &[signed], true, true), [true]);
     let verified = pending.verify_finalized(|| Ok(interval(NOW, NOW))).unwrap();
     assert_eq!(verified.observer(), &expected_observer);
     assert_eq!(verified.instruction(), &instruction);
@@ -586,10 +626,15 @@ fn account_verified_check_retains_original_full_floor_after_applied_descendants(
     let original = f.expected().floor;
     let pending = f.pending();
     assert_eq!(
-        f.commit(NOW, vec![pending.signed_transaction().clone()], true, true),
+        f.commit(
+            NOW,
+            std::slice::from_ref(pending.signed_transaction()),
+            true,
+            true
+        ),
         [true]
     );
-    f.commit(NOW + 1, Vec::new(), true, true);
+    f.commit(NOW + 1, &[], true, true);
     let verified = pending
         .verify_finalized(|| Ok(interval(NOW + 1, NOW + 1)))
         .unwrap();
@@ -611,9 +656,9 @@ fn account_verified_check_retains_exact_external_and_check_block_after_descendan
     let pending = f.pending();
     let signed = pending.signed_transaction().clone();
     let exact = norito::encode_canonical(&TransactionEntrypoint::External(signed.clone())).unwrap();
-    assert_eq!(f.commit(NOW, vec![signed], true, true), [true]);
+    assert_eq!(f.commit(NOW, &[signed], true, true), [true]);
     let check_hash = *f.state.view().latest_block_hash().unwrap().as_ref();
-    f.commit(NOW + 1, Vec::new(), true, true);
+    f.commit(NOW + 1, &[], true, true);
     let verified = pending
         .verify_finalized(|| Ok(interval(NOW + 1, NOW + 1)))
         .unwrap();

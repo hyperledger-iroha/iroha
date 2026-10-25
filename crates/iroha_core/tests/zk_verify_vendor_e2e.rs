@@ -6,8 +6,7 @@
 //! forces the prior-verification latch. Initial executor authority and the direct
 //! relation-role consumer are checked separately; the latter is an instruction
 //! unit boundary, not a successful production host handoff.
-#[path = "common/native_genesis.rs"]
-mod native_genesis;
+use crate::native_genesis;
 use iroha_core::smartcontracts::Execute;
 use iroha_core::{smartcontracts::ivm::host::CoreHost, state::WorldReadOnly};
 use iroha_crypto::Hash;
@@ -131,13 +130,13 @@ fn forced_vendor_latch_cannot_admit_development_ballot() {
         .expect("grant contract lifecycle permission");
     let (contract_program, _) = kotodama_lang::compiler::Compiler::new()
         .compile_source_with_manifest(
-            r#"
+            r"
 seiyaku VendorBridgeGate { permission CanUseVendorBridgeTest;
     kotoage fn execute(bytes instruction) authorize(CanUseVendorBridgeTest) {
         ledger::governance::submit_ballot(value: instruction);
     }
 }
-"#,
+",
         )
         .expect("compile admitted vendor-bridge contract");
     let verified_contract =

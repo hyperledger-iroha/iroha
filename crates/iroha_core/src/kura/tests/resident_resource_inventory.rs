@@ -6,22 +6,22 @@ fn recount_transaction_resident_associations(index: &super::TransactionEntrypoin
     count += index
         .heights_by_entrypoint
         .values()
-        .map(|heights| heights.len())
+        .map(std::collections::BTreeSet::len)
         .sum::<usize>();
     count += index
         .heights_by_authority
         .values()
-        .map(|heights| heights.len())
+        .map(std::collections::BTreeSet::len)
         .sum::<usize>();
     count += index
         .heights_by_timestamp_ms
         .values()
-        .map(|heights| heights.len())
+        .map(std::collections::BTreeSet::len)
         .sum::<usize>();
     count += index
         .heights_by_result_status
         .values()
-        .map(|heights| heights.len())
+        .map(std::collections::BTreeSet::len)
         .sum::<usize>();
     for inventory in index.inventories_by_height.values() {
         count += inventory.entrypoint_hashes.len()
@@ -33,7 +33,7 @@ fn recount_transaction_resident_associations(index: &super::TransactionEntrypoin
     for by_height in index.kaigi_signal_candidates.values() {
         count += by_height
             .values()
-            .map(|locators| locators.len())
+            .map(std::collections::BTreeMap::len)
             .sum::<usize>();
     }
     u64::try_from(count).expect("bounded fixture association count")

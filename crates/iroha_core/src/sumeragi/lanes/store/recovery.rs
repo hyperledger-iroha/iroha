@@ -18,7 +18,7 @@ impl LaneStoreOpen {
         }
     }
     /// Complete recovery, returning this exact owner on every refusal or error.
-    /// A caller may retry WouldBlock after resources/authority become available; semantic or I/O
+    /// A caller may retry `WouldBlock` after resources/authority become available; semantic or I/O
     /// failures remain errors. No retry spins or alternate proof/source replacement occur here.
     ///
     /// # Errors

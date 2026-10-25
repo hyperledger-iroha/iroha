@@ -19,7 +19,7 @@ pub fn validate_replication_order_archive_binding<'world>(
 }
 
 /// Run the same predicate while preserving an original physical read refusal.
-pub(crate) fn try_validate_replication_order_archive_binding<
+pub fn try_validate_replication_order_archive_binding<
     'world,
     W: MusubiEvidenceRead<Q>,
     Q: Default,
@@ -32,7 +32,7 @@ pub(crate) fn try_validate_replication_order_archive_binding<
 }
 
 /// Retains the successful archive predicate across the original binding lookup refusal.
-pub(crate) struct ReplicationBindingValidation<Q> {
+pub struct ReplicationBindingValidation<Q> {
     queries: [Q; 1],
     archive_validated: bool,
 }

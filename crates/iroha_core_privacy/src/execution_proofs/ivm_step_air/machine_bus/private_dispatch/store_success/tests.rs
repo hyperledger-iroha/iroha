@@ -15,9 +15,7 @@ fn set_port(row: &mut [F; WIDTH], slot: usize, fields: [F; packet::WIDTH]) {
         .copy_from_slice(&fields);
 }
 fn event(
-    space: Space,
-    generation: u16,
-    index: u32,
+    (space, generation, index): (Space, u16, u32),
     clock: u32,
     before: [u8; 16],
     after: [u8; 16],
@@ -39,9 +37,7 @@ fn event(
 }
 fn word_event(index: u32, clock: u32, before: u64, after: u64, write: bool) -> [F; packet::WIDTH] {
     event(
-        Space::Owner,
-        0,
-        index,
+        (Space::Owner, 0, index),
         clock,
         u128::from(before).to_le_bytes(),
         u128::from(after).to_le_bytes(),
@@ -92,9 +88,11 @@ impl Fixture {
             (5, wide::rs1(instruction), value, private),
         ] {
             dispatch.packets.fields[slot] = dispatch_tests::event(
-                Space::Register,
-                0,
-                index as u32,
+                (
+                    Space::Register,
+                    0,
+                    u32::try_from(index).expect("bounded fixture value"),
+                ),
                 value,
                 value,
                 false,
@@ -191,9 +189,15 @@ impl Fixture {
             &mut rows[3],
             1,
             event(
-                Space::Memory,
-                0,
-                (address >> 4) as u32,
+                (
+                    Space::Memory,
+                    0,
+                    u32::from_le_bytes(
+                        u64::to_le_bytes(address >> 4)[..4]
+                            .try_into()
+                            .expect("low-byte width"),
+                    ),
+                ),
                 schedule.clock(35),
                 old,
                 after,
@@ -206,9 +210,15 @@ impl Fixture {
                 &mut rows[3],
                 2,
                 event(
-                    Space::Initialization,
-                    active,
-                    (address >> 4) as u32,
+                    (
+                        Space::Initialization,
+                        active,
+                        u32::from_le_bytes(
+                            u64::to_le_bytes(address >> 4)[..4]
+                                .try_into()
+                                .expect("low-byte width"),
+                        ),
+                    ),
                     schedule.clock(36),
                     17_u128.to_le_bytes(),
                     u128::from(17 | selected).to_le_bytes(),
@@ -256,7 +266,7 @@ impl Fixture {
         ] {
             carry[i] = v;
         }
-        for row in rows.iter_mut() {
+        for row in &mut rows {
             row[CARRY..].copy_from_slice(&carry);
         }
         Self { rows, schedule }
@@ -285,9 +295,9 @@ impl Fixture {
         for i in 0..3 {
             set_port(&mut rows[3], 3 + i, dispatch.packets.fields[18 + i]);
         }
-        for phase in 0..PHASES {
+        for row in rows.iter_mut().take(PHASES) {
             for i in 0..3 {
-                rows[phase][CARRY + COMPLETION + i * packet::WIDTH
+                row[CARRY + COMPLETION + i * packet::WIDTH
                     ..CARRY + COMPLETION + (i + 1) * packet::WIDTH]
                     .copy_from_slice(&dispatch.packets.fields[18 + i]);
             }
@@ -436,7 +446,7 @@ fn permission_policy_frame_output_and_initialization_cannot_be_selected_by_witne
         (RANGE_ERROR, F::ONE),
     ] {
         let mut bad = original.clone();
-        for row in bad.rows.iter_mut() {
+        for row in &mut bad.rows {
             row[CARRY + field] = value;
         }
         assert!(!bad.accepts(&program), "coherent carry replacement {field}");
@@ -517,14 +527,34 @@ fn all_forty_original_packets_and_all_eight_stages_share_one_private_history() {
             4 => Space::Owner,
             _ => panic!("enabled typed event"),
         },
-        vm: p[VM].0 as u8,
-        generation: p[GENERATION].0 as u16,
-        index: p[INDEX].0 as u32,
+        vm: u8::from_le_bytes(
+            u64::to_le_bytes(p[VM].0)[..1]
+                .try_into()
+                .expect("low-byte width"),
+        ),
+        generation: u16::from_le_bytes(
+            u64::to_le_bytes(p[GENERATION].0)[..2]
+                .try_into()
+                .expect("low-byte width"),
+        ),
+        index: u32::from_le_bytes(
+            u64::to_le_bytes(p[INDEX].0)[..4]
+                .try_into()
+                .expect("low-byte width"),
+        ),
         write: p[WRITE] == F::ONE,
         before: core::array::from_fn(|i| ((p[BEFORE + i / 2].0 >> (8 * (i % 2))) & 255) as u8),
         after: core::array::from_fn(|i| ((p[AFTER + i / 2].0 >> (8 * (i % 2))) & 255) as u8),
-        before_private: p[BEFORE_TAG].0 as u16,
-        after_private: p[AFTER_TAG].0 as u16,
+        before_private: u16::from_le_bytes(
+            u64::to_le_bytes(p[BEFORE_TAG].0)[..2]
+                .try_into()
+                .expect("low-byte width"),
+        ),
+        after_private: u16::from_le_bytes(
+            u64::to_le_bytes(p[AFTER_TAG].0)[..2]
+                .try_into()
+                .expect("low-byte width"),
+        ),
     };
     let original = fixture.borrowed();
     let mut events = vec![None; 64];
@@ -633,8 +663,7 @@ fn all_forty_original_packets_and_all_eight_stages_share_one_private_history() {
                 residues.clear();
                 private_history::append_residues(
                     &mut residues,
-                    h.current,
-                    h.next,
+                    (h.current, h.next),
                     h.aux,
                     h.next_aux,
                     h.fixed,
@@ -717,7 +746,7 @@ fn actual_native_store_matches_original_operand_order_bytes_and_completion_tarif
                             let p = originals.producer(slot);
                             (
                                 false,
-                                p[INDEX].0 as usize,
+                                usize::try_from(p[INDEX].0).expect("bounded fixture value"),
                                 packet::half(p, BEFORE, 0),
                                 p[BEFORE_TAG] == F::ONE,
                             )

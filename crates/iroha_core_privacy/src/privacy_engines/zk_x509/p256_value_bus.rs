@@ -378,7 +378,7 @@ impl core::fmt::Debug for P256ValueBusBaseMaterialV1 {
             .debug_struct("P256ValueBusBaseMaterialV1")
             .field("role", &self.role)
             .field("private_material", &"<redacted>")
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -1139,7 +1139,7 @@ fn execution_events_v1(
                 events.push(ExpectedAccessV1 {
                     fixed: P256ValueBusFixedAccessV1::Active {
                         id,
-                        limb: limb as u8,
+                        limb: u8::try_from(limb).expect("protocol-bounded index fits u8"),
                         access,
                         modulus: linked.operation.modulus,
                         value_kind: value_metadata.value_kind,
@@ -1157,7 +1157,7 @@ fn execution_events_v1(
                 events.push(ExpectedAccessV1 {
                     fixed: P256ValueBusFixedAccessV1::Active {
                         id: initial.id,
-                        limb: limb as u8,
+                        limb: u8::try_from(limb).expect("protocol-bounded index fits u8"),
                         access: P256ValueAccessKindV1::Write,
                         modulus: initial.modulus,
                         value_kind: value_metadata.value_kind,
@@ -1302,7 +1302,7 @@ fn append_assertion_segment_v1(
             events.push(ExpectedAccessV1 {
                 fixed: P256ValueBusFixedAccessV1::Active {
                     id,
-                    limb: limb as u8,
+                    limb: u8::try_from(limb).expect("protocol-bounded index fits u8"),
                     access: P256ValueAccessKindV1::Read,
                     modulus: value.modulus,
                     value_kind: value.value_kind,
@@ -2573,8 +2573,8 @@ fn compute_base_endpoint_terminal_v1(
     let mut terminal = [F::ONE; P256_VALUE_BUS_LANES_V1];
     for cell in endpoint.rows.iter().copied() {
         validate_base_cell_v1(cell)?;
-        for lane in 0..P256_VALUE_BUS_LANES_V1 {
-            terminal[lane] = terminal[lane].mul(compress_access_v1(
+        for (lane, product) in terminal.iter_mut().enumerate() {
+            *product = product.mul(compress_access_v1(
                 cell.fixed,
                 cell.value,
                 challenges.lanes[lane],
@@ -2671,7 +2671,7 @@ impl core::fmt::Debug for P256ValueBusBaseSourceV1 {
             .debug_struct("P256ValueBusBaseSourceV1")
             .field("bind_attempted", &self.bind_attempted)
             .field("private_material", &"<redacted>")
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -2800,7 +2800,7 @@ impl P256ValueBusBaseSourceV1 {
     /// Consume the sole phase transition using an opaque X5B1 token.
     pub(crate) fn bind_v1(
         &mut self,
-        post_base: ZkX509CredentialMainPostBaseChallengesV1,
+        post_base: &ZkX509CredentialMainPostBaseChallengesV1,
     ) -> Result<P256ValueBusBoundSourceV1, P256ValueBusErrorV1> {
         self.ensure_base_phase_v1()?;
         self.bind_attempted = true;
@@ -2823,7 +2823,7 @@ impl P256ValueBusBaseSourceV1 {
             material: self.material.take(),
             execution_fixed: self.execution_fixed.take(),
             sorted_fixed: self.sorted_fixed.take(),
-            post_base: Some(post_base),
+            post_base: Some(*post_base),
             execution_terminal,
             sorted_terminal,
         })
@@ -2881,7 +2881,7 @@ impl core::fmt::Debug for P256ValueBusBoundSourceV1 {
         formatter
             .debug_struct("P256ValueBusBoundSourceV1")
             .field("private_material", &"<redacted>")
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -3664,7 +3664,10 @@ mod tests {
             [seed; 32],
             [seed.wrapping_add(1); 32],
             core::array::from_fn::<_, ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1, _>(|index| {
-                zk_x509_test_digest384_v1(seed.wrapping_add(index as u8).wrapping_add(2))
+                zk_x509_test_digest384_v1(
+                    seed.wrapping_add(u8::try_from(index & 0xff).expect("masked fixture byte"))
+                        .wrapping_add(2),
+                )
             }),
         );
         derive_zk_x509_credential_pre_aux_binding_v1(
@@ -4137,7 +4140,7 @@ mod tests {
                 continue;
             }
             let mut changed = trace.clone();
-            let value = event.value.0 as u16 ^ 1;
+            let value = u16::try_from(event.value.0 & 0xffff).expect("masked limb") ^ 1;
             set_row_value(row_mut(&mut changed.execution, ordinal), value);
             assert_eq!(
                 validate(&changed, &program),
@@ -4717,7 +4720,7 @@ mod tests {
             .iter_mut()
             .enumerate()
         {
-            segment.index = index as u32;
+            segment.index = u32::try_from(index).expect("protocol-bounded index fits u32");
         }
         assert!(validate(&coordinated_reorder, &program).is_err());
         let mut reindexed = trace.clone();
@@ -5279,7 +5282,7 @@ mod tests {
         let program = program(1);
         for seed in [37, 41] {
             let mut base = base_source_v1(&program);
-            let mut bound = base.bind_v1(post_base_v1(seed)).unwrap();
+            let mut bound = base.bind_v1(&post_base_v1(seed)).unwrap();
             for expected in [
                 P256ValueBusStarkEndpointV1::Execution,
                 P256ValueBusStarkEndpointV1::Sorted,
@@ -5380,12 +5383,12 @@ mod tests {
                     .expect("first fixed")
             })
             .collect::<Vec<_>>();
-        let first_bound = first.bind_v1(post_base_v1(0x11)).expect("first bind");
-        let second_bound = second.bind_v1(post_base_v1(0x71)).expect("second bind");
+        let first_bound = first.bind_v1(&post_base_v1(0x11)).expect("first bind");
+        let second_bound = second.bind_v1(&post_base_v1(0x71)).expect("second bind");
         assert!(first.bind_attempted_for_test_v1());
         assert!(second.bind_attempted_for_test_v1());
         assert_eq!(
-            first.bind_v1(post_base_v1(0x12)).map(|_| ()),
+            first.bind_v1(&post_base_v1(0x12)).map(|_| ()),
             Err(P256ValueBusErrorV1::Phase),
         );
         assert_eq!(
@@ -5542,12 +5545,12 @@ mod tests {
             .rows[0]
             .value = F(0xffff);
         assert!(
-            source.bind_v1(post_base_v1(0x31)).is_err(),
+            source.bind_v1(&post_base_v1(0x31)).is_err(),
             "corrupted base source reached the auxiliary phase",
         );
         assert!(source.bind_attempted_for_test_v1());
         assert_eq!(
-            source.bind_v1(post_base_v1(0x32)).map(|_| ()),
+            source.bind_v1(&post_base_v1(0x32)).map(|_| ()),
             Err(P256ValueBusErrorV1::Phase),
             "failed bind was retryable with another token",
         );

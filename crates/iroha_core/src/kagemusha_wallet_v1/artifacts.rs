@@ -104,7 +104,7 @@ impl VerifierInstallation {
 
 /// Same-overlay original snapshot, captured before the instruction mutably borrows WSV.
 /// No missing installation prevents non-proof retirement/recovery actions.
-pub(crate) struct LedgerVerifier {
+pub struct LedgerVerifier {
     scheme: Digest,
     original: Option<Result<Vec<u8>>>,
 }

@@ -1605,8 +1605,10 @@ impl ParliamentAttemptStateV1 {
             attempt,
             0,
             policy_version,
-            sortition_pulse_delay_blocks,
-            sortition_pulse_epoch_length_blocks,
+            (
+                sortition_pulse_delay_blocks,
+                sortition_pulse_epoch_length_blocks,
+            ),
             effect_preimage_hash,
             expected_head,
             required_bodies,
@@ -1628,8 +1630,7 @@ impl ParliamentAttemptStateV1 {
         attempt: GovernanceAttemptV1,
         randomness_redraws_before_attempt: u32,
         policy_version: u64,
-        sortition_pulse_delay_blocks: u64,
-        sortition_pulse_epoch_length_blocks: u64,
+        (sortition_pulse_delay_blocks, sortition_pulse_epoch_length_blocks): (u64, u64),
         effect_preimage_hash: [u8; 32],
         expected_head: GovernanceExpectedHeadV1,
         required_bodies: Vec<RequiredParliamentBodyV1>,
@@ -2412,7 +2413,7 @@ impl ParliamentAttemptStateV1 {
     /// obligation: a slot without a native pulse simply stays awaited
     /// (sortition) or ends `ReleasePulseUnavailable` (timed-OVN ballot).
     /// TODO: rename and re-scope with the governance due-item iterator when
-    /// timed-OVN is retired (specs/parliament_private_ballot_design.md 12.2 step 4).
+    /// timed-OVN is retired (`specs/parliament_private_ballot_design.md` 12.2 step 4).
     #[must_use]
     pub(crate) fn required_beacon_pulse_slots_v1(&self) -> BTreeSet<(BeaconSessionId, u64)> {
         if self.attempt.status != GovernanceAttemptStatusV1::Active {
@@ -2451,7 +2452,7 @@ impl ParliamentAttemptStateV1 {
     /// feeds one governance-internal integrity check on the attempt write and
     /// never constrains a consensus pulse.
     /// TODO: delete with the timed-OVN ballot path
-    /// (specs/parliament_private_ballot_design.md 12.2 step 4).
+    /// (`specs/parliament_private_ballot_design.md` 12.2 step 4).
     #[must_use]
     pub(crate) fn unavailable_release_pulse_slots_v1(&self) -> BTreeSet<(BeaconSessionId, u64)> {
         self.ballots

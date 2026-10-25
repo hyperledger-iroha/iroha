@@ -109,6 +109,12 @@ mod tests {
 
     #[test]
     fn transport_seals_exact_bytes_and_refuses_changed_or_missing_originals() {
+        struct Missing;
+        impl OriginalSourceV1 for Missing {
+            fn open(&mut self, _: [u8; 32]) -> Result<Box<dyn Read + '_>, Error> {
+                Err(Error::Unavailable)
+            }
+        }
         struct Source(Vec<u8>);
         impl OriginalSourceV1 for Source {
             fn open(&mut self, _: [u8; 32]) -> Result<Box<dyn Read + '_>, Error> {
@@ -147,12 +153,6 @@ mod tests {
         assert_eq!(read(&mut destination, blob, bytes.len()).unwrap(), bytes);
         // Retry cannot replace the sealed original and must reauthenticate it.
         copy_blobs(&selected, &mut Source(bytes.to_vec()), &mut destination).unwrap();
-        struct Missing;
-        impl OriginalSourceV1 for Missing {
-            fn open(&mut self, _: [u8; 32]) -> Result<Box<dyn Read + '_>, Error> {
-                Err(Error::Unavailable)
-            }
-        }
         assert!(
             copy_blobs(&selected, &mut Missing, &mut destination)
                 .is_err_and(|error| error == Error::Unavailable)

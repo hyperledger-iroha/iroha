@@ -17,7 +17,7 @@ use std::cmp::Ordering;
 
 /// Observation of the ordered descriptor stage, not semantic verification.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct PredecessorReadProgress {
+pub struct PredecessorReadProgress {
     pub(crate) current_consumed: usize,
     pub(crate) undo_consumed: usize,
     pub(crate) rows: usize,
@@ -168,13 +168,7 @@ impl<K: ComparisonKey, V: mv::Value> OriginalTableRead<K, V> {
             // This private source-bound step prepays the actual repeated tree
             // resolves as well as comparison. The callbacks below verify their
             // unchanged recorded demand; they do not waive or reset a quota.
-            if let Err(error) = admit(work, required, limit) {
-                #[cfg(all(test, sumeragi_core_mutation = "HC175"))]
-                {
-                    self.predecessor = PredecessorIndex::default();
-                }
-                return Err(error);
-            }
+            admit(work, required, limit)?;
             let current_row = if let Some(head) = current {
                 let position = self
                     .current

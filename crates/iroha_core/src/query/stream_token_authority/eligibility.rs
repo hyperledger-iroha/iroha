@@ -26,17 +26,17 @@ use sorafs_manifest::signer::stream_token::stream_token_binding_digest_v1;
 fn has_permission(
     world: &impl WorldReadOnly,
     authority: &AccountId,
-    permission: Permission,
+    permission: &Permission,
 ) -> bool {
     world.accounts().get(authority).is_some()
-        && (world.account_contains_inherent_permission(authority, &permission)
+        && (world.account_contains_inherent_permission(authority, permission)
             || world
                 .account_roles_iter(authority)
                 .filter_map(|id| world.roles().get(id))
-                .any(|role| role.permissions().any(|token| token == &permission)))
+                .any(|role| role.permissions().any(|token| token == permission)))
 }
 
-pub(crate) fn authorized(
+pub fn authorized(
     tx: &impl StateReadOnly,
     authority: &AccountId,
     provider: ProviderId,
@@ -47,10 +47,10 @@ pub(crate) fn authorized(
     let can_operate = has_permission(
         world,
         authority,
-        CanOperateSorafsStreamToken {
+        &(CanOperateSorafsStreamToken {
             provider_id: provider,
         }
-        .into(),
+        .into()),
     );
     match action {
         Action::Reserve(_) | Action::Complete(_) => is_owner && can_operate,
@@ -59,10 +59,10 @@ pub(crate) fn authorized(
                 || has_permission(
                     world,
                     authority,
-                    CanManageSorafsStreamTokenCustody {
+                    &(CanManageSorafsStreamTokenCustody {
                         provider_id: provider,
                     }
-                    .into(),
+                    .into()),
                 )
         }
         Action::Check(check) => {
@@ -72,24 +72,24 @@ pub(crate) fn authorized(
                 && has_permission(
                     world,
                     &check.expected_operator,
-                    CanOperateSorafsStreamToken {
+                    &(CanOperateSorafsStreamToken {
                         provider_id: provider,
                     }
-                    .into(),
+                    .into()),
                 )
                 && has_permission(
                     world,
                     authority,
-                    CanCheckSorafsStreamToken {
+                    &(CanCheckSorafsStreamToken {
                         provider_id: provider,
                     }
-                    .into(),
+                    .into()),
                 )
         }
     }
 }
 
-pub(crate) fn eligible_custody(
+pub fn eligible_custody(
     current: &crate::query::stream_token_custody::NativeControl,
     original_record_digest: [u8; 32],
     now: u64,
@@ -110,7 +110,7 @@ pub(crate) fn eligible_custody(
     Ok(())
 }
 
-pub(crate) fn checked_phase(
+pub fn checked_phase(
     tx: &impl StateReadOnly,
     provider: ProviderId,
     check: &StreamTokenCheckV1,
@@ -173,7 +173,7 @@ pub(crate) fn checked_phase(
     }
 }
 
-pub(crate) fn check_live_custody(
+pub fn check_live_custody(
     current: &NativeControl,
     check: &StreamTokenCheckV1,
     authority: &AccountId,

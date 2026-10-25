@@ -306,7 +306,7 @@ fn retiring_incarnation_blocks_same_lane_start_until_original_workers_finish() {
 
 #[test]
 fn failed_join_handoff_retains_every_original_handle_until_final_shutdown() {
-    let Instance {
+    let DriverInstance {
         mut running, fakes, ..
     } = spawn_instance(237, Arc::new(SystemClock::new()), |_| {});
     let handle = running.handle();
@@ -424,7 +424,7 @@ fn pending_publication_waits_for_its_original_retiring_driver() {
             release: parking_lot::Mutex::new(Some(release)),
             _original_store: Arc::clone(store),
         });
-        let Instance {
+        let DriverInstance {
             running,
             instance,
             fakes,
@@ -440,7 +440,7 @@ fn pending_publication_waits_for_its_original_retiring_driver() {
                 .driver
                 .spawn(DriverConfig::default(), prepared.start)
                 .unwrap();
-            Instance {
+            DriverInstance {
                 running,
                 key: prepared.key,
                 instance: prepared.instance,
@@ -591,7 +591,7 @@ fn spawn_retiring_store_driver(
     instance: Hash32,
     store: Arc<crate::sumeragi::lanes::store::FileLaneBlockStore>,
     budget: iroha_allocation::AllocationBudget,
-) -> Instance {
+) -> DriverInstance {
     let PreparedRetiringStore {
         driver,
         start,
@@ -600,7 +600,7 @@ fn spawn_retiring_store_driver(
         fakes,
     } = prepare_retiring_store_driver(instance, store, budget, Arc::new(SystemClock::new()));
     let running = driver.spawn(DriverConfig::default(), start).unwrap();
-    Instance {
+    DriverInstance {
         running,
         key,
         instance,
@@ -710,7 +710,7 @@ fn retired_directory_sync_does_not_block_other_lane_transaction_delivery() {
 #[test]
 fn final_driver_shutdown_preserves_original_pending_store_for_authenticated_restart() {
     crate::sumeragi::lanes::registry::observe_shutdown_sync_for_test(|observation| {
-        let Instance { running, fakes, .. } = spawn_retiring_store_driver(
+        let DriverInstance { running, fakes, .. } = spawn_retiring_store_driver(
             observation.instance,
             Arc::clone(observation.store),
             observation.budget.clone(),
@@ -745,7 +745,7 @@ fn final_driver_shutdown_preserves_original_pending_store_for_authenticated_rest
 #[test]
 fn final_shutdown_recognizes_original_publication_joiner_and_finishes_inflight_sync() {
     crate::sumeragi::lanes::registry::observe_retired_sync_for_test(|observation| {
-        let Instance {
+        let DriverInstance {
             mut running, fakes, ..
         } = spawn_retiring_store_driver(
             observation.instance,
@@ -1134,6 +1134,8 @@ fn stale_failed_startup_releases_same_lane_only_after_original_workers_join() {
 
 #[test]
 fn pending_publication_waits_for_original_startup_workers() {
+    use crate::sumeragi::driver::{DriverPreparation, PendingDriver, StartupPoll};
+
     // Final State refunds require the process-wide epoch collector to advance;
     // unrelated tests may retain a pinned State for their entire fixture.
     if crate::unit_test_support::run_in_isolated_harness(
@@ -1141,7 +1143,6 @@ fn pending_publication_waits_for_original_startup_workers() {
     ) {
         return;
     }
-    use crate::sumeragi::driver::{DriverPreparation, PendingDriver, StartupPoll};
     let (
         awaiting,
         activated,
@@ -1270,6 +1271,8 @@ fn pending_publication_waits_for_original_startup_workers() {
 
 #[test]
 fn retired_startup_keeps_publication_on_its_original_joiner() {
+    use crate::sumeragi::driver::{DriverPreparation, PendingDriver, StartupPoll};
+
     // Final State refunds require the process-wide epoch collector to advance;
     // unrelated tests may retain a pinned State for their entire fixture.
     if crate::unit_test_support::run_in_isolated_harness(
@@ -1277,7 +1280,6 @@ fn retired_startup_keeps_publication_on_its_original_joiner() {
     ) {
         return;
     }
-    use crate::sumeragi::driver::{DriverPreparation, PendingDriver, StartupPoll};
     // Cover no acquired worker, abandoned Ready, real readiness refusal, partial
     // physical creation refusal, and Ready already transferred to RunningDriver.
     for phase in 0..5 {
@@ -1364,7 +1366,7 @@ fn retired_startup_keeps_publication_on_its_original_joiner() {
                         stop: &stop,
                         gate: Arc::clone(fixture.gate),
                     };
-                    let (correct_owner, progressed, joined) = std::thread::scope(|scope| {
+                    let (correct_owner, progressed, join_result) = std::thread::scope(|scope| {
                         let _scope_release = StopRetiredSyncOnDrop {
                             stop: &stop,
                             gate: Arc::clone(fixture.gate),
@@ -1399,7 +1401,7 @@ fn retired_startup_keeps_publication_on_its_original_joiner() {
                         fixture.gate.release();
                         (correct_owner, progressed, lifecycle.join())
                     });
-                    joined.unwrap();
+                    join_result.unwrap();
                     let retired = observed_within(Duration::from_secs(5), || {
                         fixture.runner.drive_retirement_for_test();
                         fixture.runner.startup_owner_count_for_test() == 0
@@ -1442,6 +1444,8 @@ fn retired_startup_keeps_publication_on_its_original_joiner() {
 
 #[test]
 fn final_startup_shutdown_preserves_unpublished_original_store() {
+    use crate::sumeragi::driver::{DriverPreparation, PendingDriver, StartupPoll};
+
     // Final State refunds require the process-wide epoch collector to advance;
     // unrelated tests may retain a pinned State for their entire fixture.
     if crate::unit_test_support::run_in_isolated_harness(
@@ -1449,7 +1453,6 @@ fn final_startup_shutdown_preserves_unpublished_original_store() {
     ) {
         return;
     }
-    use crate::sumeragi::driver::{DriverPreparation, PendingDriver, StartupPoll};
     let (stopped, height_before_continuation, fakes, budget) =
         crate::sumeragi::lanes::registry::observe_shutdown_sync_for_test(|fixture| {
             let PreparedRetiringStore {

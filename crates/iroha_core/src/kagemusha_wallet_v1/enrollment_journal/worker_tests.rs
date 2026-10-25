@@ -89,18 +89,17 @@ impl Fixture {
             .worker()
             .packet(ActionV1::Complete, [41; 32], exchange, 2_000)
             .unwrap();
-        self.frame_for_packet(&packet, outcome, projection)
+        Self::frame_for_packet(&packet, outcome, projection)
     }
     fn frame_for_packet(
-        &self,
         packet: &VerifierExchangeV1,
         outcome: &str,
         projection: Option<Value>,
     ) -> Vec<u8> {
         let request: Value = norito::json::from_slice(&packet.frame()[4..]).unwrap();
-        let evidence = projection
-            .map(|v| Value::from(STANDARD.encode(norito::json::to_vec(&v).unwrap())))
-            .unwrap_or(Value::Null);
+        let evidence = projection.map_or(Value::Null, |v| {
+            Value::from(STANDARD.encode(norito::json::to_vec(&v).unwrap()))
+        });
         let json = norito::json!({
             "schema": ("iroha.kagemusha.wallet-e1-verifier.v1"), "version": (1_u16),
             "exchange_id": (request.get("exchange_id").unwrap().clone()),
@@ -203,7 +202,8 @@ fn unknown_unavailable_and_foreign_worker_responses_never_restore_verify() {
         .worker()
         .packet(ActionV1::Recover, [99; 32], EXCHANGE, 2_000)
         .unwrap();
-    let foreign_frame = f.frame_for_packet(&foreign_journal, "evidence", Some(f.projection()));
+    let foreign_frame =
+        Fixture::frame_for_packet(&foreign_journal, "evidence", Some(f.projection()));
     assert!(matches!(
         f.journal.retain_worker_response(
             &mut f.attempt,
@@ -391,7 +391,7 @@ fn recovered_first_claim_freezes_actual_evidence_time_before_credential_signing(
         .as_object_mut()
         .unwrap()
         .insert("time_ms".into(), Value::from(2_500_u64));
-    let frame = f.frame_for_packet(&packet, "evidence", Some(projection.clone()));
+    let frame = Fixture::frame_for_packet(&packet, "evidence", Some(projection.clone()));
     f.journal
         .retain_worker_response(&mut f.attempt, CONFIGURATION, &packet, &frame)
         .unwrap();
@@ -418,7 +418,7 @@ fn recovered_first_claim_freezes_actual_evidence_time_before_credential_signing(
             900_000,
         )
         .unwrap();
-    let frame = f.frame_for_packet(&retry, "evidence", Some(projection));
+    let frame = Fixture::frame_for_packet(&retry, "evidence", Some(projection));
     f.journal
         .retain_worker_response(&mut f.attempt, CONFIGURATION, &retry, &frame)
         .unwrap();
@@ -492,7 +492,7 @@ fn an_exposed_worker_refusal_is_verified_against_its_retained_original_and_excha
             2_500,
         )
         .unwrap();
-    let again = f.frame_for_packet(&recover, "refused", None);
+    let again = Fixture::frame_for_packet(&recover, "refused", None);
     assert!(matches!(
         f.journal
             .retain_worker_response(&mut f.attempt, CONFIGURATION, &recover, &again),

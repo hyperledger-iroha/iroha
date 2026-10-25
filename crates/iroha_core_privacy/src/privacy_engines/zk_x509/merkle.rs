@@ -456,7 +456,7 @@ pub fn trust_anchor_record_preimage_v1(
         record
             .previous_record_digest
             .as_ref()
-            .map(|value| value.as_bytes()),
+            .map(iroha_data_model::privacy::PrivacyZkX509TrustAnchorRecordDigestV1::as_bytes),
     );
     let lifecycle = governance_lifecycle_v1(record.lifecycle);
     let preimage = encode_hash_frame_v1(
@@ -512,12 +512,10 @@ pub fn certificate_policy_record_preimage_v1(
             .map_err(|_| ZkX509MerkleErrorV1::FrameLengthOverflow)?,
     );
     disclosures.extend_from_slice(&record.required_disclosed_attribute_indices);
-    let predecessor = governance_predecessor_v1(
-        record
-            .previous_record_digest
-            .as_ref()
-            .map(|value| value.as_bytes()),
-    );
+    let predecessor =
+        governance_predecessor_v1(record.previous_record_digest.as_ref().map(
+            iroha_data_model::privacy::PrivacyZkX509CertificatePolicyRecordDigestV1::as_bytes,
+        ));
     let lifecycle = governance_lifecycle_v1(record.lifecycle);
     let preimage = encode_hash_frame_v1(
         ZK_X509_CERTIFICATE_POLICY_RECORD_DIGEST_DOMAIN_V1,
@@ -556,7 +554,7 @@ pub fn crl_record_preimage_v1(
         record
             .previous_record_digest
             .as_ref()
-            .map(|value| value.as_bytes()),
+            .map(iroha_data_model::privacy::PrivacyZkX509CrlRecordDigestV1::as_bytes),
     );
     let lifecycle = governance_lifecycle_v1(record.lifecycle);
     let preimage = encode_hash_frame_v1(

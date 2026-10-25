@@ -1,5 +1,8 @@
 // Native read-only disk admission tests. Disk observation alone is not a finality proof.
 #[cfg(unix)]
+type ReadOnlyFileSnapshot = (Vec<u8>, u32, i64, i64, i64, i64, u64);
+
+#[cfg(unix)]
 mod canonical_evidence_reader_tests {
     use super::*;
     use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _, symlink};
@@ -92,15 +95,15 @@ mod canonical_evidence_reader_tests {
             fs::write(self.root.join(DATA_FILE_NAME), data).unwrap();
             fs::write(self.root.join(INDEX_FILE_NAME), indices).unwrap();
             fs::write(self.root.join(HASHES_FILE_NAME), hashes).unwrap();
-            self.write_marker(BlockStoreCommitMarker::new(
+            self.write_marker(&BlockStoreCommitMarker::new(
                 self.blocks.len() as u64,
                 self.blocks.last().map(|b| b.hash()),
             ));
         }
-        fn write_marker(&self, marker: BlockStoreCommitMarker) {
+        fn write_marker(&self, marker: &BlockStoreCommitMarker) {
             fs::write(
                 self.root.join(COUNT_FILE_NAME),
-                norito::encode_canonical(&marker).unwrap(),
+                norito::encode_canonical(marker).unwrap(),
             )
             .unwrap();
         }
@@ -141,7 +144,7 @@ mod canonical_evidence_reader_tests {
             .map(|name| self.root.join(name))
             .to_vec()
         }
-        fn snapshot(&self) -> Vec<(Vec<u8>, u32, i64, i64, i64, i64, u64)> {
+        fn snapshot(&self) -> Vec<ReadOnlyFileSnapshot> {
             self.files()
                 .iter()
                 .map(|path| {
@@ -580,17 +583,15 @@ mod canonical_evidence_reader_tests {
             let original = fixture.root.join("original");
             fs::rename(fixture.root.join(DATA_FILE_NAME), &original).expect("save file");
             match kind {
-                0 => symlink(&original, &fixture.root.join(DATA_FILE_NAME)).expect("symlink"),
-                1 => {
-                    fs::hard_link(&original, &fixture.root.join(DATA_FILE_NAME)).expect("hardlink")
-                }
+                0 => symlink(&original, fixture.root.join(DATA_FILE_NAME)).expect("symlink"),
+                1 => fs::hard_link(&original, fixture.root.join(DATA_FILE_NAME)).expect("hardlink"),
                 2 => {
                     drop(resource_file_fifo_with_live_peer(
                         &fixture.root.join(DATA_FILE_NAME),
                     ));
                 }
                 _ => {
-                    fs::create_dir(&fixture.root.join(DATA_FILE_NAME)).expect("directory");
+                    fs::create_dir(fixture.root.join(DATA_FILE_NAME)).expect("directory");
                 }
             }
             assert!(
@@ -625,17 +626,17 @@ mod canonical_evidence_reader_tests {
         for variant in 0..11 {
             let fixture = Fixture::new();
             match variant {
-                0 => fixture.write_marker(BlockStoreCommitMarker {
+                0 => fixture.write_marker(&BlockStoreCommitMarker {
                     version: 2,
                     count: 3,
                     tip_hash: Some(fixture.blocks[2].hash()),
                 }),
-                1 => fixture.write_marker(BlockStoreCommitMarker::new(0, None)),
-                2 => fixture.write_marker(BlockStoreCommitMarker::new(
+                1 => fixture.write_marker(&BlockStoreCommitMarker::new(0, None)),
+                2 => fixture.write_marker(&BlockStoreCommitMarker::new(
                     2,
                     Some(fixture.blocks[1].hash()),
                 )),
-                3 => fixture.write_marker(BlockStoreCommitMarker::new(
+                3 => fixture.write_marker(&BlockStoreCommitMarker::new(
                     3,
                     Some(fixture.blocks[0].hash()),
                 )),

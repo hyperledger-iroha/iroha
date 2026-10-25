@@ -455,10 +455,11 @@ fn maximum_profile_assembly_payload_and_source_admission_diagnostic() {
 #[test]
 #[ignore = "optimized exact-width X509 streaming hash cost diagnostic; run --release"]
 fn maximum_profile_streaming_hash_cost_diagnostic() {
+    const SAMPLE_ROWS: usize = 128;
     use std::time::Instant;
 
     crate::test_support::require_no_debug_assertions("run this diagnostic with --release");
-    const SAMPLE_ROWS: usize = 128;
+
     let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
     let widths = [
         layout
@@ -524,7 +525,12 @@ fn maximum_profile_streaming_hash_cost_diagnostic() {
             widths[0],
             widths[1],
             widths.iter().sum::<usize>(),
-            seconds * 2.0 * (full_rows / SAMPLE_ROWS) as f64,
+            seconds
+                * 2.0
+                * f64::from(
+                    u32::try_from(full_rows / SAMPLE_ROWS)
+                        .expect("fixed profile row ratio fits u32"),
+                ),
         );
     }
 }
@@ -598,7 +604,11 @@ fn maximum_profile_replay_fft_cost_diagnostic() {
         "X509 replay FFT diagnostic: rayon_workers={}, columns={batch_width}, native_rows={}, common_rows={rows}, interpolation_and_mask_seconds={interpolation_seconds:.6}, forward_seconds={lde_seconds:.6}, commitment_forward_transforms={forward_transforms}, commitment_forward_butterflies={butterflies}, linear_commitment_forward_seconds={:.3}; excludes source construction/replay, remaining native IFFTs, constraints/quotient/DEEP, hashing/FRI/CA and host contention",
         rayon::current_num_threads(),
         1_usize << native_log,
-        lde_seconds * forward_transforms as f64 / batch_width as f64,
+        lde_seconds
+            * f64::from(
+                u32::try_from(forward_transforms).expect("fixed profile transform count fits u32"),
+            )
+            / f64::from(u32::try_from(batch_width).expect("fixed column batch fits u32")),
     );
 }
 

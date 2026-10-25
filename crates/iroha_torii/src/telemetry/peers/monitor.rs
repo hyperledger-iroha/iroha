@@ -197,8 +197,10 @@ async fn drain_monitor_workers(workers: &mut JoinSet<MonitorWorkerExit>) -> bool
     let mut failed = false;
     while let Some(result) = workers.join_next().await {
         match result {
-            Ok(MonitorWorkerExit::Geo) => {}
-            Ok(MonitorWorkerExit::Polling(crate::ToriiCriticalWorkerExit::StoppedByShutdown)) => {}
+            Ok(
+                MonitorWorkerExit::Geo
+                | MonitorWorkerExit::Polling(crate::ToriiCriticalWorkerExit::StoppedByShutdown),
+            ) => {}
             Ok(MonitorWorkerExit::Polling(crate::ToriiCriticalWorkerExit::UnexpectedExit)) => {
                 failed = true;
             }
@@ -783,7 +785,7 @@ fn construct_geo_query(
     {
         let mut segments =
             url.path_segments_mut()
-                .map_err(|_| GeoLookupError::InvalidEndpoint {
+                .map_err(|()| GeoLookupError::InvalidEndpoint {
                     endpoint: endpoint_label,
                 })?;
         segments.push(host);
@@ -1036,7 +1038,9 @@ async fn get_metrics_periodic_timeout(
                         .calculate()
                         .unwrap_or_else(|| Duration::from_millis(status.commit_time_ms)),
                     queue_size: queue_depth,
-                    uptime: Duration::from_millis(status.uptime.0.as_millis() as u64),
+                    uptime: Duration::from_millis(
+                        u64::try_from(status.uptime.0.as_millis()).unwrap_or(u64::MAX),
+                    ),
                     status_rtt: Some(request_rtt),
                     status_rtt_avg: status_rtt_window.average(),
                     status_rtt_p95: status_rtt_window.percentile(95),
@@ -1099,7 +1103,7 @@ impl<const N: usize> AverageCommitTime<N> {
         Self::default()
     }
     fn observe(&mut self, height: u64, block_time: Duration) {
-        if self.last_height.map(|x| x == height).unwrap_or(false) {
+        if self.last_height.is_some_and(|x| x == height) {
             return;
         }
         self.last_height = Some(height);
@@ -1110,10 +1114,7 @@ impl<const N: usize> AverageCommitTime<N> {
             .buff
             .iter()
             .fold(None, |acc, x| Some(acc.unwrap_or(Duration::ZERO) + *x));
-        sum.map(|sum| {
-            sum.checked_div(self.buff.len() as u32)
-                .expect("non-zero if sum exists")
-        })
+        sum?.checked_div(u32::try_from(self.buff.len()).ok()?)
     }
 }
 #[derive(Default)]
@@ -1132,7 +1133,7 @@ impl<const N: usize> LatencyWindow<N> {
             .buff
             .iter()
             .fold(None, |acc, x| Some(acc.unwrap_or(Duration::ZERO) + *x))?;
-        sum.checked_div(self.buff.len() as u32)
+        sum.checked_div(u32::try_from(self.buff.len()).ok()?)
     }
     fn percentile(&self, percentile: u8) -> Option<Duration> {
         let mut values_ms = self

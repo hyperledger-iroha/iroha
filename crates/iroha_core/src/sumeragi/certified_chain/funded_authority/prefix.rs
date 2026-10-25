@@ -5,7 +5,7 @@ use iroha_allocation::ChargedShared;
 use iroha_data_model::sumeragi::epoch::ValidatorCommitteeMemberV1;
 
 /// Sharing keeps the complete original authority graph and every nested charge alive.
-pub(crate) struct FundedPrefixAuthority {
+pub struct FundedPrefixAuthority {
     material: ValidatorEpochContextV1,
     graph: FundedAuthorityGraph,
     // Material is destroyed first, including its vector and both allocations per member.
@@ -131,6 +131,12 @@ impl FundedPrefixAuthority {
         budget: &AllocationBudget,
         original: &mut AllocationReservation,
     ) -> Result<ChargedShared<Self>, ExecutionAttemptError<ChainReadError>> {
+        // Keep material before charges through every later allocation and unwind.
+        struct PendingMaterial {
+            material: ValidatorEpochContextV1,
+            charges: MaterialCharges,
+        }
+
         // `admit` reserves from this same pool; the check keeps any later caller honest.
         if !original.belongs_to(budget) {
             return Err(ExecutionAttemptError::Deferred(
@@ -149,11 +155,6 @@ impl FundedPrefixAuthority {
             .map_err(|error| map(CommitteeAdmissionError::Reservation(error)))?;
         let (material, charges) =
             Self::copy_material(&scheduled.epoch, budget, &mut reservation).map_err(map)?;
-        // Keep material before charges through every later allocation and unwind.
-        struct PendingMaterial {
-            material: ValidatorEpochContextV1,
-            charges: MaterialCharges,
-        }
         let pending = PendingMaterial { material, charges };
         let config =
             FundedHeightConfig::from_reservation(scheduled, epoch, params, &mut reservation)

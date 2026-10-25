@@ -1,9 +1,9 @@
-//! Retain all fourteen original Musubi physical map pairs in StatePublication.
+//! Retain all fourteen original Musubi physical map pairs in `StatePublication`.
 //!
 //! This closed structural stage retains actual current/undo work, metadata and
 //! original scope through partial backing/work refusal and reader-held retirement.
 //! Raw undo is not a complete predecessor. The revision retains its exact original
-//! current/undo EBR allocations in the same CellField and charged group control.
+//! current/undo EBR allocations in the same `CellField` and charged group control.
 //! Exact-key lookups now resolve those same descriptors with fallible finite
 //! key-comparison and structural work; they allocate no second query index.
 //! The same original owner retains semantic admission, live/directory/universal
@@ -29,7 +29,7 @@ use iroha_data_model::{
 
 /// Exact local group/source or original field refusal; no physical wait is forged.
 #[derive(Debug)]
-pub(crate) enum RetainedMusubiGroupReadError {
+pub enum RetainedMusubiGroupReadError {
     /// Complete original frozen publication required; terminal phases refuse.
     NotFrozen,
     /// The original State or original paired work/predecessor has changed.
@@ -124,7 +124,7 @@ impl RetryDemand {
 
 /// Publicly observable structural stage; no semantic-completion authority.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct MusubiGroupReadProgress {
+pub struct MusubiGroupReadProgress {
     pub(crate) tables: [PackageReadProgress; 14],
     pub(crate) work: usize,
     pub(crate) complete: bool,
@@ -135,7 +135,7 @@ pub(crate) struct MusubiGroupReadProgress {
 /// Observation of retained ordered predecessor descriptors in the same group.
 /// These counts establish no semantic verification or complete-State authority.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct MusubiGroupPredecessorProgress {
+pub struct MusubiGroupPredecessorProgress {
     pub(crate) tables: [PredecessorReadProgress; 14],
     pub(crate) work: usize,
     pub(crate) complete: bool,
@@ -171,7 +171,7 @@ pub(super) struct RetainedMusubiGroupRead {
 }
 /// Immutable exact original revision pair, borrowed inside the State-owned callback.
 /// Its actual staged allocations are retained; no semantic verification is implied.
-pub(crate) struct OriginalMusubiRevision<'read> {
+pub struct OriginalMusubiRevision<'read> {
     current: &'read MusubiResolverIndexRevisionV1,
     predecessor: &'read MusubiResolverIndexRevisionV1,
 }
@@ -264,7 +264,7 @@ macro_rules! define_original_musubi_group {
         /// finite structural resolves stay fallible under the original work.
         /// Checked semantic access requires both original images to complete the
         /// retained validators; the raw row callback establishes no such authority.
-        pub(crate) struct OriginalMusubiRows<'read> {
+        pub struct OriginalMusubiRows<'read> {
             data:&'read MusubiGroupReadData,
             work:&'read mut usize,
             scope: &'read OwnedAllocationScope,
@@ -444,7 +444,7 @@ macro_rules! define_original_musubi_group {
             /// indexes/readers, refund scope and successful work.
             /// An equal revision staged under the same predecessor cannot replace
             /// either original allocation. No semantic authority marker or infallible
-            /// StorageReadOnly implementation is exposed by this callback.
+            /// `StorageReadOnly` implementation is exposed by this callback.
             #[cfg(test)]
             pub(crate) fn with_original_musubi_rows<R>(&mut self,limit:usize,
                 callback:impl for<'read> FnOnce(OriginalMusubiRows<'read>,OriginalMusubiRevision<'read>)->R)
@@ -467,7 +467,7 @@ macro_rules! define_original_musubi_group {
             }
             /// Retire actual indexes/readers before original writer installation.
             /// Later reader refusal keeps completed thaw stages and the exact scope.
-            /// A reader-held refusal has no physical mutex ReleaseWait event.
+            /// A reader-held refusal has no physical mutex `ReleaseWait` event.
             pub(crate) fn retire_original_musubi_group_read(&mut self)->Result<(),RetainedMusubiGroupReadError> {
                 self.check_original_musubi_group_read()?;
                 let plan=self.group.as_mut().expect("original plan");

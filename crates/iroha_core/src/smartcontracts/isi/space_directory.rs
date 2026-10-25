@@ -181,13 +181,12 @@ fn ensure_known_dataspace(
     {
         return Ok(());
     }
-    Err(
-        InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(format!(
+    Err(InstructionExecutionError::InvalidParameter(
+        InvalidParameterError::SmartContract(format!(
             "unknown dataspace id {}",
             dataspace.as_u64()
-        )))
-        .into(),
-    )
+        )),
+    ))
 }
 fn has_publish_permission(
     state_transaction: &StateTransaction<'_, '_>,
@@ -213,17 +212,16 @@ fn has_publish_permission(
         .cloned()
         .collect();
     for role_id in role_ids {
-        if let Some(role) = state_transaction.world.roles.get(&role_id) {
-            if permissions_allow_manifest(role.permissions(), dataspace, uaid)
+        if let Some(role) = state_transaction.world.roles.get(&role_id)
+            && (permissions_allow_manifest(role.permissions(), dataspace, uaid)
                 || permissions_allow_account_domain_manifest(
                     role.permissions(),
                     state_transaction,
                     dataspace,
                     uaid,
-                )
-            {
-                return true;
-            }
+                ))
+        {
+            return true;
         }
     }
     false
@@ -381,7 +379,18 @@ mod tests {
     fn test_state() -> State {
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
-        State::new_for_testing(World::default(), kura, query)
+        let world = World::default();
+        // Component registrations use an explicit policy authored before the block snapshot.
+        let mut parameters = world.parameters.block();
+        parameters
+            .set_parameter(
+                crate::sumeragi::test_chain::crypto_fixture_policy()
+                    .into_parameter()
+                    .expect("canonical fixture crypto policy"),
+            )
+            .expect("install fixture crypto policy");
+        parameters.commit();
+        State::new_for_testing(world, kura, query)
     }
     fn checked_keypair() -> KeyPair {
         KeyPair::try_random().expect("Space Directory fixture key generation should succeed")
@@ -591,7 +600,7 @@ mod tests {
         let alias = AccountAlias::from_literal("customer@company.dpn", &tx.nexus.dataspace_catalog)
             .unwrap();
         tx.world
-            .insert_account_alias_binding(alias.clone(), customer.clone());
+            .insert_account_alias_binding(&(alias.clone()), &(customer.clone()));
         tx.world.replace_account_rekey_record(
             iroha_data_model::account::rekey::AccountRekeyRecord::new(
                 alias.clone(),
@@ -817,9 +826,9 @@ mod tests {
         .execute(&hbl_registrar, &mut tx)
         .expect_err("a stale reverse-only alias index must not authorize an HBL manifest");
         tx.world
-            .insert_account_alias_binding(hbl_alias.clone(), hbl_customer.clone());
+            .insert_account_alias_binding(&(hbl_alias.clone()), &(hbl_customer.clone()));
         tx.world
-            .insert_account_alias_binding(ubl_alias.clone(), ubl_customer.clone());
+            .insert_account_alias_binding(&(ubl_alias.clone()), &(ubl_customer.clone()));
         tx.world.replace_account_rekey_record(
             iroha_data_model::account::rekey::AccountRekeyRecord::new(
                 hbl_alias.clone(),
@@ -907,9 +916,9 @@ mod tests {
         )
         .expect("UBL customer alias");
         tx.world
-            .insert_account_alias_binding(hbl_alias, customer.clone());
+            .insert_account_alias_binding(&(hbl_alias), &(customer.clone()));
         tx.world
-            .insert_account_alias_binding(ubl_alias, customer.clone());
+            .insert_account_alias_binding(&(ubl_alias), &(customer.clone()));
         let mut set = SpaceDirectoryManifestSet::default();
         let mut existing = SpaceDirectoryManifestRecord::new(sample_manifest(uaid, dataspace, 1));
         existing.lifecycle.mark_activated(5);
@@ -1009,7 +1018,7 @@ mod tests {
         account: &AccountId,
     ) {
         tx.world
-            .insert_account_alias_binding(alias.clone(), account.clone());
+            .insert_account_alias_binding(&(alias.clone()), &(account.clone()));
         tx.world.replace_account_rekey_record(
             iroha_data_model::account::rekey::AccountRekeyRecord::new(
                 alias.clone(),

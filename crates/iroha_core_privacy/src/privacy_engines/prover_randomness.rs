@@ -452,14 +452,14 @@ mod tests {
                         *byte = if index < HEALTH_HALF_BYTES_V1 {
                             0x5A
                         } else {
-                            (index as u8).wrapping_mul(41).wrapping_add(3)
+                            index.to_le_bytes()[0].wrapping_mul(41).wrapping_add(3)
                         };
                     }
                 }
                 Mode::ConstantRightHalf => {
                     for (index, byte) in destination.iter_mut().enumerate() {
                         *byte = if index < HEALTH_HALF_BYTES_V1 {
-                            (index as u8).wrapping_mul(41).wrapping_add(3)
+                            index.to_le_bytes()[0].wrapping_mul(41).wrapping_add(3)
                         } else {
                             0xA5
                         };
@@ -467,7 +467,9 @@ mod tests {
                 }
                 Mode::Period(period) => {
                     for (index, byte) in destination.iter_mut().enumerate() {
-                        *byte = ((index % period) as u8).wrapping_mul(41).wrapping_add(3);
+                        *byte = ((index % period).to_le_bytes()[0])
+                            .wrapping_mul(41)
+                            .wrapping_add(3);
                     }
                 }
                 Mode::PartialFailure => {
@@ -476,7 +478,7 @@ mod tests {
                         .iter_mut()
                         .take(partial)
                         .enumerate()
-                        .for_each(|(index, byte)| *byte = index as u8);
+                        .for_each(|(index, byte)| *byte = index.to_le_bytes()[0]);
                     return Err(rand_core_06::Error::new(
                         "injected partial prover entropy failure",
                     ));
@@ -520,9 +522,9 @@ mod tests {
         fn byte(index: usize) -> u8 {
             let mixed = (index as u64)
                 .wrapping_mul(0x9E37_79B9_7F4A_7C15)
-                .rotate_left((index % 61) as u32)
+                .rotate_left(u32::try_from(index % 61).expect("rotation below 61"))
                 ^ 0xA5C3_6D91_E27B_4F08;
-            (mixed ^ (mixed >> 17) ^ (mixed >> 43)) as u8
+            (mixed ^ (mixed >> 17) ^ (mixed >> 43)).to_le_bytes()[0]
         }
         fn fill(&mut self, destination: &mut [u8]) -> Result<(), RecordingError> {
             self.requests.push(destination.len());
@@ -537,9 +539,7 @@ mod tests {
                 *byte = Self::byte(self.cursor);
                 self.cursor += 1;
             }
-            if panicking {
-                panic!("injected canonical-block panic");
-            }
+            assert!(!panicking, "injected canonical-block panic");
             if failing { Err(RecordingError) } else { Ok(()) }
         }
     }
@@ -789,14 +789,14 @@ mod tests {
                             *byte = if index < HEALTH_HALF_BYTES_V1 {
                                 0x5A
                             } else {
-                                (index as u8).wrapping_mul(41).wrapping_add(3)
+                                index.to_le_bytes()[0].wrapping_mul(41).wrapping_add(3)
                             };
                         }
                     }
                     TryMode::ConstantRightHalf => {
                         for (index, byte) in destination.iter_mut().enumerate() {
                             *byte = if index < HEALTH_HALF_BYTES_V1 {
-                                (index as u8).wrapping_mul(41).wrapping_add(3)
+                                index.to_le_bytes()[0].wrapping_mul(41).wrapping_add(3)
                             } else {
                                 0xA5
                             };
@@ -804,12 +804,14 @@ mod tests {
                     }
                     TryMode::Period(period) => {
                         for (index, byte) in destination.iter_mut().enumerate() {
-                            *byte = ((index % period) as u8).wrapping_mul(41).wrapping_add(3);
+                            *byte = ((index % period).to_le_bytes()[0])
+                                .wrapping_mul(41)
+                                .wrapping_add(3);
                         }
                     }
                     TryMode::PartialFailure => {
                         for (index, byte) in destination.iter_mut().take(17).enumerate() {
-                            *byte = index as u8;
+                            *byte = index.to_le_bytes()[0];
                         }
                         return Err(InjectedTryEntropyError);
                     }
@@ -831,7 +833,7 @@ mod tests {
             }
             fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
                 for byte in destination {
-                    *byte = ((self.cursor % HEALTH_PREFIX_BYTES_V1) as u8)
+                    *byte = ((self.cursor % HEALTH_PREFIX_BYTES_V1).to_le_bytes()[0])
                         .wrapping_mul(73)
                         .wrapping_add(11);
                     self.cursor += 1;
@@ -857,7 +859,7 @@ mod tests {
                 self.fills = self.fills.saturating_add(1);
                 if fill == 0 {
                     for (index, byte) in destination.iter_mut().enumerate() {
-                        *byte = (index as u8).wrapping_mul(73).wrapping_add(11);
+                        *byte = index.to_le_bytes()[0].wrapping_mul(73).wrapping_add(11);
                     }
                     return Ok(());
                 }

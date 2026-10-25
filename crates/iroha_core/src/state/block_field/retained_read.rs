@@ -8,7 +8,7 @@ use super::*;
 
 /// Why this original field cannot return to its detached publication phase.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum RetainedReadPhaseError {
+pub enum RetainedReadPhaseError {
     /// Execution, incomplete capture, publication or terminal release is not a read cut.
     NotFrozen,
     /// Actual original read/position owners still retain one of the paired cursors.
@@ -154,7 +154,7 @@ impl<V: Value, C: Send + Sync + 'static> CellField<'_, V, C> {
 
     /// Restore this same original pair only after both actual readers retire.
     /// Partial thaw refusal retains both allocations, metadata and original charge.
-    /// A retained EBR reader is not a physical writer lock or ReleaseWait event.
+    /// A retained EBR reader is not a physical writer lock or `ReleaseWait` event.
     pub(crate) fn try_retire_original_readers(&mut self) -> Result<(), RetainedReadPhaseError> {
         if self.released {
             return Err(RetainedReadPhaseError::NotFrozen);

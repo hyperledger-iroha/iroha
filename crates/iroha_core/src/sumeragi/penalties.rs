@@ -387,7 +387,7 @@ fn wire_evidence_admissions(
 mod funded_actions;
 #[path = "penalties/sccp.rs"]
 mod sccp;
-pub(crate) use funded_actions::FundedPenaltyActions;
+pub use funded_actions::FundedPenaltyActions;
 
 struct ParentPenaltySnapshot {
     pending: ChargedBuffer<PendingPenaltyEvidence>,
@@ -745,9 +745,7 @@ impl<'a> PenaltyApplier<'a> {
             .as_mut_slice()
             .sort_unstable_by(|left, right| left.0.0.cmp(&right.0.0));
         let _witness_suppression = crate::exec_witness::suppress_recording_for_current_thread();
-        let mut scratch = self
-            .state
-            .consensus_effects_probe_block(block_header.clone())?;
+        let mut scratch = self.state.consensus_effects_probe_block(*block_header)?;
         let mut actions =
             funded_actions::ActionBuilder::new(demand, self.state.evidence_preparation_budget())?;
         for record in pending.as_slice() {
@@ -865,8 +863,7 @@ impl<'a> PenaltyApplier<'a> {
                         let mut transaction = scratch.consensus_effects_transaction()?;
                         apply_indexed_slash_to_validator_without_observability(
                             &mut transaction,
-                            lane_id,
-                            validator,
+                            (lane_id, validator),
                             slash_id,
                             amount.get(),
                             block_header.creation_time_ms,
@@ -918,7 +915,7 @@ fn canonicalize_penalty_actions(actions: &mut Vec<NposPenaltyAction>) {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn apply_npos_consensus_effects_to_transaction(
+pub fn apply_npos_consensus_effects_to_transaction(
     tx: &mut StateTransaction<'_, '_>,
     effects: &NposConsensusEffects,
     stake_index: Option<&PublicLaneStakeIndex>,
@@ -948,7 +945,7 @@ pub(crate) fn apply_npos_consensus_effects_to_transaction(
 /// to the transaction execution witness in either application mode.
 #[cfg(test)]
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn validate_npos_consensus_effects_after_execution(
+pub fn validate_npos_consensus_effects_after_execution(
     state_block: &mut StateBlock<'_>,
     effects: &NposConsensusEffects,
     evidence_prune_keys: &[Hash],
@@ -1164,8 +1161,7 @@ fn apply_npos_consensus_effects_to_transaction_inner(
                 match mode {
                     EffectsApplicationMode::Commit => apply_indexed_consensus_slash_to_validator(
                         tx,
-                        action.lane_id,
-                        &action.validator,
+                        (action.lane_id, &action.validator),
                         action.slash_id,
                         &action.amount,
                         now_ms,
@@ -1176,8 +1172,7 @@ fn apply_npos_consensus_effects_to_transaction_inner(
                     EffectsApplicationMode::ValidateOnly => {
                         apply_indexed_slash_to_validator_without_observability(
                             tx,
-                            action.lane_id,
-                            &action.validator,
+                            (action.lane_id, &action.validator),
                             action.slash_id,
                             &action.amount,
                             now_ms,
@@ -1256,6 +1251,16 @@ fn penalty_staking_fixture_ids() -> (
     (asset_definition, account(0xE1), account(0xE2))
 }
 
+/// Explicit monetary rules shared by component prestate and original signed genesis.
+#[cfg(test)]
+fn penalty_staking_fixture_policy() -> iroha_data_model::block::consensus::PublicLaneStakingPolicy {
+    let (asset_definition, escrow, slash_sink) = penalty_staking_fixture_ids();
+    let mut policy = crate::sumeragi::test_chain::staking_fixture_policy(asset_definition);
+    policy.stake_escrow_account_id = escrow;
+    policy.slash_sink_account_id = slash_sink;
+    policy
+}
+
 #[cfg(test)]
 fn penalty_staking_fixture_header() -> BlockHeader {
     BlockHeader::new(
@@ -1273,7 +1278,7 @@ fn penalty_staking_fixture_header() -> BlockHeader {
 /// The setup is committed through a real world overlay so asset indexes and the
 /// definition incarnation stay consistent with production instruction execution.
 #[cfg(test)]
-pub(crate) fn configure_penalty_staking_state_for_tests(state: &mut State) {
+pub fn configure_penalty_staking_state_for_tests(state: &mut State) {
     use crate::smartcontracts::Execute as _;
     use iroha_data_model::{
         account::Account,
@@ -1293,6 +1298,25 @@ pub(crate) fn configure_penalty_staking_state_for_tests(state: &mut State) {
     state
         .set_nexus(nexus)
         .expect("install penalty staking custody configuration");
+
+    // Component prestate owns admission and monetary inputs before its first block.
+    // These parameters grant no authenticated genesis or execution capability.
+    let mut parameters = state.world.parameters.block();
+    parameters
+        .set_parameter(
+            crate::sumeragi::test_chain::crypto_fixture_policy()
+                .into_parameter()
+                .expect("canonical component crypto policy"),
+        )
+        .expect("install component crypto policy");
+    parameters
+        .set_parameter(iroha_data_model::parameter::Parameter::Custom(
+            penalty_staking_fixture_policy()
+                .into_custom_parameter()
+                .expect("canonical component staking policy"),
+        ))
+        .expect("install component staking policy");
+    parameters.commit();
 
     let mut state_block = state.block(penalty_staking_fixture_header());
     let mut transaction = state_block.transaction();
@@ -1320,7 +1344,7 @@ pub(crate) fn configure_penalty_staking_state_for_tests(state: &mut State) {
 /// Seed one validator with an account, an exactly backed escrow balance, and
 /// the matching retained validator/share and exact custody rows needed by the slash executor.
 #[cfg(test)]
-pub(crate) fn seed_penalty_validator_for_tests(
+pub fn seed_penalty_validator_for_tests(
     state: &State,
     lane_id: LaneId,
     peer: &PeerId,
@@ -1428,7 +1452,7 @@ pub(crate) fn seed_penalty_validator_for_tests(
 /// Install explicit accepted penalty-kernel prestate for an original payload pool test.
 /// Native evidence admission and offence authentication have separate real-history controls.
 #[cfg(test)]
-pub(crate) fn pending_payload_penalty_fixture(state: &State) -> (Hash, usize) {
+pub fn pending_payload_penalty_fixture(state: &State) -> (Hash, usize) {
     let key = tests::insert_evidence(state, tests::fixture_vote_evidence(1, 0), 1);
     (key, std::mem::size_of::<PendingPenaltyEvidence>())
 }
@@ -1530,13 +1554,44 @@ mod tests {
         state
     }
 
-    /// Execute real signed NPoS genesis before testing a finalized slash operation.
+    #[test]
+    fn component_penalty_policies_do_not_publish_native_genesis() {
+        let state = fresh_state();
+        let parameters = state.world.parameters.view();
+        assert_eq!(state.committed_height(), 0);
+        assert_eq!(state.kura().blocks_count(), 0);
+        assert_eq!(
+            parameters.staking_policy(),
+            Some(&penalty_staking_fixture_policy())
+        );
+        assert_eq!(
+            parameters.require_crypto_policy().unwrap(),
+            &crate::sumeragi::test_chain::crypto_fixture_policy()
+        );
+        let (definition, escrow, sink) = penalty_staking_fixture_ids();
+        assert!(state.world.accounts.view().get(&escrow).is_some());
+        assert!(state.world.accounts.view().get(&sink).is_some());
+        assert!(
+            state
+                .world
+                .asset_definitions
+                .view()
+                .get(&definition)
+                .is_some()
+        );
+    }
+
+    /// Execute real signed `NPoS` genesis before testing a finalized slash operation.
     /// Component evidence below remains explicit fixture prestate; no retired sidecar
     /// substitutes for the native committed authority required by monetary execution.
     fn native_penalty_state() -> State {
         use crate::sumeragi::{startup, test_chain::signed_genesis_fixture_for_state};
         use iroha_data_model::{
-            IntoKeyValue as _, Registrable as _, account::Account, domain::Domain,
+            Registrable as _,
+            account::Account,
+            asset::{AssetBalancePolicy, AssetDefinition},
+            domain::Domain,
+            isi::Register,
             parameter::system::ConsensusMode,
         };
         use iroha_model_base::chain::ChainId;
@@ -1553,29 +1608,41 @@ mod tests {
                 )
             })
             .collect::<Vec<_>>();
+        let (asset_definition, escrow, slash_sink) = penalty_staking_fixture_ids();
+        let policy = penalty_staking_fixture_policy();
+        // The original signed genesis installs these policies and creates all custody
+        // rows through the same registration instructions used by the component fixture.
+        let instructions = vec![
+            Register::account(Account::new(escrow.clone())).into(),
+            Register::account(Account::new(slash_sink.clone())).into(),
+            Register::asset_definition(AssetDefinition::new(
+                asset_definition.clone(),
+                "XOR",
+                iroha_primitives::numeric::NumericSpec::fractional(9),
+                AssetBalancePolicy::Global,
+                None,
+            ))
+            .into(),
+        ];
         let (genesis, state) = signed_genesis_fixture_for_state(
             &chain_id,
             &key,
             &validators,
-            Vec::new(),
+            instructions,
             1,
-            Some(SumeragiNposParameters {
-                slashing_delay_blocks: 1,
-                ..SumeragiNposParameters::default()
-            }),
+            (
+                Some(SumeragiNposParameters {
+                    slashing_delay_blocks: 1,
+                    ..SumeragiNposParameters::default()
+                }),
+                policy.clone(),
+            ),
             |network| {
-                let seed = fresh_state();
-                let nexus = seed.nexus_snapshot();
-                let mut world = seed.world;
-                let domain = iroha_genesis::GENESIS_DOMAIN_ID.clone();
-                world.insert_domain_for_testing(
-                    domain.clone(),
-                    Domain::new(domain).build(&authority),
+                let world = World::with(
+                    [Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&authority)],
+                    [Account::new(authority.clone()).build(&authority)],
+                    [],
                 );
-                let (id, account) = Account::new(authority.clone())
-                    .build(&authority)
-                    .into_key_value();
-                world.accounts.insert(id, account);
                 let mut state = State::new_with_chain_and_network_id_for_testing(
                     world,
                     Kura::blank_kura_for_testing(),
@@ -1583,6 +1650,10 @@ mod tests {
                     chain_id.clone(),
                     network,
                 );
+                let mut nexus = state.nexus_snapshot();
+                nexus.staking.stake_asset_id = asset_definition.to_string();
+                nexus.staking.stake_escrow_account_id = escrow.to_string();
+                nexus.staking.slash_sink_account_id = slash_sink.to_string();
                 state
                     .set_nexus(nexus)
                     .expect("exact network XOR custody configuration");
@@ -1600,9 +1671,51 @@ mod tests {
             &NetworkId::from_genesis_hash(genesis.hash()),
             "the final State belongs to the policy-bound original signed genesis"
         );
+        assert!(
+            state
+                .world
+                .parameters
+                .view()
+                .get()
+                .staking_policy()
+                .is_none()
+        );
+        assert!(
+            state
+                .world
+                .parameters
+                .view()
+                .get()
+                .require_crypto_policy()
+                .is_err()
+        );
+        assert!(state.world.accounts.view().get(&escrow).is_none());
+        assert!(state.world.accounts.view().get(&slash_sink).is_none());
+        assert!(
+            state
+                .world
+                .asset_definitions
+                .view()
+                .get(&asset_definition)
+                .is_none()
+        );
         startup::apply_genesis(&state, genesis, &authority, ConsensusMode::Npos, None)
             .expect("original executed native genesis and authority");
         assert_eq!(state.view().height(), 1);
+        assert_eq!(
+            state.world.parameters.view().get().staking_policy(),
+            Some(&policy)
+        );
+        assert_eq!(
+            state
+                .world
+                .parameters
+                .view()
+                .get()
+                .require_crypto_policy()
+                .unwrap(),
+            &crate::sumeragi::test_chain::crypto_fixture_policy()
+        );
         state
     }
 
@@ -3194,7 +3307,11 @@ mod tests {
                 state.network_id_ref(),
                 Duration::from_secs(1),
                 view.world().parameters().transaction(),
-                &iroha_config::parameters::actual::Crypto::default(),
+                &iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                    iroha_crypto::Algorithm::Ed25519,
+                    iroha_crypto::Algorithm::Secp256k1,
+                ])
+                .expect("this stateless fixture explicitly selects Ed25519 and Secp256k1"),
                 &clock,
             )
             .unwrap();
@@ -4492,7 +4609,7 @@ mod tests {
         }
     }
 
-    /// Certified NPoS parent whose native history authenticates one local report.
+    /// Certified `NPoS` parent whose native history authenticates one local report.
     fn certified_npos_chain() -> crate::sumeragi::test_chain::CertifiedTestChain {
         use crate::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
         use iroha_data_model::parameter::system::SumeragiConsensusMode;

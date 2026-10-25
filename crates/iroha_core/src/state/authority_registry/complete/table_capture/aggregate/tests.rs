@@ -109,6 +109,10 @@ fn note_reader(state: &State) {
     }
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 fn accounts(
     state: &State,
     limits: LeafLimits,
@@ -117,6 +121,10 @@ fn accounts(
     super::super::capture_accounts_table_once(state, limits)
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 fn aliases(
     state: &State,
     limits: LeafLimits,
@@ -221,7 +229,7 @@ fn empty_catalog_uses_zero_backing_and_catalog_errors_precede_pool_refusal() {
             .unwrap(),
         TableCaptureError::MissingMaterializer("world.accounts")
     ));
-    let over_count = [normal_readers()[0]; super::super::MAX_TABLE_MATERIALIZERS + 1];
+    let over_count = vec![normal_readers()[0]; super::super::MAX_TABLE_MATERIALIZERS + 1];
     assert!(matches!(
         capture_tables_once(&state, FIELDS, &over_count, policy(limits()))
             .err()
@@ -296,6 +304,10 @@ fn occupied_original_pool_preserves_exact_refusal_wake_and_retry() {
     );
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 fn rejected_second(
     state: &State,
     _: LeafLimits,
@@ -304,6 +316,14 @@ fn rejected_second(
     Err(LeafError::PayloadLimit)
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "The fixture implements the production fallible callback contract"
+)]
 fn unavailable_second(
     state: &State,
     _: LeafLimits,
@@ -312,6 +332,10 @@ fn unavailable_second(
     Ok(None)
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 fn generation_changed_second(
     state: &State,
     limits: LeafLimits,
@@ -377,6 +401,10 @@ fn partial_child_failure_identity_mismatch_and_both_generation_retries_release_a
     }
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 fn panic_second(
     state: &State,
     _: LeafLimits,

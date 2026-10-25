@@ -374,7 +374,7 @@ state_test! { sync da_hydration_capacity_refusal_preserves_indexes_and_original_
         assert_eq!(da_index_debug_snapshot(state), published);
         assert_eq!(std::fs::read(&journal).unwrap(), journal_before);
         drop(occupied);
-        assert!(matches!(retry.as_mut().poll(&mut context), Poll::Ready(_)));
+        assert!(matches!(retry.as_mut().poll(&mut context), Poll::Ready(())));
         if rewind {
             state.rewind_da_indexes_to_height(1).expect("retry the exact committed prefix");
         } else {

@@ -278,7 +278,7 @@ pub trait FoldObserverV1: Send + Sync {
     /// Called on the folding thread: before the background slot is released for a turn that
     /// ended before its proof finished, after the publication otherwise. It must not block,
     /// and must not call the scheduler or the wallet.
-    fn sub_proof(&self, record: FoldSubProofV1);
+    fn sub_proof(&self, record: &FoldSubProofV1);
 }
 
 /// The fixed Native entry boundaries measured independently of fold turns.
@@ -288,7 +288,7 @@ pub enum NativeWorkKindV1 {
     Request,
     /// Native wallet Bootstrap.
     Bootstrap,
-    /// Native Credited intake/query and any required ArchiveSent transition.
+    /// Native Credited intake/query and any required `ArchiveSent` transition.
     Credited,
     /// An ordinary Native execution, including its existing validation and publication.
     Execute,
@@ -432,9 +432,9 @@ impl FoldMetricsV1 {
         self.process_peak_rss_bytes = bytes;
     }
     /// Keep one Native call observation without changing fold counts or scheduling.
-    pub fn record_native_work(&mut self, record: NativeWorkRecordV1) {
+    pub fn record_native_work(&mut self, record: &NativeWorkRecordV1) {
         self.native_work_count = self.native_work_count.saturating_add(1);
-        retain_observation(&mut self.native_work, record, NATIVE_WORK_RECORDS_V1);
+        retain_observation(&mut self.native_work, *record, NATIVE_WORK_RECORDS_V1);
     }
 
     /// Total observed Native calls, including those no longer retained. Observation only.
@@ -448,7 +448,7 @@ impl FoldMetricsV1 {
     }
 
     /// Count `record` and keep it, dropping the oldest record beyond the bound.
-    pub fn record(&mut self, record: FoldSubProofV1) {
+    pub fn record(&mut self, record: &FoldSubProofV1) {
         let counts = &mut self.counts;
         counts.sub_proofs = counts.sub_proofs.saturating_add(1);
         counts.overlapped_ingests = counts
@@ -479,7 +479,7 @@ impl FoldMetricsV1 {
             }
         };
         *count = count.saturating_add(1);
-        retain_observation(&mut self.records, record, FOLD_METRICS_RECORDS_V1);
+        retain_observation(&mut self.records, *record, FOLD_METRICS_RECORDS_V1);
     }
 
     /// Kept records, oldest first.
@@ -608,7 +608,7 @@ impl FoldMetricsV1 {
             output.push_str(",\"foldRecordId\":");
             push_optional_u64(&mut output, record.fold_record_id);
             push_bridge(&mut output, record.bridge);
-            push_admissions(&mut output, record.admissions);
+            push_admissions(&mut output, &record.admissions);
             push_verification(&mut output, record.verification);
             push_work(&mut output, record.work);
             output.push('}');
@@ -658,7 +658,7 @@ fn push_bridge(output: &mut String, value: NativeBridgeMetricsV1) {
         micros(value.custody_admission)
     );
 }
-fn push_admissions(output: &mut String, value: NativeAdmissionsV1) {
+fn push_admissions(output: &mut String, value: &NativeAdmissionsV1) {
     let _ = write!(
         output,
         ",\"admissionCount\":{},\"admissions\":[",
@@ -894,8 +894,7 @@ impl FoldTurnV1 {
         let mut phases = [Duration::ZERO; FoldPhaseV1::COUNT];
         let mut stage = None;
         let mut verification = KagemushaWalletVerificationCountsV1::default();
-        let mut work = iroha_plonk::work_metrics::WorkMetrics::default();
-        if let Some(active) = active {
+        let work = active.map_or_else(iroha_plonk::work_metrics::WorkMetrics::default, |active| {
             started_native_micros = active.started_native_micros;
             phases = active.elapsed;
             let spent = &mut phases[active.phase.index()];
@@ -903,8 +902,8 @@ impl FoldTurnV1 {
             stage = active.stage;
             verification =
                 KagemushaWalletVerificationCountsV1::current_thread().since(active.verification);
-            work = iroha_plonk::work_metrics::WorkMetrics::current_thread().since(active.work);
-        }
+            iroha_plonk::work_metrics::WorkMetrics::current_thread().since(active.work)
+        });
         Some(FoldSubProofV1 {
             started_native_micros,
             ended_native_micros,

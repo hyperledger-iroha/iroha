@@ -365,6 +365,8 @@ fn bounded_validation_fee_proposal_keys<'a>(
     }
     (keys, has_more)
 }
+type ValidationProposalIndexIter<'a> = Box<dyn Iterator<Item = (&'a (u64, [u8; 32]), &'a ())> + 'a>;
+
 /// Return one bounded page of typed validation-fee Parliament proposals.
 pub async fn handler_proposals(
     State(app): State<SharedAppState>,
@@ -394,7 +396,7 @@ pub async fn handler_proposals(
     let world = view.world();
     let registry = current_validation_fee_registry(world)?;
     let index = world.validation_fee_proposal_index();
-    let indexed: Box<dyn Iterator<Item = (&(u64, [u8; 32]), &())> + '_> = match after {
+    let indexed: ValidationProposalIndexIter<'_> = match after {
         Some(after) => Box::new(index.range((Excluded(after), Unbounded))),
         None => Box::new(index.iter()),
     };

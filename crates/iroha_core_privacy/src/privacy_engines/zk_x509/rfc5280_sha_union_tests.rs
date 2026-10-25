@@ -92,7 +92,7 @@ fn all_sixteen_native_bridge_columns_are_constant_and_air_rejects_coordinated_dr
     }
     let provider = ZkX509Rfc5280StarkColumnProviderV1::with_centers_v1(
         &material,
-        der_challenges_v1(),
+        &der_challenges_v1(),
         &challenges_v1(),
         centers,
     )
@@ -145,7 +145,7 @@ fn all_sixteen_native_bridge_columns_are_constant_and_air_rejects_coordinated_dr
                         &aux,
                         next_aux,
                         &fixed,
-                        der_challenges_v1(),
+                        &der_challenges_v1(),
                         &challenges_v1(),
                         claims,
                     )

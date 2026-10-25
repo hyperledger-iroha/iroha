@@ -9,7 +9,7 @@
 //! bounded inline; complete the remaining original-pool admission before qualification.
 
 mod readiness;
-pub(crate) use readiness::{NativeBeaconReadiness, NativeBeaconReadinessError};
+pub use readiness::{NativeBeaconReadiness, NativeBeaconReadinessError};
 
 use super::control;
 use crate::{
@@ -38,10 +38,10 @@ use iroha_sumeragi::{
 use mv::storage::StorageReadOnly;
 use std::sync::Arc;
 
-/// Producer failure. AwaitingShares and source/local signer failures are local availability,
+/// Producer failure. `AwaitingShares` and source/local signer failures are local availability,
 /// never an invalid transaction, fabricated empty witness or author-punishment signal.
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum NativeBeaconError {
+pub enum NativeBeaconError {
     /// The local applied source has not reached the exact requested context.
     #[error("native beacon source is unavailable or inconsistent: {0}")]
     Source(String),
@@ -67,7 +67,7 @@ pub(crate) enum NativeBeaconError {
 
 /// Caller action for a typed producer refusal, without inspecting diagnostic strings.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum NativeControlFailure {
+pub enum NativeControlFailure {
     /// Local source advancement, custody or actual shares can resolve this refusal.
     Retryable,
     /// Discard the remote sideframe without poisoning the retained local round.
@@ -101,7 +101,7 @@ impl NativeBeaconError {
 
 /// Result of one authenticated sideframe; duplicate valid proofs do not add another seat.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum IngressOutcome {
+pub enum IngressOutcome {
     Accepted,
     Duplicate,
     Finalized,
@@ -116,9 +116,9 @@ struct ActiveRound {
     finalized: Option<Pulse>,
 }
 
-/// Process-lifetime owner retained by the sole StateExecutor Worker. Its signer is runtime
+/// Process-lifetime owner retained by the sole `StateExecutor` Worker. Its signer is runtime
 /// custody, never exported into World, configuration, canonical control bytes or diagnostics.
-pub(crate) struct NativeBeaconProducer {
+pub struct NativeBeaconProducer {
     instance: Hash32,
     local_bls: Option<[u8; 48]>,
     signer: Option<Arc<dyn GlobalThresholdBeaconPartialSignerV1>>,
@@ -156,27 +156,27 @@ impl NativeBeaconProducer {
         let Some(active) = self.active.as_mut() else {
             return Ok(None);
         };
-        if active.own.is_none() {
-            if let (Some(index), Some(signer)) = (active.local, self.signer.as_ref()) {
-                signer
-                    .attest_partial_signing_capability(active.aggregator.session(), index)
-                    .map_err(|_| NativeBeaconError::LocalSigning)?;
-                let partial = signer
-                    .sign_partial(active.aggregator.session(), active.aggregator.payload())
-                    .map_err(|_| NativeBeaconError::LocalSigning)?;
-                if partial.signer_index != index {
-                    return Err(NativeBeaconError::Sender);
-                }
-                // Encode before mutation; an encoding refusal cannot strand an admitted own
-                // share without its exact retransmission bytes.
-                let encoded = control::encode_partial(&partial)?;
-                active
-                    .aggregator
-                    .accept_partial(partial)
-                    .map_err(|_| NativeBeaconError::LocalSigning)?;
-                active.own = Some(encoded);
-                active.finish()?;
+        if active.own.is_none()
+            && let (Some(index), Some(signer)) = (active.local, self.signer.as_ref())
+        {
+            signer
+                .attest_partial_signing_capability(active.aggregator.session(), index)
+                .map_err(|_| NativeBeaconError::LocalSigning)?;
+            let partial = signer
+                .sign_partial(active.aggregator.session(), active.aggregator.payload())
+                .map_err(|_| NativeBeaconError::LocalSigning)?;
+            if partial.signer_index != index {
+                return Err(NativeBeaconError::Sender);
             }
+            // Encode before mutation; an encoding refusal cannot strand an admitted own
+            // share without its exact retransmission bytes.
+            let encoded = control::encode_partial(&partial)?;
+            active
+                .aggregator
+                .accept_partial(partial)
+                .map_err(|_| NativeBeaconError::LocalSigning)?;
+            active.own = Some(encoded);
+            active.finish()?;
         }
         Ok(active.own)
     }
@@ -213,7 +213,7 @@ impl NativeBeaconProducer {
     }
 
     /// Build only for an already checked exact source. No-demand is explicit, while demanded
-    /// missing work returns AwaitingShares even for EMPTY or a later view.
+    /// missing work returns `AwaitingShares` even for EMPTY or a later view.
     pub(crate) fn build(
         &self,
         context: &ControlWitnessContext,

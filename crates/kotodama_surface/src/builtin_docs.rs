@@ -308,6 +308,10 @@ pub const BUILTIN_DOCS: &[(&str, &str)] = &[
         "Register an asset definition with its display name, numeric spec, mintability and explicit owning domain.",
     ),
     (
+        "ledger::asset::same_uid",
+        "Compare two valid retail memberships in one Global asset without exposing their UIDs.",
+    ),
+    (
         "ledger::asset::set_holding_limit",
         "Set or remove an account asset's holding limit.",
     ),
@@ -328,6 +332,10 @@ pub const BUILTIN_DOCS: &[(&str, &str)] = &[
         "Lower a bounded list of asset transfers to a host-managed batch.",
     ),
     (
+        "ledger::asset::uid_holding_quote",
+        "Read current beneficial holdings, the optional cap and required overflow under the asset owner's UID reader grant.",
+    ),
+    (
         "ledger::asset::unregister",
         "Unregister an asset definition.",
     ),
@@ -336,12 +344,24 @@ pub const BUILTIN_DOCS: &[(&str, &str)] = &[
         "Refund a controlled native lock subject to its immutable cancellation window.",
     ),
     (
+        "ledger::asset_lock::cancel_with_waterfall",
+        "Refund a controlled native lock through its approved FI waterfall with exact remaining-balance and revision checks.",
+    ),
+    (
         "ledger::asset_lock::drawdown",
         "Draw down a controlled native lock with an exact remaining-balance check.",
     ),
     (
+        "ledger::asset_lock::drawdown_with_waterfall",
+        "Draw down a controlled native lock through its approved FI waterfall with exact remaining-balance and revision checks.",
+    ),
+    (
         "ledger::asset_lock::expire",
         "Refund an expired controlled native lock through its original controller.",
+    ),
+    (
+        "ledger::asset_lock::expire_with_waterfall",
+        "Refund an expired controlled native lock through its approved FI waterfall with exact policy and link revision checks.",
     ),
     (
         "ledger::asset_lock::open",
@@ -371,6 +391,14 @@ pub const BUILTIN_DOCS: &[(&str, &str)] = &[
     (
         "ledger::escrow::resolve_dispute",
         "Resolve an escrow dispute with buyer and seller quantities.",
+    ),
+    (
+        "ledger::fi::link_revision",
+        "Read the current approved link revision for an asserted FI and the executing controller without granting settlement authority.",
+    ),
+    (
+        "ledger::fi::transfer_linked",
+        "Transfer an account asset quantity through its approved FI link with exact policy and link revision checks.",
     ),
     (
         "ledger::governance::build_submit_ballot",

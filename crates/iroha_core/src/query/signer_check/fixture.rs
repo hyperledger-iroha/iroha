@@ -18,9 +18,9 @@ use iroha_data_model::{
 use std::{sync::Arc, time::Duration};
 
 /// Creation time of the fixture chains' first genesis transaction (milliseconds).
-pub(crate) const GENESIS_TIME_MS: u64 = 1;
+pub const GENESIS_TIME_MS: u64 = 1;
 
-pub(crate) fn key(seed: u8) -> KeyPair {
+pub fn key(seed: u8) -> KeyPair {
     KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).unwrap()
 }
 
@@ -28,7 +28,7 @@ pub(crate) fn key(seed: u8) -> KeyPair {
 ///
 /// # Panics
 /// Genesis does not apply.
-pub(crate) fn chain(world: World) -> CertifiedTestChain {
+pub fn chain(world: World) -> CertifiedTestChain {
     CertifiedTestChain::start(TestChainConfig::new(world, GENESIS_TIME_MS))
         .map_err(|failure| failure.error)
         .expect("fixture chain starts")
@@ -36,7 +36,7 @@ pub(crate) fn chain(world: World) -> CertifiedTestChain {
 
 /// `instruction` signed by `key(seed)` on `state`'s network, created one millisecond before
 /// `now` so that a block committed at `now` carries it.
-pub(crate) fn sign(
+pub fn sign(
     state: &Arc<State>,
     instruction: InstructionBox,
     seed: u8,
@@ -56,7 +56,7 @@ pub(crate) fn sign(
 }
 
 /// Commit `transactions` in one certified block at time `now`; whether each executed.
-pub(crate) fn commit(
+pub fn commit(
     chain: &mut CertifiedTestChain,
     now: u64,
     transactions: Vec<SignedTransaction>,
@@ -67,7 +67,7 @@ pub(crate) fn commit(
 /// Genuinely commit, then corrupt only the stored local QC to two of four signers.
 /// The original applied State is retained; signer finality is unavailable for the changed QC.
 #[cfg(test)]
-pub(crate) fn commit_uncertified(
+pub fn commit_uncertified(
     chain: &mut CertifiedTestChain,
     now: u64,
     transactions: Vec<SignedTransaction>,
@@ -83,7 +83,7 @@ pub(crate) fn commit_uncertified(
 /// Corrupt the State's entrypoint index: the committed `transactions` are indexed at genesis
 /// instead of their block (a State whose membership does not match its blocks).
 #[cfg(test)]
-pub(crate) fn misplace_membership(chain: &CertifiedTestChain, transactions: &[SignedTransaction]) {
+pub fn misplace_membership(chain: &CertifiedTestChain, transactions: &[SignedTransaction]) {
     for transaction in transactions {
         chain
             .state()

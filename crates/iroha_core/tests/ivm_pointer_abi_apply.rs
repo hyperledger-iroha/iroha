@@ -377,19 +377,14 @@ fn apply_queued_isis_from_compiled_json_driven_double_transfer() {
         r#"
         seiyaku DebugTransfer {{ permission TransferAsset;
           kotoage fn main() authorize(TransferAsset) {{
-            let ev = Json::parse("{{\"account_domain\":\"{domain}\",\"account_id\":\"{dst}\",\"amount\":\"1\",\"asset_definition_id\":\"{aed}\",\"kind\":\"asset_change\",\"op\":\"added\"}}");
-            let recipient = ev.get_account_id(Name::parse("account_id")).unwrap_or(AccountId::parse("{dst}"));
+            let ev = Json::parse("{{\"account_domain\":\"{domain_raw}\",\"account_id\":\"{dst_raw}\",\"amount\":\"1\",\"asset_definition_id\":\"{aed_asset_raw}\",\"kind\":\"asset_change\",\"op\":\"added\"}}");
+            let recipient = ev.get_account_id(Name::parse("account_id")).unwrap_or(AccountId::parse("{dst_raw}"));
             let quantity amount = ev.get_quantity(Name::parse("amount")).unwrap_or(0);
-            ledger::asset::transfer(source: recipient, destination: AccountId::parse("{reserve}"), asset_definition: AssetDefinitionId::parse("{aed}"), amount: amount, dataspace: DataSpaceId::parse("0"));
-            ledger::asset::transfer(source: AccountId::parse("{reserve}"), destination: recipient, asset_definition: AssetDefinitionId::parse("{cbdc}"), amount: amount * {ratio}, dataspace: DataSpaceId::parse("0"));
+            ledger::asset::transfer(source: recipient, destination: AccountId::parse("{reserve_raw}"), asset_definition: AssetDefinitionId::parse("{aed_asset_raw}"), amount: amount, dataspace: DataSpaceId::parse("0"));
+            ledger::asset::transfer(source: AccountId::parse("{reserve_raw}"), destination: recipient, asset_definition: AssetDefinitionId::parse("{cbdc_asset_raw}"), amount: amount * {ratio}, dataspace: DataSpaceId::parse("0"));
           }}
         }}
         "#,
-        aed = aed_asset_raw,
-        domain = domain_raw,
-        dst = dst_raw,
-        reserve = reserve_raw,
-        cbdc = cbdc_asset_raw,
     );
     let program = compiler.compile_source(&src).expect("compile");
     let mut vm = IVM::new(500_000);

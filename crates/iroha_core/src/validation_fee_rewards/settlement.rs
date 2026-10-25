@@ -52,19 +52,18 @@ pub(super) fn accrue_next_page(
         .gross_shares
         .get(validator)
         .ok_or_else(|| fail("reward cursor gross funding is absent"))?;
-    let reference = match &cursor.next_archive {
-        Some(reference) => *reference,
-        None => {
-            if cursor.service_offset != 0 {
-                return Err(fail("reward archive cursor lost its predecessor"));
-            }
-            let head = exposure::head(stx, binding, allocation.earning_period_start_ms, validator)?
-                .ok_or_else(|| fail("funded historical exposure head is absent"))?;
-            if head.service_total != *service_total {
-                return Err(fail("funded historical exposure service differs"));
-            }
-            head.latest
+    let reference = if let Some(reference) = &cursor.next_archive {
+        *reference
+    } else {
+        if cursor.service_offset != 0 {
+            return Err(fail("reward archive cursor lost its predecessor"));
         }
+        let head = exposure::head(stx, binding, allocation.earning_period_start_ms, validator)?
+            .ok_or_else(|| fail("funded historical exposure head is absent"))?;
+        if head.service_total != *service_total {
+            return Err(fail("funded historical exposure service differs"));
+        }
+        head.latest
     };
     let archive = exposure::load_archive(
         stx,
@@ -328,7 +327,7 @@ pub(super) fn prune_completed_history(
 }
 
 /// Run after finalized service capture and before this block's transactions.
-pub(crate) fn process_reward_entitlements(
+pub fn process_reward_entitlements(
     block: &mut StateBlock<'_>,
 ) -> Result<(), crate::state::ExecutionOutputAttemptError> {
     let mut stx = block.try_transaction()?;

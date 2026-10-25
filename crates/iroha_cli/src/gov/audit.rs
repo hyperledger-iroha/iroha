@@ -26,7 +26,7 @@ impl Run for AuditDeployArgs {
             self.contract_address.as_deref(),
             self.contract_alias.as_deref(),
         )?;
-        let report = self.audit_contract(&client, &contract_address)?;
+        let report = Self::audit_contract(&client, &contract_address)?;
         let found = report
             .get("found")
             .and_then(Value::as_bool)
@@ -53,15 +53,13 @@ impl Run for AuditDeployArgs {
             .and_then(Value::as_bool)
             .map_or("none", |value| if value { "true" } else { "false" });
         let summary = Some(format!(
-            "gov audit contract_address={} found={found} owner={owner} revision={revision} emergency_hold_active={emergency_hold_active} has_issues={has_issues} issue_count={issue_count}",
-            contract_address,
+            "gov audit contract_address={contract_address} found={found} owner={owner} revision={revision} emergency_hold_active={emergency_hold_active} has_issues={has_issues} issue_count={issue_count}",
         ));
         print_with_summary(context, summary, &report)
     }
 }
 impl AuditDeployArgs {
     fn audit_contract(
-        &self,
         client: &Client,
         contract_address: &iroha::data_model::smart_contract::ContractAddress,
     ) -> Result<Value> {

@@ -4,45 +4,55 @@ use super::*;
 #[path = "asset_fi/reader.rs"]
 mod reader;
 #[path = "asset_fi/receipt.rs"]
-pub(crate) mod receipt;
+pub mod receipt;
 use iroha_data_model::{
     asset::fi_link::{AssetFiLinkAttestationV1, AssetFiLinkV1, AssetFiV1},
     isi::error::InstructionExecutionError,
 };
 #[cfg(test)]
-pub(crate) use reader::tests::Fixture as FiLinkReaderFixture;
-pub(crate) use reader::{AssetFiLinkRevisionError, link_revision_for_contract};
+pub use reader::tests::Fixture as FiLinkReaderFixture;
+pub use reader::{AssetFiLinkRevisionError, link_revision_for_contract};
 
-pub(crate) const FI_ROOT: &str = "asset_fi_v1/";
-pub(crate) const ATTESTATION_ROOT: &str = "asset_fi_link_attestation_v1/";
-pub(crate) const LINK_ROOT: &str = "asset_fi_link_v1/";
+pub const FI_ROOT: &str = "asset_fi_v1/";
+pub const ATTESTATION_ROOT: &str = "asset_fi_link_attestation_v1/";
+pub const LINK_ROOT: &str = "asset_fi_link_v1/";
 // Native physical storage under the already-reserved sc/ root. A contract digest
 // is 64 hexadecimal characters, so no contract owns sc/native/.
-pub(crate) const RECEIPT_ROOT: &str = "sc/native/asset_fi_transfer_receipt_v1/";
+pub const RECEIPT_ROOT: &str = "sc/native/asset_fi_transfer_receipt_v1/";
 type Error = InstructionExecutionError;
 
 /// Existing transaction-frozen ceiling for assertion byte/codec graph bounds.
 /// This is accounting only, not an independent physical allocation reservation.
-pub(crate) fn assertion_encoding_ceiling(tx: &StateTransaction<'_, '_>) -> Result<usize, Error> {
+pub fn assertion_encoding_ceiling(tx: &StateTransaction<'_, '_>) -> Result<usize, Error> {
     usize::try_from(tx.fastpq_source_policy.1.max_output_bytes)
         .map_err(|_| reject("FI assertion frozen byte ceiling exceeds host width"))
 }
 
-pub(crate) fn reject(message: impl Into<String>) -> Error {
+pub fn reject(message: impl Into<String>) -> Error {
     Error::InvariantViolation(message.into().into())
 }
 
-fn path(value: String) -> StatePath {
+fn path(value: &str) -> StatePath {
     value.parse().expect("fixed native FI relationship path")
 }
 
-pub(crate) fn fi_key(definition: &AssetDefinitionId, fi: &AccountId) -> StatePath {
+pub fn fi_key(definition: &AssetDefinitionId, fi: &AccountId) -> StatePath {
     super::asset_context_keys::fi_native(definition, &fi.to_string())
 }
-pub(crate) fn attestation_key(definition: &AssetDefinitionId, account: &AccountId, fi: &AccountId, reference: &[u8; 32]) -> StatePath {
-    super::asset_context_keys::attestation_native(definition, &account.to_string(), &fi.to_string(), reference)
+pub fn attestation_key(
+    definition: &AssetDefinitionId,
+    account: &AccountId,
+    fi: &AccountId,
+    reference: &[u8; 32],
+) -> StatePath {
+    super::asset_context_keys::attestation_native(
+        definition,
+        &account.to_string(),
+        &fi.to_string(),
+        reference,
+    )
 }
-pub(crate) fn link_key(definition: &AssetDefinitionId, account: &AccountId) -> StatePath {
+pub fn link_key(definition: &AssetDefinitionId, account: &AccountId) -> StatePath {
     super::asset_context_keys::link_native(definition, &account.to_string())
 }
 
@@ -61,7 +71,7 @@ where
         .transpose()
 }
 
-pub(crate) fn fi(
+pub fn fi(
     world: &impl WorldReadOnly,
     definition: &AssetDefinitionId,
     account: &AccountId,
@@ -75,7 +85,7 @@ pub(crate) fn fi(
     Ok(value)
 }
 
-pub(crate) fn attestation(
+pub fn attestation(
     world: &impl WorldReadOnly,
     definition: &AssetDefinitionId,
     account: &AccountId,
@@ -100,7 +110,7 @@ pub(crate) fn attestation(
     Ok(value)
 }
 
-pub(crate) fn validate_link_shape(value: &AssetFiLinkV1) -> Result<(), Error> {
+pub fn validate_link_shape(value: &AssetFiLinkV1) -> Result<(), Error> {
     if value.revision == 0
         || value.fi_revision == 0
         || value.attestation_revision == 0
@@ -114,7 +124,7 @@ pub(crate) fn validate_link_shape(value: &AssetFiLinkV1) -> Result<(), Error> {
     Ok(())
 }
 
-pub(crate) fn link(
+pub fn link(
     world: &impl WorldReadOnly,
     definition: &AssetDefinitionId,
     account: &AccountId,
@@ -130,7 +140,7 @@ pub(crate) fn link(
 }
 
 /// Resolve only the exact currently eligible, FI-attested, owner-approved link.
-pub(crate) fn active_link(
+pub fn active_link(
     world: &impl WorldReadOnly,
     definition: &AssetDefinitionId,
     account: &AccountId,
@@ -166,7 +176,7 @@ pub(crate) fn active_link(
 }
 
 /// Materialize an exact private relationship at one captured ledger watermark.
-pub(crate) fn view(
+pub fn view(
     world: &impl WorldReadOnly,
     query: &iroha_data_model::query::asset_fi::FindAssetFiLinkV1,
     ledger_time_ms: u64,
@@ -196,7 +206,7 @@ fn in_root(key: &StatePath, root: &str) -> bool {
 }
 
 /// Keep all referenced accounts and definitions alive across revocation.
-pub(crate) fn retained(
+pub fn retained(
     world: &impl WorldReadOnly,
     definition: Option<&AssetDefinitionId>,
     account: Option<&AccountId>,
@@ -229,17 +239,17 @@ pub(crate) fn retained(
         } else {
             None
         };
-        if let Some((asset, accounts)) = references {
-            if definition == Some(&asset) || account.is_some_and(|id| accounts.contains(id)) {
-                return Ok(true);
-            }
+        if let Some((asset, accounts)) = references
+            && (definition == Some(&asset) || account.is_some_and(|id| accounts.contains(id)))
+        {
+            return Ok(true);
         }
     }
     Ok(false)
 }
 
 /// Validate canonical references on restore, while retaining legitimately stale approvals.
-pub(crate) fn validate_persistence(world: &impl WorldReadOnly) -> Result<(), Error> {
+pub fn validate_persistence(world: &impl WorldReadOnly) -> Result<(), Error> {
     for (key, _) in world.smart_contract_state().iter() {
         if in_root(key, RECEIPT_ROOT) {
             let value = receipt::read_record(world, key)?;

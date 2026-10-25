@@ -214,10 +214,10 @@ impl Params {
             self.per_peer_buffer = defaults.per_peer_buffer;
         }
         self.health_policy.min_samples = self.health_policy.min_samples.max(1);
-        if !self.smoothing_alpha.is_finite() {
-            self.smoothing_alpha = defaults.smoothing_alpha;
-        } else {
+        if self.smoothing_alpha.is_finite() {
             self.smoothing_alpha = self.smoothing_alpha.clamp(0.0, 1.0);
+        } else {
+            self.smoothing_alpha = defaults.smoothing_alpha;
         }
         self
     }
@@ -1036,7 +1036,7 @@ fn sample_measurement(
     Some((offset_ms, rtt_ms))
 }
 /// Handle incoming time messages from the network relay.
-pub fn handle_message(peer: Peer, msg: crate::NetworkMessage, network: &IrohaNetwork) {
+pub fn handle_message(peer: &Peer, msg: crate::NetworkMessage, network: &IrohaNetwork) {
     match msg {
         crate::NetworkMessage::TimePing(p) => {
             let arrival = local_clock_sample();

@@ -61,8 +61,8 @@ fn read_request(input: &mut UnixStream, expected: Request) {
     }
     assert_eq!(line, expected.line().unwrap());
 }
-fn response(request: Request, outcome: &str, manifest: Value) -> Vec<u8> {
-    if request.kind == Kind::Admit && manifest == Value::Null {
+fn response(request: Request, outcome: &str, manifest: &Value) -> Vec<u8> {
+    if request.kind == Kind::Admit && manifest.is_null() {
         let mut value = allocation::tests::value(MAX_FILE_BYTES, MAX_FILE_BYTES);
         let object = value.as_object_mut().unwrap();
         object.insert("sequence".to_owned(), norito::json!(request.sequence));
@@ -91,7 +91,7 @@ fn admission_actor_requires_one_ack_before_creation_and_real_preflight() {
         read_request(&mut input, request(Kind::Admit));
         assert!(!watched_path.exists());
         output
-            .write_all(&response(request(Kind::Admit), "complete", Value::Null))
+            .write_all(&response(request(Kind::Admit), "complete", &(Value::Null)))
             .unwrap();
         read_request(&mut input, request(Kind::Preflight));
         assert!(watched_path.is_dir());
@@ -114,7 +114,7 @@ fn admission_actor_requires_one_ack_before_creation_and_real_preflight() {
         let manifest = norito::json!({"name": name,
             "sha256": (format!("{:x}", Sha256::digest(&bytes))), "bytes": (bytes.len())});
         output
-            .write_all(&response(request(Kind::Preflight), "complete", manifest))
+            .write_all(&response(request(Kind::Preflight), "complete", &(manifest)))
             .unwrap();
     });
     let (sender, receiver) = mpsc::sync_channel(1);
@@ -163,7 +163,7 @@ fn admission_failed_unavailable_or_capture_reply_never_creates_directory() {
         let peer = std::thread::spawn(move || {
             read_request(&mut input, request(Kind::Admit));
             output
-                .write_all(&response(request(Kind::Admit), outcome, manifest))
+                .write_all(&response(request(Kind::Admit), outcome, &(manifest)))
                 .unwrap();
         });
         assert!(
@@ -195,7 +195,7 @@ fn admission_rejects_wrong_response_identity_before_any_directory_creation() {
         let peer = std::thread::spawn(move || {
             read_request(&mut input, request(Kind::Admit));
             output
-                .write_all(&response(reply, "complete", Value::Null))
+                .write_all(&response(reply, "complete", &(Value::Null)))
                 .unwrap();
         });
         assert!(
@@ -220,7 +220,7 @@ fn admission_and_preflight_cannot_reset_the_callers_absolute_deadline() {
     let peer = std::thread::spawn(move || {
         read_request(&mut input, request(Kind::Admit));
         output
-            .write_all(&response(request(Kind::Admit), "complete", Value::Null))
+            .write_all(&response(request(Kind::Admit), "complete", &(Value::Null)))
             .unwrap();
     });
     let (admitted, writers) = pending
@@ -276,7 +276,7 @@ fn admission_actor_rejects_invalid_first_work_without_starting_capture_preflight
         let peer = std::thread::spawn(move || {
             read_request(&mut input, request(Kind::Admit));
             output
-                .write_all(&response(request(Kind::Admit), "complete", Value::Null))
+                .write_all(&response(request(Kind::Admit), "complete", &(Value::Null)))
                 .unwrap();
             input
         });
@@ -325,7 +325,7 @@ fn admission_actor_does_not_extend_preflight_after_admission_spends_time() {
         // second deadline would accept the response deliberately sent below.
         std::thread::sleep(Duration::from_millis(200));
         output
-            .write_all(&response(request(Kind::Admit), "complete", Value::Null))
+            .write_all(&response(request(Kind::Admit), "complete", &(Value::Null)))
             .unwrap();
         read_request(&mut input, request(Kind::Preflight));
         assert!(observed_path.is_dir());
@@ -347,7 +347,7 @@ fn admission_actor_does_not_extend_preflight_after_admission_spends_time() {
             std::thread::sleep(TURN);
         }
         // Correct cancellation may already have closed this test-owned pipe.
-        let _ = output.write_all(&response(request(Kind::Preflight), "complete", manifest));
+        let _ = output.write_all(&response(request(Kind::Preflight), "complete", &(manifest)));
     });
     let (sender, receiver) = mpsc::sync_channel(1);
     let (reply, mut receive) = tokio::sync::oneshot::channel();
@@ -386,7 +386,7 @@ fn admission_actor_returns_allocations_before_parent_authorizes_any_output() {
     let peer = std::thread::spawn(move || {
         read_request(&mut input, request(Kind::Admit));
         output
-            .write_all(&response(request(Kind::Admit), "complete", Value::Null))
+            .write_all(&response(request(Kind::Admit), "complete", &(Value::Null)))
             .unwrap();
         let mut byte = [0_u8];
         assert_eq!(input.read(&mut byte).unwrap(), 0);
@@ -410,7 +410,9 @@ fn admission_actor_returns_allocations_before_parent_authorizes_any_output() {
                 assert!(control.now() < deadline);
                 std::thread::sleep(TURN);
             }
-            Err(_) => panic!("admission owner closed"),
+            Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
+                panic!("admission owner closed")
+            }
         }
     };
     assert_eq!(writers.journal.max_bytes, MAX_FILE_BYTES);
@@ -467,7 +469,7 @@ fn admitted_parent_setup_cannot_extend_deadline_or_create_late_capture_directory
     let peer = std::thread::spawn(move || {
         read_request(&mut input, request(Kind::Admit));
         output
-            .write_all(&response(request(Kind::Admit), "complete", Value::Null))
+            .write_all(&response(request(Kind::Admit), "complete", &(Value::Null)))
             .unwrap();
         let mut byte = [0_u8];
         assert_eq!(input.read(&mut byte).unwrap(), 0);
@@ -494,7 +496,9 @@ fn admitted_parent_setup_cannot_extend_deadline_or_create_late_capture_directory
                 assert!(control.now() < deadline);
                 std::thread::sleep(TURN);
             }
-            Err(_) => panic!("admission owner closed"),
+            Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
+                panic!("admission owner closed")
+            }
         }
     }
     assert!(!path.exists());

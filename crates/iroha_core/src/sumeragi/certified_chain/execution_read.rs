@@ -8,6 +8,10 @@ use super::*;
 pub struct AuthenticatedExecutionBlock {
     original: AuthenticatedExecutionOwner,
 }
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Variants retain their original paid owners across suspension and retry without new unbudgeted allocations."
+)]
 enum AuthenticatedExecutionOwner {
     Native(CommittedBlock),
     // Keep the actual native/portable cursor output AND its original decode custody.
@@ -498,7 +502,7 @@ fn read_admitted_execution_frame(
 /// The current original wire/shell, prefix and intermediate verification slots
 /// remain owned on local refusal. Admission grants no new source authority.
 /// TODO: complete deep nested decoder and cryptographic scratch custody.
-pub(crate) struct NativeExecutionReadAttempt<'source> {
+pub struct NativeExecutionReadAttempt<'source> {
     kura: &'source Kura,
     chain_id: &'source ChainId,
     network: NetworkId,

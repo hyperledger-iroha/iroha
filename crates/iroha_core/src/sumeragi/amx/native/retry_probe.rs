@@ -6,7 +6,7 @@ use iroha_data_model::{account::AccountController, sumeragi_amx::AmxTransferLegV
 use std::cell::RefCell;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Sample {
+pub struct Sample {
     pub(crate) source: (usize, usize),
     pub(crate) keys: (usize, usize),
     pub(crate) retained_bytes: usize,
@@ -132,7 +132,7 @@ pub(super) fn retained_attempt(
 }
 
 /// One thread-confined resource fixture; Drop resets it even during unwind.
-pub(crate) struct Observation;
+pub struct Observation;
 impl Observation {
     pub(crate) fn occupy_after_first_completion() -> Self {
         PROBE.with(|probe| {
@@ -157,6 +157,10 @@ impl Observation {
         });
         Self
     }
+    #[expect(
+        clippy::unused_self,
+        reason = "Borrowing the observation guard keeps this thread-local probe active through the operation."
+    )]
     pub(crate) fn partial_snapshot(&self) -> (usize, Option<String>, Option<usize>) {
         PROBE.with(|probe| {
             let probe = probe.borrow();
@@ -167,15 +171,27 @@ impl Observation {
             )
         })
     }
+    #[expect(
+        clippy::unused_self,
+        reason = "Borrowing the observation guard keeps this thread-local probe active through the operation."
+    )]
     pub(crate) fn snapshot(&self) -> (usize, usize, Option<Sample>) {
         PROBE.with(|probe| {
             let probe = probe.borrow();
             (probe.completions, probe.borrowed, probe.first)
         })
     }
+    #[expect(
+        clippy::unused_self,
+        reason = "Borrowing the observation guard keeps this thread-local probe active through the operation."
+    )]
     pub(crate) fn original_candidate_refusal(&self) -> Option<iroha_allocation::AllocationRefusal> {
         PROBE.with(|probe| probe.borrow().candidate.clone())
     }
+    #[expect(
+        clippy::unused_self,
+        reason = "Borrowing the observation guard keeps this thread-local probe active through the operation."
+    )]
     pub(crate) fn release_original_blocker(&self) {
         let blocker = PROBE.with(|probe| probe.borrow_mut().blocker.take());
         assert!(blocker.is_some());

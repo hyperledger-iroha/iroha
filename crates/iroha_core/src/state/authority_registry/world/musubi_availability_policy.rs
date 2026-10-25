@@ -1,7 +1,7 @@
 //! Independent archive-availability anchor retained in the State authority cut.
 //!
 //! Availability class and location/provider counts are checked projections of
-//! the archive, locations, and SoraFS evidence on both retained World cuts.
+//! the archive, locations, and `SoraFS` evidence on both retained World cuts.
 
 use iroha_data_model::musubi::{ArchiveId, MusubiArchiveAvailabilityV1};
 use norito::{Decode, Encode, NoritoSchema};

@@ -878,7 +878,7 @@ fn signed_nominator_claim_batch_rolls_back_and_stale_parallel_quotes_cannot_pay(
 
 /// Execute real scheduled funding for two validators, replay unfinished accrual,
 /// then withdraw both validators' and both nominators' exact signed entitlements.
-pub(crate) fn scheduled_two_validator_reward_replay() {
+pub fn scheduled_two_validator_reward_replay() {
     scheduled_conversion_automatically_funds_nominator_signed_claims(false, true);
 }
 

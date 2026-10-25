@@ -377,7 +377,7 @@ fn interpolate_all<F: PastaField>(
 }
 
 /// Interpolate the public row masks, using the closed form for singleton rows.
-/// The coefficient of X^i in L_r is omega^(-r*i) / n, so L_0 and L_last
+/// The coefficient of `X^i` in `L_r` is `omega^(-r*i) / n`, so `L_0` and `L_last`
 /// need no FFT or temporary evaluation copies. The active prefix still uses
 /// the ordinary inverse transform, preserving the exact mask polynomials.
 fn interpolate_masks<F: PastaField>(

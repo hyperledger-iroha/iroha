@@ -71,14 +71,14 @@ fn native_lagrange_openings_match_original_interpolation_and_every_subgroup_shif
             E::from_base(F(29)),
             E::ONE,
             E::from_base(root),
-            E::from_base(root.pow(((1 << log) - 1) as u128)),
+            E::from_base(root.pow((1_u128 << log) - 1)),
         ] {
             let points = MainNativeDeepPointsV1::new_v1(log, point).unwrap();
             assert_eq!(
                 points.evaluate_v1(&native, &mask).unwrap(),
                 points.points.map(|point| horner(&coefficients, point))
             );
-            if point.pow((1 << log) as u128) == E::ONE {
+            if point.pow(1_u128 << log) == E::ONE {
                 assert_eq!(
                     points
                         .weights
@@ -358,9 +358,7 @@ fn native_private_and_public_owners_clear_on_success_claim_error_late_error_and_
                     values[1] = values[1].add(E::ONE);
                 }
                 weighted.add_batch_v1(&points, &[(&native, &mask, values, [extension(251); 2])])?;
-                if mode == 3 {
-                    panic!("injected native DEEP unwind");
-                }
+                assert!(mode != 3, "injected native DEEP unwind");
                 if mode == 4 {
                     weighted.values[1] = weighted.values[1].add(E::ONE);
                 }

@@ -166,7 +166,7 @@ async fn missing_unavailable_bad_request_and_stop_are_different_responses() {
         ),
     ];
     for (error, status, code) in cases {
-        let response = source_error(error);
+        let response = source_error(&(error));
         assert_eq!(response.status(), status);
         if code != "sccp_pruned" {
             assert_ne!(
@@ -663,7 +663,7 @@ where
 {
     use axum::extract::FromRequestParts as _;
     let request = axum::http::Request::builder().uri(uri).body(()).unwrap();
-    let (mut parts, _) = request.into_parts();
+    let (mut parts, ()) = request.into_parts();
     NoritoStringQuery::<T>::from_request_parts(&mut parts, &())
         .await
         .map(|NoritoStringQuery(query)| query)
@@ -837,7 +837,7 @@ async fn latest_genesis_finality_is_unavailable_and_never_cacheable() {
 
 #[tokio::test]
 async fn authenticated_rotation_expiry_has_its_dedicated_gone_response() {
-    let response = source_error(SccpNativeReadError::RotationPruned);
+    let response = source_error(&(SccpNativeReadError::RotationPruned));
     assert_eq!(response.status(), StatusCode::GONE);
     assert_eq!(
         response.headers()[header::CACHE_CONTROL],

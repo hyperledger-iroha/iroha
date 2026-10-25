@@ -15,9 +15,7 @@ pub mod isi {
         ) -> Result<(), Error> {
             let proposal = self.proposal;
             proposal.validate().map_err(|err| {
-                Error::InvalidParameter(InvalidParameterError::SmartContract(
-                    err.to_string().into(),
-                ))
+                Error::InvalidParameter(InvalidParameterError::SmartContract(err.to_string()))
             })?;
             let proposal_id = proposal.proposal_id.clone();
             if state_transaction

@@ -227,6 +227,9 @@ pub struct ConfidentialMerklePathV2 {
     /// Root authenticated by the complete path.
     pub root: [u8; 32],
 }
+/// Owned sibling hashes, direction bits, recomputed parents and root of a Merkle path.
+pub type ConfidentialMerklePathPartsV2 = (Vec<[u8; 32]>, Vec<u8>, Vec<[u8; 32]>, [u8; 32]);
+
 impl ConfidentialMerklePathV2 {
     /// Consume the path without bypassing its zeroizing `Drop` implementation.
     ///
@@ -235,7 +238,7 @@ impl ConfidentialMerklePathV2 {
     /// wire representation use this method, which replaces every retained
     /// field with its zero/empty value before the original allocation drops.
     #[must_use]
-    pub fn into_parts(mut self) -> (Vec<[u8; 32]>, Vec<u8>, Vec<[u8; 32]>, [u8; 32]) {
+    pub fn into_parts(mut self) -> ConfidentialMerklePathPartsV2 {
         (
             std::mem::take(&mut self.siblings),
             std::mem::take(&mut self.directions),
@@ -811,21 +814,24 @@ impl From<norito::core::DecodeAttemptError> for ConfidentialProofProductionError
 pub fn is_confidential_unshield_v3_circuit_id(raw: &str) -> bool {
     raw == CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID
 }
+/// Commitments, nullifiers, outputs, root, asset tag and network tag decoded from a transfer.
+#[cfg(test)]
+pub type TransferPublicInputs = (
+    [[u8; 32]; 2],
+    [[u8; 32]; 2],
+    [[u8; 32]; 2],
+    [u8; 32],
+    [u8; 32],
+    [u8; 32],
+);
+
 #[cfg(test)]
 /// Parse the exact public columns from a confidential-transfer proof envelope.
-pub fn parse_transfer_public_inputs(
-    proof_bytes: &[u8],
-) -> Result<
-    (
-        [[u8; 32]; 2],
-        [[u8; 32]; 2],
-        [[u8; 32]; 2],
-        [u8; 32],
-        [u8; 32],
-        [u8; 32],
-    ),
-    String,
-> {
+///
+/// # Errors
+/// Returns an error for a malformed envelope, a non-transfer circuit identifier,
+/// or rejected native public-input framing.
+pub fn parse_transfer_public_inputs(proof_bytes: &[u8]) -> Result<TransferPublicInputs, String> {
     let envelope: OpenVerifyEnvelope =
         norito::decode_canonical(proof_bytes).map_err(|error| error.to_string())?;
     if envelope.circuit_id != CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID {
@@ -1041,12 +1047,14 @@ fn confidential_optional_input_path_v3(
     commitments: &[[u8; 32]],
     leaf_index: Option<usize>,
 ) -> Result<ConfidentialMerklePathV2, String> {
-    match leaf_index {
-        Some(index) => compute_confidential_merkle_path_v2(commitments, index),
-        None => Ok(confidential_absent_input_path_v3::<
-            CONFIDENTIAL_TREE_DEPTH_V2,
-        >()),
-    }
+    leaf_index.map_or_else(
+        || {
+            Ok(confidential_absent_input_path_v3::<
+                CONFIDENTIAL_TREE_DEPTH_V2,
+            >())
+        },
+        |index| compute_confidential_merkle_path_v2(commitments, index),
+    )
 }
 /// Reject impossible public tree shapes before hashing leaves or generating keys.
 fn validate_confidential_tree_input_shape_v3(
@@ -2157,7 +2165,7 @@ fn encode_native_envelope(
     required_relation: super::ProofRelation,
     kind: native::Kind,
     vk_box: &VerifyingKeyBox,
-    proved: iroha_data_model::zk::NativePipaRProofV1,
+    proved: &iroha_data_model::zk::NativePipaRProofV1,
 ) -> Result<ProofBox, ConfidentialProofProductionError> {
     native::validate_key(kind, vk_box)?;
     let envelope = OpenVerifyEnvelope {
@@ -2165,7 +2173,7 @@ fn encode_native_envelope(
         circuit_id: kind.circuit_id().to_owned(),
         vk_hash: super::hash_vk(vk_box),
         public_inputs: kind.schema().to_vec(),
-        proof_bytes: norito::core::classify_decode_attempt(|| norito::encode_canonical(&proved))?,
+        proof_bytes: norito::core::classify_decode_attempt(|| norito::encode_canonical(proved))?,
         aux: Vec::new(),
     };
     let proof = ProofBox::new(
@@ -2399,7 +2407,7 @@ fn build_confidential_transfer_proof_v2_resolved_paths(
         super::ProofRelation::ConfidentialTransfer,
         native::Kind::Transfer,
         vk_box,
-        proved,
+        &proved,
     )?;
     Ok(ConfidentialTransferProofV2 {
         nullifiers: nullifiers[..input_count].to_vec(),
@@ -2408,6 +2416,16 @@ fn build_confidential_transfer_proof_v2_resolved_paths(
         proof,
     })
 }
+/// Network, asset, signing secret and exact verifier identity shared by one proof request.
+#[derive(Clone, Copy)]
+pub(super) struct ConfidentialProofContext<'a> {
+    pub(super) network_id: &'a NetworkId,
+    pub(super) asset_definition_id: &'a str,
+    pub(super) spend_key: &'a [u8],
+    pub(super) circuit_id: &'a str,
+    pub(super) vk_box: &'a VerifyingKeyBox,
+}
+
 /// Build a confidential transfer proof, deriving input paths from the tree.
 ///
 /// Wallet callers use [`super::confidential::ConfidentialProver`].
@@ -2417,16 +2435,19 @@ fn build_confidential_transfer_proof_v2_resolved_paths(
 /// use iroha_core_zk::confidential_v2::build_confidential_transfer_proof_v2;
 /// ```
 pub(super) fn build_confidential_transfer_proof_v2(
-    network_id: &NetworkId,
-    asset_definition_id: &str,
-    spend_key: &[u8],
+    context: ConfidentialProofContext<'_>,
     tree_commitments: &[[u8; 32]],
     inputs: &[ConfidentialTransferInputV2],
     outputs: &[ConfidentialTransferOutputV2],
     root_hint: [u8; 32],
-    circuit_id: &str,
-    vk_box: &VerifyingKeyBox,
 ) -> Result<ConfidentialTransferProofV2, ConfidentialProofProductionError> {
+    let ConfidentialProofContext {
+        network_id,
+        asset_definition_id,
+        spend_key,
+        circuit_id,
+        vk_box,
+    } = context;
     validate_confidential_tree_input_shape_v3(
         tree_commitments.len(),
         inputs.iter().map(|input| input.leaf_index),
@@ -2455,8 +2476,7 @@ pub(super) fn build_confidential_transfer_proof_v2(
                 != input_0_commitment
             {
                 return Err(
-                    ("transfer input 0 does not match the current confidential tree".to_owned())
-                        .into(),
+                    "transfer input 0 does not match the current confidential tree".to_owned(),
                 );
             }
             if let Some(note) = input_1
@@ -2467,8 +2487,7 @@ pub(super) fn build_confidential_transfer_proof_v2(
                     != input_1_commitment
             {
                 return Err(
-                    ("transfer input 1 does not match the current confidential tree".to_owned())
-                        .into(),
+                    "transfer input 1 does not match the current confidential tree".to_owned(),
                 );
             }
             let input_0_path =
@@ -2480,10 +2499,7 @@ pub(super) fn build_confidential_transfer_proof_v2(
             if input_0_path.root != root_hint
                 || (input_1.is_some() && input_1_path.root != root_hint)
             {
-                return Err(
-                    ("computed confidential Merkle path does not match root_hint".to_owned())
-                        .into(),
-                );
+                return Err("computed confidential Merkle path does not match root_hint".to_owned());
             }
             Ok((input_0_path, input_1_path))
         },
@@ -2533,16 +2549,19 @@ fn normalize_confidential_transfer_paths_v3(
 /// use iroha_core_zk::confidential_v2::build_confidential_transfer_proof_v2_with_paths;
 /// ```
 pub(super) fn build_confidential_transfer_proof_v2_with_paths(
-    network_id: &NetworkId,
-    asset_definition_id: &str,
-    spend_key: &[u8],
+    context: ConfidentialProofContext<'_>,
     input_paths: &[ConfidentialMerklePathV2],
     inputs: &[ConfidentialTransferInputV2],
     outputs: &[ConfidentialTransferOutputV2],
     root_hint: [u8; 32],
-    circuit_id: &str,
-    vk_box: &VerifyingKeyBox,
 ) -> Result<ConfidentialTransferProofV2, ConfidentialProofProductionError> {
+    let ConfidentialProofContext {
+        network_id,
+        asset_definition_id,
+        spend_key,
+        circuit_id,
+        vk_box,
+    } = context;
     build_confidential_transfer_proof_v2_resolved_paths(
         network_id,
         asset_definition_id,
@@ -2683,7 +2702,7 @@ fn build_confidential_unshield_proof_v2_resolved_paths(
         super::ProofRelation::ConfidentialFullUnshield,
         native::Kind::Full,
         vk_box,
-        proved,
+        &proved,
     )?;
     Ok(ConfidentialUnshieldProofV2 {
         nullifiers: if input_1.is_some() {
@@ -2704,16 +2723,19 @@ fn build_confidential_unshield_proof_v2_resolved_paths(
 /// use iroha_core_zk::confidential_v2::build_confidential_unshield_proof_v2;
 /// ```
 pub(super) fn build_confidential_unshield_proof_v2(
-    network_id: &NetworkId,
-    asset_definition_id: &str,
-    spend_key: &[u8],
+    context: ConfidentialProofContext<'_>,
     tree_commitments: &[[u8; 32]],
     inputs: &[ConfidentialUnshieldInputV2],
     public_amount: u128,
     root_hint: [u8; 32],
-    circuit_id: &str,
-    vk_box: &VerifyingKeyBox,
 ) -> Result<ConfidentialUnshieldProofV2, ConfidentialProofProductionError> {
+    let ConfidentialProofContext {
+        network_id,
+        asset_definition_id,
+        spend_key,
+        circuit_id,
+        vk_box,
+    } = context;
     validate_confidential_tree_input_shape_v3(
         tree_commitments.len(),
         inputs.iter().map(|input| input.leaf_index),
@@ -2739,8 +2761,7 @@ pub(super) fn build_confidential_unshield_proof_v2(
                 != input_0_commitment
             {
                 return Err(
-                    ("unshield input 0 does not match the current confidential tree".to_owned())
-                        .into(),
+                    "unshield input 0 does not match the current confidential tree".to_owned(),
                 );
             }
             if let Some(note) = input_1
@@ -2751,8 +2772,7 @@ pub(super) fn build_confidential_unshield_proof_v2(
                     != input_1_commitment
             {
                 return Err(
-                    ("unshield input 1 does not match the current confidential tree".to_owned())
-                        .into(),
+                    "unshield input 1 does not match the current confidential tree".to_owned(),
                 );
             }
             let input_0_path =
@@ -2764,10 +2784,7 @@ pub(super) fn build_confidential_unshield_proof_v2(
             if input_0_path.root != root_hint
                 || (input_1.is_some() && input_1_path.root != root_hint)
             {
-                return Err(
-                    ("computed confidential Merkle path does not match root_hint".to_owned())
-                        .into(),
-                );
+                return Err("computed confidential Merkle path does not match root_hint".to_owned());
             }
             Ok((input_0_path, input_1_path))
         },
@@ -2817,18 +2834,20 @@ fn normalize_confidential_unshield_full_paths_v3(
 /// ```compile_fail,E0603
 /// use iroha_core_zk::confidential_v2::build_confidential_unshield_proof_v2_with_paths;
 /// ```
-#[allow(clippy::too_many_arguments)]
 pub(super) fn build_confidential_unshield_proof_v2_with_paths(
-    network_id: &NetworkId,
-    asset_definition_id: &str,
-    spend_key: &[u8],
+    context: ConfidentialProofContext<'_>,
     input_paths: &[ConfidentialMerklePathV2],
     inputs: &[ConfidentialUnshieldInputV2],
     public_amount: u128,
     root_hint: [u8; 32],
-    circuit_id: &str,
-    vk_box: &VerifyingKeyBox,
 ) -> Result<ConfidentialUnshieldProofV2, ConfidentialProofProductionError> {
+    let ConfidentialProofContext {
+        network_id,
+        asset_definition_id,
+        spend_key,
+        circuit_id,
+        vk_box,
+    } = context;
     build_confidential_unshield_proof_v2_resolved_paths(
         network_id,
         asset_definition_id,
@@ -3058,7 +3077,7 @@ fn build_confidential_unshield_proof_v3_resolved_paths(
         super::ProofRelation::ConfidentialChangeUnshield,
         native::Kind::Change,
         vk_box,
-        proved,
+        &proved,
     )?;
     Ok(ConfidentialUnshieldProofV3 {
         nullifiers: nullifiers[..input_count].to_vec(),
@@ -3079,17 +3098,20 @@ fn build_confidential_unshield_proof_v3_resolved_paths(
 /// use iroha_core_zk::confidential_v2::build_confidential_unshield_proof_v3;
 /// ```
 pub(super) fn build_confidential_unshield_proof_v3(
-    network_id: &NetworkId,
-    asset_definition_id: &str,
-    spend_key: &[u8],
+    context: ConfidentialProofContext<'_>,
     tree_commitments: &[[u8; 32]],
     inputs: &[ConfidentialUnshieldInputV2],
     outputs: &[ConfidentialUnshieldOutputV3],
     public_amount: u128,
     root_hint: [u8; 32],
-    circuit_id: &str,
-    vk_box: &VerifyingKeyBox,
 ) -> Result<ConfidentialUnshieldProofV3, ConfidentialProofProductionError> {
+    let ConfidentialProofContext {
+        network_id,
+        asset_definition_id,
+        spend_key,
+        circuit_id,
+        vk_box,
+    } = context;
     validate_confidential_tree_input_shape_v3(
         tree_commitments.len(),
         inputs.iter().map(|input| input.leaf_index),
@@ -3122,8 +3144,7 @@ pub(super) fn build_confidential_unshield_proof_v3(
                 != input_0_commitment
             {
                 return Err(
-                    ("unshield input 0 does not match the current confidential tree".to_owned())
-                        .into(),
+                    "unshield input 0 does not match the current confidential tree".to_owned(),
                 );
             }
             if let Some(note) = input_1
@@ -3134,8 +3155,7 @@ pub(super) fn build_confidential_unshield_proof_v3(
                     != input_1_commitment
             {
                 return Err(
-                    ("unshield input 1 does not match the current confidential tree".to_owned())
-                        .into(),
+                    "unshield input 1 does not match the current confidential tree".to_owned(),
                 );
             }
             let input_0_path =
@@ -3147,10 +3167,7 @@ pub(super) fn build_confidential_unshield_proof_v3(
             if input_0_path.root != root_hint
                 || (input_1.is_some() && input_1_path.root != root_hint)
             {
-                return Err(
-                    ("computed confidential Merkle path does not match root_hint".to_owned())
-                        .into(),
-                );
+                return Err("computed confidential Merkle path does not match root_hint".to_owned());
             }
             Ok((input_0_path, input_1_path))
         },
@@ -3200,17 +3217,20 @@ fn normalize_confidential_unshield_change_paths_v4(
 /// use iroha_core_zk::confidential_v2::build_confidential_unshield_proof_v3_with_paths;
 /// ```
 pub(super) fn build_confidential_unshield_proof_v3_with_paths(
-    network_id: &NetworkId,
-    asset_definition_id: &str,
-    spend_key: &[u8],
+    context: ConfidentialProofContext<'_>,
     input_paths: &[ConfidentialMerklePathV2],
     inputs: &[ConfidentialUnshieldInputV2],
     outputs: &[ConfidentialUnshieldOutputV3],
     public_amount: u128,
     root_hint: [u8; 32],
-    circuit_id: &str,
-    vk_box: &VerifyingKeyBox,
 ) -> Result<ConfidentialUnshieldProofV3, ConfidentialProofProductionError> {
+    let ConfidentialProofContext {
+        network_id,
+        asset_definition_id,
+        spend_key,
+        circuit_id,
+        vk_box,
+    } = context;
     build_confidential_unshield_proof_v3_resolved_paths(
         network_id,
         asset_definition_id,
@@ -3310,7 +3330,7 @@ mod production_error_owner_tests {
             .check(31)
             .unwrap_err();
         let original = Box::new(VerifyError::Ipa(IpaError::Msm(budget.into())));
-        let address: *const VerifyError = &*original;
+        let address: *const VerifyError = &raw const *original;
         let produced = ConfidentialProofProductionError::from(native::NativeProverError::Verify(
             VerifyError::BatchItem {
                 index: 4,
@@ -3328,7 +3348,7 @@ mod production_error_owner_tests {
             panic!("lost exact native failure");
         };
         assert_eq!(*index, 4);
-        let retained_address: *const VerifyError = &**error;
+        let retained_address: *const VerifyError = &raw const **error;
         assert_eq!(retained_address, address);
         assert!(
             matches!(&**error, VerifyError::Ipa(IpaError::Msm(actual)) if *actual == budget.into())

@@ -566,10 +566,11 @@ mod phase_diagnostic_tests {
         let capture = PhaseCaptureV1::new(true);
         capture.with_default(|| {
             let invocation = ProofPhaseInvocationV1::new_aps().expect("enabled invocation");
-            let clock = invocation
-                .start(ProofPhaseV1::ApsCandidateConstruction)
-                .expect("construction clock");
-            drop(clock);
+            {
+                let _clock = invocation
+                    .start(ProofPhaseV1::ApsCandidateConstruction)
+                    .expect("construction clock");
+            }
         });
         let events = capture.events_v1();
         assert_eq!(events.len(), 1, "Drop must not manufacture a completion");

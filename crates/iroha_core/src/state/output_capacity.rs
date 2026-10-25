@@ -130,8 +130,8 @@ pub(super) enum ExecutionOutputPlanState {
 mod attempt;
 #[path = "output_producer.rs"]
 mod producer;
-pub(crate) use attempt::ExecutionOutputAttemptError;
-pub(crate) use producer::{ExecutionOutputSealError, ExecutionOutputSealMetadata};
+pub use attempt::ExecutionOutputAttemptError;
+pub use producer::{ExecutionOutputSealError, ExecutionOutputSealMetadata};
 
 impl StateBlock<'_> {
     /// Capture once; an invalid restored policy is retained as an explicit refusal.
@@ -174,9 +174,9 @@ impl StateBlock<'_> {
     }
 
     /// Frozen row ceiling for transaction-owned callback capture.
-    pub(super) fn callback_output_byte_limit(&self) -> Result<u64, String> {
+    pub(super) fn callback_output_byte_limit(&self) -> u64 {
         let (_, output) = self.fastpq_source_policy_at_block_start();
-        Ok(output.max_output_bytes)
+        output.max_output_bytes
     }
 
     /// Frozen Pipeline candidate count per source event, captured before execution.

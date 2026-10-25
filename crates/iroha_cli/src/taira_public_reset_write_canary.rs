@@ -1,4 +1,4 @@
-//! Shared exact WriteCanary driver for public SSH and native private staging.
+//! Shared exact `WriteCanary` driver for public SSH and native private staging.
 
 use super::*;
 
@@ -16,6 +16,10 @@ pub(in crate::taira_public_reset) trait CoreWriteTransport {
         recovery_only: bool,
     ) -> Result<ProcessOutput>;
     fn core_publish_receipt(&self, name: &str, value: &norito::json::Value) -> Result<()>;
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "The transport contract passes the complete prepared-mutation binding and custody evidence explicitly"
+    )]
     fn coordinate_shared_prepared_mutation(
         &mut self,
         operation: &str,
@@ -120,10 +124,10 @@ pub(in crate::taira_public_reset) trait CoreWriteTransport {
         }
         let outcome =
             self.run_write_canary_prepared_until(deadline, phase, kind, &prepared, true)?;
-        if let PreparedMutationOutcome::Applied { evidence, .. } = &outcome {
-            if prepared.state != "applied" {
-                self.mark_shared_prepared_applied(phase, kind, &prepared, evidence, deadline)?;
-            }
+        if let PreparedMutationOutcome::Applied { evidence, .. } = &outcome
+            && prepared.state != "applied"
+        {
+            self.mark_shared_prepared_applied(phase, kind, &prepared, evidence, deadline)?;
         }
         Ok(outcome)
     }
@@ -278,7 +282,7 @@ pub(in crate::taira_public_reset) trait CoreWriteTransport {
                 return Err(eyre!("prepared envelope scratch file has unsafe custody"));
             }
             fs::remove_file(&scratch)?;
-            sync_directory(&self.core_receipt_root())?;
+            sync_directory(self.core_receipt_root())?;
         }
         let output_file = OpenOptions::new()
             .read(true)
@@ -342,7 +346,7 @@ pub(in crate::taira_public_reset) trait CoreWriteTransport {
             .read_to_end(&mut bytes)?;
         output_reader.sync_all()?;
         fs::remove_file(&scratch)?;
-        sync_directory(&self.core_receipt_root())?;
+        sync_directory(self.core_receipt_root())?;
         if bytes.is_empty() || bytes.len() > MAX_PREPARED_ENVELOPE_BYTES {
             return Err(eyre!("prepared write child envelope is empty or oversized"));
         }
@@ -385,7 +389,7 @@ pub(in crate::taira_public_reset) trait CoreWriteTransport {
         action.append_envelope_args(&mut args, file.as_raw_fd());
         inherited_files.push(file);
         let process = self.core_run_process(args, inherited_files, deadline, recover_only)?;
-        let value = parse_prepared_child_report(process, "exact prepared write child")?;
+        let value = parse_prepared_child_report(&process, "exact prepared write child")?;
         let outcome = value
             .as_object()
             .and_then(|object| object.get("recovery_outcome"))

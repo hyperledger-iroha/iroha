@@ -6490,7 +6490,7 @@ mod state {
                         let (send_hi, recv_hi) = conn
                             .open_bi()
                             .await
-                            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+                            .map_err(|e| std::io::Error::other(e.to_string()))?;
                         let lo = tokio::time::timeout_at(deadline, conn.open_bi()).await;
                         let (send_low, recv_low) = match lo {
                             Ok(Ok((s, r))) => (Some(s), Some(r)),
@@ -6503,10 +6503,8 @@ mod state {
                         Ok::<_, std::io::Error>(Connection::from_quic(
                             connection_id,
                             conn,
-                            send_hi,
-                            recv_hi,
-                            send_low,
-                            recv_low,
+                            (send_hi, recv_hi),
+                            send_low.zip(recv_low),
                             datagram_ingress,
                             Some(remote),
                             transport_binding,
@@ -6525,9 +6523,7 @@ mod state {
                     }
                 }
                 Err(last_err
-                    .unwrap_or_else(|| {
-                        std::io::Error::new(std::io::ErrorKind::Other, "quic dial failed")
-                    })
+                    .unwrap_or_else(|| std::io::Error::other("quic dial failed"))
                     .into())
             }
             let tcp_opts = crate::transport::TcpConnectOptions {
@@ -6640,7 +6636,7 @@ mod state {
                                             },
                                             else => {
                                                 break Err(tcp_err.or(quic_err).unwrap_or_else(|| {
-                                                    std::io::Error::new(std::io::ErrorKind::Other, "dial failed").into()
+                                                    std::io::Error::other("dial failed").into()
                                                 }));
                                             }
                                         }
@@ -8496,14 +8492,13 @@ impl Connection {
     pub(crate) fn from_quic(
         id: ConnectionId,
         quic: quinn::Connection,
-        send_hi: quinn::SendStream,
-        recv_hi: quinn::RecvStream,
-        send_low: Option<quinn::SendStream>,
-        recv_low: Option<quinn::RecvStream>,
+        (send_hi, recv_hi): (quinn::SendStream, quinn::RecvStream),
+        low: Option<(quinn::SendStream, quinn::RecvStream)>,
         quic_datagrams: Option<QuicDatagramIngress>,
         remote_addr: Option<SocketAddr>,
         transport_binding: TransportBinding,
     ) -> Self {
+        let (send_low, recv_low) = low.unzip();
         Connection {
             id,
             read: Box::new(recv_hi),

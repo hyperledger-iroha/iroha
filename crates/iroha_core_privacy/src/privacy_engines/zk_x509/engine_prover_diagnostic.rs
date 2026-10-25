@@ -65,14 +65,16 @@ fn record_public_diagnostic_v1(directory: &Path, record: &str) -> io::Result<()>
 fn harness_context_from_v1(
     directory: Option<PathBuf>,
 ) -> (iroha_measurement::RunContext, Option<PathBuf>) {
-    match directory {
-        Some(directory) => (
-            iroha_measurement::read_harness_context(&directory)
-                .expect("harness output directory holds a readable context"),
-            Some(directory),
-        ),
-        None => (iroha_measurement::RunContext::unbound(), None),
-    }
+    directory.map_or_else(
+        || (iroha_measurement::RunContext::unbound(), None),
+        |directory| {
+            (
+                iroha_measurement::read_harness_context(&directory)
+                    .expect("harness output directory holds a readable context"),
+                Some(directory),
+            )
+        },
+    )
 }
 
 /// Read the harness hand-off. This diagnostic-only variable selects where a
@@ -881,7 +883,7 @@ fn complete_credential_proof_with_retained_public_receipt_v1(maximum_shape: bool
     );
     record(format!(
         "wrong_genesis_rejected=true\nnonce_byte_mutations_rejected=32\ntampered_proof_rejected=true\ntime_target_met={}\nfull_release_qualification=false",
-        prove_elapsed.as_secs_f64() <= ZK_X509_PROVER_TARGET_SECONDS_V1 as f64,
+        prove_elapsed <= std::time::Duration::from_secs(ZK_X509_PROVER_TARGET_SECONDS_V1),
     ));
     observation.assert_complete_main_coverage_v1(
         super::super::stark::main_diagnostic_transform_columns_v1().unwrap(),
@@ -889,7 +891,7 @@ fn complete_credential_proof_with_retained_public_receipt_v1(maximum_shape: bool
     assert!(proof.len() <= ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1 as usize);
     assert!(proof.len() <= ZK_X509_MAX_PROOF_BYTES_V1 as usize);
     assert!(
-        prove_elapsed.as_secs_f64() <= ZK_X509_PROVER_TARGET_SECONDS_V1 as f64,
+        prove_elapsed <= std::time::Duration::from_secs(ZK_X509_PROVER_TARGET_SECONDS_V1),
         "complete proof exceeds unchanged proving target; verified public proof and receipt retained at {}",
         directory.display(),
     );

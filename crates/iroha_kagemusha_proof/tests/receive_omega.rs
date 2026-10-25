@@ -274,7 +274,7 @@ pub fn genuine_receive_acceptance_closes_all_four_outer_obligations(
     let _ = compact_receive(Variant::Receive, false, fixture);
 }
 
-/// Close genuine funded ReceiveRenewed under its exact rebuilt native catalog.
+/// Close genuine funded `ReceiveRenewed` under its exact rebuilt native catalog.
 #[allow(dead_code)] // Other component harnesses include this shared builder.
 pub fn genuine_renewed_receive_acceptance_closes_all_four_outer_obligations(
     fixture: compact_catalog::LoadFixture,

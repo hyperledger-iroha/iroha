@@ -133,10 +133,10 @@ mod tests {
     fn strict_key_agreement_is_symmetric() {
         let alice_secret = [0x11; 32];
         let bob_secret = [0x22; 32];
-        let alice_public = x25519_public_key_v1(&alice_secret).unwrap();
-        let bob_public = x25519_public_key_v1(&bob_secret).unwrap();
-        let alice_shared = x25519_shared_secret_v1(&alice_secret, bob_public).unwrap();
-        let bob_shared = x25519_shared_secret_v1(&bob_secret, alice_public).unwrap();
+        let alice_public = x25519_public_key_v1(alice_secret).unwrap();
+        let bob_public = x25519_public_key_v1(bob_secret).unwrap();
+        let alice_shared = x25519_shared_secret_v1(alice_secret, bob_public).unwrap();
+        let bob_shared = x25519_shared_secret_v1(bob_secret, alice_public).unwrap();
         assert_eq!(*alice_shared, *bob_shared);
     }
     #[test]
@@ -166,14 +166,14 @@ mod tests {
                 .unwrap()
                 .try_into()
                 .unwrap();
-        assert_eq!(x25519_public_key_v1(&alice_secret).unwrap(), alice_public);
-        assert_eq!(x25519_public_key_v1(&bob_secret).unwrap(), bob_public);
+        assert_eq!(x25519_public_key_v1(alice_secret).unwrap(), alice_public);
+        assert_eq!(x25519_public_key_v1(bob_secret).unwrap(), bob_public);
         assert_eq!(
-            *x25519_shared_secret_v1(&alice_secret, bob_public).unwrap(),
+            *x25519_shared_secret_v1(alice_secret, bob_public).unwrap(),
             expected_shared
         );
         assert_eq!(
-            *x25519_shared_secret_v1(&bob_secret, alice_public).unwrap(),
+            *x25519_shared_secret_v1(bob_secret, alice_public).unwrap(),
             expected_shared
         );
     }

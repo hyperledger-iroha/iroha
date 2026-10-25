@@ -16,9 +16,9 @@ mod inventory;
 #[path = "kaigi_record_identity_tests.rs"]
 mod kaigi_records;
 
+mod fi_context_values;
 mod native_capture;
 mod uid_lock_values;
-mod fi_context_values;
 
 use crate::fixture_json;
 
@@ -122,7 +122,7 @@ fn captured(nominal: &str) -> &'static Value {
             );
             assert_eq!(
                 hex(&Sha256::digest(source.as_bytes())),
-                "5ab485c40bca7058192336e415854009e5fbec22413d22a24977c28b2da090b1",
+                "2e2df5cb97289c4de50bb2abf9c17d63fb490de98a3424a319fbb38a8a6d37e0",
                 "instruction record capture digest drift"
             );
             let capture: Value =

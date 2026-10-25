@@ -119,8 +119,8 @@ impl AuthorizationArtifacts {
     fn create(&self, call: NewKaigi) -> CreateKaigi {
         CreateKaigi {
             call,
-            commitment: Some(self.commitment.clone()),
-            nullifier: Some(self.nullifier.clone()),
+            commitment: Some(self.commitment),
+            nullifier: Some(self.nullifier),
             roster_root: Some(self.root),
             proof: Some(self.proof.clone()),
         }
@@ -129,8 +129,8 @@ impl AuthorizationArtifacts {
         JoinKaigi {
             call_id: call_id.clone(),
             participant: participant.clone(),
-            commitment: Some(self.commitment.clone()),
-            nullifier: Some(self.nullifier.clone()),
+            commitment: Some(self.commitment),
+            nullifier: Some(self.nullifier),
             roster_root: Some(self.root),
             proof: Some(self.proof.clone()),
         }
@@ -139,8 +139,8 @@ impl AuthorizationArtifacts {
         LeaveKaigi {
             call_id: call_id.clone(),
             participant: participant.clone(),
-            commitment: Some(self.commitment.clone()),
-            nullifier: Some(self.nullifier.clone()),
+            commitment: Some(self.commitment),
+            nullifier: Some(self.nullifier),
             roster_root: Some(self.root),
             proof: Some(self.proof.clone()),
         }
@@ -149,8 +149,8 @@ impl AuthorizationArtifacts {
         EndKaigi {
             call_id: call_id.clone(),
             ended_at_ms: None,
-            commitment: Some(self.commitment.clone()),
-            nullifier: Some(self.nullifier.clone()),
+            commitment: Some(self.commitment),
+            nullifier: Some(self.nullifier),
             roster_root: Some(self.root),
             proof: Some(self.proof.clone()),
         }
@@ -377,7 +377,7 @@ fn kaigi_private_create_join_leave_rejoin_and_end_use_real_ledger_bound_proofs()
         "active participation replay"
     );
     let active = read_record(&tx, call.id());
-    assert_eq!(active.roster_commitments, vec![joined.commitment.clone()]);
+    assert_eq!(active.roster_commitments, vec![joined.commitment]);
     assert_eq!(active.nullifier_log.len(), 2);
     assert!(
         active.participants.is_empty(),
@@ -719,10 +719,10 @@ fn usage_summary_emitted_only_for_exact_host_context_and_fresh_segment() {
     let summary = events
         .iter()
         .find_map(|event| {
-            if let EventBox::Data(ev) = event {
-                if let DataEvent::Domain(DomainEvent::KaigiUsageSummary(summary)) = ev.as_ref() {
-                    return Some(summary.clone());
-                }
+            if let EventBox::Data(ev) = event
+                && let DataEvent::Domain(DomainEvent::KaigiUsageSummary(summary)) = ev.as_ref()
+            {
+                return Some(summary.clone());
             }
             None
         })

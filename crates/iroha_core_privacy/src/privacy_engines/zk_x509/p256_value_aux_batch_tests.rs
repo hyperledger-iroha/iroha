@@ -112,7 +112,7 @@ fn value_auxiliary_batches_match_every_endpoint_cell_and_scalar_columns() {
     for seed in [71, 79] {
         let mut base = p256_main_base_source_fixture_for_test_v1().unwrap();
         let token = super::tests::main_post_base_v1(seed);
-        let mut bound = base.bind_v1(token).unwrap();
+        let mut bound = base.bind_v1(&token).unwrap();
         assert!(base.private_is_zeroized_v1());
         let retained = bound.allocated_payload_bytes_v1();
         for signature in 0..P256_X5S1_SIGNATURES_V1 {

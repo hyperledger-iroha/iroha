@@ -613,6 +613,17 @@ fn signed_bootstrap_q_qualifies_originals_and_rejects_foreign_installation_and_r
 fn signed_bootstrap_program_qualifies_whole_context_and_its_original_stage() {
     use iroha_kagemusha_proof::a_relation::native::artifact::KeyArtifact;
     use iroha_plonk::cs::InstanceType;
+    fn persist<C: PastaCurve>(disk: &Disk, key: ProvingKey<C>) -> (OriginalV1, KeyArtifact<C>) {
+        let reference = OriginalV1 {
+            descriptor: disk.put(key.binding().encoded()),
+            verifying_key: disk.put(key.vk().to_bytes()),
+            proving_key: disk.put(&key.artifact_bytes_v2().unwrap()),
+        };
+        let metadata = KeyArtifact::new(key.binding().clone(), key.vk().clone()).unwrap();
+        drop(key);
+        (reference, metadata)
+    }
+
     let (mut disk, installed, authenticated, qualified_q) = real_q_fixture(0);
     let plan = bootstrap::plan(
         SourceScopeV1::from_scheme(installed.verifier().scheme()).unwrap(),
@@ -629,16 +640,6 @@ fn signed_bootstrap_program_qualifies_whole_context_and_its_original_stage() {
     let mut acfg = KeygenConfigV2::pipa_r(vec![InstanceType::Bounded]);
     acfg.compress_selectors = false;
     acfg.coset_cache = CosetCachePolicy::OnDemand;
-    fn persist<C: PastaCurve>(disk: &Disk, key: ProvingKey<C>) -> (OriginalV1, KeyArtifact<C>) {
-        let reference = OriginalV1 {
-            descriptor: disk.put(key.binding().encoded()),
-            verifying_key: disk.put(key.vk().to_bytes()),
-            proving_key: disk.put(&key.artifact_bytes_v2().unwrap()),
-        };
-        let metadata = KeyArtifact::new(key.binding().clone(), key.vk().clone()).unwrap();
-        drop(key);
-        (reference, metadata)
-    }
     // Lean Bootstrap is one unsplit terminal A: no A1 or W0 original exists.
     let (terminal, terminal_key) = persist(
         &disk,
@@ -839,6 +840,17 @@ fn signed_bootstrap_program_qualifies_whole_context_and_its_original_stage() {
 fn signed_retiring_route_imports_each_stage_and_keeps_candidate_omega_unqualified() {
     use iroha_kagemusha_proof::a_relation::native::artifact::KeyArtifact;
     use iroha_plonk::cs::InstanceType;
+    fn persist<C: PastaCurve>(disk: &Disk, key: ProvingKey<C>) -> (OriginalV1, KeyArtifact<C>) {
+        let reference = OriginalV1 {
+            descriptor: disk.put(key.binding().encoded()),
+            verifying_key: disk.put(key.vk().to_bytes()),
+            proving_key: disk.put(&key.artifact_bytes_v2().unwrap()),
+        };
+        let metadata = KeyArtifact::new(key.binding().clone(), key.vk().clone()).unwrap();
+        drop(key);
+        (reference, metadata)
+    }
+
     let program = Variant::ALL
         .iter()
         .position(|v| *v == Variant::Retiring)
@@ -878,22 +890,12 @@ fn signed_retiring_route_imports_each_stage_and_keeps_candidate_omega_unqualifie
     let mut acfg = KeygenConfigV2::pipa_r(vec![InstanceType::Bounded]);
     acfg.compress_selectors = false;
     acfg.coset_cache = CosetCachePolicy::OnDemand;
-    fn persist<C: PastaCurve>(disk: &Disk, key: ProvingKey<C>) -> (OriginalV1, KeyArtifact<C>) {
-        let reference = OriginalV1 {
-            descriptor: disk.put(key.binding().encoded()),
-            verifying_key: disk.put(key.vk().to_bytes()),
-            proving_key: disk.put(&key.artifact_bytes_v2().unwrap()),
-        };
-        let metadata = KeyArtifact::new(key.binding().clone(), key.vk().clone()).unwrap();
-        drop(key);
-        (reference, metadata)
-    }
     // Lean Retiring is one terminal A: no W source follows it.
     let circuit = plan.source_circuit().unwrap();
     let (original, key) = persist(&disk, keygen_pk_v2(&eq, &circuit, &acfg).unwrap());
     let a = vec![original];
     let w: Vec<OriginalV1> = Vec::new();
-    let terminal = Some(key);
+    let terminal = key;
     let (pack, installation, catalog) =
         engineering_fixture::signed_inventory_with_sources(installed.pack.steps.clone(), |_| {
             let mut inventory = authenticated.inventory.clone();
@@ -949,7 +951,6 @@ fn signed_retiring_route_imports_each_stage_and_keeps_candidate_omega_unqualifie
         qualified.owner(),
         QualifiedOperationOwnerV1::Consuming(_)
     ));
-    let terminal = terminal.unwrap();
     assert_eq!(qualified.terminal().binding(), terminal.binding());
     assert_eq!(
         qualified.terminal().key().to_bytes(),

@@ -1126,7 +1126,7 @@ mod cut_observation_tests {
         }
         let original = chain.committed(2);
         let view = chain.state().view();
-        let error: WorldStateSnapshotError = require_cut(&view, &original).unwrap_err().into();
+        let error: WorldStateSnapshotError = require_cut(&view, &original).unwrap_err();
         assert!(matches!(
             error,
             WorldStateSnapshotError::CutChanged {
@@ -1177,12 +1177,14 @@ fn admission_originals<'a>(
     Ok((bytes, previous))
 }
 
+type StreamTokenOriginals<'a> = (&'a Vec<u8>, &'a Vec<u8>);
+
 fn stream_token_originals<'a>(
     snapshot: &WorldStateSnapshotV1,
     world: &'a WorldBlock<'_>,
     provider: iroha_data_model::sorafs::capacity::ProviderId,
     budget: &AllocationBudget,
-) -> Result<Option<(&'a Vec<u8>, &'a Vec<u8>)>, String> {
+) -> Result<Option<StreamTokenOriginals<'a>>, String> {
     use crate::query::stream_token_custody::{head_key, height_key, read_active, record_key};
     // Current/predecessor controls, enrollment and key-first-use validation have
     // at most eight concurrent 256 KiB bounded decode/encode workspaces.

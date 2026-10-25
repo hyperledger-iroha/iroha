@@ -449,7 +449,7 @@ fn persist_spool_artifacts_reject_body_tuple_mismatches() {
         request.lane_id,
         request.epoch,
         request.sequence,
-        request.client_blob_id.clone(),
+        request.client_blob_id,
         ManifestDigest::new(*manifest.manifest_hash.as_bytes()),
         DaProofScheme::MerkleSha256,
         Hash::prehashed(*manifest.chunk_root.as_bytes()),

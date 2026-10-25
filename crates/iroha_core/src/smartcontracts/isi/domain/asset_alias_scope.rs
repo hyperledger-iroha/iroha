@@ -46,12 +46,10 @@ fn asset_definition_home_dataspace(
         }
         return Ok(Some(dataspace_id));
     }
-    match definition.owning_domain() {
-        Some(domain) => {
-            dataspace_id_for_alias_segment(state_transaction, domain.dataspace().as_ref())
-        }
-        None => Ok(Some(DataSpaceId::UNIVERSAL)),
-    }
+    definition.owning_domain().as_ref().map_or_else(
+        || Ok(Some(DataSpaceId::UNIVERSAL)),
+        |domain| dataspace_id_for_alias_segment(state_transaction, domain.dataspace().as_ref()),
+    )
 }
 /// General restricted-home refusal, shared by the direct and domain paths.
 ///
@@ -277,7 +275,7 @@ pub(crate) fn repair_account_alias_setup_state(
     ensure_contract_alias_namespace_available(state_transaction, &alias)?;
     state_transaction
         .world
-        .insert_account_alias_binding(alias.clone(), intent.target_account.clone());
+        .insert_account_alias_binding(&(alias.clone()), &(intent.target_account.clone()));
     upsert_account_rekey_record(state_transaction, &alias, &intent.target_account)?;
     if matches!(intent.role, AccountAliasRoleV1::Primary) && current_primary.is_none() {
         state_transaction
@@ -347,7 +345,7 @@ pub(crate) fn ensure_alias_can_change_recovery_binding(
         .world
         .account_recovery_requests
         .get(label)
-        .is_some_and(|request| request.is_pending())
+        .is_some_and(iroha_data_model::account::AccountRecoveryRequest::is_pending)
     {
         return Err(InstructionExecutionError::InvariantViolation(
             format!("cannot change primary account alias {label:?}: a recovery request is pending")
@@ -483,13 +481,10 @@ pub(crate) fn resolve_contract_alias_components(
         .transpose()?;
     let dataspace = dataspace_id_for_alias_segment(state_transaction, alias.dataspace_segment())?
         .ok_or_else(|| {
-        InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-            format!(
-                "unknown or inactive dataspace alias `{}` in contract alias",
-                alias.dataspace_segment()
-            )
-            .into(),
-        ))
+        InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(format!(
+            "unknown or inactive dataspace alias `{}` in contract alias",
+            alias.dataspace_segment()
+        )))
     })?;
     Ok((label_name, domain, dataspace))
 }
@@ -517,7 +512,7 @@ fn ensure_authority_can_manage_stale_contract_alias(
 ) -> Result<(), InstructionExecutionError> {
     let dataspace = contract_address.dataspace_id().map_err(|err| {
         InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-            err.to_string().into(),
+            err.to_string(),
         ))
     })?;
     let domain = alias
@@ -526,7 +521,7 @@ fn ensure_authority_can_manage_stale_contract_alias(
         .transpose()
         .map_err(|err| {
             InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-                err.to_string().into(),
+                err.to_string(),
             ))
         })?;
     if authority_can_manage_account_alias_scope(
@@ -545,7 +540,7 @@ fn ensure_authority_can_manage_stale_contract_alias(
 }
 fn account_alias_selector_for_contract_alias(
     alias: &ContractAlias,
-) -> Result<iroha_data_model::sns::NameSelectorV1, InstructionExecutionError> {
+) -> iroha_data_model::sns::NameSelectorV1 {
     let account_alias_literal = alias.domain_segment().map_or_else(
         || format!("{}@{}", alias.name_segment(), alias.dataspace_segment()),
         |domain| {
@@ -557,18 +552,18 @@ fn account_alias_selector_for_contract_alias(
             )
         },
     );
-    Ok(iroha_data_model::sns::NameSelectorV1 {
+    iroha_data_model::sns::NameSelectorV1 {
         version: iroha_data_model::sns::NameSelectorV1::VERSION,
         suffix_id: crate::sns::ACCOUNT_ALIAS_SUFFIX_ID,
         label: account_alias_literal,
-    })
+    }
 }
 pub(crate) fn ensure_account_alias_namespace_available_for_contract_alias(
     state_transaction: &mut StateTransaction<'_, '_>,
     alias: &ContractAlias,
 ) -> Result<(), InstructionExecutionError> {
     resolve_contract_alias_components(state_transaction, alias)?;
-    let selector = account_alias_selector_for_contract_alias(alias)?;
+    let selector = account_alias_selector_for_contract_alias(alias);
     let Some(record) = crate::sns::record_by_selector(&state_transaction.world, &selector)
         .map_err(|error| error.retain_in_instruction(state_transaction))?
     else {
@@ -866,15 +861,15 @@ pub(crate) fn remove_account_associated_permissions(
         if !should_remove {
             continue;
         }
-        let remove_entry = if let Some(permissions) =
-            state_transaction.world.account_permissions.get_mut(&holder)
-        {
-            permissions
-                .retain(|permission| !is_permission_account_associated(permission, account_id));
-            permissions.is_empty()
-        } else {
-            false
-        };
+        let remove_entry = state_transaction
+            .world
+            .account_permissions
+            .get_mut(&holder)
+            .is_some_and(|permissions| {
+                permissions
+                    .retain(|permission| !is_permission_account_associated(permission, account_id));
+                permissions.is_empty()
+            });
         if remove_entry {
             state_transaction
                 .world
@@ -1042,16 +1037,16 @@ fn remove_asset_definition_associated_permissions(
         if !should_remove {
             continue;
         }
-        let remove_entry = if let Some(permissions) =
-            state_transaction.world.account_permissions.get_mut(&holder)
-        {
-            permissions.retain(|permission| {
-                !is_permission_asset_definition_associated(permission, asset_definition_id)
+        let remove_entry = state_transaction
+            .world
+            .account_permissions
+            .get_mut(&holder)
+            .is_some_and(|permissions| {
+                permissions.retain(|permission| {
+                    !is_permission_asset_definition_associated(permission, asset_definition_id)
+                });
+                permissions.is_empty()
             });
-            permissions.is_empty()
-        } else {
-            false
-        };
         if remove_entry {
             state_transaction
                 .world
@@ -1110,7 +1105,6 @@ fn resolve_config_account_literal(
                     )
                     .into(),
                 )
-                .into()
             })
 }
 fn config_account_matches(
@@ -1169,10 +1163,15 @@ pub(crate) fn precheck_register_account(
                 .into(),
             ));
     }
-    ensure_controller_capabilities(
+    ensure_controller_policy(
         account.controller(),
-        &state_transaction.crypto.allowed_signing,
-        &state_transaction.crypto.allowed_curve_ids,
+        state_transaction
+            .crypto_admission_policy()
+            .map_err(|message| {
+                iroha_data_model::isi::error::InstructionExecutionError::InvariantViolation(
+                    message.into(),
+                )
+            })?,
     )?;
     let account_id = account.id();
     if state_transaction.world.account(account_id).is_ok() {
@@ -1294,21 +1293,20 @@ impl Execute for Register<Account> {
                 .insert(*uaid, account_id.clone());
             state_transaction.rebuild_space_directory_bindings(*uaid);
         }
-        if let Some(label) = account.label() {
-            if state_transaction
+        if let Some(label) = account.label()
+            && state_transaction
                 .world
-                .insert_account_alias_binding(label.clone(), account_id.clone())
+                .insert_account_alias_binding(&(label.clone()), &(account_id.clone()))
                 .is_some()
-            {
-                state_transaction.world.accounts.remove(account_id.clone());
-                if let Some(uaid) = account.uaid() {
-                    state_transaction.world.uaid_accounts.remove(*uaid);
-                    state_transaction.rebuild_space_directory_bindings(*uaid);
-                }
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "Account label already registered".to_owned().into(),
-                ));
+        {
+            state_transaction.world.accounts.remove(account_id.clone());
+            if let Some(uaid) = account.uaid() {
+                state_transaction.world.uaid_accounts.remove(*uaid);
+                state_transaction.rebuild_space_directory_bindings(*uaid);
             }
+            return Err(InstructionExecutionError::InvariantViolation(
+                "Account label already registered".to_owned().into(),
+            ));
         }
         if let Some(uaid) = account.uaid() {
             for opaque in account.opaque_ids() {
@@ -1384,8 +1382,7 @@ impl Execute for Unregister<Account> {
             return Err(InstructionExecutionError::InvariantViolation(
                 format!("cannot unregister account {account_id}: it is an SCCP route escrow")
                     .into(),
-            )
-            .into());
+            ));
         }
         crate::retail_fee::close_account(state_transaction, &account_id)?;
         if let Some(contract) = crate::smartcontracts::code::historical_contract_for_subject(
@@ -1397,8 +1394,7 @@ impl Execute for Unregister<Account> {
                         "cannot unregister account {account_id}: it is the retained subject of contract `{contract}`"
                     )
                     .into(),
-                )
-                .into());
+                ));
         }
         if let Some(contract) = crate::smartcontracts::code::contract_owned_or_pending_for_account(
             &state_transaction.world,
@@ -1409,8 +1405,7 @@ impl Execute for Unregister<Account> {
                         "cannot unregister account {account_id}: transfer or cancel its lifecycle ownership of contract `{contract}` first"
                     )
                     .into(),
-                )
-                .into());
+                ));
         }
         if crate::smartcontracts::isi::game::retained_game_account(
             state_transaction.world(),
@@ -1421,7 +1416,7 @@ impl Execute for Unregister<Account> {
         ) {
             return Err(InstructionExecutionError::InvariantViolation(
                     format!("cannot unregister account {account_id}: it is retained by a native game session or NFT custody").into(),
-                ).into());
+                ));
         }
         if let Some(reference) =
             crate::smartcontracts::isi::sorafs_moderation::retained_moderation_account_reference(
@@ -1434,8 +1429,7 @@ impl Execute for Unregister<Account> {
                         "cannot unregister account {account_id}: it is retained by moderation {reference}"
                     )
                     .into(),
-                )
-                .into());
+                ));
         }
         crate::smartcontracts::isi::kaigi::ensure_kaigi_account_can_unregister(
             state_transaction,
@@ -1453,8 +1447,7 @@ impl Execute for Unregister<Account> {
                         hex::encode(proposal_id)
                     )
                     .into(),
-                )
-                .into());
+                ));
         }
         if let Some((program_id, _)) =
             state_transaction
@@ -1472,8 +1465,7 @@ impl Execute for Unregister<Account> {
                         "cannot unregister account {account_id}: it is the immutable payout account for fee sponsor program {program_id}"
                     )
                     .into(),
-                )
-                .into());
+                ));
         }
         if crate::smartcontracts::isi::asset::isi::is_fx_corridor_escrow_account(
             state_transaction,
@@ -1484,8 +1476,7 @@ impl Execute for Unregister<Account> {
                     "cannot unregister account {account_id}: it is retained FX protocol escrow"
                 )
                 .into(),
-            )
-            .into());
+            ));
         }
         if crate::smartcontracts::isi::sorafs_reserve::is_reserve_custody_account(
             state_transaction.world(),
@@ -1496,18 +1487,17 @@ impl Execute for Unregister<Account> {
                     "cannot unregister account {account_id}: it is active SoraFS reserve custody"
                 )
                 .into(),
-            )
-            .into());
+            ));
         }
         if crate::kagemusha_wallet_v1::custody::is_reserve_account(
             state_transaction.world(),
             &account_id,
         )
-        .map_err(crate::smartcontracts::isi::asset::isi::kagemusha_custody_error)?
+        .map_err(|value| crate::smartcontracts::isi::asset::isi::kagemusha_custody_error(&value))?
         {
             return Err(InstructionExecutionError::InvariantViolation(
                     format!("cannot unregister account {account_id}: it is permanent KAGEMUSHA reserve custody").into(),
-                ).into());
+                ));
         }
         if crate::smartcontracts::isi::escrow::is_protocol_escrow_custody_account(
             state_transaction,
@@ -1518,8 +1508,7 @@ impl Execute for Unregister<Account> {
                         "cannot unregister account {account_id}: it is retained native escrow or VPN lease custody"
                     )
                     .into(),
-                )
-                    .into());
+                ));
         }
         if crate::smartcontracts::isi::vpn::is_active_vpn_client(
             &state_transaction.world,
@@ -1530,8 +1519,7 @@ impl Execute for Unregister<Account> {
                         "cannot unregister account {account_id}: it funds an active operator-signed VPN lease"
                     )
                     .into(),
-                )
-                .into());
+                ));
         }
         let contract_deploy_nonce_key =
             Name::from_str(iroha_data_model::smart_contract::CONTRACT_DEPLOY_NONCE_METADATA_KEY)
@@ -1547,8 +1535,7 @@ impl Execute for Unregister<Account> {
                         "cannot unregister account {account_id}: it has native contract deployment nonce state; retain the account to preserve deployment address monotonicity and audit history"
                     )
                     .into(),
-                )
-                .into());
+                ));
         }
         if state_transaction
             .world
@@ -1562,8 +1549,7 @@ impl Execute for Unregister<Account> {
                         "cannot unregister account {account_id}: it has native asset transfer-control state; clear every control through dedicated instructions first"
                     )
                     .into(),
-                )
-                .into());
+                ));
         }
         let privacy_reserve_custody =
                 crate::privacy_state::load_privacy_public_reserve_custody_v1(
@@ -1587,35 +1573,36 @@ impl Execute for Unregister<Account> {
                         owner.namespace()
                     )
                     .into(),
-                )
-                .into());
+                ));
         }
         if let Some(primary_label) = state_transaction.world.account(&account_id)?.label() {
             ensure_alias_can_change_recovery_binding(state_transaction, primary_label)?;
         }
-        if let Some(owned_domain_id) = state_transaction
-            .world
-            .domains_by_owner
-            .get(&account_id)
-            .and_then(|domains| domains.iter().next())
+        if let Some(owned_domain_id) = crate::state::range_bounds::index_members(
+            &state_transaction.world.domains_by_owner,
+            &account_id,
+        )
+        .next()
         {
             return Err(InstructionExecutionError::InvariantViolation(
                     format!(
                         "cannot unregister account {account_id}: it owns domain {owned_domain_id}; transfer ownership first"
                     )
                     .into(),
-                )
-                .into());
+                ));
         }
-        if let Some(owned_definition_id) = crate::state::range_bounds::index_members(&state_transaction.world.asset_definitions_by_owner, &account_id).next()
+        if let Some(owned_definition_id) = crate::state::range_bounds::index_members(
+            &state_transaction.world.asset_definitions_by_owner,
+            &account_id,
+        )
+        .next()
         {
             return Err(InstructionExecutionError::InvariantViolation(
                     format!(
                         "cannot unregister account {account_id}: it owns asset definition {owned_definition_id}; transfer ownership first"
                     )
                     .into(),
-                )
-                .into());
+                ));
         }
         if account_id == state_transaction.gov.bond_escrow_account {
             return Err(InstructionExecutionError::InvariantViolation(
@@ -1623,8 +1610,7 @@ impl Execute for Unregister<Account> {
                         "cannot unregister account {account_id}: it is configured as governance bond escrow account (`gov.bond_escrow_account`); update governance config first"
                     )
                     .into(),
-                )
-                .into());
+                ));
         }
         if account_id == state_transaction.gov.citizenship_escrow_account {
             return Err(InstructionExecutionError::InvariantViolation(
@@ -1632,8 +1618,7 @@ impl Execute for Unregister<Account> {
                         "cannot unregister account {account_id}: it is configured as governance citizenship escrow account (`gov.citizenship_escrow_account`); update governance config first"
                     )
                     .into(),
-                )
-                .into());
+                ));
         }
         if account_id == state_transaction.gov.slash_receiver_account {
             return Err(InstructionExecutionError::InvariantViolation(
@@ -1641,8 +1626,7 @@ impl Execute for Unregister<Account> {
                         "cannot unregister account {account_id}: it is configured as governance slash receiver account (`gov.slash_receiver_account`); update governance config first"
                     )
                     .into(),
-                )
-                .into());
+                ));
         }
         if let Some((referendum_id, _)) =
             state_transaction
@@ -1661,8 +1645,7 @@ impl Execute for Unregister<Account> {
                         "cannot unregister account {account_id}: it is retained by immutable governance lock custody (referendum {referendum_id}); clear the governance locks first"
                     )
                     .into(),
-                )
-                .into());
+                ));
         }
         if account_id
             == state_transaction
@@ -1675,8 +1658,7 @@ impl Execute for Unregister<Account> {
                         "cannot unregister account {account_id}: it is configured as governance viral incentive pool account (`gov.viral_incentives.incentive_pool_account`); update governance config first"
                     )
                     .into(),
-                )
-                .into());
+                ));
         }
         if account_id == state_transaction.gov.viral_incentives.escrow_account {
             return Err(InstructionExecutionError::InvariantViolation(
@@ -1684,8 +1666,7 @@ impl Execute for Unregister<Account> {
                         "cannot unregister account {account_id}: it is configured as governance viral escrow account (`gov.viral_incentives.escrow_account`); update governance config first"
                     )
                     .into(),
-                )
-                .into());
+                ));
         }
         if account_id == state_transaction.oracle.economics.reward_pool {
             return Err(InstructionExecutionError::InvariantViolation(
@@ -1693,8 +1674,7 @@ impl Execute for Unregister<Account> {
                         "cannot unregister account {account_id}: it is configured as oracle reward pool account (`oracle.economics.reward_pool`); update oracle config first"
                     )
                     .into(),
-                )
-                .into());
+                ));
         }
         if account_id == state_transaction.oracle.economics.slash_receiver {
             return Err(InstructionExecutionError::InvariantViolation(
@@ -1702,8 +1682,7 @@ impl Execute for Unregister<Account> {
                         "cannot unregister account {account_id}: it is configured as oracle slash receiver account (`oracle.economics.slash_receiver`); update oracle config first"
                     )
                     .into(),
-                )
-                .into());
+                ));
         }
         let nexus_fee_sink_matches = state_transaction.nexus.fees.fee_sink_account_id == account_id;
         let nexus_stake_escrow_matches = config_account_matches(
@@ -1728,8 +1707,7 @@ impl Execute for Unregister<Account> {
                         "cannot unregister account {account_id}: it is the committed root fee sink; commit a replacement root fee policy first"
                     )
                     .into(),
-                )
-                .into());
+                ));
         }
         if nexus_stake_escrow_matches {
             return Err(InstructionExecutionError::InvariantViolation(
@@ -1737,8 +1715,7 @@ impl Execute for Unregister<Account> {
                         "cannot unregister account {account_id}: it is configured as nexus staking escrow account (`nexus.staking.stake_escrow_account_id`); update nexus config first"
                     )
                     .into(),
-                )
-                .into());
+                ));
         }
         if nexus_slash_sink_matches {
             return Err(InstructionExecutionError::InvariantViolation(
@@ -1746,8 +1723,7 @@ impl Execute for Unregister<Account> {
                         "cannot unregister account {account_id}: it is configured as nexus staking slash sink account (`nexus.staking.slash_sink_account_id`); update nexus config first"
                     )
                     .into(),
-                )
-                .into());
+                ));
         }
         if state_transaction
             .content
@@ -1760,8 +1736,7 @@ impl Execute for Unregister<Account> {
                         "cannot unregister account {account_id}: it is configured as content publish allow-list account (`content.publish_allow_accounts`); update content config first"
                     )
                     .into(),
-                )
-                .into());
+                ));
         }
         if state_transaction
             .gov
@@ -1775,8 +1750,7 @@ impl Execute for Unregister<Account> {
                         "cannot unregister account {account_id}: it is configured as SoraFS telemetry submitter (`gov.sorafs_telemetry.submitters`); update governance config first"
                     )
                     .into(),
-                )
-                .into());
+                ));
         }
         if let Some((provider_id, _)) = state_transaction
             .gov
@@ -1791,8 +1765,7 @@ impl Execute for Unregister<Account> {
                         hex::encode(provider_id.as_bytes())
                     )
                     .into(),
-                )
-                .into());
+                ));
         }
         if let Some((provider_id, _)) = state_transaction
             .gov
@@ -1806,8 +1779,7 @@ impl Execute for Unregister<Account> {
                         hex::encode(provider_id.as_bytes())
                     )
                     .into(),
-                )
-                .into());
+                ));
         }
         if let Some((provider_id, _)) = state_transaction
             .world
@@ -1821,8 +1793,7 @@ impl Execute for Unregister<Account> {
                         hex::encode(provider_id.as_bytes())
                     )
                     .into(),
-                )
-                .into());
+                ));
         }
         if state_transaction.world.citizens.get(&account_id).is_some() {
             return Err(InstructionExecutionError::InvariantViolation(
@@ -1830,8 +1801,7 @@ impl Execute for Unregister<Account> {
                         "cannot unregister account {account_id}: it has an active citizenship record; revoke citizenship first"
                     )
                     .into(),
-                )
-                .into());
+                ));
         }
         if state_transaction
             .world
@@ -1851,8 +1821,7 @@ impl Execute for Unregister<Account> {
                         "cannot unregister account {account_id}: it is referenced by pinned public-lane staking custody; release all held stake first"
                     )
                     .into(),
-                )
-                .into());
+                ));
         }
         if let Some(((lane_id, validator), _)) = state_transaction
             .world
@@ -1868,8 +1837,7 @@ impl Execute for Unregister<Account> {
                         "cannot unregister account {account_id}: it has active public-lane validator stake state (lane {lane_id}, validator {validator}); exit validator first"
                     )
                     .into(),
-                )
-                .into());
+                ));
         }
         if let Some(((lane_id, validator, staker), _)) = state_transaction
             .world
@@ -1888,8 +1856,7 @@ impl Execute for Unregister<Account> {
                         "cannot unregister account {account_id}: it has active public-lane stake share state (lane {lane_id}, validator {validator}, staker {staker}); unbond first"
                     )
                     .into(),
-                )
-                .into());
+                ));
         }
         if let Some((feed_id, _)) = state_transaction
             .world
@@ -1906,8 +1873,7 @@ impl Execute for Unregister<Account> {
                         "cannot unregister account {account_id}: it has active oracle feed provider state (feed {feed_id}); update feed providers first"
                     )
                     .into(),
-                )
-                .into());
+                ));
         }
         if let Some((change_id, _)) =
             state_transaction
@@ -1932,8 +1898,7 @@ impl Execute for Unregister<Account> {
                         "cannot unregister account {account_id}: it has active oracle governance state (change {change_id:?}); resolve or prune oracle change state first"
                     )
                     .into(),
-                )
-                .into());
+                ));
         }
         if let Some((dispute_id, _)) = state_transaction
             .world
@@ -1946,8 +1911,7 @@ impl Execute for Unregister<Account> {
                         "cannot unregister account {account_id}: it has active oracle dispute state (dispute {dispute_id:?}); resolve dispute first"
                     )
                     .into(),
-                )
-                .into());
+                ));
         }
         if let Some((provider_key, _)) = state_transaction
             .world
@@ -1961,8 +1925,7 @@ impl Execute for Unregister<Account> {
                         provider_key.feed_id
                     )
                     .into(),
-                )
-                .into());
+                ));
         }
         if let Some((observation_key, _)) = state_transaction
             .world
@@ -1975,8 +1938,7 @@ impl Execute for Unregister<Account> {
                         "cannot unregister account {account_id}: it has active oracle observation window state ({observation_key:?}); clear observation state first"
                     )
                     .into(),
-                )
-                .into());
+                ));
         }
         if let Some((feed_id, _)) =
             state_transaction
@@ -2001,8 +1963,7 @@ impl Execute for Unregister<Account> {
                         "cannot unregister account {account_id}: it has active oracle feed history state (feed {feed_id}); retain provider account for oracle audit references"
                     )
                     .into(),
-                )
-                .into());
+                ));
         }
         if let Some((agreement_id, _)) =
             state_transaction
@@ -2023,8 +1984,7 @@ impl Execute for Unregister<Account> {
                         "cannot unregister account {account_id}: it is referenced by repo agreement state ({agreement_id}); retain account for settlement audit references"
                     )
                     .into(),
-                )
-                .into());
+                ));
         }
         if let Some((settlement_id, _)) =
             state_transaction
@@ -2044,8 +2004,7 @@ impl Execute for Unregister<Account> {
                         "cannot unregister account {account_id}: it is referenced by committed settlement receipt {settlement_id}"
                     )
                     .into(),
-                )
-                .into());
+                ));
         }
         if let Some((proposal_id, _)) = state_transaction
             .world
@@ -2059,8 +2018,7 @@ impl Execute for Unregister<Account> {
                         hex::encode(*proposal_id)
                     )
                     .into(),
-                )
-                .into());
+                ));
         }
         if let Some((referendum_id, _)) =
             state_transaction
@@ -2079,8 +2037,7 @@ impl Execute for Unregister<Account> {
                         "cannot unregister account {account_id}: it has active governance lock state (referendum {referendum_id}); unlock governance bonds first"
                     )
                     .into(),
-                )
-                .into());
+                ));
         }
         if let Some((referendum_id, _)) = state_transaction
             .world
@@ -2093,8 +2050,7 @@ impl Execute for Unregister<Account> {
                         "cannot unregister account {account_id}: it has active governance slash ledger state (referendum {referendum_id}); retain account for governance audit references"
                     )
                     .into(),
-                )
-                .into());
+                ));
         }
         if let Some((bundle_id, _)) = state_transaction
             .world
@@ -2107,8 +2063,7 @@ impl Execute for Unregister<Account> {
                         "cannot unregister account {account_id}: it is referenced by content bundle state ({bundle_id}); retain account for content audit references"
                     )
                     .into(),
-                )
-                .into());
+                ));
         }
         if let Some((upgrade_id, _)) = state_transaction
             .world
@@ -2122,8 +2077,7 @@ impl Execute for Unregister<Account> {
                         hex::encode(upgrade_id.0)
                     )
                     .into(),
-                )
-                .into());
+                ));
         }
         if let Some((binding_digest, _)) = state_transaction
             .world
@@ -2136,8 +2090,7 @@ impl Execute for Unregister<Account> {
                         "cannot unregister account {account_id}: it has active twitter binding oracle provider state (binding {binding_digest}); revoke binding or rotate provider first"
                     )
                     .into(),
-                )
-                .into());
+                ));
         }
         if let Some((binding_digest, _)) = state_transaction
             .world
@@ -2150,8 +2103,7 @@ impl Execute for Unregister<Account> {
                         "cannot unregister account {account_id}: it has active viral escrow state (binding {binding_digest}); settle escrow first"
                     )
                     .into(),
-                )
-                .into());
+                ));
         }
         if let Some((digest, _)) = state_transaction
             .world
@@ -2165,8 +2117,7 @@ impl Execute for Unregister<Account> {
                         hex::encode(digest.as_bytes())
                     )
                     .into(),
-                )
-                .into());
+                ));
         }
         if let Some((alias_id, _)) = state_transaction
             .world
@@ -2180,8 +2131,7 @@ impl Execute for Unregister<Account> {
                         alias_id.namespace, alias_id.name
                     )
                     .into(),
-                )
-                .into());
+                ));
         }
         if let Some((order_id, _)) = state_transaction
             .world
@@ -2195,8 +2145,7 @@ impl Execute for Unregister<Account> {
                         hex::encode(order_id.as_bytes())
                     )
                     .into(),
-                )
-                .into());
+                ));
         }
         if let Some((ticket_id, record)) = state_transaction
             .world
@@ -2212,8 +2161,7 @@ impl Execute for Unregister<Account> {
                         record.location.index_in_bundle
                     )
                     .into(),
-                )
-                .into());
+                ));
         }
         if state_transaction
             .world
@@ -2227,8 +2175,7 @@ impl Execute for Unregister<Account> {
                         "cannot unregister account {account_id}: it is present in Parliament attempt state; retain account for governance audit references"
                     )
                     .into(),
-                )
-                .into());
+                ));
         }
         if let Some((rwa_id, _)) = state_transaction
             .world
@@ -2241,8 +2188,7 @@ impl Execute for Unregister<Account> {
                         "cannot unregister account {account_id}: it owns RWA {rwa_id}; transfer or redeem the lot first"
                     )
                     .into(),
-                )
-                .into());
+                ));
         }
         remove_account_associated_permissions(state_transaction, &account_id);
         state_transaction
@@ -2469,8 +2415,7 @@ fn register_asset_definition(
     {
         return Err(InstructionExecutionError::InvariantViolation(
             format!("asset definition alias `{alias}` is already bound").into(),
-        )
-        .into());
+        ));
     }
     let mut stored_definition = asset_definition.clone();
     stored_definition.alias = None;
@@ -2489,7 +2434,7 @@ fn register_asset_definition(
         let bound_at_ms = state_transaction.block_unix_timestamp_ms();
         state_transaction.world.bind_asset_definition_alias(
             &asset_definition_id,
-            alias,
+            &(alias),
             None,
             None,
             bound_at_ms,
@@ -2544,8 +2489,7 @@ impl Execute for Unregister<AssetDefinition> {
                         "cannot unregister asset definition {asset_definition_id}: it is retained by moderation {reference}"
                     )
                     .into(),
-                )
-                .into());
+                ));
             }
         if let Some((proposal_id, reference_kind)) =
             crate::validation_fee::retained_enacted_validation_fee_asset_reference(
@@ -2559,8 +2503,7 @@ impl Execute for Unregister<AssetDefinition> {
                         hex::encode(proposal_id)
                     )
                     .into(),
-                )
-                .into());
+                ));
         }
         if crate::smartcontracts::isi::asset::isi::is_fx_corridor_asset_definition(
             state_transaction,
@@ -2571,8 +2514,7 @@ impl Execute for Unregister<AssetDefinition> {
                         "cannot unregister asset definition {asset_definition_id}: it is retained native FX corridor backing"
                     )
                     .into(),
-                )
-                .into());
+                ));
         }
         if crate::smartcontracts::isi::sorafs_reserve::is_reserve_asset_definition(
             state_transaction.world(),
@@ -2583,18 +2525,17 @@ impl Execute for Unregister<AssetDefinition> {
                         "cannot unregister asset definition {asset_definition_id}: it backs active SoraFS reserve custody"
                     )
                     .into(),
-                )
-                    .into());
+                ));
         }
         if crate::kagemusha_wallet_v1::custody::is_reserve_definition(
             state_transaction.world(),
             &asset_definition_id,
         )
-        .map_err(crate::smartcontracts::isi::asset::isi::kagemusha_custody_error)?
+        .map_err(|value| crate::smartcontracts::isi::asset::isi::kagemusha_custody_error(&value))?
         {
             return Err(InstructionExecutionError::InvariantViolation(
                     format!("cannot unregister asset definition {asset_definition_id}: it is permanent KAGEMUSHA reserve custody").into(),
-                ).into());
+                ));
         }
         let privacy_reserve_custody =
                 crate::privacy_state::load_privacy_public_reserve_custody_v1(
@@ -2618,8 +2559,7 @@ impl Execute for Unregister<AssetDefinition> {
                         owner.namespace()
                     )
                     .into(),
-                )
-                .into());
+                ));
         }
         if asset_definition_id == state_transaction.gov.voting_asset_id {
             return Err(InstructionExecutionError::InvariantViolation(
@@ -2627,8 +2567,7 @@ impl Execute for Unregister<AssetDefinition> {
                         "cannot unregister asset definition {asset_definition_id}: it is configured as governance voting asset definition (`gov.voting_asset_id`); update governance config first"
                     )
                     .into(),
-                )
-                .into());
+                ));
         }
         if let Some((referendum_id, _)) =
             state_transaction
@@ -2647,8 +2586,7 @@ impl Execute for Unregister<AssetDefinition> {
                         "cannot unregister asset definition {asset_definition_id}: it is retained by immutable governance lock custody (referendum {referendum_id}); clear the governance locks first"
                     )
                     .into(),
-                )
-                .into());
+                ));
         }
         if asset_definition_id == state_transaction.gov.citizenship_asset_id {
             return Err(InstructionExecutionError::InvariantViolation(
@@ -2656,8 +2594,7 @@ impl Execute for Unregister<AssetDefinition> {
                         "cannot unregister asset definition {asset_definition_id}: it is configured as governance citizenship asset definition (`gov.citizenship_asset_id`); update governance config first"
                     )
                     .into(),
-                )
-                .into());
+                ));
         }
         if asset_definition_id
             == state_transaction
@@ -2670,8 +2607,7 @@ impl Execute for Unregister<AssetDefinition> {
                         "cannot unregister asset definition {asset_definition_id}: it is configured as governance viral reward asset definition (`gov.viral_incentives.reward_asset_definition_id`); update governance config first"
                     )
                     .into(),
-                )
-                .into());
+                ));
         }
         if crate::smartcontracts::isi::game::retained_game_asset(
             state_transaction.world(),
@@ -2679,7 +2615,7 @@ impl Execute for Unregister<AssetDefinition> {
         ) {
             return Err(InstructionExecutionError::InvariantViolation(
                     format!("cannot unregister asset definition {asset_definition_id}: it secures an outstanding native game stake").into(),
-                ).into());
+                ));
         }
         if asset_definition_id == state_transaction.oracle.economics.reward_asset {
             return Err(InstructionExecutionError::InvariantViolation(
@@ -2687,8 +2623,7 @@ impl Execute for Unregister<AssetDefinition> {
                         "cannot unregister asset definition {asset_definition_id}: it is configured as oracle reward asset definition (`oracle.economics.reward_asset`); update oracle config first"
                     )
                     .into(),
-                )
-                .into());
+                ));
         }
         if asset_definition_id == state_transaction.oracle.economics.slash_asset {
             return Err(InstructionExecutionError::InvariantViolation(
@@ -2696,8 +2631,7 @@ impl Execute for Unregister<AssetDefinition> {
                         "cannot unregister asset definition {asset_definition_id}: it is configured as oracle slash asset definition (`oracle.economics.slash_asset`); update oracle config first"
                     )
                     .into(),
-                )
-                .into());
+                ));
         }
         if asset_definition_id == state_transaction.oracle.economics.dispute_bond_asset {
             return Err(InstructionExecutionError::InvariantViolation(
@@ -2705,8 +2639,7 @@ impl Execute for Unregister<AssetDefinition> {
                         "cannot unregister asset definition {asset_definition_id}: it is configured as oracle dispute bond asset definition (`oracle.economics.dispute_bond_asset`); update oracle config first"
                     )
                     .into(),
-                )
-                .into());
+                ));
         }
         if parse_config_asset_definition_id(
             &state_transaction.world,
@@ -2724,8 +2657,7 @@ impl Execute for Unregister<AssetDefinition> {
                         "cannot unregister asset definition {asset_definition_id}: it is the immutable committed root fee currency"
                     )
                     .into(),
-                )
-                .into());
+                ));
         }
         if parse_config_asset_definition_id(
             &state_transaction.world,
@@ -2739,8 +2671,7 @@ impl Execute for Unregister<AssetDefinition> {
                         "cannot unregister asset definition {asset_definition_id}: it is configured as nexus staking asset definition (`nexus.staking.stake_asset_id`); update nexus config first"
                     )
                     .into(),
-                )
-                .into());
+                ));
         }
         if let Some((agreement_id, _)) =
             state_transaction
@@ -2757,8 +2688,7 @@ impl Execute for Unregister<AssetDefinition> {
                         "cannot unregister asset definition {asset_definition_id}: it is referenced by repo agreement state ({agreement_id}); retain asset definition for settlement audit references"
                     )
                     .into(),
-                )
-                .into());
+                ));
         }
         if let Some((settlement_id, _)) =
             state_transaction
@@ -2777,8 +2707,7 @@ impl Execute for Unregister<AssetDefinition> {
                         "cannot unregister asset definition {asset_definition_id}: it is referenced by committed settlement receipt {settlement_id}"
                     )
                     .into(),
-                )
-                .into());
+                ));
         }
         if state_transaction
             .world
@@ -2796,8 +2725,7 @@ impl Execute for Unregister<AssetDefinition> {
                         "cannot unregister asset definition {asset_definition_id}: it is referenced by pinned public-lane staking custody; release all held stake first"
                     )
                     .into(),
-                )
-                .into());
+                ));
         }
         if state_transaction
             .world
@@ -2811,7 +2739,7 @@ impl Execute for Unregister<AssetDefinition> {
         {
             return Err(InstructionExecutionError::InvariantViolation(
                     format!("cannot unregister asset definition {asset_definition_id}: it is the committed network XOR identity").into(),
-                ).into());
+                ));
         }
         let retirement = crate::smartcontracts::isi::asset::isi::QuantityRetirementOwner::retain(
             state_transaction,
@@ -2886,8 +2814,7 @@ impl Execute for SetAssetDefinitionAlias {
                 InvalidParameterError::SmartContract(
                     "lease_expiry_ms requires alias binding".into(),
                 ),
-            )
-            .into());
+            ));
         }
         // Ensure definition exists and validate the alias against the display label and any
         // explicit human-readable name carried by the stored definition.
@@ -2902,8 +2829,7 @@ impl Execute for SetAssetDefinitionAlias {
                     definition.owned_by()
                 )
                 .into(),
-            )
-            .into());
+            ));
         }
         validate_alias_for_asset_definition(alias.as_ref(), &definition)?;
         let home_dataspace = asset_definition_home_dataspace(state_transaction, &definition)?;
@@ -2938,13 +2864,12 @@ impl Execute for SetAssetDefinitionAlias {
                     InvalidParameterError::SmartContract(
                         "lease_expiry_ms must be greater than the current block timestamp".into(),
                     ),
-                )
-                .into());
+                ));
             }
             let grace_until_ms = alias_grace_until_ms(lease_expiry_ms);
             state_transaction.world.bind_asset_definition_alias(
                 &asset_definition_id,
-                alias,
+                &(alias),
                 lease_expiry_ms,
                 grace_until_ms,
                 bound_at_ms,
@@ -2973,13 +2898,12 @@ impl Execute for SetContractAlias {
                 InvalidParameterError::SmartContract(
                     "lease_expiry_ms requires alias binding".into(),
                 ),
-            )
-            .into());
+            ));
         }
         if let Some(alias) = alias {
             let contract_dataspace_id = contract_address.dataspace_id().map_err(|err| {
                 InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-                    err.to_string().into(),
+                    err.to_string(),
                 ))
             })?;
             let contract_deployed = state_transaction
@@ -2996,14 +2920,12 @@ impl Execute for SetContractAlias {
             {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "contract address dataspace is unknown".to_owned().into(),
-                )
-                .into());
+                ));
             }
             if !contract_deployed {
                 return Err(InstructionExecutionError::InvariantViolation(
                     format!("contract {contract_address} is not deployed").into(),
-                )
-                .into());
+                ));
             }
             let (_, _, alias_dataspace_id) =
                 resolve_contract_alias_components(state_transaction, &alias)?;
@@ -3012,8 +2934,7 @@ impl Execute for SetContractAlias {
                     InvalidParameterError::SmartContract(
                         "contract alias dataspace must match contract address dataspace".into(),
                     ),
-                )
-                .into());
+                ));
             }
             ensure_authority_can_manage_contract_alias(state_transaction, authority, &alias)?;
             ensure_account_alias_namespace_available_for_contract_alias(state_transaction, &alias)?;
@@ -3023,8 +2944,7 @@ impl Execute for SetContractAlias {
                     InvalidParameterError::SmartContract(
                         "lease_expiry_ms must be greater than the current block timestamp".into(),
                     ),
-                )
-                .into());
+                ));
             }
             let grace_until_ms = alias_grace_until_ms(lease_expiry_ms);
             state_transaction.world.bind_contract_alias(
@@ -3040,22 +2960,21 @@ impl Execute for SetContractAlias {
                 .contract_alias_bindings()
                 .get(&contract_address)
                 .cloned()
-            {
-                if let Err(error) = ensure_authority_can_manage_contract_alias(
+                && let Err(error) = ensure_authority_can_manage_contract_alias(
                     state_transaction,
                     authority,
                     &binding.alias,
-                ) {
-                    if state_transaction.is_execution_deferred() {
-                        return Err(error.into());
-                    }
-                    ensure_authority_can_manage_stale_contract_alias(
-                        state_transaction,
-                        authority,
-                        &contract_address,
-                        &binding.alias,
-                    )?;
+                )
+            {
+                if state_transaction.is_execution_deferred() {
+                    return Err(error);
                 }
+                ensure_authority_can_manage_stale_contract_alias(
+                    state_transaction,
+                    authority,
+                    &contract_address,
+                    &binding.alias,
+                )?;
             }
             state_transaction
                 .world
@@ -3086,8 +3005,7 @@ impl Execute for SetKeyValue<AssetDefinition> {
         {
             return Err(InstructionExecutionError::InvariantViolation(
                 "issuer usage policy requires asset-definition owner".into(),
-            )
-            .into());
+            ));
         }
         crate::smartcontracts::limits::enforce_json_size(
             state_transaction,
@@ -3132,8 +3050,7 @@ impl Execute for RemoveKeyValue<AssetDefinition> {
         {
             return Err(InstructionExecutionError::InvariantViolation(
                 "issuer usage policy requires asset-definition owner".into(),
-            )
-            .into());
+            ));
         }
         let value = state_transaction
             .world
@@ -3297,40 +3214,15 @@ impl Execute for Transfer<Account, DomainId, Account> {
         Ok(())
     }
 }
-pub(crate) fn ensure_controller_capabilities(
+/// Check every ordinary controller algorithm against the canonical chain policy.
+/// Consensus validator-key requirements do not exempt account controllers.
+pub(crate) fn ensure_controller_policy(
     controller: &AccountController,
-    allowed_algorithms: &[Algorithm],
-    allowed_curve_ids: &[u8],
+    policy: &CryptoAdmissionPolicyV1,
 ) -> Result<(), InstructionExecutionError> {
-    if let Some(disallowed) = first_disallowed_algorithm(controller, allowed_algorithms)? {
-        let allowed_summary = if allowed_algorithms.is_empty() {
-            "none".to_string()
-        } else {
-            allowed_algorithms
-                .iter()
-                .copied()
-                .map(Algorithm::as_static_str)
-                .collect::<Vec<_>>()
-                .join(", ")
-        };
+    if let Some(disallowed) = first_disallowed_algorithm(controller, policy.allowed_algorithms())? {
         return Err(InstructionExecutionError::InvariantViolation(
-            format!(
-                "account controller uses signing algorithm {disallowed} which is not \
-                     permitted by crypto.allowed_signing (allowed: {allowed_summary})"
-            )
-            .into(),
-        ));
-    }
-    if let Some(curve) = first_disallowed_curve(controller, allowed_curve_ids)? {
-        let algo = curve.algorithm();
-        let curve_code: u8 = curve.into();
-        return Err(InstructionExecutionError::InvariantViolation(
-            format!(
-                "account controller uses curve id {curve_code:#04X} ({}) which is not \
-                     permitted by crypto.curves.allowed_curve_ids",
-                algo.as_static_str()
-            )
-            .into(),
+            format!("account controller uses signing algorithm {disallowed} which is not permitted by the committed crypto admission policy").into(),
         ));
     }
     Ok(())
@@ -3364,76 +3256,10 @@ fn controller_algorithm(public_key: &PublicKey) -> Result<Algorithm, Instruction
     })
 }
 fn algorithm_if_disallowed(algo: Algorithm, allowed: &[Algorithm]) -> Option<Algorithm> {
-    if allowed.contains(&algo) || is_bls_algorithm(algo) {
+    if allowed.contains(&algo) {
         None
     } else {
         Some(algo)
-    }
-}
-fn first_disallowed_curve(
-    controller: &AccountController,
-    allowed_curve_ids: &[u8],
-) -> Result<Option<CurveId>, InstructionExecutionError> {
-    match controller {
-        AccountController::Single(signatory) => {
-            let algo = controller_algorithm(signatory)?;
-            curve_if_disallowed(algo, allowed_curve_ids).map_err(|err| {
-                InstructionExecutionError::InvariantViolation(
-                    format!(
-                        "account controller uses signing algorithm {} which is not registered in \
-                             the account curve registry: {err}",
-                        algo.as_static_str()
-                    )
-                    .into(),
-                )
-            })
-        }
-        AccountController::Multisig(policy) => {
-            for member in policy.members() {
-                let algo = controller_algorithm(member.public_key())?;
-                match curve_if_disallowed(algo, allowed_curve_ids) {
-                    Ok(Some(curve)) => return Ok(Some(curve)),
-                    Ok(None) => {}
-                    Err(err) => {
-                        return Err(InstructionExecutionError::InvariantViolation(
-                                format!(
-                                    "account controller uses signing algorithm {} which is not registered in \
-                                     the account curve registry: {err}",
-                                    algo.as_static_str()
-                                )
-                                .into(),
-                            ));
-                    }
-                }
-            }
-            Ok(None)
-        }
-    }
-}
-fn curve_if_disallowed(
-    algo: Algorithm,
-    allowed_curve_ids: &[u8],
-) -> Result<Option<CurveId>, CurveRegistryError> {
-    if is_bls_algorithm(algo) {
-        // Consensus validators rely on BLS controller keys even when admission is restricted.
-        return Ok(None);
-    }
-    let curve = CurveId::try_from_algorithm(algo)?;
-    if allowed_curve_ids.contains(&curve.as_u8()) {
-        Ok(None)
-    } else {
-        Ok(Some(curve))
-    }
-}
-fn is_bls_algorithm(algo: Algorithm) -> bool {
-    #[cfg(feature = "bls")]
-    {
-        matches!(algo, Algorithm::BlsNormal | Algorithm::BlsSmall)
-    }
-    #[cfg(not(feature = "bls"))]
-    {
-        let _ = algo;
-        false
     }
 }
 

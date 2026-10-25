@@ -174,7 +174,7 @@ fn durable_tip_wait_refuses_visible_frame_until_original_directory_sync_finishes
         );
         *faults.entered.lock() = Some(entered);
         let (finished, observed) = std::sync::mpsc::sync_channel(1);
-        let (acquired, state_held, visible, before_resume, resumed, appended, waited) =
+        let (acquired, state_held, visible, before_resume, resumed, appended, wait_result) =
             std::thread::scope(|scope| {
                 let publisher = scope.spawn(|| store.append(&body, &qc));
                 let acquired = acquired.recv_timeout(WAIT_CONTROL_CLEANUP);
@@ -187,7 +187,7 @@ fn durable_tip_wait_refuses_visible_frame_until_original_directory_sync_finishes
                 let before_resume = observed.recv_timeout(Duration::from_secs(1));
                 let resumed = resume.send(());
                 let appended = publisher.join();
-                let waited = waiter.join();
+                let wait_result = waiter.join();
                 (
                     acquired,
                     state_held,
@@ -195,12 +195,12 @@ fn durable_tip_wait_refuses_visible_frame_until_original_directory_sync_finishes
                     before_resume,
                     resumed,
                     appended,
-                    waited,
+                    wait_result,
                 )
             });
         acquired.unwrap();
         resumed.unwrap();
-        waited.unwrap();
+        wait_result.unwrap();
         let appended = appended.unwrap();
         assert!(
             state_held,

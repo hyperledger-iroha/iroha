@@ -104,10 +104,8 @@ fn decode_base64_any(input: &str, invalid_message: &str) -> Result<Vec<u8>, Stri
     }
     let padding = if input.ends_with("==") {
         2
-    } else if input.ends_with('=') {
-        1
     } else {
-        0
+        usize::from(input.ends_with('='))
     };
     if padding != 0 && remainder != 0 {
         return Err(invalid_message.to_owned());
@@ -595,6 +593,8 @@ fn extra_headers_contain_authorization(value: &Value) -> bool {
 }
 
 fn connect_management_authorization_value(token: &str) -> Result<HeaderValue, String> {
+    const PREFIX: &str = "Bearer ";
+
     if token.len() != 43
         || !token
             .bytes()
@@ -602,7 +602,7 @@ fn connect_management_authorization_value(token: &str) -> Result<HeaderValue, St
     {
         return Err("management token must be canonical unpadded base64url".to_owned());
     }
-    const PREFIX: &str = "Bearer ";
+
     let capacity = PREFIX
         .len()
         .checked_add(token.len())

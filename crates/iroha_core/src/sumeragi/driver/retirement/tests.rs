@@ -253,8 +253,8 @@ fn original_joiner_physically_joins_workers_before_running_exact_publication() {
     let _ = release.send(());
     let call = early.or_else(|_| calls.recv_timeout(Duration::from_secs(5)));
     control.stop();
-    let joined = thread.join();
-    assert!(joined.is_ok());
+    let join_result = thread.join();
+    assert!(join_result.is_ok());
     assert!(control.complete());
     drop(stop_guard);
     drop(control);
@@ -301,13 +301,13 @@ fn final_shutdown_wakes_original_capacity_wait_and_releases_exact_retained_owner
     let stopped = finished(&thread);
     // Cleanup does not depend on the wake under test, and precedes assertions.
     thread.thread().unpark();
-    let joined = thread.join();
+    let join_result = thread.join();
     assert!(observed.is_ok());
     assert!(
         stopped,
         "final shutdown must wake the original joiner without an invented capacity release"
     );
-    assert!(joined.is_ok());
+    assert!(join_result.is_ok());
     assert!(
         !control.complete(),
         "cancellation cannot claim synchronized publication"
@@ -424,8 +424,8 @@ fn panicking_publication_cannot_claim_completion_or_release_the_original_store_o
     let joiner = super::super::DriverJoiner::start(Some(job)).unwrap();
     control.retire();
     let thread = joiner.handoff(Vec::new()).ok().unwrap();
-    let joined = thread.join();
-    assert!(joined.is_err());
+    let join_result = thread.join();
+    assert!(join_result.is_err());
     assert!(!control.complete());
     assert!(
         store.owner.get().unwrap().admit_append().is_err(),
@@ -508,7 +508,7 @@ fn original_joiner_retries_capacity_only_after_real_release_on_the_same_thread()
         control.stop();
         // Independent cleanup unpark cannot manufacture a successful assertion below.
         thread.thread().unpark();
-        let joined = thread.join();
+        let join_result = thread.join();
         assert_eq!(first.unwrap(), (original_thread, true));
         assert!(!premature);
         assert_eq!(
@@ -520,7 +520,7 @@ fn original_joiner_retries_capacity_only_after_real_release_on_the_same_thread()
             original_thread,
             "actual release must resume the same prestarted joiner"
         );
-        assert!(joined.is_ok());
+        assert!(join_result.is_ok());
         assert!(control.complete());
         assert_eq!(attempts.load(Ordering::SeqCst), 2);
         drop(stop_guard);
@@ -561,15 +561,15 @@ fn original_worker_panic_never_authorizes_publication_or_retirement_success() {
     let pending_last_join = !thread.is_finished();
     let calls_before_join = calls.load(Ordering::SeqCst);
     let _ = release.send(());
-    let joined = thread.join();
-    let original_failure = joined.as_ref().err().is_some_and(|error| {
+    let join_result = thread.join();
+    let original_failure = join_result.as_ref().err().is_some_and(|error| {
         error.downcast_ref::<&str>() == Some(&"original physical worker panic")
     });
     let completed = control.complete();
     let refused_append = store.owner.get().unwrap().admit_append().is_err();
     let calls_after_join = calls.load(Ordering::SeqCst);
     let retained_original = Arc::strong_count(&store) == 2;
-    drop(joined);
+    drop(join_result);
     drop(control);
     assert_eq!(Arc::strong_count(&store), 1);
     assert_eq!(
@@ -617,7 +617,7 @@ fn retirement_waits_for_every_original_append_permit_before_native_continuation(
     drop(last);
     let actual = calls.recv_timeout(Duration::from_secs(5));
     control.stop();
-    let joined = thread.join();
+    let join_result = thread.join();
     drop(owner);
     drop(control);
     assert_eq!(
@@ -626,7 +626,7 @@ fn retirement_waits_for_every_original_append_permit_before_native_continuation(
     );
     drop(store);
     assert_eq!(budget.reserved_bytes(), 0);
-    assert!(joined.is_ok());
+    assert!(join_result.is_ok());
     assert!(closed);
     assert!(
         early.is_err()
@@ -661,9 +661,7 @@ impl RetiredPublication for RefusedBinding {
     }
     fn bind_owner(&self, owner: OriginalPublicationOwner) -> io::Result<()> {
         owner.require_binding_thread()?;
-        if self.panic_after_binding {
-            panic!("original binding panic");
-        }
+        assert!(!self.panic_after_binding, "original binding panic");
         Err(io::Error::new(
             io::ErrorKind::InvalidData,
             OriginalBindingFailure(self.source.clone()),
@@ -773,7 +771,7 @@ fn stop_before_or_during_original_binding_never_acknowledges_live_append_readine
         let stopped = matches!(&readiness, Err(DriverError::RetirementBinding(error))
             if error.kind() == io::ErrorKind::Interrupted);
         let thread = joiner.handoff(Vec::new()).ok().unwrap();
-        let joined = thread.join();
+        let join_result = thread.join();
         let terminal = original.owner.get().unwrap().admit_append().is_err();
         assert!(!control.complete());
         drop((readiness, control, store));
@@ -783,7 +781,7 @@ fn stop_before_or_during_original_binding_never_acknowledges_live_append_readine
         );
         drop(original);
         assert_eq!(budget.reserved_bytes(), 0);
-        assert!(joined.is_ok());
+        assert!(join_result.is_ok());
         assert!(
             entered.is_ok() && before_ready && stopped && terminal,
             "stop around original binding must preserve completion ordering and terminal append ownership"
@@ -818,7 +816,7 @@ fn final_stop_drains_original_append_permit_without_retrying_publication() {
     let calls_while_held = calls.load(Ordering::SeqCst);
     drop(original);
     let ended = early.or_else(|_| observed.recv_timeout(Duration::from_secs(5)));
-    let joined = thread.join();
+    let join_result = thread.join();
     let resumed = control.complete() || calls.load(Ordering::SeqCst) != 0;
     drop((owner, control));
     assert_eq!(
@@ -827,7 +825,7 @@ fn final_stop_drains_original_append_permit_without_retrying_publication() {
     );
     drop(store);
     assert_eq!(budget.reserved_bytes(), 0);
-    assert!(joined.is_ok() && ended.is_ok());
+    assert!(join_result.is_ok() && ended.is_ok());
     assert!(rejects_new);
     assert_eq!(calls_while_held, 0);
     assert!(
@@ -868,19 +866,19 @@ fn original_worker_panics_keep_secondary_payloads_until_every_physical_join_fini
     let uncompleted = !thread.is_finished();
     workers.release();
     let _ = release_hook.send(());
-    let joined = thread.join();
-    let exact_first = joined
+    let join_result = thread.join();
+    let exact_first = join_result
         .as_ref()
         .err()
         .and_then(|error| error.downcast_ref::<Arc<()>>())
         .is_some_and(|error| Arc::ptr_eq(error, &workers.original));
-    let exact_box = joined.as_ref().err().is_some_and(|error| {
+    let exact_box = join_result.as_ref().err().is_some_and(|error| {
         std::ptr::from_ref(error.as_ref()).cast::<()>() as usize == workers.original_address
     });
     let completed = control.complete();
     let append_refused = store.owner.get().unwrap().admit_append().is_err();
     let publication_calls = calls.load(Ordering::SeqCst);
-    drop(joined);
+    drop(join_result);
     drop(control);
     assert_eq!(Arc::strong_count(&store), 1);
     assert_eq!(

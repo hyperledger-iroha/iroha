@@ -189,7 +189,7 @@ impl KuraBlockStore {
     /// Restore original signed body custody and the exact original certificate.
     ///
     /// # Errors
-    /// Corruption, invalid authority or I/O. WouldBlock retains the same original read owner.
+    /// Corruption, invalid authority or I/O. `WouldBlock` retains the same original read owner.
     pub fn committed_body(
         &self,
         height: u64,

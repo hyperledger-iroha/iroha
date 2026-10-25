@@ -277,14 +277,14 @@ fn settlement_setter_rebuilds_the_exact_state_owned_router_engine() {
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         );
-        let original = state.settlement().clone();
+        let original = *state.settlement();
         assert!(
             state
                 .settlement_engine
                 .matches_router_config(&original.router)
         );
 
-        let mut changed = original.clone();
+        let mut changed = original;
         changed.router.epsilon_bps += 1;
         changed.router.buffer_halt_pct += 1;
         assert!(

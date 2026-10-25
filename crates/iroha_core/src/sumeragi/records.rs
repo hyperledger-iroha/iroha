@@ -131,10 +131,7 @@ pub fn create_dir_durable(faults: &dyn Faults, dir: &Path) -> io::Result<()> {
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists && dir.is_dir() => {}
         Err(error) => return Err(error),
     }
-    match parent {
-        Some(parent) => sync_dir(faults, parent),
-        None => Ok(()),
-    }
+    parent.map_or(Ok(()), |parent| sync_dir(faults, parent))
 }
 
 /// Replace `dir/name` with `bytes` atomically and durably: write and fsync `dir/name.tmp`,

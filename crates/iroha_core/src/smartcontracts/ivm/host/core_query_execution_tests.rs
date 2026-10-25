@@ -182,8 +182,8 @@ fn account_balance_syscall_fixture(
     let domain_id = DomainId::try_new("wonderland", "universal").unwrap();
     let asset_definition =
         AssetDefinitionId::derive_from_components(domain_id.clone(), "rose".parse().unwrap());
-    let owning_domain = matches!(policy, AssetBalancePolicy::DataspaceRestricted)
-        .then(|| domain_id.clone());
+    let owning_domain =
+        matches!(policy, AssetBalancePolicy::DataspaceRestricted).then(|| domain_id.clone());
     let definition = AssetDefinition::numeric(
         asset_definition.clone(),
         "rose".to_owned(),
@@ -404,10 +404,8 @@ fn get_account_balance_syscall_absent_holding_obeys_item_and_byte_budget() {
         QueryExecutionBudget::from_weighted_limit(0, 1, 0),
         QueryExecutionBudget::from_weighted_limit(1, 0, 1),
     ] {
-        let error =
-            execute_account_balance_query_on_state(&view, &holder, request(), Some(budget))
-                .err()
-                .expect("zero balance must fit its query budget");
+        let error = execute_account_balance_query_on_state(&view, &holder, request(), Some(budget))
+            .expect_err("zero balance must fit its query budget");
         assert!(matches!(error.as_unmetered(), ivm::VMError::OutOfGas));
     }
     let error = read_account_balance_syscall(
@@ -450,10 +448,9 @@ fn core_queries_return_typed_handles_and_specialists_remain_norito() {
     .build(&authority);
     let full_asset_definition_bytes =
         norito::to_bytes(&asset_def).expect("encode full asset definition");
-    let projected_asset_definition_bytes = norito::to_bytes(&Some(
-        CoreHost::project_asset_definition(asset_def.clone()).expect("project definition"),
-    ))
-    .expect("encode projected asset definition");
+    let projected_asset_definition_bytes =
+        norito::to_bytes(&Some(CoreHost::project_asset_definition(asset_def.clone())))
+            .expect("encode projected asset definition");
     assert!(
         projected_asset_definition_bytes.len() < full_asset_definition_bytes.len(),
         "typed projection must be smaller than the full asset definition"

@@ -248,7 +248,7 @@ fn build_faucet_test_context_with_authority(
                 iroha_config::parameters::actual::LaneConfig::default(),
                 0,
             );
-            tx.bind_asset_definition_alias(&asset_definition_id, alias, None, None, 10_000)
+            tx.bind_asset_definition_alias(&asset_definition_id, &(alias), None, None, 10_000)
                 .expect("bind alias");
             tx.apply();
             block.commit();

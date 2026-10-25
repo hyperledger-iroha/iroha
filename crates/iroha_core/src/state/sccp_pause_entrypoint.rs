@@ -14,7 +14,7 @@ use iroha_data_model::{
 
 /// Fixed-size signed operation, with no copied account or executable graph.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum PauseOperation {
+pub enum PauseOperation {
     Accept(AcceptSccpPausePanelSeatV1),
     Endorse(EndorseSccpFastPauseV1),
 }

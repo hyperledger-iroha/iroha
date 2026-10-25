@@ -1,3 +1,7 @@
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "The output context retains independent parsed CLI options."
+)]
 struct PrintJsonContext<W, E> {
     write: W,
     err_write: E,
@@ -15,6 +19,7 @@ struct PrintJsonContext<W, E> {
     json_lines: bool,
     i18n: Localizer,
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 impl<W: std::io::Write, E: std::io::Write> RunContext for PrintJsonContext<W, E> {
     fn config(&self) -> &Config {
         &self.config

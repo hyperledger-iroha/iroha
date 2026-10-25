@@ -82,7 +82,7 @@ async fn committed_retry_acknowledges_exact_carrier_without_requeueing() {
         let response = super::handler_post_transactions_batch(
             State(app.clone()),
             HeaderMap::new(),
-            transaction_batch_body_for_test(vec![wire.clone(), wire]),
+            transaction_batch_body_for_test(&(vec![wire.clone(), wire])),
         )
         .await
         .expect("batch ingress acknowledges both copies of the exact committed carrier");
@@ -239,11 +239,35 @@ async fn committed_retry_revalidates_expiry_and_current_signature_policy() {
     assert_eq!(app.queue.active_len(), 0);
 
     let (app, transaction, _chain, _) = committed_retry_fixture(true, true);
-    let mut crypto = app.state.crypto().as_ref().clone();
-    crypto
-        .allowed_signing
-        .retain(|algorithm| *algorithm != Algorithm::Ed25519);
-    app.state.set_crypto(crypto);
+    let policy = iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+        Algorithm::Secp256k1,
+    ])
+    .expect("explicit committed policy excludes this Ed25519 signer");
+    let next_height = app
+        .state
+        .latest_block_header_fast()
+        .map_or(1, |header| header.height().get().saturating_add(1));
+    let mut block = app.state.block(BlockHeader::new(
+        NonZeroU64::new(next_height).expect("non-zero fixture height"),
+        None,
+        None,
+        0,
+        0,
+    ));
+    let mut policy_transaction = block.transaction();
+    policy_transaction
+        .world_mut_for_testing()
+        .parameters_mut_for_testing()
+        .set_parameter(
+            policy
+                .into_parameter()
+                .expect("canonical replacement policy"),
+        )
+        .expect("replace original committed policy");
+    policy_transaction.apply();
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit replacement signing policy without changing transaction history");
     let error = post_signed_transaction_for_test(app.clone(), HeaderMap::new(), &transaction)
         .await
         .expect_err("committed identity cannot bypass the current signing policy");
@@ -269,14 +293,14 @@ async fn committed_retry_preserves_full_queue_and_authority_rate_reservation() {
         &key,
     );
     let accepted = routing::accept_transaction_for_ingress(
-        app.state.clone(),
+        &(app.state),
         TransactionEntrypoint::External(pending.clone()),
         &app.telemetry,
     )
     .unwrap();
     routing::push_accepted_transaction_for_ingress_with_routing_plan(
-        app.queue.clone(),
-        app.state.clone(),
+        &(app.queue),
+        &(app.state),
         accepted,
         None,
     )
@@ -312,7 +336,7 @@ async fn committed_retry_rechecks_route_after_history_authentication() {
         Some(RoutingDecision::new(LaneId::new(9), DataSpaceId::new(9))),
     );
     let accepted = routing::accept_transaction_for_ingress(
-        app.state.clone(),
+        &(app.state),
         TransactionEntrypoint::External(transaction),
         &app.telemetry,
     )

@@ -36,7 +36,10 @@ struct Group<'a> {
 impl Drop for Group<'_> {
     fn drop(&mut self) {
         self.hash.release_writers();
-        self.outer_retirement = self.outer.take().map(|guard| guard.release_deferred());
+        self.outer_retirement = self
+            .outer
+            .take()
+            .map(crate::publication_lock::PublicationGuard::release_deferred);
     }
 }
 

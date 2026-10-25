@@ -85,7 +85,7 @@ pub fn compiled_race_profile_v1() -> ExecutionProofProfileV1 {
         rules_hash: race_rules_hash_v1(),
         relation: ExecutionProofRelationV1::RaceV1,
         target_soundness_bits: 128,
-        maximum_proof_bytes: RACE_MAX_PROOF_BYTES_V1 as u32,
+        maximum_proof_bytes: u32::try_from(RACE_MAX_PROOF_BYTES_V1).expect("bounded circuit index"),
         qualified: race_profile_is_qualified_v1(),
     }
 }
@@ -439,7 +439,7 @@ fn validate_payload(
     if !(1..=8).contains(&replay.player_count)
         || replay.frames.len() > RACE_MAX_TICKS_V1 as usize
         || replay.frames.iter().enumerate().any(|(tick, frame)| {
-            frame.tick != tick as u32
+            frame.tick != u32::try_from(tick).expect("bounded circuit index")
                 || frame.controls.len() != usize::from(replay.player_count)
                 || frame
                     .controls
@@ -451,16 +451,17 @@ fn validate_payload(
             .windows(2)
             .any(|events| events[0].tick >= events[1].tick)
         || replay.dnf_events.iter().any(|event| {
-            event.tick > replay.frames.len() as u32
+            event.tick > u32::try_from(replay.frames.len()).expect("validated replay duration")
                 || event.tick % 6 != 0
                 || event.slots.is_empty()
                 || event.slots.windows(2).any(|slots| slots[0] >= slots[1])
                 || event.slots.iter().any(|slot| *slot >= replay.player_count)
         })
-        || final_state.tick % 6 != 0
+        || !final_state.tick.is_multiple_of(6)
         || final_state.cars.len() != usize::from(replay.player_count)
         || final_state.track != replay.track
-        || final_state.tick != replay.frames.len() as u32
+        || final_state.tick
+            != u32::try_from(replay.frames.len()).expect("validated replay duration")
         || (final_state.tick != RACE_MAX_TICKS_V1
             && final_state
                 .cars
@@ -592,7 +593,8 @@ impl ProofManagedNoteStarkAdapterV1 for RaceAdapterV1<'_> {
         .map_err(|_| ProofManagedNoteStarkErrorV1::InvalidProfile)
     }
     fn trace_log2_v1(&self) -> u8 {
-        self.compiled.trace_size(&self.payload.replay).ilog2() as u8
+        u8::try_from(self.compiled.trace_size(&self.payload.replay).ilog2())
+            .expect("word-size logarithm fits a byte")
     }
     fn base_width_v1(&self) -> usize {
         NOTE_COPY_WIDTH_V1 + self.compiled.width()
@@ -614,7 +616,10 @@ impl ProofManagedNoteStarkAdapterV1 for RaceAdapterV1<'_> {
             ],
             sigma: (0..self.compiled.trace_size(&self.payload.replay))
                 .map(|row| {
-                    std::array::from_fn(|column| (row * NOTE_COPY_WIDTH_V1 + column + 1) as u32)
+                    std::array::from_fn(|column| {
+                        u32::try_from(row * NOTE_COPY_WIDTH_V1 + column + 1)
+                            .expect("bounded circuit index")
+                    })
                 })
                 .collect(),
         })
@@ -660,8 +665,7 @@ impl ProofManagedNoteStarkAdapterV1 for RaceAdapterV1<'_> {
     }
     fn profile_constraint_residues_v1(
         &self,
-        current: &[F],
-        next: &[F],
+        (current, next): (&[F], &[F]),
         _: &[F],
         _: &[F],
         fixed: &[F],
@@ -677,10 +681,13 @@ impl ProofManagedNoteStarkAdapterV1 for RaceAdapterV1<'_> {
 }
 
 /// Generate and self-verify a genuine native transparent execution proof using local entropy.
+///
+/// # Errors
+/// Rejects inconsistent admission, manifest, replay or statement bindings; propagates trace, entropy, proof-generation, size-limit and self-verification failures.
 pub fn prove_race_v1(
-    request: RaceProverRequestV1,
+    request: &RaceProverRequestV1,
 ) -> Result<ExecutionProofEnvelopeV1, ExecutionProofErrorV1> {
-    let mut payload = race_payload_from_request_v1(&request)?;
+    let mut payload = race_payload_from_request_v1(request)?;
     let adapter = RaceAdapterV1::new(&request.statement, &payload)?;
     let size = adapter.compiled.trace_size(&payload.replay);
     let mut carry = adapter.compiled.initial_carry();
@@ -738,6 +745,9 @@ fn decode_payload(
     Ok(payload)
 }
 /// Verify the complete semantic execution relation, with no replay-only or binding-only mode.
+///
+/// # Errors
+/// Rejects malformed or oversized envelopes, inconsistent semantic bindings, and invalid native STARK proofs.
 pub fn verify_race_proof_v1(
     envelope: &ExecutionProofEnvelopeV1,
 ) -> Result<(), ExecutionProofErrorV1> {
@@ -747,17 +757,38 @@ pub fn verify_race_proof_v1(
     Ok(())
 }
 
+/// Retained chain history against which an execution proof is authenticated.
+#[derive(Clone, Copy)]
+pub struct GameProofHistoryV1<'a> {
+    /// Latest certified checkpoint, when present.
+    pub checkpoint: Option<&'a GameCheckpointV1>,
+    /// Certified transcript prefixes and participant removals.
+    pub anchors: &'a [GameTranscriptAnchorV1],
+    /// Retained forced input batches in chain order.
+    pub batches: &'a [GameForcedBatchV1],
+    /// Current slot-ordered participant roster.
+    pub participants: &'a [GameParticipantV1],
+    /// Session epoch selected by committed state.
+    pub epoch: u64,
+}
+
 /// Verify semantic execution and exact retained checkpoint, forced inputs, and removals.
+///
+/// # Errors
+/// Rejects invalid proofs and mismatches with the retained session history.
 pub fn verify_race_proof_for_history_v1(
     envelope: &ExecutionProofEnvelopeV1,
     manifest: &GameManifestV1,
     outcome: &GameOutcomeV1,
-    checkpoint: Option<&GameCheckpointV1>,
-    anchors: &[GameTranscriptAnchorV1],
-    batches: &[GameForcedBatchV1],
-    participants: &[GameParticipantV1],
-    epoch: u64,
+    history: GameProofHistoryV1<'_>,
 ) -> Result<(), ExecutionProofErrorV1> {
+    let GameProofHistoryV1 {
+        checkpoint,
+        anchors,
+        batches,
+        participants,
+        epoch,
+    } = history;
     let payload = decode_payload(envelope)?;
     validate_payload(&envelope.statement, &payload)?;
     if &payload.manifest != manifest || &payload.outcome != outcome {
@@ -773,7 +804,7 @@ pub fn verify_race_proof_for_history_v1(
                 &(
                     statement.session_id,
                     epoch,
-                    checkpoint.cloned(),
+                    checkpoint.copied(),
                     anchors.to_vec(),
                     batches.to_vec(),
                 ),
@@ -787,7 +818,9 @@ pub fn verify_race_proof_for_history_v1(
         return Err(ExecutionProofErrorV1::History);
     }
     for anchor in anchors {
-        if anchor.tick > replay.frames.len() as u32 || anchor.tick % 6 != 0 {
+        if anchor.tick > u32::try_from(replay.frames.len()).expect("validated replay duration")
+            || anchor.tick % 6 != 0
+        {
             return Err(ExecutionProofErrorV1::History);
         }
         let prefix = RaceReplayV1 {
@@ -811,7 +844,10 @@ pub fn verify_race_proof_for_history_v1(
             .dnf_at_tick
             .filter(|tick| *tick <= payload.final_state.tick)
         {
-            expected_dnfs.entry(tick).or_default().push(slot as u8);
+            expected_dnfs
+                .entry(tick)
+                .or_default()
+                .push(u8::try_from(slot).expect("validated player or port count"));
         }
     }
     if replay.dnf_events
@@ -826,7 +862,8 @@ pub fn verify_race_proof_for_history_v1(
     match (checkpoint, payload.checkpoint_state.as_ref()) {
         (Some(checkpoint), Some(state)) => {
             if checkpoint.session_id != statement.session_id
-                || checkpoint.tick > replay.frames.len() as u32
+                || checkpoint.tick
+                    > u32::try_from(replay.frames.len()).expect("validated replay duration")
                 || state.tick != checkpoint.tick
                 || race_state_root_v1(&statement.network_id, state) != checkpoint.state_root
             {
@@ -885,15 +922,14 @@ pub fn verify_race_proof_for_history_v1(
         }
         for offset in 0..6 {
             let tick = batch.start_tick + offset;
-            if let Some(frame) = replay.frames.get(tick as usize) {
-                if frame.controls
+            if let Some(frame) = replay.frames.get(tick as usize)
+                && frame.controls
                     != controls
                         .iter()
                         .map(|controls| controls[offset as usize])
                         .collect::<Vec<_>>()
-                {
-                    return Err(ExecutionProofErrorV1::History);
-                }
+            {
+                return Err(ExecutionProofErrorV1::History);
             }
         }
         for slot in &batch.dnf_slots {
@@ -909,7 +945,7 @@ pub fn verify_race_proof_for_history_v1(
             tail = tail.saturating_add(6);
         }
     }
-    if tail < replay.frames.len() as u32 {
+    if tail < u32::try_from(replay.frames.len()).expect("validated replay duration") {
         return Err(ExecutionProofErrorV1::History);
     }
     let adapter = RaceAdapterV1::new(statement, &payload)?;

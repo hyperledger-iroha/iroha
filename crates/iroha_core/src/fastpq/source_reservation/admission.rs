@@ -23,7 +23,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 /// Three disjoint pools whose combined ceilings fit the authenticated block policy.
 /// Native maintenance cannot consume trigger or retained governance capacity.
-pub(crate) struct PreparedSourceQuota {
+pub struct PreparedSourceQuota {
     ordinary: EntryBundleReservationLedger,
     native: EntryBundleReservationLedger,
     mandatory: EntryBundleReservationLedger,
@@ -44,7 +44,7 @@ pub(crate) struct PreparedSourceQuota {
 /// No public constructor, serializer, cloning or new backing allocation exists.
 /// This receipt does not attest complete quantity coverage or source finality.
 #[derive(Debug)]
-pub(crate) struct SourceQuotaSeal {
+pub struct SourceQuotaSeal {
     ordinary: super::ReservationCommitSeal,
     native: super::ReservationCommitSeal,
     mandatory: super::ReservationCommitSeal,
@@ -54,7 +54,7 @@ pub(crate) struct SourceQuotaSeal {
 
 /// Disposable physical contribution whose failed preparation cannot be ignored.
 /// State and witness owners must remain disposable until `commit_after` succeeds.
-pub(crate) struct PreparedSourceFragment<'a> {
+pub struct PreparedSourceFragment<'a> {
     inner: EntryBundleReservationTransaction<'a>,
     failed: bool,
 }
@@ -109,7 +109,7 @@ impl PreparedSourceFragment<'_> {
 }
 
 /// Canonical diagnostic used by actual execution owners after an intrinsic refusal.
-pub(crate) const SOURCE_INTRINSIC_REJECTION: &str = "FASTPQ source intrinsic limit exceeded";
+pub const SOURCE_INTRINSIC_REJECTION: &str = "FASTPQ source intrinsic limit exceeded";
 
 /// Typed source result; invariant failures must never become ordinary rejected rows.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -120,7 +120,7 @@ enum SourceQuotaFailure {
 
 /// All three pool journals stay owned by the same physical State overlay.
 /// Logical ordinary E was retained by the producer before opening this scope.
-pub(crate) struct SourceQuotaTransaction<'a> {
+pub struct SourceQuotaTransaction<'a> {
     ordinary: Option<EntryBundleReservationTransaction<'a>>,
     native: Option<EntryBundleReservationTransaction<'a>>,
     mandatory: Option<EntryBundleReservationTransaction<'a>>,
@@ -272,7 +272,7 @@ impl SourceQuotaTransaction<'_> {
         result
     }
 
-    /// Exact authenticated native membership; the public ProtocolPurpose kind alone
+    /// Exact authenticated native membership; the public `ProtocolPurpose` kind alone
     /// never selects a quota pool or grants an invocation.
     pub(crate) fn is_native_purpose(&self, hash: Hash) -> bool {
         self.native_purpose == Some(hash)

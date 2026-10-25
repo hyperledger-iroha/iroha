@@ -603,30 +603,31 @@ fn revalidate_secure_parent_for_path_operations(
 }
 
 fn sync_secure_parent_directory(
-    _parent: &SecureParent,
-    _directory: &File,
+    parent: &SecureParent,
+    directory: &File,
 ) -> Result<(), SecureFileError> {
     #[cfg(unix)]
     {
-        _directory.sync_all()?;
-        let durable = crate::secure_file_metadata::from_file(_directory)?;
-        validate_secure_parent_metadata(&_parent.path, &durable)?;
-        if !crate::secure_file_metadata::same_file(&_parent.metadata, &durable) {
+        directory.sync_all()?;
+        let durable = crate::secure_file_metadata::from_file(directory)?;
+        validate_secure_parent_metadata(&parent.path, &durable)?;
+        if !crate::secure_file_metadata::same_file(&parent.metadata, &durable) {
             return Err(SecureFileError::UnsafePath(format!(
                 "persistence parent {} changed while its directory entry was synchronized",
-                _parent.path.display()
+                parent.path.display()
             )));
         }
     }
     #[cfg(windows)]
     {
-        _parent.revalidate()?;
-        crate::durable_fs::sync_direct_directory(&_parent.path)?;
-        _parent.revalidate()?;
+        let _ = directory;
+        parent.revalidate()?;
+        crate::durable_fs::sync_direct_directory(&parent.path)?;
+        parent.revalidate()?;
     }
     #[cfg(not(any(unix, windows)))]
     {
-        let _ = _parent;
+        let _ = (parent, directory);
         return Err(SecureFileError::Io(std::io::Error::new(
             std::io::ErrorKind::Unsupported,
             "durable directory synchronization is unsupported on this platform",
@@ -648,7 +649,7 @@ fn verify_secure_named_file(
     if rustix::fs::FileType::from_raw_mode(named.st_mode) != rustix::fs::FileType::RegularFile
         || crate::utils::stat_device_identity(&named) != metadata.dev()
         || named.st_ino != metadata.ino()
-        || named.st_nlink as u64 != 1
+        || u64::from(named.st_nlink) != 1
         || u64::try_from(named.st_size).ok() != Some(metadata.len())
     {
         return Err(SecureFileError::UnsafePath(format!(
@@ -691,7 +692,7 @@ fn secure_read_bytes_in_parent(
         Err(error) => return Err(std::io::Error::from(error).into()),
     };
     if rustix::fs::FileType::from_raw_mode(before.st_mode) != rustix::fs::FileType::RegularFile
-        || before.st_nlink as u64 != 1
+        || u64::from(before.st_nlink) != 1
         || u64::try_from(before.st_size)
             .ok()
             .is_none_or(|size| size > max_bytes as u64)
@@ -1192,10 +1193,11 @@ fn secure_atomic_write_with_outcome(
         revalidate_secure_parent_for_path_operations(&parent)?;
         Ok(())
     })();
-    if result.is_err() && !publication_reached {
-        if revalidate_secure_parent_for_path_operations(&parent).is_ok() {
-            let _ = unlink_secure_temporary_file(&parent_file, &temp_name, &temp_path);
-        }
+    if result.is_err()
+        && !publication_reached
+        && revalidate_secure_parent_for_path_operations(&parent).is_ok()
+    {
+        let _ = unlink_secure_temporary_file(&parent_file, &temp_name, &temp_path);
     }
     result.map_err(|error| {
         if publication_reached {
@@ -1214,7 +1216,7 @@ fn secure_atomic_write(
     secure_atomic_write_with_outcome(path, bytes, max_bytes, replace_existing)
         .map_err(SecureAtomicWriteError::into_inner)
 }
-/// Errors that may occur when reading or writing PoR persistence snapshots.
+/// Errors that may occur when reading or writing `PoR` persistence snapshots.
 #[derive(Debug, Error)]
 pub enum PorPersistenceError {
     /// Underlying filesystem I/O error.
@@ -1498,7 +1500,7 @@ pub enum RandomnessError {
     Persistence(String),
 }
 #[cfg(feature = "app_api")]
-/// Trait supplying randomness used to schedule PoR challenges.
+/// Trait supplying randomness used to schedule `PoR` challenges.
 #[async_trait]
 pub trait RandomnessProvider: Send + Sync {
     /// Produce randomness for the specified epoch, returning the commitment used to plan challenges.
@@ -2161,25 +2163,6 @@ fn parse_and_verify_drand_response(
     expected_round: u64,
     public_key: &[u8; iroha_crypto::drand::DRAND_PUBLIC_KEY_BYTES],
 ) -> Result<VerifiedDrandBeacon, RandomnessError> {
-    let value: JsonValue = json::from_slice(body)
-        .map_err(|error| RandomnessError::Endpoint(format!("invalid drand JSON: {error}")))?;
-    let object = value.as_object().ok_or_else(|| {
-        RandomnessError::Endpoint("drand response must be a JSON object".to_owned())
-    })?;
-    if object.len() != 2 || !object.contains_key("round") || !object.contains_key("signature") {
-        return Err(RandomnessError::Endpoint(
-            "drand v2 response must contain exactly round and signature".to_owned(),
-        ));
-    }
-    let round = object
-        .get("round")
-        .and_then(JsonValue::as_u64)
-        .ok_or_else(|| RandomnessError::Endpoint("drand round must be a u64".to_owned()))?;
-    if round != expected_round {
-        return Err(RandomnessError::Endpoint(format!(
-            "drand returned round {round}; expected {expected_round}"
-        )));
-    }
     fn decode_canonical_hex<const N: usize>(
         value: Option<&JsonValue>,
         field: &str,
@@ -2202,6 +2185,27 @@ fn parse_and_verify_drand_response(
             .try_into()
             .map_err(|_| RandomnessError::Endpoint(format!("drand {field} has invalid length")))
     }
+
+    let value: JsonValue = json::from_slice(body)
+        .map_err(|error| RandomnessError::Endpoint(format!("invalid drand JSON: {error}")))?;
+    let object = value.as_object().ok_or_else(|| {
+        RandomnessError::Endpoint("drand response must be a JSON object".to_owned())
+    })?;
+    if object.len() != 2 || !object.contains_key("round") || !object.contains_key("signature") {
+        return Err(RandomnessError::Endpoint(
+            "drand v2 response must contain exactly round and signature".to_owned(),
+        ));
+    }
+    let round = object
+        .get("round")
+        .and_then(JsonValue::as_u64)
+        .ok_or_else(|| RandomnessError::Endpoint("drand round must be a u64".to_owned()))?;
+    if round != expected_round {
+        return Err(RandomnessError::Endpoint(format!(
+            "drand returned round {round}; expected {expected_round}"
+        )));
+    }
+
     let signature = decode_canonical_hex(object.get("signature"), "signature")?;
     let randomness =
         iroha_crypto::drand::verify_unchained_g1_rfc9380(public_key, round, &signature, None)

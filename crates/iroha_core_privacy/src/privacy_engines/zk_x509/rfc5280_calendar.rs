@@ -367,7 +367,7 @@ mod tests {
         let operands = CalendarOperandsV1 {
             generalized: year >= 2050,
             timestamp: u64::try_from(timestamp).unwrap(),
-            year: year as u64,
+            year: u64::try_from(year).expect("fixture value fits u64"),
             month: u64::from(month),
             day: u64::from(day),
             hour: u64::from(hour),

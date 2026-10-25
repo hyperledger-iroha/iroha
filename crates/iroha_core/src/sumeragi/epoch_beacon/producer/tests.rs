@@ -1,7 +1,7 @@
 //! Native producer coverage over an actually executed/certified four-validator prefix.
 //!
 //! The DKG/session is explicit component prestate. Pulse demand is consensus-native: the
-//! fixture chain is NPoS with a ten-block epoch, so its ninth height is the pre-boundary height
+//! fixture chain is `NPoS` with a ten-block epoch, so its ninth height is the pre-boundary height
 //! (`height + 1 == authorization.last_height`) and no governance row takes part in creating it.
 //! The prefix's genesis, native parent hash and R are real; this fixture does not claim
 //! live-network qualification of the seeded component rows. The Permissioned [`prefix`] has no
@@ -77,7 +77,7 @@ struct Fixture {
     counts: Vec<Arc<AtomicUsize>>,
     context: ApplicationControlContext,
 }
-/// Length of the fixture's NPoS epoch: heights 1..=10, so the native pulse height is 9.
+/// Length of the fixture's `NPoS` epoch: heights 1..=10, so the native pulse height is 9.
 const NPOS_EPOCH_LENGTH_BLOCKS: u64 = 10;
 
 /// A Permissioned prefix through height 8. It has no native pulse cadence: no height of this
@@ -89,7 +89,7 @@ fn prefix() -> CertifiedTestChain {
     }
     chain
 }
-/// An actually executed NPoS prefix through `height` whose signed genesis fixes a ten-block
+/// An actually executed `NPoS` prefix through `height` whose signed genesis fixes a ten-block
 /// epoch. Only its pre-boundary height 9 demands a pulse; every other height is ordinary.
 fn npos_prefix(height: u64) -> CertifiedTestChain {
     let mut config = TestChainConfig::new(World::new(), 1_000);
@@ -150,7 +150,7 @@ fn build_context(context: &ApplicationControlContext, view: u64) -> ControlWitne
         parent_result: context.parent_result,
     }
 }
-/// The generic native-beacon fixture: consensus-native NPoS demand at the pre-boundary height 9.
+/// The generic native-beacon fixture: consensus-native `NPoS` demand at the pre-boundary height 9.
 fn fixture() -> Fixture {
     let fixture = seeded(npos_prefix(8));
     {
@@ -1239,7 +1239,7 @@ fn readiness_no_demand_does_not_require_a_beacon_session() {
     assert!(!horizon.local_provider_ready);
 }
 
-/// Parliament admission, kept apart from the generic NPoS fixture above.
+/// Parliament admission, kept apart from the generic `NPoS` fixture above.
 ///
 /// On a Permissioned chain (no native pulse cadence) a canonically admitted Parliament
 /// sortition attempt derives its governance-local slot index and nothing else: consensus
@@ -1482,7 +1482,7 @@ fn control_retries_use_original_tip_without_decoding_history_again() {
     let report = producer
         .attach_readiness(&state.ivm_execution_budget())
         .unwrap();
-    let (_, observed) = crate::sumeragi::certified_chain::relation_counts::measure(|| {
+    let ((), observed) = crate::sumeragi::certified_chain::relation_counts::measure(|| {
         for _ in 0..3 {
             producer
                 .refresh_readiness(&view, &context, (8, context.parent_hash), generation)

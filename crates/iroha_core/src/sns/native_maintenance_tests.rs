@@ -153,8 +153,10 @@ fn source(state: &State, now: u64) -> SignedBlock {
 fn balance(world: &impl WorldReadOnly, fixture: &Fixture, account: &AccountId) -> Quantity {
     world
         .asset(&AssetId::of(fixture.asset.clone(), account.clone()))
-        .map(|asset| asset.value().clone().into_inner())
-        .unwrap_or_else(|_| Quantity::zero())
+        .map_or_else(
+            |_| Quantity::zero(),
+            |asset| asset.value().clone().into_inner(),
+        )
 }
 
 #[test]
@@ -366,7 +368,7 @@ fn native_record_binding_rejects_scope_revision_config_and_key_substitution() {
     let permit = || SnsNativeMaintenancePermit {
         network: transaction.network_id,
         proposal: transaction._curr_block.hash(),
-        direct_slot: transaction.direct_execution_identity().unwrap(),
+        direct_slot: transaction.direct_execution_identity(),
         storage_key: alias_auto_renew_storage_key(&fixture.target).unwrap(),
         revision: record.revision,
         record_digest: SnsNativeMaintenancePermit::record_digest(
@@ -439,17 +441,16 @@ fn sns_source_inspection_refuses_foreign_incomplete_and_repeated_native_owners()
         let original = source(&fixture.state, EXPIRY - WINDOW);
         let parent_height = fixture.state.committed_height();
         let mut block;
-        let recording;
-        if refusal == 1 {
+        let recording = if refusal == 1 {
             block = Box::new(fixture.state.block(original.header()));
-            recording = None;
+            None
         } else {
             let (actual, recorder, outputs, _) =
                 crate::state::run_empty_network_owner_fixture(&fixture.state, &original);
             assert!(outputs.is_empty());
             block = actual;
-            recording = Some(recorder);
-        }
+            Some(recorder)
+        };
         let refused = if refusal == 0 {
             let foreign = source(&fixture.state, EXPIRY - WINDOW + 1);
             block.finalize_sns_owned_sources_for_testing(&foreign)

@@ -364,7 +364,7 @@ fn checked_in_securities_fixtures_validate_and_link_through_torii_profile() {
         instruction_metadata.business_message_id(),
         Some("SEC-INSTR-BAH-1")
     );
-    assert!(runtime.check_and_record_inbound(&instruction_id, instruction_metadata));
+    assert!(runtime.check_and_record_inbound(&instruction_id, &(instruction_metadata)));
     let instruction_outcome = runtime
         .apply_inbound_lifecycle_message(&instruction_id, "sese.023", &instruction)
         .expect("record BAH-wrapped sese.023 fixture");
@@ -405,7 +405,7 @@ fn checked_in_securities_fixtures_validate_and_link_through_torii_profile() {
         status_advice_metadata.business_message_id(),
         Some("SEC-STADV-BAH-1")
     );
-    assert!(runtime.check_and_record_inbound(&status_advice_id, status_advice_metadata));
+    assert!(runtime.check_and_record_inbound(&status_advice_id, &(status_advice_metadata)));
     let status_advice_outcome = runtime
         .apply_inbound_lifecycle_message(&status_advice_id, "sese.024", &status_advice)
         .expect("apply BAH-wrapped sese.024 fixture");
@@ -477,10 +477,10 @@ fn checked_in_securities_fixtures_validate_and_link_through_torii_profile() {
     assert_eq!(confirmed_instruction_id, "sese.023:PVP-FIXTURE-1");
     assert!(
         runtime
-            .check_and_record_inbound(&confirmed_instruction_id, confirmed_instruction_metadata,)
+            .check_and_record_inbound(&confirmed_instruction_id, &(confirmed_instruction_metadata),)
     );
     assert!(runtime.mark_queued(&confirmed_instruction_id));
-    assert!(runtime.check_and_record_inbound(&confirmation_id, confirmation_metadata));
+    assert!(runtime.check_and_record_inbound(&confirmation_id, &(confirmation_metadata)));
     let confirmation_outcome = runtime
         .apply_inbound_lifecycle_message(&confirmation_id, "sese.025", &confirmation)
         .expect("apply BAH-wrapped sese.025 fixture");

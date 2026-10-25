@@ -331,7 +331,7 @@ impl ZkX509MainCompositionPhaseV1<'_> {
                 MainProjectionProverConstraintSourceV1::for_main_v1(
                     &self.layout,
                     self.statement,
-                    post_base,
+                    &post_base,
                 )?,
             ),
             MainProverConstraintProviderV1::Log16(
@@ -341,7 +341,7 @@ impl ZkX509MainCompositionPhaseV1<'_> {
                 &self.layout,
                 self.statement,
                 &self.assembly.io,
-                post_base,
+                &post_base,
             )?),
             MainProverConstraintProviderV1::Log19(MainLog19ProverConstraintSourceV1::for_main_v1(
                 &self.layout,
@@ -506,7 +506,7 @@ impl<'a> ZkX509MainAwaitingCredentialBindingV1<'a> {
     /// claims, and sample the complete per-registration alpha schedule.
     pub(crate) fn bind_credential_pre_aux_v1_with_rng<R: TryRngCore>(
         self,
-        binding: ZkX509CredentialPreAuxBindingV1,
+        binding: &ZkX509CredentialPreAuxBindingV1,
         rng: &mut R,
     ) -> Result<ZkX509MainCompositionPhaseV1<'a>, ZkX509StarkErrorV1> {
         let proof_instance = self.pre_aux.proof_instance_v1();
@@ -541,8 +541,8 @@ impl<'a> ZkX509MainAwaitingCredentialBindingV1<'a> {
         let post_base = binding.main_post_base();
         #[cfg(test)]
         let source_timer = PhaseTimerV1::start_v1(PhaseV1::BoundSources);
-        projection.bind_challenges_v1(post_base)?;
-        io.bind_challenges_v1(post_base)?;
+        projection.bind_challenges_v1(&post_base)?;
+        io.bind_challenges_v1(&post_base)?;
         let log19 = MainLog19BoundTraceGroupSourceV1::bind_from_phase_v1(
             &layout, assembly, sha, p256, binding,
         )?;
@@ -611,7 +611,7 @@ impl<'a> ZkX509MainAwaitingCredentialBindingV1<'a> {
             alphas,
             transcript,
             composition_transcript_state,
-            binding,
+            binding: *binding,
         };
         phase.validate_v1()?;
         Ok(phase)
@@ -630,7 +630,7 @@ impl ZkX509MainCompositionPhaseV1<'_> {
         fri_mask_roots: Vec<PrivacyOuterDigestV1>,
         deep: aggregate::AggregateDeepProofV1,
         deep_point: E,
-        key_openings: [E; main_key_joins::OPENINGS_V1],
+        key_openings: &[E; main_key_joins::OPENINGS_V1],
         key_mixes: Vec<E>,
         mixes: Vec<Vec<FriMixV1>>,
         ca: Option<main_joint::MainCaDeepContributionV1<'_>>,
@@ -662,7 +662,7 @@ impl ZkX509MainCompositionPhaseV1<'_> {
                 &canonical_deep_traces,
                 &canonical_deep_compositions,
                 &self.key_plan,
-                &key_openings,
+                key_openings,
                 &key_mixes,
                 key_policy,
                 ca,
@@ -770,8 +770,12 @@ impl ZkX509MainCompositionPhaseV1<'_> {
         {
             return Err(ZkX509StarkErrorV1::InternalInvariant);
         }
-        trace_group.base_frontier = base_openings.commitment.frontier.clone();
-        trace_group.aux_frontier = aux_openings.commitment.frontier.clone();
+        trace_group
+            .base_frontier
+            .clone_from(&base_openings.commitment.frontier);
+        trace_group
+            .aux_frontier
+            .clone_from(&aux_openings.commitment.frontier);
         let composition_opening_indices =
             aggregate::composition_opening_indices_v1(&query_skeleton, &shared_layout)
                 .map_err(map_aggregate_error_v1)?;
@@ -913,7 +917,10 @@ impl ZkX509MainCompositionPhaseV1<'_> {
             deep,
         };
         let aggregate_bytes = encode_zk_x509_segmented_stark_proof_v1(&proof, &self.layout)?;
-        encode_zk_x509_main_proof_envelope_v1(&key_openings, &aggregate_bytes)
+        let encoded = encode_zk_x509_main_proof_envelope_v1(key_openings, &aggregate_bytes);
+        // The consumed replay and mask owners remain resident through encoding.
+        drop((composition_material, fri_masks, key_mixes, mixes));
+        encoded
     }
 }
 /// Exact six-provider registry for the verifier-owned full MAIN layout.
@@ -1454,6 +1461,7 @@ fn main_registration_composition_coefficient_chunks_v1(
     bounded_transform: main_bounded_transform::MainBoundedTransformPolicyV1,
     joint_buffers: Option<&main_ca_resources::MainCaJointBufferPlanV1>,
 ) -> Result<Vec<Vec<Vec<E>>>, ZkX509StarkErrorV1> {
+    const QUOTIENT_ROWS_PER_TASK_V1: usize = 1 << 12;
     #[cfg(test)]
     let registration_timer = PhaseTimerV1::start_v1(PhaseV1::CompositionRegistration);
     let registration = fixed.registration;
@@ -1592,7 +1600,7 @@ fn main_registration_composition_coefficient_chunks_v1(
         // Each task owns disjoint windows of the canonical full quotient. Only
         // this stripe's interleaved entries are written, so the original IFFT
         // sees exactly its original domain ordering after every stripe.
-        const QUOTIENT_ROWS_PER_TASK_V1: usize = 1 << 12;
+
         let task_entries = stripe
             .count
             .checked_mul(QUOTIENT_ROWS_PER_TASK_V1)
@@ -1711,18 +1719,16 @@ pub(super) fn add_main_composition_coefficient_chunks_v1(
         for chunk in 0..COMPOSITION_DEGREE_CHUNKS {
             let source_len = contribution[lane][chunk].len();
             let target = &mut accumulator[lane][chunk];
-            if target.len() < source_len {
-                if target.capacity() < source_len {
-                    let mut replacement = ZeroizingExtensionColumnV1(Vec::new());
-                    replacement
-                        .0
-                        .try_reserve_exact(source_len)
-                        .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
-                    replacement.0.extend_from_slice(target);
-                    // The guard now owns the displaced initialized allocation.
-                    // Its Drop clears it before the next replacement is built.
-                    core::mem::swap(target, &mut replacement.0);
-                }
+            if target.len() < source_len && target.capacity() < source_len {
+                let mut replacement = ZeroizingExtensionColumnV1(Vec::new());
+                replacement
+                    .0
+                    .try_reserve_exact(source_len)
+                    .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
+                replacement.0.extend_from_slice(target);
+                // The guard now owns the displaced initialized allocation.
+                // Its Drop clears it before the next replacement is built.
+                core::mem::swap(target, &mut replacement.0);
             }
         }
     }
@@ -2443,7 +2449,7 @@ pub(super) fn main_opened_composition_value_v1(
         .map_err(map_transparent_error_v1)?;
     let x = F(GOLDILOCKS_GENERATOR_V1).mul(lde_root.pow(query_index as u128));
     let mut composition = E::ZERO;
-    for registration_index in 0..providers.layout.registered_segments.len() {
+    for (registration_index, registration_alphas) in alphas.iter().enumerate() {
         let registration = providers.layout.registered_segments[registration_index];
         let opening = registered_opened_rows_v1(&providers.layout, registration, trace_groups)
             .map_err(map_aggregate_error_v1)?;
@@ -2473,7 +2479,7 @@ pub(super) fn main_opened_composition_value_v1(
             registration.segment,
             x,
             &residues,
-            &alphas[registration_index][lane],
+            &registration_alphas[lane],
         )?);
     }
     composition =
@@ -2648,7 +2654,7 @@ impl aggregate::AggregateOpenedRowEvaluatorV1 for DerOpenedRowEvaluatorV1<'_> {
             opening.aux_next,
             fixed,
             next_fixed,
-            self.challenges,
+            &self.challenges,
             self.public,
             self.claims,
             alphas,
@@ -2710,13 +2716,10 @@ impl aggregate::AggregateOpenedRowEvaluatorV1 for IoOpenedRowEvaluatorV1<'_> {
             .map_err(|_| AggregateStarkErrorV1::ConstraintOpening)?;
         let x = F(GOLDILOCKS_GENERATOR_V1).mul(self.lde_root.pow(query_index as u128));
         let composition = quotient_value_v1(
-            self.layout,
-            self.logical_active_rows,
+            (self.layout, self.logical_active_rows),
             x,
-            opening.base_current,
-            opening.base_next,
-            opening.aux_current,
-            opening.aux_next,
+            (opening.base_current, opening.base_next),
+            (opening.aux_current, opening.aux_next),
             &fixed,
             self.io_challenges,
             alphas,
@@ -2772,7 +2775,7 @@ fn p256_arithmetic_opened_residues_over_field_v1<A: PolynomialAirFieldV1>(
     registration: RegisteredSegmentLayoutV1,
     opening: RegisteredOpenedRowsV1<'_, A>,
     fixed: &[A],
-    challenges: P256AggregateChallengesV1,
+    challenges: &P256AggregateChallengesV1,
 ) -> Result<Vec<A>, ZkX509StarkErrorV1> {
     let identity = p256_main_registration_from_main_layout_v1(registration)?;
     if identity.adapter_v1() != P256MainAdapterV1::Arithmetic
@@ -2813,7 +2816,7 @@ fn p256_binding_sink_opened_residues_over_field_v1<A: PolynomialAirFieldV1>(
     registration: RegisteredSegmentLayoutV1,
     opening: RegisteredOpenedRowsV1<'_, A>,
     fixed: &[A],
-    challenges: P256AggregateChallengesV1,
+    challenges: &P256AggregateChallengesV1,
 ) -> Result<Vec<A>, ZkX509StarkErrorV1> {
     let identity = p256_main_registration_from_main_layout_v1(registration)?;
     if identity.adapter_v1() != P256MainAdapterV1::BindingSink
@@ -2930,7 +2933,7 @@ fn p256_comparison_opened_residues_v1<A: PolynomialAirFieldV1>(
     registration: RegisteredSegmentLayoutV1,
     opening: RegisteredOpenedRowsV1<'_, A>,
     fixed: &[A],
-    challenges: P256AggregateChallengesV1,
+    challenges: &P256AggregateChallengesV1,
 ) -> Result<Vec<A>, ZkX509StarkErrorV1> {
     let identity = p256_main_registration_from_main_layout_v1(registration)?;
     let local_instance = identity.local_instance_v1();
@@ -2971,16 +2974,15 @@ fn p256_comparison_opened_residues_v1<A: PolynomialAirFieldV1>(
             let fixed: &[A; P256_REDUCTION_AGGREGATE_FIXED_WIDTH_V1] = fixed
                 .try_into()
                 .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            let residues = super::super::p256_aggregate_adapter::evaluate_p256_reduction_aggregate_local_residues_over_field_v1(
+
+            super::super::p256_aggregate_adapter::evaluate_p256_reduction_aggregate_local_residues_over_field_v1(
                 current,
                 next,
                 current_aux,
                 next_aux,
                 fixed,
                 challenges.cross,
-            )?;
-
-            residues
+            )?
         }
         (SegmentAdapterIdV1::P256LowS, 0) => {
             let current: &[A; P256_LOW_S_BASE_WIDTH_V1] = opening
@@ -3002,16 +3004,15 @@ fn p256_comparison_opened_residues_v1<A: PolynomialAirFieldV1>(
             let fixed: &[A; P256_LOW_S_AGGREGATE_FIXED_WIDTH_V1] = fixed
                 .try_into()
                 .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            let residues = super::super::p256_aggregate_adapter::evaluate_p256_low_s_aggregate_local_residues_over_field_v1(
+
+            super::super::p256_aggregate_adapter::evaluate_p256_low_s_aggregate_local_residues_over_field_v1(
                 current,
                 next,
                 current_aux,
                 next_aux,
                 fixed,
                 challenges.cross,
-            )?;
-
-            residues
+            )?
         }
         _ => return Err(ZkX509StarkErrorV1::ProfileMismatch),
     };
@@ -3024,7 +3025,7 @@ fn p256_window_opened_residues_over_field_v1<A: PolynomialAirFieldV1>(
     registration: RegisteredSegmentLayoutV1,
     opening: RegisteredOpenedRowsV1<'_, A>,
     fixed: &[A],
-    challenges: P256AggregateChallengesV1,
+    challenges: &P256AggregateChallengesV1,
 ) -> Result<Vec<A>, ZkX509StarkErrorV1> {
     registration.segment.validate()?;
     p256_main_registration_from_main_layout_v1(registration)?;
@@ -3075,7 +3076,7 @@ fn p256_value_opened_residues_over_field_v1<A: PolynomialAirFieldV1>(
     registration: RegisteredSegmentLayoutV1,
     opening: RegisteredOpenedRowsV1<'_, A>,
     fixed: &[A],
-    challenges: P256AggregateChallengesV1,
+    challenges: &P256AggregateChallengesV1,
 ) -> Result<Vec<A>, ZkX509StarkErrorV1> {
     registration.segment.validate()?;
     p256_main_registration_from_main_layout_v1(registration)?;
@@ -3103,20 +3104,19 @@ fn p256_value_opened_residues_over_field_v1<A: PolynomialAirFieldV1>(
             let fixed: &[A; P256_VALUE_EXECUTION_AGGREGATE_FIXED_WIDTH_V1] = fixed
                 .try_into()
                 .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            let residues = super::super::p256_aggregate_adapter::evaluate_p256_value_execution_aggregate_residues_over_field_v1(
+
+            super::super::p256_aggregate_adapter::evaluate_p256_value_execution_aggregate_residues_over_field_v1(
                 current,
                 next,
                 current_aux,
                 next_aux,
                 fixed,
-                P256ValueExecutionAggregateChallengesV1 {
+                &P256ValueExecutionAggregateChallengesV1 {
                     value: challenges.value,
                     cross: challenges.cross,
                     arithmetic_copy: challenges.arithmetic_copy,
                 },
-            )?;
-
-            residues
+            )?
         }
         (SegmentAdapterIdV1::P256ValueBus, 1) => {
             let current: &[A; P256_VALUE_BUS_STARK_BASE_WIDTH_V1] = opening
@@ -3138,18 +3138,16 @@ fn p256_value_opened_residues_over_field_v1<A: PolynomialAirFieldV1>(
             let fixed: &[A; P256_VALUE_BUS_STARK_FIXED_WIDTH_V1] = fixed
                 .try_into()
                 .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            let residues =
-                super::super::p256_value_bus::evaluate_p256_value_bus_stark_residues_over_field_v1(
-                    current,
-                    next,
-                    current_aux,
-                    next_aux,
-                    fixed,
-                    challenges.value,
-                )
-                .map_err(|_| ZkX509StarkErrorV1::P256Witness)?;
 
-            residues
+            super::super::p256_value_bus::evaluate_p256_value_bus_stark_residues_over_field_v1(
+                current,
+                next,
+                current_aux,
+                next_aux,
+                fixed,
+                challenges.value,
+            )
+            .map_err(|_| ZkX509StarkErrorV1::P256Witness)?
         }
         _ => return Err(ZkX509StarkErrorV1::ProfileMismatch),
     };
@@ -3206,7 +3204,7 @@ impl MainFp4AirEvaluatorV1 {
             SegmentAdapterIdV1::P256ValueBus
                 if matches!(
                     p256_instance_parts_v1(registration.segment.instance),
-                    Some((_, 0 | 1 | 2))
+                    Some((_, 0..=2))
                 ) =>
             {
                 p256_main_registration_from_main_layout_v1(registration)?;
@@ -3249,7 +3247,7 @@ impl DerMainFp4AirEvaluatorV1 {
         opening: RegisteredOpenedRowsV1<'_, E>,
         fixed: &[E],
         next_fixed: &[E],
-        context: DerMainFp4AirContextV1,
+        context: &DerMainFp4AirContextV1,
     ) -> Result<Vec<E>, ZkX509StarkErrorV1> {
         let residues = super::super::der_stark::evaluate_zk_x509_der_stark_local_residues_v1(
             opening
@@ -3297,7 +3295,7 @@ impl RfcMainFp4AirEvaluatorV1 {
         self,
         opening: RegisteredOpenedRowsV1<'_, E>,
         fixed: &[E],
-        context: RfcMainFp4AirContextV1,
+        context: &RfcMainFp4AirContextV1,
     ) -> Result<Vec<E>, ZkX509StarkErrorV1> {
         let residues = evaluate_zk_x509_rfc5280_local_residues_v1(
             opening
@@ -3319,7 +3317,7 @@ impl RfcMainFp4AirEvaluatorV1 {
             fixed
                 .try_into()
                 .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
-            context.der,
+            &context.der,
             &context.rfc,
         )
         .map_err(|_| ZkX509StarkErrorV1::ConstraintOpening)?;
@@ -3348,10 +3346,8 @@ impl ByteMemoryMainFp4AirEvaluatorV1 {
         io_constraint_residues_v1(
             self.registration.segment,
             logical_active_rows,
-            opening.base_current,
-            opening.base_next,
-            opening.aux_current,
-            opening.aux_next,
+            (opening.base_current, opening.base_next),
+            (opening.aux_current, opening.aux_next),
             fixed,
             challenges,
         )
@@ -3387,7 +3383,7 @@ impl P256MainFp4AirEvaluatorV1 {
         self,
         opening: RegisteredOpenedRowsV1<'_, E>,
         fixed: &[E],
-        challenges: P256AggregateChallengesV1,
+        challenges: &P256AggregateChallengesV1,
     ) -> Result<Vec<E>, ZkX509StarkErrorV1> {
         match self.registration.segment.adapter {
             SegmentAdapterIdV1::P256ScalarBitBus => p256_scalar_opened_residues_over_field_v1(
@@ -3450,7 +3446,7 @@ impl ShaMainFp4AirEvaluatorV1 {
         self,
         current: &ZkX509ShaBatchRowV1<E>,
         next: &ZkX509ShaBatchRowV1<E>,
-        context: ShaMainFp4AirContextV1,
+        context: &ShaMainFp4AirContextV1,
     ) -> Result<Vec<E>, ZkX509StarkErrorV1> {
         if self.registration.segment.instance != u16::from(context.segment) {
             return Err(ZkX509StarkErrorV1::ProfileMismatch);
@@ -3476,7 +3472,7 @@ pub(super) fn p256_opened_residues_v1(
     registration: RegisteredSegmentLayoutV1,
     opening: RegisteredOpenedRowsV1<'_>,
     fixed: &[F],
-    challenges: P256AggregateChallengesV1,
+    challenges: &P256AggregateChallengesV1,
 ) -> Result<Vec<F>, ZkX509StarkErrorV1> {
     let (_, local_instance) = p256_instance_parts_v1(registration.segment.instance)
         .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?;
@@ -3551,7 +3547,7 @@ impl aggregate::AggregateOpenedRowEvaluatorV1 for P256OpenedRowEvaluatorV1<'_> {
             let alphas = self.alphas[registration_index]
                 .get(lane)
                 .ok_or(AggregateStarkErrorV1::ConstraintOpening)?;
-            let residues = p256_opened_residues_v1(registration, opening, fixed, self.challenges)
+            let residues = p256_opened_residues_v1(registration, opening, fixed, &self.challenges)
                 .map_err(|_| AggregateStarkErrorV1::ConstraintOpening)?;
             let local_composition =
                 accumulator_quotient_value_v1(registration.segment, x, &residues, alphas)

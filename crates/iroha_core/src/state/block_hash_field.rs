@@ -67,7 +67,9 @@ impl<'a> BlockHashField<'a> {
             attempted: false,
             released: false,
             retry_metadata: None,
-            retry_readers: target.map().map(|map| map.reader_release_batch()),
+            retry_readers: target
+                .map()
+                .map(concread::bptree::BptreeMap::reader_release_batch),
             retry_writers: target.released.deferred_batch(),
         }
     }
@@ -154,7 +156,9 @@ impl<'a> BlockHashField<'a> {
         };
         // Native validation checks only poison and pointer identity, then makes
         // inert moves. It neither allocates nor invokes cursor/user code.
-        let writer = match acquired.try_map_preserving_release(|a| a.validate()) {
+        let writer = match acquired
+            .try_map_preserving_release(concread::bptree::BptreeMapOwnedAcquisition::validate)
+        {
             Ok(writer) => writer,
             Err((acquired, error)) => {
                 self.phase = Some(Phase::Acquired(acquired));
@@ -162,7 +166,7 @@ impl<'a> BlockHashField<'a> {
             }
         };
         self.phase = Some(Phase::Preparing(
-            writer.map_preserving_release(|w| w.commit_slot()),
+            writer.map_preserving_release(concread::bptree::BptreeMapWriteTxn::commit_slot),
         ));
         let Some(Phase::Preparing(slot)) = self.phase.as_mut() else {
             unreachable!()
@@ -185,7 +189,8 @@ impl<'a> BlockHashField<'a> {
         let block = match phase {
             Phase::Executing(block) => block,
             Phase::Acquired(acquired) => {
-                let (work, notice) = acquired.release_deferred(|owner| owner.abort());
+                let (work, notice) =
+                    acquired.release_deferred(concread::bptree::BptreeMapOwnedAcquisition::abort);
                 assert!(
                     notice.try_merge_into(&mut self.retry_writers).is_ok(),
                     "original hash writer source"
@@ -239,7 +244,9 @@ impl<'a> BlockHashField<'a> {
         self.executing();
         let readers = std::mem::replace(
             &mut self.retry_readers,
-            self.target.map().map(|map| map.reader_release_batch()),
+            self.target
+                .map()
+                .map(concread::bptree::BptreeMap::reader_release_batch),
         );
         let writers = std::mem::replace(
             &mut self.retry_writers,
@@ -314,7 +321,8 @@ impl mv::BlockRetirement for BlockHashField<'_> {
         self.released = true;
         self.phase = match self.phase.take() {
             Some(Phase::Acquired(acquired)) => {
-                let (work, writer) = acquired.release_deferred(|a| a.abort());
+                let (work, writer) =
+                    acquired.release_deferred(concread::bptree::BptreeMapOwnedAcquisition::abort);
                 Some(Phase::Rejected {
                     _work: work,
                     _writer: writer,
@@ -332,7 +340,8 @@ impl mv::BlockRetirement for BlockHashField<'_> {
                 })
             }
             Some(Phase::Published(published)) => {
-                let (work, writer) = published.release_deferred(|p| p.release());
+                let (work, writer) =
+                    published.release_deferred(concread::bptree::BptreeMapPublished::release);
                 Some(Phase::Retired {
                     _work: work,
                     _writer: writer,

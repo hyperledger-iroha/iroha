@@ -179,10 +179,10 @@ pub fn validate_parameter_change(
 
 /// The validators signed into genesis: every `RegisterPeerWithPop` of the genesis body with its
 /// exact proof of possession, which is verified here (`specs/sumeragi.md` §10.3: a key enters
-/// the schedule only with a valid PoP). Lane-committee registrations are not validators.
+/// the schedule only with a valid `PoP`). Lane-committee registrations are not validators.
 ///
 /// # Errors
-/// A non-instruction transaction, a non-BLS-normal key, an invalid PoP or a duplicate.
+/// A non-instruction transaction, a non-BLS-normal key, an invalid `PoP` or a duplicate.
 pub fn genesis_validators(
     genesis: &GenesisBlock,
 ) -> Result<BTreeMap<PeerId, Vec<u8>>, GenesisCommitteeError> {

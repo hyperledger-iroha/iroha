@@ -14,6 +14,8 @@ use super::{
     ForgeryVerificationError, Observation, VerificationControl, original_source, store,
     verify_observation,
 };
+#[cfg(test)]
+use crate::state::WorldReadOnly;
 use crate::{
     state::{
         EvidencePreparationError, StateReadOnly, StateStorageAdmissionError, StateTransaction,
@@ -40,7 +42,7 @@ use iroha_data_model::sccp::events::SccpEvent;
     variant_size_differences,
     reason = "retain original inline resource/refusal owners without a new allocation"
 )]
-pub(crate) enum ForgeryExecutionError {
+pub enum ForgeryExecutionError {
     /// Recomputed exact parent relation, never an ingress admission receipt.
     #[error(transparent)]
     Verification(#[from] ForgeryVerificationError),
@@ -58,7 +60,7 @@ pub(crate) enum ForgeryExecutionError {
 /// Local preparation retains either the existing storage owner or a move-only
 /// execution refusal. Neither form is a deterministic verdict on signed evidence.
 #[derive(Debug)]
-pub(crate) enum ForgeryLocalRefusal {
+pub enum ForgeryLocalRefusal {
     /// Original State storage or finite evidence-pool refusal.
     Storage(StateStorageAdmissionError),
     /// Original physical pairing allocator cause, moved without diagnostic copying.
@@ -170,7 +172,7 @@ struct PreparedExecution {
 /// This function cannot be substituted for the sole-signed direct entrypoint binding.
 /// Penalties consume Pending later under their immutable delay; L3 and holds become
 /// visible immediately through the same committed record/offence/max transaction.
-pub(crate) fn execute_forgery(
+pub fn execute_forgery(
     evidence: &SubmitSccpForgeryEvidenceV1,
     stx: &mut StateTransaction<'_, '_>,
 ) -> Result<(), ForgeryExecutionError> {

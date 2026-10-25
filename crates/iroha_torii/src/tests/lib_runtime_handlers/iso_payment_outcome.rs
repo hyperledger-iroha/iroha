@@ -115,7 +115,7 @@ impl IsoPaymentOutcomeFixture {
         while chain.height() < history_height {
             chain.commit(Vec::new());
         }
-        let mut app = mk_app_state_for_tests_with_iso_bridge(Some(config.clone()));
+        let mut app = mk_app_state_for_tests_with_iso_bridge(Some(&config));
         let unique = Arc::get_mut(&mut app).expect("unique fixture app");
         unique.state = chain.state().clone();
         unique.kura = chain.kura().clone();
@@ -143,7 +143,7 @@ impl IsoPaymentOutcomeFixture {
             )
             .expect("original payment profile");
         runtime
-            .admit_authenticated_inbound("outcome-payment", metadata, parties)
+            .admit_authenticated_inbound("outcome-payment", &(metadata), parties)
             .expect("durable original payment");
         let (mut payload, context) = {
             let world = app.state.world_view();
@@ -718,7 +718,7 @@ impl IsoPaymentOutcomeFixture {
         let store = tempfile::tempdir().unwrap();
         let mut config = self.config.clone();
         config.store_dir = Some(store.path().to_owned());
-        let mut app = mk_app_state_for_tests_with_iso_bridge(Some(config.clone()));
+        let mut app = mk_app_state_for_tests_with_iso_bridge(Some(&config));
         let unique = Arc::get_mut(&mut app).unwrap();
         unique.state = self.chain.state().clone();
         unique.kura = self.chain.kura().clone();
@@ -745,7 +745,7 @@ impl IsoPaymentOutcomeFixture {
             )
             .unwrap();
         runtime
-            .admit_authenticated_inbound("other-gateway-payment", metadata, parties)
+            .admit_authenticated_inbound("other-gateway-payment", &(metadata), parties)
             .unwrap();
         let (mut payload, context) = runtime
             .build_pacs008_payload(
@@ -911,6 +911,7 @@ fn iso_native_business_locator_refuses_absent_and_private_root_authority() {
             .remove_custom_parameter(
                 &iroha_data_model::parameter::system::consensus_metadata::handshake_meta_id()
             )
+            .expect("remove fixture root metadata")
             .is_some(),
         "remove the Global root metadata seeded by the general test app helper"
     );

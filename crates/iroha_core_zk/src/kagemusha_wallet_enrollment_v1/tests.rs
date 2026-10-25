@@ -616,12 +616,12 @@ fn enrollment_failed_native_handoff_preserves_exact_private_selection_and_e5() {
 
 fn resign_permit(
     f: &Fixture,
-    body: KagemushaEnrollmentPermitBodyV1,
+    body: &KagemushaEnrollmentPermitBodyV1,
 ) -> KagemushaEnrollmentPermitV1 {
     use p256::ecdsa::{Signature as P256Signature, signature::Signer as _};
     let signature: P256Signature = signing_key(79).sign(&body.signing_message().unwrap());
     KagemushaEnrollmentPermitV1::from_issuer_der(
-        body,
+        *body,
         &f.config.scheme,
         &f.config.enrollment_certificate,
         signature.to_der().as_bytes(),
@@ -853,7 +853,7 @@ fn prekey_permit_rejects_wrong_scope_nonce_attempt_and_consumes_failed_dispatch(
             6 => body.actor_digest[0] ^= 1,
             _ => body.originals_digest[0] ^= 1,
         }
-        let wrong = resign_permit(&f, body).encode_canonical().unwrap();
+        let wrong = resign_permit(&f, &body).encode_canonical().unwrap();
         assert!(owner.accept_permit(&wrong).is_err());
         assert!(
             owner
@@ -870,7 +870,7 @@ fn prekey_permit_rejects_wrong_scope_nonce_attempt_and_consumes_failed_dispatch(
     wrong.attempt_id[0] ^= 1;
     assert!(
         owner
-            .accept_permit(&resign_permit(&f, wrong).encode_canonical().unwrap())
+            .accept_permit(&resign_permit(&f, &wrong).encode_canonical().unwrap())
             .is_err()
     );
     d.platform.with(|state| assert_eq!(state.generate_calls, 0));
@@ -924,7 +924,7 @@ fn prekey_clock_deadline_is_checked_again_after_account_authorization() {
         let f = fixture();
         let d = DeviceV1::new(
             KagemushaWalletAnchorPolicyV1::NotRequired,
-            107 + index as u8,
+            107 + u8::try_from(index).unwrap(),
         );
         let mut owner = owner(&f, &d);
         let message = begin(&f, &mut owner);
@@ -2780,7 +2780,7 @@ fn shortened_signed_permit_still_requires_live_session_and_immediate_key_effect(
         f.config.session_expires_at_ms = session_expires;
         let d = DeviceV1::new(
             KagemushaWalletAnchorPolicyV1::NotRequired,
-            181 + index as u8,
+            181 + u8::try_from(index).unwrap(),
         );
         d.platform.with(|s| {
             s.generation_policy = KagemushaWalletKeyGenerationPolicyV1::FreshEnrollmentOnly
@@ -2789,14 +2789,14 @@ fn shortened_signed_permit_still_requires_live_session_and_immediate_key_effect(
         let selected = dispatch(&f, &mut current);
         let mut body = permit(&f, &selected).body;
         body.expires_at_ms = 2010;
-        let signed = resign_permit(&f, body).encode_canonical().unwrap();
+        let signed = resign_permit(&f, &body).encode_canonical().unwrap();
         let message = current.accept_permit(&signed).unwrap();
         d.platform.with(|s| {
             s.monotonic_script = [Ok(1000), Ok(1000), Ok(1000), Ok(1000), Ok(effect_time)].into()
         });
         assert_eq!(current.authorize(&sign(&f, &message)).is_ok(), succeeds);
         d.platform
-            .with(|s| assert_eq!(s.generate_calls, if succeeds { 1 } else { 0 }));
+            .with(|s| assert_eq!(s.generate_calls, usize::from(succeeds)));
         assert_eq!(current.into_provider().slots().unwrap().len(), 1);
     }
 }
@@ -2812,7 +2812,7 @@ fn shortened_signed_permit_never_accepts_a_foreign_session_observation() {
     body.expires_at_ms = 2010;
     assert!(
         current
-            .accept_permit(&resign_permit(&f, body).encode_canonical().unwrap())
+            .accept_permit(&resign_permit(&f, &body).encode_canonical().unwrap())
             .is_err()
     );
     d.platform.with(|s| assert_eq!(s.generate_calls, 0));
@@ -3256,7 +3256,7 @@ fn session_renewal_reauthenticates_same_attempt_without_extending_its_permit_dat
     assert!(current.authorize(&sign(&f, &message)).is_err());
     let mut renewed = f.config.clone();
     renewed.session_expires_at_ms = 600_000;
-    current.renew_session(renewed).unwrap();
+    current.renew_session(&renewed).unwrap();
     assert!(matches!(
         current.authorize(&sign(&f, &message)),
         Err(Error::Phase)
@@ -3316,7 +3316,7 @@ fn session_renewal_rejects_every_changed_immutable_selection_without_consuming_c
         let message = begin(&f, &mut current);
         let mut candidate = f.config.clone();
         change(&mut candidate);
-        assert!(current.renew_session(candidate).is_err());
+        assert!(current.renew_session(&candidate).is_err());
         assert!(matches!(
             current.authorize(&sign(&f, &message)).unwrap(),
             EnrollmentProgressV1::Evidence { .. }
@@ -3347,7 +3347,7 @@ fn session_renewal_keeps_actual_generated_custody_across_storage_and_readback_fa
         });
         let mut renewed = f.config.clone();
         renewed.session_expires_at_ms += 1000;
-        current.renew_session(renewed).unwrap();
+        current.renew_session(&renewed).unwrap();
         d.platform.clear_faults();
         d.platform.with(|s| {
             s.generation_readback_unavailable = false;
@@ -3389,9 +3389,9 @@ fn session_renewal_flushes_apple_returns_and_requires_new_live_authorization() {
     assert!(current.retain_apple_effect(1, &actual_return).is_err());
     d.fs.clear_faults();
     d.fs.inject(d.fs.steps(), KagemushaWalletSimFaultV1::Error);
-    assert!(current.renew_session(f.config.clone()).is_err());
+    assert!(current.renew_session(&f.config).is_err());
     d.fs.clear_faults();
-    current.renew_session(f.config.clone()).unwrap();
+    current.renew_session(&f.config).unwrap();
     assert_eq!(
         current.apple_collection_originals().unwrap()[0],
         actual_return
@@ -3418,14 +3418,14 @@ fn session_renewal_preserves_exact_retained_e5_and_e6() {
     let d = DeviceV1::new(KagemushaWalletAnchorPolicyV1::NotRequired, 209);
     let mut current = enrolled(&f, &d);
     let e5 = request(&f, &mut current);
-    current.renew_session(f.config.clone()).unwrap();
+    current.renew_session(&f.config).unwrap();
     dispatch(&f, &mut current);
     assert_eq!(current.retained_request().unwrap(), Some(e5.clone()));
     let e6 = issuer_result(&f, &RequestV1::decode(&e5).unwrap())
         .encode()
         .unwrap();
     current.accept_credential(&e6).unwrap();
-    current.renew_session(f.config.clone()).unwrap();
+    current.renew_session(&f.config).unwrap();
     dispatch(&f, &mut current);
     assert_eq!(current.retained_request().unwrap(), Some(e5));
     assert_eq!(current.retained_result().unwrap(), Some(e6));

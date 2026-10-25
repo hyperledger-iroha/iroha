@@ -34,8 +34,16 @@ pub(super) fn witness(left: u64, right: u64, gas: u64) -> ([F; absolute::WIDTH],
 /// Candidate signed-MEAN result; both callers constrain the original source bits.
 pub(in super::super) fn result_witness(left: u64, right: u64) -> [F; WIDTH] {
     let sum = i128::from(u64::cast_signed(left)) + i128::from(u64::cast_signed(right));
-    let result = (sum / 2) as u64;
-    let floor = (sum >> 1) as u64;
+    let result = u64::from_le_bytes(
+        i128::to_le_bytes(sum / 2)[..8]
+            .try_into()
+            .expect("low-byte width"),
+    );
+    let floor = u64::from_le_bytes(
+        i128::to_le_bytes(sum >> 1)[..8]
+            .try_into()
+            .expect("low-byte width"),
+    );
     let low_sum = left.wrapping_add(right);
     let mut incoming = u64::from(sum < 0 && low_sum & 1 != 0);
     let mut bank = [F::ZERO; absolute::WIDTH];
@@ -56,9 +64,7 @@ pub(super) fn append_residues(
     sum: &[F],
     sources: Sources<'_>,
     gas_digits: &[F],
-    active: F,
-    out_of_gas: F,
-    assertion_failed: F,
+    (active, out_of_gas, assertion_failed): (F, F, F),
 ) {
     let initial = out.len();
     append_arithmetic_residues(out, bank, sum, sources, active);

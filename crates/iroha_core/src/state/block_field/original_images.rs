@@ -3,7 +3,7 @@
 //! This is the source boundary for bounded canonical encoding, not an encoder,
 //! complete-State root or another publisher. Exhaustive table/cell traversal,
 //! original-pool encoding/node admission and durable publication remain separate.
-//! TODO: join exhaustive funded table/cell encoding to the existing StatePublication
+//! TODO: join exhaustive funded table/cell encoding to the existing `StatePublication`
 //! owner before constructing or publishing any complete-State root.
 
 use super::*;

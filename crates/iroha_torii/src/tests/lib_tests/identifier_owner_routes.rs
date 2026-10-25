@@ -19,7 +19,7 @@ mod identifier_owner_routes {
             compiled_route_features(),
         )
         .expect("compute descriptors");
-        add_authenticated_application_compute_routes(&mut builder, app.clone(), limit);
+        add_authenticated_application_compute_routes(&mut builder, &(app), limit);
         let (router, _) = builder
             .finish()
             .expect("production authentication policies");

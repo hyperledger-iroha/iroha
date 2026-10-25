@@ -1,4 +1,4 @@
-/// Neither direct nor role grants may substitute a PoP permission's payload.
+/// Neither direct nor role grants may substitute a `PoP` permission's payload.
 #[test]
 fn pop_permission_tokens_require_canonical_direct_and_role_grants() {
     use iroha_data_model::prelude::{Role, RoleId};

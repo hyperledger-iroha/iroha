@@ -96,7 +96,10 @@ mod tests {
             }
         }
         fn byte(index: usize) -> u8 {
-            (index as u8).wrapping_mul(73).wrapping_add(11)
+            u8::try_from(index)
+                .expect("proof digest index fits u8")
+                .wrapping_mul(73)
+                .wrapping_add(11)
         }
     }
     impl TryRngCore for RecordingRng {

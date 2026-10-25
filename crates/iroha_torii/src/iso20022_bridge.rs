@@ -1088,7 +1088,7 @@ impl IsoDurableStoreUsage {
         let entries = self.entries(kind);
         let previous_bytes = entries.get(message_id).copied().unwrap_or(0);
         let is_new = !entries.contains_key(message_id);
-        let new_entries = if is_new { 1 } else { 0 };
+        let new_entries = u64::from(is_new);
         let directory_entries = u64::try_from(entries.len())
             .map_err(|_| IsoDurableStoreUsageError::Accounting)?
             .checked_add(new_entries)
@@ -1265,14 +1265,17 @@ fn validate_participant_id(value: &str) -> Option<&str> {
     }
     Some(value)
 }
-fn load_participant_catalog(
-    config: &actual::IsoBridge,
-    profiles: &HashMap<String, TradfiRailProfile>,
-) -> eyre::Result<(
+/// Participant lookup indexes and disjoint audit administrator keys.
+type ParticipantCatalog = (
     BTreeMap<PublicKey, IsoBridgeParticipant>,
     HashMap<String, String>,
     BTreeSet<PublicKey>,
-)> {
+);
+
+fn load_participant_catalog(
+    config: &actual::IsoBridge,
+    profiles: &HashMap<String, TradfiRailProfile>,
+) -> eyre::Result<ParticipantCatalog> {
     if config.participants.is_empty() {
         eyre::bail!(
             "iso_bridge participants must be configured when enabled; legacy unscoped bridge configuration is incompatible with ISO record schema V3"
@@ -2473,13 +2476,13 @@ impl Iso20022BridgeRuntime {
                     kind: InvalidValueKind::Enum,
                 });
             }
-        } else if let Some(service) = business_service.as_deref() {
-            if service.trim().is_empty() || !message_profile.allows_business_service(service) {
-                return Err(MsgError::InvalidValue {
-                    field: "AppHdr/BizSvc".to_owned(),
-                    kind: InvalidValueKind::Enum,
-                });
-            }
+        } else if let Some(service) = business_service.as_deref()
+            && (service.trim().is_empty() || !message_profile.allows_business_service(service))
+        {
+            return Err(MsgError::InvalidValue {
+                field: "AppHdr/BizSvc".to_owned(),
+                kind: InvalidValueKind::Enum,
+            });
         }
         let uetr = uetr(parsed).map(ToOwned::to_owned);
         if message_profile.require_uetr && uetr.is_none() {
@@ -2507,11 +2510,10 @@ impl Iso20022BridgeRuntime {
         let embedded_signature_detected =
             has_embedded_signature_marker(parsed) || payload_has_embedded_signature(payload);
         match profile.embedded_signature_policy {
-            EmbeddedSignaturePolicy::RecordOnly => {}
             EmbeddedSignaturePolicy::RejectUnsupported if embedded_signature_detected => {
                 return Err(MsgError::ValidationFailed);
             }
-            EmbeddedSignaturePolicy::RejectUnsupported => {}
+            EmbeddedSignaturePolicy::RecordOnly | EmbeddedSignaturePolicy::RejectUnsupported => {}
             EmbeddedSignaturePolicy::RequireVerified => {
                 if !embedded_signature_detected
                     || !verify_embedded_xml_signature(payload, profile, parsed)?
@@ -2533,16 +2535,16 @@ impl Iso20022BridgeRuntime {
     /// identifier is new (and records it), or `false` when a still-active entry already exists.
     #[cfg(test)]
     pub(crate) fn check_and_record_message(&self, message_id: &str) -> bool {
-        self.check_and_record_inbound(message_id, IsoMessageMetadata::default())
+        self.check_and_record_inbound(message_id, &(IsoMessageMetadata::default()))
     }
     /// Perform idempotency checks and record a new inbound message.
     #[cfg(test)]
     pub(crate) fn check_and_record_inbound(
         &self,
         message_id: &str,
-        metadata: IsoMessageMetadata,
+        metadata: &IsoMessageMetadata,
     ) -> bool {
-        let parties = self.compatibility_test_parties(&metadata);
+        let parties = self.compatibility_test_parties(metadata);
         self.admit_inbound(message_id, metadata, parties, false)
             .is_ok()
     }
@@ -2550,7 +2552,7 @@ impl Iso20022BridgeRuntime {
     pub(crate) fn admit_authenticated_inbound(
         &self,
         message_id: &str,
-        metadata: IsoMessageMetadata,
+        metadata: &IsoMessageMetadata,
         parties: IsoRecordParties,
     ) -> Result<(), IsoAdmissionError> {
         self.admit_inbound(message_id, metadata, parties, true)
@@ -2558,7 +2560,7 @@ impl Iso20022BridgeRuntime {
     fn admit_inbound(
         &self,
         message_id: &str,
-        metadata: IsoMessageMetadata,
+        metadata: &IsoMessageMetadata,
         parties: IsoRecordParties,
         require_persistence: bool,
     ) -> Result<(), IsoAdmissionError> {
@@ -2570,7 +2572,7 @@ impl Iso20022BridgeRuntime {
         self.prune_expired();
         if self.records.contains_key(message_id)
             || self.replay_tombstones.contains_key(message_id)
-            || self.metadata_conflicts(message_id, &metadata)
+            || self.metadata_conflicts(message_id, metadata)
         {
             return Err(IsoAdmissionError::Duplicate);
         }
@@ -2676,8 +2678,9 @@ impl Iso20022BridgeRuntime {
         let pinned_signature_policy = self
             .profiles
             .get(&pinned_profile_id)
-            .map(|profile| signature_policy_label(profile.embedded_signature_policy))
-            .unwrap_or("record_only")
+            .map_or("record_only", |profile| {
+                signature_policy_label(profile.embedded_signature_policy)
+            })
             .to_owned();
         let pinned_profile_policy_sha256 = self
             .profiles
@@ -2754,7 +2757,7 @@ impl Iso20022BridgeRuntime {
                 record.set_queued();
             })
             .map(|_| candidate);
-        self.finish_status_transition(message_id, previous, transition)
+        self.finish_status_transition(message_id, previous.as_ref(), transition)
     }
     /// Bind the exact signed transaction identity before queue admission begins.
     ///
@@ -2801,7 +2804,7 @@ impl Iso20022BridgeRuntime {
                 record.rejection_reason_code = None;
             })
             .map(|_| candidate);
-        self.finish_status_transition(message_id, Some(previous), transition)
+        self.finish_status_transition(message_id, Some(&previous), transition)
     }
     /// Flag a message as pending due to screening/manual hold with an optional ISO reason code.
     ///
@@ -2829,7 +2832,7 @@ impl Iso20022BridgeRuntime {
                 record.set_hold_reason(reason_code);
             })
             .map(|_| candidate);
-        self.finish_status_transition(message_id, previous, transition)
+        self.finish_status_transition(message_id, previous.as_ref(), transition)
     }
     /// Append a change-reason code for the message (deduplicated).
     ///
@@ -2861,7 +2864,7 @@ impl Iso20022BridgeRuntime {
                 record.add_change_reason_code(code);
             })
             .map(|_| candidate);
-        self.finish_status_transition(message_id, previous, transition)
+        self.finish_status_transition(message_id, previous.as_ref(), transition)
     }
     /// Mark a fixture message as settled without a canonical chain observation.
     ///
@@ -2915,7 +2918,7 @@ impl Iso20022BridgeRuntime {
                 record.rejection_reason_code = None;
             })
             .map(|_| candidate);
-        self.finish_status_transition(message_id, previous, transition)
+        self.finish_status_transition(message_id, previous.as_ref(), transition)
     }
     /// Mark the transaction identified by `tx_hash` as applied and fully settled.
     ///
@@ -2939,15 +2942,15 @@ impl Iso20022BridgeRuntime {
     ) -> bool {
         let _state_guard = self.state_lock.lock();
         if let Some(message_id) = self.tx_hash_index.get(tx_hash).map(|entry| entry.clone()) {
-            let (detail, reason_code) = reason
-                .map(Self::rejection_reason_metadata)
-                .map(|(code, detail)| (Some(detail), Some(code)))
-                .unwrap_or_else(|| {
+            let (detail, reason_code) = reason.map(Self::rejection_reason_metadata).map_or_else(
+                || {
                     (
                         Some("transaction rejected".to_owned()),
                         Some("PRTRY:TX_REJECTED".to_owned()),
                     )
-                });
+                },
+                |(code, detail)| (Some(detail), Some(code)),
+            );
             let rejected = self.mark_rejected(&message_id, detail, reason_code.as_deref());
             return rejected;
         }
@@ -3222,7 +3225,7 @@ impl Iso20022BridgeRuntime {
                 record.rejection_reason_code = reason_code;
             })
             .map(|_| candidate);
-        self.finish_status_transition(message_id, previous, transition)
+        self.finish_status_transition(message_id, previous.as_ref(), transition)
     }
     /// Retrieve the current status of a processed ISO 20022 message.
     pub fn message_status(&self, message_id: &str) -> Option<IsoMessageStatus> {
@@ -3233,11 +3236,11 @@ impl Iso20022BridgeRuntime {
     fn finish_status_transition(
         &self,
         message_id: &str,
-        previous: Option<IsoMessageRecordV2>,
+        previous: Option<&IsoMessageRecordV2>,
         transition: Result<IsoMessageRecordV2, IsoStatusHistoryLimitError>,
     ) -> bool {
         match transition {
-            Ok(candidate) => self.commit_record_candidate(message_id, previous.as_ref(), candidate),
+            Ok(candidate) => self.commit_record_candidate(message_id, previous, candidate),
             Err(error) => {
                 Self::report_status_history_limit(message_id, error);
                 false
@@ -3779,13 +3782,13 @@ impl Iso20022BridgeRuntime {
             .field_text("InstdAgt")
             .ok_or(MsgError::ValidationFailed)?;
         self.require_bic("InstdAgt", instructed_agent_bic)?;
-        if let Some(purpose) = parsed.field_text("Purp") {
-            if !purpose.trim().eq_ignore_ascii_case("SECU") {
-                return Err(MsgError::InvalidValue {
-                    field: "Purp".to_owned(),
-                    kind: InvalidValueKind::Enum,
-                });
-            }
+        if let Some(purpose) = parsed.field_text("Purp")
+            && !purpose.trim().eq_ignore_ascii_case("SECU")
+        {
+            return Err(MsgError::InvalidValue {
+                field: "Purp".to_owned(),
+                kind: InvalidValueKind::Enum,
+            });
         }
         let mut context = IsoMessageContext {
             ledger_id: Some(chain_id.as_str().to_owned()),
@@ -4395,7 +4398,7 @@ impl Iso20022BridgeRuntime {
         for entry in entries {
             let entry = entry.wrap_err("failed to read an ISO replay tombstone directory entry")?;
             let Some((path, text, bytes)) = read_startup_record_entry(
-                entry,
+                &(entry),
                 &mut directory_entries,
                 scan_budget,
                 "replay tombstone",
@@ -4526,7 +4529,7 @@ impl Iso20022BridgeRuntime {
                 let entry =
                     entry.wrap_err("failed to read an ISO bridge message directory entry")?;
                 let Some((path, text, bytes)) = read_startup_record_entry(
-                    entry,
+                    &(entry),
                     &mut directory_entries,
                     &mut scan_budget,
                     "message",
@@ -4795,9 +4798,8 @@ impl Iso20022BridgeRuntime {
             return true;
         };
         match secure_file_metadata::from_path(&lifecycle_journal_path(store_dir)) {
-            Ok(_) => false,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
-            Err(_) => false,
+            Ok(_) | Err(_) => false,
         }
     }
     fn preflight_lifecycle_journal(&self, journal: &IsoLifecycleJournal) -> bool {
@@ -4849,13 +4851,8 @@ impl Iso20022BridgeRuntime {
         }
         let path = lifecycle_journal_path(store_dir);
         match secure_file_metadata::from_path(&path) {
-            Ok(_) => {
-                self.lifecycle_persistence_healthy
-                    .store(false, Ordering::Release);
-                return false;
-            }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(_) => {
+            Ok(_) | Err(_) => {
                 self.lifecycle_persistence_healthy
                     .store(false, Ordering::Release);
                 return false;
@@ -5684,14 +5681,22 @@ impl Iso20022BridgeRuntime {
         if ivm::iso20022::validate_identifier(IdentifierKind::Isin, &isin) {
             return match self.reference_data.validate_isin(&isin) {
                 Ok(()) => Ok(()),
-                Err(err) => Err(Self::map_reference_error(field, IdentifierKind::Isin, err)),
+                Err(err) => Err(Self::map_reference_error(
+                    field,
+                    IdentifierKind::Isin,
+                    &(err),
+                )),
             };
         }
         let cusip = normalise_identifier(IdentifierKind::Cusip, value);
         if ivm::iso20022::validate_identifier(IdentifierKind::Cusip, &cusip) {
             return match self.reference_data.validate_cusip(&cusip) {
                 Ok(()) => Ok(()),
-                Err(err) => Err(Self::map_reference_error(field, IdentifierKind::Cusip, err)),
+                Err(err) => Err(Self::map_reference_error(
+                    field,
+                    IdentifierKind::Cusip,
+                    &(err),
+                )),
             };
         }
         Err(MsgError::InvalidIdentifier {
@@ -5705,21 +5710,33 @@ impl Iso20022BridgeRuntime {
             .validate_instrument_ledger_mapping(value)
         {
             Ok(()) => Ok(()),
-            Err(err) => Err(Self::map_reference_error(field, IdentifierKind::Isin, err)),
+            Err(err) => Err(Self::map_reference_error(
+                field,
+                IdentifierKind::Isin,
+                &(err),
+            )),
         }
     }
     fn require_mic(&self, field: &str, value: &str) -> Result<(), MsgError> {
         let mic = require_identifier(field, IdentifierKind::Mic, value)?;
         match self.reference_data.validate_mic(&mic) {
             Ok(()) => Ok(()),
-            Err(err) => Err(Self::map_reference_error(field, IdentifierKind::Mic, err)),
+            Err(err) => Err(Self::map_reference_error(
+                field,
+                IdentifierKind::Mic,
+                &(err),
+            )),
         }
     }
     fn require_csd_venue_mapping(&self, field: &str, value: &str) -> Result<(), MsgError> {
         let mic = require_identifier(field, IdentifierKind::Mic, value)?;
         match self.reference_data.validate_csd_venue(&mic) {
             Ok(()) => Ok(()),
-            Err(err) => Err(Self::map_reference_error(field, IdentifierKind::Mic, err)),
+            Err(err) => Err(Self::map_reference_error(
+                field,
+                IdentifierKind::Mic,
+                &(err),
+            )),
         }
     }
     fn require_securities_account_mapping(
@@ -5737,9 +5754,9 @@ impl Iso20022BridgeRuntime {
             .validate_securities_account(account, bic)
         {
             Ok(()) => Ok(()),
-            Err(ReferenceDataError::MissingLedgerMapping { .. }) => Err(MsgError::ValidationFailed),
             Err(
-                ReferenceDataError::DatasetUnavailable { .. }
+                ReferenceDataError::MissingLedgerMapping { .. }
+                | ReferenceDataError::DatasetUnavailable { .. }
                 | ReferenceDataError::DatasetFailed { .. },
             ) => Err(MsgError::ValidationFailed),
             Err(ReferenceDataError::NotFound { .. } | ReferenceDataError::MicInactive { .. }) => {
@@ -5754,7 +5771,11 @@ impl Iso20022BridgeRuntime {
         let bic = require_identifier(field, IdentifierKind::Bic, value)?;
         match self.reference_data.validate_bic(&bic) {
             Ok(()) => Ok(()),
-            Err(err) => Err(Self::map_reference_error(field, IdentifierKind::Bic, err)),
+            Err(err) => Err(Self::map_reference_error(
+                field,
+                IdentifierKind::Bic,
+                &(err),
+            )),
         }
     }
     fn require_cash_leg_mapping(
@@ -5772,14 +5793,19 @@ impl Iso20022BridgeRuntime {
             Err(err) => Err(Self::map_reference_error(
                 field,
                 IdentifierKind::Currency,
-                err,
+                &(err),
             )),
         }
     }
-    fn map_reference_error(field: &str, kind: IdentifierKind, err: ReferenceDataError) -> MsgError {
+    fn map_reference_error(
+        field: &str,
+        kind: IdentifierKind,
+        err: &ReferenceDataError,
+    ) -> MsgError {
         match err {
             ReferenceDataError::DatasetUnavailable { .. }
-            | ReferenceDataError::DatasetFailed { .. } => MsgError::ValidationFailed,
+            | ReferenceDataError::DatasetFailed { .. }
+            | ReferenceDataError::MissingLedgerMapping { .. } => MsgError::ValidationFailed,
             ReferenceDataError::NotFound { .. } => MsgError::InvalidIdentifier {
                 field: field.to_owned(),
                 kind,
@@ -5788,7 +5814,6 @@ impl Iso20022BridgeRuntime {
                 field: field.to_owned(),
                 kind: IdentifierKind::Mic,
             },
-            ReferenceDataError::MissingLedgerMapping { .. } => MsgError::ValidationFailed,
         }
     }
 }
@@ -6607,7 +6632,7 @@ fn read_persisted_record_bounded(path: &Path) -> Option<String> {
     read_persisted_json_bounded(path, ISO_PERSISTED_RECORD_MAX_BYTES)
 }
 fn read_startup_record_entry(
-    entry: fs::DirEntry,
+    entry: &fs::DirEntry,
     directory_entries: &mut u64,
     budget: &mut IsoStartupScanBudget,
     record_kind: &str,
@@ -7331,15 +7356,14 @@ impl Iso20022BridgeRuntime {
         if previous == next {
             return;
         }
-        if let Some(original) = previous {
-            if let dashmap::mapref::entry::Entry::Occupied(mut count) =
+        if let Some(original) = previous
+            && let dashmap::mapref::entry::Entry::Occupied(mut count) =
                 self.pending_return_originals.entry(original.to_owned())
-            {
-                if *count.get() == 1 {
-                    count.remove();
-                } else {
-                    *count.get_mut() -= 1;
-                }
+        {
+            if *count.get() == 1 {
+                count.remove();
+            } else {
+                *count.get_mut() -= 1;
             }
         }
         if let Some(original) = next {
@@ -8018,7 +8042,7 @@ fn lifecycle_journal_path(store_dir: &Path) -> PathBuf {
 }
 fn system_time_to_ms(time: SystemTime) -> u64 {
     time.duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
+        .map(|duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX))
         .unwrap_or(0)
 }
 fn system_time_from_ms(ms: u64) -> Option<SystemTime> {
@@ -8290,8 +8314,6 @@ fn lifecycle_referenced_message_id<'a>(
             unique_field_text_by_suffix(parsed, &["OrgnlGrpInf/OrgnlMsgId"], "OrgnlMsgId")
         }
         "sese.024" | "sese.025" => unique_field_text_by_suffix(parsed, &["TxId"], "TxId"),
-        "sese.023" => Ok(None),
-        "colr.012" => Ok(None),
         _ => Ok(None),
     }
 }
@@ -8379,7 +8401,6 @@ fn lifecycle_update_matches_original(lifecycle_type: &str, original_type: Option
             is_iso_family(original_type, "pacs.008") || is_iso_family(original_type, "pacs.009")
         }
         "sese.024" | "sese.025" => is_iso_family(original_type, "sese.023"),
-        "colr.012" => false,
         _ => false,
     }
 }
@@ -10198,8 +10219,8 @@ fn x509_certificate_presented_names(
                 GeneralName::IPAddress(name) => X509PresentedName::Ip((*name).to_vec()),
                 GeneralName::RFC822Name(name) => X509PresentedName::Rfc822((*name).to_owned()),
                 GeneralName::URI(name) => X509PresentedName::Uri((*name).to_owned()),
-                GeneralName::Invalid(_, _) => return Err(MsgError::ValidationFailed),
-                GeneralName::EDIPartyName(_)
+                GeneralName::Invalid(_, _)
+                | GeneralName::EDIPartyName(_)
                 | GeneralName::OtherName(_, _)
                 | GeneralName::RegisteredID(_)
                 | GeneralName::X400Address(_) => return Err(MsgError::ValidationFailed),
@@ -10950,7 +10971,10 @@ fn parse_ocsp_single_response(
         next_update,
     })
 }
-fn parse_ocsp_cert_id(cert_id_der: &[u8]) -> Result<(&[u8], &[u8], &[u8]), MsgError> {
+/// Borrowed issuer-name hash, issuer-key hash, and certificate serial number.
+type OcspCertId<'a> = (&'a [u8], &'a [u8], &'a [u8]);
+
+fn parse_ocsp_cert_id(cert_id_der: &[u8]) -> Result<OcspCertId<'_>, MsgError> {
     let mut content = cert_id_der;
     let hash_algorithm_oid = der_read_algorithm_identifier(&mut content)?;
     if hash_algorithm_oid != OID_SHA256_DER {
@@ -11679,9 +11703,6 @@ fn ensure_xml_signature_supported_critical_extensions(
         match extension.parsed_extension() {
             ParsedExtension::BasicConstraints(_) | ParsedExtension::KeyUsage(_) => {}
             ParsedExtension::ExtendedKeyUsage(_) if role == XmlSignatureCertificateRole::Leaf => {}
-            ParsedExtension::UnsupportedExtension { .. }
-            | ParsedExtension::ParseError { .. }
-            | ParsedExtension::Unparsed => return Err(MsgError::ValidationFailed),
             _ => return Err(MsgError::ValidationFailed),
         }
     }
@@ -11916,13 +11937,12 @@ fn apply_inherited_root_namespaces(
             if let Some((prefix, _)) = name.split_once(':') {
                 let namespace_name = format!("xmlns:{prefix}");
                 apply_inherited_namespace(attributes, inherited_namespaces, &namespace_name);
-            } else if !attributes.iter().any(|attribute| attribute.name == "xmlns") {
-                if let Some(namespace) = inherited_namespaces
+            } else if !attributes.iter().any(|attribute| attribute.name == "xmlns")
+                && let Some(namespace) = inherited_namespaces
                     .iter()
                     .find(|attribute| attribute.name == "xmlns" && !attribute.value.is_empty())
-                {
-                    attributes.push(namespace.clone());
-                }
+            {
+                attributes.push(namespace.clone());
             }
             let visibly_used_attribute_namespaces = attributes
                 .iter()
@@ -11956,12 +11976,12 @@ fn apply_inherited_namespace(
     }
 }
 fn sort_and_validate_canonical_xml_attributes(
-    parsed: &mut Vec<CanonicalXmlAttribute>,
+    parsed: &mut [CanonicalXmlAttribute],
     in_scope_namespaces: &[CanonicalXmlNamespaceBinding],
 ) -> Result<(), MsgError> {
     ensure_supported_xml_attribute_namespaces(parsed, in_scope_namespaces)?;
     ensure_unique_canonical_xml_attribute_names(parsed, in_scope_namespaces)?;
-    let lookup = parsed.clone();
+    let lookup = parsed.to_vec();
     parsed.sort_by(|left, right| match (left.kind, right.kind) {
         (CanonicalXmlAttributeKind::Namespace, CanonicalXmlAttributeKind::Namespace) => {
             namespace_attribute_sort_key(&left.name).cmp(namespace_attribute_sort_key(&right.name))
@@ -12802,8 +12822,7 @@ fn amount_fraction_digits(amount: &str) -> usize {
     amount
         .trim()
         .split_once('.')
-        .map(|(_, fraction)| fraction.len())
-        .unwrap_or(0)
+        .map_or(0, |(_, fraction)| fraction.len())
 }
 fn normalise_uetr(value: &str) -> String {
     value.trim().to_ascii_lowercase()

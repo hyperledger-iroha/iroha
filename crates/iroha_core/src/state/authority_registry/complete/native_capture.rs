@@ -22,7 +22,11 @@ use mv::PublicationPreparationError;
 /// canonical rows before encoding; native identity checks also detect direct MV
 /// publication of either table. The complete State owner is still absent, so
 /// this remains diagnostic and cannot establish finality.
-pub(crate) fn capture_domains_table_once(
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
+pub fn capture_domains_table_once(
     state: &State,
     limits: LeafLimits,
 ) -> Result<Option<CanonicalTablePairedSnapshot>, LeafError> {
@@ -75,7 +79,11 @@ pub(crate) fn capture_domains_table_once(
 /// named Single Ed25519 reference is local work policy; wider keys, vectors and
 /// quadratic original images may need a larger admitted allowance. `None` means
 /// State or native publication overlapped this read. Neither result supplies finalized authority.
-pub(crate) fn capture_accounts_table_once(
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
+pub fn capture_accounts_table_once(
     state: &State,
     limits: LeafLimits,
 ) -> Result<Option<CanonicalTablePairedSnapshot>, LeafError> {
@@ -131,7 +139,11 @@ pub(crate) fn capture_accounts_table_once(
 /// domainful alias and its reverse member in both images. Wider controllers,
 /// extra implicit accounts and quadratic history may require more local work;
 /// the reference changes no name, controller, row, gas or ledger validity rule.
-pub(crate) fn capture_account_alias_table_once(
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
+pub fn capture_account_alias_table_once(
     state: &State,
     limits: LeafLimits,
 ) -> Result<Option<CanonicalTablePairedSnapshot>, LeafError> {
@@ -163,6 +175,10 @@ pub(crate) fn capture_account_alias_table_once(
     finish_alias_encoding(state, generation, aliases, snapshot)
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 fn finish_alias_encoding(
     state: &State,
     generation: u64,

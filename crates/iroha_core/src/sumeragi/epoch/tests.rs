@@ -20,7 +20,7 @@ use iroha_model_base::peer::PeerId;
 use iroha_primitives::json::Json;
 use std::num::NonZeroU64;
 
-pub(crate) fn genesis_fixture(
+pub fn genesis_fixture(
     mode: SumeragiConsensusMode,
     length: u64,
     duplicate_npos: bool,
@@ -33,7 +33,7 @@ pub(crate) fn genesis_fixture(
     )
 }
 
-pub(crate) fn genesis_fixture_with_scope(
+pub fn genesis_fixture_with_scope(
     mode: SumeragiConsensusMode,
     length: u64,
     duplicate_npos: bool,

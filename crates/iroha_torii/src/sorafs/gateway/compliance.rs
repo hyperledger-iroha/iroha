@@ -1,4 +1,4 @@
-//! Governed SoraFS gateway-compliance catalog admission and durable promotion.
+//! Governed `SoraFS` gateway-compliance catalog admission and durable promotion.
 //!
 //! The controller deliberately owns no credentials and performs no ambient DNS or HTTP access. Feed
 //! transport and catalog signatures cross explicit runtime boundaries so production embeddings can
@@ -810,7 +810,7 @@ impl GatewayComplianceStore for FileGatewayComplianceStore {
         }
         let lock_file = options
             .open(&lock_path)
-            .map_err(|error| persistence_io("open checkpoint lease file", error))?;
+            .map_err(|error| persistence_io("open checkpoint lease file", &(error)))?;
         let (opened_before_lock, named_before_lock) = validate_opened_file(
             &lock_path,
             &lock_file,
@@ -830,7 +830,7 @@ impl GatewayComplianceStore for FileGatewayComplianceStore {
                 return Err(GatewayComplianceError::LeaseHeld);
             }
             Err(std::fs::TryLockError::Error(error)) => {
-                return Err(persistence_io("lock checkpoint lease file", error));
+                return Err(persistence_io("lock checkpoint lease file", &(error)));
             }
         }
         let (opened_after_lock, named_after_lock) = validate_opened_file(
@@ -901,11 +901,11 @@ impl GatewayComplianceStoreLease for FileGatewayComplianceStoreLease {
                 }
                 options.open(temporary_path)
             })
-            .map_err(|error| persistence_io("create checkpoint temp file", error))?;
+            .map_err(|error| persistence_io("create checkpoint temp file", &(error)))?;
         let temporary_metadata = secure_file_metadata::from_file(temporary.as_file())
-            .map_err(|error| persistence_io("inspect checkpoint temp file", error))?;
+            .map_err(|error| persistence_io("inspect checkpoint temp file", &(error)))?;
         let named_temporary_metadata = secure_file_metadata::from_path(temporary.path())
-            .map_err(|error| persistence_io("inspect checkpoint temp path", error))?;
+            .map_err(|error| persistence_io("inspect checkpoint temp path", &(error)))?;
         validate_checkpoint_file_metadata(&temporary_metadata)?;
         validate_checkpoint_file_metadata(&named_temporary_metadata)?;
         if !secure_file_metadata::same_file(&temporary_metadata, &named_temporary_metadata) {
@@ -915,15 +915,15 @@ impl GatewayComplianceStoreLease for FileGatewayComplianceStoreLease {
         }
         temporary
             .write_all(bytes)
-            .map_err(|error| persistence_io("write checkpoint temp file", error))?;
+            .map_err(|error| persistence_io("write checkpoint temp file", &(error)))?;
         temporary
             .as_file()
             .sync_all()
-            .map_err(|error| persistence_io("fsync checkpoint temp file", error))?;
+            .map_err(|error| persistence_io("fsync checkpoint temp file", &(error)))?;
         let written_temporary_metadata = secure_file_metadata::from_file(temporary.as_file())
-            .map_err(|error| persistence_io("re-inspect checkpoint temp file", error))?;
+            .map_err(|error| persistence_io("re-inspect checkpoint temp file", &(error)))?;
         let named_written_temporary_metadata = secure_file_metadata::from_path(temporary.path())
-            .map_err(|error| persistence_io("re-inspect checkpoint temp path", error))?;
+            .map_err(|error| persistence_io("re-inspect checkpoint temp path", &(error)))?;
         validate_checkpoint_file_metadata(&written_temporary_metadata)?;
         validate_checkpoint_file_metadata(&named_written_temporary_metadata)?;
         let expected_length = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
@@ -950,7 +950,7 @@ impl GatewayComplianceStoreLease for FileGatewayComplianceStoreLease {
             .take()
         {
             fs::write(&self.path, replacement)
-                .map_err(|error| persistence_io("run checkpoint test hook", error))?;
+                .map_err(|error| persistence_io("run checkpoint test hook", &(error)))?;
         }
         let current_generation = read_checkpoint_snapshot(&self.path, self.max_bytes)?.generation;
         if current_generation != expected {
@@ -964,7 +964,7 @@ impl GatewayComplianceStoreLease for FileGatewayComplianceStoreLease {
         // observe an intervening value overwritten by the rename.
         let persisted = temporary
             .persist(&self.path)
-            .map_err(|error| persistence_io("replace checkpoint", error.error))?;
+            .map_err(|error| persistence_io("replace checkpoint", &(error.error)))?;
         let persisted_metadata = secure_file_metadata::from_file(&persisted)
             .map_err(|_| GatewayComplianceError::CheckpointConflict)?;
         let path_metadata = secure_file_metadata::from_path(&self.path)
@@ -1058,6 +1058,10 @@ impl GatewayComplianceController {
         qualify_feed_transport(&expected_feed_transport_identity, transport)?;
         Self::new_inner(config, store, Some(expected_feed_transport_identity))
     }
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "the constructor retains the store owner until durable lease acquisition and checkpoint validation finish"
+    )]
     fn new_inner(
         config: GatewayComplianceControllerConfig,
         store: Arc<dyn GatewayComplianceStore>,
@@ -2361,7 +2365,7 @@ fn qualified_feed_transport_resolve(
     qualify_feed_transport(expected, transport)?;
     let result = transport.resolve(hostname, timeout);
     qualify_feed_transport(expected, transport)?;
-    result.map_err(redact_feed_transport_operation_error)
+    result.map_err(|value| redact_feed_transport_operation_error(&value))
 }
 fn qualified_feed_transport_fetch(
     expected: &GatewayComplianceFeedTransportIdentityV1,
@@ -2371,15 +2375,18 @@ fn qualified_feed_transport_fetch(
     qualify_feed_transport(expected, transport)?;
     let result = transport.fetch(request);
     qualify_feed_transport(expected, transport)?;
-    result.map_err(redact_feed_transport_operation_error)
+    result.map_err(|value| redact_feed_transport_operation_error(&value))
 }
-fn redact_feed_transport_operation_error(error: GatewayComplianceError) -> GatewayComplianceError {
+fn redact_feed_transport_operation_error(error: &GatewayComplianceError) -> GatewayComplianceError {
     match error {
         GatewayComplianceError::FetchTimeout => GatewayComplianceError::FetchTimeout,
         GatewayComplianceError::DnsRebinding => GatewayComplianceError::DnsRebinding,
         GatewayComplianceError::NonPublicAddress => GatewayComplianceError::NonPublicAddress,
         GatewayComplianceError::UnsafeAddressSet { found, maximum } => {
-            GatewayComplianceError::UnsafeAddressSet { found, maximum }
+            GatewayComplianceError::UnsafeAddressSet {
+                found: *found,
+                maximum: *maximum,
+            }
         }
         GatewayComplianceError::TrustPinMismatch => GatewayComplianceError::TrustPinMismatch,
         GatewayComplianceError::ResourceLimit {
@@ -2388,8 +2395,8 @@ fn redact_feed_transport_operation_error(error: GatewayComplianceError) -> Gatew
             maximum,
         } => GatewayComplianceError::ResourceLimit {
             resource,
-            found,
-            maximum,
+            found: *found,
+            maximum: *maximum,
         },
         _ => GatewayComplianceError::FeedTransportOperationFailed,
     }
@@ -2656,7 +2663,7 @@ fn read_checkpoint_snapshot(
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
             return Ok(checkpoint_store_snapshot(None));
         }
-        Err(error) => return Err(persistence_io("inspect checkpoint", error)),
+        Err(error) => return Err(persistence_io("inspect checkpoint", &(error))),
     };
     validate_checkpoint_file_metadata(&named_before)?;
     let length = usize::try_from(named_before.len()).unwrap_or(usize::MAX);
@@ -2673,7 +2680,7 @@ fn read_checkpoint_snapshot(
     set_stable_read_share_mode(&mut options);
     let mut file = options
         .open(path)
-        .map_err(|error| persistence_io("open checkpoint", error))?;
+        .map_err(|error| persistence_io("open checkpoint", &(error)))?;
     let (opened_before, named_after_open) =
         validate_opened_file(path, &file, "compliance checkpoint changed while opening")?;
     if !secure_file_metadata::unchanged(&named_before, &opened_before)
@@ -2691,7 +2698,7 @@ fn read_checkpoint_snapshot(
                 .saturating_add(1),
         )
         .read_to_end(&mut bytes)
-        .map_err(|error| persistence_io("read checkpoint", error))?;
+        .map_err(|error| persistence_io("read checkpoint", &(error)))?;
     if bytes.len() > max_bytes {
         return Err(GatewayComplianceError::ResourceLimit {
             resource: "compliance checkpoint bytes",
@@ -2717,7 +2724,7 @@ fn validate_checkpoint_parent(path: &Path) -> Result<(), GatewayComplianceError>
     {
         use std::os::unix::fs::PermissionsExt as _;
         let metadata = secure_file_metadata::from_path(path)
-            .map_err(|error| persistence_io("inspect checkpoint parent", error))?;
+            .map_err(|error| persistence_io("inspect checkpoint parent", &(error)))?;
         if metadata.permissions().mode() & 0o022 != 0 {
             return Err(GatewayComplianceError::Persistence(
                 "checkpoint parent must not be group- or world-writable".into(),
@@ -2744,7 +2751,7 @@ fn validate_existing_directory_chain(path: &Path) -> Result<(), GatewayComplianc
     ancestors.reverse();
     for current in ancestors {
         let metadata = secure_file_metadata::from_path(current)
-            .map_err(|error| persistence_io("inspect checkpoint directory", error))?;
+            .map_err(|error| persistence_io("inspect checkpoint directory", &(error)))?;
         if !secure_file_metadata::is_direct_directory(&metadata) {
             return Err(GatewayComplianceError::Persistence(format!(
                 "checkpoint directory `{}` is not a regular directory",
@@ -2780,7 +2787,7 @@ fn validate_output_file(path: &Path) -> Result<Option<SecureMetadata>, GatewayCo
             Ok(Some(metadata))
         }
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(persistence_io("inspect checkpoint output", error)),
+        Err(error) => Err(persistence_io("inspect checkpoint output", &(error))),
     }
 }
 fn validate_opened_file(
@@ -2789,9 +2796,9 @@ fn validate_opened_file(
     changed_message: &'static str,
 ) -> Result<(SecureMetadata, SecureMetadata), GatewayComplianceError> {
     let opened_metadata = secure_file_metadata::from_file(file)
-        .map_err(|error| persistence_io("inspect opened file", error))?;
+        .map_err(|error| persistence_io("inspect opened file", &(error)))?;
     let path_metadata = secure_file_metadata::from_path(path)
-        .map_err(|error| persistence_io("inspect opened file path", error))?;
+        .map_err(|error| persistence_io("inspect opened file path", &(error)))?;
     if !secure_file_metadata::is_direct_file(&path_metadata)
         || !secure_file_metadata::is_direct_file(&opened_metadata)
         || secure_file_metadata::number_of_links(&path_metadata) != Some(1)
@@ -2868,7 +2875,7 @@ fn set_checkpoint_temp_share_mode(options: &mut OpenOptions) {
 }
 #[cfg(not(windows))]
 fn set_checkpoint_temp_share_mode(_options: &mut OpenOptions) {}
-fn persistence_io(action: &'static str, error: io::Error) -> GatewayComplianceError {
+fn persistence_io(action: &'static str, error: &io::Error) -> GatewayComplianceError {
     GatewayComplianceError::Persistence(format!("{action}: {error}"))
 }
 /// Fail-closed compliance controller errors.

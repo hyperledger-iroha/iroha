@@ -121,7 +121,10 @@ fn genuine_endpoints_cover_every_original_byte_node_and_typed_copy_tuple() {
                         .unwrap();
                     assert_eq!(
                         row[BASE_VALUE],
-                        document.bytes[row[BASE_ADDRESS].0 as usize].value.value
+                        document.bytes[usize::try_from(row[BASE_ADDRESS].0)
+                            .expect("fixture value fits usize")]
+                        .value
+                        .value
                     );
                     assert_eq!(row[BASE_SERIAL_BYTE_QUERY_ACTIVE], F::ONE);
                     assert_eq!(row[BASE_SERIAL_BYTE_QUERY_VALUE], row[BASE_VALUE]);
@@ -198,7 +201,7 @@ fn complete_slot_equations_reject_erasure_shortening_holes_identity_and_inverse_
         let mut erased = [F::ZERO; ZK_X509_RFC5280_STARK_BASE_WIDTH_V1];
         erased[BASE_CERT2_ACTIVE] = row[BASE_CERT2_ACTIVE];
         assert!(rejects(&erased, &erased, &fixed));
-        let length = row[BASE_B].0 as usize;
+        let length = usize::try_from(row[BASE_B].0).expect("fixture value fits usize");
         assert!(length > 1 && length < slot(family, 0).unwrap().capacity);
         let mut hole = material.base_row(start + 1).unwrap();
         let after = material.base_row(start + 2).unwrap();
@@ -289,7 +292,8 @@ fn optional_slots_cannot_alias_ordinary_crl_documents_or_activate_reserved_tail(
 fn endpoint_resolver_rejects_missing_duplicate_wrong_root_and_tag_sources() {
     let mut trace = trace(false, false);
     assert!(Sources::new(&trace).is_ok());
-    let doc = equality_slot(1, 0, false).unwrap().document as usize;
+    let doc = usize::try_from(equality_slot(1, 0, false).unwrap().document)
+        .expect("fixture value fits usize");
     assert_eq!(
         doc, 3,
         "depth-two leaf AKI follows three top-level documents"
@@ -310,7 +314,7 @@ fn endpoint_resolver_rejects_missing_duplicate_wrong_root_and_tag_sources() {
             4 => node.tag_class = 2,
             5 => node.constructed = false,
             _ => unreachable!(),
-        };
+        }
         assert!(Sources::new(&trace).is_err(), "case{case}");
         trace.semantic_provenance[doc].nodes[index] = original;
     }

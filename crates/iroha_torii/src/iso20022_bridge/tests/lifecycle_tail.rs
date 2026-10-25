@@ -216,8 +216,8 @@ fn lifecycle_rejects_replayed_payload_hash() {
         "snapshot".to_owned(),
         false,
     );
-    assert!(runtime.check_and_record_inbound("status-1", first));
-    assert!(!runtime.check_and_record_inbound("status-2", replay));
+    assert!(runtime.check_and_record_inbound("status-1", &(first)));
+    assert!(!runtime.check_and_record_inbound("status-2", &(replay)));
 }
 #[test]
 fn lifecycle_pacs002_settles_known_original() {
@@ -234,7 +234,7 @@ fn lifecycle_pacs002_settles_known_original() {
     let lifecycle_id =
         Iso20022BridgeRuntime::lifecycle_message_id("pacs.002", &parsed).expect("lifecycle id");
     assert_eq!(lifecycle_id, "status-1");
-    assert!(runtime.check_and_record_inbound(&lifecycle_id, metadata));
+    assert!(runtime.check_and_record_inbound(&lifecycle_id, &(metadata)));
     let outcome = runtime
         .apply_inbound_lifecycle_message(&lifecycle_id, "pacs.002", &parsed)
         .expect("lifecycle applied");
@@ -281,7 +281,7 @@ fn lifecycle_profile_mismatch_does_not_mutate_original() {
         "snapshot".to_owned(),
         false,
     );
-    assert!(runtime.check_and_record_inbound("profile-status", lifecycle_metadata));
+    assert!(runtime.check_and_record_inbound("profile-status", &(lifecycle_metadata)));
     let outcome = runtime
         .apply_inbound_lifecycle_message("profile-status", "pacs.002", &parsed)
         .expect("lifecycle recorded");
@@ -400,7 +400,7 @@ fn checked_in_pacs002_fixture_settles_known_original() {
     let lifecycle_id =
         Iso20022BridgeRuntime::lifecycle_message_id("pacs.002", &parsed).expect("lifecycle id");
     assert_eq!(lifecycle_id, "STATUS-FIXTURE-1");
-    assert!(runtime.check_and_record_inbound(&lifecycle_id, metadata));
+    assert!(runtime.check_and_record_inbound(&lifecycle_id, &(metadata)));
     let outcome = runtime
         .apply_inbound_lifecycle_message(&lifecycle_id, "pacs.002", &parsed)
         .expect("lifecycle applied");
@@ -460,7 +460,7 @@ fn lifecycle_pacs002_uses_group_header_msgid_not_transaction_status_id() {
         Some("status-transaction-shadow")
     );
     assert_eq!(lifecycle_id, "status-group-id");
-    assert!(runtime.check_and_record_inbound(&lifecycle_id, metadata));
+    assert!(runtime.check_and_record_inbound(&lifecycle_id, &(metadata)));
     assert!(!runtime.check_and_record_message("status-group-id"));
     assert!(runtime.check_and_record_message("status-transaction-shadow"));
     let outcome = runtime

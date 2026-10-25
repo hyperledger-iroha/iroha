@@ -352,7 +352,7 @@ impl MainAwaitingJointOpeningsV1<'_> {
             return Err(ZkX509StarkErrorV1::TranscriptMismatch);
         }
         let binding = ca
-            .bind_with_main_v1(&mut self.oracles.phase.transcript, self.main_openings)
+            .bind_with_main_v1(&mut self.oracles.phase.transcript, &self.main_openings)
             .map_err(|_| ZkX509StarkErrorV1::TranscriptMismatch)?;
         self.bound = true;
         Ok(binding)
@@ -362,7 +362,7 @@ impl MainAwaitingJointOpeningsV1<'_> {
     /// divided differences accumulated before its original FRI evaluation.
     pub(crate) fn finish_v1(
         mut self,
-        binding: JointDeepBindingV1,
+        binding: &JointDeepBindingV1,
     ) -> Result<Vec<u8>, ZkX509StarkErrorV1> {
         if !self.bound
             || !binding.matches_v1(JointSubproofV1::Main, &self.oracles.phase.transcript)
@@ -389,7 +389,7 @@ impl MainAwaitingJointOpeningsV1<'_> {
             self.oracles.fri_mask_roots,
             self.deep,
             self.point,
-            self.key_openings,
+            &self.key_openings,
             key_mixes,
             mixes,
             Some(MainCaDeepContributionV1 {
@@ -450,7 +450,7 @@ impl<'a> MainJointVerifierOraclesV1<'a> {
         statement: &'a IrohaZkX509StarkP256StatementV1,
         rfc_statement: &'a ZkX509Rfc5280StatementV1,
         public: ZkX509CredentialPublicBindingV1,
-        binding: ZkX509CredentialPreAuxBindingV1,
+        binding: &ZkX509CredentialPreAuxBindingV1,
         auxiliary: JointAuxiliaryBindingV1,
         schedule: &ZkX509ShaCallScheduleV1,
         encoded: &[u8],
@@ -472,7 +472,7 @@ impl<'a> MainJointVerifierOraclesV1<'a> {
             || proof.aggregate.composition_roots.len() != 1
             || proof.aggregate.fri_mask_roots.len() != 1
             || !auxiliary.matches_v1(
-                &binding,
+                binding,
                 JointSubproofV1::Main,
                 proof.aggregate.trace_groups[0].aux_root,
             )
@@ -545,7 +545,7 @@ impl<'a> MainJointVerifierOraclesV1<'a> {
         Ok(Self {
             statement,
             rfc_statement,
-            binding,
+            binding: *binding,
             auxiliary,
             layout,
             proof,
@@ -617,7 +617,7 @@ impl MainJointVerifierDeepV1<'_> {
     pub(crate) fn bind_ca_openings_v1(
         &mut self,
         ca: &mut super::super::super::accumulator_stark::joint_verifier::CaJointVerifierDeepV1,
-        openings: JointOriginalOpeningsV1,
+        openings: &JointOriginalOpeningsV1,
     ) -> Result<JointDeepBindingV1, ZkX509StarkErrorV1> {
         if self.openings.is_some() {
             return Err(ZkX509StarkErrorV1::TranscriptMismatch);
@@ -625,7 +625,7 @@ impl MainJointVerifierDeepV1<'_> {
         let binding = ca
             .bind_with_main_v1(&mut self.oracles.transcript, openings)
             .map_err(|_| ZkX509StarkErrorV1::TranscriptMismatch)?;
-        self.openings = Some(openings);
+        self.openings = Some(*openings);
         Ok(binding)
     }
 
@@ -634,7 +634,7 @@ impl MainJointVerifierDeepV1<'_> {
     #[allow(clippy::too_many_lines)]
     pub(crate) fn finish_v1(
         mut self,
-        binding: JointDeepBindingV1,
+        binding: &JointDeepBindingV1,
     ) -> Result<(), ZkX509StarkErrorV1> {
         let proof_instance = self.oracles.binding.proof_instance_v1();
         if !binding.matches_v1(JointSubproofV1::Main, &self.oracles.transcript)
@@ -689,22 +689,22 @@ impl MainJointVerifierDeepV1<'_> {
         let log5 = MainP256Log5VerifierConstraintSourceV1::for_main_v1(
             &stage.layout,
             &p256_fixed,
-            post_base,
+            &post_base,
         )?;
         let projection = MainProjectionVerifierConstraintSourceV1::for_main_v1(
             &stage.layout,
             stage.statement,
-            post_base,
+            &post_base,
         )?;
         let io = MainIoVerifierConstraintSourceV1::for_main_v1(
             &stage.layout,
             stage.statement,
-            post_base,
+            &post_base,
         )?;
         let mut log19 = MainLog19VerifierConstraintSourceV1::for_main_v1(
             &stage.layout,
             stage.rfc_statement,
-            post_base,
+            &post_base,
         )?;
         log19.prepare_complete_oods_fixed_v1()?;
         main_oods::verify_main_deep_constraints_with_ca_v1(
@@ -789,9 +789,9 @@ pub fn finish_joint_main_ca_v1<R: TryRngCore>(
     let openings = binding.openings_v1();
     // Finish MAIN first so its large coefficient and LDE owners are released
     // before the complete CA row trees and local FRI are constructed.
-    let main = main.finish_v1(binding)?;
+    let main = main.finish_v1(&binding)?;
     let ca = ca
-        .finish_v1(binding)
+        .finish_v1(&binding)
         .map_err(|_| ZkX509StarkErrorV1::ConstraintOpening)?;
     Ok((main, ca, openings))
 }
@@ -811,6 +811,6 @@ impl<'a> ZkX509MainAwaitingCredentialBindingV1<'a> {
                 ca,
                 None,
             )?;
-        self.bind_credential_pre_aux_v1_with_rng(ca.binding_v1(), rng)
+        self.bind_credential_pre_aux_v1_with_rng(&ca.binding_v1(), rng)
     }
 }

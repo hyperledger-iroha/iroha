@@ -1,7 +1,7 @@
 //! The existing semantic predicates over the original retained frozen pair.
 //!
 //! No table, value, index, revision, pool or owner is recaptured. Ordered current
-//! positions and predecessor descriptors remain in the StatePublication group.
+//! positions and predecessor descriptors remain in the `StatePublication` group.
 //! Every native resolve/comparison updates its original cumulative work before
 //! a fallible semantic operation can use the row. No read refusal becomes None.
 
@@ -1771,6 +1771,10 @@ mod test_entry;
 impl OriginalMusubiCapture<'_, '_> {
     /// Prepare these three scoped tables under the sole frozen State publisher.
     /// This captures no complete-State, certified-history or lane-deletion authority.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+    )]
     pub(in crate::state) fn advance_for_publication(
         &mut self,
     ) -> Result<(), TransactionsBlockError> {

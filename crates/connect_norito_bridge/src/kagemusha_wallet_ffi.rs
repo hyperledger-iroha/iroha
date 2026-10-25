@@ -689,7 +689,7 @@ pub(crate) fn setup(id: u64, input: setup::Setup) -> Result<Response> {
     if let Some(turn) = turn {
         owner
             .background
-            .record_native_work(turn.finish(result.is_ok()));
+            .record_native_work(&turn.finish(result.is_ok()));
     }
     result
 }
@@ -715,7 +715,7 @@ pub(crate) fn execute(id: u64, call: requests::Call) -> Result<Response> {
     });
     owner
         .background
-        .record_native_work(turn.finish(result.is_ok()));
+        .record_native_work(&turn.finish(result.is_ok()));
     result
 }
 pub(crate) fn request_status(id: u64, request: &[u8]) -> Result<Response> {

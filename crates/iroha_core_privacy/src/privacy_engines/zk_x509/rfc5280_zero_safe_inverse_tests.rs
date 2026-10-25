@@ -30,7 +30,7 @@ fn integer_inverse(value: u64) -> u64 {
         power = power * power % modulus;
         exponent >>= 1;
     }
-    result as u64
+    u64::try_from(result).expect("fixture value fits u64")
 }
 
 #[test]

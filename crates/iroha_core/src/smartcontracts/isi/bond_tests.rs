@@ -227,6 +227,16 @@ impl Harness {
             assets,
             [],
         );
+        // Component vault registration owns its policy before the first snapshot.
+        let mut parameters = world.parameters.block();
+        parameters
+            .set_parameter(
+                crate::sumeragi::test_chain::crypto_fixture_policy()
+                    .into_parameter()
+                    .expect("canonical fixture crypto policy"),
+            )
+            .expect("install original fixture crypto policy");
+        parameters.commit();
         let state = State::new(
             world,
             Kura::blank_kura_for_testing(),
@@ -890,7 +900,6 @@ fn recording_is_paged_and_unbounded_in_holders() {
                 &accounts()[HOLDER_A],
                 AccountController::Single(key(0x51).public_key().clone()),
             )
-            .map_err(Error::from)
         })
         .expect_err("rekey during recording");
     assert!(error.to_string().contains("is being recorded"), "{error}");
@@ -1042,7 +1051,7 @@ fn settle_atomic(
     }
     movements.sort_by(|a, b| (&a.source, &a.recipient).cmp(&(&b.source, &b.recipient)));
     let instruction = SettleAtomic::new(
-        stx.network_id.clone(),
+        stx.network_id,
         SettlementId::new(
             ids[seller].clone(),
             "frozen_bond_trade".parse().expect("settlement reference"),
@@ -1506,7 +1515,7 @@ fn redemption_claim_fails_atomically_when_units_are_missing() {
     let bond = h.bond.clone();
     let holder = h.ids[HOLDER_A].clone();
     h.run(MATURITY, |stx| {
-        let network = stx.network_id().clone();
+        let network = *stx.network_id();
         crate::smartcontracts::isi::asset::isi::debit_numeric_asset_balance_for_test(
             &mut stx.world,
             &network,
@@ -1567,8 +1576,8 @@ fn issuer_policies_cannot_trap_funded_payments() {
     }
     h.record_fund_cashflow(4, MATURITY);
     // After funding, the bond issuer requires a binding nobody has on the bond itself.
-    let bond = h.bond.clone();
-    h.set_usage_policy(MATURITY, &bond, &[]);
+    let instrument = h.bond.clone();
+    h.set_usage_policy(MATURITY, &instrument, &[]);
     h.claim_all(MATURITY, 4);
     assert_eq!(h.record().state.redeemed_units, q("300"));
     assert_eq!(h.vault_eur(), Quantity::zero());
@@ -1937,7 +1946,6 @@ fn rekey_moves_bond_parties_and_unclaimed_entitlements() {
                     &old,
                     AccountController::Single(key(seed).public_key().clone()),
                 )
-                .map_err(Error::from)
             })
             .expect("rekey");
         h.ids[who] = new.clone();
@@ -1969,7 +1977,6 @@ fn rekey_moves_bond_parties_and_unclaimed_entitlements() {
                 &vault,
                 AccountController::Single(key(0x64).public_key().clone()),
             )
-            .map_err(Error::from)
         })
         .expect_err("vault rekey");
     assert!(error.to_string().contains("bond.retained"), "{error}");
@@ -2450,8 +2457,7 @@ fn entitlements_of_one_bond_iterate_as_a_key_range() {
     assert_eq!(
         world
             .bond_entitlements_of_bond_iter(&h.bond, None, None)
-            .rev()
-            .next()
+            .next_back()
             .map(|(id, _)| id.clone()),
         Some(last)
     );

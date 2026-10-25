@@ -20,7 +20,7 @@ impl State {
 
 /// Same-source view readers whose actual unlocks notify only after this owner drops.
 /// Physical guards never remain held between calls; no caller-selected source is accepted.
-pub(crate) struct StateViewReleases<'state> {
+pub struct StateViewReleases<'state> {
     state: &'state State,
     pub(super) lifecycle: LaneLifecycleReleases<'state>,
 }
@@ -28,7 +28,7 @@ pub(crate) struct StateViewReleases<'state> {
 /// Original notices detached from a State borrow before an authenticated State swap.
 /// This is only cleanup custody; it grants no read or publication authority.
 #[must_use = "retain original read notices through every enclosing physical owner"]
-pub(crate) struct StateViewRetirement {
+pub struct StateViewRetirement {
     _geometry: crate::kura::KuraPublicationReleases,
     _indexes: [DeferredReleaseBatch; 12],
     _hashes: Option<DeferredReleaseBatch>,

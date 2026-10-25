@@ -235,19 +235,19 @@ mod tests {
     #[test]
     fn startup_errors_and_panics_are_not_ready_owners() {
         assert!(matches!(
-            OwnerThread::start::<()>(1, || Err(IssuerError::Selection), |_, _| unreachable!()),
+            OwnerThread::start::<()>(1, || Err(IssuerError::Selection), |(), _| unreachable!()),
             Err(IssuerError::Selection)
         ));
         assert!(matches!(
             OwnerThread::start::<()>(
                 1,
                 || panic!("fixture initializer panic"),
-                |_, _| unreachable!()
+                |(), _| unreachable!()
             ),
             Err(IssuerError::Unavailable)
         ));
         assert!(matches!(
-            OwnerThread::start::<()>(0, || Ok(()), |_, _| unreachable!()),
+            OwnerThread::start::<()>(0, || Ok(()), |(), _| unreachable!()),
             Err(IssuerError::Selection)
         ));
     }
@@ -429,7 +429,7 @@ mod tests {
                 OwnerThread::start(
                     1,
                     || Ok(()),
-                    |_, _| {
+                    |(), _| {
                         panic!("fixture accepted-operation panic");
                     },
                 )

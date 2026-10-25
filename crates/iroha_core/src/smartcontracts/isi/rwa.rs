@@ -53,7 +53,7 @@ pub mod isi {
             )
         })
     }
-    fn authoritative_rwa(entry: RwaEntry<'_>) -> Rwa {
+    fn authoritative_rwa(entry: &RwaEntry<'_>) -> Rwa {
         let value = entry.value().clone().into_inner();
         Rwa {
             id: entry.id().clone(),
@@ -70,7 +70,10 @@ pub mod isi {
         }
     }
     fn load_rwa(world: &impl WorldReadOnly, id: &RwaId) -> Result<Rwa, Error> {
-        world.rwa(id).map(authoritative_rwa).map_err(Error::from)
+        world
+            .rwa(id)
+            .map(|value| authoritative_rwa(&value))
+            .map_err(Error::from)
     }
     fn authority_is_controller(
         world: &impl WorldReadOnly,
@@ -126,7 +129,7 @@ pub mod isi {
         let mut child = Rwa::new(
             child_id,
             quantity.clone(),
-            parent.spec.clone(),
+            parent.spec,
             parent.primary_reference().clone(),
             parent.status().clone(),
             parent.metadata().clone(),
@@ -141,8 +144,7 @@ pub mod isi {
     fn child_from_merge(
         child_id: RwaId,
         owner: AccountId,
-        quantity: Quantity,
-        spec: NumericSpec,
+        (quantity, spec): (Quantity, NumericSpec),
         primary_reference: String,
         status: Option<Name>,
         metadata: Metadata,
@@ -217,7 +219,7 @@ pub mod isi {
             )
             .build(rwa_id, authority.clone());
             let (id, value) = rwa.clone().into_key_value();
-            state_transaction.world.insert_rwa_entry(id, value);
+            state_transaction.world.insert_rwa_entry(&(id), value);
             state_transaction
                 .world
                 .emit_events(Some(DomainEvent::Rwa(RwaEvent::Created(rwa))));
@@ -248,7 +250,7 @@ pub mod isi {
                 &source_lot,
                 "transfer",
             )?;
-            ensure_quantity_matches_spec(source_lot.spec.clone(), &quantity, "transfer")?;
+            ensure_quantity_matches_spec(source_lot.spec, &quantity, "transfer")?;
             if source_lot.owned_by != source {
                 return Err(Error::InvariantViolation(
                     format!(
@@ -332,7 +334,7 @@ pub mod isi {
                 destination.clone(),
             );
             let (id, value) = child.clone().into_key_value();
-            state_transaction.world.insert_rwa_entry(id, value);
+            state_transaction.world.insert_rwa_entry(&(id), value);
             state_transaction.world.emit_events([
                 DomainEvent::Rwa(RwaEvent::Created(child)),
                 DomainEvent::Rwa(RwaEvent::Split(RwaSplit {
@@ -396,14 +398,10 @@ pub mod isi {
                             "all merge parents must use the same numeric spec".into(),
                         ));
                     }
-                    None => spec = Some(source_lot.spec.clone()),
+                    None => spec = Some(source_lot.spec),
                     Some(_) => {}
                 }
-                ensure_quantity_matches_spec(
-                    source_lot.spec.clone(),
-                    parent.quantity(),
-                    "merge parent",
-                )?;
+                ensure_quantity_matches_spec(source_lot.spec, parent.quantity(), "merge parent")?;
                 let available = source_lot.available_quantity().ok_or_else(|| {
                     Error::InvariantViolation(
                         format!(
@@ -458,15 +456,14 @@ pub mod isi {
             let child = child_from_merge(
                 child_id.clone(),
                 authority.clone(),
-                merged_quantity,
-                spec,
+                (merged_quantity, spec),
                 self.primary_reference,
                 self.status,
                 self.metadata,
                 self.parents.clone(),
             );
             let (id, value) = child.clone().into_key_value();
-            state_transaction.world.insert_rwa_entry(id, value);
+            state_transaction.world.insert_rwa_entry(&(id), value);
             state_transaction.world.emit_events([
                 DomainEvent::Rwa(RwaEvent::Created(child)),
                 DomainEvent::Rwa(RwaEvent::Merged(RwaMerged {
@@ -498,7 +495,7 @@ pub mod isi {
                     format!("redeem is disabled for RWA {}", rwa.id()).into(),
                 ));
             }
-            ensure_quantity_matches_spec(rwa.spec.clone(), &self.quantity, "redeem")?;
+            ensure_quantity_matches_spec(rwa.spec, &self.quantity, "redeem")?;
             let available = rwa.available_quantity().ok_or_else(|| {
                 Error::InvariantViolation(
                     format!("RWA {} has invalid held quantity accounting", rwa.id()).into(),
@@ -626,7 +623,7 @@ pub mod isi {
                 rwa.controls().hold_enabled,
                 "hold",
             )?;
-            ensure_quantity_matches_spec(rwa.spec.clone(), &self.quantity, "hold")?;
+            ensure_quantity_matches_spec(rwa.spec, &self.quantity, "hold")?;
             let new_held = rwa
                 .held_quantity
                 .clone()
@@ -665,7 +662,7 @@ pub mod isi {
                 rwa.controls().hold_enabled,
                 "release",
             )?;
-            ensure_quantity_matches_spec(rwa.spec.clone(), &self.quantity, "release")?;
+            ensure_quantity_matches_spec(rwa.spec, &self.quantity, "release")?;
             let new_held = rwa
                 .held_quantity
                 .clone()
@@ -708,11 +705,7 @@ pub mod isi {
                 source_lot.controls().force_transfer_enabled,
                 "force transfer",
             )?;
-            ensure_quantity_matches_spec(
-                source_lot.spec.clone(),
-                &self.quantity,
-                "force transfer",
-            )?;
+            ensure_quantity_matches_spec(source_lot.spec, &self.quantity, "force transfer")?;
             let available = source_lot.available_quantity().ok_or_else(|| {
                 Error::InvariantViolation(
                     format!(
@@ -781,7 +774,7 @@ pub mod isi {
                 self.destination.clone(),
             );
             let (id, value) = child.clone().into_key_value();
-            state_transaction.world.insert_rwa_entry(id, value);
+            state_transaction.world.insert_rwa_entry(&(id), value);
             state_transaction.world.emit_events([
                 DomainEvent::Rwa(RwaEvent::Created(child)),
                 DomainEvent::Rwa(RwaEvent::ForceTransferred(RwaSplit {
@@ -941,7 +934,18 @@ pub mod isi {
         fn test_state() -> State {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            State::new(World::default(), kura, query_handle)
+            let world = World::default();
+            // Component registrations use an explicit policy authored before the block snapshot.
+            let mut parameters = world.parameters.block();
+            parameters
+                .set_parameter(
+                    crate::sumeragi::test_chain::crypto_fixture_policy()
+                        .into_parameter()
+                        .expect("canonical fixture crypto policy"),
+                )
+                .expect("install fixture crypto policy");
+            parameters.commit();
+            State::new(world, kura, query_handle)
         }
         fn seed_domain_name_lease(
             world: &mut crate::state::WorldTransaction<'_, '_>,
@@ -1056,7 +1060,11 @@ pub mod isi {
                 .map(|(id, value)| (id.clone(), value.clone().into_inner()))
                 .collect();
             assert_eq!(lots.len(), 2, "partial transfer should create a child lot");
-            let source = stx.world.rwa(&source_id).map(authoritative_rwa).unwrap();
+            let source = stx
+                .world
+                .rwa(&source_id)
+                .map(|value| authoritative_rwa(&value))
+                .unwrap();
             assert_eq!(source.quantity, "6".parse::<Quantity>().unwrap());
             assert_eq!(source.owned_by, owner);
             let child = lots
@@ -1136,14 +1144,18 @@ pub mod isi {
             .execute(&owner, &mut stx)
             .unwrap();
             assert_eq!(stx.world.rwas.iter().count(), 1);
-            let rwa = stx.world.rwa(&rwa_id).map(authoritative_rwa).unwrap();
+            let rwa = stx
+                .world
+                .rwa(&rwa_id)
+                .map(|value| authoritative_rwa(&value))
+                .unwrap();
             assert_eq!(rwa.owned_by, recipient);
             assert_eq!(rwa.quantity, "3".parse::<Quantity>().unwrap());
             assert!(
-                !stx.world
+                stx.world
                     .rwas_by_owner
                     .get(&(owner.clone(), rwa_id.clone()))
-                    .is_some(),
+                    .is_none(),
                 "full transfer should remove the lot from the previous owner index",
             );
             assert!(
@@ -1194,7 +1206,7 @@ pub mod isi {
             assert_eq!(
                 stx.world
                     .rwa(&parent_ids[0])
-                    .map(authoritative_rwa)
+                    .map(|value| authoritative_rwa(&value))
                     .unwrap()
                     .quantity,
                 "3".parse::<Quantity>().unwrap()
@@ -1202,7 +1214,7 @@ pub mod isi {
             assert_eq!(
                 stx.world
                     .rwa(&parent_ids[1])
-                    .map(authoritative_rwa)
+                    .map(|value| authoritative_rwa(&value))
                     .unwrap()
                     .quantity,
                 "4".parse::<Quantity>().unwrap()
@@ -1242,7 +1254,7 @@ pub mod isi {
             assert_eq!(
                 stx.world
                     .rwa(&merged_id)
-                    .map(authoritative_rwa)
+                    .map(|value| authoritative_rwa(&value))
                     .unwrap()
                     .quantity,
                 "4".parse::<Quantity>().unwrap()
@@ -1692,7 +1704,7 @@ pub mod query {
         }
         true
     }
-    fn entry_to_rwa(entry: RwaEntry<'_>) -> Rwa {
+    fn entry_to_rwa(entry: &RwaEntry<'_>) -> Rwa {
         let value = entry.value().clone().into_inner();
         Rwa {
             id: entry.id().clone(),
@@ -1722,20 +1734,17 @@ pub mod query {
             );
             let iter: Box<dyn Iterator<Item = Rwa> + '_> =
                 if let Some(candidate_ids) = predicate_view.indexed_candidate_ids(world) {
-                    Box::new(
-                        candidate_ids
-                            .into_iter()
-                            .filter_map(move |id| world.rwa(&id).ok().map(entry_to_rwa)),
-                    )
+                    Box::new(candidate_ids.into_iter().filter_map(move |id| {
+                        world.rwa(&id).ok().map(|value| entry_to_rwa(&value))
+                    }))
                 } else {
-                    Box::new(world.rwas_iter().map(entry_to_rwa))
+                    Box::new(world.rwas_iter().map(|value| entry_to_rwa(&value)))
                 };
             Ok(iter.filter(move |rwa| {
-                if let Some(predicate) = predicate_json.as_ref() {
-                    predicate_matches_rwa(predicate, rwa)
-                } else {
-                    filter.applies(rwa)
-                }
+                predicate_json.as_ref().map_or_else(
+                    || filter.applies(rwa),
+                    |predicate| predicate_matches_rwa(predicate, rwa),
+                )
             }))
         }
     }
@@ -1802,7 +1811,18 @@ pub mod query {
         fn find_rwas_applies_predicate() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let world = World::default();
+            // Component account writes require an authored policy before the block snapshot.
+            let mut parameters = world.parameters.block();
+            parameters
+                .set_parameter(
+                    crate::sumeragi::test_chain::crypto_fixture_policy()
+                        .into_parameter()
+                        .expect("canonical fixture crypto policy"),
+                )
+                .expect("install fixture crypto policy");
+            parameters.commit();
+            let state = State::new(world, kura, query_handle);
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
@@ -1850,7 +1870,18 @@ pub mod query {
         fn find_rwas_filters_owner_with_owner_index() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let world = World::default();
+            // Component account writes require an authored policy before the block snapshot.
+            let mut parameters = world.parameters.block();
+            parameters
+                .set_parameter(
+                    crate::sumeragi::test_chain::crypto_fixture_policy()
+                        .into_parameter()
+                        .expect("canonical fixture crypto policy"),
+                )
+                .expect("install fixture crypto policy");
+            parameters.commit();
+            let state = State::new(world, kura, query_handle);
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
@@ -1929,7 +1960,18 @@ pub mod query {
         fn find_rwas_intersects_status_and_frozen_wsv_indexes() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let world = World::default();
+            // Component account writes require an authored policy before the block snapshot.
+            let mut parameters = world.parameters.block();
+            parameters
+                .set_parameter(
+                    crate::sumeragi::test_chain::crypto_fixture_policy()
+                        .into_parameter()
+                        .expect("canonical fixture crypto policy"),
+                )
+                .expect("install fixture crypto policy");
+            parameters.commit();
+            let state = State::new(world, kura, query_handle);
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
@@ -2014,14 +2056,14 @@ pub mod query {
             assert!(
                 stx.world
                     .rwas_by_status
-                    .get(&((&Some(vaulted.clone())).clone(), target_id.clone()))
+                    .get(&(Some(vaulted.clone()).clone(), target_id.clone()))
                     .is_some(),
                 "target lot should be present in the status index before commit",
             );
             assert!(
                 stx.world
                     .rwas_by_frozen
-                    .get(&(true.clone(), target_id.clone()))
+                    .get(&(true, target_id.clone()))
                     .is_some(),
                 "target lot should be present in the frozen-state index before commit",
             );

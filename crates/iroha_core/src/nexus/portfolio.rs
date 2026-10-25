@@ -294,7 +294,7 @@ mod tests {
         seed_world_with_scoped_assets(
             &mut state,
             &domain_id,
-            account.clone(),
+            &(account.clone()),
             uaid,
             &[
                 (
@@ -401,7 +401,7 @@ mod tests {
     fn seed_world_with_scoped_assets(
         state: &mut State,
         domain_id: &DomainId,
-        account_id: AccountId,
+        account_id: &AccountId,
         uaid: UniversalAccountId,
         assets: &[(AssetDefinitionId, &str, AssetBalanceScope, u64)],
         bindings: Option<&[(AccountId, UniversalAccountId, DataSpaceId)]>,
@@ -434,8 +434,7 @@ mod tests {
                 .insert(account_id.clone(), Owned::new(details));
             world.uaid_accounts.insert(uaid, account_id.clone());
             for (def_id, _, scope, amount) in assets {
-                let asset_id =
-                    AssetId::with_scope(def_id.clone(), account_id.clone(), scope.clone());
+                let asset_id = AssetId::with_scope(def_id.clone(), account_id.clone(), *scope);
                 world
                     .assets
                     .insert(asset_id.clone(), Owned::new(Quantity::from(*amount)));

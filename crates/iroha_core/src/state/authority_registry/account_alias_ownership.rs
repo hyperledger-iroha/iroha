@@ -14,7 +14,7 @@ use std::{collections::BTreeSet, convert::Infallible};
 
 /// Which exact logical native image failed validation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum AliasImage {
+pub enum AliasImage {
     /// Current committed rows.
     Current,
     /// Original predecessor reconstructed without changing undo.
@@ -23,7 +23,7 @@ pub(crate) enum AliasImage {
 
 /// The violated relation; errors carry no account labels or private row values.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum AliasMismatch {
+pub enum AliasMismatch {
     /// An authoritative alias points to an absent account.
     MissingAccount,
     /// A primary label is absent or belongs to another account.
@@ -40,7 +40,7 @@ pub(crate) enum AliasMismatch {
 
 /// Local scheduling refusal remains distinct from inconsistent canonical sources.
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
-pub(crate) enum AliasOwnershipError {
+pub enum AliasOwnershipError {
     /// Retry with enough admitted work; no validity decision was made.
     #[error("account-alias derivation exceeds its local work bound")]
     WorkLimit,

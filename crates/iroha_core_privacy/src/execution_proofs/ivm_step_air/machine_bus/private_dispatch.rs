@@ -114,7 +114,10 @@ impl Program {
         for instruction in words.iter().copied() {
             if role(instruction) == Some(Role::Literal)
                 && contract
-                    .scalar_literal(wide::literal_index(instruction) as u16)
+                    .scalar_literal(
+                        u16::try_from(wide::literal_index(instruction))
+                            .expect("bounded circuit index"),
+                    )
                     .is_none()
             {
                 return None;
@@ -134,7 +137,7 @@ impl Program {
         &self.callables
     }
 
-    pub(super) fn fetch<'a>(&self, row: &'a [F; WIDTH]) -> &'a [F; MAX_WORDS] {
+    pub(super) fn fetch(row: &[F; WIDTH]) -> &[F; MAX_WORDS] {
         row[FETCH..FETCH + MAX_WORDS].try_into().unwrap()
     }
 
@@ -171,6 +174,10 @@ pub(super) struct OriginalPackets {
 }
 impl OriginalPackets {
     /// Untrusted candidate columns; polynomial checks establish every role.
+    #[expect(
+        clippy::large_types_passed_by_value,
+        reason = "The constructor adopts the original packet array into its sole zeroizing owner"
+    )]
     pub(super) fn candidate(fields: [[F; packet::WIDTH]; PORTS]) -> Self {
         Self { fields }
     }
@@ -212,8 +219,7 @@ impl OriginalPackets {
         for (index, history) in rows.iter().enumerate() {
             super::private_history::append_residues(
                 out,
-                history.current,
-                history.next,
+                (history.current, history.next),
                 history.aux,
                 history.next_aux,
                 history.fixed,
@@ -291,13 +297,16 @@ fn constant_limb(value: u64, index: usize) -> F {
 /// state/alias continuity remains in the same shared private history, not here.
 fn header(
     out: &mut impl crate::execution_proofs::ivm_step_air::residues::Sink,
+
     schedule: Schedule,
+
     packets: &OriginalPackets,
+
     slot: usize,
-    space: packet::Space,
-    index: F,
-    generation: F,
+    (space, index, generation): (packet::Space, F, F),
+
     enabled: F,
+
     write: F,
 ) {
     let p = &packets.fields[slot];
@@ -447,9 +456,7 @@ fn append_control_residues<'a>(
         schedule,
         packets,
         PC_READ,
-        Space::Owner,
-        active.mul(F(u64::from(PC_OWNER))),
-        F::ZERO,
+        (Space::Owner, active.mul(F(u64::from(PC_OWNER))), F::ZERO),
         active,
         F::ZERO,
     );
@@ -458,9 +465,7 @@ fn append_control_residues<'a>(
         schedule,
         packets,
         GAS_DEBIT,
-        Space::Owner,
-        active.mul(F(u64::from(GAS_OWNER))),
-        F::ZERO,
+        (Space::Owner, active.mul(F(u64::from(GAS_OWNER))), F::ZERO),
         active,
         active,
     );
@@ -469,9 +474,7 @@ fn append_control_residues<'a>(
         schedule,
         packets,
         PC_WRITE,
-        Space::Owner,
-        active.mul(F(u64::from(PC_OWNER))),
-        F::ZERO,
+        (Space::Owner, active.mul(F(u64::from(PC_OWNER))), F::ZERO),
         active,
         active,
     );
@@ -480,9 +483,7 @@ fn append_control_residues<'a>(
         schedule,
         packets,
         CYCLE_WRITE,
-        Space::Owner,
-        active.mul(F(u64::from(CYCLE_OWNER))),
-        F::ZERO,
+        (Space::Owner, active.mul(F(u64::from(CYCLE_OWNER))), F::ZERO),
         active,
         active,
     );
@@ -493,9 +494,11 @@ fn append_control_residues<'a>(
         schedule,
         packets,
         RUNNING_WRITE,
-        Space::Owner,
-        active.mul(F(u64::from(RUNNING_OWNER))),
-        F::ZERO,
+        (
+            Space::Owner,
+            active.mul(F(u64::from(RUNNING_OWNER))),
+            F::ZERO,
+        ),
         active,
         active,
     );
@@ -590,9 +593,7 @@ fn append_control_residues<'a>(
         schedule,
         packets,
         RETURN_REGISTER,
-        Space::Register,
-        returning,
-        F::ZERO,
+        (Space::Register, returning, F::ZERO),
         returning,
         F::ZERO,
     );
@@ -601,13 +602,15 @@ fn append_control_residues<'a>(
         schedule,
         packets,
         MEMORY_BASE,
-        Space::Register,
-        weighted(&|_, w| match role(w) {
-            Some(Role::Store) => F(wide::rd(w) as u64),
-            Some(Role::Load) => F(wide::rs1(w) as u64),
-            _ => F::ZERO,
-        }),
-        F::ZERO,
+        (
+            Space::Register,
+            weighted(&|_, w| match role(w) {
+                Some(Role::Store) => F(wide::rd(w) as u64),
+                Some(Role::Load) => F(wide::rs1(w) as u64),
+                _ => F::ZERO,
+            }),
+            F::ZERO,
+        ),
         memory,
         F::ZERO,
     );
@@ -616,15 +619,17 @@ fn append_control_residues<'a>(
         schedule,
         packets,
         STORE_VALUE,
-        Space::Register,
-        weighted(&|_, w| {
-            if role(w) == Some(Role::Store) {
-                F(wide::rs1(w) as u64)
-            } else {
-                F::ZERO
-            }
-        }),
-        F::ZERO,
+        (
+            Space::Register,
+            weighted(&|_, w| {
+                if role(w) == Some(Role::Store) {
+                    F(wide::rs1(w) as u64)
+                } else {
+                    F::ZERO
+                }
+            }),
+            F::ZERO,
+        ),
         store,
         F::ZERO,
     );
@@ -708,7 +713,7 @@ fn append_control_residues<'a>(
                 core::array::from_fn(|i| schedule.clocks[first + i]),
             )
             .unwrap(),
-            &[row[inverse]],
+            [row[inverse]],
             &selection,
             frame_lifecycle::Ports {
                 counter: &p[first],
@@ -731,9 +736,11 @@ fn append_control_residues<'a>(
         schedule,
         packets,
         CALL_DEPTH,
-        Space::Owner,
-        active.mul(F(u64::from(CALL_DEPTH_OWNER))),
-        F::ZERO,
+        (
+            Space::Owner,
+            active.mul(F(u64::from(CALL_DEPTH_OWNER))),
+            F::ZERO,
+        ),
         active,
         child.add(returning),
     );
@@ -782,9 +789,11 @@ fn append_control_residues<'a>(
         schedule,
         packets,
         CHILD_PROTECTED_PC,
-        Space::Owner,
-        child.mul(F(u64::from(RETURN_PC_OWNER))),
-        p[CHILD_ACTIVE][AFTER],
+        (
+            Space::Owner,
+            child.mul(F(u64::from(RETURN_PC_OWNER))),
+            p[CHILD_ACTIVE][AFTER],
+        ),
         child,
         child,
     );
@@ -793,9 +802,11 @@ fn append_control_residues<'a>(
         schedule,
         packets,
         RETURN_PROTECTED_PC,
-        Space::Owner,
-        returning.mul(F(u64::from(RETURN_PC_OWNER))),
-        p[RETURN_ACTIVE][BEFORE],
+        (
+            Space::Owner,
+            returning.mul(F(u64::from(RETURN_PC_OWNER))),
+            p[RETURN_ACTIVE][BEFORE],
+        ),
         returning,
         F::ZERO,
     );
@@ -804,9 +815,7 @@ fn append_control_residues<'a>(
         schedule,
         packets,
         LINK_WRITE,
-        Space::Register,
-        child,
-        F::ZERO,
+        (Space::Register, child, F::ZERO),
         child,
         child,
     );

@@ -25,14 +25,14 @@ use mv::storage::StorageReadOnly;
 
 #[cfg(test)]
 #[path = "validator_committee/tests.rs"]
-pub(crate) mod tests;
+pub mod tests;
 
 /// A requested exit cannot release either a current seat or an immutable future seat.
 #[expect(
     single_use_lifetimes,
     reason = "stable Rust requires a named reference lifetime in the iterator item"
 )]
-pub(crate) fn peer_has_committee_obligation<'a>(
+pub fn peer_has_committee_obligation<'a>(
     world: &impl WorldReadOnly,
     current: impl IntoIterator<Item = &'a PeerId>,
     peer: &PeerId,
@@ -130,17 +130,18 @@ fn prepare_staking_obligations(
                     updates.shares.push((share_key.clone(), retained));
                 }
             }
-        } else if let Some(requested) = record.election_exit_height {
-            if record.deactivation_height.is_none() && requested <= outcome.first_height {
-                let mut ended = record.clone();
-                ended.deactivation_height = Some(
-                    outcome
-                        .first_height
-                        .max(requested)
-                        .max(record.activation_height),
-                );
-                updates.validators.push((key.clone(), ended));
-            }
+        } else if let Some(requested) = record.election_exit_height
+            && record.deactivation_height.is_none()
+            && requested <= outcome.first_height
+        {
+            let mut ended = record.clone();
+            ended.deactivation_height = Some(
+                outcome
+                    .first_height
+                    .max(requested)
+                    .max(record.activation_height),
+            );
+            updates.validators.push((key.clone(), ended));
         }
     }
     Ok(updates)
@@ -174,16 +175,15 @@ fn validate_retained_staking_obligations(
                 "retained committee custody has a substituted validator identity".to_owned(),
             );
         }
-        if let Some(through) = live.get(&record.peer_id) {
-            if !covered.insert(record.peer_id.clone())
+        if let Some(through) = live.get(&record.peer_id)
+            && (!covered.insert(record.peer_id.clone())
                 || record
                     .deactivation_height
-                    .is_some_and(|end| end <= *through)
-            {
-                return Err(
-                    "snapshot revokes or duplicates a retained committee obligation".to_owned(),
-                );
-            }
+                    .is_some_and(|end| end <= *through))
+        {
+            return Err(
+                "snapshot revokes or duplicates a retained committee obligation".to_owned(),
+            );
         }
         let Some(through) = historical
             .get(&record.peer_id)
@@ -212,7 +212,7 @@ fn validate_retained_staking_obligations(
 }
 
 /// Check every persisted preparation, including exact storage identities.
-pub(crate) fn validate_persisted_progress(world: &impl WorldReadOnly) -> Result<(), String> {
+pub fn validate_persisted_progress(world: &impl WorldReadOnly) -> Result<(), String> {
     for (epoch, transition) in world.validator_committee_transitions().iter() {
         if *epoch != transition.preparation.target_epoch {
             return Err("committee snapshot key differs from its exact target epoch".to_owned());
@@ -299,7 +299,7 @@ fn validate_current_beacon(
 /// Authenticate both presence and absence from the exact snapshot cut with the same native
 /// verifier used by recovery. World supplies no authority to that reader. Genesis-only checks
 /// authenticate its signed authority, not its execution roots; startup must reexecute genesis.
-pub(crate) fn validate_committed_progress(
+pub fn validate_committed_progress(
     world: &impl WorldReadOnly,
     chain_id: &iroha_model_base::chain::ChainId,
     network: iroha_data_model::NetworkId,
@@ -361,11 +361,12 @@ pub(crate) fn validate_committed_progress(
         let schedule = &certified.commitment().schedule;
         let current = &schedule.current;
         graph = Some(
-            match graph {
-                None => ConsensusSchedule::from_genesis_outcome(schedule),
-                Some(previous) => previous.advanced(schedule),
-            }
-            .map_err(|error| error.to_string())?,
+            graph
+                .map_or_else(
+                    || ConsensusSchedule::from_genesis_outcome(schedule),
+                    |previous| previous.advanced(schedule),
+                )
+                .map_err(|error| error.to_string())?,
         );
         if current.mode == ConsensusMode::Npos {
             add_obligations(
@@ -531,7 +532,7 @@ pub(crate) fn validate_committed_progress(
 /// Resolve the incumbent validator generation from the authenticated committed result.
 /// The next-height World schedule must agree with the certified boundary decision; mutable
 /// registrations and local certificate caches cannot supply replacement authority.
-pub(crate) fn current_authority(
+pub fn current_authority(
     state: &impl StateReadOnly,
 ) -> Result<(ValidatorGenerationV1, ValidatorEpochAuthorizationV1), Attempt<String>> {
     let height = u64::try_from(state.height()).map_err(|_| "committed height overflows")?;
@@ -567,7 +568,7 @@ pub(crate) fn current_authority(
 
 /// Admit a finalized public transcript without giving it independent rotation authority.
 /// The returned flag permits next-height activation only for the genesis bootstrap.
-pub(crate) fn validate_beacon_finalization(
+pub fn validate_beacon_finalization(
     state: &StateTransaction<'_, '_>,
     record: &crate::beacon::RetainedFinalizedGlobalThresholdBeaconSessionV1,
     authorizing_roster: &[PeerId],
@@ -813,9 +814,7 @@ impl StateBlock<'_> {
                             .is_some()
                     {
                         return Err(
-                            ("future committee attempts cannot be replaced or reanchored"
-                                .to_owned())
-                            .into(),
+                            "future committee attempts cannot be replaced or reanchored".to_owned()
                         );
                     }
                     let transition = ValidatorCommitteeTransitionV1 {
@@ -873,7 +872,7 @@ fn owns_validator(world: &impl WorldReadOnly, owner: &AccountId, peer: &PeerId) 
 }
 
 /// Reverify the prepared transcript and every recorded actual-custody proof from public state.
-pub(crate) fn verify_progress(
+pub fn verify_progress(
     world: &impl WorldReadOnly,
     transition: &ValidatorCommitteeTransitionV1,
 ) -> Result<(), String> {

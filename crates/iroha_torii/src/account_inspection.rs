@@ -7,8 +7,8 @@ use super::*;
 use iroha_data_model::account::AccountAddress;
 use norito::json::{BoundedJsonError, FastJsonWrite, JsonSerialize, JsonWriteSink};
 
-pub(super) const MAX_REQUEST_BYTES: usize = 4096;
-pub(super) const BODY_READ_TIMEOUT: Duration = Duration::from_secs(5);
+pub const MAX_REQUEST_BYTES: usize = 4096;
+pub const BODY_READ_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_ACCOUNT_BYTES: usize = 2048;
 const MAX_RESPONSE_BYTES: usize = 8192;
 const ENDPOINT: &str = "v1/accounts/inspect";
@@ -166,7 +166,7 @@ fn inspect(
     )
 }
 
-pub(super) async fn handler(
+pub async fn handler(
     State(app): State<SharedAppState>,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     request: axum::http::Request<Body>,
@@ -372,7 +372,7 @@ mod tests {
         assert!(inspect(&network, &norito::json::to_vec(&value).unwrap()).is_err());
         let duplicate = String::from_utf8(original)
             .unwrap()
-            .replacen("{", "{\"version\":1,", 1);
+            .replacen('{', "{\"version\":1,", 1);
         assert!(inspect(&network, duplicate.as_bytes()).is_err());
         assert!(inspect(&network, &vec![b' '; MAX_REQUEST_BYTES + 1]).is_err());
         for (request_id, nonce) in [

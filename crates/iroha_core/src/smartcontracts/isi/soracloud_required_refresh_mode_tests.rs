@@ -88,7 +88,7 @@ fn required_refresh_mode_accepts_only_the_explicit_matching_mode() {
         )
         .expect_err("a mismatched explicit mode must not retry the other mode");
         assert_invalid_parameter_contains(
-            error,
+            &(error),
             &format!("direct required-mode control refresh transcript failed {label} validation"),
         );
     }
@@ -120,9 +120,9 @@ fn required_refresh_mode_rejects_malformed_transcripts_and_key_shapes() {
                 mode,
             )
             .expect_err("malformed transcript inventory cannot pass the typed helper");
-            assert_invalid_parameter_contains(error.clone(), "rotation_transcripts.seed");
+            assert_invalid_parameter_contains(&(error), "rotation_transcripts.seed");
             assert_invalid_parameter_contains(
-                error,
+                &(error),
                 &format!("refresh transcript failed {label} validation"),
             );
         }
@@ -141,7 +141,7 @@ fn required_refresh_mode_rejects_malformed_transcripts_and_key_shapes() {
         )
         .expect_err("malformed rotation ciphertext shape cannot pass transcript replay");
         assert_invalid_parameter_contains(
-            error,
+            &(error),
             &format!("refresh transcript failed {label} validation"),
         );
     }

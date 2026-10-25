@@ -6,7 +6,7 @@
 use crate::{execution_attempt::ExecutionAttemptError as Attempt, state::WorldReadOnly};
 
 /// Resolve the signed on-chain delay before consensus-evidence penalties apply.
-pub(crate) fn resolve_npos_slashing_delay_blocks_from_world(
+pub fn resolve_npos_slashing_delay_blocks_from_world(
     world: &impl WorldReadOnly,
 ) -> Result<Option<u64>, Attempt<String>> {
     Ok(world

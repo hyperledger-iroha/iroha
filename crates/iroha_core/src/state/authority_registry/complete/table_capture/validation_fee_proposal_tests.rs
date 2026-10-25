@@ -36,6 +36,10 @@ fn state() -> State {
     )
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 fn capture(state: &State) -> Result<Option<CanonicalTablePairedSnapshot>, LeafError> {
     let TableMaterializer::Single { capture, .. } = TABLE_MATERIALIZERS
         .iter()

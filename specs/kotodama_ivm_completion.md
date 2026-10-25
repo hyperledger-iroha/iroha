@@ -187,10 +187,11 @@ the capture. The frozen adapter retains all three exact State targets in the sam
 mode and uses the original State pool. See the [scoped relation](frozen_account_identity_relation.md).
 
 Committed and frozen NFT/RWA capture share one sealed relation over the actual
-three NFT and four RWA original owners. Both images require exact nonempty
-owner/domain and owner/status/frozen membership; `None` status is a populated
-key. Physical advances, complete predecessor masks, lookup/member tails and both
-full typed equality operands are prepaid. The 4,332/4,626 singleton references
+three NFT and four RWA original owners. Both images require exact
+owner/domain and owner/status/frozen membership rows; `None` status is a
+populated key. Physical advances, complete predecessor masks, lookup/membership
+tails and both full typed equality operands are prepaid. The 4,320/4,608
+singleton references
 are local scheduling, with wider or denser cuts able to defer without changing
 validity or gas. Every committed native currentness Result precedes the held
 encoding result, reader drop and final State fence. Frozen capture requires the
@@ -204,8 +205,8 @@ fresh runtime qualification and complete State publication remain open. See the
 Committed and frozen escrow capture share one sealed relation over the actual
 source and seller, optional-buyer and status indexes in both original images.
 Buyerless records require no buyer group and cannot appear in any such group.
-Physical advances, complete predecessor masks, lookup/member tails and both
-complete equality operands are prepaid; the 1,366-unit singleton reference is a
+Physical advances, complete predecessor masks, lookup/membership tails and both
+complete equality operands are prepaid; the 1,348-unit singleton reference is a
 local schedule, with wider or denser cuts able to defer without changing validity
 or gas. All four native probes run before the held encoding result, reader drop
 and final State fence. Frozen capture retains four exact targets with equal
@@ -217,10 +218,10 @@ physical funding and finalized-anchor authority remain open.
 
 Committed and frozen repo-agreement capture share one sealed relation over the
 original rows and initiator, counterparty and optional-custodian indexes. Both
-images require exact nonempty inverse membership; custodianless records cannot
-appear in a custodian group. Physical advances, complete masks, lookups and member
+images require exact inverse membership rows; custodianless records cannot
+appear in a custodian row. Physical advances, complete masks, lookups and membership
 tails admit both full Name UTF-8 or account-controller operands before equality.
-The 1,222-unit reference is local scheduling, with wider or denser cuts able to
+The 1,204-unit reference is local scheduling, with wider or denser cuts able to
 defer without changing validity or gas. All four committed currentness Results
 precede the held encoding result, reader drop and final State fence. Frozen
 capture requires four actual State targets, equal Ordinary/Replace modes and the
@@ -233,10 +234,10 @@ authority.
 
 Asset lookup recovery projects all eight derived indexes from both retained
 definition/domain/balance images. Owning-domain changes also move untouched
-balances in the domain index; holder sets deduplicate balance partitions and
+balances in the domain index; holder rows deduplicate balance partitions and
 nonzero membership requires at least one nonzero partition in that image.
 Both images must satisfy definition and domain references before any index is
-replaced. Recovery retains complete predecessor buckets and redundant source
+replaced. Recovery retains complete predecessor memberships and redundant source
 touches without modifying canonical source rows or undo. This is snapshot index
 reconstruction, not an authenticated live capture or finalized State root.
 
@@ -305,8 +306,8 @@ consume bounded local work. Capture neither repairs indexes nor clones proposal
 payloads, and checks both original reader identities before returning. Exhausting
 the local allowance defers capture without changing transaction validity.
 
-Proof capture checks the exact stored-key/status projection against all three
-status buckets in both native images. Ordered borrowed source/undo cursors
+Proof capture checks the exact stored-key/status projection against the
+`(status, id)` membership rows in both native images. Ordered borrowed source/undo cursors
 precharge physical rows, tombstones and variable backend-key comparisons without
 allocating membership maps or searching variable keys in trees. Both original
 readers remain through encoding and the native identity checks; the unchecked
@@ -381,10 +382,10 @@ or normalizing original literals. Its named 6,696-unit per-row descriptor is a l
 reference; larger quadratic or undo cuts may defer without changing gas or ledger
 validity. See the [scoped relation](frozen_contract_alias_relation.md).
 
-Domain-owner capture retains exact storage-key and stored-owner bucket membership
+Domain-owner capture retains exact storage-key and stored-owner membership rows
 in both original images, including complete predecessor masking. It prepays every
 physical advance and both full domain/controller comparisons without allocating
-key normalization or tree lookups. The 1,292-unit single-Ed25519/max-domain reference
+key normalization or tree lookups. The 1,288-unit single-Ed25519/max-domain reference
 is local work policy; wider or quadratic cuts can defer without changing gas or
 validity. It adds no account-existence or embedded record-id requirement. See the
 [scoped relation](frozen_domain_owner_relation.md).
@@ -462,15 +463,16 @@ custody and serializer scratch remain open; see the
 [source-coupled relation](frozen_contract_subject_relation.md).
 
 Asset-balance capture now shares the sole original relation across committed
-readers and the caller's eight frozen balance/reference/index owners. Complete
-physical masks, lookup/member/partition tails and typed comparison geometry are
-prepaid before inspection. Original phased source/index errors, existential
-partition membership and quantity-zero checks remain. All eight currentness
-Results precede propagation; paired encoding retains its Result and readers
-through release and the final State fence. Frozen capture retains exact targets,
-equal modes and the original allocation pool, without later reader refresh.
-The independent Global reference is4146, valid Restricted reference4148;
-original fixtures2144/2838 and absent Global undo735/840 remain exact controls.
+readers and the caller's ten frozen balance, reference, direct-home, membership
+and count owners. Complete physical masks, lookup/membership/partition tails and
+typed comparison geometry are prepaid before inspection. Original phased
+source/index errors, existential partition membership and quantity-zero checks
+remain. All ten currentness Results precede propagation; paired encoding retains
+its Result and readers through release and the final State fence. Frozen capture
+retains exact targets, equal modes and the original allocation pool, without
+later reader refresh. The independent Global reference is3566, valid Restricted
+reference3568; original fixtures1570/2258 and absent Global undo525/630 remain
+exact controls.
 The original16MiB physical retry limit is preserved. Fresh runtime qualification,
 complete physical backing and sole publication/recovery custody remain open;
 see the [source-coupled balance relation](frozen_asset_balance_relation.md).

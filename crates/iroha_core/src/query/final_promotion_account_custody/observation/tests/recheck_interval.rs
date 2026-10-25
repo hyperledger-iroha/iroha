@@ -5,7 +5,12 @@ use super::*;
 fn verified_current(f: &mut Fixture) -> VerifiedFinalPromotionAccountCheckV1 {
     let pending = f.pending();
     assert_eq!(
-        f.commit(NOW, vec![pending.signed_transaction().clone()], true, true),
+        f.commit(
+            NOW,
+            std::slice::from_ref(pending.signed_transaction()),
+            true,
+            true
+        ),
         [true]
     );
     pending
@@ -24,7 +29,12 @@ fn initial_interval_enforces_earliest_observation_age_at_exact_boundary() {
         assert_eq!(f.policy.max_anchor_age_ms, 60_000);
         let pending = f.pending();
         assert_eq!(
-            f.commit(NOW, vec![pending.signed_transaction().clone()], true, true),
+            f.commit(
+                NOW,
+                std::slice::from_ref(pending.signed_transaction()),
+                true,
+                true
+            ),
             [true]
         );
         let result = pending.verify_finalized(|| Ok(interval(2000, upper)));
@@ -112,7 +122,7 @@ fn retained_interval_does_not_claim_newer_native_authority() {
     assert_eq!(
         f.commit(
             NOW + 1,
-            vec![
+            &[
                 pending.signed_transaction().clone(),
                 f.sign(revoke.into(), 1, NOW + 1)
             ],
@@ -145,7 +155,12 @@ fn retained_account_interval_rechecks_custody_expiry_before_the_original_age_lim
     let mut f = Fixture::new();
     let pending = f.pending();
     assert_eq!(
-        f.commit(NOW, vec![pending.signed_transaction().clone()], true, true),
+        f.commit(
+            NOW,
+            std::slice::from_ref(pending.signed_transaction()),
+            true,
+            true
+        ),
         [true]
     );
     let verified = pending

@@ -1,7 +1,7 @@
-//! Typed frame identity assertions shared by the Core SoraFS owner fixtures.
+//! Typed frame identity assertions shared by the Core `SoraFS` owner fixtures.
 
 /// Check the declared root identity and its nominal identity inside a generic parent.
-pub(crate) fn assert_identity<T: norito::NoritoSchema>(expected: &str) {
+pub fn assert_identity<T: norito::NoritoSchema>(expected: &str) {
     assert_eq!(T::nominal_name(), expected);
     assert_eq!(T::frame_name(), expected);
     assert_eq!(
@@ -15,7 +15,7 @@ pub(crate) fn assert_identity<T: norito::NoritoSchema>(expected: &str) {
 }
 
 /// Replay an actual canonical frame under every supported layout and reject a different root.
-pub(crate) fn assert_canonical_frame<T>(value: &T, expected: &str) -> Vec<u8>
+pub fn assert_canonical_frame<T>(value: &T, expected: &str) -> Vec<u8>
 where
     T: norito::NoritoSerialize,
     for<'de> T: norito::NoritoDeserialize<'de>,

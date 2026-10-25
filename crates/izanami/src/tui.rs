@@ -27,7 +27,7 @@ pub fn launch(args: IzanamiArgs) -> Result<Option<(ChaosConfig, IzanamiArgs)>> {
     terminal.show_cursor()?;
     let final_args = app.args.clone();
     match outcome? {
-        Outcome::Run(config) => Ok(Some((config, final_args))),
+        Outcome::Run(config) => Ok(Some((*config, final_args))),
         Outcome::Exit => Ok(None),
     }
 }
@@ -590,7 +590,7 @@ impl App {
                     text: "Starting Izanami...".into(),
                     is_error: false,
                 });
-                Some(Outcome::Run(config))
+                Some(Outcome::Run(Box::new(config)))
             }
             Err(e) => {
                 self.message = Some(Message {
@@ -733,7 +733,7 @@ impl App {
     }
 }
 enum Outcome {
-    Run(ChaosConfig),
+    Run(Box<ChaosConfig>),
     Exit,
 }
 #[cfg(test)]

@@ -285,7 +285,7 @@ fn speculate(owner: &Arc<Owner>, job: state::SpeculativeSendJobV1) {
                 Ok(None) => true,
                 Err(_) => false,
             };
-            owner.background.record_native_work(turn.finish(returned));
+            owner.background.record_native_work(&turn.finish(returned));
         });
 }
 pub(crate) fn execute_reviewed(id: u64, token: u64, request: &[u8]) -> Result<Response> {
@@ -297,7 +297,7 @@ pub(crate) fn execute_reviewed(id: u64, token: u64, request: &[u8]) -> Result<Re
     });
     owner
         .background
-        .record_native_work(turn.finish(result.is_ok()));
+        .record_native_work(&turn.finish(result.is_ok()));
     result
 }
 pub(crate) fn discard_review(id: u64, token: u64) -> Result<()> {

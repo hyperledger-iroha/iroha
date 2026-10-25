@@ -79,7 +79,7 @@ impl Run for Command {
 /// Read-only exact staking intent supplied as canonical Norito JSON.
 #[derive(clap::Args, Debug)]
 pub struct PrepareArgs {
-    /// PublicLanePreparationRequestV1 with explicit operation, amount and expiry offset
+    /// `PublicLanePreparationRequestV1` with explicit operation, amount and expiry offset
     #[arg(long, value_name = "PATH")]
     pub request: PathBuf,
 }
@@ -114,7 +114,7 @@ pub struct RegisterArgs {
     /// Optional metadata JSON (Norito JSON object)
     #[arg(long, value_name = "PATH")]
     pub metadata: Option<PathBuf>,
-    /// Norito JSON PublicLaneMonetaryPlanV1 with exact signed custody and transfer bindings
+    /// Norito JSON `PublicLaneMonetaryPlanV1` with exact signed custody and transfer bindings
     #[arg(long, value_name = "PATH")]
     pub monetary_plan: PathBuf,
 }
@@ -335,7 +335,7 @@ pub struct BondArgs {
     /// Optional stake-share metadata JSON (Norito JSON object)
     #[arg(long, value_name = "PATH")]
     pub metadata: Option<PathBuf>,
-    /// Norito JSON PublicLaneMonetaryPlanV1 with exact signed custody and transfer bindings
+    /// Norito JSON `PublicLaneMonetaryPlanV1` with exact signed custody and transfer bindings
     #[arg(long, value_name = "PATH")]
     pub monetary_plan: PathBuf,
 }
@@ -421,7 +421,7 @@ pub struct FinalizeUnbondArgs {
     /// Exact withdrawal hash previously supplied to schedule-unbond
     #[arg(long, value_name = "HASH")]
     pub request_id: Hash,
-    /// Norito JSON PublicLaneMonetaryPlanV1 with exact signed custody and transfer bindings
+    /// Norito JSON `PublicLaneMonetaryPlanV1` with exact signed custody and transfer bindings
     #[arg(long, value_name = "PATH")]
     pub monetary_plan: PathBuf,
 }
@@ -461,7 +461,7 @@ pub struct ClaimRewardsArgs {
     /// Reward recipient (defaults to the configured transaction authority)
     #[arg(long, value_name = "ACCOUNT_ID")]
     pub account: Option<String>,
-    /// Norito JSON PublicLaneRewardClaimPlanV1 binding the exact automatic XOR entitlement
+    /// Norito JSON `PublicLaneRewardClaimPlanV1` binding the exact automatic XOR entitlement
     #[arg(long, value_name = "PATH")]
     pub claim_plan: PathBuf,
 }
@@ -485,15 +485,12 @@ impl Run for ClaimRewardsArgs {
     }
 }
 /// Decode one exact staking request or monetary plan within fixed resource bounds.
-pub(crate) fn load_staking_json<T: norito::json::JsonDeserialize>(
-    path: &Path,
-    flag: &str,
-) -> Result<T> {
+pub fn load_staking_json<T: norito::json::JsonDeserialize>(path: &Path, flag: &str) -> Result<T> {
     load_bounded_staking_json(path, flag, STAKING_PLAN_DECODE_LIMITS)
 }
 
 /// Read committee evidence with its exact largest fixed proof field admitted.
-pub(crate) fn load_committee_json(
+pub fn load_committee_json(
     path: &Path,
     flag: &str,
 ) -> Result<iroha::data_model::nexus::ValidatorCommitteeOperationV1> {

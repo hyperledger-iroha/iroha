@@ -76,8 +76,22 @@ fn rejected_genesis_outputs_fail_before_schedule_finalization() {
         LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
     ));
     let authenticated = authenticate_genesis_block_intents(&source, &account).unwrap();
+    let mut policies = Some(authenticated.initial_policies(&source).unwrap());
+    let generation = state.state_view_generation();
     let (mut overlay, recorder) = state
-        .block_with_recorded_pristine_carrier_stage(&source, |_| Ok::<_, String>(()), |error| error)
+        .block_with_recorded_pristine_carrier_stage(
+            &source,
+            |overlay| {
+                super::super::genesis_policies::GenesisPolicies::install(
+                    &mut policies,
+                    &source,
+                    overlay,
+                    &state,
+                    generation,
+                )
+            },
+            |error| BlockValidationError::InvalidGenesis(InvalidGenesisError::CryptoPolicy(error)),
+        )
         .unwrap();
     let error = overlay
         .execute_and_seal_ordinary_outputs::<String>(

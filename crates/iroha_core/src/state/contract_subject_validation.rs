@@ -36,7 +36,7 @@ pub(super) enum ErrorKind {
 }
 
 /// Fixed rejection custody with borrowed diagnostic subjects for the restore edge.
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub(super) struct Error<'a> {
     pub(super) kind: ErrorKind,
     pub(super) image: Image,

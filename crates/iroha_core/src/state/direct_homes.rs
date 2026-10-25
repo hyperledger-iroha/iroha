@@ -15,7 +15,7 @@ use super::*;
 ///
 /// # Errors
 /// Rejects an invalid or orphan row, a foreign incarnation, or a domain-owned definition.
-pub(crate) fn direct_home_dataspace(
+pub fn direct_home_dataspace(
     row: Option<&AssetDefinitionDirectHomeV1>,
     definition: Option<&AssetDefinition>,
     incarnation: Option<&AxtAssetIncarnationV1>,
@@ -47,7 +47,7 @@ pub(crate) fn direct_home_dataspace(
 /// # Errors
 /// Rejects an insertion for a pre-existing incarnation, a removal while that incarnation is
 /// still live, or a row modified in place.
-pub(crate) fn validate_direct_home_transition(
+pub fn validate_direct_home_transition(
     before: Option<&AssetDefinitionDirectHomeV1>,
     after: Option<&AssetDefinitionDirectHomeV1>,
     incarnation_before: Option<&AxtAssetIncarnationV1>,
@@ -58,7 +58,6 @@ pub(crate) fn validate_direct_home_transition(
     let removed_while_live =
         |row: &AssetDefinitionDirectHomeV1| incarnation_after == Some(&row.incarnation);
     match (before, after) {
-        (None, None) => Ok(()),
         (Some(before), Some(after)) if before == after => Ok(()),
         (None, Some(after)) if inserted_for_existing(after) => Err(ParseError::new(
             "direct asset home cannot be added to an existing incarnation",
@@ -338,7 +337,7 @@ impl World {
         let mut block = self.block();
         {
             let mut transaction = block.transaction_without_telemetry(LaneConfig::default(), 0);
-            transaction.insert_asset_definition_entry(id.clone(), definition);
+            transaction.insert_asset_definition_entry(&(id.clone()), definition);
             transaction
                 .axt_asset_incarnations
                 .insert(id.clone(), incarnation);
@@ -346,7 +345,7 @@ impl World {
                 .asset_definition_direct_homes
                 .insert(id.clone(), row);
             if let Some(alias) = alias {
-                transaction.bind_asset_definition_alias(&id, alias, None, None, 0)?;
+                transaction.bind_asset_definition_alias(&id, &(alias), None, None, 0)?;
             }
             for (asset_id, value) in balances {
                 let scope_matches_policy = matches!(

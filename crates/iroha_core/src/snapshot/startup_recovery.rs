@@ -74,7 +74,7 @@ impl StartupRecovery {
 
 /// Only the consensus worker owns the ability to publish successful recovery.
 /// Its outer run guard distinguishes normal completion from failure/unwind.
-pub(crate) struct StartupRecoveryPublisher {
+pub struct StartupRecoveryPublisher {
     sender: watch::Sender<Phase>,
     finished: bool,
 }
@@ -113,7 +113,7 @@ impl Drop for StartupRecoveryPublisher {
 }
 
 /// A fresh pending readiness gate and its only publisher.
-pub(crate) fn channel() -> (StartupRecoveryPublisher, StartupRecovery) {
+pub fn channel() -> (StartupRecoveryPublisher, StartupRecovery) {
     let (sender, receiver) = watch::channel(Phase::Pending);
     (
         StartupRecoveryPublisher {

@@ -49,10 +49,10 @@ pub struct ConfidentialComputeWithLocation {
 /// In-memory index over confidential-compute receipts.
 #[derive(Clone, Debug, Default)]
 pub struct ConfidentialComputeStore {
-    by_manifest: BTreeMap<ManifestDigest, ConfidentialComputeWithLocation>,
-    by_ticket: BTreeMap<StorageTicketId, ConfidentialComputeWithLocation>,
-    by_lane_epoch: BTreeMap<(u32, u64, u64), ConfidentialComputeWithLocation>,
-    by_block: BTreeMap<u64, Vec<ConfidentialComputeWithLocation>>,
+    manifest: BTreeMap<ManifestDigest, ConfidentialComputeWithLocation>,
+    ticket: BTreeMap<StorageTicketId, ConfidentialComputeWithLocation>,
+    lane_epoch: BTreeMap<(u32, u64, u64), ConfidentialComputeWithLocation>,
+    block: BTreeMap<u64, Vec<ConfidentialComputeWithLocation>>,
 }
 impl ConfidentialComputeStore {
     /// Insert a record derived from a DA commitment if its identities are new.
@@ -63,9 +63,9 @@ impl ConfidentialComputeStore {
         policy: &ConfidentialComputePolicy,
     ) -> bool {
         let lane_epoch = (record.lane_id.as_u32(), record.epoch, record.sequence);
-        if self.by_lane_epoch.contains_key(&lane_epoch)
-            || self.by_manifest.contains_key(&record.manifest_hash)
-            || self.by_ticket.contains_key(&record.storage_ticket)
+        if self.lane_epoch.contains_key(&lane_epoch)
+            || self.manifest.contains_key(&record.manifest_hash)
+            || self.ticket.contains_key(&record.storage_ticket)
         {
             return false;
         }
@@ -81,12 +81,10 @@ impl ConfidentialComputeStore {
             allowed_audiences: policy.allowed_audiences.clone(),
         };
         let located = ConfidentialComputeWithLocation { receipt, location };
-        self.by_manifest
-            .insert(record.manifest_hash, located.clone());
-        self.by_ticket
-            .insert(record.storage_ticket, located.clone());
-        self.by_lane_epoch.insert(lane_epoch, located.clone());
-        self.by_block
+        self.manifest.insert(record.manifest_hash, located.clone());
+        self.ticket.insert(record.storage_ticket, located.clone());
+        self.lane_epoch.insert(lane_epoch, located.clone());
+        self.block
             .entry(location.block_height)
             .or_default()
             .push(located);
@@ -100,36 +98,36 @@ impl ConfidentialComputeStore {
         epoch: u64,
         sequence: u64,
     ) -> Option<&ConfidentialComputeWithLocation> {
-        self.by_lane_epoch.get(&(lane_id, epoch, sequence))
+        self.lane_epoch.get(&(lane_id, epoch, sequence))
     }
     #[cfg(test)]
     /// Receipts stored for a specific block height.
     #[must_use]
     pub fn receipts_at(&self, block_height: u64) -> Option<&[ConfidentialComputeWithLocation]> {
-        self.by_block.get(&block_height).map(Vec::as_slice)
+        self.block.get(&block_height).map(Vec::as_slice)
     }
     #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Return all receipts ordered by `(lane, epoch, sequence)`.
     pub fn all_sorted(&self) -> impl Iterator<Item = &ConfidentialComputeWithLocation> {
-        self.by_lane_epoch.values()
+        self.lane_epoch.values()
     }
     /// Returns true when no receipts are stored.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.by_lane_epoch.is_empty()
+        self.lane_epoch.is_empty()
     }
     /// Drop cached receipts belonging to retired lanes.
     pub fn prune_lanes(&mut self, retired: &BTreeSet<LaneId>) {
         if retired.is_empty() {
             return;
         }
-        self.by_lane_epoch
+        self.lane_epoch
             .retain(|(lane, _, _), _| !retired.contains(&LaneId::new(*lane)));
-        self.by_manifest
+        self.manifest
             .retain(|_, entry| !retired.contains(&entry.receipt.lane_id));
-        self.by_ticket
+        self.ticket
             .retain(|_, entry| !retired.contains(&entry.receipt.lane_id));
-        self.by_block.retain(|_, receipts| {
+        self.block.retain(|_, receipts| {
             receipts.retain(|entry| !retired.contains(&entry.receipt.lane_id));
             !receipts.is_empty()
         });
@@ -310,9 +308,9 @@ mod tests {
             store.get_by_lane_epoch_sequence(2, 1, 2).is_none(),
             "retired lane should be dropped"
         );
-        assert_eq!(store.by_block.len(), 1);
+        assert_eq!(store.block.len(), 1);
         assert_eq!(
-            store.by_block.get(&4).map(Vec::len),
+            store.block.get(&4).map(Vec::len),
             Some(1),
             "block index retains surviving receipts"
         );

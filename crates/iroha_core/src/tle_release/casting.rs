@@ -121,7 +121,7 @@ impl AuthorizedTimedOvnCastingContextV1 {
 /// commitment instead of reparsing response-sized registration records. Full
 /// corpus replay remains mandatory at every lifecycle transition and during
 /// world-state restore.
-pub(crate) fn derive_parliament_timed_ovn_casting_snapshot_v1(
+pub fn derive_parliament_timed_ovn_casting_snapshot_v1(
     world: &impl crate::state::WorldReadOnly,
     evaluated_height: u64,
 ) -> Result<

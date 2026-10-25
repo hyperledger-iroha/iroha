@@ -244,10 +244,10 @@ fn read_current_provider_admission(
     if policy.network_id != *view.network_id().as_bytes() || policy.paused {
         return Err(ProviderAdmissionErrorV1);
     }
-    if let Some(head) = read_head(view.world(), Some(provider))? {
-        if head.height > view.block_hashes().len() as u64 {
-            return Err(ProviderAdmissionErrorV1);
-        }
+    if let Some(head) = read_head(view.world(), Some(provider))?
+        && head.height > view.block_hashes().len() as u64
+    {
+        return Err(ProviderAdmissionErrorV1);
     }
     active_record(
         view,
@@ -411,7 +411,7 @@ fn authenticate_genesis_record(
         return Err(invalid);
     };
     let mut matched = None;
-    for instruction in instructions.iter() {
+    for instruction in instructions {
         let Some(initializer) = instruction
             .as_any()
             .downcast_ref::<InitializeSorafsProviderAdmissionV1>()

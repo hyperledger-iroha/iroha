@@ -142,7 +142,7 @@ pub fn byte_refusal(write: impl Fn(&mut dyn JsonWriteSink) -> Result<(), Bounded
     );
 }
 
-/// A real manual JsonSerialize leaf with neither FastJsonWrite nor Clone.
+/// A real manual `JsonSerialize` leaf with neither `FastJsonWrite` nor `Clone`.
 pub struct RefusingLeaf {
     /// Exact visits to this retained leaf; ordinary fallback is forbidden.
     pub(crate) visits: Cell<usize>,

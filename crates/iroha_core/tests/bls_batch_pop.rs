@@ -40,19 +40,14 @@ fn mk_state_with_bls_batch() -> (State, NetworkId, AccountId, KeyPair) {
     let domain = Domain::new(domain_id.clone()).build(&account_id);
     let account = Account::new(account_id.clone()).build(&account_id);
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
+    // The component chain installs its explicit signing policy from signed genesis.
+    // Keep this pre-genesis World free of an already committed ordinary policy.
     let mut state =
         State::new_with_chain_for_testing(world, kura, query_handle, ChainId::from("chain"));
     let network_id = *state.network_id_ref();
     let mut pipeline = state.view().pipeline().clone();
     pipeline.signature_batch_max_bls = 4;
     state.set_pipeline(pipeline);
-    let mut crypto_cfg = iroha_config::parameters::actual::Crypto::default();
-    if !crypto_cfg.allowed_signing.contains(&Algorithm::BlsNormal) {
-        crypto_cfg.allowed_signing.push(Algorithm::BlsNormal);
-        crypto_cfg.allowed_signing.sort();
-        crypto_cfg.allowed_signing.dedup();
-    }
-    state.set_crypto(crypto_cfg);
     (state, network_id, account_id, kp)
 }
 fn make_tx(

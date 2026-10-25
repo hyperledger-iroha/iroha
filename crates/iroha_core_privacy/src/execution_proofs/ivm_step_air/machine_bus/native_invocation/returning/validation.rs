@@ -46,7 +46,7 @@ impl Validation {
                 port,
                 packet::Space::Owner,
                 33,
-                first + 22 + stage as u32,
+                first + 22 + u32::try_from(stage).expect("bounded circuit index"),
                 true,
             );
             out.push(port[BEFORE_TAG]);
@@ -78,7 +78,11 @@ impl Validation {
             out,
             port,
             packet::Space::Memory,
-            (ivm::Memory::HEAP_START / 16) as u32,
+            u32::from_le_bytes(
+                u64::to_le_bytes(ivm::Memory::HEAP_START / 16)[..4]
+                    .try_into()
+                    .expect("low-byte width"),
+            ),
             first + 24,
             false,
         );

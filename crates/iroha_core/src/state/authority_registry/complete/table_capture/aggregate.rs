@@ -122,6 +122,10 @@ impl CapturedCanonicalTables {
 /// means a State publication overlapped capture and the caller must retry. Direct
 /// MV writes can bypass this generation counter, so `Some` is not a coherent
 /// finalized-State certificate. Frozen cells and authenticated history are absent.
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 pub(super) fn capture_tables_once(
     state: &State,
     fields: &'static [Field],
@@ -232,10 +236,10 @@ pub(super) fn capture_tables_once(
             }
         }
     }
-    if let Some(source) = musubi_world.as_ref() {
-        if !source.try_matches_current()? {
-            return Ok(None);
-        }
+    if let Some(source) = musubi_world.as_ref()
+        && !source.try_matches_current()?
+    {
+        return Ok(None);
     }
     if !is_stable_state_view_generation(generation, state.state_view_generation()) {
         return Ok(None);
@@ -248,6 +252,10 @@ pub(super) fn capture_tables_once(
 }
 
 /// Move a verified identity into an already admitted slot, preserving prior errors.
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 fn retain_node(
     nodes: &mut ChargedBuffer<CanonicalTablePairedSnapshot>,
     total_rows: &mut u64,

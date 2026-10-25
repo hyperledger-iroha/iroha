@@ -5,7 +5,7 @@ use crate::{
     axt::{self, AxtPolicy, ProofBlob, TouchManifest},
     gas,
     host::{
-        IVMHost, common_syscall_gas_quote, conservative_syscall_gas_quote, is_sm_syscall,
+        IVMHost, common_syscall_gas_quote, conservative_syscall_gas_quote,
         preflight_reserved_syscall_gas, quote_tlv_payload_len_at,
         require_host_syscall_metering_spec, reserve_available_syscall_gas,
         reserve_available_syscall_gas_at_least,
@@ -1628,7 +1628,6 @@ pub struct WsvHost {
     axt_state: Option<axt::HostAxtState>,
     axt_policy: Arc<dyn AxtPolicy>,
     axt_policy_overridden: bool,
-    sm_enabled: bool,
     contract_runtime_invoker: Option<AccountId>,
     contract_runtime_address: Option<ContractAddress>,
     contract_runtime_entrypoint: Option<String>,
@@ -1655,7 +1654,6 @@ struct WsvHostSnapshot {
     axt_state: Option<axt::HostAxtState>,
     axt_policy: Arc<dyn AxtPolicy>,
     axt_policy_overridden: bool,
-    sm_enabled: bool,
     contract_runtime_invoker: Option<AccountId>,
     contract_runtime_address: Option<ContractAddress>,
     contract_runtime_entrypoint: Option<String>,
@@ -1784,7 +1782,6 @@ impl WsvHost {
             axt_state: None,
             axt_policy: policy,
             axt_policy_overridden: false,
-            sm_enabled: false,
             contract_runtime_invoker: None,
             contract_runtime_address: None,
             contract_runtime_entrypoint: None,
@@ -1854,7 +1851,6 @@ impl WsvHost {
             axt_state: self.axt_state.clone(),
             axt_policy: Arc::clone(&self.axt_policy),
             axt_policy_overridden: self.axt_policy_overridden,
-            sm_enabled: self.sm_enabled,
             contract_runtime_invoker: self.contract_runtime_invoker.clone(),
             contract_runtime_address: self.contract_runtime_address.clone(),
             contract_runtime_entrypoint: self.contract_runtime_entrypoint.clone(),
@@ -1880,7 +1876,6 @@ impl WsvHost {
         self.axt_state = snapshot.axt_state.clone();
         self.axt_policy = Arc::clone(&snapshot.axt_policy);
         self.axt_policy_overridden = snapshot.axt_policy_overridden;
-        self.sm_enabled = snapshot.sm_enabled;
         self.contract_runtime_invoker = snapshot.contract_runtime_invoker.clone();
         self.contract_runtime_address = snapshot.contract_runtime_address.clone();
         self.contract_runtime_entrypoint = snapshot.contract_runtime_entrypoint.clone();
@@ -2173,15 +2168,6 @@ impl WsvHost {
             }
         }
         Ok((total, scan_work_gas))
-    }
-    /// Enable or disable SM helper syscalls.
-    pub fn with_sm_enabled(mut self, enabled: bool) -> Self {
-        self.sm_enabled = enabled;
-        self
-    }
-    /// Toggle SM helper support at runtime.
-    pub fn set_sm_enabled(&mut self, enabled: bool) {
-        self.sm_enabled = enabled;
     }
     /// Bind a deployed-contract invocation while keeping the invoking authority distinct from
     /// the immutable account which authorizes ledger effects.
@@ -2908,9 +2894,6 @@ impl IVMHost for WsvHost {
         if metering.metering == crate::syscall_metering::SyscallMetering::Staged {
             return Ok(0);
         }
-        if is_sm_syscall(number) && !self.sm_enabled {
-            return Ok(0);
-        }
         if let Some(quote) = common_syscall_gas_quote(number, vm)? {
             return Ok(quote);
         }
@@ -3605,10 +3588,7 @@ impl IVMHost for WsvHost {
             | crate::syscalls::SYSCALL_SM4_GCM_OPEN
             | crate::syscalls::SYSCALL_SM4_CCM_SEAL
             | crate::syscalls::SYSCALL_SM4_CCM_OPEN => {
-                if !self.sm_enabled {
-                    return Err(VMError::PermissionDenied);
-                }
-                let mut default = crate::host::DefaultHost::new().with_sm_enabled(true);
+                let mut default = crate::host::DefaultHost::new();
                 default.syscall(number, vm)
             }
             // Developer helper used by Kotodama-compiled programs to validate a

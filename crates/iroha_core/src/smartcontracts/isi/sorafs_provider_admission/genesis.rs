@@ -100,7 +100,7 @@ impl Execute for InitializeSorafsProviderAdmissionV1 {
         // exact direct signed genesis authenticates these templates; later mutations require
         // the ordinary enacted Parliament/council path and cannot select this origin.
         if !apply_inner(
-            Action::ConfigureCouncil(native::encode(&policy).map_err(rejected)?),
+            &(Action::ConfigureCouncil(native::encode(&policy).map_err(rejected)?)),
             tx,
             Some(origin),
         )
@@ -120,7 +120,7 @@ impl Execute for InitializeSorafsProviderAdmissionV1 {
             {
                 return Err(rejected("genesis provider owner was not established"));
             }
-            if !apply_inner(Action::Admit(projection), tx, Some(origin)).map_err(rejected)? {
+            if !apply_inner(&(Action::Admit(projection)), tx, Some(origin)).map_err(rejected)? {
                 return Err(rejected("genesis provider was not initialized"));
             }
         }

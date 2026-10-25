@@ -7,7 +7,7 @@ use iroha_data_model::{
 };
 
 /// Check the immutable definition shape without decoding policy a second time.
-pub(crate) fn validate_xor_definition_shape<W: WorldReadOnly + ?Sized>(
+pub fn validate_xor_definition_shape<W: WorldReadOnly + ?Sized>(
     world: &W,
     asset: &AssetDefinitionId,
 ) -> Result<(), Error> {
@@ -26,7 +26,7 @@ pub(crate) fn validate_xor_definition_shape<W: WorldReadOnly + ?Sized>(
 }
 
 /// Retain the exact asset identity and reject scoped custody rather than rewriting it.
-pub(crate) fn validate_xor_custody_shape<W: WorldReadOnly + ?Sized>(
+pub fn validate_xor_custody_shape<W: WorldReadOnly + ?Sized>(
     world: &W,
     asset: &AssetId,
 ) -> Result<(), Error> {
@@ -40,7 +40,7 @@ pub(crate) fn validate_xor_custody_shape<W: WorldReadOnly + ?Sized>(
 }
 
 /// Authenticate the genesis-pinned currency and its global scale-nine definition.
-pub(crate) fn validate_network_xor_asset<W: WorldReadOnly + ?Sized>(
+pub fn validate_network_xor_asset<W: WorldReadOnly + ?Sized>(
     world: &W,
     asset: &AssetDefinitionId,
 ) -> Result<(), Attempt<Error>> {

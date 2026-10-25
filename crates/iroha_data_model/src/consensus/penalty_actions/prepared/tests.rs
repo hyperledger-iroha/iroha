@@ -76,7 +76,9 @@ fn admit(pending: PreparedNposPenaltyActions, input: &ChargedBuffer<u8>) -> Npos
 
 #[test]
 fn penalty_action_owner_preserves_sole_wire_schema_json_and_original_shared_graph() {
+    use crate::block::{BlockHeader, BlockSignature, SignedBlock};
     use crate::consensus::NposConsensusEffects;
+    use iroha_crypto::{Signature, SignatureOf};
     #[derive(norito::Encode)]
     struct SoleEffectsWire {
         parent_service_commit_qc: Option<Vec<u8>>,
@@ -170,8 +172,6 @@ fn penalty_action_owner_preserves_sole_wire_schema_json_and_original_shared_grap
             assert_eq!(bytes(&effects), bytes(&wire));
             // The actual public wire remains SignedBlockWire; these children have no
             // separate root-frame contract. Compare admitted and ordinary transport.
-            use crate::block::{BlockHeader, BlockSignature, SignedBlock};
-            use iroha_crypto::{Signature, SignatureOf};
             let mut block = SignedBlock::presigned(
                 BlockSignature::new(
                     0,
@@ -380,8 +380,7 @@ fn penalty_action_control_refusal_retains_complete_graph_and_rejects_truncated_s
     let blocker = pool.try_reserve_bytes(pool.limit_bytes() - held).unwrap();
     let (pending, error) = pending
         .finish(&input)
-        .err()
-        .expect("occupied original shell capacity");
+        .expect_err("occupied original shell capacity");
     assert!(
         matches!(error,Error::ControlAdmission(AllocationRefusal::Capacity{requested_bytes,..}) if requested_bytes==NposPenaltyActions::allocation_layout().size())
     );

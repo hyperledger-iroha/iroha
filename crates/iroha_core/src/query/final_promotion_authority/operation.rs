@@ -5,9 +5,7 @@ use iroha_data_model::sorafs::final_promotion_authority::{
 };
 use sorafs_manifest::signer::protocol::SignerOperationActionV1;
 
-pub(crate) fn operation_digest(
-    record: &FinalPromotionOperationRecordV1,
-) -> Result<[u8; 32], Error> {
+pub fn operation_digest(record: &FinalPromotionOperationRecordV1) -> Result<[u8; 32], Error> {
     digest(FINAL_PROMOTION_OPERATION_RECORD_DOMAIN_V1, record)
 }
 fn read_basic(
@@ -80,7 +78,7 @@ fn read_basic(
     }
     Ok(NativeOperation { record, index })
 }
-pub(crate) fn successor_head(
+pub fn successor_head(
     previous: FinalPromotionOperationHeadV1,
     old: Option<&FinalPromotionOperationRecordV1>,
     record: &FinalPromotionOperationRecordV1,
@@ -99,80 +97,76 @@ pub(crate) fn successor_head(
     let mut head = previous;
     head.revision = record.revision;
     head.digest = operation_digest(record)?;
-    match record.outcome {
-        FinalPromotionOperationOutcomeV1::Reserved => {
-            if previous.active_operation.is_some()
-                || record.reserved != record.execution
-                || record.execution_origin != Some(record.reserved_origin)
-                || record.intent.previous_audit != previous.audit
-                || previous.fence.checked_add(1) != Some(record.reservation.fence)
-            {
-                return Err(Error::CorruptHistory);
-            }
-            head.fence = record.reservation.fence;
-            head.total_admissions = previous
-                .total_admissions
-                .checked_add(1)
-                .ok_or(Error::Capacity)?;
-            if head.total_admissions > FINAL_PROMOTION_MAX_OPERATIONS_V1 {
-                return Err(Error::Capacity);
-            }
-            head.active_operation = Some(record.intent.operation_id);
+    if record.outcome == FinalPromotionOperationOutcomeV1::Reserved {
+        if previous.active_operation.is_some()
+            || record.reserved != record.execution
+            || record.execution_origin != Some(record.reserved_origin)
+            || record.intent.previous_audit != previous.audit
+            || previous.fence.checked_add(1) != Some(record.reservation.fence)
+        {
+            return Err(Error::CorruptHistory);
         }
-        _ => {
-            let old = old.ok_or(Error::CorruptHistory)?;
-            if old.outcome != FinalPromotionOperationOutcomeV1::Reserved
-                || previous.active_operation != Some(record.intent.operation_id)
-                || record.intent != old.intent
-                || record.custody != old.custody
-                || record.reservation != old.reservation
-                || record.reserved != old.reserved
-                || record.reserved_origin != old.reserved_origin
-            {
-                return Err(Error::CorruptHistory);
+        head.fence = record.reservation.fence;
+        head.total_admissions = previous
+            .total_admissions
+            .checked_add(1)
+            .ok_or(Error::Capacity)?;
+        if head.total_admissions > FINAL_PROMOTION_MAX_OPERATIONS_V1 {
+            return Err(Error::Capacity);
+        }
+        head.active_operation = Some(record.intent.operation_id);
+    } else {
+        let old = old.ok_or(Error::CorruptHistory)?;
+        if old.outcome != FinalPromotionOperationOutcomeV1::Reserved
+            || previous.active_operation != Some(record.intent.operation_id)
+            || record.intent != old.intent
+            || record.custody != old.custody
+            || record.reservation != old.reservation
+            || record.reserved != old.reserved
+            || record.reserved_origin != old.reserved_origin
+        {
+            return Err(Error::CorruptHistory);
+        }
+        head.active_operation = None;
+        match record.outcome {
+            FinalPromotionOperationOutcomeV1::Completed(completed) => {
+                if record
+                    .execution_origin
+                    .is_none_or(|origin| origin.entry_hash == [0; 32])
+                {
+                    return Err(Error::CorruptHistory);
+                }
+                let commitment = completed.commitment;
+                let signatures_digest = completed.signatures_digest;
+                let execution_expired =
+                    record.execution.recorded_at_unix_ms >= record.reservation.expires_at_unix_ms;
+                if record.execution.authority != record.reserved.authority
+                    || record.execution.height <= record.reserved.height
+                    || execution_expired
+                    || previous.audit.sequence.checked_add(1) != Some(commitment.audit.sequence)
+                    || commitment.audit.digest == [0; 32]
+                    || commitment.audit.digest == previous.audit.digest
+                    || commitment.response_digest == [0; 32]
+                    || signatures_digest == [0; 32]
+                {
+                    return Err(Error::CorruptHistory);
+                }
+                head.audit = commitment.audit;
             }
-            head.active_operation = None;
-            match record.outcome {
-                FinalPromotionOperationOutcomeV1::Completed(completed) => {
-                    if record
-                        .execution_origin
-                        .is_none_or(|origin| origin.entry_hash == [0; 32])
-                    {
-                        return Err(Error::CorruptHistory);
-                    }
-                    let commitment = completed.commitment;
-                    let signatures_digest = completed.signatures_digest;
-                    let execution_expired = record.execution.recorded_at_unix_ms
-                        >= record.reservation.expires_at_unix_ms;
-                    if record.execution.authority != record.reserved.authority
-                        || record.execution.height <= record.reserved.height
-                        || execution_expired
-                        || previous.audit.sequence.checked_add(1) != Some(commitment.audit.sequence)
-                        || commitment.audit.digest == [0; 32]
-                        || commitment.audit.digest == previous.audit.digest
-                        || commitment.response_digest == [0; 32]
-                        || signatures_digest == [0; 32]
-                    {
-                        return Err(Error::CorruptHistory);
-                    }
-                    head.audit = commitment.audit;
+            FinalPromotionOperationOutcomeV1::Expired => {
+                if record.execution_origin.is_some() {
+                    return Err(Error::CorruptHistory);
                 }
-                FinalPromotionOperationOutcomeV1::Expired => {
-                    if record.execution_origin.is_some() {
-                        return Err(Error::CorruptHistory);
-                    }
-                    if record.execution.recorded_at_unix_ms < record.reservation.expires_at_unix_ms
-                    {
-                        return Err(Error::CorruptHistory);
-                    }
+                if record.execution.recorded_at_unix_ms < record.reservation.expires_at_unix_ms {
+                    return Err(Error::CorruptHistory);
                 }
-                FinalPromotionOperationOutcomeV1::Invalidated => {
-                    if record.execution_origin.is_some() {
-                        return Err(Error::CorruptHistory);
-                    }
-                }
-                FinalPromotionOperationOutcomeV1::Reserved => return Err(Error::CorruptHistory),
             }
+            FinalPromotionOperationOutcomeV1::Invalidated => {
+                if record.execution_origin.is_some() {
+                    return Err(Error::CorruptHistory);
+                }
+            }
+            FinalPromotionOperationOutcomeV1::Reserved => return Err(Error::CorruptHistory),
         }
     }
     if head.fence != head.total_admissions
@@ -183,7 +177,7 @@ pub(crate) fn successor_head(
     }
     Ok(head)
 }
-pub(crate) fn read_operation_record(
+pub fn read_operation_record(
     world: &impl WorldReadOnly,
     deployment: &str,
     revision: u64,
@@ -204,7 +198,7 @@ pub(crate) fn read_operation_record(
     }
     Ok(next)
 }
-pub(crate) fn read_operation_head(
+pub fn read_operation_head(
     world: &impl WorldReadOnly,
     deployment: &str,
 ) -> Result<FinalPromotionOperationHeadV1, Error> {
@@ -263,7 +257,7 @@ pub(crate) fn read_operation_head(
     }
     Ok(head)
 }
-pub(crate) fn read_operation_slot(
+pub fn read_operation_slot(
     world: &impl WorldReadOnly,
     deployment: &str,
     operation_id: [u8; 32],
@@ -312,7 +306,7 @@ pub(crate) fn read_operation_slot(
 ///
 /// A later Complete/Expire/Invalidate rewrites the slot, never the original Reserved row.
 /// Source proofs must use this admission index instead of treating the mutable slot as origin.
-pub(crate) fn read_original_reserved_operation(
+pub fn read_original_reserved_operation(
     world: &impl WorldReadOnly,
     deployment: &str,
     operation_id: [u8; 32],
@@ -341,7 +335,7 @@ pub(crate) fn read_original_reserved_operation(
     }
     Ok(Some(reserved))
 }
-pub(crate) fn read_operation_head_at(
+pub fn read_operation_head_at(
     world: &impl WorldReadOnly,
     deployment: &str,
     height: u64,

@@ -70,10 +70,10 @@ fn point<T: NoritoSerialize + for<'de> norito::core::NoritoDeserialize<'de>>(
     key: &StatePath,
     graph: &mut RetainedDecodeBudget,
     maximum: usize,
-    stats: &mut QueryExecutionStats,
+    execution_stats: &mut QueryExecutionStats,
     limits: OrdinaryQueryExecutionLimits,
 ) -> Result<Option<T>, QueryAttemptError> {
-    stats.record_preflighted_item(
+    execution_stats.record_preflighted_item(
         limits
             .max_source_item_bytes()
             .checked_mul(3)
@@ -117,10 +117,10 @@ pub(super) fn collect(
     let (_, maximum, work) = trigger_source_limits(params, mode, limits)?;
     let (mut graph, slots) =
         RetainedDecodeBudget::new::<AssetFiContextSnapshotV1>(1, limits.max_source_item_bytes())?;
-    let mut stats = QueryExecutionStats::default();
+    let mut execution_stats = QueryExecutionStats::default();
     // Admission precedes target work and every definition/account/incarnation lookup.
     for _ in 0..4 {
-        stats.record_preflighted_item(work, Some(limits.execution_budget()))?;
+        execution_stats.record_preflighted_item(work, Some(limits.execution_budget()))?;
     }
     if canonical(|| norito::canonical_frame_len(&query.target))? > maximum {
         return Err(Error::CapacityLimit.into());
@@ -162,15 +162,36 @@ pub(super) fn collect(
     let key = measured(&mut graph, maximum, || {
         canonical(|| keys::uid_binding(selected.asset_definition_id, account))
     })?;
-    let binding = point(state, &key, &mut graph, maximum, &mut stats, limits)?;
+    let binding = point(
+        state,
+        &key,
+        &mut graph,
+        maximum,
+        &mut execution_stats,
+        limits,
+    )?;
     let key = measured(&mut graph, maximum, || {
         canonical(|| keys::uid_policy(selected.asset_definition_id, &query.expected_uid))
     })?;
-    let policy = point(state, &key, &mut graph, maximum, &mut stats, limits)?;
+    let policy = point(
+        state,
+        &key,
+        &mut graph,
+        maximum,
+        &mut execution_stats,
+        limits,
+    )?;
     let key = measured(&mut graph, maximum, || {
         canonical(|| keys::fi(selected.asset_definition_id, fi))
     })?;
-    let eligibility = point(state, &key, &mut graph, maximum, &mut stats, limits)?;
+    let eligibility = point(
+        state,
+        &key,
+        &mut graph,
+        maximum,
+        &mut execution_stats,
+        limits,
+    )?;
     let key = measured(&mut graph, maximum, || {
         canonical(|| {
             keys::attestation(
@@ -181,11 +202,25 @@ pub(super) fn collect(
             )
         })
     })?;
-    let attestation = point(state, &key, &mut graph, maximum, &mut stats, limits)?;
+    let attestation = point(
+        state,
+        &key,
+        &mut graph,
+        maximum,
+        &mut execution_stats,
+        limits,
+    )?;
     let key = measured(&mut graph, maximum, || {
         canonical(|| keys::link(selected.asset_definition_id, account))
     })?;
-    let link = point(state, &key, &mut graph, maximum, &mut stats, limits)?;
+    let link = point(
+        state,
+        &key,
+        &mut graph,
+        maximum,
+        &mut execution_stats,
+        limits,
+    )?;
     drop(account_json);
     drop(fi_json);
     let source = context::ContextRows {
@@ -199,21 +234,20 @@ pub(super) fn collect(
         // The narrow native adapter retains root/lifecycle authority. The query
         // prepays its fixed registry lookups and bounds their borrowed frames.
         for _ in 0..8 {
-            stats.record_preflighted_item(work, Some(limits.execution_budget()))?;
+            execution_stats.record_preflighted_item(work, Some(limits.execution_budget()))?;
         }
-        if let Some(binding) = world.contract_subject_bindings().get(address) {
-            if canonical(|| norito::canonical_frame_len(binding))? > maximum {
-                return Err(Error::CapacityLimit.into());
-            }
+        if let Some(binding) = world.contract_subject_bindings().get(address)
+            && canonical(|| norito::canonical_frame_len(binding))? > maximum
+        {
+            return Err(Error::CapacityLimit.into());
         }
         let parameters = world.parameters();
         if let Some(metadata) = parameters
             .custom()
             .get(&consensus_metadata::handshake_meta_id())
+            && metadata.payload().get().as_str().len() > maximum
         {
-            if metadata.payload().get().as_str().len() > maximum {
-                return Err(Error::CapacityLimit.into());
-            }
+            return Err(Error::CapacityLimit.into());
         }
         measured(&mut graph, maximum, || {
             let subject = match code::try_borrow_active_contract_subject_for_observation(
@@ -221,7 +255,7 @@ pub(super) fn collect(
                 address,
                 u64::try_from(state.height()).map_err(|_| Error::CapacityLimit)?,
                 |bytes| {
-                    stats.record_preflighted_item(
+                    execution_stats.record_preflighted_item(
                         u64::try_from(bytes).map_err(|_| Error::CapacityLimit)?,
                         Some(limits.execution_budget()),
                     )
@@ -261,13 +295,13 @@ pub(super) fn collect(
         )
         .map_err(native_error)
     })?;
-    stats.record_preflighted_item(work, Some(limits.execution_budget()))?;
+    execution_stats.record_preflighted_item(work, Some(limits.execution_budget()))?;
     if canonical(|| norito::canonical_frame_len(&snapshot))? > maximum {
         return Err(Error::CapacityLimit.into());
     }
     let mut rows = ExactOwnedRows::new(1, slots)?;
     rows.push(snapshot)?;
-    Ok((rows.finish()?, stats))
+    Ok((rows.finish()?, execution_stats))
 }
 
 #[cfg(test)]
@@ -306,27 +340,61 @@ mod retained_frame_tests {
             world.commit();
         }
         let limits = super::super::tests::fi_context_test_limits(4096);
-        let mut stats = QueryExecutionStats::default();
+        let mut execution_stats = QueryExecutionStats::default();
         let mut exact = RetainedDecodeBudget {
             per_item_graph_bytes: 4096,
             remaining_graph_bytes: u64::try_from(bytes * 2).unwrap(),
         };
         let view = state.view();
         assert_eq!(
-            point::<Vec<u8>>(&view, &first, &mut exact, 4096, &mut stats, limits).unwrap(),
+            point::<Vec<u8>>(
+                &view,
+                &first,
+                &mut exact,
+                4096,
+                &mut execution_stats,
+                limits
+            )
+            .unwrap(),
             Some(vec![7; 128])
         );
         assert_eq!(
-            point::<Vec<u8>>(&view, &second, &mut exact, 4096, &mut stats, limits).unwrap(),
+            point::<Vec<u8>>(
+                &view,
+                &second,
+                &mut exact,
+                4096,
+                &mut execution_stats,
+                limits
+            )
+            .unwrap(),
             Some(vec![7; 128])
         );
         let mut short = RetainedDecodeBudget {
             per_item_graph_bytes: 4096,
             remaining_graph_bytes: u64::try_from(bytes * 2 - 1).unwrap(),
         };
-        assert!(point::<Vec<u8>>(&view, &first, &mut short, 4096, &mut stats, limits).is_ok());
         assert!(
-            point::<Vec<u8>>(&view, &second, &mut short, 4096, &mut stats, limits).is_err(),
+            point::<Vec<u8>>(
+                &view,
+                &first,
+                &mut short,
+                4096,
+                &mut execution_stats,
+                limits
+            )
+            .is_ok()
+        );
+        assert!(
+            point::<Vec<u8>>(
+                &view,
+                &second,
+                &mut short,
+                4096,
+                &mut execution_stats,
+                limits
+            )
+            .is_err(),
             "second valid row cannot reset the first row's allocation owner"
         );
         assert_eq!(

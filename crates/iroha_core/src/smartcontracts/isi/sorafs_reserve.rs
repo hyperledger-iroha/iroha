@@ -89,8 +89,7 @@ impl VerifiedSorafsReserveWithdrawal {
     fn new(
         provider_id: ProviderId,
         movement_id: [u8; 32],
-        policy_digest: [u8; 32],
-        expected_provider_revision: u64,
+        (policy_digest, expected_provider_revision): ([u8; 32], u64),
         decision_authority: AccountId,
         source_id: AssetId,
         destination_id: AssetId,
@@ -273,14 +272,18 @@ where
             "{label} state exceeds {STATE_MAX_BYTES} bytes"
         )));
     }
-    let limits = match current.as_deref() {
-        Some(current) => current.decode_limits(bytes.len(), STATE_LIMITS),
-        None => crate::smartcontracts::isi::query::singular_query_decode_limits(
-            bytes.len(),
-            STATE_LIMITS,
-        ),
-    }
-    .map_err(InstructionExecutionError::Query)?;
+    let limits = current
+        .as_deref()
+        .map_or_else(
+            || {
+                crate::smartcontracts::isi::query::singular_query_decode_limits(
+                    bytes.len(),
+                    STATE_LIMITS,
+                )
+            },
+            |current| current.decode_limits(bytes.len(), STATE_LIMITS),
+        )
+        .map_err(InstructionExecutionError::Query)?;
     let (value, allocation_bytes) = if current.is_some() {
         let (value, usage) = norito::core::with_decode_limits_measured(limits, || {
             decode_canonical_with_limits::<T>(bytes, limits)
@@ -559,45 +562,42 @@ fn append_reserve_event_journal(
     let current_state = read_reserve_state(state_transaction.world())?;
     let head = current_state.as_ref().map(|state| state.journal_head);
     ensure_no_event_after_head(state_transaction.world(), head)?;
-    let (sequence, event_index) = match head {
-        Some(head) => {
-            let sequence = head
-                .last_sequence
+    let (sequence, event_index) = if let Some(head) = head {
+        let sequence = head
+            .last_sequence
+            .checked_add(1)
+            .ok_or_else(|| corrupt_state("reserve event sequence overflow"))?;
+        let event_index = match head.last_target_block_height.cmp(&target_block_height) {
+            core::cmp::Ordering::Less => 0,
+            core::cmp::Ordering::Equal => head
+                .last_event_index
                 .checked_add(1)
-                .ok_or_else(|| corrupt_state("reserve event sequence overflow"))?;
-            let event_index = match head.last_target_block_height.cmp(&target_block_height) {
-                core::cmp::Ordering::Less => 0,
-                core::cmp::Ordering::Equal => head
-                    .last_event_index
-                    .checked_add(1)
-                    .ok_or_else(|| corrupt_state("reserve event block index overflow"))?,
-                core::cmp::Ordering::Greater => {
-                    return Err(corrupt_state(
-                        "reserve event target height regressed behind the journal head",
-                    ));
-                }
-            };
-            (sequence, event_index)
-        }
-        None => {
-            ensure_reserve_namespace_empty(state_transaction.world())?;
-            let policy = next_policy.as_ref().ok_or_else(|| {
-                corrupt_state("first reserve event has no initial policy activation")
-            })?;
-            if event.kind != SorafsReserveLedgerEventKind::PolicyActivated
-                || event.provider_id.is_some()
-                || event.operation_id.is_some()
-                || event.provider_revision != 0
-                || event.resulting_lifecycle_stage.is_some()
-                || policy.policy.revision != 1
-                || policy.policy_digest != event.policy_digest
-            {
+                .ok_or_else(|| corrupt_state("reserve event block index overflow"))?,
+            core::cmp::Ordering::Greater => {
                 return Err(corrupt_state(
-                    "reserve event journal must begin with initial policy activation",
+                    "reserve event target height regressed behind the journal head",
                 ));
             }
-            (1, 0)
+        };
+        (sequence, event_index)
+    } else {
+        ensure_reserve_namespace_empty(state_transaction.world())?;
+        let policy = next_policy
+            .as_ref()
+            .ok_or_else(|| corrupt_state("first reserve event has no initial policy activation"))?;
+        if event.kind != SorafsReserveLedgerEventKind::PolicyActivated
+            || event.provider_id.is_some()
+            || event.operation_id.is_some()
+            || event.provider_revision != 0
+            || event.resulting_lifecycle_stage.is_some()
+            || policy.policy.revision != 1
+            || policy.policy_digest != event.policy_digest
+        {
+            return Err(corrupt_state(
+                "reserve event journal must begin with initial policy activation",
+            ));
         }
+        (1, 0)
     };
     let key = event_key(sequence);
     if state_transaction
@@ -679,7 +679,7 @@ fn read_policy(
 ) -> Result<Option<ReserveAuthorityPolicyRecordV1>, InstructionExecutionError> {
     Ok(read_reserve_state(world)?.map(|state| state.policy))
 }
-/// Return whether `asset_id` is the exact asset held by active SoraFS reserve custody.
+/// Return whether `asset_id` is the exact asset held by active `SoraFS` reserve custody.
 pub(super) fn is_reserve_custody_asset(
     world: &impl WorldReadOnly,
     asset_id: &AssetId,
@@ -689,14 +689,14 @@ pub(super) fn is_reserve_custody_asset(
             && record.policy.custody_account == *asset_id.account()
     }))
 }
-/// Return whether `account_id` is the active SoraFS reserve custody account.
+/// Return whether `account_id` is the active `SoraFS` reserve custody account.
 pub(super) fn is_reserve_custody_account(
     world: &impl WorldReadOnly,
     account_id: &AccountId,
 ) -> Result<bool, InstructionExecutionError> {
     Ok(read_policy(world)?.is_some_and(|record| record.policy.custody_account == *account_id))
 }
-/// Return whether `definition_id` backs the active SoraFS reserve ledger.
+/// Return whether `definition_id` backs the active `SoraFS` reserve ledger.
 pub(super) fn is_reserve_asset_definition(
     world: &impl WorldReadOnly,
     definition_id: &iroha_data_model::asset::AssetDefinitionId,
@@ -1728,8 +1728,7 @@ impl Execute for DecideSorafsReserveMovement {
                     let authorization = VerifiedSorafsReserveWithdrawal::new(
                         movement.provider_id,
                         movement.movement_id,
-                        policy.policy_digest,
-                        self.expected_provider_revision,
+                        (policy.policy_digest, self.expected_provider_revision),
                         authority.clone(),
                         source_id,
                         destination_id,
@@ -2326,7 +2325,7 @@ fn read_policy_for_query(
 ) -> Result<Option<ReserveAuthorityPolicyRecordV1>, QueryExecutionFail> {
     let key = reserve_state_key();
     let bytes = world.smart_contract_state().get(key);
-    budget.inspect_direct_read(key, bytes.map_or(0, |bytes| bytes.len()))?;
+    budget.inspect_direct_read(key, bytes.map_or(0, std::vec::Vec::len))?;
     bytes
         .map(|bytes| {
             let mut current =
@@ -2395,7 +2394,7 @@ fn read_persisted_event_for_query(
     }
     let key = event_key(sequence);
     let bytes = world.smart_contract_state().get(&key);
-    budget.inspect_direct_read(&key, bytes.map_or(0, |bytes| bytes.len()))?;
+    budget.inspect_direct_read(&key, bytes.map_or(0, std::vec::Vec::len))?;
     bytes
         .map(|bytes| {
             let mut current =
@@ -2412,7 +2411,7 @@ fn read_event_journal_head_for_query(
 ) -> Result<Option<ReserveEventJournalHeadV1>, QueryExecutionFail> {
     let key = reserve_state_key();
     let bytes = world.smart_contract_state().get(key);
-    budget.inspect_direct_read(key, bytes.map_or(0, |bytes| bytes.len()))?;
+    budget.inspect_direct_read(key, bytes.map_or(0, std::vec::Vec::len))?;
     let Some(bytes) = bytes else {
         return Ok(None);
     };

@@ -7,7 +7,9 @@ tarball includes only `iso_bridge_builder.mjs`, its required configuration helpe
 `iso_bridge_context.mjs`, and `nexus_app_transfer.mjs`;
 examples that require a source checkout, credentials, or a live Torii endpoint
 are identified below. The Nexus and ISO builder recipes require the verified
-native host even when installed from that tarball.
+native host even when installed from that tarball. The ISO builder can render
+XML offline with that host; submitting a payment additionally requires its
+runtime signer and Torii endpoint.
 
 ## batching.mjs
 

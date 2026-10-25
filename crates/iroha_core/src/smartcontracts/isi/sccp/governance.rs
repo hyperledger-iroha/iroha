@@ -230,7 +230,7 @@ pub fn enact(
         let next = store::governance_revision(&*state_transaction.world, subject)
             .checked_add(1)
             .ok_or_else(|| refuse("a subject revision overflows"))?;
-        store::set_governance_revision(state_transaction, subject.clone(), next);
+        store::set_governance_revision(state_transaction, *subject, next);
     }
     state_transaction
         .world
@@ -567,13 +567,13 @@ fn release_stranded(
         .stranded
         .checked_sub(action.amount)
         .ok_or_else(|| refuse(format_args!("only {} is stranded", route.stranded)))?;
-    let registered = match recipients::classify_account(state_transaction, action.recipient.clone())
-    {
-        SccpRecipientClassV1::Creditable { registered, .. } => registered,
-        SccpRecipientClassV1::Uncreditable { .. } | SccpRecipientClassV1::Undecodable => {
-            return Err(refuse("the recipient cannot be credited"));
-        }
-    };
+    let registered =
+        match recipients::classify_account(state_transaction, action.recipient.clone())? {
+            SccpRecipientClassV1::Creditable { registered, .. } => registered,
+            SccpRecipientClassV1::Uncreditable { .. } | SccpRecipientClassV1::Undecodable => {
+                return Err(refuse("the recipient cannot be credited"));
+            }
+        };
     if !registered {
         recipients::register_recipient(state_transaction, &action.recipient, network, None)?;
     }
@@ -626,6 +626,9 @@ fn set_taira_paused(
     }
     Ok(())
 }
+
+#[cfg(test)]
+pub(crate) use registration::reference_pin_rows;
 
 #[cfg(test)]
 mod tests {
@@ -702,14 +705,14 @@ mod tests {
         crate::smartcontracts::isi::sccp::test_support::install_generation(
             stx,
             1,
-            sample_generation_at(1, 1),
+            &(sample_generation_at(1, 1)),
         )
         .expect("generation");
         store::committee_current::set(stx, 1);
     }
 
     /// Existing-state fixture for lifecycle tests, not evidence of successful registration.
-    /// RegisterRoute still requires the original identity and all launch/forgery authority.
+    /// `RegisterRoute` still requires the original identity and all launch/forgery authority.
     fn existing_staged(stx: &mut StateTransaction<'_, '_>, revision: u32, seed: u8) {
         let mut route = store::routes::get(&*stx.world, &NETWORK)
             .cloned()
@@ -833,7 +836,7 @@ mod tests {
         let id = stx.network_id;
         setup(&mut stx);
         let route = SccpGovernanceSubjectV1::Route(NETWORK);
-        let fresh = proposal(id, vec![(route.clone(), 0)], vec![register(1, 7)]);
+        let fresh = proposal(id, vec![(route, 0)], vec![register(1, 7)]);
         assert_eq!(preflight_rejection_in(stx.world(), &fresh), None);
         preflight_attempt(&stx, &fresh).expect("fresh");
         store::destination_words::insert(&mut stx, evm(7).destination_word(), (NETWORK, 9))
@@ -843,7 +846,7 @@ mod tests {
             preflight_rejection_in(stx.world(), &fresh),
             Some(PreflightRejection::DestinationUsed)
         );
-        let other = proposal(id, vec![(route.clone(), 0)], vec![register(1, 8)]);
+        let other = proposal(id, vec![(route, 0)], vec![register(1, 8)]);
         store::set_governance_revision(&mut stx, route, 1);
         assert_eq!(
             preflight_rejection_in(stx.world(), &fresh),
@@ -868,7 +871,7 @@ mod tests {
         let route = SccpGovernanceSubjectV1::Route(NETWORK);
         let control = SccpGovernanceSubjectV1::RouteControl(NETWORK);
         existing_staged(&mut stx, 1, 7);
-        store::set_governance_revision(&mut stx, route.clone(), 1);
+        store::set_governance_revision(&mut stx, route, 1);
         assert_eq!(activation(&stx, 1), Some(SccpRouteActivationV1::Staged));
         assert_eq!(store::governance_revision(&*stx.world, &route), 1);
         assert_eq!(
@@ -885,7 +888,7 @@ mod tests {
         // effect transaction.
         let activate = proposal(
             id,
-            vec![(route.clone(), 1)],
+            vec![(route, 1)],
             vec![SccpGovernanceActionV1::ActivateRevision(
                 SccpRouteRevisionActionV1 {
                     network: NETWORK,
@@ -902,7 +905,7 @@ mod tests {
             .expect("live");
         let pause = proposal(
             id,
-            vec![(route.clone(), 1), (control.clone(), 0)],
+            vec![(route, 1), (control, 0)],
             vec![
                 SccpGovernanceActionV1::SetTairaPaused(SccpSetTairaPausedActionV1 {
                     network: NETWORK,
@@ -935,7 +938,7 @@ mod tests {
             [0x43; 32],
             [0x45; 32],
             S0,
-            &proposal(id, vec![(route.clone(), 2)], vec![register(5, 9)]),
+            &proposal(id, vec![(route, 2)], vec![register(5, 9)]),
         )
         .expect_err("revision gap");
         assert!(error.to_string().contains("next revision"), "{error}");
@@ -1056,7 +1059,7 @@ mod tests {
             let heads = subject_heads(&*stx.world, &proposal(id, vec![], vec![activate(2)]))
                 .expect("heads")
                 .1;
-            assert_eq!(heads, vec![(subject.clone(), 0)]);
+            assert_eq!(heads, vec![(subject, 0)]);
             // Version 1 is active from genesis: re-activating it is refused at enactment and
             // the light-client head does not move.
             let error = enact(
@@ -1064,7 +1067,7 @@ mod tests {
                 [0x43; 32],
                 [0x45; 32],
                 S0,
-                &proposal(id, vec![(subject.clone(), 0)], vec![activate(1)]),
+                &proposal(id, vec![(subject, 0)], vec![activate(1)]),
             )
             .expect_err("not above version 1");
             assert!(error.to_string().contains("does not exceed"), "{error}");
@@ -1082,7 +1085,7 @@ mod tests {
                 [0x43; 32],
                 [0x45; 32],
                 S0,
-                &proposal(id, vec![(subject.clone(), 0)], vec![activate(2)]),
+                &proposal(id, vec![(subject, 0)], vec![activate(2)]),
             )
             .expect_err("version 2 is not compiled");
             assert!(stx.is_execution_deferred());
@@ -1182,6 +1185,3 @@ mod tests {
         }
     }
 }
-
-#[cfg(test)]
-pub(crate) use registration::reference_pin_rows;

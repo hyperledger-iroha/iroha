@@ -323,7 +323,7 @@ fn scalar_governance_handlers_cannot_reintroduce_history_scans() {
         .expect("citizen count handler");
     let citizen_tail = &source[citizen_start..];
     let citizen_end = citizen_tail
-        .find("/// GET /v1/gov/citizens/{account_id}")
+        .find("pub async fn handle_gov_citizen_status(")
         .expect("citizen count handler terminator");
     let citizen_handler = &citizen_tail[..citizen_end];
     assert!(citizen_handler.contains("world.citizens().len()"));
@@ -829,13 +829,15 @@ fn queue_instruction_skeleton(harness: &GovHarness, tx_instructions: &[TxInstr])
     )
     .with_instructions(instructions)
     .sign(harness.authority_keypair.private_key());
-    let params = harness.state.view().world().parameters().clone();
+    let params = harness.state.transaction_admission_parameters();
     let accepted = iroha_core::tx::AcceptedTransaction::accept(
         tx,
         harness.state.network_id_ref(),
         params.sumeragi().max_clock_drift(),
         params.transaction(),
-        harness.state.crypto().as_ref(),
+        params
+            .require_crypto_policy()
+            .expect("initialized governance fixture policy"),
     )
     .expect("accepted governance instruction skeleton");
     harness
@@ -858,13 +860,15 @@ fn queue_governance_proposal_instruction_skeleton(
     )
     .with_instructions(instructions)
     .sign(harness.authority_keypair.private_key());
-    let params = harness.state.view().world().parameters().clone();
+    let params = harness.state.transaction_admission_parameters();
     let accepted = iroha_core::tx::AcceptedTransaction::accept(
         tx,
         harness.state.network_id_ref(),
         params.sumeragi().max_clock_drift(),
         params.transaction(),
-        harness.state.crypto().as_ref(),
+        params
+            .require_crypto_policy()
+            .expect("initialized governance fixture policy"),
     )
     .expect("accepted governance proposal instruction skeleton");
     harness
@@ -888,7 +892,7 @@ fn apply_queued_block_allow_errors(harness: &GovHarness) -> Vec<bool> {
         .iter()
         .map(iroha_core::tx::AcceptedTransaction::hash_as_entrypoint)
         .collect::<Vec<_>>();
-    let committed_block = crate::test_utils::commit_native_accepted_inputs(&mut chain, accepted);
+    let committed_block = crate::test_utils::commit_native_accepted_inputs(&mut chain, &(accepted));
     let block_ref = committed_block.block();
     let errors = block_ref
         .external_transactions()
@@ -925,13 +929,15 @@ async fn citizen_status_reports_registered_record() {
     )
     .with_instructions([instruction])
     .sign(harness.authority_keypair.private_key());
-    let params = harness.state.view().world().parameters().clone();
+    let params = harness.state.transaction_admission_parameters();
     let accepted = iroha_core::tx::AcceptedTransaction::accept(
         tx,
         harness.state.network_id_ref(),
         params.sumeragi().max_clock_drift(),
         params.transaction(),
-        harness.state.crypto().as_ref(),
+        params
+            .require_crypto_policy()
+            .expect("initialized governance fixture policy"),
     )
     .expect("accepted register citizen transaction");
     harness
@@ -977,13 +983,15 @@ async fn citizen_count_reports_exact_registry_total() {
     )
     .with_instructions([instruction])
     .sign(harness.authority_keypair.private_key());
-    let params = harness.state.view().world().parameters().clone();
+    let params = harness.state.transaction_admission_parameters();
     let accepted = iroha_core::tx::AcceptedTransaction::accept(
         tx,
         harness.state.network_id_ref(),
         params.sumeragi().max_clock_drift(),
         params.transaction(),
-        harness.state.crypto().as_ref(),
+        params
+            .require_crypto_policy()
+            .expect("initialized governance fixture policy"),
     )
     .expect("accepted register citizen transaction");
     harness
@@ -1604,10 +1612,10 @@ async fn ballot_plain_builds_instruction_skeleton() {
     let canonical = canonical_literal(ACCOUNT_AUTHORITY);
     // Build DTO via JSON to ensure serde shape is satisfied
     let body = crate::json_object(vec![
-        crate::json_entry("authority", canonical.clone()),
-        crate::json_entry("network_id", *state.network_id_ref()),
+        crate::json_entry("authority", &(canonical)),
+        crate::json_entry("network_id", state.network_id_ref()),
         crate::json_entry("referendum_id", "r1"),
-        crate::json_entry("owner", canonical.clone()),
+        crate::json_entry("owner", &(canonical)),
         crate::json_entry("amount", "100"),
         crate::json_entry("duration_blocks", "600"),
         crate::json_entry("direction", "Aye"),
@@ -1679,10 +1687,10 @@ async fn ballot_plain_requires_canonical_ids_even_when_alias_is_bound() {
         (canonical.as_str(), canonical.as_str(), None),
     ] {
         let body = crate::json_object(vec![
-            crate::json_entry("authority", authority_literal),
-            crate::json_entry("network_id", *state.network_id_ref()),
+            crate::json_entry("authority", &(authority_literal)),
+            crate::json_entry("network_id", state.network_id_ref()),
             crate::json_entry("referendum_id", "r1"),
-            crate::json_entry("owner", owner_literal),
+            crate::json_entry("owner", &(owner_literal)),
             crate::json_entry("amount", "100"),
             crate::json_entry("duration_blocks", "600"),
             crate::json_entry("direction", "Aye"),
@@ -1716,10 +1724,10 @@ async fn ballot_plain_rejects_authority_mismatch() {
     let canonical_authority = canonical_literal(ACCOUNT_AUTHORITY);
     let canonical_owner = canonical_literal(ACCOUNT_OWNER_ALT);
     let body = crate::json_object(vec![
-        crate::json_entry("authority", canonical_authority),
-        crate::json_entry("network_id", *state.network_id_ref()),
+        crate::json_entry("authority", &(canonical_authority)),
+        crate::json_entry("network_id", state.network_id_ref()),
         crate::json_entry("referendum_id", "r1"),
-        crate::json_entry("owner", canonical_owner),
+        crate::json_entry("owner", &(canonical_owner)),
         crate::json_entry("amount", "100"),
         crate::json_entry("duration_blocks", "600"),
         crate::json_entry("direction", "Aye"),
@@ -1743,7 +1751,7 @@ async fn ballot_plain_accepts_raw_public_key_literals() {
     let authenticated = canonical_account(ACCOUNT_AUTHORITY);
     let body = crate::json_object(vec![
         crate::json_entry("authority", ACCOUNT_AUTHORITY),
-        crate::json_entry("network_id", *state.network_id_ref()),
+        crate::json_entry("network_id", state.network_id_ref()),
         crate::json_entry("referendum_id", "r1"),
         crate::json_entry("owner", ACCOUNT_AUTHORITY),
         crate::json_entry("amount", "100"),
@@ -2208,7 +2216,7 @@ async fn legacy_referendum_reads_reject_stored_typed_proposal_fingerprints() {
         iroha_data_model::governance::types::ValidationFeePolicyProposal {
             proposal_operator: ALICE_ID.clone(),
             policy: iroha_data_model::validation_fee::ValidationFeePolicyV1 {
-                retail_schedule: iroha_data_model::validation_fee::RetailFeeScheduleV1::default(), effective_from_ms: 1793451600000, notice_published_at_ms: 1790859600000, schema_version:
+                retail_schedule: iroha_data_model::validation_fee::RetailFeeScheduleV1::default(), effective_from_ms: 1_793_451_600_000, notice_published_at_ms: 1_790_859_600_000, schema_version:
                     iroha_data_model::validation_fee::VALIDATION_FEE_POLICY_SCHEMA_VERSION,
                 network_id: *state.network_id_ref(),
                 policy_version: 1,
@@ -2944,7 +2952,7 @@ async fn propose_deploy_rejected_without_permission() {
     let res = handle_gov_propose_deploy(harness.state.clone(), NoritoJson(propose))
         .await
         .expect("handler ok");
-    let proposal_id = res.0.proposal_id.clone();
+    let proposal_id = res.0.proposal_id;
     queue_governance_proposal_instruction_skeleton(&harness, &res.0.tx_instructions);
     let errors = apply_queued_block_allow_errors(&harness);
     assert_eq!(errors, vec![true]);
@@ -2989,7 +2997,7 @@ async fn ballot_zk_v1_builds_instruction_skeleton() {
         network_id: *state.network_id_ref(),
         election_id: "ref-1".to_string(),
         backend: "halo2/ipa".to_string(),
-        envelope_b64: base64::engine::general_purpose::STANDARD.encode(&[1u8, 2, 3, 4]),
+        envelope_b64: base64::engine::general_purpose::STANDARD.encode([1u8, 2, 3, 4]),
         root_hint: Some(hex::encode([0u8; 32])),
         owner: Some(owner),
         amount: Some(100_u64.into()),
@@ -3099,7 +3107,7 @@ async fn ballot_zk_v1_rejects_invalid_root_hint() {
         network_id: *state.network_id_ref(),
         election_id: "ref-1".to_string(),
         backend: "halo2/ipa".to_string(),
-        envelope_b64: base64::engine::general_purpose::STANDARD.encode(&[1u8, 2, 3, 4]),
+        envelope_b64: base64::engine::general_purpose::STANDARD.encode([1u8, 2, 3, 4]),
         root_hint: Some("invalid".to_string()),
         owner: None,
         amount: None,
@@ -3127,7 +3135,7 @@ async fn ballot_zk_v1_rejects_partial_lock_hints() {
         network_id: *state.network_id_ref(),
         election_id: "ref-1".to_string(),
         backend: "halo2/ipa".to_string(),
-        envelope_b64: base64::engine::general_purpose::STANDARD.encode(&[1u8, 2, 3, 4]),
+        envelope_b64: base64::engine::general_purpose::STANDARD.encode([1u8, 2, 3, 4]),
         root_hint: None,
         owner: Some(ACCOUNT_AUTHORITY.to_string()),
         amount: None,

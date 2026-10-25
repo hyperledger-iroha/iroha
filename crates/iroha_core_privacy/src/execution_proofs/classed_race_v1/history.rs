@@ -136,7 +136,10 @@ pub(super) fn validate_history(
             if tick > terminal || tick % BATCH_TICKS != 0 {
                 return Err(invalid());
             }
-            removals.entry(tick).or_default().push(slot as u8);
+            removals
+                .entry(tick)
+                .or_default()
+                .push(u8::try_from(slot).expect("validated player or port count"));
         }
     }
     if replay.dnf_events
@@ -247,13 +250,12 @@ pub(super) fn validate_history(
         if end > MAX_TICKS {
             return Err(invalid());
         }
-        if let Some(signed) = &session.checkpoint {
-            if (batch.epoch < signed.checkpoint.epoch && end > signed.checkpoint.tick)
+        if let Some(signed) = &session.checkpoint
+            && ((batch.epoch < signed.checkpoint.epoch && end > signed.checkpoint.tick)
                 || (batch.epoch >= signed.checkpoint.epoch
-                    && batch.start_tick < signed.checkpoint.tick)
-            {
-                return Err(invalid());
-            }
+                    && batch.start_tick < signed.checkpoint.tick))
+        {
+            return Err(invalid());
         }
         for (slot, input) in batch.inputs.iter().enumerate() {
             let removed = session.participants[slot]

@@ -1,8 +1,6 @@
 #[test]
 fn fee_enabled_single_transfer_uses_canonical_output_owner() {
-    let _guard = crate::status::nexus_fee_test_lock()
-        .lock()
-        .expect("nexus fee test lock");
+    let _guard = crate::status::operator_status_test_guard();
     crate::status::reset_nexus_economics_for_tests();
     let chain_id = ChainId::from("fee-detached-single-transfer-test");
     let (payer_id, payer_keypair) = gen_account_in("wonderland");
@@ -96,7 +94,10 @@ fn fee_enabled_single_transfer_uses_canonical_output_owner() {
         &state.network_id,
         max_clock_drift,
         tx_limits,
-        state.crypto().as_ref(),
+        state
+            .transaction_admission_parameters()
+            .require_crypto_policy()
+            .expect("original fixture policy"),
         &block_time_source,
     )
     .expect("transaction should pass stateless admission");
@@ -144,9 +145,7 @@ fn fee_enabled_single_transfer_uses_canonical_output_owner() {
 }
 #[test]
 fn fee_enabled_account_metadata_uses_canonical_output_owner() {
-    let _guard = crate::status::nexus_fee_test_lock()
-        .lock()
-        .expect("nexus fee test lock");
+    let _guard = crate::status::operator_status_test_guard();
     crate::status::reset_nexus_economics_for_tests();
     let chain_id = ChainId::from("fee-detached-non-transfer-fallback-test");
     let (payer_id, payer_keypair) = gen_account_in("wonderland");
@@ -217,7 +216,10 @@ fn fee_enabled_account_metadata_uses_canonical_output_owner() {
         &state.network_id,
         max_clock_drift,
         tx_limits,
-        state.crypto().as_ref(),
+        state
+            .transaction_admission_parameters()
+            .require_crypto_policy()
+            .expect("original fixture policy"),
         Duration::from_millis(10),
     )
     .expect("transaction should pass stateless admission");
@@ -260,9 +262,7 @@ fn fee_enabled_account_metadata_uses_canonical_output_owner() {
 }
 #[test]
 fn fee_enabled_single_transfer_rejects_without_partial_state_when_fee_missing() {
-    let _guard = crate::status::nexus_fee_test_lock()
-        .lock()
-        .expect("nexus fee test lock");
+    let _guard = crate::status::operator_status_test_guard();
     crate::status::reset_nexus_economics_for_tests();
     let chain_id = ChainId::from("fee-detached-insufficient-fee-test");
     let (payer_id, payer_keypair) = gen_account_in("wonderland");
@@ -355,7 +355,10 @@ fn fee_enabled_single_transfer_rejects_without_partial_state_when_fee_missing() 
         &state.network_id,
         max_clock_drift,
         tx_limits,
-        state.crypto().as_ref(),
+        state
+            .transaction_admission_parameters()
+            .require_crypto_policy()
+            .expect("original fixture policy"),
         Duration::from_millis(10),
     )
     .expect("transaction should pass stateless admission");
@@ -422,9 +425,7 @@ fn fee_enabled_single_transfer_rejects_without_partial_state_when_fee_missing() 
 }
 #[test]
 fn fee_enabled_single_transfer_with_active_data_trigger_retains_callback_outputs() {
-    let _guard = crate::status::nexus_fee_test_lock()
-        .lock()
-        .expect("nexus fee test lock");
+    let _guard = crate::status::operator_status_test_guard();
     crate::status::reset_nexus_economics_for_tests();
     let chain_id = ChainId::from("fee-detached-data-trigger-fallback-test");
     let (payer_id, payer_keypair) = gen_account_in("wonderland");
@@ -535,7 +536,10 @@ fn fee_enabled_single_transfer_with_active_data_trigger_retains_callback_outputs
         &state.network_id,
         max_clock_drift,
         tx_limits,
-        state.crypto().as_ref(),
+        state
+            .transaction_admission_parameters()
+            .require_crypto_policy()
+            .expect("original fixture policy"),
         Duration::from_millis(10),
     )
     .expect("transaction should pass stateless admission");
@@ -670,7 +674,10 @@ fn same_block_data_trigger_registration_is_atomic_with_rejected_transfer() {
             &state.network_id,
             max_clock_drift,
             tx_limits,
-            state.crypto().as_ref(),
+            state
+                .transaction_admission_parameters()
+                .require_crypto_policy()
+                .expect("original fixture policy"),
             Duration::from_millis(10),
         )
         .expect("transaction passes stateless admission")
@@ -853,7 +860,10 @@ fn prepared_execute_trigger_retains_nested_gas_on_success_and_rejection() {
             &state.network_id,
             max_clock_drift,
             tx_limits,
-            state.crypto().as_ref(),
+            state
+                .transaction_admission_parameters()
+                .require_crypto_policy()
+                .expect("original fixture policy"),
             Duration::from_millis(10),
         )
         .expect("ExecuteTrigger transaction passes stateless admission");
@@ -912,9 +922,7 @@ fn prepared_execute_trigger_retains_nested_gas_on_success_and_rejection() {
 }
 #[test]
 fn fee_enabled_single_transfer_rejects_without_partial_state_when_fee_asset_missing() {
-    let _guard = crate::status::nexus_fee_test_lock()
-        .lock()
-        .expect("nexus fee test lock");
+    let _guard = crate::status::operator_status_test_guard();
     crate::status::reset_nexus_economics_for_tests();
     let chain_id = ChainId::from("fee-detached-missing-fee-asset-test");
     let (payer_id, payer_keypair) = gen_account_in("wonderland");
@@ -1003,7 +1011,10 @@ fn fee_enabled_single_transfer_rejects_without_partial_state_when_fee_asset_miss
         &state.network_id,
         max_clock_drift,
         tx_limits,
-        state.crypto().as_ref(),
+        state
+            .transaction_admission_parameters()
+            .require_crypto_policy()
+            .expect("original fixture policy"),
         Duration::from_millis(10),
     )
     .expect("transaction should pass stateless admission");
@@ -1069,9 +1080,7 @@ fn fee_enabled_single_transfer_rejects_without_partial_state_when_fee_asset_miss
 }
 #[test]
 fn fee_enabled_transfer_fee_same_asset_rolls_back_business_and_settles_actual_work() {
-    let _guard = crate::status::nexus_fee_test_lock()
-        .lock()
-        .expect("nexus fee test lock");
+    let _guard = crate::status::operator_status_test_guard();
     crate::status::reset_nexus_economics_for_tests();
     let chain_id = ChainId::from("fee-detached-same-asset-fee-test");
     let (payer_id, payer_keypair) = gen_account_in("wonderland");
@@ -1147,7 +1156,10 @@ fn fee_enabled_transfer_fee_same_asset_rolls_back_business_and_settles_actual_wo
         &state.network_id,
         max_clock_drift,
         tx_limits,
-        state.crypto().as_ref(),
+        state
+            .transaction_admission_parameters()
+            .require_crypto_policy()
+            .expect("original fixture policy"),
         Duration::from_millis(10),
     )
     .expect("transaction should pass stateless admission");
@@ -1192,9 +1204,7 @@ fn fee_enabled_transfer_fee_same_asset_rolls_back_business_and_settles_actual_wo
 }
 #[test]
 fn fee_enabled_shared_fee_balance_rejects_later_transfer_without_rolling_back_prior_success() {
-    let _guard = crate::status::nexus_fee_test_lock()
-        .lock()
-        .expect("nexus fee test lock");
+    let _guard = crate::status::operator_status_test_guard();
     crate::status::reset_nexus_economics_for_tests();
     let chain_id = ChainId::from("fee-detached-shared-fee-balance-test");
     let (payer_id, payer_keypair) = gen_account_in("wonderland");
@@ -1285,7 +1295,10 @@ fn fee_enabled_shared_fee_balance_rejects_later_transfer_without_rolling_back_pr
         &state.network_id,
         max_clock_drift,
         tx_limits,
-        state.crypto().as_ref(),
+        state
+            .transaction_admission_parameters()
+            .require_crypto_policy()
+            .expect("original fixture policy"),
         Duration::from_millis(10),
     )
     .expect("first transaction should pass stateless admission");
@@ -1304,7 +1317,10 @@ fn fee_enabled_shared_fee_balance_rejects_later_transfer_without_rolling_back_pr
         &state.network_id,
         max_clock_drift,
         tx_limits,
-        state.crypto().as_ref(),
+        state
+            .transaction_admission_parameters()
+            .require_crypto_policy()
+            .expect("original fixture policy"),
         Duration::from_millis(10),
     )
     .expect("second transaction should pass stateless admission");
@@ -1371,17 +1387,14 @@ fn fee_enabled_shared_fee_balance_rejects_later_transfer_without_rolling_back_pr
     assert_eq!(
         assets
             .get(&payer_fee_asset)
-            .map(|asset| asset.0.clone())
-            .unwrap_or_else(Quantity::zero),
+            .map_or_else(Quantity::zero, |asset| asset.0.clone()),
         Quantity::zero(),
         "only the accepted transaction may consume the available fee balance"
     );
 }
 #[test]
 fn fee_enabled_transfer_then_failing_instruction_rolls_back_business_effects() {
-    let _guard = crate::status::nexus_fee_test_lock()
-        .lock()
-        .expect("nexus fee test lock");
+    let _guard = crate::status::operator_status_test_guard();
     crate::status::reset_nexus_economics_for_tests();
     let chain_id = ChainId::from("fee-detached-transfer-then-fail-test");
     let (payer_id, payer_keypair) = gen_account_in("wonderland");
@@ -1471,7 +1484,10 @@ fn fee_enabled_transfer_then_failing_instruction_rolls_back_business_effects() {
         &state.network_id,
         max_clock_drift,
         tx_limits,
-        state.crypto().as_ref(),
+        state
+            .transaction_admission_parameters()
+            .require_crypto_policy()
+            .expect("original fixture policy"),
         Duration::from_millis(10),
     )
     .expect("transaction should pass stateless admission");
@@ -1550,9 +1566,7 @@ fn fee_enabled_transfer_then_failing_instruction_rolls_back_business_effects() {
 }
 #[test]
 fn fee_enabled_non_increasing_sequence_rejects_before_transfer_or_fee() {
-    let _guard = crate::status::nexus_fee_test_lock()
-        .lock()
-        .expect("nexus fee test lock");
+    let _guard = crate::status::operator_status_test_guard();
     crate::status::reset_nexus_economics_for_tests();
     let chain_id = ChainId::from("fee-detached-sequence-admission-test");
     let (payer_id, payer_keypair) = gen_account_in("wonderland");
@@ -1676,7 +1690,10 @@ fn fee_enabled_non_increasing_sequence_rejects_before_transfer_or_fee() {
         &state.network_id,
         max_clock_drift,
         tx_limits,
-        state.crypto().as_ref(),
+        state
+            .transaction_admission_parameters()
+            .require_crypto_policy()
+            .expect("original fixture policy"),
         Duration::from_millis(10),
     )
     .expect("transaction should pass stateless admission");
@@ -1751,9 +1768,7 @@ fn fee_enabled_non_increasing_sequence_rejects_before_transfer_or_fee() {
 }
 #[test]
 fn legacy_fee_sponsor_metadata_rejects_before_block_admission_without_state_mutation() {
-    let _guard = crate::status::nexus_fee_test_lock()
-        .lock()
-        .expect("nexus fee test lock");
+    let _guard = crate::status::operator_status_test_guard();
     crate::status::reset_nexus_economics_for_tests();
     let chain_id = ChainId::from("legacy-fee-sponsor-metadata-default-fees-test");
     let (payer_id, payer_keypair) = gen_account_in("wonderland");
@@ -1861,9 +1876,7 @@ fn legacy_fee_sponsor_metadata_rejects_before_block_admission_without_state_muta
 }
 #[test]
 fn legacy_fee_sponsor_metadata_rejects_when_nexus_fees_are_configured() {
-    let _guard = crate::status::nexus_fee_test_lock()
-        .lock()
-        .expect("nexus fee test lock");
+    let _guard = crate::status::operator_status_test_guard();
     crate::status::reset_nexus_economics_for_tests();
     let chain_id = ChainId::from("legacy-fee-sponsor-metadata-configured-fees-test");
     let (payer_id, payer_keypair) = gen_account_in("wonderland");
@@ -1976,9 +1989,7 @@ fn legacy_fee_sponsor_metadata_rejects_when_nexus_fees_are_configured() {
 }
 #[test]
 fn local_fee_cache_cannot_mutate_committed_policy_or_balances() {
-    let _guard = crate::status::nexus_fee_test_lock()
-        .lock()
-        .expect("nexus fee test lock");
+    let _guard = crate::status::operator_status_test_guard();
     crate::status::reset_nexus_economics_for_tests();
     let chain_id = ChainId::from("fee-detached-invalid-fee-asset-test");
     let (payer_id, _payer_keypair) = gen_account_in("wonderland");
@@ -2064,9 +2075,7 @@ fn local_fee_cache_cannot_mutate_committed_policy_or_balances() {
 
 #[test]
 fn rejected_data_trigger_execution_still_charges_nexus_fee() {
-    let _guard = crate::status::nexus_fee_test_lock()
-        .lock()
-        .expect("nexus fee test lock");
+    let _guard = crate::status::operator_status_test_guard();
     crate::status::reset_nexus_economics_for_tests();
     let chain_id = ChainId::from("rejected-trigger-fee-test");
     let (payer_id, payer_keypair) = gen_account_in("wonderland");
@@ -2178,7 +2187,10 @@ fn rejected_data_trigger_execution_still_charges_nexus_fee() {
         &state.network_id,
         max_clock_drift,
         tx_limits,
-        state.crypto().as_ref(),
+        state
+            .transaction_admission_parameters()
+            .require_crypto_policy()
+            .expect("original fixture policy"),
         Duration::from_millis(10),
     )
     .expect("transaction should pass stateless admission");
@@ -2269,14 +2281,17 @@ async fn validate_and_record_transactions_allows_missing_authority_self_register
         InstructionBox::from(Log::new(Level::INFO, "self-register".into())),
     ])
     .sign(keypair.private_key());
-    let crypto_cfg = state.crypto();
     let (_clock, time_source) = TimeSource::new_mock(tx.creation_time());
     let tx = AcceptedTransaction::accept_with_time_source(
         tx,
         &state.network_id,
         max_clock_drift,
         tx_limits,
-        crypto_cfg.as_ref(),
+        &iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+            iroha_crypto::Algorithm::Ed25519,
+            iroha_crypto::Algorithm::Secp256k1,
+        ])
+        .expect("this stateless fixture explicitly selects Ed25519 and Secp256k1"),
         &time_source,
     )
     .expect("admission should accept transaction shape");

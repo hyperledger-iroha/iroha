@@ -71,7 +71,7 @@ fn compiled_fixture() -> (State, SignedBlock, ContractAddress, Permission) {
     let signing = crate::manifest_signing_test_support::ManifestSigningFixture::new();
     let (program, manifest) = kotodama_lang::compiler::Compiler::new()
         .compile_source_with_manifest(
-            r#"
+            r"
 seiyaku ScheduledFixture {
     permission Run;
     permission RetryRun;
@@ -88,7 +88,7 @@ seiyaku ScheduledFixture {
         require(false, JobError::Refused);
     }
 }
-"#,
+",
         )
         .expect("compile current native callback fixture");
     let code_hash = ivm::contract_code_hash(&program);

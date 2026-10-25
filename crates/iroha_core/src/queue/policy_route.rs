@@ -4,11 +4,11 @@ use super::*;
 
 /// A resolved physical policy lane; native ordering identifiers cannot construct it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct PhysicalExecutionPolicyRoute(RoutingDecision);
+pub struct PhysicalExecutionPolicyRoute(RoutingDecision);
 
 /// Fixed-size retained refusal. Resolver-owned diagnostic strings never enter source rows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum PhysicalPolicyRouteRejection {
+pub enum PhysicalPolicyRouteRejection {
     /// Stable resolver classification; every label is a static closed-set value.
     Routing(&'static str),
     /// The current executor admits exactly one physical route.
@@ -57,7 +57,7 @@ impl PhysicalExecutionPolicyRoute {
         native: RoutingDecision,
     ) -> Result<Self, PhysicalPolicyRouteRejection> {
         if self.0.dataspace_id != native.dataspace_id {
-            return Err(PhysicalPolicyRouteRejection::DataspaceMismatch.into());
+            return Err(PhysicalPolicyRouteRejection::DataspaceMismatch);
         }
         Ok(self)
     }
@@ -84,7 +84,7 @@ impl PhysicalExecutionPolicyRoute {
             }
             error => PhysicalPolicyRouteRejection::Routing(error.as_label()).into(),
         })?;
-        Self::single(plan).map_err(Into::into)
+        Self::single(&plan).map_err(Into::into)
     }
 
     /// Genesis retains bootstrap routing against its authenticated in-progress World.
@@ -140,7 +140,7 @@ impl PhysicalExecutionPolicyRoute {
             return Ok(Self(route));
         }
         Self::single(
-            evaluate_policy_plan_with_nexus_and_world_at_block_height(
+            &evaluate_policy_plan_with_nexus_and_world_at_block_height(
                 nexus,
                 tx,
                 world,
@@ -157,7 +157,7 @@ impl PhysicalExecutionPolicyRoute {
         .map_err(Into::into)
     }
 
-    fn single(plan: RoutingPlan) -> Result<Self, PhysicalPolicyRouteRejection> {
+    fn single(plan: &RoutingPlan) -> Result<Self, PhysicalPolicyRouteRejection> {
         let RoutingPlan::Single(leg) = plan else {
             return Err(PhysicalPolicyRouteRejection::MultipleRoutes);
         };
@@ -309,7 +309,7 @@ mod tests {
     #[test]
     fn physical_identity_requires_equal_dataspace_but_never_equal_lane_number() {
         let route =
-            PhysicalExecutionPolicyRoute::single(RoutingPlan::single(RoutingDecision::default()))
+            PhysicalExecutionPolicyRoute::single(&RoutingPlan::single(RoutingDecision::default()))
                 .unwrap();
         assert_eq!(
             route
@@ -322,7 +322,7 @@ mod tests {
         );
         assert_eq!(
             route.require_dataspace(RoutingDecision::new(LaneId::SINGLE, DataSpaceId::new(1))),
-            Err(PhysicalPolicyRouteRejection::DataspaceMismatch.into())
+            Err(PhysicalPolicyRouteRejection::DataspaceMismatch)
         );
     }
 }

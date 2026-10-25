@@ -247,18 +247,17 @@ async fn issue_storage_token(
             );
             // Issuance can await external custody. Do not release a token after an intervening
             // finalized policy withdrawal, account deletion, expiry, or replacement.
-            if let Some(account) = &account {
-                if Some(current_account_read_policy(
+            if let Some(account) = &account
+                && Some(current_account_read_policy(
                     &worker_state,
                     account,
                     ProviderId::new(provider_id),
                 )?) != policy
-                {
-                    return Err(json_error(
-                        StatusCode::FORBIDDEN,
-                        "account-read policy changed during token issuance",
-                    ));
-                }
+            {
+                return Err(json_error(
+                    StatusCode::FORBIDDEN,
+                    "account-read policy changed during token issuance",
+                ));
             }
             Ok(issuance_result)
         })
@@ -377,7 +376,7 @@ async fn issue_storage_token(
     response_headers.insert(
         header::HeaderName::from_static(HEADER_SORA_VERIFYING_KEY),
         header_value(
-            &hex::encode(issuer.verifying_key_bytes()),
+            hex::encode(issuer.verifying_key_bytes()),
             "X-SoraFS-Verifying-Key",
         ),
     );
@@ -388,16 +387,16 @@ async fn issue_storage_token(
     );
     response_headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
     let token_value = json_object(vec![
-        json_entry("body", body_value),
+        json_entry("body", &(body_value)),
         json_entry(
             "signature_hex",
-            Value::String(hex::encode(&token_issue.token.signature)),
+            &(Value::String(hex::encode(&token_issue.token.signature))),
         ),
-        json_entry("encoded", Value::String(token_base64.clone())),
+        json_entry("encoded", &(Value::String(token_base64.clone()))),
     ]);
     let response = json_object(vec![
-        json_entry("token", token_value),
-        json_entry("token_base64", Value::String(token_base64)),
+        json_entry("token", &(token_value)),
+        json_entry("token_base64", &(Value::String(token_base64))),
     ]);
     (StatusCode::OK, response_headers, JsonBody(response)).into_response()
 }

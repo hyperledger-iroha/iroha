@@ -1,4 +1,4 @@
-//! Admission-bound HTTP Routing V1 projections for SoraFS.
+//! Admission-bound HTTP Routing V1 projections for `SoraFS`.
 //!
 //! The routing view is deliberately derived from committed pin-registry state and the validated
 //! provider-advert cache for every request. It is not a second content-ownership database: approved
@@ -834,7 +834,7 @@ fn negotiate_representation(headers: &HeaderMap) -> Result<Representation, Routi
     let mut saw_header = false;
     let mut total_bytes = 0usize;
     let mut ranges = Vec::new();
-    for value in values.iter() {
+    for value in &values {
         saw_header = true;
         let value = value.to_str().map_err(|_| RoutingError::InvalidAccept)?;
         total_bytes = total_bytes.saturating_add(value.len());

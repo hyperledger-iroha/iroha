@@ -128,16 +128,17 @@ pub fn message<'a>(
     deadline_check(control)?;
     let charge = budget.try_reserve_bytes(size_of::<Message<'_>>())?;
     let world = view.world();
-    let data = if let Some(row) = store::outbound_messages::get(world, &id) {
-        MessageDetail::Outbound(outbound(id, row, views::committed_height(view)))
-    } else if let Some(row) = store::inbound_messages::get(world, &id) {
-        MessageDetail::Inbound(Inbound {
-            message_id: id,
-            record: PayloadRef(row),
-        })
-    } else {
-        MessageDetail::Unknown
-    };
+    let data = store::outbound_messages::get(world, &id).map_or_else(
+        || {
+            store::inbound_messages::get(world, &id).map_or(MessageDetail::Unknown, |row| {
+                MessageDetail::Inbound(Inbound {
+                    message_id: id,
+                    record: PayloadRef(row),
+                })
+            })
+        },
+        |row| MessageDetail::Outbound(outbound(id, row, views::committed_height(view))),
+    );
     deadline_check(control)?;
     Ok(SccpNativeDataV1 {
         data: data.into(),

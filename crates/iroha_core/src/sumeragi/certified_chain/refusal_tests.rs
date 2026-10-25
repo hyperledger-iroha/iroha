@@ -79,8 +79,7 @@ fn original_result_frame_refusal_is_local_and_same_bytes_retry() {
     let original = read_frame(Clone::clone(&frame), 1, chain.root_scope()).unwrap();
     let error: ExecutionAttemptError<ChainReadError> =
         no_decode_allocation(|| read_frame(Clone::clone(&frame), 1, chain.root_scope()))
-            .unwrap_err()
-            .into();
+            .unwrap_err();
     let ExecutionAttemptError::Deferred(local) = error else {
         panic!("the original result decoder refusal is not malformed evidence: {error:?}");
     };
@@ -169,9 +168,8 @@ fn malformed_original_result_frame_is_a_completed_rejection() {
             ),
         )),
     );
-    let error: ExecutionAttemptError<ChainReadError> = read_frame(changed, 1, chain.root_scope())
-        .unwrap_err()
-        .into();
+    let error: ExecutionAttemptError<ChainReadError> =
+        read_frame(changed, 1, chain.root_scope()).unwrap_err();
     assert!(matches!(
         error,
         ExecutionAttemptError::Rejected(ChainReadError::Malformed { height: 1, .. })

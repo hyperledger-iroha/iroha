@@ -628,7 +628,7 @@ mod tests {
         mutate: impl FnOnce(&mut OpenVerifyEnvelope),
     ) -> ProofBox {
         let vk = VerifyingKeyBox::new(
-            verifier.proof_backend.clone().into(),
+            verifier.proof_backend.clone(),
             verifier.verifying_key_bytes.clone(),
         );
         let mut envelope = OpenVerifyEnvelope {
@@ -641,7 +641,7 @@ mod tests {
         };
         mutate(&mut envelope);
         ProofBox::new(
-            verifier.proof_backend.clone().into(),
+            verifier.proof_backend.clone(),
             norito::encode_canonical(&envelope).expect("encode canonical OpenVerifyEnvelope"),
         )
     }
@@ -705,7 +705,7 @@ mod tests {
         ] {
             let mut verifier = sample_proof_verifier();
             verifier.proof_backend = backend.to_owned();
-            let malformed = ProofBox::new(backend.to_owned().into(), vec![0xFF]);
+            let malformed = ProofBox::new(backend.to_owned(), vec![0xFF]);
             let err = validate_proof_receipt(&malformed, &execution, &verifier, test_guardrails())
                 .expect_err("non-production backend labels must reject before decoding");
             assert!(

@@ -4,7 +4,7 @@ use rand_core_06::{CryptoRng, Error as RngError, RngCore};
 struct TestRng(u64);
 impl RngCore for TestRng {
     fn next_u32(&mut self) -> u32 {
-        self.next_u64() as u32
+        u32::try_from(self.next_u64() & u64::from(u32::MAX)).expect("low word fits u32")
     }
     fn next_u64(&mut self) -> u64 {
         let mut x = self.0;

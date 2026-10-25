@@ -11,7 +11,7 @@ use iroha_data_model::{
 };
 
 /// At most two certified panels for each of the three external networks.
-pub(crate) struct PauseEnactments {
+pub struct PauseEnactments {
     items: [Option<CertifiedPause>; 6],
 }
 impl PauseEnactments {
@@ -58,7 +58,7 @@ fn pause_key(
 }
 
 /// Merge due closes and panel conclusions without replacing Parliament's remaining budget.
-pub(crate) fn advance_reconciliation<E: std::fmt::Debug>(
+pub fn advance_reconciliation<E: std::fmt::Debug>(
     state: &mut StateBlock<'_>,
 ) -> Result<PauseEnactments, StateBlockStartError<E>> {
     let mut batch = PauseEnactments {

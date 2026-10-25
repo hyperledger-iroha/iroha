@@ -1569,7 +1569,7 @@ impl StagedTaikaiLineageFixture {
                 .append(
                     LaneEpoch::new(self.lane_id, self.epoch),
                     self.sequence,
-                    self.receipt.clone(),
+                    &self.receipt.clone(),
                     self.fingerprint,
                 )
                 .expect("append exact durable receipt"),
@@ -1602,7 +1602,7 @@ fn staged_taikai_lineage_fixture(seed: u8) -> StagedTaikaiLineageFixture {
         guard.validate(&manifest, &digest).expect("fresh lineage");
         guard
             .stage_ingest(
-                manifest.segment_window.clone(),
+                manifest.segment_window,
                 &digest,
                 lane_id,
                 epoch,
@@ -1773,8 +1773,7 @@ fn taikai_trm_lineage_guard_allows_exact_staged_ingest_retry() {
     assert_eq!(err.0, StatusCode::BAD_REQUEST);
     assert!(
         err.1.contains("already accepted"),
-        "unexpected inexact retry error: {:?}",
-        err
+        "unexpected inexact retry error: {err:?}"
     );
 }
 #[test]
@@ -1789,8 +1788,7 @@ fn taikai_pending_lineage_with_tampered_trm_is_not_promoted() {
     assert_eq!(err.0, StatusCode::INTERNAL_SERVER_ERROR);
     assert!(
         err.1.contains("digest mismatch"),
-        "unexpected tampered-TRM recovery error: {:?}",
-        err
+        "unexpected tampered-TRM recovery error: {err:?}"
     );
     assert!(
         taikai_lineage_artifact_path(
@@ -1959,8 +1957,7 @@ fn taikai_pending_lineage_recovery_rejects_terminal_and_oversized_windows() {
         assert_eq!(err.0, StatusCode::INTERNAL_SERVER_ERROR, "case: {label}");
         assert!(
             err.1.contains("invalid segment window"),
-            "unexpected {label} pending-lineage error: {:?}",
-            err
+            "unexpected {label} pending-lineage error: {err:?}"
         );
         assert!(
             taikai_lineage_artifact_path(
@@ -2014,7 +2011,7 @@ fn taikai_trm_lineage_guard_rejects_retry_from_legacy_lineage_without_provenance
         .expect("persist routing manifest")
         .expect("enabled routing manifest path");
         guard
-            .commit(manifest.segment_window.clone(), &digest)
+            .commit(manifest.segment_window, &digest)
             .expect("seed legacy lineage without artifact provenance");
     }
     let guard = taikai_ingest::TrmLineageGuard::new(spool_dir, &alias)
@@ -2035,8 +2032,7 @@ fn taikai_trm_lineage_guard_rejects_retry_from_legacy_lineage_without_provenance
     assert_eq!(err.0, StatusCode::BAD_REQUEST);
     assert!(
         err.1.contains("already accepted"),
-        "unexpected legacy-lineage retry error: {:?}",
-        err
+        "unexpected legacy-lineage retry error: {err:?}"
     );
 }
 #[test]
@@ -2103,7 +2099,7 @@ fn taikai_trm_lineage_guard_rejects_staged_retry_at_different_coordinates() {
         .expect("enabled other routing manifest path");
         guard
             .commit_ingest(
-                manifest.segment_window.clone(),
+                manifest.segment_window,
                 &digest,
                 lane_id,
                 epoch,
@@ -2121,7 +2117,7 @@ fn taikai_trm_lineage_guard_rejects_staged_retry_at_different_coordinates() {
             LaneId::new(8),
             epoch,
             sequence,
-            storage_ticket.clone(),
+            storage_ticket,
             fingerprint,
         ),
         (
@@ -2129,7 +2125,7 @@ fn taikai_trm_lineage_guard_rejects_staged_retry_at_different_coordinates() {
             lane_id,
             epoch + 1,
             sequence,
-            storage_ticket.clone(),
+            storage_ticket,
             fingerprint,
         ),
         (
@@ -2137,7 +2133,7 @@ fn taikai_trm_lineage_guard_rejects_staged_retry_at_different_coordinates() {
             lane_id,
             epoch,
             sequence + 1,
-            storage_ticket.clone(),
+            storage_ticket,
             fingerprint,
         ),
         (
@@ -2184,8 +2180,7 @@ fn taikai_trm_lineage_guard_rejects_staged_retry_at_different_coordinates() {
         assert_eq!(err.0, StatusCode::BAD_REQUEST, "coordinate: {label}");
         assert!(
             err.1.contains("already accepted"),
-            "unexpected {label} retry error: {:?}",
-            err
+            "unexpected {label} retry error: {err:?}"
         );
     }
 }
@@ -2270,8 +2265,7 @@ fn assert_mutated_lineage_state_rejected(mutate: impl FnOnce(&mut Value), expect
     };
     assert!(
         err.1.contains(expected_message),
-        "unexpected error: {:?}",
-        err
+        "unexpected error: {err:?}"
     );
 }
 #[test]
@@ -2383,8 +2377,7 @@ fn taikai_trm_lineage_guard_rejects_state_symlink() {
     assert!(
         err.1
             .contains("Taikai routing manifest lineage record is not a regular file"),
-        "unexpected lineage symlink error: {:?}",
-        err
+        "unexpected lineage symlink error: {err:?}"
     );
     assert!(
         fs::symlink_metadata(&state_path)
@@ -2416,8 +2409,7 @@ fn taikai_trm_lineage_guard_rejects_spool_dir_symlink() {
     assert_eq!(err.0, StatusCode::INTERNAL_SERVER_ERROR);
     assert!(
         err.1.contains("Taikai spool directory"),
-        "unexpected lineage root symlink error: {:?}",
-        err
+        "unexpected lineage root symlink error: {err:?}"
     );
     assert!(
         fs::symlink_metadata(&base_dir)
@@ -2450,8 +2442,7 @@ fn taikai_trm_lineage_guard_rejects_busy_live_lock() {
     assert_eq!(err.0, StatusCode::SERVICE_UNAVAILABLE);
     assert!(
         err.1.contains("routing manifest lock busy for alias slug"),
-        "unexpected busy lock error: {:?}",
-        err
+        "unexpected busy lock error: {err:?}"
     );
 }
 #[cfg(unix)]
@@ -2479,8 +2470,7 @@ fn taikai_trm_lineage_guard_rejects_lock_symlink() {
     assert_eq!(err.0, StatusCode::INTERNAL_SERVER_ERROR);
     assert!(
         err.1.contains("Taikai routing manifest lock") && is_non_regular_taikai_rejection(&err.1),
-        "unexpected lock symlink error: {:?}",
-        err
+        "unexpected lock symlink error: {err:?}"
     );
     assert!(
         fs::symlink_metadata(&lock_path)
@@ -2522,8 +2512,7 @@ fn taikai_trm_lineage_guard_never_steals_an_aged_live_lock() {
     assert_eq!(err.0, StatusCode::SERVICE_UNAVAILABLE);
     assert!(
         err.1.contains("routing manifest lock busy for alias slug"),
-        "unexpected busy lock error: {:?}",
-        err
+        "unexpected busy lock error: {err:?}"
     );
     drop(guard);
     let recovered = taikai_ingest::TrmLineageGuard::new(spool_dir, &alias)
