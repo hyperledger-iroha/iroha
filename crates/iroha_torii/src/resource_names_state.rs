@@ -12,7 +12,7 @@ use crate::native_projection_response::{
 use iroha_core::{
     state::{AllocationBudget, StateReadOnly, WorldStateSnapshotError},
     sumeragi::{
-        certified_chain::{CertifiedChain, CommittedBlock},
+        certified_chain::{CertifiedBlock, CertifiedChain, CommittedBlock},
         finality::AttestationBuildError,
     },
 };
@@ -49,6 +49,18 @@ fn current_names_tip(
         };
         refused("recent_tip", reason)
     })
+}
+
+// Size the genesis proof from the same signed original the attestation's genesis
+// proof reads. `committed(1)` would walk every native frame from the tip down to
+// genesis first; the attestation's own walk still authenticates genesis R via H2.
+fn genesis_sizing_frame<V: StateReadOnly>(
+    chain: &CertifiedChain<'_, V>,
+) -> Result<CommittedBlock, Error> {
+    chain
+        .certified(1)
+        .map(CertifiedBlock::into_committed)
+        .map_err(|_| refused("genesis", "source_unavailable"))
 }
 
 fn require_status_height(
@@ -271,9 +283,7 @@ async fn handle(
             })?;
             // Proof frame copies and their finite committee/signer vectors are
             // prepaid from the same operation budget before the existing builder.
-            let genesis = chain
-                .committed(1)
-                .map_err(|_| refused("genesis", "source_unavailable"))?;
+            let genesis = genesis_sizing_frame(&chain)?;
             let proof_bytes = norito::canonical_frame_len(genesis.block().as_ref())
                 .and_then(|len| {
                     norito::canonical_frame_len(tip.block().as_ref()).map(|tip_len| (len, tip_len))

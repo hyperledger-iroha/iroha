@@ -22,11 +22,26 @@ fn limits() -> NativeFinalityLimits {
     }
 }
 
+fn committee_backing(block: &CommittedBlock) -> usize {
+    let committee = &block.commitment().schedule.current.committee;
+    native_committee_original_bytes(
+        committee.len(),
+        committee.iter().map(|member| {
+            (
+                member.validator.public_key(),
+                member.proof_of_possession.as_slice(),
+            )
+        }),
+    )
+    .unwrap()
+}
+
 #[test]
 fn names_current_tip_uses_three_original_frames_at_later_height_and_keeps_source_bounds() {
     let mut chain = CertifiedTestChain::start(TestChainConfig::new(World::new(), 1))
         .map_err(|error| error.error)
         .unwrap();
+    let mut genesis_sizing_bytes = None;
     for height in [3, 12, 32] {
         for next in chain.height() + 1..=height {
             chain.commit_at(next * 1_000, Vec::new());
@@ -91,6 +106,33 @@ fn names_current_tip_uses_three_original_frames_at_later_height_and_keeps_source
                     .is_err()
             );
         }
+        // Genesis proof sizing reads the signed genesis original, not the
+        // execution receipt walk from the tip, and sizes exactly the same bytes.
+        let reader = CertifiedChain::new(&view).unwrap();
+        let unbounded =
+            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, usize::MAX, 64);
+        let (sized, sizing) =
+            norito::core::with_decode_limits_measured(unbounded, || genesis_sizing_frame(&reader));
+        let sized = sized.unwrap();
+        let legacy = reader.committed(1).unwrap();
+        assert_eq!(
+            sized.block().encode_wire().unwrap(),
+            legacy.block().encode_wire().unwrap()
+        );
+        assert_eq!(
+            norito::canonical_frame_len(sized.block().as_ref()).unwrap(),
+            norito::canonical_frame_len(legacy.block().as_ref()).unwrap()
+        );
+        assert_eq!(committee_backing(&sized), committee_backing(&legacy));
+        eprintln!(
+            "names genesis sizing height={height} allocated_bytes={}",
+            sizing.total_allocated_bytes()
+        );
+        assert_eq!(
+            *genesis_sizing_bytes.get_or_insert(sizing.total_allocated_bytes()),
+            sizing.total_allocated_bytes(),
+            "genesis sizing work must not grow with the chain"
+        );
     }
 }
 
