@@ -5963,7 +5963,7 @@ where
 /// committed genesis. `height = None` selects `latest`: the durable tip of the
 /// same immutable view that produces the proof (at least 1, so an empty ledger
 /// still reports a valid selector), so it never names a height it did not sign.
-/// Exact requested/applied/status height races return a selector-bound HTTP 409;
+/// Exact requested/applied/status height races return a selector-bound HTTP 503;
 /// missing or corrupt proofs remain fixed failures.
 #[iroha_futures::telemetry_future]
 pub(crate) async fn handle_v1_bridge_finality_attestation(
@@ -6197,7 +6197,7 @@ mod bridge_finality_attestation_progress_tests {
                         format,
                     ),
                 ));
-                assert_eq!(response.status(), StatusCode::CONFLICT);
+                assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
                 assert_eq!(response.headers()["x-content-type-options"], "nosniff");
                 assert_eq!(
                     response.headers()[axum::http::header::CACHE_CONTROL],
@@ -6295,10 +6295,16 @@ mod bridge_finality_attestation_progress_tests {
     #[tokio::test]
     async fn canonical_boundary_keeps_only_valid_tip_progress_status_and_code() {
         for (status, reason, applied, retained) in [
-            (StatusCode::CONFLICT, Reason::TipChanged, 9, true),
+            (StatusCode::SERVICE_UNAVAILABLE, Reason::TipChanged, 9, true),
+            (StatusCode::CONFLICT, Reason::TipChanged, 9, false),
             (StatusCode::NOT_FOUND, Reason::TipChanged, 9, false),
             (StatusCode::CONFLICT, Reason::ConflictingState, 9, false),
-            (StatusCode::CONFLICT, Reason::TipChanged, 10, false),
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Reason::TipChanged,
+                10,
+                false,
+            ),
         ] {
             let (node_id, network_id) = identity();
             let progress = BridgeFinalityAttestationTipMismatchV1 {

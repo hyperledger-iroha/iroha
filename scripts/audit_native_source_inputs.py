@@ -3,14 +3,16 @@
 
 Run after a successful Cargo build and the caller's source-stability check.
 Cargo JSON selects exact per-artifact depfiles, including generated inputs omitted
-by Cargo's aggregate .d. The build-script output is the actual included-file
-census, not a second reimplementation of the freshness algorithm. External
+by Cargo's aggregate .d. A standalone evaluator records source provenance without
+putting repository identity into compiled proof compatibility. External
 registry/toolchain inputs are reported, not attested. This script is diagnostic
 build correctness tooling; it does not create registry authority.
 
 Requires Python 3.11+ and the successful build's rustc toolchain. With no
 --snapshot-tool, the small maintained Rust evaluator is compiled in temporary
-storage using that build's host sha2 rlib; no Cargo build or download is run.
+storage using that build's host sha2 rlib. When a cross build has only target sha2,
+the locked standalone helper package acquires host sha2 offline in the reusable
+target/native-source-snapshot lane; it never rebuilds the proof workspace.
 RUSTC, when set, selects the same compiler used for the native build.
 """
 from pathlib import Path
@@ -19,7 +21,6 @@ import argparse, ast, hashlib, json, os, re, shlex, subprocess, tarfile, tempfil
 ROOT = Path(__file__).resolve().parents[1]
 DRIVER = ROOT / 'scripts/native_source_snapshot.rs'
 GENERATED = ROOT / 'crates/iroha_plonk/src/keys/keygen/builtin/generated.rs'
-BUILD_RS = ROOT / 'crates/iroha_plonk/build.rs'
 HELPER = ROOT / 'crates/iroha_plonk/build_support/source_identity.rs'
 EXTERNAL_GENERATED = {
     ('oid-registry', '0.8.1'): ('oid_db.rs', ['build.rs', 'src/load.rs', 'assets/oid_db.txt'],
@@ -87,7 +88,7 @@ def resolved(path):
     return canonical
 
 
-def inputs(depfile, absent_watchers):
+def inputs(depfile):
     first = depfile.read_text().replace('\\\n', '').splitlines()[0]
     if ': ' not in first:
         raise ValueError(f'unsupported or empty depfile: {depfile}')
@@ -95,12 +96,7 @@ def inputs(depfile, absent_watchers):
     for token in shlex.split(first.split(': ', 1)[1]):
         raw = Path(token)
         raw = raw if raw.is_absolute() else ROOT / raw
-        if raw in absent_watchers:
-            if raw.exists() or raw.is_symlink():
-                raise ValueError(f'Intentionally absent rescan watcher exists: {raw}')
-            paths.append(raw)
-        else:
-            paths.append(resolved(raw))
+        paths.append(resolved(raw))
     if not paths:
         raise ValueError(f'empty depfile: {depfile}')
     return paths
@@ -282,19 +278,57 @@ def actual_snapshot(tool):
     return lines[0].removeprefix('digest='), watched
 
 
-def build_snapshot_tool(directory, events):
-    """Compile the thin evaluator with the exact selected host build dependency."""
-    host_profiles = set()
-    for event in events:
-        if (event.get('reason') == 'compiler-artifact'
-                and event.get('package_id', '').startswith(
-                    'path+file://' + str(ROOT / 'crates/iroha_plonk') + '#')
-                and 'custom-build' in event.get('target', {}).get('kind', [])):
-            host_profiles.update(Path(name).resolve(strict=True).parents[2]
-                                 for name in event['filenames'])
-    if len(host_profiles) != 1:
-        raise ValueError('Need one exact selected host plonk build-script profile')
-    host_deps = host_profiles.pop() / 'deps'
+def standalone_host_sha2():
+    """Acquire the evaluator's locked host dependency in a reusable tool lane.
+
+    Cross builds need not contain host sha2 now that Plonk has no build script.
+    Build only this small external dependency, never the proof workspace. An
+    explicit host target prevents CARGO_BUILD_TARGET from selecting the device.
+    """
+    compiler = os.environ.get('RUSTC', 'rustc')
+    version = subprocess.run([compiler, '-vV'], cwd=ROOT, capture_output=True, text=True, check=True)
+    hosts = re.findall(r'^host: ([a-zA-Z0-9_.-]+)$', version.stdout, re.M)
+    if len(hosts) != 1:
+        raise ValueError('Need one exact rustc host for the standalone snapshot dependency')
+    host = hosts[0]
+    manifest = ROOT / 'scripts/native-source-snapshot/Cargo.toml'
+    lock = manifest.with_name('Cargo.lock')
+    before = {path: sha(path) for path in (manifest, lock)}
+    lane = ROOT / 'target/native-source-snapshot'
+    environment = os.environ.copy()
+    # Device-only rustflags cannot apply to the host evaluator dependency.
+    environment['CARGO_ENCODED_RUSTFLAGS'] = ''
+    result = subprocess.run(['cargo', 'build', '--offline', '--locked', '--manifest-path', str(manifest),
+        '--package', 'sha2@0.10.9', '--target', host, '--target-dir', str(lane), '--message-format=json'],
+        cwd=ROOT, env=environment, capture_output=True, text=True, check=True)
+    if any(sha(path) != digest for path, digest in before.items()):
+        raise ValueError('Standalone snapshot dependency inputs changed during compilation')
+    events = [json.loads(line) for line in result.stdout.splitlines() if line.startswith('{')]
+    finished = [event for event in events if event.get('reason') == 'build-finished']
+    if not finished or finished[-1].get('success') is not True:
+        raise ValueError('Standalone snapshot dependency build did not finish successfully')
+    profile = lane / host / 'debug'
+    libraries = selected_host_sha2(events, profile)
+    if len(libraries) != 1:
+        raise ValueError('Need one exact standalone host sha2 artifact')
+    output, features = next(iter(libraries.items()))
+    # Cargo reports a directly selected library at profile/libsha2.rlib plus its
+    # exact hashed metadata output. Bind that family, without scanning the cache.
+    metadata = {Path(name).resolve(strict=True) for event in events
+        if event.get('reason') == 'compiler-artifact'
+        and event.get('package_id') == 'registry+https://github.com/rust-lang/crates.io-index#sha2@0.10.9'
+        for name in event.get('filenames', [])
+        if Path(name).suffix == '.rmeta' and Path(name).parent == profile / 'deps'}
+    if len(metadata) != 1:
+        raise ValueError('Need one exact standalone host sha2 compiler family')
+    library = metadata.pop().with_suffix('.rlib')
+    if sha(library) != sha(output):
+        raise ValueError('Standalone host sha2 deps output differs from selected Cargo artifact')
+    return {library: features}
+
+
+def selected_host_sha2(events, host_deps):
+    """Select reported host rlibs without inspecting unrelated cached artifacts."""
     libraries = {}
     for event in events:
         if (event.get('reason') == 'compiler-artifact'
@@ -305,11 +339,33 @@ def build_snapshot_tool(directory, events):
                 path = Path(name).resolve(strict=True)
                 if path.suffix == '.rlib' and path.parent == host_deps:
                     libraries[path] = event['features']
+    return libraries
+
+
+def build_snapshot_tool(directory, events):
+    """Compile the thin evaluator with the exact selected host build dependency."""
+    # Build scripts and proc macros execute on the host even for a cross build.
+    # Their Cargo-selected output profiles identify reusable host dependencies
+    # without a special iroha_plonk build script. Pure cross-library builds may
+    # still need the independent host dependency lane below.
+    host_profiles = set()
+    for event in events:
+        if event.get('reason') != 'compiler-artifact':
+            continue
+        kinds = event.get('target', {}).get('kind', [])
+        for name in event.get('filenames', []):
+            path = Path(name).resolve(strict=True)
+            if 'custom-build' in kinds:
+                host_profiles.add(path.parents[2])
+            elif 'proc-macro' in kinds:
+                host_profiles.add(path.parent.parent)
+    libraries = selected_host_sha2(events, host_profiles.pop() / 'deps') if len(host_profiles) == 1 else {}
     if not libraries:
-        raise ValueError('Need a Cargo-selected host sha2 rlib for the snapshot evaluator')
+        libraries = standalone_host_sha2()
     # Cargo may select both the minimal host build dependency and an accelerated
     # runtime instance. Prefer the fewest features, retaining the exact selection.
     library = min(libraries, key=lambda path: (len(libraries[path]), str(path)))
+    host_deps = library.parent
     tool = directory / 'source-snapshot'
     command = [os.environ.get('RUSTC', 'rustc'), '--edition=2024', '--crate-name',
                'iroha_native_source_snapshot', str(DRIVER), '--extern', 'sha2=' + str(library),
@@ -470,15 +526,13 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--cargo-json', type=Path, help='Successful build stdout, json-render-diagnostics format')
     ap.add_argument('--depfile', type=Path, action='append', default=[], help='Additional exact depfile (repeatable)')
-    ap.add_argument('--plonk-out-dir', type=Path, action='append', default=[], help='Exact plonk OUT_DIR if JSON unavailable')
-    ap.add_argument('--expected-source-digest', help='Optional pinned compiled/exported digest; otherwise require the current maintained snapshot')
+    ap.add_argument('--expected-source-digest', help='Optional pinned source-provenance digest; otherwise require the current maintained snapshot')
     ap.add_argument('--snapshot-tool', type=Path, help='Pinned maintained snapshot evaluator; otherwise compile the thin driver from the selected host sha2 artifact')
     ap.add_argument('--output', required=True, type=Path)
     args = ap.parse_args()
     if args.expected_source_digest is not None and not re.fullmatch('[0-9a-f]{64}', args.expected_source_digest):
         raise ValueError('source digest must be 64 lowercase hex digits')
     depfiles = {p.resolve(strict=True) for p in args.depfile}
-    out_dirs = {p.resolve(strict=True) for p in args.plonk_out_dir}
     artifacts = []
     native_mappings = []
     events = []
@@ -500,10 +554,8 @@ def main():
                 depfiles.update(selected)
                 artifacts.append({'packageId': e['package_id'], 'target': e['target']['name'],
                                   'depfiles': [str(p) for p in sorted(selected)]})
-            if e.get('reason') == 'build-script-executed' and '/crates/iroha_plonk#' in e.get('package_id', ''):
-                out_dirs.add(Path(e['out_dir']).resolve(strict=True))
-    if not depfiles or not out_dirs:
-        raise ValueError('Need exact selected depfiles and plonk build-script OUT_DIR')
+    if not depfiles:
+        raise ValueError('Need exact selected compiler depfiles')
     # Use the maintained Rust algorithm itself, never a Python census replica.
     # The evaluator is tiny; it reuses the successful build's exact host sha2 rlib.
     with tempfile.TemporaryDirectory(prefix='native-source-snapshot-') as temporary:
@@ -513,70 +565,32 @@ def main():
         actual_before, actual_watched = actual_snapshot(snapshot_tool.resolve(strict=True))
         expected = args.expected_source_digest or actual_before
         if actual_before != expected:
-            raise ValueError('Current maintained source snapshot differs from expected compiled/exported identity')
-        return audit(args, events, depfiles, out_dirs, artifacts, snapshot_tool,
+            raise ValueError('Current maintained source snapshot differs from expected source provenance')
+        return audit(args, events, depfiles, artifacts, snapshot_tool,
                      expected, actual_before, actual_watched, native_mappings)
 
 
-def audit(args, events, depfiles, out_dirs, artifacts, snapshot_tool,
+def audit(args, events, depfiles, artifacts, snapshot_tool,
           expected, actual_before, actual_watched, native_mappings=None):
-    """Reconcile selected compiler inputs with the actual compiled and current census."""
+    """Reconcile compiler inputs with independently captured source provenance."""
     external_no_source = []
     external_generated = external_generated_inputs(events, external_no_source)
     observed_external_generated = set()
-    census = set()
-    generated_identity = set()
-    absent_watchers = set()
-    identity_records = []
-    for out in sorted(out_dirs):
-        identity = out / 'native_source_identity.rs'
-        source = identity.read_text()
-        if 'NATIVE_SOURCE_CLOSURE_COMPLETE: bool = true;' not in source:
-            raise ValueError('Selected plonk build has incomplete source closure')
-        values = re.search(r'CURRENT_NATIVE_SOURCE_DIGEST: \[u8; 32\] = \[([^]]+)\]', source)
-        digest = bytes(int(x.strip()) for x in values[1].split(',') if x.strip()).hex() if values else None
-        if digest != expected:
-            raise ValueError(f'Compiled digest mismatch: {out}')
-        rescan = out / 'native-source-rescan-required'
-        if rescan.exists() or rescan.is_symlink():
-            raise ValueError(f'Intentionally absent rescan watcher exists: {rescan}')
-        watched = set()
-        declared_watches = set()
-        for line in (out.parent / 'output').read_text().splitlines():
-            if line.startswith('cargo:rerun-if-changed='):
-                p = Path(line.split('=', 1)[1])
-                declared_watches.add(p)
-                if p.is_file():
-                    watched.add(p.resolve(strict=True))
-        if rescan not in declared_watches:
-            raise ValueError('Selected plonk build did not declare its exact rescan watcher')
-        absent_watchers.add(rescan)
-        if watched != {p for p in actual_watched if p.is_file()}:
-            raise ValueError('Actual source census and selected build-script census differ')
-        if not {BUILD_RS, HELPER}.issubset(watched):
-            raise ValueError('Source identity generator/helper absent from actual census')
-        census.update(watched - {GENERATED})
-        generated_identity.add(identity.resolve(strict=True))
-        identity_records.append({'outDir': str(out), 'identitySha256': sha(identity),
-                                 'buildOutputSha256': sha(out.parent / 'output'), 'sourceDigest': digest,
-                                 'nativeTarget':json.loads(re.search(r'NATIVE_SOURCE_TARGET: &str = ("[^"]+");', source)[1]),
-                                 'targetSupported': 'BUILTIN_TARGET_SUPPORTED: bool = true;' in source})
+    census = {path for path in actual_watched if path.is_file()}
+    if not {HELPER, DRIVER, GENERATED}.issubset(census):
+        raise ValueError('Source provenance omits maintained evaluator or registry DATA')
+    registry_sha256 = sha(GENERATED)
     canonical_generated = canonical_generated_inputs(events, census)
     observed_canonical_generated = set()
     canonical, external, omitted, exceptions = set(), set(), set(), set()
-    observed_absent_watchers = set()
     for depfile in sorted(depfiles):
-        for path in inputs(depfile, absent_watchers):
-            if path in absent_watchers:
-                observed_absent_watchers.add(path)
-            elif not path.is_relative_to(ROOT):
+        for path in inputs(depfile):
+            if not path.is_relative_to(ROOT):
                 external.add(path)
             elif path in external_generated:
                 observed_external_generated.add(path)
             elif path in canonical_generated:
                 observed_canonical_generated.add(path)
-            elif path in generated_identity:
-                exceptions.add(path)
             elif path == GENERATED:
                 exceptions.add(path)
             elif path in census:
@@ -586,6 +600,8 @@ def audit(args, events, depfiles, out_dirs, artifacts, snapshot_tool,
     actual_after, watched_after = actual_snapshot(snapshot_tool.resolve(strict=True))
     if actual_after != actual_before or watched_after != actual_watched:
         raise ValueError('Source inputs changed during containment audit')
+    if sha(GENERATED) != registry_sha256:
+        raise ValueError('Compiled registry DATA changed during containment audit')
     for path in observed_canonical_generated:
         if sha(path) != canonical_generated[path]['sha256']:
             raise ValueError(f'Canonical generated output changed during audit: {path}')
@@ -597,16 +613,15 @@ def audit(args, events, depfiles, out_dirs, artifacts, snapshot_tool,
         'snapshotEvaluator': json.loads(snapshot_tool.with_name('source-snapshot-build.json').read_text()),
         'scope': 'All canonical Rust compiler inputs in the exact selected depfiles; external dependencies/toolchain are reported only. Caller must separately check source stability and target mathematical parity.',
         'sourceDigest': expected,
-        'identityBuilds': identity_records,
+        'registryDataSha256': registry_sha256,
+        'compatibilityAuthority': 'Explicit proof ABI and exact mathematical/artifact identities; this source digest is provenance only.',
         'canonicalInputCount': len(canonical), 'externalInputCount': len(external),
         'omittedCanonicalInputs': [str(p) for p in sorted(omitted)],
         'externalDependencyGeneratedInputs':[external_generated[p] for p in sorted(observed_external_generated)],
         'externalBuildScriptsWithoutGeneratedSource':external_no_source,
         'canonicalGeneratedInputs':[canonical_generated[p] for p in sorted(observed_canonical_generated)],
-        'absentBuildWatchExceptions': [{'path':str(p),'relationship':'Exact selected plonk OUT_DIR marker explicitly declared by the maintained build.rs to force source membership rescan. Deliberately absent Cargo watcher, not a Rust source input.'} for p in sorted(observed_absent_watchers)],
         'generatedExceptions': [{'path': str(p), 'sha256': sha(p),
-            'relationship': ('Finite strict-generated registry DATA, sole deliberate data exclusion; source freshness is checked by the consuming registry.' if p == GENERATED else
-                'Generated only by included iroha_plonk/build.rs + build_support/source_identity.rs from the actual complete census. Target labels are diagnostic; target support is a separate predicate.')} for p in sorted(exceptions)],
+            'relationship': 'Finite strict-generated registry DATA. Independently pinned here because the provenance census excludes its bytes to permit generation.'} for p in sorted(exceptions)],
         'depfiles': [{'path': str(p), 'sha256': sha(p)} for p in sorted(depfiles)],
         'artifacts': artifacts,
         'nativeArtifactDepfileMappings': native_mappings or [],

@@ -1025,7 +1025,7 @@ def test_source_lookup_and_phone_key_checks_have_distinct_authorities() -> None:
 
 
 def test_compiled_source_profiles_are_a_kagemusha_only_digest_gate() -> None:
-    """A compiled built-in profile is a binary-digest admission, never a strict lookup hint.
+    """A compiled built-in profile checks its semantic ABI and exact originals, never a strict lookup hint.
 
     It is recorded out of plan only while KAGEMUSHA is its sole production caller; a caller
     of the delivery plan makes it open F.4 work, so this test fails until the census is
@@ -1039,10 +1039,11 @@ def test_compiled_source_profiles_are_a_kagemusha_only_digest_gate() -> None:
         ("crates/iroha_plonk/src/keys/keygen/builtin.rs", "digest_identity", "source"),
         ("crates/iroha_plonk/src/keys/keygen/builtin.rs", "unavailable", "unsupported"),
         ("crates/iroha_plonk/src/keys/keygen/builtin/generated.rs", "digest_identity", "source"),
+        ("crates/iroha_plonk/src/contract.rs", "digest_identity", "source"),
     }
     lookup = {site[0] for site in entry(CENSUS, "plonk.source_lookup")["sites"]}
     assert not {row[0] for row in rows} & lookup
-    api = ("BuiltinSourceProfileV1", "BuiltinSourceMemberV1", "builtin_source_identity_v1")
+    api = ("BuiltinSourceProfileV1", "BuiltinSourceMemberV1", "builtin_contract_v1")
     callers = set()
     for path in sorted((ROOT / "crates").glob("*/src/**/*.rs")):
         relative = path.relative_to(ROOT).as_posix()

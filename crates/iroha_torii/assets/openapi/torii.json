@@ -65266,7 +65266,7 @@
     },
     "/v1/bridge/finality/attestation/latest": {
       "get": {
-        "description": "Signs the caller's exact non-zero 32-byte challenge, installed node identity, source-bound build and resolved runtime configuration fingerprints, actual current consensus driver status, durable-tip proof and committed genesis proof. Proofs contain canonical executed block frames with embedded CommitCertificates. The exact durable-tip selector and independently sampled status must agree. Responses are never cacheable; both selectors share one rate-limit bucket. Only exact positive height races return selector-bound HTTP 409 progress; progress is unsigned and never authenticates finality.",
+        "description": "Signs the caller's exact non-zero 32-byte challenge, installed node identity, source-bound build and resolved runtime configuration fingerprints, actual current consensus driver status, durable-tip proof and committed genesis proof. Proofs contain canonical executed block frames with embedded CommitCertificates. The exact durable-tip selector and independently sampled status must agree. Responses are never cacheable; both selectors share one rate-limit bucket. Only exact positive height races return selector-bound HTTP 503 progress; progress is unsigned and never authenticates finality.",
         "operationId": "bridgeFinalityAttestationLatest",
         "parameters": [
           {
@@ -65435,7 +65435,7 @@
                 }
               }
             },
-            "description": "ErrorEnvelope code bridge_finality_attestation_failure carries the sole details.finality_attestation_failure record. FinalityAttestationFailure reason TipChanged or ConflictingState. Only TipChanged with an exact tip_mismatch payload establishes snapshot progress, binding requested_height, applied_height, status_height, challenge, node_id, and network_id. Heights are positive and not all equal. Validate every selector before retrying within the existing deadline. This unsigned observation is not finality proof. ConflictingState, missing/corrupt proofs, identity, subject, CommitQC or signature failures never grant retryable progress. Genesis scaling treats TipChanged as non-retryable conflict.",
+            "description": "ErrorEnvelope code bridge_finality_attestation_failure carries the sole details.finality_attestation_failure record with reason ConflictingState. Contradictory state, missing/corrupt proofs, identity, subject, CommitQC or signature failures never grant retryable progress and must not be treated as a missing responder.",
             "headers": {
               "Cache-Control": {
                 "description": "Finality-attestation responses must never be cached.",
@@ -65511,7 +65511,7 @@
                 }
               }
             },
-            "description": "ErrorEnvelope code bridge_finality_attestation_failure carries the sole details.finality_attestation_failure record. FinalityAttestationFailure reason ConsensusUninitialized, GenesisUncommitted, RestartRequired, or FinalityUnavailable. Only the first two explicit startup reasons permit deadline-bounded genesis readiness retries. Missing durable proofs never mean startup.",
+            "description": "ErrorEnvelope code bridge_finality_attestation_failure carries the sole details.finality_attestation_failure record. Reasons are ConsensusUninitialized, GenesisUncommitted, RestartRequired, TipChanged, or FinalityUnavailable. Only the first two explicit startup reasons permit deadline-bounded genesis readiness retries. TipChanged requires an exact tip_mismatch payload binding requested_height, applied_height, status_height, challenge, node_id, and network_id. Heights are positive and not all equal. General finality callers validate every selector before retrying within the existing deadline; genesis scaling still treats TipChanged as non-retryable conflict. These unsigned observations are not finality proofs. Missing durable proofs never mean startup.",
             "headers": {
               "Cache-Control": {
                 "description": "Finality-attestation responses must never be cached.",
@@ -65558,7 +65558,7 @@
     },
     "/v1/bridge/finality/attestation/{height}": {
       "get": {
-        "description": "Signs the caller's exact non-zero 32-byte challenge, installed node identity, source-bound build and resolved runtime configuration fingerprints, actual current consensus driver status, durable-tip proof and committed genesis proof. Proofs contain canonical executed block frames with embedded CommitCertificates. The exact durable-tip selector and independently sampled status must agree. Responses are never cacheable; both selectors share one rate-limit bucket. Only exact positive height races return selector-bound HTTP 409 progress; progress is unsigned and never authenticates finality.",
+        "description": "Signs the caller's exact non-zero 32-byte challenge, installed node identity, source-bound build and resolved runtime configuration fingerprints, actual current consensus driver status, durable-tip proof and committed genesis proof. Proofs contain canonical executed block frames with embedded CommitCertificates. The exact durable-tip selector and independently sampled status must agree. Responses are never cacheable; both selectors share one rate-limit bucket. Only exact positive height races return selector-bound HTTP 503 progress; progress is unsigned and never authenticates finality.",
         "operationId": "bridgeFinalityAttestation",
         "parameters": [
           {
@@ -65738,7 +65738,7 @@
                 }
               }
             },
-            "description": "ErrorEnvelope code bridge_finality_attestation_failure carries the sole details.finality_attestation_failure record. FinalityAttestationFailure reason TipChanged or ConflictingState. Only TipChanged with an exact tip_mismatch payload establishes snapshot progress, binding requested_height, applied_height, status_height, challenge, node_id, and network_id. Heights are positive and not all equal. Validate every selector before retrying within the existing deadline. This unsigned observation is not finality proof. ConflictingState, missing/corrupt proofs, identity, subject, CommitQC or signature failures never grant retryable progress. Genesis scaling treats TipChanged as non-retryable conflict.",
+            "description": "ErrorEnvelope code bridge_finality_attestation_failure carries the sole details.finality_attestation_failure record with reason ConflictingState. Contradictory state, missing/corrupt proofs, identity, subject, CommitQC or signature failures never grant retryable progress and must not be treated as a missing responder.",
             "headers": {
               "Cache-Control": {
                 "description": "Finality-attestation responses must never be cached.",
@@ -65814,7 +65814,7 @@
                 }
               }
             },
-            "description": "ErrorEnvelope code bridge_finality_attestation_failure carries the sole details.finality_attestation_failure record. FinalityAttestationFailure reason ConsensusUninitialized, GenesisUncommitted, RestartRequired, or FinalityUnavailable. Only the first two explicit startup reasons permit deadline-bounded genesis readiness retries. Missing durable proofs never mean startup.",
+            "description": "ErrorEnvelope code bridge_finality_attestation_failure carries the sole details.finality_attestation_failure record. Reasons are ConsensusUninitialized, GenesisUncommitted, RestartRequired, TipChanged, or FinalityUnavailable. Only the first two explicit startup reasons permit deadline-bounded genesis readiness retries. TipChanged requires an exact tip_mismatch payload binding requested_height, applied_height, status_height, challenge, node_id, and network_id. Heights are positive and not all equal. General finality callers validate every selector before retrying within the existing deadline; genesis scaling still treats TipChanged as non-retryable conflict. These unsigned observations are not finality proofs. Missing durable proofs never mean startup.",
             "headers": {
               "Cache-Control": {
                 "description": "Finality-attestation responses must never be cached.",

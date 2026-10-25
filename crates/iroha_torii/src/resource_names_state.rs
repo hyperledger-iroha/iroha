@@ -10,7 +10,7 @@ use crate::native_projection_response::{
     NativeProjectionError, capacity, current_root_tip, encode, native_committee_original_bytes,
 };
 use iroha_core::{
-    state::{AllocationBudget, StateReadOnly, WorldStateSnapshotError},
+    state::{AllocationBudget, StateReadOnly, StateViewError, WorldStateSnapshotError},
     sumeragi::{
         certified_chain::{CertifiedBlock, CertifiedChain, CommittedBlock},
         finality::AttestationBuildError,
@@ -113,10 +113,10 @@ fn refused(stage: &'static str, reason: &'static str) -> Error {
     unavailable()
 }
 
-// Only the original physical World writer can wake this snapshot attempt.
-// No StateView or failed World overlay is retained while parked. The capture
-// closure must keep the same certified tip, challenge, attestation and budget;
-// every retry reruns the original cut, permission and publication fences.
+// Only the original physical publisher can wake this acquisition attempt.
+// No failed StateView or World overlay is retained while parked. Acquire the
+// immutable original before proof work; every retry retains the same deadline
+// and finite budget, and never retries invalid source content or a changed cut.
 fn snapshot_after_busy<T>(
     budget: &AllocationBudget,
     deadline: std::time::Instant,
@@ -139,12 +139,13 @@ fn snapshot_after_busy<T>(
             Ok(value) => return Ok(value),
             Err(error) => error,
         };
-        let WorldStateSnapshotError::Acquisition(mv::storage::AdmittedStorageError::Busy {
-            release,
-            ..
-        }) = &error
-        else {
-            return Err(error);
+        let release = match &error {
+            WorldStateSnapshotError::Acquisition(mv::storage::AdmittedStorageError::Busy {
+                release,
+                ..
+            })
+            | WorldStateSnapshotError::View(StateViewError::Busy(release)) => release,
+            _ => return Err(error),
         };
         let Some(registration) = &mut registration else {
             return Err(error);
@@ -238,7 +239,14 @@ async fn handle(
         "native resource names state worker failed",
         move || {
             let _memory = memory;
-            let view = state.view();
+            // Retain the exact certified World and its immutable source view
+            // before certificate work. The physical World writer is released
+            // by this capture, so later commits cannot split proof and rows.
+            let captured = snapshot_after_busy(&budget, snapshot_deadline, || {
+                state.capture_native_resource_names_snapshot_v1(&capture_authority, &budget)
+            })
+            .map_err(|error| refused("snapshot", snapshot_refusal_reason(&error)))?;
+            let view = captured.view();
             let height =
                 u64::try_from(view.height()).map_err(|_| refused("view", "height_overflow"))?;
             if height < 2 {
@@ -262,7 +270,7 @@ async fn handle(
             }
             require_status_height(&status, height)?;
             let chain =
-                CertifiedChain::new(&view).map_err(|_| refused("chain", "source_unavailable"))?;
+                CertifiedChain::new(view).map_err(|_| refused("chain", "source_unavailable"))?;
             // The original State execution ancestry supplies the target's
             // parent schedule. Reverify the exact target quorum and signed
             // availability, without replaying every historical quorum for each
@@ -279,7 +287,7 @@ async fn handle(
                 .try_reserve_bytes(limits.journal_bytes + limits.allocated_bytes)
                 .map_err(|_| capacity())?;
             let tip = norito::core::with_decode_limits_scope(decode_limits, || {
-                current_names_tip(&view, height, chain.root_scope(), limits)
+                current_names_tip(view, height, chain.root_scope(), limits)
             })?;
             // Proof frame copies and their finite committee/signer vectors are
             // prepaid from the same operation budget before the existing builder.
@@ -322,7 +330,7 @@ async fn handle(
                 .try_reserve_bytes(proof_bytes)
                 .map_err(|_| capacity())?;
             let attestation = iroha_core::sumeragi::finality::build_attestation(
-                &view,
+                view,
                 status,
                 &identity,
                 fingerprint,
@@ -332,60 +340,52 @@ async fn handle(
             )
             .map_err(|error| refused("attestation", attestation_refusal_reason(&error)))?;
             drop(chain);
-            drop(view);
-            let mut body = snapshot_after_busy(&budget, snapshot_deadline, || {
-                state.with_native_resource_names_snapshot_v1(
-                    &tip,
-                    &capture_authority,
-                    &budget,
-                    |snapshot, originals, keys, names| {
-                        // Every retained canonical record buffer and borrowed row is
-                        // prepaid from the same aggregate operation pool as the snapshot/output.
-                        let mut wires =
-                            iroha_allocation::ChargedBuffer::new(originals.len(), &budget)
-                                .map_err(|error| error.to_string())?;
-                        for (_, value) in originals {
-                            let wire = super::native_projection_response::encode_canonical(
-                                *value,
-                                1024 * 1024,
-                                &budget,
-                            )
+            let mut body = captured
+                .with_native_resource_names_snapshot_v1(&tip, |snapshot, originals, keys, names| {
+                    // Every retained canonical record buffer and borrowed row is
+                    // prepaid from the same aggregate operation pool as the snapshot/output.
+                    let mut wires = iroha_allocation::ChargedBuffer::new(originals.len(), &budget)
+                        .map_err(|error| error.to_string())?;
+                    for (_, value) in originals {
+                        let wire = super::native_projection_response::encode_canonical(
+                            *value,
+                            1024 * 1024,
+                            &budget,
+                        )
+                        .map_err(|error| error.to_string())?;
+                        wires.push_reserved(wire);
+                    }
+                    let mut aliases =
+                        iroha_allocation::ChargedBuffer::new(originals.len(), &budget)
                             .map_err(|error| error.to_string())?;
-                            wires.push_reserved(wire);
+                    for ((key, _), wire) in originals.iter().zip(wires.as_slice()) {
+                        aliases.push_reserved(NativeAssetAliasBindingOriginalRefV1::new(
+                            key,
+                            wire.as_slice(),
+                        ));
+                    }
+                    let mut sns = iroha_allocation::ChargedBuffer::new(names.len(), &budget)
+                        .map_err(|error| error.to_string())?;
+                    for (key, value) in names {
+                        if value.len() > 1024 * 1024 {
+                            return Err("native SNS original exceeds bound".into());
                         }
-                        let mut aliases =
-                            iroha_allocation::ChargedBuffer::new(originals.len(), &budget)
-                                .map_err(|error| error.to_string())?;
-                        for ((key, _), wire) in originals.iter().zip(wires.as_slice()) {
-                            aliases.push_reserved(NativeAssetAliasBindingOriginalRefV1::new(
-                                key,
-                                wire.as_slice(),
-                            ));
-                        }
-                        let mut sns = iroha_allocation::ChargedBuffer::new(names.len(), &budget)
-                            .map_err(|error| error.to_string())?;
-                        for (key, value) in names {
-                            if value.len() > 1024 * 1024 {
-                                return Err("native SNS original exceeds bound".into());
-                            }
-                            sns.push_reserved(NativeDataspaceSnsOriginalRefV1::new(
-                                key,
-                                value.as_slice(),
-                            ));
-                        }
-                        let payload = NativeResourceNamesStateRefV1::new(
-                            &attestation,
-                            snapshot,
-                            aliases.as_slice(),
-                            keys,
-                            sns.as_slice(),
-                        );
-                        encode(&payload, format, max_response, &budget)
-                            .map_err(|_| "native names state serialization refused".to_owned())
-                    },
-                )
-            })
-            .map_err(|error| refused("snapshot", snapshot_refusal_reason(&error)))?;
+                        sns.push_reserved(NativeDataspaceSnsOriginalRefV1::new(
+                            key,
+                            value.as_slice(),
+                        ));
+                    }
+                    let payload = NativeResourceNamesStateRefV1::new(
+                        &attestation,
+                        snapshot,
+                        aliases.as_slice(),
+                        keys,
+                        sns.as_slice(),
+                    );
+                    encode(&payload, format, max_response, &budget)
+                        .map_err(|_| "native names state serialization refused".to_owned())
+                })
+                .map_err(|error| refused("snapshot", snapshot_refusal_reason(&error)))?;
             body.memory = Some(_memory);
             let content_type = match format {
                 ResponseFormat::Norito => "application/x-norito",
@@ -459,6 +459,10 @@ fn unavailable() -> Error {
 #[cfg(test)]
 #[path = "resource_names_state/recent_tip_tests.rs"]
 mod recent_tip_tests;
+
+#[cfg(test)]
+#[path = "resource_names_state/retained_cut_tests.rs"]
+mod retained_cut_tests;
 
 #[cfg(test)]
 #[path = "resource_names_state/snapshot_wait_tests.rs"]

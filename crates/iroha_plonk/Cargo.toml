@@ -50,7 +50,3 @@ sha2 = { version = "0.10.9", features = ["asm"] }
 [dev-dependencies]
 # Fallible OS probes for isolated evaluator diagnostics, never protocol code.
 iroha_measurement = { workspace = true }
-
-[build-dependencies]
-# Compile the actual local source identity; never accept a supplied digest.
-sha2 = "0.10.9"

@@ -584,7 +584,8 @@ enum Priority {
     /// keeps proving outside the owner lock, and fold telemetry counts the call on it.
     Ingest,
     /// Proves, signs, commits an Advance or deletes custody: cancel and join the running
-    /// sub-proof before the owner lock.
+    /// sub-proof before the owner lock, or let it publish first once payments starved the
+    /// fold (bounded fairness).
     Payment,
 }
 fn with_wallet<T>(
@@ -608,7 +609,8 @@ fn with_wallet_owner<T>(
     owner.closing.require_open()?;
     // Signal and join before the owner lock: the signal also ends a sub-proof still in its
     // locked prepare, and the join never needs the owner, because a proved sub-proof releases
-    // its slot before it takes the owner again to publish.
+    // its slot before it takes the owner again to publish. A payment that bounded fairness
+    // holds back waits for that publication, which it can only do without the owner.
     let _priority = match priority {
         Priority::Payment => {
             let _timer =

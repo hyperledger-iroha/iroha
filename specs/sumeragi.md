@@ -3410,6 +3410,34 @@ its instructions may name, and independent certified reads require the contiguou
 prefix from genesis (goal S7). Sequential reads reuse a bounded cursor; earlier-height reads
 reverify from the trust root.
 
+**Retained current-attestation authority (node-local).** A challenged current attestation of the
+node's own tip may rely on a retained authority instead of rereading its complete ancestry for
+each challenge (`iroha_core::sumeragi::finality::RetainedAttestationProducer`). Its single
+producer mints the authority with one complete walk, the same reverse authenticated walk from
+the target to H2 and genesis that the attestation performs without it. It then extends the
+authority through each newly published durable tip by reading exactly the new frames, the lowest
+of which must name the retained tip as parent. It also rereads every retained frame in paced,
+bounded passes. The authority binds the store instance, network, root scope, the retained tip
+identity (height, Iroha hash, core hash, `R`), the H2-authenticated genesis decision, a revocation
+generation and a coverage expiry `MAX_COVERAGE_AGE` (30 minutes) after the start of the last
+complete reread.
+- **What a request still checks.** It reads and verifies its own target and parent (exact BLS
+  quorum under the parent's schedule) and its genesis frame, which must equal the retained genesis
+  decision. Its view must contain the retained tip at most 16 heights below its height, or be one
+  of the 64 most recent retained heights.
+- **Refusals and poison.** It refuses while the authority is unminted, revoked, lagging or past
+  its coverage expiry, and the authority is rechecked immediately before signing. A contradiction
+  found by the producer, or a genesis frame that differs from the retained decision, poisons the
+  authority until restart; later commits never clear it.
+- **The changed guarantee.** Every attestation is signed within `MAX_COVERAGE_AGE` of the start
+  of a complete reread of every frame up to the retained tip (newer frames were each read once
+  when the tip advanced). Corruption of an older local frame is therefore detected by the next
+  reread, not by the next challenge, and attestations already issued cannot be retracted.
+- **What is unchanged.** Signed bodies are byte-identical to those of the complete walk, except
+  for the fresh clock. Without an attached producer, current attestations keep the complete
+  per-challenge walk. Consensus, deterministic execution, Strict replay and independent portable
+  full-prefix verification are unchanged.
+
 **Execution-time authority.** An instruction that needs the committee of a height (a
 threshold-key lifecycle certificate) reads the World schedule entry for that height (§10.1), and
 NPoS staking derives its scheduling epochs from the committed, immutable epoch length and the

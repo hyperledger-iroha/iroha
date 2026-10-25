@@ -1218,6 +1218,10 @@ impl TieredStateBackend {
     pub(crate) fn snapshot_baseline_ready(&self) -> bool {
         self.snapshot_baseline_ready
     }
+    /// The next persistence capture must include every row after skipped publications.
+    pub(crate) fn invalidate_snapshot_baseline(&mut self) {
+        self.snapshot_baseline_ready = false;
+    }
     /// Returns the cached manifest of the latest snapshot, if any.
     #[cfg(any(test, feature = "telemetry"))]
     #[must_use]
@@ -2019,8 +2023,10 @@ impl TieredStateBackend {
         Ok(())
     }
     fn write_manifest(snapshot_dir: &Path, manifest: &TieredSnapshotManifest) -> Result<()> {
-        let manifest_bytes = norito::json::to_vec_pretty(manifest)
-            .wrap_err("failed to serialize tiered state manifest")?;
+        // This is machine-read storage metadata. Pretty-printing encoded key byte
+        // arrays multiplies every full manifest write without adding information.
+        let manifest_bytes =
+            norito::json::to_vec(manifest).wrap_err("failed to serialize tiered state manifest")?;
         let manifest_path = snapshot_dir.join("manifest.json");
         let temp_path = snapshot_dir.join("manifest.json.tmp");
         let mut file = fs::OpenOptions::new()
@@ -4824,6 +4830,43 @@ include!("tiered_hot_byte_accounting.rs");
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn persisted_manifest_is_compact_and_preserves_all_hot_and_cold_metadata() {
+        let temp = tempfile::tempdir().expect("manifest directory");
+        let mut backend =
+            TieredStateBackend::new(true, 1, 0, 0, Some(temp.path().to_path_buf()), None, 1, 0);
+        let mut world = World::default();
+        for seed in [1, 2] {
+            // Long canonical keys reproduce the byte-array whitespace amplification
+            // observed in the live manifest, with both hot and spilled entries.
+            let key: StatePath = format!("manifest_{seed}_{}", "x".repeat(1024))
+                .parse()
+                .unwrap();
+            world.smart_contract_state.insert(key, vec![seed; 3]);
+        }
+        backend.record_world_snapshot(&world).expect("snapshot");
+        let expected = backend.last_manifest().expect("manifest");
+        assert_eq!(expected.hot_entries.len(), 1);
+        assert_eq!(expected.cold_entries.len(), 1);
+        let snapshot_dir = temp.path().join(format!("{:020}", expected.snapshot_index));
+        let bytes = fs::read(snapshot_dir.join("manifest.json")).expect("persisted manifest");
+        let decoded: TieredSnapshotManifest = json::from_slice(&bytes).expect("read manifest");
+        assert_eq!(
+            json::to_value(&decoded).unwrap(),
+            json::to_value(expected).unwrap()
+        );
+        let pretty = json::to_vec_pretty(expected).unwrap();
+        assert!(
+            bytes.len() < pretty.len() / 2,
+            "encoded keys must not incur indentation amplification"
+        );
+        assert!(!snapshot_dir.join("manifest.json.tmp").exists());
+        let cold = &decoded.cold_entries[0];
+        let payload = fs::read(snapshot_dir.join(cold.spill_path.as_ref().unwrap())).unwrap();
+        let _: Vec<u8> = json::from_slice(&payload).expect("cold payload still decodes");
+        assert_eq!(cold.spill_bytes, Some(payload.len() as u64));
+    }
 
     #[test]
     fn funded_public_reserve_charges_allowance_magnitude_in_hot_tier() {

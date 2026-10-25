@@ -2,6 +2,8 @@
 
 use super::*;
 mod confirmation;
+#[cfg(test)]
+pub(super) use confirmation::{initialize_ledger_load_fixture, ledger_load_fixture};
 
 const PLAN_MAX: usize = KAGEMUSHA_WALLET_ACTIVATION_MAX_BYTES_V1 + 4096;
 

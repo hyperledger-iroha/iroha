@@ -14,6 +14,7 @@ const NAMES: &[(&[u8], bool)] = &[
     (b"sccp_anchor_open", false),
     (b"sccp_pause_panel", false),
     (b"sccp_forgery_offences", true),
+    (b"sccp_destination_pending_generations", true),
     (b"sccp_block_leaves", true),
     (b"sccp_block_commitments", true),
     (b"sccp_history_leaves", true),
@@ -30,6 +31,10 @@ const NAMES: &[(&[u8], bool)] = &[
     (b"sccp_governance_revisions", true),
     (b"sccp_inbound_messages", true),
     (b"sccp_pending_counts", true),
+    (b"sccp_reconciliations", true),
+    (b"sccp_reconciliation_proven", true),
+    (b"sccp_pending_refund_amount", true),
+    (b"sccp_reconciliation_due", true),
     (b"sccp_light_clients", true),
     (b"sccp_light_client_sets", true),
     (b"sccp_light_client_checkpoints", true),
@@ -225,6 +230,10 @@ pub(super) fn select<'a>(
     })?;
     Ok(found)
 }
+
+#[cfg(test)]
+#[path = "delta/writer_tests.rs"]
+mod writer_tests;
 
 #[cfg(test)]
 mod tests {

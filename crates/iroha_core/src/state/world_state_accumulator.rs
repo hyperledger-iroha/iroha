@@ -767,7 +767,9 @@ mod inventory_tests;
 
 #[path = "world_state_snapshot.rs"]
 mod world_state_snapshot;
-pub use world_state_snapshot::{ProviderAdmissionSnapshotOriginalsV1, WorldStateSnapshotError};
+pub use world_state_snapshot::{
+    NativeResourceNamesSnapshotV1, ProviderAdmissionSnapshotOriginalsV1, WorldStateSnapshotError,
+};
 
 #[path = "world_state_cut.rs"]
 pub(crate) mod world_state_cut;

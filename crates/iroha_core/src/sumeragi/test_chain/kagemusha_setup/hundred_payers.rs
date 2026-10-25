@@ -4,8 +4,11 @@
 //! the payers, installs the engineering scheme and executes every Activate and IssueLoad.
 //! Every wallet is a real native coordinator over host custody with its own simulated hardware
 //! key and the engineering issuer, admitted from a signed engineering catalog compiled for this
-//! exact genesis (`KAGEMUSHA_WALLET_SIGNED_CATALOG`). Payers Send while the merchant's fold
-//! runs; every Receive passes native verification and Receive admission (design §3.2).
+//! exact genesis (`KAGEMUSHA_WALLET_SIGNED_CATALOG`). Payers Send concurrently; the merchant,
+//! one phone, receives their Payments one at a time while its fold runs, and every Receive
+//! passes native verification and Receive admission (design §3.2). Payment priority is taken
+//! before the merchant's wallet owner, so bounded fold fairness (Λ/Ω §5.6) is exercised and
+//! asserted: payments never cancel more than its bound of sub-proofs between publications.
 //! Asserted: each accepted Payment is credited exactly once and replays exactly, every credit
 //! folds unburned, the folded total is the sum, value is conserved and the merchant can spend it
 //! onward. Engineering evidence only: no physical device, attestation or network-round claim.
@@ -70,6 +73,9 @@ const PROVERS: usize = 6;
 /// Ledger transactions per block for Activate and IssueLoad batches, and instructions per
 /// transaction for registration and funding.
 const BATCH: usize = 10;
+/// The next customer steps up this long after the merchant's previous Receive: shorter than
+/// one fold sub-proof, so without bounded fairness every Receive would cancel the fold.
+const NEXT_CUSTOMER: Duration = Duration::from_secs(2);
 
 type Wallet =
     NativeWalletCoordinatorV1<KagemushaWalletStdFsV1, FakePlatformV1, DirectoryOriginalsV1>;
@@ -472,7 +478,12 @@ struct Payment {
     credit_id: [u8; 32],
     digest: [u8; 32],
     send_ms: u128,
+    // From the payer's hand-over to the merchant's completion, queue included.
     receive_ms: u128,
+    // From the merchant starting this Receive to its completion, fairness wait included.
+    merchant_ms: u128,
+    // The merchant's wait for payment priority.
+    priority_ms: u128,
 }
 
 fn receive(payment: &[u8], companion: &[u8], request_id: [u8; 32]) -> OperationRequestV1 {
@@ -728,39 +739,53 @@ fn hundred_payers_pay_one_merchant_and_every_accepted_payment_folds_unburned() {
             .collect()
     };
 
-    // Payments: payers Send concurrently; the merchant receives each one while its fold runs
-    // in the background, proving outside the coordinator lock exactly as the apps do.
+    // Payments: payers Send concurrently, `PROVERS` proofs at a time, and hand each Payment to
+    // the merchant. The merchant is one phone: it receives one Payment at a time, the next
+    // customer stepping up `NEXT_CUSTOMER` after the previous Receive, and it takes payment
+    // priority before its wallet owner as the bridge does. Its fold proves outside the owner in
+    // between; after two cancelled sub-proofs, bounded fairness lets the next Receive wait for
+    // the running one to publish.
     let at = Instant::now();
     let delivered = AtomicBool::new(false);
-    let (published, cancelled) = (AtomicU64::new(0), AtomicU64::new(0));
+    let (published, preempted, discarded) =
+        (AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0));
     let arrivals = Mutex::new(None);
     let next = std::sync::atomic::AtomicUsize::new(1);
-    let collected = Mutex::new(Vec::new());
+    let merchant_scheduler = wallets[0].lock().unwrap().scheduler();
+    let mut payments = Vec::with_capacity(count);
     std::thread::scope(|scope| {
         let folder = scope.spawn(|| {
             loop {
                 let prepared = {
                     let mut merchant = wallets[0].lock().unwrap();
                     merchant.scheduler().set_activity(true, false);
-                    merchant.fold_prepare().unwrap()
+                    merchant.fold_prepare()
                 };
                 match prepared {
-                    ControlFlow::Continue(job) => {
+                    Ok(ControlFlow::Continue(job)) => {
                         // The merchant is one device: its fold proves at once, never behind a
-                        // payer slot. A prepared job holds the scheduler until it runs, and a
-                        // Receive waits for it to observe cancellation.
-                        let proved = job.prove();
-                        let outcome = proved
-                            .and_then(|proved| wallets[0].lock().unwrap().fold_publish(proved));
-                        match outcome {
-                            Ok(_) => published.fetch_add(1, Ordering::Relaxed),
+                        // payer slot.
+                        match job.prove() {
+                            Ok(proved) => match wallets[0].lock().unwrap().fold_publish(proved) {
+                                Ok(_) => published.fetch_add(1, Ordering::Relaxed),
+                                // Fold fields changed under the proof: discarded, not preempted.
+                                Err(state::Error::Cancelled) => {
+                                    discarded.fetch_add(1, Ordering::Relaxed)
+                                }
+                                Err(error) => panic!("merchant fold publication failed: {error:?}"),
+                            },
                             Err(state::Error::Cancelled) => {
-                                cancelled.fetch_add(1, Ordering::Relaxed)
+                                preempted.fetch_add(1, Ordering::Relaxed)
                             }
                             Err(error) => panic!("merchant fold failed: {error:?}"),
                         };
                     }
-                    ControlFlow::Break(status) => {
+                    // Priority taken without the owner also ends a sub-proof in its locked prepare.
+                    Err(state::Error::Cancelled) => {
+                        preempted.fetch_add(1, Ordering::Relaxed);
+                    }
+                    Err(error) => panic!("merchant fold prepare failed: {error:?}"),
+                    Ok(ControlFlow::Break(status)) => {
                         if delivered.load(Ordering::Acquire)
                             && status.status == FoldStatus::CaughtUp
                         {
@@ -771,9 +796,12 @@ fn hundred_payers_pay_one_merchant_and_every_accepted_payment_folds_unburned() {
                 }
             }
         });
-        let workers: Vec<_> = (0..PROVERS)
+        let (handoff, inbox) = std::sync::mpsc::channel();
+        let payers: Vec<_> = (0..PROVERS)
             .map(|_| {
-                scope.spawn(|| {
+                let handoff = handoff.clone();
+                let (next, slots, wallets, requests) = (&next, &slots, &wallets, &requests);
+                scope.spawn(move || {
                     loop {
                         let index = next.fetch_add(1, Ordering::Relaxed);
                         if index > count {
@@ -799,49 +827,66 @@ fn hundred_payers_pay_one_merchant_and_every_accepted_payment_folds_unburned() {
                             (payment, companion)
                         });
                         let send_ms = send.elapsed().as_millis();
-                        let receive_at = Instant::now();
-                        let incoming = receive(&payment, &companion, id(213, index));
-                        let received =
-                            complete(wallets[0].lock().unwrap().execute(incoming).unwrap());
-                        let digests =
-                            KagemushaWalletPaymentV1::decode_canonical(&payment, &scheme_id)
-                                .unwrap()
-                                .digests()
-                                .unwrap();
-                        collected.lock().unwrap().push(Payment {
-                            index,
-                            payment,
-                            companion,
-                            received,
-                            credit_id: digests.credit_id,
-                            digest: digests.payment,
-                            send_ms,
-                            receive_ms: receive_at.elapsed().as_millis(),
-                        });
+                        handoff
+                            .send((index, payment, companion, send_ms, Instant::now()))
+                            .unwrap();
                     }
                 })
             })
             .collect();
-        for worker in workers {
-            worker.join().unwrap();
+        drop(handoff);
+        // The merchant phone, in arrival order, until every payer has handed over its Payment.
+        for (index, payment, companion, send_ms, handed) in inbox {
+            std::thread::sleep(NEXT_CUSTOMER);
+            let receiving = Instant::now();
+            let priority = merchant_scheduler.fair_payment_for(state::FoldCallClassV1::Payment);
+            let priority_ms = receiving.elapsed().as_millis();
+            let incoming = receive(&payment, &companion, id(213, index));
+            let received = complete(wallets[0].lock().unwrap().execute(incoming).unwrap());
+            drop(priority);
+            let digests = KagemushaWalletPaymentV1::decode_canonical(&payment, &scheme_id)
+                .unwrap()
+                .digests()
+                .unwrap();
+            payments.push(Payment {
+                index,
+                payment,
+                companion,
+                received,
+                credit_id: digests.credit_id,
+                digest: digests.payment,
+                send_ms,
+                receive_ms: handed.elapsed().as_millis(),
+                merchant_ms: receiving.elapsed().as_millis(),
+                priority_ms,
+            });
         }
-        // Every Payment is delivered: record what the fold achieved while they arrived.
+        for payer in payers {
+            payer.join().unwrap();
+        }
+        // Every Payment is received: record what the fold achieved while they arrived.
         *arrivals.lock().unwrap() = Some((
             at.elapsed().as_millis(),
             published.load(Ordering::Relaxed),
-            cancelled.load(Ordering::Relaxed),
+            preempted.load(Ordering::Relaxed),
+            discarded.load(Ordering::Relaxed),
         ));
         delivered.store(true, Ordering::Release);
         folder.join().unwrap();
     });
-    let mut payments: Vec<Payment> = collected.into_inner().unwrap();
     payments.sort_by_key(|payment| payment.index);
     phase("concurrent_payments_then_merchant_fold_to_caught_up", at);
     assert_eq!(payments.len(), count);
-    let (arrival_ms, arrival_publications, arrival_cancellations) =
+    let (arrival_ms, arrival_publications, arrival_cancellations, arrival_discards) =
         arrivals.into_inner().unwrap().unwrap();
     eprintln!(
-        "HUNDRED_PAYERS_ARRIVALS ms={arrival_ms} fold_publications={arrival_publications} fold_cancellations={arrival_cancellations}"
+        "HUNDRED_PAYERS_ARRIVALS ms={arrival_ms} fold_publications={arrival_publications} fold_cancellations={arrival_cancellations} fold_discards={arrival_discards}"
+    );
+    // Bounded fairness: payments cancel at most the bound of sub-proofs between publications.
+    assert!(
+        arrival_cancellations
+            <= u64::from(state::FOLD_FAIRNESS_CANCELLATIONS) * (arrival_publications + 1),
+        "{arrival_cancellations} cancelled sub-proofs for {arrival_publications} publications"
     );
 
     // Merchant: every accepted Payment is credited once, folded unburned and replays exactly.
@@ -975,10 +1020,13 @@ fn hundred_payers_pay_one_merchant_and_every_accepted_payment_folds_unburned() {
     assert_eq!(snapshot.known_burned_total, 0);
     phase("merchant_fold_replay_restart_onward", at);
 
-    let mut send = payments.iter().map(|p| p.send_ms).collect::<Vec<_>>();
-    let mut receive_ms = payments.iter().map(|p| p.receive_ms).collect::<Vec<_>>();
-    send.sort_unstable();
-    receive_ms.sort_unstable();
+    let sorted = |of: fn(&Payment) -> u128| {
+        let mut values = payments.iter().map(of).collect::<Vec<_>>();
+        values.sort_unstable();
+        values
+    };
+    let (send, receive_ms) = (sorted(|p| p.send_ms), sorted(|p| p.receive_ms));
+    let (merchant_ms, priority_ms) = (sorted(|p| p.merchant_ms), sorted(|p| p.priority_ms));
     let percentile = |values: &[u128], p: usize| values[(values.len() - 1) * p / 100].to_string();
     let result = norito::json!({
         "schema":"iroha.kagemusha.hundred-payers-merchant.v1",
@@ -986,8 +1034,12 @@ fn hundred_payers_pay_one_merchant_and_every_accepted_payment_folds_unburned() {
         "merchant_total_atomic":(total.to_string()),
         "send_ms_p50":(percentile(&send, 50)), "send_ms_p95":(percentile(&send, 95)), "send_ms_max":(percentile(&send, 100)),
         "receive_ms_p50":(percentile(&receive_ms, 50)), "receive_ms_p95":(percentile(&receive_ms, 95)), "receive_ms_max":(percentile(&receive_ms, 100)),
+        "merchant_receive_ms_p50":(percentile(&merchant_ms, 50)), "merchant_receive_ms_p95":(percentile(&merchant_ms, 95)), "merchant_receive_ms_max":(percentile(&merchant_ms, 100)),
+        "priority_wait_ms_p50":(percentile(&priority_ms, 50)), "priority_wait_ms_p95":(percentile(&priority_ms, 95)), "priority_wait_ms_max":(percentile(&priority_ms, 100)),
+        "next_customer_ms":(NEXT_CUSTOMER.as_millis().to_string()),
         "merchant_fold_publications_during_arrivals":(arrival_publications.to_string()),
         "merchant_fold_cancellations_during_arrivals":(arrival_cancellations.to_string()),
+        "merchant_fold_discarded_publications_during_arrivals":(arrival_discards.to_string()),
         "phases":(norito::json::Value::Array(phases)),
         "total_ms":(began.elapsed().as_millis().to_string()),
         "scope":"Genuine native proofs, real host custody, simulated hardware keys and engineering issuer on the certified component chain; no physical device, attestation or network-round claim.",

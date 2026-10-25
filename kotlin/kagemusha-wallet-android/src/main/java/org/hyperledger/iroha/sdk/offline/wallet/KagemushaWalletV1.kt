@@ -21,6 +21,12 @@ class KagemushaWalletExceptionV1(
         /** There is deliberately no structural verifier or software-key fallback. */
         const val ARTIFACTS_UNAVAILABLE = -4
         /**
+         * The current wallet head still needs its local lineage fold before this operation.
+         * A Send or Unload review has not approved or debited value; retry after Native reports
+         * a folded head. This status does not replace Native's checks on the next review.
+         */
+        const val FOLD_REQUIRED = -8
+        /**
          * Design §5.3 runtime capacity refusal: free custody storage does not cover the operation.
          * Refused before commit; nothing debited or credited. Retry after freeing storage.
          */

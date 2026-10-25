@@ -593,7 +593,14 @@ impl core::fmt::Debug for Prepared {
 /// # Errors
 /// See [`NodeError`].
 pub fn prepare(inputs: PrepareInputs) -> Result<Prepared, NodeError> {
+    // Tiered rows are a derived local projection. Replaying each historical block
+    // must not rewrite its entire manifest; publish the exact final projection once.
+    let tiered_replay = inputs
+        .state
+        .defer_tiered_snapshots_for_startup_replay()
+        .map_err(NodeError::Input)?;
     let restored = startup::applied_height(&inputs.state);
+    let replay_started = std::time::Instant::now();
     let mut prepared = if restored == 0 {
         prepare_genesis(inputs, None)?
     } else {
@@ -627,6 +634,15 @@ pub fn prepare(inputs: PrepareInputs) -> Result<Prepared, NodeError> {
         // incarnations the replayed block retired, as the runner does once it starts.
         let lanes = state.view().world().sumeragi_lanes().clone();
         lane_stores.release_retired(&lanes);
+        if height.is_multiple_of(128) || height == stored {
+            iroha_logger::info!(
+                height,
+                stored_height = stored,
+                restored_height = restored,
+                elapsed_ms = replay_started.elapsed().as_millis(),
+                "Strict startup replay progress"
+            );
+        }
     }
     // Every replayed result bound the complete World state roots; the incrementally advanced
     // accumulator must also equal a cold capture of the rebuilt World (Appendix E, E51).
@@ -637,6 +653,11 @@ pub fn prepare(inputs: PrepareInputs) -> Result<Prepared, NodeError> {
             reason: ReplayError::StateRoot(reason),
         })?;
     admit_window(&state, &crypto, stored.max(GENESIS_HEIGHT)).map_err(NodeError::Input)?;
+    if let Err(error) = tiered_replay.finish() {
+        // This derived local projection has always been best-effort. Its failed
+        // baseline stays invalid so the next publication captures the full World.
+        iroha_logger::warn!(%error, "tiered-state: failed to persist final startup snapshot");
+    }
     Ok(prepared)
 }
 

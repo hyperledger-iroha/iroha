@@ -3441,6 +3441,15 @@ impl Iroha {
                 handle.startup_recovery(),
                 supervisor.shutdown_signal(),
             ));
+            // Current attestations read only their tip pair once this child has
+            // minted the retained authority after the same completed recovery.
+            supervisor.monitor(
+                iroha_core::sumeragi::finality::RetainedAttestationProducer::start(
+                    Arc::clone(&state),
+                    handle.startup_recovery(),
+                    supervisor.shutdown_signal(),
+                ),
+            );
         }
         let sorafs_storage_config = if emergency_fast {
             sorafs_node::config::StorageConfig::builder()

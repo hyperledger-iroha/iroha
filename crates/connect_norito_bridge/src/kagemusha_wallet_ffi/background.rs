@@ -2,7 +2,9 @@
 //!
 //! Each turn prepares one sub-proof under the wallet owner, proves it without the owner and
 //! publishes it under the owner again. While it proves, ingests and status reads take the
-//! owner; a payment cancels the proof through the scheduler before it takes the owner. The
+//! owner; a payment cancels the proof through the scheduler before it takes the owner, unless
+//! payments already cancelled two sub-proofs in a row: then it lets this one publish first
+//! (bounded fairness, Λ/Ω §5.6). The
 //! backlog comes from each turn's own result, never from a snapshot: it is a scheduling hint
 //! that only decides whether an activity update wakes the worker.
 
@@ -172,7 +174,9 @@ impl Background {
         self.inner.lock().payments += 1;
         self.inner.ready.notify_all();
         Payment {
-            priority: Some(scheduler.payment_for(class)),
+            // Every caller takes priority before the wallet owner, so a starved fold's running
+            // sub-proof can take that owner to publish while this payment waits.
+            priority: Some(scheduler.fair_payment_for(class)),
             background: self,
         }
     }

@@ -20,6 +20,43 @@ fn busy(release: iroha_allocation::release::ReleaseWait) -> WorldStateSnapshotEr
 }
 
 #[test]
+fn names_retained_view_waits_only_for_its_original_publication_release() {
+    let storage = Mutex::new(());
+    let released = ReleaseNotification::default();
+    let held = released.guard(storage.lock().unwrap());
+    let budget = AllocationBudget::new(4096);
+    let (entered, waiting) = mpsc::channel();
+    std::thread::scope(|scope| {
+        let reader = scope.spawn(|| {
+            let mut entered = Some(entered);
+            snapshot_after_busy(&budget, Instant::now() + Duration::from_secs(2), || {
+                let original = released.observe();
+                match storage.try_lock() {
+                    Ok(guard) => {
+                        drop(guard);
+                        Ok(7)
+                    }
+                    Err(TryLockError::WouldBlock) => {
+                        if let Some(entered) = entered.take() {
+                            entered.send(()).unwrap();
+                        }
+                        Err(WorldStateSnapshotError::View(StateViewError::Busy(
+                            original,
+                        )))
+                    }
+                    Err(TryLockError::Poisoned(_)) => panic!("fixture storage poisoned"),
+                }
+            })
+            .unwrap()
+        });
+        waiting.recv_timeout(Duration::from_secs(1)).unwrap();
+        drop(held);
+        assert_eq!(reader.join().unwrap(), 7);
+    });
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
 fn names_snapshot_hundred_concurrent_waiters_complete_after_original_writer_releases() {
     const REQUESTS: usize = 100;
     let storage = Mutex::new(());

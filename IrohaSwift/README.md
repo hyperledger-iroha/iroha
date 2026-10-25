@@ -402,6 +402,14 @@ context-bound durability worker across APDU timeouts; replays await that same wo
 Cancellation or session retirement prevents late results from entering another
 session and retains the shared worker lease until the callback actually returns.
 
+The reader restarts polling immediately after recoverable contact loss and keeps
+the contact open for redetection for up to thirty seconds, within its whole-operation
+deadline. Returning contact resumes the saved checkpoint immediately; cancellation
+ends the wait. `durableResponseTimeoutMilliseconds` can extend only `BEGIN_PAYMENT`
+and `COMMIT` responses (up to 35 seconds) for receiver persistence and proof work.
+Discovery, connection, reads, writes and final acknowledgement retain the shorter
+`platformCallTimeoutMilliseconds` deadline.
+
 An established card session that reaches Apple's duration limit reports
 `.failed(.sessionDurationReached)` before `.ended`; other failures and explicit
 cancellation do not identify that expiry. `.ended` describes radio termination,

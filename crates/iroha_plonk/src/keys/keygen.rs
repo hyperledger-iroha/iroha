@@ -53,7 +53,7 @@ use crate::{
 mod builtin;
 mod rebuild;
 pub use builtin::{
-    BuiltinSourceErrorV1, BuiltinSourceMemberV1, BuiltinSourceProfileV1, builtin_source_identity_v1,
+    BuiltinSourceErrorV1, BuiltinSourceMemberV1, BuiltinSourceProfileV1, builtin_contract_v1,
 };
 pub use rebuild::{
     RebuildError, SourceAdmissionSealV2, SourceBoundVerifyingKeyV2, SourceBoundViewV2,

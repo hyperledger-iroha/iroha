@@ -22,8 +22,7 @@ use crate::{
     cs::{InstanceModeV1, InstanceType, ProofSuffixV1, TranscriptV1, TranscriptV2},
     frontend::Circuit,
     keys::{
-        KeygenConfig, KeygenConfigV2, ProvingKey, builtin_source_identity_v1, keygen_pk,
-        keygen_pk_v2,
+        KeygenConfig, KeygenConfigV2, ProvingKey, builtin_contract_v1, keygen_pk, keygen_pk_v2,
     },
     pcs::ipa::PinnedParams,
     prover::{ProverConfig, ProverRandomness, Witness, create_proof},
@@ -357,11 +356,11 @@ fn export_current_reference_corpus() {
         .canonicalize()
         .expect("canonical executable");
     let executable_pin = file_pin(&executable);
-    let source = builtin_source_identity_v1().expect("complete compiled source census");
+    let contract = builtin_contract_v1();
     let provenance = norito::json!({
         "schema": "iroha.native_prover.reference-capture.v1", "generator_test": EXPORT_TEST,
-        "generator_executable": (executable_pin.clone()), "bootstrap_source_digest": (hex(&source)),
-        "compiled_source_closure_complete": true,
+        "generator_executable": (executable_pin.clone()), "proof_contract_digest": (hex(&contract)),
+        "source_provenance": "captured separately by the build owner; not embedded in proof compatibility",
         "transcript": "ordinary native descriptor-bound framing; no historical representation override",
         "seed_reference_sha256": (digest(include_bytes!("../../../fixtures/native_prover/reference_v1.json"))),
         "seed_builtin_data_sha256": (digest(include_bytes!("keys/keygen/builtin/generated.rs"))),
@@ -421,7 +420,7 @@ fn export_current_reference_corpus() {
         .expect("durable originals");
     let receipt = norito::json!({
         "schema": "iroha.native_prover.reference-capture-result.v1", "generator_test": EXPORT_TEST,
-        "generator_executable": executable_pin, "bootstrap_source_digest": (hex(&source)),
+        "generator_executable": executable_pin, "proof_contract_digest": (hex(&contract)),
         "capture_start": start, "reference": reference, "cases": 46, "parameter_sets": 10,
         "current_native_production_framing": true, "native_full_verification_and_mutations_passed": true,
         "independent_python_verification_passed": false, "shipping_qualification": false,

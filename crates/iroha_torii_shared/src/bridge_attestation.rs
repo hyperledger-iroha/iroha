@@ -48,14 +48,17 @@ impl FinalityAttestationFailureReason {
     }
 
     /// Required HTTP status for this exact failure; a different status is malformed.
+    /// A changing tip makes this exact statement unavailable without classifying
+    /// contradictory state as unavailable or changing the readiness retry policy.
     #[must_use]
     pub const fn http_status_code(self) -> u16 {
         match self {
             Self::ConsensusUninitialized
             | Self::GenesisUncommitted
             | Self::RestartRequired
+            | Self::TipChanged
             | Self::FinalityUnavailable => 503,
-            Self::TipChanged | Self::ConflictingState => 409,
+            Self::ConflictingState => 409,
             Self::InternalFailure => 500,
         }
     }
@@ -307,7 +310,7 @@ mod tests {
             ),
             (GenesisUncommitted, 503, "genesis_uncommitted", "pending"),
             (RestartRequired, 503, "restart_required", "restart_required"),
-            (TipChanged, 409, "tip_changed", "conflict"),
+            (TipChanged, 503, "tip_changed", "conflict"),
             (ConflictingState, 409, "conflicting_state", "conflict"),
             (
                 FinalityUnavailable,

@@ -1078,3 +1078,107 @@ fn setup_inputs_preempt_only_when_they_prove_sign_or_delete_custody() {
         assert_eq!(setup_priority(&input), Priority::Payment);
     }
 }
+
+/// The first `proving` fold turns prove outside the owner lock until `release` or a cancelling
+/// signal, then settle their checkpoint under the owner through the scheduler's own
+/// publication identity, counting it in `published`. Later turns are caught up.
+fn publishing(
+    scheduler: state::Scheduler,
+    proving: u32,
+    entered: mpsc::Sender<()>,
+    release: Arc<AtomicBool>,
+    published: Arc<AtomicUsize>,
+) -> FoldScript {
+    let mut turns = 0_u32;
+    Box::new(move || {
+        turns += 1;
+        if turns > proving {
+            return caught_up().map(ControlFlow::Break);
+        }
+        let (scheduler, entered) = (scheduler.clone(), entered.clone());
+        let (release, published) = (Arc::clone(&release), Arc::clone(&published));
+        let proof: FoldProof = Box::new(move || -> Result<FoldPublication> {
+            let publication = scheduler.proved_sub_proof_for_test(0, |token| {
+                entered.send(()).unwrap();
+                while !release.load(Ordering::SeqCst) {
+                    token.check()?;
+                    thread::yield_now();
+                }
+                Ok(())
+            })?;
+            Ok(Box::new(move |_: &mut dyn Wallet| {
+                let Some(publication) = publication else {
+                    return Ok(Response {
+                        kind: 6,
+                        ..Response::default()
+                    });
+                };
+                publication.checkpoint();
+                published.fetch_add(1, Ordering::SeqCst);
+                Ok(Response {
+                    kind: 8,
+                    backlog: Some(1),
+                    ..Response::default()
+                })
+            }))
+        });
+        Ok(ControlFlow::Continue(proof))
+    })
+}
+
+#[test]
+fn a_payment_lets_a_starved_fold_publish_its_running_sub_proof_under_the_owner() {
+    let scheduler = state::Scheduler::new();
+    let (entered_tx, entered) = mpsc::channel();
+    let release = Arc::new(AtomicBool::new(false));
+    let published = Arc::new(AtomicUsize::new(0));
+    let id = install(
+        Box::new(ScriptWallet {
+            resume: None,
+            base: TestWallet {
+                calls: Arc::new(AtomicUsize::new(0)),
+                drops: Arc::new(AtomicUsize::new(0)),
+                expected_request: None,
+            },
+            fold: publishing(
+                scheduler.clone(),
+                state::FOLD_FAIRNESS_CANCELLATIONS + 1,
+                entered_tx,
+                Arc::clone(&release),
+                Arc::clone(&published),
+            ),
+            setup: None,
+        }),
+        scheduler,
+    )
+    .unwrap();
+    let owner = owner(id).unwrap();
+    activity(id, true, false).unwrap();
+    // Payment priority cancels the first sub-proofs, as before bounded fairness.
+    for _ in 0..state::FOLD_FAIRNESS_CANCELLATIONS {
+        started(&entered);
+        assert_eq!(resume(id).unwrap().kind, 2);
+    }
+    // The next one keeps proving while a payment waits for it without the owner.
+    started(&entered);
+    let payment = thread::spawn(move || resume(id));
+    wait(&owner, |state| state.payments == 1);
+    thread::sleep(Duration::from_millis(50));
+    assert!(
+        !payment.is_finished(),
+        "the payment lets the sub-proof finish"
+    );
+    assert!(owner.background.inner.lock().running);
+    assert_eq!(published.load(Ordering::SeqCst), 0);
+    release.store(true, Ordering::SeqCst);
+    assert_eq!(payment.join().unwrap().unwrap().kind, 2);
+    assert_eq!(
+        published.load(Ordering::SeqCst),
+        1,
+        "the worker published under the owner before the payment took it"
+    );
+    wait(&owner, |state| {
+        state.backlog == Some(0) && !state.running && !state.wake
+    });
+    close(id).unwrap();
+}

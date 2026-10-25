@@ -5696,7 +5696,7 @@
     ["crates/iroha_plonk/src/keys/keygen/rebuild.rs", "digest_identity", "source", 15],
     ["crates/iroha_plonk/src/keys/mod.rs", "digest_identity", "source", 4],
     ["crates/iroha_plonk/src/keys/pk/artifact.rs", "digest_identity", "source", 12],
-    ["crates/iroha_plonk/src/keys/source_fingerprint.rs", "digest_identity", "source", 6]
+    ["crates/iroha_plonk/src/keys/source_fingerprint.rs", "digest_identity", "source", 7]
    ]
   },
   {
@@ -5706,14 +5706,15 @@
    "owner": null,
    "path": "crates/iroha_plonk/src/keys/keygen/builtin.rs",
    "symbol": "fn select_profile(",
-   "gates": "Closed compiled source-profile admission of a PLONK verifying-key original (BuiltinSourceProfileV1::match_actual, BuiltinSourceMemberV1::admit_originals_*): a profile is admitted only when its exact bytes match an entry of the table generated into this binary (keys/keygen/builtin/generated.rs) and the build-computed source identity, the complete source closure and the supported compile target agree; otherwise UnsupportedProfile, StaleSource, UnsupportedTarget or IncompleteSourceClosure.",
+   "gates": "Closed compiled source-profile admission of a PLONK verifying-key original (BuiltinSourceProfileV1::match_actual, BuiltinSourceMemberV1::admit_originals_*): a profile is admitted only when its exact bytes match an entry of the table generated into this binary (keys/keygen/builtin/generated.rs) and the pinned semantic ABI contract and supported compile target agree; otherwise UnsupportedProfile, ContractMismatch or UnsupportedTarget.",
    "decided_by": "Outside the ZK delivery plan: the only production callers are KAGEMUSHA wallet owners, which select it explicitly instead of strict source reconstruction (plonk.source_lookup).",
    "attribution": "read",
-   "note": "BuiltinSourceProfileV1, BuiltinSourceMemberV1 and builtin_source_identity_v1 are called in production only by the KAGEMUSHA producer inventory (iroha_core_zk kagemusha_wallet_artifacts_v1: wallet.rs qualify_wallet_builtin, builtin.rs, operation.rs, sigma.rs), the KAGEMUSHA proof crate (iroha_kagemusha_proof OriginalAdmission::Builtin), the wallet bridge (connect_norito_bridge kagemusha_wallet_ffi/installed.rs) and the offline kagemusha_wallet_artifacts tool; no validator path and no product of the ZK delivery plan calls it. Availability there depends on the binary: the generated table, the build-computed source digest and the compile target. This is a binary/source-digest gate in the sense of F.4; it is recorded here, out of plan with the rest of KAGEMUSHA, and becomes open F.4 work as soon as any operation of the delivery plan admits an original through it. Later proving still rebuilds the actual source and compares its digest (plonk.source_lookup).",
+   "note": "BuiltinSourceProfileV1, BuiltinSourceMemberV1 and builtin_contract_v1 are called in production only by the KAGEMUSHA producer inventory (iroha_core_zk kagemusha_wallet_artifacts_v1: wallet.rs qualify_wallet_builtin, builtin.rs, operation.rs, sigma.rs), the KAGEMUSHA proof crate (iroha_kagemusha_proof OriginalAdmission::Builtin), the wallet bridge (connect_norito_bridge kagemusha_wallet_ffi/installed.rs) and the offline kagemusha_wallet_artifacts tool; no validator path and no product of the ZK delivery plan calls it. Availability there depends on the binary: the generated table, its explicit semantic ABI contract and the compile target. Workspace file hashes are packaging provenance only; they are not runtime compatibility authority. This is a compiled-profile admission gate in the sense of F.4; it is recorded here, out of plan with the rest of KAGEMUSHA, and becomes open F.4 work as soon as any operation of the delivery plan admits an original through it. Later proving still rebuilds the actual source and compares its digest (plonk.source_lookup).",
    "sites": [
-    ["crates/iroha_plonk/src/keys/keygen/builtin.rs", "digest_identity", "source", 13],
+    ["crates/iroha_plonk/src/keys/keygen/builtin.rs", "digest_identity", "source", 11],
     ["crates/iroha_plonk/src/keys/keygen/builtin.rs", "unavailable", "unsupported", 8],
-    ["crates/iroha_plonk/src/keys/keygen/builtin/generated.rs", "digest_identity", "source", 275]
+    ["crates/iroha_plonk/src/keys/keygen/builtin/generated.rs", "digest_identity", "source", 201],
+    ["crates/iroha_plonk/src/contract.rs", "digest_identity", "source", 2]
    ]
   },
   {

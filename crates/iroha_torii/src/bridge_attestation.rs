@@ -358,7 +358,7 @@ mod tests {
 
     #[tokio::test]
     async fn http_boundary_rejects_mismatched_finality_details_and_preserves_generic_errors() {
-        for case in 0..4 {
+        for case in 0..5 {
             let router = axum::Router::new()
                 .route(
                     "/test",
@@ -374,6 +374,11 @@ mod tests {
                         };
                         if case == 3 {
                             failure.reason = Reason::TipChanged;
+                        }
+                        if case == 4 {
+                            // A valid conflict body cannot be promoted to an
+                            // availability response by changing only its status.
+                            failure.reason = Reason::ConflictingState;
                         }
                         let mut envelope = failure.into_error_envelope();
                         if case == 2 {

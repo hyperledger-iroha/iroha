@@ -1373,3 +1373,42 @@ pub(crate) fn bootstrapped_provider<F: super::KagemushaWalletFsV1>(
     );
     (provider, platform, slot, capsule)
 }
+
+/// Enroll an existing state-owner vector through the real provider using explicit test hardware.
+pub(crate) fn enrolled_state_provider<F: super::KagemushaWalletFsV1>(
+    fs: F,
+    challenge: &KagemushaWalletEnrollmentChallengeV1,
+    key_seed: u8,
+    credential: &[u8],
+) -> (
+    super::KagemushaWalletProviderV1<F, FakePlatformV1>,
+    FakePlatformV1,
+    KagemushaWalletSlotIdV1,
+) {
+    let platform = FakePlatformV1::new(KagemushaWalletAnchorPolicyV1::NotRequired, key_seed);
+    let mut provider = super::KagemushaWalletProviderV1::open(
+        fs,
+        platform.clone(),
+        challenge.scheme_id,
+        test_options(),
+    )
+    .expect("state fixture provider");
+    let super::KagemushaWalletEnrollmentStepV1::Enrolled { slot, .. } = provider
+        .test_begin_enrollment(
+            challenge,
+            PROFILE,
+            super::KagemushaWalletEnrollmentDatesV1 {
+                issued_at_ms: 1,
+                expires_at_ms: 600_001,
+            },
+        )
+        .expect("state fixture enrollment")
+    else {
+        panic!("state fixture not enrolled")
+    };
+    provider
+        .retain_enrollment_request(&slot, b"state fixture request")
+        .unwrap();
+    provider.store_credential(&slot, 0, credential).unwrap();
+    (provider, platform, slot)
+}

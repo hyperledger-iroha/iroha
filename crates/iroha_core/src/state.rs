@@ -406,6 +406,7 @@ use canonical_history::committed_block_from_kura;
 mod finality_proof_interval;
 pub use finality_proof_interval::FinalityProofIntervalReadError;
 
+pub(crate) use canonical_history::AuthenticatedExecutionIdentity;
 pub use canonical_history::{
     CanonicalHistoryCursor, CanonicalHistoryReadBudget, CanonicalHistorySource,
     CommittedOutcomeReadError, FinalizedEventReadError,
@@ -1496,7 +1497,8 @@ mod world_commit;
 mod world_journals;
 pub(crate) mod world_projection;
 pub use world_projection::world_state_accumulator::{
-    ProviderAdmissionSnapshotOriginalsV1, WorldStateSnapshotError, WorldStateVerificationError,
+    NativeResourceNamesSnapshotV1, ProviderAdmissionSnapshotOriginalsV1, WorldStateSnapshotError,
+    WorldStateVerificationError,
 };
 
 /// Exercise actual World capture while retaining journals through a test observation.
@@ -12055,6 +12057,8 @@ struct TieredSnapshotWorkerInner {
     pending: parking_lot::Mutex<TieredSnapshotPending>,
     cvar: parking_lot::Condvar,
     shutdown: AtomicBool,
+    // Only startup replay owns this scope, before any live execution is admitted.
+    startup_replay_active: AtomicBool,
     #[cfg(feature = "telemetry")]
     telemetry: Option<StateTelemetry>,
 }
@@ -12078,6 +12082,7 @@ impl TieredSnapshotWorker {
                 pending: parking_lot::Mutex::new(TieredSnapshotPending::default()),
                 cvar: parking_lot::Condvar::new(),
                 shutdown: AtomicBool::new(false),
+                startup_replay_active: AtomicBool::new(false),
                 #[cfg(feature = "telemetry")]
                 telemetry,
             }),
@@ -12095,6 +12100,7 @@ impl TieredSnapshotWorker {
             pending: parking_lot::Mutex::new(TieredSnapshotPending::default()),
             cvar: parking_lot::Condvar::new(),
             shutdown: AtomicBool::new(false),
+            startup_replay_active: AtomicBool::new(false),
             #[cfg(feature = "telemetry")]
             telemetry,
         });
