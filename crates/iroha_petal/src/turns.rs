@@ -257,8 +257,10 @@ const WINDOW_SIGMA: f64 = 3.6;
 const CENTROID_SIGMA: f64 = 2.6;
 /// Lit petals within this distance of a carrier are modelled as its neighbours.
 const NEIGHBOUR_DISTANCE: f64 = 19.0;
-/// A neighbour's template is subtracted within this distance of its centre.
-const NEIGHBOUR_REACH: f64 = 9.0;
+/// A neighbour's template is subtracted within this distance of its centre. Radially adjacent cell
+/// centres are 11 units apart and the window grid is integral, so a whole number here would put grid
+/// points exactly on the boundary, where the last bit of a platform's `sin` and `cos` decides.
+const NEIGHBOUR_REACH: f64 = 9.5;
 /// The warp and the blur are fitted on every this-many-th carrier.
 const SAMPLE_STEP: usize = 17;
 
@@ -1031,14 +1033,15 @@ mod tests {
 
     #[test]
     fn a_turned_petal_stays_out_of_its_neighbours_sampling_discs() {
-        // the nearest petal centres are 11.7 units apart; a petal reaches its half-length from its
-        // centre whichever way it is turned
+        // the nearest petal centres (radially adjacent cells) are 11 units apart; a petal reaches its
+        // half-length from its centre whichever way it is turned
         let mut nearest = f64::MAX;
         for list in neighbours() {
             for near in list {
                 nearest = nearest.min(near.along.hypot(near.across));
             }
         }
+        assert!((nearest - 11.0).abs() < 1e-9, "{nearest}");
         assert!(
             nearest > f64::from(PETAL_HALF_LENGTH + PETAL_RADIUS),
             "{nearest}"
