@@ -378,7 +378,13 @@ final class PetalDecoderTests: XCTestCase {
     func testObservedCellsMatchTheDrawnCellsOfACleanRender() throws {
         let (encoder, image) = try setup(3)
         let decoded = try PetalDecoder.decode(image)
-        XCTAssertEqual(PetalDecoder.observedCells(image, frame: decoded), encoder.cells(frame: 3))
+        let observed = try XCTUnwrap(PetalDecoder.observedCells(image, frame: decoded))
+        let drawn = encoder.cells(frame: 3)
+        XCTAssertEqual(observed.dots, drawn.dots)
+        XCTAssertEqual(observed.petals, drawn.petals)
+        // the observed petals are unturned
+        XCTAssertTrue(observed.turns.allSatisfy { $0 == 0 })
+        XCTAssertTrue(drawn.turns.contains { $0 != 0 })
     }
 
     func testGarbageImagesNeverPanicOrDecode() throws {
@@ -805,18 +811,47 @@ final class PetalDecoderTests: XCTestCase {
         XCTAssertEqual(PetalDecoder.mergeFields([]), [nil, nil, nil, nil])
     }
 
-    // MARK: - Golden captures (`fixtures/petal/petal_captures_v2.json`)
+    // MARK: - Golden captures (`fixtures/petal/petal_captures_v3.json`)
 
     private func captures() throws -> [String: Any] {
-        try XCTUnwrap(Support.capturesFixture, "fixtures/petal/petal_captures_v2.json is missing")
+        try XCTUnwrap(Support.capturesFixture, "fixtures/petal/petal_captures_v3.json is missing")
     }
 
-    /// The recorded data of every lane: lane `D`, then the four field lanes.
+    /// The recorded data of every lane: lane `D`, the four field lanes and the
+    /// four turn lanes.
     private func truth(_ entry: [String: Any]) throws -> PetalLaneData {
         PetalLaneData(
             d: try Support.bytes(entry, "d_data"),
-            fields: try XCTUnwrap(entry["field_data"] as? [String]).map(Support.hex)
+            fields: try XCTUnwrap(entry["field_data"] as? [String]).map(Support.hex),
+            turns: try XCTUnwrap(entry["turn_data"] as? [String]).map(Support.hex)
         )
+    }
+
+    /// Reads the turn lanes of a decoded capture (no sector skipped), checks
+    /// them against the recorded data and the requirements, and returns their
+    /// sector digits and atoms.
+    @discardableResult
+    private func readTurnLanes(
+        _ name: String,
+        _ image: PetalLuma,
+        _ frame: PetalDecodedFrame,
+        _ entry: [String: Any]
+    ) throws -> (letters: String, packets: [PetalAtomPacket]) {
+        let truth = try truth(entry)
+        var letters = ""
+        var packets: [PetalAtomPacket] = []
+        for (sector, result) in PetalTurns.readTurns(image, frame: frame).enumerated() {
+            guard let result else { continue }
+            XCTAssertEqual(result.data, truth.turns[sector], "\(name): turn lane \(sector) data")
+            let field = try XCTUnwrap(frame.fields[sector], "\(name): a turn lane rides on its field lane")
+            let header = PetalLaneHeader(tag: field.data[0], frame: UInt16(field.data[1]) << 8 | UInt16(field.data[2]))
+            packets.append(try XCTUnwrap(PetalTurns.turnPacket(header, sector: sector, data: result.data), "\(name): turn check"))
+            letters.append(PetalLane.field(sector).letter)
+        }
+        let must = try Support.string(entry, "must_turn")
+        XCTAssertTrue(must.allSatisfy { letters.contains($0) }, "\(name): turned \(letters), must turn \(must)")
+        XCTAssertEqual(letters, try Support.string(entry, "reference_turned"), "\(name): turn lanes read")
+        return (letters, packets)
     }
 
     /// Checks every decoded lane against the recorded data and returns the lane letters.
@@ -847,9 +882,13 @@ final class PetalDecoderTests: XCTestCase {
             }
             let elapsed = Double(DispatchTime.now().uptimeNanoseconds - started) / 1e6
             let reference = try Support.string(capture, "reference_decoded")
+            let turnStarted = DispatchTime.now().uptimeNanoseconds
+            let (turned, packets) = try readTurnLanes(name, image, decoded, capture)
+            let turnElapsed = Double(DispatchTime.now().uptimeNanoseconds - turnStarted) / 1e6
             print(String(
-                format: "petal capture %@ %dx%d: lanes %@ (reference %@), distortion %.3f, in %.1f ms",
-                name, image.width, image.height, decoded.laneLetters, reference, decoded.pose.distortion, elapsed
+                format: "petal capture %@ %dx%d: lanes %@ (reference %@), turn lanes %@, distortion %.3f, in %.1f ms + %.1f ms",
+                name, image.width, image.height, decoded.laneLetters, reference, turned, decoded.pose.distortion,
+                elapsed, turnElapsed
             ))
             XCTAssertEqual(decoded.mirrored, capture["mirrored"] as? Bool, "\(name): mirror flag")
             let read = readLanes(name, decoded, try truth(capture))
@@ -862,6 +901,7 @@ final class PetalDecoderTests: XCTestCase {
                 "\(name): inferred corner"
             )
             decoded.feed(&assembler)
+            for packet in packets { assembler.push(atoms: packet) }
         }
         // captures of different frames of the same stream accumulate in one assembler
         XCTAssertGreaterThan(assembler.progress.atomsReceived, 100)
@@ -882,9 +922,10 @@ final class PetalDecoderTests: XCTestCase {
             let elapsed = Double(DispatchTime.now().uptimeNanoseconds - started) / 1e6
             let followed = try XCTUnwrap(tracked, "\(name): tracking lost the code")
             let reference = try Support.string(pair, "reference_tracked")
+            let (turned, _) = try readTurnLanes(name, next, followed, pair)
             print(String(
-                format: "petal track %@ %dx%d: lanes %@ (reference %@) in %.1f ms",
-                name, next.width, next.height, followed.laneLetters, reference, elapsed
+                format: "petal track %@ %dx%d: lanes %@ (reference %@), turn lanes %@, in %.1f ms",
+                name, next.width, next.height, followed.laneLetters, reference, turned, elapsed
             ))
             let read = readLanes(name, followed, try truth(pair))
             let must = try Support.string(pair, "must_track")
@@ -917,6 +958,10 @@ final class PetalDecoderTests: XCTestCase {
             for lane in PetalLane.decodeOrder {
                 let data = recorded.lane(lane)
                 XCTAssertEqual(try lane.decode(try lane.encode(data)), data)
+            }
+            for (sector, data) in recorded.turns.enumerated() {
+                let word = try PetalTurns.encodeTurnLane(sector: sector, data: data)
+                XCTAssertEqual(try PetalTurns.decodeTurnLaneCounted(sector: sector, word).data, data)
             }
             XCTAssertEqual(recorded, encoder.laneData(frame: UInt16(try Support.integer(capture, "frame"))))
         }

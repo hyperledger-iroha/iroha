@@ -7,17 +7,22 @@ import Foundation
 /// fourth frame (`frame % 4 == 0`), when lane `D` carries the stream *beacon*
 /// instead, so a receiver can join at any frame within a fraction of a
 /// second. Atom ids run contiguously over the atoms actually sent (see
-/// ``firstAtomID(frame:)``). Any single readable lane is useful on its own.
+/// ``firstAtomID(frame:)``). Any single readable lane is useful on its own. On
+/// top of every field lane, the turns of its lit petals carry four more atoms
+/// from the repair range (see ``PetalTurns``), so a sharp camera reads up to
+/// 37 atoms (592 bytes) a frame.
 ///
 /// Lane data layouts (all big-endian):
 ///
-/// * every lane starts with `tag:u8, frame:u16`; `tag` is the low byte of the
-///   payload CRC-32C.
+/// * every lane but the turn lanes starts with `tag:u8, frame:u16`; `tag` is
+///   the low byte of the payload CRC-32C.
 /// * field lanes and non-beacon `D`: atoms (16 bytes each).
 /// * beacon `D`: `version:u8, kind:u8, len:u24, crc:u32`, zero padded.
+/// * turn lanes: `atoms… check:u32`, where the check binds the atoms to the
+///   header of the field lane they ride on.
 public enum PetalStream {
-    /// Version/profile byte of the beacon: format version 2, layout profile 0.
-    public static let formatVersion: UInt8 = 0x20
+    /// Version/profile byte of the beacon: format version 3, layout profile 0.
+    public static let formatVersion: UInt8 = 0x30
     /// Largest payload a beacon can describe (`u24`).
     public static let maximumPayloadLength = (1 << 24) - 1
     /// Default receiver payload limit; override with ``PetalAssemblerLimits``.
@@ -199,16 +204,20 @@ public enum PetalDLane: Equatable, Sendable {
     case atoms(PetalAtomPacket)
 }
 
-/// The bytes of every lane of one frame: lane data, or transmitted codewords.
+/// The bytes of every lane of one frame, turn lanes included: lane data, or
+/// transmitted codewords.
 public struct PetalLaneData: Equatable, Sendable {
     /// Lane `D`.
     public let d: [UInt8]
     /// The field lanes, sector 0 first.
     public let fields: [[UInt8]]
+    /// The turn lanes, sector 0 first.
+    public let turns: [[UInt8]]
 
-    public init(d: [UInt8], fields: [[UInt8]]) {
+    public init(d: [UInt8], fields: [[UInt8]], turns: [[UInt8]]) {
         self.d = d
         self.fields = fields
+        self.turns = turns
     }
 
     /// The bytes of `lane`.
@@ -281,7 +290,7 @@ public struct PetalStreamEncoder: Sendable {
         }
     }
 
-    /// The data bytes of every lane of `frame`.
+    /// The data bytes of every lane of `frame`, turn lanes included.
     public func laneData(frame: UInt16) -> PetalLaneData {
         let header: [UInt8] = [
             meta.tag,
@@ -309,7 +318,18 @@ public struct PetalStreamEncoder: Sendable {
         } else {
             appendAtoms(firstID: PetalStream.laneFirstID(.d, frame: frame), count: PetalLane.d.atomCount, to: &d)
         }
-        return PetalLaneData(d: d, fields: fields)
+        let laneHeader = PetalLaneHeader(tag: meta.tag, frame: frame)
+        let turns = (0..<PetalLayout.sectors).map { sector -> [UInt8] in
+            var atoms: [UInt8] = []
+            atoms.reserveCapacity(PetalTurns.dataLength)
+            appendAtoms(
+                firstID: PetalTurns.turnFirstID(frame: frame, sector: sector),
+                count: PetalTurns.atomCount,
+                to: &atoms
+            )
+            return PetalTurns.turnDataValidated(laneHeader, sector: sector, atoms: atoms)
+        }
+        return PetalLaneData(d: d, fields: fields, turns: turns)
     }
 
     /// The transmitted (Reed–Solomon encoded, whitened) codewords of `frame`.
@@ -317,14 +337,17 @@ public struct PetalStreamEncoder: Sendable {
         let data = laneData(frame: frame)
         return PetalLaneData(
             d: PetalLane.d.encodeValidated(data.d),
-            fields: PetalLane.fields.map { $0.encodeValidated(data.lane($0)) }
+            fields: PetalLane.fields.map { $0.encodeValidated(data.lane($0)) },
+            turns: data.turns.indices.map { PetalTurns.encodeValidated(sector: $0, data: data.turns[$0]) }
         )
     }
 
-    /// Every cell of `frame`, ready to render.
+    /// Every cell of `frame`, lit and turned, ready to render.
     public func cells(frame: UInt16) -> PetalFrameCells {
         let words = words(frame: frame)
-        return PetalFrameCells(validatedD: words.d, fields: words.fields)
+        var cells = PetalFrameCells(validatedD: words.d, fields: words.fields)
+        cells.setTurnsValidated(words.turns)
+        return cells
     }
 }
 

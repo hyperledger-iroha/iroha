@@ -1,9 +1,10 @@
 import Foundation
 
 // Petal Stream lane codec: xorshift32 whitening, Reed–Solomon over GF(2^8)
-// and the cell layout of the five lanes. This file is a line-by-line port of
-// `crates/iroha_petal/src/{prng,rs,lanes}.rs`; the shared golden vectors in
-// `fixtures/petal/petal_stream_v2.json` pin every byte.
+// and the cell layout of the five lanes and the turns on top of them. This
+// file is a line-by-line port of `crates/iroha_petal/src/{prng,rs,lanes}.rs`;
+// the shared golden vectors in `fixtures/petal/petal_stream_v3.json` pin every
+// byte.
 
 /// Failures of the Petal lane codec.
 public enum PetalCodecError: Error, Equatable, LocalizedError, Sendable {
@@ -324,14 +325,16 @@ public struct PetalReedSolomon: Equatable, Sendable {
 
 /// One of the five data lanes of a Petal frame.
 ///
-/// Each lane is exactly one Reed–Solomon codeword, XOR-whitened with a fixed
-/// xorshift32 sequence so the picture is statistically balanced whatever the
-/// payload is:
+/// A frame carries five lanes, and four turn lanes on top of the field lanes
+/// (see ``PetalTurns``). Each lane is exactly one Reed–Solomon codeword,
+/// XOR-whitened with a fixed xorshift32 sequence so the picture is
+/// statistically balanced whatever the payload is:
 ///
 /// | lane | cells | codeword | data | parity |
 /// |------|-------|----------|------|--------|
 /// | `D` dots | 240 ring slots × 1 bit | 30 B | 19 B | 11 B |
 /// | `F0`–`F3` petals | 840 field cells of one sector × 1 bit | 105 B | 83 B | 22 B |
+/// | `T0`–`T3` turns | 360 lit petals of one sector × 2 bits | 90 B | 68 B | 22 B |
 ///
 /// Bit order is most-significant-bit first.
 public enum PetalLane: Hashable, Sendable {
@@ -478,9 +481,13 @@ public struct PetalFrameCells: Equatable, Sendable {
     public let dots: [Bool]
     /// Lit state of all 3,376 field cells (spare cells are dark).
     public let petals: [Bool]
+    /// Turn position (0–3, see ``PetalTurns/turnAngle(_:)``) of every field
+    /// cell: zero for dark petals and for lit petals that carry no turn bits.
+    public private(set) var turns: [UInt8]
 
     /// Builds the cells from the transmitted codewords of lane `D` and the
-    /// four field lanes (sector 0 first).
+    /// four field lanes (sector 0 first), with every petal unturned (see
+    /// ``setTurns(_:)``).
     ///
     /// - Throws: ``PetalCodecError/invalidShape`` when a codeword has the
     ///   wrong length or there are not four field codewords.
@@ -515,6 +522,43 @@ public struct PetalFrameCells: Equatable, Sendable {
         }
         self.dots = dots
         self.petals = petals
+        turns = [UInt8](repeating: 0, count: PetalLayout.fieldCells)
+    }
+
+    /// Turns the carriers of every sector to show its transmitted turn
+    /// codeword (see ``PetalTurns``; sector 0 first); a sector with too few
+    /// lit petals stays unturned.
+    ///
+    /// - Throws: ``PetalCodecError/invalidShape`` unless there are four
+    ///   codewords of ``PetalTurns/wordLength`` bytes.
+    public mutating func setTurns(_ words: [[UInt8]]) throws {
+        guard words.count == PetalLayout.sectors,
+              words.allSatisfy({ $0.count == PetalTurns.wordLength }) else {
+            throw PetalCodecError.invalidShape
+        }
+        setTurnsValidated(words)
+    }
+
+    mutating func setTurnsValidated(_ words: [[UInt8]]) {
+        for (sector, word) in words.enumerated() {
+            for cell in PetalTurns.carrierOrders[sector] { turns[cell] = 0 }
+            guard let chosen = PetalTurns.carriers(petals, sector: sector) else { continue }
+            for (index, cell) in chosen.enumerated() {
+                turns[cell] = PetalTurns.carrierPosition(word, index: index)
+            }
+        }
+    }
+
+    /// Packs the turns of the carriers of sector `sector` (`0..<4`) into its
+    /// turn codeword, or `nil` when the sector has too few lit petals to carry
+    /// one.
+    public func turnWord(sector: Int) -> [UInt8]? {
+        guard let chosen = PetalTurns.carriers(petals, sector: sector) else { return nil }
+        var word = [UInt8](repeating: 0, count: PetalTurns.wordLength)
+        for (index, cell) in chosen.enumerated() {
+            word[index / 4] |= PetalTurns.turnLabel(turns[cell]) << (6 - 2 * (index % 4))
+        }
+        return word
     }
 
     /// Packs the data dots into a lane `D` codeword.
@@ -549,6 +593,14 @@ enum PetalNumeric {
         return bits
     }
 
+    /// The double whose ``totalOrderKey(_:)`` is `key` (the transform is its
+    /// own inverse).
+    @inline(__always)
+    static func totalOrderValue(_ key: Int64) -> Double {
+        let bits = key ^ Int64(bitPattern: UInt64(bitPattern: key >> 63) >> 1)
+        return Double(bitPattern: UInt64(bitPattern: bits))
+    }
+
     /// Rust `f64::clamp`: NaN stays NaN.
     @inline(__always)
     static func clamp(_ value: Double, _ lower: Double, _ upper: Double) -> Double {
@@ -556,6 +608,28 @@ enum PetalNumeric {
         if value < lower { value = lower }
         if value > upper { value = upper }
         return value
+    }
+
+    /// Rust `f64::max` as the reference's arm64 build computes it (`fmaxnm`):
+    /// a NaN gives way to the other operand, and `+0.0` is larger than `-0.0`.
+    @inline(__always)
+    static func maxNum(_ a: Double, _ b: Double) -> Double {
+        if a.isNaN { return b }
+        if b.isNaN { return a }
+        if a > b { return a }
+        if b > a { return b }
+        return a.sign == .minus ? b : a
+    }
+
+    /// Rust `f64::min` as the reference's arm64 build computes it (`fminnm`):
+    /// a NaN gives way to the other operand, and `-0.0` is smaller than `+0.0`.
+    @inline(__always)
+    static func minNum(_ a: Double, _ b: Double) -> Double {
+        if a.isNaN { return b }
+        if b.isNaN { return a }
+        if a < b { return a }
+        if b < a { return b }
+        return a.sign == .minus ? a : b
     }
 
     /// Sine and cosine of one angle, computed as the reference computes such a

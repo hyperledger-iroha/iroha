@@ -420,10 +420,13 @@ final class PetalStreamTests: XCTestCase {
         XCTAssertEqual(beacon.meta, encoder.meta)
         XCTAssertEqual(beacon.header.frame, 512)
         XCTAssertNil(PetalStream.parseDLane(Array(d[..<11])))
-        // the retired format 1 (katakana tiles) is refused
-        var bad = d
-        bad[3] = 0x10
-        XCTAssertNil(PetalStream.parseDLane(bad))
+        // the retired formats 1 (katakana tiles) and 2 (unturned petals) are refused
+        XCTAssertEqual(d[3], 0x30)
+        for retired: UInt8 in [0x10, 0x20] {
+            var bad = d
+            bad[3] = retired
+            XCTAssertNil(PetalStream.parseDLane(bad), "version \(retired)")
+        }
         var empty = d
         empty[5] = 0
         empty[6] = 0

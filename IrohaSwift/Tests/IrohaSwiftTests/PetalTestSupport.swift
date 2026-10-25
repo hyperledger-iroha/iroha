@@ -30,8 +30,8 @@ enum PetalTestSupport {
         return object
     }
 
-    static let streamFixture: [String: Any]? = try? loadJSON("petal_stream_v2.json")
-    static let capturesFixture: [String: Any]? = try? loadJSON("petal_captures_v2.json")
+    static let streamFixture: [String: Any]? = try? loadJSON("petal_stream_v3.json")
+    static let capturesFixture: [String: Any]? = try? loadJSON("petal_captures_v3.json")
 
     static func object(_ value: [String: Any], _ key: String) throws -> [String: Any] {
         guard let object = value[key] as? [String: Any] else { throw Failure.malformed(key) }
@@ -127,7 +127,7 @@ enum PetalTestSupport {
     }
 
     /// Decodes a capture, tracking-pair or negative entry of
-    /// `petal_captures_v2.json` (`key` names the zlib + base64 plane).
+    /// `petal_captures_v3.json` (`key` names the zlib + base64 plane).
     static func luma(of entry: [String: Any], key: String = "luma_zlib_base64") throws -> PetalLuma {
         let width = try integer(entry, "width")
         let height = try integer(entry, "height")

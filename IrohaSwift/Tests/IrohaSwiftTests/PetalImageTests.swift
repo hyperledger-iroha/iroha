@@ -362,7 +362,11 @@ final class PetalImageTests: XCTestCase {
     // MARK: - Draw list
 
     func testDrawListDescribesEveryElementOfTheFrame() throws {
-        let frame = try cells(5)
+        var frame = try cells(5)
+        try frame.setTurns((0..<PetalLayout.sectors).map { sector in
+            try PetalTurns.encodeTurnLane(sector: sector, data: (0..<68).map { UInt8($0) ^ UInt8(sector) })
+        })
+        XCTAssertTrue(frame.turns.contains { $0 != 0 })
         let list = PetalDrawList(cells: frame)
         XCTAssertEqual(list.palette, .standard)
         XCTAssertEqual(list.finders.count, 4)
@@ -388,17 +392,19 @@ final class PetalImageTests: XCTestCase {
         }
         XCTAssertEqual(PetalDrawList.backdropClip.center, PetalPoint(x: 512, y: 512))
         XCTAssertEqual(PetalDrawList.backdropClip.radius, 390)
-        // the lit petals, with their outward angle and colour class
+        // the lit petals, with their axis (outward angle plus turn) and colour class
         XCTAssertEqual(list.petals.count, frame.petals.filter { $0 }.count)
         XCTAssertEqual(list.petals.map(\.cell), (0..<PetalLayout.fieldCells).filter { frame.petals[$0] })
         for petal in list.petals {
             XCTAssertEqual(petal.center, PetalLayout.cellCenter(petal.cell))
-            XCTAssertEqual(petal.angle, PetalLayout.cellAngle(petal.cell))
+            XCTAssertEqual(petal.angle, PetalLayout.cellAngle(petal.cell) + PetalTurns.turnAngle(frame.turns[petal.cell]))
             XCTAssertEqual(petal.light, PetalLayout.cellLight(petal.cell))
             XCTAssertEqual(petal.color, petal.light ? PetalPalette.standard.light : PetalPalette.standard.pink)
         }
-        XCTAssertEqual(PetalDrawList.petalHalfLength, Double(Float(5.2)))
-        XCTAssertEqual(PetalDrawList.petalHalfWidth, Double(Float(4.3)))
+        XCTAssertEqual(PetalDrawList.petalHalfLength, Double(Float(6.0)))
+        XCTAssertEqual(PetalDrawList.petalHalfWidth, Double(Float(3.73)))
+        XCTAssertEqual(PetalDrawList.petalNotchRadius, Double(Float(1.12)))
+        XCTAssertEqual(PetalDrawList.petalNotchDistance, Double(Float(6.24)))
         XCTAssertEqual(list.dots.count, frame.dots.filter { $0 }.count)
         for dot in list.dots {
             let dx = dot.center.x - 512

@@ -2,12 +2,12 @@ import XCTest
 @testable import IrohaSwift
 
 /// Conformance against the shared golden vectors in
-/// `fixtures/petal/petal_stream_v2.json` (every section of the file).
+/// `fixtures/petal/petal_stream_v3.json` (every section of the file).
 final class PetalFixtureTests: XCTestCase {
     private typealias Support = PetalTestSupport
 
     private func fixture() throws -> [String: Any] {
-        try XCTUnwrap(Support.streamFixture, "fixtures/petal/petal_stream_v2.json is missing")
+        try XCTUnwrap(Support.streamFixture, "fixtures/petal/petal_stream_v3.json is missing")
     }
 
     /// A fixture number that the reference wrote from a single-precision constant.
@@ -17,8 +17,8 @@ final class PetalFixtureTests: XCTestCase {
 
     func testConstantsAndLayoutMatch() throws {
         let doc = try fixture()
-        XCTAssertEqual(try Support.integer(doc, "fixture_version"), 2)
-        XCTAssertEqual(try Support.string(doc, "format"), "petal-stream-v2")
+        XCTAssertEqual(try Support.integer(doc, "fixture_version"), 3)
+        XCTAssertEqual(try Support.string(doc, "format"), "petal-stream-v3")
         let constants = try Support.object(doc, "constants")
         XCTAssertEqual(Double(try Support.integer(constants, "canvas")), PetalLayout.canvas)
         XCTAssertEqual(try Support.integer(constants, "atom_len"), PetalLane.atomLength)
@@ -32,6 +32,16 @@ final class PetalFixtureTests: XCTestCase {
         XCTAssertEqual(try Support.integer(constants, "field_cells"), PetalLayout.fieldCells)
         XCTAssertEqual(try Support.integer(constants, "beacon_interval"), Int(PetalStream.beaconInterval))
         XCTAssertEqual(try Support.integer(constants, "format_version"), Int(PetalStream.formatVersion))
+        for (key, value) in [
+            ("turn_positions", PetalTurns.positions),
+            ("turn_carriers", PetalTurns.carriersPerSector),
+            ("turn_word", PetalTurns.wordLength),
+            ("turn_parity", PetalTurns.parityLength),
+            ("turn_atoms", PetalTurns.atomCount),
+        ] {
+            XCTAssertEqual(try Support.integer(constants, key), value, key)
+        }
+        XCTAssertEqual(try Support.integer(constants, "turn_id_base"), Int(PetalTurns.idBase))
 
         let layout = try Support.object(doc, "layout")
         XCTAssertEqual(
@@ -50,6 +60,11 @@ final class PetalFixtureTests: XCTestCase {
         XCTAssertEqual(sectors.count, PetalLayout.sectors)
         for (sector, cells) in sectors.enumerated() {
             XCTAssertEqual(cells.map(\.intValue), PetalLayout.sectorCells(sector), "sector \(sector)")
+        }
+        let orders = try XCTUnwrap(layout["carrier_orders"] as? [[NSNumber]])
+        XCTAssertEqual(orders.count, PetalLayout.sectors)
+        for (sector, order) in orders.enumerated() {
+            XCTAssertEqual(order.map(\.intValue), PetalTurns.carrierOrder(sector), "sector \(sector)")
         }
         XCTAssertEqual(try Support.array(layout, "mask") as? [String], PetalLayout.mask)
         XCTAssertEqual(Double(try Support.integer(layout, "mask_origin")), PetalLayout.maskOrigin)
@@ -99,6 +114,39 @@ final class PetalFixtureTests: XCTestCase {
         XCTAssertEqual(try Support.bytes(whitening, "D"), PetalLane.d.whitening)
         for sector in 0..<PetalLayout.sectors {
             XCTAssertEqual(try Support.bytes(whitening, "F\(sector)"), PetalLane.field(sector).whitening, "F\(sector)")
+            XCTAssertEqual(try Support.bytes(whitening, "T\(sector)"), PetalTurns.turnWhitening(sector), "T\(sector)")
+        }
+    }
+
+    func testTurnIDsAndReaderTemplatesMatch() throws {
+        let doc = try fixture()
+        let ids = try Support.object(doc, "turn_first_ids")
+        let frames = try Support.integers(ids, "frames")
+        let sectors = try Support.integers(ids, "sectors")
+        let expected = try Support.integers(ids, "ids")
+        XCTAssertFalse(expected.isEmpty)
+        for index in expected.indices {
+            XCTAssertEqual(
+                Int(PetalTurns.turnFirstID(frame: UInt16(frames[index]), sector: sectors[index])),
+                expected[index],
+                "frame \(frames[index]) sector \(sectors[index])"
+            )
+        }
+        let reader = try Support.object(doc, "turn_reader")
+        let blurs = try XCTUnwrap(reader["blurs"] as? [NSNumber]).map(\.doubleValue)
+        XCTAssertEqual(blurs, PetalTurns.blurs)
+        let probes = try Support.objects(reader, "template_probes")
+        XCTAssertEqual(probes.count, 6 * PetalTurns.blurs.count)
+        for probe in probes {
+            func value(_ key: String) throws -> Double {
+                try XCTUnwrap(probe[key] as? NSNumber, key).doubleValue
+            }
+            let sigma = try value("blur")
+            let blur = try XCTUnwrap(PetalTurns.blurs.firstIndex { abs($0 - sigma) < 1e-12 }, "known blur")
+            let along = try value("along")
+            let across = try value("across")
+            let got = PetalTurns.turnTemplate(blur: blur, along: along, across: across)
+            XCTAssertEqual(got, try value("value"), accuracy: 1e-12, "blur \(sigma) at (\(along), \(across))")
         }
     }
 
@@ -152,8 +200,26 @@ final class PetalFixtureTests: XCTestCase {
                 XCTAssertEqual(data.d, try Support.bytes(frame, "d_data"), "\(name) frame \(number)")
                 let fieldData = try XCTUnwrap(frame["field_data"] as? [String]).map(Support.hex)
                 XCTAssertEqual(data.fields, fieldData, "\(name) frame \(number)")
+                let turnData = try XCTUnwrap(frame["turn_data"] as? [String]).map(Support.hex)
+                XCTAssertEqual(data.turns, turnData, "\(name) frame \(number)")
                 let dWord = try Support.bytes(frame, "d_word")
                 let fieldWords = try XCTUnwrap(frame["field_words"] as? [String]).map(Support.hex)
+                let turnWords = try XCTUnwrap(frame["turn_words"] as? [String]).map(Support.hex)
+                XCTAssertEqual(turnWords.count, PetalLayout.sectors)
+                for (sector, word) in turnWords.enumerated() {
+                    XCTAssertEqual(
+                        try PetalTurns.encodeTurnLane(sector: sector, data: turnData[sector]),
+                        word,
+                        "\(name) frame \(number) turn sector \(sector)"
+                    )
+                    let header = PetalLaneHeader(tag: meta.tag, frame: number)
+                    let packet = try XCTUnwrap(
+                        PetalTurns.turnPacket(header, sector: sector, data: turnData[sector]),
+                        "\(name) frame \(number) turn check \(sector)"
+                    )
+                    XCTAssertEqual(packet.firstID, PetalTurns.turnFirstID(frame: number, sector: sector))
+                }
+                XCTAssertEqual(encoder.words(frame: number).turns, turnWords, "\(name) frame \(number)")
                 XCTAssertEqual(try PetalLane.d.encode(data.d), dWord)
                 for (sector, word) in fieldWords.enumerated() {
                     XCTAssertEqual(
@@ -162,7 +228,16 @@ final class PetalFixtureTests: XCTestCase {
                         "\(name) frame \(number) sector \(sector)"
                     )
                 }
-                let cells = try PetalFrameCells(d: dWord, fields: fieldWords)
+                var cells = try PetalFrameCells(d: dWord, fields: fieldWords)
+                try cells.setTurns(turnWords)
+                XCTAssertEqual(
+                    String(cells.turns.map { Character(Unicode.Scalar(48 + $0)) }),
+                    try Support.string(frame, "turns"),
+                    "\(name) frame \(number)"
+                )
+                for (sector, word) in turnWords.enumerated() {
+                    XCTAssertEqual(cells.turnWord(sector: sector), word, "\(name) frame \(number) sector \(sector)")
+                }
                 XCTAssertEqual(
                     cells.dots.indices.filter { cells.dots[$0] },
                     try Support.integers(frame, "lit_dots")
@@ -174,20 +249,35 @@ final class PetalFixtureTests: XCTestCase {
                 )
                 XCTAssertEqual(cells, encoder.cells(frame: number))
             }
-            // push every fixture frame through lane decoding and the assembler
+            // push every fixture frame through lane decoding and the assembler, with and without
+            // the turn lanes: the turn lanes finish the one-pass stream in fewer frames
             if name == "one-pass" {
-                var assembler = PetalStreamAssembler()
-                for frame in try Support.objects(stream, "frames") {
-                    let d = try PetalLane.d.decode(try Support.bytes(frame, "d_word"))
-                    assembler.push(dLane: try XCTUnwrap(PetalStream.parseDLane(d)))
-                    let words = try XCTUnwrap(frame["field_words"] as? [String]).map(Support.hex)
-                    for (sector, word) in words.enumerated() {
-                        let lane = PetalLane.field(sector)
-                        let data = try lane.decode(word)
-                        assembler.push(atoms: try XCTUnwrap(PetalStream.parseAtomLane(lane, data: data)))
+                var needed = [0, 0]
+                for (index, withTurns) in [false, true].enumerated() {
+                    var assembler = PetalStreamAssembler()
+                    for frame in try Support.objects(stream, "frames") {
+                        needed[index] += 1
+                        let d = try PetalLane.d.decode(try Support.bytes(frame, "d_word"))
+                        assembler.push(dLane: try XCTUnwrap(PetalStream.parseDLane(d)))
+                        let words = try XCTUnwrap(frame["field_words"] as? [String]).map(Support.hex)
+                        for (sector, word) in words.enumerated() {
+                            let lane = PetalLane.field(sector)
+                            let data = try lane.decode(word)
+                            assembler.push(atoms: try XCTUnwrap(PetalStream.parseAtomLane(lane, data: data)))
+                        }
+                        if withTurns {
+                            let header = PetalLaneHeader(tag: meta.tag, frame: UInt16(try Support.integer(frame, "frame")))
+                            let turnWords = try XCTUnwrap(frame["turn_words"] as? [String]).map(Support.hex)
+                            for (sector, word) in turnWords.enumerated() {
+                                let data = try PetalTurns.decodeTurnLaneCounted(sector: sector, word).data
+                                assembler.push(atoms: try XCTUnwrap(PetalTurns.turnPacket(header, sector: sector, data: data)))
+                            }
+                        }
+                        if assembler.progress.complete { break }
                     }
+                    XCTAssertEqual(try XCTUnwrap(assembler.takeCompleted()).payload, Data(payload))
                 }
-                XCTAssertEqual(try XCTUnwrap(assembler.takeCompleted()).payload, Data(payload))
+                XCTAssertLessThan(needed[1], needed[0], "\(needed)")
             }
         }
     }

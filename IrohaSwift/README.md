@@ -16,7 +16,7 @@ Features:
 - Collection queries for every Torii collection: typed filter builder with canonical text and JSON forms, cursor pages and on-demand iteration, typed `{code, message, details}` errors
 - Torii HTTP client (balances, transactions, explorer instructions/transactions/RWAs, subscriptions, VPN quote/session/receipt flows, pipeline recovery, time service, ZK attachments, contracts)
 - KAGEMUSHA wallet V1 wire helpers (`KagemushaWalletWireV1`) and the iPhone platform adapter of the Rust wallet Advance provider (`KagemushaWalletApplePlatformV1`)
-- Petal Stream animated optical transport (format 2): stream encoder/assembler, camera-frame decoder, software and vector renderers, SwiftUI player and AVFoundation camera analyzer
+- Petal Stream animated optical transport (format 3): stream encoder/assembler, camera-frame decoder and turn reader, software and vector renderers, SwiftUI player and AVFoundation camera analyzer
 - Health & metrics helpers (fetch `/v1/health` text probe and `/v1/metrics` Prometheus/JSON payloads)
 - Norito envelope encoder (header + CRC64-XZ)
 - Required Native NoritoBridge integration (`dist/NoritoBridge.xcframework`) powering transfer/mint/burn builders and JSON inspection helpers
@@ -883,16 +883,19 @@ decoding and signature verification.
 ### Petal Stream optical transport
 
 Petal Stream is the animated "streaming QR" in the Sakura-storm look (format
-2): four sakura-blossom finders, a storm of 3,376 petals on 34 concentric bands
+3): four sakura-blossom finders, a storm of 3,376 petals on 34 concentric bands
 (light inside a faint `天`, pink outside) and three dotted rings. Each frame
 carries five independent lanes (ring dots `D` and the four quarter-turn sectors
 `0`–`3` of the petal field), each one whitened Reed–Solomon codeword of
-fountain-coded 16-byte atoms; every fourth frame repeats the stream beacon in
-lane `D`, so a receiver can join at any frame and any single readable lane is
-useful. `Sources/IrohaSwift/Petal/` is a function-by-function port of the
-normative Rust crate `crates/iroha_petal` (decoder included) and passes the
-shared fixtures `fixtures/petal/petal_stream_v2.json` and
-`fixtures/petal/petal_captures_v2.json`.
+fountain-coded 16-byte atoms, and a turn lane on top of every field lane: once
+a field lane is read, the first 360 of its lit petals each show two more bits
+by being turned 0°, 45°, 90° or 135° about their centres. Every fourth frame
+repeats the stream beacon in lane `D`, so a receiver can join at any frame and
+any single readable lane is useful. `Sources/IrohaSwift/Petal/` is a
+function-by-function port of the normative Rust crate `crates/iroha_petal`
+(decoder and turn reader included) and passes the shared fixtures
+`fixtures/petal/petal_stream_v3.json` and
+`fixtures/petal/petal_captures_v3.json`.
 
 ```swift
 // Sender: play an IPM1 message at the default 12 fps. Payloads may be up to
@@ -924,6 +927,22 @@ analyzer.attach(to: videoDataOutput)
   attempts and recoveries (`.laneD` and `.fieldLanes` the single-capture reads).
   `PetalDecoder.fieldEvidence(_:frame:)` and `.mergeFields(_:skip:)` expose the
   same averaging for custom camera pipelines.
+- `PetalTurns` holds the turn lanes: the carrier order, the codec (each turn
+  lane is one RS(90, 68) codeword of four repair atoms and a CRC-32C check
+  bound to the header of the field lane it rides on) and the reader.
+  `PetalTurns.readTurns(_:frame:skip:)` samples every carrier petal of a
+  decoded capture in its own frame along a smooth correction of the pose, fits
+  the camera's blur, and gives each carrier the turn whose template matches
+  best once its lit neighbours are subtracted; a sharp 720p camera reads the
+  turn lanes (in the reference simulator a 12 KB Payment arrives in 1.65 s at
+  12 fps, against 2.98 s with format 2), a blurrier one the rest of the
+  frame. `PetalScanSession` tries each turn lane once per shown frame, backs
+  off after tries that read nothing (a camera too soft or too shaky for the
+  turns), and reports what it read in `PetalScanOutcome.turned` and
+  `PetalScanStats.turnTries`/`turnLanes`;
+  `PetalTurns.observedTurns(_:frame:)` exposes every carrier's decision for
+  diagnostics. The reader builds its tables once and reuses its working memory
+  across captures.
 - When a thumb, a glare or the edge of the frame hides one corner blossom,
   three blossoms that form a corner still locate the code: the fourth corner is
   inferred, refined against the dotted rings and reported as
@@ -934,9 +953,11 @@ analyzer.attach(to: videoDataOutput)
   whole image; `PetalScanStats.tracked` and `.inferred` count both.
 - `PetalRenderer` is the pixel-exact reference software renderer;
   `PetalDrawList` describes a frame for vector backends (finders, the faint
-  `天`, lit petals as rotated ellipses, lit dots) and
+  `天`, lit petals as notched ellipses along their turned axes, lit dots) and
   `PetalCoreGraphicsRenderer` / `PetalFrameView` / `PetalStreamView`
-  (`IrohaSwiftTransferUI`) draw it with CoreGraphics and SwiftUI.
+  (`IrohaSwiftTransferUI`) draw it with CoreGraphics and SwiftUI, antialiased
+  and with every petal's notch, which tells the turn reader a petal from one
+  turned by half a turn.
 - `PetalCameraAnalyzer` (`IrohaSwiftMobileTransports`) is an
   `AVCaptureVideoDataOutput` delegate that reads the Y plane of bi-planar YUV
   frames (or converts BGRA), reports `PetalScanOutcome` values through a
@@ -945,13 +966,14 @@ analyzer.attach(to: videoDataOutput)
   (`AVCaptureSession.Preset.hd1280x720`) where the device sustains about five
   decoded frames per second and fall back to 640×480 only when it cannot.
   The field lanes are harder to read at 480p; averaging repeated captures of a
-  shown frame can recover them. Automatic exposure over-exposes a mostly black screen, so set
+  shown frame can recover them. The turn lanes need a camera that resolves the
+  petals' shapes. Automatic exposure over-exposes a mostly black screen, so set
   the exposure target bias to about −1 EV
   (`AVCaptureDevice.setExposureTargetBias`) or lock the exposure once the code
   has been seen (`specs/petal_stream.md` section 8).
 
-Run the Petal suites (codec, fixture conformance, golden captures, renderer,
-SwiftUI and camera glue) with:
+Run the Petal suites (codec, fixture conformance, golden captures, turn
+lanes, renderer, SwiftUI and camera glue) with:
 
 ```bash
 swift test --package-path IrohaSwift --disable-automatic-resolution --filter Petal

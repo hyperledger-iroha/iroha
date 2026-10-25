@@ -11,7 +11,7 @@ import UIKit
 #endif
 
 /// The CoreGraphics renderer and the SwiftUI player must draw frames the
-/// Petal decoder reads back exactly.
+/// Petal decoder reads back exactly, turn lanes included.
 final class PetalCoreGraphicsRendererTests: XCTestCase {
     private static let payload: [UInt8] = (0..<300).map {
         UInt8(truncatingIfNeeded: (UInt32($0) &* 2_654_435_761) >> 11)
@@ -50,14 +50,47 @@ final class PetalCoreGraphicsRendererTests: XCTestCase {
             let list = PetalDrawList(cells: encoder.cells(frame: frame))
             let image = try XCTUnwrap(PetalCoreGraphicsRenderer.makeImage(list, size: 768))
             XCTAssertEqual(image.width, 768)
-            let decoded = try PetalDecoder.decode(try luma(of: image))
+            let captured = try luma(of: image)
+            let decoded = try PetalDecoder.decode(captured)
             let expected = encoder.laneData(frame: frame)
             for lane in PetalLane.decodeOrder {
                 XCTAssertEqual(decoded.lane(lane)?.data, expected.lane(lane), "frame \(frame) lane \(lane.letter)")
             }
             XCTAssertEqual(decoded.rotation, 0)
             XCTAssertFalse(decoded.mirrored)
+            // the turned, notched petals read as the reference renderer draws them
+            let turns = PetalTurns.readTurns(captured, frame: decoded)
+            for sector in 0..<PetalLayout.sectors {
+                XCTAssertEqual(turns[sector]?.data, expected.turns[sector], "frame \(frame) turn lane \(sector)")
+            }
         }
+    }
+
+    func testThePetalOutlineIsTheNotchedEllipse() {
+        let outline = PetalCoreGraphicsRenderer.petalOutline
+        let a = PetalDrawList.petalHalfLength
+        let b = PetalDrawList.petalHalfWidth
+        let r = PetalDrawList.petalNotchRadius
+        let d = PetalDrawList.petalNotchDistance
+        var checked = 0
+        for j in -100...100 {
+            for i in -160...160 {
+                let x = Double(i) * 0.05
+                let y = Double(j) * 0.05
+                // points within 0.01 units of either edge may fall either way
+                let ellipse = (x / a) * (x / a) + (y / b) * (y / b)
+                let notch = ((x - d) * (x - d) + y * y).squareRoot()
+                if abs(ellipse.squareRoot() - 1) < 0.01 / b || abs(notch - r) < 0.01 { continue }
+                let inside = outline.contains(CGPoint(x: x, y: y), using: .winding)
+                XCTAssertEqual(inside, PetalLayout.petalLit(dx: x, dy: y, angle: 0), "(\(x), \(y))")
+                checked += 1
+            }
+        }
+        XCTAssertGreaterThan(checked, 60_000)
+        // the notch is cut out of the tip, and the back of the petal is whole
+        XCTAssertFalse(outline.contains(CGPoint(x: 5.5, y: 0)))
+        XCTAssertTrue(outline.contains(CGPoint(x: 5.0, y: 0)))
+        XCTAssertTrue(outline.contains(CGPoint(x: -5.5, y: 0)))
     }
 
     func testCoreGraphicsFrameMatchesTheSoftwareRendererGeometry() throws {
@@ -137,11 +170,16 @@ final class PetalCoreGraphicsRendererTests: XCTestCase {
         }
         let expected = encoder.laneData(frame: 8)
         for (name, image) in images {
-            let decoded = try PetalDecoder.decode(try luma(of: image))
+            let captured = try luma(of: image)
+            let decoded = try PetalDecoder.decode(captured)
             for lane in PetalLane.decodeOrder {
                 XCTAssertEqual(decoded.lane(lane)?.data, expected.lane(lane), "\(name) lane \(lane.letter)")
             }
             XCTAssertEqual(decoded.beacon?.meta, encoder.meta, name)
+            let turns = PetalTurns.readTurns(captured, frame: decoded)
+            for sector in 0..<PetalLayout.sectors {
+                XCTAssertEqual(turns[sector]?.data, expected.turns[sector], "\(name) turn lane \(sector)")
+            }
         }
         _ = PetalStreamView(encoder: encoder, framesPerSecond: 10)
     }

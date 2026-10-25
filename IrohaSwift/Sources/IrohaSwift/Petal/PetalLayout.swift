@@ -63,16 +63,19 @@ public enum PetalLayout {
     public static let sectorCellCount = fieldCells / sectors
     // The petal sizes are single-precision constants in the reference; they
     // are widened from `Float` so that sampling and rendering stay bit-exact.
-    /// Radius of the disc a petal stands in for: decoders sample within it.
+    /// Radius of the disc a petal stands in for: decoders sample within it,
+    /// and no other petal, however it is turned, reaches into it.
     public static let petalRadius = Double(Float(4.6))
-    /// Half the length of a drawn petal, along the outward radial direction.
-    public static let petalHalfLength = Double(Float(5.2))
+    /// Half the length of a drawn petal, along its axis (the outward radial
+    /// direction, turned by the petal's turn, see ``PetalTurns``).
+    public static let petalHalfLength = Double(Float(6.0))
     /// Half the width of a drawn petal.
-    public static let petalHalfWidth = Double(Float(4.3))
-    /// Radius of the cosmetic notch cut into each petal tip.
-    public static let petalNotchRadius = Double(Float(1.3))
-    /// Distance from a petal centre to its notch centre, outward.
-    public static let petalNotchDistance = Double(Float(5.4))
+    public static let petalHalfWidth = Double(Float(3.73))
+    /// Radius of the notch cut into each petal tip; it tells a petal from one
+    /// turned by half a turn.
+    public static let petalNotchRadius = Double(Float(1.12))
+    /// Distance from a petal centre to its notch centre, along its axis.
+    public static let petalNotchDistance = Double(Float(6.24))
 
     /// Index of the first cell of every band (and the total at the end).
     public static let bandOffsets: [Int] = {
@@ -390,8 +393,8 @@ public enum PetalLayout {
 
     /// Whether the point `(dx, dy)`, relative to the centre of a petal that
     /// points along `angle`, is lit: an ellipse of half-length
-    /// ``petalHalfLength`` along the outward direction and half-width
-    /// ``petalHalfWidth``, minus the cosmetic notch at its tip.
+    /// ``petalHalfLength`` along `angle` and half-width ``petalHalfWidth``,
+    /// minus the notch at its tip.
     public static func petalLit(dx: Double, dy: Double, angle: Double) -> Bool {
         let (s, c) = PetalNumeric.sinCos(angle)
         return petalLit(dx, dy, sin: s, cos: c)

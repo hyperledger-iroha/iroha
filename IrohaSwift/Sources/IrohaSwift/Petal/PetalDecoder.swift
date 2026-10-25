@@ -359,8 +359,9 @@ public enum PetalDecoder {
     /// Builds the cells a decoder believes it saw under `frame`'s pose, for
     /// diagnostics: the dots as lane `D` reads them, and every codeword
     /// thresholded as the first read of ``decode(_:options:)`` thresholds it
-    /// (no local read). Returns `nil` for an image or frame that
-    /// ``fieldEvidence(_:frame:options:)`` refuses.
+    /// (no local read). The petals are left unturned (the turns a reader sees
+    /// are ``PetalTurns/observedTurns(_:frame:)``). Returns `nil` for an image
+    /// or frame that ``fieldEvidence(_:frame:options:)`` refuses.
     public static func observedCells(
         _ image: PetalLuma,
         frame: PetalDecodedFrame,

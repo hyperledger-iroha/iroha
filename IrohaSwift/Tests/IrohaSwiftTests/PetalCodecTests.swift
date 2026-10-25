@@ -300,6 +300,7 @@ final class PetalCodecTests: XCTestCase {
     }
 
     func testPetalsStayClearOfTheirNeighboursAndTheRings() {
+        // a petal reaches at most its half-length from its centre, whichever way it is turned
         let outer = PetalLayout.bandRadius(PetalLayout.bandCount - 1) + PetalLayout.petalHalfLength
         XCTAssertLessThan(outer + 10, PetalLayout.ringRadii[0] - PetalLayout.dotRadius)
         XCTAssertLessThan(outer, PetalLayout.backdropRadius)
@@ -310,7 +311,11 @@ final class PetalCodecTests: XCTestCase {
             for other in near where other != cell {
                 let q = PetalLayout.cellCenter(other)
                 let distance = ((p.x - q.x) * (p.x - q.x) + (p.y - q.y) * (p.y - q.y)).squareRoot()
-                XCTAssertGreaterThan(distance, 2 * PetalLayout.petalRadius, "cells \(cell) and \(other)")
+                XCTAssertGreaterThan(
+                    distance,
+                    PetalLayout.petalHalfLength + PetalLayout.petalRadius,
+                    "cells \(cell) and \(other)"
+                )
             }
         }
     }
@@ -398,11 +403,16 @@ final class PetalCodecTests: XCTestCase {
         let tip = PetalLayout.petalNotchDistance
         XCTAssertFalse(PetalLayout.petalLit(dx: tip * cos(0.3), dy: tip * sin(0.3), angle: 0.3))
         XCTAssertFalse(PetalLayout.petalLit(dx: 0, dy: 10, angle: 0))
-        // half-length outward, half-width across
-        XCTAssertTrue(PetalLayout.petalLit(dx: 0, dy: 4.2, angle: 0))
-        XCTAssertFalse(PetalLayout.petalLit(dx: 0, dy: 4.4, angle: 0))
-        XCTAssertTrue(PetalLayout.petalLit(dx: 0, dy: 3.8, angle: Double.pi / 2))
-        XCTAssertFalse(PetalLayout.petalLit(dx: 5.3, dy: 0, angle: 0))
+        // half-length along the axis, half-width across it
+        XCTAssertTrue(PetalLayout.petalLit(dx: 0, dy: 3.6, angle: 0))
+        XCTAssertFalse(PetalLayout.petalLit(dx: 0, dy: 3.85, angle: 0))
+        XCTAssertTrue(PetalLayout.petalLit(dx: 0, dy: 5.0, angle: Double.pi / 2))
+        XCTAssertFalse(PetalLayout.petalLit(dx: 6.1, dy: 0, angle: 0))
+        // the notch tells a petal from one turned by half a turn
+        XCTAssertTrue(PetalLayout.petalLit(dx: 5.0, dy: 0, angle: 0))
+        XCTAssertFalse(PetalLayout.petalLit(dx: 5.5, dy: 0, angle: 0))
+        XCTAssertTrue(PetalLayout.petalLit(dx: -5.5, dy: 0, angle: 0))
+        XCTAssertFalse(PetalLayout.petalLit(dx: -5.5, dy: 0, angle: Double.pi))
     }
 
     // MARK: - Numeric helpers

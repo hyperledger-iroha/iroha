@@ -63,11 +63,12 @@ public struct PetalRenderOptions: Equatable, Sendable {
 ///
 /// The picture is black, with four sakura-blossom finders in the canvas
 /// corners, three dotted rings, and inside them a field of petals on
-/// concentric bands. A lit petal whose centre lies inside the `天` is drawn in
-/// the light colour, the others in sakura pink, over a faint backdrop of the
-/// `天` itself, so the character shows through the storm of petals. The output
-/// is pixel-identical to the Rust reference. Platform code may instead draw a
-/// ``PetalDrawList`` with its own 2D API: geometry and polarity are the same.
+/// concentric bands, each lit petal turned about its centre by its turn. A lit
+/// petal whose centre lies inside the `天` is drawn in the light colour, the
+/// others in sakura pink, over a faint backdrop of the `天` itself, so the
+/// character shows through the storm of petals. The output is pixel-identical
+/// to the Rust reference. Platform code may instead draw a ``PetalDrawList``
+/// with its own 2D API: geometry, turns and polarity are the same.
 public enum PetalRenderer {
     /// Renders one frame as interleaved RGB.
     ///
@@ -118,6 +119,7 @@ public enum PetalRenderer {
     private struct Shader {
         let dots: [Bool]
         let petals: [Bool]
+        let turns: [UInt8]
         let palette: PetalPalette
         let finderCenters = PetalLayout.finderCenters
         let ringRadii = PetalLayout.ringRadii
@@ -127,13 +129,14 @@ public enum PetalRenderer {
         let bandOffsets = PetalLayout.bandOffsets
         let cellX = PetalLayout.cellCenterX
         let cellY = PetalLayout.cellCenterY
-        let cellSin = PetalLayout.cellSin
-        let cellCos = PetalLayout.cellCos
+        let axisSin = PetalTurns.axisSin
+        let axisCos = PetalTurns.axisCos
         let lightCells = PetalLayout.lightCells
 
         init(cells: PetalFrameCells, palette: PetalPalette) {
             dots = cells.dots
             petals = cells.petals
+            turns = cells.turns
             self.palette = palette
         }
 
@@ -155,7 +158,9 @@ public enum PetalRenderer {
                 for slot in (around - 1)...(around + 1) {
                     let cell = bandOffsets[index] + ((slot % n) + n) % n
                     if !petals[cell] { continue }
-                    if PetalLayout.petalLit(x - cellX[cell], y - cellY[cell], sin: cellSin[cell], cos: cellCos[cell]) {
+                    // the petal's axis: its outward direction plus its turn
+                    let axis = Int(turns[cell]) * PetalLayout.fieldCells + cell
+                    if PetalLayout.petalLit(x - cellX[cell], y - cellY[cell], sin: axisSin[axis], cos: axisCos[axis]) {
                         return lightCells[cell] ? palette.light : palette.pink
                     }
                 }
@@ -232,11 +237,13 @@ public struct PetalRect: Equatable, Sendable {
 ///    ``PetalPalette/light``, then fill every notch circle with the background;
 /// 3. fill the ``backdrop`` cells with ``PetalPalette/backdrop``, clipped to
 ///    the disc ``backdropClip``;
-/// 4. fill every lit ``petals`` entry in its ``Petal/color``: an ellipse of
-///    half-length ``petalHalfLength`` along ``Petal/angle`` and half-width
-///    ``petalHalfWidth``, centred on ``Petal/center``. The reference cuts a
-///    cosmetic notch into its tip (a disc of radius ``petalNotchRadius``
-///    centred ``petalNotchDistance`` outward); renderers may omit it;
+/// 4. fill every lit ``petals`` entry in its ``Petal/color``, antialiased: an
+///    ellipse of half-length ``petalHalfLength`` along ``Petal/angle`` and
+///    half-width ``petalHalfWidth``, centred on ``Petal/center``, minus the
+///    notch at its tip (a disc of radius ``petalNotchRadius`` centred
+///    ``petalNotchDistance`` along ``Petal/angle``). The notch must be drawn:
+///    it tells a petal from one turned by half a turn, and the turn reader's
+///    templates include it;
 /// 5. fill every lit ``dots`` circle with ``PetalPalette/pink``.
 public struct PetalDrawList: Equatable, Sendable {
     /// A circle.
@@ -264,8 +271,9 @@ public struct PetalDrawList: Equatable, Sendable {
         public let cell: Int
         /// Centre in canvas units.
         public let center: PetalPoint
-        /// Outward direction (radians, clockwise on screen from 3 o'clock):
-        /// the petal's long axis.
+        /// The petal's long axis (radians, clockwise on screen from 3
+        /// o'clock): its outward direction turned by its turn
+        /// (``PetalTurns/turnAngle(_:)`` of ``PetalFrameCells/turns``).
         public let angle: Double
         /// Whether the petal lies inside the `天` (drawn in the light colour).
         public let light: Bool
@@ -280,9 +288,9 @@ public struct PetalDrawList: Equatable, Sendable {
     public static let petalHalfLength = PetalLayout.petalHalfLength
     /// Half the width of a petal.
     public static let petalHalfWidth = PetalLayout.petalHalfWidth
-    /// Radius of the cosmetic notch at a petal's tip.
+    /// Radius of the notch at a petal's tip.
     public static let petalNotchRadius = PetalLayout.petalNotchRadius
-    /// Distance from a petal's centre to its notch centre, outward.
+    /// Distance from a petal's centre to its notch centre, along its axis.
     public static let petalNotchDistance = PetalLayout.petalNotchDistance
     /// The disc the ``backdrop`` is clipped to.
     public static let backdropClip = Circle(
@@ -354,7 +362,7 @@ public struct PetalDrawList: Equatable, Sendable {
             petals.append(Petal(
                 cell: cell,
                 center: PetalLayout.cellCenter(cell),
-                angle: PetalLayout.cellAngles[cell],
+                angle: PetalLayout.cellAngles[cell] + PetalTurns.turnAngle(cells.turns[cell]),
                 light: light,
                 color: light ? palette.light : palette.pink
             ))

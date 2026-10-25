@@ -44,6 +44,10 @@ public struct PetalScanStats: Equatable, Sendable {
     public internal(set) var merges: UInt32 = 0
     /// Field lanes recovered by merging captures.
     public internal(set) var mergedLanes: UInt32 = 0
+    /// Turn lanes tried (each at most once per shown frame).
+    public internal(set) var turnTries: UInt32 = 0
+    /// Turn lanes read.
+    public internal(set) var turnLanes: UInt32 = 0
 
     public init() {}
 }
@@ -60,6 +64,9 @@ public struct PetalScanOutcome: Equatable, Sendable {
     /// Field lanes recovered by merging this capture with earlier captures of
     /// its shown frame, as sector digits.
     public let merged: String
+    /// Turn lanes read from this capture, as the sector digits of the field
+    /// lanes they ride on.
+    public let turned: String
     /// Receive progress after this frame.
     public let progress: PetalProgress
     /// The finished payload, delivered exactly once.
@@ -87,6 +94,15 @@ public struct PetalScanOutcome: Equatable, Sendable {
 /// (``PetalDecoder/mergeFields(_:skip:)``) and offers a recovered lane only
 /// when that lane's own header names the same frame. Unkeyed and torn
 /// captures are never combined.
+///
+/// Every field lane a capture decodes also lets the session read the turn
+/// lane on top of it (``PetalTurns/readTurns(_:frame:skip:)``). A turn lane is
+/// tried once per shown frame: the session remembers the last ``turnMemory``
+/// it tried and does not look at those petals again. Reading turns costs a
+/// slow phone core several times a frame's decode, so after a try that reads
+/// no turn lane (a camera too soft or too shaky for the turns) the session
+/// passes over the next captures that would try one, one more after every
+/// such try, at most ``turnBackoff``, until a try reads a lane again.
 public struct PetalScanSession: Sendable {
     /// How long a decoded pose stays usable for tracking the next frames.
     public static let trackWindowMilliseconds: UInt64 = 500
@@ -94,6 +110,11 @@ public struct PetalScanSession: Sendable {
     public static let mergeWindow = 6
     /// Captures held per shown frame; a further capture replaces the oldest.
     public static let mergeCaptures = 4
+    /// Turn lanes remembered as tried (the four of each of the last
+    /// ``mergeWindow`` shown frames).
+    public static let turnMemory = mergeWindow * PetalLayout.sectors
+    /// Most captures passed over after tries that read no turn lane.
+    public static let turnBackoff = 8
 
     /// The session limits.
     public let limits: PetalScanLimits
@@ -112,6 +133,17 @@ public struct PetalScanSession: Sendable {
         var done = [Bool](repeating: false, count: PetalLayout.sectors)
     }
     private(set) var held: [Held] = []
+    /// A turn lane tried: the header of the field lane it rides on, and its sector.
+    struct TurnTry: Equatable, Sendable {
+        let header: PetalLaneHeader
+        let sector: Int
+    }
+    /// The turn lanes tried most recently, oldest first.
+    private(set) var tried: [TurnTry] = []
+    /// Tries in a row that read no turn lane (at most ``turnBackoff``).
+    private(set) var turnMisses = 0
+    /// Captures still to pass over before the next try.
+    var turnWait = 0
 
     /// Creates a session.
     public init(limits: PetalScanLimits = PetalScanLimits()) {
@@ -129,6 +161,14 @@ public struct PetalScanSession: Sendable {
         lastRank = 0
         lastPose = nil
         held.removeAll()
+        forgetTurns()
+    }
+
+    /// Forgets the turn lanes tried and any back-off.
+    private mutating func forgetTurns() {
+        tried.removeAll()
+        turnMisses = 0
+        turnWait = 0
     }
 
     /// Offers one camera luma plane captured at monotonic time `nowMilliseconds`.
@@ -148,6 +188,7 @@ public struct PetalScanSession: Sendable {
         let error: PetalDecodeError?
         let lanes: String
         let merged: String
+        let turned: String
         switch result {
         case .success(let frame):
             error = nil
@@ -155,10 +196,12 @@ public struct PetalScanSession: Sendable {
             lastPose = (frame, now)
             lanes = absorb(frame)
             merged = merge(image, frame: frame)
+            turned = turn(image, frame: frame)
         case .failure(let failure):
             error = failure
             lanes = ""
             merged = ""
+            turned = ""
         }
         // A code was seen unless no finders were found or the image was unusable.
         if error != .noFinders && error != .unsupportedImage { stats.located &+= 1 }
@@ -172,6 +215,7 @@ public struct PetalScanSession: Sendable {
             error: error,
             lanes: lanes,
             merged: merged,
+            turned: turned,
             progress: progress,
             completed: assembler.takeCompleted()
         )
@@ -190,9 +234,58 @@ public struct PetalScanSession: Sendable {
         frame.feed(&assembler)
         // The tag is only eight bits: two streams can share a tag and frame
         // counter. Once the assembler accepts a different full stream identity,
-        // none of the previous stream's evidence or completed-lane flags apply.
-        if let previousMeta, assembler.progress.meta != previousMeta { held.removeAll() }
+        // none of the previous stream's evidence, completed-lane flags or turn lanes apply.
+        if let previousMeta, assembler.progress.meta != previousMeta {
+            held.removeAll()
+            forgetTurns()
+        }
         return lanes
+    }
+
+    /// The header of lane data; `nil` when it is too short to hold one.
+    static func laneHeader(_ data: [UInt8]) -> PetalLaneHeader? {
+        guard data.count >= PetalLane.headerLength else { return nil }
+        return PetalLaneHeader(tag: data[0], frame: UInt16(data[1]) << 8 | UInt16(data[2]))
+    }
+
+    /// Tries the turn lanes on top of the field lanes this capture decoded,
+    /// except those already tried for their shown frame, and offers the atoms
+    /// of those it reads; after tries that read nothing it passes over the next
+    /// captures that would try one (see the type's documentation).
+    mutating func turn(_ image: PetalLuma, frame: PetalDecodedFrame) -> String {
+        var skip = [Bool](repeating: true, count: PetalLayout.sectors)
+        var headers = [PetalLaneHeader?](repeating: nil, count: PetalLayout.sectors)
+        for sector in 0..<PetalLayout.sectors {
+            guard let field = frame.lane(.field(sector)), let header = Self.laneHeader(field.data) else { continue }
+            headers[sector] = header
+            skip[sector] = tried.contains(TurnTry(header: header, sector: sector))
+        }
+        if !skip.contains(false) { return "" }
+        if turnWait > 0 {
+            turnWait -= 1
+            return ""
+        }
+        for sector in 0..<PetalLayout.sectors where !skip[sector] {
+            guard let header = headers[sector] else { continue }
+            if tried.count == Self.turnMemory { tried.removeFirst() }
+            tried.append(TurnTry(header: header, sector: sector))
+            stats.turnTries &+= 1
+        }
+        var letters = ""
+        for (sector, result) in PetalTurns.readTurns(image, frame: frame, skip: skip).enumerated() {
+            guard let result, let header = headers[sector],
+                  let packet = PetalTurns.turnPacket(header, sector: sector, data: result.data) else { continue }
+            assembler.push(atoms: packet)
+            stats.turnLanes &+= 1
+            letters.append(PetalLane.field(sector).letter)
+        }
+        if letters.isEmpty {
+            turnMisses = min(turnMisses + 1, Self.turnBackoff)
+            turnWait = turnMisses
+        } else {
+            turnMisses = 0
+        }
+        return letters
     }
 
     /// The shown frame every decoded lane header of `frame` names; `nil` when
@@ -201,10 +294,7 @@ public struct PetalScanSession: Sendable {
         var shown: PetalLaneHeader?
         for lane in PetalLane.decodeOrder {
             guard let result = frame.lane(lane) else { continue }
-            guard result.data.count >= PetalLane.headerLength else { return nil }
-            let header = PetalLaneHeader(
-                tag: result.data[0], frame: UInt16(result.data[1]) << 8 | UInt16(result.data[2])
-            )
+            guard let header = laneHeader(result.data) else { return nil }
             if let shown, shown != header { return nil }
             shown = header
         }

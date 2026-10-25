@@ -24,8 +24,18 @@ final class PetalScanSessionTests: XCTestCase {
     /// A 640×480 camera frame of a steady hand: `frame` rendered at 512 px,
     /// shown about 400 px wide and turned by `degrees` about the frame centre
     /// (bilinear resampling), on a dim background.
-    private func turnedFrame(_ encoder: PetalStreamEncoder, _ frame: UInt16, degrees: Double) throws -> PetalLuma {
-        let code = try Support.render(encoder, frame: frame, size: 512, supersample: 2)
+    private func turnedFrame(
+        _ encoder: PetalStreamEncoder, _ frame: UInt16, degrees: Double, unturned: Bool = false
+    ) throws -> PetalLuma {
+        let cells: PetalFrameCells
+        if unturned {
+            // the frame's field and rings with every petal unturned: no turn lane reads
+            let words = encoder.words(frame: frame)
+            cells = try PetalFrameCells(d: words.d, fields: words.fields)
+        } else {
+            cells = encoder.cells(frame: frame)
+        }
+        let code = try PetalRenderer.render(cells, options: PetalRenderOptions(size: 512, supersample: 2)).luma()
         let width = 640
         let height = 480
         let angle = degrees * Double.pi / 180
@@ -113,8 +123,105 @@ final class PetalScanSessionTests: XCTestCase {
         let stats = session.stats
         XCTAssertGreaterThan(stats.readable, 0)
         XCTAssertGreaterThan(stats.laneD, 0)
+        XCTAssertGreaterThan(stats.turnLanes, 0)
         XCTAssertEqual(stats.frames, stats.located)
         XCTAssertTrue(session.progress.complete)
+    }
+
+    func testTheTurnLanesFinishAPayloadInFewerFrames() throws {
+        let data = Support.payload(5_000, seed: 3)
+        let encoder = try PetalStreamEncoder(payload: data, kind: 2)
+        var session = PetalScanSession()
+        var done: PetalCompletedPayload?
+        for frame in UInt16(0)..<40 {
+            let outcome = session.push(try turnedFrame(encoder, frame, degrees: 20), nowMilliseconds: UInt64(frame) * 100)
+            if let completed = outcome.completed {
+                done = completed
+                break
+            }
+        }
+        XCTAssertEqual(try XCTUnwrap(done).payload, Data(data))
+        let stats = session.stats
+        XCTAssertTrue(stats.readable > 0 && stats.laneD > 0 && stats.fieldLanes > 0)
+        XCTAssertGreaterThan(stats.turnLanes, 0)
+        // 5,000 bytes need 313 atoms: the field lanes and lane D alone carry them in 15 or 16
+        // frames, the turn lanes on top in 9 or 10
+        XCTAssertLessThanOrEqual(stats.frames, 11, "\(stats)")
+    }
+
+    func testATurnLaneIsReadOncePerShownFrame() throws {
+        let encoder = try PetalStreamEncoder(payload: Support.payload(3_000, seed: 3), kind: 2)
+        var session = PetalScanSession()
+        let first = session.push(try turnedFrame(encoder, 5, degrees: 12), nowMilliseconds: 0)
+        XCTAssertEqual(first.lanes, "D0123")
+        XCTAssertEqual(first.turned, "0123")
+        // another capture of the same shown frame: its turn lanes were read already
+        let again = session.push(try turnedFrame(encoder, 5, degrees: 12.5), nowMilliseconds: 33)
+        XCTAssertEqual(again.lanes, "D0123")
+        XCTAssertEqual(again.turned, "")
+        XCTAssertEqual(session.stats.turnLanes, 4)
+        // the next shown frame's turn lanes are new
+        let next = session.push(try turnedFrame(encoder, 6, degrees: 12), nowMilliseconds: 83)
+        XCTAssertEqual(next.turned, "0123")
+        XCTAssertEqual(session.stats.turnTries, 8)
+        XCTAssertEqual(session.stats.turnLanes, 8)
+        XCTAssertEqual(session.tried.count, 8)
+        session.reset()
+        XCTAssertTrue(session.tried.isEmpty)
+    }
+
+    func testTriesThatReadNothingBackOff() throws {
+        let encoder = try PetalStreamEncoder(payload: Support.payload(3_000, seed: 3), kind: 2)
+        var session = PetalScanSession()
+        var triedAt: [UInt16] = []
+        for frame in UInt16(1)...30 {
+            let before = session.stats.turnTries
+            let outcome = session.push(
+                try turnedFrame(encoder, frame, degrees: 12, unturned: true),
+                nowMilliseconds: UInt64(frame) * 83
+            )
+            XCTAssertTrue(outcome.lanes.hasSuffix("0123"), "frame \(frame)")
+            XCTAssertEqual(outcome.turned, "")
+            if session.stats.turnTries > before { triedAt.append(frame) }
+        }
+        // after the n-th try that reads nothing, the next min(n, 8) captures that would try are
+        // passed over
+        XCTAssertEqual(triedAt, [1, 3, 6, 10, 15, 21, 28])
+        // a try that reads a lane ends the back-off
+        session.turnWait = 0
+        XCTAssertEqual(session.push(try turnedFrame(encoder, 31, degrees: 12), nowMilliseconds: 31 * 83).turned, "0123")
+        XCTAssertEqual(session.turnMisses, 0)
+        XCTAssertEqual(session.push(try turnedFrame(encoder, 32, degrees: 12), nowMilliseconds: 32 * 83).turned, "0123")
+    }
+
+    func testTheSessionRemembersTheTurnLanesOfSixShownFrames() throws {
+        let encoder = try PetalStreamEncoder(payload: Support.payload(3_000, seed: 3), kind: 2)
+        var session = PetalScanSession()
+        for frame in UInt16(1)...7 {
+            let outcome = session.push(try turnedFrame(encoder, frame, degrees: 12), nowMilliseconds: UInt64(frame) * 83)
+            XCTAssertEqual(outcome.turned, "0123", "frame \(frame)")
+        }
+        XCTAssertEqual(session.tried.count, PetalScanSession.turnMemory)
+        XCTAssertEqual(session.tried.first?.header.frame, 2, "the oldest shown frame is forgotten")
+        XCTAssertEqual(session.tried.last, PetalScanSession.TurnTry(header: PetalLaneHeader(tag: encoder.meta.tag, frame: 7), sector: 3))
+        // a forgotten shown frame is read again
+        XCTAssertEqual(session.push(try turnedFrame(encoder, 1, degrees: 12), nowMilliseconds: 700).turned, "0123")
+    }
+
+    func testAStreamSwitchForgetsTheTurnLanesRead() throws {
+        let old = try PetalStreamEncoder(payload: Support.payload(3_000, seed: 3), kind: 2)
+        let new = try PetalStreamEncoder(payload: Support.payload(3_000, seed: 4), kind: 2)
+        var session = PetalScanSession()
+        XCTAssertEqual(session.push(try turnedFrame(old, 4, degrees: 12), nowMilliseconds: 0).turned, "0123")
+        XCTAssertFalse(session.tried.isEmpty)
+        // two beacons of another stream replace it
+        for (index, frame) in [UInt16(8), 12].enumerated() {
+            _ = session.push(try turnedFrame(new, frame, degrees: 12), nowMilliseconds: 100 + UInt64(index) * 100)
+        }
+        XCTAssertEqual(session.progress.meta, new.meta)
+        // only the turn lanes tried after the switch are remembered
+        XCTAssertEqual(session.tried.count, 4)
+        XCTAssertTrue(session.tried.allSatisfy { $0.header.tag == new.meta.tag && $0.header.frame == 12 })
     }
 
     func testIdleSessionsForgetPartialStreams() throws {
@@ -139,7 +246,9 @@ final class PetalScanSessionTests: XCTestCase {
         XCTAssertNotNil(session.push(try cameraFrame(encoder, 0), nowMilliseconds: 0).progress.meta)
         let second = session.push(try cameraFrame(encoder, 1), nowMilliseconds: 900)
         XCTAssertNotNil(second.progress.meta)
-        XCTAssertEqual(second.progress.rank, 20 + 21)
+        // the beacon frame's 20 atoms and frame 1's 21, each with 16 more from the turn lanes
+        XCTAssertEqual(second.turned, "0123")
+        XCTAssertEqual(second.progress.rank, (20 + 16) + (21 + 16))
         let third = session.push(try cameraFrame(encoder, 2), nowMilliseconds: 1_800)
         XCTAssertNotNil(third.progress.meta, "steady progress keeps the idle timer alive")
         // 2.5 s after the start the stream is dropped before the frame is read;
@@ -148,9 +257,10 @@ final class PetalScanSessionTests: XCTestCase {
         XCTAssertEqual(fourth.lanes, "D0123")
         XCTAssertNil(fourth.progress.meta)
         XCTAssertEqual(fourth.progress.rank, 0)
+        XCTAssertEqual(fourth.turned, "0123", "a reset forgets the turn lanes tried")
         let fifth = session.push(try cameraFrame(encoder, 4), nowMilliseconds: 2_600)
         XCTAssertEqual(fifth.progress.meta, encoder.meta)
-        XCTAssertEqual(fifth.progress.rank, 21 + 20, "buffered atoms of frame 3 join the restarted stream")
+        XCTAssertEqual(fifth.progress.rank, (21 + 16) + (20 + 16), "buffered atoms of frame 3 join the restarted stream")
     }
 
     func testLocatedCountsCodesThatWereSeenButCouldNotBeRead() throws {
