@@ -382,6 +382,41 @@ impl ScanQuery {
             .map_err(|_| collections::memory::capacity("Explorer cursor").into())
     }
 
+    /// Decode the native page into the rows [`Self::page`] retains.
+    ///
+    /// The page holds up to `limit` rows, so its graph is bounded by the retained-page phase
+    /// rather than by one source row's ceiling; a single field still fits one row's. A
+    /// refusal is this owner's capacity limit, never an invalid client query, so the routed
+    /// read can serve the page again with a larger owner.
+    fn decode_scan(&self, bytes: &[u8]) -> Result<Value, Error> {
+        let policy = self.limits.bytes;
+        let decode_limits = norito::DecodeLimits::new(
+            policy.source_frame_bytes,
+            policy.row_bytes,
+            policy.retained_bytes,
+            policy.retained_bytes,
+            norito::core::MAX_VALUE_NESTING_DEPTH,
+        );
+        norito::json::preflight_slice(
+            bytes,
+            norito::json::JsonPreflightLimits::from_decode_limits(
+                policy.source_frame_bytes,
+                decode_limits,
+            ),
+        )
+        .map_err(|_| collections::memory::capacity("Explorer scan graph"))?;
+        let (scan, usage) = norito::core::with_decode_limits_measured(decode_limits, || {
+            norito::json::from_slice::<Value>(bytes)
+        });
+        let scan = scan.map_err(|_| collections::memory::capacity("Explorer scan graph"))?;
+        collections::memory::ensure(
+            usage.total_allocated_bytes(),
+            policy.retained_bytes,
+            "Explorer scan graph",
+        )?;
+        Ok(scan)
+    }
+
     fn page(&self, scan: Value) -> Result<RowPage, Error> {
         let plan = prepare(self.spec, "", &self.rows, &self.limits)?;
         let Value::Object(mut scan) = scan else {
@@ -673,32 +708,8 @@ async fn execute(
         .map_err(|error| invalid("query", error.to_string()))?;
     let admission = acquire_query_admission(app.as_ref(), true).await?;
     routing::run_admitted_blocking(admission, "Explorer projection worker failed", move || {
-        let policy = query.limits.bytes;
-        let decode_limits = norito::DecodeLimits::new(
-            policy.source_frame_bytes,
-            policy.row_bytes,
-            policy.row_bytes,
-            policy.row_bytes,
-            norito::core::MAX_VALUE_NESTING_DEPTH,
-        );
-        norito::json::preflight_slice(
-            &bytes,
-            norito::json::JsonPreflightLimits::from_decode_limits(
-                policy.source_frame_bytes,
-                decode_limits,
-            ),
-        )
-        .map_err(|_| collections::memory::capacity("Explorer scan graph"))?;
-        let (scan, usage) = norito::core::with_decode_limits_measured(decode_limits, || {
-            norito::json::from_slice::<Value>(&bytes)
-        });
-        let scan = scan.map_err(|error| invalid("query", error.to_string()))?;
-        collections::memory::ensure(
-            usage.total_allocated_bytes(),
-            policy.row_bytes,
-            "Explorer scan graph",
-        )?;
-        routing::collection_sources::row_page_response(query.page(scan)?, policy)
+        let scan = query.decode_scan(&bytes)?;
+        routing::collection_sources::row_page_response(query.page(scan)?, query.limits.bytes)
     })
     .await
 }
@@ -1114,6 +1125,59 @@ mod tests {
                 .page(norito::json!({"items":[{"id":"alice"}],"pagination":{"next_cursor":null}}))
                 .is_err()
         );
+    }
+
+    #[test]
+    fn explorer_scan_beyond_its_owner_is_that_owner_capacity_refusal() {
+        // A native page decodes into the rows its projection retains. A full page beyond
+        // the smallest routed-read owner must be that owner's capacity refusal, which moves
+        // the read to a larger owner; Taira answered a 100-row accounts continuation with a
+        // final 400 `invalid_query` instead. Its rows nest six metadata objects, and every
+        // decoded object owns a B-tree node, so ~35 KB of JSON outgrew the 256 KiB phase.
+        let scan = |unit: usize| {
+            let envelope = crate::QueryFanoutMemoryEnvelope::for_body_admission(
+                unit * crate::QUERY_FANOUT_PREBODY_UNITS
+                    + crate::query_fanout_fixed_overhead_bytes().expect("fixed overhead"),
+            )
+            .expect("routed-read owner");
+            let mut bounds = limits();
+            bounds.bytes = collections::memory::BytePolicy::for_admitted_read(envelope, usize::MAX);
+            ScanQuery::new(&ACCOUNTS, ListQuery::new(), [1; 32], bounds).unwrap()
+        };
+        let rows = (0..100)
+            .map(|index| {
+                norito::json!({
+                    "id": (format!("account-{index:03}")),
+                    "metadata": {"asset_transfer_controls": {"controls": [{
+                        "asset_definition_id": "7TdbS7ACHkfy1TSW4VwbnMXouos4",
+                        "incoming_availability": {"state": "Enabled", "value": null},
+                        "limits": [],
+                        "outgoing_availability": {"state": "Disabled", "value": null},
+                        "usages": []
+                    }]}},
+                    "network_prefix": 369,
+                    "owned_assets": 0,
+                    "owned_domains": 0,
+                    "owned_nfts": 0
+                })
+            })
+            .collect::<Vec<_>>();
+        let page = norito::json::to_json(
+            &norito::json!({"items": (rows), "pagination": {"next_cursor": "native-next"}}),
+        )
+        .unwrap();
+        let [smallest, larger] = [
+            crate::ROUTED_READ_OWNER_PHASE_UNITS[0],
+            crate::ROUTED_READ_OWNER_PHASE_UNITS[1],
+        ];
+        assert!(page.len() < smallest / 2, "the page frame itself is small");
+        match scan(smallest).decode_scan(page.as_bytes()) {
+            Err(Error::CollectionQuery(error)) => {
+                assert_eq!(error.code, "query_capacity_exceeded");
+            }
+            other => panic!("expected the owner's capacity refusal, got {other:?}"),
+        }
+        assert!(scan(larger).decode_scan(page.as_bytes()).is_ok());
     }
 
     #[test]

@@ -9,7 +9,7 @@
 //! continuations use authorized entrypoint hashes rather than physical block offsets.
 use crate::{
     json_macros::{JsonDeserialize, JsonSerialize},
-    routing::DataspaceReadVisibility,
+    routing::{DataspaceReadVisibility, WorldReadVisibility},
 };
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use iroha_core::state::WorldReadOnly;
@@ -1453,11 +1453,13 @@ fn explorer_cursor_meta<K: ExplorerCursorKeyText>(
         has_more,
     })
 }
-pub(crate) fn account_counters_from_world(
-    world: &impl WorldReadOnly,
+/// Count one account's visible holdings. Every member check shares `visible`'s single
+/// committed-root decode, so the charge does not grow with the account's holdings.
+pub(crate) fn account_counters_from_world<W: WorldReadOnly>(
+    visible: &WorldReadVisibility<'_, W>,
     id: &AccountId,
-    visibility: &DataspaceReadVisibility,
 ) -> AccountCounters {
+    let (world, visibility) = (visible.world(), visible.visibility());
     AccountCounters {
         domains: world.domains_by_owner().get(id).map_or(0, |domains| {
             saturating_usize_to_u32(
@@ -1470,7 +1472,7 @@ pub(crate) fn account_counters_from_world(
         assets: saturating_usize_to_u32(
             world
                 .assets_in_account_iter(id)
-                .filter(|asset| visibility.allows_asset(world, asset.id()))
+                .filter(|asset| visible.allows_asset(asset.id()))
                 .count(),
         ),
         nfts: saturating_usize_to_u32(
@@ -1480,11 +1482,12 @@ pub(crate) fn account_counters_from_world(
         ),
     }
 }
-pub(crate) fn domain_counters_from_world(
-    world: &impl WorldReadOnly,
+/// Count one domain's visible members under `visible`'s single committed-root decode.
+pub(crate) fn domain_counters_from_world<W: WorldReadOnly>(
+    visible: &WorldReadVisibility<'_, W>,
     id: &DomainId,
-    visibility: &DataspaceReadVisibility,
 ) -> DomainCounters {
+    let (world, visibility) = (visible.world(), visible.visibility());
     let accounts = world.account_scope_domain_key(id).map_or(0, |key| {
         if visibility.can_read_all() {
             return u32::try_from(
@@ -1498,7 +1501,7 @@ pub(crate) fn domain_counters_from_world(
         }
         saturating_usize_to_u32(
             index_members(world.account_scope_accounts(), &key)
-                .filter(|account| visibility.allows_account(world, account))
+                .filter(|account| visible.allows_account(account))
                 .count(),
         )
     });
@@ -1506,7 +1509,7 @@ pub(crate) fn domain_counters_from_world(
         accounts,
         assets: saturating_usize_to_u32(
             index_members(world.assets_by_domain(), id)
-                .filter(|asset| visibility.allows_asset(world, asset))
+                .filter(|asset| visible.allows_asset(asset))
                 .count(),
         ),
         nfts: saturating_usize_to_u32(
@@ -1516,12 +1519,12 @@ pub(crate) fn domain_counters_from_world(
         ),
     }
 }
-pub(crate) fn definition_instance_count_from_world(
-    world: &impl WorldReadOnly,
+pub(crate) fn definition_instance_count_from_world<W: WorldReadOnly>(
+    visible: &WorldReadVisibility<'_, W>,
     id: &AssetDefinitionId,
-    visibility: &DataspaceReadVisibility,
 ) -> u32 {
-    if visibility.can_read_all() {
+    let world = visible.world();
+    if visible.visibility().can_read_all() {
         return u32::try_from(
             world
                 .asset_definition_asset_counts()
@@ -1533,7 +1536,7 @@ pub(crate) fn definition_instance_count_from_world(
     }
     saturating_usize_to_u32(
         index_members(world.asset_definition_assets(), id)
-            .filter(|asset| visibility.allows_asset(world, asset))
+            .filter(|asset| visible.allows_asset(asset))
             .count(),
     )
 }
@@ -1618,12 +1621,13 @@ pub(crate) fn accounts_page_for_filters<'world>(
             None => explorer_iterator(world.accounts_iter())?,
         }
     };
+    let visible = visibility.in_world(world);
     let scanned = collect_explorer_cursor_page(
         accounts,
         limit,
         byte_budget,
         |entry| entry.id,
-        |entry| visibility.allows_account(world, entry.id()),
+        |entry| visible.allows_account(entry.id()),
         |entry| {
             (domain_filter.is_none()
                 || domain_accounts.as_ref().is_some_and(|key| {
@@ -1634,7 +1638,7 @@ pub(crate) fn accounts_page_for_filters<'world>(
                 })
         },
         |entry| {
-            let counts = account_counters_from_world(world, entry.id(), visibility);
+            let counts = account_counters_from_world(&visible, entry.id());
             Ok(ExplorerAccountDto::from_entry(entry, counts))
         },
     )?;
@@ -1669,8 +1673,9 @@ pub(crate) fn domains_page_for_filters<'world>(
         ExplorerCursorCollection::Domains,
         filter_digest,
     )?;
+    let visible = visibility.in_world(world);
     let domains: Box<dyn Iterator<Item = &'world Domain> + 'world> = if owned_by
-        .is_some_and(|owner| !visibility.allows_account(world, owner))
+        .is_some_and(|owner| !visible.allows_account(owner))
     {
         explorer_iterator(std::iter::empty())?
     } else if let Some(owner) = owned_by {
@@ -1704,7 +1709,7 @@ pub(crate) fn domains_page_for_filters<'world>(
         |domain| {
             norito::core::reserve_decode_allocation(domain.id().name().as_ref().len())
                 .map_err(|_| ExplorerCursorError::ByteLimitExceeded)?;
-            let counts = domain_counters_from_world(world, domain.id(), visibility);
+            let counts = domain_counters_from_world(&visible, domain.id());
             Ok(ExplorerDomainDto::from_domain(domain, counts))
         },
     )?;
@@ -1743,9 +1748,10 @@ pub(crate) fn asset_definitions_page_for_filters<'world>(
         ExplorerCursorCollection::AssetDefinitions,
         filter_digest,
     )?;
+    let visible = visibility.in_world(world);
     let selectors_visible = owning_domain_filter
         .is_none_or(|domain| visibility.allows_domain(world, domain))
-        && owner_filter.is_none_or(|owner| visibility.allows_account(world, owner));
+        && owner_filter.is_none_or(|owner| visible.allows_account(owner));
     let definitions: Box<dyn Iterator<Item = &'world AssetDefinition> + 'world> =
         if !selectors_visible {
             explorer_iterator(std::iter::empty())?
@@ -1783,7 +1789,7 @@ pub(crate) fn asset_definitions_page_for_filters<'world>(
             Ok(
                 ExplorerAssetDefinitionDto::from_definition_with_asset_count(
                     definition,
-                    definition_instance_count_from_world(world, definition.id(), visibility),
+                    definition_instance_count_from_world(&visible, definition.id()),
                     world
                         .asset_definition_dataspace(definition.id())
                         .map_err(|_| ExplorerCursorError::InvalidSnapshot)?,
@@ -1839,10 +1845,11 @@ pub(crate) fn assets_page_for_filters<'world>(
     {
         return Err(ExplorerCursorError::InvalidKey);
     }
-    let selectors_visible = owned_by.is_none_or(|owner| visibility.allows_account(world, owner))
+    let visible = visibility.in_world(world);
+    let selectors_visible = owned_by.is_none_or(|owner| visible.allows_account(owner))
         && definition_filter
             .is_none_or(|definition| visibility.allows_asset_definition(world, definition))
-        && asset_filter.is_none_or(|asset| visibility.allows_asset(world, asset));
+        && asset_filter.is_none_or(|asset| visible.allows_asset(asset));
     let assets: Box<dyn Iterator<Item = AssetEntry<'world>> + 'world> = if !selectors_visible {
         explorer_iterator(std::iter::empty())?
     } else if let Some(asset_id) = asset_filter {
@@ -1906,7 +1913,7 @@ pub(crate) fn assets_page_for_filters<'world>(
         limit,
         byte_budget,
         |entry| entry.id,
-        |asset| visibility.allows_asset(world, asset.id()),
+        |asset| visible.allows_asset(asset.id()),
         |asset| {
             asset_filter.is_none_or(|expected| asset.id() == expected)
                 && owned_by.is_none_or(|owner| asset.id().account() == owner)
@@ -3299,12 +3306,9 @@ mod tests {
     fn definition_counts_preserve_restricted_visibility() {
         let fixture = selector_world();
         let view = fixture.world.view();
+        let all = DataspaceReadVisibility::all_for_tests();
         assert_eq!(
-            definition_instance_count_from_world(
-                &view,
-                &fixture.coin,
-                &DataspaceReadVisibility::all_for_tests(),
-            ),
+            definition_instance_count_from_world(&all.in_world(&view), &fixture.coin),
             2
         );
         let alice_only = DataspaceReadVisibility::exact_account(
@@ -3312,12 +3316,12 @@ mod tests {
             ALICE_ID.clone(),
         );
         assert_eq!(
-            definition_instance_count_from_world(&view, &fixture.coin, &alice_only),
+            definition_instance_count_from_world(&alice_only.in_world(&view), &fixture.coin),
             1
         );
         let hidden = DataspaceReadVisibility::new(std::collections::BTreeSet::new(), false);
         assert_eq!(
-            definition_instance_count_from_world(&view, &fixture.coin, &hidden),
+            definition_instance_count_from_world(&hidden.in_world(&view), &fixture.coin),
             0
         );
     }

@@ -303,7 +303,55 @@ pub struct DataspaceReadVisibility {
     alias_resolver: Option<AccountId>,
 }
 
+/// One read's dataspace visibility over one borrowed World.
+///
+/// [`DataspaceReadVisibility::allows_account`] decodes the committed root metadata on every
+/// call. Scans and counters check many accounts and assets against one World inside their
+/// read's allocation budget, so they decode that immutable root once here; each check then
+/// reads only the committed account directory.
+pub(crate) struct WorldReadVisibility<'a, W> {
+    visibility: &'a DataspaceReadVisibility,
+    world: &'a W,
+    root: Option<iroha_data_model::block::consensus::SumeragiRootScope>,
+}
+
+impl<'a, W: WorldReadOnly> WorldReadVisibility<'a, W> {
+    pub(crate) fn world(&self) -> &'a W {
+        self.world
+    }
+
+    pub(crate) fn visibility(&self) -> &'a DataspaceReadVisibility {
+        self.visibility
+    }
+
+    pub(crate) fn allows_account(&self, account_id: &AccountId) -> bool {
+        self.visibility
+            .allows_account_under(self.world, account_id, || self.root)
+    }
+
+    pub(crate) fn allows_asset(&self, asset_id: &AssetId) -> bool {
+        self.visibility
+            .allows_asset_under(self.world, asset_id, || self.root)
+    }
+}
+
 impl DataspaceReadVisibility {
+    /// Resolve this visibility over `world` for a read that checks many accounts or assets.
+    pub(crate) fn in_world<'a, W: WorldReadOnly>(
+        &'a self,
+        world: &'a W,
+    ) -> WorldReadVisibility<'a, W> {
+        // Exact-account and read-all visibilities never consult the committed root.
+        let root = (self.exact_account.is_none() && !self.can_read_all)
+            .then(|| iroha_core::sumeragi::lanes::routing::committed_root_scope(world))
+            .flatten();
+        WorldReadVisibility {
+            visibility: self,
+            world,
+            root,
+        }
+    }
+
     pub(crate) fn new(visible_dataspaces: BTreeSet<DataSpaceId>, can_read_all: bool) -> Self {
         Self {
             visible_dataspaces,
@@ -433,6 +481,19 @@ impl DataspaceReadVisibility {
         world: &impl WorldReadOnly,
         account_id: &AccountId,
     ) -> bool {
+        self.allows_account_under(world, account_id, || {
+            iroha_core::sumeragi::lanes::routing::committed_root_scope(world)
+        })
+    }
+
+    /// [`Self::allows_account`] under a committed root the caller supplies. The root is
+    /// consulted only after the exact-account, read-all and existence checks.
+    fn allows_account_under(
+        &self,
+        world: &impl WorldReadOnly,
+        account_id: &AccountId,
+        root: impl FnOnce() -> Option<iroha_data_model::block::consensus::SumeragiRootScope>,
+    ) -> bool {
         if let Some(exact_account) = &self.exact_account {
             return exact_account == account_id && world.accounts().get(account_id).is_some();
         }
@@ -442,7 +503,7 @@ impl DataspaceReadVisibility {
         if world.accounts().get(account_id).is_none() {
             return false;
         }
-        match iroha_core::sumeragi::lanes::routing::committed_root_scope(world) {
+        match root() {
             Some(iroha_data_model::block::consensus::SumeragiRootScope::Dataspace {
                 dataspace_id,
                 ..
@@ -496,12 +557,23 @@ impl DataspaceReadVisibility {
 
     /// Return whether an asset bucket and its holder belong only to visible routes.
     pub(crate) fn allows_asset(&self, world: &impl WorldReadOnly, asset_id: &AssetId) -> bool {
+        self.allows_asset_under(world, asset_id, || {
+            iroha_core::sumeragi::lanes::routing::committed_root_scope(world)
+        })
+    }
+
+    fn allows_asset_under(
+        &self,
+        world: &impl WorldReadOnly,
+        asset_id: &AssetId,
+        root: impl FnOnce() -> Option<iroha_data_model::block::consensus::SumeragiRootScope>,
+    ) -> bool {
         if self.can_read_all {
             return true;
         }
         if world.assets().get(asset_id).is_none()
             || !self.allows_asset_definition(world, asset_id.definition())
-            || !self.allows_account(world, asset_id.account())
+            || !self.allows_account_under(world, asset_id.account(), root)
         {
             return false;
         }
@@ -52678,6 +52750,125 @@ mod explorer_response_byte_budget_tests {
             bounded_explorer_json_response(&payload,exact)
         })).is_err(),"selection and output must not each spend an independent phase budget");
     }
+    #[tokio::test]
+    async fn public_domain_rows_charge_one_root_decode_not_one_per_counted_member() {
+        use iroha_data_model::block::consensus::SumeragiRootScope;
+        // Unsigned readers count each domain's accounts and assets under the committed root.
+        // Every counted member decoded that root's metadata inside the response phase, so a
+        // few ~200-byte rows of populous domains exhausted the smallest routed-read owner
+        // (Taira refused 3-row pages beside a 650-account domain).
+        const DOMAINS: usize = 5;
+        let owner_id = iroha_test_samples::ALICE_ID.clone();
+        let public = DataspaceReadVisibility::new(BTreeSet::from([DataSpaceId::UNIVERSAL]), false);
+        let domains: Vec<DomainId> = (0..DOMAINS)
+            .map(|index| DomainId::try_new(format!("populous{index}"), "universal").expect("fixture domain"))
+            .collect();
+        let definitions: Vec<AssetDefinitionId> = domains
+            .iter()
+            .map(|domain| AssetDefinitionId::derive_from_components(domain.clone(), "coin".parse().expect("asset name")))
+            .collect();
+        // One owner of every domain, and `holders` accounts that each hold every domain's coin.
+        let state = |holders: usize| {
+            let holders: Vec<AccountId> = (0..holders)
+                .map(|index| {
+                    let mut seed = vec![0x5A; 32];
+                    seed[..8].copy_from_slice(&u64::try_from(index).expect("holder index").to_be_bytes());
+                    AccountId::new(KeyPair::from_seed(seed, Algorithm::Ed25519).public_key().clone())
+                })
+                .collect();
+            let mut world = iroha_core::state::World::with_assets(
+                domains.iter().map(|domain| Domain::new(domain.clone()).build(&owner_id)),
+                std::iter::once(Account::new(owner_id.clone()).build(&owner_id))
+                    .chain(holders.iter().map(|holder| Account::new(holder.clone()).build(holder))),
+                definitions.iter().zip(&domains).map(|(definition, domain)| {
+                    AssetDefinition::numeric(
+                        definition.clone(),
+                        "coin".to_owned(),
+                        iroha_data_model::asset::AssetBalancePolicy::Global,
+                        Some(domain.clone()),
+                    )
+                    .build(&owner_id)
+                }),
+                holders.iter().flat_map(|holder| {
+                    definitions.iter().map(move |definition| {
+                        iroha_data_model::asset::Asset::new(
+                            AssetId::new(definition.clone(), holder.clone()),
+                            Quantity::from(1_u32),
+                        )
+                    })
+                }),
+                [],
+            );
+            crate::test_utils::bind_fixture_root(&mut world, SumeragiRootScope::Global);
+            Arc::new(CoreState::new_for_testing(
+                world,
+                Kura::blank_kura_for_testing(),
+                iroha_core::query::store::LiveQueryStore::start_test(),
+            ))
+        };
+        let unbounded = norito::DecodeLimits::new(
+            usize::MAX, usize::MAX, usize::MAX, usize::MAX, norito::core::MAX_VALUE_NESTING_DEPTH,
+        );
+        let small = state(1);
+        let (root, root_usage) = norito::core::with_decode_limits_measured(unbounded, || {
+            iroha_core::sumeragi::lanes::routing::committed_root_scope(&small.world_view())
+        });
+        assert_eq!(root, Some(SumeragiRootScope::Global));
+        let root_bytes = root_usage.total_allocated_bytes();
+        assert!(root_bytes > 0, "decoding the committed root charges the active budget");
+        let smallest_owner = crate::QueryFanoutMemoryEnvelope::for_body_admission(
+            crate::ROUTED_READ_OWNER_PHASE_UNITS[0] * crate::QUERY_FANOUT_PREBODY_UNITS
+                + crate::query_fanout_fixed_overhead_bytes().expect("fixed overhead"),
+        )
+        .expect("smallest routed-read owner")
+        .route_body_bytes;
+        // Twice the members whose one root decode each would alone exhaust that owner.
+        let holders = 2 * smallest_owner / (DOMAINS * root_bytes) + 1;
+        let large = state(holders);
+        let query = crate::explorer::ExplorerCursorQuery { cursor: None, limit: 10 };
+        // The page charges its rows; how many members each row counts is no part of it.
+        let charged = |state: &CoreState| {
+            let view = state.world_view();
+            let (rows, usage) = norito::core::with_decode_limits_measured(unbounded, || {
+                crate::explorer::domains_page_for_filters(&view, None, &public, &query, smallest_owner)
+                    .map(|page| page.items.len())
+            });
+            assert_eq!(rows.expect("domains page"), DOMAINS);
+            usage.total_allocated_bytes()
+        };
+        assert_eq!(charged(&small), charged(&large), "per-member root decodes reached the page charge");
+        let owner = crate::history_producer::HistoryProducerOwner::for_test();
+        let response = owner
+            .scope(|| {
+                handle_v1_explorer_domains_sync(Arc::clone(&large), public.clone(), query.clone(), None, smallest_owner)
+            })
+            .expect("tiny domain rows fit the smallest routed-read owner");
+        let body = axum::body::to_bytes(response.into_body(), smallest_owner).await.unwrap();
+        let page: norito::json::Value = norito::json::from_slice(&body).unwrap();
+        let rows = page["items"].as_array().expect("domain rows");
+        assert_eq!(rows.len(), DOMAINS);
+        for row in rows {
+            assert_eq!(row["assets"].as_u64(), Some(u64::try_from(holders).unwrap()));
+            assert_eq!(row["accounts"].as_u64(), Some(0));
+        }
+        assert!(page["pagination"]["next_cursor"].is_null());
+        // A full accounts page counts every holder's assets under the same single decode.
+        let accounts = crate::explorer::ExplorerCursorQuery { cursor: None, limit: 100 };
+        let response = owner
+            .scope(|| {
+                handle_v1_explorer_accounts_sync(Arc::clone(&large), public.clone(), accounts, None, None, smallest_owner)
+            })
+            .expect("a full public accounts page fits the smallest routed-read owner");
+        let body = axum::body::to_bytes(response.into_body(), smallest_owner).await.unwrap();
+        let page: norito::json::Value = norito::json::from_slice(&body).unwrap();
+        let rows = page["items"].as_array().expect("account rows");
+        assert_eq!(rows.len(), (holders + 1).min(100));
+        let every = Some(u64::try_from(DOMAINS).unwrap());
+        assert!(rows.iter().all(|row| {
+            let counts = (row["owned_assets"].as_u64(), row["owned_domains"].as_u64());
+            counts == (every, Some(0)) || counts == (Some(0), every)
+        }));
+    }
 }
 pub async fn handle_v1_explorer_accounts_admitted(
     state: Arc<CoreState>,
@@ -54479,9 +54670,8 @@ pub async fn handle_v1_explorer_account_detail(
             crate::explorer::ExplorerAccountDto::from_entry(
                 entry,
                 crate::explorer::account_counters_from_world(
-                    &world,
+                    &visibility.in_world(&world),
                     &account_id,
-                    &visibility,
                 ),
             )
         })
@@ -54523,7 +54713,10 @@ pub async fn handle_v1_explorer_domain_detail(
         .map(|domain| {
             crate::explorer::ExplorerDomainDto::from_domain(
                 domain,
-                crate::explorer::domain_counters_from_world(&world, &domain_id, &visibility),
+                crate::explorer::domain_counters_from_world(
+                    &visibility.in_world(&world),
+                    &domain_id,
+                ),
             )
         })
         .map_err(|_| explorer_not_found())?;
@@ -54549,9 +54742,8 @@ pub async fn handle_v1_explorer_asset_definition_detail(
     let mut dto = crate::explorer::ExplorerAssetDefinitionDto::from_definition_with_asset_count(
         &definition,
         crate::explorer::definition_instance_count_from_world(
-            &world,
+            &visibility.in_world(&world),
             &definition_id,
-            &visibility,
         ),
         asset_definition_dataspace_for_read(&world, &definition_id)?,
     );
