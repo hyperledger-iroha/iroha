@@ -61,6 +61,12 @@ internal class PetalWorkspace {
     val meanLevels: DoubleArray
         get() = mean ?: DoubleArray(PetalLayout.FIELD_CELLS).also { mean = it }
 
+    private var kana: PetalKanaReader? = null
+
+    /** The kana reader and its scratch buffers (a few kilobytes). */
+    val kanaReader: PetalKanaReader
+        get() = kana ?: PetalKanaReader().also { kana = it }
+
     private var turns: PetalTurnReader? = null
 
     /** The turn reader and its carrier windows (about 2 MB once a capture has turn lanes to read). */

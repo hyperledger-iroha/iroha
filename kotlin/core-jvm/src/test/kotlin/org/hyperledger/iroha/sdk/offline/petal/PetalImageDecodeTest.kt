@@ -142,7 +142,7 @@ class PetalImageDecodeTest {
     @Test
     fun findsTheFourCornerBlossomsInACleanRender() {
         val encoder = PetalStreamEncoder(ByteArray(200) { 9 }, 1)
-        val luma = PetalTestSupport.renderLuma(encoder, 1, 512, 2)
+        val luma = PetalRenderer.renderSquare(encoder.cells(1), PetalRenderOptions(512, 2)).toLuma()
         val quad = assertNotNull(PetalLocator.locate(luma), "four finders")
         val expected = listOf(36.0 to 36.0, 476.0 to 36.0, 476.0 to 476.0, 36.0 to 476.0)
         quad.zip(expected).forEach { (finder, position) ->
@@ -241,7 +241,7 @@ class PetalImageDecodeTest {
 
     /** The 512-pixel render the reference locator tests use. */
     private fun locatorFrame(): PetalRgb =
-        PetalRenderer.render(PetalStreamEncoder(ByteArray(200) { 9 }, 1).cells(1), PetalRenderOptions(512, 2))
+        PetalRenderer.renderSquare(PetalStreamEncoder(ByteArray(200) { 9 }, 1).cells(1), PetalRenderOptions(512, 2))
 
     @Test
     fun aHiddenBlossomYieldsAnInferredCandidate() {
@@ -321,7 +321,7 @@ class PetalImageDecodeTest {
 
     private fun setup(frame: Int): Pair<PetalStreamEncoder, PetalRgb> {
         val encoder = PetalStreamEncoder(streamPayload, 2)
-        return encoder to PetalRenderer.render(encoder.cells(frame), PetalRenderOptions(768, 2))
+        return encoder to PetalRenderer.renderSquare(encoder.cells(frame), PetalRenderOptions(768, 2))
     }
 
     private fun assertAllLanes(decoded: PetalDecodedFrame, truth: PetalFrameLanes, name: String) {
@@ -943,7 +943,7 @@ class PetalImageDecodeTest {
 
     @Test
     fun findersAreSolidBlossomsAndCornersAreOtherwiseBlack() {
-        val image = PetalRenderer.render(cells(1), PetalRenderOptions(256, 2))
+        val image = PetalRenderer.renderSquare(cells(1), PetalRenderOptions(256, 2))
         val at = { x: Int, y: Int -> image.rgbAt(x, y) ushr 16 }
         val scale = 256.0 / 1024.0
         val fx = PetalLayout.finderCenterX(0) * scale
@@ -957,7 +957,7 @@ class PetalImageDecodeTest {
     @Test
     fun litPetalsAreDrawnInTheirColourAndDarkCellsShowTheBackdrop() {
         val frame = cells(2)
-        val image = PetalRenderer.render(frame, PetalRenderOptions(1024, 1))
+        val image = PetalRenderer.renderSquare(frame, PetalRenderOptions(1024, 1))
         val palette = PetalPalette.DEFAULT
         for (cell in 0 until PetalLayout.FIELD_CELLS) {
             val center = PetalLayout.cellCenter(cell)
@@ -976,7 +976,7 @@ class PetalImageDecodeTest {
     @Test
     fun litDotsAreDrawnAndUnlitSlotsAreBlack() {
         val frame = cells(3)
-        val image = PetalRenderer.render(frame, PetalRenderOptions(1024, 1))
+        val image = PetalRenderer.renderSquare(frame, PetalRenderOptions(1024, 1))
         var checked = 0
         for (ring in 0 until PetalLayout.RING_COUNT) {
             for (slot in 0 until PetalLayout.ringSlots(ring)) {
@@ -995,16 +995,17 @@ class PetalImageDecodeTest {
 
     @Test
     fun softwareRendersAreByteIdenticalToTheReference() {
-        // CRC-32C of the Rust reference `render` output for frames of a 700-byte stream (turned
-        // petals included).
+        // CRC-32C of the Rust reference `render` output (the whole card) for frames of a 700-byte
+        // stream (turned petals and katakana tiles included).
         val encoder = PetalStreamEncoder(PetalTestSupport.payload(700, 2), 2)
         val expected = listOf(
-            Triple(0, PetalRenderOptions(512, 2), 0xAE28_7F3E.toInt()),
-            Triple(1, PetalRenderOptions(300, 3), 0x6C85_D69E),
-            Triple(6, PetalRenderOptions(777, 4), 0xDED1_68E1.toInt()),
+            Triple(0, PetalRenderOptions(512, 2), 0xFBDF_7940.toInt()),
+            Triple(1, PetalRenderOptions(300, 3), 0xB52F_B2C1.toInt()),
+            Triple(6, PetalRenderOptions(777, 4), 0xCA8B_70B1.toInt()),
         )
         for ((frame, options, crc) in expected) {
             val rgb = PetalRenderer.render(encoder.cells(frame), options)
+            assertEquals(PetalRenderer.cardHeightPx(options.size), rgb.height)
             assertEquals(crc, PetalCrc32c.compute(rgb.data()), "frame $frame at ${options.size} px, ${options.supersample}x")
         }
     }
@@ -1018,7 +1019,7 @@ class PetalImageDecodeTest {
         assertEquals(PetalLayout.MASK.sumOf { row -> row.count { it == '#' } }, list.backdropCells.size)
         assertEquals(frame.petals().count { it }, list.petals.size)
         assertEquals(frame.dots().count { it }, list.dots.size)
-        val image = PetalRenderer.render(frame, PetalRenderOptions(1024, 1))
+        val image = PetalRenderer.renderSquare(frame, PetalRenderOptions(1024, 1))
         val palette = PetalPalette.DEFAULT
         for (dot in list.dots) assertEquals(palette.pink, image.rgbAt(dot.x.toInt(), dot.y.toInt()), "dot at ${dot.x},${dot.y}")
         for (disc in list.finderDiscs) assertEquals(palette.light, image.rgbAt(disc.x.toInt(), disc.y.toInt()))
@@ -1045,5 +1046,53 @@ class PetalImageDecodeTest {
         assertTrue(darkLight.size > 100)
         assertTrue(darkLight.count { image.rgbAt(PetalLayout.cellCenter(it)[0].toInt(), PetalLayout.cellCenter(it)[1].toInt()) == palette.backdrop } > 100)
         assertTrue(list.finderDiscs === PetalRenderer.drawList(cells(5)).finderDiscs, "shapes are shared between frames")
+        // the katakana tiles: every tile in order, with the cells' symbols, as the card shows them
+        assertEquals(PetalLayout.KANA_TILE_COUNT, list.kanaTiles.size)
+        val card = PetalRenderer.render(frame, PetalRenderOptions(1024, 1))
+        val top = PetalLayout.SQUARE_TOP.toInt()
+        for ((index, tile) in list.kanaTiles.withIndex()) {
+            assertEquals(index, tile.tile)
+            assertEquals(frame.kanaGlyph(index), tile.glyph)
+            assertEquals(frame.isKanaLight(index), tile.light)
+            // the pixel at the tile centre is the tile's fill or its glyph
+            val u = Math.floor(tile.x + 12.5) + 0.5 - tile.x
+            val v = Math.floor(tile.y + 12.5) + 0.5 - tile.y
+            val expected = when {
+                PetalLayout.kanaInked(tile.glyph, u, v) -> list.glyphColor(tile)
+                tile.light -> palette.light
+                else -> palette.background
+            }
+            assertEquals(expected, card.rgbAt(Math.floor(tile.x + 12.5).toInt(), Math.floor(tile.y + 12.5).toInt() + top), "tile $index")
+        }
+    }
+
+    @Test
+    fun katakanaTilesShowTheirPolarityAndGlyph() {
+        val symbols = cells(4)
+        val glyphs = ByteArray(PetalLayout.KANA_TILE_COUNT) { (it % 16).toByte() }
+        val light = BooleanArray(PetalLayout.KANA_TILE_COUNT) { it % 3 != 0 }
+        val frame = PetalFrameCells.of(symbols.dots(), symbols.petals(), symbols.turns(), glyphs, light)
+        val image = PetalRenderer.render(frame, PetalRenderOptions(1024, 1))
+        assertEquals(1668, image.height)
+        val palette = PetalPalette.DEFAULT
+        for ((index, tile) in PetalLayout.kanaTiles().withIndex()) {
+            // the pixel centres of the tile's square, against the definition
+            val x0 = Math.ceil(tile.x).toInt()
+            val y0 = Math.ceil(tile.y + PetalLayout.SQUARE_TOP).toInt()
+            for ((dx, dy) in listOf(3 to 3, 12 to 12, 8 to 17, 20 to 6)) {
+                val px = x0 + dx
+                val py = y0 + dy
+                val u = px + 0.5 - tile.x
+                val v = py + 0.5 - PetalLayout.SQUARE_TOP - tile.y
+                val inked = PetalLayout.kanaInked(glyphs[index].toInt(), u, v)
+                val expected = when {
+                    inked && light[index] -> palette.ink
+                    light[index] -> palette.light
+                    inked -> palette.pink
+                    else -> palette.background
+                }
+                assertEquals(expected, image.rgbAt(px, py), "tile $index at ($dx, $dy)")
+            }
+        }
     }
 }

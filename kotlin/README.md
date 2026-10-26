@@ -739,16 +739,23 @@ newly signed Load transaction with that identity is rejected.
 
 Petal Stream (`org.hyperledger.iroha.sdk.offline.petal`) is the animated
 "streaming QR" used to hand an offline payload such as an `IPM1` peer message
-from one screen to a phone camera. Each square frame (format 3) shows four
-sakura-blossom finders, a field of 3,376 petals on 34 concentric bands cut into
-four sectors (field lanes `F0`–`F3`, one bit per petal; petals inside the SORA
-`天` are drawn light over a faint `天`, the others pink) and three dotted rings
-(lane `D`). On top of each field lane, the first 360 of its lit petals (in a
-fixed shuffled order) are turned by 0°, 45°, 90° or 135° about their centres:
-two more bits each, one turn lane per sector (`T0`–`T3`) carrying four atoms
-whose check binds them to their field lane's header. Every lane is one whitened
-GF(256) Reed–Solomon codeword carrying fountain-coded 16-byte atoms, and every
-fourth frame's lane `D` carries the stream beacon, so any readable lane of any
+from one screen to a phone camera. Each frame (format 5) is a portrait card of
+1024 × 1668 design units: a square with a band of 306 katakana tiles above and
+below it. The square shows four sakura-blossom finders, a field of 3,376 petals
+on 34 concentric bands cut into four sectors (field lanes `F0`–`F3`, one bit per
+petal; petals inside the SORA `天` are drawn light over a faint `天`, the others
+pink) and three dotted rings (lane `D`). On top of each field lane, the first
+360 of its lit petals (in a fixed shuffled order) are turned by 0°, 45°, 90° or
+135° about their centres: two more bits each, one turn lane per sector
+(`T0`–`T3`) carrying four atoms whose check binds them to their field lane's
+header. Eight tiles of each band are pilots; each of the other 298 shows one bit
+in its polarity (a light tile with its katakana in ink, or a dark one with it in
+pink: lanes `P0`, `P1`, one atom each) and four in its katakana (one of
+イロハニヘトワカレムノケアヒスン: lanes `K0`, `K1`, seven atoms each), bound by a
+CRC-32C to the stream tag, the frame and the lane: up to 53 atoms a frame. Every
+lane is one whitened GF(256) Reed–Solomon codeword carrying fountain-coded
+16-byte atoms, and every fourth frame's lane `D` carries the stream beacon
+(version `0x50`; formats 3, 2 and 1 are refused), so any readable lane of any
 frame helps and lost frames only cost time. The Kotlin port is pure JVM in
 `core-jvm` and follows the normative Rust crate `crates/iroha_petal`; encoding
 and rendering are bit-identical to it.
@@ -759,7 +766,7 @@ val encoder = PetalStreamEncoder(payload, kind)
 petalStreamView.setStream(encoder)           // client-android View, 12 fps by default
 petalStreamView.start()
 val list = PetalDrawList.of(encoder.cells(n)) // vector shapes for other canvases
-val rgb = PetalRenderer.render(encoder.cells(n), PetalRenderOptions(1024, 3))
+val rgb = PetalRenderer.render(encoder.cells(n), PetalRenderOptions(1024, 3)) // the card, 1668 px tall
 
 // Receiver: camera luma planes into one session; the payload arrives once.
 val session = PetalScanSession()
@@ -807,29 +814,49 @@ lanes of a capture by the digits of their field lanes, and `stats().turnTries`
 and `stats().turnLanes` count the tries and the lanes read. `PetalTurns.observedTurns` reports the fitted
 blur and every carrier's decided turn for diagnostics, and
 `PetalFrameCells.turn`, `withTurns` and `turnWord` expose the turns of a frame.
-In the reference simulation format 3 moves a 12 KB Payment in 1.65 s at the
-default 12 fps on a sharp 720p camera and 1.8 s on an older one (3.0 s where the
-camera is too soft for the turns; animated QR takes 4.3 s at 12 fps and 6.4 s
-at its 8 fps). On a desktop JVM the turn reader takes a few milliseconds per
-capture, less than the reference reader on the same machine, and about a third
-of that when it finds the camera too soft; see `specs/petal_stream.md` §8 for
-the phone measurements of the field decode.
+The bands are read from every capture whose square decoded
+(`PetalKana.readKana`): the square's pose, extended beyond the square, places
+every tile; each band's pilots are found by a small search around their places,
+an affine correction fitted to their offsets moves every tile, and the pilots
+pick the blur of the glyph templates and the levels that tell light tiles from
+dark ones. Each data tile then takes the polarity its level shows and the
+katakana whose template correlates best, and a lane passes when its check
+matches the square's frame or the frame before or after it (a rolling shutter
+can show a band of a neighbouring frame). The session reads each band once per
+shown frame, with its own back-off, and the bands go first: a capture whose
+bands read a kana lane tries no turn lane, and that shown frame's turn lanes
+wait for its next capture. `outcome.kana` names the kana lanes of a capture
+(`P0K0P1K1` for all four), `stats().kanaTries` and `stats().kanaLanes` count
+the tries and the lanes read, and `PetalKana.observeBand` reports every tile's
+decision. `PetalFrameCells.kanaGlyph`, `isKanaLight` and `withKana` expose the
+tiles of a frame.
+On a Pixel 6 held to its four Cortex-A55 cores, decoding simulated 720p
+captures, a tracked capture costs about 14 ms, the turn lanes about 75 ms and
+both bands about 36 ms. Read on one capture, turns and bands together took
+longer than a frame is shown at 12 fps, and the session decoded only six camera
+frames a second; with the bands first it decodes 14–19, and a 12 KB Payment
+shown upright at 12 fps arrives in 1.7–1.9 s on a sharp camera (format 3:
+1.8 s), 1.9–2.1 s on an older one (2.5 s) and 1.8–1.9 s on one too soft for the
+turns (3.1 s). In the reference simulation it takes 1.2, 1.25 and 1.75 s where
+the decoder keeps up with every camera frame; see `specs/petal_stream.md` §8.
 `PetalStreamAssembler` and `PetalScanSession` bound pending atoms, payload
 size (64 KiB by default) and stream lifetime (30 s idle, 180 s absolute), and
 deliver a payload only after its CRC-32C matches the beacon. `client-android`
-adds `PetalStreamView`, `PetalCanvasRenderer` (one path per colour, every lit
-petal antialiased, turned and notched: the notch tells a petal from one turned
-by half a turn) and the dependency-free `PetalLumaAdapter` (CameraX
+adds `PetalStreamView` (the portrait card, as large as the view allows),
+`PetalCanvasRenderer` (one path per colour, every lit petal antialiased, turned
+and notched: the notch tells a petal from one turned by half a turn; the tiles
+rounded and their katakana stroked with round caps) and the dependency-free
+`PetalLumaAdapter` (CameraX
 `ImageAnalysis`, Camera2 `ImageReader` and Camera1 NV21 previews); they use
 API 19 or older platform calls.
 
-The tests check every section of `../fixtures/petal/petal_stream_v3.json`
-(carrier orders, turn whitening, turn atom ids and the turn reader's template
-probes included), decode the golden camera captures of
-`../fixtures/petal/petal_captures_v3.json` with exactly the lanes, turn lanes,
-inferred corners, poses and Reed–Solomon corrections the reference reads, track
-its golden frame pairs, recover the missing lanes of its noisy merge set, and
-refuse lanes from mixed-frame captures:
+The tests check every section of `../fixtures/petal/petal_stream_v5.json`
+(carrier orders, the katakana tiles and glyphs, turn and kana whitening, atom
+ids and both readers' template probes included), decode the golden camera
+captures of `../fixtures/petal/petal_captures_v5.json` with exactly the lanes,
+turn lanes, kana lanes, inferred corners, poses and Reed–Solomon corrections the
+reference reads, track its golden frame pairs, recover the missing lanes of its
+noisy merge set, and refuse lanes from mixed-frame captures:
 
 ```bash
 ./gradlew :core-jvm:test --tests '*Petal*' --console=plain

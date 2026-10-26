@@ -407,9 +407,9 @@ class PetalFountainStreamTest {
         assertEquals(encoder.meta, beacon.meta)
         assertEquals(512, beacon.header.frame)
         assertNull(PetalStream.parseDLane(d.copyOf(11)))
-        assertEquals(0x30, d[3].toInt())
-        // the retired formats 1 (katakana tiles) and 2 (unturned petals) are refused
-        for (retired in intArrayOf(0x10, 0x20)) {
+        assertEquals(0x50, d[3].toInt())
+        // the retired formats 1 (katakana tiles), 2 (unturned petals) and 3 (no bands) are refused
+        for (retired in intArrayOf(0x10, 0x20, 0x30)) {
             val bad = d.copyOf()
             bad[3] = retired.toByte()
             assertNull(PetalStream.parseDLane(bad))

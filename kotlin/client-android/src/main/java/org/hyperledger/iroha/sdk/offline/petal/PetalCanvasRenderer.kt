@@ -9,20 +9,48 @@ import android.graphics.RectF
 /**
  * Draws a [PetalDrawList] onto an [android.graphics.Canvas].
  *
- * The frame is painted into the square `(left, top, left + size, top + size)`
- * in the order [PetalDrawList] documents: background, finder blossoms (discs
- * then petal notches), the faint `天` backdrop clipped to its disc, the lit
- * petals, then the lit ring dots. Every petal is drawn antialiased with its
- * notch, along its axis (its outward direction plus its turn): the notch tells a
- * petal from one turned by half a turn, and the turn reader's templates include
- * it. Each colour is one path draw: the finder and backdrop paths and the
- * notched unit petal are built once, and a frame only gathers the lit petals
- * (the unit petal turned and moved into place) and dots into reused paths, so
- * drawing allocates nothing. Uses API 19 or older graphics calls (`Path.op` for
- * the clipped backdrop). Not thread-safe: draw from the UI (or one render) thread.
+ * The card is painted into the rectangle of `width` pixels from `(left, top)`
+ * and [cardHeight] of it tall, in the order [PetalDrawList] documents:
+ * background, finder blossoms (discs then petal notches), the faint `天`
+ * backdrop clipped to its disc, the lit petals, the lit ring dots, then the
+ * katakana tiles of the bands above and below the square. Every petal is drawn
+ * antialiased with its notch, along its axis (its outward direction plus its
+ * turn): the notch tells a petal from one turned by half a turn, and the turn
+ * reader's templates include it. Each colour is one path draw: the finder and
+ * backdrop paths, the notched unit petal and the sixteen glyphs are built once,
+ * and a frame only gathers the lit petals (the unit petal turned and moved into
+ * place), dots, light tiles and glyphs into reused paths, so drawing allocates
+ * nothing. Uses API 19 or older graphics calls (`Path.op` for the clipped
+ * backdrop). Not thread-safe: draw from the UI (or one render) thread.
  */
 class PetalCanvasRenderer {
     private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+
+    private val stroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = PetalDrawList.KANA_STROKE_WIDTH.toFloat()
+        strokeCap = Paint.Cap.ROUND
+        strokeJoin = Paint.Join.ROUND
+    }
+
+    /** Every glyph's strokes in tile-local units, built once. */
+    private val glyphs = Array(PetalGlyphs.GLYPH_COUNT) { glyph ->
+        Path().apply {
+            for (polyline in PetalDrawList.kanaGlyphStrokes(glyph)) {
+                moveTo(polyline[0].toFloat(), polyline[1].toFloat())
+                var at = 2
+                while (at + 1 < polyline.size) {
+                    lineTo(polyline[at].toFloat(), polyline[at + 1].toFloat())
+                    at += 2
+                }
+            }
+        }
+    }
+
+    private val lightTiles = Path()
+    private val inkGlyphs = Path()
+    private val pinkGlyphs = Path()
+    private val tileRect = RectF()
 
     private val finderDiscs = Path()
     private val finderNotches = Path()
@@ -46,17 +74,19 @@ class PetalCanvasRenderer {
         backdropClip.addCircle(center, center, PetalDrawList.BACKDROP_RADIUS.toFloat(), Path.Direction.CW)
     }
 
-    /** Paints [drawList] into the square of side [size] pixels at `(left, top)`. */
-    fun draw(canvas: Canvas, drawList: PetalDrawList, left: Float, top: Float, size: Float) {
+    /** Paints [drawList] into the card [width] pixels wide (and [cardHeight] of it tall) at `(left, top)`. */
+    fun draw(canvas: Canvas, drawList: PetalDrawList, left: Float, top: Float, width: Float) {
         prepareShapes(drawList)
         val palette = drawList.palette
         val outer = canvas.save()
         canvas.translate(left, top)
-        val scale = size / PetalDrawList.CANVAS.toFloat()
+        val scale = width / PetalDrawList.CANVAS.toFloat()
         canvas.scale(scale, scale)
         val side = PetalDrawList.CANVAS.toFloat()
         fill.color = opaque(palette.background)
-        canvas.drawRect(0f, 0f, side, side, fill)
+        canvas.drawRect(0f, 0f, side, PetalDrawList.CARD_HEIGHT.toFloat(), fill)
+        // everything else is in square coordinates
+        canvas.translate(0f, PetalDrawList.SQUARE_TOP.toFloat())
 
         fill.color = opaque(palette.light)
         canvas.drawPath(finderDiscs, fill)
@@ -89,6 +119,30 @@ class PetalCanvasRenderer {
         dots.rewind()
         for (dot in drawList.dots) dots.addCircle(dot.x.toFloat(), dot.y.toFloat(), dot.radius.toFloat(), Path.Direction.CW)
         canvas.drawPath(dots, fill)
+
+        // the katakana tiles: light tiles filled, then every glyph stroked in its tile's ink
+        lightTiles.rewind()
+        inkGlyphs.rewind()
+        pinkGlyphs.rewind()
+        val tileSide = PetalDrawList.KANA_TILE.toFloat()
+        val corner = PetalDrawList.KANA_CORNER.toFloat()
+        for (tile in drawList.kanaTiles) {
+            val x = tile.x.toFloat()
+            val y = tile.y.toFloat()
+            if (tile.light) {
+                tileRect.set(x, y, x + tileSide, y + tileSide)
+                lightTiles.addRoundRect(tileRect, corner, corner, Path.Direction.CW)
+                inkGlyphs.addPath(glyphs[tile.glyph], x, y)
+            } else {
+                pinkGlyphs.addPath(glyphs[tile.glyph], x, y)
+            }
+        }
+        fill.color = opaque(palette.light)
+        canvas.drawPath(lightTiles, fill)
+        stroke.color = opaque(palette.ink)
+        canvas.drawPath(inkGlyphs, stroke)
+        stroke.color = opaque(palette.pink)
+        canvas.drawPath(pinkGlyphs, stroke)
         canvas.restoreToCount(outer)
     }
 
@@ -117,8 +171,12 @@ class PetalCanvasRenderer {
         }
     }
 
-    private companion object {
-        fun opaque(rgb: Int): Int = rgb or 0xFF00_0000.toInt()
+    companion object {
+        /** Height of a card drawn [width] pixels wide. */
+        @JvmStatic
+        fun cardHeight(width: Float): Float = width * (PetalDrawList.CARD_HEIGHT / PetalDrawList.CANVAS).toFloat()
+
+        private fun opaque(rgb: Int): Int = rgb or 0xFF00_0000.toInt()
 
         /**
          * The petal of `specs/petal_stream.md` §2.3 in its own frame, built from two arcs so that
@@ -130,7 +188,7 @@ class PetalCanvasRenderer {
          * arc back inside the ellipse. Arc angles of an oval are parametric: the point at angle `t`
          * is `(a cos t, b sin t)`.
          */
-        fun notchedPetal(): Path {
+        private fun notchedPetal(): Path {
             val a = PetalDrawList.PETAL_HALF_LENGTH
             val b = PetalDrawList.PETAL_HALF_WIDTH
             val d = PetalDrawList.PETAL_NOTCH_DISTANCE

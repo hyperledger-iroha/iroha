@@ -12,6 +12,9 @@ package org.hyperledger.iroha.sdk.offline.petal
  * | `D` dots | 240 ring slots × 1 bit | 30 B | 19 B | 11 B |
  * | `F0`–`F3` petals | 840 field cells of one sector × 1 bit | 105 B | 83 B | 22 B |
  * | `T0`–`T3` turns | 360 lit petals of one sector × 2 bits | 90 B | 68 B | 22 B |
+ *
+ * The katakana tiles of the bands above and below the square carry four more lanes (`P0`, `K0`,
+ * `P1`, `K1`, see [PetalKana]).
  */
 enum class PetalLane(
     /** The letter that names the lane in reports: `D`, or the sector digit `0`–`3`. */
@@ -195,7 +198,8 @@ object PetalLanes {
 
 /**
  * Every cell of one frame: what a renderer draws and a decoder samples: which ring slots and
- * petals are lit, and how every petal is turned (see [PetalTurns]).
+ * petals are lit, how every petal is turned (see [PetalTurns]), and what every katakana tile of
+ * the card's bands shows (see [PetalKana]).
  *
  * Immutable: arrays are copied on construction and access.
  */
@@ -203,7 +207,62 @@ class PetalFrameCells internal constructor(
     private val dotCells: BooleanArray,
     private val petalCells: BooleanArray,
     private val turnCells: ByteArray,
+    private val kanaGlyphCells: ByteArray,
+    private val kanaLightCells: BooleanArray,
 ) {
+    /** The glyph (`0..15`, see [PetalGlyphs]) katakana tile [tile] shows ([PetalLayout.kanaTiles] order). */
+    fun kanaGlyph(tile: Int): Int = kanaGlyphCells[tile].toInt()
+
+    /** Whether katakana tile [tile] is light (filled) rather than dark. */
+    fun isKanaLight(tile: Int): Boolean = kanaLightCells[tile]
+
+    /** The glyph of every katakana tile. */
+    fun kanaGlyphs(): ByteArray = kanaGlyphCells.copyOf()
+
+    /** Whether every katakana tile is light. */
+    fun kanaLight(): BooleanArray = kanaLightCells.copyOf()
+
+    internal val kanaGlyphView: ByteArray get() = kanaGlyphCells
+
+    internal val kanaLightView: BooleanArray get() = kanaLightCells
+
+    /**
+     * These cells with the data tiles of both bands showing the transmitted kana codewords
+     * [words] (four, in [PetalKanaLane.ALL] order: `P0`, `K0`, `P1`, `K1`); the pilots keep their
+     * fixed symbols.
+     */
+    fun withKana(words: List<ByteArray>): PetalFrameCells {
+        val glyphs = kanaGlyphCells.copyOf()
+        val light = kanaLightCells.copyOf()
+        setKana(glyphs, light, words)
+        return PetalFrameCells(dotCells, petalCells, turnCells, glyphs, light)
+    }
+
+    /** Packs the polarity codeword the data tiles of band [band] (`0..1`) show. */
+    fun kanaPolarityWord(band: Int): ByteArray {
+        require(band in 0 until PetalLayout.KANA_BANDS) { "band index out of range" }
+        val word = ByteArray(PetalKana.KANA_POLARITY_WORD)
+        val base = band * PetalKana.KANA_DATA_TILES
+        for (i in 0 until PetalKana.KANA_POLARITY_WORD * 8) {
+            if (kanaLightCells[PetalLayout.KANA_DATA_TILES[base + i]]) {
+                word[i / 8] = (word[i / 8].toInt() or (1 shl (7 - i % 8))).toByte()
+            }
+        }
+        return word
+    }
+
+    /** Packs the glyph codeword the data tiles of band [band] (`0..1`) show. */
+    fun kanaGlyphWord(band: Int): ByteArray {
+        require(band in 0 until PetalLayout.KANA_BANDS) { "band index out of range" }
+        val word = ByteArray(PetalKana.KANA_GLYPH_WORD)
+        val base = band * PetalKana.KANA_DATA_TILES
+        for (i in 0 until PetalKana.KANA_DATA_TILES) {
+            val nibble = kanaGlyphCells[PetalLayout.KANA_DATA_TILES[base + i]].toInt() and 0x0F
+            word[i / 2] = (word[i / 2].toInt() or (if (i % 2 == 0) nibble shl 4 else nibble)).toByte()
+        }
+        return word
+    }
+
     /** Whether flat ring slot [slot] is lit (gate dots included). */
     fun isDotLit(slot: Int): Boolean = dotCells[slot]
 
@@ -240,7 +299,7 @@ class PetalFrameCells internal constructor(
         }
         val turns = turnCells.copyOf()
         setTurns(petalCells, turns, words)
-        return PetalFrameCells(dotCells, petalCells, turns)
+        return PetalFrameCells(dotCells, petalCells, turns, kanaGlyphCells, kanaLightCells)
     }
 
     /**
@@ -283,31 +342,98 @@ class PetalFrameCells internal constructor(
 
     override fun equals(other: Any?): Boolean = other is PetalFrameCells &&
         dotCells.contentEquals(other.dotCells) && petalCells.contentEquals(other.petalCells) &&
-        turnCells.contentEquals(other.turnCells)
+        turnCells.contentEquals(other.turnCells) && kanaGlyphCells.contentEquals(other.kanaGlyphCells) &&
+        kanaLightCells.contentEquals(other.kanaLightCells)
 
-    override fun hashCode(): Int =
-        31 * (31 * dotCells.contentHashCode() + petalCells.contentHashCode()) + turnCells.contentHashCode()
+    override fun hashCode(): Int {
+        var hash = 31 * (31 * dotCells.contentHashCode() + petalCells.contentHashCode()) + turnCells.contentHashCode()
+        hash = 31 * hash + kanaGlyphCells.contentHashCode()
+        return 31 * hash + kanaLightCells.contentHashCode()
+    }
 
     companion object {
         /**
          * Builds cells from explicit values: [PetalLayout.TOTAL_SLOTS] dot states,
          * [PetalLayout.FIELD_CELLS] petal states and, optionally, as many turn positions (`0..3`;
-         * every petal unturned when omitted).
+         * every petal unturned when omitted) and the glyph (`0..15`) and polarity of every one of
+         * the [PetalLayout.KANA_TILE_COUNT] katakana tiles (when omitted, the pilots show their
+         * fixed symbols and every data tile is light with glyph 0).
          */
         @JvmStatic
         @JvmOverloads
-        fun of(dots: BooleanArray, petals: BooleanArray, turns: ByteArray? = null): PetalFrameCells {
+        fun of(
+            dots: BooleanArray,
+            petals: BooleanArray,
+            turns: ByteArray? = null,
+            kanaGlyphs: ByteArray? = null,
+            kanaLight: BooleanArray? = null,
+        ): PetalFrameCells {
             require(dots.size == PetalLayout.TOTAL_SLOTS) { "frame cells need ${PetalLayout.TOTAL_SLOTS} dots" }
             require(petals.size == PetalLayout.FIELD_CELLS) { "frame cells need ${PetalLayout.FIELD_CELLS} petals" }
             require(turns == null || (turns.size == PetalLayout.FIELD_CELLS && turns.all { it in 0 until PetalTurns.TURN_POSITIONS })) {
                 "frame cells need ${PetalLayout.FIELD_CELLS} turn positions of 0..3"
             }
-            return PetalFrameCells(dots.copyOf(), petals.copyOf(), turns?.copyOf() ?: ByteArray(PetalLayout.FIELD_CELLS))
+            require(
+                kanaGlyphs == null ||
+                    (kanaGlyphs.size == PetalLayout.KANA_TILE_COUNT && kanaGlyphs.all { it in 0 until PetalGlyphs.GLYPH_COUNT }),
+            ) { "frame cells need ${PetalLayout.KANA_TILE_COUNT} glyphs of 0..15" }
+            require(kanaLight == null || kanaLight.size == PetalLayout.KANA_TILE_COUNT) {
+                "frame cells need ${PetalLayout.KANA_TILE_COUNT} tile polarities"
+            }
+            val glyphs = ByteArray(PetalLayout.KANA_TILE_COUNT)
+            val light = BooleanArray(PetalLayout.KANA_TILE_COUNT)
+            pilotSymbols(glyphs, light)
+            return PetalFrameCells(
+                dots.copyOf(),
+                petals.copyOf(),
+                turns?.copyOf() ?: ByteArray(PetalLayout.FIELD_CELLS),
+                kanaGlyphs?.copyOf() ?: glyphs,
+                kanaLight?.copyOf() ?: light,
+            )
+        }
+
+        /** Every tile light with glyph 0, then the pilots' fixed symbols. */
+        internal fun pilotSymbols(glyphs: ByteArray, light: BooleanArray) {
+            java.util.Arrays.fill(glyphs, 0.toByte())
+            java.util.Arrays.fill(light, true)
+            for (tile in 0 until PetalLayout.KANA_TILE_COUNT) {
+                val pilot = PetalLayout.TILE_PILOT[tile]
+                if (pilot < 0) continue
+                glyphs[tile] = PetalLayout.KANA_PILOT_GLYPHS[pilot].toByte()
+                light[tile] = PetalLayout.KANA_PILOT_LIGHT[pilot]
+            }
+        }
+
+        /**
+         * Shows the transmitted kana codewords [words] (`P0`, `K0`, `P1`, `K1`) on the data tiles:
+         * data tile `i` of a band shows bit `i` of its polarity codeword (the last two tiles, beyond
+         * it, are light) and nibble `i` of its glyph codeword.
+         */
+        internal fun setKana(glyphs: ByteArray, light: BooleanArray, words: List<ByteArray>) {
+            require(words.size == PetalKanaLane.ALL.size && PetalKanaLane.ALL.all { words[it.ordinal].size == it.wordLength }) {
+                "kana lane codeword length mismatch"
+            }
+            for (band in 0 until PetalLayout.KANA_BANDS) {
+                val polarity = words[PetalKanaLane.of(band, false).ordinal]
+                val glyphWord = words[PetalKanaLane.of(band, true).ordinal]
+                val base = band * PetalKana.KANA_DATA_TILES
+                for (i in 0 until PetalKana.KANA_DATA_TILES) {
+                    val tile = PetalLayout.KANA_DATA_TILES[base + i]
+                    light[tile] = if (i < PetalKana.KANA_POLARITY_WORD * 8) {
+                        ((polarity[i / 8].toInt() ushr (7 - i % 8)) and 1) == 1
+                    } else {
+                        true
+                    }
+                    val byte = glyphWord[i / 2].toInt() and 0xFF
+                    glyphs[tile] = (if (i % 2 == 0) byte ushr 4 else byte and 0x0F).toByte()
+                }
+            }
         }
 
         /**
          * Builds the cells from the transmitted codewords of lane `D` and the four field lanes
-         * (sector 0 first), with every petal unturned (see [withTurns]).
+         * (sector 0 first), with every petal unturned (see [withTurns]) and only the pilots set
+         * among the katakana tiles (see [withKana]).
          */
         @JvmStatic
         fun fromWords(d: ByteArray, fields: List<ByteArray>): PetalFrameCells {
@@ -334,7 +460,10 @@ class PetalFrameCells internal constructor(
                     petals[PetalLayout.SECTOR_ORDER[base + bit]] = ((word[bit / 8].toInt() ushr (7 - bit % 8)) and 1) == 1
                 }
             }
-            return PetalFrameCells(dots, petals, ByteArray(PetalLayout.FIELD_CELLS))
+            val glyphs = ByteArray(PetalLayout.KANA_TILE_COUNT)
+            val light = BooleanArray(PetalLayout.KANA_TILE_COUNT)
+            pilotSymbols(glyphs, light)
+            return PetalFrameCells(dots, petals, ByteArray(PetalLayout.FIELD_CELLS), glyphs, light)
         }
 
         /**

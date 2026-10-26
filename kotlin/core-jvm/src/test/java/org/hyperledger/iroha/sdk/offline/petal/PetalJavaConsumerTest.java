@@ -44,6 +44,12 @@ final class PetalJavaConsumerTest {
       if (PetalStream.isBeaconFrame(frame)) {
         assertEquals(encoder.getMeta(), decoded.beacon().getMeta());
       }
+      // the katakana bands of the card carry four more lanes
+      final List<PetalKanaResult> kana =
+          PetalKana.readKana(luma, decoded, decoded.atomPackets().get(0).getHeader());
+      for (final PetalKanaLane lane : PetalKanaLane.ALL) {
+        assertArrayEquals(encoder.laneData(frame).kana(lane), kana.get(lane.ordinal()).getResult().getData());
+      }
       decoded.feed(assembler);
     }
     final PetalProgress progress = assembler.progress();
@@ -135,11 +141,15 @@ final class PetalJavaConsumerTest {
     assertEquals(4 * PetalTurns.TURN_CARRIERS, observed.getCarriers().size());
     assertEquals(Integer.MIN_VALUE, PetalTurns.TURN_ID_BASE);
     assertEquals(90, PetalTurns.TURN_WORD);
-    // a session reads each turn lane of a shown frame once
+    // a session reads a shown frame's bands on its first capture, its turn lanes on the next, each once
     final PetalScanSession session = new PetalScanSession();
-    assertEquals("0123", session.push(luma, 0L).getTurned());
-    assertEquals("", session.push(luma, 33L).getTurned());
+    final PetalScanOutcome first = session.push(luma, 0L);
+    assertEquals("P0K0P1K1", first.getKana());
+    assertEquals("", first.getTurned());
+    assertEquals("0123", session.push(luma, 33L).getTurned());
+    assertEquals("", session.push(luma, 66L).getTurned());
     assertEquals(4L, session.stats().getTurnLanes());
+    assertEquals(4L, session.stats().getKanaLanes());
   }
 
   @Test

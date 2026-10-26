@@ -51,21 +51,25 @@ class PetalScanStats internal constructor(
     val turnTries: Long,
     /** Turn lanes read. */
     val turnLanes: Long,
+    /** Bands tried (each at most once per shown frame). */
+    val kanaTries: Long,
+    /** Kana lanes read (up to four per shown frame). */
+    val kanaLanes: Long,
 ) {
     override fun equals(other: Any?): Boolean = other is PetalScanStats && frames == other.frames &&
         located == other.located && readable == other.readable && laneD == other.laneD &&
         fieldLanes == other.fieldLanes && tracked == other.tracked && inferred == other.inferred &&
         merges == other.merges && mergedLanes == other.mergedLanes && turnTries == other.turnTries &&
-        turnLanes == other.turnLanes
+        turnLanes == other.turnLanes && kanaTries == other.kanaTries && kanaLanes == other.kanaLanes
 
     override fun hashCode(): Int =
         (31 * frames + located + 7 * readable + 11 * laneD + 13 * fieldLanes + 17 * tracked + 19 * inferred +
-            23 * merges + 29 * mergedLanes + 41 * turnTries + 37 * turnLanes).hashCode()
+            23 * merges + 29 * mergedLanes + 41 * turnTries + 37 * turnLanes + 43 * kanaTries + 47 * kanaLanes).hashCode()
 
     override fun toString(): String =
         "PetalScanStats(frames=$frames, located=$located, readable=$readable, laneD=$laneD, fieldLanes=$fieldLanes, " +
             "tracked=$tracked, inferred=$inferred, merges=$merges, mergedLanes=$mergedLanes, " +
-            "turnTries=$turnTries, turnLanes=$turnLanes)"
+            "turnTries=$turnTries, turnLanes=$turnLanes, kanaTries=$kanaTries, kanaLanes=$kanaLanes)"
 }
 
 /** The result of offering one camera frame. */
@@ -81,6 +85,8 @@ class PetalScanOutcome internal constructor(
     val merged: String,
     /** Turn lanes read from this capture, as the sector digits of the field lanes they ride on. */
     val turned: String,
+    /** Kana lanes read from this capture, as their names (`P0`, `K0`, `P1`, `K1`). */
+    val kana: String,
     /** Receive progress after this frame. */
     val progress: PetalProgress,
     /** The finished payload, delivered exactly once. */
@@ -114,6 +120,19 @@ class PetalScanOutcome internal constructor(
  * passes over the next captures that would try one, one more after every such try, at most
  * [TURN_BACKOFF], until a try reads a lane again.
  *
+ * The katakana bands above and below the square are read the same way ([PetalKana.readKana]):
+ * each band once per shown frame (the last [KANA_MEMORY] tried are remembered), with its own
+ * back-off of at most [KANA_BACKOFF] captures after tries that read no kana lane (a camera that does
+ * not see the bands, or too blurred for their glyphs and polarity).
+ *
+ * The bands go first, and a capture whose bands read a kana lane tries no turn lane: the turn lanes
+ * of that shown frame wait for its next capture. On a slow phone core a turn try costs five tracked
+ * decodes and a band try one, so reading both on one capture overran the time a frame is shown at
+ * 12 fps and the session missed the next shown frames. A decoder that sees each shown frame two or
+ * three times still reads both; one that sees it once reads the cheaper bands and every frame's
+ * field lanes. A band try that reads nothing (bands out of view, too blurred, or a torn capture)
+ * leaves the turn lanes to the same capture.
+ *
  * Thread-safe: calls are serialised, so a camera analyzer thread may push while a UI thread reads.
  */
 class PetalScanSession @JvmOverloads constructor(
@@ -138,6 +157,8 @@ class PetalScanSession @JvmOverloads constructor(
     private var mergedLanes = 0L
     private var turnTries = 0L
     private var turnLanes = 0L
+    private var kanaTries = 0L
+    private var kanaLanes = 0L
 
     /** Captures of one shown frame; bounded by [MERGE_CAPTURES]. */
     internal class Held(val shown: PetalLaneHeader) {
@@ -151,7 +172,10 @@ class PetalScanSession @JvmOverloads constructor(
 
     internal val held = ArrayDeque<Held>()
 
-    /** A turn lane tried: the header of the field lane it rides on and its sector. */
+    /**
+     * A turn lane tried (the header of the field lane it rides on and its sector), or a band tried
+     * (the shown frame and the band, in [sector]).
+     */
     internal class Tried(val header: PetalLaneHeader, val sector: Int)
 
     /** The turn lanes tried last, oldest first; bounded by [TURN_MEMORY]. */
@@ -168,10 +192,24 @@ class PetalScanSession @JvmOverloads constructor(
     private val turnHeaders = arrayOfNulls<PetalLaneHeader>(PetalLayout.SECTORS)
     private val turnResults = arrayOfNulls<PetalLaneResult>(PetalLayout.SECTORS)
 
+    /** The bands tried last as `(shown frame, band)`, oldest first; bounded by [KANA_MEMORY]. */
+    internal val kanaTried = ArrayDeque<Tried>()
+
+    /** Tries in a row that read no kana lane (at most [KANA_BACKOFF]). */
+    internal var kanaMisses = 0
+        private set
+
+    /** Captures still to pass over before the next band try. */
+    internal var kanaWait = 0
+
+    private val kanaSkip = BooleanArray(PetalLayout.KANA_BANDS)
+    private val kanaResults = arrayOfNulls<PetalKanaResult>(PetalKanaLane.ALL.size)
+
     /** Diagnostic counters. */
     @Synchronized
     fun stats(): PetalScanStats = PetalScanStats(
         frames, located, readable, laneD, fieldLanes, tracked, inferred, merges, mergedLanes, turnTries, turnLanes,
+        kanaTries, kanaLanes,
     )
 
     /** Current progress. */
@@ -189,11 +227,14 @@ class PetalScanSession @JvmOverloads constructor(
         forgetTurns()
     }
 
-    /** Forgets the turn lanes tried and any back-off. */
+    /** Forgets the turn lanes and bands tried and any back-off. */
     private fun forgetTurns() {
         tried.clear()
         turnMisses = 0
         turnWait = 0
+        kanaTried.clear()
+        kanaMisses = 0
+        kanaWait = 0
     }
 
     /** Offers one camera luma plane captured at monotonic time [nowMillis] (non-negative). */
@@ -224,7 +265,9 @@ class PetalScanSession @JvmOverloads constructor(
         }
         val lanes = if (frame != null) absorb(frame) else ""
         val merged = if (frame != null) merge(image, frame) else ""
-        val turnedLanes = if (frame != null) turn(image, frame) else ""
+        // a capture whose bands read a lane tries no turn lane (see the class docs)
+        val kanaRead = if (frame != null) kana(image, frame) else ""
+        val turnedLanes = if (frame != null && kanaRead.isEmpty()) turn(image, frame) else ""
         if (result.error != PetalDecodeError.NO_FINDERS && result.error != PetalDecodeError.UNSUPPORTED_IMAGE) {
             located += 1
         }
@@ -234,7 +277,48 @@ class PetalScanSession @JvmOverloads constructor(
             if (startedMillis == null) startedMillis = nowMillis
         }
         lastRank = progress.rank
-        return PetalScanOutcome(result.error, lanes, merged, turnedLanes, progress, assembler.takeCompleted())
+        return PetalScanOutcome(result.error, lanes, merged, turnedLanes, kanaRead, progress, assembler.takeCompleted())
+    }
+
+    /**
+     * Tries the bands not yet tried for this capture's shown frame and offers the atoms of the kana
+     * lanes they read; after tries that read nothing it passes over the next captures that would
+     * try one (see the class docs).
+     */
+    internal fun kana(image: PetalLuma, frame: PetalDecodedFrame): String {
+        val header = shownFrame(frame) ?: return ""
+        var all = true
+        for (band in 0 until PetalLayout.KANA_BANDS) {
+            kanaSkip[band] = kanaTried.any { it.sector == band && it.header == header }
+            if (!kanaSkip[band]) all = false
+        }
+        if (all) return ""
+        if (kanaWait > 0) {
+            kanaWait -= 1
+            return ""
+        }
+        for (band in 0 until PetalLayout.KANA_BANDS) {
+            if (kanaSkip[band]) continue
+            if (kanaTried.size == KANA_MEMORY) kanaTried.removeFirst()
+            kanaTried.addLast(Tried(header, band))
+            kanaTries += 1
+        }
+        workspace.kanaReader.read(image, frame, header, kanaSkip, kanaResults)
+        val read = StringBuilder(2 * PetalKanaLane.ALL.size)
+        for (lane in PetalKanaLane.ALL) {
+            val result = kanaResults[lane.ordinal] ?: continue
+            val packet = PetalKana.kanaPacket(result.header, lane, result.result.dataView) ?: continue
+            assembler.pushAtoms(packet)
+            kanaLanes += 1
+            read.append(lane.name)
+        }
+        if (read.isEmpty()) {
+            kanaMisses = minOf(kanaMisses + 1, KANA_BACKOFF)
+            kanaWait = kanaMisses
+        } else {
+            kanaMisses = 0
+        }
+        return read.toString()
     }
 
     internal fun absorb(frame: PetalDecodedFrame): String {
@@ -374,5 +458,11 @@ class PetalScanSession @JvmOverloads constructor(
 
         /** Most captures passed over after tries that read no turn lane. */
         const val TURN_BACKOFF = 8
+
+        /** Bands remembered as tried (the two of each of the last [MERGE_WINDOW] shown frames). */
+        const val KANA_MEMORY = MERGE_WINDOW * PetalLayout.KANA_BANDS
+
+        /** Most captures passed over after tries that read no kana lane. */
+        const val KANA_BACKOFF = 8
     }
 }

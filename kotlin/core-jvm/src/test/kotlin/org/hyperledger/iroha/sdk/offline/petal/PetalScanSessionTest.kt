@@ -15,6 +15,10 @@ class PetalScanSessionTest {
     private fun render(encoder: PetalStreamEncoder, frame: Int): PetalRgb =
         PetalRenderer.render(encoder.cells(frame), PetalRenderOptions(512, 2))
 
+    /** The bare square of frame [frame], 512 pixels on a side, for tests that paint over it. */
+    private fun square(encoder: PetalStreamEncoder, frame: Int): PetalRgb =
+        PetalRenderer.renderSquare(encoder.cells(frame), PetalRenderOptions(512, 2))
+
     private fun camera(rotationDeg: Double): PetalCaptureConfig = PetalCameraSimulator.fitToFrame(
         PetalCaptureConfig.modern().copy(width = 640, height = 480, rotationDeg = rotationDeg),
         4.0,
@@ -81,9 +85,10 @@ class PetalScanSessionTest {
         assertEquals("0123", next.turned)
         assertEquals(8L, session.stats().turnTries)
         assertEquals(8L, session.stats().turnLanes)
-        // the memory holds the four turn lanes of each of the last six shown frames
+        // the memory holds the four turn lanes of each of the last six shown frames (bare squares:
+        // with no band to read, every capture tries its turn lanes)
         assertEquals(8, session.tried.size)
-        for (frame in 7 until 13) session.push(render(encoder, frame).toLuma(), 83L + 33 * (frame - 6))
+        for (frame in 7 until 13) session.push(square(encoder, frame).toLuma(), 83L + 33 * (frame - 6))
         assertEquals(PetalScanSession.TURN_MEMORY, session.tried.size)
         assertTrue(session.tried.all { it.header.frame >= 7 })
         session.reset()
@@ -123,6 +128,44 @@ class PetalScanSessionTest {
     }
 
     @Test
+    fun anUprightCameraReadsBothBandsOncePerShownFrame() {
+        val encoder = PetalStreamEncoder(payload(3000), 2)
+        // a phone held upright delivers landscape frames with the card turned a quarter
+        val config = PetalCameraSimulator.fitToFrame(PetalCaptureConfig.modern().copy(rotationDeg = 92.0), 4.0)
+        fun card(frame: Int): PetalRgb = PetalRenderer.render(encoder.cells(frame), PetalRenderOptions(768, 2))
+        val session = PetalScanSession()
+        val first = session.push(PetalCameraSimulator.capture(card(1), config), 0)
+        assertEquals("P0K0P1K1", first.kana)
+        // a second capture of the same shown frame tries no band again
+        val again = session.push(PetalCameraSimulator.capture(card(1), config), 33)
+        assertEquals("", again.kana)
+        val next = session.push(PetalCameraSimulator.capture(card(2), config), 83)
+        assertEquals("P0K0P1K1", next.kana)
+        val stats = session.stats()
+        assertEquals(4L to 8L, stats.kanaTries to stats.kanaLanes)
+    }
+
+    @Test
+    fun bandTriesThatReadNothingBackOff() {
+        val encoder = PetalStreamEncoder(payload(3000), 2)
+        // bare squares: every field lane reads, no band is in view
+        val config = camera(12.0)
+        val session = PetalScanSession()
+        val triedAt = ArrayList<Int>()
+        for (frame in 1..30) {
+            val before = session.stats().kanaTries
+            val outcome = session.push(PetalCameraSimulator.capture(square(encoder, frame), config.copy(seed = frame.toLong())), frame * 83L)
+            assertTrue(outcome.lanes.endsWith("0123"), "frame $frame")
+            assertEquals("", outcome.kana)
+            if (session.stats().kanaTries > before) triedAt += frame
+        }
+        // after the n-th try that reads nothing, the next min(n, 8) captures that would try are
+        // passed over; each try covers both bands
+        assertEquals(listOf(1, 3, 6, 10, 15, 21, 28), triedAt)
+        assertEquals(2L * triedAt.size, session.stats().kanaTries)
+    }
+
+    @Test
     fun idleSessionsForgetPartialStreams() {
         val encoder = PetalStreamEncoder(payload(12_000), 1)
         val session = PetalScanSession(PetalScanLimits(idleTimeoutMillis = 1_000))
@@ -138,7 +181,7 @@ class PetalScanSessionTest {
     @Test
     fun locatedCountsCodesThatWereSeenButCouldNotBeRead() {
         val encoder = PetalStreamEncoder(payload(100), 1)
-        val data = render(encoder, 1).data()
+        val data = square(encoder, 1).data()
         // keep only the four blossoms: finders are located, no lane can be read
         val scale = 512.0 / 1024.0
         for (y in 0 until 512) {
@@ -350,9 +393,9 @@ class PetalScanSessionTest {
         assertEquals("0123", session.merge(image, partial))
     }
 
-    /** Frame [frame] rendered at 512 pixels with the blossom of canonical corner [corner] painted over. */
+    /** Frame [frame]'s square rendered at 512 pixels with the blossom of canonical corner [corner] painted over. */
     private fun hiddenBlossom(encoder: PetalStreamEncoder, frame: Int, corner: Int): PetalLuma {
-        val rgb = render(encoder, frame)
+        val rgb = square(encoder, frame)
         val n = rgb.width
         val scale = n / 1024.0
         val reach = 75.0 * scale
@@ -371,7 +414,7 @@ class PetalScanSessionTest {
     fun inferredCornersAreCountedAndResetForgetsThePose() {
         val encoder = PetalStreamEncoder(payload(2000), 1)
         val session = PetalScanSession()
-        assertEquals("D0123", session.push(render(encoder, 0).toLuma(), 0).lanes)
+        assertEquals("D0123", session.push(square(encoder, 0).toLuma(), 0).lanes)
         // a thumb arrives over the bottom-right blossom: tracking infers it
         assertEquals("D0123", session.push(hiddenBlossom(encoder, 1, 2), 125).lanes)
         assertEquals(1L, session.stats().tracked)

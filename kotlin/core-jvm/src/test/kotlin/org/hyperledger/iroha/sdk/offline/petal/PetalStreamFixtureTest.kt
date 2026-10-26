@@ -7,8 +7,10 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.double
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.long
 import org.hyperledger.iroha.sdk.offline.petal.PetalTestSupport.array
 import org.hyperledger.iroha.sdk.offline.petal.PetalTestSupport.hexBytes
 import org.hyperledger.iroha.sdk.offline.petal.PetalTestSupport.longs
@@ -17,13 +19,16 @@ import org.hyperledger.iroha.sdk.offline.petal.PetalTestSupport.obj
 import org.hyperledger.iroha.sdk.offline.petal.PetalTestSupport.text
 import org.hyperledger.iroha.sdk.offline.petal.PetalTestSupport.u32
 
-/** Conformance with every section of the shared `fixtures/petal/petal_stream_v3.json`. */
+/** Conformance with every section of the shared `fixtures/petal/petal_stream_v5.json`. */
 class PetalStreamFixtureTest {
-    private val doc: JsonObject = PetalTestSupport.loadFixture("petal_stream_v3.json")
+    private val doc: JsonObject = PetalTestSupport.loadFixture("petal_stream_v5.json")
 
     /** One flag per field cell, cell 0 in the most significant bit of byte 0. */
-    private fun flags(bitmap: ByteArray): BooleanArray =
-        BooleanArray(PetalLayout.FIELD_CELLS) { cell -> ((bitmap[cell / 8].toInt() ushr (7 - cell % 8)) and 1) == 1 }
+    private fun flags(bitmap: ByteArray): BooleanArray = bits(bitmap, PetalLayout.FIELD_CELLS)
+
+    /** The first [count] flags of a bitmap, most significant bit first. */
+    private fun bits(bitmap: ByteArray, count: Int): BooleanArray =
+        BooleanArray(count) { i -> ((bitmap[i / 8].toInt() ushr (7 - i % 8)) and 1) == 1 }
 
     private fun JsonObject.real(key: String): Double = getValue(key).jsonPrimitive.double
 
@@ -31,8 +36,8 @@ class PetalStreamFixtureTest {
 
     @Test
     fun formatAndConstantsMatch() {
-        assertEquals(3L, doc.number("fixture_version"))
-        assertEquals("petal-stream-v3", doc.text("format"))
+        assertEquals(5L, doc.number("fixture_version"))
+        assertEquals("petal-stream-v5", doc.text("format"))
         val constants = doc.obj("constants")
         assertEquals(PetalLayout.CANVAS, constants.number("canvas").toDouble())
         assertEquals(PetalLanes.ATOM_LEN.toLong(), constants.number("atom_len"))
@@ -52,6 +57,35 @@ class PetalStreamFixtureTest {
         assertEquals(PetalTurns.TURN_PARITY.toLong(), constants.number("turn_parity"))
         assertEquals(PetalTurns.TURN_ATOMS.toLong(), constants.number("turn_atoms"))
         assertEquals(constants.number("turn_id_base"), u32(PetalTurns.TURN_ID_BASE))
+        for ((key, value) in listOf(
+            "card_height" to PetalLayout.CARD_HEIGHT,
+            "square_top" to PetalLayout.SQUARE_TOP,
+            "kana_tile" to PetalLayout.KANA_TILE,
+            "kana_pitch" to PetalLayout.KANA_PITCH,
+            "kana_glyph_box" to PetalLayout.KANA_GLYPH_BOX,
+            "kana_corner" to PetalLayout.KANA_CORNER,
+            "kana_gap" to PetalLayout.KANA_GAP,
+            "kana_margin" to PetalLayout.KANA_MARGIN,
+            "kana_finder_clearance" to PetalLayout.KANA_FINDER_CLEARANCE,
+        )) {
+            assertEquals(constants.real(key), value, key)
+        }
+        for ((key, value) in listOf(
+            "kana_rows" to PetalLayout.KANA_ROWS,
+            "kana_columns" to PetalLayout.KANA_COLUMNS,
+            "kana_bands" to PetalLayout.KANA_BANDS,
+            "kana_pilots" to PetalLayout.KANA_PILOTS,
+            "kana_data_tiles" to PetalKana.KANA_DATA_TILES,
+            "kana_glyph_word" to PetalKana.KANA_GLYPH_WORD,
+            "kana_glyph_parity" to PetalKana.KANA_GLYPH_PARITY,
+            "kana_glyph_atoms" to PetalKana.KANA_GLYPH_ATOMS,
+            "kana_polarity_word" to PetalKana.KANA_POLARITY_WORD,
+            "kana_polarity_parity" to PetalKana.KANA_POLARITY_PARITY,
+            "kana_polarity_atoms" to PetalKana.KANA_POLARITY_ATOMS,
+        )) {
+            assertEquals(constants.number(key), value.toLong(), key)
+        }
+        assertEquals(constants.number("kana_id_base"), u32(PetalKana.KANA_ID_BASE))
     }
 
     @Test
@@ -113,6 +147,38 @@ class PetalStreamFixtureTest {
         assertContentEquals(PetalLayout.dataSlots().map { it.toLong() }.toLongArray(), layout.array("data_slots").longs())
         assertContentEquals(PetalLayout.gateSlots().map { it.toLong() }.toLongArray(), layout.array("gate_slots").longs())
         assertContentEquals(PetalLayout.guardSlots().map { it.toLong() }.toLongArray(), layout.array("guard_slots").longs())
+        val tiles = layout.array("kana_tiles")
+        val expected = PetalLayout.kanaTiles()
+        assertEquals(expected.size, tiles.size)
+        for ((index, row) in tiles.withIndex()) {
+            val tile = expected[index]
+            val values = row.jsonArray
+            assertEquals(
+                listOf(tile.band.toLong(), tile.row.toLong(), tile.column.toLong()),
+                values.subList(0, 3).map { it.jsonPrimitive.long },
+                "tile $index",
+            )
+            assertEquals(values[3].jsonPrimitive.double, tile.x, "tile $index x")
+            assertEquals(values[4].jsonPrimitive.double, tile.y, "tile $index y")
+            assertEquals(values[5].jsonPrimitive.long, tile.pilot.toLong(), "tile $index pilot")
+        }
+        for ((pilot, row) in layout.array("kana_pilot_symbols").withIndex()) {
+            val values = row.longs()
+            assertEquals(values[0], PetalLayout.kanaPilotGlyph(pilot).toLong(), "pilot $pilot glyph")
+            assertEquals(values[1] == 1L, PetalLayout.isKanaPilotLight(pilot), "pilot $pilot polarity")
+        }
+        val glyphs = doc.obj("glyphs")
+        assertEquals(PetalGlyphs.GLYPH_CHARS, glyphs.text("chars"))
+        assertEquals(PetalGlyphs.GLYPH_GRID, glyphs.real("grid"))
+        assertEquals(PetalGlyphs.STROKE_WIDTH, glyphs.real("stroke_width"))
+        for ((glyph, strokes) in glyphs.array("strokes").withIndex()) {
+            val expectedStrokes = PetalGlyphs.strokes(glyph)
+            assertEquals(expectedStrokes.size, strokes.jsonArray.size, "glyph $glyph strokes")
+            for ((index, stroke) in strokes.jsonArray.withIndex()) {
+                val points = stroke.jsonArray.flatMap { point -> point.jsonArray.map { it.jsonPrimitive.double } }
+                assertEquals(expectedStrokes[index].toList(), points, "glyph $glyph stroke $index")
+            }
+        }
     }
 
     @Test
@@ -123,6 +189,7 @@ class PetalStreamFixtureTest {
         assertEquals(PetalPalette.DEFAULT.light, rgb("light"))
         assertEquals(PetalPalette.DEFAULT.pink, rgb("pink"))
         assertEquals(PetalPalette.DEFAULT.backdrop, rgb("backdrop"))
+        assertEquals(PetalPalette.DEFAULT.ink, rgb("ink"))
     }
 
     @Test
@@ -143,6 +210,54 @@ class PetalStreamFixtureTest {
         for (lane in PetalLane.FIELDS) assertContentEquals(whitening.hexBytes("F${lane.sector}"), lane.whitening(), "$lane")
         for (sector in 0 until PetalLayout.SECTORS) {
             assertContentEquals(whitening.hexBytes("T$sector"), PetalTurns.turnWhitening(sector), "T$sector")
+        }
+        for (lane in PetalKanaLane.ALL) assertContentEquals(whitening.hexBytes(lane.name), lane.whitening(), lane.name)
+    }
+
+    @Test
+    fun kanaIdsAndReaderTemplatesMatch() {
+        val ids = doc.obj("kana_first_ids")
+        assertEquals(PetalKanaLane.ALL.map { it.name }, ids.array("lanes").map { it.jsonPrimitive.content })
+        val frames = ids.array("frames").longs()
+        val rows = ids.array("ids")
+        assertEquals(frames.size, rows.size)
+        for (index in frames.indices) {
+            assertContentEquals(
+                rows[index].longs(),
+                PetalKanaLane.ALL.map { u32(PetalKana.kanaFirstId(frames[index].toInt(), it)) }.toLongArray(),
+                "frame ${frames[index]}",
+            )
+        }
+        val reader = doc.obj("kana_reader")
+        assertEquals(PetalKana.KANA_BLURS, reader.array("blurs").map { it.jsonPrimitive.double })
+        assertEquals(PetalKana.KANA_GRID.toLong(), reader.number("grid"))
+        val probes = reader.array("template_probes")
+        assertTrue(probes.size >= PetalKana.KANA_BLURS.size)
+        for (element in probes) {
+            val probe = element.jsonObject
+            val blur = PetalKana.KANA_BLURS.indexOfFirst { Math.abs(it - probe.real("blur")) < 1e-12 }
+            assertTrue(blur >= 0, "known blur ${probe.real("blur")}")
+            val got = PetalKana.templateProbe(
+                blur,
+                probe.number("glyph").toInt(),
+                probe.number("light") == 1L,
+                probe.number("i").toInt(),
+                probe.number("j").toInt(),
+            )
+            assertEquals(probe.real("value"), got, 1e-12, "probe $probe")
+        }
+        assertEquals(PetalKana.KANA_COARSE_GRID.toLong(), reader.number("coarse_grid"))
+        val coarse = reader.array("coarse_probes")
+        assertTrue(coarse.isNotEmpty())
+        for (element in coarse) {
+            val probe = element.jsonObject
+            val got = PetalKana.coarseTemplateProbe(
+                probe.number("glyph").toInt(),
+                probe.number("light") == 1L,
+                probe.number("i").toInt(),
+                probe.number("j").toInt(),
+            )
+            assertEquals(probe.real("value"), got, 1e-12, "coarse probe $probe")
         }
     }
 
@@ -242,6 +357,24 @@ class PetalStreamFixtureTest {
                 for (sector in 0 until PetalLayout.SECTORS) {
                     assertContentEquals(turnData[sector], data.turn(sector), "$name frame $frameNumber T$sector")
                 }
+                val kanaData = frame.hexList("kana_data")
+                val kanaWords = frame.hexList("kana_words")
+                assertEquals(PetalKanaLane.ALL.size, kanaData.size)
+                val kanaHeader = PetalLaneHeader(meta.tag, frameNumber)
+                for (lane in PetalKanaLane.ALL) {
+                    assertContentEquals(kanaData[lane.ordinal], data.kana(lane), "$name frame $frameNumber ${lane.name}")
+                    assertContentEquals(
+                        kanaWords[lane.ordinal],
+                        PetalKana.encodeKanaLane(lane, kanaData[lane.ordinal]),
+                        "$name frame $frameNumber ${lane.name} word",
+                    )
+                    val packet = assertNotNull(
+                        PetalKana.kanaPacket(kanaHeader, lane, kanaData[lane.ordinal]),
+                        "$name frame $frameNumber ${lane.name} check",
+                    )
+                    assertEquals(PetalKana.kanaFirstId(frameNumber, lane), packet.firstId)
+                    assertEquals(lane.atoms, packet.atomCount)
+                }
                 val dWord = frame.hexBytes("d_word")
                 val fieldWords = frame.hexList("field_words")
                 val turnWords = frame.hexList("turn_words")
@@ -262,20 +395,34 @@ class PetalStreamFixtureTest {
                     assertEquals(PetalTurns.turnFirstId(frameNumber, sector), packet.firstId)
                     assertEquals(PetalTurns.TURN_ATOMS, packet.atomCount)
                 }
-                val cells = PetalFrameCells.fromWords(dWord, fieldWords).withTurns(turnWords)
+                val cells = PetalFrameCells.fromWords(dWord, fieldWords).withTurns(turnWords).withKana(kanaWords)
                 val turns = String(CharArray(PetalLayout.FIELD_CELLS) { '0' + cells.turn(it) })
                 assertEquals(frame.text("turns"), turns, "$name frame $frameNumber turns")
+                val glyphText = String(CharArray(PetalLayout.KANA_TILE_COUNT) { Character.forDigit(cells.kanaGlyph(it), 16) })
+                assertEquals(frame.text("kana_glyphs"), glyphText, "$name frame $frameNumber kana glyphs")
+                assertContentEquals(
+                    bits(frame.hexBytes("kana_light_hex"), PetalLayout.KANA_TILE_COUNT),
+                    cells.kanaLight(),
+                    "$name frame $frameNumber kana polarity",
+                )
+                for (band in 0 until PetalLayout.KANA_BANDS) {
+                    assertContentEquals(kanaWords[PetalKanaLane.of(band, false).ordinal], cells.kanaPolarityWord(band))
+                    assertContentEquals(kanaWords[PetalKanaLane.of(band, true).ordinal], cells.kanaGlyphWord(band))
+                }
                 val lit = (0 until PetalLayout.TOTAL_SLOTS).filter { cells.isDotLit(it) }.map { it.toLong() }
                 assertContentEquals(frame.array("lit_dots").longs(), lit.toLongArray(), "$name frame $frameNumber dots")
                 assertContentEquals(flags(frame.hexBytes("lit_petals_hex")), cells.petals(), "$name frame $frameNumber petals")
                 assertEquals(cells, encoder.cells(frameNumber))
                 for (sector in 0 until PetalLayout.SECTORS) assertContentEquals(turnWords[sector], cells.turnWord(sector))
             }
-            // push every fixture frame through decodeLane + the assembler, with and without the
-            // turn lanes: the turn lanes finish the one-pass stream in fewer frames
+            // push every fixture frame through decodeLane + the assembler, without the turn and kana
+            // lanes, with the turn lanes, and with both: each layer finishes the one-pass stream in
+            // fewer frames
             if (name == "one-pass") {
-                val needed = IntArray(2)
-                for ((index, withTurns) in listOf(false, true).withIndex()) {
+                val needed = IntArray(3)
+                for (index in 0 until 3) {
+                    val withTurns = index >= 1
+                    val withKana = index >= 2
                     val assembler = PetalStreamAssembler()
                     for (frameElement in stream.array("frames")) {
                         val frame = frameElement.jsonObject
@@ -294,11 +441,19 @@ class PetalStreamFixtureTest {
                                 assembler.pushAtoms(assertNotNull(PetalTurns.turnPacket(header, sector, data)))
                             }
                         }
+                        if (withKana) {
+                            val header = PetalLaneHeader(meta.tag, frame.number("frame").toInt())
+                            for ((index2, word) in frame.hexList("kana_words").withIndex()) {
+                                val lane = PetalKanaLane.ALL[index2]
+                                val data = PetalKana.decodeKanaLaneCounted(lane, word).data
+                                assembler.pushAtoms(assertNotNull(PetalKana.kanaPacket(header, lane, data)))
+                            }
+                        }
                         if (assembler.progress().complete) break
                     }
                     assertContentEquals(payload, assertNotNull(assembler.takeCompleted()).payload)
                 }
-                assertTrue(needed[1] < needed[0], needed.contentToString())
+                assertTrue(needed[2] < needed[1] && needed[1] < needed[0], needed.contentToString())
             }
         }
     }

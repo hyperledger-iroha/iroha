@@ -10,25 +10,30 @@ package org.hyperledger.iroha.sdk.offline.petal
  * Atom ids run contiguously over the atoms actually sent (see [firstAtomId]).
  * Any single readable lane is useful on its own. On top of every field lane,
  * the turns of its lit petals carry four more atoms from the repair range (see
- * [PetalTurns]), so a sharp camera reads up to 37 atoms (592 bytes) a frame.
+ * [PetalTurns]), so a sharp camera reads up to 37 atoms (592 bytes) from the
+ * square. The katakana bands above and below the square add eight atoms each
+ * (see [PetalKana]): up to 53 atoms (848 bytes) a frame.
  *
  * Lane data layouts (all big-endian):
  *
- * * every lane but the turn lanes starts with `tag:u8, frame:u16`; `tag` is the
- *   low byte of the payload CRC-32C.
+ * * every lane but the turn and kana lanes starts with `tag:u8, frame:u16`;
+ *   `tag` is the low byte of the payload CRC-32C.
  * * field lanes and non-beacon `D`: `atoms…` (16 bytes each).
  * * beacon `D`: `version:u8, kind:u8, len:u24, crc:u32`, zero padded.
  * * turn lanes: `atoms… check:u32`, where the check binds the atoms to the
  *   header of the field lane they ride on.
+ * * kana lanes: `atoms… check:u32`, where the check binds the atoms to the
+ *   stream tag, the frame and the lane.
  *
  * Frame numbers are `u16` values (`0..65535`) and wrap.
  */
 object PetalStream {
     /**
-     * Version/profile byte of the beacon: format version 3, layout profile 0. Beacons of the
-     * retired formats 2 (`0x20`, unturned petals) and 1 (`0x10`, katakana tiles) are refused.
+     * Version/profile byte of the beacon: format version 5, layout profile 0. Beacons of the
+     * retired formats 3 (`0x30`, no katakana bands), 2 (`0x20`, unturned petals) and 1 (`0x10`,
+     * katakana tiles only) are refused.
      */
-    const val FORMAT_VERSION = 0x30
+    const val FORMAT_VERSION = 0x50
 
     /** Largest payload a beacon can describe (`u24`). */
     const val MAX_PAYLOAD_LEN = (1 shl 24) - 1
@@ -254,18 +259,30 @@ class PetalDLane internal constructor(
 }
 
 /**
- * The bytes of every lane of one frame (lane `D`, the four field lanes and the four turn lanes):
- * lane data or transmitted codewords.
+ * The bytes of every lane of one frame (lane `D`, the four field lanes, the four turn lanes and
+ * the four kana lanes): lane data or transmitted codewords.
  */
 class PetalFrameLanes internal constructor(
     private val dBytes: ByteArray,
     private val fieldBytes: Array<ByteArray>,
     private val turnBytes: Array<ByteArray>,
+    private val kanaBytes: Array<ByteArray>,
 ) {
     init {
         require(fieldBytes.size == PetalLayout.SECTORS) { "a frame has ${PetalLayout.SECTORS} field lanes" }
         require(turnBytes.size == PetalLayout.SECTORS) { "a frame has ${PetalLayout.SECTORS} turn lanes" }
+        require(kanaBytes.size == PetalKanaLane.ALL.size) { "a frame has ${PetalKanaLane.ALL.size} kana lanes" }
     }
+
+    /** The bytes of kana lane [lane] (a copy). */
+    fun kana(lane: PetalKanaLane): ByteArray = kanaBytes[lane.ordinal].copyOf()
+
+    /** The kana lanes in [PetalKanaLane.ALL] order: `P0`, `K0`, `P1`, `K1` (copies). */
+    fun kanas(): List<ByteArray> = java.util.Collections.unmodifiableList(kanaBytes.map { it.copyOf() })
+
+    internal fun kanaView(lane: PetalKanaLane): ByteArray = kanaBytes[lane.ordinal]
+
+    internal val kanaViews: List<ByteArray> get() = kanaBytes.asList()
 
     /** Lane `D` bytes (a copy). */
     fun d(): ByteArray = dBytes.copyOf()
@@ -297,12 +314,14 @@ class PetalFrameLanes internal constructor(
 
     override fun equals(other: Any?): Boolean = other is PetalFrameLanes && dBytes.contentEquals(other.dBytes) &&
         fieldBytes.indices.all { fieldBytes[it].contentEquals(other.fieldBytes[it]) } &&
-        turnBytes.indices.all { turnBytes[it].contentEquals(other.turnBytes[it]) }
+        turnBytes.indices.all { turnBytes[it].contentEquals(other.turnBytes[it]) } &&
+        kanaBytes.indices.all { kanaBytes[it].contentEquals(other.kanaBytes[it]) }
 
     override fun hashCode(): Int {
         var hash = dBytes.contentHashCode()
         for (field in fieldBytes) hash = 31 * hash + field.contentHashCode()
         for (turn in turnBytes) hash = 31 * hash + turn.contentHashCode()
+        for (kana in kanaBytes) hash = 31 * hash + kana.contentHashCode()
         return hash
     }
 }
@@ -342,7 +361,7 @@ class PetalStreamEncoder(payload: ByteArray, kind: Int) {
         frames
     }
 
-    /** The data bytes of every lane of [frame] (`0..65535`), turn lanes included. */
+    /** The data bytes of every lane of [frame] (`0..65535`), turn and kana lanes included. */
     fun laneData(frame: Int): PetalFrameLanes {
         PetalStream.checkFrame(frame)
         val mask = IntArray(PetalFountain.maskLength(k))
@@ -371,10 +390,16 @@ class PetalStreamEncoder(payload: ByteArray, kind: Int) {
             fillAtoms(atoms, 0, PetalTurns.turnFirstId(frame, sector), PetalTurns.TURN_ATOMS, mask)
             PetalTurns.turnData(header, sector, atoms)
         }
-        return PetalFrameLanes(d, fields, turns)
+        val kana = Array(PetalKanaLane.ALL.size) { index ->
+            val lane = PetalKanaLane.ALL[index]
+            val atoms = ByteArray(lane.atoms * PetalLanes.ATOM_LEN)
+            fillAtoms(atoms, 0, PetalKana.kanaFirstId(frame, lane), lane.atoms, mask)
+            PetalKana.kanaData(header, lane, atoms)
+        }
+        return PetalFrameLanes(d, fields, turns, kana)
     }
 
-    /** The transmitted (whitened) codewords of every lane of [frame], turn lanes included. */
+    /** The transmitted (whitened) codewords of every lane of [frame], turn and kana lanes included. */
     fun words(frame: Int): PetalFrameLanes {
         val data = laneData(frame)
         return PetalFrameLanes(
@@ -384,10 +409,14 @@ class PetalStreamEncoder(payload: ByteArray, kind: Int) {
                 PetalLanes.encodeLane(lane, data.laneView(lane))
             },
             Array(PetalLayout.SECTORS) { sector -> PetalTurns.encodeTurnLane(sector, data.turnView(sector)) },
+            Array(PetalKanaLane.ALL.size) { index ->
+                val lane = PetalKanaLane.ALL[index]
+                PetalKana.encodeKanaLane(lane, data.kanaView(lane))
+            },
         )
     }
 
-    /** Every cell of [frame], lit and turned, ready to render. */
+    /** Every cell of [frame], lit, turned and with its katakana tiles, ready to render. */
     fun cells(frame: Int): PetalFrameCells {
         val words = words(frame)
         val cells = PetalFrameCells.fromWords(
@@ -395,6 +424,7 @@ class PetalStreamEncoder(payload: ByteArray, kind: Int) {
             List(PetalLayout.SECTORS) { words.laneView(PetalLane.field(it)) },
         )
         PetalFrameCells.setTurns(cells.petalView, cells.turnView, List(PetalLayout.SECTORS) { words.turnView(it) })
+        PetalFrameCells.setKana(cells.kanaGlyphView, cells.kanaLightView, words.kanaViews)
         return cells
     }
 

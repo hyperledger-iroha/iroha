@@ -18,25 +18,28 @@ import org.hyperledger.iroha.sdk.offline.petal.PetalTestSupport.number
 import org.hyperledger.iroha.sdk.offline.petal.PetalTestSupport.text
 
 /**
- * Decodes the golden camera captures in `fixtures/petal/petal_captures_v3.json`.
+ * Decodes the golden camera captures in `fixtures/petal/petal_captures_v5.json`.
  *
- * Every conforming decoder must read the lanes named in `must_decode` and the
- * turn lanes named in `must_turn`, must never report wrong data for any lane,
+ * Every conforming decoder must read the lanes named in `must_decode`, the turn
+ * lanes named in `must_turn` and the kana lanes named in `must_kana`, must never
+ * report wrong data for any lane,
  * must report the recorded inferred corner, must follow each tracking pair from
  * its first frame into its second, must recover the `must_merge` field lanes of
  * every merge set from the merge of its captures, must never let a session offer
  * a lane of a mixed set, and must reject the negatives. This port mirrors the
- * reference arithmetic, so it must also read exactly the lanes and turn lanes
- * the reference read (`reference_decoded`, `reference_turned`,
- * `reference_tracked`, `reference_merged`). Two captures (`hidden-corner-540p`,
+ * reference arithmetic, so it must also read exactly the lanes, turn lanes and
+ * kana lanes the reference read (`reference_decoded`, `reference_turned`,
+ * `reference_kana`, `reference_tracked`, `reference_merged`). Two captures (`hidden-corner-540p`,
  * `cut-corner-720p`) only decode through an inferred corner, `shadow-band-540p`
  * needs the local read for one field lane and `barrel-480p` the lens distortion
  * search, so they prove that all three are implemented faithfully; the sharp,
  * mirrored, covered and cut-off captures and both tracking pairs read every turn
- * lane, and the soft, blurred, veiled and distorted ones none.
+ * lane, and the soft, blurred, veiled and distorted ones none. The four upright
+ * captures see both katakana bands: the sharp, older and soft 720p cameras read
+ * all four kana lanes and the 480p one three.
  */
 class PetalCaptureFixtureTest {
-    private val doc: JsonObject = PetalTestSupport.loadFixture("petal_captures_v3.json")
+    private val doc: JsonObject = PetalTestSupport.loadFixture("petal_captures_v5.json")
 
     private fun lumaOf(entry: JsonObject, key: String = "luma_zlib_base64", sizes: JsonObject = entry): PetalLuma {
         val data = PetalTestSupport.inflateBase64(entry.text(key))
@@ -95,13 +98,49 @@ class PetalCaptureFixtureTest {
         return letters.toString()
     }
 
+    /** The header a decoded capture's lanes name: its first atom packet's, or its beacon's. */
+    private fun headerOf(frame: PetalDecodedFrame): PetalLaneHeader =
+        frame.atomPackets().firstOrNull()?.header ?: assertNotNull(frame.beacon(), "a decoded capture names its frame").header
+
+    /**
+     * Reads the kana lanes of a decoded capture under the header its lanes name (no band skipped),
+     * checks them against the recorded data and the requirements, and returns their names; their
+     * atoms go to [assembler] when given.
+     */
+    private fun readKanaLanes(
+        name: String,
+        image: PetalLuma,
+        frame: PetalDecodedFrame,
+        entry: JsonObject,
+        assembler: PetalStreamAssembler?,
+    ): String {
+        val expected = entry.array("kana_data").map { PetalTestSupport.hex(it.jsonPrimitive.content) }
+        assertEquals(PetalKanaLane.ALL.size, expected.size)
+        val names = StringBuilder()
+        val packets = ArrayList<PetalAtomPacket>()
+        for ((index, result) in PetalKana.readKana(image, frame, headerOf(frame)).withIndex()) {
+            if (result == null) continue
+            val lane = PetalKanaLane.ALL[index]
+            assertContentEquals(expected[index], result.result.data, "$name: kana lane ${lane.name} data")
+            packets += assertNotNull(PetalKana.kanaPacket(result.header, lane, result.result.data), "$name: kana check ${lane.name}")
+            names.append(lane.name)
+        }
+        if (assembler != null) for (packet in packets) assembler.pushAtoms(packet)
+        val must = entry["must_kana"]?.jsonPrimitive?.content ?: ""
+        for (required in must.chunked(2)) {
+            assertTrue(names.chunked(2).contains(required), "$name: kana $names, must read $must")
+        }
+        assertEquals(entry.text("reference_kana"), names.toString(), "$name: kana lanes read by the reference")
+        return names.toString()
+    }
+
     @Test
     fun goldenCapturesDecodeAsRecorded() {
         val assembler = PetalStreamAssembler()
         val report = StringBuilder(
-            "Petal golden captures (Kotlin/JVM decode times of decodes 1, 2, 3 and the best of 6; turn reads 1 and the best of 6):\n",
+            "Petal golden captures (Kotlin/JVM decode times of decodes 1, 2, 3 and the best of 6; turn and kana reads 1 and the best of 6):\n",
         )
-        assertEquals(12, doc.array("captures").size)
+        assertEquals(16, doc.array("captures").size)
         for (element in doc.array("captures")) {
             val capture = element.jsonObject
             val name = capture.text("name")
@@ -120,6 +159,9 @@ class PetalCaptureFixtureTest {
             val turnStarted = System.nanoTime()
             val turned = readTurnLanes(name, image, decoded, capture, assembler)
             val firstTurn = (System.nanoTime() - turnStarted) / 1e6
+            val kanaStarted = System.nanoTime()
+            val kana = readKanaLanes(name, image, decoded, capture, assembler)
+            val firstKana = (System.nanoTime() - kanaStarted) / 1e6
             // timing: the JIT warms up over the first decodes
             val timings = DoubleArray(6)
             timings[0] = first
@@ -138,12 +180,23 @@ class PetalCaptureFixtureTest {
                 turnBest = minOf(turnBest, (System.nanoTime() - again) / 1e6)
                 assertEquals(turned, results.withIndex().filter { it.value != null }.joinToString("") { "${it.index}" }, "$name: deterministic")
             }
+            val kanaReader = PetalKanaReader()
+            val kanaResults = arrayOfNulls<PetalKanaResult>(PetalKanaLane.ALL.size)
+            var kanaBest = Double.MAX_VALUE
+            repeat(6) {
+                val again = System.nanoTime()
+                kanaReader.read(image, decoded, headerOf(decoded), BooleanArray(PetalLayout.KANA_BANDS), kanaResults)
+                kanaBest = minOf(kanaBest, (System.nanoTime() - again) / 1e6)
+                val names = kanaResults.withIndex().filter { it.value != null }.joinToString("") { PetalKanaLane.ALL[it.index].name }
+                assertEquals(kana, names, "$name: kana reading is deterministic")
+            }
             report.append(
                 String.format(
-                    "  %-22s %4dx%-4d lanes %-5s (reference %-5s, required %-5s) turned %-4s  " +
-                        "#1 %6.1f ms  #2 %6.1f ms  #3 %6.1f ms  best %6.1f ms  turns #1 %6.1f ms  best %6.1f ms%n",
-                    name, image.width, image.height, decoded.lanes, capture.text("reference_decoded"), must, turned,
-                    timings[0], timings[1], timings[2], timings.minOrNull()!!, firstTurn, turnBest,
+                    "  %-22s %4dx%-4d lanes %-5s (reference %-5s, required %-5s) turned %-4s kana %-8s  " +
+                        "#1 %6.1f ms  #2 %6.1f ms  #3 %6.1f ms  best %6.1f ms  turns #1 %6.1f ms  best %6.1f ms  " +
+                        "kana #1 %6.1f ms  best %6.1f ms%n",
+                    name, image.width, image.height, decoded.lanes, capture.text("reference_decoded"), must, turned, kana,
+                    timings[0], timings[1], timings[2], timings.minOrNull()!!, firstTurn, turnBest, firstKana, kanaBest,
                 ),
             )
         }
@@ -173,6 +226,7 @@ class PetalCaptureFixtureTest {
             assertEquals(previous.rotation, followed.rotation, "$name: tracking keeps the orientation")
             assertEquals(previous.mirrored, followed.mirrored, "$name: tracking keeps the mirror flag")
             val turned = readTurnLanes(name, to, followed, pair, null)
+            readKanaLanes(name, to, followed, pair, null)
             // timing: tracking skips the finder search
             var decodeBest = Double.MAX_VALUE
             var trackBest = Double.MAX_VALUE
@@ -288,7 +342,10 @@ class PetalCaptureFixtureTest {
     /**
      * What the Rust reference read from a capture: the `decode` pose (homography and distortion
      * bits), the orientation, corrected/erasures per lane and per turn lane (`read_turns` with no
-     * sector skipped) and the blur its turn reader fitted (an index into [PetalTurns.TURN_BLURS]).
+     * sector skipped), the blur its turn reader fitted (an index into [PetalTurns.TURN_BLURS]),
+     * corrected/erasures per kana lane (`read_kana` with no band skipped) and per band what
+     * `observe_band` saw: the blur it chose (an index into [PetalKana.KANA_BLURS]), the pilots it
+     * found and the data tiles it read, or `-`.
      */
     private class ReferenceReading(
         val homographyBits: List<String>,
@@ -298,6 +355,8 @@ class PetalCaptureFixtureTest {
         val lanes: String,
         val turnLanes: String,
         val fittedBlur: Int,
+        val kanaLanes: String,
+        val kanaBands: String,
     )
 
     /**
@@ -311,129 +370,179 @@ class PetalCaptureFixtureTest {
     private val referenceReadings = mapOf(
         "clean-512" to ReferenceReading(
             listOf(
-                "3fe00029696ba5f9", "3f0461138c40a62c", "bf6ec02f3ae3b3f1",
-                "3ef049ad824b297f", "3fe000713cf8436d", "bfa25a1ee0979718",
-                "3e618583a96052df", "3e83c8d1e38b8d87", "3ff0000000000000",
+                "3fdfff8ddf52cda6", "bee412d9ed20c9b7", "3f97a166fceb58cc",
+                "3eecebfdbcab1e3c", "3fdffff276f1c000", "40641ea0f6b7c8d5",
+                "3e573f675e4559bb", "be5597a69185da0c", "3ff0000000000000",
             ),
             "0000000000000000", 0, false, "D:0/0 0:0/0 1:0/0 2:0/0 3:0/0", "0:0/0 1:0/0 2:0/0 3:0/0", 0,
+            "P0:0/0 K0:0/0 P1:0/0 K1:0/0", "0:0/8/298 1:0/8/298",
         ),
         "modern-720p-rotated" to ReferenceReading(
             listOf(
-                "3fd9dfeb4809c413", "bfd06566a21ce590", "4082f4fefe605541",
-                "3fd31e4350d1fab6", "3fd90bc0e054b289", "401fa98edc6722ca",
-                "3f0531825a194e74", "3f0952cfffe823bd", "3ff0000000000000",
+                "3fd9e008ae2bd201", "bfd0656f6355bcad", "4082f508a824e44c",
+                "3fd31e537512ef36", "3fd90bc6fa9f7169", "401fa3c02acb15ab",
+                "3f0532b87b63e680", "3f0952a53b9fed37", "3ff0000000000000",
             ),
             "0000000000000000", 0, false, "D:0/0 0:0/0 1:0/0 2:0/0 3:0/0", "0:0/0 1:0/0 2:0/0 3:0/0", 2,
+            "P0:- K0:- P1:3/0 K1:7/0", "0:1/6/234 1:2/7/286",
         ),
         "legacy-540p-tilted" to ReferenceReading(
             listOf(
-                "bfd552bf1d10ecf4", "3fca44bb710cebcb", "408340e0409ad1c2",
-                "bfbd1d31346c0af9", "bfd5ee9ec53642d5", "40806d13d3424e99",
-                "3f181867e97a353c", "3f1c8f0bd33f6f2b", "3ff0000000000000",
+                "bfd552cab4a0bdb1", "3fca44b7862fdeec", "408340dc489ba43a",
+                "bfbd1d5b905b47b4", "bfd5ee9237a5b0ff", "40806d21e330ca93",
+                "3f181826b18cc906", "3f1c8eca58e40851", "3ff0000000000000",
             ),
             "0000000000000000", 2, false, "D:0/0 0:0/0 1:0/0 2:0/0 3:0/0", "0:- 1:- 2:- 3:-", 3,
+            "P0:- K0:- P1:8/0 K1:-", "0:3/5/188 1:3/6/255",
         ),
         "soft-480p-blur1.9" to ReferenceReading(
             listOf(
-                "bfc2215ff6ce0cfc", "bfd48045d2a13568", "4080662b2634cbbf",
-                "3fd12a3a40cd55ce", "bfc1506d167c0179", "406287e0ff7c8401",
-                "bf1c535776e1421a", "bf1651400c81b6b8", "3ff0000000000000",
+                "bfc22178f04e1e64", "bfd48033c546793b", "408066360226465e",
+                "3fd12a348896bf5e", "bfc1505fb5e40897", "406287ef0fa82d6e",
+                "bf1c53c29b500535", "bf165063ddb10711", "3ff0000000000000",
             ),
-            "0000000000000000", 1, false, "D:0/0 0:2/0 1:4/0 2:9/0 3:3/0", "0:- 1:- 2:- 3:-", 5,
+            "0000000000000000", 1, false, "D:0/0 0:3/0 1:4/0 2:11/0 3:3/0", "0:- 1:- 2:- 3:-", 5,
+            "P0:- K0:- P1:- K1:-", "0:4/5/285 1:4/4/245",
         ),
         "small-480p" to ReferenceReading(
             listOf(
-                "3fb74b7c4736e59e", "3fd5b9a944e6d7a8", "4058e74af36bae89",
-                "bfd5ba00c1379c29", "3fb746496cce8cf7", "4076f4121d6166b4",
-                "3e81d4a64a782cba", "be889c51d6a579d5", "3ff0000000000000",
+                "3fb74b5bb9090c74", "3fd5b9ca94c22997", "4058e6e53b3d28cb",
+                "bfd5ba0841a8824e", "3fb7464ec09b81b9", "4076f41b31190b2d",
+                "3e8145127b8058e2", "be86fc0550f28051", "3ff0000000000000",
             ),
             "0000000000000000", 3, false, "D:0/0 0:0/0 1:0/0 2:0/0 3:0/0", "0:- 1:- 2:- 3:-", 4,
+            "P0:2/0 K0:- P1:1/0 K1:-", "0:4/6/294 1:4/6/294",
         ),
         "selfie-mirrored-540p" to ReferenceReading(
             listOf(
-                "bfd8d0ae55b75ad1", "3fb60e52b98c3e2e", "40838bb679a30ccd",
-                "3fba9a2775678d05", "3fd8200887a075e5", "4032cff70cb4d374",
-                "3e6748fdc5046750", "bf031d9551fa441e", "3ff0000000000000",
+                "bfd8d0b4f8dc45ce", "3fb60e87caf54e18", "40838bb442f72eb4",
+                "3fba99faafec8dd4", "3fd8200d5825dbff", "4032cf1d0b089819",
+                "3e65e3b3c6ed141a", "bf031ceadf99a021", "3ff0000000000000",
             ),
             "0000000000000000", 1, true, "D:0/0 0:0/0 1:0/0 2:0/0 3:0/0", "0:0/0 1:0/0 2:0/0 3:0/0", 2,
+            "P0:- K0:- P1:- K1:-", "0:2/5/145 1:2/4/110",
         ),
         "overexposed-540p" to ReferenceReading(
             listOf(
-                "3fd64a9087ac475b", "bfc41fa64d477da1", "4079b04613fff1c5",
-                "3fc7b9b113e0c080", "3fd5d77052143a84", "40153ac09a8d4a13",
-                "3f01f32d5951d0d3", "3f064ea70c6c15c4", "3ff0000000000000",
+                "3fd64b2d160af7cf", "bfc420af24e07fb1", "4079b04de9a626ce",
+                "3fc7b9f996dc010a", "3fd5d6f5b4bca05d", "401538874739992c",
+                "3f01fa5e1883a6f7", "3f06441201ef7bbb", "3ff0000000000000",
             ),
-            "0000000000000000", 0, false, "D:0/0 0:0/0 1:0/0 2:0/0 3:0/0", "0:- 1:11/0 2:12/2 3:-", 3,
+            "0000000000000000", 0, false, "D:0/0 0:0/0 1:0/0 2:0/0 3:0/0", "0:- 1:10/0 2:- 3:-", 3,
+            "P0:- K0:- P1:12/8 K1:-", "0:2/5/207 1:2/6/250",
         ),
         "veiled-720p" to ReferenceReading(
             listOf(
-                "bfc03614b2d9fb44", "3fe339347ddf68ef", "407ed88487f21eb9",
-                "bfdf4c0483869f56", "bfc0abb61dcb3107", "40861c3f23cfa28a",
-                "3f18fb7538983040", "3f1d73cd71131e4f", "3ff0000000000000",
+                "bfc0365d22b48a29", "3fe33889d4c2bbaa", "407ed85e07c16b1d",
+                "bfdf4c000f054092", "bfc0abf548cfc139", "40861c367ebb6504",
+                "3f18f8eea571ebfb", "3f1d6ee482a381de", "3ff0000000000000",
             ),
-            "0000000000000000", 3, false, "D:0/0 0:0/0 1:0/0 2:0/0 3:0/0", "0:- 1:- 2:- 3:-", 2,
+            "0000000000000000", 3, false, "D:0/0 0:0/0 1:0/0 2:0/0 3:0/0", "0:- 1:- 2:- 3:-", 3,
+            "P0:6/0 K0:16/0 P1:0/0 K1:9/0", "0:2/6/283 1:2/8/298",
         ),
         "shadow-band-540p" to ReferenceReading(
             listOf(
-                "3fdc6a34efaeb430", "bfafc710429cedb6", "4071c80378c4d449",
-                "3fafeec8afdd7598", "3fdc6aeb254cc3ce", "4025a9168e8b7aed",
-                "be734d2367f3656f", "3e9d792aec1568a1", "3ff0000000000000",
+                "3fdc6a322736a5ec", "bfafc71aac347787", "4071c8051105d191",
+                "3fafee546c038a6c", "3fdc6aedff78bf88", "4025a5b107d6b00c",
+                "be73b818d805ad2e", "3e9d3cb223ffb43b", "3ff0000000000000",
             ),
             "0000000000000000", 0, false, "D:- 0:0/0 1:15/11 2:10/0 3:11/0", "0:5/0 1:6/0 2:3/0 3:9/0", 2,
+            "P0:- K0:- P1:- K1:-", "0:1/3/44 1:1/3/44",
         ),
         "hidden-corner-540p" to ReferenceReading(
             listOf(
-                "bfd7b34e06e88606", "bfbd86e6ef983d51", "40876e8b718eec3a",
-                "3fc35575e4fa5208", "bfd800a93c46417d", "4078c99382115a81",
-                "3f03552435ecb4b5", "3f0a1af003e9bb76", "3ff0000000000000",
+                "bfd7b3937fd531d2", "bfbd8bac91abe4af", "40876e6e51ac7558",
+                "3fc353bece274026", "bfd800c433f34e8b", "4078c99a2fe3329c",
+                "3f03493960fc473f", "3f09f1db3f0bc982", "3ff0000000000000",
             ),
             "0000000000000000", 2, false, "D:0/0 0:0/0 1:0/0 2:0/0 3:0/0", "0:0/0 1:0/0 2:0/0 3:0/0", 2,
+            "P0:- K0:- P1:- K1:-", "0:2/5/146 1:2/5/184",
         ),
         "cut-corner-720p" to ReferenceReading(
             listOf(
-                "3fd64489a45d0744", "bfd64524e85e299a", "4084ccd43cfb5614",
-                "3fd645375d87ddff", "3fd6463abc465805", "405683498e879027",
-                "be74a1623ba56aed", "3e70d67aeacce137", "3ff0000000000000",
+                "3fd643cc1e754c38", "bfd644e7505e01f6", "4084cceabc83ea78",
+                "3fd644e395a7941d", "3fd64692a123ccf5", "405682f988221c02",
+                "be7fe54208f4295c", "3e7d26eefdd5c34e", "3ff0000000000000",
             ),
             "0000000000000000", 1, false, "D:0/0 0:0/0 1:0/0 2:0/0 3:0/0", "0:0/0 1:0/0 2:0/0 3:0/0", 1,
+            "P0:1/0 K0:1/0 P1:- K1:-", "0:1/7/296 1:1/4/179",
         ),
         "barrel-480p" to ReferenceReading(
             listOf(
-                "3fd4be433a5f1ba6", "bfba57768c12e7f9", "406acaf38e7d1c31",
-                "3fbe3425a47829ba", "3fd566875cad8e50", "402c1c2da56b7f9d",
-                "3e72f7bdaf03187f", "3f0835d13ba8f65b", "3ff0000000000000",
+                "3fd4be076556447d", "bfba58133b2cdc5c", "406acb20591a5813",
+                "3fbe33e55b66e401", "3fd56642d3111452", "402c1a393810f225",
+                "3e7009da8aaa04df", "3f0830ea4e0a30a7", "3ff0000000000000",
             ),
             "bfbeb851eb851eb8", 0, false, "D:0/0 0:0/0 1:0/0 2:1/0 3:0/0", "0:- 1:- 2:- 3:-", 3,
+            "P0:- K0:- P1:- K1:-", "0:3/4/191 1:3/5/224",
+        ),
+        "upright-720p" to ReferenceReading(
+            listOf(
+                "bf5ba008bcd3ce40", "bfe305b4351d847d", "408f2dc962b27a0c",
+                "3fe4daa9ff0297f8", "bf9f9bbac0ccb7fc", "404c20ee2bf32de8",
+                "3f10fbbdde986951", "3f0c268441949c72", "3ff0000000000000",
+            ),
+            "0000000000000000", 1, false, "D:0/0 0:0/0 1:0/0 2:0/0 3:0/0", "0:0/0 1:0/0 2:0/0 3:0/0", 1,
+            "P0:0/0 K0:0/0 P1:0/0 K1:0/0", "0:1/8/298 1:1/8/298",
+        ),
+        "upright-legacy-720p" to ReferenceReading(
+            listOf(
+                "bf734d40ac63f708", "3fe61e44ff163189", "407880e9607d4b5f",
+                "bfe2553b6a775243", "bf81488654367b8f", "4085a07431cc8701",
+                "3f1b98d565bc7e82", "3f204092cb09d266", "3ff0000000000000",
+            ),
+            "0000000000000000", 3, false, "D:0/0 0:0/0 1:0/0 2:0/0 3:0/0", "0:- 1:3/0 2:2/0 3:0/0", 2,
+            "P0:0/0 K0:15/0 P1:0/0 K1:10/0", "0:2/8/298 1:2/8/298",
+        ),
+        "upright-soft-720p" to ReferenceReading(
+            listOf(
+                "3fb6700af200cd27", "bfe2ed6b4977dcb9", "408b60b557e2a78c",
+                "3fe1b2e8d456cfc5", "3fb020bd192c8960", "40402cbf8da2dbed",
+                "3e7451548694003b", "bf116f756e0f9278", "3ff0000000000000",
+            ),
+            "0000000000000000", 1, false, "D:0/0 0:0/0 1:0/0 2:0/0 3:0/0", "0:- 1:- 2:- 3:-", 3,
+            "P0:0/0 K0:0/0 P1:2/0 K1:6/0", "0:3/8/298 1:3/6/290",
+        ),
+        "upright-480p" to ReferenceReading(
+            listOf(
+                "3f8dc022d717619e", "3fdc2b98bc136eac", "40593c7f88af9782",
+                "bfda950706d8595d", "3fa1c881091abe19", "407bd46ee0463187",
+                "3e65fbcc4a6e6285", "3f16281589005824", "3ff0000000000000",
+            ),
+            "0000000000000000", 3, false, "D:0/0 0:0/0 1:0/0 2:0/0 3:0/0", "0:- 1:- 2:- 3:-", 3,
+            "P0:12/8 K0:- P1:0/0 K1:0/0", "0:3/5/205 1:3/8/298",
         ),
     )
 
     private val referenceTracks = mapOf(
         "steady-hand-540p" to ReferenceReading(
             listOf(
-                "3fd3fe39804549ea", "bfc6d6f85122d649", "407ab755660467c6",
-                "3fc8fc4b89815f46", "3fd483207d176319", "401d0986f9303303",
-                "3e5153069e35fd1f", "3f01806a07e11c54", "3ff0000000000000",
+                "3fd3fe3727a3225f", "bfc6d6c19bf0ba9c", "407ab75dae2089a8",
+                "3fc8fc47dbb4e82c", "3fd483384ee94185", "401d0353fa850028",
+                "3e4e13866530f1b1", "3f0181ce3d3cf047", "3ff0000000000000",
             ),
-            "0000000000000000", 0, false, "D:0/0 0:0/0 1:0/0 2:0/0 3:0/0", "0:1/0 1:0/0 2:0/0 3:0/0", 2,
+            "0000000000000000", 0, false, "D:0/0 0:0/0 1:0/0 2:0/0 3:0/0", "0:1/0 1:0/0 2:1/0 3:0/0", 2,
+            "P0:- K0:- P1:- K1:-", "0:2/6/219 1:2/6/243",
         ),
         "thumb-arrives-540p" to ReferenceReading(
             listOf(
-                "3fd4e7b32a42ecae", "bfc6cf963f451f5c", "407976e1078e6955",
-                "3fc9223ae4f7f44e", "3fd57317a9c8b75c", "40161e5a7d6f1043",
-                "3e9affe577aca827", "3f0371e6ae3c42b8", "3ff0000000000000",
+                "3fd4e787425acb92", "bfc6cf93a574b93b", "407976eddc59137b",
+                "3fc9220fffe4adc3", "3fd57315c2f843cf", "401617f8a4f3f7a7",
+                "3e9a526a0595628f", "3f03719795f336a1", "3ff0000000000000",
             ),
-            "0000000000000000", 0, false, "D:0/0 0:0/0 1:0/0 2:0/0 3:0/0", "0:1/0 1:0/0 2:0/0 3:0/0", 2,
+            "0000000000000000", 0, false, "D:0/0 0:0/0 1:0/0 2:0/0 3:0/0", "0:0/0 1:0/0 2:0/0 3:0/0", 2,
+            "P0:- K0:- P1:- K1:-", "0:2/5/214 1:2/6/225",
         ),
     )
 
     /** The four-capture merge of each merge set as the Rust reference reads it (`merge_fields`). */
     private val referenceMerges = mapOf(
-        "noisy-480p" to "0:6/0 1:7/0 2:16/11 3:11/0",
-        "mixed-frames-480p" to "0:7/0 1:7/0 2:- 3:7/0",
+        "noisy-480p" to "0:5/0 1:10/0 2:- 3:11/0",
+        "mixed-frames-480p" to "0:7/0 1:9/0 2:- 3:7/0",
     )
 
     /** The lanes a reference `ScanSession` merges from the noisy set, in the order it offers them. */
-    private val referenceSessionMerges = mapOf("noisy-480p" to "0123")
+    private val referenceSessionMerges = mapOf("noisy-480p" to "013")
 
     private fun bits(value: Double): String = String.format("%016x", java.lang.Double.doubleToRawLongBits(value))
 
@@ -447,6 +556,21 @@ class PetalCaptureFixtureTest {
             "$sector:" + (result?.let { "${it.corrected}/${it.erasures}" } ?: "-")
         }
 
+    private fun kanaCounts(results: List<PetalKanaResult?>): String =
+        results.withIndex().joinToString(" ") { (index, result) ->
+            "${PetalKanaLane.ALL[index].name}:" + (result?.let { "${it.result.corrected}/${it.result.erasures}" } ?: "-")
+        }
+
+    private fun bandReadings(image: PetalLuma, frame: PetalDecodedFrame): String =
+        (0 until PetalLayout.KANA_BANDS).joinToString(" ") { band ->
+            val reading = PetalKana.observeBand(image, frame, band)
+            "$band:" + if (reading == null) {
+                "-"
+            } else {
+                "${PetalKana.KANA_BLURS.indexOf(reading.blur)}/${reading.pilots}/${reading.tiles.count { it != null }}"
+            }
+        }
+
     private fun assertReading(name: String, expected: ReferenceReading, image: PetalLuma, frame: PetalDecodedFrame) {
         assertEquals(expected.homographyBits, frame.pose.homography.toArray().map(::bits), "$name: homography")
         assertEquals(expected.distortionBits, bits(frame.pose.distortion), "$name: lens distortion")
@@ -457,6 +581,8 @@ class PetalCaptureFixtureTest {
         val observed = assertNotNull(PetalTurns.observedTurns(image, frame), "$name: carriers")
         assertEquals(PetalTurns.TURN_BLURS[expected.fittedBlur], observed.blur, "$name: fitted blur")
         assertEquals(PetalLayout.SECTORS * PetalTurns.TURN_CARRIERS, observed.carriers.size, "$name: carriers")
+        assertEquals(expected.kanaLanes, kanaCounts(PetalKana.readKana(image, frame, headerOf(frame))), "$name: corrected/erasures per kana lane")
+        assertEquals(expected.kanaBands, bandReadings(image, frame), "$name: kana blur, pilots and tiles read per band")
     }
 
     @Test
@@ -520,7 +646,7 @@ class PetalCaptureFixtureTest {
     fun recordedLaneDataIsAValidCodewordOfItsStream() {
         val payload = PetalTestSupport.hex(doc.text("payload_hex"))
         val encoder = PetalStreamEncoder(payload, doc.number("payload_kind").toInt())
-        val stream = PetalTestSupport.loadFixture("petal_stream_v3.json").array("streams")
+        val stream = PetalTestSupport.loadFixture("petal_stream_v5.json").array("streams")
             .map { it.jsonObject }.single { it.text("name") == "one-pass" }
         assertContentEquals(stream.hexBytes("payload_hex"), payload)
         fun checkTurns(name: String, entry: JsonObject, data: PetalFrameLanes) {
@@ -531,6 +657,14 @@ class PetalCaptureFixtureTest {
                 assertContentEquals(turns[sector], PetalTurns.decodeTurnLaneCounted(sector, word).data)
             }
         }
+        fun checkKana(name: String, entry: JsonObject, data: PetalFrameLanes) {
+            val kana = entry.array("kana_data").map { PetalTestSupport.hex(it.jsonPrimitive.content) }
+            for (lane in PetalKanaLane.ALL) {
+                assertContentEquals(kana[lane.ordinal], data.kana(lane), "$name ${lane.name}")
+                val word = PetalKana.encodeKanaLane(lane, kana[lane.ordinal])
+                assertContentEquals(kana[lane.ordinal], PetalKana.decodeKanaLaneCounted(lane, word).data)
+            }
+        }
         for (element in doc.array("captures")) {
             val capture = element.jsonObject
             val data = encoder.laneData(capture.number("frame").toInt())
@@ -539,6 +673,7 @@ class PetalCaptureFixtureTest {
                 assertContentEquals(expected, PetalLanes.decodeLane(lane, PetalLanes.encodeLane(lane, expected)))
             }
             checkTurns(capture.text("name"), capture, data)
+            checkKana(capture.text("name"), capture, data)
         }
         // the lane data of a tracking pair is that of its second frame
         for (element in doc.array("tracks")) {
@@ -547,6 +682,7 @@ class PetalCaptureFixtureTest {
             val data = encoder.laneData(pair.number("to_frame").toInt())
             for ((lane, expected) in truth(pair)) assertContentEquals(expected, data.lane(lane), "${pair.text("name")} $lane")
             checkTurns(pair.text("name"), pair, data)
+            checkKana(pair.text("name"), pair, data)
         }
         // a merge set records the lanes of its shown frame; a mixed set its rings' frame and petals' frame
         for (element in doc.array("merges")) {

@@ -242,11 +242,11 @@ class PetalTurnsTest {
 
     @Test
     fun turnedRendersAndDrawListsMatchTheReference() {
-        // CRC-32C of the Rust reference `render` output of the turn tests' frames
+        // CRC-32C of the Rust reference `render` output (the whole card) of the turn tests' frames
         val expected = listOf(
-            stream.cells(6) to 0x17CB_8C22,
-            stream.cells(9) to 0x35BA_0ADE,
-            PetalFrameCells.of(stream.cells(3).dots(), stream.cells(3).petals()) to 0xD559_FFD0.toInt(),
+            stream.cells(6) to 0x913B_4A27.toInt(),
+            stream.cells(9) to 0x4AE3_1996,
+            PetalFrameCells.of(stream.cells(3).dots(), stream.cells(3).petals()) to 0xB234_98B5.toInt(),
         )
         for ((cells, crc) in expected) assertEquals(crc, PetalCrc32c.compute(rendered(cells).data()))
         // a draw list turns its petals as the renderer does, and shares them between frames

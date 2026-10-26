@@ -16,13 +16,17 @@ enum class PetalSlotRole {
 }
 
 /**
- * Normative Petal frame geometry (format 3).
+ * Normative Petal frame geometry (format 5).
  *
  * All coordinates are *design units* on a square canvas of [CANVAS] units with
  * the origin at the top-left and `y` growing downward. A renderer scales the
  * canvas to any pixel size; a decoder maps camera pixels back to design units.
  * Cell *order* is defined by integer indices only, and the slot count of every
  * band is a fixed table.
+ *
+ * A frame is a *card* of [CANVAS] × [CARD_HEIGHT] units: the square code with a band of katakana
+ * tiles above and below it (see [PetalKana]). Square coordinates are used throughout; the card's
+ * `y` is the square's plus [SQUARE_TOP], so band 0 lies at negative `y` and band 1 below [CANVAS].
  */
 object PetalLayout {
     /** Canvas side length in design units. */
@@ -498,6 +502,241 @@ object PetalLayout {
     internal const val TAU = 6.283185307179586
     private const val FRAC_PI_2 = 1.5707963267948966
 
+    // ---- the card: the square and a band of katakana tiles above and below it ----------------
+
+    /** Side of a katakana tile ([PetalKana]). */
+    const val KANA_TILE = 25.0
+
+    /** Pitch of the katakana tile lattice. */
+    const val KANA_PITCH = 29.0
+
+    /** Side of a tile's glyph box, centred in the tile. */
+    const val KANA_GLYPH_BOX = 23.0
+
+    /** Corner radius of a tile. */
+    const val KANA_CORNER = 3.0
+
+    /** Tile rows of each band. */
+    const val KANA_ROWS = 10
+
+    /** Tile columns of each band. */
+    const val KANA_COLUMNS = 35
+
+    /** Gap between a band's lattice and the square. */
+    const val KANA_GAP = 24.0
+
+    /** Margin outside a band's lattice. */
+    const val KANA_MARGIN = 8.0
+
+    /** Height of a band with its gap and margin (322 units). */
+    const val KANA_BAND_HEIGHT = KANA_MARGIN + KANA_ROWS * KANA_PITCH + KANA_GAP
+
+    /** Height of the card: the square with a band above and below it (1668 units). */
+    const val CARD_HEIGHT = CANVAS + 2.0 * KANA_BAND_HEIGHT
+
+    /** Card `y` of the square's top edge: card coordinates are square coordinates plus this in `y`. */
+    const val SQUARE_TOP = KANA_BAND_HEIGHT
+
+    /**
+     * Tile centres keep at least this distance from every finder centre: the blossom's radius, a
+     * blossom diameter of clearance, and a tile's half-diagonal, so no tile looks like part of a
+     * finder.
+     */
+    const val KANA_FINDER_CLEARANCE = 198.0
+
+    /** Bands: above the square and below it. */
+    const val KANA_BANDS = 2
+
+    /** Pilot tiles of each band. */
+    const val KANA_PILOTS = 8
+
+    /** Tiles of each band: the lattice cells clear of the finders. */
+    const val KANA_BAND_TILES = 306
+
+    /** Tiles of both bands. */
+    const val KANA_TILE_COUNT = KANA_BANDS * KANA_BAND_TILES
+
+    /**
+     * The pilot tiles of each band as `row, column` pairs (band 1 mirrors band 0's rows, so the
+     * pilots sit at the same distances from the square).
+     */
+    private val KANA_PILOT_CELLS = arrayOf(
+        intArrayOf(0, 0, 0, 17, 0, 34, 4, 0, 4, 34, 9, 8, 9, 17, 9, 26),
+        intArrayOf(9, 0, 9, 17, 9, 34, 5, 0, 5, 34, 0, 8, 0, 17, 0, 26),
+    )
+
+    /** What every pilot shows, in pilot order (ロ ケ ヒ ム ス ワ ア カ): its glyph … */
+    internal val KANA_PILOT_GLYPHS = intArrayOf(1, 11, 13, 9, 14, 6, 12, 7)
+
+    /** … and whether it is light. */
+    internal val KANA_PILOT_LIGHT = booleanArrayOf(true, false, true, false, false, true, false, true)
+
+    /** Band, row, column, top-left corner and pilot index (`-1` for a data tile) of every tile. */
+    internal val TILE_BAND = IntArray(KANA_TILE_COUNT)
+    internal val TILE_ROW = IntArray(KANA_TILE_COUNT)
+    internal val TILE_COLUMN = IntArray(KANA_TILE_COUNT)
+    internal val TILE_X = DoubleArray(KANA_TILE_COUNT)
+    internal val TILE_Y = DoubleArray(KANA_TILE_COUNT)
+    internal val TILE_PILOT = IntArray(KANA_TILE_COUNT)
+
+    /** The data tiles of band `b` (from `b · 298`) and its pilots (from `b · 8`), as tile indices. */
+    internal val KANA_DATA_TILES = IntArray(KANA_BANDS * (KANA_BAND_TILES - KANA_PILOTS))
+    internal val KANA_PILOT_TILES = IntArray(KANA_BANDS * KANA_PILOTS)
+
+    /** The tile of every lattice cell (`(band · 10 + row) · 35 + column`), or `-1`. */
+    private val KANA_LATTICE = IntArray(KANA_BANDS * KANA_ROWS * KANA_COLUMNS)
+
+    /** Left edge of the lattice (the columns are centred on the card). */
+    private const val KANA_LATTICE_LEFT = (CANVAS - KANA_COLUMNS * KANA_PITCH) / 2.0
+
+    init {
+        // plain loops, as in the initializer above
+        val inset = (KANA_PITCH - KANA_TILE) / 2.0
+        val clearance = KANA_FINDER_CLEARANCE
+        java.util.Arrays.fill(KANA_LATTICE, -1)
+        var count = 0
+        val data = IntArray(KANA_BANDS)
+        for (band in 0 until KANA_BANDS) {
+            for (row in 0 until KANA_ROWS) {
+                for (column in 0 until KANA_COLUMNS) {
+                    val x = KANA_LATTICE_LEFT + KANA_PITCH * column.toDouble() + inset
+                    val y = kanaLatticeTop(band) + KANA_PITCH * row.toDouble() + inset
+                    val half = KANA_TILE / 2.0
+                    val cx = x + half
+                    val cy = y + half
+                    var clear = true
+                    for (finder in 0 until 4) {
+                        val dx = cx - FINDER_CENTERS[2 * finder]
+                        val dy = cy - FINDER_CENTERS[2 * finder + 1]
+                        if (dx * dx + dy * dy < clearance * clearance) clear = false
+                    }
+                    if (!clear) continue
+                    var pilot = -1
+                    val cells = KANA_PILOT_CELLS[band]
+                    for (p in 0 until KANA_PILOTS) {
+                        if (cells[2 * p] == row && cells[2 * p + 1] == column) pilot = p
+                    }
+                    TILE_BAND[count] = band
+                    TILE_ROW[count] = row
+                    TILE_COLUMN[count] = column
+                    TILE_X[count] = x
+                    TILE_Y[count] = y
+                    TILE_PILOT[count] = pilot
+                    KANA_LATTICE[(band * KANA_ROWS + row) * KANA_COLUMNS + column] = count
+                    if (pilot >= 0) {
+                        KANA_PILOT_TILES[band * KANA_PILOTS + pilot] = count
+                    } else {
+                        KANA_DATA_TILES[band * (KANA_BAND_TILES - KANA_PILOTS) + data[band]] = count
+                        data[band] += 1
+                    }
+                    count += 1
+                }
+            }
+            check(count == (band + 1) * KANA_BAND_TILES) { "a band holds $KANA_BAND_TILES tiles" }
+            check(data[band] == KANA_BAND_TILES - KANA_PILOTS) { "a band holds ${KANA_BAND_TILES - KANA_PILOTS} data tiles" }
+        }
+    }
+
+    /** Top of band [band]'s lattice in square coordinates. */
+    private fun kanaLatticeTop(band: Int): Double =
+        if (band == 0) -KANA_BAND_HEIGHT + KANA_MARGIN else CANVAS + KANA_GAP
+
+    /**
+     * Every tile of both bands: band 0 first, each in reading order (rows top first, columns left
+     * first). A lattice cell whose tile centre lies within [KANA_FINDER_CLEARANCE] of a finder
+     * centre has no tile.
+     */
+    @JvmStatic
+    fun kanaTiles(): List<PetalKanaTile> {
+        val tiles = ArrayList<PetalKanaTile>(KANA_TILE_COUNT)
+        for (tile in 0 until KANA_TILE_COUNT) {
+            tiles += PetalKanaTile(TILE_BAND[tile], TILE_ROW[tile], TILE_COLUMN[tile], TILE_X[tile], TILE_Y[tile], TILE_PILOT[tile])
+        }
+        return java.util.Collections.unmodifiableList(tiles)
+    }
+
+    /** The data tiles of band [band] (its tiles that are not pilots) in reading order, as indices into [kanaTiles]. */
+    @JvmStatic
+    fun kanaDataTiles(band: Int): IntArray {
+        require(band in 0 until KANA_BANDS) { "band index out of range" }
+        val n = KANA_BAND_TILES - KANA_PILOTS
+        return KANA_DATA_TILES.copyOfRange(band * n, (band + 1) * n)
+    }
+
+    /** The pilot tiles of band [band] in pilot order, as indices into [kanaTiles]. */
+    @JvmStatic
+    fun kanaPilotTiles(band: Int): IntArray {
+        require(band in 0 until KANA_BANDS) { "band index out of range" }
+        return KANA_PILOT_TILES.copyOfRange(band * KANA_PILOTS, (band + 1) * KANA_PILOTS)
+    }
+
+    /** The glyph pilot [pilot] (`0..7`) shows. */
+    @JvmStatic
+    fun kanaPilotGlyph(pilot: Int): Int = KANA_PILOT_GLYPHS[pilot]
+
+    /** Whether pilot [pilot] (`0..7`) is a light tile. */
+    @JvmStatic
+    fun isKanaPilotLight(pilot: Int): Boolean = KANA_PILOT_LIGHT[pilot]
+
+    /**
+     * The tile under the square-coordinate point `(x, y)`, written to `out` as `[tile, u, v]` with
+     * the point's position inside the tile's square (`0..`[KANA_TILE] on both axes); `false`
+     * outside every tile square.
+     */
+    internal fun kanaTileAt(x: Double, y: Double, out: DoubleArray): Boolean {
+        val band = if (y < 0.0) {
+            0
+        } else if (y >= CANVAS) {
+            1
+        } else {
+            return false
+        }
+        val gx = (x - KANA_LATTICE_LEFT) / KANA_PITCH
+        val gy = (y - kanaLatticeTop(band)) / KANA_PITCH
+        if (gx < 0.0 || gy < 0.0) return false
+        val column = Math.floor(gx)
+        val row = Math.floor(gy)
+        if (column >= KANA_COLUMNS.toDouble() || row >= KANA_ROWS.toDouble()) return false
+        val tile = KANA_LATTICE[(band * KANA_ROWS + row.toInt()) * KANA_COLUMNS + column.toInt()]
+        if (tile < 0) return false
+        val inset = (KANA_PITCH - KANA_TILE) / 2.0
+        val u = (gx - column) * KANA_PITCH - inset
+        val v = (gy - row) * KANA_PITCH - inset
+        if (!(u >= 0.0 && u <= KANA_TILE && v >= 0.0 && v <= KANA_TILE)) return false
+        out[0] = tile.toDouble()
+        out[1] = u
+        out[2] = v
+        return true
+    }
+
+    /** Whether the tile-local point `(u, v)` lies inside the rounded tile square. */
+    @JvmStatic
+    fun kanaInside(u: Double, v: Double): Boolean {
+        val side = KANA_TILE
+        val corner = KANA_CORNER
+        if (!(u >= 0.0 && u <= side) || !(v >= 0.0 && v <= side)) return false
+        val cx = u.coerceIn(corner, side - corner)
+        val cy = v.coerceIn(corner, side - corner)
+        return (u - cx) * (u - cx) + (v - cy) * (v - cy) <= corner * corner
+    }
+
+    /**
+     * Whether the tile-local point `(u, v)` lies on [glyph]'s strokes: inside the tile square and
+     * inked in the glyph box (inset by half the difference of tile and box).
+     */
+    @JvmStatic
+    fun kanaInked(glyph: Int, u: Double, v: Double): Boolean {
+        require(glyph in 0 until PetalGlyphs.GLYPH_COUNT) { "glyph index out of range" }
+        return inked(glyph, u, v)
+    }
+
+    /** [kanaInked] without the range check. */
+    internal fun inked(glyph: Int, u: Double, v: Double): Boolean {
+        val inset = (KANA_TILE - KANA_GLYPH_BOX) / 2.0
+        val scale = PetalGlyphs.GLYPH_GRID / KANA_GLYPH_BOX
+        return kanaInside(u, v) && PetalGlyphs.inked(glyph, (u - inset) * scale, (v - inset) * scale)
+    }
+
     private fun checkBand(band: Int): Int {
         require(band in 0 until BAND_COUNT) { "band index out of range" }
         return band
@@ -517,4 +756,36 @@ object PetalLayout {
         require(index in 0 until 4) { "finder index out of range" }
         return index
     }
+}
+
+/** One katakana tile of the card (see [PetalLayout.kanaTiles]). Immutable. */
+class PetalKanaTile internal constructor(
+    /** Band: 0 above the square, 1 below it. */
+    val band: Int,
+    /** Row within its band, top first. */
+    val row: Int,
+    /** Column, left first. */
+    val column: Int,
+    /** Left edge of the tile square in square coordinates. */
+    val x: Double,
+    /** Top edge of the tile square in square coordinates. */
+    val y: Double,
+    /** Index among the pilots of its band, or `-1` for a data tile. */
+    val pilot: Int,
+) {
+    /** Centre `x` of the tile in square coordinates. */
+    val centerX: Double get() = x + PetalLayout.KANA_TILE / 2.0
+
+    /** Centre `y` of the tile in square coordinates. */
+    val centerY: Double get() = y + PetalLayout.KANA_TILE / 2.0
+
+    /** Whether the tile is a pilot with a fixed symbol. */
+    val isPilot: Boolean get() = pilot >= 0
+
+    override fun equals(other: Any?): Boolean = other is PetalKanaTile && band == other.band && row == other.row &&
+        column == other.column && x == other.x && y == other.y && pilot == other.pilot
+
+    override fun hashCode(): Int = ((31 * band + row) * 31 + column) * 31 + pilot
+
+    override fun toString(): String = "PetalKanaTile(band=$band, row=$row, column=$column, x=$x, y=$y, pilot=$pilot)"
 }
