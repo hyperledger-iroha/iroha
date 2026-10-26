@@ -582,6 +582,32 @@ Cursors bind the collection, complete filter and current visibility scope.
 History continuations also retain the committed snapshot hash and height.
 Changing `select` or `limit` between pages is allowed.
 
+The blocks feed seeks bounds on `height` in the filter's top-level `and`
+instead of walking from the snapshot tip: `height <= 1000` starts the walk at
+height 1000 and `height >= 901` ends it below height 901, so
+`filter=height >= 901 and height <= 1000&limit=100` can read that range in one
+page with a null `next_cursor` when it fits the request budget. Disjunctions and negations never narrow the
+walk, the complete filter still decides every row, and a continuation binds
+the bounds that issued it. Disjoint height ranges can therefore be read
+concurrently. A source-budget refusal after at least one row ends the native
+page at the unread height; its continuation resumes there. Adaptive admission
+retains that original owner-capacity refusal even when the page is successful,
+releases the smaller owner, and retries within the configured owner ladder. A
+partial page at the largest admitted owner remains a valid continuation. Canonical
+block reads capture and recheck the committed hash journal without constructing a
+World/runtime projection inside the source decoder budget. Cursor metadata,
+native page JSON, the public retained graph, projection scratch and final JSON
+capacity remain reserved under the original request owner. A required block
+that exceeds its entire source budget still returns the permanent history-budget
+error instead of an empty advancing page.
+
+The blocks feed retains at most 16,384 fixed-size summaries across all readers.
+Entries bind the exact allowed data space set and read-all permission, committed
+height/hash, and the original inline journal metadata image. An append or source
+change invalidates reuse; unavailable or evicted sidecars always use the canonical
+reader. Warm summaries skip body decoding without bypassing journal identity,
+poison or recovery checks. This cache changes neither the wire DTO nor visibility.
+
 | Feed | Filterable/projectable DTO fields |
 | --- | --- |
 | accounts | `id`, `network_prefix`, `owned_domains`, `owned_assets`, `owned_nfts`, `metadata.*` |

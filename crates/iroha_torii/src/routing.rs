@@ -37665,6 +37665,147 @@ mod explorer_lookup_tests {
         );
     }
 
+    routing_test! { sync explorer_block_summary_rows_match_full_block_rows_for_every_reader
+        use iroha_data_model::block::{
+            BlockExecutionContextBundle, ExternalExecutionContext, ExternalExecutionRouteLeg,
+            ExternalExecutionRouteRole,
+        };
+
+        let instruction: dm::InstructionBox =
+            dm::Log::new(dm::Level::INFO, "summarized".to_owned()).into();
+        let (state, _) = build_state_with_single_transaction(vec![instruction]);
+        let height = NonZeroUsize::new(state.committed_height()).expect("committed height");
+        let mut block = state
+            .block_by_height(height)
+            .expect("funded canonical history read")
+            .expect("committed block remains available")
+            .as_ref()
+            .clone();
+        let (entrypoint_hash, _) = block
+            .external_signed_transaction_at(0)
+            .expect("external signed transaction");
+        let (visible, hidden) = (DataSpaceId::new(7), DataSpaceId::new(8));
+        let readers = [
+            DataspaceReadVisibility::all_for_tests(),
+            DataspaceReadVisibility::new(BTreeSet::from([visible]), false),
+            DataspaceReadVisibility::default(),
+        ];
+        let contexts = [
+            None,
+            Some(BlockExecutionContextBundle::new(vec![ExternalExecutionContext::new(
+                entrypoint_hash,
+                LaneId::new(7),
+                visible,
+            )])),
+            Some(BlockExecutionContextBundle::new(vec![
+                ExternalExecutionContext::with_routing_plan(
+                    entrypoint_hash,
+                    LaneId::new(7),
+                    visible,
+                    Hash::new(b"summary route plan"),
+                    vec![
+                        ExternalExecutionRouteLeg::new(
+                            LaneId::new(7),
+                            visible,
+                            ExternalExecutionRouteRole::Coordinator,
+                        ),
+                        ExternalExecutionRouteLeg::new(
+                            LaneId::new(8),
+                            hidden,
+                            ExternalExecutionRouteRole::Participant,
+                        ),
+                    ],
+                ),
+            ])),
+        ];
+        let json = |row: &crate::explorer_history::HistoryBlockRow| {
+            norito::json::to_json_bounded_boxed(row, 4096).expect("row json")
+        };
+        for context in contexts {
+            block.set_execution_context(context);
+            for reader in &readers {
+                let summary = crate::explorer_history::ExplorerBlockSummary::from_block(&block, reader, [9; 32]);
+                let full = crate::explorer_history::HistoryBlockRow::from_block(&block, |index| {
+                    reader.allows_external_entrypoint(&block, index)
+                });
+                assert_eq!(json(&summary.row()), json(&full), "{reader:?}");
+            }
+        }
+    }
+
+    routing_test! { async explorer_block_feed_serves_repeat_reads_from_cached_summaries
+        let instruction: dm::InstructionBox = dm::Log::new(dm::Level::INFO, "cached".to_owned()).into();
+        let (state, _) = build_state_with_transactions(vec![vec![instruction.clone()], vec![instruction]]);
+        let summaries = Arc::new(crate::explorer_history::ExplorerBlockSummaryCache::new(64));
+        let read = |visibility: DataspaceReadVisibility| {
+            let state = state.clone();
+            let summaries = summaries.clone();
+            async move {
+                let response = handle_v1_explorer_blocks_with_summaries(
+                    state,
+                    visibility,
+                    crate::explorer::ExplorerCursorQuery { cursor: None, limit: 10 },
+                    EXPLORER_BLOCK_HEIGHTS_ALL,
+                    summaries,
+                )
+                .await
+                .expect("block page");
+                let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.expect("body");
+                let payload: norito::json::Value = norito::json::from_slice(&bytes).expect("json");
+                payload.get("items").cloned().expect("items")
+            }
+        };
+
+        let cold = read(DataspaceReadVisibility::all_for_tests()).await;
+        let committed = state.committed_height();
+        assert_eq!(cold.as_array().map(Vec::len), Some(committed));
+        assert_eq!(summaries.len(), committed, "every block read is summarized");
+        let newest = cold
+            .as_array()
+            .and_then(|rows| rows.first())
+            .and_then(|row| row.get("transactions_total")?.as_u64());
+        assert_eq!(newest, Some(2), "both inputs share the newest block; genesis has its own entries");
+
+        assert_eq!(read(DataspaceReadVisibility::all_for_tests()).await, cold, "a warm page is the cold page");
+        // Another reader's scope cannot reuse the first reader's counts.
+        let restricted = read(DataspaceReadVisibility::default()).await;
+        assert!(restricted.as_array().expect("rows").iter().all(|row| {
+            row.get("transactions_total").and_then(norito::json::Value::as_u64) == Some(0)
+        }));
+    }
+
+    routing_test! { sync explorer_block_summary_cache_hits_skip_decode_and_recheck_sources
+        let instruction: dm::InstructionBox = dm::Log::new(dm::Level::INFO, "cached source".to_owned()).into();
+        let (chain, _) = build_chain_with_executables_and_route_plans(
+            vec![dm::Executable::from(vec![instruction])], None, None,
+        );
+        let state = chain.state();
+        let height = NonZeroUsize::new(state.committed_height()).unwrap();
+        let summaries = crate::explorer_history::ExplorerBlockSummaryCache::new(16);
+        let owner = crate::history_producer::HistoryProducerOwner::for_test();
+        let all = DataspaceReadVisibility::all_for_tests();
+        let read = |reader: &DataspaceReadVisibility| owner.scope(|| {
+            explorer_feed_block_row(state, height, reader, &summaries)
+        });
+        assert!(owner.scope(|| state.canonical_history_summary_source_token(height)).unwrap().is_some());
+        let metadata_bytes = owner.allocation_context().consumed_allocated_bytes();
+        assert!(matches!(read(&all), Ok(ExplorerFeedRow::Row(_))));
+        let after_cold = owner.allocation_context().consumed_allocated_bytes();
+        let cold_bytes = after_cold - metadata_bytes;
+        assert!(cold_bytes > metadata_bytes);
+        assert!(matches!(read(&all), Ok(ExplorerFeedRow::Row(_))));
+        let after_warm = owner.allocation_context().consumed_allocated_bytes();
+        assert_eq!(after_warm - after_cold, metadata_bytes,
+            "a valid cache hit spends only the authoritative metadata check, without another body decode");
+        assert!(matches!(read(&DataspaceReadVisibility::default()), Ok(ExplorerFeedRow::Row(_))));
+        assert!(owner.allocation_context().consumed_allocated_bytes() - after_warm > metadata_bytes,
+            "another reader's visibility must obtain its own counts");
+
+        let wire = chain.committed(height.get() as u64).block().encode_wire().unwrap();
+        chain.kura().overwrite_native_frame_bytes_for_test(height, 0, &[wire[0] ^ 1]);
+        assert!(read(&all).is_err(), "changed source bytes must never reuse the warm row");
+    }
+
     routing_test! { sync native_history_rejects_mixed_execution_routes
         use iroha_core::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
         use iroha_data_model::block::{BlockExecutionContextBundle, ExternalExecutionContext, ExternalExecutionRouteLeg, ExternalExecutionRouteRole};
@@ -53156,15 +53297,45 @@ fn handle_v1_explorer_rwas_sync(
 
     })
 }
+/// Inclusive height range a block-feed walk visits; [`EXPLORER_BLOCK_HEIGHTS_ALL`]
+/// leaves it unbounded.
+pub type ExplorerBlockHeightRange = (u64, u64);
+
+/// The unbounded block-feed walk: from the snapshot tip down to genesis.
+pub const EXPLORER_BLOCK_HEIGHTS_ALL: ExplorerBlockHeightRange = (0, u64::MAX);
+
 #[cfg(test)]
 pub async fn handle_v1_explorer_blocks(
     state: Arc<CoreState>,
     telemetry: MaybeTelemetry,
     visibility: DataspaceReadVisibility,
     pagination: crate::explorer::ExplorerCursorQuery,
+    heights: ExplorerBlockHeightRange,
 ) -> Result<AxResponse, Error> {
-    crate::history_producer::HistoryProducerOwner::for_test().scope(|| {
-handle_v1_explorer_blocks_sync(state, telemetry, visibility, pagination)
+    let summaries = Arc::new(crate::explorer_history::ExplorerBlockSummaryCache::new(
+        crate::explorer_history::EXPLORER_BLOCK_SUMMARY_CACHE_CAPACITY,
+    ));
+    crate::history_producer::HistoryProducerOwner::for_test().physical_scope(|| {
+        handle_v1_explorer_blocks_sync(state, telemetry, visibility, pagination, (heights, &summaries))
+    })
+}
+
+#[cfg(test)]
+pub async fn handle_v1_explorer_blocks_with_summaries(
+    state: Arc<CoreState>,
+    visibility: DataspaceReadVisibility,
+    pagination: crate::explorer::ExplorerCursorQuery,
+    heights: ExplorerBlockHeightRange,
+    summaries: Arc<crate::explorer_history::ExplorerBlockSummaryCache>,
+) -> Result<AxResponse, Error> {
+    crate::history_producer::HistoryProducerOwner::for_test().physical_scope(|| {
+        handle_v1_explorer_blocks_sync(
+            state,
+            MaybeTelemetry::disabled(),
+            visibility,
+            pagination,
+            (heights, &summaries),
+        )
     })
 }
 
@@ -53173,66 +53344,190 @@ pub async fn handle_v1_explorer_blocks_admitted(
     telemetry: MaybeTelemetry,
     visibility: DataspaceReadVisibility,
     pagination: crate::explorer::ExplorerCursorQuery,
+    feed: (ExplorerBlockHeightRange, Arc<crate::explorer_history::ExplorerBlockSummaryCache>),
     admission: crate::QueryAdmissionPermit,
 ) -> Result<AxResponse, Error> {
-    run_admitted_blocking(admission, "Explorer block history worker failed", move || {
-        handle_v1_explorer_blocks_sync(state, telemetry, visibility, pagination)
-    })
-    .await
+    let worker = crate::panic_recovery::spawn_blocking_recoverable(move || {
+        // This route has a separate source ceiling so a spent decode grant
+        // cannot consume its cursor/output reserve. Retain original admission
+        // throughout the worker; each phase installs its original owner explicitly.
+        let _admission = admission;
+        let owner = crate::history_producer::HistoryProducerOwner::from_admission(&_admission)?;
+        owner.physical_scope(|| {
+            let (heights, summaries) = feed;
+            handle_v1_explorer_blocks_sync(state, telemetry, visibility, pagination, (heights, &summaries))
+        })
+    });
+    crate::panic_recovery::join_recoverable(worker).await
+        .map_err(|_| query_internal_error("Explorer block history worker failed"))?
 }
 
-fn handle_v1_explorer_blocks_sync(
+/// Bind a narrowed walk's range into its continuation so a cursor never
+/// resumes under different bounds; the unbounded walk keeps the plain digest.
+fn explorer_blocks_filter_digest(heights: ExplorerBlockHeightRange) -> Result<[u8; 32], Error> {
+    let collection = crate::explorer::ExplorerHistoryCollection::Blocks;
+    if heights == EXPLORER_BLOCK_HEIGHTS_ALL {
+        return Ok(crate::explorer::explorer_history_filter_digest(collection, &[]));
+    }
+    let text = |height| {
+        crate::explorer::explorer_history_scalar_text(height).map_err(explorer_history_cursor_error)
+    };
+    Ok(crate::explorer::explorer_history_filter_digest(
+        collection,
+        &[Some(text(heights.0)?), Some(text(heights.1)?)],
+    ))
+}
+
+/// The first block a page reads: the continuation (or snapshot tip) capped at
+/// the range's top, or nothing when that lies below the range's bottom.
+fn explorer_blocks_walk_start(
+    resume: Option<crate::explorer::ExplorerHistoryPosition>,
+    snapshot_height: u64,
+    heights: ExplorerBlockHeightRange,
+) -> Option<crate::explorer::ExplorerHistoryPosition> {
+    let start = resume.map_or(snapshot_height, |position| position.height);
+    let height = start.min(heights.1);
+    (height > 0 && height >= heights.0).then(|| crate::explorer::ExplorerHistoryPosition::block(height))
+}
+
+/// One block-feed row, or the request's history read budget running out
+/// before the row could be read.
+enum ExplorerFeedRow {
+    Row(crate::explorer_history::HistoryBlockRow),
+    BudgetSpent(Error),
+}
+
+/// Read one block-feed row. A summary cached by an earlier read serves it
+/// without a body read; a cold read fills the cache. A spent (not permanently
+/// exceeded) read budget is reported so the walk can end its page early.
+fn explorer_feed_block_row(
+    state: &CoreState,
+    height: NonZeroUsize,
+    visibility: &DataspaceReadVisibility,
+    summaries: &crate::explorer_history::ExplorerBlockSummaryCache,
+) -> Result<ExplorerFeedRow, Error> {
+    use iroha_core::execution_attempt::ExecutionAttemptError;
+    use iroha_data_model::query::error::{CanonicalHistoryError, QueryExecutionFail};
+    let height_u64 = u64::try_from(height.get())
+        .map_err(|_| conversion_error("block height exceeds u64".into()))?;
+    let owner = crate::history_producer::HistoryProducerOwner::current()?;
+    let read = (|| -> Result<crate::explorer_history::HistoryBlockRow, ExecutionAttemptError<QueryExecutionFail>> {
+        let source_token = state.canonical_history_summary_source_token(height)?;
+        if let Some(summary) = source_token.and_then(|token| {
+            state.committed_block_hash_at_height(height_u64)
+                .and_then(|hash| summaries.get(height_u64, hash, visibility.visible_route_set_digest(), token))
+        }) {
+            return Ok(summary.row());
+        }
+        let block = state.read_canonical_history_block(height, &owner.canonical_history_budget())?;
+        // An append or source change during decoding disables retention for
+        // this read; only equal before/after source images can warm the cache.
+        if let Some(token) = source_token {
+            if state.canonical_history_summary_source_token(height)? == Some(token) {
+                let summary = summaries.insert(crate::explorer_history::ExplorerBlockSummary::from_block(
+                    &block, visibility, token,
+                ));
+                return Ok(summary.row());
+            }
+        }
+        Ok(crate::explorer_history::HistoryBlockRow::from_block(
+            &block, |index| visibility.allows_external_entrypoint(&block, index),
+        ))
+    })();
+    match read {
+        Ok(row) => Ok(ExplorerFeedRow::Row(row)),
+        Err(ExecutionAttemptError::Rejected(QueryExecutionFail::CanonicalHistory(
+            CanonicalHistoryError::BodyUnavailable { .. },
+        ))) => explorer_hash_only_block_row(state, height_u64).map(ExplorerFeedRow::Row),
+        Err(ExecutionAttemptError::Deferred(deferred))
+            if crate::canonical_history::permanent_refusal(&deferred).is_none() =>
+        {
+            Ok(ExplorerFeedRow::BudgetSpent(crate::canonical_history::query_attempt_error(
+                ExecutionAttemptError::Deferred(deferred),
+            )))
+        }
+        Err(error) => Err(crate::canonical_history::query_attempt_error(error)),
+    }
+}
+
+/// Walk the block feed newest first from `start` down to `lowest`, filling
+/// `items` up to `limit` rows within the scan cap. A spent read budget ends a
+/// page that already holds rows; the returned continuation then names the
+/// unread height, so the next page resumes exactly there.
+fn walk_block_feed(
+    start: Option<crate::explorer::ExplorerHistoryPosition>,
+    (limit, lowest): (usize, u64),
+    items: &mut Vec<crate::explorer_history::HistoryBlockRow>,
+    mut read: impl FnMut(NonZeroUsize) -> Result<ExplorerFeedRow, Error>,
+) -> Result<Option<crate::explorer::ExplorerHistoryPosition>, Error> {
+    let mut next_position = start;
+    let mut scanned = 0_usize;
+    while items.len() < limit && scanned < EXPLORER_HISTORY_MAX_SCANNED_BLOCKS_V1 {
+        let Some(position) = next_position else {
+            break;
+        };
+        let height_usize: usize = position
+            .height
+            .try_into()
+            .map_err(|_| conversion_error("block height exceeds host pointer width".into()))?;
+        let nonzero_height = NonZeroUsize::new(height_usize)
+            .ok_or_else(|| conversion_error("block height must be at least 1".into()))?;
+        match read(nonzero_height)? {
+            ExplorerFeedRow::Row(row) => items.push(row),
+            ExplorerFeedRow::BudgetSpent(_) if !items.is_empty() => break,
+            ExplorerFeedRow::BudgetSpent(error) => return Err(error),
+        }
+        scanned = scanned.saturating_add(1);
+        next_position = position
+            .height
+            .checked_sub(1)
+            .filter(|height| *height > 0 && *height >= lowest)
+            .map(crate::explorer::ExplorerHistoryPosition::block);
+    }
+    Ok(next_position)
+}
+
+pub(crate) fn handle_v1_explorer_blocks_sync(
     state: Arc<CoreState>,
     telemetry: MaybeTelemetry,
     visibility: DataspaceReadVisibility,
     pagination: crate::explorer::ExplorerCursorQuery,
+    (heights, summaries): (ExplorerBlockHeightRange, &crate::explorer_history::ExplorerBlockSummaryCache),
 ) -> Result<AxResponse, Error> {
     let started = std::time::Instant::now();
     let response = (|| -> Result<AxResponse, Error> {
         let collection = crate::explorer::ExplorerHistoryCollection::Blocks;
-        let filter_digest = crate::explorer::explorer_history_filter_digest(collection, &[]);
-        let scope = resolve_explorer_history_request(
+        let owner = crate::history_producer::HistoryProducerOwner::current()?;
+        let scope = owner.scope(|| {
+            let filter_digest = explorer_blocks_filter_digest(heights)?;
+            resolve_explorer_history_request(
             state.as_ref(),
             &visibility,
             &pagination,
             collection,
-            filter_digest,
-        )?;
-        let mut next_position = scope.resume.or_else(|| {
-            (scope.snapshot_height > 0)
-                .then(|| crate::explorer::ExplorerHistoryPosition::block(scope.snapshot_height))
-        });
-        let mut items = crate::history_producer::HistoryProducerOwner::current()?.selected(scope.limit)?;
-        let mut scanned = 0_usize;
-        while items.len() < scope.limit && scanned < EXPLORER_HISTORY_MAX_SCANNED_BLOCKS_V1 {
-            let Some(position) = next_position else {
-                break;
-            };
-            let height_usize: usize = position.height.try_into().map_err(|_| {
-                conversion_error("block height exceeds host pointer width".into())
-            })?;
-            let nonzero_height = NonZeroUsize::new(height_usize)
-                .ok_or_else(|| conversion_error("block height must be at least 1".into()))?;
-            let dto = explorer_history_block_row(state.as_ref(), nonzero_height, &visibility)?;
-            items.push(dto);
-            scanned = scanned.saturating_add(1);
-            next_position = position
-                .height
-                .checked_sub(1)
-                .filter(|height| *height > 0)
-                .map(crate::explorer::ExplorerHistoryPosition::block);
-        }
-        let pagination_meta = explorer_history_meta(
+                filter_digest,
+            )
+        })?;
+        let mut items = owner.selected(scope.limit)?;
+        let response_reserve = owner.block_feed_output_reserve()?;
+        let source = owner.source_allocation_context(response_reserve)?;
+        let next_position = source.with(|| owner.scope(|| walk_block_feed(
+            explorer_blocks_walk_start(scope.resume, scope.snapshot_height, heights),
+            (scope.limit, heights.0),
+            &mut items,
+            |height| explorer_feed_block_row(state.as_ref(), height, &visibility, summaries),
+        )))?;
+        let pagination_meta = owner.scope(|| explorer_history_meta(
             collection,
             &pagination,
             &scope,
             next_position,
-        )?;
+        ))?;
         let body = crate::explorer_history::HistoryPage {
             pagination: pagination_meta,
             items,
         };
-        crate::history_producer::HistoryProducerOwner::current()?.json(&body)
+        owner.json_with_limit(&body, owner.source_frame_bytes())
     })();
     record_explorer_endpoint_result(&telemetry, ENDPOINT_EXPLORER_BLOCKS, started, &response);
     response
@@ -53266,6 +53561,7 @@ routing_test! { async explorer_blocks_falls_back_to_hash_only_committed_journal
             cursor: None,
             limit: 1,
         },
+        EXPLORER_BLOCK_HEIGHTS_ALL,
     )
     .await
     .expect("hash-only explorer block list should succeed");
@@ -53331,6 +53627,182 @@ routing_test! { async explorer_blocks_falls_back_to_hash_only_committed_journal
         payload.get("hash"),
         Some(&second_json)
     );
+}
+#[cfg(all(test, feature = "app_api"))]
+pub(crate) fn explorer_blocks_seek_test_state(blocks: u8) -> Arc<CoreState> {
+    let state = Arc::new(CoreState::new_for_testing(
+        World::default(),
+        Kura::blank_kura_for_testing(),
+        iroha_core::query::store::LiveQueryStore::start_test(),
+    ));
+    {
+        let mut block_hashes = state.block_hashes.block();
+        for height in 1..=blocks {
+            block_hashes.push_for_tests(HashOf::<BlockHeader>::from_untyped_unchecked(
+                Hash::prehashed([height; Hash::LENGTH]),
+            ));
+        }
+        block_hashes.commit_for_tests();
+    }
+    state
+}
+#[cfg(all(test, feature = "app_api"))]
+async fn explorer_blocks_seek_page(
+    state: &Arc<CoreState>,
+    cursor: Option<String>,
+    limit: u32,
+    heights: ExplorerBlockHeightRange,
+) -> Result<(Vec<u64>, Option<String>), Error> {
+    let response = handle_v1_explorer_blocks(
+        state.clone(),
+        MaybeTelemetry::disabled(),
+        DataspaceReadVisibility::all_for_tests(),
+        crate::explorer::ExplorerCursorQuery { cursor, limit },
+        heights,
+    )
+    .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body");
+    let payload: norito::json::Value = norito::json::from_slice(&bytes).expect("json");
+    let heights = payload
+        .get("items")
+        .and_then(norito::json::Value::as_array)
+        .expect("items")
+        .iter()
+        .map(|item| {
+            item.get("height")
+                .and_then(norito::json::Value::as_u64)
+                .expect("height")
+        })
+        .collect();
+    let next_cursor = payload
+        .get("pagination")
+        .and_then(|meta| meta.get("next_cursor"))
+        .and_then(norito::json::Value::as_str)
+        .map(str::to_owned);
+    Ok((heights, next_cursor))
+}
+#[cfg(all(test, feature = "app_api"))]
+routing_test! { async explorer_blocks_seek_a_height_range_instead_of_walking_from_the_tip
+    let state = explorer_blocks_seek_test_state(250);
+    let (tip, _) = explorer_blocks_seek_page(&state, None, 3, EXPLORER_BLOCK_HEIGHTS_ALL)
+        .await
+        .expect("unbounded page");
+    assert_eq!(tip, vec![250, 249, 248]);
+
+    let (range, next_cursor) = explorer_blocks_seek_page(&state, None, 100, (51, 100))
+        .await
+        .expect("narrowed page");
+    assert_eq!(range, (51..=100).rev().collect::<Vec<u64>>());
+    assert_eq!(next_cursor, None, "the walk ends at the range's bottom");
+}
+#[cfg(all(test, feature = "app_api"))]
+routing_test! { async explorer_blocks_range_continuation_stays_inside_its_range
+    let state = explorer_blocks_seek_test_state(250);
+    let (first, cursor) = explorer_blocks_seek_page(&state, None, 30, (51, 100))
+        .await
+        .expect("first narrowed page");
+    assert_eq!(first, (71..=100).rev().collect::<Vec<u64>>());
+    let cursor = cursor.expect("continuation inside the range");
+
+    let (second, end) = explorer_blocks_seek_page(&state, Some(cursor.clone()), 30, (51, 100))
+        .await
+        .expect("second narrowed page");
+    assert_eq!(second, (51..=70).rev().collect::<Vec<u64>>());
+    assert_eq!(end, None);
+
+    for other in [EXPLORER_BLOCK_HEIGHTS_ALL, (1, 100), (51, 99)] {
+        assert!(
+            explorer_blocks_seek_page(&state, Some(cursor.clone()), 30, other).await.is_err(),
+            "a continuation is bound to the range that issued it: {other:?}"
+        );
+    }
+}
+#[cfg(all(test, feature = "app_api"))]
+routing_test! { async explorer_blocks_range_edges_clamp_or_select_nothing
+    let state = explorer_blocks_seek_test_state(250);
+    let (clamped, end) = explorer_blocks_seek_page(&state, None, 100, (240, 10_000))
+        .await
+        .expect("range above the tip");
+    assert_eq!(clamped, (240..=250).rev().collect::<Vec<u64>>());
+    assert_eq!(end, None);
+
+    for empty in [(10, 5), (251, u64::MAX), (0, 0), (u64::MAX, u64::MAX)] {
+        let (rows, end) = explorer_blocks_seek_page(&state, None, 100, empty)
+            .await
+            .expect("empty range");
+        assert!(rows.is_empty(), "{empty:?} selects no block");
+        assert_eq!(end, None, "{empty:?} has nothing to continue");
+    }
+
+    let (genesis, end) = explorer_blocks_seek_page(&state, None, 100, (0, 2))
+        .await
+        .expect("range reaching genesis");
+    assert_eq!(genesis, vec![2, 1]);
+    assert_eq!(end, None);
+}
+#[cfg(all(test, feature = "app_api"))]
+routing_test! { sync explorer_block_walk_ends_a_page_early_when_the_read_budget_is_spent
+    let at = |height| Some(crate::explorer::ExplorerHistoryPosition::block(height));
+    let row = |height: NonZeroUsize| {
+        let height = u64::try_from(height.get()).expect("test height");
+        let hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+            [u8::try_from(height % 251).expect("byte"); Hash::LENGTH],
+        ));
+        Ok(ExplorerFeedRow::Row(crate::explorer_history::HistoryBlockRow::from_hash_only(
+            height, hash, None,
+        )))
+    };
+    let spent = || Ok(ExplorerFeedRow::BudgetSpent(explorer_not_found()));
+    let heights = |items: &[crate::explorer_history::HistoryBlockRow]| {
+        items.iter().map(|item| item.height).collect::<Vec<u64>>()
+    };
+
+    // Rows 100 and 99 fit; the budget runs out at 98, which the continuation names.
+    let mut items = Vec::new();
+    let next = walk_block_feed(at(100), (30, 1), &mut items, |height| {
+        if height.get() > 98 { row(height) } else { spent() }
+    })
+    .expect("a short page");
+    assert_eq!(heights(&items), vec![100, 99]);
+    assert_eq!(next, at(98));
+
+    // A budget spent before any row is the request's failure, never an empty page.
+    let mut items = Vec::new();
+    assert!(walk_block_feed(at(100), (30, 1), &mut items, |_| spent()).is_err());
+
+    // Otherwise a page stops at its limit, at the range's bottom, or at genesis.
+    let mut items = Vec::new();
+    assert_eq!(walk_block_feed(at(100), (3, 1), &mut items, row).expect("full page"), at(97));
+    let mut items = Vec::new();
+    assert_eq!(walk_block_feed(at(100), (30, 95), &mut items, row).expect("range page"), None);
+    assert_eq!(heights(&items), (95..=100).rev().collect::<Vec<u64>>());
+    let mut items = Vec::new();
+    assert_eq!(walk_block_feed(at(2), (30, 0), &mut items, row).expect("genesis page"), None);
+    assert_eq!(heights(&items), vec![2, 1]);
+}
+#[cfg(all(test, feature = "app_api"))]
+routing_test! { sync explorer_blocks_walk_start_caps_at_the_range_top
+    let at = |height| Some(crate::explorer::ExplorerHistoryPosition::block(height));
+    assert_eq!(explorer_blocks_walk_start(None, 250, EXPLORER_BLOCK_HEIGHTS_ALL), at(250));
+    assert_eq!(explorer_blocks_walk_start(None, 250, (51, 100)), at(100));
+    assert_eq!(explorer_blocks_walk_start(at(70), 250, (51, 100)), at(70));
+    assert_eq!(explorer_blocks_walk_start(None, 40, (51, 100)), None);
+    assert_eq!(explorer_blocks_walk_start(None, 0, EXPLORER_BLOCK_HEIGHTS_ALL), None);
+    assert_eq!(explorer_blocks_walk_start(None, 250, (10, 5)), None);
+}
+#[cfg(all(test, feature = "app_api"))]
+routing_test! { sync explorer_blocks_filter_digest_binds_only_narrowed_ranges
+    let plain = crate::explorer::explorer_history_filter_digest(
+        crate::explorer::ExplorerHistoryCollection::Blocks,
+        &[],
+    );
+    assert_eq!(explorer_blocks_filter_digest(EXPLORER_BLOCK_HEIGHTS_ALL).expect("digest"), plain);
+    let narrowed = explorer_blocks_filter_digest((51, 100)).expect("digest");
+    assert_ne!(narrowed, plain);
+    assert_ne!(narrowed, explorer_blocks_filter_digest((51, 99)).expect("digest"));
 }
 app_api_items! {
 pub async fn handle_v1_explorer_health(
@@ -56283,16 +56755,23 @@ fn explorer_history_block_row(
         Ok(block) => Ok(crate::explorer_history::HistoryBlockRow::from_block(&block,
             |index| visibility.allows_external_entrypoint(&block, index))),
         Err(ExecutionAttemptError::Rejected(QueryExecutionFail::CanonicalHistory(CanonicalHistoryError::BodyUnavailable { .. }))) => {
-            let height = height.get() as u64;
-            let hash = state.committed_block_hash_at_height(height).ok_or_else(explorer_not_found)?;
-            Ok(crate::explorer_history::HistoryBlockRow {
-                hash, height, created_at: crate::explorer_history::HistoryBlockTime(None),
-                prev_block_hash: height.checked_sub(1).filter(|height| *height > 0).and_then(|height| state.committed_block_hash_at_height(height)),
-                transactions_hash: None, transactions_rejected: 0, transactions_total: 0,
-            })
+            explorer_hash_only_block_row(state, height.get() as u64)
         }
         Err(error) => Err(crate::canonical_history::query_attempt_error(error)),
     }
+}
+/// Report only the committed journal's identity for a block whose body is unavailable;
+/// its time and counts stay unknown, never zero activity.
+fn explorer_hash_only_block_row(
+    state: &CoreState,
+    height: u64,
+) -> Result<crate::explorer_history::HistoryBlockRow, Error> {
+    let hash = state.committed_block_hash_at_height(height).ok_or_else(explorer_not_found)?;
+    Ok(crate::explorer_history::HistoryBlockRow {
+        hash, height, created_at: crate::explorer_history::HistoryBlockTime(None),
+        prev_block_hash: height.checked_sub(1).filter(|height| *height > 0).and_then(|height| state.committed_block_hash_at_height(height)),
+        transactions_hash: None, transactions_rejected: 0, transactions_total: 0,
+    })
 }
 fn parse_block_identifier(raw: &str) -> Result<ExplorerBlockIdentifier, Error> {
     let trimmed = raw.trim();

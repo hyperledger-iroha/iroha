@@ -30724,8 +30724,57 @@ impl State {
         Ok(carrier)
     }
 
+    /// Identify the current inline canonical source for a derived block summary.
+    /// This performs only bounded metadata reads and enforces Kura's original
+    /// journal binding, poison and recovery checks. It grants no body authority:
+    /// a consumer must have read the exact same token through the canonical reader.
+    /// A new append invalidates old tokens; evicted bodies are never cacheable.
+    ///
+    /// # Errors
+    /// Preserves source corruption and original local resource refusal. Absent
+    /// journal bindings return `None` so the canonical reader owns availability.
+    pub fn canonical_history_summary_source_token(
+        &self,
+        height: NonZeroUsize,
+    ) -> Result<
+        Option<[u8; 32]>,
+        crate::execution_attempt::ExecutionAttemptError<
+            iroha_data_model::query::error::QueryExecutionFail,
+        >,
+    > {
+        use iroha_data_model::query::error::QueryExecutionFail;
+        let Some(expected) = self.block_hashes.view().get(height.get() - 1).copied() else {
+            return Ok(None);
+        };
+        if self.kura.is_canonical_body_missing(height) {
+            return Ok(None);
+        }
+        let token = match self
+            .kura
+            .canonical_summary_source_token(height.get() as u64, expected)
+        {
+            Ok(token) => token,
+            Err(crate::kura::Error::NativeJournalUnavailable(_, _)) => return Ok(None),
+            Err(error) => {
+                return Err(crate::execution_attempt::kura_read_attempt_error(
+                    error,
+                    |error| QueryExecutionFail::Conversion(error.to_string()),
+                ));
+            }
+        };
+        if self.block_hashes.view().get(height.get() - 1).copied() != Some(expected) {
+            return Err(QueryExecutionFail::Conversion(
+                "canonical summary source changed during read".into(),
+            )
+            .into());
+        }
+        Ok(token)
+    }
+
     /// Read an authenticated canonical summary source in the caller's original cold owner.
-    /// Unlike execution projections this checks only the committed header hash and height.
+    /// Capture only the committed hash journal: a block summary requires no World or
+    /// runtime projection, whose manifest decoding must not consume the page's source
+    /// allowance. Recheck canonical membership after the original bounded body read.
     ///
     /// # Errors
     /// Preserves original capacity refusal, absent body, corruption and header substitution.
@@ -30740,10 +30789,32 @@ impl State {
         >,
     > {
         read_budget.with(|| {
-            self.view()
-                .canonical_history()
-                .with_read_budget(read_budget)
-                .block_with_admission(height, |_, _| Ok(()))
+            let hashes = self.block_hashes.view();
+            let expected = hashes.get(height.get() - 1).copied();
+            let block = CanonicalHistorySource::new(
+                &self.kura,
+                &hashes,
+                None,
+                read_budget.frames().clone(),
+            )
+            .block_with_admission(height, |_, _| Ok(()))
+            .map_err(|error| match error {
+                crate::execution_attempt::ExecutionAttemptError::Deferred(deferred) => {
+                    crate::execution_attempt::ExecutionAttemptError::Deferred(
+                        deferred.at_history_target(),
+                    )
+                }
+                rejected => rejected,
+            })?;
+            if self.block_hashes.view().get(height.get() - 1).copied() != expected {
+                return Err(
+                    iroha_data_model::query::error::QueryExecutionFail::Conversion(
+                        "canonical history source changed during read".into(),
+                    )
+                    .into(),
+                );
+            }
+            Ok(block)
         })
     }
 

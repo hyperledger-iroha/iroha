@@ -63,6 +63,9 @@ const EXPLORER_HISTORY_CURSOR_MAGIC: [u8; 4] = *b"IHC2";
 const EXPLORER_HISTORY_FILTER_DOMAIN: &[u8] = b"iroha-explorer-history-filter-v2";
 const EXPLORER_HISTORY_CURSOR_FRAME_BYTES: usize = 4 + 1 + 8 + 32 + 32 + 32 + 8 + 32 + 4;
 const EXPLORER_HISTORY_CURSOR_MAX_ENCODED_BYTES: usize = 208;
+/// Maximum owned cursor and snapshot-hash text built after a history scan.
+pub(crate) const EXPLORER_HISTORY_RESPONSE_METADATA_BYTES: usize =
+    EXPLORER_HISTORY_CURSOR_MAX_ENCODED_BYTES + 64;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 enum ExplorerCursorCollection {
@@ -455,7 +458,15 @@ pub(crate) fn explorer_history_cursor_meta(
     Ok(ExplorerHistoryCursorMeta {
         limit,
         snapshot_height,
-        snapshot_hash: snapshot_hash.map(hex::encode),
+        snapshot_hash: snapshot_hash
+            .map(|hash| {
+                let mut text = explorer_exact_vec::<u8>(64, 64)?;
+                text.resize(64, 0);
+                hex::encode_to_slice(hash, &mut text)
+                    .map_err(|_| ExplorerCursorError::InvalidKey)?;
+                String::from_utf8(text).map_err(|_| ExplorerCursorError::InvalidKey)
+            })
+            .transpose()?,
         has_more: next_cursor.is_some(),
         next_cursor,
     })
@@ -2311,6 +2322,32 @@ mod tests {
             );
         }
     }
+    #[test]
+    fn explorer_block_cursor_metadata_charges_owned_snapshot_text() {
+        let build = || {
+            explorer_history_cursor_meta(
+                ExplorerHistoryCollection::Blocks,
+                [0; 32],
+                [1; 32],
+                1,
+                1,
+                Some([2; 32]),
+                None,
+            )
+        };
+        for (limit, succeeds) in [(63, false), (64, true)] {
+            let budget = norito::core::DecodeBudgetContext::new(norito::DecodeLimits::new(
+                1024, 1024, 1024, limit, 16,
+            ));
+            let result = budget.with(build);
+            assert_eq!(result.is_ok(), succeeds);
+            if succeeds {
+                assert_eq!(budget.consumed_allocated_bytes(), 64);
+                assert_eq!(result.unwrap().snapshot_hash.unwrap(), "02".repeat(32));
+            }
+        }
+    }
+
     #[test]
     fn history_cursor_is_snapshot_filter_visibility_and_route_bound() {
         let collection = ExplorerHistoryCollection::Transactions;

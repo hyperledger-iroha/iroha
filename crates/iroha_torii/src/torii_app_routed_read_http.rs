@@ -833,14 +833,15 @@ fn app_routed_read_owner_admits(
 }
 /// Whether this routed read was refused by a limit derived from its own owner, so a
 /// larger owner can serve it: owner-limit refusals answer `query_capacity_exceeded`
-/// or mark the owner when they surface as a plain capacity refusal.
+/// or mark the owner, including when a producer returns a valid partial page after
+/// exhausting its source budget. The caller retries only while a larger owner exists.
 fn app_routed_read_owner_refused(
     response: &Response,
     reservation: &QueryFanoutMemoryReservation,
 ) -> bool {
-    !response.status().is_success()
-        && (reservation.owner_limit_refused()
-            || response
+    reservation.owner_limit_refused()
+        || (!response.status().is_success()
+            && response
                 .headers()
                 .get("x-iroha-reject-code")
                 .is_some_and(|code| code == "query_capacity_exceeded"))

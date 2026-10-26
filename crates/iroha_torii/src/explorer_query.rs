@@ -106,6 +106,12 @@ fn limits() -> Limits {
     )
 }
 
+/// Height bounds in the block query's outer conjunction seek the native walk;
+/// the complete filter still decides every row, and the outer cursor binds it.
+fn block_feed_heights(query: &ScanQuery) -> routing::ExplorerBlockHeightRange {
+    collections::conjunctive_height_range(query.rows.filter.as_ref(), "height")
+}
+
 /// A conjunctive equality can narrow the native scanner without changing the
 /// full row predicate. Disjunctions and negations never become scan bounds.
 fn conjunctive_equality<'a>(filter: Option<&'a FilterExpr>, name: &str) -> Option<&'a Value> {
@@ -651,7 +657,15 @@ async fn execute(
         }
         "explorer_blocks" => {
             routing::handle_v1_explorer_blocks_admitted(
-                state, telemetry, visibility, native, admission,
+                state,
+                telemetry,
+                visibility,
+                native,
+                (
+                    block_feed_heights(&query),
+                    Arc::clone(&app.explorer_block_summaries),
+                ),
+                admission,
             )
             .await?
         }
@@ -725,6 +739,145 @@ mod tests {
         visibility: [u8; 32],
     ) -> Result<ScanQuery, Error> {
         ScanQuery::new(spec, query, visibility, limits())
+    }
+
+    #[tokio::test]
+    async fn exhausted_block_feed_preserves_public_projection_and_unread_cursor() {
+        use crate::history_producer::HistoryProducerOwner;
+        use iroha_core::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
+        use std::num::NonZeroUsize;
+
+        let envelope = QueryFanoutMemoryEnvelope::for_body_admission(48_000_000).unwrap();
+        let owner = || {
+            let semaphore = Arc::new(tokio::sync::Semaphore::new(1));
+            let reservation = QueryFanoutMemoryReservation::from_admitted_fanout(
+                semaphore.try_acquire_owned().unwrap(),
+                envelope,
+                7,
+            )
+            .unwrap();
+            HistoryProducerOwner::from_reservation(&reservation).unwrap()
+        };
+        let mut limits = limits();
+        limits.bytes =
+            collections::memory::BytePolicy::for_admitted_read(envelope, envelope.route_body_bytes);
+        let mut chain =
+            CertifiedTestChain::start(TestChainConfig::new(iroha_core::state::World::new(), 1_000))
+                .unwrap();
+        chain.commit(Vec::new());
+        let state = Arc::clone(chain.state());
+        let measured = owner();
+        measured
+            .scope(|| {
+                state.read_canonical_history_block(
+                    NonZeroUsize::new(2).unwrap(),
+                    &measured.canonical_history_budget(),
+                )
+            })
+            .unwrap();
+        let first = measured.allocation_context().consumed_allocated_bytes() as usize;
+        measured
+            .scope(|| {
+                state.read_canonical_history_block(
+                    NonZeroUsize::MIN,
+                    &measured.canonical_history_budget(),
+                )
+            })
+            .unwrap();
+        let second = measured.allocation_context().consumed_allocated_bytes() as usize - first;
+        assert!(first > 0 && second > 0);
+
+        let visibility = routing::DataspaceReadVisibility::all_for_tests();
+        let summaries = crate::explorer_history::ExplorerBlockSummaryCache::new(16);
+        let mut input = ListQuery::new().limit(100).select([
+            FieldPath::from("height"),
+            FieldPath::from("transactions_total"),
+        ]);
+        for expected_height in [2, 1] {
+            let query = ScanQuery::new(
+                &BLOCKS,
+                input.clone(),
+                visibility.visible_route_set_digest(),
+                limits,
+            )
+            .unwrap();
+            if expected_height == 1 {
+                assert!(query.native.cursor.is_some());
+                assert_ne!(query.native.cursor.as_deref(), input.cursor.as_deref());
+            }
+            let request = owner();
+            // The source and the public adapter spend one cumulative grant. The
+            // source reserve must cover every downstream phase, not just native JSON.
+            let policy = query.limits.bytes;
+            let output_reserve = policy.source_frame_bytes
+                + policy.retained_bytes
+                + policy.scratch_bytes
+                + policy.response_bytes
+                + explorer::EXPLORER_HISTORY_RESPONSE_METADATA_BYTES;
+            assert_eq!(request.block_feed_output_reserve().unwrap(), output_reserve);
+            if expected_height == 2 {
+                let selected =
+                    std::alloc::Layout::array::<crate::explorer_history::HistoryBlockRow>(100)
+                        .unwrap()
+                        .size();
+                let source = first + second / 2;
+                let burn = request.allocation_limit_for_test() - output_reserve - selected - source;
+                request
+                    .scope(|| norito::core::reserve_decode_allocation(burn))
+                    .unwrap();
+            }
+            let response = request
+                .physical_scope(|| {
+                    routing::handle_v1_explorer_blocks_sync(
+                        Arc::clone(&state),
+                        routing::MaybeTelemetry::disabled(),
+                        visibility.clone(),
+                        query.native.clone(),
+                        (block_feed_heights(&query), &summaries),
+                    )
+                })
+                .expect("a spent source budget still produces its native page");
+            let bytes = axum::body::to_bytes(response.into_body(), policy.source_frame_bytes)
+                .await
+                .unwrap();
+            let before_projection = request.allocation_context().consumed_allocated_bytes();
+            // Run the same complete public adapter as execute, retaining the exact
+            // original owner after its partially decoded next block was refused.
+            let response = request
+                .scope(|| {
+                    let scan = query.decode_scan(&bytes)?;
+                    routing::collection_sources::row_page_response(query.page(scan)?, policy)
+                })
+                .expect("the original owner retains room for public projection and JSON");
+            assert_eq!(response.status(), StatusCode::OK);
+            assert!(request.allocation_context().consumed_allocated_bytes() > before_projection);
+            assert!(
+                request.allocation_context().consumed_allocated_bytes()
+                    <= request.allocation_limit_for_test() as u64
+            );
+            let bytes = axum::body::to_bytes(response.into_body(), policy.response_bytes)
+                .await
+                .unwrap();
+            let payload: Value = norito::json::from_slice(&bytes).unwrap();
+            let items = payload.get("items").and_then(Value::as_array).unwrap();
+            assert_eq!(items.len(), 1);
+            let row = items[0].as_object().unwrap();
+            assert_eq!(row.len(), 2, "the public projection is applied");
+            assert_eq!(
+                row.get("height").and_then(Value::as_u64),
+                Some(expected_height)
+            );
+            assert!(
+                row.get("transactions_total")
+                    .and_then(Value::as_u64)
+                    .is_some()
+            );
+            input.cursor = payload
+                .get("next_cursor")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            assert_eq!(input.cursor.is_some(), expected_height == 2);
+        }
     }
 
     const FAUCET_HEX: &str = "38eb3689fb42390f656ac9e1fa0d02451f1f4f1a1b92c1b074f1c2b6761e8631";
@@ -1212,5 +1365,130 @@ mod tests {
         );
         let unbounded = field("block").eq(7).or(field("status").eq("committed"));
         assert!(conjunctive_equality(Some(&unbounded), "block").is_none());
+    }
+
+    #[test]
+    fn block_feed_height_bounds_seek_without_replacing_the_row_filter() {
+        let range = field("height")
+            .gte(901)
+            .and(field("height").lte(1000))
+            .and(field("transactions_total").gt(0));
+        let query = ScanQuery::new(
+            &BLOCKS,
+            ListQuery::new().filter(range).limit(100),
+            [7; 32],
+            limits(),
+        )
+        .expect("blocks query");
+        assert_eq!(
+            collections::conjunctive_height_range(query.rows.filter.as_ref(), "height"),
+            (901, 1000)
+        );
+        // The bounds stay in the row predicate: seeking narrows, never filters.
+        let rows = query.rows.filter.as_ref().expect("row filter").to_string();
+        assert!(rows.contains("height >= 901") && rows.contains("transactions_total > 0"));
+
+        let either = field("height")
+            .gte(901)
+            .or(field("transactions_rejected").gt(0));
+        assert_eq!(
+            collections::conjunctive_height_range(Some(&either), "height"),
+            (0, u64::MAX)
+        );
+    }
+
+    /// One `/query` page over the block feed: the native walk seeks the
+    /// filter's height bounds, then the complete row filter decides each row.
+    async fn block_feed_page(
+        state: &std::sync::Arc<iroha_core::state::State>,
+        filter: &FilterExpr,
+        cursor: Option<String>,
+    ) -> RowPage {
+        let mut input = ListQuery::new().filter(filter.clone()).limit(30);
+        input.cursor = cursor;
+        let query = standalone_scan(&BLOCKS, input, [7; 32]).expect("blocks query");
+        let response = routing::handle_v1_explorer_blocks(
+            state.clone(),
+            routing::MaybeTelemetry::disabled(),
+            routing::DataspaceReadVisibility::all_for_tests(),
+            query.native.clone(),
+            block_feed_heights(&query),
+        )
+        .await
+        .expect("native block page");
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("native body");
+        query
+            .page(norito::json::from_slice(&bytes).expect("native json"))
+            .expect("row page")
+    }
+
+    /// Every page of a block-feed query, following its cursors to the end.
+    async fn block_feed_pages(
+        state: &std::sync::Arc<iroha_core::state::State>,
+        filter: &FilterExpr,
+    ) -> Vec<RowPage> {
+        let mut pages = Vec::new();
+        let mut cursor = None;
+        loop {
+            let page = block_feed_page(state, filter, cursor.take()).await;
+            cursor = page.next_cursor.clone();
+            pages.push(page);
+            if cursor.is_none() {
+                return pages;
+            }
+            assert!(pages.len() < 20, "a bounded walk must end");
+        }
+    }
+
+    #[tokio::test]
+    async fn block_feed_query_pages_through_filtered_rows_without_leaving_its_range() {
+        let state = routing::explorer_blocks_seek_test_state(250);
+        let inside = || field("height").gte(51).and(field("height").lte(100));
+
+        // Hash-only blocks report no transactions, so the row filter rejects
+        // every block the walk visits: each page is empty but still advances.
+        let nothing = inside().and(field("transactions_total").gt(0));
+        let pages = block_feed_pages(&state, &nothing).await;
+        assert_eq!(
+            pages.len(),
+            2,
+            "50 blocks in range at 30 per page, not 250 walked from the tip"
+        );
+        assert!(pages.iter().all(|page| page.items.is_empty()));
+
+        let gap = inside().and(field("height").ne(75));
+        let heights: Vec<u64> = block_feed_pages(&state, &gap)
+            .await
+            .iter()
+            .flat_map(|page| &page.items)
+            .map(|row| row.get("height").and_then(Value::as_u64).expect("height"))
+            .collect();
+        let expected: Vec<u64> = (51..=100).rev().filter(|height| *height != 75).collect();
+        assert_eq!(heights, expected);
+
+        // A negated height bound filters rows without narrowing the walk: the
+        // first page reads 100..=71 and keeps nothing, the next keeps 60..=51.
+        let late = inside().and(field("height").gt(60).negate());
+        let pages = block_feed_pages(&state, &late).await;
+        assert_eq!(pages.len(), 2);
+        assert!(pages[0].items.is_empty() && pages[0].next_cursor.is_some());
+        let heights: Vec<u64> = pages[1]
+            .items
+            .iter()
+            .map(|row| row.get("height").and_then(Value::as_u64).expect("height"))
+            .collect();
+        assert_eq!(heights, (51..=60).rev().collect::<Vec<u64>>());
+        assert_eq!(pages[1].next_cursor, None);
+
+        let first = block_feed_page(&state, &gap, None).await;
+        let token = first.next_cursor.expect("continuation");
+        let mut replay = ListQuery::new().filter(inside()).limit(30);
+        replay.cursor = Some(token);
+        assert!(
+            standalone_scan(&BLOCKS, replay, [7; 32]).is_err(),
+            "a continuation stays bound to the filter that issued it"
+        );
     }
 }

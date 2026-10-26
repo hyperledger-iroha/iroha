@@ -159,3 +159,254 @@ fn native_rewrite_image_requires_the_complete_original_frame() {
         "an empty evicted frame cannot recreate retired snapshot authority"
     );
 }
+
+#[test]
+fn canonical_summary_source_token_tracks_exact_journals_and_refuses_poison() {
+    let mut chain = CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000)).unwrap();
+    let height = std::num::NonZeroUsize::MIN;
+    let first = chain
+        .state()
+        .canonical_history_summary_source_token(height)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        chain
+            .state()
+            .canonical_history_summary_source_token(height)
+            .unwrap(),
+        Some(first)
+    );
+    chain.commit(Vec::new());
+    let appended = chain
+        .state()
+        .canonical_history_summary_source_token(height)
+        .unwrap()
+        .unwrap();
+    assert_ne!(
+        first, appended,
+        "an append invalidates the exact journal image"
+    );
+    let kura = chain.kura();
+    kura.poison_canonical_storage("summary test", &Error::CanonicalStoragePoisoned);
+    assert!(
+        chain
+            .state()
+            .canonical_history_summary_source_token(height)
+            .is_err()
+    );
+}
+
+#[test]
+fn canonical_summary_source_token_rejects_missing_and_replaced_journals() {
+    for (name, replace) in [DATA_FILE_NAME, INDEX_FILE_NAME, HASHES_FILE_NAME]
+        .into_iter()
+        .flat_map(|name| [false, true].map(|replace| (name, replace)))
+    {
+        let chain = CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000)).unwrap();
+        let height = std::num::NonZeroUsize::MIN;
+        assert!(
+            chain
+                .state()
+                .canonical_history_summary_source_token(height)
+                .unwrap()
+                .is_some()
+        );
+        let path = chain
+            .kura()
+            .block_store
+            .lock()
+            .path_to_blockchain
+            .join(name);
+        let bytes = std::fs::read(&path).unwrap();
+        let original = path.with_extension("original-summary-test");
+        std::fs::rename(&path, &original).unwrap();
+        if replace {
+            std::fs::write(&path, &bytes).unwrap();
+        }
+        assert_eq!(
+            chain
+                .state()
+                .canonical_history_summary_source_token(height)
+                .unwrap(),
+            None,
+            "same bytes in another journal object do not retain summary authority"
+        );
+    }
+}
+
+#[test]
+fn canonical_summary_source_token_invalidates_mutated_and_unavailable_bodies() {
+    let chain = CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000)).unwrap();
+    let height = std::num::NonZeroUsize::MIN;
+    let first = chain
+        .state()
+        .canonical_history_summary_source_token(height)
+        .unwrap()
+        .unwrap();
+    let kura = chain.kura();
+    let wire = kura.canonical_block_wire_bytes_for_testing(height).unwrap();
+    kura.overwrite_native_frame_bytes_for_test(height, 0, &[wire[0] ^ 1]);
+    assert_ne!(
+        chain
+            .state()
+            .canonical_history_summary_source_token(height)
+            .unwrap(),
+        Some(first)
+    );
+    // The unavailable-slot helper publishes a commit marker and validates its
+    // journal. Exercise absence on a separate intact source, not the malformed
+    // frame above, whose rejection must remain authoritative.
+    let unavailable = CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000)).unwrap();
+    unavailable
+        .kura()
+        .corrupt_canonical_body_for_testing(height)
+        .unwrap();
+    assert_eq!(
+        unavailable
+            .state()
+            .canonical_history_summary_source_token(height)
+            .unwrap(),
+        None
+    );
+}
+
+#[test]
+fn canonical_summary_source_token_refuses_recovery_and_evicted_sidecar_reuse() {
+    let chain = CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000)).unwrap();
+    let height = std::num::NonZeroUsize::MIN;
+    let kura = chain.kura();
+    assert!(
+        chain
+            .state()
+            .canonical_history_summary_source_token(height)
+            .unwrap()
+            .is_some()
+    );
+    kura.prune_recovery_required.store(true, Ordering::Release);
+    assert!(
+        chain
+            .state()
+            .canonical_history_summary_source_token(height)
+            .is_err()
+    );
+    kura.prune_recovery_required.store(false, Ordering::Release);
+    kura.evict_native_frame_for_test(height);
+    assert_eq!(
+        chain
+            .state()
+            .canonical_history_summary_source_token(height)
+            .unwrap(),
+        None
+    );
+    let path = kura.block_store.lock().da_block_path(1);
+    std::fs::remove_file(path).unwrap();
+    assert_eq!(
+        chain
+            .state()
+            .canonical_history_summary_source_token(height)
+            .unwrap(),
+        None
+    );
+}
+
+#[test]
+fn canonical_summary_read_retains_required_target_budget_provenance() {
+    let chain = CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000)).unwrap();
+    let owner = crate::state::CanonicalHistoryReadBudget::new(
+        iroha_allocation::AllocationBudget::new(1),
+        norito::core::DecodeBudgetContext::new(norito::DecodeLimits::new(
+            1_000_000, 1_000_000, 1_000_000, 1_000_000, 64,
+        )),
+    );
+    let error = chain
+        .state()
+        .read_canonical_history_block(std::num::NonZeroUsize::MIN, &owner)
+        .unwrap_err();
+    let crate::execution_attempt::ExecutionAttemptError::Deferred(deferred) = error else {
+        panic!("required target must retain the original physical refusal")
+    };
+    assert_eq!(
+        deferred.phase(),
+        Some(crate::execution_attempt::ExecutionPhase::HistoryTarget)
+    );
+    assert!(matches!(
+        deferred.allocation_refusal(),
+        Some(iroha_allocation::AllocationRefusal::ExceedsLimit { .. })
+    ));
+}
+
+#[test]
+fn canonical_summary_read_preserves_exhausted_decoder_without_runtime_projection_panic() {
+    let mut chain = CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000)).unwrap();
+    chain.commit(Vec::new());
+    let height = std::num::NonZeroUsize::new(2).unwrap();
+    let expected = chain.committed(2).block_hash();
+    let frames = iroha_allocation::AllocationBudget::new(8 * 1024 * 1024);
+    let exhausted = crate::state::CanonicalHistoryReadBudget::new(
+        frames.clone(),
+        norito::core::DecodeBudgetContext::new(norito::DecodeLimits::new(
+            1_000_000, 1_000_000, 1_000_000, 0, 64,
+        )),
+    );
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        chain
+            .state()
+            .read_canonical_history_block(height, &exhausted)
+    }))
+    .expect("request exhaustion must not invalidate or panic in the runtime projection");
+    let crate::execution_attempt::ExecutionAttemptError::Deferred(deferred) = result.unwrap_err()
+    else {
+        panic!("the original decoder refusal must remain retryable")
+    };
+    assert_eq!(
+        deferred.phase(),
+        Some(crate::execution_attempt::ExecutionPhase::HistoryTarget)
+    );
+    assert!(deferred.decode_refusal().is_some());
+
+    let admitted = crate::state::CanonicalHistoryReadBudget::new(
+        frames,
+        norito::core::DecodeBudgetContext::new(norito::DecodeLimits::new(
+            1_000_000, 1_000_000, 8_000_000, 8_000_000, 64,
+        )),
+    );
+    assert_eq!(
+        chain
+            .state()
+            .read_canonical_history_block(height, &admitted)
+            .unwrap()
+            .hash(),
+        expected
+    );
+}
+
+#[test]
+fn canonical_summary_read_does_not_acquire_unrelated_world_publication() {
+    let mut chain = CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000)).unwrap();
+    chain.commit(Vec::new());
+    let height = std::num::NonZeroUsize::new(2).unwrap();
+    let expected = chain.committed(2).block_hash();
+    let owner = crate::state::CanonicalHistoryReadBudget::new(
+        iroha_allocation::AllocationBudget::new(8 * 1024 * 1024),
+        norito::core::DecodeBudgetContext::new(norito::DecodeLimits::new(
+            1_000_000, 1_000_000, 8_000_000, 8_000_000, 64,
+        )),
+    );
+    // No history is changed under this genuine publication fence. Release the
+    // fence even on regression, so an accidental World view fails instead of
+    // leaving the test's reader spinning forever.
+    let state = chain.state();
+    let completed = std::thread::scope(|scope| {
+        state.with_held_view_publication_for_reader_test(|_| {
+            let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+            scope.spawn(move || {
+                let _ = sender.send(state.read_canonical_history_block(height, &owner));
+            });
+            receiver.recv_timeout(std::time::Duration::from_secs(2))
+        })
+    });
+    let block = completed
+        .expect("a block read does not wait for unrelated World publication")
+        .unwrap();
+    assert_eq!(block.hash(), expected);
+}

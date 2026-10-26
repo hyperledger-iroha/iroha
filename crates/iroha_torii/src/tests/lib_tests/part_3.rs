@@ -186,13 +186,20 @@ async fn account_alias_enumeration_rejects_signed_caller_without_exact_scope() {
         ],
         [],
     );
-    let app = mk_app_state_for_tests_with_world(world);
+    let app = mk_native_app_state_for_tests_with_world(world);
     bind_account_alias_for_test(&app, &target, "merchant@universal");
     let method = Method::GET;
     let uri: axum::http::Uri = format!("/v1/accounts/{target}/aliases")
         .parse()
         .expect("account aliases uri");
-    let headers = signed_app_headers(&caller, &caller_keypair, &method, &uri, &[]);
+    let headers = crate::tests_runtime_handlers::signed_network_app_headers(
+        app.state.network_id_ref(),
+        &caller,
+        &caller_keypair,
+        &method,
+        &uri,
+        &[],
+    );
     let error = match handler_account_aliases(
         State(app),
         method,
@@ -1024,7 +1031,7 @@ async fn identifier_program_registration_rejects_both_diagnostic_bfv_profiles() 
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn identifier_policies_enforce_token_policy() {
-    let mut app = mk_app_state_for_tests();
+    let mut app = mk_native_app_state_for_tests();
     {
         let state = Arc::get_mut(&mut app).expect("unique app state");
         state.require_api_token = true;
@@ -1334,7 +1341,7 @@ async fn identifier_owner_nonce_is_exact_lowerhex_nonzero_and_bounded() {
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn identifier_resolve_enforces_token_policy() {
-    let mut app = mk_app_state_for_tests();
+    let mut app = mk_native_app_state_for_tests();
     {
         let state = Arc::get_mut(&mut app).expect("unique app state");
         state.require_api_token = true;
@@ -2012,7 +2019,7 @@ async fn bond_routes_serve_registered_records_and_report_unknown_bonds() {
             claimed_at_ms: None,
         });
     }
-    let app = mk_app_state_for_tests_with_world(world);
+    let app = mk_native_app_state_for_tests_with_world(world);
     let response = handler_bond_get(
         State(app.clone()),
         HeaderMap::new(),
@@ -2161,7 +2168,7 @@ async fn bond_routes_serve_registered_records_and_report_unknown_bonds() {
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn identifier_claim_receipt_enforces_token_policy() {
-    let mut app = mk_app_state_for_tests();
+    let mut app = mk_native_app_state_for_tests();
     {
         let state = Arc::get_mut(&mut app).expect("unique app state");
         state.require_api_token = true;
@@ -3076,7 +3083,7 @@ async fn proof_record_fanout_requests_the_binary_format_required_by_its_decoder(
 }
 #[tokio::test]
 async fn proof_record_get_advertises_cache_and_304() {
-    let app = mk_app_state_for_tests();
+    let app = mk_native_app_state_for_tests();
     let id = seed_proof_record(&app, "debug-proof", [0xAB; 32]);
     let first = handler_proof_record_get(
         State(app.clone()),
@@ -3536,7 +3543,7 @@ fn axt_reject_query_response_carries_headers() {
 }
 #[tokio::test]
 async fn proof_get_egress_throttled_returns_retry_after() {
-    let mut app = mk_app_state_for_tests();
+    let mut app = mk_native_app_state_for_tests();
     let _ = seed_proof_record(&app, "debug-proof", [0xBB; 32]);
     {
         let state = Arc::get_mut(&mut app).expect("unique app");
@@ -3580,7 +3587,7 @@ async fn proof_body_limit_rejects_oversize_body() {
 }
 #[tokio::test]
 async fn proof_request_rate_limit_counts_requests_instead_of_body_chunks() {
-    let mut app = mk_app_state_for_tests();
+    let mut app = mk_native_app_state_for_tests();
     {
         let state = Arc::get_mut(&mut app).expect("unique app state");
         state.proof_rate_limiter = limits::RateLimiter::new(Some(2), Some(60));
@@ -3600,7 +3607,7 @@ async fn proof_request_rate_limit_counts_requests_instead_of_body_chunks() {
 }
 #[tokio::test]
 async fn proof_request_rate_limit_admits_max_body_cost_and_throttles_repetition() {
-    let mut app = mk_app_state_for_tests();
+    let mut app = mk_native_app_state_for_tests();
     {
         let state = Arc::get_mut(&mut app).expect("unique app state");
         state.proof_rate_limiter = limits::RateLimiter::new(Some(1), Some(1));

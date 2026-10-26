@@ -2463,6 +2463,9 @@ struct AppState {
     state: Arc<CoreState>,
     #[cfg(feature = "app_api")]
     musubi_search: Arc<RwLock<iroha_core::musubi_search::MusubiSearchIndexV1>>,
+    /// Summaries of blocks the Explorer feed has read, so repeat reads skip body I/O.
+    #[cfg(feature = "app_api")]
+    explorer_block_summaries: Arc<explorer_history::ExplorerBlockSummaryCache>,
     bootle_lantern_issuance_runtime:
         Option<Arc<privacy_issuance_api::BootleLanternIssuanceToriiRuntimeV1>>,
     #[cfg(feature = "app_api")]
@@ -3954,14 +3957,16 @@ impl AppState {
         &self,
         headers: &HeaderMap,
     ) -> Option<limits::ApiTokenPrincipal> {
+        self.state.authenticated_root_scope()?;
         evaluate_api_token(self.requires_api_token(), &self.api_token_digests, headers)
             .authenticated_principal()
     }
-    /// Immutable signed genesis scope closes every private-root listener route.
+    /// Authenticated immutable scope closes private and not-yet-authenticated roots.
+    /// Admission must not acquire a complete State view or reparse manifest keys.
     fn is_private_root(&self) -> bool {
-        matches!(
-            iroha_core::sumeragi::lanes::routing::committed_root_scope(self.state.view().world()),
-            Some(iroha_data_model::block::consensus::SumeragiRootScope::Dataspace { .. })
+        !matches!(
+            self.state.authenticated_root_scope(),
+            Some(iroha_data_model::block::consensus::SumeragiRootScope::Global)
         )
     }
     fn requires_api_token(&self) -> bool {
@@ -4504,6 +4509,9 @@ fn evaluate_api_token(
         )
 }
 fn api_token_rejection(app: &AppState, headers: &HeaderMap) -> Option<Response> {
+    if app.state.authenticated_root_scope().is_none() {
+        return Some(root_scope_unavailable_response(headers));
+    }
     api_token_rejection_with_policy(
         app.requires_api_token(),
         app.api_token_digests.as_ref(),
@@ -4744,11 +4752,33 @@ fn is_public_sorafs_gateway_path(request: &axum::http::Request<Body>) -> bool {
         })
 }
 
+fn root_scope_unavailable_response(headers: &HeaderMap) -> Response {
+    let mut response = utils::respond_with_status_and_format(
+        StatusCode::SERVICE_UNAVAILABLE,
+        ErrorEnvelope::new(
+            "native_root_scope_unavailable",
+            "Native recovery has not established the listener's authenticated root scope.",
+        ),
+        early_rejection_response_format(headers),
+    );
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        HeaderValue::from_static("private, no-store"),
+    );
+    append_vary_accept(response.headers_mut());
+    response
+}
+
 async fn enforce_api_token(
     State(app): State<SharedAppState>,
     req: axum::http::Request<Body>,
     next: Next,
 ) -> Result<axum::response::Response, Infallible> {
+    // Pre-genesis and incomplete recovery do not establish public listener authority.
+    // P2P bootstrap is independent; even diagnostics wait for an authenticated scope.
+    if app.state.authenticated_root_scope().is_none() {
+        return Ok(root_scope_unavailable_response(req.headers()));
+    }
     if !app.is_private_root() && is_public_sorafs_gateway_route(&req) {
         return Ok(next.run(req).await);
     }
@@ -6723,6 +6753,13 @@ fn validate_api_token(
     app: &AppState,
     headers: &axum::http::HeaderMap,
 ) -> Result<ApiTokenEvaluation, Error> {
+    if app.state.authenticated_root_scope().is_none() {
+        return Err(Error::AppServiceUnavailable {
+            code: "native_root_scope_unavailable",
+            message: "Native recovery has not established the listener's authenticated root scope."
+                .to_owned(),
+        });
+    }
     let evaluation = evaluate_api_token(
         app.requires_api_token(),
         app.api_token_digests.as_ref(),
@@ -41408,6 +41445,10 @@ ingress,
             state: self.state.clone(),
             #[cfg(feature = "app_api")]
             musubi_search: self.musubi_search.clone(),
+            #[cfg(feature = "app_api")]
+            explorer_block_summaries: Arc::new(explorer_history::ExplorerBlockSummaryCache::new(
+                explorer_history::EXPLORER_BLOCK_SUMMARY_CACHE_CAPACITY,
+            )),
             bootle_lantern_issuance_runtime: self.bootle_lantern_issuance_runtime.clone(),
             #[cfg(feature = "app_api")]
             kagemusha_enrollment: self.kagemusha_enrollment.clone(),

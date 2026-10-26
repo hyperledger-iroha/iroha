@@ -28,16 +28,24 @@
 //! captures after tries that read no kana lane (a camera that does not see the
 //! bands, or too blurred for their glyphs and polarity).
 //!
-//! The bands go first, and a capture whose bands read a kana lane tries no turn
-//! lane: the turn lanes of that shown frame wait for its next capture. On a slow
-//! phone core a turn try costs five tracked decodes and a band try one, so reading
-//! both on one capture overran the time a frame is shown at 12 fps and the session
-//! missed the next shown frames. A decoder that sees each shown frame two or three
-//! times still reads both; one that sees it once reads the cheaper bands and every
-//! frame's field lanes. A band try that reads nothing (bands out of view, too
-//! blurred, or a torn capture) leaves the turn lanes to the same capture.
+//! The bands go first. A capture whose bands read a kana lane tries the turn lanes
+//! too only when it has time to spare: when the work it has done (finding or
+//! following the code, a merge, the bands) and what the session's last turn try
+//! took fit together in [`CAPTURE_BUDGET_MS`], a 30 fps camera's frame time
+//! (before the first turn try, twice the work done stands in for it). Otherwise the
+//! turn lanes of that shown frame wait for its next capture. On a slow phone core a
+//! turn try costs five tracked decodes and a band try one, so reading both on one
+//! capture overran the time a frame is shown at 12 fps and the session missed the
+//! next shown frames; a fast decoder reads both at once, which matters when its
+//! camera gives it few frames a second. A band try that reads nothing (bands out of
+//! view, too blurred, or a torn capture) leaves the turn lanes to the same capture.
+//!
+//! The session times its work on the monotonic clock. [`ScanSession::with_work_cost`]
+//! puts a model's costs in place of the measured times, as the simulator's model of a
+//! slow phone and the tests do.
 
 use std::collections::VecDeque;
+use std::time::Instant;
 
 use crate::decode::{
     DecodeError, DecodeOptions, DecodedFrame, FieldEvidence, decode, field_evidence, merge_fields,
@@ -66,6 +74,26 @@ pub const TURN_BACKOFF: usize = 8;
 pub const KANA_MEMORY: usize = MERGE_WINDOW * KANA_BANDS;
 /// Most captures passed over after tries that read no kana lane.
 pub const KANA_BACKOFF: usize = 8;
+/// The time a capture's work may take, turn lanes included, for a capture whose bands read a
+/// lane to try the turn lanes too: a 30 fps camera's frame time, so a decoder that keeps to it
+/// misses no camera frame.
+pub const CAPTURE_BUDGET_MS: f64 = 1000.0 / 30.0;
+
+/// A part of a capture's work, as the session times it to tell whether a capture has time to
+/// spare for the turn lanes (see the module docs).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Work {
+    /// Finding the code by a full search and taking in the lanes read.
+    Search,
+    /// Following the code from the previous capture's pose and taking in the lanes read.
+    Track,
+    /// Merging the held captures of a shown frame.
+    Merge,
+    /// Reading the kana lanes of this many bands.
+    Bands(u32),
+    /// Reading the turn lanes.
+    Turns,
+}
 
 /// Limits of a scan session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -120,6 +148,8 @@ pub struct ScanStats {
     pub kana_tries: u32,
     /// Kana lanes read (up to four per shown frame).
     pub kana_lanes: u32,
+    /// Captures whose bands read a lane that also tried the turn lanes, having time to spare.
+    pub spare_turns: u32,
 }
 
 /// The result of offering one camera frame.
@@ -196,12 +226,26 @@ pub struct ScanSession {
     kana_tried: VecDeque<(LaneHeader, u8)>,
     kana_misses: usize,
     kana_wait: usize,
+    /// What a part of a capture cost, given the milliseconds it took.
+    work_cost: Box<dyn Fn(Work, f64) -> f64 + Send>,
+    /// What the last turn try cost, in milliseconds.
+    turn_cost_ms: Option<f64>,
 }
 
 impl ScanSession {
-    /// Creates a session.
+    /// Creates a session that times its work on the monotonic clock.
     #[must_use]
     pub fn new(limits: ScanLimits) -> Self {
+        Self::with_work_cost(limits, |_, measured_ms| measured_ms)
+    }
+
+    /// Creates a session whose work costs what `work_cost` says, given the part of a capture and
+    /// the milliseconds it took: a model of a decoder's speed in place of the measured time.
+    #[must_use]
+    pub fn with_work_cost(
+        limits: ScanLimits,
+        work_cost: impl Fn(Work, f64) -> f64 + Send + 'static,
+    ) -> Self {
         Self {
             assembler: StreamAssembler::new(limits.assembler),
             limits,
@@ -217,7 +261,14 @@ impl ScanSession {
             kana_tried: VecDeque::new(),
             kana_misses: 0,
             kana_wait: 0,
+            work_cost: Box::new(work_cost),
+            turn_cost_ms: None,
         }
+    }
+
+    /// What `work` cost, given the time since `started`.
+    fn cost(&self, work: Work, started: Instant) -> f64 {
+        (self.work_cost)(work, started.elapsed().as_secs_f64() * 1000.0)
     }
 
     /// Diagnostic counters.
@@ -261,12 +312,14 @@ impl ScanSession {
             self.reset();
         }
         self.stats.frames += 1;
+        let started = Instant::now();
         let tracked = self
             .last_pose
             .as_ref()
             .filter(|(_, at)| now_ms.saturating_sub(*at) <= TRACK_WINDOW_MS)
             .and_then(|(previous, _)| track(image, previous, &self.limits.decode));
-        if tracked.is_some() {
+        let followed = tracked.is_some();
+        if followed {
             self.stats.tracked += 1;
         }
         let result = tracked
@@ -279,11 +332,30 @@ impl ScanSession {
                 }
                 self.last_pose = Some((frame.clone(), now_ms));
                 let lanes = self.absorb(frame, now_ms);
+                let mut spent =
+                    self.cost(if followed { Work::Track } else { Work::Search }, started);
+                let (merges, started) = (self.stats.merges, Instant::now());
                 let merged = self.merge(image, frame);
-                // a capture whose bands read a lane tries no turn lane (see the module docs)
+                if self.stats.merges > merges {
+                    spent += self.cost(Work::Merge, started);
+                }
+                let (tries, started) = (self.stats.kana_tries, Instant::now());
                 let kana = self.kana(image, frame);
+                let bands = self.stats.kana_tries - tries;
+                if bands > 0 {
+                    spent += self.cost(Work::Bands(bands), started);
+                }
+                // a capture whose bands read a lane tries the turn lanes only with time to spare
+                // (see the module docs)
                 let turned = if kana.is_empty() {
                     self.turn(image, frame)
+                } else if spent + self.turn_cost_ms.unwrap_or(2.0 * spent) <= CAPTURE_BUDGET_MS {
+                    let tries = self.stats.turn_tries;
+                    let turned = self.turn(image, frame);
+                    if self.stats.turn_tries > tries {
+                        self.stats.spare_turns += 1;
+                    }
+                    turned
                 } else {
                     String::new()
                 };
@@ -366,8 +438,11 @@ impl ScanSession {
                 self.stats.turn_tries += 1;
             }
         }
+        let started = Instant::now();
+        let results = read_turns(image, frame, skip);
+        self.turn_cost_ms = Some(self.cost(Work::Turns, started));
         let mut turned = String::new();
-        for (sector, result) in read_turns(image, frame, skip).into_iter().enumerate() {
+        for (sector, result) in results.into_iter().enumerate() {
             let (Some(result), Some(header)) = (result, headers[sector]) else {
                 continue;
             };
@@ -546,38 +621,95 @@ mod tests {
         )
     }
 
-    #[test]
-    fn an_upright_camera_reads_both_bands_once_per_shown_frame() {
-        let data = payload(3000);
-        let encoder = StreamEncoder::new(&data, 2).unwrap();
-        // a phone held upright delivers landscape frames with the card turned a quarter
-        let config = fit_to_frame(
+    /// A phone held upright: landscape frames with the card turned a quarter.
+    fn upright() -> CaptureConfig {
+        fit_to_frame(
             &CaptureConfig {
                 rotation_deg: 92.0,
                 ..CaptureConfig::modern()
             },
             4.0,
+        )
+    }
+
+    /// Card `frame` of `encoder` with its bands, 768 wide.
+    fn card(encoder: &StreamEncoder, frame: u16) -> Rgb {
+        render(
+            &encoder.cells(frame),
+            &RenderOptions {
+                size: 768,
+                supersample: 2,
+                ..RenderOptions::default()
+            },
+        )
+    }
+
+    /// A session whose work costs what `costs` says, however long it took.
+    fn costed(costs: fn(Work) -> f64) -> ScanSession {
+        ScanSession::with_work_cost(ScanLimits::default(), move |work, _| costs(work))
+    }
+
+    #[test]
+    fn an_upright_camera_reads_both_bands_once_per_shown_frame() {
+        let encoder = StreamEncoder::new(&payload(3000), 2).unwrap();
+        // a fast decoder: every capture has time to spare for the turn lanes too
+        let mut session = costed(|_| 0.0);
+        let first = session.push(&capture(&card(&encoder, 1), &upright()), 0);
+        assert_eq!(
+            (first.kana.as_str(), first.turned.as_str()),
+            ("P0K0P1K1", "0123")
         );
-        let card = |frame: u16| {
-            render(
-                &encoder.cells(frame),
-                &RenderOptions {
-                    size: 768,
-                    supersample: 2,
-                    ..RenderOptions::default()
-                },
-            )
-        };
-        let mut session = ScanSession::new(ScanLimits::default());
-        let first = session.push(&capture(&card(1), &config), 0);
-        assert_eq!(first.kana, "P0K0P1K1");
-        // a second capture of the same shown frame tries no band again
-        let again = session.push(&capture(&card(1), &config), 33);
-        assert!(again.kana.is_empty());
-        let next = session.push(&capture(&card(2), &config), 83);
-        assert_eq!(next.kana, "P0K0P1K1");
+        // a second capture of the same shown frame tries no band and no turn lane again
+        let again = session.push(&capture(&card(&encoder, 1), &upright()), 33);
+        assert_eq!((again.kana.as_str(), again.turned.as_str()), ("", ""));
+        let next = session.push(&capture(&card(&encoder, 2), &upright()), 83);
+        assert_eq!(
+            (next.kana.as_str(), next.turned.as_str()),
+            ("P0K0P1K1", "0123")
+        );
         let stats = session.stats();
         assert_eq!((stats.kana_tries, stats.kana_lanes), (4, 8));
+        assert_eq!((stats.turn_lanes, stats.spare_turns), (8, 2));
+    }
+
+    #[test]
+    fn a_slow_decoder_leaves_the_turn_lanes_to_the_next_capture() {
+        let encoder = StreamEncoder::new(&payload(3000), 2).unwrap();
+        // a slow phone core: the bands take the first capture's spare time
+        let mut session = costed(|work| crate::qualify::DecoderCost::A55.of(work));
+        let first = session.push(&capture(&card(&encoder, 1), &upright()), 0);
+        assert_eq!(
+            (first.kana.as_str(), first.turned.as_str()),
+            ("P0K0P1K1", "")
+        );
+        let again = session.push(&capture(&card(&encoder, 1), &upright()), 33);
+        assert_eq!((again.kana.as_str(), again.turned.as_str()), ("", "0123"));
+        let next = session.push(&capture(&card(&encoder, 2), &upright()), 83);
+        assert_eq!((next.kana.as_str(), next.turned.as_str()), ("P0K0P1K1", ""));
+        assert_eq!(session.stats().spare_turns, 0);
+    }
+
+    #[test]
+    fn the_last_turn_try_tells_whether_a_capture_has_time_to_spare() {
+        let encoder = StreamEncoder::new(&payload(3000), 2).unwrap();
+        let mut session = costed(|work| match work {
+            Work::Search | Work::Track => 4.0,
+            Work::Bands(bands) => 3.0 * f64::from(bands),
+            Work::Merge => 0.0,
+            Work::Turns => 30.0,
+        });
+        // 10 ms of work, and twice that for the turn lanes before any try: they fit
+        let first = session.push(&capture(&card(&encoder, 1), &upright()), 0);
+        assert_eq!(
+            (first.kana.as_str(), first.turned.as_str()),
+            ("P0K0P1K1", "0123")
+        );
+        // the try took 30 ms, which with the next capture's 10 ms does not fit
+        let next = session.push(&capture(&card(&encoder, 2), &upright()), 83);
+        assert_eq!((next.kana.as_str(), next.turned.as_str()), ("P0K0P1K1", ""));
+        let again = session.push(&capture(&card(&encoder, 2), &upright()), 116);
+        assert_eq!((again.kana.as_str(), again.turned.as_str()), ("", "0123"));
+        assert_eq!(session.stats().spare_turns, 1);
     }
 
     #[test]

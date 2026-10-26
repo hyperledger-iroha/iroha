@@ -14,7 +14,7 @@ use crate::decode::DecodeError;
 use crate::image::{Luma, Rgb};
 use crate::layout::{CANVAS, SQUARE_TOP};
 use crate::render::{RenderOptions, render};
-use crate::session::{ScanLimits, ScanSession};
+use crate::session::{ScanLimits, ScanSession, Work};
 use crate::sim::{CaptureConfig, blend, capture, fit_to_frame, tear};
 use crate::stream::StreamEncoder;
 
@@ -89,7 +89,8 @@ pub struct StreamTrial {
     /// A slow phone's decoder: when set, every push costs what it would cost there, and the
     /// session takes only the newest camera frame whenever it is free (dropping the frames that
     /// arrived while it worked), as `CameraX`'s keep-only-latest analyser does. When unset, every
-    /// camera frame is decoded.
+    /// camera frame is decoded. Either way the session judges its spare time on the model's
+    /// costs, [`DecoderCost::DESKTOP`] when unset, so a trial goes the same on any machine.
     pub decoder: Option<DecoderCost>,
 }
 
@@ -119,6 +120,28 @@ impl DecoderCost {
         band: 15.0,
         merge: 10.0,
     };
+
+    /// The reference decoder on one core of an Apple M4 Max (`decode_cost`, the modern 720p
+    /// capture, 2026-10-26).
+    pub const DESKTOP: Self = Self {
+        full_search: 5.1,
+        tracked: 0.5,
+        turns: 4.7,
+        band: 1.0,
+        merge: 0.6,
+    };
+
+    /// What `work` costs, in milliseconds.
+    #[must_use]
+    pub fn of(&self, work: Work) -> f64 {
+        match work {
+            Work::Search => self.full_search,
+            Work::Track => self.tracked,
+            Work::Merge => self.merge,
+            Work::Bands(bands) => self.band * f64::from(bands),
+            Work::Turns => self.turns,
+        }
+    }
 }
 
 impl StreamTrial {
@@ -233,7 +256,9 @@ pub fn run_stream_trial(payload: &[u8], kind: u8, trial: &StreamTrial) -> TrialO
         });
         capture(source, cfg)
     };
-    let mut session = ScanSession::new(ScanLimits::default());
+    let costs = trial.decoder.unwrap_or(DecoderCost::DESKTOP);
+    let mut session =
+        ScanSession::with_work_cost(ScanLimits::default(), move |work, _| costs.of(work));
     let mut decode_ms = 0.0;
     let mut outcome = TrialOutcome {
         completed_at_s: None,
@@ -311,17 +336,17 @@ pub fn run_stream_trial(payload: &[u8], kind: u8, trial: &StreamTrial) -> TrialO
         // camera frame by then
         let done_at = trial.decoder.map_or(t, |cost| {
             let after = session.stats();
-            let mut ms = if after.tracked > before.tracked {
-                cost.tracked
+            let mut ms = cost.of(if after.tracked > before.tracked {
+                Work::Track
             } else {
-                cost.full_search
-            };
+                Work::Search
+            });
             if after.turn_tries > before.turn_tries {
-                ms += cost.turns;
+                ms += cost.of(Work::Turns);
             }
-            ms += cost.band * f64::from(after.kana_tries - before.kana_tries);
+            ms += cost.of(Work::Bands(after.kana_tries - before.kana_tries));
             if after.merges > before.merges {
-                ms += cost.merge;
+                ms += cost.of(Work::Merge);
             }
             clock = clock.max(t) + ms / 1000.0;
             clock

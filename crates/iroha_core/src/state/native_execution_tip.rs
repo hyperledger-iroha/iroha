@@ -512,6 +512,24 @@ pub(in crate::state) fn original_cell<'a>(
         .map_err(|_| Error::PolicyIdentity)
 }
 
+impl State {
+    /// Root scope established by original native execution or authenticated recovery.
+    ///
+    /// This copies only the opaque native-tip Cell. Successors preserve this scope,
+    /// so reading it needs neither a compound State view nor a publication retry.
+    /// It grants no height, result, freshness, or World authority. Absence means
+    /// native execution has not established a scope; callers must not infer Global.
+    #[must_use]
+    pub fn authenticated_root_scope(
+        &self,
+    ) -> Option<iroha_data_model::block::consensus::SumeragiRootScope> {
+        self.native_execution_tip
+            .view()
+            .get()
+            .map(NativeExecutionTip::root_scope)
+    }
+}
+
 impl StateView<'_> {
     pub(in crate::state) fn native_execution_tip_value(&self) -> Option<NativeExecutionTip> {
         *self.native_execution_tip.get()

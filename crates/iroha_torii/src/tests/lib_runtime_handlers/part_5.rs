@@ -206,7 +206,7 @@ async fn pipeline_status_handler_returns_typed_norito_when_requested() {
     use iroha_torii_shared::PipelineTransactionStatusResponse;
     let keypair = checked_torii_test_ed25519_keypair(0x29, "derive Torii typed-status fixture key");
     let authority = AccountId::new(keypair.public_key().clone());
-    let app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+    let app = mk_native_app_state_for_tests_with_world(world_with_account(&authority));
     let tx = checked_torii_test_transaction(
         TransactionBuilder::new(
             *app.state.network_id_ref(),
@@ -620,7 +620,7 @@ async fn pipeline_status_handler_cache_hit_ignores_tx_rate_limiter_pressure() {
 }
 #[tokio::test]
 async fn pipeline_status_handler_charges_cache_hits_before_local_reads() {
-    let mut app = mk_app_state_for_tests();
+    let mut app = mk_native_app_state_for_tests();
     let tx_hash =
         HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::prehashed([0x73; Hash::LENGTH]));
     {

@@ -1468,6 +1468,111 @@ mod app_routed_read_http_admission_tests {
         assert_eq!(attempts.load(Ordering::SeqCst), tiers);
     }
 
+    /// Model a bounded producer that keeps a valid row and continuation after its
+    /// actual admitted owner refuses the remaining selected-row backing.
+    fn successful_partial_owner_route(
+        owners: &Arc<std::sync::Mutex<Vec<usize>>>,
+        required: usize,
+    ) -> axum::routing::MethodRouter {
+        let owners = Arc::clone(owners);
+        any(move || {
+            let owners = Arc::clone(&owners);
+            async move {
+                let owner = crate::history_producer::HistoryProducerOwner::current()
+                    .expect("producer retains its routed-read owner");
+                owners.lock().unwrap().push(owner.working_set_bytes());
+                let complete = owner.selected::<u8>(required).is_ok();
+                Response::new(Body::from(if complete {
+                    r#"{"items":[1,2],"next_cursor":null}"#
+                } else {
+                    r#"{"items":[1],"next_cursor":"unread-row"}"#
+                }))
+            }
+        })
+    }
+
+    #[tokio::test]
+    async fn routed_read_retries_successful_partial_page_after_owner_refusal() {
+        let app = mk_app_state_for_tests();
+        let tiers = routed_read_owner_working_sets(&app).collect::<Vec<_>>();
+        assert!(tiers.len() > 1);
+        let required = QueryFanoutMemoryEnvelope::for_body_admission(tiers[0])
+            .unwrap()
+            .accumulator_retained_bytes
+            + 1;
+        let owners = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let before = app.query_fanout_inflight.available_permits();
+        let descriptor = route_catalog::application_api::EXPLORER_BLOCKS_QUERY_POST;
+        let response = admission_router_with(
+            Arc::clone(&app),
+            descriptor,
+            successful_partial_owner_route(&owners, required),
+        )
+        .oneshot(json_request_with_length(descriptor.path(), "{}"))
+        .await
+        .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            axum::body::to_bytes(response.into_body(), 1024).await.unwrap(),
+            r#"{"items":[1,2],"next_cursor":null}"#
+        );
+        assert_eq!(*owners.lock().unwrap(), tiers[..2]);
+        assert_eq!(app.query_fanout_inflight.available_permits(), before);
+    }
+
+    #[tokio::test]
+    async fn routed_read_keeps_successful_partial_page_at_largest_owner() {
+        let app = mk_app_state_for_tests();
+        let tiers = routed_read_owner_working_sets(&app).collect::<Vec<_>>();
+        let owners = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let before = app.query_fanout_inflight.available_permits();
+        let descriptor = route_catalog::application_api::EXPLORER_BLOCKS_QUERY_POST;
+        let response = admission_router_with(
+            Arc::clone(&app),
+            descriptor,
+            successful_partial_owner_route(&owners, usize::MAX),
+        )
+        .oneshot(json_request_with_length(descriptor.path(), "{}"))
+        .await
+        .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            axum::body::to_bytes(response.into_body(), 1024).await.unwrap(),
+            r#"{"items":[1],"next_cursor":"unread-row"}"#
+        );
+        assert_eq!(*owners.lock().unwrap(), tiers);
+        assert_eq!(app.query_fanout_inflight.available_permits(), before);
+    }
+
+    #[tokio::test]
+    async fn routed_read_does_not_retry_success_without_owner_refusal() {
+        let app = mk_app_state_for_tests();
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&attempts);
+        let descriptor = route_catalog::application_api::EXPLORER_BLOCKS_QUERY_POST;
+        let route = any(move || {
+            counted.fetch_add(1, Ordering::SeqCst);
+            async {
+                let mut response = Response::new(Body::from("valid partial page"));
+                // A success header alone must not invent an owner refusal.
+                response.headers_mut().insert(
+                    "x-iroha-reject-code",
+                    HeaderValue::from_static("query_capacity_exceeded"),
+                );
+                response
+            }
+        });
+        let before = app.query_fanout_inflight.available_permits();
+        let response = admission_router_with(Arc::clone(&app), descriptor, route)
+            .oneshot(json_request_with_length(descriptor.path(), "{}"))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        drop(response);
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+        assert_eq!(app.query_fanout_inflight.available_permits(), before);
+    }
+
     #[tokio::test]
     async fn local_routed_read_owner_books_without_the_proxy_candidate_allowance() {
         let app = mk_app_state_for_tests();

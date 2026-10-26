@@ -7,8 +7,123 @@ fn chain() -> CertifiedTestChain {
 }
 
 #[test]
+fn authenticated_root_scope_requires_native_execution_and_survives_publication() {
+    use iroha_data_model::block::consensus::SumeragiRootScope;
+    use iroha_model_base::topology::DataSpaceId;
+
+    let parent_network = NetworkId::from_genesis_hash(
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA7; 32])),
+    );
+    for scope in [
+        SumeragiRootScope::Global,
+        SumeragiRootScope::Dataspace {
+            parent_network_id: parent_network,
+            dataspace_id: DataSpaceId::new(u64::MAX - 1),
+        },
+    ] {
+        let mut config = TestChainConfig::new(World::new(), 1_000);
+        config.root_scope = scope;
+        if let SumeragiRootScope::Dataspace { dataspace_id, .. } = scope {
+            use iroha_data_model::nexus::{
+                DataSpaceCatalog, DataSpaceMetadata, LaneCatalog, LaneConfig,
+            };
+            let mut nexus = iroha_config::parameters::actual::Nexus::default();
+            nexus.lane_catalog = LaneCatalog::new(
+                1_u32.try_into().unwrap(),
+                vec![LaneConfig {
+                    dataspace_id,
+                    alias: "native-root-scope".into(),
+                    ..LaneConfig::default()
+                }],
+            )
+            .unwrap();
+            nexus.configured_lane_catalog = nexus.lane_catalog.clone();
+            nexus.lane_config =
+                iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+            nexus.dataspace_catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata {
+                id: dataspace_id,
+                alias: "native-root-scope".into(),
+                description: None,
+                fault_tolerance: 1,
+            }])
+            .unwrap();
+            nexus.configured_dataspace_catalog = nexus.dataspace_catalog.clone();
+            nexus.routing_policy.default_dataspace = dataspace_id;
+            config.nexus = Some(nexus);
+            let fee_domain =
+                iroha_model_base::domain::DomainId::try_new("fees", "native-root-scope").unwrap();
+            config.genesis_instructions.extend([
+                iroha_data_model::isi::Register::domain(iroha_data_model::domain::Domain::new(
+                    fee_domain.clone(),
+                ))
+                .into(),
+                iroha_data_model::isi::Register::asset_definition(
+                    iroha_data_model::asset::AssetDefinition::numeric(
+                        iroha_config::parameters::defaults::nexus::fees::genesis_policy()
+                            .fee_asset_id,
+                        "Native root fixture fee",
+                        iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+                        Some(fee_domain),
+                    ),
+                )
+                .into(),
+            ]);
+            config
+                .genesis_parameters
+                .push(iroha_data_model::parameter::Parameter::Custom(
+                    iroha_data_model::block::consensus::RootFeePolicy {
+                        base_fee: 1_u32.into(),
+                        per_gas_unit_fee: 1_u32.into(),
+                        ..iroha_config::parameters::defaults::nexus::fees::genesis_policy()
+                    }
+                    .into_custom_parameter()
+                    .unwrap(),
+                ));
+        }
+        let prepared = CertifiedTestChain::prepare(config).unwrap();
+        assert_eq!(prepared.state.authenticated_root_scope(), None);
+        let genesis_account = AccountId::new(prepared.genesis.public_key().clone());
+        crate::sumeragi::startup::apply_genesis(
+            &prepared.state,
+            prepared.genesis.block().clone(),
+            &genesis_account,
+            prepared.genesis.consensus_metadata().mode.into(),
+            None,
+        )
+        .unwrap();
+        let state = prepared.state;
+        assert_eq!(state.authenticated_root_scope(), Some(scope));
+        let (result, reader) = state.with_held_view_publication_for_reader_test(|_| {
+            assert!(matches!(
+                state.try_view_once(),
+                Err(StateViewError::Busy(_))
+            ));
+            let (send, receive) = std::sync::mpsc::channel();
+            let retained = Arc::clone(&state);
+            let reader = std::thread::spawn(move || {
+                send.send(retained.authenticated_root_scope()).unwrap();
+            });
+            (
+                receive.recv_timeout(std::time::Duration::from_secs(1)),
+                reader,
+            )
+        });
+        reader.join().unwrap();
+        assert_eq!(result.unwrap(), Some(scope));
+        state.with_held_header_for_reader_test(|_| {
+            assert!(matches!(
+                state.try_view_once(),
+                Err(StateViewError::Busy(_))
+            ));
+            assert_eq!(state.authenticated_root_scope(), Some(scope));
+        });
+    }
+}
+
+#[test]
 fn original_genesis_and_worker_publish_exact_tip_with_undo() {
     let mut chain = chain();
+    let root_scope = chain.state().authenticated_root_scope();
     let old_view = chain.state().view();
     let genesis = old_view.native_execution_tip().unwrap();
     let genesis_receipt = crate::sumeragi::certified_chain::committed_block(&old_view, 1).unwrap();
@@ -20,6 +135,7 @@ fn original_genesis_and_worker_publish_exact_tip_with_undo() {
     drop(old_view);
     let old_view = state.view();
     chain.commit(Vec::new());
+    assert_eq!(state.authenticated_root_scope(), root_scope);
     let view = state.view();
     let current = view.native_execution_tip().unwrap();
     let receipt = chain.committed(2);

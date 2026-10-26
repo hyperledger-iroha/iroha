@@ -1040,7 +1040,7 @@ async fn privacy_share_ingest_enforces_policy() {
 }
 #[tokio::test]
 async fn runtime_metrics_and_node_capabilities_ok() {
-    let app = mk_app_state_for_tests();
+    let app = mk_native_app_state_for_tests();
     let headers = HeaderMap::new();
     let metrics_resp = super::handler_runtime_metrics(
         State(app.clone()),
@@ -1168,7 +1168,7 @@ async fn runtime_metrics_and_node_capabilities_ok() {
 }
 #[tokio::test]
 async fn node_query_projection_checkpoint_handler_returns_persisted_payload() {
-    let app = mk_app_state_for_tests();
+    let app = mk_native_app_state_for_tests();
     let expected_hash =
         iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
             iroha_crypto::Hash::new([0x6A; iroha_crypto::Hash::LENGTH]),
@@ -1227,7 +1227,7 @@ async fn node_query_projection_checkpoint_handler_returns_persisted_payload() {
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn node_query_projection_shard_catalog_handler_returns_catalog_payload() {
-    let app = mk_app_state_for_tests();
+    let app = mk_native_app_state_for_tests();
     let response = super::handler_node_query_projection_shard_catalog(
         State(app),
         AxPath("accounts".to_owned()),
@@ -1267,7 +1267,7 @@ async fn node_query_projection_shard_catalog_handler_returns_catalog_payload() {
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn node_query_projection_shard_export_handler_returns_binary_archive() {
-    let app = mk_app_state_for_tests();
+    let app = mk_native_app_state_for_tests();
     let response = super::handler_node_query_projection_shard_export(
         State(app),
         AxPath(("accounts".to_owned(), 0)),
@@ -1298,7 +1298,7 @@ async fn node_query_projection_shard_export_handler_returns_binary_archive() {
 }
 #[tokio::test]
 async fn core_info_handlers_ok() {
-    let app = mk_app_state_for_tests();
+    let app = mk_native_app_state_for_tests();
     let headers = HeaderMap::new();
     // configuration
     let resp = super::handler_get_configuration(
@@ -1366,7 +1366,7 @@ async fn core_info_handlers_ok() {
 }
 #[tokio::test]
 async fn time_handlers_ok() {
-    let app = mk_app_state_for_tests();
+    let app = mk_native_app_state_for_tests();
     let headers = HeaderMap::new();
     let resp = super::handler_time_now(
         State(app.clone()),

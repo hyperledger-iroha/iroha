@@ -471,7 +471,8 @@ impl DecodeArgs {
             },
             ..ScanLimits::default()
         };
-        let mut session = ScanSession::new(limits);
+        // frames read from files keep no camera waiting: every capture has time for the turn lanes
+        let mut session = ScanSession::with_work_cost(limits, |_, _| 0.0);
         let mut report = DecodeReport {
             schema: DECODE_SCHEMA.to_owned(),
             input_dir: self.input_dir.display().to_string(),

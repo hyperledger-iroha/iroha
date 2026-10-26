@@ -242,7 +242,7 @@ fn transaction_batch_declared_decoded_limit_rejects_compressed_expansion() {
 }
 #[tokio::test]
 async fn transaction_batch_count_limit_rejects_before_transaction_decode() {
-    let mut app = mk_app_state_for_tests();
+    let mut app = mk_native_app_state_for_tests();
     Arc::get_mut(&mut app)
         .expect("unique app state")
         .transaction_batch_max_transactions = 1;
@@ -443,7 +443,7 @@ async fn transaction_batch_partial_admission_preserves_exact_ordered_outcomes() 
 async fn transaction_batch_cannot_bypass_ordinary_economic_admission() {
     use iroha_data_model::transaction::receipt::TransactionBatchEntryOutcome;
 
-    let app = mk_app_state_for_tests();
+    let app = mk_native_app_state_for_tests();
     let key = checked_torii_test_ed25519_keypair(0xce, "ordinary batch signer");
     let tx = signed_log_transaction_for_test(
         *app.state.network_id_ref(),
@@ -473,7 +473,7 @@ async fn transaction_batch_cannot_bypass_ordinary_economic_admission() {
 }
 #[tokio::test]
 async fn handler_post_transactions_batch_rate_limits_api_token_as_single_key_batch() {
-    let mut app = mk_app_state_for_tests();
+    let mut app = mk_native_app_state_for_tests();
     {
         let app_mut = Arc::get_mut(&mut app).expect("unique app state");
         app_mut.high_load_tx_threshold = usize::MAX;
@@ -536,7 +536,7 @@ fn transaction_api_token_preauth_key_never_contains_raw_token_text() {
 }
 #[tokio::test]
 async fn handler_post_transactions_batch_uses_authenticated_token_for_distinct_authorities() {
-    let mut app = mk_app_state_for_tests();
+    let mut app = mk_native_app_state_for_tests();
     {
         let app_mut = Arc::get_mut(&mut app).expect("unique app state");
         app_mut.high_load_tx_threshold = usize::MAX;
@@ -596,7 +596,7 @@ async fn handler_post_transactions_batch_uses_authenticated_token_for_distinct_a
 }
 #[tokio::test]
 async fn handler_post_transactions_batch_rejects_invalid_ed25519_precheck_without_partial_push() {
-    let mut app = mk_app_state_for_tests();
+    let mut app = mk_native_app_state_for_tests();
     Arc::get_mut(&mut app)
         .expect("unique app state")
         .high_load_tx_threshold = usize::MAX;
@@ -788,7 +788,7 @@ async fn handler_policy_reports_required_token_even_when_configuration_is_unavai
 #[tokio::test]
 #[cfg(feature = "app_api")]
 async fn kaigi_signal_history_rate_bypass_still_requires_heavy_query_admission() {
-    let mut app = mk_app_state_for_tests();
+    let mut app = mk_native_app_state_for_tests();
     {
         let app_mut = Arc::get_mut(&mut app).expect("unique app state");
         app_mut.api_rate_limit_bypass_nets = Arc::new(vec![
@@ -1169,7 +1169,7 @@ async fn peer_inventory_requires_ledger_permission_and_executes_locally() {
         "derive public peer inventory handler fixture key",
     );
     let authority = AccountId::new(key_pair.public_key().clone());
-    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+    let mut app = crate::tests_runtime_handlers::mk_native_app_state_for_tests_with_world_and_nexus(
         world_with_account(&authority),
         crate::tests_runtime_handlers::private_ingress_with_offline_foreign_nexus_for_test(),
     );
@@ -1178,7 +1178,9 @@ async fn peer_inventory_requires_ledger_permission_and_executes_locally() {
         super::torii_all_dataspace_routes(app.as_ref()).len() > 1,
         "test requires multiple restricted dataspace routes",
     );
-    let signed = authorize_query_for_test(
+    let native_network = *app.state.network_id_ref();
+    let signed = authorize_native_query_for_fixture(
+        native_network,
         iroha_data_model::query::QueryRequest::Start(build_find_peers_query_for_test()),
         authority.clone(),
     )
@@ -1198,7 +1200,8 @@ async fn peer_inventory_requires_ledger_permission_and_executes_locally() {
             if message.contains("CanReadAllLedgerData")
     ));
     grant_account_permission_for_test(&app, &authority, CanReadAllLedgerData.into());
-    let signed = authorize_query_for_test(
+    let signed = authorize_native_query_for_fixture(
+        native_network,
         iroha_data_model::query::QueryRequest::Start(build_find_peers_query_for_test()),
         authority,
     )
@@ -3239,7 +3242,7 @@ async fn handler_signed_query_executes_find_triggers_locally_with_multiple_datas
     let key_pair =
         checked_torii_test_ed25519_keypair(0xf4, "derive find triggers authority fixture key");
     let authority = AccountId::new(key_pair.public_key().clone());
-    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+    let mut app = crate::tests_runtime_handlers::mk_native_app_state_for_tests_with_world_and_nexus(
         world_with_account(&authority),
         crate::tests_runtime_handlers::multiple_dataspace_nexus_for_test(),
     );
@@ -3248,13 +3251,15 @@ async fn handler_signed_query_executes_find_triggers_locally_with_multiple_datas
         super::torii_all_dataspace_routes(app.as_ref()).len() > 1,
         "test requires multiple dataspace routes"
     );
+    let native_network = *app.state.network_id_ref();
     let denied = super::handler_signed_query(
         State(app.clone()),
         HeaderMap::new(),
         crate::loopback_connect_info(),
         None,
         crate::NoritoQuery(QueryOptions::default()),
-        versioned_query_for_test(signed_find_triggers_query_for_test(
+        versioned_query_for_test(signed_native_find_triggers_query_for_fixture(
+            native_network,
             authority.clone(),
             &key_pair,
         )),
@@ -3271,7 +3276,11 @@ async fn handler_signed_query_executes_find_triggers_locally_with_multiple_datas
         crate::loopback_connect_info(),
         None,
         crate::NoritoQuery(QueryOptions::default()),
-        versioned_query_for_test(signed_find_triggers_query_for_test(authority, &key_pair)),
+        versioned_query_for_test(signed_native_find_triggers_query_for_fixture(
+            native_network,
+            authority,
+            &key_pair,
+        )),
     )
     .await
     .expect("find triggers query should execute")
@@ -3293,7 +3302,7 @@ async fn handler_signed_query_executes_find_active_trigger_ids_locally_with_mult
         "derive find active trigger ids authority fixture key",
     );
     let authority = AccountId::new(key_pair.public_key().clone());
-    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+    let mut app = crate::tests_runtime_handlers::mk_native_app_state_for_tests_with_world_and_nexus(
         world_with_account(&authority),
         crate::tests_runtime_handlers::multiple_dataspace_nexus_for_test(),
     );
@@ -3302,13 +3311,15 @@ async fn handler_signed_query_executes_find_active_trigger_ids_locally_with_mult
         super::torii_all_dataspace_routes(app.as_ref()).len() > 1,
         "test requires multiple dataspace routes"
     );
+    let native_network = *app.state.network_id_ref();
     let denied = super::handler_signed_query(
         State(app.clone()),
         HeaderMap::new(),
         crate::loopback_connect_info(),
         None,
         crate::NoritoQuery(QueryOptions::default()),
-        versioned_query_for_test(signed_find_active_trigger_ids_query_for_test(
+        versioned_query_for_test(signed_native_find_active_trigger_ids_query_for_fixture(
+            native_network,
             authority.clone(),
             &key_pair,
         )),
@@ -3325,8 +3336,10 @@ async fn handler_signed_query_executes_find_active_trigger_ids_locally_with_mult
         crate::loopback_connect_info(),
         None,
         crate::NoritoQuery(QueryOptions::default()),
-        versioned_query_for_test(signed_find_active_trigger_ids_query_for_test(
-            authority, &key_pair,
+        versioned_query_for_test(signed_native_find_active_trigger_ids_query_for_fixture(
+            native_network,
+            authority,
+            &key_pair,
         )),
     )
     .await
@@ -3960,7 +3973,7 @@ async fn routing_space_directory_manifests_reports_inactive_pending_and_uncatalo
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn routed_uaid_handlers_reject_invalid_inputs_before_routing() {
-    let app = mk_app_state_for_tests();
+    let app = mk_native_app_state_for_tests();
     let invalid_portfolio = match super::handler_accounts_portfolio(
         State(app.clone()),
         axum::http::Method::GET,
@@ -4095,7 +4108,7 @@ async fn anonymous_loopback_cannot_read_restricted_or_missing_explorer_accounts(
         checked_torii_test_account_id(0xfc, "derive missing explorer account detail fixture key");
     let restricted_dataspace = DataSpaceId::new(10);
     let uaid = UniversalAccountId::from_hash(Hash::new(b"torii::explorer-account-detail-routes"));
-    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+    let mut app = crate::tests_runtime_handlers::mk_native_app_state_for_tests_with_world_and_nexus(
         world_with_account_bound_to_dataspace(&authority, uaid, restricted_dataspace),
         crate::tests_runtime_handlers::private_ingress_nexus_for_test(),
     );
@@ -4209,7 +4222,7 @@ async fn account_assets_reject_invalid_queries_before_routing() {
         checked_torii_test_account_id(0xf7, "derive account assets validation fixture key");
     // The minimal app has no visible route for this account, which used to
     // answer every query, valid or not, with an empty page.
-    let app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+    let app = mk_native_app_state_for_tests_with_world(world_with_account(&authority));
     let uri: axum::http::Uri =
         format!("/v1/accounts/{authority}/assets?filter=unknown_field%20%3D%201")
             .parse()

@@ -6,12 +6,17 @@
 //! directly into the request's finite destination; it never constructs an unframed hex payload
 //! or a second parsed JSON tree.
 
-use std::{fmt, time::Duration};
+use std::{
+    collections::BTreeMap,
+    fmt,
+    sync::{Arc, Mutex, PoisonError},
+    time::Duration,
+};
 
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
     account::AccountId,
-    block::{BlockHeader, SharedSignedBlock},
+    block::{BlockHeader, SharedSignedBlock, SignedBlock},
     isi::InstructionBox,
     transaction::{
         SignedTransaction, TransactionEntrypoint, TransactionResult,
@@ -497,6 +502,119 @@ impl HistoryBlockRow {
     }
 }
 
+/// Maximum fixed-size block summaries retained by the Explorer feed. The lowest
+/// heights leave first, so recent windows stay warm. Each reader scope occupies
+/// a distinct entry within this same bound.
+pub(crate) const EXPLORER_BLOCK_SUMMARY_CACHE_CAPACITY: usize = 16_384;
+
+/// Fixed-size projection of one committed block for an exact visibility scope.
+/// Retaining a count for every route combination would grow with block contents;
+/// retaining only this reader's final counts keeps cache memory independent of
+/// transaction count and route-plan size.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ExplorerBlockSummary {
+    hash: HashOf<BlockHeader>,
+    height: u64,
+    visibility_digest: [u8; 32],
+    source_token: [u8; 32],
+    created_at: Duration,
+    prev_block_hash: Option<HashOf<BlockHeader>>,
+    transactions_hash:
+        Option<iroha_crypto::HashOf<iroha_crypto::MerkleTree<TransactionEntrypoint>>>,
+    transactions_total: u32,
+    transactions_rejected: u32,
+}
+
+impl ExplorerBlockSummary {
+    pub(crate) fn from_block(
+        block: &SignedBlock,
+        visibility: &crate::routing::DataspaceReadVisibility,
+        source_token: [u8; 32],
+    ) -> Self {
+        let row = HistoryBlockRow::from_block(block, |index| {
+            visibility.allows_external_entrypoint(block, index)
+        });
+        Self {
+            hash: row.hash,
+            height: row.height,
+            visibility_digest: visibility.visible_route_set_digest(),
+            source_token,
+            created_at: block.header().creation_time(),
+            prev_block_hash: row.prev_block_hash,
+            transactions_hash: row.transactions_hash,
+            transactions_total: row.transactions_total,
+            transactions_rejected: row.transactions_rejected,
+        }
+    }
+
+    /// Restore this exact reader's row after the cache checked its scope digest.
+    pub(crate) fn row(&self) -> HistoryBlockRow {
+        HistoryBlockRow {
+            hash: self.hash,
+            height: self.height,
+            created_at: HistoryBlockTime(Some(self.created_at)),
+            prev_block_hash: self.prev_block_hash,
+            transactions_hash: self.transactions_hash,
+            transactions_rejected: self.transactions_rejected,
+            transactions_total: self.transactions_total,
+        }
+    }
+}
+
+/// Bounded summaries of committed blocks the Explorer feed has read. Committed
+/// rows are reused only when their height, hash, exact reader scope and current
+/// canonical source token all agree. Source mutation and appends invalidate reuse.
+pub(crate) struct ExplorerBlockSummaryCache {
+    entries: Mutex<BTreeMap<(u64, [u8; 32]), Arc<ExplorerBlockSummary>>>,
+    capacity: usize,
+}
+
+impl ExplorerBlockSummaryCache {
+    pub(crate) fn new(capacity: usize) -> Self {
+        Self {
+            entries: Mutex::new(BTreeMap::new()),
+            capacity: capacity.max(1),
+        }
+    }
+
+    /// The summary read at `height` while the committed journal named `hash` there.
+    pub(crate) fn get(
+        &self,
+        height: u64,
+        hash: HashOf<BlockHeader>,
+        visibility_digest: [u8; 32],
+        source_token: [u8; 32],
+    ) -> Option<Arc<ExplorerBlockSummary>> {
+        let entries = self.entries.lock().unwrap_or_else(PoisonError::into_inner);
+        entries
+            .get(&(height, visibility_digest))
+            .filter(|summary| summary.hash == hash && summary.source_token == source_token)
+            .cloned()
+    }
+
+    /// Keep `summary`, dropping the lowest heights past the capacity.
+    pub(crate) fn insert(&self, summary: ExplorerBlockSummary) -> Arc<ExplorerBlockSummary> {
+        let summary = Arc::new(summary);
+        let mut entries = self.entries.lock().unwrap_or_else(PoisonError::into_inner);
+        entries.insert(
+            (summary.height, summary.visibility_digest),
+            Arc::clone(&summary),
+        );
+        while entries.len() > self.capacity {
+            entries.pop_first();
+        }
+        summary
+    }
+
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
+        self.entries
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .len()
+    }
+}
+
 /// Canonical summary time keeps unavailable journal-only timestamps explicit as empty text.
 #[derive(Debug)]
 pub struct HistoryBlockTime(pub(crate) Option<Duration>);
@@ -515,6 +633,95 @@ impl FastJsonWrite for HistoryBlockTime {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn summary(height: u64) -> ExplorerBlockSummary {
+        ExplorerBlockSummary {
+            hash: HashOf::from_untyped_unchecked(Hash::prehashed(
+                [u8::try_from(height).expect("test height"); Hash::LENGTH],
+            )),
+            height,
+            visibility_digest: [0; 32],
+            source_token: [9; 32],
+            created_at: Duration::from_secs(height),
+            prev_block_hash: None,
+            transactions_hash: None,
+            transactions_total: 1,
+            transactions_rejected: 0,
+        }
+    }
+
+    #[test]
+    fn block_summary_cache_keeps_recent_heights_and_checks_their_hash() {
+        let cache = ExplorerBlockSummaryCache::new(2);
+        for height in 1..=3 {
+            cache.insert(summary(height));
+        }
+        assert_eq!(cache.len(), 2);
+        assert!(
+            cache.get(1, summary(1).hash, [0; 32], [9; 32]).is_none(),
+            "the lowest height leaves first"
+        );
+        assert_eq!(
+            cache
+                .get(3, summary(3).hash, [0; 32], [9; 32])
+                .map(|kept| kept.height),
+            Some(3)
+        );
+        assert!(
+            cache.get(3, summary(2).hash, [0; 32], [9; 32]).is_none(),
+            "another block at that height is a miss"
+        );
+    }
+
+    #[test]
+    fn block_summary_cache_binds_counts_to_visibility_and_bounds_all_scopes_together() {
+        let cache = ExplorerBlockSummaryCache::new(2);
+        let public = summary(7);
+        let mut restricted = public.clone();
+        restricted.visibility_digest = [1; 32];
+        restricted.transactions_total = 0;
+        cache.insert(public.clone());
+        cache.insert(restricted.clone());
+        assert_eq!(cache.len(), 2);
+        assert_eq!(
+            cache
+                .get(7, public.hash, [0; 32], [9; 32])
+                .unwrap()
+                .row()
+                .transactions_total,
+            1
+        );
+        assert_eq!(
+            cache
+                .get(7, public.hash, [1; 32], [9; 32])
+                .unwrap()
+                .row()
+                .transactions_total,
+            0
+        );
+        assert!(cache.get(7, public.hash, [2; 32], [9; 32]).is_none());
+        assert!(
+            cache.get(7, public.hash, [0; 32], [8; 32]).is_none(),
+            "changed source metadata cannot reuse counts"
+        );
+
+        // Rebinding a height invalidates only that scope's old hash, never returns
+        // stale counts, and replacement does not consume another cache slot.
+        let mut replaced = restricted.clone();
+        replaced.hash = summary(8).hash;
+        cache.insert(replaced.clone());
+        assert_eq!(cache.len(), 2);
+        assert!(cache.get(7, restricted.hash, [1; 32], [9; 32]).is_none());
+        assert!(cache.get(7, replaced.hash, [1; 32], [9; 32]).is_some());
+        cache.insert(summary(8));
+        assert_eq!(
+            cache.len(),
+            2,
+            "all visibility scopes share the same entry bound"
+        );
+        assert!(cache.get(7, public.hash, [0; 32], [9; 32]).is_none());
+        assert!(cache.get(8, summary(8).hash, [0; 32], [9; 32]).is_some());
+    }
 
     #[test]
     fn history_rejection_borrows_the_checked_native_reason_codec() {
