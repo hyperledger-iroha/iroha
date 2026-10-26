@@ -553,9 +553,13 @@ show a band from a neighbouring frame). A phone held upright sees both bands; a 
 that frames only the square reads the square as before. The session reads each band
 once per shown frame (`PetalScanOutcome.Kana`, `PetalScanStats.KanaTries` and
 `KanaLanes`) with its own back-off (`KanaBackoff`). The bands go first: a capture whose
-bands read a kana lane tries no turn lane, and the turn lanes of that shown frame wait
-for its next capture, because on a slow phone core a turn try costs five tracked decodes
-and a band try one. `PetalKana.ObserveBand` reports every tile's decided polarity and
+bands read a kana lane tries the turn lanes too only when its work and the session's last
+turn try fit a 30 fps camera's frame time (`CaptureBudgetMilliseconds`); otherwise the
+turn lanes of that shown frame wait for its next capture, because on a slow phone core a
+turn try costs five tracked decodes and a band try one. The session times its work with
+`Stopwatch`, and the constructor's `workCost` (a `Func<PetalWork, double, double>`) puts
+a model's costs in place of the measured times; `PetalScanStats.SpareTurns` counts the
+captures that had the time. `PetalKana.ObserveBand` reports every tile's decided polarity and
 glyph for diagnostics. `PetalFrameCells.Kana`, `SetKana`, `KanaPolarityWord` and
 `KanaGlyphWord`, `PetalLaneData.Kana`, `PetalRenderer.Render` (the whole card,
 `PetalRenderer.CardHeightPx(size)` pixels tall) and the draw list's tiles

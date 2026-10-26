@@ -506,35 +506,48 @@ public sealed class PetalKanaTests
         Assert.All(PetalKana.ReadKana(image, decoded, header with { Frame = 8 }), static k => Assert.Null(k));
     }
 
+    /// <summary>A session whose work costs what <paramref name="costs"/> says, however long it took.</summary>
+    private static PetalScanSession Costed(Func<PetalWork, double> costs) => new(workCost: (work, _) => costs(work));
+
+    /// <summary>A Pixel 6 held to its Cortex-A55 cores (the reference simulator's model).</summary>
+    private static double A55(PetalWork work) => work.Kind switch
+    {
+        PetalWorkKind.Search => 105,
+        PetalWorkKind.Track => 14.5,
+        PetalWorkKind.Merge => 10,
+        PetalWorkKind.Bands => 15 * work.Count,
+        _ => 75,
+    };
+
     [Fact]
     public void AnUprightCameraReadsBothBandsOncePerShownFrame()
     {
         // a phone held upright delivers landscape frames with the card turned a quarter
         var config = PetalCaptureSimulator.FitToFrame(PetalCaptureConfig.Modern() with { RotationDeg = 92.0 }, 4.0);
         PetalRgbImage Card(ushort frame) => PetalRenderer.Render(SessionStream.Cells(frame), new PetalRenderOptions { Size = 768, Supersample = 2 });
-        var session = new PetalScanSession();
+        // a fast decoder: every capture has time to spare for the turn lanes too
+        var session = Costed(static _ => 0);
         var first = session.Push(PetalCaptureSimulator.Capture(Card(1), config), 0);
-        Assert.Equal("P0K0P1K1", first.Kana);
-        // a capture whose bands read a lane tries no turn lane
-        Assert.Equal(string.Empty, first.Turned);
-        // a second capture of the same shown frame tries no band again
+        Assert.Equal(("P0K0P1K1", "0123"), (first.Kana, first.Turned));
+        // a second capture of the same shown frame tries no band and no turn lane again
         var again = session.Push(PetalCaptureSimulator.Capture(Card(1), config), 33);
-        Assert.Equal(string.Empty, again.Kana);
+        Assert.Equal((string.Empty, string.Empty), (again.Kana, again.Turned));
         var next = session.Push(PetalCaptureSimulator.Capture(Card(2), config), 83);
-        Assert.Equal("P0K0P1K1", next.Kana);
+        Assert.Equal(("P0K0P1K1", "0123"), (next.Kana, next.Turned));
         Assert.Equal((4u, 8u), (session.Stats.KanaTries, session.Stats.KanaLanes));
+        Assert.Equal((8u, 2u), (session.Stats.TurnLanes, session.Stats.SpareTurns));
         Assert.Equal(4, session.TriedBands.Count);
         session.Reset();
         Assert.Empty(session.TriedBands);
     }
 
     [Fact]
-    public void TheBandsGoFirstAndTheTurnLanesWaitForTheNextCapture()
+    public void ASlowDecoderLeavesTheTurnLanesToTheNextCapture()
     {
-        // clean, undistorted cards pushed straight into a session: the bands read on the first
-        // capture of a shown frame, so that capture tries no turn lane; the turn lanes read on the
-        // next capture of the same shown frame
-        var session = new PetalScanSession();
+        // clean, undistorted cards pushed straight into a session on a slow phone core: the bands read
+        // on the first capture of a shown frame and take its spare time, so that capture tries no turn
+        // lane; the turn lanes read on the next capture of the same shown frame
+        var session = Costed(A55);
         var card = CleanCard.Value;
         var first = session.Push(card, 0);
         Assert.Equal(("D0123", "P0K0P1K1", string.Empty), (first.Lanes, first.Kana, first.Turned));
@@ -542,8 +555,34 @@ public sealed class PetalKanaTests
         Assert.Equal(("D0123", string.Empty, "0123"), (again.Lanes, again.Kana, again.Turned));
         var stats = session.Stats;
         Assert.Equal((2u, 4u, 4u, 4u), (stats.KanaTries, stats.KanaLanes, stats.TurnTries, stats.TurnLanes));
+        Assert.Equal(0u, stats.SpareTurns);
         // the kana and turn atoms reached the assembler alongside the field lanes' (frame 6 has no beacon, so they wait)
         Assert.Equal(0u, session.Progress.AtomsReceived);
+    }
+
+    [Fact]
+    public void TheLastTurnTryTellsWhetherACaptureHasTimeToSpare()
+    {
+        var config = PetalCaptureSimulator.FitToFrame(PetalCaptureConfig.Modern() with { RotationDeg = 92.0 }, 4.0);
+        PetalLuma Shown(ushort frame) =>
+            PetalCaptureSimulator.Capture(PetalRenderer.Render(SessionStream.Cells(frame), new PetalRenderOptions { Size = 768, Supersample = 2 }), config);
+        var session = Costed(static work => work.Kind switch
+        {
+            PetalWorkKind.Search or PetalWorkKind.Track => 4,
+            PetalWorkKind.Bands => 3 * work.Count,
+            PetalWorkKind.Merge => 0,
+            _ => 30,
+        });
+        // 10 ms of work, and twice that for the turn lanes before any try: they fit
+        var first = session.Push(Shown(1), 0);
+        Assert.Equal(("P0K0P1K1", "0123"), (first.Kana, first.Turned));
+        // the try took 30 ms, which with the next capture's 10 ms does not fit
+        var shown = Shown(2);
+        var next = session.Push(shown, 83);
+        Assert.Equal(("P0K0P1K1", string.Empty), (next.Kana, next.Turned));
+        var again = session.Push(shown, 116);
+        Assert.Equal((string.Empty, "0123"), (again.Kana, again.Turned));
+        Assert.Equal(1u, session.Stats.SpareTurns);
     }
 
     [Fact]
