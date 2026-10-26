@@ -150,6 +150,7 @@ from .render import (
 )
 from .rs import ReedSolomon, RsError, RsErrorKind
 from .session import (
+    CAPTURE_BUDGET_MS,
     KANA_BACKOFF,
     KANA_MEMORY,
     TRACK_WINDOW_MS,
@@ -159,6 +160,8 @@ from .session import (
     ScanOutcome,
     ScanSession,
     ScanStats,
+    Work,
+    WorkKind,
 )
 from .stream import (
     BEACON_INTERVAL,
@@ -220,6 +223,7 @@ __version__ = "0.1.0"
 __all__ = [
     "ATOM_LEN",
     "BEACON_INTERVAL",
+    "CAPTURE_BUDGET_MS",
     "CARD_HEIGHT",
     "D_DATA",
     "D_WORD",
@@ -323,6 +327,8 @@ __all__ = [
     "StreamErrorKind",
     "StreamMeta",
     "TileReading",
+    "Work",
+    "WorkKind",
     "Xorshift32",
     "atoms_in_frame",
     "card_height_px",

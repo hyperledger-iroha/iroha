@@ -213,14 +213,18 @@ The session reads the katakana bands of every capture whose square decoded
 (it remembers the last 12 bands it tried, `KANA_MEMORY`), with its own back-off
 of at most `KANA_BACKOFF` (8) captures after tries that read no kana lane (a
 camera that does not see the bands, or too blurred for their glyphs). The bands
-go first: a capture whose bands read a kana lane tries no turn lane, and the
-turn lanes of that shown frame wait for its next capture. On a slow phone core
-a turn try costs five tracked decodes and a band try one, so reading both on one
-capture overran the time a frame is shown at 12 fps; a camera that sees each
-shown frame two or three times still reads both, one that sees it once reads
-the cheaper bands and every frame's field lanes, and a band try that reads
-nothing (bands out of view, too blurred, or a torn capture) leaves the turn
-lanes to the same capture. `ScanOutcome.kana` names the kana lanes read from a
+go first: a capture whose bands read a kana lane tries the turn lanes too only
+when its work and the session's last turn try fit a 30 fps camera's frame time
+(`CAPTURE_BUDGET_MS`); otherwise the turn lanes of that shown frame wait for its
+next capture. On a slow phone core a turn try costs five tracked decodes and a
+band try one, so reading both on one capture overran the time a frame is shown
+at 12 fps; a fast decoder reads both, and a band try that reads nothing (bands
+out of view, too blurred, or a torn capture) leaves the turn lanes to the same
+capture. The session times its work with `time.perf_counter`; a `work_cost`
+given to `ScanSession` (a function of a `Work` and the measured milliseconds)
+puts a model's costs in their place, and `ScanStats.spare_turns` counts the
+captures that had the time. `python3 -m iroha_petal decode` reads files, which
+keep no camera waiting, so it reads every capture's turn lanes. `ScanOutcome.kana` names the kana lanes read from a
 capture (`P0K0P1K1` for all four), and `ScanStats.kana_tries` and `kana_lanes`
 count the bands tried and the kana lanes read.
 

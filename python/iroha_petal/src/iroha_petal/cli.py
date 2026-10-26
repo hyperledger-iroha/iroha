@@ -87,7 +87,8 @@ def _decode(args: argparse.Namespace) -> int:
     if not paths:
         print("error: no input frames (use --input or --input-dir)", file=sys.stderr)
         return 2
-    session = ScanSession()
+    # frames read from files keep no camera waiting: every capture has time for the turn lanes
+    session = ScanSession(work_cost=lambda _work, _measured_ms: 0.0)
     completed = None
     stats = session.stats()
     for index, path in enumerate(paths):

@@ -32,21 +32,30 @@ The katakana bands above and below the square are read the same way
 :data:`KANA_BACKOFF` captures after tries that read no kana lane (a camera that
 does not see the bands, or too blurred for their glyphs and polarity).
 
-The bands go first, and a capture whose bands read a kana lane tries no turn
-lane: the turn lanes of that shown frame wait for its next capture. On a slow
-phone core a turn try costs five tracked decodes and a band try one, so reading
-both on one capture overran the time a frame is shown at 12 fps and the session
-missed the next shown frames. A decoder that sees each shown frame two or three
-times still reads both; one that sees it once reads the cheaper bands and every
-frame's field lanes. A band try that reads nothing (bands out of view, too
-blurred, or a torn capture) leaves the turn lanes to the same capture.
+The bands go first. A capture whose bands read a kana lane tries the turn lanes
+too only when it has time to spare: when the work it has done (finding or
+following the code, a merge, the bands) and what the session's last turn try
+took fit together in :data:`CAPTURE_BUDGET_MS`, a 30 fps camera's frame time
+(before the first turn try, twice the work done stands in for it). Otherwise the
+turn lanes of that shown frame wait for its next capture. On a slow phone core a
+turn try costs five tracked decodes and a band try one, so reading both on one
+capture overran the time a frame is shown at 12 fps and the session missed the
+next shown frames; a fast decoder reads both at once, which matters when its
+camera gives it few frames a second. A band try that reads nothing (bands out of
+view, too blurred, or a torn capture) leaves the turn lanes to the same capture.
+
+The session times its work on the monotonic clock (:func:`time.perf_counter`); a
+``work_cost`` given to :class:`ScanSession` puts a model's costs in place of the
+measured times, as tests do.
 """
 
 from __future__ import annotations
 
+import time
 from collections import deque
 from dataclasses import dataclass, field, replace
-from typing import Deque, List, Optional, Tuple
+from enum import Enum
+from typing import Callable, Deque, List, Optional, Tuple
 
 from .decode import (
     DecodedFrame,
@@ -81,6 +90,9 @@ __all__ = [
     "TURN_BACKOFF",
     "KANA_MEMORY",
     "KANA_BACKOFF",
+    "CAPTURE_BUDGET_MS",
+    "WorkKind",
+    "Work",
     "ScanLimits",
     "ScanStats",
     "ScanOutcome",
@@ -102,6 +114,41 @@ TURN_BACKOFF = 8
 KANA_MEMORY = MERGE_WINDOW * KANA_BANDS
 #: Most captures passed over after tries that read no kana lane.
 KANA_BACKOFF = 8
+#: The time a capture's work may take in milliseconds, turn lanes included, for a capture
+#: whose bands read a lane to try the turn lanes too: a 30 fps camera's frame time, so a
+#: decoder that keeps to it misses no camera frame.
+CAPTURE_BUDGET_MS = 1000 / 30
+
+
+class WorkKind(Enum):
+    """The kinds of a capture's work a :class:`ScanSession` times (see :class:`Work`)."""
+
+    #: Finding the code by a full search and taking in the lanes read.
+    SEARCH = "search"
+    #: Following the code from the previous capture's pose and taking in the lanes read.
+    TRACK = "track"
+    #: Merging the held captures of a shown frame.
+    MERGE = "merge"
+    #: Reading the kana lanes of :attr:`Work.count` bands.
+    BANDS = "bands"
+    #: Reading the turn lanes.
+    TURNS = "turns"
+
+
+@dataclass(frozen=True)
+class Work:
+    """A part of a capture's work, as a :class:`ScanSession` times it to tell whether a
+    capture has time to spare for the turn lanes (see the module documentation)."""
+
+    #: What the work is.
+    kind: WorkKind
+    #: The bands read for :attr:`WorkKind.BANDS`; one otherwise.
+    count: int = 1
+
+
+def _measured(_work: Work, measured_ms: float) -> float:
+    """The measured time, as a session on a camera judges its spare time."""
+    return measured_ms
 
 
 @dataclass(frozen=True)
@@ -148,6 +195,8 @@ class ScanStats:
     kana_tries: int = 0
     #: Kana lanes read (up to four per shown frame).
     kana_lanes: int = 0
+    #: Captures whose bands read a lane that also tried the turn lanes, having time to spare.
+    spare_turns: int = 0
 
 
 @dataclass(frozen=True)
@@ -208,10 +257,21 @@ def _shown_frame(frame: DecodedFrame) -> Optional[LaneHeader]:
 
 
 class ScanSession:
-    """Decodes camera frames and reassembles the stream they carry."""
+    """Decodes camera frames and reassembles the stream they carry.
 
-    def __init__(self, limits: Optional[ScanLimits] = None) -> None:
+    ``work_cost`` says what a part of a capture costs in milliseconds, given the
+    milliseconds it took; by default the measured time.
+    """
+
+    def __init__(
+        self,
+        limits: Optional[ScanLimits] = None,
+        work_cost: Optional[Callable[[Work, float], float]] = None,
+    ) -> None:
         self._limits = limits if limits is not None else ScanLimits()
+        self._work_cost = work_cost if work_cost is not None else _measured
+        #: What the last turn try cost, in milliseconds.
+        self._turn_cost_ms: Optional[float] = None
         self._assembler = StreamAssembler(self._limits.assembler)
         self._stats = ScanStats()
         self._started_ms: Optional[int] = None
@@ -270,7 +330,7 @@ class ScanSession:
         While the last decoded pose is at most :data:`TRACK_WINDOW_MS` old the frame
         is first read by tracking that pose; a full decode runs when tracking fails. The
         bands are tried before the turn lanes, and a capture whose bands read a kana lane
-        tries no turn lane (see the module documentation).
+        tries the turn lanes only with time to spare (see the module documentation).
         """
         start = self._started_ms
         if start is not None and (
@@ -279,6 +339,7 @@ class ScanSession:
         ):
             self.reset()
         self._stats = replace(self._stats, frames=self._stats.frames + 1)
+        push_started = time.perf_counter()
         error: Optional[DecodeErrorKind] = None
         lanes = ""
         merged = ""
@@ -286,9 +347,11 @@ class ScanSession:
         kana = ""
         frame: Optional[DecodedFrame] = None
         last_pose = self._last_pose
+        followed = False
         if last_pose is not None and max(now_ms - last_pose[1], 0) <= TRACK_WINDOW_MS:
             frame = track_frame(image, last_pose[0], self._limits.decode)
             if frame is not None:
+                followed = True
                 self._stats = replace(self._stats, tracked=self._stats.tracked + 1)
         if frame is None:
             try:
@@ -300,11 +363,28 @@ class ScanSession:
                 self._stats = replace(self._stats, inferred=self._stats.inferred + 1)
             self._last_pose = (frame, now_ms)
             lanes = self._absorb(frame)
+            spent = self._cost(Work(WorkKind.TRACK if followed else WorkKind.SEARCH), push_started)
+            merges = self._stats.merges
+            part_started = time.perf_counter()
             merged = self._merge(image, frame)
-            # a capture whose bands read a lane tries no turn lane (see the module docs)
+            if self._stats.merges > merges:
+                spent += self._cost(Work(WorkKind.MERGE), part_started)
+            kana_tries = self._stats.kana_tries
+            part_started = time.perf_counter()
             kana = self._kana(image, frame)
+            bands = self._stats.kana_tries - kana_tries
+            if bands > 0:
+                spent += self._cost(Work(WorkKind.BANDS, bands), part_started)
+            # a capture whose bands read a lane tries the turn lanes only with time to spare
+            # (see the module docs)
+            turn_cost = self._turn_cost_ms if self._turn_cost_ms is not None else 2 * spent
             if not kana:
                 turned = self._turn(image, frame)
+            elif spent + turn_cost <= CAPTURE_BUDGET_MS:
+                turn_tries = self._stats.turn_tries
+                turned = self._turn(image, frame)
+                if self._stats.turn_tries > turn_tries:
+                    self._stats = replace(self._stats, spare_turns=self._stats.spare_turns + 1)
         if error not in (DecodeErrorKind.NO_FINDERS, DecodeErrorKind.UNSUPPORTED_IMAGE):
             self._stats = replace(self._stats, located=self._stats.located + 1)
         progress = self._assembler.progress()
@@ -334,6 +414,10 @@ class ScanSession:
         their luma first, so pass that plane and its row stride directly.
         """
         return self.push(Luma.from_strided(width, height, stride, plane), now_ms)
+
+    def _cost(self, work: Work, started: float) -> float:
+        """What ``work`` cost, given that it started at ``started`` (:func:`time.perf_counter`)."""
+        return self._work_cost(work, (time.perf_counter() - started) * 1000)
 
     def _absorb(self, frame: DecodedFrame) -> str:
         lanes = frame.lanes
@@ -378,8 +462,11 @@ class ScanSession:
                     tried.popleft()
                 tried.append((header, sector))
                 self._stats = replace(self._stats, turn_tries=self._stats.turn_tries + 1)
+        read_started = time.perf_counter()
+        results = read_turns(image, frame, skip)
+        self._turn_cost_ms = self._cost(Work(WorkKind.TURNS), read_started)
         turned = ""
-        for sector, result in enumerate(read_turns(image, frame, skip)):
+        for sector, result in enumerate(results):
             header = headers[sector]
             if result is None or header is None:
                 continue

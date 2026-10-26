@@ -57,14 +57,18 @@ class CliTest(unittest.TestCase):
             self.assertEqual((root / "out.bin").read_bytes(), data)
             self.assertIn("kind 5", out)
             # the frames are cards (512 x 834) sharing one pose, so every frame after the first
-            # follows it; the bands of every shown frame are read on its first capture, which
-            # then tries no turn lane (each frame here is captured once)
+            # follows it; frames read from files keep no camera waiting, so each one's bands and
+            # turn lanes are both read
             self.assertEqual(read_luma(frames[0]).height, 834)
-            self.assertIn(f"{frames[3].name}: D0123 (kana lanes P0K0P1K1); rank 0/0", err)
-            self.assertIn(f"{frames[1].name}: D0123 (tracked) (kana lanes P0K0P1K1)", err)
+            self.assertIn(
+                f"{frames[3].name}: D0123 (turn lanes 0123) (kana lanes P0K0P1K1); rank 0/0", err
+            )
+            self.assertIn(
+                f"{frames[1].name}: D0123 (tracked) (turn lanes 0123) (kana lanes P0K0P1K1)", err
+            )
             self.assertIn("frames: 3 read, 3 located, 3 readable, 2 tracked", err)
             self.assertIn(
-                "lane D read in 3 frames, 12 field lanes, 0 turn lanes, 12 kana lanes; 0 merges",
+                "lane D read in 3 frames, 12 field lanes, 12 turn lanes, 12 kana lanes; 0 merges",
                 err,
             )
 

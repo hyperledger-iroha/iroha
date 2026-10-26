@@ -12,10 +12,12 @@ import unittest
 from dataclasses import replace
 from functools import reduce
 from operator import add
+from typing import Callable, List
 
 from petal_test_support import camera_homography, capture, payload, rendered
 
 from iroha_petal import (
+    CAPTURE_BUDGET_MS,
     DecodedFrame,
     FrameCells,
     LaneHeader,
@@ -24,6 +26,8 @@ from iroha_petal import (
     RsError,
     ScanSession,
     StreamEncoder,
+    Work,
+    WorkKind,
     Xorshift32,
     decode_frame,
     render_frame,
@@ -498,28 +502,45 @@ class CardRenderTest(unittest.TestCase):
         )
 
 
+def costed(costs: Callable[[Work], float]) -> ScanSession:
+    """A session whose work costs what ``costs`` says, however long it took."""
+    return ScanSession(work_cost=lambda work, _measured_ms: costs(work))
+
+
+#: A Pixel 6 held to its Cortex-A55 cores (the reference simulator's model).
+A55 = {
+    WorkKind.SEARCH: 105.0,
+    WorkKind.TRACK: 14.5,
+    WorkKind.MERGE: 10.0,
+    WorkKind.BANDS: 15.0,
+    WorkKind.TURNS: 75.0,
+}
+
+
 class UprightSessionTest(unittest.TestCase):
-    def test_an_upright_camera_reads_both_bands_once_per_shown_frame(self) -> None:
-        data = payload(3000, 3)
+    def setUp(self) -> None:
+        self.data = payload(3000, 3)
         # a phone held upright delivers landscape frames with the card turned a quarter
-        forward = camera_homography(640, 480, 0.79, 92.0, tilt=0.15)
+        self.forward = camera_homography(640, 480, 0.79, 92.0, tilt=0.15)
 
-        def shoot(frame: int, seed: int) -> Luma:
-            return capture(rendered(data, 2, frame, 512, 2).to_luma(), forward, 640, 480, seed)
+    def shoot(self, frame: int, seed: int) -> Luma:
+        card = rendered(self.data, 2, frame, 512, 2).to_luma()
+        return capture(card, self.forward, 640, 480, seed)
 
-        session = ScanSession()
-        first = session.push(shoot(1, 1), 0)
-        self.assertEqual((first.lanes, first.kana, first.turned), ("D0123", "P0K0P1K1", ""))
-        # a second capture of the same shown frame tries no band again, so its turn lanes
-        # are read
-        again = session.push(shoot(1, 2), 33)
-        self.assertEqual((again.kana, again.turned), ("", "0123"))
-        following = session.push(shoot(2, 3), 83)
-        self.assertEqual((following.kana, following.turned), ("P0K0P1K1", ""))
+    def test_an_upright_camera_reads_both_bands_once_per_shown_frame(self) -> None:
+        # a fast decoder: every capture has time to spare for the turn lanes too
+        session = costed(lambda _work: 0.0)
+        first = session.push(self.shoot(1, 1), 0)
+        self.assertEqual((first.lanes, first.kana, first.turned), ("D0123", "P0K0P1K1", "0123"))
+        # a second capture of the same shown frame tries no band and no turn lane again
+        again = session.push(self.shoot(1, 2), 33)
+        self.assertEqual((again.kana, again.turned), ("", ""))
+        following = session.push(self.shoot(2, 3), 83)
+        self.assertEqual((following.kana, following.turned), ("P0K0P1K1", "0123"))
         stats = session.stats()
         self.assertEqual((stats.kana_tries, stats.kana_lanes), (4, 8))
-        self.assertEqual((stats.turn_tries, stats.turn_lanes), (4, 4))
-        tag = StreamEncoder(data, 2).meta.tag
+        self.assertEqual((stats.turn_tries, stats.turn_lanes, stats.spare_turns), (8, 8, 2))
+        tag = StreamEncoder(self.data, 2).meta.tag
         self.assertEqual(
             list(session._kana_tried)[-2:], [(LaneHeader(tag, 2), 0), (LaneHeader(tag, 2), 1)]
         )
@@ -528,7 +549,7 @@ class UprightSessionTest(unittest.TestCase):
         self.assertEqual((KANA_MEMORY, KANA_BACKOFF), (12, 8))
         session._kana_tried.clear()
         session._kana_tried.extend((LaneHeader(0, frame), 0) for frame in range(KANA_MEMORY))
-        self.assertEqual(session.push(shoot(3, 4), 166).kana, "P0K0P1K1")
+        self.assertEqual(session.push(self.shoot(3, 4), 166).kana, "P0K0P1K1")
         self.assertEqual(len(session._kana_tried), KANA_MEMORY)
         self.assertEqual(session._kana_tried[0], (LaneHeader(0, 2), 0))
         self.assertEqual(session._kana_tried[-1], (LaneHeader(tag, 3), 1))
@@ -538,6 +559,46 @@ class UprightSessionTest(unittest.TestCase):
         self.assertEqual(
             (len(session._kana_tried), session._kana_misses, session._kana_wait), (0, 0, 0)
         )
+
+    def test_a_slow_decoder_leaves_the_turn_lanes_to_the_next_capture(self) -> None:
+        # a slow phone core: the bands take the first capture's spare time
+        session = costed(lambda work: A55[work.kind] * work.count)
+        first = session.push(self.shoot(1, 1), 0)
+        self.assertEqual((first.kana, first.turned), ("P0K0P1K1", ""))
+        again = session.push(self.shoot(1, 2), 33)
+        self.assertEqual((again.kana, again.turned), ("", "0123"))
+        following = session.push(self.shoot(2, 3), 83)
+        self.assertEqual((following.kana, following.turned), ("P0K0P1K1", ""))
+        self.assertEqual(session.stats().spare_turns, 0)
+
+    def test_the_last_turn_try_tells_whether_a_capture_has_time_to_spare(self) -> None:
+        costs = {
+            WorkKind.SEARCH: 4.0,
+            WorkKind.TRACK: 4.0,
+            WorkKind.MERGE: 0.0,
+            WorkKind.BANDS: 3.0,
+            WorkKind.TURNS: 30.0,
+        }
+        seen: List[Work] = []
+
+        def cost(work: Work) -> float:
+            seen.append(work)
+            return costs[work.kind] * work.count
+
+        session = costed(cost)
+        # 10 ms of work, and twice that for the turn lanes before any try: they fit
+        first = session.push(self.shoot(1, 1), 0)
+        self.assertEqual((first.kana, first.turned), ("P0K0P1K1", "0123"))
+        self.assertEqual(
+            seen, [Work(WorkKind.SEARCH), Work(WorkKind.BANDS, 2), Work(WorkKind.TURNS)]
+        )
+        # the try took 30 ms, which with the next capture's 10 ms does not fit
+        following = session.push(self.shoot(2, 2), 83)
+        self.assertEqual((following.kana, following.turned), ("P0K0P1K1", ""))
+        again = session.push(self.shoot(2, 3), 116)
+        self.assertEqual((again.kana, again.turned), ("", "0123"))
+        self.assertEqual(session.stats().spare_turns, 1)
+        self.assertAlmostEqual(CAPTURE_BUDGET_MS, 1000 / 30)
 
 
 if __name__ == "__main__":
