@@ -23,7 +23,7 @@ The crate is `std`-only and has no runtime dependencies.
 | `turns` | the turn lanes (`T0`–`T3`): carrier order, turn codewords and their repair atoms, and the turn reader |
 | `kana` | the kana lanes (`P0`, `K0`, `P1`, `K1`): tile symbols, codewords bound to the stream tag, frame and lane, and the band reader |
 | `render` | software renderer for cards (SDKs also expose a vector draw list) |
-| `geometry`, `locate`, `decode`, `session` | camera luma → finders (three are enough) → pose (with lens distortion) → lanes; `ScanSession` tracks the pose between frames, merges the captures of one shown frame and reads each band and turn lane once, the bands first |
+| `geometry`, `locate`, `decode`, `session` | camera luma → finders (three are enough) → pose (with lens distortion) → lanes; `ScanSession` tracks the pose between frames, merges the captures of one shown frame and reads each band and turn lane once, the bands first and the turn lanes on the same capture when it has time to spare |
 | `sim`, `qualify` | deterministic camera simulator and end-to-end stream trials |
 
 ```text

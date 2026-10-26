@@ -486,7 +486,7 @@ The reference algorithm, which the golden captures are calibrated to:
    local read included. The session offers a merged lane only when its own header names the frame it was merged for, and counts
    merges and merged lanes apart from single-capture lanes. Merging one capture reads exactly what that capture read alone.
 9. **Turn lanes.** The turn lanes are read from a capture whose field lanes decoded on their own (merged lanes are not used)
-   and whose bands read no kana lane (step 10). A scan session tries a turn lane once per shown frame: it remembers the last 24 `(tag, frame, sector)` it tried, read or
+   and whose bands read no kana lane or which has time to spare (step 10). A scan session tries a turn lane once per shown frame: it remembers the last 24 `(tag, frame, sector)` it tried, read or
    not (the four sectors of the last 6 shown frames, cleared with the held evidence when the stream changes), and passes
    those sectors over. Reading turns costs a slow phone core several times a frame's decode (§8), so after a try that reads
    no turn lane the session passes over the next captures that would try one: one capture after the first such try in a row,
@@ -537,11 +537,16 @@ The reference algorithm, which the golden captures are calibrated to:
    A scan session reads each band once per shown frame: it remembers the last 12 `(tag, frame, band)` it tried and passes
    those bands over, and after a try that reads no kana lane it passes over the next captures that would try one, as for the
    turn lanes (step 9) but with its own count (at most 8). The bands go before the turn lanes: a capture first tries the
-   bands, and only when that reads no kana lane (no band is left to try for its shown frame, the capture is one the
-   back-off passes over, or the try reads nothing) does it try the turn lanes on the same capture. A capture whose bands
-   read a kana lane tries no turn lane, and that shown frame's turn lanes wait for its next capture. On a slow phone core a
-   turn try costs about five tracked decodes and a band try about one (§8): both on one capture took longer than a frame is
-   shown at 12 fps, and the session missed the next shown frames.
+   bands, and when that reads no kana lane (no band is left to try for its shown frame, the capture is one the back-off
+   passes over, or the try reads nothing) it tries the turn lanes on the same capture. A capture whose bands read a kana
+   lane tries the turn lanes too only when it has time to spare: when `spent + estimate ≤ 1000/30` ms, a 30 fps camera's
+   frame time, where `spent` is what the capture's work took so far (finding or following the code and taking in its
+   lanes, a merge when one was made, and the bands) and `estimate` is what the session's last turn try took (`2·spent`
+   before its first). Otherwise that shown frame's turn lanes wait for its next capture. On a slow phone core a turn try
+   costs about five tracked decodes and a band try about one (§8): both on one capture took longer than a frame is shown at
+   12 fps, and the session missed the next shown frames. A fast decoder has the time for both, which matters when its
+   camera delivers few frames a second (§8). A session times its work on the monotonic clock; a simulation or a test may
+   give it a model's costs in place of the measured times, so that its choices repeat.
    1. *Placing.* The square's pose, applied to points beyond the square, places every tile. A tile one of whose corners maps
       outside the image is not read.
    2. *Samples.* A tile is sampled at a grid of points, moved by the tile's shift: the pose maps the tile's centre `o` (its
@@ -879,10 +884,6 @@ Implementations: Rust (`crates/iroha_petal`, `iroha offline petal`), Swift (`Iro
 
 ## 12. Open work
 
-* TODO: read the turn lanes on the first capture of a shown frame when the decoder has the time. The scan session reads
-  a shown frame's bands first and its turns on a later capture (§7 step 10), which a slow phone core needs; a fast decoder
-  whose camera gives it few frames a second (dim light) then reads most frames' turns not at all (§8: 1.58 s instead of
-  1.20 s at 15 camera frames a second). A session that knew its spare time per capture could read both there.
 * TODO: physical-device qualification of the matrices in §8, including the OLED/PWM and rolling-shutter effects, the
   exposure-compensation guidance, and the 12 fps default with a real camera on an older 4 GB Android phone.
 * TODO: check the katakana bands with real cameras and screens: how people frame the card (the square or the whole card),
