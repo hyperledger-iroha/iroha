@@ -692,39 +692,42 @@ card is turned by about 45° in these poses, and one band is out of view.
 End to end (`stream_sim`: 30 fps camera, 1/60 s exposure with blending/tearing, the phone held upright, 8 trials per row,
 received through a scan session that tracks the pose; seconds to complete, mean) for the largest KAGEMUSHA Payment (12,182
 bytes) and, after the slash, a Request-sized message (2,132 bytes). The slower cameras deliver only that many frames a second
-to a decoder that reads each of them whatever it reads (a slow decoder's own cost is modelled below); the rolling shutters
-expose the rows one after another over the readout time, and upright the rows run along the card, so a frame change sweeps
-across its width. Rows with three figures list the sharp, older and soft 720p cameras:
+to a decoder that reads each of them; the session judges its spare time on the reference decoder's costs on one desktop
+core (the decode-cost table below), so every capture has time for its turn lanes after its bands (a slow decoder's own cost
+is modelled below). The rolling shutters expose the rows one after another over the readout time, and upright the rows run
+along the card, so a frame change sweeps across its width. Rows with three figures list the sharp, older and soft 720p
+cameras:
 
 | Camera | 8 fps | 10 fps | 12 fps | 15 fps |
 | --- | --- | --- | --- | --- |
-| sharp 720p | 1.78 / 0.25 s | 1.40 / 0.20 s | 1.20 / 0.18 s | 0.94 / 0.15 s |
-| older 720p | 1.81 / 0.27 s | 1.47 / 0.22 s | 1.30 / 0.19 s | 1.02 / 0.15 s |
+| sharp 720p | 1.77 / 0.25 s | 1.39 / 0.19 s | 1.19 / 0.16 s | 0.93 / 0.12 s |
+| older 720p | 1.82 / 0.25 s | 1.49 / 0.19 s | 1.25 / 0.18 s | 1.01 / 0.12 s |
 | soft 720p | 2.64 / 0.40 s | 2.05 / 0.29 s | 1.76 / 0.26 s | 1.32 / 0.19 s |
 | harshest 480p preset | 4.55 / 0.75 s | 3.74 / 0.62 s | 3.20 / 0.52 s | 2.55 / 0.42 s |
-| 720p, a camera giving the decoder only 20 frames a second | 1.78 / 1.95 / 2.58 s | 1.46 / 1.56 / 2.05 s | 1.36 / 1.46 / 1.74 s | 1.23 / 1.24 / 1.40 s |
-| 720p, a camera giving the decoder only 15 frames a second | 1.87 / 1.97 / 2.55 s | 1.67 / 1.73 / 2.02 s | 1.58 / 1.62 / 1.75 s | 1.33 / 1.39 / 1.33 s |
-| 720p, a camera giving the decoder only 10 frames a second | 2.34 / 2.45 / 2.61 s | 2.00 / 2.05 / 2.00 s | 2.12 / 2.19 / 2.26 s | 2.02 / 2.09 / 2.01 s |
-| 720p, rolling shutter, 20 ms readout, 8 ms exposure | 1.82 / 1.83 / 2.73 s | not run | 1.25 / 1.32 / 1.85 s | 0.96 / 1.02 / 1.33 s |
-| 720p, rolling shutter, 30 ms readout, 16 ms exposure | 1.85 / 1.89 / 2.80 s | not run | 1.28 / 1.32 / 1.89 s | 1.03 / 1.17 / 1.40 s |
-| 720p held at any angle | not run | not run | 1.37 / 1.57 / 2.34 s | not run |
+| 720p, a camera giving the decoder only 20 frames a second | 1.78 / 1.89 / 2.58 s | 1.46 / 1.55 / 2.05 s | 1.18 / 1.24 / 1.74 s | 0.96 / 0.97 / 1.40 s |
+| 720p, a camera giving the decoder only 15 frames a second | 1.76 / 1.84 / 2.55 s | 1.40 / 1.48 / 2.02 s | 1.20 / 1.25 / 1.75 s | 0.93 / 1.00 / 1.33 s |
+| 720p, a camera giving the decoder only 10 frames a second | 1.78 / 1.90 / 2.61 s | 1.40 / 1.48 / 2.00 s | 1.49 / 1.62 / 2.26 s | 1.41 / 1.49 / 2.01 s |
+| 720p, rolling shutter, 20 ms readout, 8 ms exposure | 1.80 / 1.83 / 2.73 s | not run | 1.23 / 1.32 / 1.85 s | 0.93 / 0.97 / 1.33 s |
+| 720p, rolling shutter, 30 ms readout, 16 ms exposure | 1.85 / 1.88 / 2.80 s | not run | 1.25 / 1.29 / 1.89 s | 0.96 / 1.05 / 1.40 s |
+| 720p held at any angle | not run | not run | 1.36 / 1.53 / 2.34 s | not run |
 | format 3, the three 720p cameras at any angle | 2.46 / 2.73 / 4.46 s | 1.99 / 2.39 / 3.57 s | 1.65 / 1.87 / 2.98 s | 1.32 / 1.53 / 2.38 s |
 | format 3, the three 720p cameras, Request | 0.33 / 0.40 / 0.71 s | 0.26 / 0.34 / 0.56 s | 0.23 / 0.29 / 0.48 s | 0.18 / 0.22 / 0.38 s |
 | format 3, harshest 480p preset | 6.32 / 1.08 s | 5.70 / 1.04 s | 5.76 / 1.02 s | 6.31 / 1.29 s |
 | animated QR (Apple Vision), 720p cameras | 6.4 / 1.2 s | 5.1 s | 4.3 s | 3.4 s |
 
-Every trial completed and none delivered a wrong payload. At the default 12 fps a Payment takes 1.20 s on a sharp camera,
-1.30 s on an older one and 1.76 s on a soft one, against 1.65, 1.87 and 2.98 s for format 3 and 6.4 s for the apps' animated
-QR at its 8 fps; a Request takes 0.18–0.26 s. The three 720p cameras read 44–46 kana lanes a second of the 48 that 12 fps
+Every trial completed and none delivered a wrong payload. At the default 12 fps a Payment takes 1.19 s on a sharp camera,
+1.25 s on an older one and 1.76 s on a soft one, against 1.65, 1.87 and 2.98 s for format 3 and 6.4 s for the apps' animated
+QR at its 8 fps; a Request takes 0.16–0.26 s. The three 720p cameras read 44–46 kana lanes a second of the 48 that 12 fps
 shows; the harshest 480p preset reads 12 and completes in 3.20 s. The bands keep their lead under both rolling shutters
-(1.25–1.28 s on the sharp camera, 1.85–1.89 s on the soft one and 3.22–3.27 s on the harshest preset at 12 fps). Held at any
+(1.23–1.25 s on the sharp camera, 1.85–1.89 s on the soft one and 3.22–3.27 s on the harshest preset at 12 fps). Held at any
 angle, the harshest preset took 5.20 s on average and 3.37 s in the median, against 5.76 s on average for format 3.
 
-A camera that gives the decoder fewer frames a second costs the turn lanes most. The scan session reads a shown frame's
-bands on its first capture and its turn lanes only on a later one (§7 step 10), and at 15 camera frames a second most frames
-shown at 12 fps are captured once, so the sharp and older cameras complete in 1.58 and 1.62 s at 12 fps, where a session that
-read both on every capture took 1.20 and 1.25 s. That model charges a capture nothing for what it reads. On a phone a capture
-that reads both costs the time that makes its decoder slow, and there the bands first are the faster schedule (below).
+A camera that gives the decoder fewer frames a second costs the turn lanes most: at 15 camera frames a second most frames
+shown at 12 fps are captured once. A decoder this fast has the time to read a capture's turn lanes after its bands (§7
+step 10), so the sharp and older cameras complete in 1.20 and 1.25 s there, where a session that left every shown frame's turn
+lanes to a later capture took 1.58 and 1.62 s; with 10 camera frames a second they take 1.49 and 1.62 s instead of 2.12 and
+2.19 s, and 1.41 and 1.49 s instead of 2.02 and 2.09 s when the screen shows 15 frames a second. A slow phone core has no such
+time, and there the bands first are the faster schedule (below).
 
 The QR row is the same cameras and timeline watching the apps' animated QR stream: `IRQR` frames as ZXing draws them at ECC M,
 version 13, 256-byte shards with Cauchy Reed–Solomon parity, the QR box 1.25 times the petal canvas, carrying the message body
@@ -739,14 +742,14 @@ left the same or made slower:
 
 | Camera | Upright (24 trials) | Upright, rolling shutter 30 ms, 16 ms exposure (16) | Any angle (16) |
 | --- | --- | --- | --- |
-| sharp 720p | 1.18 / 1.66 s, 24–0–0 | 1.27 / 1.67 s, 16–0–0 | 1.38 / 1.66 s, 11–5–0 |
-| older 720p | 1.28 / 1.77 s, 24–0–0 | 1.32 / 1.75 s, 16–0–0 | 1.63 / 2.03 s, 12–4–0 |
+| sharp 720p | 1.18 / 1.66 s, 24–0–0 | 1.25 / 1.67 s, 16–0–0 | 1.35 / 1.66 s, 12–4–0 |
+| older 720p | 1.24 / 1.77 s, 24–0–0 | 1.29 / 1.75 s, 16–0–0 | 1.60 / 2.03 s, 12–4–0 |
 | soft 720p | 1.75 / 2.98 s, 24–0–0 | 1.89 / 2.99 s, 16–0–0 | 2.37 / 2.98 s, 12–4–0 |
 | harshest 480p preset | 3.30 / 3.47 s, 23–1–0 | 3.55 / 3.70 s, 13–3–0 | 11.7 / 13.5 s (median 4.07 both), 11–5–0 |
 
 No trial was slower with the bands, and none delivered a wrong payload. Held upright, the bands cut a Payment's transfer by
-28–29 % on the sharp and older cameras (about 0.5 s) and by 41 % on the soft one (1.2 s), under the 30 ms rolling shutter by
-24–37 %, and on the harshest 480p preset by 4–5 %. At any angle they cut it by about a fifth, and a quarter to a third of the
+29–30 % on the sharp and older cameras (about 0.5 s) and by 41 % on the soft one (1.2 s), under the 30 ms rolling shutter by
+25–37 %, and on the harshest 480p preset by 4–5 %. At any angle they cut it by about a fifth, and a quarter to a third of the
 trials, whose bands the frame cut off, took the same time.
 
 Decode cost (`decode_cost` example; one thread of an Apple M4 Max, the fastest of 18 runs while other work kept the machine
@@ -761,9 +764,10 @@ busy; upright captures, kana lanes of both bands):
 | modern 720p, a thumb over a blossom | 15.3 ms | 2.5 ms | 4.8 ms | 2.0 ms | 0.7 ms |
 
 Reading the turn lanes costs about ten times a tracked frame's decode, and the kana lanes of both bands about four times. A
-scan session therefore tries each turn lane and each band once per shown frame, reads the bands first, and backs off on a
-camera whose turns or bands it cannot read (§7 steps 9 and 10). On a desktop the Kotlin and Swift ports read a capture's turn
-lanes in 5–9 ms, and the Swift port its bands in 1–4 ms; ports are expected to stay within a factor of 20 of the reference.
+scan session therefore tries each turn lane and each band once per shown frame, reads the bands first and the turn lanes on
+the same capture only when it has time to spare, and backs off on a camera whose turns or bands it cannot read (§7 steps 9
+and 10). On a desktop the Kotlin and Swift ports read a capture's turn lanes in 5–9 ms, and the Swift port its bands in 1–4
+ms; ports are expected to stay within a factor of 20 of the reference.
 
 On a phone, format 3 was measured on a Pixel 6 held to its four Cortex-A55 cores at 1.8 GHz (`taskset 0f`; the core type that
 budget 4 GB phones pair with a few faster ones), running the Kotlin SDK on ART, which decoded the camera frames of simulated
@@ -774,18 +778,24 @@ the sharp camera (13–15 camera frames a second decoded), 2.50 s on the older o
 or display was in this loop.
 
 Format 5 was measured the same way, on one upright trial of each camera (three replays each). On those cores a tracked
-capture costs about 14 ms, a full search about 100 ms, the turn lanes 75 ms and the kana lanes of both bands 35–37 ms with the
-reader of §7 step 10, whose first version took 75–83 ms. A session that tried the turn lanes and the bands on the same capture
-spent about 165 ms on it, twice the 83 ms a frame is shown at 12 fps: it decoded only 6–9 camera frames a second, missed shown
-frames, and completed the Payment in 2.51, 2.61 and 2.65 s on the sharp, older and soft cameras, slower than format 3 on the
-sharp one. With the bands first (§7 step 10) the session decodes 14–15 camera frames a second on the sharp and older cameras
-and 18–20 on the soft one, and the Payment completes in 1.67–1.87 s on the sharp camera, 1.90–2.07 s on the older one and
-1.79–1.94 s on the soft one, against 1.82, 2.50 and 3.08 s with format 3. A decoder that keeps up with every camera frame
-completes the same trials in 1.17, 1.27 and 1.73 s.
+capture costs about 14 ms, a full search about 100 ms, the turn lanes 75 ms and the kana lanes of both bands 35–37 ms with
+the reader of §7 step 10, whose first version took 75–83 ms. A session that tried the turn lanes and the bands on the same
+capture spent about 165 ms on it, twice the 83 ms a frame is shown at 12 fps: it decoded only 6–9 camera frames a second,
+missed shown frames, and completed the Payment in 2.51, 2.61 and 2.65 s on the sharp, older and soft cameras, slower than
+format 3 on the sharp one. With the bands first (§7 step 10) the session decodes 14–15 camera frames a second on the sharp
+and older cameras and 18–20 on the soft one, and the Payment completes in 1.67–1.87 s on the sharp camera, 1.90–2.07 s on
+the older one and 1.79–1.94 s on the soft one, against 1.82, 2.50 and 3.08 s with format 3. A decoder that keeps up with
+every camera frame completes the same trials in 1.17, 1.27 and 1.73 s. With the turn lanes read on a capture that has time
+to spare (§7 step 10) no capture on those cores had the time, and the Payment took 1.71–1.78, 1.85–2.02 and 1.94–2.12 s, the
+same schedule within the runs' spread of about 0.2 s. On all of the phone's cores, which decode every camera frame (a
+tracked capture 1.5 ms, the turn lanes 9 ms, both bands 6 ms), 14–15 captures per trial read both, and the Payment took 1.15
+and 1.25 s on the sharp and older cameras against 1.18 and 1.28 s with the turn lanes always left to a later capture, and
+1.74 s on the soft camera either way.
 
 The simulator models those cores (`stream_sim --phone a55`: a full search 105 ms, a tracked capture 14.5 ms, the turn lanes
 75 ms, a band 15 ms and a merge 10 ms, the newest camera frame taken whenever the decoder is free; 24 upright trials of each
-camera). The Payment takes 1.74, 1.83, 1.90 and 3.94 s on the sharp, older, soft and harshest cameras with the bands first;
+camera). The Payment takes 1.74, 1.83, 1.90 and 3.94 s on the sharp, older, soft and harshest cameras with the bands first,
+where no capture has time to spare for the turn lanes as well;
 2.03, 2.13, 2.00 and 3.92 s when every capture reads both turns and bands; 2.04, 2.19, 3.09 and 3.84 s with format 3's session,
 which reads no band; and 2.25, 2.39, 3.33 and 4.15 s with the bands blacked out, the band tries that read nothing costing their
 time until the back-off passes them over.
