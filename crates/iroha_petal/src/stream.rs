@@ -9,7 +9,8 @@
 //! [`first_atom_id`]). Any single readable lane is useful on its own. On top of
 //! every field lane, the turns of its lit petals carry four more atoms from the
 //! repair range (see [`crate::turns`]), so a sharp camera reads up to 37 atoms
-//! (592 bytes) a frame.
+//! (592 bytes) from the square. The katakana bands above and below the square add
+//! eight atoms each (see [`crate::kana`]): up to 53 atoms (848 bytes) a frame.
 //!
 //! Lane data layouts (all big-endian):
 //!
@@ -19,20 +20,23 @@
 //! * beacon `D`: `version:u8, kind:u8, len:u24, crc:u32`, zero padded.
 //! * turn lanes: `atoms… check:u32`, where the check binds the atoms to the header
 //!   of the field lane they ride on.
+//! * kana lanes: `atoms… check:u32`, where the check binds the atoms to the stream
+//!   tag, the frame and the lane.
 
 use std::collections::VecDeque;
 
 use crate::crc::crc32c;
 use crate::fountain::{Atom, FountainDecoder, encode_atom, split_payload};
+use crate::kana::{KanaKind, KanaLane, encode_kana_lane, kana_data, kana_first_id};
 use crate::lanes::{
     ATOM_LEN, ATOMS_PER_FRAME, D_ATOMS, D_DATA, FIELD_ATOMS, FIELD_DATA, FrameCells,
     LANE_HEADER_LEN, Lane, encode_lane,
 };
-use crate::layout::SECTORS;
+use crate::layout::{KANA_BANDS, SECTORS};
 use crate::turns::{TURN_ATOMS, encode_turn_lane, turn_data, turn_first_id};
 
-/// Version/profile byte of the beacon: format version 3, layout profile 0.
-pub const FORMAT_VERSION: u8 = 0x30;
+/// Version/profile byte of the beacon: format version 5, layout profile 0.
+pub const FORMAT_VERSION: u8 = 0x50;
 /// Largest payload a beacon can describe (`u24`).
 pub const MAX_PAYLOAD_LEN: usize = (1 << 24) - 1;
 /// Default receiver payload limit; override with [`AssemblerLimits`].
@@ -312,7 +316,25 @@ impl StreamEncoder {
                 &self.atoms(turn_first_id(frame, sector), TURN_ATOMS),
             )
         });
-        LaneData { d, fields, turns }
+        let kana = core::array::from_fn(|b| {
+            [KanaKind::Polarity, KanaKind::Glyph].map(|kind| {
+                let lane = KanaLane {
+                    band: b as u8,
+                    kind,
+                };
+                kana_data(
+                    lane_header,
+                    lane,
+                    &self.atoms(kana_first_id(frame, lane), lane.atoms()),
+                )
+            })
+        });
+        LaneData {
+            d,
+            fields,
+            turns,
+            kana,
+        }
     }
 
     /// The transmitted codewords of `frame`.
@@ -323,10 +345,19 @@ impl StreamEncoder {
             d: encode_lane(Lane::D, &data.d),
             fields: core::array::from_fn(|s| encode_lane(Lane::FIELDS[s], &data.fields[s])),
             turns: core::array::from_fn(|s| encode_turn_lane(s as u8, &data.turns[s])),
+            kana: core::array::from_fn(|b| {
+                [KanaKind::Polarity, KanaKind::Glyph].map(|kind| {
+                    let lane = KanaLane {
+                        band: b as u8,
+                        kind,
+                    };
+                    encode_kana_lane(lane, &data.kana[b][usize::from(kind == KanaKind::Glyph)])
+                })
+            }),
         }
     }
 
-    /// Every cell of `frame`, lit and turned, ready to render.
+    /// Every cell of `frame`, lit, turned and with its katakana tiles, ready to render.
     #[must_use]
     pub fn cells(&self, frame: u16) -> FrameCells {
         let words = self.words(frame);
@@ -345,6 +376,10 @@ impl StreamEncoder {
             &words.turns[2],
             &words.turns[3],
         ]);
+        cells.set_kana([
+            [&words.kana[0][0], &words.kana[0][1]],
+            [&words.kana[1][0], &words.kana[1][1]],
+        ]);
         cells
     }
 }
@@ -358,6 +393,8 @@ pub struct LaneData {
     pub fields: [Vec<u8>; SECTORS],
     /// The turn lanes, sector 0 first.
     pub turns: [Vec<u8>; SECTORS],
+    /// The kana lanes: `kana[band]` is `[polarity, glyphs]`, band 0 (above the square) first.
+    pub kana: [[Vec<u8>; 2]; KANA_BANDS],
 }
 
 impl LaneData {
@@ -797,8 +834,9 @@ mod tests {
         assert_eq!(beacon.meta, encoder.meta());
         assert_eq!(beacon.header.frame, 512);
         assert!(parse_d_lane(&d[..11]).is_none());
-        // the retired formats 1 (katakana tiles) and 2 (unturned petals) are refused
-        for retired in [0x10, 0x20] {
+        // the retired formats 1 (katakana tiles), 2 (unturned petals) and 3 (no bands) are
+        // refused
+        for retired in [0x10, 0x20, 0x30] {
             let mut bad = d.clone();
             bad[3] = retired;
             assert!(parse_d_lane(&bad).is_none());

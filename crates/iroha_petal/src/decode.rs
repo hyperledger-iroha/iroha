@@ -1096,7 +1096,7 @@ mod tests {
     use super::*;
     use crate::geometry::Homography;
     use crate::lanes::{D_DATA, FIELD_DATA, encode_lane};
-    use crate::render::{RenderOptions, render};
+    use crate::render::{RenderOptions, render_square as render};
     use crate::stream::{LaneData, StreamEncoder};
 
     fn setup(frame_no: u16) -> (StreamEncoder, crate::image::Rgb) {

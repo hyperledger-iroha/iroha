@@ -1,8 +1,8 @@
-//! Writes the cross-SDK golden camera captures to `fixtures/petal/petal_captures_v3.json`.
+//! Writes the cross-SDK golden camera captures to `fixtures/petal/petal_captures_v5.json`.
 //!
-//! Each capture is a degraded 8-bit luma plane (zlib + base64) of one frame of
-//! the `one-pass` stream in `petal_stream_v3.json`, together with the decode
-//! result every conforming decoder must reach, turn lanes included. Merge sets are several captures
+//! Each capture is a degraded 8-bit luma plane (zlib + base64) of one card of
+//! the `one-pass` stream in `petal_stream_v5.json`, together with the decode
+//! result every conforming decoder must reach, turn and kana lanes included. Merge sets are several captures
 //! of one shown frame whose merge recovers field lanes none of them reads alone;
 //! the mixed set shows the rings of one frame over the petal field of the next, so
 //! a merge reads the other frame's lanes and a session must refuse them.
@@ -25,12 +25,13 @@ use iroha_petal::decode::{
     DecodeOptions, DecodedFrame, decode, field_evidence, merge_fields, track,
 };
 use iroha_petal::image::Luma;
+use iroha_petal::kana::{KanaLane, read_kana};
 use iroha_petal::lanes::{FrameCells, Lane};
-use iroha_petal::layout::SECTORS;
+use iroha_petal::layout::{SECTORS, SQUARE_TOP};
 use iroha_petal::render::{RenderOptions, render};
 use iroha_petal::session::{ScanLimits, ScanSession};
 use iroha_petal::sim::{CaptureConfig, capture, fit_to_frame};
-use iroha_petal::stream::{LaneData, StreamEncoder};
+use iroha_petal::stream::{LaneData, LaneHeader, StreamEncoder};
 use iroha_petal::turns::{observed_turns, read_turns};
 
 const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -88,6 +89,8 @@ struct Case {
     must: &'static str,
     /// Turn lanes every conforming reader must read (sector digits).
     must_turn: &'static str,
+    /// Kana lanes every conforming reader must read (`P0`, `K0`, `P1`, `K1`).
+    must_kana: &'static str,
     note: &'static str,
 }
 
@@ -105,9 +108,12 @@ fn shoot(encoder: &StreamEncoder, frame: u16, case: &Case) -> Luma {
     if let Some(corner) = case.hide {
         let scale = count_as_f64(size) / 1024.0;
         let (cx, cy) = iroha_petal::layout::FINDER_CENTERS[usize::from(corner)];
-        let (cx, cy) = (f64::from(cx) * scale, f64::from(cy) * scale);
+        let (cx, cy) = (
+            f64::from(cx) * scale,
+            (f64::from(cy) + f64::from(SQUARE_TOP)) * scale,
+        );
         let radius = 80.0 * scale;
-        for y in 0..size {
+        for y in 0..source.height {
             for x in 0..size {
                 let (dx, dy) = (count_as_f64(x) + 0.5 - cx, count_as_f64(y) + 0.5 - cy);
                 if dx.hypot(dy) <= radius {
@@ -227,6 +233,7 @@ fn shoot_set(encoder: &StreamEncoder, set: &MergeSet) -> Vec<Luma> {
         dots: rings.dots,
         petals: field.petals,
         turns: field.turns,
+        kana: rings.kana,
     };
     let source = render(
         &cells,
@@ -319,6 +326,41 @@ fn turned(
     (letters, report)
 }
 
+/// The kana lanes `frame` reads from `luma` under the header its lanes name, checked against
+/// `truth`, as lane names.
+fn kana_read(name: &str, luma: &Luma, frame: &DecodedFrame, truth: &LaneData) -> String {
+    let Some(header) = frame
+        .atom_packets()
+        .first()
+        .map(|p| p.header)
+        .or_else(|| frame.beacon().map(|b| b.header))
+    else {
+        return String::new();
+    };
+    let header = LaneHeader {
+        tag: header.tag,
+        frame: header.frame,
+    };
+    let mut names = String::new();
+    for (lane, result) in KanaLane::ALL
+        .into_iter()
+        .zip(read_kana(luma, frame, header, [false; 2]).iter().flatten())
+    {
+        if let Some(result) = result {
+            let band = usize::from(lane.band);
+            let kind = usize::from(lane.kind == iroha_petal::kana::KanaKind::Glyph);
+            assert_eq!(
+                result.result.data,
+                truth.kana[band][kind],
+                "{name}: kana lane {} decoded to wrong data",
+                lane.name()
+            );
+            names.push_str(&lane.name());
+        }
+    }
+    names
+}
+
 /// Warps a capture with barrel distortion about the image centre, as a cheap lens does:
 /// pixel `p` shows what an undistorted camera saw at `c + (p − c) / (1 + k r²/s²)`, with
 /// `s = 0.8 · max(width, height)` (the decoder's distortion model).
@@ -355,7 +397,7 @@ fn zlib64(luma: &Luma) -> String {
 
 fn main() {
     let path = std::env::args().nth(1).expect("output path");
-    // the stream every capture displays: identical to `one-pass` in petal_stream_v3.json
+    // the stream every capture displays: identical to `one-pass` in petal_stream_v5.json
     let mut rng = iroha_petal::prng::Xorshift32::new(2);
     let payload: Vec<u8> = (0..3000).map(|_| rng.next_byte()).collect();
     let encoder = StreamEncoder::new(&payload, 2).expect("stream");
@@ -376,6 +418,7 @@ fn main() {
             barrel: None,
             must: "D0123",
             must_turn: "0123",
+            must_kana: "",
             note: "ideal render, no camera",
         },
         Case {
@@ -397,6 +440,7 @@ fn main() {
             barrel: None,
             must: "D0123",
             must_turn: "0123",
+            must_kana: "",
             note: "sharp 720p, 37 degree rotation, mild tilt",
         },
         Case {
@@ -418,6 +462,7 @@ fn main() {
             barrel: None,
             must: "D0123",
             must_turn: "",
+            must_kana: "",
             note: "older phone: soft, noisy, barrel distortion, glare gradient",
         },
         Case {
@@ -442,6 +487,7 @@ fn main() {
             barrel: None,
             must: "D",
             must_turn: "",
+            must_kana: "",
             note: "out of focus 480p; a field lane must not be reported unless correct",
         },
         Case {
@@ -464,6 +510,7 @@ fn main() {
             barrel: None,
             must: "D0123",
             must_turn: "",
+            must_kana: "",
             note: "low-end preview resolution and soft focus",
         },
         Case {
@@ -483,6 +530,7 @@ fn main() {
             barrel: None,
             must: "D0123",
             must_turn: "0123",
+            must_kana: "",
             note: "horizontally mirrored preview (front camera)",
         },
         Case {
@@ -505,6 +553,7 @@ fn main() {
             barrel: None,
             must: "D0123",
             must_turn: "",
+            must_kana: "",
             note: "auto-exposure blows the petals out three-fold",
         },
         Case {
@@ -523,6 +572,7 @@ fn main() {
             barrel: None,
             must: "D0123",
             must_turn: "",
+            must_kana: "",
             note: "older phone in a bright room: reflections lift the black level by half the lit level",
         },
         Case {
@@ -541,6 +591,7 @@ fn main() {
             barrel: None,
             must: "023",
             must_turn: "012",
+            must_kana: "",
             note: "a band across the middle of the code in shadow (40 % light); finder levels cannot describe it, the local read does",
         },
         Case {
@@ -561,6 +612,7 @@ fn main() {
             barrel: None,
             must: "D0123",
             must_turn: "0123",
+            must_kana: "",
             note: "a thumb covers the bottom-left blossom; the fourth corner is inferred from the other three",
         },
         Case {
@@ -580,6 +632,7 @@ fn main() {
             barrel: None,
             must: "D0123",
             must_turn: "0123",
+            must_kana: "",
             note: "held too close: one corner of the code is outside the frame and is inferred",
         },
         Case {
@@ -603,7 +656,92 @@ fn main() {
             barrel: Some(-0.2),
             must: "D0123",
             must_turn: "",
+            must_kana: "",
             note: "a cheap wide lens: strong barrel distortion moves the outer petals off a plain pose; the decoder finds the distortion",
+        },
+        Case {
+            name: "upright-720p",
+            frame: 19,
+            config: Some(CaptureConfig {
+                noise: 2.0,
+                rotation_deg: 94.0,
+                tilt_x_deg: 5.0,
+                tilt_y_deg: -6.0,
+                shift: (0.01, -0.01),
+                seed: 31,
+                ..base(1280, 720)
+            }),
+            mirrored: false,
+            shadow: None,
+            hide: None,
+            fit: true,
+            barrel: None,
+            must: "D0123",
+            must_turn: "0123",
+            must_kana: "P0K0P1K1",
+            note: "sharp 720p held upright: the card lies along the frame, both katakana bands in view",
+        },
+        Case {
+            name: "upright-legacy-720p",
+            frame: 20,
+            config: Some(CaptureConfig {
+                rotation_deg: 263.0,
+                seed: 32,
+                ..CaptureConfig::legacy()
+            }),
+            mirrored: false,
+            shadow: None,
+            hide: None,
+            fit: true,
+            barrel: None,
+            must: "D0123",
+            must_turn: "",
+            must_kana: "P0P1",
+            note: "older phone held upright: soft, noisy, barrel distortion; the bands' pilots correct the extended pose",
+        },
+        Case {
+            name: "upright-soft-720p",
+            frame: 21,
+            config: Some(CaptureConfig {
+                blur_sigma: 1.8,
+                noise: 6.0,
+                rotation_deg: 81.0,
+                tilt_x_deg: -7.0,
+                seed: 33,
+                ..base(1280, 720)
+            }),
+            mirrored: false,
+            shadow: None,
+            hide: None,
+            fit: true,
+            barrel: None,
+            must: "D0123",
+            must_turn: "",
+            must_kana: "P0P1",
+            note: "soft 720p held upright: too blurred for turns; the katakana bands still read",
+        },
+        Case {
+            name: "upright-480p",
+            frame: 22,
+            config: Some(CaptureConfig {
+                width: 640,
+                height: 480,
+                blur_sigma: 1.3,
+                noise: 5.0,
+                rotation_deg: 272.0,
+                tilt_x_deg: 6.0,
+                seed: 34,
+                ..CaptureConfig::modern()
+            }),
+            mirrored: false,
+            shadow: None,
+            hide: None,
+            fit: true,
+            barrel: None,
+            must: "D0123",
+            must_turn: "",
+            must_kana: "",
+            note: "480p preview held upright: 9-pixel tiles; the polarity lanes read when the bands fit the frame",
         },
     ];
     let mut entries = Vec::new();
@@ -652,12 +790,24 @@ fn main() {
                 case.name
             );
         }
+        let kana = decoded.as_ref().map_or_else(
+            |_| String::new(),
+            |f| kana_read(case.name, &luma, f, &truth),
+        );
+        for required in case.must_kana.as_bytes().chunks(2) {
+            assert!(
+                kana.as_bytes().chunks(2).any(|lane| lane == required),
+                "{}: reference reader lost required kana lane {} (got {kana:?})",
+                case.name,
+                String::from_utf8_lossy(required)
+            );
+        }
         println!(
-            "{:<24} reference decoder reads lanes {flags:?} turns {turns:?} inferred {inferred:?} distortion {distortion:.3} (corrected/erased {margins}) (turns {turn_report})",
+            "{:<24} reference decoder reads lanes {flags:?} turns {turns:?} kana {kana:?} inferred {inferred:?} distortion {distortion:.3} (corrected/erased {margins}) (turns {turn_report})",
             case.name
         );
         entries.push(format!(
-            "    {{\n      \"name\": \"{}\", \"note\": \"{}\", \"stream\": \"one-pass\", \"frame\": {}, \"width\": {}, \"height\": {}, \"mirrored\": {},\n      \"must_decode\": \"{}\", \"reference_decoded\": \"{flags}\", \"must_turn\": \"{}\", \"reference_turned\": \"{turns}\", \"inferred_corner\": {},\n      \"d_data\": \"{}\", \"field_data\": {}, \"turn_data\": {},\n      \"luma_zlib_base64\": \"{}\"\n    }}",
+            "    {{\n      \"name\": \"{}\", \"note\": \"{}\", \"stream\": \"one-pass\", \"frame\": {}, \"width\": {}, \"height\": {}, \"mirrored\": {},\n      \"must_decode\": \"{}\", \"reference_decoded\": \"{flags}\", \"must_turn\": \"{}\", \"reference_turned\": \"{turns}\", \"must_kana\": \"{}\", \"reference_kana\": \"{kana}\", \"inferred_corner\": {},\n      \"d_data\": \"{}\", \"field_data\": {}, \"turn_data\": {}, \"kana_data\": {},\n      \"luma_zlib_base64\": \"{}\"\n    }}",
             case.name,
             case.note,
             case.frame,
@@ -666,10 +816,12 @@ fn main() {
             case.mirrored,
             case.must,
             case.must_turn,
+            case.must_kana,
             inferred.map_or_else(|| "null".to_string(), |c| c.to_string()),
             hex(&truth.d),
             field_hex(&truth),
             hex_list(&truth.turns),
+            hex_list(&truth.kana.iter().flatten().cloned().collect::<Vec<_>>()),
             zlib64(&luma)
         ));
     }
@@ -697,6 +849,7 @@ fn main() {
                 barrel: None,
                 must: "",
                 must_turn: "",
+                must_kana: "",
                 note: "",
             },
             Case {
@@ -715,6 +868,7 @@ fn main() {
                 barrel: None,
                 must: "",
                 must_turn: "",
+                must_kana: "",
                 note: "",
             },
             "D0123",
@@ -735,6 +889,7 @@ fn main() {
                 barrel: None,
                 must: "",
                 must_turn: "",
+                must_kana: "",
                 note: "",
             },
             Case {
@@ -752,6 +907,7 @@ fn main() {
                 barrel: None,
                 must: "",
                 must_turn: "",
+                must_kana: "",
                 note: "",
             },
             "D0123",
@@ -783,12 +939,13 @@ fn main() {
             followed.inferred_corner, *inferred,
             "{name}: inferred corner"
         );
+        let kana = kana_read(name, &to, &followed, &truth);
         println!(
-            "{name:<24} tracking reads lanes {flags:?} turns {turns:?} inferred {:?} (turns {turn_report})",
+            "{name:<24} tracking reads lanes {flags:?} turns {turns:?} kana {kana:?} inferred {:?} (turns {turn_report})",
             followed.inferred_corner
         );
         tracks.push(format!(
-            "    {{\n      \"name\": \"{name}\", \"note\": \"{note}\", \"stream\": \"one-pass\", \"from_frame\": {}, \"to_frame\": {}, \"width\": {}, \"height\": {},\n      \"must_track\": \"{must}\", \"reference_tracked\": \"{flags}\", \"must_turn\": \"{}\", \"reference_turned\": \"{turns}\", \"inferred_corner\": {},\n      \"d_data\": \"{}\", \"field_data\": {}, \"turn_data\": {},\n      \"from_luma_zlib_base64\": \"{}\",\n      \"to_luma_zlib_base64\": \"{}\"\n    }}",
+            "    {{\n      \"name\": \"{name}\", \"note\": \"{note}\", \"stream\": \"one-pass\", \"from_frame\": {}, \"to_frame\": {}, \"width\": {}, \"height\": {},\n      \"must_track\": \"{must}\", \"reference_tracked\": \"{flags}\", \"must_turn\": \"{}\", \"reference_turned\": \"{turns}\", \"reference_kana\": \"{kana}\", \"inferred_corner\": {},\n      \"d_data\": \"{}\", \"field_data\": {}, \"turn_data\": {}, \"kana_data\": {},\n      \"from_luma_zlib_base64\": \"{}\",\n      \"to_luma_zlib_base64\": \"{}\"\n    }}",
             frame,
             frame + 1,
             to.width,
@@ -800,6 +957,7 @@ fn main() {
             hex(&truth.d),
             field_hex(&truth),
             hex_list(&truth.turns),
+            hex_list(&truth.kana.iter().flatten().cloned().collect::<Vec<_>>()),
             zlib64(&from),
             zlib64(&to)
         ));
@@ -817,6 +975,7 @@ fn main() {
             d: rings.d.clone(),
             fields: field.fields.clone(),
             turns: field.turns.clone(),
+            kana: rings.kana.clone(),
         };
         let mut session = ScanSession::new(ScanLimits::default());
         let mut evidence = Vec::new();
@@ -949,7 +1108,7 @@ fn main() {
         ));
     }
     let out = format!(
-        "{{\n  \"fixture_version\": 3,\n  \"format\": \"petal-captures-v3\",\n  \"payload_hex\": \"{}\",\n  \"payload_kind\": 2,\n  \"captures\": [\n{}\n  ],\n  \"tracks\": [\n{}\n  ],\n  \"merges\": [\n{}\n  ],\n  \"mixed_merges\": [\n{}\n  ],\n  \"negatives\": [\n{}\n  ]\n}}\n",
+        "{{\n  \"fixture_version\": 5,\n  \"format\": \"petal-captures-v5\",\n  \"payload_hex\": \"{}\",\n  \"payload_kind\": 2,\n  \"captures\": [\n{}\n  ],\n  \"tracks\": [\n{}\n  ],\n  \"merges\": [\n{}\n  ],\n  \"mixed_merges\": [\n{}\n  ],\n  \"negatives\": [\n{}\n  ]\n}}\n",
         hex(&payload),
         entries.join(",\n"),
         tracks.join(",\n"),

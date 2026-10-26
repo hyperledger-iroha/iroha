@@ -631,7 +631,7 @@ fn complete_triple(finders: &[Finder], quad: [Finder; 4], missing: usize) -> Opt
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::render::{RenderOptions, render};
+    use crate::render::{RenderOptions, render_square as render};
     use crate::stream::StreamEncoder;
 
     fn frame() -> crate::image::Rgb {

@@ -2,13 +2,14 @@
 //! camera watching it (frame blending and rolling-shutter tearing included).
 //!
 //! `cargo run --release -p iroha_petal --example stream_sim -- [trials] [payload bytes] [display fps] [cameras]
-//! [--camera-fps N] [--exposure-ms N] [--readout-ms N] [--threads N]`
+//! [--camera-fps N] [--exposure-ms N] [--readout-ms N] [--any-rotation] [--threads N]`
 //!
 //! `cameras` is a comma-separated list of camera names (default: all). `--camera-fps` models a
 //! decoder that keeps up with only that many camera frames a second (default 30), `--readout-ms`
-//! a rolling shutter that reads the rows out over that time (default 0: every row at once), and
-//! `--threads` runs that many trials at once (default: every core). `T/F%` is the turn lanes read
-//! per field lane decoded.
+//! a rolling shutter that reads the rows out over that time (default 0: every row at once),
+//! `--any-rotation` a receiving phone held at any angle instead of upright, and `--threads` runs
+//! that many trials at once (default: every core). `T/F%` is the turn lanes read per field lane
+//! decoded, `K/s` the kana lanes read per second.
 #[path = "support/count.rs"]
 mod count;
 
@@ -68,9 +69,14 @@ fn main() {
     // unset options keep `StreamTrial::typical` exactly
     let (mut camera_fps, mut exposure_ms, mut readout_ms) = (None, None, None);
     let mut threads = None;
+    let mut upright = true;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         let target = match arg.as_str() {
+            "--any-rotation" => {
+                upright = false;
+                continue;
+            }
             "--camera-fps" => &mut camera_fps,
             "--exposure-ms" => &mut exposure_ms,
             "--readout-ms" => &mut readout_ms,
@@ -110,14 +116,19 @@ fn main() {
         trial_seeds(last).expect("requested trial range exceeds deterministic seed arithmetic");
     }
     println!(
-        "payload {payload_len} B, display {fps} fps, camera {} fps, exposure {:.1} ms, readout {} ms",
+        "payload {payload_len} B, display {fps} fps, camera {} fps, exposure {:.1} ms, readout {} ms, {}",
         camera_fps.unwrap_or(30.0),
         exposure_ms.unwrap_or(1000.0 / 60.0),
-        readout_ms.unwrap_or(0.0)
+        readout_ms.unwrap_or(0.0),
+        if upright {
+            "upright phone"
+        } else {
+            "any rotation"
+        }
     );
     println!(
-        "{:<10} {:>6} {:>8} {:>8} {:>8} {:>7} {:>9} {:>7} {:>7}",
-        "camera", "done%", "mean s", "p50 s", "p90 s", "false", "ms/frame", "F%", "T/F%"
+        "{:<10} {:>6} {:>8} {:>8} {:>8} {:>7} {:>9} {:>7} {:>7} {:>6}",
+        "camera", "done%", "mean s", "p50 s", "p90 s", "false", "ms/frame", "F%", "T/F%", "K/s"
     );
     let threads =
         threads.unwrap_or_else(|| std::thread::available_parallelism().map_or(4, usize::from));
@@ -145,6 +156,7 @@ fn main() {
                             camera_fps: camera_fps.unwrap_or(typical.camera_fps),
                             exposure_s: exposure_ms.map_or(typical.exposure_s, |ms| ms / 1000.0),
                             readout_s: readout_ms.map_or(typical.readout_s, |ms| ms / 1000.0),
+                            upright,
                             ..typical
                         };
                         let outcome = run_stream_trial(&payload, 1, &spec);
@@ -169,8 +181,10 @@ fn main() {
         let (frames, field_lanes) =
             frame_totals(&outcomes).expect("aggregate frame counts fit u64");
         let turn_lanes: u64 = outcomes.iter().map(|o| u64::from(o.turn_lanes)).sum();
+        let kana_lanes: u64 = outcomes.iter().map(|o| u64::from(o.kana_lanes)).sum();
+        let seconds = count_as_f64(frames) / camera_fps.unwrap_or(30.0);
         println!(
-            "{:<10} {:>6.0} {:>8.2} {:>8.2} {:>8.2} {:>7} {:>9.1} {:>6.0}% {:>6.0}%",
+            "{:<10} {:>6.0} {:>8.2} {:>8.2} {:>8.2} {:>7} {:>9.1} {:>6.0}% {:>6.0}% {:>6.1}",
             name,
             100.0 * completed / n,
             times.iter().sum::<f64>() / completed.max(1.0),
@@ -179,7 +193,8 @@ fn main() {
             wrong,
             outcomes.iter().map(|o| o.mean_decode_ms).sum::<f64>() / n,
             25.0 * count_as_f64(field_lanes) / count_as_f64(frames.max(1)),
-            100.0 * count_as_f64(turn_lanes) / count_as_f64(field_lanes.max(1))
+            100.0 * count_as_f64(turn_lanes) / count_as_f64(field_lanes.max(1)),
+            count_as_f64(kana_lanes) / seconds.max(1e-9)
         );
     }
 }
@@ -260,6 +275,7 @@ mod tests {
             lane_d: 0,
             field_lanes: u32::MAX,
             turn_lanes: 0,
+            kana_lanes: 0,
             mean_decode_ms: 0.0,
         };
         assert_eq!(frame_totals(&[]), Some((0, 0)));

@@ -74,12 +74,18 @@ pub struct StreamTrial {
     pub horizon_s: f64,
     /// Seed for pose, phase and noise.
     pub seed: u64,
-    /// Side in pixels of the rendered source frames.
+    /// Width in pixels of the rendered source cards.
     pub render_size: usize,
+    /// The receiving phone is held upright: cameras deliver landscape frames, so the code turns
+    /// by 90° or 270° (± 15°) in the frame, the card's long side runs along the frame's long
+    /// side and a rolling shutter sweeps across the card's width. Otherwise the code takes any
+    /// rotation.
+    pub upright: bool,
 }
 
 impl StreamTrial {
-    /// A typical phone: 30 fps camera, 1/60 s exposure, and the default 12 fps animation.
+    /// A typical phone held upright: 30 fps camera, 1/60 s exposure, and the default 12 fps
+    /// animation.
     #[must_use]
     pub fn typical(camera: CameraModel, seed: u64) -> Self {
         Self {
@@ -91,6 +97,7 @@ impl StreamTrial {
             horizon_s: 90.0,
             seed,
             render_size: 768,
+            upright: true,
         }
     }
 }
@@ -112,6 +119,8 @@ pub struct TrialOutcome {
     pub field_lanes: u32,
     /// Turn lanes read, summed over the frames (each at most once per shown frame).
     pub turn_lanes: u32,
+    /// Kana lanes read, summed over the frames (each band at most once per shown frame).
+    pub kana_lanes: u32,
     /// Mean decode time per frame in milliseconds.
     pub mean_decode_ms: f64,
 }
@@ -142,7 +151,12 @@ pub fn run_stream_trial(payload: &[u8], kind: u8, trial: &StreamTrial) -> TrialO
     let mut rng = Rng(trial.seed ^ 0x5DEE_CE66_D1CE_4E5B);
     let mut config = trial.camera.config;
     config.seed = trial.seed.wrapping_add(1);
-    config.rotation_deg = rng.range(0.0, 360.0);
+    config.rotation_deg = if trial.upright {
+        let quarter = if rng.next() < 0.5 { 90.0 } else { 270.0 };
+        quarter + rng.range(-15.0, 15.0)
+    } else {
+        rng.range(0.0, 360.0)
+    };
     config.tilt_x_deg = rng.range(-trial.camera.tilt_max_deg, trial.camera.tilt_max_deg);
     config.tilt_y_deg = rng.range(-trial.camera.tilt_max_deg, trial.camera.tilt_max_deg);
     config.shift = (rng.range(-0.03, 0.03), rng.range(-0.03, 0.03));
@@ -172,6 +186,7 @@ pub fn run_stream_trial(payload: &[u8], kind: u8, trial: &StreamTrial) -> TrialO
         lane_d: 0,
         field_lanes: 0,
         turn_lanes: 0,
+        kana_lanes: 0,
         mean_decode_ms: 0.0,
     };
     let mut index = 0u32;
@@ -241,6 +256,7 @@ pub fn run_stream_trial(payload: &[u8], kind: u8, trial: &StreamTrial) -> TrialO
         outcome.lane_d += u32::from(result.lanes.contains('D'));
         outcome.field_lanes += result.lanes.chars().filter(char::is_ascii_digit).count() as u32;
         outcome.turn_lanes += result.turned.len() as u32;
+        outcome.kana_lanes += (result.kana.len() / 2) as u32;
         if let Some(done) = result.completed {
             outcome.completed_at_s = Some(t);
             outcome.payload_matches = done.payload == payload;

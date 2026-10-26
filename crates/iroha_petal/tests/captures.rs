@@ -1,7 +1,8 @@
-//! Decodes the golden camera captures in `fixtures/petal/petal_captures_v3.json`.
+//! Decodes the golden camera captures in `fixtures/petal/petal_captures_v5.json`.
 //!
-//! Every conforming decoder must read the lanes named in `must_decode` and the
-//! turn lanes named in `must_turn`, must never report wrong data for any lane,
+//! Every conforming decoder must read the lanes named in `must_decode`, the
+//! turn lanes named in `must_turn` and the kana lanes named in `must_kana`, must
+//! never report wrong data for any lane,
 //! must report the recorded inferred corner, must follow each tracking pair from
 //! its first frame into its second,
 //! must recover the `must_merge` field lanes of every merge set from the merge of
@@ -17,6 +18,7 @@ use iroha_petal::decode::{
     DecodeOptions, DecodedFrame, LaneResult, decode, field_evidence, merge_fields, track,
 };
 use iroha_petal::image::Luma;
+use iroha_petal::kana::{KanaLane, kana_packet, read_kana};
 use iroha_petal::lanes::{Lane, decode_lane, encode_lane};
 use iroha_petal::layout::SECTORS;
 use iroha_petal::session::{ScanLimits, ScanSession, ScanStats};
@@ -70,7 +72,7 @@ fn luma_at(entry: &Value, key: &str) -> Luma {
 
 fn load() -> Value {
     let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    path.push("../../fixtures/petal/petal_captures_v3.json");
+    path.push("../../fixtures/petal/petal_captures_v5.json");
     json::from_str(&std::fs::read_to_string(path).expect("fixture file")).expect("fixture json")
 }
 
@@ -170,6 +172,68 @@ fn read_turn_lanes(
     letters
 }
 
+/// Reads the kana lanes of a decoded capture under the header its lanes name, checks them
+/// against the recorded data and the requirements, and returns their names; their atoms go to
+/// `assembler` when given.
+fn read_kana_lanes(
+    name: &str,
+    image: &Luma,
+    frame: &DecodedFrame,
+    entry: &Value,
+    assembler: Option<&mut StreamAssembler>,
+) -> String {
+    let expected: Vec<Vec<u8>> = entry
+        .get("kana_data")
+        .and_then(Value::as_array)
+        .expect("kana data")
+        .iter()
+        .map(|data| hex::decode(data.as_str().expect("hex")).expect("hex"))
+        .collect();
+    let header = frame
+        .atom_packets()
+        .first()
+        .map(|p| p.header)
+        .or_else(|| frame.beacon().map(|b| b.header))
+        .expect("a decoded capture names its frame");
+    let mut names = String::new();
+    let mut packets = Vec::new();
+    for ((k, lane), result) in KanaLane::ALL
+        .into_iter()
+        .enumerate()
+        .zip(read_kana(image, frame, header, [false; 2]).iter().flatten())
+    {
+        let Some(result) = result else {
+            continue;
+        };
+        assert_eq!(
+            result.result.data,
+            expected[k],
+            "{name}: kana lane {}",
+            lane.name()
+        );
+        packets.push(kana_packet(result.header, lane, &result.result.data).expect("kana check"));
+        names.push_str(&lane.name());
+    }
+    if let Some(assembler) = assembler {
+        for packet in &packets {
+            assembler.push_atoms(packet);
+        }
+    }
+    let must = entry.get("must_kana").and_then(Value::as_str).unwrap_or("");
+    for required in must.as_bytes().chunks(2) {
+        assert!(
+            names.as_bytes().chunks(2).any(|lane| lane == required),
+            "{name}: kana {names:?}, must read {must:?}"
+        );
+    }
+    assert_eq!(
+        names,
+        text(entry, "reference_kana"),
+        "{name}: kana lanes read"
+    );
+    names
+}
+
 #[test]
 fn golden_captures_decode_as_recorded() {
     let doc = load();
@@ -204,6 +268,7 @@ fn golden_captures_decode_as_recorded() {
         );
         decoded.feed(&mut assembler);
         read_turn_lanes(name, &image, &decoded, capture, Some(&mut assembler));
+        read_kana_lanes(name, &image, &decoded, capture, Some(&mut assembler));
     }
     // captures of different frames of the same stream accumulate in one assembler
     assert!(assembler.progress().atoms_received > 100);
@@ -236,13 +301,9 @@ fn golden_tracks_follow_the_pose_into_the_next_frame() {
             inferred,
             "{name}: inferred corner"
         );
-        read_turn_lanes(
-            name,
-            &luma_at(pair, "to_luma_zlib_base64"),
-            &followed,
-            pair,
-            None,
-        );
+        let to = luma_at(pair, "to_luma_zlib_base64");
+        read_turn_lanes(name, &to, &followed, pair, None);
+        read_kana_lanes(name, &to, &followed, pair, None);
     }
 }
 

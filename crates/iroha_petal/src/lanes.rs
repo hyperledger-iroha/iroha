@@ -10,10 +10,13 @@
 //! | `F0`–`F3` petals | 840 field cells of one sector × 1 bit | 105 B | 83 B | 22 B |
 //! | `T0`–`T3` turns | 360 lit petals of one sector × 2 bits | 90 B | 68 B | 22 B |
 //!
-//! Bit order is most-significant-bit first.
+//! The katakana tiles of the bands above and below the square carry four more lanes (see
+//! [`crate::kana`]). Bit order is most-significant-bit first.
 
+use crate::kana::{KANA_TILE_COUNT, KanaSymbol, pilot_symbols, set_kana_symbols};
 use crate::layout::{
-    D_BITS, FIELD_CELLS, SECTORS, SlotRole, TOTAL_SLOTS, data_slots, sector_cells, slot_roles,
+    D_BITS, FIELD_CELLS, KANA_BANDS, SECTORS, SlotRole, TOTAL_SLOTS, data_slots, sector_cells,
+    slot_roles,
 };
 use crate::prng::Xorshift32;
 use crate::rs::{ReedSolomon, RsError};
@@ -192,11 +195,14 @@ pub struct FrameCells {
     /// Turn position (0–3, see [`crate::turns::turn_angle`]) of every field cell: zero for dark
     /// petals and for lit petals that carry no turn bits.
     pub turns: [u8; FIELD_CELLS],
+    /// What every katakana tile shows ([`crate::layout::kana_tiles`] order).
+    pub kana: [KanaSymbol; KANA_TILE_COUNT],
 }
 
 impl FrameCells {
     /// Builds the cells from the transmitted codewords of lane `D` and the four field lanes, with
-    /// every petal unturned (see [`Self::set_turns`]).
+    /// every petal unturned (see [`Self::set_turns`]) and only the pilots set among the katakana
+    /// tiles (see [`Self::set_kana`]).
     ///
     /// # Panics
     /// Panics when a codeword has the wrong length.
@@ -224,6 +230,18 @@ impl FrameCells {
             dots,
             petals,
             turns: [0; FIELD_CELLS],
+            kana: pilot_symbols(),
+        }
+    }
+
+    /// Shows the transmitted kana codewords on the bands' data tiles: `words[band]` is
+    /// `[polarity, glyphs]` (see [`crate::kana`]).
+    ///
+    /// # Panics
+    /// Panics when a codeword has the wrong length.
+    pub fn set_kana(&mut self, words: [[&[u8]; 2]; KANA_BANDS]) {
+        for (band, [polarity, glyphs]) in words.into_iter().enumerate() {
+            set_kana_symbols(&mut self.kana, band as u8, polarity, glyphs);
         }
     }
 

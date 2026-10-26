@@ -382,9 +382,302 @@ pub fn petal_lit(dx: f64, dy: f64, angle: f64) -> bool {
     (along - notch).powi(2) + across.powi(2) > f64::from(PETAL_NOTCH_RADIUS).powi(2)
 }
 
+// ---- the card: the square and a band of katakana tiles above and below it ----------------------
+
+/// Side of a katakana tile ([`crate::kana`]).
+pub const KANA_TILE: f32 = 25.0;
+/// Pitch of the katakana tile lattice.
+pub const KANA_PITCH: f32 = 29.0;
+/// Side of a tile's glyph box, centred in the tile.
+pub const KANA_GLYPH_BOX: f32 = 23.0;
+/// Corner radius of a tile.
+pub const KANA_CORNER: f32 = 3.0;
+/// Tile rows of each band.
+pub const KANA_ROWS: usize = 10;
+/// Tile columns of each band.
+pub const KANA_COLUMNS: usize = 35;
+/// Gap between a band's lattice and the square.
+pub const KANA_GAP: f32 = 24.0;
+/// Margin outside a band's lattice.
+pub const KANA_MARGIN: f32 = 8.0;
+/// Height of a band with its gap and margin (322 units).
+pub const KANA_BAND_HEIGHT: f32 = KANA_MARGIN + KANA_ROWS as f32 * KANA_PITCH + KANA_GAP;
+/// Height of the card: the square with a band above and below it (1668 units).
+pub const CARD_HEIGHT: f32 = CANVAS + 2.0 * KANA_BAND_HEIGHT;
+/// Card `y` of the square's top edge: card coordinates are square coordinates plus this in `y`.
+pub const SQUARE_TOP: f32 = KANA_BAND_HEIGHT;
+/// Tile centres keep at least this distance from every finder centre: the blossom's radius, a
+/// blossom diameter of clearance, and a tile's half-diagonal, so no tile looks like part of a
+/// finder.
+pub const KANA_FINDER_CLEARANCE: f32 = 198.0;
+/// Bands: above the square and below it.
+pub const KANA_BANDS: usize = 2;
+/// Pilot tiles of each band.
+pub const KANA_PILOTS: usize = 8;
+
+/// The pilot tiles of each band as `(row, column)` (band 1 mirrors band 0's rows, so the pilots
+/// sit at the same distances from the square).
+pub const KANA_PILOT_CELLS: [[(u8, u8); KANA_PILOTS]; KANA_BANDS] = [
+    [
+        (0, 0),
+        (0, 17),
+        (0, 34),
+        (4, 0),
+        (4, 34),
+        (9, 8),
+        (9, 17),
+        (9, 26),
+    ],
+    [
+        (9, 0),
+        (9, 17),
+        (9, 34),
+        (5, 0),
+        (5, 34),
+        (0, 8),
+        (0, 17),
+        (0, 26),
+    ],
+];
+/// What every pilot shows: `(glyph, light)` in pilot order (ロ ケ ヒ ム ス ワ ア カ).
+pub const KANA_PILOT_SYMBOLS: [(u8, bool); KANA_PILOTS] = [
+    (1, true),
+    (11, false),
+    (13, true),
+    (9, false),
+    (14, false),
+    (6, true),
+    (12, false),
+    (7, true),
+];
+
+/// One katakana tile.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct KanaTile {
+    /// Band: 0 above the square, 1 below it.
+    pub band: u8,
+    /// Row within its band, top first.
+    pub row: u8,
+    /// Column, left first.
+    pub column: u8,
+    /// Left edge of the tile square in square coordinates.
+    pub x: f64,
+    /// Top edge of the tile square in square coordinates.
+    pub y: f64,
+    /// Index among the pilots of its band, when it is one.
+    pub pilot: Option<u8>,
+}
+
+impl KanaTile {
+    /// Centre of the tile in square coordinates.
+    #[must_use]
+    pub fn centre(&self) -> (f64, f64) {
+        let half = f64::from(KANA_TILE) / 2.0;
+        (self.x + half, self.y + half)
+    }
+}
+
+/// Top of a band's lattice in square coordinates.
+fn kana_lattice_top(band: u8) -> f64 {
+    if band == 0 {
+        -f64::from(KANA_BAND_HEIGHT) + f64::from(KANA_MARGIN)
+    } else {
+        f64::from(CANVAS) + f64::from(KANA_GAP)
+    }
+}
+
+/// Left edge of the lattice (the columns are centred on the card).
+fn kana_lattice_left() -> f64 {
+    (f64::from(CANVAS) - KANA_COLUMNS as f64 * f64::from(KANA_PITCH)) / 2.0
+}
+
+/// Every tile of both bands: band 0 first, each in reading order (rows top first, columns left
+/// first). A lattice cell whose tile centre lies within [`KANA_FINDER_CLEARANCE`] of a finder
+/// centre has no tile (306 tiles per band remain).
+#[must_use]
+pub fn kana_tiles() -> &'static [KanaTile] {
+    static TILES: OnceLock<Vec<KanaTile>> = OnceLock::new();
+    TILES.get_or_init(|| {
+        let inset = f64::from(KANA_PITCH - KANA_TILE) / 2.0;
+        let clearance = f64::from(KANA_FINDER_CLEARANCE);
+        let mut tiles = Vec::new();
+        for band in 0..KANA_BANDS as u8 {
+            for row in 0..KANA_ROWS as u8 {
+                for column in 0..KANA_COLUMNS as u8 {
+                    let x = kana_lattice_left() + f64::from(KANA_PITCH) * f64::from(column) + inset;
+                    let y = kana_lattice_top(band) + f64::from(KANA_PITCH) * f64::from(row) + inset;
+                    let half = f64::from(KANA_TILE) / 2.0;
+                    let (cx, cy) = (x + half, y + half);
+                    let clear = FINDER_CENTERS.iter().all(|&(fx, fy)| {
+                        let (dx, dy) = (cx - f64::from(fx), cy - f64::from(fy));
+                        dx * dx + dy * dy >= clearance * clearance
+                    });
+                    if !clear {
+                        continue;
+                    }
+                    let pilot = KANA_PILOT_CELLS[usize::from(band)]
+                        .iter()
+                        .position(|&cell| cell == (row, column))
+                        .map(|p| p as u8);
+                    tiles.push(KanaTile {
+                        band,
+                        row,
+                        column,
+                        x,
+                        y,
+                        pilot,
+                    });
+                }
+            }
+        }
+        tiles
+    })
+}
+
+/// The data tiles of `band` (its tiles that are not pilots) in reading order, as indices into
+/// [`kana_tiles`].
+///
+/// # Panics
+/// Panics when `band` is not below [`KANA_BANDS`].
+#[must_use]
+pub fn kana_data_tiles(band: u8) -> &'static [usize] {
+    static DATA: OnceLock<[Vec<usize>; KANA_BANDS]> = OnceLock::new();
+    &DATA.get_or_init(|| {
+        core::array::from_fn(|b| {
+            kana_tiles()
+                .iter()
+                .enumerate()
+                .filter(|(_, t)| usize::from(t.band) == b && t.pilot.is_none())
+                .map(|(i, _)| i)
+                .collect()
+        })
+    })[usize::from(band)]
+}
+
+/// The pilot tiles of `band` in pilot order, as indices into [`kana_tiles`].
+///
+/// # Panics
+/// Panics when `band` is not below [`KANA_BANDS`].
+#[must_use]
+pub fn kana_pilot_tiles(band: u8) -> [usize; KANA_PILOTS] {
+    static PILOTS: OnceLock<[[usize; KANA_PILOTS]; KANA_BANDS]> = OnceLock::new();
+    PILOTS.get_or_init(|| {
+        core::array::from_fn(|b| {
+            core::array::from_fn(|p| {
+                kana_tiles()
+                    .iter()
+                    .position(|t| usize::from(t.band) == b && t.pilot == Some(p as u8))
+                    .expect("every pilot cell holds a tile")
+            })
+        })
+    })[usize::from(band)]
+}
+
+/// The tile under the square-coordinate point `(x, y)` and the point's position inside the
+/// tile's square (`0..=`[`KANA_TILE`] on both axes), or `None` outside every tile square.
+#[must_use]
+pub fn kana_tile_at(x: f64, y: f64) -> Option<(usize, f64, f64)> {
+    static INDEX: OnceLock<Vec<Option<usize>>> = OnceLock::new();
+    let index = INDEX.get_or_init(|| {
+        let mut index = vec![None; KANA_BANDS * KANA_ROWS * KANA_COLUMNS];
+        for (i, tile) in kana_tiles().iter().enumerate() {
+            index[(usize::from(tile.band) * KANA_ROWS + usize::from(tile.row)) * KANA_COLUMNS
+                + usize::from(tile.column)] = Some(i);
+        }
+        index
+    });
+    let band: u8 = if y < 0.0 {
+        0
+    } else if y >= f64::from(CANVAS) {
+        1
+    } else {
+        return None;
+    };
+    let pitch = f64::from(KANA_PITCH);
+    let (gx, gy) = (
+        (x - kana_lattice_left()) / pitch,
+        (y - kana_lattice_top(band)) / pitch,
+    );
+    if gx < 0.0 || gy < 0.0 {
+        return None;
+    }
+    let (column, row) = (gx.floor() as usize, gy.floor() as usize);
+    if column >= KANA_COLUMNS || row >= KANA_ROWS {
+        return None;
+    }
+    let tile = index[(usize::from(band) * KANA_ROWS + row) * KANA_COLUMNS + column]?;
+    let inset = f64::from(KANA_PITCH - KANA_TILE) / 2.0;
+    let (u, v) = (
+        (gx - column as f64) * pitch - inset,
+        (gy - row as f64) * pitch - inset,
+    );
+    let side = f64::from(KANA_TILE);
+    ((0.0..=side).contains(&u) && (0.0..=side).contains(&v)).then_some((tile, u, v))
+}
+
+/// Whether the tile-local point `(u, v)` lies inside the rounded tile square.
+#[must_use]
+pub fn kana_inside(u: f64, v: f64) -> bool {
+    let (side, corner) = (f64::from(KANA_TILE), f64::from(KANA_CORNER));
+    if !(0.0..=side).contains(&u) || !(0.0..=side).contains(&v) {
+        return false;
+    }
+    let cx = u.clamp(corner, side - corner);
+    let cy = v.clamp(corner, side - corner);
+    (u - cx).powi(2) + (v - cy).powi(2) <= corner * corner
+}
+
+/// Whether the tile-local point `(u, v)` lies on `glyph`'s strokes: inside the tile square and
+/// inked in the glyph box (inset by half the difference of tile and box).
+#[must_use]
+pub fn kana_inked(glyph: u8, u: f64, v: f64) -> bool {
+    let inset = f64::from(KANA_TILE - KANA_GLYPH_BOX) / 2.0;
+    let scale = f64::from(crate::glyphs::GLYPH_GRID) / f64::from(KANA_GLYPH_BOX);
+    kana_inside(u, v)
+        && crate::glyphs::is_inked(usize::from(glyph), (u - inset) * scale, (v - inset) * scale)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_card_holds_306_tiles_per_band_and_eight_pilots_each() {
+        assert!((KANA_BAND_HEIGHT - 322.0).abs() < f32::EPSILON);
+        assert!((CARD_HEIGHT - 1668.0).abs() < f32::EPSILON);
+        let tiles = kana_tiles();
+        for band in 0..KANA_BANDS as u8 {
+            let in_band: Vec<_> = tiles.iter().filter(|t| t.band == band).collect();
+            assert_eq!(in_band.len(), 306, "band {band}");
+            assert_eq!(
+                in_band.iter().filter(|t| t.pilot.is_some()).count(),
+                KANA_PILOTS
+            );
+            assert_eq!(kana_data_tiles(band).len(), 306 - KANA_PILOTS);
+            for (p, &tile) in kana_pilot_tiles(band).iter().enumerate() {
+                assert_eq!(tiles[tile].pilot, Some(p as u8));
+            }
+        }
+        // the bands mirror each other about the square's middle
+        for tile in tiles.iter().filter(|t| t.band == 0) {
+            let mirror = tiles
+                .iter()
+                .find(|t| {
+                    t.band == 1
+                        && t.column == tile.column
+                        && usize::from(t.row) == KANA_ROWS - 1 - usize::from(tile.row)
+                })
+                .expect("mirrored tile");
+            assert!((mirror.y + f64::from(KANA_TILE) - f64::from(CANVAS) + tile.y).abs() < 1e-9);
+            assert_eq!(mirror.pilot, tile.pilot);
+        }
+        // every tile centre maps back to its tile, and the square holds none
+        for (i, tile) in tiles.iter().enumerate() {
+            let (cx, cy) = tile.centre();
+            assert_eq!(kana_tile_at(cx, cy).map(|t| t.0), Some(i));
+        }
+        assert!(kana_tile_at(512.0, 512.0).is_none());
+    }
 
     #[test]
     fn mask_is_mirror_symmetric_and_shows_which_way_is_up() {

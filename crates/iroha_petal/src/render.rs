@@ -5,16 +5,19 @@
 //! lit petal turned about its centre by its turn. A lit petal whose centre lies
 //! inside the `天` is drawn in the light colour, the others in sakura pink, over a
 //! faint backdrop of the `天` itself, so the character shows through the storm of
-//! petals. Platform SDKs may draw with their own 2D APIs as long as geometry,
-//! turns and polarity match this renderer.
+//! petals. Above and below that square, the card's two bands show rows of
+//! katakana tiles (see [`crate::kana`]): a light tile filled light with its glyph
+//! in ink, a dark tile black with its glyph in pink. Platform SDKs may draw with
+//! their own 2D APIs as long as geometry, turns, glyphs and polarity match this
+//! renderer.
 
 use crate::image::Rgb;
 use crate::lanes::FrameCells;
 use crate::layout::{
     BACKDROP_RADIUS, BAND_COUNT, BAND_INNER, BAND_OFFSETS, BAND_SLOTS, BAND_SPACING, CANVAS,
-    CENTER, DOT_RADIUS, FINDER_CENTERS, FINDER_OUTER, PETAL_HALF_LENGTH, RING_COUNT, RING_RADII,
-    RING_SLOTS, band_phase, band_radius, cell_angle, cell_center, cell_light, finder_lit, in_mask,
-    petal_lit, ring_offset,
+    CARD_HEIGHT, CENTER, DOT_RADIUS, FINDER_CENTERS, FINDER_OUTER, PETAL_HALF_LENGTH, RING_COUNT,
+    RING_RADII, RING_SLOTS, SQUARE_TOP, band_phase, band_radius, cell_angle, cell_center,
+    cell_light, finder_lit, in_mask, kana_inked, kana_inside, kana_tile_at, petal_lit, ring_offset,
 };
 use crate::turns::turn_angle;
 
@@ -29,6 +32,8 @@ pub struct Palette {
     pub pink: [u8; 3],
     /// The faint `天` drawn under the petals (a tenth of the light colour).
     pub backdrop: [u8; 3],
+    /// Glyphs on light katakana tiles.
+    pub ink: [u8; 3],
 }
 
 impl Default for Palette {
@@ -38,6 +43,7 @@ impl Default for Palette {
             light: [250, 235, 244],
             pink: [245, 175, 208],
             backdrop: [25, 24, 24],
+            ink: [20, 4, 14],
         }
     }
 }
@@ -45,7 +51,7 @@ impl Default for Palette {
 /// Rendering options.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RenderOptions {
-    /// Output side in pixels.
+    /// Output width in pixels; the card is [`card_height_px`] pixels tall.
     pub size: usize,
     /// Samples per pixel side for anti-aliasing (1–4).
     pub supersample: usize,
@@ -147,14 +153,59 @@ impl Shader<'_> {
         }
         p.background
     }
+
+    /// The colour of a katakana tile at the square-coordinate point `(x, y)` outside the square,
+    /// or the background between tiles.
+    fn kana(&self, x: f64, y: f64) -> [u8; 3] {
+        let p = &self.palette;
+        let Some((tile, u, v)) = kana_tile_at(x, y) else {
+            return p.background;
+        };
+        if !kana_inside(u, v) {
+            return p.background;
+        }
+        let symbol = self.cells.kana[tile];
+        match (kana_inked(symbol.glyph, u, v), symbol.light) {
+            (true, true) => p.ink,
+            (false, true) => p.light,
+            (true, false) => p.pink,
+            (false, false) => p.background,
+        }
+    }
 }
 
-/// Renders one frame.
+/// Height in pixels of a card rendered `size` pixels wide: `size · 1668 / 1024`, rounded.
+#[must_use]
+pub fn card_height_px(size: usize) -> usize {
+    let height = size as f64 * f64::from(CARD_HEIGHT) / f64::from(CANVAS);
+    (height + 0.5).floor() as usize
+}
+
+/// Renders one frame: the card, `options.size` pixels wide and [`card_height_px`] tall, whose
+/// square starts [`SQUARE_TOP`] units below the top edge.
 ///
 /// # Panics
 /// Panics when `options.size` is zero or `options.supersample` is outside 1–4.
 #[must_use]
 pub fn render(cells: &FrameCells, options: &RenderOptions) -> Rgb {
+    render_rows(
+        cells,
+        options,
+        card_height_px(options.size),
+        f64::from(SQUARE_TOP),
+    )
+}
+
+/// Renders only the square of the card, `options.size` pixels on a side: the decoder's own unit
+/// tests work on bare squares.
+#[cfg(test)]
+pub(crate) fn render_square(cells: &FrameCells, options: &RenderOptions) -> Rgb {
+    render_rows(cells, options, options.size, 0.0)
+}
+
+/// Renders `height` pixel rows of the card, the first `top` canvas units above the square's top
+/// edge.
+fn render_rows(cells: &FrameCells, options: &RenderOptions, height: usize, top: f64) -> Rgb {
     assert!(options.size > 0 && (1..=4).contains(&options.supersample));
     let shader = Shader {
         cells,
@@ -163,15 +214,19 @@ pub fn render(cells: &FrameCells, options: &RenderOptions) -> Rgb {
     let size = options.size;
     let s = options.supersample;
     let unit = f64::from(CANVAS) / size as f64;
-    let mut data = vec![0u8; size * size * 3];
-    for py in 0..size {
+    let mut data = vec![0u8; size * height * 3];
+    for py in 0..height {
         for px in 0..size {
             let mut acc = [0u32; 3];
             for sy in 0..s {
                 for sx in 0..s {
                     let x = (px as f64 + (sx as f64 + 0.5) / s as f64) * unit;
-                    let y = (py as f64 + (sy as f64 + 0.5) / s as f64) * unit;
-                    let c = shader.shade(x, y);
+                    let y = (py as f64 + (sy as f64 + 0.5) / s as f64) * unit - top;
+                    let c = if (0.0..f64::from(CANVAS)).contains(&y) {
+                        shader.shade(x, y)
+                    } else {
+                        shader.kana(x, y)
+                    };
                     for k in 0..3 {
                         acc[k] += u32::from(c[k]);
                     }
@@ -186,7 +241,7 @@ pub fn render(cells: &FrameCells, options: &RenderOptions) -> Rgb {
     }
     Rgb {
         width: size,
-        height: size,
+        height,
         data,
     }
 }
@@ -225,8 +280,9 @@ mod tests {
                 palette: Palette::default(),
             },
         );
-        let at = |x: usize, y: usize| image.data[(y * 256 + x) * 3];
         let scale = 256.0 / 1024.0;
+        let top = (f64::from(SQUARE_TOP) * scale) as usize;
+        let at = |x: usize, y: usize| image.data[((y + top) * 256 + x) * 3];
         let (fx, fy) = (
             f64::from(FINDER_CENTERS[0].0) * scale,
             f64::from(FINDER_CENTERS[0].1) * scale,
@@ -257,7 +313,7 @@ mod tests {
         let palette = Palette::default();
         for cell in 0..FIELD_CELLS {
             let (x, y) = cell_center(cell);
-            let at = ((y as usize) * 1024 + x as usize) * 3;
+            let at = ((y as usize + SQUARE_TOP as usize) * 1024 + x as usize) * 3;
             let pixel = [image.data[at], image.data[at + 1], image.data[at + 2]];
             let expected = match (frame.petals[cell], cell_light(cell)) {
                 (true, true) => palette.light,
@@ -284,7 +340,8 @@ mod tests {
         for (ring, &slots) in RING_SLOTS.iter().enumerate() {
             for slot in 0..slots {
                 let (x, y) = crate::layout::slot_center(ring, slot);
-                let value = image.data[((y as usize) * 1024 + x as usize) * 3];
+                let value =
+                    image.data[((y as usize + SQUARE_TOP as usize) * 1024 + x as usize) * 3];
                 if frame.dots[ring_offset(ring) + slot] {
                     assert!(value > 150, "ring {ring} slot {slot} should be lit");
                 } else {
@@ -294,5 +351,51 @@ mod tests {
             }
         }
         assert_eq!(checked, TOTAL_SLOTS);
+    }
+
+    #[test]
+    fn katakana_tiles_show_their_polarity_and_glyph() {
+        let mut frame = cells(4);
+        for (i, symbol) in frame.kana.iter_mut().enumerate() {
+            symbol.glyph = (i % 16) as u8;
+            symbol.light = i % 3 != 0;
+        }
+        let image = render(
+            &frame,
+            &RenderOptions {
+                size: 1024,
+                supersample: 1,
+                palette: Palette::default(),
+            },
+        );
+        assert_eq!(image.height, 1668);
+        let palette = Palette::default();
+        for (i, tile) in crate::layout::kana_tiles().iter().enumerate() {
+            let symbol = frame.kana[i];
+            // the pixel centres of the tile's square, against the definition
+            let (x0, y0) = (
+                tile.x.ceil() as usize,
+                (tile.y + f64::from(SQUARE_TOP)).ceil() as usize,
+            );
+            for (dx, dy) in [(3, 3), (12, 12), (8, 17), (20, 6)] {
+                let (px, py) = (x0 + dx, y0 + dy);
+                let (u, v) = (
+                    px as f64 + 0.5 - tile.x,
+                    py as f64 + 0.5 - f64::from(SQUARE_TOP) - tile.y,
+                );
+                let expected = match (kana_inked(symbol.glyph, u, v), symbol.light) {
+                    (true, true) => palette.ink,
+                    (false, true) => palette.light,
+                    (true, false) => palette.pink,
+                    (false, false) => palette.background,
+                };
+                let at = (py * 1024 + px) * 3;
+                assert_eq!(
+                    [image.data[at], image.data[at + 1], image.data[at + 2]],
+                    expected,
+                    "tile {i} at ({dx}, {dy})"
+                );
+            }
+        }
     }
 }

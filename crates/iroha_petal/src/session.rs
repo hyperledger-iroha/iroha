@@ -21,6 +21,12 @@
 //! shaky for the turns) the session passes over the next captures that would
 //! try one, one more after every such try, at most [`TURN_BACKOFF`], until a
 //! try reads a lane again.
+//!
+//! The katakana bands above and below the square are read the same way
+//! ([`read_kana`]): each band once per shown frame (the last [`KANA_MEMORY`]
+//! tried are remembered), with its own back-off of at most [`KANA_BACKOFF`]
+//! captures after tries that read no kana lane (a camera that does not see the
+//! bands, or too blurred for their glyphs and polarity).
 
 use std::collections::VecDeque;
 
@@ -29,8 +35,9 @@ use crate::decode::{
     track,
 };
 use crate::image::Luma;
+use crate::kana::{KanaKind, KanaLane, kana_packet, read_kana};
 use crate::lanes::Lane;
-use crate::layout::SECTORS;
+use crate::layout::{KANA_BANDS, SECTORS};
 use crate::stream::{
     AssemblerLimits, Completed, LaneHeader, Progress, StreamAssembler, parse_atom_lane,
 };
@@ -46,6 +53,10 @@ pub const MERGE_CAPTURES: usize = 4;
 pub const TURN_MEMORY: usize = MERGE_WINDOW * SECTORS;
 /// Most captures passed over after tries that read no turn lane.
 pub const TURN_BACKOFF: usize = 8;
+/// Bands remembered as tried (the two of each of the last [`MERGE_WINDOW`] shown frames).
+pub const KANA_MEMORY: usize = MERGE_WINDOW * KANA_BANDS;
+/// Most captures passed over after tries that read no kana lane.
+pub const KANA_BACKOFF: usize = 8;
 
 /// Limits of a scan session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -96,6 +107,10 @@ pub struct ScanStats {
     pub turn_tries: u32,
     /// Turn lanes read.
     pub turn_lanes: u32,
+    /// Bands tried (each at most once per shown frame).
+    pub kana_tries: u32,
+    /// Kana lanes read (up to four per shown frame).
+    pub kana_lanes: u32,
 }
 
 /// The result of offering one camera frame.
@@ -113,6 +128,8 @@ pub struct ScanOutcome {
     /// Turn lanes read from this capture, as the sector digits of the field lanes
     /// they ride on.
     pub turned: String,
+    /// Kana lanes read from this capture, as their names (`P0`, `K0`, `P1`, `K1`).
+    pub kana: String,
     /// Receive progress after this frame.
     pub progress: Progress,
     /// The finished payload, delivered exactly once.
@@ -167,6 +184,9 @@ pub struct ScanSession {
     tried: VecDeque<(LaneHeader, u8)>,
     turn_misses: usize,
     turn_wait: usize,
+    kana_tried: VecDeque<(LaneHeader, u8)>,
+    kana_misses: usize,
+    kana_wait: usize,
 }
 
 impl ScanSession {
@@ -185,6 +205,9 @@ impl ScanSession {
             tried: VecDeque::new(),
             turn_misses: 0,
             turn_wait: 0,
+            kana_tried: VecDeque::new(),
+            kana_misses: 0,
+            kana_wait: 0,
         }
     }
 
@@ -210,11 +233,14 @@ impl ScanSession {
         self.forget_turns();
     }
 
-    /// Forgets the turn lanes tried and any back-off.
+    /// Forgets the turn lanes and bands tried and any back-off.
     fn forget_turns(&mut self) {
         self.tried.clear();
         self.turn_misses = 0;
         self.turn_wait = 0;
+        self.kana_tried.clear();
+        self.kana_misses = 0;
+        self.kana_wait = 0;
     }
 
     /// Offers one camera luma plane captured at monotonic time `now_ms`.
@@ -237,7 +263,7 @@ impl ScanSession {
         let result = tracked
             .ok_or(())
             .or_else(|()| decode(image, &self.limits.decode));
-        let (error, lanes, merged, turned) = match &result {
+        let (error, lanes, merged, turned, kana) = match &result {
             Ok(frame) => {
                 if frame.inferred_corner.is_some() {
                     self.stats.inferred += 1;
@@ -245,9 +271,16 @@ impl ScanSession {
                 self.last_pose = Some((frame.clone(), now_ms));
                 let lanes = self.absorb(frame, now_ms);
                 let merged = self.merge(image, frame);
-                (None, lanes, merged, self.turn(image, frame))
+                let turned = self.turn(image, frame);
+                (None, lanes, merged, turned, self.kana(image, frame))
             }
-            Err(error) => (Some(*error), String::new(), String::new(), String::new()),
+            Err(error) => (
+                Some(*error),
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+            ),
         };
         if !matches!(
             error,
@@ -267,6 +300,7 @@ impl ScanSession {
             lanes,
             merged,
             turned,
+            kana,
             progress,
             completed: self.assembler.take_completed(),
         }
@@ -336,6 +370,64 @@ impl ScanSession {
             self.turn_misses = 0;
         }
         turned
+    }
+
+    /// Tries the bands not yet tried for this capture's shown frame and offers the atoms of the
+    /// kana lanes they read; after tries that read nothing it passes over the next captures that
+    /// would try one (see the module docs).
+    fn kana(&mut self, image: &Luma, frame: &DecodedFrame) -> String {
+        let Some(header) = shown_frame(frame) else {
+            return String::new();
+        };
+        let skip: [bool; KANA_BANDS] =
+            core::array::from_fn(|band| self.kana_tried.contains(&(header, band as u8)));
+        if skip.iter().all(|s| *s) {
+            return String::new();
+        }
+        if self.kana_wait > 0 {
+            self.kana_wait -= 1;
+            return String::new();
+        }
+        for (band, &skipped) in skip.iter().enumerate() {
+            if !skipped {
+                if self.kana_tried.len() == KANA_MEMORY {
+                    self.kana_tried.pop_front();
+                }
+                self.kana_tried.push_back((header, band as u8));
+                self.stats.kana_tries += 1;
+            }
+        }
+        let mut read = String::new();
+        for (band, results) in read_kana(image, frame, header, skip)
+            .into_iter()
+            .enumerate()
+        {
+            for (kind, result) in [KanaKind::Polarity, KanaKind::Glyph]
+                .into_iter()
+                .zip(results)
+            {
+                let Some(result) = result else {
+                    continue;
+                };
+                let lane = KanaLane {
+                    band: band as u8,
+                    kind,
+                };
+                let Some(packet) = kana_packet(result.header, lane, &result.result.data) else {
+                    continue;
+                };
+                self.assembler.push_atoms(&packet);
+                self.stats.kana_lanes += 1;
+                read.push_str(&lane.name());
+            }
+        }
+        if read.is_empty() {
+            self.kana_misses = (self.kana_misses + 1).min(KANA_BACKOFF);
+            self.kana_wait = self.kana_misses;
+        } else {
+            self.kana_misses = 0;
+        }
+        read
     }
 
     /// Holds this capture's field evidence under its shown frame and, from the second
@@ -437,6 +529,40 @@ mod tests {
             },
             4.0,
         )
+    }
+
+    #[test]
+    fn an_upright_camera_reads_both_bands_once_per_shown_frame() {
+        let data = payload(3000);
+        let encoder = StreamEncoder::new(&data, 2).unwrap();
+        // a phone held upright delivers landscape frames with the card turned a quarter
+        let config = fit_to_frame(
+            &CaptureConfig {
+                rotation_deg: 92.0,
+                ..CaptureConfig::modern()
+            },
+            4.0,
+        );
+        let card = |frame: u16| {
+            render(
+                &encoder.cells(frame),
+                &RenderOptions {
+                    size: 768,
+                    supersample: 2,
+                    ..RenderOptions::default()
+                },
+            )
+        };
+        let mut session = ScanSession::new(ScanLimits::default());
+        let first = session.push(&capture(&card(1), &config), 0);
+        assert_eq!(first.kana, "P0K0P1K1");
+        // a second capture of the same shown frame tries no band again
+        let again = session.push(&capture(&card(1), &config), 33);
+        assert!(again.kana.is_empty());
+        let next = session.push(&capture(&card(2), &config), 83);
+        assert_eq!(next.kana, "P0K0P1K1");
+        let stats = session.stats();
+        assert_eq!((stats.kana_tries, stats.kana_lanes), (4, 8));
     }
 
     #[test]
@@ -590,7 +716,14 @@ mod tests {
     #[test]
     fn located_counts_codes_that_were_seen_but_could_not_be_read() {
         let encoder = StreamEncoder::new(&payload(100), 1).unwrap();
-        let mut frame = source(&encoder.cells(1));
+        let mut frame = crate::render::render_square(
+            &encoder.cells(1),
+            &RenderOptions {
+                size: 512,
+                supersample: 2,
+                ..RenderOptions::default()
+            },
+        );
         // keep only the four blossoms: finders are located, no lane can be read
         let scale = 512.0 / 1024.0;
         for y in 0..512usize {

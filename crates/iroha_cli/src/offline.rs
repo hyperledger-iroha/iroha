@@ -1,14 +1,15 @@
 //! Offline commands: finalized registration packaging and Petal Stream optical handoff.
 //!
 //! Petal Stream is the animated sakura-petal transport (a storm of petals over a
-//! faint `天`, inside dotted rings) specified in `specs/petal_stream.md` and
-//! implemented by `iroha_petal`.
+//! faint `天`, inside dotted rings, with rows of katakana tiles above and below)
+//! specified in `specs/petal_stream.md` and implemented by `iroha_petal`.
 use crate::{Run, RunContext, cli_output::print_with_optional_text};
 use clap::{Args, Subcommand, ValueEnum};
 use eyre::{Result, WrapErr, eyre};
 use iroha_petal::{
     decode::{DecodeOptions, decode},
     image::Luma,
+    kana::{KanaLane, read_kana},
     lanes::Lane,
     qualify::{CameraModel, StreamTrial, TrialOutcome, run_stream_trial},
     render::{RenderOptions, render},
@@ -23,10 +24,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
-const ENCODE_SCHEMA: &str = "iroha.offline.petal.encode.v3";
-const DECODE_SCHEMA: &str = "iroha.offline.petal.decode.v3";
-const INSPECT_SCHEMA: &str = "iroha.offline.petal.inspect.v3";
-const SIMULATE_SCHEMA: &str = "iroha.offline.petal.simulate.v3";
+const ENCODE_SCHEMA: &str = "iroha.offline.petal.encode.v5";
+const DECODE_SCHEMA: &str = "iroha.offline.petal.decode.v5";
+const INSPECT_SCHEMA: &str = "iroha.offline.petal.inspect.v5";
+const SIMULATE_SCHEMA: &str = "iroha.offline.petal.simulate.v5";
 const DEFAULT_SIZE: u32 = 1_024;
 const MIN_SIZE: u32 = 256;
 const MAX_SIZE: u32 = 4_096;
@@ -129,7 +130,8 @@ pub(crate) struct EncodeArgs {
     /// Frame counter of the first rendered frame; later frames use consecutive counters.
     #[arg(long = "first-frame", default_value_t = 0)]
     first_frame: u16,
-    /// Square frame size in pixels.
+    /// Card width in pixels; the card (the square code with a band of katakana tiles above and
+    /// below it) is 1668/1024 times as tall.
     #[arg(long, default_value_t = DEFAULT_SIZE)]
     size: u32,
     /// Playback rate in frames per second (recommended 8–15; used for the GIF delay and the manifest).
@@ -204,6 +206,8 @@ struct EncodeReport {
     systematic_frames: u64,
     format: String,
     size: u32,
+    /// Card height in pixels.
+    height: u32,
     fps: u16,
     first_frame: u16,
     rendered_frames: u16,
@@ -230,6 +234,8 @@ struct DecodeReport {
     merged_field_lanes: u64,
     /// Turn lanes read (each at most once per shown frame).
     turn_lanes: u64,
+    /// Kana lanes read (each band at most once per shown frame).
+    kana_lanes: u64,
     completed_at_frame: Option<u64>,
     payload_bytes: Option<u64>,
     kind: Option<u8>,
@@ -241,7 +247,8 @@ struct DecodeReport {
 #[derive(Clone, Debug, JsonSerialize)]
 struct LaneReport {
     /// `D` for the rings, `0`–`3` for the field sectors (or, among the turn lanes, the sector whose
-    /// petals' turns carry them).
+    /// petals' turns carry them), and `P0`, `K0`, `P1`, `K1` for the kana lanes (polarity and
+    /// glyphs of the bands above and below the square).
     lane: String,
     corrected_bytes: u64,
     erased_bytes: u64,
@@ -266,6 +273,8 @@ struct InspectReport {
     turn_lanes: Vec<LaneReport>,
     /// The blur (Gaussian σ in canvas units) that fits the petals best; turns read below 2.5.
     turn_blur: Option<f64>,
+    /// The kana lanes that passed their Reed–Solomon and identity checks.
+    kana_lanes: Vec<LaneReport>,
     frame_counter: Option<u16>,
     beacon_kind: Option<u8>,
     beacon_payload_bytes: Option<u64>,
@@ -289,6 +298,8 @@ struct SimulateReport {
     field_lane_share: f64,
     /// Turn lanes read per field lane read.
     turn_lane_share: f64,
+    /// Kana lanes read per second (up to four per shown frame).
+    kana_lanes_per_second: f64,
     mean_decode_milliseconds: f64,
 }
 
@@ -352,6 +363,7 @@ impl EncodeArgs {
             size: self.size as usize,
             ..RenderOptions::default()
         };
+        let height = iroha_petal::render::card_height_px(self.size as usize) as u32;
         let mut files = Vec::new();
         let mut gif_frames = Vec::new();
         for index in 0..frames {
@@ -360,7 +372,7 @@ impl EncodeArgs {
             match self.format {
                 EncodeFormat::Png => {
                     let name = format!("frame_{index:04}.png");
-                    write_png_rgb(&self.output.join(&name), &image.data, self.size)?;
+                    write_png_rgb(&self.output.join(&name), &image.data, self.size, height)?;
                     files.push(name);
                 }
                 EncodeFormat::Gif => gif_frames.push(image.data),
@@ -371,6 +383,7 @@ impl EncodeArgs {
                 &self.output.join("stream.gif"),
                 &gif_frames,
                 self.size,
+                height,
                 self.fps,
             )?;
             files.push("stream.gif".to_owned());
@@ -388,6 +401,7 @@ impl EncodeArgs {
             systematic_frames: systematic as u64,
             format: self.format.to_string(),
             size: self.size,
+            height,
             fps: self.fps,
             first_frame: self.first_frame,
             rendered_frames: frames,
@@ -408,11 +422,12 @@ impl Run for DecodeArgs {
         let report = self.decode()?;
         let text = match (&report.completed_at_frame, &report.payload_bytes) {
             (Some(at), Some(bytes)) => format!(
-                "reassembled {bytes} bytes after {} frame(s) (lane D read in {} frames, {} field lanes, {} turn lanes)",
+                "reassembled {bytes} bytes after {} frame(s) (lane D read in {} frames, {} field lanes, {} turn lanes, {} kana lanes)",
                 at + 1,
                 report.lane_d_frames,
                 report.field_lanes,
-                report.turn_lanes
+                report.turn_lanes,
+                report.kana_lanes
             ),
             _ => format!(
                 "incomplete: collected {}/{} independent atoms",
@@ -470,6 +485,7 @@ impl DecodeArgs {
             field_lanes: 0,
             merged_field_lanes: 0,
             turn_lanes: 0,
+            kana_lanes: 0,
             completed_at_frame: None,
             payload_bytes: None,
             kind: None,
@@ -504,6 +520,7 @@ impl DecodeArgs {
         report.field_lanes = u64::from(stats.field_lanes);
         report.merged_field_lanes = u64::from(stats.merged_lanes);
         report.turn_lanes = u64::from(stats.turn_lanes);
+        report.kana_lanes = u64::from(stats.kana_lanes);
         Ok(report)
     }
 }
@@ -517,10 +534,25 @@ impl Run for InspectArgs {
             .iter()
             .map(|lane| lane.lane.as_str())
             .collect();
+        let kana: String = report
+            .kana_lanes
+            .iter()
+            .map(|lane| lane.lane.as_str())
+            .collect();
+        let or_none = |lanes: &str| {
+            if lanes.is_empty() {
+                "none".to_owned()
+            } else {
+                lanes.to_owned()
+            }
+        };
         let text = match &report.error {
             Some(error) => format!("no lane decoded: {error}"),
-            None if turns.is_empty() => format!("lanes decoded: {lanes}; no turn lane"),
-            None => format!("lanes decoded: {lanes}; turn lanes: {turns}"),
+            None => format!(
+                "lanes decoded: {lanes}; turn lanes: {}; kana lanes: {}",
+                or_none(&turns),
+                or_none(&kana)
+            ),
         };
         let readable = !lanes.is_empty();
         print_with_optional_text(context, Some(text), &report)?;
@@ -551,6 +583,7 @@ impl InspectArgs {
             lanes: Vec::new(),
             turn_lanes: Vec::new(),
             turn_blur: None,
+            kana_lanes: Vec::new(),
             frame_counter: None,
             beacon_kind: None,
             beacon_payload_bytes: None,
@@ -585,6 +618,26 @@ impl InspectArgs {
                     })
                     .collect();
                 report.turn_blur = observed_turns(&luma, &frame).map(|turns| turns.blur);
+                // the kana lanes are bound to the frame the square's lanes name
+                let header = match frame.d_lane() {
+                    Some(DLane::Beacon(beacon)) => Some(beacon.header),
+                    Some(DLane::Atoms(packet)) => Some(packet.header),
+                    None => frame.atom_packets().first().map(|packet| packet.header),
+                };
+                if let Some(header) = header {
+                    report.kana_lanes = read_kana(&luma, &frame, header, [false; 2])
+                        .iter()
+                        .flatten()
+                        .zip(KanaLane::ALL)
+                        .filter_map(|(result, lane)| {
+                            result.as_ref().map(|r| LaneReport {
+                                lane: lane.name(),
+                                corrected_bytes: r.result.corrected as u64,
+                                erased_bytes: r.result.erasures as u64,
+                            })
+                        })
+                        .collect();
+                }
                 match frame.d_lane() {
                     Some(DLane::Beacon(beacon)) => {
                         report.frame_counter = Some(beacon.header.frame);
@@ -616,7 +669,7 @@ impl Run for SimulateArgs {
         let report = self.simulate()?;
         let text = match report.completion_seconds_mean {
             Some(mean) => format!(
-                "{}: {}/{} trials completed {} bytes in {:.1} s on average ({:.0} B/s, {:.0} % of the field lanes read, {:.0} % of those with their turns)",
+                "{}: {}/{} trials completed {} bytes in {:.1} s on average ({:.0} B/s, {:.0} % of the field lanes read, {:.0} % of those with their turns, {:.1} kana lanes a second)",
                 report.camera,
                 report.completed,
                 report.trials,
@@ -624,7 +677,8 @@ impl Run for SimulateArgs {
                 mean,
                 report.effective_payload_bytes_per_second.unwrap_or(0.0),
                 report.field_lane_share * 100.0,
-                report.turn_lane_share * 100.0
+                report.turn_lane_share * 100.0,
+                report.kana_lanes_per_second
             ),
             None => format!("{}: no trial completed within the horizon", report.camera),
         };
@@ -701,6 +755,8 @@ impl SimulateArgs {
         let frames: u64 = outcomes.iter().map(|o| u64::from(o.frames)).sum();
         let field_lanes: u64 = outcomes.iter().map(|o| u64::from(o.field_lanes)).sum();
         let turn_lanes: u64 = outcomes.iter().map(|o| u64::from(o.turn_lanes)).sum();
+        let kana_lanes: u64 = outcomes.iter().map(|o| u64::from(o.kana_lanes)).sum();
+        let camera_seconds = frames as f64 / StreamTrial::typical(camera, 0).camera_fps;
         Ok(SimulateReport {
             schema: SIMULATE_SCHEMA.to_owned(),
             camera: self.camera.clone(),
@@ -718,16 +774,17 @@ impl SimulateArgs {
             effective_payload_bytes_per_second: mean.map(|m| payload.len() as f64 / m),
             field_lane_share: field_lanes as f64 / (4 * frames.max(1)) as f64,
             turn_lane_share: turn_lanes as f64 / field_lanes.max(1) as f64,
+            kana_lanes_per_second: kana_lanes as f64 / camera_seconds.max(1e-9),
             mean_decode_milliseconds: outcomes.iter().map(|o| o.mean_decode_ms).sum::<f64>()
                 / outcomes.len().max(1) as f64,
         })
     }
 }
 
-fn write_png_rgb(path: &Path, pixels: &[u8], size: u32) -> Result<()> {
+fn write_png_rgb(path: &Path, pixels: &[u8], width: u32, height: u32) -> Result<()> {
     let file = fs::File::create(path)
         .wrap_err_with(|| format!("failed to create PNG {}", path.display()))?;
-    let mut encoder = png::Encoder::new(BufWriter::new(file), size, size);
+    let mut encoder = png::Encoder::new(BufWriter::new(file), width, height);
     encoder.set_color(png::ColorType::Rgb);
     encoder.set_depth(png::BitDepth::Eight);
     encoder.set_compression(png::Compression::Fast);
@@ -793,7 +850,7 @@ fn validate_gif_available() -> Result<()> {
 }
 
 #[cfg(feature = "offline-visual-codecs")]
-fn write_gif(path: &Path, frames: &[Vec<u8>], size: u32, fps: u16) -> Result<()> {
+fn write_gif(path: &Path, frames: &[Vec<u8>], width: u32, height: u32, fps: u16) -> Result<()> {
     use image::{
         Delay, Frame, RgbaImage,
         codecs::gif::{GifEncoder, Repeat},
@@ -810,7 +867,7 @@ fn write_gif(path: &Path, frames: &[Vec<u8>], size: u32, fps: u16) -> Result<()>
             .chunks_exact(3)
             .flat_map(|px| [px[0], px[1], px[2], 255])
             .collect();
-        let image = RgbaImage::from_raw(size, size, rgba)
+        let image = RgbaImage::from_raw(width, height, rgba)
             .ok_or_else(|| eyre!("failed to build GIF frame buffer"))?;
         encoder
             .encode_frame(Frame::from_parts(
@@ -825,7 +882,13 @@ fn write_gif(path: &Path, frames: &[Vec<u8>], size: u32, fps: u16) -> Result<()>
 }
 
 #[cfg(not(feature = "offline-visual-codecs"))]
-fn write_gif(_path: &Path, _frames: &[Vec<u8>], _size: u32, _fps: u16) -> Result<()> {
+fn write_gif(
+    _path: &Path,
+    _frames: &[Vec<u8>],
+    _width: u32,
+    _height: u32,
+    _fps: u16,
+) -> Result<()> {
     validate_gif_available()
 }
 
@@ -930,6 +993,13 @@ mod tests {
             .collect();
         assert_eq!(turns, "0123");
         assert!(report.turn_blur.is_some_and(|blur| blur < 2.5));
+        let kana: String = report
+            .kana_lanes
+            .iter()
+            .map(|lane| lane.lane.as_str())
+            .collect();
+        assert_eq!(kana, "P0K0P1K1");
+        assert_eq!((report.width, report.height), (512, 834));
         assert_eq!(report.frame_counter, Some(0));
         assert_eq!(report.beacon_kind, Some(2));
         assert_eq!(report.beacon_payload_bytes, Some(100));
@@ -941,7 +1011,7 @@ mod tests {
     fn inspect_reports_blank_images_without_panicking() {
         let dir = tempdir().expect("tempdir");
         let blank = dir.path().join("blank.png");
-        write_png_rgb(&blank, &vec![0u8; 128 * 128 * 3], 128).expect("png");
+        write_png_rgb(&blank, &vec![0u8; 128 * 128 * 3], 128, 128).expect("png");
         let report = InspectArgs { input: blank }.inspect().expect("inspect");
         assert!(report.error.is_some());
         assert!(report.lanes.is_empty());
