@@ -1,7 +1,7 @@
 //! Independent Horner/FFT parity, entropy rejection and bounded-work regressions.
 
 use super::*;
-use rand::{SeedableRng, TryRngCore, rngs::StdRng};
+use rand::{SeedableRng, TryRng, rngs::StdRng};
 
 fn limits(passes: usize) -> ReplayLimits {
     ReplayLimits {
@@ -226,8 +226,16 @@ struct CountingRng {
     value: u64,
     failure: bool,
 }
-impl TryRngCore for CountingRng {
-    type Error = &'static str;
+#[derive(Debug)]
+struct CountingRngError;
+impl core::fmt::Display for CountingRngError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("test entropy failure")
+    }
+}
+impl std::error::Error for CountingRngError {}
+impl TryRng for CountingRng {
+    type Error = CountingRngError;
     fn try_next_u32(&mut self) -> core::result::Result<u32, Self::Error> {
         // A 32-bit draw keeps the low half of the 64-bit draw.
         self.try_next_u64()
@@ -236,7 +244,7 @@ impl TryRngCore for CountingRng {
     fn try_next_u64(&mut self) -> core::result::Result<u64, Self::Error> {
         self.calls += 1;
         if self.failure {
-            Err("test entropy failure")
+            Err(CountingRngError)
         } else {
             Ok(self.value)
         }

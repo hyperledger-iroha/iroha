@@ -2,7 +2,8 @@
 
 use super::*;
 use crate::privacy_engines::zk_x509::private_table::inspection;
-use rand::{RngCore, SeedableRng, rngs::StdRng};
+use rand::SeedableRng;
+use rand_chacha::ChaCha12Rng;
 use std::cell::{Cell, RefCell};
 
 fn native(log: u8, column: usize) -> ZeroizingMainTraceColumnV1 {
@@ -22,7 +23,7 @@ fn cpu(words: &mut [Vec<u64>], root: u64, direction: Direction) -> Result<Backen
 fn fused_sampling_preserves_complete_coefficients_masks_rng_and_tail_boundaries() {
     for log in [3, 11] {
         for width in [1, 7, 8, 9, 17] {
-            let mut old_rng = StdRng::from_seed([log + 51; 32]);
+            let mut old_rng = ChaCha12Rng::from_seed([log + 51; 32]);
             let mut new_rng = old_rng.clone();
             let reference =
                 MainTraceMaskGroupV1::sample_v1(log, 13, width, &mut old_rng, |column| {
@@ -59,7 +60,10 @@ fn fused_sampling_preserves_complete_coefficients_masks_rng_and_tail_boundaries(
                 }
             }
             assert_eq!(source_columns, (0..width).collect::<Vec<_>>());
-            assert_eq!(new_rng.next_u64(), old_rng.next_u64());
+            assert_eq!(
+                new_rng.try_next_u64().expect("test RNG draw succeeds"),
+                old_rng.try_next_u64().expect("test RNG draw succeeds")
+            );
         }
     }
 }
@@ -70,7 +74,7 @@ struct OrderedEntropy<'a> {
     fail: Option<usize>,
     unwind: bool,
 }
-impl TryRngCore for OrderedEntropy<'_> {
+impl TryRng for OrderedEntropy<'_> {
     type Error = std::io::Error;
     fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
         unreachable!()
@@ -323,7 +327,7 @@ fn fused_geometry_capacity_and_quarantine_reject_before_source_or_entropy() {
         );
         assert_eq!(rng.draws, 0);
     }
-    let mut rng = StdRng::from_seed([5; 32]);
+    let mut rng = ChaCha12Rng::from_seed([5; 32]);
     let mut before = rng.clone();
     for noncanonical in [false, true] {
         let mut group = MainTraceMaskGroupV1::empty_v1(3, 13, 1).unwrap();
@@ -348,7 +352,10 @@ fn fused_geometry_capacity_and_quarantine_reject_before_source_or_entropy() {
                 .is_err()
         );
     }
-    assert_eq!(rng.next_u64(), before.next_u64());
+    assert_eq!(
+        rng.try_next_u64().expect("test RNG draw succeeds"),
+        before.try_next_u64().expect("test RNG draw succeeds")
+    );
 }
 
 #[test]
@@ -383,7 +390,7 @@ fn fused_joined_roots_frontiers_and_opened_rows_match_original_masks_across_grou
     let widths = [9, 3];
     for kind in [JoinedTraceColumnKindV1::Base, JoinedTraceColumnKindV1::Aux] {
         let plan = JoinedTraceCommitmentPlanV1::new_v1(parameters, &layout, kind).unwrap();
-        let mut old_rng = StdRng::from_seed([211; 32]);
+        let mut old_rng = ChaCha12Rng::from_seed([211; 32]);
         let mut new_rng = old_rng.clone();
         let original = logs
             .into_iter()
@@ -464,8 +471,14 @@ fn fused_joined_roots_frontiers_and_opened_rows_match_original_masks_across_grou
         assert_eq!(actual.commitment.root, expected.commitment.root);
         assert_eq!(actual.commitment.frontier, expected.commitment.frontier);
         assert_eq!(actual.opened_rows, expected.opened_rows);
-        assert_eq!(new_rng.next_u64(), old_rng.next_u64());
-        let next_rng = new_rng.clone().next_u64();
+        assert_eq!(
+            new_rng.try_next_u64().expect("test RNG draw succeeds"),
+            old_rng.try_next_u64().expect("test RNG draw succeeds")
+        );
+        let next_rng = new_rng
+            .clone()
+            .try_next_u64()
+            .expect("test RNG draw succeeds");
         let replayed = plan
             .commit_replayed_v1(
                 &AGGREGATE_DOMAINS_V1,
@@ -481,7 +494,7 @@ fn fused_joined_roots_frontiers_and_opened_rows_match_original_masks_across_grou
         assert_eq!(replayed.commitment.frontier, expected.commitment.frontier);
         assert_eq!(replayed.opened_rows, expected.opened_rows);
         assert_eq!(
-            new_rng.next_u64(),
+            new_rng.try_next_u64().expect("test RNG draw succeeds"),
             next_rng,
             "cached replay never draws entropy"
         );
@@ -534,7 +547,10 @@ fn fused_joined_roots_frontiers_and_opened_rows_match_original_masks_across_grou
         assert_eq!(selected.commitment.root, expected.commitment.root);
         assert_eq!(selected.commitment.frontier, expected.commitment.frontier);
         assert_eq!(selected.opened_rows, expected.opened_rows);
-        let next_rng = new_rng.clone().next_u64();
+        let next_rng = new_rng
+            .clone()
+            .try_next_u64()
+            .expect("test RNG draw succeeds");
         let mutated = plan.commit_retained_replayed_v1(
             &AGGREGATE_DOMAINS_V1,
             &indices,
@@ -555,7 +571,7 @@ fn fused_joined_roots_frontiers_and_opened_rows_match_original_masks_across_grou
             "the actual retained-root replay must reject a changed complete mask tail"
         );
         assert_eq!(
-            new_rng.next_u64(),
+            new_rng.try_next_u64().expect("test RNG draw succeeds"),
             next_rng,
             "retained verification draws no entropy"
         );
@@ -565,7 +581,7 @@ fn fused_joined_roots_frontiers_and_opened_rows_match_original_masks_across_grou
 #[test]
 #[ignore = "requires normal Metal privacy build; initial resident source and coefficient component parity only"]
 fn fused_log19_width8_required_metal_preserves_cpu_coefficients_and_entropy() {
-    let mut cpu_rng = StdRng::from_seed([212; 32]);
+    let mut cpu_rng = ChaCha12Rng::from_seed([212; 32]);
     let mut metal_rng = cpu_rng.clone();
     let mut cpu_group = MainTraceMaskGroupV1::empty_v1(19, 22, 8).unwrap();
     let mut metal_group = MainTraceMaskGroupV1::empty_v1(19, 22, 8).unwrap();
@@ -606,7 +622,10 @@ fn fused_log19_width8_required_metal_preserves_cpu_coefficients_and_entropy() {
     for (cpu, metal) in cpu_group.masks.iter().zip(&metal_group.masks) {
         assert_eq!(cpu.coefficients(), metal.coefficients());
     }
-    assert_eq!(cpu_rng.next_u64(), metal_rng.next_u64());
+    assert_eq!(
+        cpu_rng.try_next_u64().expect("test RNG draw succeeds"),
+        metal_rng.try_next_u64().expect("test RNG draw succeeds")
+    );
 }
 
 #[test]

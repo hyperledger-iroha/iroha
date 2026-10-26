@@ -6,7 +6,7 @@
 
 use crate::kagemusha_wallet_state_v1::FrozenTransition;
 use iroha_kagemusha_proof::tree::IndexedInsert;
-use rand::rand_core::TryRngCore as _;
+use rand::rand_core::TryRng as _;
 use zeroize::Zeroizing;
 
 use super::*;
@@ -41,7 +41,7 @@ impl PreparedRecoveryV1 {
     /// Consume this fixed body and sample one independent opening before custody publication.
     pub(crate) fn seal_fresh(self) -> Result<FrozenTransition, Error> {
         let opening = sample_opening(|bytes| {
-            rand::rngs::OsRng
+            rand::rngs::SysRng
                 .try_fill_bytes(bytes)
                 .map_err(|_| Error::Entropy)
         })?;

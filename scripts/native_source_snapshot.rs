@@ -1,7 +1,9 @@
-//! Print the maintained native source identity and its exact Cargo watch census.
+//! Print native source provenance and its exact input census outside compilation.
 //!
 //! This small diagnostic is compiled by `audit_native_source_inputs.py` with the
-//! successful build's host sha2 dependency. Its only argument is the source root.
+//! selected host sha2 dependency, acquiring it from the independent locked tool
+//! package when a cross build contains only target dependencies. Its only
+//! argument is the source root.
 
 #[allow(dead_code)]
 #[path = "../crates/iroha_plonk/build_support/source_identity.rs"]

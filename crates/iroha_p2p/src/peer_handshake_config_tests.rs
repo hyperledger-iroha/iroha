@@ -1,8 +1,8 @@
 // SoraNet handshake configuration regressions included from `peer`.
 use super::*;
 use rand::{
-    RngCore, SeedableRng,
-    rand_core::{TryCryptoRng, TryRngCore},
+    Rng, SeedableRng,
+    rand_core::{TryCryptoRng, TryRng},
     rngs::StdRng,
 };
 use std::{
@@ -98,12 +98,13 @@ struct ZeroTryRng;
 struct RepeatedTryRng;
 #[derive(Debug)]
 struct FailingTryRngError;
+impl std::error::Error for FailingTryRngError {}
 impl fmt::Display for FailingTryRngError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("failing p2p ticket RNG")
     }
 }
-impl TryRngCore for FailingTryRng {
+impl TryRng for FailingTryRng {
     type Error = FailingTryRngError;
     fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
         Err(FailingTryRngError)
@@ -116,7 +117,7 @@ impl TryRngCore for FailingTryRng {
     }
 }
 impl TryCryptoRng for FailingTryRng {}
-impl TryRngCore for ZeroTryRng {
+impl TryRng for ZeroTryRng {
     type Error = std::convert::Infallible;
     fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
         Ok(0)
@@ -130,7 +131,7 @@ impl TryRngCore for ZeroTryRng {
     }
 }
 impl TryCryptoRng for ZeroTryRng {}
-impl TryRngCore for RepeatedTryRng {
+impl TryRng for RepeatedTryRng {
     type Error = std::convert::Infallible;
     fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
         Ok(u32::from_le_bytes([0xA5; 4]))

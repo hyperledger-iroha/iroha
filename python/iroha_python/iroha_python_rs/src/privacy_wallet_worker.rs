@@ -40,7 +40,7 @@ use iroha_data_model::{
     transaction::FeePaymentIntent,
 };
 use iroha_model_base::metadata::Metadata;
-use rand_core_06::{OsRng, RngCore};
+use rand::{TryRng as _, rngs::SysRng};
 use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
@@ -416,7 +416,7 @@ impl WitnessVault {
     fn unique_handle(&self) -> Result<WitnessHandle, WorkerError> {
         for _ in 0..32 {
             let mut bytes = [0_u8; HANDLE_BYTES];
-            OsRng
+            SysRng
                 .try_fill_bytes(&mut bytes)
                 .map_err(|_| WorkerError::EntropyUnavailable)?;
             bytes[0] &= 0x7f;
@@ -593,7 +593,7 @@ impl PrivateSettlementWitnessVaultV1 {
     fn unique_handle(&self) -> Result<WitnessHandle, WorkerError> {
         for _ in 0..32 {
             let mut bytes = [0_u8; HANDLE_BYTES];
-            OsRng
+            SysRng
                 .try_fill_bytes(&mut bytes)
                 .map_err(|_| WorkerError::EntropyUnavailable)?;
             bytes[0] |= 0x80;

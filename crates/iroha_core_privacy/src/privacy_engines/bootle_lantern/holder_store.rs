@@ -40,8 +40,9 @@ use iroha_data_model::privacy::BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1;
 use iroha_data_model::privacy::{
     BootleLanternIssuerPolicyV1, IrohaBootleLanternAnoncredStatementV1, PrivacyStatementContextV1,
 };
+use rand::rngs::SysRng;
 #[cfg(test)]
-use rand_core_06::{CryptoRng, OsRng, RngCore};
+use rand_core::{TryCryptoRng, TryRng};
 use sha2::{Digest as _, Sha256};
 #[cfg(unix)]
 use std::io::Read as _;
@@ -709,7 +710,7 @@ impl BootleLanternFileHolderStoreV1 {
     ///
     /// # Errors
     /// Rejects substituted bindings or invalid attributes, unhealthy randomness, proof construction failures, and durable-custody failures.
-    pub fn prepare_blind_issuance_with_rng_v1<R: CryptoRng + RngCore>(
+    pub fn prepare_blind_issuance_with_rng_v1<R: TryCryptoRng + TryRng>(
         &self,
         context: &PrivacyStatementContextV1,
         canonical_genesis_hash: [u8; 32],
@@ -978,7 +979,7 @@ impl BootleLanternFileHolderStoreV1 {
     ///
     /// # Errors
     /// Rejects invalid presentation bindings, unavailable credentials, unhealthy randomness, or proof construction failures.
-    pub fn prove_presentation_encoded_with_rng_v1<R: CryptoRng + RngCore>(
+    pub fn prove_presentation_encoded_with_rng_v1<R: TryCryptoRng + TryRng>(
         &self,
         handle: BootleLanternHolderHandleV1,
         statement: &IrohaBootleLanternAnoncredStatementV1,
@@ -1394,7 +1395,7 @@ impl BootleLanternFileHolderStoreV1 {
             return Err(BootleLanternHolderStoreErrorV1::ProviderDrift);
         }
         let mut entropy = Zeroizing::new([0_u8; HOLDER_DEK_BYTES_V1 + HOLDER_NONCE_BYTES_V1]);
-        OsRng
+        SysRng
             .try_fill_bytes(entropy.as_mut())
             .map_err(|_| BootleLanternHolderStoreErrorV1::RandomnessUnavailable)?;
         if entropy[..HOLDER_DEK_BYTES_V1]
@@ -3330,7 +3331,6 @@ mod tests {
         PrivacyStatementSchemaDigestV1, PrivacyTransactionIntentDigestV1, PrivacyVerifierDigestV1,
     };
     use iroha_data_model::{NetworkId, block::BlockHeader};
-    use rand_core_06::Error as RngError;
     struct TestRng {
         state: u64,
     }
@@ -3339,22 +3339,24 @@ mod tests {
             Self { state: seed }
         }
     }
-    impl RngCore for TestRng {
-        fn next_u32(&mut self) -> u32 {
-            let mut bytes = [0_u8; 4];
-            self.fill_bytes(&mut bytes);
-            u32::from_le_bytes(bytes)
+    impl rand::TryRng for TestRng {
+        type Error = std::io::Error;
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Ok({
+                let mut bytes = [0_u8; 4];
+                self.try_fill_bytes(&mut bytes)?;
+                u32::from_le_bytes(bytes)
+            })
         }
-        fn next_u64(&mut self) -> u64 {
-            let mut bytes = [0_u8; 8];
-            self.fill_bytes(&mut bytes);
-            u64::from_le_bytes(bytes)
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Ok({
+                let mut bytes = [0_u8; 8];
+                self.try_fill_bytes(&mut bytes)?;
+                u64::from_le_bytes(bytes)
+            })
         }
-        fn fill_bytes(&mut self, destination: &mut [u8]) {
-            self.try_fill_bytes(destination)
-                .expect("infallible deterministic test RNG");
-        }
-        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), RngError> {
+
+        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
             for byte in destination {
                 self.state ^= self.state << 13;
                 self.state ^= self.state >> 7;
@@ -3364,23 +3366,22 @@ mod tests {
             Ok(())
         }
     }
-    impl CryptoRng for TestRng {}
+    impl rand::TryCryptoRng for TestRng {}
     struct PanicRng;
-    impl RngCore for PanicRng {
-        fn next_u32(&mut self) -> u32 {
+    impl rand::TryRng for PanicRng {
+        type Error = std::io::Error;
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             panic!("idempotent holder recovery consumed RNG")
         }
-        fn next_u64(&mut self) -> u64 {
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
             panic!("idempotent holder recovery consumed RNG")
         }
-        fn fill_bytes(&mut self, _: &mut [u8]) {
-            panic!("idempotent holder recovery consumed RNG")
-        }
-        fn try_fill_bytes(&mut self, _: &mut [u8]) -> Result<(), RngError> {
+
+        fn try_fill_bytes(&mut self, _: &mut [u8]) -> Result<(), Self::Error> {
             panic!("idempotent holder recovery consumed RNG")
         }
     }
-    impl CryptoRng for PanicRng {}
+    impl rand::TryCryptoRng for PanicRng {}
     #[derive(Debug)]
     struct TestWrapper {
         qualification: Mutex<BootleLanternHolderProviderQualificationV1>,

@@ -662,7 +662,8 @@ mod tests {
         goldilocks_ifft_v1, masked_trace_coefficients_with_mask_v1, sample_trace_mask_v1,
     };
     use crate::privacy_engines::zk_x509::private_table::inspection::observe_v1;
-    use rand::{RngCore, SeedableRng, rngs::StdRng};
+    use rand::SeedableRng;
+    use rand_chacha::ChaCha12Rng;
 
     fn plan_v1(logs: [u8; 3]) -> MainTerminalLinkPlanV1 {
         let points = [
@@ -1018,7 +1019,7 @@ mod tests {
     #[test]
     fn replay_borrows_sampled_masks_without_consuming_next_blinding_entropy() {
         let plan = plan_v1([1, 2, 3]);
-        let mut rng = StdRng::from_seed([93; 32]);
+        let mut rng = ChaCha12Rng::from_seed([93; 32]);
         let masks = (0..2 * LINK_COUNT_V1)
             .map(|_| sample_trace_mask_v1(MASK_DEGREE, &mut rng).unwrap())
             .collect::<Vec<_>>();
@@ -1039,7 +1040,10 @@ mod tests {
         // This is the exact next entropy cursor used by the unchanged caller's
         // canonical quotient blinding; no private mask is copied or resampled.
         for _ in 0..(6 - 1) * 137 * 4 {
-            assert_eq!(rng.next_u64(), untouched.next_u64());
+            assert_eq!(
+                rng.try_next_u64().expect("test RNG draw succeeds"),
+                untouched.try_next_u64().expect("test RNG draw succeeds")
+            );
         }
     }
 

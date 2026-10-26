@@ -1,8 +1,4 @@
 //! Development-only fixed-witness IPA membership fixtures; never admitted ballot or tally proofs.
-use blake2::{
-    Blake2bVar,
-    digest::{Update as _, VariableOutput as _},
-};
 use norito::json::{self, Value};
 use std::{convert::TryInto, error::Error, fs, path::Path};
 /// Canonical file names within the development membership bundle directory.
@@ -139,13 +135,30 @@ fn deterministic_fixture_id(summary: &BundleSummary) -> u64 {
 #[path = "vote_tally/native.rs"]
 mod vote_tally_backend;
 
+/// Hash fixture bytes with the canonical Iroha Blake2b-256 marker semantics.
 pub fn iroha_hash(bytes: &[u8]) -> [u8; 32] {
-    let vec_hash = Blake2bVar::new(32)
-        .expect("failed to construct blake2b-256 hasher")
-        .chain(bytes)
-        .finalize_boxed();
-    let mut hash = [0u8; 32];
-    hash.copy_from_slice(&vec_hash);
-    hash[31] |= 1;
-    hash
+    *iroha_crypto::Hash::new(bytes).as_ref()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::iroha_hash;
+
+    #[test]
+    fn fixture_hash_preserves_blake2b_256_vectors_and_marker() {
+        // Independently computed Blake2b-256 vectors with the final-byte marker set.
+        // Empty input exercises setting the marker; "abc" already has it set.
+        for (input, expected) in [
+            (
+                b"".as_slice(),
+                "0e5751c026e543b2e8ab2eb06099daa1d1e5df47778f7787faab45cdf12fe3a9",
+            ),
+            (
+                b"abc".as_slice(),
+                "bddd813c634239723171ef3fee98579b94964e3bb1cb3e427262c8c068d52319",
+            ),
+        ] {
+            assert_eq!(hex::encode(iroha_hash(input)), expected);
+        }
+    }
 }

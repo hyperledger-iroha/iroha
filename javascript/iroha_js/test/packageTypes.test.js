@@ -6,7 +6,9 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import ts from "typescript";
+import * as ts from "typescript/unstable/ast";
+import { SymbolFlags } from "typescript/unstable/sync";
+import { inspectTypeScriptProject, parseTypeScriptSource } from "./helpers/typescriptInspection.js";
 
 import { validatePackPaths } from "../scripts/package-install-smoke.mjs";
 
@@ -133,13 +135,7 @@ test("algorithm options use omission rather than a nullable compatibility sentin
 test("first-release HTTP client declarations omit compatibility escape hatches", () => {
   const declarationPath = path.join(PACKAGE_ROOT, "index.d.ts");
   const declarationText = fs.readFileSync(declarationPath, "utf8");
-  const source = ts.createSourceFile(
-    declarationPath,
-    declarationText,
-    ts.ScriptTarget.Latest,
-    true,
-    ts.ScriptKind.TS,
-  );
+  const source = parseTypeScriptSource(declarationPath, declarationText);
   const declaration = (kind, name) => {
     const node = source.statements.find(
       (statement) => kind(statement) && statement.name?.text === name,
@@ -378,16 +374,9 @@ test("package smoke rejects every non-portable or missing required artifact", ()
 
 test("runtime namespace declarations expose exactly their module exports", async () => {
   const declarationPath = path.join(PACKAGE_ROOT, "index.d.ts");
-  const program = ts.createProgram([declarationPath], {
-    strict: true,
-    target: ts.ScriptTarget.ES2022,
-    module: ts.ModuleKind.NodeNext,
-    moduleResolution: ts.ModuleResolutionKind.NodeNext,
-    skipLibCheck: false,
-  });
+  const { program, checker } = inspectTypeScriptProject(declarationPath);
   const declarations = program.getSourceFile(declarationPath);
   assert.ok(declarations);
-  const checker = program.getTypeChecker();
   const moduleSymbol = checker.getSymbolAtLocation(declarations);
   assert.ok(moduleSymbol);
   const declarationExports = new Map(
@@ -403,10 +392,7 @@ test("runtime namespace declarations expose exactly their module exports", async
   ]) {
     const namespaceSymbol = declarationExports.get(namespaceName);
     assert.ok(namespaceSymbol, `missing ${namespaceName} declaration`);
-    const namespaceType = checker.getTypeOfSymbolAtLocation(
-      namespaceSymbol,
-      namespaceSymbol.valueDeclaration ?? declarations,
-    );
+    const namespaceType = checker.getTypeOfSymbol(namespaceSymbol);
     const declaredNames = checker
       .getPropertiesOfType(namespaceType)
       .map((symbol) => symbol.name)
@@ -451,26 +437,19 @@ test("public facades exclude internal codecs while retaining their declared owne
 
 test("root declarations expose exactly the source and distribution values", async () => {
   const declarationPath = path.join(PACKAGE_ROOT, "index.d.ts");
-  const program = ts.createProgram([declarationPath], {
-    strict: true,
-    target: ts.ScriptTarget.ES2022,
-    module: ts.ModuleKind.NodeNext,
-    moduleResolution: ts.ModuleResolutionKind.NodeNext,
-    skipLibCheck: false,
-  });
+  const { program, checker } = inspectTypeScriptProject(declarationPath);
   const declarations = program.getSourceFile(declarationPath);
   assert.ok(declarations);
-  const checker = program.getTypeChecker();
   const moduleSymbol = checker.getSymbolAtLocation(declarations);
   assert.ok(moduleSymbol);
   const declaredValues = checker
     .getExportsOfModule(moduleSymbol)
     .filter((symbol) => {
       const target =
-        (symbol.flags & ts.SymbolFlags.Alias) !== 0
+        (symbol.flags & SymbolFlags.Alias) !== 0
           ? checker.getAliasedSymbol(symbol)
           : symbol;
-      return (target.flags & ts.SymbolFlags.Value) !== 0;
+      return (target.flags & SymbolFlags.Value) !== 0;
     })
     .map((symbol) => symbol.name)
     .sort();
@@ -482,19 +461,17 @@ test("root declarations expose exactly the source and distribution values", asyn
       declaredValues,
       `${runtimeTarget} diverges from the root value declarations`,
     );
+    const transactionCodec = await import(runtimeTarget.replace("/index.js", "/public/transactionCodec.js"));
+    for (const [name, value] of Object.entries(transactionCodec)) {
+      assert.equal(runtime[name], value, `${runtimeTarget} must re-export transaction-codec ${name}`);
+    }
   }
 });
 
 test("Torii client declarations never promise unimplemented methods", async () => {
   const declarationPath = path.join(PACKAGE_ROOT, "index.d.ts");
   const declarationText = fs.readFileSync(declarationPath, "utf8");
-  const source = ts.createSourceFile(
-    declarationPath,
-    declarationText,
-    ts.ScriptTarget.Latest,
-    true,
-    ts.ScriptKind.TS,
-  );
+  const source = parseTypeScriptSource(declarationPath, declarationText);
 
   for (const [className, runtimeTarget] of [
     ["ToriiClient", "../src/toriiClient.js"],
@@ -534,16 +511,9 @@ test("narrow subpath declarations exactly match their runtime values", async () 
   for (const subpath of subpaths) {
     const descriptor = packageJson.exports[subpath];
     const declarationPath = path.resolve(PACKAGE_ROOT, descriptor.types);
-    const program = ts.createProgram([declarationPath], {
-      strict: true,
-      target: ts.ScriptTarget.ES2022,
-      module: ts.ModuleKind.NodeNext,
-      moduleResolution: ts.ModuleResolutionKind.NodeNext,
-      skipLibCheck: false,
-    });
+    const { program, checker } = inspectTypeScriptProject(declarationPath);
     const declaration = program.getSourceFile(declarationPath);
     assert.ok(declaration, `${subpath} declaration did not load`);
-    const checker = program.getTypeChecker();
     const declaredValueNames = (source, seen = new Set()) => {
       if (seen.has(source.fileName)) return [];
       seen.add(source.fileName);
@@ -604,13 +574,7 @@ test("narrow subpath declarations exactly match their runtime values", async () 
 test("SoraFS gateway denial declarations expose only governed catalog evidence", () => {
   const declarationPath = path.join(PACKAGE_ROOT, "index.d.ts");
   const declarationText = fs.readFileSync(declarationPath, "utf8");
-  const source = ts.createSourceFile(
-    declarationPath,
-    declarationText,
-    ts.ScriptTarget.Latest,
-    true,
-    ts.ScriptKind.TS,
-  );
+  const source = parseTypeScriptSource(declarationPath, declarationText);
   const findInterface = (name) => {
     const declaration = source.statements.find(
       (statement) =>
@@ -641,7 +605,7 @@ test("SoraFS gateway denial declarations expose only governed catalog evidence",
     const property = options.members.find(
       (member) => propertyName(member) === name,
     );
-    assert.ok(property && ts.isPropertySignature(property), `missing ${name}`);
+    assert.ok(property && ts.isPropertySignatureDeclaration(property), `missing ${name}`);
     assert.equal(
       property.type?.getText(source),
       expectedType,
@@ -653,7 +617,7 @@ test("SoraFS gateway denial declarations expose only governed catalog evidence",
   const policyBlock = failure.members.find(
     (member) => propertyName(member) === "policyBlock",
   );
-  assert.ok(policyBlock && ts.isPropertySignature(policyBlock));
+  assert.ok(policyBlock && ts.isPropertySignatureDeclaration(policyBlock));
   assert.ok(
     policyBlock.type && ts.isTypeLiteralNode(policyBlock.type),
     "policyBlock must be a closed type literal",

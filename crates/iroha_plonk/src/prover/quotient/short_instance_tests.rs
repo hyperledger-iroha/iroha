@@ -31,7 +31,7 @@ fn short_instance_cosets_match_dense_coefficients_and_keep_storage() {
                         if j == 1 {
                             C::ScalarExt::ZERO
                         } else {
-                            C::ScalarExt::from(j + 3)
+                            C::ScalarExt::from(u64::try_from(j).unwrap() + 3)
                         }
                     })
                     .collect()
@@ -309,11 +309,6 @@ fn bound_instance_quotient_matches_dense_and_cancellation_wipes_workspace() {
 fn short_instance_coset_shape_timing_diagnostic() {
     use std::{hint::black_box, time::Instant};
 
-    fn require_release() {
-        #[cfg(debug_assertions)]
-        panic!("run component diagnostic with --release");
-    }
-
     fn check<C: PastaCurve>() {
         let circuit = Arithmetic {
             start: 3,
@@ -394,7 +389,11 @@ fn short_instance_coset_shape_timing_diagnostic() {
             }
         }
     }
-    require_release();
+    // Keep the release-only refusal at invocation time, outside every timed cut.
+    assert!(
+        !black_box(cfg!(debug_assertions)),
+        "run component diagnostic with --release"
+    );
     check::<Ep>();
     check::<Eq>();
 }

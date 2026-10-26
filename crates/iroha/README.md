@@ -12,6 +12,14 @@ for setup, configuration, and client examples.
 
 ## Features
 
+HTTP uses reqwest 0.13 with the operating system certificate verifier by default.
+The `tls-rustls-webpki-roots` feature keeps Mozilla roots explicit; disable default
+features to select only that store. Enabling both rustls root profiles merges
+Mozilla roots with platform trust. The `tls-native` profiles select native TLS.
+WebSocket transports retain the corresponding native or Mozilla root feature.
+Custom trust stores use `tls_certs_only`; certificate and hostname checks remain
+mandatory. Cleartext loopback pools do not load trust roots or follow redirects.
+
 * Submit one or several Iroha Special Instructions (ISI) as a Transaction to Iroha Peer
 * Read Torii collections with one filter, sort and cursor language
 * Request data based on Iroha Queries from a Peer
@@ -93,7 +101,7 @@ certificates; genuine prover and validator-network qualification remains open.
 ## Setup
 
 **Requirements:** install
-[Rust 1.93.1](https://www.rust-lang.org/learn/get-started), the toolchain pinned
+[Rust 1.99.1](https://www.rust-lang.org/learn/get-started), the toolchain pinned
 for this workspace in the repository-root `rust-toolchain.toml`.
 
 Add the following to the manifest file of your Rust project:

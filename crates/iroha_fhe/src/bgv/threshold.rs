@@ -11,6 +11,10 @@
 //! reconstruction, or network integration. Selection checks cover metadata
 //! only; they are not algebraic proofs. Test fixtures alone expose share words
 //! for independent interpolation. No BGV profile is qualified by this module.
+//!
+//! A canonical public selection can consume a local share into a subset-additive
+//! share, in place. This private arithmetic neither releases a contribution nor
+//! establishes a reusable, authenticated or retry-secure opening protocol.
 // TODO(C.4): reviewed malicious-party-secure key generation, authenticated durable
 // custody, masked ciphertext-bound contributions and zero-knowledge share verification.
 use std::sync::Arc;
@@ -25,6 +29,9 @@ use thiserror::Error;
 
 /// Domain separator for the public threshold context.
 pub const THRESHOLD_CONTEXT_DOMAIN: &str = "iroha_fhe bgv v1 offline threshold context";
+
+/// Domain separator for a canonical public subset of one offline sharing instance.
+pub const THRESHOLD_SELECTION_DOMAIN: &str = "iroha_fhe bgv v1 offline threshold selection";
 
 /// A refusal by the offline key-sharing component.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
@@ -55,6 +62,9 @@ pub enum ThresholdError {
     /// A coordinate is absent from the declared roster.
     #[error("participant is absent from the threshold roster")]
     UnknownParticipant,
+    /// The local share's participant is absent from this canonical selected subset.
+    #[error("participant is absent from the selected threshold subset")]
+    ParticipantNotSelected,
     /// This in-memory dealer has already issued this participant's share.
     #[error("participant share has already been issued")]
     AlreadyIssued,
@@ -239,6 +249,231 @@ pub struct SecretKeyShare {
     words: RnsPoly,
 }
 
+/// A borrowed, immutable subset of one offline sharing context and instance.
+///
+/// The subset is explicitly supplied in strictly ascending order. Its identity
+/// binds public metadata only, not a ciphertext, an authenticated key registration
+/// or permission to disclose a contribution. Reusing this plan is not replay
+/// protection. The borrowed coordinates cannot change while this plan exists.
+#[derive(Debug)]
+pub struct ThresholdSelection<'a> {
+    context: &'a ThresholdContext,
+    instance: [u8; 32],
+    participants: &'a [u16],
+    identity: [u8; 32],
+}
+
+impl<'a> ThresholdSelection<'a> {
+    /// Validate a canonical subset without allocating or handling secret material.
+    ///
+    /// Every size from the declared threshold through the complete roster is
+    /// supported; no participant is silently removed or reordered.
+    ///
+    /// # Errors
+    /// Another profile, insufficient/excess participants, repeated or unsorted
+    /// coordinates, or a coordinate absent from the context's roster.
+    pub fn new(
+        profile: &BgvProfile,
+        context: &'a ThresholdContext,
+        instance: [u8; 32],
+        participants: &'a [u16],
+    ) -> Result<Self, ThresholdError> {
+        if profile.identity() != &context.profile {
+            return Err(ThresholdError::ProfileMismatch);
+        }
+        if participants.len() < usize::from(context.threshold) {
+            return Err(ThresholdError::InsufficientShares);
+        }
+        if participants.len() > context.participants.len() {
+            return Err(ThresholdError::TooManyShares);
+        }
+        for pair in participants.windows(2) {
+            if pair[0] == pair[1] {
+                return Err(ThresholdError::DuplicateParticipant);
+            }
+            if pair[0] > pair[1] {
+                return Err(ThresholdError::InvalidRoster);
+            }
+        }
+        for participant in participants {
+            if context.participants.binary_search(participant).is_err() {
+                return Err(ThresholdError::UnknownParticipant);
+            }
+        }
+        let mut hasher = blake3::Hasher::new_derive_key(THRESHOLD_SELECTION_DOMAIN);
+        hasher.update(&1_u16.to_le_bytes());
+        hasher.update(context.identity());
+        hasher.update(&instance);
+        // The context constructor bounds the full roster to u16::MAX.
+        let count = u16::try_from(participants.len()).map_err(|_| ThresholdError::TooManyShares)?;
+        hasher.update(&count.to_le_bytes());
+        for participant in participants {
+            hasher.update(&participant.to_le_bytes());
+        }
+        Ok(Self {
+            context,
+            instance,
+            participants,
+            identity: *hasher.finalize().as_bytes(),
+        })
+    }
+
+    /// The original public threshold context.
+    #[must_use]
+    pub const fn context(&self) -> &ThresholdContext {
+        self.context
+    }
+
+    /// The offline dealer instance selected by the caller.
+    #[must_use]
+    pub const fn instance(&self) -> &[u8; 32] {
+        &self.instance
+    }
+
+    /// The exact canonical selected coordinates.
+    #[must_use]
+    pub const fn participants(&self) -> &[u16] {
+        self.participants
+    }
+
+    /// Identity of the context, instance and exact canonical subset.
+    #[must_use]
+    pub const fn identity(&self) -> &[u8; 32] {
+        &self.identity
+    }
+
+    /// Public Lagrange coefficient at zero, for an already validated local party.
+    fn coefficient(&self, profile: &BgvProfile, participant: u16, limb: usize) -> u64 {
+        let fixed: crate::constant_time::FixedModulus = profile.full_plan(limb).fixed();
+        let mut numerator = 1;
+        let mut denominator = 1;
+        for &other in self.participants {
+            if other != participant {
+                numerator = fixed.multiply(numerator, u64::from(other));
+                denominator = fixed.multiply(
+                    denominator,
+                    fixed.sub_canonical(u64::from(other), u64::from(participant)),
+                );
+            }
+        }
+        // Distinct coordinates below every prime give a nonzero denominator.
+        // Only public inputs enter this existing prime-field inversion schedule.
+        let inverse = fixed.power(denominator, fixed.modulus - 2);
+        fixed.multiply(numerator, inverse)
+    }
+}
+
+/// Refused conversion retaining the original, unmodified secret share.
+///
+/// Dropping this error clears its owned secret. Recover it explicitly to retry
+/// with corrected public metadata; formatting prints no secret words.
+///
+/// ```compile_fail
+/// use iroha_fhe::bgv::threshold::ThresholdShareConversionError;
+/// fn duplicate(error: &ThresholdShareConversionError) -> ThresholdShareConversionError {
+///     (*error).clone()
+/// }
+/// ```
+#[derive(Debug)]
+pub struct ThresholdShareConversionError {
+    reason: ThresholdError,
+    share: SecretKeyShare,
+}
+
+impl ThresholdShareConversionError {
+    /// The public reason no conversion occurred.
+    #[must_use]
+    pub const fn reason(&self) -> ThresholdError {
+        self.reason
+    }
+
+    /// Recover the refusal and the exact original secret-share owner.
+    #[must_use]
+    pub fn into_parts(self) -> (ThresholdError, SecretKeyShare) {
+        (self.reason, self.share)
+    }
+}
+
+impl std::fmt::Display for ThresholdShareConversionError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.reason, formatter)
+    }
+}
+
+impl std::error::Error for ThresholdShareConversionError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.reason)
+    }
+}
+
+/// One local additive share for an exact public subset, with clearing ownership.
+///
+/// These full-field words are not a ternary [`SecretKey`]. No production export,
+/// import, reconstruction, decryption or Clone interface is provided.
+///
+/// ```compile_fail
+/// use iroha_fhe::bgv::threshold::SubsetSecretKeyShare;
+/// fn duplicate(share: &SubsetSecretKeyShare) -> SubsetSecretKeyShare {
+///     (*share).clone()
+/// }
+/// ```
+pub struct SubsetSecretKeyShare {
+    context: Arc<ThresholdContext>,
+    instance: [u8; 32],
+    participant: u16,
+    selection_identity: [u8; 32],
+    words: RnsPoly,
+}
+
+impl std::fmt::Debug for SubsetSecretKeyShare {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("SubsetSecretKeyShare")
+            .field("context", self.context.identity())
+            .field("instance", &self.instance)
+            .field("participant", &self.participant)
+            .field("selection_identity", &self.selection_identity)
+            .finish_non_exhaustive()
+    }
+}
+
+impl SubsetSecretKeyShare {
+    /// Original public threshold context.
+    #[must_use]
+    pub fn context(&self) -> &ThresholdContext {
+        &self.context
+    }
+
+    /// Original offline sharing instance, not a decryption session.
+    #[must_use]
+    pub const fn instance(&self) -> &[u8; 32] {
+        &self.instance
+    }
+
+    /// Local participant's field coordinate.
+    #[must_use]
+    pub const fn participant(&self) -> u16 {
+        self.participant
+    }
+
+    /// Exact public subset identity used for this private conversion.
+    #[must_use]
+    pub const fn selection_identity(&self) -> &[u8; 32] {
+        &self.selection_identity
+    }
+
+    /// Bytes in the retained clearing buffer, excluding public metadata.
+    #[must_use]
+    pub fn secret_buffer_bytes(&self) -> usize {
+        std::mem::size_of_val(self.words.words())
+    }
+
+    #[cfg(any(test, feature = "bgv-test-fixtures"))]
+    pub(super) fn words_for_fixture(&self) -> &[u64] {
+        self.words.words()
+    }
+}
+
 impl std::fmt::Debug for SecretKeyShare {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -251,6 +486,63 @@ impl std::fmt::Debug for SecretKeyShare {
 }
 
 impl SecretKeyShare {
+    /// Consume this local share into a subset-additive share in the same buffer.
+    ///
+    /// All validation precedes mutation. The canonical subset plan supplies
+    /// public Lagrange coefficients independently for every main/special prime;
+    /// each secret word uses the existing fixed-schedule modular owner. This
+    /// operation allocates no new buffer and publishes no decryption material.
+    ///
+    /// # Errors
+    /// Returns an owning error with the untouched original share for a different
+    /// profile, context, instance or a subset that omits this participant.
+    pub fn try_into_subset_additive(
+        mut self,
+        profile: &BgvProfile,
+        selection: &ThresholdSelection<'_>,
+    ) -> Result<SubsetSecretKeyShare, ThresholdShareConversionError> {
+        let reason = if profile.identity() != &self.context.profile
+            || profile.identity() != &selection.context.profile
+        {
+            Some(ThresholdError::ProfileMismatch)
+        } else if self.context.identity() != selection.context.identity() {
+            Some(ThresholdError::ContextMismatch)
+        } else if self.instance != selection.instance {
+            Some(ThresholdError::InstanceMismatch)
+        } else if selection
+            .participants
+            .binary_search(&self.participant)
+            .is_err()
+        {
+            Some(ThresholdError::ParticipantNotSelected)
+        } else {
+            None
+        };
+        if let Some(reason) = reason {
+            return Err(ThresholdShareConversionError {
+                reason,
+                share: self,
+            });
+        }
+        for limb in 0..self.words.limbs() {
+            let coefficient = selection.coefficient(profile, self.participant, limb);
+            let fixed: crate::constant_time::FixedModulus = profile.full_plan(limb).fixed();
+            for word in self.words.limb_mut(limb) {
+                *word = fixed.multiply(*word, coefficient);
+            }
+            if limb == 0 {
+                fault::reached(FaultPoint::ThresholdAfterFirstSubsetLimb);
+            }
+        }
+        Ok(SubsetSecretKeyShare {
+            context: self.context,
+            instance: self.instance,
+            participant: self.participant,
+            selection_identity: selection.identity,
+            words: self.words,
+        })
+    }
+
     /// Public context under which this share was issued.
     #[must_use]
     pub fn context(&self) -> &ThresholdContext {

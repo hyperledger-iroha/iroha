@@ -862,20 +862,27 @@ simulation or concrete-sponge theorem.
 
 ### Conditional honest-fold abort bound
 
-The native non-hiding fold has a source-reviewed polynomial bound that permits
-knowledge of every parameter logarithm. Let `n=2^k`, `k=16`, `m` be the ordered
-input count and `d=m−1`. Fix inputs and finite generators before this fold's
-challenges; require nonzero real source challenges and at least one full-length
-source. Actually deciding every input is additionally required for successful
-fold verification: syntax alone cannot prevent a final `FoldEquation` failure.
+The selected fold retains a source-reviewed pre-mask offset-polynomial lemma
+that permits knowledge of every parameter logarithm. The following abort bound
+is a hypothetical comparison experiment on those offsets and raw scalar
+variables; it does not describe the selected committed fold's stopping law.
+Let `n=2^k`, `k=16`, `m` be the ordered input count and `d=m−1`. Fix inputs and
+finite generators before the experiment's challenges; require nonzero real
+source challenges and at least one full-length source. Native source widths
+are 1 through 16; zero-width constant vectors in the algebra controls are only
+abstract boundary examples. For guaranteed honest-fold verification,
+additionally assume every input claim decides: syntax alone cannot prevent a
+final `FoldEquation` failure.
 
-The experiment supplies an independent tape of mapped scalar challenges
+The experiment supplies an independent tape of raw mapped scalar variables
 `alpha,z,zeta,u_0,…,u_(k−1)`, each with maximum atom `lambda`. For uniform
-base-field answers under the actual maps, `lambda=1/p` for Pallas Fp→Fq and
-`lambda=2/q` for Vesta Fq→Fp, where `p<q<2p`. Sample the whole virtual tape,
-including unused answers after a stop. A separate coupling term must account
-for prequeried, conflicting or otherwise non-fresh shared-oracle paths. This
-independent-tape premise is not established for concrete fixed RP57.
+base-field answers under field conversion before role maps, `lambda=1/p` for
+Pallas Fp→Fq and `lambda=2/q` for Vesta Fq→Fp, where `p<q<2p`. Sample the whole
+virtual tape, including unused answers after a stop. A separate coupling term
+must account for prequeried, conflicting or otherwise non-fresh shared-oracle
+paths. This independent-tape premise is not established for concrete fixed
+RP57. Actual round challenges use `nz(raw)`, which merges raw zero and one;
+the raw maximum atom cannot be assigned unchanged to that mapped role.
 
 Write unshifted coefficients as `A_i(alpha)`. Their degree is at most `d`, and
 `A_(n−1)` is a nonzero polynomial: each full input contributes its nonzero
@@ -891,46 +898,61 @@ z-degree `n−h−1`, with coefficient `D_j [D_j a_(N−1)]`. The bracket's cons
 monomial in earlier u variables is `A_(n−1)`, so it is nonzero. R has highest
 z-degree `2n−h−1`, uniquely contributed by the shifted first coefficient; its
 cleared coefficient is `−D_j² A_(n−1)`. In any scalar-log analysis basis,
-finite U has nonzero log. Thus each full point polynomial `D_j L_j` and
+finite U has nonzero log. Thus each pre-mask offset polynomial `D_j L_j` and
 `D_j R_j` has a nonzero zeta coefficient; its MSM term contains no zeta.
 Knowing the generator logs does not make either polynomial identically zero.
+Here L and R denote the offsets before adding the selected W masks.
 
 Conservative total degrees are `d+2j+n−h` for L and `d+2j+2n−h` for R.
 For independent coordinates with atom at most `lambda`, a nonzero polynomial
 of total degree t vanishes with probability at most `t*lambda`. On `D_j≠0`,
-a native point identity implies the corresponding cleared polynomial vanishes.
-Charge any zero round challenge separately by `k*lambda`. Final G has a
-multiaffine scalar-log polynomial of degree at most k with nonzero constant
-g_0, adding `k*lambda`. Complete operations permit intermediate identity
-generators; they require no separate rejection event.
+an unmasked offset identity implies the corresponding cleared polynomial
+vanishes. Charge any zero raw round variable separately by `k*lambda`. Final
+G has a multiaffine scalar-log polynomial of degree at most k with nonzero
+constant g_0, adding `k*lambda` for the hypothetical final-identity event.
+Complete group operations permit intermediate identity generators; they add no
+exceptional event.
 
-Summing before conditioning on success gives the encoding/zero-event bound
+Summing before conditioning on absence of those events gives the comparison bound
 
 `epsilon_fold = min(1, [2kd + 2k² + (3k−2)n + 2] lambda)`.
 
 For k16 this coefficient is `3,015,170+32(m−1)`. No all-coordinate-nonzero
 condition or generic relation-finding assumption is needed in this experiment.
-Cancellation, storage, allocation, invalid/undecided inputs and entropy-source
-failures retain separate treatment. Fresh attempts require bounded aggregation;
+The selected Exact-binding fold instead commits its ordered inputs and all
+masks in D before its challenges, adds W masks to L/R, uses total nonzero
+actual-round challenges, and allows an identity final G. Thus the raw-zero,
+offset-identity and final-G
+comparison events are not its native abort events. Cancellation, storage,
+allocation, invalid/undecided inputs and entropy-source failures are outside
+this experiment. Fresh hypothetical attempts require bounded aggregation;
 exact retained retries do not consume another experiment. The source derivation
 and independent review are retained in
 `target/qualification/c12-nonhiding-ipa-polynomial-audit-1`. This replaces the
 older relation-finding route within the ideal-tape lemma, and establishes no
 concrete Poseidon pseudorandomness, recursive composition or C12 qualification.
 
-The maintained [fold controls](../formal/kagemusha_fold/README.md) pass
-all 29 tests with unchanged source/tool pins. The ten polynomial cases check
-exact leading coefficients and degrees through four rounds, dependent generator
-logs, the short-only and missing-shift counterexamples, and the k16 bound's
-arithmetic. An exhaustive F17 control checks all14,739 one-round challenge tapes
-across three generator choices without conditioning away earlier failures.
-Ten transcript cases reproduce the two native prelude KATs using the independent
-RP57 reference, check its constants against the native tables, and compare every
-primitive input across all19 squeezes with a separate rate-two block scheduler.
-They retain canonical scalar/map boundaries, empty/even/odd padding and its
-logical-history alias, unsqueezed final c/unabsorbed G, and mutation/refusal
-controls. Exact counts are `52+ceil(35m/2)` for Pallas and `52+ceil(19m/2)` for
-Vesta; the test traces use syntactic points and do not assert the IPA equation.
+The maintained [fold controls](../formal/kagemusha_fold/README.md) retain the
+ten polynomial cases, including exact leading coefficients and degrees through
+four rounds, dependent generator logs, the short-only and missing-shift
+counterexamples, and k16 comparison arithmetic. The exhaustive F17 control
+checks all 14,739 one-round raw-variable tapes across three generator choices
+without conditioning away earlier exceptional events.
+
+The selected transcript controls now model the committed input digest and D
+opening, preserving the unchanged independent RP57 reference. They reconstruct
+the exact diagnostic k4 parameter bytes for the Rust prelude KATs and compare
+every primitive edge with an independent block scheduler. The challenge sponge
+uses 54 primitive calls across 19 squeezes on either curve. The separate Exact
+input digest uses `36+floor(35m/2)` calls for Pallas and `20+floor(19m/2)` for
+Vesta. This Exact API refuses WrapperVesta; the separate bounded Terminal
+controls below do not supply native TerminalFrame admission. Canonical field maps, `nz` round roles,
+context/mask/D binding, padding aliases, the unsqueezed final c and unabsorbed
+full-group G suffix have explicit
+controls. These are syntactic traces, not a native fold proof or an IPA-equation
+check. Missing and changed source roles still refuse; the semantic migration
+and new source joins were independently reviewed before adopting the manifests.
+
 Nine further controls use a finite partial-permutation model with explicit
 private tapes and both endpoints of every public attempt. Exhaustive counts
 cover 83,521 single-edge tapes and 2,187 carried-capacity two-edge tapes, including
@@ -942,19 +964,56 @@ inside one counted query. The conservative first-hit event yields
 
 for B fresh paths, H private edges and Q public attempts under independent
 uniform private salt/capacity tapes conditional on disclosed words. The common
-initial capacity must be fixed before or independent of those tapes, and public
-endpoints must be independent of hidden salts/capacities given the disclosures.
+initial capacity must be fixed before or independent of those tapes conditional
+on disclosed words, and public endpoints must be independent of hidden
+salts/capacities given the disclosures.
 Negative controls deliberately violate each hidden-state or causal premise.
 The model cannot infer these independence assumptions from caller values, and
 this finite exercise does not instantiate a random-permutation coupling for the
 actual fixed RP57 implementation.
 
-The current captured result is `c12-ideal-fold-maintained-execution-1/result.json`
-(SHA `79f581777c5bd2ce71213ccfd679cff4221208f224a0f48d746bbee7e84ecbef`):
-29 tests pass with 32 unchanged source/tool pins. These finite algebra,
-transcript and ideal-model checks generate no native proof or key and supply
-neither a general theorem proof nor the independent-tape premise. C12 remains
-open.
+The prior Exact-migration capture is
+`retained-fold-migration-integration-20261024-1/canonical-run-1/result.json`
+(SHA `50696e893881f26a350beb4f90b4bf9ea19933eb2fcb2c0a452107667e7eec4d`):
+all 34 controls passed in 8.888 seconds, with zero skips, exact reported test IDs
+and all 41 selected source/runtime
+inputs unchanged. Independent reviews preserve all 155 original check/failure
+sites; that capture has 200 sites. No legacy transcript API remains.
+The earlier 29-test receipt is historical; the pre-migration
+30-method audit retained two source-join failures and a transcript class setup
+error, not a current passing suite. These finite algebra, transcript and
+ideal-model checks generate no native proof and supply neither a general
+theorem proof nor the independent-tape premise. The ideal model introduces no
+new assumption for the selected C12 argument. C12 remains open.
+
+The bounded Terminal controls now use unchanged full reference verification of
+actual 800-byte Direct69 k7 proofs under existing official parameter pins. A
+closed diagnostic source retains exact originals before deriving its raw prefix
+and own opening. Two valid proofs with the same frame, key and initial raw value
+have different own openings; the own-slot digest binding separates them. The k7
+opening is normalized with nine leading zeros. Other frame claims remain syntax,
+and the zero-constraint relation supplies no A predicate, burn authorization,
+installed catalog or native k16 admission. The separate Terminal digest takes
+31 RP57 calls and its downstream syntactic challenge trace takes 54; upstream
+full verification is additional work.
+
+The expanded canonical capture is
+`terminal-frame-controls-integration-20261024-1/canonical-run-1/result.json`
+(SHA `7e2b4d549b4c0bf1c0a4b5bae11f1f456a7000a1b77d75e8c568d94b95cd204f`): all 47 tests pass in 165.754 seconds,
+zero skips, with 56 selected source/runtime inputs unchanged.
+The prior 34 methods and 200 check sites remain byte-for-byte preserved;
+13 new methods bring the total to 275 assertion/failure sites. The raw-zero
+versus raw-Fp comparison is explicitly synthetic, outside admitted sources.
+An earlier run retained 46 passes and one temporary-directory error when the
+volume filled; the same frozen test bytes subsequently passed.
+
+The native Receive fixture separately replaces an unconditional generic-API
+refusal with an unchanged-transcript response satisfying the three-input
+equation. It requires the closed four-input owner to reject `FoldEquation`
+and replay its original witness. Source/algebra review and formatting pass;
+that new native mutation has not been compiled or executed. These controls
+close neither A/circuit refinement, fixed-RP57 privacy, M3 nor release
+qualification.
 
 ### Conditional joint view in the full-prefix model
 

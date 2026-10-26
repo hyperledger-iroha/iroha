@@ -5,7 +5,7 @@
 //! TODO: complete nested offline decode/verifier funding and global tracker/relay integration
 //! remain separate. Historical bootstrap verification is not fresh committee readiness.
 
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::Instant;
 
 use iroha_crypto::Hash;
 use iroha_data_model::{NetworkId, isi::sumeragi_amx::RegisterAmxParticipantV1};
@@ -30,7 +30,6 @@ type OriginalPair = (zeroize::Zeroizing<Vec<u8>>, zeroize::Zeroizing<Vec<u8>>);
 #[norito_schema(name = "iroha_deploy::bootstrap::AmxSourceIdentityV1")]
 struct Identity {
     network_name: String,
-    generation: u64,
     network_id: NetworkId,
     chain_id: String,
     genesis_hash: Hash,
@@ -40,7 +39,7 @@ struct Identity {
     successor_file: LocalFileSnapshot,
 }
 
-/// Borrow the caller's authenticated release and original private attachment directory.
+/// Borrow the caller's authenticated network and original private attachment directory.
 pub struct AmxSourceSelection<'a> {
     pub(crate) bootstrap: &'a AuthenticatedBootstrap,
     pub(crate) attachment: &'a PrivateDirectory,
@@ -62,7 +61,9 @@ impl AmxSourceSelection<'_> {
         spec: &PrivateRootSpec,
         may_create: bool,
     ) -> Result<ParentBootstrapSources> {
-        self.retain_with(spec, may_create, &CheckpointTransport::new(), unix_ms)
+        self.retain_with(spec, may_create, &CheckpointTransport::new(), || {
+            Ok(Instant::now())
+        })
     }
 
     fn retain_with(
@@ -70,16 +71,16 @@ impl AmxSourceSelection<'_> {
         spec: &PrivateRootSpec,
         may_create: bool,
         transport: &CheckpointTransport,
-        now: impl Fn() -> Result<u64>,
+        now: impl Fn() -> Result<Instant>,
     ) -> Result<ParentBootstrapSources> {
         spec.validate()
             .map_err(|_| BootstrapError::Invalid("invalid selected AMX private scope"))?;
-        self.require_live_release(spec, now()?)?;
+        self.require_selected_parent(spec, now()?)?;
         if let Some(directory) = self.attachment.open_child_optional(DIRECTORY)? {
             let original = ParentBootstrapSources::open(directory, self.bootstrap, spec)?;
-            // DEP3 restores admission after retained authentication outlives its release.
+            // DEP3 restores admission after retained authentication outlives its original acquisition deadline.
             #[cfg(not(all(test, sumeragi_deploy_mutation = "DEP3")))]
-            self.require_live_release(spec, now()?)?;
+            self.require_selected_parent(spec, now()?)?;
             return Ok(original);
         }
         // DEP1 restores HTTP reconstruction of a lost published generation.
@@ -101,7 +102,7 @@ impl AmxSourceSelection<'_> {
         crate::genesis::amx::authenticate_global_sources(
             &self
                 .bootstrap
-                .release()
+                .metadata()
                 .chain_id
                 .parse()
                 .map_err(|_| BootstrapError::Invalid("invalid selected AMX chain"))?,
@@ -110,20 +111,19 @@ impl AmxSourceSelection<'_> {
             &successor,
         )
         .map_err(|_| BootstrapError::Invalid("original AMX global G1/H2 authentication failed"))?;
-        // DEP4 restores publication after acquisition outlives the original release.
+        // DEP4 restores publication after acquisition outlives the original acquisition deadline.
         #[cfg(not(all(test, sumeragi_deploy_mutation = "DEP4")))]
-        self.require_live_release(spec, now()?)?;
+        self.require_selected_parent(spec, now()?)?;
         // Keep one native directory and its actual files while deriving the local record.
         // No machine identity is added to the signed G1/H2 or private genesis instruction.
         let staging = self.attachment.create_child(STAGING)?;
         staging.write_atomic(G1, &genesis, PublishMode::CreateNew)?;
         staging.write_atomic(H2, &successor, PublishMode::CreateNew)?;
-        let release = self.bootstrap.release();
+        let metadata = self.bootstrap.metadata();
         let identity = Identity {
-            network_name: release.network_name.clone(),
-            generation: release.generation,
-            network_id: release.network_id,
-            chain_id: release.chain_id.clone(),
+            network_name: metadata.network_name.clone(),
+            network_id: metadata.network_id,
+            chain_id: metadata.chain_id.clone(),
             genesis_hash: Hash::new(&genesis),
             successor_hash: Hash::new(&successor),
             directory: staging.identity()?.local_parts(),
@@ -140,22 +140,21 @@ impl AmxSourceSelection<'_> {
         staging.write_atomic(RECORD, &record, PublishMode::CreateNew)?;
         staging.sync()?;
         #[cfg(not(all(test, sumeragi_deploy_mutation = "DEP4")))]
-        self.require_live_release(spec, now()?)?;
+        self.require_selected_parent(spec, now()?)?;
         let directory = staging.rename_to_sibling(DIRECTORY, PublishMode::CreateNew)?;
         let original = ParentBootstrapSources::open(directory, self.bootstrap, spec)?;
-        self.require_live_release(spec, now()?)?;
+        self.require_selected_parent(spec, now()?)?;
         Ok(original)
     }
 
-    fn require_live_release(&self, spec: &PrivateRootSpec, now_ms: u64) -> Result<()> {
-        let release = self.bootstrap.release();
-        if release.network_id != spec.parent_network_id
-            || now_ms < release.issued_at_ms
-            || now_ms >= release.expires_at_ms
+    fn require_selected_parent(&self, spec: &PrivateRootSpec, observed_at: Instant) -> Result<()> {
+        let metadata = self.bootstrap.metadata();
+        if metadata.network_id != spec.parent_network_id
+            || observed_at >= self.deadline
             || Instant::now() >= self.deadline
         {
             return Err(BootstrapError::Invalid(
-                "AMX sources require the original live selected parent release",
+                "AMX sources require the original selected parent and acquisition deadline",
             ));
         }
         Ok(())
@@ -179,15 +178,14 @@ impl ParentBootstrapSources {
             directory.open_retained_private(H2)?,
         ];
         let identity: Identity = decode(&directory.read(RECORD, MAX_RECORD)?, MAX_RECORD)?;
-        let release = bootstrap.release();
+        let metadata = bootstrap.metadata();
         let matches_parent = identity.network_id == spec.parent_network_id;
-        let matches_release = identity.network_name == release.network_name
-            && identity.generation == release.generation
-            && identity.network_id == release.network_id
-            && identity.chain_id == release.chain_id;
-        if !matches_parent || !matches_release {
+        let matches_metadata = identity.network_name == metadata.network_name
+            && identity.network_id == metadata.network_id
+            && identity.chain_id == metadata.chain_id;
+        if !matches_parent || !matches_metadata {
             return Err(BootstrapError::Invalid(
-                "retained AMX sources differ from selected parent generation",
+                "retained AMX sources differ from selected parent identity",
             ));
         }
         let original = Self {
@@ -237,7 +235,6 @@ impl ParentBootstrapSources {
         )?;
         let current: Identity = decode(&self.directory.read(RECORD, MAX_RECORD)?, MAX_RECORD)?;
         if current.network_name != self.identity.network_name
-            || current.generation != self.identity.generation
             || current.network_id != self.identity.network_id
             || current.chain_id != self.identity.chain_id
             || current.genesis_hash != self.identity.genesis_hash
@@ -364,14 +361,6 @@ impl ParentBootstrapSources {
         }
         Ok(())
     }
-}
-
-fn unix_ms() -> Result<u64> {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .ok()
-        .and_then(|value| u64::try_from(value.as_millis()).ok())
-        .ok_or(BootstrapError::Invalid("AMX source clock is unavailable"))
 }
 
 #[cfg(test)]

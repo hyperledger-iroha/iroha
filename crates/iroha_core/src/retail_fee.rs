@@ -468,9 +468,7 @@ fn retail_registry_preserves_original_json_scope_and_completed_malformed_diagnos
         };
         transaction
             .world
-            .parameters
-            .get_mut()
-            .set_parameter(Parameter::Custom(
+            .set_parameter_for_testing(Parameter::Custom(
                 empty
                     .clone()
                     .into_custom_parameter()
@@ -497,9 +495,7 @@ fn retail_registry_preserves_original_json_scope_and_completed_malformed_diagnos
         assert_eq!(registry(&transaction.world).unwrap(), Some(empty));
         transaction
             .world
-            .parameters
-            .get_mut()
-            .set_parameter(Parameter::Custom(parameter.clone()))
+            .set_parameter_for_testing(Parameter::Custom(parameter.clone()))
             .unwrap();
         // Typed JSON also charges its owned strings and vectors to total
         // allocation. Exercise that independent caller limit on the real registry.
@@ -544,9 +540,7 @@ fn retail_registry_preserves_original_json_scope_and_completed_malformed_diagnos
                 .to_string();
         transaction
             .world
-            .parameters
-            .get_mut()
-            .set_parameter(Parameter::Custom(malformed.clone()))
+            .set_parameter_for_testing(Parameter::Custom(malformed.clone()))
             .unwrap();
         let rejected = registry(&transaction.world).unwrap_err();
         assert!(

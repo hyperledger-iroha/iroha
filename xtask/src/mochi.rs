@@ -551,6 +551,10 @@ pub(crate) fn run_bundle_smoke(result: &MochiBundleResult) -> Result<(), Box<dyn
             &NativeBundleLayout::current().executable(&result.bundle_root, "kagami"),
         )?;
         drop(retained_bundle(result)?);
+        developer_smoke::publication_smoke::run(
+            &NativeBundleLayout::current().executable(&result.bundle_root, "kagami"),
+        )?;
+        drop(retained_bundle(result)?);
         developer_smoke::cold_start_smoke::run(
             &NativeBundleLayout::current().executable(&result.bundle_root, "kagami"),
         )?;
@@ -2395,17 +2399,14 @@ mod tests {
     }
     #[test]
     fn explicit_installed_profiles_are_canonical_and_covered_by_the_bundle_inventory() {
-        use iroha_crypto::{Algorithm, KeyPair};
         use iroha_deploy::bootstrap::{InstalledNetworkProfile, InstalledNetworkProfiles};
         let root = tempdir().unwrap();
         let profiles = InstalledNetworkProfiles::new(vec![
             InstalledNetworkProfile::new(
                 "fixture".into(),
-                KeyPair::from_seed(vec![21; 32], Algorithm::Ed25519)
-                    .public_key()
-                    .clone(),
-                7,
-                "https://release.example/checkpoint.nrt",
+                "https://network.example/",
+                "fixture-chain".into(),
+                369,
             )
             .unwrap(),
         ])

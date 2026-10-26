@@ -6,10 +6,21 @@
 
 use super::*;
 use crate::certified_originals_auth::{authenticate, require_permission};
-use crate::native_projection_response::{capacity, encode, native_committee_original_bytes};
+use crate::native_projection_response::{
+    NativeProjectionError, capacity, current_root_tip, encode, native_committee_original_bytes,
+};
 use iroha_core::{
-    state::AllocationBudget,
-    sumeragi::certified_chain::{CertifiedChain, QcVerification},
+    state::{AllocationBudget, StateReadOnly, StateViewError, WorldStateSnapshotError},
+    sumeragi::{
+        certified_chain::{CertifiedBlock, CertifiedChain, CommittedBlock},
+        finality::AttestationBuildError,
+    },
+};
+use iroha_data_model::{
+    block::consensus::SumeragiRootScope,
+    sumeragi::finality::{
+        NATIVE_FINALITY_MAX_BLOCK_BYTES, NATIVE_FINALITY_MAX_JOURNAL_BYTES, NativeFinalityLimits,
+    },
 };
 use iroha_torii_shared::resource_names_state::{
     NATIVE_RESOURCE_NAMES_STATE_MAX_BYTES_V1, NATIVE_RESOURCE_NAMES_STATE_ROUTE_PREFIX_V1,
@@ -17,6 +28,154 @@ use iroha_torii_shared::resource_names_state::{
     NativeResourceNamesStateRefV1,
 };
 const ROUTE: &str = "/v1/ledger/resource-names/{challenge}";
+
+// This helper is also exercised with exact three-frame limits (genesis, target
+// and parent), so a full historical certificate walk cannot regress unnoticed.
+fn current_names_tip(
+    view: &impl StateReadOnly,
+    height: u64,
+    root_scope: SumeragiRootScope,
+    limits: NativeFinalityLimits,
+) -> Result<CommittedBlock, Error> {
+    current_root_tip(view, height, root_scope, limits, unavailable).map_err(|error| {
+        let reason = match &error {
+            NativeProjectionError::ResponseLimit { .. } => "response_bound",
+            NativeProjectionError::Buffer(_) => "buffer",
+            NativeProjectionError::Encoding(_) => "encoding",
+            NativeProjectionError::RootScope(_) => "root_scope_read",
+            NativeProjectionError::History(_) => "history_or_certificate",
+            NativeProjectionError::Invalid(_) => "invalid_geometry",
+            NativeProjectionError::Unavailable(_) => "cut_or_root_mismatch",
+        };
+        refused("recent_tip", reason)
+    })
+}
+
+// Size the genesis proof from the same signed original the attestation's genesis
+// proof reads. `committed(1)` would walk every native frame from the tip down to
+// genesis first; the attestation's own walk still authenticates genesis R via H2.
+fn genesis_sizing_frame<V: StateReadOnly>(
+    chain: &CertifiedChain<'_, V>,
+) -> Result<CommittedBlock, Error> {
+    chain
+        .certified(1)
+        .map(CertifiedBlock::into_committed)
+        .map_err(|_| refused("genesis", "source_unavailable"))
+}
+
+fn require_status_height(
+    status: &iroha_data_model::sumeragi::SumeragiStatus,
+    height: u64,
+) -> Result<(), Error> {
+    if status.applied_height != height || status.committed_height != height {
+        return Err(refused("driver", "status_height_mismatch"));
+    }
+    Ok(())
+}
+
+fn attestation_refusal_reason(error: &AttestationBuildError) -> &'static str {
+    match error {
+        AttestationBuildError::EmptyState => "empty_state",
+        AttestationBuildError::HeightOverflow => "height_overflow",
+        AttestationBuildError::HeightIsNotDurableTip { .. } => "tip_changed",
+        AttestationBuildError::StatusHeightMismatch => "status_height_mismatch",
+        AttestationBuildError::RestartRequired => "restart_required",
+        AttestationBuildError::InvalidStatus => "invalid_status",
+        AttestationBuildError::InvalidSigner => "invalid_signer",
+        AttestationBuildError::FinalityProof(_) => "tip_proof",
+        AttestationBuildError::GenesisFinalityProof(_) => "genesis_proof",
+        AttestationBuildError::InvalidBody(_) => "invalid_body",
+        AttestationBuildError::ClockUnavailable => "clock_unavailable",
+        AttestationBuildError::Signing(_) => "signing",
+    }
+}
+
+fn snapshot_refusal_reason(error: &WorldStateSnapshotError) -> &'static str {
+    match error {
+        WorldStateSnapshotError::Encoding(_) => "encoding",
+        WorldStateSnapshotError::View(_) => "view",
+        WorldStateSnapshotError::Acquisition(_) => "overlay_acquisition",
+        WorldStateSnapshotError::Allocation(_) => "allocation",
+        WorldStateSnapshotError::Buffer(_) => "buffer",
+        WorldStateSnapshotError::Allocator(_) => "allocator",
+        WorldStateSnapshotError::DecodeControl(_) => "decode_control",
+        WorldStateSnapshotError::RootScopeRead(_) => "root_scope_read",
+        WorldStateSnapshotError::Amx(_) => "amx_original",
+        WorldStateSnapshotError::Catalog(_) => "catalog_original",
+        WorldStateSnapshotError::CatalogProjection(_) => "catalog_projection",
+        WorldStateSnapshotError::CutChanged { .. } => "cut_changed",
+        WorldStateSnapshotError::ZkX509Retention(_) => "zk_x509_retention",
+        WorldStateSnapshotError::Invalid(_) => "invalid_cut_or_original",
+    }
+}
+
+fn refused(stage: &'static str, reason: &'static str) -> Error {
+    // Fixed classifications only: no private originals, account, request,
+    // challenge, URL, credentials or arbitrary error text enter diagnostics.
+    iroha_logger::warn!(stage, reason, "native resource names current cut refused");
+    unavailable()
+}
+
+// Only the original physical publisher can wake this acquisition attempt.
+// No failed StateView or World overlay is retained while parked. Acquire the
+// immutable original before proof work; every retry retains the same deadline
+// and finite budget, and never retries invalid source content or a changed cut.
+fn snapshot_after_busy<T>(
+    budget: &AllocationBudget,
+    deadline: std::time::Instant,
+    mut capture: impl FnMut() -> Result<T, WorldStateSnapshotError>,
+) -> Result<T, WorldStateSnapshotError> {
+    use iroha_allocation::release::ReleaseRegistration;
+    use std::task::{Context, Waker};
+
+    // Admit the physical waiter before the first snapshot attempt. If it cannot
+    // fit, preserve the original one-attempt behavior and its exact refusal.
+    let mut registration = budget
+        .try_reserve(ReleaseRegistration::allocation_layout())
+        .ok()
+        .and_then(|mut prepaid| ReleaseRegistration::from_reservation(&mut prepaid).ok());
+    if let Some(registration) = &mut registration {
+        registration.bind_thread(std::thread::current());
+    }
+    loop {
+        let error = match capture() {
+            Ok(value) => return Ok(value),
+            Err(error) => error,
+        };
+        let release = match &error {
+            WorldStateSnapshotError::Acquisition(mv::storage::AdmittedStorageError::Busy {
+                release,
+                ..
+            })
+            | WorldStateSnapshotError::View(StateViewError::Busy(release)) => release,
+            _ => return Err(error),
+        };
+        let Some(registration) = &mut registration else {
+            return Err(error);
+        };
+        let mut context = Context::from_waker(Waker::noop());
+        loop {
+            let Some(remaining) = deadline.checked_duration_since(std::time::Instant::now()) else {
+                registration.cancel();
+                return Err(error);
+            };
+            if remaining.is_zero() {
+                registration.cancel();
+                return Err(error);
+            }
+            if registration.poll_wait(release, &mut context).is_ready() {
+                registration.cancel();
+                break;
+            }
+            // The registration wakes this exact blocking worker. Spurious
+            // wakes recheck the same release; neither wait nor retry resets time.
+            std::thread::park_timeout(remaining);
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(error);
+        }
+    }
+}
 
 /// Full-original carrier requires real native signed read authority; API-token access alone never suffices.
 pub async fn handler(
@@ -39,6 +198,11 @@ async fn handle(
     uri: Uri,
     remote: std::net::SocketAddr,
 ) -> Result<AxResponse, Error> {
+    // Reuse the existing query admission allowance, measured once at route
+    // entry. The caller's own request/freshness deadline is never extended.
+    let snapshot_deadline = std::time::Instant::now()
+        .checked_add(query_admission_remaining(&app))
+        .ok_or_else(capacity)?;
     let principal = validate_api_token(app.as_ref(), &headers)?.authenticated_principal();
     let challenge = validate_request_target(&headers, &method, &uri, &challenge_literal)?;
     let account = authenticate(&app, &headers, &method, &uri, &[])?;
@@ -61,18 +225,12 @@ async fn handle(
     let max_response = app
         .torii_proxy_max_response_bytes
         .min(NATIVE_RESOURCE_NAMES_STATE_MAX_BYTES_V1);
-    let driver = app.sumeragi.as_ref().ok_or_else(unavailable)?;
-    if driver.restart_required() {
-        return Err(unavailable());
-    }
-    let status = driver.status_dto().ok_or_else(unavailable)?;
-    if status.unanchored || status.abstaining || status.halted.is_some() {
-        return Err(unavailable());
-    }
+    let driver = app
+        .sumeragi
+        .as_ref()
+        .ok_or_else(|| refused("driver", "absent"))?
+        .clone();
     let identity = driver.identity().clone();
-    if status.signer.as_ref() != Some(identity.node_id.public_key()) {
-        return Err(unavailable());
-    }
     let fingerprint = iroha_crypto::Hash::new_from_chunks(&[
         app.build_status.version.as_bytes(),
         app.build_status.git_commit_sha.as_bytes(),
@@ -83,25 +241,65 @@ async fn handle(
         admission,
         "native resource names state worker failed",
         move || {
-            let view = state.view();
-            let height = u64::try_from(view.height()).map_err(|_| unavailable())?;
+            let _memory = memory;
+            // Retain the exact certified World and its immutable source view
+            // before certificate work. The physical World writer is released
+            // by this capture, so later commits cannot split proof and rows.
+            let captured = snapshot_after_busy(&budget, snapshot_deadline, || {
+                state.capture_native_resource_names_snapshot_v1(&capture_authority, &budget)
+            })
+            .map_err(|error| refused("snapshot", snapshot_refusal_reason(&error)))?;
+            let view = captured.view();
+            let height =
+                u64::try_from(view.height()).map_err(|_| refused("view", "height_overflow"))?;
             if height < 2 {
-                return Err(unavailable());
+                return Err(refused("view", "no_certified_tip"));
             }
-            let chain = CertifiedChain::new(&view).map_err(|_| unavailable())?;
-            let certified = chain.certified(height).map_err(|_| unavailable())?;
-            if certified.verification() != QcVerification::Verified {
-                return Err(unavailable());
+            // Sample the actual driver after this worker opens its immutable
+            // view, rather than before a potentially long blocking-worker queue.
+            // A publication race still refuses; the attestation builder repeats
+            // the complete identity, instance and height checks after proof work.
+            if driver.restart_required() {
+                return Err(refused("driver", "restart_required"));
             }
-            let tip = certified.into_committed();
+            let status = driver
+                .status_dto()
+                .ok_or_else(|| refused("driver", "status_absent"))?;
+            if status.unanchored || status.abstaining || status.halted.is_some() {
+                return Err(refused("driver", "not_active"));
+            }
+            if status.signer.as_ref() != Some(identity.node_id.public_key()) {
+                return Err(refused("driver", "signer_mismatch"));
+            }
+            require_status_height(&status, height)?;
+            let chain =
+                CertifiedChain::new(view).map_err(|_| refused("chain", "source_unavailable"))?;
+            // The original State execution ancestry supplies the target's
+            // parent schedule. Reverify the exact target quorum and signed
+            // availability, without replaying every historical quorum for each
+            // current read. Keep one finite source/decode owner through output.
+            let unit = bytes / 8;
+            let limits = NativeFinalityLimits {
+                block_bytes: unit.min(NATIVE_FINALITY_MAX_BLOCK_BYTES),
+                journal_bytes: (unit * 2).min(NATIVE_FINALITY_MAX_JOURNAL_BYTES),
+                block_count: 8,
+                allocated_bytes: unit * 4,
+            };
+            let decode_limits = limits.decode_limits().map_err(|_| capacity())?;
+            let _source_charge = budget
+                .try_reserve_bytes(limits.journal_bytes + limits.allocated_bytes)
+                .map_err(|_| capacity())?;
+            let tip = norito::core::with_decode_limits_scope(decode_limits, || {
+                current_names_tip(view, height, chain.root_scope(), limits)
+            })?;
             // Proof frame copies and their finite committee/signer vectors are
             // prepaid from the same operation budget before the existing builder.
-            let genesis = chain.committed(1).map_err(|_| unavailable())?;
+            let genesis = genesis_sizing_frame(&chain)?;
             let proof_bytes = norito::canonical_frame_len(genesis.block().as_ref())
                 .and_then(|len| {
                     norito::canonical_frame_len(tip.block().as_ref()).map(|tip_len| (len, tip_len))
                 })
-                .map_err(|_| unavailable())?;
+                .map_err(|_| refused("proof_backing", "invalid_frame"))?;
             let genesis_committee = &genesis.commitment().schedule.current.committee;
             let tip_committee = &tip.commitment().schedule.current.committee;
             let genesis_storage = native_committee_original_bytes(
@@ -135,7 +333,7 @@ async fn handle(
                 .try_reserve_bytes(proof_bytes)
                 .map_err(|_| capacity())?;
             let attestation = iroha_core::sumeragi::finality::build_attestation(
-                &view,
+                view,
                 status,
                 &identity,
                 fingerprint,
@@ -143,62 +341,55 @@ async fn handle(
                 challenge,
                 &signer,
             )
-            .map_err(|_| unavailable())?;
+            .map_err(|error| refused("attestation", attestation_refusal_reason(&error)))?;
             drop(chain);
-            drop(view);
-            let mut body = state
-                .with_native_resource_names_snapshot_v1(
-                    &tip,
-                    &capture_authority,
-                    &budget,
-                    |snapshot, originals, keys, names| {
-                        // Every retained canonical record buffer and borrowed row is
-                        // prepaid from the same aggregate operation pool as the snapshot/output.
-                        let mut wires =
-                            iroha_allocation::ChargedBuffer::new(originals.len(), &budget)
-                                .map_err(|error| error.to_string())?;
-                        for (_, value) in originals {
-                            let wire = super::native_projection_response::encode_canonical(
-                                *value,
-                                1024 * 1024,
-                                &budget,
-                            )
+            let mut body = captured
+                .with_native_resource_names_snapshot_v1(&tip, |snapshot, originals, keys, names| {
+                    // Every retained canonical record buffer and borrowed row is
+                    // prepaid from the same aggregate operation pool as the snapshot/output.
+                    let mut wires = iroha_allocation::ChargedBuffer::new(originals.len(), &budget)
+                        .map_err(|error| error.to_string())?;
+                    for (_, value) in originals {
+                        let wire = super::native_projection_response::encode_canonical(
+                            *value,
+                            1024 * 1024,
+                            &budget,
+                        )
+                        .map_err(|error| error.to_string())?;
+                        wires.push_reserved(wire);
+                    }
+                    let mut aliases =
+                        iroha_allocation::ChargedBuffer::new(originals.len(), &budget)
                             .map_err(|error| error.to_string())?;
-                            wires.push_reserved(wire);
+                    for ((key, _), wire) in originals.iter().zip(wires.as_slice()) {
+                        aliases.push_reserved(NativeAssetAliasBindingOriginalRefV1::new(
+                            key,
+                            wire.as_slice(),
+                        ));
+                    }
+                    let mut sns = iroha_allocation::ChargedBuffer::new(names.len(), &budget)
+                        .map_err(|error| error.to_string())?;
+                    for (key, value) in names {
+                        if value.len() > 1024 * 1024 {
+                            return Err("native SNS original exceeds bound".into());
                         }
-                        let mut aliases =
-                            iroha_allocation::ChargedBuffer::new(originals.len(), &budget)
-                                .map_err(|error| error.to_string())?;
-                        for ((key, _), wire) in originals.iter().zip(wires.as_slice()) {
-                            aliases.push_reserved(NativeAssetAliasBindingOriginalRefV1::new(
-                                key,
-                                wire.as_slice(),
-                            ));
-                        }
-                        let mut sns = iroha_allocation::ChargedBuffer::new(names.len(), &budget)
-                            .map_err(|error| error.to_string())?;
-                        for (key, value) in names {
-                            if value.len() > 1024 * 1024 {
-                                return Err("native SNS original exceeds bound".into());
-                            }
-                            sns.push_reserved(NativeDataspaceSnsOriginalRefV1::new(
-                                key,
-                                value.as_slice(),
-                            ));
-                        }
-                        let payload = NativeResourceNamesStateRefV1::new(
-                            &attestation,
-                            snapshot,
-                            aliases.as_slice(),
-                            keys,
-                            sns.as_slice(),
-                        );
-                        encode(&payload, format, max_response, &budget)
-                            .map_err(|_| "native names state serialization refused".to_owned())
-                    },
-                )
-                .map_err(|_| unavailable())?;
-            body.memory = Some(memory);
+                        sns.push_reserved(NativeDataspaceSnsOriginalRefV1::new(
+                            key,
+                            value.as_slice(),
+                        ));
+                    }
+                    let payload = NativeResourceNamesStateRefV1::new(
+                        &attestation,
+                        snapshot,
+                        aliases.as_slice(),
+                        keys,
+                        sns.as_slice(),
+                    );
+                    encode(&payload, format, max_response, &budget)
+                        .map_err(|_| "native names state serialization refused".to_owned())
+                })
+                .map_err(|error| refused("snapshot", snapshot_refusal_reason(&error)))?;
+            body.memory = Some(_memory);
             let content_type = match format {
                 ResponseFormat::Norito => "application/x-norito",
                 ResponseFormat::Json => "application/json",
@@ -269,6 +460,18 @@ fn unavailable() -> Error {
 }
 
 #[cfg(test)]
+#[path = "resource_names_state/recent_tip_tests.rs"]
+mod recent_tip_tests;
+
+#[cfg(test)]
+#[path = "resource_names_state/retained_cut_tests.rs"]
+mod retained_cut_tests;
+
+#[cfg(test)]
+#[path = "resource_names_state/snapshot_wait_tests.rs"]
+mod snapshot_wait_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     #[test]
@@ -297,6 +500,62 @@ mod tests {
         ));
         assert_eq!(
             finalize(Err(unavailable())).status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+    }
+    #[test]
+    fn names_refusal_diagnostics_preserve_fixed_service_rejection() {
+        assert_eq!(
+            attestation_refusal_reason(&AttestationBuildError::StatusHeightMismatch),
+            "status_height_mismatch"
+        );
+        assert_eq!(
+            attestation_refusal_reason(&AttestationBuildError::Signing("private input".into())),
+            "signing"
+        );
+        assert_eq!(
+            snapshot_refusal_reason(&WorldStateSnapshotError::CutChanged {
+                requested_height: 2,
+                observed_height: 3,
+            }),
+            "cut_changed"
+        );
+        assert_eq!(
+            snapshot_refusal_reason(&WorldStateSnapshotError::Invalid("private original".into())),
+            "invalid_cut_or_original"
+        );
+        let retained_refusal = iroha_allocation::ChargedBuffer::<u8>::new(
+            1,
+            &iroha_allocation::AllocationBudget::new(0),
+        )
+        .err()
+        .expect("unfunded retained State refuses");
+        for (error, reason) in [
+            (
+                WorldStateSnapshotError::Catalog(
+                    iroha_data_model::nexus::NexusCatalogValidationError::EmptyTransition,
+                ),
+                "catalog_original",
+            ),
+            (
+                WorldStateSnapshotError::CatalogProjection(
+                    iroha_core::state::LaneLifecycleError::Storage("private original".into()),
+                ),
+                "catalog_projection",
+            ),
+            (
+                WorldStateSnapshotError::ZkX509Retention(retained_refusal.into()),
+                "zk_x509_retention",
+            ),
+        ] {
+            assert_eq!(snapshot_refusal_reason(&error), reason);
+            assert_eq!(
+                finalize(Err(refused("snapshot", reason))).status(),
+                StatusCode::SERVICE_UNAVAILABLE
+            );
+        }
+        assert_eq!(
+            finalize(Err(refused("snapshot", "cut_changed"))).status(),
             StatusCode::SERVICE_UNAVAILABLE
         );
     }

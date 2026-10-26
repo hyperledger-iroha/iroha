@@ -5,6 +5,83 @@ fn runtime_catalog_invalid(reason: impl std::fmt::Display) -> LaneLifecycleError
     LaneLifecycleError::RuntimeCatalog(reason.to_string())
 }
 
+/// Observe the actual model operation before its protocol scopes begin.
+/// Original local resource refusals keep their owner after those scopes retire;
+/// semantic errors, intrinsic bounds and foreign scoped errors remain rejection.
+pub(crate) fn nexus_catalog_validation_attempt<T>(
+    operation: impl FnOnce() -> Result<T, iroha_data_model::nexus::NexusCatalogValidationError>,
+) -> Result<
+    T,
+    crate::execution_attempt::ExecutionAttemptError<
+        iroha_data_model::nexus::NexusCatalogValidationError,
+    >,
+> {
+    use crate::execution_attempt::{ExecutionAttemptError, canonical_decode_attempt_error};
+    use iroha_data_model::nexus::NexusCatalogValidationError;
+
+    match norito::core::classify_decode_attempt(|| match operation() {
+        Ok(value) => Ok(Ok(value)),
+        Err(error) => match error.into_decode_error() {
+            Ok(original) => Err(original),
+            Err(completed) => Ok(Err(completed)),
+        },
+    }) {
+        Ok(Ok(value)) => Ok(value),
+        Ok(Err(completed)) => Err(ExecutionAttemptError::Rejected(completed)),
+        Err(original) => Err(canonical_decode_attempt_error(original, |original| {
+            NexusCatalogValidationError::Codec(original.into_error())
+        })),
+    }
+}
+
+/// Preserve model codec ownership before a lifecycle diagnostic is rendered.
+fn runtime_catalog_try<T>(
+    operation: impl FnOnce() -> Result<T, iroha_data_model::nexus::NexusCatalogValidationError>,
+) -> Result<T, LaneLifecycleError> {
+    nexus_catalog_validation_attempt(operation).map_err(|error| match error {
+        crate::execution_attempt::ExecutionAttemptError::Deferred(original) => {
+            LaneLifecycleError::ParameterDeferred(original)
+        }
+        crate::execution_attempt::ExecutionAttemptError::Rejected(completed) => {
+            runtime_catalog_invalid(completed)
+        }
+    })
+}
+
+/// Reconstruct the actual registry while retaining original local codec failures.
+/// The observer begins before the loader's bounded parser and writer scopes.
+fn runtime_catalog_manifest_registry(
+    baseline: &LaneManifestRegistry,
+    additions: &[iroha_data_model::nexus::RuntimeLaneManifestV1],
+    lanes: &LaneCatalog,
+    dataspaces: &DataSpaceCatalog,
+    governance: &iroha_config::parameters::actual::GovernanceCatalog,
+) -> Result<LaneManifestRegistry, LaneLifecycleError> {
+    use crate::execution_attempt::{ExecutionAttemptError, canonical_decode_attempt_error};
+    use crate::governance::manifest::LaneManifestError;
+
+    match norito::core::classify_decode_attempt(|| {
+        match baseline.with_runtime_additions(additions, lanes, dataspaces, governance) {
+            Ok(registry) => Ok(Ok(registry)),
+            Err(error) => match error.into_decode_error() {
+                Ok(original) => Err(original),
+                Err(completed) => Ok(Err(completed)),
+            },
+        }
+    }) {
+        Ok(Ok(registry)) => Ok(registry),
+        Ok(Err(completed)) => Err(runtime_catalog_invalid(completed)),
+        Err(original) => match canonical_decode_attempt_error(original, |original| {
+            LaneManifestError::Codec(original.into_error())
+        }) {
+            ExecutionAttemptError::Deferred(original) => {
+                Err(LaneLifecycleError::ParameterDeferred(original))
+            }
+            ExecutionAttemptError::Rejected(completed) => Err(runtime_catalog_invalid(completed)),
+        },
+    }
+}
+
 /// Read the protected cumulative catalog without treating malformed state as absent.
 pub(crate) fn runtime_catalog_from_world(
     world: &impl WorldReadOnly,
@@ -23,8 +100,7 @@ fn runtime_catalog_from_parameters(
     else {
         return Ok(None);
     };
-    NexusRuntimeCatalogV1::from_custom_parameter(custom)
-        .map_err(runtime_catalog_invalid)?
+    runtime_catalog_try(|| NexusRuntimeCatalogV1::from_custom_parameter(custom))?
         .map(Some)
         .ok_or_else(|| {
             runtime_catalog_invalid("protected runtime catalog parameter identity mismatch")
@@ -36,9 +112,8 @@ pub(crate) fn runtime_catalog_root_from_world(
     world: &impl WorldReadOnly,
 ) -> Result<Option<Hash>, LaneLifecycleError> {
     runtime_catalog_from_world(world)?
-        .map(|catalog| catalog.canonical_hash())
+        .map(|catalog| runtime_catalog_try(|| catalog.canonical_hash()))
         .transpose()
-        .map_err(runtime_catalog_invalid)
 }
 
 impl StateView<'_> {
@@ -63,9 +138,7 @@ pub(crate) fn runtime_catalog_dataspaces(
     let Some(runtime) = runtime else {
         return Ok(baseline.clone());
     };
-    runtime
-        .validate_structure()
-        .map_err(runtime_catalog_invalid)?;
+    runtime_catalog_try(|| runtime.validate_structure())?;
     if runtime.baseline_dataspaces_hash != iroha_data_model::nexus::dataspace_catalog_hash(baseline)
     {
         return Err(runtime_catalog_invalid(
@@ -174,9 +247,7 @@ fn runtime_catalog_transition_dataspaces_from_parameters(
     pending: &iroha_data_model::nexus::NexusRuntimeCatalogV1,
     plan: &iroha_data_model::nexus::LaneLifecyclePlan,
 ) -> Result<DataSpaceCatalog, LaneLifecycleError> {
-    pending
-        .validate_structure()
-        .map_err(runtime_catalog_invalid)?;
+    runtime_catalog_try(|| pending.validate_structure())?;
     if plan.additions.is_empty() || !plan.retire.is_empty() {
         return Err(runtime_catalog_invalid(
             "runtime catalog transition must add lanes without retiring existing lanes",
@@ -264,6 +335,39 @@ fn runtime_catalog_transition_dataspaces_from_parameters(
         ));
     }
     runtime_catalog_dataspaces(&old_nexus.configured_dataspace_catalog, Some(pending))
+}
+
+/// Admit both protected successors before any catalog, parameter or geometry mutation.
+/// The second successor is rebound to the exact original retained source; an intermediate
+/// graph is never published, and every original charge is released on either refusal.
+fn prepare_runtime_catalog_parameters(
+    current: &crate::pipeline_gas_policy::RetainedStateParameters,
+    runtime: &iroha_data_model::parameter::CustomParameter,
+    native: &iroha_data_model::parameter::CustomParameter,
+    budget: &iroha_allocation::AllocationBudget,
+) -> Result<crate::pipeline_gas_policy::PreparedParameters, LaneLifecycleError> {
+    use crate::pipeline_gas_policy::{ParameterIngressAttemptError, ParameterIngressError};
+    ParameterIngressAttemptError::observe(|| {
+        let first = current.prepare_custom_parameter(runtime, budget)?;
+        let intermediate = first
+            .into_successor(current, budget)
+            .map_err(|(_prepared, original)| ParameterIngressError::from(original))?;
+        let second = intermediate.prepare_custom_parameter(native, budget)?;
+        let next = second
+            .into_successor(&intermediate, budget)
+            .map_err(|(_prepared, original)| ParameterIngressError::from(original))?;
+        current
+            .prepare_admitted(next, budget)
+            .map_err(|(_next, original)| ParameterIngressError::from(original))
+    })
+    .map_err(|actual| {
+        match crate::state::parameter_ingress_attempt_error(actual, runtime_catalog_invalid) {
+            crate::execution_attempt::ExecutionAttemptError::Deferred(original) => {
+                LaneLifecycleError::ParameterDeferred(original)
+            }
+            crate::execution_attempt::ExecutionAttemptError::Rejected(completed) => completed,
+        }
+    })
 }
 
 impl StateTransaction<'_, '_> {
@@ -355,11 +459,19 @@ impl StateTransaction<'_, '_> {
         &mut self,
         payload: &iroha_data_model::nexus::NexusCatalogTransitionV1,
     ) -> Result<(), LaneLifecycleError> {
+        let prepared = self.prepare_consensus_catalog_transition(payload)?;
+        self.publish_consensus_catalog_transition(prepared);
+        Ok(())
+    }
+
+    /// Construct the complete successor without mutating this transaction's cut.
+    fn prepare_consensus_catalog_transition(
+        &self,
+        payload: &iroha_data_model::nexus::NexusCatalogTransitionV1,
+    ) -> Result<PreparedConsensusCatalogTransition, LaneLifecycleError> {
         use iroha_data_model::nexus::NexusRuntimeCatalogV1;
 
-        payload
-            .validate_structure()
-            .map_err(runtime_catalog_invalid)?;
+        runtime_catalog_try(|| payload.validate_structure())?;
         crate::sumeragi::private_dataspace::ensure_parent_execution_separate(
             &self.world,
             payload
@@ -404,9 +516,8 @@ impl StateTransaction<'_, '_> {
         let previous_runtime = runtime_catalog_from_world(&self.world)?;
         let actual_runtime_hash = previous_runtime
             .as_ref()
-            .map(NexusRuntimeCatalogV1::canonical_hash)
-            .transpose()
-            .map_err(runtime_catalog_invalid)?;
+            .map(|catalog| runtime_catalog_try(|| catalog.canonical_hash()))
+            .transpose()?;
         if payload.expected_runtime_catalog_hash != actual_runtime_hash {
             return Err(runtime_catalog_invalid(
                 "expected runtime catalog root differs from current committed state",
@@ -483,9 +594,7 @@ impl StateTransaction<'_, '_> {
             .manifests
             .extend(payload.manifest_additions.iter().cloned());
         runtime.manifests.sort_by_key(|entry| entry.lane_id);
-        runtime
-            .validate_structure()
-            .map_err(runtime_catalog_invalid)?;
+        runtime_catalog_try(|| runtime.validate_structure())?;
         let plan = LaneLifecyclePlan {
             additions: payload.lane_additions.clone(),
             retire: Vec::new(),
@@ -497,10 +606,7 @@ impl StateTransaction<'_, '_> {
             &runtime,
             &plan,
         )?;
-        let runtime_parameter = runtime
-            .clone()
-            .into_custom_parameter()
-            .map_err(runtime_catalog_invalid)?;
+        let runtime_parameter = runtime_catalog_try(|| runtime.clone().into_custom_parameter())?;
         let mut prospective_nexus = self.nexus.clone();
         prospective_nexus.dataspace_catalog = updated_dataspaces.clone();
         ensure_lane_lifecycle_compliance_ready(
@@ -528,16 +634,13 @@ impl StateTransaction<'_, '_> {
             &lifecycle_update.lanes_to_reset,
             block_height,
         )?;
-        let updated_lane_manifests = Arc::new(
-            self.lane_manifests
-                .with_runtime_additions(
-                    &runtime.manifests,
-                    &prospective_nexus.lane_catalog,
-                    &prospective_nexus.dataspace_catalog,
-                    &prospective_nexus.governance,
-                )
-                .map_err(runtime_catalog_invalid)?,
-        );
+        let updated_lane_manifests = Arc::new(runtime_catalog_manifest_registry(
+            self.lane_manifests.as_ref(),
+            &runtime.manifests,
+            &prospective_nexus.lane_catalog,
+            &prospective_nexus.dataspace_catalog,
+            &prospective_nexus.governance,
+        )?);
         for addition in &payload.lane_additions {
             validate_runtime_catalog_committee(
                 &self.world,
@@ -557,47 +660,106 @@ impl StateTransaction<'_, '_> {
             })?,
         )?;
 
-        self.world.mark_axt_lane_incarnation_transitions(
+        let pool = self.world.sccp_committee_generations.allocation_budget();
+        let prepared = prepare_runtime_catalog_parameters(
+            self.world.parameters.get(),
+            &runtime_parameter,
+            &native_policy.into_custom_parameter(),
+            pool,
+        )?;
+        let parameters = prepared
+            .into_successor(self.world.parameters.get(), pool)
+            .map_err(|(_prepared, _original)| {
+                LaneLifecycleError::ParameterDeferred(
+                    ivm::error::ExecutionDeferral::LocalInvariantViolation.into(),
+                )
+            })?;
+        // All retained projections are constructed before the first mutation.
+        // TODO: admit the ordinary catalog/manifest/map/snapshot allocations through
+        // their concrete owners; this boundary only makes publication allocation-free.
+        let axt_authorization_transitioned = self.world.prepare_axt_lane_incarnation_transitions(
             &self.lane_incarnations,
             &lifecycle_update.updated_lane_incarnations,
         );
-        self.world.dataspace_catalog = prospective_nexus.dataspace_catalog.clone();
-        self.world
-            .parameters
-            .get_mut()
-            .set_parameter(iroha_data_model::parameter::Parameter::Custom(
-                runtime_parameter,
-            ))
-            .expect("runtime catalog is not a pipeline fee parameter");
-        self.world
-            .parameters
-            .get_mut()
-            .set_parameter(iroha_data_model::parameter::Parameter::Custom(
-                native_policy.into_custom_parameter(),
-            ))
-            .expect("native policy is not a pipeline fee parameter");
-        self.nexus = prospective_nexus;
-        self.lane_manifests = Arc::clone(&updated_lane_manifests);
-        self.lane_privacy_registry = Arc::new(LanePrivacyRegistry::from_manifest_registry(
+        let dataspace_catalog = prospective_nexus.dataspace_catalog.clone();
+        let lane_privacy_registry = LanePrivacyRegistry::try_from_manifest_registry(
             updated_lane_manifests.as_ref(),
-        ));
-        self.lane_incarnations = lifecycle_update.updated_lane_incarnations.clone();
-        self.lane_incarnation_lineage = lifecycle_update.updated_lane_incarnation_lineage.clone();
-        self.lane_incarnation_activation_heights = lifecycle_update
+            pool,
+        ).map_err(LaneLifecycleError::ParameterDeferred)?;
+        let lane_manifests = Arc::clone(&updated_lane_manifests);
+        let lane_incarnations = lifecycle_update.updated_lane_incarnations.clone();
+        let lane_incarnation_lineage = lifecycle_update.updated_lane_incarnation_lineage.clone();
+        let lane_incarnation_activation_heights = lifecycle_update
             .updated_lane_incarnation_activation_heights
             .clone();
-        self.pending_lane_lifecycle = Some(PendingAutoscaleLaneLifecycle {
+        let samples = self.canonical_runtime.autoscale_sample_history.iter().copied().collect();
+        let canonical_runtime = SnapshotNexusRuntime::from_nexus_with_autoscale_history(
+            &prospective_nexus,
+            &lane_incarnations,
+            &lane_incarnation_activation_heights,
+            &samples,
+            &lane_incarnation_lineage,
+        );
+        let canonical_runtime = (self.canonical_runtime.get() != &canonical_runtime)
+            .then_some(canonical_runtime);
+        let pending_lane_lifecycle = PendingAutoscaleLaneLifecycle {
             catalog_update: lifecycle_update,
             updated_lane_manifests,
+            updated_lane_privacy: lane_privacy_registry.clone(),
             plan,
             transition: PendingAutoscaleTransition::Manual,
             transition_height: block_height,
             expected_incarnation_root: payload.expected_incarnation_root,
             runtime_catalog: Some(runtime),
-        });
-        self.refresh_canonical_runtime();
-        Ok(())
+        };
+
+        Ok(PreparedConsensusCatalogTransition {
+            axt_authorization_transitioned,
+            dataspace_catalog,
+            parameters,
+            nexus: prospective_nexus,
+            lane_manifests,
+            lane_privacy_registry,
+            lane_incarnations,
+            lane_incarnation_lineage,
+            lane_incarnation_activation_heights,
+            pending_lane_lifecycle,
+            canonical_runtime,
+        })
     }
+
+    /// Move the complete successor into the same transaction without allocation.
+    fn publish_consensus_catalog_transition(&mut self, prepared: PreparedConsensusCatalogTransition) {
+        self.world.axt_authorization_transitioned = prepared.axt_authorization_transitioned;
+        self.world.dataspace_catalog = prepared.dataspace_catalog;
+        self.world.parameters.replace(prepared.parameters);
+        self.nexus = prepared.nexus;
+        self.lane_manifests = prepared.lane_manifests;
+        self.lane_privacy_registry = prepared.lane_privacy_registry;
+        self.lane_incarnations = prepared.lane_incarnations;
+        self.lane_incarnation_lineage = prepared.lane_incarnation_lineage;
+        self.lane_incarnation_activation_heights = prepared.lane_incarnation_activation_heights;
+        self.pending_lane_lifecycle = Some(prepared.pending_lane_lifecycle);
+        if let Some(canonical_runtime) = prepared.canonical_runtime {
+            self.canonical_runtime.replace(canonical_runtime);
+        }
+    }
+}
+
+/// Concrete outputs of catalog preparation, consumed immediately by its publisher.
+/// Parameter graph charges remain attached to the original retained successor.
+struct PreparedConsensusCatalogTransition {
+    axt_authorization_transitioned: BTreeSet<DataSpaceId>,
+    dataspace_catalog: DataSpaceCatalog,
+    parameters: RetainedStateParameters,
+    nexus: iroha_config::parameters::actual::Nexus,
+    lane_manifests: LaneManifestRegistryHandle,
+    lane_privacy_registry: LanePrivacyRegistry,
+    lane_incarnations: BTreeMap<LaneId, Hash>,
+    lane_incarnation_lineage: BTreeMap<LaneId, LaneIncarnationLineage>,
+    lane_incarnation_activation_heights: BTreeMap<LaneId, u64>,
+    pending_lane_lifecycle: PendingAutoscaleLaneLifecycle,
+    canonical_runtime: Option<SnapshotNexusRuntime>,
 }
 
 #[cfg(test)]

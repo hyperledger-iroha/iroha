@@ -10,7 +10,7 @@ use iroha_data_model::sorafs::moderation::{
     ModerationSignedScreeningResultV1, ModerationTrustPolicyV1,
 };
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
-use rand::{TryRngCore, rngs::OsRng};
+use rand::{TryRng, rngs::SysRng};
 use std::{
     collections::{BTreeMap, BTreeSet},
     ops::Range,
@@ -4130,7 +4130,7 @@ fn fill_nonzero_random(
     output: &mut [u8],
     label: &str,
 ) -> Result<(), ModerationQuarantineObjectError> {
-    let mut rng = OsRng;
+    let mut rng = SysRng;
     for _ in 0..4 {
         rng.try_fill_bytes(output).map_err(|error| {
             ModerationQuarantineObjectError::InvalidInput {

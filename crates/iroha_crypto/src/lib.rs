@@ -259,8 +259,12 @@ fn public_key_validation_call_count() -> usize {
 // ML-DSA-65 wire widths are stable protocol constants. Keep them available
 // when the optional native PQC backend is disabled so
 // parsers preserve the same framing and algorithm discriminant.
-const ML_DSA_65_PUBLIC_KEY_BYTES: usize = 1_952;
-const ML_DSA_65_SIGNATURE_BYTES: usize = 3_309;
+/// Encoded FIPS 204 ML-DSA-65 public key length.
+pub const ML_DSA_65_PUBLIC_KEY_BYTES: usize = 1_952;
+/// Encoded FIPS 204 ML-DSA-65 signature length.
+pub const ML_DSA_65_SIGNATURE_BYTES: usize = 3_309;
+/// Encoded FIPS 204 ML-DSA-65 expanded secret key length.
+pub const ML_DSA_65_SECRET_KEY_BYTES: usize = 4_032;
 /// Protocol-wide ceiling for the raw payload of any canonical public key.
 ///
 /// This excludes the one-byte algorithm tag stored by [`PublicKey`]. The
@@ -281,10 +285,19 @@ fn validate_public_key_structural_envelope(
     algorithm: Algorithm,
     payload: &[u8],
 ) -> Result<(), ParseError> {
+    public_key_structural_envelope_reason(algorithm, payload)
+        .map_err(|message| ParseError::Invalid(message.to_owned()))
+}
+
+// Original structural predicates shared with the allocation-free bounded encoder.
+fn public_key_structural_envelope_reason(
+    algorithm: Algorithm,
+    payload: &[u8],
+) -> Result<(), &'static str> {
     let exact_len = |expected: usize| {
         (payload.len() == expected && !is_all_zero_material(payload))
             .then_some(())
-            .ok_or_else(|| ParseError::Invalid("invalid public key structural envelope".to_owned()))
+            .ok_or("invalid public key structural envelope")
     };
     match algorithm {
         Algorithm::Ed25519 => exact_len(32),
@@ -292,9 +305,7 @@ fn validate_public_key_structural_envelope(
             exact_len(33)?;
             matches!(payload.first().copied(), Some(0x02 | 0x03))
                 .then_some(())
-                .ok_or_else(|| {
-                    ParseError::Invalid("invalid secp256k1 public key envelope".to_owned())
-                })
+                .ok_or("invalid secp256k1 public key envelope")
         }
         Algorithm::MlDsa => exact_len(ML_DSA_65_PUBLIC_KEY_BYTES),
         Algorithm::BlsNormal => exact_len(48),
@@ -311,26 +322,22 @@ fn validate_public_key_structural_envelope(
             let prefix: [u8; PREFIX_BYTES] = payload
                 .get(..PREFIX_BYTES)
                 .and_then(|bytes| bytes.try_into().ok())
-                .ok_or_else(|| ParseError::Invalid("invalid SM2 public key envelope".to_owned()))?;
+                .ok_or("invalid SM2 public key envelope")?;
             let distid_len = usize::from(u16::from_be_bytes(prefix));
             if distid_len > usize::from(u16::MAX) / 8 {
-                return Err(ParseError::Invalid(
-                    "invalid SM2 public key envelope".to_owned(),
-                ));
+                return Err("invalid SM2 public key envelope");
             }
             let sec1_start = PREFIX_BYTES
                 .checked_add(distid_len)
-                .ok_or_else(|| ParseError::Invalid("invalid SM2 public key envelope".to_owned()))?;
+                .ok_or("invalid SM2 public key envelope")?;
             let expected = sec1_start
                 .checked_add(SEC1_BYTES)
-                .ok_or_else(|| ParseError::Invalid("invalid SM2 public key envelope".to_owned()))?;
+                .ok_or("invalid SM2 public key envelope")?;
             if payload.len() != expected
                 || core::str::from_utf8(&payload[PREFIX_BYTES..sec1_start]).is_err()
                 || payload.get(sec1_start) != Some(&0x04)
             {
-                return Err(ParseError::Invalid(
-                    "invalid SM2 public key envelope".to_owned(),
-                ));
+                return Err("invalid SM2 public key envelope");
             }
             Ok(())
         }
@@ -430,7 +437,7 @@ impl KeyPair {
                 .map_err(|err| Error::KeyGen(err.to_string())),
             #[cfg(feature = "sm")]
             Algorithm::Sm2 => {
-                let mut rng = rand::rngs::OsRng;
+                let mut rng = rand::rngs::SysRng;
                 let private =
                     sm::Sm2PrivateKey::try_random(sm::Sm2PublicKey::default_distid(), &mut rng)
                         .map_err(|err| Error::KeyGen(err.to_string()))?;
@@ -1919,6 +1926,28 @@ impl PublicKeyCompact {
             .map_err(PublicKeyEnvelopeError::into_parse_error)
     }
 
+    /// Charge original compact bytes before structural inspection; no backend parse.
+    fn bounded_encode_structure(&self) -> Result<bool, norito::core::Error> {
+        let bytes: &[u8] = self.algorithm_and_payload.as_ref();
+        if !norito::core::charge_encode_prewrite(bytes.len())? {
+            return Ok(false);
+        }
+        // Reuse the original fixed-error envelope readers in their original
+        // algorithm-before-payload order, without constructing ParseError.
+        let algorithm =
+            public_key_input::algorithm(bytes).map_err(|_| norito::core::refuse_encode_source())?;
+        let payload =
+            public_key_input::payload(bytes).map_err(|_| norito::core::refuse_encode_source())?;
+        if algorithm == Algorithm::Secp256k1 {
+            // Its structural predicate revisits the SEC1 prefix after the
+            // all-zero scan; that extra byte visit needs its own precharge.
+            norito::core::charge_encode_prewrite(1)?;
+        }
+        public_key_structural_envelope_reason(algorithm, payload)
+            .map_err(|_| norito::core::refuse_encode_source())?;
+        Ok(true)
+    }
+
     fn structural_components(&self) -> Result<(Algorithm, &[u8]), ParseError> {
         let algorithm = self.try_algorithm()?;
         let payload = self.try_payload()?;
@@ -1934,8 +1963,10 @@ impl From<PublicKeyFull> for PublicKeyCompact {
 
 impl norito::core::SerializePayload for PublicKeyCompact {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        self.structural_components()
-            .map_err(|_| norito::core::Error::Message("invalid public key".to_owned()))?;
+        if !self.bounded_encode_structure()? {
+            self.structural_components()
+                .map_err(|_| norito::core::Error::Message("invalid public key".to_owned()))?;
+        }
         <ConstVec<u8> as norito::core::SerializePayload>::serialize(
             &self.algorithm_and_payload,
             writer,
@@ -1945,13 +1976,25 @@ impl norito::core::SerializePayload for PublicKeyCompact {
         // `algorithm_and_payload` is private and every public constructor and
         // Norito decoder establishes its validity. Encoding and sizing are
         // therefore structural and never reparse cryptographic key material.
-        self.structural_components().ok()?;
+        if self.bounded_encode_structure().ok()? {
+            // ConstVec sizing visits each byte again, independently of the
+            // structural scan; pay before entering that loop as well.
+            norito::core::charge_encode_prewrite(self.algorithm_and_payload.len()).ok()?;
+        } else {
+            self.structural_components().ok()?;
+        }
         <ConstVec<u8> as norito::core::SerializePayload>::encoded_len_hint(
             &self.algorithm_and_payload,
         )
     }
     fn encoded_len_exact(&self) -> Option<usize> {
-        self.structural_components().ok()?;
+        if self.bounded_encode_structure().ok()? {
+            // ConstVec sizing visits each byte again, independently of the
+            // structural scan; pay before entering that loop as well.
+            norito::core::charge_encode_prewrite(self.algorithm_and_payload.len()).ok()?;
+        } else {
+            self.structural_components().ok()?;
+        }
         <ConstVec<u8> as norito::core::SerializePayload>::encoded_len_exact(
             &self.algorithm_and_payload,
         )
@@ -2499,37 +2542,36 @@ struct MlDsaSecretKey {
 }
 #[cfg(feature = "pqc")]
 struct MlDsaSecretKeyInner {
-    secret: pqcrypto_mldsa::mldsa65::SecretKey,
+    secret: [u8; 4032],
 }
 #[cfg(feature = "pqc")]
 impl MlDsaSecretKey {
-    fn new(inner: &pqcrypto_mldsa::mldsa65::SecretKey) -> Self {
+    fn new(inner: &[u8; 4032]) -> Self {
         Self {
             inner: Arc::new(MlDsaSecretKeyInner { secret: *inner }),
         }
     }
     fn from_bytes(bytes: &[u8]) -> Result<Self, ParseError> {
-        use pqcrypto_traits::sign::SecretKey as _;
         soranet_pq::validate_mldsa_secret_key(soranet_pq::MlDsaSuite::MlDsa65, bytes)
             .map_err(|err| ParseError::Invalid(err.to_string()))?;
-        let mut inner = pqcrypto_mldsa::mldsa65::SecretKey::from_bytes(bytes)
-            .map_err(|err| ParseError::Invalid(err.to_string()))?;
+        let mut inner: [u8; 4032] = bytes
+            .try_into()
+            .map_err(|_| ParseError::Invalid("invalid ML-DSA secret key length".to_owned()))?;
         let secret = Self::new(&inner);
         zeroize_mldsa_secret_key(&mut inner);
         Ok(secret)
     }
-    fn as_secret(&self) -> &pqcrypto_mldsa::mldsa65::SecretKey {
+    fn as_secret(&self) -> &[u8; 4032] {
         &self.inner.secret
     }
     fn to_vec(&self) -> Vec<u8> {
-        use pqcrypto_traits::sign::SecretKey as _;
-        self.inner.secret.as_bytes().to_vec()
+        self.inner.secret.as_slice().to_vec()
     }
     fn try_sign(&self, payload: &[u8]) -> Result<Vec<u8>, Error> {
         self.try_sign_with_context(&[], payload)
     }
     fn try_sign_with_context(&self, context: &[u8], payload: &[u8]) -> Result<Vec<u8>, Error> {
-        let mut rng = rand::rngs::OsRng;
+        let mut rng = rand::rngs::SysRng;
         self.try_sign_with_context_and_rng(context, payload, &mut rng)
     }
     #[cfg(test)]
@@ -2546,12 +2588,11 @@ impl MlDsaSecretKey {
         payload: &[u8],
         rng: &mut R,
     ) -> Result<Vec<u8>, Error> {
-        use pqcrypto_traits::sign::SecretKey as _;
         mldsa_seed::mldsa65::public_key_from_secret(self.as_secret())
             .map_err(|err| Error::Signing(err.to_string()))?;
         soranet_pq::sign_mldsa_from_rng(
             soranet_pq::MlDsaSuite::MlDsa65,
-            self.as_secret().as_bytes(),
+            self.as_secret().as_slice(),
             context,
             payload,
             rng,
@@ -2565,12 +2606,11 @@ impl MlDsaSecretKey {
         payload: &[u8],
         rng: &mut soranet_pq::HedgedChaCha20Rng,
     ) -> Result<Vec<u8>, Error> {
-        use pqcrypto_traits::sign::SecretKey as _;
         mldsa_seed::mldsa65::public_key_from_secret(self.as_secret())
             .map_err(|err| Error::Signing(err.to_string()))?;
         soranet_pq::sign_mldsa(
             soranet_pq::MlDsaSuite::MlDsa65,
-            self.as_secret().as_bytes(),
+            self.as_secret().as_slice(),
             context,
             payload,
             rng,
@@ -2586,8 +2626,7 @@ impl MlDsaSecretKey {
 #[cfg(feature = "pqc")]
 impl PartialEq for MlDsaSecretKey {
     fn eq(&self, other: &Self) -> bool {
-        use pqcrypto_traits::sign::SecretKey as _;
-        self.inner.secret.as_bytes() == other.inner.secret.as_bytes()
+        self.inner.secret.as_slice() == other.inner.secret.as_slice()
     }
 }
 #[cfg(feature = "pqc")]
@@ -2595,22 +2634,8 @@ impl Eq for MlDsaSecretKey {}
 #[cfg(feature = "pqc")]
 impl ZeroizeOnDrop for MlDsaSecretKey {}
 #[cfg(feature = "pqc")]
-#[allow(unsafe_code)]
-fn zeroize_mldsa_secret_key(secret: &mut pqcrypto_mldsa::mldsa65::SecretKey) {
-    use core::{mem, ptr, slice};
-    let byte_ptr = ptr::addr_of_mut!(*secret).cast::<u8>();
-    // SAFETY: `byte_ptr` points to the complete live `SecretKey` object. The
-    // upstream type is a plain fixed-size byte wrapper; treating its object
-    // representation as bytes is the same layout assumption required to hold
-    // the key at all. `Zeroize` uses volatile stores plus a compiler fence, so
-    // the erase cannot be removed merely because the object is about to drop.
-    let bytes = unsafe {
-        slice::from_raw_parts_mut(
-            byte_ptr,
-            mem::size_of::<pqcrypto_mldsa::mldsa65::SecretKey>(),
-        )
-    };
-    zeroize::Zeroize::zeroize(bytes);
+fn zeroize_mldsa_secret_key(secret: &mut [u8; 4032]) {
+    zeroize::Zeroize::zeroize(secret);
 }
 #[cfg(feature = "pqc")]
 impl Drop for MlDsaSecretKeyInner {
@@ -3256,3 +3281,6 @@ pub mod error {
     impl std::error::Error for Error {}
 }
 include!("lib_tests.rs");
+
+#[cfg(test)]
+mod bounded_key_encode_tests;

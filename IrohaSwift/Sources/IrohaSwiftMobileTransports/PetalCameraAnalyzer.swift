@@ -145,8 +145,10 @@ public enum PetalCameraFrame {
 /// Attach it to an `AVCaptureVideoDataOutput` (``attach(to:)``); every
 /// camera frame is converted to luma, decoded and fed to one
 /// ``PetalScanSession``, which follows the code from frame to frame without a
-/// full finder search while the hand stays steady and merges repeated captures
-/// of each shown frame to recover tile lanes lost to noise or display banding.
+/// full finder search while the hand stays steady, merges repeated captures of
+/// each shown frame to recover field lanes lost to noise or display banding,
+/// and reads the katakana bands and the turn lanes of every shown frame once
+/// (the bands first).
 /// Each result is reported through `onOutcome` (called
 /// on the thread that analysed the frame, normally ``queue``) and through
 /// ``outcomes``. Once a payload completes, the analyzer ignores further frames
@@ -154,13 +156,18 @@ public enum PetalCameraFrame {
 /// delivered. While a frame is decoded the capture output drops late frames,
 /// which keeps old phones responsive.
 ///
-/// Scanner setup (evidence: `specs/petal_stream.md` section 8, "Scanner
-/// guidance"). The analyzer only attaches to the output; the capture session
-/// and device stay with the app:
+/// Scanner setup (evidence: `specs/petal_stream.md` section 8). The analyzer
+/// only attaches to the output; the capture session and device stay with the
+/// app:
 /// - Use a 1280×720 session preset (`AVCaptureSession.Preset.hd1280x720`)
 ///   where the device sustains about five decoded frames per second, and fall
-///   back to 640×480 only when it cannot. Lane `K` is harder to read at 480p;
-///   repeated captures of one shown frame can recover it by averaging.
+///   back to 640×480 only when it cannot. The field lanes are harder to read at
+///   480p; repeated captures of one shown frame can recover them by averaging.
+///   The turn lanes need a camera that resolves the petals' shapes (a sharp
+///   720p camera at arm's length); a softer one reads the rest of each frame.
+/// - The card is portrait: keep it whole in view, so the katakana bands above
+///   and below the square are read too. A scanner held upright sees the
+///   card along the long side of its landscape camera frames.
 /// - Automatic exposure over-exposes a mostly black screen. Set the exposure
 ///   target bias to about −1 EV (`AVCaptureDevice.setExposureTargetBias`) or
 ///   lock the exposure once the code has been seen.
@@ -214,10 +221,14 @@ public final class PetalCameraAnalyzer: NSObject, AVCaptureVideoDataOutputSample
         return latestProgress
     }
 
-    /// Session counters after the latest analysed frame, including the frames
-    /// read by tracking the previous pose (``PetalScanStats/tracked``) and those
-    /// read with one corner blossom hidden and inferred
-    /// (``PetalScanStats/inferred``), for diagnostics and UI hints.
+    /// Session counters after the latest analysed frame: lane `D` and field
+    /// lane reads (``PetalScanStats/laneD``, ``PetalScanStats/fieldLanes``),
+    /// the frames read by tracking the previous pose (``PetalScanStats/tracked``)
+    /// or with one corner blossom hidden and inferred
+    /// (``PetalScanStats/inferred``), the field lanes recovered by merging
+    /// captures (``PetalScanStats/merges``, ``PetalScanStats/mergedLanes``),
+    /// the turn lanes read (``PetalScanStats/turnLanes``) and the kana lanes
+    /// read (``PetalScanStats/kanaLanes``), for diagnostics and UI hints.
     public var stats: PetalScanStats {
         stateLock.lock()
         defer { stateLock.unlock() }

@@ -4,13 +4,7 @@
 //! buffers remain caller-owned; every cloned hash state and partial block is
 //! wiped on success, error, and unwind. Independent Poseidon suites are separate.
 
-use sha3::{
-    Sha3_384Core,
-    digest::{
-        Output,
-        core_api::{Buffer, FixedOutputCore, UpdateCore},
-    },
-};
+use sha3::{Digest, Sha3_384};
 use zeroize::Zeroize;
 
 /// Exact byte width of every outer SHA3-384 commitment.
@@ -35,7 +29,6 @@ impl PrivacyOuterDigestV1 {
         self.0
     }
     /// Overwrite a transient digest tile before its allocation is released.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     pub(crate) fn zeroize_v1(&mut self) {
         self.0.zeroize();
     }
@@ -92,41 +85,38 @@ pub struct PrivacyOuterDomainV1<'a> {
     pub(crate) counter: u64,
 }
 
-/// The dependency's core wipes its permutation state; this owner additionally
-/// wipes its whole block buffer, including bytes beyond its current cursor.
+/// SHA3 owns its entire sponge and partial input directly, and its zeroize
+/// feature erases both the permutation state and cursor in Drop. There is no
+/// separate block buffer in this implementation.
 #[derive(Clone, Default)]
 struct WipingSha3V1 {
-    core: Sha3_384Core,
-    buffer: Buffer<Sha3_384Core>,
+    inner: Sha3_384,
 }
 impl WipingSha3V1 {
     fn update(&mut self, bytes: &[u8]) {
-        let core = &mut self.core;
-        self.buffer
-            .digest_blocks(bytes, |blocks| core.update_blocks(blocks));
+        self.inner.update(bytes);
     }
-    fn finish(mut self) -> PrivacyOuterDigestV1 {
-        let mut output = Output::<Sha3_384Core>::default();
-        self.core.finalize_fixed_core(&mut self.buffer, &mut output);
-        PrivacyOuterDigestV1::from_bytes(output.into())
+    fn finish(self) -> PrivacyOuterDigestV1 {
+        // Keep the original sponge in its owner until Drop erases it in place;
+        // consuming the inner field would leave that owner's slot vacated.
+        PrivacyOuterDigestV1::from_bytes(self.inner.clone().finalize().into())
     }
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     fn finish_in_place_v1(&mut self) -> PrivacyOuterDigestV1 {
-        let mut output = Output::<Sha3_384Core>::default();
-        self.core.finalize_fixed_core(&mut self.buffer, &mut output);
-        // Drop the old wiping owner in its original allocation before replacing
-        // it. The buffer and dependency core erase in place, without moving a
-        // private state into a temporary Vec with uncleared vacated slots.
-        *self = Self::default();
-        PrivacyOuterDigestV1::from_bytes(output.into())
+        // Finalization drops and wipes the clone. Assignment then drops the
+        // original sponge in place, including all absorbed partial bytes.
+        let output = PrivacyOuterDigestV1::from_bytes(self.inner.clone().finalize().into());
+        self.wipe_state_v1();
+        output
     }
-    fn wipe_buffer(&mut self) {
-        self.buffer.pad_with_zeros().as_mut_slice().zeroize();
+    fn wipe_state_v1(&mut self) {
+        self.inner = Sha3_384::default();
     }
-}
-impl Drop for WipingSha3V1 {
-    fn drop(&mut self) {
-        self.wipe_buffer();
+    #[cfg(test)]
+    fn state_snapshot_v1(
+        &self,
+    ) -> zeroize::Zeroizing<sha3::digest::common::hazmat::SerializedState<Sha3_384>> {
+        use sha3::digest::common::hazmat::SerializableState;
+        zeroize::Zeroizing::new(self.inner.serialize())
     }
 }
 
@@ -249,7 +239,6 @@ impl PrivacyOuterDomainPrefixV1 {
     }
     /// Start an exact final field while reusing only the checked public prefix.
     /// Coordinates and every field length remain freshly bound after the clone.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     pub(crate) fn last_field_stream_at_with_counter(
         &self,
         index: u64,
@@ -310,7 +299,6 @@ impl PrivacyOuterDomainPrefixV1 {
 }
 
 /// An exact final-field stream must neither overrun nor finalize prematurely.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PrivacyOuterLastFieldStreamErrorV1 {
     /// A label, count, length, or total exceeds its exact framing width.
@@ -329,12 +317,10 @@ pub enum PrivacyOuterLastFieldStreamErrorV1 {
     },
 }
 /// Incremental final-field owner with bounded declared input and wiping state.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub struct PrivacyOuterLastFieldStreamV1 {
     state: WipingSha3V1,
     remaining: usize,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl PrivacyOuterLastFieldStreamV1 {
     /// Scalar byte oracle for the prefix path; no parallel legacy production owner.
     #[cfg(test)]
@@ -479,7 +465,13 @@ mod tests {
         assert_eq!(stream.finalize_in_place_v1(), Ok(expected));
         assert!(stream.finalize_in_place_v1().is_err());
         assert!(stream.update(&[]).is_err());
-        assert!(stream.state.buffer.get_data().iter().all(|byte| *byte == 0));
+        assert!(
+            stream
+                .state
+                .state_snapshot_v1()
+                .iter()
+                .all(|byte| *byte == 0)
+        );
     }
 
     #[test]
@@ -1387,14 +1379,16 @@ mod tests {
                 .last_field_stream_at_with_counter(1, 2, &[], usize::MAX)
                 .is_err()
         );
-        // Prefix clones use the same private buffer-clearing owner as streams.
+        // Prefix clones use the same private sponge-clearing owner as streams.
         let mut cloned = prefix.state.clone();
-        cloned.wipe_buffer();
-        assert!(cloned.buffer.get_data().iter().all(|byte| *byte == 0));
+        cloned.wipe_state_v1();
+        assert!(cloned.state_snapshot_v1().iter().all(|byte| *byte == 0));
     }
 
     #[test]
-    fn sha3_wiping_owner_matches_standard_digest_and_wipes_cloned_buffers() {
+    fn sha3_wiping_owner_matches_standard_digest_and_wipes_cloned_states() {
+        fn require_zeroize_on_drop<T: zeroize::ZeroizeOnDrop>() {}
+        require_zeroize_on_drop::<Sha3_384>();
         for length in [0, 1, 103, 104, 105, 207, 208, 4448] {
             let payload: Vec<u8> = (0..length)
                 .map(|i| u8::try_from(i % 251).expect("fixture byte"))
@@ -1411,11 +1405,21 @@ mod tests {
         let mut owner = WipingSha3V1::default();
         owner.update(&[0xa5; 103]);
         let mut cloned = owner.clone();
-        owner.wipe_buffer();
-        assert!(owner.buffer.pad_with_zeros().iter().all(|byte| *byte == 0));
-        assert!(cloned.buffer.get_data().iter().all(|byte| *byte == 0xa5));
-        cloned.wipe_buffer();
-        assert!(cloned.buffer.pad_with_zeros().iter().all(|byte| *byte == 0));
+        owner.wipe_state_v1();
+        assert!(owner.state_snapshot_v1().iter().all(|byte| *byte == 0));
+        assert!(
+            cloned.state_snapshot_v1()[..103]
+                .iter()
+                .all(|byte| *byte == 0xa5)
+        );
+        assert!(
+            cloned.state_snapshot_v1()[103..200]
+                .iter()
+                .all(|byte| *byte == 0)
+        );
+        assert_eq!(cloned.state_snapshot_v1()[200], 103);
+        cloned.wipe_state_v1();
+        assert!(cloned.state_snapshot_v1().iter().all(|byte| *byte == 0));
     }
     #[test]
     fn sha3_framing_rejects_bad_labels_and_checked_size_overflow() {

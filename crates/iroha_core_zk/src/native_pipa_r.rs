@@ -172,10 +172,12 @@ impl NativeRelationV1 {
     }
     /// Pinned domain exponent of this exact relation.
     pub const fn k(self) -> u32 {
-        if matches!(self, Self::KaigiUsage) {
-            12
-        } else {
-            13
+        match self {
+            Self::KaigiAuthorization => KaigiRelation::Authorization.k(),
+            Self::KaigiUsage => KaigiRelation::Usage.k(),
+            Self::ConfidentialTransfer
+            | Self::ConfidentialFullUnshield
+            | Self::ConfidentialChangeUnshield => 13,
         }
     }
     /// Exact single public-column length.

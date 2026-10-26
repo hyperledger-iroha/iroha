@@ -41,6 +41,8 @@ application.app_api_bindings_get	GET	/v1/app-api/bindings	public	torii_default	p
 application.app_api_cid_by_cid_by_path_get	GET	/v1/app-api/cid/{cid}/{*path}	public	torii_default	public	read	http	feature(app_api)	true	false	false	false
 application.app_api_cid_by_cid_by_path_post	POST	/v1/app-api/cid/{cid}/{*path}	public	canonical_account_signature	authenticated_account	compute	http	feature(app_api)	true	false	false	true
 application.app_api_cid_by_cid_get	GET	/v1/app-api/cid/{cid}	public	torii_default	public	read	http	feature(app_api)	true	false	false	false
+application.assets_by_definition_id_movements_get	GET	/v1/assets/{definition_id}/movements	public	optional_canonical_account_signature	dataspace_visible	read	http	feature(app_api)	true	true	false	true
+application.assets_by_definition_id_movements_query_post	POST	/v1/assets/{definition_id}/movements/query	public	optional_canonical_account_signature	dataspace_visible	read	http	feature(app_api)	true	true	false	true
 application.assets_definitions_by_asset_get	GET	/v1/assets/definitions/{asset}	public	optional_canonical_account_signature	dataspace_visible	read	http	feature(app_api)	true	true	false	true
 application.assets_definitions_get	GET	/v1/assets/definitions	public	optional_canonical_account_signature	dataspace_visible	read	http	feature(app_api)	true	true	false	true
 application.assets_definitions_query_post	POST	/v1/assets/definitions/query	public	optional_canonical_account_signature	dataspace_visible	read	http	feature(app_api)	true	true	false	true

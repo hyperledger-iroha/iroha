@@ -8,7 +8,7 @@ use iroha_pasta::{
     Ep, EpAffine, Eq, Fp, Fq, PastaCurve, fft::FftDomain, msm::MemoryBudget, params::ParamsIpa,
 };
 use rand_chacha::ChaCha20Rng;
-use rand_core_06::SeedableRng;
+use rand_core::SeedableRng;
 
 use super::{
     MultiopenError, OpeningPlan, OpeningQuery, ShapeItem, Slot, SlotKind,

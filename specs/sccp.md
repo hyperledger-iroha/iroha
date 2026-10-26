@@ -185,7 +185,7 @@ enacts, and the fast pause panel for pauses only.
 | Destination replay protection | Dense per-(network, revision) outbound nonce assigned by Taira. EVM uses a bitmap `mapping(uint256 ⇒ uint256)`; TON uses sequentially activated bucket child contracts of 512 flags that only the minter activates, once per bucket (§5.3.4) | One storage word per 256 messages. The TON account-state cap (65 536 cells) forbids an in-contract dictionary |
 | Token and bridge shape | One contract per destination: an ERC-20 with the bridge built in (EVM), deployed through deterministic CREATE2; or one Jetton master with the bridge built in plus standard wallets and consumption buckets (TON). 9 decimals everywhere | No cross-contract minting, no code-hash rechecks, no unit scaling, and Taira can recompute every deployment address |
 | Taira resets | Taira identity is the runtime `NetworkId`. Genesis carries a random reset nonce, so every reset has a fresh identity. Nothing Taira-specific is compiled into Rust or contracts. Old deployments freeze when their last generation's deadline passes (§4.18) | A compiled Taira identity would make every reset and devnet unusable |
-| Contract toolchains | Solidity 0.8.31 (`solc` +commit.fd3a2265), legacy pipeline, `evmVersion: cancun`, for Ethereum and BSC; Acton 1.2.0 / Tolk 1.4.2 for TON. All ship native macOS arm64 binaries (§5.5) | Every contract builds natively on macOS arm64 |
+| Contract toolchains | Solidity 0.8.38 (`solc` +commit.1835d247), legacy pipeline, `evmVersion: cancun`, for Ethereum and BSC; Acton 1.2.0 / Tolk 1.4.2 for TON. All ship native macOS arm64 binaries (§5.5) | Every contract builds natively on macOS arm64 |
 
 ### 1.3 End-to-end shape
 
@@ -812,8 +812,9 @@ produces no empty blocks and block counts have no wall-clock bound.
   validation and by `validate_parameter_change`; the committed Sumeragi parameter
   `sumeragi.due_work_max_lag_ms` (default 60 000) MUST be at least
   `2·max_clock_drift_ms + 4·block_cadence_ms` (§4.3). The staking floor
-  (`nexus.staking.unbonding_delay_ms`, `nexus.staking.max_slash_bps`) is node
-  configuration pinned by the genesis Nexus consensus-policy digest (§4.8 L1).
+  (`PublicLaneStakingPolicy.unbonding_delay_ms`,
+  `PublicLaneStakingPolicy.max_slash_bps`) belongs to the committed
+  `public_lane_staking_v1` parameter (§4.8 L1).
 - **Deleted fields.** `roster_max_age_ms` and `roster_validity_ms` are replaced
   by `committee_heartbeat_ms` and `committee_validity_ms`;
   `attestation_retention_ms`, `attestation_stall_ms` and
@@ -1428,7 +1429,7 @@ whatever their order.
 
 | # | Rule |
 |---|---|
-| L1 | **Delay and slash rate.** While SCCP exists, `nexus.staking.unbonding_delay_ms ≥ committee_validity_ms + forgery_evidence_grace_ms` for the current parameters and for every retained generation's `validity_ms + grace_ms`, and `nexus.staking.max_slash_bps ≥ 1`. Both values are node configuration pinned by the genesis Nexus consensus-policy digest (`NexusConsensusStakingV1`), not chain parameters. They are enforced (a) by `InitializeSccpV1` against the genesis-pinned policy, so a genesis that fails them is invalid; (b) by `irohad`, which refuses to start when SCCP exists in state and the configured policy fails them (the digest already refuses any other change); and (c) by the Parliament's `SetParameters`, which checks the parameter side against the pinned policy. Kagami's SCCP-enabled profiles set `unbonding_delay_ms = 1 814 400 000` (21 d) and `max_slash_bps = 10 000`; the global default unbonding delay of 0 stays for chains without SCCP. |
+| L1 | **Delay and slash rate.** While SCCP exists, `PublicLaneStakingPolicy.unbonding_delay_ms ≥ committee_validity_ms + forgery_evidence_grace_ms` for the current parameters and for every retained generation's `validity_ms + grace_ms`, and `PublicLaneStakingPolicy.max_slash_bps ≥ 1`. Both values belong to the mandatory committed `public_lane_staking_v1` parameter. `InitializeSccpV1` checks the authenticated original genesis policy; daemon startup checks the committed State owner. Parliament `SetParameters` and authorized staking-policy changes must each validate the proposed combination against current parameters and all retained generations before publication. Kagami's SCCP-enabled genesis recipes explicitly author `unbonding_delay_ms = 1 814 400 000` (21 d) and `max_slash_bps = 10 000`; recipes for chains without SCCP may author a delay of 0. |
 | L2 | **Liability anchor.** A forgery against generation `g` is a root-consensus offence at offence height `start_height(g)`: the penalty uses `ConsensusSlashLiability::Root(start_height(g))`. The liable exposure is bonded stake plus every pending unbond whose `slashable_through_height ≥ start_height(g)`, which is exactly the stake that backed `g`. |
 | L3 | **Release gate.** `FinalizePublicLaneUnbond` of a pending unbond of validator `v` with `slashable_through_height = H` is refused with `SccpLiabilityActive` while some retained `g` with `v ∈ members(g)` and `start_height(g) ≤ H` is `liable(g)`, and with `SccpPenaltyPending` while a `Pending` SCCP forgery record names `v`, until its penalty is `Applied`. The same two conditions refuse the pruning of an exited zero-custody validator and a `RegisterPublicLaneValidator` that replaces `v`'s exited record (a re-registration would otherwise give `v` a registration that G6 never named). The gate adds to the existing `unbond_liability_release_height` check and scans at most the retained generations. |
 | L4 | **Exit is never blocked.** `ExitPublicLaneValidator` is unchanged. A validator leaves the committee at the next election; only the release of its stake waits. |
@@ -4146,7 +4147,7 @@ Burns are allowed while paused, after expiry and after a latch.
 ### 5.2 EVM: Ethereum and BSC (`contracts/evm/sccp/SccpTairaXor.sol`)
 
 One contract source and the one library it imports
-(`contracts/evm/sccp/lib/BLS12_381.sol`, §5.2.4) are compiled by `solc` 0.8.31
+(`contracts/evm/sccp/lib/BLS12_381.sol`, §5.2.4) are compiled by `solc` 0.8.38
 for Ethereum and BSC. The contract is the ERC-20/BEP-20 token itself. It makes no external calls other than
 precompiles (so it needs no reentrancy guard), and has no owner, no upgrade
 path and no setters. Token metadata: name `Taira XOR`, symbol `tXOR`, decimals
@@ -4925,7 +4926,7 @@ certificate cells and adds one forward fee.
 
 | Target | Compiler | Settings |
 |---|---|---|
-| ETH, BSC | solc `0.8.31+commit.fd3a2265` (universal macOS arm64/x86-64, linux-amd64, linux-arm64) | `evmVersion: "cancun"`, `optimizer: {enabled: true, runs: 200}`, `viaIR: false`, `metadata.bytecodeHash: "none"`, `metadata.appendCBOR: false` |
+| ETH, BSC | solc `0.8.38+commit.1835d247` (universal macOS arm64/x86-64, linux-amd64, linux-arm64) | `evmVersion: "cancun"`, `optimizer: {enabled: true, runs: 200}`, `viaIR: false`, `metadata.bytecodeHash: "none"`, `metadata.appendCBOR: false` |
 | TON | Acton 1.2.0 bundling Tolk 1.4.2 (`acton-aarch64-apple-darwin`, linux builds) | fixed optimization; code cell hashes and depths locked |
 
 - `scripts/contract_tooling/compiler-lock.json` pins the URLs and sha256 of
@@ -4933,10 +4934,10 @@ certificate cells and adds one forward fee.
   artifacts, including each contract's creation code
   (`SCCP_EVM_CREATION_CODE`), runtime template and `immutableReferences`. No
   Rosetta or Docker is needed on macOS arm64.
-- `evmVersion: cancun` must be explicit because the compiler defaults to
-  `osaka`. The legacy pipeline avoids the via-IR-only 0.8.31 bugs. The source
-  MUST NOT `delete` memory `bytes` elements or use custom storage layouts
-  (0.8.31 legacy-pipeline bug patterns).
+- `evmVersion: cancun` must remain explicit to bind the execution fork. The
+  reviewed build uses the legacy pipeline. The source MUST NOT `delete`
+  memory `bytes` elements or use custom storage layouts; these restrictions
+  remain part of the narrow source policy after the compiler update.
 - The EVM lock lists exactly two sources, `SccpTairaXor.sol` and
   `lib/BLS12_381.sol`, and `scripts/contract_tooling/artifact-lock.json`
   records the creation code built from them. The EDR suites run that locked

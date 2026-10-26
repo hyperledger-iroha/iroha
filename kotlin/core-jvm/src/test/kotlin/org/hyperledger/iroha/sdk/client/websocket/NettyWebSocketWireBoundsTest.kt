@@ -1,6 +1,7 @@
 package org.hyperledger.iroha.sdk.client.websocket
 
-import io.netty.channel.nio.NioEventLoopGroup
+import io.netty.channel.MultiThreadIoEventLoopGroup
+import io.netty.channel.nio.NioIoHandler
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.net.ServerSocket
@@ -92,7 +93,7 @@ class NettyWebSocketWireBoundsTest {
 
     @Test
     fun `send admission reserves owned bytes before blocked event loop enqueue`() {
-        val group = NioEventLoopGroup(1)
+        val group = MultiThreadIoEventLoopGroup(1, NioIoHandler.newFactory())
         try {
             MockWebServer().use { server ->
                 server.enqueue(MockResponse().withWebSocketUpgrade(object : WebSocketListener() {
@@ -123,7 +124,7 @@ class NettyWebSocketWireBoundsTest {
 
     @Test
     fun `empty messages cannot bypass pending-write bound`() {
-        val group = NioEventLoopGroup(1)
+        val group = MultiThreadIoEventLoopGroup(1, NioIoHandler.newFactory())
         try {
             MockWebServer().use { server ->
                 server.enqueue(MockResponse().withWebSocketUpgrade(object : WebSocketListener() {}))
@@ -146,7 +147,7 @@ class NettyWebSocketWireBoundsTest {
 
     @Test
     fun `callback may send while connector closes and borrowed loop shuts down without lock inversion`() {
-        val group = NioEventLoopGroup(1)
+        val group = MultiThreadIoEventLoopGroup(1, NioIoHandler.newFactory())
         val closer = Executors.newSingleThreadExecutor()
         val release = CountDownLatch(1)
         try {

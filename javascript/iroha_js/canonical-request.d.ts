@@ -140,18 +140,31 @@ export function buildCanonicalJsonRequest(
   params: CanonicalJsonRequestInput,
 ): Promise<CanonicalJsonRequest>;
 
+/** Per-attempt server admission, transport and response allowance for canonical reads. */
+export const CANONICAL_READ_ATTEMPT_TIMEOUT_MS: 45000;
+/** Total caller-visible allowance across canonical read attempts and backoff. */
+export const CANONICAL_READ_TOTAL_TIMEOUT_MS: 100000;
+
+export interface CanonicalReadAttempt {
+  /** Forward to transport; includes the caller's cancellation and the read deadline. */
+  signal?: AbortSignal;
+  /** Forward to transport; absent for a mutation or an unknown route. */
+  timeoutMs?: number;
+}
+
 export interface CanonicalReadRetryOptions<T> {
   method: string;
   /** Exact root-relative Torii target, optionally including its query. */
   path: string;
   signal?: AbortSignal;
-  /** Build and sign a fresh request each time; pass signal to the transport. */
-  operation: (attempt: number) => T | Promise<T>;
+  /** Build and sign afresh; forward context signal/timeout to the transport. */
+  operation: (attempt: number, context: CanonicalReadAttempt) => T | Promise<T>;
 }
 
 /**
  * Retry allowlisted Torii reads on typed HTTP 429 capacity/rate failures only.
- * Attempts are zero-based, with at most three retries in a ten-second window.
+ * Attempts are zero-based, with at most three retries in a 100-second total budget.
+ * Each attempt has 45 seconds; another starts only when that full allowance fits.
  * Errors expose status/code and may carry retryAfter (HTTP header text),
  * retryAfterSeconds, or details.retry_after_seconds. Unknown routes, writes,
  * authentication and transport failures run once. Exhaustion rethrows the

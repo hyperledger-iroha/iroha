@@ -47,7 +47,7 @@ def originals():
                'source_changes': [], 'source_before': source, 'source_after': source,
                'finished_unix': 12, 'native_companion_sha256': 'c' * 64}
     component = {'emitter_path': '/owned/emitter.json', 'emitter_sha256': 'd' * 64,
-                 'qualified': True, 'observed_abi_version': 31,
+                 'qualified': True, 'observed_abi_version': 33,
                  'artifact_path': '/owned/retained/lib.dylib', 'artifact_sha256': 'c' * 64,
                  'source_before': source, 'source_after': source,
                  'toolchain_before': tools, 'toolchain_after': tools,
@@ -132,13 +132,16 @@ def test_wrong_stale_archive_emitter_source_tool_and_component_relationship_refu
 
 def test_current_repository_owned_c_jni_and_privacy_policy_is_exact():
     policy = unit.native_policy(ROOT)
-    assert len(policy['c_jni']) == 108
-    assert sum(symbol.startswith('connect_norito_kagemusha_wallet_') for symbol in policy['c_jni']) == 27
-    assert sum('offline_wallet_KagemushaWalletNativeV1_' in symbol for symbol in policy['c_jni']) == 15
+    assert len(policy['c_jni']) == 112
+    assert sum(symbol.startswith('connect_norito_kagemusha_wallet_') for symbol in policy['c_jni']) == 29
+    assert sum('offline_wallet_KagemushaWalletNativeV1_' in symbol for symbol in policy['c_jni']) == 17
     for method in ('beginInstallation', 'registerInstallation', 'closeInstallation', 'relocateRegistrationSource'):
         assert 'Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletInstalledRuntimeNativeV1_' + method in policy['c_jni']
     assert 'Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletInstalledRuntimeNativeV1_installRuntime' not in policy['c_jni']
     assert "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletLoadOriginalNativeV1_validate" in policy["c_jni"]
+    for c_name, jni_name in (("begin_exchange", "beginExchange"), ("end_exchange", "endExchange")):
+        assert "connect_norito_kagemusha_wallet_" + c_name + "_v1" in policy["c_jni"]
+        assert "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_" + jni_name in policy["c_jni"]
     assert len(policy['privacy']) == 6
     assert 'connect_norito_kagemusha_wallet_setup_v1' in policy['required']
     assert 'Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_setup' in policy['required']
@@ -301,7 +304,7 @@ def test_original_crypto_consumer_is_preserved_under_current_symbol_wrapper():
     source = unit.consumer_source(ROOT)
     assert '#define main iroha_original_crypto_main' in source
     assert 'return iroha_original_crypto_main();' in source
-    for check in ('check_mldsa_ffi()', 'sha3_expected', 'shake_expected', 'PQCLEAN_MLKEM512_CLEAN_crypto_kem_dec'):
+    for check in ('check_mldsa_ffi(suite)', 'check_mlkem_ffi(suite)', 'suite < 3', 'ciphertext[0] ^= 1', 'SORANET_PQ_ERR_VERIFICATION_FAILED'):
         assert check in source
 
 
@@ -332,7 +335,7 @@ def test_make_dependency_words_are_not_shell_evaluated():
 
 def manifest_fixture():
     return {'schema': unit.SCHEMA, 'artifact_scope': 'local-unit', 'purpose': unit.PURPOSE,
-            'version': '0.1.0', 'native_bridge_abi_version': 31,
+            'version': '0.1.0', 'native_bridge_abi_version': 33,
             'target_triple': 'aarch64-apple-darwin', 'hashes': {'macos-arm64': 'a' * 64},
             'producer_record': '/owned/producer-record.json', 'producer_record_sha256': 'b' * 64,
             'source_inputs': {'inert-source': 'c' * 64}, 'tool_inputs': {'inert-tool': 'd' * 64},
@@ -526,6 +529,8 @@ def test_current_admission_rejects_same_bytes_with_replaced_consumed_identity(tm
 @pytest.mark.parametrize('target,accepted', (('../dist/NoritoBridge.xcframework', True), ('../old-native-artifact', False)))
 def test_swift_guard_binds_only_declared_release_selector_link_without_adopting_target(tmp_path, monkeypatch, target, accepted):
     root = tmp_path / 'root'; (root / 'IrohaSwift').mkdir(parents=True)
+    for relative in unit.SWIFT_LOCAL_DEPENDENCIES:
+        (root / relative).mkdir(parents=True)
     (root / 'IrohaSwift/NoritoBridge.xcframework').symlink_to(target)
     monkeypatch.setattr(unit, 'POLICY_INPUTS', [])
     monkeypatch.setattr(unit, 'HEADER_INPUTS', {})
@@ -533,6 +538,42 @@ def test_swift_guard_binds_only_declared_release_selector_link_without_adopting_
         assert unit.swift_sources(root) == {'@symlink:IrohaSwift/NoritoBridge.xcframework': hashlib.sha256(target.encode()).hexdigest()}
     else:
         with pytest.raises(unit.Refused): unit.swift_sources(root)
+
+
+def test_swift_guard_requires_both_reviewed_local_dependency_roots():
+    assert unit.SWIFT_LOCAL_DEPENDENCIES == ('vendor/boringssl-swiftpm', 'vendor/nearby')
+
+
+@pytest.mark.parametrize('relative', ('vendor/boringssl-swiftpm', 'vendor/nearby'))
+@pytest.mark.parametrize('change', ('bytes', 'missing', 'extra', 'manifest', 'file-alias', 'directory-alias', 'cache-alias', 'owner-missing'))
+def test_swift_guard_binds_local_dependency_and_refuses_drift(tmp_path, monkeypatch, relative, change):
+    root = tmp_path / 'root'; (root / 'IrohaSwift').mkdir(parents=True)
+    for required in unit.SWIFT_LOCAL_DEPENDENCIES:
+        (root / required).mkdir(parents=True)
+    provider = root / relative; (provider / 'crypto').mkdir()
+    source = provider / 'crypto/source.cc'; source.write_bytes(b'// original public crypto source\n')
+    manifest = provider / 'Package.swift'; manifest.write_bytes(b'// original package declaration\n')
+    monkeypatch.setattr(unit, 'POLICY_INPUTS', [])
+    monkeypatch.setattr(unit, 'HEADER_INPUTS', {})
+    monkeypatch.setattr(unit, 'admit', lambda *args: None)
+    monkeypatch.setattr(unit, 'verify_hashes', lambda *args, **kwargs: None)
+    original = unit.swift_sources(root)
+    assert set(original) == {f'{relative}/Package.swift', f'{relative}/crypto/source.cc'}
+    unit.guard_inputs(root, {'pins': {}}, original, {})
+    if change == 'bytes': source.write_bytes(b'// different source\n')
+    elif change == 'missing': source.unlink()
+    elif change == 'extra': (provider / 'crypto/extra.cc').write_bytes(b'// unobserved source\n')
+    elif change == 'manifest': manifest.write_bytes(b'// changed compiler options\n')
+    elif change == 'file-alias':
+        original_file = root / 'same.cc'; original_file.write_bytes(source.read_bytes())
+        source.unlink(); source.symlink_to(original_file)
+    elif change == 'directory-alias':
+        (provider / 'crypto').rename(root / 'original-crypto')
+        (provider / 'crypto').symlink_to(root / 'original-crypto', target_is_directory=True)
+    elif change == 'cache-alias': (provider / '.build').symlink_to(root / 'IrohaSwift', target_is_directory=True)
+    else: provider.rename(root / 'removed-provider')
+    with pytest.raises((unit.Refused, RuntimeError, OSError)):
+        unit.guard_inputs(root, {'pins': {}}, original, {})
 
 
 def test_producer_cli_forwards_acknowledgement_to_exact_recipe_without_native_execution(tmp_path, monkeypatch, capsys):

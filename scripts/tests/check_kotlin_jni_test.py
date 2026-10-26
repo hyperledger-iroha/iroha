@@ -865,6 +865,24 @@ def test_kotlin_ships_only_the_kagemusha_wallet_v1_surface():
                 "StorageV1Test", "TestFakesV1",
             )
         ),
+        f"{wallet}/androidTest/java/{offline}/wallet/KagemushaProbeActivityBinding.kt",
+        f"{wallet}/androidTest/java/{offline}/wallet/KagemushaProbeActivityObservationTest.kt",
+        *(f"{wallet}/main/java/{offline}/wallet/KagemushaWallet{name}V1.kt" for name in (
+            "DeferredArchive", "ExchangeCall", "ExchangeLifetime", "Exchange",
+            "ReviewExecutionCleanup", "WorkerMetrics",
+        )),
+        *(f"{wallet}/test/kotlin/{offline}/wallet/KagemushaWallet{name}V1Test.kt" for name in (
+            "DeferredArchive", "ExchangeLifetime", "RequestBoundReview",
+            "ReviewExecutionCleanup", "WorkerMetrics",
+        )),
+        *(f"{wallet}/test/kotlin/{offline}/wallet/Kagemusha{name}Test.kt" for name in (
+            "EnrollmentProbeStage", "ProbeActivityControl", "ProbeReviewCustody",
+            "ProbeReviewHolder", "ProbeReviewPhase",
+        )),
+        *(f"{wallet}/testSupport/kotlin/{offline}/wallet/Kagemusha{name}.kt" for name in (
+            "EnrollmentProbeStage", "ProbeActivityControl", "ProbeReviewCustody",
+            "ProbeReviewHolder", "ProbeReviewPhase",
+        )),
     }
     modules = tuple(f"{module}/src" for module in GUARD.MODULES)
     assert kagemusha_named_files(kotlin, modules) == kept
@@ -985,9 +1003,17 @@ def test_swift_ships_no_old_kagemusha_surface():
         "Tests/IrohaSwiftTests/KagemushaWalletNativeWorkerV1Tests.swift",
         "Tests/IrohaSwiftTests/KagemushaWalletOutputV1Tests.swift",
         "Tests/IrohaSwiftTests/KagemushaWalletUnloadChargeReviewV1Tests.swift",
-        "Tests/IrohaSwiftTests/KagemushaWalletUnloadFinalityV1Tests.swift",
         "Tests/IrohaSwiftTests/Fixtures/kagemusha-public-checkpoint49.norito",
         "Tests/IrohaSwiftTests/Fixtures/kagemusha-public-proof49-50-page.json",
+        "Sources/IrohaSwift/KagemushaWalletDeferredArchiveV1.swift",
+        "Sources/IrohaSwift/KagemushaWalletExchangeLifetimeV1.swift",
+        "Sources/IrohaSwift/KagemushaWalletExchangeV1.swift",
+        "Sources/IrohaSwift/KagemushaWalletLedgerFinalitySyncV1.swift",
+        "Sources/IrohaSwift/KagemushaWalletReviewedExecutionV1.swift",
+        "Tests/IrohaSwiftTests/KagemushaWalletDeferredArchiveV1Tests.swift",
+        "Tests/IrohaSwiftTests/KagemushaWalletExchangeLifetimeV1Tests.swift",
+        "Tests/IrohaSwiftTests/KagemushaWalletLedgerFinalitySyncV1Tests.swift",
+        "Tests/IrohaSwiftTests/KagemushaWalletReviewedExecutionV1Tests.swift",
     }
     assert kagemusha_named_files(swift, ("Sources", "Tests")) == kept
     for relative in (

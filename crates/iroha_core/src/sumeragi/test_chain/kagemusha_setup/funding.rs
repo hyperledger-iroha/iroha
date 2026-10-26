@@ -12,7 +12,7 @@ use iroha_data_model::{
 };
 use std::{io::Read as _, num::NonZeroU16, path::PathBuf, time::Instant};
 
-fn pin(name: &str) -> [u8; 32] {
+pub(super) fn pin(name: &str) -> [u8; 32] {
     let bytes: [u8; 32] = hex::decode(std::env::var(name).expect("independent SHA-256 pin"))
         .unwrap()
         .try_into()
@@ -20,7 +20,7 @@ fn pin(name: &str) -> [u8; 32] {
     assert_ne!(bytes, [0; 32]);
     bytes
 }
-fn read(path: &Path, cap: usize, expected: [u8; 32]) -> Vec<u8> {
+pub(super) fn read(path: &Path, cap: usize, expected: [u8; 32]) -> Vec<u8> {
     let before = fs::symlink_metadata(path).unwrap();
     assert!(before.file_type().is_file() && before.len() > 0 && before.len() <= cap as u64);
     let file = File::open(path).unwrap();
@@ -31,10 +31,10 @@ fn read(path: &Path, cap: usize, expected: [u8; 32]) -> Vec<u8> {
     assert_eq!(<[u8; 32]>::from(Sha256::digest(&bytes)), expected);
     bytes
 }
-fn selected(name: &str) -> PathBuf {
+pub(super) fn selected(name: &str) -> PathBuf {
     PathBuf::from(std::env::var_os(name).expect("explicit original path"))
 }
-fn canonical<T>(bytes: &[u8]) -> T
+pub(super) fn canonical<T>(bytes: &[u8]) -> T
 where
     T: norito::NoritoSerialize,
     for<'de> T: norito::NoritoDeserialize<'de>,

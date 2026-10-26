@@ -1788,7 +1788,7 @@ fn decode_hex_digest(value: &str, field: &str) -> Result<[u8; 32]> {
 pub fn batch_manifest_sha256(binding: &AxtFastpqBinding) -> Result<String> {
     let canonical = canonicalize_binding(binding)?;
     let bytes = encode_canonical_norito(&canonical)?;
-    Ok(format!("{:x}", sha2::Sha256::digest(bytes)))
+    Ok(hex::encode(sha2::Sha256::digest(bytes)))
 }
 #[cfg(test)]
 #[path = "axt_binding/tests.rs"]

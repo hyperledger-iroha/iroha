@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { ed25519 } from '@noble/curves/ed25519';
+import { ed25519 } from '@noble/curves/ed25519.js';
 import { AccountAddress } from '../src/address.js';
 import { NetworkId } from '../src/networkId.js';
 import { buildJoinGameSessionV1, encodeGameValueV1, decodeGameValueV1, gameHashLiteralV1, gameRosterHashV1,

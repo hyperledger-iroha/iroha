@@ -1,4 +1,4 @@
-//! Exact-source arithmetic fixed-polynomial parity after bounded public replay.
+//! Exact-source SHA and arithmetic fixed-polynomial parity after bounded public replay.
 use super::*;
 use crate::privacy_engines::zk_x509::{
     main_assembly::build_zk_x509_main_trace_assembly_v1,
@@ -7,9 +7,9 @@ use crate::privacy_engines::zk_x509::{
         release_fixture::{build_zk_x509_release_fixture_v1, reference_statement_context_v1},
     },
 };
-#[test]
-#[ignore = "all five maximum-credential arithmetic fixed polynomial sets against independent scalar interpolation"]
-fn maximum_arithmetic_fixed_sets_preserve_every_coefficient_and_registration() {
+fn with_maximum_fixed_source_v1(
+    consume: impl FnOnce(&AggregateProofLayoutV1, &MainLog19BoundTraceGroupSourceV1<'_>),
+) {
     let fixture = build_zk_x509_release_fixture_v1(reference_statement_context_v1(), true)
         .expect("maximum signed credential");
     let trust_anchor = fixture.authoritative_state.trust_anchor();
@@ -55,37 +55,75 @@ fn maximum_arithmetic_fixed_sets_preserve_every_coefficient_and_registration() {
     )
     .unwrap();
 
-    let prover = MainLog19ProverConstraintSourceV1::for_main_v1(&layout, &source).unwrap();
-    let observation =
-        crate::privacy_engines::zk_x509::prover_observation::ObservationV1::begin_v1();
-    let mut checked = 0;
-    for registration in source.registrations.iter().copied() {
-        if registration.segment.adapter != SegmentAdapterIdV1::P256Arithmetic {
-            continue;
+    consume(&layout, &source);
+}
+
+#[test]
+#[ignore = "all five maximum-credential arithmetic fixed polynomial sets against independent scalar interpolation"]
+fn maximum_arithmetic_fixed_sets_preserve_every_coefficient_and_registration() {
+    with_maximum_fixed_source_v1(|layout, source| {
+        let prover = MainLog19ProverConstraintSourceV1::for_main_v1(layout, source).unwrap();
+        let observation =
+            crate::privacy_engines::zk_x509::prover_observation::ObservationV1::begin_v1();
+        let mut checked = 0;
+        for registration in source.registrations.iter().copied() {
+            if registration.segment.adapter != SegmentAdapterIdV1::P256Arithmetic {
+                continue;
+            }
+            let root = goldilocks_primitive_root_v1(registration.segment.trace_log2).unwrap();
+            let actual = main_log19_fixed_polynomial_set_v1(&prover, registration).unwrap();
+            assert_eq!(actual.registration, registration);
+            assert_eq!(actual.columns.len(), registration.segment.fixed_width);
+            for (column, coefficients) in actual.columns.iter().enumerate() {
+                let mut expected = source.native_fixed_column_v1(registration, column).unwrap();
+                goldilocks_ifft_v1(&mut expected, root).unwrap();
+                assert_eq!(coefficients.as_slice(), &*expected);
+            }
+            let mut invalid = registration;
+            invalid.segment.fixed_width -= 1;
+            assert!(main_log19_fixed_polynomial_set_v1(&prover, invalid).is_err());
+            checked += 1;
         }
-        let root = goldilocks_primitive_root_v1(registration.segment.trace_log2).unwrap();
-        let actual = main_log19_fixed_polynomial_set_v1(&prover, registration).unwrap();
-        assert_eq!(actual.registration, registration);
-        assert_eq!(actual.columns.len(), registration.segment.fixed_width);
-        for (column, coefficients) in actual.columns.iter().enumerate() {
-            let mut expected = source.native_fixed_column_v1(registration, column).unwrap();
-            goldilocks_ifft_v1(&mut expected, root).unwrap();
-            assert_eq!(coefficients.as_slice(), &*expected);
+        assert_eq!(checked, 5);
+        let receipt = observation.finish_v1().public_text_v1();
+        for phase in [
+            "CompositionArithmeticFixedRows",
+            "CompositionArithmeticFixedInverseTransform",
+        ] {
+            assert!(receipt.contains(&format!(
+                "phase={phase} calls=5 completed=5 interrupted=0 unwound=0"
+            )));
         }
-        let mut invalid = registration;
-        invalid.segment.fixed_width -= 1;
-        assert!(main_log19_fixed_polynomial_set_v1(&prover, invalid).is_err());
-        checked += 1;
-    }
-    assert_eq!(checked, 5);
-    let receipt = observation.finish_v1().public_text_v1();
-    for phase in [
-        "CompositionArithmeticFixedRows",
-        "CompositionArithmeticFixedInverseTransform",
-    ] {
-        assert!(receipt.contains(&format!(
-            "phase={phase} calls=5 completed=5 interrupted=0 unwound=0"
-        )));
-    }
-    eprintln!("{receipt}");
+        eprintln!("{receipt}");
+    });
+}
+
+#[test]
+#[ignore = "four complete maximum-credential SHA fixed polynomial sets against the prior per-column reconstruction and independent scalar interpolation"]
+fn maximum_sha_fixed_sets_preserve_every_coefficient_and_registration() {
+    with_maximum_fixed_source_v1(|layout, source| {
+        let prover = MainLog19ProverConstraintSourceV1::for_main_v1(layout, source).unwrap();
+        let mut checked = 0;
+        for registration in source.registrations.iter().copied() {
+            if registration.segment.adapter != SegmentAdapterIdV1::Sha256CallBus {
+                continue;
+            }
+            let root = goldilocks_primitive_root_v1(registration.segment.trace_log2).unwrap();
+            let actual = main_log19_fixed_polynomial_set_v1(&prover, registration).unwrap();
+            assert_eq!(actual.registration, registration);
+            assert_eq!(actual.columns.len(), registration.segment.fixed_width);
+            assert_eq!(actual.columns.len(), 118);
+            for (column, coefficients) in actual.columns.iter().enumerate() {
+                // Exact previous production path; retain every native coefficient.
+                let mut expected = source.native_fixed_column_v1(registration, column).unwrap();
+                goldilocks_ifft_v1(&mut expected, root).unwrap();
+                assert_eq!(coefficients.as_slice(), &*expected);
+            }
+            let mut invalid = registration;
+            invalid.segment.fixed_width -= 1;
+            assert!(main_log19_fixed_polynomial_set_v1(&prover, invalid).is_err());
+            checked += 1;
+        }
+        assert_eq!(checked, 4);
+    });
 }

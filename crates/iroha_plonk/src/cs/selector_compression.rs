@@ -449,7 +449,7 @@ mod tests {
     use ff::Field;
     use iroha_pasta::Fp;
     use rand_chacha::ChaCha20Rng;
-    use rand_core_06::{RngCore, SeedableRng};
+    use rand_core::{Rng, SeedableRng};
 
     use super::*;
     use crate::cs::expression::{Column, Fixed};

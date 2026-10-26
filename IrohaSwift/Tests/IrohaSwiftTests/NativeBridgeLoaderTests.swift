@@ -116,28 +116,28 @@ final class NativeBridgeLoaderTests: XCTestCase {
         }))
     }
 
-    func testExactABI31AdmissionRejectsOlderAndFutureVersions() {
+    func testExactABI33AdmissionRejectsOlderAndFutureVersions() {
         for identifier in ["macos-arm64_x86_64", "ios-arm64", "ios-arm64_x86_64-simulator"] {
-            XCTAssertEqual(NoritoBridgeLoader.expectedBridgeAbiVersion(for: identifier), 31)
-            XCTAssertTrue(NoritoBridgeLoader.isSupportedBridgeAbiVersion(31, for: identifier))
-            for rejected in [UInt32(18), 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 32] {
+            XCTAssertEqual(NoritoBridgeLoader.expectedBridgeAbiVersion(for: identifier), 33)
+            XCTAssertTrue(NoritoBridgeLoader.isSupportedBridgeAbiVersion(33, for: identifier))
+            for rejected in [UInt32(18), 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 34] {
                 XCTAssertFalse(NoritoBridgeLoader.isSupportedBridgeAbiVersion(rejected, for: identifier))
             }
             XCTAssertFalse(NoritoBridgeLoader.isSupportedBridgeAbiVersion(nil, for: identifier))
         }
     }
 
-    func testRetiredTimedOvnExportsAndStatusAreNotPartOfABI31Admission() {
+    func testRetiredTimedOvnExportsAndStatusAreNotPartOfABI33Admission() {
         XCTAssertTrue(NoritoBridgeLoader.hasRequiredExports(resolving: {
             !$0.hasPrefix("connect_norito_parliament_timed_ovn_")
         }))
         XCTAssertEqual(NativeBridgeError.fromStatus(-505), .unknown(-505))
     }
 
-    func testExpectedBridgeAbiVersionIsThirtyOneForPackagedArtifacts() {
-        XCTAssertEqual(NoritoBridgeLoader.expectedBridgeAbiVersion(for: "macos-arm64_x86_64"), 31)
-        XCTAssertEqual(NoritoBridgeLoader.expectedBridgeAbiVersion(for: "ios-arm64"), 31)
-        XCTAssertEqual(NoritoBridgeLoader.expectedBridgeAbiVersion(for: "ios-arm64_x86_64-simulator"), 31)
+    func testExpectedBridgeAbiVersionIsThirtyThreeForPackagedArtifacts() {
+        XCTAssertEqual(NoritoBridgeLoader.expectedBridgeAbiVersion(for: "macos-arm64_x86_64"), 33)
+        XCTAssertEqual(NoritoBridgeLoader.expectedBridgeAbiVersion(for: "ios-arm64"), 33)
+        XCTAssertEqual(NoritoBridgeLoader.expectedBridgeAbiVersion(for: "ios-arm64_x86_64-simulator"), 33)
         XCTAssertFalse(NoritoBridgeLoader.isSupportedBridgeAbiVersion(20, for: "macos-arm64_x86_64"))
         XCTAssertFalse(NoritoBridgeLoader.isSupportedBridgeAbiVersion(18, for: "macos-arm64_x86_64"))
         XCTAssertFalse(NoritoBridgeLoader.isSupportedBridgeAbiVersion(19, for: "macos-arm64_x86_64"))
@@ -150,14 +150,17 @@ final class NativeBridgeLoaderTests: XCTestCase {
         XCTAssertFalse(NoritoBridgeLoader.isSupportedBridgeAbiVersion(26, for: "macos-arm64_x86_64"))
         XCTAssertFalse(NoritoBridgeLoader.isSupportedBridgeAbiVersion(27, for: "macos-arm64_x86_64"))
         XCTAssertFalse(NoritoBridgeLoader.isSupportedBridgeAbiVersion(28, for: "macos-arm64_x86_64"))
-        // ABI 31 refuses the retired ABI 30 Native contract in both directions; there
+        // ABI 33 refuses the retired ABI 30 Native contract in both directions; there
         // is no compatibility export in either direction.
         XCTAssertFalse(NoritoBridgeLoader.isSupportedBridgeAbiVersion(29, for: "macos-arm64_x86_64"))
         XCTAssertFalse(NoritoBridgeLoader.isSupportedBridgeAbiVersion(29, for: "ios-arm64"))
         XCTAssertFalse(NoritoBridgeLoader.isSupportedBridgeAbiVersion(30, for: "macos-arm64_x86_64"))
         XCTAssertFalse(NoritoBridgeLoader.isSupportedBridgeAbiVersion(30, for: "ios-arm64"))
+        XCTAssertFalse(NoritoBridgeLoader.isSupportedBridgeAbiVersion(31, for: "macos-arm64_x86_64"))
+        XCTAssertFalse(NoritoBridgeLoader.isSupportedBridgeAbiVersion(31, for: "ios-arm64"))
         XCTAssertFalse(NoritoBridgeLoader.isSupportedBridgeAbiVersion(32, for: "macos-arm64_x86_64"))
-        XCTAssertTrue(NoritoBridgeLoader.isSupportedBridgeAbiVersion(31, for: "macos-arm64_x86_64"))
+        XCTAssertFalse(NoritoBridgeLoader.isSupportedBridgeAbiVersion(34, for: "macos-arm64_x86_64"))
+        XCTAssertTrue(NoritoBridgeLoader.isSupportedBridgeAbiVersion(33, for: "macos-arm64_x86_64"))
     }
 
     #if os(macOS)
@@ -305,7 +308,7 @@ final class NativeBridgeLoaderTests: XCTestCase {
         let manifest = """
         {
           "version": "\(NoritoBridgeLoader.expectedVersion)",
-          "native_bridge_abi_version": 31,
+          "native_bridge_abi_version": 33,
           "hashes": {
             "\(original.identifier)": "\(hashHex)"
           }
@@ -319,7 +322,7 @@ final class NativeBridgeLoaderTests: XCTestCase {
 
     func testArtifactManifestRejectsNativeAbiMismatchBeforeHashAcceptance() throws {
         let identifier = NoritoBridgeLoader.currentIdentifier()
-        for rejected in [30, 32] {
+        for rejected in [30, 31, 32, 34] {
             let tempDir = FileManager.default.temporaryDirectory
                 .appendingPathComponent(UUID().uuidString, isDirectory: true)
             defer { try? FileManager.default.removeItem(at: tempDir) }
@@ -346,7 +349,7 @@ final class NativeBridgeLoaderTests: XCTestCase {
             )
             XCTAssertEqual(
                 NoritoBridgeLoader.validateForTests(at: bridgeURL.path, allowUntrustedLocation: true),
-                .abiMismatch(path: bridgeURL.path, expected: 31, actual: UInt32(rejected))
+                .abiMismatch(path: bridgeURL.path, expected: 33, actual: UInt32(rejected))
             )
         }
     }
@@ -381,7 +384,7 @@ final class NativeBridgeLoaderTests: XCTestCase {
         )
         XCTAssertEqual(
             status,
-            .abiMismatch(path: bridgeURL.path, expected: 31, actual: 19)
+            .abiMismatch(path: bridgeURL.path, expected: 33, actual: 19)
         )
     }
 
@@ -409,7 +412,7 @@ final class NativeBridgeLoaderTests: XCTestCase {
         let manifest = """
         {
           "version": "\(NoritoBridgeLoader.expectedVersion)",
-          "native_bridge_abi_version": 31,
+          "native_bridge_abi_version": 33,
           "hashes": {
             "\(original.identifier)": "\(hashHex)"
           }

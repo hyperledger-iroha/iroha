@@ -56,9 +56,9 @@ Use the existing warm target, native Cargo jobserver and approved linker for
 local work:
 
 ```sh
-cargo iroha-fast --stable-local-metadata -- check -p iroha_core --lib
-cargo iroha-fast --stable-local-metadata -- build --profile local-release -p irohad --bin iroha3d
-cargo iroha-fast --stable-local-metadata -- build -p iroha_core --features dev-tools --bin pk2_bridge_finality_verify
+scripts/cargo_fast.sh --stable-local-metadata --incremental -- check -p iroha_core --lib
+scripts/cargo_fast.sh --stable-local-metadata --incremental -- build --profile local-release -p irohad --bin iroha3d
+scripts/cargo_fast.sh --stable-local-metadata --incremental -- build -p iroha_core --features dev-tools --bin pk2_bridge_finality_verify
 ```
 
 Keep the release-only `IROHA_GIT_COMMIT_HASH` unset in this development
@@ -66,6 +66,24 @@ environment. The wrapper supplies `VERGEN_GIT_SHA=local-fast-build`; it never
 creates sealed artifact metadata. It rejects an inherited sealed marker before
 starting a build, so contradictory metadata cannot waste a build and fail only at
 startup. PK2 test fixtures supply explicit identities.
+
+On Unix, this explicit local mode also checks native source inputs before and
+after Cargo using the source-identity evaluator compiled by PLONK's build script.
+The first build prepares that evaluator; subsequent builds keep a private stamp
+in the existing build directory unchanged when source contents and the watched
+inventory are unchanged. Cargo then reuses PLONK and its dependents on no-op
+builds. Git staging and same-byte touches of files watched only by the source
+census no longer force recompilation. New, edited or deleted source inputs still
+invalidate the stamp, and a source change during the
+build fails the wrapper. The full source digest is still computed; this removes
+unnecessary compilation rather than weakening source capture. Packages whose
+dependency graph excludes PLONK skip this preflight.
+
+The stamp and evaluator receipt are local build artifacts, not release evidence.
+Direct Cargo and builds without `--stable-local-metadata` retain the conservative
+per-invocation rescan. A missing or outdated evaluator falls back to that path
+until Cargo rebuilds it. Runtime source identity and release admission are
+unchanged.
 
 The local wrapper resolves both Cargo target and intermediate build directories
 with offline, locked metadata before building. It rejects lanes whose

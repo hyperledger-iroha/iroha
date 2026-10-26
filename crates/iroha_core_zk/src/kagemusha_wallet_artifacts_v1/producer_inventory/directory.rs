@@ -9,7 +9,7 @@
 use std::{io, io::Read, io::Write, path::Path};
 
 use iroha_fs::{PrivateDirectory, SealedPrivateFile};
-use rand::rand_core::TryRngCore as _;
+use rand::rand_core::TryRng as _;
 use sha2::{Digest as _, Sha256};
 
 use super::{
@@ -194,7 +194,7 @@ impl DirectoryOriginalsV1 {
             return self.require(identity);
         }
         let mut nonce = [0_u8; 16];
-        rand::rngs::OsRng
+        rand::rngs::SysRng
             .try_fill_bytes(&mut nonce)
             .map_err(io::Error::other)?;
         let staging = format!("original-{}.partial", hex::encode(nonce));

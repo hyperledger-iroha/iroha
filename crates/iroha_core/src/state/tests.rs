@@ -467,14 +467,16 @@ macro_rules! asset_index_transaction {
     ($state:ident, $state_block:ident, $stx:ident, $domain_id:ident) => {
         let $state = blank_state();
         // Component account registration owns an explicit policy before its first snapshot.
-        let mut parameters = $state.world.parameters.block();
-        parameters
-            .set_parameter(
-                crate::sumeragi::test_chain::crypto_fixture_policy()
-                    .into_parameter()
-                    .expect("canonical fixture crypto policy"),
-            )
-            .expect("install original fixture crypto policy");
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&$state.world)
+            .expect("fund original fixture parameter cell");
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            crate::sumeragi::test_chain::crypto_fixture_policy()
+                .into_parameter()
+                .expect("canonical fixture crypto policy"),
+            $state.world.sccp_committee_generations.allocation_budget(),
+        )
+        .expect("install original fixture crypto policy");
         parameters.commit();
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut $state_block = $state.block(header);
@@ -3422,17 +3424,20 @@ fn public_lane_staking_invariant_fixture() -> PublicLaneStakingInvariantFixture 
         Quantity::from(34_u32),
     );
     {
-        let mut parameters = world.parameters.block();
-        parameters
-            .set_parameter(iroha_data_model::parameter::Parameter::Custom(
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&world).unwrap();
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            iroha_data_model::parameter::Parameter::Custom(
                 SumeragiNposParameters {
                     evidence_horizon_blocks: 2,
                     slashing_delay_blocks: 2,
                     ..SumeragiNposParameters::default()
                 }
                 .into_custom_parameter(),
-            ))
-            .expect("valid fixture parameters");
+            ),
+            world.sccp_committee_generations.allocation_budget(),
+        )
+        .expect("valid fixture parameters");
         parameters.commit();
     }
     world.public_lane_validators.insert(
@@ -4808,15 +4813,15 @@ state_test! { sync public_lane_staking_roundtrip_through_state_json
         Quantity::from(1_480_u64),
     );
     {
-        let mut parameters = world.parameters.block();
-        parameters.set_parameter(iroha_data_model::parameter::Parameter::Custom(
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&world).unwrap();
+        crate::state::set_parameter_cell_for_testing(&mut parameters, iroha_data_model::parameter::Parameter::Custom(
             SumeragiNposParameters {
                 evidence_horizon_blocks: 5,
                 slashing_delay_blocks: 5,
                 ..SumeragiNposParameters::default()
             }
             .into_custom_parameter(),
-        )).expect("valid fixture parameters");
+        ), world.sccp_committee_generations.allocation_budget()).expect("valid fixture parameters");
         parameters.commit();
     }
     let request_id = Hash::new("unbond-request");
@@ -5160,14 +5165,16 @@ fn new_sample_account(account_id: &AccountId) -> iroha_data_model::account::NewA
 state_test! { sync account_scope_hierarchy_tracks_dataspaces_and_domains
     let state = blank_state();
     // Component account registration owns an explicit policy before its first snapshot.
-    let mut parameters = state.world.parameters.block();
-    parameters
-        .set_parameter(
-            crate::sumeragi::test_chain::crypto_fixture_policy()
+    let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+        .expect("fund original fixture parameter cell");
+    crate::state::set_parameter_cell_for_testing(
+        &mut parameters,
+        crate::sumeragi::test_chain::crypto_fixture_policy()
                 .into_parameter()
                 .expect("canonical fixture crypto policy"),
-        )
-        .expect("install original fixture crypto policy");
+        state.world.sccp_committee_generations.allocation_budget(),
+    )
+    .expect("install original fixture crypto policy");
     parameters.commit();
     let block = new_dummy_block_with_payload(|_| {});
     let mut state_block = state.block(block.as_ref().header());
@@ -5225,14 +5232,16 @@ state_test! { sync account_scope_hierarchy_tracks_dataspaces_and_domains
 state_test! { sync account_scope_directory_tracks_alias_bind_and_unbind
     let state = blank_state();
     // Component account registration owns an explicit policy before its first snapshot.
-    let mut parameters = state.world.parameters.block();
-    parameters
-        .set_parameter(
-            crate::sumeragi::test_chain::crypto_fixture_policy()
+    let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+        .expect("fund original fixture parameter cell");
+    crate::state::set_parameter_cell_for_testing(
+        &mut parameters,
+        crate::sumeragi::test_chain::crypto_fixture_policy()
                 .into_parameter()
                 .expect("canonical fixture crypto policy"),
-        )
-        .expect("install original fixture crypto policy");
+        state.world.sccp_committee_generations.allocation_budget(),
+    )
+    .expect("install original fixture crypto policy");
     parameters.commit();
     let block = new_dummy_block_with_payload(|_| {});
     let mut state_block = state.block(block.as_ref().header());
@@ -5671,14 +5680,16 @@ state_test! { sync account_scope_directory_uses_primary_label_materialization_fo
 state_test! { sync account_scope_directory_tracks_manifest_driven_uaid_binding_changes
     let state = blank_state();
     // Component account registration owns an explicit policy before its first snapshot.
-    let mut parameters = state.world.parameters.block();
-    parameters
-        .set_parameter(
-            crate::sumeragi::test_chain::crypto_fixture_policy()
+    let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+        .expect("fund original fixture parameter cell");
+    crate::state::set_parameter_cell_for_testing(
+        &mut parameters,
+        crate::sumeragi::test_chain::crypto_fixture_policy()
                 .into_parameter()
                 .expect("canonical fixture crypto policy"),
-        )
-        .expect("install original fixture crypto policy");
+        state.world.sccp_committee_generations.allocation_budget(),
+    )
+    .expect("install original fixture crypto policy");
     parameters.commit();
     let block = new_dummy_block_with_payload(|_| {});
     let mut state_block = state.block(block.as_ref().header());
@@ -5755,14 +5766,16 @@ state_test! { sync trigger_args_from_asset_event_falls_back_to_event_domain_with
     let asset_id = AssetId::new(asset_definition.clone(), subject.clone());
     let state = blank_test_state();
     // Component account registration owns an explicit policy before its first snapshot.
-    let mut parameters = state.world.parameters.block();
-    parameters
-        .set_parameter(
-            crate::sumeragi::test_chain::crypto_fixture_policy()
+    let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+        .expect("fund original fixture parameter cell");
+    crate::state::set_parameter_cell_for_testing(
+        &mut parameters,
+        crate::sumeragi::test_chain::crypto_fixture_policy()
                 .into_parameter()
                 .expect("canonical fixture crypto policy"),
-        )
-        .expect("install original fixture crypto policy");
+        state.world.sccp_committee_generations.allocation_budget(),
+    )
+    .expect("install original fixture crypto policy");
     parameters.commit();
     let block = new_dummy_block_with_payload(|_| {});
     let mut state_block = state.block(block.as_ref().header());
@@ -6071,8 +6084,8 @@ state_test! { sync pipeline_snapshot_reflects_latest_pipeline_config
     let mut policy = crate::pipeline_validity_policy::PipelineValidityPolicyV1::protocol_default();
     policy.query_stored_min_gas_units = updated.query_stored_min_gas_units;
     {
-        let mut parameters = state.world.parameters.block();
-        parameters.get_mut().set_parameter(Parameter::Custom(policy.into_custom_parameter())).unwrap();
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world).unwrap();
+        crate::state::set_parameter_cell_for_testing(&mut parameters, Parameter::Custom(policy.into_custom_parameter()), state.world.sccp_committee_generations.allocation_budget()).unwrap();
         parameters.commit();
     }
     assert_eq!(state.pipeline_snapshot().query_stored_min_gas_units, updated.query_stored_min_gas_units);
@@ -6098,12 +6111,15 @@ fn executor_reconciliation_cannot_replace_signed_npos_parameters() {
     };
     let state = blank_test_state();
     {
-        let mut parameters = state.world.parameters.block();
-        parameters
-            .set_parameter(iroha_data_model::parameter::Parameter::Custom(
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world).unwrap();
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            iroha_data_model::parameter::Parameter::Custom(
                 installed.clone().into_custom_parameter(),
-            ))
-            .expect("valid fixture parameters");
+            ),
+            state.world.sccp_committee_generations.allocation_budget(),
+        )
+        .expect("valid fixture parameters");
         parameters.commit();
     }
     let mut attacker_model = ExecutorDataModel::default();
@@ -6115,7 +6131,10 @@ fn executor_reconciliation_cannot_replace_signed_npos_parameters() {
     let mut block = state.block(signed_payload.header());
     {
         let mut transaction = block.transaction();
-        transaction.world.apply_executor_data_model(attacker_model);
+        transaction
+            .world
+            .apply_executor_data_model(attacker_model)
+            .unwrap();
         assert_eq!(
             transaction
                 .world
@@ -6152,7 +6171,7 @@ state_test! { sync executor_data_model_reconciliation_purges_undeclared_permissi
     let mut transaction = block.transaction();
     transaction
         .world
-        .apply_executor_data_model(data_model.clone());
+        .apply_executor_data_model(data_model.clone()).unwrap();
     let_row! { account_permissions = transaction .world .account_permissions .get(&ALICE_ID) .expect("retained account permission entry") };
     assert_eq!(account_permissions, &BTreeSet::from([retained.clone()]));
     let_row! { role = transaction .world .roles .get(&role_id) .expect("reconciled role") };
@@ -7585,9 +7604,9 @@ state_test! { sync consensus_lane_lifecycle_replay_converges_on_fresh_state
     );
     let (events_sender, _) = tokio::sync::broadcast::channel(8);
     let_row! { queue = crate::queue::Queue::from_config( iroha_config::parameters::actual::Queue::default(), events_sender, ) };
-    assert!(queue.reconfigure_nexus_with_state_if_needed(&first_nexus, first, None,));
+    assert!(queue.reconfigure_nexus_with_state_if_needed(&first_nexus, first, None,).expect("original State pool admits Queue privacy projection"));
     assert!(
-        !queue.reconfigure_nexus_with_state_if_needed(&first_nexus, first, None),
+        !queue.reconfigure_nexus_with_state_if_needed(&first_nexus, first, None).expect("original State pool admits Queue privacy projection"),
         "queue topology refresh must be idempotent after committed lifecycle publication"
     );
 }
@@ -8440,7 +8459,7 @@ state_test! { sync governance_restore_rejects_oversized_plain_ballot_corpus
     let mut world = World::default();
     // The corpus-size negative must reach its PLAIN domain check rather than
     // fail earlier at the independently retained finite source reservation.
-    let mut parameters = world.parameters.block();
+    let mut parameters = crate::state::parameter_cell_block_for_testing(&world).unwrap();
     let previous = parameters.get().block().fastpq_source();
     let mut mandatory = previous.mandatory;
     mandatory.max_retained_obligations = u32::try_from(
@@ -8450,9 +8469,9 @@ state_test! { sync governance_restore_rejects_oversized_plain_ballot_corpus
         parameters.get().block().execution_output(), previous.intrinsic, mandatory,
         iroha_data_model::parameter::FastpqSourcePolicyV1::BOOTSTRAP_NETWORK_INPUTS,
     ).expect("exact finite negative-corpus source reservation");
-    parameters.get_mut().set_parameter(iroha_data_model::parameter::Parameter::Block(
+    crate::state::set_parameter_cell_for_testing(&mut parameters, iroha_data_model::parameter::Parameter::Block(
         iroha_data_model::parameter::BlockParameter::FastpqSource(policy),
-    )).expect("valid fixture parameters");
+    ), world.sccp_committee_generations.allocation_budget()).expect("valid fixture parameters");
     parameters.commit();
     world.governance_referenda.insert("oversized-plain-restore".to_owned(), indexed_plain_referendum());
     world
@@ -11151,6 +11170,72 @@ state_test! { sync emergency_fast_restored_config_rejects_dataspace_catalog_repl
             if message.contains("dataspace catalog")
     ));
 }
+state_test! { sync nexus_reconfiguration_preserves_exact_committed_staking_monetary_owner
+    let asset = AssetDefinitionId::derive_from_components(
+        iroha_model_base::domain::DomainId::parse_fully_qualified("staking.example")
+            .expect("fixture staking domain"),
+        "bond".parse().expect("fixture staking currency"),
+    );
+    let mut monetary = crate::sumeragi::test_chain::staking_fixture_policy(asset.clone());
+    monetary.min_validator_stake = Quantity::from(17_u64);
+    monetary.max_stake_shares_per_validator = NonZeroU32::new(19).unwrap();
+    monetary.max_pending_unbonds_per_share = NonZeroU32::new(3).unwrap();
+    monetary.unbonding_delay_ms = 123_456;
+    monetary.max_slash_bps = 4321;
+    monetary.stake_escrow_account_id = ALICE_ID.clone();
+    monetary.slash_sink_account_id = BOB_ID.clone();
+    let mut world = World::default();
+    world
+        .set_parameter_for_testing(Parameter::Custom(
+            monetary.clone().into_custom_parameter().expect("typed fixture staking policy"),
+        ))
+        .expect("admit explicit pre-chain monetary policy");
+    world
+        .set_parameter_for_testing(Parameter::Custom(
+            SumeragiNposParameters {
+                xor_asset_definition_id: asset.clone(),
+                ..SumeragiNposParameters::default()
+            }
+            .into_custom_parameter(),
+        ))
+        .expect("admit matching explicit network currency");
+    let mut state = State::new_with_pre_genesis_nexus_for_testing(
+        world,
+        iroha_config::parameters::actual::Nexus::default(),
+        LiveQueryStore::start_test(),
+    );
+    let original = state.world.parameters.view().get().clone();
+    let original_policy = original.require_staking_policy().unwrap();
+    assert_eq!(original_policy, &monetary);
+    let mut nexus = state.nexus_snapshot();
+    nexus.staking.public_validator_mode =
+        iroha_config::parameters::actual::LaneValidatorMode::AdminManaged;
+    nexus.staking.restricted_validator_mode =
+        iroha_config::parameters::actual::LaneValidatorMode::StakeElected;
+    nexus.staking.max_validators = NonZeroU32::new(7).unwrap();
+    state
+        .set_nexus_from_config(nexus)
+        .expect("local modes and capacity do not select monetary policy");
+    let current = state.world.parameters.view();
+    let current_policy = current.get().require_staking_policy().unwrap();
+    assert!(std::ptr::eq(current_policy, original_policy));
+    assert_eq!(current_policy, &monetary);
+    assert_eq!(
+        state.world.view().sumeragi_npos_parameters().unwrap().unwrap().xor_asset_definition_id,
+        asset,
+    );
+    let configured = state.nexus_snapshot();
+    assert_eq!(configured.staking.max_validators.get(), 7);
+    assert_eq!(
+        configured.staking.public_validator_mode,
+        iroha_config::parameters::actual::LaneValidatorMode::AdminManaged,
+    );
+    assert_eq!(
+        configured.staking.restricted_validator_mode,
+        iroha_config::parameters::actual::LaneValidatorMode::StakeElected,
+    );
+}
+
 state_test! { sync emergency_fast_restored_config_preserves_staking_owner_and_custody
     for pending_only in [false, true] {
         let (validator, keypair) = bls_account_in("emergency-staking");
@@ -11168,16 +11253,26 @@ state_test! { sync emergency_fast_restored_config_preserves_staking_owner_and_cu
             &custody_asset,
             Quantity::from(100_u64),
         );
+        let monetary = iroha_genesis::default_staking_policy(
+            custody_asset.definition().clone(),
+            validator.clone(),
+            validator.clone(),
+        );
+        world
+            .set_parameter_for_testing(Parameter::Custom(
+                monetary.clone().into_custom_parameter().unwrap(),
+            ))
+            .expect("author the exact retained custody policy before restoration");
         {
-            let mut parameters = world.parameters.block();
-            parameters.set_parameter(iroha_data_model::parameter::Parameter::Custom(
+            let mut parameters = crate::state::parameter_cell_block_for_testing(&world).unwrap();
+            crate::state::set_parameter_cell_for_testing(&mut parameters, iroha_data_model::parameter::Parameter::Custom(
                 SumeragiNposParameters {
                     evidence_horizon_blocks: 1,
                     slashing_delay_blocks: 1,
                     ..SumeragiNposParameters::default()
                 }
                 .into_custom_parameter(),
-            )).expect("valid fixture parameters");
+            ), world.sccp_committee_generations.allocation_budget()).expect("valid fixture parameters");
             parameters.commit();
         }
         let mut state = State::new_for_testing(
@@ -11254,10 +11349,20 @@ state_test! { sync emergency_fast_restored_config_preserves_staking_owner_and_cu
             Some(&Quantity::from(100_u64))
         );
 
+        let original = state.world.parameters.view().get().clone();
+        assert_eq!(original.require_staking_policy().unwrap(), &monetary);
         let mut recoverable = before;
-        recoverable.staking.stake_escrow_account_id = BOB_ID.to_string();
+        recoverable.staking.max_validators = NonZeroU32::new(7).unwrap();
+        let requested_capacity = recoverable.staking.max_validators;
         state.set_nexus_from_config(recoverable)
-            .expect("Fast recovery may update local selectors while pinned custody retains its exact source");
+            .expect("Fast recovery may update local capacity while committed policy and custody retain their exact source");
+        assert_eq!(state.nexus_snapshot().staking.max_validators, requested_capacity);
+        let current = state.world.parameters.view();
+        assert_eq!(current.get().require_staking_policy().unwrap(), &monetary);
+        assert!(std::ptr::eq(
+            current.get().require_staking_policy().unwrap(),
+            original.require_staking_policy().unwrap(),
+        ));
         assert_eq!(
             state
                 .world
@@ -19664,14 +19769,16 @@ state_test! { sync remove_asset_and_metadata_with_total_decrements_definition_to
 state_test! { sync asset_definition_domain_index_tracks_exact_membership
     let state = blank_state();
     // Component account registration owns an explicit policy before its first snapshot.
-    let mut parameters = state.world.parameters.block();
-    parameters
-        .set_parameter(
-            crate::sumeragi::test_chain::crypto_fixture_policy()
+    let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+        .expect("fund original fixture parameter cell");
+    crate::state::set_parameter_cell_for_testing(
+        &mut parameters,
+        crate::sumeragi::test_chain::crypto_fixture_policy()
                 .into_parameter()
                 .expect("canonical fixture crypto policy"),
-        )
-        .expect("install original fixture crypto policy");
+        state.world.sccp_committee_generations.allocation_budget(),
+    )
+    .expect("install original fixture crypto policy");
     parameters.commit();
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut state_block = state.block(header);
@@ -20207,10 +20314,10 @@ state_test! { result time_trigger_same_id_reschedule_keeps_new_repeat_budget
 state_test! { sync trigger_genesis_preserves_original_execution_bounds
     let component = blank_state();
     {
-        let mut parameters = component.world.parameters.block();
-        parameters.set_parameter(iroha_data_model::parameter::Parameter::SmartContract(
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&component.world).unwrap();
+        crate::state::set_parameter_cell_for_testing(&mut parameters, iroha_data_model::parameter::Parameter::SmartContract(
             iroha_data_model::parameter::SmartContractParameter::ExecutionDepth(3),
-        )).expect("valid fixture parameters");
+        ), component.world.sccp_committee_generations.allocation_budget()).expect("valid fixture parameters");
         parameters.commit();
     }
     let original_execution = component.world.parameters.view().get().parameters()
@@ -20391,14 +20498,16 @@ state_test! { result time_triggers_due_for_block_detects_precommit_trigger
     let query = LiveQueryStore::start_test();
     let state = State::new(World::default(), kura, query);
     // Component account registration owns an explicit policy before its first snapshot.
-    let mut parameters = state.world.parameters.block();
-    parameters
-        .set_parameter(
-            crate::sumeragi::test_chain::crypto_fixture_policy()
+    let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+        .expect("fund original fixture parameter cell");
+    crate::state::set_parameter_cell_for_testing(
+        &mut parameters,
+        crate::sumeragi::test_chain::crypto_fixture_policy()
                 .into_parameter()
                 .expect("canonical fixture crypto policy"),
-        )
-        .expect("install original fixture crypto policy");
+        state.world.sccp_committee_generations.allocation_budget(),
+    )
+    .expect("install original fixture crypto policy");
     parameters.commit();
     assert!(
         !state.time_trigger_clock_progress_required_fast(Duration::ZERO),
@@ -20474,14 +20583,16 @@ state_test! { result time_trigger_clock_progress_requires_a_reachable_schedule
     fn state_with_time_trigger(execution_time: ExecutionTime) -> Result<State> {
         let_row! { state = State::new( World::default(), Kura::blank_kura_for_testing(), LiveQueryStore::start_test(), ) };
         // Component account registration owns an explicit policy before its first snapshot.
-        let mut parameters = state.world.parameters.block();
-        parameters
-            .set_parameter(
-                crate::sumeragi::test_chain::crypto_fixture_policy()
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+            .expect("fund original fixture parameter cell");
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            crate::sumeragi::test_chain::crypto_fixture_policy()
                     .into_parameter()
                     .expect("canonical fixture crypto policy"),
-            )
-            .expect("install original fixture crypto policy");
+            state.world.sccp_committee_generations.allocation_budget(),
+        )
+        .expect("install original fixture crypto policy");
         parameters.commit();
         let_row! { header = BlockHeader::new( NonZeroU64::new(1).unwrap(), None, None, PARENT_TIME_MS, 0, ) };
         let mut state_block = state.block(header);
@@ -20737,14 +20848,16 @@ state_test! { sync confidential_digest_reflects_registry_commit
     let query = LiveQueryStore::start_test();
     let state = State::new(World::default(), kura, query);
     // Component account registration owns an explicit policy before its first snapshot.
-    let mut parameters = state.world.parameters.block();
-    parameters
-        .set_parameter(
-            crate::sumeragi::test_chain::crypto_fixture_policy()
+    let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+        .expect("fund original fixture parameter cell");
+    crate::state::set_parameter_cell_for_testing(
+        &mut parameters,
+        crate::sumeragi::test_chain::crypto_fixture_policy()
                 .into_parameter()
                 .expect("canonical fixture crypto policy"),
-        )
-        .expect("install original fixture crypto policy");
+        state.world.sccp_committee_generations.allocation_budget(),
+    )
+    .expect("install original fixture crypto policy");
     parameters.commit();
     let header1 = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
     let mut block1 = state.block(header1);
@@ -26057,14 +26170,16 @@ state_test! { sync block_does_not_advance_sweep_marker_after_partial_release_fai
 state_test! { sync transaction_failure_rolls_back_asset_world_and_trigger_changes
     let state = blank_state();
     // Component account registration owns an explicit policy before its first snapshot.
-    let mut parameters = state.world.parameters.block();
-    parameters
-        .set_parameter(
-            crate::sumeragi::test_chain::crypto_fixture_policy()
+    let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+        .expect("fund original fixture parameter cell");
+    crate::state::set_parameter_cell_for_testing(
+        &mut parameters,
+        crate::sumeragi::test_chain::crypto_fixture_policy()
                 .into_parameter()
                 .expect("canonical fixture crypto policy"),
-        )
-        .expect("install original fixture crypto policy");
+        state.world.sccp_committee_generations.allocation_budget(),
+    )
+    .expect("install original fixture crypto policy");
     parameters.commit();
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
     let mut state_block = state.block(header);
@@ -26227,10 +26342,10 @@ state_test! { sync execute_called_trigger_failure_rolls_back_state
 state_test! { sync self_calling_trigger_stops_at_synchronous_execution_depth
     let state = authenticate_trigger_fixture(blank_state());
     {
-        let mut parameters = state.world.parameters.block();
-        parameters.set_parameter(iroha_data_model::parameter::Parameter::SmartContract(
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world).unwrap();
+        crate::state::set_parameter_cell_for_testing(&mut parameters, iroha_data_model::parameter::Parameter::SmartContract(
             iroha_data_model::parameter::SmartContractParameter::ExecutionDepth(3),
-        )).expect("valid fixture parameters");
+        ), state.world.sccp_committee_generations.allocation_budget()).expect("valid fixture parameters");
         parameters.commit();
     }
     let trigger_id: TriggerId = "bounded_self_call".parse().expect("valid trigger id");
@@ -26292,10 +26407,10 @@ state_test! { sync data_trigger_depth_u8_max_rejects_without_panicking_or_wrappi
     use iroha_data_model::prelude::DataEvent;
     let state = authenticate_trigger_fixture(blank_state());
     {
-        let mut parameters = state.world.parameters.block();
-        parameters.set_parameter(iroha_data_model::parameter::Parameter::SmartContract(
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world).unwrap();
+        crate::state::set_parameter_cell_for_testing(&mut parameters, iroha_data_model::parameter::Parameter::SmartContract(
             iroha_data_model::parameter::SmartContractParameter::ExecutionDepth(u8::MAX),
-        )).expect("valid fixture parameters");
+        ), state.world.sccp_committee_generations.allocation_budget()).expect("valid fixture parameters");
         parameters.commit();
     }
     let trigger_id: TriggerId = "max_depth_data_trigger".parse().expect("valid trigger id");
@@ -27419,14 +27534,16 @@ state_test! { sync identityless_raw_trigger_rejects_before_event_argument_decode
     };
     let state = blank_state();
     // Component account registration owns an explicit policy before its first snapshot.
-    let mut parameters = state.world.parameters.block();
-    parameters
-        .set_parameter(
-            crate::sumeragi::test_chain::crypto_fixture_policy()
+    let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+        .expect("fund original fixture parameter cell");
+    crate::state::set_parameter_cell_for_testing(
+        &mut parameters,
+        crate::sumeragi::test_chain::crypto_fixture_policy()
                 .into_parameter()
                 .expect("canonical fixture crypto policy"),
-        )
-        .expect("install original fixture crypto policy");
+        state.world.sccp_committee_generations.allocation_budget(),
+    )
+    .expect("install original fixture crypto policy");
     parameters.commit();
     let trigger_id: TriggerId = "identityless_raw_callback".parse().expect("trigger id");
     let_row! { program = kotodama_lang::compiler::Compiler::new() .compile_source( r"
@@ -31073,4 +31190,88 @@ state_test! { sync canonical_merge_cells_follow_actual_transaction_apply_and_dro
     }
     assert!(block.world.merge_hint_roots.is_empty());
     assert_eq!(**block.world.merge_global_state_root, None);
+}
+
+#[test]
+fn governance_restore_uses_exact_retained_parameter_predecessor_without_touching_it() {
+    use iroha_data_model::parameter::{BlockParameter, FastpqSourcePolicyV1};
+    let mut world = World::default();
+    let mut locks = GovernanceLocksForReferendum::default();
+    for owner in [ALICE_ID.clone(), BOB_ID.clone()] {
+        locks
+            .locks
+            .insert(owner.clone(), indexed_governance_lock(owner, 100));
+    }
+    world
+        .governance_referenda
+        .insert("parameter-cut".into(), indexed_plain_referendum());
+    world.governance_locks.insert("parameter-cut".into(), locks);
+    for cap in [1, 2] {
+        let mut cell = crate::state::parameter_cell_block_for_testing(&world).unwrap();
+        let source = cell.get().block().fastpq_source();
+        let mut mandatory = source.mandatory;
+        mandatory.max_retained_obligations = cap;
+        let policy = FastpqSourcePolicyV1::from_sizing(
+            cell.get().block().execution_output(),
+            source.intrinsic,
+            mandatory,
+            FastpqSourcePolicyV1::BOOTSTRAP_NETWORK_INPUTS,
+        )
+        .unwrap();
+        crate::state::set_parameter_cell_for_testing(
+            &mut cell,
+            Parameter::Block(BlockParameter::FastpqSource(policy)),
+            world.sccp_committee_generations.allocation_budget(),
+        )
+        .unwrap();
+        cell.commit();
+    }
+    let current = world.parameters.view().get().clone();
+    let previous = world
+        .parameters
+        .predecessor_view()
+        .get()
+        .as_ref()
+        .unwrap()
+        .clone();
+    assert_eq!(
+        current
+            .block()
+            .fastpq_source()
+            .mandatory
+            .max_retained_obligations,
+        2
+    );
+    assert_eq!(
+        previous
+            .block()
+            .fastpq_source()
+            .mandatory
+            .max_retained_obligations,
+        1
+    );
+    assert!(
+        world
+            .rebuild_governance_read_indexes()
+            .unwrap_err()
+            .contains("global retained")
+    );
+    assert!(matches!(world.validate_retained_mandatory_sources(),
+        Err(crate::execution_attempt::ExecutionAttemptError::Rejected(error))
+            if error.contains("global retained")));
+    assert!(current.same_version(world.parameters.view().get()));
+    assert!(previous.same_version(world.parameters.predecessor_view().get().as_ref().unwrap()));
+    // A genuine subsequent parameter-only publication advances that exact undo.
+    let mut cell = crate::state::parameter_cell_block_for_testing(&world).unwrap();
+    crate::state::set_parameter_cell_for_testing(
+        &mut cell,
+        Parameter::Block(BlockParameter::FastpqSource(
+            current.block().fastpq_source(),
+        )),
+        world.sccp_committee_generations.allocation_budget(),
+    )
+    .unwrap();
+    cell.commit();
+    world.rebuild_governance_read_indexes().unwrap();
+    world.validate_retained_mandatory_sources().unwrap();
 }

@@ -15,7 +15,7 @@ internal class EnrollmentProbeCommand(row: JsonObject) {
         probeRequire(row.keys == setOf("action", "inputs"))
         val input = row["inputs"] as? JsonObject ?: throw EnrollmentProbeFailure("input")
         val expected = when (action) {
-            "install", "begin", "collect-evidence", "inspect", "abandon", "release-wallet", "stop" -> emptySet()
+            "install", "begin", "collect-evidence", "inspect", "abandon", "release-wallet", "stop", "begin-exchange", "end-exchange" -> emptySet()
             "permit", "accept-result" -> setOf("response")
             "authorize", "retain-request" -> setOf("signature")
             "start-enrollment", "renew-session" -> setOf("access-token", "dpop-proof")

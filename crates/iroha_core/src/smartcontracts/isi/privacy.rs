@@ -91,8 +91,9 @@ use iroha_data_model::{
         PrivacyProtocolLimitsTighteningV1, PrivacyRootManagementV1, PrivacyRootPublicationV1,
         PrivacyRootRoleV1, PrivacyStatementDigestV1, PrivacyStatementV1,
         PrivacyValueBalanceDirectionV1, PrivacyVegaIssuerRecordV1, PrivacyZkAcePolicyLifecycleV1,
-        PrivacyZkAmsActionV1, PrivacyZkX509CrlRecordV1, PrivacyZkX509RecordLifecycleV1,
-        PrivacyZkX509TrustAnchorRecordV1, TAIRA_PRIVACY_MAX_PGC_BOOTSTRAP_PROOF_BYTES_V1,
+        PrivacyZkAmsActionV1, PrivacyZkX509CrlRecordV1, PrivacyZkX509PresentationBoundsV1,
+        PrivacyZkX509RecordLifecycleV1, PrivacyZkX509TrustAnchorRecordV1,
+        TAIRA_PRIVACY_MAX_PGC_BOOTSTRAP_PROOF_BYTES_V1,
         VEGA_MAX_ISSUER_RECORD_REVISIONS_PER_LINEAGE_V1, VEGA_MAX_ISSUER_RECORDS_V1,
         ZK_X509_MAX_CERTIFICATE_POLICY_RECORDS_V1, ZK_X509_MAX_CRL_AGE_SECONDS_V1,
         ZK_X509_MAX_CRL_LINEAGES_V1, ZK_X509_MAX_RECORD_REVISIONS_PER_LINEAGE_V1,
@@ -2008,33 +2009,33 @@ fn apply_zk_x509_root_append_v1(
         .privacy_root_heads
         .insert(plan.head_key, plan.next_head);
 }
-// TODO(X.6): take this verdict from the canonical interval definition
-// (`PrivacyZkX509PresentationBoundsV1::from_crl(record.update_interval())`
-// containing the block second). The predicate below is the same on every block
-// second within the RFC 5280 calendar; it is pinned as a `deferred` site in
-// specs/zk_x509_presentation_interval_sites.json and compared with the
-// definition by `deferred_sites_equal_the_canonical_definition_on_a_boundary_grid`.
+// Registration and rotation use the same signed-interval definition as proof
+// admission. Eligibility never selects an older CRL: State holds only the exact
+// governed current revision, and a rejected successor leaves it unchanged.
 fn validate_zk_x509_crl_freshness_v1(
     record: PrivacyZkX509CrlRecordV1,
     block_timestamp_ms: u64,
 ) -> Result<(), Error> {
     let block_unix_seconds = block_timestamp_ms / 1_000;
-    if block_unix_seconds < record.this_update_unix_seconds
-        || block_unix_seconds >= record.next_update_unix_seconds
+    if PrivacyZkX509PresentationBoundsV1::from_crl(record.update_interval())
+        .is_ok_and(|bounds| bounds.contains_unix_seconds(block_unix_seconds))
     {
-        return Err(invalid_privacy_parameter(
-            "X.509 signed CRL is not current at the executing block timestamp",
-        ));
+        return Ok(());
     }
-    let age = block_unix_seconds
-        .checked_sub(record.this_update_unix_seconds)
-        .ok_or_else(|| invalid_privacy_parameter("X.509 signed CRL begins in the future"))?;
-    if age > ZK_X509_MAX_CRL_AGE_SECONDS_V1 {
-        return Err(invalid_privacy_parameter(format!(
-            "X.509 signed CRL age {age}s exceeds the {ZK_X509_MAX_CRL_AGE_SECONDS_V1}s freshness limit"
-        )));
+    // Keep useful diagnostics after the canonical rejection. These branches
+    // cannot admit a record or extend the RFC 5280 calendar.
+    if block_unix_seconds < record.next_update_unix_seconds {
+        if let Some(age) = block_unix_seconds.checked_sub(record.this_update_unix_seconds) {
+            if age > ZK_X509_MAX_CRL_AGE_SECONDS_V1 {
+                return Err(invalid_privacy_parameter(format!(
+                    "X.509 signed CRL age {age}s exceeds the {ZK_X509_MAX_CRL_AGE_SECONDS_V1}s freshness limit"
+                )));
+            }
+        }
     }
-    Ok(())
+    Err(invalid_privacy_parameter(
+        "X.509 signed CRL is not current at the executing block timestamp",
+    ))
 }
 fn validate_current_zk_x509_ca_root_v1(
     trust_anchor: PrivacyZkX509TrustAnchorRecordV1,
@@ -6076,7 +6077,6 @@ mod tests {
     use iroha_model_base::name::Name;
     use iroha_test_samples::ALICE_ID;
     use mv::storage::Storage;
-    use rand_core_06::{CryptoRng, Error as RngError, RngCore};
     use sha2::{Digest, Sha256};
     use std::{str::FromStr as _, sync::OnceLock};
     const TEST_CHAIN_ID: &str = "taira-pgc-runtime-test";
@@ -6276,18 +6276,19 @@ mod tests {
             Self { seed, counter: 0 }
         }
     }
-    impl RngCore for KatRng {
-        fn next_u32(&mut self) -> u32 {
+    impl rand::TryRng for KatRng {
+        type Error = core::convert::Infallible;
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             let mut bytes = [0; 4];
-            self.fill_bytes(&mut bytes);
-            u32::from_be_bytes(bytes)
+            self.try_fill_bytes(&mut bytes)?;
+            Ok(u32::from_be_bytes(bytes))
         }
-        fn next_u64(&mut self) -> u64 {
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
             let mut bytes = [0; 8];
-            self.fill_bytes(&mut bytes);
-            u64::from_be_bytes(bytes)
+            self.try_fill_bytes(&mut bytes)?;
+            Ok(u64::from_be_bytes(bytes))
         }
-        fn fill_bytes(&mut self, destination: &mut [u8]) {
+        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
             for chunk in destination.chunks_mut(32) {
                 let mut hash = Sha256::new();
                 hash.update(b"iroha.privacy.pgc-runtime-test-rng.v1");
@@ -6297,13 +6298,10 @@ mod tests {
                 let block: [u8; 32] = hash.finalize().into();
                 chunk.copy_from_slice(&block[..chunk.len()]);
             }
-        }
-        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), RngError> {
-            self.fill_bytes(destination);
             Ok(())
         }
     }
-    impl CryptoRng for KatRng {}
+    impl rand::TryCryptoRng for KatRng {}
     fn secret(value: u64) -> SecretScalarV1 {
         let mut bytes = [0; 32];
         bytes[24..].copy_from_slice(&value.to_be_bytes());
@@ -9335,6 +9333,7 @@ mod tests {
         let original_pointer = bytes.as_ptr();
         let original_bytes = bytes.clone();
         let mut block = state.block(activation_execution_header(&state));
+        let original_refusal;
         {
             let mut transaction = block.transaction();
             grant_governance(&mut transaction);
@@ -9366,6 +9365,7 @@ mod tests {
                 original.kind(),
                 norito::core::DecodeLocalRefusalKind::EnclosingLimit
             );
+            original_refusal = original.clone();
             assert!(
                 retained.allocation_refusal().is_none(),
                 "no fabricated pool release source"
@@ -9384,9 +9384,19 @@ mod tests {
             source.attachments().unwrap().occurrences()[0].bytes,
             original_bytes
         );
-        // The refused child retains its storage cause on the original block owner.
-        // Retry the unchanged source only after retiring that unpublished attempt.
+        // The original local refusal remains latched on its carrier. A new child
+        // of that carrier cannot turn the failed attempt into a fresh one.
+        match block.try_transaction() {
+            Err(crate::state::StateStorageAdmissionError::RootScopeDecode(original)) => {
+                assert_eq!(original, original_refusal);
+            }
+            Err(other) => panic!("original root-scope refusal changed: {other:?}"),
+            Ok(_) => panic!("refused carrier must not grant a fresh child"),
+        }
+        assert_eq!(block.committed_fragment_count(), 0);
         drop(block);
+        // Retry the unchanged signed source against the same State predecessor,
+        // with a fresh execution carrier after abandoning the refused one.
         let mut retry_block = state.block(activation_execution_header(&state));
         let mut retry = retry_block.transaction();
         grant_governance(&mut retry);

@@ -1,7 +1,7 @@
 //! Immutable bounded metadata publication shared by raw compiler and encoded carriers.
 
 use iroha_fs::PrivateDirectory;
-use rand::rand_core::TryRngCore as _;
+use rand::rand_core::TryRng as _;
 use sha2::{Digest as _, Sha256};
 use std::{io, io::Read as _, io::Write as _};
 
@@ -70,7 +70,7 @@ pub(super) fn publish_metadata(
         return Ok(());
     }
     let mut nonce = [0_u8; 16];
-    rand::rngs::OsRng
+    rand::rngs::SysRng
         .try_fill_bytes(&mut nonce)
         .map_err(io::Error::other)?;
     let staging = format!("wallet-metadata-{}.partial", hex::encode(nonce));

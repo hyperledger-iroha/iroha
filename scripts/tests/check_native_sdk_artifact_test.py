@@ -80,7 +80,7 @@ def test_native_c_contracts_exclude_retired_kagemusha_exports() -> None:
 def test_current_wallet_export_contract_matches_every_apple_inventory() -> None:
     """Keep the independently reviewed publication and admission inventories exact."""
     expected = MODULE.KAGEMUSHA_WALLET_C_EXPORTS
-    assert len(expected) == len(set(expected)) == 27
+    assert len(expected) == len(set(expected)) == 29
     for relative, start, end in (
         ("scripts/build_norito_xcframework.sh", '"required_symbols": [', '"forbidden_symbols": ['),
         ("scripts/validate_norito_bridge_xcframework.py", "EXPECTED_REQUIRED_SYMBOLS = [", "EXPECTED_FORBIDDEN_SYMBOLS = ["),
@@ -101,7 +101,7 @@ def test_current_wallet_exports_are_accepted_and_unknown_names_are_rejected() ->
         + MODULE.KAGEMUSHA_WALLET_JNI_EXPORTS
         + MODULE.KAGEMUSHA_LOAD_ORIGINAL_JNI_EXPORTS
     )
-    assert len(current) == len(set(current)) == 48
+    assert len(current) == len(set(current)) == 52
     for sdk in ("c-jni", "csharp"):
         MODULE.validate_retired_protocol_symbols(current, sdk=sdk)
         for symbol in (*current, "connect_norito_free"):
@@ -178,7 +178,7 @@ def test_current_wallet_c_and_jni_inventory_matches_independent_source_declarati
     kotlin = (REPO_ROOT / "kotlin/kagemusha-wallet-android/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/KagemushaWalletV1.kt").read_text()
     methods = re.findall(r"external\s+fun\s+(\w+)\s*\(", kotlin)
     declared = {"Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_" + method for method in methods}
-    assert len(methods) == len(set(methods)) == 15
+    assert len(methods) == len(set(methods)) == 17
     assert c_header == c_rust == set(MODULE.KAGEMUSHA_WALLET_C_EXPORTS)
     assert declared == {symbol for symbol in MODULE.KAGEMUSHA_WALLET_JNI_EXPORTS if "KagemushaWalletNativeV1_" in symbol}
     assert jni_rust == set(MODULE.KAGEMUSHA_WALLET_JNI_EXPORTS + MODULE.KAGEMUSHA_LOAD_ORIGINAL_JNI_EXPORTS)
@@ -519,15 +519,18 @@ def test_retired_abi23_manifest_and_schema_are_rejected() -> None:
     }
     MODULE.validate_manifest(manifest)
     for field, retired, expected in (
-        ("bridge_abi_version", 23, "must be exactly 31"),
-        ("bridge_abi_version", 24, "must be exactly 31"),
-        ("bridge_abi_version", 25, "must be exactly 31"),
-        ("bridge_abi_version", 26, "must be exactly 31"),
-        ("bridge_abi_version", 27, "must be exactly 31"),
-        ("bridge_abi_version", 28, "must be exactly 31"),
-        ("bridge_abi_version", 29, "must be exactly 31"),
-        ("bridge_abi_version", 30, "must be exactly 31"),
-        ("bridge_abi_version", 32, "must be exactly 31"),
+        ("bridge_abi_version", 23, "must be exactly 33"),
+        ("bridge_abi_version", 24, "must be exactly 33"),
+        ("bridge_abi_version", 25, "must be exactly 33"),
+        ("bridge_abi_version", 26, "must be exactly 33"),
+        ("bridge_abi_version", 27, "must be exactly 33"),
+        ("bridge_abi_version", 28, "must be exactly 33"),
+        ("bridge_abi_version", 29, "must be exactly 33"),
+        ("bridge_abi_version", 30, "must be exactly 33"),
+        ("bridge_abi_version", 31, "must be exactly 33"),
+        ("bridge_abi_version", 32, "must be exactly 33"),
+        ("bridge_abi_version", 34, "must be exactly 33"),
+        ("schema", "iroha.native-sdk-abi31-artifact.v1", "schema is unsupported"),
         ("schema", "iroha.native-sdk-abi29-artifact.v1", "schema is unsupported"),
         ("schema", "iroha.native-sdk-abi28-artifact.v1", "schema is unsupported"),
         ("schema", "iroha.native-sdk-abi27-artifact.v1", "schema is unsupported"),
@@ -562,6 +565,31 @@ def test_wallet_prover_inventory_covers_native_owners_and_consumable_jobs() -> N
         assert re.search(r"\bfn\s+" + symbol + r"\s*\(", jni)
     assert "iroha_android_privacy_ConfidentialProverNative" not in jni
 
+
+
+def test_x509_signing_preparation_requires_both_current_native_exports() -> None:
+    """A current mobile artifact cannot omit the C or JNI signing-preparation path."""
+    c_symbol = "connect_norito_zk_x509_prepare_ownership_signing_v1"
+    jni_symbol = "Java_org_hyperledger_iroha_sdk_privacy_ZkX509SigningPreparationNative_prepare"
+    required = MODULE.REQUIRED_SYMBOLS["c-jni"]
+    header = (REPO_ROOT / "crates/connect_norito_bridge/include/connect_norito_bridge.h").read_text()
+    owner = (REPO_ROOT / "crates/connect_norito_bridge/src/zk_x509_holder_ffi.rs").read_text()
+    jni = (REPO_ROOT / "crates/connect_norito_bridge/src/platform_jni/zk_x509_holder.rs").read_text()
+    assert re.search(r"\b" + c_symbol + r"\s*\(", header)
+    assert re.search(r"\bfn\s+" + c_symbol + r"\s*\(", owner)
+    assert re.search(r"\bfn\s+" + jni_symbol + r"\s*\(", jni)
+    assert "iroha_zk_x509_prepare_ownership_signing_v1" not in header + owner
+    for missing in (c_symbol, jni_symbol):
+        assert missing in required
+        library = types.SimpleNamespace(**{symbol: object() for symbol in required if symbol != missing})
+        with mock.patch.object(MODULE.ctypes, "CDLL", return_value=library):
+            try:
+                MODULE.probe_c_abi(Path("test-only-library"), required)
+            except MODULE.ArtifactContractError as error:
+                assert "missing required symbols" in str(error)
+                assert missing in str(error)
+            else:
+                raise AssertionError(f"mobile artifact without {missing} was accepted")
 
 def test_csharp_wallet_inventory_matches_actual_native_imports() -> None:
     """Every managed wallet P/Invoke is a mandatory packaged C# export."""
@@ -1104,7 +1132,7 @@ def test_swift_retained_bridge_exports_have_one_canonical_header_owner() -> None
     assert not prototype_counts(retention), "local bridge declarations substitute for the owner"
 
 
-def test_abi31_rejects_all_retired_timed_ovn_exports() -> None:
+def test_abi33_rejects_all_retired_timed_ovn_exports() -> None:
     for sdk, retired in (
         ("c-jni", (*MODULE.RETIRED_TIMED_OVN_C_EXPORTS, *MODULE.RETIRED_TIMED_OVN_JNI_EXPORTS)),
         ("csharp", MODULE.RETIRED_TIMED_OVN_C_EXPORTS),
@@ -1115,4 +1143,4 @@ def test_abi31_rejects_all_retired_timed_ovn_exports() -> None:
             except MODULE.ArtifactContractError as error:
                 assert "retired protocol symbols" in str(error)
             else:
-                raise AssertionError(f"ABI 31 accepted retired symbol: {symbol}")
+                raise AssertionError(f"ABI 33 accepted retired symbol: {symbol}")

@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import copy
+import json
+import os
+import shutil
+import subprocess
 from pathlib import Path
 try:
     import tomllib
@@ -39,6 +43,65 @@ def _manifest() -> dict:
 
 def test_actual_workspace_keeps_matching_loadable_host_profiles() -> None:
     _check_host_profiles(_manifest())
+
+
+def test_local_build_and_test_profiles_reuse_incremental_dependencies() -> None:
+    profiles = _manifest()["profile"]
+    for name in ("dev", "test"):
+        assert profiles[name]["incremental"] is True
+    for field in ("debug", "split-debuginfo"):
+        assert profiles["dev"][field] == profiles["test"][field]
+    for package in profiles["test"]["package"]:
+        assert profiles["dev"]["package"][package] == profiles["test"]["package"][package]
+
+
+def test_real_cargo_reuses_a_dev_dependency_during_test_compilation(tmp_path: Path) -> None:
+    """Exercise Cargo freshness with the actual workspace's local profile settings."""
+    cargo = shutil.which("cargo")
+    if cargo is None:
+        pytest.skip("Cargo is required for the real profile reuse check")
+    profiles = _manifest()["profile"]
+    source = '[workspace]\nresolver = "2"\nmembers = ["dependency", "consumer"]\n'
+    for name in ("dev", "test"):
+        for suffix, settings in (
+            ("", profiles[name]),
+            (".build-override", profiles[name]["build-override"]),
+            ('.package."*"', profiles[name]["package"]["*"]),
+        ):
+            source += f"\n[profile.{name}{suffix}]\n"
+            source += "".join(f"{key} = {json.dumps(value)}\n" for key, value in settings.items()
+                              if not isinstance(value, dict))
+    (tmp_path / "Cargo.toml").write_text(source)
+    shutil.copyfile(MANIFEST.with_name("rust-toolchain.toml"), tmp_path / "rust-toolchain.toml")
+    for name in ("dependency", "consumer"):
+        directory = tmp_path / name
+        (directory / "src").mkdir(parents=True)
+        manifest = f'[package]\nname = "warm_{name}"\nversion = "0.0.0"\nedition = "2024"\n'
+        if name == "dependency":
+            rust = "//! A dependency for the profile reuse test.\npub fn answer() -> u32 { 42 }\n"
+            filename = "lib.rs"
+        else:
+            manifest += '[dependencies]\nwarm_dependency = { path = "../dependency" }\n'
+            rust = "//! A consumer for the profile reuse test.\nfn main() { assert_eq!(warm_dependency::answer(), 42); }\n"
+            filename = "main.rs"
+        (directory / "Cargo.toml").write_text(manifest)
+        (directory / "src" / filename).write_text(rust)
+    environment = {key: value for key, value in os.environ.items()
+                   if not key.startswith("CARGO_") and key not in {
+                       "RUSTFLAGS", "RUSTDOCFLAGS", "RUSTC", "RUSTDOC", "RUSTC_WRAPPER",
+                       "RUSTC_WORKSPACE_WRAPPER", "RUSTUP_TOOLCHAIN",
+                   }}
+    environment["CARGO_HOME"] = str(tmp_path / "cargo-home")
+    for args, fresh in ((["build"], False), (["test", "--no-run"], True),
+                        (["test", "--no-run"], True)):
+        result = subprocess.run([cargo, *args, "--offline", "-p", "warm_consumer",
+                                 "--message-format=json"], cwd=tmp_path, env=environment,
+                                text=True, capture_output=True, check=True)
+        artifacts = [json.loads(line) for line in result.stdout.splitlines()]
+        dependency, = [item for item in artifacts if item.get("reason") == "compiler-artifact"
+                       and item["target"]["name"] == "warm_dependency"]
+        assert dependency["fresh"] is fresh, result.stderr
+    assert any((tmp_path / "target/debug/incremental").iterdir())
 
 
 @pytest.mark.parametrize("name", ("dev", "test", "release"))

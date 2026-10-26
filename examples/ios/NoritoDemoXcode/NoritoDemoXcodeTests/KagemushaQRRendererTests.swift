@@ -3,8 +3,8 @@
 import XCTest
 
 final class KagemushaQRRendererTests: XCTestCase {
-  func testExactAskTextRendersWithActualMDescriptor() throws {
-    let text = "IAK1:" + String(repeating: "A", count: 84) + ":"
+  func testExactCurrentTextRendersWithActualMDescriptor() throws {
+    let text = "IQR1:" + String(repeating: "A", count: 84) + ":"
     let rendered = try KagemushaQRRenderer.render(text)
     XCTAssertEqual(rendered.text, text)
     XCTAssertTrue((1...17).contains(rendered.version))
@@ -24,6 +24,14 @@ final class KagemushaQRRendererTests: XCTestCase {
   func testUnsupportedOrOversizedTextIsRefused() {
     for text in ["", "other:", "IQR1:lowercase:", "IQR1:\n:", "IQR1:" + String(repeating: "A", count: 695) + ":"] {
       XCTAssertThrowsError(try KagemushaQRRenderer.render(text))
+    }
+  }
+  func testRetiredAskPrefixIsRefusedBeforeRendering() {
+    let text = "IAK1:" + String(repeating: "A", count: 84) + ":"
+    XCTAssertThrowsError(try KagemushaQRRenderer.render(text)) { error in
+      guard case KagemushaQRRenderer.Failure.text = error else {
+        return XCTFail("Retired Ask text must fail the current carrier boundary")
+      }
     }
   }
 }

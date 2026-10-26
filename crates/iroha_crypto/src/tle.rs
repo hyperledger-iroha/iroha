@@ -19,7 +19,8 @@ use blstrs::{Compress as _, G1Affine, G2Affine, G2Projective, Scalar, pairing};
 use chacha20poly1305::XChaCha20Poly1305;
 use group::{Curve as _, Group as _, prime::PrimeCurveAffine as _};
 use hkdf::Hkdf;
-use rand_core::{OsRng, TryCryptoRng};
+use rand::rngs::SysRng;
+use rand_core::TryCryptoRng;
 use sha2::{Digest as _, Sha256, Sha512};
 use subtle::ConstantTimeEq as _;
 use thiserror::Error;
@@ -584,7 +585,7 @@ pub fn seal_tle_v1(
         identity,
         caller_aad,
         plaintext,
-        &mut OsRng,
+        &mut SysRng,
     )
 }
 
@@ -818,7 +819,6 @@ fn is_zero(bytes: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use blstrs::{G2Affine, Scalar};
-    use group::{Curve as _, prime::PrimeCurveAffine as _};
     use rand_chacha::ChaCha20Rng;
     use rand_core::SeedableRng as _;
 
@@ -1003,18 +1003,21 @@ mod tests {
     fn size_and_inert_rng_bounds_fail_closed() {
         #[derive(Debug)]
         struct ZeroRng;
-        impl rand_core::RngCore for ZeroRng {
-            fn next_u32(&mut self) -> u32 {
-                0
+        impl rand::TryRng for ZeroRng {
+            type Error = core::convert::Infallible;
+            fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+                Ok(0)
             }
-            fn next_u64(&mut self) -> u64 {
-                0
+            fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+                Ok(0)
             }
-            fn fill_bytes(&mut self, destination: &mut [u8]) {
-                destination.fill(0);
+            fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
+                Ok({
+                    destination.fill(0);
+                })
             }
         }
-        impl rand_core::CryptoRng for ZeroRng {}
+        impl rand::TryCryptoRng for ZeroRng {}
 
         let (master, identity, _) = fixture();
         assert_eq!(

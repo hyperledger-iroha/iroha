@@ -154,7 +154,7 @@ impl KagemushaDevicePublicKeyV1 {
         }
         let verifying_key =
             P256VerifyingKey::from_sec1_bytes(&raw).map_err(|_| invalid_v1("device_public_key"))?;
-        if verifying_key.to_encoded_point(false).as_bytes() != raw {
+        if verifying_key.to_sec1_point(false).as_bytes() != raw {
             return Err(invalid_v1("device_public_key"));
         }
         Ok(Self(raw))
@@ -224,7 +224,7 @@ impl KagemushaDeviceSignatureV1 {
         if parsed.to_der().as_bytes() != bytes {
             return Err(invalid_v1("device_signature"));
         }
-        let canonical = parsed.normalize_s().unwrap_or(parsed);
+        let canonical = parsed.normalize_s();
         Self::from_raw_bytes(canonical.to_bytes().as_ref())
     }
 
@@ -240,7 +240,7 @@ impl KagemushaDeviceSignatureV1 {
             .map_err(|_| invalid_v1("device_signature"))?;
         let signature =
             P256Signature::from_slice(&raw).map_err(|_| invalid_v1("device_signature"))?;
-        if signature.normalize_s().is_some() {
+        if signature.normalize_s() != signature {
             return Err(invalid_v1("device_signature"));
         }
         Ok(Self(raw))

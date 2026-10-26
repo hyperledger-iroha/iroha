@@ -4870,7 +4870,7 @@ mod native_parameter_source_tests {
                 .map(native_pipa_r::NativeRelationV1::k),
             Some(KAIGI_AUTHORIZATION_CIRCUIT_K_V1)
         );
-        assert_eq!(KAIGI_AUTHORIZATION_CIRCUIT_K_V1, 13);
+        assert_eq!(KAIGI_AUTHORIZATION_CIRCUIT_K_V1, 12);
         assert_eq!(KAIGI_USAGE_CIRCUIT_K_V1, 12);
         assert_eq!(
             native_pipa_r::relation(ZK_BACKEND_NATIVE_PIPA_R, KAIGI_USAGE_CIRCUIT_ID_V1)

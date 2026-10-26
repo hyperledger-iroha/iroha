@@ -1208,31 +1208,18 @@ async fn current_native_ingress_revalidates_expiry_and_current_signing_policy() 
         Algorithm::Secp256k1,
     ])
     .expect("explicit committed policy excludes this Ed25519 signer");
-    let next_height = app
-        .state
-        .latest_block_header_fast()
-        .map_or(1, |header| header.height().get().saturating_add(1));
-    let mut block = app.state.block(BlockHeader::new(
-        NonZeroU64::new(next_height).expect("non-zero fixture height"),
-        None,
-        None,
-        0,
-        0,
-    ));
-    let mut policy_transaction = block.transaction();
-    policy_transaction
-        .world_mut_for_testing()
-        .parameters_mut_for_testing()
-        .set_parameter(
-            policy
-                .into_parameter()
-                .expect("canonical replacement policy"),
-        )
-        .expect("replace original committed policy");
-    policy_transaction.apply();
-    block
-        .commit_world_overlay_for_testing()
-        .expect("commit replacement signing policy without changing transaction history");
+    let pool = app.state.view().execution_budget();
+    let mut parameters = iroha_core::state::parameter_cell_block_for_testing(&app.state.world)
+        .expect("fund the original parameter publication");
+    iroha_core::state::set_parameter_cell_for_testing(
+        &mut parameters,
+        policy
+            .into_parameter()
+            .expect("canonical replacement policy"),
+        &pool,
+    )
+    .expect("replace original committed policy");
+    parameters.commit();
     let error = post_signed_transaction_for_test(app.clone(), HeaderMap::new(), &transaction)
         .await
         .expect_err("pending identity cannot bypass the current signing policy");

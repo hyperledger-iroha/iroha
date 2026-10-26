@@ -306,6 +306,7 @@ fn fixture() -> (
             service_origin_digest: dispatch.service_origin_digest,
             observation_endpoint: "https://provider.example/eligibility".parse().unwrap(),
             observation_credential: "/private/provider-credential".into(),
+            observation_tls_root: None,
             worker: iroha_config::parameters::actual::KagemushaEnrollmentWorker {
                 python_executable: "/opt/issuer/python".into(),
                 python_sha256: [41; 32],

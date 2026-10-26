@@ -139,6 +139,30 @@ class IrohaPeerNfcAidSelectionV1Test {
     }
 
     @Test
+    fun `SELECT activates its captured handler before returning and replacement does not inherit old traffic`() {
+        val first = RecordingHandler()
+        val second = RecordingHandler()
+        var armed = first
+        val dispatcher = IrohaPeerNfcHostApduDispatcherV1(bpng, { armed }, { it.run() }, {})
+        val select = IrohaPeerNfcAidSelectionV1(bpng).command()
+        val info = IrohaPeerNfcAPDUCodecV1.encode(IrohaPeerNfcCommandV1.GetInfo)
+        assertEquals("9000", hex(dispatcher.process(select)))
+        assertEquals(1, first.activations)
+        armed = second
+        first.reply = IrohaPeerNfcAPDUResponseV1.of(IrohaPeerNfcStatusWordV1.SUCCESS)
+        assertEquals("6985", hex(dispatcher.process(info)))
+        assertTrue(first.commands.isEmpty())
+        assertTrue(second.commands.isEmpty())
+        assertEquals("9000", hex(dispatcher.process(select)))
+        assertEquals(listOf(1), first.deactivations)
+        assertEquals(1, second.activations)
+        armed = first
+        dispatcher.deactivated(0)
+        assertEquals(listOf(0), second.deactivations)
+        assertEquals(listOf(1), first.deactivations)
+    }
+
+    @Test
     fun `reply before return is direct and never posted twice`() {
         val posted = mutableListOf<ByteArray>()
         val gate = IrohaPeerNfcApduReplyGateV1 { posted.add(it) }
@@ -216,6 +240,8 @@ class IrohaPeerNfcAidSelectionV1Test {
         val commands = mutableListOf<IrohaPeerNfcCommandV1>()
         val pending = mutableListOf<IrohaPeerNfcApduResponseHandlerV1>()
         val deactivations = mutableListOf<Int>()
+        var activations = 0
+        override fun onActivated() { activations++ }
         var reply: IrohaPeerNfcAPDUResponseV1? = null
         var failure: RuntimeException? = null
 

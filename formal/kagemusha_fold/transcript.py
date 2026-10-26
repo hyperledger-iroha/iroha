@@ -13,26 +13,39 @@ ROOT = HERE.parents[1]
 REFERENCE = ROOT / 'fixtures/native_prover/reference_verifier'
 FILES = frozenset(('README.md', 'transcript.py', 'test_transcript.py'))
 SOURCES = frozenset((
+    'crates/iroha_pasta/src/curve/hash_to_curve.rs',
+    'crates/iroha_pasta/src/curve/mod.rs',
+    'crates/iroha_pasta/src/fft.rs',
+    'crates/iroha_pasta/src/field/fp.rs',
+    'crates/iroha_pasta/src/field/fq.rs',
+    'crates/iroha_pasta/src/field/mod.rs',
+    'crates/iroha_pasta/src/params.rs',
     'crates/iroha_pasta/src/poseidon/mod.rs',
     'crates/iroha_pasta/src/poseidon/rp57_fp.bin',
     'crates/iroha_pasta/src/poseidon/rp57_fq.bin',
-    'crates/iroha_pasta/src/curve/mod.rs',
+    'crates/iroha_plonk/src/pcs/ipa/generator_prefix.rs',
+    'crates/iroha_plonk/src/pcs/ipa/mod.rs',
     'crates/iroha_plonk/src/transcript/mod.rs',
     'crates/iroha_plonk/src/transcript/pipa_r.rs',
-    'crates/iroha_plonk/src/pcs/ipa/mod.rs',
-    'crates/iroha_plonk/src/pcs/ipa/generator_prefix.rs',
+    'crates/iroha_plonk_gadgets/src/poseidon/sponge.rs',
+    'crates/iroha_plonk_gadgets/src/pow5_fq/duplex.rs',
     'crates/iroha_plonk_recursion/src/accumulation.rs',
     'crates/iroha_plonk_recursion/src/accumulation_circuit.rs',
-    'crates/iroha_plonk_recursion/src/transcript.rs',
     'crates/iroha_plonk_recursion/src/claim.rs',
+    'crates/iroha_plonk_recursion/src/fold_tape.rs',
+    'crates/iroha_plonk_recursion/src/purpose.rs',
+    'crates/iroha_plonk_recursion/src/terminal.rs',
     'crates/iroha_plonk_recursion/src/tests.rs',
-    'crates/iroha_plonk_gadgets/src/pow5_fq/duplex.rs',
-    'crates/iroha_plonk_gadgets/src/poseidon/sponge.rs',
+    'crates/iroha_plonk_recursion/src/transcript.rs',
     'fixtures/native_prover/kats_v1.json',
     'fixtures/native_prover/reference_verifier/__init__.py',
     'fixtures/native_prover/reference_verifier/curve.py',
+    'fixtures/native_prover/reference_verifier/parameters.py',
     'fixtures/native_prover/reference_verifier/transcript.py',
 ))
+INPUT_DOMAIN = int.from_bytes(b'pipa-in1', 'little')
+PURPOSES = {'SigmaBatch': (1, b'sigfold1'), 'AInitial': (0, b'a0pfold1'),
+            'AContinuation': (0, b'acpfold1'), 'ATerminal': (0, b'atpfold1')}
 DOMAIN = int.from_bytes(b'pipa-as1', 'little')
 IV = (1 << 64, 0, 0)
 K = 16
@@ -84,7 +97,7 @@ def _load_reference():
 
 @lru_cache(maxsize=1)
 def reference():
-    """Access just Sponge/Curve arithmetic; no setup, parameters or proof imports."""
+    """Access unchanged RP57/Curve arithmetic after checking every explicit source role."""
     checked_sources()
     return _load_reference()
 
@@ -130,13 +143,34 @@ def fixture_inputs(tag, count):
     return (short,) * (count - 1) + (full,)
 
 
-def prelude_words(tag, inputs, salt):
-    """Domain, salt, count, then ordered point/source-k/all16 scalar carriers."""
+def context_words(tag, parameter_digest, purpose, count):
+    """Exact-binding context only; the closed Terminal/WrapperVesta is excluded.
+
+    These are syntactic schedule words, not parameter or fold admission. The
+    bounded control permits at most sixteen sources; native generic roles have
+    no corresponding sixteen-source protocol cap.
+    """
+    curve(tag)
+    require(type(parameter_digest) is bytes and len(parameter_digest) == 32,
+            'parameter digest extent')
+    require(type(count) is int and 1 <= count <= 16, 'bounded input count')
+    require(type(purpose) is str and purpose in PURPOSES, 'exact-binding purpose')
+    orientation, domain = PURPOSES[purpose]
+    require(tag == orientation and (purpose != 'ATerminal' or count == 4), 'purpose shape')
+    return (int.from_bytes(parameter_digest[:16], 'little'),
+            int.from_bytes(parameter_digest[16:], 'little'),
+            int.from_bytes(domain, 'little'), count)
+
+
+def input_words(tag, inputs):
+    """Ordered normalized source syntax; identity G has the native (0,0) frame.
+
+    A syntactic source is not a decided generator claim. D/L/R use point_words
+    instead, so the scoped identity frame cannot become a finite proof point.
+    """
     c = curve(tag)
     require(type(inputs) is tuple and 1 <= len(inputs) <= 16, 'bounded input list')
-    require(type(salt) is int and 0 <= salt < c.base, 'canonical salt')
-    words = [DOMAIN, salt, len(inputs)]
-    full = False
+    words, full = [], False
     for row in inputs:
         require(type(row) is tuple and len(row) == 3, 'input grammar')
         point, source_k, challenges = row
@@ -147,11 +181,94 @@ def prelude_words(tag, inputs, salt):
         require(challenges[:K-source_k] == (0,) * (K-source_k) and
                 all(v != 0 for v in challenges[K-source_k:]), 'source padding/nonzero')
         full |= source_k == K
-        words.extend((*point_words(tag, point), source_k))
+        identity = type(point) is tuple and len(point) == 2 and all(
+            type(v) is int and v == 0 for v in point)
+        words.extend((*(point if identity else point_words(tag, point)), source_k))
         for value in challenges:
             words.extend(scalar_words(tag, value))
     require(full, 'full source required')
     return tuple(words)
+
+
+def input_digest_words(tag, parameter_digest, purpose, inputs, masks):
+    """Separate exact input hash: domain/length/context/sources/all32 masks."""
+    source = input_words(tag, inputs)
+    context = context_words(tag, parameter_digest, purpose, len(inputs))
+    require(type(masks) is tuple and len(masks) == 2*K, 'mask extent')
+    encoded = tuple(word for mask in masks for word in scalar_words(tag, mask))
+    words = context + source + encoded
+    return (INPUT_DOMAIN, len(words)) + words
+
+
+@lru_cache(maxsize=2)
+def k4_parameter_bytes(tag):
+    """Rebuild diagnostic k4 bytes from admitted k6 g/W/U, with a fresh IFFT.
+
+    The unchanged reference reconstructs and admits all k6 bytes against the
+    existing KAT. Only its coefficient prefix and W/U are reused. The recursive
+    sixteen-point transform below never slices the k6 Lagrange basis. This is
+    small transcript KAT data; k4 is not added to the reference admission table.
+    It does not rerun native hash-to-curve or claim k16 fold parameter support.
+    """
+    c = curve(tag)
+    owner = importlib.import_module(_load_reference().__package__ + '.parameters')
+    k6 = owner.Parameters.decode(owner.seed_parameters_k6(c), c, 6)
+    root = pow(c.omega(4), -1, c.scalar)
+
+    def transform(values, omega):
+        if len(values) == 1:
+            return values
+        even = transform(values[::2], omega*omega % c.scalar)
+        odd = transform(values[1::2], omega*omega % c.scalar)
+        half, power, low, high = len(even), 1, [], []
+        for i in range(half):
+            term = c.multiply(odd[i], power)
+            low.append(c.add(even[i], term))
+            high.append(c.add(even[i], c.multiply(term, -1)))
+            power = power*omega % c.scalar
+        return tuple(low + high)
+
+    bases = k6.g[:16]
+    scale = pow(16, -1, c.scalar)
+    lagrange = tuple(c.multiply(value, scale) for value in transform(bases, root))
+    require(all(point[2] != 0 for point in (*bases, *lagrange, k6.w, k6.u)),
+            'finite diagnostic parameters')
+    return (4).to_bytes(4, 'little') + b''.join(
+        c.encode(point) for point in (*bases, *lagrange, k6.w, k6.u))
+
+
+def commitment_opening(tag, digest, rho):
+    """D = g0*lo128(h) + g1*hi128(h) + W*rho for the diagnostic k4 owner."""
+    c = curve(tag)
+    require(type(digest) is int and 0 <= digest < c.base, 'canonical input digest')
+    scalar_words(tag, rho)
+    raw = k4_parameter_bytes(tag)
+    g0, g1, w = (c.decode(raw[i:i+32]) for i in (4, 36, 4+32*32))
+    point = c.sum(((digest & ((1 << 128)-1), g0), (digest >> 128, g1), (rho, w)))
+    require(point[2] != 0, 'identity commitment D')
+    return point_words(tag, c.affine(point))
+
+
+def prelude_words(tag, parameter_digest, purpose, count, commitment):
+    """Seven challenge words: domain, four context words and finite D(x,y)."""
+    return (DOMAIN,) + context_words(tag, parameter_digest, purpose, count) + \
+        point_words(tag, commitment)
+
+
+def committed_case(tag, inputs, purpose, rho, masks):
+    """Build a diagnostic Exact prelude from actual RP57 and the k4 opening.
+
+    No L/R equation, native proof, privacy, randomness or Terminal claim follows.
+    """
+    parameter_digest = hashlib.sha256(k4_parameter_bytes(tag)).digest()
+    words = input_digest_words(tag, parameter_digest, purpose, inputs, masks)
+    digest_trace = trace_script(tag, (words,))
+    check_trace(tag, (words,), digest_trace)
+    h = digest_trace['raw'][0]
+    d = commitment_opening(tag, h, rho)
+    first = prelude_words(tag, parameter_digest, purpose, len(inputs), d)
+    return {'parameter_digest': parameter_digest, 'digest_words': words,
+            'digest_trace': digest_trace, 'h': h, 'd': d, 'prelude': first}
 
 
 def padded_blocks(words):
@@ -193,19 +310,36 @@ def trace_script(tag, buffers):
             'state': tuple(sponge.state), 'pending': tuple(sponge.buffer)}
 
 
-def fold_script(tag, inputs, salt):
-    """All19 syntactic squeezes; fixed finite L/R do not assert the IPA equation."""
+def fold_script(tag, parameter_digest, purpose, count, commitment):
+    """All19 syntactic squeezes; finite L/R do not assert the masked IPA equation."""
     c = curve(tag)
-    first = prelude_words(tag, inputs, salt)
+    first = prelude_words(tag, parameter_digest, purpose, count, commitment)
     left, right = point_words(tag, (c.base - 1, 2)), point_words(tag, (c.base - 1, c.base - 2))
     return (first, (), ()) + ((*left, *right),) * K
 
 
 def expected_positions(tag, count):
-    """Exact native primitive call count for the bounded input list."""
-    require(type(tag) is int and tag in (0, 1), 'curve tag')
+    """The challenge sponge always has54 calls, separately from the input hash."""
+    curve(tag)
     require(type(count) is int and 1 <= count <= 16, 'bounded input count')
-    return 52 + ((35 if tag == 0 else 19) * count + 1) // 2
+    return 4 + 1 + 1 + K*3
+
+
+def expected_digest_positions(tag, count):
+    """Exact-binding input-hash calls including domain, length and final padding."""
+    expected_positions(tag, count)
+    scalar_width = 2 if tag == 0 else 1
+    words = 6 + count*(3 + K*scalar_width) + 2*K*scalar_width
+    return words//2 + 1
+
+
+def role_challenges(tag, mapped):
+    """Retain alpha/z/zeta, then nz each round scalar; no extra sponge call."""
+    c = curve(tag)
+    require(type(mapped) is tuple and len(mapped) == 3+K, 'challenge role extent')
+    require(all(type(v) is int and 0 <= v < c.scalar for v in mapped),
+            'canonical mapped challenge')
+    return mapped[:3] + tuple(reference().nonzero_challenge(v, c.scalar) for v in mapped[3:])
 
 
 def check_trace(tag, buffers, trace):

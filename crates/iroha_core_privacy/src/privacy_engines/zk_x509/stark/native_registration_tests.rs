@@ -9,7 +9,7 @@ fn der_reduced_retained_commitment_openings_and_deep_are_byte_exact() {
         })
         .collect::<Vec<_>>();
     let initial_indices = [1, 9, 31];
-    let mut replayable_rng = StdRng::from_seed([0xE1; 32]);
+    let mut replayable_rng = ChaCha12Rng::from_seed([0xE1; 32]);
     let (replayable_commitment, masks) = aggregate::commit_masked_trace_columns_v1(
         ZK_X509_DIGEST_CONTEXT_V1,
         b"zk-x509-der-reduced-retained-leaf",
@@ -26,7 +26,7 @@ fn der_reduced_retained_commitment_openings_and_deep_are_byte_exact() {
         |column| Ok(native_columns[column].clone()),
     )
     .expect("replayable reduced commitment");
-    let mut retained_rng = StdRng::from_seed([0xE1; 32]);
+    let mut retained_rng = ChaCha12Rng::from_seed([0xE1; 32]);
     let (retained_commitment, polynomials) = aggregate::commit_masked_trace_polynomial_columns_v1(
         ZK_X509_DIGEST_CONTEXT_V1,
         b"zk-x509-der-reduced-retained-leaf",
@@ -77,7 +77,7 @@ fn der_reduced_retained_commitment_openings_and_deep_are_byte_exact() {
     assert_eq!(retained_deep, replayable_deep);
     let mut mutated_columns = native_columns.clone();
     mutated_columns[0][0] = mutated_columns[0][0].add(F::ONE);
-    let mut mutation_rng = StdRng::from_seed([0xE1; 32]);
+    let mut mutation_rng = ChaCha12Rng::from_seed([0xE1; 32]);
     let (mutated_commitment, _) = aggregate::commit_masked_trace_polynomial_columns_v1(
         ZK_X509_DIGEST_CONTEXT_V1,
         b"zk-x509-der-reduced-retained-leaf",
@@ -445,7 +445,7 @@ fn native_log19_der_proof_roundtrips_and_rejects_cross_layer_mutations() {
         .clone();
     private_shape.validate().expect("private DER shape");
     let shape = ZkX509DerStarkShapeV1;
-    let mut rng = StdRng::from_seed([0xD3; 32]);
+    let mut rng = ChaCha12Rng::from_seed([0xD3; 32]);
     let prove_started = std::time::Instant::now();
     let proof = build_zk_x509_der_segmented_stark_proof_v1_with_rng(shape, &[&document], &mut rng)
         .expect("native log19 DER proof");

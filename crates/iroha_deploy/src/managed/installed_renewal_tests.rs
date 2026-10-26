@@ -488,7 +488,8 @@ fn require_ready(status: &ManagedStatus, expected: &ManagedContext) -> TestResul
 
 fn exercise(harness: &mut Harness, runtime: &InstalledRuntime) -> TestResult<()> {
     let began = Instant::now();
-    let request = runtime.localnet_request("renewal", STARTUP);
+    let mut request = runtime.localnet_request("renewal", STARTUP);
+    request.service_profile = crate::localnet::LocalnetServiceProfile::StreamTokenAuthorities;
     let initial_status = harness.store.up(&request)?;
     ensure!(
         began.elapsed() < STARTUP,

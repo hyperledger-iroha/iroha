@@ -36,7 +36,7 @@ fn fixture_with_policy(
     fee_asset: Option<iroha_data_model::asset::AssetDefinitionId>,
     configure: impl FnOnce(&mut crate::pipeline_validity_policy::PipelineValidityPolicyV1),
 ) -> State {
-    let state = state(row_bytes);
+    let mut state = state(row_bytes);
     let mut expected_policy = *state.world.parameters.view().get().pipeline_policy();
     configure(&mut expected_policy);
     expected_policy
@@ -44,7 +44,7 @@ fn fixture_with_policy(
         .expect("valid fixture execution limits");
     if let Some(asset) = &fee_asset {
         use iroha_primitives::numeric::Quantity;
-        let mut fees = state.nexus_snapshot().fees;
+        let mut fees = iroha_config::parameters::defaults::nexus::fees::genesis_policy();
         fees.base_fee = Quantity::from(1_u32);
         fees.per_byte_fee = Quantity::zero();
         fees.per_instruction_fee = Quantity::zero();
@@ -52,15 +52,14 @@ fn fixture_with_policy(
         fees.fee_asset_id = asset.clone();
         fees.fee_sink_account_id = iroha_test_samples::BOB_ID.clone();
         {
-            let mut parameters = state.world.parameters.block();
-            parameters
-                .set_parameter(iroha_data_model::parameter::Parameter::Custom(
+            state
+                .world
+                .set_parameter_for_testing(iroha_data_model::parameter::Parameter::Custom(
                     fees.clone()
                         .into_custom_parameter()
                         .expect("explicit fixture policy"),
                 ))
                 .expect("valid fixture monetary projection");
-            parameters.commit();
         }
     }
     // Genesis executes under its original predecessor's policy. Its signed
@@ -695,9 +694,7 @@ fn frozen_fraud_admission_refuses_before_business_work_and_permission_preserves_
         };
         let mut parameters = state.world.block();
         parameters
-            .parameters
-            .get_mut()
-            .set_parameter(Parameter::Custom(policy.into_custom_parameter()))
+            .set_parameter_for_testing(Parameter::Custom(policy.into_custom_parameter()))
             .unwrap();
         parameters.commit();
         let source = carrier(
@@ -830,7 +827,8 @@ fn intrinsic_source_rejection_rolls_back_movements_and_witness_but_keeps_e_and_f
     )
     .expect("canonical network XOR fee asset");
     let state = fixture_with_fee_asset(65_536, None, Some(asset.clone()));
-    let mut parameters = state.world.parameters.block();
+    let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+        .expect("fund original parameter Cell acquisition");
     let previous = parameters.get().block().fastpq_source();
     let mut intrinsic = previous.intrinsic;
     intrinsic.max_transcripts = 1;
@@ -842,10 +840,12 @@ fn intrinsic_source_rejection_rolls_back_movements_and_witness_but_keeps_e_and_f
         1,
     )
     .unwrap();
-    parameters
-        .get_mut()
-        .set_parameter(Parameter::Block(BlockParameter::FastpqSource(profile)))
-        .expect("valid fixture parameters");
+    crate::state::set_parameter_cell_for_testing(
+        &mut parameters,
+        Parameter::Block(BlockParameter::FastpqSource(profile)),
+        state.world.sccp_committee_generations.allocation_budget(),
+    )
+    .expect("valid fixture parameters");
     parameters.commit();
     let alice = AssetId::of(asset.clone(), ALICE_ID.clone());
     let bob = AssetId::of(asset.clone(), iroha_test_samples::BOB_ID.clone());

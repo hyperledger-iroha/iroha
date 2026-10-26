@@ -1,6 +1,7 @@
 package org.hyperledger.iroha.sdk.client.websocket
 
-import io.netty.channel.nio.NioEventLoopGroup
+import io.netty.channel.MultiThreadIoEventLoopGroup
+import io.netty.channel.nio.NioIoHandler
 import java.net.URI
 import java.security.KeyFactory
 import java.security.KeyStore
@@ -28,7 +29,7 @@ class NettyWebSocketTlsTest {
     @Test
     fun `TLS verifies hostname and trust while preserving credential headers`() {
         val contexts = contexts()
-        val group = NioEventLoopGroup(1)
+        val group = MultiThreadIoEventLoopGroup(1, NioIoHandler.newFactory())
         try {
             MockWebServer().use { server ->
                 server.useHttps(contexts.first.socketFactory, false)

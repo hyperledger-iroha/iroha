@@ -4,6 +4,8 @@ import XCTest
 @testable import IrohaSwift
 
 /// Managed result contracts; authenticated native artifact execution remains separately gated.
+private final class KagemushaWalletSetupOriginV1 {}
+
 final class KagemushaWalletNativeV1Tests: XCTestCase {
   func testExactBytesAndDistinctCompletionOutcomes() throws {
     let bytes = Data([0, 255, 0, 7])
@@ -50,7 +52,7 @@ final class KagemushaWalletNativeV1Tests: XCTestCase {
       let limits: [Int] = selector == 0 ? [512, 256 * 1024, 0]
         : selector == 2 ? [10_034, 1_024, 10_034] : selector == 5 ? [65_536 * 34 + 512, 10_034, 0]
         : selector == 6 ? [512, 10_034, 0] : selector == 7 ? [8_192, 10_034, 0]
-        : selector == 9 ? [0, 0, 0] : selector == 10 ? [10_034, 10_034, 0] : [1_024, 10_034, 0]
+        : selector == 9 ? [0, 0, 0] : selector == 10 ? [10_034, 2_048, 0] : [1_024, 10_034, 0]
       let originals = limits.map { Data(repeating: 7, count: $0 == 0 ? 0 : 1) }
       let amount = KagemushaWalletUInt128V1(low: 0, high: 0)
       let input = try KagemushaWalletOperationInputV1(requestId: identity, selector: selector, amount: amount, first: originals[0], second: originals[1], third: originals[2])
@@ -239,8 +241,8 @@ final class KagemushaWalletNativeV1Tests: XCTestCase {
     }
     XCTAssertThrowsError(try KagemushaWalletSetupInputV1(selector: 1, identity: Data(repeating: 0, count: 32), amount: .init(low: 1, high: 0)))
     XCTAssertThrowsError(try KagemushaWalletSetupInputV1(selector: 2, first: Data([7])))
-    XCTAssertThrowsError(try KagemushaWalletSetupInputV1(selector: 3, first: Data()))
-    XCTAssertThrowsError(try KagemushaWalletSetupInputV1(selector: 3, first: Data(repeating: 1, count: 10_035)))
+    XCTAssertThrowsError(try KagemushaWalletSetupInputV1(selector: 56, identity: Data(repeating: 1, count: 32), first: Data()))
+    XCTAssertThrowsError(try KagemushaWalletSetupInputV1(selector: 56, identity: Data(repeating: 1, count: 32), first: Data(repeating: 1, count: 10_035)))
     XCTAssertThrowsError(try KagemushaWalletSetupInputV1(selector: 6))
   }
   func testMalformedTimeReplyCannotConsumeTheExistingOrigin() throws {
@@ -277,6 +279,20 @@ final class KagemushaWalletNativeV1Tests: XCTestCase {
       sequenceHigh: 1, detail: 0, bytes: Data([1, 0, 2]))
     XCTAssertEqual(try completed.completion().bytes, Data([1, 0, 2]))
     XCTAssertThrowsError(try completed.original())
+  }
+
+  func testUnansweredTimeChallengeRetainsItsExactOriginUntilReleased() throws {
+    var owner: KagemushaWalletSetupOriginV1? = .init()
+    weak var weakOwner = owner
+    var challenge: KagemushaWalletTimeExchangeV1? = try KagemushaWalletCallV1(
+      status: 13, sequenceLow: 7, sequenceHigh: 0, detail: 0,
+      bytes: Data(repeating: 1, count: 32)).exchange(origin: XCTUnwrap(owner))
+    owner = nil
+    XCTAssertNotNil(weakOwner)
+    XCTAssertThrowsError(try challenge?.tokenFor(origin: KagemushaWalletSetupOriginV1()))
+    XCTAssertEqual(try challenge?.tokenFor(origin: XCTUnwrap(weakOwner)), 7)
+    challenge = nil
+    XCTAssertNil(weakOwner)
   }
 
 }

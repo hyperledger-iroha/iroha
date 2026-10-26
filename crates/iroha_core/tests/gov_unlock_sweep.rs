@@ -27,23 +27,22 @@ fn unlocks_after_expiry_height() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let alice = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-    let world = World::with([], [alice], []);
-    // Component account writes require an authored policy before the block snapshot.
-    let mut parameters = world.parameters.block();
-    parameters
-        .set_parameter(
-            iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
-                iroha_crypto::Algorithm::Ed25519,
-                iroha_crypto::Algorithm::Secp256k1,
-                iroha_crypto::Algorithm::BlsNormal,
-            ])
-            .expect("explicit fixture signing algorithms")
-            .into_parameter()
-            .expect("canonical fixture crypto policy"),
+    let mut world = World::with([], [alice], []);
+    // An explicit isolated component prerequisite, not signed-genesis authority.
+    // Keep fund_voter strict: ordinary account ISIs require this original policy.
+    let policy = iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+        iroha_crypto::Algorithm::Ed25519,
+    ])
+    .expect("explicit governance component signing algorithm");
+    world
+        .set_parameter_for_testing(
+            policy
+                .into_parameter()
+                .expect("canonical component signing policy"),
         )
-        .expect("install fixture crypto policy");
-    parameters.commit();
+        .expect("admit the governance component's original policy");
     let mut state = State::new_for_testing(world, kura, query_handle);
+    assert_eq!(state.committed_height(), 0, "isolated component fixture");
     let mut governance = state.gov.clone();
     // This sweep fixture retains an explicit zero-bond, zero-weight position.
     governance.min_bond_amount = 0_u64.into();

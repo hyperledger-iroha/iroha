@@ -247,7 +247,7 @@ fn expired_request_retirement_recovers_after_actual_wallet_retirement_before_clo
                         attempt.observation()?,
                         fixture.options.deadline,
                     )?
-                    .retire(&account, &attempt.wallet_path())
+                    .retire(&account, attempt.directory())
             },
         )
         .unwrap();
@@ -271,7 +271,7 @@ fn expired_request_retirement_recovers_after_actual_wallet_retirement_before_clo
                     attempt.observation()?,
                     fixture.options.deadline,
                 )?
-                .retire(&account, &attempt.wallet_path())?;
+                .retire(&account, attempt.directory())?;
             Err(invalid(
                 "stop after real wallet retirement before closure publication",
             ))
@@ -841,9 +841,7 @@ fn same_body_retired_wallet_prefix_finishes_before_outer_terminal_closure() {
         .unwrap();
     // Exact crash prefix: successor is retained, predecessor's genuine wallet is retired, and
     // its shared retirement component has not yet been published. No second wallet exists.
-    request
-        .retire(&account, &first.directory().path().join("transaction"))
-        .unwrap();
+    request.retire(&account, first.directory()).unwrap();
     assert!(
         metadata::test_read_attempt_component(first.attempt(), "retired.nrt")
             .unwrap()

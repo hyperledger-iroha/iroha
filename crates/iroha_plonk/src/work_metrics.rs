@@ -218,9 +218,11 @@ mod tests {
         };
         assert_eq!(refused(), Err(()));
         assert_eq!(DEPTH.with(Cell::get), [0, 0, 0, 0, 0, 0, 1, 0]);
-        assert_eq!(WorkMetrics::current_thread().source_restore, before.source_restore);
+        assert_eq!(
+            WorkMetrics::current_thread().source_restore,
+            before.source_restore
+        );
         drop(restored);
         assert_eq!(DEPTH.with(Cell::get), [0; 8]);
     }
-
 }

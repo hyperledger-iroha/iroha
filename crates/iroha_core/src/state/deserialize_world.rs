@@ -7434,19 +7434,24 @@ mod validation_fee_registry_restore_tests {
                 .insert(ballot_attempt_id, lifecycle);
         }
         {
-            let mut parameters = world.parameters.block();
-            parameters
-                .get_mut()
-                .set_parameter(Parameter::Custom(npos.into_custom_parameter()))
-                .expect("valid fixture parameters");
-            parameters
-                .get_mut()
-                .set_parameter(Parameter::Custom(
+            let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
+                .expect("funded original parameter-only fixture block");
+            crate::state::set_parameter_cell_for_testing(
+                &mut parameters,
+                Parameter::Custom(npos.into_custom_parameter()),
+                world.sccp_committee_generations.allocation_budget(),
+            )
+            .expect("valid fixture parameters");
+            crate::state::set_parameter_cell_for_testing(
+                &mut parameters,
+                Parameter::Custom(
                     registry.clone().into_custom_parameter().expect(
                         "validation-fee fixture registry fits the canonical JSON parameter",
                     ),
-                ))
-                .expect("valid fixture parameters");
+                ),
+                world.sccp_committee_generations.allocation_budget(),
+            )
+            .expect("valid fixture parameters");
             parameters.commit();
         }
         (world, registry)
@@ -7694,20 +7699,23 @@ mod validation_fee_registry_restore_tests {
         // Supply initialized structural parameter cuts without granting this
         // rejected restore fixture native execution authority.
         {
-            let mut parameters = world.parameters.block();
-            parameters
-                .get_mut()
-                .set_parameter(
-                    crate::sumeragi::test_chain::crypto_fixture_policy()
-                        .into_parameter()
-                        .expect("fixture crypto policy parameter"),
-                )
-                .expect("valid fixture crypto policy");
+            let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
+                .expect("fund original fixture parameter cell");
+            crate::state::set_parameter_cell_for_testing(
+                &mut parameters,
+                crate::sumeragi::test_chain::crypto_fixture_policy()
+                    .into_parameter()
+                    .expect("fixture crypto policy parameter"),
+                world.sccp_committee_generations.allocation_budget(),
+            )
+            .expect("valid fixture crypto policy");
             parameters.commit();
         }
         // An unchanged parameter commit retains the initialized current cut as
         // its predecessor, matching the fixture's post-genesis history height.
-        world.parameters.block().commit();
+        crate::state::parameter_cell_block_for_testing(&world)
+            .expect("fund original predecessor parameter cell")
+            .commit();
         validate_restored_crypto_policy(
             &world,
             usize::try_from(RESTORED_HEIGHT).expect("fixture height fits usize"),
@@ -8218,7 +8226,7 @@ fn decode_world_fields(
     if !cfg!(all(test, sumeragi_core_mutation = "HC930")) {
         map.require_source_order(canonical_world_field_order(), "world")?;
     }
-    let parameters = take_parameters_cell(&mut map, "parameters")?;
+    let parameters = take_parameters_cell(&mut map, "parameters", execution_budget)?;
     let peers: Cell<Peers> = take_required(&mut map, "peers")?;
     let consensus_schedule = take_native_consensus_schedule(&mut map, execution_budget)?;
     // Derived from the restored World: accelerated restoration recomputes it by a cold capture
@@ -10014,10 +10022,22 @@ fn build_state(
             "failed to read the exact durable Kura boundary: {error}"
         ))
     })?;
+    let restored_tip = usize::try_from(restored_height).map_err(|error| {
+        MergeLedgerCommitError::ExecutionStatePublication(format!(
+            "restored committed height does not fit this host: {error}"
+        ))
+    })?;
+    if restored_tip > durable_blocks {
+        return Err(MergeLedgerCommitError::ExecutionStatePublication(format!(
+            "restored committed height {restored_tip} exceeds durable Kura height {durable_blocks}"
+        )));
+    }
+    // The restored tip, not the Kura tip: Kura may hold the blocks replay applies next, and
+    // the next block's time triggers start from this header's creation time.
     let latest_block_header = if emergency_fast {
         None
     } else {
-        NonZeroUsize::new(durable_blocks)
+        NonZeroUsize::new(restored_tip)
             .map(|height| kura.get_block(height, &execution_budget))
             .transpose()
             .map_err(|error| match error {
@@ -10067,7 +10087,7 @@ fn build_state(
             .map_err(StateStorageAdmissionError::World)?,
         provisional_emergency_lane_manifests_consumed: false,
         lane_privacy_registry: PublicationRwLock::try_new(
-            Arc::new(LanePrivacyRegistry::empty()),
+            LanePrivacyRegistry::empty(),
             &execution_budget,
         )
         .map_err(StateStorageAdmissionError::World)?,
@@ -10162,8 +10182,15 @@ fn build_state(
             state.project_canonical_runtime(runtime.get(), &world)
         }
         .map_err(|error| MergeLedgerCommitError::ExecutionStatePublication(error.to_string()))?;
+        // The read projection above owns no privacy copy. Admit exactly once
+        // after its physical read guards retire and before either installation.
+        let privacy = LanePrivacyRegistry::try_from_manifest_registry(
+            &projection.manifests,
+            &state.ivm_execution_budget(),
+        )
+        .map_err(MergeLedgerCommitError::ExecutionDeferred)?;
         *state.lane_manifests.get_mut() = projection.manifests;
-        *state.lane_privacy_registry.get_mut() = projection.privacy;
+        *state.lane_privacy_registry.get_mut() = privacy;
     }
     crate::sumeragi::evidence::validate_persisted_records(&state)
         .map_err(crate::sumeragi::evidence::restoration_failure)?;
@@ -11834,9 +11861,13 @@ mod decode_tests {
         let mut map = json::native::Map::new();
         map.insert("parameters".to_owned(), canonical);
         let mut map = SnapshotJsonMap::from_owned(map);
-        let parsed = take_parameters_cell(&mut map, "parameters")
-            .expect("canonical parameters MV envelope must be accepted");
-        assert_eq!(&**parsed.view().get(), &expected);
+        let parsed = take_parameters_cell(
+            &mut map,
+            "parameters",
+            &scalar_cell_custody::default_budget(),
+        )
+        .expect("canonical parameters MV envelope must be accepted");
+        assert_eq!(&***parsed.view().get(), &expected);
     }
     #[test]
     fn borrowed_snapshot_map_rejects_duplicates_and_noncanonical_order() {
@@ -12512,9 +12543,13 @@ mod decode_tests {
         let mut map = json::native::Map::new();
         map.insert("parameters".to_owned(), json::Value::Object(legacy_map));
         let mut map = SnapshotJsonMap::from_owned(map);
-        let error = take_parameters_cell(&mut map, "parameters")
-            .err()
-            .expect("legacy blocks-only parameters envelope must be rejected");
+        let error = take_parameters_cell(
+            &mut map,
+            "parameters",
+            &scalar_cell_custody::default_budget(),
+        )
+        .err()
+        .expect("legacy blocks-only parameters envelope must be rejected");
         assert!(
             error.to_string().contains("parameters"),
             "unexpected diagnostic: {error}"

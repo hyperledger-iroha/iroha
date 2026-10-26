@@ -3,7 +3,8 @@
 use super::super::super::private_table::inspection;
 use super::super::tests::{credential_main_pre_aux_v1, fixture};
 use super::*;
-use rand::{SeedableRng, rngs::StdRng};
+use rand::SeedableRng;
+use rand_chacha::ChaCha12Rng;
 
 #[test]
 fn native_staged_columns_match_every_actual_row_and_clear_retained_storage() {
@@ -57,7 +58,7 @@ fn staged_original_commitments_replay_exactly_and_bind_the_shared_challenge() {
         &trace,
         &schedule,
         credential_main_pre_aux_v1(),
-        &mut StdRng::seed_from_u64(191),
+        &mut ChaCha12Rng::seed_from_u64(191),
     )
     .unwrap();
     state.validate_v1().unwrap();
@@ -221,7 +222,7 @@ fn original_ca_local_composition_matches_complete_relation_with_only_public_alph
         &trace,
         &schedule,
         credential_main_pre_aux_v1(),
-        &mut StdRng::seed_from_u64(913),
+        &mut ChaCha12Rng::seed_from_u64(913),
     )
     .unwrap();
     let layout = ca_aggregate_layout_v1().unwrap();
@@ -257,12 +258,12 @@ fn original_ca_local_composition_matches_complete_relation_with_only_public_alph
             },
             &complete_alphas,
             &layout,
-            &mut StdRng::seed_from_u64(917),
+            &mut ChaCha12Rng::seed_from_u64(917),
         )
         .unwrap()
     };
     let actual = state
-        .local_composition_v1(&alphas, &mut StdRng::seed_from_u64(917))
+        .local_composition_v1(&alphas, &mut ChaCha12Rng::seed_from_u64(917))
         .unwrap();
     assert_eq!(
         &*actual, &*expected,
@@ -276,7 +277,7 @@ fn original_ca_local_composition_matches_complete_relation_with_only_public_alph
         bad.resize(bad_len, E::ONE);
         assert!(
             state
-                .local_composition_v1(&bad, &mut StdRng::seed_from_u64(917))
+                .local_composition_v1(&bad, &mut ChaCha12Rng::seed_from_u64(917))
                 .is_err()
         );
     }
@@ -289,7 +290,7 @@ fn original_ca_local_composition_matches_complete_relation_with_only_public_alph
     ]);
     assert!(
         state
-            .local_composition_v1(&bad, &mut StdRng::seed_from_u64(917))
+            .local_composition_v1(&bad, &mut ChaCha12Rng::seed_from_u64(917))
             .is_err()
     );
     let ((), cleared) = inspection::observe_v1(|| drop(actual));

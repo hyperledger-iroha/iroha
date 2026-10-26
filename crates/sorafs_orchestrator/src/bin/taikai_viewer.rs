@@ -14,7 +14,7 @@ use norito::{
     decode_from_bytes, json,
     json::{Map, Value},
 };
-use rand::{rand_core::TryRngCore, rngs::OsRng};
+use rand::{rand_core::TryRng, rngs::SysRng};
 #[cfg(unix)]
 use sorafs_car::platform_no_follow_flag;
 use sorafs_car::taikai::{
@@ -486,7 +486,7 @@ fn create_temporary_output(path: &Path, label: &str) -> io::Result<(PathBuf, fs:
     })?;
     for _ in 0..16 {
         let mut nonce = [0_u8; 16];
-        OsRng.try_fill_bytes(&mut nonce).map_err(|err| {
+        SysRng.try_fill_bytes(&mut nonce).map_err(|err| {
             io::Error::other(format!(
                 "failed to generate temporary name for {label} `{}`: {err}",
                 path.display()

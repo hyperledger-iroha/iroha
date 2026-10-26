@@ -90,11 +90,22 @@ fn verify_metal_bundle() -> Result<(), String> {
         sources.update((source.len() as u64).to_le_bytes());
         sources.update(source.as_bytes());
     }
-    if format!("{:x}", sources.finalize()) != METAL_SOURCE_DIGEST {
+    if sources
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>()
+        != METAL_SOURCE_DIGEST
+    {
         return Err("Metal source bytes differ from the pinned bundle inputs".into());
     }
     let binary = include_bytes!("metal/v1/ivm_kernels.metallib");
-    if format!("{:x}", sha2::Sha256::digest(binary)) != METAL_LIBRARY_DIGEST {
+    if sha2::Sha256::digest(binary)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>()
+        != METAL_LIBRARY_DIGEST
+    {
         return Err("Metal library bytes differ from the pinned bundle".into());
     }
     Ok(())

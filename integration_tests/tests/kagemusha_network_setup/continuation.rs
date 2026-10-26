@@ -538,7 +538,7 @@ mod registration;
 mod settlement;
 
 #[test]
-#[ignore = "owns four actual validators through retained-genesis catalog, genuine native ABC, settlement and retained-C confirmation; explicit controller required"]
+#[ignore = "owns one fresh four-validator network through its exact setup/catalog, genuine native ABC, settlement and retained-C confirmation; explicit controller required"]
 fn execute_four_validator_monetary_continuation() -> Result<()> {
     init_instruction_registry();
     let root = PathBuf::from(
@@ -548,14 +548,21 @@ fn execute_four_validator_monetary_continuation() -> Result<()> {
     ensure!(root.is_absolute(), "absolute output required");
     private_directory(&root)?;
     let deadline = Instant::now() + Duration::from_secs(7 * 24 * 60 * 60);
+    // One fresh runtime-only owner signs this occurrence's genesis and remains
+    // available for its ordinary DKG/asset-policy transactions. The Network owns
+    // the four actual validator keys; public setup originals never recreate them.
+    let genesis_owner = KeyPair::try_random_with_algorithm(Algorithm::Ed25519)?;
     let (network, rt) = sandbox::start_network_blocking_or_skip(
-        retained::network_builder()?,
+        network_builder().with_genesis_keypair(genesis_owner.clone()),
         stringify!(execute_four_validator_monetary_continuation),
     )?
     .ok_or_else(|| eyre!("qualification cannot skip"))?;
     let result = (|| -> Result<()> {
         wait_for_committed(&network, 1, network.sync_timeout(), &[])?;
-        let _genesis_dkg = retained::provision(&network, &rt, &root)?;
+        let _genesis_dkg = provisioning::provision(&network, &rt, &root, &genesis_owner)?;
+        // DKG owns exact H2–H5. Fund the normal fee buckets only after that
+        // certificate is installed, before publishing this same live setup.
+        fund_fee_successor(&network)?;
         export(&network, &root.join("setup"))?;
         let setup_sha = hash(&fs::read(root.join("setup/setup.json"))?);
         let ready = norito::json::to_vec(
@@ -597,7 +604,14 @@ fn execute_four_validator_monetary_continuation() -> Result<()> {
             &hash(&funded),
             deadline,
         )?;
-        let settled = settlement::run(&network, &root, &command, &setup_sha, &funded)?;
+        let settled = settlement::run(
+            &network,
+            &genesis_owner,
+            &root,
+            &command,
+            &setup_sha,
+            &funded,
+        )?;
         let command = wait_command(
             &network,
             &root,

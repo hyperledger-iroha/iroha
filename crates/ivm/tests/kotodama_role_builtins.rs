@@ -25,7 +25,7 @@ fn kotodama_create_and_grant_role_enables_mint() {
         seiyaku RoleBootstrap { permission ManageRoles;
         kotoage fn main() authorize(ManageRoles) {
           // Bootstrap the asset definition used by the role permission.
-          ledger::asset::register(asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), name: "ROSE", spec: NumericSpec::integer(), mintable: Mintable::Once);
+          ledger::asset::register(asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), name: "ROSE", spec: NumericSpec::integer(), mintable: Mintable::Once, owning_domain: DomainId::parse("default.universal"));
           // Create role with mint permission and grant it to the caller.
           ledger::role::register(role: Name::parse("minter"), permissions: Json::parse("{\"perms\":[\"mint_asset:62Fk4FPcMuLvW5QjDGNF2a4jAmjM\"]}"));
           ledger::role::grant(account: context::authority(), role: Name::parse("minter"));
@@ -38,7 +38,11 @@ fn kotodama_create_and_grant_role_enables_mint() {
     let prog = compiler.compile_source(src).expect("compile");
     let caller = literal_account();
     let mut wsv = MockWorldStateView::new();
-    wsv.grant_permission(&caller, PermissionToken::RegisterAssetDefinition);
+    wsv.grant_permission(&caller, PermissionToken::RegisterDomain);
+    assert!(wsv.register_domain(
+        &caller,
+        iroha_model_base::domain::DomainId::try_new("default", "universal").unwrap()
+    ));
     wsv.grant_permission(&caller, PermissionToken::ManageRoles);
     let host = WsvHost::new_with_subject(wsv, caller.clone());
     let mut vm = IVM::new(u64::MAX);
@@ -70,7 +74,11 @@ fn kotodama_grant_role_accepts_runtime_account_argument() {
     wsv.add_account_unchecked(caller.clone());
     wsv.grant_permission(&caller, PermissionToken::RegisterDomain);
     wsv.grant_permission(&caller, PermissionToken::RegisterAccount);
-    wsv.grant_permission(&caller, PermissionToken::RegisterAssetDefinition);
+    wsv.grant_permission(&caller, PermissionToken::RegisterDomain);
+    assert!(wsv.register_domain(
+        &caller,
+        iroha_model_base::domain::DomainId::try_new("default", "universal").unwrap()
+    ));
     wsv.grant_permission(&caller, PermissionToken::ManageRoles);
     let host = WsvHost::new_with_subject(wsv, caller.clone());
     let mut vm = IVM::new(u64::MAX);

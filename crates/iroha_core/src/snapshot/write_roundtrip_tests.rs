@@ -327,8 +327,8 @@ async fn normal_snapshot_restore_rejects_overdue_pending_consensus_evidence() {
         Err(error) => error,
     };
     assert!(
-        matches!(error, TryReadError::NativeExecutionReplayRequired),
-        "a local export cannot bypass original replay even before lifecycle validation: {error:?}"
+        matches!(error, TryReadError::SuccessorRequired { .. }),
+        "a local export at the Kura tip has no certified successor to authenticate it: {error:?}"
     );
 }
 #[tokio::test]
@@ -883,12 +883,11 @@ async fn signed_native_snapshot_caches_and_tampered_accounts_require_original_re
         .unwrap()
         .clone();
     for height in [1, 2] {
-        if height == 2 {
-            chain.commit(Vec::new());
-        }
+        let captured = CapturedStateSnapshot::capture(chain.state()).unwrap();
+        // The certified successor binds the World published at the snapshot height.
+        chain.commit(Vec::new());
         let state = chain.state();
         let kura = chain.kura();
-        let captured = CapturedStateSnapshot::capture(state).unwrap();
         let mut mutated: json::Value = json::from_str(&captured.json).unwrap();
         mutated
             .as_object_mut()
@@ -903,7 +902,7 @@ async fn signed_native_snapshot_caches_and_tampered_accounts_require_original_re
             canonical_snapshot_wsv_hash(captured.json.as_bytes()).unwrap(),
             canonical_snapshot_wsv_hash(mutated.as_bytes()).unwrap()
         );
-        let original_hash = kura.block_hash_at_height(NonZeroUsize::new(height).unwrap());
+        let original_hash = kura.block_hash_at_height(NonZeroUsize::new(height + 1).unwrap());
         let original_body =
             std::fs::read(Kura::canonical_storage_path(&kura.store_root()).join("blocks.data"))
                 .unwrap();
@@ -920,7 +919,7 @@ async fn signed_native_snapshot_caches_and_tampered_accounts_require_original_re
                 &state.lane_manifests.read().clone(),
                 &state.nexus_snapshot(),
                 LiveQueryStore::start_test,
-                BlockCount(height),
+                BlockCount(height + 1),
                 TEST_CHUNK_SIZE,
                 key_pair.public_key(),
                 &state.chain_id,
@@ -930,14 +929,27 @@ async fn signed_native_snapshot_caches_and_tampered_accounts_require_original_re
                 StateTelemetry::new(<_>::default(), true),
                 &snapshot_read_budget_for_testing(),
             );
-            assert!(matches!(
-                result,
-                Err(TryReadError::NativeExecutionReplayRequired)
-            ));
-            assert_eq!(kura.blocks_count(), height);
-            assert_eq!(kura.exact_durable_blocks_count().unwrap(), height);
+            match (height, std::ptr::eq(serialized, &captured.json)) {
+                // A genesis-only result is authenticated only by original execution.
+                (1, true) => assert!(matches!(
+                    result,
+                    Err(TryReadError::NativeExecutionReplayRequired)
+                )),
+                (_, true) => assert_eq!(
+                    result
+                        .expect("the original World restores against its successor")
+                        .committed_height(),
+                    height
+                ),
+                (_, false) => assert!(
+                    result.is_err(),
+                    "hostile accounts cannot restore against the certified World root"
+                ),
+            }
+            assert_eq!(kura.blocks_count(), height + 1);
+            assert_eq!(kura.exact_durable_blocks_count().unwrap(), height + 1);
             assert_eq!(
-                kura.block_hash_at_height(NonZeroUsize::new(height).unwrap()),
+                kura.block_hash_at_height(NonZeroUsize::new(height + 1).unwrap()),
                 original_hash
             );
             assert_eq!(
@@ -1258,7 +1270,9 @@ async fn snapshot_missing_space_directory_section_rejects_even_with_kura_history
         &state.lane_manifests.read().clone(),
         &state.nexus_snapshot(),
         LiveQueryStore::start_test,
-        BlockCount(state.view().height()),
+        // A successor makes the snapshot a restore candidate; the missing section refuses it
+        // before any typed decode.
+        BlockCount(state.view().height() + 1),
         TEST_CHUNK_SIZE,
         key_pair.public_key(),
         &state.chain_id,
@@ -1296,7 +1310,9 @@ async fn snapshot_missing_space_directory_section_rejects_without_manifest_histo
         &state.lane_manifests.read().clone(),
         &state.nexus_snapshot(),
         LiveQueryStore::start_test,
-        BlockCount(state.view().height()),
+        // A successor makes the snapshot a restore candidate; the missing section refuses it
+        // before any typed decode.
+        BlockCount(state.view().height() + 1),
         TEST_CHUNK_SIZE,
         key_pair.public_key(),
         &state.chain_id,
@@ -1323,17 +1339,31 @@ async fn signed_snapshot_roundtrip_preserves_every_sccp_map() {
     let store_dir = tmp_root.path().join("snapshot");
     let mut state = state_factory();
     let parameters = iroha_data_model::sccp::params::SccpParametersV1::taira_default();
-    let mut nexus = state.nexus_snapshot();
-    nexus.staking.unbonding_delay = std::time::Duration::from_millis(
-        parameters
-            .committee_validity_ms
-            .checked_add(parameters.forgery_evidence_grace_ms)
-            .expect("fixture liability interval fits"),
+    let mut monetary = crate::sumeragi::test_chain::staking_fixture_policy(
+        SumeragiNposParameters::default().xor_asset_definition_id,
     );
-    nexus.staking.max_slash_bps = 1;
-    // The original writer and restore both use this exact pinned policy; a
-    // default delay cannot cover the retained generations' complete liability.
-    state.install_pre_genesis_nexus_for_testing(nexus);
+    monetary.unbonding_delay_ms = parameters
+        .committee_validity_ms
+        .checked_add(parameters.forgery_evidence_grace_ms)
+        .expect("fixture liability interval fits");
+    monetary.max_slash_bps = 1;
+    // This is an explicit pre-chain snapshot component fixture, not signed genesis.
+    // Writer and restore use the same admitted parameter; node settings supply no policy.
+    state
+        .world
+        .set_parameter_for_testing(Parameter::Custom(
+            monetary.clone().into_custom_parameter().unwrap(),
+        ))
+        .expect("admit the complete SCCP liability policy before writing its snapshot");
+    assert_eq!(
+        state
+            .world
+            .view()
+            .parameters()
+            .require_staking_policy()
+            .unwrap(),
+        &monetary,
+    );
     for seed in [1, 2] {
         let mut block = state.world.block();
         crate::smartcontracts::isi::sccp::test_support::populate_every_sccp_map(
@@ -1382,6 +1412,11 @@ async fn signed_snapshot_roundtrip_preserves_every_sccp_map() {
     crate::state::sccp_snapshot_state::serialize_envelope(&restored.world, &mut restored_envelope);
     assert_eq!(restored_envelope, original_envelope);
     let world = restored.world.view();
+    assert_eq!(world.parameters().staking_policy(), Some(&monetary));
+    assert_eq!(
+        world.parameters().require_staking_policy().unwrap(),
+        &monetary
+    );
     assert_eq!(world.sccp_committee_generations().len(), 2);
     assert_eq!(world.sccp_anchor_chunks().len(), 2);
     assert_eq!(world.sccp_anchor_open().as_slice().len(), 1);

@@ -327,6 +327,7 @@ pub fn install_records<R: RecordStore + ?Sized>(
     assert_fresh: bool,
     fresh_id: &mut dyn FnMut() -> u128,
 ) -> std::io::Result<Vec<(PublicKey, RecordState, bool)>> {
+    let _installation = store.installation();
     let mut log = store.log()?;
     reconcile_store_id(store, &mut log, fresh_id)?;
     let mut out = Vec::with_capacity(keys.len());

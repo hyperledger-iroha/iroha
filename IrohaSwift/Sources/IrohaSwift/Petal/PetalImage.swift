@@ -365,3 +365,85 @@ public struct PetalHomography: Equatable, Sendable {
         return x
     }
 }
+
+/// A camera pose: a homography from the canvas onto undistorted image pixels,
+/// followed by radial lens distortion about the image centre (port of `Pose`
+/// in `crates/iroha_petal/src/geometry.rs`).
+///
+/// A pixel that an undistorted camera would see at `u` is seen at
+/// `c + (u − c) · (1 + k · |u − c|² / s²)`, with `c` the image centre, `k` the
+/// ``distortion`` (negative is barrel) and `s = 0.8 · max(width, height)`.
+/// `k = 0` is a plain homography.
+public struct PetalPose: Equatable, Sendable {
+    /// Canvas to undistorted pixels.
+    public let homography: PetalHomography
+    /// Radial distortion coefficient `k`.
+    public let distortion: Double
+    /// Distortion centre in pixels.
+    public let center: PetalPoint
+    /// Squared distortion scale `s²` in pixels².
+    public let scale2: Double
+
+    public init(homography: PetalHomography, distortion: Double, center: PetalPoint, scale2: Double) {
+        self.homography = homography
+        self.distortion = distortion
+        self.center = center
+        self.scale2 = scale2
+    }
+
+    /// A pose without lens distortion.
+    public static func plain(_ homography: PetalHomography) -> PetalPose {
+        PetalPose(homography: homography, distortion: 0, center: PetalPoint(x: 0, y: 0), scale2: 1)
+    }
+
+    /// Maps a canvas point to image pixels.
+    @inline(__always)
+    public func apply(_ point: PetalPoint) -> PetalPoint {
+        let (x, y) = apply(point.x, point.y)
+        return PetalPoint(x: x, y: y)
+    }
+
+    @inline(__always)
+    func apply(_ x: Double, _ y: Double) -> (Double, Double) {
+        let (ux, uy) = homography.apply(x, y)
+        if distortion == 0.0 { return (ux, uy) }
+        let dx = ux - center.x
+        let dy = uy - center.y
+        let factor = 1.0 + distortion * (dx * dx + dy * dy) / scale2
+        return (center.x + dx * factor, center.y + dy * factor)
+    }
+
+    /// The pose with distortion `distortion` that takes the canvas points
+    /// `source` to the image points `destination` of a `width × height` image:
+    /// the image points are undistorted (six fixed-point rounds), then the
+    /// homography is fitted to them.
+    ///
+    /// Returns `nil` when ``PetalHomography/fit(from:to:)`` refuses the points.
+    public static func fit(
+        from source: [PetalPoint],
+        to destination: [PetalPoint],
+        distortion: Double,
+        width: Int,
+        height: Int
+    ) -> PetalPose? {
+        let center = PetalPoint(x: Double(width) / 2.0, y: Double(height) / 2.0)
+        let scale = 0.8 * Double(max(width, height))
+        let scale2 = scale * scale
+        let undistorted = destination.map { point -> PetalPoint in
+            let dx = point.x - center.x
+            let dy = point.y - center.y
+            var ux = dx
+            var uy = dy
+            if distortion != 0.0 {
+                for _ in 0..<6 {
+                    let factor = 1.0 + distortion * (ux * ux + uy * uy) / scale2
+                    ux = dx / factor
+                    uy = dy / factor
+                }
+            }
+            return PetalPoint(x: center.x + ux, y: center.y + uy)
+        }
+        guard let homography = PetalHomography.fit(from: source, to: undistorted) else { return nil }
+        return PetalPose(homography: homography, distortion: distortion, center: center, scale2: scale2)
+    }
+}

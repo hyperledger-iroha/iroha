@@ -152,7 +152,7 @@ sorafs_node = { path = "../sorafs_node" }
 
 # Deps used by recovery diagnostics (dag-recovery-verify) and proof helpers
 base64 = { workspace = true, features = ["alloc"] }
-sha2 = { version = "0.10.9", default-features = false }
+sha2 = { version = "0.11.1", default-features = false }
 zeroize = { version = "1.8.2", default-features = false, features = ["alloc", "std"] }
 hex = { workspace = true }
 
@@ -166,7 +166,7 @@ supports-color = { workspace = true }
 toml = { workspace = true }
 norito = { workspace = true, default-features = false }
 iroha_i18n = { workspace = true }
-reqwest = { workspace = true, features = ["blocking", "rustls-tls"] }
+reqwest = { workspace = true, features = ["blocking", "rustls"] }
 bytes = { workspace = true }
 hyper = { version = "1.7.0", default-features = false, features = ["http1", "server"] }
 hyper-util = { version = "0.1.20", default-features = false, features = ["tokio"] }
@@ -178,14 +178,14 @@ blake3 = { workspace = true }
 [dev-dependencies]
 iroha_data_model = { workspace = true, default-features = false, features = ["test-fixtures", "transparent_api"] }
 iroha_service_model = { workspace = true }
-p256 = { version = "0.13.2", default-features = false, features = ["std", "ecdsa"] }
+p256 = { version = "0.14.0", default-features = false, features = ["std", "ecdsa"] }
 iroha_deploy = { workspace = true }
 iroha_musubi_service = { workspace = true, features = ["test-fixtures"] }
 iroha_executor_data_model = { workspace = true }
 iroha_torii = { workspace = true, default-features = false, features = ["test-fixtures"] }
 iroha_core = { workspace = true, default-features = false, features = ["runtime", "iroha-core-tests"] }
 iroha_p2p = { workspace = true, features = ["test-fixtures"] }
-serial_test = "3.5.0"
+serial_test = "4.0.1"
 tempfile = { workspace = true }
 assertables = { workspace = true }
 iroha_test_samples = { workspace = true }

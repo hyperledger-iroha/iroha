@@ -30,12 +30,16 @@ struct NestedCallbackFixture {
 fn nested_callback_fixture(row_bytes: u64, depth: u8) -> NestedCallbackFixture {
     let state = authenticated_state(row_bytes);
     {
-        let mut parameters = state.world.parameters.block();
-        parameters
-            .set_parameter(iroha_data_model::parameter::Parameter::SmartContract(
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+            .expect("fund original parameter Cell acquisition");
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            iroha_data_model::parameter::Parameter::SmartContract(
                 iroha_data_model::parameter::SmartContractParameter::ExecutionDepth(depth),
-            ))
-            .expect("valid fixture parameters");
+            ),
+            state.world.sccp_committee_generations.allocation_budget(),
+        )
+        .expect("valid fixture parameters");
         parameters.commit();
     }
     let parent: TriggerId = "output_parent".parse().unwrap();

@@ -21,3 +21,7 @@
 
 # Address admission throws a structured category before crossing into the JVM.
 -keep,allowoptimization class org.hyperledger.iroha.sdk.address.AccountAddressNativeException { public <init>(java.lang.String,java.lang.String,java.lang.String,java.lang.String); }
+
+# X.509 signing preparation JNI entrypoint and native-thrown stable error constructor.
+-keep,allowoptimization class org.hyperledger.iroha.sdk.privacy.ZkX509SigningPreparationNative { native <methods>; }
+-keep,allowoptimization class org.hyperledger.iroha.sdk.privacy.ZkX509SigningPreparationException { public <init>(int); }

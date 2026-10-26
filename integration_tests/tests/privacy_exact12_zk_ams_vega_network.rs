@@ -77,7 +77,6 @@ use iroha_test_samples::gen_account_in;
 use p256::ecdsa::{
     Signature as P256Signature, SigningKey as P256SigningKey, signature::hazmat::PrehashSigner as _,
 };
-use rand_core_06::{CryptoRng, Error as RngError, RngCore};
 use sha2::{Digest, Sha256};
 use std::{
     num::{NonZeroU32, NonZeroU64},
@@ -128,18 +127,19 @@ impl DeterministicCryptoRng {
         self.offset = 0;
     }
 }
-impl RngCore for DeterministicCryptoRng {
-    fn next_u32(&mut self) -> u32 {
+impl rand::TryRng for DeterministicCryptoRng {
+    type Error = core::convert::Infallible;
+    fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
         let mut bytes = [0_u8; 4];
-        self.fill_bytes(&mut bytes);
-        u32::from_le_bytes(bytes)
+        self.try_fill_bytes(&mut bytes)?;
+        Ok(u32::from_le_bytes(bytes))
     }
-    fn next_u64(&mut self) -> u64 {
+    fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
         let mut bytes = [0_u8; 8];
-        self.fill_bytes(&mut bytes);
-        u64::from_le_bytes(bytes)
+        self.try_fill_bytes(&mut bytes)?;
+        Ok(u64::from_le_bytes(bytes))
     }
-    fn fill_bytes(&mut self, destination: &mut [u8]) {
+    fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
         let mut written = 0;
         while written < destination.len() {
             if self.offset == self.buffered.len() {
@@ -152,13 +152,10 @@ impl RngCore for DeterministicCryptoRng {
             self.offset += take;
             written += take;
         }
-    }
-    fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), RngError> {
-        self.fill_bytes(destination);
         Ok(())
     }
 }
-impl CryptoRng for DeterministicCryptoRng {}
+impl rand::TryCryptoRng for DeterministicCryptoRng {}
 #[derive(Clone)]
 struct ZkAmsCredentialFixture {
     credential: PrivacyZkAmsPersonhoodCredentialV1,
@@ -587,7 +584,7 @@ async fn wait_for_zk_ams_account_state_on_peers(
     }
 }
 fn p256_public_key(signing_key: &P256SigningKey) -> Result<PrivacyP256PointV1> {
-    let encoded = signing_key.verifying_key().to_encoded_point(true);
+    let encoded = signing_key.verifying_key().to_sec1_point(true);
     let bytes: [u8; 33] = encoded
         .as_bytes()
         .try_into()
@@ -658,7 +655,7 @@ fn zk_ams_fixture() -> Result<ZkAmsFixture> {
             let signature: P256Signature = issuer_signing_key
                 .sign_prehash(credential.digest().as_bytes())
                 .map_err(|_| eyre!("sign fixed ZK-AMS credential"))?;
-            let signature = signature.normalize_s().unwrap_or(signature);
+            let signature = signature.normalize_s();
             Ok(ZkAmsCredentialFixture {
                 credential,
                 issuer_signature: signature.to_bytes().into(),
@@ -1137,7 +1134,7 @@ fn vega_fixture(trusted_timestamp_ms: u64, challenge_byte: u8) -> Result<VegaFix
         PrivacyVegaIssuerRecordLifecycleV1::Active,
     )
     .map_err(|error| eyre!("construct canonical Vega issuer record: {error}"))?;
-    let device_uncompressed = device_signing_key.verifying_key().to_encoded_point(false);
+    let device_uncompressed = device_signing_key.verifying_key().to_sec1_point(false);
     let device_x = device_uncompressed
         .x()
         .ok_or_else(|| eyre!("uncompressed Vega device key omitted x"))?;
@@ -1216,7 +1213,7 @@ fn vega_fixture(trusted_timestamp_ms: u64, challenge_byte: u8) -> Result<VegaFix
     let issuer_signature: P256Signature = issuer_signing_key
         .sign_prehash(&issuer_digest)
         .map_err(|_| eyre!("sign fixed Vega MSO"))?;
-    let issuer_signature = issuer_signature.normalize_s().unwrap_or(issuer_signature);
+    let issuer_signature = issuer_signature.normalize_s();
     let witness_material = VegaPrivacyActionWitnessMaterialV1::new(
         signature_structure,
         mso_payload,

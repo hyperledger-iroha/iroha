@@ -107,6 +107,56 @@ def test_public_original_bytes_are_preserved(tmp_path: Path, relative: str) -> N
     assert seal._read_public_source_bytes(root, relative) == original
 
 
+def test_boringssl_privacy_declaration_is_original_source_and_binds_changes(tmp_path: Path) -> None:
+    """The exact public declaration is sealed, including replacement or removal."""
+    root = tmp_path.resolve()
+    relative = "vendor/boringssl-swiftpm/PrivacyInfo.xcprivacy"
+    source = root / relative
+    source.parent.mkdir(parents=True)
+    original = (ROOT / relative).read_bytes()
+    source.write_bytes(original)
+    lock = root / "Cargo.lock"
+    lock.write_bytes(b"public synthetic lock original\n")
+    assert seal._read_public_source_bytes(root, relative) == original
+    with mock.patch.object(seal, "listed_files", return_value=[relative]):
+        before = seal.fingerprint(root, ["vendor"], lock)
+        source.write_bytes(original + b"\n<!-- changed public declaration -->\n")
+        assert seal.fingerprint(root, ["vendor"], lock) != before
+        source.unlink()
+        with pytest.raises((OSError, RuntimeError)):
+            seal.fingerprint(root, ["vendor"], lock)
+
+
+@pytest.mark.parametrize("relative", [
+    "vendor/boringssl-swiftpm/Other.xcprivacy",
+    "vendor/another/PrivacyInfo.xcprivacy",
+    "vendor/boringssl-swiftpm/private/PrivacyInfo.xcprivacy",
+])
+def test_privacy_declaration_admission_does_not_widen_public_roles(tmp_path: Path, relative: str) -> None:
+    """Only the reviewed provider filename is admitted before source intake."""
+    root = tmp_path.resolve()
+    source = root / relative
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"public synthetic declaration\n")
+    with mock.patch.object(seal.os, "open", side_effect=AssertionError("no source open permitted")) as opened:
+        with pytest.raises(RuntimeError, match="prohibited|admitted public filename"):
+            seal._read_public_source_bytes(root, relative)
+    opened.assert_not_called()
+
+
+def test_privacy_declaration_alias_is_refused_before_intake(tmp_path: Path) -> None:
+    """A reviewed filename cannot make a symlink an original source input."""
+    root = tmp_path.resolve()
+    relative = "vendor/boringssl-swiftpm/PrivacyInfo.xcprivacy"
+    source = root / relative
+    source.parent.mkdir(parents=True)
+    source.symlink_to(ROOT / relative)
+    with mock.patch.object(seal.os, "open", side_effect=AssertionError("no source open permitted")) as opened:
+        with pytest.raises(RuntimeError, match="symlinked"):
+            seal._read_public_source_bytes(root, relative)
+    opened.assert_not_called()
+
+
 def test_fingerprint_retains_original_name_byte_and_lock_domains(tmp_path: Path) -> None:
     import hashlib
     root = tmp_path.resolve()

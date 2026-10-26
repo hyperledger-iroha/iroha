@@ -1,26 +1,23 @@
 import Foundation
 import NoritoBridge
 
-/// One process origin; it never supplies monetary authority or a caller-selected time token.
-final class KagemushaWalletSetupOriginV1: @unchecked Sendable {}
-
-/// Opaque one-use native direct-time exchange, bound to the wallet that created it.
+/// Opaque one-use native direct-time exchange, bound to the logical exchange that created it.
 public final class KagemushaWalletTimeExchangeV1: @unchecked Sendable, CustomStringConvertible {
-  private let origin: KagemushaWalletSetupOriginV1
+  private let origin: AnyObject
   private let token: UInt64
   private let lock = NSLock()
   private var consumed = false
   /// Fresh native nonce sent to the issuer; no local clock reading is exposed.
   public let nonce: Data
-  init(origin: KagemushaWalletSetupOriginV1, token: UInt64, nonce: Data) {
+  init(origin: AnyObject, token: UInt64, nonce: Data) {
     self.origin = origin; self.token = token; self.nonce = kagemushaWalletSetupCopyV1(nonce)
   }
-  func tokenFor(origin: KagemushaWalletSetupOriginV1) throws -> UInt64 {
+  func tokenFor(origin: AnyObject) throws -> UInt64 {
     lock.lock(); defer { lock.unlock() }
     guard origin === self.origin, !consumed else { throw KagemushaWalletErrorV1.invalidInput }
     return token
   }
-  func consume(origin: KagemushaWalletSetupOriginV1) throws {
+  func consume(origin: AnyObject) throws {
     lock.lock(); defer { lock.unlock() }
     guard origin === self.origin, !consumed else { throw KagemushaWalletErrorV1.invalidInput }
     consumed = true
@@ -53,7 +50,7 @@ extension KagemushaWalletCallV1 {
     guard status == 12 else { throw KagemushaWalletErrorV1.invalidNativeOutput }
     return bytes
   }
-  func exchange(origin: KagemushaWalletSetupOriginV1) throws -> KagemushaWalletTimeExchangeV1 {
+  func exchange(origin: AnyObject) throws -> KagemushaWalletTimeExchangeV1 {
     guard status == 13 else { throw KagemushaWalletErrorV1.invalidNativeOutput }
     return KagemushaWalletTimeExchangeV1(origin: origin, token: sequenceLow, nonce: bytes)
   }
@@ -65,6 +62,11 @@ extension KagemushaWalletCallV1 {
 
 /// Fixed typed bounds only. Rust authenticates every original and selects state and proof owners.
 struct KagemushaWalletSetupInputV1 {
+  /// Closed current ABI classification. Native independently rejects every wrong origin.
+  var requiresExchange: Bool {
+    ![8, 9, 10, 12, 13, 14, 16, 17, 18, 20, 21, 22, 24, 26, 29, 33, 37,
+      38, 40, 42, 43, 44, 45, 47, 50, 52, 55, 57, 58].contains(selector)
+  }
   let selector: UInt32
   let identity: Data
   let amount: KagemushaWalletUInt128V1
@@ -77,7 +79,7 @@ struct KagemushaWalletSetupInputV1 {
        first: Data = Data(), second: Data = Data(), third: Data = Data()) throws {
     let limits: [Int]
     switch selector {
-    case 0, 4, 6, 15, 18, 19, 20, 24, 27, 38, 43, 47, 48, 49, 50, 51, 52: limits = [0, 0, 0]
+    case 0, 4, 6, 15, 18, 19, 20, 24, 27, 38, 43, 47, 48, 49, 50, 51, 52, 57, 58: limits = [0, 0, 0]
     case 53: limits = [256 * 1024, 0, 0]
     case 21, 22: limits = [21_092, 0, 0]
     case 23: limits = [36 * 1024 * 1024, 0, 0]
@@ -89,18 +91,18 @@ struct KagemushaWalletSetupInputV1 {
     case 34: limits = [16_384, 65_536, 1_327_104]
     case 36: limits = [65_536, 1_327_104, 0]
     case 2: limits = [0, 1_024, 512]
-    case 3, 8...10, 12...14, 16...17, 41, 42, 54, 55: limits = [10_034, 0, 0]
-    case 39, 40, 44: limits = [10_034, 10_034, 0]
+    case 8...10, 12...14, 16...17, 42, 44, 55, 56: limits = [10_034, 0, 0]
+    case 39, 40: limits = [10_034, 10_034, 0]
     case 5: limits = [512, 512, 0]
     default: throw KagemushaWalletErrorV1.invalidInput
     }
-    guard identity.count == 32, ([2, 19, 20, 25, 27, 39, 41, 42, 43, 44, 45, 54].contains(selector)) == identity.contains(where: { $0 != 0 }),
+    guard identity.count == 32, ([2, 19, 20, 25, 27, 39, 42, 43, 44, 45, 56].contains(selector)) == identity.contains(where: { $0 != 0 }),
       ([47, 53].contains(selector) || ([2, 27, 39].contains(selector)) == (amount.low != 0 || amount.high != 0)), ([5, 6, 29, 49, 51].contains(selector)) == (token != 0),
       selector != 53 || (amount.high == 0 && !first.isEmpty),
       token <= UInt64(Int64.max), selector != 29 || ((1...3).contains(token) && !first.isEmpty), zip([first, second, third], limits).allSatisfy({ $0.count <= $1 }),
-      ![33, 34, 36, 37, 41, 42, 44, 46, 54, 55].contains(selector) || !first.isEmpty,
+      ![33, 34, 36, 37, 42, 44, 46, 55, 56].contains(selector) || !first.isEmpty,
       selector != 2 || second.isEmpty == third.isEmpty, selector != 39 || first.isEmpty == second.isEmpty,
-      (selector != 3 && !(8...10).contains(selector) && !(12...14).contains(selector) && !(16...17).contains(selector) && !(21...23).contains(selector)) || !first.isEmpty, ![5, 25, 26, 33, 34, 36, 40].contains(selector) || (!first.isEmpty && !second.isEmpty),
+      (!(8...10).contains(selector) && !(12...14).contains(selector) && !(16...17).contains(selector) && !(21...23).contains(selector)) || !first.isEmpty, ![5, 25, 26, 33, 34, 36, 40].contains(selector) || (!first.isEmpty && !second.isEmpty),
       selector != 34 || !third.isEmpty
     else { throw KagemushaWalletErrorV1.invalidInput }
     self.selector = selector; self.identity = kagemushaWalletSetupCopyV1(identity)
@@ -245,22 +247,23 @@ extension KagemushaWalletV1 {
   public func validateRequestFeePolicy(schedule: Data, certificates: Data) throws -> KagemushaWalletRequestFeeSelectionV1 {
     try .init(setup(.init(selector: 40, first: schedule, second: certificates)))
   }
+  /// Reconcile the same Send-bound Archive without replacing its delivery evidence.
+  public func creditedForSendStatus(sendRequestId: Data, original: Data) throws -> KagemushaWalletCallV1 {
+    try setup(.init(selector: 42, identity: sendRequestId, first: original)).completion()
+  }
+}
+
+extension KagemushaWalletExchangeCallV1 {
   /// Issue the receiver's open Request for `amount` under exact PolicyData `schedule` and
   /// `certificates` envelopes, authenticated against current Native policy; neither means the zero
   /// fee. Retries with the same setup id return its exact original bytes.
   public func requestWithFeePolicy(setupId: Data, amount: KagemushaWalletUInt128V1,
     schedule: Data? = nil, certificates: Data? = nil) throws -> KagemushaWalletCallV1 {
-    let result = try setup(.requestWithFeePolicy(identity: setupId, amount: amount,
-      schedule: schedule, certificates: certificates))
-    _ = try result.original()
-    return result
-  }
-  /// Bind exact delivery evidence to this retained Send before Native creates its Archive intent.
-  public func acceptCreditedForSend(sendRequestId: Data, original: Data) throws -> KagemushaWalletCallV1 {
-    try setup(.init(selector: 41, identity: sendRequestId, first: original)).completion()
-  }
-  /// Reconcile the same Send-bound Archive without replacing its delivery evidence.
-  public func creditedForSendStatus(sendRequestId: Data, original: Data) throws -> KagemushaWalletCallV1 {
-    try setup(.init(selector: 42, identity: sendRequestId, first: original)).completion()
+    return try task.withUse {
+      let result = try setup(.requestWithFeePolicy(identity: setupId, amount: amount,
+        schedule: schedule, certificates: certificates))
+      _ = try result.original()
+      return result
+    }
   }
 }

@@ -17,7 +17,7 @@ internal object KagemushaNearbyProbeManifest {
     val schemas = mapOf(
         "nearby-identity" to setOf(emptySet<String>()), "nearby-permissions" to setOf(emptySet<String>()),
         "nearby-prepare" to setOf(setOf("setup-id", "amount"), setOf("setup-id", "amount", "fee-schedule", "fee-certificate")),
-        "nearby-send" to setOf(common), "nearby-recover-send" to setOf(common),
+        "nearby-send" to setOf(common), "nearby-continue-send" to setOf(common), "nearby-recover-send" to setOf(common),
         "nearby-receive" to setOf(common + "setup-id"), "nearby-recover-receive" to setOf(common + "setup-id"),
     )
     fun validate(action: String, names: Set<String>) = probeRequire(schemas[action]?.contains(names) == true)
@@ -32,8 +32,10 @@ internal object KagemushaNearbyProbeManifest {
 internal class KagemushaNearbyDeviceStages(
     private val config: EnrollmentProbeConfiguration,
     private val walletOwner: () -> KagemushaWalletV1,
+    private val exchangeOwner: () -> KagemushaWalletExchangeV1,
     private val output: (String, ByteArray, Int) -> Unit,
     private val requireLive: () -> Unit,
+    private val reviews: KagemushaProbeReviewHolder,
 ) : AutoCloseable {
     private val identity = KagemushaNearbyProbeIdentity()
     private val profile = IrohaPeerPayloadProfile.KAGEMUSHA_WALLET_V1
@@ -57,6 +59,16 @@ internal class KagemushaNearbyDeviceStages(
         class Context(val peer: String, val value: IrohaPeerNearbyDiscoveryContextV1) : Incoming()
     }
     fun execute(command: EnrollmentProbeCommand, sequence: Int): String {
+        // Keep one accepted task across pairing, authentication, Native work and carrier waits.
+        val origin = if (command.action in setOf("nearby-identity", "nearby-permissions")) null else exchangeOwner()
+        val accepted = origin?.admit()
+        try {
+            return reviews.command(origin, sequence) { executeAccepted(command, sequence, origin, accepted) }
+        } finally { accepted?.finish() }
+    }
+    private fun executeAccepted(command: EnrollmentProbeCommand, sequence: Int,
+        origin: KagemushaWalletExchangeV1?, accepted: KagemushaWalletExchangeCallV1?): String {
+        fun call() = accepted ?: throw EnrollmentProbeFailure("exchange-required")
         requireLive(); KagemushaNearbyProbeManifest.validate(command.action, command.pins.keys)
         var index = 0
         var traceContext = emptyArray<Pair<String, String>>()
@@ -92,7 +104,7 @@ internal class KagemushaNearbyDeviceStages(
         if (command.action == "nearby-prepare") {
             val setup = word(input("setup-id"), 32); val path = "private/nearby/setup-${digest(setup)}"
             config.files.publish("$path-binding", KagemushaMonetaryProbeManifest.binding("nearby-prepare", values))
-            val request = wallet.request(setup, KagemushaMonetaryProbeManifest.amount(input("amount")),
+            val request = call().request(setup, KagemushaMonetaryProbeManifest.amount(input("amount")),
                 values["fee-schedule"], values["fee-certificate"])
             val payload = IrohaPeerWalletRequestV1(wallet.envelope(KagemushaWalletTransportKindV1.REQUEST, request),
                 wallet.metadata().accountOriginal()).encode()
@@ -106,6 +118,7 @@ internal class KagemushaNearbyDeviceStages(
         }
         val sender = command.action.endsWith("send")
         val recovery = command.action.contains("recover")
+        val continuation = command.action == "nearby-continue-send"
         val requestId = word(input("request-id"), 32)
         val sessionId = word(input("session-id"), 16)
         val requestHash = word(input("request-hash"), 32)
@@ -117,15 +130,15 @@ internal class KagemushaNearbyDeviceStages(
         val peerContext = IrohaPeerNearbyDiscoveryContextV1(profile, peerRole, sessionId, requestHash)
         traceContext = arrayOf("requestID" to EnrollmentProbeFiles.hex(requestId),
             "sessionID" to EnrollmentProbeFiles.hex(sessionId), "requestCanonicalHash" to EnrollmentProbeFiles.hex(requestHash),
-            "role" to role.name, "recovery" to recovery.toString())
-        val gate = KagemushaNearbyAttemptGate(recovery)
+            "role" to role.name, "recovery" to recovery.toString(), "continuation" to continuation.toString())
+        val gate = KagemushaNearbyAttemptGate(recovery, continuation)
         val inputsDigest = KagemushaMonetaryProbeManifest.binding(command.action, values)
         // A restarted or failed radio attempt must select a fresh session, retaining this failed cell.
         config.files.publish("private/nearby/session-${digest(sessionId)}", inputsDigest, exclusive = true)
         trace("attempt-start", fields = arrayOf("requestID" to EnrollmentProbeFiles.hex(requestId),
             "sessionID" to EnrollmentProbeFiles.hex(sessionId), "requestCanonicalHash" to EnrollmentProbeFiles.hex(requestHash),
             "peerCertificateSHA256" to digest(peerCertificate), "localCertificateSHA256" to digest(identity.certificate()),
-            "recovery" to recovery.toString(), "role" to role.name))
+            "recovery" to recovery.toString(), "continuation" to continuation.toString(), "role" to role.name))
         val queue = ArrayBlockingQueue<Incoming>(16)
         val overflow = AtomicBoolean(false)
         fun enqueue(event: Incoming) {
@@ -214,6 +227,7 @@ internal class KagemushaNearbyDeviceStages(
                 "operationID" to EnrollmentProbeFiles.hex(released.operationId()), "outputSHA256" to digest(released.original())))
             return released
         }
+        var attemptFailure: Throwable? = null
         try {
             if (sender) transport.startDiscovering(context) else transport.startAdvertising(context)
             while (!connected) handle(event())
@@ -233,24 +247,79 @@ internal class KagemushaNearbyDeviceStages(
                 val companion = IrohaPeerWalletRequestV1.decode(requestWire.canonicalPayload.bytes)
                 val request = wallet.original(KagemushaWalletTransportKindV1.REQUEST, companion.requestEnvelope())
                 val destination = companion.destinationAccountOriginal()
-                bind(requestId, "review-send", mapOf("request-id" to requestId, "request" to request, "destination" to destination), recovery)
+                bind(requestId, "review-send", mapOf("request-id" to requestId, "request" to request, "destination" to destination), recovery || continuation)
                 if (recovery) {
                     probeRequire(config.files.exists(marker(requestId)), "recovery-required")
                     complete(wallet.requestStatus(requestId))
                 } else {
-                    probeRequire(!config.files.exists(marker(requestId)), "recovery-required")
-                    val review = wallet.reviewSend(request, destination)
-                    output("nearby-native-review.bin", review.projection.bytes(), sequence)
-                    var dispatched = false
+                    probeRequire(reviews.current == null, "lifecycle")
+                    val rootFence = marker(requestId)
+                    val expectation = KagemushaProbeReviewCustody.expectation(config.files.reviewCustody,
+                        requestId, "review-send", mapOf("request" to request, "destination" to destination), continuation)
+                    val decision = call().reviewSend(requestId, request, destination, expectation)
+                    fun existing(value: KagemushaWalletBoundRequestStatusV1): String {
+                        val status = if (value is KagemushaWalletBoundRequestStatusV1.Outcome) value.completion.status else 11
+                        if (value is KagemushaWalletBoundRequestStatusV1.Outcome)
+                            output("nearby-existing-request-output.bin", value.completion.bytes(), sequence)
+                        trace("existing-request", fields = arrayOf("status" to status.toString(),
+                            "newExecution" to "false", "latencyUsable" to "false"))
+                        return "native-existing-request-status-$status"
+                    }
+                    val review = when (decision) {
+                        is KagemushaWalletReviewDecisionV1.Ready -> decision.review
+                        is KagemushaWalletReviewDecisionV1.Existing -> return existing(decision.status)
+                        is KagemushaWalletReviewDecisionV1.Waiting -> {
+                            trace("review-waiting", fields = arrayOf("wait" to decision.wait.name, "latencyUsable" to "false"))
+                            return "native-review-waiting-${decision.wait.name}"
+                        }
+                    }
+                    val selectedOrigin = origin ?: throw EnrollmentProbeFailure("exchange-required")
+                    val fence = if (continuation) "$rootFence-attempt-${config.invocation}-$sequence" else rootFence
+                    val attempt = KagemushaProbeReviewAttempt(review, selectedOrigin, wallet, sequence, fence, continuation)
+                    reviews.retain(attempt)
+                    var retained = false
+                    var primaryFailure: Throwable? = null
                     try {
+                        if (continuation) config.files.publish("$fence-binding", KagemushaMonetaryProbeManifest.binding(
+                            "review-attempt", mapOf("request-id" to requestId, "root-projection" to expectation.bytes(),
+                                "projection" to review.projection.bytes())), exclusive = true)
+                        output("nearby-native-review.bin", review.projection.bytes(), sequence)
+                        attempt.phase.beginConfirmation()
                         val confirmation = KagemushaProbeConfirmation.authenticate(review.projection)
-                        gate.authorized(confirmation.ticks); requireLive()
+                        requireLive()
+                        probeRequire(walletOwner() === wallet && exchangeOwner() === selectedOrigin && reviews.current === attempt, "lifecycle")
+                        gate.authorized(confirmation.ticks)
                         trace("user-authenticated", confirmation.ticks, "reviewSHA256" to digest(review.projection.bytes()))
-                        config.files.publish(marker(requestId), probeJson("kind" to "SEND",
-                            "reviewSHA256" to digest(review.projection.bytes())), exclusive = true)
-                        gate.dispatchMarked(); dispatched = true
-                        complete(wallet.executeReviewed(review, requestId))
-                    } finally { if (!dispatched) wallet.discardReview(review) }
+                        attempt.phase.publishFence { config.files.publish(fence, review.projection.bytes(), exclusive = true) }
+                        gate.dispatchMarked()
+                        when (val execution = call().executeReviewed(review)) {
+                            is KagemushaWalletReviewedExecutionV1.RetainedReview -> {
+                                probeRequire(execution.review === review, "native-projection")
+                                attempt.phase.retained()
+                                trace("review-retained", fields = arrayOf("wait" to execution.wait.name,
+                                    "dispatchFenceRetained" to "true", "latencyUsable" to "false"))
+                                retained = true
+                                // Radio teardown leaves the same logical exchange open for retry-reviewed.
+                                return "native-review-retained-${execution.wait.name}"
+                            }
+                            is KagemushaWalletReviewedExecutionV1.Existing -> return existing(execution.status)
+                            is KagemushaWalletReviewedExecutionV1.Executed -> complete(execution.completion)
+                        }
+                    } catch (failure: Throwable) { primaryFailure = failure; throw failure } finally {
+                        if (!retained) {
+                            if (reviews.current === attempt) reviews.clear(attempt)
+                            attempt.phase.finish()
+                            // Consumed reviews report -2 locally. Cleanup uncertainty retires the exact owner.
+                            try { selectedOrigin.discardReview(review) }
+                            catch (cleanup: Throwable) {
+                                if (cleanup !is KagemushaWalletExceptionV1 || cleanup.status != -2) {
+                                    val original = primaryFailure
+                                    if (original == null) throw cleanup
+                                    if (cleanup !== original) original.addSuppressed(cleanup)
+                                }
+                            }
+                        }
+                    }
                 }
                 val nativeOutput = released(KagemushaWalletReleasedOutputV1.Kind.SEND); gate.sendReleased()
                 val payment = nativeOutput.peerOriginal() ?: throw EnrollmentProbeFailure("native-projection")
@@ -266,15 +335,24 @@ internal class KagemushaNearbyDeviceStages(
                 gate.creditedArrived(received.ticks)
                 trace("credited-arrival", received.ticks, "creditedSHA256" to digest(credited))
                 output("nearby-credited-original.norito", credited, sequence)
-                complete(wallet.acceptCreditedForSend(requestId, credited))
-                val admitted = SystemClock.elapsedRealtimeNanos(); gate.creditedAdmitted(admitted)
+                val delivery = call().observeCreditedForSend(requestId, credited)
+                val admitted = SystemClock.elapsedRealtimeNanos()
+                // BURNED is authenticated evidence; retain it before refusing a positive sample.
+                trace("native-verified-delivery", admitted,
+                    "creditedSHA256" to digest(credited), "evidence" to delivery.evidence.name,
+                    "archive" to delivery.archive.name, "corePending" to delivery.corePending.toString(),
+                    "creditID" to EnrollmentProbeFiles.hex(delivery.creditId()),
+                    "paymentDigest" to EnrollmentProbeFiles.hex(delivery.paymentDigest()),
+                    "amountLow" to java.lang.Long.toUnsignedString(delivery.amount.low),
+                    "amountHigh" to java.lang.Long.toUnsignedString(delivery.amount.high))
+                gate.creditedAdmitted(admitted, delivery)
                 trace("payer-complete", admitted, "creditedSHA256" to digest(credited),
                     "elapsedNs" to (gate.elapsedNanos()?.toString() ?: "unknown"),
                     "rawArrivalElapsedNs" to (gate.arrivalElapsedNanos()?.toString() ?: "unknown"),
                     "rawArrivalScope" to "receiver-durable-completion-upper-bound",
-                    "elapsedScope" to "payer-confirmation-to-credited-admission",
-                    "physicalCarrierObserved" to "true", "timingAnchor" to if (recovery) "unknown-original-process" else "payer-authentication-success")
-                return "native-exact-send-delivery-admitted-over-nearby"
+                    "elapsedScope" to "payer-confirmation-to-verified-delivery",
+                    "physicalCarrierObserved" to "true", "timingAnchor" to if (recovery || continuation) "excluded-recovery-or-continuation" else "payer-authentication-success")
+                return "native-exact-send-delivery-verified-over-nearby"
             } else {
                 val setup = word(input("setup-id"), 32); val path = "private/nearby/setup-${digest(setup)}"
                 val requestWire = IrohaPeerWireMessageV1.decode(config.files.read("$path-request", 32_768))
@@ -295,7 +373,7 @@ internal class KagemushaNearbyDeviceStages(
                     wallet.requestStatus(requestId)
                 } else {
                     config.files.publish(marker(requestId), probeJson("kind" to "RECEIVE", "paymentSHA256" to digest(payment)), exclusive = true)
-                    wallet.receiveWithCompanion(requestId, payment, payerCompanion)
+                    call().receiveWithCompanion(requestId, payment, payerCompanion)
                 }
                 trace("native-return", fields = arrayOf("status" to call.status.toString(), "outputSHA256" to digest(call.bytes())))
                 val credited = gate.receivedCredit(call.status, requestId,
@@ -323,10 +401,29 @@ internal class KagemushaNearbyDeviceStages(
                 return "native-durable-receive-acknowledged-over-nearby"
             }
         } catch (failure: Throwable) {
-            trace("attempt-incomplete", fields = arrayOf("failureClass" to failure.javaClass.simpleName,
-                "latencyUsable" to "false", "automaticResampling" to "false"))
+            attemptFailure = failure
+            try {
+                trace("attempt-incomplete", fields = arrayOf("failureClass" to failure.javaClass.simpleName,
+                    "latencyUsable" to "false", "automaticResampling" to "false"))
+            } catch (diagnostic: Throwable) {
+                if (diagnostic !== failure) failure.addSuppressed(diagnostic)
+            }
             throw failure
-        } finally { transport.listener = null; transport.close(); session.close() }
+        } finally {
+            transport.listener = null
+            var cleanupFailure: Throwable? = null
+            try { transport.close() } catch (failure: Throwable) { cleanupFailure = failure }
+            try { session.close() } catch (failure: Throwable) {
+                val previous = cleanupFailure
+                if (previous == null) cleanupFailure = failure
+                else if (failure !== previous) previous.addSuppressed(failure)
+            }
+            cleanupFailure?.let { cleanup ->
+                val previous = attemptFailure
+                if (previous == null) throw cleanup
+                if (cleanup !== previous) previous.addSuppressed(cleanup)
+            }
+        }
     }
     override fun close() { identity.close() }
 }

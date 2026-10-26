@@ -109,6 +109,104 @@ fn a_released_value_waits_for_its_own_publication_and_only_a_checkpoint_promotes
 }
 
 #[test]
+fn attempt_identity_exhaustion_releases_pending_and_ready_values_without_starting_work() {
+    for ready in [false, true] {
+        let f = Fixture::new();
+        f.scheduler.0.lock().attempts = u64::MAX - 1;
+        let (_, publication) = f.released(1);
+        assert_eq!(publication.attempt, u64::MAX);
+        let mut pending = Some(publication);
+        if ready {
+            pending.take().unwrap().settle(CHECKPOINT);
+        }
+        assert!(f.holds());
+        assert!(
+            f.scheduler.start().is_none(),
+            "attempt identity never wraps"
+        );
+        assert!(!f.holds());
+        assert_eq!(f.dropped(), [1], "exhaustion releases outside the lock");
+        {
+            let state = f.scheduler.0.lock();
+            assert_eq!(state.attempts, u64::MAX);
+            assert!(state.running.is_none(), "refusal installs no running token");
+        }
+        if let Some(publication) = pending {
+            publication.settle(CHECKPOINT);
+            assert!(!f.holds(), "late publication never recreates its value");
+        }
+        for (foreground, charging) in [(false, false), (true, false), (false, true)] {
+            f.scheduler.set_activity(foreground, charging);
+            drop(f.scheduler.payment());
+            assert!(f.scheduler.start().is_none());
+            assert_eq!(f.scheduler.0.lock().attempts, u64::MAX);
+        }
+        assert_eq!(f.dropped(), [1]);
+    }
+}
+
+#[test]
+fn stale_publications_cannot_change_the_last_admitted_attempt() {
+    let cancelled = Error::Cancelled;
+    for late in [None, Some(Err(&cancelled)), Some(CHECKPOINT)] {
+        let f = Fixture::new();
+        let (_, stale) = f.released(1);
+        assert_eq!(stale.attempt, 1);
+        // Model the intervening admissions without iterating over the u64 range.
+        f.scheduler.0.lock().attempts = u64::MAX - 1;
+        let (resumed, current) = f.released(2);
+        assert_eq!(resumed, None);
+        assert_eq!(current.attempt, u64::MAX);
+        if let Some(result) = late {
+            stale.settle(result);
+        } else {
+            drop(stale);
+        }
+        assert!(matches!(
+            f.scheduler.0.lock().retained.as_ref(),
+            Some(Slot::Pending { attempt, .. }) if *attempt == u64::MAX
+        ));
+        assert_eq!(f.dropped(), [1], "old receipts cannot clear or promote F2");
+        current.settle(CHECKPOINT);
+        assert!(matches!(
+            f.scheduler.0.lock().retained.as_ref(),
+            Some(Slot::Ready(_))
+        ));
+        assert!(f.scheduler.start().is_none());
+        assert_eq!(f.dropped(), [1, 2], "only exhaustion drops the last value");
+    }
+}
+
+#[test]
+fn an_exhausted_owners_receipt_cannot_settle_a_fresh_schedulers_same_number() {
+    for publish in [false, true] {
+        let exhausted = Fixture::new();
+        let (_, stale) = exhausted.released(1);
+        exhausted.scheduler.0.lock().attempts = u64::MAX;
+        assert!(exhausted.scheduler.start().is_none());
+        assert_eq!(exhausted.dropped(), [1]);
+
+        let reopened = Fixture::new();
+        let (_, current) = reopened.released(2);
+        assert_eq!(current.attempt, stale.attempt, "fresh scheduler namespace");
+        if publish {
+            stale.settle(CHECKPOINT);
+        } else {
+            drop(stale);
+        }
+        assert!(matches!(
+            reopened.scheduler.0.lock().retained.as_ref(),
+            Some(Slot::Pending { attempt: 1, .. })
+        ));
+        assert!(!exhausted.holds());
+        assert_eq!(reopened.dropped(), []);
+        current.settle(CHECKPOINT);
+        assert_eq!(reopened.resumed(), Some(2));
+        assert_eq!(reopened.dropped(), [2]);
+    }
+}
+
+#[test]
 fn a_new_attempt_evicts_a_pending_value_and_runs_cold() {
     let f = Fixture::new();
     let (_, first) = f.released(1);

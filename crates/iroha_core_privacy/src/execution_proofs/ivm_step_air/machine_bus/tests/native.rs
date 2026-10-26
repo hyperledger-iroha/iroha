@@ -11,7 +11,8 @@ use crate::execution_proofs::stark::{
         prove_proof_managed_note_stark_v1_with_rng, verify_proof_managed_note_stark_v1,
     },
 };
-use rand::{SeedableRng, rngs::StdRng};
+use rand::SeedableRng;
+use rand_chacha::ChaCha12Rng;
 
 #[test]
 fn exact_packet_layout_stays_in_native_envelope_and_every_phase_is_degree_four() {
@@ -71,20 +72,20 @@ fn native_packet_proof_binds_every_public_event_and_explicit_entropy() {
     let proof = prove_proof_managed_note_stark_v1_with_rng(
         &bus,
         &columns,
-        &mut StdRng::from_seed([0x71; 32]),
+        &mut ChaCha12Rng::from_seed([0x71; 32]),
     )
     .unwrap();
     let repeated = prove_proof_managed_note_stark_v1_with_rng(
         &bus,
         &columns,
-        &mut StdRng::from_seed([0x71; 32]),
+        &mut ChaCha12Rng::from_seed([0x71; 32]),
     )
     .unwrap();
     assert_eq!(proof, repeated);
     let randomized = prove_proof_managed_note_stark_v1_with_rng(
         &bus,
         &columns,
-        &mut StdRng::from_seed([0x72; 32]),
+        &mut ChaCha12Rng::from_seed([0x72; 32]),
     )
     .unwrap();
     assert_ne!(proof, randomized);
@@ -130,7 +131,7 @@ fn native_packet_proof_binds_every_public_event_and_explicit_entropy() {
         prove_proof_managed_note_stark_v1_with_rng(
             &bus,
             &forged,
-            &mut StdRng::from_seed([0x71; 32]),
+            &mut ChaCha12Rng::from_seed([0x71; 32]),
         )
         .is_err()
     );

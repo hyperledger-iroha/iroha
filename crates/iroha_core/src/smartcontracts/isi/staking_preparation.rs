@@ -122,10 +122,11 @@ pub fn prepare_public_lane_plan(
         PublicLanePreparationOperationV1::Registration(intent) => {
             let context = stake_context(
                 world,
-                &state.nexus().dataspace_catalog,
-                &state.nexus().staking,
+                world
+                    .parameters()
+                    .require_staking_policy()
+                    .map_err(|error| invalid(&error.to_string()))?,
                 &intent.validator,
-                observed_ledger_time_ms,
             )?;
             check_deposit(world, lane, &intent.validator, &context, &intent.amount)?;
             let lead =
@@ -155,10 +156,11 @@ pub fn prepare_public_lane_plan(
             let record = validator_record(world, lane, &intent.validator)?;
             let context = stake_context(
                 world,
-                &state.nexus().dataspace_catalog,
-                &state.nexus().staking,
+                world
+                    .parameters()
+                    .require_staking_policy()
+                    .map_err(|error| invalid(&error.to_string()))?,
                 &intent.staker,
-                observed_ledger_time_ms,
             )?;
             check_deposit(world, lane, &intent.validator, &context, &intent.amount)?;
             monetary(

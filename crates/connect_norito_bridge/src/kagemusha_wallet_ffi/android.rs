@@ -10,29 +10,32 @@ use advance::{
 };
 use iroha_data_model::kagemusha::KagemushaDevicePublicKeyV1 as PublicKey;
 use jni::{
-    JNIEnv, JavaVM,
-    objects::{GlobalRef, JByteArray, JObject, JObjectArray, JValue},
+    Env, JavaVM,
+    objects::{Global, JByteArray, JObject, JObjectArray, JValue},
 };
 
 /// Retains one Kotlin platform object. Each upcall gets the calling thread's JNI environment:
 /// a Kotlin thread is already attached, and a Rust-owned thread (the background fold worker)
-/// is attached once as a daemon on its first upcall and detached when it exits. No environment
-/// or reply is kept between upcalls: each runs inside its own local frame and leaves no Java
+/// is attached only for the upcall and detached before it returns. No environment
+/// or reply is kept between upcalls: scoped attachments cannot hold up JVM shutdown,
+/// and each call runs inside its own local frame and leaves no Java
 /// exception pending. The callback exposes no public arbitrary-sign method and receives only
 /// G2 typed messages.
 pub struct AndroidPlatform {
     vm: JavaVM,
-    object: GlobalRef,
+    object: Global<JObject<'static>>,
 }
 impl AndroidPlatform {
     /// Retain a Kotlin KagemushaWalletAndroidPlatformV1 and check its mandatory no-anchor policy.
     /// # Errors
     /// Rejects another class, a throwing upcall or an unexpected anchor policy.
-    pub fn new(env: &mut JNIEnv<'_>, object: &JObject<'_>) -> Result<Self> {
+    pub fn new(env: &mut Env<'_>, object: &JObject<'_>) -> Result<Self> {
         let result = (|| -> jni::errors::Result<Self> {
             if !env.is_instance_of(
                 object,
-                "org/hyperledger/iroha/sdk/offline/wallet/KagemushaWalletAndroidPlatformV1",
+                jni::jni_str!(
+                    "org/hyperledger/iroha/sdk/offline/wallet/KagemushaWalletAndroidPlatformV1"
+                ),
             )? {
                 return Err(jni::errors::Error::WrongJValueType(
                     "platform",
@@ -40,7 +43,12 @@ impl AndroidPlatform {
                 ));
             }
             if env
-                .call_method(object, "anchorPolicyTag", "()I", &[])?
+                .call_method(
+                    object,
+                    jni::jni_str!("anchorPolicyTag"),
+                    jni::jni_sig!("()I"),
+                    &[],
+                )?
                 .i()?
                 != 0
             {
@@ -59,11 +67,6 @@ impl AndroidPlatform {
         }
         result.map_err(|_| Failure::code(INVALID))
     }
-    /// The calling thread's environment; never stored. Attaching as a daemon never blocks VM
-    /// shutdown while the fold worker is parked, and repeated upcalls reuse the attachment.
-    fn env(&self) -> jni::errors::Result<JNIEnv<'_>> {
-        self.vm.attach_current_thread_as_daemon()
-    }
     fn call(
         &self,
         operation: i32,
@@ -72,41 +75,36 @@ impl AndroidPlatform {
         auxiliary: i32,
         bound: usize,
     ) -> (PlatformReply, Vec<u8>) {
-        let Ok(mut env) = self.env() else {
-            return (
-                PlatformReply {
-                    tag: u32::MAX,
-                    ..PlatformReply::default()
-                },
-                vec![],
-            );
-        };
+        let result = self.vm.attach_current_thread_for_scope(|env| {
         let result = env.with_local_frame(16, |env| -> jni::errors::Result<(PlatformReply, Vec<u8>)> {
             let slot = env.byte_array_from_slice(slot.map_or(&[], |s| &s.0))?;
             let input = env.byte_array_from_slice(input)?;
-            let reply = env.call_method(self.object.as_obj(), "nativeCall", "(I[B[BI)Lorg/hyperledger/iroha/sdk/offline/wallet/KagemushaWalletNativeReplyV1;", &[JValue::Int(operation), JValue::Object(&slot), JValue::Object(&input), JValue::Int(auxiliary)])?.l()?;
-            let tag = env.get_field(&reply, "tag", "I")?.i()?;
-            let reason = env.get_field(&reply, "reason", "I")?.i()?;
-            let code = env.get_field(&reply, "code", "I")?.i()?;
-            let bytes = JByteArray::from(env.call_method(&reply, "bytes", "()[B", &[])?.l()?);
+            let reply = env.call_method(self.object.as_obj(), jni::jni_str!("nativeCall"), jni::jni_sig!("(I[B[BI)Lorg/hyperledger/iroha/sdk/offline/wallet/KagemushaWalletNativeReplyV1;"), &[JValue::Int(operation), JValue::Object(&slot), JValue::Object(&input), JValue::Int(auxiliary)])?.l()?;
+            let tag = env.get_field(&reply, jni::jni_str!("tag"), jni::jni_sig!("I"))?.i()?;
+            let reason = env.get_field(&reply, jni::jni_str!("reason"), jni::jni_sig!("I"))?.i()?;
+            let code = env.get_field(&reply, jni::jni_str!("code"), jni::jni_sig!("I"))?.i()?;
+            let bytes = env.call_method(&reply, jni::jni_str!("bytes"), jni::jni_sig!("()[B"), &[])?.l()?;
+            let bytes = JByteArray::cast_local(env, bytes)?;
             let len = env.get_array_length(&bytes)?;
             if len < 0 || len as usize > bound { return Err(jni::errors::Error::WrongJValueType("oversized", "bounded bytes")); }
             let bytes = env.convert_byte_array(&bytes)?;
             Ok((PlatformReply { tag: tag as u32, reason: reason as u32, code, length: bytes.len() }, bytes))
         });
-        // The attachment outlives this upcall: no exception may stay pending for the next one.
-        match result.and_then(|value| no_pending_exception(&mut env).map(|()| value)) {
+        let result = result.and_then(|value| no_pending_exception(env).map(|()| value));
+        if result.is_err() {
+            let _ = env.exception_clear();
+        }
+        result
+        });
+        match result {
             Ok(value) => value,
-            Err(_) => {
-                let _ = env.exception_clear();
-                (
-                    PlatformReply {
-                        tag: u32::MAX,
-                        ..PlatformReply::default()
-                    },
-                    vec![],
-                )
-            }
+            Err(_) => (
+                PlatformReply {
+                    tag: u32::MAX,
+                    ..PlatformReply::default()
+                },
+                vec![],
+            ),
         }
     }
     /// Return the credential-encrypted no-backup root; Rust creates/opens it durably.
@@ -129,8 +127,8 @@ impl AndroidPlatform {
     }
 }
 // A successful upcall that still has a pending Java exception fails closed (cleared by caller).
-fn no_pending_exception(env: &mut JNIEnv<'_>) -> jni::errors::Result<()> {
-    if env.exception_check()? {
+fn no_pending_exception(env: &mut Env<'_>) -> jni::errors::Result<()> {
+    if env.exception_check() {
         return Err(jni::errors::Error::JavaException);
     }
     Ok(())
@@ -147,45 +145,48 @@ impl Platform for AndroidPlatform {
         }
     }
     fn key_attestation_chain(&self, slot: &Slot) -> Probe<Vec<Vec<u8>>> {
-        let Ok(mut env) = self.env() else {
-            return Probe::Unavailable(U::Platform(0));
-        };
+        let answer = self.vm.attach_current_thread_for_scope(|env| {
         let answer = env.with_local_frame(32, |env| -> jni::errors::Result<(PlatformReply,Vec<Vec<u8>>)> {
             let slot = env.byte_array_from_slice(&slot.0)?;
             let empty = env.byte_array_from_slice(&[])?;
-            let reply = env.call_method(self.object.as_obj(), "nativeCall",
-                "(I[B[BI)Lorg/hyperledger/iroha/sdk/offline/wallet/KagemushaWalletNativeReplyV1;",
+            let reply = env.call_method(self.object.as_obj(), jni::jni_str!("nativeCall"),
+                jni::jni_sig!("(I[B[BI)Lorg/hyperledger/iroha/sdk/offline/wallet/KagemushaWalletNativeReplyV1;"),
                 &[JValue::Int(12),JValue::Object(&slot),JValue::Object(&empty),JValue::Int(0)])?.l()?;
-            let tag=env.get_field(&reply,"tag","I")?.i()?;
-            let reason=env.get_field(&reply,"reason","I")?.i()?;
-            let code=env.get_field(&reply,"code","I")?.i()?;
-            let bytes=JByteArray::from(env.call_method(&reply,"bytes","()[B",&[])?.l()?);
+            let tag=env.get_field(&reply,jni::jni_str!("tag"),jni::jni_sig!("I"))?.i()?;
+            let reason=env.get_field(&reply,jni::jni_str!("reason"),jni::jni_sig!("I"))?.i()?;
+            let code=env.get_field(&reply,jni::jni_str!("code"),jni::jni_sig!("I"))?.i()?;
+            let bytes=env.call_method(&reply,jni::jni_str!("bytes"),jni::jni_sig!("()[B"),&[])?.l()?;
+            let bytes=JByteArray::cast_local(env,bytes)?;
             if env.get_array_length(&bytes)? != 0 { return Err(jni::errors::Error::WrongJValueType("nonempty", "chain-only bytes")); }
-            let originals=JObjectArray::from(env.call_method(&reply,"certificatesDer","()[[B",&[])?.l()?);
+            let originals=env.call_method(&reply,jni::jni_str!("certificatesDer"),jni::jni_sig!("()[[B"),&[])?.l()?;
+            let originals=JObjectArray::<JByteArray>::cast_local(env, originals)?;
             let count=env.get_array_length(&originals)?;
             if (tag==0 && !(2..=8).contains(&count)) || (tag!=0 && count!=0) {
                 return Err(jni::errors::Error::WrongJValueType("chain count", "bounded original DER chain"));
             }
             let mut chain=Vec::with_capacity(count as usize);
             for index in 0..count {
-                let original=JByteArray::from(env.get_object_array_element(&originals,index)?);
+                let original=env.get_object_array_element(&originals,index as usize)?;
                 let length=env.get_array_length(&original)?;
                 if !(1..=16_384).contains(&length) { return Err(jni::errors::Error::WrongJValueType("DER extent", "bounded original certificate")); }
                 chain.push(env.convert_byte_array(&original)?);
             }
             Ok((PlatformReply {tag:tag as u32,reason:reason as u32,code,length:0},chain))
         });
-        match answer.and_then(|value| no_pending_exception(&mut env).map(|()| value)) {
+        let answer = answer.and_then(|value| no_pending_exception(env).map(|()| value));
+        if answer.is_err() {
+            let _ = env.exception_clear();
+        }
+        answer
+        });
+        match answer {
             Ok((reply, chain)) => match reply.tag {
                 0 => Probe::Present(chain),
                 1 if chain.is_empty() => Probe::Absent,
                 2 if chain.is_empty() => Probe::Unavailable(reason(reply)),
                 _ => Probe::Unavailable(U::Platform(0)),
             },
-            Err(_) => {
-                let _ = env.exception_clear();
-                Probe::Unavailable(U::Platform(0))
-            }
+            Err(_) => Probe::Unavailable(U::Platform(0)),
         }
     }
 

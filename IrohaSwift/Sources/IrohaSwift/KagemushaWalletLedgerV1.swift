@@ -29,10 +29,10 @@ public enum KagemushaWalletLedgerOutcomeV1: Equatable, Sendable {
         case 46:
             guard result.bytes.count == 32 else { throw KagemushaWalletErrorV1.invalidNativeOutput }
             self = .awaiting(entrypoint: result.bytes)
-        case 61, 62:
+        case 69, 70:
             let commit = KagemushaWalletLedgerCommitV1(
                 height: result.sequenceLow, commitHash: result.bytes)
-            self = result.status == 62 ? .confirmed(commit) : .rejected(commit)
+            self = result.status == 70 ? .confirmed(commit) : .rejected(commit)
         default:
             throw KagemushaWalletErrorV1.invalidNativeOutput
         }
@@ -49,7 +49,7 @@ public enum KagemushaWalletLedgerIngestV1: Equatable, Sendable {
     case epochRequired(targetHeight: UInt64)
 
     init(_ result: KagemushaWalletCallV1) throws {
-        if result.status == 60 {
+        if result.status == 68 {
             self = .epochRequired(targetHeight: result.sequenceLow)
             return
         }
@@ -61,25 +61,11 @@ public enum KagemushaWalletLedgerIngestV1: Equatable, Sendable {
 }
 
 extension KagemushaWalletV1 {
-    /// Freeze an exact next Load instruction under durable Native request custody.
-    /// Retry the same request ID and amount after uncertain delivery.
-    public func prepareLedgerLoad(requestId: Data, amount: KagemushaWalletUInt128V1) throws -> Data {
-        let result = try setup(.init(selector: 27, identity: requestId, amount: amount))
-        guard result.status == 40 else { throw KagemushaWalletErrorV1.invalidNativeOutput }
-        return result.bytes
-    }
-
     /// Canonical instruction framing only; ledger execution still validates every authority.
     public func ledgerInstruction(kind: KagemushaWalletLedgerTransportV1, original: Data) throws -> Data {
         let result = try setup(.init(selector: 29, token: kind.rawValue, first: original))
         guard result.status == 40 else { throw KagemushaWalletErrorV1.invalidNativeOutput }
         return result.bytes
-    }
-
-    /// Retain this exact same-Activation outer attempt before its first dispatch.
-    /// Intake alone establishes neither ledger inclusion nor permission to Load.
-    public func retainActivationAttempt(signedWire: Data) throws -> KagemushaWalletLedgerOutcomeV1 {
-        try .init(setup(.init(selector: 46, first: signedWire)))
     }
 
     /// Read this retained attempt's outcome: the wallet's activation, this attempt's
@@ -88,19 +74,40 @@ extension KagemushaWalletV1 {
         try .init(setup(.init(selector: 37, first: signedWire)))
     }
 
-    /// Verify one direct ledger finality original for this retained Activate attempt.
-    public func ingestActivationFinality(signedWire: Data, finality: Data) throws -> KagemushaWalletLedgerIngestV1 {
-        try .init(setup(.init(selector: 36, first: signedWire, second: finality)))
-    }
-
     /// Read the outcome of this exact signed Unload envelope over this exact claim.
     /// Only `confirmed` establishes the payout; `rejected` closes this envelope only.
     public func unloadAttemptOutcome(claim: Data, signedWire: Data) throws -> KagemushaWalletLedgerOutcomeV1 {
         try .init(setup(.init(selector: 33, first: claim, second: signedWire)))
     }
+}
 
+extension KagemushaWalletExchangeCallV1 {
+    /// Freeze an exact next Load instruction under durable Native request custody.
+    /// Retry the same request ID and amount after uncertain delivery.
+    public func prepareLedgerLoad(requestId: Data, amount: KagemushaWalletUInt128V1) throws -> Data {
+        return try task.withUse {
+            let result = try setup(.init(selector: 27, identity: requestId, amount: amount))
+            guard result.status == 40 else { throw KagemushaWalletErrorV1.invalidNativeOutput }
+            return result.bytes
+        }
+    }
+    /// Retain this exact same-Activation outer attempt before its first dispatch.
+    /// Intake alone establishes neither ledger inclusion nor permission to Load.
+    public func retainActivationAttempt(signedWire: Data) throws -> KagemushaWalletLedgerOutcomeV1 {
+        return try task.withUse {
+            try .init(setup(.init(selector: 46, first: signedWire)))
+        }
+    }
+    /// Verify one direct ledger finality original for this retained Activate attempt.
+    public func ingestActivationFinality(signedWire: Data, finality: Data) throws -> KagemushaWalletLedgerIngestV1 {
+        return try task.withUse {
+            try .init(setup(.init(selector: 36, first: signedWire, second: finality)))
+        }
+    }
     /// Verify one direct ledger finality original for this exact signed Unload envelope.
     public func ingestUnloadFinality(claim: Data, signedWire: Data, finality: Data) throws -> KagemushaWalletLedgerIngestV1 {
-        try .init(setup(.init(selector: 34, first: claim, second: signedWire, third: finality)))
+        return try task.withUse {
+            try .init(setup(.init(selector: 34, first: claim, second: signedWire, third: finality)))
+        }
     }
 }

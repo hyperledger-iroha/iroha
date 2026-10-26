@@ -148,9 +148,7 @@ mod tests {
         let name = CustomParameterId::from_str("max_metadata_value_bytes").expect("parameter name");
         transaction
             .world
-            .parameters_mut_for_testing()
-            .get_mut()
-            .set_parameter(Parameter::Custom(CustomParameter::new(
+            .set_parameter_for_testing(Parameter::Custom(CustomParameter::new(
                 name,
                 Json::new(64_u64),
             )))

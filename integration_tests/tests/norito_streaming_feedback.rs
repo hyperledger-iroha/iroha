@@ -2,7 +2,7 @@
 use eyre::{Result as EyreResult, eyre};
 use iroha_core::streaming::StreamingHandle;
 use iroha_crypto::{Algorithm, KeyPair, streaming::FeedbackStateSnapshot};
-use iroha_data_model::peer::Peer;
+use iroha_model_base::peer::Peer;
 use iroha_p2p::streaming::{
     StreamingClient, StreamingServer,
     quic::{Error as QuicError, TransportConfigSettings},

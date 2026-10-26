@@ -84,6 +84,22 @@ fn decoder_refusal(record: bool) {
     let pool = AllocationBudget::new(
         iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
     );
+    // The retained default parameter graph is decoded before Kaigi metadata.
+    // Admit that same constructor prefix, then refuse the original Kaigi decode.
+    let prefix_measurement = norito::core::DecodeBudgetContext::new(limits(usize::MAX));
+    let prefix = prefix_measurement
+        .with(|| {
+            World::try_with_execution_budget(
+                [Domain::new(domain_id.clone()).build(&ALICE_ID)],
+                [account.clone()],
+                std::iter::empty::<AssetDefinition>(),
+                &pool,
+            )
+        })
+        .expect("constructor without Kaigi metadata admits its parameter prefix");
+    let prefix_demand = usize::try_from(prefix_measurement.consumed_allocated_bytes()).unwrap();
+    drop(prefix);
+    reclaim(&pool, 0);
     let measurement = norito::core::DecodeBudgetContext::new(limits(usize::MAX));
     let measured = measurement
         .with(|| {
@@ -96,7 +112,10 @@ fn decoder_refusal(record: bool) {
         })
         .expect("genuine original constructor source is valid before refusal");
     let demand = usize::try_from(measurement.consumed_allocated_bytes()).unwrap();
-    assert!(demand > 0);
+    assert!(
+        demand > prefix_demand,
+        "Kaigi decoding must add original demand"
+    );
     drop(measured);
     reclaim(&pool, 0);
     let original = norito::core::DecodeBudgetContext::try_new_owned(
@@ -110,7 +129,7 @@ fn decoder_refusal(record: bool) {
     // return a typed error, and no partially rebuilt World may escape.
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         original.with(|| {
-            norito::with_decode_limits_scope(limits(0), || {
+            norito::with_decode_limits_scope(limits(prefix_demand), || {
                 World::try_with_execution_budget(
                     [domain.clone()],
                     [account.clone()],
@@ -229,10 +248,20 @@ fn world_constructor_storage_refusal_preserves_release_before_entity_consumption
     let expected = WorldData::try_new_with_execution_budget(&pool)
         .err()
         .unwrap();
+    // The immutable parameter Cell is now the first original-pool storage owner.
+    // Its typed constructor refusal must precede all entity iteration.
     assert!(matches!(
         &expected,
-        mv::storage::AdmittedStorageError::Allocation(AllocationRefusal::Capacity { .. })
+        WorldConstructionError::ParameterCell(mv::cell::CellInitializationError::Admission(
+            AllocationRefusal::Capacity { .. }
+        ))
     ));
+    let WorldConstructionError::ParameterCell(mv::cell::CellInitializationError::Admission(
+        expected_refusal,
+    )) = &expected
+    else {
+        unreachable!("the actual first Cell admission was checked above");
+    };
     let (domain, _, json) = source(false);
     let domain_id = domain.id().clone();
     let pointer = json.get().as_ptr();
@@ -256,10 +285,27 @@ fn world_constructor_storage_refusal_preserves_release_before_entity_consumption
         0,
         "original cell refusal precedes all entity consumption"
     );
-    let original = typed_source::<mv::storage::AdmittedStorageError>(&error)
-        .expect("actual original storage refusal must stay in the error source chain");
-    assert_eq!(original, &expected);
-    assert_eq!(original.release_wait(), expected.release_wait());
+    let WorldConstructionError::ParameterCell(mv::cell::CellInitializationError::Admission(
+        original,
+    )) = &error
+    else {
+        panic!("actual original parameter Cell refusal must stay typed: {error:?}");
+    };
+    assert_eq!(original, expected_refusal);
+    let (
+        AllocationRefusal::Capacity {
+            release: original_wait,
+            ..
+        },
+        AllocationRefusal::Capacity {
+            release: expected_wait,
+            ..
+        },
+    ) = (original, expected_refusal)
+    else {
+        panic!("the same full original pool must preserve Capacity and its ReleaseWait");
+    };
+    assert_eq!(original_wait, expected_wait);
     assert_eq!(pool.reserved_bytes(), pool.limit_bytes());
     drop(blocker);
     let retried = World::try_with_execution_budget(

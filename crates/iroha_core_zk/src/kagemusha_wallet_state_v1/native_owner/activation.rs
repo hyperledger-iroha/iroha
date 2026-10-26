@@ -2,6 +2,8 @@
 
 use super::*;
 mod confirmation;
+#[cfg(test)]
+pub(super) use confirmation::{initialize_ledger_load_fixture, ledger_load_fixture};
 
 const PLAN_MAX: usize = KAGEMUSHA_WALLET_ACTIVATION_MAX_BYTES_V1 + 4096;
 
@@ -221,6 +223,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
     /// Unreleased/missing Bootstrap, lost selected originals, invalid installed proofs,
     /// unavailable hardware/storage, or uncertain publication. No failure re-signs a selected output.
     pub fn activation(&mut self) -> Result<Vec<u8>, Error> {
+        self.require_fresh_work()?;
         let _payment = self.scheduler.payment();
         let asset = self.proofs.asset.clone();
         let plan = self.activation_plan(&asset)?;

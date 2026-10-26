@@ -47,7 +47,7 @@ import {
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const defaultRepoRoot = join(scriptDir, "..", "..", "..");
 const INTENDED_PACKAGE = "iroha_js_host";
-const PINNED_RUST_TOOLCHAIN = "1.93.1";
+const PINNED_RUST_TOOLCHAIN = "1.99.1";
 const CARGO_PATH_ENV = "IROHA_JS_CARGO_PATH";
 const MAX_CARGO_JSON_BYTES = 64 * 1024 * 1024;
 const MAX_CARGO_MANIFEST_BYTES = 4 * 1024 * 1024;

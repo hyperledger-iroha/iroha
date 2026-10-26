@@ -66,7 +66,8 @@ test("the source-checkout batching recipe runs offline end to end", () => {
     cwd: ROOT,
     encoding: "utf8",
     env: { ...process.env },
-    timeout: 120_000,
+    // Allow the native loader's 180-second custody check plus recipe execution.
+    timeout: 240_000,
   });
 
   assert.equal(result.signal, null, result.stderr || result.stdout);

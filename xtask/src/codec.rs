@@ -7,7 +7,7 @@ use norito::{
         SignatureAlgorithm, SignedRansTablesV1,
     },
 };
-use rand::{Rng, SeedableRng};
+use rand::{RngExt, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 use std::{
     error::Error,

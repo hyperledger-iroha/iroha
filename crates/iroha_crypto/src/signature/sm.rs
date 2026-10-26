@@ -1,11 +1,11 @@
 use sm2::dsa::Signature as Sm2Signature;
 /// Parse a canonical SM2 signature (r∥s) and surface the underlying error type.
 pub(crate) fn parse_signature(bytes: &[u8; 64]) -> Result<Sm2Signature, signature::Error> {
-    Sm2Signature::from_bytes(bytes)
+    Sm2Signature::from_bytes(bytes.into())
 }
 #[cfg(test)]
 mod tests {
-    use sm4::cipher::{Block, BlockEncrypt, KeyInit};
+    use sm4::cipher::{Block, BlockCipherEncrypt, KeyInit};
     #[test]
     fn sm4_zero_key_zero_block_matches_known_answer_vector() {
         let key = [0u8; 16];

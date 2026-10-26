@@ -21,7 +21,7 @@ class KagemushaWalletHostNativeV1Test {
 
     @BeforeEach
     fun requireCurrentNativeBridge() {
-        assertTrue(NativeSignerBridge.isNativeAvailable(), "The supplied ABI-31 native bridge must load")
+        assertTrue(NativeSignerBridge.isNativeAvailable(), "The supplied ABI-33 native bridge must load")
         assertEquals(1, KagemushaWalletNativeV1.revision())
     }
 
@@ -75,7 +75,7 @@ class KagemushaWalletHostNativeV1Test {
         fun call(selector: Int, low: Long = 0, high: Long = 0, token: Long = 0,
             identity: ByteArray = ByteArray(32), first: ByteArray = byteArrayOf(),
             second: ByteArray = byteArrayOf(), third: ByteArray = byteArrayOf()) =
-            assertNotNull(KagemushaWalletNativeV1.setup(0, identity, selector, low, high,
+            assertNotNull(KagemushaWalletNativeV1.setup(0, if (selector == 52 || selector == 55) 0 else 1, identity, selector, low, high,
                 token, first, second, third))
         for (reply in listOf(call(52), call(53, first = byteArrayOf(1)),
             call(53, low = -1, first = byteArrayOf(1)))) {
@@ -98,16 +98,16 @@ class KagemushaWalletHostNativeV1Test {
     }
 
     @Test
-    fun verifiedDeliveryAndPaymentCompanionSetupUseActualJniAndCheckBoundsBeforeOwnerLookup() {
+    fun durableReceiptAndPaymentCompanionSetupUseActualJniAndCheckBoundsBeforeOwnerLookup() {
         // Handle zero cannot own a wallet. These originals exercise intake shape only:
         // admitted selectors reach owner lookup (-2), while malformed calls stop at -1.
         fun call(selector: Int, identity: ByteArray, first: ByteArray = byteArrayOf(1),
             second: ByteArray = byteArrayOf(), third: ByteArray = byteArrayOf(),
             low: Long = 0, high: Long = 0, token: Long = 0) =
-            assertNotNull(KagemushaWalletNativeV1.setup(0, identity, selector, low, high,
+            assertNotNull(KagemushaWalletNativeV1.setup(0, if (selector == 52 || selector == 55) 0 else 1, identity, selector, low, high,
                 token, first, second, third))
-        for (selector in listOf(54, 55)) {
-            val id = if (selector == 54) ByteArray(32) { 1 } else ByteArray(32)
+        for (selector in listOf(56, 55)) {
+            val id = if (selector == 56) ByteArray(32) { 1 } else ByteArray(32)
             for (length in listOf(1, 10_034)) {
                 val reply = call(selector, id, first = ByteArray(length) { 1 })
                 assertEquals(-2, reply.status, "selector $selector length $length must reach owner lookup")
@@ -115,7 +115,7 @@ class KagemushaWalletHostNativeV1Test {
                 assertEquals(0, reply.platformCode)
                 assertTrue(reply.bytes().isEmpty())
             }
-            val wrongIdentity = if (selector == 54) ByteArray(32) else ByteArray(32) { 1 }
+            val wrongIdentity = if (selector == 56) ByteArray(32) else ByteArray(32) { 1 }
             val malformed = listOf(
                 "empty identity" to call(selector, byteArrayOf()),
                 "short identity" to call(selector, ByteArray(31)),
@@ -142,7 +142,7 @@ class KagemushaWalletHostNativeV1Test {
     fun unloadSetupUsesActualJniAndNeverInventsACompletedClaim() {
         val id = ByteArray(32) { 9 }
         fun call(identity: ByteArray = id, beneficiary: ByteArray = byteArrayOf(), token: Long = 0) =
-            assertNotNull(KagemushaWalletNativeV1.setup(0, identity, 45, 0, 0, token,
+            assertNotNull(KagemushaWalletNativeV1.setup(0, 0, identity, 45, 0, 0, token,
                 beneficiary, byteArrayOf(), byteArrayOf()))
         val unknown = call()
         assertEquals(-2, unknown.status)
@@ -189,7 +189,7 @@ class KagemushaWalletHostNativeV1Test {
             assertEquals(0, reply.platformCode)
             assertTrue(reply.bytes().isEmpty())
         }
-        val execute = assertNotNull(KagemushaWalletNativeV1.execute(0, id, 9, 0, 0, byteArrayOf(), byteArrayOf(), byteArrayOf()))
+        val execute = assertNotNull(KagemushaWalletNativeV1.execute(0, 1, id, 9, 0, 0, byteArrayOf(), byteArrayOf(), byteArrayOf()))
         assertEquals(-2, execute.status)
         assertTrue(execute.bytes().isEmpty())
         val snapshot = assertNotNull(KagemushaWalletNativeV1.snapshot(0))
@@ -220,7 +220,7 @@ class KagemushaWalletHostNativeV1Test {
             Triple(99, byteArrayOf(), byteArrayOf()),
         )
         for (selector in 0..10) {
-            val reply = assertNotNull(KagemushaWalletNativeV1.execute(0, id, selector, 0, 0,
+            val reply = assertNotNull(KagemushaWalletNativeV1.execute(0, 1, id, selector, 0, 0,
                 ByteArray(2_228_737), byteArrayOf(), byteArrayOf()))
             assertEquals(-1, reply.status)
             assertTrue(reply.bytes().isEmpty())
@@ -275,26 +275,34 @@ class KagemushaWalletHostNativeV1Test {
     fun realReviewJniReturnsSeparateFailuresWithoutAdmittingUnknownOwners() {
         val id = ByteArray(32) { 1 }
         // Both required original slots must pass the shape gate before the unknown owner.
-        val reply = assertNotNull(KagemushaWalletNativeV1.review(0, 1, 0, 0, byteArrayOf(1), byteArrayOf(2)))
-        assertEquals(-1, assertNotNull(KagemushaWalletNativeV1.review(0, 1, 0, 0, byteArrayOf(1), byteArrayOf())).status)
+        val reply = assertNotNull(KagemushaWalletNativeV1.review(0, 1, id, 1, 0, 0, 0, byteArrayOf(), byteArrayOf(1), byteArrayOf(2)))
+        assertEquals(-1, assertNotNull(KagemushaWalletNativeV1.review(0, 1, id, 1, 0, 0, 0, byteArrayOf(), byteArrayOf(1), byteArrayOf())).status)
         assertEquals(-2, reply.status); assertEquals(-1, reply.reason); assertEquals(0, reply.platformCode)
         // Strict negative Review parsing checks every private zero token/high/detail/bytes
         // field. A malformed negative reply yields INVALID_NATIVE_OUTPUT rather than -2.
         assertTrue(reply.cleanupToken()==null)
         val refusal=assertFailsWith<KagemushaWalletExceptionV1> {
-            reply.review(Any(),KagemushaWalletReviewProjectionV1.Kind.SEND)
+            reply.decision(Any(), id, KagemushaWalletReviewProjectionV1.Kind.SEND)
         }
         assertEquals(-2,refusal.status)
         for (selector in listOf(0, 2, 9, 99)) {
-            assertEquals(-1, assertNotNull(KagemushaWalletNativeV1.review(0, selector, 0, 0, byteArrayOf(1), byteArrayOf())).status)
+            assertEquals(-1, assertNotNull(KagemushaWalletNativeV1.review(0, 1, id, selector, 0, 0, 0, byteArrayOf(), byteArrayOf(1), byteArrayOf())).status)
         }
-        assertEquals(-1, assertNotNull(KagemushaWalletNativeV1.review(0, 1, 1, 0, byteArrayOf(1), byteArrayOf())).status)
-        assertEquals(-1, assertNotNull(KagemushaWalletNativeV1.review(0, 1, 0, 0, ByteArray(10_035), byteArrayOf())).status)
-        assertEquals(-1, assertNotNull(KagemushaWalletNativeV1.review(0, 8, 1, 0, byteArrayOf(1), byteArrayOf())).status)
-        val execution = assertNotNull(KagemushaWalletNativeV1.executeReviewed(0, 1, id))
+        assertEquals(-1, assertNotNull(KagemushaWalletNativeV1.review(0, 1, id, 1, 1, 0, 0, byteArrayOf(), byteArrayOf(1), byteArrayOf())).status)
+        assertEquals(-1, assertNotNull(KagemushaWalletNativeV1.review(0, 1, id, 1, 0, 0, 0, byteArrayOf(), ByteArray(10_035), byteArrayOf())).status)
+        assertEquals(-1, assertNotNull(KagemushaWalletNativeV1.review(0, 1, id, 8, 1, 0, 0, byteArrayOf(), byteArrayOf(1), byteArrayOf())).status)
+        val execution = assertNotNull(KagemushaWalletNativeV1.executeReviewed(0, 1, 1))
         assertEquals(-2, execution.status); assertTrue(execution.bytes().isEmpty())
-        assertEquals(-1, assertNotNull(KagemushaWalletNativeV1.executeReviewed(0, 1, ByteArray(31))).status)
-        assertEquals(-2, KagemushaWalletNativeV1.discardReview(0, 1))
+        assertEquals(-1, assertNotNull(KagemushaWalletNativeV1.review(0, 1, ByteArray(31), 1, 0, 0, 0, byteArrayOf(), byteArrayOf(1), byteArrayOf(2))).status)
+        for (identity in listOf(ByteArray(32), ByteArray(33))) {
+            assertEquals(-1, assertNotNull(KagemushaWalletNativeV1.review(0, 1, identity, 1, 0, 0,
+                0, byteArrayOf(), byteArrayOf(1), byteArrayOf(2))).status)
+        }
+        for ((tag, expected) in listOf(2 to byteArrayOf(), 0 to byteArrayOf(1), 1 to byteArrayOf())) {
+            assertEquals(-1, assertNotNull(KagemushaWalletNativeV1.review(0, 1, id, 1, 0, 0,
+                tag, expected, byteArrayOf(1), byteArrayOf(2))).status)
+        }
+        assertEquals(-2, KagemushaWalletNativeV1.discardReview(0, 1, 1))
     }
 
 }

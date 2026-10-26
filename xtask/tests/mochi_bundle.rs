@@ -110,7 +110,7 @@ fn mochi_bundle_command_generates_manifest() {
         );
         assert_eq!(
             icon_entry["sha256"].as_str(),
-            Some(format!("{:x}", Sha256::digest(&packaged_icon)).as_str())
+            Some(hex::encode(Sha256::digest(&packaged_icon)).as_str())
         );
     }
 }
@@ -168,7 +168,7 @@ fn mochi_bundle_matrix_and_smoke() {
         .unwrap_or_else(|_| panic!("missing manifest {}", manifest_path.display()));
     let mut hasher = Sha256::new();
     hasher.update(&manifest_bytes);
-    let manifest_sha = format!("{:x}", hasher.finalize());
+    let manifest_sha = hex::encode(hasher.finalize());
     assert_eq!(
         entry["manifest_sha256"],
         Value::String(manifest_sha),

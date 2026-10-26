@@ -7,10 +7,7 @@ use crate::connect::{
 use hkdf::Hkdf;
 use iroha_crypto::{
     PublicKey, SessionKey,
-    blake2::{
-        Blake2bVar,
-        digest::{Update, VariableOutput},
-    },
+    blake2::{Blake2b, digest::consts::U32},
     encryption::{ChaCha20Poly1305, SymmetricEncryptor},
     kex::{KeyExchangeScheme as _, X25519Sha256},
 };
@@ -20,15 +17,12 @@ use sha2::{Digest, Sha256};
 /// Derive the canonical Connect session identifier for one exact deployment.
 #[must_use]
 pub fn derive_session_id(network_id: &NetworkId, app_pk: &[u8; 32], nonce: &[u8; 16]) -> [u8; 32] {
-    let mut out = [0u8; 32];
-    let mut b2 = Blake2bVar::new(32).expect("32-byte BLAKE2b output is valid");
+    let mut b2 = Blake2b::<U32>::new();
     b2.update(b"iroha-connect|sid|");
     b2.update(network_id.as_bytes());
     b2.update(app_pk);
     b2.update(nonce);
-    b2.finalize_variable(&mut out)
-        .expect("fixed BLAKE2b output buffer has the requested length");
-    out
+    b2.finalize().into()
 }
 /// Connect bearer-token class used for domain-separated token hashes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -51,11 +45,10 @@ impl TokenKind {
 }
 /// Derive per-direction keys from a `SessionKey` using HKDF-SHA256 with a BLAKE2b(sid) salt.
 pub fn derive_direction_keys(session_key: &SessionKey, sid: &[u8; 32]) -> ([u8; 32], [u8; 32]) {
-    let mut salt = [0u8; 32];
-    let mut b2 = Blake2bVar::new(32).expect("ok");
+    let mut b2 = Blake2b::<U32>::new();
     b2.update(b"iroha-connect|salt|");
     b2.update(sid);
-    b2.finalize_variable(&mut salt).expect("ok");
+    let salt = b2.finalize();
     let h = Hkdf::<Sha256>::new(Some(&salt), session_key.payload());
     let mut k_app = [0u8; 32];
     let mut k_wallet = [0u8; 32];
@@ -312,36 +305,27 @@ fn encode_connect_hash_input<T: Encode>(value: &T) -> Vec<u8> {
 /// Deterministic BLAKE2b-256 hash of permissions encoded with Connect's pinned
 /// zero-flag Norito layout.
 pub fn hash_permissions_current(perms: &PermissionsV1) -> [u8; 32] {
-    use iroha_crypto::blake2::{Blake2bVar, digest::Update};
     let buf = encode_connect_hash_input(perms);
-    let mut out = [0u8; 32];
-    let mut b2 = Blake2bVar::new(32).expect("ok");
+    let mut b2 = Blake2b::<U32>::new();
     b2.update(&buf);
-    b2.finalize_variable(&mut out).expect("ok");
-    out
+    b2.finalize().into()
 }
 /// Deterministic BLAKE2b-256 hash of a sign-in proof encoded with Connect's
 /// pinned zero-flag Norito layout.
 pub fn hash_signin_proof_current(proof: &SignInProofV1) -> [u8; 32] {
-    use iroha_crypto::blake2::{Blake2bVar, digest::Update};
     let buf = encode_connect_hash_input(proof);
-    let mut out = [0u8; 32];
-    let mut b2 = Blake2bVar::new(32).expect("ok");
+    let mut b2 = Blake2b::<U32>::new();
     b2.update(&buf);
-    b2.finalize_variable(&mut out).expect("ok");
-    out
+    b2.finalize().into()
 }
 /// Deterministic BLAKE2b-256 hash of session constraints encoded with
 /// Connect's pinned zero-flag Norito layout.
 #[must_use]
 pub fn hash_constraints_current(constraints: &Constraints) -> [u8; 32] {
     let buf = encode_connect_hash_input(constraints);
-    let mut out = [0u8; 32];
-    let mut b2 = Blake2bVar::new(32).expect("32-byte BLAKE2b output is valid");
+    let mut b2 = Blake2b::<U32>::new();
     b2.update(&buf);
-    b2.finalize_variable(&mut out)
-        .expect("fixed BLAKE2b output buffer has the requested length");
-    out
+    b2.finalize().into()
 }
 /// Build the canonical approval preimage for wallet signature.
 ///

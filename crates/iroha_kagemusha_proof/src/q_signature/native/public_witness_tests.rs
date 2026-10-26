@@ -347,9 +347,12 @@ fn genuine_load_signature_public_inverse_native_proof_parity() {
             output.write_all(&encoded).unwrap();
             output.sync_all().unwrap();
             println!(
-                "PUBLIC_COLUMN_FIXTURE path={} sha256={:x}",
+                "PUBLIC_COLUMN_FIXTURE path={} sha256={}",
                 path.display(),
                 sha2::Sha256::digest(&encoded)
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect::<String>()
             );
         }
         let original = key.artifact_bytes_v2().unwrap();

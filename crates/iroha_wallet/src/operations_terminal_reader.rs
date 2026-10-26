@@ -89,52 +89,62 @@ impl<'account> CustodyPreparationReader<'account> {
             ChainDiscriminantGuard::enter(self.account.config.account_chain_discriminant);
         let (inspection, next) =
             norito::core::with_decode_limits_scope(LIMITS, || -> Result<_> {
-                let Some(journal) = Journal::open_optional_child(parent, name)? else {
-                    return Ok((VerifiedNativePreparation::missing(), None));
-                };
-                let (retained, observed) = Retained::read_with_recipe(
-                    &journal,
-                    &self.account.config,
-                    ReadRecipe::Terminal(&mut previous),
-                )?;
-                // Keep the exact purpose gate before the fresh expectation. The optional
-                // timestamp belongs to these just-observed Request bytes, not this caller.
-                eyre::ensure!(
-                    retained.request.operation.kind() == kind,
-                    "different native preparation purpose"
-                );
-                let custody_plan = expected.verify_with_timestamp(
-                    &retained.request.selection(),
-                    observed.as_ref().and_then(|value| value.custody_plan),
-                )?;
-                if !retained.retired {
-                    return Ok((retained.into_inspection()?, None));
+                let read =
+                    |journal: Option<iroha_operation_journal::NativeJournalInspection<'_>>| {
+                        let Some(journal) = journal else {
+                            return Ok((VerifiedNativePreparation::missing(), None));
+                        };
+                        let (retained, observed) = Retained::read_from_inspection(
+                            &journal,
+                            &self.account.config,
+                            ReadRecipe::Terminal(&mut previous),
+                        )?;
+                        // Keep the exact purpose gate before the fresh expectation. The optional
+                        // timestamp belongs to these just-observed Request bytes, not this caller.
+                        eyre::ensure!(
+                            retained.request.operation.kind() == kind,
+                            "different native preparation purpose"
+                        );
+                        let custody_plan = expected.verify_with_timestamp(
+                            &retained.request.selection(),
+                            observed.as_ref().and_then(|value| value.custody_plan),
+                        )?;
+                        if !retained.retired {
+                            return Ok((retained.into_inspection()?, None));
+                        }
+                        let observed = observed
+                            .ok_or_else(|| eyre!("terminal read lost its native observation"))?;
+                        let retirement = observed
+                            .retirement
+                            .ok_or_else(|| eyre!("terminal read lost its original retirement"))?;
+                        let request_commitment = observed.request_commitment.ok_or_else(|| {
+                            eyre!("terminal read lost its original request commitment")
+                        })?;
+                        let inspection = VerifiedNativePreparation {
+                            phase: retained.phase(),
+                            request_sha256: Some(request_commitment),
+                            signed: retained.signed,
+                            unprepared: None,
+                        };
+                        Ok((
+                            inspection,
+                            Some(TerminalRecords {
+                                request: ObservedRecord {
+                                    value: retained.request,
+                                    observation: observed.request,
+                                },
+                                retirement,
+                                custody_plan: Some(custody_plan),
+                            }),
+                        ))
+                    };
+                #[cfg(test)]
+                if ORIGINAL_CHILD_CUSTODY.with(std::cell::Cell::get) {
+                    let journal = Journal::open_optional_child(parent, name)?;
+                    let mut read = read;
+                    return read(journal.as_ref().map(Journal::native_inspection));
                 }
-                let observed =
-                    observed.ok_or_else(|| eyre!("terminal read lost its native observation"))?;
-                let retirement = observed
-                    .retirement
-                    .ok_or_else(|| eyre!("terminal read lost its original retirement"))?;
-                let request_commitment = observed
-                    .request_commitment
-                    .ok_or_else(|| eyre!("terminal read lost its original request commitment"))?;
-                let inspection = VerifiedNativePreparation {
-                    phase: retained.phase(),
-                    request_sha256: Some(request_commitment),
-                    signed: retained.signed,
-                    unprepared: None,
-                };
-                Ok((
-                    inspection,
-                    Some(TerminalRecords {
-                        request: ObservedRecord {
-                            value: retained.request,
-                            observation: observed.request,
-                        },
-                        retirement,
-                        custody_plan: Some(custody_plan),
-                    }),
-                ))
+                Journal::read_optional_child(parent, name, read)
             })?;
         self.previous = next;
         Ok(inspection)
@@ -172,4 +182,22 @@ pub(in crate::operations) fn count_request_commitments<T>(read: impl FnOnce() ->
         let result = read();
         (result, count.get() - before)
     })
+}
+
+// The literal prior opening recipe lets tests measure the outer scope independently of the
+// unchanged inner inventory scope. Production has no alternate recipe or runtime switch.
+#[cfg(test)]
+thread_local! {
+    static ORIGINAL_CHILD_CUSTODY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+#[cfg(test)]
+pub(in crate::operations) fn with_original_child_custody<T>(read: impl FnOnce() -> T) -> T {
+    struct Reset(bool);
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            ORIGINAL_CHILD_CUSTODY.with(|value| value.set(self.0));
+        }
+    }
+    let _reset = Reset(ORIGINAL_CHILD_CUSTODY.with(|value| value.replace(true)));
+    read()
 }

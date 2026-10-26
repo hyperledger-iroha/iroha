@@ -5,6 +5,7 @@ import java.nio.ByteBuffer
 import java.nio.charset.CodingErrorAction
 import java.nio.charset.StandardCharsets
 import org.hyperledger.iroha.sdk.core.model.NetworkId
+import org.hyperledger.iroha.sdk.crypto.NativeSignerBridge
 
 /** Native-imported Global checkpoint selection, authenticated by independently selected pins. */
 class VerifiedFiCheckpointSelection private constructor(
@@ -59,7 +60,7 @@ class NativeFinalityCheckpointBridge private constructor() {
         private const val LIBRARY_NAME = "connect_norito_bridge"
         private val nativeAvailable: Boolean = try {
             System.loadLibrary(LIBRARY_NAME)
-            nativeBridgeAbiVersion() == 31 && nativeVerifierContractVersion() == 1
+            nativeBridgeAbiVersion() == NativeSignerBridge.REQUIRED_BRIDGE_ABI_VERSION && nativeVerifierContractVersion() == 1
         } catch (_: UnsatisfiedLinkError) {
             false
         } catch (_: SecurityException) {

@@ -11,7 +11,7 @@ use iroha_data_model::{
     },
 };
 
-impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
+impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     pub(super) fn controlled_asset_lock_with_waterfall(
         &mut self,
         vm: &IVM,

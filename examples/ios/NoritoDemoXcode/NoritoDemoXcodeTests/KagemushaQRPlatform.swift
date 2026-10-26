@@ -44,7 +44,7 @@ private final class KagemushaQRCamera: NSObject, AVCaptureMetadataOutputObjectsD
     let ticks = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW)
     for case let object as AVMetadataMachineReadableCodeObject in metadataObjects {
       guard object.type == .qr, let text = object.stringValue, text.utf8.count <= 700,
-        text.hasPrefix("IQR1:") || text.hasPrefix("IAK1:") else { continue }
+        text.hasPrefix("IQR1:") else { continue }
       receive?(text, ticks)
     }
   }

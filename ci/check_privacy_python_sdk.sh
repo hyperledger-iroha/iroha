@@ -15,7 +15,7 @@ TEST_VENV_OVERRIDE="${PRIVACY_PYTHON_SDK_TEST_VENV:-}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REQUIREMENTS_LOCKFILE="${ROOT_DIR}/python/iroha_python/requirements-ci.lock"
 CHECKOUT_NATIVE_DIR="${ROOT_DIR}/python"
-ABI31_CHECKER="${ROOT_DIR}/scripts/check_native_sdk_artifact.py"
+ABI33_CHECKER="${ROOT_DIR}/scripts/check_native_sdk_artifact.py"
 WHEEL_PATH=""
 WHEEL_SEAL=""
 SDK_WHEEL_PATH=""
@@ -1051,14 +1051,14 @@ if [[ "${MATURIN_VERSION}" != "1.14.1" ]]; then
 fi
 export IROHA_PRIVACY_AUTHENTICATED_MATURIN_VERSION="${MATURIN_VERSION}"
 case "${IROHA_PRIVACY_AUTHENTICATED_RUST_TOOLCHAIN_SELECTOR}" in
-  1.93.1-x86_64-unknown-linux-gnu)
+  1.99.1-x86_64-unknown-linux-gnu)
     AUTHENTICATED_RUST_HOST_TRIPLE="x86_64-unknown-linux-gnu"
     unset \
       IROHA_PRIVACY_AUTHENTICATED_MATURIN_ENCODED_RUSTFLAGS \
       IROHA_PRIVACY_AUTHENTICATED_MATURIN_RUSTC_LINK_ARG \
       IROHA_PRIVACY_AUTHENTICATED_MACOSX_DEPLOYMENT_TARGET
     ;;
-  1.93.1-aarch64-apple-darwin)
+  1.99.1-aarch64-apple-darwin)
     AUTHENTICATED_RUST_HOST_TRIPLE="aarch64-apple-darwin"
     export IROHA_PRIVACY_AUTHENTICATED_MATURIN_ENCODED_RUSTFLAGS=$'-C\x1flink-arg=-undefined\x1f-C\x1flink-arg=dynamic_lookup'
     export IROHA_PRIVACY_AUTHENTICATED_MATURIN_RUSTC_LINK_ARG="link-args=-Wl,-install_name,@rpath/iroha_native._crypto.abi3.so"
@@ -1161,17 +1161,17 @@ case "${INSTALLED_NATIVE_PATH}" in
 esac
 assert_privacy_sdk_inputs_unchanged
 
-NATIVE_ABI31_MANIFEST="${PRIVATE_CARGO_WRAPPER_DIR}/python-native-abi31.json"
-"${VENV_DIR}/bin/python" -I -S "${ABI31_CHECKER}" record \
+NATIVE_ABI33_MANIFEST="${PRIVATE_CARGO_WRAPPER_DIR}/python-native-abi33.json"
+"${VENV_DIR}/bin/python" -I -S "${ABI33_CHECKER}" record \
   --artifact "${INSTALLED_NATIVE_PATH}" \
-  --manifest "${NATIVE_ABI31_MANIFEST}" \
+  --manifest "${NATIVE_ABI33_MANIFEST}" \
   --source-root "${ROOT_DIR}" \
   --python "${VENV_DIR}/bin/python" \
   --sdk python \
   --target "${AUTHENTICATED_RUST_HOST_TRIPLE}-py312"
-"${VENV_DIR}/bin/python" -I -S "${ABI31_CHECKER}" verify \
+"${VENV_DIR}/bin/python" -I -S "${ABI33_CHECKER}" verify \
   --artifact "${INSTALLED_NATIVE_PATH}" \
-  --manifest "${NATIVE_ABI31_MANIFEST}" \
+  --manifest "${NATIVE_ABI33_MANIFEST}" \
   --source-root "${ROOT_DIR}" \
   --python "${VENV_DIR}/bin/python"
 assert_privacy_sdk_inputs_unchanged
@@ -1198,9 +1198,9 @@ PYTEST_STATUS=0
   "${ROOT_DIR}/scripts/tests/check_privacy_python_witness_boundary_test.py" || PYTEST_STATUS=$?
 assert_privacy_sdk_inputs_unchanged
 
-"${VENV_DIR}/bin/python" -I -S "${ABI31_CHECKER}" verify \
+"${VENV_DIR}/bin/python" -I -S "${ABI33_CHECKER}" verify \
   --artifact "${INSTALLED_NATIVE_PATH}" \
-  --manifest "${NATIVE_ABI31_MANIFEST}" \
+  --manifest "${NATIVE_ABI33_MANIFEST}" \
   --source-root "${ROOT_DIR}" \
   --python "${VENV_DIR}/bin/python"
 assert_privacy_sdk_inputs_unchanged
@@ -1215,7 +1215,7 @@ if [[ -n "${EVIDENCE_OUTPUT}" ]]; then
     --native "${INSTALLED_NATIVE_PATH}" \
     --native-wheel "${WHEEL_PATH}" --native-wheel-seal "${WHEEL_SEAL}" \
     --sdk-wheel "${SDK_WHEEL_PATH}" --sdk-wheel-seal "${SDK_WHEEL_SEAL}" \
-    --manifest "${NATIVE_ABI31_MANIFEST}" --source-pin "${SOURCE_BEFORE_PIN}" \
+    --manifest "${NATIVE_ABI33_MANIFEST}" --source-pin "${SOURCE_BEFORE_PIN}" \
     --tests "${NATIVE_TEST_XML}" --test-exit "${PYTEST_STATUS}" \
     --cargo-audit "${PRIVATE_CARGO_AUDIT_PATH}"
 fi

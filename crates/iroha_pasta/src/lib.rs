@@ -7,12 +7,12 @@
 //! # Contents
 //!
 //! - [`field`]: the Pasta fields [`Fp`] and [`Fq`] (portable 4x64-bit
-//!   Montgomery arithmetic specialised to the Pasta moduli) with the `ff` 0.13
+//!   Montgomery arithmetic specialised to the Pasta moduli) with the `ff` 0.14
 //!   traits, constant-time and `*_vartime` inversion, batch inversion and
 //!   table-based square roots.
 //! - [`curve`]: Pallas ([`Ep`]) and Vesta ([`Eq`](struct@Eq)) with complete
 //!   projective formulas, compressed encodings, the GLV endomorphism,
-//!   hash-to-curve and batch kernels, implementing the `group` 0.13 traits.
+//!   hash-to-curve and batch kernels, implementing the `group` 0.14 traits.
 //! - [`msm`]: batch-affine signed-digit Pippenger ([`msm::msm_public`],
 //!   [`msm::msm_secret`]) and fixed-base commitment-key tables, planned against
 //!   an explicit [`msm::MemoryBudget`] and a process-wide 64 MiB shared scratch
@@ -27,7 +27,7 @@
 //! # Pinned representations and independent tests
 //!
 //! `tests/field_oracle.rs` and `tests/curve_oracle.rs` compare field and curve
-//! behavior with the retained `pasta_curves` 0.5.2 dev oracle;
+//! behavior with the retained `pasta_curves` 0.6.1 dev oracle;
 //! `tests/cross_impl_encoding.rs` also uses the separate `halo2curves` dev
 //! oracle. Parameter and Poseidon KATs retain digests and vectors captured
 //! before the vendored prover and `iroha_plonk_oracle` were deleted.
@@ -50,7 +50,7 @@
 //! Kaigi RP56 (`P128Pow5T3`) Poseidon tables, and allocation accounting
 //! through `iroha_allocation`. The fold and `batch_mul_vartime` already use
 //! GLV, the confidential V3 note hash uses the RP57 sponge of [`poseidon`], and
-//! `tests/cross_impl_encoding.rs` holds the `halo2curves` 0.9 encoding KATs.
+//! `tests/cross_impl_encoding.rs` holds the `halo2curves` 0.10 encoding KATs.
 #![forbid(unsafe_code)]
 
 pub mod cancellation;

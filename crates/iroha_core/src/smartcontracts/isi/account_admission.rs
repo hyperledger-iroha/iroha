@@ -377,9 +377,16 @@ mod tests {
             .into_parameter()
             .unwrap(),
         );
-        world.parameters = mv::cell::Cell::new(
-            crate::state::StateParameters::try_from(params).expect("valid fixture parameters"),
-        );
+        let authored =
+            crate::state::StateParameters::try_from(params).expect("valid fixture parameters");
+        let budget = world.sccp_committee_generations.allocation_budget();
+        let retained = crate::pipeline_gas_policy::RetainedStateParameters::try_copy_for_testing(
+            &authored, budget,
+        )
+        .expect("retain complete account fixture parameters");
+        let controls = mv::cell::CellInitialization::try_reserve(budget)
+            .expect("fund complete account fixture parameter controls");
+        world.parameters = controls.initialize(retained, None);
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         State::new_for_testing(world, kura, query)

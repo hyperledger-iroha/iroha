@@ -145,6 +145,10 @@ export {
   FilterSyntaxError,
 } from "./toriiErrors.js";
 export {
+  ACCOUNT_ALIAS_FIELDS,
+  ACCOUNT_ALIAS_ROW_FIELDS,
+  ASSET_MOVEMENT_KINDS,
+  ASSET_MOVEMENT_ROW_FIELDS,
   AGGREGATE_FUNCTIONS,
   CURSOR_MAX_BYTES,
   FIELD_PATH_MAX_BYTES,
@@ -163,6 +167,12 @@ export {
   ListQuery,
   SortKey,
   ToriiCollection,
+  accountAliasScope,
+  accountsInAliasScope,
+  decodeAccountAliasRows,
+  decodeAccountAliases,
+  decodeAssetMovementRow,
+  decodeAssetMovementRows,
   decodePage,
   field,
   isDecimalText,
@@ -240,6 +250,8 @@ export {
   buildCanonicalRequestHeaders,
   buildCanonicalJsonRequest,
   withCanonicalReadRetry,
+  CANONICAL_READ_ATTEMPT_TIMEOUT_MS,
+  CANONICAL_READ_TOTAL_TIMEOUT_MS,
 } from "./canonicalRequest.js";
 export {
   BOOTLE_LANTERN_ISSUANCE_AUTHORIZE_PATH_V1,

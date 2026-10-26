@@ -251,7 +251,7 @@ pub fn prepare_atomic_private_settlement_leg_v1(
     statement.audit_input_commitment =
         atomic_private_settlement_audit_input_commitment_v1(&plaintext.inputs)?;
     let seed = derive_healthy_try_crypto_seed_v1(
-        &mut rand::rngs::OsRng,
+        &mut rand::rngs::SysRng,
         b"iroha:private-settlement:wallet-output-nonces:v1",
     )?;
     let mut output_rng = iroha_crypto::rng_from_seed_slice(seed.as_ref());
@@ -298,7 +298,7 @@ pub fn prepare_atomic_private_settlement_leg_v1(
         },
         padding,
         policy,
-        &mut rand::rngs::OsRng,
+        &mut rand::rngs::SysRng,
     )?;
     drop(canonical);
     statement.audit_capsule_digest = capsule.digest().map_err(|_| E::Encoding)?;

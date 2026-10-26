@@ -2512,7 +2512,13 @@ impl Builtin {
             Self::TransferDomain => S::new(&["AccountId", "DomainId|Name", "AccountId"], "()"),
             Self::RegisterAccount | Self::UnregisterAccount => S::new(&["AccountId"], "()"),
             Self::RegisterAsset => S::new(
-                &["AssetDefinitionId", "string", "NumericSpec", "Mintable"],
+                &[
+                    "AssetDefinitionId",
+                    "string",
+                    "NumericSpec",
+                    "Mintable",
+                    "DomainId",
+                ],
                 "()",
             ),
             Self::UnregisterAsset => S::new(&["AssetDefinitionId"], "()"),
@@ -2795,9 +2801,13 @@ impl Builtin {
             Self::RegisterDomain | Self::UnregisterDomain => signature.with_names(&["domain"]),
             Self::TransferDomain => signature.with_names(&["source", "domain", "destination"]),
             Self::RegisterAccount | Self::UnregisterAccount => signature.with_names(&["account"]),
-            Self::RegisterAsset => {
-                signature.with_names(&["asset_definition", "name", "spec", "mintable"])
-            }
+            Self::RegisterAsset => signature.with_names(&[
+                "asset_definition",
+                "name",
+                "spec",
+                "mintable",
+                "owning_domain",
+            ]),
             Self::UnregisterAsset => signature.with_names(&["asset_definition"]),
             Self::RegisterPeer | Self::UnregisterPeer => signature.with_names(&["peer"]),
             // The Json trigger specification and the Name of a registered
@@ -4154,11 +4164,23 @@ mod tests {
         let spec = Builtin::RegisterAsset.spec();
         assert_eq!(
             spec.signature.parameters,
-            &["AssetDefinitionId", "string", "NumericSpec", "Mintable"]
+            &[
+                "AssetDefinitionId",
+                "string",
+                "NumericSpec",
+                "Mintable",
+                "DomainId"
+            ]
         );
         assert_eq!(
             spec.signature.parameter_names,
-            &["asset_definition", "name", "spec", "mintable"]
+            &[
+                "asset_definition",
+                "name",
+                "spec",
+                "mintable",
+                "owning_domain"
+            ]
         );
         assert_eq!(
             spec.operation_syscalls,

@@ -15,7 +15,7 @@ use iroha_data_model::{
 };
 use std::num::NonZeroU64;
 
-impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
+impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     pub(super) fn controlled_lock_key(
         vm: &IVM,
         pointer: u64,
@@ -612,8 +612,12 @@ seiyaku ControlledLock {
         let mut host = host();
         let mut vm = opening_vm(&asset_for("ds"), b"lock");
         let next = vm.alloc_input_tlv(&[]).unwrap() - ivm::Memory::INPUT_START;
-        vm.alloc_input_tlv(&vec![0; usize::try_from(ivm::Memory::INPUT_SIZE - next).expect("remaining input fits usize")])
-            .unwrap();
+        vm.alloc_input_tlv(&vec![
+            0;
+            usize::try_from(ivm::Memory::INPUT_SIZE - next)
+                .expect("remaining input fits usize")
+        ])
+        .unwrap();
         let heap_before = vm.alloc_heap(0).unwrap() - ivm::Memory::HEAP_START;
         vm.memory.set_heap_limit(heap_before).unwrap();
         let argument_table = vm.register(10);

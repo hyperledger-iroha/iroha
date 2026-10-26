@@ -1038,8 +1038,9 @@ impl ContextPlan {
         }
     }
     /// Copy-bind exactly one fixed Q partition to its hard verifier outputs.
-    /// The stage index selects a circuit-fixed Q partition. All stages hash
-    /// every Q instance, preventing deferred-instance substitution.
+    /// The stage index selects a circuit-fixed Q partition. Split stages also
+    /// hash every Q instance in their shared context; a single-stage closer
+    /// directly binds its complete Q partition without a continuation digest.
     ///
     /// # Errors
     /// Missing, duplicate, reordered or wrong-shaped Q outputs; layout failure.

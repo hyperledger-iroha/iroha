@@ -122,7 +122,7 @@ async fn private_physical_account_route_does_not_grant_a_stranger_or_anonymous_r
 #[tokio::test]
 async fn account_routes_require_valid_root_metadata_and_preserve_explicit_global_scope() {
     let owner = AccountId::new(iroha_crypto::KeyPair::random().public_key().clone());
-    let app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world(World::with(
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world(World::with(
         [],
         [Account::new(owner.clone()).build(&owner)],
         [],
@@ -131,22 +131,35 @@ async fn account_routes_require_valid_root_metadata_and_preserve_explicit_global
         resolve_torii_target_account_routes(&app, &owner).unwrap(),
         vec![RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)]
     );
+    let mut world = World::with([], [Account::new(owner.clone()).build(&owner)], []);
+    crate::test_utils::author_ready_fixture_crypto_policy(&mut world);
+    // The app helper authors Global metadata; construct genuine root absence explicitly.
+    let state = iroha_core::state::State::new_with_chain_and_network_id_for_testing(
+        world,
+        app.kura.clone(),
+        app.query_service.clone(),
+        app.state.chain_id_ref().clone(),
+        *app.state.network_id_ref(),
+    );
+    Arc::get_mut(&mut app).expect("unique app fixture").state = Arc::new(state);
     for malformed in [false, true] {
-        let mut block = app.state.world.block();
-        block
-            .parameters
-            .remove_custom_parameter(&consensus_metadata::handshake_meta_id())
-            .expect("optional handshake fixture parameter removal");
         if malformed {
+            let mut block = app.state.world.block();
             block
-                .parameters
-                .set_parameter(Parameter::Custom(CustomParameter::new(
+                .set_parameter_for_testing(Parameter::Custom(CustomParameter::new(
                     consensus_metadata::handshake_meta_id(),
                     iroha_primitives::json::Json::new(false),
                 )))
                 .expect("unparsed root metadata fixture");
+            block.commit();
         }
-        block.commit();
+        assert_eq!(
+            app.state.world.view().parameters().custom().contains_key(
+                &consensus_metadata::handshake_meta_id()
+            ),
+            malformed,
+            "only the malformed fixture authors a root-metadata slot"
+        );
         assert!(matches!(
             resolve_torii_target_account_routes(&app, &owner),
             Err(queue::RoutingResolveError::UnauthenticatedRootScope)

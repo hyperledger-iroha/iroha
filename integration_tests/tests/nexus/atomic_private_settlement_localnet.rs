@@ -2013,7 +2013,7 @@ fn prepare_leg_with_private_data_and_rngs(
     manifest: &AtomicPrivateSettlementV1,
     authority_digest: Hash,
     private_data: &PrivateSettlementLegPrivateData,
-    output_rng: &mut (impl rand_core_06::RngCore + rand_core_06::CryptoRng),
+    output_rng: &mut (impl rand::TryCryptoRng),
     capsule_rng: &mut impl rand::rand_core::TryCryptoRng,
 ) -> Result<PreparedLeg> {
     let witness_timing = SmokeDiagnosticSpanV1::start(

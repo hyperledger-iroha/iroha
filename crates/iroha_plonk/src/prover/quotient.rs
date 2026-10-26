@@ -888,6 +888,76 @@ fn evaluate_instance_many<F: PastaField>(
     Ok(())
 }
 
+/// Evaluates public key polynomials without transforming constants.
+/// This branch must not be used for witness, product or lookup coefficients.
+fn evaluate_public_many<F: PastaField>(
+    plan: Option<&CosetFftPlan<'_, '_, F>>,
+    coefficients: &[&[F]],
+    values: &mut [&mut [F]],
+    cancellation: Option<&CancellationToken>,
+) -> Result<(), KeyError> {
+    CancellationToken::checkpoint(cancellation)?;
+    if coefficients.len() != values.len() {
+        return Err(KeyError::Shape {
+            what: "coset columns",
+            expected: values.len(),
+            actual: coefficients.len(),
+        });
+    }
+    for (values, coefficients) in values.iter().zip(coefficients) {
+        if coefficients.len() != values.len() {
+            return Err(KeyError::Shape {
+                what: "coset coefficients",
+                expected: values.len(),
+                actual: coefficients.len(),
+            });
+        }
+    }
+    if values.is_empty() {
+        return Ok(());
+    }
+    let plan = plan.ok_or(KeyError::CosetIndex)?;
+    // Even an all-constant batch must match the actual plan. Validate the
+    // complete batch before filling any output, including empty columns.
+    for coefficients in coefficients {
+        if coefficients.len() != plan.n() {
+            return Err(iroha_pasta::fft::FftError::WrongLength {
+                expected: plan.n(),
+                actual: coefficients.len(),
+            }
+            .into());
+        }
+    }
+    let mut transformed_coefficients = Vec::with_capacity(coefficients.len());
+    let mut transformed_values = Vec::with_capacity(values.len());
+    for (coefficients, values) in coefficients.iter().zip(values.iter_mut()) {
+        let mut constant = true;
+        for chunk in coefficients[1..].chunks(ROWS_PER_TASK) {
+            CancellationToken::checkpoint(cancellation)?;
+            if chunk.iter().any(|value| *value != F::ZERO) {
+                constant = false;
+                break;
+            }
+        }
+        if constant {
+            for chunk in values.chunks_mut(ROWS_PER_TASK) {
+                CancellationToken::checkpoint(cancellation)?;
+                chunk.fill(coefficients[0]);
+            }
+        } else {
+            transformed_coefficients.push(*coefficients);
+            transformed_values.push(&mut **values);
+        }
+    }
+    CancellationToken::checkpoint(cancellation)?;
+    evaluate_many(
+        Some(plan),
+        &transformed_coefficients,
+        &mut transformed_values,
+        cancellation,
+    )
+}
+
 /// Borrows complete lookup triples without growing the field workspace.
 /// `first` is the mandatory triple; optional mask weights were reserved before
 /// the remaining columns reach this function. Partial trailing triples stay unused.
@@ -1112,7 +1182,7 @@ fn refresh_key_cosets<'a, C: PastaCurve>(
             }
         }
     }
-    evaluate_many(plan, &owned_coefficients, &mut owned, cancellation)?;
+    evaluate_public_many(plan, &owned_coefficients, &mut owned, cancellation)?;
     Ok(())
 }
 

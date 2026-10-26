@@ -196,16 +196,17 @@ impl fmt::Debug for CircuitBlindingKey {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand_core::{TryCryptoRng, TryRngCore};
+    use rand_core::{TryCryptoRng, TryRng};
     struct FailingTryRng;
     #[derive(Debug)]
     struct FailingTryRngError;
+    impl std::error::Error for FailingTryRngError {}
     impl std::fmt::Display for FailingTryRngError {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             f.write_str("failing blinding nonce RNG")
         }
     }
-    impl TryRngCore for FailingTryRng {
+    impl TryRng for FailingTryRng {
         type Error = FailingTryRngError;
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             Err(FailingTryRngError)
@@ -221,7 +222,7 @@ mod tests {
     struct FixedTryRng {
         bytes: [u8; REQUEST_NONCE_LEN],
     }
-    impl TryRngCore for FixedTryRng {
+    impl TryRng for FixedTryRng {
         type Error = core::convert::Infallible;
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             Ok(u32::from_le_bytes(self.bytes[..4].try_into().unwrap()))

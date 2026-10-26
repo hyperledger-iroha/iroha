@@ -246,6 +246,7 @@ impl From<Error> for ManagedAttachmentFailure {
     fn from(error: Error) -> Self {
         match error {
             Error::Bootstrap(reason) => Self::Bootstrap(reason),
+            Error::ParentCheckpoint { .. } => Self::ParentAuthenticationFailed,
             Error::Io(_) | Error::Busy(_) => Self::CustodyUnavailable,
             Error::ParentDeadline | Error::Timeout(_) | Error::NativeDeadline => {
                 Self::AwaitingCompletion

@@ -556,7 +556,7 @@ impl HttpTransport {
         // Each request also carries the remaining time of its attempt
         // deadline, which bounds the whole exchange, body included.
         let client = Client::builder()
-            .use_rustls_tls()
+            .tls_backend_rustls()
             .timeout(config.request_timeout)
             .connect_timeout(config.request_timeout)
             .redirect(redirect::Policy::none())

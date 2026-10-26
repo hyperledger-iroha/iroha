@@ -139,6 +139,9 @@ Stage ENGINE-3 (tasks T12 and T13) provides:
   omitted gates keep their original zero-valued positions and the final partial
   group uses serial Horner evaluation. Both-field tests compare the full
   quotient against the independent serial evaluator and retain proof-byte goldens.
+  The fused evaluator fills constant public fixed and permutation polynomials
+  directly after validating the complete coset geometry. Other polynomials keep
+  the existing FFT path; witness-dependent coefficients never use this shortcut.
   `Witness::from_circuit` checks that a circuit matches its key (copies
   through the key's copy digest, in constant memory) and moves the
   synthesized advice into the zeroizing witness; `Witness::from_columns`
@@ -214,7 +217,7 @@ domains use the unchanged transparent `derive` constructor; explicit derivation
 remains available for independent parity checks. These four public assets total
 9,699,600 bytes per native architecture. They introduce no device file cache,
 parameter authority, proof-format change or expanded proving-key storage, and
-remain ordinary source-closure inputs for compiled-profile freshness.
+remain pinned mathematical inputs to the protocol contract and artifact checks.
 
 Offline compiler recovery can use `keys::source_fingerprint_v2` to identify
 exact witnessless public source tables before generating commitments. It runs the
@@ -253,58 +256,39 @@ independent strict exporter do not consult this registry. The owning wallet must
 still authenticate its installation and finish the complete source graph before
 granting a wallet capability. Proof-time source reconstruction remains unchanged.
 
-The build computes registry freshness from actual tracked and unignored inputs,
-including higher-level circuit code, assets, manifests, lockfile and configuration.
-The census includes unknown owners and file formats by default. It omits unrelated
-Python, Swift, Kotlin and JavaScript client owners, Android/iOS examples, and
-Markdown prose under the workspace root, `docs` and `specs`. Markdown and Rust
-extensions are recognized without regard to ASCII case; exact path spelling
-remains part of the identity, and extensionless dotfiles remain unknown formats.
-Every inventoried
-nested Cargo package takes precedence over these exclusions, so a native package
-inside an SDK or vendor directory retains all its inventoried files. Native crate
-prose, scripts, tests, fixtures, machine-readable specifications and assets remain
-inputs. The optional `iroha-docs` gitlink does not affect native identity.
+Built-in compatibility is an explicit semantic ABI contract. The generated
+registry pins the proof engine contract, including protocol and artifact encodings,
+source-fingerprint encoding, admission/verifier rules, both curves' native
+transcripts, actual Poseidon constants and pinned parameter identities. The owning
+wallet separately validates its complete native profile, operation policies,
+network, provider and root. Unknown or changed contracts refuse admission. A
+contract is not an installation grant or a substitute for the exact artifact and
+mathematical checks above.
 
-Declared external native inputs and conservatively resolved Rust include/path
-literal references restore otherwise excluded files, including referenced documentation
-and SDK fixtures. This restoration intentionally retains false positives; it is
-not a Rust parser or an exhaustive compiler-input analysis. Generator/mobile
-compiler input containment checks must still reject mathematical inputs outside
-the census; generated `OUT_DIR` inputs require their exact maintained generator
-relationship. A new external compiler input must be included before its artifact
-is accepted. The census does not replace those existing build-correctness checks.
-The canonical Android and Apple bridge builders run the maintained check directly;
-standalone generator builds use `python3 scripts/audit_native_source_inputs.py
---cargo-json <successful-json> --expected-source-digest <digest> --output
-<audit.json>`. An optional `--snapshot-tool` must be pinned to the maintained
-snapshot driver and helper. For top-level native libraries, the audit binds every
-Cargo-reported output to one unique byte-identical `deps` output in the same
-compiler family. It checks the complete direct depfile against every output and
-the exact source entry point, includes the aggregate depfile, and rechecks these
-bindings before reporting success.
+The contract contains protocol semantics, not repository file hashes. Changes to
+transcripts, codecs, verifier/admission rules or source-fingerprint semantics must
+update their explicit contract and rejection/parity tests. Changes to circuit
+relations must update the owner profile and regenerate its registry through the
+strict importer. Actual proving still reconstructs and checks the full source
+fingerprint, so a different fixed, selector, copy or permutation table cannot
+produce a proof through an old source seal. No runtime fallback upgrades a stale
+entry to the current contract.
 
-Native mathematical sources and assets belong under a package's `src` or
-`build_support` tree. These trees for all inventoried Cargo owners, the existing
-top-level crate source roots, and root `.cargo` are also walked without Git ignore
-filtering. Thus ignored native modules, binary constants and Cargo configuration
-remain inputs. Generated registry DATA is excluded from the digest to avoid a
-self-hash. The existing Swift generated-framework symlink contributes its exact
-path and link text only. Other included symlinks must resolve to an already
-included regular input inside the workspace. Deleted unreferenced tracked files
-are omitted consistently before and after staging. Missing required inputs,
-references to tracked-but-absent inputs, incomplete Git inventory or changing
-inputs disable built-in admission while
-allowing strict compilation/generation. This source identity is not an external
-dependency or toolchain attestation.
+Ordinary Cargo compilation does not scan the workspace, generate a native-source
+identity in `OUT_DIR`, or watch an intentionally absent file. Native target
+architecture, OS, width and byte order are checked separately using target cfg;
+unsupported targets cannot select a built-in member. The semantic contract is
+identical on supported targets. Cross-target correctness tests remain necessary.
 
-Cargo recomputes membership and file contents on each invocation through an absent
-`OUT_DIR` rerun input. This detects newly added untracked sources or build config
-without recursively watching ignored native outputs. The identity module is only
-rewritten when its contents change; warm targets and compiler caches remain in use.
-Target architecture, width and byte order are checked separately from the shared
-mathematical source identity. Unsupported targets cannot select a built-in member.
-The support check does not replace cross-target correctness tests.
+Repository provenance belongs to packaging and capture tools. The standalone
+`build_support/source_identity.rs` census records native sources, assets,
+manifest/lock/configuration and declared external inputs, with independent
+compiler-input containment checks. It is not runtime compatibility authority and
+its digest is never replaced by the ABI digest. Unrelated source edits can change
+a package's provenance without recompiling the low-level proof library or
+invalidating otherwise compatible installed wallet originals. Packaging must
+still bind the actual selected compiler inputs and artifact bytes; retained
+captures describe their captured source only.
 
 Strict admission may reuse an already computed public column commitment within
 one immutable `PinnedParams` owner. Its clones share a private, bounded FIFO memo

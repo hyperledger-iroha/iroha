@@ -24,7 +24,7 @@ use crate::{Algorithm, Error};
 
 /// Original typed failure of contextual BLS signing, before diagnostic formatting.
 #[derive(Debug)]
-pub enum BlsSigningError<E = rand_core::OsError> {
+pub enum BlsSigningError<E = rand::rngs::SysError> {
     /// The original checked scalar decoder rejected the retained private key.
     PrivateKey(SerializationError),
     /// The original entropy provider refused the existing signing split draw.
@@ -92,7 +92,7 @@ fn scalar<C: BlsConfiguration + ?Sized, E>(
     // W3fSecretKey::from_bytes uses this same checked scalar deserializer and
     // then only sets the second share and both mutation points to zero. Keeping
     // the scalar directly lets retained scalar, seed and conversion buffers zeroize
-    // on retirement. The existing CompatRng keeps its existing cleanup policy.
+    // on retirement. The provider-owned ChaCha20 sampler keeps its upstream cleanup policy.
     let value = <C::Engine as w3f_bls::EngineBLS>::Scalar::deserialize_compressed(bytes)
         .map_err(BlsSigningError::PrivateKey)?;
     Ok(Zeroizing::new(value))
@@ -144,7 +144,7 @@ where
     if seed.iter().all(|byte| *byte == 0) {
         return Err(BlsSigningError::ZeroEntropy);
     }
-    let mut split_rng = crate::rng::rng_from_seed_slice(seed.as_slice());
+    let mut split_rng = crate::rng::bls_rng_from_seed_slice(seed.as_slice());
     let mut second = Zeroizing::new(C::Engine::generate(&mut split_rng));
     *first += *second;
     *second = -*second;
@@ -156,8 +156,8 @@ pub(super) fn sign_once<C: BlsConfiguration + ?Sized>(
     bytes: &[u8],
     message: &[u8],
 ) -> Result<SigningOutput, BlsSigningError> {
-    let shares = split_once::<C, rand_core::OsError>(bytes)?;
-    sign_split::<C, rand_core::OsError>(&shares.first, &shares.second, message)
+    let shares = split_once::<C, rand::rngs::SysError>(bytes)?;
+    sign_split::<C, rand::rngs::SysError>(&shares.first, &shares.second, message)
 }
 
 /// Decode the scalar without blinding: the second share is zero.
@@ -181,7 +181,7 @@ pub(super) fn sign_consensus(
 ) -> Result<[u8; 96], BlsSigningError> {
     #[cfg(feature = "rand")]
     {
-        sign_consensus_with_rng(bytes, digest, &mut rand::rngs::OsRng)
+        sign_consensus_with_rng(bytes, digest, &mut rand::rngs::SysRng)
     }
     #[cfg(not(feature = "rand"))]
     {
@@ -206,8 +206,8 @@ pub(super) fn sign_consensus_once(
     bytes: &[u8],
     digest: &ConsensusDigest,
 ) -> Result<[u8; 96], BlsSigningError> {
-    let shares = split_once::<NormalConfiguration, rand_core::OsError>(bytes)?;
-    consensus_split::<rand_core::OsError>(&shares, digest)
+    let shares = split_once::<NormalConfiguration, rand::rngs::SysError>(bytes)?;
+    consensus_split::<rand::rngs::SysError>(&shares, digest)
 }
 
 /// No augmentation: the IETF min-pk proof-of-possession suite hashes exactly the message.

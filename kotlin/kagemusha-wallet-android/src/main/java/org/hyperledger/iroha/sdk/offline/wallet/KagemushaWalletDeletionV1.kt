@@ -44,16 +44,17 @@ class KagemushaWalletDeletionProjectionV1 internal constructor(original: ByteArr
     }
 }
 
-/** One-use review tied to the owning wallet instance; DATA cannot authorize another owner. */
+/** One-use review tied to the wallet and exact logical exchange; DATA cannot authorize another. */
 class KagemushaWalletDeletionReviewV1 internal constructor(
     private val origin: KagemushaWalletDeletionGateV1,
+    private val exchange: Any,
     private val epoch: Long,
     private val token: Long,
     val projection: KagemushaWalletDeletionProjectionV1,
 ) {
     private var consumed = false
-    @Synchronized internal fun consume(owner: KagemushaWalletDeletionGateV1, expectedEpoch: Long): Long {
-        require(owner === origin && expectedEpoch == epoch && !consumed) { "Deletion review is closed or belongs to another wallet" }
+    @Synchronized internal fun consume(owner: KagemushaWalletDeletionGateV1, expectedExchange: Any, expectedEpoch: Long): Long {
+        require(owner === origin && expectedExchange === exchange && expectedEpoch == epoch && !consumed) { "Deletion review is closed or belongs to another exchange" }
         consumed = true
         return token
     }
@@ -78,22 +79,22 @@ internal class KagemushaWalletDeletionGateV1 {
     private var terminalMarker: ByteArray? = null
     private var epoch = 0L
     @Synchronized fun requireOrdinary() { check(!frozen) { "Custody deletion requires recovery or is terminal" } }
-    fun review(call: () -> KagemushaWalletCallV1): KagemushaWalletDeletionReviewV1 {
+    fun review(origin: Any, call: () -> KagemushaWalletCallV1): KagemushaWalletDeletionReviewV1 {
         val issuedEpoch = synchronized(this) { requireOrdinary(); epoch }
         val result = call()
         if (result.status != 53) invalidDeletionOutput()
         val projection = KagemushaWalletDeletionProjectionV1(result.bytes())
         return synchronized(this) {
             requireOrdinary(); check(epoch == issuedEpoch) { "Deletion review became stale" }
-            KagemushaWalletDeletionReviewV1(this, epoch, result.sequenceLow, projection)
+            KagemushaWalletDeletionReviewV1(this, origin, epoch, result.sequenceLow, projection)
         }
     }
-    private fun consume(review: KagemushaWalletDeletionReviewV1): Long {
+    private fun consume(review: KagemushaWalletDeletionReviewV1, origin: Any): Long {
         require(!frozen && !inFlight) { "Deletion review cannot be consumed while recovery is required" }
-        return review.consume(this, epoch)
+        return review.consume(this, origin, epoch)
     }
-    fun confirm(review: KagemushaWalletDeletionReviewV1, call: (Long) -> KagemushaWalletCallV1): ByteArray {
-        val token = synchronized(this) { val value = consume(review); frozen = true; inFlight = true; epoch++; value }
+    fun confirm(review: KagemushaWalletDeletionReviewV1, origin: Any, call: (Long) -> KagemushaWalletCallV1): ByteArray {
+        val token = synchronized(this) { val value = consume(review, origin); frozen = true; inFlight = true; epoch++; value }
         try {
             val result = call(token)
             if (result.status != 54) invalidDeletionOutput()
@@ -119,8 +120,8 @@ internal class KagemushaWalletDeletionGateV1 {
             }
         } finally { synchronized(this) { inFlight = false } }
     }
-    fun discard(review: KagemushaWalletDeletionReviewV1, call: (Long) -> KagemushaWalletCallV1) {
-        val token = synchronized(this) { consume(review) }
+    fun discard(review: KagemushaWalletDeletionReviewV1, origin: Any, call: (Long) -> KagemushaWalletCallV1) {
+        val token = synchronized(this) { consume(review, origin) }
         if (call(token).status != 55) invalidDeletionOutput()
     }
 }

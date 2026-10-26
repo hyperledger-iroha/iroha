@@ -1,7 +1,7 @@
 //! PQC (Dilithium3) deterministic batch verification tests.
-use iroha_crypto::{Algorithm, KeyPair, pqc_verify_aggregate, pqc_verify_batch_deterministic};
-use pqcrypto_mldsa::mldsa65 as dilithium;
-use pqcrypto_traits::sign::{DetachedSignature as _, PublicKey as _, SecretKey as _};
+use iroha_crypto::{
+    Algorithm, KeyPair, Signature, pqc_verify_aggregate, pqc_verify_batch_deterministic,
+};
 #[test]
 fn pqc_batch_verify_ok_and_fail() {
     // Prepare a few distinct messages and signatures
@@ -12,17 +12,20 @@ fn pqc_batch_verify_ok_and_fail() {
         .try_to_bytes()
         .expect("fixture ML-DSA public key must be well-formed");
     assert_eq!(algorithm, Algorithm::MlDsa);
-    let pk = dilithium::PublicKey::from_bytes(public_bytes).expect("seeded ML-DSA public key");
-    let sk = dilithium::SecretKey::from_bytes(&kp.private_key().to_bytes().1)
-        .expect("seeded ML-DSA secret key");
+    let sk = kp.private_key();
     let msgs: Vec<Vec<u8>> = (0..5)
         .map(|i| format!("ml-dsa-msg-{i}").into_bytes())
         .collect();
     let sigs: Vec<Vec<u8>> = msgs
         .iter()
-        .map(|m| dilithium::detached_sign(m, &sk).as_bytes().to_vec())
+        .map(|m| {
+            Signature::try_new(sk, m)
+                .expect("sign ML-DSA fixture")
+                .payload()
+                .to_vec()
+        })
         .collect();
-    let pks: Vec<Vec<u8>> = msgs.iter().map(|_| pk.as_bytes().to_vec()).collect();
+    let pks: Vec<Vec<u8>> = msgs.iter().map(|_| public_bytes.to_vec()).collect();
     let msg_refs: Vec<&[u8]> = msgs.iter().map(Vec::as_slice).collect();
     let sig_refs: Vec<&[u8]> = sigs.iter().map(Vec::as_slice).collect();
     let pk_refs: Vec<&[u8]> = pks.iter().map(Vec::as_slice).collect();
@@ -51,14 +54,14 @@ fn pqc_batch_verify_rejects_all_zero_material_before_backend() {
         .public_key()
         .try_to_bytes()
         .expect("fixture ML-DSA public key must be well-formed");
-    let secret = dilithium::SecretKey::from_bytes(&kp.private_key().to_bytes().1)
-        .expect("seeded ML-DSA secret key");
+    let secret = kp.private_key();
     let message = b"iroha:ml-dsa:pqc-batch-all-zero";
-    let signature = dilithium::detached_sign(message, &secret)
-        .as_bytes()
+    let signature = Signature::try_new(secret, message)
+        .expect("sign ML-DSA fixture")
+        .payload()
         .to_vec();
-    let all_zero_signature = vec![0u8; dilithium::signature_bytes()];
-    let all_zero_public_key = vec![0u8; dilithium::public_key_bytes()];
+    let all_zero_signature = vec![0u8; iroha_crypto::ML_DSA_65_SIGNATURE_BYTES];
+    let all_zero_public_key = vec![0u8; iroha_crypto::ML_DSA_65_PUBLIC_KEY_BYTES];
     let message_ref: &[u8] = message;
     assert!(
         pqc_verify_batch_deterministic(
@@ -93,8 +96,7 @@ fn pqc_aggregate_wrapper_accepts_valid_and_rejects_adversarial_material() {
         .try_to_bytes()
         .expect("fixture ML-DSA public key must be well-formed");
     let public_key = public_bytes.to_vec();
-    let secret = dilithium::SecretKey::from_bytes(&kp.private_key().to_bytes().1)
-        .expect("seeded ML-DSA secret key");
+    let secret = kp.private_key();
     let messages = [
         b"iroha:ml-dsa:pqc-aggregate:0".to_vec(),
         b"iroha:ml-dsa:pqc-aggregate:1".to_vec(),
@@ -102,8 +104,9 @@ fn pqc_aggregate_wrapper_accepts_valid_and_rejects_adversarial_material() {
     let signatures: Vec<Vec<u8>> = messages
         .iter()
         .map(|message| {
-            dilithium::detached_sign(message, &secret)
-                .as_bytes()
+            Signature::try_new(secret, message)
+                .expect("sign ML-DSA fixture")
+                .payload()
                 .to_vec()
         })
         .collect();

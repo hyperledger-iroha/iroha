@@ -3,7 +3,7 @@
 use super::*;
 use iroha_data_model::isi::asset_fi::TransferToLinkedFiV1;
 
-impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
+impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     pub(super) fn transfer_to_linked_fi(&mut self, vm: &IVM) -> Result<u64, ivm::VMError> {
         let context = self
             .current_contract_runtime_context

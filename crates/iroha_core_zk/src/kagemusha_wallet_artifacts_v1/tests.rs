@@ -420,6 +420,15 @@ fn native_protocol_preimages_bind_actual_curve_tables_and_params() {
     assert_eq!(&eq[5..37], &CurveV1::Vesta.base_modulus());
     assert_eq!(&eq[37..69], &CurveV1::Vesta.scalar_modulus());
     for (curve, bytes) in [(CurveV1::Vesta, eq), (CurveV1::Pallas, ep)] {
+        assert_eq!(
+            &bytes[2..],
+            iroha_plonk::contract::pipa_r_protocol_transcript_v1(
+                curve,
+                Domain::Proof.tag(),
+                Domain::Fold.tag(),
+            )
+            .unwrap(),
+        );
         for k in 12..=16 {
             let params = pinned_params_digest(curve, k).unwrap();
             assert!(bytes.windows(params.len()).any(|window| window == params));

@@ -15,7 +15,7 @@ use iroha_data_model::sorafs::{
         StreamTokenViolationKindV1,
     },
 };
-use rand::{rand_core::TryCryptoRng, rngs::OsRng};
+use rand::{rand_core::TryCryptoRng, rngs::SysRng};
 use sorafs_manifest::{StreamTokenBodyV1, token::STREAM_TOKEN_MAX_FUTURE_SKEW_SECS_V1};
 /// An immutable lifetime bound derived from the authenticated accepted record.
 #[derive(Clone, Copy, Debug)]
@@ -157,7 +157,7 @@ fn requested_bytes(route: StreamTokenRequestRouteV1) -> u64 {
     }
 }
 fn new_serving_attempt_id() -> Result<[u8; 32], StreamTokenGatewayAdmissionErrorV1> {
-    serving_attempt_id_with_rng(&mut OsRng)
+    serving_attempt_id_with_rng(&mut SysRng)
 }
 fn serving_attempt_id_with_rng<R: TryCryptoRng>(
     rng: &mut R,

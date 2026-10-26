@@ -214,19 +214,8 @@ pub(crate) fn crypto_fixture_policy()
 pub(crate) fn staking_fixture_policy(
     stake_asset_id: iroha_data_model::asset::AssetDefinitionId,
 ) -> iroha_data_model::block::consensus::PublicLaneStakingPolicy {
-    use iroha_config::parameters::defaults::{governance, nexus::staking};
-    iroha_data_model::block::consensus::PublicLaneStakingPolicy {
-        min_validator_stake: staking::min_validator_stake(),
-        max_stake_shares_per_validator: staking::MAX_STAKE_SHARES_PER_VALIDATOR,
-        max_pending_unbonds_per_share: staking::MAX_PENDING_UNBONDS_PER_SHARE,
-        unbonding_delay_ms: u64::try_from(staking::UNBONDING_DELAY.as_millis())
-            .expect("fixture delay fits"),
-        max_slash_bps: staking::MAX_SLASH_BPS,
-        stake_asset_id,
-        // Typed protocol identities retain their keys across author address contexts.
-        stake_escrow_account_id: governance::bond_escrow_account_id(),
-        slash_sink_account_id: governance::bond_escrow_account_id(),
-    }
+    let custody = iroha_config::parameters::defaults::governance::bond_escrow_account_id();
+    iroha_genesis::default_staking_policy(stake_asset_id, custody.clone(), custody)
 }
 
 /// Explicit fixed fixture author input, serialized before genesis authentication.
@@ -234,9 +223,11 @@ pub(crate) fn staking_fixture_policy(
 fn authored_staking_fixture_parameter() -> Parameter {
     Parameter::Custom(
         staking_fixture_policy(
-            iroha_config::parameters::defaults::nexus::staking::stake_asset_id()
-                .parse()
-                .expect("authored staking currency"),
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                iroha_model_base::domain::DomainId::parse_fully_qualified("universal.universal")
+                    .expect("fixed fixture staking domain"),
+                "xor".parse().expect("fixed fixture staking name"),
+            ),
         )
         .into_custom_parameter()
         .expect("complete authored fixture staking policy"),
@@ -502,7 +493,6 @@ impl CertifiedTestChain {
                 .get()
                 .root_fees()
                 .cloned()
-                .or_else(|| nexus.as_ref().map(|nexus| nexus.fees.clone()))
                 .unwrap_or_else(|| {
                     let mut fees =
                         iroha_config::parameters::defaults::nexus::fees::genesis_policy();
@@ -2275,32 +2265,36 @@ fn fixture_bootstrap_state(
     network: NetworkId,
     nexus_config: Option<&iroha_config::parameters::actual::Nexus>,
 ) -> (Box<State>, Arc<Kura>) {
-    if let Some(nexus) = nexus_config {
-        let (mut state, kura) =
-            State::new_with_chain_and_network_id_and_pre_genesis_nexus_for_testing(
-                world,
-                nexus.clone(),
-                LiveQueryStore::start_test(),
-                chain_id.clone(),
-                network,
-            );
-        // The generic State fixture disables fees. Reinstall the explicit caller policy
-        // before the first staged genesis execution, preserving its authenticated geometry.
-        state
-            .set_nexus_from_config(nexus.clone())
-            .expect("configured fixture Nexus");
-        (Box::new(state), kura)
+    // Signed genesis owns the first monetary policy. The generic State fixture's
+    // free global policy would preempt it and conflict with authenticated private SNS rows.
+    let (mut state, kura) = if let Some(nexus) = nexus_config {
+        let state = State::new_with_pre_genesis_nexus_and_identities_for_testing(
+            world,
+            nexus.clone(),
+            LiveQueryStore::start_test(),
+            chain_id.clone(),
+            network,
+        );
+        let kura = state.kura_handle();
+        (state, kura)
     } else {
         let kura = Kura::blank_kura_for_testing();
-        let state = State::new_with_chain_and_network_id_for_testing(
+        let mut state = State::try_new_with_chain_and_network_id_with_default_telemetry(
+            world.sccp_committee_generations.allocation_budget().clone(),
             world,
             Arc::clone(&kura),
             LiveQueryStore::start_test(),
             chain_id.clone(),
             network,
-        );
-        (Box::new(state), kura)
-    }
+        )
+        .expect("construct original pre-genesis fixture State");
+        state.install_active_lane_markers_for_tests();
+        (state, kura)
+    };
+    // Preserve the prior local governance fixture default. The caller installs its
+    // complete pipeline and any explicit governance before native genesis validation.
+    state.gov.citizenship_bond_amount = Quantity::zero();
+    (Box::new(state), kura)
 }
 
 // Complete original validation owners are destroyed before the caller adjusts signed policy.
@@ -2443,6 +2437,58 @@ fn build_genesis(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn staking_fixture_author_preserves_complete_bounds_and_selected_typed_currency() {
+        use iroha_data_model::{
+            asset::AssetDefinitionId, block::consensus::PublicLaneStakingPolicy,
+        };
+        use std::num::NonZeroU32;
+        let selected = AssetDefinitionId::derive_from_components(
+            iroha_model_base::domain::DomainId::parse_fully_qualified("sora.universal").unwrap(),
+            "fixture_stake".parse().unwrap(),
+        );
+        let custody = iroha_config::parameters::defaults::governance::bond_escrow_account_id();
+        let expected = PublicLaneStakingPolicy {
+            min_validator_stake: 1_u64.into(),
+            max_stake_shares_per_validator: NonZeroU32::new(256).unwrap(),
+            max_pending_unbonds_per_share: NonZeroU32::new(8).unwrap(),
+            unbonding_delay_ms: 0,
+            max_slash_bps: 10_000,
+            stake_asset_id: selected.clone(),
+            stake_escrow_account_id: custody.clone(),
+            slash_sink_account_id: custody,
+        };
+        assert_eq!(staking_fixture_policy(selected), expected);
+        expected.validate().unwrap();
+    }
+
+    #[test]
+    fn authored_staking_fixture_keeps_original_currency_across_author_contexts() {
+        use iroha_data_model::{
+            account::address::{ChainDiscriminantGuard, chain_discriminant},
+            block::consensus::PublicLaneStakingPolicy,
+        };
+        let _caller = ChainDiscriminantGuard::enter(753);
+        // This is the exact former default currency; only its producer-side
+        // construction changed from string roundtrip to the typed component ID.
+        let expected = staking_fixture_policy(
+            iroha_config::parameters::defaults::nexus::fees::fee_asset_id()
+                .parse()
+                .unwrap(),
+        );
+        for author_chain in [0, 369, 753, 65535] {
+            let actual = {
+                let _author = ChainDiscriminantGuard::enter(author_chain);
+                let Parameter::Custom(parameter) = authored_staking_fixture_parameter() else {
+                    panic!("fixture must author its exact custom staking parameter");
+                };
+                PublicLaneStakingPolicy::from_custom_parameter(&parameter).unwrap()
+            };
+            assert_eq!(actual, expected);
+            assert_eq!(chain_discriminant(), 753);
+        }
+    }
 
     #[test]
     fn crypto_fixture_author_preserves_the_exact_signed_genesis_policy() {
@@ -2766,6 +2812,7 @@ mod tests {
     fn custom_genesis_staking_observes_the_original_topology_before_moving_funds() {
         use iroha_data_model::{
             asset::{Asset, AssetBalancePolicy, AssetDefinition, AssetDefinitionId, AssetId},
+            block::consensus::PublicLaneStakingPolicy,
             isi::{RegisterBox, RegisterPublicLaneValidator},
             nexus::PublicLaneMonetaryPlanV1,
             transaction::Executable,
@@ -2777,9 +2824,22 @@ mod tests {
         let owner = AccountId::new(config.genesis_key.public_key().clone());
         let (peer, _) = fixture_validators().remove(0);
         let validator = AccountId::new(peer.public_key().clone());
-        let staking = iroha_config::parameters::actual::NexusStaking::default();
-        let definition: AssetDefinitionId = staking.stake_asset_id.parse().unwrap();
-        let escrow = AccountId::parse_encoded(&staking.stake_escrow_account_id).unwrap();
+        assert_eq!(config.genesis_parameters.len(), 1);
+        let staking = config
+            .genesis_parameters
+            .iter()
+            .find_map(|parameter| match parameter {
+                Parameter::Custom(custom)
+                    if custom.id() == &PublicLaneStakingPolicy::parameter_id() =>
+                {
+                    Some(PublicLaneStakingPolicy::from_custom_parameter(custom).unwrap())
+                }
+                _ => None,
+            })
+            .expect("the fixture owns its original signed staking policy");
+        let monetary = staking.clone();
+        let definition: AssetDefinitionId = staking.stake_asset_id;
+        let escrow = staking.stake_escrow_account_id;
         let source_asset = AssetId::new(definition.clone(), validator.clone());
         let escrow_asset = AssetId::new(definition.clone(), escrow.clone());
         let amount = Quantity::from(1_000_u32);
@@ -2804,9 +2864,7 @@ mod tests {
         // as its application consumers; it does not declare an NPoS consensus mode.
         let mut initial = config.world.block();
         initial
-            .parameters
-            .get_mut()
-            .set_parameter(Parameter::Custom(
+            .set_parameter_for_testing(Parameter::Custom(
                 SumeragiNposParameters::default().into_custom_parameter(),
             ))
             .expect("valid fixture parameters");
@@ -2829,6 +2887,16 @@ mod tests {
         );
         let chain = CertifiedTestChain::start(config)
             .expect("original topology must precede peer-dependent genesis instructions");
+        assert_eq!(
+            chain
+                .state()
+                .view()
+                .world()
+                .parameters()
+                .require_staking_policy()
+                .unwrap(),
+            &monetary,
+        );
         assert_eq!(chain.height(), 1);
         assert!(
             chain
@@ -3322,5 +3390,186 @@ mod tests {
         );
         assert_eq!(chain.commit_at(30_000, vec![failing]), [false]);
         assert_eq!(chain.committed(4).block_time_ms(), 30_000);
+    }
+
+    #[test]
+    fn original_bootstrap_constructor_does_not_publish_a_default_fee_policy() {
+        use iroha_crypto::{Hash, HashOf};
+
+        let chain_id = ChainId::from("original-monetary-bootstrap");
+        let network = NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
+            b"original monetary bootstrap network",
+        )));
+        let nexus = iroha_config::parameters::actual::Nexus::default();
+        for configured in [None, Some(&nexus)] {
+            let (state, kura) =
+                fixture_bootstrap_state(World::new(), &chain_id, network, configured);
+            assert!(state.world.parameters.view().get().root_fees().is_none());
+            assert_eq!(state.view().height(), 0);
+            assert_eq!(kura.blocks_count(), 0);
+            assert!(Arc::ptr_eq(&state.kura_handle(), &kura));
+            assert_eq!(state.network_id_ref(), &network);
+            assert_eq!(state.gov.citizenship_bond_amount, Quantity::zero());
+        }
+    }
+
+    #[test]
+    fn original_signed_fee_policy_bootstraps_global_and_private_roots_without_defaults() {
+        use iroha_crypto::{Hash, HashOf};
+        use iroha_data_model::{
+            account::AccountAddress,
+            asset::{AssetBalancePolicy, AssetDefinition, AssetDefinitionId},
+            block::consensus::{RootFeePolicy, SumeragiRootScope},
+            isi::Register,
+            nexus::{DataSpaceCatalog, DataSpaceMetadata, LaneCatalog, LaneConfig, LaneVisibility},
+            sns::{NameControllerV1, NameRecordV1},
+        };
+        use iroha_model_base::{domain::DomainId, metadata::Metadata};
+        use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
+        use std::num::NonZeroU32;
+
+        for mode in 0..3 {
+            // Cover the default and configured global constructors as well as a genuine
+            // private signed root whose fee currency differs from the global default.
+            let private = mode == 2;
+            let mut world = World::new();
+            let mut nexus = iroha_config::parameters::actual::Nexus::default();
+            let mut expected = RootFeePolicy {
+                base_fee: 3_u32.into(),
+                per_byte_fee: 0_u32.into(),
+                per_instruction_fee: 2_u32.into(),
+                per_gas_unit_fee: 1_u32.into(),
+                ..iroha_config::parameters::defaults::nexus::fees::genesis_policy()
+            };
+            let mut scope = SumeragiRootScope::Global;
+            let mut instructions = Vec::new();
+            if private {
+                let alias = "original-private-bootstrap";
+                let home = crate::sns::dataspace_id_for_sns_alias(alias).unwrap();
+                let domain = DomainId::try_new("fees", alias).unwrap();
+                expected.fee_asset_id = AssetDefinitionId::derive_from_components(
+                    domain.clone(),
+                    "signedunit".parse().unwrap(),
+                );
+                world = World::with(
+                    [Domain::new(domain.clone()).build(&ALICE_ID)],
+                    [Account::new(ALICE_ID.clone()).build(&ALICE_ID)],
+                    [],
+                );
+                let selector = crate::sns::selector_for_dataspace_alias(alias).unwrap();
+                let address = AccountAddress::from_account_id(&ALICE_ID).unwrap();
+                let record = NameRecordV1::new(
+                    selector.clone(),
+                    ALICE_ID.clone(),
+                    vec![NameControllerV1::account(&address)],
+                    0,
+                    0,
+                    u64::MAX,
+                    u64::MAX,
+                    u64::MAX,
+                    Metadata::default(),
+                );
+                world.smart_contract_state_mut_for_testing().insert(
+                    crate::sns::record_storage_key(&selector),
+                    norito::codec::Encode::encode(&record),
+                );
+                nexus.dataspace_catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata {
+                    id: home,
+                    alias: alias.into(),
+                    ..DataSpaceMetadata::default()
+                }])
+                .unwrap();
+                nexus.configured_dataspace_catalog = nexus.dataspace_catalog.clone();
+                nexus.lane_catalog = LaneCatalog::new(
+                    NonZeroU32::MIN,
+                    vec![LaneConfig {
+                        dataspace_id: home,
+                        visibility: LaneVisibility::Restricted,
+                        ..LaneConfig::default()
+                    }],
+                )
+                .unwrap();
+                nexus.configured_lane_catalog = nexus.lane_catalog.clone();
+                nexus.lane_config =
+                    iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+                nexus.routing_policy.default_dataspace = home;
+                scope = SumeragiRootScope::Dataspace {
+                    parent_network_id: NetworkId::from_genesis_hash(
+                        HashOf::from_untyped_unchecked(Hash::new(b"original private parent")),
+                    ),
+                    dataspace_id: home,
+                };
+                instructions.push(
+                    Register::asset_definition(AssetDefinition::numeric(
+                        expected.fee_asset_id.clone(),
+                        "Original signed fee unit",
+                        AssetBalancePolicy::DataspaceRestricted,
+                        Some(domain),
+                    ))
+                    .into(),
+                );
+            }
+            nexus.fees.fee_asset_id = expected.fee_asset_id.clone();
+            nexus.fees.base_fee = 99_u32.into();
+            nexus.fees.per_instruction_fee = 97_u32.into();
+            assert_ne!(nexus.fees, expected);
+            let mut config = TestChainConfig::new(world, 1_000);
+            config.genesis_key = ALICE_KEYPAIR.clone();
+            config.root_scope = scope;
+            config.nexus = (mode != 0).then_some(nexus);
+            let expected_pipeline = config.pipeline.clone();
+            config.genesis_parameters.push(Parameter::Custom(
+                expected.clone().into_custom_parameter().unwrap(),
+            ));
+            config.genesis_instructions = instructions;
+            let prepared = CertifiedTestChain::prepare(config)
+                .expect("original signed monetary policy validates before publication");
+            assert!(
+                prepared
+                    .state
+                    .world
+                    .parameters
+                    .view()
+                    .get()
+                    .root_fees()
+                    .is_none()
+            );
+            assert_eq!(prepared.state.view().height(), 0);
+            assert_eq!(prepared.kura.blocks_count(), 0);
+            assert_eq!(
+                prepared.state.installed_pipeline().parallel_overlay,
+                expected_pipeline.parallel_overlay
+            );
+            assert_eq!(
+                prepared.state.installed_pipeline().parallel_apply,
+                expected_pipeline.parallel_apply
+            );
+            assert_eq!(
+                prepared.state.installed_pipeline().ready_queue_heap,
+                expected_pipeline.ready_queue_heap
+            );
+            assert_eq!(
+                prepared.state.installed_pipeline().workers,
+                expected_pipeline.workers
+            );
+            assert_eq!(prepared.state.gov.citizenship_bond_amount, Quantity::zero());
+            let original_wire = prepared.genesis.canonical_wire().to_vec();
+            let network = NetworkId::from_genesis_hash(prepared.genesis.block().hash());
+            let chain = CertifiedTestChain::from_prepared(prepared)
+                .expect("the original signed fee policy applies without a fixture policy");
+            assert_eq!(chain.height(), 1);
+            assert_eq!(chain.root_scope(), scope);
+            assert_eq!(chain.network_id(), network);
+            assert_eq!(chain.genesis().encode_wire().unwrap(), original_wire);
+            assert_eq!(
+                chain.state().world.parameters.view().get().root_fees(),
+                Some(&expected)
+            );
+            crate::sns::ensure_default_namespace_policies_match_configured(
+                &chain.state().world.view(),
+                &expected.fee_asset_id.canonical_address(),
+            )
+            .expect("SNS retains the signed root's exact currency");
+        }
     }
 }

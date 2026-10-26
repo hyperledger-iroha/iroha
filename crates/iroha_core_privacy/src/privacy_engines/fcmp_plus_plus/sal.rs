@@ -18,7 +18,7 @@ use curve25519_dalek::{
     traits::{Identity as _, IsIdentity as _},
 };
 use p256::elliptic_curve::subtle::{Choice, ConstantTimeLess as _};
-use rand_core_06::{CryptoRng, RngCore};
+use rand_core::{TryCryptoRng, TryRng};
 use std::sync::OnceLock;
 use zeroize::Zeroize;
 const SAL_POINT_COUNT_V1: usize = 6;
@@ -258,7 +258,7 @@ fn secret_scalar_from_bytes_v1(
     let scalar = SalSecretCopyValueV1::take(&mut scalar);
     Ok(scalar)
 }
-fn random_scalar(rng: &mut (impl RngCore + CryptoRng)) -> Result<Scalar, FcmpNativeErrorV1> {
+fn random_scalar(rng: &mut (impl TryRng + TryCryptoRng)) -> Result<Scalar, FcmpNativeErrorV1> {
     // A zero alpha or beta is algebraically valid but makes the corresponding
     // response `e*x` or `e*r_i`, directly revealing the witness. Require every
     // SAL nonce/blinder to be non-zero and bound retries so a faulty
@@ -491,7 +491,7 @@ fn validate_sal_witness_relation_v1(
 /// # Errors
 /// Rejects a mismatched witness relation, unhealthy randomness, proof construction failures, or a failed prover self-check.
 pub fn prove_fcmp_sal_v1(
-    rng: &mut (impl RngCore + CryptoRng),
+    rng: &mut (impl TryRng + TryCryptoRng),
     context_hash: [u8; 32],
     public: &FcmpProofInputPublicV1,
     witness: &FcmpSalWitnessV1,
@@ -505,7 +505,7 @@ pub fn prove_fcmp_sal_v1(
     Ok(proof)
 }
 pub(super) fn prove_fcmp_sal_with_checked_rng_v1(
-    rng: &mut (impl RngCore + CryptoRng),
+    rng: &mut (impl TryRng + TryCryptoRng),
     context_hash: [u8; 32],
     public: &FcmpProofInputPublicV1,
     witness: &FcmpSalWitnessV1,
@@ -527,7 +527,7 @@ fn retry_sal_prover_v1<T>(
     Err(FcmpNativeErrorV1::SalProverRestartExhausted)
 }
 fn prove_fcmp_sal_once_v1(
-    rng: &mut (impl RngCore + CryptoRng),
+    rng: &mut (impl TryRng + TryCryptoRng),
     context_hash: [u8; 32],
     public: &FcmpProofInputPublicV1,
     witness: &FcmpSalWitnessV1,
@@ -656,7 +656,8 @@ mod tests {
     use core::cell::Cell;
     use curve25519_dalek::scalar::Scalar;
     use p256::elliptic_curve::bigint::{Encoding as _, U256};
-    use rand_08::{SeedableRng as _, rngs::StdRng};
+    use rand::SeedableRng as _;
+    use rand_chacha::ChaCha12Rng;
     thread_local! {
         static SAL_SECRET_CLEARS: Cell<usize> = const { Cell::new(0) };
     }
@@ -705,18 +706,19 @@ mod tests {
             ED25519_SCALAR_MODULUS_LE_V1,
             U256::from_be_hex("1000000000000000000000000000000014def9dea2f79cd65812631a5cf5d3ed")
                 .to_le_bytes()
+                .as_slice()
         );
         for (label, integer, expected) in [
             ("zero", U256::ZERO, Scalar::ZERO),
             ("one", U256::ONE, Scalar::ONE),
             (
                 "l-1",
-                U256::from_le_bytes(ED25519_SCALAR_MODULUS_LE_V1).wrapping_sub(&U256::ONE),
+                U256::from_le_bytes(ED25519_SCALAR_MODULUS_LE_V1.into()).wrapping_sub(&U256::ONE),
                 -Scalar::ONE,
             ),
         ] {
             reset_secret_scalar_decoder_owner_drops_v1();
-            let bytes = integer.to_le_bytes();
+            let bytes: [u8; 32] = integer.to_le_bytes().into();
             let scalar = secret_scalar_from_bytes_v1(&bytes)
                 .unwrap_or_else(|error| panic!("{label} rejected: {error:?}"));
             assert_eq!(scalar.expose_ref(), &expected, "{label}");
@@ -727,14 +729,14 @@ mod tests {
             assert_eq!(sal_secret_copy_owner_drops_v1(), 1, "{label}");
         }
 
-        let modulus = U256::from_le_bytes(ED25519_SCALAR_MODULUS_LE_V1);
+        let modulus = U256::from_le_bytes(ED25519_SCALAR_MODULUS_LE_V1.into());
         for (label, integer) in [
             ("l", modulus),
             ("l+1", modulus.wrapping_add(&U256::ONE)),
             ("max", U256::MAX),
         ] {
             reset_secret_scalar_decoder_owner_drops_v1();
-            let bytes = integer.to_le_bytes();
+            let bytes: [u8; 32] = integer.to_le_bytes().into();
             assert!(
                 matches!(
                     secret_scalar_from_bytes_v1(&bytes),
@@ -749,7 +751,7 @@ mod tests {
 
         reset_secret_scalar_decoder_owner_drops_v1();
         let unwind = std::panic::catch_unwind(|| {
-            let bytes = U256::from(7_u8).to_le_bytes();
+            let bytes: [u8; 32] = U256::from(7_u8).to_le_bytes().into();
             let scalar = secret_scalar_from_bytes_v1(&bytes).expect("canonical scalar");
             assert_eq!(secret_canonicality_state_owner_drops_v1(), 1);
             assert_eq!(secret_wide_input_owner_drops_v1(), 1);
@@ -778,7 +780,7 @@ mod tests {
 
         reset_secret_scalar_decoder_owner_drops_v1();
         let wide_unwind = std::panic::catch_unwind(|| {
-            let bytes = U256::from(11_u8).to_le_bytes();
+            let bytes: [u8; 32] = U256::from(11_u8).to_le_bytes().into();
             let wide = SalSecretScalarWideInputV1::from_borrowed_v1(&bytes);
             assert_eq!(secret_canonicality_state_owner_drops_v1(), 0);
             assert_eq!(secret_wide_input_owner_drops_v1(), 0);
@@ -1208,37 +1210,37 @@ mod tests {
         assert_eq!(fcmp_sal_witness_owner_drops_v1(), 1);
     }
     struct ZeroRng;
-    impl RngCore for ZeroRng {
-        fn next_u32(&mut self) -> u32 {
-            0
+    impl rand::TryRng for ZeroRng {
+        type Error = std::io::Error;
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Ok(0)
         }
-        fn next_u64(&mut self) -> u64 {
-            0
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Ok(0)
         }
-        fn fill_bytes(&mut self, destination: &mut [u8]) {
-            destination.fill(0);
-        }
-        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), rand_core_06::Error> {
-            self.fill_bytes(destination);
+
+        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
+            {
+                destination.fill(0);
+            };
             Ok(())
         }
     }
-    impl CryptoRng for ZeroRng {}
+    impl rand::TryCryptoRng for ZeroRng {}
     struct PeriodicRng {
         period: usize,
         cursor: usize,
     }
-    impl RngCore for PeriodicRng {
-        fn next_u32(&mut self) -> u32 {
+    impl rand::TryRng for PeriodicRng {
+        type Error = std::io::Error;
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             panic!("FCMP++ SAL must reject the periodic prefix")
         }
-        fn next_u64(&mut self) -> u64 {
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
             panic!("FCMP++ SAL must reject the periodic prefix")
         }
-        fn fill_bytes(&mut self, _destination: &mut [u8]) {
-            panic!("FCMP++ SAL must use fallible entropy")
-        }
-        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), rand_core_06::Error> {
+
+        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
             for byte in destination {
                 *byte = (self.cursor % self.period).to_le_bytes()[0]
                     .wrapping_mul(43)
@@ -1248,7 +1250,7 @@ mod tests {
             Ok(())
         }
     }
-    impl CryptoRng for PeriodicRng {}
+    impl rand::TryCryptoRng for PeriodicRng {}
     fn public_and_witness() -> (FcmpProofInputPublicV1, FcmpSalWitnessV1) {
         let x = Scalar::from(17_u64);
         let y = Scalar::from(23_u64);
@@ -1285,7 +1287,7 @@ mod tests {
     fn sal_prove_verify_and_codec_roundtrip() {
         let (public, witness) = public_and_witness();
         let context = [0x42; 32];
-        let mut rng = StdRng::seed_from_u64(0x5a17);
+        let mut rng = ChaCha12Rng::seed_from_u64(0x5a17);
         let proof =
             prove_fcmp_sal_v1(&mut rng, context, &public, &witness).expect("honest SAL proof");
         verify_fcmp_sal_v1(context, &public, &proof).expect("honest SAL verification");
@@ -1379,7 +1381,7 @@ mod tests {
     fn sal_every_component_context_and_statement_are_bound() {
         let (public, witness) = public_and_witness();
         let context = [0x24; 32];
-        let mut rng = StdRng::seed_from_u64(0x5a18);
+        let mut rng = ChaCha12Rng::seed_from_u64(0x5a18);
         let proof =
             prove_fcmp_sal_v1(&mut rng, context, &public, &witness).expect("honest SAL proof");
         let encoded = proof.encode();

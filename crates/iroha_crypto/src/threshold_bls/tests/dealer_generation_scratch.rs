@@ -7,7 +7,7 @@ use super::*;
 use crate::test_allocations::{
     allocations_during, with_deallocation_observation, without_allocations,
 };
-use rand_core::TryRngCore;
+use rand_core::TryRng;
 
 // Independent former Vec owner; never passed into the production importer.
 pub(super) struct ReferenceDealerSecret<P: ThresholdBlsPurpose> {
@@ -136,8 +136,11 @@ impl TrackedRng {
         }
     }
 }
-impl TryRngCore for TrackedRng {
-    type Error = &'static str;
+#[derive(Debug, thiserror::Error)]
+#[error("deterministic original RNG refusal")]
+pub(super) struct TrackedRngError;
+impl TryRng for TrackedRng {
+    type Error = TrackedRngError;
     fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
         let mut bytes = [0; 4];
         self.try_fill_bytes(&mut bytes)?;
@@ -153,7 +156,7 @@ impl TryRngCore for TrackedRng {
         self.calls += 1;
         self.bytes += destination.len();
         if self.fail_after.is_some_and(|limit| call >= limit) {
-            return Err("deterministic original RNG refusal");
+            return Err(TrackedRngError);
         }
         self.inner
             .try_fill_bytes(destination)

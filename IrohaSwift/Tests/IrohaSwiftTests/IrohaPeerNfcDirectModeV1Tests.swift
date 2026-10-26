@@ -378,6 +378,36 @@ final class IrohaPeerNfcDirectModeV1Tests: XCTestCase {
         XCTAssertFalse(paymentOperations.contains(.getIntake))
         let commits = await card.durableCommits
         XCTAssertEqual(commits, 1)
+
+        // A kept COMPLETE responder supports recovery of a lost final reply,
+        // but can never advertise the old Request as a new payment.
+        let beforeFreshRead = await card.commands.count
+        do {
+            _ = try await IrohaPeerNfcReaderExchangeV1.readRequest(
+                applicationIdentifier: bpng, profilePolicy: policy, limits: limits,
+                transceive: { try await card.transceive($0) })
+            XCTFail("A completed payment cannot authorize a fresh request")
+        } catch IrohaPeerNfcErrorV1.stateMismatch { }
+        let freshReadOperations = await card.commands.dropFirst(beforeFreshRead).map(\.operation)
+        XCTAssertEqual(Array(freshReadOperations), [.selectApplication, .getIntake, .getInfo])
+
+        let beforeRecovery = await card.commands.count
+        let recovered = try await IrohaPeerNfcReaderExchangeV1.run(
+            restoredCheckpoint: result.checkpoint.encoded,
+            applicationIdentifier: bpng, profilePolicy: policy, limits: limits,
+            transceive: { try await card.transceive($0) },
+            loadOrCreateDurableCheckpoint: { _, _ in
+                XCTFail("Final response recovery cannot create another payment")
+                throw IrohaPeerNfcErrorV1.stateMismatch
+            }, updateDurableCheckpoint: { _ in
+                XCTFail("The retained durable ACK does not need another save")
+            })
+        XCTAssertEqual(recovered.checkpoint.encoded, result.checkpoint.encoded)
+        XCTAssertEqual(recovered.acknowledgement, credited)
+        let recoveryOperations = await card.commands.dropFirst(beforeRecovery).map(\.operation)
+        XCTAssertEqual(Array(recoveryOperations), [.selectApplication, .getInfo, .getStatus])
+        let commitsAfterRecovery = await card.durableCommits
+        XCTAssertEqual(commitsAfterRecovery, 1)
     }
 
     func testReadRequestRefusesForeignCardsMismatchedIntakesAndStartedExchanges() async throws {

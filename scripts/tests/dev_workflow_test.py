@@ -91,7 +91,7 @@ def test_native_protocol_reverse_dependency_triggers_swift_unless_explicitly_ski
     assert result.returncode == 0, result.stderr
     expected = ["cargo", "rust_ci.py"] + ([] if skip else ["python3.12"])
     assert [call["command"] for call in calls] == expected
-    assert calls[1]["args"] == ["run", "--packages", "iroha_data_model,connect_norito_bridge",
+    assert calls[1]["args"] == ["run", "--local", "--packages", "iroha_data_model,connect_norito_bridge",
                                  "--checks", "clippy,build,test"]
 
 
@@ -107,3 +107,22 @@ def test_unsupported_host_or_runner_failure_is_not_silently_skipped(workflow):
     result, calls = invoke(workflow, TEST_SWIFT_EXIT="17")
     assert result.returncode == 17
     assert calls[-1]["command"] == "python3.12"
+
+
+@pytest.mark.parametrize("target", (None, "persistent-development"))
+def test_repeated_local_rust_workflow_preserves_the_same_target(workflow, target):
+    """Ordinary runs never invent a new target; explicit warm targets survive."""
+    root, environment = workflow
+    environment.pop("CARGO_TARGET_DIR", None)
+    selected = str(root / target) if target else None
+    arguments = ["--skip-swift"] + (["--target-dir", selected] if selected else [])
+    for _ in range(2):
+        result, calls = invoke(workflow, *arguments,
+            TEST_CHANGED_PATHS='["crates/iroha_core/src/queue.rs"]',
+            TEST_IMPACTED_PACKAGES='["iroha_core"]')
+        assert result.returncode == 0, result.stderr
+    checks = [call for call in calls if call["command"] == "rust_ci.py"]
+    assert len(checks) == 2
+    assert all(call["cargo_target_dir"] == selected for call in checks)
+    assert all(call["args"] == ["run", "--local", "--packages", "iroha_core",
+                                "--checks", "clippy,build,test"] for call in checks)

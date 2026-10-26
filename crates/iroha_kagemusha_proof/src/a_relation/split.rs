@@ -291,7 +291,7 @@ impl ContinuationCells {
 /// own statement when the plan verifies an own sigma, then any incoming one. A
 /// plan without `Q_sigma` proves its own step directly and consumes no incoming
 /// sigma: it accepts no sigma binding and retains the pinned trivial part, which
-/// the first W folds exactly where a verified part would otherwise go.
+/// the next wrapper or final Omega folds in the same slot as a verified part.
 fn bind_stage_sigma(
     chip: &mut VerifierChip<Ep>,
     region: &mut Region<'_, Fp>,

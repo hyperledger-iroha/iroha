@@ -21,10 +21,7 @@ fn key(name: &str) -> SigningKey {
 
 fn signature(key: &SigningKey, message: &[u8]) -> KagemushaDeviceSignatureV1 {
     let signature: Signature = key.sign(message);
-    KagemushaDeviceSignatureV1::from_raw_bytes(
-        &signature.normalize_s().unwrap_or(signature).to_bytes(),
-    )
-    .unwrap()
+    KagemushaDeviceSignatureV1::from_raw_bytes(&signature.normalize_s().to_bytes()).unwrap()
 }
 
 fn request() -> KagemushaWalletRequestV1 {
@@ -162,7 +159,7 @@ fn clock_fixture() -> (
     certificate.body.key = KagemushaDevicePublicKeyV1::from_sec1_bytes(
         key("time_anchor")
             .verifying_key()
-            .to_encoded_point(false)
+            .to_sec1_point(false)
             .as_bytes(),
     )
     .unwrap();

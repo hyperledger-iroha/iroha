@@ -11,7 +11,7 @@ use iroha_telemetry::{
     privacy::{PrivacyBucketConfig, PrivacyConfigError, SoranetSecureAggregator},
 };
 use norito::json;
-use rand::{rand_core::TryCryptoRng, rngs::OsRng};
+use rand::{rand_core::TryCryptoRng, rngs::SysRng};
 use reqwest::{Client, Response, StatusCode, Url, redirect};
 use sorafs_car::{
     CarBuildPlan, CarWriteStats,
@@ -5215,7 +5215,7 @@ fn manifest_id_hex(plan: &CarBuildPlan) -> String {
     hex::encode(plan.payload_digest.as_bytes())
 }
 fn generate_job_id() -> Result<String, String> {
-    let mut rng = OsRng;
+    let mut rng = SysRng;
     generate_job_id_with_rng(&mut rng)
 }
 fn generate_job_id_with_rng<R: TryCryptoRng + ?Sized>(rng: &mut R) -> Result<String, String> {
@@ -5485,7 +5485,7 @@ mod tests {
     use iroha_logger::{telemetry::Channel, test_logger};
     use iroha_telemetry::metrics::global_or_default;
     use norito::json::{self, Map, Value};
-    use rand::rand_core::TryRngCore;
+    use rand::rand_core::TryRng;
     use reqwest::Url;
     use sorafs_car::{
         CarBuildPlan, ChunkStore,
@@ -5625,12 +5625,13 @@ mod tests {
     struct FailingJobIdRng;
     #[derive(Debug)]
     struct FailingJobIdRngError;
+    impl std::error::Error for FailingJobIdRngError {}
     impl fmt::Display for FailingJobIdRngError {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             f.write_str("failing SoraFS fetch job id RNG")
         }
     }
-    impl TryRngCore for FailingJobIdRng {
+    impl TryRng for FailingJobIdRng {
         type Error = FailingJobIdRngError;
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             Err(FailingJobIdRngError)

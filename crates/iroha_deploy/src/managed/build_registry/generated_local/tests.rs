@@ -185,7 +185,8 @@ fn managed_factory_selects_published_generated_registry_without_parent_profile_o
         .unwrap();
     }
     let runtime = InstalledRuntime::from_directory(bundle.path()).unwrap();
-    let request = runtime.localnet_request("registry", Duration::from_secs(30));
+    let mut request = runtime.localnet_request("registry", Duration::from_secs(30));
+    request.service_profile = LocalnetServiceProfile::StreamTokenAuthorities;
     let networks = PrivateDirectory::open(store.root().join("networks")).unwrap();
     let directory = networks.create_child("registry").unwrap();
     let operation = store::acquire(&directory, "operation.lock", "registry").unwrap();

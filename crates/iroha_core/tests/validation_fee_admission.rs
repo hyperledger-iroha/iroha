@@ -385,7 +385,6 @@ fn test_state() -> (
     npos.validate().expect("native currency fixture policy");
     let mut nexus = iroha_config::parameters::actual::Nexus::default();
     nexus.fees.fee_asset_id = npos.xor_asset_definition_id.clone();
-    nexus.staking.stake_asset_id = npos.xor_asset_definition_id.canonical_address();
     // Preserve the original component State fixture's zero generic fees.
     nexus.fees.base_fee = Quantity::zero();
     nexus.fees.per_byte_fee = Quantity::zero();
@@ -393,6 +392,24 @@ fn test_state() -> (
     nexus.fees.per_gas_unit_fee = Quantity::zero();
     config.nexus = Some(nexus);
     config.consensus_mode = iroha_data_model::parameter::system::SumeragiConsensusMode::Npos;
+    // Replace the one explicitly authored staking policy before the genuine genesis is signed.
+    // Preserve its custody and all bounds while choosing this fixture's network currency.
+    assert_eq!(config.genesis_parameters.len(), 1);
+    let Parameter::Custom(original_staking) = &config.genesis_parameters[0] else {
+        panic!("the fixture constructor authors its canonical staking parameter");
+    };
+    let mut monetary =
+        iroha_data_model::block::consensus::PublicLaneStakingPolicy::from_custom_parameter(
+            original_staking,
+        )
+        .expect("original complete fixture staking policy");
+    monetary.stake_asset_id = npos.xor_asset_definition_id.clone();
+    config.genesis_parameters[0] = Parameter::Custom(
+        monetary
+            .clone()
+            .into_custom_parameter()
+            .expect("explicit signed staking currency"),
+    );
     config.genesis_parameters.extend([
         Parameter::Sumeragi(
             iroha_data_model::parameter::system::SumeragiParameter::EpochLengthBlocks(
@@ -405,6 +422,14 @@ fn test_state() -> (
     let mode = config.consensus_mode;
     let prepared =
         CertifiedTestChain::prepare(config).expect("original signed fee admission genesis");
+    assert_eq!(
+        iroha_data_model::block::consensus::PublicLaneStakingPolicy::from_parameters(
+            &prepared.manifest.effective_parameters().unwrap(),
+        )
+        .unwrap(),
+        monetary,
+        "actual signed genesis retains the complete authored monetary policy",
+    );
     let state = Arc::try_unwrap(prepared.state)
         .unwrap_or_else(|_| panic!("unpublished fee admission State is unique"));
     startup::apply_genesis(
@@ -415,6 +440,16 @@ fn test_state() -> (
         None,
     )
     .expect("apply actual signed fee admission genesis");
+    assert_eq!(
+        state
+            .world
+            .view()
+            .parameters()
+            .require_staking_policy()
+            .unwrap(),
+        &monetary,
+        "the original signed policy reaches committed State unchanged",
+    );
     let treasury = payout_contract_address(state.network_id_ref()).subject_id();
     assert_eq!(
         state.network_id_ref().into_genesis_hash(),
@@ -436,8 +471,12 @@ fn admission_fixture_authenticates_network_xor_identity_and_precision_in_signed_
     let nexus = state.nexus_snapshot();
     assert_eq!(nexus.fees.fee_asset_id, npos.xor_asset_definition_id);
     assert_eq!(
-        nexus.staking.stake_asset_id,
-        npos.xor_asset_definition_id.canonical_address()
+        world
+            .parameters()
+            .require_staking_policy()
+            .expect("actual signed genesis commits staking policy")
+            .stake_asset_id,
+        npos.xor_asset_definition_id
     );
     assert_eq!(
         nexus.fees.fee_asset_id.clone(),
@@ -1148,11 +1187,11 @@ fn install_canonical_post_enactment_validation_fee_state(
     }
     state_transaction
         .world
-        .parameters_mut_for_testing()
-        .get_mut()
-        .set_parameter(Parameter::Custom(registry.into_custom_parameter().expect(
-            "validation-fee fixture registry fits the canonical JSON parameter",
-        )))
+        .set_parameter_for_testing(Parameter::Custom(
+            registry
+                .into_custom_parameter()
+                .expect("validation-fee fixture registry fits the canonical JSON parameter"),
+        ))
         .expect("valid fixture parameters");
     state_transaction.apply();
     block

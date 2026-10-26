@@ -23,7 +23,7 @@ use iroha_plonk::{
 use num_bigint::{BigInt, BigUint};
 use rand_chacha::{
     ChaCha20Rng,
-    rand_core::{RngCore, SeedableRng},
+    rand_core::{Rng, SeedableRng},
 };
 
 use super::*;

@@ -48,6 +48,7 @@ const MAX_WITNESS_PAYLOAD_BYTES_V1: usize = 5 * NORITO_LENGTH_BYTES_V1
     + MAX_DISCLOSED_ATTRIBUTES_V1 * (NORITO_LENGTH_BYTES_V1 + OPENING_PAYLOAD_BYTES_V1);
 const MAX_WITNESS_FRAME_BYTES_V1: usize =
     WITNESS_FRAME_PREFIX_BYTES_V1 + MAX_WITNESS_PAYLOAD_BYTES_V1;
+/// Fixed width of the wallet-produced canonical P-256 ownership signature.
 pub const ZK_X509_WALLET_SIGNATURE_RS_BYTES_V1: usize = 64;
 const MAX_DISCLOSED_ATTRIBUTES_V1: usize = 4;
 const _: () = {
@@ -70,6 +71,14 @@ pub struct ZkX509AttributeOpeningV1 {
     /// Fixed-width private commitment salt.
     pub(crate) salt: [u8; ZK_X509_ATTRIBUTE_SALT_BYTES_V1],
 }
+impl ZkX509AttributeOpeningV1 {
+    /// Construct an opening; the witness constructor validates indices and strict ordering.
+    ///
+    /// The holder supplies a fresh private salt for the exact disclosed attribute.
+    pub const fn new_v1(index: u8, salt: [u8; 32]) -> Self {
+        Self { index, salt }
+    }
+}
 impl fmt::Debug for ZkX509AttributeOpeningV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -88,7 +97,6 @@ impl Zeroize for ZkX509AttributeOpeningV1 {
 /// Complete bounded private input to the native reference relation and prover.
 #[derive(Clone, PartialEq, Eq, norito::SerializePayload, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::privacy_engines::zk_x509::ZkX509WitnessV1")]
-#[doc(hidden)]
 pub struct ZkX509WitnessV1 {
     /// Exact DER certificates ordered leaf first and root last.
     pub(crate) certificate_chain_der: Vec<Vec<u8>>,
@@ -138,7 +146,6 @@ impl Drop for ZkX509WitnessV1 {
 }
 /// Canonical witness decoding or encoding failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
-#[doc(hidden)]
 pub enum ZkX509WitnessCodecErrorV1 {
     /// The Norito header, V1 schema, checksum, or fixed layout does not match.
     #[error("zk-X509 witness header is not canonical")]
@@ -184,12 +191,49 @@ pub enum ZkX509WitnessCodecErrorV1 {
     EncodingFailed,
 }
 impl ZkX509WitnessV1 {
+    /// Take ownership of one bounded private witness without accepting a signing key.
+    ///
+    /// Certificates are leaf first and root last. The wallet supplies a fresh low-`s`
+    /// P-256 ownership signature for the exact statement. Shape validation here does
+    /// not authenticate the chain, CRL, membership or signature; the complete prover
+    /// performs those checks against authenticated state before consuming entropy.
+    /// All moved buffers are cleared if construction fails and when the witness drops.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid chain/CRL sizes, a compact-tree index outside the 4,096-leaf
+    /// tree, and attribute indices outside `0..4` or not in strictly increasing order.
+    pub fn from_parts_v1(
+        certificate_chain_der: Vec<Vec<u8>>,
+        crl_der: Vec<u8>,
+        ca_membership_index: u16,
+        ca_membership_siblings: [[u8; 32]; 12],
+        wallet_ownership_signature_rs: [u8; 64],
+        attribute_openings: Vec<ZkX509AttributeOpeningV1>,
+    ) -> Result<Self, ZkX509WitnessCodecErrorV1> {
+        let witness = Self {
+            certificate_chain_der,
+            crl_der,
+            ca_membership_path: ZkX509CaMembershipPathV1 {
+                index: ca_membership_index,
+                siblings: ca_membership_siblings,
+            },
+            wallet_ownership_signature_rs,
+            attribute_openings,
+        };
+        validate_witness_shape_v1(&witness)?;
+        Ok(witness)
+    }
+
     /// Number of exact DER certificates in the private chain.
     #[inline]
     pub fn certificate_chain_len_v1(&self) -> usize {
         self.certificate_chain_der.len()
     }
-    /// Encode the sole Norito witness frame into one clearing allocation.
+    /// Encode the sole Norito witness frame.
+    ///
+    /// The returned bytes are private. Keep them in a clearing owner such as
+    /// `zeroize::Zeroizing<Vec<u8>>`; the holder prover does this automatically.
     pub fn encode_v1(&self) -> Result<Vec<u8>, ZkX509WitnessCodecErrorV1> {
         validate_witness_shape_v1(self)?;
         encode_witness_frame_v1(self)

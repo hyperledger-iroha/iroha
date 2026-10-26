@@ -118,7 +118,7 @@ mod tests {
     use super::*;
     use crate::backend::compact_public_columns::{PUBLIC_COLUMNS, base_values};
     use crate::gadgets::compact_smt_air::PhysicalRowIndex;
-    use rand::{SeedableRng, TryRngCore, rngs::StdRng};
+    use rand::{SeedableRng, TryRng, rngs::StdRng};
 
     fn limits() -> ReplayLimits {
         ReplayLimits {
@@ -142,14 +142,22 @@ mod tests {
             }
         }
     }
-    impl TryRngCore for CountedRng {
-        type Error = &'static str;
+    #[derive(Debug, PartialEq, Eq)]
+    struct CountedRngError;
+    impl core::fmt::Display for CountedRngError {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            f.write_str("synthetic entropy failure")
+        }
+    }
+    impl std::error::Error for CountedRngError {}
+    impl TryRng for CountedRng {
+        type Error = CountedRngError;
         fn try_next_u32(&mut self) -> std::result::Result<u32, Self::Error> {
             panic!("the existing replay samples only u64 coordinates")
         }
         fn try_next_u64(&mut self) -> std::result::Result<u64, Self::Error> {
             if self.fail_after == Some(self.words) {
-                return Err("synthetic entropy failure");
+                return Err(CountedRngError);
             }
             self.words += 1;
             Ok(self.rng.try_next_u64().unwrap())

@@ -93,30 +93,40 @@ fn staking_fixture_world_and_nexus() -> (World, iroha_config::parameters::actual
 }
 
 fn setup_state() -> State {
+    setup_state_with_staking_policy(committed_staking_fixture_policy())
+}
+
+fn setup_state_with_staking_policy(policy: PublicLaneStakingPolicy) -> State {
     let (world, nexus) = staking_fixture_world_and_nexus();
-    let mut parameters = world.parameters.block();
-    parameters
-        .set_parameter(Parameter::Custom(
-            SumeragiNposParameters::default().into_custom_parameter(),
-        ))
-        .expect("valid fixture parameters");
+    let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
+        .expect("funded parameter fixture block");
+    crate::state::set_parameter_cell_for_testing(
+        &mut parameters,
+        Parameter::Custom(SumeragiNposParameters::default().into_custom_parameter()),
+        world.sccp_committee_generations.allocation_budget(),
+    )
+    .expect("valid fixture parameters");
     // Ordinary account creation requires an explicit fixture-owned policy.
     // Authoring this value grants no signed-genesis or publication capability.
-    parameters
-        .set_parameter(
-            crate::sumeragi::test_chain::crypto_fixture_policy()
-                .into_parameter()
-                .expect("canonical fixture crypto policy"),
-        )
-        .expect("install the component's original crypto policy");
+    crate::state::set_parameter_cell_for_testing(
+        &mut parameters,
+        crate::sumeragi::test_chain::crypto_fixture_policy()
+            .into_parameter()
+            .expect("canonical fixture crypto policy"),
+        world.sccp_committee_generations.allocation_budget(),
+    )
+    .expect("install the component's original crypto policy");
     // Explicit component policy. This author grants no signed-genesis authority.
-    parameters
-        .set_parameter(Parameter::Custom(
-            committed_staking_fixture_policy()
+    crate::state::set_parameter_cell_for_testing(
+        &mut parameters,
+        Parameter::Custom(
+            policy
                 .into_custom_parameter()
                 .expect("valid fixture monetary policy"),
-        ))
-        .expect("install the component's original monetary policy");
+        ),
+        world.sccp_committee_generations.allocation_budget(),
+    )
+    .expect("install the component's original monetary policy");
     parameters.commit();
     State::new_with_nexus_for_testing(world, nexus, LiveQueryStore::start_test())
 }
@@ -301,12 +311,10 @@ fn staking_fixture_npos_policy(epoch_length_blocks: u64) -> SumeragiNposParamete
 }
 fn set_epoch_length(state: &mut State, epoch_length_blocks: u64) {
     let mut wb = state.world.block();
-    wb.parameters
-        .get_mut()
-        .set_parameter(Parameter::Custom(
-            staking_fixture_npos_policy(epoch_length_blocks).into_custom_parameter(),
-        ))
-        .expect("valid fixture parameters");
+    wb.set_parameter_for_testing(Parameter::Custom(
+        staking_fixture_npos_policy(epoch_length_blocks).into_custom_parameter(),
+    ))
+    .expect("valid fixture parameters");
     wb.commit();
 }
 fn set_test_npos_penalty_windows(
@@ -325,9 +333,7 @@ fn set_test_npos_penalty_windows(
         .validate()
         .expect("test NPoS penalty windows must be valid");
     stx.world
-        .parameters
-        .get_mut()
-        .set_parameter(Parameter::Custom(parameters.into_custom_parameter()))
+        .set_parameter_for_testing(Parameter::Custom(parameters.into_custom_parameter()))
         .expect("valid fixture parameters");
 }
 fn set_fixture_xor_identity(stx: &mut StateTransaction<'_, '_>, asset: &AssetDefinitionId) {
@@ -357,7 +363,11 @@ fn configure_reward_fixture(
         .unwrap();
     let (sink, _) = gen_account_in("wonderland");
     let (validator, _) = gen_account_in("wonderland");
-    let (escrow, _) = gen_account_in("wonderland");
+    let escrow = stx
+        .staking_monetary_policy()
+        .unwrap()
+        .stake_escrow_account_id
+        .clone();
     Register::account(Account::new(escrow.clone()))
         .execute(&ALICE_ID, stx)
         .unwrap();
@@ -395,8 +405,8 @@ fn configure_reward_fixture(
         .execute(&ALICE_ID, stx)
         .unwrap();
 
-    stx.nexus.fees.fee_sink_account_id = sink.clone();
-    stx.nexus.fees.fee_asset_id = asset_def_id.clone();
+    // Staking and reward custody use the exact typed monetary authorities;
+    // this helper does not rewrite the block's original root fee policy.
     stx.nexus.lane_catalog = LaneCatalog::new(
         nonzero!(64_u32),
         vec![LaneConfig {
@@ -412,10 +422,9 @@ fn configure_reward_fixture(
         iroha_config::parameters::actual::LaneConfig::from_catalog(&stx.nexus.lane_catalog);
     stx.nexus.staking.public_validator_mode =
         iroha_config::parameters::actual::LaneValidatorMode::StakeElected;
-    stx.nexus.staking.stake_asset_id = asset_def_id.to_string();
+
     set_fixture_xor_identity(stx, &asset_def_id);
-    stx.nexus.staking.stake_escrow_account_id = escrow.to_string();
-    stx.nexus.staking.slash_sink_account_id = sink.to_string();
+
     register_peer_for_account(stx, &validator);
     RegisterPublicLaneValidator {
         monetary_plan: fixture_registration_plan(
@@ -438,6 +447,14 @@ fn configure_reward_fixture(
 fn prepare_accounts(
     stx: &mut StateTransaction<'_, '_>,
 ) -> (AccountId, AccountId, AccountId, AssetDefinitionId) {
+    let (delegator, _) = gen_account_in("nexus");
+    prepare_accounts_with_delegator(stx, delegator)
+}
+
+fn prepare_accounts_with_delegator(
+    stx: &mut StateTransaction<'_, '_>,
+    delegator: AccountId,
+) -> (AccountId, AccountId, AccountId, AssetDefinitionId) {
     let domain_id: DomainId = DomainId::try_new("nexus", "universal").expect("domain id");
     stx.world.domains.insert(
         domain_id.clone(),
@@ -452,8 +469,11 @@ fn prepare_accounts(
         Domain::new(alice_domain_id.clone()).build(&ALICE_ID),
     );
     let (validator, _kp) = gen_account_in("nexus");
-    let (delegator, _kp) = gen_account_in("nexus");
-    let (escrow, _kp) = gen_account_in("nexus");
+    let escrow = stx
+        .staking_monetary_policy()
+        .unwrap()
+        .stake_escrow_account_id
+        .clone();
     Register::account(Account::new(validator.clone()))
         .execute(&ALICE_ID, stx)
         .unwrap();
@@ -492,19 +512,17 @@ fn prepare_accounts(
     Mint::asset_quantity(10_000u32, delegator_asset)
         .execute(&ALICE_ID, stx)
         .unwrap();
-    stx.nexus.staking.stake_asset_id = asset_def_id.to_string();
+
     set_fixture_xor_identity(stx, &asset_def_id);
-    stx.nexus.staking.stake_escrow_account_id = escrow.to_string();
-    stx.nexus.staking.slash_sink_account_id = escrow.to_string();
+
     (validator, delegator, escrow, asset_def_id)
 }
 fn complete_staking_committee(stx: &mut StateTransaction<'_, '_>, lane_id: LaneId) {
-    let asset_definition: AssetDefinitionId = stx
-        .nexus
-        .staking
+    let asset_definition = stx
+        .staking_monetary_policy()
+        .expect("original fixture stake policy")
         .stake_asset_id
-        .parse()
-        .expect("fixture stake asset");
+        .clone();
     for _ in 0..3 {
         let (validator, _) = gen_account_in("nexus");
         Register::account(Account::new(validator.clone()))
@@ -578,11 +596,21 @@ fn genesis_monetary_context_requires_initial_height_and_exact_expiry() {
     let mut stx = block.transaction_for_callback_testing();
     effects::validate_plan_context(&stx, &PublicLaneMonetaryScopeV1::Genesis, 1)
         .expect("NPoS genesis uses the same exact genesis lifetime");
-    stx.world
-        .parameters
-        .get_mut()
-        .remove_custom_parameter(&SumeragiNposParameters::parameter_id())
-        .expect("optional fixture parameter removal");
+    {
+        // Intentionally missing-policy fixture; retain a complete owned graph
+        // before replacing only this transaction's parameter value.
+        let mut authored = stx.world.parameters.get().get().clone();
+        let removed = authored
+            .remove_custom_parameter(&SumeragiNposParameters::parameter_id())
+            .expect("optional fixture parameter removal");
+        let retained = crate::pipeline_gas_policy::RetainedStateParameters::try_copy_for_testing(
+            &authored,
+            stx.world.sccp_committee_generations.allocation_budget(),
+        )
+        .expect("funded missing-policy fixture");
+        *stx.world.parameters.get_mut() = retained;
+        removed
+    };
     assert!(
         stx.world
             .sumeragi_npos_parameters()
@@ -649,13 +677,22 @@ fn genesis_staking_requires_committed_xor_and_preserves_exact_transfer_and_custo
     // Genesis scope authenticates height; it cannot replace the committed network
     // currency identity required by an actual monetary staking operation.
     let (validator, _, escrow, definition) = prepare_accounts(&mut stx);
-    let committed_parameters = stx
-        .world
-        .parameters
-        .get_mut()
-        .remove_custom_parameter(&SumeragiNposParameters::parameter_id())
-        .expect("optional fixture parameter removal")
-        .expect("fixture pins the actual network XOR definition");
+    let committed_parameters = {
+        // Intentionally missing-policy fixture; retain a complete owned graph
+        // before replacing only this transaction's parameter value.
+        let mut authored = stx.world.parameters.get().get().clone();
+        let removed = authored
+            .remove_custom_parameter(&SumeragiNposParameters::parameter_id())
+            .expect("optional fixture parameter removal");
+        let retained = crate::pipeline_gas_policy::RetainedStateParameters::try_copy_for_testing(
+            &authored,
+            stx.world.sccp_committee_generations.allocation_budget(),
+        )
+        .expect("funded missing-policy fixture");
+        *stx.world.parameters.get_mut() = retained;
+        removed
+    }
+    .expect("fixture pins the actual network XOR definition");
     assert!(
         stx.world
             .sumeragi_npos_parameters()
@@ -713,9 +750,7 @@ fn genesis_staking_requires_committed_xor_and_preserves_exact_transfer_and_custo
             .is_none()
     );
     stx.world
-        .parameters
-        .get_mut()
-        .set_parameter(Parameter::Custom(committed_parameters))
+        .set_parameter_for_testing(Parameter::Custom(committed_parameters))
         .expect("valid fixture parameters");
     let mut invalid_expiry = registration.clone();
     invalid_expiry.monetary_plan.valid_until_height = 2;

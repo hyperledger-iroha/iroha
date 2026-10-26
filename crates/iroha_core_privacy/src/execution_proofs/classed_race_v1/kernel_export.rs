@@ -54,7 +54,7 @@ fn source_hashes() -> BTreeMap<&'static str, String> {
         ),
     ]
     .into_iter()
-    .map(|(name, bytes)| (name, format!("{:x}", Sha256::digest(bytes))))
+    .map(|(name, bytes)| (name, hex::encode(Sha256::digest(bytes))))
     .collect()
 }
 
@@ -155,7 +155,7 @@ pub fn export_classed_race_kernels_json_v1() -> Result<Json, ClassedRaceSimulati
     let spec = class_performance_v1(CLASS);
     let profile_sources = CLASSED_RACE_PROFILE_SOURCES_V1
         .iter()
-        .map(|(name, bytes)| ((*name).to_owned(), format!("{:x}", Sha256::digest(bytes))))
+        .map(|(name, bytes)| ((*name).to_owned(), hex::encode(Sha256::digest(bytes))))
         .collect::<BTreeMap<_, _>>();
     Ok(json!({
         "version": 1, "computation": "ClassedRaceV1", "class_id": CLASS,
@@ -189,7 +189,7 @@ fn state_checksum(state: &ClassedRaceStateV1) -> String {
             digest.update(value.to_le_bytes());
         }
     }
-    format!("{:x}", digest.finalize())
+    hex::encode(digest.finalize())
 }
 
 fn reference_fixture(
@@ -417,7 +417,7 @@ pub fn export_classed_race_parity_json_v1() -> Result<Json, ClassedRaceSimulatio
         "version": 1, "computation": "ClassedRaceV1", "class_id": CLASS,
         "rulesHash": (classed_race_rules_hash_v1().to_string()),
         "profileId": (classed_race_profile_id_v1().to_string()),
-        "kernelSha256": (format!("{:x}", Sha256::digest(include_bytes!("reference.rs")))),
+        "kernelSha256": (hex::encode(Sha256::digest(include_bytes!("reference.rs")))),
         "generator": "Native ClassedRaceV1/TouringS1 reference and whole-tick AIR; no stock fallback",
         "fixtures": fixtures, "transitions": (environment_transitions()?),
     }))
@@ -449,7 +449,7 @@ mod tests {
         for (name, bytes) in CLASSED_RACE_PROFILE_SOURCES_V1 {
             assert_eq!(
                 value["profile_sources"][*name].as_str(),
-                Some(format!("{:x}", Sha256::digest(bytes)).as_str())
+                Some(hex::encode(Sha256::digest(bytes)).as_str())
             );
         }
     }

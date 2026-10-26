@@ -15,10 +15,8 @@ use super::{
     ring::{ApplicationPolynomialV1, ProofPolynomialV1},
 };
 use p256::elliptic_curve::bigint::{U512, U1024};
-use sha3::{
-    Shake256,
-    digest::{ExtendableOutput, Update, XofReader},
-};
+use sha3::digest::{ExtendableOutput, Update, XofReader};
+use shake::Shake256;
 use thiserror::Error;
 const MATRIX_DOMAIN_V1: &[u8] = b"iroha.privacy.bootle-lantern.matrix.v1";
 /// Nothing-up-my-sleeve domain for the fixed transparent public-parameter seed.
@@ -890,7 +888,7 @@ fn integer_negacyclic_square_v1(
             let degree = lhs_index + rhs_index;
             let wraps = degree >= APPLICATION_RING_DEGREE_V1;
             let destination = degree % APPLICATION_RING_DEGREE_V1;
-            let product: U1024 = lhs.magnitude.mul(&rhs.magnitude);
+            let product: U1024 = lhs.magnitude.concatenating_mul(&rhs.magnitude);
             let is_negative = lhs.negative ^ rhs.negative ^ wraps;
             checked_add_u1024_v1(
                 if is_negative {
@@ -905,7 +903,7 @@ fn integer_negacyclic_square_v1(
     let mut output = [SignedU512V1::ZERO; APPLICATION_RING_DEGREE_V1];
     for index in 0..APPLICATION_RING_DEGREE_V1 {
         let (negative, magnitude) = signed_difference_u1024_v1(positive[index], negative[index]);
-        let (high, low) = magnitude.split();
+        let (low, high) = magnitude.split();
         if high != U512::ZERO {
             return None;
         }
@@ -948,7 +946,7 @@ fn challenge_eta_norm_v1(challenge: &ProofPolynomialV1) -> Option<U1024> {
             let degree = lhs_index + rhs_index;
             let wraps = degree >= APPLICATION_RING_DEGREE_V1;
             let destination = degree % APPLICATION_RING_DEGREE_V1;
-            let product: U1024 = lhs.magnitude.mul(&rhs.magnitude);
+            let product: U1024 = lhs.magnitude.concatenating_mul(&rhs.magnitude);
             let is_negative = lhs.negative ^ rhs.negative ^ wraps;
             checked_add_u1024_v1(
                 if is_negative {

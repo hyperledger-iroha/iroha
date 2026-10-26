@@ -164,3 +164,54 @@ impl History {
         })
     }
 }
+
+#[cfg(test)]
+impl History {
+    pub(in crate::managed) fn test_attempts_root(&self) -> Option<&PrivateDirectory> {
+        self.root.as_ref()
+    }
+    // Reserve through the actual producer and parse its native output; never construct History.
+    pub(in crate::managed) fn test_attempts_pending(
+        &self,
+        origin: Origin,
+        terms: Terms,
+    ) -> Result<Self> {
+        self.reserve_pending(&self.operation, origin, terms)?;
+        // The actual interrupted-publication prefix has a root but no attempt child yet.
+        let _root = self.operation.create_child("attempts")?;
+        Self::read_retained(
+            &self.operation,
+            self.purpose,
+            self.semantic,
+            &self.scope,
+            self,
+        )
+    }
+    pub(in crate::managed) fn test_attempts_after_operation_admission<T>(
+        &self,
+        snapshot: &SnapshotReadPass<'_>,
+        operation: Option<&PrivateDirectory>,
+        run: impl FnOnce(&mut dyn FnMut() -> Result<()>) -> T,
+    ) -> Result<T> {
+        let census = LocalHistoryCensus::admit(self, snapshot).expect("genuine local census owner");
+        let root = self.scope.enrollment()?.root();
+        root.read_tree_scope(|tree| {
+            tree.read_scope_with_tree(operation.unwrap_or(&self.operation), |tree, reader| {
+                let mut owner = OperationRead {
+                    operation: operation.unwrap_or(&self.operation),
+                    reader,
+                };
+                let mut read = || {
+                    self.require_current_local_contents(
+                        Some(census.snapshot),
+                        Some(tree),
+                        None,
+                        None,
+                        Some(&mut owner),
+                    )
+                };
+                Ok(run(&mut read))
+            })
+        })
+    }
+}

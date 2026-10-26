@@ -19,40 +19,26 @@ from .custody import (ROOT, REFERENCE, MODULES, require, sha, checked_sources,
 from .case import uint, frame
 from .bounded import scalar_ifft
 
-OMEGA = {'descriptor': 'afa44ef85c1685dec8fba2ea2fcbe366fc9e41c9652e0c304b20ee416d405391',
-         'key': '33c2614aceb6ecd0144dc580b308d712dd967104ecbfc0ed699655472bc4ed36',
-         'original': 'e8133a8fba77bf2c87f0a2869959bbc897a0d2e168625700d9076fefc74db27d'}
+def reference(directory, *, parameter_authority=None):
+    """Copy the unchanged reference; optionally install one small private authority.
 
-
-def reference(directory, exact_descriptor_sha=None, parameter_authority=None, *, allow_large=False):
-    """Private copy: two exact resource-check changes only for Pallas k16.
-
-    Hashing, canonical parsing, equations and generator decision are unchanged.
-    The chosen authority is written before any reference module is imported.
+    Every verifier module is copied verbatim. The chosen authority is written
+    before any reference module is imported; it never changes release authority.
     """
-    return _reference(directory, exact_descriptor_sha, parameter_authority,
-                      allow_large=allow_large)
+    return _reference(directory, parameter_authority=parameter_authority)
 
 
-def _reference(directory, exact_descriptor_sha=None, parameter_authority=None, *,
-               allow_large=False, resource_curve=0, writer=write_new, saver=save,
+def _reference(directory, *, parameter_authority=None, writer=write_new, saver=save,
                before_import=lambda: None):
-    """Private factored copy mechanism; normal public front keeps its old guards."""
-    require(type(resource_curve) is int and resource_curve in (0,1), 'private resource curve')
-    require(type(allow_large) is bool, 'explicit large flag')
-    require(exact_descriptor_sha is None or
-            (type(exact_descriptor_sha) is str and len(exact_descriptor_sha) == 64
-             and all(c in '0123456789abcdef' for c in exact_descriptor_sha)),
-            'canonical exact descriptor digest')
-    require(exact_descriptor_sha is None or allow_large, 'large reference requires opt-in')
-    # Refuse caller-supplied large authority before any path creation or raw hash.
+    """Private copy mechanism with an observable authority-before-import boundary."""
+    # Refuse oversized authority before any path creation or raw hash.
     if parameter_authority is not None:
         require(isinstance(parameter_authority, (tuple, list)) and len(parameter_authority) == 3,
                 'private authority shape')
         tag, k, raw = parameter_authority
         require(type(tag) is int and tag in (0, 1) and type(k) is int and 1 <= k <= 16
                 and isinstance(raw, bytes), 'private authority')
-        require(k <= 6 or allow_large, 'large reference authority requires opt-in')
+        require(k <= 6, 'small reference authority k<=6 only')
         require(len(raw) == 64 * (1 << k) + 68, 'private authority extent')
     directory = Path(directory)
     directory.mkdir(mode=0o700, exist_ok=False)
@@ -60,26 +46,11 @@ def _reference(directory, exact_descriptor_sha=None, parameter_authority=None, *
     require(package_name not in sys.modules, 'private namespace already loaded')
     package = directory/package_name
     package.mkdir()
-    old_d = "require(1 <= v['k'] <= 10, 'reference domain exponent')"
-    old_p = "require(type(k) is int and 1 <= k <= 10, 'reference parameter exponent')"
     changes = []
     for name in MODULES:
         raw = (REFERENCE/name).read_bytes()
-        text = raw.decode()
-        if exact_descriptor_sha is not None and name == 'descriptor.py':
-            require(text.count(old_d) == 1, 'exact descriptor resource source')
-            text = text.replace(old_d, "require(1 <= v['k'] <= 10 or "
-                f"(v['k'] == 16 and self.version == 2 and v['curve'] == {resource_curve} and "
-                f"hashlib.sha256(self.raw).hexdigest() == '{exact_descriptor_sha}'), "
-                "'reference domain exponent / exact private descriptor')")
-        if exact_descriptor_sha is not None and name == 'parameters.py':
-            require(text.count(old_p) == 1, 'exact parameter resource source')
-            text = text.replace(old_p, "require(type(k) is int and (1 <= k <= 10 or "
-                f"(k == 16 and curve.tag == {resource_curve})), 'reference parameter exponent / "
-                +("Pallas" if resource_curve == 0 else "Vesta")+" k16')")
-        copied = text.encode()
-        writer(package/name, copied)
-        changes.append({'name':name, 'before_sha256':sha(raw), 'after_sha256':sha(copied)})
+        writer(package/name, raw)
+        changes.append({'name':name, 'before_sha256':sha(raw), 'after_sha256':sha(raw)})
     kats = json.loads((ROOT/'fixtures/native_prover/kats_v1.json').read_text())
     if parameter_authority is not None:
         tag, k, raw = parameter_authority
@@ -88,7 +59,6 @@ def _reference(directory, exact_descriptor_sha=None, parameter_authority=None, *
             {'k':k, 'byte_len':len(raw), 'sha256':sha(raw)}]
     saver(directory/'kats_v1.json', kats)
     saver(directory/'copy-receipt.json', {'source_changes':changes,
-         'exact_k16_descriptor':exact_descriptor_sha,
          'authority_before_import':True, 'no_transcript_or_equation_changes':True})
     before_import()
     spec = importlib.util.spec_from_file_location(package_name, package/'__init__.py',
@@ -132,46 +102,40 @@ class Case:
     public_original: bytes
 
 
-def make_case(directory, descriptor_raw, key, original, expected, chosen, *, allow_large=False):
-    """Re-key a small source relation or the sole exact historical Omega.
+def make_case(directory, descriptor_raw, key, original, expected, chosen):
+    """Re-key one small source relation using exact caller-retained originals.
 
-    Caller-selected hashes are custody inputs, not signatures. The k16 branch
-    additionally requires the frozen historical Omega triple. This function
+    Caller-selected hashes are custody inputs, not signatures. This function
     consumes supplied bytes; it never discovers or opens catalog originals.
     """
     checked_sources()
-    require(type(allow_large) is bool, 'explicit large flag')
-    require(type(chosen.k) is int and 1 <= chosen.k <= 16, 'chosen domain')
-    require((chosen.k <= 6 and len(original) <= 1 << 20) or allow_large,
-            'large historical rebind requires opt-in')
+    require(type(chosen.k) is int and 1 <= chosen.k <= 6, 'small rebind k<=6 only')
+    require(isinstance(original, bytes) and len(original) <= 1 << 20,
+            'small public original extent')
     from .public_setup import PublicSetup
     require(set(expected) == {'descriptor', 'key', 'original'}, 'exact original pin roles')
     for name, raw, limit in [('descriptor', descriptor_raw, 1 << 20),
-                             ('key', key, 4 << 20), ('original', original, 128 << 20)]:
+                             ('key', key, 4 << 20), ('original', original, 1 << 20)]:
         require(isinstance(raw, bytes) and len(raw) <= limit and sha(raw) == expected[name],
                 'pinned original '+name)
-    k16 = expected == OMEGA
     directory = Path(directory).resolve()
     directory.mkdir(mode=0o700, parents=True, exist_ok=False)
     for name, raw in [('descriptor.norito', descriptor_raw), ('vk.bin', key), ('public-original.bin', original)]:
         write_new(directory/('historical-'+name), raw)
-    old = reference(directory/'historical-reference', expected['descriptor'] if k16 else None,
-                    allow_large=allow_large)
+    old = reference(directory/'historical-reference')
     d = old['descriptor'].Descriptor.decode(descriptor_raw, 2)
+    require(d['k'] <= 6, 'small source relation k<=6 only')
     old['verify'].key_points(d, key)
     require(d['transcript'] == 2 and d['instance_mode'] == 1 and d['proof_suffix'] == 1,
             'direct PIPA-R suffix profile')
-    require(d['k'] <= 10 or (k16 and d['k'] == 16 and d['curve'] == 0), 'historical domain scope')
     public = PublicSetup.decode(original, d, key, expected['original'])
-    return _finish_case(directory, descriptor_raw, d, key, original, expected, chosen, old, public,
-                        reference_factory=lambda path,digest,authority: reference(
-                            path,digest if k16 else None,authority,allow_large=allow_large))
+    return _finish_case(directory, descriptor_raw, d, key, original, expected, chosen, old, public)
 
 
 def _finish_case(directory, descriptor_raw, d, key, original, expected, chosen, old, public, *,
-                 reference_factory, writer=write_new, saver=save,
+                 writer=write_new, saver=save,
                  checkpoint=lambda: None):
-    """One unchanged re-key algorithm shared with the closed diagnostic front."""
+    """One known-log re-key algorithm for the retained small relations."""
     from .public_setup import PublicSetup
     curve, m, n = d.curve, d.curve.scalar, d.n
     require(chosen.curve_tag == d['curve'] and chosen.k == d['k'], 'chosen curve/domain')
@@ -191,8 +155,8 @@ def _finish_case(directory, descriptor_raw, d, key, original, expected, chosen, 
             'chosen raw parameters and all private logs')
     new_desc = rebound_descriptor(descriptor_raw, hashlib.sha256(chosen.raw).digest(), old['codec'])
     checkpoint()
-    private = reference_factory(directory/'chosen-reference', sha(new_desc),
-                                (d['curve'], d['k'], chosen.raw))
+    private = reference(directory/'chosen-reference',
+                        parameter_authority=(d['curve'], d['k'], chosen.raw))
     params = private['parameters'].Parameters.decode(chosen.raw, curve, d['k'])
     checkpoint()
     new_d = private['descriptor'].Descriptor.decode(new_desc, 2)

@@ -142,7 +142,7 @@ impl StrictQualifiedSourceProfileV1 {
     /// the running process. Ordinary app and proof APIs cannot create this owner.
     ///
     /// # Errors
-    /// An incomplete build-input identity, changed/missing original or invalid
+    /// A changed/missing original or invalid
     /// canonical descriptor/compact-original envelope.
     pub fn export_builtin_entry_rust(
         &self,
@@ -150,7 +150,7 @@ impl StrictQualifiedSourceProfileV1 {
         config: iroha_plonk::keys::pk::artifact::ReadConfig,
     ) -> Result<String, WalletSourcesErrorV1> {
         use std::fmt::Write as _;
-        let source_identity = iroha_plonk::keys::builtin_source_identity_v1()?;
+        let contract = iroha_plonk::keys::builtin_contract_v1();
         let inventory = self.wallet.inventory();
         let mut paths = Vec::new();
         for (selector, member) in inventory.sigma.iter().copied().enumerate() {
@@ -193,9 +193,9 @@ impl StrictQualifiedSourceProfileV1 {
         let mut text = String::new();
         writeln!(
             text,
-            "BuiltinProfileEntry {{ profile: {}, source_identity: {:?}, members: &[",
+            "BuiltinProfileEntry {{ profile: {}, contract: {:?}, members: &[",
             rust_blob(&self.profile),
-            source_identity
+            contract
         )
         .map_err(|_| Error::Inventory)?;
         for (role, member) in paths {

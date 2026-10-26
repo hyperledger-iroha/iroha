@@ -21,7 +21,7 @@ use super::{
     Witness, bytes, create_proof, keygen_pk, replay_circuit, validate_matrix, verify_full,
 };
 use crate::{
-    keys::{DescriptorBinding, VerifyingKey, builtin_source_identity_v1},
+    keys::{DescriptorBinding, VerifyingKey, builtin_contract_v1},
     verifier::captured_succinct_tests::{native_claim_with_challenges, validate_document},
 };
 
@@ -412,12 +412,12 @@ fn export_current_native_corpora() {
         .canonicalize()
         .expect("canonical current executable");
     let executable_pin = file_pin(&executable);
-    let source = builtin_source_identity_v1().expect("complete build-time source census");
+    let contract = builtin_contract_v1();
     let provenance = norito::json!({
         "schema": ("iroha.native_prover.capture.v1"), "generator_test": (EXPORT_TEST),
-        "generator_executable": (executable_pin.clone()), "bootstrap_source_digest": (hex(&source)),
-        "compiled_source_closure_complete": (true),
-        "scope": ("Current native synthetic proof capture; bootstrap source includes unmatched seed corpora and DATA. Not an independent implementation oracle, final catalog, release or monetary admission."),
+        "generator_executable": (executable_pin.clone()), "proof_contract_digest": (hex(&contract)),
+        "source_provenance": ("captured separately by the build owner; not embedded in proof compatibility"),
+        "scope": ("Current native synthetic proof capture with exact seed corpora and DATA pins. Not an independent implementation oracle, final catalog, release or monetary admission."),
         "transcript": ("ordinary native descriptor-bound framing; no historical representation override"),
         "seed_goldens_sha256": (digest(include_bytes!("../../../../fixtures/native_prover/golden_sources_v1.json"))),
         "seed_succinct_sha256": (digest(include_bytes!("../../../../fixtures/native_prover/succinct_v1.json"))),
@@ -499,7 +499,7 @@ fn export_current_native_corpora() {
         .expect("durable originals");
     let receipt = norito::json!({
         "schema": ("iroha.native_prover.capture-result.v1"), "generator_test": (EXPORT_TEST),
-        "generator_executable": (executable_pin), "bootstrap_source_digest": (hex(&source)),
+        "generator_executable": (executable_pin), "proof_contract_digest": (hex(&contract)),
         "capture_start": (start), "golden_sources": (golden_pin), "succinct": (succinct_pin),
         "golden_cases": (42), "succinct_cases": (8), "current_native_production_framing": (true),
         "full_verification_and_mutations_passed": (true), "shipping_qualification": (false),

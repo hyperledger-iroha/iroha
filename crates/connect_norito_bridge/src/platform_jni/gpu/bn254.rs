@@ -2,14 +2,14 @@
 
 use super::super::{catch_unwind_to_java, throw_java_illegal_argument, throw_java_illegal_state};
 use jni::{
-    JNIEnv,
+    Env,
     objects::{JClass, JLongArray},
     sys::{JNI_FALSE, JNI_TRUE, jboolean},
 };
 
 type Batch = fn(&[[u64; 4]], &[[u64; 4]], &mut [[u64; 4]]) -> bool;
 
-fn field_at(env: &mut JNIEnv<'_>, array: &JLongArray<'_>, index: usize) -> Option<[u64; 4]> {
+fn field_at(env: &mut Env<'_>, array: &JLongArray<'_>, index: usize) -> Option<[u64; 4]> {
     let offset = i32::try_from(index.checked_mul(4)?).ok()?;
     let mut words = [0i64; 4];
     if let Err(error) = env.get_long_array_region(array, offset, &mut words) {
@@ -24,7 +24,7 @@ fn field_at(env: &mut JNIEnv<'_>, array: &JLongArray<'_>, index: usize) -> Optio
     Some(field)
 }
 
-fn reserve(env: &mut JNIEnv<'_>, count: usize) -> Option<ivm::AccelerationOutput<[u64; 4]>> {
+fn reserve(env: &mut Env<'_>, count: usize) -> Option<ivm::AccelerationOutput<[u64; 4]>> {
     match ivm::try_acceleration_output(count) {
         Ok(output) => Some(output),
         Err(ivm::AccelerationOutputError::InvalidLayout) => {
@@ -39,7 +39,7 @@ fn reserve(env: &mut JNIEnv<'_>, count: usize) -> Option<ivm::AccelerationOutput
 }
 
 fn run(
-    env: &mut JNIEnv<'_>,
+    env: &mut Env<'_>,
     lhs: &JLongArray<'_>,
     rhs: &JLongArray<'_>,
     out: &JLongArray<'_>,
@@ -124,13 +124,15 @@ fn run(
 /// Arguments must be valid JNI handles supplied by the canonical Kotlin bridge.
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_gpu_Accelerators_nativeBn254Add(
-    mut env: JNIEnv<'_>,
+    env: jni::EnvUnowned<'_>,
     _class: JClass<'_>,
     lhs: JLongArray<'_>,
     rhs: JLongArray<'_>,
     out: JLongArray<'_>,
 ) -> jboolean {
-    run(&mut env, &lhs, &rhs, &out, ivm::bn254_vec::add_batch_into)
+    crate::platform_jni::with_java_env(env, |mut env| {
+        run(&mut env, &lhs, &rhs, &out, ivm::bn254_vec::add_batch_into)
+    })
 }
 
 /// Subtract an ordered BN254 batch with automatic CPU/GPU selection.
@@ -138,13 +140,15 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_gpu_Accelerators_na
 /// Arguments must be valid JNI handles supplied by the canonical Kotlin bridge.
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_gpu_Accelerators_nativeBn254Sub(
-    mut env: JNIEnv<'_>,
+    env: jni::EnvUnowned<'_>,
     _class: JClass<'_>,
     lhs: JLongArray<'_>,
     rhs: JLongArray<'_>,
     out: JLongArray<'_>,
 ) -> jboolean {
-    run(&mut env, &lhs, &rhs, &out, ivm::bn254_vec::sub_batch_into)
+    crate::platform_jni::with_java_env(env, |mut env| {
+        run(&mut env, &lhs, &rhs, &out, ivm::bn254_vec::sub_batch_into)
+    })
 }
 
 /// Multiply an ordered BN254 batch with automatic CPU/GPU selection.
@@ -152,11 +156,13 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_gpu_Accelerators_na
 /// Arguments must be valid JNI handles supplied by the canonical Kotlin bridge.
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_gpu_Accelerators_nativeBn254Mul(
-    mut env: JNIEnv<'_>,
+    env: jni::EnvUnowned<'_>,
     _class: JClass<'_>,
     lhs: JLongArray<'_>,
     rhs: JLongArray<'_>,
     out: JLongArray<'_>,
 ) -> jboolean {
-    run(&mut env, &lhs, &rhs, &out, ivm::bn254_vec::mul_batch_into)
+    crate::platform_jni::with_java_env(env, |mut env| {
+        run(&mut env, &lhs, &rhs, &out, ivm::bn254_vec::mul_batch_into)
+    })
 }

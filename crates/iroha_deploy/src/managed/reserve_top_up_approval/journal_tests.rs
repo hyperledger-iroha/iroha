@@ -126,8 +126,20 @@ fn approval_claim_journal_roundtrip_keeps_exact_request_snapshot_rationale_and_o
     );
 
     let temporary = tempfile::tempdir().unwrap();
-    let directory = PrivateDirectory::open_or_create(temporary.path().join("approval")).unwrap();
+    let parent = PrivateDirectory::open_or_create(temporary.path().join("parent")).unwrap();
     let original = codec_original();
+    let missing = PrivateDirectory::open_or_create(parent.path().join("missing")).unwrap();
+    assert!(matches!(
+        publish_intent(&missing, &original),
+        Err(crate::managed::Error::Io(error))
+            if error.kind() == std::io::ErrorKind::NotFound
+    ));
+    assert!(attempts::metadata::ensure_operation(&parent, "missing").is_err());
+    assert!(
+        missing.entries(1).unwrap().is_empty(),
+        "lost operation metadata must never be recreated by publication or initialization"
+    );
+    let directory = attempts::metadata::ensure_operation(&parent, "approval").unwrap();
     publish_intent(&directory, &original).unwrap();
     let bytes = directory.read("original.nrt", MAX_ORIGINAL_BYTES).unwrap();
     let restored = read_intent(&directory).unwrap().unwrap();

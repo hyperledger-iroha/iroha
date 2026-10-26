@@ -12,16 +12,17 @@ use base64::{
 use curve25519_dalek::montgomery::MontgomeryPoint;
 use ed25519_dalek::{Signer, SigningKey};
 use hex::FromHex;
-use hkdf::{Hkdf, HkdfExtract};
+use hkdf::{SimpleHkdf, SimpleHkdfExtract};
 use norito::{
     derive::{JsonDeserialize, JsonSerialize},
     json::{self, Map, Value},
 };
 use rand_core::TryCryptoRng;
 use sha3::{
-    Digest, Sha3_256, Shake256,
+    Digest, Sha3_256,
     digest::{ExtendableOutput, Update, XofReader},
 };
+use shake::Shake256;
 use soranet_pq::{
     HedgedRngSeed, MlDsaSuite, MlKemMetadata, MlKemParameters, MlKemSharedSecret, MlKemSuite,
     decapsulate_mlkem, deterministic_chacha20_rng, encapsulate_mlkem_from_os,
@@ -5479,8 +5480,8 @@ fn derive_session_key_and_confirmation(
 fn hkdf_sha3_256_from_ikm_parts(
     salt: Option<&[u8]>,
     ikm_parts: &[&[u8]],
-) -> Result<Hkdf<Sha3_256>, HarnessError> {
-    let mut extract = HkdfExtract::<Sha3_256>::new(salt);
+) -> Result<SimpleHkdf<Sha3_256>, HarnessError> {
+    let mut extract = SimpleHkdfExtract::<Sha3_256>::new(salt);
     input_len_prefixed_hkdf_component(&mut extract, SESSION_KEY_IKM_DOMAIN)?;
     for &part in ikm_parts {
         input_len_prefixed_hkdf_component(&mut extract, part)?;
@@ -5488,7 +5489,7 @@ fn hkdf_sha3_256_from_ikm_parts(
     Ok(extract.finalize().1)
 }
 fn input_len_prefixed_hkdf_component(
-    extract: &mut HkdfExtract<Sha3_256>,
+    extract: &mut SimpleHkdfExtract<Sha3_256>,
     component: &[u8],
 ) -> Result<(), HarnessError> {
     let len = u64::try_from(component.len()).map_err(|_| HarnessError::Kdf)?;
@@ -5501,7 +5502,7 @@ fn compute_kem_confirmation(
     shared_secret: &[u8],
     transcript_hash: &[u8; 32],
 ) -> Result<Vec<u8>, HarnessError> {
-    let hk = Hkdf::<Sha3_256>::new(Some(transcript_hash), shared_secret);
+    let hk = SimpleHkdf::<Sha3_256>::new(Some(transcript_hash), shared_secret);
     let mut confirmation = vec![0u8; shared_secret.len()];
     hk.expand(label, &mut confirmation)
         .map_err(|_| HarnessError::Kdf)?;

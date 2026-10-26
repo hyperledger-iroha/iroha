@@ -1,0 +1,104 @@
+// Copyright 2024 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+#ifndef THIRD_PARTY_NEARBY_INTERNAL_PLATFORM_IMPLEMENTATION_WINDOWS_WIFI_HOTSPOT_NATIVE_H_
+#define THIRD_PARTY_NEARBY_INTERNAL_PLATFORM_IMPLEMENTATION_WINDOWS_WIFI_HOTSPOT_NATIVE_H_
+
+// clang-format off
+#include <stdbool.h>
+#include <windows.h>
+#include <winsock2.h>
+#include <wlanapi.h>
+// clang-format on
+
+#include <cstdint>
+#include <memory>
+#include <optional>
+#include <string>
+
+#include "absl/base/nullability.h"
+#include "absl/base/thread_annotations.h"
+#include "absl/strings/string_view.h"
+#include "absl/synchronization/mutex.h"
+#include "absl/synchronization/notification.h"
+#include "internal/platform/implementation/windows/network_info.h"
+#include "internal/platform/implementation/windows/wlan_client.h"
+
+namespace nearby::windows {
+
+class WifiHotspotNative {
+ public:
+  WifiHotspotNative();
+  ~WifiHotspotNative();
+  bool ConnectToWifiNetwork(absl::string_view ssid, absl::string_view password)
+      ABSL_LOCKS_EXCLUDED(mutex_);
+  bool DisconnectWifiNetwork() ABSL_LOCKS_EXCLUDED(mutex_);
+
+  bool RestoreWifiProfile() ABSL_LOCKS_EXCLUDED(mutex_);
+
+  // Returns true if the interface has required IP address assigned.
+  // If `include_ipv6` is false, check for non local scoped IPv4 address only.
+  // Otherwise, check for any IPv6 address or non local scoped IPv4 address.
+  bool HasAssignedAddress(bool include_ipv6);
+  bool RenewIpv4Address() const;
+  // Return the interface index of the wifi interface used to connect to the
+  // hotspot.
+  // On error, returns std::nullopt.
+  std::optional<uint32_t> GetWifiInterfaceIndex() const;
+
+ private:
+  // Context for WLAN notification callback.
+  struct WlanNotificationContext {
+    // This is reset to false when we start connecting to a new network, and set
+    // to true when we receive the connecting event.
+    bool got_connecting_event = false;
+    // Original profile name is captured when a disconnecting event is received
+    // before a connecting event.
+    std::string original_profile_name;
+    // The profile name of the network we are trying to connect to.
+    std::string connecting_profile_name;
+    WLAN_REASON_CODE connection_code = WLAN_REASON_CODE_UNKNOWN;
+    absl::Notification connection_completed;
+  };
+
+  static void WlanNotificationCallback(
+      PWLAN_NOTIFICATION_DATA wlan_notification_data, PVOID context);
+  std::wstring BuildWlanProfile(absl::string_view ssid,
+                                absl::string_view password);
+  GUID GetInterfaceGuid() const;
+  bool ConnectToWifiNetworkInternal(GUID interface_guid,
+                                    const std::string& profile_name)
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_);
+  bool RegisterWlanNotificationCallback(
+      WlanNotificationContext* absl_nonnull context)
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_);
+  bool UnregisterWlanNotificationCallback();
+  bool SetWlanProfile(GUID interface_guid, absl::string_view ssid,
+                      absl::string_view password)
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_);
+  bool RemoveCreatedWlanProfile(GUID interface_guid)
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_);
+  bool RemoveWlanProfile(GUID interface_guid, const std::string& profile_name)
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_);
+
+  NetworkInfo& network_info_;
+  mutable absl::Mutex mutex_;
+
+  WlanClient wlan_client_;
+  std::string backup_profile_name_;
+};
+
+}  // namespace nearby::windows
+
+#endif  // THIRD_PARTY_NEARBY_INTERNAL_PLATFORM_IMPLEMENTATION_WINDOWS_WIFI_HOTSPOT_NATIVE_H_

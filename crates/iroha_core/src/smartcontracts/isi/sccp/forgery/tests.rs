@@ -124,13 +124,15 @@ fn configured_chain_with_output(
         )),
         Parameter::Custom(npos.into_custom_parameter()),
     ]);
-    let mut nexus = iroha_config::parameters::actual::Nexus::default();
-    nexus.staking.unbonding_delay = Duration::from_secs(21 * 86_400);
-    nexus.staking.max_slash_bps = 1;
+    let mut staking = crate::sumeragi::test_chain::staking_fixture_policy(
+        SumeragiNposParameters::default().xor_asset_definition_id,
+    );
+    staking.unbonding_delay_ms = 21 * 86_400_000;
+    staking.max_slash_bps = 1;
+    replace_original_staking_parameter(&mut config, &staking);
     if register_members != 0 {
-        register_genesis_members(&mut config, &keys[..register_members], &nexus.staking);
+        register_genesis_members(&mut config, &keys[..register_members], &staking);
     }
-    config.nexus = Some(nexus);
     if let Some(maximum) = max_transactions {
         config.genesis_parameters.push(Parameter::Block(
             iroha_data_model::parameter::BlockParameter::MaxTransactions(maximum),
@@ -240,10 +242,31 @@ fn configured_chain_with_output(
     (chain, keys, ordinary_signer)
 }
 
-pub fn register_genesis_members(
+/// Replace exactly the existing explicit authored slot, never insert or deduplicate.
+/// This fixture operation happens before real signing and grants no runtime authority.
+pub(crate) fn replace_original_staking_parameter(
+    config: &mut TestChainConfig,
+    policy: &iroha_data_model::block::consensus::PublicLaneStakingPolicy,
+) {
+    let id = iroha_data_model::block::consensus::PublicLaneStakingPolicy::parameter_id();
+    let mut slots = config
+        .genesis_parameters
+        .iter_mut()
+        .filter(|parameter| matches!(parameter, Parameter::Custom(value) if value.id() == &id));
+    let slot = slots
+        .next()
+        .expect("one original fixture staking parameter");
+    assert!(
+        slots.next().is_none(),
+        "fixture never accepts duplicate original staking parameters"
+    );
+    *slot = Parameter::Custom(policy.clone().into_custom_parameter().unwrap());
+}
+
+pub(crate) fn register_genesis_members(
     config: &mut TestChainConfig,
     keys: &[KeyPair],
-    staking: &iroha_config::parameters::actual::NexusStaking,
+    staking: &iroha_data_model::block::consensus::PublicLaneStakingPolicy,
 ) {
     use iroha_data_model::{
         Registrable,
@@ -256,8 +279,8 @@ pub fn register_genesis_members(
     use iroha_model_base::{domain::DomainId, peer::PeerId, topology::LaneId};
     use iroha_primitives::numeric::{NumericSpec, Quantity};
     let owner = AccountId::new(config.genesis_key.public_key().clone());
-    let definition: AssetDefinitionId = staking.stake_asset_id.parse().unwrap();
-    let escrow = AccountId::parse_encoded(&staking.stake_escrow_account_id).unwrap();
+    let definition: AssetDefinitionId = staking.stake_asset_id.clone();
+    let escrow = &staking.stake_escrow_account_id;
     let amount = Quantity::from(1_000_u32);
     let validators = keys
         .iter()
@@ -267,7 +290,7 @@ pub fn register_genesis_members(
         [Domain::new(DomainId::try_new("nexus", "universal").unwrap()).build(&owner)],
         validators
             .iter()
-            .chain(std::iter::once(&escrow))
+            .chain(std::iter::once(escrow))
             .map(|id| Account::new(id.clone()).build(&owner)),
         [AssetDefinition::new(
             definition.clone(),

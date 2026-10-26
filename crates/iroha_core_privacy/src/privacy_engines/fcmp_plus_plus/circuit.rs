@@ -1642,7 +1642,8 @@ mod tests {
         cell::Cell,
         ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign},
     };
-    use rand_08::{SeedableRng as _, rngs::StdRng};
+    use rand::SeedableRng as _;
+    use rand_chacha::ChaCha12Rng;
     use std::panic::{self, AssertUnwindSafe};
     std::thread_local! {
         static TRACKING_CLEAR_CALLS: Cell<usize> = const { Cell::new(0) };
@@ -1868,7 +1869,7 @@ mod tests {
         let (statement, witness) = circuit
             .proving_statement(generators, commitments)
             .expect("proving statement");
-        let mut rng = StdRng::seed_from_u64(0xc1_0017);
+        let mut rng = ChaCha12Rng::seed_from_u64(0xc1_0017);
         statement
             .prove(
                 &mut FcmpProofRandomSource::new(&mut rng),

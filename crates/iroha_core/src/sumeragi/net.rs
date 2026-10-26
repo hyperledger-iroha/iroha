@@ -938,7 +938,7 @@ pub fn spawn_ingress(
 #[cfg(test)]
 mod tests {
     use iroha_crypto::{Algorithm, KeyPair};
-    use iroha_data_model::peer::Peer;
+    use iroha_model_base::peer::Peer;
     use iroha_p2p::network::message::ClassifyTopic;
     use iroha_sumeragi::availability::{AvailabilityFrame, RowBytes};
     use iroha_sumeragi::{
@@ -950,7 +950,7 @@ mod tests {
         types::{AggregateSignature, Bitmap, EpochId, SIGNATURE_LEN, Signature},
     };
     use norito::core as ncore;
-    use rand::{Rng, SeedableRng, rngs::StdRng};
+    use rand::{RngExt, SeedableRng, rngs::StdRng};
 
     use super::*;
 

@@ -26,7 +26,7 @@ use walkdir::WalkDir;
 pub(crate) type PublicationHook<'a> = dyn FnMut(&Path) -> Result<(), Box<dyn Error>> + 'a;
 type BeforePublicationHook<'a> = dyn FnMut() -> Result<(), Box<dyn Error>> + 'a;
 
-/// A copied program with its exact closed-writer image and optional native writer anchor.
+/// A copied program with its exact closed-writer image and optional read-only inode anchor.
 pub(crate) struct CopiedProgram {
     pub(crate) file: RetainedFile,
     pub(crate) snapshot: FileSnapshot,
@@ -421,9 +421,9 @@ pub(crate) fn copy_program(
     }
     copied.file().sync_all()?;
     copied.revalidate()?;
-    // Join the finalized executable to its exclusively created object. Unix may keep this
-    // raw descriptor through directory publication; Windows must close its WRITE/DELETE
-    // handles before independent readers or a directory rename can succeed.
+    // Join the finalized executable to its exclusively created object. Unix keeps this
+    // writer until the independent reader has authenticated the same inode; Windows must
+    // close its WRITE/DELETE handles before independent readers or a rename can succeed.
     let created = copied.file().try_clone()?;
     #[cfg(unix)]
     {
@@ -455,7 +455,24 @@ pub(crate) fn copy_program(
         return Err("matching CLI input changed during package publication".into());
     }
     #[cfg(unix)]
-    let created = Some(created);
+    let created = {
+        // Keep the original inode continuously retained while closing its last writer.
+        // Executing a file open for writing can fail with ETXTBSY on Unix. The raw
+        // read-only anchor survives the later rename without weakening named custody.
+        let readonly = copied.file().try_clone()?;
+        if FileSnapshot::of(&created, false)? != copied_snapshot
+            || FileSnapshot::of(&readonly, false)? != copied_snapshot
+        {
+            return Err("created CLI program changed during read-only custody handoff".into());
+        }
+        drop(created);
+        if copied.snapshot()? != copied_snapshot
+            || FileSnapshot::of(&readonly, false)? != copied_snapshot
+        {
+            return Err("created CLI program changed while closing its writer".into());
+        }
+        Some(readonly)
+    };
     #[cfg(windows)]
     let created = None;
     Ok(CopiedProgram {

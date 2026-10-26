@@ -39,6 +39,6 @@ iroha_schema = { path = "../../crates/iroha_schema", optional = true }
 norito = { path = "../../crates/norito", features = ["node-codec"], default-features = false }
 tempfile = { workspace = true }
 time = { version = "0.3.44", default-features = false, features = ["std", "macros", "formatting"] }
-sha2 = { version = "0.10.9", default-features = false, features = ["std"] }
+sha2 = { version = "0.11.1", default-features = false, features = ["alloc"] }
 syn = { workspace = true, features = ["default", "full", "visit"], optional = true }
 proc-macro2 = { workspace = true, features = ["span-locations"], optional = true }

@@ -379,6 +379,12 @@ class OwnerTests(unittest.TestCase):
 
     def test_owner_budgets_and_existing_storage_refuse_without_entropy(self):
         from .requests import Owner
+        for index,options in enumerate(({'entropy':0},{'allow_large':None},
+                                         {'allow_large':1},{'allow_large':'yes'})):
+            path=OUTPUT/f'bad-owner-input-{index}'
+            with self.assertRaisesRegex(ValueError,'explicit bit source|explicit large flag'):
+                Owner(path,**options)
+            self.assertFalse(path.exists())
         for index,args in enumerate(({'max_requests':0},{'max_requests':True},
                                      {'per_request_draws':1 << 21},{'total_draws':0})):
             path = OUTPUT/f'bad-budget-{index}'
@@ -408,3 +414,27 @@ class OwnerTests(unittest.TestCase):
         self.assertEqual(owner.draws,0)
         self.assertIs(owner.submit(b'blocked',self.cases[0],[[1]]),result)
         self.assertIn('FileExistsError',owner.records[b'blocked']['failure'])
+
+    def test_coin_width_values_and_failed_source_calls_are_counted_once(self):
+        from types import SimpleNamespace
+        from .requests import Coins
+        source=Mock(side_effect=[3,9])
+        owner=SimpleNamespace(entropy=source,draws=0,total_draws=16,per_request_draws=16)
+        coins=Coins(owner)
+        self.assertEqual([coins.getrandbits(2),coins.getrandbits(4)],[3,9])
+        self.assertEqual([call.args for call in source.call_args_list],[(2,),(4,)])
+        self.assertEqual((coins.calls,owner.draws),(2,2))
+        for width in (0,257,True,'8'):
+            with self.assertRaisesRegex(ValueError,'bounded bit width'):coins.getrandbits(width)
+        self.assertEqual((coins.calls,owner.draws,source.call_count),(2,2,2))
+        for value in (True,-1,256,None):
+            selected=SimpleNamespace(entropy=Mock(return_value=value),draws=0,total_draws=16,per_request_draws=16)
+            invalid=Coins(selected)
+            with self.assertRaisesRegex(ValueError,'canonical source bits'):invalid.getrandbits(8)
+            self.assertEqual((invalid.calls,selected.draws),(1,1))
+            selected.entropy.assert_called_once_with(8)
+        source=Mock(side_effect=OSError('unavailable'))
+        selected=SimpleNamespace(entropy=source,draws=0,total_draws=16,per_request_draws=16)
+        failed=Coins(selected)
+        with self.assertRaisesRegex(OSError,'unavailable'):failed.getrandbits(8)
+        self.assertEqual((failed.calls,selected.draws),(1,1))

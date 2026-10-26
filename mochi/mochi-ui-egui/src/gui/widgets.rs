@@ -5,9 +5,9 @@
 use super::theme::{self, CARD_RADIUS, CONTROL_RADIUS, Palette};
 use eframe::egui::{
     self, Align, Align2, Color32, CornerRadius, FontId, Frame, Layout, Margin, Response, RichText,
-    Sense, Stroke, Ui, Vec2, WidgetInfo, WidgetType,
+    Role, Sense, Stroke, Ui, Vec2, WidgetInfo,
 };
-use mochi_core::developer::ManagedPhase;
+use mochi_core::developer::{ManagedPhase, ManagedValidatorState, ManagedValidatorStatus};
 
 /// Glyphs used by navigation and actions; all must exist in egui's bundled fonts.
 pub(crate) mod icon {
@@ -213,27 +213,61 @@ pub(crate) fn phase_pill(ui: &mut Ui, phase: ManagedPhase) -> Response {
         .response
 }
 
-/// Aggregate validator liveness: `running` filled dots out of `total`. The supervisor reports a
-/// count only, so dots never claim which individual validator is alive.
-pub(crate) fn validator_dots(ui: &mut Ui, running: usize, total: usize) -> Response {
+/// One dot per committee member from the supervisor's per-validator observations: matcha while
+/// its owned process runs, aka for an exit that ended the session, muted when none is observed.
+pub(crate) fn validator_dots(
+    ui: &mut Ui,
+    validators: &[ManagedValidatorStatus],
+    total: usize,
+) -> Response {
     let palette = palette(ui);
     let response = ui
         .horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 3.0;
             for index in 0..total {
-                dot(
-                    ui,
-                    if index < running {
-                        palette.matcha
-                    } else {
-                        palette.border
-                    },
-                    4.5,
-                );
+                let color = match observed_validator(validators, index) {
+                    Some(ManagedValidatorState::Running) => palette.matcha,
+                    Some(ManagedValidatorState::Exited { .. }) => palette.aka,
+                    None => palette.border,
+                };
+                dot(ui, color, 4.5);
             }
         })
         .response;
-    response.on_hover_text(format!("{running} of {total} validators running"))
+    response.on_hover_text(validator_summary(validators, total))
+}
+
+/// One line per committee member, numbered like the observer picker. An exit names its log,
+/// which is how the supervisor's failure text identifies the same validator.
+pub(crate) fn validator_summary(validators: &[ManagedValidatorStatus], total: usize) -> String {
+    (0..total)
+        .map(|index| {
+            let state = match observed_validator(validators, index) {
+                Some(ManagedValidatorState::Running) => "running".to_owned(),
+                Some(ManagedValidatorState::Exited {
+                    code: Some(code), ..
+                }) => format!("exited with code {code} · peer{index}.log"),
+                Some(ManagedValidatorState::Exited {
+                    signal: Some(signal),
+                    ..
+                }) => format!("exited by signal {signal} · peer{index}.log"),
+                Some(ManagedValidatorState::Exited { .. }) => format!("exited · peer{index}.log"),
+                None => "not running".to_owned(),
+            };
+            format!("Validator {}: {state}", index + 1)
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn observed_validator(
+    validators: &[ManagedValidatorStatus],
+    index: usize,
+) -> Option<ManagedValidatorState> {
+    validators
+        .iter()
+        .find(|validator| usize::from(validator.index) == index)
+        .map(|validator| validator.state)
 }
 
 /// Filled sakura button for the main action of a view.
@@ -295,7 +329,7 @@ pub(crate) fn copy_button(ui: &mut Ui, value: &str, what: &str) -> Response {
         stroke,
         egui::StrokeKind::Inside,
     );
-    response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, format!("Copy {what}")));
+    response.widget_info(|| WidgetInfo::labeled(Role::Button, true, format!("Copy {what}")));
     let response = response.on_hover_text(format!("Copy {what}"));
     if response.clicked() {
         copy_to_clipboard(ui.ctx(), value, what);
@@ -317,7 +351,7 @@ pub(crate) fn close_button(ui: &mut Ui, color: Color32) -> Response {
         .line_segment([inset.left_top(), inset.right_bottom()], stroke);
     ui.painter()
         .line_segment([inset.right_top(), inset.left_bottom()], stroke);
-    response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, "Dismiss"));
+    response.widget_info(|| WidgetInfo::labeled(Role::Button, true, "Dismiss"));
     response.on_hover_text("Dismiss")
 }
 
@@ -360,7 +394,7 @@ struct Toast {
 }
 
 fn toast_id() -> egui::Id {
-    egui::Id::new("mochi-toast")
+    egui::Id::unique("mochi-toast")
 }
 
 const TOAST_SECONDS: f64 = 1.8;
@@ -401,7 +435,7 @@ pub(crate) fn show_toasts(context: &egui::Context) {
     }
     let alpha = ((TOAST_SECONDS - age) / 0.3).clamp(0.0, 1.0) as f32;
     let palette = theme::palette(context);
-    egui::Area::new(egui::Id::new("mochi-toast-area"))
+    egui::Area::new(egui::Id::unique("mochi-toast-area"))
         .anchor(Align2::CENTER_BOTTOM, Vec2::new(0.0, -28.0))
         .order(egui::Order::Tooltip)
         .interactable(false)
@@ -550,8 +584,7 @@ pub(crate) fn nav_item(
     let palette = palette(ui);
     let (rect, response) =
         ui.allocate_exact_size(Vec2::new(ui.available_width(), 34.0), Sense::click());
-    response
-        .widget_info(|| WidgetInfo::selected(WidgetType::SelectableLabel, true, selected, label));
+    response.widget_info(|| WidgetInfo::selected(Role::Button, true, selected, label));
     let painter = ui.painter();
     if selected {
         painter.rect_filled(rect, CornerRadius::same(10), palette.sakura_soft);
@@ -642,6 +675,16 @@ pub(crate) fn time_ago(then_ms: u64, now_ms: u64) -> String {
     }
 }
 
+/// Compact running time for work in progress: `7 s`, then `1:05`.
+pub(crate) fn elapsed(duration: std::time::Duration) -> String {
+    let seconds = duration.as_secs();
+    if seconds < 60 {
+        format!("{seconds} s")
+    } else {
+        format!("{}:{:02}", seconds / 60, seconds % 60)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -649,7 +692,8 @@ mod tests {
     #[test]
     fn every_icon_glyph_exists_in_the_bundled_fonts() {
         let context = egui::Context::default();
-        let _ = context.run(egui::RawInput::default(), |_| {});
+        let _ =
+            super::super::tests::run_headless_frame(&context, egui::RawInput::default(), |_| {});
         for glyph in icon::ALL {
             assert!(
                 context.fonts_mut(|fonts| fonts.has_glyphs(&FontId::proportional(14.0), glyph)),
@@ -659,10 +703,75 @@ mod tests {
     }
 
     #[test]
+    fn validator_dots_follow_each_observed_validator() {
+        let exited = ManagedValidatorStatus {
+            index: 2,
+            state: ManagedValidatorState::Exited {
+                code: Some(101),
+                signal: None,
+            },
+        };
+        assert_eq!(
+            validator_summary(&[exited], 4),
+            "Validator 1: not running\nValidator 2: not running\n\
+             Validator 3: exited with code 101 · peer2.log\nValidator 4: not running"
+        );
+        let running = (0..4)
+            .map(|index| ManagedValidatorStatus {
+                index,
+                state: ManagedValidatorState::Running,
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            validator_summary(&running, 4)
+                .lines()
+                .all(|line| line.ends_with(": running"))
+        );
+        let signalled = ManagedValidatorStatus {
+            index: 0,
+            state: ManagedValidatorState::Exited {
+                code: None,
+                signal: Some(9),
+            },
+        };
+        assert_eq!(
+            validator_summary(&[signalled], 1),
+            "Validator 1: exited by signal 9 · peer0.log"
+        );
+        let context = egui::Context::default();
+        let output =
+            super::super::tests::run_headless_frame(&context, egui::RawInput::default(), |ui| {
+                validator_dots(ui, &[running[0], running[1], exited], 4);
+            });
+        let palette = theme::palette(&context);
+        let fills = output
+            .shapes
+            .iter()
+            .filter_map(|clipped| match &clipped.shape {
+                egui::Shape::Circle(circle) => Some(circle.fill),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            fills,
+            [palette.matcha, palette.matcha, palette.aka, palette.border]
+        );
+    }
+
+    #[test]
     fn identifiers_shorten_by_characters_not_bytes() {
         assert_eq!(short_middle("abcdef", 3), "abcdef");
         assert_eq!(short_middle("abcdefgh", 3), "abc…fgh");
         assert_eq!(short_middle("ｱｲｳｴｵｶｷｸ", 2), "ｱｲ…ｷｸ");
+    }
+
+    #[test]
+    fn elapsed_times_count_seconds_then_minutes() {
+        use std::time::Duration;
+        assert_eq!(elapsed(Duration::from_millis(999)), "0 s");
+        assert_eq!(elapsed(Duration::from_secs(59)), "59 s");
+        assert_eq!(elapsed(Duration::from_secs(65)), "1:05");
+        assert_eq!(elapsed(Duration::from_secs(3_600)), "60:00");
     }
 
     #[test]
@@ -678,22 +787,27 @@ mod tests {
     #[test]
     fn toasts_expire_and_segmented_controls_report_changes() {
         let context = egui::Context::default();
-        let _ = context.run(egui::RawInput::default(), |context| {
-            notify(context, "Copied account");
-        });
+        let _ = super::super::tests::run_headless_frame(
+            &context,
+            egui::RawInput::default(),
+            |context| {
+                notify(context.ctx(), "Copied account");
+            },
+        );
         assert_eq!(current_toast(&context).as_deref(), Some("Copied account"));
-        let _ = context.run(
+        let _ = super::super::tests::run_headless_frame(
+            &context,
             egui::RawInput {
                 time: Some(10.0),
                 ..Default::default()
             },
-            show_toasts,
+            |ui| show_toasts(ui.ctx()),
         );
         assert!(current_toast(&context).is_none());
 
         let mut value = 1;
         let mut changed = false;
-        let mut draw = |context: &egui::Context| {
+        let mut draw = |context: &mut egui::Ui| {
             egui::CentralPanel::default().show(context, |ui| {
                 changed |= segmented(ui, &mut value, &[(1, "One"), (2, "Two")]);
             });
@@ -708,7 +822,7 @@ mod tests {
         for dismissible in [false, true] {
             let context = egui::Context::default();
             let mut dismissed = false;
-            let mut draw = |context: &egui::Context| {
+            let mut draw = |context: &mut egui::Ui| {
                 egui::CentralPanel::default().show(context, |ui| {
                     dismissed |= banner(ui, Tone::Error, "exact original failure", dismissible);
                 });

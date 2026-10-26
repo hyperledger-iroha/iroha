@@ -129,12 +129,7 @@ fn acvp_verification_matches_all_five_official_disposition_classes() {
                 "{suite:?} tcId={id}: {result:?}"
             );
             if !passed(case) {
-                assert!(matches!(
-                    result,
-                    Err(MlDsaError::VerificationFailed(
-                        VerificationError::InvalidSignature
-                    ))
-                ));
+                assert!(matches!(result, Err(MlDsaError::VerificationFailed)));
             }
         }
         assert_eq!(
@@ -174,9 +169,7 @@ fn acvp_valid_signatures_reject_message_and_context_substitution() {
                 assert!(
                     matches!(
                         verify_mldsa(suite, &public, ctx, msg, &signature),
-                        Err(MlDsaError::VerificationFailed(
-                            VerificationError::InvalidSignature
-                        ))
+                        Err(MlDsaError::VerificationFailed)
                     ),
                     "{suite:?} tcId={id}: substitution must not verify"
                 );
@@ -265,9 +258,7 @@ fn acvp_valid_signatures_reject_noncanonical_hint_encodings() {
         for changed in [nonzero_padding, excessive_count, repeated_index] {
             assert!(matches!(
                 verify_mldsa(suite, &public, &context, &message, &changed),
-                Err(MlDsaError::VerificationFailed(
-                    VerificationError::InvalidSignature
-                ))
+                Err(MlDsaError::VerificationFailed)
             ));
         }
     }
@@ -282,10 +273,10 @@ fn acvp_mldsa65_vectors_reach_the_typed_iroha_and_ivm_verifier() {
     let mut empty = 0;
     let mut nonempty = 0;
     for case in cases(group) {
-        let public = mldsa65::PublicKey::from_bytes(&bytes(case, "pk")).unwrap();
-        let signature = mldsa65::DetachedSignature::from_bytes(&bytes(case, "signature")).unwrap();
+        let public = bytes(case, "pk");
+        let signature = bytes(case, "signature");
         let mut message = bytes(case, "message");
-        // This is the exported typed helper actually called by iroha_crypto
+        // This is the exported borrowed helper actually called by iroha_crypto
         // (and transitively IVM); its contract fixes the FIPS context to empty.
         let result = crate::verify_mldsa65_detached(&signature, &message, &public);
         if bytes(case, "context").is_empty() {
@@ -294,13 +285,13 @@ fn acvp_mldsa65_vectors_reach_the_typed_iroha_and_ivm_verifier() {
             message[0] ^= 1;
             assert!(matches!(
                 crate::verify_mldsa65_detached(&signature, &message, &public),
-                Err(VerificationError::InvalidSignature)
+                Err(_)
             ));
         } else {
             nonempty += 1;
             assert!(
-                matches!(result, Err(VerificationError::InvalidSignature)),
-                "typed empty-context API must not discard signed context"
+                matches!(result, Err(_)),
+                "borrowed empty-context API must not discard signed context"
             );
         }
     }

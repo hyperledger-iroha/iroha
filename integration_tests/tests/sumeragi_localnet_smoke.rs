@@ -47,7 +47,7 @@ use iroha_test_network::{
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR};
 use nonzero_ext::nonzero;
 use norito::json::{Map, Value};
-use rand::{RngCore, SeedableRng};
+use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 use reqwest::Client as HttpClient;
 use std::{
@@ -2327,7 +2327,7 @@ async fn run_realistic_30tps_localnet(
         };
         let network_dir = network.env_dir().to_path_buf();
         let http = HttpClient::builder()
-            .tls_built_in_root_certs(false)
+            .tls_certs_only(std::iter::empty())
             .build()
             .wrap_err("build local HTTP client for realistic throughput soak")?;
         let mut artifacts = ThroughputArtifacts::default();

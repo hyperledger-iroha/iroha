@@ -16,7 +16,7 @@ pub use fastpq_isi::GoldilocksDigest384V1;
 #[cfg(test)]
 use fastpq_isi::{GoldilocksDigest384LastFieldStreamErrorV1, GoldilocksDigest384LastFieldStreamV1};
 use fastpq_isi::{GoldilocksDigestDomainV1, hash_bytes_384_v1};
-use rand::TryRngCore;
+use rand::TryRng;
 use rayon::prelude::*;
 use sha2::Digest as _;
 use std::collections::BTreeMap;
@@ -431,7 +431,7 @@ pub fn goldilocks_batch_invert_v1(
     Ok(())
 }
 /// Draw one unbiased canonical Goldilocks field element.
-pub fn random_goldilocks_v1<R: TryRngCore>(
+pub fn random_goldilocks_v1<R: TryRng>(
     rng: &mut R,
 ) -> Result<GoldilocksFieldV1, TransparentStarkErrorV1> {
     for _ in 0..MAX_FIELD_REJECTION_ATTEMPTS_V1 {
@@ -445,7 +445,7 @@ pub fn random_goldilocks_v1<R: TryRngCore>(
     Err(TransparentStarkErrorV1::RandomnessUnavailable)
 }
 /// Draw one uniform quartic-extension element, including zero.
-pub fn random_goldilocks_fp4_v1<R: TryRngCore>(
+pub fn random_goldilocks_fp4_v1<R: TryRng>(
     rng: &mut R,
 ) -> Result<GoldilocksFp4V1, TransparentStarkErrorV1> {
     GoldilocksFp4V1::from_coefficients([
@@ -598,7 +598,7 @@ impl Drop for ReplayableTraceMaskV1 {
 /// Streaming provers keep these few coefficients until post-query openings are reconstructed,
 /// instead of retaining the entire LDE column. Callers should drop them as soon as proof
 /// construction completes; [`Drop`] overwrites the backing allocation before release.
-pub fn sample_trace_mask_v1<R: TryRngCore>(
+pub fn sample_trace_mask_v1<R: TryRng>(
     mask_degree: usize,
     rng: &mut R,
 ) -> Result<ReplayableTraceMaskV1, TransparentStarkErrorV1> {

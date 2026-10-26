@@ -590,7 +590,7 @@ fn bridge_finality_attestation_reader_preserves_only_bound_typed_tip_progress() 
         progress.applied_height = applied;
         progress.status_height = status;
         let response = mk_response(
-            StatusCode::CONFLICT,
+            StatusCode::SERVICE_UNAVAILABLE,
             norito::to_bytes(&client_tip_progress_envelope(progress.clone())).expect("wire"),
             Some(APPLICATION_NORITO),
         );
@@ -654,7 +654,7 @@ fn bridge_finality_attestation_reader_rejects_malformed_or_unbound_tip_progress(
     }
     for progress in cases {
         let response = mk_response(
-            StatusCode::CONFLICT,
+            StatusCode::SERVICE_UNAVAILABLE,
             norito::to_bytes(&client_tip_progress_envelope(progress)).expect("wire"),
             Some(APPLICATION_NORITO),
         );
@@ -704,18 +704,17 @@ fn bridge_finality_attestation_reader_rejects_untyped_or_noncanonical_progress_h
     mixed_details.details.as_mut().unwrap().reject_code = Some("invalid_finality_proof".into());
     let mut trailing = wire.clone();
     trailing.push(0);
-    let mut duplicate_type =
-        mk_response(StatusCode::CONFLICT, wire.clone(), Some(APPLICATION_NORITO));
+    let mut duplicate_type = mk_response(
+        StatusCode::SERVICE_UNAVAILABLE,
+        wire.clone(),
+        Some(APPLICATION_NORITO),
+    );
     duplicate_type.headers_mut().append(
         http::header::CONTENT_TYPE,
         http::HeaderValue::from_static(APPLICATION_NORITO),
     );
     let mut responses = vec![duplicate_type];
-    for status in [
-        StatusCode::NOT_FOUND,
-        StatusCode::SERVICE_UNAVAILABLE,
-        StatusCode::OK,
-    ] {
+    for status in [StatusCode::NOT_FOUND, StatusCode::CONFLICT, StatusCode::OK] {
         responses.push(mk_response(status, wire.clone(), Some(APPLICATION_NORITO)));
     }
     for body in [
@@ -734,7 +733,7 @@ fn bridge_finality_attestation_reader_rejects_untyped_or_noncanonical_progress_h
         .expect("obsolete envelope is negative data"),
     ] {
         responses.push(mk_response(
-            StatusCode::CONFLICT,
+            StatusCode::SERVICE_UNAVAILABLE,
             body,
             Some(APPLICATION_NORITO),
         ));
@@ -745,13 +744,13 @@ fn bridge_finality_attestation_reader_rejects_untyped_or_noncanonical_progress_h
         Some("application/x-norito; arbitrary=1"),
     ] {
         responses.push(mk_response(
-            StatusCode::CONFLICT,
+            StatusCode::SERVICE_UNAVAILABLE,
             wire.clone(),
             content_type,
         ));
     }
     responses.push(mk_response(
-        StatusCode::CONFLICT,
+        StatusCode::SERVICE_UNAVAILABLE,
         norito::json::to_json(&envelope).expect("json").into_bytes(),
         Some(APPLICATION_JSON),
     ));
@@ -766,7 +765,7 @@ fn bridge_finality_attestation_reader_rejects_untyped_or_noncanonical_progress_h
                 root_scope,
             )
         });
-        let error = result.expect_err("only canonical bound HTTP409 is progress");
+        let error = result.expect_err("only canonical bound HTTP503 is progress");
         assert!(
             error
                 .downcast_ref::<BridgeFinalityAttestationTipMismatch>()

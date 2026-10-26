@@ -40,13 +40,17 @@ fn terminal_reader_reuses_actual_retired_records_without_retaining_a_lock_or_ver
         .retain_stream_token_custody_configure_request(&configure, &configured)
         .unwrap();
     service
-        .retire_stream_token_custody_configure_unprepared(&configured, &configure)
+        .retire_stream_token_custody_configure_unprepared(
+            &parent,
+            OsStr::new("configure"),
+            &configure,
+        )
         .unwrap();
     service
         .retain_stream_token_custody_enroll_request(&enroll, &enrolled)
         .unwrap();
     service
-        .retire_stream_token_custody_enroll_unprepared(&enrolled, &enroll)
+        .retire_stream_token_custody_enroll_unprepared(&parent, OsStr::new("enroll"), &enroll)
         .unwrap();
     let before = [retained_bytes(&configured), retained_bytes(&enrolled)];
     let mut reader = CustodyPreparationReader::new(&service);
@@ -153,7 +157,7 @@ fn terminal_reader_reads_mutations_lazily_and_preserves_original_error_authority
         .retain_stream_token_custody_configure_request(&request, &path)
         .unwrap();
     service
-        .retire_stream_token_custody_configure_unprepared(&path, &request)
+        .retire_stream_token_custody_configure_unprepared(&parent, OsStr::new("original"), &request)
         .unwrap();
     let original = retained_bytes(&path);
     let directory = iroha_fs::PrivateDirectory::open(&path).unwrap();
@@ -266,7 +270,7 @@ fn terminal_reader_preserves_inherited_decoder_recipe_and_does_not_cache_partial
         assert_eq!(count, 1);
     }
     service
-        .retire_stream_token_custody_enroll_unprepared(&path, &request)
+        .retire_stream_token_custody_enroll_unprepared(&parent, OsStr::new("original"), &request)
         .unwrap();
     let expected =
         result(reader.inspect_enroll_in_parent(&parent, OsStr::new("original"), &request));
@@ -328,13 +332,17 @@ fn terminal_plan_timestamp_reuse_keeps_fresh_locks_and_expected_plan_comparisons
         .retain_stream_token_custody_configure_request(&configure, &configured)
         .unwrap();
     service
-        .retire_stream_token_custody_configure_unprepared(&configured, &configure)
+        .retire_stream_token_custody_configure_unprepared(
+            &parent,
+            OsStr::new("configure"),
+            &configure,
+        )
         .unwrap();
     service
         .retain_stream_token_custody_enroll_request(&enroll, &enrolled)
         .unwrap();
     service
-        .retire_stream_token_custody_enroll_unprepared(&enrolled, &enroll)
+        .retire_stream_token_custody_enroll_unprepared(&parent, OsStr::new("enroll"), &enroll)
         .unwrap();
     let before = [retained_bytes(&configured), retained_bytes(&enrolled)];
     let mut reader = CustodyPreparationReader::new(&service);
@@ -417,7 +425,11 @@ fn terminal_plan_timestamp_is_replaced_with_changed_request_bytes() {
             .retain_stream_token_custody_configure_request(expected, path)
             .unwrap();
         service
-            .retire_stream_token_custody_configure_unprepared(path, expected)
+            .retire_stream_token_custody_configure_unprepared(
+                &parent,
+                path.file_name().unwrap(),
+                expected,
+            )
             .unwrap();
     }
     let original = retained_bytes(&original_path);
@@ -599,7 +611,7 @@ fn terminal_plan_timestamp_preserves_inherited_and_late_decoder_work() {
         .retain_stream_token_custody_enroll_request(&request, &path)
         .unwrap();
     service
-        .retire_stream_token_custody_enroll_unprepared(&path, &request)
+        .retire_stream_token_custody_enroll_unprepared(&parent, OsStr::new("original"), &request)
         .unwrap();
     let original = retained_bytes(&path);
     let mut reader = CustodyPreparationReader::new(&service);
@@ -693,7 +705,7 @@ fn terminal_commitment_reuse_keeps_fresh_retirement_inventory_and_dispatch_check
         .retain_stream_token_custody_configure_request(&request, &path)
         .unwrap();
     service
-        .retire_stream_token_custody_configure_unprepared(&path, &request)
+        .retire_stream_token_custody_configure_unprepared(&parent, OsStr::new("original"), &request)
         .unwrap();
     let original = retained_bytes(&path);
     let directory = iroha_fs::PrivateDirectory::open(&path).unwrap();
@@ -795,7 +807,7 @@ fn terminal_commitment_preserves_inherited_and_late_decoder_recipe() {
         .retain_stream_token_custody_enroll_request(&request, &path)
         .unwrap();
     service
-        .retire_stream_token_custody_enroll_unprepared(&path, &request)
+        .retire_stream_token_custody_enroll_unprepared(&parent, OsStr::new("original"), &request)
         .unwrap();
     let original = retained_bytes(&path);
     for late in [false, true] {
@@ -875,7 +887,144 @@ fn terminal_commitment_preserves_inherited_and_late_decoder_recipe() {
 
 #[test]
 fn terminal_inventory_scope_reduces_actual_walks_and_preserves_late_decoder_work() {
-    use crate::operations::preparation::with_original_terminal_custody;
+    crate::operations::preparation::with_original_child_custody(|| {
+        use crate::operations::preparation::with_original_terminal_custody;
+        use iroha_fs::CustodyWorkV1;
+        fn measured<T>(read: impl FnOnce() -> T) -> (T, CustodyWorkV1) {
+            let before = CustodyWorkV1::current_thread();
+            let result = read();
+            (result, CustodyWorkV1::current_thread().since(before))
+        }
+        let (service, transport) = service();
+        let now = current_unix_ms().unwrap();
+        let configure = configure(&service.config, now);
+        let enroll = enroll(&service.config, now);
+        let root = tempfile::tempdir().unwrap();
+        let parent = iroha_fs::PrivateDirectory::open(root.path()).unwrap();
+        let configured = root.path().join("configure");
+        let enrolled = root.path().join("enroll");
+        service
+            .retain_stream_token_custody_configure_request(&configure, &configured)
+            .unwrap();
+        service
+            .retire_stream_token_custody_configure_unprepared(
+                &parent,
+                OsStr::new("configure"),
+                &configure,
+            )
+            .unwrap();
+        service
+            .retain_stream_token_custody_enroll_request(&enroll, &enrolled)
+            .unwrap();
+        service
+            .retire_stream_token_custody_enroll_unprepared(&parent, OsStr::new("enroll"), &enroll)
+            .unwrap();
+        let before = [retained_bytes(&configured), retained_bytes(&enrolled)];
+        for (name, is_enroll) in [("configure", false), ("enroll", true)] {
+            let inspect = |reader: &mut CustodyPreparationReader<'_>| {
+                if is_enroll {
+                    reader.inspect_enroll_in_parent(&parent, OsStr::new(name), &enroll)
+                } else {
+                    reader.inspect_configure_in_parent(&parent, OsStr::new(name), &configure)
+                }
+            };
+            let mut old_reader = CustodyPreparationReader::new(&service);
+            let mut new_reader = CustodyPreparationReader::new(&service);
+            for warm in [false, true] {
+                let old = measured(|| {
+                    with_original_terminal_custody(|| {
+                        count_request_commitments(|| {
+                            count_request_verifications(|| {
+                                count_plan_read_work(|| result(inspect(&mut old_reader)))
+                            })
+                        })
+                    })
+                });
+                let new = measured(|| {
+                    count_request_commitments(|| {
+                        count_request_verifications(|| {
+                            count_plan_read_work(|| result(inspect(&mut new_reader)))
+                        })
+                    })
+                });
+                assert_eq!(old.0, new.0, "purpose={name}, warm={warm}");
+                let (((outcome, plan), verified), commitments) = &new.0;
+                assert_eq!(outcome.as_ref().unwrap().0, NativePreparationPhase::Retired);
+                assert_eq!(*plan, (usize::from(!warm), 1));
+                assert_eq!(*verified, usize::from(!warm));
+                assert_eq!(*commitments, 1);
+                #[cfg(unix)]
+                {
+                    assert_eq!(old.1.ancestry_walks, new.1.ancestry_walks + 7);
+                    assert!(old.1.ancestry_opens > new.1.ancestry_opens);
+                }
+                #[cfg(windows)]
+                assert_eq!(old.1, new.1);
+            }
+            for late in [false, true] {
+                for allocation in [0, 1, 128 * 1024 * 1024] {
+                    let mut reader = CustodyPreparationReader::new(&service);
+                    if late {
+                        inspect(&mut reader).unwrap();
+                    }
+                    let limits = || {
+                        norito::DecodeLimits::new(
+                            usize::MAX,
+                            usize::MAX,
+                            usize::MAX,
+                            allocation,
+                            64,
+                        )
+                    };
+                    let ordinary = measured(|| {
+                        norito::core::with_decode_limits_measured(limits(), || {
+                            count_plan_read_work(|| {
+                                result(if is_enroll {
+                                    service
+                                        .inspect_stream_token_custody_enroll_preparation_in_parent(
+                                            &parent,
+                                            OsStr::new(name),
+                                            &enroll,
+                                        )
+                                } else {
+                                    service
+                                    .inspect_stream_token_custody_configure_preparation_in_parent(
+                                        &parent,
+                                        OsStr::new(name),
+                                        &configure,
+                                    )
+                                })
+                            })
+                        })
+                    });
+                    let observed = measured(|| {
+                        norito::core::with_decode_limits_measured(limits(), || {
+                            count_plan_read_work(|| result(inspect(&mut reader)))
+                        })
+                    });
+                    assert_eq!(
+                        ordinary, observed,
+                        "purpose={name}, late={late}, allocation={allocation}"
+                    );
+                    assert_eq!(observed.0.0.0.is_ok(), allocation > 1);
+                    let (restored, verified) =
+                        count_request_verifications(|| result(inspect(&mut reader)));
+                    assert!(restored.is_ok());
+                    assert_eq!(verified, 1, "inherited admission clears retained metadata");
+                }
+            }
+        }
+        assert_eq!(
+            [retained_bytes(&configured), retained_bytes(&enrolled)],
+            before
+        );
+        assert_eq!(transport.requests.load(Ordering::SeqCst), 0);
+    });
+}
+
+#[test]
+fn terminal_optional_child_scope_reduces_native_open_work_and_keeps_fresh_expectations() {
+    use crate::operations::preparation::with_original_child_custody;
     use iroha_fs::CustodyWorkV1;
     fn measured<T>(read: impl FnOnce() -> T) -> (T, CustodyWorkV1) {
         let before = CustodyWorkV1::current_thread();
@@ -894,13 +1043,17 @@ fn terminal_inventory_scope_reduces_actual_walks_and_preserves_late_decoder_work
         .retain_stream_token_custody_configure_request(&configure, &configured)
         .unwrap();
     service
-        .retire_stream_token_custody_configure_unprepared(&configured, &configure)
+        .retire_stream_token_custody_configure_unprepared(
+            &parent,
+            OsStr::new("configure"),
+            &configure,
+        )
         .unwrap();
     service
         .retain_stream_token_custody_enroll_request(&enroll, &enrolled)
         .unwrap();
     service
-        .retire_stream_token_custody_enroll_unprepared(&enrolled, &enroll)
+        .retire_stream_token_custody_enroll_unprepared(&parent, OsStr::new("enroll"), &enroll)
         .unwrap();
     let before = [retained_bytes(&configured), retained_bytes(&enrolled)];
     for (name, is_enroll) in [("configure", false), ("enroll", true)] {
@@ -915,7 +1068,7 @@ fn terminal_inventory_scope_reduces_actual_walks_and_preserves_late_decoder_work
         let mut new_reader = CustodyPreparationReader::new(&service);
         for warm in [false, true] {
             let old = measured(|| {
-                with_original_terminal_custody(|| {
+                with_original_child_custody(|| {
                     count_request_commitments(|| {
                         count_request_verifications(|| {
                             count_plan_read_work(|| result(inspect(&mut old_reader)))
@@ -938,57 +1091,57 @@ fn terminal_inventory_scope_reduces_actual_walks_and_preserves_late_decoder_work
             assert_eq!(*commitments, 1);
             #[cfg(unix)]
             {
-                assert_eq!(old.1.ancestry_walks, new.1.ancestry_walks + 7);
-                assert!(old.1.ancestry_opens > new.1.ancestry_opens);
+                assert_eq!((old.1.ancestry_walks, new.1.ancestry_walks), (11, 10));
+                assert!(old.1.ancestry_opens > new.1.ancestry_opens * 2);
             }
             #[cfg(windows)]
             assert_eq!(old.1, new.1);
         }
-        for late in [false, true] {
-            for allocation in [0, 1, 128 * 1024 * 1024] {
-                let mut reader = CustodyPreparationReader::new(&service);
-                if late {
-                    inspect(&mut reader).unwrap();
-                }
-                let limits = || {
-                    norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, allocation, 64)
-                };
-                let ordinary = measured(|| {
-                    norito::core::with_decode_limits_measured(limits(), || {
-                        count_plan_read_work(|| {
-                            result(if is_enroll {
-                                service.inspect_stream_token_custody_enroll_preparation_in_parent(
-                                    &parent,
-                                    OsStr::new(name),
-                                    &enroll,
-                                )
-                            } else {
-                                service
-                                    .inspect_stream_token_custody_configure_preparation_in_parent(
-                                        &parent,
-                                        OsStr::new(name),
-                                        &configure,
-                                    )
-                            })
+        // A late inherited decoder uses the literal original admission and physical recipe,
+        // even after this reader has succeeded under the new optional-child scope.
+        for allocation in [0, 1, 128 * 1024 * 1024] {
+            let limits =
+                || norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, allocation, 64);
+            let original = measured(|| {
+                norito::core::with_decode_limits_measured(limits(), || {
+                    count_plan_read_work(|| {
+                        result(if is_enroll {
+                            service.inspect_stream_token_custody_enroll_preparation_in_parent(
+                                &parent,
+                                OsStr::new(name),
+                                &enroll,
+                            )
+                        } else {
+                            service.inspect_stream_token_custody_configure_preparation_in_parent(
+                                &parent,
+                                OsStr::new(name),
+                                &configure,
+                            )
                         })
                     })
-                });
-                let observed = measured(|| {
-                    norito::core::with_decode_limits_measured(limits(), || {
-                        count_plan_read_work(|| result(inspect(&mut reader)))
-                    })
-                });
-                assert_eq!(
-                    ordinary, observed,
-                    "purpose={name}, late={late}, allocation={allocation}"
-                );
-                assert_eq!(observed.0.0.0.is_ok(), allocation > 1);
-                let (restored, verified) =
-                    count_request_verifications(|| result(inspect(&mut reader)));
-                assert!(restored.is_ok());
-                assert_eq!(verified, 1, "inherited admission clears retained metadata");
-            }
+                })
+            });
+            let observed = measured(|| {
+                norito::core::with_decode_limits_measured(limits(), || {
+                    count_plan_read_work(|| result(inspect(&mut new_reader)))
+                })
+            });
+            assert_eq!(
+                original, observed,
+                "purpose={name}, allocation={allocation}"
+            );
+            assert_eq!(observed.0.0.0.is_ok(), allocation > 1);
+            let (retry, verified) =
+                count_request_verifications(|| result(inspect(&mut new_reader)));
+            assert!(retry.is_ok());
+            assert_eq!(verified, 1);
         }
+        let held = Journal::open(&root.path().join(name)).unwrap();
+        assert!(inspect(&mut new_reader).is_err());
+        drop(held);
+        let (retry, verified) = count_request_verifications(|| result(inspect(&mut new_reader)));
+        assert!(retry.is_ok());
+        assert_eq!(verified, 1);
     }
     assert_eq!(
         [retained_bytes(&configured), retained_bytes(&enrolled)],

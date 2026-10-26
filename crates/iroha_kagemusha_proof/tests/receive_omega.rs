@@ -24,7 +24,7 @@ use iroha_kagemusha_proof::{
 };
 use iroha_pasta::{Ep, Eq, Fp, msm::MemoryBudget, poseidon::hash_with_domain};
 use iroha_plonk::{DescriptorBinding, VerifyingKey, verifier::verify_full};
-use iroha_plonk_recursion::{FoldConfig, create_fold, obligation::ledger::Variant, verify_fold};
+use iroha_plonk_recursion::{FoldConfig, create_fold, obligation::ledger::Variant};
 use receive_chain::compact_catalog::{self, Terminal};
 
 /// Exact resulting receiver sources retained for subsequent `ArchiveStatus` tests.
@@ -119,9 +119,9 @@ pub(crate) fn wrap_receive(
             assert_eq!(slots[3], trivial.as_input());
         }
     }
-    // Dropping the fourth obligation changes the actual fold statement even if
-    // another slot happens to contain equal bytes. The canonical native producer
-    // independently derives and decides all four slots before proving.
+    // Retain the same successfully parsed source owner for an equation mutation.
+    // The four-slot context, D/L/R and tape remain unchanged; only terminal c/G
+    // are replaced to satisfy the equation with the fourth term omitted.
     let plan = iroha_plonk_recursion::terminal::TerminalPlan::new(
         source.binding.encoded(),
         &[source.key.to_bytes().to_vec()],
@@ -136,18 +136,37 @@ pub(crate) fn wrap_receive(
             &FoldConfig::default(),
         )
         .unwrap();
-    let (fold, _) = frame
+    let (fold, expected) = frame
         .create(common::public_fixture_tape(917), &FoldConfig::default())
         .unwrap();
-    assert!(
-        verify_fold(
-            &params,
-            &slots[..3],
-            &fold,
-            iroha_plonk_recursion::FoldPurpose::WrapperVesta,
-            &FoldConfig::default()
+    expected.decide(&params, MemoryBudget::DEFAULT).unwrap();
+    let retained_frame = plan
+        .read(
+            0,
+            std::slice::from_ref(&terminal.instances),
+            &terminal.proof,
+            &FoldConfig::default(),
         )
-        .is_err()
+        .unwrap();
+    assert_eq!(
+        retained_frame
+            .verify(&fold, &FoldConfig::default())
+            .unwrap(),
+        expected
+    );
+    let omitted = omit_terminal_fourth_term(&params, &slots, &fold, &expected);
+    assert!(matches!(
+        retained_frame.verify(&omitted, &FoldConfig::default()),
+        Err(iroha_plonk_recursion::terminal::Error::Fold(
+            iroha_plonk_recursion::Error::FoldEquation
+        ))
+    ));
+    assert_eq!(
+        retained_frame
+            .verify(&fold, &FoldConfig::default())
+            .unwrap(),
+        expected,
+        "failed omission must preserve exact original replay"
     );
     for index in [42, 46, 62, 63, 64, 65] {
         let mut changed = terminal.instances.clone();
@@ -217,7 +236,7 @@ pub(crate) fn wrap_receive(
         source.state.lineage[16]
     );
     eprintln!(
-        "RECEIVE_OMEGA_CLOSURE corrected={corrected} accepted_credit={} incoming_mode={:?} actual_proof=4032 transport=5120 four_inputs_decide=true fourth_slot_drop_rejected=true immutable_native_catalog=true exact_terminal_VK=true credit_membership=true full_catalog=false release_qualified=false",
+        "RECEIVE_OMEGA_CLOSURE corrected={corrected} accepted_credit={} incoming_mode={:?} actual_proof=4032 transport=5120 four_inputs_decide=true fourth_slot_equation_omission_rejected=true immutable_native_catalog=true exact_terminal_VK=true credit_membership=true full_catalog=false release_qualified=false",
         source.accepted_credit, terminal.incoming_mode
     );
     CompactReceiveOmega {
@@ -231,6 +250,134 @@ pub(crate) fn wrap_receive(
         credit_slot,
         credit_siblings,
     }
+}
+
+// Test-only transcript observations; none grants a frame, catalog or proof verdict.
+#[derive(Debug)]
+struct TerminalFoldTrace {
+    prelude: [Fp; 3],
+    rounds: [Fp; iroha_plonk_recursion::K],
+    round_terms: Eq,
+    gamma: Fp,
+    coefficient: Fp,
+    generator: iroha_pasta::EqAffine,
+}
+
+fn terminal_fold_trace(
+    params: &iroha_plonk::pcs::ipa::PinnedParams<Eq>,
+    bytes: &[u8],
+) -> TerminalFoldTrace {
+    use iroha_plonk::transcript::{
+        BasePoseidonHash, Transcript, TranscriptRead, TranscriptReader, pipa_r::nonzero_challenge,
+    };
+    use iroha_plonk_recursion::{FOLD_BODY_BYTES, FoldPurpose, FoldTape, K};
+    let tape = FoldTape::<Eq>::from_private_bytes(&bytes[FOLD_BODY_BYTES..]).unwrap();
+    let mut reader = TranscriptReader::<Eq, _>::new(
+        BasePoseidonHash::with_domain(*b"pipa-as1"),
+        &bytes[..FOLD_BODY_BYTES],
+    );
+    // Always four, including for the malformed equation below. No generic
+    // WrapperVesta API or caller-selected raw terminal prefix is introduced.
+    for word in iroha_plonk_recursion::accumulation::context(params, FoldPurpose::WrapperVesta, 4) {
+        reader.common_base(&word).unwrap();
+    }
+    let _commitment = reader.read_point().unwrap();
+    let prelude = core::array::from_fn(|_| reader.squeeze_challenge());
+    let mut rounds = [Fp::ZERO; K];
+    let mut round_terms = Eq::default();
+    let mut gamma = Fp::ZERO;
+    for (round, challenge) in rounds.iter_mut().enumerate() {
+        let left = reader.read_point().unwrap();
+        let right = reader.read_point().unwrap();
+        *challenge = nonzero_challenge(reader.squeeze_challenge());
+        let inverse = challenge.invert().unwrap();
+        round_terms += Eq::from(left) * inverse + Eq::from(right) * *challenge;
+        gamma += tape.masks()[2 * round] * inverse + tape.masks()[2 * round + 1] * *challenge;
+    }
+    let coefficient = reader.read_scalar().unwrap();
+    let generator = reader.read_unabsorbed_generator().unwrap();
+    reader.finish().unwrap();
+    TerminalFoldTrace {
+        prelude,
+        rounds,
+        round_terms,
+        gamma,
+        coefficient,
+        generator,
+    }
+}
+
+fn omit_terminal_fourth_term(
+    params: &iroha_plonk::pcs::ipa::PinnedParams<Eq>,
+    slots: &[iroha_plonk_recursion::FoldInput<Eq>; 4],
+    original: &iroha_plonk_recursion::FoldWitness<Eq>,
+    expected: &iroha_plonk_recursion::AccumulatorT<Eq>,
+) -> iroha_plonk_recursion::FoldWitness<Eq> {
+    use iroha_plonk::{pcs::ipa::fold_evaluation, transcript::encode_point};
+    use iroha_plonk_recursion::{FOLD_BODY_BYTES, FoldWitness, K, PrivateWitnessBytes};
+    let retained = original.to_private_bytes();
+    let trace = terminal_fold_trace(params, &retained);
+    assert_eq!(&trace.rounds, expected.challenges());
+    assert_eq!(&trace.generator, expected.g());
+    let [alpha, z, zeta] = trace.prelude;
+    let g0 = Eq::from(params.params().g()[0]);
+    let mut three = Eq::default();
+    // Independent Horner evaluation of exactly the first three source claims.
+    for slot in slots[..3].iter().rev() {
+        three = three * alpha + Eq::from(*slot.g()) - g0 * fold_evaluation(z, slot.challenges());
+    }
+    let fourth = (Eq::from(*slots[3].g()) - g0 * fold_evaluation(z, slots[3].challenges()))
+        * alpha.pow_vartime([3]);
+    let fixed = trace.round_terms - Eq::from(params.params().w()) * trace.gamma;
+    let auxiliary = Eq::from(params.params().u()) * (fold_evaluation(z, &trace.rounds) * zeta);
+    assert_eq!(
+        three + fourth + fixed
+            - Eq::from(trace.generator) * trace.coefficient
+            - auxiliary * trace.coefficient,
+        Eq::default(),
+        "independent reconstruction of the original full equation"
+    );
+    assert_ne!(
+        fourth,
+        Eq::default(),
+        "the fixture must distinguish the omitted term"
+    );
+    let replacement = iroha_pasta::EqAffine::from(three + fixed - auxiliary);
+    // This zero is only the deliberately incomplete equation, never a decide
+    // verdict or an accepted terminal proof. Identity G uses its canonical codec.
+    assert_eq!(
+        three + fixed - Eq::from(replacement) - auxiliary,
+        Eq::default()
+    );
+    let complete_residual = three + fourth + fixed - Eq::from(replacement) - auxiliary;
+    assert_eq!(complete_residual, fourth);
+    assert_ne!(
+        complete_residual,
+        Eq::default(),
+        "the complete four-input equation must reject this same tape"
+    );
+    let coefficient_offset = 32 * (2 * K + 1);
+    let changed = PrivateWitnessBytes::try_write::<std::io::Error>(retained.len(), |writer| {
+        writer.write_all(&retained[..coefficient_offset])?;
+        writer.write_all(Fp::ONE.to_repr().as_ref())?;
+        writer.write_all(&encode_point::<Eq>(&replacement))?;
+        writer.write_all(&retained[FOLD_BODY_BYTES..])
+    })
+    .unwrap();
+    assert_eq!(
+        &changed[..coefficient_offset],
+        &retained[..coefficient_offset]
+    );
+    assert_eq!(&changed[FOLD_BODY_BYTES..], &retained[FOLD_BODY_BYTES..]);
+    let forged = terminal_fold_trace(params, &changed);
+    assert_eq!(forged.prelude, trace.prelude);
+    assert_eq!(forged.rounds, trace.rounds);
+    assert_eq!(forged.round_terms, trace.round_terms);
+    assert_eq!(forged.gamma, trace.gamma);
+    assert_eq!(forged.coefficient, Fp::ONE);
+    assert_eq!(forged.generator, replacement);
+    assert_eq!(&*original.to_private_bytes(), &*retained);
+    FoldWitness::from_private_bytes(&changed).unwrap()
 }
 
 /// No funded source or Load trust is needed to prove the malformed-input burn.

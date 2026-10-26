@@ -10,10 +10,8 @@ use iroha_data_model::{
         PrivacyStatementSchemaDigestV1, PrivacyVerifierDigestV1,
     },
 };
-use sha3::{
-    Shake256,
-    digest::{ExtendableOutput, Update, XofReader},
-};
+use sha3::digest::{ExtendableOutput, Update, XofReader};
+use shake::Shake256;
 use thiserror::Error;
 /// Domain for the algebraic credential-scope term.
 pub const BOOTLE_LANTERN_CREDENTIAL_SCOPE_DOMAIN_V1: &[u8] =

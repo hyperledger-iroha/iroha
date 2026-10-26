@@ -22,7 +22,7 @@
 
 use crate::secret::SecretPolynomial;
 use ff::Field;
-use group::prime::PrimeCurveAffine;
+use group::CurveAffine;
 use iroha_pasta::CancellationToken;
 use iroha_pasta::{
     PastaCurve,
@@ -30,7 +30,7 @@ use iroha_pasta::{
     msm::{MemoryBudget, SharedMemoryBudget, msm_secret_cancellable},
     params::ParamsIpa,
 };
-use rand_core_06::{CryptoRng, RngCore};
+use rand_core::{CryptoRng, Rng};
 
 use super::{
     IpaError,
@@ -64,7 +64,7 @@ pub fn create_proof<C, T, R>(
 where
     C: PastaCurve,
     T: TranscriptWrite<C> + ?Sized,
-    R: RngCore + CryptoRng,
+    R: Rng + CryptoRng,
 {
     Ok(*create_proof_with_claim(params, rng, transcript, poly, blind, x, budget)?.g())
 }
@@ -87,7 +87,7 @@ pub fn create_proof_with_claim<C, T, R>(
 where
     C: PastaCurve,
     T: TranscriptWrite<C> + ?Sized,
-    R: RngCore + CryptoRng,
+    R: Rng + CryptoRng,
 {
     create_proof_with_claim_cancellable(params, rng, transcript, poly, blind, x, budget, None)
 }
@@ -113,7 +113,7 @@ pub fn create_proof_with_claim_cancellable<C, T, R>(
 where
     C: PastaCurve,
     T: TranscriptWrite<C> + ?Sized,
-    R: RngCore + CryptoRng,
+    R: Rng + CryptoRng,
 {
     CancellationToken::checkpoint(cancellation)?;
     let n = params.n();
@@ -270,7 +270,7 @@ mod tests {
     use group::Curve;
     use iroha_pasta::{Ep, Fq};
     use rand_chacha::ChaCha20Rng;
-    use rand_core_06::SeedableRng;
+    use rand_core::SeedableRng;
 
     use super::*;
     use crate::{

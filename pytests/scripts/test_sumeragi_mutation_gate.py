@@ -1996,7 +1996,7 @@ def require_pinned_sumeragi_toolchain(job):
     assert channel is not None
     action = (
         "      - uses: actions-rust-lang/setup-rust-toolchain@"
-        "166cdcfd11aee3cb47222f9ddb555ce30ddb9659\n"
+        "ecabd13d1c56bd1345c230e542e9144811ad706f\n"
         "        with:\n"
         '          cache: "false"\n'
         f"          toolchain: {channel.group(1)}\n"
@@ -2035,7 +2035,7 @@ def test_sumeragi_ci_rejects_missing_stale_or_late_compiler_selection(change):
             r"toolchain: [^\n]+", "toolchain: retired-compiler", action.group(0),
         ))
     elif change == "unreviewed":
-        job = job.replace("166cdcfd11aee3cb47222f9ddb555ce30ddb9659", "v1")
+        job = job.replace("ecabd13d1c56bd1345c230e542e9144811ad706f", "v2")
     else:
         job = job.replace(action.group(0), "") + action.group(0)
     with pytest.raises(AssertionError):
@@ -4222,11 +4222,21 @@ def test_funded_offender_graph_moves_original_backing_into_admission_without_wor
 
 def test_funded_material_key_uses_canonical_validation_before_original_backing():
     path = ROOT / "crates/iroha_crypto/src/prepared_decode.rs"
-    body = path.read_text().split("pub fn try_from_material(", 1)[1].split("/// Decode once", 1)[0]
+    source = path.read_text()
+    material = named_rust_function(source, "try_from_material")
+    decode = named_rust_function(source, "try_from_material_for_decode")
+    assert "Self::from_material_with(algorithm, payload, budget, false)" in material
+    assert "Self::from_material_with(algorithm, payload, budget, true)" in decode
+    body = named_rust_function(source, "from_material_with")
+    assert body.index("public_key_decode::validate(algorithm, payload)?") < body.index("reserve_compact_decode_backing")
+    assert "let exact_bytes = if decode" in body
+    ordinary = body.split("} else {", 1)[1].split("let mut backing", 1)[0]
+    assert "payload.len().checked_add(1)" in ordinary
+    assert "reserve_compact_decode_backing" not in ordinary
     assert body.index("public_key_decode::validate(algorithm, payload)?") < body.index("ChargedBuffer::new(exact_bytes, budget)")
     assert body.index("ChargedBuffer::new(exact_bytes, budget)") < body.index("backing.push_reserved")
     assert "PublicKey::bind_compact_allocation(backing)" in body
-    assert "reserve_compact_decode_backing" not in body and "from_bytes(" not in body
+    assert "from_bytes(" not in body
 
 
 def test_world_evidence_shared_body_mutation_has_exact_original_cow_control():
@@ -4551,14 +4561,27 @@ def test_checkpoint_status_preserves_g1_h2_and_internal_full_prefix_boundaries()
     assert "read_pipeline_execution_carrier_within(app, height, work, bytes)" in wrapper
     http = named_rust_function(source, "read_pipeline_execution_carrier_within")
     assert "HistoryProducerOwner::authentication_read(app)?" in http
-    assert "owner.scope(||" in http
-    assert "if height == NonZeroUsize::MIN" in http
-    assert "read_finalized_execution_carrier_with_read_budget(" in http
-    assert "read_executed_carrier_from_checkpoints(" in http
+    assert "read_execution_carrier_under_owner(app, owner, height, work, bytes)" in http
     assert "or_else" not in http and "unwrap_or" not in http
-    ordinary = source.split("fn authenticate_canonical_transaction_outcome(", 1)[1].split("// HTTP status", 1)[0]
-    assert "visit_finalized_network_transactions(" in ordinary
-    assert "checkpoint" not in ordinary.split("// HTTP", 1)[0]
+    background = named_rust_function(source, "read_background_execution_carrier")
+    assert "HistoryProducerOwner::background_read(app)?" in background
+    assert "read_execution_carrier_under_owner(app, owner, height, work, bytes)" in background
+    shared = named_rust_function(source, "read_execution_carrier_under_owner")
+    assert "owner.scope(||" in shared
+    assert "owner.canonical_history_budget()" in shared
+    assert "if height == NonZeroUsize::MIN" in shared
+    assert "read_finalized_execution_carrier_with_read_budget(height, work, bytes, &budget)" in shared
+    assert "read_executed_carrier_from_checkpoints(height, work, bytes, &budget)" in shared
+    assert "AuthenticatedPipelineCarrier { carrier, owner }" in shared
+    assert "or_else" not in shared and "unwrap_or" not in shared
+    core = (ROOT / "crates/iroha_core/src/smartcontracts/isi/tx.rs").read_text()
+    ordinary = named_rust_function(core, "visit_finalized_network_transactions")
+    assert "state.read_finalized_execution_carrier(height, max_work, max_bytes)?" in ordinary
+    assert ".visit_network_transactions(expected_hash, &mut visitor)" in ordinary
+    full_prefix = named_rust_function(core, "read_finalized_execution_carrier")
+    assert "admit_finalized_execution_read(kura, hashes, height, expected_hash, max_work, max_bytes)?" in full_prefix
+    assert "certified_chain::read_authenticated_execution(" in full_prefix
+    assert "checkpoint" not in ordinary and "checkpoint" not in full_prefix
     status = named_rust_function(source, "pipeline_status_terminal_or_state_entry")
     assert "reconcile_pending_pipeline_transaction(app, hash)?" in status
     assert "pipeline_status_terminal_or_state_entry_from_outcome(app, hash, outcome)" in status
@@ -4571,9 +4594,12 @@ def test_checkpoint_status_preserves_g1_h2_and_internal_full_prefix_boundaries()
     assert production.index("canonical_transaction_read_with_authenticator") < production.index("complete_pending_from_exact_outcome")
     exact = named_rust_function(source, "read_pipeline_transaction_outcome")
     assert "HistoryProducerOwner::authentication_read(app)?" in exact
-    assert "owner.scope(||" in exact and "owner.canonical_history_budget()" in exact
-    assert "read_committed_network_outcome(" in exact
-    assert "canonical_transaction_outcome_from_committed(hash, anchor, &committed)" in exact
+    assert "read_transaction_outcome_under_owner(app, &owner, hash, anchor)?" in exact
+    assert "Ok((outcome, owner))" in exact
+    exact_read = named_rust_function(source, "read_transaction_outcome_under_owner")
+    assert "owner.scope(||" in exact_read and "owner.canonical_history_budget()" in exact_read
+    assert "read_committed_network_outcome(" in exact_read
+    assert "canonical_transaction_outcome_from_committed(hash, anchor, &committed)" in exact_read
     checked = source.split("fn pipeline_status_terminal_or_state_entry_with_carrier_reader(", 1)[1].split("\nfn ", 1)[0]
     assert "reconcile_pending_pipeline_transaction_with_carrier_reader(app, hash, read)?" in checked
     reconciled = source.split("fn reconcile_pending_pipeline_transaction_with_carrier_reader(", 1)[1].split("\nfn ", 1)[0]
@@ -5906,35 +5932,35 @@ def test_account_resource_mutation_gate_requires_declared_native_results(monkeyp
 
 
 @pytest.mark.parametrize("mid,owner,count,causal", [
-    ("DM23", "fn decode_i105_literal_with_embedded_discriminant(", 3,
+    ("DM23", "decode_i105_literal_with_embedded_discriminant", 3,
      "a numeric I105 resource refusal must terminate before later candidate allocations"),
-    ("DM24", "fn decode_i105_literal(", 1,
+    ("DM24", "decode_i105_literal", 1,
      "expected I105 prefix diagnostics must not allocate another payload after resource refusal"),
 ])
 def test_i105_terminal_resource_mutations_keep_distinct_owning_phases_and_genuine_controls(mid, owner, count, causal):
     """Each omission restores only its original post-refusal candidate or diagnostic work."""
-    path = ROOT / "crates/iroha_data_model/src/account/address.rs"
+    path = ROOT / "crates/iroha_data_model/src/account/address/decode.rs"
     source = path.read_text()
     rule = gate.index_mutations(gate.MODEL_MUTATIONS)[mid]
     assert rule.tests == (MODEL_NAMES[mid],)
     assert not rule.scenarios
     assert gate.has_switch(mid, model=True)
     assert source.count(f'sumeragi_model_mutation = "{mid}"') == count
-    kernel = source.split(owner, 1)[1].split("fn numeric_i105_sentinel_candidate(", 1)[0]
-    if mid == "DM24":
-        kernel = kernel.split("fn decode_i105_literal_with_embedded_discriminant(", 1)[0]
+    kernel = named_rust_function(source, owner)
     normalized = re.sub(r"\s+", "", kernel)
     variable = "err" if mid == "DM23" else "error"
-    assert normalized.count(f'if{variable}.is_decode_resource_limit()&&!cfg!(all(test,sumeragi_model_mutation="{mid}"))') == count
+    assert normalized.count(f'ifD::is_resource(&{variable})&&!cfg!(all(test,sumeragi_model_mutation="{mid}"))') == count
     other = "DM24" if mid == "DM23" else "DM23"
     assert f'sumeragi_model_mutation = "{other}"' not in kernel
-    control = source.split("fn " + MODEL_NAMES[mid].rsplit("::", 1)[1] + "()", 1)[1].split("    #[test]", 1)[0]
+    controls = (ROOT / "crates/iroha_data_model/src/account/address.rs").read_text()
+    assert f'sumeragi_model_mutation = "{mid}"' not in controls
+    control = named_rust_function(controls, MODEL_NAMES[mid].rsplit("::", 1)[1])
     assert causal in control
     assert f'sumeragi_model_mutation = "{mid}"' not in control
     for text in ("observed_i105_terminal_refusal", "actual_requests", "expected_requests", "original.with(",
                  "before_retry", "consumed_allocated_bytes()", "source_pointer", "pool.reserved_bytes()"):
         assert re.sub(r"\s+", "", text) in re.sub(r"\s+", "", control)
-    shared = source.split("fn observed_i105_terminal_refusal(", 1)[1].split("fn first_i105_controller_charge(", 1)[0]
+    shared = named_rust_function(controls, "observed_i105_terminal_refusal")
     for text in ("amx_prepare_streaming_allocations::measured", "classify_decode_attempt", "DecodeAttemptErrorKind::EnclosingLimit", "assert_eq!(returned, observed.unwrap())"):
         assert re.sub(r"\s+", "", text) in re.sub(r"\s+", "", shared)
 
@@ -5968,14 +5994,28 @@ def test_account_cause_mutation_owns_all_actual_parser_address_projections():
     assert 'error.is_decode_resource_limit()' in helper
     assert 'Self::Address(AccountAddressError::DecodeResourceLimit)' in helper
     assert 'Self::Address(error)' in helper
-    parser = source.split('pub fn parse_encoded(input: &str)', 1)[1].split('impl fmt::Display for AccountId', 1)[0]
+    parser = named_rust_function(source, "parse_encoded")
     assert 'AccountIdParseError::Address(' not in parser
     assert '.map_err(AccountIdParseError::Address)' not in parser
-    assert parser.count('AccountIdParseError::from_address_error') == 4
+    assert parser.count('AccountIdParseError::from_address_error') == 1
+    assert 'address::parse_account_literal(input).map_err(|error| match error' in parser
+    assert 'error => AccountIdParseError::from_address_error(error)' in parser
+    assert 'Ok(Self { controller })' in parser
+    address = (ROOT / "crates/iroha_data_model/src/account/address.rs").read_text()
+    entry = named_rust_function(address, "parse_account_literal")
+    assert 'decode::account_literal(input, &decode::Ordinary)?.to_account_controller()' in entry
+    decoder = (ROOT / "crates/iroha_data_model/src/account/address/decode.rs").read_text()
+    literal = named_rust_function(decoder, "account_literal")
+    assert 'encoded_literal(input, Some(chain_discriminant()), destination)' in literal
+    encoded = named_rust_function(decoder, "encoded_literal")
+    assert 'canonical(&bytes, destination)?' in encoded
+    assert 'ensure_literal(input, found, &bytes, destination)?' in encoded
     assert 'AccountIdParseError::InvalidFormat' in parser
     assert 'AccountAddressError::ChecksumMismatch' not in parser
-    assert '.to_account_controller()' in parser
-    assert '.canonical_i105()' in parser
+    canonicalize = named_rust_function(source, "canonicalize")
+    assert 'Self::parse_encoded(input)?' in canonicalize
+    assert '.canonical_i105()' in canonicalize
+    assert '.map_err(AccountIdParseError::from_address_error)' in canonicalize
     rules = gate.index_mutations(gate.MODEL_MUTATIONS)
     assert rules['DM22'].tests == (MODEL_NAMES['DM22'],
         'account::json_tests::account_id_json_roundtrips_large_multisig_as_canonical_i105',

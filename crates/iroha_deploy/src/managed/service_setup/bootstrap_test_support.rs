@@ -3,12 +3,10 @@ use super::*;
 use crate::managed::native_operation::Fees;
 use crate::managed::native_operation::attempts::metadata;
 use crate::managed::native_operation::{
-    test_support::native_fixture::{NativeFixture, NativeReadHttp},
-    verify_carrier,
+    test_support::native_fixture::NativeFixture, verify_carrier,
 };
 use crate::verify::finality::FinalityVerifier;
 use iroha_fs::PublishMode;
-use std::sync::Arc;
 
 impl ManagedInitialGatewaySetup {
     pub(in crate::managed) fn bootstrap_native(
@@ -122,10 +120,7 @@ impl Setup {
         let original =
             super::tests::retain_explicit_request(self, &directory, &original, || utc, options);
         let path = original.directory().path().join("transaction");
-        let mut http = NativeReadHttp::start_config(
-            &self.wallet_config().unwrap(),
-            Arc::clone(native.chain.state()),
-        );
+        let mut http = native.read_http(&self.wallet_config().unwrap());
         original
             .request(original.terms.signing_deadline(options.deadline).unwrap())
             .prepare(&self.wallet().unwrap(), &path)

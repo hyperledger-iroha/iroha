@@ -72,36 +72,35 @@ kotodama_lang = { workspace = true }
 norito_codegen_exporter = { path = "../tools/norito_codegen_exporter" }
 mv = { path = "../crates/mv" }
 fastpq_isi = { path = "../crates/fastpq_isi" }
-arrow-array = { version = "53.4.1", default-features = false }
-arrow-schema = { version = "53.4.1", default-features = false }
-parquet = { version = "53.4.1", default-features = false, features = ["arrow"] }
+arrow-array = { version = "60.0.0", default-features = false }
+arrow-schema = { version = "60.0.0", default-features = false }
+parquet = { version = "60.0.0", default-features = false, features = ["arrow"] }
 iroha_pasta = { workspace = true, optional = true }
 iroha_plonk = { workspace = true, optional = true }
-ff = { version = "0.13.1", optional = true }
-rand_chacha = "0.9.0"
-rand = { version = "0.9.2", features = ["std", "std_rng"] }
-rand_distr = "0.5.1"
-rand_core_06 = { version = "0.6.4", package = "rand_core" }
+ff = { version = "0.14.0", optional = true }
+rand_chacha = "0.10.0"
+rand = { version = "0.10.3", features = ["std", "std_rng"] }
+rand_distr = "0.6.0"
 walkdir = "2.5"
-blake2 = { version = "0.10.6", default-features = false, features = ["std"] }
-ed25519-dalek = { version = "2.2.0", default-features = false, features = ["std", "rand_core"] }
+blake2 = { version = "0.11.0", default-features = false, features = ["alloc"] }
+ed25519-dalek = { version = "3.0.0", default-features = false, features = ["rand_core"] }
 soranet-handshake-harness = { path = "../tools/soranet-handshake-harness" }
-sha2 = { version = "0.10.9", default-features = false, features = ["std"] }
+sha2 = { version = "0.11.1", default-features = false, features = ["alloc"] }
 sorafs_car = { workspace = true }
 sorafs_manifest = { path = "../crates/sorafs_manifest", features = ["pqc"] }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "time", "macros", "sync"] }
 tower = { version = "0.5.2", features = ["util"] }
 axum = { workspace = true }
-base64 = "0.22.1"
+base64 = { workspace = true }
 data-encoding = "2.5.0"
 zeroize = "1.8.2"
 blake3 = { version = "1.8.2" }
-reqwest = { version = "0.12.24", default-features = false, features = ["blocking", "rustls-tls"] }
+reqwest = { workspace = true, features = ["blocking", "rustls"] }
 sorafs_chunker = { path = "../crates/sorafs_chunker" }
 integration_tests = { path = "../integration_tests" }
 time = { version = "0.3.44", features = ["formatting", "macros"] }
 thiserror = "2.0.17"
-toml = "0.9.8"
+toml = { workspace = true }
 eyre = { workspace = true }
 once_cell = { workspace = true }
 soranet-relay = { path = "../tools/soranet-relay", default-features = false }

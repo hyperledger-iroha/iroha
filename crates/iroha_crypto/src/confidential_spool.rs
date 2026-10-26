@@ -47,8 +47,8 @@ use std::{fs::File, io, path::Path};
 
 use aead::{AeadInOut as _, KeyInit as _};
 use chacha20poly1305::XChaCha20Poly1305;
-use rand::rngs::OsRng;
-use rand_core::TryRngCore as _;
+use rand::rngs::SysRng;
+use rand_core::TryRng as _;
 use zeroize::{Zeroize as _, Zeroizing};
 
 const AAD_DOMAIN_V1: &[u8] = b"iroha.confidential-spool.aad.v1\0";
@@ -708,7 +708,7 @@ struct OsEntropyV1;
 
 impl EntropySourceV1 for OsEntropyV1 {
     fn fill_v1(&mut self, destination: &mut [u8]) -> Result<(), ConfidentialSpoolErrorV1> {
-        OsRng
+        SysRng
             .try_fill_bytes(destination)
             .map_err(|_| ConfidentialSpoolErrorV1::EntropyUnavailable)
     }

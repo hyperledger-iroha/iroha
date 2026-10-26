@@ -9,10 +9,8 @@ use super::{
     },
     validate_mldsa_secret_key_len,
 };
-use sha3::{
-    Shake256,
-    digest::{ExtendableOutput, Update, XofReader},
-};
+use sha3::digest::{ExtendableOutput, Update, XofReader};
+use shake::Shake256;
 use zeroize::Zeroizing;
 const SEEDBYTES: usize = 32;
 const CRHBYTES: usize = 64;

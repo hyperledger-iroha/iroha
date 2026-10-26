@@ -1,0 +1,87 @@
+// Copyright 2021-2023 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+#ifndef PLATFORM_IMPL_WINDOWS_DEVICE_INFO_H_
+#define PLATFORM_IMPL_WINDOWS_DEVICE_INFO_H_
+
+// clang-format off
+#include <windows.h>
+#include <powerbase.h>
+// clang-format on
+
+#include <cstdint>
+#include <functional>
+#include <optional>
+#include <string>
+
+#include "absl/base/thread_annotations.h"
+#include "absl/container/flat_hash_map.h"
+#include "absl/functional/any_invocable.h"
+#include "absl/strings/string_view.h"
+#include "absl/synchronization/mutex.h"
+#include "internal/base/file_path.h"
+#include "internal/platform/implementation/device_info.h"
+#include "internal/platform/implementation/windows/session_manager.h"
+
+namespace nearby {
+namespace windows {
+
+class DeviceInfo : public api::DeviceInfo {
+ public:
+  ~DeviceInfo() override;
+
+  std::optional<std::string> GetOsDeviceName() const override;
+  api::DeviceInfo::DeviceType GetDeviceType() const override;
+  api::DeviceInfo::OsType GetOsType() const override;
+
+  FilePath GetDownloadPath() const override;
+  FilePath GetLocalAppDataPath(FilePath sub_path) const override;
+  FilePath GetTemporaryPath() const override;
+  FilePath GetLogPath() const override;
+
+  bool IsScreenLocked() const override;
+  void RegisterScreenLockedListener(
+      absl::string_view listener_name,
+      std::function<void(api::DeviceInfo::ScreenStatus)> callback) override;
+  void UnregisterScreenLockedListener(absl::string_view listener_name) override;
+
+  bool PreventSleep() override;
+  bool AllowSleep() override;
+
+  int64_t RegisterSuspendResumeListener(
+      std::function<void(api::DeviceInfo::SuspendResumeEvent)> callback)
+      override;
+  void UnregisterSuspendResumeListener(int64_t listener_id) override;
+
+ private:
+  static ULONG PowerSuspendResumeCallback(PVOID context, ULONG type,
+                                          PVOID setting);
+  void OnSuspendResumeEvent(SuspendResumeEvent event);
+
+  mutable absl::Mutex mutex_;
+  SessionManager session_manager_ ABSL_GUARDED_BY(mutex_);
+  absl::Mutex suspend_resume_mutex_;
+  int64_t next_suspend_resume_listener_id_ ABSL_GUARDED_BY(
+      suspend_resume_mutex_) = 0;
+  absl::flat_hash_map<
+      int64_t, absl::AnyInvocable<void(SuspendResumeEvent)>>
+      suspend_resume_listeners_ ABSL_GUARDED_BY(suspend_resume_mutex_);
+  HPOWERNOTIFY suspend_resume_notification_handle_
+      ABSL_GUARDED_BY(suspend_resume_mutex_) = nullptr;
+};
+
+}  // namespace windows
+}  // namespace nearby
+
+#endif  // PLATFORM_IMPL_WINDOWS_DEVICE_INFO_H_

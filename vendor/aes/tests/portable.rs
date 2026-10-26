@@ -2,7 +2,7 @@
 //! feature-selected top-level types agree with FIPS 197 Appendix C and with
 //! each other, with and without the `hardware` feature.
 
-use aes::cipher::{generic_array::GenericArray, BlockDecrypt, BlockEncrypt, KeyInit};
+use aes::cipher::{Array, BlockCipherDecrypt, BlockCipherEncrypt, KeyInit};
 use hex_literal::hex;
 
 /// FIPS 197 Appendix C plaintext, shared by C.1, C.2 and C.3.
@@ -21,9 +21,9 @@ const CIPHERTEXT_256: [u8; 16] = hex!("8ea2b7ca516745bfeafc49904b496089");
 /// by `cargo test --no-default-features`, which proves the path exists without
 /// the `hardware` feature.
 const _: fn() = || {
-    fn key_init<T: KeyInit + BlockEncrypt + BlockDecrypt>() {}
-    fn enc<T: KeyInit + BlockEncrypt>() {}
-    fn dec<T: KeyInit + BlockDecrypt>() {}
+    fn key_init<T: KeyInit + BlockCipherEncrypt + BlockCipherDecrypt>() {}
+    fn enc<T: KeyInit + BlockCipherEncrypt>() {}
+    fn dec<T: KeyInit + BlockCipherDecrypt>() {}
     key_init::<aes::soft::Aes128>();
     key_init::<aes::soft::Aes192>();
     key_init::<aes::soft::Aes256>();
@@ -35,9 +35,23 @@ const _: fn() = || {
     dec::<aes::soft::Aes256Dec>();
 };
 
-/// Without `hardware` (or with `--cfg aes_force_soft`) the top-level types are
+#[cfg(feature = "zeroize")]
+const _: fn() = || {
+    fn erased<T: zeroize::ZeroizeOnDrop>() {}
+    erased::<aes::soft::Aes128>();
+    erased::<aes::soft::Aes192>();
+    erased::<aes::soft::Aes256>();
+    erased::<aes::soft::Aes128Enc>();
+    erased::<aes::soft::Aes192Enc>();
+    erased::<aes::soft::Aes256Enc>();
+    erased::<aes::soft::Aes128Dec>();
+    erased::<aes::soft::Aes192Dec>();
+    erased::<aes::soft::Aes256Dec>();
+};
+
+/// Without `hardware` (or with `--cfg aes_backend = "soft"`) the top-level types are
 /// the portable types themselves, not wrappers.
-#[cfg(any(not(feature = "hardware"), aes_force_soft))]
+#[cfg(any(not(feature = "hardware"), aes_backend = "soft"))]
 const _: fn(
     aes::Aes128,
     aes::Aes192,
@@ -71,27 +85,51 @@ macro_rules! backend_tests {
 
             #[test]
             fn fips_197_appendix_c() {
-                let key = GenericArray::from($key);
+                let key = Array::from($key);
 
-                let mut block = GenericArray::from(PLAINTEXT);
+                let mut block = Array::from(PLAINTEXT);
                 aes::soft::$cipher::new(&key).encrypt_block(&mut block);
                 assert_eq!(block.as_slice(), &$ciphertext[..], "portable encrypt");
                 aes::soft::$cipher::new(&key).decrypt_block(&mut block);
                 assert_eq!(block.as_slice(), &PLAINTEXT[..], "portable decrypt");
 
-                let mut block = GenericArray::from(PLAINTEXT);
+                let mut block = Array::from(PLAINTEXT);
                 aes::$cipher::new(&key).encrypt_block(&mut block);
                 assert_eq!(block.as_slice(), &$ciphertext[..], "default encrypt");
                 aes::$cipher::new(&key).decrypt_block(&mut block);
                 assert_eq!(block.as_slice(), &PLAINTEXT[..], "default decrypt");
 
-                let mut block = GenericArray::from(PLAINTEXT);
+                let mut block = Array::from(PLAINTEXT);
                 aes::soft::$enc::new(&key).encrypt_block(&mut block);
                 assert_eq!(block.as_slice(), &$ciphertext[..], "portable Enc");
                 aes::soft::$dec::new(&key).decrypt_block(&mut block);
                 assert_eq!(block.as_slice(), &PLAINTEXT[..], "portable Dec");
 
-                let mut block = GenericArray::from(PLAINTEXT);
+                let enc = aes::soft::$enc::new(&key);
+                let full = aes::soft::$cipher::from(&enc);
+                let dec = aes::soft::$dec::from(enc.clone());
+                full.encrypt_block(&mut block);
+                assert_eq!(
+                    block.as_slice(),
+                    &$ciphertext[..],
+                    "converted portable encrypt"
+                );
+                dec.decrypt_block(&mut block);
+                assert_eq!(
+                    block.as_slice(),
+                    &PLAINTEXT[..],
+                    "converted portable decrypt"
+                );
+                aes::soft::$cipher::from(enc.clone()).encrypt_block(&mut block);
+                aes::soft::$dec::from(&enc).decrypt_block(&mut block);
+                assert_eq!(
+                    block.as_slice(),
+                    &PLAINTEXT[..],
+                    "owned and borrowed conversions"
+                );
+                assert_eq!(format!("{enc:?}"), concat!(stringify!($enc), " { .. }"));
+
+                let mut block = Array::from(PLAINTEXT);
                 aes::$enc::new(&key).encrypt_block(&mut block);
                 assert_eq!(block.as_slice(), &$ciphertext[..], "default Enc");
                 aes::$dec::new(&key).decrypt_block(&mut block);
@@ -104,13 +142,13 @@ macro_rules! backend_tests {
                 for _ in 0..64 {
                     let mut key = $key;
                     rng.fill(&mut key);
-                    let key = GenericArray::from(key);
+                    let key = Array::from(key);
                     let portable = aes::soft::$cipher::new(&key);
                     let default = aes::$cipher::new(&key);
 
                     let mut plain = [0u8; 16];
                     rng.fill(&mut plain);
-                    let mut a = GenericArray::from(plain);
+                    let mut a = Array::from(plain);
                     let mut b = a;
                     portable.encrypt_block(&mut a);
                     default.encrypt_block(&mut b);
@@ -123,7 +161,7 @@ macro_rules! backend_tests {
                     assert_eq!(b.as_slice(), &plain[..]);
 
                     // 19 blocks exercises the parallel paths plus a tail.
-                    let mut many = [GenericArray::from([0u8; 16]); 19];
+                    let mut many = [Array::from([0u8; 16]); 19];
                     for block in many.iter_mut() {
                         rng.fill(block.as_mut_slice());
                     }
@@ -175,11 +213,12 @@ backend_tests!(
 /// visible in `--nocapture` output and fails where detection is guaranteed.
 #[test]
 fn default_backend_matches_feature_selection() {
-    let key = GenericArray::from(KEY_128);
+    let key = Array::from(KEY_128);
     let portable = core::mem::size_of_val(&aes::soft::Aes128::new(&key));
     let default = core::mem::size_of_val(&aes::Aes128::new(&key));
-    if cfg!(any(not(feature = "hardware"), aes_force_soft)) {
+    if cfg!(any(not(feature = "hardware"), aes_backend = "soft")) {
         assert_eq!(portable, default);
+        assert!(!aes::hardware_accelerated());
     } else if cfg!(any(
         target_arch = "x86",
         target_arch = "x86_64",
@@ -189,6 +228,16 @@ fn default_backend_matches_feature_selection() {
         assert_ne!(
             core::any::type_name::<aes::Aes128>(),
             core::any::type_name::<aes::soft::Aes128>()
+        );
+        #[cfg(target_arch = "aarch64")]
+        assert_eq!(
+            aes::hardware_accelerated(),
+            std::arch::is_aarch64_feature_detected!("aes")
+        );
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        assert_eq!(
+            aes::hardware_accelerated(),
+            std::is_x86_feature_detected!("aes")
         );
     }
 }

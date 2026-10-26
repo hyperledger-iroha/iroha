@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { ed25519 } from "@noble/curves/ed25519";
+import { ed25519 } from "@noble/curves/ed25519.js";
 import { AccountAddress } from "../src/address.js";
 import { blake2b256 } from "../src/blake2b.js";
 import { getNativeBinding } from "../src/native.js";
@@ -341,7 +341,7 @@ function mixedTorsionSignature(message) {
     for (let index = digest.length - 1; index >= 0; index -= 1) {
       scalar = (scalar << 8n) | BigInt(digest[index]);
     }
-    return scalar % ed25519.CURVE.n;
+    return scalar % ed25519.Point.Fn.ORDER;
   };
   const hashToScalar = (...parts) =>
     scalarFromDigest(
@@ -354,7 +354,7 @@ function mixedTorsionSignature(message) {
     ed25519.Point.BASE.multiply(nonce).add(orderTwoTorsion).toBytes(),
   );
   const challenge = hashToScalar(encodedNonce, publicKey, message);
-  let response = (nonce + challenge * extended.scalar) % ed25519.CURVE.n;
+  let response = (nonce + challenge * extended.scalar) % ed25519.Point.Fn.ORDER;
   const encodedResponse = Buffer.alloc(32);
   for (let index = 0; index < encodedResponse.length; index += 1) {
     encodedResponse[index] = Number(response & 0xffn);

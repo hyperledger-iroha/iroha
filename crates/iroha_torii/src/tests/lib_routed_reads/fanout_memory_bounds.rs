@@ -431,7 +431,14 @@ fn query_memory_geometry_splits_one_aggregate_pool_without_overcommit() {
     );
     let ingress_reserved = geometry.ingress.slot_bytes * geometry.ingress_slots.get();
     let fanout_reserved = geometry.fanout_working_set_bytes * geometry.fanout_slots.get();
-    assert!(ingress_reserved + fanout_reserved <= aggregate);
+    assert!(ingress_reserved + fanout_reserved + geometry.routed_read_body_pool_bytes <= aggregate);
+    assert!(
+        geometry.routed_read_body_pool_bytes
+            >= QueryFanoutMemoryEnvelope::for_body_admission(geometry.fanout_working_set_bytes)
+                .unwrap()
+                .route_body_bytes,
+        "the shared retained-body pool still admits every routed request"
+    );
     assert!(geometry.fanout_working_set_bytes < aggregate);
     assert!(
         query_memory_geometry(
@@ -453,6 +460,49 @@ fn query_memory_geometry_splits_one_aggregate_pool_without_overcommit() {
 }
 
 #[test]
+fn query_memory_retention_growth_preserves_every_signed_ingress_limit() {
+    for aggregate in [
+        20_100_000,
+        48_000_000,
+        64_000_000,
+        512_000_000,
+        2_048_000_000,
+    ] {
+        let geometry = query_memory_geometry(aggregate, 48_000_000, 64_000_000, 32)
+            .expect("previously valid pool remains valid");
+        let phase =
+            QueryFanoutMemoryEnvelope::for_body_admission(geometry.fanout_working_set_bytes)
+                .unwrap()
+                .route_body_bytes;
+        let original_slot =
+            (aggregate / QUERY_INGRESS_POOL_DIVISOR - phase) / QUERY_INGRESS_SLOT_COUNT;
+        let original = QueryIngressMemoryEnvelope::from_slot_bytes(original_slot, phase).unwrap();
+        assert_eq!(geometry.ingress.body_bytes, original.body_bytes);
+        assert_eq!(
+            geometry.ingress.decode_allocated_bytes,
+            original.decode_allocated_bytes
+        );
+        assert_eq!(
+            geometry.ingress.canonical_encoded_bytes,
+            original.canonical_encoded_bytes
+        );
+        assert_eq!(
+            geometry.ingress.scope_decode_allocated_bytes,
+            original.scope_decode_allocated_bytes
+        );
+        assert_eq!(
+            geometry.ingress.scope_canonical_encoded_bytes,
+            original.scope_canonical_encoded_bytes
+        );
+        assert!(geometry.ingress.phases_fit());
+        assert!(
+            geometry.routed_read_body_pool_bytes
+                + geometry.ingress.slot_bytes * geometry.ingress_slots.get()
+                <= aggregate / QUERY_INGRESS_POOL_DIVISOR
+        );
+    }
+}
+#[test]
 fn query_memory_geometry_separates_complete_request_ceiling_from_concurrency() {
     let cap = 48_000_000;
     let small = query_memory_geometry(64_000_000, cap, 64_000_000, 32).unwrap();
@@ -463,8 +513,14 @@ fn query_memory_geometry_separates_complete_request_ceiling_from_concurrency() {
     assert_eq!(default.fanout_slots.get(), 8);
     assert_eq!(default.fanout_pool_bytes, 384_000_000);
     assert_eq!(
+        default.routed_read_body_pool_bytes,
+        64_000_000,
+        "the default budget admits one maximum transaction body or many small fee quotes"
+    );
+    assert_eq!(
         default.ingress.slot_bytes * default.ingress_slots.get(),
-        128_000_000
+        (128_000_000 - default.routed_read_body_pool_bytes) / default.ingress_slots.get()
+            * default.ingress_slots.get()
     );
     assert!(default.ingress.phases_fit());
     let envelope = QueryFanoutMemoryEnvelope::for_body_admission(cap).unwrap();
@@ -558,7 +614,11 @@ fn query_memory_parser_geometry_matches_runtime_complete_phases() {
         config::QUERY_INGRESS_PHASE_UNITS_V1
     );
     for (aggregate, ceiling, content) in [
-        (20_000_000, 48_000_000, 64_000_000),
+        (
+            config::QUERY_FANOUT_MIN_POOL_BYTES_V1 as usize,
+            48_000_000,
+            64_000_000,
+        ),
         (64_000_000, 48_000_000, 64_000_000),
         (512_000_000, 48_000_000, 64_000_000),
         (512_000_000, 36_000_000, 64_000_000),

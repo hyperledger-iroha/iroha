@@ -1,17 +1,21 @@
-//! Peak live field columns of one proof, from its descriptor alone.
+//! Descriptor-derived field-buffer envelope of the owned-witness prover.
 //!
 //! A proof peaks while the quotient recombines its `d - 1` residue cosets ([`super::quotient`]).
 //! It then holds the key, every column the opening reads (the advice and instance coefficients,
 //! each permutation product, each lookup's committed `A'`, `S'` and `z`, and `R`), the quotient
 //! workspace, the three coset masks, and the residues beside their recombined coefficients.
 //!
-//! The earlier phases hold less. Advice synthesis and commitment hold the evaluation columns
+//! The earlier core proving phases hold less. Advice commitment holds the evaluation columns
 //! in place of the coefficients. The lookup and permutation commitments add, at most, both
 //! instance forms, a fourth column per lookup and three sorting or product columns, fewer than
 //! the workspace's own instance, lookup and coset-power columns plus the masks and residues
 //! they do not hold. The opening holds the quotient pieces and a few polynomial and generator
-//! columns in place of the workspace, masks and residues. `tests/proving_memory.rs` measures
-//! every allocation of synthesis and proving against this count.
+//! columns in place of the workspace, masks and residues.
+//!
+//! A descriptor cannot bound a circuit's own synthesis allocations or the frontend's pending
+//! `Assigned::Rational` records and denominator buffers. Callers must account for those
+//! separately for their source. `tests/proving_memory.rs` measures synthesis plus proving for
+//! one circuit that assigns evaluated field values; it is not a generic synthesis bound.
 //!
 //! The pinned parameters and the MSM scratch are separate byte budgets that callers add.
 
@@ -21,14 +25,15 @@ use crate::{
     protocol::{Protocol, ProtocolError},
 };
 
-/// Field columns of `n` elements that one owned-witness proof holds at its peak, for a key
+/// Field columns of `n` elements budgeted for the core owned-witness prover, for a key
 /// that keeps no coset cache.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ProvingColumns {
     /// The proving key: its fixed, `sigma` and three mask columns, each held in both its
-    /// evaluation and its coefficient form.
+    /// evaluation and its coefficient form, plus both FFT twiddle directions rounded up
+    /// together to whole columns.
     pub key: usize,
-    /// What synthesizing the witness and proving hold on top of the key.
+    /// Core proving buffers on top of the key; source-specific synthesis needs a separate bound.
     pub proof: usize,
 }
 
@@ -40,9 +45,9 @@ impl ProvingColumns {
     }
 }
 
-/// The peak live columns of a proof of `descriptor` whose quotient holds `quotient_columns`
+/// The core proving field-buffer envelope of `descriptor`, whose quotient holds `quotient_columns`
 /// coset columns at once, as in [`super::ProverConfig::quotient_columns`] (`None` is the fused
-/// plan).
+/// plan). Circuit-owned synthesis work and pending rational assignments are not included.
 ///
 /// # Errors
 ///
@@ -59,6 +64,9 @@ pub fn peak_proving_columns(
         .checked_add(shape.permutation_columns)
         .and_then(|columns| columns.checked_add(3))
         .and_then(|columns| columns.checked_mul(2))
+        // The key owns the forward and inverse twiddles: 2 * (n - 1) fields.
+        // Round their combined storage up to whole columns (one only when n = 2).
+        .and_then(|columns| columns.checked_add(2 - usize::from(shape.n == 2)))
         .ok_or_else(overflow)?;
     let workspace = match quotient_columns {
         None => quotient::fused_workspace_columns(shape, false)?,

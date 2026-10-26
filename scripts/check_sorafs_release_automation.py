@@ -905,8 +905,8 @@ WORKFLOWS: dict[str, tuple[str, ...]] = {
         '"sorafs-cli-v*"',
         '- "scripts/check_sorafs_mobile_parity_reports.py"',
         '- "scripts/tests/check_sorafs_mobile_parity_reports_test.py"',
-        "actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10",
-        "actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1",
+        "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+        "actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0",
         "scripts/check_sorafs_release_version_map.py",
         "version-map-summary.first.json",
         "version-map-summary.replay.json",
@@ -1068,8 +1068,8 @@ WORKFLOWS: dict[str, tuple[str, ...]] = {
         '- "specs/sorafs/foundational_prerequisite_signing.md"',
         '- "CHANGELOG.md"',
         '- "LICENSE"',
-        "anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610",
-        "anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2",
+        "anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c",
+        "anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439",
         "syft-version: v1.44.0",
         "grype-version: v0.112.0",
         "severity-cutoff: high",
@@ -1128,7 +1128,7 @@ WORKFLOWS: dict[str, tuple[str, ...]] = {
         "name: Upload authenticated foundational manifest tuple",
         "name: Verify authenticated release-manifest candidate binding before provenance",
         "needs: [release-gate, package, verify-release-auth]",
-        "sigstore/cosign-installer@ba7bc0a3fef59531c69a25acd34668d6d3fe6f22",
+        "sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6",
         "name: Verify platform package checksums before signing",
         "signed_artifact_id: ${{ steps.upload-signed.outputs.artifact-id }}",
         "signed_artifact_digest: ${{ steps.upload-signed.outputs.artifact-digest }}",
@@ -1138,7 +1138,7 @@ WORKFLOWS: dict[str, tuple[str, ...]] = {
         "sha256sum --check SHA256SUMS",
         "SHA256SUMS contains duplicate file entries",
         "SHA256SUMS does not cover the exact platform candidate file set",
-        "actions/attest@a1948c3f048ba23858d222213b7c278aabede763",
+        "actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6",
         "name: Attest aggregate signed-input provenance",
         "name: Stage offline provenance bundles",
         '[[ "$attestation_path" != "${RUNNER_TEMP}/"*',
@@ -1193,15 +1193,15 @@ WORKFLOWS: dict[str, tuple[str, ...]] = {
     ),
     ".github/workflows/sorafs-fixtures-nightly.yml": (
         'cron: "17 2 * * *"',
-        "actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10",
-        "actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1",
+        "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+        "actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0",
         'python-version: "3.12"',
         "bash ci/check_sorafs_fixtures.sh",
-        "actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16",
+        "actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e",
         'go-version: "1.26.x"',
-        "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e",
+        "actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1",
         'node-version: "24"',
-        "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
+        "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9",
     ),
     ".github/workflows/sorafs-orchestrator-sdk.yml": (
         "node --test scripts/tests/sorafs_javascript_test_events_test.mjs scripts/tests/sorafs_javascript_child_files_test.mjs scripts/tests/sorafs_javascript_child_input_test.mjs scripts/tests/sorafs_javascript_child_loads_test.mjs scripts/tests/sorafs_javascript_child_session_test.mjs",
@@ -1220,22 +1220,22 @@ WORKFLOWS: dict[str, tuple[str, ...]] = {
         '- "scripts/package_mobile_sdk_artifacts.sh"',
         '- "scripts/tests/deploy_localnet_test.py"',
         '- "vendor/**"',
-        "actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10",
-        "actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1",
+        "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+        "actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0",
         'python-version: "3.12"',
         "name: Bind the canonical mobile Python",
         'echo "MOBILE_SDK_PYTHON_BINARY=$mobile_python" >> "$GITHUB_ENV"',
-        "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e",
+        "actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1",
         'node-version: "24"',
         "runs-on: macos-14",
         "  mobile-parity:",
         "  csharp-parity:",
-        "actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961",
-        "actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1",
+        "actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad",
+        "actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68",
         "bash ci/check_sorafs_python_native_sdk.sh",
         "bash ci/sdk_sorafs_orchestrator.sh",
         "dotnet test Hyperledger.Iroha.Sdk.sln -c Release --no-build",
-        "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
+        "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9",
     ),
 }
 SORAFS_JAVASCRIPT_CONTENT_PATHS = frozenset({
@@ -1317,7 +1317,7 @@ SORAFS_JAVASCRIPT_CHILD_STEP = (
     f"        run: {SORAFS_JAVASCRIPT_CHILD_COMMAND}"
 )
 SORAFS_JAVASCRIPT_NODE_STEP = (
-    "      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6\n"
+    "      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0\n"
     "        with:\n"
     '          node-version: "24"\n'
     "          cache: npm\n"
@@ -1374,17 +1374,17 @@ NATIVE_GOVERNANCE_SDK_CONTRACTS: dict[str, tuple[str, ...]] = {
         *JAVA_GOVERNANCE_WORKFLOW_STEP_MARKERS,
     ),
     SWIFT_GOVERNANCE_VALIDATOR_TEST: (
-        "ABI-31 connect_norito_bridge with Governance DAG symbols is required.",
+        "ABI-33 connect_norito_bridge with Governance DAG symbols is required.",
         "guard try requireGovernanceDagNativeBridge() else",
         "XCTFail(\"\\(Self.nativeValidationRequiredMessage) \\(unavailableMessage)\")",
     ),
     KOTLIN_GOVERNANCE_VALIDATOR_TEST: (
-        "ABI-31 connect_norito_bridge with Governance DAG symbols is required.",
+        "ABI-33 connect_norito_bridge with Governance DAG symbols is required.",
         "        requireGovernanceDagNativeBridge()\n",
         "throw AssertionError(requiredMessage)",
     ),
     JAVA_GOVERNANCE_VALIDATOR_TEST: (
-        "ABI-31 connect_norito_bridge with all SoraFS reference symbols is required.",
+        "ABI-33 connect_norito_bridge with all SoraFS reference symbols is required.",
         "  private static void requireNativeBridge() {\n",
         (
             "  private static void "
@@ -2078,7 +2078,7 @@ def _validate_cosign_qualification(root: Path, gate: str) -> list[str]:
         root, ".github/workflows/sorafs-cli-release.yml"
     )).decode("utf-8")
     installer = (
-        "      - uses: sigstore/cosign-installer@ba7bc0a3fef59531c69a25acd34668d6d3fe6f22 # v4.1.0\n"
+        "      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2\n"
         "        with:\n" + f'          cosign-release: "{release_tag}"\n'
     )
     if workflow.count(installer) != 2:
@@ -2559,12 +2559,12 @@ def _validate_workflow_source(relative: str, source: str) -> list[str]:
                 'IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION: "1"',
                 "name: Bind the canonical mobile Python",
                 'echo "MOBILE_SDK_PYTHON_BINARY=$mobile_python" >> "$GITHUB_ENV"',
-                "actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961",
+                "actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad",
                 'sdkmanager_status="${PIPESTATUS[1]}"',
                 'exit "$sdkmanager_status"',
                 "cargo fetch --locked",
                 'java-version: "21"',
-                "Build and authenticate the exact ABI-31 Kotlin bridge",
+                "Build and authenticate the exact ABI-33 Kotlin bridge",
                 'test ! -e "$native_root"',
                 "cargo build --locked --offline --release -p connect_norito_bridge",
                 "cargo build --locked --offline --release -p kotlin-fixture-gen",
@@ -2575,7 +2575,7 @@ def _validate_workflow_source(relative: str, source: str) -> list[str]:
                 'echo "IROHA_NATIVE_LIBRARY_PATH=$native_dir" >> "$GITHUB_ENV"',
                 'echo "IROHA_KOTLIN_FIXTURE_GEN_BIN=$native_dir/kotlin-fixture-gen" >> "$GITHUB_ENV"',
                 'echo "MOBILE_SDK_ANDROID_ARTIFACT_DIR=$artifact_dir" >> "$GITHUB_ENV"',
-                "Require fresh ABI-31 JNI bridge in complete Kotlin and Java suites",
+                "Require fresh ABI-33 JNI bridge in complete Kotlin and Java suites",
                 "working-directory: kotlin",
                 "./gradlew --no-daemon --no-build-cache --rerun-tasks",
                 "--no-configuration-cache",
@@ -2598,15 +2598,15 @@ def _validate_workflow_source(relative: str, source: str) -> list[str]:
             "csharp-parity": (
                 "runs-on: ubuntu-24.04",
                 'IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION: "1"',
-                "actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1",
-                "Build and authenticate the exact ABI-31 C# bridge",
+                "actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68",
+                "Build and authenticate the exact ABI-33 C# bridge",
                 "cargo build --locked --release -p connect_norito_bridge",
-                "native-sdk-abi31.json",
+                "native-sdk-abi33.json",
                 "check_native_sdk_artifact.py record",
                 "check_native_sdk_artifact.py verify",
                 "dotnet restore Hyperledger.Iroha.Sdk.sln",
                 "dotnet build Hyperledger.Iroha.Sdk.sln -c Release --no-restore -warnaserror",
-                "Run complete C# ABI-31 parity suite",
+                "Run complete C# ABI-33 parity suite",
                 "dotnet test Hyperledger.Iroha.Sdk.sln -c Release --no-build",
             ),
         }
@@ -2622,9 +2622,9 @@ def _validate_workflow_source(relative: str, source: str) -> list[str]:
                     )
             if job_name == "mobile-parity":
                 stages = (
-                    "Build and authenticate the exact ABI-31 Kotlin bridge",
+                    "Build and authenticate the exact ABI-33 Kotlin bridge",
                     "Prepare canonical Kotlin test outputs",
-                    "Require fresh ABI-31 JNI bridge in complete Kotlin and Java suites",
+                    "Require fresh ABI-33 JNI bridge in complete Kotlin and Java suites",
                     "Validate every mobile parity test lane",
                     "Reauthenticate the consumed Kotlin bridge",
                     "Upload Kotlin and Java native parity evidence",
@@ -2714,7 +2714,7 @@ def _validate_workflow_source(relative: str, source: str) -> list[str]:
         else:
             full_history_checkout = (
                 "uses: actions/checkout@"
-                "df4cb1c069e1874edd31b4311f1884172cec0e10 # v6\n"
+                "3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n"
                 "        with:\n"
                 "          fetch-depth: 0"
             )
@@ -3358,8 +3358,8 @@ def _validate_workflow_source(relative: str, source: str) -> list[str]:
                     errors.append(
                         f"{relative}: checksum verification, provenance, signing, and upload are out of order"
                     )
-        sbom_action = "anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610"
-        scan_action = "anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2"
+        sbom_action = "anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c"
+        scan_action = "anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439"
         if source.count(sbom_action) != 2 or source.count(scan_action) != 2:
             errors.append(
                 f"{relative}: source and platform packages require exactly one SBOM and vulnerability scan each"

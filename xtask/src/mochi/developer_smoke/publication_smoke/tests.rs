@@ -1,7 +1,93 @@
-//! Presentation and controller refusals; these fixtures create no native publication evidence.
+//! Presentation/controller checks and an explicitly invoked installed publication smoke.
 
 use super::*;
 use norito::json;
+
+/// Storage publication is independent of the ordinary config-free deployment smoke.
+#[test]
+#[ignore = "requires IROHA_DEVEX_BUNDLE_BIN pointing to matching native runtime binaries"]
+fn installed_package_publication_with_storage() {
+    let directory = std::env::var_os("IROHA_DEVEX_BUNDLE_BIN")
+        .map(std::path::PathBuf::from)
+        .expect("set IROHA_DEVEX_BUNDLE_BIN to the canonical installed runtime directory");
+    let kagami = directory.join(format!("kagami{}", std::env::consts::EXE_SUFFIX));
+    run(&kagami).expect("storage-enabled publication and cold consumer must finish");
+}
+
+#[cfg(unix)]
+#[test]
+fn publication_start_uses_fresh_storage_profile_and_always_attempts_owned_cleanup() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    for cleanup_succeeds in [true, false] {
+        let tools = tempfile::tempdir().expect("mock command directory");
+        let kagami = tools.path().join("kagami");
+        let cleanup = if cleanup_succeeds {
+            "printf '%s\\n' '{\"phase\":\"stopped\",\"running_peers\":0}'; exit 0"
+        } else {
+            "exit 8"
+        };
+        fs::write(
+            &kagami,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$@\" '--END--' >> \"$0.args\"\ncase \"$2\" in\nup) exit 9;;\ndown) {cleanup};;\n*) exit 7;;\nesac\n"
+            ),
+        )
+        .expect("write failure-only command fixture");
+        fs::set_permissions(&kagami, fs::Permissions::from_mode(0o700))
+            .expect("make command executable");
+        let original = Harness::new(&kagami).expect("original config-free harness");
+        fs::create_dir(&original.state).expect("original state");
+        fs::write(original.state.join("original"), b"unchanged").expect("original marker");
+
+        let error = run(&kagami)
+            .expect_err("failed storage startup must not be treated as publication")
+            .to_string();
+        let recorded =
+            fs::read_to_string(tools.path().join("kagami.args")).expect("recorded commands");
+        let commands = recorded
+            .split("--END--\n")
+            .filter(|command| !command.is_empty())
+            .map(|command| command.lines().collect::<Vec<_>>())
+            .collect::<Vec<_>>();
+        assert_eq!(commands.len(), 2, "startup failure must still run cleanup");
+        let state = commands[0][5];
+        assert_eq!(
+            commands[0],
+            [
+                "localnet",
+                "up",
+                "local",
+                "--with-storage",
+                "--state",
+                state,
+                "--json"
+            ]
+        );
+        assert_eq!(
+            commands[1],
+            ["localnet", "down", "local", "--state", state, "--json"]
+        );
+        assert_ne!(Path::new(state), original.state);
+        assert_eq!(
+            fs::read(original.state.join("original")).unwrap(),
+            b"unchanged"
+        );
+        assert_eq!(original.sequence, 0);
+        assert!(error.contains("flow=Err"));
+        assert!(error.contains(if cleanup_succeeds {
+            "cleanup=Ok(())"
+        } else {
+            "cleanup=Err"
+        }));
+        let retained = Path::new(state).parent().expect("fixture root");
+        assert!(error.contains(retained.to_str().expect("fixture path")));
+        assert!(retained.join("1.stderr").is_file());
+        assert!(retained.join("2.stdout").is_file());
+        // The mock creates no worker or validator; only this test's retained files are removed.
+        fs::remove_dir_all(retained).expect("remove failure-only fixture diagnostics");
+    }
+}
 
 fn release() -> MusubiReleaseIdV1 {
     MusubiReleaseIdV1::new(

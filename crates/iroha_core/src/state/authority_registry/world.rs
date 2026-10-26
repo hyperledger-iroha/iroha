@@ -13,7 +13,7 @@ use crate::state::*;
 use iroha_data_model::block::consensus::EvidenceRecord;
 
 classified_owner!(WorldData, check_world_fields, WORLD_FIELDS, readers = WorldReadReleases, {
-    parameters: Cell<StateParameters> => ("world.parameters",
+    parameters: Cell<RetainedStateParameters, iroha_allocation::AllocationCharge> => ("world.parameters",
         Role::Canonical(Canonical::Cell(schema::<Parameters>()))), release = parameters;
     consensus_schedule: Cell<crate::sumeragi::schedule::RetainedConsensusSchedule> => ("world.consensus_schedule",
         Role::Canonical(Canonical::Cell(schema::<crate::sumeragi::schedule::ConsensusSchedule>()))), release = consensus_schedule;

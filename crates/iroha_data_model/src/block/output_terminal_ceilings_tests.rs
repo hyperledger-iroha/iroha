@@ -298,6 +298,11 @@ fn derived_capacity_never_authorizes_a_different_invocation_origin() {
         });
         let mut actual = terminal.clone();
         match &mut actual {
+            ExecutionOutputV1::NetworkWithLifecycle(_)
+            | ExecutionOutputV1::PipelineWithLifecycle(_)
+            | ExecutionOutputV1::TimeWithLifecycle(_) => {
+                unreachable!("legacy V1 fixture unexpectedly contains a lifecycle carrier")
+            }
             ExecutionOutputV1::Network(row) => row.input_index -= 1,
             ExecutionOutputV1::Pipeline(row) => {
                 row.invocation.trigger.action_hash = Hash::new(b"substituted pipeline action");
@@ -366,6 +371,11 @@ fn actual_internal_rejection_fallback_fits_derived_terminals_at_descriptor_extre
                         }
                         ExecutionOutputV1::Time(row) => {
                             (&mut row.result, &mut row.failure_root, &mut row.completions)
+                        }
+                        ExecutionOutputV1::NetworkWithLifecycle(_)
+                        | ExecutionOutputV1::PipelineWithLifecycle(_)
+                        | ExecutionOutputV1::TimeWithLifecycle(_) => {
+                            unreachable!("legacy V1 fixture unexpectedly contains a lifecycle carrier")
                         }
                         ExecutionOutputV1::Network(_) => unreachable!(),
                     };

@@ -124,7 +124,7 @@ fn get_account_balance_syscall_returns_canonical_quantity_pointer() {
     let query = LiveQueryStore::start_test();
     let state = State::new_for_testing(world, kura, query);
     let view = state.view();
-    let mut host: CoreHostImpl<QueryStateSlot<_>> = CoreHostImpl::new(authority.clone());
+    let mut host: CoreHostImpl<'_, '_, QueryStateSlot<_>> = CoreHostImpl::new(authority.clone());
     host.set_query_state(&view);
     let mut vm = IVM::new(10_000);
     let balance_request = QueryRequest::Singular(SingularQueryBox::FindAssetById(FindAssetById {

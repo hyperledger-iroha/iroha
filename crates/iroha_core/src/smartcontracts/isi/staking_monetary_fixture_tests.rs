@@ -3,14 +3,26 @@
 
 #[test]
 fn genesis_monetary_scope_requires_exact_height_without_npos_parameters() {
-    let state = setup_state();
+    // Author the original component fixture without optional NPoS parameters;
+    // an already retained policy cannot be made mutable just for this control.
+    let (mut world, nexus) = staking_fixture_world_and_nexus();
+    world
+        .set_parameter_for_testing(
+            crate::sumeragi::test_chain::crypto_fixture_policy()
+                .into_parameter()
+                .expect("canonical fixture crypto policy"),
+        )
+        .expect("original fixture crypto policy");
+    world
+        .set_parameter_for_testing(Parameter::Custom(
+            committed_staking_fixture_policy()
+                .into_custom_parameter()
+                .expect("canonical fixture monetary policy"),
+        ))
+        .expect("original fixture monetary policy");
+    let state = State::new_with_nexus_for_testing(world, nexus, LiveQueryStore::start_test());
     let mut genesis = state.block(block_header_with_height(1));
-    let mut stx = genesis.transaction_for_callback_testing();
-    stx.world
-        .parameters
-        .get_mut()
-        .remove_custom_parameter(&SumeragiNposParameters::parameter_id())
-        .expect("optional fixture parameter removal");
+    let stx = genesis.transaction_for_callback_testing();
     assert!(
         stx.world
             .sumeragi_npos_parameters()
@@ -77,10 +89,9 @@ pub fn fixture_registration_plan(
 ) -> PublicLaneMonetaryPlanV1 {
     let context = stake_context(
         &stx.world,
-        &stx.nexus.dataspace_catalog,
-        &stx.nexus.staking,
+        stx.staking_monetary_policy()
+            .expect("original fixture monetary policy"),
         staker,
-        stx.block_unix_timestamp_ms(),
     )
     .expect("fixture configured registration custody");
     fixture_transfer_plan(
@@ -104,10 +115,9 @@ pub fn fixture_bond_plan(
 ) -> PublicLaneMonetaryPlanV1 {
     let context = stake_context(
         &stx.world,
-        &stx.nexus.dataspace_catalog,
-        &stx.nexus.staking,
+        stx.staking_monetary_policy()
+            .expect("original fixture monetary policy"),
         staker,
-        stx.block_unix_timestamp_ms(),
     )
     .expect("fixture configured bond custody");
     let record = stx
@@ -183,14 +193,11 @@ pub fn fixture_slash_plan(
         .expect("fixture retained slash custody")
         .0
         .clone();
-    let receiver = parse_staking_account_literal(
-        &stx.world,
-        &stx.nexus.dataspace_catalog,
-        &stx.nexus.staking.slash_sink_account_id,
-        "slash_sink_account_id",
-        stx.block_unix_timestamp_ms(),
-    )
-    .expect("fixture slash receiver");
+    let receiver = stx
+        .staking_monetary_policy()
+        .expect("original fixture slash receiver")
+        .slash_sink_account_id
+        .clone();
     let destination = AssetId::with_scope(source.definition().clone(), receiver, *source.scope());
     let record = stx
         .world
@@ -321,4 +328,86 @@ fn registration_rejects_changed_signed_monetary_fields_without_custody_writes() 
     instruction
         .execute(&validator, &mut stx)
         .expect("unchanged exact plan must register");
+}
+
+// Retain the independently reviewed removal owner separately from the
+// originally absent optional-policy scenario above. No mutable projection is exposed.
+#[test]
+fn prepared_optional_npos_removal_preserves_monetary_owners_and_exact_genesis_scope() {
+    let state = setup_state();
+    let mut genesis = state.block(block_header_with_height(1));
+    let mut stx = genesis.transaction_for_callback_testing();
+    // This explicit component fixture removes only the optional epoch schedule.
+    // The source-bound production preparation retains every initialized monetary policy.
+    let budget = stx
+        .world
+        .sccp_committee_generations
+        .allocation_budget()
+        .clone();
+    let original_parameters = stx.world.parameters.get().clone();
+    assert!(
+        stx.world
+            .sumeragi_npos_parameters()
+            .expect("the original fixture explicitly authors its optional schedule")
+            .is_some()
+    );
+    let prepared = stx
+        .world
+        .parameters
+        .get()
+        .prepare_custom_removal(&SumeragiNposParameters::parameter_id(), &budget)
+        .expect("original fixture pool admits optional schedule removal");
+    let successor = prepared
+        .into_successor(stx.world.parameters.get(), &budget)
+        .map_err(|(_prepared, original)| original)
+        .expect("the optional schedule successor matches the exact fixture source");
+    *stx.world.parameters.get_mut() = successor;
+    assert!(stx.world.parameters.get().belongs_to(&budget));
+    assert_eq!(
+        stx.world.parameters.get().root_fees(),
+        original_parameters.root_fees()
+    );
+    assert_eq!(
+        stx.world.parameters.get().staking_policy(),
+        original_parameters.staking_policy()
+    );
+    assert!(
+        stx.world
+            .sumeragi_npos_parameters()
+            .expect("original policy decoder completes")
+            .is_none()
+    );
+    assert!(effects::validate_plan_context(&stx, &PublicLaneMonetaryScopeV1::Genesis, 1).is_ok());
+    for invalid_height in [0, 2] {
+        let error = effects::validate_plan_context(
+            &stx,
+            &PublicLaneMonetaryScopeV1::Genesis,
+            invalid_height,
+        )
+        .expect_err("genesis consent must expire at its exact height");
+        assert!(error.to_string().contains("genesis height"));
+    }
+    let error = effects::validate_plan_context(
+        &stx,
+        &PublicLaneMonetaryScopeV1::Network(*stx.network_id()),
+        1,
+    )
+    .expect_err("network consent still requires a committed epoch schedule");
+    assert!(
+        error
+            .to_string()
+            .contains("committed NPoS epoch parameters")
+    );
+
+    drop(stx);
+    drop(genesis);
+    let mut next_block = state.block(block_header_with_height(2));
+    let next_stx = next_block.transaction_for_callback_testing();
+    let error = effects::validate_plan_context(&next_stx, &PublicLaneMonetaryScopeV1::Genesis, 2)
+        .expect_err("genesis scope must not authorize a later block");
+    assert!(
+        error
+            .to_string()
+            .contains("authenticated genesis or network scope")
+    );
 }

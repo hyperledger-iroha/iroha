@@ -165,6 +165,7 @@ impl State {
                 canonical_runtime,
                 native_execution_tip,
                 projection,
+                privacy,
                 block_hashes,
                 #[cfg(any(test, feature = "iroha-core-tests", feature = "bench"))]
                 da_rewind_releases,
@@ -215,7 +216,7 @@ impl State {
                 lane_incarnation_lineage: projection.lineage,
                 lane_incarnation_activation_heights: projection.activation_heights,
                 lane_manifests: projection.manifests,
-                lane_privacy_registry: projection.privacy,
+                lane_privacy_registry: privacy,
                 lane_compliance: lane_compliance.take().expect("prepared State input"),
                 runtime_policy: runtime_policy.take().expect("prepared State input"),
                 fraud_monitoring: fraud_monitoring.take().expect("prepared State input"),

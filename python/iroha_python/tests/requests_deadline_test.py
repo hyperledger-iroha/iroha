@@ -60,6 +60,9 @@ def test_bounded_requests_preserves_prepared_wire_and_reaps_success(children):
         assert headers["Authorization"] == "Bearer disposable-test"
         assert headers["Content-Type"] == "application/x-norito"
     assert len(children) == 1
+    assert children[0].args == [
+        sys.executable, "-I", "-B", owner.__file__, "--worker"
+    ]
 
 
 @pytest.mark.parametrize("status", [200, 503, 302])

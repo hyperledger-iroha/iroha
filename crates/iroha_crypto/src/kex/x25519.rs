@@ -2,7 +2,7 @@ use super::KeyExchangeScheme;
 use crate::{Error, KeyGenOption, SessionKey, error::ParseError, rng::rng_from_seed};
 use hkdf::Hkdf;
 #[cfg(feature = "rand")]
-use rand::rngs::OsRng;
+use rand::rngs::SysRng;
 #[cfg(feature = "rand")]
 use rand_core::TryCryptoRng;
 use sha2::Sha256;
@@ -48,7 +48,7 @@ impl KeyExchangeScheme for X25519Sha256 {
                 }
                 let mut rng = rng_from_seed(s);
                 let mut bytes = Zeroizing::new([0u8; 32]);
-                rand_core::RngCore::fill_bytes(&mut rng, bytes.as_mut());
+                rand_core::Rng::fill_bytes(&mut rng, bytes.as_mut());
                 validate_private_key_material_not_all_zero("X25519 derived private key", &bytes)?;
                 let sk = StaticSecret::from(*bytes);
                 let pk = PublicKey::from(&sk);
@@ -107,7 +107,7 @@ impl KeyExchangeScheme for X25519Sha256 {
 impl X25519Sha256 {
     #[cfg(feature = "rand")]
     fn random_private_key() -> Result<StaticSecret, Error> {
-        Self::random_private_key_from_rng(&mut OsRng)
+        Self::random_private_key_from_rng(&mut SysRng)
     }
     #[cfg(feature = "rand")]
     fn random_private_key_from_rng<R>(rng: &mut R) -> Result<StaticSecret, Error>
@@ -142,13 +142,13 @@ mod tests {
     use super::*;
     use curve25519_dalek::constants::EIGHT_TORSION;
     #[cfg(feature = "rand")]
-    use rand_core::TryRngCore;
+    use rand_core::TryRng;
     #[cfg(feature = "rand")]
     struct FixedTryRng {
         byte: u8,
     }
     #[cfg(feature = "rand")]
-    impl TryRngCore for FixedTryRng {
+    impl TryRng for FixedTryRng {
         type Error = core::convert::Infallible;
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             Ok(u32::from_le_bytes([self.byte; 4]))

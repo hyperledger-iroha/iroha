@@ -98,7 +98,7 @@ public enum IrohaPeerKagemushaWalletAdapterV1 {
         return try IrohaPeerWalletRequestV1.decode(message.canonicalPayload).destinationAccountOriginal
     }
 
-    /// The payer companion a Payment carries, exact bytes for `KagemushaWalletV1.receiveWithCompanion`.
+    /// The payer companion a Payment carries, exact bytes for `KagemushaWalletExchangeCallV1.receiveWithCompanion`.
     public static func payerCompanion(_ message: IrohaPeerWireMessageV1) throws -> Data {
         guard message.profile == .kagemushaWalletV1 && message.kind == .payment else {
             throw IrohaPeerWireMessageErrorV1.invalidCanonicalPayload(profile: message.profile, kind: message.kind)

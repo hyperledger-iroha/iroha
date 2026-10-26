@@ -111,7 +111,8 @@ fn exact_stake_authority_fixture(
     fault_tolerance: u32,
     validator_count: u8,
 ) -> (State, Vec<KeyPair>) {
-    let state = blank_test_state();
+    let mut state = blank_test_state();
+    set_staking_minimum_for_test(&mut state.world, 100);
     let mut nexus = state.nexus_snapshot();
     nexus.dataspace_catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata {
         id: DataSpaceId::UNIVERSAL,
@@ -128,7 +129,14 @@ fn exact_stake_authority_fixture(
         })
         .collect::<Vec<_>>();
     seed_consensus_keys_with_pops(&state, &keypairs);
-    let minimum_stake = state.nexus_snapshot().staking.min_validator_stake.clone();
+    let minimum_stake = state
+        .world
+        .parameters
+        .view()
+        .require_staking_policy()
+        .expect("explicit fixture monetary policy")
+        .min_validator_stake
+        .clone();
     let mut world = state.world.block();
     for keypair in &keypairs {
         let validator = AccountId::new(keypair.public_key().clone());

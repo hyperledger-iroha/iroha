@@ -421,7 +421,8 @@ pub fn pq_masp_release_successor_replay_fixture_v1(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand::{SeedableRng as _, rngs::StdRng};
+    use rand::SeedableRng as _;
+    use rand_chacha::ChaCha12Rng;
     #[test]
     fn release_context_binds_every_compiled_profile_digest() {
         let profile = compiled_privacy_profile_v1(PrivacyProtocolIdV1::PqMaspStarkV1)
@@ -447,7 +448,7 @@ mod tests {
     }
     #[test]
     fn shared_normal_maximum_and_invalid_path_fixtures_are_exact() {
-        let mut normal_rng = StdRng::from_seed(raw(0xd1));
+        let mut normal_rng = ChaCha12Rng::from_seed(raw(0xd1));
         let normal =
             pq_masp_release_fixture_v1(false, raw(0xe1), &mut normal_rng).expect("normal fixture");
         assert_eq!(
@@ -458,21 +459,21 @@ mod tests {
         assert_eq!(normal.witness.inputs().len(), 1);
         assert_eq!(normal.witness.outputs().len(), 1);
         assert!(!normal.authorization_secret_key.is_empty());
-        let mut maximum_rng = StdRng::from_seed(raw(0xd2));
+        let mut maximum_rng = ChaCha12Rng::from_seed(raw(0xd2));
         let maximum =
             pq_masp_release_fixture_v1(true, raw(0xe2), &mut maximum_rng).expect("maximum fixture");
         validate_pq_masp_relation_v1(&maximum.statement, &maximum.witness)
             .expect("maximum relation");
         assert_eq!(maximum.witness.inputs().len(), 2);
         assert_eq!(maximum.witness.outputs().len(), 2);
-        let mut invalid_rng = StdRng::from_seed(raw(0xd3));
+        let mut invalid_rng = ChaCha12Rng::from_seed(raw(0xd3));
         let invalid = pq_masp_release_invalid_path_fixture_v1(raw(0xe3), &mut invalid_rng)
             .expect("invalid fixture");
         assert!(validate_pq_masp_relation_v1(&invalid.statement, &invalid.witness).is_err());
     }
     #[test]
     fn successor_replay_refreshes_anchor_but_preserves_the_stable_nullifier() {
-        let mut rng = StdRng::from_seed(raw(0xd4));
+        let mut rng = ChaCha12Rng::from_seed(raw(0xd4));
         let fixture =
             pq_masp_release_fixture_v1(false, raw(0xe4), &mut rng).expect("normal fixture");
         let (statement, witness) = pq_masp_release_successor_replay_fixture_v1(&fixture)

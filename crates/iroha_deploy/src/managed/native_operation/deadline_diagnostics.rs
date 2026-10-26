@@ -1,5 +1,5 @@
-//! Explicit scalar observation of the unchanged original sixty-four-reservation native test.
-//! No hook hashes, captures, allocates or prints without that test's installed guard. This
+//! Explicit scalar observation of native custody-history regressions.
+//! No hook hashes, captures, allocates or prints without an explicitly installed guard. This
 //! observer grants no custody, decoder admission, current authority or additional time.
 
 use crate::managed::service_authority::profile_validation_test_support as profiles;
@@ -412,6 +412,7 @@ pub(in crate::managed) fn retained_error(error: &crate::managed::Error) {
             Error::WorkerFailure { .. } => ("WorkerFailure", None),
             Error::ParentDeadline => ("ParentDeadline", None),
             Error::ParentProgressDeadline { .. } => ("ParentProgressDeadline", None),
+            Error::ParentCheckpoint { .. } => ("ParentCheckpoint", None),
         };
         let mut text = ErrorText::new();
         let _ = write!(&mut text, "{error}");
@@ -449,7 +450,7 @@ pub(in crate::managed) fn wallet_error(seam: &'static str, error: &color_eyre::e
     });
 }
 
-/// Explicit RAII activation installed only by the original64 native control.
+/// Explicit RAII activation for selected native custody tests.
 pub(in crate::managed) struct Observer {
     profiles: Option<profiles::Counter>,
 }

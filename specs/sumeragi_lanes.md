@@ -429,7 +429,10 @@ storage identity). A `G` frame is committed only after the lane frames it merges
 (append order), so replay after restart re-executes `G` blocks from local lane frames. A syncing
 node syncs each lane instance alongside `G` and executes a `G` block once its lanes reach the
 merged tips; lane frames of retired incarnations are kept while any retained `G` block references
-them and pruned with those `G` blocks.
+them and pruned with those `G` blocks. Opening a lane store enumerates its contiguous frames and
+authenticates and synchronizes only the durable tip frame; every lower frame carries its own
+CommitQC and availability evidence and is authenticated by the read that first uses it, so an
+opening costs one frame whatever the lane's history.
 
 Retirement releases the node's registry owners after stopping the driver and its recovery
 job, including failed store openings that never started a driver. Their original funded
@@ -556,15 +559,17 @@ Cleanup rechecks the same monotonic request control after unlocking; one bounded
 retry closes cancellation during the original flag observation without revoking historical
 promotion or a replacement request.
 Only a physically idle Ready owner with no live driver/joiner/reader Arcs or pending work can leave
-the registry. The node's single global worker serializes proposal source calls and cancellation;
-when no independent caller holds the store, cancellation and final shutdown release that idle
-runtime owner without successor traffic, including nodes with no local lane driver. An independent
+the registry, and only at its incarnation's retirement, an explicit release or final shutdown.
+The node's single global worker serializes proposal source calls and cancellation; cancellation
+releases cancelled read slots and request-only openings, never a Ready owner of an applied
+incarnation: startup replay and nodes with no local lane driver merge from that same store block
+after block, and a reopening would authenticate it again. An independent
 live caller keeps the store lock until its existing explicit release or retirement boundary. Its
 native completion guard releases cancelled read allocations, not registry ownership on behalf of
 that caller. None of these runtime releases deletes certified disk history.
 
 The registry map only selects or publishes a per-key owner. Directory establishment,
-prefix authentication, RS16 restoration and native synchronization run outside that shared
+tip authentication, RS16 restoration and native synchronization run outside that shared
 map. A busy same-key recovery returns WouldBlock and retains its exact original opening;
 ready disjoint lanes remain available. In-flight opening Arcs pin runtime retirement until
 the caller returns, while a historical join records its interest under the map before

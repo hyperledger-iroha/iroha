@@ -168,6 +168,16 @@ impl PrivacyZkX509CertificateValidityV1 {
     }
 }
 
+// Clear this owned copy through the field-owning crate. Other copies of this
+// small value remain their owner's responsibility; this is not an erasure claim
+// for caller-retained values or compiler temporaries.
+impl zeroize::Zeroize for PrivacyZkX509CertificateValidityV1 {
+    fn zeroize(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.not_before_unix_seconds);
+        zeroize::Zeroize::zeroize(&mut self.not_after_unix_seconds);
+    }
+}
+
 impl fmt::Debug for PrivacyZkX509CertificateValidityV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("PrivacyZkX509CertificateValidityV1 { <private material redacted> }")
@@ -698,10 +708,12 @@ pub enum PrivacyZkX509HolderScheduleOutcomeV1 {
 /// timestamp independently. An idle chain does not acquire wall-clock freshness
 /// from this helper, a wallet TTL, or a previously observed block timestamp.
 ///
-/// TODO(X.6): integrate authenticated merged-event selection and actual holder
-/// lifecycle ownership, including quiet-chain and same-block revocation rules.
+/// The ordinary Core privacy holder lifecycle calls this helper only after
+/// native signature/path/CRL/State preflight, and rechecks its immutable original
+/// against current authenticated State before proving and releasing proof bytes.
+/// TODO(X.6): integrate authenticated State observation and submission ownership;
+/// local phase estimates do not establish quiet-chain wall-clock freshness.
 /// Measured preparation/proving/inclusion budgets remain E.1/X.4 obligations.
-/// This non-wire component is not a shipping holder scheduler.
 #[derive(Clone, Copy)]
 pub struct PrivacyZkX509HolderScheduleV1<'a> {
     original: &'a IrohaZkX509StarkP256StatementV1,
@@ -774,5 +786,24 @@ impl<'a> PrivacyZkX509HolderScheduleV1<'a> {
         } else {
             PrivacyZkX509HolderScheduleOutcomeV1::Reprepare
         })
+    }
+}
+
+#[cfg(test)]
+mod private_validity_erasure_tests {
+    use super::PrivacyZkX509CertificateValidityV1;
+    use zeroize::{Zeroize as _, Zeroizing};
+
+    #[test]
+    fn zeroize_clears_owned_validity_endpoints_without_claiming_other_copies() {
+        let original = PrivacyZkX509CertificateValidityV1::new(17, u64::MAX);
+        let mut owned = Zeroizing::new([original; 3]);
+        owned.zeroize();
+        for validity in owned.iter() {
+            assert_eq!(validity.not_before_unix_seconds(), 0);
+            assert_eq!(validity.not_after_unix_seconds(), 0);
+        }
+        assert_eq!(original.not_before_unix_seconds(), 17);
+        assert_eq!(original.not_after_unix_seconds(), u64::MAX);
     }
 }

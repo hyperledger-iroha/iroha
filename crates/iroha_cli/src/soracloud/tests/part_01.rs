@@ -2149,12 +2149,13 @@ const TEST_HARNESSES_V1: [&str; 25] = [
 struct FailingSoracloudSignatureNonceRng;
 #[derive(Debug)]
 struct FailingSoracloudSignatureNonceRngError;
+impl std::error::Error for FailingSoracloudSignatureNonceRngError {}
 impl fmt::Display for FailingSoracloudSignatureNonceRngError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("failing Soracloud signature nonce RNG")
     }
 }
-impl TryRngCore for FailingSoracloudSignatureNonceRng {
+impl TryRng for FailingSoracloudSignatureNonceRng {
     type Error = FailingSoracloudSignatureNonceRngError;
     fn try_next_u32(&mut self) -> std::result::Result<u32, Self::Error> {
         Err(FailingSoracloudSignatureNonceRngError)

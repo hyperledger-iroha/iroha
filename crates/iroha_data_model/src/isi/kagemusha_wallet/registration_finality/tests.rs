@@ -19,7 +19,7 @@ fn non_register_and_invalid_selected_originals_are_not_registration_data() {
         version: 1,
         network_id: *fixture.network_id().as_bytes(),
         scheme_root_key: KagemushaDevicePublicKeyV1::from_sec1_bytes(
-            key.verifying_key().to_encoded_point(false).as_bytes(),
+            key.verifying_key().to_sec1_point(false).as_bytes(),
         )
         .unwrap(),
         relation_id: [9; 32],

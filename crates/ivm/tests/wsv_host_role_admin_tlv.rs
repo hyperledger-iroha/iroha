@@ -64,7 +64,6 @@ fn create_role_grant_and_revoke_affects_permissions() {
     // Alice permissions to register entities
     wsv.grant_permission(&alice, PermissionToken::RegisterDomain);
     wsv.grant_permission(&alice, PermissionToken::RegisterAccount);
-    wsv.grant_permission(&alice, PermissionToken::RegisterAssetDefinition);
     wsv.grant_permission(&alice, PermissionToken::ManageRoles);
     // Note: No direct MintAsset permission for alice; the role will grant it.
     let host = WsvHost::new_with_subject(wsv, alice.clone());
@@ -98,6 +97,11 @@ fn create_role_grant_and_revoke_affects_permissions() {
     vm.set_register(11, Memory::INPUT_START + ad.len() as u64 + 8);
     vm.set_register(12, 0);
     vm.set_register(13, 0);
+    let domain_offset = ad.len() as u64 + display_name.len() as u64 + 16;
+    vm.memory
+        .preload_input(domain_offset, &dom)
+        .expect("preload owning domain");
+    vm.set_register(14, Memory::INPUT_START + domain_offset);
     let prog_ad = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_ASSET as u8]);
     vm.load_program(&prog_ad).unwrap();
     vm.run().expect("register asset def");
@@ -203,7 +207,6 @@ fn create_role_with_permissions_key_then_mint() {
     wsv.add_account_unchecked(alice.clone());
     wsv.grant_permission(&alice, PermissionToken::RegisterDomain);
     wsv.grant_permission(&alice, PermissionToken::RegisterAccount);
-    wsv.grant_permission(&alice, PermissionToken::RegisterAssetDefinition);
     wsv.grant_permission(&alice, PermissionToken::ManageRoles);
     let host = WsvHost::new_with_subject(wsv, alice.clone());
     let mut vm = IVM::new(u64::MAX);
@@ -235,6 +238,11 @@ fn create_role_with_permissions_key_then_mint() {
     vm.set_register(11, Memory::INPUT_START + ad.len() as u64 + 8);
     vm.set_register(12, 0);
     vm.set_register(13, 0);
+    let domain_offset = ad.len() as u64 + display_name.len() as u64 + 16;
+    vm.memory
+        .preload_input(domain_offset, &dom)
+        .expect("preload owning domain");
+    vm.set_register(14, Memory::INPUT_START + domain_offset);
     let prog_ad = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_ASSET as u8]);
     vm.load_program(&prog_ad).unwrap();
     vm.run().expect("register asset def");

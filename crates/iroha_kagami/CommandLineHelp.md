@@ -27,6 +27,7 @@ This document contains the help content for the `kagami` command-line program.
 * [`kagami contract deploy`↴](#kagami-contract-deploy)
 * [`kagami contract view`↴](#kagami-contract-view)
 * [`kagami contract call`↴](#kagami-contract-call)
+* [`kagami contract saved`↴](#kagami-contract-saved)
 * [`kagami package`↴](#kagami-package)
 * [`kagami package publish`↴](#kagami-package-publish)
 * [`kagami docker`↴](#kagami-docker)
@@ -48,8 +49,6 @@ This document contains the help content for the `kagami` command-line program.
 * [`kagami privacy-bootstrap render-taira-release-v1`↴](#kagami-privacy-bootstrap-render-taira-release-v1)
 * [`kagami verify`↴](#kagami-verify)
 * [`kagami advanced`↴](#kagami-advanced)
-* [`kagami advanced network-bootstrap`↴](#kagami-advanced-network-bootstrap)
-* [`kagami advanced network-bootstrap prepare`↴](#kagami-advanced-network-bootstrap-prepare)
 * [`kagami advanced client-configs`↴](#kagami-advanced-client-configs)
 * [`kagami advanced codec`↴](#kagami-advanced-codec)
 * [`kagami advanced codec list-types`↴](#kagami-advanced-codec-list-types)
@@ -170,6 +169,7 @@ Generate, start, verify, and select a localnet without supplying configuration
 * `--state <STATE>` — Private runtime store. By default each workspace has its own OS application-state directory
 * `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the current directory)
 * `--json` — Emit one public JSON result; progress remains on stderr
+* `--with-storage` — Provision local storage and package-registry services when creating this network
 * `--timeout <TIMEOUT>` — Complete generation and readiness budget in seconds
 
   Default value: `30`
@@ -508,6 +508,7 @@ Build and deploy native IVM contracts in one invocation
 * `deploy` — Deploy source, bytecode, or a Musubi package; automatically start a default localnet if needed
 * `view` — Read a verified deployed view in the selected managed environment
 * `call` — Prepare, execute or resume a finite durable mutable call
+* `saved` — List the saved deployment journals that deploy --resume accepts, by contract alias
 
 
 
@@ -533,6 +534,9 @@ Deploy source, bytecode, or a Musubi package; automatically start a default loca
 * `--locked` — Require an unchanged Musubi dependency lock
 * `--resume <RESUME>` — Recover this exact retained deployment without rebuilding or signing another plan
 * `--max-fee <MAX_FEE>` — Bound the aggregate quoted fees in their single fee asset before dispatch
+* `--timeout <TIMEOUT>` — Startup budget in seconds when the deployment has to start its localnet first
+
+  Default value: `30`
 
 
 
@@ -598,6 +602,21 @@ Prepare, execute or resume a finite durable mutable call
 * `--readback-gas-limit <READBACK_GAS_LIMIT>` — Independent positive gas budget for the readback view
 
   Default value: `1500000`
+
+
+
+## `kagami contract saved`
+
+List the saved deployment journals that deploy --resume accepts, by contract alias
+
+**Usage:** `kagami contract saved [OPTIONS]`
+
+###### **Options:**
+
+* `--state <STATE>` — Private runtime store. By default each workspace has its own OS application-state directory
+* `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the current directory)
+* `--json` — Emit one public JSON result; progress remains on stderr
+* `--context <CONTEXT>` — Existing managed environment; otherwise use the workspace selection
 
 
 
@@ -745,6 +764,8 @@ Sign the genesis block
 
    Validators and clients must select this same file through `genesis.expected_hash_file` and `network_id_file`, respectively.
 * `--nexus-context-output <PATH>` — Publish the exact Nexus/AMX context preimage whose hash the signed genesis commits (`nexus-amx-context.v1.bin`). Validators and public reset inputs consume these bytes
+* `--sccp-reset-history <PATH>` — Reserve the final SCCP network identity in the same history used during genesis generation. Rejects an unreserved nonce or any previously signed reset identity
+* `--fresh-sccp-reset-nonce` — Reserve a fresh SCCP reset nonce before signing a revised genesis. Requires the durable history; use when reseating a previously signed network
 * `--replace-expected-hash <NETWORK_ID>` — Replace the expected-hash file only if it still contains this exact prior NetworkId. Requires all four output paths. The identity is published last as the bundle's commit marker; interrupted publication must be retried with the same prior identity
 * `-t`, `--topology <TOPOLOGY>` — Use this topology instead of specified in genesis.json. JSON-serialized vector of `PeerId`. For use in `iroha_swarm`.
 
@@ -768,7 +789,7 @@ Sign the genesis block
 
 Generate a genesis configuration and standard-output in JSON format
 
-**Usage:** `kagami genesis generate [OPTIONS] --ivm-dir <PATH> --genesis-public-key <MULTI_HASH> [COMMAND]`
+**Usage:** `kagami genesis generate [OPTIONS] --ivm-dir <PATH> --genesis-public-key <MULTI_HASH> --allowed-signing <ALGO> [COMMAND]`
 
 ###### **Subcommands:**
 
@@ -781,6 +802,7 @@ Generate a genesis configuration and standard-output in JSON format
 * `--chain-id <CHAIN_ID>` — Optional explicit chain id. With a profile, it must equal that profile's pinned chain id
 * `--vrf-seed-hex <HEX>` — Optional VRF seed (hex, 32 bytes). Required for the public `iroha3-taira`/`iroha3-nexus` profiles
 * `--xor-asset-definition-id <BASE58>` — Canonical public XOR asset definition id (Base58). Required for `iroha3-nexus` NPoS manifests; `iroha3-taira` defaults to its live XOR id
+* `--sccp-reset-history <PATH>` — Install the SCCP genesis profile and reserve a fresh nonce in this persistent reset-history directory. Requires NPoS and a global root; retain the history across resets
 * `--executor <PATH>` — Optional path (relative to output) to the executor bytecode file (.to). If omitted, no executor upgrade is included in genesis
 * `--ivm-dir <PATH>` — Relative path from the directory of output file to the directory that contains IVM bytecode libraries
 * `--genesis-public-key <MULTI_HASH>`
@@ -790,17 +812,7 @@ Generate a genesis configuration and standard-output in JSON format
   Possible values: `permissioned`, `npos`
 
 * `--lane-policy <PATH>` — Optional path to a JSON Sumeragi lane policy (fixed lanes, routes, autoscale) to set in genesis. If omitted, the chain has lane 0 only until governance sets a policy
-* `--sm-openssl-preview <BOOL>` — Toggle the OpenSSL-backed SM preview helpers in the generated manifest
-
-  Possible values: `true`, `false`
-
-* `--default-hash <HASH>` — Override the default hash advertised in the manifest
-* `--allowed-signing <ALGO>` — Replace the allowed signing algorithms (repeat flag to supply multiple values)
-
-  Possible values: `ed25519`, `secp256k1`, `sm2`
-
-* `--sm2-distid-default <DISTID>` — Override the fallback SM2 distinguishing identifier
-* `--allowed-curve-id <CURVE_ID>` — Override the allowed curve identifiers (repeat flag to supply multiple values)
+* `--allowed-signing <ALGO>` — Explicit ordinary signing/controller algorithms in ascending canonical tag order. Repeat this flag for every selected member; duplicates and omissions are not filled in
 
 
 
@@ -1015,59 +1027,11 @@ Advanced low-level helpers for codec conversion, schema generation, block inspec
 
 ###### **Subcommands:**
 
-* `network-bootstrap` — Prepare signed remote-network bootstrap and native installation authorities offline
 * `client-configs` — Generate per-client CLI configs from a base client.toml
 * `codec` — Commands related to Norito codec conversions
 * `kura` — Commands related to block inspection
 * `markdown-help` — Output CLI documentation in Markdown format
 * `schema` — Generate the schema used for code generation in Iroha SDKs
-
-
-
-## `kagami advanced network-bootstrap`
-
-Prepare signed remote-network bootstrap and native installation authorities offline
-
-**Usage:** `kagami advanced network-bootstrap <COMMAND>`
-
-###### **Subcommands:**
-
-* `prepare` — Verify pinned genesis/proofs and atomically prepare canonical public release artifacts
-
-
-
-## `kagami advanced network-bootstrap prepare`
-
-Verify pinned genesis/proofs and atomically prepare canonical public release artifacts
-
-**Usage:** `kagami advanced network-bootstrap prepare [OPTIONS] --genesis-manifest <GENESIS_MANIFEST> --expected-genesis-manifest-sha256 <EXPECTED_GENESIS_MANIFEST_SHA256> --signed-genesis <SIGNED_GENESIS> --genesis-public-key <GENESIS_PUBLIC_KEY> --expected-network-id <EXPECTED_NETWORK_ID> --proof-json <PROOF_JSON> --network-name <NETWORK_NAME> --serial <SERIAL> --generation <GENERATION> --issued-at-ms <ISSUED_AT_MS> --expires-at-ms <EXPIRES_AT_MS> --torii-root <TORII_ROOT> --peer <PEER> --checkpoint-url <CHECKPOINT_URL> --release-public-key <RELEASE_PUBLIC_KEY> --release-key-file <RELEASE_KEY_FILE> --output-dir <OUTPUT_DIR>`
-
-###### **Options:**
-
-* `--genesis-manifest <GENESIS_MANIFEST>` — Exact manifest semantically bound to the independently authenticated signed genesis
-* `--expected-genesis-manifest-sha256 <EXPECTED_GENESIS_MANIFEST_SHA256>` — Manifest SHA256 authenticated independently, for example by native public-inputs metadata
-* `--signed-genesis <SIGNED_GENESIS>` — Original canonical signed genesis, selected independently of peer responses
-* `--genesis-public-key <GENESIS_PUBLIC_KEY>` — Independently selected public key that must authenticate the complete genesis
-* `--expected-network-id <EXPECTED_NETWORK_ID>` — Independently selected exact genesis-derived network identity
-* `--proof-json <PROOF_JSON>` — Existing typed finality-proof JSON, repeated in contiguous height order from 1 through N
-* `--network-name <NETWORK_NAME>` — Exact installed network selection; no official label is inferred
-* `--serial <SERIAL>` — Official monotonic publication serial and resulting installation rollback floor
-* `--generation <GENERATION>` — Explicit monotonic reset generation for this signed genesis
-* `--issued-at-ms <ISSUED_AT_MS>` — Inclusive release validity start in Unix milliseconds
-* `--expires-at-ms <EXPIRES_AT_MS>` — Exclusive expiry; native policy caps validity at one day
-* `--torii-root <TORII_ROOT>` — Approved canonical HTTPS parent root; repeat for each selected root
-* `--peer <PEER>` — Exact BLS public key and approved root as PUBLIC_KEY=HTTPS_ROOT; repeat for every member
-* `--checkpoint-url <CHECKPOINT_URL>` — Independently selected canonical HTTPS location where checkpoint.nrt will be published
-* `--release-public-key <RELEASE_PUBLIC_KEY>` — Independently selected release public key; must match the native signing file
-* `--release-key-file <RELEASE_KEY_FILE>` — Absolute native owner-only canonical release signing-key file (mode 0400 or 0600)
-* `--faucet-root <FAUCET_ROOT>` — Optional approved testnet faucet root; all allowance fields must be supplied together
-* `--faucet-issuer <FAUCET_ISSUER>` — Independently authenticated single-key faucet issuer
-* `--faucet-asset <FAUCET_ASSET>` — Exact sole currency available for automatic fees and namespace rent
-* `--faucet-amount <FAUCET_AMOUNT>` — Positive allowance supplied by one testnet faucet claim
-* `--max-operation-fee <MAX_OPERATION_FEE>` — Finite maximum aggregate fees for one managed parent operation
-* `--max-namespace-rent <MAX_NAMESPACE_RENT>` — Finite maximum combined dataspace and owner-alias one-year namespace rent
-* `--build-registry-root <BUILD_REGISTRY_ROOT>` — Optional approved parent build-registry root; repeat for selected roots
-* `--output-dir <OUTPUT_DIR>` — Fresh directory beneath an existing safe owner-held parent; outputs publish together
 
 
 

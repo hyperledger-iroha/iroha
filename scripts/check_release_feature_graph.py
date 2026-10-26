@@ -2200,9 +2200,9 @@ def _validate_nix_appimage_helper(repo: Path) -> None:
     relative = NIX_APPIMAGE_OWNER_ROOT / "flake.nix"
     source = (repo / relative).read_text(encoding="utf-8")
     required = (
-        r"^\s*mkappimage\s*=\s*\{\s*drv\s*,\s*name\s*\}\s*:\s*$",
-        r"^\s*closure\s*=\s*pkgs\.writeReferencesToFile\s+drv\s*;\s*$",
-        r'^\s*entrypoint\s*=\s*"\$\{drv\}/bin/\$\{name\}"\s*;\s*$',
+        r"^\s*mkappimage\s*=\s*\{\s*drv\s*,\s*name\s*,\s*executable\s*\?\s*name\s*\}\s*:\s*$",
+        r'^\s*closure\s*=\s*"\$\{pkgs\.closureInfo\s*\{\s*rootPaths\s*=\s*\[\s*drv\s*\];\s*\}\}/store-paths"\s*;\s*$',
+        r'^\s*entrypoint\s*=\s*"\$\{drv\}/bin/\$\{executable\}"\s*;\s*$',
         r"^\s*mksquashfs\s+\$\(cat\s+\$\{closure\}\)\s+\$out\s+\\\s*$",
     )
     for pattern in required:
@@ -2323,7 +2323,7 @@ def nix_shipping_targets(
         "packages.appimage",
     )
     canonical_appimage = re.sub(r"\s+", " ", appimage).strip()
-    if canonical_appimage != 'drv = packages.iroha3; name = "iroha3";':
+    if canonical_appimage != 'drv = packages.iroha3; name = "iroha3"; executable = "iroha3d";':
         raise RuntimeError(
             f"{relative}: packages.appimage must wrap packages.iroha3 exactly "
             "with the reviewed entrypoint"

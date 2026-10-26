@@ -1,5 +1,5 @@
 use norito::json;
-use rand::{RngCore, SeedableRng, rngs::StdRng};
+use rand::{Rng, SeedableRng, rngs::StdRng};
 use std::{
     error::Error,
     fs,

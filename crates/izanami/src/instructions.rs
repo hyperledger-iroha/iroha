@@ -1,11 +1,15 @@
 //! Workload generation utilities for Izanami, covering diverse ISI mixes and trigger flavours.
-use color_eyre::{Result, eyre::eyre};
-use iroha_config::parameters::defaults as config_defaults;
+use crate::config::NexusProfile;
+use color_eyre::{
+    Result,
+    eyre::{ensure, eyre},
+};
 use iroha_crypto::{Algorithm, Hash, KeyPair};
 use iroha_data_model::{
     account::AccountId,
     account::NewAccount,
     account::rekey::{AccountAlias, AccountAliasDomain},
+    block::consensus::PublicLaneStakingPolicy,
     events::{
         EventFilterBox,
         execute_trigger::ExecuteTriggerEventFilter,
@@ -66,7 +70,7 @@ use norito::{
     codec::Encode as NoritoEncode,
     json::{Map as JsonMap, Value as JsonValue},
 };
-use rand::{Rng, RngCore, rngs::StdRng, seq::IndexedRandom};
+use rand::{Rng, RngExt, rngs::StdRng, seq::IndexedRandom};
 use sorafs_manifest::{
     DagCodecId, MANIFEST_DAG_CODEC, ManifestBuilder,
     capacity::{
@@ -251,14 +255,30 @@ pub struct PreparedChaos {
     /// Provider-owner bindings that the local network must load before genesis.
     pub sorafs_provider_owners: BTreeMap<String, String>,
 }
-/// Build post-topology `NPoS` bootstrap instructions using an explicit minimum self-bond.
+/// Author the complete selected recipe with explicit disposable Izanami custody.
+pub(crate) fn nexus_staking_policy(profile: &NexusProfile) -> Result<PublicLaneStakingPolicy> {
+    let mut policy = profile.staking_policy.clone();
+    policy.validate()?;
+    let custody = nexus_gas_account_id()?;
+    policy.stake_escrow_account_id = custody.clone();
+    policy.slash_sink_account_id = custody;
+    Ok(policy)
+}
+/// Build post-topology NPoS bootstrap instructions using the complete original policy.
+/// The declared stake must already satisfy its minimum; this function never increases it.
 pub fn npos_post_topology_instructions(
     peer_count: usize,
     bootstrap_public_lanes: &[LaneId],
     min_self_bond: &Quantity,
-    stake_asset_id: &AssetDefinitionId,
-    escrow_account_id: &AccountId,
+    policy: &PublicLaneStakingPolicy,
 ) -> Result<Vec<InstructionBox>> {
+    policy.validate()?;
+    ensure!(
+        min_self_bond >= &policy.min_validator_stake,
+        "declared bootstrap stake is below the original staking policy minimum"
+    );
+    let stake_asset_id = &policy.stake_asset_id;
+    let escrow_account_id = &policy.stake_escrow_account_id;
     let effective_peers = peer_count.max(1);
     let mut instructions = Vec::new();
     for index in 0..effective_peers {
@@ -405,7 +425,7 @@ pub fn prepare_state(
     }
     let effective_peers = peer_count.unwrap_or_else(|| account_count.max(1)).max(1);
     let mut nexus_genesis = Vec::new();
-    let nexus_staking = if nexus.is_some() {
+    let nexus_staking = if let Some(profile) = nexus {
         let nexus_domain = DomainId::try_new("nexus", "universal")
             .map_err(|_| eyre!("failed to parse nexus domain id"))?;
         let ivm_domain = DomainId::try_new("ivm", "universal")
@@ -421,23 +441,14 @@ pub fn prepare_state(
             Some(AccountAliasDomain::new(ivm_domain.name().clone())),
             DataSpaceId::UNIVERSAL,
         )));
-        let stake_asset = nexus.map_or_else(
-            || {
-                config_defaults::nexus::staking::stake_asset_id()
-                    .parse()
-                    .expect("default nexus stake asset id should parse")
-            },
-            |profile| profile.stake_asset_id.clone(),
-        );
-        let fee_asset = nexus.map_or_else(
-            || {
-                config_defaults::nexus::fees::fee_asset_id()
-                    .parse()
-                    .expect("default nexus fee asset id should parse")
-            },
-            |profile| profile.fee_asset_id.clone(),
-        );
+        let policy = nexus_staking_policy(profile)?;
+        let stake_asset = policy.stake_asset_id.clone();
+        let fee_asset = profile.fee_asset_id.clone();
         let stake_amount = SumeragiNposParameters::default().min_self_bond().clone();
+        ensure!(
+            stake_amount >= policy.min_validator_stake,
+            "declared bootstrap mint is below the original staking policy minimum"
+        );
         let bootstrap_lane_count = u64::try_from(bootstrap_public_lanes.len()).unwrap_or(u64::MAX);
         let total_bootstrap_stake = stake_amount
             .try_mul_decimal(&bootstrap_lane_count.into())
@@ -512,9 +523,9 @@ pub fn prepare_state(
             #[cfg(test)]
             fee_sink: gas_account_id.clone(),
             #[cfg(test)]
-            stake_escrow: gas_account_id.clone(),
+            stake_escrow: policy.stake_escrow_account_id,
             #[cfg(test)]
-            slash_sink: gas_account_id,
+            slash_sink: policy.slash_sink_account_id,
             validator_accounts,
         })
     } else {
@@ -2601,8 +2612,7 @@ mod tests {
             setup.validator_accounts.len(),
             profile.bootstrap_public_lanes.as_slice(),
             SumeragiNposParameters::default().min_self_bond(),
-            &setup.stake_asset,
-            &setup.stake_escrow,
+            &nexus_staking_policy(&profile).unwrap(),
         )
         .expect("post topology instructions");
         let mut registered_validators = HashSet::new();
@@ -2662,8 +2672,7 @@ mod tests {
             4,
             &bootstrap_public_lanes,
             &min_self_bond,
-            &profile.stake_asset_id,
-            &escrow,
+            &nexus_staking_policy(&profile).unwrap(),
         )
         .expect("post topology instructions");
         let mut register_count = 0usize;
@@ -2685,10 +2694,13 @@ mod tests {
                     register.monetary_plan,
                     iroha_data_model::nexus::PublicLaneMonetaryPlanV1::genesis_registration(
                         AssetId::new(
-                            profile.stake_asset_id.clone(),
+                            profile.staking_policy.stake_asset_id.clone(),
                             register.stake_account.clone()
                         ),
-                        AssetId::new(profile.stake_asset_id.clone(), escrow.clone()),
+                        AssetId::new(
+                            profile.staking_policy.stake_asset_id.clone(),
+                            escrow.clone()
+                        ),
                         min_self_bond.clone(),
                     ),
                     "genesis must authorize the exact configured stake custody"
@@ -4086,5 +4098,47 @@ mod tests {
             "successful account registration should publish the new signer"
         );
     }
+    #[test]
+    fn selected_staking_recipe_preserves_all_nondefault_terms_except_explicit_custody() {
+        let mut profile = NexusProfile::sora_defaults().unwrap();
+        profile.staking_policy.min_validator_stake = 37_u64.into();
+        profile.staking_policy.max_stake_shares_per_validator = 13_u32.try_into().unwrap();
+        profile.staking_policy.max_pending_unbonds_per_share = 9_u32.try_into().unwrap();
+        profile.staking_policy.unbonding_delay_ms = 987_654;
+        profile.staking_policy.max_slash_bps = 997;
+        let recipe = profile.staking_policy.clone();
+        let mut expected = recipe.clone();
+        expected.stake_escrow_account_id = nexus_gas_account_id().unwrap();
+        expected.slash_sink_account_id = expected.stake_escrow_account_id.clone();
+        assert_eq!(nexus_staking_policy(&profile).unwrap(), expected);
+        assert_eq!(
+            profile.staking_policy, recipe,
+            "the compiled recipe is not mutated"
+        );
+        profile.staking_policy.max_slash_bps = 10_001;
+        assert!(matches!(nexus_staking_policy(&profile).unwrap_err().downcast_ref::<iroha_data_model::block::consensus::PublicLaneStakingPolicyError>(), Some(iroha_data_model::block::consensus::PublicLaneStakingPolicyError::InvalidSlashFraction)));
+    }
+
+    #[test]
+    fn staking_plan_and_mint_refuse_a_minimum_above_declared_stake() {
+        let mut profile = NexusProfile::sora_defaults().unwrap();
+        let declared = SumeragiNposParameters::default().min_self_bond().clone();
+        profile.staking_policy.min_validator_stake =
+            declared.try_add(&Quantity::from(1_u64)).unwrap();
+        let policy = nexus_staking_policy(&profile).unwrap();
+        assert!(
+            npos_post_topology_instructions(4, &[LaneId::SINGLE], &declared, &policy)
+                .unwrap_err()
+                .to_string()
+                .contains("declared bootstrap stake")
+        );
+        assert!(
+            prepare_state(2, None, Some(&profile), WorkloadProfile::Stable, false)
+                .unwrap_err()
+                .to_string()
+                .contains("declared bootstrap mint")
+        );
+    }
+
     include!("instructions_tail_tests.rs");
 }

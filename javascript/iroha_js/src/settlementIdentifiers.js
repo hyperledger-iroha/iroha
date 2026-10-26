@@ -13,7 +13,7 @@
  * - `RepoAgreementId`: canonical Iroha `Name` text.
  */
 
-import { blake3 } from "@noble/hashes/blake3";
+import { blake3 } from "@noble/hashes/blake3.js";
 import { Buffer } from "buffer";
 
 import { blake2b256 } from "./blake2b.js";

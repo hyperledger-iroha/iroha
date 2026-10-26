@@ -12,6 +12,59 @@ sys.path.insert(0, str(ROOT / 'scripts'))
 import native_sdk_source_custody as custody
 
 
+def custom_build_fixture(tmp_path, stem):
+    """Retain inert Cargo alias, exact rustc owner and emitted output rule."""
+    owner = tmp_path / 'build' / 'dependency-0123456789abcdef'
+    owner.mkdir(parents=True)
+    target = 'build-script-' + stem
+    alias = owner / target
+    compiled = owner / (target.replace('-', '_') + '-0123456789abcdef')
+    depfile = Path(str(compiled) + '.d')
+    alias.write_bytes(b'inert custom build bytes')
+    compiled.write_bytes(alias.read_bytes())
+    depfile.write_text(f'{compiled}: /source/builder/{stem}.rs\n')
+    message = {'target': {'kind': ['custom-build'], 'name': target,
+                          'src_path': f'/source/builder/{stem}.rs'},
+               'filenames': [str(alias)]}
+    return message, alias, compiled, depfile
+
+
+@pytest.mark.parametrize('stem', ['build', 'main'])
+def test_custom_build_alias_binds_exact_selected_target_and_bytes(tmp_path, stem):
+    message, alias, _, depfile = custom_build_fixture(tmp_path, stem)
+    assert custody.dep_files(message) == [depfile]
+    assert custody.dep_info_names(message) == {str(alias) + '.d', str(depfile)}
+
+
+@pytest.mark.parametrize('mutation', ['target', 'source', 'alias', 'hash', 'bytes', 'output', 'symlink'])
+def test_custom_build_alias_refuses_wrong_owner_or_substituted_bytes(tmp_path, mutation):
+    message, alias, compiled, depfile = custom_build_fixture(tmp_path, 'main')
+    if mutation == 'target':
+        message['target']['name'] = 'build-script-build'
+    elif mutation == 'source':
+        message['target']['src_path'] = '/source/other.rs'
+    elif mutation == 'alias':
+        other = alias.with_name('build-script-build')
+        alias.rename(other)
+        message['filenames'] = [str(other)]
+    elif mutation == 'hash':
+        other = alias.parent.with_name('dependency-wrong-owner')
+        alias.parent.rename(other)
+        message['filenames'] = [str(other / alias.name)]
+    elif mutation == 'bytes':
+        compiled.write_bytes(b'substituted executable')
+    elif mutation == 'output':
+        depfile.write_text('/unrelated/build_script_main: /source/builder/main.rs\n')
+    else:
+        compiled.unlink()
+        compiled.symlink_to(alias)
+    with pytest.raises(RuntimeError):
+        custody.dep_files(message)
+    if mutation in {'target', 'source', 'alias', 'hash'}:
+        with pytest.raises(RuntimeError):
+            custody.dep_info_names(message)
+
+
 @pytest.fixture(autouse=True)
 def no_children(monkeypatch):
     def forbidden(*args, **kwargs):
@@ -27,7 +80,7 @@ def fixture(tmp_path, kind='local', dependency_name='pqcrypto-internals'):
     outside = tmp_path / 'external'; outside.mkdir()
     dependency_manifest = outside / 'Cargo.toml'; dependency_manifest.write_text('[package]\nname="inert-dependency"\n')
     source = None if kind == 'local' else ('registry+https://github.com/rust-lang/crates.io-index'
-                                          if kind == 'registry' else next(iter(custody.SUPPORTED_GIT_SOURCES)))
+                                          if kind == 'registry' else 'git+https://github.com/zcash/orchard.git?rev=9d07047d32c4787e1b7964b4cf4fa0286c93824c#9d07047d32c4787e1b7964b4cf4fa0286c93824c')
     if kind == 'local':
         dependency = root / 'crates/inert-dependency'; dependency.mkdir()
         dependency_manifest = dependency / 'Cargo.toml'; dependency_manifest.write_text('[package]\nname="inert-dependency"\n')
@@ -66,8 +119,17 @@ def test_native_and_build_inputs_outside_rust_dep_info_refuse_changed_originals(
     root, metadata, originals, receipts, prefix = fixture(tmp_path, kind)
     key = prefix + name; originals[key] = 'd' * 64
     current = dict(originals); current[key] = 'e' * 64
-    with pytest.raises(RuntimeError, match='source custody differs'):
+    expected = 'Unreviewed external source identity' if kind == 'git' else 'source custody differs'
+    with pytest.raises(RuntimeError, match=expected):
         custody.consumed_source_projection(metadata, root, originals, current, receipts, 'iroha_js_host')
+
+
+def test_registry_release_source_is_the_only_admitted_external_namespace():
+    assert custody.external_source_prefix(custody.REGISTRY_SOURCE) == 'registry:'
+    for source in ('git+https://github.com/zcash/orchard.git#8190e4d9b7e9c0140964e88b71f95276d2b50470',
+                   'registry+https://unreviewed.example/index', None):
+        with pytest.raises(RuntimeError, match='Unreviewed external source identity'):
+            custody.external_source_prefix(source)
 
 
 @pytest.mark.parametrize('change', ('add', 'remove'))

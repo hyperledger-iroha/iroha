@@ -368,10 +368,12 @@ mod native_genesis_policy_tests {
         let changed =
             std::num::NonZeroU64::new(original_cadence.get().checked_add(1).unwrap()).unwrap();
         {
-            let parameters = staged.world.parameters.get_mut();
-            let mut consensus = parameters.sumeragi().clone();
+            let mut consensus = staged.world.parameters.get().sumeragi().clone();
             consensus.block_cadence_ms = changed;
-            parameters.set_sumeragi(consensus);
+            staged
+                .world
+                .set_sumeragi_for_testing(consensus)
+                .expect("retain the explicitly staged consensus fixture");
         }
         let error = ValidBlock::validate_native_genesis_policy(genesis, &staged)
             .expect_err("signed metadata cannot bless a different final executed H1 cadence");
@@ -387,10 +389,12 @@ mod native_genesis_policy_tests {
         assert_eq!(prepared.state.committed_height(), 0);
         assert_eq!(prepared.kura.exact_durable_blocks_count().unwrap(), 0);
         {
-            let parameters = staged.world.parameters.get_mut();
-            let mut consensus = parameters.sumeragi().clone();
+            let mut consensus = staged.world.parameters.get().sumeragi().clone();
             consensus.block_cadence_ms = original_cadence;
-            parameters.set_sumeragi(consensus);
+            staged
+                .world
+                .set_sumeragi_for_testing(consensus)
+                .expect("retain the explicitly staged consensus fixture");
         }
         ValidBlock::validate_native_genesis_policy(genesis, &staged)
             .expect("restoring the exact original staged cadence restores acceptance");
@@ -409,19 +413,23 @@ mod native_genesis_policy_tests {
             })
             .expect("the original signed CT5 margin fits");
         {
-            let parameters = staged.world.parameters.get_mut();
             let mut consensus = original_clock.clone();
             consensus.due_work_max_lag_ms = std::num::NonZeroU64::new(minimum_lag).unwrap();
-            parameters.set_sumeragi(consensus);
+            staged
+                .world
+                .set_sumeragi_for_testing(consensus)
+                .expect("retain the explicitly staged consensus fixture");
         }
         ValidBlock::validate_native_genesis_policy(genesis, &staged)
             .expect("the exact combined CT5 margin is valid before publication");
         let below_minimum = minimum_lag.checked_sub(1).unwrap();
         {
-            let parameters = staged.world.parameters.get_mut();
             let mut consensus = original_clock.clone();
             consensus.due_work_max_lag_ms = std::num::NonZeroU64::new(below_minimum).unwrap();
-            parameters.set_sumeragi(consensus);
+            staged
+                .world
+                .set_sumeragi_for_testing(consensus)
+                .expect("retain the explicitly staged consensus fixture");
         }
         let error = ValidBlock::validate_native_genesis_policy(genesis, &staged)
             .expect_err("the final executed policy must preserve the combined CT5 margin");
@@ -440,9 +448,8 @@ mod native_genesis_policy_tests {
         assert_eq!(prepared.kura.exact_durable_blocks_count().unwrap(), 0);
         staged
             .world
-            .parameters
-            .get_mut()
-            .set_sumeragi(original_clock);
+            .set_sumeragi_for_testing(original_clock)
+            .expect("restore the original staged consensus fixture");
         ValidBlock::validate_native_genesis_policy(genesis, &staged)
             .expect("the exact original signed execution remains valid after the negative probe");
         assert_eq!(prepared.state.committed_height(), 0);

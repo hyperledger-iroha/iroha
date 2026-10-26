@@ -80,7 +80,7 @@ use quinn::{
 #[cfg(target_os = "linux")]
 use quinn::{Connection, Dir, Endpoint, RecvStream, SendStream, Side, StreamId};
 #[cfg(target_os = "linux")]
-use rand::RngCore;
+use rand::Rng;
 #[cfg(target_os = "linux")]
 use rand::{SeedableRng, rngs::StdRng};
 #[cfg(any(target_os = "linux", test))]
@@ -3328,7 +3328,9 @@ fn spawn_network_worker(
 ) -> Result<(NetworkWorkerProcess, Arc<NetworkIpcSocket>, [u8; 32]), ControllerError> {
     let (supervisor_fd, worker_fd) = create_network_ipc_socketpair()?;
     let mut token = [0_u8; 32];
-    StdRng::from_os_rng().fill_bytes(&mut token);
+    StdRng::try_from_rng(&mut rand::rngs::SysRng)
+        .expect("OS randomness is unavailable")
+        .fill_bytes(&mut token);
     if token == [0_u8; 32] {
         return Err(ControllerError::State(
             "operating-system RNG returned an invalid all-zero IPC token".to_owned(),
@@ -5017,10 +5019,15 @@ fn build_tls_client_config(relay_tls_spki_sha256: [u8; 32]) -> rustls::ClientCon
     let verifier: Arc<dyn ServerCertVerifier> = Arc::new(PinnedSpkiVerifier {
         relay_tls_spki_sha256,
     });
-    let mut tls_config = rustls::ClientConfig::builder()
-        .dangerous()
-        .with_custom_certificate_verifier(verifier)
-        .with_no_client_auth();
+    // Match Quinn's Ring provider without consulting a process-wide default.
+    let mut tls_config = rustls::ClientConfig::builder_with_provider(Arc::new(
+        rustls::crypto::ring::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .expect("Ring supports the default TLS protocol versions")
+    .dangerous()
+    .with_custom_certificate_verifier(verifier)
+    .with_no_client_auth();
     // Helper authentication runs after QUIC setup. Keep replayable 0-RTT data
     // disabled so no future stream path can bypass that ordering.
     tls_config.enable_early_data = false;
@@ -5105,7 +5112,8 @@ async fn perform_helper_handshake(
         tls_server_name: payload.tls_server_name.as_str(),
         resume_hash: Some(&admission_binding),
     };
-    let mut rng = StdRng::from_os_rng();
+    let mut rng =
+        StdRng::try_from_rng(&mut rand::rngs::SysRng).expect("OS randomness is unavailable");
     let (client_hello, client_state) = build_client_hello(&params, &mut rng)
         .map_err(|error| ControllerError::Handshake(error.to_string()))?;
     write_handshake_frame(&mut send, &client_hello).await?;
@@ -11075,9 +11083,12 @@ fn verifier_for_signature_cert(
 ) -> Result<Arc<WebPkiServerVerifier>, rustls::Error> {
     let mut roots = RootCertStore::empty();
     roots.add(CertificateDer::from(cert.as_ref().to_vec()))?;
-    WebPkiServerVerifier::builder(Arc::new(roots))
-        .build()
-        .map_err(|error| rustls::Error::General(format!("TLS verifier config error: {error}")))
+    WebPkiServerVerifier::builder_with_provider(
+        Arc::new(roots),
+        Arc::new(rustls::crypto::ring::default_provider()),
+    )
+    .build()
+    .map_err(|error| rustls::Error::General(format!("TLS verifier config error: {error}")))
 }
 #[cfg(test)]
 mod tests {
@@ -13158,6 +13169,14 @@ mod tests {
     fn tls_spki_and_post_tls_bundle_binding_are_independent() {
         let certificate_der =
             include_bytes!("../../../certs/google_attestation_root_ecdsa.der").as_slice();
+        let signature_verifier =
+            verifier_for_signature_cert(&CertificateDer::from(certificate_der))
+                .expect("explicit Ring verifier must build even when both providers are enabled");
+        assert!(
+            signature_verifier
+                .supported_verify_schemes()
+                .contains(&rustls::SignatureScheme::ECDSA_NISTP256_SHA256)
+        );
         let spki_digest =
             leaf_certificate_spki_sha256(certificate_der).expect("fixture certificate SPKI");
         verify_relay_tls_spki_pin(certificate_der, &spki_digest)
@@ -13395,6 +13414,7 @@ mod tests {
     #[test]
     fn vpn_quic_disables_tls_early_data() {
         let tls_config = build_tls_client_config([0x55; 32]);
+        assert_eq!(tls_config.alpn_protocols, vec![SORANET_QUIC_ALPN.to_vec()]);
         assert!(
             !tls_config.enable_early_data,
             "helper authentication must complete before application data"

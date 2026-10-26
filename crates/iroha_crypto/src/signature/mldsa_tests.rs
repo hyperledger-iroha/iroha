@@ -38,11 +38,6 @@ fn key_rejection_preserves_exact_diagnostics_and_precedence() {
         KeyRejection::AllZero.into_parse_error().to_string(),
         "invalid ML-DSA public key: all-zero material"
     );
-    #[cfg(feature = "pqc")]
-    assert_eq!(
-        KeyRejection::Encoding.into_parse_error().to_string(),
-        "invalid ML-DSA public key"
-    );
     assert!(matches!(
         Rejection::Signature.into_error(),
         Error::BadSignature

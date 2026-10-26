@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for exact ABI-31 byte authentication in Android app archives."""
+"""Tests for exact ABI-33 byte authentication in Android app archives."""
 
 from __future__ import annotations
 
@@ -18,9 +18,9 @@ SCRIPT = Path(__file__).resolve().parents[1] / "check_android_app_native_archive
 ABIS = ("arm64-v8a", "armeabi-v7a", "x86_64")
 LIBRARY_NAME = "libconnect_norito_bridge.so"
 PROVENANCE_ENTRY = "assets/iroha/native-build-provenance-v1.json"
-ANDROID_NDK_BASE_REVISION = "28.0.12674087"
+ANDROID_NDK_BASE_REVISION = "30.0.16248370"
 ANDROID_NDK_SOURCE_PROPERTIES_SHA256 = (
-    "55368a3554d27b8413b75a4b2e83ea7f6b66fef4068f7a7f71cf2910c6e3357b"
+    "e73b7dc557cea2da9212c09ee1795434957d62e63b7550eef69fd1887a355d94"
 )
 
 
@@ -87,7 +87,7 @@ class AndroidAppNativeArchiveTest(unittest.TestCase):
 
         provenance = {
             "schema": "iroha.android-native-build-provenance.v1",
-            "native_bridge_abi_version": 31,
+            "native_bridge_abi_version": 33,
             "build_profile": "release",
             "cargo_locked": True,
             "privacy_production_enabled": True,

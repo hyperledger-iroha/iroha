@@ -6,6 +6,8 @@
 //! throwaway draft, and a proof without the owner. Nothing is written, signed or debited
 //! before `execute_reviewed`, which uses that σ only after hardware approval, its fresh
 //! recheck and an identical derivation. A declined review drops the σ unsigned.
+//! Review creation binds a nonzero local request ID privately. Existing permanent mappings
+//! are observations only; renewed approval cannot adopt or replan their work.
 
 use super::super::object_workspace::{DraftWorkspace, WorkspaceLimits};
 use super::super::scheduling::{Speculation, SpeculationJob};
@@ -61,6 +63,76 @@ pub struct NativeOperationReviewV1 {
     pub payment_key: KagemushaDevicePublicKeyV1,
     /// Actual signed installed runtime/artifact manifest identity.
     pub artifact_manifest_digest: [u8; 32],
+}
+
+/// Constraint on a newly authenticated review; neither variant is execution authority.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReviewExpectationV1 {
+    /// First review of a request whose permanent mapping must still be absent.
+    Fresh,
+    /// Continue the same unstarted request only if its entire original projection matches.
+    /// Exact original action and companion bytes are still required independently.
+    OriginalUnstarted(NativeOperationReviewV1),
+}
+
+impl ReviewExpectationV1 {
+    fn require_projection(&self, actual: &NativeOperationReviewV1) -> Result<(), Error> {
+        if matches!(self, Self::OriginalUnstarted(expected) if expected != actual) {
+            return Err(Error::OperationConflict);
+        }
+        Ok(())
+    }
+}
+
+fn require_review_identity(request_id: [u8; 32]) -> Result<(), Error> {
+    if request_id == [0; 32] {
+        return Err(Error::Invalid("review request identity"));
+    }
+    Ok(())
+}
+
+/// Closed maintenance preflight reasons, observed before financial execution admission.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReviewMaintenanceWaitV1 {
+    /// An actual source-selected Pending operation needs ordinary recovery.
+    SelectedPending,
+    /// The current ArchiveSent head still needs its covering fold.
+    ArchiveFold,
+    /// An existing Archive reservation is still being reconciled.
+    Busy,
+}
+
+impl ReviewMaintenanceWaitV1 {
+    fn error(self) -> Error {
+        match self {
+            Self::SelectedPending => Error::Pending,
+            Self::ArchiveFold => Error::FoldRequired,
+            Self::Busy => Error::ArchiveAdmission(ArchiveAdmissionErrorV1::Busy),
+        }
+    }
+}
+
+/// A bounded request-bound review decision. Only `Ready` owns a new capability.
+pub enum ReviewDecisionV1 {
+    /// Actual freshly authenticated one-use review for new hardware approval.
+    Ready(ReviewedOperationV1),
+    /// Exact prior request binding; no new review, preparation or execution occurred.
+    Existing(BoundRequestStatusV1),
+    /// Genuine maintenance preflight refusal with no capability or approval retained.
+    Waiting(ReviewMaintenanceWaitV1),
+}
+
+impl std::fmt::Debug for ReviewDecisionV1 {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Ready(review) => formatter
+                .debug_tuple("Ready")
+                .field(review.projection())
+                .finish(),
+            Self::Existing(status) => formatter.debug_tuple("Existing").field(status).finish(),
+            Self::Waiting(wait) => formatter.debug_tuple("Waiting").field(wait).finish(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -120,6 +192,7 @@ fn unload_beneficiary_original(
 /// fn replay(review: ReviewedOperationV1) { let _first = review; let _second = review; }
 /// ```
 pub struct ReviewedOperationV1 {
+    request_id: [u8; 32],
     projection: NativeOperationReviewV1,
     source: ReviewSourceV1,
     action: OperationActionV1,
@@ -127,6 +200,63 @@ pub struct ReviewedOperationV1 {
     // The σ_send this Send review may have proved speculatively. Dropping the review cancels
     // it and drops any finished σ unsigned.
     speculation: Option<Speculation<SpeculativeSendV1>>,
+}
+
+/// Reviewed execution refusal with ownership preserved only before execution admission.
+///
+/// Only authenticated request absence followed by a typed maintenance preflight refusal
+/// returns the same opaque review. The host keeps its
+/// original review token and approval; it must not construct or issue a replacement review.
+/// Once execution starts, the existing one-use semantics consume the review on every result.
+#[derive(thiserror::Error)]
+#[error("{error}")]
+pub struct ReviewedExecutionFailureV1 {
+    #[source]
+    error: Error,
+    retained_review: Option<ReviewedOperationV1>,
+    maintenance_wait: Option<ReviewMaintenanceWaitV1>,
+}
+
+impl std::fmt::Debug for ReviewedExecutionFailureV1 {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ReviewedExecutionFailureV1")
+            .field("error", &self.error)
+            .field("retained_review", &self.retained_review.is_some())
+            .finish()
+    }
+}
+
+impl ReviewedExecutionFailureV1 {
+    fn preflight(wait: ReviewMaintenanceWaitV1, review: ReviewedOperationV1) -> Self {
+        Self {
+            error: wait.error(),
+            retained_review: Some(review),
+            maintenance_wait: Some(wait),
+        }
+    }
+
+    /// Typed preflight reason iff this failure retains the same genuine review.
+    #[must_use]
+    pub const fn maintenance_wait(&self) -> Option<ReviewMaintenanceWaitV1> {
+        self.maintenance_wait
+    }
+
+    /// Recover the original error and, only for a preflight refusal, the unchanged review.
+    #[must_use]
+    pub fn into_parts(self) -> (Error, Option<ReviewedOperationV1>) {
+        (self.error, self.retained_review)
+    }
+}
+
+impl From<Error> for ReviewedExecutionFailureV1 {
+    fn from(error: Error) -> Self {
+        Self {
+            error,
+            retained_review: None,
+            maintenance_wait: None,
+        }
+    }
 }
 // A review must stay `Send`, so it can never retain a call-scoped, `!Send` native
 // derivation (`NativePreparedOperationV1`), independently of any mobile boundary bound.
@@ -177,7 +307,8 @@ impl ReviewedOperationV1 {
     }
 
     fn require_recheck(&self, fresh: &Self) -> Result<(), Error> {
-        if self.action != fresh.action
+        if self.request_id != fresh.request_id
+            || self.action != fresh.action
             || self.projection != fresh.projection
             || self.source != fresh.source
             || self.unload_beneficiary != fresh.unload_beneficiary
@@ -187,24 +318,18 @@ impl ReviewedOperationV1 {
         Ok(())
     }
 
-    fn into_request(self, request_id: [u8; 32]) -> Result<OperationRequestV1, Error> {
-        if request_id == [0; 32] {
-            return Err(Error::Invalid("review request identity"));
-        }
-        Ok(OperationRequestV1 {
-            request_id,
+    fn into_request(self) -> OperationRequestV1 {
+        OperationRequestV1 {
+            request_id: self.request_id,
             action: self.action,
-        })
+        }
     }
 
     // The exact request and the σ_send its speculation finished, if any. Taking the
     // speculation ends it either way.
-    fn into_execution(
-        mut self,
-        request_id: [u8; 32],
-    ) -> Result<(OperationRequestV1, Option<SpeculativeSendV1>), Error> {
+    fn into_execution(mut self) -> (OperationRequestV1, Option<SpeculativeSendV1>) {
         let speculative = self.speculation.take().and_then(Speculation::take);
-        Ok((self.into_request(request_id)?, speculative))
+        (self.into_request(), speculative)
     }
 }
 
@@ -338,6 +463,27 @@ impl SpeculativeProofV1 {
     }
 }
 
+impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
+    pub(in crate::kagemusha_wallet_state_v1) fn review_maintenance_wait(
+        &mut self,
+    ) -> Result<Option<ReviewMaintenanceWaitV1>, Error> {
+        match self.maintenance_view()? {
+            MaintenanceViewV1::BeforeBootstrap => Err(Error::NoHead),
+            MaintenanceViewV1::SelectedPending => {
+                Ok(Some(ReviewMaintenanceWaitV1::SelectedPending))
+            }
+            MaintenanceViewV1::AwaitingArchiveFold(_) => {
+                Ok(Some(ReviewMaintenanceWaitV1::ArchiveFold))
+            }
+            MaintenanceViewV1::Released(_) => match self.scheduler.require_archive_clear() {
+                Ok(()) => Ok(None),
+                Err(ArchiveAdmissionErrorV1::Busy) => Ok(Some(ReviewMaintenanceWaitV1::Busy)),
+                Err(error) => Err(error.into()),
+            },
+        }
+    }
+}
+
 impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 + Send>
     Coordinator<AdvanceHandle<F, P>, ProviderArchive<F, P>, NativeWalletProofsV1<F, P, S>>
 {
@@ -401,11 +547,13 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
     // `speculate` gives a Send review its speculation slot; a recheck never has one.
     fn review_action(
         &mut self,
+        request_id: [u8; 32],
         action: OperationActionV1,
         destination_original: Option<&[u8]>,
         unload_beneficiary: Option<&[u8]>,
         speculate: bool,
     ) -> Result<ReviewedOperationV1, Error> {
+        require_review_identity(request_id)?;
         let kind = match &action {
             OperationActionV1::Send { request }
                 if unload_beneficiary.is_none()
@@ -603,6 +751,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
                 .send_requires_time_anchor())
         .then(Speculation::new);
         Ok(ReviewedOperationV1 {
+            request_id,
             projection,
             source: binding,
             action,
@@ -745,17 +894,68 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
         }))
     }
 
-    /// Authenticate an exact signed Request against the current folded payer and all controls.
+    fn require_current_review_source(&mut self, review: &ReviewedOperationV1) -> Result<(), Error> {
+        let (selected, manifest) = self.sync_manifest()?;
+        let released = self.indexed_step(&manifest, manifest.indexed.ok_or(Error::NoHead)?)?;
+        if self.review_source(selected, &manifest, &released)? != review.source {
+            return Err(Error::OperationConflict);
+        }
+        Ok(())
+    }
+
+    fn review_request_action(
+        &mut self,
+        request: OperationRequestV1,
+        destination_original: Option<&[u8]>,
+        unload_beneficiary: Option<&[u8]>,
+        expectation: ReviewExpectationV1,
+    ) -> Result<ReviewDecisionV1, Error> {
+        require_review_identity(request.request_id)?;
+        if let ReviewExpectationV1::OriginalUnstarted(expected) = &expectation {
+            if expected.scheme_id != self.scheme_id
+                || expected.wallet_id != self.wallet_id
+                || expected.kind != request.kind()
+            {
+                return Err(Error::OperationConflict);
+            }
+        }
+        if let Some(bound) = self.bound_review_request(&request)? {
+            return Ok(ReviewDecisionV1::Existing(bound));
+        }
+        if let Some(wait) = self.review_maintenance_wait()? {
+            return Ok(ReviewDecisionV1::Waiting(wait));
+        }
+        self.require_no_preparation_draft(request.request_id)?;
+        let review = self.review_action(
+            request.request_id,
+            request.action.clone(),
+            destination_original,
+            unload_beneficiary,
+            true,
+        )?;
+        expectation.require_projection(&review.projection)?;
+        if let Some(bound) = self.bound_review_request(&request)? {
+            return Ok(ReviewDecisionV1::Existing(bound));
+        }
+        self.require_no_preparation_draft(request.request_id)?;
+        self.require_current_review_source(&review)?;
+        Ok(ReviewDecisionV1::Ready(review))
+    }
+
+    /// Classify an exact request identity before authenticating a fresh Send review.
     /// No nonce, map insertion, proof, hardware signature or Advance is produced. The review
     /// may then have its `σ_send` proved speculatively ([`ReviewedOperationV1::speculation`]).
-    /// A running local fold continues; an uncovered current head returns `FoldRequired`.
+    /// Exact bound requests return `Existing` before maintenance. Otherwise a current Archive
+    /// fold or selected Pending returns tokenless `Waiting`; an ordinary missing fold errors.
     /// # Errors
     /// Invalid/foreign Request, missing or changed source/fold/originals, failed controls or unavailable storage/observations.
     pub fn review_send(
         &mut self,
+        request_id: [u8; 32],
         request_original: &[u8],
         destination_account_original: &[u8],
-    ) -> Result<ReviewedOperationV1, Error> {
+        expectation: ReviewExpectationV1,
+    ) -> Result<ReviewDecisionV1, Error> {
         if request_original.is_empty()
             || request_original.len() > KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1
             || destination_account_original.is_empty()
@@ -763,69 +963,101 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
         {
             return Err(Error::Invalid("review Request bound"));
         }
-        self.review_action(
-            OperationActionV1::Send {
-                request: request_original.to_vec(),
+        self.review_request_action(
+            OperationRequestV1 {
+                request_id,
+                action: OperationActionV1::Send {
+                    request: request_original.to_vec(),
+                },
             },
             Some(destination_account_original),
             None,
-            true,
+            expectation,
         )
     }
 
     /// Authenticate current folded Unload amount/destination and optional signed charge.
     /// The fee is withheld from the ledger payout; the offline debit remains the face amount.
     /// No nonce, map insertion, proof, signature or Advance is produced.
-    /// A running local fold continues; execution alone takes payment priority and rechecks
-    /// the review's source after hardware approval.
+    /// Existing bindings and maintenance waits issue no review. Only authenticated absence
+    /// and a current folded source can produce `Ready`; execution rechecks after approval.
     /// # Errors
     /// Unavailable or changed source, missing fold, invalid amount or foreign/malformed
     /// quote/certificates/beneficiary. Charged reviews require the exact canonical beneficiary.
     pub fn review_unload(
         &mut self,
+        request_id: [u8; 32],
         amount: u128,
         charge: Option<ChargeOriginalsV1>,
         beneficiary_original: Option<&[u8]>,
-    ) -> Result<ReviewedOperationV1, Error> {
-        self.review_action(
-            OperationActionV1::Unload { amount, charge },
+        expectation: ReviewExpectationV1,
+    ) -> Result<ReviewDecisionV1, Error> {
+        if charge.is_some() != beneficiary_original.is_some()
+            || beneficiary_original.is_some_and(|original| {
+                original.is_empty() || original.len() > ACCOUNT_ORIGINAL_MAX_BYTES_V1
+            })
+        {
+            return Err(Error::Invalid(
+                "review Unload beneficiary presence or bound",
+            ));
+        }
+        self.review_request_action(
+            OperationRequestV1 {
+                request_id,
+                action: OperationActionV1::Unload { amount, charge },
+            },
             None,
             beneficiary_original,
-            false,
+            expectation,
         )
     }
 
-    /// Consume one actual review after fresh hardware UI approval and recheck its exact source.
-    /// The caller supplies only a nonzero local retry identity. Amount and all originals are
-    /// taken from the privately retained review. Ordinary execute/preAdvance remain mandatory.
+    /// Admit one actual review after fresh hardware UI approval and recheck its exact source.
+    /// Identity, amount and all originals are taken from the privately retained review.
+    /// Exact existing bindings return observation only; ordinary recovery remains separate.
     /// # Errors
-    /// Changed source/runtime/action, failed current controls, invalid identity, unavailable custody or ordinary execution errors.
+    /// Expected maintenance preflight refuses with the unchanged review. Operational failures, changed
+    /// source/runtime/action, failed controls, invalid identity and execution errors consume it.
     pub fn execute_reviewed(
         &mut self,
         review: ReviewedOperationV1,
-        request_id: [u8; 32],
-    ) -> Result<Completion, Error> {
+    ) -> Result<ReviewedExecutionV1, ReviewedExecutionFailureV1> {
+        let request = OperationRequestV1 {
+            request_id: review.request_id,
+            action: review.action.clone(),
+        };
+        if let Some(bound) = self.bound_review_request(&request)? {
+            return Ok(ReviewedExecutionV1::Existing(bound));
+        }
+        if let Some(wait) = self.review_maintenance_wait()? {
+            return Err(ReviewedExecutionFailureV1::preflight(wait, review));
+        }
         // Payment priority also joins an admitted speculative σ_send of this review, without
         // cancelling it, so a finished speculation is found below.
         let _payment = self.scheduler.payment();
-        if request_id == [0; 32] {
-            return Err(Error::Invalid("review request identity"));
-        }
         // The exact companion remains privately retained with this actual one-use review.
         // Reauthenticate its canonical bytes/digest against the fresh whole signed Request;
         // projection copies and caller presentation settings cannot supply a replacement.
         let fresh = self.review_action(
+            review.request_id,
             review.action.clone(),
             review.projection.destination_account_original.as_deref(),
             review.unload_beneficiary.as_deref(),
             false,
         )?;
         review.require_recheck(&fresh)?;
+        if let Some(bound) = self.bound_review_request(&request)? {
+            return Ok(ReviewedExecutionV1::Existing(bound));
+        }
+        self.require_no_preparation_draft(review.request_id)?;
+        self.require_current_review_source(&review)?;
         // Only an identical source and action reach here. The speculative σ is DATA until
         // execution plans with its nonce and finds an identical derivation; τ_send, Advance
         // and the debit happen only inside this execution.
-        let (request, speculative) = review.into_execution(request_id)?;
-        self.execute_speculated(request, speculative)
+        let checkpoint = review.source.archive_checkpoint;
+        let (request, speculative) = review.into_execution();
+        self.execute_reviewed_unbound(request, speculative, checkpoint)
+            .map_err(Into::into)
     }
 }
 

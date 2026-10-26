@@ -39,7 +39,7 @@ import {
 import { createNativeRuntime } from "../src/nativeRuntime.js";
 import { NetworkId } from "../src/networkId.js";
 import { verifyEd25519 as verifyBrowserEd25519 } from "../src/crypto.browser.js";
-import { ed25519 } from "@noble/curves/ed25519";
+import { ed25519 } from "@noble/curves/ed25519.js";
 import { __resetNativeStateForTests } from "../src/native.js";
 import {
   normalizeCryptoAlgorithm as normalizeDistCryptoAlgorithm,
@@ -242,7 +242,7 @@ test("Ed25519 verification matches Rust strict rejection semantics", () => {
   assert.equal(verifyBrowserEd25519(message, ordinary, ordinaryPublicKey), true);
 
   const scalarAtOrder = Buffer.alloc(32);
-  let order = ed25519.CURVE.n;
+  let order = ed25519.Point.Fn.ORDER;
   for (let index = 0; index < scalarAtOrder.length; index += 1) {
     scalarAtOrder[index] = Number(order & 0xffn);
     order >>= 8n;

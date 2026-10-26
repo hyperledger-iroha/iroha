@@ -107,7 +107,7 @@ fn fixture(apple: bool) -> VerifierRequestV1 {
     };
     let payment = p256::ecdsa::SigningKey::from_slice(&[17; 32]).unwrap();
     let payment = KagemushaDevicePublicKeyV1::from_sec1_bytes(
-        payment.verifying_key().to_encoded_point(false).as_bytes(),
+        payment.verifying_key().to_sec1_point(false).as_bytes(),
     )
     .unwrap();
     let evidence = if apple {
@@ -151,7 +151,7 @@ fn scheme() -> KagemushaWalletSchemeV1 {
         version: 1,
         network_id: *Hash::new(b"private worker vector DATA").as_ref(),
         scheme_root_key: KagemushaDevicePublicKeyV1::from_sec1_bytes(
-            root.verifying_key().to_encoded_point(false).as_bytes(),
+            root.verifying_key().to_sec1_point(false).as_bytes(),
         )
         .unwrap(),
         relation_id: [19; 32],

@@ -79,7 +79,6 @@ impl HttpFinalitySource {
             .map_err(|_| HttpFinalityError::Invalid("root scope"))?;
         if proof_clients.is_empty()
             || proof_clients.len() > MAX_OBSERVATION_PEERS
-            || peer_clients.is_empty()
             || peer_clients.len() > MAX_OBSERVATION_PEERS
         {
             return Err(HttpFinalityError::Invalid("endpoint count"));
@@ -113,6 +112,36 @@ impl HttpFinalitySource {
 
 impl FinalitySource for HttpFinalitySource {
     type Error = HttpFinalityError;
+
+    fn latest_finality_proof(
+        &self,
+        _peer: &PeerId,
+        _challenge: &[u8; 32],
+    ) -> Result<SumeragiFinalityProof, Self::Error> {
+        for client in &self.proof_clients {
+            ensure_deadline(self.deadline)?;
+            let bounded =
+                client.with_request_deadline(self.deadline.min(Instant::now() + PER_PEER_BUDGET));
+            let Ok(status) = iroha::blocking::Client::from_client(bounded.clone())
+                .map_err(|_| HttpFinalityError::Read)?
+                .status()
+                .get()
+            else {
+                continue;
+            };
+            let Some(height) = NonZeroU64::new(status.blocks) else {
+                continue;
+            };
+            // Status supplies only a height selector. The caller still verifies the full
+            // native certificate and its connection to the retained network.
+            if let Ok(proof) = bounded.get_sumeragi_finality_proof(height, self.root_scope) {
+                ensure_deadline(self.deadline)?;
+                return Ok(proof);
+            }
+        }
+        ensure_deadline(self.deadline)?;
+        Err(HttpFinalityError::Read)
+    }
 
     fn finality_proof(&self, height: NonZeroU64) -> Result<SumeragiFinalityProof, Self::Error> {
         for client in &self.proof_clients {

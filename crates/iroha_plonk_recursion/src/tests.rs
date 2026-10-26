@@ -1,7 +1,7 @@
 //! Native accumulator, transcript, complete-arithmetic and fold regressions.
 
 use ff::{Field, PrimeField};
-use group::prime::PrimeCurveAffine;
+use group::CurveAffine;
 use iroha_pasta::{
     Ep, Eq, PastaAffine, PastaCurve, PastaField,
     msm::{MemoryBudget, SharedMemoryBudget},

@@ -39,6 +39,7 @@ seiyaku MakotoFreeCash {
             name: "MFC",
             spec: NumericSpec::integer(),
             mintable: Mintable::Infinitely,
+            owning_domain: DomainId::parse("default.universal"),
         );
         ledger::asset::mint(account: from, asset_definition: mfc, amount: 1337);
         let dest = to;

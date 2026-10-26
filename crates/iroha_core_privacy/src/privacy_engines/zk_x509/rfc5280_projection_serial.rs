@@ -157,14 +157,12 @@ pub(super) fn residues<A: PolynomialAirFieldV1>(
     output
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy)]
 pub(super) struct Source<'a> {
     pub(super) node: &'a ZkX509Rfc5280NodeProvenanceV1,
     pub(super) magnitude: &'a [u8],
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(super) fn source(
     trace: &ZkX509Rfc5280TraceV1,
 ) -> Result<Source<'_>, ZkX509Rfc5280StarkErrorV1> {
@@ -221,7 +219,6 @@ pub(super) fn source(
     Ok(Source { node, magnitude })
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(super) fn populate_row(
     row: &mut ZkX509Rfc5280StarkBaseRowV1,
     source: &Source<'_>,
@@ -285,7 +282,6 @@ pub(super) fn populate_row(
     Ok(())
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(super) fn byte_multiplicity(source: &Source<'_>, document: usize, address: usize) -> usize {
     usize::from(
         document == 0
@@ -293,7 +289,6 @@ pub(super) fn byte_multiplicity(source: &Source<'_>, document: usize, address: u
             && address < usize::from(source.node.content_end),
     )
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(super) fn node_multiplicity(source: &Source<'_>, document: usize, node: usize) -> u16 {
     if document == 0 && node == usize::from(source.node.node) {
         source.node.content_end - source.node.content_start + 1

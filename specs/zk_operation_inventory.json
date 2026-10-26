@@ -395,7 +395,7 @@
    "id": "native_pipa_r.kaigi_authorization",
    "family": "Native PIPA-R over Pasta",
    "status": "implemented",
-   "guarantee": "Kaigi authorization bound to the public network, call, subject, role and sequence (31 instance rows).",
+   "guarantee": "Kaigi authorization bound to the public network, call, subject, role and sequence (25 instance rows).",
    "verifier": {"path": "crates/iroha_core/src/smartcontracts/isi/kaigi/privacy.rs", "symbol": "pub fn verify_authorization("},
    "core": {
     "path": "crates/iroha_core_zk/src/lib.rs",
@@ -410,7 +410,7 @@
      "path": "crates/iroha_core/src/smartcontracts/isi/kaigi.rs",
      "test": "private_join_leave_and_rejoin_consume_exact_sequences_with_real_proofs"
     },
-    {"path": "crates/iroha_core_zk/src/kaigi_authorization_v1_tests.rs", "test": "final_kaigi_real_proof_verifies_and_binds_all_31_rows"},
+    {"path": "crates/iroha_core_zk/src/kaigi_authorization_v1_tests.rs", "test": "final_kaigi_real_proof_verifies_and_binds_all_public_rows"},
     {
      "path": "crates/iroha_core_zk/src/kaigi_authorization_v1_tests.rs",
      "test": "final_kaigi_rejects_retired_labels_schema_metadata_and_relabelled_keys"
@@ -424,7 +424,7 @@
    "id": "native_pipa_r.kaigi_usage",
    "family": "Native PIPA-R over Pasta",
    "status": "implemented",
-   "guarantee": "Kaigi usage bound to the public call, host, segment and billed tuple (25 instance rows).",
+   "guarantee": "Kaigi usage bound to the public call, host, segment and billed tuple (21 instance rows).",
    "verifier": {"path": "crates/iroha_core/src/smartcontracts/isi/kaigi/privacy.rs", "symbol": "pub fn verify_usage_commitment("},
    "core": {
     "path": "crates/iroha_core_zk/src/lib.rs",
@@ -435,7 +435,10 @@
     ]
    },
    "tests": [
-    {"path": "crates/iroha_core_zk/src/kaigi_usage_v1_tests.rs", "test": "final_usage_real_proof_binds_all_25_rows_and_both_admission_routes"},
+    {
+     "path": "crates/iroha_core_zk/src/kaigi_usage_v1_tests.rs",
+     "test": "final_usage_real_proof_binds_all_public_rows_and_both_admission_routes"
+    },
     {"path": "crates/iroha_core_zk/src/kaigi_usage_v1_tests.rs", "test": "final_usage_rejects_k8_aliases_and_wrong_canonical_key"}
    ],
    "test_words": ["KAIGI_USAGE_CIRCUIT_ID_V1", "KaigiUsage"],
@@ -567,7 +570,7 @@
    "family": "native STARK (privacy substrate)",
    "status": "implemented",
    "guarantee": "Leg proof of an atomic private settlement. Committee validators verify it against a restricted sidecar before they sign a Prepare vote; the global ledger never sees the proof.",
-   "verifier": {"path": "crates/iroha_core/src/private_settlement/state.rs", "symbol": "pub(crate) fn validate_private_settlement_leg_v1("},
+   "verifier": {"path": "crates/iroha_core/src/private_settlement/state.rs", "symbol": "pub fn validate_private_settlement_leg_v1("},
    "tests": [
     {
      "path": "crates/iroha_core/src/private_settlement/committee.rs",
@@ -592,7 +595,7 @@
    "family": "committee quorum signatures",
    "status": "signature_only",
    "guarantee": "Quorum certificates of the registered lane committees over the purpose-separated Prepare and Commit bodies. The instruction handlers check these certificates (through the Prepare barrier and the receipt), not the leg proofs.",
-   "verifier": {"path": "crates/iroha_core/src/private_settlement/protocol.rs", "symbol": "pub(crate) fn verify_private_settlement_phase_certificate_v1("},
+   "verifier": {"path": "crates/iroha_core/src/private_settlement/protocol.rs", "symbol": "pub fn verify_private_settlement_phase_certificate_v1("},
    "tests": [
     {"path": "crates/iroha_core/src/private_settlement/protocol.rs", "test": "quorum_and_substitution_fail_closed"},
     {"path": "crates/iroha_core/src/private_settlement/protocol.rs", "test": "prepare_barrier_rejects_incomplete_and_cross_leg_substitution"}
@@ -838,6 +841,14 @@
    "account_recovery": {"scope": "out", "reason": "Account recovery; signatures and policy, no proof relation."},
    "alias_setup": {"scope": "out", "reason": "Alias leases; no proof relation."},
    "asset_alias": {"scope": "out", "reason": "Asset aliases; no proof relation."},
+   "asset_escrow_scope": {
+    "scope": "out",
+    "reason": "Exact asset-owner initialization derives the escrow completeness scope from canonical native rows and the current incarnation/revision (crates/iroha_core/src/state/asset_escrow_scope.rs). It carries no caller-supplied proof and invokes no ZK/FHE verifier."
+   },
+   "asset_fi_context": {
+    "scope": "out",
+    "reason": "Native FI context and historical receipt assertions compare canonical retained rows and hashes under exact authority, incarnation, challenge and checkpoint checks (crates/iroha_core/src/smartcontracts/isi/asset_fi_context.rs). They carry no proof and call no ZK/FHE verifier."
+   },
    "asset_transfer_control": {"scope": "out", "reason": "Transfer controls; no proof relation."},
    "consensus_keys": {"scope": "out", "reason": "Consensus key lifecycle; proofs of possession and threshold certificates belong to specs/sumeragi.md."},
    "content": {"scope": "out", "reason": "Content bundles; no proof relation."},
@@ -3279,8 +3290,8 @@
      "symbol": "impl Execute for RegisterAtomicPrivateSettlementPrepareV1"
     },
     {"path": "crates/iroha_core/src/state.rs", "symbol": "pub(crate) fn apply_private_settlement_prepare_locks_v1("},
-    {"path": "crates/iroha_core/src/private_settlement/global_state.rs", "symbol": "pub(crate) fn plan_private_settlement_prepare_locks_v1("},
-    {"path": "crates/iroha_core/src/private_settlement/protocol.rs", "symbol": "pub(crate) fn validate_private_settlement_prepare_barrier_v1("}
+    {"path": "crates/iroha_core/src/private_settlement/global_state.rs", "symbol": "pub fn plan_private_settlement_prepare_locks_v1("},
+    {"path": "crates/iroha_core/src/private_settlement/protocol.rs", "symbol": "pub fn validate_private_settlement_prepare_barrier_v1("}
    ],
    "relation": "settlement.committee_certificates",
    "authority": [
@@ -3368,8 +3379,8 @@
    "verifier_path": [
     {"path": "crates/iroha_core/src/smartcontracts/isi/private_settlement.rs", "symbol": "impl Execute for FinalizeAtomicPrivateSettlementV1"},
     {"path": "crates/iroha_core/src/state.rs", "symbol": "pub(crate) fn apply_private_settlement_receipt_v1("},
-    {"path": "crates/iroha_core/src/private_settlement/global_state.rs", "symbol": "pub(crate) fn plan_private_settlement_receipt_v1("},
-    {"path": "crates/iroha_core/src/private_settlement/protocol.rs", "symbol": "pub(crate) fn verify_private_settlement_receipt_v1("}
+    {"path": "crates/iroha_core/src/private_settlement/global_state.rs", "symbol": "pub fn plan_private_settlement_receipt_v1("},
+    {"path": "crates/iroha_core/src/private_settlement/protocol.rs", "symbol": "pub fn verify_private_settlement_receipt_v1("}
    ],
    "relation": "settlement.committee_certificates",
    "authority": [
@@ -3606,7 +3617,7 @@
     },
     {
      "path": "crates/iroha_core_zk/src/kaigi_authorization_v1_tests.rs",
-     "test": "final_kaigi_real_proof_verifies_and_binds_all_31_rows",
+     "test": "final_kaigi_real_proof_verifies_and_binds_all_public_rows",
      "covers": "The relation's backend verifier with a real proof; the handler is not executed."
     }
    ],
@@ -3903,12 +3914,12 @@
     },
     {
      "path": "crates/iroha_core_zk/src/kaigi_usage_v1_tests.rs",
-     "test": "final_usage_real_proof_binds_all_25_rows_and_both_admission_routes",
+     "test": "final_usage_real_proof_binds_all_public_rows_and_both_admission_routes",
      "covers": "The relation's backend verifier with a real proof; the handler is not executed."
     }
    ],
    "test_evidence": "not_default",
-   "test_note": "The default handler tests of this crate record usage in transparent mode, without a proof. The handler is executed with a usage proof only by the integration test compiled with `zk-tests`, `zk-halo2` and `halo2-dev-tests`.",
+   "test_note": "Default handler tests record usage in transparent mode, without a proof. The kaigi_privacy integration target requires `zk-tests` and exercises the handler with a native PIPA-R usage proof; it is not part of the default test run.",
    "status": {
     "presence": "registered",
     "verification": "implemented",
@@ -5414,7 +5425,7 @@
    "carrier": {
     "kind": "torii_route",
     "evidence": [
-     {"path": "crates/iroha_core/src/private_settlement/committee.rs", "symbol": "pub(crate) fn prepare_private_settlement_leg_v1("},
+     {"path": "crates/iroha_core/src/private_settlement/committee.rs", "symbol": "pub fn prepare_private_settlement_leg_v1("},
      {
       "path": "crates/iroha_core_privacy/src/privacy_engines/atomic_private_settlement/facade.rs",
       "symbol": "pub fn verify_atomic_private_settlement_v1("
@@ -5448,7 +5459,7 @@
    "owner_tasks": ["P.20"],
    "note": "A committee validator verifies an uploaded leg (proof, audit approvals, availability) against its restricted sidecar and committed State, then signs a Prepare body. This is off the instruction path: the result reaches the ledger only as committee certificates.",
    "verifier_path": [
-    {"path": "crates/iroha_core/src/private_settlement/committee.rs", "symbol": "pub(crate) fn prepare_private_settlement_leg_v1("}
+    {"path": "crates/iroha_core/src/private_settlement/committee.rs", "symbol": "pub fn prepare_private_settlement_leg_v1("}
    ]
   },
   {
@@ -6518,7 +6529,7 @@
        "path": "crates/iroha_core/src/smartcontracts/isi/privacy/role_dispatch_tests.rs",
        "test": "every_role_enters_its_own_branch_of_the_single_handler"
       },
-      {"path": "crates/iroha_core/src/executor.rs", "test": "initial_executor_routes_native_privacy_corridor_to_core"}
+      {"path": "crates/iroha_core/src/executor_tests.rs", "test": "initial_executor_routes_native_privacy_corridor_to_core"}
      ]
     },
     {
@@ -6575,7 +6586,7 @@
      "tests": [
       {"path": "crates/iroha_core/src/smartcontracts/isi/world.rs", "test": "register_vk_reserves_every_exact12_privacy_circuit_label"},
       {
-       "path": "crates/iroha_core/src/smartcontracts/ivm/host.rs",
+       "path": "crates/iroha_core/src/smartcontracts/ivm/host_tests.rs",
        "test": "set_verifying_keys_rejects_exact12_privacy_ids_during_state_rehydration"
       },
       {"path": "crates/iroha_data_model/src/zk.rs", "test": "open_verify_admission_reserves_every_exact12_privacy_namespace_and_retired_version"}
@@ -9205,7 +9216,7 @@
     "product": "atomic_settlement",
     "does": "Read the pool, native assignment and key originals of the selected settlement pools at a certified current global cut, authenticated by complete World hashes. Requires a canonical account signature and all-ledger read permission, checked again before disclosure. Builds no instruction and verifies no proof (TODO in the source: scoped keyed-State inclusion and absence proofs). The Rust client `Client::get_private_settlement_context_async` (crates/iroha/src/client/private_settlement_context.rs) builds the path from the route-catalog constant `CONTEXT`, which the literal-based SDK scan does not see.",
     "operations": [],
-    "handler": {"path": "crates/iroha_torii/src/private_settlement_context.rs", "symbol": "pub(crate) async fn handler("},
+    "handler": {"path": "crates/iroha_torii/src/private_settlement_context.rs", "symbol": "pub async fn handler("},
     "sdk_literal": "/v1/nexus/private-settlements/context/",
     "sdk_files": {"rust": [], "kotlin_java_android": [], "swift": [], "javascript": [], "python": [], "csharp": []},
     "catalog_row": {"path": "crates/iroha_torii_shared/src/route_catalog/private_settlement.rs", "symbol": "private_settlement.context"}
@@ -9827,7 +9838,7 @@
     {"path": "crates/iroha_torii/src/lib.rs", "symbol": "async fn handler_zk_verify_batch("},
     {"path": "crates/iroha_torii/src/lib.rs", "symbol": "async fn handler_post_vk_register("},
     {"path": "crates/iroha_torii/src/lib.rs", "symbol": "async fn handler_ram_lfe_execute("},
-    {"path": "crates/iroha_core/src/private_settlement/committee.rs", "symbol": "pub(crate) fn prepare_private_settlement_leg_v1("},
+    {"path": "crates/iroha_core/src/private_settlement/committee.rs", "symbol": "pub fn prepare_private_settlement_leg_v1("},
     {"path": "crates/iroha_torii/src/zk_prover.rs", "symbol": "verifying_keys.get(&attachment.vk_ref),"},
     {"path": "crates/iroha_core/src/private_settlement/coordinator.rs", "symbol": "pub(crate) fn record_prepare("},
     {"path": "crates/iroha_core/src/private_settlement/sidecar_store.rs", "symbol": "fn record_phase_certificate_v1("},
@@ -9852,9 +9863,9 @@
     }
    ],
    "tests": [
-    {"path": "crates/iroha_core/src/executor.rs", "test": "preverify_and_dedup_across_transactions_in_block"},
-    {"path": "crates/iroha_core/src/executor.rs", "test": "preverify_attachments_enforce_verifying_key_height_window"},
-    {"path": "crates/iroha_core/src/executor.rs", "test": "preverify_attachments_reject_non_production_backend_labels_before_vk_lookup"}
+    {"path": "crates/iroha_core/src/executor_tests.rs", "test": "preverify_and_dedup_across_transactions_in_block"},
+    {"path": "crates/iroha_core/src/executor_tests.rs", "test": "preverify_attachments_enforce_verifying_key_height_window"},
+    {"path": "crates/iroha_core/src/executor_tests.rs", "test": "preverify_attachments_reject_non_production_backend_labels_before_vk_lookup"}
    ],
    "references": [
     {"inventory": "resource", "key": "bounds/proof.proof_box_max_encoded_bytes"}
@@ -9937,8 +9948,8 @@
     {"path": "crates/iroha_core/src/smartcontracts/isi/kaigi.rs", "symbol": "impl Execute for RecordKaigiUsage"},
     {"path": "crates/iroha_core/src/smartcontracts/isi/kaigi.rs", "symbol": "fn process_join("},
     {"path": "crates/iroha_core/src/smartcontracts/isi/identifier.rs", "symbol": "fn validate_program_receipt("},
-    {"path": "crates/iroha_core/src/private_settlement/protocol.rs", "symbol": "pub(crate) fn validate_private_settlement_prepare_barrier_v1("},
-    {"path": "crates/iroha_core/src/private_settlement/protocol.rs", "symbol": "pub(crate) fn verify_private_settlement_receipt_v1("},
+    {"path": "crates/iroha_core/src/private_settlement/protocol.rs", "symbol": "pub fn validate_private_settlement_prepare_barrier_v1("},
+    {"path": "crates/iroha_core/src/private_settlement/protocol.rs", "symbol": "pub fn verify_private_settlement_receipt_v1("},
     {"path": "crates/iroha_core_timed_ovn/src/evidence.rs", "symbol": "pub fn finalize_release("},
     {"path": "crates/iroha_core/src/pipeline/overlay.rs", "symbol": "pub(crate) fn verify_ivm_proved_execution<R>("},
     {"path": "crates/iroha_core/src/executor.rs", "symbol": "let replay_result = crate::pipeline::overlay::verify_ivm_proved_execution("},
@@ -10810,7 +10821,7 @@
    {"id": "turboshake", "pattern": "\\bTurboShake(?:128|256)\\b"},
    {"id": "blake2s", "pattern": "\\bBlake2s(?:Var|256|Mac)?\\b|\\bblake2s_simd\\b"},
    {"id": "keccak_other", "pattern": "\\bKeccak(?:224|384|512)\\b"},
-   {"id": "hkdf", "pattern": "\\bHkdf\\b|\\bhkdf::"},
+   {"id": "hkdf", "pattern": "\\b(?:Simple)?Hkdf\\b|\\bhkdf::"},
    {"id": "hmac", "pattern": "\\bHmac\\b"},
    {"id": "ripemd", "pattern": "\\bRipemd(?:160|256|320)\\b"},
    {"id": "rescue", "pattern": "[Rr]escue"},
@@ -10861,9 +10872,9 @@
      },
      {
       "role": "authorization identities",
-      "algorithm": "six-lane Goldilocks Poseidon digest profile",
+      "algorithm": "unkeyed BLAKE3-256 over native.commitment.blake3-256.frame-v1, all 32 raw bytes",
       "path": "crates/iroha_data_model/src/kaigi/authorization.rs",
-      "symbol": "profile: b\"poseidon-x7-goldilocks-6x64-v1\","
+      "symbol": "Ok(KaigiIdentityDigestV1(*commitment.digest().as_bytes()))"
      }
     ],
     "in_circuit": [
@@ -11031,7 +11042,7 @@
    {
     "product": "exact12_admission",
     "owner_paths": ["crates/iroha_core_privacy/src/privacy_profiles.rs", "crates/iroha_core_privacy/src/privacy_engines/privacy_outer_hash.rs"],
-    "census": {"poseidon": 12, "sha2_256": 5, "sha3_384": 5},
+    "census": {"poseidon": 12, "sha2_256": 5, "sha3_384": 3},
     "native": [
      {
       "role": "parameter, verifier and engine-manifest digests",
@@ -11141,7 +11152,9 @@
       "symbol": "use sha2::{Digest, Sha256};"
      }
     ],
-    "in_circuit": {"none": "Spartan/Nova/Hyrax over T256; its inner hashes belong to the vendored prover and are not inventoried here."},
+    "in_circuit": {
+     "none": "Spartan/Nova/Hyrax over T256; native transcript and generator hashes are owned by iroha_zkp_halo2::vega and recorded in primitive_roles below. vendor/vega-prover supplies independent test reference material."
+    },
     "primitive_roles": [
      {"inventory": "primitive", "key": "digest_roles/vega.transcript-keccak"},
      {"inventory": "primitive", "key": "digest_roles/vega.xof-shake256"}
@@ -11150,7 +11163,7 @@
    {
     "product": "zk_x509",
     "owner_paths": ["crates/iroha_core_privacy/src/privacy_engines/zk_x509", "crates/iroha_core_privacy/src/privacy_engines/privacy_outer_hash.rs"],
-    "census": {"poseidon": 1, "sha2_256": 39, "sha3_384": 5},
+    "census": {"poseidon": 1, "sha2_256": 43, "sha3_384": 3},
     "native": [
      {
       "role": "hash frames and CRL digests",
@@ -11239,7 +11252,7 @@
      "crates/iroha_core_privacy/src/privacy_engines/privacy_outer_hash.rs",
      "crates/iroha_core_privacy/src/privacy_engines/proof_managed_note_stark.rs"
     ],
-    "census": {"poseidon": 1, "sha2_256": 26, "sha3_384": 5},
+    "census": {"poseidon": 1, "sha2_256": 26, "sha3_384": 3},
     "native": [
      {
       "role": "statement digest and outer commitments",
@@ -11269,7 +11282,7 @@
      "crates/iroha_core_privacy/src/privacy_engines/privacy_outer_hash.rs",
      "crates/iroha_core_privacy/src/privacy_engines/proof_managed_note_stark.rs"
     ],
-    "census": {"poseidon": 1, "sha2_256": 13, "sha3_256": 1, "sha3_384": 5},
+    "census": {"poseidon": 1, "sha2_256": 13, "sha3_256": 1, "sha3_384": 3},
     "native": [
      {
       "role": "statement digest",
@@ -11332,7 +11345,7 @@
      "crates/iroha_core_privacy/src/privacy_engines/proof_managed_note_stark.rs",
      "crates/iroha_core_privacy/src/privacy_engines/privacy_outer_hash.rs"
     ],
-    "census": {"poseidon": 1, "sha2_256": 2, "sha3_384": 5},
+    "census": {"poseidon": 1, "sha2_256": 2, "sha3_384": 3},
     "native": [
      {
       "role": "carrier and bundle digests",
@@ -11365,7 +11378,7 @@
      "crates/iroha_core/src/smartcontracts/isi/kaigi.rs",
      "crates/iroha_data_model/src/kaigi"
     ],
-    "census": {"blake2b": 1, "iroha_hash": 1, "poseidon": 41},
+    "census": {"blake2b": 1, "iroha_hash": 1, "poseidon": 40},
     "native": [
      {
       "role": "roster root",
@@ -12153,6 +12166,7 @@
      "site": "race.source_hash_profile"
     },
     {"token": "inline_key", "path": "crates/iroha_data_model/src/proof.rs", "count": 1, "site": "generic.verify_proof_registry_key"},
+    {"token": "kaigi_policy_key", "path": "crates/iroha_core/src/pipeline_gas_policy/retained.rs", "count": 6, "site": "kaigi.policy_named_key"},
     {
      "token": "kaigi_policy_key",
      "path": "crates/iroha_core/src/smartcontracts/isi/kaigi/privacy.rs",

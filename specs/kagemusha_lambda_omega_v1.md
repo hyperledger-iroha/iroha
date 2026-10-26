@@ -60,7 +60,7 @@ record.
 
 | Constraint | Met by | Status |
 |---|---|---|
-| Two-second p95 to durable completion; Ω verified on the path unless pre-verified | Matching native/SDK/device campaign, initially Pixel 6 and the connected iPhone 17 Pro Max | open; the estimates in §4 do not qualify durable completion |
+| Two-second p95 to durable completion; Ω verified on the path unless pre-verified | Matching native/SDK/device campaign, initially Pixel 6 and the specified iPhone 16 Pro Max | open; the estimates in §4 do not qualify durable completion |
 | R9: Ω + largest σ_send ≤ 10,034 − 1,394 = 8,640 B | Independent role caps σ ≤ 3,520 B and Ω ≤ 5,120 B, plus the checked joint bound (§3.5) | model/SDK boundary rules implemented; current candidate validation and genuine complete-catalog artifact qualification are open |
 | Credited::Status ≤ 10,034 B | Fixed status overhead 2,188 B plus Ω ≤ 5,120 B gives at most 7,308 B; the carrier-derived 7,846 B budget does not replace the Ω role cap | envelope arithmetic [C]; genuine artifact qualification open |
 | Fold peak RAM ≤ 1 GiB | §6: one prover at a time, ≤ 0.85 GiB per sub-proof plus ≤ 0.15 GiB wallet core | estimate only; current candidate measurement remains open (G3.6, G3.7, G4.6, G5.3) |
@@ -629,47 +629,72 @@ historical estimates cannot establish the current G3.6 result.
 | Quota-usage array rebuild (three 64-leaf depth-6 trees, B5) | 141k (954 permutations) + merge [E] |
 | Byte linking | 2–3 per byte; opaque 31-byte chunk ≈ 20 [E] |
 
-### 5.4 Per-operation budget at the M3 P-256 thresholds (V 0.30M, F 0.12M) [E]
+### 5.4 Compiled per-operation schedules and resource qualification
 
-| Operation | Q leaves (cells) | A cells (cap 1.67M) | Ω cells | Folds | Proofs (Q + A + Ω) | Mac 1t | Phone 4 cores, optimistic / pessimistic |
-|---|---|---:|---:|---:|---:|---:|---:|
-| Bootstrap (lean single stage) | 1 (the 2V1F leaf); cells pending measurement | 1 unsplit terminal A; cells pending measurement | Cells pending measurement | 0 W | 3 | Unqualified | Unqualified |
-| Load (lean native-BLS schedule) | 1 (own receipt); cells pending measurement | 2 A stages; cells pending measurement | Cells pending measurement | 1 W stage | 4 (+ 1 W) | Unqualified | Unqualified |
-| **Send** | 1 (1.00–1.09M) | 0.67–0.81M | 0.36–0.45M | 2 | 3 | **70–97 s** | **24–89 / 41–172 s** |
-| **Receive** (lean) | 2 (incoming-only Q_σ; merged 3V leaf); cells pending measurement | 9 A stages; cells pending measurement | Cells pending measurement | 8 W stages | 12 (+ 8 W) | Unqualified | Unqualified |
-| Receive (renewed, lean) | 2 (incoming-only Q_σ; merged 4V1F leaf) | 9 A stages | Cells pending measurement | 8 W stages | 12 (+ 8 W) | Unqualified | Unqualified |
-| ArchiveSent (i) (lean) | 2 (incoming-only Q_σ; merged 2V leaf) | 9 A stages | Cells pending measurement | 8 W stages | 12 (+ 8 W) | Unqualified | Unqualified |
-| ArchiveSent (ii) (lean) | 1 (merged 2V leaf) | 8 A stages | Cells pending measurement | 7 W stages | 10 (+ 7 W) | Unqualified | Unqualified |
-| Unload | 1 | 0.62–0.77M | 0.36–0.45M | 2 | 3 | 70–97 s | 24–89 / 41–172 s |
-| Retiring | 1 | 0.58–0.73M | 0.36–0.45M | 2 | 3 | 70–97 s | 24–89 / 41–172 s |
-| RefreshPolicy (Credential, worst other kind) | 2 | 0.81–1.02M | 0.36–0.45M | 2 | 4 | 92–128 s | 32–118 / 53–227 s |
-| RefreshPolicy (QuotaShare, OQ-4 with the B5 array rebuild) | 2 | 0.97–1.18M; no A-split | 0.36–0.45M | 2 | 4 | 92–128 s | 32–118 / 53–227 s |
+The counts below follow the [compiled operation schedules](../crates/iroha_kagemusha_proof/src/a_relation/schedule/compiled.rs).
+They count Q, A, W and the final Ω; the separately produced native σ is not included.
+A W continuation joins consecutive A stages, so a single terminal A has no W.
+This does not remove its PIPA-AS folds or carried-accumulator obligations.
+Current source cells and timings remain unqualified at the unchanged M3 P-256
+thresholds (V 0.30M, F 0.12M); the historical estimates below are not measurements
+of these schedules.
+
+| Operation | Q leaves / cells | A stages / cells (cap 1.67M) | Ω stages / cells | W continuations | Proofs (Q + A + Ω; W separate) | Mac 1t | Phone 4 cores |
+|---|---|---|---|---:|---:|---|---|
+| Bootstrap | 1 (2V1F leaf); cells pending measurement | 1 terminal A; cells pending measurement | 1; cells pending measurement | 0 | 3 | Unqualified | Unqualified |
+| Load | 1 (own receipt); cells pending measurement | 1 terminal A; cells pending measurement | 1; cells pending measurement | 0 | 3 | Unqualified | Unqualified |
+| Send (quota control off) | 1 (own receipt); cells pending measurement | 2; cells pending measurement | 1; cells pending measurement | 1 | 4 (+ 1 W) | Unqualified | Unqualified |
+| Send (quota control on) | 1 (own receipt); cells pending measurement | 3; cells pending measurement | 1; cells pending measurement | 2 | 5 (+ 2 W) | Unqualified | Unqualified |
+| Receive | 2 (incoming-only Q_σ; merged 3V leaf); cells pending measurement | 5; cells pending measurement | 1; cells pending measurement | 4 | 8 (+ 4 W) | Unqualified | Unqualified |
+| Receive (renewed) | 2 (incoming-only Q_σ; merged 4V1F leaf); cells pending measurement | 5; cells pending measurement | 1; cells pending measurement | 4 | 8 (+ 4 W) | Unqualified | Unqualified |
+| ArchiveSent (i; ArchiveReceive) | 2 (incoming-only Q_σ; merged 2V leaf); cells pending measurement | 9; cells pending measurement | 1; cells pending measurement | 8 | 12 (+ 8 W) | Unqualified | Unqualified |
+| ArchiveSent (ii; ArchiveStatus) | 1 (merged 2V leaf); cells pending measurement | 8; cells pending measurement | 1; cells pending measurement | 7 | 10 (+ 7 W) | Unqualified | Unqualified |
+| Unload | 1 (own receipt); cells pending measurement | 1 terminal A; cells pending measurement | 1; cells pending measurement | 0 | 3 | Unqualified | Unqualified |
+| Retiring | 1 (own receipt); cells pending measurement | 1 terminal A; cells pending measurement | 1; cells pending measurement | 0 | 3 | Unqualified | Unqualified |
+| RefreshPolicy (Credential, SchemePolicy, TimeAnchor) | 3 (own Q_σ; update and current authorization leaves); cells pending measurement | 4; cells pending measurement | 1; cells pending measurement | 3 | 8 (+ 3 W) | Unqualified | Unqualified |
+| RefreshPolicy (QuotaShare, OQ-4 with the B5 array rebuild) | 3 (own Q_σ; update and current authorization leaves); cells pending measurement | 7; cells pending measurement | 1; cells pending measurement | 6 | 11 (+ 6 W) | Unqualified | Unqualified |
 
 Load verifies ordinary BLS finality natively before Advance signing; it has no
-recursive BLS-finality stage. Its compiled schedule is lean: one Q (the own
-receipt), two A, one W and one Ω proof (`a_relation/schedule/compiled.rs`). A1
-proves the Load transition directly, so there is no own `Q_sigma`; the
-credential and certificate are carried by continuity (inductive R10, owner
-decision 2026-10-17). Unload and Retiring use the same lean shape: one Q (the own
-receipt), A1 (hard predecessor and the `administrative::monetary` transition, with the
-D32 recovery insertion for Unload), one W and A2 (the own receipt under the carried
-payment key), then Ω. Send is lean with three A stages: one Q (the own receipt), A1
-(hard predecessor, the Send objects and σ_send's relation for the installed mask, laid
-out on A's lane and bound field by field to A's statement), W1, A2 (both depth-32 map
-insertions), W2 and A3 (the own receipt), then Ω.
+recursive BLS-finality stage. Its [native relation](../crates/iroha_kagemusha_proof/src/a_relation/native/load.rs)
+uses one Q for the hard own receipt, one terminal A_Load and one Ω proof, with no
+W continuation. A_Load verifies the hard predecessor, proves the Load transition
+and depth-32 recovery insertion directly, and binds the receipt and its signature
+under the predecessor payment key. There is no own Q_σ. The credential and
+certificate are carried by continuity (inductive R10); the terminal A and its
+carried claims still require the final Ω producer and full native verification.
+Unload and Retiring likewise use one terminal A beside the hard predecessor and
+their one hard own-receipt Q: A proves the `administrative::monetary` transition,
+including the depth-32 recovery insertion for Unload, before Ω. Neither has a W
+continuation.
 
-Lean lineage milestone 2 (owner decision 2026-10-17) completes the set: Bootstrap is one
-unsplit terminal A over its 2V1F leaf (3 sub-proofs, down from 6). Receive and Receive
-(renewed) prove the Receive transition in A1 beside the hard predecessor (`ReceiveTransition`,
-σ_recv's relation bound field by field to A's statement) and keep an incoming-only Q_σ for
-σ_send; their own receipt joins the incoming signature leaf as its hard slot 0, so the
-schedule is 2 Q, 9 A, 8 W and Ω (20 sub-proofs, down from 23). ArchiveSent (i) is 2 Q, 9 A,
-8 W and Ω (20, down from 23) and ArchiveSent (ii) 1 Q, 8 A, 7 W and Ω (17, down from 23):
-A already runs σ_archive's constraints, and the own receipt joins the incoming receipt's
-leaf. No incoming check is removed. The table's other historical estimates and the model
-below do not measure these schedules. Current Load timing,
-memory and full-catalog artifact qualification remain separate gates; retaining
-Pasta payment proofs does not restore independent in-proof funding verification.
+Send has two A stages without the quota control and three with it; its
+[native composer](../crates/iroha_kagemusha_proof/src/a_relation/native/send.rs)
+pins the schedule to the installed mask. A1 verifies the hard predecessor, binds
+the Send objects and proves σ_send's relation for the installed mask field by
+field against A's statement. Without quotas, A1 also proves both depth-32 map
+insertions and W1 joins terminal A2, which verifies the own-receipt Q. With quotas,
+W1 joins A2 for both map insertions and W2 joins terminal A3 for the same Q. In
+both schedules Ω completes the fold.
+
+Bootstrap is one terminal A over its 2V1F leaf. Both Receive variants use five A
+stages: A1 proves the transition and both map effects beside the hard predecessor;
+A2 verifies the incoming-only Q_σ; A3 checks the payer's proofs and signed objects;
+A4 verifies the merged signature leaf (own receipt hard, incoming slots soft);
+A5 checks consumed-credit nonmembership, hashes both proof tapes and applies the
+effects. Four W continuations join those stages before Ω. ArchiveSent (i) remains
+2 Q, 9 A, 8 W and Ω, and ArchiveSent (ii) remains 1 Q, 8 A, 7 W and Ω: A already
+runs σ_archive's constraints, and the own receipt joins the incoming receipt's
+leaf. No incoming check is removed. RefreshPolicy keeps its own Q_σ and the two
+authorization leaves; its ordinary variants use four A stages, while QuotaShare
+uses seven for the fixed-array rebuild and merge.
+
+Send control masks and incoming σ selectors can select distinct authenticated
+source classes even when their stage counts agree. Each actual installed
+selector still requires its own descriptor, complete envelope, timing and memory
+qualification. These counts do not establish artifact equivalence or proof sizes.
+Current Load timing, memory and full-catalog qualification remain separate gates;
+retaining Pasta payment proofs does not restore independent in-proof funding
+verification.
 
 Historical time model [E]:
 
@@ -693,7 +718,7 @@ Historical time model [E]:
 |---|---|
 | Inductive R10 (verify the credential only at Bootstrap and refresh) | Applied to every non-Refresh step (2026-10-17); Receive (renewed) still verifies the quoted credential and certificate softly |
 | `proof_digest` over binding digests | −55–135k cells in A per step |
-| Inline own σ instead of verifying it | −150–190k cells in Q; applied to Load (2026-10-17): −1 Q, −1 A, −1 W; Unload and Retiring: −1 Q, −2 A, −2 W; Send: −1 Q, −2 A, −2 W; Bootstrap: −1 Q, −1 A, −1 W; Receive and ArchiveSent (i): −1 Q, −1 A, −1 W (with the own receipt merged into the incoming leaf); ArchiveSent (ii): −2 Q, −2 A, −2 W |
+| Inline own σ instead of verifying it | Historical first-inline estimates, superseded as schedule counts by §5.4: −150–190k cells in Q; Load (2026-10-17): −1 Q, −1 A, −1 W; Unload and Retiring: −1 Q, −2 A, −2 W; Send: −1 Q, −2 A, −2 W; Bootstrap: −1 Q, −1 A, −1 W; Receive and ArchiveSent (i): −1 Q, −1 A, −1 W (with the own receipt merged into the incoming leaf); ArchiveSent (ii): −2 Q, −2 A, −2 W |
 | Precommitted own-key table | own τ 0.04–0.08M instead of 0.3M |
 | 128-bit fold challenges | Ω −512 B |
 | Audited fixed-base batch-affine decide (PIPA S10 amendment) | cold receiver ≈ −45% |
@@ -711,16 +736,26 @@ Historical time model [E]:
   sub-proof through a cooperative cancellation token checked at Rayon task boundaries, which
   frees its memory; the fold resumes from the last checkpoint. The payment path then has the
   device to itself (σ_recv proving peaks at 45–49 MiB, decides at 16.4 MiB [M]).
+- **Bounded fairness.** Steady payments must not starve the fold. Each sub-proof that payment
+  priority aborts counts once, and a durable checkpoint or Ω, proved or adopted, clears the
+  count. After two aborted sub-proofs in a row (`FOLD_FAIRNESS_CANCELLATIONS`), the next payment
+  that takes priority before the wallet owner (every app call through the bridge) waits for the
+  running sub-proof to finish and publish its checkpoint, instead of aborting it; no other
+  sub-proof starts meanwhile, and a speculative σ_send admission follows the same rule. That
+  payment waits at most one sub-proof (about 30–60 s on a Pixel 6), and while payments keep
+  arriving the fold publishes at least once per three of them. A payment issued while already
+  holding the wallet owner never waits, because the publication needs that owner.
 - **Order.** Folding runs in step order whenever the app runs or the phone charges. Receive
   needs no fold to complete; only the next Send, Unload or device move waits for the backlog.
 
 ## 6. RAM plan (≤ 1 GiB)
 
-The peak falls while the quotient recombines its residues
-[S `crates/iroha_plonk/src/prover/memory.rs`]. The prover counts the columns it then holds:
+The core proving-buffer envelope counts the columns held while the quotient
+recombines its residues [S `crates/iroha_plonk/src/prover/memory.rs`]:
 
-- columns = key[2(F + m + 3)] + n_a + n_i + n_z + 3n_l + 1 + W + 3 + 2(d − 1): the key's fixed,
-  `sigma` and mask columns in both forms, the advice and instance coefficients, the
+- columns = key[2(F + m + 3) + 2] + n_a + n_i + n_z + 3n_l + 1 + W + 3 + 2(d − 1): the key's fixed,
+  `sigma` and mask columns in both forms plus its forward/inverse FFT twiddles,
+  rounded together to two columns at these domain sizes; the advice and instance coefficients, the
   permutation products, each lookup's `A'`, `S'` and `z`, `R`, the quotient workspace `W`, the
   coset masks, and the residues beside the recombined `h`. `W` is the evaluator's own count:
   fused F + m + n_a + n_i + n_z (at least 3 with lookups) + n_l + 1; lean the widest pass (at
@@ -728,11 +763,20 @@ The peak falls while the quotient recombines its residues
 - × 2 MiB at k16 × 1.15, + 8 MiB params + 64 MiB MSM scratch cap + 50 MiB core baseline.
 
 Advice values move into coefficient buffers after the permutation and lookup products are
-built [S `crates/iroha_plonk/src/prover/advice.rs`], and every earlier phase holds fewer columns.
-`crates/iroha_plonk/tests/proving_memory.rs` measures every allocation of witness synthesis and
-an owned-witness proof against the count, fused and in passes [M]. On a Pixel 6 the k16 Q2
-proof peaked 490 MiB fused and 400 MiB in 16-column passes above the process baseline,
-against counted 500 and 410 MiB with parameters. The table below keeps the original design
+built [S `crates/iroha_plonk/src/prover/advice.rs`]. A descriptor alone cannot bound
+circuit-owned synthesis allocations or deferred rational assignments. The native wallet
+uses evaluated-value assignments and keys without coset caches; its complete synthesis,
+key reconstruction and proving allocations must still fit the operation's admission bound.
+The `proving-memory-current-20261023-2` host regression verifies the actual retained key
+vectors, including FFT twiddles, and measures synthesis plus owned proving for one k14
+circuit under fused and 4/16-column plans. It does not establish a generic synthesis bound
+or whole-process RSS for the installed catalog.
+
+An earlier design record reports Pixel 6 k16 Q2 peaks of 490 MiB fused and 400 MiB in
+16-column passes above baseline, against earlier counts of 500 and 410 MiB with parameters.
+The original device/build identities and raw measurements have not been reconciled in
+`target/qualification/pixel6-q2-memory-evidence-review-20261023-1`; those figures do not
+qualify the changed engine or complete-process peak RSS. The table below keeps the original design
 estimates (a formula that counted the lookup and witness columns twice); streaming
 fixed/permutation columns remains a separate memory choice.
 

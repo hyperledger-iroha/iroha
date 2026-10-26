@@ -22,7 +22,7 @@ use super::{
     },
 };
 
-use rand::TryRngCore;
+use rand::TryRng;
 use rayon::prelude::*;
 use std::collections::BTreeSet;
 use thiserror::Error;
@@ -1373,7 +1373,7 @@ pub fn execution_fixed_query_parity_v1<A: ProofManagedNoteStarkAdapterV1>(
     }
     Ok(true)
 }
-fn masked_lde_columns_v1<R: TryRngCore>(
+fn masked_lde_columns_v1<R: TryRng>(
     columns: &[Vec<F>],
     trace_log2: u8,
     lde_log2: u8,
@@ -2030,10 +2030,7 @@ fn absorb_grinding_nonce_v1(
 /// The caller supplies exact native base columns; the adapter reconstructs all
 /// statement-derived fixed policy and deterministic auxiliary columns. The
 /// emitted proof is self-verified before it is returned.
-pub fn prove_proof_managed_note_stark_v1_with_rng<
-    A: ProofManagedNoteStarkAdapterV1,
-    R: TryRngCore,
->(
+pub fn prove_proof_managed_note_stark_v1_with_rng<A: ProofManagedNoteStarkAdapterV1, R: TryRng>(
     adapter: &A,
     base_columns: &[Vec<F>],
     rng: &mut R,
@@ -2356,7 +2353,7 @@ pub fn prove_proof_managed_note_stark_v1<A: ProofManagedNoteStarkAdapterV1>(
     adapter: &A,
     base_columns: &[Vec<F>],
 ) -> Result<Vec<u8>, ProofManagedNoteStarkErrorV1> {
-    prove_proof_managed_note_stark_v1_with_rng(adapter, base_columns, &mut rand::rngs::OsRng)
+    prove_proof_managed_note_stark_v1_with_rng(adapter, base_columns, &mut rand::rngs::SysRng)
 }
 struct NoteOpenedRowEvaluatorV1<'a, A: ProofManagedNoteStarkAdapterV1> {
     adapter: &'a A,
@@ -2566,11 +2563,14 @@ pub fn verify_proof_managed_note_stark_v1<A: ProofManagedNoteStarkAdapterV1>(
 pub mod degree_audit {
     use super::F;
     use core::fmt::Debug;
-    use rand::{RngCore as _, SeedableRng as _, rngs::StdRng};
-    fn random_field_v1(rng: &mut StdRng) -> F {
-        F::reduce(u128::from(rng.next_u64()))
+    use rand::{SeedableRng as _, TryRng as _};
+    use rand_chacha::ChaCha12Rng;
+    fn random_field_v1(rng: &mut ChaCha12Rng) -> F {
+        F::reduce(u128::from(
+            rng.try_next_u64().expect("test RNG draw succeeds"),
+        ))
     }
-    fn random_nonzero_field_v1(rng: &mut StdRng) -> F {
+    fn random_nonzero_field_v1(rng: &mut ChaCha12Rng) -> F {
         let value = random_field_v1(rng);
         if value == F::ZERO { F::ONE } else { value }
     }
@@ -2598,7 +2598,7 @@ pub mod degree_audit {
             declared_maximum_degree > 0,
             "degree audit requires a positive declared degree"
         );
-        let mut rng = StdRng::from_seed(seed);
+        let mut rng = ChaCha12Rng::from_seed(seed);
         let mut measured_maximum = 0;
         let terminal_order = usize::from(declared_maximum_degree) + 1;
         for trial in 0..trial_count {

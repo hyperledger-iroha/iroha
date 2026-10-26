@@ -138,11 +138,11 @@ fn local_source_rejects_credential_or_identity_escape_before_io() {
 }
 
 #[test]
-fn a_relay_turn_cannot_prepare_or_claim_anchoring_without_fresh_parent_quorum() {
+fn a_relay_turn_cannot_prepare_or_claim_anchoring_without_parent_certificates() {
     let mut fixture = Fixture::new();
     fixture.parent_receipt();
     let temporary = tempfile::tempdir().unwrap();
-    let bootstrap = fixture.bootstrap(&temporary.path().join("release"));
+    let bootstrap = fixture.bootstrap();
     let mut finality =
         ParentFinalityStore::open(&temporary.path().join("parent"), &bootstrap).unwrap();
     let mut store = AttachmentStore::open(

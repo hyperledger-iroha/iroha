@@ -401,6 +401,7 @@ impl QualifiedWalletSourcesV1 {
     }
 
     /// Rebuild the same sealed source with a caller-owned cancellation signal.
+    /// Wallet proving keys always omit the coset cache; `config` supplies read and row limits.
     /// # Errors
     /// The ordinary source errors, or cancellation without a rebuilt key.
     pub fn import_sigma_cancellable(
@@ -432,7 +433,6 @@ impl QualifiedWalletSourcesV1 {
             view,
             &self.sigma_parameters[0],
             &self.sigma_parameters[1],
-            config.coset_cache,
             cancellation,
         )?)
     }
@@ -470,6 +470,7 @@ impl QualifiedWalletSourcesV1 {
     /// original. A wallet's speculative Send binds it to prove without the wallet owner,
     /// after [`Self::revalidate_sigma_cancellable`] checked the same originals in that
     /// speculation's locked prepare; it grants nothing more.
+    /// Its rebuilt key always omits the coset cache, independent of importer cache policy.
     /// # Errors
     /// Undefined selector, changed seal/source identity, the local row cap, a rebuilt source
     /// that differs from the sealed source, or cancellation.
@@ -494,7 +495,6 @@ impl QualifiedWalletSourcesV1 {
             view,
             &self.sigma_parameters[0],
             &self.sigma_parameters[1],
-            config.coset_cache,
             cancellation,
         )?)
     }
@@ -697,6 +697,7 @@ impl QualifiedWalletSourcesV1 {
     /// The strict Omega source of [`Self::import_omega_cancellable`] without reading any
     /// original. A wallet fold binds it to prove without the wallet owner, after that import
     /// revalidated the same originals in the same locked turn; it grants nothing more.
+    /// The rebuilt wallet key always uses `OnDemand`, independent of importer cache policy.
     /// # Errors
     /// A changed source identity, the local row cap or cancellation.
     pub(crate) fn bind_omega_cancellable(

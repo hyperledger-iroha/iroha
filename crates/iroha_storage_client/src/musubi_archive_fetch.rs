@@ -39,7 +39,7 @@ use iroha_data_model::{
 };
 use iroha_fs::RetainedFile;
 use json_preflight::{JsonDomEnvelopeV1, preflight_json_dom};
-use rand::{TryRngCore, rngs::OsRng};
+use rand::{TryRng, rngs::SysRng};
 use reqwest::{
     StatusCode,
     blocking::{Client as HttpClient, Response as HttpResponse},
@@ -1657,7 +1657,7 @@ fn pinned_generated_local_http_client(
 }
 
 fn bounded_http_builder(request_timeout: Duration) -> reqwest::blocking::ClientBuilder {
-    HttpClient::builder()
+    iroha::http::tls::configure_blocking_client(HttpClient::builder())
         .no_proxy()
         .no_gzip()
         .no_brotli()
@@ -2052,7 +2052,7 @@ fn valid_visible_ascii(value: &str, minimum: usize, maximum: usize) -> bool {
 }
 fn random_nonce() -> Result<String, MusubiArchiveRuntimeErrorV1> {
     let mut bytes = [0_u8; 16];
-    OsRng
+    SysRng
         .try_fill_bytes(&mut bytes)
         .map_err(|_| permanent("MUSUBI_ARCHIVE_NONCE_UNAVAILABLE"))?;
     if bytes.iter().all(|byte| *byte == 0) {
@@ -2201,7 +2201,7 @@ mod tests {
             provider: ProviderId::new([0x11; 32]),
             base_url: Url::parse("https://8.8.8.8/").expect("fixed provider URL"),
             credential: ProviderCredentialV1::Operator(operator_key_pair.clone()),
-            http: HttpClient::builder()
+            http: iroha::http::tls::configure_blocking_client(HttpClient::builder())
                 .redirect(RedirectPolicy::none())
                 .build()
                 .expect("local HTTP client"),

@@ -1734,7 +1734,7 @@ test("native publication rejects dirty or stale source provenance", async (t) =>
 test(
   "required-export probe loads a real addon through the recovery-compatible private suffix",
   (t) => {
-    // Authenticate the selected original artifact through the canonical loader.
+    // Authenticate the selected artifact before exercising its verified snapshot.
     const binding = getNativeBinding();
     assert.equal(typeof binding.noritoEncodeInstruction, "function");
     const nativePath = process.env.IROHA_JS_NATIVE_DIR
@@ -1748,9 +1748,14 @@ test(
     const root = mkdtempSync(path.join(os.tmpdir(), "iroha-js-native-dlopen-probe-"));
     t.after(() => rmSync(root, { recursive: true, force: true }));
     const staged = path.join(root, `${NATIVE_FILENAME}.next`);
-    copyFileSync(nativePath, staged);
-    // Authentication above binds the current artifact. This probe separately
-    // exercises dlopen through the publication-recovery private suffix.
+    const nativeHash = createHash("sha256").update(readFileSync(nativePath)).digest("hex");
+    const loaded = process.report.getReport().sharedObjects.filter(
+      (image) => path.basename(image) === `${nativeHash}.node`,
+    );
+    assert.equal(loaded.length, 1, "exactly one authenticated selected native image must be loaded");
+    copyFileSync(loaded[0], staged);
+    // Exercise suffix loading with the verified selected image. The restricted
+    // export probe does not grant release qualification.
     assert.doesNotThrow(() =>
       probeNativeBindingExports(staged, ["noritoEncodeInstruction"]),
     );

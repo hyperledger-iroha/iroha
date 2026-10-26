@@ -12,6 +12,7 @@ fn record(ordinal: u32, outcome: FoldOutcomeV1, prove: Duration) -> FoldSubProof
         operation: Some(KagemushaWalletOperationKindV1::Receive),
         stage: Some(FoldStageV1::W),
         ordinal,
+        stages: ordinal.checked_add(2),
         outcome,
         phases,
         verification: KagemushaWalletVerificationCountsV1::default(),
@@ -44,12 +45,13 @@ fn only_a_selected_turn_reports_and_its_phases_stay_on_its_thread() {
             None,
         )
         .unwrap();
-    assert_eq!(quiet.stage, None);
+    assert_eq!((quiet.stage, quiet.stages), (None, None));
     assert_eq!(quiet.phase(FoldPhaseV1::Prove), Duration::ZERO);
 
     let mut turn = FoldTurnV1::start();
     turn.select(4, 2);
     turn.operation(KagemushaWalletOperationKindV1::Load);
+    turn.stages(3);
     enter(FoldPhaseV1::ReadFold);
     enter(FoldPhaseV1::Prove);
     stage(FoldStageV1::A);
@@ -75,6 +77,7 @@ fn only_a_selected_turn_reports_and_its_phases_stay_on_its_thread() {
         (
             record.sequence,
             record.ordinal,
+            record.stages,
             record.operation,
             record.stage,
             record.outcome,
@@ -83,6 +86,7 @@ fn only_a_selected_turn_reports_and_its_phases_stay_on_its_thread() {
         (
             4,
             2,
+            Some(3),
             Some(KagemushaWalletOperationKindV1::Load),
             Some(FoldStageV1::A),
             FoldOutcomeV1::Checkpoint,
@@ -104,13 +108,39 @@ fn only_a_selected_turn_reports_and_its_phases_stay_on_its_thread() {
 fn a_dropped_turn_closes_its_thread_state() {
     let mut turn = FoldTurnV1::start();
     turn.select(1, 0);
+    turn.stages(1);
     stage(FoldStageV1::Q);
     drop(turn);
     stage(FoldStageV1::A);
     let mut turn = FoldTurnV1::start();
     turn.select(1, 0);
     let record = turn.finish(Ok(FoldStatus::Folded(1)), None).unwrap();
-    assert_eq!(record.stage, None);
+    assert_eq!((record.stage, record.stages), (None, None));
+}
+
+#[test]
+fn stages_are_the_selected_heads_whole_schedule_or_nothing() {
+    let total = |stages: Option<usize>| {
+        let mut turn = FoldTurnV1::start();
+        turn.select(2, 1);
+        if let Some(stages) = stages {
+            turn.stages(stages);
+        }
+        turn.finish(Err(&Error::Cancelled), Some(FoldCancelCauseV1::Payment))
+            .unwrap()
+            .stages
+    };
+    // A turn cancelled before it read the schedule names no total.
+    assert_eq!(total(None), None);
+    assert_eq!(total(Some(12)), Some(12));
+    assert_eq!(
+        total(Some(usize::try_from(u32::MAX).unwrap())),
+        Some(u32::MAX)
+    );
+    // A total no record can carry is left out rather than truncated.
+    if let Ok(too_many) = usize::try_from(u64::from(u32::MAX) + 1) {
+        assert_eq!(total(Some(too_many)), None);
+    }
 }
 
 #[test]
@@ -261,6 +291,7 @@ fn log_line_carries_only_fixed_names_whole_microseconds_counts_and_bytes() {
         operation: Some(KagemushaWalletOperationKindV1::Load),
         stage: Some(FoldStageV1::Q),
         ordinal: 1,
+        stages: Some(3),
         outcome: FoldOutcomeV1::Cancelled(FoldCancelCauseV1::SetupIngest),
         phases,
         verification: KagemushaWalletVerificationCountsV1::default(),
@@ -275,6 +306,7 @@ fn log_line_carries_only_fixed_names_whole_microseconds_counts_and_bytes() {
         operation: None,
         stage: None,
         ordinal: 2,
+        stages: None,
         outcome: FoldOutcomeV1::Failed,
         phases: [Duration::ZERO; FoldPhaseV1::COUNT],
         verification: KagemushaWalletVerificationCountsV1::default(),
@@ -289,6 +321,7 @@ fn log_line_carries_only_fixed_names_whole_microseconds_counts_and_bytes() {
         operation: Some(KagemushaWalletOperationKindV1::Bootstrap),
         stage: Some(FoldStageV1::Omega),
         ordinal: 5,
+        stages: Some(6),
         outcome: FoldOutcomeV1::Discarded,
         phases: [Duration::from_micros(2); FoldPhaseV1::COUNT],
         verification: KagemushaWalletVerificationCountsV1::default(),
@@ -314,20 +347,20 @@ fn log_line_carries_only_fixed_names_whole_microseconds_counts_and_bytes() {
             )
         },
         concat!(
-            r#"{"schema":"iroha.kagemusha.fold-metrics.v2","sampledNativeMicros":0,"counts":{"subProofs":3,"#,
+            r#"{"schema":"iroha.kagemusha.fold-metrics.v3","sampledNativeMicros":0,"counts":{"subProofs":3,"#,
             r#""checkpoints":0,"folded":0,"adopted":0,"failed":1,"discarded":1,"#,
             r#""cancelledByPayment":0,"cancelledBySetupIngest":1,"cancelledByStatusRead":0,"#,
             r#""cancelledByActivity":0,"cancelledByClose":0,"discardedProveMicros":9,"#,
             r#""overlappedIngests":3},"records":["#,
-            r#"{"startedNativeMicros":0,"endedNativeMicros":0,"sequence":7,"operation":"load","stage":"q","ordinal":1,"outcome":"cancelled","#,
+            r#"{"startedNativeMicros":0,"endedNativeMicros":0,"sequence":7,"operation":"load","stage":"q","ordinal":1,"stages":3,"outcome":"cancelled","#,
             r#""cause":"setup_ingest","ingests":0,"peakRssBytes":4096,"verification":{"lineage":0,"full":0,"decides":0,"batches":0,"generatorMsms":0,"generatorMsmBases":0,"reusedVerifications":0,"reusedGenerators":0},"engineMicros":{"key_import":0,"key_rebuild":0,"witness":0,"prove":0,"self_verify":0,"commit":0,"source_restore":0,"sigma_publish":0},"micros":{"#,
             r#""sync_manifest":1,"read_fold":2,"fold_seed":3,"owner_replay":4,"restore":5,"#,
             r#""key_import":6,"prove":7,"publish":8}},"#,
-            r#"{"startedNativeMicros":0,"endedNativeMicros":0,"sequence":7,"operation":null,"stage":null,"ordinal":2,"outcome":"failed","#,
+            r#"{"startedNativeMicros":0,"endedNativeMicros":0,"sequence":7,"operation":null,"stage":null,"ordinal":2,"stages":null,"outcome":"failed","#,
             r#""cause":null,"ingests":0,"peakRssBytes":null,"verification":{"lineage":0,"full":0,"decides":0,"batches":0,"generatorMsms":0,"generatorMsmBases":0,"reusedVerifications":0,"reusedGenerators":0},"engineMicros":{"key_import":0,"key_rebuild":0,"witness":0,"prove":0,"self_verify":0,"commit":0,"source_restore":0,"sigma_publish":0},"micros":{"sync_manifest":0,"#,
             r#""read_fold":0,"fold_seed":0,"owner_replay":0,"restore":0,"key_import":0,"#,
             r#""prove":0,"publish":0}},"#,
-            r#"{"startedNativeMicros":0,"endedNativeMicros":0,"sequence":8,"operation":"bootstrap","stage":"omega","ordinal":5,"#,
+            r#"{"startedNativeMicros":0,"endedNativeMicros":0,"sequence":8,"operation":"bootstrap","stage":"omega","ordinal":5,"stages":6,"#,
             r#""outcome":"discarded","cause":null,"ingests":3,"peakRssBytes":8192,"verification":{"lineage":0,"full":0,"decides":0,"batches":0,"generatorMsms":0,"generatorMsmBases":0,"reusedVerifications":0,"reusedGenerators":0},"engineMicros":{"key_import":0,"key_rebuild":0,"witness":0,"prove":0,"self_verify":0,"commit":0,"source_restore":0,"sigma_publish":0},"micros":{"#,
             r#""sync_manifest":2,"read_fold":2,"fold_seed":2,"owner_replay":2,"restore":2,"#,
             r#""key_import":2,"prove":2,"publish":2}}],"nativeWorkCount":0,"nativeWork":[]}"#
@@ -466,6 +499,7 @@ fn maximal_public_records_fit_the_mobile_diagnostic_bound() {
     };
     maximum.operation = Some(KagemushaWalletOperationKindV1::RefreshPolicy);
     maximum.stage = Some(FoldStageV1::Omega);
+    maximum.stages = Some(u32::MAX);
     maximum.work = iroha_plonk::work_metrics::WorkMetrics {
         key_import: Duration::MAX,
         key_rebuild: Duration::MAX,
@@ -539,7 +573,7 @@ fn maximal_public_records_fit_the_mobile_diagnostic_bound() {
     let json = metrics.to_json();
     // Clock and process scratch widths can grow after this test; reserve their full u64 widths.
     let bound = json.len() + 4 * 20;
-    println!("fold-metrics.v2 worst-case retained JSON bound: {bound} bytes");
+    println!("{FOLD_METRICS_SCHEMA_V1} worst-case retained JSON bound: {bound} bytes");
     assert!(bound <= FOLD_METRICS_MAX_BYTES_V1, "{bound}");
     let value: norito::json::Value = norito::json::from_slice(json.as_bytes()).unwrap();
     let object = value.as_object().unwrap();

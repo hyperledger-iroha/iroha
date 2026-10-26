@@ -497,7 +497,8 @@ mod frame_tests {
 pub struct ConsensusConfigCaps {
     /// Canonical V1 identity of every boot policy input which can affect execution.
     pub execution_policy_hash: [u8; 32],
-    /// Canonical digest of deterministic, locally configured Nexus policy.
+    /// Canonical Nexus policy digest, binding loaded policy identities and the
+    /// authenticated original signed-genesis fee policy, not current-height fees.
     pub nexus_policy_digest: [u8; 32],
     /// Canonical signed-genesis native consensus-configuration fingerprint.
     pub native_config_fingerprint: [u8; 32],

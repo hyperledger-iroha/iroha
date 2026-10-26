@@ -22,7 +22,7 @@
 
 use crate::{CancellationToken, Cancelled};
 use ff::Field;
-use group::prime::PrimeCurveAffine;
+use group::CurveAffine;
 use rayon::prelude::*;
 
 use crate::curve::endo::wnaf_u128;
@@ -340,7 +340,7 @@ mod tests {
     use crate::field::{Fp, Fq};
     use group::{Curve, Group};
     use rand_chacha::ChaCha20Rng;
-    use rand_core_06::SeedableRng;
+    use rand_core::SeedableRng;
 
     fn reference<C: PastaCurve>(g: &[C::AffineExt], u: &C::ScalarExt) -> Vec<C::AffineExt> {
         let h = g.len() / 2;

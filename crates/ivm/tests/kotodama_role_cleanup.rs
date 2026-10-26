@@ -37,7 +37,11 @@ fn kotodama_revoke_role_denies_mint() {
     let caller: ivm::mock_wsv::AccountId = literal_account();
     // VM + host with bootstrap permissions
     let mut wsv = MockWorldStateView::new();
-    wsv.grant_permission(&caller, PermissionToken::RegisterAssetDefinition);
+    wsv.grant_permission(&caller, PermissionToken::RegisterDomain);
+    assert!(wsv.register_domain(
+        &caller,
+        iroha_model_base::domain::DomainId::try_new("default", "universal").unwrap()
+    ));
     wsv.grant_permission(&caller, PermissionToken::ManageRoles);
     let host = WsvHost::new_with_subject(wsv, caller.clone());
     let mut vm = IVM::new(u64::MAX);
@@ -45,7 +49,7 @@ fn kotodama_revoke_role_denies_mint() {
     // 1) Bootstrap + create+grant role + initial mint (should succeed)
     let prog_ok = compile(
         r#"
-          ledger::asset::register(asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), name: "ROSE", spec: NumericSpec::integer(), mintable: Mintable::Once);
+          ledger::asset::register(asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), name: "ROSE", spec: NumericSpec::integer(), mintable: Mintable::Once, owning_domain: DomainId::parse("default.universal"));
           ledger::role::register(role: Name::parse("minter"), permissions: Json::parse("{\"perms\":[\"mint_asset:62Fk4FPcMuLvW5QjDGNF2a4jAmjM\"]}"));
           ledger::role::grant(account: context::authority(), role: Name::parse("minter"));
           ledger::asset::mint(account: context::authority(), asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), amount: 1);
@@ -71,7 +75,11 @@ fn kotodama_delete_role_prevents_grant() {
     wsv.add_account_unchecked(caller.clone());
     wsv.grant_permission(&caller, PermissionToken::RegisterDomain);
     wsv.grant_permission(&caller, PermissionToken::RegisterAccount);
-    wsv.grant_permission(&caller, PermissionToken::RegisterAssetDefinition);
+    wsv.grant_permission(&caller, PermissionToken::RegisterDomain);
+    assert!(wsv.register_domain(
+        &caller,
+        iroha_model_base::domain::DomainId::try_new("default", "universal").unwrap()
+    ));
     wsv.grant_permission(&caller, PermissionToken::ManageRoles);
     let host = WsvHost::new_with_subject(wsv, caller.clone());
     let mut vm = IVM::new(u64::MAX);
@@ -80,7 +88,7 @@ fn kotodama_delete_role_prevents_grant() {
     let prog_boot = compile(
         r#"
           ledger::domain::register(domain: DomainId::parse("default.universal"));
-          ledger::asset::register(asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), name: "ROSE", spec: NumericSpec::integer(), mintable: Mintable::Once);
+          ledger::asset::register(asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), name: "ROSE", spec: NumericSpec::integer(), mintable: Mintable::Once, owning_domain: DomainId::parse("default.universal"));
           ledger::role::register(role: Name::parse("minter"), permissions: Json::parse("{\"perms\":[\"mint_asset:62Fk4FPcMuLvW5QjDGNF2a4jAmjM\"]}"));
     "#,
     );
@@ -108,7 +116,11 @@ fn kotodama_delete_role_denied_while_assigned_then_succeeds_after_revoke() {
     wsv.add_account_unchecked(caller.clone());
     wsv.grant_permission(&caller, PermissionToken::RegisterDomain);
     wsv.grant_permission(&caller, PermissionToken::RegisterAccount);
-    wsv.grant_permission(&caller, PermissionToken::RegisterAssetDefinition);
+    wsv.grant_permission(&caller, PermissionToken::RegisterDomain);
+    assert!(wsv.register_domain(
+        &caller,
+        iroha_model_base::domain::DomainId::try_new("default", "universal").unwrap()
+    ));
     wsv.grant_permission(&caller, PermissionToken::ManageRoles);
     let host = WsvHost::new_with_subject(wsv, caller.clone());
     let mut vm = IVM::new(u64::MAX);
@@ -117,7 +129,7 @@ fn kotodama_delete_role_denied_while_assigned_then_succeeds_after_revoke() {
     let boot = compile(
         r#"
           ledger::domain::register(domain: DomainId::parse("default.universal"));
-          ledger::asset::register(asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), name: "ROSE", spec: NumericSpec::integer(), mintable: Mintable::Once);
+          ledger::asset::register(asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), name: "ROSE", spec: NumericSpec::integer(), mintable: Mintable::Once, owning_domain: DomainId::parse("default.universal"));
           ledger::role::register(role: Name::parse("minter"), permissions: Json::parse("{\"perms\":[\"mint_asset:62Fk4FPcMuLvW5QjDGNF2a4jAmjM\"]}"));
           ledger::role::grant(account: AccountId::parse("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"), role: Name::parse("minter"));
     "#,
@@ -149,7 +161,11 @@ fn kotodama_combined_revoke_then_delete_blocks_grant_and_mint() {
     wsv.add_account_unchecked(caller.clone());
     wsv.grant_permission(&caller, PermissionToken::RegisterDomain);
     wsv.grant_permission(&caller, PermissionToken::RegisterAccount);
-    wsv.grant_permission(&caller, PermissionToken::RegisterAssetDefinition);
+    wsv.grant_permission(&caller, PermissionToken::RegisterDomain);
+    assert!(wsv.register_domain(
+        &caller,
+        iroha_model_base::domain::DomainId::try_new("default", "universal").unwrap()
+    ));
     wsv.grant_permission(&caller, PermissionToken::ManageRoles);
     let host = WsvHost::new_with_subject(wsv, caller.clone());
     let mut vm = IVM::new(u64::MAX);
@@ -158,7 +174,7 @@ fn kotodama_combined_revoke_then_delete_blocks_grant_and_mint() {
     let boot = compile(
         r#"
           ledger::domain::register(domain: DomainId::parse("default.universal"));
-          ledger::asset::register(asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), name: "ROSE", spec: NumericSpec::integer(), mintable: Mintable::Once);
+          ledger::asset::register(asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), name: "ROSE", spec: NumericSpec::integer(), mintable: Mintable::Once, owning_domain: DomainId::parse("default.universal"));
           ledger::role::register(role: Name::parse("minter"), permissions: Json::parse("{\"perms\":[\"mint_asset:62Fk4FPcMuLvW5QjDGNF2a4jAmjM\"]}"));
           ledger::role::grant(account: AccountId::parse("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"), role: Name::parse("minter"));
     "#,

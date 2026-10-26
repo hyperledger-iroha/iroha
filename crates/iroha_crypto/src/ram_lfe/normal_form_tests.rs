@@ -9,7 +9,7 @@ use crate::ram_lfe::{
     reference::{ram_lfe_reference_evaluate_v1, ram_lfe_reference_execute_v1},
     specification_tests::repository_file,
 };
-use rand::{Rng as _, SeedableRng as _};
+use rand::{RngExt as _, SeedableRng as _};
 use rand_chacha::ChaCha20Rng;
 
 const BASE: usize = RAM_LFE_V1_NORMAL_BASE_COLUMNS;

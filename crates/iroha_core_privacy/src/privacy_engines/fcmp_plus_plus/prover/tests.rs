@@ -8,7 +8,8 @@ use crate::privacy_engines::fcmp_plus_plus::{
 };
 use core::cell::Cell;
 use p256::elliptic_curve::bigint::{Encoding as _, U256};
-use rand_08::{SeedableRng as _, rngs::StdRng};
+use rand::SeedableRng as _;
+use rand_chacha::ChaCha12Rng;
 use sha2::{Digest as _, Sha256};
 const TEST_AMOUNT: u64 = 5;
 thread_local! {
@@ -686,14 +687,15 @@ fn rerandomization_scalar_decoder_owns_comparison_wide_and_result_on_every_exit(
         PROVER_ED25519_SCALAR_MODULUS_LE_V1,
         U256::from_be_hex("1000000000000000000000000000000014def9dea2f79cd65812631a5cf5d3ed")
             .to_le_bytes()
+            .as_slice()
     );
-    let modulus = U256::from_le_bytes(PROVER_ED25519_SCALAR_MODULUS_LE_V1);
+    let modulus = U256::from_le_bytes(PROVER_ED25519_SCALAR_MODULUS_LE_V1.into());
     for (label, integer, expected) in [
         ("one", U256::ONE, Scalar::ONE),
         ("l-1", modulus.wrapping_sub(&U256::ONE), -Scalar::ONE),
     ] {
         reset_rerandomization_scalar_decoder_owner_drops();
-        let bytes = integer.to_le_bytes();
+        let bytes: [u8; 32] = integer.to_le_bytes().into();
         let scalar = prover_secret_decode_nonzero_edwards_scalar_v1(&bytes)
             .unwrap_or_else(|error| panic!("{label} rejected: {error:?}"));
         assert_eq!(scalar.expose_ref(), &expected, "{label}");
@@ -704,7 +706,7 @@ fn rerandomization_scalar_decoder_owns_comparison_wide_and_result_on_every_exit(
         assert_eq!(prover_secret_copy_owner_drops(), 1, "{label}");
     }
     reset_rerandomization_scalar_decoder_owner_drops();
-    let zero = U256::ZERO.to_le_bytes();
+    let zero: [u8; 32] = U256::ZERO.to_le_bytes().into();
     let scalar = ProverValidatedSecretEdwardsScalarEncodingV1::validate_v1(&zero)
         .expect("zero is a canonical scalar encoding")
         .into_scalar_owner_v1();
@@ -728,7 +730,7 @@ fn rerandomization_scalar_decoder_owns_comparison_wide_and_result_on_every_exit(
         ("max", U256::MAX),
     ] {
         reset_rerandomization_scalar_decoder_owner_drops();
-        let bytes = integer.to_le_bytes();
+        let bytes: [u8; 32] = integer.to_le_bytes().into();
         assert!(
             matches!(
                 prover_secret_decode_nonzero_edwards_scalar_v1(&bytes),
@@ -742,7 +744,7 @@ fn rerandomization_scalar_decoder_owns_comparison_wide_and_result_on_every_exit(
     }
     reset_rerandomization_scalar_decoder_owner_drops();
     let result_unwind = std::panic::catch_unwind(|| {
-        let bytes = U256::from(7_u8).to_le_bytes();
+        let bytes: [u8; 32] = U256::from(7_u8).to_le_bytes().into();
         let scalar = prover_secret_decode_nonzero_edwards_scalar_v1(&bytes)
             .expect("owned scalar before unwind");
         assert_eq!(rerandomization_canonicality_owner_drops(), 1);
@@ -769,7 +771,7 @@ fn rerandomization_scalar_decoder_owns_comparison_wide_and_result_on_every_exit(
     assert_eq!(prover_secret_copy_owner_drops(), 0);
     reset_rerandomization_scalar_decoder_owner_drops();
     let wide_unwind = std::panic::catch_unwind(|| {
-        let bytes = U256::from(11_u8).to_le_bytes();
+        let bytes: [u8; 32] = U256::from(11_u8).to_le_bytes().into();
         let wide = ProverSecretEdwardsWideInputV1::from_borrowed_v1(&bytes);
         assert_eq!(rerandomization_wide_input_owner_drops(), 0);
         let _ = core::hint::black_box(&wide.0);

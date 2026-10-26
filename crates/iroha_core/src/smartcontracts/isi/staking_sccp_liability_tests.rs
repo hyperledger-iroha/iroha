@@ -45,10 +45,9 @@ fn sccp_liable_unbond_keeps_exact_pending_request_and_both_balances() {
     let block = new_block_with_height_and_time(4, 0);
     let mut state_block = state.block(block.as_ref().header());
     let mut stx = state_block.transaction_for_callback_testing();
-    stx.nexus.staking.stake_asset_id = asset_definition.to_string();
+
     set_fixture_xor_identity(&mut stx, &asset_definition);
-    stx.nexus.staking.stake_escrow_account_id = escrow.to_string();
-    stx.nexus.staking.slash_sink_account_id = escrow.to_string();
+
     let request_id = Hash::new("sccp-held-unbond");
     SchedulePublicLaneUnbond {
         lane_id,
@@ -88,10 +87,9 @@ fn sccp_liable_unbond_keeps_exact_pending_request_and_both_balances() {
     let block = new_block_with_height_and_time(release_height, 0);
     let mut state_block = state.block(block.as_ref().header());
     let mut stx = state_block.transaction_for_callback_testing();
-    stx.nexus.staking.stake_asset_id = asset_definition.to_string();
+
     set_fixture_xor_identity(&mut stx, &asset_definition);
-    stx.nexus.staking.stake_escrow_account_id = escrow.to_string();
-    stx.nexus.staking.slash_sink_account_id = escrow.to_string();
+
     finalize_validator_lifecycle(&mut stx).unwrap();
     let key = stake_key(lane_id, &validator, &validator);
     let share_before = stx
@@ -189,10 +187,9 @@ fn unbond_of_never_registered_validator_keeps_the_retained_custody_rejection_fir
     let block = new_block_with_height_and_time(4, 0);
     let mut state_block = state.block(block.as_ref().header());
     let mut stx = state_block.transaction_for_callback_testing();
-    stx.nexus.staking.stake_asset_id = asset_definition.to_string();
+
     set_fixture_xor_identity(&mut stx, &asset_definition);
-    stx.nexus.staking.stake_escrow_account_id = escrow.to_string();
-    stx.nexus.staking.slash_sink_account_id = escrow.to_string();
+
     let request_id = Hash::new("never-registered-validator-unbond");
     SchedulePublicLaneUnbond {
         lane_id,
@@ -268,10 +265,9 @@ fn sccp_liable_zero_custody_registration_survives_pruning_and_replacement() {
     let block = new_block_with_height_and_time(3, 0);
     let mut state_block = state.block(block.as_ref().header());
     let mut stx = state_block.transaction_for_callback_testing();
-    stx.nexus.staking.stake_asset_id = asset_definition.to_string();
+
     set_fixture_xor_identity(&mut stx, &asset_definition);
-    stx.nexus.staking.stake_escrow_account_id = escrow.to_string();
-    stx.nexus.staking.slash_sink_account_id = escrow.to_string();
+
     prune_zero_custody_exited_validators(&mut stx).unwrap();
     assert_eq!(
         stx.world

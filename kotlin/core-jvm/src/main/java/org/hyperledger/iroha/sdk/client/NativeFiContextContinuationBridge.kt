@@ -5,6 +5,7 @@ import java.nio.ByteBuffer
 import java.nio.charset.CodingErrorAction
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
+import org.hyperledger.iroha.sdk.crypto.NativeSignerBridge
 
 /**
  * Exact native-admitted signed candidate, not a finality, snapshot, success or freshness claim.
@@ -91,7 +92,7 @@ class NativeFiContextContinuationBridge private constructor() {
         private const val LIBRARY = "connect_norito_bridge"
         private val available = try {
             System.loadLibrary(LIBRARY)
-            nativeBridgeAbiVersion()==31 && nativeVerifierContractVersion()==1
+            nativeBridgeAbiVersion() == NativeSignerBridge.REQUIRED_BRIDGE_ABI_VERSION && nativeVerifierContractVersion() == 1
         } catch (_: UnsatisfiedLinkError) { false } catch (_: SecurityException) { false }
         @JvmStatic fun isNativeAvailable(): Boolean = available
 

@@ -15,7 +15,7 @@ class KagemushaWalletDeletionHostNativeV1Test {
         for (selector in 48..51) {
             val expectedToken = if (selector == 49 || selector == 51) 1L else 0L
             fun call(token: Long = expectedToken, first: ByteArray = byteArrayOf()) =
-                assertNotNull(KagemushaWalletNativeV1.setup(0, ByteArray(32), selector, 0, 0, token,
+                assertNotNull(KagemushaWalletNativeV1.setup(0, if (selector == 50) 0 else 1, ByteArray(32), selector, 0, 0, token,
                     first, byteArrayOf(), byteArrayOf()))
             val unknown = call()
             assertEquals(-2, unknown.status)

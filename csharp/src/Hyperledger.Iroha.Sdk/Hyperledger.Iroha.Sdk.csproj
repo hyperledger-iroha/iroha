@@ -16,7 +16,7 @@
     <RepositoryType>git</RepositoryType>
     <RepositoryUrl>https://github.com/hyperledger-iroha/iroha</RepositoryUrl>
     <RootNamespace>Hyperledger.Iroha</RootNamespace>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFramework>net10.0</TargetFramework>
     <Version>0.1.0</Version>
     <IrohaRepositoryRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)../../..'))</IrohaRepositoryRoot>
     <IrohaNativePackageRoot Condition="'$(IrohaNativePackageRoot)' == ''">$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)../../artifacts/native-package'))</IrohaNativePackageRoot>

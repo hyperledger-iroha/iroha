@@ -155,8 +155,8 @@ def make_case(directory, curve_tag, parameters_data, contradictory=False):
     columns = [frame(uint(kind)) + frame(uint(0)) for kind in (0, 2)]
     lookup = frame(seq([expr([a0])])) + frame(seq([expr([q0])]))
     fields = [uint(1, 2), uint(curve_tag), uint(curve.base, 32), uint(m, 32),
-              params.digest, uint(k, 1), uint(2), uint(1), uint(1), uint(4, 1),
-              uint(5, 2), uint(2, 1), uint(3, 1), uint(0), uint(1), uint(1),
+              params.digest, uint(k, 1), uint(2), uint(1), uint(1), uint(6, 1),
+              uint(5, 2), uint(2, 1), uint(5, 1), uint(0), uint(1), uint(1),
               seq([uint(1)]), seq([query]), seq([query]), seq([query]),
               frame(uint(0, 1)) + frame(uint(1)) + frame(seq([])),
               seq([seq([expr(gate)]) for gate in gates]), seq(columns), seq([lookup]),

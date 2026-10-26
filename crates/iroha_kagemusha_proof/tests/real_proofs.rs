@@ -1129,7 +1129,10 @@ fn compact_send_descriptor_support_inventory() {
     assert_eq!(protocol.plan().rotations(), &[0, 1, -1, -6]);
     assert_eq!(protocol.plan().sets().len(), 5);
     assert_eq!(
-        format!("{:x}", Sha256::digest(binding.encoded())),
+        Sha256::digest(binding.encoded())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>(),
         "3caa2db67ee50fa917ea344d967c477b5f9122b5a6225533033568fd6a6ea24d"
     );
 
@@ -1164,7 +1167,10 @@ fn compact_send_descriptor_support_inventory() {
         })
         .collect();
     assert_eq!(
-        format!("{:x}", Sha256::digest(&packed)),
+        Sha256::digest(&packed)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>(),
         "298f11fbfd998fad9de3239fd15c12487710b741466bba82693e8f96e175594c"
     );
     assert_eq!(
@@ -1191,9 +1197,15 @@ fn compact_send_descriptor_support_inventory() {
         ]
     );
     println!(
-        "COMPACT_SEND_SOURCE descriptor={:x} selectors={:x} source={:?} queries={:?} groups={:?} selector_map={selector_map:?}",
-        Sha256::digest(binding.encoded()),
-        Sha256::digest(packed),
+        "COMPACT_SEND_SOURCE descriptor={} selectors={} source={:?} queries={:?} groups={:?} selector_map={selector_map:?}",
+        Sha256::digest(binding.encoded())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>(),
+        Sha256::digest(packed)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>(),
         fingerprint.digest(),
         protocol.queries(),
         protocol.plan().slots()
@@ -1289,9 +1301,15 @@ fn compact_send_source_probe() {
         source.tables.selectors().len()
     );
     println!(
-        "COMPACT_SOURCE_PROBE descriptor={:x} selector_bits={:x} permutation={:?} source={:?}",
-        Sha256::digest(binding.encoded()),
-        Sha256::digest(packed),
+        "COMPACT_SOURCE_PROBE descriptor={} selector_bits={} permutation={:?} source={:?}",
+        Sha256::digest(binding.encoded())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>(),
+        Sha256::digest(packed)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>(),
         source.tables.permutation().mapping_digest(),
         fingerprint.digest()
     );

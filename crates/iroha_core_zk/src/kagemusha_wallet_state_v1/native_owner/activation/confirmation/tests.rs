@@ -106,7 +106,9 @@ pub(super) fn confirmation_data(
             .unwrap(),
     }
 }
-fn activated_plan(wallet: &mut Wallet) -> Plan {
+fn activated_plan<C: Custody, A: ArchiveStore, N: NativeProofs>(
+    wallet: &mut Coordinator<C, A, N>,
+) -> Plan {
     wallet.commit(bootstrap()).unwrap();
     let asset = fixture("KagemushaWalletAssetScopeV1");
     let plan = wallet.activation_plan(&asset).unwrap();
@@ -114,6 +116,56 @@ fn activated_plan(wallet: &mut Wallet) -> Plan {
     wallet.finish_activation(&plan, &original).unwrap();
     wallet.activation_plan(&asset).unwrap()
 }
+/// Bootstrap custody with the existing genuine signed and certified activation fixture.
+/// Custody and ledger execution results remain explicit test fixtures.
+pub(in crate::kagemusha_wallet_state_v1::native_owner) fn ledger_load_fixture(
+    confirmed: bool,
+) -> (Wallet, [[u8; 32]; 4]) {
+    let mut wallet = wallet();
+    let scope = initialize_ledger_load_fixture(&mut wallet, confirmed);
+    (wallet, scope)
+}
+
+/// Initialize the exact same activation fixture over the caller's actual custody/archive adapters.
+pub(in crate::kagemusha_wallet_state_v1::native_owner) fn initialize_ledger_load_fixture<
+    C: Custody,
+    A: ArchiveStore,
+    N: NativeProofs,
+>(
+    wallet: &mut Coordinator<C, A, N>,
+    confirmed: bool,
+) -> [[u8; 32]; 4] {
+    let plan = activated_plan(wallet);
+    let scope = [
+        wallet.scheme_id,
+        wallet.wallet_id,
+        plan.asset.asset_digest(),
+        plan.credential.body.account_digest,
+    ];
+    if confirmed {
+        let attempts = genuine(&plan, &[true]);
+        let attempt = &attempts[0];
+        let (root, manifest) = wallet.sync_manifest().unwrap();
+        wallet
+            .publish_activation_attempt(root, manifest, &plan, &attempt.wire)
+            .unwrap();
+        let plan = wallet.activation_plan(&plan.asset).unwrap();
+        let confirmation = Confirmation {
+            version: 1,
+            activation: plan.output.unwrap(),
+            signed_transaction: attempt.wire.clone(),
+            outcome: wallet
+                .write_ledger_original(&attempt.outcome, &attempt.bytes)
+                .unwrap(),
+        };
+        let (root, manifest) = wallet.sync_manifest().unwrap();
+        wallet
+            .publish_activation_confirmation(root, manifest, &plan, &confirmation)
+            .unwrap();
+    }
+    scope
+}
+
 fn reopen(wallet: Wallet) -> Wallet {
     Coordinator::new(
         wallet.custody,

@@ -36,6 +36,10 @@ fn genesis_preexecution_preserves_selected_profile_across_threads() {
         .genesis_key_pair
         .clone()
         .expect("generated genesis must retain its signing owner");
+    let staking_policy = network
+        .generated_staking_policy
+        .clone()
+        .expect("exact generated monetary recipe");
     let extra = network.genesis_isi.clone();
     let post_topology = network.genesis_post_topology_isi.clone();
     let chain = network.chain_id();
@@ -94,7 +98,7 @@ fn genesis_preexecution_preserves_selected_profile_across_threads() {
                 chain,
                 crate::config::GenesisPolicyConfig {
                     genesis_crypto: config::test_network_crypto_admission_policy(),
-                    staking_policy: config::default_test_network_staking_policy(),
+                    staking_policy: staking_policy.clone(),
                     da_proof_policies: Some(iroha_core::da::proof_policy_bundle(
                         &actual.nexus.lane_config,
                     )),
@@ -120,15 +124,81 @@ fn genesis_preexecution_preserves_selected_profile_across_threads() {
         assert_eq!(generated_staged.execution_policy, expected_execution);
         assert_eq!(chain_discriminant(), 888, "generation leaked its profile");
 
-        // An explicitly wrong prefix is an error even when the caller's ambient profile
-        // agrees with that wrong prefix. The supplied runtime configuration remains authority.
-        let mut wrong = actual;
-        wrong.nexus.staking.stake_escrow_account_id = ALICE_ID
-            .to_i105_for_discriminant(888)
-            .expect("foreign literal");
-        // Test fresh execution of the signed inputs under the invalid config.
-        // Replaying the successful output claim would instead correctly reject
-        // its committed fragment count before recording the new rejection.
+        // Monetary accounts are typed identities in the original signed policy. A foreign
+        // address literal must be rejected at that policy's JSON authoring boundary, before
+        // it can become a signed parameter; there is no node-local staking account override.
+        {
+            let _selected = ChainDiscriminantGuard::enter(369);
+            let original = norito::json::to_value(&staking_policy)
+                .expect("serialize the exact original staking policy under its selected profile");
+            let decoded: iroha_data_model::block::consensus::PublicLaneStakingPolicy =
+                norito::json::from_value(original.clone())
+                    .expect("the selected-profile original policy must decode");
+            assert_eq!(decoded, staking_policy);
+            let foreign_literal = staking_policy
+                .stake_escrow_account_id
+                .to_i105_for_discriminant(888)
+                .expect("foreign escrow literal");
+            let prefix_error =
+                iroha_data_model::account::AccountId::parse_encoded(&foreign_literal)
+                    .expect_err("the selected account parser rejects the foreign escrow prefix");
+            assert!(matches!(
+                prefix_error,
+                iroha_data_model::account::AccountIdParseError::Address(
+                    iroha_data_model::account::AccountAddressError::UnexpectedNetworkPrefix {
+                        expected: 369,
+                        found: 888,
+                    }
+                )
+            ));
+            let mut wrong = original.clone();
+            let previous = wrong
+                .as_object_mut()
+                .expect("staking policy is an object")
+                .insert(
+                    "stake_escrow_account_id".into(),
+                    norito::json::Value::String(foreign_literal.clone()),
+                );
+            assert_eq!(
+                previous,
+                original
+                    .as_object()
+                    .expect("original staking object")
+                    .get("stake_escrow_account_id")
+                    .cloned()
+            );
+            assert_ne!(
+                wrong, original,
+                "only the escrow address profile was changed"
+            );
+            assert_eq!(
+                wrong.as_object().unwrap().get("stake_escrow_account_id"),
+                Some(&norito::json::Value::String(foreign_literal))
+            );
+            let error = norito::json::from_value::<
+                iroha_data_model::block::consensus::PublicLaneStakingPolicy,
+            >(wrong)
+            .expect_err("the original staking policy rejects a foreign account prefix");
+            let diagnostic = error.to_string();
+            assert!(
+                diagnostic.contains("invalid I105 account identifier"),
+                "{diagnostic}"
+            );
+            let retried: iroha_data_model::block::consensus::PublicLaneStakingPolicy =
+                norito::json::from_value(original)
+                    .expect("rejection must leave the original policy valid");
+            assert_eq!(retried, staking_policy);
+        }
+        assert_eq!(
+            chain_discriminant(),
+            888,
+            "policy authoring leaked its profile"
+        );
+
+        // Keep a real native preexecution failure on this foreign-profile worker. The
+        // rejected proposal has an extra signature, while its original signed inputs,
+        // header and monetary policy remain unchanged. This checks scoped-profile cleanup
+        // on the actual validator's error path without reviving removed local settings.
         let proposal = GenesisBlock(
             genesis
                 .0
@@ -139,7 +209,49 @@ fn genesis_preexecution_preserves_selected_profile_across_threads() {
         assert_eq!(proposal.0.header(), genesis.0.header());
         assert_eq!(proposal.0.hash(), genesis.0.hash());
         assert!(proposal.0.external_transactions().next().is_some());
+        let proposal_wire = proposal.0.encode_wire().expect("original proposal wire");
+        let mut invalid = proposal.clone();
+        invalid
+            .0
+            .try_sign(genesis_key_pair.private_key(), 1)
+            .expect("add the deliberately noncanonical second genesis signature");
+        assert_eq!(invalid.0.signatures().count(), 2);
+        assert_eq!(invalid.0.header(), proposal.0.header());
+        assert_eq!(invalid.0.hash(), proposal.0.hash());
+        let invalid_wire = invalid.0.encode_wire().expect("invalid fixture wire");
         let error = config::preexecute_genesis_with_runtime_config(
+            &invalid,
+            &genesis_account,
+            &topology,
+            &genesis_key_pair,
+            crate::config::GenesisRuntimeConfig {
+                runtime_config: Some(&actual),
+                ..Default::default()
+            },
+        )
+        .expect_err("native genesis validation must reject the extra signature");
+        // Bootstrap authenticates this same signed source before the later ValidBlock
+        // validator runs. Keep the actual typed refusal from that earlier native boundary.
+        let native_error = error
+            .downcast_ref::<iroha_core::sns::SnsError>()
+            .unwrap_or_else(|| panic!("retain the native SNS bootstrap refusal: {error:?}"));
+        assert!(
+            matches!(
+                native_error,
+                iroha_core::sns::SnsError::BadRequest(reason)
+                    if reason == "invalid SNS bootstrap genesis: genesis must carry exactly its index-zero authority signature"
+            ),
+            "the original extra signature must fail bootstrap authentication: {error:?}"
+        );
+        assert_eq!(invalid.0.encode_wire().unwrap(), invalid_wire);
+        assert_eq!(proposal.0.encode_wire().unwrap(), proposal_wire);
+        assert_eq!(
+            chain_discriminant(),
+            888,
+            "failed execution leaked its profile"
+        );
+
+        let (retried, retried_staged) = config::preexecute_genesis_with_runtime_config(
             &proposal,
             &genesis_account,
             &topology,
@@ -148,24 +260,19 @@ fn genesis_preexecution_preserves_selected_profile_across_threads() {
                 pipeline_config: None,
                 nexus_config: None,
                 zk_config: None,
-                runtime_config: Some(&wrong),
+                runtime_config: Some(&actual),
             },
         )
-        .expect_err("explicit foreign staking account must remain rejected");
-        let diagnostic = format!("{error:#}");
+        .expect("the unchanged original proposal must still execute after native rejection");
         assert!(
-            diagnostic.contains("nexus.staking.stake_escrow_account_id"),
-            "{diagnostic}"
+            retried
+                .output_results()
+                .all(|result| result.as_ref().is_ok())
         );
-        assert!(
-            diagnostic.contains("ERR_UNEXPECTED_NETWORK_PREFIX"),
-            "{diagnostic}"
-        );
-        assert_eq!(
-            chain_discriminant(),
-            888,
-            "failed execution leaked its profile"
-        );
+        assert_eq!(retried_staged.nexus_amx, expected_nexus);
+        assert_eq!(retried_staged.execution_policy, expected_execution);
+        assert_eq!(proposal.0.encode_wire().unwrap(), proposal_wire);
+        assert_eq!(chain_discriminant(), 888, "native retry leaked its profile");
     })
     .join()
     .expect("profile-aware native genesis worker must complete");

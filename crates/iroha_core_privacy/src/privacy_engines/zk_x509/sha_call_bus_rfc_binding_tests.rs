@@ -242,6 +242,7 @@ fn maximum_credential_rfc_sha_handshake_matches_every_role_and_bound_segment() {
             );
         }
     }
+    let fixed = ZkX509ShaBatchFixedProviderV1::new_v1(assembly.sha_schedule.shape()).unwrap();
     let mut segments = Vec::new();
     let mut ca_calls = Vec::new();
     let mut boundary_rows = Vec::new();
@@ -284,7 +285,7 @@ fn maximum_credential_rfc_sha_handshake_matches_every_role_and_bound_segment() {
         });
         let mut bound = source.bind_v1(&binding).unwrap();
         bound
-            .replay_base_column_v1(segment, NATIVE_WORD_COLUMN, &mut column)
+            .replay_base_column_v1(&fixed, segment, NATIVE_WORD_COLUMN, &mut column)
             .unwrap();
         assert_eq!(
             fingerprint(&column),

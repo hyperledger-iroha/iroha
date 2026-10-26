@@ -16,7 +16,7 @@ SCRIPT = ROOT / "scripts" / "fuzz_smoke.sh"
 WORKFLOW = ROOT / ".github" / "workflows" / "workspace_release.yml"
 NORITO_MANIFEST = ROOT / "crates" / "norito" / "fuzz" / "Cargo.toml"
 IVM_MANIFEST = ROOT / "crates" / "ivm" / "fuzz" / "Cargo.toml"
-PINNED_NIGHTLY = "nightly-2025-05-08"
+PINNED_NIGHTLY = "nightly-2026-10-23"
 PINNED_CARGO_FUZZ = "0.13.2"
 NORITO_TARGETS = (
     "json_parse_string",
@@ -194,7 +194,7 @@ class FuzzSmokeInventoryTests(unittest.TestCase):
             "\n  format:\n", 1
         )[0]
         for required in (
-            "toolchain: nightly-2025-05-08",
+            "toolchain: nightly-2026-10-23",
             "--version 0.13.2",
             "--locked",
             "RUNS: \"10000\"",

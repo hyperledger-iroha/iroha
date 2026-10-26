@@ -715,11 +715,9 @@ mod tests {
         },
         streaming::StreamingKeyMaterial,
     };
-    use iroha_data_model::{
-        block::BlockHeader, peer::Peer, sorafs::pricing::PricingScheduleRecord,
-    };
+    use iroha_data_model::{block::BlockHeader, sorafs::pricing::PricingScheduleRecord};
     use iroha_logger::Level;
-    use iroha_model_base::chain::ChainId;
+    use iroha_model_base::{chain::ChainId, peer::Peer};
     use iroha_primitives::addr::socket_addr;
     use iroha_torii_shared::configuration::{
         ComputePricingUpdate, Logger as LoggerDTO, NetworkUpdate, SoranetHandshakePuzzleUpdate,

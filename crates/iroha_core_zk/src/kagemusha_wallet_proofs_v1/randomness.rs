@@ -3,7 +3,7 @@
 use ff::PrimeField;
 use iroha_pasta::{CancellationToken, PastaCurve, PastaField};
 use iroha_plonk_recursion::FoldTape;
-use rand::rand_core::TryRngCore as _;
+use rand::rand_core::TryRng as _;
 use zeroize::Zeroizing;
 
 /// Resource and cancellation errors are not a proof-invalid verdict.
@@ -15,8 +15,8 @@ pub enum Error {
     Unavailable,
 }
 /// Obtain one OS candidate; no silent infallible RNG fallback.
-pub fn os_entropy(bytes: &mut [u8; 32]) -> Result<(), Error> {
-    rand::rngs::OsRng
+pub(crate) fn os_entropy(bytes: &mut [u8; 32]) -> Result<(), Error> {
+    rand::rngs::SysRng
         .try_fill_bytes(bytes)
         .map_err(|_| Error::Unavailable)
 }

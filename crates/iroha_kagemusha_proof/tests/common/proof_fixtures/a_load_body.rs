@@ -223,11 +223,10 @@ impl Circuit<Fp> for LoadMaps {
                     },
                     &insertion,
                 )?;
-                Ok(objects
-                    .context()
-                    .iter()
-                    .map(|o| o.authenticated_digest().clone())
-                    .collect::<Vec<_>>())
+                Ok(vec![
+                    objects.receipt().digest().clone(),
+                    objects.own_receipt_digest().clone(),
+                ])
             },
         )?;
         for (i, value) in out.iter().enumerate() {

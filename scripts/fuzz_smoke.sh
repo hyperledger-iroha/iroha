@@ -7,7 +7,7 @@ set -euo pipefail
 # diagnostic and skips the run. CI and release gates MUST pass `--strict`,
 # which makes every missing or mismatched pinned prerequisite a hard failure.
 
-PINNED_NIGHTLY="nightly-2025-05-08"
+PINNED_NIGHTLY="nightly-2026-10-23"
 PINNED_CARGO_FUZZ_VERSION="0.13.2"
 
 usage() {

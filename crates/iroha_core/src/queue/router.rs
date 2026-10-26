@@ -88,6 +88,7 @@ use iroha_executor_data_model::permission::{
         CanEnrollFeeSponsorProgram, CanManageFeeSponsorProgram, CanPublishSpaceDirectoryManifest,
         CanPublishSpaceDirectoryManifestForAccountDomain, CanPublishSpaceDirectoryManifestForUaid,
     },
+    smart_contract::{CanInvokeContractEntrypoint, CanUseContractPermission},
 };
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
@@ -7948,6 +7949,52 @@ fn resolve_optional_dataspace_target<T>(
 ) -> Result<Option<DataSpaceId>, RoutingResolveError> {
     value.map_or_else(|| Ok(None), resolve)
 }
+// These permissions belong to the immutable contract address, independently of the
+// recipient's aliases. This selects scope only; native execution still validates
+// the current manifest and the grantor's exact delegation authority.
+fn contract_permission_dataspace_target(
+    permission: &Permission,
+) -> Result<Option<DataSpaceId>, RoutingResolveError> {
+    let invalid = || RoutingResolveError::OrdinaryRouteUnavailable {
+        reason: "contract permission requires an exact addressed payload".into(),
+    };
+    let decoded = norito::core::classify_decode_attempt(|| match permission.name() {
+        "CanInvokeContractEntrypoint" => permission
+            .payload()
+            .try_into_any_norito::<CanInvokeContractEntrypoint>()
+            .and_then(|token| {
+                let contract = token.contract.clone();
+                iroha_primitives::json::Json::try_new(token).map(|payload| (contract, payload))
+            }),
+        "CanUseContractPermission" => permission
+            .payload()
+            .try_into_any_norito::<CanUseContractPermission>()
+            .and_then(|token| {
+                let contract = token.contract.clone();
+                iroha_primitives::json::Json::try_new(token).map(|payload| (contract, payload))
+            }),
+        _ => Err(norito::Error::InvalidValue {
+            context: "contract permission name",
+        }),
+    });
+    let (contract, canonical) =
+        decoded.map_err(
+            |error| match crate::execution_attempt::canonical_decode_attempt_error(error, |_| {
+                invalid()
+            }) {
+                crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                    RoutingResolveError::Deferred(reason)
+                }
+                crate::execution_attempt::ExecutionAttemptError::Rejected(error) => error,
+            },
+        )?;
+    if canonical != *permission.payload() {
+        return Err(invalid());
+    }
+    contract_address_dataspace_target(&contract)
+        .map(Some)
+        .ok_or_else(invalid)
+}
 fn dataspace_scoped_permission_target(
     permission: &Permission,
     dataspace_catalog: Option<&DataSpaceCatalog>,
@@ -7958,6 +8005,9 @@ fn dataspace_scoped_permission_target(
         && permission.name() != "CanPublishSpaceDirectoryManifestForAccountDomain"
     {
         return match permission.name() {
+            "CanInvokeContractEntrypoint" | "CanUseContractPermission" => {
+                contract_permission_dataspace_target(permission)
+            }
             "CanMintAssetToAccount" => resolve_optional_dataspace_target(
                 permission
                     .payload()
@@ -8204,6 +8254,9 @@ fn dataspace_scoped_permission_target_with_world<W: WorldReadOnly>(
         && permission.name() != "CanPublishSpaceDirectoryManifestForAccountDomain"
     {
         return match permission.name() {
+            "CanInvokeContractEntrypoint" | "CanUseContractPermission" => {
+                contract_permission_dataspace_target(permission)
+            }
             "CanMintAssetToAccount" => resolve_optional_dataspace_target(
                 permission
                     .payload()
@@ -10150,6 +10203,9 @@ mod sccp_routing_tests {
 
 #[cfg(test)]
 mod tests {
+    mod contract_permission_routing {
+        include!("router/contract_permission_routing_tests.rs");
+    }
     fn test_nonce(hash: &HashOf<Vec<InstructionBox>>) -> MultisigProposalNonce {
         MultisigProposalNonce::new(*hash.as_ref()).unwrap()
     }
@@ -16434,9 +16490,7 @@ mod tests {
         registry.upsert(corridor);
         let mut world = state.world.block();
         world
-            .parameters
-            .get_mut()
-            .set_parameter(iroha_data_model::parameter::Parameter::Custom(
+            .set_parameter_for_testing(iroha_data_model::parameter::Parameter::Custom(
                 registry.into_custom_parameter(),
             ))
             .expect("valid fixture parameters");
@@ -18784,9 +18838,7 @@ mod tests {
         {
             let mut world = state.world.block();
             world
-                .parameters
-                .get_mut()
-                .set_parameter(iroha_data_model::parameter::Parameter::Custom(
+                .set_parameter_for_testing(iroha_data_model::parameter::Parameter::Custom(
                     registry.into_custom_parameter(),
                 ))
                 .expect("valid fixture parameters");

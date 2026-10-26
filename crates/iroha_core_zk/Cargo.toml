@@ -51,6 +51,9 @@ zk-preverify = []
 # Non-shipping helpers and fixtures for iroha_core's test builds; forbidden in
 # shipping library evidence (scripts/taira_release_check.py).
 test-utils = []
+# Non-shipping software-key wallet simulator (the provider tests' platform and engineering
+# issuer) for iroha_core's ignored in-process genuine-proof acceptance; enable explicitly.
+kagemusha-simulator = ["test-utils"]
 # Gate zk-heavy tests; enable with `--features zk-tests` when needed.
 zk-tests = ["test-utils"]
 
@@ -72,16 +75,15 @@ ivm_abi = { workspace = true }
 fastpq_prover = { workspace = true, optional = true }
 fastpq_isi = { path = "../fastpq_isi" }
 tracing = { workspace = true }
-sha2 = { version = "0.10.9", default-features = false, features = ["compress"] }
-ff = "0.13.1"
+sha2 = { version = "0.11.1", default-features = false, features = ["alloc"] }
+ff = "0.14.0"
 iroha_zkp_halo2 = { workspace = true }
 kaigi_zk = { path = "../kaigi_zk" }
 base64 = { workspace = true }
 blake3 = "1.8.2"
 hex = { workspace = true }
-p256 = { version = "0.13.2", default-features = false, features = ["std", "ecdsa", "pkcs8", "hash2curve", "expose-field"] }
+p256 = { version = "0.14.0", default-features = false, features = ["std", "ecdsa", "pkcs8", "hash2curve"] }
 rand = { workspace = true }
-rand_core_06 = { workspace = true }
 # Bounded route-qualification workers during opening, on the shared global pool.
 rayon = { workspace = true }
 tempfile = { workspace = true }

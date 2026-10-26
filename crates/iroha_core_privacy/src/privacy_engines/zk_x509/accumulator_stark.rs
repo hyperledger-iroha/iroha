@@ -7,7 +7,6 @@
 //! advanced per hash row, keeping the maximum committed-column degree at three.
 #[cfg(test)]
 use super::accumulator_air::ZK_X509_CA_ACCUMULATOR_NONPADDING_ROWS_V1;
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::accumulator_air::ZkX509CaAccumulatorTraceV1;
 #[cfg(test)]
 use super::proof_instance::TEST_PROOF_INSTANCE_V1;
@@ -53,7 +52,6 @@ use super::{
 use crate::privacy_engines::prover_randomness::{
     HealthCheckedTryCryptoRngV1, TryCryptoProverRandomnessErrorV1,
 };
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 use crate::privacy_engines::transparent_stark::{
     GOLDILOCKS_GENERATOR_V1, goldilocks_evaluate_coset_v1, grind_nonce_v1,
 };
@@ -76,10 +74,8 @@ pub mod joint_verifier;
 mod oods_tests;
 #[path = "accumulator_private_links.rs"]
 pub mod private_links;
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[path = "accumulator_retained_columns.rs"]
 mod retained_columns;
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[path = "accumulator_stages.rs"]
 pub mod stages;
 /// Native trace logarithm for 104 non-padding rows.
@@ -551,14 +547,12 @@ pub enum ZkX509CaAccumulatorProofErrorV1 {
     #[error("zk-X509 compact CA prover randomness is unavailable")]
     RandomnessUnavailable,
     /// Prover entropy failed the release health policy.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error("zk-X509 compact CA prover randomness failed its health check")]
     RandomnessUnhealthy,
     /// Checked arithmetic or allocation exceeded the fixed local envelope.
     #[error("zk-X509 compact CA proof resource envelope is exceeded")]
     Resource,
     /// The producer-generated proof failed independent verification.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error("zk-X509 compact CA prover self-check failed")]
     ProverSelfCheckFailed,
 }
@@ -963,7 +957,6 @@ pub fn ca_accumulator_root_spki_channel_v1(
         .ok_or(ZkX509AccumulatorStarkErrorV1::CallBus)
 }
 /// Derive verifier terminals from a validated trace and public schedule.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub fn ca_accumulator_stark_public_v1(
     trace: &ZkX509CaAccumulatorTraceV1,
     schedule: &ZkX509ShaCallScheduleV1,
@@ -1617,7 +1610,6 @@ pub fn evaluate_ca_accumulator_stark_residues_v1<A: PolynomialAirFieldV1>(
     Ok(residues)
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn build_aux_row_v1(
     public: &ZkX509CaAccumulatorStarkPublicV1,
     base: &[F; ZK_X509_CA_ACCUMULATOR_BASE_WIDTH_V1],
@@ -2226,7 +2218,6 @@ fn new_ca_transcript_v1(
 }
 /// Encode the sole claim-free CA component frame. Acceptance requires both
 /// members of the paired original-oracle credential verifier.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn encode_ca_proof_envelope_v1(inner: &[u8]) -> Result<Vec<u8>, ZkX509CaAccumulatorProofErrorV1> {
     if inner.len() < 4
         || inner[..4] != CA_INNER_PROOF_MAGIC_V1
@@ -2282,7 +2273,6 @@ fn decode_ca_proof_envelope_v1(encoded: &[u8]) -> Result<&[u8], ZkX509CaAccumula
     }
     Ok(&encoded[CA_PROOF_ENVELOPE_BYTES_V1..])
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn ca_fixed_lde_columns_v1(
     native_columns: &[Vec<F>],
 ) -> Result<Vec<Vec<F>>, ZkX509CaAccumulatorProofErrorV1> {
@@ -2451,17 +2441,14 @@ fn derive_ca_constraint_alphas_v1(
         .collect()
 }
 /// Clearing owner retained through every commitment, transcript and FRI operation.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 type CaCompositionLanesV1 = super::private_table::PrivateTableV1<Vec<Vec<E>>>;
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn erase_ca_composition_chunks_v1(chunks: &mut [Vec<E>]) {
     for chunk in chunks {
         super::private_table::zeroize_words_v1(chunk);
     }
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn own_ca_composition_lane_v1(
     chunks: Vec<Vec<E>>,
 ) -> Result<CaCompositionLanesV1, ZkX509CaAccumulatorProofErrorV1> {
@@ -2530,7 +2517,6 @@ fn derive_ca_deep_mixes_v1(
         .map_err(map_aggregate_proof_error_v1)?;
     Ok(mixes)
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn ca_fri_base_v1(
     trace_material: &aggregate::AggregateTraceGroupMaterialV1,
     composition: &[Vec<E>],
@@ -2724,7 +2710,7 @@ struct CaCompositionInputsV1<'a> {
     claims: &'a ZkX509CaAccumulatorStarkTerminalClaimsV1,
 }
 #[cfg(test)]
-fn ca_composition_lanes_v1<R: rand::TryRngCore>(
+fn ca_composition_lanes_v1<R: rand::TryRng>(
     inputs: &CaCompositionInputsV1<'_>,
     alphas: &[E],
     layout: &aggregate::AggregateProofLayoutV1,
@@ -2815,7 +2801,7 @@ mod tests {
         sha_call_bus_stark::{ZkX509ShaCallBusLaneChallengesV1, ZkX509ShaCallPublicShapeV1},
         stark::zk_x509_test_digest384_v1,
     };
-    use rand::{TryCryptoRng, TryRngCore};
+    use rand::{TryCryptoRng, TryRng};
     fn spki(index: u16) -> [u8; ZK_X509_CA_SPKI_DER_BYTES_V1] {
         let mut spki = [0x42; ZK_X509_CA_SPKI_DER_BYTES_V1];
         spki[..2].copy_from_slice(&index.to_be_bytes());
@@ -2888,6 +2874,7 @@ mod tests {
     }
     #[derive(Debug)]
     struct InjectedEntropyError;
+    impl std::error::Error for InjectedEntropyError {}
     impl core::fmt::Display for InjectedEntropyError {
         fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
             formatter.write_str("injected compact-CA prover entropy failure")
@@ -2900,7 +2887,7 @@ mod tests {
         Panic,
     }
     struct AdversarialEntropy(EntropyMode);
-    impl TryRngCore for AdversarialEntropy {
+    impl TryRng for AdversarialEntropy {
         type Error = InjectedEntropyError;
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             Err(InjectedEntropyError)

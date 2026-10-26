@@ -63,9 +63,7 @@ fn malformed_registry(stx: &mut StateTransaction<'_, '_>) -> CustomParameter {
     let original =
         CustomParameter::new(ValidationFeePolicyRegistryV1::parameter_id(), Json::new(()));
     stx.world
-        .parameters
-        .get_mut()
-        .set_parameter(Parameter::Custom(original.clone()))
+        .set_parameter_for_testing(Parameter::Custom(original.clone()))
         .expect("valid fixture parameters");
     original
 }

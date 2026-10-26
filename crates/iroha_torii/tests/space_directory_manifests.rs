@@ -874,8 +874,8 @@ async fn manifest_publish_endpoint_returns_unsigned_transaction_draft() {
     };
     let manifest_value = norito::json::to_value(&manifest).expect("manifest json");
     let value = iroha_torii::json_object(vec![
-        iroha_torii::json_entry("authority", authority.clone()),
-        iroha_torii::json_entry("manifest", manifest_value),
+        iroha_torii::json_entry("authority", &authority),
+        iroha_torii::json_entry("manifest", &manifest_value),
         iroha_torii::json_entry("reason", "QA publish trigger"),
     ]);
     let body = norito::json::to_json(&value).expect("serialize publish request");
@@ -915,8 +915,8 @@ async fn manifest_publish_endpoint_applies_reason_only_to_entries_missing_notes(
     };
     let manifest_value = norito::json::to_value(&manifest).expect("manifest json");
     let value = iroha_torii::json_object(vec![
-        iroha_torii::json_entry("authority", authority.clone()),
-        iroha_torii::json_entry("manifest", manifest_value),
+        iroha_torii::json_entry("authority", &authority),
+        iroha_torii::json_entry("manifest", &manifest_value),
         iroha_torii::json_entry("reason", "QA publish trigger"),
     ]);
     let body = norito::json::to_json(&value).expect("serialize publish request");
@@ -965,8 +965,8 @@ async fn manifest_publish_endpoint_preserves_missing_notes_when_reason_is_omitte
     };
     let manifest_value = norito::json::to_value(&manifest).expect("manifest json");
     let value = iroha_torii::json_object(vec![
-        iroha_torii::json_entry("authority", authority.clone()),
-        iroha_torii::json_entry("manifest", manifest_value),
+        iroha_torii::json_entry("authority", &authority),
+        iroha_torii::json_entry("manifest", &manifest_value),
     ]);
     let body = norito::json::to_json(&value).expect("serialize publish request");
     let req = Request::builder()
@@ -999,10 +999,10 @@ async fn manifest_revoke_endpoint_returns_unsigned_transaction_draft() {
     let uaid_hash = iroha_crypto::Hash::new(b"space-directory-revoke");
     let uaid_literal = format!("uaid:{}", uaid_hash.as_ref().encode_hex::<String>());
     let value = iroha_torii::json_object(vec![
-        iroha_torii::json_entry("authority", authority.clone()),
-        iroha_torii::json_entry("uaid", uaid_literal),
-        iroha_torii::json_entry("dataspace", 11u64),
-        iroha_torii::json_entry("revoked_epoch", 4096u64),
+        iroha_torii::json_entry("authority", &authority),
+        iroha_torii::json_entry("uaid", &uaid_literal),
+        iroha_torii::json_entry("dataspace", &11u64),
+        iroha_torii::json_entry("revoked_epoch", &4096u64),
         iroha_torii::json_entry("reason", "test emergency revoke"),
     ]);
     let body = norito::json::to_json(&value).expect("serialize revoke request");
@@ -1032,10 +1032,10 @@ async fn manifest_revoke_endpoint_rejects_padded_mixed_case_uaid() {
         uaid_hash.as_ref().encode_hex::<String>().to_uppercase()
     );
     let value = iroha_torii::json_object(vec![
-        iroha_torii::json_entry("authority", authority.clone()),
-        iroha_torii::json_entry("uaid", uaid_literal),
-        iroha_torii::json_entry("dataspace", 11u64),
-        iroha_torii::json_entry("revoked_epoch", 4096u64),
+        iroha_torii::json_entry("authority", &authority),
+        iroha_torii::json_entry("uaid", &uaid_literal),
+        iroha_torii::json_entry("dataspace", &11u64),
+        iroha_torii::json_entry("revoked_epoch", &4096u64),
         iroha_torii::json_entry("reason", "test emergency revoke"),
     ]);
     let body = norito::json::to_json(&value).expect("serialize revoke request");
@@ -1058,10 +1058,10 @@ async fn manifest_revoke_endpoint_rejects_raw_hex_uaid() {
     let uaid_hash = iroha_crypto::Hash::new(b"space-directory-revoke-raw-no-reason");
     let raw_hex = uaid_hash.as_ref().encode_hex::<String>();
     let value = iroha_torii::json_object(vec![
-        iroha_torii::json_entry("authority", authority.clone()),
-        iroha_torii::json_entry("uaid", raw_hex),
-        iroha_torii::json_entry("dataspace", 12u64),
-        iroha_torii::json_entry("revoked_epoch", 8192u64),
+        iroha_torii::json_entry("authority", &authority),
+        iroha_torii::json_entry("uaid", &raw_hex),
+        iroha_torii::json_entry("dataspace", &12u64),
+        iroha_torii::json_entry("revoked_epoch", &8192u64),
     ]);
     let body = norito::json::to_json(&value).expect("serialize revoke request");
     let req = Request::builder()
@@ -1085,10 +1085,10 @@ async fn manifest_revoke_endpoint_rejects_invalid_uaid_before_queueing() {
     } = manifest_revoke_harness();
     let authority = manifest_authority();
     let value = iroha_torii::json_object(vec![
-        iroha_torii::json_entry("authority", authority.clone()),
+        iroha_torii::json_entry("authority", &authority),
         iroha_torii::json_entry("uaid", "uaid:1234"),
-        iroha_torii::json_entry("dataspace", 11u64),
-        iroha_torii::json_entry("revoked_epoch", 4096u64),
+        iroha_torii::json_entry("dataspace", &11u64),
+        iroha_torii::json_entry("revoked_epoch", &4096u64),
         iroha_torii::json_entry("reason", "test emergency revoke"),
     ]);
     let body = norito::json::to_json(&value).expect("serialize revoke request");
@@ -1139,8 +1139,8 @@ async fn api_router_registers_space_directory_manifest_mutation_routes() {
     };
     let manifest_value = norito::json::to_value(&manifest).expect("manifest json");
     let publish_body = norito::json::to_json(&iroha_torii::json_object(vec![
-        iroha_torii::json_entry("authority", authority.clone()),
-        iroha_torii::json_entry("manifest", manifest_value),
+        iroha_torii::json_entry("authority", &authority),
+        iroha_torii::json_entry("manifest", &manifest_value),
         iroha_torii::json_entry("reason", "router publish"),
     ]))
     .expect("serialize publish request");
@@ -1172,10 +1172,10 @@ async fn api_router_registers_space_directory_manifest_mutation_routes() {
         Hash::new(b"router-revoke").as_ref().encode_hex::<String>()
     );
     let revoke_body = norito::json::to_json(&iroha_torii::json_object(vec![
-        iroha_torii::json_entry("authority", authority.clone()),
-        iroha_torii::json_entry("uaid", uaid_literal),
-        iroha_torii::json_entry("dataspace", dataspace.as_u64()),
-        iroha_torii::json_entry("revoked_epoch", 4096u64),
+        iroha_torii::json_entry("authority", &authority),
+        iroha_torii::json_entry("uaid", &uaid_literal),
+        iroha_torii::json_entry("dataspace", &dataspace.as_u64()),
+        iroha_torii::json_entry("revoked_epoch", &4096u64),
         iroha_torii::json_entry("reason", "router revoke"),
     ]))
     .expect("serialize revoke request");

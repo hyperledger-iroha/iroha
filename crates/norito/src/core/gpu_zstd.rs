@@ -654,7 +654,7 @@ pub fn decode_all(compressed: &[u8], uncompressed_size: u64) -> Result<Vec<u8>, 
 mod tests {
     use super::*;
     use crate::core::hw;
-    use rand::{Rng, SeedableRng, rngs::StdRng};
+    use rand::{RngExt, SeedableRng, rngs::StdRng};
     use std::{io::Cursor, sync::Mutex};
     static GPU_POLICY_TEST_LOCK: Mutex<()> = Mutex::new(());
     struct GpuPolicyGuard(bool);

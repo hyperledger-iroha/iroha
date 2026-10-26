@@ -357,7 +357,7 @@ fn fetch_pinned(
         // feed requests cannot inherit credentials from daemon state.
         .default_headers(HeaderMap::new())
         .https_only(true)
-        .use_rustls_tls()
+        .tls_backend_rustls()
         .redirect(Policy::none())
         .no_proxy()
         .referer(false)

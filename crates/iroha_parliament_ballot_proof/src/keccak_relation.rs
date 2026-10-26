@@ -432,7 +432,7 @@ mod tests {
 
     fn sample(seed: u8, len: usize) -> Vec<u8> {
         use sha3::digest::{ExtendableOutput, Update, XofReader};
-        let mut sponge = sha3::Shake128::default();
+        let mut sponge = shake::Shake128::default();
         sponge.update(&[seed]);
         let mut out = vec![0u8; len];
         sponge.finalize_xof().read(&mut out);
@@ -477,7 +477,7 @@ mod tests {
             message.extend_from_slice(&input);
             assert_eq!(message.len(), MESSAGE_BYTES);
             let mut expected = [0u8; 136];
-            let mut sponge = sha3::Shake256::default();
+            let mut sponge = shake::Shake256::default();
             sponge.update(&message);
             sponge.finalize_xof().read(&mut expected);
             let evaluation = evaluate(&public_block(tag, &input), &secret);

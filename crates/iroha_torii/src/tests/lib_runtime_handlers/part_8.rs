@@ -974,9 +974,7 @@ async fn torii_proxy_candidate_peers_fail_closed_when_bindings_are_missing() {
     let mut block = app.state.block(header);
     block
         .world
-        .parameters
-        .get_mut()
-        .set_parameter(Parameter::Custom(
+        .set_parameter_for_testing(Parameter::Custom(
             SumeragiNposParameters::default().into_custom_parameter(),
         ))
         .expect("install the committed NPoS fixture parameters");
@@ -1504,7 +1502,7 @@ async fn internal_torii_proxy_route_rejects_unsigned_requests() {
 async fn sorafs_por_proof_route_requires_fresh_path_bound_operator_signature() {
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
     use tower::ServiceExt as _;
-    let app = mk_app_state_for_tests();
+    let app = mk_native_app_state_for_tests();
     let signer = app.da_receipt_signer.clone();
     let operator_layer = axum::middleware::from_fn_with_state::<
         _,

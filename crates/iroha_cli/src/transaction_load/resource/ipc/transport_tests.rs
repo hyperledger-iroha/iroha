@@ -95,7 +95,7 @@ fn publish(captures: &Captures, request: Request) -> Manifest {
     .unwrap();
     let manifest = Manifest {
         name: request.kind.manifest_name(request.sequence),
-        sha256: format!("{:x}", Sha256::digest(&bytes)),
+        sha256: hex::encode(Sha256::digest(&bytes)),
         bytes: bytes.len() as u64,
     };
     let mut file = OpenOptions::new()

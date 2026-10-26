@@ -43,8 +43,8 @@ fn map_mldsa_error(err: &MlDsaError) -> c_int {
         | MlDsaError::SecretKeyMismatch { .. }
         | MlDsaError::InertKeyMaterial { .. } => ERR_ENCODING,
         MlDsaError::ContextTooLong { .. } => ERR_LENGTH_MISMATCH,
-        MlDsaError::VerificationFailed(_) => ERR_VERIFICATION_FAILED,
-        MlDsaError::Rng(_) => ERR_KEYGEN,
+        MlDsaError::VerificationFailed => ERR_VERIFICATION_FAILED,
+        MlDsaError::RngExt(_) => ERR_KEYGEN,
     }
 }
 fn map_mlkem_error(err: &MlKemError) -> c_int {
@@ -54,7 +54,7 @@ fn map_mlkem_error(err: &MlKemError) -> c_int {
         | MlKemError::KeyPairPublicHashMismatch { .. }
         | MlKemError::InertKeyMaterial { .. }
         | MlKemError::NonCanonicalEncoding { .. } => ERR_ENCODING,
-        MlKemError::BackendFailure { .. } | MlKemError::Rng(_) => ERR_KEYGEN,
+        MlKemError::BackendFailure { .. } | MlKemError::RngExt(_) => ERR_KEYGEN,
     }
 }
 fn checked_nonempty_address_range(ptr: *const c_uchar, len: usize) -> Result<AddressRange, c_int> {
@@ -695,7 +695,6 @@ mod tests {
     use super::*;
     use crate::{HedgedRngSeed, deterministic_chacha20_rng, sign_mldsa};
     use core::ptr;
-    use pqcrypto_traits::sign::VerificationError;
     use sha3::{Digest, Sha3_256};
     fn len_as_c_uint(len: usize) -> c_uint {
         c_uint::try_from(len).expect("test vector length fits in c_uint")
@@ -2040,7 +2039,7 @@ mod tests {
     }
     #[test]
     fn map_mldsa_error_maps_variants() {
-        let verification = MlDsaError::VerificationFailed(VerificationError::InvalidSignature);
+        let verification = MlDsaError::VerificationFailed;
         assert_eq!(map_mldsa_error(&verification), ERR_VERIFICATION_FAILED);
         let mut rng = deterministic_chacha20_rng(
             HedgedRngSeed::from_entropy([0xBD; 32]),
@@ -2059,7 +2058,7 @@ mod tests {
             kind: "test",
         };
         assert_eq!(map_mldsa_error(&inert), ERR_ENCODING);
-        let rng = MlDsaError::Rng(crate::RngError);
+        let rng = MlDsaError::RngExt(crate::RngError);
         assert_eq!(map_mldsa_error(&rng), ERR_KEYGEN);
         let context = MlDsaError::ContextTooLong { len: 256 };
         assert_eq!(map_mldsa_error(&context), ERR_LENGTH_MISMATCH);

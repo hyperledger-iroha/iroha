@@ -20524,8 +20524,9 @@ sys.stdout.buffer.flush()
         .expect("readiness-driven 64MiB exact stream with both output pipes backpressured");
         assert!(output.status.success());
         let mut expected_stdout = vec![b'o'; 131_072];
-        expected_stdout
-            .extend_from_slice(format!("{:x} {expected_len}\n", expected.finalize()).as_bytes());
+        expected_stdout.extend_from_slice(
+            format!("{} {expected_len}\n", hex::encode(expected.finalize())).as_bytes(),
+        );
         assert_eq!(output.stdout, expected_stdout);
         assert_eq!(output.stderr, vec![b'e'; 131_072]);
     }

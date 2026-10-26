@@ -365,7 +365,7 @@ fn quota_segments_use_complete_signed_windows_and_running_actual_usage_paths() {
     // This signature is a codec fixture only; it is never admitted as an authentic share.
     let signer = SigningKey::from_slice(&[7; 32]).unwrap();
     let signature: Signature = signer.sign(b"pure quota projection fixture");
-    let signature = signature.normalize_s().unwrap_or(signature);
+    let signature = signature.normalize_s();
     let share = KagemushaWalletQuotaShareV1 {
         body: KagemushaWalletQuotaShareBodyV1 {
             version: 1,

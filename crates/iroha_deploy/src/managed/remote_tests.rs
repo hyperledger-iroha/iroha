@@ -5,6 +5,60 @@ use crate::bootstrap::InstalledNetworkProfiles;
 use iroha_crypto::{Algorithm, KeyPair};
 
 #[test]
+fn parent_checkpoint_diagnostic_preserves_installed_context_and_typed_cause() {
+    use crate::bootstrap::CheckpointReadError;
+    use iroha::http::PublicHttpError;
+
+    let installed = profile("fixture-chain-91", 1, "https://taira.sora.org/");
+    for (source, publication_hint) in [
+        (
+            CheckpointReadError::Http(PublicHttpError::Status(404)),
+            true,
+        ),
+        (
+            CheckpointReadError::Http(PublicHttpError::Status(500)),
+            false,
+        ),
+        (CheckpointReadError::Http(PublicHttpError::Deadline), false),
+        (CheckpointReadError::Http(PublicHttpError::Transport), false),
+        (
+            CheckpointReadError::Bootstrap(BootstrapError::Invalid("native certificate rejected")),
+            false,
+        ),
+    ] {
+        let original = source.to_string();
+        let error = Error::ParentCheckpoint {
+            profile: Box::new(installed.clone()),
+            source: Box::new(source),
+        };
+        let text = error.to_string();
+        assert!(text.contains("network `fixture`"));
+        assert!(text.contains(installed.torii_root().as_str()));
+        assert!(text.contains(&original));
+        assert_eq!(text.contains("native Torii API routing"), publication_hint);
+        assert_eq!(text.contains("retry the same command"), publication_hint);
+        assert_eq!(
+            text.contains("Keep any existing context and journals"),
+            publication_hint
+        );
+        let source = std::error::Error::source(&error).unwrap();
+        let source = source.downcast_ref::<Box<CheckpointReadError>>().unwrap();
+        assert_eq!(source.as_ref().to_string(), original);
+        assert_eq!(
+            matches!(
+                source.as_ref(),
+                CheckpointReadError::Http(PublicHttpError::Status(404))
+            ),
+            publication_hint
+        );
+        assert_eq!(
+            ManagedAttachmentFailure::from(error),
+            ManagedAttachmentFailure::ParentAuthenticationFailed
+        );
+    }
+}
+
+#[test]
 fn attachment_deadline_optional_record_preserves_parent_errors_and_original_retry() {
     let temporary = tempfile::tempdir().unwrap();
     let directory = PrivateDirectory::open_or_create(temporary.path().join("attachment")).unwrap();
@@ -39,17 +93,8 @@ fn attachment_deadline_optional_record_preserves_parent_errors_and_original_retr
     attachment_turn_deadline(&directory).unwrap();
 }
 
-fn profile(seed: u8, floor: u64, url: &str) -> InstalledNetworkProfile {
-    InstalledNetworkProfile::new(
-        "fixture".into(),
-        KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
-            .unwrap()
-            .public_key()
-            .clone(),
-        floor,
-        url,
-    )
-    .unwrap()
+fn profile(chain: &str, prefix: u16, url: &str) -> InstalledNetworkProfile {
+    InstalledNetworkProfile::new("fixture".into(), url, chain.into(), prefix).unwrap()
 }
 
 fn runtime(root: &Path, profiles: &InstalledNetworkProfiles) -> InstalledRuntime {
@@ -74,42 +119,47 @@ fn runtime(root: &Path, profiles: &InstalledNetworkProfiles) -> InstalledRuntime
 }
 
 #[test]
-fn profile_binding_rejects_key_endpoint_or_floor_regression() {
-    let selected = profile(81, 4, "https://fixture.example/checkpoint");
+fn profile_binding_rejects_changed_endpoint_chain_or_address_prefix() {
+    let selected = profile("fixture-chain", 369, "https://fixture.example/");
     let binding = ProfileBinding::from_profile(&selected);
     binding.verify(&selected).unwrap();
     for changed in [
-        profile(82, 4, "https://fixture.example/checkpoint"),
-        profile(81, 3, "https://fixture.example/checkpoint"),
-        profile(81, 4, "https://other.example/checkpoint"),
+        profile("other-chain", 369, "https://fixture.example/"),
+        profile("fixture-chain", 370, "https://fixture.example/"),
+        profile("fixture-chain", 369, "https://other.example/"),
+        InstalledNetworkProfile::new(
+            "other".into(),
+            "https://fixture.example/",
+            "fixture-chain".into(),
+            369,
+        )
+        .unwrap(),
     ] {
         assert!(binding.verify(&changed).is_err());
     }
     let bytes = encode(&binding).unwrap();
     let restored: ProfileBinding = decode(&bytes).unwrap();
     restored.verify(&selected).unwrap();
-    restored
-        .verify(&profile(81, 5, "https://fixture.example/checkpoint"))
-        .unwrap();
 }
 
 #[test]
-fn installed_floor_increase_is_durable_and_concurrent_owner_cannot_regress_it() {
+fn installed_profile_binding_is_exclusive_and_cannot_be_retargeted() {
     let _resources = super::super::native_test_guard();
     let temporary = tempfile::tempdir().unwrap();
     let parent = OwnerDirectory::open_or_create(temporary.path().join("bindings")).unwrap();
-    let original = profile(86, 4, "https://fixture.example/checkpoint");
-    let newer = profile(86, 6, "https://fixture.example/checkpoint");
+    let original = profile("fixture-chain", 369, "https://fixture.example/");
+    let changed = profile("fixture-chain", 370, "https://fixture.example/");
     let binding = Binding {
         profile: ProfileBinding::from_profile(&original),
         spec: super::super::tests::private_spec(),
         account_alias: "admin".into(),
         context: None,
     };
+    let original_bytes = encode(&binding).unwrap();
     let directory = parent
         .publish_private_child(
             "private",
-            &[("request.lock", b""), (BINDING, &encode(&binding).unwrap())],
+            &[("request.lock", b""), (BINDING, &original_bytes)],
         )
         .unwrap();
     let gate = directory.open_existing_lock("request.lock").unwrap();
@@ -117,26 +167,32 @@ fn installed_floor_increase_is_durable_and_concurrent_owner_cannot_regress_it() 
     assert!(matches!(
         bind_installed_profile(
             &directory,
-            &newer,
+            &original,
             Instant::now() + Duration::from_millis(20)
         ),
         Err(Error::ParentDeadline)
     ));
-    assert_eq!(read_binding(&directory).unwrap().profile.minimum_serial, 4);
+    assert_eq!(
+        directory.read(BINDING, MAX_METADATA).unwrap().as_slice(),
+        original_bytes.as_slice()
+    );
     drop(gate);
-    let upgraded = bind_installed_profile(&directory, &newer, Instant::now() + MAX_ATTACH).unwrap();
-    assert_eq!(upgraded.profile.minimum_serial, 6);
-    assert_eq!(read_binding(&directory).unwrap().profile.minimum_serial, 6);
-    assert!(bind_installed_profile(&directory, &original, Instant::now() + MAX_ATTACH).is_err());
+    let rebound =
+        bind_installed_profile(&directory, &original, Instant::now() + MAX_ATTACH).unwrap();
+    rebound.profile.verify(&original).unwrap();
+    assert!(bind_installed_profile(&directory, &changed, Instant::now() + MAX_ATTACH).is_err());
     assert!(
         bind_installed_profile(
             &directory,
-            &profile(87, 7, "https://fixture.example/checkpoint"),
+            &profile("other-chain", 369, "https://other.example/"),
             Instant::now() + MAX_ATTACH
         )
         .is_err()
     );
-    assert_eq!(read_binding(&directory).unwrap().profile.minimum_serial, 6);
+    assert_eq!(
+        directory.read(BINDING, MAX_METADATA).unwrap().as_slice(),
+        original_bytes.as_slice()
+    );
     let restored = PrivateDirectory::open(directory.path()).unwrap();
     assert!(read_binding(&restored).unwrap().context.is_none());
     assert_eq!(read_binding(&restored).unwrap().spec, binding.spec);
@@ -146,9 +202,9 @@ fn installed_floor_increase_is_durable_and_concurrent_owner_cannot_regress_it() 
 fn retained_attachment_requires_an_explicit_canonical_owner_alias() {
     let binding = Binding {
         profile: ProfileBinding::from_profile(&profile(
-            87,
+            "fixture-chain-87",
             1,
-            "https://fixture.example/checkpoint",
+            "https://fixture.example/",
         )),
         spec: super::super::tests::private_spec(),
         account_alias: "admin".into(),
@@ -247,6 +303,57 @@ fn ordinary_context_has_no_remote_status_but_incomplete_binding_is_an_error() {
 }
 
 #[test]
+fn parent_bootstrap_custody_is_separate_and_survives_local_generation_reset() {
+    use iroha_data_model::sumeragi_finality::test_fixtures::NativeFinalityFixture;
+
+    let _guard = super::super::native_test_guard();
+    let temporary = tempfile::tempdir().unwrap();
+    let (store, generation, prepared) =
+        super::super::tests::fixture(&temporary.path().join("managed"), "private");
+    let path = bootstrap_path(&store, "private");
+    assert_eq!(path, store.root().join("parents/private"));
+    assert!(!path.starts_with(generation.path()));
+    assert!(!generation.path().starts_with(&path));
+
+    let checkpoint = NativeFinalityFixture::new().checkpoint();
+    let selected = profile(checkpoint.chain_id(), 753, "https://torii.example/");
+    let parent = BootstrapStore::open(&path).unwrap();
+    parent
+        .accept(&selected, crate::bootstrap::tests::discovered(&checkpoint))
+        .unwrap();
+    let retained = std::fs::read(path.join("accepted.nrt")).unwrap();
+
+    store.reset_captured(&prepared).unwrap();
+    assert!(
+        generation
+            .open_child_optional("generation")
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(std::fs::read(path.join("accepted.nrt")).unwrap(), retained);
+    assert_eq!(
+        parent
+            .load(&selected)
+            .unwrap()
+            .unwrap()
+            .into_verifier()
+            .checkpoint(),
+        &checkpoint
+    );
+    drop(parent);
+    assert_eq!(
+        BootstrapStore::open(&path)
+            .unwrap()
+            .load(&selected)
+            .unwrap()
+            .unwrap()
+            .into_verifier()
+            .checkpoint(),
+        &checkpoint
+    );
+}
+
+#[test]
 fn completed_binding_detects_changed_child_and_preserves_private_reset_evidence() {
     let _guard = super::super::native_test_guard();
     let temporary = tempfile::tempdir().unwrap();
@@ -257,9 +364,9 @@ fn completed_binding_detects_changed_child_and_preserves_private_reset_evidence(
     prepared.context.dataspace_id = spec.dataspace_id.as_u64();
     let binding = Binding {
         profile: ProfileBinding::from_profile(&profile(
-            83,
+            "fixture-chain-83",
             1,
-            "https://fixture.example/checkpoint",
+            "https://fixture.example/",
         )),
         spec,
         account_alias: "admin".into(),
@@ -304,9 +411,9 @@ fn failed_first_private_start_retains_exact_context_and_diagnostics_before_attac
     request.startup_timeout = Duration::from_secs(120);
     let mut binding = Binding {
         profile: ProfileBinding::from_profile(&profile(
-            83,
+            "fixture-chain-83",
             1,
-            "https://fixture.example/checkpoint",
+            "https://fixture.example/",
         )),
         spec: super::super::tests::private_spec(),
         account_alias: "admin".into(),
@@ -436,6 +543,7 @@ fn failed_first_private_start_retains_exact_context_and_diagnostics_before_attac
                 phase: ManagedPhase::Failed,
                 running_peers: 0,
                 failure: Some(failure.into()),
+                validators: Vec::new(),
             })
             .unwrap(),
             PublishMode::Replace,
@@ -473,7 +581,7 @@ fn deadlines_and_unobserved_status_do_not_claim_parent_finality() {
     assert!(
         authenticate_parent(
             &release,
-            &profile(84, 1, "https://fixture.example/checkpoint"),
+            &profile("fixture-chain-84", 1, "https://fixture.example/"),
             Instant::now(),
             false,
         )
@@ -537,16 +645,16 @@ fn terminated_attachment_owner_cannot_keep_advertising_attached() {
 }
 
 #[test]
-fn release_lock_contention_exhausts_the_original_deadline_without_http() {
+fn bootstrap_lock_contention_exhausts_the_original_deadline_without_http() {
     let _resources = super::super::native_test_guard();
     let temporary = tempfile::tempdir().unwrap();
     let path = temporary.path().join("release");
-    let owner = ReleaseCheckpointStore::open(&path).unwrap();
+    let owner = BootstrapStore::open(&path).unwrap();
     let deadline = Instant::now() + Duration::from_millis(20);
     assert!(matches!(
         authenticate_parent(
             &path,
-            &profile(85, 1, "https://fixture.example/checkpoint"),
+            &profile("fixture-chain-85", 1, "https://fixture.example/"),
             deadline,
             false,
         ),
@@ -554,7 +662,7 @@ fn release_lock_contention_exhausts_the_original_deadline_without_http() {
     ));
     assert!(Instant::now() >= deadline);
     drop(owner);
-    ReleaseCheckpointStore::open(&path).unwrap();
+    BootstrapStore::open(&path).unwrap();
 }
 
 #[test]
@@ -1042,9 +1150,9 @@ fn attachment_publication_validates_name_before_creation_and_keeps_exact_files()
     assert!(!store.root().join("attachments").exists());
     let binding = Binding {
         profile: ProfileBinding::from_profile(&profile(
-            91,
+            "fixture-chain-91",
             1,
-            "https://fixture.example/checkpoint",
+            "https://fixture.example/",
         )),
         spec: super::super::tests::private_spec(),
         account_alias: "admin".into(),
@@ -1295,9 +1403,9 @@ fn cancelled_relay_turn_refuses_before_runtime_discovery_or_new_custody() {
         super::super::tests::fixture(&temporary.path().join("managed"), "local");
     let binding = Binding {
         profile: ProfileBinding::from_profile(&profile(
-            87,
+            "fixture-chain-87",
             1,
-            "https://fixture.example/checkpoint",
+            "https://fixture.example/",
         )),
         spec: super::super::tests::private_spec(),
         account_alias: "admin".into(),
@@ -1335,7 +1443,7 @@ fn administrative_amx_managed_busy_is_before_origin_signing_and_source_repair() 
     let _resources = super::super::native_test_guard();
     let temporary = tempfile::tempdir().unwrap();
     let store = ManagedStore::open(&temporary.path().join("managed")).unwrap();
-    let selected = profile(81, 4, "https://fixture.example/checkpoint");
+    let selected = profile("fixture-chain-81", 4, "https://fixture.example/");
     let runtime = runtime(
         &temporary.path().join("installed"),
         &InstalledNetworkProfiles::new(vec![selected.clone()]).unwrap(),
@@ -1388,7 +1496,7 @@ fn administrative_amx_managed_busy_is_before_origin_signing_and_source_repair() 
     );
     assert!(!directory.path().join("provisioning").exists());
     assert!(!directory.path().join("amx-registration").exists());
-    assert!(!release_path(&store, "private").exists());
+    assert!(!bootstrap_path(&store, "private").exists());
     drop(lease);
     // Releasing the real runtime lease does not manufacture a missing original binding.
     assert!(
@@ -1431,9 +1539,9 @@ fn foreground_attachment_status_shares_one_deadline_across_both_native_reads() {
     drop(operation);
     let binding = Binding {
         profile: ProfileBinding::from_profile(&profile(
-            83,
+            "fixture-chain-83",
             1,
-            "https://fixture.example/checkpoint",
+            "https://fixture.example/",
         )),
         spec,
         account_alias: "admin".into(),
@@ -1463,6 +1571,7 @@ fn foreground_attachment_status_shares_one_deadline_across_both_native_reads() {
         phase: ManagedPhase::Ready,
         running_peers: 4,
         failure: None,
+        validators: Vec::new(),
     };
     let mut parent = connecting("fixture".into());
     parent.stage = ManagedAttachmentPhase::Attached;
@@ -1479,7 +1588,7 @@ fn foreground_attachment_status_shares_one_deadline_across_both_native_reads() {
         attachment: parent,
     };
     let server = std::thread::spawn(move || {
-        for action in ["status", "attachment_status"] {
+        for action in [ControlAction::Status, ControlAction::AttachmentStatus] {
             let accepted_before = Instant::now() + Duration::from_secs(5);
             let mut connection = loop {
                 if let Some(connection) = listener.accept().unwrap() {
@@ -1489,12 +1598,12 @@ fn foreground_attachment_status_shares_one_deadline_across_both_native_reads() {
                 std::thread::sleep(Duration::from_millis(1));
             };
             assert_eq!(connection.receive().unwrap().action, action);
-            std::thread::sleep(Duration::from_millis(if action == "status" {
+            std::thread::sleep(Duration::from_millis(if action == ControlAction::Status {
                 200
             } else {
                 1500
             }));
-            if action == "status" {
+            if action == ControlAction::Status {
                 connection.reply(&local).unwrap();
             } else {
                 let _ = connection.reply(&combined);

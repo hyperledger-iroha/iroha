@@ -220,7 +220,6 @@ pub(super) fn append_residues<A: PolynomialAirFieldV1>(
     assert_eq!(output.len() - before, RESIDUES);
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy)]
 pub(super) struct Source<'a> {
     node: &'a ZkX509Rfc5280NodeProvenanceV1,
@@ -230,13 +229,11 @@ pub(super) struct Source<'a> {
 // The largest canonical BasicConstraints encoding is twelve bytes. Keep this
 // comparison scratch on the stack and clear both private bytes and length on
 // every return, including source-validation failures.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 struct CanonicalFrame {
     bytes: [u8; ROWS_PER_SLOT],
     length: u8,
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl CanonicalFrame {
     fn new(value: Option<u32>) -> Self {
         let mut frame = Self {
@@ -268,7 +265,6 @@ impl CanonicalFrame {
     }
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for CanonicalFrame {
     fn drop(&mut self) {
         zeroize_words_v1(&mut self.bytes);
@@ -276,7 +272,6 @@ impl Drop for CanonicalFrame {
     }
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(super) fn sources(
     trace: &ZkX509Rfc5280TraceV1,
 ) -> Result<[Option<Source<'_>>; SLOTS], ZkX509Rfc5280StarkErrorV1> {
@@ -336,7 +331,6 @@ pub(super) fn sources(
     Ok(result)
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(super) fn byte_multiplicity(
     sources: &[Option<Source<'_>>; SLOTS],
     document: usize,
@@ -353,7 +347,6 @@ pub(super) fn byte_multiplicity(
         .count()
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(super) fn node_multiplicity(
     sources: &[Option<Source<'_>>; SLOTS],
     document: usize,
@@ -372,7 +365,6 @@ pub(super) fn node_multiplicity(
     .expect("fixed certificate slot count fits u16")
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(super) fn append_rows(
     trace: &ZkX509Rfc5280TraceV1,
     sources: &[Option<Source<'_>>; SLOTS],

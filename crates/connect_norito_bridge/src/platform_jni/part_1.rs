@@ -1,10 +1,16 @@
-pub(super) fn throw_java_illegal_argument(env: &mut jni::JNIEnv<'_>, message: String) {
-    let _ = env.throw_new("java/lang/IllegalArgumentException", message);
+pub(super) fn throw_java_illegal_argument(env: &mut jni::Env<'_>, message: String) {
+    let _ = env.throw_new(
+        jni::jni_str!("java/lang/IllegalArgumentException"),
+        jni::strings::JNIString::from(message),
+    );
 }
-pub(super) fn throw_java_illegal_state(env: &mut jni::JNIEnv<'_>, message: String) {
-    let _ = env.throw_new("java/lang/IllegalStateException", message);
+pub(super) fn throw_java_illegal_state(env: &mut jni::Env<'_>, message: String) {
+    let _ = env.throw_new(
+        jni::jni_str!("java/lang/IllegalStateException"),
+        jni::strings::JNIString::from(message),
+    );
 }
-pub(super) fn catch_unwind_to_java<T, F>(env: &mut jni::JNIEnv<'_>, label: &str, f: F) -> Option<T>
+pub(super) fn catch_unwind_to_java<T, F>(env: &mut jni::Env<'_>, label: &str, f: F) -> Option<T>
 where
     F: FnOnce() -> T,
 {
@@ -18,7 +24,7 @@ where
     }
 }
 pub(super) fn read_java_byte_array(
-    env: &mut jni::JNIEnv<'_>,
+    env: &mut jni::Env<'_>,
     array: &jni::objects::JByteArray<'_>,
     context: &str,
 ) -> Option<Vec<u8>> {
@@ -44,7 +50,7 @@ pub(super) fn read_java_byte_array(
     )
 }
 pub(super) fn read_java_byte_array_bounded(
-    env: &mut jni::JNIEnv<'_>,
+    env: &mut jni::Env<'_>,
     array: &jni::objects::JByteArray<'_>,
     context: &str,
     maximum: usize,
@@ -75,8 +81,8 @@ pub(super) fn read_java_byte_array_bounded(
     )
 }
 pub(super) fn java_validation_fee_policy_proof_result(
-    env: &mut jni::JNIEnv<'_>,
-    body: impl FnOnce(&mut jni::JNIEnv<'_>) -> Result<Vec<u8>, String>,
+    env: &mut jni::Env<'_>,
+    body: impl FnOnce(&mut jni::Env<'_>) -> Result<Vec<u8>, String>,
 ) -> jni::sys::jbyteArray {
     match body(env).and_then(|bytes| {
         env.byte_array_from_slice(&bytes)
@@ -91,7 +97,7 @@ pub(super) fn java_validation_fee_policy_proof_result(
     }
 }
 pub(super) fn java_native_validation_fee_current_policy_proof_request_v1(
-    env: &mut jni::JNIEnv<'_>,
+    env: &mut jni::Env<'_>,
     trusted_checkpoint: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jbyteArray {
     java_validation_fee_policy_proof_result(env, |env| {
@@ -109,7 +115,7 @@ pub(super) fn java_native_validation_fee_current_policy_proof_request_v1(
     })
 }
 pub(super) fn java_native_validation_fee_current_policy_proof_verify_v1(
-    env: &mut jni::JNIEnv<'_>,
+    env: &mut jni::Env<'_>,
     proof_norito: jni::objects::JByteArray<'_>,
     network_id: jni::objects::JByteArray<'_>,
     policy_chain_genesis_hash: jni::objects::JByteArray<'_>,
@@ -174,7 +180,7 @@ pub(super) fn java_native_validation_fee_current_policy_proof_verify_v1(
 /// Report the exact native ABI required by the validation-fee proof bridge.
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_validationfee_ValidationFeeConsensusProofBridge_nativeBridgeAbiVersion(
-    _env: jni::JNIEnv<'_>,
+    _env: jni::EnvUnowned<'_>,
     _class: jni::objects::JClass<'_>,
 ) -> jni::sys::jint {
     CONNECT_NORITO_BRIDGE_ABI_VERSION as jni::sys::jint
@@ -182,32 +188,36 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_validationfee_Valid
 /// JNI projection of the complete-checkpoint request encoder.
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_validationfee_ValidationFeeConsensusProofBridge_nativeEncodeCurrentPolicyProofRequestV1(
-    mut env: jni::JNIEnv<'_>,
+    env: jni::EnvUnowned<'_>,
     _class: jni::objects::JClass<'_>,
     trusted_checkpoint: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jbyteArray {
-    java_native_validation_fee_current_policy_proof_request_v1(&mut env, trusted_checkpoint)
+    crate::platform_jni::with_java_env(env, |mut env| {
+        java_native_validation_fee_current_policy_proof_request_v1(&mut env, trusted_checkpoint)
+    })
 }
 /// JNI verifier returning the projection JSON and promoted canonical checkpoint as two arrays.
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_validationfee_ValidationFeeConsensusProofBridge_nativeVerifyCurrentPolicyProofV1(
-    mut env: jni::JNIEnv<'_>,
+    env: jni::EnvUnowned<'_>,
     _class: jni::objects::JClass<'_>,
     proof_norito: jni::objects::JByteArray<'_>,
     network_id: jni::objects::JByteArray<'_>,
     policy_chain_genesis_hash: jni::objects::JByteArray<'_>,
     trusted_checkpoint: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jobjectArray {
-    java_native_validation_fee_current_policy_proof_verify_v1(
-        &mut env,
-        proof_norito,
-        network_id,
-        policy_chain_genesis_hash,
-        trusted_checkpoint,
-    )
+    crate::platform_jni::with_java_env(env, |mut env| {
+        java_native_validation_fee_current_policy_proof_verify_v1(
+            &mut env,
+            proof_norito,
+            network_id,
+            policy_chain_genesis_hash,
+            trusted_checkpoint,
+        )
+    })
 }
 fn java_retail_fee_assessment_operation(
-    env: &mut jni::JNIEnv<'_>,
+    env: &mut jni::Env<'_>,
     input: jni::objects::JByteArray<'_>,
     maximum_input_bytes: usize,
     operation: fn(&[u8]) -> BridgeResult<Vec<u8>>,
@@ -236,7 +246,7 @@ fn java_retail_fee_assessment_operation(
 /// Reports the exact bridge ABI required by the retail assessment codec.
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_validationfee_RetailFeeAssessmentBridge_nativeBridgeAbiVersion(
-    _env: jni::JNIEnv<'_>,
+    _env: jni::EnvUnowned<'_>,
     _class: jni::objects::JClass<'_>,
 ) -> jni::sys::jint {
     CONNECT_NORITO_BRIDGE_ABI_VERSION as jni::sys::jint
@@ -244,44 +254,50 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_validationfee_Retai
 /// Native canonical retail fee codec.
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_validationfee_RetailFeeAssessmentBridge_nativeIntentHashV1(
-    mut env: jni::JNIEnv<'_>,
+    env: jni::EnvUnowned<'_>,
     _class: jni::objects::JClass<'_>,
     input: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jbyteArray {
-    java_retail_fee_assessment_operation(
-        &mut env,
-        input,
-        RETAIL_FEE_BRIDGE_MAX_INPUT_BYTES,
-        retail_fee_intent_hash_v1,
-    )
+    crate::platform_jni::with_java_env(env, |mut env| {
+        java_retail_fee_assessment_operation(
+            &mut env,
+            input,
+            RETAIL_FEE_BRIDGE_MAX_INPUT_BYTES,
+            retail_fee_intent_hash_v1,
+        )
+    })
 }
 /// Native canonical retail fee codec.
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_validationfee_RetailFeeAssessmentBridge_nativeAssessmentMarkerV1(
-    mut env: jni::JNIEnv<'_>,
+    env: jni::EnvUnowned<'_>,
     _class: jni::objects::JClass<'_>,
     input: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jbyteArray {
-    java_retail_fee_assessment_operation(
-        &mut env,
-        input,
-        RETAIL_FEE_ASSESSMENT_MAX_BYTES,
-        retail_fee_assessment_marker_v1,
-    )
+    crate::platform_jni::with_java_env(env, |mut env| {
+        java_retail_fee_assessment_operation(
+            &mut env,
+            input,
+            RETAIL_FEE_ASSESSMENT_MAX_BYTES,
+            retail_fee_assessment_marker_v1,
+        )
+    })
 }
 /// Native canonical retail fee codec.
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_validationfee_RetailFeeAssessmentBridge_nativeDecodeAssessmentV1(
-    mut env: jni::JNIEnv<'_>,
+    env: jni::EnvUnowned<'_>,
     _class: jni::objects::JClass<'_>,
     input: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jbyteArray {
-    java_retail_fee_assessment_operation(
-        &mut env,
-        input,
-        RETAIL_FEE_MARKER_MAX_BYTES,
-        retail_fee_assessment_decode_v1,
-    )
+    crate::platform_jni::with_java_env(env, |mut env| {
+        java_retail_fee_assessment_operation(
+            &mut env,
+            input,
+            RETAIL_FEE_MARKER_MAX_BYTES,
+            retail_fee_assessment_decode_v1,
+        )
+    })
 }
 pub(super) fn java_sorafs_reference_generated_at(
     generated_at: jni::sys::jlong,
@@ -289,7 +305,7 @@ pub(super) fn java_sorafs_reference_generated_at(
     u64::try_from(generated_at).map_err(|_| "generatedAtUnix must be non-negative".to_owned())
 }
 pub(super) fn read_java_sorafs_reference_byte_array(
-    env: &mut jni::JNIEnv<'_>,
+    env: &mut jni::Env<'_>,
     array: &jni::objects::JByteArray<'_>,
     field: &str,
     maximum: usize,
@@ -305,7 +321,7 @@ pub(super) fn read_java_sorafs_reference_byte_array(
         .ok_or_else(|| format!("failed to read {field} contents"))
 }
 pub(super) fn read_java_sorafs_reference_byte_array_vector(
-    env: &mut jni::JNIEnv<'_>,
+    env: &mut jni::Env<'_>,
     values: &jni::objects::JObjectArray<'_>,
     field: &str,
     expected_count: Option<usize>,
@@ -329,15 +345,13 @@ pub(super) fn read_java_sorafs_reference_byte_array_vector(
     let mut result = Vec::with_capacity(count);
     for index in 0..count {
         let object = env
-            .get_object_array_element(
-                values,
-                i32::try_from(index).map_err(|_| format!("{field} count is invalid"))?,
-            )
+            .get_object_array_element(values, index)
             .map_err(|error| format!("failed to read {field}[{index}]: {error}"))?;
         if object.is_null() {
             return Err(format!("{field}[{index}] must be a byte array"));
         }
-        let array = jni::objects::JByteArray::from(object);
+        let array = jni::objects::JByteArray::cast_local(env, object)
+            .map_err(|error| format!("{field}[{index}] must be a byte array: {error}"))?;
         result.push(read_java_sorafs_reference_byte_array(
             env,
             &array,
@@ -359,7 +373,7 @@ pub(super) unsafe fn java_sorafs_reference_buffer_bytes(
     bytes
 }
 pub(super) unsafe fn java_sorafs_reference_buffer_to_array(
-    env: &mut jni::JNIEnv<'_>,
+    env: &mut jni::Env<'_>,
     buffer: sorafs_reference_ffi::SorafsReferenceFfiBuffer,
     context: &str,
 ) -> Result<jni::sys::jbyteArray, String> {
@@ -372,7 +386,7 @@ pub(super) unsafe fn java_sorafs_reference_buffer_to_array(
         .map_err(|err| err.to_string())
 }
 pub(super) fn java_sorafs_reference_validate_orderbook_payload_json(
-    env: &mut jni::JNIEnv<'_>,
+    env: &mut jni::Env<'_>,
     kind: jni::sys::jint,
     payload: jni::objects::JByteArray<'_>,
     label: jni::objects::JByteArray<'_>,
@@ -406,7 +420,7 @@ pub(super) fn java_sorafs_reference_validate_orderbook_payload_json(
     }
 }
 pub(super) fn java_sorafs_reference_validate_pop_payload_json(
-    env: &mut jni::JNIEnv<'_>,
+    env: &mut jni::Env<'_>,
     kind: jni::sys::jint,
     payload: jni::objects::JByteArray<'_>,
     label: jni::objects::JByteArray<'_>,
@@ -440,7 +454,7 @@ pub(super) fn java_sorafs_reference_validate_pop_payload_json(
     }
 }
 pub(super) fn java_sorafs_reference_validate_hedging_payload_json(
-    env: &mut jni::JNIEnv<'_>,
+    env: &mut jni::Env<'_>,
     kind: jni::sys::jint,
     payload: jni::objects::JByteArray<'_>,
     label: jni::objects::JByteArray<'_>,
@@ -474,7 +488,7 @@ pub(super) fn java_sorafs_reference_validate_hedging_payload_json(
     }
 }
 pub(super) fn java_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json(
-    env: &mut jni::JNIEnv<'_>,
+    env: &mut jni::Env<'_>,
     payload: jni::objects::JByteArray<'_>,
     label: jni::objects::JByteArray<'_>,
     generated_at: jni::sys::jlong,
@@ -511,7 +525,7 @@ pub(super) fn java_sorafs_reference_validate_appeal_finance_cancel_asset_lock_js
     }
 }
 pub(super) fn java_sorafs_reference_validate_governance_log_node_json(
-    env: &mut jni::JNIEnv<'_>,
+    env: &mut jni::Env<'_>,
     payload: jni::objects::JByteArray<'_>,
     label: jni::objects::JByteArray<'_>,
     expected_node_cid: jni::objects::JByteArray<'_>,
@@ -575,7 +589,7 @@ pub(super) fn java_sorafs_reference_validate_governance_log_node_json(
     }
 }
 pub(super) fn java_sorafs_reference_validate_governance_dag_block_json(
-    env: &mut jni::JNIEnv<'_>,
+    env: &mut jni::Env<'_>,
     payload: jni::objects::JByteArray<'_>,
     label: jni::objects::JByteArray<'_>,
     expected_block_cid: jni::objects::JByteArray<'_>,
@@ -639,7 +653,7 @@ pub(super) fn java_sorafs_reference_validate_governance_dag_block_json(
     }
 }
 pub(super) fn java_sorafs_reference_validate_governance_dag_head_chain_json(
-    env: &mut jni::JNIEnv<'_>,
+    env: &mut jni::Env<'_>,
     head: jni::objects::JByteArray<'_>,
     head_label: jni::objects::JByteArray<'_>,
     blocks: jni::objects::JObjectArray<'_>,
@@ -724,7 +738,7 @@ pub(super) fn java_sorafs_reference_validate_governance_dag_head_chain_json(
     }
 }
 pub(super) fn java_sorafs_reference_validate_fixture_bundle_json(
-    env: &mut jni::JNIEnv<'_>,
+    env: &mut jni::Env<'_>,
     kinds: jni::objects::JByteArray<'_>,
     payloads: jni::objects::JObjectArray<'_>,
     labels: jni::objects::JObjectArray<'_>,
@@ -804,7 +818,7 @@ pub(super) fn java_sorafs_reference_validate_fixture_bundle_json(
     }
 }
 pub(super) fn java_sorafs_reference_sign_orderbook_payload(
-    env: &mut jni::JNIEnv<'_>,
+    env: &mut jni::Env<'_>,
     kind: jni::sys::jint,
     payload: jni::objects::JByteArray<'_>,
     private_key: jni::objects::JByteArray<'_>,
@@ -838,7 +852,7 @@ pub(super) fn java_sorafs_reference_sign_orderbook_payload(
     }
 }
 pub(super) fn java_sorafs_reference_derive_orderbook_order_id(
-    env: &mut jni::JNIEnv<'_>,
+    env: &mut jni::Env<'_>,
     owner_account: jni::objects::JByteArray<'_>,
     nonce: jni::sys::jlong,
 ) -> jni::sys::jbyteArray {
@@ -922,7 +936,7 @@ pub(super) fn java_sorafs_orderbook_xor_quantity(
         .map_err(|_| format!("{field} must be a canonical non-negative XOR quantity"))
 }
 pub(super) fn java_sorafs_reference_build_signed_orderbook_order_request(
-    env: &mut jni::JNIEnv<'_>,
+    env: &mut jni::Env<'_>,
     inputs: JavaSorafsOrderbookOrderRequestArrays<'_>,
 ) -> jni::sys::jbyteArray {
     let result = (|| -> Result<jni::sys::jbyteArray, String> {
@@ -1008,7 +1022,7 @@ pub(super) struct JavaSorafsOrderbookOrderRequestArrays<'a> {
     private_key: jni::objects::JByteArray<'a>,
 }
 pub(super) fn java_sorafs_reference_build_signed_orderbook_order_cancel(
-    env: &mut jni::JNIEnv<'_>,
+    env: &mut jni::Env<'_>,
     order_id: jni::objects::JByteArray<'_>,
     owner_account: jni::objects::JByteArray<'_>,
     reason: jni::sys::jint,
@@ -1055,7 +1069,7 @@ pub(super) fn java_sorafs_reference_build_signed_orderbook_order_cancel(
     }
 }
 pub(super) fn java_sorafs_reference_build_signed_orderbook_settlement_receipt(
-    env: &mut jni::JNIEnv<'_>,
+    env: &mut jni::Env<'_>,
     inputs: JavaSorafsOrderbookSettlementReceiptArrays<'_>,
 ) -> jni::sys::jbyteArray {
     let result = (|| -> Result<jni::sys::jbyteArray, String> {
@@ -1136,7 +1150,7 @@ pub(super) struct JavaSorafsOrderbookSettlementReceiptArrays<'a> {
     private_key: jni::objects::JByteArray<'a>,
 }
 pub(super) fn java_sorafs_reference_validate_pdp_payload_json(
-    env: &mut jni::JNIEnv<'_>,
+    env: &mut jni::Env<'_>,
     kind: jni::sys::jint,
     payload: jni::objects::JByteArray<'_>,
     label: jni::objects::JByteArray<'_>,
@@ -1170,7 +1184,7 @@ pub(super) fn java_sorafs_reference_validate_pdp_payload_json(
     }
 }
 pub(super) fn java_sorafs_reference_validate_pdp_commitment_challenge_json(
-    env: &mut jni::JNIEnv<'_>,
+    env: &mut jni::Env<'_>,
     commitment: jni::objects::JByteArray<'_>,
     commitment_label: jni::objects::JByteArray<'_>,
     challenge: jni::objects::JByteArray<'_>,
@@ -1219,7 +1233,7 @@ pub(super) fn java_sorafs_reference_validate_pdp_commitment_challenge_json(
     }
 }
 pub(super) fn java_sorafs_reference_validate_pdp_challenge_proof_json(
-    env: &mut jni::JNIEnv<'_>,
+    env: &mut jni::Env<'_>,
     challenge: jni::objects::JByteArray<'_>,
     challenge_label: jni::objects::JByteArray<'_>,
     proof: jni::objects::JByteArray<'_>,
@@ -1275,7 +1289,7 @@ pub(super) struct JavaSorafsPdpBundleArrays<'local> {
     proof_label: jni::objects::JByteArray<'local>,
 }
 pub(super) fn java_sorafs_reference_validate_pdp_bundle_json(
-    env: &mut jni::JNIEnv<'_>,
+    env: &mut jni::Env<'_>,
     arrays: JavaSorafsPdpBundleArrays<'_>,
     generated_at: jni::sys::jlong,
 ) -> jni::sys::jbyteArray {
@@ -1393,7 +1407,7 @@ pub(super) fn java_verify_detached_bytes(
     }
 }
 pub(super) fn java_native_public_key_from_private(
-    env: &mut jni::JNIEnv<'_>,
+    env: &mut jni::Env<'_>,
     algorithm_code: jni::sys::jint,
     private_key: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jbyteArray {
@@ -1415,7 +1429,7 @@ pub(super) fn java_native_public_key_from_private(
     }
 }
 pub(super) fn java_native_keypair_from_seed(
-    env: &mut jni::JNIEnv<'_>,
+    env: &mut jni::Env<'_>,
     algorithm_code: jni::sys::jint,
     seed: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jobjectArray {
@@ -1430,7 +1444,9 @@ pub(super) fn java_native_keypair_from_seed(
         let public_array = env
             .byte_array_from_slice(&public_bytes)
             .map_err(|err| err.to_string())?;
-        let byte_array_class = env.find_class("[B").map_err(|err| err.to_string())?;
+        let byte_array_class = env
+            .find_class(jni::jni_str!("[B"))
+            .map_err(|err| err.to_string())?;
         let array = env
             .new_object_array(2, byte_array_class, jni::objects::JObject::null())
             .map_err(|err| err.to_string())?;
@@ -1449,7 +1465,7 @@ pub(super) fn java_native_keypair_from_seed(
     }
 }
 pub(super) fn java_native_sign_detached(
-    env: &mut jni::JNIEnv<'_>,
+    env: &mut jni::Env<'_>,
     algorithm_code: jni::sys::jint,
     private_key: jni::objects::JByteArray<'_>,
     message: jni::objects::JByteArray<'_>,
@@ -1474,7 +1490,7 @@ pub(super) fn java_native_sign_detached(
     }
 }
 pub(super) fn java_native_verify_detached(
-    env: &mut jni::JNIEnv<'_>,
+    env: &mut jni::Env<'_>,
     algorithm_code: jni::sys::jint,
     public_key: jni::objects::JByteArray<'_>,
     message: jni::objects::JByteArray<'_>,
@@ -1493,18 +1509,18 @@ pub(super) fn java_native_verify_detached(
             &message_bytes,
             &signature_bytes,
         )?;
-        Ok(if valid { 1 } else { 0 })
+        Ok(valid)
     })();
     match result {
         Ok(valid) => valid,
         Err(message) => {
             throw_java_illegal_argument(env, message);
-            0
+            false
         }
     }
 }
 pub(super) fn java_text_array(
-    env: &mut jni::JNIEnv<'_>,
+    env: &mut jni::Env<'_>,
     array: &jni::objects::JByteArray<'_>,
     context: &str,
 ) -> Result<String, String> {
@@ -1527,7 +1543,7 @@ pub(super) fn java_text_array(
     Ok(text)
 }
 pub(super) fn java_network_id(
-    env: &mut jni::JNIEnv<'_>,
+    env: &mut jni::Env<'_>,
     array: &jni::objects::JByteArray<'_>,
 ) -> Result<NetworkId, String> {
     let bytes = read_java_byte_array(env, array, "networkId")
@@ -1535,18 +1551,18 @@ pub(super) fn java_network_id(
     network_id_from_raw_bytes(&bytes).map_err(str::to_owned)
 }
 pub(super) fn java_optional_text_array(
-    env: &mut jni::JNIEnv<'_>,
+    env: &mut jni::Env<'_>,
     array: &jni::objects::JByteArray<'_>,
     present: jni::sys::jboolean,
     context: &str,
 ) -> Result<Option<String>, String> {
-    if present == 0 {
+    if !present {
         return Ok(None);
     }
     java_text_array(env, array, context).map(Some)
 }
 pub(super) fn java_fee_payment_intent(
-    env: &mut jni::JNIEnv<'_>,
+    env: &mut jni::Env<'_>,
     fee_payment_json: &jni::objects::JByteArray<'_>,
 ) -> Result<FeePaymentIntent, String> {
     let mut bytes = read_java_byte_array(env, fee_payment_json, "feePaymentJson")
@@ -1577,7 +1593,7 @@ pub(super) fn java_verifying_key_id(
 pub(super) fn java_private_key(
     algorithm_code: jni::sys::jint,
     private_key: &jni::objects::JByteArray<'_>,
-    env: &mut jni::JNIEnv<'_>,
+    env: &mut jni::Env<'_>,
 ) -> Result<PrivateKey, String> {
     let algorithm = java_algorithm_from_code(algorithm_code)?;
     let mut private_bytes = read_java_byte_array(env, private_key, "privateKey")
@@ -1588,14 +1604,14 @@ pub(super) fn java_private_key(
     key
 }
 pub(super) fn java_signed_transaction_pair(
-    env: &mut jni::JNIEnv<'_>,
+    env: &mut jni::Env<'_>,
     signed_bytes: &[u8],
     hash_bytes: &[u8; 32],
 ) -> Result<jni::sys::jobjectArray, String> {
     java_byte_array_pair(env, signed_bytes, hash_bytes)
 }
 pub(super) fn java_byte_array_pair(
-    env: &mut jni::JNIEnv<'_>,
+    env: &mut jni::Env<'_>,
     first: &[u8],
     second: &[u8],
 ) -> Result<jni::sys::jobjectArray, String> {
@@ -1605,7 +1621,9 @@ pub(super) fn java_byte_array_pair(
     let hash_array = env
         .byte_array_from_slice(second)
         .map_err(|err| err.to_string())?;
-    let byte_array_class = env.find_class("[B").map_err(|err| err.to_string())?;
+    let byte_array_class = env
+        .find_class(jni::jni_str!("[B"))
+        .map_err(|err| err.to_string())?;
     let array = env
         .new_object_array(2, byte_array_class, jni::objects::JObject::null())
         .map_err(|err| err.to_string())?;
@@ -1617,7 +1635,7 @@ pub(super) fn java_byte_array_pair(
 }
 
 fn java_account_read_permission_args(
-    env: &mut jni::JNIEnv<'_>,
+    env: &mut jni::Env<'_>,
     network_id: &jni::objects::JByteArray<'_>,
     authority: &jni::objects::JByteArray<'_>,
     reporting_account: &jni::objects::JByteArray<'_>,
@@ -1643,7 +1661,7 @@ fn java_account_read_permission_args(
 }
 
 pub(super) fn java_native_account_read_permission_multisig_payload_hash(
-    env: &mut jni::JNIEnv<'_>,
+    env: &mut jni::Env<'_>,
     network_id: jni::objects::JByteArray<'_>,
     authority: jni::objects::JByteArray<'_>,
     reporting_account: jni::objects::JByteArray<'_>,
@@ -1702,7 +1720,7 @@ pub(super) fn java_native_account_read_permission_multisig_payload_hash(
     reason = "Mirrors the Java native method's signed request arguments."
 )]
 pub(super) fn java_native_finalize_account_read_permission_multisig(
-    env: &mut jni::JNIEnv<'_>,
+    env: &mut jni::Env<'_>,
     network_id: jni::objects::JByteArray<'_>,
     authority: jni::objects::JByteArray<'_>,
     reporting_account: jni::objects::JByteArray<'_>,
@@ -1771,7 +1789,7 @@ pub(super) fn java_native_finalize_account_read_permission_multisig(
 }
 #[allow(clippy::too_many_arguments)]
 pub(super) fn java_native_encode_register_zk_asset_signed_transaction(
-    env: &mut jni::JNIEnv<'_>,
+    env: &mut jni::Env<'_>,
     algorithm_code: jni::sys::jint,
     network_id: jni::objects::JByteArray<'_>,
     chain_discriminant: jni::sys::jint,
@@ -1809,8 +1827,7 @@ pub(super) fn java_native_encode_register_zk_asset_signed_transaction(
             "unshieldVerifyingKey",
         )?;
         let private_key = java_private_key(algorithm_code, &private_key, env)?;
-        let ttl =
-            parse_ttl(ttl_ms as u64, ttl_present != 0).map_err(|_| "invalid ttlMs".to_owned())?;
+        let ttl = parse_ttl(ttl_ms as u64, ttl_present).map_err(|_| "invalid ttlMs".to_owned())?;
         let register = zk::RegisterZkAsset::new(asset_definition, vk_unshield);
         let fee_payment = java_fee_payment_intent(env, &fee_payment_json)?;
         let (signed_bytes, hash_bytes) =
@@ -1840,17 +1857,30 @@ pub(super) fn java_native_encode_register_zk_asset_signed_transaction(
 /// Derive occurrence identity using the same native adapter as Swift and Node.
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSignerBridge_nativeDeriveMultisigProposalId(
-    mut env: jni::JNIEnv<'_>, _class: jni::objects::JClass<'_>, input: jni::objects::JByteArray<'_>,
+    env: jni::EnvUnowned<'_>,
+    _class: jni::objects::JClass<'_>,
+    input: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jbyteArray {
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let bytes = read_java_byte_array_bounded(&mut env, &input, "multisig occurrence", 4096)
-            .ok_or_else(|| "bounded multisig occurrence input required".to_owned())?;
-        let output = multisig_proposal_id_from_json(&bytes).map_err(|_| "invalid native multisig occurrence".to_owned())?;
-        env.byte_array_from_slice(&output).map(jni::objects::JByteArray::into_raw).map_err(|error| error.to_string())
-    }));
-    match result {
-        Ok(Ok(array)) => array,
-        Ok(Err(message)) => { throw_java_illegal_argument(&mut env, message); std::ptr::null_mut() },
-        Err(_) => { throw_java_illegal_state(&mut env, "multisig occurrence codec panicked".to_owned()); std::ptr::null_mut() },
-    }
+    crate::platform_jni::with_java_env(env, |mut env| {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let bytes = read_java_byte_array_bounded(&mut env, &input, "multisig occurrence", 4096)
+                .ok_or_else(|| "bounded multisig occurrence input required".to_owned())?;
+            let output = multisig_proposal_id_from_json(&bytes)
+                .map_err(|_| "invalid native multisig occurrence".to_owned())?;
+            env.byte_array_from_slice(&output)
+                .map(jni::objects::JByteArray::into_raw)
+                .map_err(|error| error.to_string())
+        }));
+        match result {
+            Ok(Ok(array)) => array,
+            Ok(Err(message)) => {
+                throw_java_illegal_argument(&mut env, message);
+                std::ptr::null_mut()
+            }
+            Err(_) => {
+                throw_java_illegal_state(&mut env, "multisig occurrence codec panicked".to_owned());
+                std::ptr::null_mut()
+            }
+        }
+    })
 }

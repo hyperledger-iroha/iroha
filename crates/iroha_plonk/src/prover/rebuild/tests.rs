@@ -171,8 +171,8 @@ fn parity<C: PastaCurve>() {
                     .num_threads(workers)
                     .build()
                     .unwrap();
-                let generate_proof = |key: &ProvingKey<C>, witness: &Witness<C::ScalarExt>| {
-                    let cloned_witness = Witness {
+                let generate = |key: &ProvingKey<C>, witness: &Witness<C::ScalarExt>| {
+                    let consumed_witness = Witness {
                         advice: witness.advice.clone(),
                         instances: witness.instances.clone(),
                     };
@@ -180,15 +180,15 @@ fn parity<C: PastaCurve>() {
                         create_proof_owned(
                             &params,
                             key,
-                            cloned_witness,
+                            consumed_witness,
                             ProverRandomness::fixed_seed_for_tests([83; 32]),
                             ProverConfig::default(),
                         )
                     })
                     .unwrap()
                 };
-                let expected = generate_proof(&expected_key, &expected_witness);
-                let actual = generate_proof(&actual_key, &actual_witness);
+                let expected = generate(&expected_key, &expected_witness);
+                let actual = generate(&actual_key, &actual_witness);
                 assert_eq!(actual, expected);
                 verify_full(
                     &params,
@@ -220,6 +220,7 @@ impl WipeProbe {
     }
     fn assert_wiped(self, expected: usize) {
         assert_eq!(WIPED_WITNESS.with(Cell::get), Some((expected, true)));
+        // End this observation only after checking the completed wipe.
         drop(self);
     }
 }

@@ -211,6 +211,35 @@ fn synthesis_and_proving_fit_the_counted_columns() {
     let column = (1_usize << K) * size_of::<<Ep as iroha_pasta::PastaCurve>::ScalarExt>();
     let descriptor = pk.binding().descriptor();
     let fused = peak_proving_columns(descriptor, None).expect("columns");
+    // Inspect the actual retained vectors, independently of the descriptor formula.
+    // Twiddles remain owned by the key throughout synthesis and the proof.
+    let (value_l0, value_last, value_active) = pk.mask_values();
+    let (poly_l0, poly_last, poly_active) = pk.mask_polys();
+    let key_field_bytes = pk
+        .fixed_values()
+        .iter()
+        .chain(pk.fixed_polys())
+        .chain(pk.permutation_values())
+        .chain(pk.permutation_polys())
+        .map(|values| core::mem::size_of_val(values.as_slice()))
+        .sum::<usize>()
+        + [
+            value_l0,
+            value_last,
+            value_active,
+            poly_l0,
+            poly_last,
+            poly_active,
+        ]
+        .into_iter()
+        .map(core::mem::size_of_val)
+        .sum::<usize>()
+        + pk.domain().twiddle_bytes();
+    assert_eq!(
+        fused.key,
+        key_field_bytes.div_ceil(column),
+        "key columns must cover the actual retained field vectors, including FFT twiddles"
+    );
     // The key holds at least every column counted for it.
     assert!(
         key_bytes >= fused.key * column,

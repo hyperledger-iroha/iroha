@@ -745,7 +745,7 @@ fn public_producer_with_execution(execution: crate::DigestExecutionV1) {
         // Preserve the exact canonical public bytes before the independent
         // verifier, including when a later assertion fails.
         let label = if is_axt { "axt" } else { "ordinary" };
-        let sha = format!("{:x}", Sha256::digest(&bytes));
+        let sha = hex::encode(Sha256::digest(&bytes));
         let path = retain_public_artifact(label, &bytes);
         let started = std::time::Instant::now();
         let verified = if is_axt {
@@ -820,7 +820,7 @@ fn retain_public_artifact(label: &str, bytes: &[u8]) -> std::path::PathBuf {
     assert!(bytes.len() <= policy().transport.max_wire_bytes);
     let directory = retained_directory();
     std::fs::create_dir_all(&directory).unwrap();
-    let sha = format!("{:x}", Sha256::digest(bytes));
+    let sha = hex::encode(Sha256::digest(bytes));
     let path = directory.join(format!("quantity-public-producer-deep-{label}-{sha}.bin"));
     match std::fs::OpenOptions::new()
         .write(true)
@@ -866,7 +866,7 @@ fn read_public_artifact(variable: &str, label: &str) -> Vec<u8> {
         .read_to_end(&mut bytes)
         .unwrap();
     assert!(bytes.len() <= cap);
-    assert_eq!(format!("{:x}", Sha256::digest(&bytes)), sha);
+    assert_eq!(hex::encode(Sha256::digest(&bytes)), sha);
     bytes
 }
 
@@ -1653,9 +1653,9 @@ fn captured_public_producer_artifacts_verify_against_independent_fixture() {
         assert_captured_retag_rejected(&captured);
 
         eprintln!(
-            "captured_quantity_artifact={variable}; bytes={}; sha256={:x}; bundle_frame_bytes={}; segment_bytes={:?}; independent_verification={elapsed:?}; work={:?}",
+            "captured_quantity_artifact={variable}; bytes={}; sha256={}; bundle_frame_bytes={}; segment_bytes={:?}; independent_verification={elapsed:?}; work={:?}",
             captured.bytes.len(),
-            Sha256::digest(&captured.bytes),
+            hex::encode(Sha256::digest(&captured.bytes)),
             captured.frame.len(),
             captured
                 .wire

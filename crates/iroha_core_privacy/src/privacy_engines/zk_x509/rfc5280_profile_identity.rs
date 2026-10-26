@@ -149,7 +149,6 @@ pub(super) fn residues<A: PolynomialAirFieldV1>(
     output
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn populate_classification(
     row: &mut ZkX509Rfc5280StarkBaseRowV1,
     column: usize,
@@ -160,7 +159,6 @@ fn populate_classification(
     row[column + 1] = gate.mul(delta.inverse_or_zero_canonical_v1());
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(super) fn populate_fixed_byte(row: &mut ZkX509Rfc5280StarkBaseRowV1, certificate_two: F) {
     let active = row[BASE_ACTIVE];
     for (slot, purpose) in [6, 7, 10].into_iter().enumerate() {
@@ -172,7 +170,6 @@ pub(super) fn populate_fixed_byte(row: &mut ZkX509Rfc5280StarkBaseRowV1, certifi
     populate_classification(row, KU_LEAF, gate, delta);
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(super) fn populate_source_node(row: &mut ZkX509Rfc5280StarkBaseRowV1) {
     let active = row[BASE_ACTIVE];
     for (slot, role) in [

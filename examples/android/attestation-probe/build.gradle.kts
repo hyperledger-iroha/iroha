@@ -1,10 +1,10 @@
 plugins {
-    id("com.android.application") version "9.0.1"
+    id("com.android.application") version "9.4.1"
 }
 
 android {
     namespace = "org.hyperledger.iroha.samples.attestationprobe"
-    compileSdk = 35
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "org.hyperledger.iroha.samples.attestationprobe"

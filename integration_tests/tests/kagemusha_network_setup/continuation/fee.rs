@@ -16,6 +16,58 @@ mod world;
 
 const FEE_NAMES: [&str; 3] = ["request.norito", "payment.norito", "fee-claim.norito"];
 
+#[derive(Debug, PartialEq, Eq)]
+struct FeeStageHeights {
+    funded: u64,
+    credential: u64,
+    refusal: u64,
+    request: u64,
+    payout: u64,
+    retry: u64,
+    restart_retry: u64,
+}
+
+// This DATA join does not authenticate a height. The caller supplies its retained
+// registration owner and the funding result produced by that same live campaign.
+fn fee_stage_heights(registered_height: u64, funded: &[u8]) -> Result<FeeStageHeights> {
+    let funded: norito::json::Value = norito::json::from_slice(funded)?;
+    ensure!(
+        registered_height > 1
+            && funded["schema"].as_str() == Some("iroha.kagemusha.network-funded-load.v1")
+            && funded["registration_height"].as_u64() == Some(registered_height),
+        "fee funding must retain this owner's exact registration height"
+    );
+    let activation = registered_height
+        .checked_add(1)
+        .ok_or_else(|| eyre!("fee activation height overflow"))?;
+    let load = activation
+        .checked_add(1)
+        .ok_or_else(|| eyre!("fee Load height overflow"))?;
+    ensure!(
+        funded["activation_height"].as_u64() == Some(activation)
+            && funded["certified_height"].as_u64() == Some(load),
+        "fee activation and Load must be exact registration successors"
+    );
+    let successor = |offset| {
+        load.checked_add(offset)
+            .ok_or_else(|| eyre!("fee stage height overflow"))
+    };
+    let heights = FeeStageHeights {
+        funded: load,
+        credential: successor(1)?,
+        refusal: successor(2)?,
+        request: successor(3)?,
+        payout: successor(4)?,
+        retry: successor(5)?,
+        restart_retry: successor(6)?,
+    };
+    ensure!(
+        heights.restart_retry <= 64,
+        "fee lifecycle must fit the existing bounded history"
+    );
+    Ok(heights)
+}
+
 pub(super) fn require_command(command: &norito::json::Value) -> Result<()> {
     activation::closed(
         command,
@@ -301,9 +353,10 @@ fn execute(
     registered: &registration::Registered,
     issuer: &issuer::Issuer,
 ) -> Result<()> {
+    let heights = fee_stage_heights(registered.height, funded)?;
     ensure!(
-        committed_height(network)? == 5,
-        "dedicated fresh funded H5 required"
+        committed_height(network)? == heights.funded,
+        "dedicated exact authenticated funded cut required"
     );
     let output = root.join("fee-settlement");
     private_directory(&output)?;
@@ -323,7 +376,7 @@ fn execute(
         "retain-payer-signed.norito",
     )?;
     ensure!(
-        retained_height == 6,
+        retained_height == heights.credential,
         "payer history precedes missing Request"
     );
     let absent_key = KagemushaWalletPayoutKeyV1::Fee(input.credit).ledger_key(input.scheme);
@@ -336,7 +389,10 @@ fn execute(
         &absent_key,
         None,
     )?;
-    ensure!(before.height == 6, "exact retained-credential cut");
+    ensure!(
+        before.height == heights.credential,
+        "exact retained-credential cut"
+    );
     let instruction =
         KagemushaWalletLedgerV1::new(input.scheme, Action::ClaimFee(input.claim.clone()));
     let refusal = missing_request(network, &output, &instruction)?;
@@ -349,7 +405,10 @@ fn execute(
         &absent_key,
         None,
     )?;
-    ensure!(refused.height == 7, "exact missing-history cut");
+    ensure!(
+        refused.height == heights.refusal,
+        "exact missing-history cut"
+    );
     ensure!(
         before.rows == refused.rows,
         "failed claim changed KAGEMUSHA ledger state"
@@ -363,7 +422,10 @@ fn execute(
         &output,
         "retain-request-signed.norito",
     )?;
-    ensure!(request_height == 8, "historical Request successor");
+    ensure!(
+        request_height == heights.request,
+        "historical Request successor"
+    );
     balances(network, [900, 0, 0, 100])?;
     let (transaction, paid_height) = submit(
         network,
@@ -372,7 +434,10 @@ fn execute(
         &output,
         "fee-paid-signed.norito",
     )?;
-    ensure!(paid_height == 9, "exact first fee payout successor");
+    ensure!(
+        paid_height == heights.payout,
+        "exact first fee payout successor"
+    );
     let payout = KagemushaWalletPayoutRecordV1 {
         key: KagemushaWalletPayoutKeyV1::Fee(input.credit),
         source: input.payment_digest,
@@ -398,7 +463,7 @@ fn execute(
         "fee-fresh-retry-signed.norito",
     )?;
     ensure!(
-        retry.hash() != transaction.hash() && retry_height == 10,
+        retry.hash() != transaction.hash() && retry_height == heights.retry,
         "fresh instruction retry must execute"
     );
     let retried = world::capture(
@@ -469,7 +534,7 @@ fn execute(
     ensure!(
         restart_retry.hash() != transaction.hash()
             && restart_retry.hash() != retry.hash()
-            && final_height == 11,
+            && final_height == heights.restart_retry,
         "post-restart claim retry must have fresh identity"
     );
     let final_cut = world::capture(
@@ -535,8 +600,10 @@ fn execute_four_validator_fee_continuation() -> Result<()> {
     ensure!(root.is_absolute(), "absolute fee output required");
     private_directory(&root)?;
     let deadline = Instant::now() + Duration::from_secs(7 * 24 * 60 * 60);
+    let genesis_owner = KeyPair::try_random_with_algorithm(Algorithm::Ed25519)?;
     // Ordinary genesis permission grants the diagnostic reader, not monetary authority.
     let builder = network_builder()
+        .with_genesis_keypair(genesis_owner.clone())
         .with_base_seed("kagemusha-real-fee-v1")
         .with_config_layer(|layer| {
             layer.write("chain", "kagemusha-real-fee-acceptance-v1");
@@ -552,6 +619,9 @@ fn execute_four_validator_fee_continuation() -> Result<()> {
     .ok_or_else(|| eyre!("fee qualification cannot skip"))?;
     let result = (|| -> Result<()> {
         wait_for_committed(&network, 1, network.sync_timeout(), &[])?;
+        // Retain this network's native seat owners through issuer startup and the
+        // final same-store restart, just as the main monetary owner does.
+        let _genesis_dkg = provisioning::provision(&network, &rt, &root, &genesis_owner)?;
         fund_fee_successor(&network)?;
         export(&network, &root.join("setup"))?;
         let setup_sha = hash(&fs::read(root.join("setup/setup.json"))?);
@@ -611,6 +681,77 @@ fn execute_four_validator_fee_continuation() -> Result<()> {
     })();
     rt.block_on(async { network.shutdown().await });
     result
+}
+
+#[test]
+fn fee_stage_heights_follow_the_retained_registration_and_funding() -> Result<()> {
+    let funded = |registration, activation, load| {
+        norito::json::to_vec(&norito::json!({
+            "schema":"iroha.kagemusha.network-funded-load.v1",
+            "registration_height":registration,
+            "activation_height":activation,
+            "certified_height":load
+        }))
+        .unwrap()
+    };
+    assert_eq!(
+        fee_stage_heights(7, &funded(7, 8, 9))?,
+        FeeStageHeights {
+            funded: 9,
+            credential: 10,
+            refusal: 11,
+            request: 12,
+            payout: 13,
+            retry: 14,
+            restart_retry: 15,
+        }
+    );
+    assert_eq!(
+        fee_stage_heights(56, &funded(56, 57, 58))?.restart_retry,
+        64
+    );
+    assert!(fee_stage_heights(57, &funded(57, 58, 59)).is_err());
+    for (registration, activation, load) in [(8, 8, 9), (7, 7, 9), (7, 9, 9), (7, 8, 8), (7, 8, 10)]
+    {
+        assert!(fee_stage_heights(7, &funded(registration, activation, load)).is_err());
+    }
+    for (registration, activation, load) in [
+        (u64::MAX, u64::MAX, u64::MAX),
+        (u64::MAX - 1, u64::MAX, u64::MAX),
+        (u64::MAX - 7, u64::MAX - 6, u64::MAX - 5),
+    ] {
+        assert!(fee_stage_heights(registration, &funded(registration, activation, load)).is_err());
+    }
+    assert!(fee_stage_heights(0, &funded(0, 1, 2)).is_err());
+    assert!(fee_stage_heights(7, b"not JSON").is_err());
+    Ok(())
+}
+
+#[test]
+fn fee_stage_heights_require_every_exact_funding_field() -> Result<()> {
+    let valid = norito::json!({
+        "schema":"iroha.kagemusha.network-funded-load.v1",
+        "registration_height":7,
+        "activation_height":8,
+        "certified_height":9
+    });
+    for field in [
+        "schema",
+        "registration_height",
+        "activation_height",
+        "certified_height",
+    ] {
+        let mut missing = valid.clone();
+        missing.as_object_mut().unwrap().remove(field);
+        assert!(fee_stage_heights(7, &norito::json::to_vec(&missing)?).is_err());
+        let mut malformed = valid.clone();
+        malformed
+            .as_object_mut()
+            .unwrap()
+            .insert(field.into(), "foreign".into());
+        assert!(fee_stage_heights(7, &norito::json::to_vec(&malformed)?).is_err());
+    }
+    Ok(())
 }
 
 #[test]

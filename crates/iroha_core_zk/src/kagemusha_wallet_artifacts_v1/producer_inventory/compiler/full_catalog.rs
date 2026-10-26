@@ -112,7 +112,7 @@ fn fixture_scope() -> SourceScopeV1 {
     // Public engineering root only; the same scalar and compiled provider are
     // used by the test authority owner. No production signing material is read.
     let root = SigningKey::from_bytes((&[0x11; 32]).into()).unwrap();
-    let point = root.verifying_key().to_encoded_point(false);
+    let point = root.verifying_key().to_sec1_point(false);
     let sec1 = point.as_bytes();
     let provider = kagemusha_wallet_provider_contract_v1();
     SourceScopeV1::new(

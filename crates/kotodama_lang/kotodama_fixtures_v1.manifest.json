@@ -4154,6 +4154,26 @@
         [
           "state_operands",
           "crates/kotodama_lang/src/compiler/tests/state_operands.rs"
+        ],
+        [
+          "controlled_asset_lock_tests",
+          "crates/kotodama_lang/src/compiler/controlled_asset_lock_tests.rs"
+        ],
+        [
+          "uid_holding_quote_tests",
+          "crates/kotodama_lang/src/compiler/uid_holding_quote_tests.rs"
+        ],
+        [
+          "fi_link_revision_tests",
+          "crates/kotodama_lang/src/compiler/fi_link_revision_tests.rs"
+        ],
+        [
+          "same_uid_tests",
+          "crates/kotodama_lang/src/compiler/same_uid_tests.rs"
+        ],
+        [
+          "fi_waterfall",
+          "crates/kotodama_lang/src/compiler/tests/fi_waterfall.rs"
         ]
       ],
       "test_names": [
@@ -4245,6 +4265,23 @@
         "logical_operators_emit_control_flow_instead_of_eager_bitwise_ops",
         "get_quantity_emits_typed_option_quantity_syscall",
         "get_asset_definition_id_emits_asset_definition_syscall",
+        "typed_controlled_lock_calls_compile_to_four_distinct_effects",
+        "controlled_lock_open_rejects_wrong_quantity_and_deadline_types",
+        "controlled_lock_effects_are_unavailable_to_views",
+        "controlled_lock_open_captures_typed_account_result",
+        "controlled_lock_open_result_rejects_wrong_nominal_and_scalar_types",
+        "typed_uid_quote_compiles_as_one_native_read",
+        "uid_quote_is_pure_for_views_but_has_native_ledger_read_access",
+        "uid_quote_manifest_has_exact_nominal_six_field_product",
+        "uid_quote_fields_keep_exact_value_types",
+        "uid_quote_rejects_wrong_identity_and_amount_types",
+        "uid_quote_rejects_missing_incoming_by_exact_label",
+        "uid_quote_does_not_expose_identity_roster_or_transfer_authority",
+        "uid_quote_source_type_rendering_roundtrips_exact_nominal_type",
+        "fi_link_revision_read_is_available_to_views_and_effectful_entrypoints",
+        "fi_link_revision_rejects_wrong_types_missing_fi_and_scalar_substitution",
+        "same_uid_read_compiles_in_views_and_effectful_entrypoints",
+        "same_uid_rejects_wrong_operand_types_missing_identity_and_nonboolean_result",
         "native_escrow_builtins_emit_escrow_syscalls",
         "native_escrow_builtins_report_literal_access_hints",
         "escrow_builtins_reject_invalid_arguments",
@@ -4430,6 +4467,9 @@
         "tuple_state_keys_emit_exact_cursor_and_dynamic_access_schemas",
         "tuple_state_keys_reject_unsupported_leaves_and_mismatched_cursor_layouts",
         "literal_scalar_and_tuple_map_keys_keep_exact_canonical_child_hints",
+        "each_native_settlement_lowers_both_dynamic_revisions_as_checked_u64",
+        "each_settlement_accepts_full_u64_and_refuses_overflowing_literals",
+        "each_settlement_is_effectful_and_keeps_revision_types_nominal",
         "production_mode_rejects_test_functions_instead_of_stripping_them",
         "test_and_production_entrypoints_use_the_same_argument_boundary",
         "production_rejects_tests_before_resolving_test_only_helpers",
@@ -4457,7 +4497,7 @@
         "compile_report_sidecars_are_hash_bound_and_preserve_locations",
         "legacy_source_facade_cannot_bypass_canonical_resolution_audits"
       ],
-      "test_names_sha256": "961851f1e20e5022071ff65590f2cc8c7439a525f6ad028449fac76fdec22056"
+      "test_names_sha256": "c5ff9fe75ad7c2c5b7d02aa9c2d4bdd6dd0233f1a9a49dd36f1f2d2391599628"
     },
     {
       "external_fixtures": [],
@@ -4873,5 +4913,5 @@
       "test_names_sha256": "1d3a1883ac6de1e768761a2573cc6b965ee533d83641582fb9ed14ac0b9e81be"
     }
   ],
-  "test_inventory_sha256": "e56557b368c1248a3fc50f50a3dff89dda96d0366846d66142264add445614b8"
+  "test_inventory_sha256": "31251385d73ef23e2abea2044664830b727c983b422b791c5442eef4e6964691"
 }

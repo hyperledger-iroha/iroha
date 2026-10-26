@@ -6,7 +6,6 @@ use iroha_data_model::{
     NetworkId,
     account::AccountId,
     asset::AssetDefinitionId,
-    block::consensus::is_valid_committee_size,
     isi::SetParameter,
     parameter::{
         Parameter,
@@ -16,6 +15,7 @@ use iroha_data_model::{
 };
 use iroha_genesis::{GenesisTopologyEntry, RawGenesisTransaction, decode_signed_genesis};
 use iroha_model_base::peer::PeerId;
+use iroha_model_base::topology::is_valid_committee_size;
 use iroha_primitives::addr::{SocketAddr, SocketAddrV4};
 use norito::json;
 use sha2::Sha256;
@@ -541,10 +541,10 @@ impl Drop for PrivateProfileStaging {
 }
 fn create_profile_staging(output_root: &Path, slug: &str) -> AnyResult<PrivateProfileStaging> {
     let parent = iroha_fs::OwnerDirectory::open_or_create(output_root)?;
-    let mut rng = rand_core_06::OsRng;
+    let mut rng = rand::rngs::SysRng;
     for _ in 0..32 {
         let mut entropy = [0_u8; 16];
-        rand_core_06::RngCore::try_fill_bytes(&mut rng, &mut entropy).map_err(|error| {
+        rand::TryRng::try_fill_bytes(&mut rng, &mut entropy).map_err(|error| {
             std::io::Error::other(format!("profile staging entropy unavailable: {error}"))
         })?;
         let name = format!(".{slug}-staging-{}", hex::encode(entropy));

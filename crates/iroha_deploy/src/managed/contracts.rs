@@ -30,6 +30,29 @@ pub struct ManagedContractViewRequest {
     pub gas_limit: NonZeroU64,
 }
 
+impl ManagedContractViewRequest {
+    /// Parse an exact selector, named JSON arguments and a gas budget, as frontends accept them.
+    ///
+    /// # Errors
+    /// Rejects an empty or padded selector, arguments over 64 KiB, malformed JSON or zero gas.
+    pub fn parse(entrypoint: String, arguments: &str, gas_limit: u64) -> Result<Self> {
+        if entrypoint.is_empty() || entrypoint.trim() != entrypoint {
+            return Err(invalid("entrypoint must use its exact public selector"));
+        }
+        if arguments.len() > 64 * 1024 {
+            return Err(invalid("contract arguments exceed the 64 KiB bound"));
+        }
+        let arguments =
+            iroha_contract_deploy::call::parse_contract_arguments(arguments).map_err(invalid)?;
+        Ok(Self {
+            entrypoint,
+            arguments,
+            gas_limit: NonZeroU64::new(gas_limit)
+                .ok_or_else(|| invalid("gas limit must be positive"))?,
+        })
+    }
+}
+
 /// Authenticated selected-root view result, without any mutation or parent inclusion claim.
 #[derive(Debug, JsonSerialize)]
 pub struct ManagedContractView {

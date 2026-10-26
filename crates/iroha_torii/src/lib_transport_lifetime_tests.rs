@@ -1570,6 +1570,7 @@ mod torii_proxy_session_id_tests {
 
     #[derive(Debug)]
     struct FailingEntropy;
+    impl std::error::Error for FailingEntropy {}
 
     impl core::fmt::Display for FailingEntropy {
         fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -1579,7 +1580,7 @@ mod torii_proxy_session_id_tests {
 
     struct FailingRng;
 
-    impl rand::rand_core::TryRngCore for FailingRng {
+    impl rand::rand_core::TryRng for FailingRng {
         type Error = FailingEntropy;
 
         fn try_next_u32(&mut self) -> core::result::Result<u32, Self::Error> {

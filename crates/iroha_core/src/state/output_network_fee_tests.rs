@@ -19,17 +19,28 @@ fn priced_fixture(callback_bytes: Option<usize>) -> (State, AssetDefinitionId) {
     .expect("canonical network XOR fee asset");
     let state = fixture_with_fee_asset(65_536, callback_bytes, Some(asset.clone()));
     {
-        let mut fees = state.nexus_snapshot().fees;
+        let mut fees = state
+            .world
+            .parameters
+            .view()
+            .get()
+            .root_fees()
+            .expect("explicit fixture root fee policy")
+            .clone();
         fees.per_instruction_fee = Quantity::from(1_u32);
         {
-            let mut parameters = state.world.parameters.block();
-            parameters
-                .set_parameter(iroha_data_model::parameter::Parameter::Custom(
+            let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+                .expect("fund original parameter Cell acquisition");
+            crate::state::set_parameter_cell_for_testing(
+                &mut parameters,
+                iroha_data_model::parameter::Parameter::Custom(
                     fees.clone()
                         .into_custom_parameter()
                         .expect("explicit fixture policy"),
-                ))
-                .expect("valid fixture monetary projection");
+                ),
+                state.world.sccp_committee_generations.allocation_budget(),
+            )
+            .expect("valid fixture monetary projection");
             parameters.commit();
         }
     }
@@ -270,13 +281,16 @@ fn healthy_output_overflow_drops_both_business_and_its_staged_fee() {
     let _fee_guard = crate::status::operator_status_test_guard();
     let (state, asset) = priced_fixture(Some(32_768));
     {
-        let mut parameters = state.world.parameters.block();
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+            .expect("fund original parameter Cell acquisition");
         let mut policy = parameters.get().block().execution_output();
         policy.max_output_bytes = 16_384;
-        parameters
-            .get_mut()
-            .set_parameter(Parameter::Block(BlockParameter::ExecutionOutput(policy)))
-            .expect("valid fixture parameters");
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            Parameter::Block(BlockParameter::ExecutionOutput(policy)),
+            state.world.sccp_committee_generations.allocation_budget(),
+        )
+        .expect("valid fixture parameters");
         parameters.commit();
     }
     let source = carrier(
@@ -494,7 +508,21 @@ fn actual_failed_execution_fee_authority_is_once_only_and_bound_to_its_source_co
         bind_fee_context(&mut fee, signed);
         // Price mutation here tests the immutable admitted snapshot, not on-chain
         // governance authorization. The attempted body above is real execution.
-        fee.nexus.fees.base_fee = Quantity::from(100_u32);
+        let mut changed_fees = fee
+            .world
+            .parameters
+            .get()
+            .root_fees()
+            .expect("original explicit fixture fees")
+            .clone();
+        changed_fees.base_fee = Quantity::from(100_u32);
+        fee.world
+            .set_parameter_for_testing(Parameter::Custom(
+                changed_fees
+                    .into_custom_parameter()
+                    .expect("explicit pending fee policy"),
+            ))
+            .expect("admit pending fee policy without replacing the captured basis");
         match mutation {
             1 => fee.current_tx_hash = None,
             2 => fee.tx_call_hash = None,

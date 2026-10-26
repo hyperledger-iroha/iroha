@@ -423,7 +423,7 @@ def check_workflow():
     )
     dotnet_command_match = re.search(rf"(?m)^\s+run:\s+{re.escape(csharp_command)}\s*$", csharp)
     require(dotnet_setup_match is not None, "C# SDK tests must set up .NET")
-    require(re.search(r"(?m)^\s+dotnet-version:\s+8\.0\.x\s*$", csharp) is not None, "C# SDK tests must pin .NET 8")
+    require(re.search(r"(?m)^\s+dotnet-version:\s+10\.0\.402\s*$", csharp) is not None, "C# SDK tests must pin .NET 10")
     require_run(csharp, csharp_command, "C# SDK tests")
     if dotnet_setup_match is not None and dotnet_command_match is not None:
         require(
@@ -1212,7 +1212,7 @@ workflow_modes = {
     "--negative-control-jvm-sdk-needs-workflow": (main_job_needs_line, "    needs: [sorafs_pin_register_swift_sdk_check, sorafs_pin_register_csharp_sdk_tests, sorafs_pin_register_javascript_sdk_tests, sorafs_pin_register_python_sdk_tests]", "JVM SDK dependency drift"),
     "--negative-control-csharp-sdk-job-workflow": ("  sorafs_pin_register_csharp_sdk_tests:\n", "  sorafs_pin_register_csharp_sdk_tests_disabled:\n", "C# SDK job drift"),
     "--negative-control-csharp-sdk-setup-workflow": ("      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1\n", "", "C# SDK setup drift"),
-    "--negative-control-csharp-sdk-dotnet-version-workflow": ("          dotnet-version: 8.0.x", "          dotnet-version: 7.0.x", "C# SDK dotnet version drift"),
+    "--negative-control-csharp-sdk-dotnet-version-workflow": ("          dotnet-version: 10.0.402", "          dotnet-version: 7.0.x", "C# SDK dotnet version drift"),
     "--negative-control-csharp-sdk-script-workflow": (f"        run: {csharp_command}", "        run: bash ci/check_sorafs_pin_register_csharp_sdk.sh --skip", "C# SDK script drift"),
     "--negative-control-csharp-sdk-needs-workflow": (main_job_needs_line, "    needs: [sorafs_pin_register_swift_sdk_check, sorafs_pin_register_jvm_sdk_tests, sorafs_pin_register_javascript_sdk_tests, sorafs_pin_register_python_sdk_tests]", "C# SDK dependency drift"),
     "--negative-control-js-sdk-job-workflow": ("  sorafs_pin_register_javascript_sdk_tests:\n", "  sorafs_pin_register_javascript_sdk_tests_disabled:\n", "JavaScript SDK job drift"),

@@ -16,7 +16,7 @@ use iroha_fs::{
     FileSnapshot, PendingPrivateFile, PrivateDirectory, PrivateReadScope, ScopedSealedPrivateFile,
     SealedPrivateFile,
 };
-use rand::rand_core::TryRngCore as _;
+use rand::rand_core::TryRng as _;
 use sha2::{Digest as _, Sha256};
 
 use super::{
@@ -607,7 +607,7 @@ pub fn encode_original(
         .open_original(identity.sha256)
         .map_err(io::Error::other)?;
     let mut nonce = [0_u8; 16];
-    rand::rngs::OsRng
+    rand::rngs::SysRng
         .try_fill_bytes(&mut nonce)
         .map_err(io::Error::other)?;
     let file = destination.create_retained_private(

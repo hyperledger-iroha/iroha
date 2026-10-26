@@ -2,27 +2,27 @@
   "schema": "iroha.sccp.contract-compiler-lock.v1",
   "compilers": {
     "evm": {
-      "identity": "solc-0.8.31+commit.fd3a2265",
+      "identity": "solc-0.8.38+commit.1835d247",
       "banner": "solc, the solidity compiler commandline interface",
-      "reported_version": "0.8.31+commit.fd3a2265",
+      "reported_version": "0.8.38+commit.1835d247",
       "artifacts": {
         "linux-amd64": {
-          "url": "https://binaries.soliditylang.org/linux-amd64/solc-linux-amd64-v0.8.31+commit.fd3a2265",
-          "sha256": "aac9cd0116e9ae0cd3d8f64a8641381845dc9f12e2a52653de36fb619323e557",
+          "url": "https://github.com/argotorg/solidity/releases/download/v0.8.38/solc-static-linux",
+          "sha256": "65c3180a336eabb6bdc4bbd49cc405aeb233976964ae6c11fba2a6c8be8f3243",
           "format": "elf-x86-64",
-          "reported_version": "0.8.31+commit.fd3a2265.Linux.g++"
+          "reported_version": "0.8.38+commit.1835d247.Linux.g++"
         },
         "linux-arm64": {
-          "url": "https://binaries.soliditylang.org/linux-arm64/solc-linux-arm64-v0.8.31+commit.fd3a2265",
-          "sha256": "acf358d82da7db033debb2f4db11e1c9cfcb02b0cb5b5ddbb9635ad817b41bdd",
+          "url": "https://github.com/argotorg/solidity/releases/download/v0.8.38/solc-static-linux-arm",
+          "sha256": "7a986c8f85945fec780d2cbb352cdd85959b7222dd33830a7563c2af4bc1fca0",
           "format": "elf-aarch64",
-          "reported_version": "0.8.31+commit.fd3a2265.Linux.g++"
+          "reported_version": "0.8.38+commit.1835d247.Linux.g++"
         },
         "macos-universal": {
-          "url": "https://binaries.soliditylang.org/macosx-amd64/solc-macosx-amd64-v0.8.31+commit.fd3a2265",
-          "sha256": "f5a243d6b2dd8fba307e36c5fefa2d8eb3ae74ba81036d1c17c971b5d346ade9",
+          "url": "https://github.com/argotorg/solidity/releases/download/v0.8.38/solc-macos",
+          "sha256": "b18ac1d1f48394c71ca9aefbf0fb94fef24c87b358f48578de5941e234e0a2a9",
           "format": "macho-universal-arm64-x86-64",
-          "reported_version": "0.8.31+commit.fd3a2265.Darwin.appleclang"
+          "reported_version": "0.8.38+commit.1835d247.Darwin.appleclang"
         }
       }
     }

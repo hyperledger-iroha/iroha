@@ -14,7 +14,7 @@
   },
   "categories": ["Programming Languages", "Linters", "Formatters", "Testing"],
   "keywords": ["kotodama", "iroha", "ivm", "seiyaku", "誓約", "kotoage", "言挙げ", "smart contracts"],
-  "engines": { "vscode": "^1.91.0" },
+  "engines": { "vscode": "^1.91.0", "node": ">=22.23.4" },
   "main": "./client/extension.cjs",
   "activationEvents": ["onLanguage:kotodama", "onCommand:kotodama.restart"],
   "capabilities": { "untrustedWorkspaces": { "supported": false } },
@@ -22,9 +22,9 @@
     "test": "node --test client/config.test.cjs client/extension.test.cjs client/grammar.test.cjs",
     "package": "vsce package --out kotodama.vsix"
   },
-  "dependencies": { "vscode-languageclient": "10.1.1" },
+  "dependencies": { "vscode-languageclient": "11.0.0" },
   "devDependencies": {
-    "@vscode/vsce": "3.9.2",
+    "@vscode/vsce": "4.0.0",
     "vscode-oniguruma": "2.0.1",
     "vscode-textmate": "9.3.2"
   },

@@ -1,47 +1,49 @@
 use super::*;
-use rand_core_06::{CryptoRng, Error as RngError, RngCore};
+use std::io::Error as RngError;
 #[derive(Clone)]
 struct TestRng(u64);
-impl RngCore for TestRng {
-    fn next_u32(&mut self) -> u32 {
-        u32::try_from(self.next_u64() & u64::from(u32::MAX)).expect("low word fits u32")
+impl rand::TryRng for TestRng {
+    type Error = std::io::Error;
+    fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+        Ok(u32::try_from(self.try_next_u64()? & u64::from(u32::MAX)).expect("low word fits u32"))
     }
-    fn next_u64(&mut self) -> u64 {
-        let mut x = self.0;
-        x ^= x >> 12;
-        x ^= x << 25;
-        x ^= x >> 27;
-        self.0 = x;
-        x.wrapping_mul(0x2545_f491_4f6c_dd1d)
+    fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+        Ok({
+            let mut x = self.0;
+            x ^= x >> 12;
+            x ^= x << 25;
+            x ^= x >> 27;
+            self.0 = x;
+            x.wrapping_mul(0x2545_f491_4f6c_dd1d)
+        })
     }
-    fn fill_bytes(&mut self, out: &mut [u8]) {
-        for chunk in out.chunks_mut(8) {
-            let bytes = self.next_u64().to_le_bytes();
-            chunk.copy_from_slice(&bytes[..chunk.len()]);
-        }
-    }
-    fn try_fill_bytes(&mut self, out: &mut [u8]) -> Result<(), RngError> {
-        self.fill_bytes(out);
+
+    fn try_fill_bytes(&mut self, out: &mut [u8]) -> Result<(), Self::Error> {
+        {
+            for chunk in out.chunks_mut(8) {
+                let bytes = self.try_next_u64()?.to_le_bytes();
+                chunk.copy_from_slice(&bytes[..chunk.len()]);
+            }
+        };
         Ok(())
     }
 }
-impl CryptoRng for TestRng {}
+impl rand::TryCryptoRng for TestRng {}
 struct FailingRng;
-impl RngCore for FailingRng {
-    fn next_u32(&mut self) -> u32 {
+impl rand::TryRng for FailingRng {
+    type Error = std::io::Error;
+    fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
         panic!("fallible interface required")
     }
-    fn next_u64(&mut self) -> u64 {
+    fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
         panic!("fallible interface required")
     }
-    fn fill_bytes(&mut self, _: &mut [u8]) {
-        panic!("fallible interface required")
-    }
-    fn try_fill_bytes(&mut self, _: &mut [u8]) -> Result<(), RngError> {
-        Err(RngError::new("injected"))
+
+    fn try_fill_bytes(&mut self, _: &mut [u8]) -> Result<(), Self::Error> {
+        Err(RngError::other("injected"))
     }
 }
-impl CryptoRng for FailingRng {}
+impl rand::TryCryptoRng for FailingRng {}
 #[test]
 fn uniform_samplers_are_bounded_and_fallible() {
     let mut rng = TestRng(9);
@@ -106,7 +108,10 @@ fn fractional_decay_initializes_once_on_a_bounded_native_stack_with_exact_values
             let table = OnceLock::new();
             let values = table.get_or_init(build_fraction_decay_table_q256_v1);
             assert_eq!(values.len(), FRACTION_TABLE_LEN_V1);
-            assert_eq!(values[0], U512::ONE.shl_vartime(Q256_FRACTION_BITS_V1));
+            assert_eq!(
+                values[0],
+                U512::ONE.shl_vartime((Q256_FRACTION_BITS_V1) as u32)
+            );
             assert!(values.windows(2).all(|pair| pair[0] > pair[1]));
             assert!(core::ptr::eq(
                 values,

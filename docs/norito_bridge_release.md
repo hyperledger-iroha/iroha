@@ -24,6 +24,12 @@ read-only copy of that checkout's canonical `Cargo.lock`. Rust and identical
 producer tool binaries are not required. `DEVELOPER_DIR` selects local Apple
 tools; otherwise the verifier uses `xcode-select -p`.
 
+Preserve the checkout layout when staging the Swift SDK: `IrohaSwift` depends on
+the reviewed `vendor/nearby` source package, which binds
+`vendor/boringssl-swiftpm`. The public SDK consumer selects both `IrohaSwift` and
+`IrohaSwiftMobileTransports`; it must resolve that exact provider through the
+SDK's own dependency graph.
+
 ```bash
 python3 -I -S -B scripts/validate_norito_bridge_archive.py \
   --consumer \
@@ -53,7 +59,7 @@ that workflow for local release verification.
 ## Prerequisites
 
 - A macOS host with the approved full Xcode installation and its sealed tools.
-- Exact Rust 1.93.1 `cargo`, `rustc`, and `rustdoc`.
+- Exact Rust 1.99.1 `cargo`, `rustc`, and `rustdoc`.
 - Python 3.12.
 - Swift toolchain 5.9 or newer.
 - Access to the Hyperledger Iroha release signing keys for tagging Swift artifacts.
@@ -87,8 +93,8 @@ are rejected.
    export CARGO_INCREMENTAL=0
    export CARGO_NET_OFFLINE=true
    unset RUSTC_BOOTSTRAP
-   export RUSTC="$(rustup which --toolchain 1.93.1 rustc)"
-   export RUSTDOC="$(rustup which --toolchain 1.93.1 rustdoc)"
+   export RUSTC="$(rustup which --toolchain 1.99.1 rustc)"
+   export RUSTDOC="$(rustup which --toolchain 1.99.1 rustdoc)"
    export MOBILE_SDK_PYTHON_BINARY=/absolute/path/to/python3.12
    export SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
    export NORITO_BRIDGE_OUT_DIR=/absolute/cache/iroha-apple-artifacts
@@ -111,7 +117,7 @@ are rejected.
    `$NORITO_BRIDGE_OUT_DIR/NoritoBridge.xcframework/NoritoBridge.artifacts.json`; the companion
    `$NORITO_BRIDGE_OUT_DIR/NoritoBridge.artifacts.json` path is a stable relative symlink to that file, so
    one atomic XCFramework exchange publishes the binaries and manifest together. The
-   manifest binds exact native bridge ABI 30, the mandatory privacy build recipe,
+   manifest binds exact native bridge ABI 33, the mandatory privacy build recipe,
    source commit and fingerprint, embedded source commit, header digest,
    required-symbol inventory, and per-slice SHA-256 hashes. Ordinary builds embed
    their own commit. An exact mechanical fallback-pin child embeds its parent commit,
@@ -172,7 +178,7 @@ are rejected.
    and [fuzz](../crates/iroha_parliament_ballot_proof/fuzz/README.md) notes for
    their public test provenance. This changes no signing or artifact admission.
    The same exact-name policy covers the included public IPA generator parameter
-   files, six PQClean known-answer responses and expected trybuild diagnostics.
+   files, six stored ML-DSA/ML-KEM known-answer responses and expected trybuild diagnostics.
    Rust modules below a directory named `artifacts` are admitted only by their
    complete reviewed source paths; arbitrary operational directories remain
    prohibited. Complete source bytes are retained in the seal in every case.
@@ -188,10 +194,11 @@ are rejected.
    before and after Cargo. Keep both explicit inputs selected during verification
    and packaging. Neither input changes the pinned compiler, profile or graph.
 
-   PQClean archive normalization binds the registry package identity and checksum
-   from the selected Cargo lock to the exact successful build's JSON messages and
-   native link outputs. It removes only byte-identical duplicate members from
-   those authenticated archives; complete-archive linking remains mandatory.
+   The read-only static archive audit binds both RustCrypto registry package
+   identities and checksums from the selected Cargo lock to the exact successful
+   build's JSON messages and target rlibs. Retired PQClean providers and duplicate
+   archive members are rejected. No object is rewritten or removed;
+   complete-archive linking and the public ML-DSA/ML-KEM checks remain mandatory.
 
 2. Confirm the builder-owned archive publication:
 
@@ -203,7 +210,7 @@ are rejected.
 
    Before releasing its authenticated artifact-publication lock, the builder invokes
    the sole archive owner on the generation it just published. The owner retains a
-   unique source snapshot and re-authenticates the exact ABI-30 inventory,
+   unique source snapshot and re-authenticates the exact ABI-33 inventory,
    recomputes source and tool provenance, verifies each Mach-O architecture and the
    required/forbidden export policy with the sealed Xcode toolchain, sorts entries,
    stores them without host-zlib variance, normalizes modes and ZIP timestamps from
@@ -257,7 +264,7 @@ are rejected.
    `--sdk-scratch` directories outside source. It stages the checked-in
    `scripts/fixtures/swift_release_consumers` executables and uses `swift run
    --configuration release` for both. The public SDK consumer adds no direct
-   native-target references or unsafe linker flags. Both execute ABI-30 native
+   native-target references or unsafe linker flags. Both execute ABI-33 native
    cryptography and Connect key agreement; the SDK also checks canonical JSON,
    BLAKE3 and AEAD. Either build or runtime failure stops the Apple release gate.
 
@@ -313,7 +320,7 @@ application can depend on `IrohaSwift` without unsafe linker flags. Qualify both
 the authenticated ZIP consumer and a separate ordinary SDK dependency in
 Release. The SDK consumer must execute native key generation, public-key
 derivation and directional-key agreement, reject an all-zero peer key, and
-admit exact ABI 30. A library-only build does not establish this execution.
+admit exact ABI 33. A library-only build does not establish this execution.
 
 Publish the immutable `NoritoBridge-v<version>.xcframework.zip` with its
 authenticated manifest/checksum inventory and reviewed package source. Retain
@@ -354,7 +361,7 @@ ignored `target/norito-bridge-local/` directory. Create owned canonical mode-070
 `cargo`, `build`, `artifacts`, and `projections` directories there, and use the first
 three as the explicit Cargo, build, and output roots. Reuse this fixed Cargo lane.
 The builder still performs all five real Apple builds, source/lock/tool seals,
-consumer links, ABI-30 checks and atomic artifact exchange. It does not clean Cargo.
+consumer links, ABI-33 checks and atomic artifact exchange. It does not clean Cargo.
 Select the current root graph explicitly with `--lockfile-path "$PWD/Cargo.lock"`
 for the builder, pin owner and artifact checker. This local-only route retains
 `--locked --offline` and the source/lock identity checks; it never changes the
@@ -396,8 +403,9 @@ used. Physical-device qualification remains separate from these host unit tests.
 The explicit `MOBILE_SDK_LOCAL_UNIT_ARTIFACT_DIR` input selects only debug macOS
 unit-test artifacts with scope `local-unit`. Its producer consumes a separately
 retained static archive named by a genuine, source-guarded successful host Cargo
-invocation. It normalizes only the current locked, Cargo-proven PQClean duplicate
-members in a derived copy and records an actual complete-archive consumer link/run.
+invocation. It audits the unchanged archive against the current locked,
+Cargo-proven RustCrypto providers and records an actual complete-archive consumer
+link/run for all ML-DSA/ML-KEM parameter sets, including tamper checks.
 The archive/header/source/tool/receipt hashes remain bound through Swift execution.
 No universal architecture or release environment is claimed. Every Swift test
 stays enabled, and native ABI/symbol admission is unchanged. Selecting the release

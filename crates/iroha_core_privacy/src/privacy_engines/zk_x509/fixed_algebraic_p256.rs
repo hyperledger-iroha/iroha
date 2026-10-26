@@ -82,10 +82,12 @@ const P256_FIXED_ALGEBRAIC_CHILD_ATOM_COUNTS_V1: [usize; 6] =
 // Bind the canonical ordered child descriptors, including the distinct selected
 // input multiplicities of certificate and wallet execution. Both roles have
 // the same width and atom count, so those shape checks cannot identify them.
+// The pin also binds the canonical 32-byte native BLAKE3 catalog in every
+// child and the composite SHA3-384 frame.
 const P256_FIXED_ALGEBRAIC_COMPOSITE_DIGEST_V1: [u8; 48] = [
-    0xfb, 0x20, 0x17, 0x20, 0xf6, 0xda, 0xda, 0x59, 0xa0, 0xee, 0x68, 0x6e, 0x12, 0xc0, 0xa0, 0xc4,
-    0x18, 0xc5, 0x37, 0x6c, 0xe4, 0x4e, 0xc1, 0xb3, 0xf2, 0x1a, 0xce, 0x01, 0x59, 0x49, 0x9f, 0x35,
-    0x97, 0xd0, 0xa7, 0x5b, 0x05, 0x39, 0xcf, 0x49, 0x24, 0xd7, 0x27, 0xa8, 0xf3, 0x48, 0x5f, 0x19,
+    0xce, 0xee, 0x30, 0xc4, 0x3a, 0x1f, 0x13, 0xbd, 0xcd, 0xdb, 0x9e, 0xf6, 0x9d, 0xa5, 0x29, 0xb5,
+    0x73, 0x3f, 0x47, 0x14, 0xa9, 0xb8, 0x7b, 0x0e, 0x3d, 0x79, 0x2e, 0xa5, 0xd6, 0x63, 0x9f, 0x39,
+    0x98, 0x99, 0xcb, 0xea, 0x68, 0xf6, 0x07, 0xc2, 0xf5, 0x80, 0xc0, 0xf8, 0xe3, 0x0e, 0x23, 0xcd,
 ];
 const CERTIFICATE_ARITHMETIC_START_V1: usize = 0;
 const WALLET_ARITHMETIC_START_V1: usize =
@@ -3047,6 +3049,113 @@ mod tests {
         }
         encoded
     }
+    fn independent_current_catalog_frame_v1(
+        catalog: &[u8; 32],
+        role: &[u8],
+        phase: &[u8],
+        fields: &[&[u8]],
+    ) -> [u8; 48] {
+        use sha3::{Digest as _, Sha3_384};
+        let mut frame = Vec::new();
+        frame.extend_from_slice(b"iroha:privacy:stark:sha3-384:frame:v1\0");
+        frame.extend_from_slice(catalog);
+        for label in [
+            b"iroha-zk-x509-stark-p256-v1".as_slice(),
+            b"iroha-zk-x509-stark-p256-release-profile-v1".as_slice(),
+            role,
+            phase,
+        ] {
+            frame.extend_from_slice(
+                &u16::try_from(label.len())
+                    .expect("bounded public label")
+                    .to_be_bytes(),
+            );
+            frame.extend_from_slice(label);
+        }
+        frame.extend_from_slice(&[0; 24]);
+        frame.extend_from_slice(
+            &u32::try_from(fields.len())
+                .expect("bounded public fields")
+                .to_be_bytes(),
+        );
+        for field in fields {
+            frame.extend_from_slice(
+                &u64::try_from(field.len())
+                    .expect("bounded descriptor")
+                    .to_be_bytes(),
+            );
+            frame.extend_from_slice(field);
+        }
+        Sha3_384::digest(frame).into()
+    }
+
+    #[test]
+    fn current_catalog_binds_every_child_and_composite_descriptor() {
+        let schedule = schedule_v1();
+        let catalog = iroha_data_model::privacy::PRIVACY_EXACT12_CATALOG_COMMITMENT_BYTES_V1;
+        let mut changed_catalog = catalog;
+        changed_catalog[31] ^= 1;
+        let mut widths = Vec::new();
+        let mut digests = Vec::new();
+        for child in schedule.children_v1() {
+            let descriptor = child
+                .canonical_descriptor_v1()
+                .expect("canonical atom bytes");
+            let fields = [
+                super::super::fixed_algebraic::ZK_X509_FIXED_ALGEBRAIC_DESCRIPTOR_V1,
+                descriptor.as_slice(),
+            ];
+            let role = b"iroha:privacy:zk-x509:fixed-algebraic:schedule:v1";
+            let phase = b"verifier-fixed-algebraic-schedule";
+            let independent = independent_current_catalog_frame_v1(&catalog, role, phase, &fields);
+            assert_eq!(independent, child.descriptor_digest_v1().to_bytes());
+            assert_ne!(
+                independent,
+                independent_current_catalog_frame_v1(&changed_catalog, role, phase, &fields)
+            );
+            widths.extend_from_slice(&child.width_v1().to_be_bytes());
+            digests.extend_from_slice(&independent);
+        }
+        let fields = [
+            ZK_X509_P256_FIXED_ALGEBRAIC_DESCRIPTOR_V1,
+            widths.as_slice(),
+            digests.as_slice(),
+        ];
+        let independent = independent_current_catalog_frame_v1(
+            &catalog,
+            P256_COMPOSITE_DESCRIPTOR_DIGEST_DOMAIN_V1,
+            b"p256-fixed-algebraic-composite",
+            &fields,
+        );
+        assert_eq!(independent, schedule.descriptor_digest_v1().to_bytes());
+        assert_eq!(independent, P256_FIXED_ALGEBRAIC_COMPOSITE_DIGEST_V1);
+        assert_ne!(
+            independent,
+            independent_current_catalog_frame_v1(
+                &changed_catalog,
+                P256_COMPOSITE_DESCRIPTOR_DIGEST_DOMAIN_V1,
+                b"p256-fixed-algebraic-composite",
+                &fields
+            )
+        );
+        let compiler = independent_current_catalog_frame_v1(
+            &catalog,
+            P256_COMPILER_DESCRIPTOR_DIGEST_DOMAIN_V1,
+            b"p256-fixed-algebraic-compiler",
+            &[ZK_X509_P256_FIXED_ALGEBRAIC_DESCRIPTOR_V1],
+        );
+        assert_eq!(
+            compiler,
+            zk_x509_p256_fixed_algebraic_compiler_descriptor_digest_v1()
+                .expect("compiler descriptor")
+                .to_bytes()
+        );
+        assert_eq!(
+            hex::encode(compiler),
+            "63643304e6c6eb43a8329fd4f82723c88ef85ca03f1e1784b276044dec9f245c5a35ac2bce4cc2242995c33244d2df81"
+        );
+    }
+
     #[test]
     fn collect_exact_release_kats_or_report_stage_v1() {
         let schedule = compile_zk_x509_p256_fixed_algebraic_schedule_v1()

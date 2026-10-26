@@ -4,13 +4,11 @@
 //! helpers for common HTTP interactions. Ledger streams use the account-bound
 //! Rust SDK; Mochi owns only summaries, fanout and local reconnect policy.
 use crate::compose::{InstructionPermission, SigningAuthority};
-use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use futures::future::join_all;
 use iroha::client::AccountClient;
 use iroha_crypto::{HashOf, KeyPair};
 use iroha_data_model::{
     Identifiable,
-    asset::{AssetDefinitionId, AssetId},
     block::{
         SignedBlock, consensus::SumeragiDiagnosticsStatus, execution_output::ExecutionOutputV1,
     },
@@ -28,16 +26,19 @@ use iroha_data_model::{
     nexus::{LaneLifecycleParameterV1, LaneLifecyclePlan, LaneLifecycleStatusV1},
     parameter::Parameter,
     prelude::{AccountId, NetworkId},
-    query::{QueryOutput, QueryRequest, SignedQuery},
+    query::{QueryOutput, QueryRequest, QueryResponse, SignedQuery},
     sumeragi::SumeragiStatus,
-    transaction::{SignedTransaction, TransactionBuilder, TransactionEntrypoint},
+    transaction::{
+        SignedTransaction, TransactionBuilder, TransactionEntrypoint,
+        error::TransactionRejectionReason,
+    },
 };
-use iroha_primitives::{json::Json, numeric::Quantity};
+use iroha_primitives::json::Json;
 use iroha_torii_shared::status::Status as TelemetryStatus;
 use iroha_torii_shared::{ErrorEnvelope, mcp as torii_mcp, route_catalog as torii_routes};
 use iroha_version::codec::EncodeVersioned;
 use norito::json;
-use rand::{TryRngCore as _, rngs::OsRng};
+use rand::{TryRng as _, rngs::SysRng};
 use reqwest::{Client, Response, StatusCode, header::HeaderMap};
 use std::{
     convert::TryFrom,
@@ -89,7 +90,10 @@ pub enum ToriiError {
         maximum: usize,
     },
     /// Torii answered with a non-success status code.
-    #[error("unexpected Torii status code {status}")]
+    #[error(
+        "unexpected Torii status code {status}{}",
+        status_detail(.reject_code.as_deref(), .message.as_deref())
+    )]
     UnexpectedStatus {
         /// HTTP status code returned by Torii.
         status: StatusCode,
@@ -125,9 +129,12 @@ pub enum ToriiError {
     /// Timed out while waiting for Torii to produce a response.
     #[error("timeout while waiting for Torii: {context}")]
     Timeout { context: String },
-    /// A smoke transaction was rejected (or expired) before commitment.
+    /// The validators rejected a smoke transaction; `reason` names the failure and its causes.
     #[error("smoke transaction {hash} rejected: {reason}")]
     SmokeRejected { hash: String, reason: String },
+    /// A smoke transaction expired before any block included it.
+    #[error("smoke transaction {hash} expired before commitment")]
+    SmokeExpired { hash: String },
     /// Torii could not prove whether the exact smoke transaction was admitted.
     #[error("smoke transaction admission outcome remains unknown for {hash}")]
     SmokeAdmissionOutcomeUnknown { hash: String },
@@ -290,6 +297,11 @@ impl ToriiError {
                 format!("Smoke transaction {hash} was rejected"),
                 reason.clone(),
             ),
+            Self::SmokeExpired { hash } => ToriiErrorInfo::with_detail(
+                ToriiErrorKind::SmokeRejected,
+                format!("Smoke transaction {hash} expired"),
+                "No block included it before its time-to-live elapsed".to_owned(),
+            ),
             Self::SmokeAdmissionOutcomeUnknown { hash } => ToriiErrorInfo::with_detail(
                 ToriiErrorKind::SmokeAdmissionOutcomeUnknown,
                 format!("Smoke transaction admission outcome remains unknown for {hash}"),
@@ -346,6 +358,21 @@ impl From<iroha::Error> for ToriiError {
         Self::Sdk(Arc::new(error))
     }
 }
+/// The reject code and message Torii sent with a failed status, so the reason is shown.
+fn status_detail(reject_code: Option<&str>, message: Option<&str>) -> String {
+    let mut detail = String::new();
+    if let Some(code) = reject_code.filter(|code| !code.is_empty()) {
+        detail.push_str(" (");
+        detail.push_str(code);
+        detail.push(')');
+    }
+    if let Some(message) = message.filter(|message| !message.is_empty()) {
+        detail.push_str(": ");
+        detail.push_str(message);
+    }
+    detail
+}
+
 fn error_message_from_body(body: &[u8]) -> Option<String> {
     if let Ok(envelope) = decode_norito::<ErrorEnvelope>(body) {
         return Some(if envelope.code.is_empty() {
@@ -599,7 +626,8 @@ pub struct SmokeCommitSnapshot {
 enum SmokeTransactionStatus {
     Queued,
     Committed(u64),
-    Rejected(String),
+    /// Committed state rejected it; the status record carries no reason.
+    Rejected,
     Expired,
 }
 /// Options governing a full readiness smoke probe (status poll + commit check).
@@ -904,10 +932,52 @@ fn smoke_transaction_result_in_block(
                 Ok(_) => Ok(block.header().height().get()),
                 Err(reason) => Err(ToriiError::SmokeRejected {
                     hash: encode_lower_hex(tx_hash.as_ref()),
-                    reason: format!("{reason:?}"),
+                    reason: rejection_message(reason),
                 }),
             })
         })
+}
+/// Upper bound on a rejection reason carried into errors and the desktop.
+const MAX_REJECTION_MESSAGE_CHARS: usize = 1024;
+/// Shown when committed state marks a transaction rejected but no reason can be read.
+const UNRECORDED_REJECTION: &str = "Torii did not report a rejection reason";
+/// One line naming a rejection and its causes, worded like Torii's explorer record, such as
+/// `Validation failed: Operation is not permitted: Can't mint an asset …`.
+fn rejection_message(reason: &TransactionRejectionReason) -> String {
+    use iroha_data_model::ValidationFail;
+    let message = match reason {
+        TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(error)) => {
+            format!("Validation failed: Instruction execution failed: {error}")
+        }
+        TransactionRejectionReason::Validation(fail) => format!("Validation failed: {fail}"),
+        reason => {
+            let mut message = reason.to_string();
+            let mut source = std::error::Error::source(reason);
+            while let Some(error) = source {
+                message.push_str(": ");
+                message.push_str(&error.to_string());
+                source = error.source();
+            }
+            message
+        }
+    };
+    message.chars().take(MAX_REJECTION_MESSAGE_CHARS).collect()
+}
+/// The rejection an explorer transaction record carries, worded like [`rejection_message`].
+///
+/// The canonical encoded reason is authoritative; the explorer's own wording is used only
+/// when that encoding cannot be read. `None` when the record carries no rejection.
+fn explorer_rejection_message(record: &json::Value) -> Option<String> {
+    let rejection = record.get("rejection_reason")?;
+    if let Some(reason) = rejection
+        .get("reason")
+        .cloned()
+        .and_then(|reason| json::from_value::<TransactionRejectionReason>(reason).ok())
+    {
+        return Some(rejection_message(&reason));
+    }
+    let message = rejection.get("message")?.as_str()?.trim();
+    (!message.is_empty()).then(|| message.chars().take(MAX_REJECTION_MESSAGE_CHARS).collect())
 }
 #[derive(Debug, Default)]
 struct ReadinessSmokeAttemptCursor {
@@ -1222,640 +1292,6 @@ pub struct ToriiMetricsSnapshot {
     /// Milliseconds elapsed since genesis according to telemetry.
     pub uptime_since_genesis_ms: Option<f64>,
 }
-/// Pagination metadata returned by Explorer APIs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ExplorerPaginationMeta {
-    /// Current page number (1-indexed).
-    pub page: u64,
-    /// Items per page configured by the backend.
-    pub per_page: u64,
-    /// Total number of available pages.
-    pub total_pages: u64,
-    /// Total number of items available on the backend.
-    pub total_items: u64,
-}
-impl ExplorerPaginationMeta {
-    fn from_json(value: &json::Value) -> ToriiResult<Self> {
-        let record = value
-            .as_object()
-            .ok_or_else(|| decode_error("explorer blocks pagination", "must be a JSON object"))?;
-        require_exact_explorer_fields(
-            record,
-            &["page", "per_page", "total_pages", "total_items"],
-            "explorer blocks pagination",
-        )?;
-        let page = parse_u64_field(record, "page", false, "explorer blocks pagination.page")?;
-        let per_page = parse_u64_field(
-            record,
-            "per_page",
-            false,
-            "explorer blocks pagination.per_page",
-        )?;
-        if per_page > EXPLORER_HISTORY_MAX_PER_PAGE {
-            return Err(decode_error(
-                "explorer blocks pagination.per_page",
-                format!("must be between 1 and {EXPLORER_HISTORY_MAX_PER_PAGE}"),
-            ));
-        }
-        let total_pages = parse_u64_field(
-            record,
-            "total_pages",
-            true,
-            "explorer blocks pagination.total_pages",
-        )?;
-        let total_items = parse_u64_field(
-            record,
-            "total_items",
-            true,
-            "explorer blocks pagination.total_items",
-        )?;
-        let expected_total_pages = total_items.div_ceil(per_page);
-        if total_pages != expected_total_pages {
-            return Err(decode_error(
-                "explorer blocks pagination.total_pages",
-                format!("must equal ceil(total_items / per_page), expected {expected_total_pages}"),
-            ));
-        }
-        Ok(Self {
-            page,
-            per_page,
-            total_pages,
-            total_items,
-        })
-    }
-}
-const EXPLORER_CURSOR_MAX_LENGTH: usize = 1_424;
-const EXPLORER_CURSOR_DEFAULT_LIMIT: u32 = 25;
-const EXPLORER_CURSOR_MAX_LIMIT: u32 = 100;
-const EXPLORER_HISTORY_DEFAULT_PAGE: u64 = 1;
-const EXPLORER_HISTORY_DEFAULT_PER_PAGE: u64 = 10;
-const EXPLORER_HISTORY_MAX_PER_PAGE: u64 = 100;
-fn require_exact_explorer_fields(
-    record: &json::Map,
-    expected: &[&str],
-    context: &str,
-) -> ToriiResult<()> {
-    if record.len() != expected.len() || expected.iter().any(|field| !record.contains_key(*field)) {
-        return Err(decode_error(
-            context,
-            format!("must contain exactly these fields: {}", expected.join(", ")),
-        ));
-    }
-    Ok(())
-}
-fn is_canonical_explorer_rfc3339_utc(value: &str) -> bool {
-    let bytes = value.as_bytes();
-    if bytes.len() < 20
-        || bytes[4] != b'-'
-        || bytes[7] != b'-'
-        || bytes[10] != b'T'
-        || bytes[13] != b':'
-        || bytes[16] != b':'
-    {
-        return false;
-    }
-    let decimal = |start: usize, end: usize| {
-        bytes
-            .get(start..end)?
-            .iter()
-            .try_fold(0_u32, |value, byte| {
-                byte.is_ascii_digit()
-                    .then_some(value * 10 + u32::from(*byte - b'0'))
-            })
-    };
-    let Some(year) = decimal(0, 4) else {
-        return false;
-    };
-    let Some(month) = decimal(5, 7) else {
-        return false;
-    };
-    let Some(day) = decimal(8, 10) else {
-        return false;
-    };
-    let Some(hour) = decimal(11, 13) else {
-        return false;
-    };
-    let Some(minute) = decimal(14, 16) else {
-        return false;
-    };
-    let Some(second) = decimal(17, 19) else {
-        return false;
-    };
-    let leap_year = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
-    let days_in_month = match month {
-        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
-        4 | 6 | 9 | 11 => 30,
-        2 if leap_year => 29,
-        2 => 28,
-        _ => return false,
-    };
-    if !(1..=days_in_month).contains(&day) || hour > 23 || minute > 59 || second > 59 {
-        return false;
-    }
-    match bytes.len() {
-        20 => bytes[19] == b'Z',
-        22..=30 => {
-            bytes[19] == b'.'
-                && bytes[bytes.len() - 1] == b'Z'
-                && bytes[20..bytes.len() - 1].iter().all(u8::is_ascii_digit)
-        }
-        _ => false,
-    }
-}
-fn validate_explorer_items_len(
-    items_len: usize,
-    pagination: &ExplorerCursorMeta,
-    context: &str,
-) -> ToriiResult<()> {
-    if items_len > pagination.limit as usize {
-        return Err(decode_error(
-            context,
-            format!(
-                "must contain at most {} entries, matching pagination.limit",
-                pagination.limit
-            ),
-        ));
-    }
-    Ok(())
-}
-/// Seek-pagination metadata returned by Explorer world-collection APIs.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExplorerCursorMeta {
-    /// Maximum number of entries requested for this page.
-    pub limit: u32,
-    /// Opaque cursor for the next page, when another page exists.
-    pub next_cursor: Option<String>,
-    /// Whether another page exists for the same collection and filters.
-    pub has_more: bool,
-}
-impl ExplorerCursorMeta {
-    fn from_json(value: &json::Value, context: &str) -> ToriiResult<Self> {
-        let record = value
-            .as_object()
-            .ok_or_else(|| decode_error(context, "must be a JSON object"))?;
-        require_exact_explorer_fields(record, &["limit", "next_cursor", "has_more"], context)?;
-        let limit_value = record
-            .get("limit")
-            .ok_or_else(|| decode_error(&format!("{context}.limit"), "missing field"))?;
-        let limit = parse_u64_value(limit_value, false, &format!("{context}.limit"))?;
-        let limit = u32::try_from(limit)
-            .ok()
-            .filter(|limit| *limit <= EXPLORER_CURSOR_MAX_LIMIT)
-            .ok_or_else(|| {
-                decode_error(
-                    &format!("{context}.limit"),
-                    format!("must be between 1 and {EXPLORER_CURSOR_MAX_LIMIT}"),
-                )
-            })?;
-        let next_cursor = match record.get("next_cursor") {
-            Some(value) if value.is_null() => None,
-            Some(value) => {
-                let cursor = value.as_str().ok_or_else(|| {
-                    decode_error(
-                        &format!("{context}.next_cursor"),
-                        "must be a string or null",
-                    )
-                })?;
-                validate_explorer_cursor(cursor, &format!("{context}.next_cursor"))?;
-                Some(cursor.to_owned())
-            }
-            None => {
-                return Err(decode_error(
-                    &format!("{context}.next_cursor"),
-                    "missing field",
-                ));
-            }
-        };
-        let has_more = record
-            .get("has_more")
-            .and_then(json::Value::as_bool)
-            .ok_or_else(|| decode_error(&format!("{context}.has_more"), "must be a boolean"))?;
-        if has_more != next_cursor.is_some() {
-            return Err(decode_error(
-                context,
-                "has_more must match next_cursor availability",
-            ));
-        }
-        Ok(Self {
-            limit,
-            next_cursor,
-            has_more,
-        })
-    }
-}
-fn validate_explorer_cursor<'a>(cursor: &'a str, context: &str) -> ToriiResult<&'a str> {
-    let canonical = !cursor.is_empty()
-        && cursor.len() <= EXPLORER_CURSOR_MAX_LENGTH
-        && URL_SAFE_NO_PAD
-            .decode(cursor)
-            .map(|decoded| URL_SAFE_NO_PAD.encode(decoded) == cursor)
-            .unwrap_or(false);
-    if !canonical {
-        return Err(decode_error(
-            context,
-            format!(
-                "must be canonical base64url without padding and at most {EXPLORER_CURSOR_MAX_LENGTH} characters"
-            ),
-        ));
-    }
-    Ok(cursor)
-}
-fn append_explorer_cursor_params(
-    params: &mut Vec<(&'static str, String)>,
-    cursor: Option<String>,
-    limit: Option<u32>,
-    context: &str,
-) -> ToriiResult<()> {
-    if let Some(cursor) = cursor {
-        validate_explorer_cursor(&cursor, &format!("{context}.cursor"))?;
-        params.push(("cursor", cursor));
-    }
-    if let Some(limit) = limit {
-        if !(1..=EXPLORER_CURSOR_MAX_LIMIT).contains(&limit) {
-            return Err(decode_error(
-                &format!("{context}.limit"),
-                format!("must be between 1 and {EXPLORER_CURSOR_MAX_LIMIT}"),
-            ));
-        }
-        params.push(("limit", limit.to_string()));
-    }
-    Ok(())
-}
-/// Explorer block summary returned by `/v1/explorer/blocks`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExplorerBlockRecord {
-    /// Hex-encoded block hash.
-    pub hash: String,
-    /// Block height (`1`-indexed).
-    pub height: u64,
-    /// RFC 3339 timestamp recorded by Explorer, when the journal retained it.
-    pub created_at: Option<String>,
-    /// Optional previous block hash.
-    pub prev_block_hash: Option<String>,
-    /// Optional transactions hash recorded on the block.
-    pub transactions_hash: Option<String>,
-    /// Count of rejected transactions.
-    pub transactions_rejected: u64,
-    /// Count of transactions included in the block.
-    pub transactions_total: u64,
-}
-impl ExplorerBlockRecord {
-    fn from_json(value: &json::Value) -> ToriiResult<Self> {
-        let record = value
-            .as_object()
-            .ok_or_else(|| decode_error("explorer block record", "must be a JSON object"))?;
-        const REQUIRED_FIELDS: [&str; 7] = [
-            "hash",
-            "height",
-            "created_at",
-            "prev_block_hash",
-            "transactions_hash",
-            "transactions_rejected",
-            "transactions_total",
-        ];
-        require_exact_explorer_fields(record, &REQUIRED_FIELDS, "explorer block record")?;
-        let hash = parse_hex_field(record, "hash", "explorer block record.hash")?;
-        let created_at_value = record
-            .get("created_at")
-            .and_then(json::Value::as_str)
-            .ok_or_else(|| decode_error("explorer block record.created_at", "must be a string"))?;
-        let created_at = match created_at_value {
-            "" => None,
-            value if value.trim() != value => {
-                return Err(decode_error(
-                    "explorer block record.created_at",
-                    "must not contain surrounding whitespace",
-                ));
-            }
-            value if !is_canonical_explorer_rfc3339_utc(value) => {
-                return Err(decode_error(
-                    "explorer block record.created_at",
-                    "must be canonical UTC RFC3339 with at most 9 fractional digits",
-                ));
-            }
-            value => Some(value.to_owned()),
-        };
-        let transactions_rejected = parse_u64_field(
-            record,
-            "transactions_rejected",
-            true,
-            "explorer block record.transactions_rejected",
-        )?;
-        let transactions_total = parse_u64_field(
-            record,
-            "transactions_total",
-            true,
-            "explorer block record.transactions_total",
-        )?;
-        if transactions_rejected > transactions_total {
-            return Err(decode_error(
-                "explorer block record.transactions_rejected",
-                "must not exceed transactions_total",
-            ));
-        }
-        Ok(Self {
-            hash,
-            height: parse_u64_field(record, "height", false, "explorer block record.height")?,
-            created_at,
-            prev_block_hash: parse_optional_hex_field(
-                record,
-                "prev_block_hash",
-                "explorer block record.prev_block_hash",
-            )?,
-            transactions_hash: parse_optional_hex_field(
-                record,
-                "transactions_hash",
-                "explorer block record.transactions_hash",
-            )?,
-            transactions_rejected,
-            transactions_total,
-        })
-    }
-}
-/// Explorer `/v1/explorer/blocks` response model.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExplorerBlocksPage {
-    /// Pagination metadata.
-    pub pagination: ExplorerPaginationMeta,
-    /// Block entries included in this page.
-    pub items: Vec<ExplorerBlockRecord>,
-}
-impl ExplorerBlocksPage {
-    fn from_json(value: &json::Value) -> ToriiResult<Self> {
-        let record = value
-            .as_object()
-            .ok_or_else(|| decode_error("explorer blocks response", "must be a JSON object"))?;
-        require_exact_explorer_fields(
-            record,
-            &["pagination", "items"],
-            "explorer blocks response",
-        )?;
-        let pagination = record
-            .get("pagination")
-            .ok_or_else(|| decode_error("explorer blocks response", "missing pagination field"))
-            .and_then(ExplorerPaginationMeta::from_json)?;
-        let items_value = record
-            .get("items")
-            .ok_or_else(|| decode_error("explorer blocks response", "missing items field"))?;
-        let items_array = items_value.as_array().ok_or_else(|| {
-            decode_error("explorer blocks response.items", "must be a JSON array")
-        })?;
-        if items_array.len() > pagination.per_page as usize {
-            return Err(decode_error(
-                "explorer blocks response.items",
-                format!(
-                    "must contain at most {} entries, matching pagination.per_page",
-                    pagination.per_page
-                ),
-            ));
-        }
-        let skipped = pagination
-            .page
-            .saturating_sub(1)
-            .saturating_mul(pagination.per_page);
-        let expected_items = pagination
-            .total_items
-            .saturating_sub(skipped)
-            .min(pagination.per_page);
-        if u64::try_from(items_array.len()).ok() != Some(expected_items) {
-            return Err(decode_error(
-                "explorer blocks response.items",
-                format!(
-                    "must contain exactly {expected_items} entries for the declared pagination"
-                ),
-            ));
-        }
-        let mut items = Vec::with_capacity(items_array.len());
-        for (index, entry) in items_array.iter().enumerate() {
-            let record = ExplorerBlockRecord::from_json(entry).map_err(|err| {
-                decode_error(
-                    "explorer blocks response.items",
-                    format!("failed to decode entry {index}: {err}"),
-                )
-            })?;
-            items.push(record);
-        }
-        Ok(Self { pagination, items })
-    }
-}
-/// Query parameters accepted by `/v1/explorer/blocks`.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct ExplorerBlocksQuery {
-    /// One-based page number.
-    pub page: Option<u64>,
-    /// Maximum number of items to return per page.
-    pub per_page: Option<u64>,
-}
-/// Explorer asset entry returned by `/v1/explorer/assets`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExplorerAssetRecord {
-    /// Canonical asset identifier.
-    pub id: String,
-    /// Definition backing the asset.
-    pub definition_id: String,
-    /// Owning account identifier.
-    pub account_id: String,
-    /// Value rendered as a string (mirrors Explorer payload).
-    pub value: String,
-}
-impl ExplorerAssetRecord {
-    fn from_json(value: &json::Value) -> ToriiResult<Self> {
-        let record = value
-            .as_object()
-            .ok_or_else(|| decode_error("explorer asset record", "must be a JSON object"))?;
-        require_exact_explorer_fields(
-            record,
-            &["id", "definition_id", "account_id", "value"],
-            "explorer asset record",
-        )?;
-        let id = parse_required_string(record, "id", "explorer asset record.id")?;
-        let definition_id = parse_required_string(
-            record,
-            "definition_id",
-            "explorer asset record.definition_id",
-        )?;
-        let account_id =
-            parse_required_string(record, "account_id", "explorer asset record.account_id")?;
-        let value = parse_required_string(record, "value", "explorer asset record.value")?;
-        let parsed_id = AssetId::parse_literal(&id).map_err(|error| {
-            decode_error(
-                "explorer asset record.id",
-                format!("must be a canonical asset id: {error}"),
-            )
-        })?;
-        if parsed_id.to_string() != id {
-            return Err(decode_error(
-                "explorer asset record.id",
-                "must use the canonical asset-id spelling",
-            ));
-        }
-        let parsed_definition = definition_id
-            .parse::<AssetDefinitionId>()
-            .map_err(|error| {
-                decode_error(
-                    "explorer asset record.definition_id",
-                    format!("must be a canonical asset-definition id: {error}"),
-                )
-            })?;
-        if parsed_definition.to_string() != definition_id {
-            return Err(decode_error(
-                "explorer asset record.definition_id",
-                "must use the canonical asset-definition-id spelling",
-            ));
-        }
-        let parsed_account = AccountId::parse_encoded(&account_id).map_err(|error| {
-            decode_error(
-                "explorer asset record.account_id",
-                format!("must be a canonical account id: {error}"),
-            )
-        })?;
-        if parsed_account.to_string() != account_id {
-            return Err(decode_error(
-                "explorer asset record.account_id",
-                "must use the canonical account-id spelling",
-            ));
-        }
-        if parsed_id.definition() != &parsed_definition {
-            return Err(decode_error(
-                "explorer asset record",
-                "id does not match definition_id",
-            ));
-        }
-        if parsed_id.account() != &parsed_account {
-            return Err(decode_error(
-                "explorer asset record",
-                "id does not match account_id",
-            ));
-        }
-        let parsed_value = value.parse::<Quantity>().map_err(|error| {
-            decode_error(
-                "explorer asset record.value",
-                format!("must be a canonical quantity: {error}"),
-            )
-        })?;
-        if parsed_value.to_string() != value {
-            return Err(decode_error(
-                "explorer asset record.value",
-                "must use the canonical quantity spelling",
-            ));
-        }
-        Ok(Self {
-            id,
-            definition_id,
-            account_id,
-            value,
-        })
-    }
-}
-/// Explorer `/v1/explorer/assets` response model.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExplorerAssetsPage {
-    /// Seek-pagination metadata returned by Torii.
-    pub pagination: ExplorerCursorMeta,
-    /// Asset entries in the page.
-    pub items: Vec<ExplorerAssetRecord>,
-}
-impl ExplorerAssetsPage {
-    fn from_json(value: &json::Value) -> ToriiResult<Self> {
-        let record = value
-            .as_object()
-            .ok_or_else(|| decode_error("explorer assets response", "must be a JSON object"))?;
-        require_exact_explorer_fields(
-            record,
-            &["pagination", "items"],
-            "explorer assets response",
-        )?;
-        let pagination = record
-            .get("pagination")
-            .ok_or_else(|| decode_error("explorer assets response", "missing pagination field"))
-            .and_then(|value| {
-                ExplorerCursorMeta::from_json(value, "explorer assets response.pagination")
-            })?;
-        let items_value = record
-            .get("items")
-            .ok_or_else(|| decode_error("explorer assets response", "missing items field"))?;
-        let items_array = items_value.as_array().ok_or_else(|| {
-            decode_error("explorer assets response.items", "must be a JSON array")
-        })?;
-        validate_explorer_items_len(
-            items_array.len(),
-            &pagination,
-            "explorer assets response.items",
-        )?;
-        let mut items = Vec::with_capacity(items_array.len());
-        for (index, entry) in items_array.iter().enumerate() {
-            let record = ExplorerAssetRecord::from_json(entry).map_err(|err| {
-                decode_error(
-                    "explorer assets response.items",
-                    format!("failed to decode entry {index}: {err}"),
-                )
-            })?;
-            items.push(record);
-        }
-        Ok(Self { pagination, items })
-    }
-}
-/// Parameters accepted by `/v1/explorer/assets`.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct ExplorerAssetsQuery {
-    /// Opaque cursor returned by the preceding page.
-    pub cursor: Option<String>,
-    /// Maximum number of entries to return (1 through 100).
-    pub limit: Option<u32>,
-    /// Optional owning account filter.
-    pub owned_by: Option<String>,
-    /// Optional definition filter (`definition#domain` literal).
-    pub definition: Option<String>,
-}
-fn validate_explorer_filter(value: Option<String>, context: &str) -> ToriiResult<Option<String>> {
-    value
-        .map(|value| {
-            if value.is_empty() || value.trim() != value {
-                return Err(decode_error(
-                    context,
-                    "must be non-empty and contain no surrounding whitespace",
-                ));
-            }
-            Ok(value)
-        })
-        .transpose()
-}
-fn validate_explorer_account_filter(value: Option<String>) -> ToriiResult<Option<String>> {
-    let value = validate_explorer_filter(value, "explorer assets query.owned_by")?;
-    if let Some(literal) = value.as_ref() {
-        let account = AccountId::parse_encoded(literal).map_err(|error| {
-            decode_error(
-                "explorer assets query.owned_by",
-                format!("must be a canonical account id: {error}"),
-            )
-        })?;
-        if account.to_string() != *literal {
-            return Err(decode_error(
-                "explorer assets query.owned_by",
-                "must use the canonical account-id spelling",
-            ));
-        }
-    }
-    Ok(value)
-}
-fn validate_explorer_definition_filter(value: Option<String>) -> ToriiResult<Option<String>> {
-    let value = validate_explorer_filter(value, "explorer assets query.definition")?;
-    if let Some(literal) = value.as_ref() {
-        let definition = literal.parse::<AssetDefinitionId>().map_err(|error| {
-            decode_error(
-                "explorer assets query.definition",
-                format!("must be a canonical asset-definition id: {error}"),
-            )
-        })?;
-        if definition.to_string() != *literal {
-            return Err(decode_error(
-                "explorer assets query.definition",
-                "must use the canonical asset-definition-id spelling",
-            ));
-        }
-    }
-    Ok(value)
-}
 fn decode_error(context: &str, message: impl Into<String>) -> ToriiError {
     ToriiError::Decode(format!("{context}: {}", message.into()))
 }
@@ -1874,57 +1310,6 @@ fn parse_required_string(record: &json::Map, key: &str, context: &str) -> ToriiR
         ));
     }
     Ok(value.to_owned())
-}
-fn parse_hex_field(record: &json::Map, key: &str, context: &str) -> ToriiResult<String> {
-    let value = parse_required_string(record, key, context)?;
-    require_exact_iroha_hash(&value, context)?;
-    Ok(value)
-}
-fn parse_optional_hex_field(
-    record: &json::Map,
-    key: &str,
-    context: &str,
-) -> ToriiResult<Option<String>> {
-    let value = record
-        .get(key)
-        .ok_or_else(|| decode_error(context, "missing field"))?;
-    if value.is_null() {
-        return Ok(None);
-    }
-    let string_value = value
-        .as_str()
-        .ok_or_else(|| decode_error(context, "value must be a string"))?;
-    if string_value.is_empty() {
-        return Err(decode_error(context, "value cannot be empty"));
-    }
-    if string_value.trim() != string_value {
-        return Err(decode_error(
-            context,
-            "value must not contain surrounding whitespace",
-        ));
-    }
-    require_exact_iroha_hash(string_value, context)?;
-    Ok(Some(string_value.to_owned()))
-}
-fn parse_u64_field(
-    record: &json::Map,
-    key: &str,
-    allow_zero: bool,
-    context: &str,
-) -> ToriiResult<u64> {
-    let value = record
-        .get(key)
-        .ok_or_else(|| decode_error(context, "missing field"))?;
-    parse_u64_value(value, allow_zero, context)
-}
-fn parse_u64_value(value: &json::Value, allow_zero: bool, context: &str) -> ToriiResult<u64> {
-    let parsed = value
-        .as_u64()
-        .ok_or_else(|| decode_error(context, "value must be an unsigned integer"))?;
-    if parsed == 0 && !allow_zero {
-        return Err(decode_error(context, "value must be greater than zero"));
-    }
-    Ok(parsed)
 }
 fn require_exact_smoke_status_fields(
     record: &json::Map,
@@ -2058,7 +1443,7 @@ fn parse_pipeline_smoke_status(
                     "is required for state-resolved Applied status",
                 )
             }),
-        "Rejected" => Ok(SmokeTransactionStatus::Rejected("rejected".to_owned())),
+        "Rejected" => Ok(SmokeTransactionStatus::Rejected),
         "Expired" => Ok(SmokeTransactionStatus::Expired),
         "Queued" | "Approved" | "Committed" => Ok(SmokeTransactionStatus::Queued),
         _ => unreachable!("pipeline status kind was validated above"),
@@ -2251,7 +1636,7 @@ impl ToriiClient {
             })?;
         let mut nonce = [0_u8; 32];
         for _ in 0..16 {
-            OsRng.try_fill_bytes(&mut nonce).map_err(|error| {
+            SysRng.try_fill_bytes(&mut nonce).map_err(|error| {
                 ToriiError::SignedQueryContext(format!("OS nonce generation failed: {error}"))
             })?;
             if nonce != [0_u8; 32] {
@@ -2306,12 +1691,6 @@ impl ToriiClient {
     /// URL of the native `/v1/mcp` endpoint.
     pub fn mcp_endpoint(&self) -> ToriiResult<Url> {
         self.http_endpoint("v1/mcp")
-    }
-    fn explorer_blocks_endpoint(&self) -> ToriiResult<Url> {
-        self.http_endpoint(torii_routes::application_api::EXPLORER_BLOCKS_GET.path())
-    }
-    fn explorer_assets_endpoint(&self) -> ToriiResult<Url> {
-        self.http_endpoint(torii_routes::application_api::EXPLORER_ASSETS_GET.path())
     }
     /// URL of the `/v1/pipeline/transactions/status` endpoint.
     pub fn pipeline_transaction_status_endpoint(&self) -> ToriiResult<Url> {
@@ -2441,7 +1820,9 @@ impl ToriiClient {
                         status,
                     });
                 }
-                Err(err @ ToriiError::SmokeRejected { .. }) if cursor.is_pinned() => {
+                Err(err @ (ToriiError::SmokeRejected { .. } | ToriiError::SmokeExpired { .. }))
+                    if cursor.is_pinned() =>
+                {
                     return Err(err);
                 }
                 Err(err) if attempt < attempts => {
@@ -2496,6 +1877,8 @@ impl ToriiClient {
             .http
             .post(url)
             .header("Content-Type", NORITO_MIME_TYPE)
+            // Without it Torii answers in JSON, which the Norito decoder cannot read.
+            .header(reqwest::header::ACCEPT, NORITO_MIME_TYPE)
             .body(payload.to_vec())
             .send()
             .await?;
@@ -2608,16 +1991,23 @@ impl ToriiClient {
                                     admission_outcome_unknown = false;
                                 }
                                 SmokeTransactionStatus::Committed(height) => return Ok(height),
-                                SmokeTransactionStatus::Rejected(reason) => {
+                                SmokeTransactionStatus::Rejected => {
+                                    // The status record is final but reasonless; the
+                                    // explorer keeps the committed reason for this hash.
+                                    let reason = self
+                                        .fetch_rejection_reason(tx_hash_str.as_str())
+                                        .await
+                                        .ok()
+                                        .flatten()
+                                        .unwrap_or_else(|| UNRECORDED_REJECTION.to_owned());
                                     return Err(ToriiError::SmokeRejected {
                                         hash: tx_hash_str.clone(),
                                         reason,
                                     });
                                 }
                                 SmokeTransactionStatus::Expired => {
-                                    return Err(ToriiError::SmokeRejected {
+                                    return Err(ToriiError::SmokeExpired {
                                         hash: tx_hash_str.clone(),
-                                        reason: "expired".to_owned(),
                                     });
                                 }
                             }
@@ -2672,13 +2062,12 @@ impl ToriiClient {
                                         iroha_data_model::events::pipeline::TransactionStatus::Rejected(reason) => {
                                             return Err(ToriiError::SmokeRejected {
                                                 hash: tx_hash_str.clone(),
-                                                reason: format!("{reason:?}"),
+                                                reason: rejection_message(reason),
                                             });
                                         }
                                         iroha_data_model::events::pipeline::TransactionStatus::Expired => {
-                                            return Err(ToriiError::SmokeRejected {
+                                            return Err(ToriiError::SmokeExpired {
                                                 hash: tx_hash_str.clone(),
-                                                reason: "expired".to_owned(),
                                             });
                                         }
                                         iroha_data_model::events::pipeline::TransactionStatus::Approved => {
@@ -2767,10 +2156,79 @@ impl ToriiClient {
         let value = decode_bounded_json_response(&bytes, "pipeline status")?;
         parse_pipeline_smoke_status(&value, tx_hash).map(Some)
     }
-    /// Submit a signed query and decode the response into a typed [`QueryOutput`].
+    /// The committed rejection reason of one exact transaction, from its explorer record.
+    ///
+    /// `None` when the explorer has no record for the hash or the record is not a rejection.
+    async fn fetch_rejection_reason(&self, tx_hash: &str) -> ToriiResult<Option<String>> {
+        require_exact_iroha_hash(tx_hash, "explorer transaction request hash")?;
+        let url = self.http_endpoint(
+            &torii_routes::application_api::EXPLORER_TRANSACTIONS_BY_HASH_GET
+                .path()
+                .replace("{hash}", tx_hash),
+        )?;
+        let response = self
+            .http
+            .get(url)
+            .header(reqwest::header::ACCEPT, "application/json")
+            .send()
+            .await?;
+        if response.status() == StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if response.status() != StatusCode::OK {
+            return Err(ToriiError::UnexpectedStatus {
+                status: response.status(),
+                reject_code: None,
+                message: None,
+            });
+        }
+        let record = read_bounded_json_response(response, "explorer transaction").await?;
+        Ok(explorer_rejection_message(&record))
+    }
+    /// The name service's active policy for one suffix, such as the domain namespace.
+    ///
+    /// # Errors
+    /// Transport, non-success status or decode failures.
+    pub async fn fetch_sns_policy(
+        &self,
+        suffix_id: iroha_data_model::sns::SuffixId,
+    ) -> ToriiResult<iroha_data_model::sns::SuffixPolicyV1> {
+        let url = self.http_endpoint(
+            &torii_routes::application_api::SNS_POLICIES_BY_SUFFIX_ID_GET
+                .path()
+                .replace("{suffix_id}", &suffix_id.to_string()),
+        )?;
+        let response = self
+            .http
+            .get(url)
+            .header(reqwest::header::ACCEPT, "application/json")
+            .send()
+            .await?;
+        if response.status() != StatusCode::OK {
+            return Err(ToriiError::UnexpectedStatus {
+                status: response.status(),
+                reject_code: None,
+                message: None,
+            });
+        }
+        let bytes = read_bounded_response(response, MAX_JSON_RESPONSE_BYTES, "name service policy")
+            .await?;
+        json::from_slice(&bytes).map_err(|error| {
+            ToriiError::Decode(format!("name service policy response: {error}"))
+        })
+    }
+    /// Submit a signed iterable query and return the [`QueryOutput`] its response carries.
+    ///
+    /// # Errors
+    /// Transport, status and decode failures, or a singular response.
     pub async fn execute_query(&self, query: &SignedQuery) -> ToriiResult<QueryOutput> {
         let response = self.submit_query(&query.encode_versioned()).await?;
-        decode_norito(&response)
+        match decode_norito::<QueryResponse>(&response)? {
+            QueryResponse::Iterable(output) => Ok(output),
+            QueryResponse::Singular(_) => Err(ToriiError::Decode(
+                "Torii answered an iterable query with a singular response".to_owned(),
+            )),
+        }
     }
     /// Fetch the Torii status snapshot.
     pub async fn fetch_status(&self) -> ToriiResult<TelemetryStatus> {
@@ -2978,124 +2436,6 @@ impl ToriiClient {
     pub async fn fetch_metrics_snapshot(&self) -> ToriiResult<ToriiMetricsSnapshot> {
         let body = self.fetch_metrics().await?;
         Ok(ToriiMetricsSnapshot::from_prometheus(Instant::now(), &body))
-    }
-    /// List blocks from the Explorer API using optional pagination parameters.
-    pub async fn fetch_blocks_page(
-        &self,
-        query: ExplorerBlocksQuery,
-    ) -> ToriiResult<ExplorerBlocksPage> {
-        let requested_page = query.page.unwrap_or(EXPLORER_HISTORY_DEFAULT_PAGE);
-        let requested_per_page = query.per_page.unwrap_or(EXPLORER_HISTORY_DEFAULT_PER_PAGE);
-        if requested_page == 0 {
-            return Err(decode_error(
-                "explorer blocks query.page",
-                "must be at least 1",
-            ));
-        }
-        if !(1..=EXPLORER_HISTORY_MAX_PER_PAGE).contains(&requested_per_page) {
-            return Err(decode_error(
-                "explorer blocks query.per_page",
-                format!("must be between 1 and {EXPLORER_HISTORY_MAX_PER_PAGE}"),
-            ));
-        }
-        let url = self.explorer_blocks_endpoint()?;
-        let request = self.http.get(url).query(&[
-            ("page", requested_page.to_string()),
-            ("per_page", requested_per_page.to_string()),
-        ]);
-        let response = request.send().await?;
-        if !response.status().is_success() {
-            return Err(ToriiError::UnexpectedStatus {
-                status: response.status(),
-                reject_code: None,
-                message: None,
-            });
-        }
-        let value = read_bounded_json_response(response, "Explorer blocks").await?;
-        let page = ExplorerBlocksPage::from_json(&value)?;
-        if page.pagination.page != requested_page {
-            return Err(decode_error(
-                "explorer blocks response.pagination.page",
-                "does not match the requested page",
-            ));
-        }
-        if page.pagination.per_page != requested_per_page {
-            return Err(decode_error(
-                "explorer blocks response.pagination.per_page",
-                "does not match the requested per_page",
-            ));
-        }
-        Ok(page)
-    }
-    /// Fetch Explorer asset summaries from `/v1/explorer/assets`.
-    pub async fn fetch_explorer_assets_page(
-        &self,
-        query: ExplorerAssetsQuery,
-    ) -> ToriiResult<ExplorerAssetsPage> {
-        let ExplorerAssetsQuery {
-            cursor,
-            limit,
-            owned_by,
-            definition,
-        } = query;
-        let requested_limit = limit.unwrap_or(EXPLORER_CURSOR_DEFAULT_LIMIT);
-        let url = self.explorer_assets_endpoint()?;
-        let mut request = self.http.get(url);
-        let mut params: Vec<(&str, String)> = Vec::new();
-        append_explorer_cursor_params(
-            &mut params,
-            cursor,
-            Some(requested_limit),
-            "explorer assets query",
-        )?;
-        let owned_by = validate_explorer_account_filter(owned_by)?;
-        if let Some(owned_by) = owned_by.as_ref() {
-            params.push(("owned_by", owned_by.clone()));
-        }
-        let definition = validate_explorer_definition_filter(definition)?;
-        if let Some(definition) = definition.as_ref() {
-            params.push(("definition", definition.clone()));
-        }
-        if !params.is_empty() {
-            request = request.query(&params);
-        }
-        let response = request.send().await?;
-        if !response.status().is_success() {
-            return Err(ToriiError::UnexpectedStatus {
-                status: response.status(),
-                reject_code: None,
-                message: None,
-            });
-        }
-        let value = read_bounded_json_response(response, "Explorer assets").await?;
-        let page = ExplorerAssetsPage::from_json(&value)?;
-        if page.pagination.limit != requested_limit {
-            return Err(decode_error(
-                "explorer assets response.pagination.limit",
-                "does not match the requested limit",
-            ));
-        }
-        for item in &page.items {
-            if owned_by
-                .as_ref()
-                .is_some_and(|expected| item.account_id != *expected)
-            {
-                return Err(decode_error(
-                    "explorer assets response.items[].account_id",
-                    "does not match the requested owned_by filter",
-                ));
-            }
-            if definition
-                .as_ref()
-                .is_some_and(|expected| item.definition_id != *expected)
-            {
-                return Err(decode_error(
-                    "explorer assets response.items[].definition_id",
-                    "does not match the requested definition filter",
-                ));
-            }
-        }
-        Ok(page)
     }
     fn http_endpoint(&self, path: &str) -> ToriiResult<Url> {
         self.http_base

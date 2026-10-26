@@ -936,14 +936,16 @@ pub mod isi {
             let query_handle = LiveQueryStore::start_test();
             let world = World::default();
             // Component registrations use an explicit policy authored before the block snapshot.
-            let mut parameters = world.parameters.block();
-            parameters
-                .set_parameter(
-                    crate::sumeragi::test_chain::crypto_fixture_policy()
-                        .into_parameter()
-                        .expect("canonical fixture crypto policy"),
-                )
-                .expect("install fixture crypto policy");
+            let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
+                .expect("funded component parameter fixture");
+            crate::state::set_parameter_cell_for_testing(
+                &mut parameters,
+                crate::sumeragi::test_chain::crypto_fixture_policy()
+                    .into_parameter()
+                    .expect("canonical fixture crypto policy"),
+                world.sccp_committee_generations.allocation_budget(),
+            )
+            .expect("install fixture crypto policy");
             parameters.commit();
             State::new(world, kura, query_handle)
         }
@@ -1813,14 +1815,16 @@ pub mod query {
             let query_handle = LiveQueryStore::start_test();
             let world = World::default();
             // Component account writes require an authored policy before the block snapshot.
-            let mut parameters = world.parameters.block();
-            parameters
-                .set_parameter(
-                    crate::sumeragi::test_chain::crypto_fixture_policy()
-                        .into_parameter()
-                        .expect("canonical fixture crypto policy"),
-                )
-                .expect("install fixture crypto policy");
+            let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
+                .expect("funded component parameter fixture");
+            crate::state::set_parameter_cell_for_testing(
+                &mut parameters,
+                crate::sumeragi::test_chain::crypto_fixture_policy()
+                    .into_parameter()
+                    .expect("canonical fixture crypto policy"),
+                world.sccp_committee_generations.allocation_budget(),
+            )
+            .expect("install fixture crypto policy");
             parameters.commit();
             let state = State::new(world, kura, query_handle);
             let block = new_dummy_block();
@@ -1872,14 +1876,16 @@ pub mod query {
             let query_handle = LiveQueryStore::start_test();
             let world = World::default();
             // Component account writes require an authored policy before the block snapshot.
-            let mut parameters = world.parameters.block();
-            parameters
-                .set_parameter(
-                    crate::sumeragi::test_chain::crypto_fixture_policy()
-                        .into_parameter()
-                        .expect("canonical fixture crypto policy"),
-                )
-                .expect("install fixture crypto policy");
+            let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
+                .expect("funded component parameter fixture");
+            crate::state::set_parameter_cell_for_testing(
+                &mut parameters,
+                crate::sumeragi::test_chain::crypto_fixture_policy()
+                    .into_parameter()
+                    .expect("canonical fixture crypto policy"),
+                world.sccp_committee_generations.allocation_budget(),
+            )
+            .expect("install fixture crypto policy");
             parameters.commit();
             let state = State::new(world, kura, query_handle);
             let block = new_dummy_block();
@@ -1962,14 +1968,16 @@ pub mod query {
             let query_handle = LiveQueryStore::start_test();
             let world = World::default();
             // Component account writes require an authored policy before the block snapshot.
-            let mut parameters = world.parameters.block();
-            parameters
-                .set_parameter(
-                    crate::sumeragi::test_chain::crypto_fixture_policy()
-                        .into_parameter()
-                        .expect("canonical fixture crypto policy"),
-                )
-                .expect("install fixture crypto policy");
+            let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
+                .expect("funded component parameter fixture");
+            crate::state::set_parameter_cell_for_testing(
+                &mut parameters,
+                crate::sumeragi::test_chain::crypto_fixture_policy()
+                    .into_parameter()
+                    .expect("canonical fixture crypto policy"),
+                world.sccp_committee_generations.allocation_budget(),
+            )
+            .expect("install fixture crypto policy");
             parameters.commit();
             let state = State::new(world, kura, query_handle);
             let block = new_dummy_block();

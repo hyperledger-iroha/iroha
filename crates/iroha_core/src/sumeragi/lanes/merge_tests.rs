@@ -1106,8 +1106,7 @@ fn admissibility_retains_original_committed_policy_and_limits_across_publication
     let publish = |algorithm, max_bytes| {
         let mut block = state.world.block();
         block
-            .parameters
-            .set_parameter(
+            .set_parameter_for_testing(
                 CryptoAdmissionPolicyV1::new(vec![algorithm])
                     .unwrap()
                     .into_parameter()
@@ -1115,8 +1114,7 @@ fn admissibility_retains_original_committed_policy_and_limits_across_publication
             )
             .unwrap();
         block
-            .parameters
-            .set_parameter(Parameter::Transaction(TransactionParameter::MaxTxBytes(
+            .set_parameter_for_testing(Parameter::Transaction(TransactionParameter::MaxTxBytes(
                 NonZeroU64::new(max_bytes).unwrap(),
             )))
             .unwrap();
@@ -1170,8 +1168,7 @@ fn admissibility_defers_missing_original_policy_after_later_policy_publication()
     let original_view = state.view();
     let mut block = state.world.block();
     block
-        .parameters
-        .set_parameter(
+        .set_parameter_for_testing(
             CryptoAdmissionPolicyV1::new(vec![Algorithm::Ed25519])
                 .unwrap()
                 .into_parameter()

@@ -266,6 +266,11 @@ impl ValidatorEpochBoundaryV1 {
 
 /// Validate the exact bounded equal-vote roster and every original proof.
 ///
+/// A proof of possession depends only on its exact key and proof bytes, so a verified pair
+/// stays verified. Every epoch-context check re-presents the same committee, several times per
+/// block; a bounded process-wide record of verified pairs spares those repeated pairings.
+/// Failures are never recorded.
+///
 /// # Errors
 /// Rejects invalid committee size, non-BLS identities, duplicates/order, or invalid proofs.
 pub fn validate_committee(members: &[ValidatorCommitteeMemberV1]) -> Result<(), String> {
@@ -287,14 +292,64 @@ pub fn validate_committee(members: &[ValidatorCommitteeMemberV1]) -> Result<(), 
         {
             return Err("native committee key order or proof shape is invalid".into());
         }
-        iroha_crypto::verify_bls_normal_pop_borrowed(
-            member.validator.public_key(),
-            &member.proof_of_possession,
-        )
-        .map_err(|error| error.into_error().to_string())?;
+        let pair = verified_pops::pair(key, &member.proof_of_possession);
+        if !verified_pops::contains(&pair) {
+            iroha_crypto::verify_bls_normal_pop_borrowed(
+                member.validator.public_key(),
+                &member.proof_of_possession,
+            )
+            .map_err(|error| error.into_error().to_string())?;
+            verified_pops::insert(pair);
+        }
         previous = Some(key);
     }
     Ok(())
+}
+
+mod verified_pops {
+    //! Bounded record of verified BLS proofs of possession: the exact 48-byte key and 96-byte
+    //! proof of each pair that verified. Only successful verifications enter it.
+
+    use std::sync::{Mutex, PoisonError};
+
+    /// The committees of several epochs at `MAX_VALIDATORS` seats each.
+    const CAPACITY: usize = 128;
+    const PAIR: usize = 48 + 96;
+
+    struct Ring {
+        pairs: [[u8; PAIR]; CAPACITY],
+        len: usize,
+        next: usize,
+    }
+
+    static VERIFIED: Mutex<Ring> = Mutex::new(Ring {
+        pairs: [[0; PAIR]; CAPACITY],
+        len: 0,
+        next: 0,
+    });
+
+    pub(super) fn pair(key: &[u8], proof: &[u8]) -> [u8; PAIR] {
+        let mut pair = [0_u8; PAIR];
+        pair[..48].copy_from_slice(key);
+        pair[48..].copy_from_slice(proof);
+        pair
+    }
+
+    pub(super) fn contains(pair: &[u8; PAIR]) -> bool {
+        let ring = VERIFIED.lock().unwrap_or_else(PoisonError::into_inner);
+        ring.pairs[..ring.len].contains(pair)
+    }
+
+    pub(super) fn insert(pair: [u8; PAIR]) {
+        let mut ring = VERIFIED.lock().unwrap_or_else(PoisonError::into_inner);
+        if ring.pairs[..ring.len].contains(&pair) {
+            return;
+        }
+        let next = ring.next;
+        ring.pairs[next] = pair;
+        ring.next = (next + 1) % CAPACITY;
+        ring.len = (ring.len + 1).min(CAPACITY);
+    }
 }
 
 /// Rank one already custody-eligible candidate for one exact E-to-E+2 election.

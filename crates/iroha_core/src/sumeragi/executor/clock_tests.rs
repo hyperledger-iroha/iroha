@@ -225,21 +225,32 @@ fn sccp_clock_chain() -> CertifiedTestChain {
         SumeragiNposParameters::default().into_custom_parameter(),
     ));
     config.genesis_block_cadence_ms = std::num::NonZeroU64::new(1_000).unwrap();
-    let mut nexus = iroha_config::parameters::actual::Nexus::default();
-    nexus.staking.unbonding_delay = Duration::from_millis(test_support::SCCP_UNBONDING_DELAY_MS);
-    nexus.staking.max_slash_bps = 10_000;
+    let mut staking = crate::sumeragi::test_chain::staking_fixture_policy(
+        SumeragiNposParameters::default().xor_asset_definition_id,
+    );
+    staking.unbonding_delay_ms =
+        crate::smartcontracts::isi::sccp::test_support::SCCP_UNBONDING_DELAY_MS;
+    staking.max_slash_bps = 10_000;
+    crate::smartcontracts::isi::sccp::forgery::tests::replace_original_staking_parameter(
+        &mut config,
+        &staking,
+    );
     let keys = crate::smartcontracts::isi::sccp::forgery::tests::keys();
     config.validator_keys = Some(keys.clone());
     crate::smartcontracts::isi::sccp::forgery::tests::register_genesis_members(
         &mut config,
         &keys,
-        &nexus.staking,
+        &staking,
     );
-    config.nexus = Some(nexus);
     config
         .genesis_instructions
         .push(test_support::SampleInstructions::initialize().into());
-    CertifiedTestChain::start(config).expect("actual SCCP Global NPoS genesis")
+    let chain = CertifiedTestChain::start(config).expect("actual SCCP Global NPoS genesis");
+    assert_eq!(
+        chain.state().view().world().parameters().staking_policy(),
+        Some(&staking)
+    );
+    chain
 }
 
 #[test]

@@ -377,7 +377,7 @@ fn private_key(
         SigningKey::from_pkcs8_der(&original),
         "P256 private custody rejected",
     )?;
-    if key.verifying_key().to_encoded_point(false).as_bytes() != expected.as_sec1_bytes() {
+    if key.verifying_key().to_sec1_point(false).as_bytes() != expected.as_sec1_bytes() {
         return Err(invalid(
             "private custody differs from independent public role",
         ));

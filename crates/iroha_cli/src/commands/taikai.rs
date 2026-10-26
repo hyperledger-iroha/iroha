@@ -33,9 +33,9 @@ use norito::{
     json::{self, JsonSerialize, Map, Value},
 };
 use rand::{
-    Rng, SeedableRng,
+    RngExt, SeedableRng,
     rand_core::TryCryptoRng,
-    rngs::{OsRng, StdRng},
+    rngs::{StdRng, SysRng},
 };
 use sorafs_car::{
     taikai::{
@@ -813,7 +813,7 @@ fn build_cek_hkdf_salt(explicit: Option<&str>) -> Result<[u8; 32]> {
     Ok(salt)
 }
 fn random_cek_hkdf_salt() -> Result<[u8; 32]> {
-    random_cek_hkdf_salt_with_rng(&mut OsRng)
+    random_cek_hkdf_salt_with_rng(&mut SysRng)
 }
 fn random_cek_hkdf_salt_with_rng<R: TryCryptoRng>(rng: &mut R) -> Result<[u8; 32]> {
     let mut salt = [0u8; 32];
@@ -2077,15 +2077,13 @@ impl EdgeSummary {
     }
 }
 fn build_edge_rng(seed: Option<u64>) -> Result<StdRng> {
-    seed.map_or_else(
-        || {
-            StdRng::try_from_os_rng()
-                .map_err(|err| eyre!("failed to seed Taikai edge drift RNG from OS entropy: {err}"))
-        },
-        |seed| Ok(StdRng::seed_from_u64(seed)),
-    )
+    match seed {
+        Some(seed) => Ok(StdRng::seed_from_u64(seed)),
+        None => StdRng::try_from_rng(&mut rand::rngs::SysRng)
+            .map_err(|err| eyre!("failed to seed Taikai edge drift RNG from OS entropy: {err}")),
+    }
 }
-fn jittered_drift<R: Rng + ?Sized>(base: i32, jitter_ms: u32, rng: &mut R) -> i32 {
+fn jittered_drift<R: RngExt + ?Sized>(base: i32, jitter_ms: u32, rng: &mut R) -> i32 {
     if jitter_ms == 0 {
         return base;
     }
@@ -2996,7 +2994,7 @@ impl ExtensionMatcher {
 mod tests {
     use super::*;
     use iroha::data_model::taikai::TaikaiTrackKind;
-    use rand::RngCore as _;
+    use rand::Rng as _;
     use std::{fs, path::Path};
 
     fn policy_output_tempdir() -> tempfile::TempDir {
@@ -3019,7 +3017,7 @@ mod tests {
     }
     impl std::error::Error for FailingTryRngError {}
     struct FailingTryRng;
-    impl rand::rand_core::TryRngCore for FailingTryRng {
+    impl rand::rand_core::TryRng for FailingTryRng {
         type Error = FailingTryRngError;
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             Err(FailingTryRngError)

@@ -54,14 +54,19 @@ impl HotPathFixture {
         };
         metadata.validate().expect("benchmark root metadata");
         {
-            let mut parameters = world.parameters.block();
-            parameters
-                .set_parameter(Parameter::Custom(CustomParameter::new(
+            let budget = world.sccp_committee_generations.allocation_budget();
+            let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
+                .expect("admitted parameter-only fixture block");
+            crate::state::set_parameter_cell_for_testing(
+                &mut parameters,
+                Parameter::Custom(CustomParameter::new(
                     consensus_metadata::handshake_meta_id(),
                     Json::from_norito_value_ref(&norito::json::value::to_value(&metadata).unwrap())
                         .unwrap(),
-                )))
-                .expect("install benchmark root metadata");
+                )),
+                budget,
+            )
+            .expect("install benchmark root metadata");
             parameters.commit();
         }
         let state = Arc::new(State::new_for_testing(

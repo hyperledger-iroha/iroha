@@ -31,7 +31,7 @@ use crate::secret::SecretPolynomial;
 use ff::Field;
 use iroha_pasta::CancellationToken;
 use iroha_pasta::{PastaCurve, PastaField, msm::MemoryBudget};
-use rand_core_06::RngCore;
+use rand_core::Rng;
 
 use super::{
     ProverError, batch::invert_column_cancellable, quotient::CompiledExpressions, random_values,
@@ -118,7 +118,7 @@ pub(super) trait LookupPermutation<F> {
     /// # Errors
     ///
     /// [`ProverError::LookupInputMissing`] when no permutation exists.
-    fn permute<R: RngCore>(
+    fn permute<R: Rng>(
         &mut self,
         input: &[F],
         table: &[F],
@@ -136,7 +136,7 @@ pub(super) struct VendoredPermutation;
 impl<F: PastaField> LookupPermutation<F> for VendoredPermutation {
     const PUBLIC_TABLE_BOUND: bool = true;
 
-    fn permute<R: RngCore>(
+    fn permute<R: Rng>(
         &mut self,
         input: &[F],
         table: &[F],
@@ -157,7 +157,7 @@ impl<F: PastaField> LookupPermutation<F> for VendoredPermutation {
 ///
 /// [`ProverError::LookupInputMissing`] when an input value is not in the
 /// table.
-pub(super) fn permute<F: PastaField, R: RngCore>(
+pub(super) fn permute<F: PastaField, R: Rng>(
     input: &[F],
     table: &[F],
     usable_rows: usize,
@@ -308,7 +308,7 @@ pub(super) fn commit_permuted<C, T, R, P>(
 where
     C: PastaCurve,
     T: TranscriptWrite<C>,
-    R: RngCore,
+    R: Rng,
     P: LookupPermutation<C::ScalarExt>,
 {
     if shape.lookups == 0 {
@@ -413,7 +413,7 @@ pub(super) fn commit_products<C, T, R>(
 where
     C: PastaCurve,
     T: TranscriptWrite<C>,
-    R: RngCore,
+    R: Rng,
 {
     let tables = pk.commitment_tables();
     let u = shape.usable_rows;
@@ -496,7 +496,7 @@ mod tests {
 
     use iroha_pasta::{Ep, Eq, Fp, Fq};
     use rand_chacha::ChaCha20Rng;
-    use rand_core_06::{RngCore, SeedableRng};
+    use rand_core::{Rng, SeedableRng};
 
     use super::*;
     use crate::{

@@ -140,7 +140,7 @@ fn raw(r: &[u8; 32], s: &[u8; 32]) -> [u8; 64] {
 fn key(seed: u8) -> (SigningKey, KagemushaDevicePublicKeyV1) {
     let signing = SigningKey::from_bytes((&[seed; 32]).into()).expect("fixed scalar");
     let public = KagemushaDevicePublicKeyV1::from_sec1_bytes(
-        signing.verifying_key().to_encoded_point(false).as_bytes(),
+        signing.verifying_key().to_sec1_point(false).as_bytes(),
     )
     .expect("canonical key");
     (signing, public)

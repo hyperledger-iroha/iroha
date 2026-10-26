@@ -343,6 +343,15 @@ where
 
 #[cfg(test)]
 pub(crate) mod test_support;
+// The same software-key simulator for iroha_core's ignored genuine-proof acceptance, through
+// the non-shipping `kagemusha-simulator` feature only.
+#[cfg(all(not(test), feature = "kagemusha-simulator"))]
+pub mod test_support;
+
+#[cfg(test)]
+pub(crate) mod engineering_fixture;
+#[cfg(all(not(test), feature = "kagemusha-simulator"))]
+pub mod engineering_fixture;
 
 #[cfg(test)]
 mod enrollment_inventory_tests;

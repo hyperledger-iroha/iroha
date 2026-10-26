@@ -86,6 +86,38 @@ def test_checked_in_manifest_exhaustively_maps_locked_workspace() -> None:
     assert len(packages) == sum(len(packages) for packages in manifest.lanes.values())
 
 
+def test_every_active_vendor_patch_routes_to_workspace_validation() -> None:
+    """Each patched source owner selects its package closure or the full workspace."""
+
+    metadata = rust_ci.load_cargo_metadata(root=ROOT)
+    manifest = rust_ci.load_lane_manifest()
+    packages = rust_ci.workspace_packages(metadata, root=ROOT)
+    root_manifest = rust_ci.tomllib.loads((ROOT / "Cargo.toml").read_text())
+    patches = root_manifest["patch"]["crates-io"]
+    assert patches
+    for patch in patches.values():
+        directory = patch["path"]
+        assert directory.startswith("vendor/")
+        result = rust_ci.classify_paths(
+            [f"{directory}/Cargo.toml"],
+            metadata=metadata, manifest=manifest, root=ROOT,
+        )
+        owners = {
+            package.name for package in packages.values()
+            if str(package.directory) == directory
+        }
+        if owners:
+            assert not result.full
+            assert set(result.changed_packages) == owners
+            assert owners <= set(result.impacted_packages)
+        else:
+            # Excluded upstream packages cannot disappear through a prose/ignore
+            # rule: their vendor source changes require every workspace lane.
+            assert result.full
+            assert set(result.impacted_packages) == set(packages)
+
+
+
 @pytest.mark.parametrize("relative_path", ("src/lib.rs", "Cargo.toml"))
 def test_plonk_recursion_owner_selects_real_proof_consumers(relative_path: str) -> None:
     """Recursion changes retain the actual proof consumers in execution checks."""
@@ -1206,6 +1238,43 @@ def test_run_checks_forwards_exact_workspace_feature_matrix_without_children(tmp
     assert "--all-targets" in calls[0][0] and "--no-deps" in calls[1][0]
 
 
+@pytest.mark.parametrize("dry_run", (False, True))
+def test_local_checks_share_the_existing_wrapper_without_changing_feature_coverage(
+    tmp_path: Path, monkeypatch, capsys, dry_run: bool,
+) -> None:
+    """Local checks reuse one target and preserve each check's exact feature policy."""
+    root = _feature_workspace(tmp_path, 'default = ["governance"]\ngovernance = []\n')
+    checks = ("clippy", "build", "test")
+    commands = rust_ci.commands_for_checks(
+        ("iroha_data_model",), checks,
+        features_by_package=rust_ci.workspace_check_features(root),
+    )
+    calls = []
+    monkeypatch.setattr(rust_ci, "_run", lambda command, **kwargs: calls.append((command, kwargs)))
+    rust_ci.run_checks(("iroha_data_model",), checks, root=root, local=True, dry_run=dry_run)
+    output = capsys.readouterr().out
+    expected_prefix = [str(root / "scripts/cargo_fast.sh"),
+                       "--stable-local-metadata", "--incremental", "--"]
+    if dry_run:
+        assert not calls
+        assert output.count(str(root / "scripts/cargo_fast.sh")) == len(checks)
+    else:
+        assert [command for command, _ in calls] == [
+            [*expected_prefix, *command[1:]] for command in commands
+        ]
+        assert all(kwargs == {"cwd": root, "capture_output": False} for _, kwargs in calls)
+    assert "--target-dir" not in output and "--target-slot" not in output
+
+
+def test_local_check_cli_selects_the_local_runner(monkeypatch) -> None:
+    """The contributor entry point opts in without changing other callers."""
+    calls = []
+    monkeypatch.setattr(rust_ci, "run_checks", lambda *args, **kwargs: calls.append((args, kwargs)))
+    assert rust_ci.main(["run", "--local", "--packages", "iroha_core", "--checks", "test"]) == 0
+    assert calls == [((("iroha_core",), ("test",)),
+                     {"dry_run": False, "workspace": False, "local": True})]
+
+
 def test_feature_matrix_includes_target_optional_edges_and_suppresses_dep_globally(tmp_path: Path) -> None:
     root = _feature_workspace(tmp_path, 'default = []\nunused = ["dep:hidden"]\n')
     manifest = root / "model/Cargo.toml"
@@ -1253,7 +1322,7 @@ def test_explicit_valid_package_selection_preserves_exact_check_owners(raw, monk
     monkeypatch.setattr(rust_ci, "run_checks", lambda *args, **kwargs: calls.append((args, kwargs)))
     assert rust_ci.main(["run", "--packages", raw, "--checks", "test"]) == 0
     expected = tuple(sorted({package.strip() for package in raw.split(",")}))
-    assert calls == [((expected, ("test",)), {"dry_run": False, "workspace": False})]
+    assert calls == [((expected, ("test",)), {"dry_run": False, "workspace": False, "local": False})]
 
 
 @pytest.mark.parametrize("raw", ("", " ", ","))

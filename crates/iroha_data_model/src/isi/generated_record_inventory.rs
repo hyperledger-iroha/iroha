@@ -3,18 +3,16 @@
 use super::check;
 use crate::{
     account::Account,
-    asset::AssetDefinitionId,
-    asset::{Asset, AssetDefinition},
+    asset::{Asset, AssetDefinition, AssetDefinitionId},
     domain::Domain,
     isi::{Burn, Grant, Mint, Register, RemoveKeyValue, Revoke, SetKeyValue, Transfer, Unregister},
     nft::{Nft, NftId},
-    peer::Peer,
     permission::Permission,
     role::{Role, RoleId},
     rwa::Rwa,
     trigger::Trigger,
 };
-use iroha_model_base::domain::DomainId;
+use iroha_model_base::{domain::DomainId, peer::Peer};
 use iroha_primitives::numeric::Quantity;
 
 macro_rules! record {

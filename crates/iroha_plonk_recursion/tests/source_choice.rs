@@ -2,7 +2,7 @@
 //! omitted transcript metadata or witness-dependent circuit shape.
 
 use ff::{Field, PrimeField};
-use group::prime::PrimeCurveAffine;
+use group::CurveAffine;
 use iroha_pasta::{Ep, Eq, PastaCurve, msm::MemoryBudget, poseidon::PoseidonField};
 use iroha_plonk::{
     check::{CheckMode, check},

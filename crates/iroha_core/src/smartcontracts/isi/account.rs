@@ -13,14 +13,16 @@ fn account_fixture_state(
     kura: std::sync::Arc<crate::kura::Kura>,
     query_handle: crate::query::store::LiveQueryStoreHandle,
 ) -> crate::state::State {
-    let mut parameters = world.parameters.block();
-    parameters
-        .set_parameter(
-            crate::sumeragi::test_chain::crypto_fixture_policy()
-                .into_parameter()
-                .expect("canonical account fixture crypto policy"),
-        )
-        .expect("install the account fixture's original crypto policy");
+    let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
+        .expect("funded component parameter fixture");
+    crate::state::set_parameter_cell_for_testing(
+        &mut parameters,
+        crate::sumeragi::test_chain::crypto_fixture_policy()
+            .into_parameter()
+            .expect("canonical account fixture crypto policy"),
+        world.sccp_committee_generations.allocation_budget(),
+    )
+    .expect("install the account fixture's original crypto policy");
     parameters.commit();
     crate::state::State::new(world, kura, query_handle)
 }

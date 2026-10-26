@@ -82,6 +82,14 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
     /// Pending, unavailable/uncertain custody, no released head, missing witnesses, invalid
     /// proof, source changes and underflow return errors without any monetary projection.
     pub fn snapshot(&mut self) -> Result<Snapshot, Error> {
+        self.snapshot_selected().map(|(snapshot, _, _)| snapshot)
+    }
+
+    /// Read current operation kind and capsule under the same source/proof fences as its snapshot.
+    /// This internal observation grants no dispatch permission across another call.
+    pub(super) fn snapshot_selected(
+        &mut self,
+    ) -> Result<(Snapshot, KagemushaWalletOperationKindV1, [u8; 32]), Error> {
         let (manifest_digest, manifest) = self.sync_manifest()?;
         let status = self.status()?;
         let SlotStatus::Released(marker) = &status else {
@@ -234,6 +242,6 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
         if self.status()? != status {
             return Err(Error::WitnessLost("snapshot source marker changed"));
         }
-        Ok(snapshot)
+        Ok((snapshot, capsule.body().kind, capsule_digest))
     }
 }

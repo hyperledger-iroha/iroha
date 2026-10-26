@@ -14,12 +14,12 @@ fn proof_verified_filter_uri() -> String {
         iroha_torii::json_entry("op", "and"),
         iroha_torii::json_entry(
             "args",
-            iroha_torii::json_array(vec![
+            &iroha_torii::json_array(vec![
                 iroha_torii::json_object(vec![
                     iroha_torii::json_entry("op", "eq"),
                     iroha_torii::json_entry(
                         "args",
-                        iroha_torii::json_array(vec![
+                        &iroha_torii::json_array(vec![
                             json::Value::from("proof_backend"),
                             json::Value::from("pipa-r/pasta"),
                         ]),
@@ -29,7 +29,7 @@ fn proof_verified_filter_uri() -> String {
                     iroha_torii::json_entry("op", "eq"),
                     iroha_torii::json_entry(
                         "args",
-                        iroha_torii::json_array(vec![
+                        &iroha_torii::json_array(vec![
                             json::Value::from("proof_call_hash"),
                             json::Value::from(
                                 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",

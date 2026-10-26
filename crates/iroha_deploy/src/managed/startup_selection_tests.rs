@@ -12,6 +12,7 @@ fn ready(context: &ManagedContext) -> ManagedStatus {
         phase: ManagedPhase::Ready,
         running_peers: 4,
         failure: None,
+        validators: Vec::new(),
     }
 }
 
@@ -68,6 +69,7 @@ fn startup_selection_refuses_expiry_and_nonready_before_publication() {
                 phase,
                 running_peers: 0,
                 failure: None,
+                validators: Vec::new(),
             };
             let result = StartupSelection::Select
                 .apply(&store, &prepared.context, || {

@@ -14,10 +14,8 @@
     clippy::unreadable_literal
 )]
 use core::array;
-use sha3::{
-    Shake128, Shake256,
-    digest::{ExtendableOutput, Update, XofReader},
-};
+use sha3::digest::{ExtendableOutput, Update, XofReader};
+use shake::{Shake128, Shake256};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 const N: usize = 256;
 const Q: i32 = 8_380_417;

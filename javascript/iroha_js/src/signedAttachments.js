@@ -1,6 +1,6 @@
 /** Canonical bounded signed attachment descriptors, separate from transaction admission. */
 import { Buffer } from "buffer";
-import { blake3 } from "@noble/hashes/blake3";
+import { blake3 } from "@noble/hashes/blake3.js";
 import {
   BufferReader, decodeAccountIdValue, encodeAccountIdValue,
   decodeExactStandardBase64, decodeNoritoVec, decodeStructFields, decodeU32Value,

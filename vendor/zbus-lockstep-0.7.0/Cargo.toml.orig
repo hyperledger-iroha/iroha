@@ -1,0 +1,52 @@
+[package]
+name = "zbus-lockstep"
+authors = [
+    "Luuk van der Duim <luukvanderduim@gmail.com>",
+    "Tait Hoyem<tait@tait.tech>",
+]
+description = "Keep types in lockstep with DBus XML definitions"
+version = "0.7.0"
+edition.workspace = true
+keywords = ["type-safety", "zbus", "DBus", "IPC"]
+documentation = "https://docs.rs/zbus-lockstep"
+repository = "https://github.com/luukvanderduim/zbus-lockstep"
+readme = "README.md"
+license = "MIT"
+include = ["src/**/*", "LICENSE-MIT", "README.md"]
+rust-version.workspace = true
+publish = true
+
+[badges.maintenance]
+status = "actively-developed"
+
+[features]
+macros = ["dep:zbus-lockstep-macros"]
+
+[dependencies]
+zbus_xml = { workspace = true }
+zvariant = { workspace = true }
+zbus-lockstep-macros = { path = "../zbus-lockstep-macros", version = "0.7.0", optional = true }
+
+[dev-dependencies]
+tempfile = "3.27.0"
+version-sync = { workspace = true }
+
+
+[package.metadata.release]
+# Run git-cliff once during the release of the main crate:
+pre-release-hook = ["git-cliff", "--config", "../cliff.toml", "--unreleased", "--tag", "v{{version}}", "--prepend", "../CHANGELOG.md"]
+
+[[package.metadata.release.pre-release-replacements]]
+file = "src/lib.rs"
+search = 'html_root_url = "https://docs.rs/zbus-lockstep/[0-9.]+"'
+replace = 'html_root_url = "https://docs.rs/zbus-lockstep/{{version}}"'
+
+[[package.metadata.release.pre-release-replacements]]
+file = "../README.md"
+search = 'zbus-lockstep = \{ version = "[0-9.]+"' # Ontsnap de { met \{ voor regex!
+replace = 'zbus-lockstep = { version = "{{version}}"'
+
+[[package.metadata.release.pre-release-replacements]]
+file = "README.md"
+search = 'zbus-lockstep = "[0-9.]+"'
+replace = 'zbus-lockstep = "{{version}}"'

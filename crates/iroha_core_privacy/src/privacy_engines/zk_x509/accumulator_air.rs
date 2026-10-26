@@ -11,14 +11,12 @@
 //! adapter parses the complete signed CRL and proves the leaf serial differs
 //! from every canonical entry, while the shared SHA adapter binds the exact
 //! signed-DER and governance-record commitments.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::private_table::{PrivateTableV1, zeroize_words_v1};
 
 use super::merkle::{
     ZK_X509_CA_COMPACT_TREE_CAPACITY_V1, ZK_X509_CA_COMPACT_TREE_DEPTH_V1,
     ZK_X509_CA_SPKI_DER_BYTES_V1,
 };
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::{
     merkle::{
         ZkX509CaMembershipPathV1, ZkX509MerkleErrorV1, ca_leaf_preimage_v1, ca_leaf_v1,
@@ -26,7 +24,6 @@ use super::{
     },
     sha_call_bus_stark::{ZkX509ShaCallRoleV1, ZkX509ShaCallWitnessV1},
 };
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 use crate::privacy_engines::transparent_stark::GoldilocksFieldV1 as F;
 use thiserror::Error;
 /// Thirteen hash rows plus 91 serialized SPKI bytes, padded to log twelve with the complete cross-proof mask closure.
@@ -67,14 +64,12 @@ const _: () = {
     assert!(CA_IO_BYTE_BITS_START + 8 == ZK_X509_CA_ACCUMULATOR_BASE_WIDTH_V1);
 };
 /// Public statement selected by the verifier.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ZkX509CaAccumulatorStatementV1 {
     /// Governed compact trust-anchor root.
     pub(crate) governed_root: [u8; 32],
 }
 /// Exact private compact membership witness.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ZkX509CaAccumulatorWitnessV1 {
     /// Exact canonical root-certificate SPKI DER.
@@ -123,7 +118,6 @@ impl ZkX509CaAccumulatorFixedRowV1 {
         )
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct CaAccumulatorRowV1 {
     current: [u8; 32],
@@ -136,16 +130,13 @@ struct CaAccumulatorRowV1 {
     io_byte: u8,
     io_word_acc: u32,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Default for CaAccumulatorRowV1 {
     fn default() -> Self {
         Self::padding()
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl zeroize::DefaultIsZeroes for CaAccumulatorRowV1 {}
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl CaAccumulatorRowV1 {
     const fn padding() -> Self {
         Self {
@@ -203,7 +194,6 @@ impl CaAccumulatorRowV1 {
     }
 }
 /// Complete compact accumulator witness and canonical SHA calls.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, PartialEq, Eq)]
 pub struct ZkX509CaAccumulatorTraceV1 {
     /// Verifier-bound governed root.
@@ -214,7 +204,6 @@ pub struct ZkX509CaAccumulatorTraceV1 {
     /// Leaf then twelve node calls, in the shared schedule's exact order.
     pub(crate) hash_witnesses: [ZkX509ShaCallWitnessV1; ZK_X509_CA_ACCUMULATOR_ACTIVE_ROWS_V1],
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl core::fmt::Debug for ZkX509CaAccumulatorTraceV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -224,13 +213,11 @@ impl core::fmt::Debug for ZkX509CaAccumulatorTraceV1 {
             .finish_non_exhaustive()
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for ZkX509CaAccumulatorTraceV1 {
     fn drop(&mut self) {
         self.zeroize_private_v1();
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ZkX509CaAccumulatorTraceV1 {
     /// Overwrite the private path, derived row state, and all SHA preimages.
     pub(crate) fn zeroize_private_v1(&mut self) {
@@ -298,26 +285,21 @@ pub enum ZkX509AccumulatorAirErrorV1 {
     #[error("zk-X509 compact CA accumulator topology is invalid")]
     Topology,
     /// The private sorted-leaf index is not twelve-bit.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error("zk-X509 compact CA accumulator index is invalid")]
     Index,
     /// The exact root SPKI or canonical hash frame is invalid.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error("zk-X509 compact CA accumulator hash input is invalid")]
     HashInput,
     /// The private path does not terminate at the governed root.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error("zk-X509 compact CA accumulator root is invalid")]
     Root,
     /// A Boolean, range, transition, selection, or padding identity failed.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error("zk-X509 compact CA accumulator constraint is invalid")]
     Constraint,
     /// A fixed conversion or bounded allocation failed.
     #[error("zk-X509 compact CA accumulator resource bound is exceeded")]
     Resource,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl From<ZkX509MerkleErrorV1> for ZkX509AccumulatorAirErrorV1 {
     fn from(error: ZkX509MerkleErrorV1) -> Self {
         match error {
@@ -353,7 +335,6 @@ pub fn ca_accumulator_fixed_row_v1(
     })
 }
 /// Compile and validate the sole compact membership trace.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub fn build_ca_accumulator_trace_v1(
     statement: ZkX509CaAccumulatorStatementV1,
     witness: &ZkX509CaAccumulatorWitnessV1,
@@ -362,7 +343,6 @@ pub fn build_ca_accumulator_trace_v1(
     validate_ca_arithmetic_v1(&trace)?;
     Ok(trace)
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn compile_ca_accumulator_trace_v1(
     statement: ZkX509CaAccumulatorStatementV1,
     witness: &ZkX509CaAccumulatorWitnessV1,
@@ -481,7 +461,6 @@ fn compile_ca_accumulator_trace_v1(
 ///
 /// SHA compression is intentionally external: the proof-facing adapter adds
 /// four-lane call-product transitions to these identities.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub fn evaluate_ca_accumulator_base_constraints_v1(
     fixed: ZkX509CaAccumulatorFixedRowV1,
     row: &[F; ZK_X509_CA_ACCUMULATOR_BASE_WIDTH_V1],
@@ -631,7 +610,6 @@ pub fn evaluate_ca_accumulator_base_constraints_v1(
     );
     residues
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn validate_ca_arithmetic_v1(
     trace: &ZkX509CaAccumulatorTraceV1,
 ) -> Result<(), ZkX509AccumulatorAirErrorV1> {
@@ -654,14 +632,12 @@ fn validate_ca_arithmetic_v1(
     }
     Ok(())
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn write_bytes_v1(target: &mut [F], bytes: &[u8]) {
     debug_assert_eq!(target.len(), bytes.len());
     for (target, byte) in target.iter_mut().zip(bytes.iter().copied()) {
         *target = F(u64::from(byte));
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn write_byte_bits_v1(target: &mut [F], bytes: &[u8]) {
     debug_assert_eq!(target.len(), bytes.len() * 8);
     for (byte_index, byte) in bytes.iter().copied().enumerate() {
@@ -670,13 +646,11 @@ fn write_byte_bits_v1(target: &mut [F], bytes: &[u8]) {
         }
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn pack_little_bits_v1(bits: &[F]) -> F {
     bits.iter().enumerate().fold(F::ZERO, |value, (bit, cell)| {
         value.add(cell.mul(F(1_u64 << bit)))
     })
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn byte_fields_v1(bytes: [u8; 32]) -> [F; 32] {
     bytes.map(|byte| F(u64::from(byte)))
 }

@@ -207,7 +207,7 @@ pub async fn heights_until(
     deadline: Instant,
 ) -> Result<Vec<u64>> {
     ensure!(
-        iroha_data_model::block::consensus::is_valid_committee_size(clients.len()),
+        iroha_model_base::topology::is_valid_committee_size(clients.len()),
         "committee status requires an exact bounded voter roster"
     );
     ensure!(

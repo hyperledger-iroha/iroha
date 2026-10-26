@@ -10,7 +10,7 @@ public sealed class SoraFsReferenceValidatorsTests
     [Fact]
     public void GovernanceReferenceConstantsMatchNativeAbi()
     {
-        Assert.Equal(31u, SoraFsReferenceValidators.RequiredBridgeAbiVersion);
+        Assert.Equal(33u, SoraFsReferenceValidators.RequiredBridgeAbiVersion);
         Assert.Equal(-114, SoraFsReferenceValidators.BridgeReferenceError);
         Assert.Equal(67_108_864, SoraFsReferenceValidators.MaxInputBytesV1);
         Assert.Equal(1_024, SoraFsReferenceValidators.MaxLabelBytesV1);
@@ -33,6 +33,8 @@ public sealed class SoraFsReferenceValidatorsTests
             new FakeNativeBoundary { Abi = 20 }));
         Assert.False(SoraFsReferenceValidators.IsAvailable(
             new FakeNativeBoundary { Abi = 23 }));
+        Assert.False(SoraFsReferenceValidators.IsAvailable(
+            new FakeNativeBoundary { Abi = 32 }));
         Assert.False(SoraFsReferenceValidators.IsAvailable(
             new FakeNativeBoundary { Abi = SoraFsReferenceValidators.RequiredBridgeAbiVersion + 1 }));
         Assert.False(SoraFsReferenceValidators.IsAvailable(
@@ -58,6 +60,8 @@ public sealed class SoraFsReferenceValidatorsTests
         Assert.False(SoraFsReferenceValidators.IsAppealFinanceAvailable(
             new FakeNativeBoundary { Abi = 23 }));
         Assert.False(SoraFsReferenceValidators.IsAppealFinanceAvailable(
+            new FakeNativeBoundary { Abi = 32 }));
+        Assert.False(SoraFsReferenceValidators.IsAppealFinanceAvailable(
             new FakeNativeBoundary { Abi = SoraFsReferenceValidators.RequiredBridgeAbiVersion + 1 }));
         Assert.False(SoraFsReferenceValidators.IsAppealFinanceAvailable(
             new FakeNativeBoundary { AppealFinanceSymbolsAvailable = false }));
@@ -80,6 +84,8 @@ public sealed class SoraFsReferenceValidatorsTests
         Assert.False(SoraFsReferenceValidators.IsOrderbookPdpAvailable(
             new FakeNativeBoundary { Abi = 23 }));
         Assert.False(SoraFsReferenceValidators.IsOrderbookPdpAvailable(
+            new FakeNativeBoundary { Abi = 32 }));
+        Assert.False(SoraFsReferenceValidators.IsOrderbookPdpAvailable(
             new FakeNativeBoundary { Abi = SoraFsReferenceValidators.RequiredBridgeAbiVersion + 1 }));
         Assert.False(SoraFsReferenceValidators.IsOrderbookPdpAvailable(
             new FakeNativeBoundary { OrderbookPdpSymbolsAvailable = false }));
@@ -101,6 +107,8 @@ public sealed class SoraFsReferenceValidatorsTests
             new FakeNativeBoundary { Abi = 20 }));
         Assert.False(SoraFsReferenceValidators.IsFixtureBundleAvailable(
             new FakeNativeBoundary { Abi = 23 }));
+        Assert.False(SoraFsReferenceValidators.IsFixtureBundleAvailable(
+            new FakeNativeBoundary { Abi = 32 }));
         Assert.False(SoraFsReferenceValidators.IsFixtureBundleAvailable(
             new FakeNativeBoundary { Abi = SoraFsReferenceValidators.RequiredBridgeAbiVersion + 1 }));
         Assert.False(SoraFsReferenceValidators.IsFixtureBundleAvailable(
@@ -589,18 +597,21 @@ public sealed class SoraFsReferenceValidatorsTests
                 native));
         Assert.Equal(0, native.BlockCalls);
 
-        native.Abi = 20;
-        var abiError = Assert.Throws<InvalidOperationException>(() =>
-            SoraFsReferenceValidators.ValidateGovernanceDagBlockJson(
-                new byte[] { 1 },
-                "block.to",
-                null,
-                0,
-                native));
-        Assert.Contains("ABI 31", abiError.Message, StringComparison.Ordinal);
-        Assert.Equal(0, native.BlockCalls);
+        foreach (var abi in new uint[] { 20, 32, 34 })
+        {
+            native.Abi = abi;
+            var abiError = Assert.Throws<InvalidOperationException>(() =>
+                SoraFsReferenceValidators.ValidateGovernanceDagBlockJson(
+                    new byte[] { 1 },
+                    "block.to",
+                    null,
+                    0,
+                    native));
+            Assert.Contains("ABI 33", abiError.Message, StringComparison.Ordinal);
+            Assert.Equal(0, native.BlockCalls);
+        }
 
-        native.Abi = 31;
+        native.Abi = SoraFsReferenceValidators.RequiredBridgeAbiVersion;
         native.SymbolsAvailable = false;
         var symbolError = Assert.Throws<InvalidOperationException>(() =>
             SoraFsReferenceValidators.ValidateGovernanceDagBlockJson(
@@ -734,7 +745,7 @@ public sealed class SoraFsReferenceValidatorsTests
     {
         Assert.True(
             SoraFsReferenceValidators.IsFixtureBundleAvailable(),
-            "ABI-31 connect_norito_bridge with fixture-bundle symbol is required.");
+            "ABI-33 connect_norito_bridge with fixture-bundle symbol is required.");
 
         var fixtureRoot = Path.Combine(
             AppContext.BaseDirectory,
@@ -779,7 +790,7 @@ public sealed class SoraFsReferenceValidatorsTests
     {
         Assert.True(
             SoraFsReferenceValidators.IsOrderbookPdpAvailable(),
-            "ABI-31 connect_norito_bridge with orderbook/PDP symbols is required.");
+            "ABI-33 connect_norito_bridge with orderbook/PDP symbols is required.");
 
         var orderbookRoot = Path.Combine(
             AppContext.BaseDirectory,
@@ -911,7 +922,7 @@ public sealed class SoraFsReferenceValidatorsTests
     {
         Assert.True(
             SoraFsReferenceValidators.IsAppealFinanceAvailable(),
-            "ABI-31 appeal-finance reference bridge is required.");
+            "ABI-33 appeal-finance reference bridge is required.");
         var fixtureRoot = Path.Combine(
             AppContext.BaseDirectory,
             "Fixtures",
@@ -1006,7 +1017,7 @@ public sealed class SoraFsReferenceValidatorsTests
     {
         Assert.True(
             SoraFsReferenceValidators.IsOrderbookPdpAvailable(),
-            "ABI-31 connect_norito_bridge with orderbook/PDP symbols is required.");
+            "ABI-33 connect_norito_bridge with orderbook/PDP symbols is required.");
         var privateKey = Enumerable.Repeat((byte)0xb7, 32).ToArray();
         var owner = Encoding.UTF8.GetBytes("buyer@sora");
         var orderId = SoraFsReferenceValidators.DeriveOrderbookOrderId(owner, 7);
@@ -1086,7 +1097,7 @@ public sealed class SoraFsReferenceValidatorsTests
     {
         Assert.True(
             SoraFsReferenceValidators.IsAvailable(),
-            "ABI-31 connect_norito_bridge with governance reference symbols is required.");
+            "ABI-33 connect_norito_bridge with governance reference symbols is required.");
 
         var fixtureRoot = Path.Combine(
             AppContext.BaseDirectory,
@@ -1121,7 +1132,7 @@ public sealed class SoraFsReferenceValidatorsTests
     {
         Assert.True(
             SoraFsReferenceValidators.IsAvailable(),
-            "ABI-31 connect_norito_bridge with Governance DAG symbols is required.");
+            "ABI-33 connect_norito_bridge with Governance DAG symbols is required.");
 
         var fixtureRoot = Path.Combine(
             AppContext.BaseDirectory,
@@ -1405,7 +1416,7 @@ public sealed class SoraFsReferenceValidatorsTests
     {
         private readonly HashSet<IntPtr> allocations = new();
 
-        internal uint Abi { get; set; } = 31;
+        internal uint Abi { get; set; } = SoraFsReferenceValidators.RequiredBridgeAbiVersion;
 
         internal Exception? AbiError { get; set; }
 

@@ -90,7 +90,7 @@ pub(super) fn signer(credential: &KagemushaWalletCredentialV1) -> SigningKey {
         )
         .expect("key");
         let public = KagemushaDevicePublicKeyV1::from_sec1_bytes(
-            signing.verifying_key().to_encoded_point(false).as_bytes(),
+            signing.verifying_key().to_sec1_point(false).as_bytes(),
         )
         .expect("public");
         if public == credential.body.payment_key {
@@ -833,7 +833,7 @@ impl Custody for TestCustody {
         let message =
             kagemusha_wallet_signing_message_v1(KagemushaWalletSigningDomainV1::Receipt, &body);
         let signature: Signature = signing.sign(&message);
-        let signature = signature.normalize_s().unwrap_or(signature);
+        let signature = signature.normalize_s();
         let signature =
             KagemushaDeviceSignatureV1::from_raw_bytes(&signature.to_bytes()).expect("signature");
         self.signatures += 1;
@@ -869,6 +869,7 @@ pub(super) struct TestProofs {
     verifies: Arc<AtomicUsize>,
     folds: Arc<AtomicUsize>,
     reject: bool,
+    deferred_receipt_refusal: Option<bool>,
     burn: bool,
     checkpoint_bytes: u32,
     checkpoint_stages: u8,
@@ -885,6 +886,11 @@ pub(super) struct TestProofs {
     fail_preparation_validation: bool,
     // Mock ArchiveSent plans for deferred-Archive dispatch; otherwise Archive planning is refused.
     archive_plans: bool,
+    // Mock Receive plans exercise coordinator recovery, never native proof validity.
+    receive_plans: bool,
+    // Mock Receive admission (design §3.2): native planning refuses a Receive whose fold
+    // would burn the Payment, as the native owner does before any plan exists.
+    refuse_receive_admission: bool,
     fail_commit_derivation: bool,
     preparation_payload: Vec<u8>,
     advance_checks: Arc<AtomicUsize>,
@@ -937,8 +943,12 @@ impl TestProofs {
     }
 }
 
+mod deferred_archive_capacity_tests;
+mod deferred_archive_tests;
 mod fold_retention_tests;
 mod folding_preemption_tests;
+mod maintenance_tests;
+mod resume_scheduling_tests;
 mod storage_counters;
 mod verification_baseline_tests;
 
@@ -959,6 +969,13 @@ impl NativeProofs for TestProofs {
         payment: &KagemushaWalletPaymentV1,
     ) -> Result<(), Error> {
         // Explicit host probe only; never installed monetary proof authority.
+        if let Some(rejected) = self.deferred_receipt_refusal {
+            return Err(if rejected {
+                Error::ReceiptRejected("mock completed incoming receipt verdict")
+            } else {
+                Error::NativeVerification(crate::kagemusha_wallet_proofs_v1::Error::Profile)
+            });
+        }
         if self.reject {
             return Err(Error::Proof("mock Credited proof refusal"));
         }
@@ -1070,7 +1087,7 @@ impl NativeProofs for TestProofs {
         witness: &ReleasedStep,
         predecessor: Option<&KagemushaWalletFoldRecordV1>,
         checkpoints: Vec<PrivateArchiveBytes>,
-        _custody: Option<&mut FoldCustodyV1<'_>>,
+        custody: Option<&mut FoldCustodyV1<'_>>,
         retained: Option<FoldRetentionV1>,
         cancellation: &Cancellation,
     ) -> Result<Box<dyn NativeFoldJobV1>, Error> {
@@ -1083,7 +1100,20 @@ impl NativeProofs for TestProofs {
             .expect("retention log")
             .handed
             .push(handed);
+        // Multi-receive recovery tests use the real source-owned persistent credit tree.
+        // Only the mock lineage proof is synthesized; the final publication checks this root.
+        let credit_root = if self.receive_plans
+            && witness.frozen.capsule.body().kind == KagemushaWalletOperationKindV1::Receive
+            && checkpoints.len() == usize::from(self.checkpoint_stages.max(1))
+        {
+            let custody = custody.ok_or(Error::WitnessLost("test Receive fold custody"))?;
+            custody.credit_record(self.burn)?;
+            Some(custody.credit_root())
+        } else {
+            None
+        };
         Ok(Box::new(TestFoldJob {
+            credit_root,
             proofs: self.clone(),
             witness: witness.clone(),
             predecessor: predecessor.cloned(),
@@ -1094,6 +1124,7 @@ impl NativeProofs for TestProofs {
 
 /// Explicit mock proof work of one prepared sub-proof; it holds no custody handle.
 struct TestFoldJob {
+    credit_root: Option<[u8; 32]>,
     proofs: TestProofs,
     witness: ReleasedStep,
     predecessor: Option<KagemushaWalletFoldRecordV1>,
@@ -1105,6 +1136,7 @@ impl NativeFoldJobV1 for TestFoldJob {
         cancellation: &Cancellation,
     ) -> Result<(FoldProgress, Option<FoldRetentionV1>), Error> {
         let Self {
+            credit_root,
             proofs,
             witness,
             predecessor,
@@ -1167,7 +1199,7 @@ impl NativeFoldJobV1 for TestFoldJob {
             c.body().statement.effect,
             KagemushaWalletEffectV1::Receive { .. }
         ) {
-            tree.root()
+            credit_root.unwrap_or_else(|| tree.root())
         } else {
             predecessor.map_or_else(
                 || tree.root(),
@@ -1230,6 +1262,7 @@ pub(super) fn synthetic_payout_wallet(scheme: KagemushaWalletSchemeV1, chain: St
         capsule_sources: IndexRoot::default(),
         issued_requests: IndexRoot::default(),
         sessions: IndexRoot::default(),
+        deferred_archive: deferred_archive::DeferredIndex::default(),
         activation: None,
         close_loads: IndexRoot::default(),
         ledger_checkpoint: None,
@@ -1821,7 +1854,7 @@ fn send_requires_recorded_predecessor_and_owner_assembles_canonical_payment() {
         KagemushaWalletSigningDomainV1::Receipt,
         &body,
     ));
-    let signature = signature.normalize_s().unwrap_or(signature);
+    let signature = signature.normalize_s();
     let signature =
         KagemushaDeviceSignatureV1::from_raw_bytes(&signature.to_bytes()).expect("signature");
     let record = owner.assemble(c, &digest, &signature).expect("Payment");
@@ -1844,7 +1877,7 @@ fn send_requires_recorded_predecessor_and_owner_assembles_canonical_payment() {
             2 => changed.output.push(0),
             _ => {
                 let other: Signature = signer(&send.credential).sign(b"wrong receipt message");
-                let other = other.normalize_s().unwrap_or(other);
+                let other = other.normalize_s();
                 changed.receipt.signature =
                     KagemushaDeviceSignatureV1::from_raw_bytes(&other.to_bytes()).unwrap();
             }
@@ -2771,6 +2804,14 @@ fn snapshot_unfolded_bootstrap_preserves_owned_value_and_reports_the_actual_back
     let boot = bootstrap();
     w.commit(boot.clone()).unwrap();
     let snapshot = w.snapshot().unwrap();
+    assert_eq!(
+        w.snapshot_selected().unwrap(),
+        (
+            snapshot,
+            KagemushaWalletOperationKindV1::Bootstrap,
+            boot.capsule.custody_digest()
+        )
+    );
     assert_eq!(snapshot.head, boot.capsule.body().statement.successor.value);
     assert_eq!(
         snapshot.credential_digest,
@@ -2790,12 +2831,35 @@ fn snapshot_unfolded_bootstrap_preserves_owned_value_and_reports_the_actual_back
     assert_eq!(snapshot.fold_backlog, 1);
 }
 #[test]
+fn selected_snapshot_preserves_archive_kind_and_fold_coverage_after_reopen() {
+    for folded in [None, Some(false)] {
+        let (mut w, _, _) = credit_projection::payer_projection_wallet(false, folded);
+        let selected = w.snapshot_selected().unwrap();
+        assert_eq!(selected.1, KagemushaWalletOperationKindV1::ArchiveSent);
+        assert_eq!(selected.0, w.snapshot().unwrap());
+        assert_eq!(selected.2, w.manifest().unwrap().1.capsule);
+        assert_eq!(selected.0.fold_backlog == 0, folded.is_some());
+        let mut reopened =
+            Coordinator::new(w.custody, w.archive, w.proofs, w.scheme_id, w.wallet_id).unwrap();
+        assert_eq!(reopened.snapshot_selected().unwrap(), selected);
+    }
+}
+
+#[test]
 fn snapshot_only_the_exact_current_fold_reports_folded_balance() {
     let mut w = wallet();
     let boot = bootstrap();
     w.commit(boot.clone()).unwrap();
     snapshot_test_fold(&mut w);
     let before = w.snapshot().unwrap();
+    assert_eq!(
+        w.snapshot_selected().unwrap(),
+        (
+            before,
+            KagemushaWalletOperationKindV1::Bootstrap,
+            boot.capsule.custody_digest()
+        )
+    );
     assert_eq!(before.folded_balance, Some(20));
     assert_eq!(before.fold_backlog, 0);
     let receive = frozen(
@@ -2808,6 +2872,14 @@ fn snapshot_only_the_exact_current_fold_reports_folded_balance() {
     );
     w.commit(receive.clone()).unwrap();
     let after = w.snapshot().unwrap();
+    assert_eq!(
+        w.snapshot_selected().unwrap(),
+        (
+            after,
+            KagemushaWalletOperationKindV1::Receive,
+            receive.capsule.custody_digest()
+        )
+    );
     assert_eq!(after.head, receive.capsule.body().statement.successor.value);
     assert_eq!(after.verified_fold.unwrap().head, before.head);
     assert_eq!(after.verified_fold.unwrap().sequence, 0);
@@ -2888,7 +2960,7 @@ fn snapshot_a_fold_cannot_substitute_another_key_head_or_credential() {
                 let key = SigningKey::from_slice(&[77; 32]).unwrap();
                 fold.record.lineage.public.payment_key =
                     KagemushaDevicePublicKeyV1::from_sec1_bytes(
-                        key.verifying_key().to_encoded_point(false).as_bytes(),
+                        key.verifying_key().to_sec1_point(false).as_bytes(),
                     )
                     .unwrap();
             }
@@ -3198,9 +3270,10 @@ pub(super) fn alternate_retained_completion(
         .unwrap();
     let message =
         kagemusha_wallet_signing_message_v1(KagemushaWalletSigningDomainV1::Receipt, &body);
-    let signature: Signature =
-        signer(&frozen.credential).sign_with_rng(&mut rand_core_06::OsRng, &message);
-    let signature = signature.normalize_s().unwrap_or(signature);
+    let signature: Signature = signer(&frozen.credential)
+        .try_sign_with_rng(&mut rand::rngs::SysRng, &message)
+        .expect("test signing entropy available");
+    let signature = signature.normalize_s();
     let signature = KagemushaDeviceSignatureV1::from_raw_bytes(&signature.to_bytes()).unwrap();
     assert_ne!(signature, original.record.receipt.signature);
     let mut alternate = original.clone();
@@ -3986,13 +4059,13 @@ fn every_preparation_draft_unlink_crash_retires_before_replacement_and_keeps_ori
     }
 }
 
-/// Decode a pinned payload retained from the installed d7 wallet without rewriting it.
+/// Decode an owner-pinned current-schema payload without rewriting its persisted bytes.
 /// This is the persisted Manifest boundary only; the fixture contains no protected marker.
 #[test]
-#[ignore = "requires an owner-retained d7 checkpoint payload and its pinned provider digest"]
-fn retained_d7_manifest_payload_decodes_and_reencodes_exactly() {
+#[ignore = "requires an owner-retained current-schema checkpoint payload and its pinned provider digest"]
+fn retained_current_manifest_payload_decodes_and_reencodes_exactly() {
     let path = std::env::var_os("IROHA_KAGEMUSHA_RETAINED_MANIFEST")
-        .expect("owner-retained d7 checkpoint path is required");
+        .expect("owner-retained current-schema checkpoint path is required");
     let expected = std::env::var("IROHA_KAGEMUSHA_RETAINED_MANIFEST_DIGEST")
         .expect("owner-recorded archive-checkpoint digest is required");
     let expected: [u8; 32] = hex::decode(expected)
@@ -4014,7 +4087,7 @@ fn retained_d7_manifest_payload_decodes_and_reencodes_exactly() {
         "exact owner-pinned checkpoint payload"
     );
     let manifest: super::manifest::Manifest =
-        archive::decode(&bytes).expect("installed d7 checkpoint remains readable");
+        archive::decode(&bytes).expect("current-schema checkpoint is readable");
     assert!(
         manifest.indexed.is_some(),
         "retained selected checkpoint has an indexed source"

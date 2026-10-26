@@ -2,8 +2,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { blake3 } from "@noble/hashes/blake3";
-import { blake2b } from "@noble/hashes/blake2b";
+import { blake3 } from "@noble/hashes/blake3.js";
+import { blake2b } from "@noble/hashes/blake2.js";
 import {
   decodeProofCarrierV1, encodeProofCarrierV1, proofCarrierPublicInputsDigestV1,
   inspectSignedAttachmentProofBindingsV1,

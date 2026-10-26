@@ -14,19 +14,32 @@ use iroha_data_model::{
         PrivacyExact12CapabilityManifestV1, validate_privacy_capability_archive_v1,
     },
 };
+
+/// Borrow a native method's JNI environment without letting Rust panics cross FFI.
+/// Existing Java exceptions remain pending; unexpected Rust failures become a
+/// Java runtime exception and the JNI return type's inert default value.
+pub(crate) fn with_java_env<'local, T: Default>(
+    mut unowned: jni::EnvUnowned<'local>,
+    body: impl FnOnce(&mut jni::Env<'local>) -> T,
+) -> T {
+    unowned
+        .with_env(|env| Ok::<T, jni::errors::Error>(body(env)))
+        .resolve::<jni::errors::ThrowRuntimeExAndDefault>()
+}
 mod account_address;
 mod committed_transaction_inclusion;
 mod confidential_prover;
 mod detached_transaction;
-mod fi_checkpoint_selection;
 mod fi_checkpoint_advance;
+mod fi_checkpoint_selection;
+mod fi_context_assertion;
+mod fi_context_continuation;
 mod gpu;
 mod kagemusha_wallet_advance;
 mod kagemusha_wallet_observation;
 mod kagemusha_wallet_review;
 mod privacy_intent;
-mod fi_context_assertion;
-mod fi_context_continuation;
+mod zk_x509_holder;
 
 include!("platform_jni/part_1.rs");
 include!("platform_jni/part_2.rs");

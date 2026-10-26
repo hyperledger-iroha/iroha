@@ -44,7 +44,9 @@
 //! # Determinism and acceleration
 //!
 //! Every output is a function of the inputs and the caller-supplied randomness only,
-//! and is byte-identical across hardware. The default build uses portable code. The
+//! and is byte-identical across hardware. AES uses portable code by default. Keccak selects its deterministic backend using
+//! upstream runtime CPU detection; `--cfg keccak_backend="soft"` forces its software
+//! implementation for parity qualification. The
 //! `accel` feature enables hardware AES through the patched `aes` crate's `hardware`
 //! feature; it changes speed, never bytes.
 //!

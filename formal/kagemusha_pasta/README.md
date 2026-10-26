@@ -19,6 +19,23 @@ these pins when their contents change. A mismatch fails closed; this manifest is
 a source-consistency check, not a signature or an independent trust authority.
 Nothing under `target/` is needed to run these checks.
 
+## Selected-source consistency refresh (2026-10-24)
+
+The two changed native pins were reviewed against their exact earlier bodies.
+The hash-to-curve file changes only its external version label. The older field
+macro gains inlining metadata and fallible `try_random` entry points; its
+arithmetic bodies, canonical reduction and parsed constants do not change.
+On success the same eight words feed `from_u512`; on failure the new RNG API
+returns an error after consuming a prefix. These certificates do not execute
+native randomness or certify dependency, timing or compiler behavior.
+
+The checker parses moduli only from unchanged `fp.rs`/`fq.rs` and auxiliary
+coefficients only from unchanged `pallas.rs`/`vesta.rs`. Exact CIOS, SWU and
+isogeny bodies remain unchanged. All sixteen control methods and their
+assertions are retained. This refresh restores the source-consistency boundary
+for the maintained command and CI; a fresh checker/control run is still
+required. It adds no new arithmetic theorem or C12/release claim.
+
 ## Prime certificates
 
 `supplied_primes.json` retains twelve explicit Lucas witness/factor nodes from

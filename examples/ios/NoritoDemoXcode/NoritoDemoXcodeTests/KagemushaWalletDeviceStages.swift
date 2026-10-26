@@ -7,26 +7,52 @@ import LocalAuthentication
 @testable import IrohaSwift
 
 #if os(iOS) && !targetEnvironment(macCatalyst)
+  /// Preserve the command failure and its exact capability-cleanup failure separately.
+  /// Native cleanup keeps its own close/quarantine ownership; this is diagnostic error DATA.
+  struct KagemushaProbeReviewCleanupError: Error {
+    let primary: Error
+    let cleanup: Error
+  }
+
   struct KagemushaProbePendingReview {
     let review: KagemushaWalletReviewV1
+    let exchange: KagemushaWalletExchangeV1
     let requestID: Data
     let sequence: Int
+    let fencePath: String
+    let continuation: Bool
+    var approval = KagemushaProbeReviewApproval()
   }
 
   extension KagemushaEnrollmentDeviceActor {
     func walletOwner() throws -> KagemushaWalletV1 {
-      guard !closed, let wallet else { throw EnrollmentProbeFailure.lifecycle }
+      try walletLifecycle.requireReady()
+      guard !closed, let wallet, let walletActivity else { throw EnrollmentProbeFailure.lifecycle }
+      try walletActivity.requireHealthy()
       return wallet
     }
-    func releaseWallet() throws {
+    func releaseWallet() async throws {
       guard !carrierBusy else { throw EnrollmentProbeFailure.lifecycle }
-      if let wallet {
-        // close owns the entire Native review/exchange lifetime. On failure retain the owner.
-        try wallet.close()
-        self.wallet = nil
+      try walletLifecycle.requireIdle()
+      guard wallet != nil else { return }
+      guard let binding = walletActivity else { throw EnrollmentProbeFailure.lifecycle }
+      try walletLifecycle.beginRetirement()
+      exchangeIngress.invalidate()
+      binding.invalidate()
+      if let observation = walletObservation { await observation.stop() }
+      walletObservation = nil
+      // Activity and close run off MainActor and independently of synchronous Native proof work.
+      let retirement = await binding.retire(close: true)
+      walletLifecycle.finishRetirement(closed: retirement.closed)
+      if retirement.closed {
+        exchangeIngress.closed()
+        wallet = nil
+        walletActivity = nil
         pendingReview = nil
         timeExchange = nil
       }
+      // Only acknowledged close releases the exact owner. Cleanup still runs on activity failure.
+      try retirement.check()
     }
     func monetaryInputs(_ command: Command, sequence: Int) throws -> [String: Data] {
       try KagemushaMonetaryProbeManifest.validate(command.action, names: Set(command.inputs.keys))
@@ -83,6 +109,11 @@ import LocalAuthentication
         try output(
           "peer-envelope.norito", walletOwner().envelope(kind, original: original),
           sequence: sequence)
+        if kind == .payment {
+          try output(
+            "payer-companion.norito", walletOwner().paymentCompanion(payment: original),
+            sequence: sequence)
+        }
       }
       try event(
         "released",
@@ -244,52 +275,90 @@ import LocalAuthentication
       }
       if command.action == "release-wallet" {
         guard wallet != nil else { throw EnrollmentProbeFailure.lifecycle }
-        try releaseWallet()
+        try await releaseWallet()
         return "wallet-released-custody-retained"
       }
       if command.action == "open" {
         guard wallet == nil, pendingReview == nil else { throw EnrollmentProbeFailure.lifecycle }
-        let result = try input("result")
-        try bind("open", id: config.account, inputs: ["result": result, "account": config.account])
-        if let enrollment {
-          guard try enrollment.retainedResult() == result else {
+        try walletLifecycle.beginOpen()
+        do {
+          let result = try input("result")
+          try bind("open", id: config.account, inputs: ["result": result, "account": config.account])
+          if let enrollment {
+            guard try enrollment.retainedResult() == result else {
+              throw EnrollmentProbeFailure.collision
+            }
+            installed = try enrollment.loadInstalledRuntime()
+            self.enrollment = nil
+          }
+          guard let installed else { throw EnrollmentProbeFailure.lifecycle }
+          let admitted = try await installed.openEnrolledResult(
+            resultOriginal: result, accountOriginal: config.account,
+            signExistingAccount: { challenge in
+              try await self.awaitOpenSignature(challenge, sequence: sequence)
+            },
+            requireCurrent: { try Task.checkCancellation() })
+          let opened = mach_continuous_time()
+          wallet = admitted
+          self.installed = nil
+          let binding = KagemushaProbeActivityBinding(
+            apply: { try admitted.setActivity(foreground: $0.foreground, charging: $0.charging) },
+            closeOwner: { try admitted.close() })
+          walletActivity = binding
+          walletObservation = await KagemushaProbeActivityObservation.phone(binding: binding)
+          try await binding.acknowledgeInitial()
+          let metadata = try admitted.metadata()
+          guard metadata.accountOriginal == config.account else {
             throw EnrollmentProbeFailure.collision
           }
-          installed = try enrollment.loadInstalledRuntime()
-          self.enrollment = nil
+          try event(
+            "opened",
+            values: [
+              "nativeReturnedTicks": opened, "schemeID": metadata.schemeID,
+              "walletID": metadata.walletID, "accountDigest": metadata.accountDigest,
+              "assetDigest": metadata.assetDigest, "assetScale": metadata.assetScale,
+            ], sequence: sequence)
+          try output("native-account.norito", metadata.accountOriginal, sequence: sequence)
+          try output("native-asset.norito", metadata.assetOriginal, sequence: sequence)
+          try binding.requireHealthy()
+          try exchangeIngress.publish(admitted)
+          walletLifecycle.finishOpen(ownerRetained: true, ready: true)
+          return "native-wallet-opened"
+        } catch {
+          if let binding = walletActivity {
+            binding.invalidate()
+            if let observation = walletObservation { await observation.stop() }
+            walletObservation = nil
+            // Setup failure keeps the admitted owner for explicit release/stop, never a replacement.
+            _ = await binding.retire(close: false)
+          }
+          walletLifecycle.finishOpen(ownerRetained: wallet != nil, ready: false)
+          throw error
         }
-        guard let installed else { throw EnrollmentProbeFailure.lifecycle }
-        wallet = try await installed.openEnrolledResult(
-          resultOriginal: result, accountOriginal: config.account,
-          signExistingAccount: { challenge in
-            try await self.awaitOpenSignature(challenge, sequence: sequence)
-          },
-          requireCurrent: { try Task.checkCancellation() })
-        let opened = mach_continuous_time()
-        self.installed = nil
-        let metadata = try walletOwner().metadata()
-        guard metadata.accountOriginal == config.account else {
-          throw EnrollmentProbeFailure.collision
-        }
-        try event(
-          "opened",
-          values: [
-            "nativeReturnedTicks": opened, "schemeID": metadata.schemeID,
-            "walletID": metadata.walletID, "accountDigest": metadata.accountDigest,
-            "assetDigest": metadata.assetDigest, "assetScale": metadata.assetScale,
-          ], sequence: sequence)
-        try output("native-account.norito", metadata.accountOriginal, sequence: sequence)
-        try output("native-asset.norito", metadata.assetOriginal, sequence: sequence)
-        return "native-wallet-opened"
       }
       let wallet = try walletOwner()
       switch command.action {
+      case "begin-exchange": return "native-exchange-requested"
+      case "end-exchange":
+        // EndRequested already fences new executable children. Retire the actual retained
+        // capability through exact-origin cleanup before releasing this exchange.
+        if let pending = pendingReview {
+          pendingReview = nil
+          try pending.exchange.discardReview(pending.review)
+        }
+        let ended = try await exchangeIngress.end()
+        return "native-exchange-end-" + String(ended.rawValue)
+      case "discard-review":
+        guard let pending = pendingReview else { throw EnrollmentProbeFailure.lifecycle }
+        try pending.exchange.discardReview(pending.review)
+        pendingReview = nil
+        return "native-review-cancelled"
       case "bootstrap":
-        let result = try wallet.bootstrap()
+        let result = try mutationOwner().bootstrap()
         let returned = mach_continuous_time()
         return try call(result, returned: returned, sequence: sequence)
       case "activation":
-        let original = try wallet.activation()
+        let original = try mutationOwner().activation()
         let returned = mach_continuous_time()
         try output("activation.norito", original, sequence: sequence)
         try output(
@@ -302,7 +371,7 @@ import LocalAuthentication
       case "retain-activation", "activation-status", "activation-finality":
         let wire = try input("signed-wire")
         if command.action == "activation-finality" {
-          let ingest = try wallet.ingestActivationFinality(
+          let ingest = try mutationOwner().ingestActivationFinality(
             signedWire: wire, finality: input("finality"))
           let returned = mach_continuous_time()
           switch ingest {
@@ -317,7 +386,7 @@ import LocalAuthentication
         }
         let value: KagemushaWalletLedgerOutcomeV1
         if command.action == "retain-activation" {
-          value = try wallet.retainActivationAttempt(signedWire: wire)
+          value = try mutationOwner().retainActivationAttempt(signedWire: wire)
         } else {
           value = try wallet.activationAttemptOutcome(signedWire: wire)
         }
@@ -337,7 +406,7 @@ import LocalAuthentication
         let identity = try id()
         let amount = try KagemushaMonetaryProbeManifest.amount(input("amount"))
         try bind("load-plan", id: identity, inputs: inputs)
-        let original = try wallet.prepareLedgerLoad(requestId: identity, amount: amount)
+        let original = try mutationOwner().prepareLedgerLoad(requestId: identity, amount: amount)
         let returned = mach_continuous_time()
         try output("ledger-load-instruction.norito", original, sequence: sequence)
         try event(
@@ -366,20 +435,20 @@ import LocalAuthentication
           inputs: [
             "family": Data("load".utf8), "receipt": input("receipt"), "finality": input("finality"),
           ])
-        let result = try wallet.load(
+        let result = try mutationOwner().load(
           requestId: identity, receipt: input("receipt"), finality: input("finality"))
         let returned = mach_continuous_time()
         return try completion(result, returned: returned, requestID: identity, sequence: sequence)
       case "ledger-finality", "ledger-status":
         let value =
           try command.action == "ledger-finality"
-          ? wallet.ingestLedgerFinality(input("finality")) : wallet.ledgerProgress()
+          ? mutationOwner().ingestLedgerFinality(input("finality")) : wallet.ledgerProgress()
         try ledgerState(value, returned: mach_continuous_time(), sequence: sequence)
         return "native-ledger-prefix-observed"
       case "epoch-boundary", "epoch-status":
         let value =
           try command.action == "epoch-boundary"
-          ? wallet.ingestEpochBoundary(
+          ? mutationOwner().ingestEpochBoundary(
             expectedEpoch: KagemushaMonetaryProbeManifest.limb(input("epoch")),
             original: input("boundary")) : wallet.epochProgress()
         try event(
@@ -390,50 +459,60 @@ import LocalAuthentication
             "boundaryHeight": String(value.boundaryHeight),
           ], sequence: sequence)
         return "native-epoch-prefix-observed"
-      case "offer", "request":
+      case "request":
         let identity = try id("setup-id")
         try bind(
           "setup", id: identity,
           inputs: inputs.merging(["family": Data(command.action.utf8)]) { first, _ in first })
-        let result =
-          try command.action == "offer"
-          ? wallet.offer(
-            setupId: identity, amount: KagemushaMonetaryProbeManifest.amount(input("amount")))
-          : wallet.request(
-            setupId: identity, offer: input("offer"), feeSchedule: inputs["fee-schedule"],
-            feeCertificate: inputs["fee-certificate"])
+        let result = try mutationOwner().request(
+          setupId: identity, amount: KagemushaMonetaryProbeManifest.amount(input("amount")),
+          feeSchedule: inputs["fee-schedule"], feeCertificate: inputs["fee-certificate"])
         let returned = mach_continuous_time()
-        let kind: KagemushaWalletTransportKindV1 = command.action == "offer" ? .offer : .request
         _ = try call(result, returned: returned, sequence: sequence)
         try output("peer-original.norito", result.bytes, sequence: sequence)
         try output(
-          "peer-envelope.norito", wallet.envelope(kind, original: result.bytes), sequence: sequence)
+          "peer-envelope.norito", wallet.envelope(.request, original: result.bytes), sequence: sequence)
         return "native-" + command.action + "-exported-carrier-unobserved"
-      case "review-send", "review-unload":
+      case "review-send", "review-unload", "continue-review-send", "continue-review-unload":
         guard pendingReview == nil else { throw EnrollmentProbeFailure.lifecycle }
-        let identity = try id()
-        try bind(
-          "operation", id: identity,
-          inputs: inputs.merging(["family": Data(command.action.utf8)]) { first, _ in first })
-        // If an earlier confirmed attempt may have selected, only native recovery commands are allowed.
-        let attempted =
-          config.actorPath + "/private/intents/executed-" + EnrollmentProbeFiles.digest(identity)
-        guard try !config.files.exists(attempted) else { throw EnrollmentProbeFailure.lifecycle }
-        let review =
-          try command.action == "review-send"
-          ? wallet.reviewSend(
-            request: input("request"), destinationAccountOriginal: input("destination"))
-          : wallet.reviewUnload(
-            amount: KagemushaMonetaryProbeManifest.amount(input("amount")), quote: inputs["quote"],
-            certificates: inputs["certificates"], chargeBeneficiary: inputs["beneficiary"])
+        let identity = try id(), continuation = command.action.hasPrefix("continue-")
+        let family = continuation ? String(command.action.dropFirst(9)) : command.action
+        let operationPath = config.actorPath + "/private/intents/operation-" + EnrollmentProbeFiles.digest(identity)
+        if continuation { guard try config.files.exists(operationPath) else { throw EnrollmentProbeFailure.lifecycle } }
+        try bind("operation", id: identity,
+          inputs: inputs.merging(["family": Data(family.utf8)]) { first, _ in first })
+        let expectation = try KagemushaProbeReviewCustody.expectation(files: config.files,
+          actorPath: config.actorPath, requestID: identity, family: family,
+          originals: inputs, continuation: continuation)
+        let accepted = try mutationOwner()
+        let decision = try family == "review-send"
+          ? accepted.reviewSend(requestId: identity, request: input("request"),
+              destinationAccountOriginal: input("destination"), expectation: expectation)
+          : accepted.reviewUnload(requestId: identity, expectation: expectation,
+              amount: KagemushaMonetaryProbeManifest.amount(input("amount")), quote: inputs["quote"],
+              certificates: inputs["certificates"], chargeBeneficiary: inputs["beneficiary"])
+        let review: KagemushaWalletReviewV1
+        switch decision {
+        case .ready(let value): review = value
+        case .existing(let value): return try existingReviewed(value, sequence: sequence)
+        case .waiting(let wait):
+          try event("review-waiting", values: ["reason": wait.rawValue, "capabilityIssued": false], sequence: sequence)
+          return "native-review-waiting-" + String(wait.rawValue)
+        }
         let returned = mach_continuous_time()
-        pendingReview = .init(review: review, requestID: identity, sequence: sequence)
+        let fence = continuation
+          ? config.actorPath + "/private/" + config.invocation + "/" + String(format: "%04d", sequence) + "-review-dispatch.norito"
+          : config.actorPath + "/private/intents/executed-" + EnrollmentProbeFiles.digest(identity)
+        pendingReview = .init(review: review, exchange: accepted.exchange, requestID: identity, sequence: sequence,
+          fencePath: fence, continuation: continuation)
         let p = review.projection
         try output("native-review.bin", p.bytes, sequence: sequence)
         try event(
           "native-review",
           values: [
             "nativeReturnedTicks": returned, "reviewSHA256": EnrollmentProbeFiles.digest(p.bytes),
+            "conditionalContinuation": continuation, "latencyQualified": false,
+            "originalFence": "executed-" + EnrollmentProbeFiles.digest(identity),
             "kind": p.kind == .send ? "send" : "unload", "requestID": identity,
             "amount": scalar(p.amount), "fee": scalar(p.fee), "grossDebit": scalar(p.grossDebit),
             "netDestinationAmount": scalar(p.netDestinationAmount), "head": p.currentHead,
@@ -444,13 +523,16 @@ import LocalAuthentication
         return "native-review-awaiting-explicit-decision"
       case "decide-review":
         return try await decideReview(input("decision"), sequence: sequence)
+      case "retry-reviewed":
+        guard let pending = pendingReview else { throw EnrollmentProbeFailure.lifecycle }
+        return try executePendingReview(pending, retry: true, sequence: sequence)
       case "receive":
         let identity = try id()
         try bind(
           "operation", id: identity,
           inputs: inputs.merging(["family": Data("receive".utf8)]) { first, _ in first })
-        let result = try wallet.receiveFromOffer(
-          requestId: identity, payment: input("payment"), offer: input("offer"))
+        let result = try mutationOwner().receiveWithCompanion(
+          requestId: identity, payment: input("payment"), companion: input("payer-companion"))
         let returned = mach_continuous_time()
         return try completion(result, returned: returned, requestID: identity, sequence: sequence)
       case "credit":
@@ -471,12 +553,45 @@ import LocalAuthentication
             sequence: sequence)
         }
         return "native-credit-evidence-" + String(value.evidence.rawValue)
-      case "accept-credited", "credited-status":
-        let value =
-          try command.action == "accept-credited"
-          ? wallet.acceptCreditedForSend(sendRequestId: id(), original: input("credited"))
-          : wallet.creditedForSendStatus(sendRequestId: id(), original: input("credited"))
+      case "observe-credited":
+        let identity = try id()
+        let original = try input("credited")
+        // Keep the diagnostic original before Native durably retains and verifies it.
+        try output("verified-credited-original.norito", original, sequence: sequence)
+        let value = try mutationOwner().observeCredited(sendRequestId: identity, credited: original)
+        let returned = mach_continuous_time()
+        try event(
+          "observed-credited",
+          values: [
+            "nativeReturnedTicks": returned, "requestID": identity,
+            "creditedSHA256": EnrollmentProbeFiles.digest(original),
+            "evidence": value.evidence.rawValue, "archive": value.archive.rawValue,
+            "corePending": value.corePending, "creditID": value.creditId,
+            "paymentDigest": value.paymentDigest, "amount": scalar(value.amount),
+            "archiveDispatched": false, "carrierDeliveryClaimed": false,
+          ], sequence: sequence)
+        return "native-payer-delivery-evidence-" + String(value.evidence.rawValue)
+      case "credited-status":
+        let value = try wallet.creditedForSendStatus(sendRequestId: id(), original: input("credited"))
         return try call(value, returned: mach_continuous_time(), sequence: sequence)
+      case "resume-deferred-receipt":
+        guard let value = try wallet.resumeDeferredReceipt() else { return "native-deferred-receipt-idle" }
+        try event("deferred-receipt", values: ["evidence": value.evidence.rawValue,
+          "archive": value.archive.rawValue, "corePending": value.corePending,
+          "creditID": value.creditId, "paymentDigest": value.paymentDigest,
+          "amount": scalar(value.amount)], sequence: sequence)
+        return "native-deferred-receipt-evidence-" + String(value.evidence.rawValue)
+      case "drain-deferred-archive":
+        switch try wallet.drainDeferredArchive() {
+        case .noWork: return "native-deferred-archive-idle"
+        case .waiting(let reason): return "native-deferred-archive-wait-" + String(reason.rawValue)
+        case .reconciled(let value):
+          _ = try call(value, returned: mach_continuous_time(), sequence: sequence)
+          return "native-deferred-archive-reconciled-status-" + String(value.status)
+        case .executed(let value):
+          _ = try call(value, returned: mach_continuous_time(), sequence: sequence)
+          return "native-deferred-archive-executed-status-" + String(value.status)
+        }
       case "fold-once":
         let value = try wallet.foldOnce()
         let returned = mach_continuous_time()
@@ -540,7 +655,7 @@ import LocalAuthentication
           value, kind: "unload", event: "unload-status", returned: mach_continuous_time(),
           sequence: sequence)
       case "unload-finality":
-        let ingest = try wallet.ingestUnloadFinality(
+        let ingest = try mutationOwner().ingestUnloadFinality(
           claim: input("claim"), signedWire: input("signed-wire"), finality: input("finality"))
         let returned = mach_continuous_time()
         switch ingest {
@@ -550,9 +665,9 @@ import LocalAuthentication
         case .epochRequired(let target):
           return try epochRequired(target, kind: "unload", returned: returned, sequence: sequence)
         }
-      case "decode-offer", "decode-request", "decode-payment", "decode-credited":
+      case "decode-request", "decode-payment", "decode-credited":
         let kinds: [String: KagemushaWalletTransportKindV1] = [
-          "decode-offer": .offer, "decode-request": .request, "decode-payment": .payment,
+          "decode-request": .request, "decode-payment": .payment,
           "decode-credited": .credited,
         ]
         let original = try wallet.original(kinds[command.action]!, envelope: input("envelope"))
@@ -570,48 +685,51 @@ import LocalAuthentication
         try bind(
           "operation", id: identity,
           inputs: inputs.merging(["family": Data("refresh-time".utf8)]) { first, _ in first })
-        let result = try wallet.refresh(
+        let result = try mutationOwner().refresh(
           requestId: identity, kind: .timeAnchor, update: input("anchor"),
           certificates: input("certificates"))
         let returned = mach_continuous_time()
         return try completion(result, returned: returned, requestID: identity, sequence: sequence)
       case "begin-time":
         guard timeExchange == nil else { throw EnrollmentProbeFailure.lifecycle }
-        let exchange = try wallet.beginTimeExchange()
+        let exchange = try mutationOwner().beginTimeExchange()
         let returned = mach_continuous_time()
-        timeExchange = exchange
+        timeExchange = (challenge: exchange, exchange: try mutationOwner().exchange)
         try output("time-nonce.bin", exchange.nonce, sequence: sequence)
         try event("time-exchange", values: ["nativeReturnedTicks": returned], sequence: sequence)
         return "native-time-exchange-awaiting-issuer"
       case "finish-time":
         guard let exchange = timeExchange else { throw EnrollmentProbeFailure.lifecycle }
+        guard try mutationOwner().exchange === exchange.exchange else {
+          throw EnrollmentProbeFailure.lifecycle
+        }
         // Valid bounded inputs reach Native exactly once. A dispatched token cannot be reconstructed.
         let anchor = try input("anchor")
         let certificate = try input("certificate")
         timeExchange = nil
-        let result = try wallet.finishTimeExchange(
-          exchange, anchor: anchor, certificate: certificate)
+        let result = try mutationOwner().finishTimeExchange(
+          exchange.challenge, anchor: anchor, certificate: certificate)
         let returned = mach_continuous_time()
         return try call(result, returned: returned, sequence: sequence)
       case "cancel-time":
         guard let exchange = timeExchange else { throw EnrollmentProbeFailure.lifecycle }
+        try exchange.exchange.cancelTimeExchange(exchange.challenge)
         timeExchange = nil
-        try wallet.cancelTimeExchange(exchange)
         return "native-time-exchange-cancelled"
       default: throw EnrollmentProbeFailure.input
       }
     }
 
     func decideReview(_ original: Data, sequence: Int) async throws -> String {
-      guard let pending = pendingReview else { throw EnrollmentProbeFailure.lifecycle }
+      guard var pending = pendingReview else { throw EnrollmentProbeFailure.lifecycle }
       let wallet = try walletOwner()
       let projection = pending.review.projection
       let decision = try KagemushaMonetaryProbeManifest.Decision(
         original, invocation: config.invocation, sequence: pending.sequence,
         projection: projection.bytes)
       if !decision.confirmed {
+        try pending.exchange.discardReview(pending.review)
         pendingReview = nil
-        try wallet.discardReview(pending.review)
         try event(
           "review-cancelled",
           values: [
@@ -619,12 +737,12 @@ import LocalAuthentication
           ], sequence: sequence)
         return "native-review-cancelled"
       }
-      let attempted =
-        config.actorPath + "/private/intents/executed-"
-          + EnrollmentProbeFiles.digest(pending.requestID)
-      // A prior marker publication may have failed after installing its final name. A retained
-      // review never authorizes another attempt in that state, even with the same decision.
-      guard try !config.files.exists(attempted) else { throw EnrollmentProbeFailure.lifecycle }
+      let accepted = try mutationOwner()
+      guard accepted.exchange === pending.exchange else {
+        throw EnrollmentProbeFailure.lifecycle
+      }
+      guard pending.approval.phase == .awaitingConfirmation,
+        try !config.files.exists(pending.fencePath) else { throw EnrollmentProbeFailure.lifecycle }
       // The host's explicit review decision is followed by actual iOS owner authentication.
       // This is a diagnostic confirmation flow, not a claim of a trusted display or carrier tap.
       let context = LAContext()
@@ -636,6 +754,11 @@ import LocalAuthentication
         .deviceOwnerAuthentication, localizedReason: reason)
       guard confirmed else { throw EnrollmentProbeFailure.lifecycle }
       let confirmedTicks = mach_continuous_time()
+      // Authentication suspends the actor. Keep this decision bound to the same live wallet,
+      // accepted call and retained review before publishing its confirmation or dispatch fence.
+      guard try walletOwner() === wallet, try mutationOwner() === accepted,
+        pendingReview?.review === pending.review, accepted.exchange === pending.exchange
+      else { throw EnrollmentProbeFailure.lifecycle }
       try event(
         "confirmation",
         values: [
@@ -643,19 +766,73 @@ import LocalAuthentication
           "reviewSHA256": digest, "requestID": pending.requestID,
           "confirmationSurface": "external-exact-review-plus-ios-device-owner-authentication",
         ], sequence: sequence)
-      // Persist before dispatch. An exception after this point never authorizes another reviewed
-      // debit under this ID; use request-status/resume/retry/released on the same Native custody.
-      try config.files.publishDispatchFence(attempted, bytes: Data(digest.utf8))
-      pendingReview = nil
-      let before = mach_continuous_time()
-      try event(
-        "execute-reviewed-start",
-        values: ["ticks": before, "requestID": pending.requestID, "reviewSHA256": digest],
-        sequence: sequence)
-      let result = try wallet.executeReviewed(pending.review, requestId: pending.requestID)
-      let returned = mach_continuous_time()
-      return try completion(
-        result, returned: returned, requestID: pending.requestID, sequence: sequence)
+      // Only acknowledged exclusive publication permits this live capability's first call.
+      // An uncertain fence is retained, but cannot create an approved-live retry state.
+      do { try config.files.publishDispatchFence(pending.fencePath, bytes: projection.bytes) }
+      catch {
+        pendingReview = nil
+        try? pending.exchange.discardReview(pending.review)
+        throw error
+      }
+      try pending.approval.acknowledgedFence()
+      return try executePendingReview(pending, retry: false, sequence: sequence)
+    }
+
+    func existingReviewed(_ existing: KagemushaWalletBoundRequestV1, sequence: Int) throws -> String {
+      switch existing {
+      case .preparing:
+        try event("review-existing", values: ["status": 11, "newDispatch": false, "latencyQualified": false], sequence: sequence)
+        return "native-reviewed-existing-preparing"
+      case .outcome(let value):
+        try output("existing-native-call.bin", value.bytes, sequence: sequence)
+        try event("review-existing", values: ["status": value.status, "detail": value.detail,
+          "newDispatch": false, "latencyQualified": false], sequence: sequence)
+        return "native-reviewed-existing-" + String(value.status)
+      }
+    }
+
+    func executePendingReview(_ original: KagemushaProbePendingReview, retry: Bool, sequence: Int) throws -> String {
+      do {
+        _ = try walletOwner()
+        let accepted = try mutationOwner()
+        guard accepted.exchange === original.exchange, original.review.requestID == original.requestID,
+          !retry || pendingReview?.review === original.review,
+          try config.files.read(original.fencePath, maximum: 4591) == original.review.projection.bytes else {
+          throw EnrollmentProbeFailure.lifecycle
+        }
+        var pending = original
+        try pending.approval.dispatch(retry: retry)
+        try event("execute-reviewed-start", values: ["ticks": mach_continuous_time(),
+          "requestID": pending.requestID, "reviewSequence": pending.sequence,
+          "sameLiveRetry": retry, "conditionalContinuation": pending.continuation,
+          "latencyQualified": !retry && !pending.continuation], sequence: sequence)
+        pendingReview = nil
+        let result = try accepted.executeReviewed(pending.review)
+        let returned = mach_continuous_time()
+        switch result {
+        case .retainedReview(let wait):
+          try pending.approval.retained(); pendingReview = pending
+          try event("review-retained", values: ["reason": wait.rawValue,
+            "dispatchFenceRetained": true, "nativeReturnedTicks": returned,
+            "approvalState": "approved-live-retained", "latencyQualified": false], sequence: sequence)
+          return "native-review-retained-" + String(wait.rawValue)
+        case .existing(let value): return try existingReviewed(value, sequence: sequence)
+        case .executed(let value):
+          return try completion(value, returned: returned, requestID: pending.requestID, sequence: sequence)
+        }
+      } catch {
+        // A refusal before dispatch or a failed retained-result publication cannot
+        // leave approved-live permission behind. Native-call errors have already
+        // consumed/cleaned their token and leave pendingReview empty.
+        let primary = error
+        if let retained = pendingReview, retained.review === original.review {
+          pendingReview = nil
+          do { try retained.exchange.discardReview(retained.review) }
+          catch { throw KagemushaProbeReviewCleanupError(primary: primary, cleanup: error) }
+        }
+        throw primary
+      }
+
     }
   }
 #endif

@@ -631,8 +631,7 @@ fn generated_genesis(instructions: Vec<InstructionBox>) -> iroha_genesis::RawGen
     let asset = AssetDefinitionId::parse_address_literal(CANONICAL_XOR).unwrap();
     let custody =
         iroha_config::parameters::defaults::nexus::fees::genesis_policy().fee_sink_account_id;
-    let staking =
-        iroha_deploy::genesis::default_staking_policy(asset.clone(), custody.clone(), custody);
+    let staking = iroha_genesis::default_staking_policy(asset.clone(), custody.clone(), custody);
     let npos = SumeragiNposParameters {
         xor_asset_definition_id: asset,
         ..Default::default()

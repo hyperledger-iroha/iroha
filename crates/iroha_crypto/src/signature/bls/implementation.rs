@@ -3,7 +3,7 @@ use blake2::{Blake2b, digest::consts::U32};
 use core::marker::PhantomData;
 use hkdf::HkdfExtract;
 #[cfg(feature = "rand")]
-use rand::rngs::OsRng;
+use rand::rngs::SysRng;
 #[cfg(feature = "rand")]
 use rand_core::TryCryptoRng;
 use sha2::Digest as _;
@@ -254,7 +254,7 @@ impl<C: BlsConfiguration + ?Sized> ManagedSecretKey<C> {
     ) -> Result<super::signing::SigningOutput, super::signing::BlsSigningError> {
         #[cfg(feature = "rand")]
         {
-            self.try_sign_fixed_with_rng(message, &mut OsRng)
+            self.try_sign_fixed_with_rng(message, &mut SysRng)
         }
         #[cfg(not(feature = "rand"))]
         {
@@ -349,7 +349,7 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
     ) -> Result<(PublicKey<C::Engine>, ManagedSecretKey<C>), Error> {
         let private_key = match option {
             #[cfg(feature = "rand")]
-            KeyGenOption::Random => return Self::random_keypair_from_rng(&mut OsRng),
+            KeyGenOption::Random => return Self::random_keypair_from_rng(&mut SysRng),
             KeyGenOption::UseSeed(ref mut seed) => {
                 if bls_seed_material_is_all_zero(seed) {
                     seed.zeroize();
@@ -369,7 +369,7 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
                 let h = extract.finalize().1;
                 h.expand(&info[..], okm.as_mut_slice())
                     .map_err(|_| Error::KeyGen("BLS HKDF seed expansion failed".into()))?;
-                let deterministic_rng = crate::rng::rng_from_seed_slice(okm.as_slice());
+                let deterministic_rng = crate::rng::bls_rng_from_seed_slice(okm.as_slice());
                 let secret = SecretKeyVT::<C::Engine>::from_seed(okm.as_slice())
                     .into_split(deterministic_rng);
                 ManagedSecretKey::new(&secret)
@@ -390,7 +390,7 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
     {
         let seed = checked_entropy_from_rng("key generation", C::Engine::SECRET_KEY_SIZE, rng)?;
         let split_seed = checked_entropy_from_rng("key split", BLS_RNG_SEED_LEN, rng)?;
-        let split_rng = crate::rng::rng_from_seed_slice(split_seed.as_slice());
+        let split_rng = crate::rng::bls_rng_from_seed_slice(split_seed.as_slice());
         let secret = SecretKeyVT::<C::Engine>::from_seed(seed.as_slice()).into_split(split_rng);
         let private_key = ManagedSecretKey::new(&secret);
         let public_key = private_key
@@ -692,7 +692,7 @@ impl<C: BlsConfiguration + VerifyOkCacheAccess + ?Sized> BlsImpl<C> {
 mod tests {
     use super::*;
     #[cfg(feature = "rand")]
-    use rand_core::{TryCryptoRng, TryRngCore};
+    use rand_core::{TryCryptoRng, TryRng};
     const SEEDED_KEYGEN_REFERENCE_SEED: &[u8] = b"iroha-bls-seeded-keygen-reference";
     #[test]
     fn verify_ok_cache_confirms_exact_triple_inside_collision_bucket() {
@@ -769,7 +769,7 @@ mod tests {
         next_fill: usize,
     }
     #[cfg(feature = "rand")]
-    impl TryRngCore for FillSequenceTryRng {
+    impl TryRng for FillSequenceTryRng {
         type Error = core::convert::Infallible;
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             Ok(u32::from_le_bytes([self.fills[self.next_fill.min(1)]; 4]))
@@ -801,7 +801,7 @@ mod tests {
         h.expand(&info, &mut okm)
             .expect("reference BLS HKDF expands");
         ikm.zeroize();
-        let deterministic_rng = crate::rng::rng_from_seed_slice(&okm);
+        let deterministic_rng = crate::rng::bls_rng_from_seed_slice(&okm);
         let secret = SecretKeyVT::<C::Engine>::from_seed(&okm).into_split(deterministic_rng);
         okm.zeroize();
         let private = ManagedSecretKey::new(&secret);

@@ -10,7 +10,7 @@ use ff::{Field, PrimeField};
 use group::Curve;
 use iroha_pasta::{Ep, Eq, Fp, Fq, PastaCurve, PastaField, poseidon::PoseidonField};
 use rand_chacha::ChaCha20Rng;
-use rand_core_06::SeedableRng;
+use rand_core::SeedableRng;
 
 use super::{
     advice::{Advice, InstanceColumns},
@@ -1030,7 +1030,7 @@ struct Forged<F> {
 }
 
 impl<F: PastaField> super::lookup::LookupPermutation<F> for Forged<F> {
-    fn permute<R: rand_core_06::RngCore>(
+    fn permute<R: rand_core::Rng>(
         &mut self,
         input: &[F],
         table: &[F],

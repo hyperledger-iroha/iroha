@@ -3,7 +3,7 @@
 //! These helpers derive the nullifier/viewing keys from a 32-byte spend key using a
 //! domain-separated HKDF. They are intentionally lightweight so wallets and offline tooling can
 //! reuse the exact same derivations as the on-chain host.
-use hkdf::Hkdf;
+use hkdf::SimpleHkdf;
 use rand_core::TryCryptoRng;
 use sha3::Sha3_512;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
@@ -111,7 +111,7 @@ impl ConfidentialKeyset {
     }
 }
 fn expand_key(
-    hkdf: &Hkdf<Sha3_512>,
+    hkdf: &SimpleHkdf<Sha3_512>,
     label: &'static str,
     info: &[u8],
     out: &mut [u8; 32],
@@ -125,7 +125,7 @@ fn derive_owned_keyset(mut keyset: ConfidentialKeyset) -> Result<ConfidentialKey
     }
     // Every output slot belongs to a clearing owner before any fallible work.
     // TODO: use clearing HKDF state when the primitive exposes that contract.
-    let hkdf = Hkdf::<Sha3_512>::new(Some(KEY_SALT), &keyset.spend);
+    let hkdf = SimpleHkdf::<Sha3_512>::new(Some(KEY_SALT), &keyset.spend);
     expand_key(&hkdf, "nk", INFO_NK, &mut keyset.nullifier)?;
     expand_key(&hkdf, "ivk", INFO_IVK, &mut keyset.incoming_view)?;
     expand_key(&hkdf, "ovk", INFO_OVK, &mut keyset.outgoing_view)?;
@@ -176,7 +176,7 @@ mod owner_tests;
 mod tests {
     use super::*;
     use rand::SeedableRng as _;
-    use rand_core::TryRngCore;
+    use rand_core::TryRng;
     #[test]
     fn derive_keyset_is_deterministic() {
         let seed = [0x11u8; 32];
@@ -270,7 +270,7 @@ mod tests {
             }
         }
         impl std::error::Error for FailingRngError {}
-        impl TryRngCore for FailingRng {
+        impl TryRng for FailingRng {
             type Error = FailingRngError;
             fn try_next_u32(&mut self) -> core::result::Result<u32, Self::Error> {
                 Err(FailingRngError)
@@ -295,7 +295,7 @@ mod tests {
     #[test]
     fn generate_keyset_rejects_all_zero_rng_bytes() {
         struct ZeroRng;
-        impl TryRngCore for ZeroRng {
+        impl TryRng for ZeroRng {
             type Error = core::convert::Infallible;
             fn try_next_u32(&mut self) -> core::result::Result<u32, Self::Error> {
                 Ok(0)

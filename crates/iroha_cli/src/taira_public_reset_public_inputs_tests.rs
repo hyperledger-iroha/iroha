@@ -18,7 +18,7 @@ fn line(value: impl std::fmt::Display) -> Vec<u8> {
 
 fn fixture_staking_policy() -> iroha_data_model::block::consensus::PublicLaneStakingPolicy {
     let fees = iroha_config::parameters::defaults::nexus::fees::genesis_policy();
-    iroha_deploy::genesis::default_staking_policy(
+    iroha_genesis::default_staking_policy(
         fees.fee_asset_id,
         fees.fee_sink_account_id.clone(),
         fees.fee_sink_account_id,
@@ -348,13 +348,9 @@ fn execute_fixture_genesis(
         .to_i105_for_discriminant(CHAIN_DISCRIMINANT)
         .unwrap()
     };
-    let mut nexus = iroha_config::parameters::actual::Nexus::default();
-    for literal in [
-        &mut nexus.staking.stake_escrow_account_id,
-        &mut nexus.staking.slash_sink_account_id,
-    ] {
-        *literal = reprofile(literal);
-    }
+    let nexus = iroha_config::parameters::actual::Nexus::default();
+    // Monetary identities are typed original genesis parameters, independent of
+    // the presentation discriminant used for node-local observer settings.
 
     let kura_config = actual::Kura {
         init_mode: InitMode::Strict,

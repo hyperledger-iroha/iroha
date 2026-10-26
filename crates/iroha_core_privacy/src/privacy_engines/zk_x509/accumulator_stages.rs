@@ -9,7 +9,7 @@ use super::super::private_table::{PrivateTableV1, zeroize_fields_v1};
 use super::private_links::{CA_EXTRA_OPENINGS_V1, CaMainPrivateLinkPlanV1};
 use super::retained_columns::{CaColumnFamilyV1, CaOriginalMaskedColumnsV1};
 use super::*;
-use rand::TryRngCore;
+use rand::TryRng;
 
 fn clear_columns_v1(columns: &mut [Vec<F>]) {
     for column in columns {
@@ -306,7 +306,7 @@ impl CaAwaitingMainAuxiliaryV1 {
 
 /// Commit original CA base and auxiliary polynomials around the shared X5B1.
 /// The caller owns one health-checked cryptographic session for the whole proof.
-pub fn commit_ca_through_auxiliary_v1<R: TryRngCore>(
+pub fn commit_ca_through_auxiliary_v1<R: TryRng>(
     trace: &ZkX509CaAccumulatorTraceV1,
     schedule: &ZkX509ShaCallScheduleV1,
     main_pre_aux: ZkX509CredentialMainPreAuxV1,
@@ -427,7 +427,7 @@ impl CaAwaitingMainAuxiliaryV1 {
     /// Build the local quotient from these original committed polynomials.
     /// Only the joint auxiliary-root transition may supply these alphas in the
     /// completed engine. This helper neither finalizes nor publishes a proof.
-    pub(super) fn local_composition_v1<R: TryRngCore>(
+    pub(super) fn local_composition_v1<R: TryRng>(
         &self,
         alphas: &[E],
         rng: &mut R,

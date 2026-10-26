@@ -61,7 +61,7 @@ use iroha_data_model::{
         zk_ace_pack_bytes_to_field_limbs,
     },
 };
-use rand::{TryCryptoRng, TryRngCore};
+use rand::{TryCryptoRng, TryRng};
 use thiserror::Error;
 use zeroize::Zeroizing;
 /// Internal, fixed AIR projection of the typed privacy statement.
@@ -1520,7 +1520,7 @@ fn build_trace_material(
         public_outputs,
     })
 }
-fn masked_lde_columns<R: TryRngCore>(
+fn masked_lde_columns<R: TryRng>(
     base_columns: &[Vec<F>],
     rng: &mut R,
 ) -> Result<MaskedTraceMaterial, ZkAceStarkError> {
@@ -2682,7 +2682,7 @@ fn validate_fri_mask_coefficients_v1(coefficients: &[E]) -> Result<(), ZkAceStar
     }
     Ok(())
 }
-fn fri_mask_material<R: TryRngCore>(
+fn fri_mask_material<R: TryRng>(
     lane: usize,
     rng: &mut R,
 ) -> Result<FriMaskMaterial, ZkAceStarkError> {
@@ -2777,7 +2777,7 @@ fn proof_query(
 /// Construct a canonical masked proof using a caller-supplied fallible RNG.
 ///
 /// The injected RNG exists for deterministic known-answer tests and explicit entropy-failure tests.
-/// Product callers use [`rand::rngs::OsRng`]. All deterministic profile, public-input, and witness
+/// Product callers use [`rand::rngs::SysRng`]. All deterministic profile, public-input, and witness
 /// checks complete before one shared checked entropy session is opened for both masking phases.
 pub(super) fn prove_zk_ace_stark_v1_with_rng<R: TryCryptoRng + ?Sized>(
     public_inputs: &ZkAceAirRelationInputsV1,
@@ -3255,7 +3255,8 @@ mod tests {
     };
     use iroha_model_base::domain::DomainId;
     use iroha_model_base::name::Name;
-    use rand::{RngCore, SeedableRng as _, rngs::StdRng};
+    use rand::SeedableRng as _;
+    use rand_chacha::ChaCha12Rng;
     use std::{collections::BTreeSet, str::FromStr as _, sync::OnceLock};
     fn account(seed: u8) -> AccountId {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
@@ -3328,7 +3329,7 @@ mod tests {
         let _guard = proof_test_guard();
         FIXTURE.get_or_init(|| {
             let (public_inputs, witness) = public_inputs_and_witness();
-            let mut rng = StdRng::from_seed([0x5A; 32]);
+            let mut rng = ChaCha12Rng::from_seed([0x5A; 32]);
             let proof = prove_zk_ace_stark_v1_with_rng(&public_inputs, &witness, &mut rng)
                 .expect("construct sound deterministic fixture");
             (public_inputs, proof)
@@ -3691,18 +3692,21 @@ mod tests {
     }
     #[derive(Debug)]
     struct MaxValueRng;
-    impl RngCore for MaxValueRng {
-        fn next_u32(&mut self) -> u32 {
-            u32::MAX
+    impl rand::TryRng for MaxValueRng {
+        type Error = core::convert::Infallible;
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Ok(u32::MAX)
         }
-        fn next_u64(&mut self) -> u64 {
-            u64::MAX
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Ok(u64::MAX)
         }
-        fn fill_bytes(&mut self, destination: &mut [u8]) {
-            destination.fill(0xFF);
+        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
+            Ok({
+                destination.fill(0xFF);
+            })
         }
     }
-    impl rand::CryptoRng for MaxValueRng {}
+    impl rand::TryCryptoRng for MaxValueRng {}
     #[test]
     fn constant_entropy_fails_the_shared_health_preflight() {
         let (public_inputs, witness) = public_inputs_and_witness();
@@ -4057,7 +4061,7 @@ mod tests {
         let (public_inputs, first) = fixture();
         let (_, witness) = public_inputs_and_witness();
         let _guard = proof_test_guard();
-        let mut rng = StdRng::from_seed([0xA5; 32]);
+        let mut rng = ChaCha12Rng::from_seed([0xA5; 32]);
         let second = prove_zk_ace_stark_v1_with_rng(public_inputs, &witness, &mut rng)
             .expect("second masked proof");
         assert_ne!(first, &second);

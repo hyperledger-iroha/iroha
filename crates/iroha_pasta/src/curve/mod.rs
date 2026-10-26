@@ -25,7 +25,7 @@
 //!
 //! The compressed encoding is the 32-byte little-endian `x` with the parity of
 //! `y` in bit 255; the identity encodes as 32 zero bytes. It is byte-identical
-//! to `pasta_curves` 0.5.2. Decoding rejects non-canonical `x`, `x` values
+//! to `pasta_curves` 0.6.1. Decoding rejects non-canonical `x`, `x` values
 //! without a curve point, and the all-zero `x` with the sign bit set (unless it
 //! decodes to a point).
 //!
@@ -249,10 +249,11 @@ macro_rules! impl_pasta_curve {
         use core::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
         use ff::{Field, PrimeField};
+        use group::CurveAffine;
         use group::cofactor::{CofactorCurve, CofactorGroup};
-        use group::prime::{PrimeCurve, PrimeCurveAffine, PrimeGroup};
+        use group::prime::{PrimeCurve, PrimeGroup};
         use group::{Curve as _, Group, GroupEncoding};
-        use rand_core_06::RngCore;
+        use rand_core::TryRng;
         use subtle::{Choice, ConditionallySelectable, ConstantTimeEq, CtOption};
 
         use crate::curve::{HashToCurveError, PastaAffine, PastaCurve};
@@ -668,16 +669,16 @@ macro_rules! impl_pasta_curve {
 
             /// Samples a uniformly random point, consuming the RNG exactly as
             /// `pasta_curves` does (a random `x`, then one `u32` for the sign).
-            fn random(mut rng: impl RngCore) -> Self {
+            fn try_random<R: TryRng + ?Sized>(rng: &mut R) -> Result<Self, R::Error> {
                 loop {
-                    let x = $base::random(&mut rng);
-                    let ysign = (rng.next_u32() % 2) as u8;
+                    let x = $base::try_random(rng)?;
+                    let ysign = (rng.try_next_u32()? % 2) as u8;
                     let x3 = x.square().mul(&x);
                     let y = (x3.add(&B)).sqrt();
                     if let Some(y) = Option::<$base>::from(y) {
                         let sign = y.is_odd().unwrap_u8();
                         let y = if ysign ^ sign == 0 { y } else { y.neg() };
-                        break $affine { x, y }.to_curve();
+                        break Ok($affine { x, y }.to_curve());
                     }
                 }
             }
@@ -687,7 +688,7 @@ macro_rules! impl_pasta_curve {
             }
 
             fn generator() -> Self {
-                <$affine as PrimeCurveAffine>::generator().to_curve()
+                <$affine as group::CurveAffine>::generator().to_curve()
             }
 
             fn is_identity(&self) -> Choice {
@@ -716,9 +717,9 @@ macro_rules! impl_pasta_curve {
         }
 
         impl group::Curve for $name {
-            type AffineRepr = $affine;
+            type Affine = $affine;
 
-            fn batch_normalize(p: &[Self], q: &mut [Self::AffineRepr]) {
+            fn batch_normalize(p: &[Self], q: &mut [Self::Affine]) {
                 crate::curve::batch::normalize_into(p, q);
             }
 
@@ -734,9 +735,7 @@ macro_rules! impl_pasta_curve {
 
         impl PrimeGroup for $name {}
 
-        impl PrimeCurve for $name {
-            type Affine = $affine;
-        }
+        impl PrimeCurve for $name {}
 
         impl CofactorGroup for $name {
             type Subgroup = $name;
@@ -754,9 +753,7 @@ macro_rules! impl_pasta_curve {
             }
         }
 
-        impl CofactorCurve for $name {
-            type Affine = $affine;
-        }
+        impl CofactorCurve for $name {}
 
         impl GroupEncoding for $name {
             type Repr = [u8; 32];
@@ -808,7 +805,7 @@ macro_rules! impl_pasta_curve {
             }
         }
 
-        impl PrimeCurveAffine for $affine {
+        impl group::CurveAffine for $affine {
             type Scalar = $scalar;
             type Curve = $name;
 
@@ -835,27 +832,6 @@ macro_rules! impl_pasta_curve {
                     y: $base::conditional_select(&self.y, &$base::one(), id),
                     z: $base::conditional_select(&$base::one(), &$base::zero(), id),
                 }
-            }
-        }
-
-        impl group::cofactor::CofactorCurveAffine for $affine {
-            type Scalar = $scalar;
-            type Curve = $name;
-
-            fn identity() -> Self {
-                <Self as PrimeCurveAffine>::identity()
-            }
-
-            fn generator() -> Self {
-                <Self as PrimeCurveAffine>::generator()
-            }
-
-            fn is_identity(&self) -> Choice {
-                <Self as PrimeCurveAffine>::is_identity(self)
-            }
-
-            fn to_curve(&self) -> $name {
-                <Self as PrimeCurveAffine>::to_curve(self)
             }
         }
 
@@ -1051,7 +1027,7 @@ mod tests {
 
     use super::*;
     use ff::{Field, WithSmallOrderMulGroup};
-    use group::{Curve, Group, GroupEncoding};
+    use group::{Curve, CurveAffine, Group, GroupEncoding};
 
     fn generic_checks<C: PastaCurve>()
     where

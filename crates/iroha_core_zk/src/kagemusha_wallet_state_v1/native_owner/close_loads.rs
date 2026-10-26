@@ -203,6 +203,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
     /// Current source is not a complete Retiring consumer, proof/key checks fail, storage is
     /// unavailable, publication is uncertain, or an already selected original was lost.
     pub fn close_loads(&mut self, request_id: [u8; 32]) -> Result<Vec<u8>, Error> {
+        self.require_fresh_work()?;
         let _payment = self.scheduler.payment();
         let plan = self.close_loads_plan(request_id)?;
         if plan.credential.body.account_digest != self.proofs.enrollment.body.account_digest

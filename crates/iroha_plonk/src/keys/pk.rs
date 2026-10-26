@@ -768,7 +768,7 @@ mod mask_tests;
 mod tests {
     use iroha_pasta::{Fp, Fq};
     use rand_chacha::ChaCha20Rng;
-    use rand_core_06::SeedableRng;
+    use rand_core::SeedableRng;
 
     use super::*;
     use crate::pcs::ipa::evaluate_polynomial;

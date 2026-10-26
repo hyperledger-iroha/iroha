@@ -8,8 +8,8 @@ namespace Hyperledger.Iroha.Petal;
 /// </summary>
 /// <remarks>
 /// Frame output is bit-identical to the Rust reference encoder (pinned by
-/// <c>fixtures/petal/petal_stream_v1.json</c>). The frame counter wraps at
-/// 65536 on a beacon frame, so atom ids repeat cleanly.
+/// <c>fixtures/petal/petal_stream_v5.json</c>), turn and kana lanes included. The
+/// frame counter wraps at 65536 on a beacon frame, so atom ids repeat cleanly.
 /// </remarks>
 public sealed class PetalStreamEncoder
 {
@@ -49,15 +49,22 @@ public sealed class PetalStreamEncoder
     /// <summary>Frames needed to send every source atom once (no losses, no repair).</summary>
     public int SystematicFrames { get; }
 
-    /// <summary>The data bytes of every lane of <paramref name="frame"/>.</summary>
+    /// <summary>The data bytes of every lane of <paramref name="frame"/>, turn and kana lanes included.</summary>
     /// <param name="frame">Frame counter.</param>
-    /// <returns>Lane data for <c>P</c> (19 B), <c>K</c> (83 B) and <c>D</c> (19 B).</returns>
-    public (byte[] P, byte[] K, byte[] D) LaneData(ushort frame)
+    /// <returns>
+    /// Lane data for <c>D</c> (19 B), the four field lanes (83 B each), the four turn lanes
+    /// (68 B each) and the kana lanes <c>P0</c>, <c>K0</c>, <c>P1</c>, <c>K1</c> (20 B and 116 B).
+    /// </returns>
+    public PetalLaneData LaneData(ushort frame)
     {
-        var p = NewLane(PetalLane.P, frame);
-        WriteAtoms(p, PetalStream.LaneFirstId(PetalLane.P, frame), PetalLanes.PAtoms);
-        var k = NewLane(PetalLane.K, frame);
-        WriteAtoms(k, PetalStream.LaneFirstId(PetalLane.K, frame), PetalLanes.KAtoms);
+        var fields = new byte[PetalLayout.Sectors][];
+        foreach (var lane in PetalLanes.Fields)
+        {
+            var data = NewLane(lane, frame);
+            WriteAtoms(data.AsSpan(PetalLanes.LaneHeaderLength), PetalStream.LaneFirstId(lane, frame), PetalLanes.FieldAtoms);
+            fields[PetalLanes.Sector(lane)] = data;
+        }
+
         var d = NewLane(PetalLane.D, frame);
         if (PetalStream.IsBeaconFrame(frame))
         {
@@ -71,32 +78,57 @@ public sealed class PetalStreamEncoder
         }
         else
         {
-            WriteAtoms(d, PetalStream.LaneFirstId(PetalLane.D, frame), PetalLanes.DAtoms);
+            WriteAtoms(d.AsSpan(PetalLanes.LaneHeaderLength), PetalStream.LaneFirstId(PetalLane.D, frame), PetalLanes.DAtoms);
         }
 
-        return (p, k, d);
+        var header = new PetalLaneHeader(Meta.Tag, frame);
+        var turns = new byte[PetalLayout.Sectors][];
+        Span<byte> atoms = stackalloc byte[PetalTurns.TurnAtoms * PetalLanes.AtomLength];
+        for (var sector = 0; sector < turns.Length; sector++)
+        {
+            WriteAtoms(atoms, PetalTurns.TurnFirstId(frame, sector), PetalTurns.TurnAtoms);
+            turns[sector] = PetalTurns.TurnData(header, sector, atoms);
+        }
+
+        var kana = new byte[PetalKana.Lanes.Count][];
+        Span<byte> kanaAtoms = stackalloc byte[PetalKana.KanaGlyphAtoms * PetalLanes.AtomLength];
+        foreach (var lane in PetalKana.Lanes)
+        {
+            var laneAtoms = kanaAtoms[..(PetalKana.Atoms(lane) * PetalLanes.AtomLength)];
+            WriteAtoms(laneAtoms, PetalKana.KanaFirstId(frame, lane), PetalKana.Atoms(lane));
+            kana[(int)lane] = PetalKana.KanaData(header, lane, laneAtoms);
+        }
+
+        return new PetalLaneData(d, fields, turns, kana);
     }
 
     /// <summary>The transmitted (whitened Reed–Solomon) codewords of <paramref name="frame"/>.</summary>
     /// <param name="frame">Frame counter.</param>
-    /// <returns>Codewords for <c>P</c> (32 B), <c>K</c> (128 B) and <c>D</c> (30 B).</returns>
-    public (byte[] P, byte[] K, byte[] D) Words(ushort frame)
+    /// <returns>
+    /// Codewords for <c>D</c> (30 B), the four field lanes (105 B each), the four turn lanes
+    /// (90 B each) and the kana lanes <c>P0</c>, <c>K0</c>, <c>P1</c>, <c>K1</c> (37 B and 149 B).
+    /// </returns>
+    public PetalLaneData Words(ushort frame)
     {
-        var (p, k, d) = LaneData(frame);
-        return (
-            PetalLanes.EncodeLane(PetalLane.P, p),
-            PetalLanes.EncodeLane(PetalLane.K, k),
-            PetalLanes.EncodeLane(PetalLane.D, d));
+        var data = LaneData(frame);
+        var fields = new byte[PetalLayout.Sectors][];
+        var turns = new byte[PetalLayout.Sectors][];
+        for (var sector = 0; sector < fields.Length; sector++)
+        {
+            fields[sector] = PetalLanes.EncodeLane(PetalLanes.Field(sector), data.Fields[sector]);
+            turns[sector] = PetalTurns.EncodeTurnLane(sector, data.Turns[sector]);
+        }
+
+        var kana = new byte[PetalKana.Lanes.Count][];
+        foreach (var lane in PetalKana.Lanes)
+            kana[(int)lane] = PetalKana.EncodeKanaLane(lane, data.Lane(lane));
+        return new PetalLaneData(PetalLanes.EncodeLane(PetalLane.D, data.D), fields, turns, kana);
     }
 
-    /// <summary>Every cell of <paramref name="frame"/>, ready to render.</summary>
+    /// <summary>Every cell of <paramref name="frame"/>, lit, turned and with its katakana tiles, ready to render.</summary>
     /// <param name="frame">Frame counter.</param>
     /// <returns>The frame cells.</returns>
-    public PetalFrameCells Cells(ushort frame)
-    {
-        var (p, k, d) = Words(frame);
-        return PetalFrameCells.FromWords(p, k, d);
-    }
+    public PetalFrameCells Cells(ushort frame) => PetalFrameCells.FromWords(Words(frame));
 
     private byte[] NewLane(PetalLane lane, ushort frame)
     {
@@ -107,12 +139,13 @@ public sealed class PetalStreamEncoder
         return data;
     }
 
-    private void WriteAtoms(byte[] lane, uint firstId, int count)
+    /// <summary>Writes <paramref name="count"/> consecutive atoms from <paramref name="firstId"/> to the start of <paramref name="target"/>.</summary>
+    private void WriteAtoms(Span<byte> target, uint firstId, int count)
     {
         for (var i = 0; i < count; i++)
         {
-            var target = lane.AsSpan(PetalLanes.LaneHeaderLength + i * PetalLanes.AtomLength, PetalLanes.AtomLength);
-            PetalFountain.EncodeAtom(source, Meta.Crc, firstId + (uint)i, target);
+            var atom = target.Slice(i * PetalLanes.AtomLength, PetalLanes.AtomLength);
+            PetalFountain.EncodeAtom(source, Meta.Crc, firstId + (uint)i, atom);
         }
     }
 }

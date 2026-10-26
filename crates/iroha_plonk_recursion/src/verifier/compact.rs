@@ -101,7 +101,7 @@ impl CompactPublicConfig {
 }
 impl<C: PastaCurve> VerifierConfig<C> {
     /// Configures the same complete interpreter on 11 advice columns, one range
-    /// lookup and 12 fixed columns, using explicit degree-ten phase gates.
+    /// lookup and 14 fixed columns, using explicit degree-ten phase gates.
     /// Returned direct public gates have the fixed Omega `[1,2,16]` schema.
     pub fn configure_compact(
         meta: &mut ConstraintSystem<C::Base>,
@@ -305,7 +305,7 @@ mod tests {
         cs::{
             CircuitDescriptorV1, CircuitDescriptorV2, CurveV1, DescriptorConfig, DescriptorError,
             DescriptorRule, InstanceModeV1, InstanceType, ProofSuffixV1, TranscriptV1,
-            TranscriptV2,
+            TranscriptV2, descriptor::MAX_DEGREE,
         },
     };
 
@@ -313,7 +313,7 @@ mod tests {
     enum Trade {
         Base,
         ExistingPort,
-        ExistingPortDegreeTen,
+        AboveMaximumDegree,
         SecondaryComponent,
         NewAdvice,
         NewState,
@@ -332,10 +332,10 @@ mod tests {
         );
         match trade {
             Trade::Base | Trade::SecondaryComponent => {}
-            Trade::ExistingPort | Trade::ExistingPortDegreeTen => {
+            Trade::ExistingPort | Trade::AboveMaximumDegree => {
                 meta.enable_equality(config.ecc.advice()[5]);
-                if matches!(trade, Trade::ExistingPortDegreeTen) {
-                    meta.set_minimum_degree(10);
+                if matches!(trade, Trade::AboveMaximumDegree) {
+                    meta.set_minimum_degree(MAX_DEGREE + 1);
                 }
             }
             Trade::NewAdvice | Trade::NewState => {
@@ -382,12 +382,23 @@ mod tests {
     fn descriptor<C: PastaCurve>(curve: CurveV1) {
         let protocol = protocol::<C>(curve, Trade::Base).unwrap();
         assert_eq!(protocol.shape().num_advice, 11);
-        assert_eq!(protocol.shape().num_fixed, 12);
-        assert_eq!(protocol.shape().advice_queries, 25);
-        assert_eq!(protocol.shape().permutation_columns, 5);
-        assert_eq!(protocol.shape().degree, 9);
+        // Eight phase columns plus two tuple-table, two pattern and two
+        // lookup-coefficient columns. The packed CRT port also participates
+        // in the norm-product permutation, which needs two sets at degree ten.
+        assert_eq!(protocol.shape().num_fixed, 14);
+        assert_eq!(protocol.shape().fixed_queries, 14);
+        assert_eq!(protocol.shape().advice_queries, 26);
+        assert_eq!(protocol.shape().permutation_columns, 6);
+        assert_eq!(protocol.shape().permutation_sets, 2);
+        assert_eq!(protocol.shape().chunk_len, 4);
+        assert_eq!(protocol.shape().degree, 10);
+        assert_eq!(protocol.shape().quotient_pieces, 9);
         assert_eq!(protocol.shape().lookups, 1);
-        assert_eq!(protocol.proof_length() + 1088, 4768);
+        assert_eq!(protocol.plan().sets().len(), 5);
+        // The norm-product transcript has 61 point and 64 scalar messages,
+        // each 32 bytes, followed by the two 544-byte accumulator claims.
+        assert_eq!(protocol.proof_length(), (61 + 64) * 32);
+        assert_eq!(protocol.proof_length() + 1088, 5088);
     }
 
     #[test]
@@ -398,11 +409,11 @@ mod tests {
 
     #[test]
     fn compact_range_column_and_degree_trade_inventory() {
-        for (trade, expected) in [
-            (Trade::ExistingPort, 4800),
-            (Trade::SecondaryComponent, 4800),
-            (Trade::NewAdvice, 4832),
-            (Trade::NewState, 4896),
+        for (trade, degree, advice, queries, permutation, expected) in [
+            (Trade::ExistingPort, 10, 11, 26, 7, 5120),
+            (Trade::SecondaryComponent, 11, 11, 26, 6, 5120),
+            (Trade::NewAdvice, 10, 12, 27, 6, 5152),
+            (Trade::NewState, 10, 12, 28, 7, 5216),
         ] {
             let protocol = protocol::<Eq>(CurveV1::Pallas, trade).unwrap();
             eprintln!(
@@ -410,10 +421,17 @@ mod tests {
                 protocol.shape(),
                 protocol.proof_length() + 1088
             );
+            assert_eq!(protocol.shape().degree, degree);
+            assert_eq!(protocol.shape().num_fixed, 14);
+            assert_eq!(protocol.shape().num_advice, advice);
+            assert_eq!(protocol.shape().advice_queries, queries);
+            assert_eq!(protocol.shape().permutation_columns, permutation);
+            assert_eq!(protocol.shape().permutation_sets, 2);
+            assert_eq!(protocol.plan().sets().len(), 5);
             assert_eq!(protocol.proof_length() + 1088, expected);
         }
         assert!(matches!(
-            protocol::<Eq>(CurveV1::Pallas, Trade::ExistingPortDegreeTen),
+            protocol::<Eq>(CurveV1::Pallas, Trade::AboveMaximumDegree),
             Err(DescriptorError::Invalid(DescriptorRule::Degree))
         ));
     }

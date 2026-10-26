@@ -976,6 +976,12 @@ impl WordBuilderV1 {
 pub fn build_sha256_word_circuit_v1(
     message: &[u8],
 ) -> Result<ZkX509Sha256WordCircuitV1, ZkX509Sha256WordAirErrorV1> {
+    #[cfg(test)]
+    CIRCUIT_BUILD_COUNT_V1.with(|count| {
+        if let Some(current) = count.get() {
+            count.set(Some(current + 1));
+        }
+    });
     let circuit = build_sha256_word_circuit_unchecked_v1(message)?;
     circuit.validate()?;
     Ok(circuit)
@@ -2029,4 +2035,29 @@ mod tests {
             Err(ZkX509IoAirErrorV1::PublicInput)
         );
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    static CIRCUIT_BUILD_COUNT_V1: core::cell::Cell<Option<usize>> = const { core::cell::Cell::new(None) };
+}
+
+/// Count actual checked circuit constructions in this test thread, resetting on unwind.
+#[cfg(test)]
+pub(super) fn observe_circuit_builds_v1<T>(operation: impl FnOnce() -> T) -> (T, usize) {
+    struct Scope;
+    impl Drop for Scope {
+        fn drop(&mut self) {
+            CIRCUIT_BUILD_COUNT_V1.set(None);
+        }
+    }
+    assert!(CIRCUIT_BUILD_COUNT_V1.replace(Some(0)).is_none());
+    let _scope = Scope;
+    let output = operation();
+    (
+        output,
+        CIRCUIT_BUILD_COUNT_V1
+            .get()
+            .expect("active circuit observation"),
+    )
 }

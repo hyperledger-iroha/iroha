@@ -14,7 +14,7 @@ import {
   JS_TYPE_STRING,
   UTF8_ENCODING,
 } from "./commonLiterals.js";
-import { sha256 } from "@noble/hashes/sha2";
+import { sha256 } from "@noble/hashes/sha2.js";
 import { crc64Xz } from "./crc64Xz.js";
 import {
   AccountAddress,

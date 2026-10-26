@@ -31,8 +31,8 @@ extension KagemushaEnrollmentDeviceActor {
     }
     let sender = command.action.hasSuffix("send")
     let runner = KagemushaQRDiagnostic(selection: .init(sender: sender,
-      recovery: command.action.contains("recover"), setupID: setupID, requestID: requestID, inputs: inputs),
-      wallet: wallet, files: config.files, actorPath: config.actorPath,
+      recovery: command.action.contains("recover"), continuation: command.action.contains("continue"), setupID: setupID, requestID: requestID, inputs: inputs),
+      wallet: wallet, call: try mutationOwner(), files: config.files, actorPath: config.actorPath,
       attemptPath: config.actorPath + "/public/" + config.invocation + String(format: "/%04d-qr", sequence),
       ui: pair.0, prompt: pair.1)
     qrRun = runner
@@ -42,7 +42,7 @@ extension KagemushaEnrollmentDeviceActor {
         runner.run { continuation.resume(with: $0) }
       }
     } onCancel: { runner.cancel() }
-    return sender ? "native-exact-send-delivery-admitted-over-qr"
+    return sender ? "native-exact-send-delivery-verified-over-qr"
       : "native-durable-receive-credited-display-closed-over-qr"
   }
 }

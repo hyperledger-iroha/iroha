@@ -48,6 +48,12 @@ fn mk_state_with_bls_batch() -> (State, NetworkId, AccountId, KeyPair) {
     let mut pipeline = state.view().pipeline().clone();
     pipeline.signature_batch_max_bls = 4;
     state.set_pipeline(pipeline);
+    assert!(
+        state
+            .transaction_admission_parameters()
+            .crypto_policy()
+            .is_none()
+    );
     (state, network_id, account_id, kp)
 }
 fn make_tx(
@@ -79,6 +85,14 @@ fn make_tx(
 fn bls_batch_block_validates_with_pop() {
     let (state, _, account, kp) = mk_state_with_bls_batch();
     let chain = crate::block::tests::component_chain(state);
+    assert!(
+        chain
+            .state()
+            .transaction_admission_parameters()
+            .require_crypto_policy()
+            .expect("actual signed genesis committed the batch fixture policy")
+            .allows(Algorithm::BlsNormal)
+    );
     let tx = make_tx(&chain.network_id(), &account, &kp, true);
     native_validation::validate(&chain, native_validation::proposal(&chain, vec![tx]))
         .expect("BLS block with verified PoP must validate");
@@ -87,6 +101,14 @@ fn bls_batch_block_validates_with_pop() {
 fn bls_batch_block_validates_without_pop_fallback() {
     let (state, _, account, kp) = mk_state_with_bls_batch();
     let chain = crate::block::tests::component_chain(state);
+    assert!(
+        chain
+            .state()
+            .transaction_admission_parameters()
+            .require_crypto_policy()
+            .expect("actual signed genesis committed the batch fixture policy")
+            .allows(Algorithm::BlsNormal)
+    );
     let tx = make_tx(&chain.network_id(), &account, &kp, false);
     native_validation::validate(&chain, native_validation::proposal(&chain, vec![tx]))
         .expect("BLS block without PoP must validate via individual signatures");
@@ -95,6 +117,14 @@ fn bls_batch_block_validates_without_pop_fallback() {
 fn bls_batch_block_rejects_missing_proof_policies() {
     let (state, _, account, kp) = mk_state_with_bls_batch();
     let chain = crate::block::tests::component_chain(state);
+    assert!(
+        chain
+            .state()
+            .transaction_admission_parameters()
+            .require_crypto_policy()
+            .expect("actual signed genesis committed the batch fixture policy")
+            .allows(Algorithm::BlsNormal)
+    );
     let tx = make_tx(&chain.network_id(), &account, &kp, true);
     let original = native_validation::proposal(&chain, vec![tx.clone()]);
     let mut header = original.header();

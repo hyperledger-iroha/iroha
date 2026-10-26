@@ -94,7 +94,7 @@ fn policy_and_prf_ignore_ambient_layout_and_keep_borrowed_frame_identity() {
     // Exercise the external HKDF concatenation contract independently of the
     // production borrowed multi-part path; every field and domain stays ordered.
     let salt = [HKDF_SALT_DOMAIN, commitment.policy_hash.as_ref()].concat();
-    let hkdf = Hkdf::<Sha3_512>::new(Some(&salt), secret);
+    let hkdf = SimpleHkdf::<Sha3_512>::new(Some(&salt), secret);
     let mut opaque_material = [0_u8; Hash::LENGTH];
     hkdf.expand(
         &[HKDF_OPAQUE_INFO_DOMAIN, &owned_frame].concat(),

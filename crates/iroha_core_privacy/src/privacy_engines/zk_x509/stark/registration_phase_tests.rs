@@ -214,6 +214,7 @@ fn deterministic_projection_proof_roundtrips_and_has_a_protocol_kat() {
         .map(|query| query.index)
         .collect::<BTreeSet<_>>();
     assert_eq!(indices.len(), QUERY_COUNT);
+    // The canonical 32-byte native BLAKE3 catalog binds every transcript frame.
     let digest: [u8; 32] = Sha256::digest(proof).into();
     eprintln!(
         "zk-x509-native-projection-proof-sha256={}",
@@ -221,7 +222,7 @@ fn deterministic_projection_proof_roundtrips_and_has_a_protocol_kat() {
     );
     assert_eq!(
         hex::encode(digest),
-        "0dd4a27570de1f36d102a887c61929bb8f94776afeba6568720e7758ca49aa2a",
+        "6f42a655b97ec22fbd4bab70cf04c401bb17d6d30d6897f4c885ba68897b4cac",
         "update only when the canonical projection proof protocol intentionally changes"
     );
 }
@@ -276,11 +277,12 @@ fn deterministic_proof_roundtrips_and_has_unique_post_grinding_queries() {
         .map(|query| query.index)
         .collect::<BTreeSet<_>>();
     assert_eq!(indices.len(), QUERY_COUNT);
+    // The canonical 32-byte native BLAKE3 catalog binds every transcript frame.
     let digest: [u8; 32] = Sha256::digest(proof).into();
     eprintln!("zk-x509-native-io-proof-sha256={}", hex::encode(digest));
     assert_eq!(
         hex::encode(digest),
-        "165791adcb5b95e31ec00387bc9ea82577977ff7c96e26ed7829fe7a784b1f94",
+        "672c2f231ed044de2ffc6aee74c686777dadaabdbec2a58a464afda6581af69f",
         "update only when the canonical proof protocol intentionally changes"
     );
 }
@@ -289,7 +291,7 @@ fn witness_and_entropy_failures_are_rejected_before_emission() {
     let statement = fixture_statement();
     let mut changed = fixture_witnesses();
     changed[0].consumer_values[0][0] ^= 1;
-    let mut rng = StdRng::from_seed([7; 32]);
+    let mut rng = ChaCha12Rng::from_seed([7; 32]);
     assert!(matches!(
         prove_zk_x509_io_segmented_stark_v1_with_rng(&statement, &changed, &mut rng),
         Err(ZkX509StarkErrorV1::IoWitness)
@@ -456,7 +458,7 @@ fn every_deep_value_order_omission_and_replay_is_rejected() {
         encode_zk_x509_segmented_stark_proof_v1(&duplicated, &fixture_aggregate_layout()),
         Err(ZkX509StarkErrorV1::ProfileMismatch)
     ));
-    let mut replay_rng = StdRng::from_seed([0xC7; 32]);
+    let mut replay_rng = ChaCha12Rng::from_seed([0xC7; 32]);
     let replay_bytes = prove_zk_x509_io_segmented_stark_v1_with_rng(
         &fixture().0,
         &fixture_witnesses(),
@@ -527,7 +529,7 @@ fn every_projection_committed_column_and_opening_family_is_bound() {
 #[test]
 fn invalid_projection_witnesses_and_entropy_fail_before_emission() {
     let (statement, witness) = crate::privacy_engines::zk_x509::projection_air::tests::fixture();
-    let mut rng = StdRng::from_seed([0x31; 32]);
+    let mut rng = ChaCha12Rng::from_seed([0x31; 32]);
     let mut changed = witness.clone();
     changed.chain_spki_der[0][0] ^= 1;
     assert!(matches!(
@@ -2493,7 +2495,7 @@ fn main_joined_row_order_and_base_aux_phase_are_domain_bound() {
     );
 }
 fn tiny_main_mask_group_fixture_v1(seed: u8) -> main_aggregate::MainTraceMaskGroupV1 {
-    let mut rng = StdRng::from_seed([seed; 32]);
+    let mut rng = ChaCha12Rng::from_seed([seed; 32]);
     main_aggregate::MainTraceMaskGroupV1::sample_v1(2, 11, 1, &mut rng, |_| {
         Ok(ZeroizingMainTraceColumnV1(vec![F(u64::from(seed)); 4]))
     })
@@ -2948,7 +2950,7 @@ fn main_finish_verifier_and_consensus_source_use_only_the_closed_release_path() 
     assert!(!source.contains("fn composition_material_v1"));
     assert!(!source.contains("fn main_composition_material_from_polynomials_v1"));
     let combined_start = source
-        .find("fn main_composition_material_with_ca_v1<R: TryRngCore>")
+        .find("fn main_composition_material_with_ca_v1<R: TryRng>")
         .expect("canonical MAIN composition owner");
     let combined = &source[combined_start..];
     let links = combined

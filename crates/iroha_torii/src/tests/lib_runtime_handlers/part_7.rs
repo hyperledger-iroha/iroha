@@ -2731,9 +2731,7 @@ fn install_two_peer_npos_roster(
     let mut block = app.state.block(header);
     block
         .world
-        .parameters
-        .get_mut()
-        .set_parameter(Parameter::Custom(
+        .set_parameter_for_testing(Parameter::Custom(
             SumeragiNposParameters::default().into_custom_parameter(),
         ))
         .expect("install the committed NPoS fixture parameters");
@@ -2830,9 +2828,7 @@ async fn authoritative_lane_peers_do_not_fall_back_to_online_peers_when_state_is
         let mut block = app.state.block(header);
         block
             .world
-            .parameters
-            .get_mut()
-            .set_parameter(Parameter::Custom(
+            .set_parameter_for_testing(Parameter::Custom(
                 SumeragiNposParameters::default().into_custom_parameter(),
             ))
             .expect("install the committed NPoS fixture parameters");
@@ -3116,7 +3112,10 @@ async fn authoritative_lane_peers_use_scheduled_global_committee_for_admin_manag
         }
         install_lane_manifest_registry_for_test(state, &[(lane_id, exact_committee.clone())]);
         let state_view = app_mut.state.view();
-        app_mut.queue.reconfigure_nexus(&nexus, &state_view, None);
+        app_mut
+            .queue
+            .reconfigure_nexus(&nexus, &state_view, None)
+            .expect("original State pool admits Queue privacy projection");
     }
     let route = RoutingDecision::new(lane_id, dataspace_id);
     let expected_global = sorted_admin_peer_ids_for_test(&exact_committee);
@@ -3474,7 +3473,10 @@ async fn scheduled_global_route_authority_ignores_local_commit_topology_filterin
             &[(lane_id, exact_remote_committee.clone())],
         );
         let state_view = app_mut.state.view();
-        app_mut.queue.reconfigure_nexus(&nexus, &state_view, None);
+        app_mut
+            .queue
+            .reconfigure_nexus(&nexus, &state_view, None)
+            .expect("original State pool admits Queue privacy projection");
     }
     let route = RoutingDecision::new(lane_id, dataspace_id);
     let expected_global = sorted_admin_peer_ids_for_test(&exact_remote_committee);
@@ -3537,7 +3539,10 @@ async fn incoming_proxy_reads_and_fanout_are_terminal_when_route_ownership_is_st
             &[(lane_id, exact_remote_committee.clone())],
         );
         let state_view = app_mut.state.view();
-        app_mut.queue.reconfigure_nexus(&nexus, &state_view, None);
+        app_mut
+            .queue
+            .reconfigure_nexus(&nexus, &state_view, None)
+            .expect("original State pool admits Queue privacy projection");
     }
     let route = RoutingDecision::new(lane_id, dataspace_id);
     let expected_global = sorted_admin_peer_ids_for_test(&exact_remote_committee);

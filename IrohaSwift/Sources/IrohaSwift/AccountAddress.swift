@@ -29,7 +29,7 @@ public enum AccountAddressError: Error, Equatable {
     case unsupportedAddressFormat
     case multisigMemberOverflow(Int)
     case invalidMultisigPolicy(String)
-    /// Complete account admission requires the ABI-31 Rust address codec.
+    /// Complete account admission requires the ABI-33 Rust address codec.
     case nativeBridgeUnavailable
 
     /// Stable Norito error code (`ERR_*`) that mirrors the Rust data model.
@@ -139,7 +139,7 @@ public struct AccountAddress {
         return try fromCanonicalBytes(canonical)
     }
 
-    /// Validate the complete controller with the mandatory ABI-31 Rust owner.
+    /// Validate the complete controller with the mandatory ABI-33 Rust owner.
     public static func fromCanonicalBytes(_ bytes: Data) throws -> AccountAddress {
         guard !bytes.isEmpty else { throw AccountAddressError.invalidLength }
         guard let _ = try NoritoNativeBridge.shared.renderAccountAddress(
@@ -666,7 +666,7 @@ private func encodeMultisigPolicyCTAP2(
 }
 
 private func blake2bMac256(_ data: Data, personal: Data) -> Data {
-    // Blake2bMac with an empty key still emits a zero-padded key block.
+    // The canonical policy preimage starts with the 128-byte empty-key MAC block.
     var prefixed = Data(repeating: 0, count: blake2bBlockLength)
     prefixed.append(data)
     return Blake2b.hash256(prefixed, personal: personal)

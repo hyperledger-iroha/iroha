@@ -16,7 +16,7 @@ pub(super) struct LaneLifecycleReleases<'state> {
     pub(super) nexus: DeferredPublicationRwLock<'state, iroha_config::parameters::actual::Nexus>,
     pub(super) header: DeferredPublicationRwLock<'state, Option<BlockHeader>>,
     pub(super) manifests: DeferredPublicationRwLock<'state, LaneManifestRegistryHandle>,
-    pub(super) privacy: DeferredPublicationRwLock<'state, LanePrivacyRegistryHandle>,
+    pub(super) privacy: DeferredPublicationRwLock<'state, LanePrivacyRegistry>,
     pub(super) commitments: DeferredPublicationRwLock<'state, DaCommitmentStore>,
     pub(super) confidential_compute: DeferredPublicationRwLock<'state, ConfidentialComputeStore>,
     pub(super) receipt_cursors: DeferredPublicationRwLock<'state, DaReceiptCursorIndex>,

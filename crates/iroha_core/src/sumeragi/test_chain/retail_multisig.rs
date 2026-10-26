@@ -491,11 +491,11 @@ fn install_monthly_policy(
     registry.validate().unwrap();
     transaction
         .world
-        .parameters
-        .get_mut()
-        .set_parameter(Parameter::Custom(registry.into_custom_parameter().expect(
-            "validation-fee fixture registry fits the canonical JSON parameter",
-        )))
+        .set_parameter_for_testing(Parameter::Custom(
+            registry
+                .into_custom_parameter()
+                .expect("validation-fee fixture registry fits the canonical JSON parameter"),
+        ))
         .expect("valid fixture parameters");
     let record = RetailFeeAccountStateV1::enroll(source.clone(), START, 1000).unwrap();
     crate::retail_fee::write_account(&mut transaction.world, &record).unwrap();

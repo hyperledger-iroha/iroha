@@ -19,7 +19,8 @@ use iroha_data_model::{
         PrivacyZkX509CrlRecordDigestV1, PrivacyZkX509TrustAnchorRecordDigestV1,
     },
 };
-use rand::{RngCore, SeedableRng as _, rngs::StdRng};
+use rand::SeedableRng as _;
+use rand_chacha::ChaCha12Rng;
 use sha2::{Digest as _, Sha256};
 use std::{
     collections::BTreeSet,
@@ -1342,7 +1343,7 @@ fn fixture() -> &'static (ZkX509IoStarkStatementV1, Vec<u8>) {
     let _guard = proof_guard();
     FIXTURE.get_or_init(|| {
         let statement = fixture_statement();
-        let mut rng = StdRng::from_seed([0x5A; 32]);
+        let mut rng = ChaCha12Rng::from_seed([0x5A; 32]);
         let proof = prove_zk_x509_io_segmented_stark_v1_with_rng(
             &statement,
             &fixture_witnesses(),
@@ -1387,7 +1388,7 @@ fn projection_fixture() -> &'static (
     FIXTURE.get_or_init(|| {
         let (statement, witness) =
             crate::privacy_engines::zk_x509::projection_air::tests::fixture();
-        let mut rng = StdRng::from_seed([0xA7; 32]);
+        let mut rng = ChaCha12Rng::from_seed([0xA7; 32]);
         let proof =
             prove_zk_x509_projection_segmented_stark_v1_with_rng(&statement, &witness, &mut rng)
                 .expect("deterministic projection proof");
@@ -1400,10 +1401,12 @@ fn projection_layout() -> SegmentLayoutV1 {
 fn projection_provider_post_base_v1(
     statement: &IrohaZkX509StarkP256StatementV1,
 ) -> ZkX509CredentialMainPostBaseChallengesV1 {
-    let consensus_context_digest =
-        ZkX509CredentialPublicBindingV1::from_consensus_context_v1(statement, [0x91; 32])
-            .expect("projection fixture consensus binding")
-            .consensus_context_digest;
+    let consensus_context_digest = ZkX509CredentialPublicBindingV1::from_consensus_context_v1(
+        statement,
+        *statement.context.network_id.as_bytes(),
+    )
+    .expect("projection fixture consensus binding")
+    .consensus_context_digest;
     derive_zk_x509_credential_pre_aux_binding_v1(
         ZkX509CredentialMainPreAuxV1::fixture_for_test_v1(
             consensus_context_digest,

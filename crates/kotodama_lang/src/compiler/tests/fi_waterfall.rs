@@ -1,7 +1,7 @@
 //! Compiler contract for native FI and controlled overflow settlement.
 //!
-//! TODO: Register with the compiler tests in the coordinated ABI candidate.
-//! This staged file is uncompiled and does not qualify any native surface.
+//! Registered with the compiler test owner; these checks exercise compilation
+//! and do not establish native host or deployment qualification.
 
 use super::*;
 

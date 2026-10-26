@@ -4632,17 +4632,19 @@ mod tests {
     {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
-        let world = World::default();
-        // Component registrations use an explicit policy authored before the block snapshot.
-        let mut parameters = world.parameters.block();
-        parameters
-            .set_parameter(
-                crate::sumeragi::test_chain::crypto_fixture_policy()
-                    .into_parameter()
-                    .expect("canonical fixture crypto policy"),
+        let mut world = World::default();
+        // This isolated component fixture authors its predecessor policy explicitly.
+        // It does not claim original signed genesis or consensus publication.
+        world
+            .set_parameter_for_testing(
+                iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                    iroha_crypto::Algorithm::Ed25519,
+                ])
+                .unwrap()
+                .into_parameter()
+                .unwrap(),
             )
-            .expect("install fixture crypto policy");
-        parameters.commit();
+            .expect("explicit component account crypto policy");
         let state = State::new(world, kura, query);
         let header = iroha_data_model::block::BlockHeader::new(
             NonZeroU64::new(1).expect("non-zero height"),
@@ -4668,21 +4670,23 @@ mod tests {
             .iter()
             .cloned()
             .map(|account| Account::new(account).build(&ALICE_ID));
-        let world = World::with(
+        let mut world = World::with(
             [seeded_domain],
             seeded_accounts,
             std::iter::empty::<AssetDefinition>(),
         );
-        // Component account writes require an authored policy before the block snapshot.
-        let mut parameters = world.parameters.block();
-        parameters
-            .set_parameter(
-                crate::sumeragi::test_chain::crypto_fixture_policy()
-                    .into_parameter()
-                    .expect("canonical fixture crypto policy"),
+        // This isolated component fixture authors its predecessor policy explicitly.
+        // It does not claim original signed genesis or consensus publication.
+        world
+            .set_parameter_for_testing(
+                iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                    iroha_crypto::Algorithm::Ed25519,
+                ])
+                .unwrap()
+                .into_parameter()
+                .unwrap(),
             )
-            .expect("install fixture crypto policy");
-        parameters.commit();
+            .expect("explicit component account crypto policy");
         let state = State::new(world, kura, query);
         let header = iroha_data_model::block::BlockHeader::new(
             NonZeroU64::new(1).expect("non-zero height"),
@@ -7730,9 +7734,7 @@ mod tests {
                 .parse()
                 .expect("metadata limit parameter id");
             stx.world
-                .parameters
-                .get_mut()
-                .set_parameter(Parameter::Custom(CustomParameter::new(
+                .set_parameter_for_testing(Parameter::Custom(CustomParameter::new(
                     limit_id,
                     Json::new(1_u64),
                 )))

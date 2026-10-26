@@ -39,6 +39,7 @@
 )]
 
 use ff::Field;
+use group::CurveAffine;
 use zeroize::Zeroize;
 
 use crate::curve::{PastaAffine, PastaCurve};
@@ -275,7 +276,13 @@ impl<'a, C: PastaCurve, const SECRET: bool> Buckets<'a, C, SECRET> {
         if self.mark[b] == self.epoch {
             // Already queued in this batch: accumulate projectively.
             let signed = if neg { -*base } else { *base };
-            self.overflow[b] = self.overflow[b].add_mixed_finite(&signed);
+            // A newly used overflow is the identity. Construct its first point
+            // directly; subsequent complete additions keep the same group sum.
+            self.overflow[b] = if self.overflow_used[b] {
+                self.overflow[b].add_mixed_finite(&signed)
+            } else {
+                signed.to_curve()
+            };
             self.overflow_used[b] = true;
             return;
         }
@@ -806,6 +813,150 @@ mod tests {
         p.insert(0, 0, false);
         p.wipe();
         assert!(p.has[0]);
+    }
+
+    #[test]
+    fn first_overflow_sign_and_cancelled_overflow_match_both_curves() {
+        fn check<C: PastaCurve, const SECRET: bool>() {
+            let generator = C::generator();
+            let weights = [
+                C::ScalarExt::ONE,
+                C::ScalarExt::from(2),
+                C::ScalarExt::from(3),
+                -C::ScalarExt::from(3),
+            ];
+            let bases: Vec<_> = weights
+                .iter()
+                .map(|weight| (generator * *weight).to_affine())
+                .collect();
+            for bucket in [0, 3] {
+                for point in [2, 3] {
+                    for negative in [false, true] {
+                        let mut buckets = Buckets::<C, SECRET>::new(&bases, 4);
+                        let signed = if negative {
+                            -weights[point]
+                        } else {
+                            weights[point]
+                        };
+                        // Queue an affine cancellation; the third insertion is
+                        // the first overflow, with both signs and base signs.
+                        buckets.insert(bucket, 0, false);
+                        buckets.insert(bucket, 0, true);
+                        assert!(!buckets.overflow_used[bucket]);
+                        buckets.insert(bucket, point, negative);
+                        assert!(buckets.overflow_used[bucket]);
+                        assert_eq!(buckets.overflow[bucket], generator * signed);
+                        // Cancel that overflow and add to its identity again.
+                        // The used flag must survive algebraic cancellation.
+                        buckets.insert(bucket, point, !negative);
+                        assert!(buckets.overflow_used[bucket]);
+                        assert_eq!(buckets.overflow[bucket], C::identity());
+                        buckets.insert(bucket, 1, true);
+                        buckets.flush();
+                        assert!(!buckets.has[bucket]);
+                        assert!(buckets.overflow_used[bucket]);
+                        assert_eq!(buckets.reduce(bucket, 1), -generator.double());
+
+                        // Reusing the cancelled affine bucket in a new epoch
+                        // must retain the old projective overflow contribution.
+                        buckets.insert(bucket, 0, false);
+                        buckets.insert(bucket, 1, false);
+                        buckets.insert(bucket, point, negative);
+                        buckets.flush();
+                        let expected = generator * (C::ScalarExt::ONE + signed);
+                        assert_eq!(buckets.reduce(bucket, 1), expected);
+                        assert_eq!(buckets.reduce(bucket, 1).to_bytes(), expected.to_bytes());
+                        assert_eq!(
+                            buckets.reduce(0, 4),
+                            expected * C::ScalarExt::from((bucket + 1) as u64),
+                        );
+                    }
+                }
+            }
+        }
+        check::<crate::Ep, false>();
+        check::<crate::Ep, true>();
+        check::<crate::Eq, false>();
+        check::<crate::Eq, true>();
+    }
+
+    #[test]
+    fn first_overflow_across_flushes_and_wipe_matches_group_oracle() {
+        fn check<C: PastaCurve, const SECRET: bool>() {
+            let bases: Vec<_> = (1..=6)
+                .map(|weight| (C::generator() * C::ScalarExt::from(weight)).to_affine())
+                .collect();
+            let mut buckets = Buckets::<C, SECRET>::new(&bases, 3);
+            let mut expected = [C::ScalarExt::ZERO; 3];
+            // Repeated buckets force first and subsequent projective overflow.
+            // Opposite points exercise identity sums; explicit flushes advance
+            // epochs without discarding the retained overflow accumulator.
+            for (step, (bucket, point, negative)) in [
+                (0, 0, false),
+                (0, 1, false),
+                (0, 2, true),
+                (0, 3, false),
+                (1, 0, false),
+                (1, 0, true),
+                (1, 1, false),
+                (1, 1, true),
+                (0, 4, true),
+                (0, 5, false),
+                (0, 5, true),
+                (0, 4, false),
+                (2, 3, false),
+                (2, 3, false),
+                (2, 1, true),
+                (2, 2, false),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                buckets.insert(bucket, point, negative);
+                let weight = C::ScalarExt::from((point + 1) as u64);
+                expected[bucket] += if negative { -weight } else { weight };
+                if step % 4 == 3 {
+                    buckets.flush();
+                    for (index, scalar) in expected.iter().enumerate() {
+                        let actual = buckets.reduce(index, 1);
+                        let oracle = C::generator() * scalar;
+                        assert_eq!(actual, oracle);
+                        assert_eq!(actual.to_bytes(), oracle.to_bytes());
+                    }
+                    let weighted = expected.iter().enumerate().fold(
+                        C::ScalarExt::ZERO,
+                        |sum, (index, scalar)| {
+                            sum + *scalar * C::ScalarExt::from((index + 1) as u64)
+                        },
+                    );
+                    assert_eq!(buckets.reduce(0, 3), C::generator() * weighted);
+                }
+            }
+            if SECRET {
+                // Also leave an unflushed queue and overflow, as cancellation
+                // or unwinding can do, before reusing the wiped bucket set.
+                for (point, negative) in [(0, false), (1, true), (2, false)] {
+                    buckets.insert(0, point, negative);
+                }
+                assert!(!buckets.queue_bucket.is_empty());
+                buckets.wipe();
+                assert_eq!(buckets.reduce(0, 3), C::identity());
+                assert!(buckets.overflow_used.iter().all(|used| !used));
+                for (point, negative) in [(0, false), (1, false), (2, true)] {
+                    buckets.insert(0, point, negative);
+                }
+                assert!(buckets.overflow_used[0]);
+                assert_eq!(buckets.overflow[0], -C::generator() * C::ScalarExt::from(3));
+                buckets.flush();
+                let actual = buckets.reduce(0, 3);
+                assert_eq!(actual, C::identity());
+                assert_eq!(actual.to_bytes(), C::identity().to_bytes());
+            }
+        }
+        check::<crate::Ep, false>();
+        check::<crate::Ep, true>();
+        check::<crate::Eq, false>();
+        check::<crate::Eq, true>();
     }
 
     #[test]

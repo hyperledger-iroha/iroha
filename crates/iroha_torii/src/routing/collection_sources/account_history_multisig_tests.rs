@@ -406,6 +406,7 @@ async fn account_history_sparse_pages_advance_by_public_blocks_without_losing_mo
                     collections::prepare(&specs::ACCOUNT_HISTORY, &scope, &query, &limits).unwrap();
                 let page = account_subrow_page(
                     fixture.chain.state(),
+                    &collection_history_read_budget(true, limits.bytes).unwrap(),
                     &prepared,
                     &fixture.recipient,
                     None,
@@ -452,6 +453,7 @@ async fn account_history_sparse_pages_advance_by_public_blocks_without_losing_mo
     assert!(
         account_subrow_page(
             fixture.chain.state(),
+            &collection_history_read_budget(true, limits.bytes).unwrap(),
             &prepared,
             &fixture.recipient,
             None,

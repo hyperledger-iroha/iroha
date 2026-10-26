@@ -11,8 +11,9 @@ known-answer generator as PQClean runs it (`test/crypto_kem/nistkat.c` and
 `00..2f` supplies the 48-byte seed, the DRBG is re-seeded with it, and the
 algorithm draws its randomness from that second DRBG. PQClean records the
 SHA-256 of the printed response as `nistkat-sha256` in each scheme's `META.yml`;
-those files ship inside the `pqcrypto-mlkem` and `pqcrypto-mldsa` crates that
-Cargo.lock pins.
+the immutable upstream revisions and published crate versions recorded below
+identify that independent oracle. The tracked response bytes and their digests
+remain fixed when the production dependency changes.
 
 This module
 * reimplements AES-256 and the CTR_DRBG to derive the exact randomness each

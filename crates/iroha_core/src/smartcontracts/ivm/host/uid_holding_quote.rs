@@ -50,7 +50,7 @@ impl QueryStateRef<'_, '_, '_> {
     }
 }
 
-impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
+impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     pub(super) fn execute_uid_holding_quote(
         &mut self,
         vm: &mut IVM,

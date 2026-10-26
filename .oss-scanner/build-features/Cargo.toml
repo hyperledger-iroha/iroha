@@ -40,7 +40,7 @@ norito = { optional = true, workspace = true, default-features = false, features
 criterion = { optional = true, workspace = true }
 derive_more = { optional = true, workspace = true, features = ["default", "is_variant"] }
 rustix = { optional = true, version = "1.1.4", features = ["pipe", "stdio", "termios"] }
-sha3 = { optional = true, version = "0.10.9", features = ["asm"] }
+sha3 = { optional = true, version = "0.12.0", features = ["alloc"] }
 iroha_crypto = { optional = true, workspace = true, default-features = false, features = ["default"] }
 iroha_cli_lib = { optional = true, path = "../../crates/iroha_cli", default-features = false }
 iroha_torii = { optional = true, workspace = true, default-features = false }

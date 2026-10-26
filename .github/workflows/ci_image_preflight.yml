@@ -1,0 +1,31 @@
+name: Validate the qualified CI image
+
+on:
+  workflow_call:
+    outputs:
+      image:
+        description: Validated immutable CI image selected by the repository owner
+        value: ${{ jobs.validate.outputs.image }}
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      image: ${{ steps.validate.outputs.image }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Require a qualified image digest before starting any CI container
+        id: validate
+        shell: bash
+        env:
+          IROHA_CI_IMAGE: ${{ vars.IROHA_CI_IMAGE }}
+        run: |
+          python3 -I -S scripts/validate_release_image_bases.py \
+            --builder "$IROHA_CI_IMAGE" --runtime "$IROHA_CI_IMAGE"
+          printf 'image=%s\n' "$IROHA_CI_IMAGE" >> "$GITHUB_OUTPUT"

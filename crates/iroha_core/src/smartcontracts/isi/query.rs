@@ -3102,9 +3102,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         {
             let mut block = world.block();
             block
-                .parameters
-                .get_mut()
-                .set_parameter(Parameter::Custom(policy.into_custom_parameter()))
+                .set_parameter_for_testing(Parameter::Custom(policy.into_custom_parameter()))
                 .expect("valid fixture parameters");
             block.commit();
         }
@@ -6921,14 +6919,16 @@ mod tests {
         let asset_id = AssetId::new(ad_id.clone(), ALICE_ID.clone());
         let world = World::default();
         // Component account registration requires an explicit original policy.
-        let mut parameters = world.parameters.block();
-        parameters
-            .set_parameter(
-                crate::sumeragi::test_chain::crypto_fixture_policy()
-                    .into_parameter()
-                    .expect("canonical fixture crypto policy"),
-            )
-            .expect("install original fixture crypto policy");
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
+            .expect("funded component parameter fixture");
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            crate::sumeragi::test_chain::crypto_fixture_policy()
+                .into_parameter()
+                .expect("canonical fixture crypto policy"),
+            world.sccp_committee_generations.allocation_budget(),
+        )
+        .expect("install original fixture crypto policy");
         parameters.commit();
         // Build state and register domain/account/asset def; then mint
         let kura = Kura::blank_kura_for_testing();
@@ -7039,14 +7039,16 @@ mod tests {
         let handle = crate::query::store::LiveQueryStoreHandle::new(store);
         let world = World::default();
         // Component account registration requires an explicit original policy.
-        let mut parameters = world.parameters.block();
-        parameters
-            .set_parameter(
-                crate::sumeragi::test_chain::crypto_fixture_policy()
-                    .into_parameter()
-                    .expect("canonical fixture crypto policy"),
-            )
-            .expect("install original fixture crypto policy");
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
+            .expect("funded component parameter fixture");
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            crate::sumeragi::test_chain::crypto_fixture_policy()
+                .into_parameter()
+                .expect("canonical fixture crypto policy"),
+            world.sccp_committee_generations.allocation_budget(),
+        )
+        .expect("install original fixture crypto policy");
         parameters.commit();
         let state = State::new(world, kura, handle.clone());
         let header = ValidBlock::new_dummy(ALICE_KEYPAIR.private_key())
@@ -7153,14 +7155,16 @@ mod tests {
             let handle = crate::query::store::LiveQueryStoreHandle::new(store);
             let world = World::default();
             // Component account registration requires an explicit original policy.
-            let mut parameters = world.parameters.block();
-            parameters
-                .set_parameter(
-                    crate::sumeragi::test_chain::crypto_fixture_policy()
-                        .into_parameter()
-                        .expect("canonical fixture crypto policy"),
-                )
-                .expect("install original fixture crypto policy");
+            let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
+                .expect("funded component parameter fixture");
+            crate::state::set_parameter_cell_for_testing(
+                &mut parameters,
+                crate::sumeragi::test_chain::crypto_fixture_policy()
+                    .into_parameter()
+                    .expect("canonical fixture crypto policy"),
+                world.sccp_committee_generations.allocation_budget(),
+            )
+            .expect("install original fixture crypto policy");
             parameters.commit();
             let state = State::new(world, kura, handle.clone());
             let header = ValidBlock::new_dummy(ALICE_KEYPAIR.private_key())

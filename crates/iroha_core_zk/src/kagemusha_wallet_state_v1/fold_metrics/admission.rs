@@ -22,6 +22,8 @@ pub enum NativeAdmissionPhaseV1 {
     IntakeMemory,
     /// Blacklist publication storage admission.
     Blacklist,
+    /// Fresh deferred Archive receipt metadata and publication workspace.
+    DeferredArchive,
 }
 impl NativeAdmissionPhaseV1 {
     pub(super) const fn name(self) -> &'static str {
@@ -32,6 +34,7 @@ impl NativeAdmissionPhaseV1 {
             Self::Intake => "intake",
             Self::IntakeMemory => "intake_memory",
             Self::Blacklist => "blacklist",
+            Self::DeferredArchive => "deferred_archive",
         }
     }
 }

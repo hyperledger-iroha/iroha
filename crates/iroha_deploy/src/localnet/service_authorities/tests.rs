@@ -106,6 +106,18 @@ fn managed_authority_genesis_registers_grants_funds_and_keeps_services_disabled(
     let manifest = prepared.stream_token_authorities().unwrap().unwrap();
     {
         let _parent_profile = ChainDiscriminantGuard::enter(369);
+        let root = prepared.context.client_config.parent().unwrap();
+        let signed =
+            iroha_fs::read_private(root.join("genesis.signed.nrt"), SIGNED_GENESIS_MAX_BYTES_V1)
+                .unwrap();
+        let block = iroha_data_model::block::decode_framed_signed_block(&signed)
+            .expect("retained binary genesis is independent of the parent address profile");
+        iroha_data_model::sumeragi_finality::authenticated_genesis(&block)
+            .expect("retained genesis authentication is independent of the parent address profile");
+        assert!(
+            iroha_genesis::signed_genesis_root_fee_policy(&block).is_err(),
+            "strict account literals reject the foreign parent address profile"
+        );
         assert_eq!(
             prepared.stream_token_authorities().unwrap(),
             Some(manifest.clone())
@@ -487,6 +499,26 @@ fn managed_authority_genesis_registers_grants_funds_and_keeps_services_disabled(
             &iroha_genesis::signed_genesis_root_fee_policy(&block).unwrap()
         )
         .unwrap()
+    );
+    let original_fees = iroha_genesis::signed_genesis_root_fee_policy(&block).unwrap();
+    let mut local_fee_drift = config.clone();
+    local_fee_drift.nexus.fees.per_byte_fee = 777_u32.into();
+    local_fee_drift
+        .nexus
+        .fees
+        .successful_claim_fee_exempt_authorities
+        .clear();
+    assert_eq!(
+        configured_execution_policy(&local_fee_drift, &original_fees).unwrap(),
+        policy,
+        "retained service authority reads the exact signed fee policy, not a local recipe"
+    );
+    let mut changed_original = original_fees;
+    changed_original.per_byte_fee = 888_u32.into();
+    assert_ne!(
+        configured_execution_policy(&config, &changed_original).unwrap(),
+        policy,
+        "a different original fee parameter changes service execution authority"
     );
     let mut external_compliance = config;
     external_compliance.nexus.compliance.enabled = true;

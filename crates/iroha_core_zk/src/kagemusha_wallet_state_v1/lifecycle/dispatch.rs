@@ -14,6 +14,24 @@ pub use projection::CreditProjectionV1;
 
 use super::super::capacity::{FROZEN_BOUND, PLAN_BOUND};
 
+// Only the actual review owner supplies ReviewedUnbound. Ordinary exact recovery and the
+// independently reserved Archive path retain their existing preparation behavior.
+#[derive(Clone, Copy)]
+enum DispatchAdmission<'a> {
+    Ordinary,
+    ReviewedUnbound { checkpoint: [u8; 32] },
+    Archive(&'a super::super::scheduling::ArchiveDispatchPermit),
+}
+
+fn ordinary_completion(value: ReviewedExecutionV1) -> Result<Completion, Error> {
+    match value {
+        ReviewedExecutionV1::Executed(completion) => Ok(completion),
+        ReviewedExecutionV1::Existing(_) => Err(Error::WitnessLost(
+            "review-only result on ordinary dispatch",
+        )),
+    }
+}
+
 #[derive(norito::Encode, norito::Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core_zk::kagemusha_wallet_state_v1::PreparationPlanV1")]
 struct Plan {
@@ -52,6 +70,16 @@ impl Plan {
         }
         Ok(())
     }
+}
+
+// Receive preserves an already-issued payer claim; Archive only removes delivered outbox
+// evidence. Neither releases local value. Replanning still needs authenticated nonselection,
+// exact retained originals and complete retirement of the former immutable preparation.
+fn can_replan_unselected(kind: KagemushaWalletOperationKindV1) -> bool {
+    matches!(
+        kind,
+        KagemushaWalletOperationKindV1::Receive | KagemushaWalletOperationKindV1::ArchiveSent
+    )
 }
 
 fn original(
@@ -246,6 +274,74 @@ impl DerivationBindingV1 {
 }
 
 impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
+    fn canonical_intent(
+        &self,
+        request: &NativeIntentV1,
+    ) -> Result<crate::kagemusha_wallet_archive_bytes_v1::PrivateArchiveBytes, Error> {
+        let (scheme, _) = self.proofs.ledger_scope()?;
+        request.validate(&scheme)?;
+        if norito::canonical_frame_len(request)
+            .map_err(|_| Error::Invalid("private intake encoding"))?
+            > REQUEST_MAX_BYTES
+        {
+            return Err(Error::Invalid("lifecycle request size"));
+        }
+        let bytes = crate::kagemusha_wallet_archive_bytes_v1::PrivateArchiveBytes::encode(request)
+            .map_err(|_| Error::Invalid("private intake encoding"))?;
+        if bytes.len() > REQUEST_MAX_BYTES {
+            return Err(Error::Invalid("lifecycle request size"));
+        }
+        Ok(bytes)
+    }
+
+    fn exact_bound_status(
+        &mut self,
+        entry: &Entry,
+        request: &NativeIntentV1,
+        bytes: &[u8],
+    ) -> Result<BoundRequestStatusV1, Error> {
+        entry.require_request(
+            &mut self.archive,
+            &self.scheme_id,
+            &self.wallet_id,
+            request,
+            bytes,
+        )?;
+        entry.require_binding()?;
+        let Some(operation) = entry.operation else {
+            return Ok(BoundRequestStatusV1::Preparing);
+        };
+        Ok(self
+            .retry_prepared_intent(
+                request,
+                &entry
+                    .capsule
+                    .ok_or(Error::WitnessLost("prepared capsule"))?,
+                &entry
+                    .capsule_commitment
+                    .ok_or(Error::WitnessLost("prepared commitment"))?,
+                &operation,
+            )?
+            .map_or(
+                BoundRequestStatusV1::Preparing,
+                BoundRequestStatusV1::Outcome,
+            ))
+    }
+
+    // Reads the selected permanent map even while Advance is Pending. Exact binding is
+    // checked before any current-source/maintenance decision; this never resumes or plans.
+    pub(in crate::kagemusha_wallet_state_v1) fn bound_review_request(
+        &mut self,
+        request: &OperationRequestV1,
+    ) -> Result<Option<BoundRequestStatusV1>, Error> {
+        let intent = NativeIntentV1::user(request.clone());
+        let bytes = self.canonical_intent(&intent)?;
+        let (_, manifest) = self.manifest()?;
+        self.preparation_entry(&manifest, &request.request_id)?
+            .map(|entry| self.exact_bound_status(&entry, &intent, &bytes))
+            .transpose()
+    }
+
     fn preparation_entry(
         &mut self,
         manifest: &manifest::Manifest,
@@ -278,11 +374,11 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
         Ok(())
     }
 
-    /// Retire only an authenticated stale `ArchiveSent` plan that Advance never selected.
+    /// Retire an authenticated stale Receive/ArchiveSent plan that Advance never selected.
     /// The durable Entry keeps its exact request and stale capsule locator until every unlink
     /// succeeds. A crash therefore repeats these idempotent removals before replacing the plan.
-    /// No selected completion, uncertain lookup or monetary operation can reach this path.
-    fn retire_archive_plan(
+    /// No selected completion, uncertain lookup or value-releasing operation reaches this path.
+    fn retire_unselected_plan(
         &mut self,
         request: &NativeIntentV1,
         source: &[u8; 32],
@@ -291,18 +387,18 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
         manifest: &mut manifest::Manifest,
     ) -> Result<(), Error> {
         entry.require_binding()?;
-        if request.kind() != KagemushaWalletOperationKindV1::ArchiveSent
-            || entry.kind != KagemushaWalletOperationKindV1::ArchiveSent
+        if !can_replan_unselected(request.kind())
+            || entry.kind != request.kind()
             || entry.plan.is_none()
             || entry.request != Some(plan.request_object)
             || plan.source == *source
         {
-            return Err(Error::WitnessLost("stale Archive retirement binding"));
+            return Err(Error::WitnessLost("stale intake retirement binding"));
         }
         if let Some(operation) = entry.operation {
             let capsule = entry
                 .capsule
-                .ok_or(Error::WitnessLost("stale Archive capsule"))?;
+                .ok_or(Error::WitnessLost("stale intake capsule"))?;
             // Low-level Unknown alone is insufficient: an older committed output may be
             // missing. The permanent authenticated operation index must also prove absence.
             if !matches!(self.custody.lookup(&operation)?, Lookup::Unknown)
@@ -310,16 +406,16 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
                     .missing_retained_output(&operation, Some(&capsule))?
                     .is_some()
             {
-                return Err(Error::WitnessLost("stale Archive already selected"));
+                return Err(Error::WitnessLost("stale intake already selected"));
             }
-            let plan_address = entry.plan.ok_or(Error::WitnessLost("stale Archive plan"))?;
+            let plan_address = entry.plan.ok_or(Error::WitnessLost("stale intake plan"))?;
             if manifest
                 .capsule_plans
                 .get(&mut self.archive, &capsule)?
                 .as_deref()
                 != Some(plan_address.as_slice())
             {
-                return Err(Error::WitnessLost("stale Archive capsule plan binding"));
+                return Err(Error::WitnessLost("stale intake capsule plan binding"));
             }
         }
         // The source-selected stale Entry plus authenticated nonselection authorizes retiring
@@ -517,6 +613,54 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
         ))
     }
 
+    // Reconciliation requires the permanent exact Archive intent even before an operation
+    // has been prepared. Missing mapping/originals are custody loss, never nonselection.
+    pub(in crate::kagemusha_wallet_state_v1) fn archive_target_status(
+        &mut self,
+        request_id: &[u8; 32],
+    ) -> Result<(RequestStatusV1, Option<[u8; 32]>), Error> {
+        let (_, manifest) = self.manifest()?;
+        let entry = self
+            .preparation_entry(&manifest, request_id)?
+            .ok_or(Error::WitnessLost("Archive target intent"))?;
+        let original = self
+            .archive
+            .read_object(&entry.retained_request()?, REQUEST_MAX_BYTES)?;
+        let (scheme, _) = self.proofs.ledger_scope()?;
+        let request = NativeIntentV1::decode(&original, &scheme)?;
+        if request.request_id() != *request_id
+            || request.kind() != KagemushaWalletOperationKindV1::ArchiveSent
+        {
+            return Err(Error::WitnessLost("Archive target identity"));
+        }
+        entry.require_request(
+            &mut self.archive,
+            &self.scheme_id,
+            &self.wallet_id,
+            &request,
+            &original,
+        )?;
+        if entry.capsule.is_some() != entry.operation.is_some() {
+            return Err(Error::WitnessLost("Archive target operation"));
+        }
+        let outcome = match entry.operation {
+            None => RequestStatusV1::Preparing,
+            Some(operation) => self
+                .retry_prepared_intent(
+                    &request,
+                    &entry
+                        .capsule
+                        .ok_or(Error::WitnessLost("Archive target capsule"))?,
+                    &entry
+                        .capsule_commitment
+                        .ok_or(Error::WitnessLost("Archive target commitment"))?,
+                    &operation,
+                )?
+                .map_or(RequestStatusV1::Preparing, RequestStatusV1::Outcome),
+        };
+        Ok((outcome, entry.capsule))
+    }
+
     /// Resolve a local request identity through its source-selected actual operation mapping.
     /// An uncommitted preparation has no completion, even when its native plan is durable.
     ///
@@ -578,61 +722,68 @@ impl<C: Custody, A: ArchiveStore, N: NativePreparation> Coordinator<C, A, N> {
     ///
     /// # Errors
     /// Conflicting request, missing native custody, unavailable storage/artifacts, invalid proof
-    /// or uncertain Advance. A stale prepared source returns `NotPerformed` without rebasing.
+    /// or uncertain Advance. Only never-selected Receive and ArchiveSent may retire a stale
+    /// plan and prepare again from the current source; every other kind returns `NotPerformed`.
     pub fn execute(&mut self, request: OperationRequestV1) -> Result<Completion, Error> {
         self.execute_intent(NativeIntentV1::user(request))
     }
 
-    /// [`Self::execute`] for a reviewed request whose step a speculation proved before the
-    /// user confirmed. Planning and proving use it only for an identical derivation; every
-    /// other check, the durable plan, commit and the sole Advance are unchanged.
-    pub(crate) fn execute_speculated(
+    // The review owner has just authenticated its complete private source and action.
+    // This entry cannot recover/adopt a prior binding, including one without a plan.
+    pub(in crate::kagemusha_wallet_state_v1) fn execute_reviewed_unbound(
         &mut self,
         request: OperationRequestV1,
         speculative: Option<N::Speculative>,
-    ) -> Result<Completion, Error> {
-        self.execute_intent_with(NativeIntentV1::user(request), speculative)
+        checkpoint: [u8; 32],
+    ) -> Result<ReviewedExecutionV1, Error> {
+        self.execute_intent_with(
+            NativeIntentV1::user(request),
+            speculative,
+            DispatchAdmission::ReviewedUnbound { checkpoint },
+        )
     }
 
-    pub(crate) fn archive_credited(
+    pub(in crate::kagemusha_wallet_state_v1) fn execute_archive_intent(
         &mut self,
-        credit: &[u8; 32],
-        credited: Vec<u8>,
+        request: NativeIntentV1,
+        permit: &super::super::scheduling::ArchiveDispatchPermit,
     ) -> Result<Completion, Error> {
-        if credited.is_empty() || credited.len() > KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1 {
-            return Err(Error::Invalid("Archive evidence size"));
+        if request.kind() != KagemushaWalletOperationKindV1::ArchiveSent {
+            return Err(Error::Invalid("Archive permit operation"));
         }
-        let (send, certificates) = self.archive_send_source(credit)?;
-        self.execute_intent(NativeIntentV1::archive(&send, certificates, credited)?)
+        self.execute_intent_with(request, None, DispatchAdmission::Archive(permit))
+            .and_then(ordinary_completion)
     }
 
     fn execute_intent(&mut self, request: NativeIntentV1) -> Result<Completion, Error> {
-        self.execute_intent_with(request, None)
+        self.execute_intent_with(request, None, DispatchAdmission::Ordinary)
+            .and_then(ordinary_completion)
     }
 
     fn execute_intent_with(
         &mut self,
         request: NativeIntentV1,
         speculative: Option<N::Speculative>,
-    ) -> Result<Completion, Error> {
-        let _payment = self.scheduler.payment();
-        let (scheme, _) = self.proofs.ledger_scope()?;
-        request.validate(&scheme)?;
-        if norito::canonical_frame_len(&request)
-            .map_err(|_| Error::Invalid("private intake encoding"))?
-            > REQUEST_MAX_BYTES
-        {
-            return Err(Error::Invalid("lifecycle request size"));
-        }
-        let bytes = crate::kagemusha_wallet_archive_bytes_v1::PrivateArchiveBytes::encode(&request)
-            .map_err(|_| Error::Invalid("private intake encoding"))?;
-        if bytes.len() > REQUEST_MAX_BYTES {
-            return Err(Error::Invalid("lifecycle request size"));
-        }
+        admission: DispatchAdmission<'_>,
+    ) -> Result<ReviewedExecutionV1, Error> {
+        let bytes = self.canonical_intent(&request)?;
+        let reviewed_checkpoint = match admission {
+            DispatchAdmission::ReviewedUnbound { checkpoint } => Some(checkpoint),
+            _ => None,
+        };
+        let archive_permit = match admission {
+            DispatchAdmission::Archive(permit) => Some(permit),
+            _ => None,
+        };
         // Resolve the source-selected request before requiring a Released head: Advance may
         // already have irreversibly selected this operation and still owe its receipt.
         let (_, selected_manifest) = self.manifest()?;
         if let Some(entry) = self.preparation_entry(&selected_manifest, &request.request_id())? {
+            if reviewed_checkpoint.is_some() {
+                return self
+                    .exact_bound_status(&entry, &request, &bytes)
+                    .map(ReviewedExecutionV1::Existing);
+            }
             entry.require_request(
                 &mut self.archive,
                 &self.scheme_id,
@@ -655,9 +806,25 @@ impl<C: Custody, A: ArchiveStore, N: NativePreparation> Coordinator<C, A, N> {
                     &operation,
                 )?
             {
-                return Ok(completion);
+                return Ok(ReviewedExecutionV1::Executed(completion));
             }
         }
+        let _payment = if let Some(permit) = archive_permit {
+            if request.kind() != KagemushaWalletOperationKindV1::ArchiveSent {
+                return Err(Error::Invalid("Archive permit operation"));
+            }
+            let (source, _, _) = self.selected_archive_head()?;
+            permit.validate_for(&self.scheduler, &request.request_id(), source)?;
+            None // The consumed Archive turn already owns the sole Payment priority.
+        } else {
+            if request.kind() == KagemushaWalletOperationKindV1::ArchiveSent {
+                return Err(Error::Invalid(
+                    "Archive dispatch requires Native reservation",
+                ));
+            }
+            self.require_fresh_work()?;
+            Some(self.scheduler.payment())
+        };
         let (mut selected, mut manifest) = self.sync_manifest()?;
         if request.kind() == KagemushaWalletOperationKindV1::Load {
             self.require_ledger_activation(&manifest)?;
@@ -668,6 +835,11 @@ impl<C: Custody, A: ArchiveStore, N: NativePreparation> Coordinator<C, A, N> {
         let mut entry = if let Some(entry) =
             self.preparation_entry(&manifest, &request.request_id())?
         {
+            if reviewed_checkpoint.is_some() {
+                return self
+                    .exact_bound_status(&entry, &request, &bytes)
+                    .map(ReviewedExecutionV1::Existing);
+            }
             entry.require_request(
                 &mut self.archive,
                 &self.scheme_id,
@@ -677,6 +849,12 @@ impl<C: Custody, A: ArchiveStore, N: NativePreparation> Coordinator<C, A, N> {
             )?;
             entry
         } else {
+            if let Some(expected) = reviewed_checkpoint {
+                self.require_no_preparation_draft(request.request_id())?;
+                if selected != expected {
+                    return Err(Error::OperationConflict);
+                }
+            }
             let entry = Entry::bound(&self.scheme_id, &self.wallet_id, &request, &bytes);
             self.publish_preparation(&mut selected, &mut manifest, request.request_id(), &entry)?;
             entry
@@ -698,7 +876,7 @@ impl<C: Custody, A: ArchiveStore, N: NativePreparation> Coordinator<C, A, N> {
                 &operation,
             )?
         {
-            return Ok(completion);
+            return Ok(ReviewedExecutionV1::Executed(completion));
         }
         let restoration = iroha_plonk::work_metrics::WorkTimer::start(
             iroha_plonk::work_metrics::WorkPhase::SourceRestore,
@@ -717,17 +895,20 @@ impl<C: Custody, A: ArchiveStore, N: NativePreparation> Coordinator<C, A, N> {
             .as_ref()
             .is_some_and(|plan| plan.source != source_digest)
         {
-            if request.kind() != KagemushaWalletOperationKindV1::ArchiveSent {
-                return Ok(Completion::NotPerformed(NotPerformed::StaleHead));
+            if !can_replan_unselected(request.kind()) {
+                return Ok(ReviewedExecutionV1::Executed(Completion::NotPerformed(
+                    NotPerformed::StaleHead,
+                )));
             }
-            // A deferred, never-selected Archive may replan on the new head. The helper
-            // preserves a durable recovery locator until stale artifact retirement finishes.
-            self.retire_archive_plan(
+            // Receive and deferred Archive may replan only after authenticated nonselection.
+            // Their immutable inputs remain bound to the same request. The helper preserves
+            // a durable recovery locator until stale artifact retirement finishes.
+            self.retire_unselected_plan(
                 &request,
                 &source_digest,
                 held_plan
                     .as_ref()
-                    .ok_or(Error::WitnessLost("stale Archive plan"))?,
+                    .ok_or(Error::WitnessLost("stale intake plan"))?,
                 &mut entry,
                 &mut manifest,
             )?;
@@ -751,7 +932,7 @@ impl<C: Custody, A: ArchiveStore, N: NativePreparation> Coordinator<C, A, N> {
         let (plan, planned) = if let Some(plan) = held_plan {
             (plan, None)
         } else {
-            let Some((plan, prepared)) = self.prepare_intake_plan(
+            let planned = self.prepare_intake_plan(
                 &request,
                 &bytes,
                 &source,
@@ -761,9 +942,29 @@ impl<C: Custody, A: ArchiveStore, N: NativePreparation> Coordinator<C, A, N> {
                 &mut selected,
                 &mut manifest,
                 speculative.as_ref(),
-            )?
-            else {
-                return Ok(Completion::NotPerformed(NotPerformed::StaleHead));
+            );
+            // Receive admission (§3.2) refused this exact Payment before any plan existed.
+            // Unbind the Entry, which no request object, plan or capsule references, so the
+            // request reads Unknown and the caller may quarantine the Payment; retrying the
+            // same bytes repeats the same refusal.
+            if let Err(Error::Invalid(field)) = &planned {
+                if *field
+                    == crate::kagemusha_wallet_state_v1::native_worker::RECEIVE_ADMISSION_REFUSAL
+                    && entry.request.is_none()
+                    && entry.plan.is_none()
+                    && entry.capsule.is_none()
+                    && entry.operation.is_none()
+                {
+                    manifest.preparations = manifest
+                        .preparations
+                        .remove(&mut self.archive, &request.request_id())?;
+                    self.publish_manifest(selected, &manifest)?;
+                }
+            }
+            let Some((plan, prepared)) = planned? else {
+                return Ok(ReviewedExecutionV1::Executed(Completion::NotPerformed(
+                    NotPerformed::StaleHead,
+                )));
             };
             (plan, Some(prepared))
         };
@@ -772,7 +973,9 @@ impl<C: Custody, A: ArchiveStore, N: NativePreparation> Coordinator<C, A, N> {
             return Err(Error::WitnessLost("preparation request original"));
         }
         if plan.source != source_digest {
-            return Ok(Completion::NotPerformed(NotPerformed::StaleHead));
+            return Ok(ReviewedExecutionV1::Executed(Completion::NotPerformed(
+                NotPerformed::StaleHead,
+            )));
         }
         let prepared = if let Some(prepared) = planned {
             // Intake derived this plan once in this call, from fresh choices or by replaying
@@ -889,10 +1092,13 @@ impl<C: Custody, A: ArchiveStore, N: NativePreparation> Coordinator<C, A, N> {
         // same exclusive owner; commit independently repeats full native and Advance checks.
         let (_, current) = self.sync_manifest()?;
         if current.capsule != source_digest {
-            return Ok(Completion::NotPerformed(NotPerformed::StaleHead));
+            return Ok(ReviewedExecutionV1::Executed(Completion::NotPerformed(
+                NotPerformed::StaleHead,
+            )));
         }
         drop(request);
-        self.commit(frozen)
+        self.commit_with_archive(frozen, archive_permit)
+            .map(ReviewedExecutionV1::Executed)
     }
 }
 

@@ -2,32 +2,46 @@ import Foundation
 import IrohaSwift
 
 public struct IrohaPeerNfcReaderRetryPolicyV1: Equatable, Sendable {
-    public static let maximumContactAttemptsLimit = 10
     public static let maximumRedetectionTimeoutMilliseconds: UInt64 = 30_000
-    public let maximumContactAttempts: Int
+    public static let maximumRestartIntervalMilliseconds: UInt64 = 1_000
     public let redetectionTimeoutMilliseconds: UInt64
+    public let minimumRestartIntervalMilliseconds: UInt64
 
     public init(
-        maximumContactAttempts: Int = 3,
-        redetectionTimeoutMilliseconds: UInt64 = 3_000
+        redetectionTimeoutMilliseconds: UInt64 = 30_000,
+        minimumRestartIntervalMilliseconds: UInt64 = 250
     ) {
         precondition(Self.areValid(
-            maximumContactAttempts: maximumContactAttempts,
-            redetectionTimeoutMilliseconds: redetectionTimeoutMilliseconds
+            redetectionTimeoutMilliseconds: redetectionTimeoutMilliseconds,
+            minimumRestartIntervalMilliseconds: minimumRestartIntervalMilliseconds
         ))
-        self.maximumContactAttempts = maximumContactAttempts
         self.redetectionTimeoutMilliseconds = redetectionTimeoutMilliseconds
+        self.minimumRestartIntervalMilliseconds = minimumRestartIntervalMilliseconds
     }
 
     public static let `default` = IrohaPeerNfcReaderRetryPolicyV1()
 
     static func areValid(
-        maximumContactAttempts: Int,
-        redetectionTimeoutMilliseconds: UInt64
+        redetectionTimeoutMilliseconds: UInt64,
+        minimumRestartIntervalMilliseconds: UInt64
     ) -> Bool {
-        (1...maximumContactAttemptsLimit).contains(maximumContactAttempts)
-            && (1...maximumRedetectionTimeoutMilliseconds)
-                .contains(redetectionTimeoutMilliseconds)
+        (1...maximumRedetectionTimeoutMilliseconds).contains(redetectionTimeoutMilliseconds)
+            && (1...maximumRestartIntervalMilliseconds).contains(minimumRestartIntervalMilliseconds)
+    }
+}
+
+/// Allow durable admission and COMMIT work to finish without making discovery, connection or
+/// ordinary APDUs wait for a wallet-proof deadline. Cancellation and the reader's
+/// whole-operation deadline still apply while any command is outstanding.
+struct IrohaPeerNfcReaderCallDeadlinesV1: Equatable, Sendable {
+    static let maximumDurableResponseTimeoutMilliseconds: UInt64 = 35_000
+    let platformCallMilliseconds: UInt64
+    let durableResponseMilliseconds: UInt64
+
+    func nanoseconds(for operation: IrohaPeerNfcOperationV1) -> UInt64 {
+        let durable = operation == .beginPayment || operation == .commit
+        let milliseconds = durable ? durableResponseMilliseconds : platformCallMilliseconds
+        return milliseconds * 1_000_000
     }
 }
 
@@ -376,6 +390,27 @@ final class IrohaPeerNfcReaderProgressReporterV1: @unchecked Sendable {
         handler?(event)
     }
 
+    /// The checkpoint is already durable. An ACK-bearing resume is cleanup only;
+    /// it must not start another payment/commit timing span. Repeated contact
+    /// observations still use the reporter's single-shot value-stage policy.
+    func checkpointRetained(paymentBytes: Int, acknowledgementBytes: Int?) {
+        if let acknowledgementBytes {
+            emit(.ackPersisted, bytes: acknowledgementBytes)
+        } else {
+            emit(.paymentPrepared, bytes: paymentBytes)
+        }
+    }
+
+    /// Called only by a successful payment exchange's terminal owner. Request-only
+    /// reads, failures and cancellation retire the reporter without this event.
+    /// This is transport completion, not the application's Native receipt verdict.
+    func finishPayment() {
+        lock.lock()
+        defer { lock.unlock() }
+        emit(.complete)
+        finish()
+    }
+
     /// Records only the closed command name, never its associated APDU data.
     func record(operation: IrohaPeerNfcOperationV1) {
         lock.lock()
@@ -402,6 +437,53 @@ final class IrohaPeerNfcReaderProgressReporterV1: @unchecked Sendable {
 
     func invalidate() {
         finish()
+    }
+}
+
+/// A per-session synchronous publication barrier around one logical reporter.
+/// Renewing the RF session retires only this relay; trace and single-shot value
+/// progress stay with the public operation. Old callbacks cannot reach a successor.
+final class IrohaPeerNfcReaderProgressRelayV1: @unchecked Sendable {
+    private let lock = NSRecursiveLock()
+    private let reporter: IrohaPeerNfcReaderProgressReporterV1
+    private var active = true
+
+    init(_ reporter: IrohaPeerNfcReaderProgressReporterV1) { self.reporter = reporter }
+
+    func emit(_ stage: IrohaPeerNfcProgressStageV1, bytes: Int = 0, chunk: Int = 0) {
+        lock.lock(); defer { lock.unlock() }
+        if active { reporter.emit(stage, bytes: bytes, chunk: chunk) }
+    }
+
+    func record(operation: IrohaPeerNfcOperationV1) {
+        lock.lock(); defer { lock.unlock() }
+        if active { reporter.record(operation: operation) }
+    }
+
+    func checkpointRetained(paymentBytes: Int, acknowledgementBytes: Int?) {
+        lock.lock(); defer { lock.unlock() }
+        if active {
+            reporter.checkpointRetained(paymentBytes: paymentBytes,
+                                        acknowledgementBytes: acknowledgementBytes)
+        }
+    }
+
+    func finish(error: Error) {
+        lock.lock(); defer { lock.unlock() }
+        guard active else { return }
+        active = false
+        reporter.finish(error: error)
+    }
+
+    func finishPayment() {
+        lock.lock(); defer { lock.unlock() }
+        guard active else { return }
+        active = false
+        reporter.finishPayment()
+    }
+
+    func invalidate() {
+        lock.lock(); active = false; lock.unlock()
     }
 }
 
@@ -470,17 +552,20 @@ final class IrohaPeerNfcRetryLimitsBoxV1: @unchecked Sendable {
 
 final class IrohaPeerNfcRetryGateV1: @unchecked Sendable {
     private let policy: IrohaPeerNfcReaderRetryPolicyV1
+    private let now: @Sendable () -> UInt64
     private let lock = NSLock()
-    private var attempts = 0
+    private var recoveryDeadline: UInt64?
+    private var lastRestart: UInt64?
 
-    init(_ policy: IrohaPeerNfcReaderRetryPolicyV1) { self.policy = policy }
+    init(_ policy: IrohaPeerNfcReaderRetryPolicyV1,
+         now: @escaping @Sendable () -> UInt64 = { DispatchTime.now().uptimeNanoseconds }) {
+        self.policy = policy
+        self.now = now
+    }
 
     func beginContactAttempt() -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        guard attempts < policy.maximumContactAttempts else { return false }
-        attempts += 1
-        return true
+        lock.lock(); defer { lock.unlock() }
+        return recoveryDeadline.map { now() < $0 } ?? true
     }
 
     enum InvalidDetectionDisposition: Equatable, Sendable {
@@ -488,26 +573,18 @@ final class IrohaPeerNfcRetryGateV1: @unchecked Sendable {
         case exhausted
     }
 
-    /// Invalid and multi-tag detections spend the same physical-contact budget
-    /// as a valid ISO 7816 detection. This prevents an endless restart loop.
+    /// Invalid tags and RF chatter consume elapsed time, never a three-contact
+    /// allowance. Polling restarts are throttled under the same fixed budget.
     func recordInvalidDetection() -> InvalidDetectionDisposition {
-        lock.lock()
-        defer { lock.unlock() }
-        guard attempts < policy.maximumContactAttempts else { return .exhausted }
-        attempts += 1
-        return attempts < policy.maximumContactAttempts ? .retry : .exhausted
+        mayRedetect() ? .retry : .exhausted
     }
 
-    /// Claims the operation's connect slot before consuming a retry. Callers
-    /// hold their operation lock around this helper, making duplicate CoreNFC
-    /// detections unable to spend the attempt owned by an in-flight connect.
+    /// Duplicate callbacks cannot claim the connect slot already in flight.
     func claimContactAttempt(
         operationGate: inout IrohaPeerNfcReaderOperationGateV1,
         capturedEpoch: UInt64
     ) -> Bool {
-        guard operationGate.beginConnect(capturedEpoch: capturedEpoch) else {
-            return false
-        }
+        guard operationGate.beginConnect(capturedEpoch: capturedEpoch) else { return false }
         guard beginContactAttempt() else {
             _ = operationGate.finishConnect(capturedEpoch: capturedEpoch)
             return false
@@ -516,13 +593,192 @@ final class IrohaPeerNfcRetryGateV1: @unchecked Sendable {
     }
 
     func mayRedetect() -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        return attempts < policy.maximumContactAttempts
+        lock.lock(); defer { lock.unlock() }
+        let instant = now()
+        if recoveryDeadline == nil {
+            recoveryDeadline = instant + policy.redetectionTimeoutMilliseconds * 1_000_000
+        }
+        return instant < recoveryDeadline!
+    }
+
+    /// First RF recovery polls immediately; subsequent restarts have a small
+    /// minimum interval so a noisy field cannot create a tight callback loop.
+    var restartDelayNanoseconds: UInt64 {
+        lock.lock(); defer { lock.unlock() }
+        let instant = now()
+        let interval = policy.minimumRestartIntervalMilliseconds * 1_000_000
+        return max(instant, lastRestart.map { $0 + interval } ?? instant) - instant
+    }
+
+    func recordRestart() {
+        lock.lock(); lastRestart = now(); lock.unlock()
     }
 
     var redetectionTimeoutNanoseconds: UInt64 {
-        policy.redetectionTimeoutMilliseconds * 1_000_000
+        lock.lock(); defer { lock.unlock() }
+        guard let deadline = recoveryDeadline else {
+            return policy.redetectionTimeoutMilliseconds * 1_000_000
+        }
+        let instant = now()
+        return instant < deadline ? deadline - instant : 0
+    }
+}
+
+
+/// A completed CoreNFC session must close before a fresh reader can take over.
+/// This internal control-flow result never authorizes another monetary Send.
+enum IrohaPeerNfcReaderContinuationErrorV1: Error {
+    case renewSession
+}
+
+/// Controls admission of new work, not an unrelated timer over in-flight work.
+/// A durable APDU admitted just before the logical limit retains its full reply
+/// deadline, and ordinary ACK cleanup may finish in the same bounded RF session.
+struct IrohaPeerNfcReaderContinuationBudgetV1: Sendable {
+    static let startWindowNanoseconds: UInt64 = 120_000_000_000
+    static let sessionMarginNanoseconds: UInt64 = 1_000_000_000
+    let startedAtNanoseconds: UInt64
+
+    enum Decision: Equatable { case proceed, renewSession, expired }
+
+    func mayStartSession(nowNanoseconds: UInt64) -> Bool {
+        nowNanoseconds - min(nowNanoseconds, startedAtNanoseconds) < Self.startWindowNanoseconds
+    }
+
+    func decision(for operation: IrohaPeerNfcOperationV1, nowNanoseconds: UInt64,
+                  sessionRemainingNanoseconds: UInt64, durableCallNanoseconds: UInt64) -> Decision {
+        guard operation == .beginPayment || operation == .commit else { return .proceed }
+        guard mayStartSession(nowNanoseconds: nowNanoseconds) else { return .expired }
+        return sessionRemainingNanoseconds >= durableCallNanoseconds + Self.sessionMarginNanoseconds
+            ? .proceed : .renewSession
+    }
+}
+
+/// One request-bound factory task survives RF retirement. Session waiters may
+/// cancel independently; only the logical owner or this task's own deadline
+/// cancels preparation. A second Request can never dispatch another factory.
+final class IrohaPeerNfcReaderPreparationV1<Value: Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
+    private let now: @Sendable () -> UInt64
+    private let timeout: UInt64
+    private var binding: Data?
+    private var task: Task<Value, Error>?
+    private var completedResult: Result<Value, Error>?
+    private var startedAt: UInt64?
+    private var cancelled = false
+    private var waiters: [UUID: Task<Value, Error>] = [:]
+
+    init(timeoutNanoseconds: UInt64 = 120_000_000_000,
+         now: @escaping @Sendable () -> UInt64 = { DispatchTime.now().uptimeNanoseconds }) {
+        precondition(timeoutNanoseconds > 0)
+        self.timeout = timeoutNanoseconds
+        self.now = now
+    }
+
+    func begin(binding: Data, operation: @escaping @Sendable () async throws -> Value) throws -> Task<Value, Error> {
+        lock.lock(); defer { lock.unlock() }
+        guard !cancelled else { throw CancellationError() }
+        if let task {
+            guard self.binding == binding else { throw IrohaPeerNfcErrorV1.continuityMismatch }
+            return task
+        }
+        self.binding = binding
+        startedAt = now()
+        let task = Task {
+            let result: Result<Value, Error>
+            do {
+                try Task.checkCancellation()
+                let value = try await operation()
+                try Task.checkCancellation()
+                result = .success(value)
+            } catch { result = .failure(error) }
+            return try self.retainCompletion(result).get()
+        }
+        self.task = task
+        return task
+    }
+
+    private func retainCompletion(_ result: Result<Value, Error>) -> Result<Value, Error> {
+        lock.lock(); defer { lock.unlock() }
+        guard !cancelled else { return .failure(CancellationError()) }
+        let instant = now(), elapsed = instant - min(instant, startedAt ?? instant)
+        let bounded: Result<Value, Error> = elapsed < timeout
+            ? result : .failure(IrohaPeerNfcOperationDeadlineErrorV1.timedOut)
+        completedResult = bounded
+        return bounded
+    }
+
+    var currentTask: Task<Value, Error>? {
+        lock.lock(); defer { lock.unlock() }; return task
+    }
+
+    var remainingNanoseconds: UInt64 {
+        lock.lock(); defer { lock.unlock() }
+        guard let startedAt else { return timeout }
+        let instant = now(), elapsed = instant - min(instant, startedAt)
+        return elapsed < timeout ? timeout - elapsed : 0
+    }
+
+    func cancel() {
+        lock.lock()
+        cancelled = true
+        let task = task, waiters = Array(self.waiters.values)
+        self.waiters.removeAll()
+        lock.unlock()
+        task?.cancel()
+        waiters.forEach { $0.cancel() }
+    }
+
+    private func makeWaiter() throws -> (UUID, Task<Value, Error>)? {
+        lock.lock(); defer { lock.unlock() }
+        guard !cancelled else { throw CancellationError() }
+        guard let task, let startedAt else { return nil }
+        let id = UUID()
+        if let completedResult {
+            // A save that finished within its deadline stays completed when a
+            // later RF session joins it; its old timer cannot undo durability.
+            let waiter = Task { try completedResult.get() }
+            waiters[id] = waiter
+            return (id, waiter)
+        }
+        let instant = now(), elapsed = instant - min(instant, startedAt)
+        guard elapsed < timeout else { throw IrohaPeerNfcOperationDeadlineErrorV1.timedOut }
+        let remaining = timeout - elapsed
+        let waiter = Task {
+            try await irohaPeerNfcWithDeadlineV1(
+                timeoutNanoseconds: remaining,
+                operation: { try await task.value },
+                onTimeout: { self.cancel() })
+        }
+        waiters[id] = waiter
+        return (id, waiter)
+    }
+
+    private func removeWaiter(_ id: UUID) {
+        lock.lock(); waiters[id] = nil; lock.unlock()
+    }
+
+    private func requireActive() throws {
+        try Task.checkCancellation()
+        lock.lock(); defer { lock.unlock() }
+        if cancelled { throw CancellationError() }
+    }
+
+    func value() async throws -> Value? {
+        let registered: (UUID, Task<Value, Error>)?
+        do { registered = try makeWaiter() }
+        catch is IrohaPeerNfcOperationDeadlineErrorV1 {
+            cancel()
+            throw IrohaPeerNfcOperationDeadlineErrorV1.timedOut
+        }
+        guard let (id, waiter) = registered else { return nil }
+        defer { removeWaiter(id) }
+        return try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            let value = try await waiter.value
+            try requireActive()
+            return value
+        } onCancel: { waiter.cancel() }
     }
 }
 
@@ -531,6 +787,9 @@ final class IrohaPeerNfcRetryGateV1: @unchecked Sendable {
 struct IrohaPeerNfcReaderOperationGateV1: Sendable {
     private(set) var activeEpoch: UInt64 = 0
     private(set) var connectInFlight = false
+    /// Identifies each claimed connect, so a woken timer of an earlier contact
+    /// cannot act on a later connect of the same reader session.
+    private(set) var connectGeneration: UInt64 = 0
 
     mutating func beginOperation() -> UInt64 {
         activeEpoch &+= 1
@@ -548,7 +807,13 @@ struct IrohaPeerNfcReaderOperationGateV1: Sendable {
             return false
         }
         connectInFlight = true
+        connectGeneration &+= 1
         return true
+    }
+
+    /// The connect claimed as `generation` is still waiting for its platform callback.
+    func isConnecting(generation: UInt64) -> Bool {
+        connectInFlight && connectGeneration == generation
     }
 
     mutating func finishConnect(capturedEpoch: UInt64) -> Bool {

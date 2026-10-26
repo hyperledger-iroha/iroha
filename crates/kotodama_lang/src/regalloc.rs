@@ -1210,11 +1210,13 @@ pub(crate) fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
             name,
             spec,
             mintable,
+            owning_domain,
         } => {
             f(*asset);
             f(*name);
             f(*spec);
             f(*mintable);
+            f(*owning_domain);
         }
         TransferAsset {
             from,

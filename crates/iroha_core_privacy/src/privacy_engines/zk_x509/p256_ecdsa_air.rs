@@ -43,7 +43,6 @@ impl core::fmt::Debug for P256EcdsaWitnessV1 {
 }
 impl P256EcdsaWitnessV1 {
     /// Overwrite the complete private ECDSA input tuple.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     pub(crate) fn zeroize_private_v1(&mut self) {
         super::private_table::zeroize_words_v1(&mut self.public_key_x_be[..]);
         super::private_table::zeroize_words_v1(&mut self.public_key_y_be[..]);
@@ -88,10 +87,8 @@ pub trait P256EcdsaCircuitV1: P256WindowCircuitV1 {
     /// Handle of one canonical P-256 scalar-field value.
     type Scalar: Copy;
     /// Allocate a private base-field value bound to DER/P-256 byte I/O.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     fn base_input_v1(&mut self, value_be: [u8; 32]) -> Result<Self::Value, Self::Error>;
     /// Allocate a private canonical scalar bound to strict DER output.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     fn scalar_input_v1(&mut self, value_be: [u8; 32]) -> Result<Self::Scalar, Self::Error>;
     /// Allocate an inverse and constrain `value * inverse = 1 mod n`.
     fn scalar_inverse_nonzero_v1(
@@ -111,7 +108,6 @@ pub trait P256EcdsaCircuitV1: P256WindowCircuitV1 {
         right: Self::Scalar,
     ) -> Result<(), Self::Error>;
     /// Reduce an exact SHA-256 word with the one-subtraction reduction AIR.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     fn reduce_digest_v1(&mut self, digest_be: [u8; 32]) -> Result<Self::Scalar, Self::Error>;
     /// Reduce an assigned canonical base-field coordinate modulo n.
     fn reduce_base_coordinate_v1(
@@ -140,12 +136,10 @@ pub trait P256EcdsaInputSourceV1<C: P256EcdsaCircuitV1> {
     /// Allocate and constrain the reduced SHA-256 digest.
     fn reduced_digest_v1(&mut self, circuit: &mut C) -> Result<C::Scalar, C::Error>;
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy)]
 struct P256EcdsaWitnessInputSourceV1 {
     witness: P256EcdsaWitnessV1,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<C: P256EcdsaCircuitV1> P256EcdsaInputSourceV1<C> for P256EcdsaWitnessInputSourceV1 {
     fn public_key_v1(&mut self, circuit: &mut C) -> Result<(C::Value, C::Value), C::Error> {
         Ok((
@@ -210,7 +204,6 @@ pub fn constrain_p256_ecdsa_from_source_v1<C: P256EcdsaCircuitV1, I: P256EcdsaIn
     })
 }
 /// Constrain one complete P-256 ECDSA verification equation from native witness bytes.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub fn constrain_p256_ecdsa_v1<C: P256EcdsaCircuitV1>(
     circuit: &mut C,
     generator_table: &[P256ProjectiveValueV1<C::Value>; 16],
@@ -240,9 +233,11 @@ mod tests {
         },
     };
     use p256::{
-        EncodedPoint, FieldBytes, FieldElement, ProjectivePoint, Scalar,
+        FieldBytes, NistP256, ProjectivePoint, Scalar, Sec1Point,
         ecdsa::{Signature, SigningKey, signature::hazmat::PrehashSigner as _},
-        elliptic_curve::{PrimeField as _, group::Group as _, sec1::ToEncodedPoint as _},
+        elliptic_curve::{
+            PrimeField as _, group::Group as _, hazmat::FieldArithmetic, sec1::ToSec1Point as _,
+        },
     };
     use thiserror::Error;
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -315,10 +310,15 @@ mod tests {
             self.scalar_values.push(value);
             Ok(assigned)
         }
-        fn base_field(&self, value: BaseValue) -> Result<FieldElement, TestError> {
-            Option::<FieldElement>::from(FieldElement::from_bytes(&FieldBytes::from(
-                self.base_values[value.0],
-            )))
+        fn base_field(
+            &self,
+            value: BaseValue,
+        ) -> Result<<NistP256 as FieldArithmetic>::FieldElement, TestError> {
+            Option::<<NistP256 as FieldArithmetic>::FieldElement>::from(
+                <NistP256 as FieldArithmetic>::FieldElement::from_bytes(&FieldBytes::from(
+                    self.base_values[value.0],
+                )),
+            )
             .ok_or(TestError::NonCanonical)
         }
         fn scalar_field(&self, value: ScalarValue) -> Result<Scalar, TestError> {
@@ -410,8 +410,10 @@ mod tests {
             Ok(())
         }
         fn inverse_nonzero_v1(&mut self, value: Self::Value) -> Result<Self::Value, Self::Error> {
-            let inverse = Option::<FieldElement>::from(self.base_field(value)?.invert())
-                .ok_or(TestError::ZeroInverse)?;
+            let inverse = Option::<<NistP256 as FieldArithmetic>::FieldElement>::from(
+                self.base_field(value)?.invert(),
+            )
+            .ok_or(TestError::ZeroInverse)?;
             let inverse = self.push_base(inverse.to_bytes().into())?;
             let product = self.multiply_v1(value, inverse)?;
             let one = self.constant_v1({
@@ -529,7 +531,7 @@ mod tests {
                     z: circuit.push_base([0; 32]).expect("zero"),
                 };
             }
-            let encoded = point.to_affine().to_encoded_point(false);
+            let encoded = point.to_affine().to_sec1_point(false);
             let mut x = [0_u8; 32];
             let mut y = [0_u8; 32];
             x.copy_from_slice(encoded.x().expect("x"));
@@ -544,7 +546,7 @@ mod tests {
         })
     }
     fn witness_for(key: &SigningKey, digest: [u8; 32], signature: Signature) -> P256EcdsaWitnessV1 {
-        let encoded = key.verifying_key().to_encoded_point(false);
+        let encoded = key.verifying_key().to_sec1_point(false);
         let mut horizontal = [0_u8; 32];
         let mut vertical = [0_u8; 32];
         horizontal.copy_from_slice(encoded.x().expect("x"));
@@ -594,7 +596,7 @@ mod tests {
                 .wrapping_add(3)
         });
         let signature: Signature = key.sign_prehash(&digest).expect("signature");
-        let signature = signature.normalize_s().unwrap_or(signature);
+        let signature = signature.normalize_s();
         let witness = witness_for(&key, digest, signature);
         assert_eq!(
             execute(witness, P256EcdsaRoleV1::WalletOwnership),
@@ -618,7 +620,7 @@ mod tests {
                     );
             }
             let signature: Signature = key.sign_prehash(&digest).expect("prehash signature");
-            let signature = signature.normalize_s().unwrap_or(signature);
+            let signature = signature.normalize_s();
             let circuit = execute(
                 witness_for(&key, digest, signature),
                 P256EcdsaRoleV1::WalletOwnership,
@@ -644,7 +646,7 @@ mod tests {
         let key = signing_key(29);
         let digest = [0xa5_u8; 32];
         let low: Signature = key.sign_prehash(&digest).expect("signature");
-        let low = low.normalize_s().unwrap_or(low);
+        let low = low.normalize_s();
         let high = Signature::from_scalars(low.r().to_bytes(), (-*low.s()).to_bytes())
             .expect("high-s representative");
         execute(
@@ -666,14 +668,14 @@ mod tests {
         let key = signing_key(41);
         let digest = [0x3c_u8; 32];
         let signature: Signature = key.sign_prehash(&digest).expect("signature");
-        let signature = signature.normalize_s().unwrap_or(signature);
+        let signature = signature.normalize_s();
         let witness = witness_for(&key, digest, signature);
         let mut wrong_digest = witness;
         wrong_digest.digest_be[0] ^= 1;
         assert!(execute(wrong_digest, P256EcdsaRoleV1::WalletOwnership).is_err());
         let other_key = signing_key(43);
         let mut wrong_key = witness;
-        let other = other_key.verifying_key().to_encoded_point(false);
+        let other = other_key.verifying_key().to_sec1_point(false);
         wrong_key
             .public_key_x_be
             .copy_from_slice(other.x().expect("x"));
@@ -711,7 +713,7 @@ mod tests {
         let key = signing_key(53);
         let digest = [0xff_u8; 32];
         let signature: Signature = key.sign_prehash(&digest).expect("signature");
-        let signature = signature.normalize_s().unwrap_or(signature);
+        let signature = signature.normalize_s();
         let circuit = execute(
             witness_for(&key, digest, signature),
             P256EcdsaRoleV1::WalletOwnership,
@@ -729,7 +731,7 @@ mod tests {
                 assert_eq!(circuit.base_values[point.z.0], [0; 32]);
                 continue;
             }
-            let encoded = EncodedPoint::from_affine_coordinates(
+            let encoded = Sec1Point::from_affine_coordinates(
                 &FieldBytes::from(circuit.base_values[point.x.0]),
                 &FieldBytes::from(circuit.base_values[point.y.0]),
                 false,
@@ -738,7 +740,7 @@ mod tests {
                 encoded,
                 (ProjectivePoint::GENERATOR * Scalar::from(multiple as u64))
                     .to_affine()
-                    .to_encoded_point(false)
+                    .to_sec1_point(false)
             );
         }
     }

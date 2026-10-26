@@ -17,6 +17,14 @@ fn peer(seed: u8) -> PeerId {
 }
 
 fn client(network_id: NetworkId, endpoint: &str) -> Client {
+    client_with_transport(network_id, endpoint, None)
+}
+
+fn client_with_transport(
+    network_id: NetworkId,
+    endpoint: &str,
+    transport: Option<Arc<dyn iroha::http::HttpTransport>>,
+) -> Client {
     let key = KeyPair::from_seed(vec![83; 32], Algorithm::Ed25519);
     let table = toml::toml! {
         chain = "http-finality"
@@ -27,9 +35,13 @@ fn client(network_id: NetworkId, endpoint: &str) -> Client {
         public_key = (key.public_key().to_string())
         private_key = (iroha_crypto::ExposedPrivateKey(key.private_key().clone()).to_string())
     };
-    Client::builder(Config::load_table("http-tests.toml", table).unwrap())
-        .build()
-        .unwrap()
+    let builder = Client::builder(Config::load_table("http-tests.toml", table).unwrap());
+    let builder = if let Some(transport) = transport {
+        builder.http_transport(transport)
+    } else {
+        builder
+    };
+    builder.build().unwrap()
 }
 
 #[test]
@@ -93,7 +105,6 @@ fn constructor_binds_network_and_distinct_bls_peers_without_dispatch() {
     );
     for (proofs, peers) in [
         (vec![], peers.clone()),
-        (vec![proof.clone()], vec![]),
         (
             vec![proof.clone()],
             vec![peers[0].clone(), peers[0].clone()],
@@ -237,5 +248,82 @@ fn concurrent_reads_overlap_peers_preserve_order_and_join_before_returning() {
             panic!("joined worker failure")
         }),
         vec![Err(HttpFinalityError::Worker)]
+    );
+}
+
+#[derive(Debug)]
+struct CertifiedTipTransport {
+    proof: iroha_data_model::sumeragi_finality::SumeragiFinalityProof,
+    paths: std::sync::Mutex<Vec<String>>,
+}
+impl iroha::http::HttpTransport for CertifiedTipTransport {
+    fn send_blocking(
+        &self,
+        request: iroha::http::TransportRequest,
+    ) -> color_eyre::eyre::Result<iroha::http::Response<Vec<u8>>> {
+        let path = request.url.path();
+        self.paths.lock().unwrap().push(path.to_owned());
+        let (bytes, media) = if path == "/status" {
+            let status = iroha_torii_shared::status::Status {
+                blocks: self.proof.height(),
+                ..Default::default()
+            };
+            (norito::json::to_vec(&status).unwrap(), "application/json")
+        } else if path == "/v1/node/capabilities" {
+            (norito::json::to_vec(&norito::json!({
+                "data_model_version": (iroha_data_model::DATA_MODEL_VERSION),
+                "signed_transaction_schema_hash_hex": (hex::encode(norito::schema::identity::frame_hash::<iroha_data_model::transaction::SignedTransaction>()))
+            })).unwrap(), "application/json")
+        } else {
+            assert_eq!(path, format!("/v1/bridge/finality/{}", self.proof.height()));
+            (
+                norito::encode_canonical(&self.proof).unwrap(),
+                "application/x-norito",
+            )
+        };
+        let mut response = iroha::http::Response::new(bytes);
+        response
+            .headers_mut()
+            .insert("content-type", media.parse().unwrap());
+        Ok(response)
+    }
+    fn send(&self, request: iroha::http::TransportRequest) -> iroha::http::TransportFuture<'_> {
+        Box::pin(async move { self.send_blocking(request) })
+    }
+}
+
+#[test]
+fn certified_tip_uses_one_public_endpoint_without_claiming_peer_readiness() {
+    let native = iroha_data_model::sumeragi_finality::test_fixtures::NativeFinalityFixture::new();
+    let proof = native.checkpoint().tip().clone();
+    let transport = Arc::new(CertifiedTipTransport {
+        proof: proof.clone(),
+        paths: Default::default(),
+    });
+    let client = client_with_transport(
+        native.network_id(),
+        "https://parent.example/",
+        Some(transport.clone()),
+    );
+    let source = HttpFinalitySource::new(
+        native.network_id(),
+        NonZeroU64::new(1).unwrap(),
+        vec![client],
+        vec![],
+        Instant::now() + Duration::from_secs(10),
+        iroha_data_model::block::consensus::SumeragiRootScope::Global,
+    )
+    .unwrap();
+    assert_eq!(
+        source.latest_finality_proof(&peer(99), &[1; 32]).unwrap(),
+        proof
+    );
+    assert_eq!(
+        *transport.paths.lock().unwrap(),
+        ["/status", "/v1/node/capabilities", "/v1/bridge/finality/2"]
+    );
+    assert_eq!(
+        source.latest_attestation(&peer(99), &[1; 32]).unwrap_err(),
+        HttpFinalityError::MissingPeer
     );
 }

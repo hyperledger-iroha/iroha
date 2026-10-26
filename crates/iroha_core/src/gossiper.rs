@@ -2847,23 +2847,29 @@ mod tests {
         );
         // This component fixture needs explicit routing metadata; it has no signed
         // genesis, certified history or native publication authority.
-        let mut parameters = world.parameters.block();
-        parameters
-            .set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
+        let budget = world.sccp_committee_generations.allocation_budget();
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
+            .expect("admitted parameter-only fixture block");
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            crate::sumeragi::lanes::routing::test_support::metadata(
                 iroha_data_model::block::consensus::SumeragiRootScope::Global,
-            ))
-            .expect("valid fixture parameters");
-        parameters
-            .set_parameter(
-                iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
-                    Algorithm::Ed25519,
-                    Algorithm::Secp256k1,
-                ])
-                .expect("explicit two-algorithm gossip fixture policy")
-                .into_parameter()
-                .unwrap(),
-            )
-            .unwrap();
+            ),
+            budget,
+        )
+        .expect("valid fixture parameters");
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                Algorithm::Ed25519,
+                Algorithm::Secp256k1,
+            ])
+            .expect("explicit two-algorithm gossip fixture policy")
+            .into_parameter()
+            .unwrap(),
+            budget,
+        )
+        .unwrap();
         parameters.commit();
         world
     }
@@ -4480,10 +4486,22 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
     fn gossip_before_initial_policy_retains_original_source_then_retries_without_rejection() {
         let gossiper = closed_test_gossiper(NonZeroU32::new(1).unwrap());
         // Explicit pre-initialization component fixture, not a permitted production removal.
-        let mut parameters = gossiper.state.world.parameters.block();
+        let budget = gossiper
+            .state
+            .world
+            .sccp_committee_generations
+            .allocation_budget();
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&gossiper.state.world)
+            .expect("admitted parameter-only fixture block");
         let original_parameters = parameters.get().clone();
         assert!(original_parameters.root_fees().is_some());
-        *parameters.get_mut() = crate::state::StateParameters::default();
+        let uninitialized =
+            crate::pipeline_gas_policy::RetainedStateParameters::try_copy_for_testing(
+                &crate::state::StateParameters::default(),
+                budget,
+            )
+            .expect("fund the explicit uninitialized fixture graph");
+        *parameters.get_mut() = uninitialized;
         parameters.commit();
         let (signed, _) = build_transaction("policy readiness original source");
         let hash = signed.hash_as_entrypoint();
@@ -4509,7 +4527,8 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         assert_eq!(gossiper.queue.queued_len(), 0);
         assert_eq!(message.payload().txs[0].hash(), Some(hash));
         assert!(Arc::ptr_eq(&payload, &message.payload().txs[0].payload()));
-        let mut parameters = gossiper.state.world.parameters.block();
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&gossiper.state.world)
+            .expect("admitted parameter-only fixture block");
         // Restore the same complete owner, including its committed fee policy.
         // Restoring only crypto/metadata would leave ordinary admission uninitialized.
         *parameters.get_mut() = original_parameters.clone();

@@ -332,8 +332,7 @@ fn admit_lane_authority(
     authority: &LaneAuthority,
 ) -> Result<(), Attempt<io::Error>> {
     let mut members: [Option<(iroha_crypto::PublicKey, &[u8])>;
-        iroha_data_model::block::consensus::MAX_VALIDATORS_PER_HEIGHT] =
-        std::array::from_fn(|_| None);
+        iroha_model_base::topology::MAX_VALIDATORS_PER_HEIGHT] = std::array::from_fn(|_| None);
     let mut count = 0;
     authority
         .visit_members(|key, proof| {

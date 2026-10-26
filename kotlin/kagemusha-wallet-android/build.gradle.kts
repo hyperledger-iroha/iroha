@@ -24,8 +24,8 @@ val mobileSdkRepoDir = providers.gradleProperty("irohaSdkRepoDir")
 
 android {
     namespace = "org.hyperledger.iroha.sdk.offline.wallet"
-    compileSdk = 35
-    ndkVersion = "28.0.12674087"
+    compileSdk = 37
+    ndkVersion = "30.0.16248370"
 
     defaultConfig {
         minSdk = 26
@@ -122,6 +122,7 @@ publishing {
 
 dependencies {
     api(project(":client-android"))
+    implementation(libs.serialization.json) // Fold telemetry reading only.
     coreLibraryDesugaring(libs.desugar.jdk.libs)
     testImplementation(kotlin("test"))
     testImplementation(libs.coroutines.core.jvm)
@@ -129,8 +130,8 @@ dependencies {
     testRuntimeOnly(libs.junit.jupiter.engine)
     testRuntimeOnly(libs.junit.platform.launcher)
     androidTestImplementation(libs.bcprov) // Dedicated raw IPN1 diagnostic identity, never payment-key signing.
-    androidTestImplementation("androidx.test:runner:1.6.2")
-    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.junit)
 }
 
 tasks.withType<Test>().configureEach {
@@ -218,8 +219,8 @@ abstract class CompileEnrollmentProbeFiles : DefaultTask() {
         val properties = Properties().apply {
             ndk.resolve("source.properties").inputStream().use { load(it) }
         }
-        require(properties.getProperty("Pkg.BaseRevision") == "28.0.12674087" &&
-            properties.getProperty("Pkg.Revision") == "28.0.12674087-beta2") { "Test mailbox helper requires the pinned NDK" }
+        require(properties.getProperty("Pkg.BaseRevision") == "30.0.16248370" &&
+            properties.getProperty("Pkg.Revision") == "30.0.16248370") { "Test mailbox helper requires the pinned NDK" }
         val host = when {
             System.getProperty("os.name").startsWith("Mac") -> "darwin-x86_64"
             System.getProperty("os.name").startsWith("Linux") -> "linux-x86_64"

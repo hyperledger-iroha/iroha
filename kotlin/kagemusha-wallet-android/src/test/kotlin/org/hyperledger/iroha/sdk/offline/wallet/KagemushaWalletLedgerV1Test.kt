@@ -12,6 +12,24 @@ import org.hyperledger.iroha.sdk.client.KagemushaWalletLedgerReadV1
 import org.junit.jupiter.api.Test
 
 class KagemushaWalletLedgerV1Test {
+    @Test fun `direct finality and exchange outcomes have distinct canonical ABI tags`() {
+        assertEquals(listOf(60, 61, 62, 63, 64, 65, 66, 67), listOf(
+            KagemushaWalletCallV1.EXCHANGE_BEGUN, KagemushaWalletCallV1.EXCHANGE_ENDED,
+            KagemushaWalletCallV1.DEFERRED_NO_WORK, KagemushaWalletCallV1.DEFERRED_BLOCKED,
+            KagemushaWalletCallV1.DEFERRED_COMPLETION, KagemushaWalletCallV1.REVIEW_RETAINED,
+            KagemushaWalletCallV1.REVIEW_EXISTING, KagemushaWalletCallV1.REVIEW_WAITING))
+        assertEquals(listOf(68, 69, 70), listOf(KagemushaWalletCallV1.LEDGER_EPOCH_REQUIRED,
+            KagemushaWalletCallV1.LEDGER_REJECTED, KagemushaWalletCallV1.LEDGER_CONFIRMED))
+        for (exchangeResult in listOf(
+            KagemushaWalletCallV1(KagemushaWalletCallV1.EXCHANGE_BEGUN, -1, 0, 2, 0, 0, byteArrayOf()),
+            KagemushaWalletCallV1(KagemushaWalletCallV1.EXCHANGE_ENDED, -1, 0, 0, 0, 0, byteArrayOf()),
+            KagemushaWalletCallV1(KagemushaWalletCallV1.DEFERRED_NO_WORK, -1, 0, 0, 0, 0, byteArrayOf()),
+        )) {
+            assertFailsWith<KagemushaWalletExceptionV1> { KagemushaWalletLedgerOutcomeV1.of(exchangeResult) }
+            assertFailsWith<KagemushaWalletExceptionV1> { KagemushaWalletLedgerIngestV1.of(exchangeResult) }
+        }
+    }
+
     private val entrypoint = ByteArray(32) { 0x0f }
     private val commit = KagemushaWalletLedgerCommitV1(7, ByteArray(32) { 9 })
 
@@ -126,14 +144,14 @@ class KagemushaWalletLedgerV1Test {
             }
         }
         // 44/49 were the walk's Confirmed/Rejected: height plus the Iroha header hash, the shape of
-        // 61/62. A Native from before direct finality cannot hand this SDK a terminal outcome.
+        // 69/70. A Native from before direct finality cannot hand this SDK a terminal outcome.
         for (status in listOf(41, 42, 43, 44, 45, 49)) {
             for (bytes in listOf(byteArrayOf(), byteArrayOf(1), ByteArray(8) { 2 }, ByteArray(32) { 2 })) {
                 assertFailsWith<KagemushaWalletExceptionV1> { KagemushaWalletCallV1(status, -1, 0, 0, 0, 0, bytes) }
                 assertFailsWith<KagemushaWalletExceptionV1> { KagemushaWalletCallV1(status, -1, 0, 3, 0, 0, bytes) }
             }
         }
-        assertFailsWith<KagemushaWalletExceptionV1> { KagemushaWalletCallV1(63, -1, 0, 1, 0, 0, byteArrayOf()) }
+        assertFailsWith<KagemushaWalletExceptionV1> { KagemushaWalletCallV1(71, -1, 0, 1, 0, 0, byteArrayOf()) }
     }
 
     private class Counts { var outcomes = 0; var fetches = 0; var ingests = 0; var syncs = 0; val fetched = ArrayList<ByteArray>() }

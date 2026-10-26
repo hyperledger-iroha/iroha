@@ -13,31 +13,23 @@ crate-type = ["rlib"]
 
 [features]
 default = ["pqc"]
-pqc = ["dep:pqcrypto-traits", "dep:pqcrypto-mldsa", "dep:pqcrypto-mlkem"]
+pqc = ["dep:ml-dsa", "dep:ml-kem"]
 
 [lints]
 workspace = true
 
 [dependencies]
+shake = { version = "0.1.0", default-features = false, features = ["zeroize"] }
 blake3 = { workspace = true, features = ["zeroize"] }
-hkdf = { version = "0.12.4", default-features = false, features = ["std"] }
-pqcrypto-traits = { version = "0.3.5", optional = true }
+hkdf = { version = "0.13.0", default-features = false, features = [] }
+ml-dsa = { workspace = true, optional = true }
+ml-kem = { workspace = true, optional = true }
 rand = { workspace = true, default-features = false, features = ["std_rng", "std"] }
-rand_chacha = { version = "0.9.0", default-features = false, features = ["std"] }
-rand_core = { version = "0.9.3", default-features = false, features = ["std"] }
-sha3 = { version = "0.10.8", default-features = false, features = ["std", "zeroize"] }
+rand_chacha = { version = "0.10.0", default-features = false, features = ["std"] }
+rand_core = { version = "0.10.1", default-features = false, features = [] }
+sha3 = { version = "0.12.0", default-features = false, features = ["zeroize", "alloc"] }
 thiserror = { workspace = true }
 zeroize = { version = "1.8.2", default-features = false, features = ["alloc", "derive"] }
-
-# pqcrypto's ML-DSA and ML-KEM NEON C backends are not compatible with MSVC.
-# Keep both algorithms enabled there through their portable clean C implementations.
-[target.'cfg(all(target_os = "windows", target_arch = "aarch64"))'.dependencies]
-pqcrypto-mldsa = { version = "0.1.2", default-features = false, features = ["std"], optional = true }
-pqcrypto-mlkem = { version = "0.1.1", default-features = false, features = ["std"], optional = true }
-
-[target.'cfg(not(all(target_os = "windows", target_arch = "aarch64")))'.dependencies]
-pqcrypto-mldsa = { version = "0.1.2", optional = true }
-pqcrypto-mlkem = { version = "0.1.1", optional = true }
 
 [dev-dependencies]
 hex = { workspace = true }

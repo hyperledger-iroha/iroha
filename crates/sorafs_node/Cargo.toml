@@ -34,10 +34,10 @@ sorafs_chunker = { path = "../sorafs_chunker" }
 tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 base64 = { workspace = true }
 rand = { workspace = true }
-rand_chacha = { version = "0.9", default-features = false, features = ["std"] }
+rand_chacha = { version = "0.10.0", default-features = false, features = ["std"] }
 iroha_crypto = { path = "../iroha_crypto", default-features = false, features = ["node-crypto"] }
-ed25519-dalek = "2.2.0"
-reqwest = { workspace = true, features = ["multipart", "rustls-tls", "stream"] }
+ed25519-dalek = "3.0.0"
+reqwest = { workspace = true, features = ["multipart", "rustls", "stream"] }
 url.workspace = true
 tempfile = { workspace = true }
 

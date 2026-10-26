@@ -20,7 +20,7 @@
 
 use iroha_config_base::{ReadConfig, read::ConfigReader, toml::TomlSource};
 use iroha_crypto::Hash;
-use iroha_data_model::block::consensus::{ConsensusMode, RootFeePolicy};
+use iroha_data_model::block::consensus::{ConsensusMode, PublicLaneStakingPolicy, RootFeePolicy};
 use norito::codec::{Decode, Encode};
 use std::{collections::BTreeMap, fmt, path::PathBuf, str::FromStr, time::Duration};
 use thiserror::Error;
@@ -44,7 +44,7 @@ const POLICY_DIGEST_DOMAIN: &[u8] = b"iroha:config:profile:policy-digest:v1\0";
 /// One account per base profile holds the gas technical account, the fee sink, the sponsor-vault
 /// custody, the stake escrow and the slash sink, as Kagami's per-genesis gas-custody account did.
 /// It is `derive_non_signing_ed25519_public_key(PROTOCOL_CUSTODY_ACCOUNT_DOMAIN, &[profile id])`,
-/// so no signing key exists for it; the profile's genesis recipe and staking literals must equal
+/// so no signing key exists for it; the profile's genesis monetary recipes must equal
 /// [`protocol_custody_account`].
 pub const PROTOCOL_CUSTODY_ACCOUNT_DOMAIN: &[u8] = b"iroha:config:profile:protocol-custody:v1";
 
@@ -327,6 +327,8 @@ pub struct GenesisRecipeV1 {
     pub npos_min_self_bond: u64,
     /// Complete monetary policy authored into the original signed genesis.
     pub root_fees: RootFeePolicy,
+    /// Complete staking monetary policy authored into the original signed genesis.
+    pub public_lane_staking: PublicLaneStakingPolicy,
 }
 
 impl GenesisRecipeV1 {
@@ -499,6 +501,8 @@ struct GenesisRecipeFile {
     npos_min_self_bond: u64,
     #[config(nested)]
     root_fees: GenesisRootFeesFile,
+    #[config(nested)]
+    public_lane_staking: GenesisStakingFile,
 }
 
 // TOML authoring adapter only; the model owns the monetary policy and its validation.
@@ -554,6 +558,59 @@ impl GenesisRootFeesFile {
             per_instruction_fee: self.per_instruction_fee,
             per_gas_unit_fee: self.per_gas_unit_fee,
         })
+    }
+}
+
+// Complete TOML authoring input only. The canonical model owns validation and wire bytes.
+#[derive(ReadConfig)]
+struct GenesisStakingFile {
+    min_validator_stake: iroha_primitives::numeric::Quantity,
+    max_stake_shares_per_validator: std::num::NonZeroU32,
+    max_pending_unbonds_per_share: std::num::NonZeroU32,
+    unbonding_delay_ms: u64,
+    max_slash_bps: u16,
+    stake_asset_id: String,
+    stake_escrow_account_id: String,
+    slash_sink_account_id: String,
+}
+
+impl GenesisStakingFile {
+    fn into_policy(self, discriminant: u16) -> Result<PublicLaneStakingPolicy, String> {
+        use iroha_data_model::{
+            account::{AccountId, address::ChainDiscriminantGuard},
+            asset::AssetDefinitionId,
+        };
+        let _chain = ChainDiscriminantGuard::enter(discriminant);
+        let account = |literal: &str| -> Result<AccountId, String> {
+            let account = AccountId::parse_encoded(literal).map_err(|error| error.to_string())?;
+            if account.to_string() != literal {
+                return Err(
+                    "genesis staking identities require canonical account literals".to_owned(),
+                );
+            }
+            Ok(account)
+        };
+        let asset = self
+            .stake_asset_id
+            .parse::<AssetDefinitionId>()
+            .map_err(|error| error.to_string())?;
+        if asset.canonical_address() != self.stake_asset_id {
+            return Err(
+                "genesis staking currency requires its canonical asset identity".to_owned(),
+            );
+        }
+        let policy = PublicLaneStakingPolicy {
+            min_validator_stake: self.min_validator_stake,
+            max_stake_shares_per_validator: self.max_stake_shares_per_validator,
+            max_pending_unbonds_per_share: self.max_pending_unbonds_per_share,
+            unbonding_delay_ms: self.unbonding_delay_ms,
+            max_slash_bps: self.max_slash_bps,
+            stake_asset_id: asset,
+            stake_escrow_account_id: account(&self.stake_escrow_account_id)?,
+            slash_sink_account_id: account(&self.slash_sink_account_id)?,
+        };
+        policy.validate().map_err(|error| error.to_string())?;
+        Ok(policy)
     }
 }
 
@@ -716,6 +773,11 @@ impl Profile {
                     .root_fees
                     .into_policy(file.profile.chain_discriminant)
                     .map_err(malformed)?,
+                public_lane_staking: file
+                    .genesis_recipe
+                    .public_lane_staking
+                    .into_policy(file.profile.chain_discriminant)
+                    .map_err(malformed)?,
             },
             static_config,
             derive: DeriveInputs {
@@ -871,7 +933,7 @@ impl Profile {
             validators,
             reason,
         };
-        if !iroha_data_model::block::consensus::is_valid_committee_size(validators) {
+        if !iroha_model_base::topology::is_valid_committee_size(validators) {
             return Err(reject(
                 "the global committee must have exactly 3f + 1 validators with 1 <= f <= 10",
             ));
@@ -1096,3 +1158,6 @@ fn keys_overlap(left: &str, right: &str) -> bool {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod staking_recipe_tests;

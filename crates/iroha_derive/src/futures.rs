@@ -9,7 +9,7 @@ use syn::ItemFn;
 /// The proc macro itself stays feature-free; `iroha_futures` defines the helper
 /// macro twice behind its own `telemetry` feature, so instrumentation is chosen
 /// by the consumer's `iroha_futures` build rather than by this crate.
-fn instrument_telemetry_future(emitter: &mut Emitter, input: ItemFn) -> TokenStream {
+fn instrument_telemetry_future(emitter: &mut Emitter, mut input: ItemFn) -> TokenStream {
     if input.sig.asyncness.is_none() {
         emit!(
             emitter,
@@ -19,22 +19,18 @@ fn instrument_telemetry_future(emitter: &mut Emitter, input: ItemFn) -> TokenStr
         return quote! { #input };
     }
 
-    let ItemFn {
-        attrs,
-        vis,
-        sig,
-        block,
-    } = input;
-    let ident = &sig.ident;
-    quote! {
-        #(#attrs)*
-        #vis #sig {
-            ::iroha_futures::__telemetry_future_body!(
-                #block,
-                concat!(module_path!(), "::", stringify!(#ident))
-            )
-        }
-    }
+    let ident = &input.sig.ident;
+    let block = &input.block;
+    let Some(instrumented) = emitter.handle(syn::parse2(quote!({
+        ::iroha_futures::__telemetry_future_body!(
+            #block,
+            concat!(module_path!(), "::", stringify!(#ident))
+        )
+    }))) else {
+        return TokenStream::new();
+    };
+    input.block = instrumented;
+    quote! { #input }
 }
 
 /// Wrap an async function body with telemetry when `iroha_futures/telemetry` is enabled.
@@ -81,7 +77,7 @@ mod tests {
         assert!(rendered.contains(":: iroha_futures :: __telemetry_future_body !"));
         let output: ItemFn = syn::parse2(output).expect("instrumented function should parse");
         assert!(output.sig.asyncness.is_some());
-        assert!(output.sig.unsafety.is_some());
+        assert!(matches!(output.sig.safety, syn::Safety::Unsafe(_)));
         assert!(output.sig.abi.is_some());
         assert_eq!(output.sig.generics.params.len(), 1);
         assert!(output.sig.generics.where_clause.is_some());

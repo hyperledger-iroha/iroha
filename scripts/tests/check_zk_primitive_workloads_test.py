@@ -1660,7 +1660,7 @@ class SdkManifestPqChecks(unittest.TestCase):
     PATH = "IrohaSwift/Package.swift"
     EVIDENCE = (
         'Set(evidence.keys) == Set(["producer-record.json",\n'
-        '    "pqcrypto-normalization.json", "consumer"])'
+        '    "native-archive-audit.json", "consumer"])'
     )
 
     def test_exact_swift_receipt_key_is_metadata(self) -> None:
@@ -1678,16 +1678,16 @@ class SdkManifestPqChecks(unittest.TestCase):
 
     def test_other_keys_and_nonliteral_expressions_are_not_exempt(self) -> None:
         for source in (
-            self.EVIDENCE.replace("pqcrypto-normalization.json", "pqcrypto.json"),
+            self.EVIDENCE.replace("native-archive-audit.json", "pqcrypto.json"),
             self.EVIDENCE.replace('"consumer"', '"liboqs"'),
             self.EVIDENCE.replace('"consumer"', 'linkedLibrary("pqcrypto")'),
-            self.EVIDENCE.replace("evidence.keys", "dependencies.keys"),
+            self.EVIDENCE.replace("native-archive-audit.json", "pqcrypto-normalization.json"),
         ):
             with self.subTest(source=source):
                 self.assertIsNotNone(checker.sdk_manifest_pq_library(self.PATH, source))
 
     def test_other_manifest_formats_have_no_swift_exception(self) -> None:
-        self.assertEqual(checker.sdk_manifest_pq_library("javascript/package.json", self.EVIDENCE), "pqcrypto")
+        self.assertEqual(checker.sdk_manifest_pq_library("javascript/package.json", self.EVIDENCE.replace("native-archive-audit.json", "pqcrypto-normalization.json")), "pqcrypto")
 
 
 class PostQuantumChecks(TreeFixture):
@@ -1709,7 +1709,7 @@ class PostQuantumChecks(TreeFixture):
         removed = spec["post_quantum"]["legacy_labels"]["files"].pop()
         self.assertTrue(any("superseded algorithm label" in error and removed in error for error in self.pq_errors(spec)))
         names = [package["name"] for package in self.spec["post_quantum"]["lock_packages"]]
-        self.assertEqual(names, ["pqcrypto-internals", "pqcrypto-mldsa", "pqcrypto-mlkem", "pqcrypto-traits"])
+        self.assertEqual(names, ["ml-dsa", "ml-kem"])
 
     def test_parameter_sets_and_tests_are_checked(self) -> None:
         spec = self.mutated()
@@ -1771,9 +1771,9 @@ class PostQuantumChecks(TreeFixture):
         self.assertReported(self.pq_errors(spec), "BouncyCastle manifest")
 
     def test_superseded_package_names(self) -> None:
-        for name in ("pqcrypto-kyber", "pqcrypto-dilithium", "kyber", "crystals-dilithium", "ntru", "sphincsplus", "sphincs-plus", "pqcrypto-sphincsplus"):
+        for name in ("pqcrypto-kyber", "pqcrypto-dilithium", "kyber", "crystals-dilithium", "ntru", "sphincsplus", "sphincs-plus", "pqcrypto-sphincsplus", "pqcrypto-mlkem", "pqcrypto-mldsa", "pqcrypto-internals", "pqcrypto-traits"):
             self.assertTrue(checker.SUPERSEDED_PQ_PACKAGES.search(name) or name == "sphincsplus", name)
-        for name in ("untrusted", "pqcrypto-mlkem", "pqcrypto-mldsa", "pqcrypto-internals", "pqcrypto-traits", "sabertooth"):
+        for name in ("untrusted", "ml-kem", "ml-dsa", "sabertooth"):
             self.assertIsNone(checker.SUPERSEDED_PQ_PACKAGES.search(name), name)
 
     def test_a_superseded_package_in_the_lockfile_fails(self) -> None:

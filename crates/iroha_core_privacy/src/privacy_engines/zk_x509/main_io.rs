@@ -4,7 +4,6 @@
 //! closed first-release profile; no private witness, prover-selected channel metadata, or
 //! trace-derived length can change it. The MAIN assembler compares its witness-bearing declarations
 //! byte-for-byte with this plan before committing either I/O base table.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::io_air::ZkX509IoChannelWitnessV1;
 use super::{
     der_air::ZK_X509_RFC5280_MAX_TOP_LEVEL_DOCUMENT_BYTES_V1,
@@ -53,7 +52,6 @@ pub struct ZkX509MainIoDeclarationsV1 {
 }
 impl ZkX509MainIoDeclarationsV1 {
     /// Reject witness-selected channel metadata before either base table is built.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     pub(crate) fn validate_witness_declarations_v1(
         &self,
         witnesses: &[ZkX509IoChannelWitnessV1],

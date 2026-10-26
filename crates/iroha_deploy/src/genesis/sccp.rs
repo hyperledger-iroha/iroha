@@ -11,7 +11,7 @@ use iroha_data_model::{
     sccp::params::{SCCP_MIN_EPOCH_MS_V1, SccpParametersV1},
 };
 use iroha_genesis::RawGenesisTransaction;
-use rand::{TryRngCore as _, rngs::OsRng};
+use rand::{TryRng as _, rngs::SysRng};
 use std::{num::NonZeroU64, path::Path};
 
 /// Genesis-pinned liability coverage: fourteen-day validity plus seven-day evidence grace.
@@ -123,7 +123,7 @@ pub fn reserve_reset_nonce(history: &Path, nonce: [u8; 32]) -> Result<()> {
 /// Returns an error if entropy or durable identity reservation fails.
 pub fn fresh_reset_nonce(history: &Path) -> Result<[u8; 32]> {
     let mut nonce = [0; 32];
-    OsRng
+    SysRng
         .try_fill_bytes(&mut nonce)
         .map_err(|error| eyre!("SCCP reset entropy unavailable: {error}"))?;
     reserve_reset_nonce(history, nonce)?;
@@ -206,7 +206,7 @@ mod tests {
 
     fn manifest(cadence: u64) -> RawGenesisTransaction {
         let custody = iroha_config::parameters::defaults::governance::bond_escrow_account_id();
-        let mut staking = super::super::default_staking_policy(
+        let mut staking = iroha_genesis::default_staking_policy(
             SumeragiNposParameters::default().xor_asset_definition_id,
             custody.clone(),
             custody,

@@ -99,7 +99,8 @@ fn complete_world_drop_releases_peers_before_parameters_callback(
     // Seed genuine retained preimages, even though these two values are equal.
     // The replacement constructor must execute its real Some(preimage) path.
     {
-        let mut tip = world.parameters.block();
+        let mut tip = crate::state::parameter_cell_block_for_testing(&world)
+            .expect("fund original parameter Cell acquisition");
         let _ = tip.get_mut();
         tip.commit();
     }
@@ -117,9 +118,8 @@ fn complete_world_drop_releases_peers_before_parameters_callback(
 
     // These are the original detached generations, created before any World
     // writer is held. The callback never constructs a replacement generation.
-    let parameters_probe = world
-        .parameters
-        .block()
+    let parameters_probe = crate::state::parameter_cell_block_for_testing(&world)
+        .expect("fund original parameter Cell acquisition")
         .try_detach(|_| Ok::<_, ()>(()))
         .expect("detach the original parameters probe");
     let peers_probe = world

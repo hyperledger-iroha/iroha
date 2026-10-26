@@ -3,7 +3,7 @@
 use ff::Field;
 use iroha_pasta::{Ep, Eq, Fp, Fq, PastaField};
 use rand_chacha::ChaCha20Rng;
-use rand_core_06::SeedableRng;
+use rand_core::SeedableRng;
 
 use super::*;
 use crate::transcript::{Blake2bHash, Transcript, TranscriptError, TranscriptWriter};
@@ -256,7 +256,10 @@ fn diagnostic_implicit<F: PastaField>(
     challenges: &[F],
     output: &mut Vec<(F, F)>,
 ) -> (F, usize, usize) {
-    let mut evaluation = FoldedEvaluation::new(x, u32::try_from(challenges.len()).unwrap());
+    let mut evaluation = FoldedEvaluation::new(
+        x,
+        u32::try_from(challenges.len()).expect("diagnostic challenge count fits u32"),
+    );
     let payload = evaluation.powers.capacity() * size_of::<F>();
     for (p, &challenge) in rounds.iter().zip(challenges) {
         let half = p.len() / 2;
@@ -326,12 +329,11 @@ fn measure_evaluation_vector<C: PastaCurve>(curve: &str, workers: usize) {
 #[test]
 #[ignore = "release-only balanced scalar-component diagnostic; not proof or phone latency"]
 fn measure_explicit_implicit_evaluation_vectors() {
-    fn require_release() {
-        #[cfg(debug_assertions)]
-        panic!("run this diagnostic with --release");
-    }
-
-    require_release();
+    // Refuse invocation in debug builds while keeping the ignored test compilable.
+    assert!(
+        !std::hint::black_box(cfg!(debug_assertions)),
+        "run this diagnostic with --release"
+    );
     for workers in [1, 4] {
         measure_evaluation_vector::<Ep>("Pallas", workers);
         measure_evaluation_vector::<Eq>("Vesta", workers);

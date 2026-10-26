@@ -10,10 +10,8 @@ use crate::{
     state::WorldReadOnly,
     sumeragi::schedule::{RetainedConsensusSchedule, ScheduledSlot},
 };
-use iroha_data_model::{
-    block::consensus::MAX_VALIDATORS_PER_HEIGHT, parameter::system::ConsensusMode,
-};
-use iroha_model_base::peer::PeerId;
+use iroha_data_model::parameter::system::ConsensusMode;
+use iroha_model_base::{peer::PeerId, topology::MAX_VALIDATORS_PER_HEIGHT};
 
 /// Consensus inputs of one height for the SCCP generation step (§4.2.2).
 #[derive(Debug, Clone, PartialEq, Eq)]

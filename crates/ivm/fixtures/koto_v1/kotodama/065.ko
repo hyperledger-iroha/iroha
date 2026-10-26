@@ -1,5 +1,11 @@
-
-        module InvalidAssetRegistration {
-            fn f() { ledger::asset::register(asset_definition: "x", name: "X", spec: NumericSpec::integer(), mintable: Mintable::Not); }
-        }
-    
+module InvalidAssetRegistration {
+    fn f() {
+        ledger::asset::register(
+            asset_definition: "x",
+            name: "X",
+            spec: NumericSpec::integer(),
+            mintable: Mintable::Not,
+            owning_domain: DomainId::parse("default.universal"),
+        );
+    }
+}

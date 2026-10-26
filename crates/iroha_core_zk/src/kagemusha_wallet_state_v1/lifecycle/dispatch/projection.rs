@@ -235,13 +235,22 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
         })
     }
 
-    /// Project evidence anchored by one exact completed Native Archive. An optional newer
-    /// Credited original is verified read-only with the same installed verifier; permanent
-    /// Archive originals survive Send collection. No second Archive is performed here.
+    /// Project evidence anchored by one exact completed Native Archive. Permanent Archive
+    /// originals survive Send collection. New incoming evidence must use durable receipt intake.
     /// # Errors
-    /// Noncompleted/foreign anchor, invalid fresh evidence, unavailable proofs or maps,
-    /// changed source and unknown custody never become a positive delivery verdict.
+    /// Noncompleted/foreign anchor, unavailable proofs or maps, changed source and unknown
+    /// custody never become a positive delivery verdict.
     pub fn delivery_credit_projection(
+        &mut self,
+        send: &[u8; 32],
+        anchor: &[u8],
+    ) -> Result<CreditProjectionV1, Error> {
+        self.delivery_credit_projection_with_newer(send, anchor, &[])
+    }
+
+    // The durable queue alone verifies newer retained evidence against an immutable anchor.
+    // This is the same projection implementation; it never creates a second Archive.
+    pub(in crate::kagemusha_wallet_state_v1) fn delivery_credit_projection_with_newer(
         &mut self,
         send: &[u8; 32],
         anchor: &[u8],
@@ -347,16 +356,28 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
     /// Pending custody or Archive, foreign or incomplete Send, invalid evidence or proofs,
     /// unavailable maps, a pruned or lost Archive outcome and changed source never become a
     /// positive delivery verdict.
-    pub fn verified_delivery_projection(
+    pub(in crate::kagemusha_wallet_state_v1) fn verified_delivery_projection(
         &mut self,
         send: &[u8; 32],
         credited: &[u8],
     ) -> Result<CreditProjectionV1, Error> {
+        self.verified_delivery_with_anchor(send, credited, &[])
+    }
+
+    // A queue's immutable first receipt supplies historical Send originals even if a
+    // different later receipt is being observed. A completed anchor uses the same existing
+    // post-Archive projection; an unselected anchor still performs no Advance.
+    pub(in crate::kagemusha_wallet_state_v1) fn verified_delivery_with_anchor(
+        &mut self,
+        send: &[u8; 32],
+        anchor: &[u8],
+        newer: &[u8],
+    ) -> Result<CreditProjectionV1, Error> {
         let before = self.snapshot()?;
-        let intent = self.bound_archive_intent(send, credited)?;
+        let intent = self.bound_archive_intent(send, anchor)?;
         match self.retry_request(&intent.request_id())? {
             RequestStatusV1::Outcome(Completion::Complete(_)) => {
-                return self.delivery_credit_projection(send, credited, &[]);
+                return self.delivery_credit_projection_with_newer(send, anchor, newer);
             }
             // An Archive Advance in flight is reconciled by its own retry, never projected.
             RequestStatusV1::Outcome(Completion::Pending) => return Err(Error::Pending),
@@ -379,7 +400,11 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
             Error::Invalid("G1 validation"),
         )?;
         let identity = valid(payment.digests())?;
-        let evidence: KagemushaWalletCreditedV1 = archive::decode(credited)?;
+        let original = if newer.is_empty() { anchor } else { newer };
+        if original.len() > KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1 {
+            return Err(Error::Invalid("deferred Credited bound"));
+        }
+        let evidence: KagemushaWalletCreditedV1 = archive::decode(original)?;
         self.proofs.verify_credited(&evidence, &request, &payment)?;
         let descriptor = outgoing_descriptor(identity.credit_id, &request);
         let core_pending = self.core_pending(&manifest, before.sequence, &descriptor)?;

@@ -51,7 +51,7 @@ use iroha_data_model::privacy::{
     IrohaIvmPrivateNoteStarkStatementV1, PrivacyConsensusLimitsV1,
     PrivacyNativeConsensusBindingDigestV1, PrivacyNativeConsensusBindingV1, PrivacyProtocolIdV1,
 };
-use rand::TryRngCore;
+use rand::TryRng;
 const TYPE_SHA_ROUND: usize = 0;
 const TYPE_SHA_END: usize = 1;
 const TYPE_NODE_SELECT: usize = 2;
@@ -791,7 +791,7 @@ pub(super) fn compile_private_note_prover_columns_v1(
 /// The witness is compiled and checked by the native interpreter before the shared proof driver
 /// sees any columns. The proof driver then checks the same relation algebraically on the native and
 /// extension domains. This relation adapter independently verifies its opaque candidate before returning bytes.
-pub(super) fn prove_private_note_stark_v1_with_rng<R: TryRngCore>(
+pub(super) fn prove_private_note_stark_v1_with_rng<R: TryRng>(
     statement: &IrohaIvmPrivateNoteStarkStatementV1,
     consensus_binding: &PrivacyNativeConsensusBindingV1,
     consensus_limits: &PrivacyConsensusLimitsV1,
@@ -833,7 +833,8 @@ mod tests {
         PrivacyParameterIdV1, PrivacyStatementContextV1, PrivacyStatementSchemaDigestV1,
         PrivacyTransactionIntentDigestV1, PrivacyVerifierDigestV1,
     };
-    use rand::{SeedableRng as _, rngs::StdRng};
+    use rand::SeedableRng as _;
+    use rand_chacha::ChaCha12Rng;
     fn consensus_material(
         statement: &IrohaIvmPrivateNoteStarkStatementV1,
     ) -> (PrivacyNativeConsensusBindingV1, PrivacyConsensusLimitsV1) {
@@ -1183,7 +1184,7 @@ mod tests {
     fn full_domain_stark_roundtrip_and_adversarial_wires_fail_closed() {
         let value = fixture();
         let (binding, limits) = consensus_material(&value.statement);
-        let mut rng = StdRng::from_seed([0xA9; 32]);
+        let mut rng = ChaCha12Rng::from_seed([0xA9; 32]);
         let proof = super::super::prove_ivm_private_note_v1_with_rng(
             &value.statement,
             &binding,
@@ -1343,7 +1344,7 @@ mod tests {
             &limits,
             value.profile,
         );
-        let mut rng = StdRng::from_seed([0xB7; 32]);
+        let mut rng = ChaCha12Rng::from_seed([0xB7; 32]);
         let proof = prove_proof_managed_note_stark_v1_with_rng(&adapter, &base_columns, &mut rng)
             .expect("three-output seam candidate")
             .verify_into_bytes_v1(&adapter)

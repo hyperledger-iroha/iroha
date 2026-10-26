@@ -1608,9 +1608,12 @@ mod tests {
     fn state_with_test_domains(kura: &Arc<Kura>) -> Result<State> {
         let world = World::with([], [], []);
         // Component registrations use an explicit policy authored before the block snapshot.
-        let mut parameters = world.parameters.block();
-        parameters.set_parameter(
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
+            .expect("funded component parameter fixture");
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
             crate::sumeragi::test_chain::crypto_fixture_policy().into_parameter()?,
+            world.sccp_committee_generations.allocation_budget(),
         )?;
         parameters.commit();
         let query_handle = LiveQueryStore::start_test();

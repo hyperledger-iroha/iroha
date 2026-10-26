@@ -3,11 +3,11 @@ import { createHash } from "node:crypto";
 import { build } from "esbuild";
 import test from "node:test";
 import { readFileSync } from "node:fs";
-import { ed25519, x25519 } from "@noble/curves/ed25519";
-import { chacha20poly1305 } from "@noble/ciphers/chacha";
-import { blake2b } from "@noble/hashes/blake2b";
-import { hkdf } from "@noble/hashes/hkdf";
-import { sha256 } from "@noble/hashes/sha2";
+import { ed25519, x25519 } from "@noble/curves/ed25519.js";
+import { chacha20poly1305 } from "@noble/ciphers/chacha.js";
+import { blake2b } from "@noble/hashes/blake2.js";
+import { hkdf } from "@noble/hashes/hkdf.js";
+import { sha256 } from "@noble/hashes/sha2.js";
 
 import {
   ConnectApprovalRejectedError,
@@ -48,6 +48,7 @@ class RecordingWebSocket {
     this.url = url;
     this.protocols = protocols;
     this.sent = [];
+    this.closeCalls = 0;
     this.listeners = new Map();
     this.readyState = 0;
     RecordingWebSocket.instances.push(this);
@@ -77,6 +78,7 @@ class RecordingWebSocket {
   }
 
   close() {
+    this.closeCalls += 1;
     this.readyState = 3;
     this.emit("close", {});
   }
@@ -292,7 +294,7 @@ function encodeApproveControl(preview, walletPublicKey, accountId, accountPrivat
 
 function mixedTorsionSignature(message, privateKey) {
   const extended = ed25519.utils.getExtendedPublicKey(privateKey);
-  const Point = ed25519.Point ?? ed25519.ExtendedPoint;
+  const Point = ed25519.Point;
   const orderTwoTorsion = Point.fromHex(
     "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
   );
@@ -301,7 +303,7 @@ function mixedTorsionSignature(message, privateKey) {
     for (let index = digest.length - 1; index >= 0; index -= 1) {
       scalar = (scalar << 8n) | BigInt(digest[index]);
     }
-    return scalar % ed25519.CURVE.n;
+    return scalar % ed25519.Point.Fn.ORDER;
   };
   const hashToScalar = (...parts) => scalarFromDigest(
     createHash("sha512")
@@ -310,10 +312,10 @@ function mixedTorsionSignature(message, privateKey) {
   );
   const nonce = hashToScalar(extended.prefix, message);
   const encodedNonce = Buffer.from(
-    Point.BASE.multiply(nonce).add(orderTwoTorsion).toRawBytes(),
+    Point.BASE.multiply(nonce).add(orderTwoTorsion).toBytes(),
   );
-  const challenge = hashToScalar(encodedNonce, extended.point.toRawBytes(), message);
-  let response = (nonce + challenge * extended.scalar) % ed25519.CURVE.n;
+  const challenge = hashToScalar(encodedNonce, extended.point.toBytes(), message);
+  let response = (nonce + challenge * extended.scalar) % ed25519.Point.Fn.ORDER;
   const encodedResponse = Buffer.alloc(32);
   for (let index = 0; index < encodedResponse.length; index += 1) {
     encodedResponse[index] = Number(response & 0xffn);
@@ -564,10 +566,27 @@ function makeAccount() {
   return { accountId, privateKey, publicKey };
 }
 
-async function createApprovedTestSession({ permissions = null } = {}) {
+function makeNativeInspectionFixtureAccount() {
+  // Use the canonical native fixture verbatim: browser transport tests must
+  // not require a local native codec just to prepare the inspection response.
+  const vectors = JSON.parse(readFileSync(
+    new URL("../../../fixtures/account/address_vectors.json", import.meta.url), "utf8",
+  ));
+  const vector = vectors.cases.positive.find(entry => entry.case_id === "addr-single-treasury-ed25519");
+  assert.ok(vector);
+  const privateKey = new Uint8Array(32).fill(vector.input.seed_byte);
+  const publicKey = ed25519.getPublicKey(privateKey);
+  assert.equal(toHex(publicKey), vector.controller.public_key_hex.toLowerCase());
+  return {
+    privateKey, publicKey, accountId: vector.encodings.i105.string,
+    canonicalHex: vector.encodings.canonical_hex.toLowerCase(),
+  };
+}
+
+async function createApprovedTestSession({ permissions = null, nativeInspection = false } = {}) {
   RecordingWebSocket.instances.length = 0;
   const preview = makePreview();
-  const account = makeAccount();
+  const account = nativeInspection ? makeNativeInspectionFixtureAccount() : makeAccount();
   const relayToken = "relay-token";
   const walletPrivateKey = new Uint8Array(32).fill(0x55);
   const walletPublicKey = x25519.getPublicKey(walletPrivateKey);
@@ -582,6 +601,15 @@ async function createApprovedTestSession({ permissions = null } = {}) {
     },
     permissions,
     webSocketImpl: RecordingWebSocket,
+    inspectAccountIdentity: nativeInspection ? async () => inspectToriiAccountIdentityViaNativeTransport({
+      networkId: preview.networkId, baseUrl: "https://taira.sora.org", accountId: account.accountId,
+    }, async ({ body }) => ({
+      ...JSON.parse(body),
+      canonical_hex: account.canonicalHex,
+      controller: {
+        kind: "single", algorithm: "ed25519", public_key_hex: Buffer.from(account.publicKey).toString("hex"),
+      },
+    })) : undefined,
   });
   const socket = RecordingWebSocket.instances[0];
   socket.open();
@@ -936,6 +964,60 @@ test("createConnectAppSession observes a socket failure before waitForApproval i
   } finally {
     process.off("unhandledRejection", onUnhandled);
   }
+});
+
+test("createConnectAppSession closes the transport once after an invalid approved-session frame", async () => {
+  const { session, socket } = await createApprovedTestSession({ nativeInspection: true });
+  let closeEvents = 0;
+  socket.addEventListener("close", () => { closeEvents += 1; });
+  const signature = session.signTransaction(Buffer.from([0xaa]));
+  const rejected = assert.rejects(signature, /Connect WebSocket message must be binary/u);
+  await Promise.resolve();
+  socket.receive("not a binary frame");
+  await rejected;
+
+  assert.equal(socket.readyState, 3);
+  assert.equal(socket.closeCalls, 1);
+  assert.equal(closeEvents, 1);
+  socket.triggerError();
+  socket.emit("close", {});
+  assert.equal(socket.closeCalls, 1);
+  await assert.rejects(session.signTransaction(Buffer.from([0xbb])), /connect session closed/u);
+});
+
+test("createConnectAppSession does not close an already closed transport again", async () => {
+  const { session, socket } = await createApprovedTestSession({ nativeInspection: true });
+  const signature = session.signTransaction(Buffer.from([0xaa]));
+  const rejected = assert.rejects(signature, /connect socket closed/u);
+  socket.close();
+  await rejected;
+  assert.equal(socket.closeCalls, 1);
+});
+
+test("createConnectAppSession closes an idle approved transport on an encrypted peer close", async () => {
+  const { session, socket, preview, keys } = await createApprovedTestSession({ nativeInspection: true });
+  const closed = new Promise(resolve => socket.addEventListener("close", resolve));
+  socket.receive(encodeEncryptedClose(preview, keys, 2, "wallet ended session"));
+  await closed;
+  assert.equal(socket.readyState, 3);
+  assert.equal(socket.closeCalls, 1);
+  await assert.rejects(session.signTransaction(Buffer.from([0xaa])), /connect session closed/u);
+});
+
+test("createConnectAppSession preserves the failure when transport cleanup throws", async () => {
+  const { session, socket } = await createApprovedTestSession({ nativeInspection: true });
+  const signature = session.signTransaction(Buffer.from([0xaa]));
+  const rejected = assert.rejects(signature, /connect socket errored/u);
+  let closeCalls = 0;
+  socket.close = () => {
+    closeCalls += 1;
+    throw new Error("transport cleanup failed");
+  };
+
+  assert.doesNotThrow(() => socket.triggerError());
+  await rejected;
+  socket.triggerError();
+  assert.equal(closeCalls, 1);
 });
 
 test("createConnectAppSession handles approval and sign success", async () => {
@@ -1388,6 +1470,7 @@ test("createConnectAppSession rejects duplicate approvals without replacing iden
   assert.equal(first.accountId, account.accountId);
   assert.equal(session.approvedAccountId, account.accountId);
   assert.equal(socket.readyState, 3);
+  assert.equal(socket.closeCalls, 1);
   await assert.rejects(session.waitForApproval(), (error) => {
     assert.ok(error instanceof ConnectSessionClosedError);
     assert.match(error.message, /more than one wallet approval/u);
@@ -1471,6 +1554,8 @@ test("createConnectAppSession surfaces wallet rejection", async () => {
     assert.equal(error.codeId, "USER_DENIED");
     return true;
   });
+  assert.equal(socket.readyState, 3);
+  assert.equal(socket.closeCalls, 1);
 });
 
 test("createConnectAppSession surfaces wallet sign errors", async () => {
@@ -1563,6 +1648,8 @@ test("createConnectAppSession surfaces encrypted close frames", async () => {
     assert.equal(error.reason, "wallet session closed");
     return true;
   });
+  assert.equal(socket.readyState, 3);
+  assert.equal(socket.closeCalls, 1);
 });
 
 test("createConnectCanonicalRequestAuth rejects valid multisig and non-Ed25519 accounts before signing", async () => {

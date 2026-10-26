@@ -708,7 +708,10 @@ mod tests {
                     hash.update(word);
                 }
             }
-            format!("{:x}", hash.finalize())
+            hash.finalize()
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect()
         }
         // Independently generated and compared with pinned circomlibjs v0.1.7: each width's
         // round-major constants followed by row-major MDS, canonical little-endian.

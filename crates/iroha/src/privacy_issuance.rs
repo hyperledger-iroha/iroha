@@ -224,7 +224,7 @@ impl BootleLanternIssuanceClientV1 {
         if timeout.is_zero() {
             return Err(BootleLanternIssuanceClientErrorV1::InvalidTimeout);
         }
-        let transport = Client::builder()
+        let transport = crate::http::tls::configure_blocking_client(Client::builder())
             .redirect(Policy::none())
             .retry(reqwest::retry::never())
             .no_proxy()

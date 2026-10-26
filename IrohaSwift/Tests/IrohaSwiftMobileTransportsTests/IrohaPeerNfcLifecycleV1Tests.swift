@@ -36,6 +36,64 @@ private final class IrohaPeerNfcLifecycleProbeV1: @unchecked Sendable {
 }
 
 final class IrohaPeerNfcLifecycleV1Tests: XCTestCase {
+    func testOnlyAdmissionAndCommitUseTheDurableResponseDeadline() {
+        let deadlines = IrohaPeerNfcReaderCallDeadlinesV1(
+            platformCallMilliseconds: 8_000, durableResponseMilliseconds: 35_000)
+        for operation in IrohaPeerNfcOperationV1.allCases {
+            XCTAssertEqual(deadlines.nanoseconds(for: operation),
+                           [.beginPayment, .commit].contains(operation) ? 35_000_000_000 : 8_000_000_000,
+                           "Only durable admission and credit may extend a command's response wait")
+        }
+    }
+
+    func testDefaultRecoveryKeepsPollingForThirtySecondsWithoutDelayingTheNextContact() {
+        let gate = IrohaPeerNfcRetryGateV1(.default)
+        var ownership = IrohaPeerNfcReaderOperationGateV1()
+        let epoch = ownership.beginOperation()
+        XCTAssertTrue(gate.claimContactAttempt(operationGate: &ownership, capturedEpoch: epoch))
+        XCTAssertTrue(ownership.finishConnect(capturedEpoch: epoch))
+        XCTAssertEqual(gate.redetectionTimeoutNanoseconds, 30_000_000_000)
+        XCTAssertTrue(gate.mayRedetect())
+        XCTAssertTrue(gate.claimContactAttempt(operationGate: &ownership, capturedEpoch: epoch),
+                      "The recovery budget is a deadline, never a pause before retry")
+    }
+
+#if os(iOS) && canImport(CoreNFC)
+    func testDurableResponseConfigurationKeepsNormalCallsShortAndChecksBounds() {
+        let defaultConfiguration = IrohaPeerNfcCoreNFCConfigurationV1(
+            cardAlertMessage: "", readerAlertMessage: "", completionAlertMessage: "")
+        XCTAssertEqual(defaultConfiguration.durableResponseTimeoutMilliseconds, 35_000)
+        XCTAssertEqual(defaultConfiguration.readerOperationTimeoutMilliseconds, 60_000)
+        XCTAssertTrue(IrohaPeerNfcCoreNFCConfigurationV1.isValidDurableReaderBudget(
+            readerMilliseconds: 60_000, durableMilliseconds: 35_000))
+        XCTAssertTrue(IrohaPeerNfcCoreNFCConfigurationV1.isValidDurableReaderBudget(
+            readerMilliseconds: 36_000, durableMilliseconds: 35_000))
+        XCTAssertFalse(IrohaPeerNfcCoreNFCConfigurationV1.isValidDurableReaderBudget(
+            readerMilliseconds: 30_000, durableMilliseconds: 35_000))
+        XCTAssertFalse(IrohaPeerNfcCoreNFCConfigurationV1.isValidDurableReaderBudget(
+            readerMilliseconds: 35_000, durableMilliseconds: 35_000))
+        let shortNonPaymentConfiguration = IrohaPeerNfcCoreNFCConfigurationV1(
+            cardAlertMessage: "", readerAlertMessage: "", completionAlertMessage: "",
+            readerOperationTimeoutMilliseconds: 1)
+        XCTAssertEqual(shortNonPaymentConfiguration.readerOperationTimeoutMilliseconds, 1,
+                       "Request-only readers and card mode must still permit short bounds")
+        XCTAssertEqual(defaultConfiguration.durabilityTimeoutMilliseconds, 30_000)
+        XCTAssertTrue(IrohaPeerNfcCoreNFCConfigurationV1.isValidDurabilityTimeout(30_000))
+        XCTAssertFalse(IrohaPeerNfcCoreNFCConfigurationV1.isValidDurabilityTimeout(30_001))
+        XCTAssertFalse(IrohaPeerNfcCoreNFCConfigurationV1.isValidDurabilityTimeout(0))
+        let configuration = IrohaPeerNfcCoreNFCConfigurationV1(
+            cardAlertMessage: "", readerAlertMessage: "", completionAlertMessage: "",
+            platformCallTimeoutMilliseconds: 8_000, durableResponseTimeoutMilliseconds: 35_000)
+        XCTAssertEqual(configuration.readerCallDeadlines.nanoseconds(for: .commit), 35_000_000_000)
+        XCTAssertEqual(configuration.readerCallDeadlines.nanoseconds(for: .beginPayment), 35_000_000_000)
+        XCTAssertEqual(configuration.readerCallDeadlines.nanoseconds(for: .getInfo), 8_000_000_000)
+        XCTAssertTrue(IrohaPeerNfcCoreNFCConfigurationV1.isValidDurableResponseTimeout(1))
+        XCTAssertTrue(IrohaPeerNfcCoreNFCConfigurationV1.isValidDurableResponseTimeout(35_000))
+        XCTAssertFalse(IrohaPeerNfcCoreNFCConfigurationV1.isValidDurableResponseTimeout(0))
+        XCTAssertFalse(IrohaPeerNfcCoreNFCConfigurationV1.isValidDurableResponseTimeout(35_001))
+    }
+#endif
+
     func testDeadlineReturnsCompletedValue() async throws {
         let value = try await irohaPeerNfcWithDeadlineV1(
             timeoutNanoseconds: 1_000_000_000,
@@ -132,15 +190,11 @@ final class IrohaPeerNfcLifecycleV1Tests: XCTestCase {
         )
     }
 
-    func testInvalidAndMultipleTagsConsumeTheSharedAttemptBudget() {
-        let gate = IrohaPeerNfcRetryGateV1(.init(
-            maximumContactAttempts: 3,
-            redetectionTimeoutMilliseconds: 3_000
-        ))
-
-        XCTAssertEqual(gate.recordInvalidDetection(), .retry)
-        XCTAssertEqual(gate.recordInvalidDetection(), .retry)
-        XCTAssertEqual(gate.recordInvalidDetection(), .exhausted)
+    func testInvalidAndMultipleTagsCannotExtendTheElapsedRecoveryBudget() {
+        let clock = IrohaPeerNfcRecoveryTestClockV1()
+        let gate = IrohaPeerNfcRetryGateV1(.default, now: { clock.read() })
+        for _ in 0..<10 { XCTAssertEqual(gate.recordInvalidDetection(), .retry) }
+        clock.advance(30_000_000_000)
         XCTAssertEqual(gate.recordInvalidDetection(), .exhausted)
         XCTAssertFalse(gate.mayRedetect())
         XCTAssertFalse(gate.beginContactAttempt())
@@ -187,7 +241,7 @@ final class IrohaPeerNfcLifecycleV1Tests: XCTestCase {
             encoding: .utf8
         )
 
-        XCTAssertTrue(source.contains("readerOperationTimeoutMilliseconds: UInt64 = 30_000"))
+        XCTAssertTrue(source.contains("readerOperationTimeoutMilliseconds: UInt64 = 60_000"))
         XCTAssertTrue(source.contains("platformCallTimeoutMilliseconds: UInt64 = 3_000"))
         XCTAssertTrue(source.contains("cardSessionStartupTimeoutMilliseconds: UInt64 = 10_000"))
         XCTAssertTrue(source.contains("maximumReaderOperationTimeoutMilliseconds: UInt64 = 60_000"))

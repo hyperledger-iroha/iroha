@@ -175,7 +175,9 @@ fn governed_queue_push_preserves_sealed_commitment_without_signed_body() {
     let (validator, _) = gen_account_in("governed-validator");
     register_test_authority(&state, &authority);
     let queue = Arc::new(Queue::test(config_factory(), &time_source));
-    queue.reconfigure_nexus_with_state(&state.nexus_snapshot(), &state, None);
+    queue
+        .reconfigure_nexus_with_state(&state.nexus_snapshot(), &state, None)
+        .expect("original State pool admits Queue privacy projection");
     let manifests = Arc::new(LaneManifestRegistry::from_statuses(BTreeMap::from([(
         LaneId::SINGLE,
         LaneManifestStatus {
@@ -203,7 +205,9 @@ fn governed_queue_push_preserves_sealed_commitment_without_signed_body() {
             privacy_commitments: Vec::new(),
         },
     )])));
-    queue.install_lane_manifests_for_testing(&manifests);
+    queue
+        .install_lane_manifests_for_testing(&manifests, &state.ivm_execution_budget())
+        .expect("original fixture pool admits privacy projection");
     let signed = TransactionBuilder::new_with_time_source(
         state.network_id,
         authority.clone(),

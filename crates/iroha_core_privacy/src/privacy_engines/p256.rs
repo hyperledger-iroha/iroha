@@ -8,14 +8,14 @@ use core::fmt;
 /// P-256 ES256 signing key used by first-release wallet-side device proofs.
 pub use p256::ecdsa::SigningKey as DeviceSigningKeyV1;
 use p256::{
-    AffinePoint, EncodedPoint, FieldBytes, NistP256, ProjectivePoint, Scalar,
+    AffinePoint, FieldBytes, NistP256, ProjectivePoint, Scalar, Sec1Point,
     elliptic_curve::{
         Field, Group, PrimeField,
-        hash2curve::{ExpandMsgXmd, GroupDigest},
-        sec1::{FromEncodedPoint, ToEncodedPoint},
+        sec1::{FromSec1Point, ToSec1Point},
     },
+    hash2curve::ExpandMsgXmd,
 };
-use rand_core_06::{CryptoRng, RngCore};
+use rand_core::{TryCryptoRng, TryRng};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 use zeroize::{Zeroize, Zeroizing};
@@ -133,7 +133,7 @@ impl CompressedPointV1 {
         if bool::from(point.is_identity()) {
             return Err(P256EngineError::IdentityPoint);
         }
-        let encoded = AffinePoint::from(point).to_encoded_point(true);
+        let encoded = AffinePoint::from(point).to_sec1_point(true);
         let bytes = encoded.as_bytes();
         if bytes.len() != 33 {
             return Err(P256EngineError::InvalidPointEncoding);
@@ -146,18 +146,18 @@ impl CompressedPointV1 {
         if !matches!(self.bytes[0], 0x02 | 0x03) {
             return Err(P256EngineError::InvalidPointEncoding);
         }
-        let encoded = EncodedPoint::from_bytes(self.bytes)
-            .map_err(|_| P256EngineError::InvalidPointEncoding)?;
+        let encoded =
+            Sec1Point::from_bytes(self.bytes).map_err(|_| P256EngineError::InvalidPointEncoding)?;
         if !encoded.is_compressed() {
             return Err(P256EngineError::InvalidPointEncoding);
         }
-        let affine = Option::<AffinePoint>::from(AffinePoint::from_encoded_point(&encoded))
+        let affine = Option::<AffinePoint>::from(AffinePoint::from_sec1_point(&encoded))
             .ok_or(P256EngineError::InvalidPointEncoding)?;
         let projective = ProjectivePoint::from(affine);
         if bool::from(projective.is_identity()) {
             return Err(P256EngineError::IdentityPoint);
         }
-        if affine.to_encoded_point(true).as_bytes() != self.bytes {
+        if affine.to_sec1_point(true).as_bytes() != self.bytes {
             return Err(P256EngineError::InvalidPointEncoding);
         }
         Ok(projective)
@@ -263,7 +263,7 @@ impl SecretScalarV1 {
     /// within the fixed rejection bound.
     pub fn generate<R>(rng: &mut R) -> Result<Self, P256EngineError>
     where
-        R: CryptoRng + RngCore,
+        R: TryCryptoRng + TryRng,
     {
         let mut checked = health_checked_p256_rng_v1(rng)?;
         let scalar = random_nonzero_scalar(&mut checked)?;
@@ -455,7 +455,7 @@ pub(crate) fn health_checked_p256_rng_v1<R>(
     rng: &mut R,
 ) -> Result<HealthCheckedCryptoRngV1<'_, R>, P256EngineError>
 where
-    R: CryptoRng + RngCore,
+    R: TryCryptoRng + TryRng,
 {
     HealthCheckedCryptoRngV1::new(rng).map_err(|error| match error {
         ProverRandomnessErrorV1::Unavailable => P256EngineError::RandomnessUnavailable,
@@ -464,7 +464,7 @@ where
 }
 pub(crate) fn random_nonzero_scalar<R>(rng: &mut R) -> Result<Scalar, P256EngineError>
 where
-    R: CryptoRng + RngCore,
+    R: TryCryptoRng + TryRng,
 {
     for _ in 0..MAX_REJECTION_ATTEMPTS {
         let mut candidate = [0_u8; 32];
@@ -486,8 +486,9 @@ pub(crate) fn hash_to_curve_rfc9380(
     dst: &'static [u8],
     message: &[u8],
 ) -> Result<ProjectivePoint, P256EngineError> {
-    let point = NistP256::hash_from_bytes::<ExpandMsgXmd<Sha256>>(&[message], &[dst])
-        .map_err(|_| P256EngineError::HashToCurve)?;
+    let point =
+        p256::hash2curve::hash_from_bytes::<NistP256, ExpandMsgXmd<Sha256>>(&[message], &[dst])
+            .map_err(|_| P256EngineError::HashToCurve)?;
     if bool::from(point.is_identity()) {
         return Err(P256EngineError::IdentityPoint);
     }
@@ -537,33 +538,31 @@ pub(crate) fn validate_generator_independence(
 mod tests {
     use super::*;
     struct FailingRng;
-    impl RngCore for FailingRng {
-        fn next_u32(&mut self) -> u32 {
+    impl rand::TryRng for FailingRng {
+        type Error = std::io::Error;
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             panic!("P-256 privacy engines must use the fallible RNG interface")
         }
-        fn next_u64(&mut self) -> u64 {
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
             panic!("P-256 privacy engines must use the fallible RNG interface")
         }
-        fn fill_bytes(&mut self, _destination: &mut [u8]) {
-            panic!("P-256 privacy engines must use the fallible RNG interface")
-        }
-        fn try_fill_bytes(&mut self, _destination: &mut [u8]) -> Result<(), rand_core_06::Error> {
-            Err(rand_core_06::Error::new("injected P-256 RNG failure"))
+
+        fn try_fill_bytes(&mut self, _destination: &mut [u8]) -> Result<(), Self::Error> {
+            Err(std::io::Error::other("injected P-256 RNG failure"))
         }
     }
-    impl CryptoRng for FailingRng {}
+    impl rand::TryCryptoRng for FailingRng {}
     struct PeriodicRng;
-    impl RngCore for PeriodicRng {
-        fn next_u32(&mut self) -> u32 {
+    impl rand::TryRng for PeriodicRng {
+        type Error = std::io::Error;
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             panic!("P-256 privacy engines must use the fallible RNG interface")
         }
-        fn next_u64(&mut self) -> u64 {
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
             panic!("P-256 privacy engines must use the fallible RNG interface")
         }
-        fn fill_bytes(&mut self, _destination: &mut [u8]) {
-            panic!("P-256 privacy engines must use the fallible RNG interface")
-        }
-        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), rand_core_06::Error> {
+
+        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
             for (index, byte) in destination.iter_mut().enumerate() {
                 *byte = ((index % 16).to_le_bytes()[0])
                     .wrapping_mul(17)
@@ -572,7 +571,7 @@ mod tests {
             Ok(())
         }
     }
-    impl CryptoRng for PeriodicRng {}
+    impl rand::TryCryptoRng for PeriodicRng {}
     fn binding() -> TranscriptBindingV1<'static> {
         TranscriptBindingV1 {
             network_id: &[1; 32],
@@ -591,7 +590,7 @@ mod tests {
     fn rfc9380_p256_vector_matches() {
         const DST: &[u8] = b"QUUX-V01-CS02-with-P256_XMD:SHA-256_SSWU_RO_";
         let point = hash_to_curve_rfc9380(DST, b"abc").expect("RFC 9380 point");
-        let encoded = AffinePoint::from(point).to_encoded_point(false);
+        let encoded = AffinePoint::from(point).to_sec1_point(false);
         assert_eq!(
             hex::encode(encoded.as_bytes()),
             concat!(

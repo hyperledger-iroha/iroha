@@ -43,7 +43,7 @@ use crate::{
         AttachmentIdentity, AttachmentStore, ConfirmedAnchor, LocalPrivateRootSource, RelayParent,
         RelayProgress,
     },
-    bootstrap::{AuthenticatedBootstrap, ParentFinalityStore, ReleaseFaucet},
+    bootstrap::{AuthenticatedBootstrap, FaucetPolicy, ParentFinalityStore},
     managed::PreparedLocalnet,
     verify::finality::FinalitySource,
 };
@@ -135,7 +135,6 @@ pub struct ProvisioningProgress {
 #[norito_schema(name = "iroha_deploy::provisioning::BindingV1")]
 struct Binding {
     parent_name: String,
-    parent_generation: u64,
     parent_network_id: NetworkId,
     parent_chain_id: String,
     parent_profile: u16,
@@ -144,7 +143,7 @@ struct Binding {
     account_alias: String,
     owner: AccountId,
     registration: PrivateDataspaceRegistration,
-    faucet: ReleaseFaucet,
+    faucet: FaucetPolicy,
 }
 
 #[derive(Clone, Encode, Decode, norito::NoritoSchema)]
@@ -424,12 +423,12 @@ impl RemoteProvisioning {
         }
     }
 
-    /// Obtain fresh parent quorum, then fund and reserve the exact namespace within one deadline.
+    /// Verify certified parent state, then fund and reserve the namespace within one deadline.
     /// Any existing signed operation is reconciled before another request can be prepared.
     /// Completion here permits registration; it does not establish parent anchoring.
     ///
     /// # Errors
-    /// Expired release/budget, changed policy, unsafe custody, failed quorum or exact operation.
+    /// Expired budget, changed policy, unsafe custody, invalid certificates or failed operation.
     pub fn provision_once(
         &mut self,
         bootstrap: &AuthenticatedBootstrap,
@@ -458,7 +457,7 @@ impl RemoteProvisioning {
         if self.record.lease_generation.is_some() {
             return Ok(self.progress());
         }
-        self.finality.observe(source, &rand::random())?;
+        self.finality.refresh_certified(source)?;
         let operations = self.directory.ensure_child("operations")?;
         if !self.record.faucet_observed {
             let mut config = self.parent.clone();
@@ -533,9 +532,9 @@ impl RemoteProvisioning {
                 ..self.progress()
             });
         }
-        // Applied/NoOp is not an authenticated namespace generation. Select a fresh independent
-        // cut after the operation, then verify its current SNS row before freezing registration.
-        self.finality.observe(source, &rand::random())?;
+        // Applied/NoOp is not a certified namespace generation. Verify a parent cut after
+        // the operation and its SNS row; registration also enforces that exact generation.
+        self.finality.refresh_certified(source)?;
         let tip = self
             .finality
             .verifier()
@@ -546,7 +545,7 @@ impl RemoteProvisioning {
             &LeaseRead {
                 alias: &self.record.binding.alias,
                 owner: &self.record.binding.owner,
-                native_schema: bootstrap.release().native_world_schema,
+                native_schema: bootstrap.metadata().native_world_schema,
                 block: &tip,
                 deadline,
             },
@@ -664,23 +663,10 @@ impl RemoteProvisioning {
     ) -> Result<Instant> {
         self.revalidate()?;
         self.record.binding.validate_parent(bootstrap)?;
-        let now = unix_ms()?;
         if Instant::now() >= deadline {
             return Err(ProvisioningError::Deadline);
         }
-        if now < bootstrap.release().issued_at_ms || now >= bootstrap.release().expires_at_ms {
-            return Err(ProvisioningError::Invalid(
-                "parent release authorization is not current",
-            ));
-        }
-        // Every SDK read, quote, proof-of-work and dispatch in this turn shares the earlier
-        // of the caller's budget and the independent release's remaining authorization.
-        let release_deadline = Instant::now()
-            .checked_add(Duration::from_millis(
-                bootstrap.release().expires_at_ms - now,
-            ))
-            .ok_or(ProvisioningError::Invalid("release deadline overflow"))?;
-        Ok(deadline.min(release_deadline))
+        Ok(deadline)
     }
 
     fn revalidate(&self) -> Result<()> {

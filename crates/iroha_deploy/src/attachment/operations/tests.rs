@@ -80,7 +80,7 @@ fn status_carrier_is_only_a_bounded_hint_and_elapsed_budget_fails_before_io() {
 }
 
 #[test]
-fn parent_context_and_fresh_quorum_are_required_before_preparation_or_dispatch() {
+fn parent_context_and_certified_tip_are_required_before_preparation_or_dispatch() {
     use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair};
     use iroha_data_model::{
         sumeragi_finality::SumeragiFinalityProof, transaction::FeePaymentIntent,
@@ -111,7 +111,7 @@ fn parent_context_and_fresh_quorum_are_required_before_preparation_or_dispatch()
     let mut fixture = Fixture::new();
     fixture.parent_receipt();
     let dir = tempfile::tempdir().unwrap();
-    let bootstrap = fixture.bootstrap(&dir.path().join("release"));
+    let bootstrap = fixture.bootstrap();
     let mut parent = ParentFinalityStore::open(&dir.path().join("parent"), &bootstrap).unwrap();
     let mut store =
         AttachmentStore::open(&dir.path().join("attachment"), fixture.identity.clone()).unwrap();
@@ -148,7 +148,7 @@ fn parent_context_and_fresh_quorum_are_required_before_preparation_or_dispatch()
             .advance_parent(&config, &bootstrap, &mut parent, &offline, &options, None)
             .is_err()
     );
-    assert!(offline.0.load(Ordering::Relaxed) >= 3);
+    assert_eq!(offline.0.load(Ordering::Relaxed), 1);
     assert!(!store.progress(None).pending);
     assert!(!store.directory.path().join("transactions").exists());
     assert!(store.confirmed().is_none());
@@ -267,7 +267,7 @@ fn cancelled_attachment_refuses_new_parent_work_but_preserves_pending_reconcilia
     let mut fixture = Fixture::new();
     fixture.parent_receipt();
     let dir = tempfile::tempdir().unwrap();
-    let bootstrap = fixture.bootstrap(&dir.path().join("release"));
+    let bootstrap = fixture.bootstrap();
     let mut parent = ParentFinalityStore::open(&dir.path().join("parent"), &bootstrap).unwrap();
     let path = dir.path().join("attachment");
     let mut store = AttachmentStore::open(&path, fixture.identity.clone()).unwrap();
@@ -335,7 +335,7 @@ fn cancelled_attachment_refuses_new_parent_work_but_preserves_pending_reconcilia
         store.advance_parent(&config, &bootstrap, &mut parent, &source, &options, None),
         Ok(_) | Err(AttachmentError::Cancelled)
     ));
-    assert!(source.0.get() >= 3);
+    assert_eq!(source.0.get(), 1);
     assert_eq!(
         store
             .directory

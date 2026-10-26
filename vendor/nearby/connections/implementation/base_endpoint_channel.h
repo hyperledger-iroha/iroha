@@ -1,0 +1,177 @@
+// Copyright 2020 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+#ifndef CORE_INTERNAL_BASE_ENDPOINT_CHANNEL_H_
+#define CORE_INTERNAL_BASE_ENDPOINT_CHANNEL_H_
+
+#include <cstdint>
+#include <memory>
+#include <string>
+
+#include "absl/base/thread_annotations.h"
+#include "absl/strings/string_view.h"
+#include "absl/synchronization/mutex.h"
+#include "absl/time/time.h"
+#include "connections/implementation/analytics/analytics_recorder.h"
+#include "connections/implementation/endpoint_channel.h"
+#include "internal/platform/byte_array.h"
+#include "internal/platform/condition_variable.h"
+#include "internal/platform/exception.h"
+#include "internal/platform/input_stream.h"
+#include "internal/platform/mutex.h"
+#include "internal/platform/output_stream.h"
+
+namespace nearby::connections {
+
+class BaseEndpointChannel : public EndpointChannel {
+ public:
+  BaseEndpointChannel(const std::string& service_id,
+                      const std::string& channel_name, InputStream* reader,
+                      OutputStream* writer);
+  BaseEndpointChannel(
+      const std::string& service_id, const std::string& channel_name,
+      InputStream* reader, OutputStream* writer,
+      location::nearby::proto::connections::ConnectionTechnology,
+      location::nearby::proto::connections::ConnectionBand band, int frequency,
+      int try_count);
+  ~BaseEndpointChannel() override = default;
+
+  // EndpointChannel:
+  ExceptionOr<ByteArray> Read()
+      ABSL_LOCKS_EXCLUDED(reader_mutex_, crypto_mutex_,
+                          last_read_mutex_) override;
+  Exception Write(absl::string_view data)
+      ABSL_LOCKS_EXCLUDED(writer_mutex_, crypto_mutex_) override;
+  void Close() ABSL_LOCKS_EXCLUDED(is_paused_mutex_) override;
+  void Close(location::nearby::proto::connections::DisconnectionReason reason)
+      override;
+  void Close(location::nearby::proto::connections::DisconnectionReason reason,
+             nearby::analytics::SafeDisconnectionResult result) override;
+  bool IsClosed() const ABSL_LOCKS_EXCLUDED(is_paused_mutex_) override;
+  std::string GetType() const override;
+  std::string GetServiceId() const override;
+  std::string GetName() const override;
+  location::nearby::proto::connections::ConnectionTechnology GetTechnology()
+      const override;
+  location::nearby::proto::connections::ConnectionBand GetBand() const override;
+  int GetFrequency() const override;
+  int GetTryCount() const override;
+  int GetMaxTransmitPacketSize() const override;
+  void EnableEncryption(std::shared_ptr<EncryptionContext> context) override;
+  void DisableEncryption() override;
+  bool IsEncrypted() override;
+  ExceptionOr<ByteArray> TryDecrypt(const ByteArray& data) override;
+  bool IsPaused() const ABSL_LOCKS_EXCLUDED(is_paused_mutex_) override;
+  void Pause() ABSL_LOCKS_EXCLUDED(is_paused_mutex_) override;
+  void Resume() ABSL_LOCKS_EXCLUDED(is_paused_mutex_) override;
+  absl::Time GetLastReadTimestamp() const
+      ABSL_LOCKS_EXCLUDED(last_read_mutex_) override;
+  absl::Time GetLastWriteTimestamp() const
+      ABSL_LOCKS_EXCLUDED(last_write_mutex_) override;
+  uint32_t GetNextKeepAliveSeqNo() const override;
+  void SetAnalyticsRecorder(analytics::AnalyticsRecorder* analytics_recorder,
+                            const std::string& endpoint_id) override;
+  void SetLocalEndpointId(const std::string& local_endpoint_id) override;
+  std::string GetLocalEndpointId() const override;
+
+  // Reads a complete packet from the underlying medium.
+  virtual ExceptionOr<ByteArray> DispatchPacket() {
+    return ExceptionOr<ByteArray>{};
+  }
+
+  // Reads the length of the next incoming data packet from the underlying
+  // medium.
+  virtual ExceptionOr<std::int32_t> ReadPayloadLength() {
+    return ExceptionOr<std::int32_t>{0};
+  }
+
+  // Writes the length of a data packet to the underlying medium before writing
+  // the packet itself.
+  virtual Exception WritePayloadLength(int payload_length) {
+    return {Exception::kFailed};
+  }
+
+ protected:
+  virtual void CloseImpl() = 0;
+  // For tests only.
+  std::unique_ptr<std::string> EncodeMessageForTests(absl::string_view data);
+
+ private:
+  // Gets the maximum number of bytes that can be read from the channel.
+  int GetMaxAllowedReadBytes() const;
+
+  // Gets the default maximum transmit unit/packet size.
+  int GetDefaultMaxTransmitPacketSize() const;
+
+  bool IsEncryptionEnabledLocked() const
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(crypto_mutex_);
+  void UnblockPausedWriter() ABSL_EXCLUSIVE_LOCKS_REQUIRED(is_paused_mutex_);
+  void BlockUntilUnpaused() ABSL_EXCLUSIVE_LOCKS_REQUIRED(is_paused_mutex_);
+  void CloseIo() ABSL_NO_THREAD_SAFETY_ANALYSIS;
+
+  // We need a separate mutex to protect read timestamp, because if a read
+  // blocks on IO, we don't want timestamp read access to block too.
+  mutable absl::Mutex last_read_mutex_;
+  absl::Time last_read_timestamp_ ABSL_GUARDED_BY(last_read_mutex_) =
+      absl::InfinitePast();
+
+  // We need a separate mutex to protect write timestamp, because if a write
+  // blocks on IO, we don't want timestamp write access to block too.
+  mutable absl::Mutex last_write_mutex_;
+  absl::Time last_write_timestamp_ ABSL_GUARDED_BY(last_write_mutex_) =
+      absl::InfinitePast();
+
+  mutable absl::Mutex keep_alive_mutex_;
+  mutable uint32_t next_keep_alive_seq_no_ ABSL_GUARDED_BY(keep_alive_mutex_) =
+      0;
+
+  const std::string service_id_;
+  const std::string channel_name_;
+
+  const int max_allowed_read_bytes_;
+  const int default_max_transmit_packet_size_;
+
+  // The reader and writer are synchronized independently since we can't have
+  // writes waiting on reads that might potentially block forever.
+  absl::Mutex reader_mutex_;
+  InputStream* reader_ ABSL_PT_GUARDED_BY(reader_mutex_);
+
+  absl::Mutex writer_mutex_;
+  OutputStream* writer_ ABSL_PT_GUARDED_BY(writer_mutex_);
+
+  // An encryptor/decryptor. May be null.
+  mutable absl::Mutex crypto_mutex_;
+  std::shared_ptr<EncryptionContext> crypto_context_
+      ABSL_GUARDED_BY(crypto_mutex_);
+
+  mutable Mutex is_paused_mutex_;
+  ConditionVariable is_paused_cond_{&is_paused_mutex_};
+  // If true, writes should block until this has been set to false.
+  bool is_paused_ ABSL_GUARDED_BY(is_paused_mutex_) = false;
+  bool is_closed_ ABSL_GUARDED_BY(is_paused_mutex_) = false;
+
+  // The medium technology information of this endpoint channel.
+  location::nearby::proto::connections::ConnectionTechnology technology_;
+  location::nearby::proto::connections::ConnectionBand band_;
+  int frequency_;
+  int try_count_;
+
+  analytics::AnalyticsRecorder* analytics_recorder_ = nullptr;
+  std::string endpoint_id_ = "";
+  std::string local_endpoint_id_ = "";
+};
+
+}  // namespace nearby::connections
+
+#endif  // CORE_INTERNAL_BASE_ENDPOINT_CHANNEL_H_

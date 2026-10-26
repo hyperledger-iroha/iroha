@@ -159,17 +159,13 @@ fn staking_asset_resolution_requires_the_exact_committed_network_currency() {
         .unwrap();
     parameters.xor_asset_definition_id = other;
     stx.world
-        .parameters
-        .get_mut()
-        .set_parameter(Parameter::Custom(parameters.into_custom_parameter()))
+        .set_parameter_for_testing(Parameter::Custom(parameters.into_custom_parameter()))
         .expect("valid fixture parameters");
     assert!(
         stake_context(
             &stx.world,
-            &stx.nexus.dataspace_catalog,
-            &stx.nexus.staking,
-            &validator,
-            stx.block_unix_timestamp_ms()
+            stx.staking_monetary_policy().unwrap(),
+            &validator
         )
         .is_err()
     );
@@ -280,7 +276,7 @@ fn staking_registration_rejects_wrong_xor_shape_with_transaction_rollback() {
 }
 
 #[test]
-fn staking_configuration_and_reward_custody_reject_registered_xor_lookalike() {
+fn typed_staking_policy_and_reward_custody_reject_registered_xor_lookalike() {
     let state = setup_state();
     let mut block = state.block(block_header_with_height(1));
     let mut stx = block.transaction_for_callback_testing();
@@ -301,15 +297,9 @@ fn staking_configuration_and_reward_custody_reject_registered_xor_lookalike() {
     // An existing numeric asset with the same public name still has no network-currency
     // authority. Staking and funded reward custody both require the committed identity.
     for configured in [&committed_xor, &lookalike] {
-        stx.nexus.staking.stake_asset_id = configured.to_string();
-        stx.nexus.fees.fee_asset_id = configured.clone();
-        let stake_result = stake_context(
-            &stx.world,
-            &stx.nexus.dataspace_catalog,
-            &stx.nexus.staking,
-            &validator,
-            stx.block_unix_timestamp_ms(),
-        );
+        let mut policy = stx.staking_monetary_policy().unwrap().clone();
+        policy.stake_asset_id = configured.clone();
+        let stake_result = stake_context(&stx.world, &policy, &validator);
         let rewards = crate::state::validate_network_xor_asset(&stx.world, configured);
         if configured == &committed_xor {
             assert_eq!(stake_result.unwrap().asset_definition, committed_xor);
@@ -342,7 +332,7 @@ fn final_unbond_rejects_changed_signed_request_without_releasing_custody() {
         let mut block = state.block(block_header_with_height(1));
         let mut stx = block.transaction_for_callback_testing();
         let (validator, _, _, _) = prepare_accounts(&mut stx);
-        stx.nexus.staking.unbonding_delay = Duration::ZERO;
+
         RegisterPublicLaneValidator::new(
             lane,
             validator.clone(),
@@ -451,7 +441,7 @@ fn final_unbond_rejects_mismatched_share_identity_and_rolls_back_transaction() {
         let mut block = state.block(block_header_with_height(1));
         let mut stx = block.transaction_for_callback_testing();
         let (validator, delegator, _, _) = prepare_accounts(&mut stx);
-        stx.nexus.staking.unbonding_delay = Duration::ZERO;
+
         RegisterPublicLaneValidator::new(
             lane,
             validator.clone(),

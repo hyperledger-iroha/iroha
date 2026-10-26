@@ -7,7 +7,7 @@
 //! fixed-control-flow algebraic S-box; neither secret-indexed tables nor
 //! accelerator/device dispatch are used.
 use super::{holder_aes256::ConstantTimeAes256KeyV1, ring::ApplicationPolynomialV1};
-use rand_core_06::{CryptoRng, RngCore};
+use rand_core::{TryCryptoRng, TryRng};
 use thiserror::Error;
 use zeroize::{Zeroize, Zeroizing};
 pub const CREDENTIAL_RANDOMNESS_POLYNOMIALS_V1: usize = 16;
@@ -80,7 +80,7 @@ impl Drop for CredentialRandomnessV1 {
         self.zeroize();
     }
 }
-pub fn sample_credential_randomness_v1<R: CryptoRng + RngCore>(
+pub fn sample_credential_randomness_v1<R: TryCryptoRng + TryRng>(
     rng: &mut R,
 ) -> Result<CredentialRandomnessV1, CredentialRandomnessErrorV1> {
     let mut seed = Zeroizing::new([0_u8; 32]);
@@ -367,24 +367,23 @@ pub enum CredentialRandomnessErrorV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand_core_06::Error as RngError;
     use sha2::{Digest as _, Sha256};
+    use std::io::Error as RngError;
     struct FailingRng;
-    impl RngCore for FailingRng {
-        fn next_u32(&mut self) -> u32 {
+    impl rand::TryRng for FailingRng {
+        type Error = std::io::Error;
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             panic!("credential sampling must use the fallible RNG interface")
         }
-        fn next_u64(&mut self) -> u64 {
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
             panic!("credential sampling must use the fallible RNG interface")
         }
-        fn fill_bytes(&mut self, _destination: &mut [u8]) {
-            panic!("credential sampling must use the fallible RNG interface")
-        }
-        fn try_fill_bytes(&mut self, _destination: &mut [u8]) -> Result<(), RngError> {
-            Err(RngError::new("injected credential-sampling RNG failure"))
+
+        fn try_fill_bytes(&mut self, _destination: &mut [u8]) -> Result<(), Self::Error> {
+            Err(RngError::other("injected credential-sampling RNG failure"))
         }
     }
-    impl CryptoRng for FailingRng {}
+    impl rand::TryCryptoRng for FailingRng {}
     #[test]
     fn gaussian_rejection_exponent_matches_exact_branch_and_center_numerators() {
         // The CDF terminator bounds magnitudes by 20; rounding supplies only 0 or 1/2.

@@ -204,6 +204,9 @@ class Registry(Base):
                           "SetAssetFiLinkV1", "TransferToLinkedFiV1")),
             ("asset_uid_enrollment", ("ActivateAssetUidEnrollmentV1",
                                       "SetAssetUidSystemAccountV1")),
+            ("asset_fi_context", ("AssertAssetFiContextV1",
+                                   "AssertAssetFiTransferReceiptV1")),
+            ("asset_escrow_scope", ("InitializeAssetEscrowReadScopeV1",)),
         ):
             self.assertEqual(INVENTORY["registry"]["modules"][module]["scope"], "out")
             path = f"crates/iroha_core/src/smartcontracts/isi/{module}.rs"
@@ -575,8 +578,10 @@ class ClosedLists(Base):
              "Self::KaigiUsage => Some(KaigiRelation::Authorization)", "kaigi selects"),
             ("Self::ConfidentialTransfer => Some(Kind::Transfer)",
              "Self::ConfidentialTransfer => Some(Kind::Full)", "confidential selects"),
-            ("if let Some(kind) = self.kaigi() {\n            kind.circuit_id()",
-             "if let Some(_kind) = self.kaigi() {\n            KaigiRelation::Usage.circuit_id()", "circuit_id must delegate"),
+            ("KaigiRelation::circuit_id,",
+             "|_kind| KaigiRelation::Usage.circuit_id(),", "circuit_id must delegate"),
+            ('|| self.confidential().expect("closed relation").circuit_id(),',
+             "|| KaigiRelation::Usage.circuit_id(),", "circuit_id must delegate"),
         ):
             self.assert_fails(run("check_generic", overrides=replaced(path, original, substitute)), fragment)
         for path, original, substitute, fragment in (
@@ -862,6 +867,7 @@ def small_selection(inventory: dict) -> dict:
     section["selector_census"]["roots"] = ["crates/iroha_core/src/smartcontracts/isi/kaigi", "crates/iroha_core_zk/src/verification.rs",
                                            "crates/iroha_core/src/smartcontracts/isi/ram_lfe.rs", "crates/iroha_core/src/smartcontracts/isi/game.rs",
                                            "crates/iroha_core_privacy/src/privacy_state.rs", "crates/iroha_core/src/state.rs",
+                                           "crates/iroha_core/src/pipeline_gas_policy/retained.rs",
                                            "crates/iroha_core/src/smartcontracts/ivm/host.rs", "crates/iroha_data_model/src/proof.rs",
                                            "crates/iroha_torii/src/routing.rs"]
     section["source_inclusion_census"]["roots"] = ["crates/iroha_core_privacy/src/execution_proofs"]
@@ -880,6 +886,16 @@ class GuaranteeSelection(Base):
 
     def test_small_baseline_is_clean(self) -> None:
         self.assert_clean(run("check_guarantee_selection", self.small))
+
+    def test_retained_policy_key_copy_remains_in_the_named_key_census(self) -> None:
+        path = "crates/iroha_core/src/pipeline_gas_policy/retained.rs"
+        rows = self.small["guarantee_selection"]["selector_census"]["occurrences"]
+        matching = [row for row in rows if row["path"] == path and row["token"] == "kaigi_policy_key"]
+        self.assertEqual(matching, [{"token": "kaigi_policy_key", "path": path,
+                                     "count": 6, "site": "kaigi.policy_named_key"}])
+        overrides = replaced(path, "&source.zk.proofs.kaigi_authorization_vk,", "&None,")
+        self.assert_fails(run("check_guarantee_selection", self.small, overrides),
+                          f"`kaigi_policy_key` occurs 5 times in {path}, recorded 6")
 
     def test_new_registry_read_fails(self) -> None:
         path = "crates/iroha_core/src/smartcontracts/isi/ram_lfe.rs"
@@ -1979,7 +1995,8 @@ class SelectionEvidence(Base):
         tokens = {token["id"]: token["pattern"] for token in INVENTORY["digests"]["primitive_tokens"]}
         import re as regex
         for identifier, sample in (("sha2_384", "Sha384::new()"), ("blake2s", "Blake2s256::digest(x)"),
-                                   ("shake128", "Shake128::default()"), ("hkdf", "Hkdf::<Sha3_512>::new(None, k)")):
+                                   ("shake128", "Shake128::default()"), ("hkdf", "Hkdf::<Sha3_512>::new(None, k)"),
+                                   ("hkdf", "SimpleHkdf::<Sha3_512>::new(None, k)")):
             self.assertRegex(sample, regex.compile(tokens[identifier]), identifier)
         race = next(group for group in INVENTORY["digests"]["products"] if group["product"] == "race")
         self.assertGreater(race["census"].get("sha2_384", 0), 0)
@@ -1988,6 +2005,7 @@ class SelectionEvidence(Base):
             group = next(group for group in INVENTORY["digests"]["products"] if group["product"] == product)
             self.assertIn(outer, group["owner_paths"])
             self.assertGreater(group["census"].get("sha3_384", 0), 0, product)
+        self.assertRegex("inner: Sha3_384,", regex.compile(tokens["sha3_384"]))
         self.assertRegex("core: Sha3_384Core,", regex.compile(tokens["sha3_384"]))
 
 

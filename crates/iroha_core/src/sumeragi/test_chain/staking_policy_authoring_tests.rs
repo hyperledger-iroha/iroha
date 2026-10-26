@@ -194,7 +194,7 @@ fn foreign_staking_manifest_mismatch_refuses_before_execution_and_restores_calle
 
 #[test]
 fn selected_fixture_staking_asset_preserves_bounds_and_typed_custody_across_authors() {
-    use iroha_config::parameters::defaults::{governance, nexus::staking};
+    use iroha_config::parameters::defaults::governance;
     use iroha_data_model::account::address::{ChainDiscriminantGuard, chain_discriminant};
     let _caller = ChainDiscriminantGuard::enter(753);
     let asset = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
@@ -202,22 +202,42 @@ fn selected_fixture_staking_asset_preserves_bounds_and_typed_custody_across_auth
             .unwrap(),
         "gas".parse().unwrap(),
     );
+    let defaults = iroha_genesis::default_staking_policy(
+        asset.clone(),
+        governance::bond_escrow_account_id(),
+        governance::bond_escrow_account_id(),
+    );
     let policy = staking_fixture_policy(asset.clone());
     assert_eq!(policy.stake_asset_id, asset);
-    assert_eq!(policy.min_validator_stake, staking::min_validator_stake());
+    assert_eq!(policy.min_validator_stake, defaults.min_validator_stake);
+    // These are the canonical genesis author's documented monetary choices, not node defaults.
+    assert_eq!(
+        policy.min_validator_stake,
+        iroha_primitives::numeric::Quantity::from(1_u32)
+    );
     assert_eq!(
         policy.max_stake_shares_per_validator,
-        staking::MAX_STAKE_SHARES_PER_VALIDATOR
+        defaults.max_stake_shares_per_validator
     );
     assert_eq!(
         policy.max_pending_unbonds_per_share,
-        staking::MAX_PENDING_UNBONDS_PER_SHARE
+        defaults.max_pending_unbonds_per_share
     );
     assert_eq!(
         u128::from(policy.unbonding_delay_ms),
-        staking::UNBONDING_DELAY.as_millis()
+        u128::from(defaults.unbonding_delay_ms)
     );
-    assert_eq!(policy.max_slash_bps, staking::MAX_SLASH_BPS);
+    assert_eq!(policy.max_slash_bps, defaults.max_slash_bps);
+    assert_eq!(
+        policy.max_stake_shares_per_validator,
+        std::num::NonZeroU32::new(256).unwrap()
+    );
+    assert_eq!(
+        policy.max_pending_unbonds_per_share,
+        std::num::NonZeroU32::new(8).unwrap()
+    );
+    assert_eq!(policy.unbonding_delay_ms, 0);
+    assert_eq!(policy.max_slash_bps, 10_000);
     assert_eq!(
         policy.stake_escrow_account_id,
         governance::bond_escrow_account_id()

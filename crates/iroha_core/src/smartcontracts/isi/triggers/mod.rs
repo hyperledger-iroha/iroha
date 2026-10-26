@@ -1294,9 +1294,7 @@ pub mod isi {
                 .expect("parameter name");
             transaction
                 .world
-                .parameters_mut_for_testing()
-                .get_mut()
-                .set_parameter(Parameter::Custom(CustomParameter::new(
+                .set_parameter_for_testing(Parameter::Custom(CustomParameter::new(
                     name,
                     Json::new(64_u64),
                 )))
@@ -1641,20 +1639,23 @@ mod tests {
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     use mv::storage::StorageReadOnly;
     use std::{str::FromStr, time::Duration};
+    include!("applying_time_register_tests.rs");
     fn checked_keypair() -> KeyPair {
         KeyPair::try_random().expect("trigger fixture key generation should succeed")
     }
     /// Author admission input for isolated component fixtures without genesis authority.
     fn component_trigger_world() -> World {
         let world = World::default();
-        let mut parameters = world.parameters.block();
-        parameters
-            .set_parameter(
-                crate::sumeragi::test_chain::crypto_fixture_policy()
-                    .into_parameter()
-                    .expect("canonical trigger fixture crypto policy"),
-            )
-            .expect("install original trigger component crypto policy");
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
+            .expect("funded component parameter fixture");
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            crate::sumeragi::test_chain::crypto_fixture_policy()
+                .into_parameter()
+                .expect("canonical trigger fixture crypto policy"),
+            world.sccp_committee_generations.allocation_budget(),
+        )
+        .expect("install original trigger component crypto policy");
         parameters.commit();
         world
     }
@@ -3631,9 +3632,7 @@ mod tests {
         let id = CustomParameterId::from_str("max_metadata_value_bytes").unwrap();
         let param = Parameter::Custom(CustomParameter::new(id, Json::new(4u32)));
         stx.world
-            .parameters
-            .get_mut()
-            .set_parameter(param)
+            .set_parameter_for_testing(param)
             .expect("valid fixture parameters");
         let mut metadata = Metadata::default();
         metadata.insert("oversized".parse().unwrap(), Json::new("0123456789"));

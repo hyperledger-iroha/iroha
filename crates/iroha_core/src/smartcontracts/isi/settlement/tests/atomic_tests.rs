@@ -142,7 +142,8 @@ fn atomic_state_in_scope_with_source_delta_limit(
     {
         use iroha_data_model::parameter::{BlockParameter, FastpqSourcePolicyV1, Parameter};
 
-        let mut parameters = world.parameters.block();
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
+            .expect("funded parameter fixture block");
         let previous = parameters.get().block().fastpq_source();
         let mut intrinsic = previous.intrinsic;
         let usage = atomic_fixture_source_usage(&movements);
@@ -165,10 +166,12 @@ fn atomic_state_in_scope_with_source_delta_limit(
                 .expect("original Network source envelope"),
         )
         .expect("finite atomic source profile");
-        parameters
-            .get_mut()
-            .set_parameter(Parameter::Block(BlockParameter::FastpqSource(profile)))
-            .expect("valid fixture parameters");
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            Parameter::Block(BlockParameter::FastpqSource(profile)),
+            world.sccp_committee_generations.allocation_budget(),
+        )
+        .expect("valid fixture parameters");
         parameters.commit();
     }
     (
@@ -912,13 +915,16 @@ fn atomic_settlement_final_source_or_destination_failure_preserves_all_prior_mov
 fn atomic_settlement_bootstrap_delta_limit_refuses_without_movement_or_receipt() {
     use iroha_data_model::parameter::{BlockParameter, FastpqSourcePolicyV1, Parameter};
     let (state, movements, _) = atomic_state(17);
-    let mut parameters = state.world.parameters.block();
-    parameters
-        .get_mut()
-        .set_parameter(Parameter::Block(BlockParameter::FastpqSource(
+    let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+        .expect("funded parameter fixture block");
+    crate::state::set_parameter_cell_for_testing(
+        &mut parameters,
+        Parameter::Block(BlockParameter::FastpqSource(
             FastpqSourcePolicyV1::bootstrap(),
-        )))
-        .expect("valid fixture parameters");
+        )),
+        state.world.sccp_committee_generations.allocation_budget(),
+    )
+    .expect("valid fixture parameters");
     parameters.commit();
     let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
     let mut stx = block.transaction_for_fastpq_testing(Hash::new(b"atomic-fixture-carrier"));
@@ -1029,14 +1035,16 @@ fn bond_escrow_fixture() -> BondEscrowFixture {
         [],
     );
     // Component escrow custody owns its policy before the first snapshot.
-    let mut parameters = world.parameters.block();
-    parameters
-        .set_parameter(
-            crate::sumeragi::test_chain::crypto_fixture_policy()
-                .into_parameter()
-                .expect("canonical fixture crypto policy"),
-        )
-        .expect("install original fixture crypto policy");
+    let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
+        .expect("funded component parameter fixture");
+    crate::state::set_parameter_cell_for_testing(
+        &mut parameters,
+        crate::sumeragi::test_chain::crypto_fixture_policy()
+            .into_parameter()
+            .expect("canonical fixture crypto policy"),
+        world.sccp_committee_generations.allocation_budget(),
+    )
+    .expect("install original fixture crypto policy");
     parameters.commit();
     BondEscrowFixture {
         state: State::new(

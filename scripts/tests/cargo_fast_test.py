@@ -29,6 +29,7 @@ CONTROLLED_ENV_VARS = (
     "CARGO_FAST_RESOLUTION_CAPTURE",
     "CARGO_ENCODED_RUSTFLAGS",
     "CARGO_FAST_TARGET_ROOT",
+    "CARGO_FAST_TIMINGS",
     "CARGO_FAST_TEST_WORKSPACE_MANIFEST",
     "CARGO_INCREMENTAL",
     "CARGO_PROFILE_BENCH_BUILD_OVERRIDE_CODEGEN_UNITS",
@@ -146,6 +147,7 @@ def _run_wrapper(
                     print(name + "=" + value, file=stream)
                 print("__CARGO_FAST_ARGS__", file=stream)
                 print("\n".join(args), file=stream)
+            sys.exit(int(os.environ.get("CARGO_FAST_TEST_COMMAND_EXIT", "0")))
         """,
     )
     for name, source in (binaries or {}).items():
@@ -690,6 +692,20 @@ def test_explicit_development_metadata_has_no_release_marker(tmp_path: Path) -> 
     assert result.returncode == 0, result.stderr
     assert environment["VERGEN_GIT_SHA"] == "local-fast-build"
     assert "IROHA_GIT_COMMIT_HASH" not in environment
+
+
+@pytest.mark.parametrize("exit_code", [0, 17])
+def test_cargo_timing_keeps_actual_result_and_arguments(tmp_path: Path, exit_code: int) -> None:
+    result, environment, arguments = _run_wrapper(
+        tmp_path, "--no-sccache", "--stable-local-metadata", "--", "check", "--lib",
+        extra_env={"CARGO_FAST_TIMINGS": "1", "CARGO_FAST_TEST_COMMAND_EXIT": str(exit_code)},
+    )
+    assert result.returncode == exit_code, result.stderr
+    records = [json.loads(line.removeprefix("[cargo-fast-timings] "))
+               for line in result.stderr.splitlines() if line.startswith("[cargo-fast-timings] ")]
+    assert len(records) == 1 and records[0]["cargo_seconds"] >= 0
+    assert arguments == ["check", "--lib"]
+    assert environment["VERGEN_GIT_SHA"] == "local-fast-build"
 
 
 @pytest.mark.parametrize("sealed", ["a" * 40, "", "local-fast-build"])

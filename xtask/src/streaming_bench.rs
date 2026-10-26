@@ -11,7 +11,7 @@ use norito::{
         },
     },
 };
-use rand::{RngCore, SeedableRng};
+use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 use std::{
     error::Error,

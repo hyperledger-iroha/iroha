@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Freeze the authenticated, no-skip ABI-31 Swift privacy lane."""
+"""Freeze the authenticated, no-skip ABI-33 Swift privacy lane."""
 
 from __future__ import annotations
 
@@ -142,7 +142,7 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
             parity,
         )
         self.assertIn(
-            'XCTFail("ABI-31 NoritoBridge is required on this platform")',
+            'XCTFail("ABI-33 NoritoBridge is required on this platform")',
             parity,
         )
         for retired in (
@@ -219,7 +219,7 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
         self.assertNotIn("export RUSTC_BOOTSTRAP=", readme)
         self.assertNotIn("build\nan opt-in Apple artifact", readme)
         self.assertIn("Every bridge build includes mandatory privacy support", readme)
-        self.assertIn("stock Rust 1.93.1", readme)
+        self.assertIn("stock Rust 1.99.1", readme)
         self.assertIn("unset RUSTC_BOOTSTRAP", readme)
         self.assertIn('bridge_local="$PWD/target/norito-bridge-local"', readme)
         self.assertIn('--lockfile-path "$PWD/Cargo.lock" --local-integration --allow-dirty-source', readme)
@@ -514,7 +514,7 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
             '"MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT"',
             "configuredArtifactDirectory == nil",
             "must be outside the reviewed Iroha source tree",
-            "requiredBridgeAbiVersion = 31",
+            "requiredBridgeAbiVersion = 33",
             '"NoritoBridge.artifacts.json"',
             'manifest["native_bridge_abi_version"]',
             "validateBridgeArtifact(at: bridgeAbsolutePath)",
@@ -633,15 +633,15 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
             self.assertIn(f'      - "{trigger}"', source)
         for marker in (
             "runs-on: macos-14",
-            "actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065",
+            "actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0",
             'python-version: "3.12"',
             "update-environment: false",
             "MOBILE_SDK_PYTHON_BINARY",
             '"${HOME}/.cargo/bin/rustup" toolchain install',
-            '"1.93.1-aarch64-apple-darwin"',
+            '"1.99.1-aarch64-apple-darwin"',
             "aarch64-apple-ios-sim",
             "x86_64-apple-darwin",
-            'cargo_path="$(rustup which --toolchain 1.93.1-aarch64-apple-darwin cargo)"',
+            'cargo_path="$(rustup which --toolchain 1.99.1-aarch64-apple-darwin cargo)"',
             'env -u RUSTC_BOOTSTRAP "$cargo_path" fetch --locked --manifest-path "$GITHUB_WORKSPACE/Cargo.toml"',
             "MOBILE_SDK_APPLE_ARTIFACT_DIR",
             "MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT=1",

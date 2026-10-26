@@ -189,12 +189,16 @@ pub mod tests {
                 .build(&owner)],
             );
             {
-                let mut parameters = world.parameters.block();
-                parameters
-                    .set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
+                let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
+                    .expect("funded original parameter-only fixture block");
+                crate::state::set_parameter_cell_for_testing(
+                    &mut parameters,
+                    crate::sumeragi::lanes::routing::test_support::metadata(
                         iroha_data_model::block::consensus::SumeragiRootScope::Global,
-                    ))
-                    .unwrap();
+                    ),
+                    world.sccp_committee_generations.allocation_budget(),
+                )
+                .unwrap();
                 parameters.commit();
             }
             let state = State::new_for_testing(

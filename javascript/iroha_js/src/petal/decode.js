@@ -1,77 +1,95 @@
 // From a camera luma plane to lane data.
 //
-// The decoder locates the four finders (or three, inferring the fourth),
-// derives a homography for each orientation hypothesis, ranks the hypotheses
-// by how well the ring gates and the `天` line up, then reads the tiles and
-// dots. Every tile is classified jointly: the 8x8 sample patch is compared
-// against the 32 hypotheses (polarity x glyph) and the best match wins, so the
-// katakana and the light/dark bit help each other. Cells the decoder is unsure
-// about become Reed-Solomon erasures. A scan session follows a code from one
-// frame to the next by tracking its pose instead of searching again.
+// The decoder locates the corner finders (four, or three with the fourth
+// inferred), derives a pose for each orientation hypothesis, ranks the
+// orientations by how well the ring gates line up (lane D must check out),
+// then reads the dots and the petal field. Every petal is one bit: its level,
+// normalised by the finder levels, is compared with a threshold computed for
+// its codeword and colour class (the petals inside the `天` are lighter than
+// the pink ones). Bytes the decoder is unsure about become Reed-Solomon
+// erasures.
 //
-// The tile level read judges every patch against the light and dark levels
-// measured at the finders. When it leaves lane P or K unreadable, the
-// normalised read is tried: it rescales each patch (and each template) by its
-// own contrast, so over-exposure, veiling light, glare, shadows and gradients
-// cancel out.
+// When some field lanes do not decode, the pose is searched for radial lens
+// distortion: a cheap camera's barrel distortion moves the petals by a third
+// of their pitch at the edge of a 480p frame, while the finders that fix the
+// homography sit far outside the field. Sectors the finder levels leave
+// unread are read again from local levels, which shadows, glare, banding and
+// veiling light do not disturb. A scan session follows a code from one frame
+// to the next by tracking its pose instead of searching again.
+//
+// A camera sees each shown frame two to four times. `fieldEvidence` keeps what
+// one capture shows of the petal field, and `mergeFields` reads the field
+// lanes from the average of several captures of one shown frame, which
+// recovers lanes that noise, display banding or hand shake cost each capture
+// alone.
 //
 // Every floating-point expression follows the reference operation by
 // operation. Intermediates match the reference wherever the platform's sin,
 // cos, exp and atan2 agree (they are not guaranteed to across platforms);
 // conformance is that the golden captures decode to the recorded lanes.
 
-import { PetalHomography, applyHomography, homographyFromPoints } from "./geometry.js";
-import { GLYPH_COUNT, TEMPLATES, TEMPLATE_N } from "./glyphs.js";
+import { PetalPose, fitPose } from "./geometry.js";
 import { sampleLuma } from "./image.js";
-import { D_WORD, K_WORD, P_WORD, PetalFrameCells, decodeLaneCountedStatus, laneSpec } from "./lanes.js";
 import {
+  D_WORD,
+  FIELD_BITS,
+  FIELD_LANES,
+  FIELD_WORD,
+  LANE_ORDER,
+  PetalFrameCells,
+  decodeLaneCountedStatus,
+  laneLetter,
+  laneSpec,
+} from "./lanes.js";
+import {
+  BAND_COUNT,
+  BAND_OFFSETS,
+  CELL_BAND,
+  CELL_CENTER_X,
+  CELL_CENTER_Y,
+  CELL_LIGHT,
   D_BITS,
   DATA_SLOT,
+  DOT_RADIUS,
+  FIELD_CELLS,
   FINDER_CENTERS,
   GATE_SLOT_LIST,
-  GLYPH_BOX,
   GUARD_SLOT_LIST,
-  MASK,
+  PETAL_RADIUS_F32,
   RING_COUNT,
+  SECTORS,
+  SECTOR_CELL_LIST,
   SLOT_CENTER_X,
   SLOT_CENTER_Y,
   SLOT_RING,
-  TILE_CENTER_X,
-  TILE_CENTER_Y,
-  TILE_COUNT,
-  TILE_ORIGIN,
-  TILE_PITCH,
   TOTAL_SLOTS,
 } from "./layout.js";
 import { finderCandidates, followFinder } from "./locate.js";
 import { parseAtomLane, parseDLane } from "./stream.js";
 import { PetalError, clamp, fmax, fmin, totalCmp } from "./support.js";
 
-const PATCH = TEMPLATE_N;
-const CELLS = PATCH * PATCH;
-const HYPOTHESES = 2 * GLYPH_COUNT;
-/** Relative level of the glyph ink on a light tile (ink / light fill). */
-const INK_ON_LIGHT = 0.04;
-/** Relative level of a pink glyph on a dark tile (pink / light fill). */
-const PINK_ON_DARK = 0.83;
-/** Cells cut from each end of a sorted patch to find its robust darkest and brightest level. */
-const PATCH_CUT = Math.floor(CELLS / 10);
-/** Smallest span, in luma levels, that counts as contrast when a camera patch is rescaled. */
-const PATCH_SPAN_FLOOR = 1.0;
-/** Smallest span that counts as contrast when a template is rescaled. */
-const TEMPLATE_SPAN_FLOOR = 0.001;
 /**
- * Tiles whose contrast is below this fraction of the median tile contrast become erasures
- * in the normalised read.
+ * Distortion steps tried, relative to the starting pose, when a plain pose leaves field lanes
+ * unread; the best is then refined by +-`DISTORTION_REFINE`.
  */
-const WEAK_TILE = 0.25;
+const DISTORTION_STEPS = Object.freeze([-0.03, -0.06, -0.09, -0.12, -0.16, 0.03]);
+/** Final refinement step of the distortion search. */
+const DISTORTION_REFINE = 0.015;
+/** A colour class with fewer cells in a codeword than this takes the codeword's threshold. */
+const CLASS_MIN_CELLS = 16;
+/** Field cells within this distance of a cell are its neighbourhood for the local read. */
+const NEIGHBOURHOOD = 32;
+/** Cells averaged at each end of a sorted neighbourhood for its local dark and lit levels. */
+const NEIGHBOURHOOD_ENDS = 5;
+/** Sample spread of a ring dot, in canvas units. */
+const DOT_SPREAD = 0.32 * DOT_RADIUS;
+/** Sample spread of a petal, in canvas units. */
+const PETAL_SPREAD = 0.4 * PETAL_RADIUS_F32;
 
 /** Default decoder tuning. */
 export const DEFAULT_DECODE_OPTIONS = Object.freeze({
   /** Also try horizontally mirrored images (front-camera previews). */
   tryMirrored: true,
-  /** Blur widths (in template cells) tried for glyph matching. */
-  templateSigmas: Object.freeze([0, 0.5, 0.8, 1.1, 1.5]),
   /**
    * Largest image (in pixels) the decoder accepts; larger frames should be
    * downscaled by the caller. Bounds memory and work on hostile input.
@@ -88,22 +106,14 @@ export function resolveDecodeOptions(options) {
     throw new TypeError("decode options must be an object");
   }
   const tryMirrored = options.tryMirrored ?? DEFAULT_DECODE_OPTIONS.tryMirrored;
-  const templateSigmas = options.templateSigmas ?? DEFAULT_DECODE_OPTIONS.templateSigmas;
   const maxPixels = options.maxPixels ?? DEFAULT_DECODE_OPTIONS.maxPixels;
   if (typeof tryMirrored !== "boolean") {
     throw new TypeError("tryMirrored must be a boolean");
   }
-  if (
-    !Array.isArray(templateSigmas) ||
-    templateSigmas.length === 0 ||
-    templateSigmas.some((sigma) => typeof sigma !== "number" || !Number.isFinite(sigma))
-  ) {
-    throw new TypeError("templateSigmas must be a non-empty array of finite numbers");
-  }
   if (typeof maxPixels !== "number" || !(maxPixels >= 0)) {
     throw new TypeError("maxPixels must be a non-negative number");
   }
-  return Object.freeze({ tryMirrored, templateSigmas: Object.freeze(templateSigmas.slice()), maxPixels });
+  return Object.freeze({ tryMirrored, maxPixels });
 }
 
 // Unit vectors of the eight reference-level sample directions.
@@ -115,21 +125,30 @@ for (let k = 0; k < 8; k += 1) {
   REFERENCE_SIN[k] = Math.sin(angle);
 }
 
-/** Maps canvas `(x, y)` through `m` and samples the image there. */
-function sampleCanvas(image, m, x, y) {
+/** Maps canvas `(x, y)` through `pose` and samples the image there. */
+function sampleCanvas(image, pose, x, y) {
+  const m = pose._m;
   const w = m[6] * x + m[7] * y + m[8];
-  const px = (m[0] * x + m[1] * y + m[2]) / w;
-  const py = (m[3] * x + m[4] * y + m[5]) / w;
+  let px = (m[0] * x + m[1] * y + m[2]) / w;
+  let py = (m[3] * x + m[4] * y + m[5]) / w;
+  const k = pose.distortion;
+  if (k !== 0) {
+    const dx = px - pose._cx;
+    const dy = py - pose._cy;
+    const factor = 1 + (k * (dx * dx + dy * dy)) / pose.scale2;
+    px = pose._cx + dx * factor;
+    py = pose._cy + dy * factor;
+  }
   return sampleLuma(image.data, image.width, image.height, px, py);
 }
 
-function dotSamples(image, m, x, y, spread) {
+function dotSamples(image, pose, x, y, spread) {
   let sum = 0;
-  sum += sampleCanvas(image, m, x + 0, y + 0);
-  sum += sampleCanvas(image, m, x + spread, y + 0);
-  sum += sampleCanvas(image, m, x + -spread, y + 0);
-  sum += sampleCanvas(image, m, x + 0, y + spread);
-  sum += sampleCanvas(image, m, x + 0, y + -spread);
+  sum += sampleCanvas(image, pose, x + 0, y + 0);
+  sum += sampleCanvas(image, pose, x + spread, y + 0);
+  sum += sampleCanvas(image, pose, x + -spread, y + 0);
+  sum += sampleCanvas(image, pose, x + 0, y + spread);
+  sum += sampleCanvas(image, pose, x + 0, y + -spread);
   return sum / 5;
 }
 
@@ -140,7 +159,7 @@ function dotSamples(image, m, x, y, spread) {
  * levels are extrapolated from the other three by the parallelogram rule and kept within their
  * range, and must differ by 12 like a seen corner's. Exported for tests only.
  */
-export function referenceLevels(image, m, inferred = null) {
+export function referenceLevels(image, pose, inferred = null) {
   const lit = new Float64Array(4);
   const dark = new Float64Array(4);
   for (let i = 0; i < 4; i += 1) {
@@ -150,15 +169,15 @@ export function referenceLevels(image, m, inferred = null) {
     const cx = FINDER_CENTERS[i][0];
     const cy = FINDER_CENTERS[i][1];
     // the blossom is solid out to radius 24 around its centre
-    let sum = sampleCanvas(image, m, cx, cy);
+    let sum = sampleCanvas(image, pose, cx, cy);
     for (let k = 0; k < 8; k += 1) {
-      sum += sampleCanvas(image, m, cx + 20 * REFERENCE_COS[k], cy + 20 * REFERENCE_SIN[k]);
+      sum += sampleCanvas(image, pose, cx + 20 * REFERENCE_COS[k], cy + 20 * REFERENCE_SIN[k]);
     }
     lit[i] = sum / 9;
     const sx = cx < 512 ? 1 : -1;
     const sy = cy < 512 ? 1 : -1;
-    const a = dotSamples(image, m, cx + sx * 100, cy, 5);
-    const b = dotSamples(image, m, cx, cy + sy * 100, 5);
+    const a = dotSamples(image, pose, cx + sx * 100, cy, 5);
+    const b = dotSamples(image, pose, cx, cy + sy * 100, 5);
     dark[i] = 0.5 * (a + b);
     // also refuses NaN levels, which only a non-finite pose can produce
     if (!Number.isFinite(lit[i] - dark[i]) || lit[i] - dark[i] < 12) {
@@ -195,48 +214,18 @@ function clampUnit(value) {
   return value < 0 ? 0 : value > 1 ? 1 : value;
 }
 
-/** `(x, y)` normalised with the light and dark levels interpolated there. */
-function normalisedLevel(reference, sample, x, y) {
-  const u = clampUnit(x / 1024);
-  const v = clampUnit(y / 1024);
-  const lit = mixCorners(reference.lit, u, v);
-  const dark = mixCorners(reference.dark, u, v);
-  return (sample - dark) / (lit - dark);
-}
+// Where every field cell and ring slot sits for the bilinear level interpolation.
+const CELL_U = Float64Array.from(CELL_CENTER_X, (x) => clampUnit(x / 1024));
+const CELL_V = Float64Array.from(CELL_CENTER_Y, (y) => clampUnit(y / 1024));
+const SLOT_U = Float64Array.from(SLOT_CENTER_X, (x) => clampUnit(x / 1024));
+const SLOT_V = Float64Array.from(SLOT_CENTER_Y, (y) => clampUnit(y / 1024));
 
-// Centres of the lattice cells outside the `天` mask (no tile is ever drawn there), row-major.
-const EMPTY_X = [];
-const EMPTY_Y = [];
-MASK.forEach((line, row) => {
-  for (let col = 0; col < line.length; col += 1) {
-    if (line[col] !== "#") {
-      EMPTY_X.push(TILE_ORIGIN + TILE_PITCH * (col + 0.5));
-      EMPTY_Y.push(TILE_ORIGIN + TILE_PITCH * (row + 0.5));
-    }
-  }
-});
+const CANONICAL_X = Float64Array.from(FINDER_CENTERS, (center) => center[0]);
+const CANONICAL_Y = Float64Array.from(FINDER_CENTERS, (center) => center[1]);
 
-/**
- * How well the `天` lines up: the mean normalised level over the tiles (each sampled at five
- * points across the tile, so a glyph stroke at the centre does not decide it) minus the mean
- * over the empty lattice cells. The mask is symmetric left to right but not top to bottom, so
- * this tells the four quarter turns apart even when the ring gates are damaged. Exported for
- * tests only.
- */
-export function maskScore(image, m, reference) {
-  let tiles = -0;
-  for (let tile = 0; tile < TILE_COUNT; tile += 1) {
-    const x = TILE_CENTER_X[tile];
-    const y = TILE_CENTER_Y[tile];
-    tiles += normalisedLevel(reference, dotSamples(image, m, x, y, 8), x, y);
-  }
-  let empty = -0;
-  for (let cell = 0; cell < EMPTY_X.length; cell += 1) {
-    const x = EMPTY_X[cell];
-    const y = EMPTY_Y[cell];
-    empty += normalisedLevel(reference, dotSamples(image, m, x, y, 8), x, y);
-  }
-  return tiles / TILE_COUNT - empty / EMPTY_X.length;
+/** The pose with lens distortion `distortion` through the four finder centres (canonical corner order). */
+function fitCanonical(image, dstX, dstY, distortion) {
+  return fitPose(CANONICAL_X, CANONICAL_Y, dstX, dstY, distortion, image.width, image.height);
 }
 
 /**
@@ -247,23 +236,20 @@ function canonicalCorner(index, rotation, mirrored) {
   return mirrored ? (rotation + 4 - index) % 4 : (index + 4 - rotation) % 4;
 }
 
-const CANONICAL_X = Float64Array.from(FINDER_CENTERS, (center) => center[0]);
-const CANONICAL_Y = Float64Array.from(FINDER_CENTERS, (center) => center[1]);
-
 /**
- * The brightness summed over all ring slots under the pose that maps the canonical corners onto
- * the quad `(xs[i], ys[i])`, or `null` when that pose is degenerate. The slots form the same set
- * of points under every quarter turn and mirror of the canvas (80, 92 and 104 are multiples of
- * four), so the value does not depend on the orientation.
+ * The brightness summed over all ring slots under the plain pose that maps the canonical corners
+ * onto the quad `(xs[i], ys[i])`, or `null` when that pose is degenerate. The slots form the same
+ * set of points under every quarter turn and mirror of the canvas (88, 100 and 108 are multiples
+ * of four), so the value does not depend on the orientation.
  */
 function ringBrightness(image, xs, ys) {
-  const m = homographyFromPoints(CANONICAL_X, CANONICAL_Y, xs, ys);
-  if (m === null) {
+  const pose = fitCanonical(image, xs, ys, 0);
+  if (pose === null) {
     return null;
   }
   let sum = -0;
   for (let flat = 0; flat < TOTAL_SLOTS; flat += 1) {
-    sum += dotSamples(image, m, SLOT_CENTER_X[flat], SLOT_CENTER_Y[flat], 3.5);
+    sum += dotSamples(image, pose, SLOT_CENTER_X[flat], SLOT_CENTER_Y[flat], DOT_SPREAD);
   }
   return sum;
 }
@@ -272,7 +258,7 @@ function ringBrightness(image, xs, ys) {
  * Moves an inferred corner to where the three dotted rings line up best: a 13 x 13 search in
  * steps of 2 % of the mean leg around the parallelogram estimate, then a 9 x 9 search in steps
  * of 0.5 % around the best point. The rings fix the geometry only; the orientation is decided
- * afterwards by the gates and the `天`. Returns a new quad. Exported for tests only.
+ * afterwards by the gates and the lanes. Returns a new quad. Exported for tests only.
  */
 export function refineInferredCorner(image, corners, inferred) {
   const xs = Float64Array.from(corners, (finder) => finder.x);
@@ -308,26 +294,25 @@ export function refineInferredCorner(image, corners, inferred) {
   return refined;
 }
 
-function normalisedDot(image, m, reference, flat) {
-  const x = SLOT_CENTER_X[flat];
-  const y = SLOT_CENTER_Y[flat];
-  const u = clampUnit(x / 1024);
-  const v = clampUnit(y / 1024);
+function normalisedDot(image, pose, reference, flat) {
+  const u = SLOT_U[flat];
+  const v = SLOT_V[flat];
   const lit = mixCorners(reference.lit, u, v);
   const dark = mixCorners(reference.dark, u, v);
-  return (dotSamples(image, m, x, y, 3.5) - dark) / (lit - dark);
+  return (dotSamples(image, pose, SLOT_CENTER_X[flat], SLOT_CENTER_Y[flat], DOT_SPREAD) - dark) / (lit - dark);
 }
 
-function gateScore(image, m, reference) {
+/** The mean normalised level of the gate dots minus that of the guards. Exported for tests only. */
+export function gateScore(image, pose, reference) {
   let gates = -0;
-  for (const slot of GATE_SLOT_LIST) gates += normalisedDot(image, m, reference, slot);
+  for (const slot of GATE_SLOT_LIST) gates += normalisedDot(image, pose, reference, slot);
   let guards = -0;
-  for (const slot of GUARD_SLOT_LIST) guards += normalisedDot(image, m, reference, slot);
+  for (const slot of GUARD_SLOT_LIST) guards += normalisedDot(image, pose, reference, slot);
   return gates / GATE_SLOT_LIST.length - guards / GUARD_SLOT_LIST.length;
 }
 
 /** Reads lane D: returns the transmitted bytes and per-byte confidence. */
-function readDots(image, m, reference) {
+function readDots(image, pose, reference) {
   // per-ring thresholds from the gates (lit) and guards (dark)
   const thresholds = [0.5, 0.5, 0.5];
   for (let ring = 0; ring < RING_COUNT; ring += 1) {
@@ -335,14 +320,14 @@ function readDots(image, m, reference) {
     let litCount = 0;
     for (const slot of GATE_SLOT_LIST) {
       if (SLOT_RING[slot] !== ring) continue;
-      litSum += normalisedDot(image, m, reference, slot);
+      litSum += normalisedDot(image, pose, reference, slot);
       litCount += 1;
     }
     let darkSum = -0;
     let darkCount = 0;
     for (const slot of GUARD_SLOT_LIST) {
       if (SLOT_RING[slot] !== ring) continue;
-      darkSum += normalisedDot(image, m, reference, slot);
+      darkSum += normalisedDot(image, pose, reference, slot);
       darkCount += 1;
     }
     if (litCount > 0 && darkCount > 0) {
@@ -357,7 +342,7 @@ function readDots(image, m, reference) {
   const confidence = new Float64Array(D_WORD).fill(Number.MAX_VALUE);
   for (let bit = 0; bit < D_BITS; bit += 1) {
     const slot = DATA_SLOT[bit];
-    const value = normalisedDot(image, m, reference, slot);
+    const value = normalisedDot(image, pose, reference, slot);
     const threshold = thresholds[SLOT_RING[slot]];
     if (value > threshold) {
       word[bit >> 3] |= 1 << (7 - (bit & 7));
@@ -368,8 +353,8 @@ function readDots(image, m, reference) {
 }
 
 /** Lane D under one pose. */
-function readLaneD(image, m, reference) {
-  const dots = readDots(image, m, reference);
+function readLaneD(image, pose, reference) {
+  const dots = readDots(image, pose, reference);
   return decodeWithErasures("D", dots.word, dots.confidence);
 }
 
@@ -377,14 +362,9 @@ function readLaneD(image, m, reference) {
  * Tries Reed-Solomon with growing numbers of erasures, least confident first.
  *
  * The schedule erases 0, 1/8, 1/4, 1/3 and 1/2 of the parity bytes (integer
- * division), and for lane K also 2/3: lane D 0, 1, 2, 3, 5; lane P 0, 1, 3, 4,
- * 6; lane K 0, 5, 11, 15, 22, 30. Lanes D and P stop at 1/2: their words have
- * only 11 and 13 parity bytes, and a further erasure step leaves so few spare
- * ones that it accepts wrong codewords (lane D at 7 erasures: about 0.4 % of
- * random words, and 5 wrong lanes in 2 900 simulated harsh frames; lane P at 8:
- * 2 wrong lanes in 600 banded 480p frames, in the reference's simulation).
- * Capping them costs 0.65 % of the lane D reads and 0.15 % of the lane P reads
- * in those frames.
+ * division: lane D 0, 1, 2, 3, 5; a field lane 0, 2, 5, 7, 11). Lane D has
+ * only 11 parity bytes, and a further step leaves so few spare ones that it
+ * accepts wrong codewords (at 7 erasures about 0.4 % of random words).
  *
  * Returns `{data, corrected, erasures}`: `corrected` is the number of byte
  * positions the decoder rewrote (the erased bytes plus any errors it found
@@ -400,9 +380,6 @@ export function decodeWithErasures(lane, word, confidence) {
   for (let index = 0; index < word.length; index += 1) order.push(index);
   order.sort((a, b) => totalCmp(confidence[a], confidence[b]));
   const steps = [0, Math.floor(nsym / 8), Math.floor(nsym / 4), Math.floor(nsym / 3), Math.floor(nsym / 2)];
-  if (spec.name === "K") {
-    steps.push(Math.floor((nsym * 2) / 3));
-  }
   // consecutive duplicates are dropped, as with the reference's `dedup`
   const schedule = [];
   for (const erasures of steps) {
@@ -423,349 +400,331 @@ export function decodeWithErasures(lane, word, confidence) {
   return null;
 }
 
-const patternCache = new Map();
-const rescaledPatternCache = new Map();
-
-/** `pred[h * 64 + cell]`: expected normalised patch for hypothesis `h = polarity * 16 + glyph`. */
-function buildPatterns(sigma) {
-  const raw = new Float64Array(5);
-  for (let i = -2; i <= 2; i += 1) {
-    raw[i + 2] = sigma < 0.05 ? (i === 0 ? 1 : 0) : Math.exp(-(i * i) / (2 * sigma * sigma));
-  }
-  let total = -0;
-  for (const value of raw) total += value;
-  const kernel = raw.map((value) => value / total);
-  const pred = new Float64Array(HYPOTHESES * CELLS);
-  const coverage = new Float64Array(CELLS);
-  for (let polarity = 0; polarity < 2; polarity += 1) {
-    for (let glyph = 0; glyph < GLYPH_COUNT; glyph += 1) {
-      const template = TEMPLATES[glyph];
-      for (let cell = 0; cell < CELLS; cell += 1) coverage[cell] = template[cell] / 255;
-      const base = (polarity * GLYPH_COUNT + glyph) * CELLS;
-      for (let v = 0; v < PATCH; v += 1) {
-        for (let u = 0; u < PATCH; u += 1) {
-          let acc = 0;
-          for (let ky = 0; ky < 5; ky += 1) {
-            const sy = v + ky - 2;
-            for (let kx = 0; kx < 5; kx += 1) {
-              const sx = u + kx - 2;
-              if (sx >= 0 && sx < PATCH && sy >= 0 && sy < PATCH) {
-                acc += kernel[kx] * kernel[ky] * coverage[sy * PATCH + sx];
-              }
-            }
-          }
-          pred[base + v * PATCH + u] = polarity === 1 ? 1 - (1 - INK_ON_LIGHT) * acc : PINK_ON_DARK * acc;
-        }
+/**
+ * The two-means threshold of the first `count` values: start at their mean, then move to the
+ * midpoint of the means of the values above and at or below the threshold, at most eight times,
+ * stopping when it moves less than 1e-4 or one side is empty. Sums run in the order given.
+ * Exported for tests only.
+ */
+export function twoMeans(values, count = values.length) {
+  let sum = -0;
+  for (let index = 0; index < count; index += 1) sum += values[index];
+  let threshold = sum / count;
+  for (let round = 0; round < 8; round += 1) {
+    let low = 0;
+    let lows = 0;
+    let high = 0;
+    let highs = 0;
+    for (let index = 0; index < count; index += 1) {
+      const value = values[index];
+      if (value > threshold) {
+        high += value;
+        highs += 1;
+      } else {
+        low += value;
+        lows += 1;
       }
     }
+    if (lows === 0 || highs === 0) {
+      break;
+    }
+    const next = 0.5 * (low / lows + high / highs);
+    const moved = Math.abs(next - threshold);
+    threshold = next;
+    if (moved < 1e-4) {
+      break;
+    }
   }
-  return pred;
+  return threshold;
 }
 
 /**
- * The templates of one blur width, cached per width. With `rescaled` every template is
- * rescaled by its own contrast like the patches of the normalised read.
+ * The level of every field cell under one pose, normalised by the finder levels; written to
+ * `out` (allocated when omitted) and returned. Exported for tests only.
  */
-function patternsFor(sigma, rescaled) {
-  const cache = rescaled ? rescaledPatternCache : patternCache;
-  const cached = cache.get(sigma);
-  if (cached !== undefined) {
-    return cached;
-  }
-  let pred;
-  if (rescaled) {
-    const plain = patternsFor(sigma, false);
-    pred = new Float64Array(plain.length);
-    for (let hypothesis = 0; hypothesis < HYPOTHESES; hypothesis += 1) {
-      rescale(plain, hypothesis * CELLS, TEMPLATE_SPAN_FLOOR, pred);
-    }
-  } else {
-    pred = buildPatterns(sigma);
-  }
-  if (cache.size >= 16) {
-    cache.clear();
-  }
-  cache.set(sigma, pred);
-  return pred;
-}
-
-function newReads() {
-  return {
-    light: new Uint8Array(TILE_COUNT),
-    glyph: new Uint8Array(TILE_COUNT),
-    polarityMargin: new Float64Array(TILE_COUNT),
-    glyphMargin: new Float64Array(TILE_COUNT),
-    error: new Float64Array(TILE_COUNT),
-    count: 0,
-  };
-}
-
-const PATCHES = new Float64Array(TILE_COUNT * CELLS);
-const WORK = new Float64Array(TILE_COUNT * CELLS);
-const SORTED = new Float64Array(CELLS);
-const SPANS = new Float64Array(TILE_COUNT);
-const SPANS_SORTED = new Float64Array(TILE_COUNT);
-const ERASED = new Uint8Array(TILE_COUNT);
-const ERRORS = new Float64Array(HYPOTHESES);
-const PATCH_OFFSETS = Float64Array.of(-0.25, -0.25, 0.25, -0.25, -0.25, 0.25, 0.25, 0.25);
-
-/**
- * The raw 8x8 luma patch of every tile, as captured (no reference levels applied): each of the
- * 64 cells is the mean of four bilinear samples at +-1/4 cell. Writes `256 * 64` values, tile by
- * tile and row by row, into `out` (allocated when omitted) and returns it. Exported for tests
- * only.
- */
-export function samplePatches(image, m, out = new Float64Array(TILE_COUNT * CELLS)) {
-  const half = GLYPH_BOX / 2;
-  const cell = GLYPH_BOX / PATCH;
-  for (let tile = 0; tile < TILE_COUNT; tile += 1) {
-    const cx = TILE_CENTER_X[tile];
-    const cy = TILE_CENTER_Y[tile];
-    for (let v = 0; v < PATCH; v += 1) {
-      for (let u = 0; u < PATCH; u += 1) {
-        const gx = cx - half + (u + 0.5) * cell;
-        const gy = cy - half + (v + 0.5) * cell;
-        let sum = 0;
-        for (let o = 0; o < 8; o += 2) {
-          sum += sampleCanvas(image, m, gx + PATCH_OFFSETS[o] * cell, gy + PATCH_OFFSETS[o + 1] * cell);
-        }
-        out[tile * CELLS + v * PATCH + u] = sum / 4;
-      }
-    }
+export function fieldLevels(image, pose, reference, out = new Float64Array(FIELD_CELLS)) {
+  const lit = reference.lit;
+  const dark = reference.dark;
+  for (let cell = 0; cell < FIELD_CELLS; cell += 1) {
+    const u = CELL_U[cell];
+    const v = CELL_V[cell];
+    const cellLit = mixCorners(lit, u, v);
+    const cellDark = mixCorners(dark, u, v);
+    out[cell] = (dotSamples(image, pose, CELL_CENTER_X[cell], CELL_CENTER_Y[cell], PETAL_SPREAD) - cellDark) / (cellLit - cellDark);
   }
   return out;
 }
 
-/** Sorts the 64 cells of the patch at `values[offset]` ascending into `SORTED` (`total_cmp` order). */
-function sortCells(values, offset) {
-  for (let c = 0; c < CELLS; c += 1) SORTED[c] = values[offset + c];
-  SORTED.sort();
-}
+let neighbourTable = null;
 
 /**
- * The robust darkest and brightest level of a patch, `[low, high]`: the values `PATCH_CUT` cells
- * in from either end of the sorted cells. Exported for tests only.
+ * The neighbourhood of every field cell: the cells (itself included) whose centres lie within
+ * `NEIGHBOURHOOD` units, in index order, as `cells[start[c] .. start[c + 1]]`. Bands are 11
+ * units apart, so only the three bands on either side can hold neighbours. Built on first use.
+ * Exported for tests only.
  */
-export function patchLevels(values, offset = 0) {
-  sortCells(values, offset);
-  return [SORTED[PATCH_CUT], SORTED[CELLS - 1 - PATCH_CUT]];
-}
-
-/**
- * Maps the darkest level of the patch at `values[offset]` to 0 and its brightest to 1, with
- * `floor` as the smallest span that counts as contrast, clamped to [-0.25, 1.25]; writes the 64
- * results to `out[offset]` (`out` may be `values`) and returns the span `high - low` before the
- * floor. Exported for tests only.
- */
-export function rescale(values, offset, floor, out) {
-  sortCells(values, offset);
-  const low = SORTED[PATCH_CUT];
-  const high = SORTED[CELLS - 1 - PATCH_CUT];
-  const range = fmax(high - low, floor);
-  for (let c = 0; c < CELLS; c += 1) {
-    out[offset + c] = clamp((values[offset + c] - low) / range, -0.25, 1.25);
-  }
-  return high - low;
-}
-
-/**
- * Picks for every patch the polarity and glyph whose template matches best.
- *
- * The template blur is chosen per frame, by the lowest total error. With `rescaleTemplates` the
- * templates are rescaled like the patches; tiles flagged in `erased` (a byte per tile, or `null`
- * for none) get zero margins, so they are the first the Reed-Solomon decoder treats as erasures.
- */
-function classify(patches, sigmas, rescaleTemplates, erased) {
-  let bestTotal = Number.MAX_VALUE;
-  let best = newReads();
-  let reads = newReads();
-  for (const sigma of sigmas) {
-    const pred = patternsFor(sigma, rescaleTemplates);
+export function neighbourhoods() {
+  if (neighbourTable === null) {
+    const start = new Uint32Array(FIELD_CELLS + 1);
+    const lists = [];
     let total = 0;
-    for (let tile = 0; tile < TILE_COUNT; tile += 1) {
-      const patchBase = tile * CELLS;
-      for (let hypothesis = 0; hypothesis < HYPOTHESES; hypothesis += 1) {
-        const predBase = hypothesis * CELLS;
-        let error = 0;
-        for (let c = 0; c < CELLS; c += 1) {
-          const d = patches[patchBase + c] - pred[predBase + c];
-          error += d * d;
-        }
-        ERRORS[hypothesis] = error;
-      }
-      let bestHypothesis = 0;
-      for (let hypothesis = 1; hypothesis < HYPOTHESES; hypothesis += 1) {
-        if (totalCmp(ERRORS[hypothesis], ERRORS[bestHypothesis]) < 0) {
-          bestHypothesis = hypothesis;
+    let longest = 0;
+    for (let cell = 0; cell < FIELD_CELLS; cell += 1) {
+      const x = CELL_CENTER_X[cell];
+      const y = CELL_CENTER_Y[cell];
+      const band = CELL_BAND[cell];
+      const first = BAND_OFFSETS[Math.max(band - 3, 0)];
+      const last = BAND_OFFSETS[Math.min(band + 4, BAND_COUNT)];
+      const around = [];
+      for (let other = first; other < last; other += 1) {
+        const dx = CELL_CENTER_X[other] - x;
+        const dy = CELL_CENTER_Y[other] - y;
+        if (dx * dx + dy * dy <= NEIGHBOURHOOD * NEIGHBOURHOOD) {
+          around.push(other);
         }
       }
-      const polarity = bestHypothesis >> 4;
-      const glyph = bestHypothesis & 15;
-      const bestError = ERRORS[bestHypothesis];
-      let otherPolarity = Number.MAX_VALUE;
-      for (let g = 0; g < GLYPH_COUNT; g += 1) {
-        otherPolarity = fmin(otherPolarity, ERRORS[(1 - polarity) * GLYPH_COUNT + g]);
-      }
-      let otherGlyph = Number.MAX_VALUE;
-      for (let g = 0; g < GLYPH_COUNT; g += 1) {
-        if (g !== glyph) otherGlyph = fmin(otherGlyph, ERRORS[polarity * GLYPH_COUNT + g]);
-      }
-      total += bestError;
-      const unreadable = erased !== null && erased[tile] === 1;
-      reads.light[tile] = polarity;
-      reads.glyph[tile] = glyph;
-      reads.polarityMargin[tile] = unreadable ? 0 : otherPolarity - bestError;
-      reads.glyphMargin[tile] = unreadable ? 0 : otherGlyph - bestError;
-      reads.error[tile] = bestError;
+      start[cell] = total;
+      total += around.length;
+      longest = Math.max(longest, around.length);
+      lists.push(around);
     }
-    reads.count = TILE_COUNT;
-    if (total < bestTotal) {
-      bestTotal = total;
-      const swap = best;
-      best = reads;
-      reads = swap;
-    }
+    start[FIELD_CELLS] = total;
+    const cells = new Uint16Array(total);
+    lists.forEach((around, cell) => cells.set(around, start[cell]));
+    const sorted = new Float64Array(longest);
+    // one view per neighbourhood size, so sorting a neighbourhood allocates nothing
+    const views = Array.from({ length: longest + 1 }, (_, length) => sorted.subarray(0, length));
+    neighbourTable = Object.freeze({ start, cells, sorted, views });
   }
-  return best;
+  return neighbourTable;
 }
 
 /**
- * The level read: every patch is judged against the light and dark levels measured at the
- * finders, interpolated to the tile. `patches` is the output of {@link samplePatches}. Exported
- * for tests only.
+ * Cell levels rescaled by their neighbourhood: the mean of the lowest and of the highest
+ * `NEIGHBOURHOOD_ENDS` levels around a cell become 0 and 1 (a span below 0.05 counts as 0.05).
+ * About half the petals around any cell are lit, so shadows, glare, banding and veiling light,
+ * which the finder levels cannot describe, cancel. Writes to `out` (allocated when omitted) and
+ * returns it. Exported for tests only.
  */
-export function readTiles(patches, reference, sigmas) {
-  for (let tile = 0; tile < TILE_COUNT; tile += 1) {
-    const u = clampUnit(TILE_CENTER_X[tile] / 1024);
-    const v = clampUnit(TILE_CENTER_Y[tile] / 1024);
-    const lit = mixCorners(reference.lit, u, v);
-    const dark = mixCorners(reference.dark, u, v);
-    const base = tile * CELLS;
-    for (let c = 0; c < CELLS; c += 1) {
-      WORK[base + c] = (patches[base + c] - dark) / (lit - dark);
-    }
+export function localLevels(levels, out = new Float64Array(FIELD_CELLS)) {
+  const { start, cells, views } = neighbourhoods();
+  for (let cell = 0; cell < FIELD_CELLS; cell += 1) {
+    const begin = start[cell];
+    const length = start[cell + 1] - begin;
+    const values = views[length];
+    for (let index = 0; index < length; index += 1) values[index] = levels[cells[begin + index]];
+    // ascending, -0 before +0 and NaN last: the reference's `total_cmp` order
+    values.sort();
+    const ends = Math.max(Math.min(NEIGHBOURHOOD_ENDS, Math.floor(length / 2)), 1);
+    let low = -0;
+    for (let index = 0; index < ends; index += 1) low += values[index];
+    low /= ends;
+    let high = -0;
+    for (let index = length - ends; index < length; index += 1) high += values[index];
+    high /= ends;
+    out[cell] = (levels[cell] - low) / fmax(high - low, 0.05);
   }
-  return classify(WORK, sigmas, false, null);
+  return out;
 }
 
-/** Raw tile patches and finder levels from one independently decoded capture. */
-export function tileEvidence(image, frame, options = DEFAULT_DECODE_OPTIONS) {
-  if (!isDecodable(image, options) || (frame.inferredCorner !== null &&
-      (!Number.isInteger(frame.inferredCorner) || frame.inferredCorner < 0 || frame.inferredCorner > 3))) {
+// Bit positions (within a sector's 840 bit cells) of the light and the pink cells.
+const SECTOR_CLASSES = Object.freeze(
+  SECTOR_CELL_LIST.map((order) => {
+    const light = [];
+    const pink = [];
+    for (let bit = 0; bit < FIELD_BITS; bit += 1) {
+      (CELL_LIGHT[order[bit]] === 1 ? light : pink).push(bit);
+    }
+    return Object.freeze({ light: Uint16Array.from(light), pink: Uint16Array.from(pink) });
+  }),
+);
+
+const SECTOR_VALUES = new Float64Array(FIELD_BITS);
+const CLASS_VALUES = new Float64Array(FIELD_BITS);
+const NO_SKIP = Object.freeze([false, false, false, false]);
+
+/** The two-means threshold of one colour class of a sector, or `all` when the class is small. */
+function classThreshold(members, all) {
+  if (members.length < CLASS_MIN_CELLS) {
+    return all;
+  }
+  for (let index = 0; index < members.length; index += 1) CLASS_VALUES[index] = SECTOR_VALUES[members[index]];
+  return twoMeans(CLASS_VALUES, members.length);
+}
+
+/**
+ * The transmitted word of one sector read from cell levels with per-colour thresholds, written to
+ * `bytes`, and each byte's confidence (the smallest margin of its bits), written to `confidence`.
+ * Every bit's margin from its threshold is added to the running sum `margins`, which is returned.
+ */
+function readWord(levels, sector, bytes, confidence, margins) {
+  const order = SECTOR_CELL_LIST[sector];
+  for (let bit = 0; bit < FIELD_BITS; bit += 1) SECTOR_VALUES[bit] = levels[order[bit]];
+  const all = twoMeans(SECTOR_VALUES, FIELD_BITS);
+  // the light (`天`) and pink petals are thresholded apart: their lit levels differ
+  const classes = SECTOR_CLASSES[sector];
+  const lightThreshold = classThreshold(classes.light, all);
+  const pinkThreshold = classThreshold(classes.pink, all);
+  bytes.fill(0);
+  confidence.fill(Number.MAX_VALUE);
+  let sum = margins;
+  for (let bit = 0; bit < FIELD_BITS; bit += 1) {
+    const value = SECTOR_VALUES[bit];
+    const threshold = CELL_LIGHT[order[bit]] === 1 ? lightThreshold : pinkThreshold;
+    if (value > threshold) {
+      bytes[bit >> 3] |= 1 << (7 - (bit & 7));
+    }
+    const margin = Math.abs(value - threshold);
+    sum += margin;
+    confidence[bit >> 3] = fmin(confidence[bit >> 3], margin);
+  }
+  return sum;
+}
+
+/**
+ * One read of the field lanes from cell levels with per-codeword, per-colour thresholds,
+ * skipping the sectors flagged in `skip`. Writes a lane result or `null` for every sector to
+ * `results` and returns how far the cells sit from their thresholds on average (a pose that lands
+ * on the petals separates lit from dark cells best). Exported for tests only.
+ */
+export function readSectors(levels, skip, results) {
+  let separation = 0;
+  let counted = 0;
+  for (let sector = 0; sector < SECTORS; sector += 1) {
+    results[sector] = null;
+    if (skip[sector]) {
+      continue;
+    }
+    const bytes = new Uint8Array(FIELD_WORD);
+    const confidence = new Float64Array(FIELD_WORD);
+    separation = readWord(levels, sector, bytes, confidence, separation);
+    counted += FIELD_BITS;
+    results[sector] = decodeWithErasures(FIELD_LANES[sector], bytes, confidence);
+  }
+  return separation / Math.max(counted, 1);
+}
+
+const LEVELS_LOCAL = new Float64Array(FIELD_CELLS);
+
+/**
+ * The field lanes read from normalised cell levels, skipping the sectors in `skip`; sectors the
+ * levels leave unread are read again from their `localLevels`. Writes the results to `results`
+ * and returns the separation of the first read. Exported for tests only.
+ */
+export function readFields(levels, skip, results) {
+  const separation = readSectors(levels, skip, results);
+  const retrySkip = [true, true, true, true];
+  let unread = false;
+  for (let sector = 0; sector < SECTORS; sector += 1) {
+    if (!skip[sector] && results[sector] === null) {
+      retrySkip[sector] = false;
+      unread = true;
+    }
+  }
+  if (unread) {
+    const retry = [null, null, null, null];
+    readSectors(localLevels(levels, LEVELS_LOCAL), retrySkip, retry);
+    for (let sector = 0; sector < SECTORS; sector += 1) {
+      if (results[sector] === null) results[sector] = retry[sector];
+    }
+  }
+  return separation;
+}
+
+function countDecoded(fields) {
+  let decoded = 0;
+  for (const field of fields) if (field !== null) decoded += 1;
+  return decoded;
+}
+
+/** More lanes, then a clearer separation. */
+function betterThan(read, other) {
+  return read.decoded > other.decoded || (read.decoded === other.decoded && read.separation > other.separation);
+}
+
+// Level buffers of the reads under way: the plain read of a hypothesis and the best and the
+// current pose of a distortion search. A decode works through them one at a time.
+const LEVELS_PLAIN = new Float64Array(FIELD_CELLS);
+const LEVELS_BEST = new Float64Array(FIELD_CELLS);
+const LEVELS_TRIAL = new Float64Array(FIELD_CELLS);
+
+/**
+ * A read of the field under one pose (no local read): `{pose, reference, levels, fields,
+ * decoded, separation}` with the levels in `levels`, or `null` when the pose or the reference
+ * levels fail.
+ */
+function readFieldAt(image, dstX, dstY, distortion, inferred, levels) {
+  const pose = fitCanonical(image, dstX, dstY, distortion);
+  if (pose === null) {
     return null;
   }
-  const m = frame.homography.values;
-  const reference = referenceLevels(image, m, frame.inferredCorner);
-  return reference === null ? null : { patches: samplePatches(image, m), reference };
+  const reference = referenceLevels(image, pose, inferred);
+  if (reference === null) {
+    return null;
+  }
+  fieldLevels(image, pose, reference, levels);
+  const fields = [null, null, null, null];
+  const separation = readSectors(levels, NO_SKIP, fields);
+  return { pose, reference, levels, fields, decoded: countDecoded(fields), separation };
 }
 
-/** Finder-level-normalised patches, with each capture levelled before it is averaged. */
-function levelledPatches(patches, reference) {
-  const out = new Float64Array(TILE_COUNT * CELLS);
-  for (let tile = 0; tile < TILE_COUNT; tile += 1) {
-    const u = clampUnit(TILE_CENTER_X[tile] / 1024);
-    const v = clampUnit(TILE_CENTER_Y[tile] / 1024);
-    const lit = mixCorners(reference.lit, u, v);
-    const dark = mixCorners(reference.dark, u, v);
-    const base = tile * CELLS;
-    for (let c = 0; c < CELLS; c += 1) {
-      out[base + c] = (patches[base + c] - dark) / (lit - dark);
+/** Reads the sectors a field read left unread again from its `localLevels`. */
+function finishRead(read) {
+  if (read.decoded < SECTORS) {
+    const skip = read.fields.map((field) => field !== null);
+    const retry = [null, null, null, null];
+    readSectors(localLevels(read.levels, LEVELS_LOCAL), skip, retry);
+    for (let sector = 0; sector < SECTORS; sector += 1) {
+      if (read.fields[sector] === null) read.fields[sector] = retry[sector];
     }
+    read.decoded = countDecoded(read.fields);
   }
-  return out;
-}
-
-/** Sequential cell-by-cell mean, matching the reference's floating-point sum order. */
-function meanPatches(sets) {
-  const mean = new Float64Array(TILE_COUNT * CELLS);
-  for (const set of sets) {
-    for (let i = 0; i < mean.length; i += 1) mean[i] += set[i];
-  }
-  for (let i = 0; i < mean.length; i += 1) mean[i] /= sets.length;
-  return mean;
-}
-
-/** Tile lanes recovered from captures of one shown frame; the caller checks lane headers. */
-export function mergeTiles(evidence, options = DEFAULT_DECODE_OPTIONS) {
-  if (evidence.length === 0) return { p: null, k: null };
-  const levelled = meanPatches(evidence.map((e) => levelledPatches(e.patches, e.reference)));
-  let words = tileWords(classify(levelled, options.templateSigmas, false, null));
-  let p = decodeWithErasures("P", words.p, words.pConfidence);
-  let k = decodeWithErasures("K", words.k, words.kConfidence);
-  if (p === null || k === null) {
-    const raw = meanPatches(evidence.map((e) => e.patches));
-    words = tileWords(readTilesNormalised(raw, options.templateSigmas));
-    if (p === null) p = decodeWithErasures("P", words.p, words.pConfidence);
-    if (k === null) k = decodeWithErasures("K", words.k, words.kConfidence);
-  }
-  return { p, k };
+  return read;
 }
 
 /**
- * The normalised read: every patch and every template is rescaled by its own contrast before
- * they are compared, so the judgement does not depend on absolute levels. Tiles whose contrast
- * is below `WEAK_TILE` times the median contrast are erased. Exported for tests only.
+ * Reads the field through the finder centres `(dstX[i], dstY[i])`, starting from lens distortion
+ * `start`, and searches the distortion while some field lane stays unread: `start` plus each of
+ * `DISTORTION_STEPS` in turn, then the best +-`DISTORTION_REFINE`. The pose that decodes the most
+ * lanes wins (ties: the clearer separation); the search stops once every lane decodes. Lanes the
+ * winning pose still leaves unread are read again from its `localLevels`.
  */
-export function readTilesNormalised(patches, sigmas) {
-  for (let tile = 0; tile < TILE_COUNT; tile += 1) {
-    SPANS[tile] = rescale(patches, tile * CELLS, PATCH_SPAN_FLOOR, WORK);
+function readFieldSearching(image, dstX, dstY, start, inferred) {
+  let best = readFieldAt(image, dstX, dstY, start, inferred, LEVELS_BEST);
+  if (best === null) {
+    return null;
   }
-  SPANS_SORTED.set(SPANS);
-  SPANS_SORTED.sort();
-  const median = SPANS_SORTED[TILE_COUNT >> 1];
-  for (let tile = 0; tile < TILE_COUNT; tile += 1) {
-    ERASED[tile] = SPANS[tile] < WEAK_TILE * median ? 1 : 0;
+  if (best.decoded === SECTORS) {
+    return best;
   }
-  return classify(WORK, sigmas, true, ERASED);
+  let spare = LEVELS_TRIAL;
+  for (const step of DISTORTION_STEPS) {
+    const read = readFieldAt(image, dstX, dstY, start + step, inferred, spare);
+    if (read !== null && betterThan(read, best)) {
+      spare = best.levels;
+      best = read;
+      if (best.decoded === SECTORS) {
+        return best;
+      }
+    }
+  }
+  const centre = best.pose.distortion;
+  for (const k of [centre - DISTORTION_REFINE, centre + DISTORTION_REFINE]) {
+    const read = readFieldAt(image, dstX, dstY, k, inferred, spare);
+    if (read !== null && betterThan(read, best)) {
+      spare = best.levels;
+      best = read;
+    }
+  }
+  return finishRead(best);
 }
 
 /**
- * Packs tile reads into lane P and K words with per-byte confidence. Exported for tests only.
- */
-export function tileWords(reads) {
-  const p = new Uint8Array(P_WORD);
-  const pConfidence = new Float64Array(P_WORD).fill(Number.MAX_VALUE);
-  const k = new Uint8Array(K_WORD);
-  const kConfidence = new Float64Array(K_WORD).fill(Number.MAX_VALUE);
-  for (let tile = 0; tile < reads.count; tile += 1) {
-    if (reads.light[tile] === 1) {
-      p[tile >> 3] |= 1 << (7 - (tile & 7));
-    }
-    pConfidence[tile >> 3] = fmin(pConfidence[tile >> 3], reads.polarityMargin[tile]);
-    k[tile >> 1] |= (tile & 1) === 0 ? reads.glyph[tile] << 4 : reads.glyph[tile];
-    kConfidence[tile >> 1] = fmin(kConfidence[tile >> 1], fmin(reads.glyphMargin[tile], reads.polarityMargin[tile]));
-  }
-  return { p, pConfidence, k, kConfidence };
-}
-
-/**
- * Lanes P and K from one set of patches: the level read first, then, for any lane still
- * unreadable, the normalised read. Returns `{p, k}` (each a lane result or `null`). Exported for
- * tests only.
- */
-export function readTileLanes(patches, reference, sigmas) {
-  let words = tileWords(readTiles(patches, reference, sigmas));
-  let p = decodeWithErasures("P", words.p, words.pConfidence);
-  let k = decodeWithErasures("K", words.k, words.kConfidence);
-  if (p === null || k === null) {
-    words = tileWords(readTilesNormalised(patches, sigmas));
-    if (p === null) {
-      p = decodeWithErasures("P", words.p, words.pConfidence);
-    }
-    if (k === null) {
-      k = decodeWithErasures("K", words.k, words.kConfidence);
-    }
-  }
-  return { p, k };
-}
-
-/**
- * The orientation hypotheses `{rotation, mirrored, m}` of a finder quad: four quarter turns, and
- * four mirrored ones when `tryMirrored`. Exported for tests only.
+ * The orientation hypotheses `{rotation, mirrored, dstX, dstY}` of a finder quad: four quarter
+ * turns, and four mirrored ones when `tryMirrored`, each with the finder centres in canonical
+ * corner order. Exported for tests only.
  */
 export function hypotheses(finders, tryMirrored) {
-  const srcX = CANONICAL_X;
-  const srcY = CANONICAL_Y;
   const out = [];
   for (const mirrored of [false, true]) {
     if (mirrored && !tryMirrored) {
@@ -779,30 +738,32 @@ export function hypotheses(finders, tryMirrored) {
         dstX[i] = q.x;
         dstY[i] = q.y;
       }
-      const m = homographyFromPoints(srcX, srcY, dstX, dstY);
-      if (m !== null) {
-        out.push({ rotation, mirrored, m });
-      }
+      out.push({ rotation, mirrored, dstX, dstY });
     }
   }
   return out;
 }
 
+function freezeFields(fields) {
+  if (!Array.isArray(fields) || fields.length !== SECTORS) {
+    throw new TypeError("fields must hold one result (or null) per field lane");
+  }
+  return Object.freeze(fields.slice());
+}
+
 /** Everything read from one camera frame. */
 export class PetalDecodedFrame {
-  constructor(homography, rotation, mirrored, p, k, d, inferredCorner) {
-    /** Canvas-to-pixel homography that was used. */
-    this.homography = homography;
+  constructor(pose, rotation, mirrored, d, fields, inferredCorner) {
+    /** Canvas-to-pixel pose that was used (`PetalPose`). */
+    this.pose = pose;
     /** Orientation: how many quarter turns the code is rotated. */
     this.rotation = rotation;
     /** Whether the image was mirrored. */
     this.mirrored = mirrored;
-    /** Lane P result (`{data, corrected, erasures}`) or `null`. */
-    this.p = p;
-    /** Lane K result or `null`. */
-    this.k = k;
-    /** Lane D result or `null`. */
+    /** Lane D result (`{data, corrected, erasures}`) or `null`. */
     this.d = d;
+    /** Field lane results (or `null`), sector 0 first. */
+    this.fields = freezeFields(fields);
     /**
      * The corner finder that was hidden (by a finger, a glare or the edge of the frame) and
      * inferred from the other three, as its canonical index: 0 top-left, 1 top-right,
@@ -814,7 +775,22 @@ export class PetalDecodedFrame {
 
   /** Number of lanes that decoded. */
   lanesOk() {
-    return (this.p !== null ? 1 : 0) + (this.k !== null ? 1 : 0) + (this.d !== null ? 1 : 0);
+    return (this.d !== null ? 1 : 0) + countDecoded(this.fields);
+  }
+
+  /** The result of `lane` (`"D"` or `"F0"` ... `"F3"`), or `null` when it did not decode. */
+  lane(lane) {
+    const spec = laneSpec(lane);
+    return spec.sector === null ? this.d : this.fields[spec.sector];
+  }
+
+  /** The lanes that decoded, as letters: `D` and the sector digits `0`-`3`. */
+  letters() {
+    let letters = "";
+    for (const lane of LANE_ORDER) {
+      if (this.lane(lane) !== null) letters += laneLetter(lane);
+    }
+    return letters;
   }
 
   /** What lane D carried, when it decoded (see `parseDLane`). */
@@ -828,17 +804,14 @@ export class PetalDecodedFrame {
     return lane !== null && lane.type === "beacon" ? lane.beacon : null;
   }
 
-  /** Atom packets from every lane that decoded (P, K, then D). */
+  /** Atom packets from every lane that decoded (the field lanes, then D). */
   atomPackets() {
     const packets = [];
-    if (this.p !== null) {
-      const packet = parseAtomLane("P", this.p.data);
+    FIELD_LANES.forEach((lane, sector) => {
+      const result = this.fields[sector];
+      const packet = result === null ? null : parseAtomLane(lane, result.data);
       if (packet !== null) packets.push(packet);
-    }
-    if (this.k !== null) {
-      const packet = parseAtomLane("K", this.k.data);
-      if (packet !== null) packets.push(packet);
-    }
+    });
     const lane = this.dLane();
     if (lane !== null && lane.type === "atoms") {
       packets.push(lane.packet);
@@ -846,41 +819,35 @@ export class PetalDecodedFrame {
     return packets;
   }
 
-  /** Offers everything this frame carries to `assembler` (D first, then P and K). */
+  /** Offers everything this frame carries to `assembler` (D first, then the field lanes). */
   feed(assembler) {
     const lane = this.dLane();
     if (lane !== null) {
       assembler.pushDLane(lane);
     }
-    if (this.p !== null) {
-      const packet = parseAtomLane("P", this.p.data);
+    FIELD_LANES.forEach((name, sector) => {
+      const result = this.fields[sector];
+      const packet = result === null ? null : parseAtomLane(name, result.data);
       if (packet !== null) assembler.pushAtoms(packet);
-    }
-    if (this.k !== null) {
-      const packet = parseAtomLane("K", this.k.data);
-      if (packet !== null) assembler.pushAtoms(packet);
-    }
+    });
   }
 }
 
 /**
- * Reads every lane under one orientation. `d` (an already decoded lane D, or
- * `null`) skips work the caller has done; the result is identical either way
- * because every read is a pure function of its inputs.
+ * What one capture shows of a frame's petal field: the level of every field cell sampled under
+ * the capture's decoded pose and normalised by that capture's finder levels. Captures of one
+ * shown frame merge with {@link mergeFields}. One evidence holds about 27 KB.
  */
-function finish(image, options, candidate, d, inferredCorner) {
-  const laneD = d !== null ? d : readLaneD(image, candidate.m, candidate.reference);
-  const patches = samplePatches(image, candidate.m, PATCHES);
-  const tiles = readTileLanes(patches, candidate.reference, options.templateSigmas);
-  return new PetalDecodedFrame(
-    new PetalHomography(candidate.m),
-    candidate.rotation,
-    candidate.mirrored,
-    tiles.p,
-    tiles.k,
-    laneD,
-    inferredCorner,
-  );
+export class PetalFieldEvidence {
+  /** @param {ArrayLike<number>} levels the normalised level of each of the 3,376 field cells */
+  constructor(levels) {
+    if (levels === null || typeof levels !== "object" || levels.length !== FIELD_CELLS) {
+      throw new TypeError(`field evidence holds exactly ${FIELD_CELLS} cell levels`);
+    }
+    /** The normalised level of every field cell. */
+    this.levels = levels instanceof Float64Array ? levels : Float64Array.from(levels);
+    Object.freeze(this);
+  }
 }
 
 function isByteArray(value) {
@@ -914,6 +881,18 @@ function isDecodable(image, options) {
   );
 }
 
+/** Whether `corner` is a corner a decoded frame may name: `null` or `0..3`. */
+function isCorner(corner) {
+  return corner === null || (Number.isInteger(corner) && corner >= 0 && corner < 4);
+}
+
+function requirePose(pose, name) {
+  if (!(pose instanceof PetalPose)) {
+    throw new TypeError(`${name} must be a PetalPose`);
+  }
+  return pose;
+}
+
 /**
  * Decodes one frame; returns `{frame}` or `{error}` with a `PetalError` code.
  * Shared by `decodePetalFrame` and the scan session.
@@ -938,54 +917,77 @@ export function decodeFrameResult(image, options) {
 }
 
 /**
- * One finder set: an inferred corner is first refined against the rings; the
- * orientation hypotheses are ranked by gate score plus `天` score; lane D is
- * tried under the best three whose gate score is at least 0.2, then the tile
- * lanes under the best four.
+ * One finder set: an inferred corner is first refined against the rings; the orientation
+ * hypotheses are ranked by gate score under their plain poses; lane D is tried under the best
+ * three whose gate score is at least 0.2 (the field is then read with the distortion search), then
+ * the field lanes under the best four.
  */
 function decodeCandidate(image, options, set) {
   const corners = set.inferred === null ? set.corners : refineInferredCorner(image, set.corners, set.inferred);
-  const inferredCorner = (rotation, mirrored) =>
+  const inferredAt = (rotation, mirrored) =>
     set.inferred === null ? null : canonicalCorner(set.inferred, rotation, mirrored);
   const scored = [];
   for (const hypothesis of hypotheses(corners, options.tryMirrored)) {
-    const reference = referenceLevels(image, hypothesis.m, inferredCorner(hypothesis.rotation, hypothesis.mirrored));
+    const pose = fitCanonical(image, hypothesis.dstX, hypothesis.dstY, 0);
+    if (pose === null) continue;
+    const reference = referenceLevels(image, pose, inferredAt(hypothesis.rotation, hypothesis.mirrored));
     if (reference === null) continue;
-    scored.push({
-      ...hypothesis,
-      reference,
-      gate: gateScore(image, hypothesis.m, reference),
-      mask: maskScore(image, hypothesis.m, reference),
-    });
+    scored.push({ ...hypothesis, pose, reference, gate: gateScore(image, pose, reference) });
   }
   // a stable sort, like the reference's
-  scored.sort((a, b) => totalCmp(b.gate + b.mask, a.gate + a.mask));
-  // 1. the ring beacon is the cheapest and strongest orientation check; the
-  // ranking is not by gate score, so a weak gate skips to the next hypothesis
+  scored.sort((a, b) => totalCmp(b.gate, a.gate));
+  // 1. the ring beacon is the cheapest and strongest orientation check
   for (const candidate of scored.slice(0, 3)) {
     if (candidate.gate < 0.2) {
       continue;
     }
-    const d = readLaneD(image, candidate.m, candidate.reference);
+    const d = readLaneD(image, candidate.pose, candidate.reference);
     if (d !== null) {
-      return finish(image, options, candidate, d, inferredCorner(candidate.rotation, candidate.mirrored));
-    }
-  }
-  // 2. fall back to the tile lanes under the most promising orientations
-  for (const candidate of scored.slice(0, 4)) {
-    const patches = samplePatches(image, candidate.m, PATCHES);
-    const tiles = readTileLanes(patches, candidate.reference, options.templateSigmas);
-    if (tiles.p !== null || tiles.k !== null) {
+      const inferred = inferredAt(candidate.rotation, candidate.mirrored);
+      const read = readFieldSearching(image, candidate.dstX, candidate.dstY, 0, inferred);
       return new PetalDecodedFrame(
-        new PetalHomography(candidate.m),
+        read === null ? candidate.pose : read.pose,
         candidate.rotation,
         candidate.mirrored,
-        tiles.p,
-        tiles.k,
-        readLaneD(image, candidate.m, candidate.reference),
-        inferredCorner(candidate.rotation, candidate.mirrored),
+        d,
+        read === null ? [null, null, null, null] : read.fields,
+        inferred,
       );
     }
+  }
+  // 2. fall back to the field lanes under the most promising orientations: a wrong orientation
+  //    reads permuted petals, which no field codeword accepts. Strong lens distortion can hide
+  //    both lane D and the field from a plain pose, so the distortion is searched under the best
+  //    orientation whose gates line up even when its plain pose reads nothing.
+  const fallbacks = scored.slice(0, 4);
+  for (let index = 0; index < fallbacks.length; index += 1) {
+    const candidate = fallbacks[index];
+    const inferred = inferredAt(candidate.rotation, candidate.mirrored);
+    const plain = readFieldAt(image, candidate.dstX, candidate.dstY, 0, inferred, LEVELS_PLAIN);
+    if (plain === null) {
+      continue;
+    }
+    const confident = index === 0 && candidate.gate >= 0.2;
+    // the local read costs a sort per cell: only the best orientation gets it for free
+    let read;
+    if (plain.decoded === SECTORS) {
+      read = plain;
+    } else if (plain.decoded === 0 && !confident) {
+      read = index === 0 ? finishRead(plain) : plain;
+    } else {
+      read = readFieldSearching(image, candidate.dstX, candidate.dstY, 0, inferred) ?? finishRead(plain);
+    }
+    if (read.decoded === 0) {
+      continue;
+    }
+    return new PetalDecodedFrame(
+      read.pose,
+      candidate.rotation,
+      candidate.mirrored,
+      readLaneD(image, read.pose, read.reference),
+      read.fields,
+      inferred,
+    );
   }
   return null;
 }
@@ -993,17 +995,16 @@ function decodeCandidate(image, options, set) {
 /**
  * Decodes one camera frame.
  *
- * The finder candidates are tried in order: four corner blossoms, or three
- * that form a corner with the fourth inferred (hidden by a finger, a glare or
- * the edge of the frame; reported in `inferredCorner`). Orientations are
- * ranked by the ring gates plus the `天`. Lanes P and K are read against the
- * light and dark levels measured at the finders first; a lane that does not
- * decode that way is re-read with a normalised read that rescales every tile
- * by its own contrast (over-exposure, veiling light, glare and shadows
- * cancel). An orientation is accepted when lane D, P or K decodes.
+ * The finder candidates are tried in order: four corner blossoms, or three that form a corner
+ * with the fourth inferred (hidden by a finger, a glare or the edge of the frame; reported in
+ * `inferredCorner`). Orientations are ranked by the ring gates; lane D is tried under the best
+ * three, the field lanes under the best four. Every petal is thresholded per codeword and colour
+ * class; the pose is searched for lens distortion while field lanes stay unread, and lanes the
+ * finder levels cannot read (shadows, glare, banding, veiling light) are read again from local
+ * levels. An orientation is accepted when lane D or a field lane decodes.
  *
  * @param {{width: number, height: number, data: Uint8Array | Uint8ClampedArray}} image luma plane
- * @param {{tryMirrored?: boolean, templateSigmas?: readonly number[], maxPixels?: number}} [options]
+ * @param {{tryMirrored?: boolean, maxPixels?: number}} [options]
  * @returns {PetalDecodedFrame}
  * @throws {PetalError} `unsupported_image` (smaller than 48 pixels on a side,
  *   larger than `maxPixels` or inconsistent), `no_finders` or `no_orientation`
@@ -1016,42 +1017,24 @@ export function decodePetalFrame(image, options) {
   return result.frame;
 }
 
-function homographyValues(homography) {
-  if (homography instanceof PetalHomography) {
-    return Float64Array.from(homography.values);
-  }
-  if (homography !== null && typeof homography === "object" && homography.length === 9) {
-    return Float64Array.from(homography);
-  }
-  throw new TypeError("homography must be a PetalHomography or nine coefficients");
-}
-
-/** The inferred canonical corner of a decoded frame (`null` when it has none). */
-function inferredCornerOf(frame) {
-  const corner = frame.inferredCorner ?? null;
-  if (corner !== null && !(Number.isInteger(corner) && corner >= 0 && corner < 4)) {
-    throw new TypeError("inferredCorner must be null or a corner index 0..3");
-  }
-  return corner;
-}
-
 /**
  * Follows a code from the previous frame that decoded; returns the frame or `null`. The shared
- * part of `trackPetalFrame` and the scan session (arguments already validated).
+ * part of `trackPetalFrame` and the scan session (options already validated).
  */
 export function trackFrame(image, previous, options) {
   requireLumaShape(image);
-  if (!isDecodable(image, options)) {
+  const p0 = requirePose(previous.pose, "previous.pose");
+  // a frame built by the caller may name a corner that does not exist
+  const previousInferred = previous.inferredCorner ?? null;
+  if (!isDecodable(image, options) || !isCorner(previousInferred)) {
     return null;
   }
-  const h0 = homographyValues(previous.homography);
-  const previousInferred = inferredCornerOf(previous);
   const span = (a, b) => Math.sqrt((a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]));
   const expected = FINDER_CENTERS.map(([cx, cy]) => {
-    const [x, y] = applyHomography(h0, cx, cy);
+    const [x, y] = p0.apply(cx, cy);
     const size = fmax(
-      span(applyHomography(h0, cx - 60, cy), applyHomography(h0, cx + 60, cy)),
-      span(applyHomography(h0, cx, cy - 60), applyHomography(h0, cx, cy + 60)),
+      span(p0.apply(cx - 60, cy), p0.apply(cx + 60, cy)),
+      span(p0.apply(cx, cy - 60), p0.apply(cx, cy + 60)),
     );
     return { x, y, size };
   });
@@ -1106,34 +1089,21 @@ export function trackFrame(image, previous, options) {
     return null;
   }
   const corners = inferred === null ? found : refineInferredCorner(image, found, inferred);
-  const m = homographyFromPoints(
-    CANONICAL_X,
-    CANONICAL_Y,
+  const read = readFieldSearching(
+    image,
     Float64Array.from(corners, (finder) => finder.x),
     Float64Array.from(corners, (finder) => finder.y),
-  );
-  if (m === null) {
-    return null;
-  }
-  const reference = referenceLevels(image, m, inferred);
-  if (reference === null) {
-    return null;
-  }
-  const d = readLaneD(image, m, reference);
-  const patches = samplePatches(image, m, PATCHES);
-  const tiles = readTileLanes(patches, reference, options.templateSigmas);
-  if (tiles.p === null && tiles.k === null && d === null) {
-    return null;
-  }
-  return new PetalDecodedFrame(
-    new PetalHomography(m),
-    previous.rotation,
-    previous.mirrored,
-    tiles.p,
-    tiles.k,
-    d,
+    p0.distortion,
     inferred,
   );
+  if (read === null) {
+    return null;
+  }
+  const d = readLaneD(image, read.pose, read.reference);
+  if (d === null && read.decoded === 0) {
+    return null;
+  }
+  return new PetalDecodedFrame(read.pose, previous.rotation, previous.mirrored, d, read.fields, inferred);
 }
 
 /**
@@ -1144,13 +1114,13 @@ export function trackFrame(image, previous, options) {
  * previous frame is seen again only when its blossom is found within a quarter diameter of where
  * the mean movement of the others puts it. When exactly one corner is not found it is placed by
  * that mean movement and refined against the rings like an inferred corner. The orientation is
- * kept from the previous frame. Returns `null` for a broken previous pose, when two corners are
- * lost or when no lane decodes; the caller then runs {@link decodePetalFrame}. A
- * {@link PetalScanSession} does this by itself.
+ * kept from the previous frame and the lens distortion search starts from its distortion.
+ * Returns `null` for a broken previous pose, when two corners are lost or when no lane decodes;
+ * the caller then runs {@link decodePetalFrame}. A {@link PetalScanSession} does this by itself.
  *
  * @param {{width: number, height: number, data: Uint8Array | Uint8ClampedArray}} image luma plane
  * @param {PetalDecodedFrame} previous the last frame that decoded
- * @param {{tryMirrored?: boolean, templateSigmas?: readonly number[], maxPixels?: number}} [options]
+ * @param {{tryMirrored?: boolean, maxPixels?: number}} [options]
  * @returns {PetalDecodedFrame | null}
  */
 export function trackPetalFrame(image, previous, options) {
@@ -1162,73 +1132,137 @@ export function trackPetalFrame(image, previous, options) {
 }
 
 /**
- * Reads all lanes with a known canvas-to-pixel homography (no finder search).
+ * Reads all lanes with a known canvas-to-pixel pose (no finder search, no distortion search).
  *
- * Returns `null` when the image is unusable or the finder reference levels
- * are too weak. Used by refinement passes and by qualification tooling with a
- * ground-truth pose; {@link trackPetalFrame} follows a moving code.
+ * Returns `null` when the image is unusable or the finder reference levels are too weak. Used by
+ * refinement passes and by qualification tooling with a ground-truth pose. The reference levels
+ * come from all four corner finders, so a frame whose corner blossom is hidden is refused here
+ * (the hidden corner has no contrast); {@link decodePetalFrame} and {@link trackPetalFrame} read
+ * such frames by inferring that corner.
+ *
+ * @param {{width: number, height: number, data: Uint8Array | Uint8ClampedArray}} image luma plane
+ * @param {PetalPose} pose
+ * @param {{tryMirrored?: boolean, maxPixels?: number}} [options]
+ * @returns {PetalDecodedFrame | null}
  */
-export function decodePetalFrameAt(image, homography, options) {
+export function decodePetalFrameAt(image, pose, options) {
   const resolved = resolveDecodeOptions(options);
   requireLumaShape(image);
-  const m = homographyValues(homography);
+  requirePose(pose, "pose");
   if (!isDecodable(image, resolved)) {
     return null;
   }
-  const reference = referenceLevels(image, m);
+  const reference = referenceLevels(image, pose);
   if (reference === null) {
     return null;
   }
-  return finish(image, resolved, { m, rotation: 0, mirrored: false, reference }, null, null);
+  const fields = [null, null, null, null];
+  readFields(fieldLevels(image, pose, reference, LEVELS_PLAIN), NO_SKIP, fields);
+  return new PetalDecodedFrame(pose, 0, false, readLaneD(image, pose, reference), fields, null);
+}
+
+/** Validated pose and inferred corner of a frame-like value, or `null` for a corner that does not exist. */
+function frameGeometry(frame) {
+  if (frame === null || typeof frame !== "object") {
+    throw new TypeError("frame must be a decoded frame");
+  }
+  const pose = requirePose(frame.pose, "frame.pose");
+  const inferred = frame.inferredCorner ?? null;
+  return isCorner(inferred) ? { pose, inferred } : null;
+}
+
+/** The field evidence of `image` under `pose`, or `null` when the finder levels are too weak. */
+function evidenceUnder(image, pose, inferred) {
+  const reference = referenceLevels(image, pose, inferred);
+  return reference === null ? null : new PetalFieldEvidence(fieldLevels(image, pose, reference));
 }
 
 /**
- * Builds the cells a decoder believes it saw, for diagnostics; `null` when the image is unusable
- * or the finder reference levels are too weak. The levels of the frame's inferred corner, if
- * any, are extrapolated as in the decoder.
+ * The field evidence of `image` under the pose `frame` was decoded with: the normalised level of
+ * every field cell.
  *
- * Tiles are taken from the level read (the one that judges against the finder levels), even for
- * a frame whose lanes were rescued by the normalised read.
+ * Returns `null` when the image is unusable (see `unsupported_image`), the frame names a corner
+ * that does not exist, or the finder levels under that pose are too weak.
+ *
+ * @param {{width: number, height: number, data: Uint8Array | Uint8ClampedArray}} image luma plane
+ * @param {{pose: PetalPose, inferredCorner?: number | null}} frame usually a {@link PetalDecodedFrame}
+ * @param {{tryMirrored?: boolean, maxPixels?: number}} [options]
+ * @returns {PetalFieldEvidence | null}
+ */
+export function fieldEvidence(image, frame, options) {
+  const resolved = resolveDecodeOptions(options);
+  requireLumaShape(image);
+  const geometry = frameGeometry(frame);
+  if (!isDecodable(image, resolved) || geometry === null) {
+    return null;
+  }
+  return evidenceUnder(image, geometry.pose, geometry.inferred);
+}
+
+const LEVELS_MEAN = new Float64Array(FIELD_CELLS);
+
+/**
+ * The field lanes from several captures of one shown frame: the cell-by-cell mean of their
+ * levels (summed in capture order, then divided by the number of captures), read as one
+ * capture's levels are, local read included. Averaging cancels the sensor noise, banding and
+ * shake that differ between captures; one evidence reads exactly the field lanes the decoder
+ * read from that capture's pose. The caller checks that every evidence comes from captures of the
+ * same shown frame: a lane read here names its frame in its own header. Sectors flagged in `skip`
+ * are not read.
+ *
+ * @param {readonly PetalFieldEvidence[]} evidence
+ * @param {readonly boolean[]} [skip] one flag per sector
+ * @returns {Array<{data: Uint8Array, corrected: number, erasures: number} | null>} sector 0 first
+ */
+export function mergeFields(evidence, skip = NO_SKIP) {
+  if (!Array.isArray(evidence) || evidence.some((item) => !(item instanceof PetalFieldEvidence))) {
+    throw new TypeError("evidence must be an array of PetalFieldEvidence");
+  }
+  if (!Array.isArray(skip) || skip.length !== SECTORS) {
+    throw new TypeError("skip must hold one flag per sector");
+  }
+  const results = [null, null, null, null];
+  if (evidence.length === 0) {
+    return results;
+  }
+  const mean = LEVELS_MEAN.fill(0);
+  for (const capture of evidence) {
+    const levels = capture.levels;
+    for (let cell = 0; cell < FIELD_CELLS; cell += 1) mean[cell] += levels[cell];
+  }
+  for (let cell = 0; cell < FIELD_CELLS; cell += 1) mean[cell] /= evidence.length;
+  readFields(mean, skip.map(Boolean), results);
+  return results;
+}
+
+/**
+ * Builds the cells a decoder believes it saw under `frame`'s pose, for diagnostics; `null` when
+ * the image is unusable, the frame names a corner that does not exist or the finder reference
+ * levels are too weak. The levels of the frame's inferred corner, if any, are extrapolated as in
+ * the decoder, and every sector is thresholded per colour class as the decoder reads it. The
+ * petals are left unturned (`observedTurns` reports the turns).
+ *
+ * @param {{width: number, height: number, data: Uint8Array | Uint8ClampedArray}} image luma plane
+ * @param {{pose: PetalPose, inferredCorner?: number | null}} frame usually a {@link PetalDecodedFrame}
+ * @param {{tryMirrored?: boolean, maxPixels?: number}} [options]
+ * @returns {PetalFrameCells | null}
  */
 export function observedCells(image, frame, options) {
-  const resolved = resolveDecodeOptions(options);
-  requireLumaShape(image);
-  const m = homographyValues(frame.homography);
-  const inferred = inferredCornerOf(frame);
-  if (!isDecodable(image, resolved)) {
+  const evidence = fieldEvidence(image, frame, options);
+  if (evidence === null) {
     return null;
   }
-  const reference = referenceLevels(image, m, inferred);
+  const { pose, inferred } = frameGeometry(frame);
+  const reference = referenceLevels(image, pose, inferred);
   if (reference === null) {
     return null;
   }
-  const patches = samplePatches(image, m, PATCHES);
-  const words = tileWords(readTiles(patches, reference, resolved.templateSigmas));
-  const dots = readDots(image, m, reference);
-  return PetalFrameCells.fromWords(words.p, words.k, dots.word);
-}
-
-/**
- * Mean squared tile-match error of the level read, a quick image-quality indicator; `null` when
- * the image is unusable or the finder reference levels are too weak.
- *
- * It can be large for a frame whose lanes were rescued by the normalised read, which is the
- * point: the finder levels did not describe that picture.
- */
-export function tileMatchError(image, frame, options) {
-  const resolved = resolveDecodeOptions(options);
-  requireLumaShape(image);
-  const m = homographyValues(frame.homography);
-  const inferred = inferredCornerOf(frame);
-  if (!isDecodable(image, resolved)) {
-    return null;
-  }
-  const reference = referenceLevels(image, m, inferred);
-  if (reference === null) {
-    return null;
-  }
-  const reads = readTiles(samplePatches(image, m, PATCHES), reference, resolved.templateSigmas);
-  let total = -0;
-  for (let tile = 0; tile < reads.count; tile += 1) total += reads.error[tile];
-  return total / reads.count;
+  const { word } = readDots(image, pose, reference);
+  const confidence = new Float64Array(FIELD_WORD);
+  const words = FIELD_LANES.map((_, sector) => {
+    const field = new Uint8Array(FIELD_WORD);
+    readWord(evidence.levels, sector, field, confidence, 0);
+    return field;
+  });
+  return PetalFrameCells.fromWords(word, words);
 }

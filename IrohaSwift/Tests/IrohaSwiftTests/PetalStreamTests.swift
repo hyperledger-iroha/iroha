@@ -145,10 +145,11 @@ final class PetalStreamTests: XCTestCase {
             XCTAssertEqual(PetalStream.firstAtomID(frame: frame), expected, "frame \(frame)")
             expected += UInt32(PetalStream.atomsInFrame(frame))
         }
-        XCTAssertEqual(PetalStream.atomsInFrame(0), 6)
-        XCTAssertEqual(PetalStream.atomsInFrame(1), 7)
-        XCTAssertEqual(PetalStream.laneFirstID(.k, frame: 4), PetalStream.firstAtomID(frame: 4) + 1)
-        XCTAssertEqual(PetalStream.laneFirstID(.k, frame: 5), PetalStream.firstAtomID(frame: 5) + 2)
+        XCTAssertEqual(PetalStream.atomsInFrame(0), 20)
+        XCTAssertEqual(PetalStream.atomsInFrame(1), 21)
+        XCTAssertEqual(PetalStream.laneFirstID(.field(0), frame: 4), PetalStream.firstAtomID(frame: 4))
+        XCTAssertEqual(PetalStream.laneFirstID(.field(3), frame: 5), PetalStream.firstAtomID(frame: 5) + 15)
+        XCTAssertEqual(PetalStream.laneFirstID(.d, frame: 5), PetalStream.firstAtomID(frame: 5) + 20)
         // the frame counter wraps on a beacon frame, so ids repeat cleanly
         XCTAssertTrue(PetalStream.isBeaconFrame(0))
         XCTAssertEqual(65_536 % Int(PetalStream.beaconInterval), 0)
@@ -159,7 +160,7 @@ final class PetalStreamTests: XCTestCase {
         let encoder = try PetalStreamEncoder(payload: data, kind: 2)
         var assembler = PetalStreamAssembler()
         for frame in 0..<encoder.systematicFrames {
-            try PetalTestSupport.feed(&assembler, encoder, frame: UInt16(frame), lanes: [.d, .p, .k])
+            try PetalTestSupport.feed(&assembler, encoder, frame: UInt16(frame), lanes: PetalLane.decodeOrder)
         }
         let done = try XCTUnwrap(assembler.takeCompleted())
         XCTAssertEqual([UInt8](done.payload), data)
@@ -171,7 +172,7 @@ final class PetalStreamTests: XCTestCase {
     func testAnySingleLaneIsEnoughGivenABeacon() throws {
         let data = PetalTestSupport.payload(400, seed: 22)
         let encoder = try PetalStreamEncoder(payload: data, kind: 1)
-        for lane in [PetalLane.p, .k, .d] {
+        for lane in PetalLane.decodeOrder {
             var assembler = PetalStreamAssembler()
             try PetalTestSupport.feed(&assembler, encoder, frame: 0, lanes: [.d])
             for frame in UInt16(0)..<400 {
@@ -188,11 +189,11 @@ final class PetalStreamTests: XCTestCase {
         var assembler = PetalStreamAssembler()
         // frames 1..3: no beacon among them until frame 4
         for frame in UInt16(1)..<4 {
-            try PetalTestSupport.feed(&assembler, encoder, frame: frame, lanes: [.p, .k, .d])
+            try PetalTestSupport.feed(&assembler, encoder, frame: frame, lanes: PetalLane.decodeOrder)
         }
         XCTAssertNil(assembler.progress.meta)
         for frame in UInt16(4)..<UInt16(encoder.systematicFrames + 4) {
-            try PetalTestSupport.feed(&assembler, encoder, frame: frame, lanes: [.p, .k, .d])
+            try PetalTestSupport.feed(&assembler, encoder, frame: frame, lanes: PetalLane.decodeOrder)
         }
         XCTAssertEqual(assembler.takeCompleted().map { [UInt8]($0.payload) }, data)
     }
@@ -207,7 +208,7 @@ final class PetalStreamTests: XCTestCase {
         while !assembler.progress.complete {
             if rng.nextUInt32() % 10 < 6 {
                 // 60 % of the frames are readable
-                try PetalTestSupport.feed(&assembler, encoder, frame: frame, lanes: [.d, .p, .k])
+                try PetalTestSupport.feed(&assembler, encoder, frame: frame, lanes: PetalLane.decodeOrder)
             }
             frame = frame &+ 1
             shown += 1
@@ -233,10 +234,10 @@ final class PetalStreamTests: XCTestCase {
             let lossPercent = rng.nextUInt32() % 70
             let lanes: [PetalLane]
             switch rng.nextUInt32() % 5 {
-            case 0: lanes = [.p]
-            case 1: lanes = [.d, .p]
-            case 2: lanes = [.k, .d]
-            default: lanes = [.p, .k, .d]
+            case 0: lanes = [.field(2)]
+            case 1: lanes = [.d, .field(0)]
+            case 2: lanes = [.field(1), .field(3), .d]
+            default: lanes = PetalLane.decodeOrder
             }
             var assembler = PetalStreamAssembler()
             var frame = UInt16(truncatingIfNeeded: rng.nextUInt32() & 0xFFFF)
@@ -269,7 +270,7 @@ final class PetalStreamTests: XCTestCase {
         // start a few frames before the 16-bit counter wraps and run across it
         var frame: UInt16 = 65_530
         for _ in 0..<200 {
-            try PetalTestSupport.feed(&assembler, encoder, frame: frame, lanes: [.p, .k, .d])
+            try PetalTestSupport.feed(&assembler, encoder, frame: frame, lanes: PetalLane.decodeOrder)
             frame = frame &+ 1
             if assembler.progress.complete { break }
         }
@@ -315,9 +316,9 @@ final class PetalStreamTests: XCTestCase {
         let data = PetalTestSupport.payload(700, seed: 6)
         let encoder = try PetalStreamEncoder(payload: data, kind: 1)
         var assembler = PetalStreamAssembler(limits: PetalAssemblerLimits(maximumPendingAtoms: 5))
-        // frames 1..3 without a beacon: 21 atoms, only the newest five are kept
+        // frames 1..3 without a beacon: 63 atoms, only the newest five are kept
         for frame in UInt16(1)..<4 {
-            try PetalTestSupport.feed(&assembler, encoder, frame: frame, lanes: [.p, .d, .k])
+            try PetalTestSupport.feed(&assembler, encoder, frame: frame, lanes: PetalLane.decodeOrder)
         }
         try PetalTestSupport.feed(&assembler, encoder, frame: 4, lanes: [.d])
         let progress = assembler.progress
@@ -331,7 +332,7 @@ final class PetalStreamTests: XCTestCase {
         var assembler = PetalStreamAssembler(limits: PetalAssemblerLimits(maximumPendingAtoms: 0))
         // atoms before any beacon are dropped, not buffered
         for frame in UInt16(1)..<4 {
-            try PetalTestSupport.feed(&assembler, encoder, frame: frame, lanes: [.p, .k, .d])
+            try PetalTestSupport.feed(&assembler, encoder, frame: frame, lanes: PetalLane.decodeOrder)
         }
         try PetalTestSupport.feed(&assembler, encoder, frame: 4, lanes: [.d])
         XCTAssertEqual(assembler.progress.rank, 0)
@@ -363,31 +364,34 @@ final class PetalStreamTests: XCTestCase {
         XCTAssertNotEqual(first.meta.tag, second.meta.tag)
         var assembler = PetalStreamAssembler()
         try PetalTestSupport.feed(&assembler, first, frame: 0, lanes: [.d])
-        try PetalTestSupport.feed(&assembler, second, frame: 1, lanes: [.p, .k, .d])
+        try PetalTestSupport.feed(&assembler, second, frame: 1, lanes: PetalLane.decodeOrder)
         XCTAssertEqual(assembler.progress.atomsReceived, 0)
         assembler.reset()
         XCTAssertNil(assembler.progress.meta)
     }
 
     func testCorruptAtomsAreCaughtByThePayloadCRC() throws {
-        let data = PetalTestSupport.payload(200, seed: 25)
+        let data = PetalTestSupport.payload(2_000, seed: 25)
         let encoder = try PetalStreamEncoder(payload: data, kind: 1)
         var assembler = PetalStreamAssembler()
-        try PetalTestSupport.feed(&assembler, encoder, frame: 0, lanes: [.d, .k])
+        try PetalTestSupport.feed(&assembler, encoder, frame: 0, lanes: [.d, .field(1)])
         // atom 0 arrives with a valid header but a wrong body
         assembler.push(atoms: PetalAtomPacket(
             header: PetalLaneHeader(tag: encoder.meta.tag, frame: 0),
             firstID: 0,
             atoms: [[UInt8](repeating: 0xEE, count: 16)]
         ))
-        for frame in 1..<encoder.systematicFrames {
-            try PetalTestSupport.feed(&assembler, encoder, frame: UInt16(frame), lanes: [.p, .k, .d])
+        var frame: UInt16 = 1
+        while assembler.progress.integrityFailures == 0 {
+            try PetalTestSupport.feed(&assembler, encoder, frame: frame, lanes: PetalLane.decodeOrder)
+            frame += 1
+            if frame >= 100 { return XCTFail("the corrupt atom was never caught") }
         }
         XCTAssertNil(assembler.takeCompleted())
         XCTAssertEqual(assembler.progress.integrityFailures, 1)
         // clean repair frames after the reset recover the payload
         for frame in UInt16(100)..<600 {
-            try PetalTestSupport.feed(&assembler, encoder, frame: frame, lanes: [.p, .k, .d])
+            try PetalTestSupport.feed(&assembler, encoder, frame: frame, lanes: PetalLane.decodeOrder)
             if assembler.progress.complete { break }
         }
         XCTAssertEqual(assembler.takeCompleted().map { [UInt8]($0.payload) }, data)
@@ -416,9 +420,13 @@ final class PetalStreamTests: XCTestCase {
         XCTAssertEqual(beacon.meta, encoder.meta)
         XCTAssertEqual(beacon.header.frame, 512)
         XCTAssertNil(PetalStream.parseDLane(Array(d[..<11])))
-        var bad = d
-        bad[3] = 0x20
-        XCTAssertNil(PetalStream.parseDLane(bad))
+        // the retired formats 1 (katakana tiles), 2 (unturned petals) and 3 (no bands) are refused
+        XCTAssertEqual(d[3], 0x50)
+        for retired: UInt8 in [0x10, 0x20, 0x30] {
+            var bad = d
+            bad[3] = retired
+            XCTAssertNil(PetalStream.parseDLane(bad), "version \(retired)")
+        }
         var empty = d
         empty[5] = 0
         empty[6] = 0
@@ -429,7 +437,8 @@ final class PetalStreamTests: XCTestCase {
             return XCTFail("atoms expected")
         }
         XCTAssertNil(PetalStream.parseAtomLane(.d, data: d))
-        XCTAssertNil(PetalStream.parseAtomLane(.p, data: [1, 2, 3]))
+        XCTAssertNil(PetalStream.parseAtomLane(.field(0), data: [1, 2, 3]))
+        XCTAssertNotNil(PetalStream.parseAtomLane(.field(3), data: encoder.laneData(frame: 513).fields[3]))
     }
 
     func testDataAndByteArrayPayloadsEncodeIdentically() throws {
@@ -439,6 +448,6 @@ final class PetalStreamTests: XCTestCase {
         XCTAssertEqual(fromBytes.meta, fromData.meta)
         XCTAssertEqual(fromBytes.cells(frame: 3), fromData.cells(frame: 3))
         XCTAssertEqual(fromBytes.meta.sourceAtoms, 21)
-        XCTAssertEqual(fromBytes.systematicFrames, 4)
+        XCTAssertEqual(fromBytes.systematicFrames, 2)
     }
 }

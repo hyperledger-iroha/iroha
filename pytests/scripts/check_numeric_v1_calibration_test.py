@@ -197,7 +197,7 @@ class NumericV1CalibrationTests(unittest.TestCase):
             ("runner_os", "Linux"),
             ("runner_arch", "X64"),
             ("logical_cpus", "19"),
-            ("rustc_release", "1.93.0"),
+            ("rustc_release", "1.93.1"),
             ("rustc_host", "x86_64-apple-darwin"),
             ("rustc_commit_hash", "0" * 40),
             ("rustc_commit_date", "2026-02-10"),
@@ -329,13 +329,13 @@ class NumericV1CalibrationTests(unittest.TestCase):
             "aws-graviton3",
             "c7g-4xlarge",
             "CALIBRATION_PROFILE: ${{ matrix.profile }}",
-            "toolchain: 1.93.1",
+            "toolchain: 1.99.1",
             "GITHUB_REF_PROTECTED",
             "REPOSITORY: ${{ github.repository }}",
             "WORKFLOW_REF: ${{ github.workflow_ref }}",
             "WORKFLOW_REPOSITORY: ${{ github.repository }}",
             "WORKFLOW_SHA: ${{ github.workflow_sha }}",
-            "actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be",
+            "actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8",
             'gh release upload "$EVIDENCE_RELEASE_TAG"',
             'asset.get("digest")',
         ):
@@ -387,7 +387,7 @@ class NumericV1CalibrationTests(unittest.TestCase):
             "ubuntu-24.04-arm",
             "macos-14",
             "windows-latest",
-            "toolchain: 1.93.1",
+            "toolchain: 1.99.1",
             "randomized_decimal_arithmetic_matches_independent_rational_reference",
         ):
             with self.subTest(required=required):

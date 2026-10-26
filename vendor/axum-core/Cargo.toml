@@ -88,7 +88,7 @@ version = "0.2.7"
 version = "1.0.0"
 
 [dependencies.tower-http]
-version = "0.6.0"
+version = "0.7.1"
 features = ["limit"]
 optional = true
 
@@ -111,7 +111,7 @@ version = "1.25.0"
 features = ["macros", "rt"]
 
 [dev-dependencies.tower-http]
-version = "0.6.0"
+version = "0.7.1"
 features = ["limit"]
 
 [lints.clippy]

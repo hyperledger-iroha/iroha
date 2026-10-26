@@ -27,10 +27,8 @@
 use blstrs::{G1Affine, G1Projective, G2Affine};
 use group::{Curve as _, Group as _, prime::PrimeCurveAffine as _};
 use iroha_crypto::bls::consensus::key_validate;
-pub use iroha_data_model::{
-    block::consensus::is_valid_committee_size,
-    sumeragi_finality::certified_result::{COMMITTEE_TAG, committee_root},
-};
+pub use iroha_data_model::sumeragi_finality::certified_result::{COMMITTEE_TAG, committee_root};
+pub use iroha_model_base::topology::is_valid_committee_size;
 
 use super::finality::{SccpFinalityHeaderV1, checkpoint_id};
 

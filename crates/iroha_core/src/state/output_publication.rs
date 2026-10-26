@@ -81,7 +81,7 @@ pub(in crate::state) struct FinalizedPublicationSurface {
     lane_lineage: BTreeMap<LaneId, LaneIncarnationLineage>,
     lane_activation_heights: BTreeMap<LaneId, u64>,
     manifests: [u8; 32],
-    privacy: LanePrivacyRegistryHandle,
+    privacy: PrivacyOwnerIdentity,
     da_commitments: Option<(u64, Hash)>,
     da_pins: Option<(u64, Hash, Hash)>,
     lifecycle: Option<LifecycleSurface>,
@@ -123,6 +123,15 @@ impl BlockHashSurface {
     }
 }
 
+/// The exact admitted graph is part of this local publication capability.
+#[derive(Debug)]
+struct PrivacyOwnerIdentity(LanePrivacyRegistry);
+impl PartialEq for PrivacyOwnerIdentity {
+    fn eq(&self, other: &Self) -> bool {
+        LanePrivacyRegistry::ptr_eq(&self.0, &other.0)
+    }
+}
+
 /// All inputs to the deferred catalog/geometry publication, including its undo.
 #[derive(Debug, PartialEq)]
 struct LifecycleSurface {
@@ -143,6 +152,7 @@ struct LifecycleSurface {
     lanes_to_reset: BTreeSet<LaneId>,
     replaced_lanes: BTreeSet<LaneId>,
     manifests: [u8; 32],
+    privacy: PrivacyOwnerIdentity,
     plan: Hash,
     transition: PendingAutoscaleTransition,
     transition_height: u64,
@@ -157,6 +167,7 @@ impl LifecycleSurface {
         let PendingAutoscaleLaneLifecycle {
             catalog_update,
             updated_lane_manifests,
+            updated_lane_privacy,
             plan,
             transition,
             transition_height,
@@ -228,6 +239,7 @@ impl LifecycleSurface {
             lanes_to_reset: lanes_to_reset.clone(),
             replaced_lanes: replaced_lane_ids.clone(),
             manifests: updated_lane_manifests.consensus_policy_digest(),
+            privacy: PrivacyOwnerIdentity(updated_lane_privacy.clone()),
             plan: hash_value(plan)?,
             transition: transition.clone(),
             transition_height: *transition_height,
@@ -341,6 +353,7 @@ impl FinalizedPublicationSurface {
                 &block.pipeline,
                 &block.oracle,
                 &block.nexus,
+                block.world.parameters.get_before_block().root_fees(),
                 &block.lane_manifests,
                 block.lane_compliance.as_deref(),
                 &block.fraud_monitoring,
@@ -359,7 +372,7 @@ impl FinalizedPublicationSurface {
             lane_lineage: block.lane_incarnation_lineage.clone(),
             lane_activation_heights: block.lane_incarnation_activation_heights.clone(),
             manifests: block.lane_manifests.consensus_policy_digest(),
-            privacy: Arc::clone(&block.lane_privacy_registry),
+            privacy: PrivacyOwnerIdentity(block.lane_privacy_registry.clone()),
             da_commitments,
             da_pins,
             lifecycle: block
@@ -768,6 +781,7 @@ mod tests {
                 replaced_lane_ids: BTreeSet::new(),
             },
             updated_lane_manifests: Arc::clone(&block.lane_manifests),
+            updated_lane_privacy: block.lane_privacy_registry.clone(),
             plan: iroha_data_model::nexus::LaneLifecyclePlan {
                 additions: Vec::new(),
                 retire: Vec::new(),
@@ -825,9 +839,7 @@ mod tests {
             .unwrap();
         block
             .world
-            .parameters
-            .get_mut()
-            .set_parameter(selected.into_parameter().unwrap())
+            .set_parameter_for_testing(selected.into_parameter().unwrap())
             .unwrap();
         let first = block.prepare_finalized_publication_surface().unwrap();
         first.verify(&block).unwrap();
@@ -842,4 +854,25 @@ mod tests {
         );
         assert!(block.prepare_finalized_publication_surface().is_err());
     }
+
+    #[test]
+    fn publication_privacy_seal_binds_original_graph_even_when_values_match() {
+        use iroha_crypto::privacy::{LaneCommitmentId, LanePrivacyCommitment, MerkleCommitment};
+        let state = state();
+        let nexus = state.nexus_snapshot();
+        let source = LaneManifestRegistry::from_config(&nexus.lane_catalog, &nexus.governance, &nexus.registry);
+        let mut statuses = source.statuses();
+        statuses[0].privacy_commitments.push(LanePrivacyCommitment::merkle(
+            LaneCommitmentId::new(1), MerkleCommitment::from_root_bytes([0x12; 32], 16),
+        ));
+        let pool = state.ivm_execution_budget();
+        let owner = LanePrivacyRegistry::try_from_statuses(&statuses, &pool).unwrap();
+        let separate = LanePrivacyRegistry::try_from_statuses(&statuses, &pool).unwrap();
+        assert_eq!(owner, separate, "same deterministic protocol projection");
+        let shared = owner.clone();
+        assert_eq!(PrivacyOwnerIdentity(owner.clone()), PrivacyOwnerIdentity(shared));
+        assert_ne!(PrivacyOwnerIdentity(owner), PrivacyOwnerIdentity(separate),
+            "an independently allocated equal graph cannot replace the captured owner");
+    }
+
 }

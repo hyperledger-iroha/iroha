@@ -331,13 +331,13 @@ mod tests {
         use sha3::digest::{ExtendableOutput, Update, XofReader};
         let mut out = vec![0u8; len];
         if level == SecurityLevel::L128 {
-            let mut sponge = sha3::Shake128::default();
+            let mut sponge = shake::Shake128::default();
             for part in parts {
                 sponge.update(part);
             }
             sponge.finalize_xof().read(&mut out);
         } else {
-            let mut sponge = sha3::Shake256::default();
+            let mut sponge = shake::Shake256::default();
             for part in parts {
                 sponge.update(part);
             }

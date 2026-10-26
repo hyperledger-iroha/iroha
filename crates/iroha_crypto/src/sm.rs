@@ -23,11 +23,10 @@ use signature::Signer;
 use sm2::{
     PublicKey as Sm2EcPublicKey, SecretKey,
     dsa::{Signature as Sm2RawSignature, SigningKey, VerifyingKey},
-    elliptic_curve::sec1::ToEncodedPoint,
+    elliptic_curve::sec1::ToSec1Point,
     pkcs8::{DecodePrivateKey, EncodePrivateKey, EncodePublicKey},
 };
-use sm3::digest::Digest as _;
-use sm4::cipher::{Block, BlockDecrypt, BlockEncrypt, KeyInit as Sm4BlockKeyInit};
+use sm4::cipher::{Block, BlockCipherDecrypt, BlockCipherEncrypt, KeyInit as Sm4BlockKeyInit};
 use sm4_gcm::{Sm4Key as Sm4AeadKey, sm4_gcm_aad_decrypt, sm4_gcm_aad_encrypt};
 use std::sync::{OnceLock, RwLock};
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
@@ -181,7 +180,7 @@ impl Sm2PublicKey {
     }
     /// Export the public key as SEC1 bytes.
     pub fn to_sec1_bytes(&self, compressed: bool) -> Vec<u8> {
-        self.0.to_encoded_point(compressed).as_bytes().to_vec()
+        self.0.to_sec1_point(compressed).as_bytes().to_vec()
     }
     /// Return the distinguishing identifier embedded in this verifying key.
     pub fn distid(&self) -> &str {
@@ -197,7 +196,7 @@ impl Sm2PublicKey {
             .map_err(|err| {
                 ParseError::Invalid(format!("failed to decode SM2 public key PEM: {err}"))
             })?
-            .to_encoded_point(false);
+            .to_sec1_point(false);
         Self::from_sec1_bytes(distid, encoded_point.as_bytes())
     }
     /// Export the public key as a `SubjectPublicKeyInfo` DER document.
@@ -265,7 +264,7 @@ impl Sm2PublicKey {
     }
 
     pub(crate) fn into_compact(self) -> Result<crate::PublicKey, ParseError> {
-        let encoded = self.0.to_encoded_point(false);
+        let encoded = self.0.to_sec1_point(false);
         let payload = encode_sm2_public_key_payload(self.distid(), encoded.as_bytes())?;
         Ok(crate::PublicKey(crate::PublicKeyCompact::new(
             Algorithm::Sm2,
@@ -291,7 +290,7 @@ impl Sm2PublicKey {
 impl PartialEq for Sm2PublicKey {
     fn eq(&self, other: &Self) -> bool {
         self.distid() == other.distid()
-            && self.0.to_encoded_point(false) == other.0.to_encoded_point(false)
+            && self.0.to_sec1_point(false) == other.0.to_sec1_point(false)
     }
 }
 impl Eq for Sm2PublicKey {}
@@ -378,7 +377,7 @@ impl Sm2PrivateKey {
     /// the OS RNG fails, or the RNG cannot produce valid scalar material within
     /// the retry budget.
     pub fn try_random_from_os(distid: impl Into<String>) -> Result<Self, ParseError> {
-        let mut rng = rand::rngs::OsRng;
+        let mut rng = rand::rngs::SysRng;
         Self::try_random(distid, &mut rng)
     }
     /// Deterministically derive an SM2 private key from an arbitrary seed.
@@ -554,7 +553,7 @@ pub fn decode_sm2_public_key_payload(payload: &[u8]) -> Result<Sm2PublicKey, Par
         )));
     }
     let key = Sm2PublicKey::from_sec1_bytes(distid, rest)?;
-    if key.0.to_encoded_point(false).as_bytes() != rest {
+    if key.0.to_sec1_point(false).as_bytes() != rest {
         return Err(ParseError::Invalid(
             "non-canonical SM2 public key encoding".into(),
         ));
@@ -1516,7 +1515,7 @@ mod sm4_ccm_compat {
     use core::convert::TryFrom;
     use sm4::{
         Sm4,
-        cipher::{Block, BlockEncrypt, KeyInit},
+        cipher::{Block, BlockCipherEncrypt, KeyInit},
     };
     const BLOCK_SIZE: usize = 16;
     fn is_valid_tag_len(len: usize) -> bool {
@@ -2693,9 +2692,10 @@ pub mod openssl_sm {
 mod tests {
     use super::{sm_accel, *};
     use hex::decode as hex_decode;
-    use rand_core::{OsRng, TryCryptoRng, TryRngCore};
+    use rand::rngs::SysRng;
+    use rand_core::{TryCryptoRng, TryRng};
     use signature::hazmat::PrehashVerifier;
-    use sm2::elliptic_curve::sec1::ToEncodedPoint;
+    use sm2::elliptic_curve::sec1::ToSec1Point;
     use sm3::Sm3;
     use std::str::FromStr;
     const ANNEX_SIG_HEX: &str = "40F1EC59F793D9F49E09DCEF49130D4194F79FB1EED2CAA55BACDB49C4E755D16FC6DAC32C5D5CF10C77DFB20F7C2EB667A457872FB09EC56327A67EC7DEEBE7";
@@ -2709,12 +2709,13 @@ mod tests {
     struct FailingTryRng;
     #[derive(Debug)]
     struct FailingTryRngError;
+    impl std::error::Error for FailingTryRngError {}
     impl std::fmt::Display for FailingTryRngError {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             f.write_str("failing SM2 RNG")
         }
     }
-    impl TryRngCore for FailingTryRng {
+    impl TryRng for FailingTryRng {
         type Error = FailingTryRngError;
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             Err(FailingTryRngError)
@@ -2730,7 +2731,7 @@ mod tests {
     struct FixedTryRng {
         byte: u8,
     }
-    impl TryRngCore for FixedTryRng {
+    impl TryRng for FixedTryRng {
         type Error = core::convert::Infallible;
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             Ok(u32::from_le_bytes([self.byte; 4]))
@@ -2840,7 +2841,7 @@ mod tests {
         hasher.update(SM2_EQUATION_B_BYTES);
         hasher.update(SM2_GENERATOR_X_BYTES);
         hasher.update(SM2_GENERATOR_Y_BYTES);
-        let encoded = public.as_inner().as_affine().to_encoded_point(false);
+        let encoded = public.as_inner().as_affine().to_sec1_point(false);
         let sm2::elliptic_curve::sec1::Coordinates::Uncompressed { x, y } = encoded.coordinates()
         else {
             panic!("SM2 public key must encode as uncompressed SEC1 point");
@@ -2916,7 +2917,7 @@ mod tests {
     }
     #[test]
     fn sm2_public_key_pem_roundtrip() {
-        let mut rng = OsRng;
+        let mut rng = SysRng;
         let private = Sm2PrivateKey::try_random("custom-distid", &mut rng).expect("valid distid");
         let public = private.public_key();
         let pem = public
@@ -2963,15 +2964,15 @@ mod tests {
     }
     #[test]
     fn sm2_compute_z_aligns_with_signing_key() {
-        let mut rng = OsRng;
+        let mut rng = SysRng;
         let distid = "device:alpha";
         let private = Sm2PrivateKey::try_random(distid, &mut rng).expect("valid distid");
         let public = private.public_key();
         let za = public.compute_z(distid).expect("compute ZA");
         let message = b"za alignment check";
         let signature = private.sign(message);
-        let raw_signature =
-            Sm2RawSignature::from_bytes(&signature.as_bytes()).expect("convert to raw signature");
+        let raw_signature = Sm2RawSignature::from_bytes((&signature.as_bytes()).into())
+            .expect("convert to raw signature");
         let mut sm3 = Sm3::new();
         sm3.update(za);
         sm3.update(message);
@@ -2984,7 +2985,7 @@ mod tests {
     }
     #[test]
     fn sm2_compute_z_matches_manual_formula_samples() {
-        use rand::{RngCore as _, SeedableRng as _};
+        use rand::{Rng as _, SeedableRng as _};
         use rand_chacha::ChaCha20Rng;
         let mut rng = ChaCha20Rng::from_seed([0xA5; 32]);
         for _ in 0..128 {
@@ -3211,7 +3212,7 @@ mod tests {
     }
     #[test]
     fn sm2_random_private_key_roundtrip() {
-        let mut rng = OsRng;
+        let mut rng = SysRng;
         let private = Sm2PrivateKey::try_random(Sm2PublicKey::DEFAULT_DISTID, &mut rng)
             .expect("valid distid");
         let message = b"random sm2";
@@ -3384,7 +3385,7 @@ mod tests {
     }
     #[test]
     fn sm2_try_random_rejects_invalid_distid() {
-        let mut rng = OsRng;
+        let mut rng = SysRng;
         let distid = "a".repeat(8192);
         assert!(Sm2PrivateKey::try_random(distid, &mut rng).is_err());
     }
@@ -3437,7 +3438,7 @@ mod tests {
     }
     #[test]
     fn sm2_signature_der_handles_high_bit_components() {
-        let mut rng = OsRng;
+        let mut rng = SysRng;
         for attempt in 0..1024usize {
             let private =
                 Sm2PrivateKey::try_random("interop-highbit", &mut rng).expect("valid distid");

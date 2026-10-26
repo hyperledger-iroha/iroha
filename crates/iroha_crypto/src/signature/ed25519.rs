@@ -6,7 +6,7 @@ use core::convert::TryFrom;
 use curve25519_dalek::edwards::CompressedEdwardsY;
 use ed25519_dalek::Signature;
 #[cfg(feature = "rand")]
-use rand::rngs::OsRng;
+use rand::rngs::SysRng;
 #[cfg(feature = "rand")]
 use rand_core::TryCryptoRng;
 use sha2::{Digest, Sha256};
@@ -430,7 +430,7 @@ impl Ed25519Sha512 {
     }
     #[cfg(feature = "rand")]
     fn random_private_key() -> Result<PrivateKey, Error> {
-        Self::random_private_key_from_rng(&mut OsRng)
+        Self::random_private_key_from_rng(&mut SysRng)
     }
     #[cfg(feature = "rand")]
     fn random_private_key_from_rng<R>(rng: &mut R) -> Result<PrivateKey, Error>
@@ -714,9 +714,9 @@ mod test {
         sign::{Signer, Verifier as OpenSslVerifier},
     };
     #[cfg(feature = "ecc-batch")]
-    use rand::{RngCore, SeedableRng, rngs::StdRng};
+    use rand::{Rng, SeedableRng, rngs::StdRng};
     #[cfg(feature = "rand")]
-    use rand_core::TryRngCore;
+    use rand_core::TryRng;
     use sha2::{Digest, Sha256, Sha512};
     const MESSAGE_1: &[u8] = b"This is a dummy message for use with tests";
     const SIGNATURE_1: &str = "451b5b8e8725321541954997781de51f4142e4a56bab68d24f6a6b92615de5eefb74134138315859a32c7cf5fe5a488bc545e2e08e5eedfd1fb10188d532d808";
@@ -786,7 +786,7 @@ mod test {
         byte: u8,
     }
     #[cfg(feature = "rand")]
-    impl TryRngCore for FixedTryRng {
+    impl TryRng for FixedTryRng {
         type Error = core::convert::Infallible;
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             Ok(u32::from_le_bytes([self.byte; 4]))

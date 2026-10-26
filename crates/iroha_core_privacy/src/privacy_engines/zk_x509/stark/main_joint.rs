@@ -5,7 +5,6 @@
 //! the existing composition and original FRI. The canonical claim-free wire
 //! can be accepted only after both members of the paired verifier finish.
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::super::super::accumulator_stark::stages::{
     CaAwaitingMainAuxiliaryV1,
     joint::{CaAwaitingJointOpeningsV1, CaAwaitingJointPointV1},
@@ -19,7 +18,6 @@ use super::*;
 
 /// Borrowed, bounded original CA contribution used inside the original MAIN
 /// coefficient builder. MAIN24 is returned only after ordinary caches drop.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(super) struct MainCaCompositionContributionV1<'a> {
     pub(super) plan: &'a main_ca_links::MainCaPrivatePlanV1,
     pub(super) alphas: &'a [E; 108],
@@ -29,7 +27,6 @@ pub(super) struct MainCaCompositionContributionV1<'a> {
 
 /// All values are already jointly bound before this supplemental coefficient
 /// contribution can reach the common original FRI continuation.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(super) struct MainCaDeepContributionV1<'a> {
     pub(super) plan: &'a main_ca_links::MainCaPrivatePlanV1,
     pub(super) original: &'a main_ca_links::MainCaOriginalAuxiliaryV1,
@@ -38,7 +35,6 @@ pub(super) struct MainCaDeepContributionV1<'a> {
 }
 
 /// Original MAIN composition and FRI-mask roots waiting for the CA checkpoint.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub struct MainAwaitingJointPointV1<'a> {
     phase: ZkX509MainCompositionPhaseV1<'a>,
     ca_plan: main_ca_links::MainCaPrivatePlanV1,
@@ -52,7 +48,6 @@ pub struct MainAwaitingJointPointV1<'a> {
 }
 
 /// MAIN's complete local DEEP record and 24 translated original openings.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub struct MainAwaitingJointOpeningsV1<'a> {
     oracles: MainAwaitingJointPointV1<'a>,
     point: E,
@@ -64,7 +59,6 @@ pub struct MainAwaitingJointOpeningsV1<'a> {
     timer: PhaseTimerV1,
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<'a> ZkX509MainCompositionPhaseV1<'a> {
     /// Bind this phase's original joined auxiliary root with the original CA
     /// auxiliary root under the exact same X5B1 challenge capability.
@@ -86,7 +80,7 @@ impl<'a> ZkX509MainCompositionPhaseV1<'a> {
     /// Build the original combined composition before CA working LDEs exist.
     /// Every actual ordinary registration uses the narrowed joint cache plan.
     #[allow(clippy::too_many_lines)]
-    pub(crate) fn commit_joint_oracles_v1<R: TryRngCore>(
+    pub(crate) fn commit_joint_oracles_v1<R: TryRng>(
         mut self,
         ca: &CaAwaitingMainAuxiliaryV1,
         auxiliary: JointAuxiliaryBindingV1,
@@ -191,6 +185,10 @@ impl<'a> ZkX509MainCompositionPhaseV1<'a> {
         commitment_timer.complete_v1();
         #[cfg(test)]
         composition_timer.complete_v1();
+        // Observe the actual mask construction and transcript absorption. This
+        // is outside composition and before the original DEEP timer starts.
+        #[cfg(test)]
+        let fri_mask_timer = PhaseTimerV1::start_v1(PhaseV1::MainFriMaskOracles);
         let fri_masks = aggregate::build_fri_mask_oracles_v1(
             AGGREGATE_PARAMETERS_V1,
             &main_domains_v1(proof_instance),
@@ -209,6 +207,8 @@ impl<'a> ZkX509MainCompositionPhaseV1<'a> {
             &fri_mask_roots,
         )
         .map_err(map_aggregate_error_v1)?;
+        #[cfg(test)]
+        fri_mask_timer.complete_v1();
         Ok(MainAwaitingJointPointV1 {
             phase: self,
             ca_plan,
@@ -223,7 +223,6 @@ impl<'a> ZkX509MainCompositionPhaseV1<'a> {
     }
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<'a> MainAwaitingJointPointV1<'a> {
     /// Both original checkpoints and all translated-source exclusions define
     /// the same challenge. An independent standalone point is never accepted.
@@ -340,7 +339,6 @@ impl<'a> MainAwaitingJointPointV1<'a> {
     }
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl MainAwaitingJointOpeningsV1<'_> {
     /// Mutate both transcript owners in one operation before either local FRI
     /// may sample mixes. Each finishing stage checks the resulting capability.
@@ -767,8 +765,7 @@ pub fn main_joint_auxiliary_from_proofs_v1(
 
 /// Complete both original subproofs using one shared point and paired openings.
 /// Calling this function never changes the production activation policy.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
-pub fn finish_joint_main_ca_v1<R: TryRngCore>(
+pub fn finish_joint_main_ca_v1<R: TryRng>(
     main: ZkX509MainCompositionPhaseV1<'_>,
     ca: CaAwaitingMainAuxiliaryV1,
     rng: &mut R,
@@ -777,9 +774,13 @@ pub fn finish_joint_main_ca_v1<R: TryRngCore>(
     // CA local LDE/composition working owners are created only after the final
     // ordinary MAIN registration and its restricted cache have been dropped.
     let main = main.commit_joint_oracles_v1(&ca, auxiliary, rng)?;
+    #[cfg(test)]
+    let ca_oracle_timer = PhaseTimerV1::start_v1(PhaseV1::CaJointOracleCommitment);
     let ca = ca
         .commit_joint_oracles_v1(auxiliary, rng)
         .map_err(|_| ZkX509StarkErrorV1::ConstraintOpening)?;
+    #[cfg(test)]
+    ca_oracle_timer.complete_v1();
     let point = main.derive_joint_point_v1(&ca)?;
     let mut main = main.open_joint_point_v1(point)?;
     let mut ca = ca
@@ -790,17 +791,20 @@ pub fn finish_joint_main_ca_v1<R: TryRngCore>(
     // Finish MAIN first so its large coefficient and LDE owners are released
     // before the complete CA row trees and local FRI are constructed.
     let main = main.finish_v1(&binding)?;
+    #[cfg(test)]
+    let ca_finish_timer = PhaseTimerV1::start_v1(PhaseV1::CaFinalProof);
     let ca = ca
         .finish_v1(&binding)
         .map_err(|_| ZkX509StarkErrorV1::ConstraintOpening)?;
+    #[cfg(test)]
+    ca_finish_timer.complete_v1();
     Ok((main, ca, openings))
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<'a> ZkX509MainAwaitingCredentialBindingV1<'a> {
     /// Admit retained CA originals before allocating MAIN auxiliary replay and
     /// masks; the same owner is passed to every later joint phase.
-    pub(crate) fn bind_joint_credential_pre_aux_v1_with_rng<R: TryRngCore>(
+    pub(crate) fn bind_joint_credential_pre_aux_v1_with_rng<R: TryRng>(
         self,
         ca: &CaAwaitingMainAuxiliaryV1,
         rng: &mut R,

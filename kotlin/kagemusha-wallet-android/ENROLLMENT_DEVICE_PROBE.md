@@ -68,7 +68,7 @@ out of staged command/catalog inputs. Busy publication ownership fails explicitl
 
 `src/androidTest/cpp/enrollment_probe_rename.c` owns this test-only atomic operation.
 The instrumentation APK packages `libkagemusha_enrollment_probe_files.so` for arm64-v8a,
-armeabi-v7a and x86_64, compiled with the same pinned NDK 28.0.12674087-beta2 at API26.
+armeabi-v7a and x86_64, compiled with the same pinned NDK 30.0.16248370 at API26.
 The helper retains the selected private parent descriptor, validates bounded leaf names
 and a single-link mode0600 source, and calls Linux `renameat2(RENAME_NOREPLACE)`.
 A destination symlink or any existing name returns EEXIST. Unsupported syscall, policy
@@ -124,12 +124,74 @@ The instrumentation arguments contain only public selection DATA:
 `kagemushaTestAPK_SHA256`, and `kagemushaTimeoutSeconds` (1–1800).
 No argument carries token, DPoP, account key, issuer key or signing secret.
 Select only `KagemushaEnrollmentPhysicalDeviceTest#retainedNativeEnrollmentMailbox`
-for the campaign. An absent opt-in skips this case in ordinary instrumentation; an
+for the ordinary campaign. An absent opt-in skips this case in ordinary instrumentation; an
 explicit campaign with missing or invalid input fails. A skip is never device evidence.
-The separate thirteen device-mailbox contract cases exercise only descriptors and isolated mailbox files,
+The separate device-mailbox contract cases exercise only descriptors and isolated mailbox files,
 including interrupted publication, exclusive attempt markers, the actual merged confirmation Activity and concurrent helper instances. Host fault-
 injection tests exercise the same publication state machine; they do not qualify Android
 filesystem behavior or Native custody.
+
+## Receive publication and driver reconstruction trials
+
+Two additional physical tests compose genuine Native Receive completion with a failed
+public export and exact recovery after acknowledged driver close. They are authored
+trial callers; execution requires matching compiled artifacts and explicit approval for
+the selected phone actions. Select exactly one fully qualified method in the standard
+instrumentation `class` argument:
+
+- `org.hyperledger.iroha.sdk.offline.wallet.KagemushaEnrollmentPhysicalDeviceTest#retainedReceiveBeforePublicationDriverReconstruction`
+- `org.hyperledger.iroha.sdk.offline.wallet.KagemushaEnrollmentPhysicalDeviceTest#retainedReceiveAfterPublicationDriverReconstruction`
+
+Class-only, suite, multiple-method and ordinary-mailbox selections skip these additional
+tests before any filesystem or Native action. The existing `kagemushaProbe=enrollment-v1`
+opt-in, candidate/device arguments and configuration remain mandatory. There is no new
+mailbox command or fault-setting argument. Use `requiredStage=received`, a fresh invocation
+UUID and a new Receive request ID for each trial while preserving the admitted actor and
+application namespace. Never clear or restore Native custody between variants.
+
+Use the ordinary install/enrollment/open and exchange commands with genuine admitted
+originals. Immediately before the selected `receive`, issue `request-status` for that
+same nonzero request ID and require Native UNKNOWN. Then stage the exact Payment and
+payer companion through the existing `receive` command. The test injects one exception
+only at that command's `released-original.norito` publication: either immediately before
+the checked publisher or after it acknowledges file and parent synchronization. The
+callback receives a detached copy of the actual retained Native output; it cannot change
+the original passed to the publisher. Other paths and the ordinary mailbox have no
+active fault callback. Pending or Preparing, an unfired boundary, a different failure,
+or absent COMPLETE/identity records fails this trial without automatic Receive retry.
+
+The selected Receive retains a failed `finished.json` diagnostic. Before publishing that
+finished record, the test preserves the exact output baseline and request/operation
+binding, acknowledges real driver close, constructs a fresh driver over the same
+configuration/namespace, and publishes `publication-trial-reconstructed.json`. If close
+or reconstruction fails, the attempt fails and the retained diagnostics remain unresolved.
+Wait for the failed finished record, then issue exactly these existing commands in order:
+
+1. `install`, authenticating the same catalog.
+2. `open`, supplying the same credential. Answer the new Native account challenge through
+   the existing open-signature mailbox; the previous challenge signature cannot be reused.
+3. `request-status`, with the original Receive request ID, requiring Native COMPLETE.
+4. `released-request`, with that same request ID.
+5. `released-operation`, with the operation ID retained in the failed Receive's
+   `durable-call-return.json` and the trial fault record.
+6. `stop`.
+
+No fresh monetary or review command is accepted after the fault. All three recovery reads
+must return Receive with byte-identical retained output and the original operation ID.
+Their Credited originals and envelopes are compared with each other after reconstruction;
+the trial does not claim a pre-fault Credited comparison because the selected failure
+precedes its export. The original Payment, companion and immutable operation binding must
+remain unchanged. Recovery keeps the exact Native request identity and does not reconstruct
+an approved live review or introduce a managed signing counter.
+
+The ordinary mailbox still requires zero failed commands. A dedicated trial preserves
+`failedCommands=1` and requires exactly the injected exception, zero unexpected failures,
+one acknowledged reconstruction and all three exact recovery observations. Its separate
+`publication-trial-complete.json` records the bounded result with qualification, delivery,
+original-latency and process-death claims disabled. These cases do not establish physical
+crash durability, nonrollback, Send/companion or activation-wire recovery, QR/Nearby
+delivery, or release readiness. Actual process-death and other operation/carrier trials
+remain separate requirements.
 
 ## Commands and retained originals
 
@@ -188,7 +250,20 @@ that manufactures a new operation. Use fresh command numbers for retries; never 
   intake checks, and the signature pin must be exactly 64 bytes and bind the actual
   32-byte Native challenge.
   Only exactly 64 signature bytes are accepted. Callback waiting is bounded to 120 seconds.
-- release-wallet: no inputs. Closes the actual native wallet before dropping the reference.
+- begin-exchange: no inputs. Reserve one Native logical exchange before monetary work.
+  Keep it across Request, review, confirmation, issuer and carrier waits. Each command
+  admits a child synchronously on the mailbox worker before any SDK worker or UI enqueue.
+- end-exchange: no inputs. Fence new work, join accepted children off the UI thread and
+  end that exact Native exchange. A failed end retains its owner for explicit retry.
+  The probe discards its live financial review through that exact origin after fencing;
+  its approved retry state cannot survive end. Time challenge cleanup remains bound to
+  its original exchange even after a new exchange is opened.
+- release-wallet: no inputs. End the exact logical exchange first. Retires activity callbacks, detaches observations and drains
+  the final inactive publication attempt before closing the actual Native wallet. A failed
+  publication stays visible but does not prevent Native cleanup after the control fence.
+  An exchange-end failure stays visible after the local task fence but cannot prevent
+  exact-wallet close/retry. Failed observer or Native cleanup retains that exact owner for retry; Native cleanup
+  retries use `retryCleanup`, without enabling the retired wallet again.
   install + open then reopens exact E6 on the same custody without an expired session.
 - abandon: no inputs. Explicitly call the canonical Native abandonment API on the same
   unused enrollment, including a definitive E1 refusal. Native alone
@@ -274,15 +349,21 @@ by Native; a pinned mailbox digest establishes input identity, not issuer author
 | finish-time | anchor, certificate | Consume exchange once and retain verified issuer response |
 | cancel-time | none | Cancel exact live exchange |
 | refresh-time | request-id, anchor, certificates | Native TimeAnchor refresh; no caller clock |
-| offer | setup-id, amount | Exact signed Offer and Native peer envelope |
-| request | setup-id, offer; optionally fee-schedule, fee-certificate | Exact signed Request and Native peer envelope |
-| decode-offer / decode-request / decode-payment / decode-credited | envelope | Extract expected Native original without granting monetary admission |
+| request | setup-id, amount; optionally fee-schedule, fee-certificate | Receiver's exact signed open Request and Native peer envelope |
+| decode-request / decode-payment / decode-credited | envelope | Extract expected Native original without granting monetary admission |
 | review-send | request-id, request, destination | Actual Native review capability and complete projection |
 | review-unload | request-id, amount; optionally quote, certificates, beneficiary | Actual Native review capability and charge-bound projection |
-| decide-review | decision | Cancel live review, or fresh foreground device authentication then execute exactly that review |
-| receive | request-id, payment, offer | Native Receive using the exact session Offer and Payment |
+| continue-review-send / continue-review-unload | Same exact inputs as review-send / review-unload | Compare the retained full original projection through Native; a new Ready requires a new explicit decision and authentication |
+| decide-review | decision | Cancel an awaiting review, or fresh foreground device authentication then execute exactly that review |
+| retry-reviewed | none | Retry only the same approved live typed65 review through its still-open original exchange and acknowledged fence |
+| payment-companion | payment | Export payer-companion.norito for this wallet's exact retained Payment, including its historical credential and issuer certificates |
+| receive | request-id, payment, companion | Native authenticates the exact Payment and payer companion against the receiver's durably issued Request |
 | credit | request-id | Actual Receive credit evidence, optional exact Credited original/envelope |
-| accept-credited / credited-status | request-id, credited | Native exact Send-bound Archive completion/status |
+| observe-credited | request-id, credited | Native durably retains exact Credited before its Send-bound delivery projection; no Archive dispatch |
+| resume-deferred-receipt | none | Native verifies at most one retained intake; no Archive dispatch |
+| drain-deferred-archive | none | One Native-selected guarded turn; reports NoWork, typed wait, reconciliation or actual execution outcome |
+| credited-status | request-id, credited | Exact existing Archive status; never dispatches |
+| discard-review | none | Discard the exact retained review through its original exchange, including after end |
 | fold-once / fold-status / snapshot | none | Native work/status or current head; only actual folded head marks folded |
 | request-status / released-request | request-id | Resolve actual request or read its exact released output |
 | retry / released-operation | operation-id | Native retry or exact released output |
@@ -290,6 +371,27 @@ by Native; a pinned mailbox digest establishes input identity, not issuer author
 | unload-claim | request-id; optionally beneficiary | Exact retained claim and ledger instruction, not settlement |
 | unload-status | claim, signed-wire | Observe the envelope's retained outcome, or Awaiting with Native's entrypoint |
 | unload-finality | claim, signed-wire, finality | Verify the envelope's one direct finality original (or report the epoch it needs) |
+
+The receiver creates Request from `amount`; the payer completes it after reviewing the
+Request and the receiver's canonical `destination` account original. After durable Send,
+`payment-companion` consumes that exact Payment original. Pass its exact exported bytes
+as the `companion` pin to `receive` (maximum 2,048 bytes). The companion supplies the
+retained Send's credential and issuer certificate originals, including after renewal;
+it grants no monetary authority. Retain Payment and companion together for exact retries.
+
+`observe-credited` first publishes `verified-credited-original.norito`, then exports the
+Native projection's evidence, Archive state, `corePending`, credit ID, Payment digest,
+amount and return clock. `UNFOLDED` and `CREDITED` are positive delivery evidence;
+`BURNED` is authenticated burned evidence, never a positive payment sample. `NOT_ARCHIVED`
+and either `corePending` value are valid payer observations. The outcome
+`native-payer-delivery-evidence-<evidence>` alone marks no actor stage. Retain the exact
+Credited original in Native's canonical queue. `resume-deferred-receipt` retries one
+retained intake; `drain-deferred-archive` requests one Native-selected turn after the
+logical exchange ends. Native alone rechecks selected recovery, exchange admission,
+fold backlog, charging/count/age and exact source. No caller receipt selects fresh
+Archive execution. A blocked/no-work result or generic projection grants no actor stage;
+only the actual inner completion describes the maintenance outcome. The mailbox does
+not start an automatic polling task.
 
 `decision` is UTF-8 JSON with exactly four string fields: `decision` (`confirm` or
 `cancel`), `invocation` (this invocation UUID), `reviewSequence` (canonical decimal
@@ -305,16 +407,66 @@ duplicate or stale callbacks. Activity destruction fails that attempt; an uncons
 Native review remains owned until explicit cancel, another fresh prompt, or wallet close.
 This diagnostic UI plus external exact review is not a trusted-display attestation.
 
-Immediately before dispatch, the driver publishes a durable exclusive `executed-<id>`
-marker under `private/intents`. Its locked no-replace operation refuses even identical
-existing bytes. Failed publication after naming blocks all later confirmed dispatches,
-including the still-retained review. Recovery uses the same Native request/operation ID;
-never delete this marker or choose another ID to work around an uncertain outcome.
-Publication failure before naming cannot have reached Native execution. Ordinary audit
-files retain exact-byte repeat-and-sync behavior. Stable content bindings fence changed
-inputs for a reused setup/load-plan/operation ID across command numbers and invocations.
-`stop` or `release-wallet` releases pending reviews/exchanges only after actual wallet
-close; it retains keys, originals and Native recovery custody.
+Review issuance binds the nonzero request ID and exact originals in Native. The SDK
+returns only Ready (actual capability), Existing (Preparing or an exact bound request
+outcome), or Waiting (selected Pending, Archive fold or busy). Existing and Waiting
+cannot execute or provide a new latency sample. Execution accepts the actual review
+alone; callers cannot supply a replacement request ID.
+
+Immediately before dispatch, both monetary and Nearby drivers publish the full exact
+`KWORV1` projection into the durable exclusive `executed-<id>` root under
+`private/intents`. Its locked no-replace operation refuses even identical existing bytes.
+Failed publication after naming never grants a live retry. Recovery keeps the same
+Native request/operation ID; never delete this marker or choose another ID to work around
+an uncertain outcome. Ordinary exact Native recovery remains available even when an
+older hash-only or JSON-only marker lacks continuation evidence.
+
+`continue-review-send`, `continue-review-unload` and `nearby-continue-send` require the
+existing exact operation binding, full root projection, and every full original retained
+under `private/intents/review-originals-<id>`, including the request ID, action family and
+all charge companions. Both review drivers use the same checked private-file helper;
+continuation only reads and compares those bytes. Missing or changed originals refuse
+without recreating them from new inputs. Exact Native status and retained-Payment recovery
+remain available through their existing commands. Native compares the projection DATA
+against its authenticated source and original request identity; neither a local file nor
+Unknown grants permission. A new Ready receives a fresh explicit decision/authentication,
+an immutable invocation/command attempt binding to the root, and a distinct exclusive
+attempt fence containing the entire new projection. Old hash/JSON bodies are refused;
+there is no fallback decoder. The root is never overwritten. Continuation is excluded
+from the original attempt's latency sample.
+
+Typed65 retains the same actual review, original exchange and acknowledged fence in the
+live Driver. Only `retry-reviewed` can retry that approval: it verifies the exact fence,
+admits another child of the same still-open exchange, and neither prompts nor republishes
+a fence. A repeated `decide-review` is refused. Nearby closes its radio session on65 while
+keeping this logical exchange open. After exact monetary completion, use
+`nearby-recover-send` with a fresh radio session to transport the retained Payment;
+that recovery does not reconstruct an original timing anchor. Ending, closing or losing
+the process destroys the approved-live retry state; subsequent conditional continuation
+requires new Native Ready and new approval. Explicit discard remains cleanup-only.
+Stable content bindings refuse changed inputs for a reused ID across commands/invocations.
+`stop` or `release-wallet` ends the logical exchange before actual wallet close; keys,
+originals and ordinary Native recovery custody remain retained.
+
+Every admitted wallet now owns an activity binding before `opened` is reported. The existing
+AndroidX instrumentation lifecycle monitor observes the three actual probe Activities;
+STARTED, RESUMED and PAUSED count as visible, while an empty visible set is inactive. The
+binding subscribes before sampling, including Activities already running. It observes the
+real sticky battery status and subsequent changes: CHARGING or FULL enables the charging
+axis; missing, unknown, discharging and not-charging do not. These observations use the
+instrumentation host, not an assumed target-application lifecycle. Complete foreground/
+charging pairs reach the exact wallet on a separate serial control executor, including
+while a monetary call is blocked. Initial publication is acknowledged before commands;
+callback failures remain visible during commands and mailbox waiting.
+
+The mailbox loop itself is not a visible Activity. When its temporary prompt Activities
+finish, folding can correctly become inactive unless the device is actually charging.
+An unplugged foreground fold requires a genuinely visible probe Activity. `fold-once` can
+also return idle while the Native background worker owns folding; inspect actual current
+fold state. This binding does not implement the separate §5.3 deferred Archive queue.
+Qualification still requires matching-artifact phone runs covering initial visibility,
+prompt pause/stop/recreation, charging/full/disconnect/unknown observations, transitions
+during a blocked command, and cleanup/reopen; source and unit controls are not that evidence.
 
 For A → B → C → Unload, use three admitted actor namespaces and their original accounts:
 
@@ -325,18 +477,50 @@ For A → B → C → Unload, use three admitted actor namespaces and their orig
 2. A prepares Load; the controller obtains the actual finalized receipt and proof. A
    calls Load with the same request ID, resolves pending results through recovery, and
    observes current folded state before Send review. No exported plan counts as loaded.
-3. A creates Offer for B; transfer its exact envelope to B and decode it there. B creates
-   Request from that exact Offer. A decodes B's exact envelope and reviews Send using B's
-   canonical account original. Confirm the exact projection and complete A's fresh
-   device prompt. Recover exact Payment envelope from actual durable Send output.
-4. B decodes and receives that Payment with the original A Offer. Retain durable Receive,
-   current head/fold observations and exact Credited evidence for A. B creates its Offer
-   for C; repeat the same Request/review/fresh prompt/Payment/Receive sequence. Native
-   refuses onward Send review until its actual source prerequisites are satisfied.
+3. B creates Request for the selected amount. A decodes B's exact Request envelope and
+   reviews Send using B's canonical account original. Confirm the exact projection and
+   complete A's fresh device prompt. Recover the exact Payment original/envelope from
+   actual durable Send output, then export its exact payer companion on A.
+4. B decodes that Payment envelope and calls Receive with the Payment original and the
+   exact companion exported by A. Retain durable Receive, current head/fold observations
+   and exact Credited evidence for A's durable `observe-credited`. C creates its own Request;
+   B reviews it and repeats the fresh prompt/Payment plus companion/Receive/Credited
+   exchange with C. Native refuses onward Send review until its actual source
+   prerequisites are satisfied.
 5. C reviews Unload, confirms the exact projection through a fresh prompt and resolves
    the Native operation. Export its exact Unload claim/instruction. The independent
    controller signs/submits it, then supplies the actual transaction hash, exact claim
    and ordered real finality. Require Native Unload confirmation for `unloaded`.
+
+The physical Nearby driver uses the same receiver-first Request → Payment with payer
+companion → Credited exchange. `KagemushaNearbyProbeManifest` owns these closed commands:
+
+| Command | Input pins | Actual action/output |
+| --- | --- | --- |
+| nearby-identity | none | Export this live driver's engineering transport identity |
+| nearby-permissions | none | Request actual Android Nearby permissions |
+| nearby-prepare | setup-id, amount; optionally fee-schedule, fee-certificate | Retain receiver Request with its canonical account companion; export nearby-request-ipm1.bin and nearby-request-hash.bin |
+| nearby-send / nearby-continue-send / nearby-recover-send | request-id, session-id, request-hash, peer-certificate | Discover the selected receiver, authenticate, freshly review, conditionally review, or recover exact Send, then verify its returned Credited without ArchiveSent |
+| nearby-receive / nearby-recover-receive | request-id, session-id, request-hash, peer-certificate, setup-id | Advertise, authenticate, send the retained Request, receive Payment with its carried companion and return fresh Native Credited |
+
+Stage each peer's exact `nearby-certificate.bin` and the receiver's exported Request hash.
+`session-id` is a nonzero 16-byte word; `request-hash` and `peer-certificate` are nonzero
+32-byte words. Each failed or restarted radio attempt requires a fresh session ID while
+retaining the same monetary request ID and immutable intent inputs for recovery. The
+receiver's setup ID selects its retained Request. After mutual authentication, Request
+is the first encrypted record; the payer carries the exact native Payment and companion
+together in `IrohaPeerWalletPaymentV1`. The receiver passes both to `receiveWithCompanion`.
+No separate mailbox `payment-companion` command is needed during that physical exchange.
+Prepared metadata and the engineering transport identity do not establish carrier
+delivery, hardware attestation or shipping qualification.
+
+The payer persists `nearby-credited-original.norito` before `observeCreditedForSend` and records
+the typed projection before admitting a positive diagnostic. Authenticated burned evidence
+is retained but fails that positive diagnostic; it is not a Native verification error.
+An unarchived or pending-fold payer projection remains eligible. The positive outcome is
+`native-exact-send-delivery-verified-over-nearby`; its local elapsed interval ends at the
+Native delivery-verification return, before any separate ArchiveSent. Receipt arrival
+remains a separate timing observation. Keep the exact retained Credited for later archive.
 
 Nearby Receive recovery accepts the native `CREDIT_STATUS` result after old
 Receive output collection. It reads fresh covering evidence through
@@ -344,7 +528,8 @@ Receive output collection. It reads fresh covering evidence through
 ordinary `COMPLETE` result still records its retained release separately before
 reading fresh credit evidence. Missing, burned or nonreceiver evidence fails the
 diagnostic; only the exact native Credited original enters the acknowledgement.
-Sender recovery remains `COMPLETE`-only. Recovery does not reconstruct the
+Sender recovery still requires `COMPLETE` for its retained Send, followed by a positive
+Native delivery projection for the returned Credited. Recovery does not reconstruct the
 original completion time.
 
 Mailbox copying is not physical QR/NFC/Nearby delivery evidence. Run the maintained

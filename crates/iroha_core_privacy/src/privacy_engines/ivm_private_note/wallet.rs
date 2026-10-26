@@ -22,7 +22,8 @@ use iroha_data_model::privacy::{
     PRIVACY_IVM_PRIVATE_NOTE_PLAINTEXT_BYTES_V1, PrivacyCommitmentV1, PrivacyEncryptedOutputV1,
     PrivacyEncryptionKeyV1, PrivacyPoolIdV1, PrivacyProgramIdV1, PrivacyRecipientIdV1,
 };
-use rand_core_06::{CryptoRng, OsRng, RngCore};
+use rand::rngs::SysRng;
+use rand_core::{TryCryptoRng, TryRng};
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 use zeroize::Zeroizing;
@@ -314,7 +315,7 @@ fn encrypt_note_material_v1(
 /// # Errors
 /// Rejects invalid note/key bindings, unhealthy randomness, encoding failures, or authenticated-encryption failures.
 pub fn encrypt_ivm_private_wallet_note_v1(
-    rng: &mut (impl RngCore + CryptoRng),
+    rng: &mut (impl TryRng + TryCryptoRng),
     pool_id: PrivacyPoolIdV1,
     program_id: PrivacyProgramIdV1,
     note: &PrivateNotePlaintextV1,
@@ -360,7 +361,7 @@ pub fn encrypt_ivm_private_wallet_note_v1(
 /// profile. The supplied ephemeral secret is retained only in restricted audit
 /// material; a fresh authenticated nonce is obtained from `rng`.
 pub fn encrypt_ivm_private_wallet_note_for_commitment_with_opening_v1(
-    rng: &mut (impl RngCore + CryptoRng),
+    rng: &mut (impl TryRng + TryCryptoRng),
     pool_id: PrivacyPoolIdV1,
     program_id: PrivacyProgramIdV1,
     note: &PrivateNotePlaintextV1,
@@ -397,7 +398,7 @@ pub fn encrypt_ivm_private_wallet_note_with_os_rng_v1(
     note: &PrivateNotePlaintextV1,
     recipient_public_key: [u8; 32],
 ) -> Result<PrivacyEncryptedOutputV1, IvmPrivateNoteWalletErrorV1> {
-    encrypt_ivm_private_wallet_note_v1(&mut OsRng, pool_id, program_id, note, recipient_public_key)
+    encrypt_ivm_private_wallet_note_v1(&mut SysRng, pool_id, program_id, note, recipient_public_key)
 }
 fn decrypt_note_material_v1(
     pool_id: PrivacyPoolIdV1,
@@ -498,8 +499,9 @@ pub fn decrypt_ivm_private_wallet_note_v1(
 mod tests {
     use super::*;
     use crate::privacy_engines::ivm_private_note::relation::derive_note_authority_v1;
-    use rand_08::{SeedableRng as _, rngs::StdRng};
-    use rand_core_06::{CryptoRng, Error as RngError, RngCore};
+    use rand::SeedableRng as _;
+    use rand_chacha::ChaCha12Rng;
+    use std::io::Error as RngError;
     #[derive(Clone, Copy)]
     enum AuditedEntropyMode {
         Healthy,
@@ -527,17 +529,16 @@ mod tests {
             index.to_le_bytes()[0].wrapping_mul(41).wrapping_add(3)
         }
     }
-    impl RngCore for AuditedRng {
-        fn next_u32(&mut self) -> u32 {
+    impl rand::TryRng for AuditedRng {
+        type Error = std::io::Error;
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             panic!("private-IVM wallet must use the fallible RNG interface")
         }
-        fn next_u64(&mut self) -> u64 {
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
             panic!("private-IVM wallet must use the fallible RNG interface")
         }
-        fn fill_bytes(&mut self, _destination: &mut [u8]) {
-            panic!("private-IVM wallet must use the fallible RNG interface")
-        }
-        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), RngError> {
+
+        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
             self.requests.push(destination.len());
             match self.mode {
                 AuditedEntropyMode::Healthy
@@ -583,7 +584,7 @@ mod tests {
                     if matches!(self.mode, AuditedEntropyMode::Panic) {
                         panic!("injected private-IVM wallet entropy panic");
                     }
-                    return Err(RngError::new(
+                    return Err(RngError::other(
                         "injected partial private-IVM wallet RNG failure",
                     ));
                 }
@@ -591,7 +592,7 @@ mod tests {
             Ok(())
         }
     }
-    impl CryptoRng for AuditedRng {}
+    impl rand::TryCryptoRng for AuditedRng {}
     fn fixture() -> (
         PrivacyPoolIdV1,
         PrivacyProgramIdV1,
@@ -617,7 +618,7 @@ mod tests {
         let (pool, program, note, recipient_secret) = fixture();
         let recipient_public =
             ivm_private_recipient_public_key_v1(&recipient_secret).expect("recipient public key");
-        let mut rng = StdRng::seed_from_u64(0x1_50_4e_45);
+        let mut rng = ChaCha12Rng::seed_from_u64(0x1_50_4e_45);
         let encrypted =
             encrypt_ivm_private_wallet_note_v1(&mut rng, pool, program, &note, recipient_public)
                 .expect("encrypt canonical note");
@@ -656,7 +657,7 @@ mod tests {
     fn fixed_codec_rejects_cross_context_and_public_field_substitution() {
         let (pool, program, note, recipient_secret) = fixture();
         let recipient_public = ivm_private_recipient_public_key_v1(&recipient_secret).unwrap();
-        let mut rng = StdRng::seed_from_u64(0x2_50_4e_45);
+        let mut rng = ChaCha12Rng::seed_from_u64(0x2_50_4e_45);
         let encrypted =
             encrypt_ivm_private_wallet_note_v1(&mut rng, pool, program, &note, recipient_public)
                 .unwrap();
@@ -726,7 +727,7 @@ mod tests {
     fn fixed_codec_rejects_noncanonical_shapes_and_keys() {
         let (pool, program, note, recipient_secret) = fixture();
         let recipient_public = ivm_private_recipient_public_key_v1(&recipient_secret).unwrap();
-        let mut rng = StdRng::seed_from_u64(0x3_50_4e_45);
+        let mut rng = ChaCha12Rng::seed_from_u64(0x3_50_4e_45);
         let encrypted =
             encrypt_ivm_private_wallet_note_v1(&mut rng, pool, program, &note, recipient_public)
                 .unwrap();

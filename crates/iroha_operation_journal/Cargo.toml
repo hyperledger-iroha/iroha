@@ -16,7 +16,7 @@ norito = { workspace = true, default-features = false, features = ["json"] }
 eyre = { workspace = true }
 # Canonical submission digests return lowercase owned strings independently of consumer features.
 hex = { workspace = true, features = ["alloc"] }
-sha2 = { version = "0.10.9", default-features = false, features = ["std"] }
+sha2 = { version = "0.11.1", default-features = false, features = ["alloc"] }
 
 [dev-dependencies]
 tempfile = { workspace = true }

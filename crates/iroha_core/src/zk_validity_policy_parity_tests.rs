@@ -299,9 +299,7 @@ fn state_with(node: Option<Zk>, policy: Option<&ZkValidityPolicyV1>) -> State {
     if let Some(policy) = policy {
         let mut block = world.block();
         block
-            .parameters
-            .get_mut()
-            .set_parameter(Parameter::Custom(policy.clone().into_custom_parameter()))
+            .set_parameter_for_testing(Parameter::Custom(policy.clone().into_custom_parameter()))
             .expect("valid fixture parameters");
         block.commit();
     }
@@ -663,7 +661,10 @@ fn executor_reconciliation_cannot_replace_or_remove_the_committed_policy() {
         // The migrated executor declares the parameter.
         let mut declares = ExecutorDataModel::default();
         declares.parameters.insert(attacker.clone());
-        transaction.world.apply_executor_data_model(declares);
+        transaction
+            .world
+            .apply_executor_data_model(declares)
+            .expect("executor reconciliation succeeds");
         assert_eq!(
             committed(transaction.world.parameters.get()),
             Ok(Some(installed.clone())),
@@ -682,7 +683,8 @@ fn executor_reconciliation_cannot_replace_or_remove_the_committed_policy() {
         // A later migration stops declaring it.
         transaction
             .world
-            .apply_executor_data_model(ExecutorDataModel::default());
+            .apply_executor_data_model(ExecutorDataModel::default())
+            .expect("executor reconciliation succeeds");
         assert_eq!(
             committed(transaction.world.parameters.get()),
             Ok(Some(installed.clone())),
@@ -697,7 +699,10 @@ fn executor_reconciliation_cannot_replace_or_remove_the_committed_policy() {
     declares
         .parameters
         .insert(committed_policy().into_custom_parameter());
-    transaction.world.apply_executor_data_model(declares);
+    transaction
+        .world
+        .apply_executor_data_model(declares)
+        .expect("executor reconciliation succeeds");
     assert_eq!(committed(transaction.world.parameters.get()), Ok(None));
     assert!(
         crate::state::consensus_owned_custom_parameter_ids()

@@ -21,7 +21,7 @@ fn scheme(setup: &ExecutedKagemushaSetup) -> KagemushaWalletSchemeV1 {
         version: 1,
         network_id: *setup.chain.network_id().as_bytes(),
         scheme_root_key: KagemushaDevicePublicKeyV1::from_sec1_bytes(
-            key.verifying_key().to_encoded_point(false).as_bytes(),
+            key.verifying_key().to_sec1_point(false).as_bytes(),
         )
         .unwrap(),
         relation_id: [9; 32],

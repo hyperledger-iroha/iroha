@@ -112,15 +112,19 @@ fn account_identity_birth_fixture(
         world
             .smart_contract_state_mut_for_testing()
             .insert(crate::sns::record_storage_key(&selector), record.encode());
-        let mut parameters = world.parameters.block();
-        parameters
-            .set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
+            .expect("funded original parameter-only fixture block");
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            crate::sumeragi::lanes::routing::test_support::metadata(
                 iroha_data_model::block::consensus::SumeragiRootScope::Dataspace {
                     parent_network_id: super::super::queue_test_network_id(),
                     dataspace_id: home,
                 },
-            ))
-            .unwrap();
+            ),
+            world.sccp_committee_generations.allocation_budget(),
+        )
+        .unwrap();
         parameters.commit();
         let mut nexus = iroha_config::parameters::actual::Nexus::default();
         nexus.routing_policy = router.policy.as_ref().clone();

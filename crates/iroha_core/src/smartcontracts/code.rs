@@ -1448,12 +1448,16 @@ mod tests {
         let domain = Domain::new(dom.clone()).build(&auth);
         let account = Account::new(auth.clone()).build(&auth);
         let mut world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
-        let mut parameters = world.parameters.block();
-        parameters
-            .set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
+            .expect("funded parameter fixture block");
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            crate::sumeragi::lanes::routing::test_support::metadata(
                 iroha_data_model::block::consensus::SumeragiRootScope::Global,
-            ))
-            .expect("valid fixture parameters");
+            ),
+            world.sccp_committee_generations.allocation_budget(),
+        )
+        .expect("valid fixture parameters");
         parameters.commit();
         let mut permissions = permission::Permissions::new();
         assert!(
@@ -1485,8 +1489,7 @@ mod tests {
         let dataspace_id = iroha_model_base::topology::DataSpaceId::new(u64::MAX);
         transaction
             .world
-            .parameters
-            .set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
+            .set_parameter_for_testing(crate::sumeragi::lanes::routing::test_support::metadata(
                 iroha_data_model::block::consensus::SumeragiRootScope::Dataspace {
                     parent_network_id: state.network_id,
                     dataspace_id,
@@ -2541,12 +2544,14 @@ seiyaku LifecycleAba { permission CanRunLifecycleAba;
             iroha_data_model::pipeline_validity_policy::PipelineValidityPolicyV1::protocol_default(
             );
         policy.ivm_max_cycles_upper_bound = 1;
-        let mut parameters = state.world.parameters.block();
-        parameters
-            .set_parameter(iroha_data_model::parameter::Parameter::Custom(
-                policy.into_custom_parameter(),
-            ))
-            .expect("valid committed admission ceiling");
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+            .expect("funded parameter fixture block");
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            iroha_data_model::parameter::Parameter::Custom(policy.into_custom_parameter()),
+            state.world.sccp_committee_generations.allocation_budget(),
+        )
+        .expect("valid committed admission ceiling");
         parameters.commit();
         let mut block = state.block(default_header(1));
         assert_eq!(block.pipeline.ivm_max_cycles_upper_bound.get(), 1);

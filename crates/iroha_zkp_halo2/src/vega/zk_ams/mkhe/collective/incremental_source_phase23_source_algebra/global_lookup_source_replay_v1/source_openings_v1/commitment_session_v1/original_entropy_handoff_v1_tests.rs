@@ -235,7 +235,7 @@ fn original_handoff_is_source_typed_and_gated_before_consumption() {
         "context_digest:[u8;32]",
         "fn into_parts",
         "HealthCheckedCryptoRngV1",
-        "OsRng",
+        "SysRng",
         "seed_from",
         "Box<",
         "dyn ",

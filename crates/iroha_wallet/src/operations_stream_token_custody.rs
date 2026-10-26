@@ -449,15 +449,20 @@ impl AccountService {
         )
     }
     /// Retire only this exact retained request before any payload or dispatch evidence exists.
+    ///
+    /// Shares the original parent's ancestry while freshly opening the child and exclusive lock.
+    /// Missing children never create a journal; every retained record and inventory is checked.
     /// # Errors
     /// Refuses missing, changed, malformed, payload-retained or signed histories and unsafe custody.
     pub fn retire_stream_token_custody_enroll_unprepared(
         &self,
-        journal: &Path,
+        parent: &iroha_fs::PrivateDirectory,
+        name: &std::ffi::OsStr,
         expected: &StreamTokenCustodyEnrollRequest,
     ) -> Result<RetiredNativeRequest> {
-        self.retire_preparation(
-            journal,
+        self.retire_preparation_in_parent(
+            parent,
+            name,
             NativeOperationKind::StreamTokenCustodyEnroll,
             OperationExpectation::Custody(CustodyExpectation::Enroll(expected)),
         )
@@ -502,15 +507,20 @@ impl AccountService {
         )
     }
     /// Retire only this exact retained request before any payload or dispatch evidence exists.
+    ///
+    /// Shares the original parent's ancestry while freshly opening the child and exclusive lock.
+    /// Missing children never create a journal; every retained record and inventory is checked.
     /// # Errors
     /// Refuses missing, changed, malformed, payload-retained or signed histories and unsafe custody.
     pub fn retire_stream_token_custody_configure_unprepared(
         &self,
-        journal: &Path,
+        parent: &iroha_fs::PrivateDirectory,
+        name: &std::ffi::OsStr,
         expected: &StreamTokenCustodyConfigureRequest,
     ) -> Result<RetiredNativeRequest> {
-        self.retire_preparation(
-            journal,
+        self.retire_preparation_in_parent(
+            parent,
+            name,
             NativeOperationKind::StreamTokenCustodyConfigure,
             OperationExpectation::Custody(CustodyExpectation::Configure(expected)),
         )
@@ -593,15 +603,21 @@ impl AccountService {
     }
     fn verify_custody_journal(
         &self,
-        journal: &Path,
+        parent: &iroha_fs::PrivateDirectory,
+        name: &std::ffi::OsStr,
         expected: CustodyExpectation<'_>,
     ) -> Result<SignedTransaction> {
         let kind = match &expected {
             CustodyExpectation::Configure(_) => NativeOperationKind::StreamTokenCustodyConfigure,
             CustodyExpectation::Enroll(_) => NativeOperationKind::StreamTokenCustodyEnroll,
         };
-        self.inspect_preparation(journal, kind, Some(OperationExpectation::Custody(expected)))?
-            .into_signed_transaction()
+        self.inspect_preparation_in_parent(
+            parent,
+            name,
+            kind,
+            Some(OperationExpectation::Custody(expected)),
+        )?
+        .into_signed_transaction()
     }
     fn run_custody(
         &self,
@@ -664,27 +680,35 @@ impl AccountService {
     ) -> Result<OperationReport> {
         self.prepare_custody(CustodyExpectation::Enroll(request), journal)
     }
-    /// Inspect an original Configure journal, including after its UTC deadline, without I/O to a node.
+    /// Inspect the original Configure journal under its retained private parent, including after
+    /// its UTC deadline, without I/O to a node. Each call freshly opens the named child and lock
+    /// and verifies every retained record; sharing ancestor owners grants no cached verdict.
     /// Returns its exact validated signed envelope for independent native inclusion verification.
     /// # Errors
-    /// Rejects substituted request, signed wire, network, fees or local custody.
+    /// Rejects invalid names, changed parent custody, substituted request, signed wire, network,
+    /// fees, missing or partial journals, and competing locks.
     pub fn verify_stream_token_custody_configure_journal(
         &self,
-        journal: &Path,
+        parent: &iroha_fs::PrivateDirectory,
+        name: &std::ffi::OsStr,
         expected: &StreamTokenCustodyConfigureRequest,
     ) -> Result<SignedTransaction> {
-        self.verify_custody_journal(journal, CustodyExpectation::Configure(expected))
+        self.verify_custody_journal(parent, name, CustodyExpectation::Configure(expected))
     }
-    /// Inspect an original Enroll journal without renewing its attestation or transaction lifetime.
+    /// Inspect the original Enroll journal under its retained private parent without renewing
+    /// its attestation or transaction lifetime. Each call freshly opens the named child and lock
+    /// and verifies every retained record; sharing ancestor owners grants no cached verdict.
     /// Returns its exact validated signed envelope, never a freshly signed replacement.
     /// # Errors
-    /// Rejects substituted request, signed wire, original interval, fees or local custody.
+    /// Rejects invalid names, changed parent custody, substituted request, signed wire, original
+    /// interval, fees, missing or partial journals, and competing locks.
     pub fn verify_stream_token_custody_enroll_journal(
         &self,
-        journal: &Path,
+        parent: &iroha_fs::PrivateDirectory,
+        name: &std::ffi::OsStr,
         expected: &StreamTokenCustodyEnrollRequest,
     ) -> Result<SignedTransaction> {
-        self.verify_custody_journal(journal, CustodyExpectation::Enroll(expected))
+        self.verify_custody_journal(parent, name, CustodyExpectation::Enroll(expected))
     }
     /// Submit the original Configure at most once, comparing its request while holding the journal.
     /// # Errors

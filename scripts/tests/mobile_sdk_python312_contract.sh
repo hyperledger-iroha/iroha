@@ -229,8 +229,8 @@ APPLE_RUSTUP="$("$PYTHON312" -I -S -B -c \
   "$APPLE_RUSTUP")"
 [[ "$APPLE_RUSTUP" == /* && -f "$APPLE_RUSTUP" && ! -L "$APPLE_RUSTUP" \
   && -x "$APPLE_RUSTUP" ]] || fail "pinned rustup is not canonical"
-APPLE_RUSTC="$("$APPLE_RUSTUP" which --toolchain 1.93.1 rustc)"
-APPLE_RUSTDOC="$("$APPLE_RUSTUP" which --toolchain 1.93.1 rustdoc)"
+APPLE_RUSTC="$("$APPLE_RUSTUP" which --toolchain 1.99.1 rustc)"
+APPLE_RUSTDOC="$("$APPLE_RUSTUP" which --toolchain 1.99.1 rustdoc)"
 mkdir -p "$APPLE_CARGO_TARGET" "$APPLE_BUILD_DIR" "$APPLE_OUT_DIR"
 expect_failure_containing \
   "retired Apple boolean lock bypass" \

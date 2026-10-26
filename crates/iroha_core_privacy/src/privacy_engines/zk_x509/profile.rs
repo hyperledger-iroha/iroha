@@ -25,13 +25,11 @@ pub(crate) const ZK_X509_SUITE_V1: &[u8] = b"iroha-zk-x509-stark-p256-v1";
 /// Source identity for the original Iroha implementation.
 pub(crate) const ZK_X509_SOURCE_PROFILE_V1: &[u8] =
     b"iroha-native-rust:strict-der:rfc5280-p256-sha256:private-chain-crl-ownership:goldilocks-stark:v1";
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 /// Minimum admitted certificate-chain depth, including leaf and root.
 pub(crate) const ZK_X509_MIN_CHAIN_DEPTH_V1: usize = 2;
 /// Maximum admitted certificate-chain depth, including leaf and root.
 #[doc(hidden)]
 pub const ZK_X509_MAX_CHAIN_DEPTH_V1: usize = 3;
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 /// Maximum DER bytes in the private CRL witness.
 ///
 /// Unbounded parsing is deliberately excluded from a consensus circuit.
@@ -54,7 +52,6 @@ pub(crate) const ZK_X509_ATTRIBUTE_SALT_BYTES_V1: usize = 32;
 pub(crate) const ZK_X509_MAX_ATTRIBUTE_VALUE_BYTES_V1: usize = 256;
 /// Fixed uncompressed P-256 affine public-key width, including SEC1 prefix.
 pub(crate) const ZK_X509_UNCOMPRESSED_P256_BYTES_V1: usize = 65;
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 /// RFC 5280 client-authentication EKU OID.
 pub(crate) const ZK_X509_CLIENT_AUTHENTICATION_EKU_OID_V1: &str = "1.3.6.1.5.5.7.3.2";
 #[cfg(test)]
@@ -85,8 +82,8 @@ pub(crate) const ZK_X509_WALLET_IDENTITY_EKU_DER_VALUE_V1: &[u8] = &[
 pub(crate) const ZK_X509_HASH_FRAME_DOMAIN_V1: &[u8] = b"iroha.zk-x509.sha256.frame.v1";
 /// Domain for occupied CA leaves.
 pub(crate) const ZK_X509_CA_LEAF_DOMAIN_V1: &[u8] = b"iroha.zk-x509.ca.leaf.v1";
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 /// Domain for empty CA leaves.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) const ZK_X509_CA_EMPTY_LEAF_DOMAIN_V1: &[u8] = b"iroha.zk-x509.ca.empty-leaf.v1";
 /// Domain for CA internal tree nodes.
 pub(crate) const ZK_X509_CA_NODE_DOMAIN_V1: &[u8] = b"iroha.zk-x509.ca.node.v1";

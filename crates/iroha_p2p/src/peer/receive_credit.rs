@@ -433,7 +433,7 @@ struct Reservation {
 impl Reservation {
     fn delivered<T: Pload>(
         mut self,
-        peer: iroha_data_model::peer::Peer,
+        peer: iroha_model_base::peer::Peer,
         payload: T,
         connection: ConnectionId,
     ) -> message::PeerMessage<T> {

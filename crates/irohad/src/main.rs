@@ -125,8 +125,10 @@ use iroha_data_model::{
 };
 use iroha_data_model::{prelude::*, transaction::Executable};
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal, Supervisor};
+#[cfg(test)]
+use iroha_genesis::RawGenesisTransaction;
 use iroha_genesis::{
-    GenesisBlock, RawGenesisTransaction, compute_genesis_vk_set_hash,
+    GenesisBlock, compute_genesis_vk_set_hash,
     init_instruction_registry as init_genesis_instruction_registry,
 };
 use iroha_logger::actor::LoggerHandle;
@@ -234,12 +236,37 @@ fn torii_receipt_signer_or_derived(
 type ConsensusHandshakeMeta = ConsensusHandshakeMetadata;
 fn parse_handshake_meta_str(raw: &str) -> Result<ConsensusHandshakeMeta, norito::Error> {
     let metadata: ConsensusHandshakeMeta =
-        norito::json::from_str(raw).map_err(norito::Error::from)?;
+        norito::json::from_str(raw).map_err(norito::json::Error::into_core_error)?;
     metadata
         .validate()
         .map_err(|error| norito::Error::Message(error.to_string()))?;
     Ok(metadata)
 }
+
+/// Admit internal daemon work against one retained committed parameter source.
+/// Missing ordinary crypto authority remains unavailable rather than using local config.
+fn accept_internal_transaction(
+    transaction: SignedTransaction,
+    network: &iroha_data_model::NetworkId,
+    parameters: &iroha_core::state::StateParameters,
+) -> eyre::Result<iroha_core::tx::AcceptedTransaction<'static>> {
+    let policy = parameters.require_crypto_policy().map_err(|_| {
+        iroha_core::execution_attempt::ExecutionDeferred::from(
+            ivm::error::ExecutionDeferral::CryptoAdmissionPolicyUnavailable,
+        )
+    })?;
+    Ok(iroha_core::tx::AcceptedTransaction::accept(
+        transaction,
+        network,
+        parameters.sumeragi().max_clock_drift(),
+        parameters.transaction(),
+        policy,
+    )?)
+}
+
+#[cfg(test)]
+#[path = "main/internal_admission_tests.rs"]
+mod internal_admission_tests;
 
 /// Required verifier implementations are a local participation condition, not policy validity.
 fn require_crypto_verification_implementations(
@@ -289,7 +316,7 @@ fn daemon_fixture_crypto_policy()
 #[cfg(test)]
 fn daemon_fixture_staking_policy() -> iroha_data_model::block::consensus::PublicLaneStakingPolicy {
     let fees = iroha_config::parameters::defaults::nexus::fees::genesis_policy();
-    iroha_deploy::genesis::default_staking_policy(
+    iroha_genesis::default_staking_policy(
         fees.fee_asset_id,
         fees.fee_sink_account_id.clone(),
         fees.fee_sink_account_id,
@@ -389,12 +416,11 @@ fn confidential_handshake_policy_digest(
         Some(iroha_core::state::default_genesis_confidential_policy_hash()),
     )
 }
+// Preserve the canonical parser's original cause; callers own any startup context.
 fn decode_consensus_handshake_meta(
     payload: &Json,
 ) -> Result<ConsensusHandshakeMeta, norito::Error> {
-    parse_handshake_meta_str(payload.get()).map_err(|_| {
-        norito::Error::Message("failed to decode consensus_handshake_meta payload".to_string())
-    })
+    parse_handshake_meta_str(payload.get())
 }
 type SharedSoraFsProviderCache = Arc<tokio::sync::RwLock<iroha_torii::sorafs::ProviderAdvertCache>>;
 #[derive(Debug)]
@@ -508,7 +534,7 @@ fn complete_test_genesis_builder_for_topology(
 ) -> iroha_genesis::GenesisBuilder {
     topology.sort_by(|left, right| left.peer.cmp(&right.peer));
     assert!(
-        iroha_data_model::block::consensus::is_valid_committee_size(topology.len()),
+        iroha_model_base::topology::is_valid_committee_size(topology.len()),
         "irohad genesis fixtures require an exact supported 3f + 1 topology"
     );
     assert!(
@@ -588,8 +614,8 @@ mod handshake_payload_tests {
         let err =
             decode_consensus_handshake_meta(&stringified).expect_err("nested payload must fail");
         assert!(
-            err.to_string().contains("failed to decode"),
-            "unexpected error: {err}"
+            matches!(&err, norito::Error::Json(_)),
+            "invalid handshake input must retain its original JSON category: {err:?}"
         );
     }
     #[test]
@@ -618,8 +644,8 @@ mod handshake_payload_tests {
             .expect("construct bad json");
         let err = decode_consensus_handshake_meta(&bad).expect_err("garbage must fail");
         assert!(
-            err.to_string().contains("failed to decode"),
-            "unexpected error: {err}"
+            matches!(&err, norito::Error::Json(_)),
+            "invalid handshake input must retain its original JSON category: {err:?}"
         );
     }
     #[test]
@@ -630,8 +656,8 @@ mod handshake_payload_tests {
         .expect("construct mangled payload");
         let err = decode_consensus_handshake_meta(&mangled).expect_err("mangled payload must fail");
         assert!(
-            err.to_string().contains("failed to decode"),
-            "unexpected error: {err}"
+            matches!(&err, norito::Error::Json(_)),
+            "invalid handshake input must retain its original JSON category: {err:?}"
         );
     }
     #[test]
@@ -644,8 +670,8 @@ mod handshake_payload_tests {
         let err =
             decode_consensus_handshake_meta(&payload).expect_err("non-JSON payload must fail");
         assert!(
-            err.to_string().contains("failed to decode"),
-            "unexpected error: {err}"
+            matches!(&err, norito::Error::Json(_)),
+            "invalid handshake input must retain its original JSON category: {err:?}"
         );
     }
 
@@ -697,9 +723,7 @@ mod handshake_payload_tests {
         {
             let mut block = world.block();
             block
-                .parameters
-                .get_mut()
-                .set_parameter(iroha_data_model::parameter::Parameter::Custom(
+                .set_parameter_for_testing(iroha_data_model::parameter::Parameter::Custom(
                     policy.into_custom_parameter(),
                 ))
                 .expect("install the committed pipeline fixture policy");
@@ -1216,7 +1240,7 @@ fn apply_state_geometry_config_before_kura_replay(
                 report.attach("failed to restore primary geometry before startup replay")
             })?;
     }
-    sccp_staking_policy::validate(&state.world_view(), &policies.nexus.staking)
+    sccp_staking_policy::validate(&state.world_view())
         .map_err(|error| Report::new(error).change_context(StartError::InitKura))
         .map_err(|report| {
             report.attach(
@@ -2647,7 +2671,6 @@ impl Iroha {
         let queue_limits = iroha_core::queue::QueueLimits::from_nexus(&runtime_nexus);
         let lane_catalog = Arc::new(runtime_nexus.lane_catalog.clone());
         let dataspace_catalog = Arc::new(runtime_nexus.dataspace_catalog.clone());
-        let governance_catalog = Arc::new(runtime_nexus.governance.clone());
         let registry_cfg = runtime_nexus.registry.clone();
         let lane_compliance = frozen_startup_lane_compliance;
         if let Some(engine) = lane_compliance.as_ref() {
@@ -2722,12 +2745,10 @@ impl Iroha {
         } else {
             let queue_task = Arc::clone(&queue);
             let telemetry_task = state.telemetry.clone();
-            let governance_task = Arc::clone(&governance_catalog);
             let registry_cfg_task = registry_cfg.clone();
             Some((
                 queue_task,
                 telemetry_task,
-                governance_task,
                 registry_cfg_task,
             ))
         };
@@ -2736,9 +2757,8 @@ impl Iroha {
             None
         } else {
             let queue_task = Arc::clone(&queue);
-            let governance_task = Arc::clone(&governance_catalog);
             let registry_cfg_task = registry_cfg.clone();
-            Some((queue_task, governance_task, registry_cfg_task))
+            Some((queue_task, registry_cfg_task))
         };
         if config.kura.init_mode == InitMode::Fast {
             iroha_logger::warn!(
@@ -2756,15 +2776,24 @@ impl Iroha {
                 .read()
                 .baseline_consensus_policy_digest()
         });
+        // Every final handshake, including a restored or emergency-Fast node,
+        // binds the same authenticated original genesis fee policy. Current-height
+        // monetary updates must not prevent an older peer from joining the chain.
+        let handshake_genesis = effective_genesis.ok_or_else(|| {
+            Report::new(StartError::InitKura)
+                .attach("native handshake requires exact signed genesis")
+        })?;
         let mut config_caps = if emergency_fast {
-            build_consensus_config_caps(
+            build_signed_genesis_consensus_config_caps(
                 &config.nexus,
+                handshake_genesis,
                 compliance_policy_digest,
                 lane_manifest_policy_digest,
             )
         } else {
-            build_consensus_config_caps(
+            build_signed_genesis_consensus_config_caps(
                 &state.nexus_snapshot(),
+                handshake_genesis,
                 compliance_policy_digest,
                 lane_manifest_policy_digest,
             )
@@ -3044,7 +3073,7 @@ impl Iroha {
             })?;
         }
         #[cfg(feature = "telemetry")]
-        if let Some((queue_task, telemetry_task, governance_task, registry_cfg_task)) =
+        if let Some((queue_task, telemetry_task, registry_cfg_task)) =
             lane_manifest_task
         {
             let state_task = Arc::clone(&state);
@@ -3053,9 +3082,8 @@ impl Iroha {
                 queue_task
                     .watch_lane_manifests_task(
                         Some(telemetry_task),
-                        governance_task,
                         registry_cfg_task,
-                        Some(state_task),
+                        state_task,
                     )
                     .await;
                 // A disabled or refused diagnostic refresh may finish normally. Preserve that
@@ -3064,16 +3092,15 @@ impl Iroha {
             }));
         }
         #[cfg(not(feature = "telemetry"))]
-        if let Some((queue_task, governance_task, registry_cfg_task)) = lane_manifest_task {
+        if let Some((queue_task, registry_cfg_task)) = lane_manifest_task {
             let state_task = Arc::clone(&state);
             let watcher_shutdown = supervisor.shutdown_signal();
             supervisor.monitor(tokio::spawn(async move {
                 queue_task
                     .watch_lane_manifests_task(
                         None,
-                        governance_task,
                         registry_cfg_task,
-                        Some(state_task),
+                        state_task,
                     )
                     .await;
                 // A disabled or refused diagnostic refresh may finish normally. Preserve that
@@ -3458,6 +3485,15 @@ impl Iroha {
                 handle.startup_recovery(),
                 supervisor.shutdown_signal(),
             ));
+            // Current attestations read only their tip pair once this child has
+            // minted the retained authority after the same completed recovery.
+            supervisor.monitor(
+                iroha_core::sumeragi::finality::RetainedAttestationProducer::start(
+                    Arc::clone(&state),
+                    handle.startup_recovery(),
+                    supervisor.shutdown_signal(),
+                ),
+            );
         }
         let sorafs_storage_config = if emergency_fast {
             sorafs_node::config::StorageConfig::builder()
@@ -8529,7 +8565,8 @@ fn validate_available_genesis_inputs(
     let (signed_mode, signed_parameters) = signed_genesis_context_metadata(&genesis.0)
         .map_err(|error| Report::new(MainError::Config).attach(error))?;
     let config_caps =
-        build_consensus_config_caps(&config.nexus, None, None).change_context(MainError::Config)?;
+        build_signed_genesis_consensus_config_caps(&config.nexus, &genesis.0, None, None)
+            .change_context(MainError::Config)?;
     let (mode_tag, _bls_domain, consensus_caps, block_cadence_ms, _maximum_validator_roster_len) =
         consensus_caps_from_genesis(genesis, &config_caps).ok_or_else(|| {
             Report::new(MainError::Config).attach(
@@ -8581,7 +8618,7 @@ impl DisposableValidationRoot {
         let parent = env::temp_dir();
         for _ in 0..32 {
             let mut nonce = [0_u8; 16];
-            rand::TryRngCore::try_fill_bytes(&mut rand::rngs::OsRng, &mut nonce)
+            rand::TryRng::try_fill_bytes(&mut rand::rngs::SysRng, &mut nonce)
                 .map_err(|error| {
                     std::io::Error::other(format!(
                         "operating-system randomness unavailable for temporary validation storage: {error}"
@@ -8796,12 +8833,14 @@ fn parse_confidential_registry_hash(payload: &Json) -> ReportResult<Option<[u8; 
 }
 fn build_consensus_config_caps(
     nexus: &iroha_config::parameters::actual::Nexus,
+    original_fees: Option<&iroha_data_model::block::consensus::RootFeePolicy>,
     compliance_policy_digest: Option<[u8; 32]>,
     lane_manifest_policy_digest: Option<[u8; 32]>,
 ) -> ReportResult<iroha_p2p::ConsensusConfigCaps, StartError> {
     let nexus_policy_digest =
         iroha_config::parameters::actual::nexus_consensus_policy_digest_with_runtime_policies(
             nexus,
+            original_fees,
             compliance_policy_digest,
             lane_manifest_policy_digest,
         )
@@ -8819,6 +8858,31 @@ fn build_consensus_config_caps(
         ivm_gas_schedule_hash: ivm::gas::schedule_hash().into(),
     })
 }
+/// Bind handshake monetary identity to the authenticated original signed genesis.
+///
+/// Startup selects and authenticates the expected chain/genesis identity before this
+/// call. The shared genesis reader verifies the original signatures, unique policy
+/// instruction and signed root scope; local recipes and later State fees are not inputs.
+fn build_signed_genesis_consensus_config_caps(
+    nexus: &iroha_config::parameters::actual::Nexus,
+    genesis: &SignedBlock,
+    compliance_policy_digest: Option<[u8; 32]>,
+    lane_manifest_policy_digest: Option<[u8; 32]>,
+) -> ReportResult<iroha_p2p::ConsensusConfigCaps, StartError> {
+    let original_fees =
+        iroha_genesis::signed_genesis_root_fee_policy(genesis).map_err(|error| {
+            Report::new(StartError::StartP2p).attach(format!(
+                "authenticate original handshake fee policy: {error}"
+            ))
+        })?;
+    build_consensus_config_caps(
+        nexus,
+        Some(&original_fees),
+        compliance_policy_digest,
+        lane_manifest_policy_digest,
+    )
+}
+
 fn consensus_caps_from_genesis(
     genesis: &GenesisBlock,
     config_caps: &iroha_p2p::ConsensusConfigCaps,
@@ -10014,9 +10078,7 @@ mod tests {
             .split_once("// Recovery: scan recent persisted pipeline sidecars")
             .expect("pipeline recovery diagnostics")
             .1
-            .split_once(
-                "if let Some((queue_task, telemetry_task, governance_task, registry_cfg_task)) =",
-            )
+            .split_once("if let Some((queue_task, telemetry_task, registry_cfg_task)) =")
             .expect("end of pipeline recovery diagnostics")
             .0;
         assert_eq!(
@@ -11288,11 +11350,14 @@ mod tests {
             let base_raw = base_genesis
                 .build_raw()
                 .expect("build complete offline semantic genesis manifest");
+            // Ordinary policy is explicitly authored in genesis. Check compiled
+            // verifier readiness before native signing and staging.
             assert_eq!(
                 base_raw.crypto_admission_policy(),
                 &daemon_fixture_crypto_policy(),
-                "sign the explicitly authored fixture crypto policy before native staging"
             );
+            require_crypto_verification_implementations(base_raw.crypto_admission_policy())
+                .expect("compiled verifiers support the explicitly authored genesis policy");
             let (context_hash, execution_policy_hash) =
                 staged_context_hashes_for_test(&base_raw, &genesis_authority, &config);
             let mut parameters = base_raw.sumeragi_context_parameters();
@@ -11314,7 +11379,7 @@ mod tests {
             config.genesis.expected_hash = genesis.0.hash();
             let (mode, parameters) = signed_genesis_context_metadata(&genesis.0)
                 .expect("signed genesis context metadata");
-            let config_caps = build_consensus_config_caps(&config.nexus, None, None)
+            let config_caps = build_consensus_config_caps(&config.nexus, None, None, None)
                 .expect("default consensus config caps");
             let (_, _, _, cadence_ms, _) = consensus_caps_from_genesis(&genesis, &config_caps)
                 .expect("canonical genesis consensus metadata");
@@ -11404,8 +11469,13 @@ mod tests {
                 ready.nexus_amx_context_hash,
                 Some(hex_hash(bootstrap.nexus_amx_context_hash))
             );
-            let config_caps = build_consensus_config_caps(&fixture.config.nexus, None, None)
-                .expect("default consensus config caps");
+            let config_caps = build_signed_genesis_consensus_config_caps(
+                &fixture.config.nexus,
+                &fixture.genesis.0,
+                None,
+                None,
+            )
+            .expect("authenticated original consensus config caps");
             let (_, _, handshake, _, _) =
                 consensus_caps_from_genesis(&fixture.genesis, &config_caps)
                     .expect("canonical genesis consensus metadata");
@@ -11418,10 +11488,28 @@ mod tests {
                 ready.protocol_version,
                 iroha_data_model::sumeragi::PROTOCOL_VERSION
             );
-            // Build- and configuration-bound values do not depend on the genesis.
+            // Build identities are unchanged; the ready digest now binds actual
+            // signed monetary authority instead of the pending absence marker.
             assert_eq!(ready.protocol_version, pending.protocol_version);
             assert_eq!(ready.wire_schema_hash, pending.wire_schema_hash);
-            assert_eq!(ready.nexus_policy_digest, pending.nexus_policy_digest);
+            assert_ne!(ready.nexus_policy_digest, pending.nexus_policy_digest);
+            let manifests = freeze_lane_manifests_for_startup_replay(&fixture.config.nexus)
+                .expect("actual ready manifest authority");
+            let compliance = freeze_lane_compliance_for_startup_replay(&fixture.config.nexus)
+                .expect("actual ready compliance authority");
+            let ready_caps = build_signed_genesis_consensus_config_caps(
+                &fixture.config.nexus,
+                &fixture.genesis.0,
+                compliance
+                    .as_ref()
+                    .map(|engine| engine.consensus_policy_digest()),
+                Some(manifests.baseline_consensus_policy_digest()),
+            )
+            .expect("same signed original authority as final network startup");
+            assert_eq!(
+                ready.nexus_policy_digest,
+                hex::encode(ready_caps.nexus_policy_digest)
+            );
             assert_eq!(ready.gas_schedule_hash, pending.gas_schedule_hash);
         }
 
@@ -11893,10 +11981,11 @@ mod tests {
         #[test]
         fn consensus_config_caps_use_canonical_fields() {
             let config = sample_config();
-            let caps = build_consensus_config_caps(&config.nexus, None, None)
+            let caps = build_consensus_config_caps(&config.nexus, None, None, None)
                 .expect("config caps should build");
             let expected_nexus_policy_digest = iroha_config::parameters::actual::nexus_consensus_policy_digest_with_runtime_policies(
                 &config.nexus,
+                None,
                 None,
                 None,
             )
@@ -11908,6 +11997,137 @@ mod tests {
                 <[u8; 32]>::from(ivm::gas::schedule_hash())
             );
         }
+        #[test]
+        fn consensus_config_caps_distinguish_original_policy_from_actual_absence() {
+            let mut config = sample_config();
+            let mut original = iroha_config::parameters::defaults::nexus::fees::genesis_policy();
+            original.base_fee = 37_u32.into();
+            let absent = build_consensus_config_caps(&config.nexus, None, None, None).unwrap();
+            let present =
+                build_consensus_config_caps(&config.nexus, Some(&original), None, None).unwrap();
+            assert_ne!(present.nexus_policy_digest, absent.nexus_policy_digest);
+            assert_eq!(
+                present.nexus_policy_digest,
+                iroha_config::parameters::actual::nexus_consensus_policy_digest_with_runtime_policies(
+                    &config.nexus,
+                    Some(&original),
+                    None,
+                    None,
+                )
+                .unwrap()
+            );
+            config.nexus.fees.base_fee = 999_u32.into();
+            assert_eq!(
+                build_consensus_config_caps(&config.nexus, Some(&original), None, None).unwrap(),
+                present,
+                "the node-local authoring recipe cannot replace original monetary authority"
+            );
+            assert_eq!(
+                build_consensus_config_caps(&config.nexus, None, None, None).unwrap(),
+                absent,
+                "pending absence does not manufacture a local fee policy"
+            );
+        }
+
+        #[test]
+        fn signed_genesis_handshake_retains_original_fees_and_rejects_signature_substitution() {
+            use iroha_data_model::block::{BlockSignature, BlockSignatures};
+
+            let _registry_guard = instruction_registry_test_guard();
+            iroha_genesis::init_instruction_registry();
+            let mut config = sample_config();
+            let mut original = iroha_config::parameters::defaults::nexus::fees::genesis_policy();
+            original.base_fee = 37_u32.into();
+            let raw = sample_manifest()
+                .into_builder()
+                .append_parameter(iroha_data_model::parameter::Parameter::Custom(
+                    original.clone().into_custom_parameter().unwrap(),
+                ))
+                .build_raw()
+                .expect("one explicit nondefault original fee policy");
+            let genesis = sign_configured_genesis_for_test(raw, &config.common.key_pair, &config);
+            assert_eq!(
+                iroha_genesis::signed_genesis_root_fee_policy(&genesis.0).unwrap(),
+                original
+            );
+            let ready = build_signed_genesis_consensus_config_caps(
+                &config.nexus,
+                &genesis.0,
+                Some([0x31; 32]),
+                Some([0x32; 32]),
+            )
+            .expect("the final network helper authenticates original genesis fees");
+            assert_eq!(
+                ready,
+                build_consensus_config_caps(
+                    &config.nexus,
+                    Some(&original),
+                    Some([0x31; 32]),
+                    Some([0x32; 32]),
+                )
+                .unwrap()
+            );
+            assert_ne!(
+                ready.nexus_policy_digest,
+                build_consensus_config_caps(
+                    &config.nexus,
+                    None,
+                    Some([0x31; 32]),
+                    Some([0x32; 32]),
+                )
+                .unwrap()
+                .nexus_policy_digest,
+                "restored startup cannot advertise synthetic fee absence"
+            );
+            let mut successor = original;
+            successor.base_fee = 91_u32.into();
+            assert_ne!(
+                ready.nexus_policy_digest,
+                build_consensus_config_caps(
+                    &config.nexus,
+                    Some(&successor),
+                    Some([0x31; 32]),
+                    Some([0x32; 32]),
+                )
+                .unwrap()
+                .nexus_policy_digest,
+                "the current-height fee projection is a different authority"
+            );
+            config.nexus.fees = successor;
+            assert_eq!(
+                build_signed_genesis_consensus_config_caps(
+                    &config.nexus,
+                    &genesis.0,
+                    Some([0x31; 32]),
+                    Some([0x32; 32]),
+                )
+                .unwrap(),
+                ready,
+                "both final startup branches retain the original signed fee policy"
+            );
+            let mut forged = genesis.0.clone();
+            let wrong = KeyPair::from_seed(vec![0x79; 32], Algorithm::Ed25519);
+            let signature =
+                iroha_crypto::SignatureOf::try_from_hash(wrong.private_key(), forged.hash())
+                    .unwrap();
+            forged
+                .replace_signatures(
+                    BlockSignatures::try_from_iter([BlockSignature::new(0, signature)]).unwrap(),
+                )
+                .unwrap();
+            assert_eq!(forged.hash(), genesis.0.hash());
+            assert!(
+                build_signed_genesis_consensus_config_caps(
+                    &config.nexus,
+                    &forged,
+                    Some([0x31; 32]),
+                    Some([0x32; 32]),
+                )
+                .is_err(),
+                "matching body hash cannot replace original signature authentication"
+            );
+        }
+
         #[test]
         fn verify_genesis_metadata_rejects_consensus_mode_mismatch() -> eyre::Result<()> {
             use iroha_data_model::parameter::system::SumeragiConsensusMode;
@@ -11947,7 +12167,7 @@ mod tests {
             .with_consensus_mode(SumeragiConsensusMode::Npos)
             .with_consensus_meta()?
             .build_and_sign(&genesis_keys)?;
-            let config_caps = build_consensus_config_caps(&config.nexus, None, None)
+            let config_caps = build_consensus_config_caps(&config.nexus, None, None, None)
                 .map_err(|err| eyre::eyre!(format!("{err:?}")))?;
             let (mode_tag, _bls_domain, consensus_caps, _, _) =
                 consensus_caps_from_genesis(&permissioned_genesis, &config_caps)
@@ -11982,7 +12202,7 @@ mod tests {
             .expect("build complete fingerprint-mismatch genesis manifest")
             .with_consensus_meta()?
             .build_and_sign(&genesis_keys)?;
-            let config_caps = build_consensus_config_caps(&config.nexus, None, None)
+            let config_caps = build_consensus_config_caps(&config.nexus, None, None, None)
                 .map_err(|err| eyre::eyre!(format!("{err:?}")))?;
             let (mode_tag, _bls_domain, mut consensus_caps, _, _) =
                 consensus_caps_from_genesis(&genesis_block, &config_caps)
@@ -12090,6 +12310,8 @@ mod tests {
                 World::new(),
                 Kura::blank_kura_for_testing(),
                 LiveQueryStore::start_test(),
+                #[cfg(feature = "telemetry")]
+                StateTelemetry::default(),
             );
             assert!(
                 state
@@ -12453,8 +12675,7 @@ fn authenticated_maximum_validator_roster_len(
 ) -> Result<usize, String> {
     match mode {
         iroha_data_model::block::consensus::ConsensusMode::Permissioned => {
-            if !iroha_data_model::block::consensus::is_valid_committee_size(permissioned_roster_len)
-            {
+            if !iroha_model_base::topology::is_valid_committee_size(permissioned_roster_len) {
                 return Err(
                     "authenticated permissioned roster is not a bounded 3f + 1 committee"
                         .to_owned(),
@@ -12469,7 +12690,7 @@ fn authenticated_maximum_validator_roster_len(
             let maximum = usize::try_from(maximum).map_err(|_| {
                 "authenticated NPoS maximum validator roster does not fit this platform".to_owned()
             })?;
-            if !iroha_data_model::block::consensus::is_valid_committee_size(maximum) {
+            if !iroha_model_base::topology::is_valid_committee_size(maximum) {
                 return Err(
                     "authenticated NPoS maximum validator roster is not a bounded 3f + 1 committee"
                         .to_owned(),

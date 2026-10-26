@@ -336,6 +336,11 @@ fn reservation_binds_complete_internal_origin_not_just_row_kind() {
             ExecutionOutputV1::Time(output) => {
                 output.invocation.trigger.action_hash = Hash::new(b"another action")
             }
+            ExecutionOutputV1::NetworkWithLifecycle(_)
+            | ExecutionOutputV1::PipelineWithLifecycle(_)
+            | ExecutionOutputV1::TimeWithLifecycle(_) => {
+                unreachable!("legacy V1 fixture unexpectedly contains a lifecycle carrier")
+            }
             ExecutionOutputV1::Network(_) => unreachable!(),
         }
         assert!(owner.begin(original).unwrap().finish(substituted).is_err());
@@ -670,6 +675,11 @@ mod internal_rejection {
             ExecutionOutputV1::Time(row) => {
                 (&mut row.result, &mut row.failure_root, &mut row.completions)
             }
+            ExecutionOutputV1::NetworkWithLifecycle(_)
+            | ExecutionOutputV1::PipelineWithLifecycle(_)
+            | ExecutionOutputV1::TimeWithLifecycle(_) => {
+                unreachable!("legacy V1 fixture unexpectedly contains a lifecycle carrier")
+            }
             ExecutionOutputV1::Network(_) => panic!("internal fixture"),
         }
     }
@@ -771,6 +781,11 @@ mod internal_rejection {
             match &mut later_terminal {
                 ExecutionOutputV1::Pipeline(row) => row.invocation.candidate_index += 1,
                 ExecutionOutputV1::Time(row) => row.invocation.schedule_index += 1,
+                ExecutionOutputV1::NetworkWithLifecycle(_)
+                | ExecutionOutputV1::PipelineWithLifecycle(_)
+                | ExecutionOutputV1::TimeWithLifecycle(_) => {
+                    unreachable!("legacy V1 fixture unexpectedly contains a lifecycle carrier")
+                }
                 ExecutionOutputV1::Network(_) => unreachable!(),
             }
             assert_eq!(output_bytes(&later_terminal).unwrap(), unit);
@@ -858,6 +873,11 @@ mod internal_rejection {
                         4 => row.invocation.trigger.trigger_id = "foreign-root".parse().unwrap(),
                         _ => row.result = TransactionResult::new(Ok(Vec::new())),
                     },
+                    ExecutionOutputV1::NetworkWithLifecycle(_)
+                    | ExecutionOutputV1::PipelineWithLifecycle(_)
+                    | ExecutionOutputV1::TimeWithLifecycle(_) => {
+                        unreachable!("legacy V1 fixture unexpectedly contains a lifecycle carrier")
+                    }
                     ExecutionOutputV1::Network(_) => unreachable!(),
                 }
                 assert_refused(&terminal, &invalid);

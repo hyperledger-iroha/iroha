@@ -34,6 +34,12 @@ import UIKit
     choice(title: "Compare Nearby pairing code", message: "Peer: \(peer)\nCode: \(code)\nPinned identity: \(certificate)\nSession: \(session)\nConfirm only if the selected other phone shows the same code.",
       accept: "Codes match", completion: decision)
   }
+  /// Retry only the same already approved live capability after Native65. No new approval
+  /// or authentication is manufactured; the caller checks its exact owner and acknowledged fence.
+  func retryApproved(completion: @escaping (Bool) -> Void) {
+    choice(title: "Approved Send is waiting", message: "Native retained this exact live review before dispatch. Retry the same approved Send, or cancel it.",
+      accept: "Retry approved Send", completion: completion)
+  }
   func review(_ projection: KagemushaWalletReviewProjectionV1,
               completion: @escaping (Result<UInt64, Error>) -> Void) {
     let hex = { (data: Data) in data.map { String(format: "%02x", $0) }.joined() }

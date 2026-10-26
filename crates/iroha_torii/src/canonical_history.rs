@@ -22,7 +22,20 @@ fn invalid(message: impl std::fmt::Display) -> QueryExecutionFail {
 /// [`permanent_refusal`]) is the typed permanent [`crate::Error::HistoryReadExceedsBudget`],
 /// which names the required quantity and the request's own limit and carries no retry hint.
 /// Every other deferral is transient capacity: a retryable `CapacityLimit` (HTTP 429).
+///
+/// Committed-history reads charge their cold frames and decoded graphs to the current query
+/// owner, so a capacity refusal may be that owner's own limit: it marks the owner, and a
+/// routed read is served again with a larger one.
 pub fn query_attempt_error(error: ExecutionAttemptError<QueryExecutionFail>) -> crate::Error {
+    if matches!(
+        error,
+        ExecutionAttemptError::Deferred(_)
+            | ExecutionAttemptError::Rejected(
+                QueryExecutionFail::CapacityLimit | QueryExecutionFail::GasBudgetExceeded
+            )
+    ) {
+        note_owner_capacity_refusal();
+    }
     let query_error = match error {
         ExecutionAttemptError::Deferred(deferred) => {
             if let Some((resource, required, limit)) = permanent_refusal(&deferred) {
@@ -37,6 +50,28 @@ pub fn query_attempt_error(error: ExecutionAttemptError<QueryExecutionFail>) -> 
         ExecutionAttemptError::Rejected(error) => error,
     };
     crate::Error::Query(iroha_data_model::ValidationFail::QueryFailed(query_error))
+}
+
+/// Project an off-chain page refusal without discarding its original source/decoder owner.
+///
+/// The page's physical source pool and cumulative decoder context both belong to its
+/// admitted query. Semantic page-work exhaustion is handled as a continuation in Core;
+/// original local resource refusals reach this boundary intact.
+pub fn history_page_error(error: ExecutionAttemptError<QueryExecutionFail>) -> crate::Error {
+    match error {
+        ExecutionAttemptError::Deferred(original) => {
+            query_attempt_error(ExecutionAttemptError::Deferred(original))
+        }
+        ExecutionAttemptError::Rejected(error) => {
+            crate::Error::Query(iroha_data_model::ValidationFail::QueryFailed(error))
+        }
+    }
+}
+
+fn note_owner_capacity_refusal() {
+    if let Ok(Some(owner)) = crate::history_producer::HistoryProducerOwner::current_if_admitted() {
+        owner.note_owner_limit_refused();
+    }
 }
 
 /// Project authenticated target work or forward the original execution refusal unchanged.

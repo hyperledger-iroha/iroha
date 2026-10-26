@@ -1,12 +1,13 @@
 //! Direct-field oracles, shape rejection and complete-profile work accounting.
 
 use super::*;
-use rand::{RngCore, SeedableRng, rngs::StdRng};
+use rand::SeedableRng;
+use rand_chacha::ChaCha12Rng;
 
 #[test]
 fn every_profile_stripe_matches_direct_boundary_and_random_denominators() {
     let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
-    let mut rng = StdRng::from_seed([0xD3; 32]);
+    let mut rng = ChaCha12Rng::from_seed([0xD3; 32]);
     let mut quotient_rows = 0;
     let mut inverse_calls = 0;
     let mut stripes = 0;
@@ -48,7 +49,8 @@ fn every_profile_stripe_matches_direct_boundary_and_random_denominators() {
             ];
             for row in indices.into_iter().chain((0..64).map(|_| {
                 usize::try_from(
-                    rng.next_u64() % u64::try_from(stripe.rows).expect("stripe rows fit u64"),
+                    rng.try_next_u64().expect("test RNG draw succeeds")
+                        % u64::try_from(stripe.rows).expect("stripe rows fit u64"),
                 )
                 .expect("sampled row fits usize")
             })) {
@@ -211,7 +213,7 @@ fn cached_composition_matches_direct_oracle_for_every_registration() {
             MainLog19ProverConstraintSourceV1::for_main_v1(&layout, &source).unwrap(),
         ),
     ];
-    let mut rng = StdRng::from_seed([0x73; 32]);
+    let mut rng = ChaCha12Rng::from_seed([0x73; 32]);
     let mut checked = 0;
     for registration in layout.registered_segments.iter().copied() {
         let segment = registration.segment;
@@ -226,7 +228,11 @@ fn cached_composition_matches_direct_oracle_for_every_registration() {
         // These rows are synthetic public field data, not retained witness cells.
         let mut fields = |width| {
             (0..width)
-                .map(|_| F::reduce(u128::from(rng.next_u64())))
+                .map(|_| {
+                    F::reduce(u128::from(
+                        rng.try_next_u64().expect("test RNG draw succeeds"),
+                    ))
+                })
                 .collect::<Vec<_>>()
         };
         let rows = [
@@ -247,7 +253,9 @@ fn cached_composition_matches_direct_oracle_for_every_registration() {
         let alphas = (0..segment.constraint_count)
             .map(|_| {
                 E::from_coefficients(core::array::from_fn(|_| {
-                    F::reduce(u128::from(rng.next_u64()))
+                    F::reduce(u128::from(
+                        rng.try_next_u64().expect("test RNG draw succeeds"),
+                    ))
                 }))
                 .unwrap()
             })

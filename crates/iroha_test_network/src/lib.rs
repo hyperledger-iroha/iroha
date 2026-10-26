@@ -31,9 +31,6 @@ pub use dedicated_read::read_on_dedicated_thread;
 use fslock::LockFile;
 use fslock_ports::AllocatedPort;
 use futures::{prelude::*, stream::FuturesUnordered};
-use iroha::data_model::block::consensus::{
-    MAX_VALIDATORS_PER_HEIGHT, MIN_VALIDATORS_PER_HEIGHT, is_valid_committee_size,
-};
 use iroha::data_model::sumeragi::SumeragiStatus;
 use iroha::{
     blocking::Client, client::Client as AsyncClient, data_model::prelude::*, secrecy::SecretString,
@@ -62,7 +59,9 @@ use iroha_data_model::{
         AliasDataSpaceIntentV1, AliasDomainIntentV1, AliasIntentV1, AliasLeaseAcquisitionV1,
         AliasQuoteGuardV1, ResolvedAccountAliasV1, ResolvedDataSpaceV1, ResolvedDomainV1,
     },
-    block::consensus::{ConsensusGenesisModeParams, ConsensusGenesisParams},
+    block::consensus::{
+        ConsensusGenesisModeParams, ConsensusGenesisParams, PublicLaneStakingPolicy,
+    },
     domain::NewDomain,
     isi::{
         InstructionBox, SetParameter,
@@ -88,6 +87,9 @@ use iroha_model_base::metadata::Metadata;
 use iroha_model_base::peer::PeerId;
 use iroha_model_base::topology::DataSpaceId;
 use iroha_model_base::topology::LaneId;
+use iroha_model_base::topology::{
+    MAX_VALIDATORS_PER_HEIGHT, MIN_VALIDATORS_PER_HEIGHT, is_valid_committee_size,
+};
 use iroha_primitives::{
     addr::{SocketAddr, socket_addr},
     json::Json,
@@ -187,6 +189,7 @@ pub fn unexecuted_genesis_factory_with_post_topology(
         topology,
         topology_entries,
         SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
+        config::default_test_network_staking_policy(),
     )
 }
 
@@ -3333,6 +3336,8 @@ pub struct Network {
     genesis_key_pair: Option<KeyPair>,
     genesis_isi: Vec<Vec<InstructionBox>>,
     genesis_post_topology_isi: Vec<Vec<InstructionBox>>,
+    // Exact complete authored policy shared by generated preview and final genesis.
+    generated_staking_policy: Option<PublicLaneStakingPolicy>,
     // Cache a single, deterministic genesis block per network instance to ensure
     // all peers that submit genesis use byte-for-byte identical content.
     cached_genesis: OnceLock<GenesisBlock>,
@@ -4434,7 +4439,10 @@ impl Network {
                 self.chain_id(),
                 crate::config::GenesisPolicyConfig {
                     genesis_crypto,
-                    staking_policy: config::default_test_network_staking_policy(),
+                    staking_policy: self
+                        .generated_staking_policy
+                        .clone()
+                        .expect("generated genesis has one authored staking policy"),
                     da_proof_policies,
                     pipeline_config: pipeline_config.clone(),
                     nexus_config: nexus_config.clone(),
@@ -5915,6 +5923,7 @@ pub struct NetworkBuilder {
     genesis_isi: Vec<Vec<InstructionBox>>,
     genesis_post_topology_isi: Vec<Vec<InstructionBox>>,
     custom_genesis: Option<GenesisBuilderFn>,
+    genesis_staking_policy: Option<PublicLaneStakingPolicy>,
     retained_genesis: Option<RetainedNetworkGenesis>,
     seed: Option<String>,
     genesis_key_pair: KeyPair,
@@ -6687,6 +6696,7 @@ fn genesis_contains_any_consensus_handshake(block: &GenesisBlock) -> bool {
 }
 #[path = "lib/genesis_parameter_normalization.rs"]
 mod genesis_parameter_normalization;
+mod genesis_staking;
 use genesis_parameter_normalization::normalize_genesis_parameters;
 fn consensus_handshake_parameter(consensus_profile: &ConsensusBootstrapProfile) -> Parameter {
     let mode = match consensus_profile.params.mode {
@@ -6795,16 +6805,19 @@ fn authenticated_validator_capacity(
     Ok(declared_capacity.max(signed_capacity))
 }
 fn resolve_npos_bootstrap_stake(
-    genesis_isi: &[Vec<InstructionBox>],
-    genesis_post_topology_isi: &[Vec<InstructionBox>],
+    npos: &SumeragiNposParameters,
+    policy: &PublicLaneStakingPolicy,
     requested: Quantity,
 ) -> Quantity {
-    let min_self_bond = npos_params_from_genesis(genesis_isi, genesis_post_topology_isi)
-        .expect("NPoS genesis snapshot must be valid")
-        .expect("NPoS genesis snapshot must be present before stake bootstrap")
-        .min_self_bond()
-        .clone();
-    requested.max(min_self_bond)
+    assert!(
+        &requested >= npos.min_self_bond(),
+        "declared bootstrap stake is below original NPoS minimum self bond"
+    );
+    assert!(
+        requested >= policy.min_validator_stake,
+        "declared bootstrap stake is below original staking policy minimum"
+    );
+    requested
 }
 impl Default for NetworkBuilder {
     fn default() -> Self {
@@ -6834,6 +6847,7 @@ impl NetworkBuilder {
             genesis_isi: vec![vec![]],
             genesis_post_topology_isi: Vec::new(),
             custom_genesis: None,
+            genesis_staking_policy: None,
             retained_genesis: None,
             seed: None,
             genesis_key_pair: SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
@@ -7422,6 +7436,28 @@ impl NetworkBuilder {
         self.genesis_isi.push(Vec::new());
         self
     }
+    /// Author one complete staking policy for generated genesis.
+    ///
+    /// The same policy reaches preview and final signing unchanged. Custom signed
+    /// and retained genesis own their original policy and reject this override.
+    ///
+    /// # Panics
+    /// Panics for invalid terms, repeated authorship, or an existing custom/retained genesis.
+    pub fn with_genesis_staking_policy(mut self, policy: PublicLaneStakingPolicy) -> Self {
+        assert!(
+            self.custom_genesis.is_none() && self.retained_genesis.is_none(),
+            "custom or retained genesis owns its original staking policy"
+        );
+        assert!(
+            self.genesis_staking_policy.is_none(),
+            "staking policy may be authored once"
+        );
+        policy
+            .validate()
+            .expect("complete valid genesis staking policy");
+        self.genesis_staking_policy = Some(policy);
+        self
+    }
     /// Override the genesis instructions using a custom block builder.
     ///
     /// The provided closure receives the network topology (as peer IDs) and the
@@ -7439,6 +7475,10 @@ impl NetworkBuilder {
     where
         F: Fn(UniqueVec<PeerId>, Vec<GenesisTopologyEntry>) -> GenesisBlock + Send + Sync + 'static,
     {
+        assert!(
+            self.genesis_staking_policy.is_none(),
+            "custom signed genesis owns its original staking policy"
+        );
         self.custom_genesis = Some(Arc::new(
             move |topology,
                   topology_entries,
@@ -7470,6 +7510,10 @@ impl NetworkBuilder {
             + Sync
             + 'static,
     {
+        assert!(
+            self.genesis_staking_policy.is_none(),
+            "custom signed genesis owns its original staking policy"
+        );
         self.custom_genesis = Some(Arc::new(
             move |topology,
                   topology_entries,
@@ -7498,6 +7542,10 @@ impl NetworkBuilder {
             + Sync
             + 'static,
     {
+        assert!(
+            self.genesis_staking_policy.is_none(),
+            "custom signed genesis owns its original staking policy"
+        );
         self.custom_genesis = Some(Arc::new(
             move |topology,
                   topology_entries,
@@ -7559,6 +7607,7 @@ impl NetworkBuilder {
             mut genesis_isi,
             mut genesis_post_topology_isi,
             custom_genesis,
+            genesis_staking_policy,
             retained_genesis: _,
             seed,
             genesis_key_pair,
@@ -7623,33 +7672,6 @@ impl NetworkBuilder {
         // when the recipe is built so retrying a cloned recipe cannot inherit a
         // previous attempt's peer directories, Kura state, logs, or ports.
         let env = Environment::new();
-        // Keep Nexus sink/escrow account literals parseable for unregister-guard checks even
-        // when callers don't provide explicit nexus account overrides.
-        let genesis_account_literal = ALICE_ID
-            .to_i105_for_discriminant(chain_discriminant)
-            .expect("harness genesis account renders for selected profile");
-        let has_stake_escrow_override = config_layers.iter().any(|layer| {
-            get_nested_value(layer, &["nexus", "staking", "stake_escrow_account_id"]).is_some()
-        });
-        let has_slash_sink_override = config_layers.iter().any(|layer| {
-            get_nested_value(layer, &["nexus", "staking", "slash_sink_account_id"]).is_some()
-        });
-        if !(has_stake_escrow_override && has_slash_sink_override) {
-            let mut nexus_accounts_layer = Table::new();
-            if !has_stake_escrow_override {
-                TomlWriter::new(&mut nexus_accounts_layer).write(
-                    ["nexus", "staking", "stake_escrow_account_id"],
-                    genesis_account_literal.clone(),
-                );
-            }
-            if !has_slash_sink_override {
-                TomlWriter::new(&mut nexus_accounts_layer).write(
-                    ["nexus", "staking", "slash_sink_account_id"],
-                    genesis_account_literal.clone(),
-                );
-            }
-            config_layers.push(nexus_accounts_layer);
-        }
         let parliament_beacon_signer_modes = parliament_test_signers
             .as_ref()
             .map(|selection| selection.resolve(n_peers));
@@ -7823,8 +7845,25 @@ impl NetworkBuilder {
         if let Some(fuel) = set_ivm_fuel {
             parameter_prefix.push(fuel);
         }
-        let npos_snapshot = npos_params_from_genesis(&genesis_isi, &genesis_post_topology_isi)
-            .unwrap_or_else(|error| panic!("{error}"));
+        let npos_snapshot = if let Some(custom) = custom_genesis_block.as_ref() {
+            // The custom original may already carry its NPoS currency and minimum.
+            // Use the same explicit parameter composition as its final normalizer.
+            let parameters = consensus_parameters_from_genesis_with_overrides(
+                custom,
+                &genesis_isi,
+                &genesis_post_topology_isi,
+            );
+            parameters
+                .custom()
+                .get(&SumeragiNposParameters::parameter_id())
+                .map(SumeragiNposParameters::from_custom_parameter)
+                .transpose()
+                .expect("custom original NPoS parameters must decode")
+                .flatten()
+        } else {
+            npos_params_from_genesis(&genesis_isi, &genesis_post_topology_isi)
+                .unwrap_or_else(|error| panic!("{error}"))
+        };
         let xor_asset_id = npos_snapshot.as_ref().map_or_else(
             || {
                 iroha_config::parameters::defaults::nexus::fees::fee_asset_id()
@@ -7849,8 +7888,9 @@ impl NetworkBuilder {
                 .into(),
             );
         }
-        match (consensus_mode, npos_snapshot) {
-            (ConsensusMode::Npos, Some(_)) | (ConsensusMode::Permissioned, None) => {}
+        let resolved_npos = match (consensus_mode, npos_snapshot) {
+            (ConsensusMode::Npos, Some(npos)) => Some(npos),
+            (ConsensusMode::Permissioned, None) => None,
             (ConsensusMode::Npos, None) => {
                 // Materialize one explicit signed snapshot before deriving the
                 // consensus carrier. Runtime code never falls back to local
@@ -7864,13 +7904,14 @@ impl NetworkBuilder {
                 npos.validate()
                     .expect("test-network NPoS genesis snapshot must be valid");
                 parameter_prefix.push(InstructionBox::from(SetParameter::new(Parameter::Custom(
-                    npos.into_custom_parameter(),
+                    npos.clone().into_custom_parameter(),
                 ))));
+                Some(npos)
             }
             (ConsensusMode::Permissioned, Some(_)) => {
                 panic!("permissioned genesis must omit `sumeragi_npos_parameters`");
             }
-        }
+        };
         {
             let first_tx = genesis_isi
                 .first_mut()
@@ -7888,6 +7929,30 @@ impl NetworkBuilder {
             Algorithm::Ed25519,
         );
         let gas_account_id = AccountId::new(bootstrap_gas_keypair.public_key().clone());
+        let staking_policy = genesis_staking::resolve_policy(
+            genesis_staking_policy,
+            custom_genesis_block.as_ref(),
+            genesis_isi
+                .iter()
+                .chain(&genesis_post_topology_isi)
+                .flatten(),
+            &stake_asset_id,
+            if matches!(consensus_mode, ConsensusMode::Npos) {
+                &gas_account_id
+            } else {
+                &ALICE_ID
+            },
+        )
+        .expect("one original or explicitly authored staking policy");
+        if matches!(consensus_mode, ConsensusMode::Npos) {
+            assert_eq!(
+                staking_policy.stake_asset_id, stake_asset_id,
+                "staking policy must match original NPoS XOR pin"
+            );
+        }
+        let generated_staking_policy = custom_genesis_block
+            .is_none()
+            .then(|| staking_policy.clone());
         let generated_validator_accounts = peers
             .iter()
             .map(NetworkPeer::account_id)
@@ -7938,7 +8003,13 @@ impl NetworkBuilder {
         // caller owns them.
         let validator_stake = match consensus_mode {
             ConsensusMode::Npos => npos_genesis_bootstrap_stake.map(|stake_amount| {
-                resolve_npos_bootstrap_stake(&genesis_isi, &genesis_post_topology_isi, stake_amount)
+                resolve_npos_bootstrap_stake(
+                    resolved_npos
+                        .as_ref()
+                        .expect("original NPoS parameters resolved above"),
+                    &staking_policy,
+                    stake_amount,
+                )
             }),
             ConsensusMode::Permissioned => None,
         };
@@ -7947,27 +8018,6 @@ impl NetworkBuilder {
                 && custom_genesis.is_none()
                 && !has_permissioned_bootstrap_support_collision);
         if fee_resource_bootstrap {
-            let gas_account_str = gas_account_id
-                .to_i105_for_discriminant(chain_discriminant)
-                .expect("harness bootstrap custody renders for selected profile");
-            let mut bootstrap_layer = Table::new();
-            let mut writer = TomlWriter::new(&mut bootstrap_layer);
-            if validator_stake.is_some() {
-                writer
-                    .write(
-                        ["nexus", "staking", "stake_asset_id"],
-                        stake_asset_id.to_string(),
-                    )
-                    .write(
-                        ["nexus", "staking", "stake_escrow_account_id"],
-                        gas_account_str.clone(),
-                    )
-                    .write(
-                        ["nexus", "staking", "slash_sink_account_id"],
-                        gas_account_str,
-                    );
-            }
-            config_layers.push(bootstrap_layer);
             // Staking and transaction fees consume the same genesis-selected XOR.
             // These explicit allocations belong only to this isolated fixture network.
             let definition = AssetDefinition::new(
@@ -8045,7 +8095,7 @@ impl NetworkBuilder {
                         monetary_plan:
                             iroha_data_model::nexus::PublicLaneMonetaryPlanV1::genesis_registration(
                                 AssetId::new(stake_asset_id.clone(), validator_id.clone()),
-                                AssetId::new(stake_asset_id.clone(), gas_account_id.clone()),
+                                AssetId::new(stake_asset_id.clone(), staking_policy.stake_escrow_account_id.clone()),
                                 stake_amount.clone(),
                             ),
                     }
@@ -8235,7 +8285,9 @@ impl NetworkBuilder {
                         consensus_chain_id.clone(),
                         crate::config::GenesisPolicyConfig {
                             genesis_crypto: genesis_crypto.clone(),
-                            staking_policy: config::default_test_network_staking_policy(),
+                            staking_policy: generated_staking_policy
+                                .clone()
+                                .expect("generated preview has one authored staking policy"),
                             da_proof_policies: da_proof_policies.clone(),
                             pipeline_config: pipeline_config.clone(),
                             nexus_config: nexus_config.clone(),
@@ -8434,6 +8486,7 @@ impl NetworkBuilder {
             genesis_key_pair: Some(genesis_key_pair),
             genesis_isi,
             genesis_post_topology_isi,
+            generated_staking_policy,
             cached_genesis,
             generated_genesis_manifest: OnceLock::new(),
             retained_genesis: None,
@@ -15426,7 +15479,7 @@ mod tests {
         );
     }
     #[test]
-    fn npos_bootstrap_overrides_stake_accounts_in_config() {
+    fn npos_bootstrap_authors_stake_accounts_in_original_policy() {
         let stake_amount = SumeragiNposParameters::default().min_self_bond().clone();
         let network = NetworkBuilder::new()
             .with_peers(4)
@@ -15437,20 +15490,27 @@ mod tests {
         for layer in network.config_layers() {
             merge_tables(&mut merged, layer.as_ref());
         }
-        let stake_escrow =
-            get_nested_value(&merged, &["nexus", "staking", "stake_escrow_account_id"])
-                .and_then(Value::as_str)
-                .expect("stake_escrow_account_id should be present");
-        let slash_sink = get_nested_value(&merged, &["nexus", "staking", "slash_sink_account_id"])
-            .and_then(Value::as_str)
-            .expect("slash_sink_account_id should be present");
-        assert!(
-            AccountId::parse_encoded(stake_escrow).is_ok(),
-            "stake_escrow_account_id must parse as AccountId; got {stake_escrow}"
+        assert!(get_nested_value(&merged, &["nexus", "staking"]).is_none());
+        let policy = genesis_staking::original_policy(
+            network
+                .genesis()
+                .0
+                .external_transactions()
+                .filter_map(|tx| match tx.instructions() {
+                    Executable::Instructions(instructions) => Some(instructions.iter()),
+                    _ => None,
+                })
+                .flatten(),
+        )
+        .unwrap()
+        .expect("one signed original policy");
+        assert_eq!(
+            AccountId::parse_encoded(&policy.stake_escrow_account_id.to_string()).unwrap(),
+            policy.stake_escrow_account_id
         );
-        assert!(
-            AccountId::parse_encoded(slash_sink).is_ok(),
-            "slash_sink_account_id must parse as AccountId; got {slash_sink}"
+        assert_eq!(
+            AccountId::parse_encoded(&policy.slash_sink_account_id.to_string()).unwrap(),
+            policy.slash_sink_account_id
         );
     }
     #[test]
@@ -15572,7 +15632,7 @@ mod tests {
         );
     }
     #[test]
-    fn default_builder_sets_parseable_nexus_account_literals() {
+    fn default_builder_authors_typed_nexus_custody_accounts() {
         let network = build_with_isolated_permit(NetworkBuilder::new());
         let mut merged = Table::new();
         for layer in network.config_layers() {
@@ -15582,20 +15642,27 @@ mod tests {
             .expect("original authenticated fee policy");
         assert_eq!(fees.fee_sink_account_id, ALICE_ID.clone());
         assert!(get_nested_value(&merged, &["nexus", "fees"]).is_none());
-        let stake_escrow =
-            get_nested_value(&merged, &["nexus", "staking", "stake_escrow_account_id"])
-                .and_then(Value::as_str)
-                .expect("stake_escrow_account_id should be present");
-        let slash_sink = get_nested_value(&merged, &["nexus", "staking", "slash_sink_account_id"])
-            .and_then(Value::as_str)
-            .expect("slash_sink_account_id should be present");
-        assert!(
-            AccountId::parse_encoded(stake_escrow).is_ok(),
-            "stake_escrow_account_id must parse as AccountId; got {stake_escrow}"
+        assert!(get_nested_value(&merged, &["nexus", "staking"]).is_none());
+        let policy = genesis_staking::original_policy(
+            network
+                .genesis()
+                .0
+                .external_transactions()
+                .filter_map(|tx| match tx.instructions() {
+                    Executable::Instructions(instructions) => Some(instructions.iter()),
+                    _ => None,
+                })
+                .flatten(),
+        )
+        .unwrap()
+        .expect("one signed original policy");
+        assert_eq!(
+            AccountId::parse_encoded(&policy.stake_escrow_account_id.to_string()).unwrap(),
+            policy.stake_escrow_account_id
         );
-        assert!(
-            AccountId::parse_encoded(slash_sink).is_ok(),
-            "slash_sink_account_id must parse as AccountId; got {slash_sink}"
+        assert_eq!(
+            AccountId::parse_encoded(&policy.slash_sink_account_id.to_string()).unwrap(),
+            policy.slash_sink_account_id
         );
     }
     #[test]
@@ -15682,8 +15749,12 @@ mod tests {
             slashing_delay_blocks: 1,
             ..SumeragiNposParameters::default()
         };
+        let mut staking_policy = config::default_test_network_staking_policy();
+        staking_policy.unbonding_delay_ms = 1_814_400_000;
+        staking_policy.max_slash_bps = 1;
         let builder = NetworkBuilder::new()
             .with_peers(4)
+            .with_genesis_staking_policy(staking_policy.clone())
             .with_npos_consensus()
             .with_npos_genesis_bootstrap(1_000_u64.into())
             .with_block_cadence(Duration::from_millis(cadence_ms))
@@ -15717,21 +15788,19 @@ mod tests {
                 .into(),
             ])
             .with_config_layer(|layer| {
-                layer
-                    .write(
-                        ["nexus", "staking", "unbonding_delay_ms"],
-                        1_814_400_000_i64,
-                    )
-                    .write(["nexus", "staking", "max_slash_bps"], 1_i64)
-                    .write(
-                        ["nexus", "storage", "local_budget_bytes"],
-                        1_073_741_824_i64,
-                    );
+                layer.write(
+                    ["nexus", "storage", "local_budget_bytes"],
+                    1_073_741_824_i64,
+                );
             });
         // This construction executes both preview and final genesis, including the
         // original SCCP one-hour guard and generated-policy fixed-point check.
         let network = build_with_isolated_permit(builder);
         let parameters = consensus_parameters_from_genesis(&network.genesis());
+        assert_eq!(
+            PublicLaneStakingPolicy::from_parameters(&parameters).unwrap(),
+            staking_policy
+        );
         assert_eq!(parameters.sumeragi().epoch_length_blocks.get(), epoch.get());
         let metadata = consensus_handshake_metadata(&network.genesis())
             .expect("executed SCCP genesis must retain its signed consensus metadata");
@@ -16873,27 +16942,20 @@ mod tests {
             )
         }
 
+        fn fixture_policy() -> PublicLaneStakingPolicy {
+            iroha_genesis::default_staking_policy(
+                fixture_stake_asset_id(),
+                fixture_escrow_id(),
+                fixture_escrow_id(),
+            )
+        }
         let baseline = build_with_isolated_permit(
             NetworkBuilder::new()
                 .with_peers(4)
                 .with_base_seed(SEED)
                 .with_npos_consensus()
                 .without_npos_genesis_bootstrap()
-                .with_config_layer(|layer| {
-                    layer
-                        .write(
-                            ["nexus", "staking", "stake_asset_id"],
-                            fixture_stake_asset_id().to_string(),
-                        )
-                        .write(
-                            ["nexus", "staking", "stake_escrow_account_id"],
-                            fixture_escrow_id().to_string(),
-                        )
-                        .write(
-                            ["nexus", "staking", "slash_sink_account_id"],
-                            fixture_escrow_id().to_string(),
-                        );
-                }),
+                .with_genesis_staking_policy(fixture_policy()),
         );
         let baseline_genesis = baseline.genesis();
         assert_signed_nexus_amx_context_matches_preexecution(&baseline, &baseline_genesis);
@@ -16924,21 +16986,6 @@ mod tests {
                 .with_base_seed(SEED)
                 .with_npos_consensus()
                 .without_npos_genesis_bootstrap()
-                .with_config_layer(|layer| {
-                    layer
-                        .write(
-                            ["nexus", "staking", "stake_asset_id"],
-                            fixture_stake_asset_id().to_string(),
-                        )
-                        .write(
-                            ["nexus", "staking", "stake_escrow_account_id"],
-                            fixture_escrow_id().to_string(),
-                        )
-                        .write(
-                            ["nexus", "staking", "slash_sink_account_id"],
-                            fixture_escrow_id().to_string(),
-                        );
-                })
                 .with_genesis_block(|topology, topology_entries| {
                     let peer_id = topology
                         .iter()
@@ -16985,11 +17032,13 @@ mod tests {
                         .into(),
                         ActivatePublicLaneValidator::new(LaneId::SINGLE, ALICE_ID.clone()).into(),
                     ];
-                    unexecuted_genesis_factory_with_post_topology(
+                    config::genesis_unexecuted_with_keypair_and_post_topology(
                         Vec::new(),
                         vec![bootstrap, validator],
                         topology,
                         topology_entries,
+                        SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
+                        fixture_policy(),
                     )
                 }),
         );

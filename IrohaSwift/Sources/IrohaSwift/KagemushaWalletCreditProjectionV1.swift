@@ -59,21 +59,21 @@ extension KagemushaWalletV1 {
     }
 
     /// Keep receiver burn evidence separate from this Send's Archive fold progress.
-    /// The first original anchors the completed Archive; an optional newer original cannot replace it.
-    public func deliveryProjection(sendRequestId: Data, archiveCredited: Data,
-        newerCredited: Data? = nil) throws -> KagemushaWalletCreditProjectionV1 {
-        guard newerCredited.map({ !$0.isEmpty }) ?? true else { throw KagemushaWalletErrorV1.invalidInput }
+    /// The exact original anchors the completed Archive. New receipt intake uses observeCredited.
+    public func deliveryProjection(sendRequestId: Data, archiveCredited: Data) throws -> KagemushaWalletCreditProjectionV1 {
         return try KagemushaWalletCreditProjectionV1(setup(.init(selector: 44, identity: sendRequestId,
-            first: archiveCredited, second: newerCredited ?? Data()))).requirePayer()
+            first: archiveCredited))).requirePayer()
     }
+}
 
-    /// Verify the receiver's receipt for one exact committed Send before any Archive: the same
-    /// binding and verifier as `acceptCreditedForSend`, with no Advance, so the Send's fold keeps
-    /// running. Archive it later with the same original. A completed Archive of that original
-    /// returns its `deliveryProjection`.
-    public func verifiedDelivery(sendRequestId: Data, credited: Data) throws
+extension KagemushaWalletExchangeCallV1 {
+    /// Native durably retains the exact receipt and Send before verification. This does not
+    /// dispatch Archive. Native retains the original and classifies rejection or exact recovery.
+    public func observeCredited(sendRequestId: Data, credited: Data) throws
         -> KagemushaWalletCreditProjectionV1 {
-        try KagemushaWalletCreditProjectionV1(setup(.init(selector: 54, identity: sendRequestId,
-            first: credited))).requirePayer()
+        return try task.withUse {
+            try KagemushaWalletCreditProjectionV1(setup(.init(selector: 56, identity: sendRequestId,
+                first: credited))).requirePayer()
+        }
     }
 }

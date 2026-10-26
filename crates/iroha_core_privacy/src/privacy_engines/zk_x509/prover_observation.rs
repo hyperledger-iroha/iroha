@@ -95,8 +95,12 @@ pub(super) enum PhaseV1 {
     SourceP256ValueBusAux,
     SourceP256ScalarBitBusBase,
     SourceP256ScalarBitBusAux,
+    MainFriMaskOracles,
+    CaJointOracleCommitment,
+    MainProofEncodingAndExplicitCleanup,
+    CaFinalProof,
 }
-const PHASES: [PhaseV1; 65] = [
+const PHASES: [PhaseV1; 69] = [
     PhaseV1::Preparation,
     PhaseV1::Assembly,
     PhaseV1::BaseSources,
@@ -162,6 +166,10 @@ const PHASES: [PhaseV1; 65] = [
     PhaseV1::SourceP256ValueBusAux,
     PhaseV1::SourceP256ScalarBitBusBase,
     PhaseV1::SourceP256ScalarBitBusAux,
+    PhaseV1::MainFriMaskOracles,
+    PhaseV1::CaJointOracleCommitment,
+    PhaseV1::MainProofEncodingAndExplicitCleanup,
+    PhaseV1::CaFinalProof,
 ];
 
 /// Static public labels of [`PHASES`] in the shared phase tree, in that order.
@@ -231,6 +239,10 @@ const PHASE_LABELS_V1: [&str; PHASES.len()] = [
     "SourceP256ValueBusAux",
     "SourceP256ScalarBitBusBase",
     "SourceP256ScalarBitBusAux",
+    "MainFriMaskOracles",
+    "CaJointOracleCommitment",
+    "MainProofEncodingAndExplicitCleanup",
+    "CaFinalProof",
 ];
 
 /// Workload label of the X509 credential prover in the shared phase tree.
@@ -722,7 +734,7 @@ mod tests {
 
     #[test]
     fn fine_phase_inventory_is_fixed_unique_and_preserves_every_old_phase() {
-        assert_eq!(PHASES.len(), 65);
+        assert_eq!(PHASES.len(), 69);
         let observation = ObservationV1::begin_v1();
         for (index, phase) in PHASES.iter().copied().enumerate() {
             assert_eq!(phase as usize, index);
@@ -738,7 +750,7 @@ mod tests {
             text.lines()
                 .filter(|line| line.starts_with("phase="))
                 .count(),
-            65
+            69
         );
         for phase in [
             PhaseV1::Composition,
@@ -747,6 +759,10 @@ mod tests {
             PhaseV1::CompositionFp4Evaluations,
             PhaseV1::SourceStrictDerBase,
             PhaseV1::SourceP256ScalarBitBusAux,
+            PhaseV1::MainFriMaskOracles,
+            PhaseV1::CaJointOracleCommitment,
+            PhaseV1::MainProofEncodingAndExplicitCleanup,
+            PhaseV1::CaFinalProof,
         ] {
             assert!(text.contains(&format!("phase={phase:?} calls=1 completed=1")));
         }
@@ -890,7 +906,7 @@ mod tests {
 
     #[test]
     fn observation_is_bounded_scoped_and_does_not_claim_worker_thread_coverage() {
-        // Diagnostic-only fixed public counters: 65 phase slots, never witness-sized.
+        // Diagnostic-only fixed public counters: 69 phase slots, never witness-sized.
         assert!(core::mem::size_of::<ReceiptV1>() < 4_096);
         let observation = ObservationV1::begin_v1();
         std::thread::spawn(|| completed_transform_v1(true, 8))
@@ -918,6 +934,35 @@ mod tests {
         assert_eq!(receipt.phases[PhaseV1::Assembly as usize].calls, 0);
         assert_eq!(receipt.phases[PhaseV1::Preparation as usize].completed, 1);
     }
+    #[test]
+    fn previously_unattributed_operations_preserve_success_error_and_unwind_counts() {
+        let phases = [
+            PhaseV1::MainFriMaskOracles,
+            PhaseV1::CaJointOracleCommitment,
+            PhaseV1::MainProofEncodingAndExplicitCleanup,
+            PhaseV1::CaFinalProof,
+        ];
+        let observation = ObservationV1::begin_v1();
+        for phase in phases {
+            PhaseTimerV1::start_v1(phase).complete_v1();
+            drop(PhaseTimerV1::start_v1(phase));
+            let _ = std::panic::catch_unwind(|| {
+                let _timer = PhaseTimerV1::start_v1(phase);
+                panic!("synthetic unfinished public operation");
+            });
+        }
+        let receipt = observation.finish_v1();
+        for phase in phases {
+            let count = receipt.phases[phase as usize];
+            assert_eq!(count.calls, 3);
+            assert_eq!(count.completed, 1);
+            assert_eq!(count.interrupted, 2);
+            assert_eq!(count.unwound, 1);
+        }
+        assert!(core::mem::size_of::<ReceiptV1>() < 4_096);
+        assert_eq!(receipt.cpu_columns + receipt.metal_columns, 0);
+    }
+
     #[test]
     fn composition_subphases_preserve_bounded_thread_scoped_error_and_unwind_counts() {
         // These observations are wall time around the original serial caller's
@@ -950,7 +995,7 @@ mod tests {
         .join()
         .unwrap();
         let receipt = observation.finish_v1();
-        // Diagnostic-only fixed public counters: 65 phase slots, never witness-sized.
+        // Diagnostic-only fixed public counters: 69 phase slots, never witness-sized.
         assert!(core::mem::size_of::<ReceiptV1>() < 4_096);
         for phase in phases {
             let count = receipt.phases[phase as usize];
@@ -993,7 +1038,7 @@ mod tests {
             assert_eq!(count.unwound, 1);
         }
         assert_eq!(receipt.phases[PhaseV1::QueryOpenings as usize].calls, 0);
-        // Diagnostic-only fixed public counters: 65 phase slots, never witness-sized.
+        // Diagnostic-only fixed public counters: 69 phase slots, never witness-sized.
         assert!(core::mem::size_of::<ReceiptV1>() < 4_096);
         let next = ObservationV1::begin_v1();
         stale.complete_v1();

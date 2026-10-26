@@ -49,7 +49,7 @@ impl QueryStateRef<'_, '_, '_> {
     }
 }
 
-impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
+impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     pub(super) fn execute_fi_link_revision(
         &mut self,
         vm: &mut IVM,
@@ -145,7 +145,7 @@ mod tests {
         let mut block = state.block(header());
         let mut tx = block.transaction();
         f.install(&mut tx);
-        let mut host: CoreHostImpl<QueryStateSlot<_>> = CoreHostImpl::new(f.owner.clone());
+        let mut host: CoreHostImpl<'_, '_, QueryStateSlot<_>> = CoreHostImpl::new(f.owner.clone());
         host.set_query_state(&tx);
         host.set_contract_runtime_context(Some(f.context.clone()));
         let mut vm = arguments(&f, 50_000_000);
@@ -208,7 +208,8 @@ mod tests {
         let mut tx = block.transaction();
         f.install(&mut tx);
         for defect in 0..5 {
-            let mut host: CoreHostImpl<QueryStateSlot<_>> = CoreHostImpl::new(f.owner.clone());
+            let mut host: CoreHostImpl<'_, '_, QueryStateSlot<_>> =
+                CoreHostImpl::new(f.owner.clone());
             host.set_query_state(&tx);
             let mut context = f.context.clone();
             if defect == 1 {
@@ -256,13 +257,17 @@ mod tests {
         let mut block = state.block(header());
         let mut tx = block.transaction();
         f.install(&mut tx);
-        let mut host: CoreHostImpl<QueryStateSlot<_>> = CoreHostImpl::new(f.owner.clone());
+        let mut host: CoreHostImpl<'_, '_, QueryStateSlot<_>> = CoreHostImpl::new(f.owner.clone());
         host.set_query_state(&tx);
         host.set_contract_runtime_context(Some(f.context.clone()));
         let mut vm = arguments(&f, 50_000_000);
         let next = vm.alloc_input_tlv(&[]).unwrap() - ivm::Memory::INPUT_START;
-        vm.alloc_input_tlv(&vec![0; usize::try_from(ivm::Memory::INPUT_SIZE - next).expect("remaining input fits usize")])
-            .unwrap();
+        vm.alloc_input_tlv(&vec![
+            0;
+            usize::try_from(ivm::Memory::INPUT_SIZE - next)
+                .expect("remaining input fits usize")
+        ])
+        .unwrap();
         let heap_before = vm.alloc_heap(0).unwrap() - ivm::Memory::HEAP_START;
         vm.memory.set_heap_limit(heap_before).unwrap();
         let before = vm.register(10);
@@ -308,7 +313,7 @@ mod tests {
     }";
     // Observation only: real compiled bytecode and CoreHost perform every read/check.
     struct GasProbe<QS: Default + QueryStateAccess> {
-        inner: CoreHostImpl<QS>,
+        inner: CoreHostImpl<'static, 'static, QS>,
         before: std::cell::Cell<Option<u64>>,
         reserve: Option<u64>,
         actual: Option<u64>,
@@ -375,7 +380,7 @@ mod tests {
         let prepared =
             ivm::prepare_argument_record_with_gas_limit(schema, Arc::from(canonical), gas_limit)
                 .unwrap();
-        let mut inner: CoreHostImpl<QueryStateSlot<_>> = CoreHostImpl::new(f.owner.clone());
+        let mut inner: CoreHostImpl<'_, '_, QueryStateSlot<_>> = CoreHostImpl::new(f.owner.clone());
         inner.set_query_state(&tx);
         inner.set_contract_runtime_context(Some(f.context.clone()));
         inner.set_entrypoint_argument_record(Some(prepared.clone()));

@@ -1474,3 +1474,56 @@ fn resume_prepared_boundary_rejects_between_open_replacement_before_progress() -
     }
     Ok(())
 }
+
+#[test]
+fn saved_deployments_list_each_resumable_slot_journal_by_alias_without_dispatch() -> Result<()> {
+    let temporary = tempfile::tempdir()?;
+    let http = Http::new(None)?;
+    let runtime = runtime(temporary.path(), &http.origin);
+    assert!(
+        runtime.saved_deployments()?.is_empty(),
+        "an absent root lists nothing and stays absent"
+    );
+    assert!(!temporary.path().join("journals").exists());
+    let applied = plan_for_alias(&runtime, 7, "Alpha::universal")?;
+    let preparing = plan_for_alias(&runtime, 8, "Mid::universal")?;
+    // A plan whose slot never published it is not offered for resume.
+    let unpublished = plan_for_alias(&runtime, 9, "Zeta::universal")?;
+    complete(&applied)?;
+    active(&runtime, &applied)?.write_state(&Publication::Active {
+        journal: plan_journal_id(&applied.preflight)?,
+    })?;
+    active(&runtime, &preparing)?.write_state(&Publication::Preparing {
+        candidate: plan_journal_id(&preparing.preflight)?,
+        previous: None,
+    })?;
+    let saved = runtime.saved_deployments()?;
+    assert_eq!(
+        saved,
+        vec![
+            SavedDeployment {
+                alias: "Alpha::universal".parse()?,
+                journal: applied.journal.clone(),
+                has_receipt: true,
+            },
+            SavedDeployment {
+                alias: "Mid::universal".parse()?,
+                journal: preparing.journal.clone(),
+                has_receipt: false,
+            },
+        ]
+    );
+    // Listing reconciles nothing: the candidate still awaits its resume.
+    assert!(active(&runtime, &preparing)?.current_journal().is_err());
+    assert_eq!(active(&runtime, &unpublished)?.current_journal()?, None);
+    // Running work holds its slot, so the listing refuses rather than guess its state.
+    let held = active(&runtime, &applied)?;
+    assert!(runtime.saved_deployments().is_err());
+    drop(held);
+    assert_eq!(runtime.saved_deployments()?, saved);
+    assert!(
+        http.finish()?.is_empty(),
+        "listing never contacts the network"
+    );
+    Ok(())
+}
