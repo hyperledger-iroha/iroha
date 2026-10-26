@@ -13,7 +13,7 @@ from __future__ import annotations
 import random
 import unittest
 
-from petal_test_support import captures_fixture, luma_of, rendered
+from petal_test_support import captures_fixture, luma_of, rendered_square
 
 from iroha_petal.image import Luma
 from iroha_petal.locate import (
@@ -143,8 +143,8 @@ def as_tuples(components) -> list:
 
 
 def clean_frame() -> Luma:
-    # payload [9; 200], kind 1, frame 1, 512 px with 2x2 supersampling
-    return rendered(bytes([9] * 200), 1, 1, 512, 2).to_luma()
+    # payload [9; 200], kind 1, frame 1, the square at 512 px with 2x2 supersampling
+    return rendered_square(bytes([9] * 200), 1, 1, 512, 2).to_luma()
 
 
 class LocateTest(unittest.TestCase):

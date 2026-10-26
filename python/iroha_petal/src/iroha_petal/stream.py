@@ -12,16 +12,20 @@ Atom ids run contiguously over the atoms actually sent (see
 :func:`first_atom_id`). Any single readable lane is useful on its own. On top of
 every field lane, the turns of its lit petals carry four more atoms from the
 repair range (see :mod:`iroha_petal.turns`), so a sharp camera reads up to 37
-atoms (592 bytes) a frame.
+atoms (592 bytes) from the square. The katakana bands above and below the square
+add eight atoms each (see :mod:`iroha_petal.kana`): up to 53 atoms (848 bytes) a
+frame.
 
 Lane data layouts (all big-endian):
 
-* every lane but the turn lanes starts with ``tag:u8, frame:u16``; ``tag`` is
-  the low byte of the payload CRC-32C.
+* every lane but the turn and kana lanes starts with ``tag:u8, frame:u16``;
+  ``tag`` is the low byte of the payload CRC-32C.
 * field lanes and non-beacon ``D``: ``atoms...`` (16 bytes each).
 * beacon ``D``: ``version:u8, kind:u8, len:u24, crc:u32``, zero padded.
 * turn lanes: ``atoms... check:u32``, where the check binds the atoms to the
   header of the field lane they ride on.
+* kana lanes: ``atoms... check:u32``, where the check binds the atoms to the
+  stream tag, the frame and the lane.
 """
 
 from __future__ import annotations
@@ -73,8 +77,10 @@ __all__ = [
     "StreamAssembler",
 ]
 
-#: Version/profile byte of the beacon: format version 3, layout profile 0.
-FORMAT_VERSION = 0x30
+#: Version/profile byte of the beacon: format version 5, layout profile 0. Beacons of the
+#: retired formats 3 (``0x30``, no katakana bands), 2 (``0x20``, unturned petals) and 1
+#: (``0x10``, katakana tiles only) are refused.
+FORMAT_VERSION = 0x50
 #: Largest payload a beacon can describe (``u24``).
 MAX_PAYLOAD_LEN = (1 << 24) - 1
 #: Default receiver payload limit; override with :class:`AssemblerLimits`.
@@ -208,6 +214,9 @@ class LaneData:
     fields: Tuple[bytes, ...]
     #: The turn lanes, sector 0 first.
     turns: Tuple[bytes, ...]
+    #: The kana lanes in the order ``P0``, ``K0``, ``P1``, ``K1``: band 0 (above the square)
+    #: first, each band's polarity lane before its glyph lane.
+    kana: Tuple[bytes, ...]
 
     def lane(self, lane: Lane) -> bytes:
         """The bytes of ``lane``."""
@@ -291,8 +300,9 @@ class StreamEncoder:
         return b"".join(encode_atom(self._source, crc, (first_id + i) & _U32) for i in range(count))
 
     def lane_data(self, frame: int) -> LaneData:
-        """The data bytes of every lane of ``frame``, turn lanes included."""
-        # imported here: the turns module builds on this one
+        """The data bytes of every lane of ``frame``, turn and kana lanes included."""
+        # imported here: the turns and kana modules build on this one
+        from .kana import KANA_LANES, kana_data, kana_first_id
         from .turns import TURN_ATOMS, turn_data, turn_first_id
 
         _check_frame(frame)
@@ -316,10 +326,15 @@ class StreamEncoder:
             turn_data(lane_header, sector, self._atoms(turn_first_id(frame, sector), TURN_ATOMS))
             for sector in range(SECTORS)
         )
-        return LaneData(d=d, fields=fields, turns=turns)
+        kana = tuple(
+            kana_data(lane_header, lane, self._atoms(kana_first_id(frame, lane), lane.atoms))
+            for lane in KANA_LANES
+        )
+        return LaneData(d=d, fields=fields, turns=turns, kana=kana)
 
     def words(self, frame: int) -> LaneData:
-        """The transmitted codewords of ``frame``."""
+        """The transmitted codewords of ``frame``, turn and kana lanes included."""
+        from .kana import KANA_LANES, encode_kana_lane
         from .turns import encode_turn_lane
 
         data = self.lane_data(frame)
@@ -327,12 +342,18 @@ class StreamEncoder:
             d=encode_lane(Lane.D, data.d),
             fields=tuple(encode_lane(lane, data.lane(lane)) for lane in FIELD_LANES),
             turns=tuple(encode_turn_lane(sector, data.turns[sector]) for sector in range(SECTORS)),
+            kana=tuple(encode_kana_lane(lane, kana) for lane, kana in zip(KANA_LANES, data.kana)),
         )
 
     def cells(self, frame: int) -> FrameCells:
-        """Every cell of ``frame``, lit and turned, ready to render."""
+        """Every cell of ``frame``, lit, turned and with its katakana tiles, ready to
+        render."""
         words = self.words(frame)
-        return FrameCells.from_words(words.d, words.fields).with_turns(words.turns)
+        return (
+            FrameCells.from_words(words.d, words.fields)
+            .with_turns(words.turns)
+            .with_kana(words.kana)
+        )
 
 
 @dataclass(frozen=True)

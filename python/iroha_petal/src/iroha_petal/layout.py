@@ -16,6 +16,11 @@ constants (``4.6``, ``3.73``, ...) are not, so they hold here the widened
 single-precision values the reference computes with (``PETAL_RADIUS`` is
 ``4.599999904632568``). :func:`slot_center` evaluates its trigonometry in single
 precision like the reference.
+
+The frame is a *card*: the square with a band of katakana tiles above and below
+it (:data:`CARD_HEIGHT`). Coordinates stay the square's: the band above the
+square has negative ``y``, the band below it ``y`` beyond :data:`CANVAS`, and a
+card renderer moves everything down by :data:`SQUARE_TOP`.
 """
 
 from __future__ import annotations
@@ -26,6 +31,8 @@ import struct
 from bisect import bisect_right
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
+
+from .glyphs import GLYPH_GRID, is_inked
 
 __all__ = [
     "CANVAS",
@@ -83,6 +90,29 @@ __all__ = [
     "finder_notch_centers",
     "finder_lit",
     "petal_lit",
+    "KANA_TILE",
+    "KANA_PITCH",
+    "KANA_GLYPH_BOX",
+    "KANA_CORNER",
+    "KANA_ROWS",
+    "KANA_COLUMNS",
+    "KANA_GAP",
+    "KANA_MARGIN",
+    "KANA_BAND_HEIGHT",
+    "CARD_HEIGHT",
+    "SQUARE_TOP",
+    "KANA_FINDER_CLEARANCE",
+    "KANA_BANDS",
+    "KANA_PILOTS",
+    "KANA_PILOT_CELLS",
+    "KANA_PILOT_SYMBOLS",
+    "KanaTile",
+    "kana_tiles",
+    "kana_data_tiles",
+    "kana_pilot_tiles",
+    "kana_tile_at",
+    "kana_inside",
+    "kana_inked",
 ]
 
 _F32 = struct.Struct("<f")
@@ -541,3 +571,215 @@ def petal_lit(dx: float, dy: float, angle: float) -> bool:
         return False
     tip = along - PETAL_NOTCH_DISTANCE
     return tip * tip + across * across > _NOTCH_RADIUS_SQUARED
+
+
+# ---- the card: the square and a band of katakana tiles above and below it ---------------------
+
+#: Side of a katakana tile (:mod:`iroha_petal.kana`).
+KANA_TILE = 25.0
+#: Pitch of the katakana tile lattice.
+KANA_PITCH = 29.0
+#: Side of a tile's glyph box, centred in the tile.
+KANA_GLYPH_BOX = 23.0
+#: Corner radius of a tile.
+KANA_CORNER = 3.0
+#: Tile rows of each band.
+KANA_ROWS = 10
+#: Tile columns of each band.
+KANA_COLUMNS = 35
+#: Gap between a band's lattice and the square.
+KANA_GAP = 24.0
+#: Margin outside a band's lattice.
+KANA_MARGIN = 8.0
+#: Height of a band with its gap and margin (322 units).
+KANA_BAND_HEIGHT = KANA_MARGIN + KANA_ROWS * KANA_PITCH + KANA_GAP
+#: Height of the card: the square with a band above and below it (1668 units).
+CARD_HEIGHT = CANVAS + 2.0 * KANA_BAND_HEIGHT
+#: Card ``y`` of the square's top edge: card coordinates are square coordinates plus this in
+#: ``y``.
+SQUARE_TOP = KANA_BAND_HEIGHT
+#: Tile centres keep at least this distance from every finder centre: the blossom's radius, a
+#: blossom diameter of clearance, and a tile's half-diagonal, so no tile looks like part of a
+#: finder.
+KANA_FINDER_CLEARANCE = 198.0
+#: Bands: above the square and below it.
+KANA_BANDS = 2
+#: Pilot tiles of each band.
+KANA_PILOTS = 8
+
+#: The pilot tiles of each band as ``(row, column)`` (band 1 mirrors band 0's rows, so the
+#: pilots sit at the same distances from the square).
+KANA_PILOT_CELLS = (
+    ((0, 0), (0, 17), (0, 34), (4, 0), (4, 34), (9, 8), (9, 17), (9, 26)),
+    ((9, 0), (9, 17), (9, 34), (5, 0), (5, 34), (0, 8), (0, 17), (0, 26)),
+)
+#: What every pilot shows: ``(glyph, light)`` in pilot order (ロ ケ ヒ ム ス ワ ア カ).
+KANA_PILOT_SYMBOLS = (
+    (1, True),
+    (11, False),
+    (13, True),
+    (9, False),
+    (14, False),
+    (6, True),
+    (12, False),
+    (7, True),
+)
+
+
+@dataclass(frozen=True)
+class KanaTile:
+    """One katakana tile."""
+
+    #: Band: 0 above the square, 1 below it.
+    band: int
+    #: Row within its band, top first.
+    row: int
+    #: Column, left first.
+    column: int
+    #: Left edge of the tile square in square coordinates.
+    x: float
+    #: Top edge of the tile square in square coordinates.
+    y: float
+    #: Index among the pilots of its band, when it is one.
+    pilot: Optional[int] = None
+
+    def centre(self) -> Tuple[float, float]:
+        """Centre of the tile in square coordinates."""
+        half = KANA_TILE / 2.0
+        return self.x + half, self.y + half
+
+
+#: Left edge of the lattice (the columns are centred on the card).
+_KANA_LATTICE_LEFT = (CANVAS - KANA_COLUMNS * KANA_PITCH) / 2.0
+#: Top of each band's lattice in square coordinates.
+_KANA_LATTICE_TOP = (-KANA_BAND_HEIGHT + KANA_MARGIN, CANVAS + KANA_GAP)
+#: The tile square sits this far inside its lattice cell.
+_KANA_INSET = (KANA_PITCH - KANA_TILE) / 2.0
+
+
+def _build_kana_tiles() -> Tuple[KanaTile, ...]:
+    clearance = KANA_FINDER_CLEARANCE
+    half = KANA_TILE / 2.0
+    tiles = []
+    for band in range(KANA_BANDS):
+        for row in range(KANA_ROWS):
+            for column in range(KANA_COLUMNS):
+                x = _KANA_LATTICE_LEFT + KANA_PITCH * column + _KANA_INSET
+                y = _KANA_LATTICE_TOP[band] + KANA_PITCH * row + _KANA_INSET
+                cx = x + half
+                cy = y + half
+                if not all(
+                    (cx - fx) * (cx - fx) + (cy - fy) * (cy - fy) >= clearance * clearance
+                    for fx, fy in FINDER_CENTERS
+                ):
+                    continue
+                cells = KANA_PILOT_CELLS[band]
+                pilot = cells.index((row, column)) if (row, column) in cells else None
+                tiles.append(KanaTile(band, row, column, x, y, pilot))
+    return tuple(tiles)
+
+
+_KANA_TILES = _build_kana_tiles()
+_KANA_DATA_TILES = tuple(
+    tuple(i for i, tile in enumerate(_KANA_TILES) if tile.band == band and tile.pilot is None)
+    for band in range(KANA_BANDS)
+)
+_KANA_PILOT_TILES = tuple(
+    tuple(
+        next(i for i, tile in enumerate(_KANA_TILES) if tile.band == band and tile.pilot == pilot)
+        for pilot in range(KANA_PILOTS)
+    )
+    for band in range(KANA_BANDS)
+)
+
+
+def _build_kana_index() -> Tuple[Optional[int], ...]:
+    index: List[Optional[int]] = [None] * (KANA_BANDS * KANA_ROWS * KANA_COLUMNS)
+    for i, tile in enumerate(_KANA_TILES):
+        index[(tile.band * KANA_ROWS + tile.row) * KANA_COLUMNS + tile.column] = i
+    return tuple(index)
+
+
+_KANA_INDEX = _build_kana_index()
+
+
+def _check_band(band: int) -> int:
+    if not 0 <= band < KANA_BANDS:
+        raise IndexError("band index out of range")
+    return band
+
+
+def kana_tiles() -> Tuple[KanaTile, ...]:
+    """Every tile of both bands: band 0 first, each in reading order (rows top first, columns
+    left first). A lattice cell whose tile centre lies within :data:`KANA_FINDER_CLEARANCE` of
+    a finder centre has no tile (306 tiles per band remain)."""
+    return _KANA_TILES
+
+
+def kana_data_tiles(band: int) -> Tuple[int, ...]:
+    """The data tiles of ``band`` (its tiles that are not pilots) in reading order, as
+    indices into :func:`kana_tiles`."""
+    return _KANA_DATA_TILES[_check_band(band)]
+
+
+def kana_pilot_tiles(band: int) -> Tuple[int, ...]:
+    """The pilot tiles of ``band`` in pilot order, as indices into :func:`kana_tiles`."""
+    return _KANA_PILOT_TILES[_check_band(band)]
+
+
+def kana_tile_at(x: float, y: float) -> Optional[Tuple[int, float, float]]:
+    """The tile under the square-coordinate point ``(x, y)`` and the point's position inside
+    the tile's square (``0 ... KANA_TILE`` on both axes), or ``None`` outside every tile
+    square."""
+    if y < 0.0:
+        band = 0
+    elif y >= CANVAS:
+        band = 1
+    else:
+        return None
+    gx = (x - _KANA_LATTICE_LEFT) / KANA_PITCH
+    gy = (y - _KANA_LATTICE_TOP[band]) / KANA_PITCH
+    if gx < 0.0 or gy < 0.0:
+        return None
+    # `floor() as usize`, then the lattice bounds (NaN and infinities fall outside)
+    if not (gx < KANA_COLUMNS and gy < KANA_ROWS):
+        return None
+    column = int(gx)
+    row = int(gy)
+    tile = _KANA_INDEX[(band * KANA_ROWS + row) * KANA_COLUMNS + column]
+    if tile is None:
+        return None
+    u = (gx - column) * KANA_PITCH - _KANA_INSET
+    v = (gy - row) * KANA_PITCH - _KANA_INSET
+    if 0.0 <= u <= KANA_TILE and 0.0 <= v <= KANA_TILE:
+        return tile, u, v
+    return None
+
+
+def kana_inside(u: float, v: float) -> bool:
+    """Whether the tile-local point ``(u, v)`` lies inside the rounded tile square."""
+    side = KANA_TILE
+    corner = KANA_CORNER
+    if not (0.0 <= u <= side and 0.0 <= v <= side):
+        return False
+    cx = corner if u < corner else (side - corner if u > side - corner else u)
+    cy = corner if v < corner else (side - corner if v > side - corner else v)
+    dx = u - cx
+    dy = v - cy
+    return dx * dx + dy * dy <= corner * corner
+
+
+#: The glyph box sits this far inside the tile square.
+_KANA_GLYPH_INSET = (KANA_TILE - KANA_GLYPH_BOX) / 2.0
+#: Design-grid units per tile unit.
+_KANA_GLYPH_SCALE = GLYPH_GRID / KANA_GLYPH_BOX
+
+
+def kana_inked(glyph: int, u: float, v: float) -> bool:
+    """Whether the tile-local point ``(u, v)`` lies on ``glyph``'s strokes: inside the tile
+    square and inked in the glyph box (inset by half the difference of tile and box)."""
+    return kana_inside(u, v) and is_inked(
+        glyph,
+        (u - _KANA_GLYPH_INSET) * _KANA_GLYPH_SCALE,
+        (v - _KANA_GLYPH_INSET) * _KANA_GLYPH_SCALE,
+    )

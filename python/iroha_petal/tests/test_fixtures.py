@@ -1,7 +1,7 @@
 # Copyright 2026 Hyperledger Iroha Contributors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Conformance with the shared golden vectors in ``fixtures/petal/petal_stream_v3.json``."""
+"""Conformance with the shared golden vectors in ``fixtures/petal/petal_stream_v5.json``."""
 
 from __future__ import annotations
 
@@ -12,6 +12,29 @@ from petal_test_support import stream_fixture
 
 from iroha_petal import crc32c
 from iroha_petal.fountain import mask_words, mix32
+from iroha_petal.glyphs import GLYPH_CHARS, GLYPH_GRID, STROKE_WIDTH, STROKES
+from iroha_petal.kana import (
+    KANA_BLURS,
+    KANA_COARSE_GRID,
+    KANA_DATA_TILES,
+    KANA_GLYPH_ATOMS,
+    KANA_GLYPH_PARITY,
+    KANA_GLYPH_WORD,
+    KANA_GRID,
+    KANA_ID_BASE,
+    KANA_LANES,
+    KANA_POLARITY_ATOMS,
+    KANA_POLARITY_PARITY,
+    KANA_POLARITY_WORD,
+    coarse_template_probe,
+    decode_kana_lane_counted,
+    encode_kana_lane,
+    glyph_word,
+    kana_first_id,
+    kana_packet,
+    polarity_word,
+    template_probe,
+)
 from iroha_petal.lanes import (
     ATOM_LEN,
     ATOMS_PER_FRAME,
@@ -32,9 +55,22 @@ from iroha_petal.layout import (
     BAND_SLOTS,
     BAND_SPACING,
     CANVAS,
+    CARD_HEIGHT,
     DOT_RADIUS,
     FIELD_CELLS,
     FINDER_CENTERS,
+    KANA_BANDS,
+    KANA_COLUMNS,
+    KANA_CORNER,
+    KANA_FINDER_CLEARANCE,
+    KANA_GAP,
+    KANA_GLYPH_BOX,
+    KANA_MARGIN,
+    KANA_PILOT_SYMBOLS,
+    KANA_PILOTS,
+    KANA_PITCH,
+    KANA_ROWS,
+    KANA_TILE,
     MASK,
     MASK_ORIGIN,
     MASK_PITCH,
@@ -46,9 +82,11 @@ from iroha_petal.layout import (
     RING_RADII,
     RING_SLOTS,
     SECTORS,
+    SQUARE_TOP,
     SlotKind,
     cell_light,
     data_slots,
+    kana_tiles,
     sector_cells,
     slot_roles,
 )
@@ -83,9 +121,10 @@ from iroha_petal.turns import (
 )
 
 
-def flags(bitmap: bytes) -> list:
-    """One flag per field cell, cell 0 in the most significant bit of byte 0."""
-    return [(bitmap[cell >> 3] >> (7 - (cell & 7))) & 1 == 1 for cell in range(FIELD_CELLS)]
+def flags(bitmap: bytes, count: int = FIELD_CELLS) -> list:
+    """The first ``count`` flags of a bitmap (one per field cell by default), flag 0 in the
+    most significant bit of byte 0."""
+    return [(bitmap[i >> 3] >> (7 - (i & 7))) & 1 == 1 for i in range(count)]
 
 
 def single(value: float) -> float:
@@ -100,8 +139,8 @@ class FixtureTest(unittest.TestCase):
 
     def test_constants_and_layout_match(self) -> None:
         doc = self.doc
-        self.assertEqual(doc["fixture_version"], 3)
-        self.assertEqual(doc["format"], "petal-stream-v3")
+        self.assertEqual(doc["fixture_version"], 5)
+        self.assertEqual(doc["format"], "petal-stream-v5")
         constants = doc["constants"]
         self.assertEqual(constants["canvas"], CANVAS)
         self.assertEqual(constants["atom_len"], ATOM_LEN)
@@ -122,6 +161,27 @@ class FixtureTest(unittest.TestCase):
             ("turn_parity", TURN_PARITY),
             ("turn_atoms", TURN_ATOMS),
             ("turn_id_base", TURN_ID_BASE),
+            ("card_height", CARD_HEIGHT),
+            ("square_top", SQUARE_TOP),
+            ("kana_tile", KANA_TILE),
+            ("kana_pitch", KANA_PITCH),
+            ("kana_glyph_box", KANA_GLYPH_BOX),
+            ("kana_corner", KANA_CORNER),
+            ("kana_rows", KANA_ROWS),
+            ("kana_columns", KANA_COLUMNS),
+            ("kana_gap", KANA_GAP),
+            ("kana_margin", KANA_MARGIN),
+            ("kana_finder_clearance", KANA_FINDER_CLEARANCE),
+            ("kana_bands", KANA_BANDS),
+            ("kana_pilots", KANA_PILOTS),
+            ("kana_data_tiles", KANA_DATA_TILES),
+            ("kana_glyph_word", KANA_GLYPH_WORD),
+            ("kana_glyph_parity", KANA_GLYPH_PARITY),
+            ("kana_glyph_atoms", KANA_GLYPH_ATOMS),
+            ("kana_polarity_word", KANA_POLARITY_WORD),
+            ("kana_polarity_parity", KANA_POLARITY_PARITY),
+            ("kana_polarity_atoms", KANA_POLARITY_ATOMS),
+            ("kana_id_base", KANA_ID_BASE),
         ):
             self.assertEqual(constants[key], value, key)
         layout = doc["layout"]
@@ -161,11 +221,33 @@ class FixtureTest(unittest.TestCase):
         self.assertEqual(
             layout["guard_slots"], [i for i, r in enumerate(roles) if r.kind is SlotKind.GUARD]
         )
+        # every katakana tile as [band, row, column, x, y, pilot] (-1 for a data tile)
+        tiles = layout["kana_tiles"]
+        self.assertEqual(len(tiles), len(kana_tiles()))
+        for index, (tile, row) in enumerate(zip(kana_tiles(), tiles)):
+            pilot = -1 if tile.pilot is None else tile.pilot
+            self.assertEqual(
+                [tile.band, tile.row, tile.column, tile.x, tile.y, pilot], row, f"tile {index}"
+            )
+        self.assertEqual(
+            [tuple(symbol) for symbol in layout["kana_pilot_symbols"]],
+            [(glyph, int(light)) for glyph, light in KANA_PILOT_SYMBOLS],
+        )
+        glyphs = doc["glyphs"]
+        self.assertEqual(glyphs["chars"], GLYPH_CHARS)
+        self.assertEqual((glyphs["grid"], glyphs["stroke_width"]), (GLYPH_GRID, STROKE_WIDTH))
+        self.assertEqual(len(glyphs["strokes"]), len(STROKES))
+        for glyph, (strokes, expected) in enumerate(zip(glyphs["strokes"], STROKES)):
+            self.assertEqual(
+                [[tuple(point) for point in stroke] for stroke in strokes],
+                [list(stroke) for stroke in expected],
+                f"glyph {glyph}",
+            )
 
     def test_palette_matches(self) -> None:
         palette = self.doc["palette"]
         ours = Palette()
-        for key in ("background", "light", "pink", "backdrop"):
+        for key in ("background", "light", "pink", "backdrop", "ink"):
             self.assertEqual(tuple(palette[key]), getattr(ours, key), key)
 
     def test_checksums_prng_and_whitening_match(self) -> None:
@@ -178,11 +260,38 @@ class FixtureTest(unittest.TestCase):
             self.assertEqual(mix32(case["in"]), case["out"])
         whitening = self.doc["whitening"]
         turn_lanes = [f"T{sector}" for sector in range(SECTORS)]
-        self.assertEqual(sorted(whitening), sorted([lane.value for lane in Lane] + turn_lanes))
+        kana_lanes = [lane.value for lane in KANA_LANES]
+        self.assertEqual(kana_lanes, ["P0", "K0", "P1", "K1"])
+        self.assertEqual(
+            sorted(whitening), sorted([lane.value for lane in Lane] + turn_lanes + kana_lanes)
+        )
         for lane in Lane:
             self.assertEqual(lane.whitening().hex(), whitening[lane.value], lane)
         for sector, name in enumerate(turn_lanes):
             self.assertEqual(turn_whitening(sector).hex(), whitening[name], name)
+        for lane in KANA_LANES:
+            self.assertEqual(lane.whitening().hex(), whitening[lane.value], lane)
+
+    def test_kana_ids_and_reader_templates_match(self) -> None:
+        ids = self.doc["kana_first_ids"]
+        self.assertEqual(ids["lanes"], [lane.value for lane in KANA_LANES])
+        self.assertEqual(len(ids["frames"]), len(ids["ids"]))
+        for frame, row in zip(ids["frames"], ids["ids"]):
+            self.assertEqual([kana_first_id(frame, lane) for lane in KANA_LANES], row, frame)
+        reader = self.doc["kana_reader"]
+        self.assertEqual(tuple(reader["blurs"]), KANA_BLURS)
+        self.assertEqual((reader["grid"], reader["coarse_grid"]), (KANA_GRID, KANA_COARSE_GRID))
+        probes = reader["template_probes"]
+        self.assertGreaterEqual(len(probes), len(KANA_BLURS))
+        for probe in probes:
+            blur = KANA_BLURS.index(probe["blur"])
+            got = template_probe(blur, probe["glyph"], probe["light"] == 1, probe["i"], probe["j"])
+            self.assertLess(abs(got - probe["value"]), 1e-12, f"{probe}: {got}")
+        coarse = reader["coarse_probes"]
+        self.assertTrue(coarse)
+        for probe in coarse:
+            got = coarse_template_probe(probe["glyph"], probe["light"] == 1, probe["i"], probe["j"])
+            self.assertLess(abs(got - probe["value"]), 1e-12, f"{probe}: {got}")
 
     def test_turn_ids_and_reader_templates_match(self) -> None:
         ids = self.doc["turn_first_ids"]
@@ -248,6 +357,17 @@ class FixtureTest(unittest.TestCase):
                 self.assertEqual([f.hex() for f in lanes.fields], frame["field_data"], label)
                 turn_data = [bytes.fromhex(data) for data in frame["turn_data"]]
                 self.assertEqual(list(lanes.turns), turn_data, label)
+                kana_data = [bytes.fromhex(data) for data in frame["kana_data"]]
+                kana_words = [bytes.fromhex(word) for word in frame["kana_words"]]
+                self.assertEqual(list(lanes.kana), kana_data, label)
+                self.assertEqual(list(encoder.words(number).kana), kana_words, label)
+                kana_header = LaneHeader(meta.tag, number)
+                for lane, data_bytes, word in zip(KANA_LANES, kana_data, kana_words):
+                    self.assertEqual(encode_kana_lane(lane, data_bytes), word, f"{label} {lane}")
+                    packet = kana_packet(kana_header, lane, data_bytes)
+                    self.assertIsNotNone(packet, f"{label} {lane} check")
+                    self.assertEqual(packet.first_id, kana_first_id(number, lane))
+                    self.assertEqual(len(packet.atoms), lane.atoms)
                 d_word = bytes.fromhex(frame["d_word"])
                 field_words = [bytes.fromhex(word) for word in frame["field_words"]]
                 turn_words = [bytes.fromhex(word) for word in frame["turn_words"]]
@@ -263,20 +383,37 @@ class FixtureTest(unittest.TestCase):
                 for lane, word in zip(FIELD_LANES, field_words):
                     self.assertEqual(encode_lane(lane, lanes.lane(lane)), word, f"{label} {lane}")
                     self.assertEqual(decode_lane(lane, word), lanes.lane(lane), f"{label} {lane}")
-                cells = FrameCells.from_words(d_word, field_words).with_turns(turn_words)
+                cells = (
+                    FrameCells.from_words(d_word, field_words)
+                    .with_turns(turn_words)
+                    .with_kana(kana_words)
+                )
                 turns = "".join(str(turn) for turn in cells.turns)
                 self.assertEqual(turns, frame["turns"], label)
+                glyphs = "".join("%x" % symbol.glyph for symbol in cells.kana)
+                self.assertEqual(glyphs, frame["kana_glyphs"], label)
+                self.assertEqual(
+                    [symbol.light for symbol in cells.kana],
+                    flags(bytes.fromhex(frame["kana_light_hex"]), len(cells.kana)),
+                    label,
+                )
+                for band in range(KANA_BANDS):
+                    self.assertEqual(polarity_word(cells.kana, band), kana_words[2 * band])
+                    self.assertEqual(glyph_word(cells.kana, band), kana_words[2 * band + 1])
                 lit = [i for i, on in enumerate(cells.dots) if on]
                 self.assertEqual(lit, frame["lit_dots"], label)
                 self.assertEqual(
                     list(cells.petals), flags(bytes.fromhex(frame["lit_petals_hex"])), label
                 )
                 self.assertEqual(cells, encoder.cells(number), label)
-            # push every fixture frame through decode_lane + assembler, with and without the
-            # turn lanes: the turn lanes finish the one-pass stream in fewer frames
+            # push every fixture frame through decode_lane + assembler, without the turn and
+            # kana lanes, with the turn lanes, and with both: each layer finishes the one-pass
+            # stream in fewer frames
             if name == "one-pass":
                 needed = []
-                for with_turns in (False, True):
+                for layers in (0, 1, 2):
+                    with_turns = layers >= 1
+                    with_kana = layers >= 2
                     assembler = StreamAssembler()
                     count = 0
                     for frame in stream["frames"]:
@@ -293,6 +430,11 @@ class FixtureTest(unittest.TestCase):
                                     sector, bytes.fromhex(word)
                                 )
                                 assembler.push_atoms(turn_packet(header, sector, data_bytes))
+                        if with_kana:
+                            header = LaneHeader(meta.tag, frame["frame"])
+                            for lane, word in zip(KANA_LANES, frame["kana_words"]):
+                                data_bytes, _ = decode_kana_lane_counted(lane, bytes.fromhex(word))
+                                assembler.push_atoms(kana_packet(header, lane, data_bytes))
                         if assembler.progress().complete:
                             break
                     completed = assembler.take_completed()
@@ -300,7 +442,7 @@ class FixtureTest(unittest.TestCase):
                     self.assertEqual(completed.payload, data)
                     self.assertEqual(completed.meta.kind, stream["kind"])
                     needed.append(count)
-                self.assertLess(needed[1], needed[0], needed)
+                self.assertTrue(needed[2] < needed[1] < needed[0], needed)
 
 
 if __name__ == "__main__":

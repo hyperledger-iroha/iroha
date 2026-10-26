@@ -3,20 +3,23 @@
 
 """Petal Stream: the Sakura-storm optical transport, in pure Python.
 
-A Petal frame (format 3) is a square image whose data lives in independent
-lanes: the dots on three concentric rings (lane ``D``), and a storm of 3,376
-petals on concentric bands inside them, cut into four sectors (lanes
-``F0``-``F3``), each petal lit or dark. On top of each field lane, the way its
-lit petals are turned carries a turn lane (``T0``-``T3``, see
-:mod:`iroha_petal.turns`). The petals inside the SORA ``天`` are drawn white and
-the others pink, over a faint ``天``. Every lane is one Reed-Solomon codeword,
-so any lane that reads cleanly yields fountain-coded payload atoms.
+A Petal frame (format 5) is a card: a square code with a band of katakana tiles
+above and below it, whose data lives in independent lanes. In the square: the
+dots on three concentric rings (lane ``D``), and a storm of 3,376 petals on
+concentric bands inside them, cut into four sectors (lanes ``F0``-``F3``), each
+petal lit or dark. On top of each field lane, the way its lit petals are turned
+carries a turn lane (``T0``-``T3``, see :mod:`iroha_petal.turns`). The petals
+inside the SORA ``天`` are drawn white and the others pink, over a faint ``天``.
+In the bands: 306 tiles each, light or dark and showing one of sixteen
+katakana, carry the kana lanes (``P0``, ``K0``, ``P1``, ``K1``, see
+:mod:`iroha_petal.kana`). Every lane is one Reed-Solomon codeword, so any lane
+that reads cleanly yields fountain-coded payload atoms.
 
 Sender::
 
     encoder = StreamEncoder(payload, kind=1)
     for frame in range(encoder.systematic_frames() * 2):
-        rgb = render_frame(encoder.cells(frame), RenderOptions(size=768))
+        rgb = render_frame(encoder.cells(frame), RenderOptions(size=768))  # 768 x 1251
 
 Receiver::
 
@@ -46,7 +49,42 @@ from .decode import (
     track_frame,
 )
 from .fountain import FountainDecoder, encode_atom, mask_len, mask_words, mix32, split_payload
+from .glyphs import GLYPH_CHARS, GLYPH_COUNT, GLYPH_GRID, STROKE_WIDTH, is_inked
 from .image import Homography, Luma, Pose, Rgb
+from .kana import (
+    KANA_BLURS,
+    KANA_COARSE_GRID,
+    KANA_DATA_TILES,
+    KANA_GLYPH_ATOMS,
+    KANA_GLYPH_PARITY,
+    KANA_GLYPH_WORD,
+    KANA_GRID,
+    KANA_ID_BASE,
+    KANA_LANES,
+    KANA_POLARITY_ATOMS,
+    KANA_POLARITY_PARITY,
+    KANA_POLARITY_WORD,
+    KANA_TILE_COUNT,
+    BandReading,
+    KanaKind,
+    KanaLane,
+    KanaResult,
+    TileReading,
+    coarse_template_probe,
+    decode_kana_lane_counted,
+    encode_kana_lane,
+    glyph_word,
+    kana_check,
+    kana_data,
+    kana_first_id,
+    kana_packet,
+    observe_band,
+    pilot_symbols,
+    polarity_word,
+    read_kana,
+    set_kana_symbols,
+    template_probe,
+)
 from .lanes import (
     ATOM_LEN,
     D_DATA,
@@ -56,16 +94,23 @@ from .lanes import (
     FIELD_LANES,
     FIELD_WORD,
     FrameCells,
+    KanaSymbol,
     Lane,
     decode_lane,
     decode_lane_counted,
     encode_lane,
 )
 from .layout import (
+    CARD_HEIGHT,
     FIELD_CELLS,
     FINDER_CENTERS,
+    KANA_BANDS,
+    KANA_PILOT_SYMBOLS,
+    KANA_PILOTS,
     MASK,
     SECTORS,
+    SQUARE_TOP,
+    KanaTile,
     SlotKind,
     SlotRole,
     cell_angle,
@@ -73,6 +118,12 @@ from .layout import (
     cell_light,
     data_slots,
     finder_lit,
+    kana_data_tiles,
+    kana_inked,
+    kana_inside,
+    kana_pilot_tiles,
+    kana_tile_at,
+    kana_tiles,
     petal_lit,
     sector_cells,
     slot_center,
@@ -87,14 +138,20 @@ from .render import (
     Circle,
     DrawList,
     FinderShape,
+    KanaTileShape,
     Palette,
     PetalShape,
     RenderOptions,
+    card_height_px,
     draw_list,
+    kana_glyph_strokes,
     render_frame,
+    render_square,
 )
 from .rs import ReedSolomon, RsError, RsErrorKind
 from .session import (
+    KANA_BACKOFF,
+    KANA_MEMORY,
     TRACK_WINDOW_MS,
     TURN_BACKOFF,
     TURN_MEMORY,
@@ -163,6 +220,7 @@ __version__ = "0.1.0"
 __all__ = [
     "ATOM_LEN",
     "BEACON_INTERVAL",
+    "CARD_HEIGHT",
     "D_DATA",
     "D_WORD",
     "DECODE_ORDER",
@@ -173,9 +231,32 @@ __all__ = [
     "FIELD_WORD",
     "FINDER_CENTERS",
     "FORMAT_VERSION",
+    "GLYPH_CHARS",
+    "GLYPH_COUNT",
+    "GLYPH_GRID",
+    "KANA_BACKOFF",
+    "KANA_BANDS",
+    "KANA_BLURS",
+    "KANA_COARSE_GRID",
+    "KANA_DATA_TILES",
+    "KANA_GLYPH_ATOMS",
+    "KANA_GLYPH_PARITY",
+    "KANA_GLYPH_WORD",
+    "KANA_GRID",
+    "KANA_ID_BASE",
+    "KANA_LANES",
+    "KANA_MEMORY",
+    "KANA_PILOT_SYMBOLS",
+    "KANA_PILOTS",
+    "KANA_POLARITY_ATOMS",
+    "KANA_POLARITY_PARITY",
+    "KANA_POLARITY_WORD",
+    "KANA_TILE_COUNT",
     "MASK",
     "MAX_PAYLOAD_LEN",
     "SECTORS",
+    "SQUARE_TOP",
+    "STROKE_WIDTH",
     "TRACK_WINDOW_MS",
     "TURN_ATOMS",
     "TURN_BACKOFF",
@@ -192,6 +273,7 @@ __all__ = [
     "AssemblerLimits",
     "AtomPacket",
     "BackdropCell",
+    "BandReading",
     "Beacon",
     "Circle",
     "Completed",
@@ -208,6 +290,12 @@ __all__ = [
     "FountainDecoder",
     "FrameCells",
     "Homography",
+    "KanaKind",
+    "KanaLane",
+    "KanaResult",
+    "KanaSymbol",
+    "KanaTile",
+    "KanaTileShape",
     "Lane",
     "LaneData",
     "LaneHeader",
@@ -234,24 +322,29 @@ __all__ = [
     "StreamError",
     "StreamErrorKind",
     "StreamMeta",
+    "TileReading",
     "Xorshift32",
     "atoms_in_frame",
+    "card_height_px",
     "carrier_order",
     "carrier_position",
     "carriers",
     "cell_angle",
     "cell_center",
     "cell_light",
+    "coarse_template_probe",
     "crc32c",
     "data_slots",
     "decode_frame",
     "decode_frame_at",
+    "decode_kana_lane_counted",
     "decode_lane",
     "decode_lane_counted",
     "decode_png",
     "decode_turn_lane_counted",
     "draw_list",
     "encode_atom",
+    "encode_kana_lane",
     "encode_lane",
     "encode_pgm",
     "encode_png",
@@ -259,8 +352,21 @@ __all__ = [
     "field_evidence",
     "finder_lit",
     "first_atom_id",
+    "glyph_word",
     "image_to_luma",
     "is_beacon_frame",
+    "is_inked",
+    "kana_check",
+    "kana_data",
+    "kana_data_tiles",
+    "kana_first_id",
+    "kana_glyph_strokes",
+    "kana_inked",
+    "kana_inside",
+    "kana_packet",
+    "kana_pilot_tiles",
+    "kana_tile_at",
+    "kana_tiles",
     "lane_first_id",
     "locate",
     "locate_candidates",
@@ -268,19 +374,26 @@ __all__ = [
     "mask_words",
     "merge_fields",
     "mix32",
+    "observe_band",
     "observed_cells",
     "observed_turns",
     "parse_atom_lane",
     "parse_d_lane",
     "petal_lit",
+    "pilot_symbols",
+    "polarity_word",
+    "read_kana",
     "read_luma",
     "read_turns",
     "render_frame",
+    "render_square",
     "sector_cells",
+    "set_kana_symbols",
     "slot_center",
     "slot_roles",
     "split_payload",
     "split_slot",
+    "template_probe",
     "track_frame",
     "turn_angle",
     "turn_check",

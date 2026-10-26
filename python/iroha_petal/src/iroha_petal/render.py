@@ -3,24 +3,30 @@
 
 """Reference software renderer and a platform-neutral draw list.
 
-The picture is black, with four sakura-blossom finders in the canvas corners,
-three dotted rings, and inside them a field of petals on concentric bands, each
-lit petal turned about its centre by its turn. A lit petal whose centre lies
-inside the ``天`` is drawn in the light colour, the others in sakura pink, over a
-faint backdrop of the ``天`` itself, so the character shows through the storm of
-petals.
+The picture is a black card. Its square has four sakura-blossom finders in the
+canvas corners, three dotted rings, and inside them a field of petals on
+concentric bands, each lit petal turned about its centre by its turn. A lit petal
+whose centre lies inside the ``天`` is drawn in the light colour, the others in
+sakura pink, over a faint backdrop of the ``天`` itself, so the character shows
+through the storm of petals. Above and below the square, the card's two bands
+show rows of katakana tiles (see :mod:`iroha_petal.kana`): a light tile filled
+light with its glyph in ink, a dark tile black with its glyph in pink.
 
 :func:`render_frame` reproduces the Rust reference renderer pixel for pixel:
 every supersample is shaded by the same predicates in the same IEEE double
 arithmetic. It paints each drawn shape only over the samples near it (the
 backdrop row by row, every lit petal over its own ellipse, every lit dot and
-finder over its disc), which is equivalent because the finders, the rings and
-the field never overlap; a sample that two petals claim, or that sits at a
-petal tip, is shaded by the reference's own petal search.
+finder over its disc, every tile row by row), which is equivalent because the
+finders, the rings, the field and the tiles never overlap; a sample that two
+petals claim, or that sits at a petal tip, is shaded by the reference's own petal
+search, and a tile's glyph strokes are classified a row at a time exactly as the
+reference's per-sample test would (:func:`~iroha_petal.glyphs.inked_flags`).
+:func:`render_square` renders the square alone, for tests that work on bare
+squares.
 
-:func:`draw_list` describes the same frame as shapes for vector backends
+:func:`draw_list` describes the same card as shapes for vector backends
 (canvas, SVG, Core Graphics, ...). Platform renderers may use their own 2D
-APIs as long as geometry, turns and polarity match the reference.
+APIs as long as geometry, turns, glyphs and polarity match the reference.
 """
 
 from __future__ import annotations
@@ -30,9 +36,10 @@ from bisect import bisect_left, bisect_right
 from dataclasses import dataclass, field
 from itertools import repeat
 from operator import add, floordiv
-from typing import List, Optional, Sequence, Set, Tuple
+from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 from ._numeric import round_half_away
+from .glyphs import GLYPH_COUNT, GLYPH_GRID, STROKE_WIDTH, STROKES, inked_flags
 from .image import Rgb
 from .lanes import FrameCells
 from .layout import (
@@ -43,6 +50,7 @@ from .layout import (
     BAND_SLOTS,
     BAND_SPACING,
     CANVAS,
+    CARD_HEIGHT,
     CENTER,
     DOT_RADIUS,
     FIELD_CELLS,
@@ -51,6 +59,16 @@ from .layout import (
     FINDER_NOTCH_RADIUS,
     FINDER_OUTER,
     FINDER_PETAL_RADIUS,
+    KANA_BAND_HEIGHT,
+    KANA_BANDS,
+    KANA_COLUMNS,
+    KANA_CORNER,
+    KANA_GAP,
+    KANA_GLYPH_BOX,
+    KANA_MARGIN,
+    KANA_PITCH,
+    KANA_ROWS,
+    KANA_TILE,
     MASK,
     MASK_GRID,
     MASK_ORIGIN,
@@ -62,6 +80,7 @@ from .layout import (
     RING_COUNT,
     RING_RADII,
     RING_SLOTS,
+    SQUARE_TOP,
     band_phase,
     band_radius,
     cell_angle,
@@ -71,6 +90,8 @@ from .layout import (
     finder_notch_centers,
     finder_petal_centers,
     in_mask,
+    kana_inside,
+    kana_tiles,
     petal_lit,
     ring_offset,
 )
@@ -80,12 +101,16 @@ __all__ = [
     "Color",
     "Palette",
     "RenderOptions",
+    "card_height_px",
     "render_frame",
+    "render_square",
     "Circle",
     "FinderShape",
     "BackdropCell",
     "PetalShape",
+    "KanaTileShape",
     "DrawList",
+    "kana_glyph_strokes",
     "draw_list",
 ]
 
@@ -98,19 +123,22 @@ class Palette:
 
     #: Background.
     background: Color = (0, 0, 0)
-    #: Finders and the petals inside the ``天``.
+    #: Finders, the petals inside the ``天`` and the light katakana tiles.
     light: Color = (250, 235, 244)
-    #: Sakura pink of the ring dots and of the petals outside the ``天``.
+    #: Sakura pink of the ring dots, of the petals outside the ``天`` and of the glyphs on dark
+    #: tiles.
     pink: Color = (245, 175, 208)
     #: The faint ``天`` drawn under the petals (a tenth of the light colour).
     backdrop: Color = (25, 24, 24)
+    #: Glyphs on light katakana tiles.
+    ink: Color = (20, 4, 14)
 
 
 @dataclass(frozen=True)
 class RenderOptions:
     """Rendering options."""
 
-    #: Output side in pixels.
+    #: Output width in pixels; the card is :func:`card_height_px` pixels tall.
     size: int = 1024
     #: Samples per pixel side for anti-aliasing (1-4).
     supersample: int = 3
@@ -119,7 +147,7 @@ class RenderOptions:
 
 
 # Sample colour codes painted before the colour lookup.
-_BACKGROUND, _LIGHT, _PINK, _BACKDROP = 0, 1, 2, 3
+_BACKGROUND, _LIGHT, _PINK, _BACKDROP, _INK = 0, 1, 2, 3, 4
 
 #: The axis of every field cell's petal at every turn position (the outward direction plus
 #: the turn), ``[cell * 4 + turn]``.
@@ -137,6 +165,13 @@ _NOTCH_RADIUS_SQUARED = PETAL_NOTCH_RADIUS * PETAL_NOTCH_RADIUS
 #: petal's own ellipse, however the petal is turned (a point of the ellipse within this
 #: distance of the tips along its axis lies less than the half-length from its centre).
 _TIP = PETAL_HALF_LENGTH - 0.01
+
+
+def card_height_px(size: int) -> int:
+    """Height in pixels of a card rendered ``size`` pixels wide: ``size * 1668 / 1024``,
+    rounded."""
+    height = size * CARD_HEIGHT / CANVAS
+    return math.floor(height + 0.5)
 
 
 def _round(value: float) -> float:
@@ -199,13 +234,13 @@ def _ring_is_pink(dx: float, dy: float, dots: Sequence[bool]) -> bool:
     return False
 
 
-def _paint_backdrop(coords: Sequence[float], codes: bytearray) -> None:
+def _paint_backdrop(xs: Sequence[float], ys: Sequence[float], codes: bytearray) -> None:
     """The ``#`` lattice cells inside :data:`BACKDROP_RADIUS`."""
-    span = len(coords)
-    offsets = [x - CENTER for x in coords]
+    span = len(xs)
+    offsets = [x - CENTER for x in xs]
     # the lattice column of every sample column (`in_mask`), as one pattern per mask row
     columns = []
-    for x in coords:
+    for x in xs:
         col = int((x - MASK_ORIGIN) / MASK_PITCH) if x >= MASK_ORIGIN else MASK_GRID
         columns.append(col if col < MASK_GRID else MASK_GRID)
     patterns = [
@@ -218,7 +253,7 @@ def _paint_backdrop(coords: Sequence[float], codes: bytearray) -> None:
         dx = offsets[i]
         return math.sqrt(dx * dx + dy2) <= BACKDROP_RADIUS
 
-    for j, y in enumerate(coords):
+    for j, y in enumerate(ys):
         if y < MASK_ORIGIN:
             continue
         row = int((y - MASK_ORIGIN) / MASK_PITCH)
@@ -253,10 +288,12 @@ def _paint_backdrop(coords: Sequence[float], codes: bytearray) -> None:
         codes[base + first : base + last + 1] = patterns[row][first : last + 1]
 
 
-def _paint_petals(cells: FrameCells, coords: Sequence[float], codes: bytearray) -> None:
+def _paint_petals(
+    cells: FrameCells, xs: Sequence[float], ys: Sequence[float], codes: bytearray
+) -> None:
     """Every lit petal over its ellipse along its turned axis; contested and tip samples
     are shaded by the reference's petal search."""
-    span = len(coords)
+    span = len(xs)
     petals = cells.petals
     turns = cells.turns
     a = PETAL_HALF_LENGTH
@@ -278,8 +315,8 @@ def _paint_petals(cells: FrameCells, coords: Sequence[float], codes: bytearray) 
         qa = cos * cos / a2 + sin * sin / b2
         cross = cos * sin * (1.0 / a2 - 1.0 / b2)
         tall = math.sqrt(a2 * sin * sin + b2 * cos * cos) + 0.05
-        for j in range(bisect_left(coords, cy - tall), bisect_right(coords, cy + tall)):
-            dy = coords[j] - cy
+        for j in range(bisect_left(ys, cy - tall), bisect_right(ys, cy + tall)):
+            dy = ys[j] - cy
             qb = 2.0 * dy * cross
             qc = dy * dy * (sin * sin / a2 + cos * cos / b2) - 1.0
             disc = qb * qb - 4.0 * qa * qc
@@ -287,10 +324,10 @@ def _paint_petals(cells: FrameCells, coords: Sequence[float], codes: bytearray) 
             middle = -qb / (2.0 * qa)
             base = j * span
             for i in range(
-                bisect_left(coords, cx + middle - half - 0.05),
-                bisect_right(coords, cx + middle + half + 0.05),
+                bisect_left(xs, cx + middle - half - 0.05),
+                bisect_right(xs, cx + middle + half + 0.05),
             ):
-                dx = coords[i] - cx
+                dx = xs[i] - cx
                 along = dx * cos + dy * sin
                 across = -dx * sin + dy * cos
                 u = along / a
@@ -311,8 +348,8 @@ def _paint_petals(cells: FrameCells, coords: Sequence[float], codes: bytearray) 
                     codes[index] = code
     for index in special:
         j, i = divmod(index, span)
-        x = coords[i]
-        y = coords[j]
+        x = xs[i]
+        y = ys[j]
         resolved = _petal_code(cells, x, y)
         if resolved is None:
             dx = x - CENTER
@@ -322,20 +359,25 @@ def _paint_petals(cells: FrameCells, coords: Sequence[float], codes: bytearray) 
         codes[index] = resolved
 
 
-def _paint(cells: FrameCells, coords: Sequence[float], codes: bytearray) -> None:
+def _paint_square(
+    cells: FrameCells, xs: Sequence[float], ys: Sequence[float], codes: bytearray
+) -> None:
+    """The square's shapes over the samples of the rows ``ys`` and columns ``xs`` (both
+    ascending; every shape lies within the square, so rows outside it are never touched)."""
     # The finders, the ring dots and the field (petals over the backdrop) occupy disjoint
     # parts of the canvas, so painting each over its own samples shades every sample as
     # the reference's priority order (finders, dots, petals, backdrop) does.
-    span = len(coords)
-    _paint_backdrop(coords, codes)
-    _paint_petals(cells, coords, codes)
+    span = len(xs)
+    _paint_backdrop(xs, ys, codes)
+    _paint_petals(cells, xs, ys, codes)
     # ring dots: paint around every lit slot. Near a slot only that slot's dot can be drawn
     # (slots are 29 units apart, rings 35), and a sample well inside its disc passes every
     # test of the reference's ring search, so only the rim needs the search itself.
     dots = cells.dots
     reach = DOT_RADIUS + 1.0
     inner = DOT_RADIUS - 1e-6
-    offsets = [x - CENTER for x in coords]
+    x_offsets = [x - CENTER for x in xs]
+    y_offsets = [y - CENTER for y in ys]
     for ring in range(RING_COUNT):
         slots = RING_SLOTS[ring]
         ring_radius = RING_RADII[ring]
@@ -347,17 +389,17 @@ def _paint(cells: FrameCells, coords: Sequence[float], codes: bytearray) -> None
             px = ring_radius * math.cos(angle)
             py = ring_radius * math.sin(angle)
             cols = range(
-                bisect_left(coords, CENTER + px - reach), bisect_right(coords, CENTER + px + reach)
+                bisect_left(xs, CENTER + px - reach), bisect_right(xs, CENTER + px + reach)
             )
             for j in range(
-                bisect_left(coords, CENTER + py - reach), bisect_right(coords, CENTER + py + reach)
+                bisect_left(ys, CENTER + py - reach), bisect_right(ys, CENTER + py + reach)
             ):
-                dy = offsets[j]
+                dy = y_offsets[j]
                 ey = dy - py
                 ey2 = ey * ey
                 base = j * span
                 for i in cols:
-                    dx = offsets[i]
+                    dx = x_offsets[i]
                     ex = dx - px
                     distance = math.sqrt(ex * ex + ey2)
                     if distance > DOT_RADIUS:
@@ -367,44 +409,137 @@ def _paint(cells: FrameCells, coords: Sequence[float], codes: bytearray) -> None
     # finders: the disc of radius FINDER_OUTER belongs to the blossom
     outer = FINDER_OUTER
     for fx, fy in FINDER_CENTERS:
-        cols = range(bisect_left(coords, fx - outer - 1.0), bisect_right(coords, fx + outer + 1.0))
-        for j in range(
-            bisect_left(coords, fy - outer - 1.0), bisect_right(coords, fy + outer + 1.0)
-        ):
-            dy = coords[j] - fy
+        cols = range(bisect_left(xs, fx - outer - 1.0), bisect_right(xs, fx + outer + 1.0))
+        for j in range(bisect_left(ys, fy - outer - 1.0), bisect_right(ys, fy + outer + 1.0)):
+            dy = ys[j] - fy
             dy2 = dy * dy
             base = j * span
             for i in cols:
-                dx = coords[i] - fx
+                dx = xs[i] - fx
                 if math.sqrt(dx * dx + dy2) <= outer:
                     codes[base + i] = _LIGHT if finder_lit(dx, dy) else _BACKGROUND
 
 
-def render_frame(cells: FrameCells, options: Optional[RenderOptions] = None) -> Rgb:
-    """Render one frame as RGB, identical to the reference renderer.
+#: Left edge of the tile lattice and the top of each band's lattice (square coordinates).
+_LATTICE_LEFT = (CANVAS - KANA_COLUMNS * KANA_PITCH) / 2.0
+_LATTICE_TOP = (-KANA_BAND_HEIGHT + KANA_MARGIN, CANVAS + KANA_GAP)
+#: The tile square sits this far inside its lattice cell.
+_TILE_INSET = (KANA_PITCH - KANA_TILE) / 2.0
+#: The glyph box sits this far inside the tile square; design-grid units per tile unit.
+_GLYPH_INSET = (KANA_TILE - KANA_GLYPH_BOX) / 2.0
+_GLYPH_SCALE = GLYPH_GRID / KANA_GLYPH_BOX
 
-    Raises :class:`ValueError` when ``options.size`` is not positive or
-    ``options.supersample`` is outside 1-4.
+
+def _tile_index() -> Tuple[Optional[int], ...]:
+    """The tile at every lattice cell, ``[(band * rows + row) * columns + column]``."""
+    index: List[Optional[int]] = [None] * (KANA_BANDS * KANA_ROWS * KANA_COLUMNS)
+    for i, tile in enumerate(kana_tiles()):
+        index[(tile.band * KANA_ROWS + tile.row) * KANA_COLUMNS + tile.column] = i
+    return tuple(index)
+
+
+_TILE_AT = _tile_index()
+
+
+def _paint_kana(
+    cells: FrameCells, xs: Sequence[float], ys: Sequence[float], codes: bytearray
+) -> None:
+    """The katakana tiles over the samples of the rows ``ys`` outside the square: the
+    reference's ``kana_tile_at``, ``kana_inside`` and ``kana_inked`` for every sample.
+
+    A sample's lattice column and tile-local ``u`` depend on its ``x`` alone, and its band,
+    row and ``v`` on its ``y`` alone, so each tile's samples form runs of columns and rows.
+    Along a row of a tile the glyph's strokes are classified at once
+    (:func:`~iroha_petal.glyphs.inked_flags`), and only the samples in the tile's rounded
+    corners need the inside test.
     """
-    if options is None:
-        options = RenderOptions()
+    span = len(xs)
+    # sample columns: per lattice column, the first sample of its run and every u of it
+    runs: Dict[int, Tuple[int, List[float]]] = {}
+    for i, x in enumerate(xs):
+        gx = (x - _LATTICE_LEFT) / KANA_PITCH
+        if gx < 0.0 or not gx < KANA_COLUMNS:
+            continue
+        column = int(gx)
+        u = (gx - column) * KANA_PITCH - _TILE_INSET
+        if not 0.0 <= u <= KANA_TILE:
+            continue
+        run = runs.get(column)
+        if run is None:
+            runs[column] = (i, [u])
+        else:
+            run[1].append(u)
+    low = KANA_CORNER
+    high = KANA_TILE - KANA_CORNER
+    columns = []
+    for column, (first, us) in sorted(runs.items()):
+        design = [(u - _GLYPH_INSET) * _GLYPH_SCALE for u in us]
+        corners = [k for k, u in enumerate(us) if u < low or u > high]
+        columns.append((column, first, us, design, corners))
+    # sample rows: band, lattice row and v
+    rows: Dict[Tuple[int, int], List[Tuple[int, float]]] = {}
+    for j, y in enumerate(ys):
+        if 0.0 <= y < CANVAS:
+            continue
+        band = 0 if y < 0.0 else 1
+        gy = (y - _LATTICE_TOP[band]) / KANA_PITCH
+        if gy < 0.0 or not gy < KANA_ROWS:
+            continue
+        row = int(gy)
+        v = (gy - row) * KANA_PITCH - _TILE_INSET
+        if not 0.0 <= v <= KANA_TILE:
+            continue
+        rows.setdefault((band, row), []).append((j, v))
+    symbols = cells.kana
+    tables = {
+        light: bytes.maketrans(
+            b"\x00\x01", bytes((_LIGHT, _INK) if light else (_BACKGROUND, _PINK))
+        )
+        for light in (True, False)
+    }
+    for (band, row), samples in rows.items():
+        base_index = (band * KANA_ROWS + row) * KANA_COLUMNS
+        for column, first, us, design, corners in columns:
+            tile = _TILE_AT[base_index + column]
+            if tile is None:
+                continue
+            glyph, light = symbols[tile]
+            table = tables[light]
+            count = len(us)
+            for j, v in samples:
+                pattern = inked_flags(glyph, (v - _GLYPH_INSET) * _GLYPH_SCALE, design)
+                pattern = pattern.translate(table)
+                if corners and (v < low or v > high):
+                    for k in corners:
+                        if not kana_inside(us[k], v):
+                            pattern[k] = _BACKGROUND
+                start = j * span + first
+                codes[start : start + count] = pattern
+
+
+def _render_rows(cells: FrameCells, options: RenderOptions, height: int, top: float) -> Rgb:
+    """Renders ``height`` pixel rows of the card, the first ``top`` canvas units above the
+    square's top edge."""
     size = options.size
     s = options.supersample
     if size <= 0 or not 1 <= s <= 4:
         raise ValueError("render size must be positive and supersample within 1-4")
     unit = CANVAS / size
     span = size * s
-    coords = [(i // s + ((i % s) + 0.5) / s) * unit for i in range(span)]
-    codes = bytearray(span * span)
-    _paint(cells, coords, codes)
+    xs = [(i // s + ((i % s) + 0.5) / s) * unit for i in range(span)]
+    ys = [(j // s + ((j % s) + 0.5) / s) * unit - top for j in range(height * s)]
+    codes = bytearray(span * len(ys))
+    _paint_square(cells, xs, ys, codes)
+    if ys and (ys[0] < 0.0 or ys[-1] >= CANVAS):
+        _paint_kana(cells, xs, ys, codes)
     palette = options.palette
-    colours = (palette.background, palette.light, palette.pink, palette.backdrop)
-    tables = [bytes(c[k] for c in colours) + bytes(252) for k in range(3)]
+    colours = (palette.background, palette.light, palette.pink, palette.backdrop, palette.ink)
+    tables = [bytes(c[k] for c in colours) + bytes(256 - len(colours)) for k in range(3)]
     n = s * s
     half = n // 2
-    out = bytearray(size * size * 3)
+    out = bytearray(size * height * 3)
     stride = size * 3
-    for py in range(size):
+    for py in range(height):
         sums: List[Optional[list]] = [None, None, None]
         for sy in range(s):
             start = (py * s + sy) * span
@@ -423,7 +558,32 @@ def render_frame(cells: FrameCells, options: Optional[RenderOptions] = None) -> 
             out[row + k : row + stride : 3] = bytes(
                 map(floordiv, map(add, total, repeat(half)), repeat(n))
             )
-    return Rgb(size, size, out)
+    return Rgb(size, height, out)
+
+
+def render_frame(cells: FrameCells, options: Optional[RenderOptions] = None) -> Rgb:
+    """Render one frame as RGB, identical to the reference renderer: the card,
+    ``options.size`` pixels wide and :func:`card_height_px` tall, whose square starts
+    :data:`~iroha_petal.layout.SQUARE_TOP` units below its top edge.
+
+    Raises :class:`ValueError` when ``options.size`` is not positive or
+    ``options.supersample`` is outside 1-4.
+    """
+    if options is None:
+        options = RenderOptions()
+    return _render_rows(cells, options, card_height_px(options.size), SQUARE_TOP)
+
+
+def render_square(cells: FrameCells, options: Optional[RenderOptions] = None) -> Rgb:
+    """Render only the square of the card, ``options.size`` pixels on a side (the rows of
+    :func:`render_frame` from :data:`~iroha_petal.layout.SQUARE_TOP` down, but sampled from
+    the square's own top edge): what decoder tests that work on bare squares use.
+
+    Raises :class:`ValueError` as :func:`render_frame` does.
+    """
+    if options is None:
+        options = RenderOptions()
+    return _render_rows(cells, options, options.size, 0.0)
 
 
 @dataclass(frozen=True)
@@ -484,20 +644,79 @@ class PetalShape:
 
 
 @dataclass(frozen=True)
+class KanaTileShape:
+    """One katakana tile: a square of side :attr:`DrawList.kana_tile` with corners rounded
+    to :attr:`DrawList.kana_corner`, filled with the light colour when it is light (a dark
+    tile is not filled), and its glyph's strokes (:func:`kana_glyph_strokes`, in tile-local
+    units from the tile's top-left corner) drawn over it in ``glyph_color``."""
+
+    #: Tile (:func:`~iroha_petal.layout.kana_tiles` order).
+    index: int
+    #: Left edge of the tile square (square coordinates).
+    x: float
+    #: Top edge of the tile square (square coordinates: negative above the square).
+    y: float
+    #: The glyph it shows (``0..16``, see :mod:`iroha_petal.glyphs`).
+    glyph: int
+    #: Whether the tile is light (filled, glyph in ink) rather than dark (glyph in pink).
+    light: bool
+    #: Colour of the glyph's strokes: ink on a light tile, pink on a dark one.
+    glyph_color: Color
+
+
+#: Width of a glyph's strokes in tile units: the design grid's stroke width scaled into the
+#: glyph box.
+_KANA_STROKE_WIDTH = STROKE_WIDTH * KANA_GLYPH_BOX / GLYPH_GRID
+
+#: Every glyph's strokes in tile-local units.
+_KANA_STROKES = tuple(
+    tuple(
+        tuple(
+            (
+                _GLYPH_INSET + x * (KANA_GLYPH_BOX / GLYPH_GRID),
+                _GLYPH_INSET + y * (KANA_GLYPH_BOX / GLYPH_GRID),
+            )
+            for x, y in stroke
+        )
+        for stroke in strokes
+    )
+    for strokes in STROKES
+)
+
+
+def kana_glyph_strokes(glyph: int) -> Tuple[Tuple[Tuple[float, float], ...], ...]:
+    """The strokes of ``glyph`` (``0..16``) in tile-local units: polylines of ``(u, v)``
+    points measured from the tile's top-left corner (the glyph box is inset by 1 unit and
+    the design grid scaled by 23/32). Stroke them with round caps and joins, of width
+    :attr:`DrawList.kana_stroke_width`; every stroke lies inside its rounded tile, so no
+    clip is needed."""
+    if not 0 <= glyph < GLYPH_COUNT:
+        raise IndexError("glyph index out of range")
+    return _KANA_STROKES[glyph]
+
+
+@dataclass(frozen=True)
 class DrawList:
-    """Shapes of one frame in canvas units (``0..1024``), in painting order: background,
-    then the backdrop cells clipped to :attr:`backdrop_clip`, the lit petals, the lit
-    dots and the finders.
+    """Shapes of one frame in square design units (the square spans ``0..1024``; the
+    card's bands lie above and below it, so a canvas of :attr:`canvas` x
+    :attr:`card_height` units moved down by :attr:`square_top` holds it all), in painting
+    order: the background over the whole card, then the backdrop cells clipped to
+    :attr:`backdrop_clip`, the lit petals, the lit dots, the finders and the katakana tiles
+    (light tiles filled, then every glyph stroked).
 
     Every petal is an ellipse along its axis minus its notch (a disc of
     :attr:`petal_notch_radius` centred :attr:`petal_notch_distance` along the axis), which
     must be drawn: it tells a petal from one turned by half a turn, and the turn reader's
-    templates include it. Petals are small (12 x 7.5 units): draw them antialiased, at 768
-    pixels or more.
+    templates include it. Petals are small (12 x 7.5 units) and tiles 25 units: draw them
+    antialiased, at 768 pixels or more.
     """
 
-    #: Canvas side in design units.
+    #: Canvas side in design units: the card's width.
     canvas: float
+    #: Height of the card in design units: the square with a band above and below it.
+    card_height: float
+    #: Distance from the card's top edge to the square's, in design units.
+    square_top: float
     #: Colours.
     palette: Palette
     #: The ``#`` cells of the mask lattice, row-major.
@@ -518,6 +737,14 @@ class DrawList:
     dots: Tuple[Circle, ...]
     #: The four corner finders, clockwise from the top-left one.
     finders: Tuple[FinderShape, ...]
+    #: Every katakana tile of both bands, in tile order.
+    kana_tiles: Tuple[KanaTileShape, ...]
+    #: Side of a katakana tile.
+    kana_tile: float
+    #: Corner radius of a katakana tile.
+    kana_corner: float
+    #: Width of a glyph's strokes (round caps and joins), in tile units.
+    kana_stroke_width: float
 
     def petal_outline(self) -> str:
         """The SVG path data of the petal outline in its own frame (``x`` along its axis,
@@ -557,8 +784,10 @@ class DrawList:
         )
 
     def to_svg(self, size: Optional[int] = None) -> str:
-        """Serialise the draw list as a standalone SVG document; every petal is drawn
-        notched along its turned axis, and SVG renderers antialias it."""
+        """Serialise the draw list as a standalone SVG document of the card, ``size`` units
+        wide (the canvas width by default); every petal is drawn notched along its turned
+        axis and every glyph stroked with round caps and joins, and SVG renderers antialias
+        them."""
         side = self.canvas if size is None else size
         p = self.palette
 
@@ -571,14 +800,25 @@ class DrawList:
             return f'<circle cx="{num(c.x)}" cy="{num(c.y)}" r="{num(c.radius)}"/>'
 
         clip = self.backdrop_clip
+        top = -self.square_top
         parts = [
-            f'<svg xmlns="http://www.w3.org/2000/svg" width="{num(side)}" height="{num(side)}" '
-            f'viewBox="0 0 {num(self.canvas)} {num(self.canvas)}">',
-            f'<rect width="{num(self.canvas)}" height="{num(self.canvas)}" fill="{rgb(p.background)}"/>',
+            f'<svg xmlns="http://www.w3.org/2000/svg" width="{num(side)}" '
+            f'height="{num(side * self.card_height / self.canvas)}" '
+            f'viewBox="0 {num(top)} {num(self.canvas)} {num(self.card_height)}">',
+            f'<rect y="{num(top)}" width="{num(self.canvas)}" height="{num(self.card_height)}" '
+            f'fill="{rgb(p.background)}"/>',
             f'<defs><clipPath id="backdrop">{circle(clip)}</clipPath>'
-            f'<path id="petal" d="{self.petal_outline()}"/></defs>',
-            f'<g fill="{rgb(p.backdrop)}" clip-path="url(#backdrop)">',
+            f'<path id="petal" d="{self.petal_outline()}"/>',
         ]
+        used = sorted({tile.glyph for tile in self.kana_tiles})
+        for glyph in used:
+            lines = "".join(
+                '<polyline points="' + " ".join(f"{num(u)},{num(v)}" for u, v in stroke) + '"/>'
+                for stroke in kana_glyph_strokes(glyph)
+            )
+            parts.append(f'<g id="kana{glyph}">{lines}</g>')
+        parts.append("</defs>")
+        parts.append(f'<g fill="{rgb(p.backdrop)}" clip-path="url(#backdrop)">')
         for cell in self.backdrop:
             parts.append(
                 f'<rect x="{num(cell.x)}" y="{num(cell.y)}" width="{num(cell.size)}" '
@@ -603,6 +843,24 @@ class DrawList:
         parts.append(f'</g><g fill="{rgb(p.background)}">')
         for finder in self.finders:
             parts.extend(circle(c) for c in finder.notches)
+        parts.append(f'</g><g fill="{rgb(p.light)}">')
+        tile = num(self.kana_tile)
+        corner = num(self.kana_corner)
+        for shape in self.kana_tiles:
+            if shape.light:
+                parts.append(
+                    f'<rect x="{num(shape.x)}" y="{num(shape.y)}" width="{tile}" '
+                    f'height="{tile}" rx="{corner}"/>'
+                )
+        parts.append(
+            f'</g><g fill="none" stroke-width="{num(self.kana_stroke_width)}" '
+            'stroke-linecap="round" stroke-linejoin="round">'
+        )
+        for shape in self.kana_tiles:
+            parts.append(
+                f'<use href="#kana{shape.glyph}" x="{num(shape.x)}" y="{num(shape.y)}" '
+                f'stroke="{rgb(shape.glyph_color)}"/>'
+            )
         parts.append("</g></svg>")
         return "\n".join(parts) + "\n"
 
@@ -670,8 +928,21 @@ def draw_list(cells: FrameCells, palette: Optional[Palette] = None) -> DrawList:
                         DOT_RADIUS,
                     )
                 )
+    tiles = tuple(
+        KanaTileShape(
+            index=index,
+            x=tile.x,
+            y=tile.y,
+            glyph=symbol.glyph,
+            light=symbol.light,
+            glyph_color=palette.ink if symbol.light else palette.pink,
+        )
+        for index, (tile, symbol) in enumerate(zip(kana_tiles(), cells.kana))
+    )
     return DrawList(
         canvas=CANVAS,
+        card_height=CARD_HEIGHT,
+        square_top=SQUARE_TOP,
         palette=palette,
         backdrop=_BACKDROP_CELLS,
         backdrop_clip=Circle(CENTER, CENTER, BACKDROP_RADIUS),
@@ -682,4 +953,8 @@ def draw_list(cells: FrameCells, palette: Optional[Palette] = None) -> DrawList:
         petal_notch_distance=PETAL_NOTCH_DISTANCE,
         dots=tuple(dots),
         finders=tuple(finders),
+        kana_tiles=tiles,
+        kana_tile=KANA_TILE,
+        kana_corner=KANA_CORNER,
+        kana_stroke_width=_KANA_STROKE_WIDTH,
     )

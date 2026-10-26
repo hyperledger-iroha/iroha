@@ -45,7 +45,7 @@ def one_pass() -> StreamEncoder:
 
 @functools.lru_cache(maxsize=None)
 def source(encoder: StreamEncoder, frame: int) -> Luma:
-    """A 512-pixel render of ``frame``."""
+    """A render of ``frame``: the card, 512 pixels wide."""
     cells = encoder.cells(frame)
     return render_frame(cells, RenderOptions(size=512, supersample=2)).to_luma()
 
@@ -170,12 +170,17 @@ class MergeTest(unittest.TestCase):
                     ["decode", "--input-dir", str(frames), "--output", str(root / "out.bin")]
                 )
         self.assertEqual(status, 1)  # these captures contain one shown frame, not a whole stream
-        # the second capture's merge recovers lane 0, the third's lane 1, the last's 2 and 3
-        # (as the reference session reads these captures)
+        # the first capture reads the polarity lane of the band below the square; the second
+        # capture's merge recovers lane 0, the third's lane 1, the last's lane 3 (as the
+        # reference session reads these captures)
+        self.assertIn("00.pgm: D (kana lanes P1);", err.getvalue())
         self.assertIn("01.pgm: D (tracked) (merged 0);", err.getvalue())
         self.assertIn("02.pgm: D (tracked) (merged 1);", err.getvalue())
-        self.assertIn("03.pgm: D (tracked) (merged 23);", err.getvalue())
-        self.assertIn("0 field lanes, 0 turn lanes; 3 merges, 4 merged field lanes", err.getvalue())
+        self.assertIn("03.pgm: D (tracked) (merged 3);", err.getvalue())
+        self.assertIn(
+            "0 field lanes, 0 turn lanes, 1 kana lanes; 3 merges, 3 merged field lanes",
+            err.getvalue(),
+        )
 
     def test_a_merge_never_offers_atoms_of_another_shown_frame(self) -> None:
         session = ScanSession()

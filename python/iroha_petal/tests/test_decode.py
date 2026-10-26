@@ -15,7 +15,7 @@ from unittest import mock
 from petal_test_support import (
     decode_test_payload,
     encoder,
-    rendered,
+    rendered_square,
     rotate90,
     rotate180,
     rotate270,
@@ -86,8 +86,9 @@ SCAN_ACCEPTED_D = {
 
 
 def setup(frame: int) -> Luma:
-    """Frame ``frame`` of the reference decoder-test stream, 768 px, 2x2 supersampled."""
-    return rendered(decode_test_payload(), KIND, frame, 768, 2).to_luma()
+    """The square of frame ``frame`` of the reference decoder-test stream, 768 px, 2x2
+    supersampled."""
+    return rendered_square(decode_test_payload(), KIND, frame, 768, 2).to_luma()
 
 
 def lane_data(frame: int):
@@ -403,7 +404,7 @@ class DecodeTest(unittest.TestCase):
         self.assertEqual(completed.payload, decode_test_payload())
 
     def test_max_side_downscales_large_inputs_and_keeps_pixel_coordinates(self) -> None:
-        image = rendered(decode_test_payload(), KIND, 5, 1024, 1).to_luma()
+        image = rendered_square(decode_test_payload(), KIND, 5, 1024, 1).to_luma()
         decoded = decode_frame(image, max_side=512)
         self.assertEqual(decoded.lanes, "D0123")
         for canvas in ((512.0, 512.0), (72.0, 72.0), (952.0, 952.0)):

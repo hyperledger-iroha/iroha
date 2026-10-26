@@ -25,6 +25,21 @@ times a frame's decode, so after a try that reads no turn lane (a camera too
 soft or too shaky for the turns) the session passes over the next captures that
 would try one, one more after every such try, at most :data:`TURN_BACKOFF`,
 until a try reads a lane again.
+
+The katakana bands above and below the square are read the same way
+(:func:`~iroha_petal.kana.read_kana`): each band once per shown frame (the last
+:data:`KANA_MEMORY` tried are remembered), with its own back-off of at most
+:data:`KANA_BACKOFF` captures after tries that read no kana lane (a camera that
+does not see the bands, or too blurred for their glyphs and polarity).
+
+The bands go first, and a capture whose bands read a kana lane tries no turn
+lane: the turn lanes of that shown frame wait for its next capture. On a slow
+phone core a turn try costs five tracked decodes and a band try one, so reading
+both on one capture overran the time a frame is shown at 12 fps and the session
+missed the next shown frames. A decoder that sees each shown frame two or three
+times still reads both; one that sees it once reads the cheaper bands and every
+frame's field lanes. A band try that reads nothing (bands out of view, too
+blurred, or a torn capture) leaves the turn lanes to the same capture.
 """
 
 from __future__ import annotations
@@ -45,8 +60,9 @@ from .decode import (
     track_frame,
 )
 from .image import Luma
+from .kana import KANA_LANES, kana_packet, read_kana
 from .lanes import DECODE_ORDER, FIELD_LANES
-from .layout import SECTORS
+from .layout import KANA_BANDS, SECTORS
 from .stream import (
     AssemblerLimits,
     Completed,
@@ -63,6 +79,8 @@ __all__ = [
     "MERGE_CAPTURES",
     "TURN_MEMORY",
     "TURN_BACKOFF",
+    "KANA_MEMORY",
+    "KANA_BACKOFF",
     "ScanLimits",
     "ScanStats",
     "ScanOutcome",
@@ -80,6 +98,10 @@ MERGE_CAPTURES = 4
 TURN_MEMORY = MERGE_WINDOW * SECTORS
 #: Most captures passed over after tries that read no turn lane.
 TURN_BACKOFF = 8
+#: Bands remembered as tried (the two of each of the last :data:`MERGE_WINDOW` shown frames).
+KANA_MEMORY = MERGE_WINDOW * KANA_BANDS
+#: Most captures passed over after tries that read no kana lane.
+KANA_BACKOFF = 8
 
 
 @dataclass(frozen=True)
@@ -122,6 +144,10 @@ class ScanStats:
     turn_tries: int = 0
     #: Turn lanes read.
     turn_lanes: int = 0
+    #: Bands tried (each at most once per shown frame).
+    kana_tries: int = 0
+    #: Kana lanes read (up to four per shown frame).
+    kana_lanes: int = 0
 
 
 @dataclass(frozen=True)
@@ -144,6 +170,8 @@ class ScanOutcome:
     #: Turn lanes read from this capture, as the sector digits of the field lanes they
     #: ride on.
     turned: str = ""
+    #: Kana lanes read from this capture, as their names (``P0``, ``K0``, ``P1``, ``K1``).
+    kana: str = ""
 
 
 @dataclass
@@ -197,6 +225,12 @@ class ScanSession:
         self._turn_misses = 0
         #: Captures that would try a turn lane still to pass over.
         self._turn_wait = 0
+        #: The bands tried, oldest first: ``(shown frame, band)``.
+        self._kana_tried: Deque[Tuple[LaneHeader, int]] = deque()
+        #: Tries in a row that read no kana lane (at most :data:`KANA_BACKOFF`).
+        self._kana_misses = 0
+        #: Captures that would try a band still to pass over.
+        self._kana_wait = 0
 
     @property
     def limits(self) -> ScanLimits:
@@ -213,7 +247,7 @@ class ScanSession:
 
     def reset(self) -> None:
         """Drop all partial state, including the pose used for tracking, held captures, the
-        turn lanes tried and any back-off."""
+        turn lanes and bands tried and any back-off."""
         self._assembler.reset()
         self._started_ms = None
         self._last_rank = 0
@@ -222,16 +256,21 @@ class ScanSession:
         self._forget_turns()
 
     def _forget_turns(self) -> None:
-        """Forget the turn lanes tried and any back-off."""
+        """Forget the turn lanes and bands tried and any back-off."""
         self._tried.clear()
         self._turn_misses = 0
         self._turn_wait = 0
+        self._kana_tried.clear()
+        self._kana_misses = 0
+        self._kana_wait = 0
 
     def push(self, image: Luma, now_ms: int) -> ScanOutcome:
         """Offer one camera luma plane captured at monotonic time ``now_ms``.
 
         While the last decoded pose is at most :data:`TRACK_WINDOW_MS` old the frame
-        is first read by tracking that pose; a full decode runs when tracking fails.
+        is first read by tracking that pose; a full decode runs when tracking fails. The
+        bands are tried before the turn lanes, and a capture whose bands read a kana lane
+        tries no turn lane (see the module documentation).
         """
         start = self._started_ms
         if start is not None and (
@@ -244,6 +283,7 @@ class ScanSession:
         lanes = ""
         merged = ""
         turned = ""
+        kana = ""
         frame: Optional[DecodedFrame] = None
         last_pose = self._last_pose
         if last_pose is not None and max(now_ms - last_pose[1], 0) <= TRACK_WINDOW_MS:
@@ -261,7 +301,10 @@ class ScanSession:
             self._last_pose = (frame, now_ms)
             lanes = self._absorb(frame)
             merged = self._merge(image, frame)
-            turned = self._turn(image, frame)
+            # a capture whose bands read a lane tries no turn lane (see the module docs)
+            kana = self._kana(image, frame)
+            if not kana:
+                turned = self._turn(image, frame)
         if error not in (DecodeErrorKind.NO_FINDERS, DecodeErrorKind.UNSUPPORTED_IMAGE):
             self._stats = replace(self._stats, located=self._stats.located + 1)
         progress = self._assembler.progress()
@@ -277,6 +320,7 @@ class ScanSession:
             lanes=lanes,
             merged=merged,
             turned=turned,
+            kana=kana,
             progress=progress,
             completed=self._assembler.take_completed(),
         )
@@ -351,6 +395,43 @@ class ScanSession:
             self._turn_misses = min(self._turn_misses + 1, TURN_BACKOFF)
             self._turn_wait = self._turn_misses
         return turned
+
+    def _kana(self, image: Luma, frame: DecodedFrame) -> str:
+        """Tries the bands not yet tried for this capture's shown frame and offers the atoms
+        of the kana lanes they read; after tries that read nothing it passes over the next
+        captures that would try one (see the module documentation)."""
+        header = _shown_frame(frame)
+        if header is None:
+            return ""
+        tried = self._kana_tried
+        skip = [(header, band) in tried for band in range(KANA_BANDS)]
+        if all(skip):
+            return ""
+        if self._kana_wait > 0:
+            self._kana_wait -= 1
+            return ""
+        for band in range(KANA_BANDS):
+            if not skip[band]:
+                if len(tried) == KANA_MEMORY:
+                    tried.popleft()
+                tried.append((header, band))
+                self._stats = replace(self._stats, kana_tries=self._stats.kana_tries + 1)
+        read = ""
+        for lane, result in zip(KANA_LANES, read_kana(image, frame, header, skip)):
+            if result is None:
+                continue
+            packet = kana_packet(result.header, lane, result.result.data)
+            if packet is None:
+                continue
+            self._assembler.push_atoms(packet)
+            self._stats = replace(self._stats, kana_lanes=self._stats.kana_lanes + 1)
+            read += lane.value
+        if read:
+            self._kana_misses = 0
+        else:
+            self._kana_misses = min(self._kana_misses + 1, KANA_BACKOFF)
+            self._kana_wait = self._kana_misses
+        return read
 
     def _merge(self, image: Luma, frame: DecodedFrame) -> str:
         """Holds this capture's field evidence under its shown frame and, from the second

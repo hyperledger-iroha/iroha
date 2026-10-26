@@ -1,17 +1,18 @@
 # Copyright 2026 Hyperledger Iroha Contributors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Golden camera captures in ``fixtures/petal/petal_captures_v3.json``.
+"""Golden camera captures in ``fixtures/petal/petal_captures_v5.json``.
 
-Every conforming decoder must read the lanes named in ``must_decode`` and the
-turn lanes named in ``must_turn``, must never report wrong data for any lane,
-must report the recorded inferred corner, must follow each tracking pair from
-its first frame into its second, must recover the ``must_merge`` field lanes of
-every merge set from the merge of its captures, must never let a session offer
-a lane of a mixed set, and must reject the negatives. This port follows the
-reference operation by operation, so it is also held to the exact lanes the
-reference read (``reference_decoded``, ``reference_turned``,
-``reference_tracked`` and ``reference_merged``).
+Every conforming decoder must read the lanes named in ``must_decode``, the turn
+lanes named in ``must_turn`` and the kana lanes named in ``must_kana``, must
+never report wrong data for any lane, must report the recorded inferred corner,
+must follow each tracking pair from its first frame into its second, must
+recover the ``must_merge`` field lanes of every merge set from the merge of its
+captures, must never let a session offer a lane of a mixed set, and must reject
+the negatives. This port follows the reference operation by operation, so it is
+also held to the exact lanes the reference read (``reference_decoded``,
+``reference_turned``, ``reference_kana``, ``reference_tracked`` and
+``reference_merged``).
 """
 
 from __future__ import annotations
@@ -32,6 +33,8 @@ from petal_test_support import (
 
 from iroha_petal import (
     DECODE_ORDER,
+    KANA_LANES,
+    Beacon,
     DecodeError,
     LaneHeader,
     RenderOptions,
@@ -42,7 +45,9 @@ from iroha_petal import (
     decode_lane,
     encode_lane,
     field_evidence,
+    kana_packet,
     merge_fields,
+    read_kana,
     read_turns,
     render_frame,
     track_frame,
@@ -66,6 +71,10 @@ CAPTURE_NAMES = [
     "hidden-corner-540p",
     "cut-corner-720p",
     "barrel-480p",
+    "upright-720p",
+    "upright-legacy-720p",
+    "upright-soft-720p",
+    "upright-480p",
 ]
 
 #: The tracking pairs of the fixture, in order.
@@ -100,6 +109,50 @@ def read_turn_lanes(test: unittest.TestCase, name: str, image, frame, entry: dic
         test.assertIn(letter, letters, f"{name}: turned {letters!r}, must turn {letter}")
     test.assertEqual(letters, entry["reference_turned"], f"{name}: turn lanes read")
     return letters, elapsed
+
+
+def kana_header(frame) -> LaneHeader:
+    """The header (stream tag and frame) a decoded capture's lanes name: its first atom
+    packet's, or its beacon's."""
+    packets = frame.atom_packets()
+    if packets:
+        return packets[0].header
+    beacon = frame.beacon()
+    assert isinstance(beacon, Beacon), "a decoded capture names its frame"
+    return beacon.header
+
+
+def read_kana_lanes(test: unittest.TestCase, name: str, image, frame, entry: dict, assembler=None):
+    """Reads the kana lanes of a decoded capture under the header its lanes name (both bands),
+    checks them against the recorded data and the requirements, and returns their names and
+    how long the read took; their atoms go to ``assembler`` when given."""
+    expected = [bytes.fromhex(data) for data in entry.get("kana_data", [])]
+    started = time.perf_counter()
+    results = read_kana(image, frame, kana_header(frame))
+    elapsed = time.perf_counter() - started
+    names = ""
+    packets = []
+    for k, (lane, result) in enumerate(zip(KANA_LANES, results)):
+        if result is None:
+            continue
+        if expected:
+            test.assertEqual(result.result.data, expected[k], f"{name}: kana lane {lane.value}")
+        packet = kana_packet(result.header, lane, result.result.data)
+        test.assertIsNotNone(packet, f"{name}: kana check {lane.value}")
+        packets.append(packet)
+        names += lane.value
+    if assembler is not None:
+        for packet in packets:
+            assembler.push_atoms(packet)
+    must = entry.get("must_kana", "")
+    for required in (must[i : i + 2] for i in range(0, len(must), 2)):
+        test.assertIn(
+            required,
+            [names[i : i + 2] for i in range(0, len(names), 2)],
+            f"{name}: kana {names!r}, must read {must!r}",
+        )
+    test.assertEqual(names, entry["reference_kana"], f"{name}: kana lanes read")
+    return names, elapsed
 
 
 def merge_set(test: unittest.TestCase, entry: dict):
@@ -144,8 +197,8 @@ class CaptureTest(unittest.TestCase):
         cls.doc = captures_fixture()
 
     def test_the_fixture_carries_its_captures_tracks_merges_and_negatives(self) -> None:
-        self.assertEqual(self.doc["fixture_version"], 3)
-        self.assertEqual(self.doc["format"], "petal-captures-v3")
+        self.assertEqual(self.doc["fixture_version"], 5)
+        self.assertEqual(self.doc["format"], "petal-captures-v5")
         self.assertEqual([c["name"] for c in self.doc["captures"]], CAPTURE_NAMES)
         self.assertEqual([t["name"] for t in self.doc["tracks"]], TRACK_NAMES)
         self.assertEqual([m["name"] for m in self.doc["merges"]], ["noisy-480p"])
@@ -181,6 +234,8 @@ class CaptureTest(unittest.TestCase):
             decoded.feed(assembler)
             turned, turn_elapsed = read_turn_lanes(self, name, image, decoded, capture, assembler)
             self.assertLess(turn_elapsed, TIME_BUDGET_S, f"{name}: turns took {turn_elapsed:.1f} s")
+            kana, kana_elapsed = read_kana_lanes(self, name, image, decoded, capture, assembler)
+            self.assertLess(kana_elapsed, TIME_BUDGET_S, f"{name}: bands took {kana_elapsed:.1f} s")
             timings.append(
                 (
                     name,
@@ -188,24 +243,28 @@ class CaptureTest(unittest.TestCase):
                     image.height,
                     read,
                     turned,
+                    kana,
                     decoded.pose.distortion,
                     elapsed,
                     turn_elapsed,
+                    kana_elapsed,
                 )
             )
         # captures of different frames of the same stream accumulate in one assembler
         self.assertGreater(assembler.progress().atoms_received, 100)
-        for name, width, height, read, turned, distortion, elapsed, turn_elapsed in timings:
+        for name, width, height, read, turned, kana, distortion, *seconds in timings:
             sys.stderr.write(
                 f"\n  {name:<22} {width}x{height} lanes {read:<5} turns {turned:<4} "
-                f"k {distortion:+.3f} {elapsed:.2f} s + {turn_elapsed:.2f} s"
+                f"kana {kana:<8} k {distortion:+.3f} "
+                + " + ".join(f"{elapsed:.2f} s" for elapsed in seconds)
             )
         sys.stderr.write("\n")
 
     def test_the_golden_turn_lanes_cover_the_cameras_the_spec_names(self) -> None:
         turned = {c["name"]: c["reference_turned"] for c in self.doc["captures"]}
-        # the sharp cameras, the mirrored, covered and cut-off captures read every turn lane;
-        # the over-exposed capture reads two; the soft, blurred, veiled and distorted none
+        # the sharp cameras, the mirrored, covered and cut-off captures and the sharp upright
+        # phone read every turn lane; the older upright phone three, the over-exposed capture
+        # one; the soft, blurred, veiled and distorted none
         for name in (
             "clean-512",
             "modern-720p-rotated",
@@ -213,15 +272,19 @@ class CaptureTest(unittest.TestCase):
             "hidden-corner-540p",
             "cut-corner-720p",
             "shadow-band-540p",
+            "upright-720p",
         ):
             self.assertEqual(turned[name], "0123", name)
-        self.assertEqual(turned["overexposed-540p"], "12")
+        self.assertEqual(turned["upright-legacy-720p"], "123")
+        self.assertEqual(turned["overexposed-540p"], "1")
         for name in (
             "legacy-540p-tilted",
             "soft-480p-blur1.9",
             "small-480p",
             "veiled-720p",
             "barrel-480p",
+            "upright-soft-720p",
+            "upright-480p",
         ):
             self.assertEqual(turned[name], "", name)
         for pair in self.doc["tracks"]:
@@ -234,14 +297,54 @@ class CaptureTest(unittest.TestCase):
         self.assertEqual(
             [(r.corrected, r.erasures) for r in results], [(5, 0), (6, 0), (3, 0), (9, 0)]
         )
-        # the over-exposed capture reads two, each at the limit of its Reed-Solomon code
-        # (22 parity bytes: twice the errors plus the erasures)
+        # the over-exposed capture reads one with 10 corrections of its 11, as the reference
         image = luma_of(by_name["overexposed-540p"])
         results = read_turns(image, decode_frame(image))
-        read = [(r.corrected, r.erasures) for r in results if r is not None]
-        self.assertEqual(read, [(11, 0), (12, 2)])
-        for corrected, erasures in read:
-            self.assertEqual(2 * (corrected - erasures) + erasures, 22)
+        self.assertEqual([(r.corrected, r.erasures) for r in results if r is not None], [(10, 0)])
+
+    def test_the_golden_kana_lanes_cover_the_cameras_the_spec_names(self) -> None:
+        kana = {c["name"]: c["reference_kana"] for c in self.doc["captures"]}
+        # the phones held upright see both bands: the sharp, older and soft ones read all four
+        # kana lanes, the 480p one P0, P1 and K1; the clean card and the veiled capture read
+        # all four too, and the tilted captures the band in view
+        for name in ("upright-720p", "upright-legacy-720p", "upright-soft-720p"):
+            self.assertEqual(kana[name], "P0K0P1K1", name)
+        self.assertEqual(kana["upright-480p"], "P0P1K1")
+        self.assertEqual((kana["clean-512"], kana["veiled-720p"]), ("P0K0P1K1", "P0K0P1K1"))
+        self.assertEqual((kana["modern-720p-rotated"], kana["cut-corner-720p"]), ("P1K1", "P0K0"))
+        must = {c["name"]: c["must_kana"] for c in self.doc["captures"] if c["must_kana"]}
+        self.assertEqual(
+            must,
+            {
+                "upright-720p": "P0K0P1K1",
+                "upright-legacy-720p": "P0P1",
+                "upright-soft-720p": "P0P1",
+            },
+        )
+        for pair in self.doc["tracks"]:
+            self.assertEqual(pair["reference_kana"], "", pair["name"])
+        by_name = {c["name"]: c for c in self.doc["captures"]}
+        # every lane is read under the square's own frame, with the corrections and erasures
+        # the reference reads it with
+        for name, expected in (
+            ("upright-legacy-720p", [(0, 0), (15, 0), (0, 0), (10, 0)]),
+            ("upright-480p", [(12, 8), None, (0, 0), (0, 0)]),
+            ("overexposed-540p", [None, None, (12, 8), None]),
+        ):
+            capture = by_name[name]
+            image = luma_of(capture)
+            frame = decode_frame(image)
+            results = read_kana(image, frame, kana_header(frame))
+            self.assertEqual(
+                [None if r is None else (r.result.corrected, r.result.erasures) for r in results],
+                expected,
+                name,
+            )
+            for result in results:
+                if result is not None:
+                    self.assertEqual(
+                        result.header, LaneHeader(capture_tag(self.doc), capture["frame"])
+                    )
 
     def test_the_cheap_lens_needs_the_distortion_search(self) -> None:
         by_name = {c["name"]: c for c in self.doc["captures"]}
@@ -275,6 +378,7 @@ class CaptureTest(unittest.TestCase):
             turned, turn_elapsed = read_turn_lanes(
                 self, name, luma_of(pair, "to_luma_zlib_base64"), followed, pair
             )
+            read_kana_lanes(self, name, luma_of(pair, "to_luma_zlib_base64"), followed, pair)
             timings.append((name, read, turned, elapsed, turn_elapsed))
         for name, read, turned, elapsed, turn_elapsed in timings:
             sys.stderr.write(
@@ -343,18 +447,20 @@ class CaptureTest(unittest.TestCase):
                 "d_data": lanes.d.hex(),
                 "field_data": [f.hex() for f in lanes.fields],
                 "turn_data": [t.hex() for t in lanes.turns],
+                "kana_data": [k.hex() for k in lanes.kana],
             }
 
         for capture in self.doc["captures"]:
             self.assertEqual(
-                {key: capture[key] for key in ("d_data", "field_data", "turn_data")},
+                {key: capture[key] for key in ("d_data", "field_data", "turn_data", "kana_data")},
                 recorded(capture["frame"]),
                 capture["name"],
             )
         for pair in self.doc["tracks"]:
+            lanes = recorded(pair["to_frame"])
             self.assertEqual(
                 {key: pair[key] for key in ("d_data", "field_data", "turn_data")},
-                recorded(pair["to_frame"]),
+                {key: lanes[key] for key in ("d_data", "field_data", "turn_data")},
                 pair["name"],
             )
         for entry in self.doc["merges"]:
@@ -370,10 +476,17 @@ class CaptureTest(unittest.TestCase):
             self.assertEqual(entry["field_data"], petals["field_data"], entry["name"])
 
     def test_renderer_reproduces_the_clean_capture_pixel_for_pixel(self) -> None:
+        # the clean capture is the whole card, its bands included
         capture = next(c for c in self.doc["captures"] if c["name"] == "clean-512")
         encoder = StreamEncoder(bytes.fromhex(self.doc["payload_hex"]), self.doc["payload_kind"])
         rgb = render_frame(encoder.cells(capture["frame"]), RenderOptions(size=512, supersample=3))
+        self.assertEqual((rgb.width, rgb.height), (capture["width"], capture["height"]))
         self.assertEqual(rgb.to_luma().data, luma_of(capture).data)
+
+
+def capture_tag(doc: dict) -> int:
+    """The stream tag of the captures' payload: the low byte of its CRC-32C."""
+    return StreamEncoder(bytes.fromhex(doc["payload_hex"]), doc["payload_kind"]).meta.tag
 
 
 if __name__ == "__main__":

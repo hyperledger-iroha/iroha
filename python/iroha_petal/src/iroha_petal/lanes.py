@@ -16,23 +16,29 @@ F0 ... F3  840 field cells of one sector x 1 bit    105 B     83 B   22 B
 T0 ... T3  360 lit petals of one sector x 2 bits    90 B      68 B   22 B
 =========  =======================================  ========  =====  ======
 
-Bit order is most-significant-bit first.
+The katakana tiles of the bands above and below the square carry four more
+lanes (``P0``, ``K0``, ``P1``, ``K1``, see :mod:`iroha_petal.kana`). Bit order is
+most-significant-bit first.
 """
 
 from __future__ import annotations
 
 import enum
 from dataclasses import dataclass
-from typing import Iterable, Optional, Sequence, Tuple
+from typing import Iterable, NamedTuple, Optional, Sequence, Tuple
 
+from .glyphs import GLYPH_COUNT
 from .layout import (
     D_BITS,
     FIELD_CELLS,
+    KANA_BANDS,
+    KANA_PILOT_SYMBOLS,
     SECTOR_CELLS,
     SECTORS,
     TOTAL_SLOTS,
     SlotKind,
     data_slots,
+    kana_tiles,
     sector_cells,
     slot_roles,
 )
@@ -58,6 +64,7 @@ __all__ = [
     "encode_lane",
     "decode_lane",
     "decode_lane_counted",
+    "KanaSymbol",
     "FrameCells",
 ]
 
@@ -212,6 +219,30 @@ _SECTOR_BITS = tuple(sector_cells(sector)[:_FIELD_BITS] for sector in range(SECT
 _UNTURNED = (0,) * FIELD_CELLS
 
 
+class KanaSymbol(NamedTuple):
+    """What one katakana tile shows (see :mod:`iroha_petal.kana`)."""
+
+    #: Glyph ``0..16`` (:data:`~iroha_petal.glyphs.GLYPH_CHARS`).
+    glyph: int
+    #: Light (filled) or dark.
+    light: bool
+
+
+def _pilot_symbols() -> Tuple[KanaSymbol, ...]:
+    symbols = [KanaSymbol(0, True)] * len(kana_tiles())
+    for index, tile in enumerate(kana_tiles()):
+        if tile.pilot is not None:
+            glyph, light = KANA_PILOT_SYMBOLS[tile.pilot]
+            symbols[index] = KanaSymbol(glyph, light)
+    return tuple(symbols)
+
+
+#: Every katakana tile as :meth:`FrameCells.from_words` leaves it: the pilots show their fixed
+#: symbols, every data tile is light with glyph 0.
+_PILOT_SYMBOLS = _pilot_symbols()
+_KANA_TILE_COUNT = len(_PILOT_SYMBOLS)
+
+
 @dataclass(frozen=True)
 class FrameCells:
     """Every cell of one frame: what a renderer draws and a decoder samples."""
@@ -224,11 +255,17 @@ class FrameCells:
     #: zero for dark petals and for lit petals that carry no turn bits. Empty (the
     #: default) means every petal is unturned.
     turns: Tuple[int, ...] = ()
+    #: What every katakana tile shows (:func:`~iroha_petal.layout.kana_tiles` order). Empty
+    #: (the default) means the pilots show their fixed symbols and every data tile is light
+    #: with glyph 0.
+    kana: Tuple[KanaSymbol, ...] = ()
 
     def __post_init__(self) -> None:
         dots = tuple(bool(v) for v in self.dots)
         petals = tuple(bool(v) for v in self.petals)
         turns = tuple(int(v) for v in self.turns) or _UNTURNED
+        kana = tuple(KanaSymbol(int(glyph), bool(light)) for glyph, light in self.kana)
+        kana = kana or _PILOT_SYMBOLS
         if len(dots) != TOTAL_SLOTS:
             raise ValueError("a frame has exactly 296 ring slots")
         if len(petals) != FIELD_CELLS:
@@ -237,15 +274,21 @@ class FrameCells:
             raise ValueError("a frame turns exactly 3376 field cells")
         if min(turns) < 0 or max(turns) > 3:
             raise ValueError("a turn position is within 0..=3")
+        if len(kana) != _KANA_TILE_COUNT:
+            raise ValueError("a frame has exactly 612 katakana tiles")
+        if any(not 0 <= symbol.glyph < GLYPH_COUNT for symbol in kana):
+            raise ValueError("a katakana glyph is within 0..=15")
         object.__setattr__(self, "dots", dots)
         object.__setattr__(self, "petals", petals)
         object.__setattr__(self, "turns", turns)
+        object.__setattr__(self, "kana", kana)
 
     @classmethod
     def from_words(cls, d: bytes, fields: Sequence[bytes]) -> "FrameCells":
         """Build the cells from the transmitted codewords of lane ``D`` and the four
         field lanes (sector 0 first), with every petal unturned (see
-        :meth:`with_turns`)."""
+        :meth:`with_turns`) and only the pilots set among the katakana tiles (see
+        :meth:`with_kana`)."""
         if len(d) != D_WORD:
             raise ValueError("lane D codeword length mismatch")
         if len(fields) != SECTORS or any(len(word) != FIELD_WORD for word in fields):
@@ -304,7 +347,26 @@ class FrameCells:
                 continue
             for index, cell in enumerate(chosen):
                 turns[cell] = carrier_position(word, index)
-        return FrameCells(self.dots, self.petals, tuple(turns))
+        return FrameCells(self.dots, self.petals, tuple(turns), self.kana)
+
+    def with_kana(self, words: Sequence[bytes]) -> "FrameCells":
+        """The same cells with the data tiles of both bands showing the transmitted kana
+        codewords ``words`` (four, in the order ``P0``, ``K0``, ``P1``, ``K1``, see
+        :mod:`iroha_petal.kana`); the pilots keep their symbols.
+
+        Raises :class:`ValueError` when a codeword has the wrong length.
+        """
+        # imported here: the kana module builds on this one
+        from .kana import KANA_LANES, set_kana_symbols
+
+        if len(words) != len(KANA_LANES) or any(
+            len(word) != lane.word_len for word, lane in zip(words, KANA_LANES)
+        ):
+            raise ValueError("a frame has four kana codewords: P0, K0, P1 and K1")
+        symbols = list(self.kana)
+        for band in range(KANA_BANDS):
+            set_kana_symbols(symbols, band, words[2 * band], words[2 * band + 1])
+        return FrameCells(self.dots, self.petals, self.turns, tuple(symbols))
 
     def turn_word(self, sector: int) -> Optional[bytes]:
         """Pack the turns of the carriers of sector ``sector`` into its turn codeword, or
