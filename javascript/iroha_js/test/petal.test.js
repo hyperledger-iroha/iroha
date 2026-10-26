@@ -13,6 +13,8 @@ import { findForbiddenBrowserInputs } from "../scripts/bundle-size-check.mjs";
 import {
   PETAL_DEFAULT_DECODE_OPTIONS,
   PETAL_DEFAULT_SCAN_LIMITS,
+  PETAL_GLYPHS,
+  PETAL_KANA,
   PETAL_LANES,
   PETAL_LAYOUT,
   PETAL_PALETTE,
@@ -47,6 +49,7 @@ import {
   cellLight,
   crc32c,
   dataSlots,
+  decodeKanaLaneCounted,
   decodeLane,
   decodeLaneCounted,
   decodePetalFrame,
@@ -54,6 +57,7 @@ import {
   decodeTurnLaneCounted,
   drawPetalFrame,
   encodeAtom,
+  encodeKanaLane,
   encodeLane,
   encodeTurnLane,
   fieldEvidence,
@@ -63,6 +67,13 @@ import {
   followFinder,
   inMask,
   isBeaconFrame,
+  kanaCoarseTemplateProbe,
+  kanaFirstId,
+  kanaInked,
+  kanaPacket,
+  kanaTemplateProbe,
+  kanaTiles,
+  kanaWhitening,
   labelComponents,
   laneFirstId,
   laneLetter,
@@ -76,10 +87,12 @@ import {
   observedTurns,
   parseAtomLane,
   parseDLane,
+  petalCardHeight,
   petalDrawList,
   petalLit,
   petalPlayerFrame,
   petalScanSize,
+  readKana,
   readTurns,
   renderPetalFrame,
   sectorCells,
@@ -110,11 +123,12 @@ import {
   twoMeans,
 } from "../src/petal/decode.js";
 import { completeTriple, strongFinders } from "../src/petal/locate.js";
-import { TURN_MEMORY } from "../src/petal/session.js";
+import { renderPetalSquare } from "../src/petal/render.js";
+import { KANA_MEMORY, TURN_MEMORY } from "../src/petal/session.js";
 import { decideWindow, neighbours, turnKernels } from "../src/petal/turns.js";
 
-const STREAM_FIXTURE = new URL("../../../fixtures/petal/petal_stream_v3.json", import.meta.url);
-const CAPTURE_FIXTURE = new URL("../../../fixtures/petal/petal_captures_v3.json", import.meta.url);
+const STREAM_FIXTURE = new URL("../../../fixtures/petal/petal_stream_v5.json", import.meta.url);
+const CAPTURE_FIXTURE = new URL("../../../fixtures/petal/petal_captures_v5.json", import.meta.url);
 
 /** Lane D, then the four field lanes. */
 const ALL_LANES = Object.freeze(["D", "F0", "F1", "F2", "F3"]);
@@ -156,9 +170,28 @@ function assertPetalError(fn, code) {
   assert.throws(fn, (error) => error instanceof PetalError && error.code === code);
 }
 
-function renderLuma(cells, size, supersample) {
+/**
+ * The bare square of `cells`, `size` pixels on a side: what the decoder's own tests (pixel
+ * positions, locator expectations, painting over a blossom) work on.
+ */
+function squareLuma(cells, size, supersample) {
+  const image = renderPetalSquare(cells, { size, supersample });
+  return PetalLuma.fromRgba(image.width, image.height, image.data);
+}
+
+/** The whole card of `cells`, `size` pixels wide: the square with its katakana bands. */
+function cardLuma(cells, size, supersample) {
   const image = renderPetalFrame(cells, { size, supersample });
   return PetalLuma.fromRgba(image.width, image.height, image.data);
+}
+
+/** The RGB bytes (the reference's `Rgb` layout) of an RGBA render. */
+function rgbOf(image) {
+  const rgb = new Uint8Array(image.width * image.height * 3);
+  for (let pixel = 0; pixel < image.width * image.height; pixel += 1) {
+    rgb.set(image.data.subarray(pixel * 4, pixel * 4 + 3), pixel * 3);
+  }
+  return rgb;
 }
 
 /** The bytes of `lane` among lane data or codewords `{d, fields}`. */
@@ -470,6 +503,18 @@ test("lane sizes are consistent", () => {
   assert.equal(2 ** turns.bits, turns.positions);
   assert.deepEqual([turns.idBase, turns.memory], [2 ** 31, 24]);
   assert.equal(TURN_MEMORY, turns.memory);
+  const kana = PETAL_KANA;
+  assert.deepEqual(kana.lanes, ["P0", "K0", "P1", "K1"]);
+  assert.deepEqual([kana.polarity.wordLen, kana.polarity.parityLen, kana.polarity.dataLen, kana.polarity.atoms], [37, 17, 20, 1]);
+  assert.deepEqual([kana.glyph.wordLen, kana.glyph.parityLen, kana.glyph.dataLen, kana.glyph.atoms], [149, 33, 116, 7]);
+  for (const size of [kana.polarity, kana.glyph]) {
+    assert.equal(size.dataLen, size.atoms * PETAL_STREAM.atomLen + kana.checkLen);
+  }
+  // a band's 298 data tiles show one polarity bit (296 used) and one glyph nibble each
+  assert.equal(kana.dataTiles, PETAL_LAYOUT.kanaBandTiles - PETAL_LAYOUT.kanaPilots);
+  assert.deepEqual([kana.polarity.wordLen, kana.glyph.wordLen], [Math.floor(kana.dataTiles / 8), kana.dataTiles / 2]);
+  assert.deepEqual([kana.idBase, kana.memory, kana.backoff], [turns.idBase + 2 ** 20, 12, 8]);
+  assert.equal(KANA_MEMORY, kana.memory);
   assert.deepEqual([0, 1, 2, 3].map(fieldLane), ["F0", "F1", "F2", "F3"]);
   assert.equal(ALL_LANES.map(laneLetter).join(""), "D0123");
   assert.throws(() => fieldLane(4), RangeError);
@@ -831,11 +876,11 @@ test("the beacon roundtrips through lane D", () => {
   assert.equal(lane.type, "beacon");
   assert.deepEqual(lane.beacon.meta, encoder.meta);
   assert.equal(lane.beacon.header.frame, 512);
-  assert.equal(d[3], 0x30);
-  assert.equal(PETAL_STREAM.formatVersion, 0x30);
+  assert.equal(d[3], 0x50);
+  assert.equal(PETAL_STREAM.formatVersion, 0x50);
   assert.equal(parseDLane(d.slice(0, 11)), null);
-  // the retired formats 1 (katakana tiles) and 2 (unturned petals) are refused
-  for (const retired of [0x10, 0x20]) {
+  // the retired formats 1 (katakana tiles), 2 (unturned petals) and 3 (no bands) are refused
+  for (const retired of [0x10, 0x20, 0x30]) {
     const bad = d.slice();
     bad[3] = retired;
     assert.equal(parseDLane(bad), null);
@@ -1205,18 +1250,28 @@ function renderCells(seed) {
 }
 
 test("finders are solid blossoms and corners are otherwise black", () => {
-  const image = renderPetalFrame(renderCells(1), { size: 256, supersample: 2 });
+  const image = renderPetalSquare(renderCells(1), { size: 256, supersample: 2 });
+  assert.deepEqual([image.width, image.height], [256, 256]);
   const at = (x, y) => image.data[(y * 256 + x) * 4];
   assert.ok(at(18, 18) > 200, "core must be lit");
   assert.ok(at(18, 9) > 200, "upper petal must be lit");
   assert.ok(at(23, 23) > 200, "blossom body must be lit");
   assert.equal(at(2, 255), 0);
   assert.equal(image.data[3], 255);
+  // the card is the same square with a band above and below it (at 512 pixels the square starts
+  // on pixel row 161)
+  const square = renderPetalSquare(renderCells(1), { size: 512, supersample: 2 });
+  const card = renderPetalFrame(renderCells(1), { size: 512, supersample: 2 });
+  assert.deepEqual([card.width, card.height], [512, petalCardHeight(512)]);
+  const top = (PETAL_LAYOUT.squareTop * 512) / 1024;
+  assert.ok(Buffer.from(card.data.subarray(top * 512 * 4, (top + 512) * 512 * 4)).equals(Buffer.from(square.data)));
+  assert.deepEqual([petalCardHeight(1024), petalCardHeight(512), petalCardHeight(300), petalCardHeight(777)], [1668, 834, 489, 1266]);
+  assert.throws(() => petalCardHeight(0), RangeError);
 });
 
 test("lit petals are drawn in their colour and dark cells show the backdrop", () => {
   const frame = renderCells(2);
-  const image = renderPetalFrame(frame, { size: 1024, supersample: 1 });
+  const image = renderPetalSquare(frame, { size: 1024, supersample: 1 });
   const palette = PETAL_PALETTE;
   for (let cell = 0; cell < PETAL_LAYOUT.fieldCells; cell += 1) {
     const [x, y] = cellCenter(cell);
@@ -1231,7 +1286,7 @@ test("lit petals are drawn in their colour and dark cells show the backdrop", ()
 
 test("lit dots are drawn and unlit slots are black", () => {
   const frame = renderCells(3);
-  const image = renderPetalFrame(frame, { size: 1024, supersample: 1 });
+  const image = renderPetalSquare(frame, { size: 1024, supersample: 1 });
   let checked = 0;
   for (let ring = 0; ring < 3; ring += 1) {
     for (let slot = 0; slot < PETAL_LAYOUT.ringSlots[ring]; slot += 1) {
@@ -1247,8 +1302,21 @@ test("lit dots are drawn and unlit slots are black", () => {
 });
 
 test("the software renderer matches the reference renderer bit for bit", () => {
-  // FNV-1a 64 of the RGB bytes produced by `iroha_petal::render::render` for
-  // the decoder-test stream (3,000 bytes, kind 2).
+  // CRC-32C of the RGB bytes the reference `render` produces (the whole card) for frames of a
+  // 700-byte stream (xorshift32 seed 2, kind 2): turned petals and katakana tiles included
+  const stream = new PetalStreamEncoder(payload(700, 2), 2);
+  for (const [frame, size, supersample, expected] of [
+    [0, 512, 2, 0xfbdf7940],
+    [1, 300, 3, 0xb52fb2c1],
+    [6, 777, 4, 0xca8b70b1],
+  ]) {
+    const image = renderPetalFrame(stream.cells(frame), { size, supersample });
+    assert.deepEqual([image.width, image.height], [size, petalCardHeight(size)]);
+    assert.equal(crc32c(rgbOf(image)), expected, `frame ${frame} at ${size} px, ${supersample}x`);
+  }
+  // FNV-1a 64 of the RGB bytes the reference renders for the bare square of frame 3 of the
+  // decoder-test stream (3,000 bytes, kind 2): a frame without a beacon, whose square the bands
+  // left unchanged
   const fnv = (bytes) => {
     // 64-bit FNV-1a on two 32-bit halves; the prime is 2^40 + 0x1b3.
     let hi = 0xcbf29ce4;
@@ -1261,24 +1329,21 @@ test("the software renderer matches the reference renderer bit for bit", () => {
     }
     return hi.toString(16).padStart(8, "0") + lo.toString(16).padStart(8, "0");
   };
-  const encoder = decodeSetupEncoder();
-  for (const [frame, size, supersample, expected] of [
-    [0, 256, 2, "0b93de25d5cb490a"],
-    [3, 1024, 1, "71686d3619ad7d3e"],
-  ]) {
-    const image = renderPetalFrame(encoder.cells(frame), { size, supersample });
-    const rgb = new Uint8Array(size * size * 3);
-    for (let pixel = 0; pixel < size * size; pixel += 1) rgb.set(image.data.subarray(pixel * 4, pixel * 4 + 3), pixel * 3);
-    assert.equal(fnv(rgb), expected, `frame ${frame} at ${size}px`);
-  }
+  const square = renderPetalSquare(decodeSetupEncoder().cells(3), { size: 1024, supersample: 1 });
+  assert.equal(fnv(rgbOf(square)), "71686d3619ad7d3e");
 });
 
 test("the draw list reproduces the software renderer's geometry", () => {
   const cells = renderCells(4);
   cells.setTurns(turnWords());
   assert.ok(cells.turns.some((turn) => turn !== 0), "the draw list is checked with turned petals");
+  cells.kanaGlyphs.forEach((_, tile) => {
+    cells.kanaGlyphs[tile] = (tile * 7) % 16;
+    cells.kanaLight[tile] = tile % 3 === 0 ? 0 : 1;
+  });
   const list = petalDrawList(cells);
   assert.equal(list.canvas, 1024);
+  assert.deepEqual([list.cardHeight, list.squareTop], [1668, 322]);
   assert.equal(list.finders.length, 4);
   assert.equal(list.petals.length, cells.petals.reduce((a, b) => a + b, 0));
   assert.equal(list.dots.length, cells.dots.reduce((a, b) => a + b, 0));
@@ -1328,7 +1393,7 @@ test("the draw list reproduces the software renderer's geometry", () => {
     for (const disc of [finder.core, ...finder.petals]) paint(...box(disc), inCircle(disc), list.palette.light);
     for (const notch of finder.notches) paint(...box(notch), inCircle(notch), list.palette.background);
   }
-  const image = renderPetalFrame(cells, { size: 1024, supersample: 1 });
+  const image = renderPetalSquare(cells, { size: 1024, supersample: 1 });
   let mismatches = 0;
   for (let gy = 0; gy < side; gy += 1) {
     for (let gx = 0; gx < side; gx += 1) {
@@ -1339,13 +1404,38 @@ test("the draw list reproduces the software renderer's geometry", () => {
   }
   assert.equal(mismatches, 0);
   assert.deepEqual(list.palette, PETAL_PALETTE);
+  // the katakana tiles: every tile in order with the cells' symbols, as the card shows them
+  assert.deepEqual([list.tile.side, list.tile.corner, list.tile.strokeWidth], [25, 3, (6.5 * 23) / 32]);
+  assert.equal(list.tile.glyphs.length, 16);
+  list.tile.glyphs.forEach((strokes, glyph) => {
+    assert.deepEqual(strokes, PETAL_GLYPHS.strokes[glyph].map((stroke) => stroke.map(([x, y]) => [1 + (x * 23) / 32, 1 + (y * 23) / 32])));
+  });
+  assert.equal(list.kanaTiles.length, PETAL_LAYOUT.kanaTileCount);
+  const card = renderPetalFrame(cells, { size: 1024, supersample: 1 });
+  const tiles = kanaTiles();
+  list.kanaTiles.forEach((tile, index) => {
+    assert.deepEqual([tile.index, tile.x, tile.y, tile.glyph, tile.light], [index, tiles[index].x, tiles[index].y, cells.kanaGlyphs[index], cells.kanaLight[index] === 1]);
+    assert.deepEqual([tile.fill, tile.ink], tile.light ? [PETAL_PALETTE.light, PETAL_PALETTE.ink] : [null, PETAL_PALETTE.pink]);
+    // the pixel at the tile centre is the tile's fill or its glyph
+    const px = Math.floor(tile.x + 12.5);
+    const py = Math.floor(tile.y + 12.5);
+    const inked = kanaInked(tile.glyph, px + 0.5 - tile.x, py + 0.5 - tile.y);
+    const color = inked ? tile.ink : (tile.fill ?? PETAL_PALETTE.background);
+    const at = ((py + PETAL_LAYOUT.squareTop) * 1024 + px) * 4;
+    assert.deepEqual(Array.from(card.data.subarray(at, at + 3)), color, `tile ${index}`);
+  });
+  // the shapes are shared between frames
+  assert.equal(petalDrawList(renderCells(5)).tile, list.tile);
+  cells.kanaGlyphs[3] = 16;
+  assert.throws(() => petalDrawList(cells), RangeError);
+  assert.throws(() => renderPetalFrame(cells, { size: 64 }), RangeError);
 });
 
 // ---------------------------------------------------------------- locate
 
 test("the four corner blossoms are found in a clean render", () => {
   const encoder = new PetalStreamEncoder(new Uint8Array(200).fill(9), 1);
-  const quad = locate(renderLuma(encoder.cells(1), 512, 2));
+  const quad = locate(squareLuma(encoder.cells(1), 512, 2));
   const expected = [
     [36, 36],
     [476, 36],
@@ -1431,7 +1521,7 @@ test("a smaller blob at the inferred corner completes the quad", () => {
 /** The 512-pixel locator test render. */
 function locatorFrame() {
   const encoder = new PetalStreamEncoder(new Uint8Array(200).fill(9), 1);
-  return renderLuma(encoder.cells(1), 512, 2);
+  return squareLuma(encoder.cells(1), 512, 2);
 }
 
 test("a hidden blossom yields an inferred candidate", () => {
@@ -1514,10 +1604,10 @@ function decodeSetupEncoder() {
   return new PetalStreamEncoder(data, 2);
 }
 
-/** A 768-pixel render (2x2 supersampled) of frame `frame` of the decoder tests' stream. */
+/** The 768-pixel square (2x2 supersampled) of frame `frame` of the decoder tests' stream. */
 function decodeSetup(frame) {
   const encoder = decodeSetupEncoder();
-  return { encoder, luma: renderLuma(encoder.cells(frame), 768, 2) };
+  return { encoder, luma: squareLuma(encoder.cells(frame), 768, 2) };
 }
 
 function transformLuma(luma, map) {
@@ -2171,7 +2261,7 @@ function turnStream() {
 test("a clean render reads every turn lane and skips what it is told", () => {
   const encoder = turnStream();
   const truth = encoder.laneData(6);
-  const image = renderLuma(encoder.cells(6), 768, 2);
+  const image = cardLuma(encoder.cells(6), 768, 2);
   const decoded = decodePetalFrame(image);
   assert.equal(decoded.letters(), "D0123");
   readTurns(image, decoded).forEach((result, sector) => {
@@ -2209,7 +2299,7 @@ test("a clean render reads every turn lane and skips what it is told", () => {
 test("a camera reads the turn lanes", () => {
   const encoder = turnStream();
   const truth = encoder.laneData(9);
-  const source = renderLuma(encoder.cells(9), 768, 2);
+  const source = cardLuma(encoder.cells(9), 768, 2);
   for (const [seed, rotationDeg] of [
     [1, 17],
     [2, 205],
@@ -2228,18 +2318,36 @@ test("unturned petals never pass for a turn lane", () => {
   const encoder = turnStream();
   const cells = encoder.cells(3);
   cells.turns.fill(0);
-  const image = renderLuma(cells, 768, 2);
+  const image = cardLuma(cells, 768, 2);
   const decoded = decodePetalFrame(image);
   assert.equal(decoded.letters(), "D0123", "the field lanes read without turns");
   assert.ok(readTurns(image, decoded).every((result) => result === null));
 });
 
+test("turned cards render exactly as the reference renders them", () => {
+  // CRC-32C of the reference `render` output (the whole card, 768 px, 2x2) of the turn reader
+  // tests' frames; the last cells are unturned and show only the pilots among their tiles
+  const encoder = turnStream();
+  const plain = encoder.cells(3);
+  for (const [cells, expected] of [
+    [encoder.cells(6), 0x913b4a27],
+    [encoder.cells(9), 0x4ae31996],
+    [new PetalFrameCells(plain.dots, plain.petals), 0xb23498b5],
+  ]) {
+    assert.equal(crc32c(rgbOf(renderPetalFrame(cells, { size: 768, supersample: 2 }))), expected);
+  }
+});
+
 // ---------------------------------------------------------------- scan session
 
 /**
- * Minimal camera model for session tests: the rendered canvas is rotated
- * about the image centre, scaled to fit, sampled with 2x2 supersampling and
- * given a little deterministic noise.
+ * Minimal camera model for session tests: the rendered card (or bare square) is
+ * rotated about the image centre, scaled so that its square fits, sampled with
+ * 2x2 supersampling and given a little deterministic noise. A card's centre is
+ * its square's centre (its two bands are equally tall), so its square lands
+ * where a bare square would, `SQUARE_TOP` units below the card's top edge, and
+ * its bands extend above and below it: in view when the frame's long side runs
+ * along the card (an upright phone), mostly out of view otherwise.
  */
 function cameraCapture(source, { width, height, rotationDeg = 0, noise = 3, seed = 1 }) {
   const angle = (rotationDeg * Math.PI) / 180;
@@ -2278,7 +2386,7 @@ test("a session receives a payload from simulated captures", () => {
   const session = new PetalScanSession();
   let done = null;
   for (let frame = 0; frame < 40; frame += 1) {
-    const source = renderLuma(encoder.cells(frame), 512, 2);
+    const source = cardLuma(encoder.cells(frame), 512, 2);
     const outcome = session.push(cameraCapture(source, { width: 640, height: 480, rotationDeg: 20, seed: frame + 1 }), frame * 125);
     if (outcome.completed !== null) {
       done = outcome.completed;
@@ -2302,14 +2410,14 @@ test("a turn lane is tried once per shown frame", () => {
   const encoder = new PetalStreamEncoder(payload(3000, 3), 2);
   const session = new PetalScanSession();
   const camera = (source, seed) => cameraCapture(source, { width: 640, height: 480, rotationDeg: 12, seed });
-  const shown = renderLuma(encoder.cells(5), 512, 2);
+  const shown = cardLuma(encoder.cells(5), 512, 2);
   const first = session.push(camera(shown, 1), 0);
   assert.deepEqual([first.lanes, first.turned], ["D0123", "0123"]);
   const again = session.push(camera(shown, 2), 33);
   assert.deepEqual([again.lanes, again.turned], ["D0123", ""]);
   assert.equal(session.stats().turnLanes, 4);
   // the next shown frame's turn lanes are new
-  const next = session.push(camera(renderLuma(encoder.cells(6), 512, 2), 3), 83);
+  const next = session.push(camera(cardLuma(encoder.cells(6), 512, 2), 3), 83);
   assert.equal(next.turned, "0123");
   assert.deepEqual([session.stats().turnTries, session.stats().turnLanes], [8, 8]);
   session.reset();
@@ -2328,7 +2436,8 @@ test("tries that read nothing back off", () => {
   // unturned petals: every field lane reads, no turn lane ever does
   const unturned = (frame) => {
     const cells = encoder.cells(frame);
-    return renderLuma(new PetalFrameCells(cells.dots, cells.petals), 512, 2);
+    cells.turns.fill(0);
+    return cardLuma(cells, 512, 2);
   };
   const session = new PetalScanSession();
   const triedAt = [];
@@ -2343,15 +2452,70 @@ test("tries that read nothing back off", () => {
   assert.deepEqual(triedAt, [1, 3, 6, 10, 15, 21, 28]);
   // a try that reads a lane ends the back-off
   session._turnWait = 0;
-  assert.equal(session.push(camera(renderLuma(encoder.cells(31), 512, 2), 31), 31 * 83).turned, "0123");
+  assert.equal(session.push(camera(cardLuma(encoder.cells(31), 512, 2), 31), 31 * 83).turned, "0123");
   assert.equal(session._turnMisses, 0);
-  assert.equal(session.push(camera(renderLuma(encoder.cells(32), 512, 2), 32), 32 * 83).turned, "0123");
+  assert.equal(session.push(camera(cardLuma(encoder.cells(32), 512, 2), 32), 32 * 83).turned, "0123");
+});
+
+test("an upright camera reads both bands once per shown frame", () => {
+  const encoder = new PetalStreamEncoder(payload(3000, 3), 2);
+  // a phone held upright delivers landscape frames with the card turned a quarter
+  const camera = (frame, seed) =>
+    cameraCapture(cardLuma(encoder.cells(frame), 768, 2), { width: 1280, height: 720, rotationDeg: 92, seed });
+  const session = new PetalScanSession();
+  const first = session.push(camera(1, 1), 0);
+  assert.deepEqual([first.lanes, first.kana], ["D0123", "P0K0P1K1"]);
+  // the bands read, so this capture tries no turn lane ...
+  assert.equal(first.turned, "");
+  // ... and a second capture of the same shown frame tries no band again but its turn lanes
+  const again = session.push(camera(1, 2), 33);
+  assert.deepEqual([again.kana, again.turned], ["", "0123"]);
+  const next = session.push(camera(2, 3), 83);
+  assert.deepEqual([next.kana, next.turned], ["P0K0P1K1", ""]);
+  const stats = session.stats();
+  assert.deepEqual([stats.kanaTries, stats.kanaLanes], [4, 8]);
+  assert.deepEqual([stats.turnTries, stats.turnLanes], [4, 4]);
+  assert.deepEqual(session._kanaTried.at(-1), { tag: encoder.meta.tag, frame: 2, band: 1 });
+  session.reset();
+  assert.equal(session._kanaTried.length, 0);
+  // the session remembers the last KANA_MEMORY bands it tried
+  session._kanaTried = Array.from({ length: KANA_MEMORY }, (_, frame) => ({ tag: 0, frame, band: 0 }));
+  assert.equal(session.push(camera(1, 4), 200).kana, "P0K0P1K1");
+  assert.equal(session._kanaTried.length, KANA_MEMORY);
+  assert.deepEqual(session._kanaTried[0], { tag: 0, frame: 2, band: 0 });
+});
+
+test("band tries that read nothing back off and leave the capture to the turn lanes", () => {
+  const encoder = new PetalStreamEncoder(payload(3000, 3), 2);
+  // bare squares: every field lane reads, no band is in view
+  const session = new PetalScanSession();
+  const triedAt = [];
+  for (let frame = 1; frame <= 30; frame += 1) {
+    const before = session.stats().kanaTries;
+    const image = cameraCapture(squareLuma(encoder.cells(frame), 512, 2), { width: 640, height: 480, rotationDeg: 12, seed: frame });
+    const outcome = session.push(image, frame * 83);
+    assert.ok(outcome.lanes.endsWith("0123"), `frame ${frame}`);
+    assert.deepEqual([outcome.kana, outcome.turned], ["", "0123"], `frame ${frame}`);
+    if (session.stats().kanaTries > before) triedAt.push(frame);
+  }
+  // after the n-th try that reads nothing, the next min(n, 8) captures that would try are passed
+  // over; each try covers both bands
+  assert.deepEqual(triedAt, [1, 3, 6, 10, 15, 21, 28]);
+  assert.equal(session.stats().kanaTries, 2 * triedAt.length);
+  assert.equal(session._kanaMisses, 7);
+  // a band try that reads a lane ends the back-off
+  session._kanaWait = 0;
+  const upright = (frame) =>
+    cameraCapture(cardLuma(encoder.cells(frame), 768, 2), { width: 1280, height: 720, rotationDeg: 92, seed: frame });
+  assert.equal(session.push(upright(31), 31 * 83).kana, "P0K0P1K1");
+  assert.equal(session._kanaMisses, 0);
+  assert.equal(session.push(upright(32), 32 * 83).kana, "P0K0P1K1");
 });
 
 test("a steady camera is tracked after the first frame", () => {
   const encoder = new PetalStreamEncoder(payload(3000, 3), 2);
   const shoot = (frame) =>
-    cameraCapture(renderLuma(encoder.cells(frame), 512, 2), { width: 640, height: 480, rotationDeg: 8, seed: frame + 1 });
+    cameraCapture(cardLuma(encoder.cells(frame), 512, 2), { width: 640, height: 480, rotationDeg: 8, seed: frame + 1 });
   const session = new PetalScanSession();
   for (let frame = 0; frame < 6; frame += 1) {
     const outcome = session.push(shoot(frame), frame * 125);
@@ -2390,7 +2554,7 @@ test("a session counts frames read with a hidden corner and keeps tracking throu
 test("idle sessions forget partial streams", () => {
   const encoder = new PetalStreamEncoder(payload(12000, 3), 1);
   const session = new PetalScanSession({ idleTimeoutMs: 1000 });
-  const source = renderLuma(encoder.cells(0), 512, 2);
+  const source = cardLuma(encoder.cells(0), 512, 2);
   session.push(cameraCapture(source, { width: 640, height: 480 }), 0);
   assert.ok(session.progress().rank > 0);
   // a frame much later with nothing readable resets the session first
@@ -2401,7 +2565,7 @@ test("idle sessions forget partial streams", () => {
 
 test("located counts codes that were seen but could not be read", () => {
   const encoder = new PetalStreamEncoder(payload(100, 3), 1);
-  const frame = renderPetalFrame(encoder.cells(1), { size: 512, supersample: 2 });
+  const frame = renderPetalSquare(encoder.cells(1), { size: 512, supersample: 2 });
   // keep only the four blossoms: finders are located, no lane can be read
   const scale = 512 / 1024;
   for (let y = 0; y < 512; y += 1) {
@@ -2428,8 +2592,10 @@ test("unreadable frames do not disturb progress", () => {
   assert.equal(outcome.lanes, "");
   assert.equal(outcome.merged, "");
   assert.equal(outcome.turned, "");
+  assert.equal(outcome.kana, "");
   assert.equal(session.stats().frames, 1);
   assert.equal(session.stats().located, 0);
+  assert.deepEqual([session.stats().kanaTries, session.stats().kanaLanes], [0, 0]);
   assert.equal(PETAL_DEFAULT_SCAN_LIMITS.idleTimeoutMs, 30000);
   assert.equal(PETAL_DEFAULT_SCAN_LIMITS.absoluteTimeoutMs, 180000);
   assert.equal(PETAL_DEFAULT_SCAN_LIMITS.assembler.maxPendingAtoms, 512);
@@ -2442,8 +2608,8 @@ const streamFixture = JSON.parse(readFileSync(STREAM_FIXTURE, "utf8"));
 
 test("fixture: constants and layout match", () => {
   const doc = streamFixture;
-  assert.equal(doc.fixture_version, 3);
-  assert.equal(doc.format, "petal-stream-v3");
+  assert.equal(doc.fixture_version, 5);
+  assert.equal(doc.format, "petal-stream-v5");
   const c = doc.constants;
   assert.deepEqual(
     [
@@ -2478,6 +2644,53 @@ test("fixture: constants and layout match", () => {
   assert.deepEqual(
     [c.turn_positions, c.turn_carriers, c.turn_word, c.turn_parity, c.turn_atoms, c.turn_id_base],
     [PETAL_TURNS.positions, PETAL_TURNS.carriers, PETAL_TURNS.wordLen, PETAL_TURNS.parityLen, PETAL_TURNS.atoms, PETAL_TURNS.idBase],
+  );
+  const L = PETAL_LAYOUT;
+  assert.deepEqual(
+    [
+      c.card_height,
+      c.square_top,
+      c.kana_tile,
+      c.kana_pitch,
+      c.kana_glyph_box,
+      c.kana_corner,
+      c.kana_rows,
+      c.kana_columns,
+      c.kana_gap,
+      c.kana_margin,
+      c.kana_finder_clearance,
+      c.kana_bands,
+      c.kana_pilots,
+    ],
+    [
+      L.cardHeight,
+      L.squareTop,
+      L.kanaTile,
+      L.kanaPitch,
+      L.kanaGlyphBox,
+      L.kanaCorner,
+      L.kanaRows,
+      L.kanaColumns,
+      L.kanaGap,
+      L.kanaMargin,
+      L.kanaFinderClearance,
+      L.kanaBands,
+      L.kanaPilots,
+    ],
+  );
+  const K = PETAL_KANA;
+  assert.deepEqual(
+    [
+      c.kana_data_tiles,
+      c.kana_glyph_word,
+      c.kana_glyph_parity,
+      c.kana_glyph_atoms,
+      c.kana_polarity_word,
+      c.kana_polarity_parity,
+      c.kana_polarity_atoms,
+      c.kana_id_base,
+    ],
+    [K.dataTiles, K.glyph.wordLen, K.glyph.parityLen, K.glyph.atoms, K.polarity.wordLen, K.polarity.parityLen, K.polarity.atoms, K.idBase],
   );
   const layout = doc.layout;
   assert.deepEqual(layout.finder_centers, PETAL_LAYOUT.finderCenters.flat());
@@ -2526,6 +2739,21 @@ test("fixture: constants and layout match", () => {
   const of = (kind) => roles.map((role, index) => [role.kind, index]).filter(([k]) => k === kind).map(([, index]) => index);
   assert.deepEqual(layout.gate_slots, of("gate"));
   assert.deepEqual(layout.guard_slots, of("guard"));
+  // every katakana tile as `[band, row, column, x, y, pilot]` (-1 for a data tile) and the pilots' symbols
+  assert.deepEqual(
+    kanaTiles().map((tile) => [tile.band, tile.row, tile.column, tile.x, tile.y, tile.pilot ?? -1]),
+    layout.kana_tiles,
+  );
+  assert.deepEqual(
+    layout.kana_pilot_symbols,
+    PETAL_LAYOUT.kanaPilotSymbols.map(([glyph, light]) => [glyph, light ? 1 : 0]),
+  );
+  const glyphs = doc.glyphs;
+  assert.deepEqual(
+    [glyphs.chars, glyphs.grid, glyphs.stroke_width],
+    [PETAL_GLYPHS.chars, PETAL_GLYPHS.grid, PETAL_GLYPHS.strokeWidth],
+  );
+  assert.deepEqual(glyphs.strokes, PETAL_GLYPHS.strokes);
   assert.deepEqual(doc.palette, PETAL_PALETTE);
 });
 
@@ -2537,10 +2765,33 @@ test("fixture: checksums, PRNG, mixer and whitening match", () => {
     streamFixture.prng.xorshift32_seed1,
   );
   for (const entry of streamFixture.prng.mix32) assert.equal(mix32(entry.in), entry.out);
-  assert.deepEqual(Object.keys(streamFixture.whitening), [...ALL_LANES, "T0", "T1", "T2", "T3"]);
+  assert.deepEqual(Object.keys(streamFixture.whitening), [...ALL_LANES, "T0", "T1", "T2", "T3", ...PETAL_KANA.lanes]);
   for (const lane of ALL_LANES) assert.equal(hex(laneWhitening(lane)), streamFixture.whitening[lane], lane);
   for (let sector = 0; sector < 4; sector += 1) {
     assert.equal(hex(turnWhitening(sector)), streamFixture.whitening[`T${sector}`], `T${sector}`);
+  }
+  for (const lane of PETAL_KANA.lanes) assert.equal(hex(kanaWhitening(lane)), streamFixture.whitening[lane], lane);
+});
+
+test("fixture: kana ids and reader templates match", () => {
+  const ids = streamFixture.kana_first_ids;
+  assert.deepEqual(ids.lanes, PETAL_KANA.lanes);
+  ids.frames.forEach((frame, index) => {
+    assert.deepEqual(PETAL_KANA.lanes.map((lane) => kanaFirstId(frame, lane)), ids.ids[index], `frame ${frame}`);
+  });
+  const reader = streamFixture.kana_reader;
+  assert.deepEqual([reader.blurs, reader.grid, reader.coarse_grid], [PETAL_KANA.blurs, PETAL_KANA.grid, PETAL_KANA.coarseGrid]);
+  assert.ok(reader.template_probes.length >= PETAL_KANA.blurs.length);
+  for (const probe of reader.template_probes) {
+    const blur = PETAL_KANA.blurs.findIndex((value) => Math.abs(value - probe.blur) < 1e-12);
+    assert.ok(blur >= 0, `known blur ${probe.blur}`);
+    const got = kanaTemplateProbe(blur, probe.glyph, probe.light === 1, probe.i, probe.j);
+    assert.ok(Math.abs(got - probe.value) < 1e-12, `${JSON.stringify(probe)}: ${got}`);
+  }
+  assert.ok(reader.coarse_probes.length > 0);
+  for (const probe of reader.coarse_probes) {
+    const got = kanaCoarseTemplateProbe(probe.glyph, probe.light === 1, probe.i, probe.j);
+    assert.ok(Math.abs(got - probe.value) < 1e-12, `coarse ${JSON.stringify(probe)}: ${got}`);
   }
 });
 
@@ -2605,15 +2856,36 @@ test("fixture: streams encode identically and reassemble", () => {
         assert.ok(packet !== null, `${label} turn check ${sector}`);
         assert.equal(packet.firstId, turnFirstId(frame.frame, sector));
       });
+      // the kana lanes, P0, K0, P1, K1
+      assert.deepEqual(lanes.kana.map(hex), frame.kana_data, label);
+      PETAL_KANA.lanes.forEach((lane, index) => {
+        assert.equal(hex(encodeKanaLane(lane, fromHex(frame.kana_data[index]))), frame.kana_words[index], `${label} ${lane}`);
+        const packet = kanaPacket(header, lane, fromHex(frame.kana_data[index]));
+        assert.ok(packet !== null, `${label} ${lane} check`);
+        assert.equal(packet.firstId, kanaFirstId(frame.frame, lane));
+        assert.equal(packet.atoms.length, index % 2 === 0 ? PETAL_KANA.polarity.atoms : PETAL_KANA.glyph.atoms);
+      });
       const words = encoder.words(frame.frame);
       assert.deepEqual(
-        [hex(words.d), words.fields.map(hex), words.turns.map(hex)],
-        [frame.d_word, frame.field_words, frame.turn_words],
+        [hex(words.d), words.fields.map(hex), words.turns.map(hex), words.kana.map(hex)],
+        [frame.d_word, frame.field_words, frame.turn_words, frame.kana_words],
         label,
       );
       const cells = PetalFrameCells.fromWords(fromHex(frame.d_word), frame.field_words.map(fromHex));
       cells.setTurns(frame.turn_words.map(fromHex));
       assert.equal(cells.turns.join(""), frame.turns, label);
+      cells.setKana(frame.kana_words.map(fromHex));
+      assert.equal(Array.from(cells.kanaGlyphs, (glyph) => glyph.toString(16)).join(""), frame.kana_glyphs, label);
+      const light = fromHex(frame.kana_light_hex);
+      assert.deepEqual(
+        Array.from(cells.kanaLight),
+        Array.from({ length: PETAL_LAYOUT.kanaTileCount }, (_, tile) => (light[tile >> 3] >> (7 - (tile & 7))) & 1),
+        label,
+      );
+      for (let band = 0; band < 2; band += 1) {
+        assert.equal(hex(cells.kanaPolarityWord(band)), frame.kana_words[2 * band], `${label} band ${band}`);
+        assert.equal(hex(cells.kanaGlyphWord(band)), frame.kana_words[2 * band + 1], `${label} band ${band}`);
+      }
       assert.deepEqual(
         Array.from(cells.dots).flatMap((lit, index) => (lit ? [index] : [])),
         frame.lit_dots,
@@ -2622,10 +2894,12 @@ test("fixture: streams encode identically and reassemble", () => {
       assert.deepEqual(Array.from(cells.petals), cellFlags(fromHex(frame.lit_petals_hex)), label);
       assert.ok(cells.equals(encoder.cells(frame.frame)), label);
     }
-    // push every fixture frame through decodeLane + assembler, with and without the turn lanes:
-    // the turn lanes finish the one-pass stream in fewer frames
+    // push every fixture frame through decodeLane + assembler, without the turn and kana lanes,
+    // with the turn lanes, and with both: each layer finishes the one-pass stream in fewer frames
     if (stream.name === "one-pass") {
-      const needed = [false, true].map((withTurns) => {
+      const needed = [0, 1, 2].map((layers) => {
+        const withTurns = layers >= 1;
+        const withKana = layers >= 2;
         const assembler = new PetalStreamAssembler();
         let frames = 0;
         for (const frame of stream.frames) {
@@ -2642,12 +2916,20 @@ test("fixture: streams encode identically and reassemble", () => {
               assembler.pushAtoms(turnPacket(header, sector, turn));
             });
           }
+          if (withKana) {
+            const header = { tag: meta.tag, frame: frame.frame };
+            frame.kana_words.forEach((word, index) => {
+              const lane = PETAL_KANA.lanes[index];
+              const { data: kana } = decodeKanaLaneCounted(lane, fromHex(word));
+              assembler.pushAtoms(kanaPacket(header, lane, kana));
+            });
+          }
           if (assembler.progress().complete) break;
         }
         assert.deepEqual(assembler.takeCompleted().payload, data);
         return frames;
       });
-      assert.ok(needed[1] < needed[0], JSON.stringify(needed));
+      assert.ok(needed[2] < needed[1] && needed[1] < needed[0], JSON.stringify(needed));
     }
   }
 });
@@ -2696,8 +2978,43 @@ function readTurnLanes(name, image, frame, entry, assembler = null) {
   return letters;
 }
 
+/** The header a decoded capture's lanes name: its first atom packet's, or its beacon's. */
+function headerOf(frame) {
+  const packet = frame.atomPackets()[0];
+  if (packet !== undefined) return packet.header;
+  const beacon = frame.beacon();
+  assert.ok(beacon !== null, "a decoded capture names its frame");
+  return beacon.header;
+}
+
+/**
+ * Reads the kana lanes of a decoded capture under the header its lanes name (no band passed
+ * over), checks them against the recorded data and the requirements, offers their atoms to
+ * `assembler` when given and returns their names.
+ */
+function readKanaLanes(name, image, frame, entry, assembler = null) {
+  let names = "";
+  readKana(image, frame, headerOf(frame)).forEach((result, index) => {
+    if (result === null) return;
+    const lane = PETAL_KANA.lanes[index];
+    assert.equal(hex(result.data), entry.kana_data[index], `${name}: kana lane ${lane} data`);
+    const packet = kanaPacket(result.header, lane, result.data);
+    assert.ok(packet !== null, `${name}: kana check ${lane}`);
+    if (assembler !== null) assembler.pushAtoms(packet);
+    names += lane;
+  });
+  const must = entry.must_kana ?? "";
+  for (let at = 0; at < must.length; at += 2) {
+    assert.ok(names.match(/../gu)?.includes(must.slice(at, at + 2)), `${name}: kana ${names}, must read ${must}`);
+  }
+  assert.equal(names, entry.reference_kana, `${name}: kana lanes read`);
+  return names;
+}
+
 test("golden captures decode as recorded", (t) => {
-  assert.equal(captureFixture.fixture_version, 3);
+  assert.equal(captureFixture.fixture_version, 5);
+  assert.equal(captureFixture.format, "petal-captures-v5");
+  assert.equal(captureFixture.captures.length, 16);
   const assembler = new PetalStreamAssembler();
   for (const capture of captureFixture.captures) {
     const image = captureLuma(capture);
@@ -2717,8 +3034,11 @@ test("golden captures decode as recorded", (t) => {
     const turning = performance.now();
     const turned = readTurnLanes(capture.name, image, decoded, capture, assembler);
     const turnElapsed = performance.now() - turning;
+    const reading = performance.now();
+    const kana = readKanaLanes(capture.name, image, decoded, capture, assembler);
+    const kanaElapsed = performance.now() - reading;
     t.diagnostic(
-      `${capture.name} ${capture.width}x${capture.height}: lanes ${lanes}, distortion ${decoded.pose.distortion} in ${elapsed.toFixed(1)} ms; turn lanes ${turned || "-"} in ${turnElapsed.toFixed(1)} ms`,
+      `${capture.name} ${capture.width}x${capture.height}: lanes ${lanes}, distortion ${decoded.pose.distortion} in ${elapsed.toFixed(1)} ms; turn lanes ${turned || "-"} in ${turnElapsed.toFixed(1)} ms; kana lanes ${kana || "-"} in ${kanaElapsed.toFixed(1)} ms`,
     );
   }
   // captures of different frames of the same stream accumulate in one assembler
@@ -2740,7 +3060,8 @@ test("golden tracks follow the pose into the next frame", (t) => {
     assert.equal(followed.inferredCorner, pair.inferred_corner, `${pair.name}: inferred corner`);
     assert.deepEqual([followed.rotation, followed.mirrored], [previous.rotation, previous.mirrored]);
     const turned = readTurnLanes(pair.name, next, followed, pair);
-    t.diagnostic(`${pair.name}: tracked lanes ${lanes} in ${elapsed.toFixed(1)} ms, turn lanes ${turned || "-"}`);
+    const kana = readKanaLanes(pair.name, next, followed, pair);
+    t.diagnostic(`${pair.name}: tracked lanes ${lanes} in ${elapsed.toFixed(1)} ms, turn lanes ${turned || "-"}, kana lanes ${kana || "-"}`);
     // a scan session that saw the first frame reads the second by tracking, turn lanes included
     // (the two frames show different shown frames)
     assert.notEqual(pair.from_frame, pair.to_frame);
@@ -2748,6 +3069,7 @@ test("golden tracks follow the pose into the next frame", (t) => {
     session.push(captureLuma(pair, "from_luma_zlib_base64"), 0);
     const outcome = session.push(next, 125);
     assert.equal(outcome.lanes, pair.reference_tracked, pair.name);
+    assert.equal(outcome.kana, pair.reference_kana, pair.name);
     assert.equal(outcome.turned, pair.reference_turned, pair.name);
     assert.equal(session.stats().tracked, 1, pair.name);
     assert.equal(session.stats().inferred, pair.inferred_corner === null ? 0 : 1, pair.name);
@@ -2809,31 +3131,51 @@ test("a scan session reads the recorded lanes of every golden capture", () => {
     const session = new PetalScanSession();
     const image = captureLuma(capture);
     const outcome = session.push(image, 0);
-    assert.equal(outcome.error, null, capture.name);
-    assert.equal(outcome.lanes, capture.reference_decoded, capture.name);
-    assert.equal(outcome.turned, capture.reference_turned, capture.name);
+    const name = capture.name;
+    assert.equal(outcome.error, null, name);
+    assert.equal(outcome.lanes, capture.reference_decoded, name);
+    // the bands go first; a capture whose bands read a kana lane tries no turn lane
+    assert.equal(outcome.kana, capture.reference_kana, name);
+    const banded = capture.reference_kana !== "";
+    assert.equal(outcome.turned, banded ? "" : capture.reference_turned, name);
     const stats = session.stats();
     const letters = capture.reference_decoded;
-    assert.deepEqual([stats.laneD, stats.fieldLanes], [letters.includes("D") ? 1 : 0, letters.replace("D", "").length], capture.name);
-    assert.deepEqual([stats.tracked, stats.inferred], [0, capture.inferred_corner === null ? 0 : 1], capture.name);
-    assert.equal(stats.turnLanes, capture.reference_turned.length, capture.name);
-    if (capture.reference_turned === "0123") {
-      // the same shown frame again: its turn lanes were tried and are not looked at again
-      assert.equal(session.push(image, 33).turned, "", capture.name);
-      assert.equal(session.stats().turnLanes, 4, capture.name);
+    assert.deepEqual([stats.laneD, stats.fieldLanes], [letters.includes("D") ? 1 : 0, letters.replace("D", "").length], name);
+    assert.deepEqual([stats.tracked, stats.inferred], [0, capture.inferred_corner === null ? 0 : 1], name);
+    assert.deepEqual([stats.kanaTries, stats.kanaLanes], [2, capture.reference_kana.length / 2], name);
+    assert.equal(stats.turnLanes, banded ? 0 : capture.reference_turned.length, name);
+    // the same shown frame again: its bands were tried and are not looked at again, so a capture
+    // whose bands read now tries its turn lanes, and one whose turn lanes were tried tries none
+    const again = session.push(image, 33);
+    assert.equal(again.kana, "", name);
+    if (banded) {
+      assert.equal(again.turned, capture.reference_turned, name);
+    } else if (capture.reference_turned === "0123") {
+      assert.equal(again.turned, "", name);
     }
+    assert.equal(session.stats().kanaTries, 2, name);
   }
 });
 
 test("the golden turn lanes cover the cameras the spec names", () => {
   const turned = Object.fromEntries(captureFixture.captures.map((capture) => [capture.name, capture.reference_turned]));
   // the sharp cameras, the mirrored, covered and cut-off captures read every turn lane; the
-  // over-exposed capture reads two; the soft, blurred, veiled and distorted captures read none
-  for (const name of ["clean-512", "modern-720p-rotated", "selfie-mirrored-540p", "hidden-corner-540p", "cut-corner-720p", "shadow-band-540p"]) {
+  // over-exposed capture and the older upright camera read some; the soft, blurred, veiled and
+  // distorted captures read none
+  for (const name of [
+    "clean-512",
+    "modern-720p-rotated",
+    "selfie-mirrored-540p",
+    "hidden-corner-540p",
+    "cut-corner-720p",
+    "shadow-band-540p",
+    "upright-720p",
+  ]) {
     assert.equal(turned[name], "0123", name);
   }
-  assert.equal(turned["overexposed-540p"], "12");
-  for (const name of ["legacy-540p-tilted", "soft-480p-blur1.9", "small-480p", "veiled-720p", "barrel-480p"]) {
+  assert.equal(turned["overexposed-540p"], "1");
+  assert.equal(turned["upright-legacy-720p"], "123");
+  for (const name of ["legacy-540p-tilted", "soft-480p-blur1.9", "small-480p", "veiled-720p", "barrel-480p", "upright-soft-720p", "upright-480p"]) {
     assert.equal(turned[name], "", name);
   }
   for (const pair of captureFixture.tracks) assert.equal(pair.reference_turned, "0123", pair.name);
@@ -2842,6 +3184,29 @@ test("the golden turn lanes cover the cameras the spec names", () => {
   const image = captureLuma(capture);
   const corrected = readTurns(image, decodePetalFrame(image)).map((result) => result.corrected);
   assert.ok(corrected.every((count) => count >= 3 && count <= 9), JSON.stringify(corrected));
+});
+
+test("the golden kana lanes cover the cameras the spec names", () => {
+  const kana = Object.fromEntries(captureFixture.captures.map((capture) => [capture.name, capture.reference_kana]));
+  // the four phones held upright see both bands: the sharp, older and soft 720p cameras read every
+  // kana lane and the 480p one three; so do the clean card and the veiled capture, and the tilted
+  // captures read the band in view
+  for (const name of ["upright-720p", "upright-legacy-720p", "upright-soft-720p", "clean-512", "veiled-720p"]) {
+    assert.equal(kana[name], "P0K0P1K1", name);
+  }
+  assert.equal(kana["upright-480p"], "P0P1K1");
+  assert.deepEqual(
+    captureFixture.captures.filter((capture) => capture.must_kana !== "").map((capture) => [capture.name, capture.must_kana]),
+    [
+      ["upright-720p", "P0K0P1K1"],
+      ["upright-legacy-720p", "P0P1"],
+      ["upright-soft-720p", "P0P1"],
+    ],
+  );
+  for (const name of ["modern-720p-rotated", "legacy-540p-tilted", "overexposed-540p", "cut-corner-720p"]) {
+    assert.ok(kana[name] !== "" && kana[name] !== "P0K0P1K1", name);
+  }
+  for (const pair of captureFixture.tracks) assert.equal(pair.reference_kana, "", pair.name);
 });
 
 test("negative captures are rejected", () => {
@@ -2859,16 +3224,20 @@ test("recorded lane data is a valid codeword of its stream", () => {
     }
     const expected = encoder.laneData(capture.frame);
     assert.deepEqual(
-      [hex(expected.d), expected.fields.map(hex), expected.turns.map(hex)],
-      [capture.d_data, capture.field_data, capture.turn_data],
+      [hex(expected.d), expected.fields.map(hex), expected.turns.map(hex), expected.kana.map(hex)],
+      [capture.d_data, capture.field_data, capture.turn_data, capture.kana_data],
       capture.name,
     );
+    PETAL_KANA.lanes.forEach((lane, index) => {
+      const data = fromHex(capture.kana_data[index]);
+      assert.deepEqual(decodeKanaLaneCounted(lane, encodeKanaLane(lane, data)).data, data, `${capture.name} ${lane}`);
+    });
   }
   for (const pair of captureFixture.tracks) {
     const expected = encoder.laneData(pair.to_frame);
     assert.deepEqual(
-      [hex(expected.d), expected.fields.map(hex), expected.turns.map(hex)],
-      [pair.d_data, pair.field_data, pair.turn_data],
+      [hex(expected.d), expected.fields.map(hex), expected.turns.map(hex), expected.kana.map(hex)],
+      [pair.d_data, pair.field_data, pair.turn_data, pair.kana_data],
       pair.name,
     );
   }
@@ -2904,25 +3273,52 @@ test("petalPlayerFrame advances at the frame rate and wraps the counter", () => 
   assert.throws(() => petalPlayerFrame(0, 0, 0), TypeError);
 });
 
-test("drawPetalFrame paints the draw list: backdrop, notched petals, dots, finders", () => {
+test("drawPetalFrame paints the draw list: backdrop, notched petals, dots, finders, tiles", () => {
   const encoder = new PetalStreamEncoder(payload(300, 8), 1);
   const cells = encoder.cells(3);
   const list = petalDrawList(cells);
-  const context = recordingContext();
+  // the widest card a 512 x 834 canvas holds is 512 pixels wide
+  const context = recordingContext({ width: 512, height: 834 });
   drawPetalFrame(context, list);
   const count = (name) => context.calls.filter((call) => call[0] === name).length;
   assert.deepEqual(context.calls.find((call) => call[0] === "scale"), ["scale", 0.5, 0.5]);
+  // the card's background, then square coordinates
+  assert.deepEqual(context.calls.find((call) => call[0] === "fillRect"), ["fillRect", 0, 0, 1024, 1668]);
+  assert.deepEqual(
+    context.calls.filter((call) => call[0] === "translate"),
+    [
+      ["translate", 0, 0],
+      ["translate", 0, 322],
+    ],
+  );
   const petals = list.petals.length;
-  // finder cores, petals and notches, the backdrop disc, the dots and one notch arc per petal
-  assert.equal(count("arc"), 4 * 11 + 1 + list.dots.length + petals);
+  const lightTiles = list.kanaTiles.filter((tile) => tile.light).length;
+  const strokes = list.kanaTiles.reduce((sum, tile) => sum + list.tile.glyphs[tile.glyph].length, 0);
+  const points = list.kanaTiles.reduce(
+    (sum, tile) => sum + list.tile.glyphs[tile.glyph].reduce((total, stroke) => total + stroke.length, 0),
+    0,
+  );
+  assert.ok(lightTiles > 200 && lightTiles < 612 - 200, `${lightTiles} light tiles`);
+  // finder cores, petals and notches, the backdrop disc, the dots, one notch arc per petal and the
+  // four rounded corners of every light tile
+  assert.equal(count("arc"), 4 * 11 + 1 + list.dots.length + petals + 4 * lightTiles);
   assert.equal(count("ellipse"), petals);
-  assert.equal(count("closePath"), petals);
+  assert.equal(count("closePath"), petals + lightTiles);
   assert.equal(count("rect"), list.backdrop.cells.length);
   assert.equal(count("clip"), 1);
-  assert.equal(count("fill"), 6);
-  assert.equal(count("stroke"), 0);
+  // the backdrop, two petal colours, the dots, the finders and their notches, the light tiles;
+  // then the glyphs in ink and in pink
+  assert.equal(count("fill"), 7);
+  assert.equal(count("stroke"), 2);
+  assert.equal(count("lineTo"), points - strokes);
   assert.equal(count("save"), count("restore"));
-  assert.equal(count("moveTo"), 4 * 11 + 1 + list.dots.length + petals);
+  assert.equal(count("moveTo"), 4 * 11 + 1 + list.dots.length + petals + lightTiles + strokes);
+  assert.deepEqual([context.lineWidth, context.lineCap, context.lineJoin], [(6.5 * 23) / 32, "round", "round"]);
+  assert.equal(context.strokeStyle, "rgb(245, 175, 208)");
+  // a glyph stroke starts at its tile's corner plus its tile-local point
+  const tile = list.kanaTiles.find((candidate) => !candidate.light);
+  const [u, v] = list.tile.glyphs[tile.glyph][0][0];
+  assert.ok(context.calls.some((call) => call[0] === "moveTo" && call[1] === tile.x + u && call[2] === tile.y + v));
   // every petal path starts where its ellipse arc starts, so no stray edge joins two petals
   const first = context.calls.findIndex((call) => call[0] === "ellipse");
   const [, x, y, a, b, angle, start] = context.calls[first];
@@ -2983,11 +3379,12 @@ test("the camera scanner reads a stream from video frames", async () => {
   const encoder = new PetalStreamEncoder(data, 4);
   const frames = [];
   for (let frame = 0; frame < 6; frame += 1) frames.push(renderPetalFrame(encoder.cells(frame), { size: 320, supersample: 2 }));
+  assert.equal(frames[0].height, 521);
   let current = 0;
   const callbacks = [];
   const video = {
     videoWidth: 320,
-    videoHeight: 320,
+    videoHeight: 521,
     paused: false,
     requestVideoFrameCallback: (callback) => callbacks.push(callback),
     cancelVideoFrameCallback: () => {},
@@ -3025,8 +3422,10 @@ test("the camera scanner reads a stream from video frames", async () => {
   assert.equal(completed.meta.kind, 4);
   assert.ok(!scanner.scanning);
   assert.equal(callbacks.length, 0, "a completed scan stops requesting frames");
-  assert.deepEqual(drawn[0], [0, 0, 320, 320]);
+  assert.deepEqual(drawn[0], [0, 0, 320, 521]);
   assert.ok(outcomes.every((outcome) => outcome.error === null));
+  // the video shows whole cards, so the session reads the bands of every frame
+  assert.ok(outcomes.every((outcome) => outcome.kana === "P0K0P1K1"), JSON.stringify(outcomes.map((outcome) => outcome.kana)));
   assert.ok(scanner.session.stats().readable >= 1);
   // the progress callback sees the session's counters: after the first frame the code is tracked
   assert.deepEqual(counters.at(-1), scanner.session.stats());
@@ -3140,8 +3539,11 @@ test("the declarations type-check a strict browser consumer", () => {
         "  PETAL_TRACK_WINDOW_MS, locateCandidates, trackPetalFrame,",
         "  PETAL_TURNS, PetalFrameCells, carrierOrder, carriers, decodeTurnLaneCounted, encodeTurnLane, observedTurns,",
         "  readTurns, turnAngle, turnData, turnFirstId, turnPacket, turnTemplate, turnWhitening,",
+        "  PETAL_GLYPHS, PETAL_KANA, decodeKanaLaneCounted, encodeKanaLane, kanaFirstId, kanaPacket, kanaTemplateProbe,",
+        "  kanaTileAt, kanaTiles, observeBand, petalCardHeight, readKana,",
         "  type PetalCompleted, type PetalDecodeErrorCode, type PetalFieldEvidence, type PetalLane, type PetalScanOutcome,",
         "  type PetalScanStats, type PetalObservedTurns, type PetalLaneResult, type PetalLaneHeader,",
+        "  type PetalBandReading, type PetalKanaLane, type PetalKanaResult,",
         `} from ${JSON.stringify(declaration)};`,
         "declare const canvas: HTMLCanvasElement;",
         "declare const video: HTMLVideoElement;",
@@ -3182,6 +3584,11 @@ test("the declarations type-check a strict browser consumer", () => {
         "    const observed: PetalObservedTurns | null = observedTurns(luma, frame);",
         "    const carrier = observed?.carriers[0];",
         "    void packet?.firstId; void observed?.blur; void carrier?.cell; void carrier?.position; void carrier?.lead;",
+        "    const kana: readonly (PetalKanaResult | null)[] = readKana(luma, frame, header, [false, true]);",
+        "    const k0 = kana[1];",
+        "    const kanaAtoms = k0 ? kanaPacket(k0.header, \"K0\", k0.data) : null;",
+        "    const band: PetalBandReading | null = observeBand(luma, frame, 0);",
+        "    void kanaAtoms?.firstId; void k0?.erasures; void band?.blur; void band?.tiles[0]?.glyphLead;",
         "  } catch (error) {",
         "    if (error instanceof PetalError) { const code: string = error.code; void code; }",
         "  }",
@@ -3204,6 +3611,17 @@ test("the declarations type-check a strict browser consumer", () => {
         "const session = new PetalScanSession({ idleTimeoutMs: 10_000, decode: { maxPixels: 2_000_000 } });",
         "const outcome = session.push(new PetalLuma(64, 64), performance.now());",
         "const reason: PetalDecodeErrorCode | null = outcome.error;",
+        "const kanaLane: PetalKanaLane = \"P1\";",
+        "const kanaWord: Uint8Array = encodeKanaLane(kanaLane, new Uint8Array(PETAL_KANA.polarity.dataLen));",
+        "const kanaDecoded = decodeKanaLaneCounted(\"P1\", kanaWord);",
+        "cells.setKana(lanes.kana);",
+        "const tileAt = kanaTileAt(100, -100);",
+        "const sizes: number = PETAL_GLYPHS.count + (cells.kanaGlyphs[0] ?? 0) + cells.kanaGlyphWord(1).length + kanaTiles().length;",
+        "const more: number = petalCardHeight(512) + kanaFirstId(1, \"K1\") + kanaTemplateProbe(0, 1, true, 3, 4) + PETAL_LAYOUT.cardHeight;",
+        "void kanaDecoded.corrected; void tileAt?.[0]; void sizes; void more; void list.kanaTiles[0]?.ink; void list.tile.strokeWidth;",
+        "void outcome.kana; void session.stats().kanaLanes; void kanaTiles()[0]?.pilot;",
+        "// @ts-expect-error kana lanes are named P0, K0, P1 or K1",
+        "encodeKanaLane(\"P2\", new Uint8Array(20));",
         "const fieldLen: number = PETAL_LANES.F0.wordLen + PETAL_LAYOUT.fieldCells;",
         "void petals; void reason; void fieldLen; void encodeLane(\"D\", new Uint8Array(19));",
         "// @ts-expect-error lanes are named D or F0-F3",

@@ -5,6 +5,7 @@
 // only when a player or scanner runs, and every one of them can be injected.
 
 import { PetalLuma, rgbaToLumaInto } from "./image.js";
+import { CANVAS, CARD_HEIGHT } from "./layout.js";
 import { petalDrawList, resolvePalette } from "./render.js";
 import { PetalScanSession } from "./session.js";
 
@@ -79,17 +80,67 @@ function addPetal(context, petal, shape, outline) {
 }
 
 /**
+ * Adds a square of side `side` at `(x, y)` with corners rounded to radius `corner` to the current
+ * path (clockwise, from the end of its top edge's left corner).
+ */
+function addRoundedSquare(context, x, y, side, corner) {
+  context.moveTo(x + corner, y);
+  context.arc(x + side - corner, y + corner, corner, -Math.PI / 2, 0);
+  context.arc(x + side - corner, y + side - corner, corner, 0, Math.PI / 2);
+  context.arc(x + corner, y + side - corner, corner, Math.PI / 2, Math.PI);
+  context.arc(x + corner, y + corner, corner, Math.PI, (3 * Math.PI) / 2);
+  context.closePath();
+}
+
+/**
+ * Draws the katakana tiles of a draw list: the light tiles filled, then the glyph strokes, ink on
+ * light tiles and pink on dark ones (round caps and joins; every stroke lies inside its tile).
+ */
+function drawTiles(context, drawList) {
+  const { palette, tile: shape } = drawList;
+  context.fillStyle = css(palette.light);
+  context.beginPath();
+  for (const tile of drawList.kanaTiles) {
+    if (tile.light) addRoundedSquare(context, tile.x, tile.y, shape.side, shape.corner);
+  }
+  context.fill();
+  context.lineWidth = shape.strokeWidth;
+  context.lineCap = "round";
+  context.lineJoin = "round";
+  for (const light of [true, false]) {
+    context.strokeStyle = css(light ? palette.ink : palette.pink);
+    context.beginPath();
+    for (const tile of drawList.kanaTiles) {
+      if (tile.light !== light) continue;
+      for (const stroke of shape.glyphs[tile.glyph]) {
+        context.moveTo(tile.x + stroke[0][0], tile.y + stroke[0][1]);
+        for (let point = 1; point < stroke.length; point += 1) {
+          context.lineTo(tile.x + stroke[point][0], tile.y + stroke[point][1]);
+        }
+      }
+    }
+    context.stroke();
+  }
+}
+
+/**
  * Draws a `petalDrawList` result onto a Canvas 2D context (or any object
- * with the same path API), scaling the 1024-unit design canvas to `size`
- * pixels with its top-left corner at `(x, y)`. Petals are drawn turned
- * (half-length 6 and half-width 3.73 along their axis), with the notch of
- * radius 1.12 at 6.24 along the axis that tells a petal from one turned by
- * half a turn, and antialiased (Canvas 2D fills paths antialiased; keep the
- * code at 768 pixels or more so the turns show).
+ * with the same path API): the whole card, its 1024-unit width scaled to
+ * `size` pixels (it is `size * 1668 / 1024` pixels tall) with its top-left
+ * corner at `(x, y)`, the square starting 322 units below the card's top
+ * edge. Petals are drawn turned (half-length 6 and half-width 3.73 along their
+ * axis), with the notch of radius 1.12 at 6.24 along the axis that tells a
+ * petal from one turned by half a turn; the katakana tiles above and below the
+ * square are rounded squares of side 25 (corner radius 3), light tiles filled,
+ * with their glyphs stroked (width 6.5 * 23 / 32, round caps and joins) in ink
+ * on light tiles and pink on dark ones. Everything is antialiased (Canvas 2D
+ * fills and strokes paths antialiased; keep the card at 768 pixels wide or
+ * more so the turns and glyphs show).
  *
  * @param {CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D} context
  * @param {ReturnType<typeof petalDrawList>} drawList
- * @param {{x?: number, y?: number, size?: number}} [options] `size` defaults to the smaller canvas side
+ * @param {{x?: number, y?: number, size?: number}} [options] `size` (the card's width) defaults
+ *   to the widest card the canvas holds
  */
 export function drawPetalFrame(context, drawList, options = {}) {
   const x = options.x ?? 0;
@@ -104,7 +155,9 @@ export function drawPetalFrame(context, drawList, options = {}) {
   context.translate(x, y);
   context.scale(scale, scale);
   context.fillStyle = css(palette.background);
-  context.fillRect(0, 0, drawList.canvas, drawList.canvas);
+  context.fillRect(0, 0, drawList.canvas, drawList.cardHeight);
+  // square coordinates from here on: the bands lie above and below the square
+  context.translate(0, drawList.squareTop);
   // the faint 天 under the petals, clipped to the backdrop disc
   const { backdrop } = drawList;
   context.save();
@@ -146,15 +199,18 @@ export function drawPetalFrame(context, drawList, options = {}) {
     for (const notch of finder.notches) addCircle(context, notch);
   }
   context.fill();
+  // the katakana bands above and below the square
+  drawTiles(context, drawList);
   context.restore();
 }
 
+/** The width of the widest card a context's canvas holds (1024 without a canvas). */
 function defaultSize(context) {
   const canvas = context && context.canvas;
   if (canvas && typeof canvas.width === "number" && typeof canvas.height === "number") {
-    return Math.min(canvas.width, canvas.height);
+    return Math.min(canvas.width, (canvas.height * CANVAS) / CARD_HEIGHT);
   }
-  return 1024;
+  return CANVAS;
 }
 
 /**
@@ -220,7 +276,9 @@ function frameScheduler(requestFrame, cancelFrame) {
  * with `requestAnimationFrame`, by default 12 frames per second, of which a
  * 30 fps camera reads practically every frame; a frame must stay up for at
  * least two camera frames, so keep `fps` at or below half the camera frame
- * rate.
+ * rate. Every frame is the whole card, the square with its katakana bands
+ * (`size` is the card's width; by default the widest card the canvas holds):
+ * on a phone, let the card's width fill the screen's width.
  */
 export class PetalStreamPlayer {
   /**
@@ -347,7 +405,9 @@ function defaultCanvas(width, height) {
  * with one corner blossom hidden. `onProgress` receives each frame's outcome
  * and the session's counters: `stats.tracked` counts frames read by tracking,
  * and `stats.inferred` grows while a corner blossom is hidden (a hint such as
- * "one corner blossom is hidden" helps the user uncover it).
+ * "one corner blossom is hidden" helps the user uncover it). A phone held
+ * upright sees the card's katakana bands as well, which the session reads
+ * (`outcome.kana`, `stats.kanaLanes`).
  *
  * The scanner does not change the camera's settings; set the stream up like
  * this (evidence: `specs/petal_stream.md` section 8):

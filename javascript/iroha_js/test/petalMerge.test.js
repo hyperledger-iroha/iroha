@@ -17,13 +17,28 @@ import {
 } from "../src/petal.js";
 import { MERGE_CAPTURES, MERGE_WINDOW } from "../src/petal/session.js";
 
-const fixture = JSON.parse(readFileSync(new URL("../../../fixtures/petal/petal_captures_v3.json", import.meta.url)));
+const fixture = JSON.parse(readFileSync(new URL("../../../fixtures/petal/petal_captures_v5.json", import.meta.url)));
 const hex = (bytes) => Buffer.from(bytes).toString("hex");
 const imageOf = (set, capture) => new PetalLuma(set.width, set.height,
   new Uint8Array(inflateSync(Buffer.from(capture.luma_zlib_base64, "base64"))));
 /** The sector digits of the field lanes that read. */
 const letters = (fields) => fields.map((field, sector) => (field === null ? "" : String(sector))).join("");
+/** Corrected and erased bytes of every field lane that read. */
+const counts = (fields) =>
+  fields.map((field, sector) => `${sector}:${field === null ? "-" : `${field.corrected}/${field.erasures}`}`).join(" ");
 const NO_FIELDS = Object.freeze([null, null, null, null]);
+/** The four-capture merge of each set as the reference reads it (`merge_fields`). */
+const REFERENCE_MERGES = Object.freeze({
+  "noisy-480p": "0:5/0 1:10/0 2:- 3:11/0",
+  "mixed-frames-480p": "0:7/0 1:9/0 2:- 3:7/0",
+});
+/** The lanes a reference scan session merges from the noisy set, in the order it offers them. */
+const REFERENCE_SESSION_MERGES = Object.freeze({ "noisy-480p": "013" });
+
+test("petal averaging: the fixture holds one merge set and one mixed set", () => {
+  assert.deepEqual(fixture.merges.map((set) => [set.name, set.must_merge, set.reference_merged]), [["noisy-480p", "01", "013"]]);
+  assert.deepEqual(fixture.mixed_merges.map((set) => [set.name, set.reference_merged]), [["mixed-frames-480p", "013"]]);
+});
 
 for (const set of fixture.merges) {
   test(`petal averaging: ${set.name} recovers the recorded field lanes`, () => {
@@ -38,6 +53,7 @@ for (const set of fixture.merges) {
     }
     const recovered = mergeFields(evidence);
     assert.equal(letters(recovered), set.reference_merged);
+    assert.equal(counts(recovered), REFERENCE_MERGES[set.name]);
     recovered.forEach((result, sector) => {
       if (result !== null) assert.equal(hex(result.data), set.field_data[sector], `merged lane ${sector}`);
     });
@@ -54,10 +70,16 @@ for (const set of fixture.merges) {
     }
     for (const letter of set.must_merge) assert.equal(recovered.split(letter).length - 1, 1, `lane ${letter}`);
     assert.equal(new Set(recovered).size, recovered.length, "every lane is recovered once");
+    // merging two, then three, then four held captures, as the reference session does
+    assert.equal(recovered, REFERENCE_SESSION_MERGES[set.name]);
     const stats = session.stats();
     assert.equal(stats.mergedLanes, recovered.length);
     assert.equal(stats.fieldLanes, 0, "no capture reads a field lane alone");
-    assert.ok(stats.merges > 0);
+    assert.equal(stats.merges, 3);
+    // merged lanes are not single-capture reads: no turn lane rides on them; the bands are tried
+    // once for the shown frame, on its first capture
+    assert.equal(stats.turnLanes, 0);
+    assert.equal(stats.kanaTries, 2);
     // the merged atoms wait for the beacon of their stream
     assert.equal(session.progress().atomsReceived, 0);
   });
@@ -79,6 +101,7 @@ test("petal averaging: mixed-frame field lanes never enter the assembler", () =>
     // the merge reads the petal field, which shows another frame than the rings
     const recovered = mergeFields(evidence);
     assert.equal(letters(recovered), set.reference_merged);
+    assert.equal(counts(recovered), REFERENCE_MERGES[set.name]);
     recovered.forEach((result, sector) => {
       if (result === null) return;
       assert.equal((result.data[1] << 8) | result.data[2], set.petals_frame);

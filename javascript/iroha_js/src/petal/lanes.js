@@ -11,12 +11,26 @@
 // | F0 ... F3 | 840 field cells of one sector x 1 bit  | 105 B    | 83 B | 22 B   |
 // | T0 ... T3 | 360 lit petals of one sector x 2 bits  | 90 B     | 68 B | 22 B   |
 //
-// Bit order is most-significant-bit first.
+// The katakana tiles of the bands above and below the square carry four more
+// lanes (`P0`, `K0`, `P1`, `K1`, see `kana.js`). Bit order is
+// most-significant-bit first.
 
+import { GLYPH_COUNT } from "./glyphs.js";
+import {
+  KANA_GLYPH_WORD,
+  KANA_LANES,
+  KANA_POLARITY_WORD,
+  kanaGlyphWordOf,
+  kanaPilotSymbolsInto,
+  kanaPolarityWordOf,
+  setKanaSymbolsInto,
+} from "./kana.js";
 import {
   D_BITS,
   DATA_SLOT,
   FIELD_CELLS,
+  KANA_BANDS,
+  KANA_TILE_COUNT,
   ROLE_GATE,
   SECTORS,
   SECTOR_CELLS,
@@ -248,14 +262,46 @@ function turnArray(value) {
   return out;
 }
 
-/** Every cell of one frame: what a renderer draws and a decoder samples. */
+function glyphArray(value) {
+  const out = new Uint8Array(KANA_TILE_COUNT);
+  if (value === null || typeof value !== "object" || typeof value.length !== "number") {
+    throw new TypeError(`kanaGlyphs must be an array of ${KANA_TILE_COUNT} glyphs`);
+  }
+  if (value.length !== KANA_TILE_COUNT) {
+    throw new RangeError(`kanaGlyphs must hold exactly ${KANA_TILE_COUNT} glyphs`);
+  }
+  for (let index = 0; index < KANA_TILE_COUNT; index += 1) {
+    const glyph = value[index];
+    if (!Number.isInteger(glyph) || glyph < 0 || glyph >= GLYPH_COUNT) {
+      throw new RangeError("a glyph is an integer in 0..=15");
+    }
+    out[index] = glyph;
+  }
+  return out;
+}
+
+function requireBand(band) {
+  if (!Number.isInteger(band) || band < 0 || band >= KANA_BANDS) {
+    throw new RangeError("band out of range");
+  }
+  return band;
+}
+
+/**
+ * Every cell of one frame: what a renderer draws and a decoder samples: which ring slots and
+ * petals are lit, how every petal is turned (see `turns.js`), and what every katakana tile of the
+ * card's bands shows (see `kana.js`).
+ */
 export class PetalFrameCells {
   /**
    * @param {ArrayLike<number | boolean>} [dots] lit state of each of the 296 ring slots, gate dots included
    * @param {ArrayLike<number | boolean>} [petals] lit state of each of the 3,376 field cells
    * @param {ArrayLike<number>} [turns] turn position (0-3) of each of the 3,376 field cells
+   * @param {ArrayLike<number>} [kanaGlyphs] glyph (0-15) of each of the 612 katakana tiles
+   * @param {ArrayLike<number | boolean>} [kanaLight] polarity (light or dark) of each of the 612
+   *   katakana tiles; omitted symbols are the pilots' fixed ones and light tiles of glyph 0
    */
-  constructor(dots, petals, turns) {
+  constructor(dots, petals, turns, kanaGlyphs, kanaLight) {
     /** Lit state (`0`/`1`) of every ring slot, gate dots included. */
     this.dots = cellArray(dots, TOTAL_SLOTS, "dots");
     /** Lit state (`0`/`1`) of every field cell (spare cells are dark). */
@@ -265,12 +311,20 @@ export class PetalFrameCells {
      * petals that carry no turn bits.
      */
     this.turns = turnArray(turns);
+    const glyphs = new Uint8Array(KANA_TILE_COUNT);
+    const light = new Uint8Array(KANA_TILE_COUNT);
+    kanaPilotSymbolsInto(glyphs, light);
+    /** The glyph (0-15, see `glyphs.js`) every katakana tile shows, in `kanaTiles` order. */
+    this.kanaGlyphs = kanaGlyphs === undefined ? glyphs : glyphArray(kanaGlyphs);
+    /** Whether every katakana tile is light (`1`: filled, glyph in ink) or dark (`0`: glyph in pink). */
+    this.kanaLight = kanaLight === undefined ? light : cellArray(kanaLight, KANA_TILE_COUNT, "kanaLight");
   }
 
   /**
    * Builds the cells from the transmitted codewords of lane D and the four
    * field lanes (sector 0 first), with every petal unturned (see
-   * {@link PetalFrameCells#setTurns}).
+   * {@link PetalFrameCells#setTurns}) and only the pilots set among the
+   * katakana tiles (see {@link PetalFrameCells#setKana}).
    */
   static fromWords(d, fields) {
     const dWord = toBytes(d, "lane D word");
@@ -349,6 +403,35 @@ export class PetalFrameCells {
     return word;
   }
 
+  /**
+   * Shows the transmitted kana codewords `words` (`P0`, `K0`, `P1`, `K1`: 37, 149, 37 and 149
+   * bytes) on the data tiles of both bands: data tile `i` of a band shows bit `i` of its polarity
+   * codeword (the last two data tiles, beyond it, are light) and nibble `i` of its glyph codeword.
+   * The pilots keep their fixed symbols.
+   */
+  setKana(words) {
+    if (!Array.isArray(words) || words.length !== KANA_LANES.length) {
+      throw new TypeError("words must hold the four kana lane words (P0, K0, P1, K1)");
+    }
+    const kanaWords = words.map((word, index) => toBytes(word, `kana lane ${KANA_LANES[index]} word`));
+    if (kanaWords.some((word, index) => word.length !== ((index & 1) === 1 ? KANA_GLYPH_WORD : KANA_POLARITY_WORD))) {
+      throw new RangeError("kana lane word length mismatch");
+    }
+    for (let band = 0; band < KANA_BANDS; band += 1) {
+      setKanaSymbolsInto(this.kanaGlyphs, this.kanaLight, band, kanaWords[2 * band], kanaWords[2 * band + 1]);
+    }
+  }
+
+  /** Packs the polarity codeword the data tiles of band `band` (0 above the square, 1 below it) show. */
+  kanaPolarityWord(band) {
+    return kanaPolarityWordOf(this.kanaLight, requireBand(band));
+  }
+
+  /** Packs the glyph codeword the data tiles of band `band` (0 above the square, 1 below it) show. */
+  kanaGlyphWord(band) {
+    return kanaGlyphWordOf(this.kanaGlyphs, requireBand(band));
+  }
+
   /** Packs the data dots into a lane D codeword. */
   dWord() {
     const word = new Uint8Array(D_WORD);
@@ -375,7 +458,7 @@ export class PetalFrameCells {
     return word;
   }
 
-  /** Whether `other` holds exactly the same cells, turns included. */
+  /** Whether `other` holds exactly the same cells, turns and katakana tiles included. */
   equals(other) {
     if (!(other instanceof PetalFrameCells)) return false;
     for (let index = 0; index < TOTAL_SLOTS; index += 1) {
@@ -383,6 +466,11 @@ export class PetalFrameCells {
     }
     for (let index = 0; index < FIELD_CELLS; index += 1) {
       if (this.petals[index] !== other.petals[index] || this.turns[index] !== other.turns[index]) return false;
+    }
+    for (let index = 0; index < KANA_TILE_COUNT; index += 1) {
+      if (this.kanaGlyphs[index] !== other.kanaGlyphs[index] || this.kanaLight[index] !== other.kanaLight[index]) {
+        return false;
+      }
     }
     return true;
   }

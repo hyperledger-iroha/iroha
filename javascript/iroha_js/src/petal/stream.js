@@ -7,19 +7,24 @@
 // contiguously over the atoms actually sent (see `firstAtomId`). Any single
 // readable lane is useful on its own. On top of every field lane, the turns of
 // its lit petals carry four more atoms from the repair range (see `turns.js`),
-// so a sharp camera reads up to 37 atoms (592 bytes) a frame.
+// so a sharp camera reads up to 37 atoms (592 bytes) from the square. The
+// katakana bands above and below the square add eight atoms each (see
+// `kana.js`): up to 53 atoms (848 bytes) a frame.
 //
 // Lane data layouts (all big-endian):
 //
-// * every lane but the turn lanes starts with `tag:u8, frame:u16`; `tag` is
-//   the low byte of the payload CRC-32C.
+// * every lane but the turn and kana lanes starts with `tag:u8, frame:u16`;
+//   `tag` is the low byte of the payload CRC-32C.
 // * field lanes and non-beacon D: `atoms...` (16 bytes each).
 // * beacon D: `version:u8, kind:u8, len:u24, crc:u32`, zero padded.
 // * turn lanes: `atoms... check:u32`, where the check binds the atoms to the
 //   header of the field lane they ride on.
+// * kana lanes: `atoms... check:u32`, where the check binds the atoms to the
+//   stream tag, the frame and the lane.
 
 import { crc32c } from "./crc.js";
 import { PetalFountainDecoder, encodeAtom, splitPayload } from "./fountain.js";
+import { KANA_LANES, encodeKanaLane, kanaData, kanaFirstId, kanaLaneSpec } from "./kana.js";
 import {
   ATOM_LEN,
   ATOMS_PER_FRAME,
@@ -36,8 +41,12 @@ import { SECTORS } from "./layout.js";
 import { PetalError, requireIndex, toBytes } from "./support.js";
 import { TURN_ATOMS, encodeTurnLane, turnData, turnFirstId } from "./turns.js";
 
-/** Version/profile byte of the beacon: format version 3, layout profile 0. */
-export const FORMAT_VERSION = 0x30;
+/**
+ * Version/profile byte of the beacon: format version 5, layout profile 0. Beacons of the retired
+ * formats 3 (`0x30`, no katakana bands), 2 (`0x20`, unturned petals) and 1 (`0x10`, katakana tiles
+ * only) are refused.
+ */
+export const FORMAT_VERSION = 0x50;
 /** Largest payload a beacon can describe (`u24`). */
 export const MAX_PAYLOAD_LEN = 2 ** 24 - 1;
 /** Default receiver payload limit; override with the assembler limits. */
@@ -205,9 +214,10 @@ export class PetalStreamEncoder {
 
   /**
    * The data bytes of every lane of `frame` (a counter reduced modulo 65536):
-   * lane D, the four field lanes and the four turn lanes, sector 0 first.
+   * lane D, the four field lanes and the four turn lanes, sector 0 first, and
+   * the four kana lanes (`P0`, `K0`, `P1`, `K1`).
    *
-   * @returns {{d: Uint8Array, fields: Uint8Array[], turns: Uint8Array[]}}
+   * @returns {{d: Uint8Array, fields: Uint8Array[], turns: Uint8Array[], kana: Uint8Array[]}}
    */
   laneData(frame) {
     const f = frameNumber(frame);
@@ -250,28 +260,36 @@ export class PetalStreamEncoder {
       this._atoms(turnFirstId(f, sector), TURN_ATOMS, atoms, 0);
       turns.push(turnData(laneHeader, sector, atoms));
     }
-    return { d, fields, turns };
+    const kana = KANA_LANES.map((lane) => {
+      const count = kanaLaneSpec(lane).atoms;
+      const atoms = new Uint8Array(count * ATOM_LEN);
+      this._atoms(kanaFirstId(f, lane), count, atoms, 0);
+      return kanaData(laneHeader, lane, atoms);
+    });
+    return { d, fields, turns, kana };
   }
 
   /**
    * The transmitted codewords of `frame`.
    *
-   * @returns {{d: Uint8Array, fields: Uint8Array[], turns: Uint8Array[]}}
+   * @returns {{d: Uint8Array, fields: Uint8Array[], turns: Uint8Array[], kana: Uint8Array[]}}
    */
   words(frame) {
-    const { d, fields, turns } = this.laneData(frame);
+    const { d, fields, turns, kana } = this.laneData(frame);
     return {
       d: encodeLane("D", d),
       fields: fields.map((data, sector) => encodeLane(FIELD_LANES[sector], data)),
       turns: turns.map((data, sector) => encodeTurnLane(sector, data)),
+      kana: kana.map((data, index) => encodeKanaLane(KANA_LANES[index], data)),
     };
   }
 
-  /** Every cell of `frame`, lit and turned, ready to render. */
+  /** Every cell of `frame`, lit, turned and with its katakana tiles, ready to render. */
   cells(frame) {
-    const { d, fields, turns } = this.words(frame);
+    const { d, fields, turns, kana } = this.words(frame);
     const cells = PetalFrameCells.fromWords(d, fields);
     cells.setTurns(turns);
+    cells.setKana(kana);
     return cells;
   }
 }

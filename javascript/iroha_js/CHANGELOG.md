@@ -4,6 +4,30 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
 
 ## [Unreleased]
 
+- `@iroha/iroha-js/petal` implements Petal Stream format 5: every frame is a portrait card of 1024 x 1668
+  units, the format 3 square with a band of 306 katakana tiles above and below it (`PETAL_LAYOUT.cardHeight`,
+  `squareTop`, `kanaTiles`, `kanaDataTiles`, `kanaPilotTiles`, `kanaTileAt`, `kanaInside`, `kanaInked`). Beacons
+  carry version `0x50`; format 3's `0x30` is refused like `0x20` and `0x10`. Eight tiles of each band are pilots
+  with fixed symbols; each of the other 298 shows one of sixteen katakana (`PETAL_GLYPHS`, stroke polylines on a
+  32-unit grid, `isGlyphInked`, `glyphStrokes`), light (filled, the glyph in the new palette colour `ink`) or dark
+  (the glyph in pink). The tiles' polarity is a lane `P0`/`P1` (37-byte words with 17 parity bytes, one atom)
+  and their katakana a lane `K0`/`K1` (149-byte words with 33 parity bytes, seven atoms), each closed by a
+  CRC-32C over the stream tag, the frame and the lane, with repair ids from 2³¹ + 2²⁰ (`PETAL_KANA`,
+  `kanaFirstId`, `kanaCheck`, `kanaData`, `kanaPacket`, `kanaWhitening`, `encodeKanaLane`,
+  `decodeKanaLaneCounted`): a card carries up to 53 atoms. Lane data and words gain `kana` (`P0`, `K0`, `P1`,
+  `K1`), `PetalFrameCells` gains `kanaGlyphs` and `kanaLight` (constructor arguments, `setKana`,
+  `kanaPolarityWord`, `kanaGlyphWord`), `renderPetalFrame` draws the whole card (`petalCardHeight(size)`
+  pixels tall, byte-identical to the reference), and draw lists carry `cardHeight`, `squareTop`, the tile
+  shape with every glyph's strokes and `kanaTiles`, which `drawPetalFrame` and the player draw. `readKana`
+  reads the bands of a decoded capture: the square's pose placed beyond the square, pilots found by a coarse
+  search and refined, an affine shift field and level lines fitted to them, and every tile's polarity and
+  glyph read against blurred templates; a lane passes when its check matches the square's frame or the frame
+  after or before it (`observeBand`, `kanaTemplateProbe` and `kanaCoarseTemplateProbe` for diagnostics and
+  conformance). `PetalScanSession` reads each band once per shown frame before the turn lanes, tries no turn
+  lane on a capture whose bands read a kana lane, backs off after band tries that read nothing (at most eight
+  captures, counted apart from the turn lanes'), and reports `outcome.kana` and `stats().kanaTries` and
+  `kanaLanes`. The unit suite checks `fixtures/petal/petal_stream_v5.json` and `petal_captures_v5.json`
+  exactly (`test/petalKana.test.js` holds the band tests).
 - `@iroha/iroha-js/petal` implements Petal Stream format 3 and removes formats 1 and 2 (beacons carry
   version `0x30`; `0x20` and `0x10` are refused). The katakana tile lanes `P` and `K` (with `PETAL_GLYPHS`,
   `tileCenter`, the glyph templates, `templateSigmas` and `tileMatchError`) give way to a field of 3,376

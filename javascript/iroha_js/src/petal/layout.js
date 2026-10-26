@@ -5,7 +5,13 @@
 // canvas to any pixel size; a decoder maps camera pixels back to design units.
 // Cell order is defined by integer indices only, and the slot count of every
 // band is a fixed table.
+//
+// A frame is a card of 1024 x 1668 units: the square code with a band of
+// katakana tiles above and below it (see `kana.js`). Square coordinates are used
+// throughout; the card's `y` is the square's plus `SQUARE_TOP`, so band 0 lies at
+// negative `y` and band 1 below the square.
 
+import { GLYPH_GRID, glyphInkedAt, requireGlyph } from "./glyphs.js";
 import { deepFreeze, requireIndex } from "./support.js";
 
 /** Canvas side length in design units. */
@@ -516,4 +522,285 @@ export function petalLitAlong(dx, dy, sin, cos) {
   }
   const tip = along - NOTCH_DISTANCE_F32;
   return tip * tip + across * across > NOTCH_RADIUS_F32 * NOTCH_RADIUS_F32;
+}
+
+// ---- the card: the square and a band of katakana tiles above and below it ---------------------
+
+/** Side of a katakana tile (see `kana.js`). */
+export const KANA_TILE = 25;
+/** Pitch of the katakana tile lattice. */
+export const KANA_PITCH = 29;
+/** Side of a tile's glyph box, centred in the tile. */
+export const KANA_GLYPH_BOX = 23;
+/** Corner radius of a tile. */
+export const KANA_CORNER = 3;
+/** Tile rows of each band. */
+export const KANA_ROWS = 10;
+/** Tile columns of each band. */
+export const KANA_COLUMNS = 35;
+/** Gap between a band's lattice and the square. */
+export const KANA_GAP = 24;
+/** Margin outside a band's lattice. */
+export const KANA_MARGIN = 8;
+/** Height of a band with its gap and margin (322 units). */
+export const KANA_BAND_HEIGHT = KANA_MARGIN + KANA_ROWS * KANA_PITCH + KANA_GAP;
+/** Height of the card: the square with a band above and below it (1668 units). */
+export const CARD_HEIGHT = CANVAS + 2 * KANA_BAND_HEIGHT;
+/** Card `y` of the square's top edge: card coordinates are square coordinates plus this in `y`. */
+export const SQUARE_TOP = KANA_BAND_HEIGHT;
+/**
+ * Tile centres keep at least this distance from every finder centre: the blossom's radius, a
+ * blossom diameter of clearance, and a tile's half-diagonal, so no tile looks like part of a
+ * finder.
+ */
+export const KANA_FINDER_CLEARANCE = 198;
+/** Bands: above the square and below it. */
+export const KANA_BANDS = 2;
+/** Pilot tiles of each band. */
+export const KANA_PILOTS = 8;
+/** Tiles of each band: the lattice cells clear of the finders. */
+export const KANA_BAND_TILES = 306;
+/** Tiles of both bands. */
+export const KANA_TILE_COUNT = KANA_BANDS * KANA_BAND_TILES;
+/** Data tiles of each band (its tiles that are not pilots). */
+export const KANA_BAND_DATA_TILES = KANA_BAND_TILES - KANA_PILOTS;
+
+/**
+ * The pilot tiles of each band as `[row, column]` (band 1 mirrors band 0's rows, so the pilots
+ * sit at the same distances from the square).
+ */
+export const KANA_PILOT_CELLS = deepFreeze([
+  [
+    [0, 0],
+    [0, 17],
+    [0, 34],
+    [4, 0],
+    [4, 34],
+    [9, 8],
+    [9, 17],
+    [9, 26],
+  ],
+  [
+    [9, 0],
+    [9, 17],
+    [9, 34],
+    [5, 0],
+    [5, 34],
+    [0, 8],
+    [0, 17],
+    [0, 26],
+  ],
+]);
+/** What every pilot shows: `[glyph, light]` in pilot order (ロ ケ ヒ ム ス ワ ア カ). */
+export const KANA_PILOT_SYMBOLS = deepFreeze([
+  [1, true],
+  [11, false],
+  [13, true],
+  [9, false],
+  [14, false],
+  [6, true],
+  [12, false],
+  [7, true],
+]);
+
+/** Left edge of the lattice (the columns are centred on the card). */
+const KANA_LATTICE_LEFT = (CANVAS - KANA_COLUMNS * KANA_PITCH) / 2;
+/** The inset of a tile square in its lattice cell. */
+const KANA_INSET = (KANA_PITCH - KANA_TILE) / 2;
+
+/** Top of band `band`'s lattice in square coordinates. */
+function kanaLatticeTop(band) {
+  return band === 0 ? -KANA_BAND_HEIGHT + KANA_MARGIN : CANVAS + KANA_GAP;
+}
+
+/** Band of every tile. */
+export const TILE_BAND = new Uint8Array(KANA_TILE_COUNT);
+/** Row (within its band) of every tile. */
+export const TILE_ROW = new Uint8Array(KANA_TILE_COUNT);
+/** Column of every tile. */
+export const TILE_COLUMN = new Uint8Array(KANA_TILE_COUNT);
+/** Left edge of every tile square in square coordinates. */
+export const TILE_X = new Float64Array(KANA_TILE_COUNT);
+/** Top edge of every tile square in square coordinates. */
+export const TILE_Y = new Float64Array(KANA_TILE_COUNT);
+/** Index among the pilots of its band of every tile, or `-1` for a data tile. */
+export const TILE_PILOT = new Int8Array(KANA_TILE_COUNT);
+/** The data tiles of band `b` (`KANA_DATA_TILE_LIST[b]`, in reading order) as tile indices. */
+export const KANA_DATA_TILE_LIST = Object.freeze([
+  new Uint16Array(KANA_BAND_DATA_TILES),
+  new Uint16Array(KANA_BAND_DATA_TILES),
+]);
+/** The pilot tiles of band `b` (`KANA_PILOT_TILE_LIST[b]`, in pilot order) as tile indices. */
+export const KANA_PILOT_TILE_LIST = Object.freeze([new Uint16Array(KANA_PILOTS), new Uint16Array(KANA_PILOTS)]);
+/** The tile of every lattice cell (`(band * 10 + row) * 35 + column`), or `-1`. */
+const KANA_LATTICE = new Int16Array(KANA_BANDS * KANA_ROWS * KANA_COLUMNS).fill(-1);
+
+(() => {
+  const half = KANA_TILE / 2;
+  const clearance = KANA_FINDER_CLEARANCE;
+  let count = 0;
+  for (let band = 0; band < KANA_BANDS; band += 1) {
+    let data = 0;
+    for (let row = 0; row < KANA_ROWS; row += 1) {
+      for (let column = 0; column < KANA_COLUMNS; column += 1) {
+        const x = KANA_LATTICE_LEFT + KANA_PITCH * column + KANA_INSET;
+        const y = kanaLatticeTop(band) + KANA_PITCH * row + KANA_INSET;
+        const cx = x + half;
+        const cy = y + half;
+        const clear = FINDER_CENTERS.every(([fx, fy]) => {
+          const dx = cx - fx;
+          const dy = cy - fy;
+          return dx * dx + dy * dy >= clearance * clearance;
+        });
+        if (!clear) {
+          continue;
+        }
+        const pilot = KANA_PILOT_CELLS[band].findIndex(([r, c]) => r === row && c === column);
+        TILE_BAND[count] = band;
+        TILE_ROW[count] = row;
+        TILE_COLUMN[count] = column;
+        TILE_X[count] = x;
+        TILE_Y[count] = y;
+        TILE_PILOT[count] = pilot;
+        KANA_LATTICE[(band * KANA_ROWS + row) * KANA_COLUMNS + column] = count;
+        if (pilot >= 0) {
+          KANA_PILOT_TILE_LIST[band][pilot] = count;
+        } else {
+          KANA_DATA_TILE_LIST[band][data] = count;
+          data += 1;
+        }
+        count += 1;
+      }
+    }
+    if (count !== (band + 1) * KANA_BAND_TILES || data !== KANA_BAND_DATA_TILES) {
+      throw new Error(`a band holds ${KANA_BAND_TILES} tiles, ${KANA_PILOTS} of them pilots`);
+    }
+  }
+})();
+
+const KANA_TILE_OBJECTS = Object.freeze(
+  Array.from({ length: KANA_TILE_COUNT }, (_, tile) =>
+    Object.freeze({
+      band: TILE_BAND[tile],
+      row: TILE_ROW[tile],
+      column: TILE_COLUMN[tile],
+      x: TILE_X[tile],
+      y: TILE_Y[tile],
+      pilot: TILE_PILOT[tile] < 0 ? null : TILE_PILOT[tile],
+    }),
+  ),
+);
+
+/**
+ * Every tile of both bands: band 0 first, each in reading order (rows top first, columns left
+ * first), as `{band, row, column, x, y, pilot}` with the tile square's top-left corner `(x, y)` in
+ * square coordinates and `pilot` the index among its band's pilots (`null` for a data tile). A
+ * lattice cell whose tile centre lies within `KANA_FINDER_CLEARANCE` of a finder centre has no
+ * tile (306 tiles per band remain).
+ */
+export function kanaTiles() {
+  return KANA_TILE_OBJECTS.slice();
+}
+
+function requireBand(band) {
+  requireIndex(band, "band");
+  if (band >= KANA_BANDS) {
+    throw new RangeError("band out of range");
+  }
+  return band;
+}
+
+/** The data tiles of band `band` (its tiles that are not pilots) in reading order, as indices into {@link kanaTiles}. */
+export function kanaDataTiles(band) {
+  return Array.from(KANA_DATA_TILE_LIST[requireBand(band)]);
+}
+
+/** The pilot tiles of band `band` in pilot order, as indices into {@link kanaTiles}. */
+export function kanaPilotTiles(band) {
+  return Array.from(KANA_PILOT_TILE_LIST[requireBand(band)]);
+}
+
+/**
+ * The tile under the square-coordinate point `(x, y)` into `out` as `[tile, u, v]`, with the
+ * point's position inside the tile's square (`0..=25` on both axes); `false` outside every tile
+ * square.
+ */
+export function kanaTileAtInto(x, y, out) {
+  let band;
+  if (y < 0) {
+    band = 0;
+  } else if (y >= CANVAS) {
+    band = 1;
+  } else {
+    return false;
+  }
+  const gx = (x - KANA_LATTICE_LEFT) / KANA_PITCH;
+  const gy = (y - kanaLatticeTop(band)) / KANA_PITCH;
+  // NaN coordinates land on no tile (the reference finds no tile for them either)
+  if (!(gx >= 0) || !(gy >= 0)) {
+    return false;
+  }
+  const column = Math.floor(gx);
+  const row = Math.floor(gy);
+  if (column >= KANA_COLUMNS || row >= KANA_ROWS) {
+    return false;
+  }
+  const tile = KANA_LATTICE[(band * KANA_ROWS + row) * KANA_COLUMNS + column];
+  if (tile < 0) {
+    return false;
+  }
+  const u = (gx - column) * KANA_PITCH - KANA_INSET;
+  const v = (gy - row) * KANA_PITCH - KANA_INSET;
+  if (!(u >= 0 && u <= KANA_TILE && v >= 0 && v <= KANA_TILE)) {
+    return false;
+  }
+  out[0] = tile;
+  out[1] = u;
+  out[2] = v;
+  return true;
+}
+
+/**
+ * The tile under the square-coordinate point `(x, y)` and the point's position inside the tile's
+ * square (`0..=25` on both axes), as `[tile, u, v]`; `null` outside every tile square.
+ *
+ * @returns {[number, number, number] | null}
+ */
+export function kanaTileAt(x, y) {
+  if (typeof x !== "number" || typeof y !== "number") {
+    throw new TypeError("tile coordinates must be numbers");
+  }
+  const out = [0, 0, 0];
+  return kanaTileAtInto(x, y, out) ? out : null;
+}
+
+/** Whether the tile-local point `(u, v)` lies inside the rounded tile square. */
+export function kanaInside(u, v) {
+  const side = KANA_TILE;
+  const corner = KANA_CORNER;
+  if (!(u >= 0 && u <= side) || !(v >= 0 && v <= side)) {
+    return false;
+  }
+  const cx = u < corner ? corner : u > side - corner ? side - corner : u;
+  const cy = v < corner ? corner : v > side - corner ? side - corner : v;
+  return (u - cx) * (u - cx) + (v - cy) * (v - cy) <= corner * corner;
+}
+
+/** The glyph box's inset in its tile. */
+const GLYPH_INSET = (KANA_TILE - KANA_GLYPH_BOX) / 2;
+/** Design-grid units per tile unit inside the glyph box. */
+const GLYPH_SCALE = GLYPH_GRID / KANA_GLYPH_BOX;
+
+/** {@link kanaInked} without the argument checks. */
+export function kanaInkedAt(glyph, u, v) {
+  return kanaInside(u, v) && glyphInkedAt(glyph, (u - GLYPH_INSET) * GLYPH_SCALE, (v - GLYPH_INSET) * GLYPH_SCALE);
+}
+
+/**
+ * Whether the tile-local point `(u, v)` lies on `glyph`'s strokes: inside the tile square and
+ * inked in the glyph box (inset by half the difference of tile and box).
+ */
+export function kanaInked(glyph, u, v) {
+  requireGlyph(glyph);
+  return kanaInkedAt(glyph, u, v);
 }

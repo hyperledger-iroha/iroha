@@ -20,6 +20,22 @@
 // shaky for the turns) the session passes over the next captures that would
 // try one, one more after every such try, at most `TURN_BACKOFF`, until a try
 // reads a lane again.
+//
+// The katakana bands above and below the square are read the same way
+// (`readKana`): each band once per shown frame (the last `KANA_MEMORY` tried
+// are remembered), with its own back-off of at most `KANA_BACKOFF` captures
+// after tries that read no kana lane (a camera that does not see the bands, or
+// too blurred for their glyphs and polarity).
+//
+// The bands go first, and a capture whose bands read a kana lane tries no turn
+// lane: the turn lanes of that shown frame wait for its next capture. On a slow
+// phone core a turn try costs five tracked decodes and a band try one, so
+// reading both on one capture overran the time a frame is shown at 12 fps and
+// the session missed the next shown frames. A decoder that sees each shown
+// frame two or three times still reads both; one that sees it once reads the
+// cheaper bands and every frame's field lanes. A band try that reads nothing
+// (bands out of view, too blurred, or a torn capture) leaves the turn lanes to
+// the same capture.
 
 import {
   DEFAULT_DECODE_OPTIONS,
@@ -29,8 +45,9 @@ import {
   resolveDecodeOptions,
   trackFrame,
 } from "./decode.js";
+import { KANA_LANES, kanaPacket, readKana } from "./kana.js";
 import { FIELD_LANES, LANE_ORDER, laneLetter } from "./lanes.js";
-import { SECTORS } from "./layout.js";
+import { KANA_BANDS, SECTORS } from "./layout.js";
 import {
   DEFAULT_MAX_PAYLOAD_LEN,
   DEFAULT_MAX_PENDING_ATOMS,
@@ -50,6 +67,10 @@ export const MERGE_CAPTURES = 4;
 export const TURN_MEMORY = MERGE_WINDOW * SECTORS;
 /** Most captures passed over after tries that read no turn lane. */
 export const TURN_BACKOFF = 8;
+/** Bands remembered as tried (the two of each of the last `MERGE_WINDOW` shown frames). */
+export const KANA_MEMORY = MERGE_WINDOW * KANA_BANDS;
+/** Most captures passed over after band tries that read no kana lane. */
+export const KANA_BACKOFF = 8;
 
 /** The header every lane starts with, or `null` for data too short to hold one. */
 function laneHeader(data) {
@@ -131,6 +152,7 @@ export class PetalScanSession {
     this._stats = {
       frames: 0, located: 0, readable: 0, laneD: 0, fieldLanes: 0,
       tracked: 0, inferred: 0, merges: 0, mergedLanes: 0, turnTries: 0, turnLanes: 0,
+      kanaTries: 0, kanaLanes: 0,
     };
     this._startedMs = null;
     this._progressMs = 0;
@@ -145,6 +167,12 @@ export class PetalScanSession {
     this._turnMisses = 0;
     /** Captures still to pass over before the next try. */
     this._turnWait = 0;
+    /** The bands tried: `{tag, frame, band}` (the shown frame and the band), oldest first, at most `KANA_MEMORY`. */
+    this._kanaTried = [];
+    /** Band tries in a row that read no kana lane (at most `KANA_BACKOFF`). */
+    this._kanaMisses = 0;
+    /** Captures still to pass over before the next band try. */
+    this._kanaWait = 0;
   }
 
   /** The limits in force. */
@@ -160,8 +188,10 @@ export class PetalScanSession {
    * frames read by tracking the previous pose instead of a full search
    * (`tracked`) and frames read with one corner finder hidden and inferred
    * (`inferred`), merges of two or more captures of one shown frame and the
-   * field lanes they recovered (`merges`, `mergedLanes`), and turn lanes tried
-   * (`turnTries`, each at most once per shown frame) and read (`turnLanes`).
+   * field lanes they recovered (`merges`, `mergedLanes`), turn lanes tried
+   * (`turnTries`, each at most once per shown frame) and read (`turnLanes`),
+   * and bands tried (`kanaTries`, each at most once per shown frame) and kana
+   * lanes read (`kanaLanes`, up to four per shown frame).
    */
   stats() {
     return Object.freeze({ ...this._stats });
@@ -174,7 +204,7 @@ export class PetalScanSession {
 
   /**
    * Drops all partial state, including the pose used for tracking, held captures and the turn
-   * lanes read.
+   * lanes and bands tried.
    */
   reset() {
     this._assembler.reset();
@@ -185,11 +215,14 @@ export class PetalScanSession {
     this._forgetTurns();
   }
 
-  /** Forgets the turn lanes tried and any back-off. */
+  /** Forgets the turn lanes and bands tried and any back-off. */
   _forgetTurns() {
     this._tried = [];
     this._turnMisses = 0;
     this._turnWait = 0;
+    this._kanaTried = [];
+    this._kanaMisses = 0;
+    this._kanaWait = 0;
   }
 
   /**
@@ -197,9 +230,11 @@ export class PetalScanSession {
    *
    * When the last frame that decoded is at most `TRACK_WINDOW_MS` old, the
    * code is first followed from its pose (no finder search); a full decode
-   * runs when that fails.
+   * runs when that fails. The bands not yet tried for the capture's shown
+   * frame are read first; the turn lanes are tried only when they read no kana
+   * lane.
    *
-   * @returns {{error: string | null, lanes: string, merged: string, turned: string,
+   * @returns {{error: string | null, lanes: string, merged: string, turned: string, kana: string,
    *   progress: object, completed: {meta: object, payload: Uint8Array} | null}}
    *   `error` is a `PetalError` code when the frame produced nothing
    *   (`no_orientation` means a code was located but no lane could be read:
@@ -207,8 +242,9 @@ export class PetalScanSession {
    *   alone (`D` and the sector digits `0`-`3`), `merged` lists the field
    *   lanes newly recovered by merging it with earlier captures of its shown
    *   frame (sector digits), `turned` lists the turn lanes read from it (the
-   *   sector digits of the field lanes they ride on), and `completed` is the
-   *   finished payload, delivered exactly once.
+   *   sector digits of the field lanes they ride on), `kana` lists the kana
+   *   lanes read from it (their names `P0`, `K0`, `P1`, `K1` concatenated), and
+   *   `completed` is the finished payload, delivered exactly once.
    */
   push(image, nowMs) {
     if (typeof nowMs !== "number" || !Number.isFinite(nowMs)) {
@@ -236,6 +272,7 @@ export class PetalScanSession {
     let lanes = "";
     let merged = "";
     let turned = "";
+    let kana = "";
     if (result.error !== undefined) {
       error = result.error;
     } else {
@@ -245,7 +282,11 @@ export class PetalScanSession {
       this._lastPose = { frame: result.frame, atMs: nowMs };
       lanes = this._absorb(result.frame);
       merged = this._merge(image, result.frame);
-      turned = this._turn(image, result.frame);
+      // a capture whose bands read a lane tries no turn lane (see the module docs)
+      kana = this._kana(image, result.frame);
+      if (kana === "") {
+        turned = this._turn(image, result.frame);
+      }
     }
     // A code that was found but could not be read (`no_orientation`) still
     // counts as located.
@@ -260,7 +301,7 @@ export class PetalScanSession {
       }
     }
     this._lastRank = progress.rank;
-    return Object.freeze({ error, lanes, merged, turned, progress, completed: this._assembler.takeCompleted() });
+    return Object.freeze({ error, lanes, merged, turned, kana, progress, completed: this._assembler.takeCompleted() });
   }
 
   _absorb(frame) {
@@ -334,6 +375,53 @@ export class PetalScanSession {
       this._turnMisses = 0;
     }
     return turned;
+  }
+
+  /**
+   * Tries the bands not yet tried for this capture's shown frame and offers the atoms of the kana
+   * lanes they read; after tries that read nothing it passes over the next captures that would try
+   * one (see the module docs).
+   */
+  _kana(image, frame) {
+    const shown = shownFrame(frame);
+    if (shown === null) return "";
+    const skip = [false, false];
+    for (let band = 0; band < KANA_BANDS; band += 1) {
+      skip[band] = this._kanaTried.some(
+        (tried) => tried.tag === shown.tag && tried.frame === shown.frame && tried.band === band,
+      );
+    }
+    if (skip.every(Boolean)) {
+      return "";
+    }
+    if (this._kanaWait > 0) {
+      this._kanaWait -= 1;
+      return "";
+    }
+    for (let band = 0; band < KANA_BANDS; band += 1) {
+      if (skip[band]) continue;
+      if (this._kanaTried.length === KANA_MEMORY) this._kanaTried.shift();
+      this._kanaTried.push({ tag: shown.tag, frame: shown.frame, band });
+      this._stats.kanaTries += 1;
+    }
+    let read = "";
+    readKana(image, frame, shown, skip).forEach((result, index) => {
+      const lane = KANA_LANES[index];
+      const packet = result === null ? null : kanaPacket(result.header, lane, result.data);
+      if (packet === null) {
+        return;
+      }
+      this._assembler.pushAtoms(packet);
+      this._stats.kanaLanes += 1;
+      read += lane;
+    });
+    if (read === "") {
+      this._kanaMisses = Math.min(this._kanaMisses + 1, KANA_BACKOFF);
+      this._kanaWait = this._kanaMisses;
+    } else {
+      this._kanaMisses = 0;
+    }
+    return read;
   }
 
   /**

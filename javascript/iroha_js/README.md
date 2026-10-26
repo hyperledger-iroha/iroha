@@ -315,19 +315,30 @@ native dispatch. Fixture-bundle and Governance DAG block entries use `bytes`.
 
 ## Petal Stream optical transport
 
-`@iroha/iroha-js/petal` is Petal Stream (format 3), the animated optical
+`@iroha/iroha-js/petal` is Petal Stream (format 5), the animated optical
 transport used to hand over a payload (for example a KAGEMUSHA `IPM1` peer
-message) from one screen to a camera. Each square frame shows four
-sakura-blossom finders, three dotted rings and inside them a storm of 3,376
-petals on 34 concentric bands, white inside the SORA `天` and pink outside it.
-The ring dots (lane `D`) and the lit petals of the field's four sectors (lanes
-`F0`-`F3`) are five independent Reed-Solomon codewords carrying fountain-coded
-16-byte atoms. On top of each field lane, the first 360 lit petals of its
-sector are turned by 0°, 45°, 90° or 135° about their centres: a turn lane
-(`T0`-`T3`) of four more atoms, which a camera that resolves the petals' shapes
-reads once the field lane has said which petals are lit. Any readable lane of
-any frame helps and lost frames only cost time. The player shows 12 frames per
-second by default and draws every petal turned, notched and antialiased.
+message) from one screen to a camera. Each frame is a portrait card of
+1024 × 1668 design units: a square code with a band of katakana tiles above and
+below it. The square shows four sakura-blossom finders, three dotted rings and
+inside them a storm of 3,376 petals on 34 concentric bands, white inside the
+SORA `天` and pink outside it. The ring dots (lane `D`) and the lit petals of the
+field's four sectors (lanes `F0`-`F3`) are five independent Reed-Solomon
+codewords carrying fountain-coded 16-byte atoms. On top of each field lane, the
+first 360 lit petals of its sector are turned by 0°, 45°, 90° or 135° about
+their centres: a turn lane (`T0`-`T3`) of four more atoms, which a camera that
+resolves the petals' shapes reads once the field lane has said which petals are
+lit. Each band holds 306 rounded tiles, eight of them pilots with fixed symbols;
+each of the other 298 shows one of sixteen katakana (イロハニヘトワカレムノケアヒスン),
+light (filled, the glyph in ink) or dark (the glyph in pink). The polarity of a
+band's tiles is a lane `P0`/`P1` of one atom and their katakana a lane `K0`/`K1`
+of seven, each closed by a CRC-32C that binds the atoms to the stream tag, the
+frame and the lane: a card carries up to 53 atoms (848 bytes). A phone held
+upright sees both bands; a camera that frames only the square reads the square
+as before. Any readable lane of any frame helps and lost frames only cost time.
+Beacons carry version `0x50`; those of the retired formats 3, 2 and 1 (`0x30`,
+`0x20`, `0x10`) are refused. The player shows 12 frames per second by default
+and draws the whole card, every petal turned, notched and antialiased and every
+glyph stroked.
 
 The module is a port of the `iroha_petal` Rust reference: the encoder is
 bit-exact and the decoder follows the reference step by step. It is pure
@@ -389,19 +400,34 @@ too soft or too shaky for the turns) it passes over up to eight captures before
 it tries again, because reading turns costs a slow phone core several times a
 frame's decode. `outcome.turned` lists the turn lanes read (the sector digits of
 their field lanes); `stats().turnTries` and `turnLanes` count tries and lanes
-read. Reset and receive timeouts clear held evidence and the turn lanes tried.
-Lower-level pieces are exported as well:
+read. The katakana bands are read the same way, each band once per shown frame
+(the last 12 tried are remembered), with their own back-off of up to eight
+captures after band tries that read nothing (bands out of view or too blurred),
+and they go first: a capture whose bands read a kana lane tries no turn lane,
+and that shown frame's turn lanes wait for its next capture. A turn try costs a
+slow phone core about five tracked decodes and a band try about one, so both
+on one capture overran a frame shown at 12 fps. `outcome.kana` lists the kana
+lanes read (`"P0K0P1K1"` for all four); `stats().kanaTries` and `kanaLanes`
+count tries and lanes read. Reset and receive timeouts clear held evidence and
+the turn lanes and bands tried. Lower-level pieces are exported as well:
 `decodePetalFrame`, `decodePetalFrameAt` and `trackPetalFrame`, `PetalPose`,
 `fieldEvidence` and `mergeFields`, `readTurns` (with `observedTurns` and
-`turnTemplate` for diagnostics and conformance), the finder
+`turnTemplate` for diagnostics and conformance), `readKana` (with
+`observeBand`, `kanaTemplateProbe` and `kanaCoarseTemplateProbe`), the finder
 search (`locate`, `locateCandidates`, `selectTriple`, `followFinder`), the
-software `renderPetalFrame` (RGBA output, ready for `ImageData`), the vector
-`petalDrawList` (each lit petal with its axis: the outward direction plus its
-turn) and `drawPetalFrame`, `PetalStreamAssembler`, the lane codecs
-(`encodeLane`, `decodeLane`, `PetalFrameCells` with its `turns`), the turn lane
-codecs (`PETAL_TURNS`, `carrierOrder`, `carriers`, `turnData`, `turnPacket`,
-`encodeTurnLane`, `decodeTurnLaneCounted`), `PetalReedSolomon`, the
-fountain code (`maskWords`, `encodeAtom`, `PetalFountainDecoder`) and `crc32c`.
+software `renderPetalFrame` (the whole card, `petalCardHeight(size)` pixels
+tall; RGBA output, ready for `ImageData`), the vector `petalDrawList` (each lit
+petal with its axis: the outward direction plus its turn; each tile with its
+glyph, polarity and colours, over the glyphs' stroke polylines in tile units)
+and `drawPetalFrame`, `PetalStreamAssembler`, the lane codecs (`encodeLane`,
+`decodeLane`, `PetalFrameCells` with its `turns`, `kanaGlyphs` and
+`kanaLight`), the turn lane codecs (`PETAL_TURNS`, `carrierOrder`, `carriers`,
+`turnData`, `turnPacket`, `encodeTurnLane`, `decodeTurnLaneCounted`), the kana
+lane codecs (`PETAL_KANA`, `kanaFirstId`, `kanaData`, `kanaPacket`,
+`encodeKanaLane`, `decodeKanaLaneCounted`), the card's geometry
+(`PETAL_LAYOUT`, `kanaTiles`, `kanaTileAt`, `kanaInked`) and glyphs
+(`PETAL_GLYPHS`, `isGlyphInked`), `PetalReedSolomon`, the fountain code
+(`maskWords`, `encodeAtom`, `PetalFountainDecoder`) and `crc32c`.
 A reassembled payload is only delivered after its CRC-32C matches the beacon;
 it carries no authentication of its own.
 
@@ -417,13 +443,23 @@ by a cubic fitted to the carriers' centroids, fits the camera's blur, and
 decides each turn with the lit neighbours subtracted; a turn lane passes only
 when its check matches the header of the field lane it rides on. From a fitted
 blur of 3.2 canvas units on (a soft or distant camera) it reads no turn lanes and
-the field lanes and lane `D` carry the stream as before. The scanner does not
-change the camera's settings, so set the stream up for it
-(`specs/petal_stream.md` section 8):
+the field lanes and lane `D` carry the stream as before. The band reader extends
+the square's pose beyond the square to place every tile, finds each band's
+pilots by a small search around their places, fits an affine correction to their
+offsets that moves every tile, lets them choose the blur of the glyph templates
+and the levels that tell light tiles from dark ones, and then reads each tile's
+polarity from its level and its glyph from the best-correlating template; a kana
+lane passes when its check matches the square's frame or the frame before or
+after it (a rolling shutter can show a band of a neighbouring frame), and its
+atoms take that frame's ids. The scanner does not change the camera's settings,
+so set the stream up for it (`specs/petal_stream.md` section 8):
 
 - Ask `getUserMedia` for about 1280×720; the default `maxSide` of 1280 already
   matches it. Only drop to 640 when the device cannot sustain about 5 decoded
   frames per second, because at 480p a little defocus already costs the field.
+- Show the whole card with its width filling the screen's width, and scan with
+  the phone held upright, so the camera's long side runs along the card and
+  sees both bands.
 - Automatic exposure over-exposes a mostly black screen. Where the browser
   supports it, apply an exposure compensation of about -1 EV to the video track
   once the stream is open (Chrome on Android exposes it; feature-detect with
@@ -437,11 +473,14 @@ if (track.getCapabilities?.().exposureCompensation) {
 ```
 
 `test/petal.test.js` checks the shared fixtures in `fixtures/petal/`
-(`petal_stream_v3.json`, turn lanes and the turn reader's template probes
-included, and the golden camera captures and tracking pairs in
-`petal_captures_v3.json`, whose turn lanes it reads exactly as the reference)
-and ports the reference unit tests; run it on its own with
-`node --test test/petal.test.js`.
+(`petal_stream_v5.json`, turn and kana lanes, the tiles and glyphs and the turn
+and kana readers' template probes included, and the sixteen golden camera
+captures and two tracking pairs in `petal_captures_v5.json`, whose turn and kana
+lanes it reads exactly as the reference) and ports the reference unit tests;
+`test/petalKana.test.js` ports the reference's glyph, card layout, kana lane and
+band reader tests and pins the reader's intermediates on the golden captures, and
+`test/petalMerge.test.js` the merge sets. Run them on their own with
+`node --test test/petal.test.js test/petalKana.test.js test/petalMerge.test.js`.
 
 ## Atomic private settlement transport
 

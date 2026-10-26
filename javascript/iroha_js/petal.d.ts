@@ -1,14 +1,18 @@
 /**
- * Petal Stream: the Sakura-storm optical transport (a streaming visual code).
+ * Petal Stream: the Sakura-storm optical transport (a streaming visual code), format 5.
  *
- * A sender shows a sequence of square frames; a camera reads them and a
- * payload is reassembled. Every frame carries independent lanes, each one
- * Reed-Solomon codeword over GF(256): the ring dots (lane `D`), the four
- * sectors of a field of 3,376 petals, each lit or dark (lanes `F0`-`F3`), and
- * on top of each field lane the turns of its first 360 lit petals, 0, 45, 90
- * or 135 degrees about their centres (turn lanes `T0`-`T3`, named by the
- * digit of their field lane). Lanes carry fountain-coded 16-byte atoms; lane
- * `D` carries the stream beacon on every fourth frame.
+ * A sender shows a sequence of frames; a camera reads them and a payload is
+ * reassembled. Every frame is a portrait card of 1024 x 1668 design units: a
+ * square code with a band of 306 katakana tiles above and below it. Every
+ * frame carries independent lanes, each one Reed-Solomon codeword over
+ * GF(256): the ring dots (lane `D`), the four sectors of a field of 3,376
+ * petals, each lit or dark (lanes `F0`-`F3`), on top of each field lane the
+ * turns of its first 360 lit petals, 0, 45, 90 or 135 degrees about their
+ * centres (turn lanes `T0`-`T3`, named by the digit of their field lane), and
+ * in each band the polarity (light or dark, lanes `P0`, `P1`) and the
+ * katakana (one of sixteen, lanes `K0`, `K1`) of its 298 data tiles. Lanes
+ * carry fountain-coded 16-byte atoms; lane `D` carries the stream beacon on
+ * every fourth frame.
  *
  * This subpath is a port of the `iroha_petal` Rust reference: the encoder is
  * bit-exact (shared fixtures) and the decoder follows the reference step by
@@ -26,6 +30,15 @@ export type PetalLane = "D" | PetalFieldLane;
 
 /** Four values, one per field sector (sector 0 first). */
 export type PetalSectors<T> = readonly [T, T, T, T];
+
+/** A kana lane name: the polarity (`P`) or glyph (`K`) lane of band 0 (above the square) or 1 (below it). */
+export type PetalKanaLane = "P0" | "K0" | "P1" | "K1";
+
+/** Four values, one per kana lane, in the order `P0`, `K0`, `P1`, `K1`. */
+export type PetalKanaLanes<T> = readonly [T, T, T, T];
+
+/** Two values, one per katakana band (band 0, above the square, first). */
+export type PetalBands<T> = readonly [T, T];
 
 /** Byte input accepted by the codec. */
 export type PetalBytes = Uint8Array | ArrayBuffer | ArrayBufferView | readonly number[];
@@ -54,7 +67,10 @@ export class PetalError extends Error {
 
 // ------------------------------------------------------------------ constants
 
-/** Normative frame geometry in design units (canvas 1024, origin top-left, `y` down). */
+/**
+ * Normative frame geometry in design units (square coordinates: canvas 1024, origin top-left, `y`
+ * down; the card adds a band of 322 units above the square and one below it).
+ */
 export interface PetalLayout {
   readonly canvas: 1024;
   readonly center: 512;
@@ -107,6 +123,39 @@ export interface PetalLayout {
   readonly finderPetalRadius: 26;
   readonly finderNotchRadius: 6;
   readonly finderOuter: 60;
+  /** Height of the card: the square with a band above and below it. */
+  readonly cardHeight: 1668;
+  /** Card `y` of the square's top edge: card coordinates are square coordinates plus this in `y`. */
+  readonly squareTop: 322;
+  /** Side of a katakana tile, a square with rounded corners. */
+  readonly kanaTile: 25;
+  /** Pitch of the tile lattice. */
+  readonly kanaPitch: 29;
+  /** Side of a tile's glyph box, centred in the tile. */
+  readonly kanaGlyphBox: 23;
+  /** Corner radius of a tile. */
+  readonly kanaCorner: 3;
+  readonly kanaRows: 10;
+  readonly kanaColumns: 35;
+  /** Gap between a band's lattice and the square. */
+  readonly kanaGap: 24;
+  /** Margin outside a band's lattice. */
+  readonly kanaMargin: 8;
+  /** Height of a band with its gap and margin. */
+  readonly kanaBandHeight: 322;
+  /** Tile centres keep at least this distance from every finder centre (lattice cells closer hold no tile). */
+  readonly kanaFinderClearance: 198;
+  readonly kanaBands: 2;
+  /** Pilot tiles of each band, with fixed symbols. */
+  readonly kanaPilots: 8;
+  /** Tiles of each band. */
+  readonly kanaBandTiles: 306;
+  /** Tiles of both bands. */
+  readonly kanaTileCount: 612;
+  /** The pilot tiles of each band as `[row, column]`, in pilot order (band 1 mirrors band 0's rows). */
+  readonly kanaPilotCells: readonly (readonly (readonly [number, number])[])[];
+  /** What every pilot shows: `[glyph, light]` in pilot order. */
+  readonly kanaPilotSymbols: readonly (readonly [number, boolean])[];
 }
 
 /** Normative frame geometry. */
@@ -131,8 +180,8 @@ export const PETAL_STREAM: {
   readonly atomsPerFrame: 21;
   /** Cells at the end of every sector that carry no bit (they stay dark). */
   readonly spareSectorCells: 4;
-  /** Beacon version byte: format version 3, layout profile 0. */
-  readonly formatVersion: 48;
+  /** Beacon version byte: format version 5, layout profile 0 (`0x50`; `0x30`, `0x20` and `0x10` are refused). */
+  readonly formatVersion: 80;
   readonly beaconInterval: 4;
   readonly maxPayloadLen: 16777215;
   readonly defaultMaxPayloadLen: 65536;
@@ -163,18 +212,71 @@ export const PETAL_TURNS: {
   readonly backoff: 8;
 };
 
+/** Byte sizes of a kana lane. */
+export interface PetalKanaLaneSize {
+  readonly wordLen: number;
+  readonly parityLen: number;
+  /** The atoms, then a 4-byte check. */
+  readonly dataLen: number;
+  readonly atoms: number;
+}
+
+/**
+ * The kana lanes of the katakana bands: the polarity lanes `P0`, `P1` (37-byte words, 17 parity,
+ * one atom) and the glyph lanes `K0`, `K1` (149-byte words, 33 parity, seven atoms), each closed by
+ * a check that binds its atoms to the stream tag, the frame and the lane.
+ */
+export const PETAL_KANA: {
+  /** The lanes in their order: `P0`, `K0`, `P1`, `K1`. */
+  readonly lanes: readonly PetalKanaLane[];
+  readonly polarity: PetalKanaLaneSize;
+  readonly glyph: PetalKanaLaneSize;
+  /** Data tiles of each band (306 tiles less 8 pilots). */
+  readonly dataTiles: 298;
+  readonly checkLen: 4;
+  /** Fountain id of the first kana atom of frame 0 (`2^31 + 2^20`). */
+  readonly idBase: 2148532224;
+  /** Gaussian blurs (sigma in canvas units) of the band reader's glyph templates: 1.0, 1.6, 2.4, 3.4, 4.8. */
+  readonly blurs: readonly number[];
+  /** Samples per tile side. */
+  readonly grid: 12;
+  /** Samples per tile side in the coarse pilot search. */
+  readonly coarseGrid: 6;
+  /** Bands a scan session remembers as tried (the two of each of the last six shown frames). */
+  readonly memory: 12;
+  /** Most captures a scan session passes over after band tries that read no kana lane. */
+  readonly backoff: 8;
+};
+
+/**
+ * The sixteen katakana of the band tiles, symbols `0`-`15` (`chars`: イロハニヘトワカレムノケアヒスン),
+ * as stroke polylines of `[x, y]` points on a `grid` x `grid` design grid (`y` down), drawn with
+ * round caps and joins of width `strokeWidth`: a point is inked within half a stroke width of a
+ * stroke segment.
+ */
+export const PETAL_GLYPHS: {
+  readonly count: 16;
+  readonly grid: 32;
+  readonly strokeWidth: 6.5;
+  readonly chars: string;
+  /** `strokes[glyph][stroke][point]` is `[x, y]`. */
+  readonly strokes: readonly (readonly (readonly (readonly [number, number])[])[])[];
+};
+
 /** Colours of the picture. */
 export interface PetalPalette {
   readonly background: PetalRgb;
-  /** Finders and the petals inside the `天`. */
+  /** Finders, the petals inside the `天` and the light katakana tiles. */
   readonly light: PetalRgb;
-  /** Sakura pink of the ring dots and of the petals outside the `天`. */
+  /** Sakura pink of the ring dots, of the petals outside the `天` and of the glyphs on dark tiles. */
   readonly pink: PetalRgb;
   /** The faint `天` drawn under the petals. */
   readonly backdrop: PetalRgb;
+  /** Glyphs on light katakana tiles. */
+  readonly ink: PetalRgb;
 }
 
-/** Default palette: background (0,0,0), light (250,235,244), pink (245,175,208), backdrop (25,24,24). */
+/** Default palette: background (0,0,0), light (250,235,244), pink (245,175,208), backdrop (25,24,24), ink (20,4,14). */
 export const PETAL_PALETTE: PetalPalette;
 
 /** Decoder tuning. */
@@ -302,6 +404,48 @@ export function ringOffset(ring: number): number;
 /** Whether the point `(dx, dy)` relative to a finder centre is lit (five-petal blossom). */
 export function finderLit(dx: number, dy: number): boolean;
 
+/** One katakana tile of the card. */
+export interface PetalKanaTile {
+  /** Band: 0 above the square, 1 below it. */
+  readonly band: number;
+  /** Row within its band, top first. */
+  readonly row: number;
+  /** Column, left first. */
+  readonly column: number;
+  /** Left edge of the tile square in square coordinates. */
+  readonly x: number;
+  /** Top edge of the tile square in square coordinates (negative above the square). */
+  readonly y: number;
+  /** Index among the pilots of its band, or `null` for a data tile. */
+  readonly pilot: number | null;
+}
+
+/**
+ * Every tile of both bands: band 0 first, each in reading order (rows top first, columns left
+ * first); lattice cells within 198 units of a finder centre hold no tile (306 per band remain).
+ */
+export function kanaTiles(): PetalKanaTile[];
+/** The data tiles of band `band` (its 298 tiles that are not pilots) in reading order, as indices into {@link kanaTiles}. */
+export function kanaDataTiles(band: number): number[];
+/** The eight pilot tiles of band `band` in pilot order, as indices into {@link kanaTiles}. */
+export function kanaPilotTiles(band: number): number[];
+/**
+ * The tile under the square-coordinate point `(x, y)` and the point's position inside the tile's
+ * square (`0..=25` on both axes) as `[tile, u, v]`; `null` outside every tile square.
+ */
+export function kanaTileAt(x: number, y: number): [number, number, number] | null;
+/** Whether the tile-local point `(u, v)` lies inside the rounded tile square. */
+export function kanaInside(u: number, v: number): boolean;
+/**
+ * Whether the tile-local point `(u, v)` lies on `glyph`'s strokes: inside the tile square and
+ * inked in the glyph box (the tile inset by 1 unit, design point `((u - 1) * 32 / 23, (v - 1) * 32 / 23)`).
+ */
+export function kanaInked(glyph: number, u: number, v: number): boolean;
+/** Whether the design-grid point `(x, y)` is inked in `glyph` (`0..15`): within 3.25 of a stroke segment. */
+export function isGlyphInked(glyph: number, x: number, y: number): boolean;
+/** The strokes of `glyph` (`0..15`): polylines of `[x, y]` points on the 32 x 32 design grid (a copy). */
+export function glyphStrokes(glyph: number): [number, number][][];
+
 // ------------------------------------------------------------------ lanes
 
 /** The field lane of sector `sector` (0..4). */
@@ -331,12 +475,20 @@ export function decodeLaneCounted(
   erasures?: readonly number[],
 ): { readonly data: Uint8Array; readonly corrected: number };
 
-/** Every cell of one frame: what a renderer draws and a decoder samples. */
+/**
+ * Every cell of one frame: what a renderer draws and a decoder samples: which ring slots and petals
+ * are lit, how every petal is turned, and what every katakana tile of the card's bands shows.
+ */
 export class PetalFrameCells {
+  /**
+   * Omitted katakana symbols are the pilots' fixed ones and light tiles of glyph 0.
+   */
   constructor(
     dots?: ArrayLike<number | boolean>,
     petals?: ArrayLike<number | boolean>,
     turns?: ArrayLike<number>,
+    kanaGlyphs?: ArrayLike<number>,
+    kanaLight?: ArrayLike<number | boolean>,
   );
   /** Lit state (`0`/`1`) of each of the 296 ring slots, gate dots included. */
   readonly dots: Uint8Array;
@@ -347,9 +499,14 @@ export class PetalFrameCells {
    * petals and for lit petals that carry no turn bits.
    */
   readonly turns: Uint8Array;
+  /** The glyph (0-15) each of the 612 katakana tiles shows, in {@link kanaTiles} order. */
+  readonly kanaGlyphs: Uint8Array;
+  /** Whether each of the 612 katakana tiles is light (`1`: filled, glyph in ink) or dark (`0`: glyph in pink). */
+  readonly kanaLight: Uint8Array;
   /**
    * Builds the cells from the transmitted codewords of lane `D` and the four field lanes, with
-   * every petal unturned (see {@link PetalFrameCells.setTurns}).
+   * every petal unturned (see {@link PetalFrameCells.setTurns}) and only the pilots set among the
+   * katakana tiles (see {@link PetalFrameCells.setKana}).
    */
   static fromWords(d: PetalBytes, fields: PetalSectors<PetalBytes>): PetalFrameCells;
   /**
@@ -359,11 +516,21 @@ export class PetalFrameCells {
   setTurns(words: PetalSectors<PetalBytes>): void;
   /** Packs the turns of the carriers of sector `sector` into its turn codeword; `null` without carriers. */
   turnWord(sector: number): Uint8Array | null;
+  /**
+   * Shows the transmitted kana codewords (`P0`, `K0`, `P1`, `K1`) on the data tiles of both bands:
+   * data tile `i` shows bit `i` of its band's polarity codeword (the two tiles beyond it are light)
+   * and nibble `i` of its glyph codeword; the pilots keep their fixed symbols.
+   */
+  setKana(words: PetalKanaLanes<PetalBytes>): void;
+  /** Packs the polarity codeword (37 bytes) the data tiles of band `band` show. */
+  kanaPolarityWord(band: number): Uint8Array;
+  /** Packs the glyph codeword (149 bytes) the data tiles of band `band` show. */
+  kanaGlyphWord(band: number): Uint8Array;
   /** Packs the data dots into a lane `D` codeword. */
   dWord(): Uint8Array;
   /** Packs the petals of sector `sector` into its field codeword. */
   fieldWord(sector: number): Uint8Array;
-  /** Whether `other` holds exactly the same cells, turns included. */
+  /** Whether `other` holds exactly the same cells, turns and katakana tiles included. */
   equals(other: unknown): boolean;
 }
 
@@ -444,6 +611,8 @@ export interface PetalLaneWords {
   readonly fields: PetalSectors<Uint8Array>;
   /** The turn lanes, sector 0 first: atoms and check (68 bytes), or the 90-byte codewords. */
   readonly turns: PetalSectors<Uint8Array>;
+  /** The kana lanes `P0`, `K0`, `P1`, `K1`: atoms and check (20 or 116 bytes), or the 37- or 149-byte codewords. */
+  readonly kana: PetalKanaLanes<Uint8Array>;
 }
 
 /** Snapshot of receive progress for a UI. */
@@ -490,11 +659,11 @@ export class PetalStreamEncoder {
   readonly meta: PetalStreamMeta;
   /** Frames needed to send every source atom once in the field lanes and lane `D`. */
   systematicFrames(): number;
-  /** Data bytes of every lane of `frame` (reduced modulo 65536), turn lanes included. */
+  /** Data bytes of every lane of `frame` (reduced modulo 65536), turn and kana lanes included. */
   laneData(frame: number): PetalLaneWords;
   /** Transmitted codewords of `frame`. */
   words(frame: number): PetalLaneWords;
-  /** Every cell of `frame`, lit and turned, ready to render. */
+  /** Every cell of `frame`, lit, turned and with its katakana tiles, ready to render. */
   cells(frame: number): PetalFrameCells;
 }
 
@@ -618,6 +787,105 @@ export function observedTurns(image: PetalLumaLike, frame: PetalTurnFrame): Peta
  * compare it with the fixture's probes.
  */
 export function turnTemplate(blur: number, along: number, across: number): number;
+
+// ------------------------------------------------------------------ kana lanes
+
+/**
+ * Fountain id of the first atom `lane` carries in `frame` (reduced modulo 65536):
+ * `2^31 + 2^20 + 16 * frame + 8 * band`, plus 7 for the polarity lane (the glyph lane's seven atoms
+ * come first).
+ */
+export function kanaFirstId(frame: number, lane: PetalKanaLane): number;
+/**
+ * The check of a kana lane: CRC-32C over the stream tag, the frame (big-endian), the lane's code
+ * (`0x10 | band << 1 | kind`, polarity 0 and glyph 1) and the atoms.
+ */
+export function kanaCheck(header: PetalLaneHeader, lane: PetalKanaLane, atoms: PetalBytes): number;
+/** The data of a kana lane: its atoms (one or seven) followed by their check (big-endian). */
+export function kanaData(header: PetalLaneHeader, lane: PetalKanaLane, atoms: PetalBytes): Uint8Array;
+/** The atoms of kana lane data whose check matches `header` and `lane`; `null` for the wrong length or check. */
+export function kanaPacket(header: PetalLaneHeader, lane: PetalKanaLane, data: PetalBytes): PetalAtomPacket | null;
+/** The whitening sequence of a kana lane (xorshift32 seeded "POL0", "POL1", "KAN0" or "KAN1"). */
+export function kanaWhitening(lane: PetalKanaLane): Uint8Array;
+/** Encodes kana lane data (20 or 116 bytes) into the transmitted, whitened codeword (37 or 149 bytes). */
+export function encodeKanaLane(lane: PetalKanaLane, data: PetalBytes): Uint8Array;
+/**
+ * Decodes a transmitted kana codeword, returning its data and how many byte positions the
+ * Reed-Solomon decoder rewrote; the check is not verified (see {@link kanaPacket}).
+ *
+ * @throws {PetalError} `rs_invalid_shape` or `rs_uncorrectable`
+ */
+export function decodeKanaLaneCounted(
+  lane: PetalKanaLane,
+  transmitted: PetalBytes,
+  erasures?: readonly number[],
+): { readonly data: Uint8Array; readonly corrected: number };
+
+/** A kana lane read from a capture, with the header (stream tag and frame) its check matched. */
+export interface PetalKanaResult extends PetalLaneResult {
+  /** The square's frame, the frame after it or the frame before it. */
+  readonly header: PetalLaneHeader;
+}
+
+/** A decoded frame as the band reader needs it: its pose. */
+export interface PetalKanaFrame {
+  readonly pose: PetalPose;
+}
+
+/**
+ * Reads the kana lanes of the bands not flagged in `skip` of a capture whose square `frame` decoded
+ * under `header` (the stream tag and frame its lanes name). The square's pose, extended beyond the
+ * square, places every tile; each band's pilots are found by a small search, pick the band's blur
+ * and set the light and dark levels, and an affine shift fitted to their offsets moves every tile.
+ * A lane passes when its codeword decodes, with 0, 1/8, 1/4, 1/3 or 1/2 of its parity bytes' worth of
+ * its least confident bytes erased, into data whose check matches `header`'s frame, the frame after
+ * it or the frame before it. Returns `P0`, `K0`, `P1`, `K1`.
+ */
+export function readKana(
+  image: PetalLumaLike,
+  frame: PetalKanaFrame,
+  header: PetalLaneHeader,
+  skip?: PetalBands<boolean>,
+): PetalKanaLanes<PetalKanaResult | null>;
+
+/** What the band reader decided for one data tile. */
+export interface PetalTileReading {
+  /** Index into {@link kanaTiles}. */
+  readonly tile: number;
+  /** Decided polarity. */
+  readonly light: boolean;
+  /** How far the tile's level lay from the threshold, in half-contrasts. */
+  readonly lightMargin: number;
+  /** Decided glyph (0-15). */
+  readonly glyph: number;
+  /** How far the glyph's correlation led the runner-up's. */
+  readonly glyphLead: number;
+}
+
+/** What the band reader saw of one band. */
+export interface PetalBandReading {
+  /** The blur (sigma in canvas units) the pilots chose. */
+  readonly blur: number;
+  /** Pilots found. */
+  readonly pilots: number;
+  /** Every data tile of the band in data order, `null` for the tiles it could not read. */
+  readonly tiles: readonly (PetalTileReading | null)[];
+}
+
+/**
+ * What {@link readKana} sees of band `band` before any Reed-Solomon correction, for diagnostics;
+ * `null` when fewer than two pilots are found or the pilots show no contrast.
+ */
+export function observeBand(image: PetalLumaLike, frame: PetalKanaFrame, band: number): PetalBandReading | null;
+
+/**
+ * The band reader's template of `glyph` (a light or dark tile) under blur `blur` (an index into
+ * `PETAL_KANA.blurs`) at point `(i, j)` of the 12 x 12 grid, mean-centred and scaled to unit length;
+ * conformance tests compare it with the fixture's probes.
+ */
+export function kanaTemplateProbe(blur: number, glyph: number, light: boolean, i: number, j: number): number;
+/** The coarse template of `glyph` (a light or dark tile) at point `(i, j)` of the 6 x 6 grid. */
+export function kanaCoarseTemplateProbe(glyph: number, light: boolean, i: number, j: number): number;
 
 // ------------------------------------------------------------------ images
 
@@ -900,7 +1168,7 @@ export function mergeFields(
 
 /** Software renderer options. */
 export interface PetalRenderOptions {
-  /** Output side in pixels (default 1024). */
+  /** Output width in pixels (default 1024); the card is {@link petalCardHeight} pixels tall. */
   readonly size?: number;
   /** Samples per pixel side, 1-4 (default 3). */
   readonly supersample?: number;
@@ -914,7 +1182,13 @@ export interface PetalRgbaImage {
   readonly data: Uint8ClampedArray<ArrayBuffer>;
 }
 
-/** Renders one frame in software, exactly like the reference renderer. */
+/** Height in pixels of a card rendered `size` pixels wide: `size * 1668 / 1024`, rounded. */
+export function petalCardHeight(size: number): number;
+
+/**
+ * Renders one frame in software, exactly like the reference renderer: the whole card, the square
+ * starting 322 canvas units below its top edge.
+ */
 export function renderPetalFrame(cells: PetalFrameCells, options?: PetalRenderOptions): PetalRgbaImage;
 
 /** A circle in canvas design units. */
@@ -967,9 +1241,48 @@ export interface PetalDrawPetal {
   readonly fill: PetalRgb;
 }
 
-/** The frame as vector primitives in canvas design units (0..1024). */
+/** The shape every katakana tile is drawn with, in canvas units, and the strokes of every glyph. */
+export interface PetalDrawTileShape {
+  /** Side of the tile square (25). */
+  readonly side: number;
+  /** Corner radius of the tile square (3). */
+  readonly corner: number;
+  /** Width of the glyph strokes (`6.5 * 23 / 32`), drawn with round caps and joins. */
+  readonly strokeWidth: number;
+  /**
+   * `glyphs[glyph][stroke][point]`: the strokes of every glyph as polylines of `[u, v]` points in
+   * tile-local units from the tile's top-left corner; every stroke lies inside its rounded tile.
+   */
+  readonly glyphs: readonly (readonly (readonly (readonly [number, number])[])[])[];
+}
+
+/** One katakana tile. */
+export interface PetalDrawTile {
+  /** Tile index ({@link kanaTiles} order). */
+  readonly index: number;
+  /** Top-left corner of the tile square in square coordinates (negative `y` above the square). */
+  readonly x: number;
+  readonly y: number;
+  /** The glyph it shows (0-15). */
+  readonly glyph: number;
+  readonly light: boolean;
+  /** The tile's fill: the light colour, or `null` for a dark tile (not filled). */
+  readonly fill: PetalRgb | null;
+  /** The colour of its glyph's strokes: ink on a light tile, pink on a dark one. */
+  readonly ink: PetalRgb;
+}
+
+/**
+ * The frame as vector primitives in square design units (0..1024, `y` down); the card extends
+ * `squareTop` units above and below the square, so a `canvas` x `cardHeight` area translated down by
+ * `squareTop` holds it all.
+ */
 export interface PetalDrawList {
   readonly canvas: number;
+  /** Height of the card (1668). */
+  readonly cardHeight: number;
+  /** Distance from the card's top edge to the square's (322). */
+  readonly squareTop: number;
   readonly palette: PetalPalette;
   readonly finders: readonly PetalDrawFinder[];
   /** Drawn first, under the petals. */
@@ -978,6 +1291,9 @@ export interface PetalDrawList {
   readonly petals: readonly PetalDrawPetal[];
   /** Lit ring dots (radius 9), gate dots included. */
   readonly dots: readonly PetalDrawCircle[];
+  readonly tile: PetalDrawTileShape;
+  /** Every katakana tile of both bands in tile order: fill the light ones, then stroke every glyph. */
+  readonly kanaTiles: readonly PetalDrawTile[];
 }
 
 /** Builds the platform-neutral draw list of a frame for vector backends. */
@@ -1012,6 +1328,10 @@ export interface PetalScanStats {
   readonly turnTries: number;
   /** Turn lanes read. */
   readonly turnLanes: number;
+  /** Bands tried (each at most once per shown frame). */
+  readonly kanaTries: number;
+  /** Kana lanes read (up to four per shown frame). */
+  readonly kanaLanes: number;
 }
 
 /** The result of offering one camera frame. */
@@ -1027,6 +1347,8 @@ export interface PetalScanOutcome {
   readonly merged: string;
   /** Turn lanes read from this capture, as the sector digits of the field lanes they ride on. */
   readonly turned: string;
+  /** Kana lanes read from this capture, their names concatenated (for example `"P0K0P1K1"`). */
+  readonly kana: string;
   readonly progress: PetalProgress;
   /** The finished payload, delivered exactly once. */
   readonly completed: PetalCompleted | null;
@@ -1038,13 +1360,16 @@ export class PetalScanSession {
   readonly limits: PetalResolvedScanLimits;
   stats(): PetalScanStats;
   progress(): PetalProgress;
-  /** Drops all partial state, including the pose used for tracking and the turn lanes tried. */
+  /** Drops all partial state, including the pose used for tracking and the turn lanes and bands tried. */
   reset(): void;
   /**
    * Offers one camera luma plane captured at monotonic time `nowMs`. While the last decoded pose
-   * is at most {@link PETAL_TRACK_WINDOW_MS} old, the code is first tracked from it. The turn lanes
-   * on top of the field lanes it decodes are tried, each once per shown frame; after tries that read
-   * nothing the session passes over up to eight captures before it tries again.
+   * is at most {@link PETAL_TRACK_WINDOW_MS} old, the code is first tracked from it. The katakana
+   * bands are read first, each once per shown frame; only when they read no kana lane are the turn
+   * lanes on top of the decoded field lanes tried, each once per shown frame (a capture whose bands
+   * read leaves its frame's turn lanes to the next capture). After tries that read nothing the
+   * session passes over up to eight captures before it tries again, with separate counts for the
+   * bands and the turn lanes.
    */
   push(image: PetalLumaLike, nowMs: number): PetalScanOutcome;
 }
@@ -1055,9 +1380,10 @@ export class PetalScanSession {
 export type PetalCanvasContext = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
 
 /**
- * Draws a draw list onto a Canvas 2D context, scaling the 1024-unit design
- * canvas to `size` pixels (default: the smaller canvas side) at `(x, y)`.
- * Petals are drawn turned, notched and antialiased (Canvas 2D path fills).
+ * Draws a draw list onto a Canvas 2D context: the whole card, its 1024-unit width scaled to `size`
+ * pixels (default: the widest card the canvas holds; the card is `size * 1668 / 1024` pixels tall)
+ * at `(x, y)`. Petals are drawn turned, notched and antialiased (Canvas 2D path fills), tiles as
+ * rounded squares with their glyphs stroked (round caps and joins).
  */
 export function drawPetalFrame(
   context: PetalCanvasContext,
@@ -1080,7 +1406,7 @@ export interface PetalStreamPlayerOptions {
    * Frames per second (default 12). Keep it at or below half the camera frame rate.
    */
   readonly fps?: number;
-  /** Drawn side in pixels (default: the smaller canvas side). */
+  /** Drawn width of the card in pixels (default: the widest card the canvas holds). */
   readonly size?: number;
   readonly x?: number;
   readonly y?: number;
