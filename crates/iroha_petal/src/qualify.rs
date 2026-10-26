@@ -12,6 +12,7 @@ use std::time::Instant;
 
 use crate::decode::DecodeError;
 use crate::image::{Luma, Rgb};
+use crate::layout::{CANVAS, SQUARE_TOP};
 use crate::render::{RenderOptions, render};
 use crate::session::{ScanLimits, ScanSession};
 use crate::sim::{CaptureConfig, blend, capture, fit_to_frame, tear};
@@ -81,6 +82,10 @@ pub struct StreamTrial {
     /// side and a rolling shutter sweeps across the card's width. Otherwise the code takes any
     /// rotation.
     pub upright: bool,
+    /// The screen shows the cards with their katakana bands blacked out, so the camera gets
+    /// what the square alone carries; the same seed then gives the same poses, phases and noise
+    /// as with the bands shown.
+    pub hide_bands: bool,
 }
 
 impl StreamTrial {
@@ -98,7 +103,18 @@ impl StreamTrial {
             seed,
             render_size: 768,
             upright: true,
+            hide_bands: false,
         }
+    }
+}
+
+/// Blacks out the rows of a rendered card above and below its square.
+fn black_out_bands(card: &mut Rgb) {
+    let unit = f64::from(CANVAS) / card.width as f64;
+    let top = (f64::from(SQUARE_TOP) / unit).floor() as usize;
+    let bottom = ((f64::from(SQUARE_TOP) + f64::from(CANVAS)) / unit).ceil() as usize;
+    for y in (0..top).chain(bottom..card.height) {
+        card.data[y * card.width * 3..(y + 1) * card.width * 3].fill(0);
     }
 }
 
@@ -165,14 +181,18 @@ pub fn run_stream_trial(payload: &[u8], kind: u8, trial: &StreamTrial) -> TrialO
     let mut sources: HashMap<u16, Rgb> = HashMap::new();
     let mut grab = |frame: u16, cfg: &CaptureConfig| -> Luma {
         let source = sources.entry(frame).or_insert_with(|| {
-            render(
+            let mut card = render(
                 &encoder.cells(frame),
                 &RenderOptions {
                     size: trial.render_size,
                     supersample: 2,
                     ..RenderOptions::default()
                 },
-            )
+            );
+            if trial.hide_bands {
+                black_out_bands(&mut card);
+            }
+            card
         });
         capture(source, cfg)
     };
@@ -310,6 +330,53 @@ mod tests {
             "{outcome:?}"
         );
         assert!(outcome.payload_matches);
+    }
+
+    #[test]
+    fn hiding_the_bands_blacks_out_only_the_rows_beyond_the_square() {
+        let shown = render(
+            &StreamEncoder::new(&[1, 2, 3], 2).unwrap().cells(0),
+            &RenderOptions {
+                size: 256,
+                ..RenderOptions::default()
+            },
+        );
+        let mut hidden = shown.clone();
+        black_out_bands(&mut hidden);
+        let row = shown.width * 3;
+        let rows = |card: &Rgb, from: usize, to: usize| card.data[from * row..to * row].to_vec();
+        // the square spans rows 80.5 to 336.5 of the 417-row card
+        let (top, bottom) = (80, 337);
+        assert!(rows(&shown, 0, top).iter().any(|&v| v > 0));
+        assert!(rows(&shown, bottom, shown.height).iter().any(|&v| v > 0));
+        assert!(rows(&hidden, 0, top).iter().all(|&v| v == 0));
+        assert!(rows(&hidden, bottom, hidden.height).iter().all(|&v| v == 0));
+        assert_eq!(rows(&hidden, top, bottom), rows(&shown, top, bottom));
+    }
+
+    #[test]
+    fn a_camera_reads_no_kana_lanes_from_hidden_bands() {
+        let payload: Vec<u8> = (0..600u16).map(|i| (i * 7) as u8).collect();
+        let camera = CameraModel::named("modern").unwrap();
+        let trial = StreamTrial {
+            horizon_s: 20.0,
+            ..StreamTrial::typical(camera, 5)
+        };
+        let shown = run_stream_trial(&payload, 2, &trial);
+        let hidden = run_stream_trial(
+            &payload,
+            2,
+            &StreamTrial {
+                hide_bands: true,
+                ..trial
+            },
+        );
+        assert!(shown.payload_matches && shown.kana_lanes > 0, "{shown:?}");
+        assert!(
+            hidden.payload_matches && hidden.kana_lanes == 0,
+            "{hidden:?}"
+        );
+        assert!(hidden.field_lanes > 0);
     }
 
     #[test]

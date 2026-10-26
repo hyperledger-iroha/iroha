@@ -9,8 +9,8 @@
 //! `cargo run --release -p iroha_petal --example stress -- [trials] [filter] [--threads N]`
 //!
 //! Columns: frames with any lane, frames with lane `D`, field lanes read (of four per frame), turn
-//! lanes read (of four per frame), kana lanes read (of four per frame), and payload bytes per
-//! frame.
+//! lanes read (of four per frame), kana lanes read (of four per frame), payload bytes per frame and
+//! of them the bytes from the katakana bands.
 #[path = "support/count.rs"]
 mod count;
 #[path = "support/floor.rs"]
@@ -178,8 +178,8 @@ fn main() {
         ("worst 480p", CaptureConfig::worst(), 22.0),
     ];
     println!(
-        "{:<26} {:<12} {:>5} {:>5} {:>5} {:>5} {:>5} {:>5}",
-        "condition", "camera", "any%", "D%", "F%", "T%", "K%", "B/frm"
+        "{:<26} {:<12} {:>5} {:>5} {:>5} {:>5} {:>5} {:>5} {:>5}",
+        "condition", "camera", "any%", "D%", "F%", "T%", "K%", "B/frm", "kanaB"
     );
     for (name, stress) in stress_rows() {
         if filter.as_ref().is_some_and(|f| !name.contains(f.as_str())) {
@@ -187,7 +187,7 @@ fn main() {
         }
         for (camera, base, tilt) in &cameras {
             let next = AtomicUsize::new(0);
-            let tally = std::sync::Mutex::new([0usize; 6]);
+            let tally = std::sync::Mutex::new([0usize; 7]);
             std::thread::scope(|scope| {
                 for _ in 0..threads {
                     scope.spawn(|| {
@@ -308,6 +308,7 @@ fn main() {
                                 t[3] += 80 * fields + 64 * turns + 12 * usize::from(d) + kana_bytes;
                                 t[4] += turns;
                                 t[5] += kana;
+                                t[6] += kana_bytes;
                             }
                         }
                     });
@@ -316,7 +317,7 @@ fn main() {
             let t = tally.into_inner().expect("tally");
             let pct = |n: usize| 100.0 * count_as_f64(n) / count_as_f64(trials);
             println!(
-                "{:<26} {:<12} {:>5.0} {:>5.0} {:>5.0} {:>5.0} {:>5.0} {:>5.0}",
+                "{:<26} {:<12} {:>5.0} {:>5.0} {:>5.0} {:>5.0} {:>5.0} {:>5.0} {:>5.0}",
                 name,
                 camera,
                 pct(t[0]),
@@ -324,7 +325,8 @@ fn main() {
                 pct(t[2]) / 4.0,
                 pct(t[4]) / 4.0,
                 pct(t[5]) / 4.0,
-                count_as_f64(t[3]) / count_as_f64(trials)
+                count_as_f64(t[3]) / count_as_f64(trials),
+                count_as_f64(t[6]) / count_as_f64(trials)
             );
         }
     }

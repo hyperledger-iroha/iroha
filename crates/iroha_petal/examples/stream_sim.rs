@@ -2,14 +2,15 @@
 //! camera watching it (frame blending and rolling-shutter tearing included).
 //!
 //! `cargo run --release -p iroha_petal --example stream_sim -- [trials] [payload bytes] [display fps] [cameras]
-//! [--camera-fps N] [--exposure-ms N] [--readout-ms N] [--any-rotation] [--threads N]`
+//! [--camera-fps N] [--exposure-ms N] [--readout-ms N] [--any-rotation] [--hide-bands] [--threads N]`
 //!
 //! `cameras` is a comma-separated list of camera names (default: all). `--camera-fps` models a
 //! decoder that keeps up with only that many camera frames a second (default 30), `--readout-ms`
 //! a rolling shutter that reads the rows out over that time (default 0: every row at once),
-//! `--any-rotation` a receiving phone held at any angle instead of upright, and `--threads` runs
-//! that many trials at once (default: every core). `T/F%` is the turn lanes read per field lane
-//! decoded, `K/s` the kana lanes read per second.
+//! `--any-rotation` a receiving phone held at any angle instead of upright, `--hide-bands` cards
+//! whose katakana bands are blacked out (the square alone, under the same seeds), and `--threads`
+//! runs that many trials at once (default: every core). `T/F%` is the turn lanes read per field
+//! lane decoded, `K/s` the kana lanes read per second.
 #[path = "support/count.rs"]
 mod count;
 
@@ -70,11 +71,16 @@ fn main() {
     let (mut camera_fps, mut exposure_ms, mut readout_ms) = (None, None, None);
     let mut threads = None;
     let mut upright = true;
+    let mut hide_bands = false;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         let target = match arg.as_str() {
             "--any-rotation" => {
                 upright = false;
+                continue;
+            }
+            "--hide-bands" => {
+                hide_bands = true;
                 continue;
             }
             "--camera-fps" => &mut camera_fps,
@@ -116,7 +122,7 @@ fn main() {
         trial_seeds(last).expect("requested trial range exceeds deterministic seed arithmetic");
     }
     println!(
-        "payload {payload_len} B, display {fps} fps, camera {} fps, exposure {:.1} ms, readout {} ms, {}",
+        "payload {payload_len} B, display {fps} fps, camera {} fps, exposure {:.1} ms, readout {} ms, {}{}",
         camera_fps.unwrap_or(30.0),
         exposure_ms.unwrap_or(1000.0 / 60.0),
         readout_ms.unwrap_or(0.0),
@@ -124,7 +130,8 @@ fn main() {
             "upright phone"
         } else {
             "any rotation"
-        }
+        },
+        if hide_bands { ", bands hidden" } else { "" }
     );
     println!(
         "{:<10} {:>6} {:>8} {:>8} {:>8} {:>7} {:>9} {:>7} {:>7} {:>6}",
@@ -157,6 +164,7 @@ fn main() {
                             exposure_s: exposure_ms.map_or(typical.exposure_s, |ms| ms / 1000.0),
                             readout_s: readout_ms.map_or(typical.readout_s, |ms| ms / 1000.0),
                             upright,
+                            hide_bands,
                             ..typical
                         };
                         let outcome = run_stream_trial(&payload, 1, &spec);

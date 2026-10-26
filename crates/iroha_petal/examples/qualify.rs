@@ -6,8 +6,9 @@
 //! many trials at once (default: every core).
 //!
 //! Columns: frames with any lane, frames with lane `D`, field lanes read (of four per frame), turn
-//! lanes read (of four per frame), kana lanes read (of four per frame), payload bytes per frame,
-//! decode time (turn and kana lanes included), and pixels per petal pitch (12.5 canvas units).
+//! lanes read (of four per frame), kana lanes read (of four per frame), payload bytes per frame and
+//! of them the bytes from the katakana bands, decode time (turn and kana lanes included), and
+//! pixels per petal pitch (12.5 canvas units).
 //! Rows marked `upright` hold the phone upright (the card turned 90° or 270°, ± 15°, in the
 //! landscape frame), so the katakana bands above and below the square are in view.
 #[path = "support/count.rs"]
@@ -176,8 +177,8 @@ fn main() {
         .collect();
     let encoder = StreamEncoder::new(&payload, 2).expect("payload");
     println!(
-        "{:<34} {:>6} {:>6} {:>6} {:>6} {:>6} {:>6} {:>7} {:>8}",
-        "scenario", "any%", "D%", "F%", "T%", "K%", "B/frm", "ms/dec", "px/petal"
+        "{:<34} {:>6} {:>6} {:>6} {:>6} {:>6} {:>6} {:>6} {:>7} {:>8}",
+        "scenario", "any%", "D%", "F%", "T%", "K%", "B/frm", "kanaB", "ms/dec", "px/petal"
     );
     for scenario in scenarios() {
         if filter
@@ -299,7 +300,7 @@ fn main() {
         let dot_bytes = 12.0 * count_as_f64(results.iter().filter(|r| r.0).count());
         let bytes = (field_bytes + dot_bytes) / n;
         println!(
-            "{:<34} {:>6.0} {:>6.0} {:>6.0} {:>6.0} {:>6.0} {:>6.0} {:>7.1} {:>6.1}px  loc {:>3.0}%  ({:.0}s)",
+            "{:<34} {:>6.0} {:>6.0} {:>6.0} {:>6.0} {:>6.0} {:>6.0} {:>6.0} {:>7.1} {:>6.1}px  loc {:>3.0}%  ({:.0}s)",
             scenario.name,
             pct(&|r| r.0 || r.1 > 0),
             pct(&|r| r.0),
@@ -307,6 +308,7 @@ fn main() {
             25.0 * count_as_f64(turn_lanes) / n,
             25.0 * count_as_f64(kana_lanes) / n,
             bytes,
+            count_as_f64(kana_bytes) / n,
             results.iter().map(|r| r.2).sum::<f64>() / n,
             mean_scale * 12.5,
             pct(&|r| r.3),
