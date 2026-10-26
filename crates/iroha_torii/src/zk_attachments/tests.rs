@@ -712,7 +712,12 @@ fn load_meta_rejects_oversized_persisted_metadata() {
     let id = "a".repeat(super::ATTACHMENT_ID_HEX_LEN);
     fs::write(
         super::meta_path(&tenant, &id),
-        vec![b' '; super::ATTACHMENT_META_FILE_MAX_BYTES as usize + 1],
+        vec![
+            b' ';
+            usize::try_from(super::ATTACHMENT_META_FILE_MAX_BYTES)
+                .expect("fixture bound fits usize")
+                + 1
+        ],
     )
     .expect("write oversized persisted metadata");
     super::try_load_meta(&tenant, &id)
@@ -726,7 +731,10 @@ fn save_meta_rejects_records_beyond_the_persistence_contract() {
     let id = "c".repeat(super::ATTACHMENT_ID_HEX_LEN);
     let meta = AttachmentMeta {
         id: id.clone(),
-        content_type: "x".repeat(super::ATTACHMENT_META_FILE_MAX_BYTES as usize),
+        content_type: "x".repeat(
+            usize::try_from(super::ATTACHMENT_META_FILE_MAX_BYTES)
+                .expect("fixture bound fits usize"),
+        ),
         size: 0,
         created_ms: 0,
         tenant: Some(tenant.as_str().to_owned()),
@@ -1591,6 +1599,9 @@ fn sanitizer_limit_helpers_round_up() {
         super::sanitizer_cpu_limit_secs(std::time::Duration::from_millis(1001)),
         2
     );
+    let oversized =
+        std::time::Duration::from_millis(u64::MAX) + std::time::Duration::from_millis(1);
+    assert_eq!(super::sanitizer_cpu_limit_secs(oversized), u64::MAX / 1000);
     let min_limit = super::sanitizer_memory_limit_bytes(0);
     assert!(min_limit >= 64 * 1024 * 1024);
     let scaled_limit = super::sanitizer_memory_limit_bytes(16 * 1024 * 1024);

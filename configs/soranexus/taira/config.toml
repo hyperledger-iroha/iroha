@@ -326,15 +326,10 @@ poll_interval_ms = 10000
 # The first-release catalog is fixed; no autoscale range can consume a participant lane.
 
 [nexus.staking]
-# SCCP validity plus evidence grace; pinned by the signed genesis Nexus policy.
-unbonding_delay_ms = 1814400000
-max_slash_bps = 10000
+# Validator modes remain part of the genesis-pinned Nexus consensus policy.
+# Monetary terms, including SCCP liability floors, live in public_lane_staking_v1.
 public_validator_mode = "stake_elected"
 restricted_validator_mode = "admin_managed"
-min_validator_stake = "1"
-stake_asset_id = "xor#universal"
-stake_escrow_account_id = "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
-slash_sink_account_id = "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
 
 [[nexus.lane_catalog]]
 index = 0

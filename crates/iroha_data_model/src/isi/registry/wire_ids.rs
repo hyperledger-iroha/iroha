@@ -1,6 +1,9 @@
 //! Explicit wire identifiers for the built-in instruction registry.
 use super::*;
-use crate::isi::{asset_escrow_scope, asset_fi_context, asset_fi, asset_uid, asset_uid_enrollment, retail_daily_limit};
+use crate::isi::{
+    asset_escrow_scope, asset_fi, asset_fi_context, asset_uid, asset_uid_enrollment,
+    retail_daily_limit,
+};
 type TypeName = fn() -> &'static str;
 /// One built-in instruction's Rust type and path-independent wire identity.
 #[derive(Clone, Copy)]
@@ -44,7 +47,6 @@ macro_rules! built_in_wire_id {
         )
     };
 }
-#[cfg(feature = "governance")]
 macro_rules! governance_wire_id {
     ($ty:ty => $wire_id:literal) => {
         built_in_wire_id_with_scope!(
@@ -80,7 +82,6 @@ pub(super) const ALL: &[BuiltInWireId] = &[
     built_in_wire_id!(asset_fi::TransferToLinkedFiV1 => "iroha.asset.fi.link.transfer.v1"),
     built_in_wire_id!(asset_fi_context::AssertAssetFiContextV1 => "iroha.asset.fi.context.assert.v1"),
     built_in_wire_id!(asset_fi_context::AssertAssetFiTransferReceiptV1 => "iroha.asset.fi.transfer_receipt.assert.v1"),
-
     built_in_wire_id!(retail_daily_limit::BindRetailIdentityV1 => "iroha.asset.retail_day.identity.bind.v1"),
     built_in_wire_id!(retail_daily_limit::RetailMonetaryMovementV1 => "iroha.asset.retail_day.monetary_movement.v1"),
     built_in_wire_id!(crate::isi::sumeragi_amx::RegisterAmxDataspaceV1 => "iroha.sumeragi.amx.register_dataspace.v1", register),
@@ -449,41 +450,23 @@ pub(super) const ALL: &[BuiltInWireId] = &[
     built_in_wire_id!(confidential::PublishPoseidonParams => "iroha.instruction.v1::confidential::PublishPoseidonParams", register),
     built_in_wire_id!(confidential::SetPoseidonParamsLifecycle => "iroha.instruction.v1::confidential::SetPoseidonParamsLifecycle", register),
     built_in_wire_id!(ministry::SubmitAgendaProposal => "iroha.instruction.v1::ministry::SubmitAgendaProposal"),
-    #[cfg(feature = "governance")]
     governance_wire_id!(governance::ProposeDeployContract => "iroha.instruction.v1::governance::ProposeDeployContract"),
-    #[cfg(feature = "governance")]
     governance_wire_id!(governance::ProposeContractLifecycleGovernance => "iroha.instruction.v1::governance::ProposeContractLifecycleGovernance"),
-    #[cfg(feature = "governance")]
     governance_wire_id!(governance::ProposeContractEmergencyHold => "iroha.instruction.v1::governance::ProposeContractEmergencyHold"),
-    #[cfg(feature = "governance")]
     governance_wire_id!(governance::ProposeGlobalDataTriggerPermissionGovernance => "iroha.instruction.v1::governance::ProposeGlobalDataTriggerPermissionGovernance"),
-    #[cfg(feature = "governance")]
     governance_wire_id!(governance::ProposeRuntimeUpgradeProposal => "iroha.instruction.v1::governance::ProposeRuntimeUpgradeProposal"),
-    #[cfg(feature = "governance")]
     governance_wire_id!(governance::ProposeSccpRouteGovernance => "iroha.instruction.v1::governance::ProposeSccpRouteGovernance"),
-    #[cfg(feature = "governance")]
     governance_wire_id!(governance::ProposeSorafsProviderGovernance => "iroha.instruction.v1::governance::ProposeSorafsProviderGovernance"),
-    #[cfg(feature = "governance")]
     governance_wire_id!(governance::ProposeValidationFeePolicy => "iroha.instruction.v1::governance::ProposeValidationFeePolicy"),
-    #[cfg(feature = "governance")]
     governance_wire_id!(governance::ProposeValidationFeePayoutLifecycle => "iroha.instruction.v1::governance::ProposeValidationFeePayoutLifecycle"),
-    #[cfg(feature = "governance")]
     governance_wire_id!(governance::CreateParliamentGovernanceAttemptV1 => "iroha.governance.parliament.attempt.create.v1"),
-    #[cfg(feature = "governance")]
     governance_wire_id!(governance::SubmitParliamentLifecycleTransitionV1 => "iroha.governance.parliament.transition.submit.v1"),
-    #[cfg(feature = "governance")]
     governance_wire_id!(governance::CastZkBallot => "iroha.instruction.v1::governance::CastZkBallot"),
-    #[cfg(feature = "governance")]
     governance_wire_id!(governance::CastPlainBallot => "iroha.instruction.v1::governance::CastPlainBallot"),
-    #[cfg(feature = "governance")]
     governance_wire_id!(governance::UpdatePlainConviction => "iroha.instruction.v1::governance::UpdatePlainConviction"),
-    #[cfg(feature = "governance")]
     governance_wire_id!(governance::SlashGovernanceLock => "iroha.instruction.v1::governance::SlashGovernanceLock"),
-    #[cfg(feature = "governance")]
     governance_wire_id!(governance::RestituteGovernanceLock => "iroha.instruction.v1::governance::RestituteGovernanceLock"),
-    #[cfg(feature = "governance")]
     governance_wire_id!(governance::RegisterCitizen => "iroha.instruction.v1::governance::RegisterCitizen"),
-    #[cfg(feature = "governance")]
     governance_wire_id!(governance::UnregisterCitizen => "iroha.instruction.v1::governance::UnregisterCitizen"),
     built_in_wire_id!(runtime_upgrade::ProposeRuntimeUpgrade => "iroha.runtime_upgrade.propose"),
     built_in_wire_id!(runtime_upgrade::ActivateRuntimeUpgrade => "iroha.runtime_upgrade.activate"),

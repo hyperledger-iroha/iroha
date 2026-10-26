@@ -120,10 +120,10 @@ fn governance_mirror_fixture() -> (
     index.insert(
         "archive".into(),
         json_object(vec![
-            json_entry("generation", Value::from(0_u64)),
-            json_entry("archived_block_count", Value::from(0_u64)),
-            json_entry("blake3", Value::Null),
-            json_entry("ipfs_cid", Value::Null),
+            json_entry("generation", &(Value::from(0_u64))),
+            json_entry("archived_block_count", &(Value::from(0_u64))),
+            json_entry("blake3", &(Value::Null)),
+            json_entry("ipfs_cid", &(Value::Null)),
         ]),
     );
     index.insert("block_count".into(), Value::from(signed_head.block_count));
@@ -445,7 +445,7 @@ async fn governance_dag_indexes_reject_unknown_host_path_fields() {
         runtime_snapshot.head_bytes(),
     ) {
         Err(response) => response,
-        Ok(_) => panic!("unknown runtime field must fail"),
+        Ok(()) => panic!("unknown runtime field must fail"),
     };
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     let body_bytes = api_test_response_body(response).await;
@@ -623,11 +623,8 @@ async fn governance_dag_dashboard_head_and_lookups_project_validated_mirror() {
     let publisher = AccountId::new(publisher_key.public_key().clone());
     let publisher_digest_hex =
         encode(sorafs_manifest::governance_dag_submission_account_digest_v1(&publisher.encode()));
-    let response = governance_dag_dashboard_response_from_index(
-        index.clone(),
-        metadata.clone(),
-        HeaderMap::new(),
-    );
+    let response =
+        governance_dag_dashboard_response_from_index(&(index), &(metadata), &(HeaderMap::new()));
     assert_eq!(response.status(), StatusCode::OK);
     let dashboard_etag = response
         .headers()
@@ -647,13 +644,11 @@ async fn governance_dag_dashboard_head_and_lookups_project_validated_mirror() {
 
     let mut headers = HeaderMap::new();
     headers.insert(IF_NONE_MATCH, dashboard_etag.clone());
-    let response =
-        governance_dag_dashboard_response_from_index(index.clone(), metadata.clone(), headers);
+    let response = governance_dag_dashboard_response_from_index(&(index), &(metadata), &(headers));
     assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
     let mut headers = HeaderMap::new();
     headers.insert(IF_NONE_MATCH, dashboard_etag.clone());
-    let response =
-        governance_dag_head_response_from_index(index.clone(), metadata.clone(), headers);
+    let response = governance_dag_head_response_from_index(&(index), &(metadata), &(headers));
     assert_eq!(response.status(), StatusCode::OK);
     let head_etag = response.headers().get(ETAG).cloned().expect("head etag");
     assert_ne!(head_etag, dashboard_etag);
@@ -665,9 +660,9 @@ async fn governance_dag_dashboard_head_and_lookups_project_validated_mirror() {
         Some(head_block_cid_hex.as_str())
     );
     let response = governance_dag_lookup_response_from_index(
-        index.clone(),
-        metadata.clone(),
-        HeaderMap::new(),
+        &(index),
+        &(metadata),
+        &(HeaderMap::new()),
         "block",
         "by_block_cid_hex",
         "sorafs.governance_dag.block.lookup.v1",
@@ -685,9 +680,9 @@ async fn governance_dag_dashboard_head_and_lookups_project_validated_mirror() {
     let mut headers = HeaderMap::new();
     headers.insert(IF_NONE_MATCH, block_etag);
     let response = governance_dag_lookup_response_from_index(
-        index.clone(),
-        metadata.clone(),
-        headers,
+        &(index),
+        &(metadata),
+        &(headers),
         "block",
         "by_block_cid_hex",
         "sorafs.governance_dag.block.lookup.v1",
@@ -695,9 +690,9 @@ async fn governance_dag_dashboard_head_and_lookups_project_validated_mirror() {
     );
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
     let response = governance_dag_lookup_response_from_index(
-        index,
-        metadata,
-        HeaderMap::new(),
+        &(index),
+        &(metadata),
+        &(HeaderMap::new()),
         "node",
         "by_node_cid_hex",
         "sorafs.governance_dag.node.lookup.v1",
@@ -772,9 +767,9 @@ async fn governance_dag_lookup_rejects_malformed_and_absent_capability() {
         "a node without an installed mirror capability must fail closed"
     );
     let response = governance_dag_lookup_response_from_index(
-        index,
-        metadata,
-        HeaderMap::new(),
+        &(index),
+        &(metadata),
+        &(HeaderMap::new()),
         "block",
         "by_block_cid_hex",
         "sorafs.governance_dag.block.lookup.v1",
@@ -1459,7 +1454,7 @@ async fn transparency_proof_token_verify_honors_api_token_enforcement() {
 #[tokio::test]
 async fn transparency_proof_token_issuance_endpoint_requires_canonical_request_auth() {
     let (app, _temp_dir, _auth) = sorafs_app_state_with_appeal_finance_governance_publisher();
-    let body = proof_token_issuance_body(transparency_proof_token_issuance_request(0xAD));
+    let body = proof_token_issuance_body(&(transparency_proof_token_issuance_request(0xAD)));
     let response = handle_post_sorafs_transparency_token_issuance(
         State(app),
         HeaderMap::new(),
@@ -1473,7 +1468,7 @@ async fn transparency_proof_token_issuance_endpoint_requires_canonical_request_a
 #[tokio::test]
 async fn transparency_proof_token_issuance_endpoint_requires_source_publisher_role() {
     let (app, _temp_dir, auth) = sorafs_app_state_with_appeal_finance_governance_publisher();
-    let body = proof_token_issuance_body(transparency_proof_token_issuance_request(0xAD));
+    let body = proof_token_issuance_body(&(transparency_proof_token_issuance_request(0xAD)));
     let response = post_transparency_proof_token_issuance(app.clone(), &auth.buyer, body).await;
     assert_forbidden_role(response, SORAFS_TRANSPARENCY_SOURCE_PUBLISHER_ROLE).await;
     assert_eq!(app.sorafs_node.pending_governance_publication_count(), 0);
@@ -1486,7 +1481,7 @@ async fn transparency_proof_token_issuance_endpoint_publishes_signed_frame() {
     let response = post_transparency_proof_token_issuance(
         app.clone(),
         &auth.provider,
-        proof_token_issuance_body(request),
+        proof_token_issuance_body(&(request)),
     )
     .await;
     assert_eq!(response.status(), StatusCode::ACCEPTED);
@@ -1543,7 +1538,7 @@ async fn transparency_proof_token_issuance_endpoint_rejects_bad_signer() {
     let response = post_transparency_proof_token_issuance(
         app,
         &auth.provider,
-        proof_token_issuance_body(request),
+        proof_token_issuance_body(&(request)),
     )
     .await;
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);

@@ -52,7 +52,7 @@ fn every_actual_advance_mask_and_lookup_tail_is_funded_before_next() {
                 &original,
                 Image::Predecessor,
                 &mut Work::bounded(bound as u64),
-                |_, _, _| {
+                |_, (), _| {
                     inspected.set(inspected.get() + 1);
                     Ok(())
                 },

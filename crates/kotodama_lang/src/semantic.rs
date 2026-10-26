@@ -8130,16 +8130,30 @@ fn fixed_builtin_message(builtin: Builtin) -> Option<FixedBuiltinMessage> {
         Builtin::SetAssetHoldingLimit => M::Static(
             "ledger::asset::set_holding_limit expects (AccountId, AssetDefinitionId, Option<quantity>)",
         ),
-        Builtin::FiLinkRevision => M::SourceNameSuffix(" expects (AssetDefinitionId, AccountId, AccountId)"),
-        Builtin::AssetSameUid => M::SourceNameSuffix(" expects (AssetDefinitionId, AccountId, AccountId)"),
-        Builtin::AssetLockOpen => M::SourceNameSuffix(" expects (bytes, AccountId, AccountId, AssetDefinitionId, quantity, int, int, int)"),
+        Builtin::FiLinkRevision => {
+            M::SourceNameSuffix(" expects (AssetDefinitionId, AccountId, AccountId)")
+        }
+        Builtin::AssetSameUid => {
+            M::SourceNameSuffix(" expects (AssetDefinitionId, AccountId, AccountId)")
+        }
+        Builtin::AssetLockOpen => M::SourceNameSuffix(
+            " expects (bytes, AccountId, AccountId, AssetDefinitionId, quantity, int, int, int)",
+        ),
         Builtin::AssetLockDrawdown => M::SourceNameSuffix(" expects (bytes, quantity, quantity)"),
         Builtin::AssetLockCancel => M::SourceNameSuffix(" expects (bytes, quantity)"),
         Builtin::AssetLockExpire => M::SourceNameSuffix(" expects (bytes)"),
-        Builtin::AssetUidHoldingQuote => M::SourceNameSuffix(" expects (AssetDefinitionId, AccountId, quantity)"),
-        Builtin::TransferToLinkedFi => M::SourceNameSuffix(" expects (AssetDefinitionId, AccountId, quantity, int, int)"),
-        Builtin::AssetLockDrawdownWaterfall => M::SourceNameSuffix(" expects (bytes, quantity, quantity, int, int)"),
-        Builtin::AssetLockCancelWaterfall => M::SourceNameSuffix(" expects (bytes, quantity, int, int)"),
+        Builtin::AssetUidHoldingQuote => {
+            M::SourceNameSuffix(" expects (AssetDefinitionId, AccountId, quantity)")
+        }
+        Builtin::TransferToLinkedFi => {
+            M::SourceNameSuffix(" expects (AssetDefinitionId, AccountId, quantity, int, int)")
+        }
+        Builtin::AssetLockDrawdownWaterfall => {
+            M::SourceNameSuffix(" expects (bytes, quantity, quantity, int, int)")
+        }
+        Builtin::AssetLockCancelWaterfall => {
+            M::SourceNameSuffix(" expects (bytes, quantity, int, int)")
+        }
         Builtin::AssetLockExpireWaterfall => M::SourceNameSuffix(" expects (bytes, int, int)"),
         Builtin::AccountRecoveryPropose => {
             M::Static("ledger::account::recovery::propose expects (string, AccountId, int)")
@@ -8473,7 +8487,8 @@ fn analyze_register_asset_call(
     builtin: Builtin,
     args: Vec<TypedExpr>,
 ) -> Result<TypedExpr, SemanticError> {
-    if args.len() != 4
+    if args.len() != 5
+        || args[4].ty != Type::DomainId
         || args[0].ty != Type::AssetDefinitionId
         || resolve_struct_type(&args[1].ty) != Type::String
         || !matches!(args[2].kind(), ExprKind::IntLiteral(_))
@@ -8481,7 +8496,7 @@ fn analyze_register_asset_call(
     {
         return Err(sem_err(
             "K2003",
-            "ledger::asset::register expects (asset_definition: AssetDefinitionId, name: string, spec: NumericSpec::..., mintable: Mintable::...)".into(),
+            "ledger::asset::register expects (asset_definition: AssetDefinitionId, name: string, spec: NumericSpec::..., mintable: Mintable::..., owning_domain: DomainId)".into(),
         ));
     }
     if let ExprKind::String(name) = args[1].kind()
@@ -17195,11 +17210,22 @@ mod tests {
         assert_eq!(module.code, "E_PERMISSION_ARGUMENT");
     }
     #[test]
+    fn asset_registration_requires_an_explicit_typed_owning_domain() {
+        for home in ["", ", owning_domain: Name::parse(\"default\")"] {
+            let source = format!(
+                r#"fn reg(AssetDefinitionId asset) {{ ledger::asset::register(asset_definition: asset, name: "Rose", spec: NumericSpec::integer(), mintable: Mintable::Once{home}); }}"#
+            );
+            assert!(analyze(&parse(&source).unwrap()).is_err());
+        }
+    }
+
+    #[test]
     fn asset_registration_takes_compile_time_spec_and_mintability() {
         let source = |spec: &str, mintable: &str| {
             format!(
                 "fn reg(AssetDefinitionId asset) {{ ledger::asset::register(asset_definition: asset, \
-                 name: \"Rose\", spec: {spec}, mintable: {mintable}); }}"
+                 name: \"Rose\", spec: {spec}, mintable: {mintable},
+                 owning_domain: DomainId::parse(\"default.universal\"),); }}"
             )
         };
         let typed = analyze(
@@ -17278,7 +17304,7 @@ mod tests {
             );
         }
         let error = analyze_error(
-            "fn reg(AssetDefinitionId asset) { ledger::asset::register(asset_definition: asset, name: \"a#b\", spec: NumericSpec::integer(), mintable: Mintable::Not); }",
+            "fn reg(AssetDefinitionId asset) { ledger::asset::register(asset_definition: asset, name: \"a#b\", spec: NumericSpec::integer(), mintable: Mintable::Not, owning_domain: DomainId::parse(\"default.universal\")); }",
         );
         assert_eq!(error.code, "E_ASSET_NAME_INVALID");
         assert_eq!(
@@ -17361,12 +17387,12 @@ mod tests {
             (
                 "2",
                 "NumericSpec",
-                "ledger::asset::register(asset_definition: asset, name: \"Rose\", spec: 2, mintable: Mintable::Once)",
+                "ledger::asset::register(asset_definition: asset, name: \"Rose\", spec: 2, mintable: Mintable::Once, owning_domain: DomainId::parse(\"default.universal\"))",
             ),
             (
                 "mode",
                 "Mintable",
-                "ledger::asset::register(asset_definition: asset, name: \"Rose\", spec: NumericSpec::integer(), mintable: mode)",
+                "ledger::asset::register(asset_definition: asset, name: \"Rose\", spec: NumericSpec::integer(), mintable: mode, owning_domain: DomainId::parse(\"default.universal\"))",
             ),
             (
                 "1",
@@ -17409,7 +17435,7 @@ mod tests {
     }
     #[test]
     fn invalid_asset_display_name_literals_point_at_the_name() {
-        let source = "seiyaku Probe { permission ProbeAccess;  kotoage fn r(AssetDefinitionId asset) authorize(ProbeAccess) { ledger::asset::register(asset_definition: asset, name: \"ro@se\", spec: NumericSpec::integer(), mintable: Mintable::Once); } }";
+        let source = "seiyaku Probe { permission ProbeAccess;  kotoage fn r(AssetDefinitionId asset) authorize(ProbeAccess) { ledger::asset::register(asset_definition: asset, name: \"ro@se\", spec: NumericSpec::integer(), mintable: Mintable::Once, owning_domain: DomainId::parse(\"default.universal\")); } }";
         let (message, help, primary) = first_checked_diagnostic(source);
         assert_eq!(
             message,

@@ -133,7 +133,7 @@ struct TestMarkerFile {
     marker: Vec<u8>,
 }
 
-fn marker_record(marker: KagemushaWalletMarkerV1, completion_digest: [u8; 32]) -> MarkerRecord {
+fn marker_record(marker: &KagemushaWalletMarkerV1, completion_digest: [u8; 32]) -> MarkerRecord {
     let scheme = marker.scheme_id;
     let bytes = archive::encode(&TestMarkerFile {
         version: 1,
@@ -162,7 +162,7 @@ fn enrollment() -> KagemushaWalletMarkerV1 {
 }
 
 /// Seal synthetic, structurally valid test DATA with a fixed opening, never production entropy.
-pub(crate) fn seal_body(body: KagemushaWalletRecoveryBodyV1) -> KagemushaWalletRecoveryCapsuleV1 {
+pub fn seal_body(body: KagemushaWalletRecoveryBodyV1) -> KagemushaWalletRecoveryCapsuleV1 {
     body.freeze()
         .expect("valid synthetic body")
         .seal([0; 32])
@@ -241,7 +241,7 @@ fn frozen_body_for_credential(
     // object fixtures, never the initial local map descriptor. Mock steps carry their actual
     // selected predecessor fields; Bootstrap starts with the protocol's empty local stores.
     c.successor_state = previous.map_or_else(
-        || KagemushaWalletStateV1::bootstrap(&credential, field(92)).expect("empty state"),
+        || KagemushaWalletStateV1::bootstrap(credential, field(92)).expect("empty state"),
         |previous| previous.capsule.body().successor_state,
     );
     let state = &mut c.successor_state;
@@ -445,14 +445,13 @@ impl MemoryArchive {
     }
 }
 impl MemoryArchive {
-    fn keys(&mut self) -> Result<Vec<ArchiveKey>, Error> {
-        Ok(self
-            .records
+    fn keys(&mut self) -> Vec<ArchiveKey> {
+        self.records
             .lock()
             .expect("records")
             .keys()
             .copied()
-            .collect())
+            .collect()
     }
 }
 impl ArchiveStore for MemoryArchive {
@@ -545,10 +544,14 @@ impl ArchiveStore for MemoryArchive {
     }
 }
 
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent custody fault injections combine to test exact owner retention and recovery"
+)]
 pub(super) struct TestCustody {
     credential: KagemushaWalletCredentialV1,
     enrollment: KagemushaWalletMarkerV1,
-    checkpoint: Option<([u8; 32], Vec<u8>)>,
+    checkpoint: Option<custody::ArchiveCheckpointV1>,
     status: SlotStatus,
     retained: BTreeMap<[u8; 32], Retained<KagemushaWalletCompletionRecordV1>>,
     tombstones: BTreeMap<[u8; 32], crate::kagemusha_wallet_advance_v1::KagemushaWalletTombstoneV1>,
@@ -565,7 +568,7 @@ pub(super) struct TestCustody {
     status_unavailable_at: Option<usize>,
     status_error: Option<ProviderError>,
     checkpoint_calls: usize,
-    checkpoint_replacement: Option<(usize, ([u8; 32], Vec<u8>))>,
+    checkpoint_replacement: Option<(usize, custody::ArchiveCheckpointV1)>,
     // A genuine custody head reported by status once `move_head` is set: an Advance that
     // the archive checkpoint has not indexed yet.
     moved_status: Option<SlotStatus>,
@@ -608,7 +611,7 @@ impl TestCustody {
             credential: *credential,
             enrollment: *enrollment,
             checkpoint: None,
-            status: SlotStatus::Enrollment(marker_record(*enrollment, [0; 32])),
+            status: SlotStatus::Enrollment(marker_record(enrollment, [0; 32])),
             retained: BTreeMap::new(),
             tombstones: BTreeMap::new(),
             pending: None,
@@ -681,10 +684,10 @@ impl Custody for TestCustody {
     }
     fn archive_checkpoint(&mut self) -> Result<Option<([u8; 32], Vec<u8>)>, ProviderError> {
         self.checkpoint_calls += 1;
-        if let Some((at, replacement)) = &self.checkpoint_replacement {
-            if self.checkpoint_calls == *at {
-                return Ok(Some(replacement.clone()));
-            }
+        if let Some((at, replacement)) = &self.checkpoint_replacement
+            && self.checkpoint_calls == *at
+        {
+            return Ok(Some(replacement.clone()));
         }
         Ok(self.checkpoint.clone())
     }
@@ -721,7 +724,7 @@ impl Custody for TestCustody {
         // payment selection and completion while publishing a new nonmonetary generation.
         if let SlotStatus::Released(record) = &self.status {
             let mut file: TestMarkerFile = archive::decode(record.file_bytes()).unwrap();
-            let mut marker = record.marker().clone();
+            let mut marker = *record.marker();
             marker.generation += 1;
             file.marker = marker.to_canonical_bytes().unwrap();
             file.archive_checkpoint = digest;
@@ -747,20 +750,20 @@ impl Custody for TestCustody {
         if let Some(error) = self.status_error {
             return Err(error);
         }
-        if self.move_head.load(Ordering::SeqCst) {
-            if let Some(moved) = &self.moved_status {
-                return Ok(moved.clone());
-            }
+        if self.move_head.load(Ordering::SeqCst)
+            && let Some(moved) = &self.moved_status
+        {
+            return Ok(moved.clone());
         }
         if self.status_unavailable_at == Some(self.status_calls) {
             return Err(ProviderError::Unavailable(
                 crate::kagemusha_wallet_advance_v1::KagemushaWalletUnavailableV1::Locked,
             ));
         }
-        if let Some((at, replacement)) = &self.status_replacement {
-            if self.status_calls == *at {
-                return Ok(replacement.clone());
-            }
+        if let Some((at, replacement)) = &self.status_replacement
+            && self.status_calls == *at
+        {
+            return Ok(replacement.clone());
         }
         if self.unavailable {
             return Err(ProviderError::Unavailable(
@@ -820,7 +823,7 @@ impl Custody for TestCustody {
             let mut marker = self.enrollment;
             marker.generation = capsule.body().statement.sequence * 2 + 1;
             marker.state = capsule.head_marker_state();
-            self.status = SlotStatus::Pending(marker_record(marker, [0; 32]));
+            self.status = SlotStatus::Pending(marker_record(&marker, [0; 32]));
             return Ok(AdvanceOutcome::Pending {
                 operation_id: request.operation_id,
             });
@@ -846,7 +849,7 @@ impl Custody for TestCustody {
         let mut marker = self.enrollment;
         marker.generation = capsule.body().statement.sequence * 2 + 2;
         marker.state = capsule.head_marker_state();
-        self.status = SlotStatus::Released(marker_record(marker, retained.completion_digest));
+        self.status = SlotStatus::Released(marker_record(&marker, retained.completion_digest));
         self.retained
             .insert(capsule.body().operation_id, retained.clone());
         self.pending = None;
@@ -858,6 +861,10 @@ impl Custody for TestCustody {
 }
 
 #[derive(Clone, Default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent proof and custody failure hooks combine without defining production lifecycle states"
+)]
 pub(super) struct TestProofs {
     verifies: Arc<AtomicUsize>,
     folds: Arc<AtomicUsize>,
@@ -1182,7 +1189,10 @@ impl NativeFoldJobV1 for TestFoldJob {
         ) {
             credit_root.unwrap_or_else(|| tree.root())
         } else {
-            predecessor.map_or(tree.root(), |pred| pred.lineage.public.credit_digest_root)
+            predecessor.map_or_else(
+                || tree.root(),
+                |pred| pred.lineage.public.credit_digest_root,
+            )
         };
         Ok((
             FoldProgress::Complete {
@@ -1220,7 +1230,7 @@ pub(super) fn synthetic_payout_wallet(scheme: KagemushaWalletSchemeV1, chain: St
     marker.scheme_id = scheme.scheme_id();
     marker.generation = 2;
     marker.state = bootstrap().capsule.head_marker_state();
-    custody.status = SlotStatus::Released(marker_record(marker.clone(), field(73)));
+    custody.status = SlotStatus::Released(marker_record(&marker, field(73)));
     let mut archive = MemoryArchive::new();
     archive.scheme = scheme.scheme_id();
     let manifest = manifest::Manifest {
@@ -1264,7 +1274,7 @@ pub(super) fn synthetic_payout_wallet(scheme: KagemushaWalletSchemeV1, chain: St
         custody,
         archive,
         TestProofs {
-            ledger_scope: Some((scheme.clone(), chain)),
+            ledger_scope: Some((scheme, chain)),
             ..TestProofs::default()
         },
         scheme.scheme_id(),
@@ -1372,7 +1382,7 @@ fn rejected_native_proof_never_reaches_advance_or_archive() {
     w.proofs.reject = true;
     assert!(matches!(w.commit(bootstrap()), Err(Error::Proof(_))));
     assert_eq!(w.custody.signatures, 0);
-    assert!(w.archive.keys().expect("keys").is_empty());
+    assert!(w.archive.keys().is_empty());
 }
 
 #[test]
@@ -1584,13 +1594,13 @@ fn payment_preempts_fold_and_frees_memory_before_admission() {
     let worker = scheduler.clone();
     let freed = dropped.clone();
     let join = std::thread::spawn(move || {
-        let guard = worker.start().expect("fold permit");
         struct Workspace(Arc<AtomicUsize>, Vec<u8>);
         impl Drop for Workspace {
             fn drop(&mut self) {
                 self.0.store(self.1.len(), Ordering::SeqCst);
             }
         }
+        let guard = worker.start().expect("fold permit");
         let _workspace = Workspace(freed, vec![0; 1024]);
         started_tx.send(()).expect("started");
         while guard.token.check().is_ok() {
@@ -1648,7 +1658,11 @@ fn fs_archive_is_canonical_bound_redundant_and_immutable() {
     let primary = fs
         .visible_names(&directory)
         .into_iter()
-        .find(|name| name.ends_with(".arc"))
+        .find(|name| {
+            std::path::Path::new(name)
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("arc"))
+        })
         .expect("primary");
     fs.unlink(&directory, &primary).expect("remove first copy");
     fs.sync_dir(&directory).expect("sync");
@@ -2935,7 +2949,7 @@ fn snapshot_rechecks_the_full_selected_marker_after_all_witness_reads() {
         panic!("released");
     };
     let mut file: TestMarkerFile = archive::decode(record.file_bytes()).unwrap();
-    let mut marker = record.marker().clone();
+    let mut marker = *record.marker();
     marker.generation += 1;
     file.marker = marker.to_canonical_bytes().unwrap();
     let replacement = MarkerRecord::decode(
@@ -4026,10 +4040,10 @@ fn retained_d7_manifest_payload_decodes_and_reencodes_exactly() {
         "retained selected checkpoint has an indexed source"
     );
     assert!(
-        !manifest
+        manifest
             .folded
             .zip(manifest.indexed)
-            .is_some_and(|(folded, indexed)| folded > indexed),
+            .is_none_or(|(folded, indexed)| folded <= indexed),
         "folded source cannot exceed indexed source"
     );
     assert_eq!(

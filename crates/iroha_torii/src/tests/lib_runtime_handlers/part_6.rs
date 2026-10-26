@@ -608,10 +608,10 @@ fn explorer_heavy_history_routes_are_bound_to_cancellation_safe_worker() {
         let start = source
             .find(marker)
             .unwrap_or_else(|| panic!("missing exact function marker `{marker}`"));
-        let open = source[start..]
-            .find('{')
-            .map(|offset| start + offset)
-            .unwrap_or_else(|| panic!("function `{marker}` has no body"));
+        let open = source[start..].find('{').map_or_else(
+            || panic!("function `{marker}` has no body"),
+            |offset| start + offset,
+        );
         let mut depth = 0_usize;
         for (offset, byte) in source.as_bytes()[open..].iter().enumerate() {
             match byte {
@@ -1350,7 +1350,7 @@ fn seed_public_soracloud_world() -> World {
                 health_window_secs: std::num::NonZeroU32::new(30).expect("window"),
                 automatic_rollback_failures: std::num::NonZeroU32::new(1).expect("rollback"),
             },
-            economics: Default::default(),
+            economics: iroha_data_model::soracloud::SoraHttpServiceEconomicsV1::default(),
             state_bindings: Vec::new(),
             lease_volumes: Vec::new(),
             handlers: vec![
@@ -1645,7 +1645,7 @@ fn seed_authoritative_hosted_http_revision(
                     staker: validator_account_id.clone(),
                     bonded: Quantity::from(1_u64),
                     pending_unbonds: BTreeMap::new(),
-                    metadata: Default::default(),
+                    metadata: iroha_model_base::metadata::Metadata::default(),
                 },
             );
             stake_tx.apply();
@@ -1807,7 +1807,7 @@ fn seed_public_hosted_http_current_app_with_service_lease(
             Some("http://127.0.0.1:18080"),
             Some(101),
         )],
-        vec![hosted_http_runtime_replica_plan(
+        &[hosted_http_runtime_replica_plan(
             &temp.path().join("service-canary"),
             1,
             candidate_health,
@@ -1824,7 +1824,7 @@ fn seed_public_hosted_http_current_app_with_replica_plans(
     baseline_health: iroha_data_model::soracloud::SoraServiceHealthStatusV1,
     candidate_health: iroha_data_model::soracloud::SoraServiceHealthStatusV1,
     baseline_replica_plans: Vec<SoracloudRuntimeReplicaPlan>,
-    candidate_replica_plans: Vec<SoracloudRuntimeReplicaPlan>,
+    candidate_replica_plans: &[SoracloudRuntimeReplicaPlan],
 ) -> SharedAppState {
     seed_public_hosted_http_current_app_with_replica_plans_and_snapshot_peer_id(
         temp,
@@ -1929,7 +1929,7 @@ fn seed_hosted_http_public_lane_validator(
                 staker: validator.clone(),
                 bonded: Quantity::from(1_u64),
                 pending_unbonds: BTreeMap::new(),
-                metadata: Default::default(),
+                metadata: iroha_model_base::metadata::Metadata::default(),
             },
         );
     tx.apply();
@@ -2103,7 +2103,7 @@ fn seed_public_hosted_http_current_app_with_replica_plans_and_snapshot_peer_id(
     baseline_health: iroha_data_model::soracloud::SoraServiceHealthStatusV1,
     _candidate_health: iroha_data_model::soracloud::SoraServiceHealthStatusV1,
     baseline_replica_plans: Vec<SoracloudRuntimeReplicaPlan>,
-    candidate_replica_plans: Vec<SoracloudRuntimeReplicaPlan>,
+    candidate_replica_plans: &[SoracloudRuntimeReplicaPlan],
 
     snapshot_local_peer_id: Option<String>,
     service_lease: Option<iroha_data_model::soracloud::SoraServiceLeaseStateV1>,
@@ -2144,7 +2144,7 @@ fn seed_public_hosted_http_current_app_with_replica_plans_and_snapshot_peer_id(
         "derive canonical hosted-http current remote host fixture key",
     );
     let candidate_assignments = assignments_for(
-        &candidate_replica_plans,
+        candidate_replica_plans,
         0x60,
         "derive canonical hosted-http inactive remote host fixture key",
     );
@@ -2171,10 +2171,7 @@ fn seed_public_hosted_http_current_app_with_replica_plans_and_snapshot_peer_id(
             baseline_assignments.as_slice(),
             baseline_replica_plans.as_slice(),
         ),
-        (
-            candidate_assignments.as_slice(),
-            candidate_replica_plans.as_slice(),
-        ),
+        (candidate_assignments.as_slice(), candidate_replica_plans),
     ] {
         for (assignment, replica_plan) in assignments.iter().zip(replica_plans) {
             if assignment.2.as_str() != local_peer_id_string.as_str() {

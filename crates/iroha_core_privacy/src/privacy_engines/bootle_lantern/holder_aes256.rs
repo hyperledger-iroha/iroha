@@ -72,6 +72,10 @@ fn schedule_word(
     let offset = (index % 4) * 4;
     core::array::from_fn(|byte| round_keys[round][offset + byte])
 }
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "Borrow the zeroizing secret word rather than creating an uncleared stack copy."
+)]
 fn set_schedule_word(
     round_keys: &mut [[u8; AES_BLOCK_BYTES]; AES_256_ROUND_KEYS],
     index: usize,
@@ -79,9 +83,7 @@ fn set_schedule_word(
 ) {
     let round = index / 4;
     let offset = (index % 4) * 4;
-    for byte in 0..4 {
-        round_keys[round][offset + byte] = word[byte];
-    }
+    round_keys[round][offset..offset + 4].copy_from_slice(word);
 }
 fn sub_word(word: &mut [u8; 4]) {
     for byte in word {
@@ -146,14 +148,14 @@ fn gf256_multiply(mut left: u8, mut right: u8) -> u8 {
 fn aes_sbox(value: u8) -> u8 {
     // Inversion as value^254; zero maps to zero.  The fixed addition chain
     // has no data-dependent branch or memory access.
-    let power_2 = gf256_multiply(value, value);
-    let power_4 = gf256_multiply(power_2, power_2);
-    let power_8 = gf256_multiply(power_4, power_4);
+    let squared = gf256_multiply(value, value);
+    let fourth_power = gf256_multiply(squared, squared);
+    let power_8 = gf256_multiply(fourth_power, fourth_power);
     let power_16 = gf256_multiply(power_8, power_8);
     let power_32 = gf256_multiply(power_16, power_16);
     let power_64 = gf256_multiply(power_32, power_32);
     let power_128 = gf256_multiply(power_64, power_64);
-    let mut inverse = gf256_multiply(power_2, power_4);
+    let mut inverse = gf256_multiply(squared, fourth_power);
     inverse = gf256_multiply(inverse, power_8);
     inverse = gf256_multiply(inverse, power_16);
     inverse = gf256_multiply(inverse, power_32);

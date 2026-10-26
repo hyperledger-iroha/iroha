@@ -50,7 +50,7 @@ fn execution_shell_physical_refusal_keeps_original_charge_and_single_wire_delive
     let mut original = pending(&chain, &pool);
     assert!(original.acquisition.take_delivered_bytes().is_none());
     let layout = SharedSignedBlock::allocation_layout();
-    let raw_bytes = original.length as usize;
+    let raw_bytes = usize::try_from(original.length).expect("fixture length fits usize");
     let mut raw = None;
     for _ in 0..2 {
         let (result, denied) =

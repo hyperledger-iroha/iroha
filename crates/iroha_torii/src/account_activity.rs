@@ -194,10 +194,10 @@ fn collect_instruction_account_activities(
         push_unique(out, &quorum.account, AccountActivityRole::Affected);
         return;
     }
-    if let Some(custom) = any.downcast_ref::<CustomInstruction>() {
-        if let Ok(multisig) = MultisigInstructionBox::try_from(custom.payload()) {
-            collect_multisig_account_activities(&multisig, out);
-        }
+    if let Some(custom) = any.downcast_ref::<CustomInstruction>()
+        && let Ok(multisig) = MultisigInstructionBox::try_from(custom.payload())
+    {
+        collect_multisig_account_activities(&multisig, out);
     }
 }
 fn collect_multisig_account_activities(

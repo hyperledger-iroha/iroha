@@ -2617,11 +2617,13 @@ fn rewrite_instr_uses<F: FnMut(&mut Temp)>(instr: &mut ir::Instr, mut f: F) {
             name,
             spec,
             mintable,
+            owning_domain,
         } => {
             f(asset);
             f(name);
             f(spec);
             f(mintable);
+            f(owning_domain);
         }
         TransferAsset {
             from,

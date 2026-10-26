@@ -316,10 +316,10 @@ fn copy_slice<T: Copy>(values: &[T]) -> Result<Vec<T>> {
 }
 
 fn frame_error(error: norito::Error) -> SccpNativeReadError {
-    match error.decode_resource_error() {
-        Some(resource) => SccpNativeReadError::DecodeResource(resource),
-        None => SccpNativeReadError::Frame(error),
-    }
+    error.decode_resource_error().map_or_else(
+        || SccpNativeReadError::Frame(error),
+        SccpNativeReadError::DecodeResource,
+    )
 }
 
 /// Read the current generation from one authenticated committed view while sharing its
@@ -362,12 +362,12 @@ fn committee_data(
             "current generation source is absent or malformed",
         ))?;
     let number = requested.map_or(current, NonZeroU64::get);
-    if let Some(record) = store::committee_generations::get(world, &number) {
-        if !store::committee_generations::valid_entry(&number, record) {
-            return Err(SccpNativeReadError::Unavailable(
-                "malformed retained generation",
-            ));
-        }
+    if let Some(record) = store::committee_generations::get(world, &number)
+        && !store::committee_generations::valid_entry(&number, record)
+    {
+        return Err(SccpNativeReadError::Unavailable(
+            "malformed retained generation",
+        ));
     }
     let response = super::committee(world, number).map_err(|error| match error {
         super::SccpReadError::NotFound(_) => SccpNativeReadError::NotFound("committee generation"),

@@ -12,13 +12,13 @@ async fn find_transaction() -> Result<()> {
     .sign(ALICE_KEYPAIR.private_key());
     let wrong_hash = TransactionEntrypoint::from(unapplied_tx).hash();
     let not_found = crate::smartcontracts::isi::tx::execute_transactions_fixture(
-        CompoundPredicate::PASS,
+        &(CompoundPredicate::PASS),
         &state_view,
     )?
     .find(|tx| *tx.entrypoint_hash() == wrong_hash);
     assert_eq!(not_found, None, "Transaction should not be found");
     let found_accepted = crate::smartcontracts::isi::tx::execute_transactions_fixture(
-        CompoundPredicate::PASS,
+        &(CompoundPredicate::PASS),
         &state_view,
     )?
     .find(|tx| *tx.entrypoint_hash() == fixture.target_entrypoint_hash)

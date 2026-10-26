@@ -82,6 +82,10 @@ impl norito::SerializePayload for Scripted {
     }
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 fn scripted_frame(
     value: &Scripted,
     bound: usize,
@@ -128,7 +132,7 @@ fn codec_and_io_error_adapters_keep_fixed_categories_without_rendering() {
     let actual = without_allocations(|| {
         EncodingError::io(
             EncodingOperation::WriteFrame,
-            io::ErrorKind::WriteZero.into(),
+            &(io::ErrorKind::WriteZero.into()),
         )
     });
     assert_eq!(

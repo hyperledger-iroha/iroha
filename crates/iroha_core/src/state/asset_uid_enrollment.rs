@@ -9,8 +9,8 @@ use iroha_data_model::{
     isi::error::InstructionExecutionError,
 };
 
-pub(crate) const ENROLLMENT_ROOT: &str = "asset_uid_enrollment_v1/";
-pub(crate) const SYSTEM_ROOT: &str = "asset_uid_system_v1/";
+pub const ENROLLMENT_ROOT: &str = "asset_uid_enrollment_v1/";
+pub const SYSTEM_ROOT: &str = "asset_uid_system_v1/";
 type Error = InstructionExecutionError;
 
 fn reject(message: impl Into<String>) -> Error {
@@ -21,13 +21,13 @@ fn digest(value: impl std::fmt::Display) -> String {
     hex::encode(Hash::new(value.to_string().as_bytes()).as_ref())
 }
 
-pub(crate) fn enrollment_key(definition: &AssetDefinitionId) -> StatePath {
+pub fn enrollment_key(definition: &AssetDefinitionId) -> StatePath {
     format!("{ENROLLMENT_ROOT}{}", digest(definition))
         .parse()
         .expect("fixed native asset enrollment path")
 }
 
-pub(crate) fn system_key(definition: &AssetDefinitionId, account: &AccountId) -> StatePath {
+pub fn system_key(definition: &AssetDefinitionId, account: &AccountId) -> StatePath {
     format!("{SYSTEM_ROOT}{}/{}", digest(definition), digest(account))
         .parse()
         .expect("fixed native system enrollment path")
@@ -48,7 +48,7 @@ where
         .transpose()
 }
 
-pub(crate) fn enrollment(
+pub fn enrollment(
     world: &impl WorldReadOnly,
     definition: &AssetDefinitionId,
 ) -> Result<Option<AssetUidEnrollmentV1>, Error> {
@@ -64,7 +64,7 @@ pub(crate) fn enrollment(
     Ok(value)
 }
 
-pub(crate) fn system(
+pub fn system(
     world: &impl WorldReadOnly,
     definition: &AssetDefinitionId,
     account: &AccountId,
@@ -81,13 +81,13 @@ pub(crate) fn system(
 }
 
 /// Beneficial categories never overlap, including revoked institutional records.
-pub(crate) enum BeneficialEnrollment {
+pub enum BeneficialEnrollment {
     Retail,
     Fi { enabled: bool },
     System { enabled: bool },
 }
 
-pub(crate) fn beneficial(
+pub fn beneficial(
     world: &impl WorldReadOnly,
     definition: &AssetDefinitionId,
     account: &AccountId,
@@ -111,10 +111,7 @@ pub(crate) fn beneficial(
 
 /// New ordinary monetary use requires current eligibility at both boundaries.
 /// Native retained-payer returns use their separate sealed custody path.
-pub(crate) fn require_active_beneficial(
-    world: &impl WorldReadOnly,
-    id: &AssetId,
-) -> Result<(), Error> {
+pub fn require_active_beneficial(world: &impl WorldReadOnly, id: &AssetId) -> Result<(), Error> {
     if enrollment(world, id.definition())?.is_none() {
         return Ok(());
     }
@@ -140,7 +137,7 @@ pub(crate) fn require_active_beneficial(
 /// This is also the snapshot invariant: revocation does not make existing funds
 /// disappear or reclassify them as retail. A stale institutional approval stops
 /// new movements while preserving the retained institutional ownership category.
-pub(crate) fn validate_reconciliation(
+pub fn validate_reconciliation(
     world: &impl WorldReadOnly,
     definition: &AssetDefinitionId,
 ) -> Result<(), Error> {
@@ -196,7 +193,7 @@ pub(crate) fn validate_reconciliation(
     Ok(())
 }
 
-pub(crate) fn validate_persistence(world: &impl WorldReadOnly) -> Result<(), Error> {
+pub fn validate_persistence(world: &impl WorldReadOnly) -> Result<(), Error> {
     for (key, _) in world.smart_contract_state().iter() {
         if key.as_ref().starts_with(ENROLLMENT_ROOT) {
             let value: AssetUidEnrollmentV1 =
@@ -234,9 +231,8 @@ pub(crate) fn validate_persistence(world: &impl WorldReadOnly) -> Result<(), Err
     Ok(())
 }
 
-
 /// Retained enrollment cannot be discarded by deleting its definition or account.
-pub(crate) fn retained(
+pub fn retained(
     world: &impl WorldReadOnly,
     definition: Option<&AssetDefinitionId>,
     account: Option<&AccountId>,
@@ -245,18 +241,17 @@ pub(crate) fn retained(
         if key.as_ref() == ENROLLMENT_ROOT.trim_end_matches('/')
             || key.as_ref().starts_with(ENROLLMENT_ROOT)
         {
-            let value: AssetUidEnrollmentV1 = read(world, key)?
-                .ok_or_else(|| reject("missing retained asset enrollment"))?;
+            let value: AssetUidEnrollmentV1 =
+                read(world, key)?.ok_or_else(|| reject("missing retained asset enrollment"))?;
             if definition == Some(&value.asset_definition_id) {
                 return Ok(true);
             }
         } else if key.as_ref() == SYSTEM_ROOT.trim_end_matches('/')
             || key.as_ref().starts_with(SYSTEM_ROOT)
         {
-            let value: AssetUidSystemAccountV1 = read(world, key)?
-                .ok_or_else(|| reject("missing retained system enrollment"))?;
-            if definition == Some(&value.asset_definition_id)
-                || account == Some(&value.account_id)
+            let value: AssetUidSystemAccountV1 =
+                read(world, key)?.ok_or_else(|| reject("missing retained system enrollment"))?;
+            if definition == Some(&value.asset_definition_id) || account == Some(&value.account_id)
             {
                 return Ok(true);
             }

@@ -15,10 +15,9 @@ use iroha::{
         isi::{
             Grant, InstructionBox, Mint, Register, SetParameter,
             privacy::{
-                BootstrapPrivacyPgcAccountsV1, BootstrapPrivacyProofManagedPoolV1,
-                RegisterPrivacyBootleLanternIssuerPolicyV1, RegisterPrivacyProtocolActivationV1,
-                RotatePrivacyBootleLanternIssuerPolicyV1, SubmitPrivacyProofV1,
-                TransitionPrivacyProtocolLifecycleV1,
+                BootstrapPrivacyProofManagedPoolV1, RegisterPrivacyBootleLanternIssuerPolicyV1,
+                RegisterPrivacyProtocolActivationV1, RotatePrivacyBootleLanternIssuerPolicyV1,
+                SubmitPrivacyProofV1, TransitionPrivacyProtocolLifecycleV1,
             },
         },
         parameter::{Parameter, TransactionParameter},
@@ -902,6 +901,7 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
             creation_time + Duration::from_millis(1),
             201,
         );
+        let pgc_bootstrap_context = action_context(&client, genesis_hash, creation_time + Duration::from_millis(12), 212);
         let pgc_context = action_context(
             &client,
             genesis_hash,
@@ -975,62 +975,61 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
         let build_actions = tokio::task::spawn_blocking(move || {
             ensure!(
                 build_privacy_release_zk_ace_network_action_v1(
-                    zk_context,
+                    &zk_context,
                     ALICE_ID.clone(),
                     reserve_for_builder.clone(),
                     zk_asset_for_builder,
                     19,
-                    [0x31; 32],
-                    [0x32; 32],
+                    ([0x31; 32], [0x32; 32]),
                     &signing_key,
                 )
                 .is_err(),
                 "disabled ZK-ACE release builder admitted a production action"
             );
             let pgc = build_privacy_release_anonymous_pgc_network_action_v1(
-                pgc_context,
+                &pgc_context,
+                &pgc_bootstrap_context,
                 pgc_asset_for_builder.clone(),
                 pgc_pool,
-                0,
                 [0x41; 32],
                 &signing_key,
             )
             .map_err(|error| eyre!("build canonical Anonymous-PGC action: {error:?}"))?;
             let pgc_replay = build_privacy_release_anonymous_pgc_network_action_v1(
-                pgc_replay_context,
+                &pgc_replay_context,
+                &pgc_bootstrap_context,
                 pgc_asset_for_builder,
                 pgc_pool,
-                0,
                 [0x41; 32],
                 &signing_key,
             )
             .map_err(|error| eyre!("build stale-head Anonymous-PGC action: {error:?}"))?;
             let pre_verange = build_privacy_release_verange_network_action_v1(
-                pre_verange_context,
+                &(pre_verange_context),
                 verange_asset_for_builder.clone(),
                 verange_policy,
-                vec![1, 2, 3, 5, 8, 13, 21, u64::from(u32::MAX)],
+                &(vec![1, 2, 3, 5, 8, 13, 21, u64::from(u32::MAX)]),
                 [0x51; 32],
                 &signing_key,
             )
             .map_err(|error| eyre!("build pre-activation VeRange action: {error:?}"))?;
             let verange = build_privacy_release_verange_network_action_v1(
-                verange_context,
+                &(verange_context),
                 verange_asset_for_builder,
                 verange_policy,
-                vec![0, 1, 17, u64::from(u32::MAX)],
+                &(vec![0, 1, 17, u64::from(u32::MAX)]),
                 [0x52; 32],
                 &signing_key,
             )
             .map_err(|error| eyre!("build canonical VeRange action: {error:?}"))?;
             let bootle = build_privacy_release_bootle_lantern_network_action_v1(
-                bootle_context,
+                &(bootle_context),
                 [0x61; 32],
                 &signing_key,
             )
             .map_err(|error| eyre!("build canonical Bootle/Lantern action: {error:?}"))?;
             let stale_bootle = build_privacy_release_bootle_lantern_network_action_v1(
-                stale_bootle_context,
+                &(stale_bootle_context),
                 [0x61; 32],
                 &signing_key,
             )
@@ -1045,7 +1044,7 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
                 "Bootle/Lantern successor reused the initial issuer public key"
             );
             let fcmp = build_privacy_release_fcmp_network_action_v1(
-                fcmp_context,
+                &(fcmp_context),
                 fcmp_asset_for_builder.clone(),
                 fcmp_pool,
                 [0x71; 32],
@@ -1053,7 +1052,7 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
             )
             .map_err(|error| eyre!("build canonical FCMP++ action: {error:?}"))?;
             let fcmp_replay = build_privacy_release_fcmp_network_action_v1(
-                fcmp_replay_context,
+                &(fcmp_replay_context),
                 fcmp_asset_for_builder,
                 fcmp_pool,
                 [0x71; 32],
@@ -1061,7 +1060,7 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
             )
             .map_err(|error| eyre!("build key-image replay FCMP++ action: {error:?}"))?;
             let ivm = build_privacy_release_ivm_private_note_network_action_v1(
-                ivm_context,
+                &(ivm_context),
                 ivm_asset_for_builder.clone(),
                 ivm_pool,
                 reserve_for_builder.clone(),
@@ -1070,7 +1069,7 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
             )
             .map_err(|error| eyre!("build canonical private-IVM action: {error:?}"))?;
             let ivm_replay = build_privacy_release_ivm_private_note_network_action_v1(
-                ivm_replay_context,
+                &(ivm_replay_context),
                 ivm_asset_for_builder,
                 ivm_pool,
                 reserve_for_builder,
@@ -1107,8 +1106,7 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
             .map_err(|_| eyre!("retained exact-12 proving exceeded {PROVER_TIMEOUT:?}"))?
             .map_err(|error| eyre!("retained exact-12 prover task failed: {error}"))??;
         ensure!(
-            pgc.bootstrap == pgc_replay.bootstrap
-                && pgc.bootstrap_proof == pgc_replay.bootstrap_proof
+            pgc.bootstrap_transaction == pgc_replay.bootstrap_transaction
                 && pgc.statement.account_state_root == pgc_replay.statement.account_state_root
                 && pgc.statement.next_account_state_root
                     == pgc_replay.statement.next_account_state_root,
@@ -1217,15 +1215,9 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
             "register authoritative Bootle/Lantern policy",
         )
         .await?;
-        submit_instructions(
+        submit_signed_transaction(
             &client,
-            vec![
-                BootstrapPrivacyPgcAccountsV1::new(
-                    pgc.bootstrap.clone(),
-                    pgc.bootstrap_proof.clone(),
-                )
-                .into(),
-            ],
+            &pgc.bootstrap_transaction,
             "bootstrap authoritative Anonymous-PGC account table",
         )
         .await?;

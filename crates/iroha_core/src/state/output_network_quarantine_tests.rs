@@ -95,7 +95,7 @@ fn assert_quarantine_overflow(row: &NetworkExecutionOutputV1, index: usize) {
 }
 fn earlier_ranked(
     state: &State,
-    instructions: Vec<InstructionBox>,
+    instructions: &[InstructionBox],
     later: &TransactionEntrypoint,
     future: bool,
 ) -> TransactionEntrypoint {
@@ -103,7 +103,7 @@ fn earlier_ranked(
         .find_map(|attempt| {
             let candidate = signed_quarantine_input(
                 state,
-                instructions.clone(),
+                instructions.to_vec(),
                 Some(Json::new(true)),
                 false,
                 attempt,
@@ -338,7 +338,7 @@ fn stateless_invalid_lower_hash_does_not_consume_a_quarantine_slot() {
     );
     let invalid = earlier_ranked(
         &state,
-        vec![write_quarantine("invalid_quota", 1)],
+        &[write_quarantine("invalid_quota", 1)],
         &healthy,
         true,
     );
@@ -387,7 +387,7 @@ fn actual_business_failure_does_not_refill_the_frozen_quarantine_selection() {
     );
     let rejected = earlier_ranked(
         &state,
-        vec![
+        &[
             write_quarantine("failed_quota_write", 1),
             Unregister::trigger("missing_quarantine_trigger".parse().unwrap()).into(),
         ],
@@ -435,7 +435,7 @@ fn healthy_callback_output_overflow_does_not_refill_quarantine_or_apply_effects(
     );
     let oversized = earlier_ranked(
         &state,
-        vec![ExecuteTrigger::new("network_callback".parse().unwrap()).into()],
+        &[ExecuteTrigger::new("network_callback".parse().unwrap()).into()],
         &later,
         false,
     );
@@ -550,15 +550,9 @@ fn sealed_reveal_quota_uses_actual_pending_commitments_and_outer_source_hashes()
 
     for quota in [0, 1] {
         let component = state(65_536);
-        let mut policy = component
-            .world
-            .parameters
-            .view()
-            .get()
-            .pipeline_policy()
-            .clone();
+        let mut policy = *component.world.parameters.view().get().pipeline_policy();
         policy.quarantine_max_txs_per_block = u64::try_from(quota).unwrap();
-        let mut config = output_fixture_config(component, policy.clone());
+        let mut config = output_fixture_config(component, policy);
         config
             .genesis_instructions
             .push(Register::account(Account::new(ALICE_ID.clone())).into());
@@ -652,11 +646,11 @@ fn sealed_reveal_quota_uses_actual_pending_commitments_and_outer_source_hashes()
             committed
                 .block()
                 .network_entrypoints()
-                .map(|input| input.hash())
+                .map(iroha_data_model::transaction::TransactionEntrypoint::hash)
                 .collect::<Vec<_>>(),
             source
                 .network_entrypoints()
-                .map(|input| input.hash())
+                .map(iroha_data_model::transaction::TransactionEntrypoint::hash)
                 .collect::<Vec<_>>(),
         );
         {
@@ -732,7 +726,7 @@ fn real_nexus_fee_is_not_charged_for_quota_refusal_before_business_execution() {
         asset::{AssetDefinitionId, AssetId},
         transaction::{FeeChargeKind, FeeChargeLimit},
     };
-    let _fee_guard = crate::status::nexus_fee_test_lock().lock().unwrap();
+    let _fee_guard = crate::status::operator_status_test_guard();
     for quota in [0, 1] {
         let asset = AssetDefinitionId::parse_address_literal(
             &iroha_config::parameters::defaults::nexus::fees::fee_asset_id(),

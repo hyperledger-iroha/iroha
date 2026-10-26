@@ -264,7 +264,7 @@ pub struct TradfiRailProfile {
     pub rail: TradfiRail,
     /// Policy for embedded XMLDSig/XAdES blocks.
     pub embedded_signature_policy: EmbeddedSignaturePolicy,
-    /// SHA-256 pins for accepted XMLDSig signer public-key bytes.
+    /// SHA-256 pins for accepted `XMLDSig` signer public-key bytes.
     pub signature_public_key_sha256_pins: Vec<String>,
     /// SHA-256 pins for accepted X.509 trust-anchor certificate DER bytes.
     pub x509_trust_anchor_sha256_pins: Vec<String>,
@@ -278,7 +278,7 @@ pub struct TradfiRailProfile {
     pub x509_require_ocsp_revocation_check: bool,
     /// Base64 DER OCSP responses accepted as rail-profile revocation material.
     pub x509_ocsp_response_der_base64: Vec<String>,
-    /// Denied SHA-256 pins of DER-encoded XMLDSig X.509 certificates.
+    /// Denied SHA-256 pins of DER-encoded `XMLDSig` X.509 certificates.
     pub revoked_certificate_sha256: Vec<String>,
     /// Datasets that must be loaded before accepting live-profile messages.
     pub required_reference_datasets: Vec<ReferenceDatasetRequirement>,
@@ -303,13 +303,13 @@ impl TradfiRailProfile {
     pub fn requires_dataset(&self, dataset: ReferenceDatasetRequirement) -> bool {
         self.required_reference_datasets.contains(&dataset)
     }
-    /// Returns `true` when this profile has at least one configured XMLDSig trust pin.
+    /// Returns `true` when this profile has at least one configured `XMLDSig` trust pin.
     #[must_use]
     pub fn has_xml_signature_trust_anchors(&self) -> bool {
         !self.signature_public_key_sha256_pins.is_empty()
             || !self.x509_trust_anchor_sha256_pins.is_empty()
     }
-    /// Returns `true` when the verified XMLDSig key material matches this profile's pins.
+    /// Returns `true` when the verified `XMLDSig` key material matches this profile's pins.
     #[must_use]
     pub fn accepts_xml_signature_key(
         &self,

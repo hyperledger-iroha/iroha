@@ -106,23 +106,27 @@ fn next_musubi_location_for_provider(
     let bounds = MusubiProviderLocationKeyV1::provider_range(provider);
     let start = *bounds.start();
     let end = *bounds.end();
-    match after {
-        None => state_transaction
-            .world
-            .musubi_locations_by_provider
-            .range(start..=end)
-            .next()
-            .map(|(key, ())| key.location),
-        Some(location) => state_transaction
-            .world
-            .musubi_locations_by_provider
-            .range((
-                std::ops::Bound::Excluded(MusubiProviderLocationKeyV1::new(provider, location)),
-                std::ops::Bound::Included(end),
-            ))
-            .next()
-            .map(|(key, ())| key.location),
-    }
+    after.map_or_else(
+        || {
+            state_transaction
+                .world
+                .musubi_locations_by_provider
+                .range(start..=end)
+                .next()
+                .map(|(key, ())| key.location)
+        },
+        |location| {
+            state_transaction
+                .world
+                .musubi_locations_by_provider
+                .range((
+                    std::ops::Bound::Excluded(MusubiProviderLocationKeyV1::new(provider, location)),
+                    std::ops::Bound::Included(end),
+                ))
+                .next()
+                .map(|(key, ())| key.location)
+        },
+    )
 }
 /// Convert governance configuration into manifest validation constraints.
 pub fn manifest_pin_policy_constraints_from_config(
@@ -169,7 +173,7 @@ fn quantity_arithmetic_error(
 }
 fn pricing_computation_error(
     context: &str,
-    error: PricingComputationError,
+    error: &PricingComputationError,
 ) -> InstructionExecutionError {
     InstructionExecutionError::InvariantViolation(
         format!("SoraFS {context} calculation failed: {error}").into(),
@@ -418,17 +422,17 @@ fn prepare_pin_admission_accounting(
     let policy = &state_transaction.gov.sorafs_pin_policy;
     let world = state_transaction.world();
     let global_key = pin_global_usage_key();
-    let global_usage = match read_pin_usage(world, global_key, "global resource usage")? {
-        Some(usage) => usage,
-        None => {
+    let global_usage =
+        if let Some(usage) = read_pin_usage(world, global_key, "global resource usage")? {
+            usage
+        } else {
             if world.pin_manifests().iter().next().is_some() {
                 return Err(pin_accounting_corruption(
                     "retained manifests exist without the global resource summary",
                 ));
             }
             PinResourceUsage::default()
-        }
-    };
+        };
     let global_usage = global_usage
         .checked_charge(content_length)
         .ok_or_else(|| invalid_parameter("global SoraFS pin resource accounting overflow"))?;
@@ -444,9 +448,10 @@ fn prepare_pin_admission_accounting(
         )));
     }
     let authority_key = pin_authority_usage_key(authority)?;
-    let authority_usage = match read_pin_usage(world, &authority_key, "authority resource usage")? {
-        Some(usage) => usage,
-        None => {
+    let authority_usage =
+        if let Some(usage) = read_pin_usage(world, &authority_key, "authority resource usage")? {
+            usage
+        } else {
             if world
                 .pin_manifests()
                 .iter()
@@ -457,8 +462,7 @@ fn prepare_pin_admission_accounting(
                 )));
             }
             PinResourceUsage::default()
-        }
-    };
+        };
     let authority_usage = authority_usage
         .checked_charge(content_length)
         .ok_or_else(|| {
@@ -917,7 +921,7 @@ pub(crate) fn validate_stored_capacity_declaration(
         // The outer instruction Display is a category; retain its canonical
         // inner parameter reason when explaining invalid stored metadata.
         let reason = std::error::Error::source(&error)
-            .map_or_else(|| error.to_string(), |source| source.to_string());
+            .map_or_else(|| error.to_string(), std::string::ToString::to_string);
         invalid(reason)
     })?;
     if merged_metadata != record.metadata {
@@ -1104,7 +1108,7 @@ pub(super) fn apply_governed_provider_owner_action(
     })?;
     match action {
         SorafsProviderGovernanceActionV1::Admission(action) => {
-            return super::sorafs_provider_admission::apply(action, state_transaction);
+            return super::sorafs_provider_admission::apply(&(action), state_transaction);
         }
         SorafsProviderGovernanceActionV1::Establish(action) => {
             if state_transaction
@@ -1251,14 +1255,12 @@ impl Execute for iroha_data_model::isi::sorafs::SetProviderIngestCompletionAutho
         if provider_owner != authority {
             return Err(invalid_parameter(
                 "provider-ingest completion authority may be set only by the exact governed provider owner",
-            )
-            .into());
+            ));
         }
         if provider_owner != &self.next.provider_owner {
             return Err(invalid_parameter(
                 "provider-ingest completion authority owner does not match the registered provider owner",
-            )
-            .into());
+            ));
         }
         state_transaction.world.account(&self.next.provider_owner)?;
         state_transaction
@@ -1276,8 +1278,7 @@ impl Execute for iroha_data_model::isi::sorafs::SetProviderIngestCompletionAutho
         if current != self.expected_current {
             return Err(invalid_parameter(
                 "provider-ingest completion authority compare-and-set predecessor mismatch",
-            )
-            .into());
+            ));
         }
         validate_provider_ingest_completion_authority_successor(current.as_ref(), &self.next)?;
         state_transaction
@@ -1296,8 +1297,7 @@ impl Execute for iroha_data_model::isi::sorafs::RevokeProviderIngestCompletionAu
         if !self.expected_current.is_valid() {
             return Err(invalid_parameter(
                 "provider-ingest completion authority revocation is noncanonical",
-            )
-            .into());
+            ));
         }
         let provider_owner = state_transaction
             .world
@@ -1312,8 +1312,7 @@ impl Execute for iroha_data_model::isi::sorafs::RevokeProviderIngestCompletionAu
         if provider_owner != authority || &self.expected_current.provider_owner != provider_owner {
             return Err(invalid_parameter(
                 "provider-ingest completion authority may be revoked only by the exact governed provider owner",
-            )
-            .into());
+            ));
         }
         let current = state_transaction
             .world
@@ -1322,8 +1321,7 @@ impl Execute for iroha_data_model::isi::sorafs::RevokeProviderIngestCompletionAu
         if current != Some(&self.expected_current) {
             return Err(invalid_parameter(
                 "provider-ingest completion authority compare-and-remove predecessor mismatch",
-            )
-            .into());
+            ));
         }
         ensure_provider_not_needed_by_pending_replication(self.provider_id, state_transaction)?;
         state_transaction
@@ -1416,12 +1414,12 @@ impl Execute for iroha_data_model::isi::sorafs::RegisterPinManifest {
                 None,
             )?;
         }
-        if let Some(successor_of) = &successor_of {
-            if successor_of.as_bytes().iter().all(|byte| *byte == 0) {
-                return Err(invalid_parameter(
-                    "successor manifest digest must not be zero",
-                ));
-            }
+        if let Some(successor_of) = &successor_of
+            && successor_of.as_bytes().iter().all(|byte| *byte == 0)
+        {
+            return Err(invalid_parameter(
+                "successor manifest digest must not be zero",
+            ));
         }
         if state_transaction.world.pin_manifests.get(&digest).is_some() {
             return Err(InstructionExecutionError::InvariantViolation(
@@ -1488,23 +1486,21 @@ impl Execute for iroha_data_model::isi::sorafs::RegisterPinManifest {
             submitted_epoch,
         )?;
         record.record_pin_fee_payment(pin_fee_payment);
-        if !requires_council_approval {
-            if let Some(alias) = &record.alias {
-                ensure_alias_unique(
-                    alias,
-                    &state_transaction.world.pin_manifests,
-                    &state_transaction.world.manifest_aliases,
-                    Some(&digest),
-                )?;
-                bind_alias_record(
-                    state_transaction,
-                    alias,
-                    &digest,
-                    authority,
-                    submitted_epoch,
-                    record.policy.retention_epoch,
-                );
-            }
+        if !requires_council_approval && let Some(alias) = &record.alias {
+            ensure_alias_unique(
+                alias,
+                &state_transaction.world.pin_manifests,
+                &state_transaction.world.manifest_aliases,
+                Some(&digest),
+            )?;
+            bind_alias_record(
+                state_transaction,
+                alias,
+                &digest,
+                authority,
+                submitted_epoch,
+                record.policy.retention_epoch,
+            );
         }
         if let Some(order) = auto_order {
             state_transaction
@@ -2469,8 +2465,7 @@ pub fn seed_eligible_auto_replication_providers_for_test(
     count: u16,
     storage_class: StorageClass,
     profile: &ChunkerProfileHandle,
-    consensus_epoch: u64,
-    deadline_horizon_secs: u64,
+    (consensus_epoch, deadline_horizon_secs): (u64, u64),
     per_provider_gib: u64,
 ) -> Result<Vec<ProviderId>, InstructionExecutionError> {
     use sorafs_manifest::{
@@ -2747,7 +2742,7 @@ fn collect_public_pin_fee(
             submitted_epoch,
             policy.retention_epoch,
         )
-        .map_err(|error| pricing_computation_error("public pin fee", error))?;
+        .map_err(|error| pricing_computation_error("public pin fee", &(error)))?;
     let fee_asset_id = state_transaction.gov.sorafs_pin_fee_asset_id.clone();
     let treasury_account_id = state_transaction
         .gov
@@ -3529,13 +3524,13 @@ impl Execute for iroha_data_model::isi::sorafs::RecordCapacityTelemetry {
         let storage_class = storage_class_from_declaration_record(declaration_record)?;
         let storage_fee = pricing_schedule
             .storage_charge(storage_class, record.utilised_gib, window_secs)
-            .map_err(|error| pricing_computation_error("storage fee", error))?;
+            .map_err(|error| pricing_computation_error("storage fee", &(error)))?;
         let uptime_bps = u128::from(record.uptime_bps.min(10_000));
         let por_bps = u128::from(record.por_success_bps.min(10_000));
         let health_multiplier = uptime_bps.checked_mul(por_bps).ok_or_else(|| {
             pricing_computation_error(
                 "health multiplier",
-                PricingComputationError::ArithmeticOverflow("health multiplier"),
+                &(PricingComputationError::ArithmeticOverflow("health multiplier")),
             )
         })?;
         let storage_fee =
@@ -3543,10 +3538,10 @@ impl Execute for iroha_data_model::isi::sorafs::RecordCapacityTelemetry {
                 .map_err(|error| quantity_arithmetic_error("health-adjusted storage fee", error))?;
         let egress_fee = pricing_schedule
             .egress_charge_bytes(storage_class, record.egress_bytes)
-            .map_err(|error| pricing_computation_error("egress fee", error))?;
+            .map_err(|error| pricing_computation_error("egress fee", &(error)))?;
         let expected_storage = pricing_schedule
             .expected_settlement_storage_charge(storage_class, record.utilised_gib)
-            .map_err(|error| pricing_computation_error("expected settlement", error))?;
+            .map_err(|error| pricing_computation_error("expected settlement", &(error)))?;
         let expected_settlement = expected_storage
             .checked_add(&egress_fee)
             .map_err(|error| quantity_arithmetic_error("expected settlement", error))?;
@@ -3590,11 +3585,11 @@ impl Execute for iroha_data_model::isi::sorafs::RecordCapacityTelemetry {
                     credit_record.onboarding_epoch,
                     record.window_end_epoch,
                 )
-                .map_err(|error| pricing_computation_error("required collateral", error))?;
+                .map_err(|error| pricing_computation_error("required collateral", &(error)))?;
             credit_record.expected_settlement = expected_settlement.clone();
             let low_balance_threshold = pricing_schedule
                 .low_balance_threshold(&expected_settlement)
-                .map_err(|error| pricing_computation_error("low-balance threshold", error))?;
+                .map_err(|error| pricing_computation_error("low-balance threshold", &(error)))?;
             credit_record.track_low_balance(&low_balance_threshold, record.window_end_epoch);
             let penalty_policy = &state_transaction.gov.sorafs_penalty;
             // Treat failure counters as authoritative even when challenge/window counters are
@@ -3613,7 +3608,7 @@ impl Execute for iroha_data_model::isi::sorafs::RecordCapacityTelemetry {
                         10_000,
                         u128::from(record.declared_gib),
                     )
-                    .map_err(|error| pricing_computation_error("utilisation ratio", error))?
+                    .map_err(|error| pricing_computation_error("utilisation ratio", &(error)))?
                 };
                 let utilisation_floor =
                     u128::from(penalty_policy.utilisation_floor_bps.min(10_000));
@@ -3690,7 +3685,9 @@ impl Execute for iroha_data_model::isi::sorafs::RecordCapacityTelemetry {
                     if let Some(alert) = proof_alert.as_mut() {
                         alert.penalty_applied = penalty_amount.clone();
                     }
-                    if !penalty_amount.is_zero() {
+                    if penalty_amount.is_zero() {
+                        credit_record.reset_strikes();
+                    } else {
                         credit_record
                             .apply_penalty(&penalty_amount, record.window_end_epoch)
                             .map_err(|error| {
@@ -3706,8 +3703,6 @@ impl Execute for iroha_data_model::isi::sorafs::RecordCapacityTelemetry {
                                         .into(),
                                 )
                             })?;
-                    } else {
-                        credit_record.reset_strikes();
                     }
                 }
             }
@@ -4160,8 +4155,7 @@ impl Execute for iroha_data_model::isi::sorafs::ReviseReplicationOrderAssignment
         {
             return Err(invalid_parameter(
                 "replication assignment revision must be an exact nonzero monotonic successor",
-            )
-            .into());
+            ));
         }
         let mut record = state_transaction
             .world
@@ -4189,8 +4183,7 @@ impl Execute for iroha_data_model::isi::sorafs::ReviseReplicationOrderAssignment
         if record.assignment_revision != self.expected_assignment_revision {
             return Err(invalid_parameter(format!(
                 "replication order {order_label} assignment revision compare-and-set mismatch"
-            ))
-            .into());
+            )));
         }
         if !matches!(record.status, ReplicationOrderStatus::Pending)
             || !record.provider_completions.is_empty()
@@ -4206,8 +4199,7 @@ impl Execute for iroha_data_model::isi::sorafs::ReviseReplicationOrderAssignment
         if canonical_order.assignments == self.assignments {
             return Err(invalid_parameter(format!(
                 "replication order {order_label} assignment revision does not change assignments"
-            ))
-            .into());
+            )));
         }
         canonical_order.assignments = self.assignments;
         canonical_order.validate().map_err(|error| {
@@ -4243,8 +4235,7 @@ impl Execute for iroha_data_model::isi::sorafs::ReviseReplicationOrderAssignment
                 return Err(invalid_parameter(format!(
                     "replication order {order_label} replacement provider {} has an invalid or owner-mismatched completion authority",
                     hex::encode(provider.as_bytes())
-                ))
-                .into());
+                )));
             }
         }
         record.canonical_order = norito::encode_canonical(&canonical_order).map_err(|error| {
@@ -4566,8 +4557,7 @@ impl Execute for iroha_data_model::isi::sorafs::CompleteReplicationOrder {
         {
             return Err(invalid_parameter(
                 "replication completion authority, assignment revision, or finalized anchor is noncanonical or stale",
-            )
-            .into());
+            ));
         }
         let order_label = order_hex(&self.order_id);
         let mut record = state_transaction
@@ -4584,8 +4574,7 @@ impl Execute for iroha_data_model::isi::sorafs::CompleteReplicationOrder {
         if record.assignment_revision != self.expected_assignment_revision {
             return Err(invalid_parameter(format!(
                 "replication order {order_label} assignment revision changed before completion commit"
-            ))
-            .into());
+            )));
         }
         if !canonical_order
             .assignments
@@ -5049,6 +5038,10 @@ struct RepairPersistedEventV1 {
     norito::NoritoSchema,
 )]
 #[norito_schema(name = "iroha_core::smartcontracts::isi::sorafs::RepairEventJournalHeadV1")]
+#[expect(
+    clippy::struct_field_names,
+    reason = "Canonical journal fields identify the last committed event and retain their serialized names"
+)]
 struct RepairEventJournalHeadV1 {
     last_sequence: u64,
     last_target_block_height: u64,
@@ -5528,17 +5521,16 @@ fn validate_repair_task_record(
         }
         last_revision = expected;
     }
-    if let Some(lease) = &task.lease {
-        if lease.generation == 0
+    if let Some(lease) = &task.lease
+        && (lease.generation == 0
             || lease.acquired_at_unix_ms == 0
             || lease.renewed_at_unix_ms < lease.acquired_at_unix_ms
             || lease.expires_at_unix_ms <= lease.renewed_at_unix_ms
-            || task.terminal_outcome.is_some()
-        {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "stored repair lease is inconsistent".into(),
-            ));
-        }
+            || task.terminal_outcome.is_some())
+    {
+        return Err(InstructionExecutionError::InvariantViolation(
+            "stored repair lease is inconsistent".into(),
+        ));
     }
     match (&task.terminal_outcome, &task.slash, &task.appeal) {
         (None, None, None) => {}
@@ -6168,53 +6160,49 @@ fn append_repair_event_journal(
     }
     let head = read_repair_event_journal_head(state_transaction.world())?;
     ensure_no_repair_event_after_head(state_transaction.world(), head)?;
-    let (sequence, event_index, previous) = match head {
-        Some(head) => {
-            let sequence = head
-                .last_sequence
+    let (sequence, event_index, previous) = if let Some(head) = head {
+        let sequence = head
+            .last_sequence
+            .checked_add(1)
+            .ok_or_else(|| corrupt_repair_state("repair event sequence overflow"))?;
+        let event_index = match head.last_target_block_height.cmp(&target_block_height) {
+            core::cmp::Ordering::Less => 0,
+            core::cmp::Ordering::Equal => head
+                .last_event_index
                 .checked_add(1)
-                .ok_or_else(|| corrupt_repair_state("repair event sequence overflow"))?;
-            let event_index = match head.last_target_block_height.cmp(&target_block_height) {
-                core::cmp::Ordering::Less => 0,
-                core::cmp::Ordering::Equal => head
-                    .last_event_index
-                    .checked_add(1)
-                    .ok_or_else(|| corrupt_repair_state("repair event block index overflow"))?,
-                core::cmp::Ordering::Greater => {
-                    return Err(corrupt_repair_state(
-                        "repair event target height regressed behind the journal head",
-                    ));
-                }
-            };
-            let previous =
-                read_repair_persisted_event(state_transaction.world(), head.last_sequence)?
-                    .ok_or_else(|| {
-                        corrupt_repair_state("repair event journal head lost its terminal record")
-                    })?;
-            (sequence, event_index, Some(previous))
-        }
-        None => {
-            let status = read_repair_status(state_transaction.world())?
-                .ok_or_else(|| corrupt_repair_state("first repair event has no ledger status"))?;
-            let initial_status = status.tasks == 1
-                && status.leased_tasks == 0
-                && status.terminal_outcomes == 0
-                && status.completed == 0
-                && status.failed == 0
-                && status.escalated == 0
-                && status.slash_proposals == 0
-                && status.appeals == 0
-                && status.updated_at_unix_ms == event.occurred_at_unix_ms;
-            if event.kind != SorafsRepairLedgerEventKind::TaskSubmitted
-                || event.revision != 1
-                || !initial_status
-            {
+                .ok_or_else(|| corrupt_repair_state("repair event block index overflow"))?,
+            core::cmp::Ordering::Greater => {
                 return Err(corrupt_repair_state(
-                    "repair event journal must begin with the first task submission",
+                    "repair event target height regressed behind the journal head",
                 ));
             }
-            (1, 0, None)
+        };
+        let previous = read_repair_persisted_event(state_transaction.world(), head.last_sequence)?
+            .ok_or_else(|| {
+                corrupt_repair_state("repair event journal head lost its terminal record")
+            })?;
+        (sequence, event_index, Some(previous))
+    } else {
+        let status = read_repair_status(state_transaction.world())?
+            .ok_or_else(|| corrupt_repair_state("first repair event has no ledger status"))?;
+        let initial_status = status.tasks == 1
+            && status.leased_tasks == 0
+            && status.terminal_outcomes == 0
+            && status.completed == 0
+            && status.failed == 0
+            && status.escalated == 0
+            && status.slash_proposals == 0
+            && status.appeals == 0
+            && status.updated_at_unix_ms == event.occurred_at_unix_ms;
+        if event.kind != SorafsRepairLedgerEventKind::TaskSubmitted
+            || event.revision != 1
+            || !initial_status
+        {
+            return Err(corrupt_repair_state(
+                "repair event journal must begin with the first task submission",
+            ));
         }
+        (1, 0, None)
     };
     let key = repair_event_key(sequence);
     if state_transaction
@@ -7984,9 +7972,9 @@ mod sorafs_tests {
         assert_pin_fee_balances_unchanged(
             &stx,
             &alice(),
-            alice_balance_before,
+            &(alice_balance_before),
             &treasury_account,
-            treasury_balance_before,
+            &(treasury_balance_before),
         );
     }
     pub(super) fn replication_order_struct(
@@ -9219,9 +9207,9 @@ mod sorafs_tests {
         assert_pin_fee_balances_unchanged(
             &stx,
             &alice(),
-            alice_balance_before,
+            &(alice_balance_before),
             &treasury_account,
-            treasury_balance_before,
+            &(treasury_balance_before),
         );
     }
     #[test]
@@ -9291,9 +9279,9 @@ mod sorafs_tests {
         assert_pin_fee_balances_unchanged(
             &stx,
             &alice(),
-            alice_balance_before,
+            &(alice_balance_before),
             &treasury_account,
-            treasury_balance_before,
+            &(treasury_balance_before),
         );
     }
     #[test]
@@ -9357,9 +9345,9 @@ mod sorafs_tests {
         assert_pin_fee_balances_unchanged(
             &stx,
             &alice(),
-            alice_balance_before,
+            &(alice_balance_before),
             &treasury_account,
-            treasury_balance_before,
+            &(treasury_balance_before),
         );
     }
     #[test]
@@ -9389,9 +9377,9 @@ mod sorafs_tests {
         assert_pin_fee_balances_unchanged(
             &stx,
             &alice(),
-            alice_balance_before,
+            &(alice_balance_before),
             &treasury_account,
-            treasury_balance_before,
+            &(treasury_balance_before),
         );
     }
     #[test]
@@ -9565,8 +9553,10 @@ mod sorafs_tests {
             1,
             StorageClass::Hot,
             &default_chunker(),
-            5,
-            u64::from(SORAFS_AUTO_REPLICATION_ORDER_INGEST_DEADLINE_SECS_V1),
+            (
+                5,
+                u64::from(SORAFS_AUTO_REPLICATION_ORDER_INGEST_DEADLINE_SECS_V1),
+            ),
             1,
         )
         .expect("seed undersized provider");
@@ -9579,8 +9569,10 @@ mod sorafs_tests {
             1,
             StorageClass::Hot,
             &default_chunker(),
-            5,
-            u64::from(SORAFS_AUTO_REPLICATION_ORDER_INGEST_DEADLINE_SECS_V1) - 1,
+            (
+                5,
+                u64::from(SORAFS_AUTO_REPLICATION_ORDER_INGEST_DEADLINE_SECS_V1) - 1,
+            ),
             2,
         )
         .expect("seed provider expiring just before the automatic deadline");
@@ -9593,8 +9585,10 @@ mod sorafs_tests {
             1,
             StorageClass::Hot,
             &default_chunker(),
-            5,
-            u64::from(SORAFS_AUTO_REPLICATION_ORDER_INGEST_DEADLINE_SECS_V1),
+            (
+                5,
+                u64::from(SORAFS_AUTO_REPLICATION_ORDER_INGEST_DEADLINE_SECS_V1),
+            ),
             2,
         )
         .expect("seed exact eligible provider");
@@ -9613,8 +9607,10 @@ mod sorafs_tests {
             1,
             StorageClass::Hot,
             &default_chunker(),
-            5,
-            u64::from(SORAFS_AUTO_REPLICATION_ORDER_INGEST_DEADLINE_SECS_V1),
+            (
+                5,
+                u64::from(SORAFS_AUTO_REPLICATION_ORDER_INGEST_DEADLINE_SECS_V1),
+            ),
             1,
         )
         .expect("seed one-GiB provider");
@@ -9770,9 +9766,9 @@ mod sorafs_tests {
         assert_pin_fee_balances_unchanged(
             &stx,
             &alice(),
-            alice_balance_before,
+            &(alice_balance_before),
             &treasury_account,
-            treasury_balance_before,
+            &(treasury_balance_before),
         );
     }
     #[test]
@@ -10146,9 +10142,9 @@ mod sorafs_tests {
         assert_pin_fee_balances_unchanged(
             &stx,
             &alice(),
-            alice_balance_before,
+            &(alice_balance_before),
             &treasury_account,
-            treasury_balance_before,
+            &(treasury_balance_before),
         );
     }
     #[test]
@@ -10188,9 +10184,9 @@ mod sorafs_tests {
         assert_pin_fee_balances_unchanged(
             &stx,
             &alice(),
-            alice_balance_before,
+            &(alice_balance_before),
             &treasury_account,
-            treasury_balance_before,
+            &(treasury_balance_before),
         );
     }
     #[test]
@@ -10226,9 +10222,9 @@ mod sorafs_tests {
         assert_pin_fee_balances_unchanged(
             &stx,
             &alice(),
-            alice_balance_before,
+            &(alice_balance_before),
             &treasury_account,
-            treasury_balance_before,
+            &(treasury_balance_before),
         );
     }
     #[test]
@@ -10287,9 +10283,9 @@ mod sorafs_tests {
         assert_pin_fee_balances_unchanged(
             &stx,
             &alice(),
-            alice_balance_before,
+            &(alice_balance_before),
             &treasury_account,
-            treasury_balance_before,
+            &(treasury_balance_before),
         );
     }
     #[test]
@@ -10325,9 +10321,9 @@ mod sorafs_tests {
         assert_pin_fee_balances_unchanged(
             &stx,
             &alice(),
-            alice_balance_before,
+            &(alice_balance_before),
             &treasury_account,
-            treasury_balance_before,
+            &(treasury_balance_before),
         );
     }
     #[test]
@@ -10372,9 +10368,9 @@ mod sorafs_tests {
         assert_pin_fee_balances_unchanged(
             &stx,
             &alice(),
-            alice_balance_before,
+            &(alice_balance_before),
             &treasury_account,
-            treasury_balance_before,
+            &(treasury_balance_before),
         );
     }
     #[test]
@@ -10412,9 +10408,9 @@ mod sorafs_tests {
         assert_pin_fee_balances_unchanged(
             &stx,
             &alice(),
-            alice_balance_before,
+            &(alice_balance_before),
             &treasury_account,
-            treasury_balance_before,
+            &(treasury_balance_before),
         );
     }
     #[test]
@@ -10453,9 +10449,9 @@ mod sorafs_tests {
         assert_pin_fee_balances_unchanged(
             &stx,
             &alice(),
-            alice_balance_before,
+            &(alice_balance_before),
             &treasury_account,
-            treasury_balance_before,
+            &(treasury_balance_before),
         );
     }
     #[test]
@@ -10502,9 +10498,9 @@ mod sorafs_tests {
         assert_pin_fee_balances_unchanged(
             &stx,
             &alice(),
-            alice_balance_before,
+            &(alice_balance_before),
             &treasury_account,
-            treasury_balance_before,
+            &(treasury_balance_before),
         );
     }
     #[test]
@@ -10558,9 +10554,9 @@ mod sorafs_tests {
         assert_pin_fee_balances_unchanged(
             &stx,
             &alice(),
-            alice_balance_before,
+            &(alice_balance_before),
             &treasury_account,
-            treasury_balance_before,
+            &(treasury_balance_before),
         );
     }
     #[test]
@@ -10601,9 +10597,9 @@ mod sorafs_tests {
         assert_pin_fee_balances_unchanged(
             &stx,
             &alice(),
-            alice_balance_before,
+            &(alice_balance_before),
             &treasury_account,
-            treasury_balance_before,
+            &(treasury_balance_before),
         );
     }
     #[test]
@@ -15683,8 +15679,10 @@ mod sorafs_tests {
             1,
             StorageClass::Hot,
             &default_chunker(),
-            5,
-            u64::from(SORAFS_AUTO_REPLICATION_ORDER_INGEST_DEADLINE_SECS_V1),
+            (
+                5,
+                u64::from(SORAFS_AUTO_REPLICATION_ORDER_INGEST_DEADLINE_SECS_V1),
+            ),
             1,
         )
         .expect("seed eligible provider");
@@ -16280,7 +16278,7 @@ mod sorafs_tests {
         let first_hash = iroha_crypto::HashOf::new(&first_header);
         let first_hash_bytes = *first_hash.as_ref();
         {
-            let mut block = state.block(first_header.clone());
+            let mut block = state.block(first_header);
             let mut transaction = block.transaction();
             SubmitSorafsRepairTask::new(source_identity, report_payload.clone())
                 .execute(&alice(), &mut transaction)
@@ -16328,7 +16326,7 @@ mod sorafs_tests {
         let second_hash = iroha_crypto::HashOf::new(&second_header);
         let second_hash_bytes = *second_hash.as_ref();
         {
-            let mut block = state.block(second_header.clone());
+            let mut block = state.block(second_header);
             let mut transaction = block.transaction();
             ApplySorafsRepairTaskAction::new(
                 report.ticket_id.0.clone(),

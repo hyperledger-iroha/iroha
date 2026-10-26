@@ -158,6 +158,10 @@ impl NativeReplaySeed {
 
     // A failed initial bootstrap publishes only into its own disposable Kura.
     // Rebuilding that unfinished local seed cannot change the original source.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     pub(crate) fn begin(
         &self,
         target: &super::super::certified_chain::AuthenticatedExecutionBlock,
@@ -260,7 +264,7 @@ impl NativeReplaySeed {
             &self.nexus.dataspace_catalog,
         )?;
         let query = crate::query::store::LiveQueryStore::from_config(
-            Default::default(),
+            config::LiveQueryStore::default(),
             iroha_futures::supervisor::ShutdownSignal::new(),
         )
         .into_inert_handle();
@@ -302,7 +306,7 @@ impl NativeReplaySeed {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum IsolatedReplayError {
+pub enum IsolatedReplayError {
     #[error("isolated replay step deadline expired")]
     Deadline,
     #[error("isolated replay source: {0}")]
@@ -337,7 +341,7 @@ pub(crate) enum IsolatedReplayError {
 
 /// Exact completed isolated replay transport, still untrusted by FASTPQ until
 /// the original source reader joins the complete tape to its independent target.
-pub(crate) struct ReplayedNativeTransport {
+pub struct ReplayedNativeTransport {
     kura: Arc<Kura>,
     target: ReplayTarget,
 }
@@ -362,6 +366,10 @@ impl ReplayTarget {
     }
 }
 impl ReplayedNativeTransport {
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     pub(crate) fn into_for(
         self,
         native: &super::super::certified_chain::AuthenticatedExecutionBlock,
@@ -376,8 +384,8 @@ impl ReplayedNativeTransport {
 }
 
 /// The existing startup executor, retained at one exact next height. Its source
-/// KuraBlockStore only reads; its prepared owner only publishes into temporary Kura.
-pub(crate) struct IsolatedNativeReplay {
+/// `KuraBlockStore` only reads; its prepared owner only publishes into temporary Kura.
+pub struct IsolatedNativeReplay {
     prepared: Prepared,
     source: KuraBlockStore,
     pending: Option<(AvailableBody, Qc)>,
@@ -388,6 +396,10 @@ pub(crate) struct IsolatedNativeReplay {
 impl IsolatedNativeReplay {
     /// Cooperative finite continuation. The caller retains the original target,
     /// deadline and refusal. No intermediate height is a FASTPQ cursor completion.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     pub(crate) fn advance(
         &mut self,
         target: &super::super::certified_chain::AuthenticatedExecutionBlock,
@@ -456,8 +468,9 @@ impl IsolatedNativeReplay {
                 .ok_or(IsolatedReplayError::Identity(
                     "replay has no applied native result",
                 ))?;
+            let target_iroha_hash = target.block_hash();
             if tip.height() != target.height()
-                || tip.iroha_hash() != target.block_hash()
+                || tip.iroha_hash() != target_iroha_hash
                 || tip.core_hash() != target.core_hash()
                 || tip.result() != target.result()
                 || tip.root_scope() != target.root_scope()
@@ -479,6 +492,10 @@ impl IsolatedNativeReplay {
     }
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+)]
 fn check_replay_deadline(deadline: Instant) -> Result<(), IsolatedReplayError> {
     if Instant::now() >= deadline {
         Err(IsolatedReplayError::Deadline)
@@ -491,7 +508,7 @@ fn check_replay_deadline(deadline: Instant) -> Result<(), IsolatedReplayError> {
 mod tests;
 
 #[cfg(test)]
-pub(crate) fn original_source_fixture_for_test(
+pub fn original_source_fixture_for_test(
     seed_count: usize,
 ) -> (
     crate::sumeragi::test_chain::CertifiedTestChain,

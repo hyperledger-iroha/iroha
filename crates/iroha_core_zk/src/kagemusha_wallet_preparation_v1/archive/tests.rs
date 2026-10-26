@@ -57,12 +57,12 @@ fn originals() -> (
     KagemushaWalletCredentialV1,
     Vec<KagemushaWalletRetainedInputV1>,
 ) {
+    use KagemushaWalletRetainedInputRoleV1 as R;
     let scheme = object("KagemushaWalletSchemeV1");
     let payer = object("KagemushaWalletCredentialV1");
     let payment: KagemushaWalletPaymentV1 = object("KagemushaWalletPaymentV1");
     let companion: KagemushaWalletPayerCompanionV1 = object("KagemushaWalletPayerCompanionV1");
     let certificates = companion.certificates;
-    use KagemushaWalletRetainedInputRoleV1 as R;
     let originals = vec![
         (
             R::Request,

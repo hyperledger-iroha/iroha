@@ -1,16 +1,16 @@
 # Original domain-owner relation
 
 `authority_registry/domain_ownership.rs` owns the single sealed relation used by
-retained committed readers and `complete/frozen_domain_ownership.rs`. Both current
-and exact predecessor contain the same storage-key/bucket rule: every domain key
-occurs in the bucket of its stored `owned_by()`, and every nonempty owner bucket
-contains only domain keys stored under that owner. MissingDomain, EmptyBucket and
-ForeignDomain retain their exact current/predecessor categories. The rule adds no
+retained committed readers and `complete/frozen_domain_ownership.rs`. The index
+stores one `(owner, DomainId) -> ()` row per membership. Both current and exact
+predecessor contain the same storage-key/membership rule: every domain key has a
+row under its stored `owned_by()`, and every row names a domain key stored under
+that owner. MissingDomain and ForeignDomain retain their exact current/predecessor
+categories; an empty owner group cannot be represented. The rule adds no
 account existence, embedded Domain id, authentication or execution authority
 predicate. It never repairs either native image.
 
-Each physical current/undo row and set member is prepaid before its actual
-iterator advance. Empty iterators consume no work. Predecessor masking scans all
+Each physical current/undo row is prepaid before its actual iterator advance. Empty iterators consume no work. Predecessor masking scans all
 original undo candidates by equality, including every candidate after an equal
 key, then visits all undo entries including absent preimages. Full DomainId name
 and dataspace UTF-8 bytes for both operands are funded before equality. Full
@@ -22,18 +22,18 @@ parse, tree lookup, allocating Ord, clone, sort or scratch allocation occurs.
 Malformed typed compact keys preserve exact membership semantics and error
 categories; measuring them grants no key validity or authority.
 
-Every domain scans every original owner and member, funding both complete owner
-and domain comparisons even when one differs. Every reverse member scans every
+Every domain scans every original membership row, funding both complete owner
+and domain comparisons even when one differs. Every membership row scans every
 original domain with both comparisons funded before combining results. A complete
 match boolean is retained until each scan ends. Checked conversion/subtraction
 refuses with WorkLimit before unadmitted work, without a validity verdict.
 
-One domain/member with owner geometry A and domain geometry D costs
-`12 + 8*(A+D)` over both images without undo. The Single Ed25519 `live.universal`
-fixture costs 388 (A=34,D=13); an equal no-op pair costs 584; an inserted pair with
-absent preimages costs 294; two otherwise empty maps each retaining an absent undo
+One domain/membership row with owner geometry A and domain geometry D costs
+`8 + 8*(A+D)` over both images without undo. The Single Ed25519 `live.universal`
+fixture costs 384 (A=34,D=13); an equal no-op pair costs 632; an inserted pair with
+absent preimages costs 318; two otherwise empty maps each retaining an absent undo
 row cost 2. Tests bind exact-1/exact and allocation-free results to those formulas.
-The named committed descriptor is 1292=`12+8*(34+126)`, for a single Ed25519 owner
+The named committed descriptor is 1288=`8+8*(34+126)`, for a single Ed25519 owner
 and the two existing maximum 63-byte DomainId components. Runtime funding uses
 actual borrowed bytes. Wider controllers, multiple rows and quadratic predecessor
 scans may defer for a larger admitted local allowance. This changes no controller,

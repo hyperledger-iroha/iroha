@@ -55,6 +55,10 @@ fn readiness_failure(error: NativeBeaconReadinessError) -> PublicationError {
 }
 
 impl Worker<'_> {
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     pub(super) fn attach_beacon(
         &mut self,
         instance: Hash32,
@@ -78,6 +82,10 @@ impl Worker<'_> {
         Ok(reporting)
     }
 
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     fn control_available(&self) -> Result<(), PublicationError> {
         if let Some(reason) = &self.recovery {
             return Err(PublicationError::RecoveryRequired(reason.clone()));
@@ -97,7 +105,7 @@ impl Worker<'_> {
 
     fn control_error(
         &mut self,
-        error: NativeBeaconError,
+        error: &NativeBeaconError,
         class: NativeControlFailure,
     ) -> PublicationError {
         let reason = error.to_string();
@@ -119,6 +127,10 @@ impl Worker<'_> {
         }
     }
 
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     pub(super) fn build_control_witness(
         &mut self,
         context: &ControlWitnessContext,
@@ -131,10 +143,14 @@ impl Worker<'_> {
             .map_err(|error| {
                 iroha_logger::debug!(?context, %error, "native control witness refused");
                 let class = error.local_classification();
-                self.control_error(error, class)
+                self.control_error(&error, class)
             })
     }
 
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     pub(super) fn drive_control(
         &mut self,
         context: &ApplicationControlContext,
@@ -160,7 +176,7 @@ impl Worker<'_> {
         if let Err(error) = observed {
             iroha_logger::debug!(?context, %error, "native control parent observation refused");
             let class = error.local_classification();
-            return Err(self.control_error(error, class));
+            return Err(self.control_error(&error, class));
         }
         let produced = self
             .beacon
@@ -175,11 +191,15 @@ impl Worker<'_> {
             Err(error) => {
                 iroha_logger::debug!(?context, %error, "native control source drive refused");
                 let class = error.local_classification();
-                Err(self.control_error(error, class))
+                Err(self.control_error(&error, class))
             }
         }
     }
 
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     pub(super) fn receive_application_control(
         &mut self,
         from: &PublicKey,
@@ -211,7 +231,7 @@ impl Worker<'_> {
                     // that frame; never turn it into a local retry, halt or queue removal.
                     return Ok(());
                 }
-                Err(self.control_error(error, class))
+                Err(self.control_error(&error, class))
             }
         }
     }
@@ -254,7 +274,7 @@ mod tests {
             .expect_err("an empty reservation cannot construct the physical control");
         assert_eq!(original, 17);
         assert!(matches!(error, PrepaidSharedError::Reservation(_)));
-        let expected = error.clone();
+        let expected = error;
         let failure = readiness_failure(NativeBeaconReadinessError::Allocator(error));
         let PublicationError::Deferred(ref retained) = failure else {
             panic!("retain the concrete allocator failure, got {failure:?}");

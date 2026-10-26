@@ -85,8 +85,8 @@ iroha_plonk_recursion = { path = "crates/iroha_plonk_recursion" }
 iroha_kagemusha_proof = { path = "crates/iroha_kagemusha_proof" }
 iroha_i18n = { path = "crates/iroha_i18n" }
 
-# Crates that need JSON, governance, HTTP, bridge, BLS, or transparent APIs
-# request them locally so focused builds do not compile the broadest model.
+# Canonical JSON and governance model identities are unconditional.
+# Crates request HTTP, crypto implementations and transparent APIs locally.
 iroha_data_model = { path = "crates/iroha_data_model", default-features = false }
 iroha_model_base = { path = "crates/iroha_model_base", default-features = false }
 iroha_js_codec = { path = "crates/iroha_js_codec", default-features = false }
@@ -348,6 +348,7 @@ default-members = [
     "crates/kotodama_toolchain",
 ]
 members = [
+    ".oss-scanner/build-features",
     "crates/irohad/bins",
     "crates/iroha_cli/bins",
     "crates/*",
@@ -401,9 +402,10 @@ split-debuginfo = "unpacked"
 # Keep test harnesses from producing enormous debug-heavy Linux artifacts.
 # Use `CARGO_PROFILE_TEST_DEBUG=line-tables-only` when debugging tests.
 debug = 0
-# Keep long workspace test runs from retaining large incremental-query caches
-# on WSL and memory-constrained VMs. Override locally with `CARGO_INCREMENTAL=1`.
-incremental = false
+# Reuse the same dependency artifacts and incremental queries as local builds.
+# Constrained or deliberately cold runs can set `CARGO_INCREMENTAL=0` (or use
+# scripts/cargo_fast.sh --no-incremental) without changing the workspace profile.
+incremental = true
 
 [profile.test.build-override]
 debug = 0

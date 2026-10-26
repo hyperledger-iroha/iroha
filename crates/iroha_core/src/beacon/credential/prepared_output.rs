@@ -249,6 +249,10 @@ impl PreparedGlobalBeaconCredentialV1 {
     ///
     /// # Errors
     /// Returns this unchanged original preparation when no complete frame has been written.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Failed sealing returns the original paid secret or session owner without a new fallible allocation"
+    )]
     pub fn into_credential(
         self,
     ) -> Result<SecretConsensusThresholdCredentialV1, (Self, GlobalBeaconCredentialEncodeErrorV1)>

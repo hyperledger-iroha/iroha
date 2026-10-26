@@ -16,6 +16,7 @@ use iroha_crypto::{Hash, KeyPair};
 use iroha_data_model::{
     account::address::{AccountAddress, ChainDiscriminantGuard},
     asset::AssetDefinitionAlias,
+    block::consensus::PublicLaneStakingPolicy,
     da::commitment::DaProofPolicyBundle,
     parameter::system::{ConsensusMode, SumeragiConsensusMode},
     prelude::*,
@@ -53,25 +54,6 @@ pub fn retired_synthetic_stake_asset_id() -> AssetDefinitionId {
             .expect("static stake asset name must remain valid"),
     )
 }
-fn resolve_npos_bootstrap_stake_asset_id(
-    manifest: &RawGenesisTransaction,
-    configured: &str,
-) -> Result<AssetDefinitionId, color_eyre::eyre::Error> {
-    if let Ok(asset_id) = configured.parse::<AssetDefinitionId>() {
-        return Ok(asset_id);
-    }
-    let alias = configured.parse::<AssetDefinitionAlias>().map_err(|err| {
-        eyre!(
-            "invalid nexus.staking.stake_asset_id `{configured}`: {err}; expected canonical asset definition id or alias"
-        )
-    })?;
-    let Some(asset_definition_id) = resolve_asset_definition_alias(manifest, &alias)? else {
-        return Err(eyre!(
-            "nexus.staking.stake_asset_id alias `{configured}` is not bound in genesis manifest"
-        ));
-    };
-    Ok(asset_definition_id)
-}
 fn resolve_asset_definition_alias(
     manifest: &RawGenesisTransaction,
     alias: &AssetDefinitionAlias,
@@ -100,16 +82,29 @@ fn public_xor_profile_for_manifest(
 ) -> Option<super::profile::GenesisProfile> {
     public_xor_profile_for_chain_id(manifest.chain_id().as_str())
 }
-/// Resolve and verify the committed canonical XOR definition against the exact configuration.
+/// Read the exact authored staking policy and validate its NPoS currency binding.
+///
+/// Custody and monetary bounds come from the original manifest parameter. Node
+/// configuration cannot supply a missing policy or redirect bootstrap transfers.
 ///
 /// # Errors
-/// Returns an error when the committed stake asset is missing, ambiguous, retired, or inconsistent with the configured asset and public XOR binding.
-pub fn configured_npos_bootstrap_stake_asset_id(
+/// Returns the original policy decode error or a missing, retired, ambiguous or
+/// mismatched NPoS XOR binding.
+pub fn committed_npos_bootstrap_staking_policy(
     manifest: &RawGenesisTransaction,
-    config: Option<&actual::Root>,
-) -> Result<AssetDefinitionId, color_eyre::eyre::Error> {
-    let public_profile = public_xor_profile_for_manifest(manifest);
+) -> Result<PublicLaneStakingPolicy, color_eyre::eyre::Error> {
+    let _chain = staged_genesis_chain_discriminant(manifest);
     let parameters = manifest.effective_parameters()?;
+    let policy = PublicLaneStakingPolicy::from_parameters(&parameters)?;
+    validate_npos_bootstrap_staking_policy(manifest, &parameters, &policy)?;
+    Ok(policy)
+}
+fn validate_npos_bootstrap_staking_policy(
+    manifest: &RawGenesisTransaction,
+    parameters: &iroha_data_model::parameter::Parameters,
+    policy: &PublicLaneStakingPolicy,
+) -> Result<(), color_eyre::eyre::Error> {
+    let public_profile = public_xor_profile_for_manifest(manifest);
     let pinned = parameters
         .custom()
         .get(&iroha_data_model::parameter::system::SumeragiNposParameters::parameter_id())
@@ -118,13 +113,8 @@ pub fn configured_npos_bootstrap_stake_asset_id(
         .flatten()
         .ok_or_else(|| eyre!("NPoS bootstrap requires the committed XOR asset identity"))?
         .xor_asset_definition_id;
-    let stake_asset_id = if let Some(config) = config {
-        resolve_npos_bootstrap_stake_asset_id(manifest, &config.nexus.staking.stake_asset_id)
-            .map_err(|err| eyre!("failed to resolve nexus.staking.stake_asset_id: {err}"))?
-    } else {
-        pinned.clone()
-    };
-    if stake_asset_id != pinned || stake_asset_id == retired_synthetic_stake_asset_id() {
+    let stake_asset_id = &policy.stake_asset_id;
+    if stake_asset_id != &pinned || *stake_asset_id == retired_synthetic_stake_asset_id() {
         return Err(eyre!(
             "NPoS stake asset must equal the committed canonical XOR definition `{pinned}`; synthetic stake assets are forbidden"
         ));
@@ -154,16 +144,16 @@ pub fn configured_npos_bootstrap_stake_asset_id(
         }
         if public_xor_asset_id == retired_synthetic_stake_asset_id() {
             return Err(eyre!(
-                "public NPoS bootstrap for {profile:?} cannot use synthetic `{RETIRED_SYNTHETIC_STAKE_DOMAIN}/{RETIRED_SYNTHETIC_STAKE_ASSET_NAME}`; bind `{PUBLIC_XOR_ALIAS}` to the real XOR asset or configure a canonical stake asset id"
+                "public NPoS bootstrap for {profile:?} cannot use synthetic `{RETIRED_SYNTHETIC_STAKE_DOMAIN}/{RETIRED_SYNTHETIC_STAKE_ASSET_NAME}`; bind `{PUBLIC_XOR_ALIAS}` to the real XOR asset and author the same canonical stake asset in the original policy"
             ));
         }
-        if stake_asset_id != public_xor_asset_id {
+        if stake_asset_id != &public_xor_asset_id {
             return Err(eyre!(
                 "public NPoS bootstrap for {profile:?} resolved stake asset `{stake_asset_id}`, but `{PUBLIC_XOR_ALIAS}` is bound to `{public_xor_asset_id}`; public stake asset must match the canonical XOR binding"
             ));
         }
     }
-    Ok(stake_asset_id)
+    Ok(())
 }
 /// Reject a peer configuration with another manifest chain or address discriminant.
 ///
@@ -768,36 +758,22 @@ pub fn staged_default_account_literal(
         .to_i105_for_discriminant(target_discriminant)
         .map_err(|error| eyre!("re-encode built-in {label} for staged genesis: {error}"))
 }
-/// Resolve staging policy from the explicit manifest fees and canonical public asset binding.
+/// Validate original monetary policies and project only remaining node configuration.
 ///
 /// # Errors
-/// Returns an error for missing or invalid fees, an inconsistent committed XOR asset,
-/// or a built-in account that cannot be re-encoded for the manifest.
+/// Returns an error for missing or invalid monetary policies or an inconsistent committed XOR asset.
 pub fn staged_default_nexus(
     genesis: &RawGenesisTransaction,
 ) -> Result<actual::Nexus, color_eyre::eyre::Error> {
-    let discriminant = genesis.chain_discriminant();
+    let _chain = iroha_data_model::account::address::ChainDiscriminantGuard::enter(
+        genesis.chain_discriminant(),
+    );
+    let parameters = genesis.effective_parameters()?;
+    let staking =
+        iroha_data_model::block::consensus::PublicLaneStakingPolicy::from_parameters(&parameters)?;
     let mut nexus = actual::Nexus::default();
-    if super::sccp::is_enabled(genesis) {
-        nexus.staking.unbonding_delay =
-            std::time::Duration::from_millis(super::sccp::UNBONDING_DELAY_MS);
-        nexus.staking.max_slash_bps = super::sccp::MAX_SLASH_BPS;
-    }
-    nexus.staking.stake_escrow_account_id = staged_default_account_literal(
-        &nexus.staking.stake_escrow_account_id,
-        discriminant,
-        "nexus.staking.stake_escrow_account_id",
-    )?;
-    nexus.staking.slash_sink_account_id = staged_default_account_literal(
-        &nexus.staking.slash_sink_account_id,
-        discriminant,
-        "nexus.staking.slash_sink_account_id",
-    )?;
-    // The manifest is the authoring input; runtime fee authority is the executed parameter.
-    let fees = iroha_data_model::block::consensus::RootFeePolicy::from_parameters(
-        &genesis.effective_parameters()?,
-    )?
-    .ok_or_else(|| eyre!("staged genesis requires an explicit root fee policy"))?;
+    let fees = iroha_data_model::block::consensus::RootFeePolicy::from_parameters(&parameters)?
+        .ok_or_else(|| eyre!("staged genesis requires an explicit root fee policy"))?;
     fees.validate_for_scope(&genesis.sumeragi_context_parameters().root_scope)?;
     nexus.fees = fees;
     if genesis.consensus_mode() == SumeragiConsensusMode::Npos
@@ -805,13 +781,13 @@ pub fn staged_default_nexus(
     {
         // Bootstrap and the offline execution that authenticates it must use
         // the same manifest-selected asset, including public XOR alias bindings.
-        let xor_asset = configured_npos_bootstrap_stake_asset_id(genesis, None)?;
-        if nexus.fees.fee_asset_id != xor_asset {
+        validate_npos_bootstrap_staking_policy(genesis, &parameters, &staking)?;
+        let xor_asset = &staking.stake_asset_id;
+        if &nexus.fees.fee_asset_id != xor_asset {
             return Err(eyre!(
                 "signed root fee asset must equal the committed canonical XOR definition `{xor_asset}`"
             ));
         }
-        nexus.staking.stake_asset_id = xor_asset.to_string();
     }
     Ok(nexus)
 }
@@ -929,11 +905,242 @@ fn install_staged_nexus_policies(
 
 #[cfg(test)]
 mod tests {
+    fn fixture_staking_policy() -> iroha_data_model::block::consensus::PublicLaneStakingPolicy {
+        let fees = iroha_config::parameters::defaults::nexus::fees::genesis_policy();
+        iroha_genesis::default_staking_policy(
+            fees.fee_asset_id,
+            fees.fee_sink_account_id.clone(),
+            fees.fee_sink_account_id,
+        )
+    }
+
+    #[test]
+    fn staging_preserves_every_authored_staking_field_and_restores_foreign_context() {
+        use iroha_data_model::account::address::{ChainDiscriminantGuard, chain_discriminant};
+        let _caller = ChainDiscriminantGuard::enter(753);
+        let (raw, expected, expected_escrow, expected_sink) = {
+            let _author = ChainDiscriminantGuard::enter(369);
+            let mut policy = fixture_staking_policy();
+            policy.min_validator_stake = 19_u64.into();
+            policy.max_stake_shares_per_validator = std::num::NonZeroU32::new(7).unwrap();
+            policy.max_pending_unbonds_per_share = std::num::NonZeroU32::new(3).unwrap();
+            policy.unbonding_delay_ms = 43_210;
+            policy.max_slash_bps = 1_234;
+            policy.stake_asset_id = AssetDefinitionId::derive_from_components(
+                iroha_model_base::domain::DomainId::parse_fully_qualified("stake.example").unwrap(),
+                "bond".parse().unwrap(),
+            );
+            policy.stake_escrow_account_id = AccountId::new(
+                KeyPair::from_seed(vec![0x68; 32], Algorithm::Ed25519)
+                    .public_key()
+                    .clone(),
+            );
+            policy.slash_sink_account_id = AccountId::new(
+                KeyPair::from_seed(vec![0x69; 32], Algorithm::Ed25519)
+                    .public_key()
+                    .clone(),
+            );
+            let raw = GenesisBuilder::new_without_executor(
+                ChainId::from("foreign-staking-projection"),
+                ".",
+                iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                    Algorithm::Ed25519,
+                    Algorithm::BlsNormal,
+                ])
+                .unwrap(),
+            )
+            .with_staking_policy(policy.clone())
+            .unwrap()
+            .with_sumeragi_context_parameters(SumeragiGenesisContextParameters::recommended())
+            .set_topology(default_test_topology())
+            .build_raw()
+            .unwrap();
+            let escrow = policy.stake_escrow_account_id.to_string();
+            let sink = policy.slash_sink_account_id.to_string();
+            (raw, policy, escrow, sink)
+        };
+        let original = norito::json::to_json(&raw).unwrap();
+        staged_default_nexus(&raw).unwrap();
+        let projected = {
+            let _author = staged_genesis_chain_discriminant(&raw);
+            PublicLaneStakingPolicy::from_parameters(&raw.effective_parameters().unwrap()).unwrap()
+        };
+        assert_eq!(chain_discriminant(), 753);
+        assert_eq!(norito::json::to_json(&raw).unwrap(), original);
+        assert_eq!(projected.min_validator_stake, expected.min_validator_stake);
+        assert_eq!(
+            projected.max_stake_shares_per_validator,
+            expected.max_stake_shares_per_validator
+        );
+        assert_eq!(
+            projected.max_pending_unbonds_per_share,
+            expected.max_pending_unbonds_per_share
+        );
+        assert_eq!(projected.unbonding_delay_ms, expected.unbonding_delay_ms);
+        assert_eq!(projected.max_slash_bps, expected.max_slash_bps);
+        assert_eq!(projected.stake_asset_id, expected.stake_asset_id);
+        assert_eq!(
+            projected.stake_escrow_account_id,
+            expected.stake_escrow_account_id
+        );
+        assert_eq!(
+            projected
+                .stake_escrow_account_id
+                .to_i105_for_discriminant(369)
+                .unwrap(),
+            expected_escrow
+        );
+        assert_eq!(
+            projected.slash_sink_account_id,
+            expected.slash_sink_account_id
+        );
+        assert_eq!(
+            projected
+                .slash_sink_account_id
+                .to_i105_for_discriminant(369)
+                .unwrap(),
+            expected_sink
+        );
+    }
+
     use super::*;
     use iroha_crypto::{Algorithm, bls_normal_pop_prove};
     use iroha_data_model::block::consensus::SumeragiGenesisContextParameters;
     use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry};
     use iroha_model_base::{chain::ChainId, peer::PeerId};
+
+    fn bootstrap_policy_fixture(policy: PublicLaneStakingPolicy) -> RawGenesisTransaction {
+        use iroha_data_model::parameter::system::SumeragiNposParameters;
+        GenesisBuilder::new_without_executor(
+            ChainId::from("typed-original-staking-bootstrap"),
+            ".",
+            iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                Algorithm::Ed25519,
+                Algorithm::BlsNormal,
+            ])
+            .unwrap(),
+        )
+        .with_staking_policy(policy)
+        .unwrap()
+        .append_parameter(Parameter::Custom(
+            SumeragiNposParameters::default().into_custom_parameter(),
+        ))
+        .with_sumeragi_context_parameters(SumeragiGenesisContextParameters::recommended())
+        .set_topology(default_test_topology())
+        .build_raw()
+        .unwrap()
+        .with_consensus_mode(SumeragiConsensusMode::Npos)
+    }
+
+    #[test]
+    fn bootstrap_uses_the_complete_original_policy_and_restores_author_context() {
+        let _caller = ChainDiscriminantGuard::enter(753);
+        let (raw, expected) = {
+            let _author = ChainDiscriminantGuard::enter(369);
+            let mut policy = fixture_staking_policy();
+            policy.min_validator_stake = 19_u64.into();
+            policy.max_stake_shares_per_validator = 7_u32.try_into().unwrap();
+            policy.max_pending_unbonds_per_share = 3_u32.try_into().unwrap();
+            policy.unbonding_delay_ms = 43_210;
+            policy.max_slash_bps = 1_234;
+            policy.stake_escrow_account_id = AccountId::new(
+                KeyPair::from_seed(vec![0x68; 32], Algorithm::Ed25519)
+                    .public_key()
+                    .clone(),
+            );
+            policy.slash_sink_account_id = AccountId::new(
+                KeyPair::from_seed(vec![0x69; 32], Algorithm::Ed25519)
+                    .public_key()
+                    .clone(),
+            );
+            (
+                bootstrap_policy_fixture(policy.clone()).with_chain_discriminant(369),
+                policy,
+            )
+        };
+        let original = norito::json::to_json(&raw).unwrap();
+        assert_eq!(
+            committed_npos_bootstrap_staking_policy(&raw).unwrap(),
+            expected
+        );
+        assert_ne!(
+            expected.stake_escrow_account_id,
+            expected.slash_sink_account_id
+        );
+        assert_eq!(
+            iroha_data_model::account::address::chain_discriminant(),
+            753
+        );
+        assert_eq!(norito::json::to_json(&raw).unwrap(), original);
+    }
+
+    #[test]
+    fn bootstrap_cannot_replace_missing_invalid_or_mismatched_original_policy() {
+        use iroha_data_model::block::consensus::PublicLaneStakingPolicyError;
+        let raw = bootstrap_policy_fixture(fixture_staking_policy());
+        committed_npos_bootstrap_staking_policy(&raw).unwrap();
+        let original = norito::json::to_value(&raw).unwrap();
+        for mutation in ["missing", "invalid", "different_asset"] {
+            let mut value = original.clone();
+            let mut changed = 0;
+            for transaction in value
+                .get_mut("transactions")
+                .unwrap()
+                .as_array_mut()
+                .unwrap()
+            {
+                let Some(custom) = transaction
+                    .get_mut("parameters")
+                    .and_then(|p| p.get_mut("custom"))
+                    .and_then(norito::json::Value::as_object_mut)
+                else {
+                    continue;
+                };
+                let id = PublicLaneStakingPolicy::PARAMETER_ID_STR;
+                if !custom.contains_key(id) {
+                    continue;
+                }
+                changed += 1;
+                if mutation == "missing" {
+                    assert!(custom.remove(id).is_some());
+                } else {
+                    let payload = custom
+                        .get_mut(id)
+                        .unwrap()
+                        .get_mut("payload")
+                        .unwrap()
+                        .as_object_mut()
+                        .unwrap();
+                    if mutation == "invalid" {
+                        payload.insert("max_slash_bps".into(), 10_001_u32.into());
+                    } else {
+                        payload.insert(
+                            "stake_asset_id".into(),
+                            "61CtjvNd9T3THAR65GsMVHr82Bjc".into(),
+                        );
+                    }
+                }
+            }
+            assert_eq!(changed, 1, "one original parameter snapshot");
+            let changed: RawGenesisTransaction = norito::json::from_value(value).unwrap();
+            let error = committed_npos_bootstrap_staking_policy(&changed).unwrap_err();
+            match mutation {
+                "missing" => assert!(matches!(
+                    error.downcast_ref::<PublicLaneStakingPolicyError>(),
+                    Some(PublicLaneStakingPolicyError::MissingParameter)
+                )),
+                "invalid" => assert!(matches!(
+                    error.downcast_ref::<PublicLaneStakingPolicyError>(),
+                    Some(PublicLaneStakingPolicyError::InvalidSlashFraction)
+                )),
+                "different_asset" => assert!(error.to_string().contains(
+                    "NPoS stake asset must equal the committed canonical XOR definition"
+                )),
+                _ => unreachable!(),
+            }
+        }
+        assert_eq!(norito::json::to_value(&raw).unwrap(), original);
+    }
 
     fn default_test_topology() -> Vec<GenesisTopologyEntry> {
         let mut entries = (0x40..=0x43)
@@ -960,16 +1167,26 @@ mod tests {
         fees.fee_sink_account_id = AccountId::new(sink_key.public_key().clone());
         let npos = SumeragiNposParameters::default();
         fees.fee_asset_id = npos.xor_asset_definition_id.clone();
-        let raw = GenesisBuilder::new_without_executor(ChainId::from("explicit-staging-fees"), ".")
-            .set_topology(default_test_topology())
-            .with_sumeragi_context_parameters(SumeragiGenesisContextParameters::recommended())
-            .append_parameter(Parameter::Custom(npos.into_custom_parameter()))
-            .append_parameter(Parameter::Custom(
-                fees.clone().into_custom_parameter().unwrap(),
-            ))
-            .build_raw()
-            .unwrap()
-            .with_consensus_mode(SumeragiConsensusMode::Npos);
+        let raw = GenesisBuilder::new_without_executor(
+            ChainId::from("explicit-staging-fees"),
+            ".",
+            iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                iroha_crypto::Algorithm::Ed25519,
+                iroha_crypto::Algorithm::BlsNormal,
+            ])
+            .unwrap(),
+        )
+        .with_staking_policy(fixture_staking_policy())
+        .unwrap()
+        .set_topology(default_test_topology())
+        .with_sumeragi_context_parameters(SumeragiGenesisContextParameters::recommended())
+        .append_parameter(Parameter::Custom(npos.into_custom_parameter()))
+        .append_parameter(Parameter::Custom(
+            fees.clone().into_custom_parameter().unwrap(),
+        ))
+        .build_raw()
+        .unwrap()
+        .with_consensus_mode(SumeragiConsensusMode::Npos);
         assert_eq!(staged_default_nexus(&raw).unwrap().fees, fees);
         assert_eq!(
             RootFeePolicy::from_parameters(&raw.effective_parameters().unwrap()).unwrap(),
@@ -996,14 +1213,25 @@ mod tests {
     fn configured_genesis_world_retains_original_state_pool_across_pipeline_installation() {
         let key = KeyPair::try_from_seed(vec![0x6D; 32], Algorithm::Ed25519)
             .expect("deterministic staging authority");
-        let raw = GenesisBuilder::new_without_executor(ChainId::from("genesis-original-pool"), ".")
-            .set_topology(default_test_topology())
-            .with_sumeragi_context_parameters(SumeragiGenesisContextParameters::recommended())
-            .build_raw()
-            .unwrap()
-            .with_consensus_mode(SumeragiConsensusMode::Permissioned)
-            .with_consensus_meta()
-            .unwrap();
+        let raw = GenesisBuilder::new_without_executor(
+            ChainId::from("genesis-original-pool"),
+            ".",
+            iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                iroha_crypto::Algorithm::Ed25519,
+                iroha_crypto::Algorithm::Secp256k1,
+                iroha_crypto::Algorithm::BlsNormal,
+            ])
+            .expect("explicit canonical genesis producer policy"),
+        )
+        .with_staking_policy(fixture_staking_policy())
+        .unwrap()
+        .set_topology(default_test_topology())
+        .with_sumeragi_context_parameters(SumeragiGenesisContextParameters::recommended())
+        .build_raw()
+        .unwrap()
+        .with_consensus_mode(SumeragiConsensusMode::Permissioned)
+        .with_consensus_meta()
+        .unwrap();
         let provisional = build_signed_genesis(
             raw.clone(),
             &key,
@@ -1054,15 +1282,25 @@ mod tests {
         let genesis_key_pair = KeyPair::try_from_seed(vec![0x6E; 32], Algorithm::Ed25519)
             .expect("derive deterministic default staging key");
         let topology = default_test_topology();
-        let raw =
-            GenesisBuilder::new_without_executor(ChainId::from("default-genesis-staging"), ".")
-                .set_topology(topology.clone())
-                .with_sumeragi_context_parameters(SumeragiGenesisContextParameters::recommended())
-                .build_raw()
-                .expect("complete generic four-validator genesis")
-                .with_consensus_mode(SumeragiConsensusMode::Permissioned)
-                .with_consensus_meta()
-                .expect("valid fixture consensus parameters");
+        let raw = GenesisBuilder::new_without_executor(
+            ChainId::from("default-genesis-staging"),
+            ".",
+            iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                iroha_crypto::Algorithm::Ed25519,
+                iroha_crypto::Algorithm::Secp256k1,
+                iroha_crypto::Algorithm::BlsNormal,
+            ])
+            .expect("explicit canonical genesis producer policy"),
+        )
+        .with_staking_policy(fixture_staking_policy())
+        .unwrap()
+        .set_topology(topology.clone())
+        .with_sumeragi_context_parameters(SumeragiGenesisContextParameters::recommended())
+        .build_raw()
+        .expect("complete generic four-validator genesis")
+        .with_consensus_mode(SumeragiConsensusMode::Permissioned)
+        .with_consensus_meta()
+        .expect("valid fixture consensus parameters");
         let (bound_manifest, signed) = bind_and_sign_staged_sumeragi_context(
             raw,
             &genesis_key_pair,
@@ -1156,18 +1394,26 @@ mod tests {
                 missing_assessment_permitted: false,
                 ..FraudAdmissionPolicyV1::protocol_default()
             };
-            let raw =
-                GenesisBuilder::new_without_executor(ChainId::from("fraud-genesis-staging"), ".")
-                    .set_topology(default_test_topology())
-                    .with_sumeragi_context_parameters(
-                        SumeragiGenesisContextParameters::recommended(),
-                    )
-                    .append_parameter(Parameter::Custom(policy.into_custom_parameter()))
-                    .build_raw()
-                    .unwrap()
-                    .with_consensus_mode(SumeragiConsensusMode::Permissioned)
-                    .with_consensus_meta()
-                    .unwrap();
+            let raw = GenesisBuilder::new_without_executor(
+                ChainId::from("fraud-genesis-staging"),
+                ".",
+                iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                    iroha_crypto::Algorithm::Ed25519,
+                    iroha_crypto::Algorithm::Secp256k1,
+                    iroha_crypto::Algorithm::BlsNormal,
+                ])
+                .expect("explicit fixture account and validator controller policy"),
+            )
+            .with_staking_policy(fixture_staking_policy())
+            .unwrap()
+            .set_topology(default_test_topology())
+            .with_sumeragi_context_parameters(SumeragiGenesisContextParameters::recommended())
+            .append_parameter(Parameter::Custom(policy.into_custom_parameter()))
+            .build_raw()
+            .unwrap()
+            .with_consensus_mode(SumeragiConsensusMode::Permissioned)
+            .with_consensus_meta()
+            .unwrap();
             let (manifest, signed) = bind_and_sign_staged_sumeragi_context(
                 raw,
                 &key,

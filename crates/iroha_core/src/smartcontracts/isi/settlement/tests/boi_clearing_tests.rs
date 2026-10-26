@@ -14,7 +14,7 @@ fn boi_wholesale_vectors_preserve_gross_funding_balances_and_once_only_receipts(
             AssetBalanceScope::Global,
             AssetBalancePolicy::Global,
             16,
-            Quantity::from(1_000_000_u32),
+            &(Quantity::from(1_000_000_u32)),
         );
         let source = sources[0].source.clone();
         let destination = sources[1].source.clone();

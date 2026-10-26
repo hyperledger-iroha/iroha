@@ -275,7 +275,7 @@ impl NativeJournalCursor {
                 }
                 reader
                     .certified(height)
-                    .map(|value| value.into_committed())
+                    .map(super::certified_chain::CertifiedBlock::into_committed)
                     .map_err(NativeJournalError::History)
             },
         )?;

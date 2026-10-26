@@ -145,9 +145,9 @@ impl Fixture {
     fn new() -> Self {
         let native = NativeCheckTestFixtureV1::with_final_promotion_accounts(
             DEPLOYMENT,
-            account(1),
-            account(2),
-            account(3),
+            &account(1),
+            &account(2),
+            &account(3),
         );
         let receipt_policy = policy(&native, SignerRoleV1::FinalPromotionProvenance, 4, 7);
         let account_policy = policy(

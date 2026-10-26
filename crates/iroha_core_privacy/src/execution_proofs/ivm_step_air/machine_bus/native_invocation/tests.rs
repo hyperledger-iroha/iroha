@@ -116,7 +116,9 @@ impl History {
         private_history::View::new(
             private_history::Schedule::new(17, 1).unwrap(),
             [private_history::Segment::new(
-                core::array::from_fn(|column| self.columns[NOTE_COPY_WIDTH_V1 + column].as_slice()),
+                &core::array::from_fn(|column| {
+                    self.columns[NOTE_COPY_WIDTH_V1 + column].as_slice()
+                }),
                 core::array::from_fn(|column| self.aux[column].as_slice()),
             )],
             &self.challenges,
@@ -377,7 +379,7 @@ fn whole_history_shape_and_consumer_refusal_are_checked_without_new_backing() {
     let view = private_history::View::new(
         private_history::Schedule::new(13, 1).unwrap(),
         [private_history::Segment::new(
-            [column.as_slice(); super::super::ROW_WIDTH],
+            &[column.as_slice(); super::super::ROW_WIDTH],
             [column.as_slice(); permutation::WIDTH],
         )],
         &challenges,
@@ -396,7 +398,7 @@ fn whole_history_shape_and_consumer_refusal_are_checked_without_new_backing() {
     assert!(!touched);
     let column = vec![F::ZERO; 1 << 17];
     let segment = private_history::Segment::new(
-        [column.as_slice(); super::super::ROW_WIDTH],
+        &[column.as_slice(); super::super::ROW_WIDTH],
         [column.as_slice(); permutation::WIDTH],
     );
     let oversized = private_history::View::new(

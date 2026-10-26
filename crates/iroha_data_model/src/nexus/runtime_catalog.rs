@@ -28,6 +28,7 @@ pub const MAX_NEXUS_RUNTIME_CATALOG_ENTRIES: usize = MAX_ACTIVE_EXECUTION_LANES;
 pub const MAX_NEXUS_RUNTIME_MANIFEST_BYTES: usize = 256 * 1024;
 /// Maximum complete custom-parameter JSON, including its cumulative manifest sources.
 pub const MAX_NEXUS_RUNTIME_CATALOG_BYTES: usize = MAX_JSON_BYTES;
+const RUNTIME_CATALOG_DOMAIN: &[u8] = b"iroha:nexus:runtime-catalog:v1\0";
 const MAX_ALIAS_BYTES: usize = 128;
 const MAX_DESCRIPTION_BYTES: usize = 4 * 1024;
 const DECODE_LIMITS: norito::DecodeLimits = norito::DecodeLimits::new(
@@ -146,7 +147,7 @@ pub struct NexusRuntimeCatalogV1 {
 }
 
 /// Invalid or non-canonical additive Nexus catalog data.
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[derive(Debug, Error)]
 pub enum NexusCatalogValidationError {
     /// Only the V1 layout is accepted.
     #[error("unsupported Nexus runtime catalog version {0}")]
@@ -175,9 +176,58 @@ pub enum NexusCatalogValidationError {
     /// A protocol byte/count bound was exceeded.
     #[error("Nexus runtime catalog exceeds {0}")]
     BoundExceeded(&'static str),
-    /// Strict codec validation or bounded encoding failed.
+    /// Original typed JSON reader failure, including its decoder scope identity.
     #[error("Nexus runtime catalog codec: {0}")]
-    Codec(String),
+    Json(#[source] json::Error),
+    /// Fixed protocol lexical bound or syntax failure; this is not local admission.
+    #[error("Nexus runtime catalog codec: {0}")]
+    Preflight(#[source] json::JsonPreflightError),
+    /// Original counted JSON writer failure.
+    #[error("Nexus runtime catalog codec: {0}")]
+    JsonEncoding(#[source] json::BoundedJsonError),
+    /// Original bounded canonical frame writer failure.
+    #[error("Nexus runtime catalog codec: {0}")]
+    BinaryEncoding(#[source] norito::core::BoundedEncodeError),
+    /// Original canonical JSON custody or native codec failure.
+    #[error("Nexus runtime catalog codec: {0}")]
+    Codec(#[source] norito::Error),
+}
+
+impl NexusCatalogValidationError {
+    /// Move an original decoder cause into its caller's active admission observer.
+    ///
+    /// This performs no classification and creates no observer. The caller must
+    /// observe the actual operation before invoking this method. Scoped resource
+    /// owners retain their exact provenance; fixed protocol bounds and malformed
+    /// JSON stay in their original model variants instead of becoming local refusal.
+    ///
+    /// # Errors
+    /// Returns this unchanged error when it is not a native decoder cause or a
+    /// JSON resource report. No formatting or allocation occurs on that path.
+    pub fn into_decode_error(self) -> Result<norito::Error, Self> {
+        match self {
+            Self::Json(
+                original @ (json::Error::ScopedDecodeResource(_)
+                | json::Error::DecodeResource(_)
+                | json::Error::AllocationFailed),
+            ) => Ok(original.into_core_error()),
+            Self::JsonEncoding(
+                original @ (json::BoundedJsonError::ScopedDecodeResource(_)
+                | json::BoundedJsonError::DecodeResource(_)
+                | json::BoundedJsonError::AllocationFailed),
+            ) => Ok(original.into_core_error()),
+            Self::Codec(original)
+            | Self::BinaryEncoding(norito::core::BoundedEncodeError::Serialization(original)) => {
+                Ok(original)
+            }
+            Self::BinaryEncoding(norito::core::BoundedEncodeError::AllocationFailed { bytes }) => {
+                Ok(norito::Error::AllocationFailed {
+                    bytes: bytes as u64,
+                })
+            }
+            original => Err(original),
+        }
+    }
 }
 
 impl RuntimeDataSpaceAdditionV1 {
@@ -259,6 +309,12 @@ impl NexusCatalogTransitionV1 {
     /// # Errors
     /// Rejects unsupported versions, empty requests, non-canonical entries and codec bounds.
     pub fn validate_structure(&self) -> Result<(), NexusCatalogValidationError> {
+        self.validated_json().map(|_| ())
+    }
+
+    // Keep the validated output for authoring instead of allocating and serializing it again.
+    // This does not bypass lexical preflight or transfer ownership of the canonical Json backing.
+    fn validated_json(&self) -> Result<String, NexusCatalogValidationError> {
         version(self.version)?;
         nonzero(self.expected_catalog_hash, "expected_catalog_hash")?;
         nonzero(self.expected_incarnation_root, "expected_incarnation_root")?;
@@ -274,7 +330,9 @@ impl NexusCatalogTransitionV1 {
         validate_dataspaces(&self.dataspace_additions)?;
         validate_lanes(&self.lane_additions)?;
         validate_manifests(&self.manifest_additions)?;
-        preflight(&bounded_json(self)?, MAX_NEXUS_RUNTIME_CATALOG_BYTES)
+        let encoded = bounded_json(self)?;
+        preflight(&encoded, MAX_NEXUS_RUNTIME_CATALOG_BYTES)?;
+        Ok(encoded)
     }
 
     /// Return the exact transition custom-parameter ID.
@@ -290,8 +348,8 @@ impl NexusCatalogTransitionV1 {
     /// # Errors
     /// Returns structural or bounded codec failures.
     pub fn into_custom_parameter(self) -> Result<CustomParameter, NexusCatalogValidationError> {
-        self.validate_structure()?;
-        custom_parameter(Self::parameter_id(), &self)
+        let encoded = self.validated_json()?;
+        custom_parameter_from_validated_json(Self::parameter_id(), &encoded)
     }
 
     /// Decode only this reserved parameter and validate its complete bounded structure.
@@ -321,12 +379,20 @@ impl NexusRuntimeCatalogV1 {
     /// # Errors
     /// Rejects unsupported versions, zero baselines, non-canonical entries and codec bounds.
     pub fn validate_structure(&self) -> Result<(), NexusCatalogValidationError> {
+        self.validated_json().map(|_| ())
+    }
+
+    // Keep the validated output for authoring instead of allocating and serializing it again.
+    // This does not bypass lexical preflight or transfer ownership of the canonical Json backing.
+    fn validated_json(&self) -> Result<String, NexusCatalogValidationError> {
         version(self.version)?;
         nonzero(self.baseline_dataspaces_hash, "baseline_dataspaces_hash")?;
         nonzero(self.baseline_manifests_hash, "baseline_manifests_hash")?;
         validate_dataspaces(&self.dataspaces)?;
         validate_manifests(&self.manifests)?;
-        preflight(&bounded_json(self)?, MAX_NEXUS_RUNTIME_CATALOG_BYTES)
+        let encoded = bounded_json(self)?;
+        preflight(&encoded, MAX_NEXUS_RUNTIME_CATALOG_BYTES)?;
+        Ok(encoded)
     }
 
     /// Compute the canonical domain-separated root of this complete validated overlay.
@@ -335,12 +401,7 @@ impl NexusRuntimeCatalogV1 {
     /// Returns structural or bounded native encoding failures.
     pub fn canonical_hash(&self) -> Result<Hash, NexusCatalogValidationError> {
         self.validate_structure()?;
-        let encoded = norito::core::to_bytes_bounded(self, 2 * MAX_NEXUS_RUNTIME_CATALOG_BYTES)
-            .map_err(|error| NexusCatalogValidationError::Codec(error.to_string()))?;
-        Ok(Hash::new_from_chunks(&[
-            b"iroha:nexus:runtime-catalog:v1\0",
-            &encoded,
-        ]))
+        streamed_catalog_hash(self, 2 * MAX_NEXUS_RUNTIME_CATALOG_BYTES)
     }
 
     /// Return the exact protected cumulative-state custom-parameter ID.
@@ -356,8 +417,8 @@ impl NexusRuntimeCatalogV1 {
     /// # Errors
     /// Returns structural or bounded codec failures. This method grants no write authority.
     pub fn into_custom_parameter(self) -> Result<CustomParameter, NexusCatalogValidationError> {
-        self.validate_structure()?;
-        custom_parameter(Self::parameter_id(), &self)
+        let encoded = self.validated_json()?;
+        custom_parameter_from_validated_json(Self::parameter_id(), &encoded)
     }
 
     /// Decode and validate this protected state parameter without authenticating its origin.
@@ -483,7 +544,7 @@ fn validate_lanes(entries: &[LaneConfig]) -> Result<(), NexusCatalogValidationEr
                     "lane ID cannot form exclusive bound".into(),
                 )
             })?;
-        LaneCatalog::new(bound, entries.to_vec())
+        LaneCatalog::validate_borrowed(bound, entries)
             .map_err(|error| NexusCatalogValidationError::InvalidLane(error.to_string()))?;
     }
     Ok(())
@@ -525,31 +586,97 @@ fn preflight(raw: &str, max: usize) -> Result<(), NexusCatalogValidationError> {
     );
     json::preflight_slice(raw.as_bytes(), limits)
         .map(|_| ())
-        .map_err(|error| NexusCatalogValidationError::Codec(error.to_string()))
+        .map_err(NexusCatalogValidationError::Preflight)
 }
 fn bounded_json<T: JsonSerialize>(value: &T) -> Result<String, NexusCatalogValidationError> {
     json::to_json_bounded(value, MAX_NEXUS_RUNTIME_CATALOG_BYTES)
-        .map_err(|error| NexusCatalogValidationError::Codec(error.to_string()))
+        .map_err(NexusCatalogValidationError::JsonEncoding)
 }
+// Retained only as an independent authoring/refusal oracle in the unit controls.
+#[cfg(test)]
 fn custom_parameter<T: JsonSerialize>(
     id: CustomParameterId,
     value: &T,
 ) -> Result<CustomParameter, NexusCatalogValidationError> {
     let encoded = bounded_json(value)?;
     preflight(&encoded, MAX_NEXUS_RUNTIME_CATALOG_BYTES)?;
+    custom_parameter_from_validated_json(id, &encoded)
+}
+
+// Both production callers supply their exact validated_json result. Preserve the existing typed
+// parse and canonical custody: derive field order is not canonical Json object-key order.
+fn custom_parameter_from_validated_json(
+    id: CustomParameterId,
+    encoded: &str,
+) -> Result<CustomParameter, NexusCatalogValidationError> {
     let payload = norito::with_decode_limits_scope(DECODE_LIMITS, || {
-        let value: json::Value = json::from_str(&encoded)?;
-        Json::from_norito_value_ref(&value).map_err(|error| json::Error::Message(error.to_string()))
-    })
-    .map_err(|error| NexusCatalogValidationError::Codec(error.to_string()))?;
+        let value: json::Value =
+            json::from_str(encoded).map_err(NexusCatalogValidationError::Json)?;
+        Json::from_norito_value_ref(&value).map_err(NexusCatalogValidationError::Codec)
+    })?;
     Ok(CustomParameter::new(id, payload))
 }
+// The codec measures this exact borrowed value before invoking the prefix. It then enforces the
+// same payload length, checksum and layout flags while streaming its second pass. The prefix emits
+// no bytes and rejects an oversized complete frame before its header reaches the destination.
+// Preserve active layout flags exactly as to_bytes_bounded did; forcing default flags would change
+// existing commitments inside a non-default layout scope. Serializer-internal scratch remains its
+// owner's responsibility: this removes only the complete frame destination.
+fn write_catalog_frame<T: norito::core::NoritoSerialize>(
+    value: &T,
+    writer: &mut dyn std::io::Write,
+    maximum: usize,
+) -> Result<(), norito::core::BoundedEncodeError> {
+    let mut bound = None;
+    let result = norito::core::write_frame_with_prefix(
+        value,
+        &mut norito::core::Encoder::new(writer),
+        |_, encoded_bytes| {
+            if encoded_bytes > maximum {
+                bound = Some(norito::core::BoundedEncodeError::FrameTooLarge {
+                    encoded_bytes,
+                    max_bytes: maximum,
+                });
+                return Err(norito::Error::LengthMismatch);
+            }
+            Ok(())
+        },
+    );
+    match bound {
+        Some(original) => Err(original),
+        None => result.map_err(norito::core::BoundedEncodeError::Serialization),
+    }
+}
+
+fn streamed_catalog_hash<T: norito::core::NoritoSerialize>(
+    value: &T,
+    maximum: usize,
+) -> Result<Hash, NexusCatalogValidationError> {
+    let mut codec = None;
+    let hash = Hash::new_from_writer(|writer| {
+        writer.write_all(RUNTIME_CATALOG_DOMAIN)?;
+        write_catalog_frame(value, writer, maximum).map_err(|original| {
+            codec = Some(original);
+            // Keep the original typed cause outside the I/O bridge without formatting or boxing.
+            std::io::Error::from(std::io::ErrorKind::Other)
+        })
+    });
+    if let Some(original) = codec {
+        return Err(NexusCatalogValidationError::BinaryEncoding(original));
+    }
+    hash.map_err(|original| {
+        NexusCatalogValidationError::BinaryEncoding(
+            norito::core::BoundedEncodeError::Serialization(norito::Error::Io(original)),
+        )
+    })
+}
+
 fn decode_payload<T: JsonDeserializeOwned>(
     payload: &Json,
 ) -> Result<T, NexusCatalogValidationError> {
     preflight(payload.get(), MAX_NEXUS_RUNTIME_CATALOG_BYTES)?;
     norito::with_decode_limits_scope(DECODE_LIMITS, || json::from_str(payload.get()))
-        .map_err(|error| NexusCatalogValidationError::Codec(error.to_string()))
+        .map_err(NexusCatalogValidationError::Json)
 }
 
 #[cfg(test)]
@@ -676,10 +803,10 @@ mod tests {
         request.dataspace_additions.clear();
         request.lane_additions.clear();
         request.manifest_additions.clear();
-        assert_eq!(
+        assert!(matches!(
             request.validate_structure(),
             Err(NexusCatalogValidationError::EmptyTransition)
-        );
+        ));
         let mut request = transition();
         request.dataspace_additions.push(dataspace(8, "eight"));
         assert!(request.validate_structure().is_err());
@@ -723,17 +850,15 @@ mod tests {
                 "expected_incarnation_root" => request.expected_incarnation_root = empty_digest,
                 _ => request.expected_runtime_catalog_hash = Some(empty_digest),
             }
-            let expected = NexusCatalogValidationError::ZeroCommitment(field);
-            assert_eq!(request.validate_structure(), Err(expected.clone()));
-            assert_eq!(
-                request.clone().into_custom_parameter(),
-                Err(expected.clone())
-            );
+            assert!(matches!(request.validate_structure(),
+                Err(NexusCatalogValidationError::ZeroCommitment(actual)) if actual == field));
+            assert!(matches!(request.clone().into_custom_parameter(),
+                Err(NexusCatalogValidationError::ZeroCommitment(actual)) if actual == field));
             let unchecked =
                 CustomParameter::new(NexusCatalogTransitionV1::parameter_id(), Json::new(request));
-            assert_eq!(
-                NexusCatalogTransitionV1::from_custom_parameter(&unchecked),
-                Err(expected)
+            assert!(
+                matches!(NexusCatalogTransitionV1::from_custom_parameter(&unchecked),
+                Err(NexusCatalogValidationError::ZeroCommitment(actual)) if actual == field)
             );
         }
         for field in ["baseline_dataspaces_hash", "baseline_manifests_hash"] {
@@ -742,15 +867,17 @@ mod tests {
                 "baseline_dataspaces_hash" => state.baseline_dataspaces_hash = empty_digest,
                 _ => state.baseline_manifests_hash = empty_digest,
             }
-            let expected = NexusCatalogValidationError::ZeroCommitment(field);
-            assert_eq!(state.validate_structure(), Err(expected.clone()));
-            assert_eq!(state.canonical_hash(), Err(expected.clone()));
-            assert_eq!(state.clone().into_custom_parameter(), Err(expected.clone()));
+            assert!(matches!(state.validate_structure(),
+                Err(NexusCatalogValidationError::ZeroCommitment(actual)) if actual == field));
+            assert!(matches!(state.canonical_hash(),
+                Err(NexusCatalogValidationError::ZeroCommitment(actual)) if actual == field));
+            assert!(matches!(state.clone().into_custom_parameter(),
+                Err(NexusCatalogValidationError::ZeroCommitment(actual)) if actual == field));
             let unchecked =
                 CustomParameter::new(NexusRuntimeCatalogV1::parameter_id(), Json::new(state));
-            assert_eq!(
-                NexusRuntimeCatalogV1::from_custom_parameter(&unchecked),
-                Err(expected)
+            assert!(
+                matches!(NexusRuntimeCatalogV1::from_custom_parameter(&unchecked),
+                Err(NexusCatalogValidationError::ZeroCommitment(actual)) if actual == field)
             );
         }
     }
@@ -871,5 +998,887 @@ mod tests {
         let catalog = DataSpaceCatalog::new(vec![second, first]).unwrap();
         assert_eq!(catalog.entries()[0].id, DataSpaceId::new(17));
         assert_eq!(catalog.entries()[1].id, DataSpaceId::new(18));
+    }
+
+    // Independent pre-streaming oracle. It deliberately allocates a complete native frame so the
+    // original destination refusal assertions remain exercised alongside the optimized path.
+    fn materialized_runtime_hash(
+        value: &NexusRuntimeCatalogV1,
+    ) -> Result<Hash, NexusCatalogValidationError> {
+        value.validate_structure()?;
+        let encoded = norito::core::to_bytes_bounded(value, 2 * MAX_NEXUS_RUNTIME_CATALOG_BYTES)
+            .map_err(NexusCatalogValidationError::BinaryEncoding)?;
+        Ok(Hash::new_from_chunks(&[RUNTIME_CATALOG_DOMAIN, &encoded]))
+    }
+
+    fn assert_original_refusal(
+        context: &norito::core::DecodeBudgetContext,
+        operation: impl FnOnce() -> NexusCatalogValidationError,
+    ) -> norito::core::DecodeAttemptError {
+        let mut captured = None;
+        let attempt = context
+            .with(|| {
+                norito::core::classify_decode_attempt(|| {
+                    let original = operation()
+                        .into_decode_error()
+                        .expect("actual decoder cause is available to its enclosing observer");
+                    if let norito::Error::ScopedDecodeResource(scope) = &original {
+                        captured = Some(scope.clone());
+                    }
+                    Err::<(), _>(original)
+                })
+            })
+            .unwrap_err();
+        assert_eq!(
+            attempt.kind(),
+            norito::core::DecodeAttemptErrorKind::EnclosingLimit
+        );
+        assert!(attempt.local_refusal().is_some());
+        let norito::Error::ScopedDecodeResource(original) = attempt.error() else {
+            panic!("the actual operation must retain its original scoped refusal");
+        };
+        assert_eq!(Some(original), captured.as_ref());
+        attempt
+    }
+
+    #[test]
+    fn catalog_decode_preserves_actual_work_allocation_and_observer_identity() {
+        type Read = fn(&CustomParameter) -> Result<(), NexusCatalogValidationError>;
+        let sources: [(CustomParameter, Read); 2] = [
+            (transition().into_custom_parameter().unwrap(), |source| {
+                NexusCatalogTransitionV1::from_custom_parameter(source).map(|_| ())
+            }),
+            (runtime().into_custom_parameter().unwrap(), |source| {
+                NexusRuntimeCatalogV1::from_custom_parameter(source).map(|_| ())
+            }),
+        ];
+        for (source, read) in sources {
+            let original = source.clone();
+            for work_limit in [true, false] {
+                let limits = norito::DecodeLimits::new(
+                    usize::MAX,
+                    usize::MAX,
+                    if work_limit { 1 } else { usize::MAX },
+                    if work_limit { usize::MAX } else { 0 },
+                    usize::MAX,
+                );
+                let context = norito::core::DecodeBudgetContext::new(limits);
+                let error = assert_original_refusal(&context, || read(&source).unwrap_err());
+                let norito::Error::ScopedDecodeResource(_) = error.error() else {
+                    unreachable!("checked original scope");
+                };
+                if work_limit {
+                    assert!(
+                        matches!(error.error().decode_resource_error().expect("original resource fields"),
+                        norito::core::DecodeResourceError::TotalElementsExceeded { attempted, limit: 1 }
+                        if attempted > 1)
+                    );
+                } else {
+                    assert!(
+                        matches!(error.error().decode_resource_error().expect("original resource fields"),
+                        norito::core::DecodeResourceError::TotalAllocationExceeded { attempted, limit: 0 }
+                        if attempted > 0)
+                    );
+                }
+                // Even the same cumulative context cannot authorize replay in a sibling attempt.
+                let replay = context
+                    .with(|| {
+                        norito::core::classify_decode_attempt(|| Err::<(), _>(error.into_error()))
+                    })
+                    .unwrap_err();
+                assert_eq!(replay.kind(), norito::core::DecodeAttemptErrorKind::Invalid);
+                assert!(replay.local_refusal().is_none());
+                assert_eq!(source, original);
+                assert!(source.payload().ptr_eq(original.payload()));
+                read(&source)
+                    .expect("unchanged original source retries outside the exhausted context");
+            }
+        }
+    }
+
+    #[test]
+    fn catalog_authoring_preserves_writer_and_inner_canonical_custody_refusals() {
+        let value = json::Value::Null;
+        let zero = norito::core::DecodeBudgetContext::new(norito::DecodeLimits::new(
+            usize::MAX,
+            usize::MAX,
+            usize::MAX,
+            0,
+            usize::MAX,
+        ));
+        assert_original_refusal(&zero, || {
+            let error = bounded_json(&value).unwrap_err();
+            assert!(matches!(
+                &error,
+                NexusCatalogValidationError::JsonEncoding(
+                    json::BoundedJsonError::ScopedDecodeResource(_)
+                )
+            ));
+            error
+        });
+        assert_eq!(bounded_json(&value).unwrap(), "null");
+
+        // Measure the exact prefix before canonical Json custody. The tested operation
+        // remains the complete original custom_parameter path, including its parse.
+        let measured = norito::core::DecodeBudgetContext::new(norito::DecodeLimits::new(
+            usize::MAX,
+            usize::MAX,
+            usize::MAX,
+            usize::MAX,
+            usize::MAX,
+        ));
+        measured.with(|| {
+            let encoded = bounded_json(&value).unwrap();
+            preflight(&encoded, MAX_NEXUS_RUNTIME_CATALOG_BYTES).unwrap();
+            norito::with_decode_limits_scope(DECODE_LIMITS, || {
+                assert!(matches!(
+                    json::from_str::<json::Value>(&encoded).unwrap(),
+                    json::Value::Null
+                ));
+            });
+        });
+        let prefix_bytes = usize::try_from(measured.consumed_allocated_bytes()).unwrap();
+        assert!(prefix_bytes > 0);
+        let context = norito::core::DecodeBudgetContext::new(norito::DecodeLimits::new(
+            usize::MAX,
+            usize::MAX,
+            usize::MAX,
+            prefix_bytes,
+            usize::MAX,
+        ));
+        let id = NexusCatalogTransitionV1::parameter_id();
+        let expected = custom_parameter(id.clone(), &value).unwrap();
+        assert_original_refusal(&context, || {
+            let error = custom_parameter(id.clone(), &value).unwrap_err();
+            assert!(
+                matches!(
+                    &error,
+                    NexusCatalogValidationError::Codec(norito::Error::ScopedDecodeResource(_))
+                ),
+                "the refusal must be from original canonical custody after the measured prefix"
+            );
+            error
+        });
+        assert_eq!(context.consumed_allocated_bytes(), prefix_bytes as u64);
+        assert_eq!(custom_parameter(id, &value).unwrap(), expected);
+    }
+
+    #[test]
+    fn catalog_root_hash_preserves_original_binary_destination_refusal() {
+        let value = runtime();
+        let original = value.clone();
+        let expected = value.canonical_hash().unwrap();
+        let measured = norito::core::DecodeBudgetContext::new(norito::DecodeLimits::new(
+            usize::MAX,
+            usize::MAX,
+            usize::MAX,
+            usize::MAX,
+            usize::MAX,
+        ));
+        measured.with(|| value.validate_structure()).unwrap();
+        let prefix_bytes = usize::try_from(measured.consumed_allocated_bytes()).unwrap();
+        let context = norito::core::DecodeBudgetContext::new(norito::DecodeLimits::new(
+            usize::MAX,
+            usize::MAX,
+            usize::MAX,
+            prefix_bytes,
+            usize::MAX,
+        ));
+        assert_original_refusal(&context, || {
+            let error = materialized_runtime_hash(&value).unwrap_err();
+            assert!(matches!(
+                &error,
+                NexusCatalogValidationError::BinaryEncoding(
+                    norito::core::BoundedEncodeError::Serialization(
+                        norito::Error::ScopedDecodeResource(_)
+                    )
+                )
+            ));
+            error
+        });
+        assert_eq!(context.consumed_allocated_bytes(), prefix_bytes as u64);
+        let streaming = norito::core::DecodeBudgetContext::new(norito::DecodeLimits::new(
+            usize::MAX,
+            usize::MAX,
+            usize::MAX,
+            prefix_bytes,
+            usize::MAX,
+        ));
+        assert_eq!(streaming.with(|| value.canonical_hash()).unwrap(), expected);
+        assert_eq!(streaming.consumed_allocated_bytes(), prefix_bytes as u64);
+        assert_eq!(value, original);
+        assert_eq!(value.canonical_hash().unwrap(), expected);
+    }
+
+    #[test]
+    fn catalog_invalid_input_and_protocol_bounds_never_gain_local_admission() {
+        let invalid = preflight("{", MAX_NEXUS_RUNTIME_CATALOG_BYTES).unwrap_err();
+        assert!(matches!(invalid.into_decode_error(),
+            Err(NexusCatalogValidationError::Preflight(error)) if error.syntax_kind().is_some()));
+        let fixed_bound = preflight("null", 3).unwrap_err();
+        assert!(matches!(fixed_bound.into_decode_error(),
+            Err(NexusCatalogValidationError::Preflight(error)) if error.resource_kind().is_some()));
+        let malformed =
+            CustomParameter::new(NexusCatalogTransitionV1::parameter_id(), Json::new(()));
+        let error = NexusCatalogTransitionV1::from_custom_parameter(&malformed).unwrap_err();
+        assert!(matches!(
+            error.into_decode_error(),
+            Err(NexusCatalogValidationError::Json(_))
+        ));
+        let mut wrong_version = transition();
+        wrong_version.version = 2;
+        assert!(matches!(
+            wrong_version
+                .validate_structure()
+                .unwrap_err()
+                .into_decode_error(),
+            Err(NexusCatalogValidationError::UnsupportedVersion(2))
+        ));
+        let too_large = "x".repeat(MAX_NEXUS_RUNTIME_CATALOG_BYTES);
+        assert!(matches!(
+            bounded_json(&too_large).unwrap_err().into_decode_error(),
+            Err(NexusCatalogValidationError::JsonEncoding(
+                json::BoundedJsonError::BodyTooLarge
+            ))
+        ));
+        let frame = norito::core::to_bytes_bounded(&runtime(), 0).unwrap_err();
+        assert!(matches!(
+            NexusCatalogValidationError::BinaryEncoding(frame).into_decode_error(),
+            Err(NexusCatalogValidationError::BinaryEncoding(
+                norito::core::BoundedEncodeError::FrameTooLarge { .. }
+            ))
+        ));
+        let reconstructed = NexusCatalogValidationError::Json(json::Error::DecodeResource(
+            norito::core::DecodeResourceError::TotalElementsExceeded {
+                attempted: 2,
+                limit: 1,
+            },
+        ));
+        let context = norito::core::DecodeBudgetContext::new(norito::DecodeLimits::new(
+            usize::MAX,
+            usize::MAX,
+            1,
+            usize::MAX,
+            usize::MAX,
+        ));
+        let attempt = context
+            .with(|| {
+                norito::core::classify_decode_attempt(|| {
+                    Err::<(), _>(reconstructed.into_decode_error().unwrap())
+                })
+            })
+            .unwrap_err();
+        assert_eq!(
+            attempt.kind(),
+            norito::core::DecodeAttemptErrorKind::Invalid
+        );
+        assert!(attempt.local_refusal().is_none());
+    }
+
+    #[test]
+    fn catalog_second_read_exhausts_original_cumulative_element_owner() {
+        let expected = transition();
+        let source = expected.clone().into_custom_parameter().unwrap();
+        let original = source.clone();
+        let unlimited =
+            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, usize::MAX, usize::MAX);
+        let (measured, usage) = norito::core::with_decode_limits_measured(unlimited, || {
+            NexusCatalogTransitionV1::from_custom_parameter(&source)
+        });
+        assert_eq!(measured.unwrap(), Some(expected.clone()));
+        let work = usage.total_elements();
+        assert!(work > 0);
+        let limit = work.checked_mul(2).unwrap() - 1;
+        let limits =
+            norito::DecodeLimits::new(usize::MAX, usize::MAX, limit, usize::MAX, usize::MAX);
+        let context = norito::core::DecodeBudgetContext::new(limits);
+        let first = context
+            .with(|| NexusCatalogTransitionV1::from_custom_parameter(&source))
+            .unwrap();
+        assert_eq!(first, Some(expected));
+        let error = assert_original_refusal(&context, || {
+            NexusCatalogTransitionV1::from_custom_parameter(&source).unwrap_err()
+        });
+        let norito::Error::ScopedDecodeResource(_) = error.error() else {
+            unreachable!("checked original scoped work refusal");
+        };
+        assert!(
+            matches!(error.error().decode_resource_error().expect("original resource fields"),
+            norito::core::DecodeResourceError::TotalElementsExceeded { attempted, limit: actual }
+            if actual == limit as u64 && attempted > actual)
+        );
+        assert_eq!(source, original);
+        assert!(source.payload().ptr_eq(original.payload()));
+        let fresh = norito::core::DecodeBudgetContext::new(limits);
+        assert_eq!(
+            fresh
+                .with(|| NexusCatalogTransitionV1::from_custom_parameter(&source))
+                .unwrap(),
+            first
+        );
+    }
+
+    #[test]
+    fn catalog_real_json_and_binary_destination_denials_preserve_bytes_and_retry() {
+        use crate::amx_prepare_streaming_allocations::with_nth_exact_allocation_denial;
+        use std::alloc::Layout;
+
+        let value = json::Value::Null;
+        let expected = bounded_json(&value).unwrap();
+        let bytes = expected.len();
+        let layout = Layout::array::<u8>(bytes).unwrap();
+        let (attempt, denied) = with_nth_exact_allocation_denial(layout, 0, || {
+            norito::core::classify_decode_attempt(|| {
+                let error = bounded_json(&value).unwrap_err();
+                assert!(matches!(&error, NexusCatalogValidationError::JsonEncoding(
+                    json::BoundedJsonError::DecodeResource(norito::core::DecodeResourceError::AllocationFailed { bytes: actual })
+                ) if *actual == bytes as u64));
+                Err::<(), _>(error.into_decode_error().unwrap())
+            })
+        });
+        assert!(denied, "actual counted JSON destination must be denied");
+        let error = attempt.unwrap_err();
+        assert_eq!(
+            error.kind(),
+            norito::core::DecodeAttemptErrorKind::Allocator
+        );
+        assert!(
+            matches!(error.error(), norito::Error::AllocationFailed { bytes: actual } if *actual == bytes as u64)
+        );
+        assert_eq!(
+            error.local_refusal().unwrap().kind(),
+            norito::core::DecodeLocalRefusalKind::Allocator
+        );
+        assert_eq!(bounded_json(&value).unwrap(), expected);
+
+        let mut value = runtime();
+        value.dataspaces.clear();
+        value.manifests.clear();
+        let original = value.clone();
+        let expected = value.canonical_hash().unwrap();
+        let bytes = norito::core::encoded_frame_len(&value).unwrap();
+        // Empty collections need no prefix allocation; the only prior owned
+        // serialization is the differently sized bounded JSON validation output.
+        assert_ne!(bounded_json(&value).unwrap().len(), bytes);
+        let layout = Layout::array::<u8>(bytes).unwrap();
+        let (attempt, denied) = with_nth_exact_allocation_denial(layout, 0, || {
+            norito::core::classify_decode_attempt(|| {
+                let error = materialized_runtime_hash(&value).unwrap_err();
+                assert!(
+                    matches!(&error, NexusCatalogValidationError::BinaryEncoding(
+                    norito::core::BoundedEncodeError::AllocationFailed { bytes: actual }
+                ) if *actual == bytes)
+                );
+                Err::<(), _>(error.into_decode_error().unwrap())
+            })
+        });
+        assert!(denied, "actual canonical binary destination must be denied");
+        let error = attempt.unwrap_err();
+        assert_eq!(
+            error.kind(),
+            norito::core::DecodeAttemptErrorKind::Allocator
+        );
+        assert!(
+            matches!(error.error(), norito::Error::AllocationFailed { bytes: actual } if *actual == bytes as u64)
+        );
+        assert_eq!(
+            error.local_refusal().unwrap().kind(),
+            norito::core::DecodeLocalRefusalKind::Allocator
+        );
+        let (streamed, denied) =
+            with_nth_exact_allocation_denial(layout, 0, || value.canonical_hash());
+        assert!(
+            !denied,
+            "streaming never requests the removed frame destination"
+        );
+        assert_eq!(streamed.unwrap(), expected);
+        assert_eq!(value, original);
+        assert_eq!(value.canonical_hash().unwrap(), expected);
+    }
+
+    #[test]
+    fn streamed_catalog_frames_preserve_exact_bytes_layouts_and_bounds() {
+        let mut empty = runtime();
+        empty.dataspaces.clear();
+        empty.manifests.clear();
+        let mut populated = runtime();
+        populated.dataspaces[0].descriptor.description = Some("quoted \"line\"\n\\雪 ".repeat(64));
+        populated.dataspaces.push(dataspace(17, "seventeen"));
+        populated.manifests.push(RuntimeLaneManifestV1 {
+            lane_id: LaneId::new(18),
+            manifest: Json::new(json::Value::Object(
+                [(
+                    "escaped".into(),
+                    json::Value::String("\"\\\n雪".repeat(128)),
+                )]
+                .into_iter()
+                .collect(),
+            )),
+        });
+        for value in [empty, runtime(), populated] {
+            for flags in [0, norito::core::header_flags::COMPACT_LEN] {
+                let _layout = norito::core::DecodeFlagsGuard::enter(flags);
+                let original = value.clone();
+                let frame =
+                    norito::core::to_bytes_bounded(&value, 2 * MAX_NEXUS_RUNTIME_CATALOG_BYTES)
+                        .unwrap();
+                let expected = Hash::new_from_chunks(&[RUNTIME_CATALOG_DOMAIN, &frame]);
+                let mut streamed = Vec::new();
+                write_catalog_frame(&value, &mut streamed, frame.len()).unwrap();
+                assert_eq!(
+                    streamed, frame,
+                    "header, padding, payload and checksum must match"
+                );
+                assert_eq!(
+                    streamed_catalog_hash(&value, frame.len()).unwrap(),
+                    expected
+                );
+                assert_eq!(value.canonical_hash().unwrap(), expected);
+                let mut refused_output = Vec::new();
+                let error =
+                    write_catalog_frame(&value, &mut refused_output, frame.len() - 1).unwrap_err();
+                assert!(matches!(error,
+                    norito::core::BoundedEncodeError::FrameTooLarge { encoded_bytes, max_bytes }
+                    if encoded_bytes == frame.len() && max_bytes == frame.len() - 1));
+                assert!(
+                    refused_output.is_empty(),
+                    "over-limit frame must not emit its header"
+                );
+                assert!(matches!(
+                    streamed_catalog_hash(&value, frame.len() - 1).unwrap_err().into_decode_error(),
+                    Err(NexusCatalogValidationError::BinaryEncoding(
+                        norito::core::BoundedEncodeError::FrameTooLarge { encoded_bytes, max_bytes }
+                    )) if encoded_bytes == frame.len() && max_bytes == frame.len() - 1
+                ));
+                assert_eq!(value, original);
+            }
+        }
+    }
+
+    #[test]
+    fn catalog_streaming_removes_only_frame_destination_and_keeps_actual_refusals() {
+        use crate::amx_prepare_streaming_allocations::{
+            measured, with_nth_exact_allocation_denial,
+        };
+        use std::alloc::Layout;
+
+        let value = runtime();
+        let original = value.clone();
+        let expected = materialized_runtime_hash(&value).unwrap();
+        // Warm process state and prepare every oracle/input before observing native requests.
+        assert_eq!(value.canonical_hash().unwrap(), expected);
+        let (validated, validation_requests) = measured(|| value.validate_structure());
+        validated.unwrap();
+        let (streamed, hash_requests) = measured(|| value.canonical_hash());
+        assert_eq!(streamed.unwrap(), expected);
+        assert_eq!(
+            hash_requests, validation_requests,
+            "hashing adds no native allocation request beyond existing JSON validation"
+        );
+        let (materialized, materialized_requests) = measured(|| materialized_runtime_hash(&value));
+        assert_eq!(materialized.unwrap(), expected);
+        assert_eq!(
+            materialized_requests.iter().sum::<usize>(),
+            hash_requests.iter().sum::<usize>() + 1,
+            "the independent oracle still allocates exactly the removed complete frame"
+        );
+
+        let prefix = bounded_json(&value).unwrap().len();
+        let context = norito::core::DecodeBudgetContext::new(norito::DecodeLimits::new(
+            usize::MAX,
+            usize::MAX,
+            usize::MAX,
+            prefix - 1,
+            usize::MAX,
+        ));
+        assert_original_refusal(&context, || {
+            let error = value.canonical_hash().unwrap_err();
+            assert!(matches!(
+                &error,
+                NexusCatalogValidationError::JsonEncoding(
+                    json::BoundedJsonError::ScopedDecodeResource(_)
+                )
+            ));
+            error
+        });
+        // The JSON destination still really exists. Refusing its allocator request must retain
+        // the actual allocator cause, even though the later binary destination has disappeared.
+        let (attempt, denied) =
+            with_nth_exact_allocation_denial(Layout::array::<u8>(prefix).unwrap(), 0, || {
+                norito::core::classify_decode_attempt(|| {
+                    let error = value.canonical_hash().unwrap_err();
+                    assert!(matches!(&error, NexusCatalogValidationError::JsonEncoding(
+                        json::BoundedJsonError::DecodeResource(
+                            norito::core::DecodeResourceError::AllocationFailed { bytes }
+                        )) if *bytes == prefix as u64));
+                    Err::<(), _>(error.into_decode_error().unwrap())
+                })
+            });
+        assert!(denied);
+        let error = attempt.unwrap_err();
+        assert_eq!(
+            error.kind(),
+            norito::core::DecodeAttemptErrorKind::Allocator
+        );
+        assert!(
+            matches!(error.error(), norito::Error::AllocationFailed { bytes }
+            if *bytes == prefix as u64)
+        );
+        assert_eq!(
+            error.local_refusal().unwrap().kind(),
+            norito::core::DecodeLocalRefusalKind::Allocator
+        );
+        assert_eq!(value, original);
+        assert_eq!(value.canonical_hash().unwrap(), expected);
+    }
+
+    #[test]
+    fn catalog_streaming_keeps_original_serializer_refusals_and_rejects_drift() {
+        use std::{cell::Cell, io::Write};
+
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(name = "iroha_data_model.test.CatalogAllocatingSerializer")]
+        struct Allocating;
+        impl norito::SerializePayload for Allocating {
+            fn serialize(
+                &self,
+                output: &mut norito::core::Encoder<'_>,
+            ) -> Result<(), norito::Error> {
+                // Exercise a real fallible codec destination inside the producer. No error fields
+                // or observer provenance are fabricated by this control.
+                let bytes =
+                    norito::core::to_bytes_bounded(&7_u8, 1024).map_err(|error| match error {
+                        norito::core::BoundedEncodeError::Serialization(original) => original,
+                        norito::core::BoundedEncodeError::AllocationFailed { bytes } => {
+                            norito::Error::AllocationFailed {
+                                bytes: bytes as u64,
+                            }
+                        }
+                        norito::core::BoundedEncodeError::FrameTooLarge { .. } => {
+                            unreachable!("single byte fixture fits the fixed frame bound")
+                        }
+                    })?;
+                output.write_all(&bytes)?;
+                Ok(())
+            }
+        }
+        let context = norito::core::DecodeBudgetContext::new(norito::DecodeLimits::new(
+            usize::MAX,
+            usize::MAX,
+            usize::MAX,
+            0,
+            usize::MAX,
+        ));
+        assert_original_refusal(&context, || {
+            let error = streamed_catalog_hash(&Allocating, 4096).unwrap_err();
+            assert!(matches!(
+                &error,
+                NexusCatalogValidationError::BinaryEncoding(
+                    norito::core::BoundedEncodeError::Serialization(
+                        norito::Error::ScopedDecodeResource(_)
+                    )
+                )
+            ));
+            error
+        });
+        let bytes = norito::core::to_bytes_bounded(&Allocating, 4096).unwrap();
+        assert_eq!(
+            streamed_catalog_hash(&Allocating, 4096).unwrap(),
+            Hash::new_from_chunks(&[RUNTIME_CATALOG_DOMAIN, &bytes])
+        );
+
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(name = "iroha_data_model.test.CatalogDriftingSerializer")]
+        struct Drifting {
+            visits: Cell<usize>,
+            length_changes: bool,
+        }
+        impl norito::SerializePayload for Drifting {
+            fn serialize(
+                &self,
+                output: &mut norito::core::Encoder<'_>,
+            ) -> Result<(), norito::Error> {
+                let visit = self.visits.get();
+                self.visits.set(visit + 1);
+                if self.length_changes && visit != 0 {
+                    output.write_all(&[1, 2])?;
+                } else {
+                    output.write_all(&[u8::from(visit != 0)])?;
+                }
+                Ok(())
+            }
+        }
+        for length_changes in [false, true] {
+            let value = Drifting {
+                visits: Cell::new(0),
+                length_changes,
+            };
+            let error = streamed_catalog_hash(&value, 4096).unwrap_err();
+            assert!(matches!(error, NexusCatalogValidationError::BinaryEncoding(
+                norito::core::BoundedEncodeError::Serialization(ref original)
+            ) if if length_changes { matches!(original, norito::Error::LengthMismatch) }
+                else { matches!(original, norito::Error::ChecksumMismatch) }));
+            assert_eq!(
+                value.visits.get(),
+                2,
+                "the actual two passes must detect drift"
+            );
+        }
+    }
+
+    #[test]
+    fn catalog_authoring_reuses_validated_json_without_changing_custody_or_bounds() {
+        fn check<T: JsonSerialize + Clone>(
+            value: T,
+            validate: fn(&T) -> Result<(), NexusCatalogValidationError>,
+            author: fn(T) -> Result<CustomParameter, NexusCatalogValidationError>,
+            id: fn() -> CustomParameterId,
+        ) {
+            let unlimited = norito::DecodeLimits::new(
+                usize::MAX,
+                usize::MAX,
+                usize::MAX,
+                usize::MAX,
+                usize::MAX,
+            );
+            let prior = norito::core::DecodeBudgetContext::new(unlimited);
+            let previous = prior
+                .with(|| {
+                    validate(&value)?;
+                    custom_parameter(id(), &value)
+                })
+                .unwrap();
+            let destination_bytes = bounded_json(&value).unwrap().len();
+            let next_source = value.clone();
+            let current = norito::core::DecodeBudgetContext::new(unlimited);
+            let next = current.with(|| author(next_source)).unwrap();
+            assert_eq!(next, previous);
+            assert_eq!(next.payload().get(), previous.payload().get());
+            assert_eq!(
+                prior.consumed_allocated_bytes(),
+                current.consumed_allocated_bytes() + destination_bytes as u64,
+                "only the duplicate validated JSON destination charge is removed"
+            );
+            let exact = usize::try_from(current.consumed_allocated_bytes()).unwrap();
+            assert!(exact > 0);
+            let source = value.clone();
+            let fits = norito::core::DecodeBudgetContext::new(norito::DecodeLimits::new(
+                usize::MAX,
+                usize::MAX,
+                usize::MAX,
+                exact,
+                usize::MAX,
+            ));
+            assert_eq!(fits.with(|| author(source)).unwrap(), previous);
+            assert_eq!(fits.consumed_allocated_bytes(), exact as u64);
+            let source = value.clone();
+            let short = norito::core::DecodeBudgetContext::new(norito::DecodeLimits::new(
+                usize::MAX,
+                usize::MAX,
+                usize::MAX,
+                exact - 1,
+                usize::MAX,
+            ));
+            assert_original_refusal(&short, || author(source).unwrap_err());
+            assert_eq!(author(value).unwrap(), previous);
+        }
+        check(
+            transition(),
+            NexusCatalogTransitionV1::validate_structure,
+            NexusCatalogTransitionV1::into_custom_parameter,
+            NexusCatalogTransitionV1::parameter_id,
+        );
+        check(
+            runtime(),
+            NexusRuntimeCatalogV1::validate_structure,
+            NexusRuntimeCatalogV1::into_custom_parameter,
+            NexusRuntimeCatalogV1::parameter_id,
+        );
+    }
+
+    // Exact prior wrapper and independent prior owner; used only as a regression oracle.
+    fn materialized_validate_lanes(
+        entries: &[LaneConfig],
+    ) -> Result<(), NexusCatalogValidationError> {
+        count(entries.len())?;
+        if entries.windows(2).any(|pair| pair[0].id >= pair[1].id) {
+            return Err(NexusCatalogValidationError::NonCanonicalOrder("lanes"));
+        }
+        for entry in entries {
+            validate_alias(&entry.alias)?;
+            if entry
+                .description
+                .as_ref()
+                .is_some_and(|value| value.len() > MAX_DESCRIPTION_BYTES)
+            {
+                return Err(NexusCatalogValidationError::BoundExceeded(
+                    "lane description bytes",
+                ));
+            }
+        }
+        if let Some(last) = entries.last() {
+            let bound = last
+                .id
+                .as_u32()
+                .checked_add(1)
+                .and_then(NonZeroU32::new)
+                .ok_or_else(|| {
+                    NexusCatalogValidationError::InvalidLane(
+                        "lane ID cannot form exclusive bound".into(),
+                    )
+                })?;
+            super::super::tests::original_lane_catalog_constructor(bound, entries.to_vec())
+                .map_err(|error| NexusCatalogValidationError::InvalidLane(error.to_string()))?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn borrowed_runtime_lanes_preserve_outer_limits_order_and_owner_errors() {
+        let lane = transition().lane_additions.remove(0);
+        let mut cases = vec![Vec::new(), vec![lane.clone()]];
+        let mut oversized = vec![lane.clone(); MAX_NEXUS_RUNTIME_CATALOG_ENTRIES + 1];
+        oversized[0].alias.clear();
+        assert!(matches!(
+            validate_lanes(&oversized),
+            Err(NexusCatalogValidationError::BoundExceeded("entry count"))
+        ));
+        cases.push(oversized);
+        let mut reversed = vec![lane.clone(), lane.clone()];
+        reversed[0].alias.clear();
+        assert!(matches!(
+            validate_lanes(&reversed),
+            Err(NexusCatalogValidationError::NonCanonicalOrder("lanes"))
+        ));
+        cases.push(reversed);
+        for alias in [
+            String::new(),
+            " padded ".into(),
+            "control\n".into(),
+            "x".repeat(MAX_ALIAS_BYTES + 1),
+        ] {
+            let mut invalid = lane.clone();
+            invalid.alias = alias;
+            invalid.id = LaneId::new(u32::MAX);
+            assert!(matches!(
+                validate_lanes(std::slice::from_ref(&invalid)),
+                Err(NexusCatalogValidationError::InvalidDataSpace(
+                    "non-canonical alias"
+                ))
+            ));
+            cases.push(vec![invalid]);
+        }
+        let mut description = lane.clone();
+        description.description = Some("d".repeat(MAX_DESCRIPTION_BYTES + 1));
+        description.id = LaneId::new(u32::MAX);
+        assert!(matches!(
+            validate_lanes(std::slice::from_ref(&description)),
+            Err(NexusCatalogValidationError::BoundExceeded(
+                "lane description bytes"
+            ))
+        ));
+        cases.push(vec![description]);
+        let mut overflow = lane.clone();
+        overflow.id = LaneId::new(u32::MAX);
+        assert!(matches!(validate_lanes(std::slice::from_ref(&overflow)),
+            Err(NexusCatalogValidationError::InvalidLane(message))
+            if message == "lane ID cannot form exclusive bound"));
+        cases.push(vec![overflow]);
+        let mut duplicate = lane.clone();
+        duplicate.id = LaneId::new(lane.id.as_u32() + 1);
+        assert!(matches!(validate_lanes(&[lane.clone(), duplicate.clone()]),
+            Err(NexusCatalogValidationError::InvalidLane(message))
+            if message == super::super::LaneCatalogError::DuplicateLaneAlias(lane.alias.clone()).to_string()));
+        cases.push(vec![lane.clone(), duplicate.clone()]);
+        duplicate.alias = "distinct".into();
+        duplicate.visibility = super::super::LaneVisibility::Restricted;
+        assert!(matches!(validate_lanes(&[lane.clone(), duplicate.clone()]),
+            Err(NexusCatalogValidationError::InvalidLane(message))
+            if message == (super::super::LaneCatalogError::MixedDataspaceVisibility { dataspace: lane.dataspace_id }).to_string()));
+        cases.push(vec![lane.clone(), duplicate]);
+        let mut retired = lane.clone();
+        retired
+            .metadata
+            .insert("da_shard_id".into(), "retired".into());
+        assert!(matches!(validate_lanes(std::slice::from_ref(&retired)),
+            Err(NexusCatalogValidationError::InvalidLane(message))
+            if message == super::super::LaneCatalogError::RetiredShardIdMetadata(lane.id).to_string()));
+        cases.push(vec![retired]);
+        for entries in cases {
+            let original = entries.clone();
+            let expected =
+                materialized_validate_lanes(&entries).map_err(|error| format!("{error:?}"));
+            let actual = validate_lanes(&entries).map_err(|error| format!("{error:?}"));
+            assert_eq!(
+                actual, expected,
+                "the wrapper must retain its exact variant and diagnostic"
+            );
+            assert_eq!(entries, original);
+        }
+        // Empty additions remain valid here; the complete owner constructor still rejects empty.
+        validate_lanes(&[]).unwrap();
+        assert_eq!(
+            LaneCatalog::validate_borrowed(NonZeroU32::MIN, &[]),
+            Err(super::super::LaneCatalogError::EmptyCatalog)
+        );
+    }
+
+    #[test]
+    fn borrowed_runtime_lanes_eliminate_graph_copy_at_exact_maximum_shape() {
+        use crate::amx_prepare_streaming_allocations::measured;
+        let lanes: Vec<_> = (0..MAX_NEXUS_RUNTIME_CATALOG_ENTRIES)
+            .map(|index| LaneConfig {
+                id: LaneId::new((index * 3 + 7) as u32),
+                alias: format!("{}-{index:04}", "a".repeat(MAX_ALIAS_BYTES - 5)),
+                description: Some("d".repeat(MAX_DESCRIPTION_BYTES)),
+                dataspace_id: DataSpaceId::new(9),
+                metadata: [("operator_note".into(), "retained input metadata".repeat(32))]
+                    .into_iter()
+                    .collect(),
+                ..LaneConfig::default()
+            })
+            .collect();
+        let original = lanes.clone();
+        let aliases: Vec<_> = lanes.iter().map(|lane| lane.alias.as_ptr()).collect();
+        let descriptions: Vec<_> = lanes
+            .iter()
+            .map(|lane| lane.description.as_ref().unwrap().as_ptr())
+            .collect();
+        validate_lanes(&lanes).unwrap();
+        let (old, old_requests) = measured(|| materialized_validate_lanes(&lanes));
+        old.unwrap();
+        assert!(
+            old_requests.iter().sum::<usize>() > 0,
+            "the independent old wrapper must exercise real graph and owner allocations"
+        );
+        let (new, requests) = measured(|| validate_lanes(&lanes));
+        new.unwrap();
+        assert_eq!(
+            requests, [0; 3],
+            "no alloc, alloc_zeroed or realloc on the borrowed path"
+        );
+        assert_eq!(lanes, original);
+        assert_eq!(
+            lanes
+                .iter()
+                .map(|lane| lane.alias.as_ptr())
+                .collect::<Vec<_>>(),
+            aliases
+        );
+        assert_eq!(
+            lanes
+                .iter()
+                .map(|lane| lane.description.as_ref().unwrap().as_ptr())
+                .collect::<Vec<_>>(),
+            descriptions
+        );
+        let mut over = lanes.clone();
+        let mut last = lanes.last().unwrap().clone();
+        last.id = LaneId::new(last.id.as_u32() + 1);
+        over.push(last);
+        assert!(matches!(
+            validate_lanes(&over),
+            Err(NexusCatalogValidationError::BoundExceeded("entry count"))
+        ));
     }
 }

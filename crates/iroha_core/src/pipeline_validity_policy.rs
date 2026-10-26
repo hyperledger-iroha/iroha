@@ -255,10 +255,8 @@ pub fn effective_pipeline(
 pub fn validate_set_parameter(
     custom: &CustomParameter,
 ) -> Result<bool, PipelineValidityPolicyError> {
-    match PipelineValidityPolicyV1::from_custom_parameter(custom) {
-        None => Ok(false),
-        Some(policy) => policy.map(|_| true),
-    }
+    PipelineValidityPolicyV1::from_custom_parameter(custom)
+        .map_or(Ok(false), |policy| policy.map(|_| true))
 }
 
 #[cfg(test)]

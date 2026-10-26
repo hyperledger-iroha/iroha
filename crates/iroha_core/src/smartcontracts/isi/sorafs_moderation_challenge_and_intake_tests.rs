@@ -371,8 +371,9 @@ fn pending_challenge_blocks_native_multisig_controller_rekey() {
                     spec,
                 )),
             )
-            .map_err(|error| {
-                InstructionExecutionError::InvariantViolation(error.to_string().into())
+            .map_err(|error| match error {
+                iroha_data_model::ValidationFail::InstructionFailed(error) => error,
+                other => InstructionExecutionError::InvariantViolation(format!("{other:?}").into()),
             })?;
             Transfer::asset_quantity(
                 AssetId::new(voting_asset_id, initial_signer.clone()),
@@ -918,7 +919,7 @@ fn retained_challenge_settlements_ignore_post_funding_issuer_and_account_control
         let escrow = account(&keypair(0x22));
         let slash_receiver = account(&keypair(0x23));
         let case_policy = policy_with_custody(escrow.clone(), slash_receiver.clone());
-        let mut fixture = Fixture::new_with_policy(1, case_policy.clone());
+        let mut fixture = Fixture::new_with_policy(1, &(case_policy));
         let challenger = account(&fixture.outsider);
         let manager = fixture.manager_id();
         let definition = case_policy.challenge_voting_asset_id.clone();
@@ -1209,7 +1210,7 @@ fn rejected_settlement_rolls_back_refund_when_slash_destination_disappears() {
     let escrow = account(&keypair(0x22));
     let slash_receiver = account(&keypair(0x23));
     let case_policy = policy_with_custody(escrow.clone(), slash_receiver.clone());
-    let mut fixture = Fixture::new_with_policy(1, case_policy);
+    let mut fixture = Fixture::new_with_policy(1, &(case_policy));
     let challenger = account(&fixture.outsider);
     fixture
         .run(2_500, |transaction| {

@@ -3,7 +3,10 @@
 use super::*;
 use iroha_config::{base::toml::TomlSource, parameters::actual};
 
-fn execution_policy(config: &Config) -> [u8; 32] {
+fn execution_policy(
+    config: &Config,
+    authored_fees: &iroha_data_model::block::consensus::RootFeePolicy,
+) -> [u8; 32] {
     assert!(!config.nexus.compliance.enabled);
     let manifests = iroha_core::governance::manifest::LaneManifestRegistry::from_config(
         &config.nexus.lane_catalog,
@@ -15,6 +18,7 @@ fn execution_policy(config: &Config) -> [u8; 32] {
         .expect("fixture lane policy coverage");
     let nexus = actual::nexus_consensus_policy_digest_with_runtime_policies(
         &config.nexus,
+        Some(authored_fees),
         None,
         Some(manifests.baseline_consensus_policy_digest()),
     )
@@ -22,7 +26,6 @@ fn execution_policy(config: &Config) -> [u8; 32] {
     actual::execution_policy_digest_v1(
         &config.pipeline,
         &config.oracle,
-        &config.crypto,
         &config.fraud_monitoring,
         &config.gov,
         &config.content,
@@ -52,7 +55,10 @@ fn assert_same_geometry_and_execution_policy(before: &Config, after: &Config) {
         after.nexus.dataspace_fee_sponsor_program_ids,
         before.nexus.dataspace_fee_sponsor_program_ids
     );
-    assert_eq!(execution_policy(after), execution_policy(before));
+    assert_eq!(
+        execution_policy(after, &after.nexus.fees),
+        execution_policy(before, &before.nexus.fees)
+    );
 }
 
 fn geometry_fixture(source: &str, root: &Path) -> toml::Table {

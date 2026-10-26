@@ -4,7 +4,7 @@ async fn ballot_zk_v1_rejects_alias_keys_in_raw_json() {
     let (state, _queue, _chain_id) = mk_basic_context();
     let authenticated = canonical_account(ACCOUNT_AUTHORITY);
     let network_id = *state.network_id_ref();
-    let envelope_b64 = base64::engine::general_purpose::STANDARD.encode(&[1u8, 2, 3, 4]);
+    let envelope_b64 = base64::engine::general_purpose::STANDARD.encode([1u8, 2, 3, 4]);
     let root_hint = hex::encode([0u8; 32]);
     let dto = super::ZkBallotV1Dto {
         authority: ACCOUNT_AUTHORITY.to_string(),
@@ -55,7 +55,7 @@ async fn ballot_zk_v1_rejects_noncanonical_owner_hint() {
         network_id: *state.network_id_ref(),
         election_id: "ref-1".to_string(),
         backend: "halo2/ipa".to_string(),
-        envelope_b64: base64::engine::general_purpose::STANDARD.encode(&[1u8, 2, 3, 4]),
+        envelope_b64: base64::engine::general_purpose::STANDARD.encode([1u8, 2, 3, 4]),
         root_hint: None,
         owner: Some(owner),
         amount: Some(100_u64.into()),
@@ -311,7 +311,7 @@ async fn ballot_zk_v1_ballotproof_rejects_alias_keys_in_raw_json() {
     let (state, _queue, _chain_id) = mk_basic_context();
     let authenticated = canonical_account(ACCOUNT_AUTHORITY);
     let network_id = *state.network_id_ref();
-    let envelope_b64 = base64::engine::general_purpose::STANDARD.encode(&[1u8, 2, 3, 4]);
+    let envelope_b64 = base64::engine::general_purpose::STANDARD.encode([1u8, 2, 3, 4]);
     let root_hint = hex::encode([0xAAu8; 32]);
     let ballot = BallotProof {
         backend: "halo2/ipa".into(),

@@ -63,8 +63,8 @@ pub(super) fn attempted(
     let segment = ScalarSegment::new(
         contract,
         steps,
-        records[0].before,
-        records[steps - 1].after,
+        &records[0].before,
+        &records[steps - 1].after,
         outcome,
     )
     .unwrap();
@@ -105,8 +105,8 @@ fn from_records(
     ScalarSegment::new(
         segment.contract.clone(),
         records.len(),
-        records[0].before,
-        records.last().unwrap().after,
+        &records[0].before,
+        &records.last().unwrap().after,
         outcome,
     )
     .unwrap()
@@ -298,8 +298,8 @@ fn division_attempts_enforce_strict_artifact_cycle_limit_and_public_boundaries()
             let result = ScalarSegment::new(
                 contract.clone(),
                 1,
-                changed[0].before,
-                changed[0].after,
+                &changed[0].before,
+                &changed[0].after,
                 segment.outcome,
             );
             if cycles == limit {
@@ -317,8 +317,8 @@ fn division_attempts_enforce_strict_artifact_cycle_limit_and_public_boundaries()
             ScalarSegment::new(
                 segment.contract.clone(),
                 1,
-                before,
-                segment.after,
+                &before,
+                &segment.after,
                 segment.outcome
             )
             .is_err()
@@ -329,8 +329,8 @@ fn division_attempts_enforce_strict_artifact_cycle_limit_and_public_boundaries()
             ScalarSegment::new(
                 segment.contract.clone(),
                 1,
-                segment.before,
-                after,
+                &segment.before,
+                &after,
                 segment.outcome
             )
             .is_err()
@@ -341,8 +341,8 @@ fn division_attempts_enforce_strict_artifact_cycle_limit_and_public_boundaries()
             ScalarSegment::new(
                 segment.contract.clone(),
                 steps,
-                segment.before,
-                segment.after,
+                &segment.before,
+                &segment.after,
                 segment.outcome
             )
             .is_err()
@@ -352,6 +352,13 @@ fn division_attempts_enforce_strict_artifact_cycle_limit_and_public_boundaries()
     before.cycles = u64::MAX;
     let after = before;
     assert!(
-        ScalarSegment::new(segment.contract.clone(), 2, before, after, segment.outcome).is_err()
+        ScalarSegment::new(
+            segment.contract.clone(),
+            2,
+            &before,
+            &after,
+            segment.outcome
+        )
+        .is_err()
     );
 }

@@ -7,13 +7,13 @@ use crate::state::authority_registry::{
 };
 use iroha_data_model::repo::{RepoAgreement, RepoAgreementId};
 
-/// Retained canonical repo_agreements and all three original derived index readers.
+/// Retained canonical `repo_agreements` and all three original derived index readers.
 pub(in super::super) struct CheckedRepoAgreements<'world> {
     world: &'world World,
     rows: CommittedStorageView<'world, RepoAgreementId, RepoAgreement>,
-    initiators: CommittedStorageView<'world, AccountId, BTreeSet<RepoAgreementId>>,
-    counterparties: CommittedStorageView<'world, AccountId, BTreeSet<RepoAgreementId>>,
-    custodians: CommittedStorageView<'world, AccountId, BTreeSet<RepoAgreementId>>,
+    initiators: CommittedStorageView<'world, (AccountId, RepoAgreementId), ()>,
+    counterparties: CommittedStorageView<'world, (AccountId, RepoAgreementId), ()>,
+    custodians: CommittedStorageView<'world, (AccountId, RepoAgreementId), ()>,
 }
 impl<'world> CheckedRepoAgreements<'world> {
     /// Check both native images without allocating, rebuilding or repairing.
@@ -81,7 +81,7 @@ impl<'world> CheckedRepoAgreements<'world> {
 
 /// Fifteen-byte Name and three Single Ed25519 participant groups on both images, no undo.
 /// This local scheduling reference is neither a validity limit nor a worst-case bound.
-pub(in crate::state) const REPO_AGREEMENT_WORK_PER_ROW: u64 = 1222;
+pub(in crate::state) const REPO_AGREEMENT_WORK_PER_ROW: u64 = 1204;
 
 struct RepoWork(u64);
 impl RepoWork {
@@ -99,6 +99,12 @@ impl RepoWork {
 }
 trait RepoKey: mv::Key {
     fn prepay(&self, work: &mut RepoWork) -> Result<(), GroupedOwnershipError>;
+}
+impl<G: RepoKey, K: RepoKey> RepoKey for (G, K) {
+    fn prepay(&self, work: &mut RepoWork) -> Result<(), GroupedOwnershipError> {
+        self.0.prepay(work)?;
+        self.1.prepay(work)
+    }
 }
 impl RepoKey for RepoAgreementId {
     fn prepay(&self, work: &mut RepoWork) -> Result<(), GroupedOwnershipError> {
@@ -174,24 +180,41 @@ fn lookup<'a, K: RepoKey, V: mv::Value>(
     })?;
     Ok(found)
 }
-fn contains<K: RepoKey>(
-    members: &BTreeSet<K>,
-    key: &K,
+fn contains<G: RepoKey, K: RepoKey>(
+    groups: &impl RawStorageImages<(G, K), ()>,
+    image: GroupImage,
+    group: &G,
+    member: &K,
     work: &mut RepoWork,
 ) -> Result<bool, GroupedOwnershipError> {
-    let mut members = members.iter();
     let mut found = false;
-    while let Some(candidate) = next_physical(&mut members, work)? {
-        found |= equal(key, candidate, work)?;
-    }
+    visit_original(
+        groups,
+        image,
+        work,
+        |(candidate_group, candidate_member), (), work| {
+            let group_matches = equal(group, candidate_group, work)?;
+            let member_matches = equal(member, candidate_member, work)?;
+            found |= group_matches && member_matches;
+            Ok(())
+        },
+    )?;
     Ok(found)
 }
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "This projection implements the fallible grouped ownership callback signature"
+)]
 fn initiator<'a>(
     agreement: &'a RepoAgreement,
     _: &mut RepoWork,
 ) -> Result<Option<&'a AccountId>, GroupedOwnershipError> {
     Ok(Some(agreement.initiator()))
 }
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "This projection implements the fallible grouped ownership callback signature"
+)]
 fn counterparty<'a>(
     agreement: &'a RepoAgreement,
     _: &mut RepoWork,
@@ -218,7 +241,7 @@ fn group_error(
 }
 fn validate_repo_agreement_group<G: RepoKey>(
     rows: &impl RawStorageImages<RepoAgreementId, RepoAgreement>,
-    groups: &impl RawStorageImages<G, BTreeSet<RepoAgreementId>>,
+    groups: &impl RawStorageImages<(G, RepoAgreementId), ()>,
     index: &'static str,
     project: impl for<'a> Fn(
         &'a RepoAgreement,
@@ -229,35 +252,24 @@ fn validate_repo_agreement_group<G: RepoKey>(
     for image in [GroupImage::Current, GroupImage::Predecessor] {
         visit_original(rows, image, work, |id, record, work| {
             if let Some(group) = project(record, work)? {
-                let found = if let Some(members) = lookup(groups, image, group, work)? {
-                    contains(members, id, work)?
-                } else {
-                    false
-                };
+                let found = contains(groups, image, group, id, work)?;
                 if !found {
                     return Err(group_error(index, image, GroupMismatch::MissingMember));
                 }
             }
             Ok(())
         })?;
-        visit_original(groups, image, work, |group, members, work| {
-            work.prepay(1)?;
-            if members.is_empty() {
-                return Err(group_error(index, image, GroupMismatch::EmptyGroup));
-            }
-            let mut members = members.iter();
-            while let Some(id) = next_physical(&mut members, work)? {
-                let Some(record) = lookup(rows, image, id, work)? else {
-                    return Err(group_error(index, image, GroupMismatch::ForeignMember));
-                };
-                let matches = if let Some(projected) = project(record, work)? {
-                    equal(projected, group, work)?
-                } else {
-                    false
-                };
-                if !matches {
-                    return Err(group_error(index, image, GroupMismatch::ForeignMember));
-                }
+        visit_original(groups, image, work, |(group, id), (), work| {
+            let Some(record) = lookup(rows, image, id, work)? else {
+                return Err(group_error(index, image, GroupMismatch::ForeignMember));
+            };
+            let matches = if let Some(projected) = project(record, work)? {
+                equal(projected, group, work)?
+            } else {
+                false
+            };
+            if !matches {
+                return Err(group_error(index, image, GroupMismatch::ForeignMember));
             }
             Ok(())
         })?;
@@ -269,9 +281,9 @@ fn validate_repo_agreement_group<G: RepoKey>(
 /// No record ID, account/reference, custody, quantity or instruction validity is added.
 pub(in crate::state) fn validate_original_repo_agreements(
     rows: &impl RawStorageImages<RepoAgreementId, RepoAgreement>,
-    initiators: &impl RawStorageImages<AccountId, BTreeSet<RepoAgreementId>>,
-    counterparties: &impl RawStorageImages<AccountId, BTreeSet<RepoAgreementId>>,
-    custodians: &impl RawStorageImages<AccountId, BTreeSet<RepoAgreementId>>,
+    initiators: &impl RawStorageImages<(AccountId, RepoAgreementId), ()>,
+    counterparties: &impl RawStorageImages<(AccountId, RepoAgreementId), ()>,
+    custodians: &impl RawStorageImages<(AccountId, RepoAgreementId), ()>,
     max_work: u64,
 ) -> Result<(), GroupedOwnershipError> {
     let mut work = RepoWork::bounded(max_work);

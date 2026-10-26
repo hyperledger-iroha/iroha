@@ -257,7 +257,7 @@ fn hash_correct_manifest_with_duplicate_identity_field_is_rejected() {
         .unwrap();
     let path = captures.path.join(&manifest.name);
     let text = String::from_utf8(std::fs::read(&path).unwrap()).unwrap();
-    let duplicate = text.replacen("{", "{\"sequence\":1,", 1).into_bytes();
+    let duplicate = text.replacen('{', "{\"sequence\":1,", 1).into_bytes();
     std::fs::write(&path, &duplicate).unwrap();
     manifest.bytes = duplicate.len() as u64;
     manifest.sha256 = format!("{:x}", Sha256::digest(&duplicate));

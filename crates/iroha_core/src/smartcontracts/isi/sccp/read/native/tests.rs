@@ -38,7 +38,7 @@ pub(super) fn control(stop: &AtomicBool) -> SccpNativeReadControl<'_> {
     }
 }
 
-/// Signed NPoS genesis initializes SCCP through its real instruction and output seal.
+/// Signed `NPoS` genesis initializes SCCP through its real instruction and output seal.
 /// No test writes a generation, X, R or QC. The long epoch avoids an unrelated boundary
 /// ceremony while a real heartbeat supplies the unchanged-key rotation test.
 pub(super) fn active_chain() -> CertifiedTestChain {
@@ -69,17 +69,23 @@ fn active_chain_with_cadence(cadence: NonZeroU64) -> CertifiedTestChain {
         )),
         Parameter::Custom(npos.into_custom_parameter()),
     ]);
-    let mut nexus = iroha_config::parameters::actual::Nexus::default();
-    nexus.staking.unbonding_delay = Duration::from_secs(21 * 86_400);
-    nexus.staking.max_slash_bps = 1;
+    let mut staking = crate::sumeragi::test_chain::staking_fixture_policy(
+        SumeragiNposParameters::default().xor_asset_definition_id,
+    );
+    staking.unbonding_delay_ms =
+        crate::smartcontracts::isi::sccp::test_support::SCCP_UNBONDING_DELAY_MS;
+    staking.max_slash_bps = 1;
+    crate::smartcontracts::isi::sccp::forgery::tests::replace_original_staking_parameter(
+        &mut config,
+        &staking,
+    );
     let keys = crate::smartcontracts::isi::sccp::forgery::tests::keys();
     config.validator_keys = Some(keys.clone());
     crate::smartcontracts::isi::sccp::forgery::tests::register_genesis_members(
         &mut config,
         &keys,
-        &nexus.staking,
+        &staking,
     );
-    config.nexus = Some(nexus);
     config.genesis_instructions.push(
         InitializeSccpV1 {
             parameters: SccpParametersV1::taira_default(),
@@ -87,7 +93,12 @@ fn active_chain_with_cadence(cadence: NonZeroU64) -> CertifiedTestChain {
         }
         .into(),
     );
-    CertifiedTestChain::start(config).expect("original signed SCCP genesis")
+    let chain = CertifiedTestChain::start(config).expect("original signed SCCP genesis");
+    assert_eq!(
+        chain.state().view().world().parameters().staking_policy(),
+        Some(&staking)
+    );
+    chain
 }
 
 #[test]
@@ -684,11 +695,9 @@ fn native_control_fields_and_paths_are_bound_to_the_original_committed_leaf() {
 
     let mut block = chain.state().block(header(4));
     let mut stx = block.transaction();
-    let mut changed = store::control_messages::get(&*stx.world, &(network, 1, 1))
-        .unwrap()
-        .clone();
+    let mut changed = *store::control_messages::get(&*stx.world, &(network, 1, 1)).unwrap();
     changed.effect_hash[0] ^= 1;
-    store::control_messages::insert(&mut stx, (network, 1, 1), changed.clone()).unwrap();
+    store::control_messages::insert(&mut stx, (network, 1, 1), changed).unwrap();
     assert!(matches!(
         control_proof(
             &stx,
@@ -741,8 +750,9 @@ fn generation_selection_uses_height_and_rejects_overlaps() {
     second.start_height = 9;
     let mut block = state.block(header(2));
     let mut stx = block.transaction();
-    crate::smartcontracts::isi::sccp::test_support::install_generation(&mut stx, 1, first).unwrap();
-    crate::smartcontracts::isi::sccp::test_support::install_generation(&mut stx, 2, second.clone())
+    crate::smartcontracts::isi::sccp::test_support::install_generation(&mut stx, 1, &(first))
+        .unwrap();
+    crate::smartcontracts::isi::sccp::test_support::install_generation(&mut stx, 2, &(second))
         .unwrap();
     let stop = AtomicBool::new(false);
     assert_eq!(
@@ -766,7 +776,7 @@ fn generation_selection_uses_height_and_rejects_overlaps() {
     ));
     assert_eq!(budget.reserved_bytes(), 0);
     second.start_height = 8;
-    crate::smartcontracts::isi::sccp::test_support::install_generation(&mut stx, 2, second)
+    crate::smartcontracts::isi::sccp::test_support::install_generation(&mut stx, 2, &(second))
         .unwrap();
     assert!(matches!(
         signing_generation(&*stx.world, 8, control(&stop)),
@@ -1280,8 +1290,8 @@ fn check_original_handoff_coordinates(chain: &CertifiedTestChain) {
         }
         let mut block = chain.state().block(header(4));
         let mut stx = block.transaction();
-        install_generation(&mut stx, 1, old).unwrap();
-        install_generation(&mut stx, 2, next).unwrap();
+        install_generation(&mut stx, 1, &(old)).unwrap();
+        install_generation(&mut stx, 2, &(next)).unwrap();
         let rejected = committee_rotations(&stx, 1, 1, &budget, control(&stop));
         match change {
             1 | 4 => assert!(

@@ -52,6 +52,10 @@ pub fn summarize_profile(
     assert!(!samples.is_empty());
     samples.sort_unstable();
     let total: f64 = samples.iter().map(std::time::Duration::as_secs_f64).sum();
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "Profiling averages and throughput use approximate floating-point sample counts."
+    )]
     let sample_count = samples.len() as f64;
     let wall_secs = wall_time.as_secs_f64();
     ProfileSummary {

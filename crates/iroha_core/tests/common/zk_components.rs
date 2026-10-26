@@ -7,10 +7,10 @@ use iroha_data_model::{
 
 /// Execute one component handler with its real permissions and validation.
 /// This helper provides no transaction, genesis or block-publication authority.
-pub(crate) fn execute_isi_component(
+pub fn execute_isi_component(
     state: &mut StateTransaction<'_, '_>,
     authority: &AccountId,
-    instruction: InstructionBox,
+    instruction: &InstructionBox,
 ) -> Result<(), ValidationFail> {
     macro_rules! run {
         ($($ty:ty),+ $(,)?) => {

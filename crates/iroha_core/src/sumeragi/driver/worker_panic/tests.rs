@@ -12,8 +12,9 @@ use std::{
     time::Duration,
 };
 
+type JoinProbe = Box<dyn FnMut(usize)>;
 thread_local! {
-    static BEFORE_JOIN: RefCell<Option<Box<dyn FnMut(usize)>>> = const { RefCell::new(None) };
+    static BEFORE_JOIN: RefCell<Option<JoinProbe>> = const { RefCell::new(None) };
 }
 
 pub(super) fn before_join(index: usize) {
@@ -29,7 +30,7 @@ pub(in crate::sumeragi::driver) fn with_before_join<R>(
     hook: impl FnMut(usize) + 'static,
     operation: impl FnOnce() -> R,
 ) -> R {
-    struct Reset(Option<Box<dyn FnMut(usize)>>);
+    struct Reset(Option<JoinProbe>);
     impl Drop for Reset {
         fn drop(&mut self) {
             BEFORE_JOIN.with(|hook| *hook.borrow_mut() = self.0.take());

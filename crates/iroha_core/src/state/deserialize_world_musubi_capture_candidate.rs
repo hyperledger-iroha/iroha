@@ -13,6 +13,28 @@ use crate::state::authority_registry::leaf::{
 #[cfg(test)]
 use crate::state::authority_registry::leaf::CanonicalTableLeafSet;
 
+type RetainedAvailability<'capture, Rows> = RetainedSemanticRows<
+    'capture,
+    ArchiveId,
+    MusubiArchiveAvailabilityV1,
+    MusubiAvailabilityAuthorityV1,
+    Rows,
+>;
+type RetainedResolver<'capture, Rows> = RetainedSemanticRows<
+    'capture,
+    MusubiReleaseIdV1,
+    MusubiResolverReleaseRowV1,
+    MusubiResolverAuthorityV1,
+    Rows,
+>;
+type RetainedDirectory<'capture, Rows> = RetainedSemanticRows<
+    'capture,
+    MusubiPackageSelectorV1,
+    MusubiOrderedPackageEntryV1,
+    MusubiDirectoryAuthorityV1,
+    Rows,
+>;
+
 /// Closed semantic tables whose independently authoritative fields are reviewed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::state) enum MusubiSemanticTable {
@@ -35,6 +57,10 @@ impl MusubiSemanticTable {
     }
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 impl<W: MusubiObservationCut> ValidatedMusubiSource<'_, W> {
     /// Read only the validated cut and copy the selected authority projection.
     pub(in crate::state) fn capture_table(
@@ -75,7 +101,7 @@ impl<W: MusubiObservationCut> ValidatedMusubiSource<'_, W> {
 
     /// Retain the exact validated availability iterator and original refund scope.
     /// Refusal keeps pending canonical rows and completed trees in this operation.
-    /// TODO: the StatePublication semantic-plan producer must supply this actual
+    /// TODO: the `StatePublication` semantic-plan producer must supply this actual
     /// immutable cut and its original scope; this borrows no new State authority.
     #[cfg_attr(
         not(test),
@@ -90,11 +116,8 @@ impl<W: MusubiObservationCut> ValidatedMusubiSource<'_, W> {
         scope: &iroha_allocation::OwnedAllocationScope,
         work_limit: usize,
     ) -> Result<
-        RetainedSemanticRows<
+        RetainedAvailability<
             'capture,
-            ArchiveId,
-            MusubiArchiveAvailabilityV1,
-            MusubiAvailabilityAuthorityV1,
             impl ExactSizeIterator<Item = (&'capture ArchiveId, &'capture MusubiArchiveAvailabilityV1)>,
         >,
         RetainedSemanticError,
@@ -112,7 +135,7 @@ impl<W: MusubiObservationCut> ValidatedMusubiSource<'_, W> {
 
     /// Retain the exact validated resolver iterator and original refund scope.
     /// Refusal keeps pending canonical rows and completed trees in this operation.
-    /// TODO: the StatePublication semantic-plan producer must supply this actual
+    /// TODO: the `StatePublication` semantic-plan producer must supply this actual
     /// immutable cut and its original scope; this borrows no new State authority.
     #[cfg_attr(
         not(test),
@@ -127,11 +150,8 @@ impl<W: MusubiObservationCut> ValidatedMusubiSource<'_, W> {
         scope: &iroha_allocation::OwnedAllocationScope,
         work_limit: usize,
     ) -> Result<
-        RetainedSemanticRows<
+        RetainedResolver<
             'capture,
-            MusubiReleaseIdV1,
-            MusubiResolverReleaseRowV1,
-            MusubiResolverAuthorityV1,
             impl ExactSizeIterator<
                 Item = (
                     &'capture MusubiReleaseIdV1,
@@ -154,7 +174,7 @@ impl<W: MusubiObservationCut> ValidatedMusubiSource<'_, W> {
 
     /// Retain the exact validated directory iterator and original refund scope.
     /// Refusal keeps pending canonical rows and completed trees in this operation.
-    /// TODO: the StatePublication semantic-plan producer must supply this actual
+    /// TODO: the `StatePublication` semantic-plan producer must supply this actual
     /// immutable cut and its original scope; this borrows no new State authority.
     #[cfg_attr(
         not(test),
@@ -169,11 +189,8 @@ impl<W: MusubiObservationCut> ValidatedMusubiSource<'_, W> {
         scope: &iroha_allocation::OwnedAllocationScope,
         work_limit: usize,
     ) -> Result<
-        RetainedSemanticRows<
+        RetainedDirectory<
             'capture,
-            MusubiPackageSelectorV1,
-            MusubiOrderedPackageEntryV1,
-            MusubiDirectoryAuthorityV1,
             impl ExactSizeIterator<
                 Item = (
                     &'capture MusubiPackageSelectorV1,

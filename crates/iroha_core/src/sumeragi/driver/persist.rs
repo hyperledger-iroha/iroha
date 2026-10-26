@@ -526,7 +526,7 @@ mod tests {
                 h,
                 Hash32::ZERO,
                 Hash32::ZERO,
-                vec![0; 10],
+                &[0; 10],
             )))
         };
         assert_eq!(queue.push_record(r1.clone()), (1, None));

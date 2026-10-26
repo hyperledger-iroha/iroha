@@ -2826,7 +2826,7 @@ impl PrivateSettlementFileSidecarStoreV1 {
         bytes: &[u8],
         replacing: bool,
     ) -> Result<(), DurableSidecarMutationFailureV1> {
-        let target = self.root.join(&file_name);
+        let target = self.root.join(file_name);
         let temp = self
             .temp_root
             .join(format!("{file_name}{SIDECAR_TEMP_EXTENSION_V1}"));
@@ -2851,21 +2851,19 @@ impl PrivateSettlementFileSidecarStoreV1 {
         #[cfg(unix)]
         {
             use std::os::unix::fs::MetadataExt as _;
-            let path_metadata = match fs::symlink_metadata(&temp) {
-                Ok(metadata) => metadata,
-                Err(_) => {
-                    drop(file);
-                    let _ = fs::remove_file(&temp);
-                    return Err(DurableSidecarMutationFailureV1::before());
-                }
+            let path_metadata = if let Ok(metadata) = fs::symlink_metadata(&temp) {
+                metadata
+            } else {
+                drop(file);
+                let _ = fs::remove_file(&temp);
+                return Err(DurableSidecarMutationFailureV1::before());
             };
-            let opened = match file.metadata() {
-                Ok(metadata) => metadata,
-                Err(_) => {
-                    drop(file);
-                    let _ = fs::remove_file(&temp);
-                    return Err(DurableSidecarMutationFailureV1::before());
-                }
+            let opened = if let Ok(metadata) = file.metadata() {
+                metadata
+            } else {
+                drop(file);
+                let _ = fs::remove_file(&temp);
+                return Err(DurableSidecarMutationFailureV1::before());
             };
             if path_metadata.file_type().is_symlink()
                 || !path_metadata.file_type().is_file()
@@ -3776,7 +3774,7 @@ pub(crate) mod tests {
         privacy::{PrivacyCommitmentV1, PrivacyNullifierV1, PrivacyPoolIdV1, PrivacyRootV1},
     };
 
-    pub(crate) struct SidecarFixtureV1 {
+    pub struct SidecarFixtureV1 {
         pub(crate) sidecar: PrivateSettlementRestrictedSidecarV1,
         pub(crate) validator: PeerId,
         pub(crate) auditor: AccountId,
@@ -3836,11 +3834,11 @@ pub(crate) mod tests {
         );
     }
 
-    pub(crate) fn sidecar_fixture() -> SidecarFixtureV1 {
+    pub fn sidecar_fixture() -> SidecarFixtureV1 {
         sidecar_fixture_with_threshold(1)
     }
 
-    pub(crate) fn provisional_material_fixture(
+    pub fn provisional_material_fixture(
         fixture: &SidecarFixtureV1,
     ) -> PrivateSettlementProvisionalLegMaterialV1 {
         let mut manifest = fixture.sidecar.manifest.clone();
@@ -3863,7 +3861,7 @@ pub(crate) mod tests {
         material
     }
 
-    pub(crate) fn sidecar_fixture_with_threshold(min_approvals: u8) -> SidecarFixtureV1 {
+    pub fn sidecar_fixture_with_threshold(min_approvals: u8) -> SidecarFixtureV1 {
         sidecar_fixture_with_threshold_and_ordinal(min_approvals, 0)
     }
 
@@ -4002,7 +4000,7 @@ pub(crate) mod tests {
             .expect("successor projection")
     }
 
-    pub(crate) fn audit_approval(
+    pub fn audit_approval(
         store: &PrivateSettlementFileSidecarStoreV1,
         fixture: &SidecarFixtureV1,
         digest: Hash,
@@ -4847,7 +4845,7 @@ pub(crate) mod tests {
         .expect("prepared bundle digest");
         let barrier = private_settlement_prepare_barrier_v1(
             fixture.sidecar.manifest.clone(),
-            vec![fixture.sidecar.authority.clone(), second_authority.clone()],
+            &[fixture.sidecar.authority.clone(), second_authority.clone()],
             vec![fixture.sidecar.payload.delta.clone(), second_delta.clone()],
             vec![local_prepare.clone(), second_prepare.clone()],
         )

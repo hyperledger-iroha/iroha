@@ -16,7 +16,7 @@ type PackageValue = iroha_data_model::musubi::MusubiPackageRecordV1;
 
 /// Exact local structural/admission cause; no physical lock wait is fabricated.
 #[derive(Debug)]
-pub(crate) enum RetainedPackageReadError {
+pub enum RetainedPackageReadError {
     /// Only the original completely frozen, nonterminal publisher may capture.
     NotFrozen,
     /// Another source, predecessor or State generation cannot replace this cut.
@@ -41,7 +41,7 @@ pub(crate) enum RetainedPackageReadError {
 
 /// Observation of this retained plan; counts are physical current/raw-undo rows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct PackageReadProgress {
+pub struct PackageReadProgress {
     pub(crate) current: usize,
     pub(crate) undo: usize,
     pub(crate) work: usize,
@@ -211,10 +211,10 @@ impl StateBlock<'_> {
             .expect("original retained State fields")
             .world
             .musubi_packages;
-        if let Some(data) = plan.data.as_ref() {
-            if !original_field.retained_read_matches_source(&data.as_slice()[0].source) {
-                return Err(RetainedPackageReadError::SourceChanged);
-            }
+        if let Some(data) = plan.data.as_ref()
+            && !original_field.retained_read_matches_source(&data.as_slice()[0].source)
+        {
+            return Err(RetainedPackageReadError::SourceChanged);
         }
         if plan.generation != self.state_ref.state_view_generation()
             || self

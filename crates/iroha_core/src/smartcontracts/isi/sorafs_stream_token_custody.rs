@@ -125,10 +125,10 @@ fn apply_control(
         return Err(Error::BindingMismatch);
     }
     let current = read_active(tx.world(), provider)?;
-    if let Some(active) = &current {
-        if validate_state_binding(tx, &active.state.policy.binding)? != provider {
-            return Err(Error::BindingMismatch);
-        }
+    if let Some(active) = &current
+        && validate_state_binding(tx, &active.state.policy.binding)? != provider
+    {
+        return Err(Error::BindingMismatch);
     }
     let request_digest = request_digest(&instruction, authority)?;
     if current.as_ref().map_or(0, |c| c.index.revision) != instruction.expected_revision
@@ -136,16 +136,15 @@ fn apply_control(
     {
         // Only the exact original authority and full canonical request can retry a retained
         // transition. Current permission/registration has already been checked; no state revives.
-        if let Some(active) = &current {
-            if instruction.expected_revision < active.index.revision {
-                let historical =
-                    read_record(tx.world(), provider, instruction.expected_revision + 1)?;
-                if historical.record.predecessor_digest == instruction.expected_digest
-                    && historical.record.authority == *authority
-                    && historical.record.request_digest == request_digest
-                {
-                    return Ok(());
-                }
+        if let Some(active) = &current
+            && instruction.expected_revision < active.index.revision
+        {
+            let historical = read_record(tx.world(), provider, instruction.expected_revision + 1)?;
+            if historical.record.predecessor_digest == instruction.expected_digest
+                && historical.record.authority == *authority
+                && historical.record.request_digest == request_digest
+            {
+                return Ok(());
             }
         }
         return Err(Error::Conflict);

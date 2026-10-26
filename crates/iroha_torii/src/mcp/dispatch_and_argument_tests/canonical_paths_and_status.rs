@@ -105,7 +105,7 @@ fn extract_transaction_status_hash_argument_accepts_only_exact_query_hash() {
 }
 #[test]
 fn canonical_path_and_hash_extractors_reject_retired_aliases() {
-    let cases: &[(Value, fn(&Map) -> Result<String, String>)] = &[
+    let cases: &[(Value, CanonicalArgumentExtractor)] = &[
         (
             norito::json!({ "id": "upgrade-001" }),
             extract_runtime_upgrade_id_argument,
@@ -173,9 +173,9 @@ fn extract_transaction_hash_from_submit_result_accepts_encoded_submission_receip
         iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed([0xAB; 32]));
     let payload = iroha_data_model::transaction::TransactionSubmissionReceiptPayload {
         entrypoint_hash: iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::from(
-            tx_hash.clone(),
+            tx_hash,
         )),
-        signed_transaction_hash: Some(tx_hash.clone()),
+        signed_transaction_hash: Some(tx_hash),
         submitted_at_ms: 1,
         submitted_at_height: 1,
         signer: key_pair.public_key().clone(),
@@ -537,7 +537,7 @@ fn extract_block_identifier_argument_requires_canonical_path_field() {
 }
 #[test]
 fn remaining_canonical_path_extractors_reject_retired_flat_aliases() {
-    let cases: [(Value, fn(&Map) -> Result<String, String>); 13] = [
+    let cases: [(Value, CanonicalArgumentExtractor); 13] = [
         (norito::json!({ "code_hash": "cafebabe" }), |args| {
             contract_artifact_route(args, false)
         }),

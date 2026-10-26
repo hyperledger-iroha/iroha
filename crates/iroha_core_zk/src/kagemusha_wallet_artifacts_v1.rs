@@ -633,10 +633,12 @@ impl InstalledVerifierPackV1 {
             installation.manifest_digest,
             runtime,
             allowlist,
-            &steps,
-            LineageArtifact {
-                descriptor: &pack.lineage.descriptor,
-                verifying_key: &pack.lineage.verifying_key,
+            crate::kagemusha_wallet_proofs_v1::ArtifactOriginals {
+                steps: &steps,
+                lineage: LineageArtifact {
+                    descriptor: &pack.lineage.descriptor,
+                    verifying_key: &pack.lineage.verifying_key,
+                },
             },
         )?;
         Ok(Self {

@@ -1951,10 +1951,9 @@ pub(crate) fn configured_execution_policy(
         .map_err(|_| eyre!("service authority lane policies are invalid"))?;
     // Only original signed fee terms enter this runtime projection. Node configuration
     // supplies local settings and the other independently checked policy inputs.
-    let mut projected_nexus = config.nexus.clone();
-    projected_nexus.fees = fees.clone();
     let nexus = actual::nexus_consensus_policy_digest_with_runtime_policies(
-        &projected_nexus,
+        &config.nexus,
+        Some(fees),
         None,
         Some(manifests.baseline_consensus_policy_digest()),
     )
@@ -1962,7 +1961,6 @@ pub(crate) fn configured_execution_policy(
     Ok(Hash::prehashed(actual::execution_policy_digest_v1(
         &config.pipeline,
         &config.oracle,
-        &config.crypto,
         &config.fraud_monitoring,
         &config.gov,
         &config.content,

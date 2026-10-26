@@ -30,7 +30,7 @@ pub fn prepare(
             .map(Arc::new)
             .map(Some)
             .map_err(|error| {
-                crate::ToriiBuildError::invalid_configuration("stream_token_cleanup", error)
+                crate::ToriiBuildError::invalid_configuration("stream_token_cleanup", &(error))
             }),
         _ => Err(crate::ToriiBuildError::invalid_configuration(
             "stream_token_cleanup",

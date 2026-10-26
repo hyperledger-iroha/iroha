@@ -68,7 +68,7 @@ async fn handler_post_transactions_batch(
     let (transactions, permit) = run_transaction_ingress_compute_job(
         permit,
         "transaction_batch_decode_worker_failed",
-        move || decode_transaction_batch_request(body, max_transactions),
+        move || decode_transaction_batch_request(&(body), max_transactions),
     )
     .await?;
     admit_transaction_api_token_preauth(&app.tx_preauth_rate_limiter, token, transactions.len())
@@ -92,7 +92,7 @@ async fn handler_post_transactions_batch(
                 let hash = transaction.hash();
                 let accepted =
                     routing::accept_decoded_signed_transaction_for_ingress_with_precheck(
-                        worker_app.state.clone(),
+                        &(worker_app.state),
                         transaction,
                         &worker_app.telemetry,
                         precheck.single_ed25519_prechecked,
@@ -327,8 +327,8 @@ async fn handler_proof_retention_status(
         enforce,
     )
     .await?;
-    let status = routing::handle_proof_retention_status(app.state.clone())?;
-    Ok(crate::utils::respond_with_format(status, format))
+    let status = routing::handle_proof_retention_status(&(app.state))?;
+    Ok(crate::utils::respond_with_format(&(status), format))
 }
 /// Debug endpoint exposing the current AXT proof cache state per dataspace.
 #[cfg(test)]
@@ -487,7 +487,7 @@ async fn handler_pipeline_preflight(
     )
     .await?;
     Ok(crate::utils::respond_with_format(
-        routing::build_pipeline_preflight_response(app.state.as_ref(), app.queue.as_ref()),
+        &(routing::build_pipeline_preflight_response(app.state.as_ref(), app.queue.as_ref())),
         format,
     ))
 }
@@ -581,8 +581,7 @@ fn charge_fastpq_recovery_artifact_bytes(used: &mut usize, amount: usize) -> Res
     })?;
     if next > PIPELINE_FASTPQ_RECOVERY_MAX_ARTIFACT_BYTES {
         return Err(fastpq_recovery_capacity_error(format!(
-            "selected FASTPQ recovery artifacts exceed the {} byte response-source budget",
-            PIPELINE_FASTPQ_RECOVERY_MAX_ARTIFACT_BYTES
+            "selected FASTPQ recovery artifacts exceed the {PIPELINE_FASTPQ_RECOVERY_MAX_ARTIFACT_BYTES} byte response-source budget"
         )));
     }
     *used = next;
@@ -648,8 +647,7 @@ fn build_pipeline_recovery_fastpq_response(
         })?;
     if serialized.len() > PIPELINE_FASTPQ_RECOVERY_MAX_RESPONSE_BYTES {
         return Err(fastpq_recovery_capacity_error(format!(
-            "encoded FASTPQ recovery page exceeds the {} byte response budget",
-            PIPELINE_FASTPQ_RECOVERY_MAX_RESPONSE_BYTES
+            "encoded FASTPQ recovery page exceeds the {PIPELINE_FASTPQ_RECOVERY_MAX_RESPONSE_BYTES} byte response budget"
         )));
     }
     Ok(serialized)
@@ -691,27 +689,27 @@ fn encode_fastpq_recovery_batch(
         })?;
     if source_bytes > PIPELINE_FASTPQ_RECOVERY_MAX_BATCH_BYTES {
         return Err(fastpq_recovery_capacity_error(format!(
-            "FASTPQ batch exceeds the {} byte per-batch budget",
-            PIPELINE_FASTPQ_RECOVERY_MAX_BATCH_BYTES
+            "FASTPQ batch exceeds the {PIPELINE_FASTPQ_RECOVERY_MAX_BATCH_BYTES} byte per-batch budget"
         )));
     }
     let model = fastpq_prover::transition_batch_to_model(batch);
-    let bytes =
-        match norito::core::to_bytes_bounded(&model, PIPELINE_FASTPQ_RECOVERY_MAX_BATCH_BYTES) {
-            Ok(bytes) => bytes,
-            Err(norito::core::BoundedEncodeError::FrameTooLarge { .. }) => {
-                return Err(fastpq_recovery_capacity_error(format!(
-                    "FASTPQ batch exceeds the {} byte per-batch budget",
-                    PIPELINE_FASTPQ_RECOVERY_MAX_BATCH_BYTES
-                )));
-            }
-            Err(source) => {
-                return Err(Error::SerializationFailure {
-                    context: "pipeline_recovery_fastpq_batch",
-                    source: Box::new(source),
-                });
-            }
-        };
+    let bytes = match norito::core::to_bytes_bounded(
+        &model,
+        PIPELINE_FASTPQ_RECOVERY_MAX_BATCH_BYTES,
+    ) {
+        Ok(bytes) => bytes,
+        Err(norito::core::BoundedEncodeError::FrameTooLarge { .. }) => {
+            return Err(fastpq_recovery_capacity_error(format!(
+                "FASTPQ batch exceeds the {PIPELINE_FASTPQ_RECOVERY_MAX_BATCH_BYTES} byte per-batch budget"
+            )));
+        }
+        Err(source) => {
+            return Err(Error::SerializationFailure {
+                context: "pipeline_recovery_fastpq_batch",
+                source: Box::new(source),
+            });
+        }
+    };
     charge_fastpq_recovery_artifact_bytes(artifact_bytes, bytes.len())?;
     Ok((
         base64::engine::general_purpose::STANDARD.encode(bytes),
@@ -1058,7 +1056,7 @@ fn canonical_transaction_anchor(
     state: &CoreState,
     hash: &HashOf<SignedTransaction>,
 ) -> Result<Option<CanonicalTransactionAnchor>, Error> {
-    let entrypoint_hash = iroha_core::tx::external_entrypoint_hash_from_signed_hash(hash.clone());
+    let entrypoint_hash = iroha_core::tx::external_entrypoint_hash_from_signed_hash(*hash);
     let state_view = state.view();
     let Some(height) = state_view.transactions.get(&entrypoint_hash) else {
         return Ok(None);
@@ -1577,7 +1575,7 @@ pub(crate) fn pipeline_status_local_entry_checked(
     if let Some(entry) = pipeline_status_cached_entry_without_canonical(app, hash)? {
         if entry.kind == PipelineStatusKind::Queued
             && !app.queue.contains_pending_hash(
-                iroha_core::tx::external_entrypoint_hash_from_signed_hash(hash.clone()),
+                iroha_core::tx::external_entrypoint_hash_from_signed_hash(*hash),
                 &app.state,
             )
         {
@@ -1587,12 +1585,11 @@ pub(crate) fn pipeline_status_local_entry_checked(
         return Ok(Some((entry, "cache")));
     }
     if app.queue.contains_pending_hash(
-        iroha_core::tx::external_entrypoint_hash_from_signed_hash(hash.clone()),
+        iroha_core::tx::external_entrypoint_hash_from_signed_hash(*hash),
         &app.state,
     ) {
         let entry = PipelineStatusEntry::fresh(PipelineStatusKind::Queued, None, None);
-        app.pipeline_status_cache
-            .record_entry(hash.clone(), entry.clone());
+        app.pipeline_status_cache.record_entry(*hash, entry.clone());
         return Ok(Some((entry, "queue")));
     }
     Ok(None)
@@ -1622,7 +1619,7 @@ fn pipeline_status_response_with_route(
     route: Option<(RoutingDecision, &'static str)>,
 ) -> Response {
     let mut response = crate::utils::respond_with_format(
-        pipeline_status_response(hash, entry, scope, resolved_from),
+        &(pipeline_status_response(hash, entry, scope, resolved_from)),
         format,
     );
     if let Some((routing_decision, routed_by)) = route {
@@ -1637,7 +1634,7 @@ fn pipeline_status_not_found_response(
 ) -> Response {
     crate::utils::respond_with_status_and_format(
         StatusCode::NOT_FOUND,
-        ErrorEnvelope::new(
+        &(ErrorEnvelope::new(
             iroha_torii_shared::PIPELINE_TRANSACTION_STATUS_NOT_FOUND_CODE,
             "No transaction status is available for the exact requested hash and scope.",
         )
@@ -1646,7 +1643,7 @@ fn pipeline_status_not_found_response(
                 iroha_torii_shared::PipelineTransactionStatusNotFoundV1::new(hash, scope.as_str()),
             ),
             ..ErrorDetails::default()
-        }),
+        })),
         format,
     )
 }
@@ -1683,10 +1680,10 @@ fn exact_transaction_details_query_hash(
         predicate: &iroha_data_model::query::dsl::CompoundPredicate<CommittedTransaction>,
     ) -> Option<HashOf<TransactionEntrypoint>> {
         let filters = predicate.committed_tx_filters()?;
-        let entry_eq = filters.entry_eq.clone()?;
+        let entry_eq = filters.entry_eq?;
         (filters
             == CommittedTxFilters {
-                entry_eq: Some(entry_eq.clone()),
+                entry_eq: Some(entry_eq),
                 ..CommittedTxFilters::default()
             })
         .then_some(entry_eq)
@@ -2088,8 +2085,7 @@ async fn handler_pipeline_transaction_status(
     #[cfg(feature = "app_api")]
     {
         let query_string = pipeline_status_proxy_query(&hash, read_scope)?;
-        let entrypoint_hash =
-            iroha_core::tx::external_entrypoint_hash_from_signed_hash(hash.clone());
+        let entrypoint_hash = iroha_core::tx::external_entrypoint_hash_from_signed_hash(hash);
         if let Some(route) = app
             .queue
             .routing_plan_hint(&entrypoint_hash)
@@ -2133,10 +2129,10 @@ async fn handler_pipeline_transaction_status(
         let _ = hash;
         Ok(crate::utils::respond_with_status_and_format(
             StatusCode::SERVICE_UNAVAILABLE,
-            ErrorEnvelope::new(
+            &(ErrorEnvelope::new(
                 "route_unavailable",
                 "global pipeline status fanout is unavailable on this node",
-            ),
+            )),
             format,
         ))
     }
@@ -2204,7 +2200,7 @@ async fn handler_trigger_completions(
             code: "trigger_completion_worker_failed",
             message: error.to_string(),
         })?;
-    Ok(crate::utils::respond_with_format(result?, format))
+    Ok(crate::utils::respond_with_format(&(result?), format))
 }
 async fn handler_policy(
     State(app): State<SharedAppState>,
@@ -2266,8 +2262,8 @@ async fn handler_policy(
         );
         let fees_enabled = fee_policy.is_enabled();
         let enforced = true;
-        let stream_shed = (queue_len as usize) >= stream_th;
-        let sub_shed = (queue_len as usize) >= sub_th;
+        let stream_shed = usize::try_from(queue_len).unwrap_or(usize::MAX) >= stream_th;
+        let sub_shed = usize::try_from(queue_len).unwrap_or(usize::MAX) >= sub_th;
         obj.insert(
             "rate_limit_enforced".into(),
             norito::json::Value::from(enforced),
@@ -2289,8 +2285,7 @@ async fn handler_policy(
             norito::json::Value::from(sub_shed),
         );
         let explain = format!(
-            "rate_limits_always_on=true, fees_enabled={}, queue_len={}, high_load_admission_shed_thresholds(normal={}, stream={}, subscription={})",
-            fees_enabled, queue_len, normal_th, stream_th, sub_th
+            "rate_limits_always_on=true, fees_enabled={fees_enabled}, queue_len={queue_len}, high_load_admission_shed_thresholds(normal={normal_th}, stream={stream_th}, subscription={sub_th})"
         );
         obj.insert("explain".into(), norito::json::Value::from(explain));
         let body = norito::json::to_json_pretty(&norito::json::Value::Object(obj))

@@ -497,14 +497,14 @@ fn parse_optional_privacy_artifacts(
         .map(KaigiCommitmentBuilder::new)
         .transpose()?
         .map(|builder| builder.commitment);
-    let nullifier = nullifier_hex.map(|hex| build_nullifier(hex)).transpose()?;
+    let nullifier = nullifier_hex.map(build_nullifier).transpose()?;
     let roster_root = roster_root_hex
         .map(|hex| parse_hash(hex).wrap_err("invalid roster root hex"))
         .transpose()?;
     let proof = proof_hex
         .map(|hex| decode_hex_vec(hex).wrap_err("invalid proof hex"))
         .transpose()?;
-    if proof.as_ref().is_some_and(|proof| proof.is_empty()) {
+    if proof.as_ref().is_some_and(std::vec::Vec::is_empty) {
         eyre::bail!("privacy proof payload must be non-empty");
     }
     let supplied_artifact_count = [
@@ -730,9 +730,11 @@ fn parse_call_id(domain: &str, call_name: &str) -> Result<KaigiId> {
     Ok(KaigiId::new(domain_id, call))
 }
 fn validate_max_participants(max_participants: Option<u32>) -> Result<()> {
-    if max_participants
-        .is_some_and(|limit| !(1..=KAIGI_MAX_PARTICIPANTS_V1 as u32).contains(&limit))
-    {
+    if max_participants.is_some_and(|limit| {
+        !(1..=u32::try_from(KAIGI_MAX_PARTICIPANTS_V1)
+            .expect("participant protocol limit fits u32"))
+            .contains(&limit)
+    }) {
         eyre::bail!(
             "Kaigi max participants must be between 1 and {KAIGI_MAX_PARTICIPANTS_V1} when provided"
         );
@@ -817,7 +819,7 @@ fn validate_usage_privacy_artifacts(
     usage_commitment: Option<&KaigiAuthorizationScalarV1>,
     proof: Option<&[u8]>,
 ) -> Result<()> {
-    if proof.is_some_and(|proof| proof.is_empty()) {
+    if proof.is_some_and(<[u8]>::is_empty) {
         eyre::bail!("privacy proof payload must be non-empty");
     }
     if usage_commitment.is_some() != proof.is_some() {
@@ -1189,9 +1191,22 @@ mod tests {
     fn local_scalar_validation_rejects_requests_core_would_refuse() {
         assert!(validate_max_participants(None).is_ok());
         assert!(validate_max_participants(Some(1)).is_ok());
-        assert!(validate_max_participants(Some(KAIGI_MAX_PARTICIPANTS_V1 as u32)).is_ok());
+        assert!(
+            validate_max_participants(Some(
+                u32::try_from(KAIGI_MAX_PARTICIPANTS_V1)
+                    .expect("participant protocol limit fits u32")
+            ))
+            .is_ok()
+        );
         assert!(validate_max_participants(Some(0)).is_err());
-        assert!(validate_max_participants(Some(KAIGI_MAX_PARTICIPANTS_V1 as u32 + 1)).is_err());
+        assert!(
+            validate_max_participants(Some(
+                u32::try_from(KAIGI_MAX_PARTICIPANTS_V1)
+                    .expect("participant protocol limit fits u32")
+                    + 1
+            ))
+            .is_err()
+        );
         assert!(validate_usage_duration(1).is_ok());
         assert!(validate_usage_duration(0).is_err());
         assert!(validate_relay_hpke_public_key(&[1]).is_ok());
@@ -1259,7 +1274,7 @@ mod tests {
         assert!(validate_relay_manifest_limits(&too_few).is_err());
 
         let too_many = KaigiRelayManifest {
-            hops: (0..KAIGI_RELAY_MANIFEST_MAX_HOPS_V1 + 1)
+            hops: (0..=KAIGI_RELAY_MANIFEST_MAX_HOPS_V1)
                 .map(|_| hop(1))
                 .collect(),
             expiry_ms: 1,

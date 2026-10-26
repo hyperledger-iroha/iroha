@@ -28,7 +28,20 @@ fn plain_ballot_rejected_when_referendum_absent_or_closed() {
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
     let domain: Domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
     let account: Account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-    let world = World::with([domain], [account], []);
+    let mut world = World::with([domain], [account], []);
+    // Explicit prerequisite for this isolated component, not signed-genesis authority.
+    // The funding helper still executes ordinary account admission without defaults.
+    let policy = iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+        iroha_crypto::Algorithm::Ed25519,
+    ])
+    .expect("explicit governance component signing algorithm");
+    world
+        .set_parameter_for_testing(
+            policy
+                .into_parameter()
+                .expect("canonical governance component policy"),
+        )
+        .expect("admit the governance component's original policy");
     let mut state = State::new_for_testing(world, kura, query_handle);
     let mut gov_cfg = state.gov.clone();
     gov_cfg.plain_voting_enabled = true;

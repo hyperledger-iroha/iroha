@@ -45,7 +45,7 @@ impl QueryStateRef<'_, '_, '_> {
         }
     }
 }
-impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
+impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     pub(super) fn execute_same_uid(
         &mut self,
         vm: &mut IVM,
@@ -71,7 +71,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             .query_state
             .get()
             .ok_or(ivm::VMError::NotImplemented { syscall })?;
-        let (equal, stats) = state.same_uid(
+        let (equal, execution_stats) = state.same_uid(
             &self.effect_authority(),
             context,
             &definition,
@@ -83,8 +83,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             vm,
             remaining,
             &context_gas,
-            stats.processed_items(),
-            stats.processed_bytes(),
+            execution_stats.processed_items(),
+            execution_stats.processed_bytes(),
             0,
         )?;
         // Bool is one canonical public word. No heap/TLV allocation and no queued effect.
@@ -141,7 +141,8 @@ mod tests {
         let mut tx = block.transaction();
         f.install(&mut tx);
         for (destination, expected) in [(&f.destination, true), (&f.foreign, false)] {
-            let mut host: CoreHostImpl<QueryStateSlot<_>> = CoreHostImpl::new(f.owner.clone());
+            let mut host: CoreHostImpl<'_, '_, QueryStateSlot<_>> =
+                CoreHostImpl::new(f.owner.clone());
             host.set_query_state(&tx);
             host.set_contract_runtime_context(Some(f.context.clone()));
             let mut vm = arguments(&f, destination, 50_000_000);
@@ -153,13 +154,13 @@ mod tests {
             assert_eq!(vm.register(10), u64::from(expected));
             assert_eq!(vm.alloc_input_tlv(&[]).unwrap(), input);
             assert_eq!(vm.alloc_heap(0).unwrap(), heap);
-            let (_, stats) = f.read(tx.world(), &f.source, destination).unwrap();
+            let (_, execution_stats) = f.read(tx.world(), &f.source, destination).unwrap();
             assert_eq!(
                 gas,
                 CoreHost::query_gas_cost(
                     &QueryGasContext::singular(),
-                    stats.processed_items(),
-                    stats.processed_bytes()
+                    execution_stats.processed_items(),
+                    execution_stats.processed_bytes()
                 )
             );
             assert!(host.queued.is_empty());
@@ -186,7 +187,8 @@ mod tests {
         let mut tx = block.transaction();
         f.install(&mut tx);
         for defect in 0..5 {
-            let mut host: CoreHostImpl<QueryStateSlot<_>> = CoreHostImpl::new(f.owner.clone());
+            let mut host: CoreHostImpl<'_, '_, QueryStateSlot<_>> =
+                CoreHostImpl::new(f.owner.clone());
             host.set_query_state(&tx);
             let mut context = f.context.clone();
             if defect == 1 {
@@ -248,13 +250,13 @@ mod tests {
             ivm::VMError::OutOfGas
         ));
     }
-    const SOURCE: &str = r#"seiyaku SameUid {
+    const SOURCE: &str = r"seiyaku SameUid {
         view fn same(AssetDefinitionId asset, AccountId source, AccountId destination) authorize(anyone) -> bool {
             ledger::asset::same_uid(asset_definition: asset, source: source, destination: destination)
         }
-    }"#;
+    }";
     struct Probe<QS: Default + QueryStateAccess> {
-        inner: CoreHostImpl<QS>,
+        inner: CoreHostImpl<'static, 'static, QS>,
         before: std::cell::Cell<Option<u64>>,
         reserve: Option<u64>,
         actual: Option<u64>,
@@ -331,7 +333,7 @@ mod tests {
         let prepared =
             ivm::prepare_argument_record_with_gas_limit(schema, Arc::from(canonical), gas_limit)
                 .unwrap();
-        let mut inner: CoreHostImpl<QueryStateSlot<_>> = CoreHostImpl::new(f.owner.clone());
+        let mut inner: CoreHostImpl<'_, '_, QueryStateSlot<_>> = CoreHostImpl::new(f.owner.clone());
         inner.set_query_state(&tx);
         inner.set_contract_runtime_context(Some(f.context.clone()));
         inner.set_entrypoint_argument_record(Some(prepared.clone()));

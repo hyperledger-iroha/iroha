@@ -196,8 +196,7 @@ mod tests {
             let error: WorldStateSnapshotError =
                 amx_approval_originals(&snapshot, &world, &approval, &relay, &request)
                     .err()
-                    .unwrap()
-                    .into();
+                    .unwrap();
             let WorldStateSnapshotError::Allocation(AllocationRefusal::Capacity {
                 requested_bytes,
                 reserved_bytes,
@@ -222,8 +221,7 @@ mod tests {
         let error: WorldStateSnapshotError =
             amx_approval_originals(&snapshot, &world, &approval, &relay, &empty)
                 .err()
-                .unwrap()
-                .into();
+                .unwrap();
         assert!(matches!(
             error,
             WorldStateSnapshotError::Allocation(AllocationRefusal::ExceedsLimit {
@@ -262,8 +260,7 @@ mod tests {
         let error: WorldStateSnapshotError = outer
             .with(|| amx_approval_originals(&snapshot, &world, &approval, &relay, &request))
             .err()
-            .unwrap()
-            .into();
+            .unwrap();
         let WorldStateSnapshotError::RootScopeRead(cause) = error else {
             panic!("the first actual root metadata read refusal was erased: {error}");
         };
@@ -287,8 +284,7 @@ mod tests {
         let error: WorldStateSnapshotError =
             amx_approval_originals(&snapshot, &world, &approval, &relay, &request)
                 .err()
-                .unwrap()
-                .into();
+                .unwrap();
         assert!(matches!(error, WorldStateSnapshotError::Invalid(_)));
         assert_eq!(request.reserved_bytes(), 0);
     }
@@ -344,16 +340,20 @@ mod tests {
         let empty = crate::state::World::new();
         for malformed in [false, true] {
             if malformed {
-                let mut parameters = empty.parameters.block();
-                parameters
-                    .set_parameter(Parameter::Custom(CustomParameter::new(
+                let mut parameters = crate::state::parameter_cell_block_for_testing(&empty)
+                    .expect("funded original parameter-only fixture block");
+                crate::state::set_parameter_cell_for_testing(
+                    &mut parameters,
+                    Parameter::Custom(CustomParameter::new(
                         consensus_metadata::handshake_meta_id(),
                         iroha_primitives::json::Json::from_norito_value_ref(
                             &norito::json::Value::Bool(false),
                         )
                         .unwrap(),
-                    )))
-                    .unwrap();
+                    )),
+                    empty.sccp_committee_generations.allocation_budget(),
+                )
+                .unwrap();
                 parameters.commit();
             }
             let world = empty.block();

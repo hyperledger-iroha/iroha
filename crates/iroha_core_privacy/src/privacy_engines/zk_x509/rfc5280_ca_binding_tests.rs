@@ -20,8 +20,10 @@ use crate::privacy_engines::zk_x509::{
 #[test]
 fn compact_ca_channel_matches_actual_rfc_fixed_topology_for_every_disclosure_count() {
     for (disclosures, expected_channel) in [30_u32, 32, 34, 36, 38].into_iter().enumerate() {
-        let mut shape = ZkX509Rfc5280StarkShapeV1::default();
-        shape.disclosed_attribute_count = u8::try_from(disclosures).unwrap();
+        let mut shape = ZkX509Rfc5280StarkShapeV1 {
+            disclosed_attribute_count: u8::try_from(disclosures).unwrap(),
+            ..ZkX509Rfc5280StarkShapeV1::default()
+        };
         for index in 0..disclosures {
             shape.disclosed_attribute_indices[index] = u8::try_from(index).unwrap();
         }
@@ -78,7 +80,7 @@ fn actual_root_spki_products_match_rfc_and_ca_and_reject_retired_channel() {
         ZkX509CaAccumulatorStatementV1 {
             governed_root: *fixture.statement.ca_membership_root.as_bytes(),
         },
-        ZkX509CaAccumulatorWitnessV1 {
+        &ZkX509CaAccumulatorWitnessV1 {
             root_spki_der,
             path: fixture.witness.ca_membership_path,
         },
@@ -115,7 +117,7 @@ fn actual_root_spki_products_match_rfc_and_ca_and_reject_retired_channel() {
         let role = ZkX509Rfc5280OutputRoleV1::GovernedTrustAnchor;
         let role_index = output_role_index_v1(role);
         let witnesses = rfc5280_io_witnesses_v1(&rfc_trace, 0).unwrap();
-        let roles = output_roles_v1(&rfc_trace).unwrap();
+        let roles = output_roles_v1(&rfc_trace);
         let root = witnesses
             .iter()
             .zip(roles)
@@ -143,11 +145,13 @@ fn actual_root_spki_products_match_rfc_and_ca_and_reject_retired_channel() {
                     product.mul(
                         output_factor_v1(
                             role,
-                            root.declaration.channel - 2,
-                            root.declaration.consumers[0],
-                            offset,
-                            byte,
-                            false,
+                            (
+                                root.declaration.channel - 2,
+                                root.declaration.consumers[0],
+                                offset,
+                                byte,
+                                false,
+                            ),
                             lane,
                             &io_challenges,
                         )

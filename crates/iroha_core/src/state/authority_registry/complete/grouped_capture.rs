@@ -17,7 +17,11 @@ use mv::{PublicationPreparationError, storage::StorageReadOnly};
 macro_rules! grouped_capture {
     ($function:ident, $checker:ident, $table:literal, $work_per_row:expr) => {
         /// Capture exact canonical rows after checking every retained grouped index.
-        pub(crate) fn $function(
+        #[expect(
+            clippy::result_large_err,
+            reason = "Grouped capture propagates original source and allocation refusal inline without allocating an error box"
+        )]
+        pub fn $function(
             state: &State,
             limits: LeafLimits,
         ) -> Result<Option<CanonicalTablePairedSnapshot>, LeafError> {
@@ -67,7 +71,11 @@ macro_rules! grouped_capture {
 }
 
 /// Capture exact nfts while retaining every original native reader through encoding.
-pub(crate) fn capture_nfts_once(
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
+pub fn capture_nfts_once(
     state: &State,
     limits: LeafLimits,
 ) -> Result<Option<CanonicalTablePairedSnapshot>, LeafError> {
@@ -102,6 +110,10 @@ pub(crate) fn capture_nfts_once(
     );
     finish_nfts_encoding(state, generation, checked, snapshot)
 }
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 fn finish_nfts_encoding(
     state: &State,
     generation: u64,
@@ -137,8 +149,12 @@ grouped_capture!(
     "world.governance_proposals",
     VALIDATION_FEE_PROPOSAL_WORK_PER_ROW
 );
-/// Capture canonical account_rekey_records through all four original native owners.
-pub(crate) fn capture_account_rekey_records_once(
+/// Capture canonical `account_rekey_records` through all four original native owners.
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
+pub fn capture_account_rekey_records_once(
     state: &State,
     limits: LeafLimits,
 ) -> Result<Option<CanonicalTablePairedSnapshot>, LeafError> {
@@ -169,6 +185,10 @@ pub(crate) fn capture_account_rekey_records_once(
     );
     finish_account_rekey_records_encoding(state, generation, checked, snapshot)
 }
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 fn finish_account_rekey_records_encoding(
     state: &State,
     generation: u64,
@@ -190,7 +210,11 @@ fn finish_account_rekey_records_encoding(
 mod account_rekeys_fence_tests;
 
 /// Capture canonical balances through their eight exact native dependencies.
-pub(crate) fn capture_assets_once(
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
+pub fn capture_assets_once(
     state: &State,
     limits: LeafLimits,
 ) -> Result<Option<CanonicalTablePairedSnapshot>, LeafError> {
@@ -222,6 +246,10 @@ pub(crate) fn capture_assets_once(
     finish_assets_encoding(state, generation, checked, snapshot)
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 fn finish_assets_encoding(
     state: &State,
     generation: u64,
@@ -249,7 +277,11 @@ grouped_capture!(
     CONTRACT_ALIAS_WORK_PER_ROW
 );
 /// Capture canonical definitions through their seven exact native dependencies.
-pub(crate) fn capture_asset_definitions_once(
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
+pub fn capture_asset_definitions_once(
     state: &State,
     limits: LeafLimits,
 ) -> Result<Option<CanonicalTablePairedSnapshot>, LeafError> {
@@ -283,6 +315,10 @@ pub(crate) fn capture_asset_definitions_once(
     finish_asset_definition_encoding(state, generation, checked, snapshot)
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 fn finish_asset_definition_encoding(
     state: &State,
     generation: u64,
@@ -304,7 +340,11 @@ fn finish_asset_definition_encoding(
 #[path = "grouped_capture/asset_definition_tests.rs"]
 mod asset_definition_tests;
 /// Capture exact rwas while retaining every original native reader through encoding.
-pub(crate) fn capture_rwas_once(
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
+pub fn capture_rwas_once(
     state: &State,
     limits: LeafLimits,
 ) -> Result<Option<CanonicalTablePairedSnapshot>, LeafError> {
@@ -339,6 +379,10 @@ pub(crate) fn capture_rwas_once(
     );
     finish_rwas_encoding(state, generation, checked, snapshot)
 }
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 fn finish_rwas_encoding(
     state: &State,
     generation: u64,
@@ -356,7 +400,11 @@ fn finish_rwas_encoding(
     Ok(Some(snapshot?))
 }
 /// Capture canonical escrows through all four original native owners.
-pub(crate) fn capture_escrows_once(
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
+pub fn capture_escrows_once(
     state: &State,
     limits: LeafLimits,
 ) -> Result<Option<CanonicalTablePairedSnapshot>, LeafError> {
@@ -387,6 +435,10 @@ pub(crate) fn capture_escrows_once(
     );
     finish_escrows_encoding(state, generation, checked, snapshot)
 }
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 fn finish_escrows_encoding(
     state: &State,
     generation: u64,
@@ -406,8 +458,12 @@ fn finish_escrows_encoding(
 #[cfg(test)]
 #[path = "grouped_capture/escrows_fence_tests.rs"]
 mod escrows_fence_tests;
-/// Capture canonical repo_agreements through all four original native owners.
-pub(crate) fn capture_repo_agreements_once(
+/// Capture canonical `repo_agreements` through all four original native owners.
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
+pub fn capture_repo_agreements_once(
     state: &State,
     limits: LeafLimits,
 ) -> Result<Option<CanonicalTablePairedSnapshot>, LeafError> {
@@ -438,6 +494,10 @@ pub(crate) fn capture_repo_agreements_once(
     );
     finish_repo_agreements_encoding(state, generation, checked, snapshot)
 }
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 fn finish_repo_agreements_encoding(
     state: &State,
     generation: u64,

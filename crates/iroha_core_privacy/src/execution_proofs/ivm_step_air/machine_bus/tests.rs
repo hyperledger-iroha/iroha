@@ -13,7 +13,7 @@ fn event(space: Space, index: u32, before: u128, after: u128) -> Event {
     Event {
         space,
         vm: 0,
-        generation: if space == Space::Initialization { 1 } else { 0 },
+        generation: u16::from(space == Space::Initialization),
         index,
         write: before != after,
         before: bytes(before),
@@ -191,9 +191,11 @@ fn every_tuple_field_is_bound_by_the_post_commit_multiset_product() {
     let original = bus.columns();
     for field in 0..packet::WIDTH {
         let mut forged = original.clone();
-        for phase in 0..PHASES {
-            forged[NOTE_COPY_WIDTH_V1 + SORTED + field][phase] =
-                forged[NOTE_COPY_WIDTH_V1 + SORTED + field][phase].add(F::ONE);
+        for value in forged[NOTE_COPY_WIDTH_V1 + SORTED + field]
+            .iter_mut()
+            .take(PHASES)
+        {
+            *value = value.add(F::ONE);
         }
         let values = aux(&forged, &challenges());
         let last = bus.size() - 1;

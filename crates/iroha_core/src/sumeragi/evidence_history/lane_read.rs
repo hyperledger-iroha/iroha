@@ -8,6 +8,10 @@ use crate::sumeragi::runtime_availability::history::{
     HistoryCapture, HistoryScan, LaneEvidenceContext,
 };
 
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Variants retain their original paid owners across suspension and retry without new unbudgeted allocations."
+)]
 enum Stage {
     Captured(HistoryCapture),
     History(HistoryScan),
@@ -17,7 +21,7 @@ enum Stage {
 }
 /// The caller owns this job until completion or explicit cancellation of its original State cut.
 /// Construction performs no disk I/O; the original World view must be dropped before polling.
-pub(crate) struct LaneEvidenceRead {
+pub struct LaneEvidenceRead {
     scope: LaneEvidenceScope,
     height: u64,
     stage: Stage,

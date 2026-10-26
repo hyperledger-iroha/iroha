@@ -207,12 +207,7 @@ fn paired_table_indexes_commit_the_same_retained_norito_rows() {
     let range = paired.prove_raw_range(&start, &end, 1, 8 * 1024).unwrap();
     let verified = CanonicalTableLeafSet::verify_paired_raw_range(
         table,
-        limits(),
-        &paired.root(),
-        &paired.lookup_root(),
-        &paired.ordered_root(),
-        &start,
-        &end,
+        limits(),(&paired.root(), &paired.lookup_root(), &paired.ordered_root()),(&start, &end),
         1,
         8 * 1024,
         &range,
@@ -225,12 +220,7 @@ fn paired_table_indexes_commit_the_same_retained_norito_rows() {
     assert!(matches!(
         CanonicalTableLeafSet::verify_paired_raw_range(
             table,
-            limits(),
-            &paired.root(),
-            &Hash::new(b"wrong lookup component"),
-            &paired.ordered_root(),
-            &start,
-            &end,
+            limits(),(&paired.root(), &Hash::new(b"wrong lookup component"), &paired.ordered_root()),(&start, &end),
             1,
             8 * 1024,
             &range,

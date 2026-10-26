@@ -96,7 +96,7 @@ fn validate(state: &ClassedRaceStateV1) -> Result<(), ClassedRaceSimulationError
 
 fn terminal(state: &ClassedRaceStateV1) -> bool {
     state.tick == MAX_TICKS
-        || state.tick % BATCH_TICKS == 0
+        || state.tick.is_multiple_of(BATCH_TICKS)
             && (state
                 .cars
                 .iter()
@@ -323,19 +323,18 @@ pub fn replay_classed_race_v1(
         .dnf_events
         .windows(2)
         .any(|pair| pair[0].tick >= pair[1].tick)
-        || replay
-            .dnf_events
-            .iter()
-            .any(|event| event.tick > replay.frames.len() as u32)
+        || replay.dnf_events.iter().any(|event| {
+            event.tick > u32::try_from(replay.frames.len()).expect("validated replay duration")
+        })
     {
         return Err(ClassedRaceSimulationErrorV1::TickSequence);
     }
     let mut events = replay.dnf_events.iter().peekable();
     for frame in &replay.frames {
-        if events.peek().is_some_and(|event| event.tick == state.tick) {
-            if let Some(event) = events.next() {
-                apply_classed_race_dnf_v1(&mut state, &event.slots)?;
-            }
+        if events.peek().is_some_and(|event| event.tick == state.tick)
+            && let Some(event) = events.next()
+        {
+            apply_classed_race_dnf_v1(&mut state, &event.slots)?;
         }
         step_classed_race_v1(&mut state, frame)?;
     }
@@ -358,7 +357,7 @@ pub fn classed_race_result_v1(
         .iter()
         .enumerate()
         .map(|(slot, car)| ClassedRaceStandingV1 {
-            slot: slot as u8,
+            slot: u8::try_from(slot).expect("validated player or port count"),
             finish_tick: car.finish_tick,
             dnf_tick: car.dnf_tick,
             progress_mm: car.progress_mm,
@@ -393,15 +392,15 @@ pub fn classed_race_result_v1(
             );
         } else if eligible.len() == 1 {
             winners.push(eligible[0].slot);
-        } else if state.tick == MAX_TICKS {
-            if let Some(leader) = eligible.first() {
-                winners.extend(
-                    eligible
-                        .iter()
-                        .filter(|car| car.progress_mm == leader.progress_mm)
-                        .map(|car| car.slot),
-                );
-            }
+        } else if state.tick == MAX_TICKS
+            && let Some(leader) = eligible.first()
+        {
+            winners.extend(
+                eligible
+                    .iter()
+                    .filter(|car| car.progress_mm == leader.progress_mm)
+                    .map(|car| car.slot),
+            );
         }
     }
     winners.sort_unstable();

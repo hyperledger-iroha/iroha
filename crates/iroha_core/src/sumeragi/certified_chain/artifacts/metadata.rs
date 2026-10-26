@@ -454,12 +454,13 @@ fn workspace(
     budget: &AllocationBudget,
     reservation: &mut AllocationReservation,
 ) -> Result<ncore::PreparedDecodeWorkspace, CertificateReadError> {
-    ncore::PreparedDecodeWorkspace::from_reservation(budget, reservation).map_err(scope_error)
+    ncore::PreparedDecodeWorkspace::from_reservation(budget, reservation)
+        .map_err(|error| scope_error(&error))
 }
-fn scope_error(error: ncore::PreparedDecodeScopeError) -> CertificateReadError {
+fn scope_error(error: &ncore::PreparedDecodeScopeError) -> CertificateReadError {
     match error {
         ncore::PreparedDecodeScopeError::Allocation(error) => {
-            CertificateReadError::Admission(ByteAdmissionError::ControlAllocation(error))
+            CertificateReadError::Admission(ByteAdmissionError::ControlAllocation(*error))
         }
         ncore::PreparedDecodeScopeError::ForeignPool => CertificateReadError::ForeignBudget,
         ncore::PreparedDecodeScopeError::Reservation(_)
@@ -472,7 +473,7 @@ fn prepared_error(error: ncore::PreparedDecodeError<CertificateReadError>) -> Ce
     match error {
         ncore::PreparedDecodeError::Codec(original) => captured(original),
         ncore::PreparedDecodeError::Destination(original) => original,
-        ncore::PreparedDecodeError::Scope(original) => scope_error(original),
+        ncore::PreparedDecodeError::Scope(original) => scope_error(&original),
     }
 }
 
@@ -492,7 +493,7 @@ pub(in crate::sumeragi) fn header(
 }
 
 /// Decode the same header into the native reader's ordinary ownership API.
-/// TODO: BodyRestoration still takes a bare header graph; its shared handoff migration
+/// TODO: `BodyRestoration` still takes a bare header graph; its shared handoff migration
 /// is separate from canonical scope/depth parity at this reader boundary.
 pub(in crate::sumeragi) fn decoded_header(raw: &[u8]) -> Result<BlockHeader, CertificateReadError> {
     capture_decode(|| {
@@ -521,7 +522,7 @@ pub(in crate::sumeragi) fn qc(
 }
 
 /// Decode the same quorum metadata into the native reader's ordinary bitmap owner.
-/// TODO: migrate the bare QC handoff with BodyRestoration's shared owner.
+/// TODO: migrate the bare QC handoff with `BodyRestoration`'s shared owner.
 pub(in crate::sumeragi) fn decoded_qc(raw: &[u8]) -> Result<Qc, CertificateReadError> {
     capture_decode(|| {
         frame_bound(raw, MAX_QC_METADATA_BYTES)?;

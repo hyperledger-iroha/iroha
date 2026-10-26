@@ -114,7 +114,7 @@ fn time_trigger_call_hashes_bind_transcripts_and_include_failed_invocations() {
         trigger_ids.iter().enumerate().map(|(index, id)| {
             iroha_data_model::block::execution_output::TimeInvocationV1 {
                 schedule_index: u32::try_from(index).unwrap(),
-                event: event.clone(),
+                event,
                 trigger: crate::smartcontracts::isi::triggers::set::invocation_identity::time_trigger_use_v1(
                     &trial.world.triggers, id, header.height().get(),
                 ).unwrap(),

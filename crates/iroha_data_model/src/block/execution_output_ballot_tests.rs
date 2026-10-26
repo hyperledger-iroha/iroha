@@ -191,7 +191,7 @@ fn identical_anonymous_inputs_keep_distinct_results_and_canonical_source_positio
             0,
             BTreeMap::new(),
             vec![],
-            Default::default(),
+            crate::nexus::AxtPolicySnapshot::default(),
             BTreeSet::new(),
             &limits,
         )

@@ -236,7 +236,7 @@ mod tests;
 
 /// One aggregate's exclusive permission to prepare and publish its original fields.
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) enum AggregatePublication {
+pub enum AggregatePublication {
     Executing,
     Capturing,
     Frozen,

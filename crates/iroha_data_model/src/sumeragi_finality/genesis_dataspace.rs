@@ -17,7 +17,7 @@ use crate::{
     nexus::{
         LaneLifecycleParameterV1, LaneVisibility, MAX_NEXUS_AMX_CONTEXT_BYTES_V1,
         NexusAmxContextCatalogV1, NexusAmxContextError, NexusCatalogTransitionV1,
-        NexusRuntimeCatalogV1, decode_nexus_amx_context_v1,
+        NexusCatalogValidationError, NexusRuntimeCatalogV1, decode_nexus_amx_context_v1,
     },
     parameter::{CustomParameter, Parameter, Parameters},
     sns::dataspace_id_for_alias,
@@ -58,7 +58,7 @@ pub struct GenesisDataspaceSelectorV1 {
 }
 
 /// Why a genesis dataspace declaration or certified cut was refused.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, thiserror::Error)]
 pub enum GenesisDataspaceError {
     /// The selector itself is malformed.
     #[error("genesis dataspace selector is invalid: {0}")]
@@ -93,6 +93,9 @@ pub enum GenesisDataspaceError {
     /// The committed runtime catalog collides with the declared dataspace.
     #[error("runtime catalog collides with the genesis dataspace: {0}")]
     RuntimeCatalog(&'static str),
+    /// Original runtime catalog decoder or structural failure, including local resource provenance.
+    #[error("runtime catalog validation: {0}")]
+    Catalog(#[from] NexusCatalogValidationError),
     /// A Restricted dataspace needs a per-height manifest witness that does not exist yet.
     #[error("restricted dataspace manifest authority is unavailable")]
     RestrictedManifestAuthorityUnavailable,
@@ -449,7 +452,8 @@ impl GenesisDataspaceAuthorityV1 {
     /// context; a tip outside this authority's Global network and chain; parameters that differ
     /// from the certified cell; a missing or invalid lane policy, or one that no longer pins the
     /// lane to the dataspace with a committee drawn from the tip committee; or a runtime catalog
-    /// addition of this dataspace or of a manifest for its lane.
+    /// addition of this dataspace or of a manifest for its lane. Catalog decoding retains the
+    /// original typed malformed-input or resource cause for the caller's admission observer.
     pub fn verify_cut(
         &self,
         tip: &VerifiedSumeragiBlock,
@@ -494,7 +498,7 @@ impl GenesisDataspaceAuthorityV1 {
             .get(&NexusRuntimeCatalogV1::parameter_id())
         {
             let runtime = NexusRuntimeCatalogV1::from_custom_parameter(custom)
-                .map_err(|_| GenesisDataspaceError::RuntimeCatalog("invalid runtime catalog"))?
+                .map_err(GenesisDataspaceError::Catalog)?
                 .ok_or(GenesisDataspaceError::RuntimeCatalog(
                     "invalid runtime catalog",
                 ))?;

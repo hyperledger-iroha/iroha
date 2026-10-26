@@ -72,17 +72,17 @@ impl ExecutionOutputProducer<'_, '_, '_> {
                     PipelineEventPositionV1::Network(
                         u32::try_from(index).map_err(|_| "Pipeline source index exceeds u32")?,
                     ),
-                    event.into(),
+                    &(event.into()),
                     maximum,
                 )?;
             }
             self.execute_pipeline_event(
                 PipelineEventPositionV1::BlockApproved,
-                BlockEvent {
+                &(BlockEvent {
                     header: self.source.header(),
                     status: BlockStatus::Approved,
                 }
-                .into(),
+                .into()),
                 maximum,
             )
         })();
@@ -95,7 +95,7 @@ impl ExecutionOutputProducer<'_, '_, '_> {
     fn execute_pipeline_event(
         &mut self,
         position: PipelineEventPositionV1,
-        event: PipelineEventBox,
+        event: &PipelineEventBox,
         maximum: u32,
     ) -> Result<(), ExecutionAttemptError<String>> {
         if self.state.gas_limit_per_block != 0
@@ -116,7 +116,7 @@ impl ExecutionOutputProducer<'_, '_, '_> {
             .state
             .world
             .triggers
-            .match_pipeline_event(&event, height)
+            .match_pipeline_event(event, height)
         {
             if matched.len() == limit {
                 return Err("Pipeline matcher exceeded frozen capacity".into());
@@ -140,14 +140,14 @@ impl ExecutionOutputProducer<'_, '_, '_> {
                 .triggers
                 .pipeline_triggers()
                 .get(&id)
-                .filter(|action| pipeline_trigger_action_matches(action, &event, height))
+                .filter(|action| pipeline_trigger_action_matches(action, event, height))
                 .cloned();
             let Some(action) = action else {
                 self.skip_uninvoked(ExecutionOutputPhase::Pipeline, 1)?;
                 continue;
             };
             let invocation = PipelineInvocationV1 {
-                event: position.clone(),
+                event: position,
                 candidate_index: u32::try_from(candidate_index)
                     .map_err(|_| "Pipeline index exceeds u32")?,
                 trigger: pipeline_trigger_use_v1(&self.state.world.triggers, &id, height)?,

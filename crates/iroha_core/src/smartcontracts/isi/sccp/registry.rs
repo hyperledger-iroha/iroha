@@ -198,7 +198,7 @@ mod tests {
         let mut stx = block.transaction();
         let network = SccpNetworkV1::BscMainnet;
         let mut route = sample_route(network);
-        let mut second = route.revisions.get(&1).cloned().expect("revision");
+        let mut second = route.revisions.get(&1).copied().expect("revision");
         second.revision = 2;
         route.revisions.insert(2, second);
         store::routes::insert(&mut stx, network, route).expect("route");

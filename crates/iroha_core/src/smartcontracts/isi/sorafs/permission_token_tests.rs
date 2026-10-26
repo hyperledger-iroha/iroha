@@ -1,4 +1,4 @@
-/// Global SoraFS grants require the exact canonical unit payload.
+/// Global `SoraFS` grants require the exact canonical unit payload.
 #[test]
 fn sorafs_permission_tokens_reject_same_name_with_substituted_payload() {
     use iroha_executor_data_model::permission::sorafs::{

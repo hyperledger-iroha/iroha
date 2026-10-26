@@ -788,6 +788,21 @@ mod block {
             }
             self.applied = true;
         }
+        /// Replace the current value, moving its original into the transaction journal.
+        ///
+        /// Unlike mutable access, replacement needs no cloned preimage. Later writes
+        /// retain the same transaction original, and apply preserves the block's oldest
+        /// original. The existing current and undo allocation charges stay with their
+        /// physical owners. Dropping an unapplied transaction restores its original.
+        pub fn replace(&mut self, replacement: V) {
+            let value = self.block.writers.as_mut().blocks.get_mut();
+            let previous = core::mem::replace(value, replacement);
+            self.block.dirty = true;
+            if self.revert.is_none() {
+                self.revert = Some(previous);
+            }
+        }
+
         /// Get mutable access to the value stored in cell
         pub fn get_mut(&mut self) -> &mut V {
             let value = self.block.writers.as_mut().blocks.get_mut();
@@ -831,6 +846,116 @@ pub use block::{Block, Transaction};
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn transaction_replace_moves_preimage_and_keeps_original_across_repeated_writes() {
+        let cell = Cell::new(vec![0_u8; 17]);
+        let mut block = cell.block();
+        let mut transaction = block.transaction();
+        let original = transaction.get().as_ptr();
+        let first = vec![1; 19];
+        let second = vec![2; 23];
+        crate::allocation_test_support::without_allocations(|| {
+            transaction.replace(first);
+            assert_eq!(transaction.get_before_transaction().as_ptr(), original);
+            assert_eq!(transaction.get_before_block().as_ptr(), original);
+            transaction.get_mut()[0] = 3;
+            transaction.replace(second);
+            assert_eq!(transaction.get_before_transaction().as_ptr(), original);
+            assert_eq!(
+                transaction.touched_value().unwrap().before.as_ptr(),
+                original
+            );
+            assert_eq!(transaction.get(), &[2; 23]);
+            drop(transaction);
+        });
+        assert_eq!(block.get().as_ptr(), original);
+        assert!(!block.dirty);
+        assert!(block.original_undo().is_none());
+    }
+
+    #[test]
+    fn transaction_replace_and_mutable_access_preserve_apply_drop_and_oldest_block_undo() {
+        for prior_dirty in [false, true] {
+            for mutable_first in [false, true] {
+                for apply in [false, true] {
+                    let cell = Cell::new(vec![0_u8]);
+                    let mut block = cell.block();
+                    if prior_dirty {
+                        let mut sibling = block.transaction();
+                        sibling.replace(vec![1]);
+                        sibling.apply();
+                    }
+                    let before = if prior_dirty { 1 } else { 0 };
+                    let mut transaction = block.transaction();
+                    if mutable_first {
+                        transaction.get_mut()[0] = 2;
+                    }
+                    let original = transaction.get_before_transaction().as_ptr();
+                    let replacement = vec![3];
+                    let repeated = vec![4];
+                    crate::allocation_test_support::without_allocations(|| {
+                        transaction.replace(replacement);
+                        transaction.replace(repeated);
+                        transaction.get_mut()[0] = 5;
+                        assert_eq!(transaction.get_before_transaction(), &[before]);
+                        assert_eq!(transaction.get_before_transaction().as_ptr(), original);
+                        assert_eq!(transaction.get_before_block(), &[0]);
+                        if apply {
+                            transaction.apply();
+                        } else {
+                            drop(transaction);
+                        }
+                    });
+                    assert_eq!(block.get(), &[if apply { 5 } else { before }]);
+                    assert_eq!(block.dirty, prior_dirty || apply);
+                    if prior_dirty || apply {
+                        assert_eq!(block.original_undo().as_deref(), Some(&[0][..]));
+                    } else {
+                        assert!(block.original_undo().is_none());
+                    }
+                    block.commit();
+                    assert_eq!(cell.view().get(), &[if apply { 5 } else { before }]);
+                    if prior_dirty || apply {
+                        assert_eq!(cell.predecessor_view().get().as_deref(), Some(&[0][..]));
+                    } else {
+                        assert!(cell.predecessor_view().get().is_none());
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn transaction_replace_retains_both_original_physical_charge_owners() {
+        use std::sync::Arc;
+        let current = Arc::new(());
+        let undo = Arc::new(());
+        let cell = Cell::new_charged(
+            vec![0_u8],
+            CellAllocationCharges::new(Arc::clone(&current), Arc::clone(&undo)),
+        );
+        let mut block = cell.block_charged(CellAllocationCharges::new(
+            Arc::clone(&current),
+            Arc::clone(&undo),
+        ));
+        let counts = (Arc::strong_count(&current), Arc::strong_count(&undo));
+        let mut transaction = block.transaction();
+        let replacement = vec![1];
+        crate::allocation_test_support::without_allocations(|| {
+            transaction.replace(replacement);
+            assert_eq!(
+                (Arc::strong_count(&current), Arc::strong_count(&undo)),
+                counts
+            );
+            drop(transaction);
+            assert_eq!(
+                (Arc::strong_count(&current), Arc::strong_count(&undo)),
+                counts
+            );
+        });
+        assert_eq!(block.get(), &[0]);
+    }
+
     #[test]
     fn original_undo_distinguishes_untouched_and_original_empty_value() {
         let cell = Cell::new(None::<u64>);

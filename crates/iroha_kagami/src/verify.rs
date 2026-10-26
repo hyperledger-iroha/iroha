@@ -12,7 +12,6 @@ use clap::Parser;
 use color_eyre::eyre::{Result, WrapErr as _, eyre};
 use iroha_data_model::{
     asset::{AssetDefinitionAlias, AssetDefinitionId},
-    block::consensus::is_valid_committee_size,
     isi::{Register, asset_alias::SetAssetDefinitionAlias},
     parameter::{
         custom::CustomParameterId,
@@ -21,8 +20,7 @@ use iroha_data_model::{
     prelude::AssetDefinition,
 };
 use iroha_genesis::RawGenesisTransaction;
-use iroha_model_base::domain::DomainId;
-use iroha_model_base::peer::PeerId;
+use iroha_model_base::{domain::DomainId, peer::PeerId, topology::is_valid_committee_size};
 use std::{
     collections::{BTreeMap, HashSet},
     io::{BufWriter, Write},
@@ -385,6 +383,14 @@ mod tests {
             GenesisProfile::Iroha3Dev => unreachable!("dev profile has no public XOR"),
         }
     }
+    fn staking_policy_for_profile(
+        profile: GenesisProfile,
+    ) -> iroha_data_model::block::consensus::PublicLaneStakingPolicy {
+        let asset =
+            profile_uses_public_xor(profile).then(|| test_public_xor_asset_definition_id(profile));
+        crate::genesis::resolve_test_staking_policy(asset.as_ref(), false)
+            .expect("explicit profile staking policy")
+    }
     fn append_public_xor_binding_for_test(
         manifest: RawGenesisTransaction,
         asset_definition_id: AssetDefinitionId,
@@ -448,8 +454,22 @@ mod tests {
         peers: &[(PublicKey, Vec<u8>)],
     ) -> RawGenesisTransaction {
         let defaults = profile_defaults(profile);
+        let _author_context = iroha_data_model::account::address::ChainDiscriminantGuard::enter(
+            defaults
+                .chain_discriminant
+                .unwrap_or_else(iroha_data_model::account::address::chain_discriminant),
+        );
         let builder = complete_builder_for_test_peers(
-            GenesisBuilder::new_without_executor(defaults.chain_id.clone(), PathBuf::from(".")),
+            GenesisBuilder::new_without_executor(
+                defaults.chain_id.clone(),
+                PathBuf::from("."),
+                iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                    iroha_crypto::Algorithm::Ed25519,
+                    iroha_crypto::Algorithm::Secp256k1,
+                    iroha_crypto::Algorithm::BlsNormal,
+                ])
+                .expect("explicit canonical genesis producer policy"),
+            ),
             peers,
         );
         let manifest = crate::genesis::generate_default(
@@ -459,6 +479,7 @@ mod tests {
             consensus_mode,
             Some(&defaults),
             Some(vrf_seed),
+            staking_policy_for_profile(profile),
         )
         .expect("generate profile manifest");
         let manifest = if profile_uses_public_xor(profile) {
@@ -617,8 +638,22 @@ mod tests {
             let seed = [8_u8; 32];
             let peers = (0..4).map(|_| generate_peer_pop()).collect::<Vec<_>>();
             let defaults = profile_defaults(profile);
+            let _author_context = iroha_data_model::account::address::ChainDiscriminantGuard::enter(
+                defaults
+                    .chain_discriminant
+                    .unwrap_or_else(iroha_data_model::account::address::chain_discriminant),
+            );
             let builder = complete_builder_for_test_peers(
-                GenesisBuilder::new_without_executor(defaults.chain_id.clone(), PathBuf::from(".")),
+                GenesisBuilder::new_without_executor(
+                    defaults.chain_id.clone(),
+                    PathBuf::from("."),
+                    iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                        iroha_crypto::Algorithm::Ed25519,
+                        iroha_crypto::Algorithm::Secp256k1,
+                        iroha_crypto::Algorithm::BlsNormal,
+                    ])
+                    .expect("explicit canonical genesis producer policy"),
+                ),
                 &peers,
             );
             let manifest = crate::genesis::generate_default(
@@ -628,6 +663,7 @@ mod tests {
                 SumeragiConsensusMode::Npos,
                 Some(&defaults),
                 Some(seed),
+                staking_policy_for_profile(profile),
             )
             .unwrap();
             for (spec, scope) in [
@@ -675,8 +711,22 @@ mod tests {
         let seed = [9u8; 32];
         let peers = (0..4).map(|_| generate_peer_pop()).collect::<Vec<_>>();
         let defaults = profile_defaults(GenesisProfile::Iroha3Taira);
+        let _author_context = iroha_data_model::account::address::ChainDiscriminantGuard::enter(
+            defaults
+                .chain_discriminant
+                .unwrap_or_else(iroha_data_model::account::address::chain_discriminant),
+        );
         let builder = complete_builder_for_test_peers(
-            GenesisBuilder::new_without_executor(defaults.chain_id.clone(), PathBuf::from(".")),
+            GenesisBuilder::new_without_executor(
+                defaults.chain_id.clone(),
+                PathBuf::from("."),
+                iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                    iroha_crypto::Algorithm::Ed25519,
+                    iroha_crypto::Algorithm::Secp256k1,
+                    iroha_crypto::Algorithm::BlsNormal,
+                ])
+                .expect("explicit canonical genesis producer policy"),
+            ),
             &peers,
         );
         let manifest = crate::genesis::generate_default(
@@ -686,6 +736,7 @@ mod tests {
             SumeragiConsensusMode::Npos,
             Some(&defaults),
             Some(seed),
+            staking_policy_for_profile(GenesisProfile::Iroha3Taira),
         )
         .expect("generate profile manifest")
         .into_builder()
@@ -712,8 +763,22 @@ mod tests {
         let seed = [10u8; 32];
         let peers = (0..4).map(|_| generate_peer_pop()).collect::<Vec<_>>();
         let defaults = profile_defaults(GenesisProfile::Iroha3Taira);
+        let _author_context = iroha_data_model::account::address::ChainDiscriminantGuard::enter(
+            defaults
+                .chain_discriminant
+                .unwrap_or_else(iroha_data_model::account::address::chain_discriminant),
+        );
         let builder = complete_builder_for_test_peers(
-            GenesisBuilder::new_without_executor(defaults.chain_id.clone(), PathBuf::from(".")),
+            GenesisBuilder::new_without_executor(
+                defaults.chain_id.clone(),
+                PathBuf::from("."),
+                iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                    iroha_crypto::Algorithm::Ed25519,
+                    iroha_crypto::Algorithm::Secp256k1,
+                    iroha_crypto::Algorithm::BlsNormal,
+                ])
+                .expect("explicit canonical genesis producer policy"),
+            ),
             &peers,
         );
         let manifest = crate::genesis::generate_default(
@@ -723,6 +788,7 @@ mod tests {
             SumeragiConsensusMode::Npos,
             Some(&defaults),
             Some(seed),
+            staking_policy_for_profile(GenesisProfile::Iroha3Taira),
         )
         .expect("generate profile manifest");
         let wrong_xor = AssetDefinitionId::parse_address_literal("61CtjvNd9T3THAR65GsMVHr82Bjc")
@@ -754,8 +820,22 @@ mod tests {
         let seed = [11u8; 32];
         let peers = (0..4).map(|_| generate_peer_pop()).collect::<Vec<_>>();
         let defaults = profile_defaults(GenesisProfile::Iroha3Taira);
+        let _author_context = iroha_data_model::account::address::ChainDiscriminantGuard::enter(
+            defaults
+                .chain_discriminant
+                .unwrap_or_else(iroha_data_model::account::address::chain_discriminant),
+        );
         let builder = complete_builder_for_test_peers(
-            GenesisBuilder::new_without_executor(defaults.chain_id.clone(), PathBuf::from(".")),
+            GenesisBuilder::new_without_executor(
+                defaults.chain_id.clone(),
+                PathBuf::from("."),
+                iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                    iroha_crypto::Algorithm::Ed25519,
+                    iroha_crypto::Algorithm::Secp256k1,
+                    iroha_crypto::Algorithm::BlsNormal,
+                ])
+                .expect("explicit canonical genesis producer policy"),
+            ),
             &peers,
         );
         let manifest = crate::genesis::generate_default(
@@ -765,6 +845,7 @@ mod tests {
             SumeragiConsensusMode::Npos,
             Some(&defaults),
             Some(seed),
+            staking_policy_for_profile(GenesisProfile::Iroha3Taira),
         )
         .expect("generate profile manifest");
         let synthetic_xor = AssetDefinitionId::derive_from_components(
@@ -814,8 +895,22 @@ mod tests {
         let seed = [12u8; 32];
         let peers = (0..4).map(|_| generate_peer_pop()).collect::<Vec<_>>();
         let defaults = profile_defaults(GenesisProfile::Iroha3Nexus);
+        let _author_context = iroha_data_model::account::address::ChainDiscriminantGuard::enter(
+            defaults
+                .chain_discriminant
+                .unwrap_or_else(iroha_data_model::account::address::chain_discriminant),
+        );
         let builder = complete_builder_for_test_peers(
-            GenesisBuilder::new_without_executor(defaults.chain_id.clone(), PathBuf::from(".")),
+            GenesisBuilder::new_without_executor(
+                defaults.chain_id.clone(),
+                PathBuf::from("."),
+                iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                    iroha_crypto::Algorithm::Ed25519,
+                    iroha_crypto::Algorithm::Secp256k1,
+                    iroha_crypto::Algorithm::BlsNormal,
+                ])
+                .expect("explicit canonical genesis producer policy"),
+            ),
             &peers,
         );
         let manifest = crate::genesis::generate_default(
@@ -825,6 +920,7 @@ mod tests {
             SumeragiConsensusMode::Npos,
             Some(&defaults),
             Some(seed),
+            staking_policy_for_profile(GenesisProfile::Iroha3Nexus),
         )
         .expect("generate profile manifest");
         let domain_derived_xor = AssetDefinitionId::derive_from_components(
@@ -862,9 +958,17 @@ mod tests {
     fn verify_rejects_missing_pop() {
         let defaults = profile_defaults(GenesisProfile::Iroha3Dev);
         let seed = derive_vrf_seed_from_chain(&defaults.chain_id);
-        let builder =
-            GenesisBuilder::new_without_executor(defaults.chain_id.clone(), PathBuf::from("."))
-                .complete_for_test();
+        let builder = GenesisBuilder::new_without_executor(
+            defaults.chain_id.clone(),
+            PathBuf::from("."),
+            iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                iroha_crypto::Algorithm::Ed25519,
+                iroha_crypto::Algorithm::Secp256k1,
+                iroha_crypto::Algorithm::BlsNormal,
+            ])
+            .expect("explicit canonical genesis producer policy"),
+        )
+        .complete_for_test();
         let manifest = crate::genesis::generate_default(
             builder,
             SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key(),
@@ -872,6 +976,7 @@ mod tests {
             SumeragiConsensusMode::Npos,
             Some(&defaults),
             Some(seed),
+            crate::genesis::test_staking_policy(),
         )
         .expect("generate profile manifest")
         .into_builder()

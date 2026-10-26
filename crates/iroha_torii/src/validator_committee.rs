@@ -47,7 +47,7 @@ fn capacity() -> Error {
     ))
 }
 
-fn codec_error(error: norito::Error) -> Error {
+fn codec_error(error: &norito::Error) -> Error {
     if error.is_decode_resource_limit() {
         capacity()
     } else {
@@ -66,7 +66,7 @@ fn beacon_binding_error(error: GlobalThresholdBeaconError) -> Error {
     invalid(format!("invalid prepared committee beacon: {error}"))
 }
 
-fn response_error(error: crate::utils::BoundedResponseEncodeError) -> Error {
+fn response_error(error: &crate::utils::BoundedResponseEncodeError) -> Error {
     match error {
         crate::utils::BoundedResponseEncodeError::BodyTooLarge { .. }
         | crate::utils::BoundedResponseEncodeError::JsonBodyTooLarge { .. } => capacity(),
@@ -83,16 +83,16 @@ fn admitted_copy<T>(value: &T, max_frame_bytes: usize) -> Result<T, Error>
 where
     T: norito::NoritoSerialize + for<'de> norito::NoritoDeserialize<'de>,
 {
-    let length = norito::canonical_frame_len(value).map_err(codec_error)?;
+    let length = norito::canonical_frame_len(value).map_err(|value| codec_error(&value))?;
     if length > max_frame_bytes {
         return Err(capacity());
     }
     let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
     let bytes = norito::core::to_bytes_bounded(value, length).map_err(|error| match error {
-        norito::core::BoundedEncodeError::Serialization(error) => codec_error(error),
+        norito::core::BoundedEncodeError::Serialization(error) => codec_error(&(error)),
         _ => capacity(),
     })?;
-    norito::decode_canonical(&bytes).map_err(codec_error)
+    norito::decode_canonical(&bytes).map_err(|value| codec_error(&value))
 }
 
 fn load(
@@ -100,6 +100,8 @@ fn load(
     target_epoch: Option<u64>,
     limits: NativeFinalityLimits,
 ) -> Result<ValidatorCommitteeStatusV1, Error> {
+    use iroha_data_model::query::error::QueryExecutionFail;
+
     let height = u64::try_from(state.height()).map_err(|_| invalid("committee height overflow"))?;
     limits.validate().map_err(invalid)?;
     if height < 2 {
@@ -111,7 +113,7 @@ fn load(
     // Keep one cumulative decode scope and source allowance for both attachments.
     let mut source_blocks_left = limits.block_count as u64;
     let mut source_bytes_left = limits.journal_bytes as u64;
-    use iroha_data_model::query::error::QueryExecutionFail;
+
     let query_error = crate::canonical_history::query_attempt_error;
     let mut admit = |work, bytes| {
         if bytes > limits.block_bytes as u64 {
@@ -361,8 +363,8 @@ pub async fn handler_validator_committee_status(
                 limits.decode_limits().map_err(invalid)?,
                 || load(&view, query.target_epoch, limits),
             )?;
-            crate::utils::respond_with_format_bounded(payload, format, response_limit)
-                .map_err(response_error)
+            crate::utils::respond_with_format_bounded(&(payload), format, response_limit)
+                .map_err(|value| response_error(&value))
         })
         .await?;
     let response = proof_response_with_exact_egress(
@@ -394,7 +396,7 @@ mod tests {
         .expect_err("original zero allocation owner refuses its first byte");
         assert!(resource.is_decode_resource_limit());
         assert!(matches!(
-            codec_error(resource),
+            codec_error(&(resource)),
             Error::Query(iroha_data_model::ValidationFail::QueryFailed(
                 QueryExecutionFail::GasBudgetExceeded
             ))
@@ -443,7 +445,12 @@ mod tests {
                     else {
                         panic!("allocation usage probe must refuse without charging");
                     };
-                    (result, attempted as usize - budget - 1)
+                    (
+                        result,
+                        usize::try_from(attempted).expect("fixture allocation count fits usize")
+                            - budget
+                            - 1,
+                    )
                 },
             )
         };
@@ -470,7 +477,7 @@ mod tests {
         );
         assert_eq!(source, [vec![0x37; 512], vec![0x51; 128]]);
         assert!(matches!(
-            codec_error(norito::Error::LengthMismatch),
+            codec_error(&(norito::Error::LengthMismatch)),
             Error::Query(iroha_data_model::ValidationFail::InternalError(_))
         ));
     }
@@ -536,15 +543,15 @@ mod tests {
         for format in [ResponseFormat::Json, ResponseFormat::Norito] {
             let observed = read(envelope.limits).unwrap();
             let response = crate::utils::respond_with_format_bounded(
-                observed,
+                &(observed),
                 format,
                 envelope.response_bytes,
             )
             .unwrap();
             assert_eq!(response.status(), StatusCode::OK);
             let observed = read(envelope.limits).unwrap();
-            let refused = crate::utils::respond_with_format_bounded(observed, format, 1)
-                .map_err(response_error);
+            let refused = crate::utils::respond_with_format_bounded(&(observed), format, 1)
+                .map_err(|value| response_error(&value));
             assert!(matches!(
                 refused,
                 Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -553,7 +560,7 @@ mod tests {
             ));
         }
         assert!(matches!(
-            response_error(crate::utils::BoundedResponseEncodeError::Serialization),
+            response_error(&(crate::utils::BoundedResponseEncodeError::Serialization)),
             Error::Query(iroha_data_model::ValidationFail::InternalError(_))
         ));
         let insufficient_source = NativeFinalityLimits {
@@ -656,7 +663,7 @@ mod tests {
             else {
                 panic!("allocation usage probe must refuse without charging");
             };
-            attempted as usize - budget - 1
+            usize::try_from(attempted).expect("fixture allocation count fits usize") - budget - 1
         });
         let exact = frame.len() + decoded_bytes;
         let limits = norito::DecodeLimits::new(65536, 65536, 65536, exact, 128);

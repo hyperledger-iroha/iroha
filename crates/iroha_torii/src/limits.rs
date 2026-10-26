@@ -462,6 +462,10 @@ impl InnerLimiter {
         );
         true
     }
+    #[expect(
+        clippy::suboptimal_flops,
+        reason = "Preserve separate refill multiplication and addition rounding at admission thresholds."
+    )]
     fn refill_bucket(rate_per_sec: f64, burst: f64, bucket: &mut TokenBucket, now: Instant) {
         let elapsed = now.saturating_duration_since(bucket.last).as_secs_f64();
         if elapsed > 0.0 {
@@ -471,6 +475,10 @@ impl InnerLimiter {
     }
     fn allow_cost(&mut self, key: &str, cost: u64, now: Instant) -> bool {
         let burst = self.burst;
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "Token costs use the same floating-point approximation as bucket capacity and refill."
+        )]
         let required = (cost.max(1) as f64).min(f64::MAX);
         if required > burst {
             return false;
@@ -478,22 +486,25 @@ impl InnerLimiter {
         self.allow_required(key, required, now)
     }
     fn allow_cost_capped_to_burst(&mut self, key: &str, cost: u64, now: Instant) -> bool {
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "Token costs use the same floating-point approximation as bucket capacity and refill."
+        )]
         let required = (cost.max(1) as f64).min(self.burst);
         self.allow_required(key, required, now)
     }
     fn allow_required(&mut self, key: &str, required: f64, now: Instant) -> bool {
         let burst = self.burst;
         let rate_per_sec = self.rate_per_sec;
-        let bucket = match self.buckets.get_mut(key) {
-            Some(bucket) => bucket,
-            None => {
-                if !self.insert_full_bucket(key, now) {
-                    return false;
-                }
-                self.buckets
-                    .get_mut(key)
-                    .expect("inserted rate-limit bucket must be present")
+        let bucket = if let Some(bucket) = self.buckets.get_mut(key) {
+            bucket
+        } else {
+            if !self.insert_full_bucket(key, now) {
+                return false;
             }
+            self.buckets
+                .get_mut(key)
+                .expect("inserted rate-limit bucket must be present")
         };
         Self::refill_bucket(rate_per_sec, burst, bucket, now);
         if bucket.tokens >= required {
@@ -507,6 +518,10 @@ impl InnerLimiter {
         if count == 0 {
             return true;
         }
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "Repeated token costs use the same floating-point representation as bucket capacity."
+        )]
         let required = count as f64;
         if required > self.burst {
             return false;
@@ -546,6 +561,10 @@ impl InnerLimiter {
             .is_some_and(|bucket| bucket.pending_reservations > 0)
     }
 
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "Refund the same floating-point token count deducted when reserving."
+    )]
     fn finish_reservation(&mut self, key: &str, count: usize, refund: bool) {
         let bucket = self
             .buckets
@@ -617,6 +636,10 @@ impl FixedKeyInnerLimiter {
         if count == 0 {
             return true;
         }
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "Repeated token costs use the same floating-point representation as bucket capacity."
+        )]
         let required = count as f64;
         if required > self.burst {
             return false;
@@ -656,14 +679,22 @@ impl RateLimiter {
         let rate = rate_per_minute.and_then(|value| {
             (value > 0).then_some(f64::from(value) / Duration::from_secs(60).as_secs_f64())
         });
-        let burst = burst.unwrap_or_else(|| rate_per_minute.unwrap_or(0)).max(1) as f64;
+        let burst = f64::from(burst.unwrap_or_else(|| rate_per_minute.unwrap_or(0)).max(1));
         Self {
             inner: Arc::new(ShardedLimiter::new(rate, burst, DEFAULT_MAX_BUCKETS)),
         }
     }
     /// Create a new limiter configured with `u64`-sized token buckets.
     pub fn new_u64(rate_per_sec: Option<u64>, burst: Option<u64>) -> Self {
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "Token refill rates retain the existing floating-point representation for u64 configuration."
+        )]
         let rate = rate_per_sec.and_then(|v| if v == 0 { None } else { Some(v as f64) });
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "Bucket capacity retains the same floating-point representation used for costs and refill."
+        )]
         let burst = burst.unwrap_or_else(|| rate_per_sec.unwrap_or(0)).max(1) as f64;
         Self {
             inner: Arc::new(ShardedLimiter::new(rate, burst, DEFAULT_MAX_BUCKETS)),
@@ -674,8 +705,8 @@ impl RateLimiter {
         burst: Option<u32>,
         max_buckets: usize,
     ) -> Self {
-        let rate = rate_per_sec.and_then(|v| if v == 0 { None } else { Some(v as f64) });
-        let burst = burst.unwrap_or_else(|| rate_per_sec.unwrap_or(0)).max(1) as f64;
+        let rate = rate_per_sec.and_then(|v| if v == 0 { None } else { Some(f64::from(v)) });
+        let burst = f64::from(burst.unwrap_or_else(|| rate_per_sec.unwrap_or(0)).max(1));
         Self {
             inner: Arc::new(ShardedLimiter::new(rate, burst, max_buckets)),
         }
@@ -835,7 +866,7 @@ impl FixedKeyRateLimiter {
         let rate = rate_per_minute.and_then(|value| {
             (value > 0).then_some(f64::from(value) / Duration::from_secs(60).as_secs_f64())
         });
-        let burst = burst.unwrap_or_else(|| rate_per_minute.unwrap_or(0)).max(1) as f64;
+        let burst = f64::from(burst.unwrap_or_else(|| rate_per_minute.unwrap_or(0)).max(1));
         Self {
             inner: Arc::new(FixedKeyShardedLimiter::new(
                 rate,
@@ -921,7 +952,7 @@ pub fn ingress_remote_ip(
 }
 fn parse_forwarded_for_chain(headers: &HeaderMap) -> Option<Vec<IpAddr>> {
     let mut addresses = Vec::new();
-    for value in headers.get_all(FORWARDED_FOR_HEADER).iter() {
+    for value in &headers.get_all(FORWARDED_FOR_HEADER) {
         let value = value.to_str().ok()?;
         for component in value.split(',') {
             if addresses.len() == MAX_FORWARDED_FOR_HOPS {
@@ -961,10 +992,10 @@ pub(crate) fn key_from_headers(
 /// Awaitable helper: returns true when request should pass (either not enforced
 /// or limiter allows), false when it should be rate-limited.
 pub async fn allow_conditionally(limiter: &RateLimiter, key: &str, enforce: bool) -> bool {
-    if !enforce {
-        true
-    } else {
+    if enforce {
         limiter.allow(key).await
+    } else {
+        true
     }
 }
 /// Awaitable helper for costed operations: returns true when request should pass (either not
@@ -975,10 +1006,10 @@ pub async fn allow_cost_conditionally(
     cost: u64,
     enforce: bool,
 ) -> bool {
-    if !enforce {
-        true
-    } else {
+    if enforce {
         limiter.allow_cost(key, cost).await
+    } else {
+        true
     }
 }
 #[allow(dead_code)]
@@ -1080,7 +1111,7 @@ pub fn cidr_contains(nets: &[IpNet], ip: IpAddr) -> bool {
 /// Uses the effective client IP resolved by ingress middleware.
 pub fn is_allowed_by_cidr(headers: &HeaderMap, remote: Option<IpAddr>, allow: &[IpNet]) -> bool {
     let candidate_ip = effective_remote_ip(headers, remote);
-    candidate_ip.map_or(false, |ip| cidr_contains(allow, ip))
+    candidate_ip.is_some_and(|ip| cidr_contains(allow, ip))
 }
 /// Returns true if a forwarded header is present and the TCP peer belongs to a trusted proxy CIDR.
 pub fn has_trusted_forwarded_header(
@@ -1152,7 +1183,7 @@ pub(crate) fn clamp_preauth_max_total(
     let Some(nofile_soft) = nofile_soft else {
         return Some(configured);
     };
-    let cap = preauth_budget_from_nofile(nofile_soft) as usize;
+    let cap = usize::try_from(preauth_budget_from_nofile(nofile_soft)).unwrap_or(usize::MAX);
     Some(configured.min(cap))
 }
 pub(crate) fn clamp_preauth_max_per_ip(
@@ -1311,10 +1342,10 @@ impl PreAuthGate {
         let counted_ip_addr = if let Some(addr) = ip {
             match inner.active_per_ip.entry(addr) {
                 Entry::Occupied(mut occ) => {
-                    if let Some(limit) = inner.max_per_ip {
-                        if *occ.get() >= limit {
-                            return Err(RejectReason::IpCap);
-                        }
+                    if let Some(limit) = inner.max_per_ip
+                        && *occ.get() >= limit
+                    {
+                        return Err(RejectReason::IpCap);
                     }
                     *occ.get_mut() += 1;
                 }
@@ -1379,18 +1410,18 @@ impl PreAuthGate {
         // Transient capacity rejection is not evidence of abusive request
         // volume. Charge only after capacity is available; the owned permit
         // releases all counters if rate admission fails or is cancelled.
-        if let (Some(addr), Some(rate)) = (ip, inner.rate_limiter.as_ref()) {
-            if !rate.allow(&addr.to_string()).await {
-                inner.note_ban(addr);
-                // Pre-auth rates are positive integer tokens per second,
-                // so a single token refills within one second. An explicit
-                // operator cooldown can extend that minimum retry delay.
-                let retry_after = inner
-                    .ban_duration
-                    .unwrap_or_default()
-                    .max(Duration::from_secs(1));
-                return Err(RejectReason::RateLimited { retry_after });
-            }
+        if let (Some(addr), Some(rate)) = (ip, inner.rate_limiter.as_ref())
+            && !rate.allow(&addr.to_string()).await
+        {
+            inner.note_ban(addr);
+            // Pre-auth rates are positive integer tokens per second,
+            // so a single token refills within one second. An explicit
+            // operator cooldown can extend that minimum retry delay.
+            let retry_after = inner
+                .ban_duration
+                .unwrap_or_default()
+                .max(Duration::from_secs(1));
+            return Err(RejectReason::RateLimited { retry_after });
         }
         Ok(permit)
     }
@@ -1444,15 +1475,15 @@ impl Drop for PreAuthPermit {
         if self.counted_global {
             self.gate.active_total.fetch_sub(1, Ordering::Release);
         }
-        if self.counted_ip {
-            if let Some(ip) = self.ip {
-                self.gate.release_ip(ip);
-            }
+        if self.counted_ip
+            && let Some(ip) = self.ip
+        {
+            self.gate.release_ip(ip);
         }
-        if self.counted_scheme {
-            if let Some(label) = self.scheme.as_deref() {
-                self.gate.release_scheme(label);
-            }
+        if self.counted_scheme
+            && let Some(label) = self.scheme.as_deref()
+        {
+            self.gate.release_scheme(label);
         }
     }
 }
@@ -2864,6 +2895,11 @@ mod tests {
         let nofile_soft = Some(256);
         assert_eq!(clamp_preauth_max_total(Some(200), nofile_soft), Some(64));
         assert_eq!(clamp_preauth_max_total(Some(32), nofile_soft), Some(32));
+        let large_nofile_soft = 2 * (u64::from(u32::MAX) + 1) + PREAUTH_NOFILE_RESERVE;
+        assert_eq!(
+            clamp_preauth_max_total(Some(32), Some(large_nofile_soft)),
+            Some(32),
+        );
     }
     #[test]
     fn clamp_preauth_max_per_ip_caps_to_total() {

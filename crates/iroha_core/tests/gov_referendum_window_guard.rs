@@ -25,8 +25,20 @@ fn plain_ballot_rejected_outside_window() {
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
     let domain: Domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
     let account: Account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-    let world = World::with([domain], [account], []);
+    let mut world = World::with([domain], [account], []);
+    // An explicit isolated component prerequisite, not signed-genesis authority.
+    // Keep fund_voter strict: ordinary account ISIs require this original policy.
+    let policy = iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+        iroha_crypto::Algorithm::Ed25519,
+    ])
+    .expect("explicit governance component signing algorithm");
+    world
+        .set_parameter_for_testing(
+            policy.into_parameter().expect("canonical component signing policy"),
+        )
+        .expect("admit the governance component's original policy");
     let mut state = State::new_for_testing(world, kura, query_handle);
+    assert_eq!(state.committed_height(), 0, "isolated component fixture");
     let mut gov_cfg = state.gov.clone();
     gov_cfg.plain_voting_enabled = true;
     gov_cfg.min_bond_amount = 0_u64.into();

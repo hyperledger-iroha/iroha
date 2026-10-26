@@ -35,7 +35,12 @@ pub(in super::super) fn append_subset_residues(
 ) {
     let mut returning = F::ZERO;
     let mut public_scalar = F::ZERO;
-    for (slot, fetch) in program.fetch(row).iter().copied().enumerate() {
+    for (slot, fetch) in
+        crate::execution_proofs::ivm_step_air::machine_bus::private_dispatch::Program::fetch(row)
+            .iter()
+            .copied()
+            .enumerate()
+    {
         let instruction = program.words.get(slot).copied();
         out.push(fetch.mul(F(u64::from(!instruction.is_some_and(supported)))));
         if instruction.is_some_and(|instruction| role(instruction) == Some(Role::Return)) {

@@ -152,10 +152,12 @@ pub(super) fn validate_retained<'a>(
         if locks.locks.is_empty() {
             return Err("retained governance corpus contains an empty referendum group".into());
         }
-        if let Some((old, new)) = rekey {
-            if old != new && locks.locks.contains_key(old) && locks.locks.contains_key(new) {
-                return Err("governance rekey would merge distinct retained obligations".into());
-            }
+        if let Some((old, new)) = rekey
+            && old != new
+            && locks.locks.contains_key(old)
+            && locks.locks.contains_key(new)
+        {
+            return Err("governance rekey would merge distinct retained obligations".into());
         }
         for (owner, record) in &locks.locks {
             if &record.owner != owner {
@@ -220,7 +222,7 @@ impl StateTransaction<'_, '_> {
 impl super::World {
     /// Validate both retained cuts before startup/restore can publish derived owners.
     pub(super) fn validate_retained_mandatory_sources(
-        &self,
+        &mut self,
     ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<String>> {
         {
             let parameters = self.parameters.view();
@@ -233,14 +235,13 @@ impl super::World {
             )?;
         }
         {
-            let parameters = self.parameters.block_and_revert();
+            // Exclusive World construction/restore ownership binds these two
+            // immutable EBR views to the same complete publication cut.
+            let current = self.parameters.view();
+            let predecessor = self.parameters.predecessor_view();
+            let parameters = predecessor.get().as_ref().unwrap_or_else(|| current.get());
             let locks = self.governance_locks.block_and_revert();
-            validate_retained(
-                parameters.get().block().fastpq_source(),
-                locks.iter(),
-                None,
-                None,
-            )?;
+            validate_retained(parameters.block().fastpq_source(), locks.iter(), None, None)?;
         }
         Ok(())
     }

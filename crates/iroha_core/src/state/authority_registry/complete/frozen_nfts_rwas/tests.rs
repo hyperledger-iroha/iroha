@@ -148,12 +148,12 @@ fn change(block: &mut WorldBlock<'_>) {
     let no_op_rwa = block.rwas.get(&rwa("noop")).unwrap().clone();
     {
         let mut tx = block.transaction_without_telemetry(LaneConfig::default(), 0);
-        tx.insert_nft_entry(fixture::nft_id(), replacement_nft());
-        tx.insert_rwa_entry(fixture::rwa_id(), replacement_rwa());
-        tx.insert_nft_entry(nft("inserted"), n);
-        tx.insert_rwa_entry(rwa("inserted"), r);
-        tx.insert_nft_entry(nft("noop"), no_op_nft);
-        tx.insert_rwa_entry(rwa("noop"), no_op_rwa);
+        tx.insert_nft_entry(&(fixture::nft_id()), replacement_nft());
+        tx.insert_rwa_entry(&(fixture::rwa_id()), replacement_rwa());
+        tx.insert_nft_entry(&(nft("inserted")), n);
+        tx.insert_rwa_entry(&(rwa("inserted")), r);
+        tx.insert_nft_entry(&(nft("noop")), no_op_nft);
+        tx.insert_rwa_entry(&(rwa("noop")), no_op_rwa);
         tx.remove_nft_entry(&nft("deleted")).unwrap();
         let removed_id = rwa("deleted");
         let removed = tx.rwas.remove(removed_id.clone()).unwrap();
@@ -515,7 +515,6 @@ fn every_five_index_error_keeps_exact_current_or_predecessor_category_before_all
                         },
                         mismatch: match case % 3 {
                             0 => GroupMismatch::MissingMember,
-                            1 => GroupMismatch::ForeignMember,
                             _ => GroupMismatch::ForeignMember,
                         },
                     }

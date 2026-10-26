@@ -699,7 +699,7 @@ fn cancellation_stays_final_when_the_identical_context_and_request_return() {
 fn lane_sized_peer_inputs_above_global_bound_keep_independent_progress() {
     // A valid 3f+1 lane committee exceeds the global chain's 31-seat maximum.
     let members = 64;
-    assert!(members > iroha_data_model::block::consensus::MAX_VALIDATORS_PER_HEIGHT);
+    assert!(members > iroha_model_base::topology::MAX_VALIDATORS_PER_HEIGHT);
     assert!(members <= iroha_data_model::consensus::MAX_LANE_CONSENSUS_VALIDATORS);
     let committee = iroha_sumeragi::types::Committee::new((0..members).map(key).collect()).unwrap();
     assert_eq!(committee.n(), 3 * committee.f() + 1);

@@ -37,7 +37,7 @@ fn native_validation_rejects_replayed_sealed_signed_identity_from_actual_history
         vec![true]
     );
     let proposal = fixture.proposal_from_inputs(
-        vec![AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(
+        &[AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(
             reveal,
         ))],
         fixture.cadence(),

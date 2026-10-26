@@ -11,7 +11,7 @@ use crate::{
 };
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
-    block::BlockHeader,
+    block::{BlockHeader, consensus::PublicLaneStakingPolicy},
     isi::{
         Log, Mint,
         staking::{
@@ -29,7 +29,7 @@ use iroha_data_model::{
     validation_fee_rewards::ValidationFeeExposurePage,
 };
 use iroha_model_base::{metadata::Metadata, topology::DataSpaceId};
-use std::{num::NonZeroU64, time::Duration};
+use std::num::NonZeroU64;
 
 fn lifecycle_block(state: &State, height: u64, time: u64) -> StateBlock<'_> {
     state.block(BlockHeader::new(
@@ -92,10 +92,6 @@ fn run_historical_reward_lifecycle() {
     .unwrap();
     nexus.configured_lane_catalog = nexus.lane_catalog.clone();
     nexus.configured_dataspace_catalog = nexus.dataspace_catalog.clone();
-    nexus.staking.stake_asset_id = genesis_policy.xor_asset_definition_id.to_string();
-    nexus.staking.stake_escrow_account_id = escrow.to_string();
-    nexus.staking.slash_sink_account_id = slash_sink.to_string();
-    nexus.staking.unbonding_delay = Duration::from_millis(1);
     nexus.fees.fee_asset_id = genesis_policy.xor_asset_definition_id.clone();
     nexus.fees.fee_sink_account_id = fee_sink.clone();
     let mut config = crate::sumeragi::test_chain::TestChainConfig::new(
@@ -104,8 +100,24 @@ fn run_historical_reward_lifecycle() {
     );
     config.consensus_mode = SumeragiConsensusMode::Npos;
     config.nexus = Some(nexus);
-    // NPoS genesis requires the policy in its signed instruction list as well
-    // as the supplied World; both must retain the same immutable defaults.
+    let mut monetary = iroha_genesis::default_staking_policy(
+        genesis_policy.xor_asset_definition_id.clone(),
+        escrow.clone(),
+        slash_sink.clone(),
+    );
+    monetary.unbonding_delay_ms = 1;
+    assert_eq!(config.genesis_parameters.len(), 1);
+    let original_staking = config
+        .genesis_parameters
+        .iter_mut()
+        .find(|parameter| {
+            matches!(parameter, Parameter::Custom(custom)
+            if custom.id() == &PublicLaneStakingPolicy::parameter_id())
+        })
+        .expect("the fixture constructor authors exactly one original monetary policy");
+    *original_staking = Parameter::Custom(monetary.clone().into_custom_parameter().unwrap());
+    // NPoS and monetary policy are authored together in the original signed genesis.
+    // The supplied World contains ledger identities, not pre-genesis policy authority.
     config.genesis_parameters.extend([
         Parameter::Sumeragi(SumeragiParameter::EpochLengthBlocks(
             genesis_policy.epoch_length_blocks,
@@ -127,6 +139,21 @@ fn run_historical_reward_lifecycle() {
     );
     let (mut chain, mut binding) =
         crate::validation_fee::tests::signed_payout_lifecycle_registry_fixture_with_config(config);
+    assert_eq!(
+        chain.state().view().world().parameters().staking_policy(),
+        Some(&monetary)
+    );
+    assert_eq!(
+        chain
+            .state()
+            .world
+            .view()
+            .parameters()
+            .require_staking_policy()
+            .unwrap(),
+        &monetary,
+        "signed genesis and original deployments retain the exact custody and one-millisecond delay",
+    );
     let settled_fees = |chain: &crate::sumeragi::test_chain::CertifiedTestChain| {
         use crate::state::StateReadOnly as _;
         use iroha_data_model::{block::consensus::NexusFeeSettlementV1, nexus::FeeDebitSource};

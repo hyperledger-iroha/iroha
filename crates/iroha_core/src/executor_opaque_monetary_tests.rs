@@ -119,9 +119,9 @@ fn assert_claim_unchanged(
     assert_eq!(claim.expected_claim_sequence, 0);
 }
 
-fn assert_opaque_rejection(error: ValidationFail) {
+fn assert_opaque_rejection(error: &ValidationFail) {
     assert!(
-        matches!(error, ValidationFail::NotPermitted(ref message)
+        matches!(error, ValidationFail::NotPermitted(message)
         if message.contains("opaque deferred executable derived monetary staking operation `iroha.instruction.v1::staking::ClaimPublicLaneRewards`")
             && message.contains("the exact monetary plan must be a signed instruction")),
         "{error:?}"
@@ -215,7 +215,7 @@ fn raw_ivm_staking_trigger_requires_signed_monetary_plan() {
                 let result = Executor::Initial.execute_transaction(
                     &mut tx,
                     authority,
-                    signed,
+                    &signed,
                     &mut IvmCache::new(),
                 );
                 assert!(
@@ -225,9 +225,9 @@ fn raw_ivm_staking_trigger_requires_signed_monetary_plan() {
                 assert_claim_unchanged(&tx, authority, source, destination);
                 if monetary {
                     assert_opaque_rejection(
-                        result
+                        &(result
                             .map_err(crate::execution_attempt::expect_completed_rejection)
-                            .expect_err("opaque trigger must fail before registration"),
+                            .expect_err("opaque trigger must fail before registration")),
                     );
                     assert!(
                         tx.world
@@ -269,7 +269,7 @@ fn raw_ivm_staking_trigger_requires_signed_monetary_plan() {
         let mut tx = block.transaction_for_fastpq_testing(call);
         bind_scope(&mut tx);
         Executor::Initial
-            .execute_transaction(&mut tx, authority, signed, &mut IvmCache::new())
+            .execute_transaction(&mut tx, authority, &signed, &mut IvmCache::new())
             .unwrap();
         assert!(tx.complete_direct_callbacks(call).unwrap().is_empty());
         tx.apply();
@@ -355,19 +355,20 @@ fn supplied_proved_staking_effects_require_signed_monetary_plan() {
                     &mut tx,
                     authority,
                     &signed,
-                    instructions,
-                    Some(replay),
+                    &instructions,
+                    (Some(replay), None, None),
+                    crate::executor::InstructionFeeContext {
+                        tx_bytes_len: 0,
+                        gas_limit_md: Some(GAS),
+                        require_gas_limit: true,
+                        gas_asset_opt: None,
+                        fee_sponsor: None,
+                        skip_nexus_fee: true,
+                    },
                     None,
-                    None,
-                    0,
-                    Some(GAS),
-                    true,
-                    None,
-                    None,
-                    true,
                 )
                 .expect_err("supplied replay must not manufacture a signed monetary plan");
-            assert_opaque_rejection(error);
+            assert_opaque_rejection(&(error));
             assert_eq!(tx.last_tx_gas_used, replay_gas);
             tx.finish_execution_effect_budget().unwrap();
             assert!(

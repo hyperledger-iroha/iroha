@@ -225,7 +225,11 @@ impl CanonicalRequestAuthRuntime {
 }
 fn auth_runtime() -> &'static RwLock<CanonicalRequestAuthRuntime> {
     static STATE: OnceLock<RwLock<CanonicalRequestAuthRuntime>> = OnceLock::new();
-    STATE.get_or_init(|| RwLock::new(CanonicalRequestAuthRuntime::new(Default::default())))
+    STATE.get_or_init(|| {
+        RwLock::new(CanonicalRequestAuthRuntime::new(
+            crate::app_auth::CanonicalRequestAuthConfig::default(),
+        ))
+    })
 }
 fn auth_runtime_snapshot() -> (CanonicalRequestAuthConfig, Arc<ReplayCache>) {
     let guard = auth_runtime()
@@ -1171,10 +1175,14 @@ pub fn canonical_authentication_error(error: crate::Error) -> crate::Error {
     }
 }
 
+// The outer option records whether authorization capture is active; the inner
+// option records whether publication refused the view.
+type CapturedPublicationRelease = Option<Option<iroha_allocation::release::ReleaseWait>>;
+
 thread_local! {
     /// The block publication that refused this thread's authorization view, recorded only while
     /// a caller that can wait for it captures (`Some`); `None` when nobody captures.
-    static PUBLICATION_RELEASE: std::cell::RefCell<Option<Option<iroha_allocation::release::ReleaseWait>>> =
+    static PUBLICATION_RELEASE: std::cell::RefCell<CapturedPublicationRelease> =
         const { std::cell::RefCell::new(None) };
 }
 
@@ -1196,7 +1204,7 @@ pub fn authorization_view_error(error: iroha_core::state::StateViewError) -> cra
 fn capture_publication_release<T>(
     authorize: impl FnOnce() -> T,
 ) -> (T, Option<iroha_allocation::release::ReleaseWait>) {
-    struct Restore(Option<Option<iroha_allocation::release::ReleaseWait>>);
+    struct Restore(CapturedPublicationRelease);
     impl Drop for Restore {
         fn drop(&mut self) {
             let outer = self.0.take();
@@ -1217,7 +1225,8 @@ fn capture_publication_release<T>(
 /// Replay evidence is published only after a successful view, so the same request is authorized
 /// again once that exact publication releases, until `wait` elapses. After the deadline, or when
 /// no waiter registration fits `waiters`, the original capacity refusal is returned unchanged.
-pub(crate) async fn authorize_after_publication<T>(
+#[cfg(test)]
+pub async fn authorize_after_publication<T>(
     waiters: &iroha_core::state::AllocationBudget,
     wait: std::time::Duration,
     authorize: impl FnMut() -> Result<T, crate::Error>,
@@ -1227,9 +1236,9 @@ pub(crate) async fn authorize_after_publication<T>(
         .0
 }
 
-/// [`authorize_after_publication`], also reporting whether its final refusal came from a
+/// Authorize after publication, reporting whether its final refusal came from a
 /// block publication (`true`) rather than from the request or its owner's limits.
-pub(crate) async fn authorize_after_publication_outcome<T>(
+pub async fn authorize_after_publication_outcome<T>(
     waiters: &iroha_core::state::AllocationBudget,
     wait: std::time::Duration,
     mut authorize: impl FnMut() -> Result<T, crate::Error>,
@@ -1395,10 +1404,8 @@ pub fn decode_bounded_canonical_base64_value(
     }
     let padding = if encoded.ends_with("==") {
         2
-    } else if encoded.ends_with('=') {
-        1
     } else {
-        0
+        usize::from(encoded.ends_with('='))
     };
     let Some(decoded_bytes) = encoded
         .len()
@@ -1780,7 +1787,7 @@ fn finish_verified_canonical_request(
 pub fn validate_iter_query_for_authority<Q>(
     state: &Arc<CoreState>,
     authority: &AccountId,
-    query: Q,
+    query: &Q,
 ) -> Result<(), crate::Error>
 where
     Q: Query + 'static,
@@ -1796,7 +1803,7 @@ where
     };
     let iter = QueryWithParams {
         query: (),
-        query_payload: norito::codec::Encode::encode(&query),
+        query_payload: norito::codec::Encode::encode(query),
         item: query.query_item_kind(),
         predicate_bytes: norito::codec::Encode::encode(&CompoundPredicate::<Q::Item>::PASS),
         selector_bytes: norito::codec::Encode::encode(&SelectorTuple::<Q::Item>::default()),
@@ -2692,12 +2699,14 @@ mod tests {
         Signature::try_new(private_key, payload).expect("test fixture signing should succeed")
     }
     fn noncanonical_standard_base64_pad_bit_alias(encoded: &str) -> String {
+        const ALPHABET: &[u8; 64] =
+            b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
         assert!(
             encoded.ends_with("=="),
             "64-byte signatures encode with == padding"
         );
-        const ALPHABET: &[u8; 64] =
-            b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
         let mut bytes = encoded.as_bytes().to_vec();
         let index = bytes.len() - 3;
         let value = ALPHABET
@@ -2725,7 +2734,7 @@ mod tests {
         let query = iroha_data_model::query::escrow::prelude::FindAssetEscrowsBySeller {
             seller: ALICE_ID.clone(),
         };
-        validate_iter_query_for_authority(&state, &ALICE_ID, query)
+        validate_iter_query_for_authority(&state, &ALICE_ID, &(query))
             .expect("the seller-specific tag must retain same-account query authorization");
     }
     #[test]
@@ -3266,6 +3275,11 @@ mod tests {
 
     #[test]
     fn bounded_witness_frame_identity_matches_original_observations() {
+        fn typed_contract<T: norito::NoritoSerialize + for<'de> norito::NoritoDeserialize<'de>>()
+        -> [u8; 16] {
+            norito::schema::identity::frame_hash::<T>()
+        }
+
         use norito::NoritoSchema as _;
         let source =
             include_str!("../tests/fixtures/bounded_request_witness_frame_identity.v1.json");
@@ -3283,10 +3297,7 @@ mod tests {
             BoundedCanonicalRequestWitnessV1::frame_name(),
             fixture["root_nominal"].as_str().unwrap()
         );
-        fn typed_contract<T: norito::NoritoSerialize + for<'de> norito::NoritoDeserialize<'de>>()
-        -> [u8; 16] {
-            norito::schema::identity::frame_hash::<T>()
-        }
+
         let hash = typed_contract::<BoundedCanonicalRequestWitnessV1>();
         for direction in [
             "serialize_hash",

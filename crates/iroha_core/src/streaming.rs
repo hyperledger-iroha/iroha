@@ -31,14 +31,13 @@ use iroha_data_model::{
         EventBox,
         data::{DataEvent, prelude as data_events},
     },
-    peer::Peer,
     soranet::ticket::TicketCommitmentError,
 };
 use iroha_logger::warn;
-use iroha_model_base::domain::DomainId;
 #[cfg(test)]
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::peer::PeerId;
+use iroha_model_base::{domain::DomainId, peer::Peer};
 #[cfg(feature = "quic")]
 use iroha_p2p::streaming::{CapabilityNegotiation, StreamingConnection};
 use iroha_p2p::{Post, Priority};
@@ -1028,23 +1027,16 @@ impl StreamingHandle {
         }
         Ok(())
     }
-    /// Apply crypto configuration gating to the advertised capability mask.
-    pub fn apply_crypto_config(&mut self, crypto: &actual::Crypto) {
-        #[cfg(feature = "sm")]
+    /// Advertise the actual local verification implementation, independently of chain policy.
+    pub fn apply_crypto_capabilities(&mut self) {
+        if iroha_crypto::Algorithm::Sm2
+            .require_implementation(iroha_crypto::CryptoOperation::VerifySignature)
+            .is_ok()
         {
-            if crypto.sm_helpers_enabled() {
-                self.capabilities = self
-                    .capabilities
-                    .insert(CapabilityFlags::FEATURE_SM_TRANSACTIONS);
-            } else {
-                self.capabilities = self
-                    .capabilities
-                    .remove(CapabilityFlags::FEATURE_SM_TRANSACTIONS);
-            }
-        }
-        #[cfg(not(feature = "sm"))]
-        {
-            let _ = crypto;
+            self.capabilities = self
+                .capabilities
+                .insert(CapabilityFlags::FEATURE_SM_TRANSACTIONS);
+        } else {
             self.capabilities = self
                 .capabilities
                 .remove(CapabilityFlags::FEATURE_SM_TRANSACTIONS);
@@ -1333,22 +1325,22 @@ impl StreamingHandle {
             .ticket_nullifiers
             .write()
             .map_err(|_| StreamingProcessError::StatePoisoned)?;
-        if let Some(existing_stream) = nullifiers.get(&ticket_nullifier) {
-            if *existing_stream != stream_id {
-                return Err(StreamingProcessError::DuplicateTicketNullifier {
-                    nullifier: ticket_nullifier,
-                    stream: *existing_stream,
-                });
-            }
+        if let Some(existing_stream) = nullifiers.get(&ticket_nullifier)
+            && *existing_stream != stream_id
+        {
+            return Err(StreamingProcessError::DuplicateTicketNullifier {
+                nullifier: ticket_nullifier,
+                stream: *existing_stream,
+            });
         }
         for route_id in &order {
-            if let Some(owner) = route_index.get(route_id) {
-                if *owner != stream_id {
-                    return Err(StreamingProcessError::DuplicatePrivacyRoute {
-                        route_id: *route_id,
-                        stream: *owner,
-                    });
-                }
+            if let Some(owner) = route_index.get(route_id)
+                && *owner != stream_id
+            {
+                return Err(StreamingProcessError::DuplicatePrivacyRoute {
+                    route_id: *route_id,
+                    stream: *owner,
+                });
             }
         }
         if let Some(previous) = tickets.remove(&stream_id) {
@@ -2031,10 +2023,10 @@ impl StreamingHandle {
             SNAPSHOT_MAX_CIPHERTEXT_BYTES_V1,
         )?;
         let path = path.as_ref();
-        if let Some(parent) = path.parent() {
-            if !parent.as_os_str().is_empty() {
-                fs::create_dir_all(parent)?;
-            }
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            fs::create_dir_all(parent)?;
         }
         let tmp_path = snapshot_temp_path(path);
         {
@@ -2050,10 +2042,10 @@ impl StreamingHandle {
                 return Err(err.into());
             }
         }
-        if let Some(parent) = path.parent() {
-            if !parent.as_os_str().is_empty() {
-                sync_dir(parent)?;
-            }
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            sync_dir(parent)?;
         }
         Ok(())
     }
@@ -2161,12 +2153,10 @@ impl StreamingHandle {
             let session = guard
                 .entry(entry.peer.clone())
                 .or_insert_with(|| StreamingSession::new(entry.role));
-            if needs_install {
-                if let Some(material) = &self.key_material {
-                    material
-                        .install_into_session(session)
-                        .map_err(StreamingProcessError::from)?;
-                }
+            if needs_install && let Some(material) = &self.key_material {
+                material
+                    .install_into_session(session)
+                    .map_err(StreamingProcessError::from)?;
             }
             session
                 .restore_from_snapshot(entry.snapshot)
@@ -2255,21 +2245,21 @@ impl StreamingHandle {
         }
         #[cfg(not(feature = "telemetry"))]
         let _ = parity;
-        if let Some(diagnostics) = &report.sync_diagnostics {
-            if let Some(violation) = self.sync_policy.violation(diagnostics) {
-                if self.sync_policy.observe_only() {
-                    warn!(
-                        peer = %peer.id(),
-                        ?diagnostics,
-                        %violation,
-                        "observed streaming A/V sync violation (observe-only)"
-                    );
-                } else {
-                    return Err(StreamingProcessError::AudioSyncViolation {
-                        peer: peer.id().clone(),
-                        reason: violation,
-                    });
-                }
+        if let Some(diagnostics) = &report.sync_diagnostics
+            && let Some(violation) = self.sync_policy.violation(diagnostics)
+        {
+            if self.sync_policy.observe_only() {
+                warn!(
+                    peer = %peer.id(),
+                    ?diagnostics,
+                    %violation,
+                    "observed streaming A/V sync violation (observe-only)"
+                );
+            } else {
+                return Err(StreamingProcessError::AudioSyncViolation {
+                    peer: peer.id().clone(),
+                    reason: violation,
+                });
             }
         }
         Ok(())
@@ -2331,13 +2321,12 @@ impl StreamingHandle {
         hint.latency_gradient_q16 = snapshot.latency_gradient_q16;
         hint.observed_rtt_ms = snapshot.observed_rtt_ms;
         hint.parity_chunks = snapshot.parity_chunks;
-        if hint.report_interval_ms == 0 {
-            if let Some(resolution) = self
+        if hint.report_interval_ms == 0
+            && let Some(resolution) = self
                 .transport_capabilities_for_role(CapabilityRole::Publisher, peer_id)
                 .or_else(|| self.transport_capabilities_for_role(CapabilityRole::Viewer, peer_id))
-            {
-                hint.report_interval_ms = resolution.fec_feedback_interval_ms;
-            }
+        {
+            hint.report_interval_ms = resolution.fec_feedback_interval_ms;
         }
         Ok(())
     }
@@ -2648,18 +2637,16 @@ fn promote_snapshot_temp(tmp_path: &Path, main_path: &Path) {
             false
         }
     };
-    if promoted {
-        if let Some(parent) = main_path.parent() {
-            if !parent.as_os_str().is_empty() {
-                if let Err(err) = sync_dir(parent) {
-                    warn!(
-                        ?err,
-                        path = %parent.display(),
-                        "failed to sync streaming snapshot directory"
-                    );
-                }
-            }
-        }
+    if promoted
+        && let Some(parent) = main_path.parent()
+        && !parent.as_os_str().is_empty()
+        && let Err(err) = sync_dir(parent)
+    {
+        warn!(
+            ?err,
+            path = %parent.display(),
+            "failed to sync streaming snapshot directory"
+        );
     }
 }
 fn decode_snapshot_plaintext(

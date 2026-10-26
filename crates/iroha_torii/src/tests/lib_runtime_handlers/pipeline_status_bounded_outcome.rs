@@ -844,6 +844,7 @@ async fn pipeline_status_target_output_work_excess_is_permanent_under_default_po
     };
 
     let mut config = TestChainConfig::new(World::new(), 1_000);
+    let authored_genesis_parameters = config.genesis_parameters.clone();
     let key = config.genesis_key.clone();
     let authority = AccountId::new(key.public_key().clone());
     for index in 0..500 {
@@ -866,9 +867,9 @@ async fn pipeline_status_target_output_work_excess_is_permanent_under_default_po
             .genesis_instructions
             .push(Register::trigger(trigger).into());
     }
-    assert!(
-        config.genesis_parameters.is_empty(),
-        "no policy enlargement"
+    assert_eq!(
+        config.genesis_parameters, authored_genesis_parameters,
+        "the fixture must retain its constructor-authored policies without enlargement"
     );
     let mut chain = CertifiedTestChain::start(config)
         .expect("500 genuine scheduled registrations must fit unchanged genesis admission");

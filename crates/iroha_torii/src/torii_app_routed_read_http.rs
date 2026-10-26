@@ -29,6 +29,10 @@ fn app_routed_read_deadline_response() -> Response {
 }
 /// Replay admission minted by an earlier authenticated attempt of this routed read:
 /// `Some(Some(_))` signed, `Some(None)` verified as unsigned, `None` not yet verified.
+#[expect(
+    clippy::option_option,
+    reason = "The outer option records whether authentication ran; the inner option distinguishes signed from verified unsigned requests."
+)]
 fn routed_read_canonical_auth() -> Option<Option<crate::app_auth::CanonicalRequestReplayAdmission>>
 {
     APP_ROUTED_READ_HTTP_ADMISSION
@@ -118,12 +122,14 @@ impl AppRoutedReadHttpDecoder {
         clippy::result_large_err,
         reason = "HTTP rejections retain the complete Axum response at this transport boundary."
     )]
-    fn preflight_media(self, _headers: &HeaderMap) -> Result<(), Response> {
+    fn preflight_media(self, headers: &HeaderMap) -> Result<(), Response> {
+        #[cfg(not(feature = "app_api"))]
+        let _ = headers;
         match self {
             #[cfg(feature = "app_api")]
-            Self::JsonOrNorito(_) => crate::utils::typed_request_content_format(_headers).map(drop),
+            Self::JsonOrNorito(_) => crate::utils::typed_request_content_format(headers).map(drop),
             #[cfg(feature = "app_api")]
-            Self::Json(_) => crate::utils::canonical_json_request_content_type(_headers),
+            Self::Json(_) => crate::utils::canonical_json_request_content_type(headers),
             #[cfg(feature = "app_api")]
             Self::None | Self::Query(_) | Self::ExactInternalAssetScope => Ok(()),
             Self::StringQuery(_) => Ok(()),
@@ -805,6 +811,10 @@ async fn serve_app_routed_read_with_admission(
 }
 /// Whether the owner limits derived from `working_set_bytes` admit this request target and,
 /// for a body-bearing route, its declared body length (`Some(None)`: undeclared).
+#[expect(
+    clippy::option_option,
+    reason = "No body, an undeclared body length, and a known body length have distinct admission limits."
+)]
 fn app_routed_read_owner_admits(
     app: &AppState,
     endpoint: AppReadHttpRoute,

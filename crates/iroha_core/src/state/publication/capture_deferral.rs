@@ -263,7 +263,7 @@ pub(in crate::state) fn materialization_refusal(
 }
 
 #[cfg(test)]
-pub(crate) fn buffer_refusal_for_test(original: ChargedBufferError) -> TransactionsBlockError {
+pub fn buffer_refusal_for_test(original: ChargedBufferError) -> TransactionsBlockError {
     source_refusal(RetainedMusubiGroupReadError::Control(original))
 }
 

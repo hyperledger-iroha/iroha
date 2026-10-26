@@ -1,7 +1,7 @@
 //! Deterministic content-bundle admission fields of the State-owned policy.
 //!
 //! `PublishContentBundle` reads these fields to accept an archive and form its
-//! canonical record. Gateway quotas, response objectives and fetch PoW do not
+//! canonical record. Gateway quotas, response objectives and fetch `PoW` do not
 //! change ledger execution. The account allow-list is a set for admission, so
 //! its incidental configuration order and repeated identities are excluded.
 

@@ -484,11 +484,10 @@ fn seed_test_account_alias_lease_record(
             .world
             .domains
             .get(&domain_id)
-            .map(|domain| domain.owned_by().clone())
-            .unwrap_or_else(|| owner.clone());
+            .map_or_else(|| owner.clone(), |domain| domain.owned_by().clone());
         if tx.world.domains.get(&domain_id).is_none() {
             let domain = Domain::new(domain_id.clone()).build(&domain_owner);
-            tx.world.insert_domain_entry(domain_id.clone(), domain);
+            tx.world.insert_domain_entry(&(domain_id.clone()), domain);
             tx.world.track_domain_owner(&domain_id, &domain_owner);
         }
         let selector = crate::sns::selector_for_domain(&domain_id).expect("SNS domain selector");
@@ -663,7 +662,7 @@ pub(super) fn contract_test_state_with_world(authority: &AccountId, world: World
     grant_named_permission_to_account(
         &state,
         authority,
-        authority.clone(),
+        &(authority.clone()),
         "CanManageSmartContractCode",
     );
     state
@@ -881,7 +880,7 @@ fn named_permission_fixture_rejects_scoped_entrypoint_marker() {
     grant_named_permission_to_account(
         &state,
         &authority,
-        authority.clone(),
+        &(authority.clone()),
         "CanInvokeContractEntrypoint",
     );
 }
@@ -1050,12 +1049,12 @@ seiyaku ProtectedPages { permission ReadState; permission WriteState;
 ",
         2,
     );
-    grant_named_permission_to_account(&state, &authority, authority.clone(), "WriteState");
+    grant_named_permission_to_account(&state, &authority, &(authority.clone()), "WriteState");
     // A grant to the outer transaction authority does not authorize a different
     // calling contract subject at the nested boundary.
-    grant_named_permission_to_account(&state, &authority, authority.clone(), "ReadState");
-    grant_named_permission_to_account(&state, &authority, reader.subject_id(), "ReadState");
-    grant_named_permission_to_account(&state, &authority, other.subject_id(), "OtherOps");
+    grant_named_permission_to_account(&state, &authority, &(authority.clone()), "ReadState");
+    grant_named_permission_to_account(&state, &authority, &(reader.subject_id()), "ReadState");
+    grant_named_permission_to_account(&state, &authority, &(other.subject_id()), "OtherOps");
     let mut cache = crate::smartcontracts::ivm::cache::IvmCache::new();
     execute_contract_call_transaction(
         &state,
@@ -1071,7 +1070,7 @@ seiyaku ProtectedPages { permission ReadState; permission WriteState;
         &reader,
         &target_contract,
         "first",
-        Json::new(()),
+        &(Json::new(())),
         1_000_000,
     );
     result.expect("authorized first page should produce a live continuation");
@@ -1120,7 +1119,7 @@ seiyaku ProtectedPages { permission ReadState; permission WriteState;
             caller,
             &target_contract,
             "resume",
-            payload.clone(),
+            &(payload),
             1_000_000,
         );
         result
@@ -1138,7 +1137,7 @@ seiyaku ProtectedPages { permission ReadState; permission WriteState;
             caller,
             &target_contract,
             "resume",
-            payload.clone(),
+            &(payload),
             1_000_000,
         );
         let error = result.expect_err("cursor possession cannot grant ReadState");
@@ -1155,7 +1154,7 @@ seiyaku ProtectedPages { permission ReadState; permission WriteState;
     };
     assert_can_resume(&reader);
     assert_cannot_resume(&other);
-    grant_named_permission_to_account(&state, &authority, other.subject_id(), "ReadState");
+    grant_named_permission_to_account(&state, &authority, &(other.subject_id()), "ReadState");
     assert_can_resume(&other);
 
     let next_height = u64::try_from((state.view().height() + 1).max(2))
@@ -1180,7 +1179,7 @@ seiyaku ProtectedPages { permission ReadState; permission WriteState;
         .expect("commit ReadState revocation");
     assert_cannot_resume(&other);
     assert_can_resume(&reader);
-    grant_named_permission_to_account(&state, &authority, other.subject_id(), "ReadState");
+    grant_named_permission_to_account(&state, &authority, &(other.subject_id()), "ReadState");
     assert_can_resume(&other);
 }
 

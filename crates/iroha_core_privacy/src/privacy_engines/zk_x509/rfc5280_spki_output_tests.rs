@@ -37,7 +37,10 @@ fn spki_row_fixture_v1(
     let ordinal = schedule
         .output_topology
         .iter()
-        .position(|entry| entry.channel == channel && entry.offset == offset as u32)
+        .position(|entry| {
+            entry.channel == channel
+                && entry.offset == u32::try_from(offset).expect("fixture value fits u32")
+        })
         .unwrap();
     let fixed = schedule
         .fixed_row(schedule.starts[ZkX509Rfc5280StarkFamilyV1::OutputProducer as usize] + ordinal)
@@ -53,7 +56,7 @@ fn spki_row_fixture_v1(
         let value = if offset == 0 {
             0x30
         } else {
-            (55 + offset) as u8
+            u8::try_from(55 + offset).expect("fixture value fits u8")
         };
         row[BASE_VALUE] = F(u64::from(value));
         write_u8_bits_v1(&mut row, BASE_BYTE_BITS, value);
@@ -76,10 +79,12 @@ fn spki_row_fixture_v1(
 #[test]
 fn spki_output_schedule_binds_all_five_channels_offsets_and_source_documents() {
     for disclosed in 0..=4_u8 {
-        let mut shape = ZkX509Rfc5280StarkShapeV1::default();
-        shape.disclosed_attribute_count = disclosed;
+        let mut shape = ZkX509Rfc5280StarkShapeV1 {
+            disclosed_attribute_count: disclosed,
+            ..ZkX509Rfc5280StarkShapeV1::default()
+        };
         for i in 0..usize::from(disclosed) {
-            shape.disclosed_attribute_indices[i] = i as u8;
+            shape.disclosed_attribute_indices[i] = u8::try_from(i).expect("fixture value fits u8");
         }
         let schedule = compile_zk_x509_rfc5280_stark_fixed_schedule_v1(shape).unwrap();
         let mut counts = [0_usize; 5];
@@ -105,12 +110,10 @@ fn spki_output_schedule_binds_all_five_channels_offsets_and_source_documents() {
                     assert!(entry.offset < 91);
                     assert_eq!(
                         entry.role,
-                        if slot < 3 {
-                            ZkX509Rfc5280OutputRoleV1::Projection
-                        } else if slot == 3 {
-                            ZkX509Rfc5280OutputRoleV1::IssuerSpkiSha
-                        } else {
-                            ZkX509Rfc5280OutputRoleV1::GovernedTrustAnchor
+                        match slot {
+                            0..3 => ZkX509Rfc5280OutputRoleV1::Projection,
+                            3 => ZkX509Rfc5280OutputRoleV1::IssuerSpkiSha,
+                            _ => ZkX509Rfc5280OutputRoleV1::GovernedTrustAnchor,
                         }
                     );
                     let (optional, document, coefficient) = SPKI_OUTPUT_SOURCES_V1[slot];
@@ -335,7 +338,13 @@ fn spki_output_aux_fixture_v1(
     let mut next = neutral_aux_v1();
     for lane in 0..4 {
         next[output_role_aux_column_v1(output_role_index_v1(role), false, lane)] =
-            output_role_product_factor_v1(row, output_role_index_v1(role), false, lane, &challenges);
+            output_role_product_factor_v1(
+                row,
+                output_role_index_v1(role),
+                false,
+                lane,
+                &challenges,
+            );
         for (factor, zero, inverse, sum, zero_sum) in [
             (
                 serial_byte_lookup_factor_v1(
@@ -406,7 +415,7 @@ fn assert_spki_coherent_shadow_v1(trace: ZkX509Rfc5280TraceV1) {
                 &aux,
                 &after,
                 &fixed,
-                der_challenges_v1(),
+                &der_challenges_v1(),
                 &challenges_v1(),
             )
             .unwrap();
@@ -433,7 +442,7 @@ fn assert_spki_coherent_shadow_v1(trace: ZkX509Rfc5280TraceV1) {
                 &aux,
                 &products_only,
                 &fixed,
-                der_challenges_v1(),
+                &der_challenges_v1(),
                 &challenges_v1(),
             )
             .unwrap();
@@ -450,7 +459,7 @@ fn assert_spki_coherent_shadow_v1(trace: ZkX509Rfc5280TraceV1) {
                 &repaired_aux,
                 &repaired_after,
                 &fixed,
-                der_challenges_v1(),
+                &der_challenges_v1(),
                 &challenges_v1(),
             )
             .unwrap();
@@ -501,6 +510,7 @@ fn assert_spki_coherent_shadow_v1(trace: ZkX509Rfc5280TraceV1) {
             }
         }
     }
+    drop(trace);
 }
 
 #[test]
@@ -555,4 +565,5 @@ fn assert_spki_complete_multiplicities_v1(trace: ZkX509Rfc5280TraceV1) {
             )
         );
     }
+    drop(trace);
 }

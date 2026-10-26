@@ -149,8 +149,7 @@ impl TransactionStructuralSummary {
             authority: payload.authority().to_string(),
             network_id: payload
                 .network_id()
-                .map(ToString::to_string)
-                .unwrap_or_else(|| "genesis".to_owned()),
+                .map_or_else(|| "genesis".to_owned(), ToString::to_string),
             creation_time_ms: payload.creation_time_ms,
             time_to_live_ms: payload.time_to_live_ms.map(Into::into),
             has_nonce: payload.nonce.is_some(),
@@ -339,7 +338,7 @@ pub struct PreparedTransactionArtifact {
 impl PreparedTransactionArtifact {
     fn from_builder(
         expected_network_id: &NetworkId,
-        builder: TransactionBuilder,
+        builder: &TransactionBuilder,
     ) -> Result<Self, TransactionArtifactError> {
         ensure_expected_network(expected_network_id, builder.payload())?;
         let canonical_payload_bytes = builder.encode_payload();
@@ -403,6 +402,61 @@ impl PreparedTransactionArtifact {
     }
 }
 
+/// Closed signature failure codes, stored without a string pointer and length.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SignatureFailureCode {
+    /// The authority uses an unsupported multisignature form.
+    UnsupportedMultisigAuthority,
+    /// The signature algorithm is not allowed.
+    AlgorithmNotPermitted,
+    /// The signature key does not match the authority.
+    AuthorityKeyMismatch,
+    /// The cryptographic verifier rejected the signature.
+    CryptographicVerificationFailed,
+    /// The transaction contains no signatures.
+    NoSignatures,
+    /// Required multisignature proofs are missing.
+    MissingMultisigSignatures,
+    /// Unexpected multisignature proofs were supplied.
+    UnexpectedMultisigSignatures,
+    /// A multisignature signer is not authorized.
+    UnknownMultisigSigner,
+    /// Multisignature proofs are not canonical.
+    NonCanonicalMultisigSignatures,
+    /// The fee payment intent is invalid.
+    InvalidFeePaymentIntent,
+    /// The transaction has no required lifetime.
+    MissingTimeToLive,
+    /// The genesis domain is not allowed here.
+    GenesisDomainNotAllowed,
+    /// The genesis domain is required here.
+    GenesisDomainRequired,
+    /// The multisignature weight is below the threshold.
+    InsufficientMultisigWeight,
+}
+
+impl SignatureFailureCode {
+    /// Stable MCP reason code; never includes cryptographic diagnostics.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::UnsupportedMultisigAuthority => "unsupported_multisig_authority",
+            Self::AlgorithmNotPermitted => "algorithm_not_permitted",
+            Self::AuthorityKeyMismatch => "authority_key_mismatch",
+            Self::CryptographicVerificationFailed => "cryptographic_verification_failed",
+            Self::NoSignatures => "no_signatures",
+            Self::MissingMultisigSignatures => "missing_multisig_signatures",
+            Self::UnexpectedMultisigSignatures => "unexpected_multisig_signatures",
+            Self::UnknownMultisigSigner => "unknown_multisig_signer",
+            Self::NonCanonicalMultisigSignatures => "noncanonical_multisig_signatures",
+            Self::InvalidFeePaymentIntent => "invalid_fee_payment_intent",
+            Self::MissingTimeToLive => "missing_time_to_live",
+            Self::GenesisDomainNotAllowed => "genesis_domain_not_allowed",
+            Self::GenesisDomainRequired => "genesis_domain_required",
+            Self::InsufficientMultisigWeight => "insufficient_multisig_weight",
+        }
+    }
+}
+
 /// Signature verification outcome for an inspected artifact.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SignatureVerification {
@@ -410,19 +464,26 @@ pub enum SignatureVerification {
     NotPresent,
     /// The canonical data-model verifier accepted every required signature.
     Valid,
+    /// Verification could not run; the exact known algorithm and operation are retained.
+    UnsupportedImplementation(iroha_crypto::UnsupportedImplementation),
     /// Verification failed with a stable, non-secret reason code.
     Invalid {
         /// Closed failure code; raw cryptographic diagnostics are not echoed.
-        code: &'static str,
+        code: SignatureFailureCode,
     },
 }
 
 impl SignatureVerification {
     fn from_signed_transaction(transaction: &SignedTransaction) -> Self {
-        match transaction.verify_signature() {
+        Self::from_verification_result(transaction.verify_signature())
+    }
+
+    fn from_verification_result(result: Result<(), TransactionSignatureError>) -> Self {
+        match result {
             Ok(()) => Self::Valid,
-            Err(error) => Self::Invalid {
-                code: signature_error_code(&error),
+            Err(error) => match signature_error_code(&error) {
+                Ok(code) => Self::Invalid { code },
+                Err(original) => Self::UnsupportedImplementation(original),
             },
         }
     }
@@ -432,16 +493,31 @@ impl SignatureVerification {
         let (status, valid, failure_code) = match self {
             Self::NotPresent => ("not_present", Value::Null, Value::Null),
             Self::Valid => ("valid", Value::Bool(true), Value::Null),
+            Self::UnsupportedImplementation(_) => (
+                "unavailable",
+                Value::Null,
+                Value::String("unsupported_implementation".to_owned()),
+            ),
             Self::Invalid { code } => (
                 "invalid",
                 Value::Bool(false),
-                Value::String(code.to_owned()),
+                Value::String(code.as_str().to_owned()),
             ),
         };
         let mut object = Map::new();
         object.insert("status".into(), Value::String(status.to_owned()));
         object.insert("valid".into(), valid);
         object.insert("failure_code".into(), failure_code);
+        if let Self::UnsupportedImplementation(original) = self {
+            object.insert(
+                "algorithm".into(),
+                Value::String(original.algorithm.as_static_str().to_owned()),
+            );
+            object.insert(
+                "operation".into(),
+                Value::String(original.operation.to_string()),
+            );
+        }
         Value::Object(object)
     }
 }
@@ -519,7 +595,7 @@ pub fn prepare_transaction_payload(
     ensure_expected_network(expected_network_id, &payload)?;
     let builder = TransactionBuilder::from_payload(payload)
         .map_err(|error| TransactionArtifactError::InvalidTransactionPayload(error.to_string()))?;
-    PreparedTransactionArtifact::from_builder(expected_network_id, builder)
+    PreparedTransactionArtifact::from_builder(expected_network_id, &(builder))
 }
 
 /// Decode and canonicalize exact bytes previously emitted by
@@ -529,7 +605,7 @@ pub fn prepare_transaction_payload_bytes(
     payload_bytes: &[u8],
 ) -> Result<PreparedTransactionArtifact, TransactionArtifactError> {
     let builder = decode_canonical_payload_builder(payload_bytes)?;
-    PreparedTransactionArtifact::from_builder(expected_network_id, builder)
+    PreparedTransactionArtifact::from_builder(expected_network_id, &(builder))
 }
 
 fn decode_canonical_payload_builder(
@@ -631,27 +707,50 @@ const fn fee_payment_kind(intent: &FeePaymentIntent) -> &'static str {
     }
 }
 
-fn signature_error_code(error: &TransactionSignatureError) -> &'static str {
-    match error {
-        TransactionSignatureError::UnsupportedMultisigAuthority => "unsupported_multisig_authority",
-        TransactionSignatureError::AlgorithmNotPermitted(_) => "algorithm_not_permitted",
-        TransactionSignatureError::AuthorityKeyMismatch => "authority_key_mismatch",
-        TransactionSignatureError::CryptoError(_) => "cryptographic_verification_failed",
-        TransactionSignatureError::NoSignatures => "no_signatures",
-        TransactionSignatureError::MissingMultisigSignatures => "missing_multisig_signatures",
-        TransactionSignatureError::UnexpectedMultisigSignatures => "unexpected_multisig_signatures",
-        TransactionSignatureError::UnknownMultisigSigner => "unknown_multisig_signer",
+fn signature_error_code(
+    error: &TransactionSignatureError,
+) -> Result<SignatureFailureCode, iroha_crypto::UnsupportedImplementation> {
+    Ok(match error {
+        TransactionSignatureError::UnsupportedImplementation(original) => return Err(*original),
+        TransactionSignatureError::UnsupportedMultisigAuthority => {
+            SignatureFailureCode::UnsupportedMultisigAuthority
+        }
+        TransactionSignatureError::AlgorithmNotPermitted(_) => {
+            SignatureFailureCode::AlgorithmNotPermitted
+        }
+        TransactionSignatureError::AuthorityKeyMismatch => {
+            SignatureFailureCode::AuthorityKeyMismatch
+        }
+        TransactionSignatureError::CryptoError(_) => {
+            SignatureFailureCode::CryptographicVerificationFailed
+        }
+        TransactionSignatureError::NoSignatures => SignatureFailureCode::NoSignatures,
+        TransactionSignatureError::MissingMultisigSignatures => {
+            SignatureFailureCode::MissingMultisigSignatures
+        }
+        TransactionSignatureError::UnexpectedMultisigSignatures => {
+            SignatureFailureCode::UnexpectedMultisigSignatures
+        }
+        TransactionSignatureError::UnknownMultisigSigner => {
+            SignatureFailureCode::UnknownMultisigSigner
+        }
         TransactionSignatureError::NonCanonicalMultisigSignatures => {
-            "noncanonical_multisig_signatures"
+            SignatureFailureCode::NonCanonicalMultisigSignatures
         }
-        TransactionSignatureError::InvalidFeePaymentIntent(_) => "invalid_fee_payment_intent",
-        TransactionSignatureError::MissingTimeToLive => "missing_time_to_live",
-        TransactionSignatureError::GenesisDomainNotAllowed => "genesis_domain_not_allowed",
-        TransactionSignatureError::GenesisDomainRequired => "genesis_domain_required",
+        TransactionSignatureError::InvalidFeePaymentIntent(_) => {
+            SignatureFailureCode::InvalidFeePaymentIntent
+        }
+        TransactionSignatureError::MissingTimeToLive => SignatureFailureCode::MissingTimeToLive,
+        TransactionSignatureError::GenesisDomainNotAllowed => {
+            SignatureFailureCode::GenesisDomainNotAllowed
+        }
+        TransactionSignatureError::GenesisDomainRequired => {
+            SignatureFailureCode::GenesisDomainRequired
+        }
         TransactionSignatureError::InsufficientMultisigWeight { .. } => {
-            "insufficient_multisig_weight"
+            SignatureFailureCode::InsufficientMultisigWeight
         }
-    }
+    })
 }
 
 fn count_value(count: usize) -> Value {
@@ -839,7 +938,7 @@ mod tests {
         assert_eq!(
             inspected.signature_verification,
             SignatureVerification::Invalid {
-                code: "cryptographic_verification_failed"
+                code: SignatureFailureCode::CryptographicVerificationFailed
             }
         );
         let verification = &inspected.to_mcp_value()["signature_verification"];
@@ -849,6 +948,80 @@ mod tests {
             Value::String("cryptographic_verification_failed".to_owned())
         );
         assert!(verification.get("message").is_none());
+    }
+
+    #[test]
+    fn signature_failures_keep_closed_mcp_codes() {
+        let cases = [
+            (
+                TransactionSignatureError::UnsupportedMultisigAuthority,
+                "unsupported_multisig_authority",
+            ),
+            (
+                TransactionSignatureError::AlgorithmNotPermitted(iroha_crypto::Algorithm::Ed25519),
+                "algorithm_not_permitted",
+            ),
+            (
+                TransactionSignatureError::AuthorityKeyMismatch,
+                "authority_key_mismatch",
+            ),
+            (
+                TransactionSignatureError::CryptoError("private cryptographic diagnostic".into()),
+                "cryptographic_verification_failed",
+            ),
+            (TransactionSignatureError::NoSignatures, "no_signatures"),
+            (
+                TransactionSignatureError::MissingMultisigSignatures,
+                "missing_multisig_signatures",
+            ),
+            (
+                TransactionSignatureError::UnexpectedMultisigSignatures,
+                "unexpected_multisig_signatures",
+            ),
+            (
+                TransactionSignatureError::UnknownMultisigSigner,
+                "unknown_multisig_signer",
+            ),
+            (
+                TransactionSignatureError::NonCanonicalMultisigSignatures,
+                "noncanonical_multisig_signatures",
+            ),
+            (
+                TransactionSignatureError::InvalidFeePaymentIntent("private fee diagnostic".into()),
+                "invalid_fee_payment_intent",
+            ),
+            (
+                TransactionSignatureError::MissingTimeToLive,
+                "missing_time_to_live",
+            ),
+            (
+                TransactionSignatureError::GenesisDomainNotAllowed,
+                "genesis_domain_not_allowed",
+            ),
+            (
+                TransactionSignatureError::GenesisDomainRequired,
+                "genesis_domain_required",
+            ),
+            (
+                TransactionSignatureError::InsufficientMultisigWeight {
+                    collected: 1,
+                    required: 2,
+                },
+                "insufficient_multisig_weight",
+            ),
+        ];
+
+        for (error, expected_code) in cases {
+            let outcome = SignatureVerification::from_verification_result(Err(error));
+            assert!(matches!(outcome, SignatureVerification::Invalid { .. }));
+            let value = outcome.to_mcp_value();
+            assert_eq!(value["status"], Value::String("invalid".into()));
+            assert_eq!(value["valid"], Value::Bool(false));
+            assert_eq!(value["failure_code"], Value::String(expected_code.into()));
+            assert!(value.get("message").is_none());
+            assert!(value.get("algorithm").is_none());
+            assert!(value.get("operation").is_none());
+        }
     }
 
     #[test]
@@ -920,5 +1093,107 @@ mod tests {
         let summary_json = norito::json::to_json(&prepared.summary.to_mcp_value())
             .expect("encode structural summary");
         assert!(!summary_json.contains(SECRET_FREE_MARKER));
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn unavailable_signature_inspection_is_neither_valid_nor_invalid() {
+    let original = iroha_crypto::UnsupportedImplementation {
+        algorithm: iroha_crypto::Algorithm::MlDsa,
+        operation: iroha_crypto::CryptoOperation::VerifySignature,
+    };
+    let outcome = SignatureVerification::from_verification_result(Err(
+        TransactionSignatureError::UnsupportedImplementation(original),
+    ));
+    assert_eq!(
+        outcome,
+        SignatureVerification::UnsupportedImplementation(original)
+    );
+    let value = outcome.to_mcp_value();
+    assert_eq!(value["status"], Value::String("unavailable".into()));
+    assert_eq!(value["valid"], Value::Null);
+    assert_eq!(
+        value["failure_code"],
+        Value::String("unsupported_implementation".into())
+    );
+    assert_eq!(value["algorithm"], Value::String("ml-dsa".into()));
+    assert_eq!(
+        value["operation"],
+        Value::String(original.operation.to_string())
+    );
+    assert_eq!(
+        SignatureVerification::from_verification_result(Err(
+            TransactionSignatureError::CryptoError("bad".into())
+        )),
+        SignatureVerification::Invalid {
+            code: SignatureFailureCode::CryptographicVerificationFailed
+        }
+    );
+}
+
+#[cfg(test)]
+#[test]
+fn signature_failure_codes_preserve_closed_wire_names() {
+    for (code, expected) in [
+        (
+            SignatureFailureCode::UnsupportedMultisigAuthority,
+            "unsupported_multisig_authority",
+        ),
+        (
+            SignatureFailureCode::AlgorithmNotPermitted,
+            "algorithm_not_permitted",
+        ),
+        (
+            SignatureFailureCode::AuthorityKeyMismatch,
+            "authority_key_mismatch",
+        ),
+        (
+            SignatureFailureCode::CryptographicVerificationFailed,
+            "cryptographic_verification_failed",
+        ),
+        (SignatureFailureCode::NoSignatures, "no_signatures"),
+        (
+            SignatureFailureCode::MissingMultisigSignatures,
+            "missing_multisig_signatures",
+        ),
+        (
+            SignatureFailureCode::UnexpectedMultisigSignatures,
+            "unexpected_multisig_signatures",
+        ),
+        (
+            SignatureFailureCode::UnknownMultisigSigner,
+            "unknown_multisig_signer",
+        ),
+        (
+            SignatureFailureCode::NonCanonicalMultisigSignatures,
+            "noncanonical_multisig_signatures",
+        ),
+        (
+            SignatureFailureCode::InvalidFeePaymentIntent,
+            "invalid_fee_payment_intent",
+        ),
+        (
+            SignatureFailureCode::MissingTimeToLive,
+            "missing_time_to_live",
+        ),
+        (
+            SignatureFailureCode::GenesisDomainNotAllowed,
+            "genesis_domain_not_allowed",
+        ),
+        (
+            SignatureFailureCode::GenesisDomainRequired,
+            "genesis_domain_required",
+        ),
+        (
+            SignatureFailureCode::InsufficientMultisigWeight,
+            "insufficient_multisig_weight",
+        ),
+    ] {
+        assert_eq!(code.as_str(), expected);
+        assert_eq!(
+            SignatureVerification::Invalid { code }.to_mcp_value()["failure_code"],
+            Value::String(expected.into())
+        );
     }
 }

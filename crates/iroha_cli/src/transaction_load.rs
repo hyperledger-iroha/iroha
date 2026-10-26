@@ -3,7 +3,7 @@
 //! This command writes account metadata and verifies every planned effect. The localnet
 //! deployment, the lane policy and account routes, and the five-pair verdict belong to
 //! `scripts/sumeragi_scaling_gate.py`. Failed collection never publishes a passing trace or
-//! replays an ambiguous submission. Every request must also reach StateApplied on the required
+//! replays an ambiguous submission. Every request must also reach `StateApplied` on the required
 //! local observer, at the global height, within the same drain clock.
 
 use iroha_model_base::metadata::Metadata;
@@ -111,7 +111,7 @@ pub struct Args {
     #[arg(long = "account-config", value_name = "PATH")]
     account_configs: Vec<PathBuf>,
     /// Required client configuration for the exact peer whose stopped Kura is inspected.
-    /// Every request must be StateApplied on this peer before the original drain deadline.
+    /// Every request must be `StateApplied` on this peer before the original drain deadline.
     #[arg(long, value_name = "PATH")]
     local_observer_config: PathBuf,
     /// New strict trace path, published only after successful collection.
@@ -321,10 +321,10 @@ fn decimal(value: &str) -> Result<(u128, u128)> {
         bail!("decimal precision exceeds 18 places");
     }
     let denominator = if scale >= 0 {
-        10_u128.pow(scale as u32)
+        10_u128.pow(scale.unsigned_abs())
     } else {
         numerator = numerator
-            .checked_mul(10_u128.pow((-scale) as u32))
+            .checked_mul(10_u128.pow(scale.unsigned_abs()))
             .ok_or_else(|| eyre!("decimal overflow"))?;
         1
     };
@@ -361,7 +361,7 @@ impl Schedule {
             .checked_mul(rate_denominator)
             .ok_or_else(|| eyre!("rate overflow"))?;
         if rate_numerator > period_numerator
-            || (schedule.lag_ns as u128)
+            || u128::try_from(schedule.lag_ns)?
                 .checked_mul(4)
                 .and_then(|v| v.checked_mul(rate_numerator))
                 .is_none_or(|v| v > period_numerator)
@@ -387,7 +387,7 @@ impl Schedule {
             Cohort::Warmup => self.warmup_ns,
             Cohort::Measurement => self.measurement_ns,
         };
-        let numerator = (duration as u128)
+        let numerator = u128::try_from(duration)?
             .checked_mul(self.rate_numerator)
             .ok_or_else(|| eyre!("schedule count overflow"))?;
         let denominator = (NS as u128)
@@ -492,11 +492,11 @@ impl Bounds {
         Ok(Self {
             lookahead: args.preparation_lookahead,
             preparations: args.preparation_concurrency,
-            ahead_ns: args.preparation_ahead_ms as i64 * 1_000_000,
+            ahead_ns: i64::try_from(args.preparation_ahead_ms)? * 1_000_000,
             submissions: args.max_submissions,
             in_flight: args.max_in_flight,
             observations: args.max_status_requests,
-            poll_ns: args.poll_interval_ms as i64 * 1_000_000,
+            poll_ns: i64::try_from(args.poll_interval_ms)? * 1_000_000,
         })
     }
 }
@@ -517,7 +517,8 @@ impl Clock for LiveClock {
     }
     fn sleep(self: Arc<Self>, offset: i64) -> BoxFuture<'static, i64> {
         async move {
-            let delay = offset.saturating_sub(self.initial_offset).max(0) as u64;
+            let delay = u64::try_from(offset.saturating_sub(self.initial_offset).max(0))
+                .expect("nonnegative signed delay fits u64");
             tokio::time::sleep_until(self.started + Duration::from_nanos(delay)).await;
             offset
         }
@@ -659,7 +660,7 @@ impl Backend for SdkBackend {
             let warmup_count = self.warmup_count;
             let captured = tokio::task::spawn_blocking(move || {
                 let transaction = account.sign_transaction(payload)?;
-                signed_request::capture(transaction, captured_plan, warmup_count)
+                signed_request::capture(&(transaction), captured_plan, warmup_count)
             })
             .await??;
             // Persistence latency counts against the unchanged preparation/offer
@@ -793,6 +794,10 @@ impl Journal {
     ) -> Result<Self> {
         Self::start_inner(path, capacity, allocation, Some(Box::new(hook)))
     }
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "Consume the move-only admitted journal reservation when starting its sole writer."
+    )]
     fn start_inner(
         path: &Path,
         capacity: usize,
@@ -946,12 +951,40 @@ fn accept_offer(
     Ok(())
 }
 
+/// Prepared payload storage and the exact hashes already seen in this run.
+struct PreparationState<'a, P> {
+    prepared: &'a mut BTreeMap<usize, Prepared<P>>,
+    seen_hashes: &'a mut BTreeSet<TransactionHash>,
+}
+
+/// Cohort records and pending work updated by one completed operation.
+struct CompletionState<'a, R> {
+    records: &'a mut [Record],
+    schedule: &'a Schedule,
+    cohort: Cohort,
+    recorder: &'a R,
+    active: &'a mut BTreeSet<usize>,
+    outstanding: &'a mut BTreeSet<usize>,
+    polls: &'a mut Polls,
+}
+
+/// Fixed cohort geometry and the records collected under those bounds.
+struct PhaseRun<'a> {
+    schedule: &'a Schedule,
+    bounds: &'a Bounds,
+    records: &'a mut [Record],
+    range: std::ops::Range<usize>,
+    cohort: Cohort,
+}
+
 fn complete_preparation<P, R: Recorder>(
     index: usize,
     result: Result<Prepared<P>>,
     records: &mut [Record],
-    prepared: &mut BTreeMap<usize, Prepared<P>>,
-    seen_hashes: &mut BTreeSet<TransactionHash>,
+    PreparationState {
+        prepared,
+        seen_hashes,
+    }: PreparationState<'_, P>,
     recorder: &R,
     now: i64,
     failure: &mut Option<String>,
@@ -983,14 +1016,16 @@ fn complete_preparation<P, R: Recorder>(
 
 fn complete_submission<R: Recorder>(
     index: usize,
-    completed: Submission,
-    records: &mut [Record],
-    schedule: &Schedule,
-    cohort: Cohort,
-    recorder: &R,
-    active: &mut BTreeSet<usize>,
-    outstanding: &mut BTreeSet<usize>,
-    polls: &mut Polls,
+    completed: &Submission,
+    CompletionState {
+        records,
+        schedule,
+        cohort,
+        recorder,
+        active,
+        outstanding,
+        polls,
+    }: CompletionState<'_, R>,
     failure: &mut Option<String>,
 ) -> Result<()> {
     if let Some(offset) = completed.offer_ns {
@@ -1084,13 +1119,15 @@ fn complete_observation<R: Recorder>(
     scope: ObservationScope,
     offset: i64,
     result: Result<Option<PipelineTransactionStatusResponse>>,
-    records: &mut [Record],
-    schedule: &Schedule,
-    cohort: Cohort,
-    recorder: &R,
-    active: &mut BTreeSet<usize>,
-    outstanding: &mut BTreeSet<usize>,
-    polls: &mut Polls,
+    CompletionState {
+        records,
+        schedule,
+        cohort,
+        recorder,
+        active,
+        outstanding,
+        polls,
+    }: CompletionState<'_, R>,
     poll_ns: i64,
     failure: &mut Option<String>,
 ) -> Result<()> {
@@ -1152,11 +1189,13 @@ async fn collect_phase<B: Backend, C: Clock, R: Recorder>(
     backend: Arc<B>,
     clock: Arc<C>,
     recorder: Arc<R>,
-    schedule: &Schedule,
-    bounds: &Bounds,
-    records: &mut [Record],
-    range: std::ops::Range<usize>,
-    cohort: Cohort,
+    PhaseRun {
+        schedule,
+        bounds,
+        records,
+        range,
+        cohort,
+    }: PhaseRun<'_>,
     seen_hashes: &mut BTreeSet<TransactionHash>,
 ) -> Result<()> {
     let deadline = schedule.deadline(cohort);
@@ -1191,14 +1230,16 @@ async fn collect_phase<B: Backend, C: Clock, R: Recorder>(
         while let Some(Some((index, completed))) = submissions.next().now_or_never() {
             complete_submission(
                 index,
-                completed,
-                records,
-                schedule,
-                cohort,
-                recorder.as_ref(),
-                &mut active,
-                &mut outstanding,
-                &mut polls,
+                &(completed),
+                CompletionState {
+                    records,
+                    schedule,
+                    cohort,
+                    recorder: recorder.as_ref(),
+                    active: &mut active,
+                    outstanding: &mut outstanding,
+                    polls: &mut polls,
+                },
                 &mut failure,
             )?;
         }
@@ -1211,13 +1252,15 @@ async fn collect_phase<B: Backend, C: Clock, R: Recorder>(
                 scope,
                 offset,
                 result,
-                records,
-                schedule,
-                cohort,
-                recorder.as_ref(),
-                &mut active,
-                &mut outstanding,
-                &mut polls,
+                CompletionState {
+                    records,
+                    schedule,
+                    cohort,
+                    recorder: recorder.as_ref(),
+                    active: &mut active,
+                    outstanding: &mut outstanding,
+                    polls: &mut polls,
+                },
                 bounds.poll_ns,
                 &mut failure,
             )?;
@@ -1248,8 +1291,10 @@ async fn collect_phase<B: Backend, C: Clock, R: Recorder>(
                     index,
                     result,
                     records,
-                    &mut prepared,
-                    seen_hashes,
+                    PreparationState {
+                        prepared: &mut prepared,
+                        seen_hashes,
+                    },
                     recorder.as_ref(),
                     clock.now(),
                     &mut failure,
@@ -1408,18 +1453,16 @@ async fn collect_phase<B: Backend, C: Clock, R: Recorder>(
                 accept_offer(&mut records[offered.index], offered, &mut active, &mut polls)?;
             }
             Some((index, completed)) = submissions.next(), if !submissions.is_empty() => {
-                complete_submission(index, completed, records, schedule, cohort, recorder.as_ref(),
-                    &mut active, &mut outstanding, &mut polls, &mut failure)?;
+                complete_submission(index, &(completed), CompletionState { records, schedule, cohort, recorder: recorder.as_ref(), active: &mut active, outstanding: &mut outstanding, polls: &mut polls }, &mut failure)?;
             }
             Some((index, result)) = preparations.next(), if !preparations.is_empty() => {
-                complete_preparation(index, result, records, &mut prepared, seen_hashes,
+                complete_preparation(index, result, records, PreparationState { prepared: &mut prepared, seen_hashes },
                     recorder.as_ref(), clock.now(), &mut failure);
             }
 
             Some((index, (scope, offset, result))) = observations.next(), if !observations.is_empty() => {
                 drain_observation_starts(records, &mut observation_start_rx)?;
-                complete_observation(index, scope, offset, result, records, schedule, cohort, recorder.as_ref(),
-                    &mut active, &mut outstanding, &mut polls, bounds.poll_ns, &mut failure)?;
+                complete_observation(index, scope, offset, result, CompletionState { records, schedule, cohort, recorder: recorder.as_ref(), active: &mut active, outstanding: &mut outstanding, polls: &mut polls }, bounds.poll_ns, &mut failure)?;
             }
             reached = timer => {
                 if closing {
@@ -1449,6 +1492,10 @@ async fn collect_phase<B: Backend, C: Clock, R: Recorder>(
     Ok(())
 }
 
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Consume the move-only admitted trace reservation at its sole publication attempt."
+)]
 fn publish_trace(
     path: &Path,
     args: &Args,
@@ -1644,11 +1691,7 @@ impl Run for Args {
                     backend.clone(),
                     clock.clone(),
                     recorder.clone(),
-                    &schedule,
-                    &bounds,
-                    &mut records,
-                    0..warmup_end,
-                    Cohort::Warmup,
+                    PhaseRun { schedule: &schedule, bounds: &bounds, records: &mut records, range: 0..warmup_end, cohort: Cohort::Warmup },
                     &mut hashes,
                 )
                 .await?;
@@ -1656,11 +1699,7 @@ impl Run for Args {
                     backend.clone(),
                     clock.clone(),
                     recorder.clone(),
-                    &schedule,
-                    &bounds,
-                    &mut records,
-                    warmup_end..total,
-                    Cohort::Measurement,
+                    PhaseRun { schedule: &schedule, bounds: &bounds, records: &mut records, range: warmup_end..total, cohort: Cohort::Measurement },
                     &mut hashes,
                 )
                 .await?;

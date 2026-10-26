@@ -49,6 +49,10 @@ impl CertifiedTestChain {
     /// # Panics
     /// The supplied committee has no matching fixture proposer key or the State pool is exhausted.
     #[cfg(test)]
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     pub(in crate::sumeragi) fn author_payload_under_test_context(
         &self,
         header: BlockHeader,
@@ -58,6 +62,10 @@ impl CertifiedTestChain {
         self.author_payload_in_context(header, payload, config)
     }
 
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     fn author_payload_in_context(
         &self,
         header: BlockHeader,
@@ -88,7 +96,7 @@ impl CertifiedTestChain {
             .map(|authored| authored.body)
     }
 
-    /// Restore the original stored signed body and CommitQC into this chain's State pool.
+    /// Restore the original stored signed body and `CommitQC` into this chain's State pool.
     /// The Kura adapter verifies the complete historical certificate and original availability;
     /// it never substitutes a body funded or signed by another fixture's State owner.
     ///

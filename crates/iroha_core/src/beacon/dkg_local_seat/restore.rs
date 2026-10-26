@@ -18,6 +18,10 @@ impl PreparedLocalGlobalThresholdBeaconDkgSeatV1 {
     /// # Errors
     /// Returns the unchanged prepared owner on source, proof, context or original
     /// decoder refusal. Its same bank and source binding survive retry.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Failed sealing returns the original paid secret or session owner without a new fallible allocation"
+    )]
     pub fn restore_generated(
         mut self,
         context: &VerifiedGlobalBeaconDkgCheckpointContextV1,
@@ -159,12 +163,15 @@ impl LocalGlobalThresholdBeaconDkgSeatV1 {
     ///
     /// # Errors
     /// Returns this same owner on source/context/precondition/proof/decode refusal.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Failed sealing returns the original paid secret or session owner without a new fallible allocation"
+    )]
     pub fn restore_delivered(
         mut self,
         context: &VerifiedGlobalBeaconDkgCheckpointContextV1,
         commitments: &GlobalThresholdBeaconDkgSnapshotV1,
-        publication: &GlobalThresholdBeaconDkgSnapshotV1,
-        canonical_publication: &[u8],
+        (publication, canonical_publication): (&GlobalThresholdBeaconDkgSnapshotV1, &[u8]),
         encrypted: &[u8],
         signer: &KeyPair,
         limits: norito::DecodeLimits,
@@ -273,12 +280,15 @@ impl LocalGlobalThresholdBeaconDkgSeatV1 {
     ///
     /// # Errors
     /// Returns the unchanged enclosing owner on original source, decoder or custody refusal.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Failed sealing returns the original paid secret or session owner without a new fallible allocation"
+    )]
     pub fn restore_accepted(
         mut self,
         context: &VerifiedGlobalBeaconDkgCheckpointContextV1,
         deliveries: &GlobalThresholdBeaconDkgSnapshotV1,
-        publication: &GlobalThresholdBeaconDkgSnapshotV1,
-        canonical_publication: &[u8],
+        (publication, canonical_publication): (&GlobalThresholdBeaconDkgSnapshotV1, &[u8]),
         encrypted: &[u8],
         signer: &KeyPair,
         limits: norito::DecodeLimits,

@@ -39,8 +39,9 @@ impl Client {
             .map_err(|error| QueryError::Other(eyre!(error)))?;
         self.ensure_data_model_compatibility()
             .map_err(QueryError::from)?;
+        let expected_query = query.clone();
         let (_, request) = self
-            .query(query.clone())
+            .query(query)
             .with_fetch_size(FetchSize {
                 fetch_size: NonZeroU64::new(1),
             })
@@ -56,7 +57,7 @@ impl Client {
                 .assemble_canonical_norito_body_at(body.clone(), &route)
                 .max_response_bytes(maximum_bytes))
         })?;
-        decode_scope_response(&response, &query, maximum_bytes)
+        decode_scope_response(&response, &expected_query, maximum_bytes)
     }
 }
 

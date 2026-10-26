@@ -196,7 +196,7 @@ pub fn verify_usage_commitment(
     };
     if column.len() != KAIGI_USAGE_INSTANCE_ROWS_V1 {
         return Err(privacy_error(
-            "Kaigi usage requires exactly 25 instance rows",
+            "Kaigi usage requires exactly 21 instance rows",
         ));
     }
     let host_commitment = Option::<Fp>::from(Fp::from_repr(host.commitment.to_le_bytes()))

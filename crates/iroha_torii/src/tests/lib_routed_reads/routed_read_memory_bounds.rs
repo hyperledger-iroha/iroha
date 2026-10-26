@@ -478,7 +478,7 @@ async fn routed_read_single_route_pipeline_status_keeps_original_json_graph_and_
             ToriiRoutedReadMemoryBudget::new(routed_read_working_set_for_phase(phase), phase)
                 .unwrap();
         let response = crate::utils::respond_with_format(
-            PipelineTransactionStatusResponse::new(
+            &(PipelineTransactionStatusResponse::new(
                 HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::prehashed(
                     [0x51; Hash::LENGTH],
                 ))
@@ -489,7 +489,7 @@ async fn routed_read_single_route_pipeline_status_keeps_original_json_graph_and_
                 },
                 "global".to_owned(),
                 "state".to_owned(),
-            ),
+            )),
             ResponseFormat::Json,
         );
         let response = bound_torii_single_route_response(

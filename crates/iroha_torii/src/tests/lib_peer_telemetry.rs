@@ -1,7 +1,7 @@
 #[cfg(all(test, feature = "app_api", feature = "telemetry"))]
 mod peer_telemetry_tests {
     use std::{collections::HashSet, str::FromStr};
-    use iroha_data_model::peer::Peer;
+    use iroha_model_base::peer::Peer;
     use tokio::sync::watch;
     use super::{OnlinePeersProvider, collect_peer_urls};
     use crate::telemetry::peers::ToriiUrl;

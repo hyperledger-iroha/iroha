@@ -43,6 +43,7 @@ use super::{
         BlindIssuanceRequestTranscriptV1, PresentationTranscriptV1, ProofTranscriptCoreV1,
     },
 };
+use core::ops::{Add, Sub};
 #[cfg(test)]
 use core::{num::NonZeroU32, time::Duration};
 #[cfg(test)]
@@ -210,7 +211,7 @@ impl ProofRejectionBudgetV1 {
     fn record_response_norm_rejection(&mut self) {
         ProofRejectionStatsV1::increment(&mut self.rejections.response_norm);
     }
-    fn exhaustion_error(&self) -> PresentationProofErrorV1 {
+    fn exhaustion_error() -> PresentationProofErrorV1 {
         PresentationProofErrorV1::SamplingBudgetExhausted
     }
 }
@@ -334,9 +335,10 @@ fn prove_with_transcript_core_v1<R: CryptoRng + RngCore>(
             &mut randomness,
             &mut rejection_budget,
         )? {
-            if let Err(_error) = verify_with_transcript_core_v1(relation, transcript, &proof) {
+            if let Err(error) = verify_with_transcript_core_v1(relation, transcript, &proof) {
                 #[cfg(test)]
-                eprintln!("Bootle/Lantern prover self-check detail: {_error:?}");
+                eprintln!("Bootle/Lantern prover self-check detail: {error:?}");
+                let _ = error;
                 return Err(PresentationProofErrorV1::ProverSelfCheckFailed);
             }
             return Ok(proof);
@@ -345,7 +347,7 @@ fn prove_with_transcript_core_v1<R: CryptoRng + RngCore>(
             return Err(PresentationProofErrorV1::InternalInvariant);
         }
     }
-    Err(rejection_budget.exhaustion_error())
+    Err(ProofRejectionBudgetV1::exhaustion_error())
 }
 /// Verify one strictly decoded presentation proof against the borrowed transcript.
 ///
@@ -395,13 +397,15 @@ fn verify_with_transcript_core_v1(
     let multipliers = derive_equation_multipliers(transcript, &t_b, &h, &z3, &z4)?;
     let equation = QuadraticEquationV1::new(
         relation,
-        projection_r,
-        projection_r_prime,
-        z3.clone(),
-        z4.clone(),
-        h.clone(),
-        weights,
-        multipliers,
+        crate::privacy_engines::bootle_lantern::toolbox::QuadraticPublicInputsV1 {
+            projection_r,
+            projection_r_prime,
+            z3: z3.clone(),
+            z4: z4.clone(),
+            h: h.clone(),
+            schwartz_weights: weights,
+            equation_multipliers: multipliers,
+        },
     )
     .map_err(PresentationProofErrorV1::Toolbox)?;
     let recovered_w1 = recover_gamma_high(&matrices, &z1, &z21, &t_a1, &challenge, &hint)?;
@@ -431,8 +435,8 @@ fn verify_with_transcript_core_v1(
             .evaluate(&variables.negate())
             .map_err(PresentationProofErrorV1::Toolbox)?,
     ];
-    let (linear_z, q2_z) = decompose_signed_quadratic_evaluations(&q0, &q_z, &q_negative_z)?;
-    let recovered_v = q2_z
+    let (linear_z, quadratic_z) = decompose_signed_quadratic_evaluations(&q0, &q_z, &q_negative_z)?;
+    let recovered_v = quadratic_z
         .add(challenge.multiply(linear_z))
         .add(challenge.multiply(challenge).multiply(q0))
         .sub(f);
@@ -463,8 +467,10 @@ fn prove_attempt(
         matrices,
         &s2.polynomials,
         &mut messages.polynomials,
-        randomness,
-        rejection_budget,
+        ProofProverStateV1 {
+            randomness,
+            rejection_budget,
+        },
     )? {
         Some(projection) => projection,
         None => return Ok(None),
@@ -493,13 +499,15 @@ fn prove_attempt(
     let z4 = projection.z4;
     let mut equation = QuadraticEquationV1::new(
         relation,
-        projection.projection_r,
-        projection.projection_r_prime,
-        z3.polynomials.clone(),
-        z4.polynomials.clone(),
-        boxed_zero_polynomial_array_v1(),
-        weights,
-        boxed_zero_polynomial_array_v1(),
+        crate::privacy_engines::bootle_lantern::toolbox::QuadraticPublicInputsV1 {
+            projection_r: projection.projection_r,
+            projection_r_prime: projection.projection_r_prime,
+            z3: z3.polynomials.clone(),
+            z4: z4.polynomials.clone(),
+            h: boxed_zero_polynomial_array_v1(),
+            schwartz_weights: weights,
+            equation_multipliers: boxed_zero_polynomial_array_v1(),
+        },
     )
     .map_err(PresentationProofErrorV1::Toolbox)?;
     let schwartz = Zeroizing::new(
@@ -547,8 +555,10 @@ fn prove_attempt(
         let (t_candidate, v) = quadratic_linearization(
             &equation,
             &variables,
-            &q0,
-            &q_secret,
+            QuadraticEvaluationsV1 {
+                q0: &q0,
+                q_secret: &q_secret,
+            },
             matrices,
             &b_s21_linearization,
             &y1.polynomials,
@@ -627,22 +637,26 @@ fn prove_attempt(
             &w1,
             array_suffix::<TBOX_KMSIS_V1, TBOX_M2_V1>(&z2.polynomials),
         )?;
-        let proof = construct_proof(
-            &t_b,
-            &h,
-            &t_a1,
-            &challenge,
-            &hint,
-            &z1.polynomials,
-            array_prefix::<S21_POLYNOMIALS_V1, TBOX_M2_V1>(&z2.polynomials),
-            &z3.polynomials,
-            &z4.polynomials,
-        )?;
+        let proof = construct_proof(ProofSectionsV1 {
+            t_b: &t_b,
+            h: &h,
+            t_a1: &t_a1,
+            challenge: &challenge,
+            hint: &hint,
+            z1: &z1.polynomials,
+            z21: array_prefix::<S21_POLYNOMIALS_V1, TBOX_M2_V1>(&z2.polynomials),
+            z3: &z3.polynomials,
+            z4: &z4.polynomials,
+        })?;
         validate_public_response_bounds_v1(&proof)
             .map_err(PresentationProofErrorV1::ResponseBound)?;
         return Ok(Some(proof));
     }
     Ok(None)
+}
+struct ProofProverStateV1<'a> {
+    randomness: &'a mut ProofRandomnessV1,
+    rejection_budget: &'a mut ProofRejectionBudgetV1,
 }
 fn prove_projected_responses(
     relation: &BootleLanternApplicationRelationV1,
@@ -651,9 +665,12 @@ fn prove_projected_responses(
     matrices: &InternalMatricesV1,
     s2: &[ProofPolynomialV1; TBOX_M2_V1],
     messages: &mut [ProofPolynomialV1; TBOX_LEXT_V1],
-    randomness: &mut ProofRandomnessV1,
-    rejection_budget: &mut ProofRejectionBudgetV1,
+    prover: ProofProverStateV1<'_>,
 ) -> Result<Option<ProjectionProofV1>, PresentationProofErrorV1> {
+    let ProofProverStateV1 {
+        randomness,
+        rejection_budget,
+    } = prover;
     let s3 = projected_norm_witness_v1(short);
     let s4 = Zeroizing::new(
         application_quotient_v1(relation, short).map_err(PresentationProofErrorV1::Toolbox)?,
@@ -694,7 +711,7 @@ fn prove_projected_responses(
         beta_coefficients[0] = beta3;
         beta_coefficients[APPLICATION_RING_DEGREE_V1 / 2] = beta4;
         messages[BETA_MESSAGE_INDEX_V1] =
-            ProofPolynomialV1::from_centered_coefficients(beta_coefficients);
+            ProofPolynomialV1::from_centered_coefficients(&beta_coefficients);
         let t_b = commit_extended_messages_v1(
             &matrices.b_prime,
             array_prefix::<S21_POLYNOMIALS_V1, TBOX_M2_V1>(s2),
@@ -782,11 +799,13 @@ fn prove_projected_responses(
     }
     Ok(None)
 }
+type ProjectionMatricesV1 = (Box<[i8]>, Box<[i8]>);
+
 fn derive_projection_matrices(
     transcript: &ProofTranscriptCoreV1,
     t_b: &[ProofPolynomialV1; TBOX_LEXT_V1],
-) -> Result<(Box<[i8]>, Box<[i8]>), PresentationProofErrorV1> {
-    let projection_commitments = encode_polynomials_v1(&t_b[..BETA_MESSAGE_INDEX_V1 + 1]);
+) -> Result<ProjectionMatricesV1, PresentationProofErrorV1> {
+    let projection_commitments = encode_polynomials_v1(&t_b[..=BETA_MESSAGE_INDEX_V1]);
     let components = [projection_commitments.as_slice()];
     let projection_r = expand_projection_matrix_v1(
         transcript,
@@ -877,22 +896,27 @@ fn commit_short_witness(
             high_coefficients[index] = rounded.high;
             low_coefficients[index] = rounded.low;
         }
-        high[row] = ProofPolynomialV1::new(*high_coefficients)
+        high[row] = ProofPolynomialV1::new(&high_coefficients)
             .map_err(|_| PresentationProofErrorV1::InternalInvariant)?;
-        low.polynomials[row] = ProofPolynomialV1::from_centered_coefficients(*low_coefficients);
+        low.polynomials[row] = ProofPolynomialV1::from_centered_coefficients(&low_coefficients);
     }
     Ok((high, low))
+}
+#[derive(Clone, Copy)]
+struct QuadraticEvaluationsV1<'a> {
+    q0: &'a ProofPolynomialV1,
+    q_secret: &'a ProofPolynomialV1,
 }
 fn quadratic_linearization(
     equation: &QuadraticEquationV1<'_>,
     secret: &QuadraticVariablesV1,
-    q0: &ProofPolynomialV1,
-    q_secret: &ProofPolynomialV1,
+    evaluations: QuadraticEvaluationsV1<'_>,
     matrices: &InternalMatricesV1,
     b_s21_linearization: &ProofPolynomialV1,
     y1: &[ProofPolynomialV1; TBOX_M1_V1],
     y21: &[ProofPolynomialV1; S21_POLYNOMIALS_V1],
 ) -> Result<(ProofPolynomialV1, ProofPolynomialV1), PresentationProofErrorV1> {
+    let QuadraticEvaluationsV1 { q0, q_secret } = evaluations;
     let b_y21 = matrix_vector_product_v1(&matrices.b_prime, y21)
         .map_err(PresentationProofErrorV1::Toolbox)?;
     let mask = QuadraticVariablesV1 {
@@ -977,9 +1001,9 @@ fn decompose_mask_commitment(
             high_coefficients[index] = decomposition.high;
             low_coefficients[index] = decomposition.low;
         }
-        high[row] = ProofPolynomialV1::new(*high_coefficients)
+        high[row] = ProofPolynomialV1::new(&high_coefficients)
             .map_err(|_| PresentationProofErrorV1::InternalInvariant)?;
-        low.polynomials[row] = ProofPolynomialV1::from_centered_coefficients(*low_coefficients);
+        low.polynomials[row] = ProofPolynomialV1::from_centered_coefficients(&low_coefficients);
     }
     Ok((high, low))
 }
@@ -1009,7 +1033,7 @@ fn make_hint(
             }
             coefficients[index] = hint;
         }
-        hints[row] = ProofPolynomialV1::from_centered_coefficients(*coefficients);
+        hints[row] = ProofPolynomialV1::from_centered_coefficients(&coefficients);
     }
     Ok(*hints)
 }
@@ -1025,12 +1049,12 @@ fn recover_gamma_high(
     let mut recovered = [ProofPolynomialV1::ZERO; TBOX_KMSIS_V1];
     for row in 0..TBOX_KMSIS_V1 {
         let mut coefficients = [0_u64; APPLICATION_RING_DEGREE_V1];
-        for index in 0..APPLICATION_RING_DEGREE_V1 {
+        for (index, coefficient) in coefficients.iter_mut().enumerate() {
             let centered_hint = hint[row].centered_coefficient(index);
-            coefficients[index] = use_gamma_hint_v1(tmp1[row].coefficients()[index], centered_hint)
+            *coefficient = use_gamma_hint_v1(tmp1[row].coefficients()[index], centered_hint)
                 .map_err(PresentationProofErrorV1::Compression)?;
         }
-        recovered[row] = ProofPolynomialV1::new(coefficients)
+        recovered[row] = ProofPolynomialV1::new(&coefficients)
             .map_err(|_| PresentationProofErrorV1::InternalInvariant)?;
     }
     Ok(recovered)
@@ -1078,17 +1102,32 @@ fn validate_compressed_response_bound(
     }
     Ok(())
 }
+#[derive(Clone, Copy)]
+struct ProofSectionsV1<'a> {
+    t_b: &'a [ProofPolynomialV1; T_B_POLYNOMIALS_V1],
+    h: &'a [ProofPolynomialV1; H_POLYNOMIALS_V1],
+    t_a1: &'a [ProofPolynomialV1; T_A1_POLYNOMIALS_V1],
+    challenge: &'a ProofPolynomialV1,
+    hint: &'a [ProofPolynomialV1; HINT_POLYNOMIALS_V1],
+    z1: &'a [ProofPolynomialV1; Z1_POLYNOMIALS_V1],
+    z21: &'a [ProofPolynomialV1; Z21_POLYNOMIALS_V1],
+    z3: &'a [ProofPolynomialV1; Z3_POLYNOMIALS_V1],
+    z4: &'a [ProofPolynomialV1; Z4_POLYNOMIALS_V1],
+}
 fn construct_proof(
-    t_b: &[ProofPolynomialV1; T_B_POLYNOMIALS_V1],
-    h: &[ProofPolynomialV1; H_POLYNOMIALS_V1],
-    t_a1: &[ProofPolynomialV1; T_A1_POLYNOMIALS_V1],
-    challenge: &ProofPolynomialV1,
-    hint: &[ProofPolynomialV1; HINT_POLYNOMIALS_V1],
-    z1: &[ProofPolynomialV1; Z1_POLYNOMIALS_V1],
-    z21: &[ProofPolynomialV1; Z21_POLYNOMIALS_V1],
-    z3: &[ProofPolynomialV1; Z3_POLYNOMIALS_V1],
-    z4: &[ProofPolynomialV1; Z4_POLYNOMIALS_V1],
+    sections: ProofSectionsV1<'_>,
 ) -> Result<BootleLanternPresentationProofV1, PresentationProofErrorV1> {
+    let ProofSectionsV1 {
+        t_b,
+        h,
+        t_a1,
+        challenge,
+        hint,
+        z1,
+        z21,
+        z3,
+        z4,
+    } = sections;
     let mut coefficients = Vec::with_capacity(PROOF_COEFFICIENTS_V1);
     for section in [
         t_b.as_slice(),
@@ -1198,7 +1237,7 @@ fn sample_uniform_g(
     let mut coefficients = *uniform.coefficients();
     coefficients[0] = 0;
     coefficients[APPLICATION_RING_DEGREE_V1 / 2] = 0;
-    ProofPolynomialV1::new(coefficients).map_err(|_| PresentationProofErrorV1::InternalInvariant)
+    ProofPolynomialV1::new(&coefficients).map_err(|_| PresentationProofErrorV1::InternalInvariant)
 }
 fn project_centered(
     matrix: &[i8],
@@ -1240,15 +1279,23 @@ fn polynomials_from_centered_projection(
         let start = polynomial * APPLICATION_RING_DEGREE_V1;
         let mut array = [0_i64; APPLICATION_RING_DEGREE_V1];
         array.copy_from_slice(&coefficients[start..start + APPLICATION_RING_DEGREE_V1]);
-        ProofPolynomialV1::from_centered_coefficients(array)
+        ProofPolynomialV1::from_centered_coefficients(&array)
     })
 }
+#[expect(
+    clippy::unnecessary_box_returns,
+    reason = "Polynomial vectors stay heap-owned to avoid large secret stack copies and preserve their clearing owners."
+)]
 fn multiply_vector_by_polynomial<const N: usize>(
     vector: &[ProofPolynomialV1; N],
     scalar: &ProofPolynomialV1,
 ) -> Box<[ProofPolynomialV1; N]> {
     boxed_polynomial_array_from_fn_v1(|index| scalar.multiply(vector[index]))
 }
+#[expect(
+    clippy::unnecessary_box_returns,
+    reason = "Polynomial vectors stay heap-owned to avoid large secret stack copies and preserve their clearing owners."
+)]
 fn add_arrays<const N: usize>(
     lhs: &[ProofPolynomialV1; N],
     rhs: &[ProofPolynomialV1; N],
@@ -1427,7 +1474,7 @@ impl core::fmt::Debug for BootleLanternPreparedPresentationPrivacyActionV1 {
 impl BootleLanternPreparedPresentationPrivacyActionV1 {
     /// Exact state effect certified by the prepared presentation.
     #[must_use]
-    pub const fn effect(&self) -> BootleLanternPresentationPrivacyActionEffectV1 {
+    pub const fn effect() -> BootleLanternPresentationPrivacyActionEffectV1 {
         BootleLanternPresentationPrivacyActionEffectV1::PresentationVerificationAndFinalityOnly
     }
     /// Hash of the exact canonical governed issuer-policy encoding.
@@ -1524,7 +1571,7 @@ impl SignedBootleLanternPresentationPrivacyActionV1 {
     }
     /// Exact state effect certified by the signed presentation.
     #[must_use]
-    pub const fn effect(&self) -> BootleLanternPresentationPrivacyActionEffectV1 {
+    pub const fn effect() -> BootleLanternPresentationPrivacyActionEffectV1 {
         BootleLanternPresentationPrivacyActionEffectV1::PresentationVerificationAndFinalityOnly
     }
     /// Hash of the exact canonical governed issuer-policy encoding.
@@ -2024,7 +2071,7 @@ fn finalize_bootle_lantern_prepared_presentation_privacy_action_v1(
     context: &BootleLanternPresentationPrivacyActionTransactionContextV1,
     issuer_policy: BootleLanternIssuerPolicyV1,
     statement: IrohaBootleLanternAnoncredStatementV1,
-    proof: BootleLanternPresentationProofV1,
+    proof: &BootleLanternPresentationProofV1,
     canonical_genesis_hash: [u8; 32],
 ) -> Result<
     BootleLanternPreparedPresentationPrivacyActionV1,
@@ -2105,7 +2152,7 @@ fn finalize_bootle_lantern_prepared_presentation_privacy_action_v1(
 /// Returns a closed context, policy, statement, relation, witness, native
 /// proof, encoding, or integrity failure.
 pub fn prepare_bootle_lantern_presentation_privacy_action_with_rng_v1<R>(
-    context: BootleLanternPresentationPrivacyActionTransactionContextV1,
+    context: &BootleLanternPresentationPrivacyActionTransactionContextV1,
     issuer_policy: BootleLanternIssuerPolicyV1,
     statement: IrohaBootleLanternAnoncredStatementV1,
     witness: &BootleLanternPresentationWitnessV1,
@@ -2125,7 +2172,7 @@ where
         return Err(BootleLanternPresentationPrivacyActionBuildErrorV1::NetworkIdMismatch);
     }
     validate_bootle_lantern_presentation_transaction_intent_v1(
-        &context,
+        context,
         &issuer_policy,
         &statement,
     )?;
@@ -2137,10 +2184,10 @@ where
         rng,
     )?;
     finalize_bootle_lantern_prepared_presentation_privacy_action_v1(
-        &context,
+        context,
         issuer_policy,
         statement,
-        proof,
+        &proof,
         canonical_genesis_hash,
     )
 }
@@ -2230,7 +2277,7 @@ pub fn sign_prepared_bootle_lantern_presentation_privacy_action_v1(
 ///
 /// Returns a closed validation, proving, binding, or signing failure.
 pub fn build_signed_bootle_lantern_presentation_privacy_action_with_rng_v1<R>(
-    context: BootleLanternPresentationPrivacyActionTransactionContextV1,
+    context: &BootleLanternPresentationPrivacyActionTransactionContextV1,
     issuer_policy: BootleLanternIssuerPolicyV1,
     statement: IrohaBootleLanternAnoncredStatementV1,
     witness: &BootleLanternPresentationWitnessV1,
@@ -2386,7 +2433,8 @@ mod tests {
             }
             if let Some(period) = self.period {
                 for (index, byte) in destination.iter_mut().enumerate() {
-                    *byte = ((index % usize::from(period)) as u8)
+                    *byte = u8::try_from(index % usize::from(period))
+                        .expect("period is a byte")
                         .wrapping_mul(31)
                         .wrapping_add(5);
                 }
@@ -2396,7 +2444,7 @@ mod tests {
                 self.state ^= self.state << 13;
                 self.state ^= self.state >> 7;
                 self.state ^= self.state << 17;
-                *byte = self.state as u8;
+                *byte = self.state.to_le_bytes()[0];
             }
             Ok(())
         }
@@ -2493,9 +2541,11 @@ mod tests {
             let mut authorization_rng = TestRng::healthy(0x1f83_d9ab_fb41_bd6b);
             let authorization = issuer_authorize_blind_issuance_with_rng_v1(
                 &issuer_key_pair,
-                &context,
-                genesis_hash,
-                &policy,
+                crate::privacy_engines::bootle_lantern::issuer::BootleLanternIssuanceContextV1 {
+                    context: &context,
+                    canonical_genesis_hash: genesis_hash,
+                    policy: &policy,
+                },
                 [0x71; 32],
                 10,
                 20,
@@ -2524,9 +2574,11 @@ mod tests {
             let mut issuer_issuance_rng = TestRng::healthy(0xa54f_f53a_5f1d_36f1);
             let response = issuer_blind_issue_once_with_rng_v1(
                 &issuer_key_pair,
-                &context,
-                genesis_hash,
-                &policy,
+                crate::privacy_engines::bootle_lantern::issuer::BootleLanternIssuanceContextV1 {
+                    context: &context,
+                    canonical_genesis_hash: genesis_hash,
+                    policy: &policy,
+                },
                 &authorization,
                 &request,
                 11,
@@ -2605,9 +2657,11 @@ mod tests {
             let mut authorization_rng = TestRng::healthy(0x1f83_d9ab_fb41_bd6b);
             let authorization = issuer_authorize_blind_issuance_with_rng_v1(
                 &issuer_key_pair,
-                &context,
-                genesis_hash,
-                &policy,
+                crate::privacy_engines::bootle_lantern::issuer::BootleLanternIssuanceContextV1 {
+                    context: &context,
+                    canonical_genesis_hash: genesis_hash,
+                    policy: &policy,
+                },
                 [0x71; 32],
                 10,
                 20,
@@ -2635,9 +2689,11 @@ mod tests {
             let mut issuer_issuance_rng = TestRng::healthy(0xa54f_f53a_5f1d_36f1);
             let response = issuer_blind_issue_once_with_rng_v1(
                 &issuer_key_pair,
-                &context,
-                genesis_hash,
-                &policy,
+                crate::privacy_engines::bootle_lantern::issuer::BootleLanternIssuanceContextV1 {
+                    context: &context,
+                    canonical_genesis_hash: genesis_hash,
+                    policy: &policy,
+                },
                 &authorization,
                 &request,
                 11,
@@ -2707,7 +2763,7 @@ mod tests {
             .expect("mutation remains a canonical proof encoding")
     }
     fn alternate_residue(residue: u64) -> u64 {
-        if residue == 0 { 1 } else { 0 }
+        u64::from(residue == 0)
     }
     fn presentation_action_signer(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
@@ -2782,7 +2838,7 @@ mod tests {
         let statement = presentation_action_statement(&context, &policy);
         assert!(matches!(
             prepare_bootle_lantern_presentation_privacy_action_with_rng_v1(
-                context,
+                &context,
                 policy,
                 statement,
                 &sealed_issued_fixture().witness,
@@ -2797,7 +2853,7 @@ mod tests {
         let statement = presentation_action_statement(&context, &policy);
         assert!(matches!(
             prepare_bootle_lantern_presentation_privacy_action_with_rng_v1(
-                context,
+                &context,
                 policy,
                 statement,
                 &sealed_issued_fixture().witness,
@@ -2813,7 +2869,7 @@ mod tests {
         let statement = presentation_action_statement(&context, &policy);
         assert!(matches!(
             build_signed_bootle_lantern_presentation_privacy_action_with_rng_v1(
-                context,
+                &context,
                 policy,
                 statement,
                 &sealed_issued_fixture().witness,
@@ -2835,7 +2891,7 @@ mod tests {
         statement.issuer_policy_record_digest = revoked_policy.record_digest;
         assert!(matches!(
             prepare_bootle_lantern_presentation_privacy_action_with_rng_v1(
-                context,
+                &context,
                 revoked_policy,
                 statement,
                 &sealed_issued_fixture().witness,
@@ -2857,7 +2913,7 @@ mod tests {
         .expect("structural statement intent remains derivable");
         assert!(matches!(
             prepare_bootle_lantern_presentation_privacy_action_with_rng_v1(
-                context,
+                &context,
                 policy,
                 statement,
                 &sealed_issued_fixture().witness,
@@ -2876,7 +2932,7 @@ mod tests {
         let policy = sealed_issued_fixture().policy.clone();
         let statement = presentation_action_statement(&context, &policy);
         let prepared = prepare_bootle_lantern_presentation_privacy_action_with_rng_v1(
-            context.clone(),
+            &context.clone(),
             policy,
             statement,
             &sealed_issued_fixture().witness,
@@ -2885,7 +2941,7 @@ mod tests {
         )
         .expect("prepare sealed Bootle/Lantern presentation action");
         assert_eq!(
-            prepared.effect(),
+            BootleLanternPreparedPresentationPrivacyActionV1::effect(),
             BootleLanternPresentationPrivacyActionEffectV1::PresentationVerificationAndFinalityOnly
         );
         assert_ne!(prepared.issuer_policy_hash(), [0; 32]);
@@ -2926,26 +2982,26 @@ mod tests {
         let expected_statement = prepared.statement_digest();
         let expected_envelope = prepared.proof_envelope_hash();
         let expected_policy = prepared.issuer_policy_hash();
-        let signed = sign_prepared_bootle_lantern_presentation_privacy_action_v1(
+        let signed_action = sign_prepared_bootle_lantern_presentation_privacy_action_v1(
             clone_prepared_for_adversary(&prepared),
             signer.private_key(),
         )
         .expect("consume and sign sealed Bootle/Lantern presentation");
-        signed
+        signed_action
             .signed_transaction()
             .verify_signature()
             .expect("locally signed Bootle/Lantern transaction verifies");
-        assert_eq!(signed.transaction_intent_digest(), expected_intent);
-        assert_eq!(signed.statement_digest(), expected_statement);
-        assert_eq!(signed.proof_envelope_hash(), expected_envelope);
-        assert_eq!(signed.issuer_policy_hash(), expected_policy);
+        assert_eq!(signed_action.transaction_intent_digest(), expected_intent);
+        assert_eq!(signed_action.statement_digest(), expected_statement);
+        assert_eq!(signed_action.proof_envelope_hash(), expected_envelope);
+        assert_eq!(signed_action.issuer_policy_hash(), expected_policy);
         assert_eq!(
-            signed.transaction_hash(),
-            *signed.signed_transaction().hash().as_ref()
+            signed_action.transaction_hash(),
+            *signed_action.signed_transaction().hash().as_ref()
         );
         assert_eq!(
-            signed.adaptive_signed_transaction_bytes(),
-            u32::try_from(norito::codec::encode_adaptive(signed.signed_transaction()).len())
+            signed_action.adaptive_signed_transaction_bytes(),
+            u32::try_from(norito::codec::encode_adaptive(signed_action.signed_transaction()).len())
                 .expect("bounded signed Bootle/Lantern transaction")
         );
         let assert_drift = |candidate| {
@@ -3074,30 +3130,30 @@ mod tests {
             .add(y.scale_centered(-11))
             .add(ProofPolynomialV1::constant_centered(-13))
     }
-    fn actual_quadratic_equation<'a>(fixture: &'a Fixture) -> QuadraticEquationV1<'a> {
+    fn actual_quadratic_equation(fixture: &Fixture) -> QuadraticEquationV1<'_> {
         let t_b = boxed_polynomial_array_from_fn_v1::<TBOX_LEXT_V1>(|polynomial| {
-            ProofPolynomialV1::from_centered_coefficients(core::array::from_fn(|coefficient| {
+            ProofPolynomialV1::from_centered_coefficients(&core::array::from_fn(|coefficient| {
                 let polynomial = i64::try_from(polynomial).expect("polynomial index fits i64");
                 let coefficient = i64::try_from(coefficient).expect("coefficient index fits i64");
                 (polynomial * 37 + coefficient * 19).rem_euclid(257) - 128
             }))
         });
         let z3 = boxed_polynomial_array_from_fn_v1::<PROJECTION_POLYNOMIALS_V1>(|polynomial| {
-            ProofPolynomialV1::from_centered_coefficients(core::array::from_fn(|coefficient| {
+            ProofPolynomialV1::from_centered_coefficients(&core::array::from_fn(|coefficient| {
                 let polynomial = i64::try_from(polynomial).expect("polynomial index fits i64");
                 let coefficient = i64::try_from(coefficient).expect("coefficient index fits i64");
                 (polynomial * 43 + coefficient * 23).rem_euclid(193) - 96
             }))
         });
         let z4 = boxed_polynomial_array_from_fn_v1::<PROJECTION_POLYNOMIALS_V1>(|polynomial| {
-            ProofPolynomialV1::from_centered_coefficients(core::array::from_fn(|coefficient| {
+            ProofPolynomialV1::from_centered_coefficients(&core::array::from_fn(|coefficient| {
                 let polynomial = i64::try_from(polynomial).expect("polynomial index fits i64");
                 let coefficient = i64::try_from(coefficient).expect("coefficient index fits i64");
                 87 - (polynomial * 31 + coefficient * 17).rem_euclid(175)
             }))
         });
         let h = boxed_polynomial_array_from_fn_v1::<H_POLYNOMIALS_V1>(|polynomial| {
-            ProofPolynomialV1::from_centered_coefficients(core::array::from_fn(|coefficient| {
+            ProofPolynomialV1::from_centered_coefficients(&core::array::from_fn(|coefficient| {
                 if coefficient == 0 || coefficient == APPLICATION_RING_DEGREE_V1 / 2 {
                     0
                 } else {
@@ -3116,19 +3172,21 @@ mod tests {
             .expect("ring equation multipliers");
         QuadraticEquationV1::new(
             &fixture.relation,
-            projection_r,
-            projection_r_prime,
-            z3,
-            z4,
-            h,
-            weights,
-            multipliers,
+            crate::privacy_engines::bootle_lantern::toolbox::QuadraticPublicInputsV1 {
+                projection_r,
+                projection_r_prime,
+                z3,
+                z4,
+                h,
+                schwartz_weights: weights,
+                equation_multipliers: multipliers,
+            },
         )
         .expect("fully compiled actual quadratic equation")
     }
     fn actual_quadratic_variables() -> QuadraticVariablesV1 {
         let short = boxed_polynomial_array_from_fn_v1::<TBOX_M1_V1>(|polynomial| {
-            ProofPolynomialV1::new(core::array::from_fn(|coefficient| {
+            ProofPolynomialV1::new(&core::array::from_fn(|coefficient| {
                 match (polynomial + coefficient) % 7 {
                     0 => 0,
                     1 => 1,
@@ -3149,17 +3207,20 @@ mod tests {
         });
         let mut message =
             boxed_polynomial_array_from_fn_v1::<QUADRATIC_MESSAGE_POLYNOMIALS_V1>(|polynomial| {
-                ProofPolynomialV1::from_centered_coefficients(core::array::from_fn(|coefficient| {
-                    let polynomial = i64::try_from(polynomial).expect("polynomial index fits i64");
-                    let coefficient =
-                        i64::try_from(coefficient).expect("coefficient index fits i64");
-                    (polynomial * 53 + coefficient * 97).rem_euclid(509) - 254
-                }))
+                ProofPolynomialV1::from_centered_coefficients(&core::array::from_fn(
+                    |coefficient| {
+                        let polynomial =
+                            i64::try_from(polynomial).expect("polynomial index fits i64");
+                        let coefficient =
+                            i64::try_from(coefficient).expect("coefficient index fits i64");
+                        (polynomial * 53 + coefficient * 97).rem_euclid(509) - 254
+                    },
+                ))
             });
         let mut beta = [0_i64; APPLICATION_RING_DEGREE_V1];
         beta[0] = -1;
         beta[APPLICATION_RING_DEGREE_V1 / 2] = 1;
-        message[BETA_MESSAGE_INDEX_V1] = ProofPolynomialV1::from_centered_coefficients(beta);
+        message[BETA_MESSAGE_INDEX_V1] = ProofPolynomialV1::from_centered_coefficients(&beta);
         QuadraticVariablesV1 { short, message }
     }
     fn scale_quadratic_variables(
@@ -3195,14 +3256,14 @@ mod tests {
             coefficients[0] = 1;
             coefficients[1] = 1;
             coefficients[APPLICATION_RING_DEGREE_V1 - 1] = -1;
-            ProofPolynomialV1::from_centered_coefficients(coefficients)
+            ProofPolynomialV1::from_centered_coefficients(&coefficients)
         };
         let boundary = {
             let mut coefficients = [0_i64; APPLICATION_RING_DEGREE_V1];
             coefficients[0] = -CHALLENGE_OMEGA_V1;
             coefficients[31] = CHALLENGE_OMEGA_V1;
             coefficients[33] = -CHALLENGE_OMEGA_V1;
-            ProofPolynomialV1::from_centered_coefficients(coefficients)
+            ProofPolynomialV1::from_centered_coefficients(&coefficients)
         };
         let patterned = {
             let mut coefficients = [0_i64; APPLICATION_RING_DEGREE_V1];
@@ -3212,7 +3273,7 @@ mod tests {
             for index in 33..APPLICATION_RING_DEGREE_V1 {
                 coefficients[index] = -coefficients[APPLICATION_RING_DEGREE_V1 - index];
             }
-            ProofPolynomialV1::from_centered_coefficients(coefficients)
+            ProofPolynomialV1::from_centered_coefficients(&coefficients)
         };
         for challenge in [sparse, boundary, patterned] {
             assert_eq!(challenge, challenge.automorphism());
@@ -3227,17 +3288,17 @@ mod tests {
         ProofPolynomialV1,
     ); 4] {
         let patterned_positive =
-            ProofPolynomialV1::from_centered_coefficients(core::array::from_fn(|index| {
+            ProofPolynomialV1::from_centered_coefficients(&core::array::from_fn(|index| {
                 i64::try_from(index).expect("ring index fits i64") * 65_537 - 2_000_000
             }));
         let patterned_negative =
-            ProofPolynomialV1::from_centered_coefficients(core::array::from_fn(|index| {
+            ProofPolynomialV1::from_centered_coefficients(&core::array::from_fn(|index| {
                 1_700_000 - i64::try_from(index).expect("ring index fits i64") * 131_071
             }));
         let canonical_minus_one =
-            ProofPolynomialV1::new([PROOF_MODULUS_V1 - 1; APPLICATION_RING_DEGREE_V1])
+            ProofPolynomialV1::new(&[PROOF_MODULUS_V1 - 1; APPLICATION_RING_DEGREE_V1])
                 .expect("q - 1 is canonical");
-        let canonical_boundary_pattern = ProofPolynomialV1::new(core::array::from_fn(|index| {
+        let canonical_boundary_pattern = ProofPolynomialV1::new(&core::array::from_fn(|index| {
             PROOF_MODULUS_V1 - 1 - u64::try_from(index % 3).expect("small residue")
         }))
         .expect("boundary residues are canonical");
@@ -3444,7 +3505,7 @@ mod tests {
             });
             beta[index] = noise;
             variables.message[BETA_MESSAGE_INDEX_V1] =
-                ProofPolynomialV1::from_centered_coefficients(beta);
+                ProofPolynomialV1::from_centered_coefficients(&beta);
             let canonical_constraints = equation
                 .constraints(&variables)
                 .expect("canonical coefficient constraints");
@@ -3550,7 +3611,7 @@ mod tests {
         assert_eq!(budget.response_mask_draws, 0);
         assert_eq!(budget.remaining(), 0);
         assert_eq!(
-            budget.exhaustion_error(),
+            ProofRejectionBudgetV1::exhaustion_error(),
             PresentationProofErrorV1::SamplingBudgetExhausted
         );
     }
@@ -3568,7 +3629,7 @@ mod tests {
         assert_eq!(budget.response_mask_draws, 7);
         assert_eq!(budget.remaining(), 0);
         assert_eq!(
-            budget.exhaustion_error(),
+            ProofRejectionBudgetV1::exhaustion_error(),
             PresentationProofErrorV1::SamplingBudgetExhausted
         );
     }
@@ -3607,7 +3668,7 @@ mod tests {
         assert_eq!(budget.rejections.response_sampling, 1);
         assert_eq!(budget.rejections.response_norm, 1);
         assert_eq!(
-            budget.exhaustion_error(),
+            ProofRejectionBudgetV1::exhaustion_error(),
             PresentationProofErrorV1::SamplingBudgetExhausted
         );
     }
@@ -3634,7 +3695,7 @@ mod tests {
             format!("{:?}", &exercised.rejections)
         );
         assert_eq!(
-            format!("{}", exercised.exhaustion_error()),
+            format!("{}", ProofRejectionBudgetV1::exhaustion_error()),
             "Bootle/Lantern sampling exhausted the shared proof work budget"
         );
     }

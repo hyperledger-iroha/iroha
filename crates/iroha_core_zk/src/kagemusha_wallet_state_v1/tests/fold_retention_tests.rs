@@ -40,7 +40,12 @@ fn holds(wallet: &Wallet) -> bool {
 }
 
 /// The durable records a fold left: every archive record and the selected manifest.
-fn durable(wallet: &Wallet) -> (BTreeMap<ArchiveKey, Vec<u8>>, Option<([u8; 32], Vec<u8>)>) {
+type DurableRecords = (
+    BTreeMap<ArchiveKey, Vec<u8>>,
+    Option<custody::ArchiveCheckpointV1>,
+);
+
+fn durable(wallet: &Wallet) -> DurableRecords {
     (
         wallet.archive.records.lock().unwrap().clone(),
         wallet.custody.checkpoint.clone(),

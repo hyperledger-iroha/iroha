@@ -346,8 +346,7 @@ fn check_detached_asset_transfer_matches_sequential_transcript_and_events() {
             .world()
             .assets()
             .get(asset_id)
-            .map(|value| value.as_ref().clone())
-            .unwrap_or_else(Quantity::zero)
+            .map_or_else(Quantity::zero, |value| value.as_ref().clone())
     }
     let call_hash = iroha_crypto::Hash::prehashed([7_u8; iroha_crypto::Hash::LENGTH]);
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);

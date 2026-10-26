@@ -95,7 +95,7 @@ pub fn sign_envelope(
 ///
 /// # Panics
 /// The action does not apply.
-pub fn enact_for_test(action: Action, tx: &mut StateTransaction<'_, '_>) {
+pub fn enact_for_test(action: &Action, tx: &mut StateTransaction<'_, '_>) {
     assert!(
         super::apply(action, tx).expect("the fixture admission action applies"),
         "the fixture admission action changed nothing"
@@ -232,8 +232,8 @@ impl ProviderAdmissionTestFixtureV1 {
         self.commit(
             |tx| {
                 tx.world.provider_owners.insert(provider, owner);
-                enact_for_test(Action::ConfigureCouncil(policy), tx);
-                enact_for_test(Action::Admit(envelope), tx);
+                enact_for_test(&(Action::ConfigureCouncil(policy)), tx);
+                enact_for_test(&(Action::Admit(envelope)), tx);
             },
             true,
         );
@@ -274,6 +274,6 @@ impl ProviderAdmissionTestFixtureV1 {
     /// Revoke the admitted provider in the next certified block.
     pub fn revoke(&mut self) {
         let revocation = norito::encode_canonical(&self.revocation()).expect("revocation");
-        self.commit(|tx| enact_for_test(Action::Revoke(revocation), tx), true);
+        self.commit(|tx| enact_for_test(&(Action::Revoke(revocation)), tx), true);
     }
 }

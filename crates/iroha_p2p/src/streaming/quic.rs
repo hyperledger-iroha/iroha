@@ -621,7 +621,7 @@ fn spawn_datagram_pump(
                 let mut drained = 0_u32;
                 while connection.read_datagram().await.is_ok() {
                     drained = drained.wrapping_add(1);
-                    if drained % 64 == 0 {
+                    if drained.is_multiple_of(64) {
                         tokio::task::yield_now().await;
                     }
                 }
@@ -1307,35 +1307,31 @@ impl CapabilityNegotiation {
         F: FnOnce(&TransportCapabilityResolution),
     {
         validate_capability_report(&report)?;
-        let mut record = Some(record);
         let local_frame = TransportCapabilitiesFrame {
             endpoint_role: streaming::CapabilityRole::Viewer,
             capabilities: conn.normalize_local_transport_capabilities(capabilities),
         };
-        conn.send_control_frame(&ControlFrame::TransportCapabilities(local_frame.clone()))
+        conn.send_control_frame(&ControlFrame::TransportCapabilities(local_frame))
             .await?;
-        let remote_caps = loop {
-            let response = conn.next_control_frame().await?;
-            match response {
-                ControlFrame::TransportCapabilities(frame) => {
-                    if frame.endpoint_role != streaming::CapabilityRole::Publisher {
-                        return Err(Error::ProtocolViolation(format!(
-                            "expected publisher capabilities, received {role:?}",
-                            role = frame.endpoint_role
-                        )));
-                    }
-                    break frame;
-                }
-                ControlFrame::Error(err) => {
+        let remote_caps = match conn.next_control_frame().await? {
+            ControlFrame::TransportCapabilities(frame) => {
+                if frame.endpoint_role != streaming::CapabilityRole::Publisher {
                     return Err(Error::ProtocolViolation(format!(
-                        "peer reported error: {err:?}"
+                        "expected publisher capabilities, received {role:?}",
+                        role = frame.endpoint_role
                     )));
                 }
-                other => {
-                    return Err(Error::ProtocolViolation(format!(
-                        "expected TransportCapabilities, received {other:?}"
-                    )));
-                }
+                frame
+            }
+            ControlFrame::Error(err) => {
+                return Err(Error::ProtocolViolation(format!(
+                    "peer reported error: {err:?}"
+                )));
+            }
+            other => {
+                return Err(Error::ProtocolViolation(format!(
+                    "expected TransportCapabilities, received {other:?}"
+                )));
             }
         };
         let mut resolution = streaming::resolve_transport_capabilities(
@@ -1358,35 +1354,26 @@ impl CapabilityNegotiation {
         let expected_dplpmtud = report.dplpmtud;
         conn.send_control_frame(&ControlFrame::CapabilityReport(report))
             .await?;
-        loop {
-            let response = conn.next_control_frame().await?;
-            match response {
-                ControlFrame::CapabilityAck(ack) => {
-                    validate_capability_ack_binding(
-                        &ack,
-                        expected_stream_id,
-                        expected_version,
-                        expected_dplpmtud,
-                        resolution,
-                    )?;
-                    conn.apply_transport_resolution(resolution)?;
-                    conn.finish_setup()?;
-                    if let Some(callback) = record.take() {
-                        callback(&resolution);
-                    }
-                    return Ok((ack, resolution));
-                }
-                ControlFrame::Error(err) => {
-                    return Err(Error::ProtocolViolation(format!(
-                        "peer reported error: {err:?}"
-                    )));
-                }
-                other => {
-                    return Err(Error::ProtocolViolation(format!(
-                        "expected CapabilityAck, received {other:?}"
-                    )));
-                }
+        match conn.next_control_frame().await? {
+            ControlFrame::CapabilityAck(ack) => {
+                validate_capability_ack_binding(
+                    &ack,
+                    expected_stream_id,
+                    expected_version,
+                    expected_dplpmtud,
+                    resolution,
+                )?;
+                conn.apply_transport_resolution(resolution)?;
+                conn.finish_setup()?;
+                record(&resolution);
+                Ok((ack, resolution))
             }
+            ControlFrame::Error(err) => Err(Error::ProtocolViolation(format!(
+                "peer reported error: {err:?}"
+            ))),
+            other => Err(Error::ProtocolViolation(format!(
+                "expected CapabilityAck, received {other:?}"
+            ))),
         }
     }
     /// Await the viewer's capability report (publisher side).
@@ -1398,7 +1385,6 @@ impl CapabilityNegotiation {
     where
         F: FnOnce(&TransportCapabilityResolution),
     {
-        let mut record = Some(record);
         let viewer_caps = match conn.next_control_frame().await? {
             ControlFrame::TransportCapabilities(frame) => {
                 if frame.endpoint_role != streaming::CapabilityRole::Viewer {
@@ -1424,51 +1410,42 @@ impl CapabilityNegotiation {
             endpoint_role: streaming::CapabilityRole::Publisher,
             capabilities: conn.normalize_local_transport_capabilities(capabilities),
         };
-        conn.send_control_frame(&ControlFrame::TransportCapabilities(local_frame.clone()))
+        conn.send_control_frame(&ControlFrame::TransportCapabilities(local_frame))
             .await?;
         let mut resolution = streaming::resolve_transport_capabilities(
             &local_frame.capabilities,
             &viewer_caps.capabilities,
         )
         .map_err(Error::TransportCapability)?;
-        loop {
-            let frame = conn.next_control_frame().await?;
-            match frame {
-                ControlFrame::CapabilityReport(report) => {
-                    validate_capability_report(&report)?;
-                    if resolution.use_datagram {
-                        if report.max_datagram_size == 0 {
-                            return Err(Error::ProtocolViolation(
-                                "viewer capability report advertised zero datagram size".into(),
-                            ));
-                        }
-                        resolution.max_segment_datagram_size = resolution
-                            .max_segment_datagram_size
-                            .min(report.max_datagram_size);
+        match conn.next_control_frame().await? {
+            ControlFrame::CapabilityReport(report) => {
+                validate_capability_report(&report)?;
+                if resolution.use_datagram {
+                    if report.max_datagram_size == 0 {
+                        return Err(Error::ProtocolViolation(
+                            "viewer capability report advertised zero datagram size".into(),
+                        ));
                     }
-                    conn.apply_transport_resolution(resolution)?;
-                    conn.pending_publisher_ack = Some(PendingCapabilityAck {
-                        stream_id: report.stream_id,
-                        protocol_version: report.protocol_version,
-                        dplpmtud: report.dplpmtud,
-                        resolution,
-                    });
-                    if let Some(callback) = record.take() {
-                        callback(&resolution);
-                    }
-                    return Ok((report, resolution));
+                    resolution.max_segment_datagram_size = resolution
+                        .max_segment_datagram_size
+                        .min(report.max_datagram_size);
                 }
-                ControlFrame::Error(err) => {
-                    return Err(Error::ProtocolViolation(format!(
-                        "peer reported error: {err:?}"
-                    )));
-                }
-                other => {
-                    return Err(Error::ProtocolViolation(format!(
-                        "expected CapabilityReport, received {other:?}"
-                    )));
-                }
+                conn.apply_transport_resolution(resolution)?;
+                conn.pending_publisher_ack = Some(PendingCapabilityAck {
+                    stream_id: report.stream_id,
+                    protocol_version: report.protocol_version,
+                    dplpmtud: report.dplpmtud,
+                    resolution,
+                });
+                record(&resolution);
+                Ok((report, resolution))
             }
+            ControlFrame::Error(err) => Err(Error::ProtocolViolation(format!(
+                "peer reported error: {err:?}"
+            ))),
+            other => Err(Error::ProtocolViolation(format!(
+                "expected CapabilityReport, received {other:?}"
+            ))),
         }
     }
 }
@@ -1533,11 +1510,8 @@ impl ControlStreamWriter {
         stream
             .write_u8(direction.marker())
             .await
-            .map_err(|e| Error::Io(std::io::Error::from(e)))?;
-        stream
-            .flush()
-            .await
-            .map_err(|e| Error::Io(std::io::Error::from(e)))?;
+            .map_err(Error::Io)?;
+        stream.flush().await.map_err(Error::Io)?;
         Ok(Self { stream })
     }
     async fn send_frame(&mut self, frame: &ControlFrame) -> Result<()> {
@@ -1551,15 +1525,12 @@ impl ControlStreamWriter {
         self.stream
             .write_u32_le(bytes.len() as u32)
             .await
-            .map_err(|e| Error::Io(std::io::Error::from(e)))?;
+            .map_err(Error::Io)?;
         self.stream
             .write_all(&bytes)
             .await
             .map_err(|e| Error::Io(std::io::Error::from(e)))?;
-        self.stream
-            .flush()
-            .await
-            .map_err(|e| Error::Io(std::io::Error::from(e)))?;
+        self.stream.flush().await.map_err(Error::Io)?;
         Ok(())
     }
 }
@@ -2286,7 +2257,7 @@ mod tests {
             resolution,
         )
         .expect("matching ack accepted");
-        let mut wrong_stream = valid_ack.clone();
+        let mut wrong_stream = valid_ack;
         wrong_stream.stream_id = hash(12);
         let err = validate_capability_ack_binding(
             &wrong_stream,
@@ -2300,7 +2271,7 @@ mod tests {
             Error::ProtocolViolation(reason) => assert!(reason.contains("stream_id")),
             other => panic!("unexpected error: {other:?}"),
         }
-        let mut wrong_version = valid_ack.clone();
+        let mut wrong_version = valid_ack;
         wrong_version.accepted_version = 2;
         let err = validate_capability_ack_binding(
             &wrong_version,
@@ -2380,11 +2351,7 @@ mod tests {
                 };
                 let (report, transport_resolution) = within(
                     "publisher_handshake",
-                    CapabilityNegotiation::publisher_handshake(
-                        &mut conn,
-                        publisher_caps.clone(),
-                        |_| {},
-                    ),
+                    CapabilityNegotiation::publisher_handshake(&mut conn, publisher_caps, |_| {}),
                 )
                 .await
                 .expect("report");
@@ -2403,7 +2370,7 @@ mod tests {
                     max_datagram_size: transport_resolution.max_segment_datagram_size,
                     dplpmtud: report.dplpmtud,
                 };
-                let ack_frame = ControlFrame::CapabilityAck(ack.clone());
+                let ack_frame = ControlFrame::CapabilityAck(ack);
                 within("send_ack", conn.send_control_frame(&ack_frame))
                     .await
                     .expect("ack");
@@ -2578,16 +2545,12 @@ mod tests {
                 let publisher_caps = TransportCapabilities::kyber768_default();
                 let (report, resolution) = within(
                     "publisher_handshake",
-                    CapabilityNegotiation::publisher_handshake(
-                        &mut conn,
-                        publisher_caps.clone(),
-                        |_| {},
-                    ),
+                    CapabilityNegotiation::publisher_handshake(&mut conn, publisher_caps, |_| {}),
                 )
                 .await
                 .expect("handshake");
                 session
-                    .record_transport_capabilities(resolution.clone())
+                    .record_transport_capabilities(resolution)
                     .expect("negotiated transport capabilities are valid");
                 let ack = CapabilityAck {
                     stream_id: report.stream_id,

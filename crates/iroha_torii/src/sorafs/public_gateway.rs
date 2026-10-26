@@ -1,4 +1,4 @@
-//! Public, local-only SoraFS CID and site gateway routes.
+//! Public, local-only `SoraFS` CID and site gateway routes.
 //!
 //! These routes are deliberately independent of Torii's optional application
 //! API.  They never accept a client storage token: a canonical manifest already
@@ -44,7 +44,7 @@ fn json_error(status: StatusCode, code: &'static str, message: impl Into<String>
         status,
         JsonBody(json_object(vec![
             json_entry("error", code),
-            json_entry("message", message.into()),
+            json_entry("message", &(message.into())),
         ])),
     )
         .into_response()
@@ -194,7 +194,7 @@ pub async fn handle_get_sorafs_site_path(
     handle_get_sorafs_site_path_inner(State(state), headers, Path(raw_path)).await
 }
 
-/// Return whether the canonical request host selects a configured public SoraFS site.
+/// Return whether the canonical request host selects a configured public `SoraFS` site.
 pub fn request_host_selects_site(state: &SharedAppState, headers: &HeaderMap) -> bool {
     request_host_selects_site_inner(state, headers)
 }
@@ -769,8 +769,8 @@ fn compliance_decision_response(
                 StatusCode::UNAVAILABLE_FOR_LEGAL_REASONS,
                 JsonBody(json_object(vec![
                     json_entry("error", "gateway_compliance_denied"),
-                    json_entry("source", source),
-                    json_entry("catalog_digest_hex", hex::encode(digest)),
+                    json_entry("source", &(source)),
+                    json_entry("catalog_digest_hex", &(hex::encode(digest))),
                 ])),
             )
                 .into_response();
@@ -927,24 +927,24 @@ async fn handle_get_sorafs_site_manifest_inner(
     }
     let (files, file_count, truncated_files) = manifest_listing(&resolved.stored, limit);
     JsonBody(json_object(vec![
-        json_entry("hostname", resolved.hostname),
+        json_entry("hostname", &(resolved.hostname)),
         json_entry(
             "content_cid",
-            super::site::encode_content_cid(resolved.stored.manifest_cid()),
+            &(super::site::encode_content_cid(resolved.stored.manifest_cid())),
         ),
         json_entry(
             "manifest_digest_hex",
-            hex::encode(resolved.stored.manifest_digest()),
+            &(hex::encode(resolved.stored.manifest_digest())),
         ),
-        json_entry("manifest_id_hex", resolved.stored.manifest_id()),
-        json_entry("manifest_b64", BASE64_STANDARD.encode(manifest_bytes)),
-        json_entry("index_document", resolved.index_document),
-        json_entry("spa_fallback", resolved.spa_fallback),
-        json_entry("file_count", file_count as u64),
-        json_entry("returned_file_count", files.len() as u64),
-        json_entry("limit", limit as u64),
-        json_entry("truncated_files", truncated_files),
-        json_entry("files", Value::Array(files)),
+        json_entry("manifest_id_hex", &(resolved.stored.manifest_id())),
+        json_entry("manifest_b64", &(BASE64_STANDARD.encode(manifest_bytes))),
+        json_entry("index_document", &(resolved.index_document)),
+        json_entry("spa_fallback", &(resolved.spa_fallback)),
+        json_entry("file_count", &(file_count as u64)),
+        json_entry("returned_file_count", &(files.len() as u64)),
+        json_entry("limit", &(limit as u64)),
+        json_entry("truncated_files", &(truncated_files)),
+        json_entry("files", &(Value::Array(files))),
     ]))
     .into_response()
 }
@@ -1020,15 +1020,18 @@ async fn handle_get_sorafs_cid_lookup_inner(
     JsonBody(json_object(vec![
         json_entry(
             "content_cid",
-            super::site::encode_content_cid(stored.manifest_cid()),
+            &(super::site::encode_content_cid(stored.manifest_cid())),
         ),
-        json_entry("manifest_digest_hex", hex::encode(stored.manifest_digest())),
-        json_entry("manifest_id_hex", stored.manifest_id()),
-        json_entry("file_count", file_count as u64),
-        json_entry("returned_file_count", files.len() as u64),
-        json_entry("limit", limit as u64),
-        json_entry("truncated_files", truncated_files),
-        json_entry("files", Value::Array(files)),
+        json_entry(
+            "manifest_digest_hex",
+            &(hex::encode(stored.manifest_digest())),
+        ),
+        json_entry("manifest_id_hex", &(stored.manifest_id())),
+        json_entry("file_count", &(file_count as u64)),
+        json_entry("returned_file_count", &(files.len() as u64)),
+        json_entry("limit", &(limit as u64)),
+        json_entry("truncated_files", &(truncated_files)),
+        json_entry("files", &(Value::Array(files))),
     ]))
     .into_response()
 }

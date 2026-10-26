@@ -80,12 +80,16 @@ impl NativeFoldWorkerV1 {
         if source == [0; 32]
             || input.signatures.len() != q.signatures().len()
             || checkpoints.len() > q.keys().len()
-            || input.own.is_some() != q.sigma().is_some_and(|sigma| sigma.has_own())
+            || input.own.is_some()
+                != q.sigma()
+                    .is_some_and(iroha_kagemusha_proof::q_sigma::QSigmaPlan::has_own)
         {
             return Err(Error::Proof("Q source schedule"));
         }
         let q_params = self.installed.verifier().pallas_parameters();
-        let requires_fold = q.sigma().is_some_and(|sigma| sigma.requires_private_fold());
+        let requires_fold = q
+            .sigma()
+            .is_some_and(iroha_kagemusha_proof::q_sigma::QSigmaPlan::requires_private_fold);
         let (sigma, expected, checked, retains) = if let Some(state) =
             retained.filter(|state| state.checked.len() <= checkpoints.len())
         {
@@ -216,7 +220,7 @@ impl NativeFoldWorkerV1 {
             let owner = self
                 .sources
                 .bind_q_cancellable(route, stage, self.read, Some(cancellation.prover_token()))
-                .map_err(artifact)?;
+                .map_err(|error| artifact(&error))?;
             let config = self.prover_config(cancellation, owner.binding().descriptor());
             cancellation.check()?;
             fold_metrics::enter(FoldPhaseV1::Prove);
@@ -248,8 +252,10 @@ impl NativeFoldWorkerV1 {
             return Err(Error::Proof("Q native source values"));
         }
         let bytes = q_checkpoint::encode(
-            &q.keys()[stage],
-            q_params,
+            q_checkpoint::VerificationKey {
+                key: &q.keys()[stage],
+                params: q_params,
+            },
             stage,
             source,
             &original,

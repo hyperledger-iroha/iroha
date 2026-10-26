@@ -4,7 +4,7 @@ use iroha_crypto::{Algorithm, PublicKey};
 ///
 /// Uses checked algorithm access, so a key whose algorithm cannot be decoded
 /// is treated as not BLS-normal instead of panicking.
-pub(crate) fn is_bls_normal_public_key(public_key: &PublicKey) -> bool {
+pub fn is_bls_normal_public_key(public_key: &PublicKey) -> bool {
     public_key
         .try_algorithm()
         .is_ok_and(|algorithm| algorithm == Algorithm::BlsNormal)

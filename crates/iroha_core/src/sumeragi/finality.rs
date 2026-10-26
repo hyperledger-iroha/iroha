@@ -161,17 +161,16 @@ impl<V: StateReadOnly> FinalityProofReader<'_, V> {
         if let Some(change_original) = self.before_verified.take() {
             change_original();
         }
-        let result = match self.chain.as_ref() {
-            Some(chain) => proof_from_chain(chain, height),
-            None => {
-                let mut chain = CertifiedChain::new(self.view)?;
-                chain.enable_proof_source_cut();
-                let result = proof_from_chain(&chain, height);
-                if result.is_ok() {
-                    self.chain = Some(chain);
-                }
-                result
+        let result = if let Some(chain) = self.chain.as_ref() {
+            proof_from_chain(chain, height)
+        } else {
+            let mut chain = CertifiedChain::new(self.view)?;
+            chain.enable_proof_source_cut();
+            let result = proof_from_chain(&chain, height);
+            if result.is_ok() {
+                self.chain = Some(chain);
             }
+            result
         };
         match result {
             Err(error) => {
@@ -241,6 +240,10 @@ fn proof_from_chain<V: StateReadOnly>(
     proof_from_certified(chain.certified(height)?, height)
 }
 
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Consume the authenticated receipt so its retained native storage retires before the caller continues."
+)]
 fn proof_from_certified(
     certified: CertifiedBlock,
     height: u64,

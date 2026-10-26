@@ -1,4 +1,4 @@
-//! Actual TxOverlay admission, executor authorization and execution of atomic settlements.
+//! Actual `TxOverlay` admission, executor authorization and execution of atomic settlements.
 
 use super::*;
 use crate::state::{State, StateBlock, World};
@@ -94,7 +94,8 @@ fn set_source_delta_limit(
         )
         .expect("exact atomic fixture fits its bounded sizing corpus");
     assert_eq!(measured.deltas, transcript.deltas.len());
-    let mut parameters = world.parameters.block();
+    let mut parameters = crate::state::parameter_cell_block_for_testing(world)
+        .expect("funded original parameter-only fixture block");
     let baseline = parameters.get().block().fastpq_source();
     let mut intrinsic = baseline.intrinsic;
     intrinsic.max_transcripts = intrinsic
@@ -130,10 +131,12 @@ fn set_source_delta_limit(
         u64::try_from(measured.total_statement_bytes).unwrap()
             <= profile.intrinsic.max_total_statement_bytes
     );
-    parameters
-        .get_mut()
-        .set_parameter(Parameter::Block(BlockParameter::FastpqSource(profile)))
-        .expect("valid fixture parameters");
+    crate::state::set_parameter_cell_for_testing(
+        &mut parameters,
+        Parameter::Block(BlockParameter::FastpqSource(profile)),
+        world.sccp_committee_generations.allocation_budget(),
+    )
+    .expect("valid fixture parameters");
     parameters.commit();
     profile
 }

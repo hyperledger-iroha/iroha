@@ -17,9 +17,9 @@ fn complete_q_identity_preflight_rejects_missing_foreign_duplicate_and_reordered
     let expected: Vec<_> = (0..3).map(|program| (installation, program)).collect();
     require_program_identities(installation, 3, expected.clone().into_iter()).unwrap();
     for count in [0, 1, 2, 4] {
-        let values: Vec<_> = (0..count).map(|program| (installation, program)).collect();
+        let values = (0..count).map(|program| (installation, program));
         assert!(matches!(
-            require_program_identities(installation, 3, values.into_iter()),
+            require_program_identities(installation, 3, values),
             Err(Error::Inventory)
         ));
     }
@@ -152,7 +152,7 @@ fn expected_reads(inventory: &ProducerInventoryV1, record: &OperationV1) -> Vec<
 
 /// Exercise source reuse only after the public whole-wallet constructor succeeded.
 /// No production cache can be seeded by this cfg(test)-private helper.
-pub(crate) fn assert_receive_alias_controls(
+pub fn assert_receive_alias_controls(
     qualified: &QualifiedWalletSourcesV1,
     installed: &InstalledVerifierPackV1,
     source: &mut dyn OriginalSourceV1,
@@ -167,14 +167,14 @@ pub(crate) fn assert_receive_alias_controls(
     )
 }
 
-pub(crate) fn assert_builtin_receive_alias_controls(
+pub fn assert_builtin_receive_alias_controls(
     qualified: &QualifiedWalletSourcesV1,
     installed: &InstalledVerifierPackV1,
     source: &mut dyn OriginalSourceV1,
     config: ReadConfig,
-    profile: &iroha_plonk::keys::BuiltinSourceProfileV1,
+    profile: iroha_plonk::keys::BuiltinSourceProfileV1,
 ) -> usize {
-    let admission = super::super::super::builtin::Admission::Builtin(profile);
+    let admission = super::super::super::builtin::Admission::Builtin(&profile);
     let cases = assert_alias_controls(qualified, installed, source, config, admission);
     // The phone path: the built-in route stage on 1, 2, 4 and 8 workers over an
     // immutable copy of the same originals. Counted apart from the alias cases.
@@ -197,6 +197,15 @@ fn assert_alias_controls(
     config: ReadConfig,
     admission: super::super::super::builtin::Admission<'_>,
 ) -> usize {
+    struct Unavailable {
+        opens: usize,
+    }
+    impl OriginalSourceV1 for Unavailable {
+        fn open(&mut self, _: [u8; 32]) -> Result<Box<dyn Read + '_>, Error> {
+            self.opens += 1;
+            Err(Error::Unavailable)
+        }
+    }
     let inventory = qualified.inventory();
     let authenticated = installed
         .authenticate_producer_inventory(&inventory.to_canonical_bytes().unwrap())
@@ -278,15 +287,6 @@ fn assert_alias_controls(
     assert!(observed.opens.is_empty());
     assert!(events.is_empty());
     drop(observed);
-    struct Unavailable {
-        opens: usize,
-    }
-    impl OriginalSourceV1 for Unavailable {
-        fn open(&mut self, _: [u8; 32]) -> Result<Box<dyn Read + '_>, Error> {
-            self.opens += 1;
-            Err(Error::Unavailable)
-        }
-    }
     let mut unavailable = Unavailable { opens: 0 };
     let mut events = Vec::new();
     assert!(
@@ -1290,12 +1290,11 @@ fn same_routes(
     let mut owners: BTreeMap<u32, &Arc<receive::Prover>> = BTreeMap::new();
     for &route in actual {
         if let QualifiedOperationOwnerV1::Receive(owner) = route.owner() {
-            match owners.get(&route.identity().2) {
-                Some(lead) => assert!(Arc::ptr_eq(lead, owner)),
-                None => {
-                    assert!(owners.values().all(|other| !Arc::ptr_eq(other, owner)));
-                    owners.insert(route.identity().2, owner);
-                }
+            if let Some(lead) = owners.get(&route.identity().2) {
+                assert!(Arc::ptr_eq(lead, owner));
+            } else {
+                assert!(owners.values().all(|other| !Arc::ptr_eq(other, owner)));
+                owners.insert(route.identity().2, owner);
             }
         }
     }

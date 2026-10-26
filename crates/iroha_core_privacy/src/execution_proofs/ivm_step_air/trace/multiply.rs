@@ -124,6 +124,7 @@ fn correction_residues(
 /// selected division/square mode minus its fixed trap flag, never a witness bit.
 /// Other is a disjoint private workspace owner; public trace callers keep zero.
 /// Active convolution, inactive carries and signed corrections have distinct masks.
+#[derive(Clone, Copy)]
 pub(in super::super) struct Selection {
     pub(in super::super) multiply: F,
     pub(in super::super) division: F,

@@ -161,7 +161,7 @@ fn certified_retention_ambiguous_cas_restart_and_successor_capture_preserve_exac
     let second = archive
         .reconcile_certified_state_tip(&chain.state().query_view(), chain.kura())
         .unwrap();
-    let floor = first.qualification.archive_tip().clone();
+    let floor = *first.qualification.archive_tip();
     let fence = archive.retention_fence_for(&floor).unwrap();
     let proposal = archive
         .prepare_certified_compaction(&fence, &chain.state().query_view(), chain.kura())
@@ -184,7 +184,7 @@ fn certified_retention_ambiguous_cas_restart_and_successor_capture_preserve_exac
     assert_eq!(installed.generation(), archive.health_generation().unwrap());
     assert_eq!(
         archive.retention_floor(&chain.network_id()).unwrap(),
-        Some(floor.clone())
+        Some(floor)
     );
     assert_eq!(fs::read_dir(&archive.anchors).unwrap().count(), 1);
     let certified_id =

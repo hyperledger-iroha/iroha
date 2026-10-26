@@ -11,7 +11,7 @@ fn unique_staged_bytes<'a>(writes: &'a [(StatePath, Vec<u8>)], path: &StatePath)
 /// Decode only the exact staged head, immutable row and state for test assertions.
 ///
 /// This does not validate or install a complete history, including in capacity-tail fixtures.
-pub(crate) fn staged_control<P: CustodyPurpose>(
+pub fn staged_control<P: CustodyPurpose>(
     writes: &[(StatePath, Vec<u8>)],
     deployment: &str,
 ) -> NativeControl<P> {

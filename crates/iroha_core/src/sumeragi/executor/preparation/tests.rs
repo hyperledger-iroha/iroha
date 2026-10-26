@@ -51,7 +51,7 @@ fn certificate_capacity_refusal_reaches_scheduler_with_original_release_and_exec
                 _ => panic!("retain original executed phase"),
             };
             let mut scheduler = ExecSched::new(1, Backoff::default(), scheduler_registration);
-            scheduler.bind_release_thread(original_thread);
+            scheduler.bind_release_thread(&original_thread);
             scheduler.commit(body.clone(), qc.clone());
             let Some(ExecOp::Prepare(original)) = scheduler.next(0) else {
                 panic!("prepare same original commit");
@@ -485,7 +485,7 @@ fn cold_prepare_refusal_retains_original_finishing_owner_and_exact_release() {
             }));
             let retained = budget.reserved_bytes();
             let mut scheduler = ExecSched::new(1, Backoff::default(), scheduler_registration);
-            scheduler.bind_release_thread(original_thread);
+            scheduler.bind_release_thread(&original_thread);
             scheduler.commit(body.clone(), qc.clone());
             let Some(ExecOp::Prepare(original)) = scheduler.next(0) else {
                 panic!("cold prepare retains the original queued decision");

@@ -263,7 +263,6 @@ pub(super) fn inputs_from_nexus(
             dataspace_id,
             autoscale_validator_set,
             validator_mode,
-            minimum_stake: nexus.staking.min_validator_stake.clone(),
             max_validators: nexus.staking.max_validators.get(),
         },
         manifest_authority_lanes,
@@ -300,12 +299,13 @@ fn live_dataspace_stake_candidates(
     inputs: &ResolvedLaneAuthorityInputs,
     block_height: u64,
 ) -> Option<Vec<(AccountId, PeerId, Quantity)>> {
+    let monetary = world.parameters().require_staking_policy().ok()?;
     live_stake_candidates_for_lanes(
         world,
         target_lane,
         &inputs.staking_authority_lanes,
         inputs.staking_owner_lane,
-        &inputs.bounded.minimum_stake,
+        &monetary.min_validator_stake,
         inputs.bounded.max_validators,
         block_height,
     )
@@ -335,7 +335,6 @@ pub(super) fn live_stake_candidates_for_lanes(
                 &record.self_stake,
                 minimum_stake,
             )
-            .unwrap_or(false)
             || !world.peers().iter().any(|peer| peer == &record.peer_id)
             || !peer_has_live_consensus_key_for_lane(
                 world,
@@ -438,10 +437,13 @@ pub(super) fn validator_accounts_with_inputs(
             iroha_config::parameters::actual::LaneValidatorMode::StakeElected
         )
     {
+        let Ok(monetary) = world.parameters().require_staking_policy() else {
+            return Vec::new();
+        };
         return bounded_authority::stake_elected_validator_accounts(
             world,
             lane_id,
-            &inputs.bounded.minimum_stake,
+            &monetary.min_validator_stake,
             inputs.bounded.max_validators,
             block_height,
         );
@@ -501,10 +503,14 @@ pub(super) fn peer_pool_with_inputs(
             iroha_config::parameters::actual::LaneValidatorMode::StakeElected
         )
     {
+        let monetary = world
+            .parameters()
+            .require_staking_policy()
+            .map_err(|_| ())?;
         return Ok(bounded_authority::stake_elected_peer_ids(
             world,
             lane_id,
-            &inputs.bounded.minimum_stake,
+            &monetary.min_validator_stake,
             inputs.bounded.max_validators,
             block_height,
         ));
@@ -520,13 +526,13 @@ pub(super) fn peer_pool_with_inputs(
 ///
 /// Every transaction executes in the global Sumeragi block, so lanes and dataspaces are routing
 /// labels. An active route binds the exact authenticated epoch committee retained for
-/// `authority_height`, in canonical order, shared with QueuePlan admission. Live registrations
+/// `authority_height`, in canonical order, shared with `QueuePlan` admission. Live registrations
 /// cannot replace that authority. The reported fault tolerance is the global `(n − 1) / 3`.
 ///
 /// # Errors
 /// The dataspace is unknown, the lane is inactive, or the retained authenticated schedule is
 /// absent, malformed, pending its boundary, or does not cover `authority_height`.
-pub(crate) fn resolve_global_route(
+pub fn resolve_global_route(
     world: &impl WorldReadOnly,
     route: LaneAuthorityRoute,
     nexus: &iroha_config::parameters::actual::Nexus,

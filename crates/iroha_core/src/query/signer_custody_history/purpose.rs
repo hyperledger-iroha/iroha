@@ -15,9 +15,9 @@ use iroha_data_model::sorafs::{
 };
 
 #[cfg(test)]
-pub(crate) struct ManifestPurpose;
-pub(crate) struct ReceiptPurpose;
-pub(crate) struct AccountPurpose;
+pub struct ManifestPurpose;
+pub struct ReceiptPurpose;
+pub struct AccountPurpose;
 
 macro_rules! purpose {
     ($purpose:ident, $record:ident, $execution:ident, $namespace:literal, $domain:path,

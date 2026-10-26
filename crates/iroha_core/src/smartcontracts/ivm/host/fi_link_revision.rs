@@ -49,7 +49,7 @@ impl QueryStateRef<'_, '_, '_> {
     }
 }
 
-impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
+impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     pub(super) fn execute_fi_link_revision(
         &mut self,
         vm: &mut IVM,
@@ -75,7 +75,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             .query_state
             .get()
             .ok_or(ivm::VMError::NotImplemented { syscall })?;
-        let (revision, stats) = state.fi_link_revision(
+        let (revision, execution_stats) = state.fi_link_revision(
             &self.effect_authority(),
             context,
             &definition,
@@ -89,8 +89,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             vm,
             remaining,
             &gas_context,
-            stats.processed_items(),
-            stats.processed_bytes(),
+            execution_stats.processed_items(),
+            execution_stats.processed_bytes(),
             length,
         )?;
         vm.preflight_host_tlv_allocations_with_reserved_heap(&[encoded.len()], 0)?;
@@ -145,7 +145,7 @@ mod tests {
         let mut block = state.block(header());
         let mut tx = block.transaction();
         f.install(&mut tx);
-        let mut host: CoreHostImpl<QueryStateSlot<_>> = CoreHostImpl::new(f.owner.clone());
+        let mut host: CoreHostImpl<'_, '_, QueryStateSlot<_>> = CoreHostImpl::new(f.owner.clone());
         host.set_query_state(&tx);
         host.set_contract_runtime_context(Some(f.context.clone()));
         let mut vm = arguments(&f, 50_000_000);
@@ -153,14 +153,14 @@ mod tests {
             .syscall(ivm::syscalls::SYSCALL_ASSET_FI_LINK_REVISION, &mut vm)
             .unwrap();
         assert_revision(&vm, vm.register(10), u64::MAX);
-        let (_, stats) = f.read(tx.world()).unwrap();
+        let (_, execution_stats) = f.read(tx.world()).unwrap();
         let encoded = ivm_abi::numeric_tlv::encode_int(&BigInt::from(u64::MAX)).unwrap();
         assert_eq!(
             gas,
             CoreHost::query_gas_cost(
                 &QueryGasContext::singular(),
-                stats.processed_items(),
-                stats.processed_bytes() + encoded.len() as u64
+                execution_stats.processed_items(),
+                execution_stats.processed_bytes() + encoded.len() as u64
             )
         );
         assert!(host.queued.is_empty());
@@ -208,7 +208,8 @@ mod tests {
         let mut tx = block.transaction();
         f.install(&mut tx);
         for defect in 0..5 {
-            let mut host: CoreHostImpl<QueryStateSlot<_>> = CoreHostImpl::new(f.owner.clone());
+            let mut host: CoreHostImpl<'_, '_, QueryStateSlot<_>> =
+                CoreHostImpl::new(f.owner.clone());
             host.set_query_state(&tx);
             let mut context = f.context.clone();
             if defect == 1 {
@@ -256,14 +257,18 @@ mod tests {
         let mut block = state.block(header());
         let mut tx = block.transaction();
         f.install(&mut tx);
-        let mut host: CoreHostImpl<QueryStateSlot<_>> = CoreHostImpl::new(f.owner.clone());
+        let mut host: CoreHostImpl<'_, '_, QueryStateSlot<_>> = CoreHostImpl::new(f.owner.clone());
         host.set_query_state(&tx);
         host.set_contract_runtime_context(Some(f.context.clone()));
         let mut vm = arguments(&f, 50_000_000);
         let next = vm.alloc_input_tlv(&[]).unwrap() - ivm::Memory::INPUT_START;
-        vm.alloc_input_tlv(&vec![0; (ivm::Memory::INPUT_SIZE - next) as usize])
-            .unwrap();
-        let heap_before = (vm.alloc_heap(0).unwrap() - ivm::Memory::HEAP_START);
+        vm.alloc_input_tlv(&vec![
+            0;
+            usize::try_from(ivm::Memory::INPUT_SIZE - next)
+                .expect("remaining input fits usize")
+        ])
+        .unwrap();
+        let heap_before = vm.alloc_heap(0).unwrap() - ivm::Memory::HEAP_START;
         vm.memory.set_heap_limit(heap_before).unwrap();
         let before = vm.register(10);
         assert!(matches!(
@@ -301,14 +306,14 @@ mod tests {
         ));
     }
 
-    const SOURCE: &str = r#"seiyaku FiRevision {
+    const SOURCE: &str = r"seiyaku FiRevision {
         view fn revision(AssetDefinitionId asset, AccountId wallet, AccountId fi) authorize(anyone) -> int {
             ledger::fi::link_revision(asset_definition: asset, account: wallet, expected_fi: fi)
         }
-    }"#;
+    }";
     // Observation only: real compiled bytecode and CoreHost perform every read/check.
     struct GasProbe<QS: Default + QueryStateAccess> {
-        inner: CoreHostImpl<QS>,
+        inner: CoreHostImpl<'static, 'static, QS>,
         before: std::cell::Cell<Option<u64>>,
         reserve: Option<u64>,
         actual: Option<u64>,
@@ -334,7 +339,7 @@ mod tests {
                 assert!(self.reserve.replace(vm.syscall_reserved_gas()).is_none());
                 assert!(vm.syscall_reserved_gas() > 0);
                 self.input_before = Some(vm.alloc_input_tlv(&[]).unwrap());
-                self.heap_before = Some((vm.alloc_heap(0).unwrap() - ivm::Memory::HEAP_START));
+                self.heap_before = Some(vm.alloc_heap(0).unwrap() - ivm::Memory::HEAP_START);
                 self.register_before = Some(vm.register(10));
             }
             let result = self.inner.syscall(number, vm);
@@ -375,7 +380,7 @@ mod tests {
         let prepared =
             ivm::prepare_argument_record_with_gas_limit(schema, Arc::from(canonical), gas_limit)
                 .unwrap();
-        let mut inner: CoreHostImpl<QueryStateSlot<_>> = CoreHostImpl::new(f.owner.clone());
+        let mut inner: CoreHostImpl<'_, '_, QueryStateSlot<_>> = CoreHostImpl::new(f.owner.clone());
         inner.set_query_state(&tx);
         inner.set_contract_runtime_context(Some(f.context.clone()));
         inner.set_entrypoint_argument_record(Some(prepared.clone()));

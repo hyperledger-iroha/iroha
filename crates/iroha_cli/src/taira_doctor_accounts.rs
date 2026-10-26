@@ -158,7 +158,7 @@ fn append_parliament_checks(
                     Some(CANONICAL_BOND_FAUCET_REACH_DETAIL.to_owned()),
                 );
             } else {
-                let detail = format!("{}: {detail}", CANONICAL_BOND_FAUCET_REACH);
+                let detail = format!("{CANONICAL_BOND_FAUCET_REACH}: {detail}");
                 push_check(checks, CANONICAL_BOND_FAUCET_REACH, 200, false, Some(detail.clone()));
                 failures.push(detail);
             }

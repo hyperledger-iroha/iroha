@@ -93,7 +93,7 @@ fn sample_response() -> PipelinePreflightResponse {
 /// Encode the sample exactly as `handler_pipeline_preflight` answers a JSON request.
 async fn served_json_body() -> Vec<u8> {
     let response =
-        crate::utils::respond_with_format(sample_response(), crate::utils::ResponseFormat::Json);
+        crate::utils::respond_with_format(&(sample_response()), crate::utils::ResponseFormat::Json);
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
         response

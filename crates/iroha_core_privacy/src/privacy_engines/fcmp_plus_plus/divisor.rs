@@ -442,13 +442,13 @@ impl<F: ProofScalar> ReducedPolynomial<F> {
                     .unwrap_or(F::ZERO)
             })
             .collect();
-        let max_x = normalized
+        let pure_x_degree = normalized
             .terms
             .keys()
             .filter_map(|(y_power, x_power)| (*y_power == 0).then_some(*x_power))
             .max()
             .unwrap_or(0);
-        let x = (1..=max_x)
+        let x = (1..=pure_x_degree)
             .map(|power| {
                 normalized
                     .terms
@@ -509,7 +509,7 @@ fn new_divisor<F: ProofScalar, P: DivisorPoint<F>>(
     let sum = points
         .iter()
         .copied()
-        .fold(P::identity(), |sum, point| sum.add(point));
+        .fold(P::identity(), DivisorPoint::add);
     if !sum.is_identity() {
         return Err(FcmpNativeErrorV1::ArithmeticInvariant);
     }
@@ -520,8 +520,8 @@ fn new_divisor<F: ProofScalar, P: DivisorPoint<F>>(
         let second = points.get(index + 1).copied();
         divisors.push((
             2_usize,
-            first.add(second.unwrap_or(P::identity())),
-            line(first, second.unwrap_or(first.negate()))?,
+            first.add(second.unwrap_or_else(P::identity)),
+            line(first, second.unwrap_or_else(|| first.negate()))?,
         ));
         index += 2;
     }

@@ -68,8 +68,7 @@ impl Schedule {
 /// constrained in that relation; consistency alone cannot authorize its writes.
 pub(super) fn append_residues(
     out: &mut impl crate::execution_proofs::ivm_step_air::residues::Sink,
-    row: &[F; ROW_WIDTH],
-    next: &[F; ROW_WIDTH],
+    (row, next): (&[F; ROW_WIDTH], &[F; ROW_WIDTH]),
     aux: &[F],
     next_aux: &[F],
     fixed: &[F; FIXED_WIDTH],

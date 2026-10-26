@@ -393,9 +393,9 @@ async fn bounded_snapshot_reader_rejects_symlink_and_hardlink() {
 #[tokio::test]
 async fn snapshot_publication_rejects_body_without_original_execution() {
     let kura = Kura::blank_kura_for_testing();
-    let mut state = state_factory_with_kura(Arc::clone(&kura));
+    let mut state = state_factory_with_kura(&kura);
     let block = signed_block_with_transaction(accepted_log_transaction("unexecuted body"));
-    store_block_and_mark_state_height(&mut state, &kura, block);
+    store_block_and_mark_state_height(&mut state, &kura, &(block));
     let root = tempdir().unwrap();
     let store = root.path().join("snapshot");
     let error = try_write_snapshot(
@@ -465,7 +465,7 @@ async fn snapshot_commit_evidence_refusal_retains_original_pool_and_captured_pub
         source.append(&wire).unwrap();
         let mut decoder =
             iroha_data_model::block::PreparedSignedBlockSignaturesDecode::new(&census).unwrap();
-        let decoded = decoder
+        let restored = decoder
             .decode(
                 &source,
                 norito::core::SequenceSpan {
@@ -475,7 +475,7 @@ async fn snapshot_commit_evidence_refusal_retains_original_pool_and_captured_pub
                 norito::canonical_decode_limits(wire.len()),
             )
             .unwrap();
-        assert_eq!(decoded.encode_wire().unwrap(), wire);
+        assert_eq!(restored.encode_wire().unwrap(), wire);
         let peak = census.peak_reserved_bytes() - wire.len();
         drop(decoder);
         let retained = census.reserved_bytes() - wire.len();
@@ -682,7 +682,7 @@ async fn snapshot_fixture_key_generation_preserves_algorithm() {
         Algorithm::BlsNormal
     );
 }
-fn state_factory_with_kura_and_chain(kura: Arc<Kura>, chain_id: ChainId) -> State {
+fn state_factory_with_kura_and_chain(kura: &Arc<Kura>, chain_id: ChainId) -> State {
     let query_handle = LiveQueryStore::start_test();
     let world = crate::queue::tests::world_with_test_domains();
     // Retain the same original pool as every admitted World field. A fresh
@@ -691,7 +691,7 @@ fn state_factory_with_kura_and_chain(kura: Arc<Kura>, chain_id: ChainId) -> Stat
     let mut state = State::try_new_with_chain(
         budget,
         world,
-        Arc::clone(&kura),
+        Arc::clone(kura),
         query_handle,
         chain_id,
         #[cfg(feature = "telemetry")]
@@ -719,11 +719,11 @@ fn state_factory_with_kura_and_chain(kura: Arc<Kura>, chain_id: ChainId) -> Stat
     state.configure_test_runtime_defaults();
     state
 }
-fn state_factory_with_kura(kura: Arc<Kura>) -> State {
+fn state_factory_with_kura(kura: &Arc<Kura>) -> State {
     state_factory_with_kura_and_chain(kura, ChainId::from(TEST_CHAIN_ID))
 }
 fn state_factory() -> State {
-    state_factory_with_kura(Kura::blank_kura_for_testing())
+    state_factory_with_kura(&Kura::blank_kura_for_testing())
 }
 fn kura_config_for_snapshot_test(store_dir: &Path, blocks_in_memory: NonZeroUsize) -> KuraConfig {
     KuraConfig {
@@ -1057,7 +1057,7 @@ async fn staged_snapshot_wsv_hash_injects_committed_event_buffer() {
         canonical_snapshot_wsv_hash_with_overrides(
             staged,
             CanonicalWsvOverrides {
-                committed_external_event_buf: Some(committed_event_buffer),
+                external_event_buf: Some(committed_event_buffer),
                 ..CanonicalWsvOverrides::default()
             },
         )
@@ -1077,8 +1077,8 @@ async fn staged_snapshot_wsv_hash_projects_deferred_storage_and_undo_history() {
     let actual = canonical_snapshot_wsv_hash_with_overrides(
         staged,
         CanonicalWsvOverrides {
-            committed_axt_replay_ledger: Some(replay),
-            committed_smart_contract_state: Some(quota),
+            axt_replay_ledger: Some(replay),
+            smart_contract_state: Some(quota),
             ..CanonicalWsvOverrides::default()
         },
     )
@@ -1093,8 +1093,8 @@ async fn staged_snapshot_wsv_hash_projects_deferred_storage_and_undo_history() {
         canonical_snapshot_wsv_hash_with_overrides(
             staged,
             CanonicalWsvOverrides {
-                committed_axt_replay_ledger: Some(r#"{"blocks":{},"revert":{}}"#),
-                committed_smart_contract_state: Some(quota),
+                axt_replay_ledger: Some(r#"{"blocks":{},"revert":{}}"#),
+                smart_contract_state: Some(quota),
                 ..CanonicalWsvOverrides::default()
             },
         )
@@ -1160,7 +1160,7 @@ async fn canonical_wsv_hash_uses_current_mv_cell_values() {
     let state = state_factory();
     let before = canonical_state_snapshot_bytes_for_tests(&state);
     {
-        let mut parameters = state.world.parameters.block();
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world).unwrap();
         let current = parameters.get().clone();
         *parameters.get_mut() = current;
         parameters.commit();
@@ -1190,14 +1190,19 @@ async fn canonical_wsv_hash_uses_current_mv_cell_values() {
 async fn canonical_wsv_hash_sorts_sumeragi_key_algorithm_set() {
     let state = state_factory();
     {
-        let mut parameters = state.world.parameters.block();
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world).unwrap();
         let mut consensus = parameters.sumeragi().clone();
         consensus.key_allowed_algorithms = vec![
             Algorithm::Secp256k1,
             Algorithm::Ed25519,
             Algorithm::Secp256k1,
         ];
-        parameters.set_sumeragi(consensus);
+        crate::state::set_sumeragi_cell_for_testing(
+            &mut parameters,
+            consensus,
+            state.world.sccp_committee_generations.allocation_budget(),
+        )
+        .expect("fund the exact authored consensus key policy");
         parameters.commit();
     }
     let first = canonical_state_snapshot_bytes_for_tests(&state);
@@ -1208,10 +1213,15 @@ async fn canonical_wsv_hash_sorts_sumeragi_key_algorithm_set() {
         Hash::new(&first),
     );
     {
-        let mut parameters = state.world.parameters.block();
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world).unwrap();
         let mut consensus = parameters.sumeragi().clone();
         consensus.key_allowed_algorithms = vec![Algorithm::Ed25519, Algorithm::Secp256k1];
-        parameters.set_sumeragi(consensus);
+        crate::state::set_sumeragi_cell_for_testing(
+            &mut parameters,
+            consensus,
+            state.world.sccp_committee_generations.allocation_budget(),
+        )
+        .expect("fund the exact authored consensus key policy");
         parameters.commit();
     }
     let second = canonical_state_snapshot_bytes_for_tests(&state);
@@ -1351,9 +1361,11 @@ fn snapshot_json_with_mutation(original: &str, mutated: &json::Value) -> String 
             let items: Vec<_> = changes
                 .iter()
                 .enumerate()
-                .map(|(index, value)| match items.get(index) {
-                    Some(original) => snapshot_json_with_mutation(original, value),
-                    None => json::to_json(value).expect("new JSON fixture item"),
+                .map(|(index, value)| {
+                    items.get(index).map_or_else(
+                        || json::to_json(value).expect("new JSON fixture item"),
+                        |original| snapshot_json_with_mutation(original, value),
+                    )
                 })
                 .collect();
             format!("[{}]", items.join(","))
@@ -1445,12 +1457,14 @@ fn publish_test_snapshot_generation(
     let generation = publish_immutable_snapshot_generation(
         store_dir,
         store_identity,
-        &digest_hex,
-        bytes,
-        &digest_line,
-        &signature_hex,
-        &fast_manifest_bytes,
-        &merkle_bytes,
+        (
+            &digest_hex,
+            bytes,
+            &digest_line,
+            &signature_hex,
+            &fast_manifest_bytes,
+            &merkle_bytes,
+        ),
         merkle_limit,
         key_pair.public_key(),
     )
@@ -1477,7 +1491,7 @@ pub(super) fn write_snapshot_bundle_from_bytes(
 fn store_block_and_mark_state_height(
     state: &mut State,
     kura: &Arc<Kura>,
-    block: iroha_data_model::block::SharedSignedBlock,
+    block: &iroha_data_model::block::SharedSignedBlock,
 ) {
     kura.store_block(block.clone()).expect("store block");
     state.push_block_hash_for_testing(block.hash());

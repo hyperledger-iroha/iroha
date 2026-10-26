@@ -64,7 +64,7 @@ fn casting_tle_key(network_id: [u8; 32], tag: u8) -> ValidatedTleKeySessionV1 {
 }
 
 /// Complete enacted attempt state plus the exact timed-OVN stores required by restore.
-pub(crate) struct EnactedParliamentRestoreFixtureV1 {
+pub struct EnactedParliamentRestoreFixtureV1 {
     pub(crate) attempt: ParliamentAttemptStateV1,
     pub(crate) tle_key_sessions: Vec<TleKeySessionPublicStateV1>,
     pub(crate) tle_key_session_rosters: Vec<(TleKeySessionId, Vec<iroha_model_base::peer::PeerId>)>,
@@ -72,14 +72,18 @@ pub(crate) struct EnactedParliamentRestoreFixtureV1 {
     pub(crate) timed_ovn_evidence: Vec<(BallotAttemptId, TimedOvnLifecycleStateV1)>,
 }
 
+type EnactedTleSessionStores<'a> = (
+    &'a mut Vec<TleKeySessionPublicStateV1>,
+    &'a mut Vec<(TleKeySessionId, Vec<iroha_model_base::peer::PeerId>)>,
+    &'a mut Vec<(TleKeySessionId, TleKeySessionLifecycleV1)>,
+);
+
 fn complete_enacted_fixture_hidden_body_with_evidence(
     attempt: &mut ParliamentAttemptStateV1,
     requirement: RequiredParliamentBodyV1,
     election_attempt_id: BodyElectionAttemptId,
     network_id: &NetworkId,
-    tle_key_sessions: &mut Vec<TleKeySessionPublicStateV1>,
-    tle_key_session_rosters: &mut Vec<(TleKeySessionId, Vec<iroha_model_base::peer::PeerId>)>,
-    tle_key_session_lifecycles: &mut Vec<(TleKeySessionId, TleKeySessionLifecycleV1)>,
+    (tle_key_sessions, tle_key_session_rosters, tle_key_session_lifecycles): EnactedTleSessionStores<'_>,
     timed_ovn_evidence: &mut Vec<(BallotAttemptId, TimedOvnLifecycleStateV1)>,
 ) {
     assert_eq!(
@@ -282,8 +286,10 @@ fn complete_enacted_fixture_hidden_body_with_evidence(
         .freeze_ballot_survivors(
             governance_attempt_id,
             ballot_attempt_id,
-            binding.dropout_root.expect("dropout root"),
-            binding.survivor_root.expect("survivor root"),
+            (
+                binding.dropout_root.expect("dropout root"),
+                binding.survivor_root.expect("survivor root"),
+            ),
             binding.survivors.expect("survivor count"),
             binding.no_recovery_root.expect("no-recovery root"),
             10,
@@ -293,8 +299,10 @@ fn complete_enacted_fixture_hidden_body_with_evidence(
         .freeze_timed_ovn_corpus(
             governance_attempt_id,
             ballot_attempt_id,
-            binding.corpus_root.expect("ballot corpus root"),
-            binding.survivor_root.expect("survivor root"),
+            (
+                binding.corpus_root.expect("ballot corpus root"),
+                binding.survivor_root.expect("survivor root"),
+            ),
             binding.accepted_ballots.expect("accepted ballot count"),
             binding
                 .timed_commitment_root
@@ -376,7 +384,7 @@ fn complete_enacted_fixture_hidden_body_with_evidence(
 }
 
 /// Build an enacted attempt with every exact cross-store restore dependency.
-pub(crate) fn enacted_parliament_attempt_restore_fixture_v1(
+pub fn enacted_parliament_attempt_restore_fixture_v1(
     proposal: &ProposalKind,
     candidates: Vec<AccountId>,
     network_id: &NetworkId,
@@ -401,9 +409,11 @@ pub(crate) fn enacted_parliament_attempt_restore_fixture_v1(
                     requirement,
                     election_attempt_id,
                     network_id,
-                    &mut tle_key_sessions,
-                    &mut tle_key_session_rosters,
-                    &mut tle_key_session_lifecycles,
+                    (
+                        &mut tle_key_sessions,
+                        &mut tle_key_session_rosters,
+                        &mut tle_key_session_lifecycles,
+                    ),
                     &mut timed_ovn_evidence,
                 );
             }
@@ -503,10 +513,7 @@ fn consume_sortition(
     state.consume_sortition_pulse_batch(
         governance_attempt_id,
         request_ids,
-        beacon_session_id,
-        pulse_height,
-        pulse_id,
-        pulse_output,
+        (beacon_session_id, pulse_height, pulse_id, pulse_output),
         &network_id(),
         &governance,
     )
@@ -590,7 +597,7 @@ fn sortition_request_intent(
     governance_attempt_id: GovernanceAttemptId,
     sequence: u32,
     body: ParliamentBody,
-    candidate_snapshot: Vec<AccountId>,
+    candidate_snapshot: &[AccountId],
     target_seats: u32,
     request_height: u64,
     pulse_height: u64,
@@ -610,7 +617,7 @@ fn sortition_request_intent(
         candidate_root: parliament_candidate_root_v1(
             governance_attempt_id,
             body,
-            &candidate_snapshot,
+            candidate_snapshot,
         ),
         candidate_count,
         target_seats,
@@ -686,7 +693,7 @@ fn policy_only_state_with_proposal_tag(proposal_tag: u8) -> ParliamentAttemptSta
 }
 
 /// Build a semantically plausible attempt whose canonical frame necessarily exceeds 16 MiB.
-pub(crate) fn oversized_attempt_state_fixture_v1(proposal_tag: u8) -> ParliamentAttemptStateV1 {
+pub fn oversized_attempt_state_fixture_v1(proposal_tag: u8) -> ParliamentAttemptStateV1 {
     let mut state = policy_only_state_with_proposal_tag(proposal_tag);
     // Every entry emits two nonempty enum discriminants. Even without counting the
     // sequence length and per-element framing, this exceeds the protocol byte bound.
@@ -751,7 +758,7 @@ fn validation_fee_asset(name: &str) -> AssetDefinitionId {
     )
 }
 
-pub(crate) fn validation_fee_policy_proposal() -> ProposalKind {
+pub fn validation_fee_policy_proposal() -> ProposalKind {
     let lifecycle = validation_fee_payout_lifecycle_proposal();
     let ProposalKind::ValidationFeePayoutLifecycle(ref lifecycle_proposal) = lifecycle else {
         unreachable!()
@@ -878,9 +885,8 @@ fn validation_fee_proposals_bind_committed_global_network_xor() {
     });
     let world = World::with([], [], definitions);
     {
-        let mut committed = world.parameters.block();
-        committed
-            .set_parameter(Parameter::Custom(parameters.into_custom_parameter()))
+        let mut committed = crate::state::parameter_cell_block_for_testing(&world).unwrap();
+        crate::state::set_parameter_cell_for_testing(&mut committed, Parameter::Custom(parameters.into_custom_parameter()), world.sccp_committee_generations.allocation_budget())
             .expect("valid fixture parameters");
         committed.commit();
     }
@@ -1117,8 +1123,7 @@ fn successor_attempt_inherits_exact_proposal_redraw_prefix() {
         successor_attempt,
         first.randomness_redraws_used_v1().expect("bounded prefix"),
         PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1,
-        10,
-        FIXTURE_SORTITION_PULSE_EPOCH_LENGTH_BLOCKS,
+        (10, FIXTURE_SORTITION_PULSE_EPOCH_LENGTH_BLOCKS),
         root(3),
         GovernanceExpectedHeadV1::Absent(GovernanceExpectedHeadAbsentV1 {
             subject_id: root(4),
@@ -1155,8 +1160,7 @@ fn successor_attempt_inherits_exact_proposal_redraw_prefix() {
         successor_attempt,
         0,
         PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1,
-        10,
-        FIXTURE_SORTITION_PULSE_EPOCH_LENGTH_BLOCKS,
+        (10, FIXTURE_SORTITION_PULSE_EPOCH_LENGTH_BLOCKS),
         root(3),
         GovernanceExpectedHeadV1::Absent(GovernanceExpectedHeadAbsentV1 {
             subject_id: root(4),
@@ -1190,8 +1194,7 @@ fn proposal_attempt_lineage_requires_exact_contiguous_sequences() {
         skipped_attempt,
         0,
         PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1,
-        10,
-        FIXTURE_SORTITION_PULSE_EPOCH_LENGTH_BLOCKS,
+        (10, FIXTURE_SORTITION_PULSE_EPOCH_LENGTH_BLOCKS),
         root(3),
         GovernanceExpectedHeadV1::Absent(GovernanceExpectedHeadAbsentV1 {
             subject_id: root(4),
@@ -1363,7 +1366,7 @@ fn timed_ovn_policy() -> ParliamentTimedOvn {
 }
 
 /// Build one validated active timed-OVN ballot with a caller-selected schedule.
-pub(crate) fn active_timed_ovn_reservation_attempt_fixture_v1(
+pub fn active_timed_ovn_reservation_attempt_fixture_v1(
     proposal_tag: u8,
     key_session_tag: u8,
     registered_at_height: u64,
@@ -1379,7 +1382,7 @@ pub(crate) fn active_timed_ovn_reservation_attempt_fixture_v1(
 /// The same active timed-OVN ballot, still in registration, whose frozen release slot is on
 /// the caller's logical beacon session. Its release height is whatever the fixture policy
 /// derives from `registered_at_height`; read it from `required_beacon_pulse_slots_v1`.
-pub(crate) fn active_timed_ovn_attempt_awaiting_release_fixture_v1(
+pub fn active_timed_ovn_attempt_awaiting_release_fixture_v1(
     proposal_tag: u8,
     key_session_tag: u8,
     registered_at_height: u64,
@@ -1648,8 +1651,7 @@ fn opened_policy_ballot(seats: u32, accepted: u32) -> OpeningFixture {
         .freeze_ballot_survivors(
             attempt_id,
             ballot_id,
-            root(21),
-            root(29),
+            (root(21), root(29)),
             accepted,
             root(22),
             survivor_freeze_height,
@@ -1659,8 +1661,7 @@ fn opened_policy_ballot(seats: u32, accepted: u32) -> OpeningFixture {
         .freeze_timed_ovn_corpus(
             attempt_id,
             ballot_id,
-            root(20),
-            root(29),
+            (root(20), root(29)),
             accepted,
             root(25),
             commitment_close_height,

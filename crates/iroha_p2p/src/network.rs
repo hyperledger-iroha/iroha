@@ -26,9 +26,10 @@ use iroha_config::parameters::actual::{
     Network as Config, SoranetHandshake as ActualSoranetHandshake,
 };
 use iroha_crypto::{Algorithm, Hash, KeyPair, Signature};
-use iroha_data_model::{NetworkId, prelude::Peer};
+use iroha_data_model::NetworkId;
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use iroha_logger::prelude::*;
+use iroha_model_base::peer::Peer;
 use iroha_model_base::peer::PeerId;
 use iroha_primitives::addr::SocketAddr;
 use norito::{
@@ -7774,10 +7775,10 @@ impl<T: Pload + message::ClassifyTopic + Sync, E: Enc + Sync> NetworkBaseHandle<
                 quic_datagram_max_payload_bytes,
                 quic_datagram_receive_buffer_bytes,
                 quic_datagram_send_buffer_bytes,
-                network_id.clone(),
-                consensus_caps.clone(),
+                network_id,
+                consensus_caps,
                 confidential_caps.clone(),
-                crypto_caps.clone(),
+                crypto_caps,
                 p2p_post_queue_cap.get(),
                 outbound_frame_queue_limits,
                 outbound_post_byte_budgets.clone(),
@@ -9365,8 +9366,7 @@ mod accept_stream_tests {
         LaneProfile, Network as NetCfg, RelayMode, SoranetPrivacy as ActualSoranetPrivacy,
     };
     use iroha_crypto::{KeyPair, encryption::ChaCha20Poly1305};
-    use iroha_data_model::peer::Peer;
-    use iroha_model_base::peer::PeerId;
+    use iroha_model_base::peer::{Peer, PeerId};
     use iroha_primitives::addr::socket_addr;
     use norito::codec::{Decode, DecodeAll, Encode};
     use std::time::Duration;
@@ -10532,7 +10532,7 @@ mod accept_stream_tests {
             service_tx.clone(),
             Duration::from_secs(5),
             preauth_timeout,
-            network_id.clone(),
+            network_id,
             None,
             None,
             None,
@@ -11568,10 +11568,7 @@ where
             let soranet_transport_key_pair = Arc::clone(&soranet_transport_key_pair);
             let soranet_transport_certificate = Arc::clone(&soranet_transport_certificate);
             let public_address = public_address.clone();
-            let network_id = network_id.clone();
-            let consensus_caps = consensus_caps.clone();
             let confidential_caps = confidential_caps.clone();
-            let crypto_caps = crypto_caps.clone();
             let idle_timeout = idle_timeout;
             let post_capacity = post_capacity;
             let outbound_frame_queue_limits = outbound_frame_queue_limits;
@@ -11702,10 +11699,8 @@ where
                     Connection::from_quic(
                         conn_id,
                         new_conn.clone(),
-                        send_hi,
-                        recv_hi,
-                        send_low,
-                        recv_low,
+                        (send_hi, recv_hi),
+                        send_low.zip(recv_low),
                         datagram_ingress,
                         Some(remote),
                         transport_binding,
@@ -11850,12 +11845,11 @@ mod quic_tests {
         {
             Ok(task) => task,
             Err(err) => {
-                if let Error::Io(io_err) = &err {
-                    if io_err.kind() == std::io::ErrorKind::PermissionDenied
-                        || io_err.to_string().contains("Operation not permitted")
-                    {
-                        return;
-                    }
+                if let Error::Io(io_err) = &err
+                    && (io_err.kind() == std::io::ErrorKind::PermissionDenied
+                        || io_err.to_string().contains("Operation not permitted"))
+                {
+                    return;
                 }
                 panic!("scaffold should start without error: {err:?}");
             }
@@ -16786,7 +16780,7 @@ mod tests;
 pub mod message {
     //! Module for network messages
     use super::*;
-    use iroha_data_model::peer::Peer;
+    use iroha_model_base::peer::Peer;
     use norito::codec::{Decode, Encode};
     /// Priority for network messages.
     #[derive(Clone, Copy, Debug, Encode, Decode, PartialEq, Eq)]

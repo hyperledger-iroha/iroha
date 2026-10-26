@@ -261,7 +261,7 @@ where
     };
     let json = norito::json::to_json_bounded_boxed(&query, plan.expanded_query_limit_bytes)
         .map_err(|error| {
-            torii_routed_read_form_encode_response(error, plan.expanded_query_limit_bytes)
+            torii_routed_read_form_encode_response(&(error), plan.expanded_query_limit_bytes)
         })?;
     decode_torii_routed_read_typed_json(plan, &json, "query parameters")
 }
@@ -363,7 +363,7 @@ where
         };
         let json = norito::json::to_json_bounded_boxed(&form, plan.expanded_query_limit_bytes)
             .map_err(|error| {
-                app_routed_read_form_encode_response(error, plan.expanded_query_limit_bytes)
+                app_routed_read_form_encode_response(&(error), plan.expanded_query_limit_bytes)
             })?;
         decode_app_routed_read_typed_json(plan, &json, "query parameters")
     })
@@ -410,10 +410,10 @@ fn validate_app_routed_read_form(
         validate_app_routed_read_form_component(pair.value)?;
         let key =
             torii_exact_form_component(pair.key, plan.component_limit_bytes).map_err(|error| {
-                app_routed_read_form_encode_response(error, plan.component_limit_bytes)
+                app_routed_read_form_encode_response(&(error), plan.component_limit_bytes)
             })?;
         let value = torii_exact_form_component(pair.value, plan.component_limit_bytes).map_err(
-            |error| app_routed_read_form_encode_response(error, plan.component_limit_bytes),
+            |error| app_routed_read_form_encode_response(&(error), plan.component_limit_bytes),
         )?;
         if std::str::from_utf8(&key)
             .into_iter()
@@ -544,7 +544,7 @@ fn app_routed_read_request_capacity_response(
     )
 }
 fn app_routed_read_form_encode_response(
-    error: norito::json::BoundedJsonError,
+    error: &norito::json::BoundedJsonError,
     limit: usize,
 ) -> Response {
     match error {
@@ -643,7 +643,7 @@ fn torii_routed_read_request_capacity_response(
 }
 #[cfg(feature = "app_api")]
 fn torii_routed_read_form_encode_response(
-    error: norito::json::BoundedJsonError,
+    error: &norito::json::BoundedJsonError,
     limit: usize,
 ) -> Response {
     match error {

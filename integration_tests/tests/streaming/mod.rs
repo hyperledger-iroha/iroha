@@ -4,7 +4,7 @@ use hex::encode as hex_encode;
 use iroha_config::parameters::actual;
 use iroha_core::streaming::{StreamingHandle, StreamingProcessError};
 use iroha_crypto::{Algorithm, KeyPair};
-use iroha_data_model::peer::Peer;
+use iroha_model_base::peer::Peer;
 use iroha_primitives::addr::SocketAddr;
 use norito::{
     json,

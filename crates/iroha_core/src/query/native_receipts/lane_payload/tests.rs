@@ -115,12 +115,13 @@ fn lane_payload_rejects_foreign_carrier_pool_network_and_changed_complete_state(
     for case in 0..5 {
         let budget = AllocationBudget::new(64 << 20);
         let mut bytes = source(&chain, 2, &budget);
-        let mut network = chain.network_id();
-        if case == 2 {
-            network = NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
+        let network = if case == 2 {
+            NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
                 b"foreign network",
-            )));
-        }
+            )))
+        } else {
+            chain.network_id()
+        };
         if case >= 3 {
             let mut projection: NativeExecutionProjectionV1 =
                 norito::decode_canonical(bytes.as_slice()).unwrap();

@@ -51,8 +51,8 @@ fn prefix(batch: Hash) -> CheckedSourcePrefix {
         Hash::new(b"reservation-authority"),
         PrefixLengthLimits {
             max_deltas: 10,
-            max_input_frame_bytes: 2_000_000,
-            max_public_statement_frame_bytes: 2_000_000,
+            input_frame_ceiling_bytes: 2_000_000,
+            public_statement_ceiling_bytes: 2_000_000,
         },
     )
     .unwrap()
@@ -127,7 +127,7 @@ fn capacity_failure_drops_unpublished_semantics_and_lengths_then_allows_exact_re
     assert_eq!(a.semantics.count(), 1);
     assert_eq!(a.semantics.unique_keys(), 2);
     assert_eq!(tx.usage(), before_failure);
-    tx.rollback(before_other).unwrap();
+    tx.rollback(&before_other).unwrap();
     drop(b); // The abandoned execution owner also discards its local prefix.
     let pending = a.prepare(&second, None).unwrap();
     tx.replace(&a_owner, &a_slot, occurrence(pending.lengths()))

@@ -87,14 +87,12 @@ const _: () = assert!(P256_REDUCTION_STARK_FIXED_WIDTH_V1 == P256_LOW_S_STARK_FI
 const _: () = assert!(P256_REDUCTION_STARK_CONSTRAINT_DEGREE_V1 <= 4);
 const _: () = assert!(P256_LOW_S_STARK_CONSTRAINT_DEGREE_V1 <= 4);
 /// Verifier-fixed limb row.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct P256ReductionFixedRowV1 {
     /// Little-endian 16-bit limb index.
     pub(crate) limb: u8,
 }
 /// Complete exact reduction trace.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, PartialEq, Eq)]
 pub struct P256ReductionTraceV1 {
     /// Verifier-regenerated row topology.
@@ -102,20 +100,17 @@ pub struct P256ReductionTraceV1 {
     /// Committed witness rows.
     pub(crate) base: [[F; P256_REDUCTION_BASE_WIDTH_V1]; P256_REDUCTION_ROWS_V1],
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl core::fmt::Debug for P256ReductionTraceV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str("P256ReductionTraceV1 { <private trace redacted> }")
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for P256ReductionTraceV1 {
     fn drop(&mut self) {
         self.zeroize_private_v1();
     }
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256ReductionTraceV1 {
     /// Overwrite every committed reduction row.
     pub(crate) fn zeroize_private_v1(&mut self) {
@@ -140,7 +135,9 @@ impl P256ReductionTraceV1 {
     }
     /// Canonical reduced scalar reconstructed from committed limbs.
     pub(crate) fn reduced_be_v1(&self) -> [u8; 32] {
-        let limbs = core::array::from_fn(|limb| self.base[limb][REDUCED].value() as u16);
+        let limbs = core::array::from_fn(|limb| {
+            u16::try_from(self.base[limb][REDUCED].value() & 0xffff).expect("masked limb")
+        });
         limbs_le_to_bytes_be_v1(limbs)
     }
 }
@@ -148,7 +145,6 @@ impl P256ReductionTraceV1 {
 ///
 /// This is the narrow pointwise surface used by the aggregate value/byte
 /// bindings; it does not expose or reinterpret the internal carry witness.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub fn p256_reduction_limb_cells_v1(
     trace: &P256ReductionTraceV1,
     limb: usize,
@@ -174,7 +170,6 @@ pub enum P256ReductionAirErrorV1 {
     #[error("zk-X509 P-256 reduction topology is invalid")]
     Topology,
     /// A claimed reduction or canonical comparison is false.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error("zk-X509 P-256 reduction witness is invalid")]
     InvalidWitness,
     /// A local or transition polynomial identity is nonzero.
@@ -186,7 +181,6 @@ pub enum P256ReductionAirErrorV1 {
     Allocation,
 }
 /// Exact fixed trace proving `s <= floor(n/2)`.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, PartialEq, Eq)]
 pub struct P256LowSTraceV1 {
     /// Verifier-regenerated limb rows.
@@ -194,20 +188,17 @@ pub struct P256LowSTraceV1 {
     /// Committed low-s comparison rows.
     pub(crate) base: [[F; P256_LOW_S_BASE_WIDTH_V1]; P256_REDUCTION_ROWS_V1],
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl core::fmt::Debug for P256LowSTraceV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str("P256LowSTraceV1 { <private trace redacted> }")
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for P256LowSTraceV1 {
     fn drop(&mut self) {
         self.zeroize_private_v1();
     }
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256LowSTraceV1 {
     /// Overwrite every committed low-s comparison row.
     pub(crate) fn zeroize_private_v1(&mut self) {
@@ -232,7 +223,6 @@ impl P256LowSTraceV1 {
     }
 }
 /// Read the scalar cell constrained by one low-s comparison limb.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub fn p256_low_s_limb_cell_v1(
     trace: &P256LowSTraceV1,
     limb: usize,
@@ -251,7 +241,6 @@ pub fn p256_low_s_opened_binding_cell_v1<A: PolynomialAirFieldV1>(
     base[LOW_S_VALUE]
 }
 /// Build the exact wallet low-s comparison trace.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub fn build_p256_low_s_trace_v1(
     scalar_be: [u8; 32],
 ) -> Result<P256LowSTraceV1, P256ReductionAirErrorV1> {
@@ -261,7 +250,9 @@ pub fn build_p256_low_s_trace_v1(
     let scalar = bytes_be_to_limbs_le_v1(scalar_be);
     let bound = bytes_be_to_limbs_le_v1(P256_LOW_S_EXCLUSIVE_BOUND_BE_V1);
     let (difference, borrow) = less_than_witness_v1(scalar, bound)?;
-    let fixed = core::array::from_fn(|limb| P256ReductionFixedRowV1 { limb: limb as u8 });
+    let fixed = core::array::from_fn(|limb| P256ReductionFixedRowV1 {
+        limb: u8::try_from(limb).expect("16-limb index fits u8"),
+    });
     let mut base = [[F::ZERO; P256_LOW_S_BASE_WIDTH_V1]; LIMBS];
     for limb in 0..LIMBS {
         base[limb][LOW_S_VALUE] = F(u64::from(scalar[limb]));
@@ -282,7 +273,6 @@ pub fn build_p256_low_s_trace_v1(
     Ok(trace)
 }
 /// Evaluate one exact low-s comparison row.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub fn evaluate_p256_low_s_row_constraints_v1(
     fixed: P256ReductionFixedRowV1,
     base: &[F; P256_LOW_S_BASE_WIDTH_V1],
@@ -329,7 +319,6 @@ pub fn evaluate_p256_low_s_row_constraints_v1(
     Ok(residues)
 }
 /// Build the canonical fixed trace for one arbitrary 256-bit word.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub fn build_p256_reduction_trace_v1(
     word_be: [u8; 32],
 ) -> Result<P256ReductionTraceV1, P256ReductionAirErrorV1> {
@@ -358,12 +347,15 @@ pub fn build_p256_reduction_trace_v1(
         if next > 1 {
             return Err(P256ReductionAirErrorV1::InvalidWitness);
         }
-        carries[limb + 1] = next as u8;
+        carries[limb + 1] =
+            u8::try_from(next).map_err(|_| P256ReductionAirErrorV1::InvalidWitness)?;
     }
     if carries[LIMBS] != 0 {
         return Err(P256ReductionAirErrorV1::InvalidWitness);
     }
-    let fixed = core::array::from_fn(|limb| P256ReductionFixedRowV1 { limb: limb as u8 });
+    let fixed = core::array::from_fn(|limb| P256ReductionFixedRowV1 {
+        limb: u8::try_from(limb).expect("16-limb index fits u8"),
+    });
     let mut base = [[F::ZERO; P256_REDUCTION_BASE_WIDTH_V1]; P256_REDUCTION_ROWS_V1];
     for limb in 0..LIMBS {
         base[limb][WORD] = F(u64::from(word[limb]));
@@ -395,7 +387,6 @@ pub fn build_p256_reduction_trace_v1(
     Ok(trace)
 }
 /// Evaluate one exact reduction row.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub fn evaluate_p256_reduction_row_constraints_v1(
     fixed: P256ReductionFixedRowV1,
     base: &[F; P256_REDUCTION_BASE_WIDTH_V1],
@@ -601,15 +592,15 @@ fn stark_fields_are_canonical_v1<A: PolynomialAirFieldV1, const BASE: usize, con
 pub fn evaluate_p256_reduction_stark_residues_v1(
     current: &[F; P256_REDUCTION_BASE_WIDTH_V1],
     next: &[F; P256_REDUCTION_BASE_WIDTH_V1],
-    current_aux: &[F; P256_REDUCTION_STARK_AUX_WIDTH_V1],
-    next_aux: &[F; P256_REDUCTION_STARK_AUX_WIDTH_V1],
+    current_aux: [F; P256_REDUCTION_STARK_AUX_WIDTH_V1],
+    next_aux: [F; P256_REDUCTION_STARK_AUX_WIDTH_V1],
     fixed: &[F; P256_REDUCTION_STARK_FIXED_WIDTH_V1],
 ) -> Result<Vec<F>, P256ReductionAirErrorV1> {
     evaluate_p256_reduction_stark_residues_over_field_v1(
         current,
         next,
-        current_aux,
-        next_aux,
+        &current_aux,
+        &next_aux,
         fixed,
     )
 }
@@ -695,11 +686,11 @@ pub fn evaluate_p256_reduction_stark_residues_over_field_v1<A: PolynomialAirFiel
 pub fn evaluate_p256_low_s_stark_residues_v1(
     current: &[F; P256_LOW_S_BASE_WIDTH_V1],
     next: &[F; P256_LOW_S_BASE_WIDTH_V1],
-    current_aux: &[F; P256_LOW_S_STARK_AUX_WIDTH_V1],
-    next_aux: &[F; P256_LOW_S_STARK_AUX_WIDTH_V1],
+    current_aux: [F; P256_LOW_S_STARK_AUX_WIDTH_V1],
+    next_aux: [F; P256_LOW_S_STARK_AUX_WIDTH_V1],
     fixed: &[F; P256_LOW_S_STARK_FIXED_WIDTH_V1],
 ) -> Result<Vec<F>, P256ReductionAirErrorV1> {
-    evaluate_p256_low_s_stark_residues_over_field_v1(current, next, current_aux, next_aux, fixed)
+    evaluate_p256_low_s_stark_residues_over_field_v1(current, next, &current_aux, &next_aux, fixed)
 }
 /// The same complete comparison polynomial over base or extension arithmetic.
 pub fn evaluate_p256_low_s_stark_residues_over_field_v1<A: PolynomialAirFieldV1>(
@@ -769,7 +760,6 @@ fn append_range_residues_v1<A: PolynomialAirFieldV1>(residues: &mut Vec<A>, valu
 fn boolean_residue_v1<A: PolynomialAirFieldV1>(value: A) -> A {
     value.mul(value.sub(A::ONE))
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn less_than_witness_v1(
     value: [u16; LIMBS],
     modulus: [u16; LIMBS],
@@ -779,10 +769,12 @@ fn less_than_witness_v1(
     for limb in 0..LIMBS {
         let raw = i32::from(value[limb]) - i32::from(modulus[limb]) - i32::from(borrow[limb]);
         if raw < 0 {
-            difference[limb] = (raw + RADIX as i32) as u16;
+            difference[limb] =
+                u16::try_from(raw + i32::try_from(RADIX).expect("16-bit radix fits i32"))
+                    .expect("borrow-adjusted difference is a limb");
             borrow[limb + 1] = 1;
         } else {
-            difference[limb] = raw as u16;
+            difference[limb] = u16::try_from(raw).expect("nonnegative difference is a limb");
         }
     }
     if borrow[LIMBS] != 1 {
@@ -790,16 +782,15 @@ fn less_than_witness_v1(
     }
     Ok((difference, borrow))
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn subtract_be_v1(mut left: [u8; 32], right: [u8; 32]) -> Option<[u8; 32]> {
     let mut borrow = 0_i16;
     for index in (0..32).rev() {
         let value = i16::from(left[index]) - i16::from(right[index]) - borrow;
         if value < 0 {
-            left[index] = (value + 256) as u8;
+            left[index] = u8::try_from(value + 256).expect("borrow-adjusted difference is a byte");
             borrow = 1;
         } else {
-            left[index] = value as u8;
+            left[index] = u8::try_from(value & 0xff).expect("masked byte");
             borrow = 0;
         }
     }
@@ -811,7 +802,6 @@ fn bytes_be_to_limbs_le_v1(bytes: [u8; 32]) -> [u16; LIMBS] {
         u16::from_le_bytes([bytes[low], bytes[low - 1]])
     })
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn limbs_le_to_bytes_be_v1(limbs: [u16; LIMBS]) -> [u8; 32] {
     let mut bytes = [0_u8; 32];
     for (limb, value) in limbs.into_iter().enumerate() {
@@ -821,7 +811,6 @@ fn limbs_le_to_bytes_be_v1(limbs: [u16; LIMBS]) -> [u8; 32] {
     }
     bytes
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn write_bits_v1(target: &mut [F], value: u16) {
     for (bit, cell) in target.iter_mut().enumerate() {
         *cell = F(u64::from((value >> bit) & 1));
@@ -866,7 +855,7 @@ mod tests {
         let mut carry = amount;
         for byte in value.iter_mut().rev() {
             let sum = u64::from(*byte) + (carry & 0xff);
-            *byte = sum as u8;
+            *byte = u8::try_from(sum & 0xff).expect("masked byte");
             carry = (carry >> 8) + (sum >> 8);
             if carry == 0 {
                 break;
@@ -898,10 +887,12 @@ mod tests {
         for limb in 0..LIMBS {
             let raw = i32::from(value[limb]) - i32::from(bound[limb]) - i32::from(borrow[limb]);
             if raw < 0 {
-                difference[limb] = (raw + RADIX as i32) as u16;
+                difference[limb] =
+                    u16::try_from(raw + i32::try_from(RADIX).expect("16-bit radix fits i32"))
+                        .expect("borrow-adjusted difference is a limb");
                 borrow[limb + 1] = 1;
             } else {
-                difference[limb] = raw as u16;
+                difference[limb] = u16::try_from(raw).expect("nonnegative difference is a limb");
             }
         }
         (difference, borrow)
@@ -915,16 +906,16 @@ mod tests {
         assert_eq!(base.len(), fixed.len());
         (0..base.len()).any(|row| {
             let next = (row + 1) % base.len();
-            match evaluate_p256_reduction_stark_residues_v1(
+            evaluate_p256_reduction_stark_residues_v1(
                 &base[row],
                 &base[next],
-                &aux[row],
-                &aux[next],
+                aux[row],
+                aux[next],
                 &fixed[row],
-            ) {
-                Ok(residues) => residues.iter().any(|residue| *residue != F::ZERO),
-                Err(_) => true,
-            }
+            )
+            .map_or(true, |residues| {
+                residues.iter().any(|residue| *residue != F::ZERO)
+            })
         })
     }
     fn low_s_numeric_trace_has_nonzero(
@@ -936,16 +927,16 @@ mod tests {
         assert_eq!(base.len(), fixed.len());
         (0..base.len()).any(|row| {
             let next = (row + 1) % base.len();
-            match evaluate_p256_low_s_stark_residues_v1(
+            evaluate_p256_low_s_stark_residues_v1(
                 &base[row],
                 &base[next],
-                &aux[row],
-                &aux[next],
+                aux[row],
+                aux[next],
                 &fixed[row],
-            ) {
-                Ok(residues) => residues.iter().any(|residue| *residue != F::ZERO),
-                Err(_) => true,
-            }
+            )
+            .map_or(true, |residues| {
+                residues.iter().any(|residue| *residue != F::ZERO)
+            })
         })
     }
     fn reduction_numeric_nonzero_count(
@@ -959,8 +950,8 @@ mod tests {
                 evaluate_p256_reduction_stark_residues_v1(
                     &base[row],
                     &base[next],
-                    &aux[row],
-                    &aux[next],
+                    aux[row],
+                    aux[next],
                     &fixed[row],
                 )
                 .expect("canonical aggregate fields")
@@ -981,8 +972,8 @@ mod tests {
                 evaluate_p256_low_s_stark_residues_v1(
                     &base[row],
                     &base[next],
-                    &aux[row],
-                    &aux[next],
+                    aux[row],
+                    aux[next],
                     &fixed[row],
                 )
                 .expect("canonical aggregate fields")
@@ -1249,8 +1240,8 @@ mod tests {
                 let residues = evaluate_p256_reduction_stark_residues_v1(
                     &base[row],
                     &base[next],
-                    &aux[row],
-                    &aux[next],
+                    aux[row],
+                    aux[next],
                     &fixed[row],
                 )
                 .expect("canonical reduction row");
@@ -1265,8 +1256,8 @@ mod tests {
                 let residues = evaluate_p256_reduction_stark_residues_v1(
                     &base[row],
                     &base[next],
-                    &aux[row],
-                    &aux[next],
+                    aux[row],
+                    aux[next],
                     &fixed[row],
                 )
                 .expect("canonical reduction padding");
@@ -1297,8 +1288,8 @@ mod tests {
             let residues = evaluate_p256_low_s_stark_residues_v1(
                 &base[row],
                 &base[next],
-                &aux[row],
-                &aux[next],
+                aux[row],
+                aux[next],
                 &fixed[row],
             )
             .expect("canonical low-S row");
@@ -1313,8 +1304,8 @@ mod tests {
             let residues = evaluate_p256_low_s_stark_residues_v1(
                 &base[row],
                 &base[next],
-                &aux[row],
-                &aux[next],
+                aux[row],
+                aux[next],
                 &fixed[row],
             )
             .expect("canonical low-S padding");
@@ -1324,13 +1315,13 @@ mod tests {
     }
     #[test]
     fn numeric_fixed_compilers_are_witness_independent_and_reject_bad_domains() {
-        let trace =
-            build_p256_reduction_trace_v1([0_u8; 32]).expect("canonical reduction topology");
         type Compiler =
             fn(
                 usize,
             )
                 -> Result<Vec<[F; P256_REDUCTION_STARK_FIXED_WIDTH_V1]>, P256ReductionAirErrorV1>;
+        let trace =
+            build_p256_reduction_trace_v1([0_u8; 32]).expect("canonical reduction topology");
         let reduction_compiler: Compiler = compile_p256_reduction_stark_fixed_rows_v1;
         let low_s_compiler: Compiler = compile_p256_low_s_stark_fixed_rows_v1;
         for compiler in [reduction_compiler, low_s_compiler] {
@@ -1517,8 +1508,8 @@ mod tests {
                 evaluate_p256_reduction_stark_residues_v1(
                     &current,
                     &trace.base[1],
-                    &reduction_aux,
-                    &reduction_aux,
+                    reduction_aux,
+                    reduction_aux,
                     &reduction_fixed[0],
                 ),
                 Err(P256ReductionAirErrorV1::Constraint)
@@ -1529,8 +1520,8 @@ mod tests {
                 evaluate_p256_reduction_stark_residues_v1(
                     &trace.base[0],
                     &next,
-                    &reduction_aux,
-                    &reduction_aux,
+                    reduction_aux,
+                    reduction_aux,
                     &reduction_fixed[0],
                 ),
                 Err(P256ReductionAirErrorV1::Constraint)
@@ -1543,8 +1534,8 @@ mod tests {
                 evaluate_p256_reduction_stark_residues_v1(
                     &trace.base[0],
                     &trace.base[1],
-                    &reduction_aux,
-                    &reduction_aux,
+                    reduction_aux,
+                    reduction_aux,
                     &fixed,
                 ),
                 Err(P256ReductionAirErrorV1::Constraint)
@@ -1556,8 +1547,8 @@ mod tests {
             evaluate_p256_reduction_stark_residues_v1(
                 &trace.base[0],
                 &trace.base[1],
-                &bad_aux,
-                &reduction_aux,
+                bad_aux,
+                reduction_aux,
                 &reduction_fixed[0],
             ),
             Err(P256ReductionAirErrorV1::Constraint)
@@ -1566,8 +1557,8 @@ mod tests {
             evaluate_p256_reduction_stark_residues_v1(
                 &trace.base[0],
                 &trace.base[1],
-                &reduction_aux,
-                &bad_aux,
+                reduction_aux,
+                bad_aux,
                 &reduction_fixed[0],
             ),
             Err(P256ReductionAirErrorV1::Constraint)
@@ -1583,8 +1574,8 @@ mod tests {
                 evaluate_p256_low_s_stark_residues_v1(
                     &current,
                     &low_s.base[1],
-                    &low_s_aux,
-                    &low_s_aux,
+                    low_s_aux,
+                    low_s_aux,
                     &low_s_fixed[0],
                 ),
                 Err(P256ReductionAirErrorV1::Constraint)
@@ -1595,8 +1586,8 @@ mod tests {
                 evaluate_p256_low_s_stark_residues_v1(
                     &low_s.base[0],
                     &next,
-                    &low_s_aux,
-                    &low_s_aux,
+                    low_s_aux,
+                    low_s_aux,
                     &low_s_fixed[0],
                 ),
                 Err(P256ReductionAirErrorV1::Constraint)
@@ -1609,8 +1600,8 @@ mod tests {
                 evaluate_p256_low_s_stark_residues_v1(
                     &low_s.base[0],
                     &low_s.base[1],
-                    &low_s_aux,
-                    &low_s_aux,
+                    low_s_aux,
+                    low_s_aux,
                     &fixed,
                 ),
                 Err(P256ReductionAirErrorV1::Constraint)
@@ -1622,8 +1613,8 @@ mod tests {
             evaluate_p256_low_s_stark_residues_v1(
                 &low_s.base[0],
                 &low_s.base[1],
-                &bad_aux,
-                &low_s_aux,
+                bad_aux,
+                low_s_aux,
                 &low_s_fixed[0],
             ),
             Err(P256ReductionAirErrorV1::Constraint)
@@ -1632,8 +1623,8 @@ mod tests {
             evaluate_p256_low_s_stark_residues_v1(
                 &low_s.base[0],
                 &low_s.base[1],
-                &low_s_aux,
-                &bad_aux,
+                low_s_aux,
+                bad_aux,
                 &low_s_fixed[0],
             ),
             Err(P256ReductionAirErrorV1::Constraint)

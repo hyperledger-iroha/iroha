@@ -40,7 +40,7 @@ fn challenges() -> (
 }
 
 fn terminal(segment: u16) -> u8 {
-    segment as u8
+    u8::try_from(segment).expect("fixture value fits u8")
 }
 
 fn context(terminal: u8) -> ShaMainFp4AirContextV1 {
@@ -97,7 +97,7 @@ fn four_complete_sha_fp4_registrations_match_independent_base_polynomial_lifting
             E::canonical([i + 11, i + 13, i + 17, i + 19]).unwrap()
         });
         let actual = evaluator
-            .evaluate_residues_v1(&current, &next, context(terminal))
+            .evaluate_residues_v1(&current, &next, &context(terminal))
             .unwrap();
         assert_eq!(actual.len(), 564);
         let mut expected = vec![E::ZERO; actual.len()];
@@ -140,7 +140,7 @@ fn four_complete_sha_fp4_registrations_match_independent_base_polynomial_lifting
                 let embedded_next = map_row(&next_base, E::from_base);
                 assert_eq!(
                     evaluator
-                        .evaluate_residues_v1(&embedded_current, &embedded_next, context(terminal))
+                        .evaluate_residues_v1(&embedded_current, &embedded_next, &context(terminal))
                         .unwrap(),
                     base.into_iter().map(E::from_base).collect::<Vec<_>>()
                 );
@@ -207,13 +207,13 @@ fn sha_fp4_rejects_wrong_instance_noncanonical_rows_and_binds_local_recurrences(
     let next = row(|index| E::from_base(F(index as u64 + 11)));
     let terminal = terminal(registration.segment.instance);
     let original = evaluator
-        .evaluate_residues_v1(&current, &next, context(terminal))
+        .evaluate_residues_v1(&current, &next, &context(terminal))
         .unwrap();
     let mut wrong_instance = terminal;
     wrong_instance = (wrong_instance + 1) % 4;
     assert!(
         evaluator
-            .evaluate_residues_v1(&current, &next, context(wrong_instance))
+            .evaluate_residues_v1(&current, &next, &context(wrong_instance))
             .is_err()
     );
     // Private RFC endpoints remain locally bound by all16 stream recurrences.
@@ -223,7 +223,7 @@ fn sha_fp4_rejects_wrong_instance_noncanonical_rows_and_binds_local_recurrences(
         changed.aux[62 + product] = changed.aux[62 + product].add(E::ONE);
         assert_ne!(
             evaluator
-                .evaluate_residues_v1(&current, &changed, context(terminal))
+                .evaluate_residues_v1(&current, &changed, &context(terminal))
                 .unwrap(),
             original
         );
@@ -236,7 +236,7 @@ fn sha_fp4_rejects_wrong_instance_noncanonical_rows_and_binds_local_recurrences(
             changed.aux[column] = changed.aux[column].add(E::ONE);
             assert_ne!(
                 evaluator
-                    .evaluate_residues_v1(&current, &changed, context(terminal))
+                    .evaluate_residues_v1(&current, &changed, &context(terminal))
                     .unwrap(),
                 original
             );
@@ -258,7 +258,7 @@ fn sha_fp4_rejects_wrong_instance_noncanonical_rows_and_binds_local_recurrences(
     );
     assert!(
         evaluator
-            .evaluate_residues_v1(&current, &next, context(u8::MAX))
+            .evaluate_residues_v1(&current, &next, &context(u8::MAX))
             .is_err()
     );
 }

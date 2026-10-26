@@ -5,7 +5,12 @@ use super::*;
 fn verified_current(f: &mut Fixture) -> VerifiedFinalPromotionCheckV1 {
     let pending = f.pending();
     assert_eq!(
-        f.commit(NOW, vec![pending.signed_transaction().clone()], true, true),
+        f.commit(
+            NOW,
+            std::slice::from_ref(pending.signed_transaction()),
+            true,
+            true
+        ),
         [true]
     );
     pending
@@ -26,7 +31,12 @@ fn initial_interval_enforces_earliest_observation_age_at_exact_boundary() {
         assert_eq!(f.policy.max_anchor_age_ms, 60_000);
         let pending = f.pending();
         assert_eq!(
-            f.commit(NOW, vec![pending.signed_transaction().clone()], true, true),
+            f.commit(
+                NOW,
+                std::slice::from_ref(pending.signed_transaction()),
+                true,
+                true
+            ),
             [true]
         );
         let result = pending.verify_finalized(FinalPromotionCheckSourceV1::Current, || {
@@ -116,7 +126,7 @@ fn retained_interval_does_not_claim_newer_native_authority() {
     assert_eq!(
         f.commit(
             NOW + 1,
-            vec![
+            &[
                 pending.signed_transaction().clone(),
                 f.sign(revoke.into(), 1, NOW + 1)
             ],
@@ -162,7 +172,7 @@ fn verified_subject(
     assert_eq!(
         f.commit(
             NOW + 2,
-            vec![pending.signed_transaction().clone()],
+            std::slice::from_ref(pending.signed_transaction()),
             true,
             true
         ),
@@ -233,12 +243,7 @@ fn completed_phase_has_no_retained_result_without_exact_complete_source_proof() 
             },
         ));
         assert_eq!(
-            f.commit(
-                NOW + 1,
-                vec![f.sign(complete.into(), 2, NOW + 1)],
-                true,
-                true
-            ),
+            f.commit(NOW + 1, &[f.sign(complete.into(), 2, NOW + 1)], true, true),
             [true]
         );
         let row = native_operation_row(&f);
@@ -257,7 +262,7 @@ fn completed_phase_has_no_retained_result_without_exact_complete_source_proof() 
         assert_eq!(
             f.commit(
                 NOW + 2,
-                vec![pending.signed_transaction().clone()],
+                std::slice::from_ref(pending.signed_transaction()),
                 true,
                 true,
             ),

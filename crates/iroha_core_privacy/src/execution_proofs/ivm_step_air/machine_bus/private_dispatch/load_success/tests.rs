@@ -19,9 +19,7 @@ fn set_port(row: &mut [F; WIDTH], slot: usize, fields: [F; packet::WIDTH]) {
         .copy_from_slice(&fields);
 }
 fn event(
-    space: Space,
-    generation: u16,
-    index: u32,
+    (space, generation, index): (Space, u16, u32),
     clock: u32,
     before: [u8; 16],
     after: [u8; 16],
@@ -43,9 +41,7 @@ fn event(
 }
 fn word_event(index: u32, clock: u32, before: u64, after: u64, write: bool) -> [F; packet::WIDTH] {
     event(
-        Space::Owner,
-        0,
-        index,
+        (Space::Owner, 0, index),
         clock,
         u128::from(before).to_le_bytes(),
         u128::from(after).to_le_bytes(),
@@ -105,9 +101,11 @@ impl Fixture {
             false,
         );
         dispatch.packets.fields[4] = dispatch_tests::event(
-            Space::Register,
-            0,
-            wide::rs1(instruction) as u32,
+            (
+                Space::Register,
+                0,
+                u32::try_from(wide::rs1(instruction)).expect("bounded fixture value"),
+            ),
             base,
             base,
             false,
@@ -202,7 +200,11 @@ impl Fixture {
                 program
                     .artifact()
                     .artifact()
-                    .get(program.artifact().header_len() + (address & !15) as usize + i)
+                    .get(
+                        program.artifact().header_len()
+                            + usize::try_from(address & !15).expect("bounded fixture value")
+                            + i,
+                    )
                     .copied()
                     .unwrap_or(0)
             })
@@ -218,9 +220,15 @@ impl Fixture {
             &mut rows[3],
             0,
             event(
-                Space::Memory,
-                0,
-                (address >> 4) as u32,
+                (
+                    Space::Memory,
+                    0,
+                    u32::from_le_bytes(
+                        u64::to_le_bytes(address >> 4)[..4]
+                            .try_into()
+                            .expect("low-byte width"),
+                    ),
+                ),
                 schedule.clock(32),
                 cell,
                 cell,
@@ -233,9 +241,11 @@ impl Fixture {
                 &mut rows[3],
                 1,
                 event(
-                    Space::Register,
-                    0,
-                    destination as u32,
+                    (
+                        Space::Register,
+                        0,
+                        u32::try_from(destination).expect("bounded fixture value"),
+                    ),
                     schedule.clock(33),
                     u128::from(old_value).to_le_bytes(),
                     u128::from(value).to_le_bytes(),
@@ -269,7 +279,7 @@ impl Fixture {
         }
         carry[PERMITTED] = decision.permitted;
         carry[RANGE_ERROR] = decision.range_error;
-        for row in rows.iter_mut() {
+        for row in &mut rows {
             row[CARRY..].copy_from_slice(&carry);
         }
         Self { rows, schedule }
@@ -297,9 +307,9 @@ impl Fixture {
         for i in 0..3 {
             set_port(&mut rows[3], 2 + i, dispatch.packets.fields[18 + i]);
         }
-        for phase in 0..PHASES {
+        for row in rows.iter_mut().take(PHASES) {
             for i in 0..3 {
-                rows[phase][CARRY + COMPLETION + i * packet::WIDTH
+                row[CARRY + COMPLETION + i * packet::WIDTH
                     ..CARRY + COMPLETION + (i + 1) * packet::WIDTH]
                     .copy_from_slice(&dispatch.packets.fields[18 + i]);
             }
@@ -402,9 +412,8 @@ fn every_load_phase_original_tuple_and_carry_rejects_arbitrary_substitution() {
                 let mut bad = original.clone();
                 let c = PACKETS + slot * packet::WIDTH + field;
                 bad.rows[phase][c] = bad.rows[phase][c].add(F(0x0123_4567));
-                assert_eq!(
-                    bad.accepts(&program),
-                    false,
+                assert!(
+                    !bad.accepts(&program),
                     "phase={phase} slot={slot} field={field}"
                 );
             }
@@ -442,7 +451,7 @@ fn permission_initialization_privacy_and_memory_policy_cannot_be_chosen() {
         ADDRESS,
     ] {
         let mut bad = original.clone();
-        for row in bad.rows.iter_mut() {
+        for row in &mut bad.rows {
             row[CARRY + offset] = row[CARRY + offset].add(F::ONE);
         }
         assert!(!bad.accepts(&program));
@@ -534,14 +543,34 @@ fn all_thirty_seven_original_packets_and_all_eight_stages_share_one_private_hist
             4 => Space::Owner,
             _ => panic!("enabled typed event"),
         },
-        vm: p[VM].0 as u8,
-        generation: p[GENERATION].0 as u16,
-        index: p[INDEX].0 as u32,
+        vm: u8::from_le_bytes(
+            u64::to_le_bytes(p[VM].0)[..1]
+                .try_into()
+                .expect("low-byte width"),
+        ),
+        generation: u16::from_le_bytes(
+            u64::to_le_bytes(p[GENERATION].0)[..2]
+                .try_into()
+                .expect("low-byte width"),
+        ),
+        index: u32::from_le_bytes(
+            u64::to_le_bytes(p[INDEX].0)[..4]
+                .try_into()
+                .expect("low-byte width"),
+        ),
         write: p[WRITE] == F::ONE,
         before: core::array::from_fn(|i| ((p[BEFORE + i / 2].0 >> (8 * (i % 2))) & 255) as u8),
         after: core::array::from_fn(|i| ((p[AFTER + i / 2].0 >> (8 * (i % 2))) & 255) as u8),
-        before_private: p[BEFORE_TAG].0 as u16,
-        after_private: p[AFTER_TAG].0 as u16,
+        before_private: u16::from_le_bytes(
+            u64::to_le_bytes(p[BEFORE_TAG].0)[..2]
+                .try_into()
+                .expect("low-byte width"),
+        ),
+        after_private: u16::from_le_bytes(
+            u64::to_le_bytes(p[AFTER_TAG].0)[..2]
+                .try_into()
+                .expect("low-byte width"),
+        ),
     };
     let original = fixture.borrowed();
     let mut events = vec![None; 64];
@@ -650,8 +679,7 @@ fn all_thirty_seven_original_packets_and_all_eight_stages_share_one_private_hist
                 residues.clear();
                 private_history::append_residues(
                     &mut residues,
-                    h.current,
-                    h.next,
+                    (h.current, h.next),
                     h.aux,
                     h.next_aux,
                     h.fixed,
@@ -759,7 +787,7 @@ impl Fixture {
         for index in 0..3 {
             let original = *port(&self.rows[0], 18 + index);
             set_port(&mut self.rows[3], 2 + index, original);
-            for row in self.rows.iter_mut() {
+            for row in &mut self.rows {
                 row[CARRY + COMPLETION + index * packet::WIDTH
                     ..CARRY + COMPLETION + (index + 1) * packet::WIDTH]
                     .copy_from_slice(&original);
@@ -800,7 +828,11 @@ impl Fixture {
             .wrapping_add_signed(i64::from(wide::imm8(instruction)));
         assert_eq!(memory[INDEX], F(address >> 4));
         let cell = address & !15;
-        let privacy = memory[BEFORE_TAG].0 as u16;
+        let privacy = u16::from_le_bytes(
+            u64::to_le_bytes(memory[BEFORE_TAG].0)[..2]
+                .try_into()
+                .expect("low-byte width"),
+        );
         // Root initialization starts empty. Only prior checked guest writes
         // establish its stack bitmap; pre-run host bytes cannot initialize it.
         let initialized = recorder.memory_accesses.with_records(|accesses| {
@@ -826,7 +858,10 @@ impl Fixture {
             for (byte, access) in reads.into_iter().enumerate() {
                 let offset = ((address & 15) as usize) + byte;
                 assert_eq!(access.address, address + byte as u64);
-                assert_eq!(access.byte_offset, byte as u32);
+                assert_eq!(
+                    access.byte_offset,
+                    u32::try_from(byte).expect("bounded fixture value")
+                );
                 let value = ((memory[BEFORE + offset / 2].0 >> (8 * (offset % 2))) & 255) as u8;
                 assert_eq!((access.before, access.after), (value, value));
                 assert_eq!(
@@ -879,7 +914,7 @@ impl Fixture {
                 false,
             );
             set_port(&mut self.rows[1], index, original);
-            for row in self.rows.iter_mut() {
+            for row in &mut self.rows {
                 row[CARRY + POLICY + index * packet::WIDTH
                     ..CARRY + POLICY + (index + 1) * packet::WIDTH]
                     .copy_from_slice(&original);
@@ -991,7 +1026,10 @@ fn actual_native_load_matches_five_regions_both_halves_aliases_zero_and_signed_i
                         vm.set_register(
                             4,
                             u64::from_le_bytes(
-                                data[half as usize..half as usize + 8].try_into().unwrap(),
+                                data[usize::try_from(half).expect("bounded fixture value")
+                                    ..usize::try_from(half).expect("bounded fixture value") + 8]
+                                    .try_into()
+                                    .unwrap(),
                             ),
                         );
                         if destination == 3 {
@@ -1033,6 +1071,7 @@ fn actual_native_load_matches_five_regions_both_halves_aliases_zero_and_signed_i
 #[test]
 fn actual_native_private_stack_load_preserves_atomic_value_and_tag_and_rejects_failed_success_paths()
  {
+    use ivm::error::{Perm, VMError, VmTrapKind};
     let stack = ivm::IVM::new(10_000).memory.stack_top() - 512;
     for half in [0, 8] {
         for destination in [0, 2, 3] {
@@ -1090,9 +1129,13 @@ fn actual_native_private_stack_load_preserves_atomic_value_and_tag_and_rejects_f
         let stack_top = native(&p, 1_000).memory.stack_top();
         let stack_start = stack_top - u64::from(frame_bytes);
         let setup_gas = 8 + ivm::call_gas::frame(frame_bytes, 1).unwrap();
-        use ivm::error::{Perm, VMError, VmTrapKind};
+
         let read_fault = |address| VMError::MemoryAccessViolation {
-            addr: address as u32,
+            addr: u32::from_le_bytes(
+                u64::to_le_bytes(address)[..4]
+                    .try_into()
+                    .expect("low-byte width"),
+            ),
             perm: Perm::READ,
         };
         // LOAD64 checks base privacy before reading; load_u64 checks alignment
@@ -1111,7 +1154,11 @@ fn actual_native_private_stack_load_preserves_atomic_value_and_tag_and_rejects_f
                 false,
                 1_000,
                 VMError::MisalignedAccess {
-                    addr: (Memory::HEAP_START + 0x101) as u32,
+                    addr: u32::from_le_bytes(
+                        u64::to_le_bytes(Memory::HEAP_START + 0x101)[..4]
+                            .try_into()
+                            .expect("low-byte width"),
+                    ),
                 },
                 VmTrapKind::MemoryFault,
             ),

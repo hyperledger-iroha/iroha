@@ -16,6 +16,9 @@ use iroha_data_model::{
 };
 use mv::storage::StorageReadOnly;
 
+/// A borrowed original table row or its original source failure.
+type BorrowedRow<'a, K, V, E> = Result<(&'a K, &'a V), E>;
+
 /// Scalar progress of the original key's charged comparison geometry.
 /// This contains no key, source, credit or publication authority.
 #[derive(Clone, Copy, Debug, Default)]
@@ -34,7 +37,7 @@ pub struct KeyWorkCursor {
 
 /// Completion of an exact query over its retained original source.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) enum LookupResolution {
+pub enum LookupResolution {
     /// Source work remains before a presence or absence result is known.
     #[default]
     Pending,
@@ -103,7 +106,7 @@ pub trait MusubiRead: MusubiEvidenceRead<LookupCursor> {
     fn musubi_archives_rows(
         &self,
     ) -> Result<
-        impl ExactSizeIterator<Item = Result<(&ArchiveId, &MusubiArchiveRecordV1), Self::Error>>,
+        impl ExactSizeIterator<Item = BorrowedRow<'_, ArchiveId, MusubiArchiveRecordV1, Self::Error>>,
         Self::Error,
     >;
     /// Exact original lookup in `musubi_archives`; absence never replaces a refusal.
@@ -125,7 +128,9 @@ pub trait MusubiRead: MusubiEvidenceRead<LookupCursor> {
     fn musubi_archive_availability_rows(
         &self,
     ) -> Result<
-        impl ExactSizeIterator<Item = Result<(&ArchiveId, &MusubiArchiveAvailabilityV1), Self::Error>>,
+        impl ExactSizeIterator<
+            Item = BorrowedRow<'_, ArchiveId, MusubiArchiveAvailabilityV1, Self::Error>,
+        >,
         Self::Error,
     >;
     /// Exact original lookup in `musubi_archive_availability`; absence never replaces a refusal.
@@ -148,7 +153,12 @@ pub trait MusubiRead: MusubiEvidenceRead<LookupCursor> {
         &self,
     ) -> Result<
         impl ExactSizeIterator<
-            Item = Result<(&MusubiArchiveLocationKeyV1, &MusubiArchiveLocationV1), Self::Error>,
+            Item = BorrowedRow<
+                '_,
+                MusubiArchiveLocationKeyV1,
+                MusubiArchiveLocationV1,
+                Self::Error,
+            >,
         >,
         Self::Error,
     >;
@@ -190,7 +200,9 @@ pub trait MusubiRead: MusubiEvidenceRead<LookupCursor> {
     fn musubi_packages_rows(
         &self,
     ) -> Result<
-        impl ExactSizeIterator<Item = Result<(&MusubiPackageIdV1, &MusubiPackageRecordV1), Self::Error>>,
+        impl ExactSizeIterator<
+            Item = BorrowedRow<'_, MusubiPackageIdV1, MusubiPackageRecordV1, Self::Error>,
+        >,
         Self::Error,
     >;
     /// Exact original lookup in `musubi_packages`; absence never replaces a refusal.
@@ -213,11 +225,10 @@ pub trait MusubiRead: MusubiEvidenceRead<LookupCursor> {
         &self,
     ) -> Result<
         impl ExactSizeIterator<
-            Item = Result<
-                (
-                    &MusubiProviderBundleAttestationKeyV1,
-                    &MusubiProviderBundleAttestationRecordV1,
-                ),
+            Item = BorrowedRow<
+                '_,
+                MusubiProviderBundleAttestationKeyV1,
+                MusubiProviderBundleAttestationRecordV1,
                 Self::Error,
             >,
         >,
@@ -230,7 +241,12 @@ pub trait MusubiRead: MusubiEvidenceRead<LookupCursor> {
         &self,
     ) -> Result<
         impl ExactSizeIterator<
-            Item = Result<(&MusubiPackageSelectorV1, &MusubiOrderedPackageEntryV1), Self::Error>,
+            Item = BorrowedRow<
+                '_,
+                MusubiPackageSelectorV1,
+                MusubiOrderedPackageEntryV1,
+                Self::Error,
+            >,
         >,
         Self::Error,
     >;
@@ -240,7 +256,9 @@ pub trait MusubiRead: MusubiEvidenceRead<LookupCursor> {
     fn musubi_releases_rows(
         &self,
     ) -> Result<
-        impl ExactSizeIterator<Item = Result<(&MusubiReleaseIdV1, &MusubiReleaseRecordV1), Self::Error>>,
+        impl ExactSizeIterator<
+            Item = BorrowedRow<'_, MusubiReleaseIdV1, MusubiReleaseRecordV1, Self::Error>,
+        >,
         Self::Error,
     >;
     /// Exact original lookup in `musubi_releases`; absence never replaces a refusal.
@@ -263,7 +281,7 @@ pub trait MusubiRead: MusubiEvidenceRead<LookupCursor> {
         &self,
     ) -> Result<
         impl ExactSizeIterator<
-            Item = Result<(&MusubiReleaseIdV1, &MusubiResolverReleaseRowV1), Self::Error>,
+            Item = BorrowedRow<'_, MusubiReleaseIdV1, MusubiResolverReleaseRowV1, Self::Error>,
         >,
         Self::Error,
     >;
@@ -334,7 +352,7 @@ impl<W: MusubiSourceReadOnly> MusubiRead for W {
     fn musubi_archives_rows(
         &self,
     ) -> Result<
-        impl ExactSizeIterator<Item = Result<(&ArchiveId, &MusubiArchiveRecordV1), Self::Error>>,
+        impl ExactSizeIterator<Item = BorrowedRow<'_, ArchiveId, MusubiArchiveRecordV1, Self::Error>>,
         Self::Error,
     > {
         Ok(self.source_musubi_archives().iter().map(Ok))
@@ -351,7 +369,9 @@ impl<W: MusubiSourceReadOnly> MusubiRead for W {
     fn musubi_archive_availability_rows(
         &self,
     ) -> Result<
-        impl ExactSizeIterator<Item = Result<(&ArchiveId, &MusubiArchiveAvailabilityV1), Self::Error>>,
+        impl ExactSizeIterator<
+            Item = BorrowedRow<'_, ArchiveId, MusubiArchiveAvailabilityV1, Self::Error>,
+        >,
         Self::Error,
     > {
         Ok(self.source_musubi_archive_availability().iter().map(Ok))
@@ -369,7 +389,12 @@ impl<W: MusubiSourceReadOnly> MusubiRead for W {
         &self,
     ) -> Result<
         impl ExactSizeIterator<
-            Item = Result<(&MusubiArchiveLocationKeyV1, &MusubiArchiveLocationV1), Self::Error>,
+            Item = BorrowedRow<
+                '_,
+                MusubiArchiveLocationKeyV1,
+                MusubiArchiveLocationV1,
+                Self::Error,
+            >,
         >,
         Self::Error,
     > {
@@ -402,7 +427,9 @@ impl<W: MusubiSourceReadOnly> MusubiRead for W {
     fn musubi_packages_rows(
         &self,
     ) -> Result<
-        impl ExactSizeIterator<Item = Result<(&MusubiPackageIdV1, &MusubiPackageRecordV1), Self::Error>>,
+        impl ExactSizeIterator<
+            Item = BorrowedRow<'_, MusubiPackageIdV1, MusubiPackageRecordV1, Self::Error>,
+        >,
         Self::Error,
     > {
         Ok(self.source_musubi_packages().iter().map(Ok))
@@ -420,11 +447,10 @@ impl<W: MusubiSourceReadOnly> MusubiRead for W {
         &self,
     ) -> Result<
         impl ExactSizeIterator<
-            Item = Result<
-                (
-                    &MusubiProviderBundleAttestationKeyV1,
-                    &MusubiProviderBundleAttestationRecordV1,
-                ),
+            Item = BorrowedRow<
+                '_,
+                MusubiProviderBundleAttestationKeyV1,
+                MusubiProviderBundleAttestationRecordV1,
                 Self::Error,
             >,
         >,
@@ -442,7 +468,12 @@ impl<W: MusubiSourceReadOnly> MusubiRead for W {
         &self,
     ) -> Result<
         impl ExactSizeIterator<
-            Item = Result<(&MusubiPackageSelectorV1, &MusubiOrderedPackageEntryV1), Self::Error>,
+            Item = BorrowedRow<
+                '_,
+                MusubiPackageSelectorV1,
+                MusubiOrderedPackageEntryV1,
+                Self::Error,
+            >,
         >,
         Self::Error,
     > {
@@ -454,7 +485,9 @@ impl<W: MusubiSourceReadOnly> MusubiRead for W {
     fn musubi_releases_rows(
         &self,
     ) -> Result<
-        impl ExactSizeIterator<Item = Result<(&MusubiReleaseIdV1, &MusubiReleaseRecordV1), Self::Error>>,
+        impl ExactSizeIterator<
+            Item = BorrowedRow<'_, MusubiReleaseIdV1, MusubiReleaseRecordV1, Self::Error>,
+        >,
         Self::Error,
     > {
         Ok(self.source_musubi_releases().iter().map(Ok))
@@ -472,7 +505,7 @@ impl<W: MusubiSourceReadOnly> MusubiRead for W {
         &self,
     ) -> Result<
         impl ExactSizeIterator<
-            Item = Result<(&MusubiReleaseIdV1, &MusubiResolverReleaseRowV1), Self::Error>,
+            Item = BorrowedRow<'_, MusubiReleaseIdV1, MusubiResolverReleaseRowV1, Self::Error>,
         >,
         Self::Error,
     > {

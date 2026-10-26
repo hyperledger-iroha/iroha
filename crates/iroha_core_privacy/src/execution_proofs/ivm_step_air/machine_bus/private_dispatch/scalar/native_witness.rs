@@ -24,8 +24,8 @@ pub(in super::super) fn fill(
     original_left: u64,
     original_right: u64,
 ) {
-    let (left, right, arithmetic_opcode, predicate) = match instruction {
-        Some(instruction) => {
+    let (left, right, arithmetic_opcode, predicate) =
+        instruction.map_or((0, 0, wide::arithmetic::ADD, 0), |instruction| {
             assert!(supported(instruction), "closed native scalar component");
             let (left, right) = if wide::opcode(instruction) == wide::arithmetic::NEG {
                 (0, original_left)
@@ -51,9 +51,7 @@ pub(in super::super) fn fill(
                 ][predicate]
             });
             (left, right, arithmetic_opcode, predicate)
-        }
-        None => (0, 0, wide::arithmetic::ADD, 0),
-    };
+        });
     let source = Temporary(word::witness(left, right));
     row[SCALAR + SOURCES..SCALAR + ALU].copy_from_slice(&source.0);
     let arithmetic = Temporary(alu::witness(arithmetic_opcode, left, right));

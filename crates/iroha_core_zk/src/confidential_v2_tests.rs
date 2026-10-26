@@ -216,46 +216,52 @@ mod tests {
             super::reset_confidential_commitment_leaf_hash_calls_v3();
             check(
                 super::build_confidential_transfer_proof_v2(
-                    &network,
-                    "asset",
-                    &[1; 32],
+                    crate::confidential_v2::ConfidentialProofContext {
+                        network_id: &network,
+                        asset_definition_id: "asset",
+                        spend_key: &[1; 32],
+                        circuit_id: super::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
+                        vk_box: &key,
+                    },
                     &tree,
                     &transfer_inputs,
                     std::slice::from_ref(&transfer_output),
                     [0; 32],
-                    super::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
-                    &key,
                 )
                 .map(|_| ()),
                 expected,
             );
             check(
                 super::build_confidential_unshield_proof_v2(
-                    &network,
-                    "asset",
-                    &[1; 32],
+                    crate::confidential_v2::ConfidentialProofContext {
+                        network_id: &network,
+                        asset_definition_id: "asset",
+                        spend_key: &[1; 32],
+                        circuit_id: super::CONFIDENTIAL_UNSHIELD_V2_CIRCUIT_ID,
+                        vk_box: &key,
+                    },
                     &tree,
                     &unshield_inputs,
                     1,
                     [0; 32],
-                    super::CONFIDENTIAL_UNSHIELD_V2_CIRCUIT_ID,
-                    &key,
                 )
                 .map(|_| ()),
                 expected,
             );
             check(
                 super::build_confidential_unshield_proof_v3(
-                    &network,
-                    "asset",
-                    &[1; 32],
+                    crate::confidential_v2::ConfidentialProofContext {
+                        network_id: &network,
+                        asset_definition_id: "asset",
+                        spend_key: &[1; 32],
+                        circuit_id: super::CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID,
+                        vk_box: &key,
+                    },
                     &tree,
                     &unshield_inputs,
                     &[],
                     1,
                     [0; 32],
-                    super::CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID,
-                    &key,
                 )
                 .map(|_| ()),
                 expected,
@@ -271,15 +277,17 @@ mod tests {
         for outputs in [vec![], vec![transfer_output; 3]] {
             check(
                 super::build_confidential_transfer_proof_v2(
-                    &network,
-                    "asset",
-                    &[1; 32],
+                    crate::confidential_v2::ConfidentialProofContext {
+                        network_id: &network,
+                        asset_definition_id: "asset",
+                        spend_key: &[1; 32],
+                        circuit_id: super::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
+                        vk_box: &key,
+                    },
                     &tree,
                     std::slice::from_ref(&transfer_input),
                     &outputs,
                     [0; 32],
-                    super::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
-                    &key,
                 )
                 .map(|_| ()),
                 "one or two outputs",
@@ -300,16 +308,18 @@ mod tests {
         ];
         check(
             super::build_confidential_unshield_proof_v3(
-                &network,
-                "asset",
-                &[1; 32],
+                crate::confidential_v2::ConfidentialProofContext {
+                    network_id: &network,
+                    asset_definition_id: "asset",
+                    spend_key: &[1; 32],
+                    circuit_id: super::CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID,
+                    vk_box: &key,
+                },
                 &tree,
                 &[unshield_input],
                 &outputs,
                 1,
                 [0; 32],
-                super::CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID,
-                &key,
             )
             .map(|_| ()),
             "at most one private change output",
@@ -582,7 +592,7 @@ mod tests {
                 all_commitments.len(),
                 empty_roots[0],
             );
-            for height in 0..=6 {
+            for (height, dense_layer) in dense_layers.iter().enumerate().take(7) {
                 let width = 1_usize << height;
                 for start in (0..64).step_by(width) {
                     let sparse = super::confidential_subtree_root_v3(
@@ -592,7 +602,7 @@ mod tests {
                         &empty_roots,
                     )
                     .expect("sparse subtree root");
-                    let dense = dense_layers[height][start / width];
+                    let dense = dense_layer[start / width];
                     assert_eq!(sparse, dense, "len={len} start={start} height={height}");
                 }
             }
@@ -754,7 +764,8 @@ mod tests {
     }
     #[test]
     fn production_circuit_selectors_reject_noncanonical_aliases() {
-        let selectors: [(&str, fn(&str) -> bool); 3] = [
+        type Selector = (&'static str, fn(&str) -> bool);
+        let selectors: [Selector; 3] = [
             (
                 super::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
                 super::is_confidential_transfer_v2_circuit_id,
@@ -833,14 +844,6 @@ mod tests {
     }
     #[test]
     fn native_confidential_poseidon_matches_captured_oracle_on_both_pasta_fields() {
-        let fixture: norito::json::Value = norito::json::from_str(include_str!(
-            "../../../fixtures/native_prover/confidential_poseidon_v1.json"
-        ))
-        .expect("captured independent oracle vectors");
-        assert_eq!(
-            fixture.get("schema").and_then(norito::json::Value::as_str),
-            Some("iroha.native_prover.confidential_poseidon.v1")
-        );
         fn check<F: iroha_pasta::poseidon::PoseidonField>(
             fixture: &norito::json::Value,
             field: &str,
@@ -931,6 +934,14 @@ mod tests {
                 }
             }
         }
+        let fixture: norito::json::Value = norito::json::from_str(include_str!(
+            "../../../fixtures/native_prover/confidential_poseidon_v1.json"
+        ))
+        .expect("captured independent oracle vectors");
+        assert_eq!(
+            fixture.get("schema").and_then(norito::json::Value::as_str),
+            Some("iroha.native_prover.confidential_poseidon.v1")
+        );
         check::<iroha_pasta::Fp>(&fixture, "fp");
         check::<iroha_pasta::Fq>(&fixture, "fq");
     }
@@ -1464,29 +1475,6 @@ mod tests {
     }
     #[test]
     fn confidential_unshield_v2_v3_canonical_caches_reject_key_substitution() {
-        use iroha_data_model::proof::VerifyingKeyBox;
-        let v2 = super::confidential_unshield_v2_vk_box().expect("canonical unshield v2 vk");
-        let v2_cached = super::confidential_unshield_v2_vk_box().expect("cached unshield v2 vk");
-        assert_eq!(v2, v2_cached);
-        super::ensure_confidential_unshield_v2_canonical_vk_box(&v2)
-            .map_err(|error| match error {
-                crate::VerificationAttemptError::Rejected(error) => error,
-                crate::VerificationAttemptError::Deferred(original) => {
-                    panic!("unexpected local verification refusal: {original}")
-                }
-            })
-            .expect("canonical unshield v2 verifier key should pass");
-        let v3 = super::confidential_unshield_v3_vk_box().expect("canonical unshield v3 vk");
-        let v3_cached = super::confidential_unshield_v3_vk_box().expect("cached unshield v3 vk");
-        assert_eq!(v3, v3_cached);
-        super::ensure_confidential_unshield_v3_canonical_vk_box(&v3)
-            .map_err(|error| match error {
-                crate::VerificationAttemptError::Rejected(error) => error,
-                crate::VerificationAttemptError::Deferred(original) => {
-                    panic!("unexpected local verification refusal: {original}")
-                }
-            })
-            .expect("canonical unshield v3 verifier key should pass");
         fn assert_rejects_key_substitution(
             label: &str,
             canonical: &VerifyingKeyBox,
@@ -1523,6 +1511,29 @@ mod tests {
                 "unexpected {label} backend error: {err}"
             );
         }
+        use iroha_data_model::proof::VerifyingKeyBox;
+        let v2 = super::confidential_unshield_v2_vk_box().expect("canonical unshield v2 vk");
+        let v2_cached = super::confidential_unshield_v2_vk_box().expect("cached unshield v2 vk");
+        assert_eq!(v2, v2_cached);
+        super::ensure_confidential_unshield_v2_canonical_vk_box(&v2)
+            .map_err(|error| match error {
+                crate::VerificationAttemptError::Rejected(error) => error,
+                crate::VerificationAttemptError::Deferred(original) => {
+                    panic!("unexpected local verification refusal: {original}")
+                }
+            })
+            .expect("canonical unshield v2 verifier key should pass");
+        let v3 = super::confidential_unshield_v3_vk_box().expect("canonical unshield v3 vk");
+        let v3_cached = super::confidential_unshield_v3_vk_box().expect("cached unshield v3 vk");
+        assert_eq!(v3, v3_cached);
+        super::ensure_confidential_unshield_v3_canonical_vk_box(&v3)
+            .map_err(|error| match error {
+                crate::VerificationAttemptError::Rejected(error) => error,
+                crate::VerificationAttemptError::Deferred(original) => {
+                    panic!("unexpected local verification refusal: {original}")
+                }
+            })
+            .expect("canonical unshield v3 verifier key should pass");
         assert_rejects_key_substitution(
             "unshield v2",
             &v2,
@@ -1645,9 +1656,13 @@ mod tests {
             { super::CONFIDENTIAL_TREE_DEPTH_V2 },
         >(&witness, instance_columns));
         let proof = super::build_confidential_transfer_proof_v2(
-            &network_id,
-            asset_definition_id,
-            &spend_key,
+            crate::confidential_v2::ConfidentialProofContext {
+                network_id: &network_id,
+                asset_definition_id,
+                spend_key: &spend_key,
+                circuit_id: &transfer_vk.circuit_id,
+                vk_box: transfer_key,
+            },
             &tree_commitments,
             &[super::ConfidentialTransferInputV2 {
                 amount: 7,
@@ -1661,8 +1676,6 @@ mod tests {
                 owner_tag: output_owner_tag,
             }],
             root,
-            &transfer_vk.circuit_id,
-            transfer_key,
         )
         .expect("transfer proof");
         assert!(
@@ -1689,9 +1702,13 @@ mod tests {
         let wrong_cid_key = super::confidential_unshield_v2_vk_box().unwrap();
         assert_ne!(crate::hash_vk(transfer_key), crate::hash_vk(&wrong_cid_key));
         let wrong_cid_error = super::build_confidential_transfer_proof_v2(
-            &network_id,
-            asset_definition_id,
-            &spend_key,
+            crate::confidential_v2::ConfidentialProofContext {
+                network_id: &network_id,
+                asset_definition_id,
+                spend_key: &spend_key,
+                circuit_id: &transfer_vk.circuit_id,
+                vk_box: &wrong_cid_key,
+            },
             &tree_commitments,
             &[super::ConfidentialTransferInputV2 {
                 amount: 7,
@@ -1705,8 +1722,6 @@ mod tests {
                 owner_tag: output_owner_tag,
             }],
             root,
-            &transfer_vk.circuit_id,
-            &wrong_cid_key,
         )
         .expect_err("proof builder must reject a verifier key for another circuit");
         assert!(
@@ -1764,19 +1779,24 @@ mod tests {
             input_1_owner_tag,
         )
         .expect("input 1 commitment");
-        let mut tree_commitments = Vec::new();
-        tree_commitments.push(input_0_commitment);
-        tree_commitments.push(super::scalar_to_repr_bytes(super::Scalar::from(0x99_u64)));
-        tree_commitments.push(input_1_commitment);
+        let tree_commitments = vec![
+            input_0_commitment,
+            super::scalar_to_repr_bytes(super::Scalar::from(0x99_u64)),
+            input_1_commitment,
+        ];
         let root_hint =
             super::compute_confidential_root_v2(&tree_commitments).expect("confidential root");
         let vk_record =
             super::confidential_transfer_v2_vk_record("vk_transfer", 3).expect("transfer vk");
         let vk_box = vk_record.key.clone().expect("inline transfer vk");
         let proof = super::build_confidential_transfer_proof_v2(
-            &network_id,
-            asset_definition_id,
-            &spend_key,
+            crate::confidential_v2::ConfidentialProofContext {
+                network_id: &network_id,
+                asset_definition_id,
+                spend_key: &spend_key,
+                circuit_id: &vk_record.circuit_id,
+                vk_box: &vk_box,
+            },
             &tree_commitments,
             &[
                 super::ConfidentialTransferInputV2 {
@@ -1805,8 +1825,6 @@ mod tests {
                 },
             ],
             root_hint,
-            &vk_record.circuit_id,
-            &vk_box,
         )
         .expect("build transfer proof");
         assert!(
@@ -1843,9 +1861,13 @@ mod tests {
             super::confidential_transfer_v2_vk_record("vk_transfer", 3).expect("transfer vk");
         let vk_box = vk_record.key.clone().expect("inline transfer vk");
         let proof = super::build_confidential_transfer_proof_v2(
-            &network_id,
-            asset_definition_id,
-            &spend_key,
+            crate::confidential_v2::ConfidentialProofContext {
+                network_id: &network_id,
+                asset_definition_id,
+                spend_key: &spend_key,
+                circuit_id: &vk_record.circuit_id,
+                vk_box: &vk_box,
+            },
             &tree_commitments,
             &[super::ConfidentialTransferInputV2 {
                 amount: 2,
@@ -1866,8 +1888,6 @@ mod tests {
                 },
             ],
             root_hint,
-            &vk_record.circuit_id,
-            &vk_box,
         )
         .expect("build transfer proof");
         assert!(

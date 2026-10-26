@@ -132,24 +132,20 @@ pub struct BooleanGateAirRowV1 {
 impl BooleanGateAirRowV1 {
     /// Canonical AND witness row.
     pub(crate) fn and(left: bool, right: bool) -> Self {
-        Self::new_selector([1, 0, 0], left, right, false, left & right, false)
+        Self::new_selector([1, 0, 0], (left, right, false, left & right, false))
     }
     /// Canonical XOR witness row.
     pub(crate) fn xor(left: bool, right: bool) -> Self {
-        Self::new_selector([0, 1, 0], left, right, false, left ^ right, false)
+        Self::new_selector([0, 1, 0], (left, right, false, left ^ right, false))
     }
     /// Canonical one-bit full-adder witness row.
     pub(crate) fn full_adder(left: bool, right: bool, carry_in: bool) -> Self {
         let sum = u8::from(left) + u8::from(right) + u8::from(carry_in);
-        Self::new_selector([0, 0, 1], left, right, carry_in, sum & 1 == 1, sum >= 2)
+        Self::new_selector([0, 0, 1], (left, right, carry_in, sum & 1 == 1, sum >= 2))
     }
     fn new_selector(
         selectors: [u64; 3],
-        left: bool,
-        right: bool,
-        carry_in: bool,
-        out: bool,
-        carry_out: bool,
+        (left, right, carry_in, out, carry_out): (bool, bool, bool, bool, bool),
     ) -> Self {
         Self {
             select_and: F(selectors[0]),
@@ -355,7 +351,8 @@ mod tests {
         assert_eq!(ZK_X509_CA_ACCUMULATOR_DEEP_OPENING_BYTES_V1, 52_800);
         assert_eq!(ZK_X509_CA_ACCUMULATOR_INNER_MAX_PROOF_BYTES_V1, 1_498_816);
         assert_eq!(ZK_X509_CA_ACCUMULATOR_MAX_PROOF_BYTES_V1, 1_498_826);
-        let _verifier =
-            super::super::accumulator_stark::joint_verifier::CaJointVerifierOraclesV1::new_v1;
+        std::hint::black_box(
+            super::super::accumulator_stark::joint_verifier::CaJointVerifierOraclesV1::new_v1,
+        );
     }
 }

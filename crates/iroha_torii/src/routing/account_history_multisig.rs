@@ -170,7 +170,7 @@ fn validate_executed_outcome(
 
 /// Bound the existing pure movement projector before it allocates its output.
 ///
-/// Never feed it CustomInstruction: a nested proposal is intent, and a nested
+/// Never feed it `CustomInstruction`: a nested proposal is intent, and a nested
 /// approval's actual effects are represented by its own immutable execution
 /// record in the same entrypoint prefix. This also prevents double projection.
 fn direct_movement_bound(instruction: &InstructionBox) -> usize {
@@ -391,7 +391,7 @@ mod tests {
                 instructions,
                 proposed_at_ms: 100,
                 expires_at_ms: 200,
-                approvals: Default::default(),
+                approvals: std::collections::BTreeSet::default(),
             },
             status: MultisigProposalTerminalStatus::Finalized,
             terminal_at_ms: 150,
@@ -439,7 +439,7 @@ mod tests {
     #[test]
     fn execution_is_bound_to_exact_key_network_height_and_occurrence() {
         let (key, execution) = execution_fixture();
-        let network = execution.terminal.proposal.network_id.clone();
+        let network = execution.terminal.proposal.network_id;
         validate_execution(&key, &execution, [0x33; 32], 65, &network).unwrap();
         assert!(validate_execution(&key, &execution, [0x34; 32], 65, &network).is_err());
         assert!(validate_execution(&key, &execution, [0x33; 32], 66, &network).is_err());

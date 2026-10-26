@@ -1,6 +1,24 @@
 //! This module contains [`Nft`] instructions and queries implementations.
 use super::prelude::*;
 use iroha_telemetry::metrics;
+/// Seed the explicit Ed25519 policy for NFT component fixtures that register accounts.
+/// This is pre-block fixture state, not authenticated signed-genesis evidence.
+#[cfg(test)]
+fn nft_account_fixture_world() -> crate::state::World {
+    let mut world = crate::state::World::default();
+    let policy = iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+        iroha_crypto::Algorithm::Ed25519,
+    ])
+    .expect("explicit NFT fixture crypto policy");
+    world
+        .set_parameter_for_testing(
+            policy
+                .into_parameter()
+                .expect("encode explicit NFT fixture crypto policy"),
+        )
+        .expect("retain explicit NFT fixture crypto policy before the block");
+    world
+}
 /// ISI module contains all instructions related to NFTs:
 /// - register/unregister NFT
 /// - update metadata
@@ -53,14 +71,15 @@ pub mod isi {
             if !should_remove {
                 continue;
             }
-            let remove_entry = if let Some(permissions) =
-                state_transaction.world.account_permissions.get_mut(&holder)
-            {
-                permissions.retain(|permission| !is_permission_nft_associated(permission, nft_id));
-                permissions.is_empty()
-            } else {
-                false
-            };
+            let remove_entry = state_transaction
+                .world
+                .account_permissions
+                .get_mut(&holder)
+                .is_some_and(|permissions| {
+                    permissions
+                        .retain(|permission| !is_permission_nft_associated(permission, nft_id));
+                    permissions.is_empty()
+                });
             if remove_entry {
                 state_transaction
                     .world
@@ -125,7 +144,9 @@ pub mod isi {
                 .into());
             }
             let _ = state_transaction.world.domain(nft_id.domain())?;
-            state_transaction.world.insert_nft_entry(nft_id, nft_value);
+            state_transaction
+                .world
+                .insert_nft_entry(&(nft_id), nft_value);
             state_transaction
                 .world
                 .emit_events(Some(DomainEvent::Nft(NftEvent::Created(nft))));
@@ -370,7 +391,11 @@ pub mod isi {
         fn unregister_nft_removes_associated_permissions_from_accounts_and_roles() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = State::new(
+                super::super::nft_account_fixture_world(),
+                kura,
+                query_handle,
+            );
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
@@ -438,7 +463,11 @@ pub mod isi {
         fn transfer_nft_rejects_authority_without_ownership() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = State::new(
+                super::super::nft_account_fixture_world(),
+                kura,
+                query_handle,
+            );
             let users_domain: DomainId =
                 DomainId::try_new("users", "universal").expect("domain id");
             let user1 = checked_account_id();
@@ -480,7 +509,11 @@ pub mod isi {
         fn transfer_nft_allows_nft_domain_owner() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = State::new(
+                super::super::nft_account_fixture_world(),
+                kura,
+                query_handle,
+            );
             let users_domain: DomainId =
                 DomainId::try_new("users", "universal").expect("domain id");
             let user1 = checked_account_id();
@@ -619,7 +652,7 @@ pub mod query {
         Domains(Vec<DomainId>),
         Full,
     }
-    fn nft_from_entry(entry: NftEntry<'_>) -> Nft {
+    fn nft_from_entry(entry: &NftEntry<'_>) -> Nft {
         let details = entry.value().clone().into_inner();
         Nft {
             id: entry.id().clone(),
@@ -666,9 +699,11 @@ pub mod query {
                 iroha_data_model::query::json::predicate_json_candidate_plan_for_execution,
             );
             let iter: Box<dyn Iterator<Item = Nft> + '_> = match predicate_view.plan() {
-                NftQueryPlan::Ids(ids) => {
-                    Box::new(world.nft_entries_by_ids_iter(ids).map(nft_from_entry))
-                }
+                NftQueryPlan::Ids(ids) => Box::new(
+                    world
+                        .nft_entries_by_ids_iter(ids)
+                        .map(|value| nft_from_entry(&value)),
+                ),
                 NftQueryPlan::Owners(owners) => {
                     Box::new(owners.into_iter().flat_map(move |owner| {
                         let nft_ids = crate::state::range_bounds::index_members(
@@ -676,7 +711,9 @@ pub mod query {
                             &owner,
                         )
                         .cloned();
-                        world.nft_entries_by_ids_iter(nft_ids).map(nft_from_entry)
+                        world
+                            .nft_entries_by_ids_iter(nft_ids)
+                            .map(|value| nft_from_entry(&value))
                     }))
                 }
                 NftQueryPlan::Domains(domains) => {
@@ -685,17 +722,20 @@ pub mod query {
                             .nfts_in_domain_iter(&domain)
                             .map(|entry| entry.id().clone())
                             .collect::<Vec<_>>();
-                        world.nft_entries_by_ids_iter(nft_ids).map(nft_from_entry)
+                        world
+                            .nft_entries_by_ids_iter(nft_ids)
+                            .map(|value| nft_from_entry(&value))
                     }))
                 }
-                NftQueryPlan::Full => Box::new(world.nfts_iter().map(nft_from_entry)),
+                NftQueryPlan::Full => {
+                    Box::new(world.nfts_iter().map(|value| nft_from_entry(&value)))
+                }
             };
             Ok(iter.filter(move |nft| {
-                if let Some(predicate) = predicate_json.as_ref() {
-                    predicate_matches_nft(predicate, nft)
-                } else {
-                    filter.applies(nft)
-                }
+                predicate_json.as_ref().map_or_else(
+                    || filter.applies(nft),
+                    |predicate| predicate_matches_nft(predicate, nft),
+                )
             }))
         }
     }
@@ -1011,7 +1051,11 @@ pub mod query {
         fn nft_owner_index_tracks_register_transfer_and_unregister() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = State::new(
+                super::super::nft_account_fixture_world(),
+                kura,
+                query_handle,
+            );
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();

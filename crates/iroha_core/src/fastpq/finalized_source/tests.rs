@@ -156,7 +156,8 @@ fn native_source_join_rejects_other_height_or_certified_block_identity() {
     let (mut chain, joined, _, _) = original_source();
     let (_, other, _, _) = original_source();
     chain.commit(Vec::new());
-    for wrong in [authority(&chain, 1), authority(&chain, 3)] {
+    for wrong in std::iter::once(authority(&chain, 1)).chain(std::iter::once(authority(&chain, 3)))
+    {
         assert_eq!(
             joined.witness.verify_finalized_source(&wrong),
             Err(FinalizedFastpqSourceError::BlockIdentity)

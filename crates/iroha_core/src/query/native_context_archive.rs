@@ -91,8 +91,8 @@ impl NativeContextArchiveError {
     /// mismatches require recovery. Encoder errors do not borrow a decoder scope.
     pub fn is_local_refusal(&self) -> bool {
         match self {
-            Self::CaptureAdmission(iroha_allocation::AllocationRefusal::Capacity { .. }) => true,
-            Self::Allocation(
+            Self::CaptureAdmission(iroha_allocation::AllocationRefusal::Capacity { .. })
+            | Self::Allocation(
                 ChargedBufferError::Admission(
                     iroha_allocation::AllocationRefusal::Capacity { .. }
                     | iroha_allocation::AllocationRefusal::ExceedsLimit { .. },
@@ -461,7 +461,7 @@ impl NativeContextArchive {
     }
 
     /// Durably publish or recheck the exact retained record. A failure leaves `original` intact.
-    /// The caller must keep it in PendingCommit until publication and remaining notifications finish.
+    /// The caller must keep it in `PendingCommit` until publication and remaining notifications finish.
     ///
     /// # Errors
     /// Foreign backing, changed canonical record, or a write/link/directory-sync failure.
@@ -499,15 +499,15 @@ impl NativeContextArchive {
             original.carrier_hash,
             original.bytes.as_slice(),
         )?;
-        if let Some(intents) = &original.prepared_intents {
-            if !cfg!(all(test, sumeragi_core_mutation = "HC183")) {
-                publish_named_record(
-                    &self.directory,
-                    &RecordName::intent(original.height, original.carrier_hash, false),
-                    &RecordName::intent(original.height, original.carrier_hash, true),
-                    intents.as_slice(),
-                )?;
-            }
+        if let Some(intents) = &original.prepared_intents
+            && !cfg!(all(test, sumeragi_core_mutation = "HC183"))
+        {
+            publish_named_record(
+                &self.directory,
+                &RecordName::intent(original.height, original.carrier_hash, false),
+                &RecordName::intent(original.height, original.carrier_hash, true),
+                intents.as_slice(),
+            )?;
         }
         self.recheck_namespace()?;
         Ok(())
@@ -572,8 +572,8 @@ impl NativeContextArchive {
     }
 
     /// Read exact original canonical bytes for a separately selected carrier identity.
-    /// The returned bytes are untrusted until NativeExecutionEvidenceVerifier consumes the
-    /// full canonical carrier and checks R.native_lanes. A missing record fails closed.
+    /// The returned bytes are untrusted until `NativeExecutionEvidenceVerifier` consumes the
+    /// full canonical carrier and checks `R.native_lanes`. A missing record fails closed.
     /// This one-shot convenience drops its read job on error; callers that retry must retain
     /// the owner returned by [`Self::read_job`] to keep the original descriptor and partial bytes.
     ///
@@ -708,19 +708,19 @@ fn open_archive_directory_named(root: &File, namespace: &str, create: bool) -> i
     use rustix::fs::{AtFlags, Mode, OFlags};
     use std::os::unix::fs::MetadataExt as _;
     if create {
-        match rustix::fs::mkdirat(&root, namespace, Mode::RUSR | Mode::WUSR | Mode::XUSR) {
+        match rustix::fs::mkdirat(root, namespace, Mode::RUSR | Mode::WUSR | Mode::XUSR) {
             Ok(()) => root.sync_all()?,
             Err(rustix::io::Errno::EXIST) => {}
             Err(error) => return Err(error.into()),
         }
     }
     let directory = File::from(rustix::fs::openat(
-        &root,
+        root,
         namespace,
         OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
         Mode::empty(),
     )?);
-    let entry = rustix::fs::statat(&root, namespace, AtFlags::SYMLINK_NOFOLLOW)?;
+    let entry = rustix::fs::statat(root, namespace, AtFlags::SYMLINK_NOFOLLOW)?;
     let actual = directory.metadata()?;
     if !actual.is_dir()
         || crate::kura::unix_device_identity(entry.st_dev) != actual.dev()

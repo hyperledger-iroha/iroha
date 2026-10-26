@@ -518,8 +518,10 @@ fn casting_context_authorization_replays_all_prefix_phases_and_rejects_tampering
         .freeze_ballot_survivors(
             governance_attempt_id,
             ballot_attempt_id,
-            *frozen.dropout_root(),
-            frozen.release_identity().survivor_corpus_root,
+            (
+                *frozen.dropout_root(),
+                frozen.release_identity().survivor_corpus_root,
+            ),
             u32::try_from(frozen.survivor_participant_hashes().len()).expect("survivor count"),
             frozen.release_identity().no_recovery_root,
             34,
@@ -639,7 +641,7 @@ fn timed_ovn_checkpoint_prechecks_reject_phase_and_height_before_replay() {
         .precheck_freeze_ballot_survivors(attempt_id, ballot_id, 34)
         .expect("exact survivor deadline passes the cheap guard");
     state
-        .freeze_ballot_survivors(attempt_id, ballot_id, root(21), root(29), 3, root(22), 34)
+        .freeze_ballot_survivors(attempt_id, ballot_id, (root(21), root(29)), 3, root(22), 34)
         .expect("freeze survivors");
     assert_eq!(
         state.precheck_freeze_ballot_survivors(attempt_id, ballot_id, 34),
@@ -665,7 +667,7 @@ fn timed_ovn_checkpoint_prechecks_reject_phase_and_height_before_replay() {
 
     let mut early_completion = state.clone();
     early_completion
-        .freeze_timed_ovn_corpus(attempt_id, ballot_id, root(20), root(29), 3, root(25), 35)
+        .freeze_timed_ovn_corpus(attempt_id, ballot_id, (root(20), root(29)), 3, root(25), 35)
         .expect("a complete corpus may seal at the first window height");
     assert_eq!(
         early_completion
@@ -688,7 +690,7 @@ fn timed_ovn_checkpoint_prechecks_reject_phase_and_height_before_replay() {
     );
 
     state
-        .freeze_timed_ovn_corpus(attempt_id, ballot_id, root(20), root(29), 3, root(25), 36)
+        .freeze_timed_ovn_corpus(attempt_id, ballot_id, (root(20), root(29)), 3, root(25), 36)
         .expect("freeze ballot corpus");
     assert_eq!(
         state.precheck_freeze_timed_ovn_corpus(attempt_id, ballot_id, 36),
@@ -771,7 +773,7 @@ fn ballot_transition_table_freezes_corpus_and_retries_without_fallback() {
         )
         .expect("registration");
     assert_eq!(
-        state.freeze_ballot_survivors(id, ballot, root(21), root(29), 3, root(22), 34),
+        state.freeze_ballot_survivors(id, ballot, (root(21), root(29)), 3, root(22), 34),
         Err(ParliamentReducerErrorV1::InvalidLifecycleTransition(
             ParliamentReducerEntityV1::BallotAttempt
         ))
@@ -786,7 +788,7 @@ fn ballot_transition_table_freezes_corpus_and_retries_without_fallback() {
         ))
     );
     assert_eq!(
-        state.freeze_ballot_survivors(id, ballot, root(21), root(29), 2, root(22), 34),
+        state.freeze_ballot_survivors(id, ballot, (root(21), root(29)), 2, root(22), 34),
         Err(ParliamentReducerErrorV1::InvalidBallotCount),
         "the two-survivor exact-tally disclosure must fail before ballot acceptance"
     );
@@ -866,14 +868,14 @@ fn ballot_transition_table_freezes_corpus_and_retries_without_fallback() {
 }
 
 /// Build a validated attempt retaining `key_session_id` through two ballot deadlines.
-pub(crate) fn tle_key_session_retention_attempt_fixture_v1(
+pub fn tle_key_session_retention_attempt_fixture_v1(
     key_session_id: TleKeySessionId,
 ) -> ParliamentAttemptStateV1 {
     tle_key_session_retention_attempt_fixture_with_retry_schedule_v1(key_session_id, 47, 60)
 }
 
 /// Build a validated attempt whose retry retains `key_session_id` forever.
-pub(crate) fn tle_key_session_unbounded_retention_attempt_fixture_v1(
+pub fn tle_key_session_unbounded_retention_attempt_fixture_v1(
     key_session_id: TleKeySessionId,
 ) -> ParliamentAttemptStateV1 {
     tle_key_session_retention_attempt_fixture_with_retry_schedule_v1(
@@ -886,7 +888,7 @@ pub(crate) fn tle_key_session_unbounded_retention_attempt_fixture_v1(
 /// Build a validated attempt whose first timed-OVN ballot ended `ReleasePulseUnavailable`
 /// through the reducer: its corpus froze and the release deadline passed without a pulse at
 /// `(release_beacon_session_id, release_height)`. Returns the attempt and that release slot.
-pub(crate) fn release_pulse_unavailable_attempt_fixture_v1(
+pub fn release_pulse_unavailable_attempt_fixture_v1(
     release_beacon_session_id: BeaconSessionId,
 ) -> (ParliamentAttemptStateV1, (BeaconSessionId, u64)) {
     let BodyFixture {
@@ -921,10 +923,10 @@ pub(crate) fn release_pulse_unavailable_attempt_fixture_v1(
         .close_ballot_registration(attempt_id, ballot_id, root(71), 3, 31)
         .expect("freeze registration");
     state
-        .freeze_ballot_survivors(attempt_id, ballot_id, root(74), root(75), 3, root(76), 34)
+        .freeze_ballot_survivors(attempt_id, ballot_id, (root(74), root(75)), 3, root(76), 34)
         .expect("freeze survivors");
     state
-        .freeze_timed_ovn_corpus(attempt_id, ballot_id, root(77), root(75), 3, root(78), 36)
+        .freeze_timed_ovn_corpus(attempt_id, ballot_id, (root(77), root(75)), 3, root(78), 36)
         .expect("freeze timed corpus");
     state
         .fail_ballot_no_result(attempt_id, ballot_id, false, release_height + 1)
@@ -1395,7 +1397,7 @@ fn ballot_failure_reason_is_derived_from_the_frozen_phase() {
     );
 
     state
-        .freeze_ballot_survivors(attempt_id, ballot_id, root(74), root(75), 3, root(76), 34)
+        .freeze_ballot_survivors(attempt_id, ballot_id, (root(74), root(75)), 3, root(76), 34)
         .expect("freeze survivors");
     let mut commitment_expired = state.clone();
     commitment_expired
@@ -1410,7 +1412,7 @@ fn ballot_failure_reason_is_derived_from_the_frozen_phase() {
     );
 
     state
-        .freeze_timed_ovn_corpus(attempt_id, ballot_id, root(77), root(75), 3, root(78), 36)
+        .freeze_timed_ovn_corpus(attempt_id, ballot_id, (root(77), root(75)), 3, root(78), 36)
         .expect("freeze timed corpus");
     let mut release_expired = state.clone();
     release_expired

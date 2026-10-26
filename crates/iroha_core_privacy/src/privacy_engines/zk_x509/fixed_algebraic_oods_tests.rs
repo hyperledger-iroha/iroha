@@ -53,7 +53,8 @@ fn mixed_schedule(log: u8) -> ZkX509FixedAlgebraicScheduleV1 {
 }
 
 fn interpolation_reference(schedule: &ZkX509FixedAlgebraicScheduleV1, point: E) -> Vec<E> {
-    let native_size = schedule.domain.native_size_v1().unwrap() as usize;
+    let native_size = usize::try_from(schedule.domain.native_size_v1().unwrap())
+        .expect("protocol-bounded index fits usize");
     let root = goldilocks_primitive_root_v1(schedule.domain.native_log2).unwrap();
     (0..schedule.width)
         .map(|column| {
@@ -162,7 +163,8 @@ fn fixed_fp4_cyclic_prefixes_match_direct_sums_for_every_shift_and_gcd() {
             let count = (63 - first) / stride + 1;
             for shift in 0..64 {
                 let expected = (0..count).fold(E::ZERO, |sum, occurrence| {
-                    let row = (first + occurrence * stride) as usize;
+                    let row = usize::try_from(first + occurrence * stride)
+                        .expect("protocol-bounded index fits usize");
                     let coefficient = F(7).add(F(5).mul(F(occurrence)));
                     sum.add(table.weights[(row + 64 - shift) % 64].mul_base(coefficient))
                 });

@@ -1,4 +1,4 @@
-//! OpenAPI schema construction and package authority tests.
+//! `OpenAPI` schema construction and package authority tests.
 
 use super::*;
 use crate::utils;
@@ -246,7 +246,6 @@ impl ComponentRefContext {
     fn child(self, key: &str) -> Self {
         match self {
             Self::Schema | Self::SchemaMap => Self::Schema,
-            Self::HeaderMap => Self::Header,
             Self::Components => match key {
                 "schemas" => Self::SchemaMap,
                 "headers" => Self::HeaderMap,
@@ -258,7 +257,7 @@ impl ComponentRefContext {
                 Self::Schema
             }
             Self::Document => Self::Document,
-            Self::Header => Self::Header,
+            Self::HeaderMap | Self::Header => Self::Header,
         }
     }
     fn expected_component(self) -> Option<&'static str> {
@@ -2522,7 +2521,18 @@ fn incoming_static_openapi_contracts_remain_bound_to_runtime_routes() {
             .collect::<BTreeSet<_>>(),
         BTreeSet::from(["classical-rom", "pq-qrom"])
     );
-    let catalog_commitment = schemas["PrivacyExact12CatalogCommitmentV1"]["const"]
+    let catalog_commitment_schema = &schemas["PrivacyExact12CatalogCommitmentV1"];
+    let catalog_commitment_width =
+        u64::try_from(iroha_data_model::privacy::PrivacyExact12CatalogCommitmentV1::BYTES)
+            .expect("catalog commitment width fits u64");
+    for bound in ["minItems", "maxItems"] {
+        assert_eq!(
+            catalog_commitment_schema[bound].as_u64(),
+            Some(catalog_commitment_width),
+            "Exact12 catalog commitment {bound} must match its native owner"
+        );
+    }
+    let catalog_commitment = catalog_commitment_schema["const"]
         .as_array()
         .expect("pinned Exact12 catalog commitment")
         .iter()
@@ -2534,8 +2544,8 @@ fn incoming_static_openapi_contracts_remain_bound_to_runtime_routes() {
     assert_eq!(
         catalog_commitment,
         iroha_data_model::privacy::PrivacyExact12CatalogCommitmentV1::canonical()
-            .digest()
-            .to_le_bytes()
+            .as_bytes()
+            .as_slice()
     );
     let details = openapi_operation(&document, "/v1/pipeline/transactions/details", "post");
     assert_eq!(

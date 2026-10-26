@@ -3,7 +3,7 @@
 async fn assert_body_retains_route_lease(kind: CapabilityRangeKind, consume: bool) {
     let advert = make_signed_advert();
     let payload = b"accepted application bodies retain the stream lease".to_vec();
-    let mut context = capability_token_context(&advert, payload.clone());
+    let mut context = capability_token_context(&advert, &(payload));
     let mut app = Arc::try_unwrap(context.app).unwrap_or_else(|_| panic!("exclusive route app"));
     let admission = ServingAdmissionFixture::new();
     app.stream_token_admission_capture = Some(admission.capture.clone());

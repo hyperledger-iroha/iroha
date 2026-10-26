@@ -34,7 +34,7 @@ fn bind_root(transaction: &mut StateTransaction<'_, '_>, signed: &SignedTransact
 
 #[test]
 fn preparation_refusal_is_fee_free_but_admitted_business_failure_charges_actual_work() {
-    let _fee_guard = crate::status::nexus_fee_test_lock().lock().unwrap();
+    let _fee_guard = crate::status::operator_status_test_guard();
     for batch in [false, true] {
         for maximum in [1, 2] {
             let asset = AssetDefinitionId::parse_address_literal(
@@ -372,12 +372,7 @@ fn actual_root_effects_cannot_apply_after_owner_reuse_or_context_substitution() 
             block.transaction_for_fastpq_testing(Hash::from(signed.hash_as_entrypoint()));
         bind_root(&mut transaction, signed);
         Executor::Initial
-            .execute_transaction(
-                &mut transaction,
-                &ALICE_ID,
-                signed.clone(),
-                &mut IvmCache::new(),
-            )
+            .execute_transaction(&mut transaction, &ALICE_ID, signed, &mut IvmCache::new())
             .unwrap();
         assert!(
             transaction
@@ -397,7 +392,7 @@ fn actual_root_effects_cannot_apply_after_owner_reuse_or_context_substitution() 
             0 => {}
             1 => assert!(
                 transaction
-                    .admit_authored_execution_effects(&[write()])
+                    .admit_authored_execution_effects([write()].iter())
                     .is_err()
             ),
             2 => transaction.current_entrypoint_index = Some(1),
@@ -466,7 +461,7 @@ fn unwinding_before_root_close_cannot_publish_already_staged_effects() {
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         transaction.begin_execution_effect_budget(signed).unwrap();
         transaction
-            .admit_authored_execution_effects(&[write()])
+            .admit_authored_execution_effects([write()].iter())
             .unwrap();
         write().execute(&ALICE_ID, &mut transaction).unwrap();
         panic!("crash cut after staging an instruction before root close");
@@ -513,7 +508,7 @@ fn failing_forgery_invalidates_carrier_without_rejection_fee_or_partial_record()
     use iroha_data_model::{
         isi::sccp::SubmitSccpForgeryEvidenceV1, sccp::params::SccpParametersV1,
     };
-    let _fee_guard = crate::status::nexus_fee_test_lock().lock().unwrap();
+    let _fee_guard = crate::status::operator_status_test_guard();
     let asset = AssetDefinitionId::parse_address_literal(
         &iroha_config::parameters::defaults::nexus::fees::fee_asset_id(),
     )

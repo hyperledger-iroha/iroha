@@ -6,8 +6,8 @@ use std::collections::BTreeSet;
 /// Build the initial validator topology as the authenticated subset of trusted peers.
 ///
 /// Every returned validator is a trusted peer with a BLS-normal key and an
-/// explicit, valid proof of possession. An empty PoP map therefore yields an
-/// empty validator roster, while PoPs for keys outside the trusted-peer set are
+/// explicit, valid proof of possession. An empty `PoP` map therefore yields an
+/// empty validator roster, while `PoPs` for keys outside the trusted-peer set are
 /// ignored. The result is deduplicated and canonically ordered by [`PeerId`].
 pub fn filter_validators_from_trusted(
     tp: &iroha_config::parameters::actual::TrustedPeers,
@@ -59,8 +59,7 @@ mod tests {
     use super::filter_validators_from_trusted;
     use iroha_config::parameters::actual::TrustedPeers;
     use iroha_crypto::{Algorithm, KeyPair, PublicKey, bls_normal_pop_prove};
-    use iroha_data_model::peer::Peer;
-    use iroha_model_base::peer::PeerId;
+    use iroha_model_base::peer::{Peer, PeerId};
     use std::collections::BTreeMap;
 
     fn bls_key(seed: &[u8]) -> KeyPair {

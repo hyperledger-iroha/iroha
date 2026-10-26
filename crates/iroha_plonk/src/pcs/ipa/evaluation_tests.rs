@@ -88,10 +88,12 @@ fn measure<F: Field>(field: &str) {
 #[test]
 #[ignore = "release-only paired arithmetic diagnostic; not a phone latency measurement"]
 fn measure_interleaved_horner_leaves() {
-    assert!(
-        !cfg!(debug_assertions),
-        "run this diagnostic with --release"
-    );
+    fn require_release() {
+        #[cfg(debug_assertions)]
+        panic!("run this diagnostic with --release");
+    }
+
+    require_release();
     measure::<Fp>("Fp");
     measure::<Fq>("Fq");
 }

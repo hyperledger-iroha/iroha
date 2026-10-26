@@ -77,11 +77,11 @@ impl NativeValidationFixture {
             .into_iter()
             .map(|tx| AcceptedTransaction::new_unchecked(Cow::Owned(tx)))
             .collect::<Vec<_>>();
-        self.proposal_from_inputs(inputs, cadence)
+        self.proposal_from_inputs(&(inputs), cadence)
     }
     fn proposal_from_inputs(
         &self,
-        inputs: Vec<AcceptedTransaction<'static>>,
+        inputs: &[AcceptedTransaction<'static>],
         cadence: Duration,
     ) -> SignedBlock {
         let parent = self.chain.committed(self.chain.height());
@@ -93,7 +93,7 @@ impl NativeValidationFixture {
                 cadence,
                 proposed_time: std::time::Duration::ZERO,
             },
-            &inputs,
+            inputs,
         )
         .unwrap()
     }
@@ -268,7 +268,7 @@ fn native_validation_rechecks_signature_despite_forged_positive_cache_entry() {
         .state()
         .stateless_validation_cache()
         .lock()
-        .insert_ok(invalid_key.clone(), None, 0);
+        .insert_ok(invalid_key, None, 0);
     assert!(
         fixture
             .chain

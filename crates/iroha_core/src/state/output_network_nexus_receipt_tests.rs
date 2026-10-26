@@ -40,7 +40,7 @@ fn balance(block: &StateBlock<'_>, asset: &AssetDefinitionId) -> Quantity {
 
 #[test]
 fn success_and_business_rejection_publish_only_their_actual_charge_once() {
-    let _guard = crate::status::nexus_fee_test_lock().lock().unwrap();
+    let _guard = crate::status::operator_status_test_guard();
     for reject in [false, true] {
         let (state, asset) = priced(65_536, None);
         let body = if reject {
@@ -86,7 +86,7 @@ fn success_and_business_rejection_publish_only_their_actual_charge_once() {
 
 #[test]
 fn healthy_output_overflow_discards_the_unpaid_receipt_and_actual_burn() {
-    let _guard = crate::status::nexus_fee_test_lock().lock().unwrap();
+    let _guard = crate::status::operator_status_test_guard();
     let (state, asset) = priced(16_384, Some(32_768));
     let source = carrier(
         &state,
@@ -114,21 +114,32 @@ fn healthy_output_overflow_discards_the_unpaid_receipt_and_actual_burn() {
 
 #[test]
 fn failed_charge_has_no_fee_receipt_or_balance_supply_effect() {
-    let _guard = crate::status::nexus_fee_test_lock().lock().unwrap();
+    let _guard = crate::status::operator_status_test_guard();
     let (state, asset) = priced(65_536, None);
     // Sign a valid nonzero cap, then reject it against the actual configured fee.
     {
-        let mut fees = state.nexus_snapshot().fees;
+        let mut fees = state
+            .world
+            .parameters
+            .view()
+            .get()
+            .root_fees()
+            .expect("explicit fixture root fee policy")
+            .clone();
         fees.base_fee = Quantity::from(2_u32);
         {
-            let mut parameters = state.world.parameters.block();
-            parameters
-                .set_parameter(iroha_data_model::parameter::Parameter::Custom(
+            let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+                .expect("fund original parameter Cell acquisition");
+            crate::state::set_parameter_cell_for_testing(
+                &mut parameters,
+                iroha_data_model::parameter::Parameter::Custom(
                     fees.clone()
                         .into_custom_parameter()
                         .expect("explicit fixture policy"),
-                ))
-                .expect("valid fixture monetary projection");
+                ),
+                state.world.sccp_committee_generations.allocation_budget(),
+            )
+            .expect("valid fixture monetary projection");
             parameters.commit();
         }
     }

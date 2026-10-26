@@ -12,7 +12,7 @@ use iroha_sumeragi::types::HeightConfig;
 
 /// Private attempt custody, not an imported certificate or a reusable State authority.
 #[derive(Default)]
-pub(crate) struct ParentServicePreparation {
+pub struct ParentServicePreparation {
     assembly_parent: Option<SharedSignedBlock>,
     pub(super) producer_copy: parent_service_copy::ParentServiceCopyPreparation,
     pub(super) offered_qc: ParentServiceQcPreparation,

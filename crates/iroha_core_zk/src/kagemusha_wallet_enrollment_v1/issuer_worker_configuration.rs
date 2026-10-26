@@ -48,6 +48,7 @@ pub fn require_qualified_android_adapters_v1(
 
 /// Public runtime locations already selected by the node's private process owner.
 /// The worker is Linux-only. These strings do not open files or establish path custody.
+#[derive(Clone, Copy)]
 pub struct VerifierRuntimeSelectionV1<'a> {
     /// Canonical absolute Linux path of the retained public OpenSSL executable.
     pub openssl_path: &'a str,

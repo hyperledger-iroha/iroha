@@ -14,7 +14,7 @@ use std::ops::Bound;
 
 /// One original evidence status borrowing the original admitted member graph.
 #[derive(norito::SerializePayload, norito::json::JsonSerialize)]
-pub struct Status<'a> {
+pub struct EvidenceObservation<'a> {
     evidence_id: [u8; 32],
     generation: u64,
     height: u64,
@@ -26,7 +26,7 @@ pub struct Status<'a> {
 /// One request-funded bounded vector of original status borrows.
 #[derive(norito::SerializePayload, norito::json::JsonSerialize)]
 pub struct Page<'a> {
-    records: Vec<Status<'a>>,
+    records: Vec<EvidenceObservation<'a>>,
     next_after: Option<[u8; 32]>,
 }
 macro_rules! schema {
@@ -41,10 +41,13 @@ macro_rules! schema {
         }
     };
 }
-schema!(Status<'_>, api::SccpForgeryEvidenceStatusV1);
+schema!(EvidenceObservation<'_>, api::SccpForgeryEvidenceStatusV1);
 schema!(Page<'_>, api::SccpForgeryEvidencePageV1);
 
-fn status<'a>(key: &Hash, retained: &'a RetainedEvidenceRecord) -> Result<Option<Status<'a>>> {
+fn status<'a>(
+    key: &Hash,
+    retained: &'a RetainedEvidenceRecord,
+) -> Result<Option<EvidenceObservation<'a>>> {
     let RecordedEvidenceV1::SccpForgery(record) = &retained.evidence else {
         return Ok(None);
     };
@@ -67,7 +70,7 @@ fn status<'a>(key: &Hash, retained: &'a RetainedEvidenceRecord) -> Result<Option
     if header.generation() != record.generation {
         return Err(SccpNativeReadError::Invalid("retained evidence generation"));
     }
-    Ok(Some(Status {
+    Ok(Some(EvidenceObservation {
         evidence_id,
         generation: record.generation,
         height: header.height(),
@@ -86,9 +89,9 @@ pub fn detail<'a>(
     id: [u8; 32],
     budget: &AllocationBudget,
     control: SccpNativeReadControl<'_>,
-) -> Result<SccpNativeDataV1<Status<'a>>> {
+) -> Result<SccpNativeDataV1<EvidenceObservation<'a>>> {
     deadline_check(control)?;
-    let charge = budget.try_reserve_bytes(size_of::<Status<'_>>())?;
+    let charge = budget.try_reserve_bytes(size_of::<EvidenceObservation<'_>>())?;
     let key = Hash::prehashed(id);
     let record = view
         .world()
@@ -119,8 +122,8 @@ pub fn page<'a>(
     if !(1..=api::MAX_EVIDENCE_PAGE).contains(&limit) {
         return Err(SccpNativeReadError::Request("evidence page limit"));
     }
-    let charge =
-        budget.try_reserve_bytes(size_of::<Page<'_>>() + limit * size_of::<Status<'_>>())?;
+    let charge = budget
+        .try_reserve_bytes(size_of::<Page<'_>>() + limit * size_of::<EvidenceObservation<'_>>())?;
     let mut data = Page {
         records: Vec::new(),
         next_after: None,
@@ -269,7 +272,7 @@ mod tests {
         let view = chain.state().view();
         let stop = AtomicBool::new(false);
         let control = super::super::tests::control(&stop);
-        let demand = size_of::<Page<'_>>() + size_of::<Status<'_>>();
+        let demand = size_of::<Page<'_>>() + size_of::<EvidenceObservation<'_>>();
         let budget = AllocationBudget::new(demand);
         let occupied = budget.try_reserve_bytes(demand).unwrap();
         assert!(matches!(

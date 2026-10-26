@@ -72,13 +72,45 @@ mod account_capabilities_tests {
         let value: iroha_torii_shared::account_capabilities::AccountCapabilitiesV1 =
             norito::json::from_slice(&bytes).expect("capabilities JSON");
         assert_eq!(value.network_id, network_id);
-        assert_eq!(value.default_signing, "ed25519");
+        assert_eq!(value.allowed_signing, ["ed25519", "secp256k1"]);
         assert!(
             value
                 .allowed_signing
                 .iter()
                 .any(|algorithm| algorithm == "ed25519")
         );
+    }
+
+    #[tokio::test]
+    async fn account_capabilities_pristine_state_is_readiness_deferred() {
+        let mut app = mk_app_state_for_tests();
+        let pristine = iroha_core::state::State::new_for_testing(
+            iroha_core::state::World::default(),
+            iroha_core::kura::Kura::blank_kura_for_testing(),
+            iroha_core::query::store::LiveQueryStore::start_test(),
+        );
+        Arc::get_mut(&mut app)
+            .expect("fixture app has no shared consumers")
+            .state = Arc::new(pristine);
+        let error = handler_accounts_capabilities(
+            State(app),
+            axum::http::HeaderMap::new(),
+            "/v1/accounts/capabilities".parse().unwrap(),
+            axum::extract::ConnectInfo("127.0.0.1:8080".parse().unwrap()),
+            axum::body::Bytes::new(),
+        )
+        .await
+        .expect_err("initial policy is unavailable");
+        assert!(
+            matches!(&error, Error::TransactionAdmissionDeferred(original)
+            if original.reason() == ivm::error::ExecutionDeferral::CryptoAdmissionPolicyUnavailable)
+        );
+        let response = error.into_response();
+        assert_eq!(
+            response.status(),
+            axum::http::StatusCode::SERVICE_UNAVAILABLE
+        );
+        assert!(response.headers().get("x-iroha-reject-code").is_none());
     }
 
     #[tokio::test]
@@ -1624,8 +1656,9 @@ mod sorafs_evidence_viewer_startup_tests {
         ));
         assert!(compact_source.contains("producer.reconcile().map_err(|error|{"));
         assert!(
-            compact_source
-                .contains("\"sorafs.storage.evidence_viewer.transparency_producer\",error,)})?;")
+            compact_source.contains(
+                "\"sorafs.storage.evidence_viewer.transparency_producer\",&(error),)})?;"
+            )
         );
         assert!(!compact_source.contains(&providerless_open));
     }
@@ -1989,6 +2022,11 @@ mod sorafs_native_transaction_signer_startup_tests {
     }
     #[test]
     fn native_signer_startup_qualifies_exact_configured_provider() {
+        use iroha_data_model::isi::sorafs::{
+            SorafsPdpProofOutcomeSubmissionV1, SorafsProofOutcomeSubmissionV1,
+            SubmitSorafsProofOutcome,
+        };
+
         let provider = Arc::new(ProofSigner::new(
             "provider://sorafs/proof-outcome/primary",
             0x21,
@@ -2013,10 +2051,6 @@ mod sorafs_native_transaction_signer_startup_tests {
         assert_eq!(qualified.authority(), configured.authority);
         assert_eq!(qualified.public_key(), Ok(configured.public_key));
         assert_eq!(qualified.qualification(), Ok(QUALIFICATION));
-        use iroha_data_model::isi::sorafs::{
-            SorafsPdpProofOutcomeSubmissionV1, SorafsProofOutcomeSubmissionV1,
-            SubmitSorafsProofOutcome,
-        };
         // The startup boundary owns the typed envelope; native execution validates its evidence.
         let payload = TransactionBuilder::new(
             network_id,

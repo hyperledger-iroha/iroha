@@ -61,7 +61,7 @@ impl QualificationInputs<'_> {
 mod tests;
 
 #[cfg(test)]
-pub(crate) use tests::{assert_builtin_signature_reuse_controls, assert_signature_reuse_controls};
+pub use tests::{assert_builtin_signature_reuse_controls, assert_signature_reuse_controls};
 
 // Qualified origin is opaque. Production constructs this only from the typed
 // strict or compiled-member importer, never from signed metadata alone.
@@ -309,8 +309,7 @@ impl AuthenticatedProducerInventoryV1 {
                     let bytes = self.read_original(member, originals, config.maximum_bytes)?;
                     let metadata = import_with_admission(
                         index,
-                        source.as_ref(),
-                        &signatures,
+                        (source.as_ref(), &signatures),
                         &bytes,
                         inputs.pallas(),
                         config,

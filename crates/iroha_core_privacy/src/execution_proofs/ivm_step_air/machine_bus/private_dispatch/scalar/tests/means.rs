@@ -7,7 +7,9 @@ fn checked(instruction: u32, inputs: &[(usize, u64, bool)]) -> (Program, ScalarF
     let p = &fixture.0.packets.fields;
     let left = u64::cast_signed(packet::half(&p[SCALAR_LEFT], BEFORE, 0));
     let right = u64::cast_signed(packet::half(&p[SCALAR_RIGHT], BEFORE, 0));
-    let expected = ((i128::from(left) + i128::from(right)) / 2) as u64;
+    let expected = i64::try_from(i128::midpoint(i128::from(left), i128::from(right)))
+        .expect("signed word mean")
+        .cast_unsigned();
     assert_eq!(ivm::gas::cost_of(instruction), Some(2));
     assert_eq!(
         packet::half(&p[SCALAR_DESTINATION], AFTER, 0),
@@ -114,12 +116,24 @@ fn private_mean_rejects_wrapped_sum_floor_unsigned_and_false_original_sources() 
             ],
         );
         let sum = i128::from(a) + i128::from(b);
-        let correct = (sum / 2) as u64;
+        let correct = u64::from_le_bytes(
+            i128::to_le_bytes(sum / 2)[..8]
+                .try_into()
+                .expect("low-byte width"),
+        );
         for wrong in [
             correct.wrapping_add(1),
-            (sum >> 1) as u64,
+            u64::from_le_bytes(
+                i128::to_le_bytes(sum >> 1)[..8]
+                    .try_into()
+                    .expect("low-byte width"),
+            ),
             i64::cast_unsigned(a.wrapping_add(b) / 2),
-            ((u128::from(i64::cast_unsigned(a)) + u128::from(i64::cast_unsigned(b))) / 2) as u64,
+            u64::try_from(u128::midpoint(
+                u128::from(i64::cast_unsigned(a)),
+                u128::from(i64::cast_unsigned(b)),
+            ))
+            .expect("unsigned word mean"),
         ] {
             if wrong == correct {
                 continue;

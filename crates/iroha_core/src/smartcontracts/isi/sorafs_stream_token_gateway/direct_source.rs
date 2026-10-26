@@ -20,7 +20,7 @@ fn rejected() -> ValidationFail {
 /// its original signed position. Consumption precedes all checks, so a rejected action cannot
 /// lend its marker to a later or nested call. This function does not grant gateway permissions
 /// or authenticate finalized readback.
-pub(crate) fn execution(
+pub fn execution(
     tx: &mut StateTransaction<'_, '_>,
     authority: &AccountId,
 ) -> Result<StreamTokenGatewayExecutionV1, ValidationFail> {

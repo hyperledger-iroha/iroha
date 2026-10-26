@@ -29,7 +29,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 mod geometry_attempt;
-pub(crate) use geometry_attempt::TieredGeometryAttempt;
+pub use geometry_attempt::TieredGeometryAttempt;
 
 const WSV_COLD_COMPONENT: &str = "wsv_cold";
 #[cfg(test)]
@@ -94,7 +94,7 @@ struct SnapshotPayloadCache {
 /// Changed WSV keys captured during a block for incremental snapshotting.
 #[derive(Debug, Default, Clone)]
 #[cfg(test)]
-pub(crate) struct TieredSnapshotDiff {
+pub struct TieredSnapshotDiff {
     entries: Vec<TieredKeyHandle>,
 }
 #[cfg(test)]
@@ -111,7 +111,7 @@ impl TieredSnapshotDiff {
 }
 /// Changed WSV keys captured with their updated payloads for background snapshots.
 #[derive(Default)]
-pub(crate) struct TieredSnapshotPayload {
+pub struct TieredSnapshotPayload {
     entries: Vec<TieredSnapshotPayloadEntry>,
     complete: bool,
 }
@@ -301,7 +301,7 @@ impl TieredStateBackend {
             snapshot_dir,
             scores,
             Some(&payload_cache.payloads),
-        )?;
+        );
         self.execute_snapshot_plan_with_payload(plan, &payload_cache.payloads)?;
         self.snapshot_baseline_ready = true;
         Ok(())
@@ -453,14 +453,12 @@ impl TieredStateBackend {
                 }
             }
         }
-        if touched {
-            if let Err(err) = Self::sync_dir(root) {
-                iroha_logger::warn!(
-                    ?err,
-                    path = %root.display(),
-                    "tiered-state: failed to sync snapshot root after recovery"
-                );
-            }
+        if touched && let Err(err) = Self::sync_dir(root) {
+            iroha_logger::warn!(
+                ?err,
+                path = %root.display(),
+                "tiered-state: failed to sync snapshot root after recovery"
+            );
         }
         Ok(())
     }
@@ -474,7 +472,7 @@ impl TieredStateBackend {
         self.collect_world_entries(world, snapshot_idx, &mut scores, &mut seen)?;
         self.entries.retain(|id, _| seen.contains(id));
         self.entry_keys.retain(|id, _| seen.contains(id));
-        let plan = self.build_snapshot_plan(root, snapshot_idx, snapshot_dir, scores, None)?;
+        let plan = self.build_snapshot_plan(root, snapshot_idx, snapshot_dir, scores, None);
         Ok(Some(plan))
     }
     #[cfg(test)]
@@ -490,7 +488,7 @@ impl TieredStateBackend {
             self.apply_snapshot_diff(world, snapshot_idx, diff)?;
         }
         let scores = self.build_scores_from_keys(snapshot_idx);
-        let plan = self.build_snapshot_plan(root, snapshot_idx, snapshot_dir, scores, None)?;
+        let plan = self.build_snapshot_plan(root, snapshot_idx, snapshot_dir, scores, None);
         Ok(Some(plan))
     }
     fn prepare_snapshot(&mut self) -> Result<Option<(PathBuf, u64, PathBuf)>> {
@@ -534,7 +532,7 @@ impl TieredStateBackend {
         snapshot_dir: PathBuf,
         mut scores: Vec<EntryScore>,
         payloads: Option<&BTreeMap<TieredEntryId, Vec<u8>>>,
-    ) -> Result<TieredSnapshotPlan> {
+    ) -> TieredSnapshotPlan {
         if scores.is_empty() {
             let manifest = TieredSnapshotManifest {
                 snapshot_index: snapshot_idx,
@@ -549,12 +547,12 @@ impl TieredStateBackend {
                 hot_budget_overflow_keys: 0,
                 hot_budget_overflow_bytes: 0,
             };
-            return Ok(TieredSnapshotPlan {
+            return TieredSnapshotPlan {
                 root,
                 snapshot_dir,
                 manifest,
                 cold_entries: Vec::new(),
-            });
+            };
         }
         scores.sort_by(|a, b| {
             let meta_a = self.entries.get(&a.id).expect("metadata populated");
@@ -732,12 +730,12 @@ impl TieredStateBackend {
             hot_budget_overflow_keys,
             hot_budget_overflow_bytes,
         };
-        Ok(TieredSnapshotPlan {
+        TieredSnapshotPlan {
             root,
             snapshot_dir,
             manifest,
             cold_entries: cold_plans,
-        })
+        }
     }
     #[cfg(test)]
     fn apply_snapshot_diff(
@@ -747,7 +745,7 @@ impl TieredStateBackend {
         diff: &TieredSnapshotDiff,
     ) -> Result<()> {
         for entry in &diff.entries {
-            let (id, key_encoded) = entry.entry_id()?;
+            let (id, key_encoded) = entry.entry_id();
             let Some((value_hash, value_size_bytes)) = entry.measure_value(world)? else {
                 self.entries.remove(&id);
                 self.entry_keys.remove(&id);
@@ -779,7 +777,7 @@ impl TieredStateBackend {
     ) -> Result<SnapshotPayloadCache> {
         let mut cache = SnapshotPayloadCache::default();
         for entry in &payload.entries {
-            let (id, key_encoded) = entry.key.entry_id()?;
+            let (id, key_encoded) = entry.key.entry_id();
             let Some(value) = entry.value.as_ref() else {
                 self.entries.remove(&id);
                 self.entry_keys.remove(&id);
@@ -977,14 +975,14 @@ impl TieredStateBackend {
                 )
             })?;
         }
-        if let Some(backup_path) = backup {
-            if let Err(err) = fs::remove_dir_all(&backup_path) {
-                iroha_logger::warn!(
-                    ?err,
-                    path = %backup_path.display(),
-                    "tiered-state: failed to remove snapshot backup directory"
-                );
-            }
+        if let Some(backup_path) = backup
+            && let Err(err) = fs::remove_dir_all(&backup_path)
+        {
+            iroha_logger::warn!(
+                ?err,
+                path = %backup_path.display(),
+                "tiered-state: failed to remove snapshot backup directory"
+            );
         }
         self.last_manifest = Some(plan.manifest);
         self.prune_old_snapshots(&plan.root)?;
@@ -1160,14 +1158,14 @@ impl TieredStateBackend {
                 )
             })?;
         }
-        if let Some(backup_path) = backup {
-            if let Err(err) = fs::remove_dir_all(&backup_path) {
-                iroha_logger::warn!(
-                    ?err,
-                    path = %backup_path.display(),
-                    "tiered-state: failed to remove snapshot backup directory"
-                );
-            }
+        if let Some(backup_path) = backup
+            && let Err(err) = fs::remove_dir_all(&backup_path)
+        {
+            iroha_logger::warn!(
+                ?err,
+                path = %backup_path.display(),
+                "tiered-state: failed to remove snapshot backup directory"
+            );
         }
         self.last_manifest = Some(plan.manifest);
         self.prune_old_snapshots(&plan.root)?;
@@ -1439,13 +1437,14 @@ impl TieredStateBackend {
             max_snapshots,
             max_cold_bytes,
         );
-        if self.enabled && cold_root_changed {
-            if let Err(err) = self.ensure_cold_roots() {
-                iroha_logger::warn!(
-                    ?err,
-                    "tiered-state: failed to prepare cold tier root after reconfigure"
-                );
-            }
+        if self.enabled
+            && cold_root_changed
+            && let Err(err) = self.ensure_cold_roots()
+        {
+            iroha_logger::warn!(
+                ?err,
+                "tiered-state: failed to prepare cold tier root after reconfigure"
+            );
         }
     }
     /// Update in-memory policy and caches without creating or changing storage.
@@ -2433,7 +2432,7 @@ fn compute_json_hash(value: &impl json::JsonSerialize) -> Result<([u8; 32], usiz
     Ok((sha256(&encoded), encoded.len()))
 }
 /// Deterministic byte estimate for hot-tier sizing.
-pub(crate) trait MeasuredBytes {
+pub trait MeasuredBytes {
     /// Return the total measured byte footprint used for hot-tier budgeting.
     fn measured_bytes(&self) -> usize;
     /// Return bytes beyond the stack size of the value.
@@ -4387,7 +4386,11 @@ impl EntryScore {
 }
 /// Key handle for tiered snapshot entries.
 #[derive(Debug, Clone)]
-pub(crate) enum TieredKeyHandle {
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Native key handles retain complete identity inline without allocating during lookup or refusal"
+)]
+pub enum TieredKeyHandle {
     Domain(iroha_model_base::domain::DomainId),
     Account(iroha_data_model::account::AccountId),
     AccountRekey(iroha_data_model::account::rekey::AccountAlias),
@@ -4473,99 +4476,89 @@ impl TieredKeyHandle {
         }
         tiered_segment_table!(handle_segments)
     }
-    fn encode_key(&self) -> Result<Vec<u8>> {
+    fn encode_key(&self) -> Vec<u8> {
         match self {
-            TieredKeyHandle::ContractInstance(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::ContractSubjectBinding(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::ContractAliasBinding(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::Domain(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::Account(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::AccountRekey(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::AccountRecoveryPolicy(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::AccountRecoveryRequest(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::AssetDefinition(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::AssetDefinitionAliasBinding(key) => {
-                Ok(norito::codec::Encode::encode(key))
+            TieredKeyHandle::ContractInstance(key)
+            | TieredKeyHandle::ContractSubjectBinding(key)
+            | TieredKeyHandle::ContractAliasBinding(key) => norito::codec::Encode::encode(key),
+            TieredKeyHandle::Domain(key) => norito::codec::Encode::encode(key),
+            TieredKeyHandle::Account(key)
+            | TieredKeyHandle::AccountPermission(key)
+            | TieredKeyHandle::TxSequence(key) => norito::codec::Encode::encode(key),
+            TieredKeyHandle::AccountRekey(key)
+            | TieredKeyHandle::AccountRecoveryPolicy(key)
+            | TieredKeyHandle::AccountRecoveryRequest(key) => norito::codec::Encode::encode(key),
+            TieredKeyHandle::AssetDefinition(key)
+            | TieredKeyHandle::AxtAssetIncarnation(key)
+            | TieredKeyHandle::ZkAsset(key)
+            | TieredKeyHandle::AssetDefinitionAliasBinding(key)
+            | TieredKeyHandle::AssetDefinitionDirectHome(key) => norito::codec::Encode::encode(key),
+            TieredKeyHandle::Asset(key) | TieredKeyHandle::AssetMetadata(key) => {
+                norito::codec::Encode::encode(key)
             }
-            TieredKeyHandle::Asset(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::AssetMetadata(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::AxtPolicy(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::AxtHandleCounter(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::AxtAssetIncarnation(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::AssetDefinitionDirectHome(key) => {
-                Ok(norito::codec::Encode::encode(key))
+            TieredKeyHandle::AxtPolicy(key) | TieredKeyHandle::AxtHandleCounter(key) => {
+                norito::codec::Encode::encode(key)
             }
-            TieredKeyHandle::AxtReplay(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::AxtSpendNonce(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::AxtSourceTransferReplay(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::AxtHandleBudget(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::Nft(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::Rwa(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::Role(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::AccountPermission(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::AccountRole(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::TxSequence(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::VerifyingKey(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::RuntimeUpgrade(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::PrivacyActivation(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::PrivacyPgcAccount(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::PrivacyPgcPoolInvariant(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::PrivacyNullifier(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::PrivacyCommitment(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::PrivacyRoot(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::PrivacyRootHead(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::KagemushaWalletLedger(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::AxtReplay(key) => norito::codec::Encode::encode(key),
+            TieredKeyHandle::AxtSpendNonce(key) => norito::codec::Encode::encode(key),
+            TieredKeyHandle::AxtSourceTransferReplay(key) => norito::codec::Encode::encode(key),
+            TieredKeyHandle::AxtHandleBudget(key) => norito::codec::Encode::encode(key),
+            TieredKeyHandle::Nft(key) => norito::codec::Encode::encode(key),
+            TieredKeyHandle::Rwa(key) => norito::codec::Encode::encode(key),
+            TieredKeyHandle::Role(key) => norito::codec::Encode::encode(key),
+            TieredKeyHandle::AccountRole(key) => norito::codec::Encode::encode(key),
+            TieredKeyHandle::VerifyingKey(key) => norito::codec::Encode::encode(key),
+            TieredKeyHandle::RuntimeUpgrade(key) => norito::codec::Encode::encode(key),
+            TieredKeyHandle::PrivacyActivation(key) => norito::codec::Encode::encode(key),
+            TieredKeyHandle::PrivacyPgcAccount(key) => norito::codec::Encode::encode(key),
+            TieredKeyHandle::PrivacyPgcPoolInvariant(key) => norito::codec::Encode::encode(key),
+            TieredKeyHandle::PrivacyNullifier(key) => norito::codec::Encode::encode(key),
+            TieredKeyHandle::PrivacyCommitment(key) => norito::codec::Encode::encode(key),
+            TieredKeyHandle::PrivacyRoot(key) => norito::codec::Encode::encode(key),
+            TieredKeyHandle::PrivacyRootHead(key) => norito::codec::Encode::encode(key),
+            TieredKeyHandle::KagemushaWalletLedger(key) => norito::codec::Encode::encode(key),
             TieredKeyHandle::PrivateSettlementGovernance(key)
-            | TieredKeyHandle::PrivateSettlementPool(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::PrivateSettlementRoot(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::PrivateSettlementNullifier(key) => {
-                Ok(norito::codec::Encode::encode(key))
-            }
-            TieredKeyHandle::PrivateSettlementOutput(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::PrivateSettlementStagedLock(key) => {
-                Ok(norito::codec::Encode::encode(key))
-            }
+            | TieredKeyHandle::PrivateSettlementPool(key) => norito::codec::Encode::encode(key),
+            TieredKeyHandle::PrivateSettlementRoot(key) => norito::codec::Encode::encode(key),
+            TieredKeyHandle::PrivateSettlementNullifier(key) => norito::codec::Encode::encode(key),
+            TieredKeyHandle::PrivateSettlementOutput(key) => norito::codec::Encode::encode(key),
+            TieredKeyHandle::PrivateSettlementStagedLock(key) => norito::codec::Encode::encode(key),
             TieredKeyHandle::PrivateSettlementReceipt(key)
-            | TieredKeyHandle::PrivateSettlementAbort(key) => {
-                Ok(norito::codec::Encode::encode(key))
+            | TieredKeyHandle::PrivateSettlementAbort(key) => norito::codec::Encode::encode(key),
+            TieredKeyHandle::Proof(key) | TieredKeyHandle::ProofTag(key) => {
+                norito::codec::Encode::encode(key)
             }
-            TieredKeyHandle::Proof(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::ProofTag(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::ProofByTag(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::ContractManifest(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::ContractCode(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::ContractCodeUpload(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::ContractCodeUploadChunk(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::SmartContractState(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::ZkAsset(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::Election(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::MinistryAgendaProposal(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::GovernanceProposal(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::GovernanceReferendum(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::GovernanceLock(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::GovernanceSlash(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::ParliamentAttempt(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::TleKeySession(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::TleKeySessionRoster(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::TleKeySessionLifecycle(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::TleActiveKeySession(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::TimedOvnEvidence(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::ValidatorCommitteeTransition(key) => {
-                Ok(norito::codec::Encode::encode(key))
+            TieredKeyHandle::ProofByTag(key) => norito::codec::Encode::encode(key),
+            TieredKeyHandle::ContractManifest(key) | TieredKeyHandle::ContractCode(key) => {
+                norito::codec::Encode::encode(key)
             }
-            TieredKeyHandle::GlobalBeaconDkg(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::GlobalBeaconKeySession(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::GlobalBeaconActiveSession(key) => {
-                Ok(norito::codec::Encode::encode(key))
-            }
-            TieredKeyHandle::GlobalBeaconLatestPulse(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::GlobalBeaconPulse(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::ContractCodeUpload(key) => norito::codec::Encode::encode(key),
+            TieredKeyHandle::ContractCodeUploadChunk(key) => norito::codec::Encode::encode(key),
+            TieredKeyHandle::SmartContractState(key) => norito::codec::Encode::encode(key),
+            TieredKeyHandle::Election(key)
+            | TieredKeyHandle::MinistryAgendaProposal(key)
+            | TieredKeyHandle::GovernanceReferendum(key)
+            | TieredKeyHandle::GovernanceLock(key)
+            | TieredKeyHandle::GovernanceSlash(key) => norito::codec::Encode::encode(key),
+            TieredKeyHandle::GovernanceProposal(key)
+            | TieredKeyHandle::GlobalBeaconDkg(key)
+            | TieredKeyHandle::GlobalBeaconKeySession(key)
+            | TieredKeyHandle::GlobalBeaconPulse(key) => norito::codec::Encode::encode(key),
+            TieredKeyHandle::ParliamentAttempt(key) => norito::codec::Encode::encode(key),
+            TieredKeyHandle::TleKeySession(key)
+            | TieredKeyHandle::TleKeySessionRoster(key)
+            | TieredKeyHandle::TleKeySessionLifecycle(key) => norito::codec::Encode::encode(key),
+            TieredKeyHandle::TleActiveKeySession(key)
+            | TieredKeyHandle::GlobalBeaconLatestPulse(key)
+            | TieredKeyHandle::ValidatorCommitteeTransition(key)
+            | TieredKeyHandle::GlobalBeaconActiveSession(key) => norito::codec::Encode::encode(key),
+            TieredKeyHandle::TimedOvnEvidence(key) => norito::codec::Encode::encode(key),
         }
     }
-    fn entry_id(&self) -> Result<(TieredEntryId, Vec<u8>)> {
-        let key_encoded = self.encode_key()?;
+    fn entry_id(&self) -> (TieredEntryId, Vec<u8>) {
+        let key_encoded = self.encode_key();
         let key_hash = sha256(&key_encoded);
-        Ok((TieredEntryId::new(self.segment(), key_hash), key_encoded))
+        (TieredEntryId::new(self.segment(), key_hash), key_encoded)
     }
     #[cfg(test)]
     fn measure_value(&self, world: &World) -> Result<Option<([u8; 32], usize)>> {
@@ -4946,10 +4939,8 @@ mod tests {
         world.proofs_by_tag.insert(first.clone(), ());
         world.proofs_by_tag.insert(second.clone(), ());
         backend.record_world_snapshot(&world).unwrap();
-        let first_key = TieredKeyHandle::ProofByTag(first.clone())
-            .encode_key()
-            .unwrap();
-        let second_key = TieredKeyHandle::ProofByTag(second).encode_key().unwrap();
+        let first_key = TieredKeyHandle::ProofByTag(first.clone()).encode_key();
+        let second_key = TieredKeyHandle::ProofByTag(second).encode_key();
         assert_ne!(first_key, second_key);
         {
             let mut block = world.proofs_by_tag.block();
@@ -5038,7 +5029,9 @@ mod tests {
         world
     }
 
-    fn validate_tiered_x509_root_world(world: &World) -> Result<(), String> {
+    fn validate_tiered_x509_root_world(
+        world: &World,
+    ) -> Result<(), crate::privacy_state::PrivacyStateValidationErrorV1> {
         crate::privacy_state::validate_privacy_persisted_state_v1(
             &iroha_data_model::privacy::PrivacyConsensusPolicyV1::taira_default(),
             &world.privacy_activations.view(),
@@ -5788,9 +5781,7 @@ mod tests {
     use tempfile::tempdir;
 
     fn assert_retained_value(backend: &TieredStateBackend, key: &StatePath, value: &[u8]) {
-        let encoded_key = TieredKeyHandle::SmartContractState(key.clone())
-            .encode_key()
-            .unwrap();
+        let encoded_key = TieredKeyHandle::SmartContractState(key.clone()).encode_key();
         let manifest = backend.last_manifest().expect("retained snapshot manifest");
         let entry = manifest
             .hot_entries
@@ -6478,12 +6469,8 @@ mod tests {
             .record_world_snapshot_with_diff(&world, &diff)
             .expect("diff snapshot");
         let manifest = backend.last_manifest().expect("manifest recorded");
-        let key1_payload = TieredKeyHandle::SmartContractState(key1)
-            .encode_key()
-            .expect("first state key encode");
-        let key2_payload = TieredKeyHandle::SmartContractState(key2)
-            .encode_key()
-            .expect("second state key encode");
+        let key1_payload = TieredKeyHandle::SmartContractState(key1).encode_key();
+        let key2_payload = TieredKeyHandle::SmartContractState(key2).encode_key();
         let mut entries = manifest.hot_entries.iter().chain(&manifest.cold_entries);
         let entry1 = entries
             .clone()
@@ -6525,12 +6512,8 @@ mod tests {
             .record_world_snapshot_with_payload(&payload)
             .expect("payload snapshot");
         let manifest = backend.last_manifest().expect("manifest recorded");
-        let key1_payload = TieredKeyHandle::SmartContractState(key1)
-            .encode_key()
-            .expect("first state key encode");
-        let key2_payload = TieredKeyHandle::SmartContractState(key2)
-            .encode_key()
-            .expect("second state key encode");
+        let key1_payload = TieredKeyHandle::SmartContractState(key1).encode_key();
+        let key2_payload = TieredKeyHandle::SmartContractState(key2).encode_key();
         let mut entries = manifest.hot_entries.iter().chain(&manifest.cold_entries);
         let entry1 = entries
             .clone()

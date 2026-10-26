@@ -295,11 +295,11 @@ impl QueryProjectionShardRowSet {
     #[must_use]
     pub fn asset_definition_id(&self) -> Option<&str> {
         match self {
-            Self::Accounts(_) => None,
-            Self::AccountAssets(_) => None,
             Self::AssetHolders(rowset) => Some(rowset.asset_definition_id.as_str()),
-            Self::AssetDefinitions(_) => None,
-            Self::Domains(_) => None,
+            Self::Accounts(_)
+            | Self::AccountAssets(_)
+            | Self::AssetDefinitions(_)
+            | Self::Domains(_) => None,
         }
     }
     /// Number of logical rows carried inside this rowset.

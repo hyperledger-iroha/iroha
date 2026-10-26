@@ -11,7 +11,7 @@ use iroha_data_model::sorafs::capacity::ProviderId;
 
 /// Current provider identities with protocol-bounded, allocation-free storage.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct CurrentLocationProviders {
+pub struct CurrentLocationProviders {
     values: [ProviderId; MUSUBI_MAX_LOCATION_PROVIDERS_V1],
     len: usize,
 }
@@ -34,8 +34,8 @@ impl IntoIterator for CurrentLocationProviders {
     }
 }
 
-/// Recheck complete attestation and current SoraFS authority before returning identities.
-pub(crate) fn current_location_providers(
+/// Recheck complete attestation and current `SoraFS` authority before returning identities.
+pub fn current_location_providers(
     location: &MusubiArchiveLocationV1,
     world: &impl MusubiSourceReadOnly,
 ) -> Option<CurrentLocationProviders> {
@@ -46,7 +46,7 @@ pub(crate) fn current_location_providers(
 }
 
 /// Preserve local source refusal independently of unavailable provider evidence.
-pub(crate) fn try_current_location_providers<W: MusubiRead>(
+pub fn try_current_location_providers<W: MusubiRead>(
     location: &MusubiArchiveLocationV1,
     world: &W,
 ) -> Result<Option<CurrentLocationProviders>, W::Error> {
@@ -55,7 +55,7 @@ pub(crate) fn try_current_location_providers<W: MusubiRead>(
 
 /// Retained current-provider predicate for one unchanged original location.
 /// Completed model checks, signatures and provider edges survive source refusal.
-pub(crate) struct CurrentProviderValidation {
+pub struct CurrentProviderValidation {
     queries: [crate::state::deserialize::musubi_source_read::LookupCursor; 7],
     phase: u8,
     provider: usize,

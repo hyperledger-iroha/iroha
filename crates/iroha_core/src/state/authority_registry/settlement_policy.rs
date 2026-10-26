@@ -79,17 +79,19 @@ mod tests {
         assert_eq!(norito::encode_canonical(&projected).unwrap(), bytes);
     }
 
+    type RouterMutation<'a> = (&'a str, fn(&mut iroha_config::parameters::actual::Router));
+
     #[test]
     fn every_router_input_changes_policy() {
         let original = Settlement::default();
         let expected = frame(&original);
-        let mut changed = original.clone();
+        let mut changed = original;
         changed.router.twap_window += Duration::from_secs(1);
         assert_ne!(frame(&changed), expected, "TWAP seconds");
-        let mut changed = original.clone();
+        let mut changed = original;
         changed.router.twap_window += Duration::from_nanos(1);
         assert_ne!(frame(&changed), expected, "TWAP nanoseconds");
-        let mutations: [(&str, fn(&mut iroha_config::parameters::actual::Router)); 6] = [
+        let mutations: [RouterMutation<'_>; 6] = [
             ("epsilon", |router| router.epsilon_bps += 1),
             ("alert", |router| router.buffer_alert_pct += 1),
             ("throttle", |router| router.buffer_throttle_pct += 1),
@@ -98,7 +100,7 @@ mod tests {
             ("horizon", |router| router.buffer_horizon_hours += 1),
         ];
         for (name, change) in mutations {
-            let mut changed = original.clone();
+            let mut changed = original;
             change(&mut changed.router);
             assert_ne!(frame(&changed), expected, "{name}");
         }

@@ -780,7 +780,7 @@ fn soracloud_hosted_http_topology_section_excludes_inactive_validator() {
                     staker: validator_account_id.clone(),
                     bonded: Quantity::from(1_u64),
                     pending_unbonds: BTreeMap::new(),
-                    metadata: Default::default(),
+                    metadata: iroha_model_base::metadata::Metadata::default(),
                 },
             );
             stake_tx.apply();
@@ -1519,10 +1519,35 @@ impl RuntimeApiRouterFixture {
 }
 #[tokio::test]
 async fn node_capabilities_http_bootstraps_without_registered_account() {
-    // This fixture has an empty world and mounts the production route catalog,
-    // including authentication middleware. Calling the handler alone misses
-    // the circular dependency between account registration and SDK preflight.
-    let fixture = RuntimeApiRouterFixture::standard("public-node-capabilities-test");
+    // The original world has an explicitly authored policy and no registered
+    // accounts. Mount the production catalog and authentication middleware to
+    // retain the account-registration/SDK-preflight bootstrap control.
+    let mut world = World::default();
+    let policy = iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+        Algorithm::Ed25519,
+        Algorithm::Secp256k1,
+    ])
+    .expect("explicit public capability fixture policy");
+    let mut block = world.block();
+    block
+        .set_parameter_for_testing(policy.into_parameter().expect("canonical fixture policy"))
+        .expect("author policy before State construction");
+    block.commit();
+    let kura = Kura::blank_kura_for_testing();
+    let state = Arc::new(IrohaState::new_for_testing(
+        world,
+        kura.clone(),
+        LiveQueryStore::start_test(),
+    ));
+    let fixture = RuntimeApiRouterFixture::with_runtime(
+        "public-node-capabilities-test",
+        kura,
+        state,
+        ToriiRuntimeDeps::new(
+            crate::build_identity_test_fixture::build_identity(),
+            routing::MaybeTelemetry::disabled(),
+        ),
+    );
     for (path, expected) in [
         ("/v1/node/capabilities", StatusCode::OK),
         ("/v1/privacy/capabilities", StatusCode::UNAUTHORIZED),
@@ -2236,6 +2261,7 @@ async fn contract_compute_routes_bind_authenticated_authority_before_work() {
     let key = checked_torii_test_ed25519_keypair(0xb4, "contract view caller fixture");
     let caller = AccountId::new(key.public_key().clone());
     let app = mk_native_app_state_for_tests_with_world(world_with_account(&caller));
+    let network = *app.state.network_id_ref();
     let router = axum::Router::new()
         .route(
             "/v1/contracts/view",
@@ -2275,14 +2301,8 @@ async fn contract_compute_routes_bind_authenticated_authority_before_work() {
             };
             let body = norito::json::to_vec(&body).expect("request JSON");
             let uri = path.parse().expect("request URI");
-            let headers = signed_network_app_headers(
-                app.state.network_id_ref(),
-                &caller,
-                &key,
-                &Method::POST,
-                &uri,
-                &body,
-            );
+            let headers =
+                signed_network_app_headers(&network, &caller, &key, &Method::POST, &uri, &body);
             let mut request = Request::builder()
                 .method(Method::POST)
                 .uri(uri)

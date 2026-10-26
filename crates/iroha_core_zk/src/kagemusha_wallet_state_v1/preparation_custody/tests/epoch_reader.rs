@@ -53,10 +53,12 @@ fn sealed_epoch_index_restores_verified_authority_for_current_and_older_receipts
         &state,
         K::Load,
         None,
-        IndexRoot::default(),
-        IndexRoot::default(),
-        root,
-        None,
+        crate::kagemusha_wallet_state_v1::preparation_custody::PreparationSelectionV1 {
+            issued: IndexRoot::default(),
+            anchors: IndexRoot::default(),
+            epochs: root,
+            blacklist: None,
+        },
     )
     .unwrap();
     let no_allocation = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 64);
@@ -99,7 +101,6 @@ fn sealed_epoch_index_restores_verified_authority_for_current_and_older_receipts
             .load_finality_reader(&foreign.verifier(), 1)
             .is_err()
     );
-    drop(custody);
     store.remove(ArchiveKey::Object(address)).unwrap();
     let mut custody = PreparationCustodyV1::new(
         &mut store,
@@ -107,10 +108,12 @@ fn sealed_epoch_index_restores_verified_authority_for_current_and_older_receipts
         &state,
         K::Load,
         None,
-        IndexRoot::default(),
-        IndexRoot::default(),
-        root,
-        None,
+        crate::kagemusha_wallet_state_v1::preparation_custody::PreparationSelectionV1 {
+            issued: IndexRoot::default(),
+            anchors: IndexRoot::default(),
+            epochs: root,
+            blacklist: None,
+        },
     )
     .unwrap();
     assert!(custody.load_finality_reader(&genesis, 1).is_err());
@@ -163,17 +166,18 @@ fn epoch_reader_preserves_absent_unavailable_and_lost_index_results() {
         &state,
         K::Load,
         None,
-        IndexRoot::default(),
-        IndexRoot::default(),
-        root,
-        None,
+        crate::kagemusha_wallet_state_v1::preparation_custody::PreparationSelectionV1 {
+            issued: IndexRoot::default(),
+            anchors: IndexRoot::default(),
+            epochs: root,
+            blacklist: None,
+        },
     )
     .unwrap();
     assert!(matches!(
         custody.load_finality_reader(&genesis, 1),
         Err(Error::Storage(error)) if error.kind() == std::io::ErrorKind::WouldBlock
     ));
-    drop(custody);
 
     // Losing the actual selected node is custody loss, not the zero-index answer.
     store.remove(ArchiveKey::Object(root.0)).unwrap();
@@ -183,10 +187,12 @@ fn epoch_reader_preserves_absent_unavailable_and_lost_index_results() {
         &state,
         K::Load,
         None,
-        IndexRoot::default(),
-        IndexRoot::default(),
-        root,
-        None,
+        crate::kagemusha_wallet_state_v1::preparation_custody::PreparationSelectionV1 {
+            issued: IndexRoot::default(),
+            anchors: IndexRoot::default(),
+            epochs: root,
+            blacklist: None,
+        },
     )
     .unwrap();
     assert!(matches!(

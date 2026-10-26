@@ -292,7 +292,7 @@ fn retained_main_ca_coefficients_bind_deep_remainders_and_clear_owned_storage() 
         let mut column = Vec::new();
         column.try_reserve_exact(526_104).unwrap();
         column.resize(526_104, F::ZERO);
-        column[0] = F(index as u64 + 3);
+        column[0] = F(u64::try_from(index).expect("fixture value fits u64") + 3);
         column[1] = F(5);
         column[2] = F(7);
         columns.push(column);
@@ -309,12 +309,14 @@ fn retained_main_ca_coefficients_bind_deep_remainders_and_clear_owned_storage() 
         let target = point.mul_base(plan.shared.main_openings_v1()[index].multiplier);
         assert_eq!(
             *value,
-            E::from_base(F(index as u64 + 3))
+            E::from_base(F(u64::try_from(index).expect("fixture value fits u64") + 3))
                 .add(target.mul_base(F(5)))
                 .add(target.mul(target).mul_base(F(7)))
         );
     }
-    let mixes: [E; 24] = core::array::from_fn(|index| E::from_base(F(index as u64 + 13)));
+    let mixes: [E; 24] = core::array::from_fn(|index| {
+        E::from_base(F(u64::try_from(index).expect("fixture value fits u64") + 13))
+    });
     let policy =
         main_bounded_transform::MainBoundedTransformPolicyV1::for_assembly_v1(&layout, 0).unwrap();
     let mut accumulator = vec![E::ZERO; 589_824];

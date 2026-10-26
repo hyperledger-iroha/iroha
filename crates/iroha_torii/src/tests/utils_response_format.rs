@@ -30,7 +30,7 @@ async fn respond_with_format_produces_norito_bytes() {
         &payload,
         "iroha_torii::utils::response_format_tests::DummyPayload",
     );
-    let (parts, body) = respond_with_format(payload.clone(), ResponseFormat::Norito).into_parts();
+    let (parts, body) = respond_with_format(&(payload), ResponseFormat::Norito).into_parts();
     assert_eq!(
         parts.headers.get(CONTENT_TYPE),
         Some(&HeaderValue::from_static(NORITO_MIME_TYPE))
@@ -47,7 +47,7 @@ async fn respond_with_format_produces_norito_bytes() {
 #[tokio::test]
 async fn respond_with_format_produces_json() {
     let payload = DummyPayload { value: 7 };
-    let (parts, body) = respond_with_format(payload.clone(), ResponseFormat::Json).into_parts();
+    let (parts, body) = respond_with_format(&(payload), ResponseFormat::Json).into_parts();
     assert_eq!(
         parts.headers.get(CONTENT_TYPE),
         Some(&HeaderValue::from_static("application/json"))
@@ -60,7 +60,7 @@ async fn respond_with_format_produces_json() {
 async fn bounded_response_accepts_exact_norito_limit_and_rejects_next_byte() {
     let payload = DummyPayload { value: 99 };
     let exact = norito::core::encoded_frame_len(&payload).expect("count payload frame");
-    let (_, body) = respond_with_format_bounded(payload.clone(), ResponseFormat::Norito, exact)
+    let (_, body) = respond_with_format_bounded(&(payload), ResponseFormat::Norito, exact)
         .expect("the exact body reservation must fit")
         .into_parts();
     assert_eq!(
@@ -71,7 +71,7 @@ async fn bounded_response_accepts_exact_norito_limit_and_rejects_next_byte() {
             .len(),
         exact
     );
-    let error = match respond_with_format_bounded(payload, ResponseFormat::Norito, exact - 1) {
+    let error = match respond_with_format_bounded(&(payload), ResponseFormat::Norito, exact - 1) {
         Ok(_) => panic!("one byte below the exact frame must fail"),
         Err(error) => error,
     };
@@ -86,7 +86,7 @@ async fn bounded_response_accepts_exact_norito_limit_and_rejects_next_byte() {
 #[test]
 fn bounded_response_rejects_legacy_json_without_invoking_its_string_serializer() {
     let error = match respond_with_format_bounded(
-        LegacyJsonSerializerMustNotRun,
+        &(LegacyJsonSerializerMustNotRun),
         ResponseFormat::Json,
         usize::MAX,
     ) {
@@ -101,7 +101,7 @@ async fn bounded_response_accepts_exact_json_limit_and_rejects_next_byte() {
     let exact = norito::json::to_string(&payload)
         .expect("encode fixture")
         .len();
-    let (parts, body) = respond_with_format_bounded(payload.clone(), ResponseFormat::Json, exact)
+    let (parts, body) = respond_with_format_bounded(&(payload), ResponseFormat::Json, exact)
         .expect("the exact JSON body reservation must fit")
         .into_parts();
     assert_eq!(
@@ -116,7 +116,7 @@ async fn bounded_response_accepts_exact_json_limit_and_rejects_next_byte() {
     assert_eq!(bytes.len(), exact);
     let decoded: DummyPayload = norito::json::from_slice(&bytes).expect("decode bounded JSON");
     assert_eq!(decoded, payload);
-    let error = match respond_with_format_bounded(payload, ResponseFormat::Json, exact - 1) {
+    let error = match respond_with_format_bounded(&(payload), ResponseFormat::Json, exact - 1) {
         Ok(_) => panic!("one byte below the exact JSON body must fail"),
         Err(error) => error,
     };
@@ -164,7 +164,7 @@ fn bounded_json_helper_supports_the_iterable_query_response_envelope() {
 fn typed_error_response_carries_bounded_telemetry_code() {
     let response = respond_with_status_and_format(
         StatusCode::CONFLICT,
-        ErrorEnvelope::new("idempotency_key_conflict", "conflict"),
+        &(ErrorEnvelope::new("idempotency_key_conflict", "conflict")),
         ResponseFormat::Json,
     );
     assert_eq!(
@@ -176,7 +176,7 @@ fn typed_error_response_carries_bounded_telemetry_code() {
     );
     let response = respond_with_status_and_format(
         StatusCode::BAD_REQUEST,
-        ErrorEnvelope::new("raw/value/from/request", "invalid"),
+        &(ErrorEnvelope::new("raw/value/from/request", "invalid")),
         ResponseFormat::Norito,
     );
     assert_eq!(
@@ -206,7 +206,7 @@ async fn unacceptable_representation_uses_typed_json_fallback() {
 #[tokio::test]
 async fn respond_value_with_format_keeps_dynamic_payloads_json_only() {
     let value = json::Value::from(7_u64);
-    let (parts, body) = respond_value_with_format(value, ResponseFormat::Norito).into_parts();
+    let (parts, body) = respond_value_with_format(&(value), ResponseFormat::Norito).into_parts();
     assert_eq!(
         parts.headers.get(CONTENT_TYPE),
         Some(&HeaderValue::from_static(JSON_MIME_TYPE))
@@ -221,7 +221,7 @@ async fn respond_json_document_with_format_wraps_json_string_as_norito() {
     object.insert("ok".to_owned(), json::Value::Bool(true));
     let (parts, body) = respond_json_document_with_status_and_format(
         StatusCode::ACCEPTED,
-        json::Value::Object(object),
+        &(json::Value::Object(object)),
         ResponseFormat::Norito,
     )
     .into_parts();
@@ -245,7 +245,7 @@ async fn respond_json_document_with_format_renders_json() {
     object.insert("ok".to_owned(), json::Value::Bool(true));
     let (parts, body) = respond_json_document_with_status_and_format(
         StatusCode::ACCEPTED,
-        json::Value::Object(object),
+        &(json::Value::Object(object)),
         ResponseFormat::Json,
     )
     .into_parts();

@@ -3,6 +3,7 @@
 
 use std::{slice, str};
 
+use iroha_crypto::sha256;
 use iroha_data_model::{
     NetworkId,
     block::consensus::SumeragiRootScope,
@@ -11,7 +12,6 @@ use iroha_data_model::{
     },
 };
 use libc::{c_int, c_uchar, c_ulong};
-use iroha_crypto::sha256;
 
 const ERR_FI_CHECKPOINT: c_int = -510;
 
@@ -51,7 +51,7 @@ pub(crate) fn verify_fi_checkpoint_selection(
         || expected_context_id == [0; 32]
         || expected_height == 0
         || expected_height == u64::MAX
-        || <[u8; 32]>::from(sha256(checkpoint_bytes)) != expected_sha256
+        || sha256(checkpoint_bytes) != expected_sha256
     {
         return Err("checkpoint differs from independently signed selection".into());
     }

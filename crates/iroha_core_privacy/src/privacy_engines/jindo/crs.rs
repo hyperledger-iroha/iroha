@@ -133,7 +133,7 @@ fn uniform_polynomial(
             *coefficient = sample_uniform_modulus(&mut reader, prime.modulus());
         }
     }
-    JindoRnsPolynomialV1::from_residues(residues, moduli)
+    JindoRnsPolynomialV1::from_residues(&residues, moduli)
         .expect("rejection sampler emits canonical residues")
 }
 fn absorb(state: &mut Shake256, bytes: &[u8]) {

@@ -18,7 +18,9 @@ fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(7 + payload.len() + 32);
     out.extend_from_slice(&type_id.to_be_bytes());
     out.push(1);
-    out.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+    out.extend_from_slice(
+        &(u32::try_from(payload.len()).expect("fixture length fits u32")).to_be_bytes(),
+    );
     out.extend_from_slice(payload);
     let h: [u8; 32] = iroha_crypto::Hash::new(payload).into();
     out.extend_from_slice(&h);
@@ -178,7 +180,7 @@ fn zk_roots_get_respects_cap_and_max() {
     let mut vm = ivm::IVM::new(1_000_000);
     let mut host = CoreHost::new(owner.clone());
     host.set_zk_tree_roots_history_len(state.view().zk.tree_roots_history_len);
-    host.set_zk_roots_snapshot(zk_snapshot)
+    host.set_zk_roots_snapshot(&(zk_snapshot))
         .expect("canonical confidential tree snapshot");
     let mut host = host;
     // Case 1: max=0 => bounded by cap

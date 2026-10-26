@@ -272,7 +272,9 @@ mod tests {
         assert_eq!(norito::encode_canonical(&projected).unwrap(), encoded);
     }
 
-    fn assert_mutations_change_projection(mutations: &[(&str, fn(&mut Oracle))]) {
+    type PolicyMutation<'a> = (&'a str, fn(&mut Oracle));
+
+    fn assert_mutations_change_projection(mutations: &[PolicyMutation<'_>]) {
         let baseline = policy();
         let expected = frame(&baseline);
         for &(name, mutate) in mutations {
@@ -284,7 +286,7 @@ mod tests {
 
     #[test]
     fn every_oracle_economics_field_changes_the_projection() {
-        let mutations: &[(&str, fn(&mut Oracle))] = &[
+        let mutations: &[PolicyMutation<'_>] = &[
             ("history depth", |c| {
                 c.history_depth = increment(c.history_depth)
             }),
@@ -333,7 +335,7 @@ mod tests {
 
     #[test]
     fn every_oracle_governance_field_changes_the_projection() {
-        let mutations: &[(&str, fn(&mut Oracle))] = &[
+        let mutations: &[PolicyMutation<'_>] = &[
             ("intake SLA", |c| c.governance.intake_sla_blocks += 1),
             ("rules SLA", |c| c.governance.rules_sla_blocks += 1),
             ("COP SLA", |c| c.governance.cop_sla_blocks += 1),
@@ -379,7 +381,7 @@ mod tests {
 
     #[test]
     fn every_oracle_twitter_binding_field_changes_the_projection() {
-        let mutations: &[(&str, fn(&mut Oracle))] = &[
+        let mutations: &[PolicyMutation<'_>] = &[
             ("Twitter feed", |c| {
                 c.twitter_binding.feed_id = other_feed(&c.twitter_binding.feed_id)
             }),

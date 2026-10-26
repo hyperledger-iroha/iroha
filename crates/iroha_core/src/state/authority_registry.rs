@@ -20,7 +20,7 @@
 use norito::{NoritoSchema, codec::Encode};
 
 // Borrow concrete original current/undo owners without admitting arbitrary row suppliers.
-pub(crate) mod original_images;
+pub mod original_images;
 
 mod account_alias_ownership;
 
@@ -32,7 +32,7 @@ mod grouped_ownership;
 
 /// Fixed bare payload layout for a canonical V1 State leaf.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct CanonicalLayout {
+pub struct CanonicalLayout {
     /// Norito major version selecting the payload contract.
     pub major: u8,
     /// Norito minor version selecting the payload contract.
@@ -42,7 +42,7 @@ pub(crate) struct CanonicalLayout {
 }
 
 /// Canonical payloads use the same explicit V1 compact-length layout.
-pub(crate) const V1_LAYOUT: CanonicalLayout = CanonicalLayout {
+pub const V1_LAYOUT: CanonicalLayout = CanonicalLayout {
     major: norito::core::VERSION_MAJOR,
     minor: norito::core::VERSION_MINOR,
     flags: norito::core::default_encode_flags(),
@@ -50,7 +50,7 @@ pub(crate) const V1_LAYOUT: CanonicalLayout = CanonicalLayout {
 
 /// Codec evidence for one key or value; unresolved projections block cutover.
 #[derive(Clone, Copy, Debug)]
-pub(crate) enum Schema {
+pub enum Schema {
     /// Existing Norito codec with its explicit nominal schema declaration.
     Norito {
         /// Exact declared identity: literal names are borrowed; generic names retain ownership.
@@ -77,7 +77,7 @@ pub(crate) enum Schema {
 }
 
 /// Resolve the declared type schema only when inspection is requested.
-pub(crate) const fn schema<T: Encode + NoritoSchema>() -> Schema {
+pub const fn schema<T: Encode + NoritoSchema>() -> Schema {
     Schema::Norito {
         nominal_name: norito::schema::identity::nominal_name::<T>,
         layout: V1_LAYOUT,
@@ -86,7 +86,7 @@ pub(crate) const fn schema<T: Encode + NoritoSchema>() -> Schema {
 
 /// Shape of independent canonical authority; nested owners remain exhaustive.
 #[derive(Clone, Copy, Debug)]
-pub(crate) enum Canonical {
+pub enum Canonical {
     /// Keyed table. The Rust owner iterates in its own `Ord`; the keyed State commitment
     /// orders entries by canonical key bytes instead (`specs/sumeragi.md` §16.1, §16.2).
     Table { key: Schema, value: Schema },
@@ -98,7 +98,7 @@ pub(crate) enum Canonical {
 
 /// Exact checked reconstruction of secondary state from authoritative sources.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum DerivationCheck {
+pub enum DerivationCheck {
     /// Existing reconstruction implementation; root publication must run/check it.
     Rebuild(&'static str),
     /// A commitment over every canonical descendant of the named owners, which supply its
@@ -108,7 +108,7 @@ pub(crate) enum DerivationCheck {
 
 /// Four explicit authority classes. Names alone never select a class.
 #[derive(Clone, Copy, Debug)]
-pub(crate) enum Role {
+pub enum Role {
     /// Independent semantic authority with a canonical codec or explicit obligation.
     Canonical(Canonical),
     /// Secondary state, excluded as independent authority only after verification.
@@ -131,7 +131,7 @@ pub(crate) enum Role {
 
 /// Disclosure is independently reviewed; canonical does not imply public rows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Disclosure {
+pub enum Disclosure {
     /// No raw row witness may be published from this descriptor.
     CommitmentOnly,
     /// A physical owner has no canonical row witness.
@@ -140,7 +140,7 @@ pub(crate) enum Disclosure {
 
 /// One actual owner field and its stable, explicitly assigned identity.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct Field {
+pub struct Field {
     /// Stable identity, independent of list order or Rust type location.
     pub id: &'static str,
     /// Reviewed authority class.
@@ -174,7 +174,7 @@ macro_rules! classified_owner {
         });
         /// Exhaustive original reader releases, retained beyond enclosing fences.
         /// Slot names are physical custody metadata, separate from canonical field identity.
-        pub(crate) struct $readers {
+        pub struct $readers {
             $( $(#[$attribute])* pub(crate) $release:
                 <$ty as crate::state::view_acquisition::StateFieldReader>::Releases, )+
         }
@@ -190,7 +190,7 @@ macro_rules! classified_owner {
     ($owner:ident, $check:ident, $registry:ident, {
         $( $(#[$attribute:meta])* $field:ident : $ty:ty => ($id:literal, $role:expr); )+
     }) => {
-        pub(crate) const $registry: &[Field] = &[
+        pub const $registry: &[Field] = &[
             $( $(#[$attribute])* Field::new($id, $role), )+
         ];
         fn $check(owner: &$owner) {
@@ -218,7 +218,7 @@ mod cell_snapshot;
     )
 )]
 mod complete;
-pub(crate) use complete::original_stream;
+pub use complete::original_stream;
 #[cfg_attr(
     not(test),
     expect(
@@ -227,16 +227,8 @@ pub(crate) use complete::original_stream;
     )
 )]
 mod content_policy;
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "TODO: consume the cryptographic admission projection in the complete State root owner"
-    )
-)]
-mod crypto_policy;
 mod domain_ownership;
-pub(crate) mod policy_borrowed;
+pub mod policy_borrowed;
 
 #[cfg_attr(
     not(test),
@@ -255,7 +247,7 @@ mod governance_policy;
         reason = "TODO(G.2, G.3): candidate constructions and the State publication owner consume the keyed commitment contract"
     )
 )]
-pub(crate) mod keyed_commitment;
+pub mod keyed_commitment;
 #[cfg_attr(
     not(test),
     expect(
@@ -271,7 +263,7 @@ mod lane_manifest_policy;
         reason = "TODO: bind the scoped table-leaf substrate to the complete State publication owner"
     )
 )]
-pub(crate) mod leaf;
+pub mod leaf;
 #[cfg_attr(
     not(test),
     expect(
@@ -324,9 +316,9 @@ pub(in crate::state) use complete::table_capture::frozen_musubi::{
     FrozenMusubiError, OriginalMusubiMaterializers,
 };
 /// Classified fields of the concrete State owner.
-pub(crate) const STATE_FIELDS: &[Field] = state::STATE_FIELDS;
+pub const STATE_FIELDS: &[Field] = state::STATE_FIELDS;
 /// Classified fields of the concrete heap-owned World data owner.
-pub(crate) const WORLD_FIELDS: &[Field] = world::WORLD_FIELDS;
+pub const WORLD_FIELDS: &[Field] = world::WORLD_FIELDS;
 
 #[cfg(test)]
 pub(in crate::state) mod inventory_test_support;

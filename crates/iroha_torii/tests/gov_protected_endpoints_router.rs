@@ -60,7 +60,7 @@ async fn protected_namespaces_endpoints_work() {
     // POST apply namespaces
     let body_value = iroha_torii::json_object(vec![iroha_torii::json_entry(
         "namespaces",
-        iroha_torii::json_array(vec!["apps", "system"]),
+        &iroha_torii::json_array(vec!["apps", "system"]),
     )]);
     let body = json::to_string(&body_value).expect("serialize namespaces");
     let req_post = http::Request::builder()

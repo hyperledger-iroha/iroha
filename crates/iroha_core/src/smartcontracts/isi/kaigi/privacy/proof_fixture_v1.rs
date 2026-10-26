@@ -13,7 +13,7 @@ use kaigi_zk::authorization_v1::{
 use kaigi_zk::{Scalar as Fp, native::NativeRelationV1};
 
 /// Exact artifacts from the final circuit, with a real proof.
-pub(crate) struct AuthorizationFixtureV1 {
+pub struct AuthorizationFixtureV1 {
     /// Canonical private opening commitment.
     pub commitment: KaigiParticipantCommitment,
     /// Canonical action nullifier.
@@ -25,7 +25,7 @@ pub(crate) struct AuthorizationFixtureV1 {
 }
 
 /// Generate a final proof for this ledger context and install its governed key.
-pub(crate) fn authorization_fixture_v1(
+pub fn authorization_fixture_v1(
     state: &mut StateTransaction<'_, '_>,
     record: &KaigiRecord,
     subject: &AccountId,

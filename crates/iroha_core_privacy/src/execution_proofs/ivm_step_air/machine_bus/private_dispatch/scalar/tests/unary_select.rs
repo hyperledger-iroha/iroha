@@ -156,9 +156,7 @@ fn native_unary_ignores_every_rs2_byte_and_its_value_and_tag() {
         assert_eq!(first.0.packets.fields, second.0.packets.fields);
         let mut extra = first.clone();
         extra.0.packets.fields[SCALAR_RIGHT] = event(
-            Space::Register,
-            0,
-            255,
+            (Space::Register, 0, 255),
             0,
             0,
             false,

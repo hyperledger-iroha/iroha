@@ -52,6 +52,7 @@ const GENERATION_COUNTER: u32 = 1;
 const PARENT: u32 = 2;
 
 /// Original typed history ports; callers cannot replace them with success flags.
+#[derive(Clone, Copy)]
 pub(super) struct Ports<'a> {
     pub(super) counter: &'a [F; packet::WIDTH],
     pub(super) active: &'a [F; packet::WIDTH],
@@ -77,7 +78,7 @@ pub(super) fn witness(active_generation: u16, transition: Transition) -> [F; WID
 pub(super) fn append_residues(
     out: &mut impl crate::execution_proofs::ivm_step_air::residues::Sink,
     schedule: Schedule,
-    row: &[F; WIDTH],
+    row: [F; WIDTH],
     selection: &[F; 3],
     ports: Ports<'_>,
 ) {
@@ -103,9 +104,7 @@ pub(super) fn append_residues(
         out,
         ports.counter,
         schedule,
-        0,
-        GENERATION_COUNTER,
-        F::ZERO,
+        (0, GENERATION_COUNTER, F::ZERO),
         entry,
         selected,
     );
@@ -113,9 +112,7 @@ pub(super) fn append_residues(
         out,
         ports.active,
         schedule,
-        1,
-        ACTIVE,
-        F::ZERO,
+        (1, ACTIVE, F::ZERO),
         true,
         selected,
     );
@@ -123,9 +120,7 @@ pub(super) fn append_residues(
         out,
         ports.parent,
         schedule,
-        2,
-        PARENT,
-        generation,
+        (2, PARENT, generation),
         entry,
         selected,
     );
@@ -170,12 +165,14 @@ pub(super) fn append_residues(
 
 fn header(
     out: &mut impl crate::execution_proofs::ivm_step_air::residues::Sink,
+
     port: &[F; packet::WIDTH],
+
     schedule: Schedule,
-    slot: usize,
-    index: u32,
-    generation: F,
+    (slot, index, generation): (usize, u32, F),
+
     write: bool,
+
     selected: F,
 ) {
     use packet::*;

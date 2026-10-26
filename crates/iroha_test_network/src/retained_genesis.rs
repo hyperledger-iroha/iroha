@@ -123,7 +123,7 @@ impl RetainedGenesis {
         let params = iroha_core::sumeragi::consensus::consensus_genesis_params_from_parameters(
             mode,
             &parameter_state,
-            metadata.sumeragi_context.clone(),
+            metadata.sumeragi_context,
         )
         .map_err(|error| eyre!(error))?;
         let profile = ConsensusBootstrapProfile {
@@ -199,10 +199,12 @@ impl RetainedGenesis {
             &original,
             &AccountId::new(self.originals.public_key.clone()),
             topology,
-            Some(&config.pipeline),
-            Some(&config.nexus),
-            Some(&config.zk),
-            Some(config),
+            crate::config::GenesisRuntimeConfig {
+                pipeline_config: Some(&config.pipeline),
+                nexus_config: Some(&config.nexus),
+                zk_config: Some(&config.zk),
+                runtime_config: Some(config),
+            },
         )?;
         // Native validation authenticates the proposal and computes its outputs.
         // Outputs are secondary state, not signed proposal content: a valid
@@ -261,6 +263,7 @@ impl NetworkBuilder {
                 && self.observer_p2p_bootstrap.is_none()
                 && self.observer_slow_reader_relays.is_none()
                 && self.custom_genesis.is_none()
+                && self.genesis_staking_policy.is_none()
                 && self.genesis_isi.iter().all(Vec::is_empty)
                 && self.genesis_post_topology_isi.iter().all(Vec::is_empty)
                 && self.genesis_post_bootstrap_isi.iter().all(Vec::is_empty)
@@ -374,6 +377,7 @@ impl NetworkBuilder {
             genesis_key_pair: None,
             genesis_isi: Vec::new(),
             genesis_post_topology_isi: Vec::new(),
+            generated_staking_policy: None,
             cached_genesis: OnceLock::new(),
             generated_genesis_manifest: OnceLock::new(),
             retained_genesis: Some(genesis),
@@ -670,6 +674,9 @@ mod tests {
             }),
             Box::new(|recipe| recipe.block_cadence = Some(Duration::from_secs(37))),
             Box::new(|recipe| recipe.ivm_fuel = IvmFuelConfig::Auto),
+            Box::new(|recipe| {
+                recipe.genesis_staking_policy = Some(config::default_test_network_staking_policy())
+            }),
             Box::new(|recipe| recipe.genesis_key_pair = ALICE_KEYPAIR.clone()),
             Box::new(|recipe| recipe.genesis_committee_keys_for_global_peers = true),
             Box::new(|recipe| recipe.auto_populate_trusted_peer_pops = false),
@@ -733,10 +740,12 @@ mod tests {
             &original,
             &AccountId::new(originals.public_key.clone()),
             &topology,
-            Some(&actual.pipeline),
-            Some(&actual.nexus),
-            Some(&actual.zk),
-            Some(&actual),
+            crate::config::GenesisRuntimeConfig {
+                pipeline_config: Some(&actual.pipeline),
+                nexus_config: Some(&actual.nexus),
+                zk_config: Some(&actual.zk),
+                runtime_config: Some(&actual),
+            },
         )?;
         assert!(
             executed.has_results(),

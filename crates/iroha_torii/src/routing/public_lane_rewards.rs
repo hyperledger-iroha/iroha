@@ -50,17 +50,19 @@ mod tests {
             test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400bb"),
             recipient.clone(),
         );
-        let (_, value) = pending_reward_to_json(PublicLanePendingReward {
-            lane_id: LaneId::SINGLE,
-            account: recipient.clone(),
-            asset: asset.clone(),
-            amount: "0.000000001".parse().unwrap(),
-            beneficiary_id: recipient.clone(),
-            beneficiary_revision: 3,
-            expected_claim_sequence: 7,
-            lifecycle_seal: [0xA5; 32],
-            claimable: false,
-        });
+        let (_, value) = pending_reward_to_json(
+            &(PublicLanePendingReward {
+                lane_id: LaneId::SINGLE,
+                account: recipient.clone(),
+                asset: asset.clone(),
+                amount: "0.000000001".parse().unwrap(),
+                beneficiary_id: recipient.clone(),
+                beneficiary_revision: 3,
+                expected_claim_sequence: 7,
+                lifecycle_seal: [0xA5; 32],
+                claimable: false,
+            }),
+        );
         assert_eq!(value["asset"], Value::from(asset.to_string()));
         assert_eq!(value["amount"], Value::from("0.000000001"));
         assert_eq!(value["beneficiary_id"], Value::from(recipient.to_string()));

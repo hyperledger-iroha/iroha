@@ -13,7 +13,6 @@ pub(super) struct LaneAuthorityInputs {
     pub(super) dataspace_id: DataSpaceId,
     pub(super) autoscale_validator_set: Option<Vec<PeerId>>,
     pub(super) validator_mode: LaneValidatorMode,
-    pub(super) minimum_stake: Quantity,
     pub(super) max_validators: u32,
 }
 pub(super) fn staking_validator_limit_from(configured: u32) -> Option<usize> {
@@ -145,7 +144,6 @@ pub(super) fn stake_elected_validator_accounts(
                 &record.self_stake,
                 minimum_stake,
             )
-            .unwrap_or(false)
             || !world.peers().iter().any(|peer| peer == &record.peer_id)
             || !peer_has_live_consensus_key_for_lane(world, &record.peer_id, block_height, lane_id)
         {
@@ -190,7 +188,6 @@ pub(super) fn stake_elected_peer_ids(
                 &record.self_stake,
                 minimum_stake,
             )
-            .unwrap_or(false)
             || !world.peers().iter().any(|peer| peer == &record.peer_id)
             || !peer_has_live_consensus_key_for_lane(world, &record.peer_id, block_height, lane_id)
         {

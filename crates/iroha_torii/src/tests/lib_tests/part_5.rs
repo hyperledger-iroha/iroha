@@ -1019,7 +1019,7 @@ async fn cancelled_attachment_request_retains_admission_in_real_sanitizer_worker
     use axum::{Router, routing::post};
     use tower::ServiceExt as _;
 
-    let _data_dir = crate::test_utils::TestDataDirGuard::new();
+    let data_dir = crate::test_utils::TestDataDirGuard::new();
     let _auth_guard = crate::tests_runtime_handlers::app_auth_test_guard(
         crate::app_auth::CanonicalRequestAuthConfig::default(),
     );
@@ -1034,7 +1034,7 @@ async fn cancelled_attachment_request_retains_admission_in_real_sanitizer_worker
     let method = axum::http::Method::POST;
     let uri: axum::http::Uri = "/v1/zk/attachments".parse().expect("attachment URI");
     let body = br#"{"attachment":"cancel-real-sanitizer"}"#;
-    let missing_sanitizer = _data_dir.path().join("missing-attachment-sanitizer");
+    let missing_sanitizer = data_dir.path().join("missing-attachment-sanitizer");
 
     for (mode, executable) in [
         (

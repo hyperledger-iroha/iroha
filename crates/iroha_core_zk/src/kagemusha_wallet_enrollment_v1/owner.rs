@@ -92,6 +92,10 @@ struct Scope {
 
 /// Native source-selected enrollment progress. It does not assert issuer approval.
 #[derive(Debug, Clone)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "return the authenticated marker inline without adding a fallible allocation"
+)]
 pub enum EnrollmentProgressV1 {
     /// Durable generation-zero marker; originals identify the exact key to attest.
     Evidence {
@@ -148,6 +152,10 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> EnrollmentOwnerV1<F, 
     /// Returns the original provider together with an error if the scheme, installed
     /// selection, Enrollment certificate, session interval, app policy, qualified
     /// Android profile or Apple root original is invalid or bound to another scheme.
+    #[expect(
+        clippy::result_large_err,
+        reason = "return the exact original custody owner on refusal without allocating a replacement"
+    )]
     pub fn new(
         provider: KagemushaWalletProviderV1<F, P>,
         config: EnrollmentConfigV1,
@@ -214,7 +222,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> EnrollmentOwnerV1<F, 
     /// Returns an error if any installed identity or policy changes, the replacement
     /// session interval is invalid, or a pending Apple return cannot be flushed.
     /// Session fields and live selections are replaced only after that flush succeeds.
-    pub fn renew_session(&mut self, config: EnrollmentConfigV1) -> Result<(), Error> {
+    pub fn renew_session(&mut self, config: &EnrollmentConfigV1) -> Result<(), Error> {
         if config.scheme != self.config.scheme
             || config.app != self.config.app
             || config.policy != self.config.policy
@@ -248,6 +256,10 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> EnrollmentOwnerV1<F, 
     /// If `load` returns an error and its provider, returns that exact error alongside
     /// an enrollment owner reconstructed with the returned provider and every retained
     /// private selection. This method adds no validation or error conversion.
+    #[expect(
+        clippy::result_large_err,
+        reason = "return the exact original custody owner on refusal without allocating a replacement"
+    )]
     pub fn try_handoff<T, E>(
         self,
         load: impl FnOnce(
@@ -294,17 +306,18 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> EnrollmentOwnerV1<F, 
         Ok(match self.provider.status(slot)? {
             KagemushaWalletSlotStatusV1::Enrollment(marker) => EnrollmentProgressV1::Evidence {
                 slot: slot.0,
-                marker: marker.marker().clone(),
+                marker: *marker.marker(),
                 challenge_digest: scope.challenge.challenge_digest(),
             },
-            KagemushaWalletSlotStatusV1::IntentOnly => EnrollmentProgressV1::Pending,
+            // A selected pre-key slot may precede E2. It grants no generation authority.
+            KagemushaWalletSlotStatusV1::IntentOnly | KagemushaWalletSlotStatusV1::Empty => {
+                EnrollmentProgressV1::Pending
+            }
             KagemushaWalletSlotStatusV1::Pending(_) | KagemushaWalletSlotStatusV1::Released(_) => {
                 EnrollmentProgressV1::BootstrapSelected
             }
             KagemushaWalletSlotStatusV1::SlotAbandoned
             | KagemushaWalletSlotStatusV1::Terminal(_) => EnrollmentProgressV1::Abandoned,
-            // A selected pre-key slot may precede E2. It grants no generation authority.
-            KagemushaWalletSlotStatusV1::Empty => EnrollmentProgressV1::Pending,
         })
     }
     /// Permanently abandon this unused enrollment (design §3.2). A slot with no enrollment

@@ -233,7 +233,9 @@ impl Record {
                 && iroha_data_model::kagemusha::KagemushaWalletEnrollmentRefusalV1::from_code(
                     self.worker_refusal,
                 )
-                .is_none_or(|refusal| refusal.is_eligibility()))
+                .is_none_or(
+                    iroha_data_model::kagemusha::KagemushaWalletEnrollmentRefusalV1::is_eligibility,
+                ))
             || (self.refusal != 0
                 && (self.signing_dispatched
                     || matches!(self.phase, Issued | Rejected)

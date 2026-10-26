@@ -48,7 +48,7 @@ fn global_asset(policy: &AssetUidPolicyV1, account: &AccountId) -> Result<AssetI
 /// preflight and retained-row passes. Absence of a balance after account,
 /// definition and membership validation is the ledger's canonical zero.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn collect(
+pub fn collect(
     world: &impl WorldReadOnly,
     network: &NetworkId,
     policy: &AssetUidPolicyV1,
@@ -136,8 +136,8 @@ pub(crate) fn collect(
                 | AssetEscrowStatus::Accepted
                 | AssetEscrowStatus::PaymentSent
                 | AssetEscrowStatus::Disputed,
-            ) => true,
-            (AssetEscrowKind::Lock | AssetEscrowKind::Conditional, AssetEscrowStatus::Locked) => {
+            )
+            | (AssetEscrowKind::Lock | AssetEscrowKind::Conditional, AssetEscrowStatus::Locked) => {
                 true
             }
             (
@@ -196,10 +196,10 @@ pub(crate) fn collect(
             }
             // Opening already stored min(explicit expiry, created + Within).
             // Native attestation rejects now >= expiry; do not recompute it here.
-            if now < expiry {
-                if let Some(amount) = actual {
-                    add(&mut pending_incoming, amount.as_ref())?;
-                }
+            if now < expiry
+                && let Some(amount) = actual
+            {
+                add(&mut pending_incoming, amount.as_ref())?;
             }
         }
     }

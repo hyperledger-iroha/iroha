@@ -5,7 +5,7 @@ use iroha_data_model::nexus::NativeLaneValidatorBindingV1;
 
 /// Freeze exact validator manifests for the supplied active catalog.
 /// The returned registry retains its parsed source after the temporary files disappear.
-pub(crate) fn validator_registry(
+pub fn validator_registry(
     catalog: &LaneCatalog,
     governance: &GovernanceCatalog,
     bindings_by_lane: BTreeMap<LaneId, Vec<ManifestValidatorBinding>>,

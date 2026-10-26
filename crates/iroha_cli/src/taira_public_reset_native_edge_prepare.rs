@@ -333,21 +333,32 @@ fn validate_darwin_header(bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
+#[derive(Clone, Copy)]
+struct NativeEdgeSigningKeys<'a> {
+    trusted: &'a TrustedKeyV1,
+    native_key: &'a KeyPair,
+    owner_key: &'a KeyPair,
+}
+
 fn sign_records(
     request: &PrepareRequestV1,
     revision: &RevisionV1,
     observation: OwnerObservationV1,
     dispatcher: NativePublicFileV1,
     guard: NativePublicFileV1,
-    trusted: &TrustedKeyV1,
-    native_key: &KeyPair,
-    owner_key: &KeyPair,
+    keys: NativeEdgeSigningKeys<'_>,
     captured_at_unix_ms: u64,
 ) -> Result<(
     SignedNativeEdgeCaptureV1,
     SignedNativeEdgeCandidateV1,
     native_edge_protocol::NativeEdgeCapabilityV1,
 )> {
+    let NativeEdgeSigningKeys {
+        trusted,
+        native_key,
+        owner_key,
+    } = keys;
+
     let native = &request.hosts.native_edge;
     let release = request.incumbent.clone();
     if release.config_sha256 != observation.owned_publication.publication.sha256 {
@@ -455,6 +466,17 @@ pub(super) fn prepare(args: &PrepareNativeEdge, writer: &mut impl Write) -> Resu
 
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 fn prepare_native(args: &PrepareNativeEdge, writer: &mut impl Write) -> Result<()> {
+    #[derive(JsonSerialize)]
+    struct Receipt {
+        schema: String,
+        output: String,
+        request_sha256: String,
+        capture_sha256: String,
+        candidate_sha256: String,
+        capability_sha256: String,
+        qualified: bool,
+    }
+
     let (request, request_pin) = read_request(args)?;
     validate_selected_refs(&request)?;
     let native = &request.hosts.native_edge;
@@ -683,9 +705,11 @@ fn prepare_native(args: &PrepareNativeEdge, writer: &mut impl Write) -> Result<(
         observed.clone(),
         dispatcher,
         guard,
-        &trusted,
-        &native_key,
-        &owner_key,
+        NativeEdgeSigningKeys {
+            trusted: &trusted,
+            native_key: &native_key,
+            owner_key: &owner_key,
+        },
         now_unix_ms()?,
     )?;
     for pin in &pins {
@@ -720,16 +744,7 @@ fn prepare_native(args: &PrepareNativeEdge, writer: &mut impl Write) -> Result<(
         ],
     )?;
     output.revalidate()?;
-    #[derive(JsonSerialize)]
-    struct Receipt {
-        schema: String,
-        output: String,
-        request_sha256: String,
-        capture_sha256: String,
-        candidate_sha256: String,
-        capability_sha256: String,
-        qualified: bool,
-    }
+
     writeln!(
         writer,
         "{}",
@@ -938,9 +953,11 @@ mod tests {
             observation.clone(),
             dispatcher.clone(),
             guard.clone(),
-            &trusted,
-            &native_key,
-            &owner_key,
+            NativeEdgeSigningKeys {
+                trusted: &trusted,
+                native_key: &native_key,
+                owner_key: &owner_key,
+            },
             1_234,
         )
         .unwrap();
@@ -1002,9 +1019,11 @@ mod tests {
                 observation.clone(),
                 dispatcher.clone(),
                 guard.clone(),
-                &trusted,
-                &other,
-                &owner_key,
+                NativeEdgeSigningKeys {
+                    trusted: &trusted,
+                    native_key: &other,
+                    owner_key: &owner_key
+                },
                 1_234
             )
             .is_err()
@@ -1016,9 +1035,11 @@ mod tests {
                 observation,
                 dispatcher,
                 guard,
-                &trusted,
-                &native_key,
-                &other,
+                NativeEdgeSigningKeys {
+                    trusted: &trusted,
+                    native_key: &native_key,
+                    owner_key: &other
+                },
                 1_234
             )
             .is_err()
@@ -1050,9 +1071,11 @@ mod tests {
             observation,
             dispatcher,
             guard,
-            &trusted,
-            &native_key,
-            &owner_key,
+            NativeEdgeSigningKeys {
+                trusted: &trusted,
+                native_key: &native_key,
+                owner_key: &owner_key,
+            },
             1_234,
         )
         .unwrap();
@@ -1124,7 +1147,7 @@ mod tests {
             "--output",
             "/native/fresh",
         ];
-        assert!(Cli::try_parse_from(args.clone()).is_ok());
+        assert!(Cli::try_parse_from(args).is_ok());
         for name in [
             "--request",
             "--expected-request-sha256",
@@ -1132,7 +1155,10 @@ mod tests {
             "--owner-signing-key-fd",
             "--output",
         ] {
-            let mut missing = args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>();
+            let mut missing = args
+                .iter()
+                .map(std::string::ToString::to_string)
+                .collect::<Vec<_>>();
             let at = missing.iter().position(|arg| arg == name).unwrap();
             missing.drain(at..at + 2);
             assert!(Cli::try_parse_from(missing).is_err(), "{name}");

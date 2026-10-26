@@ -1,6 +1,6 @@
 //! One original-pool portable proof destination, shared by bounded consumers.
 //!
-//! Actual wire, committee, compact public-key and PoP allocations retire before
+//! Actual wire, committee, compact public-key and `PoP` allocations retire before
 //! their exact charge ledger. Nested decoder/verifier graphs remain obligations
 //! of the integrating caller; this destination grants no certificate authority.
 

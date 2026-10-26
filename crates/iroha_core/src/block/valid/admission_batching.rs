@@ -41,18 +41,25 @@ fn setup_world_with_account(algo: Algorithm) -> (State, AccountId, NetworkId, Ke
     state.install_lane_manifests_for_testing(&Arc::new(
         LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
     ));
-    let mut crypto_cfg = iroha_config::parameters::actual::Crypto::default();
-    if !crypto_cfg.allowed_signing.contains(&algo) {
-        crypto_cfg.allowed_signing.push(algo);
-        crypto_cfg.allowed_signing.sort();
-        crypto_cfg.allowed_signing.dedup();
-    }
-    crypto_cfg.allowed_curve_ids =
-        iroha_config::parameters::defaults::crypto::derive_curve_ids_from_algorithms(
-            &crypto_cfg.allowed_signing,
-        );
-    state.set_crypto(crypto_cfg);
+    let mut algorithms = vec![Algorithm::Ed25519, Algorithm::Secp256k1, algo];
+    algorithms.sort_unstable();
+    algorithms.dedup();
+    install_fixture_policy(&state, algorithms);
     (state, account_id, network_id, kp)
+}
+fn install_fixture_policy(state: &State, algorithms: Vec<Algorithm>) {
+    let policy =
+        iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(algorithms)
+            .expect("explicit batching fixture policy is canonical");
+    let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+        .expect("funded original parameter-only fixture block");
+    crate::state::set_parameter_cell_for_testing(
+        &mut parameters,
+        policy.into_parameter().expect("canonical fixture policy"),
+        state.world.sccp_committee_generations.allocation_budget(),
+    )
+    .expect("publish fixture policy");
+    parameters.commit();
 }
 fn checked_random_keypair() -> KeyPair {
     KeyPair::try_random().expect("generate checked admission batching keypair")
@@ -92,6 +99,10 @@ fn checked_signature_of<T: norito::codec::Encode>(
 fn checked_signature_from_hash<T>(private_key: &PrivateKey, hash: HashOf<T>) -> SignatureOf<T> {
     SignatureOf::try_from_hash(private_key, hash).expect("test fixture hash signing should succeed")
 }
+#[expect(
+    clippy::result_large_err,
+    reason = "Exercise the production block-validation refusal type without allocating an error wrapper"
+)]
 fn validate_admission(
     block: &SignedBlock,
     state: &State,
@@ -103,13 +114,17 @@ fn validate_admission(
     );
     let view = state.view();
     let prepared = ValidBlock::prepare_external_transactions(block);
-    let parameters = view.world().parameters();
+    let parameters = view.world().transaction_admission_parameters();
     let pipeline = view.pipeline().clone();
     let snapshot = super::StaticValidationData {
         expected_block_height: block.header().height().get().try_into().unwrap(),
         max_clock_drift: parameters.sumeragi().max_clock_drift(),
         tx_params: parameters.transaction(),
-        crypto_cfg: view.crypto(),
+        crypto_policy: Some(
+            parameters
+                .require_crypto_policy()
+                .expect("original batching policy"),
+        ),
         pipeline_parallelism: state.pipeline_parallelism().clone(),
         pipeline_cfg: pipeline,
         aggregate_lane: view.nexus().routing_policy.default_lane,
@@ -129,10 +144,10 @@ fn validate_admission(
         metrics,
     )
 }
-fn assert_invalid_signature(result: Result<(), BlockValidationError>) {
+fn assert_invalid_signature(result: &Result<(), BlockValidationError>) {
     assert!(
         matches!(result, Err(BlockValidationError::TransactionAccept(
-            AcceptTransactionFail::SignatureVerification(ref fail)
+            AcceptTransactionFail::SignatureVerification(fail)
         )) if fail.code() == SignatureRejectionCode::InvalidSignature),
         "admission must reject the invalid transaction signature, got {result:?}"
     );
@@ -383,17 +398,9 @@ fn bls_multi_message_verification_ok() {
 }
 #[cfg(feature = "sm")]
 #[test]
-fn sm2_transactions_rejected_when_sm_disabled() {
+fn sm2_transactions_rejected_when_absent_from_committed_policy() {
     let (state, authority, network_id, signer) = setup_world_with_account(Algorithm::Sm2);
-    let mut crypto_cfg = (*state.crypto()).clone();
-    crypto_cfg
-        .allowed_signing
-        .retain(|algorithm| *algorithm != Algorithm::Sm2);
-    crypto_cfg.allowed_curve_ids =
-        iroha_config::parameters::defaults::crypto::derive_curve_ids_from_algorithms(
-            &crypto_cfg.allowed_signing,
-        );
-    state.set_crypto(crypto_cfg);
+    install_fixture_policy(&state, vec![Algorithm::Ed25519, Algorithm::Secp256k1]);
     let leader = checked_random_keypair();
     let block = build_block_with_txs(&signer, &signer, &leader, &authority, &network_id);
     let result = validate_admission(&block, &state, &authority);
@@ -401,7 +408,7 @@ fn sm2_transactions_rejected_when_sm_disabled() {
         matches!(result, Err(BlockValidationError::TransactionAccept(
             AcceptTransactionFail::SignatureVerification(ref fail)
         )) if fail.code() == SignatureRejectionCode::AlgorithmNotPermitted),
-        "SM2 block should be rejected when SM is disabled, got {result:?}"
+        "SM2 block should be rejected by the committed policy, got {result:?}"
     );
 }
 #[cfg(feature = "sm")]
@@ -477,7 +484,7 @@ fn bls_multi_message_rejects_balancing_altered_transaction_signatures() {
         .expect_err("second altered transaction signature must fail independently");
     let block = presigned_block_with_creation_after_txs(&leader, vec![tx1, tx2]);
     let result = validate_admission(&block, &state, &authority);
-    assert_invalid_signature(result);
+    assert_invalid_signature(&(result));
 }
 /// BLS multi-message verification: one of two distinct payloads is signed by a wrong key
 /// and should trigger an exact-verification failure plus telemetry bookkeeping.
@@ -493,7 +500,7 @@ fn bls_multi_message_verification_fails_and_counts() {
     let tx_bad = mk_tx_with_creation_time(&network_id, &authority, "m2", ct + 1, &bad, &good);
     let block = presigned_block_with_creation_after_txs(&leader, vec![tx_valid, tx_bad]);
     let result = validate_admission(&block, &state, &authority);
-    assert_invalid_signature(result);
+    assert_invalid_signature(&(result));
     #[cfg(feature = "telemetry")]
     {
         let ((same_success, same_failure), (multi_success, multi_failure)) = state
@@ -524,7 +531,7 @@ fn bls_batch_bisection_finds_bad_sig() {
     let leader = good.clone();
     let block = build_block_with_txs(&good, &bad, &leader, &authority, &network_id);
     let result = validate_admission(&block, &state, &authority);
-    assert_invalid_signature(result);
+    assert_invalid_signature(&(result));
 }
 #[test]
 fn mldsa_batch_bisection_finds_bad_sig() {
@@ -534,7 +541,7 @@ fn mldsa_batch_bisection_finds_bad_sig() {
     let leader = checked_random_keypair();
     let block = build_block_with_txs(&good, &bad, &leader, &authority, &network_id);
     let result = validate_admission(&block, &state, &authority);
-    assert_invalid_signature(result);
+    assert_invalid_signature(&(result));
 }
 #[test]
 fn ed25519_batch_bisection_finds_bad_sig() {
@@ -543,7 +550,7 @@ fn ed25519_batch_bisection_finds_bad_sig() {
     let leader = checked_random_keypair();
     let block = build_block_with_txs(&good, &bad, &leader, &authority, &network_id);
     let result = validate_admission(&block, &state, &authority);
-    assert_invalid_signature(result);
+    assert_invalid_signature(&(result));
 }
 #[test]
 fn secp256k1_batch_bisection_finds_bad_sig() {
@@ -552,7 +559,7 @@ fn secp256k1_batch_bisection_finds_bad_sig() {
     let leader = checked_random_keypair();
     let block = build_block_with_txs(&good, &bad, &leader, &authority, &network_id);
     let result = validate_admission(&block, &state, &authority);
-    assert_invalid_signature(result);
+    assert_invalid_signature(&(result));
 }
 #[test]
 fn rejects_transaction_signed_with_disallowed_algorithm() {
@@ -574,25 +581,20 @@ fn rejects_transaction_signed_with_disallowed_algorithm() {
     )
     .with_instructions([Log::new(Level::INFO, "secp attempt".to_owned())])
     .sign(secp.private_key());
-    let mut crypto_cfg = (*state.crypto()).clone();
-    crypto_cfg
-        .allowed_signing
-        .retain(|algo| *algo == Algorithm::Ed25519);
-    crypto_cfg.allowed_curve_ids =
-        iroha_config::parameters::defaults::crypto::derive_curve_ids_from_algorithms(
-            &crypto_cfg.allowed_signing,
-        );
-    state.set_crypto(crypto_cfg.clone());
+    install_fixture_policy(&state, vec![Algorithm::Ed25519]);
+    let parameters = state.transaction_admission_parameters();
     let (_clock, time_source) = TimeSource::new_mock(tx.creation_time());
     match AcceptedTransaction::accept_with_time_source(
         tx,
         &network_id,
         max_clock_drift,
         tx_limits,
-        &crypto_cfg,
+        parameters
+            .require_crypto_policy()
+            .expect("original batching fixture policy"),
         &time_source,
     ) {
-        Err(AcceptTransactionFail::SignatureVerification(fail)) => {
+        Err(AcceptTransactionFail::SignatureVerification(ref fail)) => {
             assert_eq!(fail.code(), SignatureRejectionCode::AlgorithmNotPermitted);
             assert!(
                 fail.detail.contains("not permitted"),
@@ -623,20 +625,17 @@ fn accepts_transaction_once_algorithm_whitelisted() {
     )
     .with_instructions([Log::new(Level::INFO, "secp allowed".to_owned())])
     .sign(secp.private_key());
-    let mut crypto_cfg = (*state.crypto()).clone();
-    if !crypto_cfg.allowed_signing.contains(&Algorithm::Secp256k1) {
-        crypto_cfg.allowed_signing.push(Algorithm::Secp256k1);
-        crypto_cfg.allowed_signing.sort();
-        crypto_cfg.allowed_signing.dedup();
-    }
-    state.set_crypto(crypto_cfg.clone());
+    install_fixture_policy(&state, vec![Algorithm::Ed25519, Algorithm::Secp256k1]);
+    let parameters = state.transaction_admission_parameters();
     let (_clock, time_source) = TimeSource::new_mock(tx.creation_time());
     AcceptedTransaction::accept_with_time_source(
         tx,
         &network_id,
         max_clock_drift,
         tx_limits,
-        &crypto_cfg,
+        parameters
+            .require_crypto_policy()
+            .expect("original batching fixture policy"),
         &time_source,
     )
     .expect("transaction should be accepted after whitelisting");
@@ -663,14 +662,16 @@ fn rejects_transaction_when_ttl_expired() {
     builder.set_creation_time(Duration::from_secs(0));
     builder.set_ttl(Duration::from_secs(1));
     let tx = builder.sign(kp.private_key());
-    let crypto_cfg = (*state.crypto()).clone();
+    let parameters = state.transaction_admission_parameters();
     let (_clock, time_source) = TimeSource::new_mock(Duration::from_secs(2));
     match AcceptedTransaction::accept_with_time_source(
         tx,
         &network_id,
         max_clock_drift,
         tx_limits,
-        &crypto_cfg,
+        parameters
+            .require_crypto_policy()
+            .expect("original batching fixture policy"),
         &time_source,
     ) {
         Err(AcceptTransactionFail::TransactionExpired { .. }) => {}
@@ -701,14 +702,16 @@ fn accepts_transaction_with_valid_ttl() {
     builder.set_creation_time(creation_time);
     builder.set_ttl(Duration::from_secs(10));
     let tx = builder.sign(kp.private_key());
-    let crypto_cfg = (*state.crypto()).clone();
+    let parameters = state.transaction_admission_parameters();
     let (_clock, time_source) = TimeSource::new_mock(now);
     AcceptedTransaction::accept_with_time_source(
         tx,
         &network_id,
         max_clock_drift,
         tx_limits,
-        &crypto_cfg,
+        parameters
+            .require_crypto_policy()
+            .expect("original batching fixture policy"),
         &time_source,
     )
     .expect("transaction with unexpired TTL should be accepted");

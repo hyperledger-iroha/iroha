@@ -67,7 +67,7 @@ pub enum DaPinIntentSpoolError {
     )]
     FilenameMismatch {
         /// Path that failed.
-        path: PathBuf,
+        path: Box<std::path::Path>,
         /// Lane identifier parsed from the filename.
         filename_lane: LaneId,
         /// Epoch parsed from the filename.
@@ -391,7 +391,7 @@ fn decode_pin_intent(
         || filename_key.storage_ticket != intent.storage_ticket
     {
         return Err(DaPinIntentSpoolError::FilenameMismatch {
-            path: path.to_path_buf(),
+            path: path.into(),
             filename_lane: filename_key.lane_id,
             filename_epoch: filename_key.epoch,
             filename_sequence: filename_key.sequence,

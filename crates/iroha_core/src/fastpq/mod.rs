@@ -407,13 +407,10 @@ impl PoseidonDigestBatch {
         {
             return None;
         }
-        match submit(&self.words, &self.slices) {
-            Some(output) => Some(output),
-            None => {
-                set_poseidon_digest_acceleration_enabled(false);
-                None
-            }
-        }
+        submit(&self.words, &self.slices).or_else(|| {
+            set_poseidon_digest_acceleration_enabled(false);
+            None
+        })
     }
     // Never install a prefix or ignore trailing accelerator output. A cardinality
     // failure quarantines acceleration; the caller recomputes the entire batch.

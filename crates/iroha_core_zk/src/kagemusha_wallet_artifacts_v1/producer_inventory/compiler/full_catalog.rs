@@ -28,7 +28,7 @@ pub(super) use mask_boundary::ImportedRows;
 mod reuse;
 #[path = "full_catalog/transport.rs"]
 mod transport;
-pub(crate) use acceptance::{
+pub use acceptance::{
     open_pinned_engineering_finality_sources, open_pinned_engineering_wallet_sources,
     reopen_pinned_engineering_wallet_sources,
 };
@@ -298,7 +298,7 @@ fn complete_wallet_catalog_from_pinned_genesis() {
     publish(&output.join("producer-inventory.norito"), bytes).unwrap();
     publish(
         &output.join("producer-inventory.sha256"),
-        &BlobV1::of(&bytes).sha256,
+        &BlobV1::of(bytes).sha256,
     )
     .unwrap();
     // wallet_pack strictly imports both new and reused originals. Inspect the

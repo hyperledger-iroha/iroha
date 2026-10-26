@@ -91,16 +91,18 @@ fn unmutated_material_reaches_closed_production_qualification_gate() {
         &fixture.evaluation_keys,
         &fixture.transcript,
         &fixture.artifacts,
-        &fixture.release_audit_package,
-        fixture.release_audit_package_digest,
-        "sora-zk-audit-wg-2026",
-        fixture.reviewer_key_pair.public_key(),
+        (
+            &fixture.release_audit_package,
+            fixture.release_audit_package_digest,
+            "sora-zk-audit-wg-2026",
+            fixture.reviewer_key_pair.public_key(),
+        ),
         BfvRefreshTranscriptModeV1::ExactLift,
     )
     .expect_err("local material must remain rejected by production qualification");
-    assert_invalid_parameter_contains(error.clone(), "release audit package failed validation");
+    assert_invalid_parameter_contains(&(error), "release audit package failed validation");
     assert_invalid_parameter_contains(
-        error,
+        &(error),
         "BFV production qualification unavailable: KnownInsecureExactProfile",
     );
 }
@@ -123,10 +125,12 @@ fn malformed_key_context_rejects_before_audit_package_or_execution() {
             keys,
             refresh_transcript,
             &artifacts,
-            package,
-            release_audit_package_digest,
-            "sora-zk-audit-wg-2026",
-            reviewer_key_pair.public_key(),
+            (
+                package,
+                release_audit_package_digest,
+                "sora-zk-audit-wg-2026",
+                reviewer_key_pair.public_key(),
+            ),
             required_refresh_mode,
         )
     };
@@ -139,7 +143,7 @@ fn malformed_key_context_rejects_before_audit_package_or_execution() {
         BfvRefreshTranscriptModeV1::ExactLift,
     )
     .expect_err("missing bootstrap key must fail before execution proof generation");
-    assert_invalid_parameter_contains(err, "requires bootstrap key material");
+    assert_invalid_parameter_contains(&(err), "requires bootstrap key material");
     let mut refresh_only_keys = evaluation_keys.clone();
     refresh_only_keys
         .bootstrap_key
@@ -153,7 +157,7 @@ fn malformed_key_context_rejects_before_audit_package_or_execution() {
         BfvRefreshTranscriptModeV1::ExactLift,
     )
     .expect_err("refresh-only bootstrap key must fail before execution proof generation");
-    assert_invalid_parameter_contains(err, "requires FullBootstrapV1 bootstrap key material");
+    assert_invalid_parameter_contains(&(err), "requires FullBootstrapV1 bootstrap key material");
     let mut missing_material_keys = evaluation_keys.clone();
     missing_material_keys
         .bootstrap_key
@@ -167,7 +171,7 @@ fn malformed_key_context_rejects_before_audit_package_or_execution() {
         BfvRefreshTranscriptModeV1::ExactLift,
     )
     .expect_err("missing governed material must fail before execution proof generation");
-    assert_invalid_parameter_contains(err, "requires governed full-bootstrap material");
+    assert_invalid_parameter_contains(&(err), "requires governed full-bootstrap material");
     let mut missing_public_key_digest_keys = evaluation_keys.clone();
     missing_public_key_digest_keys
         .bootstrap_key
@@ -181,7 +185,7 @@ fn malformed_key_context_rejects_before_audit_package_or_execution() {
         BfvRefreshTranscriptModeV1::ExactLift,
     )
     .expect_err("missing governed public-key digest must fail before execution proof generation");
-    assert_invalid_parameter_contains(err, "requires governed bootstrap public-key digest");
+    assert_invalid_parameter_contains(&(err), "requires governed bootstrap public-key digest");
     let mut stale_public_key_digest_keys = evaluation_keys.clone();
     stale_public_key_digest_keys
         .bootstrap_key
@@ -195,7 +199,7 @@ fn malformed_key_context_rejects_before_audit_package_or_execution() {
         BfvRefreshTranscriptModeV1::ExactLift,
     )
     .expect_err("stale governed public-key digest must fail before execution proof generation");
-    assert_invalid_parameter_contains(err, "refresh transcript public-key digest");
+    assert_invalid_parameter_contains(&(err), "refresh transcript public-key digest");
     let mut malformed_bootstrap_key_entries = evaluation_keys.clone();
     malformed_bootstrap_key_entries
         .bootstrap_key
@@ -211,7 +215,7 @@ fn malformed_key_context_rejects_before_audit_package_or_execution() {
     .expect_err(
         "malformed governed bootstrap-key entries must fail before execution proof generation",
     );
-    assert_invalid_parameter_contains(err, "max_refresh_rounds");
+    assert_invalid_parameter_contains(&(err), "max_refresh_rounds");
     let mut malformed_zero_refresh_entries = evaluation_keys.clone();
     malformed_zero_refresh_entries
         .bootstrap_key
@@ -221,7 +225,10 @@ fn malformed_key_context_rejects_before_audit_package_or_execution() {
         .c0
         .push(1);
     let err = preflight(&malformed_zero_refresh_entries, &transcript, &release_audit_package, BfvRefreshTranscriptModeV1::ExactLift).expect_err("malformed governed bootstrap-key zero-refresh entries must fail before execution proof generation");
-    assert_invalid_parameter_contains(err, "must not carry encrypted-zero zero_refresh material");
+    assert_invalid_parameter_contains(
+        &(err),
+        "must not carry encrypted-zero zero_refresh material",
+    );
     let mut all_zero_seed_transcript = transcript.clone();
     all_zero_seed_transcript.rotation_transcripts[0].seed =
         vec![0; BFV_REFRESH_TRANSCRIPT_SEED_MAX_BYTES];
@@ -232,11 +239,8 @@ fn malformed_key_context_rejects_before_audit_package_or_execution() {
         BfvRefreshTranscriptModeV1::ExactLift,
     )
     .expect_err("all-zero transcript seed must fail before execution proof generation");
-    assert_invalid_parameter_contains(
-        err.clone(),
-        "refresh transcript failed exact-lift validation",
-    );
-    assert_invalid_parameter_contains(err, "rotation_transcripts.seed");
+    assert_invalid_parameter_contains(&(err), "refresh transcript failed exact-lift validation");
+    assert_invalid_parameter_contains(&(err), "rotation_transcripts.seed");
     let mut stale_package_with_all_zero_transcript = release_audit_package.clone();
     stale_package_with_all_zero_transcript.record_digest =
         Hash::new(b"stale-execution-package-digest-behind-transcript-inventory-error");
@@ -246,11 +250,8 @@ preflight(&evaluation_keys, &all_zero_seed_transcript, &stale_package_with_all_z
                 "malformed transcript inventory must fail before stale execution release package validation",
             );
     let debug = format!("{err:?}");
-    assert_invalid_parameter_contains(
-        err.clone(),
-        "refresh transcript failed exact-lift validation",
-    );
-    assert_invalid_parameter_contains(err, "rotation_transcripts.seed");
+    assert_invalid_parameter_contains(&(err), "refresh transcript failed exact-lift validation");
+    assert_invalid_parameter_contains(&(err), "rotation_transcripts.seed");
     assert!(
         !debug.contains("release audit package failed validation"),
         "transcript inventory diagnostics must not be masked by stale package validation: {debug}"
@@ -266,7 +267,7 @@ preflight(&evaluation_keys, &all_zero_seed_transcript, &stale_package_with_all_z
         BfvRefreshTranscriptModeV1::ExactLift,
     )
     .expect_err("stale transcript body must fail before execution proof generation");
-    assert_invalid_parameter_contains(err, "refresh transcript failed exact-lift validation");
+    assert_invalid_parameter_contains(&(err), "refresh transcript failed exact-lift validation");
     let err = preflight(
         &evaluation_keys,
         &transcript,
@@ -276,5 +277,5 @@ preflight(&evaluation_keys, &all_zero_seed_transcript, &stale_package_with_all_z
     .expect_err(
         "bounded-noise execution proof generation must reject exact-lift release transcripts",
     );
-    assert_invalid_parameter_contains(err, "refresh transcript failed bounded-noise validation");
+    assert_invalid_parameter_contains(&(err), "refresh transcript failed bounded-noise validation");
 }

@@ -161,6 +161,10 @@ fn prepare_anchor<'a>(
     }))
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "SCCP refusal retains the original execution or validation owner without allocating during rejection"
+)]
 fn local_or_degraded<T>(
     result: Result<T, GenerationError>,
     failure: &mut Option<SccpFinalityDegradedReasonV1>,
@@ -199,6 +203,10 @@ fn degrade(stx: &mut StateTransaction<'_, '_>, height: u64, reason: SccpFinality
 /// # Errors
 /// Dense-leaf violations retain their execution-invariant error. Storage and allocation
 /// refusal retain their original retry owner. Generation/anchor inconsistency only degrades.
+#[expect(
+    clippy::result_large_err,
+    reason = "SCCP refusal retains the original execution or validation owner without allocating during rejection"
+)]
 pub fn finalize_block(
     state_block: &mut StateBlock<'_>,
     header: &BlockHeader,
@@ -232,7 +240,9 @@ pub fn finalize_block(
     if failure.is_some() {
         draft = None;
     }
-    let generation_demand = draft.as_ref().map_or(Ok(0), |draft| draft.demand());
+    let generation_demand = draft
+        .as_ref()
+        .map_or(Ok(0), super::generations::GenerationDraft::demand);
     let mut generation_demand = local_or_degraded(generation_demand, &mut failure)?.unwrap_or(0);
     if failure.is_some() {
         draft = None;
@@ -342,7 +352,7 @@ pub(crate) mod observed {
 
     /// Test-only owned value snapshot; production custody never depends on observation.
     #[derive(Debug, Clone, PartialEq, Eq)]
-    pub(crate) struct HeightInputsSnapshot {
+    pub struct HeightInputsSnapshot {
         /// Observed mode.
         pub(crate) mode: iroha_data_model::parameter::system::ConsensusMode,
         /// Observed executing height.
@@ -399,7 +409,7 @@ pub(crate) mod observed {
     }
 
     /// Retain observations for one exact original proposal across execution threads.
-    pub(crate) struct HeaderCalls {
+    pub struct HeaderCalls {
         header: HashOf<BlockHeader>,
     }
 
@@ -422,7 +432,7 @@ pub(crate) mod observed {
     }
 
     /// Observe a proposal until the returned guard is dropped, including on unwind.
-    pub(crate) fn for_header(header: &BlockHeader) -> HeaderCalls {
+    pub fn for_header(header: &BlockHeader) -> HeaderCalls {
         let header = header.hash();
         let mut headers = HEADERS.lock();
         let std::collections::btree_map::Entry::Vacant(entry) = headers.entry(header) else {
@@ -433,7 +443,7 @@ pub(crate) mod observed {
     }
 
     /// Take the `(height, inputs)` of every SCCP finalizer call on this thread so far.
-    pub(crate) fn take() -> Calls {
+    pub fn take() -> Calls {
         CALLS.with(|calls| core::mem::take(&mut *calls.borrow_mut()))
     }
 }
@@ -644,7 +654,7 @@ mod tests {
         let chain = CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000)).unwrap();
         let parameters = SccpParametersV1::taira_default();
         chain.setup_world_at(2_000, |stx| {
-            store::parameters::set(stx, Some(parameters.clone()));
+            store::parameters::set(stx, Some(parameters));
             store::liability_clock::set(stx, 1_000);
         });
         let time = 10 * parameters.committee_validity_ms;
@@ -714,9 +724,12 @@ mod tests {
         }
         config.genesis_block_cadence_ms = std::num::NonZeroU64::new(1_000).unwrap();
         let mut nexus = iroha_config::parameters::actual::Nexus::default();
-        nexus.staking.unbonding_delay =
-            std::time::Duration::from_millis(super::super::test_support::SCCP_UNBONDING_DELAY_MS);
-        nexus.staking.max_slash_bps = 10_000;
+        let mut staking = crate::sumeragi::test_chain::staking_fixture_policy(
+            SumeragiNposParameters::default().xor_asset_definition_id,
+        );
+        staking.unbonding_delay_ms = super::super::test_support::SCCP_UNBONDING_DELAY_MS;
+        staking.max_slash_bps = 10_000;
+        super::super::forgery::tests::replace_original_staking_parameter(&mut config, &staking);
         if scope == iroha_data_model::block::consensus::SumeragiRootScope::Global {
             use iroha_data_model::{
                 Registrable,
@@ -731,8 +744,8 @@ mod tests {
             // G1 captures genuine original staking records. Fund the normal genesis
             // registration plan before the sole SCCP initializer executes.
             let owner = AccountId::new(config.genesis_key.public_key().clone());
-            let definition: AssetDefinitionId = nexus.staking.stake_asset_id.parse().unwrap();
-            let escrow = AccountId::parse_encoded(&nexus.staking.stake_escrow_account_id).unwrap();
+            let definition: AssetDefinitionId = staking.stake_asset_id;
+            let escrow = staking.stake_escrow_account_id.clone();
             let amount = Quantity::from(1_000_u32);
             let validators = crate::sumeragi::test_chain::fixture_validators();
             let accounts = validators
@@ -801,7 +814,6 @@ mod tests {
                 iroha_model_base::domain::DomainId::try_new("sccp", "sccp-private").unwrap();
             let asset =
                 AssetDefinitionId::derive_from_components(domain.clone(), "fee".parse().unwrap());
-            nexus.fees.fee_asset_id = asset.clone();
             nexus.lane_catalog = LaneCatalog::new(
                 1_u32.try_into().unwrap(),
                 vec![LaneConfig {
@@ -855,11 +867,22 @@ mod tests {
 
     #[test]
     fn genuine_global_genesis_installs_original_generation_and_sealed_active_header() {
-        use crate::sumeragi::test_chain::CertifiedTestChain;
+        use crate::{state::WorldReadOnly as _, sumeragi::test_chain::CertifiedTestChain};
         use iroha_data_model::block::consensus::SumeragiRootScope;
         let chain = CertifiedTestChain::start(native_init_config(SumeragiRootScope::Global))
             .expect("genuine Global genesis");
         let view = chain.state().view();
+        let mut expected_staking = crate::sumeragi::test_chain::staking_fixture_policy(
+            iroha_data_model::parameter::system::SumeragiNposParameters::default()
+                .xor_asset_definition_id,
+        );
+        expected_staking.unbonding_delay_ms = super::super::test_support::SCCP_UNBONDING_DELAY_MS;
+        expected_staking.max_slash_bps = 10_000;
+        assert_eq!(
+            view.world().parameters().staking_policy(),
+            Some(&expected_staking)
+        );
+
         let generation = store::committee_generations::get(view.world(), &1).expect("original G1");
         assert_eq!(
             generation.cause,

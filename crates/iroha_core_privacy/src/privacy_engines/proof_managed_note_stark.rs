@@ -227,10 +227,8 @@ fn map_aggregate_error_v1(error: aggregate::AggregateStarkErrorV1) -> ProofManag
         aggregate::AggregateStarkErrorV1::InvalidLayout => {
             ProofManagedNoteStarkErrorV1::InvalidProfile
         }
-        aggregate::AggregateStarkErrorV1::InvalidProofShape => {
-            ProofManagedNoteStarkErrorV1::ProofWire
-        }
-        aggregate::AggregateStarkErrorV1::MalformedProof
+        aggregate::AggregateStarkErrorV1::InvalidProofShape
+        | aggregate::AggregateStarkErrorV1::MalformedProof
         | aggregate::AggregateStarkErrorV1::ProofTooLarge
         | aggregate::AggregateStarkErrorV1::NonCanonicalField => {
             ProofManagedNoteStarkErrorV1::ProofWire
@@ -349,7 +347,7 @@ impl ProofManagedNoteStarkProtocolV1 {
             self.parameters.query_count,
         )
         .map_err(map_transparent_error_v1)?;
-        let consensus_proof_cap = self.domains.digest_context.maximum_proof_bytes_v1();
+        let consensus_proof_cap = crate::privacy_engines::transparent_stark::TransparentStarkDigestContextV1::maximum_proof_bytes_v1();
         let _combined_profile_digest =
             proof_managed_note_stark_profile_digest_v1(&self.domains, self.profile_descriptor)?;
         if self.parameters.security_lanes != PROOF_MANAGED_NOTE_SECURITY_LANES_V1
@@ -474,8 +472,7 @@ pub trait ProofManagedNoteStarkAdapterV1: Sync {
     /// Evaluate profile-only polynomial residues at one current/next row pair.
     fn profile_constraint_residues_v1(
         &self,
-        current_base: &[F],
-        next_base: &[F],
+        base_rows: (&[F], &[F]),
         current_aux: &[F],
         next_aux: &[F],
         fixed: &[F],
@@ -518,8 +515,8 @@ impl NoteCopyScheduleV1 {
             return Err(ProofManagedNoteStarkErrorV1::Resource);
         }
         let mut seen = BTreeSet::new();
-        for row in 0..trace_size {
-            for column in 0..NOTE_COPY_WIDTH_V1 {
+        for (row, policies) in self.policies.iter().enumerate().take(trace_size) {
+            for (column, policy) in policies.iter().enumerate() {
                 let identity = row
                     .checked_mul(NOTE_COPY_WIDTH_V1)
                     .and_then(|value| value.checked_add(column))
@@ -533,7 +530,7 @@ impl NoteCopyScheduleV1 {
                 let target_zero = target - 1;
                 let target_row = target_zero / NOTE_COPY_WIDTH_V1;
                 let target_column = target_zero % NOTE_COPY_WIDTH_V1;
-                match self.policies[row][column] {
+                match *policy {
                     NoteCopyCellPolicyV1::Variable => {
                         if !matches!(
                             self.policies[target_row][target_column],
@@ -562,8 +559,8 @@ impl NoteCopyScheduleV1 {
     ) -> Result<Vec<Vec<F>>, ProofManagedNoteStarkErrorV1> {
         self.validate(trace_size)?;
         let mut columns = vec![vec![F::ZERO; trace_size]; NOTE_COPY_FIXED_WIDTH_V1];
-        for row in 0..trace_size {
-            for column in 0..NOTE_COPY_WIDTH_V1 {
+        for (row, policies) in self.policies.iter().enumerate().take(trace_size) {
+            for (column, policy) in policies.iter().enumerate() {
                 let identity = row
                     .checked_mul(NOTE_COPY_WIDTH_V1)
                     .and_then(|value| value.checked_add(column))
@@ -574,7 +571,7 @@ impl NoteCopyScheduleV1 {
                         .map_err(|_| ProofManagedNoteStarkErrorV1::Resource)?);
                 columns[COPY_FIXED_SIGMA_OFFSET + column][row] =
                     F(u64::from(self.sigma[row][column]));
-                match self.policies[row][column] {
+                match *policy {
                     NoteCopyCellPolicyV1::Inactive => {
                         columns[COPY_FIXED_INACTIVE_OFFSET + column][row] = F::ONE;
                     }
@@ -615,7 +612,7 @@ pub fn derive_note_copy_challenges_v1(
         beta: F::ZERO,
         gamma: F::ZERO,
     }; NOTE_COPY_LANES_V1];
-    for lane in lanes.iter_mut() {
+    for lane in &mut lanes {
         lane.beta = transcript
             .challenge_field(NOTE_COPY_BETA_LABEL_V1)
             .map_err(map_transparent_error_v1)?;
@@ -1601,14 +1598,14 @@ fn derive_deep_mixes_v1(
 fn all_constraint_residues_v1<A: ProofManagedNoteStarkAdapterV1>(
     adapter: &A,
     prepared: &PreparedNoteProfileV1,
-    current_base: &[F],
-    next_base: &[F],
-    current_aux: &[F],
-    next_aux: &[F],
+    base_rows: (&[F], &[F]),
+    auxiliary_rows: (&[F], &[F]),
     fixed: &[F],
     copy_challenges: NoteCopyChallengesV1,
     profile_challenges: &A::ProfileChallenges,
 ) -> Result<ZeroizingBaseFieldValuesV1, ProofManagedNoteStarkErrorV1> {
+    let (current_base, next_base) = base_rows;
+    let (current_aux, next_aux) = auxiliary_rows;
     if current_base.len() != prepared.base_width
         || next_base.len() != prepared.base_width
         || current_aux.len() != prepared.aux_width
@@ -1625,8 +1622,7 @@ fn all_constraint_residues_v1<A: ProofManagedNoteStarkAdapterV1>(
         copy_challenges,
     )?);
     let profile = ZeroizingBaseFieldValuesV1::from(adapter.profile_constraint_residues_v1(
-        current_base,
-        next_base,
+        (current_base, next_base),
         current_aux,
         next_aux,
         fixed,
@@ -1680,10 +1676,8 @@ fn validate_native_constraints_v1<A: ProofManagedNoteStarkAdapterV1>(
             let residues = all_constraint_residues_v1(
                 adapter,
                 prepared,
-                &current_base,
-                &next_base,
-                &current_aux,
-                &next_aux,
+                (&current_base, &next_base),
+                (&current_aux, &next_aux),
                 &fixed,
                 copy_challenges,
                 profile_challenges,
@@ -1696,16 +1690,16 @@ fn validate_native_constraints_v1<A: ProofManagedNoteStarkAdapterV1>(
         .collect::<Vec<_>>();
     results.into_iter().collect()
 }
+type NoteLdeColumnsV1<'a> = (&'a [Vec<F>], &'a [Vec<F>], &'a [Vec<F>]);
 fn composition_lanes_v1<A: ProofManagedNoteStarkAdapterV1>(
     adapter: &A,
     prepared: &PreparedNoteProfileV1,
-    base_lde: &[Vec<F>],
-    aux_lde: &[Vec<F>],
-    fixed_lde: &[Vec<F>],
+    lde_columns: NoteLdeColumnsV1<'_>,
     copy_challenges: NoteCopyChallengesV1,
     profile_challenges: &A::ProfileChallenges,
     alphas: &[Vec<E>],
 ) -> Result<Vec<Vec<Vec<E>>>, ProofManagedNoteStarkErrorV1> {
+    let (base_lde, aux_lde, fixed_lde) = lde_columns;
     if alphas.len() != PROOF_MANAGED_NOTE_SECURITY_LANES_V1
         || alphas
             .iter()
@@ -1762,10 +1756,8 @@ fn composition_lanes_v1<A: ProofManagedNoteStarkAdapterV1>(
                 let residues = all_constraint_residues_v1(
                     adapter,
                     prepared,
-                    &current_base,
-                    &next_base,
-                    &current_aux,
-                    &next_aux,
+                    (&current_base, &next_base),
+                    (&current_aux, &next_aux),
                     &fixed,
                     copy_challenges,
                     profile_challenges,
@@ -2123,9 +2115,7 @@ pub fn prove_proof_managed_note_stark_v1_with_rng<
         let compositions = ZeroizingExtensionFieldCubeV1::from(composition_lanes_v1(
             adapter,
             &prepared,
-            &base_lde,
-            &aux_lde,
-            &fixed_lde,
+            (&base_lde, &aux_lde, &fixed_lde),
             copy_challenges,
             &profile_challenges,
             &alphas,
@@ -2407,10 +2397,8 @@ impl<A: ProofManagedNoteStarkAdapterV1> AggregateOpenedRowEvaluatorV1
         let residues = all_constraint_residues_v1(
             self.adapter,
             self.prepared,
-            &opening.base_current,
-            &opening.base_next,
-            &opening.aux_current,
-            &opening.aux_next,
+            (&opening.base_current, &opening.base_next),
+            (&opening.aux_current, &opening.aux_next),
             fixed,
             self.copy_challenges,
             self.profile_challenges,
@@ -2719,17 +2707,15 @@ pub mod fixed_query_audit {
         }
         fn profile_constraint_residues_v1(
             &self,
-            base: &[F],
-            next_base: &[F],
+            base_rows: (&[F], &[F]),
             aux: &[F],
             next_aux: &[F],
             fixed: &[F],
             copy: NoteCopyChallengesV1,
             profile: &Self::ProfileChallenges,
         ) -> Result<Vec<F>, ProofManagedNoteStarkErrorV1> {
-            self.0.profile_constraint_residues_v1(
-                base, next_base, aux, next_aux, fixed, copy, profile,
-            )
+            self.0
+                .profile_constraint_residues_v1(base_rows, aux, next_aux, fixed, copy, profile)
         }
     }
 
@@ -3091,10 +3077,10 @@ mod tests {
             let trace_size = 1_usize << self.trace_log2_v1();
             let policies = vec![[NoteCopyCellPolicyV1::Variable; NOTE_COPY_WIDTH_V1]; trace_size];
             let mut sigma = vec![[0_u32; NOTE_COPY_WIDTH_V1]; trace_size];
-            for row in 0..trace_size {
-                for column in 0..NOTE_COPY_WIDTH_V1 {
+            for (row, sigma_row) in sigma.iter_mut().enumerate() {
+                for (column, value) in sigma_row.iter_mut().enumerate() {
                     let next_row = (row + 1) % trace_size;
-                    sigma[row][column] = u32::try_from(next_row * NOTE_COPY_WIDTH_V1 + column + 1)
+                    *value = u32::try_from(next_row * NOTE_COPY_WIDTH_V1 + column + 1)
                         .map_err(|_| ProofManagedNoteStarkErrorV1::Resource)?;
                 }
             }
@@ -3125,14 +3111,14 @@ mod tests {
         }
         fn profile_constraint_residues_v1(
             &self,
-            current_base: &[F],
-            _next_base: &[F],
+            base_rows: (&[F], &[F]),
             _current_aux: &[F],
             _next_aux: &[F],
             _fixed: &[F],
             _copy_challenges: NoteCopyChallengesV1,
             _profile_challenges: &Self::ProfileChallenges,
         ) -> Result<Vec<F>, ProofManagedNoteStarkErrorV1> {
+            let (current_base, _next_base) = base_rows;
             Ok(vec![
                 *current_base
                     .first()
@@ -3334,6 +3320,16 @@ mod tests {
 
     #[test]
     fn bounded_column_dispatch_preserves_order_and_lowest_error() {
+        struct DropProbe {
+            dropped: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        }
+        impl Drop for DropProbe {
+            fn drop(&mut self) {
+                self.dropped
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
+
         let column_count = aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1 * 2 + 1;
         let active = std::sync::atomic::AtomicUsize::new(0);
         let peak = std::sync::atomic::AtomicUsize::new(0);
@@ -3381,15 +3377,6 @@ mod tests {
             "a failing canonical batch must stop before the next batch is dispatched"
         );
 
-        struct DropProbe {
-            dropped: std::sync::Arc<std::sync::atomic::AtomicUsize>,
-        }
-        impl Drop for DropProbe {
-            fn drop(&mut self) {
-                self.dropped
-                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            }
-        }
         let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(16)
             .build()
@@ -3427,9 +3414,7 @@ mod tests {
                 let _ = collect_bounded_parallel_columns_v1(
                     aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1,
                     |column| -> Result<DropProbe, ProofManagedNoteStarkErrorV1> {
-                        if column == 3 {
-                            panic!("injected transform unwind");
-                        }
+                        assert!(column != 3, "injected transform unwind");
                         created.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                         Ok(DropProbe {
                             dropped: std::sync::Arc::clone(&dropped),
@@ -3602,9 +3587,7 @@ mod tests {
                     composition_lanes_v1(
                         &adapter,
                         &prepared,
-                        &base_lde,
-                        &aux_lde,
-                        &fixed_lde,
+                        (&base_lde, &aux_lde, &fixed_lde),
                         copy_challenges,
                         &(),
                         &alphas,
@@ -3627,10 +3610,14 @@ mod tests {
             let residues = all_constraint_residues_v1(
                 &adapter,
                 &prepared,
-                &row_at_columns_v1(&base_lde, index).expect("serial current base"),
-                &row_at_columns_v1(&base_lde, next).expect("serial next base"),
-                &row_at_columns_v1(&aux_lde, index).expect("serial current auxiliary"),
-                &row_at_columns_v1(&aux_lde, next).expect("serial next auxiliary"),
+                (
+                    &row_at_columns_v1(&base_lde, index).expect("serial current base"),
+                    &row_at_columns_v1(&base_lde, next).expect("serial next base"),
+                ),
+                (
+                    &row_at_columns_v1(&aux_lde, index).expect("serial current auxiliary"),
+                    &row_at_columns_v1(&aux_lde, next).expect("serial next auxiliary"),
+                ),
                 &row_at_columns_v1(&fixed_lde, index).expect("serial fixed"),
                 copy_challenges,
                 &(),
@@ -3968,8 +3955,7 @@ mod tests {
             let query_point =
                 E::from_base(F(GOLDILOCKS_GENERATOR_V1).mul(lde_root.pow(index as u128)));
             let expected = aggregate::deep_ali_mixed_opening_v1(
-                query_point,
-                deep_point,
+                (query_point, deep_point),
                 &layout,
                 core::slice::from_ref(&opened),
                 &deep_trace,
@@ -4185,8 +4171,10 @@ mod tests {
     }
     #[test]
     fn malformed_schedules_and_non_bytes_fail_closed() {
-        let mut duplicate = MockAdapterV1::default();
-        duplicate.corrupt_schedule = true;
+        let duplicate = MockAdapterV1 {
+            corrupt_schedule: true,
+            ..MockAdapterV1::default()
+        };
         assert!(matches!(
             prepare_note_profile_v1(&duplicate),
             Err(ProofManagedNoteStarkErrorV1::Copy)
@@ -4248,7 +4236,7 @@ mod tests {
         for length in [1, 4, 7, proof.len() / 4, proof.len() / 2, proof.len() - 1] {
             assert!(verify_proof_managed_note_stark_v1(adapter, &proof[..length]).is_err());
         }
-        let mut trailing = proof.to_vec();
+        let mut trailing = proof.clone();
         trailing.push(0);
         assert!(verify_proof_managed_note_stark_v1(adapter, &trailing).is_err());
         let header_bytes = 8;
@@ -4259,7 +4247,7 @@ mod tests {
             (0..2 + 2 * PROOF_MANAGED_NOTE_SECURITY_LANES_V1)
                 .map(|root| header_bytes + root * digest_bytes),
         ) {
-            let mut changed = proof.to_vec();
+            let mut changed = proof.clone();
             changed[offset] ^= 1;
             assert!(
                 verify_proof_managed_note_stark_v1(adapter, &changed).is_err(),
@@ -4288,16 +4276,16 @@ mod tests {
         assert_eq!(
             aggregate::encode_proof_with_deep_v1(&decoded, &deep, parameters, &layout)
                 .expect("canonical DEEP re-encoding"),
-            proof.to_vec()
+            proof.clone()
         );
         assert!(
             aggregate::decode_proof_v1(proof, parameters, &layout).is_err(),
             "the non-DEEP codec must not reinterpret a release proof"
         );
-        let mut omitted_deep = proof.to_vec();
+        let mut omitted_deep = proof.clone();
         omitted_deep.drain(deep_insertion..deep_end);
         assert!(verify_proof_managed_note_stark_v1(adapter, &omitted_deep).is_err());
-        let mut duplicated_deep = proof.to_vec();
+        let mut duplicated_deep = proof.clone();
         duplicated_deep.splice(
             deep_end..deep_end,
             proof[deep_insertion..deep_end].iter().copied(),
@@ -4326,7 +4314,7 @@ mod tests {
             ),
         ];
         for (label, offset) in deep_region_offsets {
-            let mut changed = proof.to_vec();
+            let mut changed = proof.clone();
             changed[offset + extension_bytes - 1] ^= 1;
             assert!(
                 verify_proof_managed_note_stark_v1(adapter, &changed).is_err(),
@@ -4337,7 +4325,7 @@ mod tests {
                 u64::MAX,
             ] {
                 for coefficient in 0..4 {
-                    let mut noncanonical = proof.to_vec();
+                    let mut noncanonical = proof.clone();
                     let start = offset + coefficient * core::mem::size_of::<u64>();
                     noncanonical[start..start + 8].copy_from_slice(&invalid.to_be_bytes());
                     assert!(
@@ -4350,7 +4338,7 @@ mod tests {
                 }
             }
         }
-        let mut reordered_deep = proof.to_vec();
+        let mut reordered_deep = proof.clone();
         let first_current =
             reordered_deep[deep_insertion..deep_insertion + extension_bytes].to_vec();
         let first_next = reordered_deep[deep_insertion + NOTE_COPY_WIDTH_V1 * extension_bytes
@@ -4364,7 +4352,7 @@ mod tests {
         assert!(verify_proof_managed_note_stark_v1(adapter, &reordered_deep).is_err());
         let first_terminal =
             deep_end + PROOF_MANAGED_NOTE_SECURITY_LANES_V1 * (fri_rounds + 1) * digest_bytes;
-        let mut noncanonical = proof.to_vec();
+        let mut noncanonical = proof.clone();
         noncanonical[first_terminal..first_terminal + 8].copy_from_slice(&u64::MAX.to_be_bytes());
         assert!(matches!(
             verify_proof_managed_note_stark_v1(adapter, &noncanonical),
@@ -4374,7 +4362,7 @@ mod tests {
             + PROOF_MANAGED_NOTE_SECURITY_LANES_V1
                 * (1 << PROOF_MANAGED_NOTE_TERMINAL_LOG2_V1)
                 * core::mem::size_of::<[u64; 4]>();
-        let mut wrong_nonce = proof.to_vec();
+        let mut wrong_nonce = proof.clone();
         wrong_nonce[grinding + 7] ^= 1;
         assert!(verify_proof_managed_note_stark_v1(adapter, &wrong_nonce).is_err());
     }

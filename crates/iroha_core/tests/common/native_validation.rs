@@ -19,7 +19,7 @@ use iroha_data_model::{block::SignedBlock, transaction::SignedTransaction};
 use iroha_sumeragi::{message::BlockHeader, preimage::payload_hash, types::ControlWitness};
 use std::{borrow::Cow, time::Duration};
 
-pub(super) fn proposal(chain: &CertifiedTestChain, txs: Vec<SignedTransaction>) -> SignedBlock {
+pub fn proposal(chain: &CertifiedTestChain, txs: Vec<SignedTransaction>) -> SignedBlock {
     let inputs = txs
         .into_iter()
         .map(|tx| AcceptedTransaction::new_unchecked(Cow::Owned(tx)))
@@ -37,7 +37,7 @@ pub(super) fn proposal(chain: &CertifiedTestChain, txs: Vec<SignedTransaction>) 
     .expect("native resultless proposal assembly")
 }
 
-pub(super) fn validate(
+pub fn validate(
     chain: &CertifiedTestChain,
     proposal: SignedBlock,
 ) -> Result<ValidBlock, Box<BlockValidationError>> {

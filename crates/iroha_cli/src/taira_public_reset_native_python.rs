@@ -6,7 +6,7 @@ use host_pair::NativePythonRuntimeV1;
 
 const SCHEMA: &str = "iroha.taira.public-reset.native-python-runtime.v1";
 const MAX_IMAGE: u64 = 512 * 1024 * 1024;
-const PROBE: &str = r#"import ctypes, hashlib, json, os, stat, sys
+const PROBE: &str = r"import ctypes, hashlib, json, os, stat, sys
 image, fd = json.loads(sys.argv[1]), int(sys.argv[2])
 if sys.platform != 'darwin' or sys.version_info[:2] < (3, 11):
     raise RuntimeError('native_python_platform_version')
@@ -36,7 +36,7 @@ while offset < image['file']['identity']['size']:
 if digest.hexdigest() != image['sha256']: raise RuntimeError('native_python_digest_changed')
 verify()
 sys.stdout.write(json.dumps(list(sys.version_info[:3]), separators=(',', ':')) + '\n')
-"#;
+";
 
 #[derive(clap::Args, Debug)]
 pub(in crate::taira_public_reset) struct CaptureNativePython {

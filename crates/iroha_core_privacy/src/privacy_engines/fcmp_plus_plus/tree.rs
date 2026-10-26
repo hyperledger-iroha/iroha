@@ -64,7 +64,7 @@ fn expected_shape(tree_size: u64) -> Result<(usize, Vec<usize>), FcmpNativeError
         if level >= super::FCMP_MAX_TREE_LAYERS_V1 - 1 {
             return Err(FcmpNativeErrorV1::TreeFull);
         }
-        let width = if level % 2 == 0 {
+        let width = if level.is_multiple_of(2) {
             FCMP_LAYER_TWO_LEN_V1
         } else {
             FCMP_LAYER_ONE_LEN_V1
@@ -163,7 +163,7 @@ fn hash_full_parent(
     level_index: usize,
     children: &[[u8; 32]],
 ) -> Result<ActiveSubtree, FcmpNativeErrorV1> {
-    if level_index % 2 == 0 {
+    if level_index.is_multiple_of(2) {
         if children.len() != FCMP_LAYER_TWO_LEN_V1 {
             return Err(FcmpNativeErrorV1::FrontierShape);
         }
@@ -228,6 +228,9 @@ fn append_one(
     Ok(())
 }
 /// Build canonical compact frontier parts from a complete ordered genesis output set.
+///
+/// # Errors
+/// Rejects an empty output set, duplicates, invalid outputs, or a full or inconsistent tree.
 pub fn build_fcmp_frontier_v1(
     outputs: &[FcmpOutputTupleV1],
 ) -> Result<FcmpFrontierPartsV1, FcmpNativeErrorV1> {
@@ -255,6 +258,9 @@ pub fn build_fcmp_frontier_v1(
     Ok(parts)
 }
 /// Reconstruct and authenticate persisted FCMP++ compact frontier parts.
+///
+/// # Errors
+/// Rejects malformed frontier dimensions or a root inconsistent with its retained outputs and levels.
 pub fn validate_fcmp_frontier_v1(parts: &FcmpFrontierPartsV1) -> Result<(), FcmpNativeErrorV1> {
     validate_shape(parts)?;
     let reconstructed = reconstruct_root(&parts.active_outputs, &parts.levels)?;
@@ -268,6 +274,9 @@ pub fn validate_fcmp_frontier_v1(parts: &FcmpFrontierPartsV1) -> Result<(), Fcmp
 /// The compact frontier can only detect duplicates in the active leaf and the
 /// new batch.  Ledger integration must additionally check each `output_id`
 /// against the protocol-scoped durable output registry before calling this function.
+///
+/// # Errors
+/// Rejects an invalid current frontier, empty or duplicate outputs, or tree-capacity overflow.
 pub fn append_fcmp_outputs_v1(
     current: &FcmpFrontierPartsV1,
     outputs: &[FcmpOutputTupleV1],

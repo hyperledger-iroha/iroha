@@ -84,10 +84,12 @@ fn genesis_preexecution_uses_ordinary_stack_with_exact_runtime_profile() {
                         &genesis_account,
                         &topology,
                         genesis_key_pair,
-                        None,
-                        None,
-                        None,
-                        Some(&actual),
+                        crate::config::GenesisRuntimeConfig {
+                            pipeline_config: None,
+                            nexus_config: None,
+                            zk_config: None,
+                            runtime_config: Some(&actual),
+                        },
                     )
                     .expect("native genesis must execute on the ordinary stack");
                     assert_eq!(chain_discriminant(), 888, "runtime scope leaked");
@@ -155,10 +157,12 @@ fn blocking_builder_reexecutes_genesis_on_its_default_runtime_worker() {
             &account,
             &topology,
             &key,
-            None,
-            None,
-            None,
-            Some(&actual),
+            crate::config::GenesisRuntimeConfig {
+                pipeline_config: None,
+                nexus_config: None,
+                zk_config: None,
+                runtime_config: Some(&actual),
+            },
         )
         .expect("the owned runtime executes strict genesis with its default worker stack");
         assert_eq!(genesis_preexecution_count(), before + 1);

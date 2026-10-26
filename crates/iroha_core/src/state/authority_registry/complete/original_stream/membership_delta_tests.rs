@@ -65,7 +65,13 @@ fn change_membership_capture_uses_only_delta_sets_and_recreates_complete_pair() 
     for replacement in [false, true] {
         let state = state();
         for height in 1..=128 {
-            commit_membership(&state, height, &[key(height as u8)]);
+            commit_membership(
+                &state,
+                height,
+                &[key(
+                    u8::try_from(height).expect("fixture height fits a byte")
+                )],
+            );
         }
         let mut before = committed_membership_bytes(&state);
         let mut block = if replacement {
@@ -158,7 +164,7 @@ fn membership_delta_base_refusal_precedes_every_change_and_retains_original_retr
     let _retirement_pin = crossbeam_epoch::pin();
     let (state, proposal) = crate::state::publication::musubi_materializer_test_support::fixture();
     let before = committed_membership_bytes(&state);
-    let block = validated_original(&state, proposal.header());
+    let block = validated_original(&state, &(proposal.header()));
     let mut cut = OriginalCut::new(&block, limits(), CaptureIntent::Changes).unwrap();
     cut.advance().unwrap();
     let pointer = cut.collector.fields.as_slice().as_ptr();

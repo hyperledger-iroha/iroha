@@ -52,11 +52,11 @@ pub(super) struct Schedule {
 }
 impl Schedule {
     pub(super) fn new(vm: u8, first_clock: u32) -> Option<Self> {
-        first_clock.checked_add(PORTS as u32 - 1)?;
+        first_clock.checked_add(u32::try_from(PORTS).expect("fixed port schedule fits u32") - 1)?;
         Some(Self { vm, first_clock })
     }
     fn clock(self, slot: usize) -> u32 {
-        self.first_clock + slot as u32
+        self.first_clock + u32::try_from(slot).expect("validated player or port count")
     }
     fn dispatch(self) -> super::Schedule {
         super::Schedule::new(
@@ -125,8 +125,7 @@ pub(super) fn append_residues(
         }
         private_history::append_residues(
             out,
-            history.current,
-            history.next,
+            (history.current, history.next),
             history.aux,
             history.next_aux,
             history.fixed,
@@ -181,9 +180,7 @@ fn append_semantics(out: &mut Vec<F>, program: &Program, schedule: Schedule, row
             out,
             original,
             schedule,
-            Space::Owner,
-            F::ZERO,
-            F(u64::from(index)),
+            (Space::Owner, F::ZERO, F(u64::from(index))),
             18 + i,
             policies[CARRY + STORE],
             F::ZERO,
@@ -250,13 +247,16 @@ fn append_semantics(out: &mut Vec<F>, program: &Program, schedule: Schedule, row
 
 fn header(
     out: &mut Vec<F>,
+
     p: &[F; packet::WIDTH],
+
     schedule: Schedule,
-    space: Space,
-    generation: F,
-    index: F,
+    (space, generation, index): (Space, F, F),
+
     clock: usize,
+
     enabled: F,
+
     write: F,
 ) {
     out.push(bit(enabled));

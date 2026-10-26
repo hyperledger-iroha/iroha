@@ -266,7 +266,6 @@ pub(super) fn append_residues_v1<A: PolynomialAirFieldV1>(
     debug_assert_eq!(residues.len() - start, RESIDUES_V1);
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(super) fn populate_v1(
     operands: super::CalendarOperandsV1,
     witness: &mut [F],
@@ -367,7 +366,7 @@ mod tests {
         let operands = CalendarOperandsV1 {
             generalized: year >= 2050,
             timestamp: u64::try_from(timestamp).unwrap(),
-            year: year as u64,
+            year: u64::try_from(year).expect("fixture value fits u64"),
             month: u64::from(month),
             day: u64::from(day),
             hour: u64::from(hour),

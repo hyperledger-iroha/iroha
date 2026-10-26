@@ -108,12 +108,11 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
         signed: &SignedTransaction,
     ) -> Result<LedgerAttemptOutcomeV1, Error> {
         let entrypoint = ledger_outcome::entrypoint(signed)?;
-        Ok(
-            match self.retained_unload_outcome(manifest, &entrypoint, original_digest)? {
-                Some(outcome) => outcome.attempt(),
-                None => LedgerAttemptOutcomeV1::Awaiting { entrypoint },
-            },
-        )
+        Ok(self
+            .retained_unload_outcome(manifest, &entrypoint, original_digest)?
+            .map_or(LedgerAttemptOutcomeV1::Awaiting { entrypoint }, |outcome| {
+                outcome.attempt()
+            }))
     }
     // Offer one original for an intake-checked envelope. A retained outcome is reconciled and
     // never replaced. Otherwise exactly one original is verified, written and selected with

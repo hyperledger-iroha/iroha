@@ -27,7 +27,7 @@ fn value_fp4_complete_registrations_match_independent_polynomial_lifting() {
         };
         let input = rows(registration);
         let actual = evaluator
-            .evaluate_residues_v1(opening(&input), &input[4], challenges)
+            .evaluate_residues_v1(opening(&input), &input[4], &challenges)
             .unwrap();
         assert_eq!(actual.len(), registration.segment.constraint_count);
         let mut expected = vec![E::ZERO; actual.len()];
@@ -45,7 +45,7 @@ fn value_fp4_complete_registrations_match_independent_polynomial_lifting() {
                     .collect::<Vec<_>>()
             });
             let scalar =
-                p256_opened_residues_v1(registration, opening(&lifted), &lifted[4], challenges)
+                p256_opened_residues_v1(registration, opening(&lifted), &lifted[4], &challenges)
                     .unwrap();
             let mut numerator = E::ONE;
             let mut denominator = F::ONE;
@@ -65,7 +65,7 @@ fn value_fp4_complete_registrations_match_independent_polynomial_lifting() {
                     .map(|row| row.iter().copied().map(E::from_base).collect());
                 assert_eq!(
                     evaluator
-                        .evaluate_residues_v1(opening(&embedded), &embedded[4], challenges)
+                        .evaluate_residues_v1(opening(&embedded), &embedded[4], &challenges)
                         .unwrap(),
                     scalar.into_iter().map(E::from_base).collect::<Vec<_>>()
                 );
@@ -114,7 +114,7 @@ fn value_fp4_binds_each_private_terminal_column_and_rejects_malformed_inputs() {
         };
         let input = rows(registration);
         let original = evaluator
-            .evaluate_residues_v1(opening(&input), &input[4], challenges)
+            .evaluate_residues_v1(opening(&input), &input[4], &challenges)
             .unwrap();
         for &family in families {
             for column in p256_private_link_columns_v1(identity, family).unwrap() {
@@ -122,14 +122,14 @@ fn value_fp4_binds_each_private_terminal_column_and_rejects_malformed_inputs() {
                 changed[2][column] = changed[2][column].add(E::ONE);
                 assert_ne!(
                     evaluator
-                        .evaluate_residues_v1(opening(&changed), &changed[4], challenges)
+                        .evaluate_residues_v1(opening(&changed), &changed[4], &challenges)
                         .unwrap(),
                     original
                 );
                 changed[2][column] = E::noncanonical_fixture_v1();
                 assert!(
                     evaluator
-                        .evaluate_residues_v1(opening(&changed), &changed[4], challenges)
+                        .evaluate_residues_v1(opening(&changed), &changed[4], &challenges)
                         .is_err()
                 );
             }
@@ -139,7 +139,7 @@ fn value_fp4_binds_each_private_terminal_column_and_rejects_malformed_inputs() {
             malformed[component].pop();
             assert!(
                 evaluator
-                    .evaluate_residues_v1(opening(&malformed), &malformed[4], challenges)
+                    .evaluate_residues_v1(opening(&malformed), &malformed[4], &challenges)
                     .is_err()
             );
         }
@@ -172,7 +172,7 @@ fn value_execution_and_sorted_total_degree_remains_three_including_fixed_columns
                         .map(|value| value.coefficients()[0].add(t.mul(value.coefficients()[1])))
                         .collect::<Vec<_>>()
                 });
-                p256_opened_residues_v1(registration, opening(&lifted), &lifted[4], challenges)
+                p256_opened_residues_v1(registration, opening(&lifted), &lifted[4], &challenges)
                     .unwrap()
             })
             .collect::<Vec<_>>();

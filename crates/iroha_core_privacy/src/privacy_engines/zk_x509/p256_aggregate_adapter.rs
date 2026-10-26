@@ -8,13 +8,9 @@
 //! can both be replayed one native column at a time.
 //!
 //! This is the first-release aggregate registration surface.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::main_assembly::ZkX509MainTraceAssemblyV1;
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::p256_cross_trace_bus::evaluate_zk_x509_p256_cross_trace_terminal_constraints_v1;
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::private_table::ClearingVecV1;
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::{
     credential_pre_aux::ZkX509CredentialMainPostBaseChallengesV1,
     p256_air::{
@@ -111,7 +107,6 @@ use super::{
 use crate::privacy_engines::transparent_stark::{
     GoldilocksFieldV1 as F, PolynomialAirFieldV1, TransparentStarkErrorV1, TransparentTranscriptV1,
 };
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 use std::borrow::Cow;
 use thiserror::Error;
 /// Stable descriptor for the first-release heterogeneous-domain integration layer.
@@ -138,14 +133,12 @@ mod native_boundary_sources;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum P256AggregateAdapterErrorV1 {
     /// A base-only or challenge-bound capability was used in the wrong phase.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error("zk-X509 P-256 aggregate adapter phase is invalid")]
     Phase,
     /// A role, adapter order, row count, fixed schedule, or opening is wrong.
     #[error("zk-X509 P-256 aggregate adapter topology is invalid")]
     Topology,
     /// One committed source row is absent or has the wrong native shape.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error("zk-X509 P-256 aggregate source row is invalid")]
     Source,
     /// A cross-trace or scalar-bit challenge is invalid.
@@ -166,7 +159,6 @@ fn verifier_topology_v1(
         _ => P256AggregateAdapterErrorV1::Topology,
     })
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn validate_arithmetic_trace_topology_v1(
     trace: &ZkX509P256ArithmeticTraceV1,
     topology: &P256EcdsaTopologyV1,
@@ -307,12 +299,10 @@ fn f_usize_v1(value: usize) -> Result<F, P256AggregateAdapterErrorV1> {
 /// guard. Those prevalidation errors therefore preserve the caller's buffer,
 /// while every error or panic after the first possible write clears the whole
 /// destination rather than exposing a private column prefix.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 struct P256AggregateColumnDestinationGuardV1<'a> {
     output: &'a mut [F],
     committed: bool,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<'a> P256AggregateColumnDestinationGuardV1<'a> {
     fn new_v1(output: &'a mut [F]) -> Self {
         Self {
@@ -324,7 +314,6 @@ impl<'a> P256AggregateColumnDestinationGuardV1<'a> {
         self.committed = true;
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for P256AggregateColumnDestinationGuardV1<'_> {
     fn drop(&mut self) {
         if !self.committed {
@@ -332,25 +321,21 @@ impl Drop for P256AggregateColumnDestinationGuardV1<'_> {
         }
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn zeroize_cross_challenges_v1(challenges: &mut P256CrossTraceChallengesV1) {
     for lane in &mut challenges.lanes {
         super::private_table::zeroize_fields_v1(&mut lane.terms[..]);
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn zeroize_scalar_challenges_v1(challenges: &mut P256ScalarBitBusChallengesV1) {
     for lane in &mut challenges.lanes {
         super::private_table::zeroize_fields_v1(&mut lane.terms[..]);
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn zeroize_arithmetic_copy_challenges_v1(challenges: &mut P256ArithmeticCopyChallengesV1) {
     for lane in &mut challenges.lanes {
         super::private_table::zeroize_fields_v1(&mut lane.terms[..]);
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn fill_aggregate_row_column_v1<const WIDTH: usize>(
     rows: usize,
     column: usize,
@@ -367,7 +352,6 @@ fn fill_aggregate_row_column_v1<const WIDTH: usize>(
     destination.commit_v1();
     Ok(())
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn fill_aggregate_aux_column_v1<const WIDTH: usize>(
     rows: usize,
     column: usize,
@@ -388,12 +372,10 @@ fn fill_aggregate_aux_column_v1<const WIDTH: usize>(
     Ok(())
 }
 /// One commit decision covers every caller-owned destination in a bounded batch.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 struct P256AggregateColumnsDestinationGuardV1<'a, 'b> {
     outputs: &'a mut [&'b mut [F]],
     committed: bool,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for P256AggregateColumnsDestinationGuardV1<'_, '_> {
     fn drop(&mut self) {
         if !self.committed {
@@ -403,15 +385,12 @@ impl Drop for P256AggregateColumnsDestinationGuardV1<'_, '_> {
         }
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 struct P256AggregateAuxRowScratchV1<const WIDTH: usize>([F; WIDTH]);
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<const WIDTH: usize> Drop for P256AggregateAuxRowScratchV1<WIDTH> {
     fn drop(&mut self) {
         super::private_table::zeroize_fields_v1(&mut self.0);
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn fill_aggregate_aux_columns_v1<const WIDTH: usize>(
     rows: usize,
     first: usize,
@@ -449,7 +428,6 @@ fn fill_aggregate_aux_columns_v1<const WIDTH: usize>(
 }
 /// Replay a bounded set of challenge-independent columns through the same
 /// transactional destination and clearing row owner as auxiliary replay.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn fill_aggregate_base_columns_v1<const WIDTH: usize>(
     rows: usize,
     first: usize,
@@ -468,7 +446,6 @@ fn fill_aggregate_base_columns_v1<const WIDTH: usize>(
 }
 /// Conservative stack charge for either serial arithmetic or value base replay.
 /// Native output columns already occupy the unchanged eight-column allowance.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn p256_base_replay_scratch_v1() -> usize {
     core::mem::size_of::<P256ArithmeticAggregateRowsV1<'static>>()
         + core::mem::size_of::<super::p256_value_bus::P256ValueBusStarkBaseRowProviderV1<'static>>()
@@ -481,7 +458,6 @@ fn p256_base_replay_scratch_v1() -> usize {
         + core::mem::size_of::<P256ValueBusStarkEndpointV1>()
 }
 /// Stack-owned replay state in addition to the already admitted native columns.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn p256_arithmetic_aux_replay_scratch_v1() -> usize {
     core::mem::size_of::<P256ArithmeticAggregateAuxStreamV1<'static>>()
         + core::mem::size_of::<P256AggregateAuxRowScratchV1<P256_ARITHMETIC_AGGREGATE_AUX_WIDTH_V1>>(
@@ -498,7 +474,6 @@ fn p256_arithmetic_aux_replay_scratch_v1() -> usize {
         + core::mem::size_of::<[P256ArithmeticCopyEventFixedV1; 3]>()
 }
 /// Peak stack payload for a serial value-bus batch, beyond existing stream heap scratch.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn p256_value_aux_replay_scratch_v1() -> usize {
     let execution = core::mem::size_of::<P256MainBoundWriterReplayV1<'static>>()
         + core::mem::size_of::<P256ValueExecutionAggregateStreamV1<'static>>()
@@ -566,7 +541,6 @@ fn cross_factor_v1<A: PolynomialAirFieldV1>(
         .add(fixed.address.mul_base(terms[2]))
         .add(value.mul_base(terms[3]))
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn build_compact_cross_aux_row_v1(
     events: &[P256CrossTraceEventFixedV1],
     sources: &[F],
@@ -725,7 +699,6 @@ fn arithmetic_copy_factor_v1<A: PolynomialAirFieldV1>(
         .add(fixed.address.mul_base(terms[1]))
         .add(value.mul_base(terms[2]))
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn build_compact_arithmetic_copy_aux_row_v1(
     events: &[P256ArithmeticCopyEventFixedV1],
     sources: &[F],
@@ -882,7 +855,6 @@ fn arithmetic_copy_terminal_v1<A: PolynomialAirFieldV1>(
 }
 /// Verifier-owned role of one external cross-product source segment.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub enum P256CrossTraceTerminalRoleV1 {
     /// Value-bus writer multiplicities.
     ValueWriter,
@@ -897,7 +869,6 @@ pub enum P256CrossTraceTerminalRoleV1 {
 }
 /// One explicit, transcript-bound source-segment terminal claim.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub struct P256CrossTraceTerminalClaimV1 {
     /// Registration-owned segment role.
     pub(crate) role: P256CrossTraceTerminalRoleV1,
@@ -908,7 +879,6 @@ pub struct P256CrossTraceTerminalClaimV1 {
 }
 /// Explicit transcript-bound claims for the three non-cross product buses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub struct P256BusTerminalClaimsV1 {
     /// Value-bus execution permutation terminal.
     pub(crate) value_execution: [F; P256_VALUE_BUS_LANES_V1],
@@ -931,7 +901,6 @@ pub struct P256BusTerminalClaimsV1 {
 #[cfg(test)]
 pub const P256_TERMINAL_CLAIMS_TRANSCRIPT_LABEL_V1: &[u8] = b"zk-x509-p256-terminal-claims-v1";
 /// Exact source role order for one ECDSA statement role.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub fn p256_cross_trace_terminal_roles_v1(
     role: P256EcdsaRoleV1,
 ) -> &'static [P256CrossTraceTerminalRoleV1] {
@@ -953,13 +922,11 @@ pub fn p256_cross_trace_terminal_roles_v1(
         P256EcdsaRoleV1::WalletOwnership => &WALLET,
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn p256_claim_fields_are_canonical_v1(fields: impl IntoIterator<Item = F>) -> bool {
     fields
         .into_iter()
         .all(|field| F::canonical(field.0).is_some())
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn validate_p256_cross_trace_terminal_claims_v1(
     role: P256EcdsaRoleV1,
     sources: &[P256CrossTraceTerminalClaimV1],
@@ -984,7 +951,6 @@ fn validate_p256_cross_trace_terminal_claims_v1(
 ///
 /// Private product validation checks this chain before constructing a bound native source.
 /// Registered private MAIN endpoint columns bind each product to its source trace.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub fn evaluate_p256_cross_trace_terminal_claim_equalities_v1(
     role: P256EcdsaRoleV1,
     sources: &[P256CrossTraceTerminalClaimV1],
@@ -1013,7 +979,6 @@ pub fn evaluate_p256_cross_trace_terminal_claim_equalities_v1(
     Ok(residues)
 }
 /// Host-side equality residues for value, arithmetic-copy, and scalar buses.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub fn evaluate_p256_bus_terminal_claim_equalities_v1(
     claims: P256BusTerminalClaimsV1,
 ) -> Result<[F; 4 * P256_CROSS_TRACE_LANES_V1], P256AggregateAdapterErrorV1> {
@@ -1127,9 +1092,8 @@ pub fn absorb_p256_terminal_claims_v1(
         )
         .map_err(|_| P256AggregateAdapterErrorV1::Resource)
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn flatten_writer_aux_v1(
-    row: P256CrossTraceWriterAuxRowV1,
+    row: &P256CrossTraceWriterAuxRowV1,
 ) -> [F; P256_CROSS_TRACE_WRITER_AUX_WIDTH_V1] {
     let mut flat = [F::ZERO; P256_CROSS_TRACE_WRITER_AUX_WIDTH_V1];
     flat[..P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1].copy_from_slice(&row.event_values);
@@ -1319,7 +1283,6 @@ impl P256ValueExecutionAggregateFixedProviderV1 {
         Ok(fixed)
     }
     /// Regenerate one complete verifier-preprocessed native column.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     pub(crate) fn fill_fixed_column_v1(
         &self,
         column: usize,
@@ -1334,7 +1297,6 @@ impl P256ValueExecutionAggregateFixedProviderV1 {
     }
 }
 /// Constant-memory integrated value-execution base/aux stream.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub struct P256ValueExecutionAggregateStreamV1<'a> {
     base: P256ValueBusStarkBaseRowProviderV1<'a>,
     value_aux: Option<P256ValueBusStarkAuxSourceV1<'a>>,
@@ -1346,7 +1308,6 @@ pub struct P256ValueExecutionAggregateStreamV1<'a> {
     arithmetic_copy_terminal: [F; P256_ARITHMETIC_COPY_LANES_V1],
     next_row: usize,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<'a> P256ValueExecutionAggregateStreamV1<'a> {
     /// Construct the execution aggregate only from an X5B1-bound value-bus source.
     pub(crate) fn new_v1(
@@ -1426,7 +1387,7 @@ impl<'a> P256ValueExecutionAggregateStreamV1<'a> {
             .next_row_v1()?
             .ok_or(P256AggregateAdapterErrorV1::Topology)?;
         aux[VALUE_WRITER_AUX..VALUE_ARITHMETIC_COPY_AUX]
-            .copy_from_slice(&flatten_writer_aux_v1(writer));
+            .copy_from_slice(&flatten_writer_aux_v1(&writer));
         let events = value_arithmetic_copy_events_v1(self.next_row, self.arithmetic_operations)?;
         let sources = p256_value_bus_opened_values_v1(&self.base.base_row_v1(self.next_row)?);
         self.arithmetic_copy_running = build_compact_arithmetic_copy_aux_row_v1(
@@ -1530,7 +1491,6 @@ impl<'a> P256ValueExecutionAggregateStreamV1<'a> {
             && self.next_row == P256_VALUE_BUS_AGGREGATE_TRACE_SIZE_V1
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for P256ValueExecutionAggregateStreamV1<'_> {
     fn drop(&mut self) {
         self.zeroize_private_v1();
@@ -1553,7 +1513,7 @@ pub fn evaluate_p256_value_execution_aggregate_residues_over_field_v1<A: Polynom
     current_aux: &[A; P256_VALUE_EXECUTION_AGGREGATE_AUX_WIDTH_V1],
     next_aux: &[A; P256_VALUE_EXECUTION_AGGREGATE_AUX_WIDTH_V1],
     fixed: &[A; P256_VALUE_EXECUTION_AGGREGATE_FIXED_WIDTH_V1],
-    challenges: P256ValueExecutionAggregateChallengesV1,
+    challenges: &P256ValueExecutionAggregateChallengesV1,
 ) -> Result<Vec<A>, P256AggregateAdapterErrorV1> {
     challenges
         .cross
@@ -1707,7 +1667,6 @@ fn scalar_factor_v1<A: PolynomialAirFieldV1>(
         .add(fixed.bit.mul_base(terms[3]))
         .add(value.mul_base(terms[4]))
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn build_compact_scalar_aux_row_v1(
     events: &[P256ScalarSourceEventFixedV1],
     sources: &[F],
@@ -1822,7 +1781,6 @@ fn arithmetic_scalar_events_v1(
     }
     Ok(events)
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn arithmetic_scalar_sources_v1(row: usize, base: &[F; P256_ARITHMETIC_BASE_WIDTH_V1]) -> [F; 8] {
     let coefficient = row % P256_ARITHMETIC_ROWS_PER_OPERATION_V1;
     let offset = if coefficient < 16 { 0 } else { 8 };
@@ -1830,13 +1788,11 @@ fn arithmetic_scalar_sources_v1(row: usize, base: &[F; P256_ARITHMETIC_BASE_WIDT
     core::array::from_fn(|slot| bits[offset + slot])
 }
 /// Borrow either the checked raw oracle or MAIN's lossless compact owner.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Debug)]
 enum P256ArithmeticRowsStorageV1<'a> {
     Raw(&'a ZkX509P256ArithmeticTraceV1),
     Compact(&'a P256CompactArithmeticTraceV1),
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256ArithmeticRowsStorageV1<'_> {
     fn rows_v1(&self) -> usize {
         match self {
@@ -1898,12 +1854,10 @@ impl P256ArithmeticRowsStorageV1<'_> {
 /// Constant-memory base/fixed provider for exact arithmetic plus its attached
 /// scalar-source and value-copy products.
 #[derive(Clone, Debug)]
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub struct P256ArithmeticAggregateRowsV1<'a> {
     trace: P256ArithmeticRowsStorageV1<'a>,
     fixed: Cow<'a, P256ArithmeticStarkFixedProviderV1>,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<'a> P256ArithmeticAggregateRowsV1<'a> {
     /// Validate the exact arithmetic trace and scalar source positions.
     pub(crate) fn new_v1(
@@ -1995,13 +1949,11 @@ impl<'a> P256ArithmeticAggregateRowsV1<'a> {
     }
 }
 /// A bounded column selection derived only from the public registration range.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct P256ArithmeticAuxSelectionV1 {
     scalar: bool,
     value_copy: bool,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256ArithmeticAuxSelectionV1 {
     fn new_v1(first: usize, width: usize) -> Result<Self, P256AggregateAdapterErrorV1> {
         let end = first
@@ -2022,7 +1974,6 @@ impl P256ArithmeticAuxSelectionV1 {
 /// Exact compact row when its verifier-fixed events are all inactive: every
 /// source is zero, every prefix is the unchanged running product, and terminal
 /// copies remain those of the same bound source. No private value is inspected.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn fill_compact_identity_aux_row_v1(
     events: usize,
     running: &[F; P256_PERMUTATION_CHALLENGE_LANES_V1],
@@ -2035,13 +1986,12 @@ fn fill_compact_identity_aux_row_v1(
     target[..events].fill(F::ZERO);
     for lane in 0..P256_PERMUTATION_CHALLENGE_LANES_V1 {
         let start = compact_products_start_v1(events, lane);
-        target[start..start + events + 1].fill(running[lane]);
+        target[start..=(start + events)].fill(running[lane]);
         target[compact_terminal_start_v1(events) + lane] = terminal[lane];
     }
     Ok(())
 }
 /// Constant-memory arithmetic auxiliary stream.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub struct P256ArithmeticAggregateAuxStreamV1<'a> {
     rows: P256ArithmeticAggregateRowsV1<'a>,
     scalar_challenges: P256ScalarBitBusChallengesV1,
@@ -2053,7 +2003,6 @@ pub struct P256ArithmeticAggregateAuxStreamV1<'a> {
     next_row: usize,
     _not_copy: core::cell::Cell<()>,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<'a> P256ArithmeticAggregateAuxStreamV1<'a> {
     /// Compute the source terminal from the two exact scalar operations, then
     /// prepare a streaming second pass.
@@ -2329,7 +2278,6 @@ impl<'a> P256ArithmeticAggregateAuxStreamV1<'a> {
             && self.next_row == P256_ARITHMETIC_AGGREGATE_TRACE_SIZE_V1
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for P256ArithmeticAggregateAuxStreamV1<'_> {
     fn drop(&mut self) {
         self.zeroize_private_v1();
@@ -2498,11 +2446,9 @@ fn window_scalar_event_v1(
 }
 /// Constant-memory base/fixed provider for the vertically packed 128-window adapter.
 #[derive(Clone, Copy, Debug)]
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub struct P256WindowAggregateRowsV1<'a> {
     trace: &'a P256WindowBatchStarkTraceV1,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<'a> P256WindowAggregateRowsV1<'a> {
     /// Validate the sole vertical commitment layout.
     pub(crate) fn new_v1(
@@ -2518,7 +2464,7 @@ impl<'a> P256WindowAggregateRowsV1<'a> {
     }
     /// Direct committed base row or canonical zero padding.
     pub(crate) fn base_row_v1(
-        &self,
+        self,
         row: usize,
     ) -> Result<[F; P256_WINDOW_BASE_WIDTH_V1], P256AggregateAdapterErrorV1> {
         if row >= P256_WINDOW_AGGREGATE_TRACE_SIZE_V1 {
@@ -2533,7 +2479,7 @@ impl<'a> P256WindowAggregateRowsV1<'a> {
     }
     /// Copy one complete committed window column into caller-owned storage.
     pub(crate) fn fill_base_column_v1(
-        &self,
+        self,
         column: usize,
         output: &mut [F],
     ) -> Result<(), P256AggregateAdapterErrorV1> {
@@ -2542,7 +2488,7 @@ impl<'a> P256WindowAggregateRowsV1<'a> {
         })
     }
     fn native_aux_row_v1(
-        &self,
+        self,
         row: usize,
     ) -> Result<[F; P256_WINDOW_STARK_AUX_WIDTH_V1], P256AggregateAdapterErrorV1> {
         if row >= P256_WINDOW_AGGREGATE_TRACE_SIZE_V1 {
@@ -2557,7 +2503,6 @@ impl<'a> P256WindowAggregateRowsV1<'a> {
     }
 }
 /// Constant-memory integrated window auxiliary stream.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub struct P256WindowAggregateAuxStreamV1<'a> {
     rows: P256WindowAggregateRowsV1<'a>,
     cross_challenges: P256CrossTraceChallengesV1,
@@ -2570,7 +2515,6 @@ pub struct P256WindowAggregateAuxStreamV1<'a> {
     next_row: usize,
     _not_copy: core::cell::Cell<()>,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<'a> P256WindowAggregateAuxStreamV1<'a> {
     /// Prepare both external and scalar source products.
     pub(crate) fn new_v1(
@@ -2738,7 +2682,6 @@ impl<'a> P256WindowAggregateAuxStreamV1<'a> {
             && self.next_row == P256_WINDOW_AGGREGATE_TRACE_SIZE_V1
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for P256WindowAggregateAuxStreamV1<'_> {
     fn drop(&mut self) {
         self.zeroize_private_v1();
@@ -2889,14 +2832,12 @@ fn reduction_cross_events_v1(
 }
 /// Constant-memory base/fixed provider for one reduction instance.
 #[derive(Clone, Copy, Debug)]
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub struct P256ReductionAggregateRowsV1<'a> {
     role: P256ReductionAggregateRoleV1,
     trace: &'a P256ReductionTraceV1,
     #[cfg(test)]
     fixed: P256ComparisonStarkFixedProviderV1,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<'a> P256ReductionAggregateRowsV1<'a> {
     /// Validate the exact 16-row reduction topology.
     pub(crate) fn new_v1(
@@ -2965,7 +2906,6 @@ impl<'a> P256ReductionAggregateRowsV1<'a> {
     }
 }
 /// Constant-memory reduction auxiliary stream.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub struct P256ReductionAggregateAuxStreamV1<'a> {
     rows: P256ReductionAggregateRowsV1<'a>,
     challenges: P256CrossTraceChallengesV1,
@@ -2975,7 +2915,6 @@ pub struct P256ReductionAggregateAuxStreamV1<'a> {
     next_row: usize,
     _not_copy: core::cell::Cell<()>,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<'a> P256ReductionAggregateAuxStreamV1<'a> {
     /// Prepare one exact reduction chain segment.
     pub(crate) fn new_v1(
@@ -3109,7 +3048,6 @@ impl<'a> P256ReductionAggregateAuxStreamV1<'a> {
             && self.next_row == P256_REDUCTION_AGGREGATE_TRACE_SIZE_V1
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for P256ReductionAggregateAuxStreamV1<'_> {
     fn drop(&mut self) {
         self.zeroize_private_v1();
@@ -3212,13 +3150,11 @@ fn low_s_cross_event_v1(
 }
 /// Constant-memory wallet low-S base/fixed provider.
 #[derive(Clone, Copy, Debug)]
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub struct P256LowSAggregateRowsV1<'a> {
     trace: &'a P256LowSTraceV1,
     #[cfg(test)]
     fixed: P256ComparisonStarkFixedProviderV1,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<'a> P256LowSAggregateRowsV1<'a> {
     /// Construct only for the wallet role.
     pub(crate) fn new_v1(
@@ -3239,7 +3175,7 @@ impl<'a> P256LowSAggregateRowsV1<'a> {
     }
     /// Direct committed low-S row or canonical zero padding.
     pub(crate) fn base_row_v1(
-        &self,
+        self,
         row: usize,
     ) -> Result<[F; P256_LOW_S_BASE_WIDTH_V1], P256AggregateAdapterErrorV1> {
         if row >= P256_LOW_S_AGGREGATE_TRACE_SIZE_V1 {
@@ -3254,7 +3190,7 @@ impl<'a> P256LowSAggregateRowsV1<'a> {
     }
     /// Copy one complete committed low-S column into caller-owned storage.
     pub(crate) fn fill_base_column_v1(
-        &self,
+        self,
         column: usize,
         output: &mut [F],
     ) -> Result<(), P256AggregateAdapterErrorV1> {
@@ -3265,7 +3201,7 @@ impl<'a> P256LowSAggregateRowsV1<'a> {
     /// Exact flat fixed row.
     #[cfg(test)]
     pub(crate) fn fixed_row_v1(
-        &self,
+        self,
         row: usize,
     ) -> Result<[F; P256_LOW_S_AGGREGATE_FIXED_WIDTH_V1], P256AggregateAdapterErrorV1> {
         let mut fixed = [F::ZERO; P256_LOW_S_AGGREGATE_FIXED_WIDTH_V1];
@@ -3282,7 +3218,6 @@ impl<'a> P256LowSAggregateRowsV1<'a> {
     }
 }
 /// Constant-memory wallet low-S auxiliary stream.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub struct P256LowSAggregateAuxStreamV1<'a> {
     rows: P256LowSAggregateRowsV1<'a>,
     challenges: P256CrossTraceChallengesV1,
@@ -3292,7 +3227,6 @@ pub struct P256LowSAggregateAuxStreamV1<'a> {
     next_row: usize,
     _not_copy: core::cell::Cell<()>,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<'a> P256LowSAggregateAuxStreamV1<'a> {
     /// Prepare the wallet-only chain segment.
     pub(crate) fn new_v1(
@@ -3424,7 +3358,6 @@ impl<'a> P256LowSAggregateAuxStreamV1<'a> {
             && self.next_row == P256_LOW_S_AGGREGATE_TRACE_SIZE_V1
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for P256LowSAggregateAuxStreamV1<'_> {
     fn drop(&mut self) {
         self.zeroize_private_v1();
@@ -3553,15 +3486,13 @@ fn p256_inactive_real_byte_v1(byte: usize) -> Result<u8, P256AggregateAdapterErr
             .ok_or(P256AggregateAdapterErrorV1::Topology)
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn write_byte_bits_v1(target: &mut [F], byte: u8) {
     for (bit, value) in target.iter_mut().enumerate() {
         *value = F(u64::from((byte >> bit) & 1));
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn flatten_regular_aux_v1(
-    row: P256CrossTraceRegularAuxRowV1,
+    row: &P256CrossTraceRegularAuxRowV1,
 ) -> [F; P256_CROSS_TRACE_SINK_AUX_WIDTH_V1] {
     let mut flat = [F::ZERO; P256_CROSS_TRACE_SINK_AUX_WIDTH_V1];
     flat[..6].copy_from_slice(&row.event_values);
@@ -3638,7 +3569,6 @@ impl P256BindingSinkFixedProviderV1 {
         Ok(fixed)
     }
     /// Regenerate one complete verifier-preprocessed sink column.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     pub(crate) fn fill_fixed_column_v1(
         &self,
         column: usize,
@@ -3654,11 +3584,9 @@ impl P256BindingSinkFixedProviderV1 {
 }
 /// Constant-memory committed sink base-row provider.
 #[derive(Clone, Copy, Debug)]
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub struct P256BindingSinkRowsV1<'a> {
     trace: &'a P256ExternalBindingTraceV1,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<'a> P256BindingSinkRowsV1<'a> {
     /// Validate the exact role-dependent row count.
     pub(crate) fn new_v1(
@@ -3720,7 +3648,6 @@ impl<'a> P256BindingSinkRowsV1<'a> {
     }
 }
 /// Integrated binding-sink base/aux stream.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub struct P256BindingSinkAggregateStreamV1<'a> {
     rows: P256BindingSinkRowsV1<'a>,
     fixed: P256BindingSinkFixedProviderV1,
@@ -3728,7 +3655,6 @@ pub struct P256BindingSinkAggregateStreamV1<'a> {
     terminal: [F; P256_CROSS_TRACE_LANES_V1],
     optional_certificate: bool,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<'a> P256BindingSinkAggregateStreamV1<'a> {
     /// Build the sole verifier-positioned optional certificate sink.
     pub(crate) fn new_with_optional_certificate_v1(
@@ -3761,6 +3687,7 @@ impl<'a> P256BindingSinkAggregateStreamV1<'a> {
             .as_mut()
             .ok_or(P256AggregateAdapterErrorV1::Challenge)?
             .next_row_v1()?
+            .as_ref()
             .map(flatten_regular_aux_v1))
     }
     /// Replay this deterministic stream into one challenge-dependent sink auxiliary column.
@@ -3803,7 +3730,6 @@ impl<'a> P256BindingSinkAggregateStreamV1<'a> {
         self.sink.is_none() && self.terminal.iter().all(|value| *value == F::ZERO)
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for P256BindingSinkAggregateStreamV1<'_> {
     fn drop(&mut self) {
         self.zeroize_private_v1();
@@ -4362,7 +4288,6 @@ impl P256MainArithmeticFixedSourceV1 {
         );
         Ok(fixed)
     }
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     fn fill_fixed_column_v1(
         &self,
         column: usize,
@@ -4451,12 +4376,10 @@ fn p256_main_value_fixed_source_v1(
     )?)
 }
 /// Borrow the admitted public matrix without allocating another field owner.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 struct P256PublicArithmeticFixedDestinationV1<'a> {
     columns: &'a mut [Vec<F>],
     committed: bool,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for P256PublicArithmeticFixedDestinationV1<'_> {
     fn drop(&mut self) {
         if !self.committed {
@@ -4468,7 +4391,6 @@ impl Drop for P256PublicArithmeticFixedDestinationV1<'_> {
 }
 /// Fill only a complete public arithmetic fixed matrix, with one row per call.
 /// The private replay helpers retain their independent eight-column limit.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn fill_public_arithmetic_fixed_matrix_with_v1(
     rows: usize,
     columns: &mut [Vec<F>],
@@ -4521,7 +4443,6 @@ pub struct P256MainVerifierFixedSourceV1 {
 }
 impl P256MainVerifierFixedSourceV1 {
     /// Allocated schedules shared by the five native signature sources.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     fn allocated_heap_bytes_v1(&self) -> usize {
         use super::allocation_payload::sum_v1;
         sum_v1([
@@ -4676,7 +4597,6 @@ impl P256MainVerifierFixedSourceV1 {
     /// Fill the already admitted public arithmetic matrix with one canonical
     /// row pass. The only scratch is one clearing stack row; the existing
     /// column allocations stay with the caller on success, error and unwind.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     pub(crate) fn fill_arithmetic_fixed_matrix_v1(
         &self,
         registration: P256MainRegistrationV1,
@@ -4727,7 +4647,6 @@ impl P256MainVerifierFixedSourceV1 {
         )
     }
     /// Replay one complete verifier-owned fixed column transactionally.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     pub(crate) fn fill_fixed_column_v1(
         &self,
         registration: P256MainRegistrationV1,
@@ -4799,22 +4718,18 @@ impl P256MainVerifierFixedSourceV1 {
         }
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn zeroize_main_arithmetic_trace_v1(trace: &mut ZkX509P256ArithmeticTraceV1) {
     super::private_table::zeroize_field_rows_v1(&mut trace.base);
     trace.base.clear();
     trace.fixed.clear();
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn zeroize_main_window_batch_v1(trace: &mut P256WindowBatchStarkTraceV1) {
     super::private_table::zeroize_field_rows_v1(&mut trace.base);
     super::private_table::zeroize_field_rows_v1(&mut trace.aux);
     trace.base.clear();
     trace.aux.clear();
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 struct P256MainWindowInputGuardV1(Vec<P256WindowTraceV1>);
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for P256MainWindowInputGuardV1 {
     fn drop(&mut self) {
         for trace in &mut self.0 {
@@ -4823,15 +4738,12 @@ impl Drop for P256MainWindowInputGuardV1 {
         self.0.clear();
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 struct P256MainArithmeticGuardV1(Option<ZkX509P256ArithmeticTraceV1>);
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256MainArithmeticGuardV1 {
     fn as_ref_v1(&self) -> Result<&ZkX509P256ArithmeticTraceV1, P256AggregateAdapterErrorV1> {
         self.0.as_ref().ok_or(P256AggregateAdapterErrorV1::Source)
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for P256MainArithmeticGuardV1 {
     fn drop(&mut self) {
         if let Some(trace) = self.0.as_mut() {
@@ -4841,13 +4753,11 @@ impl Drop for P256MainArithmeticGuardV1 {
     }
 }
 /// Immutable checked raw capability, consumed after scalar-source construction.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub struct P256MainRawArithmeticV1 {
     role: P256EcdsaRoleV1,
     trace: P256MainArithmeticGuardV1,
     fixed: P256ArithmeticStarkFixedProviderV1,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256MainRawArithmeticV1 {
     fn new_v1(
         role: P256EcdsaRoleV1,
@@ -4867,7 +4777,6 @@ impl P256MainRawArithmeticV1 {
             .expect("checked raw owner retains its trace")
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 enum P256MainArithmeticStorageV1 {
     Compact(P256CompactArithmeticTraceV1),
     // Deliberately malformed allocation fixtures never enter a replay path.
@@ -4879,13 +4788,11 @@ enum P256MainArithmeticStorageV1 {
 /// MAIN retains compact cells and its verifier-fixed schedule. The checked raw
 /// trace clears before the next signature is constructed; no mutable or cloning
 /// API can change the validated operation records.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 struct P256MainValidatedArithmeticV1 {
     role: P256EcdsaRoleV1,
     trace: P256MainArithmeticStorageV1,
     fixed: P256ArithmeticStarkFixedProviderV1,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256MainValidatedArithmeticV1 {
     #[cfg(test)]
     fn new_v1(
@@ -4945,9 +4852,7 @@ impl P256MainValidatedArithmeticV1 {
         super::allocation_payload::sum_v1([trace, self.fixed.allocated_heap_bytes_v1()])
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 struct P256MainWindowBatchGuardV1(Option<P256WindowBatchStarkTraceV1>);
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256MainWindowBatchGuardV1 {
     fn as_ref_v1(&self) -> Result<&P256WindowBatchStarkTraceV1, P256AggregateAdapterErrorV1> {
         self.0.as_ref().ok_or(P256AggregateAdapterErrorV1::Source)
@@ -4956,7 +4861,6 @@ impl P256MainWindowBatchGuardV1 {
         self.0.take().ok_or(P256AggregateAdapterErrorV1::Source)
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for P256MainWindowBatchGuardV1 {
     fn drop(&mut self) {
         if let Some(trace) = self.0.as_mut() {
@@ -4965,9 +4869,7 @@ impl Drop for P256MainWindowBatchGuardV1 {
         self.0 = None;
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 struct P256MainReductionGuardV1(Option<P256ReductionTraceV1>);
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256MainReductionGuardV1 {
     fn as_ref_v1(&self) -> Result<&P256ReductionTraceV1, P256AggregateAdapterErrorV1> {
         self.0.as_ref().ok_or(P256AggregateAdapterErrorV1::Source)
@@ -4976,7 +4878,6 @@ impl P256MainReductionGuardV1 {
         self.0.take().ok_or(P256AggregateAdapterErrorV1::Source)
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for P256MainReductionGuardV1 {
     fn drop(&mut self) {
         if let Some(trace) = self.0.as_mut() {
@@ -4985,9 +4886,7 @@ impl Drop for P256MainReductionGuardV1 {
         self.0 = None;
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 struct P256MainLowSGuardV1(Option<P256LowSTraceV1>);
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256MainLowSGuardV1 {
     fn as_ref_v1(&self) -> Option<&P256LowSTraceV1> {
         self.0.as_ref()
@@ -4996,7 +4895,6 @@ impl P256MainLowSGuardV1 {
         self.0.take()
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for P256MainLowSGuardV1 {
     fn drop(&mut self) {
         if let Some(trace) = self.0.as_mut() {
@@ -5005,7 +4903,6 @@ impl Drop for P256MainLowSGuardV1 {
         self.0 = None;
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 struct P256MainSignatureBaseV1 {
     role: P256EcdsaRoleV1,
     value: Option<P256ValueBusBaseSourceV1>,
@@ -5017,22 +4914,20 @@ struct P256MainSignatureBaseV1 {
     low_s: Option<P256LowSTraceV1>,
     sink: Option<P256ExternalBindingTraceV1>,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl core::fmt::Debug for P256MainSignatureBaseV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
             .debug_struct("P256MainSignatureBaseV1")
             .field("role", &self.role)
             .field("private_material", &"<redacted>")
-            .finish()
+            .finish_non_exhaustive()
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256MainSignatureBaseV1 {
     fn new_v1(
         signature: usize,
         material: &P256EcdsaTraceMaterialV1,
-        optional_selection: P256OptionalCertificateSelectionV1,
+        optional_selection: &P256OptionalCertificateSelectionV1,
     ) -> Result<Self, P256AggregateAdapterErrorV1> {
         let expected_role = if signature < P256_X5S1_CERTIFICATE_OR_CRL_SIGNATURES_V1 {
             P256EcdsaRoleV1::CertificateOrCrl
@@ -5169,14 +5064,12 @@ impl P256MainSignatureBaseV1 {
         self.sink = None;
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for P256MainSignatureBaseV1 {
     fn drop(&mut self) {
         self.zeroize_private_v1();
     }
 }
 /// Pre-X5B1 capability for the exact five-signature P-256 MAIN set.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub struct P256MainBaseSourceV1 {
     // Keep the reserved exact-five owner on the heap across phase transitions.
     // An inline array duplicates the embedded reduction traces in debug frames.
@@ -5184,27 +5077,25 @@ pub struct P256MainBaseSourceV1 {
     fixed: Option<P256MainVerifierFixedSourceV1>,
     bind_attempted: bool,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl core::fmt::Debug for P256MainBaseSourceV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
             .debug_struct("P256MainBaseSourceV1")
             .field("bind_attempted", &self.bind_attempted)
             .field("private_material", &"<redacted>")
-            .finish()
+            .finish_non_exhaustive()
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256MainBaseSourceV1 {
     /// Forecast the largest serial native source construction before allocating it.
     pub(crate) fn replay_scratch_forecast_v1() -> Result<usize, P256AggregateAdapterErrorV1> {
+        use super::allocation_payload::{p256_topology_v1, sum_v1, vector_v1};
         let certificate = super::p256_value_bus::p256_value_source_scratch_forecast_v1(
             P256EcdsaRoleV1::CertificateOrCrl,
         )?;
         let wallet = super::p256_value_bus::p256_value_source_scratch_forecast_v1(
             P256EcdsaRoleV1::WalletOwnership,
         )?;
-        use super::allocation_payload::{p256_topology_v1, sum_v1, vector_v1};
         let mut validation_scratch = 0;
         for role in [
             P256EcdsaRoleV1::CertificateOrCrl,
@@ -5313,11 +5204,11 @@ impl P256MainBaseSourceV1 {
                         signature
                             .value
                             .as_ref()
-                            .map_or(0, |value| value.allocated_heap_bytes_v1()),
+                            .map_or(0, super::p256_value_bus::P256ValueBusBaseSourceV1::allocated_heap_bytes_v1),
                         signature
                             .scalar
                             .as_ref()
-                            .map_or(0, |scalar| scalar.allocated_heap_bytes_v1()),
+                            .map_or(0, super::p256_scalar_bit_bus::P256ScalarBitBusBaseSourceV1::allocated_heap_bytes_v1),
                         signature
                             .arithmetic
                             .as_ref()
@@ -5336,18 +5227,17 @@ impl P256MainBaseSourceV1 {
     }
     /// Compile all five role-positioned signatures from the canonical MAIN
     /// assembly before any P-256 base commitment is exposed.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     pub(crate) fn new_v1(
         assembly: &ZkX509MainTraceAssemblyV1,
     ) -> Result<Self, P256AggregateAdapterErrorV1> {
         Self::from_materials_v1(
             &assembly.p256_materials,
-            assembly.optional_certificate_selection,
+            &assembly.optional_certificate_selection,
         )
     }
     fn from_materials_v1(
         materials: &[P256EcdsaTraceMaterialV1; P256_X5S1_SIGNATURES_V1],
-        optional_selection: P256OptionalCertificateSelectionV1,
+        optional_selection: &P256OptionalCertificateSelectionV1,
     ) -> Result<Self, P256AggregateAdapterErrorV1> {
         for (signature, material) in materials.iter().enumerate() {
             let expected = if signature < P256_X5S1_CERTIFICATE_OR_CRL_SIGNATURES_V1 {
@@ -5385,7 +5275,7 @@ impl P256MainBaseSourceV1 {
     #[cfg(test)]
     fn from_materials_for_test_v1(
         materials: &[P256EcdsaTraceMaterialV1; P256_X5S1_SIGNATURES_V1],
-        optional_selection: P256OptionalCertificateSelectionV1,
+        optional_selection: &P256OptionalCertificateSelectionV1,
     ) -> Result<Self, P256AggregateAdapterErrorV1> {
         Self::from_materials_v1(materials, optional_selection)
     }
@@ -5614,13 +5504,11 @@ impl P256MainBaseSourceV1 {
         self.signatures.is_none() && self.fixed.is_none() && self.bind_attempted
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for P256MainBaseSourceV1 {
     fn drop(&mut self) {
         self.zeroize_private_v1();
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 struct P256MainSignatureBoundV1 {
     role: P256EcdsaRoleV1,
     value: Option<P256ValueBusBoundSourceV1>,
@@ -5632,17 +5520,15 @@ struct P256MainSignatureBoundV1 {
     low_s: Option<P256LowSTraceV1>,
     sink: Option<P256ExternalBindingTraceV1>,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl core::fmt::Debug for P256MainSignatureBoundV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
             .debug_struct("P256MainSignatureBoundV1")
             .field("role", &self.role)
             .field("private_material", &"<redacted>")
-            .finish()
+            .finish_non_exhaustive()
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256MainSignatureBoundV1 {
     fn zeroize_private_v1(&mut self) {
         if let Some(value) = self.value.as_mut() {
@@ -5677,20 +5563,17 @@ impl P256MainSignatureBoundV1 {
         self.sink = None;
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for P256MainSignatureBoundV1 {
     fn drop(&mut self) {
         self.zeroize_private_v1();
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 struct P256MainSignatureTerminalClaimsV1 {
     role: P256EcdsaRoleV1,
     buses: P256BusTerminalClaimsV1,
     cross_sources: Vec<P256CrossTraceTerminalClaimV1>,
     sink: [F; P256_CROSS_TRACE_LANES_V1],
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for P256MainSignatureTerminalClaimsV1 {
     fn drop(&mut self) {
         zeroize_p256_main_bus_claims_v1(&mut self.buses);
@@ -5702,15 +5585,12 @@ impl Drop for P256MainSignatureTerminalClaimsV1 {
         super::private_table::zeroize_fields_v1(&mut self.sink[..]);
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 struct P256MainCrossClaimsGuardV1(Vec<P256CrossTraceTerminalClaimV1>);
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256MainCrossClaimsGuardV1 {
     fn take_v1(&mut self) -> Vec<P256CrossTraceTerminalClaimV1> {
         core::mem::take(&mut self.0)
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for P256MainCrossClaimsGuardV1 {
     fn drop(&mut self) {
         for source in &mut self.0 {
@@ -5720,13 +5600,11 @@ impl Drop for P256MainCrossClaimsGuardV1 {
         self.0.clear();
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 struct P256MainTerminalAssemblyGuardV1 {
     certificate_or_crl:
         [ZkX509P256CertificatePrivateProductsV1; P256_X5S1_CERTIFICATE_OR_CRL_SIGNATURES_V1],
     wallet: ZkX509P256WalletPrivateProductsV1,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for P256MainTerminalAssemblyGuardV1 {
     fn drop(&mut self) {
         for signature in &mut self.certificate_or_crl {
@@ -5745,10 +5623,9 @@ impl Drop for P256MainTerminalAssemblyGuardV1 {
         super::private_table::zeroize_fields_v1(&mut self.wallet.sink[..]);
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn p256_main_signature_terminal_claims_v1(
     signature: &P256MainSignatureBoundV1,
-    post_base: ZkX509CredentialMainPostBaseChallengesV1,
+    post_base: &ZkX509CredentialMainPostBaseChallengesV1,
     optional_certificate: bool,
 ) -> Result<P256MainSignatureTerminalClaimsV1, P256AggregateAdapterErrorV1> {
     let value = signature
@@ -5758,7 +5635,7 @@ fn p256_main_signature_terminal_claims_v1(
     if value
         .post_base_v1()
         .map_err(P256AggregateAdapterErrorV1::from)?
-        != post_base
+        != *post_base
     {
         return Err(P256AggregateAdapterErrorV1::Challenge);
     }
@@ -5769,7 +5646,7 @@ fn p256_main_signature_terminal_claims_v1(
     if scalar
         .post_base_v1()
         .map_err(P256AggregateAdapterErrorV1::from)?
-        != post_base
+        != *post_base
     {
         return Err(P256AggregateAdapterErrorV1::Challenge);
     }
@@ -5900,10 +5777,9 @@ fn p256_main_signature_terminal_claims_v1(
     }
     Ok(claims)
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn p256_main_terminal_claims_v1(
     signatures: &[P256MainSignatureBoundV1; P256_X5S1_SIGNATURES_V1],
-    post_base: ZkX509CredentialMainPostBaseChallengesV1,
+    post_base: &ZkX509CredentialMainPostBaseChallengesV1,
 ) -> Result<ZkX509P256PrivateProductsV1, P256AggregateAdapterErrorV1> {
     let mut computed = Vec::new();
     computed
@@ -5962,12 +5838,11 @@ fn p256_main_terminal_claims_v1(
         },
     };
     ZkX509P256PrivateProductsV1::from_p256_air_terminals_v1(
-        assembled.certificate_or_crl,
-        assembled.wallet,
+        &assembled.certificate_or_crl,
+        &assembled.wallet,
     )
     .map_err(|_| P256AggregateAdapterErrorV1::Constraint)
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn zeroize_p256_main_bus_claims_v1(claims: &mut P256BusTerminalClaimsV1) {
     super::private_table::zeroize_fields_v1(&mut claims.value_execution[..]);
     super::private_table::zeroize_fields_v1(&mut claims.value_sorted[..]);
@@ -5978,7 +5853,6 @@ fn zeroize_p256_main_bus_claims_v1(claims: &mut P256BusTerminalClaimsV1) {
     super::private_table::zeroize_fields_v1(&mut claims.scalar_bus_arithmetic[..]);
     super::private_table::zeroize_fields_v1(&mut claims.scalar_bus_window[..]);
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn zeroize_p256_main_terminal_claims_v1(claims: &mut ZkX509P256PrivateProductsV1) {
     for signature in &mut claims.certificate_or_crl {
         zeroize_p256_main_bus_claims_v1(&mut signature.buses);
@@ -5995,7 +5869,6 @@ fn zeroize_p256_main_terminal_claims_v1(claims: &mut ZkX509P256PrivateProductsV1
     }
     super::private_table::zeroize_fields_v1(&mut claims.wallet.sink[..]);
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256MainBaseSourceV1 {
     /// Consume the exact five-signature base phase once under the opaque X5B1 token.
     ///
@@ -6004,7 +5877,7 @@ impl P256MainBaseSourceV1 {
     /// can never be retried with another transcript.
     pub(crate) fn bind_v1(
         &mut self,
-        post_base: ZkX509CredentialMainPostBaseChallengesV1,
+        post_base: &ZkX509CredentialMainPostBaseChallengesV1,
     ) -> Result<P256MainBoundSourceV1, P256AggregateAdapterErrorV1> {
         self.ensure_base_phase_v1()?;
         self.bind_attempted = true;
@@ -6039,7 +5912,7 @@ impl P256MainBaseSourceV1 {
                 if value
                     .post_base_v1()
                     .map_err(P256AggregateAdapterErrorV1::from)?
-                    != post_base
+                    != *post_base
                 {
                     return Err(P256AggregateAdapterErrorV1::Challenge);
                 }
@@ -6052,7 +5925,7 @@ impl P256MainBaseSourceV1 {
                 if scalar
                     .post_base_v1()
                     .map_err(P256AggregateAdapterErrorV1::from)?
-                    != post_base
+                    != *post_base
                 {
                     return Err(P256AggregateAdapterErrorV1::Challenge);
                 }
@@ -6073,7 +5946,7 @@ impl P256MainBaseSourceV1 {
             let mut source = P256MainBoundSourceV1 {
                 signatures: Some(bound),
                 fixed: self.fixed.take(),
-                post_base: Some(post_base),
+                post_base: Some(*post_base),
                 terminal_claims: None,
             };
             source.terminal_claims = Some(p256_main_terminal_claims_v1(
@@ -6100,14 +5973,12 @@ impl P256MainBaseSourceV1 {
 /// Fields and construction stay private to this module; the cross-trace stream
 /// may only read them. No proof claim, raw terminal or independent key/trace can
 /// be supplied by a caller. The lifetime keeps the complete checked owner alive.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(super) struct P256MainBoundWriterReplayV1<'a> {
     endpoint: &'a super::p256_value_bus::P256ValueBusBaseEndpointTraceV1,
     fixed: &'a P256CrossTraceWriterSourceFixedV1,
     post_base: ZkX509CredentialMainPostBaseChallengesV1,
     terminal: &'a [F; P256_CROSS_TRACE_LANES_V1],
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<'a> P256MainBoundWriterReplayV1<'a> {
     /// The immutable execution endpoint selected by MAIN registration.
     pub(super) fn endpoint_v1(&self) -> &'a super::p256_value_bus::P256ValueBusBaseEndpointTraceV1 {
@@ -6131,7 +6002,6 @@ impl<'a> P256MainBoundWriterReplayV1<'a> {
 /// It is the only production source of P-256 auxiliary replay. All challenge
 /// families remain tied to the single retained opaque token; callers cannot
 /// pass a second raw challenge set into column replay.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub struct P256MainBoundSourceV1 {
     // Cardinality is checked before replay; transferring this owner never
     // materializes the five large signatures as a stack array.
@@ -6140,16 +6010,14 @@ pub struct P256MainBoundSourceV1 {
     post_base: Option<ZkX509CredentialMainPostBaseChallengesV1>,
     terminal_claims: Option<ZkX509P256PrivateProductsV1>,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl core::fmt::Debug for P256MainBoundSourceV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
             .debug_struct("P256MainBoundSourceV1")
             .field("private_material", &"<redacted>")
-            .finish()
+            .finish_non_exhaustive()
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256MainBoundSourceV1 {
     /// Reachable native source payload, excluding the separately borrowed assembly.
     pub(crate) fn allocated_payload_bytes_v1(&self) -> usize {
@@ -6168,11 +6036,11 @@ impl P256MainBoundSourceV1 {
                         signature
                             .value
                             .as_ref()
-                            .map_or(0, |value| value.allocated_heap_bytes_v1()),
+                            .map_or(0, super::p256_value_bus::P256ValueBusBoundSourceV1::allocated_heap_bytes_v1),
                         signature
                             .scalar
                             .as_ref()
-                            .map_or(0, |scalar| scalar.allocated_heap_bytes_v1()),
+                            .map_or(0, super::p256_scalar_bit_bus::P256ScalarBitBusBoundSourceV1::allocated_heap_bytes_v1),
                         signature
                             .arithmetic
                             .as_ref()
@@ -6198,8 +6066,8 @@ impl P256MainBoundSourceV1 {
             return Err(P256AggregateAdapterErrorV1::Phase);
         }
         if ZkX509P256PrivateProductsV1::from_p256_air_terminals_v1(
-            claims.certificate_or_crl,
-            claims.wallet,
+            &claims.certificate_or_crl,
+            &claims.wallet,
         )
         .map_err(|_| P256AggregateAdapterErrorV1::Constraint)?
             != claims
@@ -6524,7 +6392,7 @@ impl P256MainBoundSourceV1 {
             .ok_or(P256AggregateAdapterErrorV1::Phase)?
             .execution_v1(signature.role);
         let writer =
-            P256CrossTraceWriterSourceStreamV1::from_bound_main_v1(P256MainBoundWriterReplayV1 {
+            P256CrossTraceWriterSourceStreamV1::from_bound_main_v1(&P256MainBoundWriterReplayV1 {
                 endpoint: value.execution_endpoint_v1()?,
                 fixed: &fixed.writer,
                 post_base,
@@ -6832,9 +6700,9 @@ impl P256MainBoundSourceV1 {
     #[cfg(test)]
     fn replace_post_base_for_test_v1(
         &mut self,
-        post_base: ZkX509CredentialMainPostBaseChallengesV1,
+        post_base: &ZkX509CredentialMainPostBaseChallengesV1,
     ) {
-        self.post_base = Some(post_base);
+        self.post_base = Some(*post_base);
     }
     #[cfg(test)]
     fn private_is_zeroized_v1(&self) -> bool {
@@ -6844,7 +6712,6 @@ impl P256MainBoundSourceV1 {
             && self.terminal_claims.is_none()
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for P256MainBoundSourceV1 {
     fn drop(&mut self) {
         self.zeroize_private_v1();
@@ -6876,24 +6743,24 @@ fn p256_main_signed_witness_for_test_v1(
     let key = SigningKey::from_slice(&secret).map_err(|_| P256AggregateAdapterErrorV1::Topology)?;
     secret.fill(0);
     let digest = core::array::from_fn(|index| {
-        seed.wrapping_mul(31)
-            .wrapping_add((index as u8).wrapping_mul(17))
+        seed.wrapping_mul(31).wrapping_add(
+            (u8::try_from(index & 0xff).expect("masked fixture byte")).wrapping_mul(17),
+        )
     });
     let signature: Signature = key
         .sign_prehash(&digest)
         .map_err(|_| P256AggregateAdapterErrorV1::Topology)?;
-    let signature = match signature.normalize_s() {
-        Some(normalized) => normalized,
-        None => signature,
-    };
+    let signature = signature
+        .normalize_s()
+        .map_or(signature, |normalized| normalized);
     let encoded = key.verifying_key().to_encoded_point(false);
-    let mut public_key_x_be = [0_u8; 32];
-    let mut public_key_y_be = [0_u8; 32];
-    public_key_x_be.copy_from_slice(encoded.x().ok_or(P256AggregateAdapterErrorV1::Topology)?);
-    public_key_y_be.copy_from_slice(encoded.y().ok_or(P256AggregateAdapterErrorV1::Topology)?);
+    let mut horizontal = [0_u8; 32];
+    let mut vertical = [0_u8; 32];
+    horizontal.copy_from_slice(encoded.x().ok_or(P256AggregateAdapterErrorV1::Topology)?);
+    vertical.copy_from_slice(encoded.y().ok_or(P256AggregateAdapterErrorV1::Topology)?);
     Ok(super::p256_ecdsa_air::P256EcdsaWitnessV1 {
-        public_key_x_be,
-        public_key_y_be,
+        public_key_x_be: horizontal,
+        public_key_y_be: vertical,
         r_be: signature.r().to_bytes().into(),
         s_be: signature.s().to_bytes().into(),
         digest_be: digest,
@@ -6951,7 +6818,7 @@ fn p256_main_canonical_materials_for_test_v1()
 pub fn p256_main_base_source_fixture_for_test_v1()
 -> Result<P256MainBaseSourceV1, P256AggregateAdapterErrorV1> {
     let fixture = p256_main_canonical_materials_for_test_v1()?;
-    P256MainBaseSourceV1::from_materials_v1(&fixture.materials, fixture.selection)
+    P256MainBaseSourceV1::from_materials_v1(&fixture.materials, &fixture.selection)
 }
 #[cfg(test)]
 #[path = "p256_arithmetic_fp4_tests.rs"]
@@ -7069,12 +6936,12 @@ mod tests {
                         } else {
                             let binding = main_post_base_v1(29);
                             assert!(matches!(
-                                source.bind_v1(binding),
+                                source.bind_v1(&binding),
                                 Err(P256AggregateAdapterErrorV1::Source)
                             ));
                             assert!(source.private_is_zeroized_v1());
                             assert!(matches!(
-                                source.bind_v1(binding),
+                                source.bind_v1(&binding),
                                 Err(P256AggregateAdapterErrorV1::Phase)
                             ));
                         }
@@ -7191,8 +7058,8 @@ mod tests {
         });
         let (cross_sources, sink) = canonical_terminal_chain(P256EcdsaRoleV1::WalletOwnership);
         let claims = ZkX509P256PrivateProductsV1::from_p256_air_terminals_v1(
-            certificate_or_crl,
-            ZkX509P256WalletPrivateProductsV1 {
+            &certificate_or_crl,
+            &ZkX509P256WalletPrivateProductsV1 {
                 buses,
                 cross_sources: cross_sources.try_into().unwrap(),
                 sink,
@@ -7392,7 +7259,10 @@ mod tests {
             [seed; 32],
             [seed.wrapping_add(1); 32],
             core::array::from_fn::<_, ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1, _>(|index| {
-                zk_x509_test_digest384_v1(seed.wrapping_add(index as u8).wrapping_add(2))
+                zk_x509_test_digest384_v1(
+                    seed.wrapping_add(u8::try_from(index & 0xff).expect("masked fixture byte"))
+                        .wrapping_add(2),
+                )
             }),
         );
         derive_zk_x509_credential_pre_aux_binding_v1(
@@ -7595,8 +7465,10 @@ mod tests {
             for row in start..start + count {
                 let actual_fixed = fixed.row_v1(row).unwrap();
                 assert_eq!(actual_fixed[SINK_SELECTION_BYTE_FIXED], F::ONE);
-                let dummy = actual_fixed[SINK_SELECTION_DUMMY_FIXED].0 as u8;
-                let inactive = actual_fixed[SINK_SELECTION_INACTIVE_REAL_FIXED].0 as u8;
+                let dummy = u8::try_from(actual_fixed[SINK_SELECTION_DUMMY_FIXED].0)
+                    .expect("Boolean selector fits u8");
+                let inactive = u8::try_from(actual_fixed[SINK_SELECTION_INACTIVE_REAL_FIXED].0)
+                    .expect("Boolean selector fits u8");
                 // Distinct real and selected cells are legal only while inactive:
                 // the projection must retain the committed real source.
                 let (base, _) = selection_byte_row_v1(F::ZERO, inactive, dummy, dummy, inactive);
@@ -8848,19 +8720,19 @@ mod tests {
             ..writer_first_row
         };
         assert_eq!(
-            decode_writer_aux_v1(&flatten_writer_aux_v1(writer_first_row)),
+            decode_writer_aux_v1(&flatten_writer_aux_v1(&writer_first_row)),
             Ok(writer_first_row)
         );
         assert_eq!(
-            decode_writer_aux_v1(&flatten_writer_aux_v1(writer_last_row)),
+            decode_writer_aux_v1(&flatten_writer_aux_v1(&writer_last_row)),
             Ok(writer_last_row)
         );
         let mut value_first = [F::ZERO; P256_VALUE_EXECUTION_AGGREGATE_AUX_WIDTH_V1];
         let mut value_last = [F::ZERO; P256_VALUE_EXECUTION_AGGREGATE_AUX_WIDTH_V1];
         value_first[VALUE_WRITER_AUX..VALUE_ARITHMETIC_COPY_AUX]
-            .copy_from_slice(&flatten_writer_aux_v1(writer_first_row));
+            .copy_from_slice(&flatten_writer_aux_v1(&writer_first_row));
         value_last[VALUE_WRITER_AUX..VALUE_ARITHMETIC_COPY_AUX]
-            .copy_from_slice(&flatten_writer_aux_v1(writer_last_row));
+            .copy_from_slice(&flatten_writer_aux_v1(&writer_last_row));
         assert_eq!(
             p256_value_execution_cross_terminal_claim_v1(&value_first, &value_last),
             Ok(P256CrossTraceTerminalClaimV1 {
@@ -9514,11 +9386,13 @@ mod tests {
     fn p256_main_ephemeral_stream_zeroization_body_v1() {
         let fixture =
             p256_main_canonical_materials_for_test_v1().expect("canonical P-256 MAIN materials");
-        let mut source =
-            P256MainBaseSourceV1::from_materials_for_test_v1(&fixture.materials, fixture.selection)
-                .expect("canonical five-signature base source");
+        let mut source = P256MainBaseSourceV1::from_materials_for_test_v1(
+            &fixture.materials,
+            &fixture.selection,
+        )
+        .expect("canonical five-signature base source");
         let post_base = main_post_base_v1(71);
-        let bound = source.bind_v1(post_base).expect("one exact X5B1 bind");
+        let bound = source.bind_v1(&post_base).expect("one exact X5B1 bind");
         let signature = &bound
             .signatures
             .as_ref()
@@ -9812,26 +9686,26 @@ mod tests {
         let selection = fixture.selection;
         fixture.materials.swap(0, P256_X5S1_SIGNATURES_V1 - 1);
         assert!(matches!(
-            P256MainBaseSourceV1::from_materials_for_test_v1(&fixture.materials, selection),
+            P256MainBaseSourceV1::from_materials_for_test_v1(&fixture.materials, &selection),
             Err(P256AggregateAdapterErrorV1::Topology)
         ));
         fixture.materials.swap(0, P256_X5S1_SIGNATURES_V1 - 1);
         let post_base = main_post_base_v1(41);
         let mut partially_poisoned =
-            P256MainBaseSourceV1::from_materials_for_test_v1(&fixture.materials, selection)
+            P256MainBaseSourceV1::from_materials_for_test_v1(&fixture.materials, &selection)
                 .expect("canonical source before injected child failure");
         partially_poisoned
             .poison_scalar_for_test_v1(0)
             .expect("inject scalar failure after value bind starts");
-        assert!(partially_poisoned.bind_v1(post_base).is_err());
+        assert!(partially_poisoned.bind_v1(&post_base).is_err());
         assert!(partially_poisoned.private_is_zeroized_v1());
         assert!(matches!(
-            partially_poisoned.bind_v1(post_base),
+            partially_poisoned.bind_v1(&post_base),
             Err(P256AggregateAdapterErrorV1::Phase)
         ));
         drop(partially_poisoned);
         let mut source =
-            P256MainBaseSourceV1::from_materials_for_test_v1(&fixture.materials, selection)
+            P256MainBaseSourceV1::from_materials_for_test_v1(&fixture.materials, &selection)
                 .expect("canonical five-signature base source");
         drop(fixture);
         assert_eq!(
@@ -9862,7 +9736,7 @@ mod tests {
             .fill_fixed_column_v1(scalar, 0, &mut independently_replayed)
             .expect("independent fixed replay");
         assert_eq!(scalar_fixed_before, independently_replayed);
-        let mut bound = source.bind_v1(post_base).expect("one exact X5B1 bind");
+        let mut bound = source.bind_v1(&post_base).expect("one exact X5B1 bind");
         assert!(source.private_is_zeroized_v1());
         assert_eq!(
             bound.post_base_v1().expect("retained opaque token"),
@@ -9876,7 +9750,7 @@ mod tests {
             41
         );
         assert!(matches!(
-            source.bind_v1(post_base),
+            source.bind_v1(&post_base),
             Err(P256AggregateAdapterErrorV1::Phase)
         ));
         let mut denied_after_bind = scalar_base_before.clone();
@@ -9939,14 +9813,14 @@ mod tests {
             .fill_aux_column_v1(reduction, 0, &mut reduction_aux)
             .expect("digest reduction auxiliary replay");
         let other_post_base = main_post_base_v1(42);
-        bound.replace_post_base_for_test_v1(other_post_base);
+        bound.replace_post_base_for_test_v1(&other_post_base);
         let mut token_mismatch = vec![F(91); scalar_shape.trace_size];
         assert_eq!(
             bound.fill_aux_column_v1(scalar, 0, &mut token_mismatch),
             Err(P256AggregateAdapterErrorV1::Challenge)
         );
         assert!(token_mismatch.iter().all(|value| *value == F(91)));
-        bound.replace_post_base_for_test_v1(post_base);
+        bound.replace_post_base_for_test_v1(&post_base);
         bound
             .terminal_claims
             .as_mut()
@@ -10004,12 +9878,12 @@ mod tests {
         };
         let post_base = main_post_base_v1(29);
         assert!(matches!(
-            source.bind_v1(post_base),
+            source.bind_v1(&post_base),
             Err(P256AggregateAdapterErrorV1::Source)
         ));
         assert!(source.private_is_zeroized_v1());
         assert!(matches!(
-            source.bind_v1(post_base),
+            source.bind_v1(&post_base),
             Err(P256AggregateAdapterErrorV1::Phase)
         ));
         let mut bound = P256MainBoundSourceV1 {
@@ -10049,24 +9923,30 @@ mod tests {
             cross_sources: wallet_sources.try_into().expect("five wallet sources"),
             sink: wallet_sink,
         };
-        ZkX509P256PrivateProductsV1::from_p256_air_terminals_v1(certificate_or_crl, wallet)
+        ZkX509P256PrivateProductsV1::from_p256_air_terminals_v1(&certificate_or_crl, &wallet)
             .expect("canonical private products");
         let mut changed = certificate_or_crl;
         changed[0].cross_sources[1].start[0] = changed[0].cross_sources[1].start[0].add(F::ONE);
-        assert!(ZkX509P256PrivateProductsV1::from_p256_air_terminals_v1(changed, wallet).is_err());
+        assert!(
+            ZkX509P256PrivateProductsV1::from_p256_air_terminals_v1(&changed, &wallet).is_err()
+        );
         let mut changed = certificate_or_crl;
         changed[1].sink[1] = changed[1].sink[1].add(F::ONE);
-        assert!(ZkX509P256PrivateProductsV1::from_p256_air_terminals_v1(changed, wallet).is_err());
+        assert!(
+            ZkX509P256PrivateProductsV1::from_p256_air_terminals_v1(&changed, &wallet).is_err()
+        );
         let mut changed = certificate_or_crl;
         changed[2].buses.value_sorted[2] = changed[2].buses.value_sorted[2].add(F::ONE);
-        assert!(ZkX509P256PrivateProductsV1::from_p256_air_terminals_v1(changed, wallet).is_err());
+        assert!(
+            ZkX509P256PrivateProductsV1::from_p256_air_terminals_v1(&changed, &wallet).is_err()
+        );
         let mut changed_wallet = wallet;
         changed_wallet.cross_sources[4].start[3] =
             changed_wallet.cross_sources[4].start[3].add(F::ONE);
         assert!(
             ZkX509P256PrivateProductsV1::from_p256_air_terminals_v1(
-                certificate_or_crl,
-                changed_wallet,
+                &certificate_or_crl,
+                &changed_wallet,
             )
             .is_err()
         );

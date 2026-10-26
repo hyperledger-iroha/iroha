@@ -76,7 +76,7 @@ fn retail_uid(
 /// ungranted operands are errors. Identity is retained after wallet closure; transfer
 /// availability remains independently enforced by the native settlement kernel.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn same_uid_for_contract(
+pub fn same_uid_for_contract(
     world: &impl WorldReadOnly,
     authority: &AccountId,
     context: &ContractRuntimeExecutionContext,
@@ -130,7 +130,7 @@ pub(crate) fn same_uid_for_contract(
 }
 
 #[cfg(test)]
-pub(crate) mod tests {
+pub mod tests {
     use super::*;
     use crate::{
         kura::Kura,
@@ -145,7 +145,7 @@ pub(crate) mod tests {
     };
     use iroha_model_base::{domain::DomainId, topology::DataSpaceId};
     use std::{collections::BTreeSet, num::NonZeroU64};
-    pub(crate) struct Fixture {
+    pub struct Fixture {
         pub(crate) owner: AccountId,
         pub(crate) source: AccountId,
         pub(crate) destination: AccountId,
@@ -160,10 +160,10 @@ pub(crate) mod tests {
                 .clone(),
         )
     }
-    pub(crate) fn header() -> BlockHeader {
+    pub fn header() -> BlockHeader {
         BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 1_000, 0)
     }
-    pub(crate) fn budget() -> QueryExecutionBudget {
+    pub fn budget() -> QueryExecutionBudget {
         QueryExecutionBudget::from_weighted_limit(10_000_000, 7, 3)
     }
     impl Fixture {
@@ -189,12 +189,16 @@ pub(crate) mod tests {
                 .build(&owner)],
             );
             {
-                let mut parameters = world.parameters.block();
-                parameters
-                    .set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
+                let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
+                    .expect("funded original parameter-only fixture block");
+                crate::state::set_parameter_cell_for_testing(
+                    &mut parameters,
+                    crate::sumeragi::lanes::routing::test_support::metadata(
                         iroha_data_model::block::consensus::SumeragiRootScope::Global,
-                    ))
-                    .unwrap();
+                    ),
+                    world.sccp_committee_generations.allocation_budget(),
+                )
+                .unwrap();
                 parameters.commit();
             }
             let state = State::new_for_testing(
@@ -552,19 +556,19 @@ pub(crate) mod tests {
         tx.world
             .smart_contract_state
             .insert(key.clone(), vec![0xff; 32768]);
-        let mut stats = QueryExecutionStats::default();
+        let mut execution_stats = QueryExecutionStats::default();
         let error = row::<AssetUidBindingV1>(
             tx.world(),
             &key,
             QueryExecutionBudget::from_weighted_limit(512, 7, 3),
-            &mut stats,
+            &mut execution_stats,
         )
         .unwrap_err();
         assert!(matches!(
             error,
             AssetUidHoldingQuoteError::Query(QueryExecutionFail::GasBudgetExceeded)
         ));
-        assert!(stats.processed_bytes() < 32768);
+        assert!(execution_stats.processed_bytes() < 32768);
         let mut bytes = norito::encode_canonical(&f.binding(&f.source, [7; 32])).unwrap();
         bytes.push(0);
         tx.world.smart_contract_state.insert(key, bytes);

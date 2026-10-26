@@ -1,40 +1,67 @@
-// Initial-dispatch fixtures retain the component World and its explicit Nexus,
-// then authenticate an original signed genesis before ordinary H2 execution.
+// Initial-dispatch fixtures begin with a policy-pristine World and explicit Nexus.
+// All mandatory policies are authored into signed genesis before ordinary H2 execution.
 // This grants no authority to a synthetic header or unretained source hash.
-fn original_staking_state(
-    component: State,
-    nexus: iroha_config::parameters::actual::Nexus,
-    mode: iroha_data_model::parameter::system::SumeragiConsensusMode,
-) -> State {
+// Staking admission needs an original NPoS schedule; permissioned genesis
+// deliberately forbids this policy and cannot establish the required authority.
+fn original_npos_staking_state(policy: SumeragiNposParameters) -> State {
     use crate::sumeragi::{
         startup,
         test_chain::{CertifiedTestChain, TestChainConfig},
     };
     use iroha_data_model::parameter::system::{SumeragiConsensusMode, SumeragiParameter};
-    let mut config = TestChainConfig::new(component.world, 0);
-    config.consensus_mode = mode;
-    let npos_epoch_length = if mode == SumeragiConsensusMode::Npos {
-        let policy = config
-            .world
-            .view()
-            .sumeragi_npos_parameters()
-            .expect("fixture policy read completes")
-            .expect("NPoS fixture owns an explicit policy");
-        let length = policy.epoch_length_blocks;
-        config.genesis_parameters.extend([
-            Parameter::Sumeragi(SumeragiParameter::EpochLengthBlocks(length)),
-            Parameter::Custom(policy.into_custom_parameter()),
-        ]);
-        Some(length.get())
+    let (world, mut nexus) = staking_fixture_world_and_nexus();
+    // Match the component fixture's explicitly free fee schedule, but carry it
+    // only as signed author input instead of an initialized World parameter.
+    nexus.fees.base_fee = Quantity::zero();
+    nexus.fees.per_byte_fee = Quantity::zero();
+    nexus.fees.per_instruction_fee = Quantity::zero();
+    nexus.fees.per_gas_unit_fee = Quantity::zero();
+    let mut config = TestChainConfig::new(world, 0);
+    config.consensus_mode = SumeragiConsensusMode::Npos;
+    let length = policy.epoch_length_blocks;
+    // Replace the constructor's one authored staking parameter with this
+    // fixture's exact monetary profile; never remove policy from a live World.
+    assert_eq!(config.genesis_parameters.len(), 1);
+    config.genesis_parameters[0] = Parameter::Custom(
+        committed_staking_fixture_policy()
+            .into_custom_parameter()
+            .expect("valid original staking policy"),
+    );
+    config
+        .genesis_parameters
+        .push(Parameter::Custom(policy.into_custom_parameter()));
+    config
+        .genesis_parameters
+        .push(Parameter::Sumeragi(SumeragiParameter::EpochLengthBlocks(
+            length,
+        )));
+    let fee_parameter = iroha_data_model::parameter::Parameter::Custom(
+        nexus
+            .fees
+            .clone()
+            .into_custom_parameter()
+            .expect("canonical signed fixture fee policy"),
+    );
+    if let Some(slot) = config.genesis_parameters.iter_mut().find(|parameter| {
+        matches!(
+            parameter,
+            iroha_data_model::parameter::Parameter::Custom(value)
+                if value.id() == &iroha_data_model::block::consensus::RootFeePolicy::parameter_id()
+        )
+    }) {
+        *slot = fee_parameter;
     } else {
-        None
-    };
-    config.chain_id = component.chain_id;
+        config.genesis_parameters.push(fee_parameter);
+    }
     config.nexus = Some(nexus);
-    config.governance = Some(component.gov);
     let account = AccountId::new(config.genesis_key.public_key().clone());
     let mode = config.consensus_mode;
     let prepared = CertifiedTestChain::prepare(config).expect("original signed staking genesis");
+    assert_eq!(
+        prepared.genesis.consensus_metadata().mode,
+        SumeragiConsensusMode::Npos,
+        "the retained original signed source establishes the NPoS schedule",
+    );
     let state = std::sync::Arc::try_unwrap(prepared.state)
         .unwrap_or_else(|_| panic!("unpublished staking State is unique"));
     startup::apply_genesis(
@@ -45,11 +72,12 @@ fn original_staking_state(
         None,
     )
     .expect("apply original authenticated staking genesis");
-    if let Some(length) = npos_epoch_length {
-        let (_, authority) = crate::state::validator_committee::current_authority(&state.view())
-            .expect("fixture owns authenticated NPoS scheduling authority");
-        assert_eq!((authority.first_height, authority.last_height), (1, length));
-    }
+    let (_, authority) = crate::state::validator_committee::current_authority(&state.view())
+        .expect("fixture owns authenticated NPoS scheduling authority");
+    assert_eq!(
+        (authority.first_height, authority.last_height),
+        (1, length.get())
+    );
     state
 }
 
@@ -64,21 +92,48 @@ fn original_staking_header(state: &State) -> iroha_data_model::block::BlockHeade
 }
 
 #[test]
+fn staking_genesis_inputs_are_pristine_before_policy_authorship() {
+    let (world, nexus) = staking_fixture_world_and_nexus();
+    let parameters = world.parameters.view();
+    assert!(parameters.get().crypto_policy().is_none());
+    assert!(parameters.get().staking_policy().is_none());
+    assert!(parameters.get().root_fees().is_none());
+    assert!(world.view().sumeragi_npos_parameters().unwrap().is_none());
+    assert!(world.accounts.view().get(&*ALICE_ID).is_some());
+    assert_eq!(nexus.lane_catalog, staking_test_lane_catalog());
+    assert_eq!(nexus.configured_lane_catalog, nexus.lane_catalog);
+    assert_eq!(nexus.configured_dataspace_catalog, nexus.dataspace_catalog);
+    let policy = staking_fixture_npos_policy(6);
+    assert_eq!(policy.epoch_length_blocks.get(), 6);
+    assert_eq!(policy.evidence_horizon_blocks, 1);
+    assert_eq!(policy.slashing_delay_blocks, 1);
+    policy.validate().expect("valid original epoch policy");
+}
+
+#[test]
 fn staking_initial_fixture_owns_original_root_and_retains_epoch_policy() {
-    let mut component = setup_state();
-    set_epoch_length(&mut component, 6);
-    let nexus = component.nexus_snapshot();
-    let original_lanes = nexus.lane_catalog.clone();
-    let state = original_staking_state(
-        component,
-        nexus,
-        iroha_data_model::parameter::system::SumeragiConsensusMode::Permissioned,
-    );
+    let original_lanes = staking_test_lane_catalog();
+    let state = original_npos_staking_state(staking_fixture_npos_policy(6));
     let parent = state
         .view()
         .latest_block_hash()
         .expect("committed original genesis");
     assert_eq!(state.network_id_ref().into_genesis_hash(), parent);
+    assert_eq!(state.view().height(), 1);
+    assert_eq!(state.kura().blocks_count(), 1);
+    assert_eq!(
+        state.view().world().parameters().staking_policy(),
+        Some(&committed_staking_fixture_policy()),
+    );
+    assert_eq!(
+        state
+            .view()
+            .world()
+            .parameters()
+            .require_crypto_policy()
+            .unwrap(),
+        &crate::sumeragi::test_chain::crypto_fixture_policy(),
+    );
     let header = original_staking_header(&state);
     assert_eq!(header.prev_block_hash(), Some(parent));
     let mut block = state.block(header);
@@ -166,20 +221,15 @@ fn signed_candidate(
 
 #[test]
 fn initial_executor_candidate_bonds_after_key_lead_without_joining_current_topology() {
-    let mut state = setup_state();
-    set_epoch_length(&mut state, 6);
-    let nexus = state.nexus_snapshot();
-    let state = original_staking_state(
-        state,
-        nexus,
-        iroha_data_model::parameter::system::SumeragiConsensusMode::Permissioned,
-    );
+    let state = original_npos_staking_state(staking_fixture_npos_policy(6));
     let mut block = state.block(original_staking_header(&state));
     let mut stx = block.transaction_for_callback_testing();
     let (validator, _, escrow, definition) = prepare_accounts(&mut stx);
     let mut consensus = stx.world.parameters.sumeragi().clone();
     consensus.key_activation_lead_blocks = 7;
-    stx.world.parameters.get_mut().set_sumeragi(consensus);
+    stx.world
+        .set_sumeragi_for_testing(consensus)
+        .expect("valid fixture consensus family");
     let peer_key = checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let candidate = signed_candidate(&stx, &validator, &peer_key, 1000, LaneId::new(42));
     let peer = candidate.registration.peer_id.clone();
@@ -253,13 +303,7 @@ fn candidate_rejects_other_authority_tampered_consent_and_invalid_pop() {
 
 #[test]
 fn failed_candidate_transaction_rolls_back_peer_key_and_stake() {
-    let component = setup_state();
-    let nexus = component.nexus_snapshot();
-    let state = original_staking_state(
-        component,
-        nexus,
-        iroha_data_model::parameter::system::SumeragiConsensusMode::Permissioned,
-    );
+    let state = original_npos_staking_state(SumeragiNposParameters::default());
     let mut block = state.block(original_staking_header(&state));
     let (validator, delegator, escrow, definition, nexus) = {
         let mut stx = block.transaction_for_callback_testing();
@@ -290,7 +334,7 @@ fn failed_candidate_transaction_rolls_back_peer_key_and_stake() {
             "the rejected transaction must contain a successful custody write"
         );
         let unauthorized_bond = BondPublicLaneStake {
-            monetary_plan: fixture_bond_plan(&stx, lane, &validator, &delegator, &Quantity::one()),
+            monetary_plan: fixture_bond_plan(&stx, lane, &validator, &delegator, Quantity::one()),
             lane_id: lane,
             validator: validator.clone(),
             staker: delegator.clone(),
@@ -595,10 +639,21 @@ fn candidate_requires_committed_schedule_and_rejects_expired_tenure_consent() {
             .to_string()
             .contains("consent targets activation height")
     );
-    stx.world
-        .parameters
-        .get_mut()
-        .remove_custom_parameter(&SumeragiNposParameters::parameter_id());
+    {
+        // Intentionally missing-policy fixture; retain a complete owned graph
+        // before replacing only this transaction's parameter value.
+        let mut authored = stx.world.parameters.get().get().clone();
+        let removed = authored
+            .remove_custom_parameter(&SumeragiNposParameters::parameter_id())
+            .expect("optional fixture parameter removal");
+        let retained = crate::pipeline_gas_policy::RetainedStateParameters::try_copy_for_testing(
+            &authored,
+            stx.world.sccp_committee_generations.allocation_budget(),
+        )
+        .expect("funded missing-policy fixture");
+        *stx.world.parameters.get_mut() = retained;
+        removed
+    };
     let error = candidate
         .execute(&validator, &mut stx)
         .expect_err("missing committed schedule");
@@ -664,14 +719,15 @@ fn participant_binding_does_not_enter_global_pool_even_with_validator_key() {
 
 #[test]
 fn participant_exit_and_unbonds_keep_reserved_custody_until_liability_ends() {
-    let mut state = setup_state();
+    let mut policy = committed_staking_fixture_policy();
+    policy.min_validator_stake = 1000_u64.into();
+    let mut state = setup_state_with_staking_policy(policy);
     set_epoch_length(&mut state, 6);
     let mut block = state.block(block_header_with_height(2));
     let mut stx = block.transaction_for_callback_testing();
     let (validator, delegator, escrow, definition) = prepare_accounts(&mut stx);
     let lane_id = LaneId::new(42);
-    stx.nexus.staking.min_validator_stake = 1000_u64.into();
-    stx.nexus.staking.unbonding_delay = Duration::ZERO;
+
     RegisterPublicLaneValidator::new(
         lane_id,
         validator.clone(),
@@ -689,7 +745,7 @@ fn participant_exit_and_unbonds_keep_reserved_custody_until_liability_ends() {
             lane_id,
             &(validator.clone()),
             &(delegator.clone()),
-            &(100_u64.into()),
+            Quantity::from(100_u64),
         ),
         lane_id,
         validator: validator.clone(),
@@ -822,7 +878,21 @@ fn self_bond_restores_minimum_without_rewriting_candidate_identity() {
         .peer_id
         .clone();
     // A governance minimum increase may be met by a further exact self bond.
-    stx.nexus.staking.min_validator_stake = 2000_u64.into();
+    let mut successor = stx.staking_monetary_policy().unwrap().clone();
+    successor.min_validator_stake = 2000_u64.into();
+    stx.world
+        .set_parameter_for_testing(Parameter::Custom(
+            successor.into_custom_parameter().unwrap(),
+        ))
+        .unwrap();
+    stx.apply();
+    block.commit_world_overlay_for_testing().unwrap();
+    let mut block = state.block(block_header_with_height(3));
+    let mut stx = block.transaction_for_callback_testing();
+    assert_eq!(
+        stx.staking_monetary_policy().unwrap().min_validator_stake,
+        Quantity::from(2000_u64)
+    );
     BondPublicLaneStake {
         monetary_plan: fixture_bond_plan(
             &stx,

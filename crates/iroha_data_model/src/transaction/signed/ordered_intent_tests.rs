@@ -1663,3 +1663,236 @@ fn capture_signed_attachment_vectors() {
     std::fs::write(&path, signed_attachment_vectors()).expect("write vectors");
     println!("wrote {}", path.display());
 }
+
+#[test]
+fn payload_attachment_validation_preserves_the_actual_original_codec_refusal() {
+    let payload = fixture_payload();
+    let bytes = payload_bytes(&payload);
+    let limits = |allocation| {
+        norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, allocation, usize::MAX)
+    };
+    let context = norito::core::DecodeBudgetContext::new(limits(usize::MAX));
+    let baseline = context
+        .with(|| TransactionBuilder::decode_payload(&bytes))
+        .expect("complete actual payload");
+    assert_eq!(baseline.payload(), &payload);
+    let demand = usize::try_from(context.consumed_allocated_bytes())
+        .expect("measured local demand fits this host");
+    assert!(demand > 0);
+    let error = norito::with_decode_limits_scope(limits(demand - 1), || {
+        norito::core::classify_decode_attempt(|| TransactionBuilder::decode_payload(&bytes))
+    })
+    .unwrap_err();
+    assert_eq!(
+        error.kind(),
+        norito::core::DecodeAttemptErrorKind::EnclosingLimit
+    );
+    assert!(error.local_refusal().is_some());
+    assert!(
+        matches!(error.error().decode_resource_error(), Some(norito::core::DecodeResourceError::TotalAllocationExceeded { attempted, limit }) if attempted > limit)
+    );
+    let direct =
+        norito::with_decode_limits_scope(limits(0), || payload.validate_signed_attachments_v1())
+            .unwrap_err();
+    assert_eq!(
+        direct.into_local_refusal().unwrap().kind(),
+        norito::core::DecodeLocalRefusalKind::EnclosingLimit
+    );
+    let decoded = TransactionBuilder::decode_payload(&bytes).expect("unchanged source retries");
+    assert_eq!(decoded.payload(), &payload);
+}
+
+#[test]
+fn payload_builder_canonicality_adds_no_output_allocation_after_actual_decode() {
+    use crate::amx_prepare_streaming_allocations::measured;
+    use norito::core::DecodeFromSlice;
+
+    let payload = builder(instructions())
+        .into_payload()
+        .expect("ordinary payload");
+    let bytes = payload_bytes(&payload);
+    let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+    // Warm the same actual decoder/encoder paths before measuring allocator calls. Retaining
+    // both returned graphs outside each observation excludes destructor work from the counts.
+    TransactionPayload::decode_from_slice(&bytes).expect("warm payload decoder");
+    TransactionBuilder::decode_payload(&bytes).expect("warm complete builder decoder");
+    let (parsed, parse_requests) = measured(|| TransactionPayload::decode_from_slice(&bytes));
+    let (checked, checked_requests) = measured(|| TransactionBuilder::decode_payload(&bytes));
+    let (parsed, used) = parsed.expect("actual payload decoder");
+    let checked = checked.expect("actual complete builder decoder");
+    assert_eq!(used, bytes.len());
+    assert_eq!(parsed, payload);
+    assert_eq!(checked.payload(), &payload);
+    assert!(parse_requests.iter().any(|count| *count != 0));
+    assert_eq!(
+        checked_requests, parse_requests,
+        "the final exact canonicality comparison must not allocate another payload buffer"
+    );
+}
+
+#[test]
+fn payload_builder_canonicality_keeps_layout_domains_and_exact_input() {
+    use crate::transaction::signed::TransactionSignatureError;
+
+    let ordinary = fixture_payload();
+    let genesis = TransactionBuilder::new_with_time(
+        TransactionDomain::Genesis,
+        authority(),
+        CREATION_TIME_MS,
+        FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([log("genesis canonicality")])
+    .into_payload()
+    .expect("genesis payload");
+    for payload in [ordinary, genesis] {
+        let bytes = norito::codec::Encode::encode(&payload);
+        let original = bytes.clone();
+        let is_genesis = matches!(payload.domain, TransactionDomain::Genesis);
+        let decode = |source: &[u8]| {
+            if is_genesis {
+                TransactionBuilder::decode_genesis_payload(source)
+            } else {
+                TransactionBuilder::decode_payload(source)
+            }
+        };
+        for flags in [0, norito::core::default_encode_flags()] {
+            let _flags = norito::core::DecodeFlagsGuard::enter(flags);
+            let decoded = decode(&bytes).expect("the original fixed-V1 payload");
+            assert_eq!(decoded.payload(), &payload);
+            assert_eq!(decoded.encode_payload(), bytes);
+            assert_eq!(norito::core::effective_decode_flags(), Some(flags));
+            let mut suffixed = bytes.clone();
+            suffixed.push(0);
+            assert!(matches!(
+                decode(&suffixed),
+                Err(norito::Error::LengthMismatch)
+            ));
+            assert_eq!(norito::core::effective_decode_flags(), Some(flags));
+            assert!(decode(&bytes[..bytes.len() - 1]).is_err());
+            assert_eq!(norito::core::effective_decode_flags(), Some(flags));
+            // The domain is the first length-prefixed field. An overlong compact length
+            // preserves its numeric length but must not be accepted as canonical V1 bytes.
+            assert!(bytes[0] < 0x80);
+            let mut overlong = bytes.clone();
+            overlong[0] |= 0x80;
+            overlong.insert(1, 0);
+            assert!(decode(&overlong).is_err());
+            assert_eq!(norito::core::effective_decode_flags(), Some(flags));
+            assert_eq!(decode(&bytes).unwrap().payload(), &payload);
+        }
+        let wrong_domain = if is_genesis {
+            TransactionBuilder::decode_payload(&bytes)
+        } else {
+            TransactionBuilder::decode_genesis_payload(&bytes)
+        }
+        .expect_err("the ordinary and genesis constructors retain distinct domains");
+        let expected = if is_genesis {
+            TransactionSignatureError::GenesisDomainNotAllowed
+        } else {
+            TransactionSignatureError::GenesisDomainRequired
+        };
+        assert!(
+            matches!(wrong_domain, norito::Error::Message(message) if message == expected.to_string())
+        );
+        assert_eq!(bytes, original);
+    }
+}
+
+#[test]
+fn actual_payload_exact_verifier_preserves_count_refusal_and_retries() {
+    use std::cell::Cell;
+
+    // This tests the final verifier itself, after a real payload was built. It is not a
+    // decode-first budget refusal: the finite count writer runs inside the exact comparison.
+    struct Compare<'a> {
+        payload: &'a TransactionPayload,
+        bytes: &'a [u8],
+        entered: &'a Cell<bool>,
+    }
+    impl norito::SerializePayload for Compare<'_> {
+        fn serialize(&self, _writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::Error> {
+            self.entered.set(true);
+            norito::codec::verify_exact_payload(self.payload, self.bytes)
+        }
+    }
+    let payload = fixture_payload();
+    let bytes = payload_bytes(&payload);
+    let original = bytes.clone();
+    let entered = Cell::new(false);
+    let comparison = Compare {
+        payload: &payload,
+        bytes: &bytes,
+        entered: &entered,
+    };
+    let error = norito::core::encoded_payload_len_bounded(&comparison, 0)
+        .expect_err("the real nested counting writer must refuse");
+    assert!(entered.get());
+    assert!(
+        matches!(error, norito::Error::Io(original) if original.kind() == std::io::ErrorKind::Other)
+    );
+    // An I/O kind is not an authenticated decode-budget owner. Do not relabel this failure
+    // as a local decoder refusal; the exact verifier must preserve the writer's actual error.
+    assert_eq!(norito::core::encoded_payload_len(&comparison).unwrap(), 0);
+    norito::codec::verify_exact_payload(&payload, &bytes).expect("unchanged source retries");
+    assert_eq!(bytes, original);
+    assert_eq!(
+        TransactionBuilder::decode_payload(&bytes)
+            .unwrap()
+            .payload(),
+        &payload
+    );
+}
+
+#[test]
+fn payload_builder_second_read_retains_original_cumulative_allocation_refusal() {
+    let payload = fixture_payload();
+    let bytes = payload_bytes(&payload);
+    let original = bytes.clone();
+    let limits = |allocation| {
+        norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, allocation, usize::MAX)
+    };
+    let measured = norito::core::DecodeBudgetContext::new(limits(usize::MAX));
+    let baseline = measured
+        .with(|| TransactionBuilder::decode_payload(&bytes))
+        .expect("measure the complete actual builder read");
+    assert_eq!(baseline.payload(), &payload);
+    let demand = usize::try_from(measured.consumed_allocated_bytes()).unwrap();
+    assert!(demand > 0);
+    let maximum = demand.checked_mul(2).unwrap() - 1;
+    let original_context = norito::core::DecodeBudgetContext::new(limits(maximum));
+    let first = original_context
+        .with(|| TransactionBuilder::decode_payload(&bytes))
+        .expect("the first identical read fits");
+    assert_eq!(first.payload(), &payload);
+    let error = original_context
+        .with(|| {
+            norito::core::classify_decode_attempt(|| TransactionBuilder::decode_payload(&bytes))
+        })
+        .expect_err("the same original cumulative owner refuses the second read");
+    assert_eq!(
+        error.kind(),
+        norito::core::DecodeAttemptErrorKind::EnclosingLimit
+    );
+    assert_eq!(
+        error.local_refusal().unwrap().kind(),
+        norito::core::DecodeLocalRefusalKind::EnclosingLimit
+    );
+    assert!(matches!(
+        error.error(),
+        norito::Error::ScopedDecodeResource(_)
+    ));
+    assert!(matches!(
+        error.error().decode_resource_error(),
+        Some(norito::core::DecodeResourceError::TotalAllocationExceeded { attempted, limit })
+            if limit == maximum as u64 && attempted > limit
+    ));
+    assert_eq!(bytes, original);
+    let fresh = norito::core::DecodeBudgetContext::new(limits(maximum));
+    assert_eq!(
+        fresh
+            .with(|| TransactionBuilder::decode_payload(&bytes))
+            .unwrap()
+            .payload(),
+        &payload
+    );
+}

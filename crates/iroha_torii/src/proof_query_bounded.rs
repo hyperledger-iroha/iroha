@@ -3,7 +3,7 @@
     reason = "HTTP rejections retain the complete Axum response at this transport boundary."
 )]
 fn decode_bounded_proof_query(
-    dto: crate::routing::ProofFindByIdQueryDto,
+    dto: &crate::routing::ProofFindByIdQueryDto,
     envelope: QueryFanoutMemoryEnvelope,
 ) -> Result<SignedQuery, Response> {
     use iroha_data_model::query::{QueryRequest, SingularQueryBox};
@@ -24,10 +24,8 @@ fn decode_bounded_proof_query(
     }
     let padding = if dto.signed_query_b64.ends_with("==") {
         2
-    } else if dto.signed_query_b64.ends_with('=') {
-        1
     } else {
-        0
+        usize::from(dto.signed_query_b64.ends_with('='))
     };
     let decoded_len = (dto.signed_query_b64.len() / 4)
         .checked_mul(3)
@@ -128,7 +126,7 @@ async fn execute_bounded_proof_query(
                 ));
             }
         };
-    let signed = match decode_bounded_proof_query(dto, provisional) {
+    let signed = match decode_bounded_proof_query(&(dto), provisional) {
         Ok(signed) => signed,
         Err(response) => {
             return Ok(hold_query_fanout_memory_in_response_body(
@@ -180,7 +178,7 @@ async fn execute_bounded_proof_query(
         }
     };
     let response =
-        bounded_singular_fanout_response(query_response, format, envelope.final_body_bytes);
+        bounded_singular_fanout_response(&(query_response), format, envelope.final_body_bytes);
     Ok(hold_query_fanout_memory_in_response_body(
         response,
         reservation,

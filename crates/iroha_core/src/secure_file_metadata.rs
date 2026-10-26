@@ -4,15 +4,15 @@
 use std::{fs, io, path::Path};
 
 #[cfg(not(windows))]
-pub(crate) type SecureMetadata = fs::Metadata;
+pub type SecureMetadata = fs::Metadata;
 
 #[cfg(not(windows))]
-pub(crate) fn from_file(file: &fs::File) -> io::Result<SecureMetadata> {
+pub fn from_file(file: &fs::File) -> io::Result<SecureMetadata> {
     file.metadata()
 }
 
 #[cfg(not(windows))]
-pub(crate) fn from_path(path: &Path) -> io::Result<SecureMetadata> {
+pub fn from_path(path: &Path) -> io::Result<SecureMetadata> {
     fs::symlink_metadata(path)
 }
 
@@ -144,7 +144,7 @@ pub(crate) use windows::{SecureMetadata, from_file, from_path};
 
 /// Whether the file has exactly one hard link. Platforms without a stable link count fail closed.
 #[inline]
-pub(crate) fn is_single_link(metadata: &SecureMetadata) -> bool {
+pub fn is_single_link(metadata: &SecureMetadata) -> bool {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt as _;

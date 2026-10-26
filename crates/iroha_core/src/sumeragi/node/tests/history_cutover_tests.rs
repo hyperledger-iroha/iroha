@@ -97,7 +97,7 @@ fn stored_disk() -> Disk {
 }
 
 /// The validators of `chain`, each on its own on-disk store.
-fn stored_disks(chain: &Chain) -> Vec<Disk> {
+fn stored_disks(chain: &NodeTestChain) -> Vec<Disk> {
     (0..chain.keys.len()).map(|_| stored_disk()).collect()
 }
 
@@ -155,7 +155,7 @@ fn assert_canonical_frames(frames: &[Vec<u8>]) {
 /// Rebuild a State from `disk` alone through the production startup path: an empty State, the
 /// `supplied` genesis (a restart supplies none) and no snapshot.
 fn cold_replay(
-    identity: &Chain,
+    identity: &NodeTestChain,
     disk: &Disk,
     supplied: Option<SignedBlock>,
 ) -> (Arc<State>, Result<Prepared, NodeError>) {
@@ -172,6 +172,10 @@ fn cold_replay(
 
 /// Drop a prepared instance and its State once the detached executor thread released it, so the
 /// next startup over the same store is the only owner again.
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "This fixture consumes the final State owner after its executor has physically retired."
+)]
 fn release(state: Arc<State>, prepared: Prepared) {
     drop(prepared);
     await_sole_owner(
@@ -181,7 +185,7 @@ fn release(state: Arc<State>, prepared: Prepared) {
 }
 
 /// Commit `count` blocks of real work on a running four-validator chain.
-fn commit_work(chain: &Chain, validators: &[Validator], label: &str, count: usize) {
+fn commit_work(chain: &NodeTestChain, validators: &[Validator], label: &str, count: usize) {
     for index in 0..count {
         let hash = submit(chain, validators, &format!("{label} {index}"));
         wait_until(
@@ -603,7 +607,7 @@ fn pinned_history_of_an_earlier_build_replays_to_its_pinned_state() {
         pinned.block_hashes,
         "{PINNED_REPLAY_RULE}"
     );
-    let identity = Chain {
+    let identity = NodeTestChain {
         genesis: blocks[0].clone(),
         keys: Vec::new(),
         chain_id: pinned.chain_id.clone(),
@@ -686,7 +690,7 @@ fn pinned_history_of_an_earlier_build_replays_to_its_pinned_state() {
 /// Returns the SHA-256 of the frames in order, which the inventory records.
 fn write_pinned_history(
     dir: &Path,
-    chain: &Chain,
+    chain: &NodeTestChain,
     frames: &[Vec<u8>],
     world_state_root: &str,
     execution_tip: &Value,

@@ -80,7 +80,6 @@ fn publish_configured_catalog_baseline(kura: &Kura, catalog: &LaneCatalog) {
     .expect("publish configured lane catalog baseline");
 }
 
-
 #[cfg(unix)]
 #[test]
 fn configured_primary_open_rejects_store_root_inode_swap_before_block_open() {
@@ -514,14 +513,10 @@ fn canonical_transaction_index_keeps_empty_and_nonempty_resultless_bodies_incomp
             }
             // This is an untrusted storage/index shape control, not execution authority.
             let expected_wire = block.encode_wire().expect("encode exact index test body");
-            let probe = block
-                .network_entrypoints()
-                .cloned()
-                .next()
-                .map(|entry| entry.hash())
-                .unwrap_or_else(|| {
-                    HashOf::from_untyped_unchecked(Hash::new(b"absent index probe"))
-                });
+            let probe = block.network_entrypoints().next().cloned().map_or_else(
+                || HashOf::from_untyped_unchecked(Hash::new(b"absent index probe")),
+                |entry| entry.hash(),
+            );
             let block = share_storage_fixture(block);
             kura.store_block((block).clone())
                 .expect("store canonical body without panicking in the derived index");

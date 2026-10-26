@@ -29,7 +29,11 @@ fn domain_admission_carriers(
             &network,
             Duration::ZERO,
             TransactionParameters::default(),
-            &iroha_config::parameters::actual::Crypto::default(),
+            &iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                iroha_crypto::Algorithm::Ed25519,
+                iroha_crypto::Algorithm::Secp256k1,
+            ])
+            .expect("this stateless fixture explicitly selects Ed25519 and Secp256k1"),
             now,
         )
         .expect("the original signed carrier is accepted in its own network")
@@ -50,7 +54,7 @@ fn assert_preaccepted_foreign_domain_rejected(form: usize) {
         let queue = Queue::test(config_factory(), &time);
         let plan = queue.route_plan_with_state(transaction, &state).unwrap();
         let result = match boundary {
-            0 => queue.push(transaction.clone(), state.view()).map(|_| ()),
+            0 => queue.push(transaction.clone(), state.view()),
             1 => queue
                 .push_with_lane_with_state(transaction.clone(), &state)
                 .map(|_| ()),
@@ -141,13 +145,8 @@ fn queue_rejects_preaccepted_genesis_domain_before_custody() {
     .with_instructions([Log::new(Level::INFO, "genesis-only queue carrier".into())])
     .sign(ALICE_KEYPAIR.private_key());
     let (_, time) = TimeSource::new_mock(signed.creation_time());
-    let genesis = AcceptedTransaction::accept_genesis(
-        signed,
-        Duration::from_secs(1),
-        &authority,
-        &iroha_config::parameters::actual::Crypto::default(),
-    )
-    .expect("the exact signed carrier satisfies genesis-only envelope admission");
+    let genesis = AcceptedTransaction::accept_genesis(signed, Duration::from_secs(1), &authority)
+        .expect("the exact signed carrier satisfies genesis-only envelope admission");
     let original = genesis.entrypoint_bytes();
     let queue = Queue::test(config_factory(), &time);
     let failure = queue

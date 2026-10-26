@@ -1,6 +1,6 @@
 //! Historical certification transcripts with genuine BLS votes and threshold pulses.
 //! These fixtures verify exact BLS quorums and authenticated scheduling transitions.
-//! They do not execute NPoS State transitions or establish monetary qualification.
+//! They do not execute `NPoS` State transitions or establish monetary qualification.
 
 use super::*;
 use crate::state::WorldReadOnly as _;
@@ -306,9 +306,11 @@ fn build_history_with_epoch_length(
     let metadata = iroha_genesis::signed_genesis_consensus_metadata(&genesis).unwrap();
     let routing_world = World::new();
     {
-        let mut parameters = routing_world.parameters.block();
-        parameters
-            .set_parameter(iroha_data_model::parameter::Parameter::Custom(
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&routing_world)
+            .expect("funded fixture parameter cell");
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            iroha_data_model::parameter::Parameter::Custom(
                 iroha_data_model::parameter::custom::CustomParameter::new(
                     iroha_data_model::parameter::system::consensus_metadata::handshake_meta_id(),
                     iroha_primitives::json::Json::from_norito_value_ref(
@@ -316,8 +318,10 @@ fn build_history_with_epoch_length(
                     )
                     .unwrap(),
                 ),
-            ))
-            .expect("valid fixture parameters");
+            ),
+            routing_world.sccp_committee_generations.allocation_budget(),
+        )
+        .expect("valid fixture parameters");
         parameters.commit();
     }
     assert_eq!(
@@ -381,7 +385,11 @@ fn build_history_with_epoch_length(
             &network,
             Duration::from_secs(1),
             world.view().world().parameters().transaction(),
-            &iroha_config::parameters::actual::Crypto::default(),
+            &iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                iroha_crypto::Algorithm::Ed25519,
+                iroha_crypto::Algorithm::Secp256k1,
+            ])
+            .expect("this stateless fixture explicitly selects Ed25519 and Secp256k1"),
             &time_source,
         )
         .unwrap();

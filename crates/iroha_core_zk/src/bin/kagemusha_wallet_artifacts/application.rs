@@ -7,7 +7,7 @@ use iroha_core_zk::kagemusha_wallet_artifacts_v1::{
 };
 use norito::json::Value;
 
-pub(super) const RUNTIME_MAX: usize = 128 << 10;
+pub const RUNTIME_MAX: usize = 128 << 10;
 const APP_MAX: usize = 8 << 20;
 const ENVELOPE_MAX: usize = 2048;
 const DOMAIN: &str = "iroha.kagemusha.wallet-application-release.v1";
@@ -36,7 +36,7 @@ struct Apple {
 }
 #[derive(JsonDeserialize)]
 #[norito(deny_unknown_fields)]
-struct Controls {
+struct EnrollmentPolicy {
     permitted_controls: u32,
     time_anchor_max_response_ms: u64,
     challenge_lifetime_ms: u64,
@@ -45,7 +45,7 @@ struct Controls {
 /// Public session authority inputs. No token, secret or hardware verdict belongs here.
 #[derive(JsonDeserialize)]
 #[norito(deny_unknown_fields)]
-pub(super) struct Authority {
+pub struct Authority {
     pub(super) issuer: String,
     pub(super) audience: String,
     pub(super) request_origin: String,
@@ -74,19 +74,19 @@ struct Prepare {
     transport: OriginalInput,
     android: Android,
     apple: Apple,
-    controls: Controls,
+    controls: EnrollmentPolicy,
     sessions: Vec<Authority>,
     output_parent: String,
     output_name: String,
 }
 
-pub(super) fn text_valid(value: &str, maximum: usize) -> bool {
+pub fn text_valid(value: &str, maximum: usize) -> bool {
     !value.is_empty()
         && value.len() <= maximum
         && value.trim() == value
         && !value.chars().any(char::is_control)
 }
-pub(super) fn origin_valid(origin: &str) -> bool {
+pub fn origin_valid(origin: &str) -> bool {
     let Some(authority) = origin.strip_prefix("https://") else {
         return false;
     };
@@ -133,14 +133,14 @@ pub(super) fn origin_valid(origin: &str) -> bool {
                 && p.parse::<u16>().is_ok_and(|p| p > 0)
         })
 }
-pub(super) fn path_valid(path: &str) -> bool {
+pub fn path_valid(path: &str) -> bool {
     text_valid(path, 1024)
         && path.starts_with('/')
         && !path.starts_with("//")
         && !path.contains(['?', '#', '\\'])
         && !path.split('/').any(|v| matches!(v, "." | ".."))
 }
-pub(super) fn canonical(value: &Value, maximum: usize) -> io::Result<Vec<u8>> {
+pub fn canonical(value: &Value, maximum: usize) -> io::Result<Vec<u8>> {
     let mut bytes = checked(
         json::to_json_bounded(value, maximum.saturating_sub(1)),
         "JSON bound",
@@ -149,7 +149,7 @@ pub(super) fn canonical(value: &Value, maximum: usize) -> io::Result<Vec<u8>> {
     bytes.push(b'\n');
     Ok(bytes)
 }
-pub(super) fn parse(bytes: &[u8], maximum: usize, require_canonical: bool) -> io::Result<Value> {
+pub fn parse(bytes: &[u8], maximum: usize, require_canonical: bool) -> io::Result<Value> {
     if bytes.is_empty() || bytes.len() > maximum {
         return Err(invalid("JSON bound"));
     }
@@ -168,7 +168,7 @@ pub(super) fn parse(bytes: &[u8], maximum: usize, require_canonical: bool) -> io
     }
     Ok(value)
 }
-pub(super) fn input(
+pub fn input(
     input: &OriginalInput,
     maximum: usize,
     held: &mut Vec<Original>,
@@ -178,13 +178,13 @@ pub(super) fn input(
     held.push(original);
     Ok(bytes)
 }
-pub(super) fn recheck(held: &[Original]) -> io::Result<()> {
+pub fn recheck(held: &[Original]) -> io::Result<()> {
     for original in held {
         original.recheck()?;
     }
     Ok(())
 }
-pub(super) fn output(parent: &str, name: &str) -> io::Result<PrivateDirectory> {
+pub fn output(parent: &str, name: &str) -> io::Result<PrivateDirectory> {
     if name.is_empty()
         || name.len() > 128
         || !name
@@ -243,7 +243,7 @@ fn authority(
 fn policy(
     app: &KagemushaWalletAppPolicyV1,
     platform: KagemushaWalletEnrollmentPlatformV1,
-    controls: &Controls,
+    controls: &EnrollmentPolicy,
 ) -> io::Result<Vec<u8>> {
     let template = KagemushaWalletEnrollmentPolicyTemplateV1 {
         version: 1,
@@ -260,11 +260,14 @@ fn policy(
     checked(template.validate_for_app(app), "platform template mismatch")?;
     checked(template.encode_canonical(), "canonical enrollment template")
 }
+/// Canonical platform policies and their named evidence payloads.
+type PlatformData = (Value, Value, Vec<(String, Vec<u8>)>);
+
 fn platform_data(
     request: &Prepare,
     scheme_id: [u8; 32],
     held: &mut Vec<Original>,
-) -> io::Result<(Value, Value, Vec<(String, Vec<u8>)>)> {
+) -> io::Result<PlatformData> {
     if !(1..=4).contains(&request.android.signing_certificates_der.len())
         || !(1..=8).contains(&request.android.roots.len())
     {
@@ -274,7 +277,7 @@ fn platform_data(
     for original in &request.android.signing_certificates_der {
         signers.push(BlobV1::of(&input(original, 16_384, held)?).sha256);
     }
-    signers.sort();
+    signers.sort_unstable();
     let android = KagemushaWalletAppPolicyV1 {
         version: 1,
         scheme_id,
@@ -376,13 +379,13 @@ fn transport_closure(
 fn blob(bytes: &[u8]) -> Value {
     norito::json!({"bytes":(bytes.len()),"sha256":(hex::encode(BlobV1::of(bytes).sha256))})
 }
-pub(super) fn signing_message(manifest: &[u8]) -> Vec<u8> {
+pub fn signing_message(manifest: &[u8]) -> Vec<u8> {
     let mut message = DOMAIN.as_bytes().to_vec();
     message.push(0);
     message.extend_from_slice(manifest);
     message
 }
-pub(super) fn prepare(path: &str) -> io::Result<()> {
+pub fn prepare(path: &str) -> io::Result<()> {
     let source = Original::open(path, REQUEST_MAX, None)?;
     parse(&source.bytes, REQUEST_MAX, false)?;
     let request: Prepare = checked(
@@ -665,7 +668,7 @@ fn envelope(manifest: &[u8], signature: &[u8], public: [u8; 32]) -> io::Result<V
         ENVELOPE_MAX,
     )
 }
-pub(super) fn finish(path: &str) -> io::Result<()> {
+pub fn finish(path: &str) -> io::Result<()> {
     let source = Original::open(path, REQUEST_MAX, None)?;
     parse(&source.bytes, REQUEST_MAX, false)?;
     let request: Finish = checked(

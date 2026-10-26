@@ -37,13 +37,13 @@
 use super::{Canonical, CanonicalLayout, Field, Role, Schema};
 
 /// Domain tag of [`StateSchema::canonical_bytes`].
-pub(crate) const SCHEMA_DOMAIN: &[u8] = b"iroha:state-keyed-commitment:schema:v1\0";
+pub const SCHEMA_DOMAIN: &[u8] = b"iroha:state-keyed-commitment:schema:v1\0";
 
 /// Byte length of every keyed State root, whatever the construction.
-pub(crate) const ROOT_BYTES: usize = 32;
+pub const ROOT_BYTES: usize = 32;
 
 /// The only key of a cell: a cell is the single entry at the empty key of its table.
-pub(crate) const CELL_KEY: &[u8] = &[];
+pub const CELL_KEY: &[u8] = &[];
 
 /// Root of the keyed State commitment: 32 opaque bytes fixed by the construction.
 ///
@@ -55,7 +55,7 @@ pub(crate) const CELL_KEY: &[u8] = &[];
 /// is not 32 bytes commits a normalisation hash of it; G.2 measures and G.3 freezes
 /// that encoding. A marker-setting `Hash` conversion is never used.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct KeyedStateRoot(pub(crate) [u8; ROOT_BYTES]);
+pub struct KeyedStateRoot(pub(crate) [u8; ROOT_BYTES]);
 
 impl KeyedStateRoot {
     /// The Norito payload of a root field: exactly [`ROOT_BYTES`] raw bytes with all 256
@@ -76,7 +76,7 @@ impl KeyedStateRoot {
 
 /// Whether a committed identity is a keyed table or a singleton cell.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) enum TableShape {
+pub enum TableShape {
     /// Zero or more entries under canonical key bytes.
     Table,
     /// At most one entry, at [`CELL_KEY`].
@@ -95,7 +95,7 @@ impl TableShape {
 
 /// One committed table or cell: its registry identity and codec identities.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct TableDescriptor {
+pub struct TableDescriptor {
     id: String,
     shape: TableShape,
     key_schema: String,
@@ -150,7 +150,7 @@ impl TableDescriptor {
 
 /// A schema that cannot be committed.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
-pub(crate) enum SchemaError {
+pub enum SchemaError {
     /// A table identity is empty.
     #[error("keyed State schema has an empty table identity")]
     EmptyIdentity,
@@ -176,7 +176,7 @@ pub(crate) enum SchemaError {
 /// Tables are held in the canonical order: ascending bytes of their identities.
 /// That order is the table order of every root, range and result layout.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct StateSchema {
+pub struct StateSchema {
     tables: Vec<TableDescriptor>,
 }
 
@@ -342,7 +342,7 @@ fn collect_registry(
 ///
 /// `norito:<nominal name>@<major>.<minor>.<flags>` for a declared Norito type and
 /// `semantic:<identity>@<major>.<minor>.<flags>` for a semantic projection.
-pub(crate) fn codec_identity(field: &'static str, schema: Schema) -> Result<String, SchemaError> {
+pub fn codec_identity(field: &'static str, schema: Schema) -> Result<String, SchemaError> {
     let (kind, identity, layout): (&str, std::borrow::Cow<'static, str>, CanonicalLayout) =
         match schema {
             Schema::Norito {
@@ -362,7 +362,7 @@ pub(crate) fn codec_identity(field: &'static str, schema: Schema) -> Result<Stri
 
 /// One committed entry: canonical key and value bytes inside one table.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Entry<'a> {
+pub struct Entry<'a> {
     /// Canonical key bytes ([`CELL_KEY`] for a cell).
     pub(crate) key: &'a [u8],
     /// Canonical value bytes; an empty value is present, never absent.
@@ -371,7 +371,7 @@ pub(crate) struct Entry<'a> {
 
 /// One net change of a block: the value after the block, or `None` when the key is absent.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Change<'a> {
+pub struct Change<'a> {
     /// Registry identity of the table or cell.
     pub(crate) table: &'a str,
     /// Canonical key bytes ([`CELL_KEY`] for a cell).
@@ -385,7 +385,7 @@ pub(crate) struct Change<'a> {
 /// Keys are compared as byte strings. `lower` is inclusive; `upper` is exclusive and
 /// `None` is unbounded, so `KeyRange::FULL` is the complete table.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct KeyRange<'a> {
+pub struct KeyRange<'a> {
     /// Inclusive lower bound; the empty string is the start of the table.
     pub(crate) lower: &'a [u8],
     /// Exclusive upper bound; `None` is the end of the table.
@@ -429,7 +429,7 @@ impl<'a> KeyRange<'a> {
 /// `[p, prefix_upper_bound(p))` for the exact leading bytes `p` that the key encoding
 /// emits for those components, framing included. The bare encoding of a component
 /// alone is not that prefix.
-pub(crate) fn prefix_upper_bound(prefix: &[u8]) -> Option<Vec<u8>> {
+pub fn prefix_upper_bound(prefix: &[u8]) -> Option<Vec<u8>> {
     let last = prefix.iter().rposition(|byte| *byte != u8::MAX)?;
     let mut upper = prefix[..=last].to_vec();
     upper[last] += 1;
@@ -442,7 +442,7 @@ pub(crate) fn prefix_upper_bound(prefix: &[u8]) -> Option<Vec<u8>> {
 /// truncated encodings and trailing bytes are rejected, and every byte counts toward
 /// the carried witness caps of a transaction. Proofs need not be non-malleable.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Witness(Vec<u8>);
+pub struct Witness(Vec<u8>);
 
 impl Witness {
     /// Wrap witness bytes received from a transaction or produced by a prover.
@@ -458,7 +458,7 @@ impl Witness {
 
 /// A statement that is ill-formed before any commitment is consulted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
-pub(crate) enum StatementError {
+pub enum StatementError {
     /// The table identity is not declared by the schema.
     #[error("the keyed State schema does not declare this table")]
     UnknownTable,
@@ -481,7 +481,7 @@ pub(crate) enum StatementError {
 /// A local failure is never a verdict about a transaction: the caller retries or
 /// defers. Verification has no such outcome.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
-pub(crate) enum LocalFailure {
+pub enum LocalFailure {
     /// A local memory or work budget refused the operation.
     #[error("local resources were refused")]
     Resources,
@@ -492,7 +492,7 @@ pub(crate) enum LocalFailure {
 
 /// A change set that was refused; the commitment is unchanged (K10).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
-pub(crate) enum UpdateError {
+pub enum UpdateError {
     /// A change addresses an undeclared table or a cell under a nonempty key.
     #[error("invalid keyed State change: {0}")]
     Statement(#[from] StatementError),
@@ -506,7 +506,7 @@ pub(crate) enum UpdateError {
 
 /// A witness that the prover cannot produce.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
-pub(crate) enum ProveError {
+pub enum ProveError {
     /// The statement is ill-formed.
     #[error("invalid keyed State statement: {0}")]
     Statement(#[from] StatementError),
@@ -525,7 +525,7 @@ pub(crate) enum ProveError {
 ///
 /// Verification has no local-failure outcome: it is a pure function of its inputs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
-pub(crate) enum Rejection {
+pub enum Rejection {
     /// The statement is ill-formed.
     #[error("invalid keyed State statement: {0}")]
     Statement(#[from] StatementError),
@@ -542,7 +542,7 @@ pub(crate) enum Rejection {
 /// An implementation owns the committed entries (or their digests) of one State
 /// version and answers the three statement kinds against its root. The contract
 /// (`specs/sumeragi.md` §16.4, K1..K12) is checked by `conformance::check_contract`.
-pub(crate) trait KeyedStateCommitment: Sized {
+pub trait KeyedStateCommitment: Sized {
     /// Stable identity of the construction and its parameters, recorded with every
     /// measurement (for example `reference-oracle/v1`).
     const CONSTRUCTION: &'static str;
@@ -627,8 +627,8 @@ pub(crate) trait KeyedStateCommitment: Sized {
 #[cfg(all(test, feature = "state-commitment-prototypes"))]
 mod candidates_tests;
 #[cfg(test)]
-pub(crate) mod conformance;
+pub mod conformance;
 #[cfg(test)]
-pub(crate) mod reference;
+pub mod reference;
 #[cfg(test)]
 mod tests;

@@ -73,6 +73,10 @@ impl PublicFile {
 
 #[derive(Clone, Debug, JsonDeserialize, JsonSerialize)]
 #[norito(deny_unknown_fields)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "The canonical peer report schema names its authenticated identity peer_id."
+)]
 struct Peer {
     role: u8,
     peer_id: PeerId,
@@ -145,11 +149,11 @@ fn identity(metadata: &std::fs::Metadata) -> Result<[u64; 9]> {
         metadata.len(),
         u64::try_from(metadata.mtime())?
             .checked_mul(1_000_000_000)
-            .and_then(|s| s.checked_add(metadata.mtime_nsec() as u64))
+            .and_then(|s| s.checked_add(u64::try_from(metadata.mtime_nsec()).ok()?))
             .ok_or_else(|| eyre!("public input mtime is invalid"))?,
         u64::try_from(metadata.ctime())?
             .checked_mul(1_000_000_000)
-            .and_then(|s| s.checked_add(metadata.ctime_nsec() as u64))
+            .and_then(|s| s.checked_add(u64::try_from(metadata.ctime_nsec()).ok()?))
             .ok_or_else(|| eyre!("public input ctime is invalid"))?,
     ])
 }
@@ -276,7 +280,7 @@ impl HeldPublic {
             "retained public input metadata changed"
         );
         let mut offset = 0;
-        let mut buffer = [0u8; 65536];
+        let mut buffer = vec![0u8; 65536];
         let mut digest = Sha256::new();
         loop {
             let read = self.file.read_at(&mut buffer, offset)?;
@@ -373,6 +377,10 @@ fn verify_manifest_identity(
 }
 
 #[derive(JsonSerialize)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "The report exposes independent observed and configured identity facts."
+)]
 struct Report {
     schema: &'static str,
     request_sha256: String,
@@ -435,7 +443,7 @@ pub(super) fn run(context: &mut impl RunContext, args: Args) -> Result<()> {
                     .torii_api_url
                     .as_str()
                     .strip_suffix('/')
-                    .unwrap_or(context.config().torii_api_url.as_str())
+                    .unwrap_or_else(|| context.config().torii_api_url.as_str())
                     == request.torii_url,
             "configured public network, chain, discriminant or route differs from independent request"
         );
@@ -809,17 +817,39 @@ mod tests {
 
     #[test]
     fn genesis_discriminant_must_match_the_independent_request() {
+        let _author = iroha_data_model::account::address::ChainDiscriminantGuard::enter(369);
+        let fees = iroha_config::parameters::defaults::nexus::fees::genesis_policy();
+        let staking = iroha_genesis::default_staking_policy(
+            fees.fee_asset_id,
+            fees.fee_sink_account_id.clone(),
+            fees.fee_sink_account_id,
+        );
         let fixture = NativeFinalityFixture::new();
         let manifest = iroha_genesis::GenesisBuilder::new_without_executor(
             fixture.chain_id().parse().unwrap(),
             ".",
+            iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                iroha_crypto::Algorithm::Ed25519,
+                iroha_crypto::Algorithm::Secp256k1,
+                iroha_crypto::Algorithm::BlsNormal,
+            ])
+            .expect("explicit canonical genesis producer policy"),
         )
+        .with_staking_policy(staking.clone())
+        .expect("explicit fixture staking policy")
         .with_sumeragi_context_parameters(
             iroha_data_model::block::consensus::SumeragiGenesisContextParameters::recommended(),
         )
         .build_raw()
         .unwrap()
         .with_chain_discriminant(369);
+        assert_eq!(
+            iroha_data_model::block::consensus::PublicLaneStakingPolicy::from_parameters(
+                &manifest.effective_parameters().unwrap()
+            )
+            .unwrap(),
+            staking
+        );
         verify_manifest_identity(&manifest, fixture.chain_id(), 369).unwrap();
         assert!(verify_manifest_identity(&manifest, fixture.chain_id(), 753).is_err());
         assert!(verify_manifest_identity(&manifest, "foreign chain", 369).is_err());

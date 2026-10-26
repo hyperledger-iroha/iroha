@@ -32,7 +32,7 @@ fn default_synthetic_clock_executes_original_amx_due_work_at_its_signed_time() {
 #[test]
 fn explicit_fixture_clock_preserves_parent_due_work_refusal_and_original_retry() {
     let (clock, source) = TimeSource::new_mock(Duration::from_millis(2_000));
-    let mut roots = Roots::new_with_time_source(source.clone());
+    let mut roots = Roots::new_with_time_source(&source);
     let transaction = roots.transaction(100, 0xC9);
     let tx = transaction.id().unwrap();
     let lag = roots

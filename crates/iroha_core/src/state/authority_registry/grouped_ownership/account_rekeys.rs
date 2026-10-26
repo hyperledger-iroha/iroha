@@ -326,13 +326,13 @@ pub(in crate::state) fn validate_original_account_rekeys(
                 let predecessors = funded_predecessors(record, image, work)?;
                 if contains_account(predecessors.iter(), account, work)? {
                     work.prepay(1)?;
-                    if let Some(previous) = target {
-                        if !equal(previous, &record.active_account_id, work)? {
-                            return Err(source(
-                                image,
-                                "active rekey predecessor has ambiguous targets",
-                            ));
-                        }
+                    if let Some(previous) = target
+                        && !equal(previous, &record.active_account_id, work)?
+                    {
+                        return Err(source(
+                            image,
+                            "active rekey predecessor has ambiguous targets",
+                        ));
                     }
                     target = Some(&record.active_account_id);
                 }

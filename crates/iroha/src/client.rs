@@ -29440,7 +29440,7 @@ mod tests {
             &store,
             json_response(StatusCode::OK, "{}"),
         )));
-        client
+        let _ = client
             .with_request_deadline(std::time::Instant::now())
             .with_test_http_transport(transport)
             .post_contract_deployment_state(&alias)

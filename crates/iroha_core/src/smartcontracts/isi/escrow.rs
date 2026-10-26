@@ -190,6 +190,7 @@ fn reject_reserved_native_escrow_id(escrow_id: &EscrowId) -> Result<(), Error> {
     reject_reserved_orderbook_escrow_id(escrow_id)?;
     reject_reserved_controlled_asset_lock_id(escrow_id)
 }
+#[derive(Clone, Copy)]
 enum AssetLockNamespace {
     Generic,
     Orderbook,
@@ -544,8 +545,7 @@ fn validate_native_orderbook_lock_record(
         .world
         .assets
         .get(&resolved_custody_asset)
-        .map(|value| value.as_ref().clone())
-        .unwrap_or_else(Quantity::zero);
+        .map_or_else(Quantity::zero, |value| value.as_ref().clone());
     if custody_balance != record.remaining_amount {
         return Err(validation_err(
             "native orderbook custody balance does not match its asset-lock record",
@@ -641,7 +641,7 @@ fn close_native_orderbook_asset_lock(
         transfer_numeric_asset_for_escrow(
             state_transaction,
             VerifiedNativeEscrowMovement::retained(
-                record.id.clone(),
+                record.id,
                 custody_asset,
                 seller_asset,
                 record.remaining_amount.clone(),
@@ -656,7 +656,7 @@ fn close_native_orderbook_asset_lock(
         };
         state_transaction
             .world
-            .insert_asset_escrow_entry(record.clone())?;
+            .insert_asset_escrow_entry(&(record.clone()))?;
         let event = match close {
             NativeOrderbookClose::Cancelled => EscrowEvent::Cancelled(record.clone()),
             NativeOrderbookClose::Expired => EscrowEvent::Expired(record.clone()),
@@ -898,8 +898,8 @@ pub(crate) fn partition_orderbook_asset_lock(
     let transfer = transfer_numeric_asset_for_escrow(
         state_transaction,
         VerifiedNativeEscrowMovement::custody_partition(
-            parent.id.clone(),
-            child_id.clone(),
+            parent.id,
+            child_id,
             source,
             destination,
             amount.clone(),
@@ -943,10 +943,10 @@ pub(crate) fn partition_orderbook_asset_lock(
     };
     state_transaction
         .world
-        .insert_asset_escrow_entry(parent.clone())?;
+        .insert_asset_escrow_entry(&(parent.clone()))?;
     state_transaction
         .world
-        .insert_asset_escrow_entry(child.clone())?;
+        .insert_asset_escrow_entry(&(child.clone()))?;
     mark_orderbook_channel_lock(state_transaction, &child.id)?;
     state_transaction.world.emit_events([
         EscrowEvent::Released(parent.clone()),
@@ -1111,17 +1111,13 @@ pub(crate) fn settle_orderbook_asset_lock(
             .world
             .assets
             .get(destination_id)
-            .map(|value| value.as_ref().clone())
-            .unwrap_or_else(Quantity::zero);
+            .map_or_else(Quantity::zero, |value| value.as_ref().clone());
         destination_balance
             .checked_add(amount)
             .map_err(|_| validation_err("orderbook settlement destination balance overflow"))?;
     }
-    let authorization = VerifiedNativeEscrowBatch::orderbook_settlement(
-        record.id.clone(),
-        authority.clone(),
-        plans,
-    );
+    let authorization =
+        VerifiedNativeEscrowBatch::orderbook_settlement(record.id, authority.clone(), plans);
     crate::smartcontracts::isi::asset::isi::execute_verified_native_escrow_batch(
         state_transaction,
         authorization,
@@ -1133,7 +1129,7 @@ pub(crate) fn settle_orderbook_asset_lock(
     }
     state_transaction
         .world
-        .insert_asset_escrow_entry(record.clone())?;
+        .insert_asset_escrow_entry(&(record.clone()))?;
     state_transaction
         .world
         .emit_events(Some(EscrowEvent::Released(record.clone())));
@@ -1310,7 +1306,7 @@ impl Execute for OpenAssetEscrow {
         let transfer_result = transfer_numeric_asset_for_escrow(
             state_transaction,
             VerifiedNativeEscrowMovement::funding(
-                self.escrow_id.clone(),
+                self.escrow_id,
                 authority.clone(),
                 seller_asset,
                 custody_asset,
@@ -1344,7 +1340,7 @@ impl Execute for OpenAssetEscrow {
         };
         state_transaction
             .world
-            .insert_asset_escrow_entry(record.clone())?;
+            .insert_asset_escrow_entry(&(record.clone()))?;
         state_transaction
             .world
             .emit_events(Some(EscrowEvent::Opened(record)));
@@ -1378,7 +1374,7 @@ impl Execute for AcceptAssetEscrow {
         record.accepted_at_ms = Some(state_transaction.block_unix_timestamp_ms());
         state_transaction
             .world
-            .insert_asset_escrow_entry(record.clone())?;
+            .insert_asset_escrow_entry(&(record.clone()))?;
         state_transaction
             .world
             .emit_events(Some(EscrowEvent::Accepted(record)));
@@ -1410,7 +1406,7 @@ impl Execute for MarkEscrowPaymentSent {
         record.payment_sent_at_ms = Some(state_transaction.block_unix_timestamp_ms());
         state_transaction
             .world
-            .insert_asset_escrow_entry(record.clone())?;
+            .insert_asset_escrow_entry(&(record.clone()))?;
         state_transaction
             .world
             .emit_events(Some(EscrowEvent::PaymentSent(record)));
@@ -1447,7 +1443,7 @@ impl Execute for ReleaseAssetEscrow {
         transfer_numeric_asset_for_escrow(
             state_transaction,
             VerifiedNativeEscrowMovement::retained(
-                record.id.clone(),
+                record.id,
                 escrow_asset,
                 buyer_asset,
                 record.amount.clone(),
@@ -1458,7 +1454,7 @@ impl Execute for ReleaseAssetEscrow {
         record.closed_at_ms = Some(state_transaction.block_unix_timestamp_ms());
         state_transaction
             .world
-            .insert_asset_escrow_entry(record.clone())?;
+            .insert_asset_escrow_entry(&(record.clone()))?;
         state_transaction
             .world
             .emit_events(Some(EscrowEvent::Released(record)));
@@ -1496,7 +1492,7 @@ impl Execute for CancelAssetEscrow {
         transfer_numeric_asset_for_escrow(
             state_transaction,
             VerifiedNativeEscrowMovement::retained(
-                record.id.clone(),
+                record.id,
                 escrow_asset,
                 seller_asset,
                 record.amount.clone(),
@@ -1507,7 +1503,7 @@ impl Execute for CancelAssetEscrow {
         record.closed_at_ms = Some(state_transaction.block_unix_timestamp_ms());
         state_transaction
             .world
-            .insert_asset_escrow_entry(record.clone())?;
+            .insert_asset_escrow_entry(&(record.clone()))?;
         state_transaction
             .world
             .emit_events(Some(EscrowEvent::Cancelled(record)));
@@ -1551,7 +1547,7 @@ impl Execute for OpenEscrowDispute {
             .extend(self.evidence_hashes.iter().copied());
         state_transaction
             .world
-            .insert_asset_escrow_entry(record.clone())?;
+            .insert_asset_escrow_entry(&(record.clone()))?;
         state_transaction
             .world
             .emit_events(Some(EscrowEvent::Disputed(AssetEscrowDisputed {
@@ -1594,7 +1590,7 @@ impl Execute for ResolveEscrowDispute {
             transfer_numeric_asset_for_escrow(
                 state_transaction,
                 VerifiedNativeEscrowMovement::retained(
-                    record.id.clone(),
+                    record.id,
                     escrow_asset.clone(),
                     buyer_asset,
                     self.buyer_amount.clone(),
@@ -1606,7 +1602,7 @@ impl Execute for ResolveEscrowDispute {
             transfer_numeric_asset_for_escrow(
                 state_transaction,
                 VerifiedNativeEscrowMovement::retained(
-                    record.id.clone(),
+                    record.id,
                     escrow_asset.clone(),
                     seller_asset,
                     self.seller_amount.clone(),
@@ -1626,7 +1622,7 @@ impl Execute for ResolveEscrowDispute {
         });
         state_transaction
             .world
-            .insert_asset_escrow_entry(record.clone())?;
+            .insert_asset_escrow_entry(&(record.clone()))?;
         state_transaction
             .world
             .emit_events(Some(EscrowEvent::Resolved(AssetEscrowResolved {
@@ -1692,7 +1688,7 @@ fn execute_open_asset_lock(
     let transfer_result = transfer_numeric_asset_for_escrow(
         state_transaction,
         VerifiedNativeEscrowMovement::funding(
-            instruction.escrow_id.clone(),
+            instruction.escrow_id,
             authority.clone(),
             source_asset,
             custody_asset,
@@ -1726,7 +1722,7 @@ fn execute_open_asset_lock(
     };
     state_transaction
         .world
-        .insert_asset_escrow_entry(record.clone())?;
+        .insert_asset_escrow_entry(&(record.clone()))?;
     state_transaction
         .world
         .emit_events(Some(EscrowEvent::Opened(record)));
@@ -1752,15 +1748,18 @@ impl Execute for DrawdownAssetLock {
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        execute_drawdown_asset_lock(self, authority, state_transaction, false, None)
+        execute_drawdown_asset_lock(&(self), authority, state_transaction, false, None)
     }
 }
 fn execute_drawdown_asset_lock(
-    instruction: DrawdownAssetLock,
+    instruction: &DrawdownAssetLock,
     authority: &AccountId,
     state_transaction: &mut StateTransaction<'_, '_>,
     controlled: bool,
-    waterfall: Option<(&iroha_data_model::escrow::control::AssetLockWaterfallSettlementV1, &crate::executor::ContractRuntimeExecutionContext)>,
+    waterfall: Option<(
+        &iroha_data_model::escrow::control::AssetLockWaterfallSettlementV1,
+        &crate::executor::ContractRuntimeExecutionContext,
+    )>,
 ) -> Result<(), Error> {
     if !controlled {
         controlled::reject_generic_mutation(state_transaction.world(), &instruction.escrow_id)?;
@@ -1808,14 +1807,21 @@ fn execute_drawdown_asset_lock(
         .clone()
         .ok_or_else(|| validation_err("lock destination missing"))?;
     if let Some((pins, context)) = waterfall {
-        controlled_waterfall::transfer(state_transaction, &record, &destination, &instruction.amount, pins, context)?;
+        controlled_waterfall::transfer(
+            state_transaction,
+            &record,
+            &destination,
+            &instruction.amount,
+            pins,
+            context,
+        )?;
     } else {
         let custody_asset = custody_asset(&record);
         let destination_asset = party_asset(&record, &destination);
         transfer_numeric_asset_for_escrow(
             state_transaction,
             VerifiedNativeEscrowMovement::retained(
-                record.id.clone(),
+                record.id,
                 custody_asset,
                 destination_asset,
                 instruction.amount.clone(),
@@ -1832,7 +1838,7 @@ fn execute_drawdown_asset_lock(
     }
     state_transaction
         .world
-        .insert_asset_escrow_entry(record.clone())?;
+        .insert_asset_escrow_entry(&(record.clone()))?;
     state_transaction
         .world
         .emit_events(Some(EscrowEvent::Released(record)));
@@ -1844,15 +1850,18 @@ impl Execute for CancelAssetLock {
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        execute_cancel_asset_lock(self, authority, state_transaction, false, None)
+        execute_cancel_asset_lock(&(self), authority, state_transaction, false, None)
     }
 }
 fn execute_cancel_asset_lock(
-    instruction: CancelAssetLock,
+    instruction: &CancelAssetLock,
     authority: &AccountId,
     state_transaction: &mut StateTransaction<'_, '_>,
     controlled: bool,
-    waterfall: Option<(&iroha_data_model::escrow::control::AssetLockWaterfallSettlementV1, &crate::executor::ContractRuntimeExecutionContext)>,
+    waterfall: Option<(
+        &iroha_data_model::escrow::control::AssetLockWaterfallSettlementV1,
+        &crate::executor::ContractRuntimeExecutionContext,
+    )>,
 ) -> Result<(), Error> {
     if !controlled {
         controlled::reject_generic_mutation(state_transaction.world(), &instruction.escrow_id)?;
@@ -1888,14 +1897,21 @@ fn execute_cancel_asset_lock(
         ));
     }
     if let Some((pins, context)) = waterfall {
-        controlled_waterfall::transfer(state_transaction, &record, &record.seller, &record.remaining_amount, pins, context)?;
+        controlled_waterfall::transfer(
+            state_transaction,
+            &record,
+            &record.seller,
+            &record.remaining_amount,
+            pins,
+            context,
+        )?;
     } else {
         let custody_asset = custody_asset(&record);
         let seller_asset = party_asset(&record, &record.seller);
         transfer_numeric_asset_for_escrow(
             state_transaction,
             VerifiedNativeEscrowMovement::retained(
-                record.id.clone(),
+                record.id,
                 custody_asset,
                 seller_asset,
                 record.remaining_amount.clone(),
@@ -1907,7 +1923,7 @@ fn execute_cancel_asset_lock(
     record.closed_at_ms = Some(state_transaction.block_unix_timestamp_ms());
     state_transaction
         .world
-        .insert_asset_escrow_entry(record.clone())?;
+        .insert_asset_escrow_entry(&(record.clone()))?;
     state_transaction
         .world
         .emit_events(Some(EscrowEvent::Cancelled(record)));
@@ -1919,15 +1935,18 @@ impl Execute for ExpireAssetLock {
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        execute_expire_asset_lock(self, authority, state_transaction, false, None)
+        execute_expire_asset_lock(&(self), authority, state_transaction, false, None)
     }
 }
 fn execute_expire_asset_lock(
-    instruction: ExpireAssetLock,
+    instruction: &ExpireAssetLock,
     _authority: &AccountId,
     state_transaction: &mut StateTransaction<'_, '_>,
     controlled: bool,
-    waterfall: Option<(&iroha_data_model::escrow::control::AssetLockWaterfallSettlementV1, &crate::executor::ContractRuntimeExecutionContext)>,
+    waterfall: Option<(
+        &iroha_data_model::escrow::control::AssetLockWaterfallSettlementV1,
+        &crate::executor::ContractRuntimeExecutionContext,
+    )>,
 ) -> Result<(), Error> {
     if !controlled {
         controlled::reject_generic_mutation(state_transaction.world(), &instruction.escrow_id)?;
@@ -1952,14 +1971,21 @@ fn execute_expire_asset_lock(
         return Err(validation_err("asset lock expiry has not been reached"));
     }
     if let Some((pins, context)) = waterfall {
-        controlled_waterfall::transfer(state_transaction, &record, &record.seller, &record.remaining_amount, pins, context)?;
+        controlled_waterfall::transfer(
+            state_transaction,
+            &record,
+            &record.seller,
+            &record.remaining_amount,
+            pins,
+            context,
+        )?;
     } else {
         let custody_asset = custody_asset(&record);
         let seller_asset = party_asset(&record, &record.seller);
         transfer_numeric_asset_for_escrow(
             state_transaction,
             VerifiedNativeEscrowMovement::retained(
-                record.id.clone(),
+                record.id,
                 custody_asset,
                 seller_asset,
                 record.remaining_amount.clone(),
@@ -1971,7 +1997,7 @@ fn execute_expire_asset_lock(
     record.closed_at_ms = Some(state_transaction.block_unix_timestamp_ms());
     state_transaction
         .world
-        .insert_asset_escrow_entry(record.clone())?;
+        .insert_asset_escrow_entry(&(record.clone()))?;
     state_transaction
         .world
         .emit_events(Some(EscrowEvent::Expired(record)));
@@ -2068,7 +2094,7 @@ impl ConditionalEscrowOpening {
         )?;
         state_transaction
             .world
-            .insert_asset_escrow_entry(self.record.clone())?;
+            .insert_asset_escrow_entry(&(self.record.clone()))?;
         state_transaction
             .world
             .emit_events(Some(EscrowEvent::Opened(self.record)));
@@ -2399,7 +2425,7 @@ impl Execute for AttestEscrowCondition {
             transfer_numeric_asset_for_escrow(
                 state_transaction,
                 VerifiedNativeEscrowMovement::retained(
-                    record.id.clone(),
+                    record.id,
                     custody_asset,
                     destination_asset,
                     record.remaining_amount.clone(),
@@ -2411,7 +2437,7 @@ impl Execute for AttestEscrowCondition {
         }
         state_transaction
             .world
-            .insert_asset_escrow_entry(record.clone())?;
+            .insert_asset_escrow_entry(&(record.clone()))?;
         state_transaction
             .world
             .emit_events(Some(EscrowEvent::Attested(ConditionalEscrowAttested {
@@ -2461,7 +2487,7 @@ impl Execute for ExpireConditionalEscrow {
         transfer_numeric_asset_for_escrow(
             state_transaction,
             VerifiedNativeEscrowMovement::retained(
-                record.id.clone(),
+                record.id,
                 custody_asset,
                 seller_asset,
                 record.remaining_amount.clone(),
@@ -2472,7 +2498,7 @@ impl Execute for ExpireConditionalEscrow {
         record.closed_at_ms = Some(now_ms);
         state_transaction
             .world
-            .insert_asset_escrow_entry(record.clone())?;
+            .insert_asset_escrow_entry(&(record.clone()))?;
         state_transaction
             .world
             .emit_events(Some(EscrowEvent::Expired(record)));
@@ -2699,7 +2725,7 @@ impl ValidQuery for FindAssetEscrowsByStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{kura::Kura, query::store::LiveQueryStore, state::State};
+    use crate::state::State;
     use iroha_data_model::{
         Registrable,
         asset::{
@@ -2718,7 +2744,7 @@ mod tests {
     use iroha_executor_data_model::permission::{Permission as _, escrow::CanResolveEscrowDispute};
     use iroha_model_base::domain::DomainId;
     use iroha_primitives::{json::Json, numeric::Numeric};
-    use std::collections::BTreeMap;
+    use std::{collections::BTreeMap, sync::Arc};
     fn fixture_account(label: &str) -> AccountId {
         let seed: Vec<u8> = label.as_bytes().iter().copied().cycle().take(32).collect();
         let (public_key, _) = KeyPair::try_from_seed(seed, Algorithm::Ed25519)
@@ -2745,25 +2771,38 @@ mod tests {
             ),
         )
     }
-    fn block_header(timestamp_ms: u64) -> iroha_data_model::block::BlockHeader {
+    fn block_header(state: &State, timestamp_ms: u64) -> iroha_data_model::block::BlockHeader {
         iroha_data_model::block::BlockHeader::new(
-            nonzero_ext::nonzero!(1_u64),
-            None,
+            core::num::NonZeroU64::new(
+                u64::try_from(state.view().height())
+                    .unwrap()
+                    .checked_add(1)
+                    .unwrap(),
+            )
+            .unwrap(),
+            state.view().latest_block_hash(),
             None,
             timestamp_ms,
             0,
         )
     }
-    // Direct ISI component tests explicitly retain a bounded source invocation
-    // before borrowing State. This grants no Network or publication authority;
-    // executor_asset_lock_admission_tests exercises signed certified execution.
+    // Original signed genesis initializes strict crypto/monetary policy. Later direct ISI
+    // component transactions retain their own bounded invocation; they do not fabricate
+    // later certified blocks. Executor admission tests cover signed ordinary execution.
+    fn original_escrow_state(world: crate::state::World) -> Arc<State> {
+        let chain = crate::sumeragi::test_chain::CertifiedTestChain::start(
+            crate::sumeragi::test_chain::TestChainConfig::new(world, 0),
+        )
+        .expect("original signed escrow fixture genesis");
+        Arc::clone(chain.state())
+    }
     fn state_with_parties(
         seller: &AccountId,
         buyer: &AccountId,
         court: &AccountId,
         asset_definition: &AssetDefinitionId,
         seller_balance: Quantity,
-    ) -> State {
+    ) -> Arc<State> {
         let asset_definition_entry = AssetDefinition::numeric(
             asset_definition.clone(),
             "XOR".to_owned(),
@@ -2787,7 +2826,7 @@ mod tests {
         asset_definition: &AssetDefinitionId,
         asset_definition_entry: AssetDefinition,
         seller_balance: Quantity,
-    ) -> State {
+    ) -> Arc<State> {
         let domain = Domain::new(fixture_asset_definition_domain()).build(seller);
         let seller_asset_id = AssetId::of(asset_definition.clone(), seller.clone());
         let seller_asset = Asset::new(seller_asset_id, seller_balance);
@@ -2802,11 +2841,7 @@ mod tests {
             [seller_asset],
             [],
         );
-        State::new_for_testing(
-            world,
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
-        )
+        original_escrow_state(world)
     }
 
     fn conditional_terms(
@@ -2847,7 +2882,7 @@ mod tests {
             &asset_definition,
             Quantity::from(100_u32),
         );
-        let mut block = state.block(block_header(1_000));
+        let mut block = state.block(block_header(&state, 1_000));
         let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0xD3; Hash::LENGTH]));
         let source = AssetId::new(asset_definition.clone(), seller.clone());
         let accounts_before = tx.world.accounts.iter().count();
@@ -2945,7 +2980,7 @@ mod tests {
             .build(&seller),
             Quantity::from(100_u32),
         );
-        let mut block = state.block(block_header(1_000));
+        let mut block = state.block(block_header(&state, 1_000));
         let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0xD4; Hash::LENGTH]));
         OpenConditionalEscrow::new(
             escrow_id,
@@ -3018,7 +3053,7 @@ mod tests {
             Quantity::from(100_u32),
         );
         let definitions = BTreeSet::from([asset_definition.clone()]);
-        let mut block = state.block(block_header(3_000));
+        let mut block = state.block(block_header(&state, 3_000));
         let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0xD5; Hash::LENGTH]));
         OpenAssetLock::with_options(
             lock_id,
@@ -3065,7 +3100,7 @@ mod tests {
         // Missing invocation custody poisons its carrier. Keep that refusal intact;
         // a successful independent component attempt needs its own pristine owner.
         {
-            let mut block = state.block(block_header(1_000));
+            let mut block = state.block(block_header(&state, 1_000));
             let mut unretained = block.transaction();
             unretained.tx_call_hash = Some(call_hash);
             let error = instruction
@@ -3086,7 +3121,7 @@ mod tests {
             drop(unretained);
             assert_eq!(block.committed_fragment_count(), 0);
         }
-        let mut block = state.block(block_header(1_000));
+        let mut block = state.block(block_header(&state, 1_000));
         let mut retained = block.transaction_for_fastpq_testing(call_hash);
         instruction
             .execute(&seller, &mut retained)
@@ -3110,8 +3145,7 @@ mod tests {
             .world
             .assets
             .get(&asset_id)
-            .map(|value| value.as_ref().clone())
-            .unwrap_or_else(Quantity::zero)
+            .map_or_else(Quantity::zero, |value| value.as_ref().clone())
     }
     fn asset_transfer_events(events: &[EventBox]) -> Vec<(&'static str, AssetId, Quantity)> {
         events
@@ -3237,12 +3271,12 @@ mod tests {
     fn state_transaction_deposit_closed_custody_dust(
         state_transaction: &mut StateTransaction<'_, '_>,
         custody_asset: &AssetId,
-        amount: Quantity,
+        amount: &Quantity,
     ) {
         crate::smartcontracts::isi::asset::isi::seed_numeric_asset_balance_for_test(
             &mut state_transaction.world,
             custody_asset,
-            &amount,
+            amount,
         )
         .expect("deposit closed custody dust");
     }
@@ -3357,7 +3391,7 @@ mod tests {
             asset_definition_entry,
             Quantity::from(100_u32),
         );
-        let mut block = state.block(block_header(1_000));
+        let mut block = state.block(block_header(&state, 1_000));
         let mut tx = block.transaction();
         let err = OpenAssetEscrow {
             escrow_id,
@@ -3412,7 +3446,7 @@ mod tests {
             asset_definition_entry,
             Quantity::from(100_u32),
         );
-        let mut block = state.block(block_header(1_000));
+        let mut block = state.block(block_header(&state, 1_000));
         let mut tx = block.transaction();
         let err = OpenAssetEscrow {
             escrow_id,
@@ -3447,7 +3481,7 @@ mod tests {
             &asset_definition,
             Quantity::from(100_u32),
         );
-        let mut block = state.block(block_header(1_000));
+        let mut block = state.block(block_header(&state, 1_000));
         let mut tx = block.transaction();
         SetAssetTransferAvailability::new(
             seller.clone(),
@@ -3497,7 +3531,7 @@ mod tests {
             &asset_definition,
             Quantity::from(100_u32),
         );
-        let mut block = state.block(block_header(1_000));
+        let mut block = state.block(block_header(&state, 1_000));
         let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0xA2; Hash::LENGTH]));
         OpenAssetEscrow {
             escrow_id,
@@ -3549,7 +3583,7 @@ mod tests {
             &asset_definition,
             Quantity::from(100_u32),
         );
-        let mut block = state.block(block_header(1_000));
+        let mut block = state.block(block_header(&state, 1_000));
         let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0xC1; Hash::LENGTH]));
         OpenAssetLock::with_options(
             escrow_id,
@@ -3643,6 +3677,18 @@ mod tests {
             [source_asset],
             [],
         );
+        // Component custody registration owns its policy before the first snapshot.
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
+            .expect("funded component parameter fixture");
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            crate::sumeragi::test_chain::crypto_fixture_policy()
+                .into_parameter()
+                .expect("canonical fixture crypto policy"),
+            world.sccp_committee_generations.allocation_budget(),
+        )
+        .expect("install original fixture crypto policy");
+        parameters.commit();
         let alias: iroha_data_model::asset::AssetDefinitionAlias =
             "xor#paynet".parse().expect("asset alias");
         world
@@ -3657,11 +3703,7 @@ mod tests {
                 bound_at_ms: 0,
             },
         );
-        let state = State::new_for_testing(
-            world,
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
-        );
+        let state = original_escrow_state(world);
         let catalog = iroha_data_model::nexus::DataSpaceCatalog::new(vec![
             iroha_data_model::nexus::DataSpaceMetadata::default(),
             iroha_data_model::nexus::DataSpaceMetadata {
@@ -3672,7 +3714,7 @@ mod tests {
             },
         ])
         .expect("dataspace catalog");
-        let mut block = state.block(block_header(1_000));
+        let mut block = state.block(block_header(&state, 1_000));
         block.nexus.dataspace_catalog = catalog.clone();
         let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0xC9; Hash::LENGTH]));
         tx.nexus.dataspace_catalog = catalog.clone();
@@ -3756,8 +3798,7 @@ mod tests {
         assert_eq!(
             tx.world
                 .asset(&custody_asset_id)
-                .map(|asset| asset.as_ref().clone())
-                .unwrap_or_else(|_| Quantity::zero()),
+                .map_or_else(|_| Quantity::zero(), |asset| asset.as_ref().clone()),
             Quantity::zero()
         );
     }
@@ -3775,7 +3816,7 @@ mod tests {
             &asset_definition,
             Quantity::from(100_u32),
         );
-        let mut block = state.block(block_header(2_000));
+        let mut block = state.block(block_header(&state, 2_000));
         let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0xC2; Hash::LENGTH]));
         OpenAssetLock::new(
             escrow_id,
@@ -3852,7 +3893,7 @@ mod tests {
             &asset_definition,
             Quantity::from(100_u32),
         );
-        let mut block = state.block(block_header(3_000));
+        let mut block = state.block(block_header(&state, 3_000));
         let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0xC3; Hash::LENGTH]));
         OpenAssetLock::new(
             no_deadline_id,
@@ -3939,7 +3980,7 @@ mod tests {
             &asset_definition,
             Quantity::from(40_u32),
         );
-        let mut block = state.block(block_header(3_100));
+        let mut block = state.block(block_header(&state, 3_100));
         let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0xC4; Hash::LENGTH]));
         let zero_id = fixture_escrow_id("lock-open-zero");
         let err = OpenAssetLock::new(
@@ -4037,7 +4078,7 @@ mod tests {
             &asset_definition,
             Quantity::from(100_u32),
         );
-        let mut block = state.block(block_header(3_200));
+        let mut block = state.block(block_header(&state, 3_200));
         let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0xC5; Hash::LENGTH]));
         let marketplace_id = fixture_escrow_id("lock-drawdown-marketplace");
         OpenAssetEscrow {
@@ -4170,7 +4211,7 @@ mod tests {
             &asset_definition,
             Quantity::from(100_u32),
         );
-        let mut block = state.block(block_header(3_300));
+        let mut block = state.block(block_header(&state, 3_300));
         let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0xC6; Hash::LENGTH]));
         OpenAssetLock::new(
             drawdown_id,
@@ -4289,7 +4330,7 @@ mod tests {
             &asset_definition,
             Quantity::from(100_u32),
         );
-        let mut block = state.block(block_header(3_400));
+        let mut block = state.block(block_header(&state, 3_400));
         let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0xC7; Hash::LENGTH]));
         OpenAssetLock::new(
             escrow_id,
@@ -4377,7 +4418,7 @@ mod tests {
             &asset_definition,
             Quantity::from(100_u32),
         );
-        let mut block = state.block(block_header(1_000));
+        let mut block = state.block(block_header(&state, 1_000));
         let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0xA3; Hash::LENGTH]));
         OpenAssetEscrow {
             escrow_id,
@@ -4395,29 +4436,26 @@ mod tests {
             .expect("mark payment sent");
         assert!(
             crate::state::range_bounds::index_members(&tx.world.asset_escrows_by_seller, &seller)
-                .cloned()
-                .collect::<std::collections::BTreeSet<_>>()
-                .contains(&escrow_id)
+                .copied()
+                .any(|x| x == escrow_id)
         );
         assert!(
             crate::state::range_bounds::index_members(&tx.world.asset_escrows_by_buyer, &buyer)
-                .cloned()
-                .collect::<std::collections::BTreeSet<_>>()
-                .contains(&escrow_id)
+                .copied()
+                .any(|x| x == escrow_id)
         );
         assert!(
             crate::state::range_bounds::index_members(
                 &tx.world.asset_escrows_by_status,
                 &AssetEscrowStatus::PaymentSent
             )
-            .cloned()
-            .collect::<std::collections::BTreeSet<_>>()
-            .contains(&escrow_id)
+            .copied()
+            .any(|x| x == escrow_id)
         );
         let stale_open_entry = tx
             .world
             .asset_escrows_by_status
-            .get(&(AssetEscrowStatus::Open.clone(), escrow_id.clone()))
+            .get(&(AssetEscrowStatus::Open, escrow_id))
             .is_some();
         assert!(
             !stale_open_entry,
@@ -4426,7 +4464,7 @@ mod tests {
         let stale_accepted_entry = tx
             .world
             .asset_escrows_by_status
-            .get(&(AssetEscrowStatus::Accepted.clone(), escrow_id.clone()))
+            .get(&(AssetEscrowStatus::Accepted, escrow_id))
             .is_some();
         assert!(
             !stale_accepted_entry,
@@ -4513,7 +4551,7 @@ mod tests {
             &asset_definition,
             Quantity::from(100_u32),
         );
-        let mut block = state.block(block_header(1_000));
+        let mut block = state.block(block_header(&state, 1_000));
         let mut tx = block.transaction();
         let target = fixture_escrow_id("asset-candidate-target");
         let same_status = fixture_escrow_id("asset-candidate-same-status");
@@ -4541,7 +4579,9 @@ mod tests {
                 AssetEscrowStatus::Accepted,
             ),
         ] {
-            tx.world.insert_asset_escrow_entry(record).expect("escrow fixture insert");
+            tx.world
+                .insert_asset_escrow_entry(&record)
+                .expect("escrow fixture insert");
         }
         let predicate = CompoundPredicate::<AssetEscrowRecord>::build(|predicate| {
             predicate
@@ -4568,7 +4608,7 @@ mod tests {
             &asset_definition,
             Quantity::from(100_u32),
         );
-        let mut block = state.block(block_header(1_000));
+        let mut block = state.block(block_header(&state, 1_000));
         let call_hash = Hash::prehashed([0xA1; Hash::LENGTH]);
         let mut tx = block.transaction_for_fastpq_testing(call_hash);
         OpenAssetEscrow {
@@ -4637,7 +4677,7 @@ mod tests {
             &asset_definition,
             Quantity::from(100_u32),
         );
-        let mut block = state.block(block_header(1_000));
+        let mut block = state.block(block_header(&state, 1_000));
         let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0xB1; Hash::LENGTH]));
         OpenAssetEscrow {
             escrow_id,
@@ -4685,7 +4725,7 @@ mod tests {
             &asset_definition,
             Quantity::from(100_u32),
         );
-        let mut block = state.block(block_header(1_000));
+        let mut block = state.block(block_header(&state, 1_000));
         let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0xB2; Hash::LENGTH]));
         OpenAssetEscrow {
             escrow_id,
@@ -4734,7 +4774,7 @@ mod tests {
             &asset_definition,
             Quantity::from(100_u32),
         );
-        let mut block = state.block(block_header(2_000));
+        let mut block = state.block(block_header(&state, 2_000));
         let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0xB3; Hash::LENGTH]));
         OpenAssetEscrow {
             escrow_id,
@@ -4773,7 +4813,7 @@ mod tests {
             &asset_definition,
             Quantity::from(100_u32),
         );
-        let mut block = state.block(block_header(2_000));
+        let mut block = state.block(block_header(&state, 2_000));
         let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0xB4; Hash::LENGTH]));
         OpenAssetEscrow {
             escrow_id,
@@ -4819,7 +4859,7 @@ mod tests {
             &asset_definition,
             Quantity::from(100_u32),
         );
-        let mut block = state.block(block_header(3_000));
+        let mut block = state.block(block_header(&state, 3_000));
         let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0xB5; Hash::LENGTH]));
         OpenAssetEscrow {
             escrow_id,
@@ -4901,7 +4941,7 @@ mod tests {
             &asset_definition,
             Quantity::from(100_u32),
         );
-        let mut block = state.block(block_header(3_000));
+        let mut block = state.block(block_header(&state, 3_000));
         let call_hash = Hash::prehashed([0xA2; Hash::LENGTH]);
         let mut tx = block.transaction_for_fastpq_testing(call_hash);
         OpenAssetEscrow {
@@ -4978,7 +5018,7 @@ mod tests {
             &asset_definition,
             Quantity::from(100_u32),
         );
-        let mut block = state.block(block_header(3_000));
+        let mut block = state.block(block_header(&state, 3_000));
         let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0xB6; Hash::LENGTH]));
         OpenAssetEscrow {
             escrow_id,
@@ -5040,7 +5080,7 @@ mod tests {
             &asset_definition,
             Quantity::from(100_u32),
         );
-        let mut block = state.block(block_header(4_000));
+        let mut block = state.block(block_header(&state, 4_000));
         let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0xB7; Hash::LENGTH]));
         OpenAssetEscrow {
             escrow_id,
@@ -5103,7 +5143,7 @@ mod tests {
         state_transaction_deposit_closed_custody_dust(
             &mut tx,
             &custody_asset,
-            Quantity::from(1_u32),
+            &(Quantity::from(1_u32)),
         );
         assert!(
             Transfer::asset_quantity(custody_asset.clone(), 1_u32, buyer)
@@ -5132,7 +5172,7 @@ mod tests {
             &asset_definition,
             Quantity::from(100_u32),
         );
-        let mut block = state.block(block_header(4_100));
+        let mut block = state.block(block_header(&state, 4_100));
         let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0xC8; Hash::LENGTH]));
         OpenAssetLock::new(
             escrow_id,
@@ -5162,7 +5202,7 @@ mod tests {
         state_transaction_deposit_closed_custody_dust(
             &mut tx,
             &custody_asset,
-            Quantity::from(1_u32),
+            &(Quantity::from(1_u32)),
         );
         assert!(
             Transfer::asset_quantity(custody_asset.clone(), 1_u32, destination.clone())
@@ -5176,5 +5216,55 @@ mod tests {
                 .is_err(),
             "generic asset burn must not drain recorded native lock custody after close"
         );
+    }
+
+    #[test]
+    fn escrow_fixture_authenticates_genesis_and_retains_parent_for_component_funding() {
+        let seller = fixture_account("original-seller");
+        let buyer = fixture_account("original-buyer");
+        let court = fixture_account("original-court");
+        let asset = fixture_asset_definition_id();
+        let state = state_with_parties(&seller, &buyer, &court, &asset, Quantity::from(100_u32));
+        let parent = state
+            .view()
+            .latest_block_hash()
+            .expect("original signed parent");
+        assert_eq!(state.committed_height(), 1);
+        assert_eq!(state.kura().blocks_count(), 1);
+        assert_eq!(
+            state
+                .view()
+                .world()
+                .parameters()
+                .require_crypto_policy()
+                .unwrap(),
+            &crate::sumeragi::test_chain::crypto_fixture_policy()
+        );
+        assert!(state.view().world().parameters().staking_policy().is_some());
+        let header = block_header(&state, 1_000);
+        assert_eq!(header.height().get(), 2);
+        assert_eq!(header.prev_block_hash(), Some(parent));
+        let mut block = state.block(header);
+        let mut tx =
+            block.transaction_for_fastpq_testing(Hash::new(b"original-signed-escrow-fixture"));
+        let escrow_id = fixture_escrow_id("original-policy-funding");
+        OpenAssetEscrow {
+            escrow_id,
+            asset_definition: asset.clone(),
+            amount: Quantity::from(40_u32),
+            evidence_hashes: Vec::new(),
+        }
+        .execute(&seller, &mut tx)
+        .expect("real bounded custody funding");
+        assert_eq!(balance(&tx, &seller, &asset), Quantity::from(60_u32));
+        assert_eq!(
+            escrow_record(&tx, &escrow_id).remaining_amount,
+            Quantity::from(40_u32)
+        );
+        drop(tx);
+        drop(block);
+        assert_eq!(state.view().latest_block_hash(), Some(parent));
+        assert_eq!(state.committed_height(), 1);
+        assert_eq!(state.kura().blocks_count(), 1);
     }
 }

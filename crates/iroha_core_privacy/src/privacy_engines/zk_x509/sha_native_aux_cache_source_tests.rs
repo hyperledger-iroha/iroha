@@ -13,7 +13,7 @@ fn retained_native_auxiliary_rows_match_original_recurrence_and_bound_terminals(
         for segment in 0..ZK_X509_SHA_SEGMENT_COUNT_V1 {
             let mut base =
                 ZkX509ShaBatchSegmentBaseSourceV1::new_v1(&schedule, &witnesses, segment).unwrap();
-            let mut source = base.bind_v1(binding).unwrap();
+            let mut source = base.bind_v1(&binding).unwrap();
             assert_eq!(source.retained_aux_heap_bytes_v1(), 0);
             source.retain_native_aux_v1().unwrap();
             assert!(source.retain_native_aux_v1().is_err());
@@ -31,17 +31,19 @@ fn retained_native_auxiliary_rows_match_original_recurrence_and_bound_terminals(
             assert_eq!(compared, ZK_X509_SHA_SEGMENT_ROWS_V1);
             assert_eq!(cache.copy_terminals_v1().unwrap(), original);
             assert_eq!(
-                source.rfc_union_air_terminals_v1(binding, segment).unwrap(),
+                source
+                    .rfc_union_air_terminals_v1(&binding, segment)
+                    .unwrap(),
                 original
             );
             assert!(
                 source
-                    .rfc_union_air_terminals_v1(credential_binding(91), segment)
+                    .rfc_union_air_terminals_v1(&credential_binding(91), segment)
                     .is_err()
             );
             assert!(
                 source
-                    .rfc_union_air_terminals_v1(binding, (segment + 1) % 4)
+                    .rfc_union_air_terminals_v1(&binding, (segment + 1) % 4)
                     .is_err()
             );
             for first in (0..78).step_by(8) {

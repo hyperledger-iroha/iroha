@@ -161,6 +161,10 @@ impl OpeningOwners {
 // A caller clones this original owner while holding the map, then uses only a
 // nonblocking per-key guard. The completed owner also stays here until pre-publication
 // joiners finish, so an old Opening Arc can never interpret completion as a fresh open.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Variants retain their original paid owners across suspension and retry without new unbudgeted allocations."
+)]
 enum OpeningProgress {
     Pending(Option<LaneStoreOpen>),
     Ready(Arc<FileLaneBlockStore>),

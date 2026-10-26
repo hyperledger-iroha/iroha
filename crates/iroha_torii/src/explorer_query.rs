@@ -192,6 +192,18 @@ fn extract_selectors(
     names: &[&str],
     selectors: &mut BTreeMap<String, String>,
 ) -> Result<Option<FilterExpr>, Error> {
+    fn contains(expr: &FilterExpr, names: &[&str]) -> bool {
+        match expr {
+            FilterExpr::And(children) | FilterExpr::Or(children) => {
+                children.iter().any(|expr| contains(expr, names))
+            }
+            FilterExpr::Not(expr) => contains(expr, names),
+            expr => expr
+                .field()
+                .is_some_and(|field| names.contains(&field.as_str())),
+        }
+    }
+
     if let FilterExpr::And(children) = expr {
         let children = children
             .into_iter()
@@ -213,17 +225,7 @@ fn extract_selectors(
         }
         return Ok(None);
     }
-    fn contains(expr: &FilterExpr, names: &[&str]) -> bool {
-        match expr {
-            FilterExpr::And(children) | FilterExpr::Or(children) => {
-                children.iter().any(|expr| contains(expr, names))
-            }
-            FilterExpr::Not(expr) => contains(expr, names),
-            expr => expr
-                .field()
-                .is_some_and(|field| names.contains(&field.as_str())),
-        }
-    }
+
     if contains(&expr, names) {
         return Err(invalid(
             "filter",
@@ -539,9 +541,7 @@ async fn execute(
 ) -> Result<Response, Error> {
     let spec =
         specification(uri.path()).ok_or_else(|| invalid("query", "unknown Explorer collection"))?;
-    let visibility = caller
-        .into_dataspace_context(Arc::clone(app))
-        .current_visibility();
+    let visibility = caller.dataspace_visibility(app.as_ref());
     if let Some(filter) = query.filter.as_mut() {
         let fields: &[&str] = match spec.id {
             "explorer_accounts" => &["id"],

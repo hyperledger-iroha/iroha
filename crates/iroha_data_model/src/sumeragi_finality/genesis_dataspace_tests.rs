@@ -479,10 +479,10 @@ fn declaration_rejects_foreign_context_and_root_scope() {
     let (_, genesis) = declare(&context, vec![policy_instruction()]);
     let mut other = context.clone();
     other.autoscale = (false, 1, 9);
-    assert_eq!(
+    assert!(matches!(
         verify_genesis_dataspace_v1(&genesis, &other.preimage(), &bpng()),
         Err(GenesisDataspaceError::ContextHash)
-    );
+    ));
     let scope = SumeragiRootScope::Dataspace {
         parent_network_id: NativeFinalityFixture::start(CHAIN).network_id(),
         dataspace_id: fixture_dataspace_id("bpng"),
@@ -490,10 +490,10 @@ fn declaration_rejects_foreign_context_and_root_scope() {
     let fixture = NativeFinalityFixture::start_with_scope("private-root", scope);
     let (wire, pins) = pins(&fixture);
     let private = authenticate_signed_genesis_v1(&wire, &pins).unwrap();
-    assert_eq!(
+    assert!(matches!(
         verify_genesis_dataspace_v1(&private, &context.preimage(), &bpng()),
         Err(GenesisDataspaceError::NotGlobalRoot)
-    );
+    ));
 }
 
 #[test]
@@ -656,10 +656,10 @@ fn declaration_rejects_missing_duplicate_or_mismatched_lane_policy_and_catalog_m
             iroha_primitives::json::Json::new(norito::json::Value::Null),
         )))
         .into();
-        assert_eq!(
+        assert!(matches!(
             verify(&context, vec![policy_instruction(), mutation], &bpng()),
             Err(GenesisDataspaceError::CatalogMutation)
-        );
+        ));
     }
 }
 
@@ -678,7 +678,7 @@ fn cut_authority(selector: &GenesisDataspaceSelectorV1) -> Cut {
 fn parameters_with(custom: impl IntoIterator<Item = CustomParameter>) -> Parameters {
     let mut parameters = Parameters::default();
     for custom in custom {
-        parameters.custom.insert(custom.id().clone(), custom);
+        parameters.custom.insert(custom);
     }
     parameters
 }
@@ -809,8 +809,117 @@ fn certified_cut_rejects_runtime_catalog_collisions_and_restricted_lanes() {
     });
     let parameters = parameters_with([policy]);
     let (tip, world) = certify_parameters(&mut fixture, &parameters);
-    assert_eq!(
+    assert!(matches!(
         authority.verify_cut(&tip, &world, &parameters),
         Err(GenesisDataspaceError::RestrictedManifestAuthorityUnavailable)
+    ));
+}
+
+#[test]
+fn certified_cut_keeps_original_catalog_decoder_refusal_and_retries_the_same_cut() {
+    let Cut {
+        mut fixture,
+        authority,
+    } = cut_authority(&bpng());
+    let runtime = NexusRuntimeCatalogV1 {
+        version: NexusRuntimeCatalogV1::VERSION,
+        baseline_dataspaces_hash: Hash::new(b"unchanged physical baseline"),
+        baseline_manifests_hash: Hash::new(b"unchanged native manifest baseline"),
+        dataspaces: Vec::new(),
+        manifests: Vec::new(),
+    };
+    let parameters = parameters_with([
+        taira_fixture_lane_policy(&committee_keys()).into_custom_parameter(),
+        runtime.into_custom_parameter().unwrap(),
+    ]);
+    let (tip, world) = certify_parameters(&mut fixture, &parameters);
+    let measured = norito::core::DecodeBudgetContext::new(norito::DecodeLimits::new(
+        usize::MAX,
+        usize::MAX,
+        usize::MAX,
+        usize::MAX,
+        usize::MAX,
+    ));
+    let expected = measured
+        .with(|| authority.verify_cut(&tip, &world, &parameters))
+        .unwrap();
+    let original_bytes = usize::try_from(measured.consumed_allocated_bytes()).unwrap();
+    assert!(original_bytes > 0);
+    // The catalog is the final decoder in the actual verifier. Refuse its last
+    // charged allocation after the unchanged certificate/policy prefix has run.
+    let context = norito::core::DecodeBudgetContext::new(norito::DecodeLimits::new(
+        usize::MAX,
+        usize::MAX,
+        usize::MAX,
+        original_bytes - 1,
+        usize::MAX,
+    ));
+    let mut captured = None;
+    let refusal = context
+        .with(|| {
+            norito::core::classify_decode_attempt(|| {
+                let error = authority.verify_cut(&tip, &world, &parameters).unwrap_err();
+                let GenesisDataspaceError::Catalog(original) = error else {
+                    panic!("the actual catalog cause must survive the cut verifier: {error}");
+                };
+                let cause = original
+                    .into_decode_error()
+                    .expect("original catalog resource cause");
+                let norito::Error::ScopedDecodeResource(scope) = &cause else {
+                    panic!("original enclosing decoder owner must remain scoped");
+                };
+                captured = Some(scope.clone());
+                Err::<(), _>(cause)
+            })
+        })
+        .unwrap_err();
+    assert_eq!(
+        refusal.kind(),
+        norito::core::DecodeAttemptErrorKind::EnclosingLimit
     );
+    assert!(refusal.local_refusal().is_some());
+    assert!(
+        matches!(refusal.error(), norito::Error::ScopedDecodeResource(scope)
+        if Some(scope) == captured.as_ref())
+    );
+    let replay = context
+        .with(|| norito::core::classify_decode_attempt(|| Err::<(), _>(refusal.into_error())))
+        .unwrap_err();
+    assert_eq!(replay.kind(), norito::core::DecodeAttemptErrorKind::Invalid);
+    assert!(replay.local_refusal().is_none());
+    assert_eq!(
+        authority.verify_cut(&tip, &world, &parameters).unwrap(),
+        expected
+    );
+}
+
+#[test]
+fn certified_cut_distinguishes_malformed_catalog_from_a_route_collision() {
+    let Cut {
+        mut fixture,
+        authority,
+    } = cut_authority(&bpng());
+    let custom = CustomParameter::new(
+        NexusRuntimeCatalogV1::parameter_id(),
+        iroha_primitives::json::Json::new(norito::json!({"version": "not a number"})),
+    );
+    let parameters = parameters_with([
+        taira_fixture_lane_policy(&committee_keys()).into_custom_parameter(),
+        custom,
+    ]);
+    let (tip, world) = certify_parameters(&mut fixture, &parameters);
+    let error = authority.verify_cut(&tip, &world, &parameters).unwrap_err();
+    let GenesisDataspaceError::Catalog(original) = error else {
+        panic!("malformed catalog must retain its typed cause: {error}");
+    };
+    assert!(matches!(
+        original.into_decode_error(),
+        Err(NexusCatalogValidationError::Json(_))
+    ));
+    assert!(matches!(
+        authority.verify_cut(&tip, &world, &parameters),
+        Err(GenesisDataspaceError::Catalog(
+            NexusCatalogValidationError::Json(_)
+        ))
+    ));
 }

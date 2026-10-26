@@ -60,8 +60,10 @@ fn event_carrier_keeps_original_execution_source_while_state_appends() {
             &kura,
             state.chain_id_ref(),
             *state.network_id_ref(),
-            NonZeroUsize::new(usize::try_from(original_height).unwrap()).unwrap(),
-            target_hash,
+            (
+                NonZeroUsize::new(usize::try_from(original_height).unwrap()).unwrap(),
+                target_hash,
+            ),
             work,
             bytes,
         )
@@ -103,8 +105,7 @@ fn event_carrier_refuses_unanchored_and_changed_original_execution_source() {
             &kura,
             state.chain_id_ref(),
             *state.network_id_ref(),
-            height,
-            expected,
+            (height, expected),
             work,
             bytes,
         )
@@ -140,7 +141,8 @@ fn event_carrier_refuses_unanchored_and_changed_original_execution_source() {
 #[test]
 fn event_carrier_refusal_preserves_original_pool_and_cumulative_metadata_owner() {
     let chain = event_chain();
-    let state = chain.state();
+    let state = Arc::clone(chain.state());
+    let kura = Arc::clone(chain.kura());
     let pool = state.ivm_execution_budget();
     let context = norito::core::DecodeBudgetContext::new(norito::DecodeLimits::new(
         1_000_000, 48_000_000, 1_000_000, 48_000_000, 64,
@@ -160,6 +162,8 @@ fn event_carrier_refusal_preserves_original_pool_and_cumulative_metadata_owner()
         drop(source);
     }
     let exact_metadata = context.consumed_allocated_bytes() - before_metadata;
+    // Complete fixture request retirement before occupying its original pool.
+    drop(chain);
     let original_reserved = pool.reserved_bytes();
     let blocker = pool
         .try_reserve_bytes(pool.limit_bytes() - original_reserved)
@@ -168,7 +172,7 @@ fn event_carrier_refusal_preserves_original_pool_and_cumulative_metadata_owner()
         .try_reserve(iroha_data_model::block::SharedSignedBlock::allocation_layout())
         .unwrap_err();
     let before = context.consumed_allocated_bytes();
-    chain.kura().reset_canonical_query_reads_for_test();
+    kura.reset_canonical_query_reads_for_test();
     for attempt in 1..=2_u64 {
         let result = context.with(|| state.read_finalized_event_carrier(height, work, bytes));
         let Err(FinalizedEventReadError::Execution(ExecutionAttemptError::Deferred(reason))) =
@@ -182,7 +186,7 @@ fn event_carrier_refusal_preserves_original_pool_and_cumulative_metadata_owner()
             before + attempt * exact_metadata,
             "only the actual target/genesis marker preflight follows the same cumulative owner before shell refusal"
         );
-        assert_eq!(chain.kura().canonical_query_reads_for_test(), (0, 0));
+        assert_eq!(kura.canonical_query_reads_for_test(), (0, 0));
         assert_eq!(pool.reserved_bytes(), pool.limit_bytes());
     }
     drop(blocker);
@@ -412,8 +416,7 @@ fn event_carrier_refuses_substituted_opaque_tip_and_intermediate_hash_ancestry()
             chain.kura(),
             state.chain_id_ref(),
             *state.network_id_ref(),
-            height,
-            expected,
+            (height, expected),
             work,
             bytes,
         )
@@ -438,8 +441,7 @@ fn event_carrier_refuses_substituted_opaque_tip_and_intermediate_hash_ancestry()
             chain.kura(),
             state.chain_id_ref(),
             *state.network_id_ref(),
-            height,
-            expected,
+            (height, expected),
             work,
             bytes,
         )
@@ -502,7 +504,13 @@ fn event_carrier_busy_capture_retains_exact_physical_writer_release_and_no_decod
         task::{Context, Waker},
     };
     let chain = event_chain();
-    let state = chain.state();
+    let state = Arc::clone(chain.state());
+    let kura = Arc::clone(chain.kura());
+    let height = NonZeroUsize::new(usize::try_from(chain.height()).unwrap()).unwrap();
+    let (work, bytes) = exact_recent_bounds(&chain, chain.height(), chain.height());
+    let expected_hash = chain.committed(chain.height()).block_hash();
+    // The explicit writer below remains live; only completed fixture work joins.
+    drop(chain);
     let pool = state.ivm_execution_budget();
     let mut registration = crate::unit_test_support::release_registration(&pool);
     let original_reserved = pool.reserved_bytes();
@@ -510,9 +518,7 @@ fn event_carrier_busy_capture_retains_exact_physical_writer_release_and_no_decod
         1_000_000, 48_000_000, 1_000_000, 48_000_000, 64,
     ));
     let original_work = context.consumed_allocated_bytes();
-    let height = NonZeroUsize::new(usize::try_from(chain.height()).unwrap()).unwrap();
-    let (work, bytes) = exact_recent_bounds(&chain, chain.height(), chain.height());
-    chain.kura().reset_canonical_query_reads_for_test();
+    kura.reset_canonical_query_reads_for_test();
     let mut notice = state.state_view_publication();
     let held = state.state_write_lock.lock();
     let publication = notice.begin();
@@ -528,7 +534,7 @@ fn event_carrier_busy_capture_retains_exact_physical_writer_release_and_no_decod
     }
     assert_eq!(context.consumed_allocated_bytes(), original_work);
     assert_eq!(pool.reserved_bytes(), original_reserved);
-    assert_eq!(chain.kura().canonical_query_reads_for_test(), (0, 0));
+    assert_eq!(kura.canonical_query_reads_for_test(), (0, 0));
     let wait = wait.unwrap();
     let mut pending = std::pin::pin!(wait.wait_for_release(&mut registration));
     let cx = &mut Context::from_waker(Waker::noop());
@@ -546,10 +552,7 @@ fn event_carrier_busy_capture_retains_exact_physical_writer_release_and_no_decod
         .read_finalized_event_carrier(height, work, bytes)
         .unwrap();
     assert!(carrier.block().belongs_to(&pool));
-    assert_eq!(
-        carrier.block().hash(),
-        chain.committed(chain.height()).block_hash()
-    );
+    assert_eq!(carrier.block().hash(), expected_hash);
 }
 
 #[test]
@@ -594,8 +597,13 @@ fn event_carrier_changed_capture_returns_original_release_without_retrying_new_g
 fn event_carrier_post_read_writer_refusal_retires_carrier_and_preserves_original_cause() {
     let chain = event_chain();
     let state = Arc::clone(chain.state());
+    let kura = Arc::clone(chain.kura());
+    let original_height = chain.height();
     let height = NonZeroUsize::new(usize::try_from(chain.height()).unwrap()).unwrap();
     let (work, bytes) = exact_recent_bounds(&chain, chain.height(), chain.height());
+    let expected_hash = chain.committed(chain.height()).block_hash();
+    // The post-read writer is created below, after fixture request owners retire.
+    drop(chain);
     let pool = state.ivm_execution_budget();
     let original_reserved = pool.reserved_bytes();
     let (begin_tx, begin_rx) = std::sync::mpsc::channel();
@@ -611,7 +619,7 @@ fn event_carrier_post_read_writer_refusal_retires_carrier_and_preserves_original
         }
     });
     let mut expected = None;
-    chain.kura().reset_canonical_query_reads_for_test();
+    kura.reset_canonical_query_reads_for_test();
     let (result, counts) = relation_counts::measure(|| {
         state.read_finalized_event_carrier_after_read(height, work, bytes, || {
             if begin_tx.send(()).is_ok() {
@@ -630,8 +638,8 @@ fn event_carrier_post_read_writer_refusal_retires_carrier_and_preserves_original
         panic!("post-read State publication must remain an original local refusal");
     };
     assert_eq!(Some(wait), expected);
-    assert_eq!(counts.qcs, [chain.height()]);
-    assert_eq!(chain.kura().canonical_query_reads_for_test(), (3, bytes));
+    assert_eq!(counts.qcs, [original_height]);
+    assert_eq!(kura.canonical_query_reads_for_test(), (3, bytes));
     assert_eq!(
         pool.reserved_bytes(),
         original_reserved,
@@ -640,10 +648,7 @@ fn event_carrier_post_read_writer_refusal_retires_carrier_and_preserves_original
     let carrier = state
         .read_finalized_event_carrier(height, work, bytes)
         .unwrap();
-    assert_eq!(
-        carrier.block().hash(),
-        chain.committed(chain.height()).block_hash()
-    );
+    assert_eq!(carrier.block().hash(), expected_hash);
     assert!(carrier.block().belongs_to(&pool));
 }
 

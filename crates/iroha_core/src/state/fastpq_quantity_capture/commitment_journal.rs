@@ -9,9 +9,7 @@ use super::*;
 mod finalized_source;
 use crate::execution_attempt::ExecutionDeferred;
 use finalized_source::FinalizedQuantitySource;
-pub(crate) use finalized_source::{
-    AdmittedQuantityArchive, CapturedExecWitness, CapturedQuantityEntry,
-};
+pub use finalized_source::{AdmittedQuantityArchive, CapturedExecWitness, CapturedQuantityEntry};
 use iroha_allocation::{AllocationBudget, AllocationRefusal, ChargedBufferError};
 use iroha_data_model::fastpq::{FastpqExecutionEffectCommitmentV1, FastpqExecutionEffectRefV1};
 
@@ -171,10 +169,10 @@ impl PreparedQuantityJournal {
         let pending = &state.pending_fastpq_quantity_candidate.commitments;
         let baseline = parent.get(&hash).copied();
         let before = pending.get(&hash).copied().or(baseline);
-        if let Some(row) = pending.entries.get(&hash) {
-            if row.baseline != baseline {
-                return Err(QuantityCaptureIssue::InvalidFacts.into());
-            }
+        if let Some(row) = pending.entries.get(&hash)
+            && row.baseline != baseline
+        {
+            return Err(QuantityCaptureIssue::InvalidFacts.into());
         }
         let mut commitment =
             before.unwrap_or_else(|| FastpqExecutionEffectCommitmentV1::new(context));

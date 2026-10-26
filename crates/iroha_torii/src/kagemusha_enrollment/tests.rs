@@ -125,7 +125,9 @@ fn signed(
 
 #[test]
 fn exact_envelopes_authenticate_once_for_all_actions() {
-    let _guard = crate::tests_runtime_handlers::app_auth_test_guard(Default::default());
+    let _guard = crate::tests_runtime_handlers::app_auth_test_guard(
+        crate::app_auth::CanonicalRequestAuthConfig::default(),
+    );
     let (state, dispatch, key) = fixture();
     for action in [
         EnrollmentServiceActionV1::PreKey,
@@ -144,7 +146,9 @@ fn exact_envelopes_authenticate_once_for_all_actions() {
 }
 #[test]
 fn account_network_target_action_and_exact_original_mutations_reject() {
-    let _guard = crate::tests_runtime_handlers::app_auth_test_guard(Default::default());
+    let _guard = crate::tests_runtime_handlers::app_auth_test_guard(
+        crate::app_auth::CanonicalRequestAuthConfig::default(),
+    );
     let (state, dispatch, key) = fixture();
     for mutation in 0..9 {
         let mut call = signed(&state, &dispatch, &key, EnrollmentServiceActionV1::Evidence);

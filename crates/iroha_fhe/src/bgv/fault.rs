@@ -22,6 +22,12 @@ pub enum FaultPoint {
     EncryptionAfterSampling,
     /// Decryption, after `c0 + c1*s` was formed.
     DecryptionAfterInnerProduct,
+    /// Offline dealer, after the first secret sharing polynomial was sampled.
+    ThresholdAfterFirstPolynomial,
+    /// Offline dealer, after calculating a share but before marking it issued.
+    ThresholdBeforeShareRelease,
+    /// Local subset conversion, after the first secret limb was weighted in place.
+    ThresholdAfterFirstSubsetLimb,
 }
 
 #[cfg(any(test, feature = "bgv-test-fixtures"))]

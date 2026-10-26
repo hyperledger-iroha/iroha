@@ -42,10 +42,7 @@ fn continue_retained_b_archive_then_unload_without_repeating_transfers() {
         previous["schema"].as_str(),
         Some("iroha.kagemusha.selected-send-continuation.v1")
     );
-    message_census::require_selected_send_session(
-        &census_originals[4],
-        &previous,
-    );
+    message_census::require_selected_send_session(&census_originals[4], &previous);
     let completed_path = selected_path("KAGEMUSHA_NATIVE_COMPLETED_SEND_CONTINUATION");
     let completed_bytes = read_pin(
         &completed_path,
@@ -329,10 +326,10 @@ fn continue_retained_b_archive_then_unload_without_repeating_transfers() {
     // Only the first remaining C Unload may sign; neither archived payer is enabled.
     device_c.platform.with(|state| state.sign_fault_at = None);
     finish_unload(
-        output,
-        sources,
-        setup,
-        target_bytes,
+        &output,
+        &sources,
+        &setup,
+        &target_bytes,
         [
             Participant {
                 wallet: a,

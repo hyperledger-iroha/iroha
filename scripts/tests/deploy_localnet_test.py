@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import subprocess
+import os
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -12,13 +14,41 @@ SCRIPT = REPO_ROOT / "scripts" / "deploy_localnet.sh"
 
 
 class DeployLocalnetShellSafetyTest(unittest.TestCase):
+    def test_current_generator_keeps_committed_fee_policy_out_of_peer_config(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            generator = root / "kagami"
+            generator.write_text('''#!/usr/bin/env python3
+from pathlib import Path
+import sys
+assert sys.argv[1:3] == ['localnet', 'generate']
+assert sys.argv[sys.argv.index('--block-cadence-ms') + 1] == '5000'
+root = Path(sys.argv[sys.argv.index('--out-dir') + 1])
+root.mkdir()
+(root / 'peer0.toml').write_text('[pipeline]\\nivm_execution_max_bytes = 16777216\\n')
+(root / 'start.sh').write_text('#!/bin/sh\\nexit 92\\n')
+(root / 'stop.sh').write_text('#!/bin/sh\\nexit 0\\n')
+''')
+            generator.chmod(0o700)
+            output = root / 'network'
+            result = subprocess.run(
+                ['bash', str(SCRIPT), '--iroha-dir', str(REPO_ROOT),
+                 '--out-dir', str(output), '--no-build', '--block-cadence-ms', '5000'],
+                env={**os.environ, 'KAGAMI_BIN': str(generator),
+                     'IROHAD_BIN': '/usr/bin/true', 'IROHA_BIN': '/usr/bin/true'},
+                capture_output=True, text=True, timeout=30,
+            )
+            self.assertEqual(result.returncode, 92, result.stdout + result.stderr)
+            self.assertEqual((output / 'peer0.toml').read_text(),
+                             '[pipeline]\nivm_execution_max_bytes = 16777216\n')
+
     def test_script_parses(self) -> None:
         subprocess.run(["bash", "-n", str(SCRIPT)], check=True)
 
-    def test_builtin_kagemusha_asset_verification_cannot_be_skipped(self) -> None:
+    def test_builtin_xor_asset_verification_cannot_be_skipped(self) -> None:
         text = SCRIPT.read_text(encoding="utf-8")
         self.assertNotIn("SKIP_ASSET_CHECK", text)
-        self.assertIn("Verifying built-in KAGEMUSHA V1 alias", text)
+        self.assertIn("Verifying built-in XOR fee alias", text)
         for flag in ("--skip-asset-check", "--skip-asset-register"):
             self.assertNotIn(flag, text)
             rejected = subprocess.run(

@@ -5932,7 +5932,6 @@ dependencies = [
  "displaydoc",
  "iroha_config",
  "iroha_crypto",
- "iroha_data_model",
  "iroha_model_base",
  "iroha_primitives",
  "nonzero_ext",
@@ -8218,6 +8217,22 @@ checksum = "9aa2b01e1d916879f73a53d01d1d6cee68adbb31d6d9177a8cfce093cced1d50"
 dependencies = [
  "futures-core",
  "pin-project-lite",
+]
+
+[[package]]
+name = "oss-scanner-build-features"
+version = "0.0.0"
+dependencies = [
+ "criterion",
+ "derive_more",
+ "iroha_cli_lib",
+ "iroha_crypto",
+ "iroha_data_model",
+ "iroha_torii",
+ "musubi",
+ "norito",
+ "rustix 1.1.4",
+ "sha3",
 ]
 
 [[package]]

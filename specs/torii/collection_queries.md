@@ -56,7 +56,8 @@ Collection planning, source scans, filtering, projection and final JSON encoding
 run on a blocking worker under the request's original query-memory owner.
 Cancelling the HTTP task does not release that owner while the worker or its
 response bytes still retain backing. One-shot reads resolve their current
-visibility without first constructing a long-lived stream admission scope.
+visibility once, from one State view, without first constructing a long-lived
+stream admission scope.
 Domain, account and NFT sources evaluate available scalar fields before
 serializing metadata. Unknown metadata predicates remain undecided through
 `and`, `or` and `not`; every surviving complete row still passes the ordinary

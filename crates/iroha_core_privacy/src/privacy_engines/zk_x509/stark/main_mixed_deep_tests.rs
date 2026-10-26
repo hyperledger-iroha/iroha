@@ -437,9 +437,7 @@ fn production_lane_constructor_clears_partial_error_and_dirty_owners_on_drop_and
                         }
                     }
                     populated.set(true);
-                    if unwind {
-                        panic!("injected production lane unwind");
-                    }
+                    assert!(!unwind, "injected production lane unwind")
                 }))
             });
             assert!(populated.get());

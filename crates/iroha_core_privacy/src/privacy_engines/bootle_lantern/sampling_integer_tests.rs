@@ -33,7 +33,7 @@ impl RngCore for TestRng {
             self.state ^= self.state << 13;
             self.state ^= self.state >> 7;
             self.state ^= self.state << 17;
-            *byte = self.state as u8;
+            *byte = self.state.to_le_bytes()[0];
         }
         Ok(())
     }
@@ -648,6 +648,10 @@ fn z4_gaussian_kat_coefficient_13_is_reconstructed_from_pinned_raw_draws() {
 }
 #[test]
 fn gaussian_retry_and_probability_error_budgets_have_integer_margins() {
+    const MAXIMUM_PROPOSAL_BITS: u32 = 37;
+    const PER_DECISION_CDT_ERROR_BITS: u32 = 252;
+    const MINIMUM_AGGREGATE_CDT_ERROR_BITS: u32 = 214;
+
     // The event branch=negative, magnitude=0 alone has probability above
     // (1/2)*(2/5)*(4/5) = 4/25.  Therefore per-attempt failure is below
     // 21/25, and every four failures cost more than one bit.
@@ -666,11 +670,15 @@ fn gaussian_retry_and_probability_error_budgets_have_integer_margins() {
             .expect("fixed dimensions");
     let maximum_proposals =
         response_coefficients * u128::from(MAX_GAUSSIAN_COEFFICIENT_ATTEMPTS_V1) * 4_096;
-    assert!(maximum_proposals < 1_u128 << 37);
+    assert!(maximum_proposals < 1_u128 << MAXIMUM_PROPOSAL_BITS);
     // A per-decision decay error below 2^-240 therefore aggregates below
     // 2^-203.  The 30-threshold CDT contributes less than 2^-214.
-    assert_eq!(240 - 37, 203);
-    const { assert!(252 - 37 >= 214) };
+    assert_eq!(240 - MAXIMUM_PROPOSAL_BITS, 203);
+    const {
+        assert!(
+            PER_DECISION_CDT_ERROR_BITS - MAXIMUM_PROPOSAL_BITS >= MINIMUM_AGGREGATE_CDT_ERROR_BITS
+        )
+    };
 }
 #[test]
 fn decay_tables_initialize_on_a_bounded_native_thread_stack() {

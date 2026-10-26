@@ -92,7 +92,7 @@ fn attestation_authenticates_generation_root_and_refuses_unknown_revision() {
     let mut stx = block.transaction();
     store::routes::insert(&mut stx, NETWORK, sample_route(NETWORK)).unwrap();
     let generation = sample_generation_at(1, 1);
-    install_generation(&mut stx, 1, generation.clone()).unwrap();
+    install_generation(&mut stx, 1, &(generation)).unwrap();
     store::committee_current::set(&mut stx, 1);
     let before = store::routes::get(&*stx.world, &NETWORK).unwrap().clone();
     let events = stx.world.internal_event_buf.len();

@@ -222,15 +222,18 @@ impl RaceAirV1 {
         checkpoint_tick: Option<u32>,
     ) -> Vec<i64> {
         let mut fixed = vec![
-            row as i64,
+            i64::try_from(row).expect("bounded circuit index"),
             i64::from(row < replay.frames.len()),
             i64::from(row == 0),
             i64::from(row + 1 < size),
             i64::from(row == replay.frames.len()),
-            i64::from(checkpoint_tick == Some(row as u32)),
-            i64::from(row < replay.frames.len() && row % 6 == 0),
+            i64::from(checkpoint_tick == Some(u32::try_from(row).expect("bounded circuit index"))),
+            i64::from(row < replay.frames.len() && row.is_multiple_of(6)),
         ];
-        let (rain, wind) = super::environment::weather(replay.track, row.min(5400) as u32);
+        let (rain, wind) = super::environment::weather(
+            replay.track,
+            u32::try_from(row.min(5400)).expect("bounded circuit index"),
+        );
         fixed.extend([rain, wind]);
         for slot in 0..usize::from(replay.player_count) {
             let control = replay
@@ -249,8 +252,12 @@ impl RaceAirV1 {
             let dnf = replay
                 .dnf_events
                 .iter()
-                .find(|event| event.tick == row as u32)
-                .is_some_and(|event| event.slots.contains(&(slot as u8)));
+                .find(|event| event.tick == u32::try_from(row).expect("bounded circuit index"))
+                .is_some_and(|event| {
+                    event
+                        .slots
+                        .contains(&u8::try_from(slot).expect("bounded player slot"))
+                });
             fixed.extend([
                 acceleration,
                 steer,
@@ -395,7 +402,9 @@ mod tests {
                     };
                     1 | 16
                         | steer
-                        | if (tick + slot as u32 * 11) % 90 < 25 {
+                        | if (tick + u32::try_from(slot).expect("bounded fixture value") * 11) % 90
+                            < 25
+                        {
                             32
                         } else {
                             0

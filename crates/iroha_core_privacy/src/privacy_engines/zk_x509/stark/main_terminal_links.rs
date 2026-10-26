@@ -4,7 +4,6 @@
 //! is required at one native point, never between independently masked entire
 //! polynomials. No terminal value enters the public proof or transcript.
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::super::super::private_table::{PrivateTableV1, zeroize_fields_v1};
 use super::*;
 
@@ -33,7 +32,6 @@ pub(super) struct MainTerminalLinkPlanV1 {
 
 impl MainTerminalLinkPlanV1 {
     /// Conservative public stack/heap charge retained during all MAIN device phases.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     pub(super) const fn public_owner_charge_v1() -> usize {
         3 * core::mem::size_of::<Self>()
             + 64
@@ -376,7 +374,6 @@ impl MainTerminalLinkPlanV1 {
 
     /// Accumulate the same masked linear quotients with four native-domain transforms.
     /// Original masks and the transcript are unchanged; no entropy is sampled here.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     pub(super) fn accumulate_v1(
         &self,
         layout: &AggregateProofLayoutV1,
@@ -480,7 +477,6 @@ impl MainTerminalLinkPlanV1 {
     }
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 mod weighted_replay {
     include!("main_terminal_weighted.rs");
 }
@@ -623,7 +619,7 @@ mod tests {
             alphas[index] = E::ONE;
             let inverse = z.sub(E::from_base(link.point)).inv().unwrap();
             let expected = slope(link.left)
-                .sub(link.right.map(&slope).unwrap_or(E::ZERO))
+                .sub(link.right.map_or(E::ZERO, &slope))
                 .mul(vanishing)
                 .mul(inverse);
             assert_eq!(
@@ -705,12 +701,9 @@ mod tests {
             base_plan.evaluate_base_v1(&base_groups, F(7), &alphas),
             Err(ZkX509StarkErrorV1::ConstraintOpening)
         );
-        for point in plan
-            .links
-            .iter()
-            .map(|link| link.point.0)
-            .collect::<std::collections::BTreeSet<_>>()
-        {
+        let mut points = std::collections::BTreeSet::new();
+        points.extend(plan.links.iter().map(|link| link.point.0));
+        for point in points {
             assert!(
                 plan.evaluate_with_v1(E::from_base(F(point)), &alphas, |_| Ok(E::ONE))
                     .is_err()

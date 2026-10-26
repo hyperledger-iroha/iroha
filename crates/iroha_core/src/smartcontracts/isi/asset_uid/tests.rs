@@ -76,12 +76,29 @@ fn fixture(first: u32, second: u32) -> (Fixture, State) {
         [],
     );
     {
-        let mut parameters = world.parameters.block();
-        parameters
-            .set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
+            .expect("funded parameter fixture block");
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            crate::sumeragi::lanes::routing::test_support::metadata(
                 iroha_data_model::block::consensus::SumeragiRootScope::Global,
-            ))
-            .unwrap();
+            ),
+            world.sccp_committee_generations.allocation_budget(),
+        )
+        .unwrap();
+        // Component custody/rekey tests require an explicit predecessor policy;
+        // this World-only fixture does not create a signed genesis or certified tip.
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                Algorithm::Ed25519,
+            ])
+            .unwrap()
+            .into_parameter()
+            .unwrap(),
+            world.sccp_committee_generations.allocation_budget(),
+        )
+        .expect("explicit component account crypto policy");
         parameters.commit();
     }
     let state = State::new_for_testing(
@@ -91,7 +108,9 @@ fn fixture(first: u32, second: u32) -> (Fixture, State) {
     );
     // Complete the fixture-defined asset's real genesis registration boundary.
     // This World-only fixture publication does not create a certified ledger tip.
-    state.block(header(1, 0)).commit_world_overlay_for_testing()
+    state
+        .block(header(1, 0))
+        .commit_world_overlay_for_testing()
         .expect("complete fixture asset incarnation before native FI execution");
     (f, state)
 }
@@ -136,14 +155,13 @@ impl Fixture {
         let policy = asset_uid::policy(tx.world(), &self.definition, &[7; 32])
             .unwrap()
             .unwrap();
-        asset_uid::holdings(tx.world(), &policy, &Default::default()).unwrap()
+        asset_uid::holdings(tx.world(), &policy, &std::collections::BTreeMap::default()).unwrap()
     }
     fn balance(&self, tx: &StateTransaction<'_, '_>, account: &AccountId) -> Quantity {
         tx.world
             .assets
             .get(&self.asset(account))
-            .map(|v| v.as_ref().clone())
-            .unwrap_or_else(Quantity::zero)
+            .map_or_else(Quantity::zero, |v| v.as_ref().clone())
     }
     fn escrow(&self, label: &str, amount: u32, expiry: u64) -> OpenConditionalEscrow {
         OpenConditionalEscrow::new(
@@ -739,7 +757,11 @@ fn uid_controlled_lock_retains_payer_and_blocks_generic_or_unframed_mutation() {
             .expect_err("payer cannot bypass controller cancellation");
         run(
             &mut tx,
-            CancelControlledAssetLockV1 { cancel, waterfall: None }.into(),
+            CancelControlledAssetLockV1 {
+                cancel,
+                waterfall: None,
+            }
+            .into(),
             Some(&context),
         )
         .expect_err("immutable refund window is not open");
@@ -772,7 +794,11 @@ fn uid_controlled_lock_retains_payer_and_blocks_generic_or_unframed_mutation() {
             .expect_err("generic expiry is not controller invocation");
         let result = run(
             &mut tx,
-            ExpireControlledAssetLockV1 { expiry, waterfall: None }.into(),
+            ExpireControlledAssetLockV1 {
+                expiry,
+                waterfall: None,
+            }
+            .into(),
             Some(&context),
         );
         assert_eq!(
@@ -791,7 +817,7 @@ fn uid_controlled_lock_retains_payer_and_blocks_generic_or_unframed_mutation() {
     }
 }
 
-mod enrollment;
-mod fi_link;
-mod fi_context;
 mod controlled_waterfall;
+mod enrollment;
+mod fi_context;
+mod fi_link;

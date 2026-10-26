@@ -481,7 +481,7 @@ pub(crate) struct ExplorerAccountDto<'world> {
     pub owned_nfts: u32,
 }
 impl<'world> ExplorerAccountDto<'world> {
-    pub(crate) fn from_entry(entry: AccountEntry<'world>, counts: AccountCounters) -> Self {
+    pub(crate) fn from_entry(entry: &AccountEntry<'world>, counts: AccountCounters) -> Self {
         Self {
             id: entry.id,
             network_prefix: iroha_data_model::account::address::chain_discriminant(),
@@ -724,7 +724,7 @@ pub(crate) struct ExplorerAssetDto<'world> {
     pub value: &'world Quantity,
 }
 impl<'world> ExplorerAssetDto<'world> {
-    pub(crate) fn from_entry(entry: AssetEntry<'world>) -> Self {
+    pub(crate) fn from_entry(entry: &AssetEntry<'world>) -> Self {
         Self {
             id: entry.id,
             definition_id: entry.id.definition(),
@@ -745,7 +745,7 @@ pub(crate) struct ExplorerNftDto<'world> {
     pub metadata: &'world Metadata,
 }
 impl<'world> ExplorerNftDto<'world> {
-    pub(crate) fn from_entry(entry: NftEntry<'world>) -> Self {
+    pub(crate) fn from_entry(entry: &NftEntry<'world>) -> Self {
         Self {
             id: entry.id,
             owned_by: &entry.value.owned_by,
@@ -813,7 +813,7 @@ pub(crate) struct ExplorerRwaDto<'world> {
     pub parents: ExplorerRwaParents<'world>,
 }
 impl<'world> ExplorerRwaDto<'world> {
-    pub(crate) fn from_entry(entry: RwaEntry<'world>) -> Self {
+    pub(crate) fn from_entry(entry: &RwaEntry<'world>) -> Self {
         let value = entry.value.as_ref();
         Self {
             id: ExplorerText(entry.id),
@@ -1146,6 +1146,8 @@ fn decode_explorer_cursor_key(
     collection: ExplorerCursorCollection,
     filter_digest: [u8; 32],
 ) -> Result<String, ExplorerCursorError> {
+    const HEADER_LEN: usize = 4 + 1 + 32 + 2;
+
     if cursor.is_empty() || cursor.len() > EXPLORER_CURSOR_MAX_ENCODED_BYTES {
         return Err(ExplorerCursorError::InvalidFrame);
     }
@@ -1159,7 +1161,7 @@ fn decode_explorer_cursor_key(
     if explorer_base64_frame(&frame)? != cursor {
         return Err(ExplorerCursorError::InvalidEncoding);
     }
-    const HEADER_LEN: usize = 4 + 1 + 32 + 2;
+
     if frame.len() < HEADER_LEN || frame[..4] != EXPLORER_CURSOR_MAGIC {
         return Err(ExplorerCursorError::InvalidFrame);
     }
@@ -1306,9 +1308,9 @@ impl CanonicalExplorerCursorKey for NftId {
     fn parse_canonical_cursor_key(key: &str) -> Result<Self, ExplorerCursorError> {
         let (name, domain) = key.split_once('$').ok_or(ExplorerCursorError::InvalidKey)?;
         let name = json::JsonObjectKeyOwned::from_json_key_text(name)
-            .map_err(explorer_identifier_decode_error)?;
+            .map_err(|value| explorer_identifier_decode_error(&value))?;
         let domain = json::JsonObjectKeyOwned::from_json_key_text(domain)
-            .map_err(explorer_identifier_decode_error)?;
+            .map_err(|value| explorer_identifier_decode_error(&value))?;
         require_canonical_cursor_text(key, NftId::new(domain, name))
     }
 }
@@ -1322,11 +1324,11 @@ impl CanonicalExplorerCursorKey for RwaId {
             .map_err(|_| ExplorerCursorError::ByteLimitExceeded)?;
         let hash = hash.parse().map_err(|_| ExplorerCursorError::InvalidKey)?;
         let domain = json::JsonObjectKeyOwned::from_json_key_text(domain)
-            .map_err(explorer_identifier_decode_error)?;
+            .map_err(|value| explorer_identifier_decode_error(&value))?;
         require_canonical_cursor_text(key, RwaId::new(domain, hash))
     }
 }
-fn explorer_identifier_decode_error(error: json::Error) -> ExplorerCursorError {
+fn explorer_identifier_decode_error(error: &json::Error) -> ExplorerCursorError {
     if matches!(
         error,
         json::Error::DecodeResourceLimit
@@ -1472,14 +1474,11 @@ pub(crate) fn account_counters_from_world<W: WorldReadOnly>(
 ) -> AccountCounters {
     let (world, visibility) = (visible.world(), visible.visibility());
     AccountCounters {
-        domains: world.domains_by_owner().get(id).map_or(0, |domains| {
-            saturating_usize_to_u32(
-                domains
-                    .iter()
-                    .filter(|domain| visibility.allows_domain(world, domain))
-                    .count(),
-            )
-        }),
+        domains: saturating_usize_to_u32(
+            index_members(world.domains_by_owner(), id)
+                .filter(|domain| visibility.allows_domain(world, domain))
+                .count(),
+        ),
         assets: saturating_usize_to_u32(
             world
                 .assets_in_account_iter(id)
@@ -1650,7 +1649,7 @@ pub(crate) fn accounts_page_for_filters<'world>(
         },
         |entry| {
             let counts = account_counters_from_world(&visible, entry.id());
-            Ok(ExplorerAccountDto::from_entry(entry, counts))
+            Ok(ExplorerAccountDto::from_entry(&entry, counts))
         },
     )?;
     let pagination = explorer_cursor_meta(
@@ -1685,31 +1684,23 @@ pub(crate) fn domains_page_for_filters<'world>(
         filter_digest,
     )?;
     let visible = visibility.in_world(world);
-    let domains: Box<dyn Iterator<Item = &'world Domain> + 'world> = if owned_by
-        .is_some_and(|owner| !visible.allows_account(owner))
-    {
-        explorer_iterator(std::iter::empty())?
-    } else if let Some(owner) = owned_by {
-        let domain_ids = world.domains_by_owner().get(owner);
-        let domain_ids: Box<dyn Iterator<Item = &'world DomainId> + 'world> = match domain_ids {
-            Some(domain_ids) => match after {
-                Some(after) => explorer_iterator(domain_ids.range((Excluded(after), Unbounded)))?,
-                None => explorer_iterator(domain_ids.iter())?,
-            },
-            None => explorer_iterator(std::iter::empty())?,
+    let domains: Box<dyn Iterator<Item = &'world Domain> + 'world> =
+        if owned_by.is_some_and(|owner| !visible.allows_account(owner)) {
+            explorer_iterator(std::iter::empty())?
+        } else if let Some(owner) = owned_by {
+            let domain_ids = index_members_after(world.domains_by_owner(), owner, after.as_ref());
+            explorer_iterator(domain_ids.filter_map(|domain_id| world.domains().get(domain_id)))?
+        } else {
+            match after {
+                Some(after) => explorer_iterator(
+                    world
+                        .domains()
+                        .range((Excluded(after), Unbounded))
+                        .map(|(_, domain)| domain),
+                )?,
+                None => explorer_iterator(world.domains_iter())?,
+            }
         };
-        explorer_iterator(domain_ids.filter_map(|domain_id| world.domains().get(domain_id)))?
-    } else {
-        match after {
-            Some(after) => explorer_iterator(
-                world
-                    .domains()
-                    .range((Excluded(after), Unbounded))
-                    .map(|(_, domain)| domain),
-            )?,
-            None => explorer_iterator(world.domains_iter())?,
-        }
-    };
     let scanned = collect_explorer_cursor_page(
         domains,
         limit,
@@ -1930,7 +1921,7 @@ pub(crate) fn assets_page_for_filters<'world>(
                 && owned_by.is_none_or(|owner| asset.id().account() == owner)
                 && definition_filter.is_none_or(|definition| asset.id().definition() == definition)
         },
-        |entry| Ok(ExplorerAssetDto::from_entry(entry)),
+        |entry| Ok(ExplorerAssetDto::from_entry(&(entry))),
     )?;
     let pagination = explorer_cursor_meta(
         ExplorerCursorCollection::Assets,
@@ -2011,7 +2002,7 @@ pub(crate) fn nfts_page_for_filters<'world>(
             owned_by.is_none_or(|owner| nft.value().owned_by == *owner)
                 && domain_filter.is_none_or(|domain| nft.id().domain() == domain)
         },
-        |entry| Ok(ExplorerNftDto::from_entry(entry)),
+        |entry| Ok(ExplorerNftDto::from_entry(&(entry))),
     )?;
     let pagination = explorer_cursor_meta(
         ExplorerCursorCollection::Nfts,
@@ -2095,7 +2086,7 @@ pub(crate) fn rwas_page_for_filters<'world>(
             owned_by.is_none_or(|owner| rwa.value().owned_by == *owner)
                 && domain_filter.is_none_or(|domain| rwa.id().domain() == domain)
         },
-        |entry| Ok(ExplorerRwaDto::from_entry(entry)),
+        |entry| Ok(ExplorerRwaDto::from_entry(&(entry))),
     )?;
     let pagination = explorer_cursor_meta(
         ExplorerCursorCollection::Rwas,
@@ -2762,9 +2753,12 @@ mod tests {
             "Limited(3)"
         );
     }
-    fn assert_explorer_wire<T: json::JsonSerialize>(value: &T, expected: Value) {
+    fn assert_explorer_wire<T: json::JsonSerialize>(value: &T, expected: &Value) {
         let ordinary = json::to_vec(value).expect("ordinary canonical DTO");
-        assert_eq!(json::from_slice::<Value>(&ordinary).unwrap(), expected);
+        assert_eq!(
+            json::from_slice::<Value>(&ordinary).unwrap(),
+            expected.clone()
+        );
         let bounded = json::to_json_bounded_boxed(value, ordinary.len())
             .expect("exact canonical DTO boundary");
         assert_eq!(&*bounded, ordinary.as_slice());
@@ -2794,10 +2788,10 @@ mod tests {
         assert!(std::ptr::eq(dto.metadata, domain.metadata()));
         assert_explorer_wire(
             &dto,
-            norito::json!({
+            &(norito::json!({
                 "id": (domain.id().to_string()), "logo": "sorafs://manifest/logo.png", "metadata": {"label":"value"},
                 "owned_by": (ALICE_ID.to_string()), "accounts":2, "assets":3, "nfts":4
-            }),
+            })),
         );
     }
     #[test]
@@ -2811,7 +2805,7 @@ mod tests {
         let account_id = ALICE_ID.clone();
         let entry = Ref::new(&account_id, &details);
         let dto = ExplorerAccountDto::from_entry(
-            entry,
+            &(entry),
             AccountCounters {
                 domains: 1,
                 assets: 2,
@@ -2842,10 +2836,10 @@ mod tests {
         assert!(std::ptr::eq(dto.metadata, details.metadata()));
         assert_explorer_wire(
             &dto,
-            norito::json!({
+            &(norito::json!({
                 "id": expected_id, "network_prefix": (dto.network_prefix),
                 "metadata": {}, "owned_domains":1, "owned_assets":2, "owned_nfts":3
-            }),
+            })),
         );
     }
     #[test]
@@ -2894,11 +2888,11 @@ mod tests {
         assert!(std::ptr::eq(dto.metadata, definition.metadata()));
         assert_explorer_wire(
             &dto,
-            norito::json!({
+            &(norito::json!({
                 "id":(def_id.to_string()), "owning_domain":null, "owning_dataspace":null, "mintable":"Once", "logo":null,
                 "metadata":{"ticker":"ROSE"}, "owned_by":(ALICE_ID.to_string()), "assets":7,
                 "total_quantity":"100", "locked_quantity":null, "circulating_quantity":null
-            }),
+            })),
         );
     }
     #[test]
@@ -2911,16 +2905,16 @@ mod tests {
         let asset_id = AssetId::new(def_id, ALICE_ID.clone());
         let value = Owned::new(Quantity::from(42u32));
         let entry = Ref::new(&asset_id, &value);
-        let dto = ExplorerAssetDto::from_entry(entry);
+        let dto = ExplorerAssetDto::from_entry(&(entry));
         assert_eq!(dto.id, &asset_id);
         assert_eq!(dto.value, &Quantity::from(42_u32));
         assert_eq!(dto.account_id, &*ALICE_ID);
         assert_explorer_wire(
             &dto,
-            norito::json!({
+            &(norito::json!({
                 "id":(asset_id.to_string()), "definition_id":(asset_id.definition().to_string()),
                 "account_id":(ALICE_ID.to_string()), "value":"42"
-            }),
+            })),
         );
     }
     #[test]
@@ -2936,7 +2930,7 @@ mod tests {
         );
         let value = Owned::new(data);
         let entry = Ref::new(&nft_id, &value);
-        let dto = ExplorerNftDto::from_entry(entry);
+        let dto = ExplorerNftDto::from_entry(&(entry));
         assert_eq!(dto.id, &nft_id);
         assert_eq!(dto.owned_by, &*ALICE_ID);
         let payload = json::to_value(&dto).expect("canonical NFT DTO");
@@ -2954,9 +2948,9 @@ mod tests {
         assert!(std::ptr::eq(dto.metadata, &raw const value.content));
         assert_explorer_wire(
             &dto,
-            norito::json!({
+            &(norito::json!({
                 "id":(nft_id.to_string()), "owned_by":(ALICE_ID.to_string()), "metadata":{"artist":"Alice"}
-            }),
+            })),
         );
     }
     #[test]
@@ -2971,7 +2965,7 @@ mod tests {
             |bytes| norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, bytes, 32);
         let (dto, construction) = norito::core::with_decode_limits_measured(limits(0), || {
             ExplorerAccountDto::from_entry(
-                Ref::new(&ALICE_ID, &details),
+                &(Ref::new(&ALICE_ID, &details)),
                 AccountCounters::default(),
             )
         });
@@ -3006,16 +3000,16 @@ mod tests {
             is_frozen: true,
             held_quantity: Quantity::from(2_u32),
         });
-        let dto = ExplorerRwaDto::from_entry(Ref::new(&id, &value));
+        let dto = ExplorerRwaDto::from_entry(&(Ref::new(&id, &value)));
         assert!(std::ptr::eq(dto.metadata, &raw const value.metadata));
         assert_eq!(dto.parents.0.as_ptr(), value.parents.as_ptr());
         assert_explorer_wire(
             &dto,
-            norito::json!({
+            &(norito::json!({
                 "id":(id.to_string()), "owned_by":(ALICE_ID.to_string()), "quantity":"7", "held_quantity":"2",
                 "primary_reference":"https://example.org/certificate", "status":"held", "is_frozen":true,
                 "metadata":{}, "parents":[{"rwa":(id.to_string()),"quantity":"3"}]
-            }),
+            })),
         );
         let many = vec![parent; 2048];
         let projected = ExplorerRwaParents(&many);
@@ -3083,7 +3077,7 @@ mod tests {
         );
         assert!(!denied, "root metadata refusal must fail closed");
         assert!(!DataspaceReadVisibility::default().allows_account(&global, &ALICE_ID));
-        let exact = DataspaceReadVisibility::exact_account(
+        let exact = DataspaceReadVisibility::default().with_exact_account(
             std::collections::BTreeSet::from([DataSpaceId::UNIVERSAL]),
             ALICE_ID.clone(),
         );
@@ -3115,7 +3109,11 @@ mod tests {
         expected.update(2_u32.to_be_bytes());
         for value in &values {
             expected.update([1]);
-            expected.update((value.len() as u32).to_be_bytes());
+            expected.update(
+                u32::try_from(value.len())
+                    .expect("fixture filter length fits u32")
+                    .to_be_bytes(),
+            );
             expected.update(value.as_bytes());
         }
         expected.update([0x11; 32]);
@@ -3348,7 +3346,7 @@ mod tests {
             definition_instance_count_from_world(&all.in_world(&view), &fixture.coin),
             2
         );
-        let alice_only = DataspaceReadVisibility::exact_account(
+        let alice_only = DataspaceReadVisibility::default().with_exact_account(
             std::collections::BTreeSet::from([iroha_model_base::topology::DataSpaceId::UNIVERSAL]),
             ALICE_ID.clone(),
         );
@@ -3841,7 +3839,7 @@ mod tests {
             transactions_rejected: 61,
             block: 422,
             block_created_at: Some(crate::explorer_history::HistoryTime(Duration::from_millis(
-                1771262077843,
+                1_771_262_077_843,
             ))),
             finalized_block: 422,
             avg_commit_time: Some(ExplorerDurationDto { ms: 302 }),

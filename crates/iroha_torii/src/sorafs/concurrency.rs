@@ -1,4 +1,4 @@
-//! Concurrency tracking for SoraFS stream tokens.
+//! Concurrency tracking for `SoraFS` stream tokens.
 use dashmap::{DashMap, mapref::entry::Entry};
 use std::sync::{
     Arc,

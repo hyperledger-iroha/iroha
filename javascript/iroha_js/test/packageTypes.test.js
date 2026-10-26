@@ -17,6 +17,7 @@ const TSC = fileURLToPath(
 const PACKAGE_NAME = "@iroha/iroha-js";
 const PORTABLE_RECIPES = [
   "recipes/iso_bridge_builder.mjs",
+  "recipes/iso_bridge_context.mjs",
   "recipes/nexus_app_transfer.mjs",
 ];
 
@@ -481,6 +482,10 @@ test("root declarations expose exactly the source and distribution values", asyn
       declaredValues,
       `${runtimeTarget} diverges from the root value declarations`,
     );
+    const transactionCodec = await import(runtimeTarget.replace("/index.js", "/public/transactionCodec.js"));
+    for (const [name, value] of Object.entries(transactionCodec)) {
+      assert.equal(runtime[name], value, `${runtimeTarget} must re-export transaction-codec ${name}`);
+    }
   }
 });
 

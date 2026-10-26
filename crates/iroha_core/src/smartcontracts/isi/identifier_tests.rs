@@ -69,8 +69,7 @@ fn claim_receipt(
     policy_id: &IdentifierPolicyId,
     program_policy: &RamLfeProgramPolicy,
     resolver: &KeyPair,
-    uaid: UniversalAccountId,
-    account_id: &AccountId,
+    (uaid, account_id): (UniversalAccountId, &AccountId),
     resolved_at_ms: u64,
     expires_at_ms: Option<u64>,
     output_seed: &[u8],
@@ -170,13 +169,10 @@ fn attach_phone_retail_canonicality(
     nullifier
 }
 fn phone_retail_claim_receipt(
-    policy_id: &IdentifierPolicyId,
-    program_policy: &RamLfeProgramPolicy,
-    resolver: &KeyPair,
-    attestor: &KeyPair,
+    (policy_id, program_policy): (&IdentifierPolicyId, &RamLfeProgramPolicy),
+    (resolver, attestor): (&KeyPair, &KeyPair),
     network_id: &NetworkId,
-    uaid: UniversalAccountId,
-    account_id: &AccountId,
+    (uaid, account_id): (UniversalAccountId, &AccountId),
     resolved_at_ms: u64,
     expires_at_ms: u64,
     canonical_phone: &str,
@@ -185,8 +181,7 @@ fn phone_retail_claim_receipt(
         policy_id,
         program_policy,
         resolver,
-        uaid,
-        account_id,
+        (uaid, account_id),
         resolved_at_ms,
         Some(expires_at_ms),
         canonical_phone.as_bytes(),
@@ -210,24 +205,19 @@ fn phone_retail_claim_receipt(
     receipt
 }
 fn phone_claim_receipt(
-    policy_id: &IdentifierPolicyId,
-    program_policy: &RamLfeProgramPolicy,
-    resolver: &KeyPair,
-    attestor: &KeyPair,
+    (policy_id, program_policy): (&IdentifierPolicyId, &RamLfeProgramPolicy),
+    (resolver, attestor): (&KeyPair, &KeyPair),
     network_id: NetworkId,
-    uaid: UniversalAccountId,
-    account_id: &AccountId,
+    (uaid, account_id): (UniversalAccountId, &AccountId),
     canonical_phone: &str,
-    ciphertext_seed: &[u8],
-    output_seed: &[u8],
+    (ciphertext_seed, output_seed): (&[u8], &[u8]),
     resolved_at_ms: u64,
 ) -> IdentifierResolutionReceipt {
     let mut receipt = claim_receipt(
         policy_id,
         program_policy,
         resolver,
-        uaid,
-        account_id,
+        (uaid, account_id),
         resolved_at_ms,
         Some(resolved_at_ms + 60_000),
         output_seed,
@@ -350,7 +340,13 @@ fn encrypted_registration_activation_and_claims_refuse_without_state_changes() {
             .identifier_policies
             .insert(policy.id.clone(), policy.clone());
         let receipt = claim_receipt(
-            &policy.id, &candidate, &resolver, uaid, &owner, 0, None, b"value",
+            &policy.id,
+            &candidate,
+            &resolver,
+            (uaid, &owner),
+            0,
+            None,
+            b"value",
         );
         let opaque_id = receipt.payload.opaque_id;
         let error = ClaimIdentifier {
@@ -389,8 +385,7 @@ fn identifier_receipt_checks_policy_and_commitment_backends_before_decode() {
         &policy.id,
         &program,
         &resolver,
-        UniversalAccountId::from_hash(Hash::new(b"uaid")),
-        &owner,
+        (UniversalAccountId::from_hash(Hash::new(b"uaid")), &owner),
         0,
         None,
         b"value",
@@ -517,8 +512,7 @@ fn opening_and_receipt_signatures_bind_the_independent_authorities() {
         &policy.id,
         &program,
         &resolver,
-        UniversalAccountId::from_hash(Hash::new(b"uaid")),
-        &owner,
+        (UniversalAccountId::from_hash(Hash::new(b"uaid")), &owner),
         0,
         None,
         b"value",
@@ -564,8 +558,7 @@ fn validly_signed_opening_rejects_each_execution_context_mismatch() {
         &policy.id,
         &program,
         &resolver,
-        UniversalAccountId::from_hash(Hash::new(b"uaid")),
-        &owner,
+        (UniversalAccountId::from_hash(Hash::new(b"uaid")), &owner),
         0,
         Some(60_000),
         b"value",
@@ -631,13 +624,10 @@ fn canonical_phone_attestation_rejects_missing_context_and_untrusted_signer() {
     .with_phone_retail_attestor_public_key(attestor.public_key().clone());
     let program = sample_program_policy(&owner, &resolver, &policy.program_id);
     let receipt = phone_retail_claim_receipt(
-        &policy.id,
-        &program,
-        &resolver,
-        &attestor,
+        (&policy.id, &program),
+        (&resolver, &attestor),
         &network_id,
-        UniversalAccountId::from_hash(Hash::new(b"uaid")),
-        &owner,
+        (UniversalAccountId::from_hash(Hash::new(b"uaid")), &owner),
         100,
         60_000,
         "+15551234567",
@@ -717,8 +707,7 @@ fn identifier_metadata_rejects_zero_receipt_hash_and_invalid_expiry() {
         &policy.id,
         &program,
         &resolver,
-        UniversalAccountId::from_hash(Hash::new(b"uaid")),
-        &owner,
+        (UniversalAccountId::from_hash(Hash::new(b"uaid")), &owner),
         5,
         Some(10),
         b"value",
@@ -765,16 +754,12 @@ fn output_binding_rejects_resigned_opaque_id_and_receipt_hash_changes() {
         let program = sample_program_policy(&owner, &resolver, &policy.program_id);
         let receipt = if phone {
             phone_claim_receipt(
-                &policy.id,
-                &program,
-                &resolver,
-                &attestor,
+                (&policy.id, &program),
+                (&resolver, &attestor),
                 network,
-                uaid,
-                &owner,
+                (uaid, &owner),
                 "+15551234567",
-                b"ciphertext",
-                b"plaintext",
+                (b"ciphertext", b"plaintext"),
                 100,
             )
         } else {
@@ -782,8 +767,7 @@ fn output_binding_rejects_resigned_opaque_id_and_receipt_hash_changes() {
                 &policy.id,
                 &program,
                 &resolver,
-                uaid,
-                &owner,
+                (uaid, &owner),
                 100,
                 Some(60_000),
                 b"alice@example.com",
@@ -830,8 +814,7 @@ fn verified_binding_checks_account_identity_and_lifetime() {
             &policy.id,
             &program,
             &resolver,
-            uaid,
-            &owner,
+            (uaid, &owner),
             5,
             Some(20),
             b"value",
@@ -902,8 +885,7 @@ fn verified_binding_and_revoke_update_all_indexes_and_enforce_authority() {
         &policy.id,
         &program,
         &resolver,
-        uaid,
-        &owner,
+        (uaid, &owner),
         0,
         Some(60_000),
         b"value",
@@ -1008,8 +990,7 @@ fn expired_binding_replaces_all_indexes_for_the_new_uaid() {
         &policy.id,
         &program,
         &resolver,
-        owner_uaid,
-        &owner,
+        (owner_uaid, &owner),
         0,
         Some(50),
         b"shared",
@@ -1034,8 +1015,7 @@ fn expired_binding_replaces_all_indexes_for_the_new_uaid() {
         &policy.id,
         &program,
         &resolver,
-        replacement_uaid,
-        &replacement,
+        (replacement_uaid, &replacement),
         100,
         Some(200),
         b"shared",
@@ -1104,16 +1084,12 @@ fn phone_nullifier_identity_is_independent_of_ciphertext_and_globally_unique() {
     .with_phone_retail_attestor_public_key(attestor.public_key().clone());
     let program = sample_program_policy(&owner, &resolver, &policy.program_id);
     let first = phone_claim_receipt(
-        &policy.id,
-        &program,
-        &resolver,
-        &attestor,
+        (&policy.id, &program),
+        (&resolver, &attestor),
         network,
-        owner_uaid,
-        &owner,
+        (owner_uaid, &owner),
         "+15551234567",
-        b"ciphertext-one",
-        b"output-one",
+        (b"ciphertext-one", b"output-one"),
         100,
     );
     let nullifier =
@@ -1139,16 +1115,12 @@ fn phone_nullifier_identity_is_independent_of_ciphertext_and_globally_unique() {
         nullifier
     );
     let second = phone_claim_receipt(
-        &policy.id,
-        &program,
-        &resolver,
-        &attestor,
+        (&policy.id, &program),
+        (&resolver, &attestor),
         network,
-        other_uaid,
-        &other,
+        (other_uaid, &other),
         "+15551234567",
-        b"ciphertext-two",
-        b"output-two",
+        (b"ciphertext-two", b"output-two"),
         100,
     );
     assert_eq!(second.payload.opaque_id, opaque_id);
@@ -1170,16 +1142,12 @@ fn phone_nullifier_identity_is_independent_of_ciphertext_and_globally_unique() {
         "{error}"
     );
     let different = phone_claim_receipt(
-        &policy.id,
-        &program,
-        &resolver,
-        &attestor,
+        (&policy.id, &program),
+        (&resolver, &attestor),
         network,
-        other_uaid,
-        &other,
+        (other_uaid, &other),
         "+15551234568",
-        b"ciphertext-three",
-        b"output-three",
+        (b"ciphertext-three", b"output-three"),
         100,
     );
     assert_ne!(different.payload.opaque_id, opaque_id);

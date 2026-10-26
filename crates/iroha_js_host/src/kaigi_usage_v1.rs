@@ -269,7 +269,7 @@ mod tests {
     }
 
     #[test]
-    fn native_usage_proof_opens_host_commitment_and_rejects_all_25_row_mutations() {
+    fn native_usage_proof_opens_host_commitment_and_rejects_all_public_row_mutations() {
         let context = fixture_context();
         let mut secret = [0x11; 32];
         let witness = take_witness(&mut secret).unwrap();
@@ -291,11 +291,14 @@ mod tests {
         assert_eq!(envelope.public_inputs, KAIGI_USAGE_PUBLIC_INPUTS_SCHEMA_V1);
         assert_eq!(envelope.vk_hash, iroha_core_zk::hash_vk(&key));
         assert!(envelope.aux.is_empty());
-        for row in 0..25 {
+        for row in 0..kaigi_zk::usage_v1::KAIGI_USAGE_INSTANCE_ROWS_V1 {
             let mut changed = envelope.clone();
             let mut inner: iroha_data_model::zk::NativePipaRProofV1 =
                 norito::decode_canonical(&changed.proof_bytes).unwrap();
-            assert_eq!(inner.public_inputs.len(), 25);
+            assert_eq!(
+                inner.public_inputs.len(),
+                kaigi_zk::usage_v1::KAIGI_USAGE_INSTANCE_ROWS_V1
+            );
             let bytes = &mut inner.public_inputs[row];
             let zero = bytes.iter().all(|byte| *byte == 0);
             bytes.fill(0);

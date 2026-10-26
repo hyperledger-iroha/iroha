@@ -176,7 +176,7 @@ fn fee_registered_home_domain_uses_canonical_json_and_preserves_refusal() {
         assert_actual_fee_decoder_owner(limited(|| {
             validate_registered_account_state(
                 &tx.world,
-                native.account_id.clone(),
+                &(native.account_id.clone()),
                 with_domain.clone(),
             )
         }));
@@ -640,7 +640,7 @@ fn fee_registered_metadata_refusal_retains_original_json_attempt() {
             .metadata()
             .clone();
         assert_actual_fee_decoder_owner(limited(|| {
-            validate_registered_account_state(&tx.world, account, state)
+            validate_registered_account_state(&tx.world, &(account), state)
         }));
         assert_eq!(
             tx.world
@@ -651,7 +651,7 @@ fn fee_registered_metadata_refusal_retains_original_json_attempt() {
             &original_metadata
         );
         assert_eq!(
-            validate_registered_account_state(&tx.world, native.account_id.clone(), native.clone())
+            validate_registered_account_state(&tx.world, &native.account_id, native.clone())
                 .unwrap(),
             *native
         );
@@ -851,7 +851,7 @@ fn fee_metadata_completed_invalid_json_keeps_original_diagnostics() {
             .insert(spec_key(), malformed.clone());
         let Err(Attempt::Rejected(ValidationFail::QueryFailed(QueryExecutionFail::Conversion(
             actual,
-        )))) = validate_registered_account_state(&tx.world, account.clone(), native.clone())
+        )))) = validate_registered_account_state(&tx.world, &(account.clone()), native.clone())
         else {
             panic!("intrinsically invalid spec must remain completed rejection");
         };
@@ -878,7 +878,7 @@ fn fee_metadata_completed_invalid_json_keeps_original_diagnostics() {
             .insert(home_domain_key(), malformed);
         let Err(Attempt::Rejected(ValidationFail::QueryFailed(QueryExecutionFail::Conversion(
             actual,
-        )))) = validate_registered_account_state(&tx.world, account.clone(), native.clone())
+        )))) = validate_registered_account_state(&tx.world, &(account.clone()), native.clone())
         else {
             panic!("intrinsically invalid domain must remain completed rejection");
         };

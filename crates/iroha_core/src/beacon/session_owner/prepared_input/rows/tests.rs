@@ -1,4 +1,4 @@
-//! Exact shared PeerId field framing, crypto work charges and original retry custody.
+//! Exact shared `PeerId` field framing, crypto work charges and original retry custody.
 
 use super::*;
 use iroha_crypto::{Algorithm, KeyPair};

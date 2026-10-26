@@ -718,24 +718,25 @@ fn build_response(request: BuildActionRequestV1) -> Result<BuildActionResponseV1
     let transaction: SignedTransaction = match operation.operation {
         ZK_ACE_OPERATION => {
             build_privacy_release_zk_ace_network_action_v1(
-                context,
+                &(context),
                 authority,
                 counterparty,
                 asset_definition_id,
                 ZK_ACE_RELEASE_AMOUNT,
-                *fixture_seed,
-                *proof_seed,
+                (*fixture_seed, *proof_seed),
                 &private_key,
             )
             .map_err(|error| format!("native ZK-ACE action construction failed: {error:?}"))?
             .transaction
         }
         ANONYMOUS_PGC_OPERATION => {
+            // The non-shipping driver selects both complete contexts explicitly;
+            // only the payment is returned by this operation.
             build_privacy_release_anonymous_pgc_network_action_v1(
-                context,
+                &context,
+                &context,
                 asset_definition_id,
                 pool_id,
-                0,
                 *fixture_seed,
                 &private_key,
             )
@@ -744,10 +745,10 @@ fn build_response(request: BuildActionRequestV1) -> Result<BuildActionResponseV1
         }
         VERANGE_OPERATION => {
             build_privacy_release_verange_network_action_v1(
-                context,
+                &(context),
                 asset_definition_id,
                 PrivacyPolicyIdV1::new(policy_seed),
-                VERANGE_RELEASE_VALUES.to_vec(),
+                VERANGE_RELEASE_VALUES.as_ref(),
                 *fixture_seed,
                 &private_key,
             )
@@ -761,7 +762,7 @@ fn build_response(request: BuildActionRequestV1) -> Result<BuildActionResponseV1
         }
         BOOTLE_LANTERN_OPERATION => {
             build_privacy_release_bootle_lantern_network_action_v1(
-                context,
+                &(context),
                 *fixture_seed,
                 &private_key,
             )
@@ -772,7 +773,7 @@ fn build_response(request: BuildActionRequestV1) -> Result<BuildActionResponseV1
         }
         ORCHARD_OPERATION => {
             build_privacy_release_orchard_network_action_v1(
-                context,
+                &(context),
                 pool_id,
                 asset_definition_id,
                 counterparty,
@@ -785,7 +786,7 @@ fn build_response(request: BuildActionRequestV1) -> Result<BuildActionResponseV1
         }
         FCMP_OPERATION => {
             build_privacy_release_fcmp_network_action_v1(
-                context,
+                &(context),
                 asset_definition_id,
                 pool_id,
                 *fixture_seed,
@@ -796,7 +797,7 @@ fn build_response(request: BuildActionRequestV1) -> Result<BuildActionResponseV1
         }
         IVM_PRIVATE_NOTE_OPERATION => {
             build_privacy_release_ivm_private_note_network_action_v1(
-                context,
+                &(context),
                 asset_definition_id,
                 pool_id,
                 counterparty,
@@ -815,10 +816,10 @@ fn build_response(request: BuildActionRequestV1) -> Result<BuildActionResponseV1
             // Returning only this canonical transaction therefore remains
             // explicitly construction-only and cannot satisfy a controller case.
             let actions = build_privacy_release_pq_masp_network_actions_v1(
-                preactivation_context,
-                context,
-                replay_context,
-                post_restart_replay_context,
+                &(preactivation_context),
+                &(context),
+                &(replay_context),
+                &(post_restart_replay_context),
                 *fixture_seed,
                 &private_key,
             )

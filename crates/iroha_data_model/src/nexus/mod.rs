@@ -1666,6 +1666,29 @@ impl LaneCatalog {
         lane_count: NonZeroU32,
         mut lanes: Vec<LaneConfig>,
     ) -> Result<Self, LaneCatalogError> {
+        Self::validate_borrowed(lane_count, &lanes)?;
+        // Catalog iteration feeds derived storage geometry, snapshot encoding,
+        // and lifecycle commitments. Canonicalize it here so semantically
+        // identical configuration files cannot disagree about the primary
+        // lane or any other order-sensitive derived artifact.
+        lanes.sort_unstable_by_key(|lane| lane.id);
+        Ok(Self { lane_count, lanes })
+    }
+    /// Validate a borrowed catalog without copying or reordering its lane graph.
+    ///
+    /// Uses three bounded stack indexes (6 KiB at the current active-lane limit) and no heap
+    /// allocation on success. Each input lane retains the same policy and error precedence as
+    /// [`Self::new`]. Alias lookup makes O(n log n) string comparisons across a valid catalog;
+    /// inserting sorted indexes can move O(n²) small integers, bounded by the active-lane limit.
+    /// Error diagnostics retain their original owned strings where required.
+    ///
+    /// # Errors
+    /// Returns the same [`LaneCatalogError`] as [`Self::new`] for the original input order,
+    /// including empty input, active-entry bounds, policy failures and duplicate identities.
+    pub fn validate_borrowed(
+        lane_count: NonZeroU32,
+        lanes: &[LaneConfig],
+    ) -> Result<(), LaneCatalogError> {
         if lanes.is_empty() {
             return Err(LaneCatalogError::EmptyCatalog);
         }
@@ -1675,10 +1698,15 @@ impl LaneCatalog {
                 maximum: MAX_ACTIVE_EXECUTION_LANES,
             });
         }
-        let mut seen_ids = BTreeSet::new();
-        let mut seen_aliases = BTreeSet::new();
-        let mut dataspace_visibility = BTreeMap::new();
-        for lane in &lanes {
+        // Entries are input positions, so the active-entry bound proves every u16 conversion.
+        // Online indexes keep the original short-circuit order: no later alias is compared before
+        // this lane is accepted. Insertion shifts only small indexes, never LaneConfig owners.
+        const { assert!(MAX_ACTIVE_EXECUTION_LANES <= u16::MAX as usize) };
+        let mut seen_ids = [0_u16; MAX_ACTIVE_EXECUTION_LANES];
+        let mut seen_aliases = [0_u16; MAX_ACTIVE_EXECUTION_LANES];
+        let mut dataspace_visibility = [0_u16; MAX_ACTIVE_EXECUTION_LANES];
+        let mut dataspace_count = 0;
+        for (input_index, lane) in lanes.iter().enumerate() {
             if lane.alias.trim().is_empty() {
                 return Err(LaneCatalogError::EmptyAlias(lane.id));
             }
@@ -1687,14 +1715,24 @@ impl LaneCatalog {
             {
                 return Err(LaneCatalogError::RestrictedUniversalLane(lane.id));
             }
-            if *dataspace_visibility
-                .entry(lane.dataspace_id)
-                .or_insert(lane.visibility)
-                != lane.visibility
-            {
-                return Err(LaneCatalogError::MixedDataspaceVisibility {
-                    dataspace: lane.dataspace_id,
-                });
+            match dataspace_visibility[..dataspace_count].binary_search_by(|&index| {
+                lanes[usize::from(index)]
+                    .dataspace_id
+                    .cmp(&lane.dataspace_id)
+            }) {
+                Ok(position) => {
+                    let first = &lanes[usize::from(dataspace_visibility[position])];
+                    if first.visibility != lane.visibility {
+                        return Err(LaneCatalogError::MixedDataspaceVisibility {
+                            dataspace: lane.dataspace_id,
+                        });
+                    }
+                }
+                Err(position) => {
+                    dataspace_visibility.copy_within(position..dataspace_count, position + 1);
+                    dataspace_visibility[position] = input_index as u16;
+                    dataspace_count += 1;
+                }
             }
             lane.validate_policy_surface()?;
             if lane.id.as_u32() >= lane_count.get() {
@@ -1703,19 +1741,24 @@ impl LaneCatalog {
                     lane_count: lane_count.get(),
                 });
             }
-            if !seen_ids.insert(lane.id) {
-                return Err(LaneCatalogError::DuplicateLaneId(lane.id));
-            }
-            if !seen_aliases.insert(lane.alias.clone()) {
-                return Err(LaneCatalogError::DuplicateLaneAlias(lane.alias.clone()));
-            }
+            let id_position = match seen_ids[..input_index]
+                .binary_search_by(|&index| lanes[usize::from(index)].id.cmp(&lane.id))
+            {
+                Ok(_) => return Err(LaneCatalogError::DuplicateLaneId(lane.id)),
+                Err(position) => position,
+            };
+            seen_ids.copy_within(id_position..input_index, id_position + 1);
+            seen_ids[id_position] = input_index as u16;
+            let alias_position = match seen_aliases[..input_index]
+                .binary_search_by(|&index| lanes[usize::from(index)].alias.cmp(&lane.alias))
+            {
+                Ok(_) => return Err(LaneCatalogError::DuplicateLaneAlias(lane.alias.clone())),
+                Err(position) => position,
+            };
+            seen_aliases.copy_within(alias_position..input_index, alias_position + 1);
+            seen_aliases[alias_position] = input_index as u16;
         }
-        // Catalog iteration feeds derived storage geometry, snapshot encoding,
-        // and lifecycle commitments. Canonicalize it here so semantically
-        // identical configuration files cannot disagree about the primary
-        // lane or any other order-sensitive derived artifact.
-        lanes.sort_unstable_by_key(|lane| lane.id);
-        Ok(Self { lane_count, lanes })
+        Ok(())
     }
     /// Exclusive lane-id bound for the current catalog namespace.
     ///
@@ -3414,6 +3457,598 @@ mod tests {
         let error = LaneCatalog::new(NonZeroU32::new(1).expect("non-zero bound"), Vec::new())
             .expect_err("validated catalogs must never be empty");
         assert_eq!(error, LaneCatalogError::EmptyCatalog);
+    }
+
+    // Independent frozen constructor oracle: original constructor body, with only Self -> LaneCatalog
+    // in the final construction. It intentionally retains the old owned trees and alias copies.
+    /// Retained original constructor for independent owner and runtime regression oracles.
+    pub(super) fn original_lane_catalog_constructor(
+        lane_count: NonZeroU32,
+        mut lanes: Vec<LaneConfig>,
+    ) -> Result<LaneCatalog, LaneCatalogError> {
+        if lanes.is_empty() {
+            return Err(LaneCatalogError::EmptyCatalog);
+        }
+        if lanes.len() > MAX_ACTIVE_EXECUTION_LANES {
+            return Err(LaneCatalogError::ActiveLaneBoundExceeded {
+                actual: lanes.len(),
+                maximum: MAX_ACTIVE_EXECUTION_LANES,
+            });
+        }
+        let mut seen_ids = BTreeSet::new();
+        let mut seen_aliases = BTreeSet::new();
+        let mut dataspace_visibility = BTreeMap::new();
+        for lane in &lanes {
+            if lane.alias.trim().is_empty() {
+                return Err(LaneCatalogError::EmptyAlias(lane.id));
+            }
+            if lane.dataspace_id == DataSpaceId::UNIVERSAL
+                && lane.visibility != LaneVisibility::Public
+            {
+                return Err(LaneCatalogError::RestrictedUniversalLane(lane.id));
+            }
+            if *dataspace_visibility
+                .entry(lane.dataspace_id)
+                .or_insert(lane.visibility)
+                != lane.visibility
+            {
+                return Err(LaneCatalogError::MixedDataspaceVisibility {
+                    dataspace: lane.dataspace_id,
+                });
+            }
+            lane.validate_policy_surface()?;
+            if lane.id.as_u32() >= lane_count.get() {
+                return Err(LaneCatalogError::LaneOutOfBounds {
+                    lane: lane.id,
+                    lane_count: lane_count.get(),
+                });
+            }
+            if !seen_ids.insert(lane.id) {
+                return Err(LaneCatalogError::DuplicateLaneId(lane.id));
+            }
+            if !seen_aliases.insert(lane.alias.clone()) {
+                return Err(LaneCatalogError::DuplicateLaneAlias(lane.alias.clone()));
+            }
+        }
+        // Catalog iteration feeds derived storage geometry, snapshot encoding,
+        // and lifecycle commitments. Canonicalize it here so semantically
+        // identical configuration files cannot disagree about the primary
+        // lane or any other order-sensitive derived artifact.
+        lanes.sort_unstable_by_key(|lane| lane.id);
+        Ok(LaneCatalog { lane_count, lanes })
+    }
+
+    fn assert_borrowed_lane_case(
+        label: &str,
+        bound: NonZeroU32,
+        lanes: Vec<LaneConfig>,
+        exact_error: Option<LaneCatalogError>,
+    ) {
+        let original = lanes.clone();
+        let expected = original_lane_catalog_constructor(bound, lanes.clone());
+        if let Some(exact_error) = exact_error {
+            assert_eq!(expected.as_ref().unwrap_err(), &exact_error, "{label}");
+        } else {
+            assert!(expected.is_ok(), "original acceptance fixture: {label}");
+        }
+        let expected_validation = expected.as_ref().map(|_| ()).map_err(Clone::clone);
+        assert_eq!(
+            LaneCatalog::validate_borrowed(bound, &lanes),
+            expected_validation,
+            "{label}"
+        );
+        assert_eq!(
+            lanes, original,
+            "borrowed validation changes no source: {label}"
+        );
+        assert_eq!(
+            LaneCatalog::new(bound, lanes),
+            expected,
+            "owned constructor: {label}"
+        );
+    }
+
+    fn borrowed_lane_fixture(id: u32, alias: &str) -> LaneConfig {
+        visibility_lane(id, alias, DataSpaceId::new(42), LaneVisibility::Public)
+    }
+
+    fn borrowed_confidential_policy(audiences: &[&str]) -> ConfidentialComputePolicy {
+        ConfidentialComputePolicy::new(
+            ConfidentialComputeMechanism::Encryption,
+            NonZeroU32::new(7).unwrap(),
+            audiences.iter().map(|value| (*value).to_owned()).collect(),
+        )
+    }
+
+    #[test]
+    fn borrowed_lane_catalog_matches_original_constructor_acceptance_and_errors() {
+        let bound = NonZeroU32::new(10).unwrap();
+        assert_borrowed_lane_case(
+            "empty",
+            bound,
+            Vec::new(),
+            Some(LaneCatalogError::EmptyCatalog),
+        );
+        assert_borrowed_lane_case(
+            "single sparse",
+            bound,
+            vec![borrowed_lane_fixture(7, "seven")],
+            None,
+        );
+        assert_borrowed_lane_case(
+            "unsorted sparse",
+            bound,
+            vec![
+                borrowed_lane_fixture(7, "seven"),
+                borrowed_lane_fixture(2, "two"),
+            ],
+            None,
+        );
+        // The native constructor accepts nonempty padded aliases. The transition layer owns its
+        // stricter spelling bound; moving that restriction here would silently change configuration.
+        assert_borrowed_lane_case(
+            "padded nonempty alias",
+            bound,
+            vec![borrowed_lane_fixture(7, " seven ")],
+            None,
+        );
+        for alias in ["", " \t\n"] {
+            assert_borrowed_lane_case(
+                "blank alias",
+                bound,
+                vec![borrowed_lane_fixture(7, alias)],
+                Some(LaneCatalogError::EmptyAlias(LaneId::new(7))),
+            );
+        }
+        assert_borrowed_lane_case(
+            "out of range",
+            bound,
+            vec![borrowed_lane_fixture(10, "ten")],
+            Some(LaneCatalogError::LaneOutOfBounds {
+                lane: LaneId::new(10),
+                lane_count: 10,
+            }),
+        );
+        assert_borrowed_lane_case(
+            "duplicate ID",
+            bound,
+            vec![
+                borrowed_lane_fixture(7, "seven"),
+                borrowed_lane_fixture(7, "another"),
+            ],
+            Some(LaneCatalogError::DuplicateLaneId(LaneId::new(7))),
+        );
+        assert_borrowed_lane_case(
+            "duplicate alias",
+            bound,
+            vec![
+                borrowed_lane_fixture(7, "same"),
+                borrowed_lane_fixture(2, "same"),
+            ],
+            Some(LaneCatalogError::DuplicateLaneAlias("same".to_owned())),
+        );
+        let mut restricted = borrowed_lane_fixture(7, "restricted");
+        restricted.visibility = LaneVisibility::Restricted;
+        assert_borrowed_lane_case(
+            "uniform restricted data space",
+            bound,
+            vec![restricted.clone()],
+            None,
+        );
+        assert_borrowed_lane_case(
+            "mixed same data space",
+            bound,
+            vec![borrowed_lane_fixture(2, "two"), restricted.clone()],
+            Some(LaneCatalogError::MixedDataspaceVisibility {
+                dataspace: DataSpaceId::new(42),
+            }),
+        );
+        let mut intervening = borrowed_lane_fixture(9, "intervening");
+        intervening.dataspace_id = DataSpaceId::new(43);
+        assert_borrowed_lane_case(
+            "nonadjacent mixed data space in unsorted input",
+            bound,
+            vec![
+                borrowed_lane_fixture(2, "two"),
+                intervening,
+                restricted.clone(),
+            ],
+            Some(LaneCatalogError::MixedDataspaceVisibility {
+                dataspace: DataSpaceId::new(42),
+            }),
+        );
+        restricted.dataspace_id = DataSpaceId::UNIVERSAL;
+        assert_borrowed_lane_case(
+            "restricted universal",
+            bound,
+            vec![restricted],
+            Some(LaneCatalogError::RestrictedUniversalLane(LaneId::new(7))),
+        );
+        let mut retired_shard = borrowed_lane_fixture(7, "seven");
+        retired_shard
+            .metadata
+            .insert("da_shard_id".to_owned(), "9".to_owned());
+        assert_borrowed_lane_case(
+            "retired shard",
+            bound,
+            vec![retired_shard],
+            Some(LaneCatalogError::RetiredShardIdMetadata(LaneId::new(7))),
+        );
+        for key in RETIRED_FUNCTIONAL_METADATA_KEYS.into_iter().chain([
+            "confidential_future_policy",
+            "scheduler.future_policy",
+            "settlement.buffer_future_policy",
+        ]) {
+            let mut retired = borrowed_lane_fixture(7, "seven");
+            retired
+                .metadata
+                .insert(key.to_owned(), "retired".to_owned());
+            assert_borrowed_lane_case(
+                "retired functional key",
+                bound,
+                vec![retired],
+                Some(LaneCatalogError::RetiredFunctionalMetadata {
+                    lane: LaneId::new(7),
+                    key: key.to_owned(),
+                }),
+            );
+        }
+        let mut empty_scheduler = borrowed_lane_fixture(7, "seven");
+        empty_scheduler.scheduler = Some(LaneSchedulerPolicy::new(None, None));
+        assert_borrowed_lane_case(
+            "empty scheduler",
+            bound,
+            vec![empty_scheduler],
+            Some(LaneCatalogError::InvalidFunctionalPolicy {
+                lane: LaneId::new(7),
+                reason:
+                    "scheduler policy must define `teu_capacity`, `starvation_bound_slots`, or both"
+                        .to_owned(),
+            }),
+        );
+        let mut zero_buffer = borrowed_lane_fixture(7, "seven");
+        let mut policy = settlement_buffer_policy();
+        policy.capacity = XorQuantity::zero();
+        zero_buffer.settlement_buffer = Some(policy);
+        assert_borrowed_lane_case(
+            "zero settlement buffer",
+            bound,
+            vec![zero_buffer],
+            Some(LaneCatalogError::InvalidFunctionalPolicy {
+                lane: LaneId::new(7),
+                reason: "settlement buffer capacity must be positive".to_owned(),
+            }),
+        );
+        let mut confidential = borrowed_lane_fixture(7, "seven");
+        confidential.confidential_compute = Some(borrowed_confidential_policy(&["auditor"]));
+        assert_borrowed_lane_case(
+            "full replica confidential",
+            bound,
+            vec![confidential.clone()],
+            Some(LaneCatalogError::InvalidFunctionalPolicy {
+                lane: LaneId::new(7),
+                reason:
+                    "confidential compute requires `commitment_only` or `split_replica` storage"
+                        .to_owned(),
+            }),
+        );
+        confidential.storage = LaneStorageProfile::SplitReplica;
+        for audience in ["", " auditor", "auditor "] {
+            confidential.confidential_compute = Some(borrowed_confidential_policy(&[audience]));
+            assert_borrowed_lane_case(
+                "invalid confidential audience",
+                bound,
+                vec![confidential.clone()],
+                Some(LaneCatalogError::InvalidFunctionalPolicy {
+                    lane: LaneId::new(7),
+                    reason: format!(
+                        "confidential audience `{audience}` must be non-empty and must not contain surrounding whitespace"
+                    ),
+                }),
+            );
+        }
+        confidential.confidential_compute =
+            Some(borrowed_confidential_policy(&["auditor", "operator"]));
+        confidential.scheduler = Some(LaneSchedulerPolicy::new(
+            Some(NonZeroU64::new(5).unwrap()),
+            Some(NonZeroU64::new(3).unwrap()),
+        ));
+        confidential.settlement_buffer = Some(settlement_buffer_policy());
+        confidential
+            .metadata
+            .insert("instrumentation.owner".to_owned(), "ops".to_owned());
+        assert_borrowed_lane_case("complete typed policy", bound, vec![confidential], None);
+        let maximum = u32::try_from(MAX_ACTIVE_EXECUTION_LANES).unwrap();
+        let exact = (0..maximum)
+            .map(|id| borrowed_lane_fixture(id, &format!("lane-{id}")))
+            .collect::<Vec<_>>();
+        assert_borrowed_lane_case(
+            "exact active bound",
+            NonZeroU32::new(maximum).unwrap(),
+            exact.clone(),
+            None,
+        );
+        let mut oversized = exact;
+        oversized.push(borrowed_lane_fixture(maximum, "overflow"));
+        assert_borrowed_lane_case(
+            "one over active bound",
+            NonZeroU32::new(maximum + 1).unwrap(),
+            oversized,
+            Some(LaneCatalogError::ActiveLaneBoundExceeded {
+                actual: MAX_ACTIVE_EXECUTION_LANES + 1,
+                maximum: MAX_ACTIVE_EXECUTION_LANES,
+            }),
+        );
+    }
+
+    #[test]
+    fn borrowed_lane_catalog_keeps_combined_fault_and_input_order_precedence() {
+        let bound = NonZeroU32::new(2).unwrap();
+        let first = borrowed_lane_fixture(0, "first");
+        let second = borrowed_lane_fixture(1, "second");
+        let mut row = second.clone();
+        row.alias = " ".to_owned();
+        row.dataspace_id = DataSpaceId::UNIVERSAL;
+        row.visibility = LaneVisibility::Restricted;
+        row.metadata
+            .insert("da_shard_id".to_owned(), "retired".to_owned());
+        assert_borrowed_lane_case(
+            "alias before visibility and policy",
+            bound,
+            vec![first.clone(), row],
+            Some(LaneCatalogError::EmptyAlias(LaneId::new(1))),
+        );
+        let mut row = second.clone();
+        row.dataspace_id = DataSpaceId::UNIVERSAL;
+        row.visibility = LaneVisibility::Restricted;
+        row.metadata
+            .insert("da_shard_id".to_owned(), "retired".to_owned());
+        assert_borrowed_lane_case(
+            "universal before policy",
+            bound,
+            vec![first.clone(), row],
+            Some(LaneCatalogError::RestrictedUniversalLane(LaneId::new(1))),
+        );
+        let mut row = second.clone();
+        row.visibility = LaneVisibility::Restricted;
+        row.alias = first.alias.clone();
+        row.metadata
+            .insert("da_shard_id".to_owned(), "retired".to_owned());
+        assert_borrowed_lane_case(
+            "mixed visibility before policy and alias",
+            bound,
+            vec![first.clone(), row],
+            Some(LaneCatalogError::MixedDataspaceVisibility {
+                dataspace: DataSpaceId::new(42),
+            }),
+        );
+        let mut row = second.clone();
+        row.metadata
+            .insert("da_shard_id".to_owned(), "retired".to_owned());
+        row.metadata
+            .insert("scheduler.future_policy".to_owned(), "retired".to_owned());
+        row.scheduler = Some(LaneSchedulerPolicy::new(None, None));
+        assert_borrowed_lane_case(
+            "shard before functional metadata and scheduler",
+            bound,
+            vec![first.clone(), row],
+            Some(LaneCatalogError::RetiredShardIdMetadata(LaneId::new(1))),
+        );
+        let mut row = second.clone();
+        row.metadata
+            .insert("scheduler.future_policy".to_owned(), "retired".to_owned());
+        row.metadata.insert(
+            "confidential_future_policy".to_owned(),
+            "retired".to_owned(),
+        );
+        row.scheduler = Some(LaneSchedulerPolicy::new(None, None));
+        assert_borrowed_lane_case(
+            "first sorted retired key before scheduler",
+            bound,
+            vec![first.clone(), row],
+            Some(LaneCatalogError::RetiredFunctionalMetadata {
+                lane: LaneId::new(1),
+                key: "confidential_future_policy".to_owned(),
+            }),
+        );
+        let mut zero = settlement_buffer_policy();
+        zero.capacity = XorQuantity::zero();
+        let mut row = second.clone();
+        row.scheduler = Some(LaneSchedulerPolicy::new(None, None));
+        row.settlement_buffer = Some(zero.clone());
+        row.confidential_compute = Some(borrowed_confidential_policy(&[""]));
+        assert_borrowed_lane_case(
+            "scheduler before settlement and confidential",
+            bound,
+            vec![first.clone(), row],
+            Some(LaneCatalogError::InvalidFunctionalPolicy {
+                lane: LaneId::new(1),
+                reason:
+                    "scheduler policy must define `teu_capacity`, `starvation_bound_slots`, or both"
+                        .to_owned(),
+            }),
+        );
+        let mut row = second.clone();
+        row.settlement_buffer = Some(zero);
+        row.confidential_compute = Some(borrowed_confidential_policy(&[""]));
+        assert_borrowed_lane_case(
+            "settlement before confidential",
+            bound,
+            vec![first.clone(), row],
+            Some(LaneCatalogError::InvalidFunctionalPolicy {
+                lane: LaneId::new(1),
+                reason: "settlement buffer capacity must be positive".to_owned(),
+            }),
+        );
+        let mut row = second.clone();
+        row.confidential_compute = Some(borrowed_confidential_policy(&[""]));
+        assert_borrowed_lane_case(
+            "confidential storage before audience",
+            bound,
+            vec![first.clone(), row],
+            Some(LaneCatalogError::InvalidFunctionalPolicy {
+                lane: LaneId::new(1),
+                reason:
+                    "confidential compute requires `commitment_only` or `split_replica` storage"
+                        .to_owned(),
+            }),
+        );
+        let mut row = second.clone();
+        row.id = LaneId::new(2);
+        row.storage = LaneStorageProfile::SplitReplica;
+        row.confidential_compute = Some(borrowed_confidential_policy(&[""]));
+        row.alias = first.alias.clone();
+        assert_borrowed_lane_case("audience before bound and duplicate alias", bound, vec![first.clone(), row], Some(LaneCatalogError::InvalidFunctionalPolicy { lane: LaneId::new(2), reason: "confidential audience `` must be non-empty and must not contain surrounding whitespace".to_owned() }));
+        let mut row = second.clone();
+        row.id = LaneId::new(2);
+        row.alias = first.alias.clone();
+        assert_borrowed_lane_case(
+            "bound before duplicate alias",
+            bound,
+            vec![first.clone(), row],
+            Some(LaneCatalogError::LaneOutOfBounds {
+                lane: LaneId::new(2),
+                lane_count: 2,
+            }),
+        );
+        let mut row = second.clone();
+        row.id = first.id;
+        row.alias = first.alias.clone();
+        assert_borrowed_lane_case(
+            "duplicate ID before alias",
+            bound,
+            vec![first.clone(), row],
+            Some(LaneCatalogError::DuplicateLaneId(first.id)),
+        );
+        let mut row = second.clone();
+        row.alias = first.alias.clone();
+        assert_borrowed_lane_case(
+            "earlier error before later empty alias",
+            NonZeroU32::new(3).unwrap(),
+            vec![first.clone(), row, borrowed_lane_fixture(2, "")],
+            Some(LaneCatalogError::DuplicateLaneAlias(first.alias.clone())),
+        );
+        // Count rejection precedes even an invalid first entry. This catches eager per-row scans.
+        let mut oversized = (0..=MAX_ACTIVE_EXECUTION_LANES)
+            .map(|id| borrowed_lane_fixture(u32::try_from(id).unwrap(), &format!("lane-{id}")))
+            .collect::<Vec<_>>();
+        oversized[0].alias.clear();
+        assert_borrowed_lane_case(
+            "global bound before first lane error",
+            NonZeroU32::new(u32::try_from(MAX_ACTIVE_EXECUTION_LANES + 1).unwrap()).unwrap(),
+            oversized,
+            Some(LaneCatalogError::ActiveLaneBoundExceeded {
+                actual: MAX_ACTIVE_EXECUTION_LANES + 1,
+                maximum: MAX_ACTIVE_EXECUTION_LANES,
+            }),
+        );
+    }
+
+    #[derive(Debug, PartialEq, Eq)]
+    struct BorrowedLaneGraphPointers {
+        id: LaneId,
+        alias: *const u8,
+        description: Option<*const u8>,
+        metadata: Vec<(*const u8, *const u8)>,
+        audiences: Vec<*const u8>,
+    }
+    fn borrowed_lane_graph_pointers(lanes: &[LaneConfig]) -> Vec<BorrowedLaneGraphPointers> {
+        lanes
+            .iter()
+            .map(|lane| BorrowedLaneGraphPointers {
+                id: lane.id,
+                alias: lane.alias.as_ptr(),
+                description: lane.description.as_ref().map(|value| value.as_ptr()),
+                metadata: lane
+                    .metadata
+                    .iter()
+                    .map(|(key, value)| (key.as_ptr(), value.as_ptr()))
+                    .collect(),
+                audiences: lane
+                    .confidential_compute
+                    .as_ref()
+                    .map(|policy| {
+                        policy
+                            .allowed_audiences
+                            .iter()
+                            .map(|value| value.as_ptr())
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn borrowed_lane_catalog_preserves_rich_original_graphs_without_allocations() {
+        use crate::amx_prepare_streaming_allocations::measured;
+        let mut rich = borrowed_lane_fixture(1, "rich");
+        rich.description = Some("original description 雪 ".repeat(64));
+        rich.storage = LaneStorageProfile::SplitReplica;
+        rich.confidential_compute = Some(borrowed_confidential_policy(&["auditor", "operator"]));
+        rich.scheduler = Some(LaneSchedulerPolicy::new(
+            Some(NonZeroU64::new(9).unwrap()),
+            Some(NonZeroU64::new(3).unwrap()),
+        ));
+        rich.settlement_buffer = Some(settlement_buffer_policy());
+        rich.metadata.insert(
+            "instrumentation.owner".to_owned(),
+            "source-owned-value".repeat(16),
+        );
+        for count in [1, 3, MAX_ACTIVE_EXECUTION_LANES] {
+            let bound = NonZeroU32::new(u32::try_from(count * 2).unwrap()).unwrap();
+            let mut lanes = (0..count)
+                .map(|index| {
+                    let mut lane = rich.clone();
+                    lane.id = LaneId::new(u32::try_from(index * 2 + 1).unwrap());
+                    // At maximum shape every original index is full; the smaller shape also
+                    // exercises repeated data spaces with uniform visibility.
+                    let dataspace = if count == MAX_ACTIVE_EXECUTION_LANES {
+                        index
+                    } else {
+                        index / 2
+                    };
+                    lane.dataspace_id = DataSpaceId::new(42 + u64::try_from(dataspace).unwrap());
+                    lane.alias = format!("lane-{index}");
+                    lane
+                })
+                .collect::<Vec<_>>();
+            lanes.reverse();
+            let original = lanes.clone();
+            let pointers = borrowed_lane_graph_pointers(&lanes);
+            let vector = lanes.as_ptr();
+            let oracle_source = lanes.clone();
+            let (oracle, oracle_requests) =
+                measured(|| original_lane_catalog_constructor(bound, oracle_source));
+            let oracle = oracle.unwrap();
+            assert!(
+                oracle_requests.into_iter().any(|requests| requests > 0),
+                "the original constructor must exercise actual allocator observation"
+            );
+            let (validated, requests) = measured(|| LaneCatalog::validate_borrowed(bound, &lanes));
+            assert_eq!(validated, Ok(()));
+            assert_eq!(
+                requests, [0; 3],
+                "borrowed validation allocates no graph or indexes at {count} lanes"
+            );
+            assert_eq!(lanes, original);
+            assert_eq!(lanes.as_ptr(), vector);
+            assert_eq!(borrowed_lane_graph_pointers(&lanes), pointers);
+            let owned_source = lanes.clone();
+            let owned_vector = owned_source.as_ptr();
+            let mut owned_pointers = borrowed_lane_graph_pointers(&owned_source);
+            owned_pointers.sort_unstable_by_key(|entry| entry.id);
+            let (owned, requests) = measured(|| LaneCatalog::new(bound, owned_source));
+            let owned = owned.unwrap();
+            assert_eq!(
+                requests, [0; 3],
+                "constructor reuses original vector and heap payloads"
+            );
+            assert_eq!(owned, oracle);
+            assert_eq!(owned.lanes().as_ptr(), owned_vector);
+            assert_eq!(borrowed_lane_graph_pointers(owned.lanes()), owned_pointers);
+            assert_eq!(owned.lane_count(), bound);
+        }
     }
 }
 /// Prelude re-export for the Nexus module.

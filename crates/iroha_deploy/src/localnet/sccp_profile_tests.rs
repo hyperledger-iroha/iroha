@@ -98,18 +98,17 @@ fn assert_sccp_localnet_profile(
     assert!(
         timing.epoch_length_blocks.get() * timing.block_cadence_ms().get() >= SCCP_MIN_EPOCH_MS_V1
     );
+    let policy = PublicLaneStakingPolicy::from_parameters(&parameters).unwrap();
+    assert_eq!(policy.unbonding_delay_ms, 1_814_400_000);
+    assert_eq!(policy.max_slash_bps, 10_000);
     for index in 0..4 {
         let config: toml::Value = toml::from_str(
             &fs::read_to_string(directory.join(format!("peer{index}.toml"))).unwrap(),
         )
         .unwrap();
-        assert_eq!(
-            config["nexus"]["staking"]["unbonding_delay_ms"].as_integer(),
-            Some(1_814_400_000)
-        );
-        assert_eq!(
-            config["nexus"]["staking"]["max_slash_bps"].as_integer(),
-            Some(10_000)
+        assert!(
+            config["nexus"].get("staking").is_none(),
+            "peer {index} must not duplicate original monetary terms"
         );
     }
     let nonce = initializer.reset_nonce;

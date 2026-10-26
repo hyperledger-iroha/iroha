@@ -52,9 +52,9 @@ fn native_rp56_parameters_match_every_upstream_constant() {
 fn context() -> KaigiAuthorizationContextV1 {
     KaigiAuthorizationContextV1 {
         network_id: array::from_fn(|index| index as u8 + 1),
-        call_id: [1, 2, 3, 4, 5, 6],
-        host_id: [11, 12, 13, 14, 15, 16],
-        subject_id: [11, 12, 13, 14, 15, 16],
+        call_id: [1, 2, 3, 4],
+        host_id: [11, 12, 13, 14],
+        subject_id: [11, 12, 13, 14],
         participation_sequence: 0,
         action: KaigiAuthorizationActionV1::HostCreate,
         pre_roster_root: array::from_fn(|index| index as u8 + 33),
@@ -175,7 +175,7 @@ fn exact_root_instance_limbs_match_every_input_byte() {
     for (bytes, scalar) in context
         .pre_roster_root
         .chunks_exact(8)
-        .zip(&instance[24..28])
+        .zip(&instance[18..22])
     {
         let expected = u64::from_le_bytes(bytes.try_into().unwrap());
         let repr = scalar.to_repr();

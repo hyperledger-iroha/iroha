@@ -583,36 +583,27 @@ fn tree_operation_reader_closes_renamed_replaced_and_unsafe_originals_on_every_r
                         "native_error" => reader.read("record", 7, |_| Some(8)),
                         _ => Err(io::Error::new(io::ErrorKind::InvalidData, "inner refusal")),
                     };
-                    match attack {
-                        "permission" => {
-                            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
-                                .unwrap()
-                        }
-                        _ => {
-                            std::fs::rename(&path, &moved).unwrap();
-                            if attack == "replacement" {
-                                std::fs::create_dir(&path).unwrap();
-                                std::fs::set_permissions(
-                                    &path,
-                                    std::fs::Permissions::from_mode(0o700),
-                                )
+                    if attack == "permission" {
+                        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+                            .unwrap();
+                    } else {
+                        std::fs::rename(&path, &moved).unwrap();
+                        if attack == "replacement" {
+                            std::fs::create_dir(&path).unwrap();
+                            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700))
                                 .unwrap();
-                            }
                         }
                     }
                     value
                 })
             });
-            match attack {
-                "permission" => {
-                    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap()
+            if attack == "permission" {
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+            } else {
+                if attack == "replacement" {
+                    std::fs::remove_dir(&path).unwrap();
                 }
-                _ => {
-                    if attack == "replacement" {
-                        std::fs::remove_dir(&path).unwrap();
-                    }
-                    std::fs::rename(&moved, &path).unwrap();
-                }
+                std::fs::rename(&moved, &path).unwrap();
             }
             let error = result.unwrap_err();
             assert_eq!(
@@ -770,32 +761,26 @@ fn root_tree_reader_closes_original_root_on_every_result_and_retries() {
                     ),
                     _ => assert_eq!(value.as_ref().unwrap_err().to_string(), "inner refusal"),
                 }
-                match attack {
-                    "permission" => {
-                        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
-                            .unwrap()
-                    }
-                    _ => {
-                        std::fs::rename(&path, &moved).unwrap();
-                        if attack == "replacement" {
-                            std::fs::create_dir(&path).unwrap();
-                            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700))
-                                .unwrap();
-                        }
+                if attack == "permission" {
+                    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+                        .unwrap();
+                } else {
+                    std::fs::rename(&path, &moved).unwrap();
+                    if attack == "replacement" {
+                        std::fs::create_dir(&path).unwrap();
+                        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700))
+                            .unwrap();
                     }
                 }
                 value
             });
-            match attack {
-                "permission" => {
-                    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap()
+            if attack == "permission" {
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+            } else {
+                if attack == "replacement" {
+                    std::fs::remove_dir(&path).unwrap();
                 }
-                _ => {
-                    if attack == "replacement" {
-                        std::fs::remove_dir(&path).unwrap();
-                    }
-                    std::fs::rename(&moved, &path).unwrap();
-                }
+                std::fs::rename(&moved, &path).unwrap();
             }
             assert_eq!(
                 result.unwrap_err().kind(),
@@ -818,6 +803,12 @@ fn root_tree_reader_closes_original_root_on_every_result_and_retries() {
 #[test]
 fn root_tree_reader_entry_and_explicit_anchor_reads_keep_full_native_custody() {
     use std::os::unix::fs::PermissionsExt as _;
+    struct DroppedValue<'a>(&'a Cell<bool>);
+    impl Drop for DroppedValue<'_> {
+        fn drop(&mut self) {
+            self.0.set(true);
+        }
+    }
     let (_temporary, root, first, _second) = store();
     root.write_atomic("record", b"root", PublishMode::CreateNew)
         .unwrap();
@@ -831,12 +822,6 @@ fn root_tree_reader_entry_and_explicit_anchor_reads_keep_full_native_custody() {
     std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
     assert_eq!(result.unwrap_err().kind(), io::ErrorKind::PermissionDenied);
     assert!(!entered.get());
-    struct DroppedValue<'a>(&'a Cell<bool>);
-    impl Drop for DroppedValue<'_> {
-        fn drop(&mut self) {
-            self.0.set(true);
-        }
-    }
     let dropped = Cell::new(false);
     let result: io::Result<_> = root.read_tree_scope_with_root(|_, _| {
         std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o755)).unwrap();

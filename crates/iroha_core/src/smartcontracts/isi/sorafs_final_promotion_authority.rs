@@ -172,12 +172,11 @@ fn stage_operation(
     tx: &StateTransaction<'_, '_>,
     head: FinalPromotionOperationHeadV1,
     previous: Option<&FinalPromotionOperationRecordV1>,
-    record: FinalPromotionOperationRecordV1,
+    record: &FinalPromotionOperationRecordV1,
     writes: &mut Writes,
 ) -> Result<(), Error> {
-    let next = crate::query::final_promotion_authority::operation::successor_head(
-        head, previous, &record,
-    )?;
+    let next =
+        crate::query::final_promotion_authority::operation::successor_head(head, previous, record)?;
     let index = OperationIndexV1 {
         head: next,
         height: record.execution.height,
@@ -188,7 +187,7 @@ fn stage_operation(
         tx.world(),
         writes,
         operation_record_key(&record.deployment_id, record.revision)?,
-        encode(&record)?,
+        encode(record)?,
     )?;
     immutable(
         tx.world(),
@@ -212,7 +211,7 @@ fn stage_operation(
     Ok(())
 }
 fn apply(
-    instruction: MutateSorafsFinalPromotionAuthority,
+    instruction: &MutateSorafsFinalPromotionAuthority,
     authority: &AccountId,
     tx: &mut StateTransaction<'_, '_>,
 ) -> Result<(), Error> {
@@ -239,7 +238,7 @@ fn apply(
     }
     if let Action::Check(check) = &instruction.action {
         // Check has no mutation request digest, but retains the same canonical instruction bound.
-        encode(&instruction)?;
+        encode(instruction)?;
         return observation_check::execute(
             check,
             authority,
@@ -248,11 +247,11 @@ fn apply(
             head,
         );
     }
-    let request_digest = final_promotion_authority_request_digest_v1(&instruction, authority)?;
+    let request_digest = final_promotion_authority_request_digest_v1(instruction, authority)?;
     let mut writes = Writes::new();
     match &instruction.action {
         Action::Configure(_) | Action::Enroll(_) | Action::Revoke(_) => control::prepare(
-            &instruction,
+            instruction,
             authority,
             tx,
             current.as_ref(),
@@ -261,7 +260,7 @@ fn apply(
             &mut writes,
         )?,
         _ => operation::prepare(
-            &instruction,
+            instruction,
             authority,
             tx,
             current.as_ref().ok_or(Error::Conflict)?,
@@ -286,7 +285,7 @@ impl Execute for MutateSorafsFinalPromotionAuthority {
         {
             return Err(rejected(Error::BindingMismatch));
         }
-        apply(self, authority, tx).map_err(rejected)
+        apply(&(self), authority, tx).map_err(rejected)
     }
 }
 

@@ -195,8 +195,8 @@ impl AggregateStarkParametersV1 {
             || self.terminal_degree_bound >= terminal_size
             || self.composition_degree_chunks == 0
             || self.composition_degree_chunks > usize::from(u16::MAX)
-            || maximum_lde_log2 > u32::BITS as u8
-            || maximum_lde_log2 >= usize::BITS as u8
+            || maximum_lde_log2 > u8::try_from(u32::BITS).expect("bounded circuit index")
+            || maximum_lde_log2 >= u8::try_from(usize::BITS).expect("bounded circuit index")
             || self.minimum_trace_log2 > self.maximum_trace_log2
             || self.security_lanes > usize::from(u16::MAX)
             || self.maximum_trace_groups == 0
@@ -519,6 +519,10 @@ impl AggregateProofLayoutV1 {
 /// the smooth domain, Fp4 field-size lower bound, fold/terminal geometry, and
 /// the implementation's distinct-query schedule.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "The theorem certificate records independent domain and sampler premises"
+)]
 pub struct AggregateFriTheorem2CertificateV1 {
     /// Numerator of `L - 1`.
     pub(crate) l_minus_one_numerator: u8,
@@ -581,7 +585,11 @@ impl U512V1 {
             let product = u128::from(*limb)
                 .checked_mul(u128::from(multiplier))?
                 .checked_add(carry)?;
-            *limb = product as u64;
+            *limb = u64::from_le_bytes(
+                u128::to_le_bytes(product)[..8]
+                    .try_into()
+                    .expect("low-byte width"),
+            );
             carry = product >> 64;
         }
         (carry == 0).then_some(self)
@@ -647,7 +655,7 @@ const fn gcd_u64_v1(mut left: u64, mut right: u64) -> u64 {
 pub fn validate_affine_batched_fri_theorem2_v1(
     parameters: AggregateStarkParametersV1,
     layout: &AggregateProofLayoutV1,
-    certificate: AggregateFriTheorem2CertificateV1,
+    certificate: &AggregateFriTheorem2CertificateV1,
 ) -> Result<AggregateFriTheorem2BoundV1, AggregateStarkErrorV1> {
     layout.validate(parameters)?;
     let domain_size = layout.common_lde_size();
@@ -720,7 +728,7 @@ pub fn validate_affine_batched_fri_theorem2_v1(
     // For m=3, an even q gives the exact rational query term
     // `(rho * 49/36)^(q/2)`. Reduce the rational before exponentiation and
     // compare it to the claimed power of two with fixed 512-bit integers.
-    if certificate.query_count % 2 != 0 {
+    if !certificate.query_count.is_multiple_of(2) {
         return Err(AggregateStarkErrorV1::InvalidLayout);
     }
     let half_queries = certificate.query_count / 2;
@@ -1667,8 +1675,7 @@ impl StreamingRowCommitmentV1 {
             digest_streams.push(
                 goldilocks_digest384_last_field_stream_v1(
                     context,
-                    leaf_role,
-                    b"vector-row-leaf",
+                    (leaf_role, b"vector-row-leaf"),
                     0,
                     u64::try_from(row_index).map_err(|_| AggregateStarkErrorV1::InvalidLayout)?,
                     u64::from(u16::from_be_bytes(group)),
@@ -1912,17 +1919,36 @@ fn checked_domain_size_v1(log2: u8) -> Result<usize, AggregateStarkErrorV1> {
         .checked_shl(u32::from(log2))
         .ok_or(AggregateStarkErrorV1::InvalidLayout)
 }
+/// Dimensions of one masked trace commitment.
+#[cfg(test)]
+#[derive(Clone, Copy)]
+pub struct MaskedTraceShapeV1 {
+    /// Canonical trace-group index.
+    pub group: usize,
+    /// Logarithm of the native trace row count.
+    pub native_trace_log2: u8,
+    /// Logarithm of the commitment evaluation row count.
+    pub lde_log2: u8,
+    /// Number of trace columns.
+    pub width: usize,
+    /// Degree of the sampled trace mask.
+    pub mask_degree: usize,
+}
+
 #[cfg(test)]
 fn validate_masked_trace_commitment_shape_v1(
     leaf_domain: &[u8],
     node_domain: &[u8],
-    group: usize,
-    native_trace_log2: u8,
-    lde_log2: u8,
-    width: usize,
-    mask_degree: usize,
+    shape: MaskedTraceShapeV1,
     opening_indices: &[usize],
 ) -> Result<(usize, usize), AggregateStarkErrorV1> {
+    let MaskedTraceShapeV1 {
+        group,
+        native_trace_log2,
+        lde_log2,
+        width,
+        mask_degree,
+    } = shape;
     let native_rows = checked_domain_size_v1(native_trace_log2)?;
     let lde_rows = checked_domain_size_v1(lde_log2)?;
     if leaf_domain.is_empty()
@@ -1956,11 +1982,7 @@ pub fn commit_masked_trace_polynomial_columns_v1<R, S>(
     context: TransparentStarkDigestContextV1,
     leaf_domain: &[u8],
     node_domain: &'static [u8],
-    group: usize,
-    native_trace_log2: u8,
-    commitment_lde_log2: u8,
-    width: usize,
-    mask_degree: usize,
+    shape: MaskedTraceShapeV1,
     opening_indices: &[usize],
     rng: &mut R,
     mut source: S,
@@ -1969,14 +1991,23 @@ where
     R: TryRngCore,
     S: FnMut(usize) -> Result<Vec<F>, AggregateStarkErrorV1>,
 {
+    let MaskedTraceShapeV1 {
+        group,
+        native_trace_log2,
+        lde_log2: commitment_lde_log2,
+        width,
+        mask_degree,
+    } = shape;
     let (native_rows, commitment_rows) = validate_masked_trace_commitment_shape_v1(
         leaf_domain,
         node_domain,
-        group,
-        native_trace_log2,
-        commitment_lde_log2,
-        width,
-        mask_degree,
+        MaskedTraceShapeV1 {
+            group,
+            native_trace_log2,
+            lde_log2: commitment_lde_log2,
+            width,
+            mask_degree,
+        },
         opening_indices,
     )?;
     let mut commitment = StreamingRowCommitmentV1::new(
@@ -2062,7 +2093,7 @@ pub fn replay_masked_trace_polynomial_columns_v1(
     for batch_start in (0..polynomials.width()).step_by(MASKED_TRACE_LDE_COLUMN_BATCH_V1) {
         let batch_end = batch_start
             .checked_add(MASKED_TRACE_LDE_COLUMN_BATCH_V1)
-            .map_or(polynomials.width(), |end| end.min(polynomials.width()));
+            .map_or_else(|| polynomials.width(), |end| end.min(polynomials.width()));
         let evaluations = (batch_start..batch_end)
             .into_par_iter()
             .map(|column| {
@@ -2354,8 +2385,7 @@ fn accumulate_base_deep_quotients_v1(
 /// Evaluate the complete batched DEEP-ALI quotient at one authenticated query
 /// row.
 pub fn deep_ali_mixed_opening_v1(
-    query_point: E,
-    deep_point: E,
+    (query_point, deep_point): (E, E),
     layout: &AggregateProofLayoutV1,
     trace_groups: &[AggregateOpenedTraceGroupV1],
     deep_trace_groups: &[AggregateOpenedDeepTraceGroupV1],
@@ -2893,7 +2923,7 @@ pub fn maximum_multiproof_frontier_len_v1(
         let row_limit = maximum_opened_leaves.min(capacity);
         let mut current = vec![None; maximum_opened_leaves + 1];
         let mut row_maximum = 0_usize;
-        for opened in 1..=row_limit {
+        for (opened, destination) in current.iter_mut().enumerate().take(row_limit + 1).skip(1) {
             let minimum_left = opened.saturating_sub(half_capacity);
             let maximum_left = opened.min(half_capacity);
             let mut best = None;
@@ -2918,7 +2948,7 @@ pub fn maximum_multiproof_frontier_len_v1(
                     best = Some(best.map_or(candidate, |prior: usize| prior.max(candidate)));
                 }
             }
-            current[opened] = best;
+            *destination = best;
             row_maximum = row_maximum.max(best.ok_or(AggregateStarkErrorV1::InternalInvariant)?);
         }
         previous = current;
@@ -3970,6 +4000,14 @@ pub fn build_query_v1(
         fri_lanes: fri_queries,
     })
 }
+/// Canonical trace, composition, mask, and FRI authentication frontiers.
+pub type AggregateProofFrontiersV1 = (
+    Vec<(Vec<GoldilocksDigest384V1>, Vec<GoldilocksDigest384V1>)>,
+    Vec<Vec<GoldilocksDigest384V1>>,
+    Vec<Vec<GoldilocksDigest384V1>>,
+    Vec<Vec<Vec<GoldilocksDigest384V1>>>,
+);
+
 /// Build every canonical trace/composition/FRI frontier after queries are fixed.
 pub fn build_all_frontiers_v1(
     parameters: AggregateStarkParametersV1,
@@ -3979,15 +4017,7 @@ pub fn build_all_frontiers_v1(
     composition_trees: &[GoldilocksMerkleTreeV1],
     fri_masks: &[AggregateFriMaskOracleMaterialV1],
     fri_lanes: &[AggregateFriLaneMaterialV1],
-) -> Result<
-    (
-        Vec<(Vec<GoldilocksDigest384V1>, Vec<GoldilocksDigest384V1>)>,
-        Vec<Vec<GoldilocksDigest384V1>>,
-        Vec<Vec<GoldilocksDigest384V1>>,
-        Vec<Vec<Vec<GoldilocksDigest384V1>>>,
-    ),
-    AggregateStarkErrorV1,
-> {
+) -> Result<AggregateProofFrontiersV1, AggregateStarkErrorV1> {
     layout.validate(parameters)?;
     if queries.len() != parameters.query_count
         || trace_groups.len() != layout.trace_groups.len()
@@ -4170,7 +4200,7 @@ pub fn verify_all_merkle_openings_v1(
             .map_err(|_| AggregateStarkErrorV1::FriOpening)?;
             let mut layer_index = index;
             let mut layer_size = layout.common_lde_size();
-            for round in 0..fri_rounds {
+            for (round, leaves) in fri_leaves[lane].iter_mut().enumerate().take(fri_rounds) {
                 let opening = query.fri_lanes[lane].rounds[round];
                 let low =
                     E::canonical(opening.low).ok_or(AggregateStarkErrorV1::NonCanonicalField)?;
@@ -4179,13 +4209,13 @@ pub fn verify_all_merkle_openings_v1(
                 let half = layer_size / 2;
                 let low_index = layer_index % half;
                 insert_opened_leaf_v1(
-                    &mut fri_leaves[lane][round],
+                    leaves,
                     low_index,
                     fri_leaf_hash_unchecked_v1(domains, lane, round, low_index, low)?,
                 )
                 .map_err(|_| AggregateStarkErrorV1::FriOpening)?;
                 insert_opened_leaf_v1(
-                    &mut fri_leaves[lane][round],
+                    leaves,
                     low_index + half,
                     fri_leaf_hash_unchecked_v1(domains, lane, round, low_index + half, high)?,
                 )
@@ -4232,13 +4262,13 @@ pub fn verify_all_merkle_openings_v1(
             &proof.fri_mask_frontiers[lane],
         )
         .map_err(|_| AggregateStarkErrorV1::FriOpening)?;
-        for round in 0..fri_rounds {
+        for (round, leaves) in fri_leaves[lane].iter().enumerate().take(fri_rounds) {
             verify_canonical_multiproof_v1(
                 domains.digest_context,
                 domains.fri_node,
                 &proof.fri_lanes[lane].roots[round],
                 layout.common_lde_size() >> round,
-                &fri_leaves[lane][round],
+                leaves,
                 &proof.fri_lanes[lane].round_frontiers[round],
             )
             .map_err(|_| AggregateStarkErrorV1::FriOpening)?;
@@ -4246,6 +4276,9 @@ pub fn verify_all_merkle_openings_v1(
     }
     Ok(())
 }
+/// Per-lane fold challenges and authenticated terminal vectors.
+pub type AggregateFriCommitmentValuesV1 = (Vec<Vec<E>>, Vec<Vec<E>>);
+
 /// Verify and transcript-bind terminal FRI vectors, returning fold challenges.
 pub fn verify_fri_commitments_v1(
     proof: &AggregateStarkProofV1,
@@ -4253,7 +4286,7 @@ pub fn verify_fri_commitments_v1(
     domains: &AggregateStarkDomainsV1,
     layout: &AggregateProofLayoutV1,
     transcript: &mut TransparentTranscriptV1,
-) -> Result<(Vec<Vec<E>>, Vec<Vec<E>>), AggregateStarkErrorV1> {
+) -> Result<AggregateFriCommitmentValuesV1, AggregateStarkErrorV1> {
     validate_proof_shape_v1(proof, parameters, layout)?;
     let fri_rounds = layout.fri_rounds(parameters)?;
     let mut all_betas = Vec::with_capacity(parameters.security_lanes);
@@ -4273,8 +4306,8 @@ pub fn verify_fri_commitments_v1(
         )
         .map_err(map_transparent_error_v1)?;
         let mut betas = Vec::with_capacity(fri_rounds);
-        for round in 0..fri_rounds {
-            absorb_fri_root_v1(transcript, domains, lane, round, &lane_proof.roots[round])?;
+        for (round, root) in lane_proof.roots.iter().enumerate().take(fri_rounds) {
+            absorb_fri_root_v1(transcript, domains, lane, round, root)?;
             betas.push(
                 transcript
                     .challenge_fp4(domains.fri_beta_label)
@@ -4315,7 +4348,7 @@ fn verify_fri_query_v1(
     let mut domain_root =
         goldilocks_primitive_root_v1(layout.common_lde_log2).map_err(map_transparent_error_v1)?;
     let mut expected = expected_base;
-    for round in 0..fri_rounds {
+    for (round, &beta) in betas.iter().enumerate().take(fri_rounds) {
         let opening = query.rounds[round];
         let low = E::canonical(opening.low).ok_or(AggregateStarkErrorV1::NonCanonicalField)?;
         let high = E::canonical(opening.high).ok_or(AggregateStarkErrorV1::NonCanonicalField)?;
@@ -4326,7 +4359,7 @@ fn verify_fri_query_v1(
             return Err(AggregateStarkErrorV1::FriOpening);
         }
         let x = domain_shift.mul(domain_root.pow(low_index as u128));
-        expected = fri_fold_pair_fp4_v1(low, high, betas[round], x)
+        expected = fri_fold_pair_fp4_v1(low, high, beta, x)
             .map_err(|_| AggregateStarkErrorV1::FriOpening)?;
         layer_index = low_index;
         layer_size = half;
@@ -4422,8 +4455,7 @@ pub fn verify_opened_query_relations_with_deep_v1<Evaluator: AggregateOpenedRowE
                 return Err(AggregateStarkErrorV1::ConstraintOpening);
             }
             let fri_base = deep_ali_mixed_opening_v1(
-                query_point,
-                deep_point,
+                (query_point, deep_point),
                 layout,
                 &opened_groups,
                 &deep_trace_groups,

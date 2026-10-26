@@ -1,9 +1,5 @@
 //! Parameters default values
-use iroha_crypto::Algorithm;
-use iroha_data_model::{
-    account::{AccountId, curve::CurveId},
-    asset::prelude::AssetDefinitionId,
-};
+use iroha_data_model::{account::AccountId, asset::prelude::AssetDefinitionId};
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::name::Name;
 use iroha_primitives::numeric::Quantity;
@@ -26,19 +22,14 @@ fn canonical_asset_definition_literal(domain: &str, name: &str) -> String {
 }
 /// Cryptography configuration defaults.
 pub mod crypto {
-    use super::*;
     /// Preview toggle for OpenSSL-backed SM helpers.
     pub const ENABLE_SM_OPENSSL_PREVIEW: bool = false;
     /// Default SM intrinsic dispatch policy.
     pub const SM_INTRINSICS_POLICY: &str = "auto";
     /// Default hash algorithm identifier used when none is supplied.
     pub const DEFAULT_HASH: &str = "blake2b-256";
-    /// Default signing algorithms permitted on the network.
-    pub const ALLOWED_SIGNING: &[Algorithm] = &[Algorithm::Ed25519, Algorithm::Secp256k1];
     /// Default distinguishing identifier for SM2 signatures.
     pub const SM2_DISTID_DEFAULT: &str = "1234567812345678";
-    /// Default set of curve identifiers permitted for account controllers.
-    pub const ALLOWED_CURVE_IDS: &[u8] = &[CurveId::ED25519.as_u8(), CurveId::SECP256K1.as_u8()];
     /// Default hash algorithm identifier used when none is supplied.
     pub fn default_hash() -> String {
         DEFAULT_HASH.to_string()
@@ -51,32 +42,9 @@ pub mod crypto {
     pub fn sm_intrinsics_policy() -> String {
         SM_INTRINSICS_POLICY.to_owned()
     }
-    /// Default set of signing algorithms permitted on the network.
-    pub fn allowed_signing() -> Vec<Algorithm> {
-        ALLOWED_SIGNING.to_vec()
-    }
-    /// Default set of signing algorithms expressed as strings (for env overrides).
-    pub fn allowed_signing_env() -> Vec<String> {
-        ALLOWED_SIGNING.iter().map(Algorithm::to_string).collect()
-    }
     /// Default distinguishing identifier for SM2 signatures.
     pub fn sm2_distid_default() -> String {
         SM2_DISTID_DEFAULT.to_string()
-    }
-    /// Derive the curve capability list from the supplied signing algorithms.
-    pub fn derive_curve_ids_from_algorithms(algorithms: &[Algorithm]) -> Vec<u8> {
-        let mut ids: Vec<u8> = algorithms
-            .iter()
-            .filter_map(|algo| CurveId::try_from_algorithm(*algo).ok())
-            .map(CurveId::as_u8)
-            .collect();
-        ids.sort_unstable();
-        ids.dedup();
-        ids
-    }
-    /// Default set of curve identifiers permitted on the network.
-    pub fn allowed_curve_ids() -> Vec<u8> {
-        derive_curve_ids_from_algorithms(ALLOWED_SIGNING)
     }
 }
 /// Common configuration defaults shared across components.
@@ -3659,41 +3627,12 @@ pub mod nexus {
         /// Slot-bound deadline for proofs/DA bundles to arrive before a transaction aborts.
         pub const WINDOW_SLOTS: u16 = 2;
     }
-    /// Public-lane staking defaults.
+    /// Public-lane validator capacity defaults. Monetary policy has no node defaults.
     pub mod staking {
-        use super::super::{NonZeroU32, Quantity};
+        use super::super::NonZeroU32;
         use nonzero_ext::nonzero;
-        use std::time::Duration;
-        /// Minimum bonded stake required to register a validator (asset base units).
-        pub fn min_validator_stake() -> Quantity {
-            Quantity::from(1_u64)
-        }
         /// Maximum number of validators allowed per lane.
         pub const MAX_VALIDATORS: NonZeroU32 = nonzero!(32_u32);
-        /// Maximum number of stake-share rows retained for one validator.
-        pub const MAX_STAKE_SHARES_PER_VALIDATOR: NonZeroU32 = nonzero!(256_u32);
-        /// Maximum number of pending unbond requests retained in one stake share.
-        pub const MAX_PENDING_UNBONDS_PER_SHARE: NonZeroU32 = nonzero!(8_u32);
-        /// Minimum delay between scheduling and finalising unbonds.
-        pub const UNBONDING_DELAY: Duration = Duration::from_secs(0);
-        /// Maximum slash ratio (basis points, `10_000` = 100%).
-        pub const MAX_SLASH_BPS: u16 = 10_000;
-        /// Escrow account that custodies bonded stake.
-        pub const STAKE_ESCROW_ACCOUNT_ID: &str = super::fees::FEE_SINK_ACCOUNT_ID;
-        /// Account that receives slashed stake (treasury/burn sink).
-        pub const SLASH_SINK_ACCOUNT_ID: &str = super::fees::FEE_SINK_ACCOUNT_ID;
-        /// Canonical XOR asset used by both staking and Nexus fees.
-        pub fn stake_asset_id() -> String {
-            super::fees::fee_asset_id()
-        }
-        /// Escrow account that custodies bonded stake.
-        pub fn stake_escrow_account_id() -> String {
-            STAKE_ESCROW_ACCOUNT_ID.to_string()
-        }
-        /// Account that receives slashed stake (treasury/burn sink).
-        pub fn slash_sink_account_id() -> String {
-            SLASH_SINK_ACCOUNT_ID.to_string()
-        }
     }
     /// Universal fee schedule defaults.
     pub mod fees {
@@ -3730,7 +3669,8 @@ pub mod nexus {
                 // and could panic while constructing an otherwise fallible World.
                 fee_sink_account_id: super::super::governance::bond_escrow_account_id(),
                 sponsor_vault_custody_account_id: sponsor_vault_custody_account_id(),
-                successful_claim_fee_exempt_authorities: std::collections::BTreeSet::default(),
+                successful_claim_fee_exempt_authorities:
+                    iroha_data_model::block::consensus::RootFeeExemptions::new(),
                 base_fee: base_fee(),
                 per_byte_fee: per_byte_fee(),
                 per_instruction_fee: per_instruction_fee(),

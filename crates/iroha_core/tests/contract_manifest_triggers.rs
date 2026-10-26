@@ -963,9 +963,7 @@ fn activate_registers_cross_contract_manifest_trigger_callback() {
             .validate()
             .expect("valid explicit component root metadata");
         stx.world
-            .parameters_mut_for_testing()
-            .get_mut()
-            .set_parameter(Parameter::Custom(CustomParameter::new(
+            .set_parameter_for_testing(Parameter::Custom(CustomParameter::new(
                 consensus_metadata::handshake_meta_id(),
                 Json::new(metadata),
             )))

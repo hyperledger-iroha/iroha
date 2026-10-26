@@ -278,7 +278,7 @@ impl ArtifactRead {
             match self.file.read(&mut trailing) {
                 Ok(0) => break,
                 Ok(_) => return Err(ArtifactReadError::Io(invalid("artifact grew during read"))),
-                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
                 Err(error) => return Err(ArtifactReadError::Io(error)),
             }
         }

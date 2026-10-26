@@ -5,7 +5,7 @@ async fn ballot_zk_v1_ballotproof_rejects_noncanonical_owner_hint_in_raw_json() 
     let (state, _queue, _chain_id) = mk_basic_context();
     let authenticated = canonical_account(ACCOUNT_AUTHORITY);
     let network_id = *state.network_id_ref();
-    let envelope_b64 = base64::engine::general_purpose::STANDARD.encode(&[1u8, 2, 3, 4]);
+    let envelope_b64 = base64::engine::general_purpose::STANDARD.encode([1u8, 2, 3, 4]);
     let owner_canonical = canonical_literal(ACCOUNT_AUTHORITY);
     let owner_noncanonical = noncanonical_literal(ACCOUNT_AUTHORITY);
     let ballot = BallotProof {

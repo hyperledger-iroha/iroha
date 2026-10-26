@@ -162,11 +162,10 @@ fn proof_fixture_uses_supplied_id_and_updates_status_index_without_finality() {
     }
     let view = state.view();
     assert!(
-        !view
-            .world()
+        view.world()
             .proofs_by_status()
             .get(&(ProofStatus::Verified, id.clone()))
-            .is_some()
+            .is_none()
     );
 }
 
@@ -175,7 +174,11 @@ fn proof_tag_fixture_deduplicates_both_indexes_without_finality() {
     let mut state = state();
     let id = proof_id(0x41);
     for _ in 0..2 {
-        insert_proof_tags_for_test(&mut state, id.clone(), vec![*b"ZZZZ", *b"AAAA", *b"ZZZZ"]);
+        insert_proof_tags_for_test(
+            &mut state,
+            &(id.clone()),
+            vec![*b"ZZZZ", *b"AAAA", *b"ZZZZ"],
+        );
         assert_no_finality(&state);
     }
     let view = state.view();

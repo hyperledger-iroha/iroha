@@ -22,7 +22,7 @@ const NETWORKS: [SccpNetworkV1; 3] = [
 ];
 
 #[derive(norito::SerializePayload, norito::json::JsonSerialize)]
-struct Round {
+struct PanelRound {
     network: SccpNetworkV1,
     role: SccpPanelRoleV1,
     round: RetainedSccpFastPauseRound,
@@ -38,7 +38,7 @@ struct Active {
 pub struct RetainedFastPauseView {
     panel: Option<RetainedSccpPausePanel>,
     seats: Option<([usize; 18], usize)>,
-    rounds: Vec<Round>,
+    rounds: Vec<PanelRound>,
     active: Vec<Active>,
     suspended: Vec<SccpFastPauseSuspendedViewV1>,
 }
@@ -95,7 +95,7 @@ struct View<'a> {
     panel: PayloadRef<'a, Option<RetainedSccpPausePanel>>,
     seats: Option<Seats<'a>>,
     eligibility_available: bool,
-    rounds: PayloadRef<'a, Vec<Round>>,
+    rounds: PayloadRef<'a, Vec<PanelRound>>,
     active: PayloadRef<'a, Vec<Active>>,
     suspended: PayloadRef<'a, Vec<SccpFastPauseSuspendedViewV1>>,
 }
@@ -171,7 +171,7 @@ fn pause_page(
     deadline_check(control)?;
     let charge = budget.try_reserve_bytes(
         size_of::<RetainedFastPauseView>()
-            + 6 * size_of::<Round>()
+            + 6 * size_of::<PanelRound>()
             + 3 * size_of::<Active>()
             + 3 * size_of::<SccpFastPauseSuspendedViewV1>(),
     )?;
@@ -213,7 +213,7 @@ fn pause_page(
         deadline_check(control)?;
         for role in [SccpPanelRoleV1::Primary, SccpPanelRoleV1::Backup] {
             if let Some(round) = store::fast_pause_rounds::get(world, &(network, role)) {
-                response.rounds.push(Round {
+                response.rounds.push(PanelRound {
                     network,
                     role,
                     round: round.clone(),

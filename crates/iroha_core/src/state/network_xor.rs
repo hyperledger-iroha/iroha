@@ -7,7 +7,7 @@ use iroha_data_model::{
 };
 
 /// Check the immutable definition shape without decoding policy a second time.
-pub(crate) fn validate_xor_definition_shape<W: WorldReadOnly + ?Sized>(
+pub fn validate_xor_definition_shape<W: WorldReadOnly + ?Sized>(
     world: &W,
     asset: &AssetDefinitionId,
 ) -> Result<(), Error> {
@@ -26,7 +26,7 @@ pub(crate) fn validate_xor_definition_shape<W: WorldReadOnly + ?Sized>(
 }
 
 /// Retain the exact asset identity and reject scoped custody rather than rewriting it.
-pub(crate) fn validate_xor_custody_shape<W: WorldReadOnly + ?Sized>(
+pub fn validate_xor_custody_shape<W: WorldReadOnly + ?Sized>(
     world: &W,
     asset: &AssetId,
 ) -> Result<(), Error> {
@@ -40,7 +40,7 @@ pub(crate) fn validate_xor_custody_shape<W: WorldReadOnly + ?Sized>(
 }
 
 /// Authenticate the genesis-pinned currency and its global scale-nine definition.
-pub(crate) fn validate_network_xor_asset<W: WorldReadOnly + ?Sized>(
+pub fn validate_network_xor_asset<W: WorldReadOnly + ?Sized>(
     world: &W,
     asset: &AssetDefinitionId,
 ) -> Result<(), Attempt<Error>> {
@@ -85,11 +85,14 @@ mod tests {
         let xor = parameters.xor_asset_definition_id.clone();
         let mut world = World::with([], [Account::new(ALICE_ID.clone()).build(&ALICE_ID)], []);
         {
-            let mut policy = world.parameters.block();
-            policy
-                .get_mut()
-                .set_parameter(Parameter::Custom(parameters.into_custom_parameter()))
-                .expect("valid fixture parameters");
+            let mut policy = crate::state::parameter_cell_block_for_testing(&world)
+                .expect("funded original parameter-only fixture block");
+            crate::state::set_parameter_cell_for_testing(
+                &mut policy,
+                Parameter::Custom(parameters.into_custom_parameter()),
+                world.sccp_committee_generations.allocation_budget(),
+            )
+            .expect("valid fixture parameters");
             policy.commit();
         }
         for (spec, scope) in [

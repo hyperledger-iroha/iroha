@@ -2502,28 +2502,17 @@ fn npos_without_sora_profile_uses_mandatory_nexus() {
         "npos iroha3 localnet should use an explicit disposable storage budget"
     );
     let gas_account_id = account_id_runtime_literal(&gas_account_id, None);
-    let staking = nexus
-        .get("staking")
-        .and_then(toml::Value::as_table)
-        .expect("nexus staking table");
+    assert!(
+        !nexus.contains_key("staking"),
+        "no generated node monetary policy"
+    );
     let expected_stake_asset_id = localnet_xor_asset_literal();
     let expected_fee_asset_id = localnet_xor_asset_literal();
-    assert_eq!(
-        staking.get("stake_asset_id").and_then(toml::Value::as_str),
-        Some(expected_stake_asset_id.as_str())
-    );
-    assert_eq!(
-        staking
-            .get("stake_escrow_account_id")
-            .and_then(toml::Value::as_str),
-        Some(gas_account_id.as_str())
-    );
-    assert_eq!(
-        staking
-            .get("slash_sink_account_id")
-            .and_then(toml::Value::as_str),
-        Some(gas_account_id.as_str())
-    );
+    let manifest = genesis_json_from_path(&temp.path().join("genesis.json"));
+    let policy = PublicLaneStakingPolicy::from_parameters(&genesis_parameters(&manifest)).unwrap();
+    assert_eq!(policy.stake_asset_id.to_string(), expected_stake_asset_id);
+    assert_eq!(policy.stake_escrow_account_id.to_string(), gas_account_id);
+    assert_eq!(policy.slash_sink_account_id.to_string(), gas_account_id);
     assert!(
         nexus.get("fees").is_none(),
         "node config cannot author monetary terms"
@@ -2760,6 +2749,7 @@ fn localnet_genesis_signing_rejects_incomplete_duplicate_and_invalid_pop_rosters
         &public,
         SumeragiConsensusMode::Permissioned,
         "roster-refusal",
+        localnet_staking_policy(&public, None, false).unwrap(),
     )
     .unwrap();
     let incomplete = append_peer_pop(raw.clone(), &peers[..3]).unwrap();

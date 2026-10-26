@@ -32,7 +32,7 @@ seiyaku Callee {
         &caller_contract,
         &nested_contract,
         "value",
-        Json::new(()),
+        &(Json::new(())),
     );
     result.expect("nested StateMap read");
     let logical_path = log
@@ -251,7 +251,7 @@ seiyaku Callee {{ permission AssetOps;
             &root,
             &target_contract,
             "attempt",
-            Json::from(norito::json!({"succeed": succeed})),
+            &(Json::from(norito::json!({"succeed": succeed}))),
         );
         assert!(
             outcome.expect("Result is recoverable return data") > 0,
@@ -328,7 +328,7 @@ seiyaku Callback {{ permission AssetOps;
             &root,
             target,
             "quote",
-            Json::from(norito::json!({"amount_in":"5","min_out":"0"})),
+            &(Json::from(norito::json!({"amount_in":"5","min_out":"0"}))),
         );
         let error = outcome.expect_err("active addresses cannot be entered again");
         assert!(
@@ -353,7 +353,7 @@ seiyaku Callback {{ permission AssetOps;
         &independent,
         &root,
         "quote",
-        Json::from(norito::json!({"amount_in":"5","min_out":"0"})),
+        &(Json::from(norito::json!({"amount_in":"5","min_out":"0"}))),
     )
     .0
     .expect("inactive target remains callable");
@@ -522,7 +522,7 @@ seiyaku FaultChild {
         &root,
         &child,
         "divide",
-        Json::new(norito::json!({"divisor":"0"})),
+        &(Json::new(norito::json!({"divisor":"0"}))),
         1_000_000,
     );
     let error = outcome.expect_err("division by zero must trap after the staged write");

@@ -41,7 +41,7 @@ impl ColumnStateV1 {
         column: usize,
         context: &RowContextV1,
         last: bool,
-        der_challenges: ZkX509DerStarkChallengesV1,
+        der_challenges: &ZkX509DerStarkChallengesV1,
         challenges: &ZkX509Rfc5280StarkChallengesV1,
         sha_union: &ZkX509ShaUnionCentersV1,
     ) -> Result<F, ZkX509Rfc5280StarkErrorV1> {
@@ -61,7 +61,7 @@ impl ColumnStateV1 {
         column: usize,
         context: &RowContextV1,
         last: bool,
-        der_challenges: ZkX509DerStarkChallengesV1,
+        der_challenges: &ZkX509DerStarkChallengesV1,
         challenges: &ZkX509Rfc5280StarkChallengesV1,
         sha_union: &ZkX509ShaUnionCentersV1,
         inverse: &mut impl FnMut(F, F) -> (F, F),
@@ -326,10 +326,11 @@ impl ColumnStateV1 {
             if matches!(lookup.kind, 0 | 3) && last_value != F::ZERO {
                 return Err(ZkX509Rfc5280StarkErrorV1::Grammar);
             }
-        } else if let Some(lookup) = lookup_aux_column_descriptor_v1(column) {
-            if matches!(lookup.kind, 0 | 3) && last_value != F::ZERO {
-                return Err(ZkX509Rfc5280StarkErrorV1::Source);
-            }
+        } else if let Some(lookup) = lookup_aux_column_descriptor_v1(column)
+            && matches!(lookup.kind, 0 | 3)
+            && last_value != F::ZERO
+        {
+            return Err(ZkX509Rfc5280StarkErrorV1::Source);
         }
         Ok(())
     }
@@ -375,7 +376,7 @@ pub(super) const fn scratch_payload_bytes_v1() -> usize {
 /// Fill the admitted public column span with bounded inverse windows where needed.
 pub(super) fn fill_columns_v1(
     material: &ZkX509Rfc5280StarkBaseMaterialV1,
-    der_challenges: ZkX509DerStarkChallengesV1,
+    der_challenges: &ZkX509DerStarkChallengesV1,
     challenges: &ZkX509Rfc5280StarkChallengesV1,
     first: usize,
     outputs: &mut [&mut [F]],
@@ -395,7 +396,7 @@ pub(super) fn fill_columns_v1(
 #[cfg(test)]
 pub(super) fn fill_scalar_columns_for_testing_v1(
     material: &ZkX509Rfc5280StarkBaseMaterialV1,
-    der_challenges: ZkX509DerStarkChallengesV1,
+    der_challenges: &ZkX509DerStarkChallengesV1,
     challenges: &ZkX509Rfc5280StarkChallengesV1,
     first: usize,
     outputs: &mut [&mut [F]],
@@ -428,7 +429,7 @@ fn fill_with_v1(
     rows: usize,
     first: usize,
     outputs: &mut [&mut [F]],
-    der_challenges: ZkX509DerStarkChallengesV1,
+    der_challenges: &ZkX509DerStarkChallengesV1,
     challenges: &ZkX509Rfc5280StarkChallengesV1,
     sha_union: &ZkX509ShaUnionCentersV1,
     mut row_at: impl FnMut(usize) -> Result<RowContextV1, ZkX509Rfc5280StarkErrorV1>,
@@ -535,7 +536,7 @@ mod tests {
             let challenges = challenges_v1();
             let centers = ZkX509ShaUnionCentersV1::identity_fixture_v1();
             let claims =
-                compile_zk_x509_rfc5280_stark_terminal_claims_v1(material, der, &challenges)
+                compile_zk_x509_rfc5280_stark_terminal_claims_v1(material, &der, &challenges)
                     .unwrap();
             let mut states: [ColumnStateV1; ZK_X509_RFC5280_STARK_AUX_WIDTH_V1] =
                 core::array::from_fn(|_| ColumnStateV1::new_v1());
@@ -560,8 +561,11 @@ mod tests {
                         F::ZERO
                     );
                 }
-                let aux = if inactive && index != last && neutral.is_some() {
-                    neutral.unwrap()
+                let aux = if inactive
+                    && index != last
+                    && let Some(aux) = neutral
+                {
+                    aux
                 } else {
                     // The same denominator occurs in six auxiliary column kinds.
                     // Cache only this row's canonical inverses, preserving the
@@ -596,7 +600,7 @@ mod tests {
                                 column,
                                 &context,
                                 index == last,
-                                der,
+                                &der,
                                 &challenges,
                                 &centers,
                                 &mut inverse,
@@ -621,7 +625,7 @@ mod tests {
                         &prev_aux,
                         &aux,
                         &prev.fixed,
-                        der,
+                        &der,
                         &challenges,
                         claims,
                     )
@@ -642,7 +646,7 @@ mod tests {
                 &aux,
                 &first_aux,
                 &context.fixed,
-                der,
+                &der,
                 &challenges,
                 claims,
             )
@@ -877,7 +881,7 @@ mod tests {
                     rows,
                     first,
                     &mut outputs,
-                    der_v1(),
+                    &der_v1(),
                     &challenges_v1(),
                     &centers,
                     |_| panic!("invalid geometry must not read source")
@@ -924,7 +928,7 @@ mod tests {
                         4,
                         0,
                         &mut outputs,
-                        der_v1(),
+                        &der_v1(),
                         &challenges_v1(),
                         &centers,
                         |index| {
@@ -971,7 +975,7 @@ mod tests {
                 4,
                 0,
                 &mut outputs,
-                der_v1(),
+                &der_v1(),
                 &challenges_v1(),
                 &centers,
                 |_| {
@@ -1006,7 +1010,7 @@ mod tests {
                 3,
                 first,
                 &mut outputs,
-                der_v1(),
+                &der_v1(),
                 &challenges_v1(),
                 &centers,
                 |_| panic!("constant centers need no row reconstruction"),
@@ -1036,10 +1040,9 @@ mod tests {
         state.sums = [F(9), F(10)];
         for column in 0..ZK_X509_RFC5280_STARK_AUX_WIDTH_V1 {
             let result = state.finish_v1(column, F(11));
-            let expected = if column >= AUX_NUMERIC_INVERSE {
-                Some(ZkX509Rfc5280StarkErrorV1::Semantic)
-            } else if profile_lookup_aux_column_descriptor_v1(column)
-                .is_some_and(|(kind, _)| matches!(kind, 0 | 3))
+            let expected = if column >= AUX_NUMERIC_INVERSE
+                || profile_lookup_aux_column_descriptor_v1(column)
+                    .is_some_and(|(kind, _)| matches!(kind, 0 | 3))
             {
                 Some(ZkX509Rfc5280StarkErrorV1::Semantic)
             } else if grammar_lookup_aux_column_descriptor_v1(column)
@@ -1077,7 +1080,7 @@ mod tests {
                     3,
                     first,
                     &mut outputs,
-                    der_v1(),
+                    &der_v1(),
                     &challenges_v1(),
                     &centers,
                     |_| Ok(row_v1()),
@@ -1147,7 +1150,7 @@ mod tests {
                     3,
                     first,
                     &mut outputs,
-                    der_v1(),
+                    &der_v1(),
                     &challenges,
                     &centers,
                     |index| Ok(numeric_context_v1(index, value)),
@@ -1178,7 +1181,7 @@ mod tests {
                         2,
                         column,
                         &mut [&mut output],
-                        der_v1(),
+                        &der_v1(),
                         &challenges,
                         &centers,
                         |index| Ok(numeric_context_v1(index, value))
@@ -1199,7 +1202,7 @@ mod tests {
                 2,
                 AUX_OUTPUT_ROLE_PRODUCTS,
                 &mut outputs,
-                der_v1(),
+                &der_v1(),
                 &challenges_v1(),
                 &centers,
                 |index| {
@@ -1314,7 +1317,7 @@ mod tests {
                     let mut state = ColumnStateV1::new_v1();
                     state.sums = [F(17), F(19)];
                     assert_eq!(
-                        state.step_v1(column, &context, last, der_v1(), &challenges, &centers),
+                        state.step_v1(column, &context, last, &der_v1(), &challenges, &centers),
                         Ok(expected),
                         "column{column} singular{singular} last{last}"
                     );

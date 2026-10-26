@@ -16,7 +16,6 @@
 //! physical `2^19` slots vertically in the common `2^20` native domain and pads every unused row
 //! algebraically. This is deliberate: byte-copy and call-bus terminals may only be joined when they
 //! share the same subgroup and masking polynomial.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::credential_pre_aux::ZkX509CredentialPreAuxBindingV1;
 #[cfg(test)]
 use super::sha256_word_air::derive_sha256_word_memory_challenges_v1;
@@ -482,7 +481,6 @@ impl Drop for ZkX509ShaWordStarkBaseV1 {
 /// This source owns every base and fixed row plus the private word-memory events needed to derive
 /// auxiliary products later. No challenge-dependent row exists until [`Self::bind_v1`] consumes
 /// this source with the opaque credential pre-auxiliary token.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub struct ZkX509ShaWordCapacityBaseSourceV1 {
     message_len: usize,
     #[cfg(test)]
@@ -501,16 +499,14 @@ pub struct ZkX509ShaWordCapacityBaseSourceV1 {
     execution: Vec<WordMemoryAccessV1>,
     sorted: Vec<WordMemoryAccessV1>,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl core::fmt::Debug for ZkX509ShaWordCapacityBaseSourceV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
             .debug_struct("ZkX509ShaWordCapacityBaseSourceV1")
             .field("private_material", &"<redacted>")
-            .finish()
+            .finish_non_exhaustive()
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ZkX509ShaWordCapacityBaseSourceV1 {
     /// Exact private message length committed by the base rows.
     pub(crate) const fn message_len(&self) -> usize {
@@ -553,7 +549,7 @@ impl ZkX509ShaWordCapacityBaseSourceV1 {
     /// Consume the base phase and derive auxiliary rows from the opaque X5B1 credential token.
     pub(crate) fn bind_v1(
         self,
-        binding: ZkX509CredentialPreAuxBindingV1,
+        binding: &ZkX509CredentialPreAuxBindingV1,
     ) -> Result<ZkX509ShaWordCapacityTraceV1, ZkX509ShaWordStarkErrorV1> {
         self.bind_challenges_v1(binding.sha_word())
     }
@@ -597,7 +593,6 @@ impl ZkX509ShaWordCapacityBaseSourceV1 {
             && self.sorted.is_empty()
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for ZkX509ShaWordCapacityBaseSourceV1 {
     fn drop(&mut self) {
         self.zeroize_private_v1();
@@ -614,7 +609,6 @@ pub struct ZkX509ShaWordStarkTraceV1 {
 ///
 /// Only a single call is materialized at a time. The 29-call adapter streams these call traces into
 /// its four physical segments and drops each call before constructing the next one.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone)]
 pub struct ZkX509ShaWordCapacityTraceV1 {
     pub(crate) message_len: usize,
@@ -631,16 +625,14 @@ pub struct ZkX509ShaWordCapacityTraceV1 {
     pub(crate) aux_rows: Vec<[F; SHA_WORD_CAPACITY_AUX_WIDTH_V1]>,
     pub(crate) fixed_rows: Vec<[F; SHA_WORD_CAPACITY_FIXED_WIDTH_V1]>,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl core::fmt::Debug for ZkX509ShaWordCapacityTraceV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
             .debug_struct("ZkX509ShaWordCapacityTraceV1")
             .field("private_material", &"<redacted>")
-            .finish()
+            .finish_non_exhaustive()
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ZkX509ShaWordCapacityTraceV1 {
     fn zeroize_private_cells_v1(&mut self) {
         zeroize::Zeroize::zeroize(&mut self.message_len);
@@ -668,7 +660,6 @@ impl ZkX509ShaWordCapacityTraceV1 {
             && self.fixed_rows.is_empty()
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for ZkX509ShaWordCapacityTraceV1 {
     fn drop(&mut self) {
         self.zeroize_private_v1();
@@ -693,7 +684,6 @@ pub struct ZkX509ShaWordCapacityFixedScheduleV1 {
 }
 impl ZkX509ShaWordCapacityFixedScheduleV1 {
     /// Exact allocated public preprocessing payload, including spare capacity.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     pub(crate) fn allocated_heap_bytes_v1(&self) -> usize {
         use super::allocation_payload::{sum_v1, vector_v1};
         sum_v1([
@@ -803,7 +793,6 @@ impl ZkX509ShaWordCapacityFixedScheduleV1 {
         Ok(fixed)
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ZkX509ShaWordCapacityTraceV1 {
     pub(crate) const fn logical_rows(&self) -> usize {
         self.maximum_local_rows + self.maximum_memory_rows
@@ -869,7 +858,8 @@ pub fn compile_sha_word_capacity_fixed_schedule_v1(
         message_len: maximum_message_len,
         digest: maximum_circuit.digest(),
     };
-    let mut maximum = build_sha_word_stark_base_v1(maximum_statement, &maximum_message)?;
+    let mut maximum =
+        build_sha_word_stark_base_from_circuit_v1(maximum_statement, &maximum_circuit)?;
     drop(maximum_message);
     if maximum.local_rows != maximum_local_rows
         || maximum.execution.len() != maximum_memory_rows
@@ -982,7 +972,7 @@ impl ZkX509ShaWordStarkFixedScheduleV1 {
     pub(crate) const fn logical_rows(&self) -> usize {
         self.logical_rows
     }
-    pub(crate) const fn aggregate_rows(&self) -> usize {
+    pub(crate) const fn aggregate_rows() -> usize {
         SHA_WORD_AGGREGATE_TRACE_SIZE_V1
     }
     pub(crate) const fn local_rows(&self) -> usize {
@@ -992,7 +982,6 @@ impl ZkX509ShaWordStarkFixedScheduleV1 {
         self.logical_rows - self.local_rows
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn compress_access(access: WordMemoryAccessV1, challenge: ZkX509WordMemoryLaneChallengesV1) -> F {
     challenge
         .beta
@@ -1041,7 +1030,6 @@ pub fn validate_zk_x509_sha_word_stark_challenges_v1(
     }
     Ok(())
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn local_product_row(
     events: &[WordMemoryAccessV1],
     before: [F; SHA_WORD_COPY_LANES_V1],
@@ -1221,7 +1209,7 @@ pub fn build_sha_word_stark_trace_v1(
     }
     let continuations = build_continuations(&base, &memory_products)?;
     let mut aux_rows = Vec::with_capacity(base.base_rows.len());
-    for global_row in 0..base.base_rows.len() {
+    for (global_row, _) in base.base_rows.iter().enumerate() {
         let mut row = vec![F::ZERO; SHA_WORD_AUX_WIDTH_V1];
         if global_row < base.local_rows {
             row[..SHA_WORD_LOCAL_PRODUCT_WIDTH_V1].copy_from_slice(&local_aux[global_row]);
@@ -1262,7 +1250,6 @@ fn capacity_memory_rows_v1(blocks: usize) -> Result<usize, ZkX509ShaWordStarkErr
         .and_then(|rows| rows.checked_add(SHA_WORD_CAPACITY_MEMORY_ROWS_PER_CALL_V1))
         .ok_or(ZkX509ShaWordStarkErrorV1::Resource)
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn capacity_raw_base_row_v1(
     row: &[F],
 ) -> Result<[F; SHA_WORD_BASE_WIDTH_V1], ZkX509ShaWordStarkErrorV1> {
@@ -1274,7 +1261,6 @@ fn capacity_raw_base_row_v1(
 /// Counts six simultaneous circuit copies, raw rows/events, complete capacity
 /// matrices and call products, plus bounded sorting/index scratch. This intentionally
 /// overcharges owners whose scopes do not overlap. Allocator metadata is excluded.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub fn source_replay_scratch_forecast_v1(
     maximum_blocks: usize,
 ) -> Result<usize, ZkX509ShaWordStarkErrorV1> {
@@ -1318,7 +1304,6 @@ pub fn source_replay_scratch_forecast_v1(
 /// active-block prefix, padding transition, selected digest state, and memory activity remain
 /// committed witness columns. Word memory products are intentionally absent until the returned
 /// source binds an opaque X5B1 token.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub fn build_sha_word_capacity_base_source_v1(
     message: &[u8],
     maximum_message_len: usize,
@@ -1332,9 +1317,39 @@ pub fn build_sha_word_capacity_base_source_v1(
     if exact_length && message.len() != maximum_message_len {
         return Err(ZkX509ShaWordStarkErrorV1::Topology);
     }
-    let active_blocks = capacity_blocks_v1(message.len())?;
     let fixed_schedule =
         compile_sha_word_capacity_fixed_schedule_v1(maximum_message_len, exact_length)?;
+    build_sha_word_capacity_base_with_fixed_v1(
+        message,
+        maximum_message_len,
+        exact_length,
+        &fixed_schedule,
+    )
+}
+
+/// Reuse an existing compiler-owned public schedule without retaining private rows.
+///
+/// Exact message admission and the independent actual-message zero-shape check
+/// remain in the sole capacity implementation. A schedule for another capacity
+/// or exact-length policy is rejected before constructing any private source.
+pub(crate) fn build_sha_word_capacity_base_with_fixed_v1(
+    message: &[u8],
+    maximum_message_len: usize,
+    exact_length: bool,
+    fixed_schedule: &ZkX509ShaWordCapacityFixedScheduleV1,
+) -> Result<ZkX509ShaWordCapacityBaseSourceV1, ZkX509ShaWordStarkErrorV1> {
+    if message.len() > maximum_message_len
+        || maximum_message_len > ZK_X509_DER_MAX_DOCUMENT_BYTES_V1
+    {
+        return Err(ZkX509ShaWordStarkErrorV1::Resource);
+    }
+    if (exact_length && message.len() != maximum_message_len)
+        || fixed_schedule.maximum_message_len != maximum_message_len
+        || fixed_schedule.exact_length != exact_length
+    {
+        return Err(ZkX509ShaWordStarkErrorV1::Topology);
+    }
+    let active_blocks = capacity_blocks_v1(message.len())?;
     let maximum_blocks = fixed_schedule.maximum_blocks();
     let maximum_local_rows = fixed_schedule.maximum_local_rows();
     let maximum_memory_rows = fixed_schedule.maximum_memory_rows();
@@ -1344,7 +1359,7 @@ pub fn build_sha_word_capacity_base_source_v1(
         message_len: message.len(),
         digest: actual_circuit.digest(),
     };
-    let mut actual = build_sha_word_stark_base_v1(actual_statement, message)?;
+    let mut actual = build_sha_word_stark_base_from_circuit_v1(actual_statement, &actual_circuit)?;
     drop(actual_circuit);
     if actual.local_rows != capacity_local_rows_v1(active_blocks)?
         || actual.execution.len() != capacity_memory_rows_v1(active_blocks)?
@@ -1461,7 +1476,6 @@ pub fn build_sha_word_capacity_base_source_v1(
         base_rows.push(base);
         fixed_rows.push(fixed);
     }
-    drop(fixed_schedule);
     Ok(ZkX509ShaWordCapacityBaseSourceV1 {
         message_len: message.len(),
         #[cfg(test)]
@@ -1481,7 +1495,6 @@ pub fn build_sha_word_capacity_base_source_v1(
         sorted: core::mem::take(&mut actual.sorted),
     })
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ZkX509ShaWordCapacityBaseSourceV1 {
     fn bind_challenges_v1(
         self,
@@ -1704,10 +1717,13 @@ fn push_word_row(
     events.push(vec![write(WordIdV1(address), word.value)?]);
     Ok(())
 }
+struct ShaWordRowOutputsV1<'a> {
+    rows: &'a mut Vec<Vec<F>>,
+    fixed: &'a mut Vec<ShaWordFixedRowV1>,
+    events: &'a mut Vec<Vec<WordMemoryAccessV1>>,
+}
 fn push_sigma_row(
-    rows: &mut Vec<Vec<F>>,
-    fixed: &mut Vec<ShaWordFixedRowV1>,
-    events: &mut Vec<Vec<WordMemoryAccessV1>>,
+    outputs: ShaWordRowOutputsV1<'_>,
     circuit: &ZkX509Sha256WordCircuitV1,
     input: WordIdV1,
     output: WordIdV1,
@@ -1715,6 +1731,11 @@ fn push_sigma_row(
     rotate_second: u8,
     third: SigmaThirdV1,
 ) -> Result<(), ZkX509ShaWordStarkErrorV1> {
+    let ShaWordRowOutputsV1 {
+        rows,
+        fixed,
+        events,
+    } = outputs;
     let input_row = circuit
         .stark_words_v1()
         .get(input.0)
@@ -1802,9 +1823,7 @@ fn push_boolean_rows(
     Ok(())
 }
 fn push_add_row(
-    rows: &mut Vec<Vec<F>>,
-    fixed: &mut Vec<ShaWordFixedRowV1>,
-    events: &mut Vec<Vec<WordMemoryAccessV1>>,
+    outputs: ShaWordRowOutputsV1<'_>,
     circuit: &ZkX509Sha256WordCircuitV1,
     inputs: [WordIdV1; 5],
     arity: u8,
@@ -1812,6 +1831,11 @@ fn push_add_row(
     output: WordIdV1,
     carry_bits: [F; 3],
 ) -> Result<(), ZkX509ShaWordStarkErrorV1> {
+    let ShaWordRowOutputsV1 {
+        rows,
+        fixed,
+        events,
+    } = outputs;
     if !(1..=5).contains(&arity) {
         return Err(ZkX509ShaWordStarkErrorV1::Topology);
     }
@@ -1855,9 +1879,11 @@ fn push_operation_rows(
             third,
             output,
         } => push_sigma_row(
-            rows,
-            fixed,
-            events,
+            ShaWordRowOutputsV1 {
+                rows,
+                fixed,
+                events,
+            },
             circuit,
             *input,
             *output,
@@ -1879,9 +1905,11 @@ fn push_operation_rows(
             carry_bits,
             ..
         } => push_add_row(
-            rows,
-            fixed,
-            events,
+            ShaWordRowOutputsV1 {
+                rows,
+                fixed,
+                events,
+            },
             circuit,
             *inputs,
             *arity,
@@ -1900,8 +1928,10 @@ fn digest_words(digest: [u8; 32]) -> [u32; 8] {
         )
     })
 }
-/// Compile the challenge-independent local and word-memory base trace.
-pub fn build_sha_word_stark_base_v1(
+/// Standalone test adapter for the checked local and word-memory base builder.
+/// Production capacity callers reuse their already validated circuit directly.
+#[cfg(test)]
+fn build_sha_word_stark_base_v1(
     statement: ZkX509ShaWordStarkStatementV1,
     message: &[u8],
 ) -> Result<ZkX509ShaWordStarkBaseV1, ZkX509ShaWordStarkErrorV1> {
@@ -1911,7 +1941,22 @@ pub fn build_sha_word_stark_base_v1(
         return Err(ZkX509ShaWordStarkErrorV1::Topology);
     }
     let circuit = build_sha256_word_circuit_v1(message)?;
-    if circuit.digest() != statement.digest {
+    build_sha_word_stark_base_from_circuit_v1(statement, &circuit)
+}
+
+/// Reuse a validated circuit while retaining the independent zero-message topology check.
+///
+/// Only this module supplies circuits built by the checked word constructor. The
+/// caller keeps the clearing owner; rows and events acquire their own clearing
+/// owners exactly as in the standalone builder. No circuit or private row is cloned.
+fn build_sha_word_stark_base_from_circuit_v1(
+    statement: ZkX509ShaWordStarkStatementV1,
+    circuit: &ZkX509Sha256WordCircuitV1,
+) -> Result<ZkX509ShaWordStarkBaseV1, ZkX509ShaWordStarkErrorV1> {
+    if circuit.stark_message_len_v1() != statement.message_len
+        || statement.message_len > ZK_X509_DER_MAX_DOCUMENT_BYTES_V1
+        || circuit.digest() != statement.digest
+    {
         return Err(ZkX509ShaWordStarkErrorV1::Topology);
     }
     let shape_message = vec![0_u8; statement.message_len];
@@ -1953,13 +1998,13 @@ pub fn build_sha_word_stark_base_v1(
                 &mut rows,
                 &mut fixed,
                 &mut events,
-                &circuit,
+                circuit,
                 &shape,
                 word_cursor,
             )?;
             word_cursor += 1;
         }
-        push_operation_rows(&mut rows, &mut fixed, &mut events, &circuit, operation)?;
+        push_operation_rows(&mut rows, &mut fixed, &mut events, circuit, operation)?;
         word_cursor = output
             .0
             .checked_add(1)
@@ -1970,7 +2015,7 @@ pub fn build_sha_word_stark_base_v1(
             &mut rows,
             &mut fixed,
             &mut events,
-            &circuit,
+            circuit,
             &shape,
             word_cursor,
         )?;
@@ -2017,16 +2062,7 @@ pub fn build_sha_word_stark_base_v1(
     // Each word address has one immutable value. Equal address/write keys
     // therefore have identical event tuples; unstable sorting preserves the
     // canonical bytes without a heap scratch copy of private events.
-    sorted.sort_unstable_by_key(|access| {
-        (
-            access.address.0,
-            if access.is_write == F::ONE {
-                0_u8
-            } else {
-                1_u8
-            },
-        )
-    });
+    sorted.sort_unstable_by_key(|access| (access.address.0, u8::from(access.is_write != F::ONE)));
     if sorted.as_slice() != circuit.stark_memory_v1().sorted.as_slice() {
         return Err(ZkX509ShaWordStarkErrorV1::LocalCopy);
     }
@@ -2522,23 +2558,26 @@ fn aggregate_continuations_v1(
         first.sorted_product_start,
         first.sorted_product_end,
     );
-    let second = if let Some(second) = trace.continuations.get(1).copied() {
-        continuation_from_slot_v1(
-            schedule.slots[1],
-            second.execution_product_start,
-            second.execution_product_end,
-            second.sorted_product_start,
-            second.sorted_product_end,
-        )
-    } else {
-        continuation_from_slot_v1(
-            schedule.slots[1],
-            first.execution_product_end,
-            first.execution_product_end,
-            first.sorted_product_end,
-            first.sorted_product_end,
-        )
-    };
+    let second = trace.continuations.get(1).copied().map_or_else(
+        || {
+            continuation_from_slot_v1(
+                schedule.slots[1],
+                first.execution_product_end,
+                first.execution_product_end,
+                first.sorted_product_end,
+                first.sorted_product_end,
+            )
+        },
+        |second| {
+            continuation_from_slot_v1(
+                schedule.slots[1],
+                second.execution_product_start,
+                second.execution_product_end,
+                second.sorted_product_start,
+                second.sorted_product_end,
+            )
+        },
+    );
     Ok(([first, second], global_local_end))
 }
 /// Reconstruct one aggregate base row, including canonical zero padding.
@@ -2550,13 +2589,15 @@ pub fn zk_x509_sha_word_stark_aggregate_base_row_v1(
     if index >= SHA_WORD_AGGREGATE_TRACE_SIZE_V1 {
         return Err(ZkX509ShaWordStarkErrorV1::Resource);
     }
-    match trace.base.base_rows.get(index) {
-        Some(row) => row
-            .as_slice()
-            .try_into()
-            .map_err(|_| ZkX509ShaWordStarkErrorV1::Topology),
-        None => Ok([F::ZERO; SHA_WORD_BASE_WIDTH_V1]),
-    }
+    trace
+        .base
+        .base_rows
+        .get(index)
+        .map_or(Ok([F::ZERO; SHA_WORD_BASE_WIDTH_V1]), |row| {
+            row.as_slice()
+                .try_into()
+                .map_err(|_| ZkX509ShaWordStarkErrorV1::Topology)
+        })
 }
 /// Reconstruct one aggregate auxiliary row. Padding keeps only the exact
 /// physical continuation tuple; every local/product cell is zero.
@@ -2727,17 +2768,17 @@ pub fn evaluate_zk_x509_sha_word_stark_residues_over_field_v1<A: PolynomialAirFi
         }
         base_error_count += 1;
     };
-    for column in 33..SHA_WORD_BASE_WIDTH_V1 {
-        push_base_error(word_or_digest.mul(current[column]));
+    for value in &current[33..SHA_WORD_BASE_WIDTH_V1] {
+        push_base_error(word_or_digest.mul(*value));
     }
-    for column in 40..SHA_WORD_BASE_WIDTH_V1 {
-        push_base_error(boolean_any.mul(current[column]));
+    for value in &current[40..SHA_WORD_BASE_WIDTH_V1] {
+        push_base_error(boolean_any.mul(*value));
     }
-    for column in 41..SHA_WORD_BASE_WIDTH_V1 {
-        push_base_error(add_any.mul(current[column]));
+    for value in &current[41..SHA_WORD_BASE_WIDTH_V1] {
+        push_base_error(add_any.mul(*value));
     }
-    for column in 6..SHA_WORD_BASE_WIDTH_V1 {
-        push_base_error(memory.mul(current[column]));
+    for value in &current[6..SHA_WORD_BASE_WIDTH_V1] {
+        push_base_error(memory.mul(*value));
     }
     for value in current {
         push_base_error(padding.mul(*value));
@@ -2750,7 +2791,7 @@ pub fn evaluate_zk_x509_sha_word_stark_residues_over_field_v1<A: PolynomialAirFi
     }
     push_base_error(word_or_digest.mul(current[0].sub(word_value)));
     for byte in 0..4 {
-        let byte_value = pack_bits(&current[1 + byte * 8..1 + (byte + 1) * 8]);
+        let byte_value = pack_bits(&current[(1 + byte * 8)..=((byte + 1) * 8)]);
         push_base_error(
             fixed[FIX_WORD_BYTE_MASK + byte]
                 .mul(byte_value.sub(fixed[FIX_WORD_BYTE_EXPECTED + byte])),
@@ -3185,9 +3226,8 @@ pub fn evaluate_zk_x509_sha_word_capacity_residues_over_field_v1<A: PolynomialAi
     effective_fixed[FIX_EVENT_ADDRESS] = digest
         .mul(current[SHA_WORD_CAPACITY_DYNAMIC_ADDRESS_V1])
         .add(A::ONE.sub(digest).mul(effective_fixed[FIX_EVENT_ADDRESS]));
-    for index in 0..7 {
-        effective_fixed[FIX_CONTINUATION_PUBLIC + index] = current_aux[CONT_SEGMENT_INDEX + index];
-    }
+    effective_fixed[FIX_CONTINUATION_PUBLIC..FIX_CONTINUATION_PUBLIC + 7]
+        .copy_from_slice(&current_aux[CONT_SEGMENT_INDEX..CONT_SEGMENT_INDEX + 7]);
     let current_raw: &[A; SHA_WORD_BASE_WIDTH_V1] = current[..SHA_WORD_BASE_WIDTH_V1]
         .try_into()
         .expect("raw base prefix");
@@ -3454,12 +3494,10 @@ pub fn evaluate_zk_x509_sha_word_capacity_residues_over_field_v1<A: PolynomialAi
             ),
         );
     }
-    for column in SHA_WORD_MEMORY_PRODUCT_WIDTH_V1..SHA_WORD_LOCAL_PRODUCT_WIDTH_V1 {
-        residues.push(memory.mul(current_aux[column]));
+    for value in &current_aux[SHA_WORD_MEMORY_PRODUCT_WIDTH_V1..SHA_WORD_LOCAL_PRODUCT_WIDTH_V1] {
+        residues.push(memory.mul(*value));
     }
-    for column in CONTINUATION_OFFSET..GLOBAL_LOCAL_PRODUCT_END {
-        residues.push(current_aux[column]);
-    }
+    residues.extend_from_slice(&current_aux[CONTINUATION_OFFSET..GLOBAL_LOCAL_PRODUCT_END]);
     if residues.len() != SHA_WORD_CAPACITY_CONSTRAINT_COUNT_V1 {
         return Err(ZkX509ShaWordStarkErrorV1::Topology);
     }
@@ -4598,7 +4636,7 @@ mod tests {
         let schedule = compile_zk_x509_sha_word_stark_fixed_schedule_v1(trace.base.statement)
             .expect("fixed aggregate schedule");
         assert_eq!(schedule.logical_rows(), trace.base.base_rows.len());
-        assert_eq!(schedule.aggregate_rows(), 1 << 20);
+        assert_eq!(ZkX509ShaWordStarkFixedScheduleV1::aggregate_rows(), 1 << 20);
         assert_eq!(schedule.local_rows(), trace.base.local_rows);
         assert_eq!(schedule.memory_rows(), trace.base.execution.len());
         for index in 0..schedule.logical_rows() {
@@ -5062,3 +5100,7 @@ mod tests {
 #[cfg(test)]
 #[path = "sha_word_stark_polynomial_tests.rs"]
 mod polynomial_tests;
+
+#[cfg(test)]
+#[path = "sha_circuit_reuse_tests.rs"]
+mod circuit_reuse_tests;

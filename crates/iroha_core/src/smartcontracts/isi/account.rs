@@ -4,6 +4,29 @@ use super::prelude::*;
 use iroha_data_model::{prelude::*, query::error::FindError};
 use iroha_model_base::name::Name;
 use iroha_telemetry::metrics;
+
+/// Author the ordinary signing policy required by account component fixtures.
+/// This input grants no authenticated genesis or block-publication capability.
+#[cfg(test)]
+fn account_fixture_state(
+    world: crate::state::World,
+    kura: std::sync::Arc<crate::kura::Kura>,
+    query_handle: crate::query::store::LiveQueryStoreHandle,
+) -> crate::state::State {
+    let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
+        .expect("funded component parameter fixture");
+    crate::state::set_parameter_cell_for_testing(
+        &mut parameters,
+        crate::sumeragi::test_chain::crypto_fixture_policy()
+            .into_parameter()
+            .expect("canonical account fixture crypto policy"),
+        world.sccp_committee_generations.allocation_budget(),
+    )
+    .expect("install the account fixture's original crypto policy");
+    parameters.commit();
+    crate::state::State::new(world, kura, query_handle)
+}
+
 /// All instructions related to accounts:
 /// - minting/burning public key into account signatories
 /// - minting/burning signature condition check
@@ -250,8 +273,7 @@ pub mod isi {
                 if value.try_into_any_norito::<bool>().ok() != Some(true) {
                     return Err(Error::InvariantViolation("retail enrollment accepts only true; account classification cannot be removed".into()));
                 }
-                return crate::retail_fee::enroll(state_transaction, authority, &account_id)
-                    .map_err(Into::into);
+                return crate::retail_fee::enroll(state_transaction, authority, &account_id);
             }
             if key.as_ref() == iroha_data_model::smart_contract::CONTRACT_DEPLOY_NONCE_METADATA_KEY
             {
@@ -1034,13 +1056,14 @@ pub mod isi {
     }
     #[cfg(test)]
     mod test {
+        use super::super::account_fixture_state;
         use crate::smartcontracts::isi::Registrable as _;
         use crate::{
             block::ValidBlock,
             kura::Kura,
             query::store::LiveQueryStore,
             smartcontracts::Execute,
-            state::{State, World, WorldReadOnly},
+            state::{World, WorldReadOnly},
         };
         use core::num::NonZeroU64;
         use iroha_crypto::{Algorithm, KeyPair};
@@ -1094,7 +1117,7 @@ pub mod isi {
         fn duplicate_alias_permission_grant_is_idempotent() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = account_fixture_state(World::default(), kura, query_handle);
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
@@ -1131,7 +1154,7 @@ pub mod isi {
         fn duplicate_non_alias_permission_grant_still_rejects() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = account_fixture_state(World::default(), kura, query_handle);
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
@@ -1762,11 +1785,8 @@ pub mod query {
             if let Some(candidates) = candidate_ids {
                 let iter: Box<dyn Iterator<Item = Account> + '_> =
                     Box::new(candidates.into_iter().filter_map(move |account_id| {
-                        let Some((account_id, account_value)) =
-                            world.accounts().get_key_value(&account_id)
-                        else {
-                            return None;
-                        };
+                        let (account_id, account_value) =
+                            world.accounts().get_key_value(&account_id)?;
                         if id_only_predicate {
                             return Some(account_from_entry(world, account_id, account_value));
                         }
@@ -1834,10 +1854,7 @@ pub mod query {
             if let Some(candidates) = candidate_ids {
                 let iter: Box<dyn Iterator<Item = AccountId> + '_> =
                     Box::new(candidates.into_iter().filter_map(move |account_id| {
-                        let Some((account_id, _)) = world.accounts().get_key_value(&account_id)
-                        else {
-                            return None;
-                        };
+                        let (account_id, _) = world.accounts().get_key_value(&account_id)?;
                         if id_only_predicate || filter.applies(account_id) {
                             Some(account_id.clone())
                         } else {
@@ -1870,11 +1887,8 @@ pub mod query {
                 let subjects = nonzero_asset_holders_for_definition(world, &asset_definition_id);
                 let iter: Box<dyn Iterator<Item = Account> + '_> =
                     Box::new(subjects.into_iter().filter_map(move |subject| {
-                        let Some((account_id, account_value)) =
-                            world.accounts().get_key_value(&subject)
-                        else {
-                            return None;
-                        };
+                        let (account_id, account_value) =
+                            world.accounts().get_key_value(&subject)?;
                         Some(account_from_entry(world, account_id, account_value))
                     }));
                 return Ok(iter);
@@ -1901,11 +1915,8 @@ pub mod query {
                 };
                 let iter: Box<dyn Iterator<Item = Account> + '_> =
                     Box::new(subjects.into_iter().filter_map(move |subject| {
-                        let Some((account_id, account_value)) =
-                            world.accounts().get_key_value(&subject)
-                        else {
-                            return None;
-                        };
+                        let (account_id, account_value) =
+                            world.accounts().get_key_value(&subject)?;
                         Some(account_from_entry(world, account_id, account_value))
                     }));
                 return Ok(iter);
@@ -1930,11 +1941,7 @@ pub mod query {
             };
             let iter: Box<dyn Iterator<Item = Account> + '_> =
                 Box::new(subjects.into_iter().filter_map(move |subject| {
-                    let Some((account_id, account_value)) =
-                        world.accounts().get_key_value(&subject)
-                    else {
-                        return None;
-                    };
+                    let (account_id, account_value) = world.accounts().get_key_value(&subject)?;
                     if id_only_predicate {
                         return Some(account_from_entry(world, account_id, account_value));
                     }
@@ -2141,7 +2148,9 @@ pub mod query {
     }
     #[cfg(test)]
     mod tests {
-        use super::super::isi::ensure_recovery_request_targets_current_lineage;
+        use super::super::{
+            account_fixture_state, isi::ensure_recovery_request_targets_current_lineage,
+        };
         use super::*;
         use crate::{
             block::ValidBlock,
@@ -2160,6 +2169,27 @@ pub mod query {
         }
         fn checked_account_id() -> AccountId {
             AccountId::new(checked_keypair().public_key().clone())
+        }
+        #[test]
+        fn account_fixture_owns_crypto_policy_without_committed_genesis() {
+            let world = World::default();
+            assert!(world.parameters.view().require_crypto_policy().is_err());
+            let state = account_fixture_state(
+                world,
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            assert_eq!(state.committed_height(), 0);
+            assert_eq!(state.kura().blocks_count(), 0);
+            assert_eq!(
+                state
+                    .view()
+                    .world()
+                    .parameters()
+                    .require_crypto_policy()
+                    .expect("explicit account component policy"),
+                &crate::sumeragi::test_chain::crypto_fixture_policy(),
+            );
         }
         #[test]
         fn checked_keypair_preserves_default_algorithm() {
@@ -2193,7 +2223,7 @@ pub mod query {
             let query_handle = LiveQueryStore::start_test();
             let mut world = World::default();
             seed_authority_account(&mut world, &ALICE_ID);
-            State::new(world, kura, query_handle)
+            account_fixture_state(world, kura, query_handle)
         }
         fn new_state_with_authority_and_domain_lease(domain_id: &DomainId) -> State {
             let kura = Kura::blank_kura_for_testing();
@@ -2201,7 +2231,7 @@ pub mod query {
             let mut world = World::default();
             seed_authority_account(&mut world, &ALICE_ID);
             seed_domain_name_lease(&mut world, &ALICE_ID, domain_id);
-            State::new(world, kura, query_handle)
+            account_fixture_state(world, kura, query_handle)
         }
         fn root_alias(label: &str) -> AccountAlias {
             AccountAlias::domainless(
@@ -2280,7 +2310,7 @@ pub mod query {
                 .set_label(Some(alias.clone()));
             state_transaction
                 .world
-                .insert_account_alias_binding(alias.clone(), account_id.clone());
+                .insert_account_alias_binding(&(alias.clone()), &(account_id.clone()));
             state_transaction.world.replace_account_rekey_record(
                 iroha_data_model::account::rekey::AccountRekeyRecord::new(
                     alias.clone(),
@@ -2305,7 +2335,7 @@ pub mod query {
         fn find_accounts_with_asset_ignores_zero_holdings() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = account_fixture_state(World::default(), kura, query_handle);
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
@@ -3058,7 +3088,7 @@ pub mod query {
         fn find_accounts_returns_registered_accounts_for_pass_predicate() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = account_fixture_state(World::default(), kura, query_handle);
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
@@ -3091,7 +3121,7 @@ pub mod query {
         fn find_accounts_applies_predicate() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = account_fixture_state(World::default(), kura, query_handle);
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
@@ -3130,7 +3160,7 @@ pub mod query {
         fn find_accounts_applies_id_literal_predicate() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = account_fixture_state(World::default(), kura, query_handle);
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
@@ -3162,7 +3192,7 @@ pub mod query {
         fn find_accounts_applies_id_in_literal_predicate() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = account_fixture_state(World::default(), kura, query_handle);
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
@@ -3202,7 +3232,7 @@ pub mod query {
         fn find_accounts_filters_by_domain_with_scope_index() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = account_fixture_state(World::default(), kura, query_handle);
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
@@ -3261,7 +3291,7 @@ pub mod query {
         fn find_accounts_applies_mixed_domain_and_metadata_predicate() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = account_fixture_state(World::default(), kura, query_handle);
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
@@ -3322,7 +3352,7 @@ pub mod query {
         fn find_accounts_applies_mixed_id_and_metadata_predicate() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = account_fixture_state(World::default(), kura, query_handle);
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
@@ -3363,7 +3393,7 @@ pub mod query {
         fn find_account_ids_uses_direct_id_lookup_for_id_predicates() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = account_fixture_state(World::default(), kura, query_handle);
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
@@ -3395,7 +3425,7 @@ pub mod query {
         fn find_account_ids_uses_candidate_lookup_for_id_predicates_with_exists() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = account_fixture_state(World::default(), kura, query_handle);
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
@@ -3434,7 +3464,7 @@ pub mod query {
         fn find_accounts_with_asset_applies_predicate() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = account_fixture_state(World::default(), kura, query_handle);
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
@@ -3495,7 +3525,7 @@ pub mod query {
         fn find_accounts_with_asset_uses_nonzero_definition_asset_index() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = account_fixture_state(World::default(), kura, query_handle);
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
@@ -3552,7 +3582,7 @@ pub mod query {
         fn find_accounts_with_asset_filters_by_domain_with_scope_index() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = account_fixture_state(World::default(), kura, query_handle);
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
@@ -3617,7 +3647,7 @@ pub mod query {
         fn find_accounts_with_asset_applies_id_literal_predicate() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = account_fixture_state(World::default(), kura, query_handle);
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
@@ -3671,7 +3701,7 @@ pub mod query {
         fn find_accounts_with_asset_applies_id_in_literal_predicate() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = account_fixture_state(World::default(), kura, query_handle);
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
@@ -3730,7 +3760,7 @@ pub mod query {
         fn find_accounts_with_asset_applies_mixed_id_and_metadata_predicate() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = account_fixture_state(World::default(), kura, query_handle);
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
@@ -3797,7 +3827,7 @@ pub mod query {
             let mut world = World::default();
             seed_domain_name_lease(&mut world, &ALICE_ID, &linked_domain);
             seed_authority_account(&mut world, &ALICE_ID);
-            let mut state = State::new(world, kura, query_handle);
+            let mut state = account_fixture_state(world, kura, query_handle);
             state.set_dataspace_catalog_for_testing(
                 iroha_data_model::nexus::DataSpaceCatalog::new(vec![
                     iroha_data_model::nexus::DataSpaceMetadata::default(),
@@ -3837,7 +3867,7 @@ pub mod query {
                 iroha_data_model::IntoKeyValue::into_key_value(account);
             stx.world.accounts.insert(stored_account_id, stored_value);
             stx.world
-                .insert_account_alias_binding(primary_label.clone(), account_id.clone());
+                .insert_account_alias_binding(&(primary_label.clone()), &(account_id.clone()));
             stx.world
                 .replace_account_rekey_record(AccountRekeyRecord::new(
                     primary_label.clone(),
@@ -3865,7 +3895,7 @@ pub mod query {
             let query_handle = LiveQueryStore::start_test();
             let mut world = World::default();
             seed_authority_account(&mut world, &ALICE_ID);
-            let state = State::new(world, kura, query_handle);
+            let state = account_fixture_state(world, kura, query_handle);
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
@@ -3874,7 +3904,7 @@ pub mod query {
             let alias = AccountAlias::domainless("merchant".parse().expect("label"), dataspace);
             seed_account_alias_lease(&mut stx, &ALICE_ID, &alias);
             stx.world
-                .insert_account_alias_binding(alias.clone(), ALICE_ID.clone());
+                .insert_account_alias_binding(&(alias.clone()), &(ALICE_ID.clone()));
             stx.world
                 .replace_account_rekey_record(AccountRekeyRecord::new(alias, ALICE_ID.clone()));
             stx.apply();
@@ -3895,7 +3925,7 @@ pub mod query {
             let query_handle = LiveQueryStore::start_test();
             let mut world = World::default();
             seed_authority_account(&mut world, &ALICE_ID);
-            let state = State::new(world, kura, query_handle);
+            let state = account_fixture_state(world, kura, query_handle);
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
@@ -3904,7 +3934,7 @@ pub mod query {
             let alias = AccountAlias::domainless("merchant".parse().expect("label"), dataspace);
             seed_account_alias_lease(&mut stx, &ALICE_ID, &alias);
             stx.world
-                .insert_account_alias_binding(alias.clone(), ALICE_ID.clone());
+                .insert_account_alias_binding(&(alias.clone()), &(ALICE_ID.clone()));
             stx.world
                 .replace_account_rekey_record(AccountRekeyRecord::new(alias, ALICE_ID.clone()));
             stx.apply();
@@ -3957,7 +3987,7 @@ pub mod query {
             let mut world = World::default();
             seed_domain_name_lease(&mut world, &ALICE_ID, &linked_domain);
             seed_authority_account(&mut world, &ALICE_ID);
-            let mut state = State::new(world, kura, query_handle);
+            let mut state = account_fixture_state(world, kura, query_handle);
             state.set_dataspace_catalog_for_testing(
                 iroha_data_model::nexus::DataSpaceCatalog::new(vec![
                     iroha_data_model::nexus::DataSpaceMetadata::default(),
@@ -3997,7 +4027,7 @@ pub mod query {
                 iroha_data_model::IntoKeyValue::into_key_value(account);
             stx.world.accounts.insert(stored_account_id, stored_value);
             stx.world
-                .insert_account_alias_binding(primary_label.clone(), account_id.clone());
+                .insert_account_alias_binding(&(primary_label.clone()), &(account_id.clone()));
             stx.world
                 .replace_account_rekey_record(AccountRekeyRecord::new(
                     primary_label.clone(),
@@ -4023,7 +4053,7 @@ pub mod query {
             let mut world = World::default();
             seed_domain_name_lease(&mut world, &ALICE_ID, &linked_domain);
             seed_authority_account(&mut world, &ALICE_ID);
-            let mut state = State::new(world, kura, query_handle);
+            let mut state = account_fixture_state(world, kura, query_handle);
             state.set_dataspace_catalog_for_testing(
                 iroha_data_model::nexus::DataSpaceCatalog::new(vec![
                     iroha_data_model::nexus::DataSpaceMetadata::default(),
@@ -4062,7 +4092,7 @@ pub mod query {
                 iroha_data_model::IntoKeyValue::into_key_value(account);
             stx.world.accounts.insert(stored_account_id, stored_value);
             stx.world
-                .insert_account_alias_binding(primary_label.clone(), account_id.clone());
+                .insert_account_alias_binding(&(primary_label.clone()), &(account_id.clone()));
             stx.world
                 .replace_account_rekey_record(AccountRekeyRecord::new(
                     primary_label.clone(),
@@ -4082,7 +4112,7 @@ pub mod query {
             let query_handle = LiveQueryStore::start_test();
             let mut world = World::default();
             seed_authority_account(&mut world, &ALICE_ID);
-            let mut state = State::new(world, kura, query_handle);
+            let mut state = account_fixture_state(world, kura, query_handle);
             state.set_dataspace_catalog_for_testing(
                 iroha_data_model::nexus::DataSpaceCatalog::new(vec![
                     iroha_data_model::nexus::DataSpaceMetadata::default(),
@@ -4130,7 +4160,7 @@ pub mod query {
         fn transfer_asset_definition_rejects_unauthorized_authority() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = account_fixture_state(World::default(), kura, query_handle);
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
@@ -4196,7 +4226,7 @@ pub mod query {
         fn transfer_asset_definition_allows_source_owner() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = account_fixture_state(World::default(), kura, query_handle);
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();

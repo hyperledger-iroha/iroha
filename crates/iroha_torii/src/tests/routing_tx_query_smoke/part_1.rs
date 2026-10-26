@@ -141,7 +141,7 @@ async fn contract_feeds_ignore_contract_metadata_on_non_contract_transactions() 
         .sign(keypair.private_key());
     let _committed = crate::test_utils::commit_native_accepted_inputs(
         &mut native_chain,
-        vec![AcceptedTransaction::new_unchecked(Cow::Owned(signed))],
+        &[AcceptedTransaction::new_unchecked(Cow::Owned(signed))],
     );
     let everything = || iroha_torii_shared::list_query::ListQuery::new().limit(10);
     let events = contract_event_page(&state, everything()).await;
@@ -208,7 +208,7 @@ async fn contract_feeds_project_rejected_contract_call_from_signed_invocation() 
     let entry_hash = format!("{}", signed.hash_as_entrypoint());
     let committed = crate::test_utils::commit_native_accepted_inputs(
         &mut native_chain,
-        vec![AcceptedTransaction::new_unchecked(Cow::Owned(signed))],
+        &[AcceptedTransaction::new_unchecked(Cow::Owned(signed))],
     );
     let by_address = || {
         iroha_torii_shared::list_query::ListQuery::new()

@@ -305,3 +305,43 @@ impl JsonKeyCodec for LaneId {
 mod tests;
 #[cfg(test)]
 mod wire_identity_tests;
+
+/// Consensus-wide lower bound for one voting roster.
+///
+/// Every production committee has the exact `3f + 1` shape and tolerates at
+/// least one Byzantine validator.
+pub const MIN_VALIDATORS_PER_HEIGHT: usize = 4;
+/// Maximum Byzantine validators tolerated by one frozen height context.
+pub const MAX_FAULTS_PER_HEIGHT: usize = 10;
+/// Consensus-wide upper bound for one voting roster.
+///
+/// This is a protocol admission limit, not a local resource-tuning knob.  It
+/// must stay aligned with the production reducer and the formal Sumeragi
+/// model so every admitted wire value has a representable verified state.
+pub const MAX_VALIDATORS_PER_HEIGHT: usize = 3 * MAX_FAULTS_PER_HEIGHT + 1;
+/// Returns whether `validator_count` has the production `3f + 1` geometry.
+#[must_use]
+pub const fn is_valid_committee_size(validator_count: usize) -> bool {
+    validator_count >= MIN_VALIDATORS_PER_HEIGHT
+        && validator_count <= MAX_VALIDATORS_PER_HEIGHT
+        && (validator_count - 1).is_multiple_of(3)
+}
+
+#[cfg(test)]
+mod committee_geometry_tests {
+    use super::*;
+
+    #[test]
+    fn committees_retain_exact_first_release_geometry_at_all_boundaries() {
+        assert_eq!(MIN_VALIDATORS_PER_HEIGHT, 4);
+        assert_eq!(MAX_FAULTS_PER_HEIGHT, 10);
+        assert_eq!(MAX_VALIDATORS_PER_HEIGHT, 31);
+        for count in 0..=40 {
+            assert_eq!(
+                is_valid_committee_size(count),
+                [4, 7, 10, 13, 16, 19, 22, 25, 28, 31].contains(&count)
+            );
+        }
+        assert!(!is_valid_committee_size(usize::MAX));
+    }
+}

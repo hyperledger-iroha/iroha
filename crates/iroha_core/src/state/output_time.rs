@@ -63,7 +63,7 @@ impl ExecutionOutputProducer<'_, '_, '_> {
                     continue;
                 }
                 if self.try_apply_time_output(
-                    id.clone(),
+                    &(id.clone()),
                     event,
                     u32::try_from(schedule_index)
                         .map_err(|_| "Time schedule position exceeds u32")?,
@@ -82,7 +82,7 @@ impl ExecutionOutputProducer<'_, '_, '_> {
     // True means the existing retry policy suppresses later occurrences this block.
     fn try_apply_time_output(
         &mut self,
-        id: TriggerId,
+        id: &TriggerId,
         event: TimeEvent,
         schedule_index: u32,
     ) -> Result<bool, ExecutionAttemptError<String>> {
@@ -94,7 +94,7 @@ impl ExecutionOutputProducer<'_, '_, '_> {
             .world
             .triggers
             .time_triggers()
-            .get(&id)
+            .get(id)
             .filter(|action| time_trigger_action_is_due(action, &event, height, now))
             .cloned();
         let Some(action) = action else {
@@ -104,7 +104,7 @@ impl ExecutionOutputProducer<'_, '_, '_> {
         let invocation = TimeInvocationV1 {
             schedule_index,
             event,
-            trigger: time_trigger_use_v1(&self.state.world.triggers, &id, height)?,
+            trigger: time_trigger_use_v1(&self.state.world.triggers, id, height)?,
         };
         let disposition = self.try_apply_internal(
             InternalInvocation::Time(invocation),

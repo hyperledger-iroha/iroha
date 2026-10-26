@@ -133,7 +133,7 @@ pub(super) fn step_window_v1(
     index: usize,
     context: &RowContextV1,
     last: bool,
-    der: ZkX509DerStarkChallengesV1,
+    der: &ZkX509DerStarkChallengesV1,
     challenges: &ZkX509Rfc5280StarkChallengesV1,
     centers: &ZkX509ShaUnionCentersV1,
 ) -> Result<(), ZkX509Rfc5280StarkErrorV1> {
@@ -187,7 +187,7 @@ pub(super) fn step_window_v1(
 /// Fill at most the existing admitted eight-column replay batch without a heap scratch matrix.
 pub(in super::super) fn fill_columns_v1(
     material: &ZkX509Rfc5280StarkBaseMaterialV1,
-    der_challenges: ZkX509DerStarkChallengesV1,
+    der_challenges: &ZkX509DerStarkChallengesV1,
     challenges: &ZkX509Rfc5280StarkChallengesV1,
     first: usize,
     outputs: &mut [&mut [F]],
@@ -219,7 +219,7 @@ pub(super) fn fill_with_v1(
     rows: usize,
     first: usize,
     outputs: &mut [&mut [F]],
-    der_challenges: ZkX509DerStarkChallengesV1,
+    der_challenges: &ZkX509DerStarkChallengesV1,
     challenges: &ZkX509Rfc5280StarkChallengesV1,
     sha_union: &ZkX509ShaUnionCentersV1,
     mut row_at: impl FnMut(usize) -> Result<RowContextV1, ZkX509Rfc5280StarkErrorV1>,

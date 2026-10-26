@@ -200,21 +200,20 @@ async fn run_mock_actor(
             Message::UpdateWithDTO { dto, respond_to } => {
                 // Update the exposed Norito-RPC summary if provided; ignore the rest to
                 // keep the mock lightweight.
-                if let Some(transport) = dto.transport.as_ref() {
-                    if let Some(norito_rpc) = transport.norito_rpc.as_ref() {
-                        if let Some(enabled) = norito_rpc.enabled {
-                            dto_snapshot.transport.norito_rpc.enabled = enabled;
-                        }
-                        if let Some(stage) = norito_rpc.stage.as_ref() {
-                            dto_snapshot.transport.norito_rpc.stage.clone_from(stage);
-                        }
-                        if let Some(require_mtls) = norito_rpc.require_mtls {
-                            dto_snapshot.transport.norito_rpc.require_mtls = require_mtls;
-                        }
-                        if let Some(allowlist) = norito_rpc.allowed_clients.as_ref() {
-                            dto_snapshot.transport.norito_rpc.canary_allowlist_size =
-                                allowlist.len();
-                        }
+                if let Some(transport) = dto.transport.as_ref()
+                    && let Some(norito_rpc) = transport.norito_rpc.as_ref()
+                {
+                    if let Some(enabled) = norito_rpc.enabled {
+                        dto_snapshot.transport.norito_rpc.enabled = enabled;
+                    }
+                    if let Some(stage) = norito_rpc.stage.as_ref() {
+                        dto_snapshot.transport.norito_rpc.stage.clone_from(stage);
+                    }
+                    if let Some(require_mtls) = norito_rpc.require_mtls {
+                        dto_snapshot.transport.norito_rpc.require_mtls = require_mtls;
+                    }
+                    if let Some(allowlist) = norito_rpc.allowed_clients.as_ref() {
+                        dto_snapshot.transport.norito_rpc.canary_allowlist_size = allowlist.len();
                     }
                 }
                 let _ = respond_to.send(Ok(()));
@@ -282,7 +281,7 @@ pub enum Error {
     Communication(#[from] oneshot::error::RecvError),
     /// Configuration validation failed: {0}
     Validation(String),
-    /// SoraNet handshake runtime update failed: {0}
+    /// `SoraNet` handshake runtime update failed: {0}
     SoranetHandshakeRuntime(String),
 }
 struct Actor {
@@ -716,11 +715,9 @@ mod tests {
         },
         streaming::StreamingKeyMaterial,
     };
-    use iroha_data_model::{
-        block::BlockHeader, peer::Peer, sorafs::pricing::PricingScheduleRecord,
-    };
+    use iroha_data_model::{block::BlockHeader, sorafs::pricing::PricingScheduleRecord};
     use iroha_logger::Level;
-    use iroha_model_base::chain::ChainId;
+    use iroha_model_base::{chain::ChainId, peer::Peer};
     use iroha_primitives::addr::socket_addr;
     use iroha_torii_shared::configuration::{
         ComputePricingUpdate, Logger as LoggerDTO, NetworkUpdate, SoranetHandshakePuzzleUpdate,

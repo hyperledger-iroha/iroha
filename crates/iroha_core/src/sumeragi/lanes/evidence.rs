@@ -82,7 +82,7 @@ pub fn verify_lane_certificate(
 ) -> Result<HeightConfig, LaneEntryError> {
     if record.lane.as_u32() == 0
         || record.incarnation == [0; 32]
-        || !iroha_data_model::block::consensus::is_valid_committee_size(record.committee.len())
+        || !iroha_model_base::topology::is_valid_committee_size(record.committee.len())
         || record
             .committee
             .windows(2)
@@ -161,9 +161,9 @@ pub fn verify_lane_entry(
     anchors: &impl AnchorView,
     history: &LaneChainView,
     predecessor: &SumeragiLaneFrontier,
-    body: &AvailableBody,
-    qc: &Qc,
+    receipt: (&AvailableBody, &Qc),
 ) -> Result<LaneResult, LaneEntryError> {
+    let (body, qc) = receipt;
     let config = verify_lane_certificate(record, network, chain_id, predecessor, body, qc)?;
     let checks = StatelessChecks::new(*network);
     let Admission::Valid(result) = admit(

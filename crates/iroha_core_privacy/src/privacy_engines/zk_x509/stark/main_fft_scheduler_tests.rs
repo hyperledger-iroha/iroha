@@ -287,9 +287,7 @@ fn coarse_batch_fft_preserves_validation_and_clearing_on_all_exits() {
                     // Record the actual return before the deliberate unwind;
                     // assertions belong outside catch_unwind so they cannot be swallowed.
                     returned_error = Some(result.is_err());
-                    if unwind {
-                        panic!("diagnostic batch FFT cleanup");
-                    }
+                    assert!(!unwind, "diagnostic batch FFT cleanup")
                 }))
             });
             assert_eq!(returned_error, Some(malformed));
@@ -323,9 +321,12 @@ fn registered_batch_fft_scheduler_cost_preserves_native_quotient_and_fixed_work(
             0,
         )
         .unwrap();
-        stripe_logs.insert(stripe.rows.ilog2() as u8);
+        stripe_logs.insert(u8::try_from(stripe.rows.ilog2()).expect("fixture value fits u8"));
         if stripe.count > 1 {
-            transition_logs.insert((stripe.rows.ilog2() as u8, plan.quotient_coset_log2));
+            transition_logs.insert((
+                u8::try_from(stripe.rows.ilog2()).expect("fixture value fits u8"),
+                plan.quotient_coset_log2,
+            ));
         }
     }
     let mut cases = Vec::new();

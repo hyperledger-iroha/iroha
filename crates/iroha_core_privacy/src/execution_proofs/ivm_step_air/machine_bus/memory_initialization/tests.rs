@@ -49,7 +49,11 @@ impl Fixture {
                 space: Space::Memory,
                 vm: p.vm,
                 generation: 0,
-                index: (p.address / 16) as u32,
+                index: u32::from_le_bytes(
+                    u64::to_le_bytes(p.address / 16)[..4]
+                        .try_into()
+                        .expect("low-byte width"),
+                ),
                 write: true,
                 before: [0x33; 16],
                 after: BYTES,
@@ -81,7 +85,11 @@ impl Fixture {
                 space: Space::Initialization,
                 vm: p.vm,
                 generation: p.generation,
-                index: (p.address / 16) as u32,
+                index: u32::from_le_bytes(
+                    u64::to_le_bytes(p.address / 16)[..4]
+                        .try_into()
+                        .expect("low-byte width"),
+                ),
                 write: true,
                 before: encoded_mask(old),
                 after: encoded_mask(after),
@@ -355,14 +363,8 @@ fn initialization_composes_with_the_same_constrained_store_packet_and_log() {
         CELL + 8,
         p.vm,
         [37, 38, 39, 40],
-        100,
-        0,
-        0,
-        CELL + 64,
-        0,
-        true,
-        true,
-        false,
+        (100, 0, 0, CELL + 64, 0),
+        (true, true, false),
         memory_store::MemoryOutcome::Ready,
     )
     .unwrap();

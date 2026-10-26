@@ -50,11 +50,12 @@ impl Inner {
     }
 }
 impl state::FoldObserverV1 for Inner {
-    fn sub_proof(&self, mut record: state::FoldSubProofV1) {
+    fn sub_proof(&self, record: &state::FoldSubProofV1) {
+        let mut record = *record;
         record.peak_rss_bytes = peak_rss_bytes();
         let id = {
             let mut control = self.lock();
-            control.fold.record(record);
+            control.fold.record(&record);
             control.fold.counts().sub_proofs
         };
         observation::capture(self, id);
@@ -199,7 +200,7 @@ impl Background {
         }
     }
     /// Record a finished execution/speculation observation without scheduling work.
-    pub(super) fn record_native_work(&self, record: state::NativeWorkRecordV1) {
+    pub(super) fn record_native_work(&self, record: &state::NativeWorkRecordV1) {
         self.inner.lock().fold.record_native_work(record);
     }
     /// Observation-only fold telemetry: the last 64 sub-proofs and cumulative counts.

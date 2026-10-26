@@ -14,12 +14,12 @@ fn proof_verified_filter_uri() -> String {
         iroha_torii::json_entry("op", "and"),
         iroha_torii::json_entry(
             "args",
-            iroha_torii::json_array(vec![
+            &iroha_torii::json_array(vec![
                 iroha_torii::json_object(vec![
                     iroha_torii::json_entry("op", "eq"),
                     iroha_torii::json_entry(
                         "args",
-                        iroha_torii::json_array(vec![
+                        &iroha_torii::json_array(vec![
                             json::Value::from("proof_backend"),
                             json::Value::from("pipa-r/pasta"),
                         ]),
@@ -29,7 +29,7 @@ fn proof_verified_filter_uri() -> String {
                     iroha_torii::json_entry("op", "eq"),
                     iroha_torii::json_entry(
                         "args",
-                        iroha_torii::json_array(vec![
+                        &iroha_torii::json_array(vec![
                             json::Value::from("proof_call_hash"),
                             json::Value::from(
                                 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -77,7 +77,7 @@ async fn proof_verified_fields_and_filtering() {
         "/v1/events/sse",
         get({
             let events = events.clone();
-            move |q| async move { iroha_torii::handle_v1_events_sse_for_tests(events, q) }
+            move |q| async move { iroha_torii::handle_v1_events_sse_for_tests(&(events), q) }
         }),
     );
     // SSE with filter on proof_backend and proof_call_hash

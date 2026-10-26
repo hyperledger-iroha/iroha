@@ -141,13 +141,16 @@ fn actual_pipeline_output_owns_its_emissions_separately_from_network() {
         let state = fixture(65_536, None);
         let (address, hash) = install(&state, SOURCE);
         {
-            let mut parameters = state.world.parameters.block();
+            let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+                .expect("fund original parameter Cell acquisition");
             let mut policy = parameters.get().block().execution_output();
             policy.max_pipeline_triggers = 1;
-            parameters
-                .get_mut()
-                .set_parameter(Parameter::Block(BlockParameter::ExecutionOutput(policy)))
-                .expect("valid fixture parameters");
+            crate::state::set_parameter_cell_for_testing(
+                &mut parameters,
+                Parameter::Block(BlockParameter::ExecutionOutput(policy)),
+                state.world.sccp_committee_generations.allocation_budget(),
+            )
+            .expect("valid fixture parameters");
             parameters.commit();
         }
         {

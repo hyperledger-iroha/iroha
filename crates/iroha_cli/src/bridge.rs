@@ -45,7 +45,7 @@ pub struct EmitReceiptArgs {
 impl Run for Command {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
-            Self::GenesisReadiness(args) => genesis_readiness::run(context, args),
+            Self::GenesisReadiness(args) => genesis_readiness::run(context, &args),
             Self::VerifyRetainedNetwork(args) => retained_network::run(context, args),
             Self::EmitReceipt(args) => emit_receipt(context, args),
         }

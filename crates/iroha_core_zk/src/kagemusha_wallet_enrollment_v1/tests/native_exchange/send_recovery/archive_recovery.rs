@@ -114,10 +114,7 @@ fn continue_retained_archives_then_unload_without_repeating_transfers() {
         prior["schema"].as_str(),
         Some("iroha.kagemusha.selected-send-continuation.v1")
     );
-    message_census::require_selected_send_session(
-        &census_originals[4],
-        &prior,
-    );
+    message_census::require_selected_send_session(&census_originals[4], &prior);
     let custody = selected_path("KAGEMUSHA_NATIVE_RETAINED_EXCHANGE");
     assert_eq!(prior["prior_custody_root"].as_str(), custody.to_str());
     let sources = Sources::admit(&output.join("source-admission"));
@@ -324,10 +321,10 @@ fn continue_retained_archives_then_unload_without_repeating_transfers() {
     device_c.platform.with(|state| state.sign_fault_at = None);
     let (b, archived_bc) = archive::exercise(b, &device_b, &sources, &f_b, &frames_b, &credited_bc);
     finish_unload(
-        output,
-        sources,
-        setup,
-        target_bytes,
+        &output,
+        &sources,
+        &setup,
+        &target_bytes,
         [
             Participant {
                 wallet: a,

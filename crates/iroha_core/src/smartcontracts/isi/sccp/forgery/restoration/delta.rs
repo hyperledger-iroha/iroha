@@ -1,4 +1,7 @@
 //! Borrowed canonical SCCP delta selection; parsing alone grants no authority.
+/// Borrowed key matcher; captured selector data need not be static.
+type KeyPredicate<'a> = dyn Fn(&[u8]) -> bool + 'a;
+
 use norito::{codec::DecodeAll, core::SerializePayload};
 
 // Exact writer order in WorldBlock::write_sccp_execution_delta. Retired/unknown
@@ -206,7 +209,7 @@ impl<'a> SelectedValue<'a> {
 pub(super) fn select<'a>(
     bytes: &'a [u8],
     name: &[u8],
-    key: Option<&dyn Fn(&[u8]) -> bool>,
+    key: Option<&KeyPredicate<'_>>,
 ) -> Result<Option<SelectedValue<'a>>, super::Error> {
     let mut found = None;
     visit::<super::Error>(bytes, |entry| {

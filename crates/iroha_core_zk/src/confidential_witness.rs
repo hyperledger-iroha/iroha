@@ -88,14 +88,19 @@ pub(super) fn validate_transfer_witness<const DEPTH: usize>(
     }
     Ok(())
 }
+#[derive(Clone, Copy)]
+struct UnshieldPublicTags {
+    asset: [u8; 32],
+    network: [u8; 32],
+}
+
 fn validate_unshield_inputs<const DEPTH: usize>(
     include_input_1: bool,
     input_amounts: [u128; 2],
     input_rhos: [[u8; 32]; 2],
     spend_scalar: [u8; 32],
     diversifiers: [[u8; 32]; 2],
-    asset_tag: [u8; 32],
-    network_tag: [u8; 32],
+    tags: UnshieldPublicTags,
     paths: [&ConfidentialMerklePathV2; 2],
 ) -> Result<(), String> {
     if input_amounts[0] == 0 || input_rhos[0] == [0; 32] {
@@ -103,8 +108,8 @@ fn validate_unshield_inputs<const DEPTH: usize>(
     }
     canonical_nonzero_scalar(spend_scalar, "unshield spend scalar")?;
     canonical_nonzero_scalar(diversifiers[0], "unshield input 0 diversifier")?;
-    canonical_nonzero_scalar(asset_tag, "unshield asset tag")?;
-    canonical_nonzero_scalar(network_tag, "unshield network tag")?;
+    canonical_nonzero_scalar(tags.asset, "unshield asset tag")?;
+    canonical_nonzero_scalar(tags.network, "unshield network tag")?;
     validate_path::<DEPTH>(paths[0], "unshield input 0 path")?;
     validate_path::<DEPTH>(paths[1], "unshield input 1 path")?;
     if include_input_1 {
@@ -128,8 +133,10 @@ pub(super) fn validate_unshield_v2_witness<const DEPTH: usize>(
         [witness.input_0_rho, witness.input_1_rho],
         witness.spend_scalar,
         [witness.input_0_diversifier, witness.input_1_diversifier],
-        witness.asset_tag,
-        witness.network_tag,
+        UnshieldPublicTags {
+            asset: witness.asset_tag,
+            network: witness.network_tag,
+        },
         [&witness.input_0_path, &witness.input_1_path],
     )
 }
@@ -142,8 +149,10 @@ pub(super) fn validate_unshield_v3_witness<const DEPTH: usize>(
         [witness.input_0_rho, witness.input_1_rho],
         witness.spend_scalar,
         [witness.input_0_diversifier, witness.input_1_diversifier],
-        witness.asset_tag,
-        witness.network_tag,
+        UnshieldPublicTags {
+            asset: witness.asset_tag,
+            network: witness.network_tag,
+        },
         [&witness.input_0_path, &witness.input_1_path],
     )?;
     if witness.include_output_0 {

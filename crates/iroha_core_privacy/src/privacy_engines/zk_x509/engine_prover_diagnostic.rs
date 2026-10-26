@@ -65,14 +65,16 @@ fn record_public_diagnostic_v1(directory: &Path, record: &str) -> io::Result<()>
 fn harness_context_from_v1(
     directory: Option<PathBuf>,
 ) -> (iroha_measurement::RunContext, Option<PathBuf>) {
-    match directory {
-        Some(directory) => (
-            iroha_measurement::read_harness_context(&directory)
-                .expect("harness output directory holds a readable context"),
-            Some(directory),
-        ),
-        None => (iroha_measurement::RunContext::unbound(), None),
-    }
+    directory.map_or_else(
+        || (iroha_measurement::RunContext::unbound(), None),
+        |directory| {
+            (
+                iroha_measurement::read_harness_context(&directory)
+                    .expect("harness output directory holds a readable context"),
+                Some(directory),
+            )
+        },
+    )
 }
 
 /// Read the harness hand-off. This diagnostic-only variable selects where a
@@ -881,7 +883,7 @@ fn complete_credential_proof_with_retained_public_receipt_v1(maximum_shape: bool
     );
     record(format!(
         "wrong_genesis_rejected=true\nnonce_byte_mutations_rejected=32\ntampered_proof_rejected=true\ntime_target_met={}\nfull_release_qualification=false",
-        prove_elapsed.as_secs_f64() <= ZK_X509_PROVER_TARGET_SECONDS_V1 as f64,
+        prove_elapsed <= std::time::Duration::from_secs(ZK_X509_PROVER_TARGET_SECONDS_V1),
     ));
     observation.assert_complete_main_coverage_v1(
         super::super::stark::main_diagnostic_transform_columns_v1().unwrap(),
@@ -889,7 +891,7 @@ fn complete_credential_proof_with_retained_public_receipt_v1(maximum_shape: bool
     assert!(proof.len() <= ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1 as usize);
     assert!(proof.len() <= ZK_X509_MAX_PROOF_BYTES_V1 as usize);
     assert!(
-        prove_elapsed.as_secs_f64() <= ZK_X509_PROVER_TARGET_SECONDS_V1 as f64,
+        prove_elapsed <= std::time::Duration::from_secs(ZK_X509_PROVER_TARGET_SECONDS_V1),
         "complete proof exceeds unchanged proving target; verified public proof and receipt retained at {}",
         directory.display(),
     );
@@ -914,4 +916,454 @@ fn canonical_witness_round_trip_clears_its_owned_bytes_on_match_and_mismatch() {
         assert!(observations.iter().all(|row| row.nonzero_after == 0));
         assert_eq!(supplied[0], encoded[0] ^ u8::from(mismatch));
     }
+}
+
+// Local diagnostic estimates, not network transport or measured performance.
+// The complete 300-second proving estimate is unchanged. With a signed
+// 300,999ms window, proving can start only through elapsed millisecond 899.
+const LOCAL_HOLDER_DIAGNOSTIC_BUDGET_V1: iroha_data_model::privacy::PrivacyZkX509HolderBudgetV1 =
+    iroha_data_model::privacy::PrivacyZkX509HolderBudgetV1 {
+        observation_ms: 100,
+        preparation_ms: 100,
+        proving_ms: 300_000,
+        publication_jitter_ms: 0,
+        submission_ms: 0,
+        clock_margin_ms: 100,
+    };
+
+fn holder_local_timestamp_v1(anchor: u64, elapsed: std::time::Duration) -> Option<u64> {
+    anchor.checked_add(u64::try_from(elapsed.as_millis()).ok()?)
+}
+
+fn holder_refusal_category_v1(
+    error: &super::super::holder::ZkX509HolderAttemptErrorV1,
+) -> &'static str {
+    use super::super::holder::ZkX509HolderAttemptErrorV1;
+    match error {
+        ZkX509HolderAttemptErrorV1::Engine(_) => "engine",
+        ZkX509HolderAttemptErrorV1::Schedule(_) => "schedule",
+        ZkX509HolderAttemptErrorV1::LocalTimeMovedBackwards => "local-time-backwards",
+        ZkX509HolderAttemptErrorV1::DeadlineExceeded => "deadline-exceeded",
+    }
+}
+
+// A fresh diagnostic directory may contain only one real encoded candidate.
+// The existing reader checks its exact digest name, file kind and byte cap.
+fn read_single_public_candidate_v1(directory: &Path) -> io::Result<Vec<u8>> {
+    let mut candidate = None;
+    for entry in fs::read_dir(directory)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        if name
+            .to_str()
+            .is_some_and(|name| name.starts_with("unverified-") && name.ends_with(".x5s1"))
+            && candidate.replace(entry.path()).is_some()
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "multiple public candidates in one holder attempt",
+            ));
+        }
+    }
+    read_unverified_candidate_v1(&candidate.ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            "holder attempt has no public candidate",
+        )
+    })?)
+}
+
+#[test]
+fn holder_diagnostic_clock_and_full_proving_estimate_keep_the_signed_deadline() {
+    use iroha_data_model::privacy::{
+        PrivacyZkX509CrlUpdateIntervalV1, PrivacyZkX509PresentationBoundsV1,
+    };
+    use std::time::Duration;
+    let anchor = 1_800_000_000_000;
+    assert_eq!(
+        holder_local_timestamp_v1(anchor, Duration::ZERO),
+        Some(anchor)
+    );
+    assert_eq!(
+        holder_local_timestamp_v1(anchor, Duration::from_nanos(899_999_999)),
+        Some(anchor + 899)
+    );
+    assert_eq!(
+        holder_local_timestamp_v1(u64::MAX, Duration::from_millis(1)),
+        None
+    );
+    assert_eq!(
+        holder_local_timestamp_v1(0, Duration::from_secs(u64::MAX)),
+        None
+    );
+    let budget = LOCAL_HOLDER_DIAGNOSTIC_BUDGET_V1;
+    assert_eq!(budget.proving_ms, 300_000);
+    assert_eq!(
+        budget.proving_ms,
+        super::super::profile::ZK_X509_PROVER_TARGET_SECONDS_V1 * 1_000
+    );
+    assert_eq!(budget.total_millis().unwrap(), 300_300);
+    let bounds = PrivacyZkX509PresentationBoundsV1::from_crl(
+        PrivacyZkX509CrlUpdateIntervalV1::new(anchor / 1_000, anchor / 1_000 + 301),
+    )
+    .unwrap();
+    let deadline = bounds
+        .presentation_deadline_unix_ms(anchor / 1_000 + 300)
+        .unwrap();
+    assert_eq!(deadline, anchor + 300_999);
+    let mut proving = budget;
+    proving.observation_ms = 0;
+    proving.preparation_ms = 0;
+    assert_eq!(anchor + 899 + proving.total_millis().unwrap(), deadline);
+    assert!(anchor + 900 + proving.total_millis().unwrap() > deadline);
+    assert_eq!(budget.publication_jitter_ms, 0);
+    assert_eq!(budget.submission_ms, 0);
+}
+
+#[test]
+fn holder_diagnostic_refusal_categories_do_not_forward_private_errors() {
+    use super::super::holder::ZkX509HolderAttemptErrorV1;
+    use iroha_data_model::privacy::PrivacyZkX509HolderScheduleErrorV1;
+    for (error, expected) in [
+        (
+            ZkX509HolderAttemptErrorV1::Engine(ZkX509EngineErrorV1::InvalidAuthoritativeState(
+                "payload must not enter a public receipt".to_owned(),
+            )),
+            "engine",
+        ),
+        (
+            ZkX509HolderAttemptErrorV1::Schedule(
+                PrivacyZkX509HolderScheduleErrorV1::BudgetOverflow,
+            ),
+            "schedule",
+        ),
+        (
+            ZkX509HolderAttemptErrorV1::LocalTimeMovedBackwards,
+            "local-time-backwards",
+        ),
+        (
+            ZkX509HolderAttemptErrorV1::DeadlineExceeded,
+            "deadline-exceeded",
+        ),
+    ] {
+        assert_eq!(holder_refusal_category_v1(&error), expected);
+    }
+}
+
+#[test]
+fn holder_diagnostic_candidate_reader_requires_one_exact_public_artifact() {
+    let directory = run_directory_v1(&std::env::temp_dir()).unwrap();
+    assert_eq!(
+        read_single_public_candidate_v1(&directory)
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::NotFound
+    );
+    // These bytes test artifact ownership only; no proof validity is claimed.
+    let first = retain_unverified_candidate_v1(&directory, b"public candidate owner A").unwrap();
+    assert_eq!(
+        read_single_public_candidate_v1(&directory).unwrap(),
+        b"public candidate owner A"
+    );
+    let second = retain_unverified_candidate_v1(&directory, b"public candidate owner B").unwrap();
+    assert_eq!(
+        read_single_public_candidate_v1(&directory)
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::InvalidData
+    );
+    fs::remove_file(second).unwrap();
+    fs::write(first, b"substituted public artifact").unwrap();
+    assert_eq!(
+        read_single_public_candidate_v1(&directory)
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::InvalidData
+    );
+    fs::remove_dir_all(directory).unwrap();
+}
+
+/// Local real-proof holder control; it never observes a network or submits a transaction.
+///
+/// The fixed trusted fixture time stays separate from actual monotonic elapsed
+/// local time. A legitimate refusal fails this positive control after preserving
+/// evidence. No phase retries, substitutes State, or extends the original window.
+#[test]
+#[ignore = "complete ordinary holder prepare/prove/release; optimized build and external RSS measurement required; genuine deadline refusal is a failed positive control"]
+fn ordinary_holder_lifecycle_with_retained_public_receipt() {
+    use super::super::{
+        holder::ZkX509HolderAttemptV1,
+        profile::{
+            ZK_X509_MAX_PROOF_BYTES_V1, ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1,
+            ZK_X509_PROVER_ADDRESS_SPACE_CEILING_BYTES_V1, ZK_X509_PROVER_PEAK_MEMORY_BYTES_V1,
+            ZK_X509_PROVER_TARGET_SECONDS_V1,
+        },
+        relation::release_fixture::{
+            build_zk_x509_network_release_fixture_v1, build_zk_x509_release_fixture_v1,
+            reference_statement_context_v1,
+        },
+    };
+    crate::test_support::require_no_debug_assertions("run this full holder proof with --release");
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("Core crate is under the repository crates directory");
+    let directory = run_directory_v1(&repository.join("dist/zk-x509-prover-evidence"))
+        .expect("persistent public holder diagnostic output directory");
+    let receipt = directory.join("receipt.txt");
+    let record = |text: String| {
+        record_public_diagnostic_v1(&directory, &text).expect("durable public holder receipt");
+    };
+    let budget = LOCAL_HOLDER_DIAGNOSTIC_BUDGET_V1;
+    record(format!(
+        "output_directory={}\nfixture_kind=ordinary-holder-signed-network-window\nprofile=complete49-MAIN-plus-compactCA\nrayon_workers={}\nproof_cap_bytes={ZK_X509_MAX_PROOF_BYTES_V1}\nencoded_geometry_bound_bytes={ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1}\nprover_target_seconds={ZK_X509_PROVER_TARGET_SECONDS_V1}\npeak_rss_limit_bytes={ZK_X509_PROVER_PEAK_MEMORY_BYTES_V1}\naddress_space_limit_bytes={ZK_X509_PROVER_ADDRESS_SPACE_CEILING_BYTES_V1}\nactivation=unavailable\nfull_release_qualification=false\nprivate_witness_recorded=false\nnetwork_observation=false\nnetwork_submission=false\npublication_performed=false\nlocal_budget_only=true\nbudget_observation_ms={}\nbudget_preparation_ms={}\nbudget_proving_ms={}\nbudget_publication_jitter_ms={}\nbudget_submission_ms={}\nbudget_clock_margin_ms={}\nbudget_total_ms={}\nzero_transport_budget_reason=no-publication-or-submission-in-this-local-diagnostic",
+        directory.display(),
+        rayon::current_num_threads(),
+        budget.observation_ms,
+        budget.preparation_ms,
+        budget.proving_ms,
+        budget.publication_jitter_ms,
+        budget.submission_ms,
+        budget.clock_margin_ms,
+        budget.total_millis().unwrap(),
+    ));
+    // Reuse the public KAT context/wallet, but genuinely sign the canonical
+    // full-allowance network fixture. Neither original raw KAT case is changed.
+    let reference = build_zk_x509_release_fixture_v1(reference_statement_context_v1(), false)
+        .expect("ordinary reference context and wallet");
+    let trusted_block_timestamp_ms =
+        reference.statement.presentation_not_before_unix_seconds * 1_000;
+    let fixture = build_zk_x509_network_release_fixture_v1(
+        reference.statement.context.clone(),
+        trusted_block_timestamp_ms,
+        reference.statement.wallet_account.clone(),
+    )
+    .expect("signed ordinary holder fixture");
+    drop(reference);
+    fixture.resource_shape.validate_v1().unwrap();
+    assert_eq!(fixture.resource_shape.certificate_chain_depth, 2);
+    assert_eq!(fixture.statement.disclosed_attributes.len(), 1);
+    assert_eq!(fixture.crl_entry_count, 0);
+    assert_eq!(fixture.resource_shape.maximum_serial_bytes, 1);
+    record(format!("structural_shape={:?}", fixture.resource_shape));
+    let original = fixture.statement;
+    let state = fixture.authoritative_state;
+    let genesis = *original.context.network_id.as_bytes();
+    let limits = PrivacyConsensusLimitsV1::taira_default();
+    // This is a public statement, never the private witness or signed input DER.
+    let statement_bytes = norito::to_bytes(&original).expect("public original statement encoding");
+    let statement_path = directory.join("original-statement.norito");
+    let mut statement_file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&statement_path)
+        .expect("new public original statement artifact");
+    statement_file.write_all(&statement_bytes).unwrap();
+    statement_file.sync_all().unwrap();
+    record(format!(
+        "original_statement_path={}\noriginal_statement_sha256={}\ntrusted_fixture_block_unix_ms={trusted_block_timestamp_ms}\nlocal_time_anchor_unix_ms={trusted_block_timestamp_ms}\nlocal_time_source=actual-Instant-elapsed\nchain_time_source=unchanged-authoritative-fixture-not-local-elapsed\npublic_window_start={}\npublic_window_end={}",
+        statement_path.display(),
+        hex::encode(Sha256::digest(&statement_bytes)),
+        original.presentation_not_before_unix_seconds,
+        original.presentation_not_after_unix_seconds,
+    ));
+    let local_start = Instant::now();
+    let local_preparation_start =
+        holder_local_timestamp_v1(trusted_block_timestamp_ms, local_start.elapsed())
+            .expect("checked local preparation timestamp");
+    let attempt = catch_private_prover_panic_v1(|| {
+        ZkX509HolderAttemptV1::prepare(
+            original.clone(),
+            fixture.witness,
+            &state,
+            trusted_block_timestamp_ms,
+            &limits,
+            genesis,
+            budget,
+            local_preparation_start,
+        )
+    });
+    let attempt = match attempt {
+        Ok(Ok(attempt)) => attempt,
+        Ok(Err(error)) => {
+            record(format!(
+                "holder_prepare=refused\nholder_refusal_category={}\nproducer=not-started\nholder_release=not-attempted\nholder_positive_control_passed=false\nlocal_elapsed_ms={}",
+                holder_refusal_category_v1(&error),
+                local_start.elapsed().as_millis()
+            ));
+            panic!(
+                "holder preparation refused; public receipt at {}",
+                receipt.display()
+            );
+        }
+        Err(()) => {
+            record("holder_prepare=unwind\nproducer=not-started\nholder_release=not-attempted\nholder_positive_control_passed=false".into());
+            panic!(
+                "holder preparation panicked; public receipt at {}",
+                receipt.display()
+            );
+        }
+    };
+    record(format!(
+        "holder_prepare=success\nlocal_preparation_start_unix_ms={local_preparation_start}\npreparation_elapsed_ms={}",
+        local_start.elapsed().as_millis()
+    ));
+    let (measurement_context, harness_directory) = harness_context_v1();
+    let observation = super::super::prover_observation::ObservationV1::begin_with_harness_v1(
+        measurement_context,
+        harness_directory,
+    );
+    let public_capture = PublicFixtureDiagnosticGuardV1::begin_v1(&directory);
+    let local_proving_start =
+        holder_local_timestamp_v1(trusted_block_timestamp_ms, local_start.elapsed())
+            .expect("checked local proving timestamp");
+    let proving_start = Instant::now();
+    let produced = catch_private_prover_panic_v1(|| {
+        attempt.prove_with_rng(
+            &state,
+            trusted_block_timestamp_ms,
+            &limits,
+            genesis,
+            local_proving_start,
+            &mut rand::rngs::OsRng,
+        )
+    });
+    let prove_elapsed = proving_start.elapsed();
+    drop(public_capture);
+    // Decide release immediately. Independent replay and receipt I/O follow it;
+    // their duration cannot postpone this actual local release check.
+    let local_release =
+        holder_local_timestamp_v1(trusted_block_timestamp_ms, local_start.elapsed())
+            .expect("checked local release timestamp");
+    let (released, producer_status, holder_prove_status, refusal) = match produced {
+        Ok(Ok(pending)) => (
+            Some(pending.release(
+                &state,
+                trusted_block_timestamp_ms,
+                &limits,
+                genesis,
+                local_release,
+            )),
+            "success",
+            "success",
+            "none",
+        ),
+        Ok(Err(error)) => {
+            observation.record_failure_v1("holder-prove", "refused");
+            let category = holder_refusal_category_v1(&error);
+            let producer_status = if category == "engine" {
+                "error"
+            } else {
+                "not-started"
+            };
+            (None, producer_status, "refused", category)
+        }
+        Err(()) => {
+            observation.record_failure_v1("holder-prove", "unwind");
+            (None, "unwind", "unwind", "unwind")
+        }
+    };
+    record(format!(
+        "producer={producer_status}\nholder_prove={holder_prove_status}\nholder_prove_refusal_category={refusal}\nlocal_proving_start_unix_ms={local_proving_start}\nlocal_release_check_unix_ms={local_release}\nproving_seconds={:.6}\nfull_release_qualification=false",
+        prove_elapsed.as_secs_f64()
+    ));
+    match &released {
+        Some(Ok((statement, _))) => {
+            assert_eq!(statement, &original);
+            record("holder_release=success\nproducer_self_check=passed".into());
+        }
+        Some(Err(error)) => {
+            observation.record_failure_v1("holder-release", "refused");
+            record(format!(
+                "holder_release=refused\nholder_refusal_category={}\nproducer_self_check=passed\nholder_positive_control_passed=false\nretained_proof_authorizes_submission=false",
+                holder_refusal_category_v1(error)
+            ));
+        }
+        None => record("holder_release=not-attempted\nholder_positive_control_passed=false".into()),
+    }
+    let proof = released.as_ref().map(|result| {
+        // This reads the one real candidate already retained by the existing
+        // public-fixture scope, even if the consuming holder release refused.
+        let proof = read_single_public_candidate_v1(&directory)
+            .expect("one exact captured public candidate");
+        observation.record_proof_bytes_v1(proof.len() as u64);
+        if let Ok((_, released_proof)) = result {
+            assert!(
+                released_proof == &proof,
+                "released proof matches the exact captured candidate"
+            );
+        }
+        proof
+    });
+    let observation = observation.finish_v1();
+    record(observation.public_text_v1());
+    record(
+        retain_phase_tree_v1(
+            &directory,
+            observation.harness_v1(),
+            observation
+                .measurement_v1()
+                .expect("holder producer phase-tree record"),
+        )
+        .expect("durable holder phase-tree record"),
+    );
+    let proof = proof.unwrap_or_else(|| {
+        panic!(
+            "holder proving refused or unwound; public receipt at {}",
+            receipt.display()
+        )
+    });
+    let replay_start = Instant::now();
+    let replay = verify_zk_x509_credential_proof_v1(&original, &state, genesis, &proof);
+    record(format!(
+        "independent_replay={replay:?}\nindependent_replay_seconds={:.6}",
+        replay_start.elapsed().as_secs_f64()
+    ));
+    replay.expect("independent verification of the actual captured holder proof");
+    let proof_path =
+        retain_public_proof_v1(&directory, &proof).expect("verified public proof artifact");
+    record(format!(
+        "verified_proof_path={}\nproof_bytes={}\nproof_sha256={}\nretained_proof_authorizes_submission=false",
+        proof_path.display(),
+        proof.len(),
+        hex::encode(Sha256::digest(&proof))
+    ));
+    let mut wrong_genesis = genesis;
+    wrong_genesis[0] ^= 1;
+    assert!(verify_zk_x509_credential_proof_v1(&original, &state, wrong_genesis, &proof).is_err());
+    let mut nonce_tampered = proof.clone();
+    for nonce_byte in 0..32 {
+        let offset = 8 + nonce_byte;
+        nonce_tampered[offset] ^= 1;
+        assert!(
+            verify_zk_x509_credential_proof_v1(&original, &state, genesis, &nonce_tampered)
+                .is_err(),
+            "substituted proof-instance nonce byte {nonce_byte} must be rejected"
+        );
+        nonce_tampered[offset] ^= 1;
+    }
+    let mut tampered = proof.clone();
+    *tampered.last_mut().expect("nonempty credential proof") ^= 1;
+    assert!(verify_zk_x509_credential_proof_v1(&original, &state, genesis, &tampered).is_err());
+    record(format!(
+        "wrong_genesis_rejected=true\nnonce_byte_mutations_rejected=32\ntampered_proof_rejected=true\ntime_target_met={}\nholder_release_succeeded={}\nfull_release_qualification=false",
+        prove_elapsed <= std::time::Duration::from_secs(ZK_X509_PROVER_TARGET_SECONDS_V1),
+        released.as_ref().is_some_and(Result::is_ok)
+    ));
+    observation.assert_complete_main_coverage_v1(
+        super::super::stark::main_diagnostic_transform_columns_v1().unwrap(),
+    );
+    assert!(proof.len() <= ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1 as usize);
+    assert!(proof.len() <= ZK_X509_MAX_PROOF_BYTES_V1 as usize);
+    assert!(
+        prove_elapsed <= std::time::Duration::from_secs(ZK_X509_PROVER_TARGET_SECONDS_V1),
+        "complete proof exceeds unchanged proving target; public evidence at {}",
+        directory.display()
+    );
+    assert!(
+        released.as_ref().is_some_and(Result::is_ok),
+        "holder release refused the real proof; verified public proof retained without submission authority at {}",
+        directory.display()
+    );
+    record("holder_positive_control_passed=true\nfull_release_qualification=false".into());
 }

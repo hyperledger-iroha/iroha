@@ -16,7 +16,7 @@ use iroha_allocation::AllocationBudget;
 ///
 /// # Errors
 /// Returns the canonical schedule or original pool/allocator error. No World field is changed.
-pub(crate) fn retain_same_epoch_component_window(
+pub fn retain_same_epoch_component_window(
     world: &impl WorldReadOnly,
     first: u64,
     budget: &AllocationBudget,

@@ -3,7 +3,7 @@
 use super::{Hash, StateBlock, StateTransaction, output_capacity::ExecutionOutputPlanState};
 
 /// Original Time preparation scope; only the borrowing State output owner issues it.
-pub(crate) struct NativeMaintenanceTimeScope {
+pub struct NativeMaintenanceTimeScope {
     network: iroha_data_model::NetworkId,
     proposal: iroha_crypto::HashOf<iroha_data_model::block::BlockHeader>,
     remaining_entries: usize,
@@ -153,6 +153,10 @@ impl StateTransaction<'_, '_> {
 
     /// Consume the sweep's original record permit after the charge rereads its exact quote.
     /// Authorization alone retains no source entry; its actual nonempty transcript opens E.
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "Authorization consumes the original native-maintenance permit"
+    )]
     pub(crate) fn authorize_sns_native_source(
         &mut self,
         permit: crate::sns::SnsNativeMaintenancePermit,
@@ -173,7 +177,7 @@ impl StateTransaction<'_, '_> {
 
 /// Original block-start identity retained across a single retail batch preparation.
 /// Public proposal coordinates alone cannot recreate this source-context allocation.
-pub(crate) struct RetailMaintenanceSource {
+pub struct RetailMaintenanceSource {
     transaction: crate::fastpq::source_reservation::SourceTransactionIdentity,
     context: std::sync::Arc<crate::fastpq::FastpqBlockStartSourceContext>,
     fragment: usize,

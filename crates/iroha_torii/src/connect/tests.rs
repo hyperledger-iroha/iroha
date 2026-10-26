@@ -1584,9 +1584,9 @@ async fn heartbeat_failure_detected() {
         let mut queue = session.heartbeat_queue(proto::Role::App).await;
         let now = Instant::now();
         for (idx, entry) in queue.pending.iter_mut().enumerate() {
-            let factor = (idx as f32) + 2.0;
+            let factor = u32::try_from(idx).expect("two pending heartbeat entries") + 2;
             entry.sent_at = now
-                .checked_sub(cfg.ping_interval.mul_f32(factor))
+                .checked_sub(cfg.ping_interval * factor)
                 .expect("ping interval scaling stays within instant range");
         }
     }
@@ -2160,7 +2160,7 @@ async fn execution_transport_config_relays_complete_large_frames_after_signed_ap
             kind: proto::FrameKind::Control(proto::ConnectControlV1::Open {
                 app_pk,
                 app_meta: None,
-                constraints: constraints.clone(),
+                constraints,
                 permissions: None,
             }),
         })
@@ -2306,7 +2306,7 @@ async fn drops_plaintext_control_after_approve() {
         kind: proto::FrameKind::Control(proto::ConnectControlV1::Open {
             app_pk,
             app_meta: None,
-            constraints: constraints.clone(),
+            constraints,
             permissions: None,
         }),
     };
@@ -2468,7 +2468,7 @@ async fn substituted_wallet_approval_is_rejected_before_app_delivery() {
         kind: proto::FrameKind::Control(proto::ConnectControlV1::Open {
             app_pk,
             app_meta: None,
-            constraints: constraints.clone(),
+            constraints,
             permissions: None,
         }),
     })
@@ -2535,7 +2535,7 @@ async fn noncanonical_wallet_account_id_is_rejected_before_app_delivery() {
         kind: proto::FrameKind::Control(proto::ConnectControlV1::Open {
             app_pk,
             app_meta: None,
-            constraints: constraints.clone(),
+            constraints,
             permissions: None,
         }),
     })
@@ -2615,7 +2615,7 @@ async fn repeated_valid_wallet_approval_terminates_the_session() {
         kind: proto::FrameKind::Control(proto::ConnectControlV1::Open {
             app_pk,
             app_meta: None,
-            constraints: constraints.clone(),
+            constraints,
             permissions: None,
         }),
     })
@@ -2693,7 +2693,7 @@ async fn concurrent_wallet_approvals_cannot_both_reach_the_app() {
         kind: proto::FrameKind::Control(proto::ConnectControlV1::Open {
             app_pk,
             app_meta: None,
-            constraints: constraints.clone(),
+            constraints,
             permissions: None,
         }),
     })

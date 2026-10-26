@@ -70,9 +70,7 @@ pub struct NativeMusubiStorageObservationV1<'a> {
 pub fn with_native_musubi_storage_v1<R>(
     view: &StateView<'_>,
     pin_authority: &AccountId,
-    archive_id: ArchiveId,
-    manifest: ManifestDigest,
-    floor_height: u64,
+    (archive_id, manifest, floor_height): (ArchiveId, ManifestDigest, u64),
     seed_provider: ProviderId,
     now_secs: u64,
     consume: impl FnOnce(NativeMusubiStorageObservationV1<'_>) -> R,
@@ -256,9 +254,7 @@ mod tests {
             with_native_musubi_storage_v1(
                 &chain.state().view(),
                 &authority,
-                ArchiveId::new([1; 32]),
-                ManifestDigest::new([2; 32]),
-                floor,
+                (ArchiveId::new([1; 32]), ManifestDigest::new([2; 32]), floor),
                 ProviderId::new([3; 32]),
                 1,
                 |_| called.set(true),

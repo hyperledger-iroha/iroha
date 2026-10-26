@@ -70,7 +70,12 @@ impl JindoFieldElementV1 {
     /// Construct from an unsigned integer known to be smaller than the field modulus.
     pub(crate) fn from_u128(value: u128) -> Self {
         Self(Self::montgomery_mul_limbs(
-            [value as u64, (value >> 64) as u64, 0, 0],
+            [
+                u64::try_from(value & u128::from(u64::MAX)).expect("low limb fits u64"),
+                (value >> 64) as u64,
+                0,
+                0,
+            ],
             Self::MONTGOMERY_R2,
         ))
     }
@@ -143,7 +148,7 @@ impl JindoFieldElementV1 {
         let mut carry = 0_u64;
         for index in 0..4 {
             let sum = u128::from(left[index]) + u128::from(right[index]) + u128::from(carry);
-            out[index] = sum as u64;
+            out[index] = u64::try_from(sum & u128::from(u64::MAX)).expect("low limb fits u64");
             carry = (sum >> 64) as u64;
         }
         (out, carry)
@@ -180,14 +185,15 @@ impl JindoFieldElementV1 {
     }
     fn montgomery_mul_limbs(left: [u64; 4], right: [u64; 4]) -> [u64; 4] {
         let mut product = [0_u64; 9];
-        for left_index in 0..4 {
+        for (left_index, left_word) in left.iter().copied().enumerate() {
             let mut carry = 0_u64;
-            for right_index in 0..4 {
+            for (right_index, right_word) in right.iter().copied().enumerate() {
                 let index = left_index + right_index;
-                let accumulation = u128::from(left[left_index]) * u128::from(right[right_index])
+                let accumulation = u128::from(left_word) * u128::from(right_word)
                     + u128::from(product[index])
                     + u128::from(carry);
-                product[index] = accumulation as u64;
+                product[index] =
+                    u64::try_from(accumulation & u128::from(u64::MAX)).expect("low limb fits u64");
                 carry = (accumulation >> 64) as u64;
             }
             Self::add_with_propagation(&mut product, left_index + 4, carry);
@@ -201,7 +207,8 @@ impl JindoFieldElementV1 {
                     * u128::from(Self::MODULUS[modulus_index])
                     + u128::from(product[index])
                     + u128::from(carry);
-                product[index] = accumulation as u64;
+                product[index] =
+                    u64::try_from(accumulation & u128::from(u64::MAX)).expect("low limb fits u64");
                 carry = (accumulation >> 64) as u64;
             }
             Self::add_with_propagation(&mut product, offset + 4, carry);

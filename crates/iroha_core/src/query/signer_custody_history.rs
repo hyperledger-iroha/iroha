@@ -17,21 +17,21 @@ use sorafs_manifest::signer::{
 mod purpose;
 mod read;
 #[cfg(test)]
-pub(crate) mod staging_fixture;
+pub mod staging_fixture;
 mod transition;
 #[cfg(test)]
-pub(crate) use purpose::ManifestPurpose;
-pub(crate) use purpose::{AccountPurpose, ReceiptPurpose};
+pub use purpose::ManifestPurpose;
+pub use purpose::{AccountPurpose, ReceiptPurpose};
 #[cfg(test)]
-pub(crate) use read::read_control_record;
-pub(crate) use read::{control_digest, read_control, read_control_at};
-pub(crate) use transition::{ControlAction, ControlTransition, control_revision, prepare_control};
+pub use read::read_control_record;
+pub use read::{control_digest, read_control, read_control_at};
+pub use transition::{ControlAction, ControlTransition, control_revision, prepare_control};
 
 const MAX_FRAME_BYTES_V1: usize = 32 * 1024;
 
 /// Payload-free retained-control failure, mapped once by each public purpose owner.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum HistoryError {
+pub enum HistoryError {
     Invalid,
     BindingMismatch,
     CorruptHistory,
@@ -55,19 +55,19 @@ mod sealed {
 
 /// Borrowed execution coordinates; never an independently trusted execution assertion.
 #[derive(Clone, Copy)]
-pub(crate) struct ExecutionView<'a> {
+pub struct ExecutionView<'a> {
     pub(crate) height: u64,
     pub(crate) ordinal: u32,
     pub(crate) recorded_at_unix_ms: u64,
     pub(crate) authority: &'a AccountId,
 }
 /// Distinct purpose-owned execution DTOs share only deterministic coordinate rules.
-pub(crate) trait CustodyExecution: sealed::Execution {
+pub trait CustodyExecution: sealed::Execution {
     fn view(&self) -> ExecutionView<'_>;
     fn build(value: ExecutionView<'_>) -> Self;
 }
 /// Borrowed fields of one purpose-owned immutable record.
-pub(crate) struct ControlRecordView<'a, E> {
+pub struct ControlRecordView<'a, E> {
     pub(crate) deployment: &'a str,
     pub(crate) revision: u64,
     pub(crate) predecessor_digest: [u8; 32],
@@ -77,7 +77,7 @@ pub(crate) struct ControlRecordView<'a, E> {
     pub(crate) enrollment: Option<&'a [u8]>,
 }
 /// Owned fields prepared only after the common native transition checks.
-pub(crate) struct ControlRecordParts<E> {
+pub struct ControlRecordParts<E> {
     pub(crate) deployment: String,
     pub(crate) revision: u64,
     pub(crate) predecessor_digest: [u8; 32],
@@ -87,7 +87,7 @@ pub(crate) struct ControlRecordParts<E> {
     pub(crate) enrollment: Option<Vec<u8>>,
 }
 /// Closed purpose selection, with no caller-supplied namespace, verifier or authority callback.
-pub(crate) trait CustodyPurpose: sealed::Purpose {
+pub trait CustodyPurpose: sealed::Purpose {
     type Record: Clone
         + PartialEq
         + norito::core::NoritoSerialize
@@ -114,26 +114,26 @@ pub(crate) trait CustodyPurpose: sealed::Purpose {
     norito::NoritoSchema,
 )]
 #[norito_schema(name = "iroha_core::query::final_promotion_authority::ControlIndexV1")]
-pub(crate) struct ControlIndexV1 {
+pub struct ControlIndexV1 {
     pub(crate) revision: u64,
     pub(crate) digest: [u8; 32],
     pub(crate) height: u64,
     pub(crate) ordinal: u32,
 }
 /// Internally validated control and its immutable purpose-owned row/index.
-pub(crate) struct NativeControl<P: CustodyPurpose> {
+pub struct NativeControl<P: CustodyPurpose> {
     pub(crate) record: P::Record,
     pub(crate) state: SignerCustodyControlStateV1,
     pub(crate) index: ControlIndexV1,
 }
 
-pub(crate) fn encode<T: norito::core::NoritoSerialize>(value: &T) -> Result<Vec<u8>, HistoryError> {
+pub fn encode<T: norito::core::NoritoSerialize>(value: &T) -> Result<Vec<u8>, HistoryError> {
     if norito::canonical_frame_len(value).map_err(|_| HistoryError::Invalid)? > MAX_FRAME_BYTES_V1 {
         return Err(HistoryError::Invalid);
     }
     norito::encode_canonical(value).map_err(|_| HistoryError::Invalid)
 }
-pub(crate) fn decode<T>(bytes: &[u8]) -> Result<T, HistoryError>
+pub fn decode<T>(bytes: &[u8]) -> Result<T, HistoryError>
 where
     T: norito::core::NoritoSerialize + for<'de> norito::core::NoritoDeserialize<'de>,
 {
@@ -152,7 +152,7 @@ where
     )
     .map_err(|_| HistoryError::Invalid)
 }
-pub(crate) fn digest<T: norito::core::NoritoSerialize>(
+pub fn digest<T: norito::core::NoritoSerialize>(
     domain: &[u8],
     value: &T,
 ) -> Result<[u8; 32], HistoryError> {
@@ -162,22 +162,19 @@ pub(crate) fn digest<T: norito::core::NoritoSerialize>(
     bytes.extend_from_slice(&frame);
     Ok(*Hash::new(bytes).as_ref())
 }
-pub(crate) fn valid_deployment<P: CustodyPurpose>(deployment: &str) -> bool {
+pub fn valid_deployment<P: CustodyPurpose>(deployment: &str) -> bool {
     !deployment.is_empty()
         && deployment.len() <= SIGNER_MAX_ID_BYTES_V1
         && P::purpose(deployment.to_owned()).validates_role(P::ROLE)
 }
-pub(crate) fn scope<P: CustodyPurpose>(deployment: &str) -> String {
+pub fn scope<P: CustodyPurpose>(deployment: &str) -> String {
     format!(
         "{}_{}",
         P::NAMESPACE,
         hex::encode(Hash::new(deployment.as_bytes()).as_ref())
     )
 }
-pub(crate) fn path<P: CustodyPurpose>(
-    deployment: &str,
-    suffix: &str,
-) -> Result<StatePath, HistoryError> {
+pub fn path<P: CustodyPurpose>(deployment: &str, suffix: &str) -> Result<StatePath, HistoryError> {
     if !valid_deployment::<P>(deployment) {
         return Err(HistoryError::BindingMismatch);
     }
@@ -185,18 +182,16 @@ pub(crate) fn path<P: CustodyPurpose>(
         .parse()
         .map_err(|_| HistoryError::Invalid)
 }
-pub(crate) fn control_head_key<P: CustodyPurpose>(
-    deployment: &str,
-) -> Result<StatePath, HistoryError> {
+pub fn control_head_key<P: CustodyPurpose>(deployment: &str) -> Result<StatePath, HistoryError> {
     path::<P>(deployment, "control_head")
 }
-pub(crate) fn control_record_key<P: CustodyPurpose>(
+pub fn control_record_key<P: CustodyPurpose>(
     deployment: &str,
     revision: u64,
 ) -> Result<StatePath, HistoryError> {
     path::<P>(deployment, &format!("control_revision_{revision:020}"))
 }
-pub(crate) fn control_height_key<P: CustodyPurpose>(
+pub fn control_height_key<P: CustodyPurpose>(
     deployment: &str,
     height: u64,
     ordinal: u32,
@@ -206,7 +201,7 @@ pub(crate) fn control_height_key<P: CustodyPurpose>(
         &format!("control_height_{height:020}_{ordinal:010}"),
     )
 }
-pub(crate) fn key_path<P: CustodyPurpose>(
+pub fn key_path<P: CustodyPurpose>(
     deployment: &str,
     signer: bool,
     key: &PublicKey,
@@ -220,7 +215,7 @@ pub(crate) fn key_path<P: CustodyPurpose>(
         ),
     )
 }
-pub(crate) fn prefix_has_any<P: CustodyPurpose>(
+pub fn prefix_has_any<P: CustodyPurpose>(
     world: &impl WorldReadOnly,
     deployment: &str,
     suffix: &str,
@@ -232,14 +227,11 @@ pub(crate) fn prefix_has_any<P: CustodyPurpose>(
         .next()
         .is_some_and(|(key, _)| key.as_ref().starts_with(start.as_ref())))
 }
-pub(crate) fn valid_execution<E: CustodyExecution>(execution: &E) -> bool {
+pub fn valid_execution<E: CustodyExecution>(execution: &E) -> bool {
     let value = execution.view();
     value.height != 0 && value.recorded_at_unix_ms != 0 && value.recorded_at_unix_ms != u64::MAX
 }
-pub(crate) fn adjacent_execution<E: CustodyExecution>(
-    old: &E,
-    next: &E,
-) -> Result<(), HistoryError> {
+pub fn adjacent_execution<E: CustodyExecution>(old: &E, next: &E) -> Result<(), HistoryError> {
     let old = old.view();
     let next = next.view();
     let ordinal = if old.height == next.height {
@@ -259,7 +251,7 @@ pub(crate) fn adjacent_execution<E: CustodyExecution>(
     }
     Ok(())
 }
-pub(crate) fn execution<E: CustodyExecution>(
+pub fn execution<E: CustodyExecution>(
     tx: &StateTransaction<'_, '_>,
     authority: &AccountId,
     previous: Option<&E>,
@@ -289,7 +281,7 @@ pub(crate) fn execution<E: CustodyExecution>(
     }
     Ok(next)
 }
-pub(crate) fn validate_binding<P: CustodyPurpose>(
+pub fn validate_binding<P: CustodyPurpose>(
     state: &impl StateReadOnly,
     binding: &SignerCustodyBindingV1,
     deployment: &str,
@@ -305,7 +297,7 @@ pub(crate) fn validate_binding<P: CustodyPurpose>(
     Ok(())
 }
 /// Match actual committed predecessor control without fabricating its block anchor.
-pub(crate) fn committed_control<P: CustodyPurpose>(
+pub fn committed_control<P: CustodyPurpose>(
     tx: &StateTransaction<'_, '_>,
     current: &NativeControl<P>,
 ) -> Result<SignerCustodyAnchorV1, HistoryError> {
@@ -336,7 +328,7 @@ pub(crate) fn committed_control<P: CustodyPurpose>(
     })
 }
 /// Stage immutable bytes only; the native purpose owner publishes after all extra checks succeed.
-pub(crate) fn immutable(
+pub fn immutable(
     world: &impl WorldReadOnly,
     writes: &mut Vec<(StatePath, Vec<u8>)>,
     key: StatePath,

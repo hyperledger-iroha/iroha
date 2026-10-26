@@ -245,7 +245,7 @@ pub(super) fn three_output_fixture() -> ThreeOutputFixture {
         second_input_note,
         second_input_secret,
         1,
-        path_1,
+        &path_1,
         profile,
     )
     .expect("second cover input witness");

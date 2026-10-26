@@ -1082,12 +1082,13 @@ def _feature_workspace(tmp_path: Path, features: str, dependencies: str = "") ->
 
 
 def test_supported_feature_matrix_preserves_all_current_nonmutation_features() -> None:
-    """Governance, fixtures and explicit network diagnostics retain coverage."""
+    """Canonical governance is unconditional; optional implementations retain coverage."""
 
     inventory = rust_ci.workspace_check_features(ROOT)
     for package in rust_ci.MUTATION_FEATURE_OWNERS:
         assert "mutation-testing" not in inventory[package]
-    assert {"governance", "application-model", "transparent_api", "test-fixtures",
+    assert "governance" not in inventory["iroha_data_model"]
+    assert {"application-model", "transparent_api", "test-fixtures",
             "fault_injection"} <= set(inventory["iroha_data_model"])
     assert {"iroha-core-tests", "node", "simd", "zk-stark",
             "test-network-private-settlement-evidence",
@@ -1205,6 +1206,43 @@ def test_run_checks_forwards_exact_workspace_feature_matrix_without_children(tmp
     assert "--all-targets" in calls[0][0] and "--no-deps" in calls[1][0]
 
 
+@pytest.mark.parametrize("dry_run", (False, True))
+def test_local_checks_share_the_existing_wrapper_without_changing_feature_coverage(
+    tmp_path: Path, monkeypatch, capsys, dry_run: bool,
+) -> None:
+    """Local checks reuse one target and preserve each check's exact feature policy."""
+    root = _feature_workspace(tmp_path, 'default = ["governance"]\ngovernance = []\n')
+    checks = ("clippy", "build", "test")
+    commands = rust_ci.commands_for_checks(
+        ("iroha_data_model",), checks,
+        features_by_package=rust_ci.workspace_check_features(root),
+    )
+    calls = []
+    monkeypatch.setattr(rust_ci, "_run", lambda command, **kwargs: calls.append((command, kwargs)))
+    rust_ci.run_checks(("iroha_data_model",), checks, root=root, local=True, dry_run=dry_run)
+    output = capsys.readouterr().out
+    expected_prefix = [str(root / "scripts/cargo_fast.sh"),
+                       "--stable-local-metadata", "--incremental", "--"]
+    if dry_run:
+        assert not calls
+        assert output.count(str(root / "scripts/cargo_fast.sh")) == len(checks)
+    else:
+        assert [command for command, _ in calls] == [
+            [*expected_prefix, *command[1:]] for command in commands
+        ]
+        assert all(kwargs == {"cwd": root, "capture_output": False} for _, kwargs in calls)
+    assert "--target-dir" not in output and "--target-slot" not in output
+
+
+def test_local_check_cli_selects_the_local_runner(monkeypatch) -> None:
+    """The contributor entry point opts in without changing other callers."""
+    calls = []
+    monkeypatch.setattr(rust_ci, "run_checks", lambda *args, **kwargs: calls.append((args, kwargs)))
+    assert rust_ci.main(["run", "--local", "--packages", "iroha_core", "--checks", "test"]) == 0
+    assert calls == [((("iroha_core",), ("test",)),
+                     {"dry_run": False, "workspace": False, "local": True})]
+
+
 def test_feature_matrix_includes_target_optional_edges_and_suppresses_dep_globally(tmp_path: Path) -> None:
     root = _feature_workspace(tmp_path, 'default = []\nunused = ["dep:hidden"]\n')
     manifest = root / "model/Cargo.toml"
@@ -1252,7 +1290,7 @@ def test_explicit_valid_package_selection_preserves_exact_check_owners(raw, monk
     monkeypatch.setattr(rust_ci, "run_checks", lambda *args, **kwargs: calls.append((args, kwargs)))
     assert rust_ci.main(["run", "--packages", raw, "--checks", "test"]) == 0
     expected = tuple(sorted({package.strip() for package in raw.split(",")}))
-    assert calls == [((expected, ("test",)), {"dry_run": False, "workspace": False})]
+    assert calls == [((expected, ("test",)), {"dry_run": False, "workspace": False, "local": False})]
 
 
 @pytest.mark.parametrize("raw", ("", " ", ","))

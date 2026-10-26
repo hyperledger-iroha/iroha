@@ -215,10 +215,10 @@ fn validate_taikai_publisher_owner_binds_outer_principal() {
     );
     taikai::validate_taikai_publisher_owner(&outcome, &signing_manifest.body.publisher_account)
         .expect("the authenticated publisher may submit its own segment");
-    let relayer = if signing_manifest.body.publisher_account != *ALICE_ID {
-        ALICE_ID.clone()
-    } else {
+    let relayer = if signing_manifest.body.publisher_account == *ALICE_ID {
         BOB_ID.clone()
+    } else {
+        ALICE_ID.clone()
     };
     let err = taikai::validate_taikai_publisher_owner(&outcome, &relayer)
         .expect_err("an unrelated DA owner must not submit another publisher's SSM");
@@ -308,10 +308,10 @@ fn validate_taikai_ssm_rejects_publisher_account_key_mismatch() {
         Algorithm::Ed25519,
         &[[0x33; 32]],
         |body| {
-            body.publisher_account = if AccountId::new(body.publisher_key.clone()) != *ALICE_ID {
-                ALICE_ID.clone()
-            } else {
+            body.publisher_account = if AccountId::new(body.publisher_key.clone()) == *ALICE_ID {
                 BOB_ID.clone()
+            } else {
+                ALICE_ID.clone()
             };
         },
     );
@@ -1030,13 +1030,13 @@ fn build_receipt_prefers_chunk_root_from_manifest() {
         .expect("compute rent quote for manifest");
     let manifest = DaManifestV1 {
         version: DaManifestV1::VERSION,
-        client_blob_id: request.client_blob_id.clone(),
+        client_blob_id: request.client_blob_id,
         lane_id: request.lane_id,
         epoch: request.epoch,
         blob_class: request.blob_class,
         codec: request.codec.clone(),
         blob_hash: payload_hash,
-        chunk_root: manifest_chunk_root.clone(),
+        chunk_root: manifest_chunk_root,
         storage_ticket: StorageTicketId::new([0x55; 32]),
         total_size: request.total_size,
         chunk_size: request.chunk_size,

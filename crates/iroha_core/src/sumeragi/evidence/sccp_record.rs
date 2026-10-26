@@ -151,7 +151,8 @@ fn decode_material_kind(raw: &str) -> Result<MaterialKind, Error> {
         seen |= bit;
         match key.as_str() {
             "evidence" => {
-                material = Some(map.parse_value_with_parser(|p| p.raw_value_slice())?);
+                material =
+                    Some(map.parse_value_with_parser(norito::json::Parser::raw_value_slice)?);
                 break;
             }
             // Preserve the canonical first invalid field when a common field precedes
@@ -188,7 +189,7 @@ fn decode_material_kind(raw: &str) -> Result<MaterialKind, Error> {
                 kind = Some(map.parse_value::<String>()?);
             }
             "value" => {
-                map.parse_value_with_parser(|p| p.raw_value_slice())?;
+                map.parse_value_with_parser(norito::json::Parser::raw_value_slice)?;
             }
             _ => return Err(invalid("unknown evidence JSON field")),
         }
@@ -266,12 +267,12 @@ fn preflight_offender_object(parser: &mut Parser<'_>) -> Result<(), Error> {
                 let excessive = false;
                 #[cfg(not(all(test, sumeragi_core_mutation = "HC906")))]
                 let excessive = sequence.total_entries()
-                    > iroha_data_model::block::consensus::MAX_VALIDATORS_PER_HEIGHT;
+                    > iroha_model_base::topology::MAX_VALIDATORS_PER_HEIGHT;
                 if excessive {
                     let parser = sequence.parser();
                     let byte = parser.position();
                     let prefix = &parser.input().as_bytes()[..byte];
-                    let line = 1 + prefix.iter().filter(|byte| **byte == b'\n').count();
+                    let line = prefix.split(|byte| *byte == b'\n').count();
                     let col = prefix
                         .iter()
                         .rposition(|byte| *byte == b'\n')
@@ -290,7 +291,7 @@ fn preflight_offender_object(parser: &mut Parser<'_>) -> Result<(), Error> {
                 sequence.finish().map_err(Error::from)
             })?;
         } else {
-            map.parse_value_with_parser(|parser| parser.raw_value_slice())?;
+            map.parse_value_with_parser(norito::json::Parser::raw_value_slice)?;
         }
     }
     map.finish().map_err(Error::from)
@@ -305,7 +306,7 @@ fn preflight_offenders(raw: &str) -> Result<(), Error> {
             if key.as_str() == "value" {
                 map.parse_value_with_parser_typed(preflight_offender_object)?;
             } else {
-                map.parse_value_with_parser(|parser| parser.raw_value_slice())?;
+                map.parse_value_with_parser(norito::json::Parser::raw_value_slice)?;
             }
         }
         map.finish().map_err(Error::from)
@@ -317,7 +318,7 @@ fn preflight_offenders(raw: &str) -> Result<(), Error> {
             "evidence" => map.parse_value_with_parser_typed(material)?,
             "attribution" => map.parse_value_with_parser_typed(preflight_offender_object)?,
             _ => {
-                map.parse_value_with_parser(|parser| parser.raw_value_slice())?;
+                map.parse_value_with_parser(norito::json::Parser::raw_value_slice)?;
             }
         }
     }
@@ -396,7 +397,7 @@ pub(super) fn decode_json(
 
 /// Private funded materialization from an actual source-bound verifier and selected signer mask.
 /// The execution handler alone joins this custody with deduplication and atomic publication.
-pub(crate) struct PreparedSccpRecord {
+pub struct PreparedSccpRecord {
     body: ChargedShared<SccpRecordBody>,
     parent: crate::state::NativeExecutionTip,
     execution_height: u64,
@@ -441,7 +442,7 @@ impl PreparedSccpRecord {
     }
 }
 /// Fund immutable record custody from the exact verified observation and selected new signers.
-pub(crate) fn prepare_claim(
+pub fn prepare_claim(
     candidate: &crate::smartcontracts::isi::sccp::forgery::VerifiedForgeryCandidate<'_>,
     new_signers: u32,
     budget: &AllocationBudget,

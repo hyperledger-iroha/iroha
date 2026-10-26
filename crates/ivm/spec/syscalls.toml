@@ -90,7 +90,7 @@ gas = "G_set_detail + bytes(val)"
 
 [[syscall]]
 number = "0x20"
-args = "r10=&AssetDefinitionId, r11=&Blob(name), r12=numeric_spec:u64, r13=mintability:u64"
+args = "r10=&AssetDefinitionId, r11=&Blob(name), r12=numeric_spec:u64, r13=mintability:u64, r14=&DomainId(owning domain)"
 ret = "u64=0"
 gas = "G_reg_asset"
 

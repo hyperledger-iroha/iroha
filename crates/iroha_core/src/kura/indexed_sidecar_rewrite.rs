@@ -826,27 +826,27 @@ impl Kura {
                 return false;
             }
         }
-        if let Some(parent) = data_path.parent() {
-            if let Err(err) = sync_dir(parent) {
-                iroha_logger::warn!(
-                    ?err,
-                    ?parent,
-                    kind,
-                    "failed to sync sidecar parent directory after prune"
-                );
-                return false;
-            }
+        if let Some(parent) = data_path.parent()
+            && let Err(err) = sync_dir(parent)
+        {
+            iroha_logger::warn!(
+                ?err,
+                ?parent,
+                kind,
+                "failed to sync sidecar parent directory after prune"
+            );
+            return false;
         }
-        if let Some(parent) = index_path.parent() {
-            if let Err(err) = sync_dir(parent) {
-                iroha_logger::warn!(
-                    ?err,
-                    ?parent,
-                    kind,
-                    "failed to sync sidecar parent directory after prune"
-                );
-                return false;
-            }
+        if let Some(parent) = index_path.parent()
+            && let Err(err) = sync_dir(parent)
+        {
+            iroha_logger::warn!(
+                ?err,
+                ?parent,
+                kind,
+                "failed to sync sidecar parent directory after prune"
+            );
+            return false;
         }
         let retained = match rewrite {
             #[cfg(test)]

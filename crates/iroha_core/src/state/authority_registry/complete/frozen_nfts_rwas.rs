@@ -1,6 +1,6 @@
 //! Actual three-owner NFT and four-owner RWA frozen relations and canonical encoding.
-//! Scoped tables grant no joint StatePublication, economic or finality authority.
-//! TODO: join all remaining cells/history/owners to sole StatePublication and Kura.
+//! Scoped tables grant no joint `StatePublication`, economic or finality authority.
+//! TODO: join all remaining cells/history/owners to sole `StatePublication` and Kura.
 use super::{CanonicalTableLeafSet, CanonicalTablePairedSnapshot, LeafError, LeafLimits};
 use crate::state::{
     StateBlock,
@@ -53,6 +53,10 @@ impl<'frozen> OriginalNfts<'frozen> {
     }
 }
 /// Check both exact original images and encode their original current rows with the State pool.
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 pub(in crate::state) fn capture_nfts(
     block: &StateBlock<'_>,
     limits: LeafLimits,
@@ -120,6 +124,10 @@ impl<'frozen> OriginalRwas<'frozen> {
     }
 }
 /// Check both exact original images and encode their original current rows with the State pool.
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 pub(in crate::state) fn capture_rwas(
     block: &StateBlock<'_>,
     limits: LeafLimits,

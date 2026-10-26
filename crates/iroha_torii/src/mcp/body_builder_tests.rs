@@ -150,7 +150,7 @@ fn sponsored_account_tool_descriptors_require_one_exact_body_shape() {
 }
 #[test]
 fn sponsored_account_tool_descriptors_require_v1_permissions_fee_and_pow_fields() {
-    fn required_body_fields(tool: ToolSpec) -> Vec<String> {
+    fn required_body_fields(tool: &ToolSpec) -> Vec<String> {
         tool.input_schema["properties"]["body"]["required"]
             .as_array()
             .expect("body required array")
@@ -160,14 +160,14 @@ fn sponsored_account_tool_descriptors_require_v1_permissions_fee_and_pow_fields(
     }
 
     assert!(
-        required_body_fields(iroha_accounts_onboard_plan_tool())
+        required_body_fields(&(iroha_accounts_onboard_plan_tool()))
             .iter()
             .any(|field| field == "permissions")
     );
     {
         let tool = iroha_accounts_onboard_prepare_tool();
         assert!(
-            required_body_fields(tool)
+            required_body_fields(&(tool))
                 .iter()
                 .any(|field| field == "fee_payment")
         );

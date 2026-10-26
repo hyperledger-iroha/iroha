@@ -1,7 +1,7 @@
 //! Governance helpers (app API convenience). Build/submit governance transactions.
 mod audit;
 mod deploy;
-pub(crate) mod parliament;
+pub mod parliament;
 mod shared;
 mod vote;
 use crate::{Run, RunContext};
@@ -11,7 +11,7 @@ pub use deploy::{
 };
 use eyre::Result;
 pub use parliament::ParliamentCommand;
-pub(crate) use shared::parse_governance_selector_v1;
+pub use shared::parse_governance_selector_v1;
 pub use vote::{
     LocksGetArgs, ProposalGetArgs, ReferendumGetArgs, TallyGetArgs, UnlockStatsArgs, VoteArgs,
 };

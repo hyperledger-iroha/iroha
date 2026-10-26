@@ -1107,9 +1107,11 @@ async fn run(args: Args) -> Result<()> {
             args.binding.network_id,
             &args.binding.chain_id,
             &seats,
-            &args.binding.daemon,
-            limits(),
-            5,
+            iroha_test_network::GenesisDkgRunConfig {
+                native_binary: &args.binding.daemon,
+                limits: limits(),
+                certificate_height: 5,
+            },
             |height, snapshot, deadline| {
                 let binding = args.binding.clone();
                 let output = args.output.clone();

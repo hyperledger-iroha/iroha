@@ -15,11 +15,11 @@ use iroha_data_model::asset::{
 };
 use iroha_data_model::isi::retail_daily_limit::RetailMonetaryMovementV1;
 
-pub(crate) const POLICY_ROOT: &str = RETAIL_POLICY_STATE_PREFIX_V1;
-pub(crate) const ACTIVATION_ROOT: &str = RETAIL_ACTIVATION_STATE_PREFIX_V1;
-pub(crate) const IDENTITY_ROOT: &str = "retail_day_identity_v1/";
-pub(crate) const USAGE_ROOT: &str = "retail_day_usage_v1/";
-pub(crate) const MONETARY_OPERATION_ROOT: &str = "retail_day_monetary_operation_v1/";
+pub const POLICY_ROOT: &str = RETAIL_POLICY_STATE_PREFIX_V1;
+pub const ACTIVATION_ROOT: &str = RETAIL_ACTIVATION_STATE_PREFIX_V1;
+pub const IDENTITY_ROOT: &str = "retail_day_identity_v1/";
+pub const USAGE_ROOT: &str = "retail_day_usage_v1/";
+pub const MONETARY_OPERATION_ROOT: &str = "retail_day_monetary_operation_v1/";
 const DAY_MS: u64 = 86_400_000;
 
 fn definition_digest(definition: &AssetDefinitionId) -> String {
@@ -30,19 +30,19 @@ fn account_digest(account: &AccountId) -> String {
     hex::encode(Hash::new(account.to_string().as_bytes()).as_ref())
 }
 
-fn fixed_path(value: String) -> StatePath {
+fn fixed_path(value: &str) -> StatePath {
     value
         .parse()
         .expect("fixed-size native retail DAY state path must be valid")
 }
 
-pub(crate) fn policy_key(definition: &AssetDefinitionId, dataspace: DataSpaceId) -> StatePath {
+pub fn policy_key(definition: &AssetDefinitionId, dataspace: DataSpaceId) -> StatePath {
     retail_policy_state_path_v1(definition, dataspace)
 }
 
 /// The immutable per-definition marker is also the exact governed-asset index.
 /// Native admission can find it without scanning every installed policy.
-pub(crate) fn activation_key(definition: &AssetDefinitionId) -> StatePath {
+pub fn activation_key(definition: &AssetDefinitionId) -> StatePath {
     retail_activation_state_path_v1(definition)
 }
 
@@ -52,7 +52,7 @@ fn policy_digest(policy: &RetailDailyLimitPolicyV1) -> Result<[u8; 32], String> 
     Ok(*Hash::new(bytes).as_ref())
 }
 
-pub(crate) fn activation_for_policy(
+pub fn activation_for_policy(
     policy: &RetailDailyLimitPolicyV1,
     activated_at_ms: u64,
 ) -> Result<RetailDailyActivationV1, String> {
@@ -80,41 +80,47 @@ fn validate_activation(
     Ok(())
 }
 
-pub(crate) fn identity_key(
+pub fn identity_key(
     definition: &AssetDefinitionId,
     dataspace: DataSpaceId,
     account: &AccountId,
 ) -> StatePath {
-    fixed_path(format!(
-        "{IDENTITY_ROOT}{}/{}/{}",
-        definition_digest(definition),
-        dataspace.as_u64(),
-        account_digest(account)
-    ))
+    fixed_path(
+        &(format!(
+            "{IDENTITY_ROOT}{}/{}/{}",
+            definition_digest(definition),
+            dataspace.as_u64(),
+            account_digest(account)
+        )),
+    )
 }
 
-pub(crate) fn usage_key(key: &RetailDailyUsageKeyV1) -> StatePath {
-    fixed_path(format!(
-        "{USAGE_ROOT}{}/{}/{}/{}",
-        definition_digest(&key.asset_definition_id),
-        key.physical_dataspace.as_u64(),
-        hex::encode(key.identity.digest),
-        key.utc_day_start_ms
-    ))
+pub fn usage_key(key: &RetailDailyUsageKeyV1) -> StatePath {
+    fixed_path(
+        &(format!(
+            "{USAGE_ROOT}{}/{}/{}/{}",
+            definition_digest(&key.asset_definition_id),
+            key.physical_dataspace.as_u64(),
+            hex::encode(key.identity.digest),
+            key.utc_day_start_ms
+        )),
+    )
 }
 
-pub(crate) fn monetary_operation_key(
+pub fn monetary_operation_key(
     definition: &AssetDefinitionId,
     operation_digest: &[u8; 32],
 ) -> StatePath {
-    fixed_path(format!(
-        "{MONETARY_OPERATION_ROOT}{}/{}",
-        definition_digest(definition),
-        hex::encode(operation_digest)
-    ))
+    fixed_path(
+        &(format!(
+            "{MONETARY_OPERATION_ROOT}{}/{}",
+            definition_digest(definition),
+            hex::encode(operation_digest)
+        )),
+    )
 }
 
-pub(crate) fn monetary_operation_exists(
+pub fn monetary_operation_exists(
     world: &impl WorldReadOnly,
     definition: &AssetDefinitionId,
     operation_digest: &[u8; 32],
@@ -143,7 +149,7 @@ fn validate_first_release_policy(policy: &RetailDailyLimitPolicyV1) -> Result<()
     Ok(())
 }
 
-pub(crate) fn policy_for_exact(
+pub fn policy_for_exact(
     world: &impl WorldReadOnly,
     definition: &AssetDefinitionId,
     dataspace: DataSpaceId,
@@ -160,7 +166,7 @@ pub(crate) fn policy_for_exact(
     Ok(Some(policy))
 }
 
-pub(crate) fn activation_for_exact(
+pub fn activation_for_exact(
     world: &impl WorldReadOnly,
     policy: &RetailDailyLimitPolicyV1,
 ) -> Result<RetailDailyActivationV1, String> {
@@ -174,7 +180,7 @@ pub(crate) fn activation_for_exact(
     Ok(activation)
 }
 
-pub(crate) fn has_policy_for_definition(
+pub fn has_policy_for_definition(
     world: &impl WorldReadOnly,
     definition: &AssetDefinitionId,
 ) -> Result<bool, String> {
@@ -197,7 +203,7 @@ pub(crate) fn has_policy_for_definition(
     Ok(true)
 }
 
-pub(crate) fn identity_for_exact(
+pub fn identity_for_exact(
     world: &impl WorldReadOnly,
     definition: &AssetDefinitionId,
     dataspace: DataSpaceId,
@@ -217,7 +223,7 @@ pub(crate) fn identity_for_exact(
     Ok(Some(attestation))
 }
 
-pub(crate) fn usage_for_exact(
+pub fn usage_for_exact(
     world: &impl WorldReadOnly,
     key: &RetailDailyUsageKeyV1,
 ) -> Result<Option<Quantity>, String> {
@@ -232,10 +238,7 @@ pub(crate) fn usage_for_exact(
     Ok(Some(amount))
 }
 
-pub(crate) fn encode_usage(
-    key: &RetailDailyUsageKeyV1,
-    amount: &Quantity,
-) -> Result<Vec<u8>, String> {
+pub fn encode_usage(key: &RetailDailyUsageKeyV1, amount: &Quantity) -> Result<Vec<u8>, String> {
     if amount.is_zero() {
         return Err("retail DAY usage must be positive".to_owned());
     }
@@ -243,17 +246,17 @@ pub(crate) fn encode_usage(
         .map_err(|error| format!("cannot encode retail DAY usage: {error}"))
 }
 
-pub(crate) fn put_usage(
+pub fn put_usage(
     world: &mut WorldTransaction<'_, '_>,
-    key: RetailDailyUsageKeyV1,
-    amount: Quantity,
+    key: &RetailDailyUsageKeyV1,
+    amount: &Quantity,
 ) -> Result<(), String> {
-    let bytes = encode_usage(&key, &amount)?;
-    world.smart_contract_state.insert(usage_key(&key), bytes);
+    let bytes = encode_usage(key, amount)?;
+    world.smart_contract_state.insert(usage_key(key), bytes);
     Ok(())
 }
 
-pub(crate) fn retained_definition(
+pub fn retained_definition(
     world: &impl WorldReadOnly,
     definitions: &BTreeSet<AssetDefinitionId>,
 ) -> Result<Option<AssetDefinitionId>, String> {
@@ -314,7 +317,7 @@ pub(crate) fn retained_definition(
     Ok(None)
 }
 
-pub(crate) fn account_is_retained(
+pub fn account_is_retained(
     world: &impl WorldReadOnly,
     account: &AccountId,
 ) -> Result<bool, String> {
@@ -503,7 +506,7 @@ fn validate_immutable_policy_history(world: &mut World) -> Result<(), String> {
 }
 
 /// Validate current native records and immutable undo before accepting a snapshot.
-pub(crate) fn validate_persistence(world: &mut World) -> Result<(), String> {
+pub fn validate_persistence(world: &mut World) -> Result<(), String> {
     let state = world.smart_contract_state.view();
     for (path, bytes) in state.iter() {
         if in_root(path, POLICY_ROOT) {

@@ -7,7 +7,7 @@ use super::StateTransaction;
 use crate::tx::AcceptedTransaction;
 
 /// Bind immutable replay identities without upgrading a sealed reveal to `External` provenance.
-pub(crate) fn seed_committed_transaction_context(
+pub fn seed_committed_transaction_context(
     state_transaction: &mut StateTransaction<'_, '_>,
     entrypoint: &TransactionEntrypoint,
     entrypoint_index: usize,

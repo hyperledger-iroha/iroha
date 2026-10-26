@@ -124,6 +124,10 @@ struct OrderbookPersistedEventV1 {
 #[norito_schema(
     name = "iroha_core::smartcontracts::isi::sorafs_orderbook::OrderbookEventJournalHeadV1"
 )]
+#[expect(
+    clippy::struct_field_names,
+    reason = "Canonical journal fields identify the last committed event and retain their serialized names"
+)]
 struct OrderbookEventJournalHeadV1 {
     last_sequence: u64,
     last_target_block_height: u64,
@@ -177,60 +181,57 @@ fn emit_orderbook_event(
     };
     let head = read_event_journal_head(state_transaction.world())?;
     ensure_no_event_after_head(state_transaction.world(), head)?;
-    let (sequence, event_index) = match head {
-        Some(head) => {
-            let sequence = head
-                .last_sequence
+    let (sequence, event_index) = if let Some(head) = head {
+        let sequence = head
+            .last_sequence
+            .checked_add(1)
+            .ok_or_else(|| corrupt_state("orderbook event sequence overflow"))?;
+        let event_index = match head.last_target_block_height.cmp(&target_block_height) {
+            core::cmp::Ordering::Less => 0,
+            core::cmp::Ordering::Equal => head
+                .last_event_index
                 .checked_add(1)
-                .ok_or_else(|| corrupt_state("orderbook event sequence overflow"))?;
-            let event_index = match head.last_target_block_height.cmp(&target_block_height) {
-                core::cmp::Ordering::Less => 0,
-                core::cmp::Ordering::Equal => head
-                    .last_event_index
-                    .checked_add(1)
-                    .ok_or_else(|| corrupt_state("orderbook event block index overflow"))?,
-                core::cmp::Ordering::Greater => {
-                    return Err(corrupt_state(
-                        "orderbook event target height regressed behind the journal head",
-                    ));
-                }
-            };
-            (sequence, event_index)
-        }
-        None => {
-            let policy = read_policy(state_transaction.world())?
-                .ok_or_else(|| corrupt_state("first orderbook event has no active policy"))?;
-            let status = read_status(state_transaction.world())?
-                .ok_or_else(|| corrupt_state("first orderbook event has no ledger status"))?;
-            let counters_empty = status.open_orders == 0
-                && status.partially_filled_orders == 0
-                && status.filled_orders == 0
-                && status.cancelled_orders == 0
-                && status.expired_orders == 0
-                && status.provider_revoked_orders == 0
-                && status.trades == 0
-                && status.settlement_receipts == 0
-                && status.settlement_channels == 0
-                && status.open_settlement_channels == 0
-                && status.book_revision == 0
-                && status.last_match_scan_book_revision == 0
-                && status.next_admission_sequence == 1
-                && status.next_trade_sequence == 1;
-            if kind != SorafsOrderbookLedgerEventKind::PolicyActivated
-                || order_id.is_some()
-                || trade_id.is_some()
-                || channel_id.is_some()
-                || receipt_id.is_some()
-                || provider_id.is_some()
-                || policy.policy.revision != 1
-                || !counters_empty
-            {
+                .ok_or_else(|| corrupt_state("orderbook event block index overflow"))?,
+            core::cmp::Ordering::Greater => {
                 return Err(corrupt_state(
-                    "orderbook event journal must begin with initial policy activation",
+                    "orderbook event target height regressed behind the journal head",
                 ));
             }
-            (1, 0)
+        };
+        (sequence, event_index)
+    } else {
+        let policy = read_policy(state_transaction.world())?
+            .ok_or_else(|| corrupt_state("first orderbook event has no active policy"))?;
+        let status = read_status(state_transaction.world())?
+            .ok_or_else(|| corrupt_state("first orderbook event has no ledger status"))?;
+        let counters_empty = status.open_orders == 0
+            && status.partially_filled_orders == 0
+            && status.filled_orders == 0
+            && status.cancelled_orders == 0
+            && status.expired_orders == 0
+            && status.provider_revoked_orders == 0
+            && status.trades == 0
+            && status.settlement_receipts == 0
+            && status.settlement_channels == 0
+            && status.open_settlement_channels == 0
+            && status.book_revision == 0
+            && status.last_match_scan_book_revision == 0
+            && status.next_admission_sequence == 1
+            && status.next_trade_sequence == 1;
+        if kind != SorafsOrderbookLedgerEventKind::PolicyActivated
+            || order_id.is_some()
+            || trade_id.is_some()
+            || channel_id.is_some()
+            || receipt_id.is_some()
+            || provider_id.is_some()
+            || policy.policy.revision != 1
+            || !counters_empty
+        {
+            return Err(corrupt_state(
+                "orderbook event journal must begin with initial policy activation",
+            ));
         }
+        (1, 0)
     };
     let key = event_key(sequence);
     if state_transaction
@@ -2035,7 +2036,7 @@ impl Execute for SubmitSorafsOrderbookOrder {
                 .ok_or_else(|| invalid_parameter("bid custody expiry overflow"))?;
             super::escrow::open_orderbook_order_asset_lock(
                 state_transaction,
-                binding.escrow_id.clone(),
+                binding.escrow_id,
                 &owner,
                 binding.asset_definition,
                 binding.initial_xor_locked.clone().into_quantity(),
@@ -4320,7 +4321,7 @@ mod tests {
         operation: impl FnOnce(&mut StateTransaction<'_, '_>) -> Result<(), InstructionExecutionError>,
     ) -> Result<(), InstructionExecutionError> {
         let header = block_header_at(height, now_unix);
-        let mut block = state.block(header.clone());
+        let mut block = state.block(header);
         // Local journal fixture only: retain a bounded direct execution slot before
         // custody changes. This World-only commit does not publish a Network carrier.
         let mut transaction = block.transaction_for_callback_testing();
@@ -4331,6 +4332,21 @@ mod tests {
             .expect("commit orderbook test block");
         state.push_block_hash_for_testing(iroha_crypto::HashOf::new(&header));
         Ok(())
+    }
+    /// Author admission policy only for component fixtures before their first block.
+    /// Shared constructors stay pristine for the authenticated-genesis query fixture.
+    fn seed_component_crypto_policy(state: &State) {
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+            .expect("funded component parameter fixture");
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            crate::sumeragi::test_chain::crypto_fixture_policy()
+                .into_parameter()
+                .expect("canonical fixture crypto policy"),
+            state.world.sccp_committee_generations.allocation_budget(),
+        )
+        .expect("install original fixture crypto policy");
+        parameters.commit();
     }
     pub(super) fn state_with_accounts(keypairs: &[&KeyPair]) -> State {
         let authority = account(keypairs[0]);
@@ -4559,8 +4575,7 @@ mod tests {
             .world
             .assets
             .get(&AssetId::of(settlement_asset_definition(), account.clone()))
-            .map(|value| value.as_ref().clone())
-            .unwrap_or_else(Quantity::zero)
+            .map_or_else(Quantity::zero, |value| value.as_ref().clone())
     }
     fn assert_no_receipt_status_mutation(state_transaction: &StateTransaction<'_, '_>) {
         let status = read_status(state_transaction.world())
@@ -4860,6 +4875,7 @@ mod tests {
         let buyer = keypair(0xE1);
         let authority = account(&buyer);
         let state = state_with_accounts(&[&buyer]);
+        seed_component_crypto_policy(&state);
         let candidate = order(&buyer, 1);
         let initial_balance;
         {
@@ -4936,6 +4952,7 @@ mod tests {
         let buyer = keypair(0x21);
         let authority = account(&buyer);
         let state = state_with_accounts(&[&buyer]);
+        seed_component_crypto_policy(&state);
         let mut block = state.block(block_header());
         let mut stx = block.transaction_for_callback_testing();
         let policy_digest = activate_policy(&mut stx, &authority);
@@ -5175,6 +5192,7 @@ mod tests {
         let provider_id = ProviderId::new([0x72; 32]);
         let mut state =
             state_with_settlement_accounts(&settlement, &buyer, &provider, &treasury, 100_000);
+        seed_component_crypto_policy(&state);
         let mut orderbook_policy_digest = [0; 32];
         let mut reserve_policy_digest = [0; 32];
         transact(&mut state, 1, NOW, |transaction| {
@@ -5257,6 +5275,7 @@ mod tests {
         let buyer = keypair(0x27);
         let authority = account(&buyer);
         let state = state_with_accounts(&[&buyer]);
+        seed_component_crypto_policy(&state);
         let mut block = state.block(block_header());
         let mut stx = block.transaction_for_callback_testing();
         let policy_digest = activate_policy(&mut stx, &authority);
@@ -5297,6 +5316,7 @@ mod tests {
         let buyer = keypair(0x28);
         let authority = account(&buyer);
         let mut state = state_with_accounts(&[&buyer]);
+        seed_component_crypto_policy(&state);
         let mut block = state.block(block_header());
         let mut stx = block.transaction_for_callback_testing();
         let policy_digest = activate_policy(&mut stx, &authority);
@@ -5493,6 +5513,7 @@ mod tests {
             Err(QueryExecutionFail::Conversion(_))
         ));
         let mut missing_middle = state_with_accounts(&[&operator]);
+        seed_component_crypto_policy(&missing_middle);
         let mut policy_digest = [0; 32];
         transact(&mut missing_middle, 1, NOW, |transaction| {
             policy_digest = activate_policy(transaction, &authority);
@@ -5522,6 +5543,7 @@ mod tests {
         let attacker = keypair(0x33);
         let authority = account(&buyer);
         let state = state_with_accounts(&[&buyer, &attacker]);
+        seed_component_crypto_policy(&state);
         let mut block = state.block(block_header());
         let mut stx = block.transaction_for_callback_testing();
         let policy_digest = activate_policy(&mut stx, &authority);
@@ -5659,6 +5681,7 @@ mod tests {
         let provider_id = account(&provider);
         let state =
             state_with_settlement_accounts(&settlement, &buyer, &provider, &treasury, 100_000);
+        seed_component_crypto_policy(&state);
         let mut block = state.block(block_header());
         let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x2B; Hash::LENGTH]));
         let policy_digest = activate_policy(&mut stx, &settlement_id);
@@ -5706,6 +5729,7 @@ mod tests {
         let provider_id = account(&provider);
         let capped_state =
             state_with_settlement_accounts(&settlement, &buyer, &provider, &treasury, 100_000);
+        seed_component_crypto_policy(&capped_state);
         let mut capped_block = capped_state.block(block_header());
         let mut capped =
             capped_block.transaction_for_fastpq_testing(Hash::prehashed([0x30; Hash::LENGTH]));
@@ -5728,6 +5752,7 @@ mod tests {
         assert_eq!(capped_status.trades, 1);
         let exhausted_state =
             state_with_settlement_accounts(&settlement, &buyer, &provider, &treasury, 100_000);
+        seed_component_crypto_policy(&exhausted_state);
         let mut exhausted_block = exhausted_state.block(block_header());
         let mut exhausted =
             exhausted_block.transaction_for_fastpq_testing(Hash::prehashed([0x31; Hash::LENGTH]));
@@ -5779,6 +5804,7 @@ mod tests {
         let attacker_id = account(&attacker);
         let mut state =
             state_with_settlement_accounts(&settlement, &buyer, &provider, &treasury, 100_000);
+        seed_component_crypto_policy(&state);
         let (attacker_key, attacker_value) = Account::new(attacker_id.clone())
             .build(&attacker_id)
             .into_key_value();
@@ -6050,6 +6076,7 @@ mod tests {
         let provider_id = ProviderId::new([0x72; 32]);
         let state =
             state_with_settlement_accounts(&settlement, &buyer, &provider, &treasury, 100_000);
+        seed_component_crypto_policy(&state);
         let mut block = state.block(block_header());
         let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0xB6; Hash::LENGTH]));
         let policy_digest = activate_policy(&mut stx, &settlement_id);
@@ -6208,6 +6235,7 @@ mod tests {
         let provider_id = account(&provider);
         let state =
             state_with_settlement_accounts(&settlement, &buyer, &provider, &treasury, 100_000);
+        seed_component_crypto_policy(&state);
         let mut block = state.block(block_header());
         let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0xAC; Hash::LENGTH]));
         let fixture = seed_two_fill_match(
@@ -6258,6 +6286,7 @@ mod tests {
         let provider_id = account(&provider);
         let state =
             state_with_settlement_accounts(&settlement, &buyer, &provider, &treasury, 100_000);
+        seed_component_crypto_policy(&state);
         let mut block = state.block(block_header());
         let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0xB1; Hash::LENGTH]));
         let fixture = seed_two_fill_match(
@@ -6292,6 +6321,7 @@ mod tests {
         let buyer_id = account(&buyer);
         let attacker_id = account(&attacker);
         let state = state_with_accounts(&[&operator, &buyer, &attacker]);
+        seed_component_crypto_policy(&state);
         let mut block = state.block(block_header());
         let mut stx = block.transaction_for_callback_testing();
         let policy_digest = activate_policy(&mut stx, &operator_id);
@@ -6407,6 +6437,7 @@ mod tests {
             &treasury,
             TEST_TRADE_LOCK_MICRO,
         );
+        seed_component_crypto_policy(&state);
         let mut block = state.block(block_header());
         let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0xA1; Hash::LENGTH]));
         let policy_digest = activate_policy(&mut stx, &authority);
@@ -6653,6 +6684,7 @@ mod tests {
             &treasury,
             TEST_TRADE_LOCK_MICRO,
         );
+        seed_component_crypto_policy(&state);
         let attacker_id = account(&attacker);
         let (attacker_key, attacker_value) = Account::new(attacker_id.clone())
             .build(&attacker_id)

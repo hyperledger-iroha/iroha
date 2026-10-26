@@ -171,7 +171,12 @@ mod tests {
             name.contains("iter2"),
             "file name missing iteration marker: {name}"
         );
-        assert!(name.ends_with(".trace"));
+        assert_eq!(
+            std::path::Path::new(&name)
+                .extension()
+                .and_then(std::ffi::OsStr::to_str),
+            Some("trace")
+        );
     }
     #[test]
     fn trace_dir_conflicts_with_other_trace_outputs() {
@@ -270,7 +275,7 @@ mod tests {
         assert_eq!(
             object
                 .get("bytes")
-                .and_then(|v| v.as_u64())
+                .and_then(Value::as_u64)
                 .expect("bytes present"),
             4096
         );
@@ -309,7 +314,7 @@ mod tests {
         assert_eq!(
             queue
                 .get("dispatch_count")
-                .and_then(|v| v.as_u64())
+                .and_then(Value::as_u64)
                 .expect("dispatch count present"),
             3
         );
@@ -381,7 +386,7 @@ mod tests {
         assert_eq!(
             first
                 .get("index")
-                .and_then(|v| v.as_u64())
+                .and_then(Value::as_u64)
                 .expect("lane index"),
             0
         );
@@ -421,7 +426,7 @@ mod tests {
             .expect("kernel profiles serialize to object");
         assert_eq!(
             map.get("total_samples")
-                .and_then(|v| v.as_u64())
+                .and_then(Value::as_u64)
                 .expect("total_samples present"),
             2
         );
@@ -437,7 +442,7 @@ mod tests {
             .expect("fft block");
         assert_eq!(
             fft.get("sample_count")
-                .and_then(|v| v.as_u64())
+                .and_then(Value::as_u64)
                 .expect("fft sample count"),
             1
         );
@@ -528,21 +533,21 @@ mod tests {
         assert_eq!(
             object
                 .get("hits")
-                .and_then(|v| v.as_u64())
+                .and_then(Value::as_u64)
                 .expect("hits present"),
             3
         );
         assert_eq!(
             object
                 .get("misses")
-                .and_then(|v| v.as_u64())
+                .and_then(Value::as_u64)
                 .expect("misses present"),
             1
         );
         assert!(
             object
                 .get("before_ms")
-                .and_then(|v| v.as_f64())
+                .and_then(Value::as_f64)
                 .expect("before present")
                 .abs()
                 > 0.0
@@ -550,9 +555,10 @@ mod tests {
         assert_eq!(
             object
                 .get("savings_ms")
-                .and_then(|v| v.as_f64())
-                .expect("savings present"),
-            round3(stats.before_ms - stats.after_ms)
+                .and_then(Value::as_f64)
+                .expect("savings present")
+                .to_bits(),
+            round3(stats.before_ms - stats.after_ms).to_bits()
         );
     }
     #[test]
@@ -584,7 +590,7 @@ mod tests {
         assert_eq!(
             object
                 .get("total_dispatches")
-                .and_then(|v| v.as_u64())
+                .and_then(Value::as_u64)
                 .expect("total dispatches present"),
             3
         );
@@ -646,6 +652,7 @@ mod tests {
 #[cfg(all(test, feature = "fastpq-gpu", target_os = "macos"))]
 mod heuristics_value_tests {
     use super::harness::heuristics_value;
+    use norito::json::Value;
     use fastpq_prover::{
         AdaptiveScheduleSnapshot, BatchHeuristicSnapshot, CommandLimitSnapshot, CommandLimitSource,
     };
@@ -698,13 +705,13 @@ mod heuristics_value_tests {
             .expect("FFT snapshot present");
         assert_eq!(
             fft.get("columns")
-                .and_then(|v| v.as_u64())
+                .and_then(Value::as_u64)
                 .expect("columns present"),
             64
         );
         assert_eq!(
             fft.get("samples")
-                .and_then(|v| v.as_u64())
+                .and_then(Value::as_u64)
                 .expect("samples present"),
             3
         );
@@ -744,7 +751,7 @@ mod harness {
     fn debug_env_var(name: &str) -> Option<String> {
         #[cfg(any(test, debug_assertions))]
         {
-            return env::var(name).ok();
+            env::var(name).ok()
         }
         #[cfg(not(any(test, debug_assertions)))]
         {
@@ -753,18 +760,18 @@ mod harness {
         }
     }
     const BENCH_COLUMN_COUNT: usize = 16;
-    pub(super) const DEFAULT_TRACE_TEMPLATE: &str = "Metal System Trace";
-    pub(super) const DEFAULT_TRACE_OUTPUT: &str = "fastpq.trace";
-    pub(super) const DEFAULT_TRACE_SECONDS: u32 = 60;
+    pub const DEFAULT_TRACE_TEMPLATE: &str = "Metal System Trace";
+    pub const DEFAULT_TRACE_OUTPUT: &str = "fastpq.trace";
+    pub const DEFAULT_TRACE_SECONDS: u32 = 60;
     const TRACE_REEXEC_ENV: &str = "FASTPQ_METAL_TRACE_CHILD";
     #[derive(Debug, Clone)]
-    pub(crate) struct TraceOptions {
+    pub struct TraceOptions {
         pub(crate) output: PathBuf,
         pub(crate) template: String,
         pub(crate) seconds: u32,
     }
     #[derive(Debug, Clone)]
-    pub(crate) struct Config {
+    pub struct Config {
         pub(crate) rows: usize,
         pub(crate) warmups: usize,
         pub(crate) iterations: usize,
@@ -967,7 +974,7 @@ mod harness {
             .map_err(|err| format!("{flag} expects a positive integer: {err}"))
     }
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-    pub(crate) enum OperationFilter {
+    pub enum OperationFilter {
         All,
         Only(BenchOperation),
     }
@@ -978,31 +985,31 @@ mod harness {
             }
             let op = raw
                 .parse::<BenchOperation>()
-                .map_err(|_| format!("unknown --operation '{raw}'"))?;
+                .map_err(|()| format!("unknown --operation '{raw}'"))?;
             Ok(Self::Only(op))
         }
-        pub(crate) fn includes(&self, op: BenchOperation) -> bool {
-            matches!(self, Self::All) || matches!(self, Self::Only(single) if *single == op)
+        pub(crate) fn includes(self, op: BenchOperation) -> bool {
+            matches!(self, Self::All) || matches!(self, Self::Only(single) if single == op)
         }
-        pub(crate) fn as_str(&self) -> &'static str {
+        pub(crate) fn as_str(self) -> &'static str {
             match self {
                 Self::All => "all",
                 Self::Only(operation) => operation.as_str(),
             }
         }
-        pub(crate) fn includes_fft_tuning(&self) -> bool {
+        pub(crate) fn includes_fft_tuning(self) -> bool {
             matches!(
                 self,
                 Self::All
                     | Self::Only(BenchOperation::Fft | BenchOperation::Ifft | BenchOperation::Lde)
             )
         }
-        pub(crate) fn includes_lde_telemetry_probe(&self) -> bool {
+        pub(crate) fn includes_lde_telemetry_probe(self) -> bool {
             self.includes(BenchOperation::Lde)
         }
     }
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-    pub(crate) enum BenchOperation {
+    pub enum BenchOperation {
         Fft,
         Ifft,
         Lde,
@@ -1011,7 +1018,7 @@ mod harness {
         Bn254PoseidonWords,
     }
     impl BenchOperation {
-        fn as_str(&self) -> &'static str {
+        fn as_str(self) -> &'static str {
             match self {
                 Self::Fft => "fft",
                 Self::Ifft => "ifft",
@@ -1094,7 +1101,7 @@ mod harness {
         (value * 1_000.0).round() / 1_000.0
     }
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    pub(super) enum RunState {
+    pub enum RunState {
         Ok,
         GpuUnavailable,
         GpuFallback,
@@ -1150,7 +1157,7 @@ mod harness {
         }
     }
     #[derive(Debug, Clone)]
-    pub(crate) struct ZeroFillSummary {
+    pub struct ZeroFillSummary {
         pub(crate) bytes: usize,
         pub(crate) ms: Summary,
         pub(crate) queue_delta: Option<QueueDepthStats>,
@@ -1195,7 +1202,7 @@ mod harness {
     }
     #[cfg(test)]
     #[derive(Default)]
-    pub(crate) struct QueueDeltaAccumulator {
+    pub struct QueueDeltaAccumulator {
         total: Option<QueueDepthStats>,
     }
     #[cfg(test)]
@@ -1465,7 +1472,7 @@ mod harness {
             for idx in 0..len {
                 let value = (row as u64)
                     .wrapping_mul(0x9e37_79b9_7f4a_7c15)
-                    .rotate_left((idx % 63) as u32)
+                    .rotate_left(u32::try_from(idx % 63).expect("rotation is below 63"))
                     ^ (idx as u64).wrapping_mul(0xd1b5_4a32_d192_ed03);
                 words.push(value);
             }
@@ -1515,7 +1522,7 @@ mod harness {
         );
         Value::Object(map)
     }
-    pub(crate) fn zero_fill_value(stats: &ZeroFillSummary) -> Value {
+    pub fn zero_fill_value(stats: &ZeroFillSummary) -> Value {
         let mut map = json::Map::new();
         map.insert(
             "bytes".into(),
@@ -1626,8 +1633,8 @@ mod harness {
             },
         );
         assert_eq!(total.batches, 7);
-        assert_eq!(total.flatten_ms, 10.0);
-        assert_eq!(total.wait_ms, 5.0);
+        assert_eq!(total.flatten_ms.to_bits(), 10.0_f64.to_bits());
+        assert_eq!(total.wait_ms.to_bits(), 5.0_f64.to_bits());
         let value = Value::Object(column_staging_phase_value(&total));
         assert_eq!(value.get("wait_ratio").and_then(Value::as_f64), Some(0.333));
     }
@@ -1656,7 +1663,7 @@ mod harness {
         map.insert("samples".into(), Value::Object(samples));
         Value::Object(map)
     }
-    pub(super) fn operation_value(
+    pub fn operation_value(
         name: &str,
         input_len: usize,
         columns: usize,
@@ -1727,7 +1734,7 @@ mod harness {
         }
         Some((metric.to_owned(), Value::Object(metric_map)))
     }
-    pub(super) fn bn254_metrics_value(operations: &[Value], backend_label: &str) -> Option<Value> {
+    pub fn bn254_metrics_value(operations: &[Value], backend_label: &str) -> Option<Value> {
         let mut entries = BTreeMap::new();
         for entry in operations {
             if let Some((name, value)) = metric_entry(entry, backend_label) {
@@ -1743,7 +1750,7 @@ mod harness {
         }
         Some(Value::Object(map))
     }
-    pub(super) fn twiddle_cache_value(stats: &TwiddleCacheStats) -> Value {
+    pub fn twiddle_cache_value(stats: &TwiddleCacheStats) -> Value {
         let mut map = json::Map::new();
         map.insert(
             "hits".into(),
@@ -1768,7 +1775,7 @@ mod harness {
         );
         Value::Object(map)
     }
-    fn fft_tuning_value(tuning: &FftTuning) -> Value {
+    fn fft_tuning_value(tuning: FftTuning) -> Value {
         let mut map = json::Map::new();
         map.insert(
             "threadgroup_lanes".into(),
@@ -1780,7 +1787,7 @@ mod harness {
         );
         Value::Object(map)
     }
-    pub(super) fn queue_stats_value(stats: &QueueDepthStats) -> Value {
+    pub fn queue_stats_value(stats: &QueueDepthStats) -> Value {
         let overlap_ratio = if stats.busy_ms <= f64::EPSILON {
             0.0
         } else {
@@ -1900,7 +1907,7 @@ mod harness {
             entry
                 .as_object()
                 .and_then(|map| map.get("gpu"))
-                .map_or(false, Value::is_object)
+                .is_some_and(Value::is_object)
         });
         let mut state = if has_gpu_timings {
             RunState::Ok
@@ -1918,7 +1925,7 @@ mod harness {
         if queue_required {
             match queue_stats {
                 None => reasons.push("missing_queue_telemetry".to_owned()),
-                Some(stats) if stats.dispatch_count == 0 => {
+                Some(queue) if queue.dispatch_count == 0 => {
                     reasons.push("missing_queue_dispatches".to_owned())
                 }
                 _ => {}
@@ -1957,7 +1964,7 @@ mod harness {
             backend_label: backend_label.to_owned(),
         }
     }
-    pub(super) fn heuristics_value(snapshot: &AdaptiveScheduleSnapshot) -> Option<Value> {
+    pub fn heuristics_value(snapshot: &AdaptiveScheduleSnapshot) -> Option<Value> {
         let mut map = json::Map::new();
         if let Some(limit) = snapshot.max_in_flight.as_ref() {
             map.insert("max_in_flight".into(), command_limit_value(limit));
@@ -2056,12 +2063,12 @@ mod harness {
         );
         Value::Object(map)
     }
-    pub(super) fn kernel_stats_value(samples: &[KernelStatsSample]) -> Value {
+    pub fn kernel_stats_value(samples: &[KernelStatsSample]) -> Value {
         let mut by_kind: BTreeMap<&'static str, KindSummary> = BTreeMap::new();
         for sample in samples {
             by_kind
                 .entry(sample.kind.as_str())
-                .or_insert_with(KindSummary::default)
+                .or_default()
                 .record(sample);
         }
         let mut kinds = json::Map::new();
@@ -2076,6 +2083,10 @@ mod harness {
         map.insert("by_kind".into(), Value::Object(kinds));
         Value::Object(map)
     }
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "Benchmark telemetry deliberately reports approximate floating-point averages and ratios"
+    )]
     fn summarize_bn254_samples(samples: &[KernelStatsSample]) -> Option<Value> {
         if samples.is_empty() {
             return None;
@@ -2140,7 +2151,7 @@ mod harness {
         }
         Some(Value::Object(map))
     }
-    pub(super) fn bn254_dispatch_summary(samples: &[KernelStatsSample]) -> Option<Value> {
+    pub fn bn254_dispatch_summary(samples: &[KernelStatsSample]) -> Option<Value> {
         let mut fft = Vec::new();
         let mut lde = Vec::new();
         for sample in samples {
@@ -2169,7 +2180,7 @@ mod harness {
             Some(Value::Object(map))
         }
     }
-    pub(super) fn post_tile_value(samples: &[PostTileSample]) -> Value {
+    pub fn post_tile_value(samples: &[PostTileSample]) -> Value {
         let mut by_kind: BTreeMap<&'static str, PostTileKindSummary> = BTreeMap::new();
         for sample in samples {
             by_kind
@@ -2252,8 +2263,9 @@ mod harness {
                 "bandwidth_gbps".into(),
                 sample_bandwidth_gbps(sample)
                     .map(round3)
-                    .map(|value| json::to_value(&value).expect("serialize bandwidth"))
-                    .unwrap_or(Value::Null),
+                    .map_or(Value::Null, |value| {
+                        json::to_value(&value).expect("serialize bandwidth")
+                    }),
             );
             entry.insert(
                 "occupancy_ratio".into(),
@@ -2332,6 +2344,10 @@ mod harness {
             self.sum = self.sum.saturating_add(u128::from(value));
             self.count = self.count.saturating_add(1);
         }
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "Benchmark telemetry deliberately reports approximate floating-point averages and ratios"
+        )]
         fn into_value(self) -> Value {
             if self.count == 0 {
                 return Value::Null;
@@ -2372,6 +2388,10 @@ mod harness {
             self.sum += value;
             self.count = self.count.saturating_add(1);
         }
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "Benchmark telemetry deliberately reports approximate floating-point averages and ratios"
+        )]
         fn into_value(self) -> Value {
             if self.count == 0 {
                 Value::Null
@@ -2394,6 +2414,10 @@ mod harness {
             }
         }
     }
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "Benchmark telemetry deliberately reports approximate floating-point averages and ratios"
+    )]
     fn sample_bandwidth_gbps(sample: &KernelStatsSample) -> Option<f64> {
         if sample.duration_ms <= f64::EPSILON {
             return None;
@@ -2405,11 +2429,15 @@ mod harness {
         let gbps = (sample.bytes as f64) / seconds / 1_000_000_000.0;
         Some(gbps)
     }
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "Benchmark telemetry deliberately reports approximate floating-point averages and ratios"
+    )]
     fn sample_occupancy(sample: &KernelStatsSample) -> f64 {
         if sample.max_threads_per_group == 0 {
             return 0.0;
         }
-        let ratio = (sample.threadgroup_width as f64) / (sample.max_threads_per_group as f64);
+        let ratio = (sample.threadgroup_width as f64) / f64::from(sample.max_threads_per_group);
         ratio.clamp(0.0, 1.0)
     }
     struct ColumnSets {
@@ -2431,15 +2459,16 @@ mod harness {
         launch_trace(trace)
     }
     fn launch_trace(trace: &TraceOptions) -> Result<(), String> {
-        if let Some(parent) = trace.output.parent() {
-            if !parent.as_os_str().is_empty() && !parent.exists() {
-                fs::create_dir_all(parent).map_err(|err| {
-                    format!(
-                        "failed to create trace directory {}: {err}",
-                        parent.display()
-                    )
-                })?;
-            }
+        if let Some(parent) = trace.output.parent()
+            && !parent.as_os_str().is_empty()
+            && !parent.exists()
+        {
+            fs::create_dir_all(parent).map_err(|err| {
+                format!(
+                    "failed to create trace directory {}: {err}",
+                    parent.display()
+                )
+            })?;
         }
         let exe = env::current_exe()
             .map_err(|err| format!("failed to locate benchmark executable: {err}"))?;
@@ -2528,7 +2557,7 @@ mod harness {
         let queue_stats_missing = gpu_available
             && queue_stats
                 .as_ref()
-                .map_or(true, |stats| stats.dispatch_count == 0);
+                .is_none_or(|stats| stats.dispatch_count == 0);
         if gpu_available
             && config.operation.includes_lde_telemetry_probe()
             && (zero_fill_missing || queue_stats_missing)
@@ -2697,8 +2726,8 @@ mod harness {
             let cpu = Summary::from_samples(&[6.0, 6.0, 6.0]);
             let gpu = Summary::from_samples(&[2.0, 2.0, 2.0]);
             let comparison = Speedup::between(&cpu, &gpu);
-            assert_eq!(comparison.ratio, round3(3.0));
-            assert_eq!(comparison.delta_ms, round3(4.0));
+            assert_eq!(comparison.ratio.to_bits(), round3(3.0).to_bits());
+            assert_eq!(comparison.delta_ms.to_bits(), round3(4.0).to_bits());
         }
         #[test]
         fn speedup_value_serializes_expected_fields() {
@@ -3085,7 +3114,7 @@ mod harness {
             } else {
                 (None, None)
             };
-            zero_fill_result = zero_fill_metrics.clone();
+            zero_fill_result.clone_from(&zero_fill_metrics);
             operations.push(operation_value(
                 BenchOperation::Lde.as_str(),
                 eval_len,
@@ -3173,13 +3202,10 @@ mod harness {
             queue_delta: None,
         }
     }
-    pub(super) fn inject_zero_fill(operations: &mut [Value], summary: &ZeroFillSummary) -> bool {
+    pub fn inject_zero_fill(operations: &mut [Value], summary: &ZeroFillSummary) -> bool {
         for entry in operations {
             if let Some(map) = entry.as_object_mut() {
-                let is_lde = map
-                    .get("operation")
-                    .and_then(Value::as_str)
-                    .map_or(false, |name| name == "lde");
+                let is_lde = map.get("operation").and_then(Value::as_str) == Some("lde");
                 if is_lde {
                     map.insert("zero_fill".into(), zero_fill_value(summary));
                     return true;
@@ -3210,7 +3236,7 @@ mod harness {
         }
         (resolved_mode, backend, gpu_available)
     }
-    pub(super) fn enforce_gpu_requirement(
+    pub fn enforce_gpu_requirement(
         require_gpu: bool,
         gpu_forced: bool,
         gpu_available: bool,
@@ -3239,16 +3265,15 @@ mod harness {
             backend_label
         ))
     }
-    pub(crate) fn fastpq_gpu_forced_raw(raw: Option<&str>) -> bool {
-        raw.map(|value| {
+    pub fn fastpq_gpu_forced_raw(raw: Option<&str>) -> bool {
+        raw.is_some_and(|value| {
             matches!(
                 value.trim().to_ascii_lowercase().as_str(),
                 "gpu" | "on" | "enable" | "enabled" | "1"
             )
         })
-        .unwrap_or(false)
     }
-    pub(crate) fn fastpq_gpu_forced_via_env() -> bool {
+    pub fn fastpq_gpu_forced_via_env() -> bool {
         fastpq_gpu_forced_raw(debug_env_var("FASTPQ_GPU").as_deref())
     }
     fn log_gpu_probe_summary(
@@ -3509,7 +3534,7 @@ mod harness {
             json::to_value(&inputs.timestamp).expect("serialize timestamp"),
         );
         if let Some(tuning) = inputs.fft_tuning {
-            report.insert("fft_tuning".to_owned(), fft_tuning_value(&tuning));
+            report.insert("fft_tuning".to_owned(), fft_tuning_value(tuning));
         }
         let queue_block = inputs.queue_stats.as_ref().map(queue_stats_value);
         if let Some(value) = queue_block {
@@ -3521,22 +3546,22 @@ mod harness {
         if let Some(stats) = inputs.twiddle_stats.as_ref() {
             report.insert("twiddle_cache".to_owned(), twiddle_cache_value(stats));
         }
-        if let Some(snapshot) = inputs.adaptive_heuristics.as_ref() {
-            if let Some(value) = heuristics_value(snapshot) {
-                report.insert("metal_heuristics".to_owned(), value);
-            }
+        if let Some(snapshot) = inputs.adaptive_heuristics.as_ref()
+            && let Some(value) = heuristics_value(snapshot)
+        {
+            report.insert("metal_heuristics".to_owned(), value);
         }
-        if let Some(samples) = inputs.post_tile_stats.as_ref() {
-            if !samples.is_empty() {
-                report.insert("post_tile_dispatches".to_owned(), post_tile_value(samples));
-            }
+        if let Some(samples) = inputs.post_tile_stats.as_ref()
+            && !samples.is_empty()
+        {
+            report.insert("post_tile_dispatches".to_owned(), post_tile_value(samples));
         }
-        if let Some(samples) = inputs.kernel_stats.as_ref() {
-            if !samples.is_empty() {
-                report.insert("kernel_profiles".to_owned(), kernel_stats_value(samples));
-                if let Some(value) = bn254_dispatch_summary(samples) {
-                    report.insert("bn254_dispatch".to_owned(), value);
-                }
+        if let Some(samples) = inputs.kernel_stats.as_ref()
+            && !samples.is_empty()
+        {
+            report.insert("kernel_profiles".to_owned(), kernel_stats_value(samples));
+            if let Some(value) = bn254_dispatch_summary(samples) {
+                report.insert("bn254_dispatch".to_owned(), value);
             }
         }
         if let Some(profile) = inputs.device_profile.as_ref() {

@@ -34,7 +34,7 @@ fn prepare(cache: &mut IvmCache) -> GenericProgramSummary {
         .expect("generic summary")
 }
 
-fn capacity_refusal<T>(result: Result<T, ivm::VMError>) {
+fn capacity_refusal<T>(result: &Result<T, ivm::VMError>) {
     assert!(matches!(
         result,
         Err(ivm::VMError::AllocationDeferred(
@@ -60,7 +60,7 @@ fn prepared_arrays_refuse_original_pool_and_survive_eviction_until_final_owner()
     assert_eq!(cache.stats().preparations, 0);
     budget.set_limit_bytes(LIMIT);
     let occupied = budget.try_reserve_bytes(LIMIT).unwrap();
-    capacity_refusal(cache.get_or_prepare(hash, &program));
+    capacity_refusal(&(cache.get_or_prepare(hash, &program)));
     drop(occupied);
     let prepared = cache.get_or_prepare(hash, &program).unwrap();
     assert_eq!(prepared.artifact(), diagnostic.artifact());
@@ -128,7 +128,7 @@ fn generic_runtime_refuses_exhausted_pool_and_retries_the_same_owner() {
     let summary = prepare(&mut cache);
     let summary_bytes = budget.reserved_bytes();
     let occupied = budget.try_reserve_bytes(LIMIT - summary_bytes).unwrap();
-    capacity_refusal(cache.checkout_generic_runtime(&summary, GAS, HEAP));
+    capacity_refusal(&(cache.checkout_generic_runtime(&summary, GAS, HEAP)));
     assert_eq!(budget.reserved_bytes(), LIMIT);
     assert!(cache.with_local(|local| local.runtime_templates.is_empty()));
     assert_eq!(cache.stats().prepared_loads, 0);

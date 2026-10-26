@@ -330,10 +330,11 @@ fn validate_checkpoint(
             "session checkpoint has wrong epoch or stale/noncanonical tick",
         ));
     }
-    if let Some(old) = &session.checkpoint {
-        if cp.tick == old.checkpoint.tick && cp != &old.checkpoint {
-            return Err(invalid("conflicting session checkpoint at same tick"));
-        }
+    if let Some(old) = &session.checkpoint
+        && cp.tick == old.checkpoint.tick
+        && cp != &old.checkpoint
+    {
+        return Err(invalid("conflicting session checkpoint at same tick"));
     }
     verify_joint(
         session,
@@ -426,10 +427,10 @@ impl Execute for OpenGameSessionV1 {
         if st.world.game_sessions.get(&self.session_id).is_some() {
             return Err(invalid("session id already used"));
         }
-        if let GameAccessV1::Invite(key) = &self.manifest.access {
-            if key.algorithm() != Algorithm::Ed25519 {
-                return Err(invalid("session invitation key must use Ed25519"));
-            }
+        if let GameAccessV1::Invite(key) = &self.manifest.access
+            && key.algorithm() != Algorithm::Ed25519
+        {
+            return Err(invalid("session invitation key must use Ed25519"));
         }
         st.world.account(authority)?;
         crate::execution_proofs::validate_game_manifest_v1(&self.manifest)
@@ -451,7 +452,7 @@ impl Execute for OpenGameSessionV1 {
             validate_payout_capacity(&self.stake, self.manifest.max_participants, scale)?;
             scale
         };
-        let network = st.network_id().clone();
+        let network = *st.network_id();
         let custody = game_custody_account_v1(&network, &self.session_id, &self.asset_definition);
         if st.world.assets_in_account_iter(&custody).next().is_some() {
             return Err(invalid(
@@ -472,7 +473,7 @@ impl Execute for OpenGameSessionV1 {
         }
         let session = GameSessionRecordV1 {
             version: 1,
-            network_id: network.clone(),
+            network_id: network,
             session_id: self.session_id,
             profile_id: self.manifest.profile_id,
             manifest_hash: game_message_hash_v1(&network, "session-manifest", &self.manifest),
@@ -691,14 +692,13 @@ impl Execute for CommitGameCheckpointV1 {
         if let Some(frontier) = &self.frontier {
             validate_frontier(&session, &self.checkpoint.checkpoint, frontier)?;
         }
-        if let Some(old) = &session.pending_certificate {
-            if self.checkpoint.checkpoint.tick == old.start_tick
-                && self.frontier.as_ref() != Some(old)
-            {
-                return Err(invalid(
-                    "certified pending controls cannot be discarded or replaced",
-                ));
-            }
+        if let Some(old) = &session.pending_certificate
+            && self.checkpoint.checkpoint.tick == old.start_tick
+            && self.frontier.as_ref() != Some(old)
+        {
+            return Err(invalid(
+                "certified pending controls cannot be discarded or replaced",
+            ));
         }
         session.next_tick = self.checkpoint.checkpoint.tick;
         session.checkpoint = Some(self.checkpoint);
@@ -857,18 +857,18 @@ fn advance_batch(
             );
         }
     }
-    if !dnf_slots.is_empty() {
-        if let Some(checkpoint) = &session.checkpoint {
-            let anchor = GameTranscriptAnchorV1 {
-                tick: checkpoint.checkpoint.tick,
-                transcript_root: checkpoint.checkpoint.transcript_root,
-            };
-            if session.transcript_anchors.last() != Some(&anchor) {
-                if session.transcript_anchors.len() >= GAME_MAX_PARTICIPANTS_V1 {
-                    return Err(invalid("session authority-shrink anchor bound exceeded"));
-                }
-                session.transcript_anchors.push(anchor);
+    if !dnf_slots.is_empty()
+        && let Some(checkpoint) = &session.checkpoint
+    {
+        let anchor = GameTranscriptAnchorV1 {
+            tick: checkpoint.checkpoint.tick,
+            transcript_root: checkpoint.checkpoint.transcript_root,
+        };
+        if session.transcript_anchors.last() != Some(&anchor) {
+            if session.transcript_anchors.len() >= GAME_MAX_PARTICIPANTS_V1 {
+                return Err(invalid("session authority-shrink anchor bound exceeded"));
             }
+            session.transcript_anchors.push(anchor);
         }
     }
     session.forced_batches.push(GameForcedBatchV1 {
@@ -1223,11 +1223,13 @@ impl Execute for SettleGameSessionV1 {
             &self.proof,
             &session.manifest,
             &self.outcome,
-            session.checkpoint.as_ref().map(|c| &c.checkpoint),
-            &session.transcript_anchors,
-            &session.forced_batches,
-            &session.participants,
-            session.epoch,
+            crate::execution_proofs::GameProofHistoryV1 {
+                checkpoint: session.checkpoint.as_ref().map(|c| &c.checkpoint),
+                anchors: &session.transcript_anchors,
+                batches: &session.forced_batches,
+                participants: &session.participants,
+                epoch: session.epoch,
+            },
         )
         .map_err(|e| invalid(format!("execution proof rejected: {e}")))?;
         let recipients = if self.outcome.winner_slots.is_empty() {
@@ -1824,7 +1826,11 @@ mod tests {
                 &session.network_id,
                 std::time::Duration::from_secs(1),
                 TransactionParameters::default(),
-                &iroha_config::parameters::actual::Crypto::default(),
+                &iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                    iroha_crypto::Algorithm::Ed25519,
+                    iroha_crypto::Algorithm::Secp256k1,
+                ])
+                .expect("this stateless fixture explicitly selects Ed25519 and Secp256k1"),
                 &time_source,
             )
             .expect("canonical signed claim transaction must pass stateless admission")
@@ -2614,6 +2620,18 @@ mod tests {
             )],
             [],
         );
+        // Exercise custody refusal after ordinary account admission is configured.
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
+            .expect("funded component parameter fixture");
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            crate::sumeragi::test_chain::crypto_fixture_policy()
+                .into_parameter()
+                .expect("canonical fixture crypto policy"),
+            world.sccp_committee_generations.allocation_budget(),
+        )
+        .expect("install original fixture crypto policy");
+        parameters.commit();
         let state = State::new_for_testing(
             world,
             Kura::blank_kura_for_testing(),

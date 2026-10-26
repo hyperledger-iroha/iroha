@@ -12,7 +12,7 @@ use std::{alloc::Layout, cmp::Ordering, fmt, ops::Deref};
 mod prepared;
 pub use prepared::{ParentServiceCustodyError, PreparedParentServiceCommitQc};
 
-/// The original parent-service CommitQC frame, retaining exact admitted byte custody.
+/// The original parent-service `CommitQC` frame, retaining exact admitted byte custody.
 ///
 /// Untrusted transport is an input only. Admitted values expose immutable bytes and
 /// clone only their original control; neither path grants signature or quorum authority.

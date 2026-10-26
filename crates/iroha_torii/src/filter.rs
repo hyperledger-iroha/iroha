@@ -135,7 +135,7 @@ pub fn validate_filter(expr: &FilterExpr) -> Result<(), ValidateError> {
                 let all_numbers = vals.iter().all(norito::json::Value::is_number);
                 let all_bools = vals.iter().all(norito::json::Value::is_bool);
                 let metadata_values = f.0.starts_with("metadata.");
-                if !metadata_values && !(all_strings || all_numbers || all_bools) {
+                if !(metadata_values || all_strings || all_numbers || all_bools) {
                     return Err(ValidateError::TypeMismatch(f.0.clone()));
                 }
                 Ok(())

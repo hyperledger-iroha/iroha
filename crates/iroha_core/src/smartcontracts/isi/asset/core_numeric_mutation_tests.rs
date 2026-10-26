@@ -108,7 +108,7 @@ fn seed_test_account_alias_binding(
         .set_label(Some(alias.clone()));
     state_transaction
         .world
-        .insert_account_alias_binding(alias.clone(), owner.clone());
+        .insert_account_alias_binding(&(alias.clone()), &(owner.clone()));
     state_transaction
         .world
         .replace_account_rekey_record(AccountRekeyRecord::new(alias.clone(), owner.clone()));
@@ -141,17 +141,27 @@ fn fee_sponsor_custody_state() -> (State, AccountId, AssetDefinitionId, AssetId)
         LiveQueryStore::start_test(),
     );
     {
-        let mut fees = state.nexus_snapshot().fees;
+        let mut fees = state
+            .world
+            .parameters
+            .view()
+            .root_fees()
+            .expect("original fixture fee policy")
+            .clone();
         fees.sponsor_vault_custody_account_id = custody.clone();
         {
-            let mut parameters = state.world.parameters.block();
-            parameters
-                .set_parameter(iroha_data_model::parameter::Parameter::Custom(
+            let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+                .expect("funded parameter fixture block");
+            crate::state::set_parameter_cell_for_testing(
+                &mut parameters,
+                iroha_data_model::parameter::Parameter::Custom(
                     fees.clone()
                         .into_custom_parameter()
                         .expect("explicit fixture policy"),
-                ))
-                .expect("valid fixture monetary projection");
+                ),
+                state.world.sccp_committee_generations.allocation_budget(),
+            )
+            .expect("valid fixture monetary projection");
             parameters.commit();
         }
     }
@@ -181,14 +191,17 @@ fn fee_sponsor_custody_transfer_needs_no_custody_signature_and_conserves_balance
         .expect("protocol custody transfer does not require custody authorization");
     let destination_id = AssetId::new(definition_id, BOB_ID.clone());
     assert_eq!(
-        stx.world.assets.get(&source_id).map(|value| value.as_ref()),
+        stx.world
+            .assets
+            .get(&source_id)
+            .map(std::convert::AsRef::as_ref),
         Some(&Quantity::from(6_u32))
     );
     assert_eq!(
         stx.world
             .assets
             .get(&destination_id)
-            .map(|value| value.as_ref()),
+            .map(std::convert::AsRef::as_ref),
         Some(&Quantity::from(4_u32))
     );
     assert!(stx.world.internal_event_buf.iter().any(|event| matches!(
@@ -228,7 +241,10 @@ fn fee_sponsor_custody_burn_reduces_balance_and_total_supply_together() {
     super::isi::execute_verified_fee_sponsor_charge(&mut stx, authorization)
         .expect("protocol custody burn does not require custody authorization");
     assert_eq!(
-        stx.world.assets.get(&source_id).map(|value| value.as_ref()),
+        stx.world
+            .assets
+            .get(&source_id)
+            .map(std::convert::AsRef::as_ref),
         Some(&Quantity::from(8_u32))
     );
     assert_eq!(
@@ -541,8 +557,7 @@ fn asset_balance_or_zero(
         .world
         .assets
         .get(asset_id)
-        .map(|asset| asset.as_ref().clone())
-        .unwrap_or_else(Quantity::zero)
+        .map_or_else(Quantity::zero, |asset| asset.as_ref().clone())
 }
 fn load_asset_transfer_control_store(
     state_transaction: &crate::state::StateTransaction<'_, '_>,
@@ -1755,10 +1770,10 @@ fn prepared_numeric_transfer_rejects_stale_balance_without_applying() {
     let error = super::super::isi::apply_prepared_numeric_transfer_after_source_credit_for_test(
         &mut stx,
         &ALICE_ID,
-        source_asset_id.clone(),
+        &(source_asset_id),
         destination_asset_id.clone(),
         Quantity::from(3_u32),
-        Quantity::one(),
+        &(Quantity::one()),
     )
     .expect_err("stale prepared movement must fail closed");
     assert!(error.to_string().contains("source balance changed"));
@@ -2305,7 +2320,7 @@ fn nominal_asset_mutation_boundaries_reject_negative_values_and_underflow() {
         stx.world
             .assets
             .get(&source_asset_id)
-            .map(|value| value.as_ref()),
+            .map(std::convert::AsRef::as_ref),
         Some(&Quantity::from(10_u32))
     );
     assert!(stx.world.assets.get(&destination_asset_id).is_none());

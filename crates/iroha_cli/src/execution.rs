@@ -22,7 +22,7 @@ use std::{
 pub enum Command {
     /// List compiled profiles and their explicit qualification state.
     Profiles,
-    /// Export browser integer kernels from the compiled native RaceV1 relation.
+    /// Export browser integer kernels from the compiled native `RaceV1` relation.
     ExportKernels(ExportKernelArgs),
     /// Export native reference transcripts, snapshots and outcomes for all 21 browser grids.
     ExportParity(ExportKernelArgs),
@@ -45,10 +45,10 @@ pub struct ExportKernelArgs {
 /// Paths for a local native proof job. All witness inputs are public application data.
 #[derive(Debug, Args)]
 pub struct ProveArgs {
-    /// Canonical Norito RaceProverRequestV1 input path.
+    /// Canonical Norito `RaceProverRequestV1` input path.
     #[arg(long, value_name = "PATH")]
     request: PathBuf,
-    /// Destination for the canonical generic ExecutionProofEnvelopeV1.
+    /// Destination for the canonical generic `ExecutionProofEnvelopeV1`.
     #[arg(long, value_name = "PATH")]
     output_file: PathBuf,
 }
@@ -56,7 +56,7 @@ pub struct ProveArgs {
 /// Exact generic proof envelope to verify, without submitting a transaction.
 #[derive(Debug, Args)]
 pub struct VerifyArgs {
-    /// Canonical Norito ExecutionProofEnvelopeV1 path.
+    /// Canonical Norito `ExecutionProofEnvelopeV1` path.
     #[arg(long, value_name = "PATH")]
     proof: PathBuf,
 }
@@ -96,7 +96,7 @@ impl RaceProver {
         }
     }
 
-    fn prove(self, request: RaceProverRequestV1) -> Result<ExecutionProofEnvelopeV1> {
+    fn prove(self, request: &RaceProverRequestV1) -> Result<ExecutionProofEnvelopeV1> {
         match self {
             Self::V1 => prove_race_v1(request),
         }
@@ -134,7 +134,7 @@ impl Command {
                 let request = read_canonical::<RaceProverRequestV1>(&args.request)?;
                 let prover = RaceProver::for_profile(&request.manifest.profile_id)?;
                 let started = Instant::now();
-                let proof = prover.prove(request)?;
+                let proof = prover.prove(&request)?;
                 let bytes = proof.encode();
                 if bytes.len() > RACE_MAX_PROOF_BYTES_V1 {
                     return Err(eyre!("encoded envelope exceeds the compiled wire cap"));
@@ -142,7 +142,7 @@ impl Command {
                 fs::write(&args.output_file, &bytes)
                     .wrap_err_with(|| format!("write {}", args.output_file.display()))?;
                 Ok(
-                    norito::json!({"proof_file":(args.output_file.display().to_string()),"proof_bytes":(bytes.len()),"profile_id":(proof.profile_id.to_string()),"elapsed_ms":(started.elapsed().as_millis() as u64)}),
+                    norito::json!({"proof_file":(args.output_file.display().to_string()),"proof_bytes":(bytes.len()),"profile_id":(proof.profile_id.to_string()),"elapsed_ms":(u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX))}),
                 )
             }
             Self::Verify(args) => {

@@ -11,7 +11,7 @@ use iroha_data_model::{
 };
 
 /// Explicit finite policy for structural fixtures; never a runtime admission default.
-pub(crate) fn structural_output_limits() -> ExecutionOutputLimits {
+pub fn structural_output_limits() -> ExecutionOutputLimits {
     ExecutionOutputLimits {
         max_outputs: 1024,
         max_output_bytes: 64 * 1024 * 1024,
@@ -22,7 +22,7 @@ pub(crate) fn structural_output_limits() -> ExecutionOutputLimits {
 
 /// Build Network rows only after checking every fixture's immutable source join.
 /// Internal invocation fixtures must construct their own typed invocation rows.
-pub(crate) fn structural_network_outputs(
+pub fn structural_network_outputs(
     block: &SignedBlock,
     sources: &[HashOf<TransactionEntrypoint>],
     results: Vec<TransactionResultInner>,

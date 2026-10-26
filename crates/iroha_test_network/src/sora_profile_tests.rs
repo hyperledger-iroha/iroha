@@ -145,32 +145,37 @@ fn genesis_projection_preserves_explicit_default_sora_topology_and_execution_pol
         before.nexus.configured_dataspace_catalog
     );
     assert_eq!(projected.nexus.routing_policy, before.nexus.routing_policy);
-    let execution_policy = |config: &iroha_config::parameters::actual::Root| {
-        let manifests = iroha_core::governance::manifest::LaneManifestRegistry::from_config(
-            &config.nexus.lane_catalog,
-            &config.nexus.governance,
-            &config.nexus.registry,
-        );
-        let nexus =
+    let execution_policy =
+        |config: &iroha_config::parameters::actual::Root,
+         authored_fees: &iroha_data_model::block::consensus::RootFeePolicy| {
+            let manifests = iroha_core::governance::manifest::LaneManifestRegistry::from_config(
+                &config.nexus.lane_catalog,
+                &config.nexus.governance,
+                &config.nexus.registry,
+            );
+            let nexus =
             iroha_config::parameters::actual::nexus_consensus_policy_digest_with_runtime_policies(
                 &config.nexus,
+                Some(authored_fees),
                 None,
                 Some(manifests.baseline_consensus_policy_digest()),
             )
             .expect("fixture Nexus policy");
-        iroha_config::parameters::actual::execution_policy_digest_v1(
-            &config.pipeline,
-            &config.oracle,
-            &config.crypto,
-            &config.fraud_monitoring,
-            &config.gov,
-            &config.content,
-            &config.settlement,
-            nexus,
-            iroha_core::state::compute_zk_consensus_policy_hash(&config.zk),
-        )
-    };
-    assert_eq!(execution_policy(&projected), execution_policy(&before));
+            iroha_config::parameters::actual::execution_policy_digest_v1(
+                &config.pipeline,
+                &config.oracle,
+                &config.fraud_monitoring,
+                &config.gov,
+                &config.content,
+                &config.settlement,
+                nexus,
+                iroha_core::state::compute_zk_consensus_policy_hash(&config.zk),
+            )
+        };
+    assert_eq!(
+        execution_policy(&projected, &projected.nexus.fees),
+        execution_policy(&before, &before.nexus.fees)
+    );
     assert!(projected.torii.sorafs_storage.enabled);
 }
 

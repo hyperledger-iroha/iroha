@@ -8,7 +8,7 @@ use iroha_sumeragi::types::{ControlWitness, MAX_CONTROL_WITNESS_BYTES};
 
 /// Malformed canonical control data or an exact signed-header/result mismatch.
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum ControlCodecError {
+pub enum ControlCodecError {
     /// A schema, codec, canonical framing or bounded encoding check failed.
     #[error("invalid canonical native control frame: {0}")]
     Encoding(#[from] norito::Error),
@@ -28,7 +28,7 @@ fn limits() -> norito::DecodeLimits {
 }
 
 /// Stream the exact Pulse frame into inline header storage. No heap Vec is constructed.
-pub(crate) fn encode(pulse: Option<&Pulse>) -> Result<ControlWitness, ControlCodecError> {
+pub fn encode(pulse: Option<&Pulse>) -> Result<ControlWitness, ControlCodecError> {
     let mut witness = ControlWitness::empty();
     if let Some(pulse) = pulse {
         norito::core::write_canonical_to_writer(pulse, &mut witness)?;
@@ -38,7 +38,7 @@ pub(crate) fn encode(pulse: Option<&Pulse>) -> Result<ControlWitness, ControlCod
 
 /// Decode only the single current canonical Pulse frame. Empty bytes carry no witness;
 /// the pristine source verifier must independently require or prohibit that absence.
-pub(crate) fn decode(witness: &ControlWitness) -> Result<Option<Pulse>, ControlCodecError> {
+pub fn decode(witness: &ControlWitness) -> Result<Option<Pulse>, ControlCodecError> {
     if witness.is_empty() {
         return Ok(None);
     }
@@ -48,7 +48,7 @@ pub(crate) fn decode(witness: &ControlWitness) -> Result<Option<Pulse>, ControlC
 }
 
 /// Bind historical/follower R to exactly the bytes signed in its native header.
-pub(crate) fn verify_result(
+pub fn verify_result(
     witness: &ControlWitness,
     pulse: Option<&Pulse>,
 ) -> Result<(), ControlCodecError> {
@@ -59,13 +59,13 @@ pub(crate) fn verify_result(
 }
 
 /// Canonical sideframe for an actual proof-carrying share; never a finalized header witness.
-pub(crate) fn encode_partial(partial: &Partial) -> Result<ControlWitness, ControlCodecError> {
+pub fn encode_partial(partial: &Partial) -> Result<ControlWitness, ControlCodecError> {
     let mut bytes = ControlWitness::empty();
     norito::core::write_canonical_to_writer(partial, &mut bytes)?;
     Ok(bytes)
 }
 
 /// Bounded exact decoder for the sole native producer's application-control sideframe.
-pub(crate) fn decode_partial(bytes: &ControlWitness) -> Result<Partial, ControlCodecError> {
+pub fn decode_partial(bytes: &ControlWitness) -> Result<Partial, ControlCodecError> {
     norito::decode_canonical_with_limits(bytes.as_slice(), limits()).map_err(Into::into)
 }

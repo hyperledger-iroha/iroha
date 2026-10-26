@@ -247,7 +247,7 @@ fn checkpoint_rollback_restores_old_handles_without_reviving_discarded_generatio
     let discarded = tx.replace(&owner, &old, occurrence(2, 4, 20)).unwrap();
     let discarded_extra = tx.reserve(&owner, occurrence(1, 2, 30)).unwrap();
     let future_checkpoint = tx.checkpoint();
-    tx.rollback(checkpoint).unwrap();
+    tx.rollback(&(checkpoint)).unwrap();
     let replacement = tx.replace(&owner, &old, occurrence(3, 6, 15)).unwrap();
     assert_ne!(replacement.generation, discarded.generation);
     invariant(
@@ -264,7 +264,7 @@ fn checkpoint_rollback_restores_old_handles_without_reviving_discarded_generatio
         ReservationInvariant::StaleSlot,
     );
     invariant(
-        tx.rollback(future_checkpoint).unwrap_err(),
+        tx.rollback(&(future_checkpoint)).unwrap_err(),
         ReservationInvariant::StaleCheckpoint,
     );
     assert_consistent(&tx);
@@ -375,19 +375,19 @@ fn checkpoints_reject_foreign_transactions_ledgers_contexts_and_discarded_branch
     first.commit();
     let mut tx = ledger.transaction(context()).unwrap();
     invariant(
-        tx.rollback(old_transaction).unwrap_err(),
+        tx.rollback(&(old_transaction)).unwrap_err(),
         ReservationInvariant::ForeignTransaction,
     );
     let mut other_ledger = ReservationLedger::new(context(), tx.ledger.policy).unwrap();
     let other = other_ledger.transaction(context()).unwrap();
     invariant(
-        tx.rollback(other.checkpoint()).unwrap_err(),
+        tx.rollback(&(other.checkpoint())).unwrap_err(),
         ReservationInvariant::ForeignLedger,
     );
     let mut wrong_context = tx.checkpoint();
     wrong_context.context.policy_digest[0] ^= 1;
     invariant(
-        tx.rollback(wrong_context).unwrap_err(),
+        tx.rollback(&(wrong_context)).unwrap_err(),
         ReservationInvariant::ContextMismatch,
     );
     let root = tx.checkpoint();
@@ -395,13 +395,13 @@ fn checkpoints_reject_foreign_transactions_ledgers_contexts_and_discarded_branch
     let inner = tx.checkpoint();
     tx.reserve(&owner, occurrence(1, 1, 1)).unwrap();
     let discarded = tx.checkpoint();
-    tx.rollback(inner).unwrap();
+    tx.rollback(&(inner)).unwrap();
     tx.reserve(&owner, occurrence(2, 2, 2)).unwrap(); // Refill the same offset.
     invariant(
-        tx.rollback(discarded).unwrap_err(),
+        tx.rollback(&(discarded)).unwrap_err(),
         ReservationInvariant::StaleCheckpoint,
     );
-    tx.rollback(root).unwrap(); // The retained ancestor remains valid.
+    tx.rollback(&(root)).unwrap(); // The retained ancestor remains valid.
     assert_eq!(tx.usage(), SourceUsage::ZERO);
     assert_consistent(&tx);
 }
@@ -556,7 +556,7 @@ fn exhausted_generations_fail_atomically_and_drop_rollback_needs_no_new_generati
             ReservationInvariant::GenerationOverflow,
         );
         assert_eq!((tx.usage(), tx.journal.len()), before);
-        assert_eq!(tx.rollback(checkpoint).unwrap(), committed);
+        assert_eq!(tx.rollback(&(checkpoint)).unwrap(), committed);
         assert_eq!(tx.ledger.next_generation, u64::MAX);
         assert_consistent(&tx);
     }
@@ -581,9 +581,9 @@ fn nested_inner_rollback_then_outer_entry_rollback_preserves_prior_shared_transa
     let original = tx.reserve(&entry, occurrence(1, 2, 30)).unwrap();
     let inner = tx.checkpoint();
     tx.replace(&entry, &original, occurrence(2, 4, 40)).unwrap();
-    tx.rollback(inner).unwrap();
+    tx.rollback(&(inner)).unwrap();
     assert_eq!(tx.owner_usage(&entry).unwrap().max_statement_bytes, 30);
-    tx.rollback(outer).unwrap();
+    tx.rollback(&(outer)).unwrap();
     assert_eq!(tx.usage(), prior_usage);
     invariant(
         tx.owner_usage(&entry).unwrap_err(),
@@ -867,8 +867,8 @@ fn retained_commit_seal_tracks_surviving_nested_prefix_only() {
     transaction
         .replace(&owner, &outer, occurrence(3, 30, 36))
         .unwrap();
-    transaction.rollback(inner).unwrap();
-    transaction.rollback(root).unwrap();
+    transaction.rollback(&(inner)).unwrap();
+    transaction.rollback(&(root)).unwrap();
     transaction.commit();
     assert_eq!(ledger.usage(), before);
     assert!(ledger.matches_commit_seal(&seal));
@@ -880,7 +880,7 @@ fn retained_commit_seal_tracks_surviving_nested_prefix_only() {
     transaction
         .replace(&owner, &outer, occurrence(3, 30, 36))
         .unwrap();
-    transaction.rollback(inner).unwrap();
+    transaction.rollback(&(inner)).unwrap();
     transaction.commit();
     assert_eq!(ledger.usage(), before);
     assert!(!ledger.matches_commit_seal(&seal));

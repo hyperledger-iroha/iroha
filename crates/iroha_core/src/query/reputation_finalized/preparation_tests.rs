@@ -126,7 +126,7 @@ fn reputation_admission_rejects_fork_gap_capacity_and_generation_before_writes()
     ));
     let gap = ReputationReconstructionStateV1::from_projection(sample_projection(9, [0x91; 32]));
     assert!(matches!(
-        archive.prepare_captured_state(gap, vec![first.authority_policy.clone()]),
+        archive.prepare_captured_state(gap, std::slice::from_ref(&first.authority_policy)),
         Err(ReputationFinalizedArchiveError::ArchiveCoverageGap { .. })
     ));
     archive.write_index().unwrap().generation = u64::MAX;

@@ -12,7 +12,7 @@ use iroha_data_model::parameter::{
 use iroha_primitives::json::Json;
 
 /// Valid genesis metadata carrying one explicit root scope.
-pub(crate) fn metadata(scope: SumeragiRootScope) -> Parameter {
+pub fn metadata(scope: SumeragiRootScope) -> Parameter {
     let mut context =
         iroha_data_model::block::consensus::SumeragiGenesisContextParameters::recommended();
     context.root_scope = scope;
@@ -31,18 +31,22 @@ pub(crate) fn metadata(scope: SumeragiRootScope) -> Parameter {
 }
 
 /// Component World with explicit structural root metadata for the requested scope.
-pub(crate) fn world(scope: SumeragiRootScope) -> World {
+pub fn world(scope: SumeragiRootScope) -> World {
     let world = World::new();
-    let mut parameters = world.parameters.block();
-    parameters
-        .set_parameter(metadata(scope))
-        .expect("valid fixture parameters");
+    let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
+        .expect("original parameter-only fixture block");
+    crate::state::set_parameter_cell_for_testing(
+        &mut parameters,
+        metadata(scope),
+        world.sccp_committee_generations.allocation_budget(),
+    )
+    .expect("valid fixture parameters");
     parameters.commit();
     world
 }
 
 /// Original signed genesis with a canonical committee and explicit root scope.
-pub(crate) fn signed_genesis(scope: SumeragiRootScope) -> iroha_data_model::block::SignedBlock {
+pub fn signed_genesis(scope: SumeragiRootScope) -> iroha_data_model::block::SignedBlock {
     iroha_genesis::init_instruction_registry();
     let Parameter::Custom(parameter) = metadata(scope) else {
         unreachable!()
@@ -59,7 +63,17 @@ pub(crate) fn signed_genesis(scope: SumeragiRootScope) -> iroha_data_model::bloc
     iroha_genesis::GenesisBuilder::new_without_executor(
         iroha_model_base::chain::ChainId::from("root-scope-fixture"),
         ".",
+        iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+            iroha_crypto::Algorithm::Ed25519,
+            iroha_crypto::Algorithm::Secp256k1,
+            iroha_crypto::Algorithm::BlsNormal,
+        ])
+        .expect("explicit canonical genesis producer policy"),
     )
+    .with_staking_policy(crate::sumeragi::test_chain::staking_fixture_policy(
+        fees.fee_asset_id.clone(),
+    ))
+    .expect("explicit fixture staking author")
     .set_topology(
         crate::sumeragi::test_chain::fixture_validators()
             .into_iter()

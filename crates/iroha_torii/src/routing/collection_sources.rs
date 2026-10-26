@@ -698,7 +698,7 @@ fn execute_prepared_collection_local(
                     ),
                     visibility.allows_rwa(&world, id).then(|| {
                         dto_row(&crate::explorer::ExplorerRwaDto::from_entry(
-                            iroha_data_model::rwa::RwaEntry::new(id, value),
+                            &(iroha_data_model::rwa::RwaEntry::new(id, value)),
                         ))
                     }),
                 )
@@ -980,7 +980,7 @@ fn execute_prepared_collection_local(
         CollectionTarget::UaidManifests(raw_uaid) => {
             let uaid = parse_uaid_literal(raw_uaid)?;
             let world = state.world_view();
-            let aliases = DataspaceAliasLookup::new(state.nexus_snapshot().dataspace_catalog);
+            let aliases = DataspaceAliasLookup::new(&(state.nexus_snapshot().dataspace_catalog));
             let bindings = world.uaid_dataspaces().get(&uaid);
             let rows = world
                 .space_directory_manifests()
@@ -1076,9 +1076,9 @@ fn execute_prepared_collection_local(
                 &mut failure,
             );
             let page = if scan.is_some() {
-                prepared.execute_ordered(rows, &limits)
+                prepared.execute_ordered(rows, limits)
             } else {
-                prepared.execute_entries(rows.map(|(_, row)| row), &limits)
+                prepared.execute_entries(rows.map(|(_, row)| row), limits)
             };
             if let Some(error) = failure {
                 return Err(error);
@@ -1116,9 +1116,9 @@ fn execute_prepared_collection_local(
                 )
             });
             if scan.is_some() {
-                prepared.execute_ordered(rows, &limits)
+                prepared.execute_ordered(rows, limits)
             } else {
-                prepared.execute_entries(rows.map(|(_, row)| row), &limits)
+                prepared.execute_entries(rows.map(|(_, row)| row), limits)
             }
         }
         CollectionTarget::RepoAgreements => {
@@ -1407,7 +1407,7 @@ fn account_subrow_page(
 /// `/v1/accounts/{account_id}/history` pages project them for `visibility`.
 /// The height bounds join the caller's filter as top-level conjuncts, so each
 /// page scans only those blocks.
-pub(crate) fn account_history_rows_between(
+pub fn account_history_rows_between(
     state: &Arc<CoreState>,
     account: &AccountId,
     filter: Option<&iroha_torii_shared::list_query::FilterExpr>,
@@ -2566,9 +2566,6 @@ mod tests {
 
     #[test]
     fn exact_index_candidates_do_not_clone_prefix_keys() {
-        thread_local! {
-            static CLONES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-        }
         #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
         struct Prefix(u8);
         impl Clone for Prefix {
@@ -2577,6 +2574,11 @@ mod tests {
                 Self(self.0)
             }
         }
+
+        thread_local! {
+            static CLONES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+        }
+
         let rows: mv::storage::Storage<(Prefix, u32), ()> = [
             ((Prefix(1), 4), ()),
             ((Prefix(2), 4), ()),
@@ -2944,7 +2946,7 @@ mod tests {
         for pair in [[1_000, 1_001], [2_000, 2_001], [3_000, 3_001]] {
             crate::test_utils::commit_native_accepted_inputs(
                 &mut chain,
-                pair.into_iter().map(signed).collect(),
+                &(pair.into_iter().map(signed).collect::<Vec<_>>()),
             );
         }
         let target = CollectionTarget::AccountTransactions(alice.to_string());
@@ -3023,7 +3025,7 @@ mod tests {
             .sign(keys.private_key());
         crate::test_utils::commit_native_accepted_inputs(
             &mut chain,
-            vec![AcceptedTransaction::new_unchecked(std::borrow::Cow::Owned(
+            &[AcceptedTransaction::new_unchecked(std::borrow::Cow::Owned(
                 movement_tx,
             ))],
         );

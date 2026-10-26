@@ -273,22 +273,21 @@ pub(super) fn header(
     plan: Option<HeaderPlan>,
     budget: &AllocationBudget,
 ) -> Result<FundedMetadata<BlockHeader>, CertificateReadError> {
-    let plan = match plan {
-        Some(plan) => plan,
-        None => {
-            let mut reservation = budget
-                .try_reserve_bytes(workspace_bytes()?)
-                .map_err(admission)?;
-            let mut work = workspace(budget, &mut reservation)?;
-            let mut probe = HeaderDestination {
-                value: blank_header(),
-                backing: None,
-                valid: false,
-            };
-            // No payload allocation or second decode: actual root/field errors win.
-            fill::<BlockHeader, _>(&mut work, raw, &mut probe)?;
-            return Err(CertificateReadError::Decode(norito::Error::LengthMismatch));
-        }
+    let plan = if let Some(plan) = plan {
+        plan
+    } else {
+        let mut reservation = budget
+            .try_reserve_bytes(workspace_bytes()?)
+            .map_err(admission)?;
+        let mut work = workspace(budget, &mut reservation)?;
+        let mut probe = HeaderDestination {
+            value: blank_header(),
+            backing: None,
+            valid: false,
+        };
+        // No payload allocation or second decode: actual root/field errors win.
+        fill::<BlockHeader, _>(&mut work, raw, &mut probe)?;
+        return Err(CertificateReadError::Decode(norito::Error::LengthMismatch));
     };
     let mut reservation = budget
         .try_reserve_bytes(demand::<BlockHeader>(plan.count + 1, plan.backing)?)
@@ -335,22 +334,21 @@ pub(super) fn qc(
     plan: Option<QcPlan>,
     budget: &AllocationBudget,
 ) -> Result<FundedMetadata<Qc>, CertificateReadError> {
-    let plan = match plan {
-        Some(plan) => plan,
-        None => {
-            let mut reservation = budget
-                .try_reserve_bytes(workspace_bytes()?)
-                .map_err(admission)?;
-            let mut work = workspace(budget, &mut reservation)?;
-            let mut probe = QcDestination {
-                value: blank_qc(),
-                ledger: None,
-                reservation: None,
-                valid: false,
-            };
-            fill::<Qc, _>(&mut work, raw, &mut probe)?;
-            return Err(CertificateReadError::Decode(norito::Error::LengthMismatch));
-        }
+    let plan = if let Some(plan) = plan {
+        plan
+    } else {
+        let mut reservation = budget
+            .try_reserve_bytes(workspace_bytes()?)
+            .map_err(admission)?;
+        let mut work = workspace(budget, &mut reservation)?;
+        let mut probe = QcDestination {
+            value: blank_qc(),
+            ledger: None,
+            reservation: None,
+            valid: false,
+        };
+        fill::<Qc, _>(&mut work, raw, &mut probe)?;
+        return Err(CertificateReadError::Decode(norito::Error::LengthMismatch));
     };
     let mut reservation = budget
         .try_reserve_bytes(demand::<Qc>(1, plan.backing)?)

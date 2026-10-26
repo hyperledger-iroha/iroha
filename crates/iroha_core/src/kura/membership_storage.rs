@@ -190,10 +190,10 @@ struct RangePermit<'kura> {
 impl Drop for RangePermit<'_> {
     fn drop(&mut self) {
         let mut control = self.kura.membership_storage.control.lock();
-        if let Some(active) = &mut control.active {
-            if active.id == self.id {
-                active.abandoned = true;
-            }
+        if let Some(active) = &mut control.active
+            && active.id == self.id
+        {
+            active.abandoned = true;
         }
     }
 }
@@ -729,7 +729,7 @@ impl<'kura> MembershipAppendRange<'kura> {
         #[cfg(not(unix))]
         let result: io::Result<usize> = Err(io::ErrorKind::Unsupported.into());
         #[cfg(test)]
-        if let Some(length) = EXTEND_MEMBERSHIP_POST_WRITE.with(|fault| fault.take()) {
+        if let Some(length) = EXTEND_MEMBERSHIP_POST_WRITE.with(std::cell::Cell::take) {
             // A foreign writer can mutate the same inode without replacing its
             // namespace entry. The original request must not adopt that growth.
             file.set_len(length)?;

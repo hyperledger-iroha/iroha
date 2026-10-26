@@ -264,9 +264,14 @@ mod tests {
         // Equal extent and private permissions cannot authorize a changed preimage.
         let directory = PrivateDirectory::open_exact(root.join("wallet-originals")).unwrap();
         let mut writer = directory
-            .create_retained_private(hex::encode(blob.sha256), blob.bytes as usize)
+            .create_retained_private(
+                hex::encode(blob.sha256),
+                usize::try_from(blob.bytes).unwrap(),
+            )
             .unwrap();
-        writer.write_all(&vec![0; blob.bytes as usize]).unwrap();
+        writer
+            .write_all(&vec![0; usize::try_from(blob.bytes).unwrap()])
+            .unwrap();
         writer.seal_read_only().unwrap();
         assert!(originals.write_bundle_metadata(&root, &wallet).is_err());
         assert!(!root.join("verifier-pack.norito").exists());

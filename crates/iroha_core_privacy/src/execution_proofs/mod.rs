@@ -23,9 +23,9 @@ mod stark;
 
 pub use error::ExecutionProofErrorV1;
 pub use proof::{
-    RACE_MAX_PROOF_BYTES_V1, RACE_MAX_STARK_BYTES_V1, compiled_race_profile_v1, prove_race_v1,
-    race_game_transcript_v1, race_profile_id_v1, race_profile_is_qualified_v1, race_rules_hash_v1,
-    race_state_root_v1, race_transcript_root_v1, verify_race_proof_v1,
+    GameProofHistoryV1, RACE_MAX_PROOF_BYTES_V1, RACE_MAX_STARK_BYTES_V1, compiled_race_profile_v1,
+    prove_race_v1, race_game_transcript_v1, race_profile_id_v1, race_profile_is_qualified_v1,
+    race_rules_hash_v1, race_state_root_v1, race_transcript_root_v1, verify_race_proof_v1,
 };
 pub use registry::{
     compiled_execution_profile_v1, compiled_execution_profiles_v1, game_resource_requirements_v1,

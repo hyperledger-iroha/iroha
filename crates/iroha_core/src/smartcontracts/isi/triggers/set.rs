@@ -1807,10 +1807,10 @@ pub trait SetReadOnly {
     fn active_trigger_ids_iter(&self) -> impl Iterator<Item = &TriggerId> {
         self.active_data_trigger_ids()
             .iter()
-            .map(|(id, _)| id)
-            .chain(self.active_pipeline_trigger_ids().iter().map(|(id, _)| id))
-            .chain(self.active_time_trigger_ids().iter().map(|(id, _)| id))
-            .chain(self.active_by_call_trigger_ids().iter().map(|(id, _)| id))
+            .map(|(id, ())| id)
+            .chain(self.active_pipeline_trigger_ids().iter().map(|(id, ())| id))
+            .chain(self.active_time_trigger_ids().iter().map(|(id, ())| id))
+            .chain(self.active_by_call_trigger_ids().iter().map(|(id, ())| id))
     }
     /// Iterate triggers directly from the typed trigger stores.
     fn triggers_iter(&self) -> impl Iterator<Item = Trigger> + '_ {
@@ -2599,12 +2599,14 @@ impl<'block> SetTransaction<'block> {
             let updated = match event_type {
                 TriggeringEventType::Data => {
                     let updated = self.data_triggers.get_mut(&trigger_id).map(|action| {
-                        let mut updated = replace_trigger_authority(action, old, new);
-                        if action.filter.replace_account_id(old, new) {
+                        let authority_updated = replace_trigger_authority(action, old, new);
+                        let mut updated = if action.filter.replace_account_id(old, new) {
                             replacement_filter = Some(action.filter.clone());
                             replacement_filter_is_active = Set::action_is_active(action);
-                            updated = true;
-                        }
+                            true
+                        } else {
+                            authority_updated
+                        };
                         updated |= replace_data_trigger_global_permission_grantee(
                             &mut action.metadata,
                             old,
@@ -4068,11 +4070,11 @@ fn load_trigger_entries<F>(
             continue;
         }
         let action = LoadedAction::try_from(dto)?;
-        if let Some(blob_hash) = action.extract_blob_hash() {
-            if !contracts.contains_key(&blob_hash) {
-                missing_contracts.push(id);
-                continue;
-            }
+        if let Some(blob_hash) = action.extract_blob_hash()
+            && !contracts.contains_key(&blob_hash)
+        {
+            missing_contracts.push(id);
+            continue;
         }
         ids.insert(id.clone(), event_type);
         entries.push((id, action));

@@ -10,7 +10,7 @@ pub(in crate::state) mod musubi_rejection;
 use musubi_rejection::{ProjectionCut, ProjectionRejection, ProjectionTable};
 
 #[path = "deserialize_world_musubi_source_read.rs"]
-pub(crate) mod musubi_source_read;
+pub mod musubi_source_read;
 
 #[path = "deserialize_world_musubi_live.rs"]
 pub(in crate::state) mod musubi_live;
@@ -27,6 +27,22 @@ pub(in crate::state) mod musubi_universal;
 pub(in crate::state) mod proof_tag_index;
 #[path = "deserialize_world_verifying_key_index.rs"]
 mod verifying_key_index;
+
+/// Project persisted privacy validation without flattening original local codec refusal.
+fn privacy_state_json_error(
+    error: crate::privacy_state::PrivacyStateValidationErrorV1,
+) -> json::Error {
+    use crate::privacy_state::{PrivacyPgcAccountStateRootErrorV1, PrivacyStateValidationErrorV1};
+    match error {
+        PrivacyStateValidationErrorV1::PgcAccountRoot(
+            PrivacyPgcAccountStateRootErrorV1::NamespaceEncoding(original),
+        ) => json::Error::from_decode_resource(original.into_error()),
+        original => json::Error::InvalidField {
+            field: "world.privacy_state".to_owned(),
+            message: original.to_string(),
+        },
+    }
+}
 
 struct MusubiPersistedState<'a> {
     namespace_bindings: &'a Storage<MusubiNamespaceV1, MusubiNamespaceBindingV1>,
@@ -6133,16 +6149,27 @@ fn timed_ovn_phase_matches_ballot_status_v1(
     use iroha_data_model::governance::types::BallotAttemptStatusV1 as BallotStatus;
     use iroha_data_model::governance::types::ParliamentBallotFailureKindV1 as FailureKind;
     match (status, failure_kind) {
-        (BallotStatus::Registration, None) => phase == PersistedTimedOvnPhaseV1::Registered,
         (BallotStatus::SurvivorFreeze, None) => {
             phase == PersistedTimedOvnPhaseV1::RegistrationClosed
         }
-        (BallotStatus::TimedCommitment, None) => phase == PersistedTimedOvnPhaseV1::SurvivorsFrozen,
+        (BallotStatus::TimedCommitment, None)
+        | (
+            BallotStatus::NoResult | BallotStatus::Superseded,
+            Some(FailureKind::CommitmentDeadlineExpired),
+        ) => phase == PersistedTimedOvnPhaseV1::SurvivorsFrozen,
         (BallotStatus::AwaitingRelease | BallotStatus::Opening, None) => {
             phase == PersistedTimedOvnPhaseV1::Sealed
         }
-        (BallotStatus::Finalized, None) => phase == PersistedTimedOvnPhaseV1::Released,
-        (
+        (BallotStatus::Finalized, None)
+        | (
+            BallotStatus::NoResult,
+            Some(
+                FailureKind::ConfirmationJuryCapacityUnavailable
+                | FailureKind::RandomnessRedrawBudgetExhausted,
+            ),
+        ) => phase == PersistedTimedOvnPhaseV1::Released,
+        (BallotStatus::Registration, None)
+        | (
             BallotStatus::NoResult | BallotStatus::Superseded,
             Some(FailureKind::RegistrationDeadlineExpired),
         ) => phase == PersistedTimedOvnPhaseV1::Registered,
@@ -6152,19 +6179,8 @@ fn timed_ovn_phase_matches_ballot_status_v1(
         ) => phase == PersistedTimedOvnPhaseV1::RegistrationClosed,
         (
             BallotStatus::NoResult | BallotStatus::Superseded,
-            Some(FailureKind::CommitmentDeadlineExpired),
-        ) => phase == PersistedTimedOvnPhaseV1::SurvivorsFrozen,
-        (
-            BallotStatus::NoResult | BallotStatus::Superseded,
             Some(FailureKind::ReleasePulseUnavailable | FailureKind::OpeningDeadlineExpired),
         ) => phase == PersistedTimedOvnPhaseV1::Sealed,
-        (
-            BallotStatus::NoResult,
-            Some(
-                FailureKind::ConfirmationJuryCapacityUnavailable
-                | FailureKind::RandomnessRedrawBudgetExhausted,
-            ),
-        ) => phase == PersistedTimedOvnPhaseV1::Released,
         _ => false,
     }
 }
@@ -7418,19 +7434,24 @@ mod validation_fee_registry_restore_tests {
                 .insert(ballot_attempt_id, lifecycle);
         }
         {
-            let mut parameters = world.parameters.block();
-            parameters
-                .get_mut()
-                .set_parameter(Parameter::Custom(npos.into_custom_parameter()))
-                .expect("valid fixture parameters");
-            parameters
-                .get_mut()
-                .set_parameter(Parameter::Custom(
+            let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
+                .expect("funded original parameter-only fixture block");
+            crate::state::set_parameter_cell_for_testing(
+                &mut parameters,
+                Parameter::Custom(npos.into_custom_parameter()),
+                world.sccp_committee_generations.allocation_budget(),
+            )
+            .expect("valid fixture parameters");
+            crate::state::set_parameter_cell_for_testing(
+                &mut parameters,
+                Parameter::Custom(
                     registry.clone().into_custom_parameter().expect(
                         "validation-fee fixture registry fits the canonical JSON parameter",
                     ),
-                ))
-                .expect("valid fixture parameters");
+                ),
+                world.sccp_committee_generations.allocation_budget(),
+            )
+            .expect("valid fixture parameters");
             parameters.commit();
         }
         (world, registry)
@@ -7675,6 +7696,31 @@ mod validation_fee_registry_restore_tests {
         );
         let (world, _) =
             registry_world_with_policy_network(REGISTRY_CANDIDATE_SEED, foreign_policy_network);
+        // Supply initialized structural parameter cuts without granting this
+        // rejected restore fixture native execution authority.
+        {
+            let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
+                .expect("fund original fixture parameter cell");
+            crate::state::set_parameter_cell_for_testing(
+                &mut parameters,
+                crate::sumeragi::test_chain::crypto_fixture_policy()
+                    .into_parameter()
+                    .expect("fixture crypto policy parameter"),
+                world.sccp_committee_generations.allocation_budget(),
+            )
+            .expect("valid fixture crypto policy");
+            parameters.commit();
+        }
+        // An unchanged parameter commit retains the initialized current cut as
+        // its predecessor, matching the fixture's post-genesis history height.
+        crate::state::parameter_cell_block_for_testing(&world)
+            .expect("fund original predecessor parameter cell")
+            .commit();
+        validate_restored_crypto_policy(
+            &world,
+            usize::try_from(RESTORED_HEIGHT).expect("fixture height fits usize"),
+        )
+        .expect("fixture current and predecessor parameter cuts retain crypto policy");
         let block_hashes: Vec<HashOf<BlockHeader>> = (1..=RESTORED_HEIGHT)
             .map(|height| HashOf::from_untyped_unchecked(Hash::new(height.to_le_bytes())))
             .collect();
@@ -8099,7 +8145,7 @@ fn take_native_amx_participant(
         source
             .map(|source| crate::sumeragi::amx::RetainedNativeAmx::admit(source, budget))
             .transpose()
-            .map(|value| value.unwrap_or_default())
+            .map(std::option::Option::unwrap_or_default)
             .map_err(|error| match error {
                 local @ (crate::sumeragi::amx::NativeAmxAdmissionError::Admission(_)
                 | crate::sumeragi::amx::NativeAmxAdmissionError::Allocator { .. }
@@ -8180,7 +8226,7 @@ fn decode_world_fields(
     if !cfg!(all(test, sumeragi_core_mutation = "HC930")) {
         map.require_source_order(canonical_world_field_order(), "world")?;
     }
-    let parameters = take_parameters_cell(&mut map, "parameters")?;
+    let parameters = take_parameters_cell(&mut map, "parameters", execution_budget)?;
     let peers: Cell<Peers> = take_required(&mut map, "peers")?;
     let consensus_schedule = take_native_consensus_schedule(&mut map, execution_budget)?;
     // Derived from the restored World: accelerated restoration recomputes it by a cold capture
@@ -8688,10 +8734,7 @@ fn decode_world_fields(
         &privacy_roots.view(),
         &privacy_root_heads.view(),
     )
-    .map_err(|message| json::Error::InvalidField {
-        field: "world.privacy_state".to_owned(),
-        message,
-    })?;
+    .map_err(privacy_state_json_error)?;
     if let Some(qualification) = privacy_exact12_qualification.view().get() {
         qualification
             .validate()
@@ -9271,12 +9314,12 @@ fn parse_world(
     proof_tag_index::rebuild(&mut world)?;
     verifying_key_index::validate_verifying_key_index(&world)?;
     validate_asset_transfer_control_persistence_v1(&world)?;
-    crate::smartcontracts::isi::escrow::controlled::validate_persistence(&world.view()).map_err(|error| {
-        json::Error::InvalidField {
+    crate::smartcontracts::isi::escrow::controlled::validate_persistence(&world.view()).map_err(
+        |error| json::Error::InvalidField {
             field: "world.smart_contract_state.asset_lock_control_v1".to_owned(),
             message: error.to_string(),
-        }
-    })?;
+        },
+    )?;
     super::asset_uid::validate_persistence(&world.view()).map_err(|error| {
         json::Error::InvalidField {
             field: "world.smart_contract_state.asset_uid_v1".to_owned(),
@@ -9800,6 +9843,33 @@ struct BuildStateInputs {
     #[cfg(feature = "telemetry")]
     telemetry: StateTelemetry,
 }
+// Validate original current/predecessor parameter cuts against the restored
+// history coordinate. This grants no authority to restore native execution.
+fn validate_restored_crypto_policy(
+    world: &World,
+    committed_height: usize,
+) -> Result<(), MergeLedgerCommitError> {
+    let reject = |message: &str| MergeLedgerCommitError::ExecutionStatePublication(message.into());
+    if committed_height > 0 {
+        world
+            .parameters
+            .view()
+            .get()
+            .require_crypto_policy()
+            .map_err(reject)?;
+    }
+    if committed_height > 1 {
+        let predecessor = world.parameters.predecessor_view();
+        // MV retains an undo value only when the last committed block changed
+        // this cell. With no undo value, the predecessor is the current cut,
+        // whose mandatory policy was validated above.
+        if let Some(previous) = predecessor.get().as_ref() {
+            previous.require_crypto_policy().map_err(reject)?;
+        }
+    }
+    Ok(())
+}
+
 fn build_state(
     inputs: BuildStateInputs,
     allow_durable_recovery: bool,
@@ -9850,6 +9920,7 @@ fn build_state(
             "restored standalone governance state is invalid: {error}"
         ))
     })?;
+    validate_restored_crypto_policy(&world, block_hashes.committed_height())?;
     let initial_crypto = iroha_config::parameters::actual::Crypto::default();
     let da_receipt_cursors =
         PublicationRwLock::try_new(DaReceiptCursorIndex::default(), &execution_budget)
@@ -10016,7 +10087,7 @@ fn build_state(
             .map_err(StateStorageAdmissionError::World)?,
         provisional_emergency_lane_manifests_consumed: false,
         lane_privacy_registry: PublicationRwLock::try_new(
-            Arc::new(LanePrivacyRegistry::empty()),
+            LanePrivacyRegistry::empty(),
             &execution_budget,
         )
         .map_err(StateStorageAdmissionError::World)?,
@@ -10111,8 +10182,15 @@ fn build_state(
             state.project_canonical_runtime(runtime.get(), &world)
         }
         .map_err(|error| MergeLedgerCommitError::ExecutionStatePublication(error.to_string()))?;
+        // The read projection above owns no privacy copy. Admit exactly once
+        // after its physical read guards retire and before either installation.
+        let privacy = LanePrivacyRegistry::try_from_manifest_registry(
+            &projection.manifests,
+            &state.ivm_execution_budget(),
+        )
+        .map_err(MergeLedgerCommitError::ExecutionDeferred)?;
         *state.lane_manifests.get_mut() = projection.manifests;
-        *state.lane_privacy_registry.get_mut() = projection.privacy;
+        *state.lane_privacy_registry.get_mut() = privacy;
     }
     crate::sumeragi::evidence::validate_persisted_records(&state)
         .map_err(crate::sumeragi::evidence::restoration_failure)?;
@@ -10354,9 +10432,7 @@ fn reject_unknown(map: &SnapshotJsonMap<'_>, context: &str) -> Result<(), json::
 /// Decode and validate the World component without granting authenticated State
 /// history. This test-only helper returns a World, never an installed native tip.
 #[cfg(test)]
-pub(crate) fn decode_world_component_for_testing(
-    world: &World,
-) -> Result<World, StateRestoreError> {
+pub fn decode_world_component_for_testing(world: &World) -> Result<World, StateRestoreError> {
     let encoded = json::to_json(world)?;
     let ivm = IVM::new(0);
     parse_world(
@@ -11289,9 +11365,9 @@ mod decode_tests {
             .musubi_archive_availability
             .view()
             .get(&archive_id)
-            .cloned()
+            .copied()
             .expect("seeded availability row");
-        let mut stale = original.clone();
+        let mut stale = original;
         stale.active_locations = 1;
         stale
             .validate()
@@ -11785,9 +11861,13 @@ mod decode_tests {
         let mut map = json::native::Map::new();
         map.insert("parameters".to_owned(), canonical);
         let mut map = SnapshotJsonMap::from_owned(map);
-        let parsed = take_parameters_cell(&mut map, "parameters")
-            .expect("canonical parameters MV envelope must be accepted");
-        assert_eq!(&**parsed.view().get(), &expected);
+        let parsed = take_parameters_cell(
+            &mut map,
+            "parameters",
+            &scalar_cell_custody::default_budget(),
+        )
+        .expect("canonical parameters MV envelope must be accepted");
+        assert_eq!(&***parsed.view().get(), &expected);
     }
     #[test]
     fn borrowed_snapshot_map_rejects_duplicates_and_noncanonical_order() {
@@ -11926,7 +12006,7 @@ mod decode_tests {
             aborts
                 .iter()
                 .next()
-                .map(|(_, abort)| abort.clone())
+                .map(|(_, abort)| *abort)
                 .expect("finalized fixture abort")
         };
         let encoded = json::to_json(&world).expect("serialize finalized settlement World");
@@ -12463,9 +12543,13 @@ mod decode_tests {
         let mut map = json::native::Map::new();
         map.insert("parameters".to_owned(), json::Value::Object(legacy_map));
         let mut map = SnapshotJsonMap::from_owned(map);
-        let error = take_parameters_cell(&mut map, "parameters")
-            .err()
-            .expect("legacy blocks-only parameters envelope must be rejected");
+        let error = take_parameters_cell(
+            &mut map,
+            "parameters",
+            &scalar_cell_custody::default_budget(),
+        )
+        .err()
+        .expect("legacy blocks-only parameters envelope must be rejected");
         assert!(
             error.to_string().contains("parameters"),
             "unexpected diagnostic: {error}"
@@ -12896,7 +12980,7 @@ mod decode_tests {
             index_revision: 1,
         };
         let mut checkpoints = Storage::default();
-        checkpoints.insert(revision, checkpoint.clone());
+        checkpoints.insert(revision, checkpoint);
         let mut map = json::native::Map::new();
         map.insert(
             "musubi_resolver_index_checkpoints".to_owned(),
@@ -13294,3 +13378,53 @@ mod kaigi_typed_deferral_tests;
 #[cfg(test)]
 #[path = "deserialize_world_kaigi_relay_deferral_tests.rs"]
 mod kaigi_relay_typed_deferral_tests;
+
+#[cfg(test)]
+#[path = "deserialize_crypto_policy_tests.rs"]
+mod crypto_policy_history_tests;
+
+#[cfg(test)]
+mod privacy_root_refusal_tests {
+    use super::privacy_state_json_error;
+    use crate::privacy_state::{PrivacyPgcAccountStateRootErrorV1, PrivacyStateValidationErrorV1};
+
+    #[test]
+    fn privacy_restore_json_preserves_original_scope_and_invalid_field() {
+        let limits = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 64);
+        let mut expected = None;
+        let original = norito::with_decode_limits_scope(limits, || {
+            norito::core::classify_decode_attempt(|| {
+                let inner = norito::core::classify_decode_attempt(|| {
+                    norito::core::reserve_decode_allocation(1)
+                })
+                .unwrap_err();
+                expected = inner.local_refusal();
+                Err::<(), _>(
+                    privacy_state_json_error(PrivacyStateValidationErrorV1::PgcAccountRoot(
+                        PrivacyPgcAccountStateRootErrorV1::NamespaceEncoding(inner),
+                    ))
+                    .into_core_error(),
+                )
+            })
+        })
+        .unwrap_err();
+        assert_eq!(original.local_refusal().as_ref(), expected.as_ref());
+        assert_eq!(
+            original.kind(),
+            norito::core::DecodeAttemptErrorKind::EnclosingLimit
+        );
+        norito::core::reserve_decode_allocation(1)
+            .expect("same allocation retries outside retired scope");
+        for error in [
+            PrivacyStateValidationErrorV1::Invalid("orphan table".to_owned()),
+            PrivacyStateValidationErrorV1::PgcAccountRoot(
+                PrivacyPgcAccountStateRootErrorV1::ZeroEpoch,
+            ),
+        ] {
+            assert!(
+                matches!(privacy_state_json_error(error), norito::json::Error::InvalidField { field, .. }
+                if field == "world.privacy_state")
+            );
+        }
+    }
+}

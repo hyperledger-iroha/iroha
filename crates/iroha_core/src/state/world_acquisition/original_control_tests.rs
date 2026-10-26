@@ -285,10 +285,9 @@ fn original_world_partial_placement_releases_both_sides_before_reclaiming_backin
         for fail_after in [1, 2, 3, fields / 2, fields - 1, fields] {
             let source = AllocationBudget::new(16 * 1024 * 1024);
             let world = world_on(&source);
-            let baseline = source.reserved_bytes();
-            let parameters = world
-                .parameters
-                .block()
+            let before_probes = source.reserved_bytes();
+            let parameters = crate::state::parameter_cell_block_for_testing(&world)
+                .expect("funded original parameter-only fixture block")
                 .try_detach(|_| Ok::<_, ()>(()))
                 .unwrap();
             let peers = world.peers.block().try_detach(|_| Ok::<_, ()>(())).unwrap();
@@ -297,6 +296,9 @@ fn original_world_partial_placement_releases_both_sides_before_reclaiming_backin
                 .block()
                 .try_detach(|_| Ok::<_, ()>(()))
                 .unwrap();
+            // The detached parameter probe now retains its original physical backing.
+            // Compare the attempt against the same live probe owners.
+            let baseline = source.reserved_bytes();
             let result = catch_unwind(AssertUnwindSafe(|| {
                 original_control::with_placement_failure(fail_after, || {
                     drop(
@@ -337,6 +339,11 @@ fn original_world_partial_placement_releases_both_sides_before_reclaiming_backin
             released!(parameters, &world.parameters);
             released!(peers, &world.peers);
             released!(state, &world.smart_contract_state);
+            assert_eq!(
+                source.reserved_bytes(),
+                before_probes,
+                "all detached probe backing releases after its original owners"
+            );
         }
     }
 }

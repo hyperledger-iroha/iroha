@@ -105,7 +105,8 @@ fn fixed_arithmetic_matrix_rejects_other_owners_and_wrong_native_shapes() {
     let fixed = P256MainVerifierFixedSourceV1::new_v1().unwrap();
     let arithmetic = P256MainRegistrationV1::new_v1(0, P256MainAdapterV1::Arithmetic, 0).unwrap();
     let mut invalid_signature = arithmetic;
-    invalid_signature.signature = P256_X5S1_SIGNATURES_V1 as u8;
+    invalid_signature.signature =
+        u8::try_from(P256_X5S1_SIGNATURES_V1).expect("protocol-bounded index fits u8");
     let mut invalid_local = arithmetic;
     invalid_local.local_instance = 1;
     for registration in [
@@ -193,7 +194,7 @@ fn fixed_arithmetic_batches_match_full_rows_scalar_columns_and_parallel_coeffici
             for (offset, column) in columns.iter().enumerate() {
                 assert_eq!(column, &matrix[first + offset]);
             }
-            for row in 0..shape.trace_size {
+            for (row, _) in columns[0].iter().enumerate() {
                 let expected = fixed
                     .arithmetic_v1(registration.role_v1())
                     .row_v1(row)

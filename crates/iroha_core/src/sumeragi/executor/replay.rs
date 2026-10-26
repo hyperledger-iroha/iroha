@@ -81,23 +81,30 @@ fn encode(
 }
 
 impl Worker<'_> {
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     pub(super) fn replay(
         &mut self,
         block: &AvailableBody,
         qc: &Qc,
     ) -> Result<(), PublicationError> {
-        match catch_unwind(AssertUnwindSafe(|| {
+        if let Ok(result) = catch_unwind(AssertUnwindSafe(|| {
             self.replay_with_encoder(block, qc, encode)
         })) {
-            Ok(result) => result,
-            Err(_) => {
-                let reason = "startup replay completion panicked; recovery required".to_owned();
-                self.recovery = Some(reason.clone());
-                Err(PublicationError::RecoveryRequired(reason))
-            }
+            result
+        } else {
+            let reason = "startup replay completion panicked; recovery required".to_owned();
+            self.recovery = Some(reason.clone());
+            Err(PublicationError::RecoveryRequired(reason))
         }
     }
 
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     fn replay_with_encoder(
         &mut self,
         block: &AvailableBody,
@@ -156,6 +163,10 @@ impl Worker<'_> {
         Ok(())
     }
 
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     fn retire_completed_replay(
         &mut self,
         block: &AvailableBody,
@@ -233,6 +244,10 @@ impl Worker<'_> {
 }
 
 impl CompletedReplay {
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     fn acknowledge(
         &self,
         block: &AvailableBody,

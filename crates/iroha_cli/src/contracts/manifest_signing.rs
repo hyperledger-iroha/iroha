@@ -80,7 +80,7 @@ impl ManifestSigningBudget {
         Ok(self.grant.try_partition_bytes(bytes)?)
     }
 
-    /// Retain this exact slice until the signed manifest has been consumed.
+    /// Retain this exact slice until the `signed_manifest` manifest has been consumed.
     pub(super) fn reserve_signer(&mut self, signer: &PublicKey) -> Result<AllocationReservation> {
         Ok(self
             .grant
@@ -132,16 +132,16 @@ mod tests {
             let frame = owner.reserve_frame(&manifest).unwrap();
             let exact = frame.remaining_bytes();
             assert_eq!(owner.context().consumed_allocated_bytes(), 0);
-            let signed = manifest.try_signed(owner.context(), exact, &key).unwrap();
+            let signed_manifest = manifest.try_signed(owner.context(), exact, &key).unwrap();
             assert_eq!(
                 owner.context().consumed_allocated_bytes(),
                 u64::try_from(exact + signer.remaining_bytes()).unwrap()
             );
             drop(frame);
             assert_eq!(pool.reserved_bytes(), bytes - exact);
-            let rendered = norito::json::to_json_pretty(&signed).unwrap();
+            let rendered = norito::json::to_json_pretty(&signed_manifest).unwrap();
             assert!(rendered.contains("provenance"));
-            drop(signed);
+            drop(signed_manifest);
             drop(signer);
         }
         assert_eq!(pool.reserved_bytes(), 0);

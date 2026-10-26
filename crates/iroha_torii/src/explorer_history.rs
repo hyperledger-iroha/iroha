@@ -811,7 +811,7 @@ mod tests {
         let duration = Duration::from_millis(1_735_689_600_123);
         let encoded = json::to_json_bounded_boxed(&HistoryTime(duration), 64).unwrap();
         let expected = OffsetDateTime::from_unix_timestamp_nanos(
-            i128::from(duration.as_millis() as u64) * 1_000_000,
+            i128::try_from(duration.as_millis()).expect("fixture duration fits i128") * 1_000_000,
         )
         .unwrap()
         .format(&Rfc3339)

@@ -12,10 +12,9 @@ impl StateTransaction<'_, '_> {
 
     /// Abort local processing before accounting, receipts, callbacks or successful apply.
     pub(crate) fn require_storage_admission(&self) -> Result<(), StateStorageAdmissionError> {
-        match self.local_storage_refusal.as_ref() {
-            Some(error) => Err(error.clone()),
-            None => Ok(()),
-        }
+        self.local_storage_refusal
+            .as_ref()
+            .map_or(Ok(()), |error| Err(error.clone()))
     }
 }
 
@@ -36,10 +35,9 @@ impl StateBlock<'_> {
 
     /// Borrow the original refusal through child discard, without taking or clearing it.
     pub(crate) fn require_storage_admission(&self) -> Result<(), StateStorageAdmissionError> {
-        match self.local_storage_refusal.as_ref() {
-            Some(error) => Err(error.clone()),
-            None => Ok(()),
-        }
+        self.local_storage_refusal
+            .as_ref()
+            .map_or(Ok(()), |error| Err(error.clone()))
     }
 }
 

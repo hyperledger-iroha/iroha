@@ -60,10 +60,10 @@ pub(crate) fn attach_fixture_execution_outputs(
         .set_execution_outputs(
             rows,
             fragments,
-            Default::default(),
+            std::collections::BTreeMap::default(),
             vec![],
-            Default::default(),
-            Default::default(),
+            iroha_data_model::nexus::AxtPolicySnapshot::default(),
+            std::collections::BTreeSet::default(),
             &iroha_data_model::block::output_budget::ExecutionOutputLimits {
                 max_outputs: 1024,
                 max_output_bytes: 1024 * 1024,
@@ -85,6 +85,7 @@ fn checked_random_keypair(context: &str) -> iroha_crypto::KeyPair {
         .unwrap_or_else(|err| panic!("{context}: checked random key generation failed: {err}"))
 }
 /// Parameters for invoking a contract within Torii integration tests.
+#[derive(Clone, Copy)]
 pub struct ContractCallOptions<'a> {
     /// Explicit entry point function to call on the contract.
     pub entrypoint: &'a str,
@@ -94,6 +95,7 @@ pub struct ContractCallOptions<'a> {
     pub gas_limit: u64,
 }
 /// Parameters for invoking a read-only contract view within Torii integration tests.
+#[derive(Clone, Copy)]
 pub struct ContractViewOptions<'a> {
     /// Explicit entry point function to execute.
     pub entrypoint: &'a str,
@@ -122,7 +124,7 @@ pub fn apply_queued_in_one_block(chain: &mut CertifiedTestChain, queue: &Arc<Que
         .iter()
         .map(AcceptedTransaction::hash_as_entrypoint)
         .collect::<Vec<_>>();
-    let committed = commit_native_accepted_inputs(chain, accepted);
+    let committed = commit_native_accepted_inputs(chain, &(accepted));
     for (_, _, result) in crate::canonical_history::signed_calls(committed.block())
         .expect("complete native output ownership")
     {
@@ -142,7 +144,7 @@ pub fn apply_queued_in_one_block(chain: &mut CertifiedTestChain, queue: &Arc<Que
 /// Panics if no original parent or successor schedule exists, or execution refuses the proposal.
 pub fn commit_native_accepted_inputs(
     chain: &mut CertifiedTestChain,
-    accepted: Vec<AcceptedTransaction<'static>>,
+    accepted: &[AcceptedTransaction<'static>],
 ) -> CommittedBlock {
     let view = chain.state().view();
     let parent = view
@@ -162,7 +164,7 @@ pub fn commit_native_accepted_inputs(
             cadence: Duration::from_millis(schedule.params.block_time_ms),
             proposed_time: std::time::Duration::ZERO,
         },
-        &accepted,
+        accepted,
     )
     .expect("assemble original pending inputs");
     drop(view);
@@ -178,7 +180,11 @@ pub fn finalize_committed_block(
     chain: &mut CertifiedTestChain,
     proposal: SignedBlock,
 ) -> CommittedBlock {
-    chain.commit_proposal(proposal, Signers::Quorum, Default::default())
+    chain.commit_proposal(
+        proposal,
+        Signers::Quorum,
+        iroha_sumeragi::types::ControlWitness::default(),
+    )
 }
 /// Build a minimal self-describing contract artifact containing a single HALT.
 pub fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
@@ -407,13 +413,12 @@ pub fn enqueue_locally_signed_contract_deployment_with_permissions(
         .expect("deployment authority exists")
         .metadata()
         .get(&nonce_key)
-        .map(|value| {
+        .map_or(0, |value| {
             value
                 .clone()
                 .try_into_any_norito::<u64>()
                 .expect("canonical contract deployment nonce")
-        })
-        .unwrap_or(0);
+        });
     let network_id = *state_view.network_id();
     drop(state_view);
     let contract_alias = iroha_data_model::smart_contract::ContractAlias::from_components(
@@ -531,19 +536,19 @@ pub fn contract_call_request_json(
     options: ContractCallOptions<'_>,
 ) -> String {
     let mut entries = vec![
-        crate::json_entry("authority", account.clone()),
+        crate::json_entry("authority", account),
         crate::json_entry("contract_address", contract_address),
     ];
     entries.push(crate::json_entry("entrypoint", options.entrypoint));
     if let Some(value) = options.payload {
-        entries.push(crate::json_entry("payload", value.clone()));
+        entries.push(crate::json_entry("payload", value));
     }
     entries.push(crate::json_entry(
         "fee_payment",
-        iroha_data_model::transaction::FeePaymentIntent::authority(
+        &(iroha_data_model::transaction::FeePaymentIntent::authority(
             Vec::new(),
             NonZeroU64::new(options.gas_limit),
-        ),
+        )),
     ));
     let value = crate::json_object(entries);
     norito::json::to_json(&value).expect("serialize contract call request")
@@ -555,14 +560,14 @@ pub fn contract_view_request_json(
     options: ContractViewOptions<'_>,
 ) -> String {
     let mut entries = vec![
-        crate::json_entry("authority", account.clone()),
+        crate::json_entry("authority", account),
         crate::json_entry("contract_address", contract_address),
     ];
     entries.push(crate::json_entry("entrypoint", options.entrypoint));
     if let Some(value) = options.payload {
-        entries.push(crate::json_entry("payload", value.clone()));
+        entries.push(crate::json_entry("payload", value));
     }
-    entries.push(crate::json_entry("gas_limit", options.gas_limit));
+    entries.push(crate::json_entry("gas_limit", &(options.gas_limit)));
     let value = crate::json_object(entries);
     norito::json::to_json(&value).expect("serialize contract view request")
 }
@@ -583,8 +588,8 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
         },
         streaming::StreamingKeyMaterial,
     };
-    use iroha_data_model::peer::Peer;
     use iroha_logger::Level;
+    use iroha_model_base::peer::Peer;
     use iroha_primitives::addr::socket_addr;
     let torii_data_dir = crate::data_dir::base_dir();
     let da_ingest = A::DaIngest {
@@ -790,7 +795,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             ram_lfe: None,
             faucet: None,
             tx_history: None,
-            recipient_lookup: Default::default(),
+            recipient_lookup: iroha_config::parameters::actual::ToriiRecipientLookup::default(),
             kagemusha_enrollment: None,
             public_dataspace_upstreams: Vec::new(),
             webhooks_enabled: defaults::torii::WEBHOOKS_ENABLED,
@@ -998,14 +1003,14 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
                 audit_admin_keys: Vec::new(),
                 account_aliases: Vec::new(),
                 currency_assets: Vec::new(),
-                reference_data: Default::default(),
+                reference_data: iroha_config::parameters::actual::IsoReferenceData::default(),
             },
-            sorafs_discovery: Default::default(),
+            sorafs_discovery: iroha_config::parameters::actual::SorafsDiscovery::default(),
             sorafs_storage,
-            sorafs_repair: Default::default(),
-            sorafs_gc: Default::default(),
-            sorafs_quota: Default::default(),
-            sorafs_alias_cache: Default::default(),
+            sorafs_repair: iroha_config::parameters::actual::SorafsRepair::default(),
+            sorafs_gc: iroha_config::parameters::actual::SorafsGc::default(),
+            sorafs_quota: iroha_config::parameters::actual::SorafsQuota::default(),
+            sorafs_alias_cache: iroha_config::parameters::actual::SorafsAliasCachePolicy::default(),
             sorafs_gateway: A::SorafsGateway {
                 enforce_capabilities: false,
                 enforce_admission: false,
@@ -1013,7 +1018,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
                 ..Default::default()
             },
             sorafs_por,
-            sorafs_appeal_finance_settlement: Default::default(),
+            sorafs_appeal_finance_settlement: iroha_config::parameters::actual::SorafsAppealFinanceSettlement::default(),
             account_onboarding: None,
         },
         soracloud_runtime: A::SoracloudRuntime::default(),
@@ -1043,7 +1048,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             gossip_period: core::time::Duration::from_millis(200),
             gossip_size: nonzero!(32u32),
             gossip_resend_ticks: defaults::network::TRANSACTION_GOSSIP_RESEND_TICKS,
-            dataspace: Default::default(),
+            dataspace: iroha_config::parameters::actual::DataspaceGossip::default(),
         },
         live_query_store: A::LiveQueryStore::default(),
         logger: A::Logger {
@@ -1063,7 +1068,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             merkle_chunk_size_bytes: defaults::snapshot::MERKLE_CHUNK_SIZE_BYTES,
             max_payload_bytes: defaults::snapshot::MAX_PAYLOAD_BYTES,
             max_read_buffer_bytes: defaults::snapshot::MAX_READ_BUFFER_BYTES,
-            resources: Default::default(),
+            resources: iroha_config::parameters::actual::SnapshotResourcePolicy::default(),
             verification_public_key: None,
             signing_private_key: None,
         },
@@ -1173,7 +1178,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
                 max_requests_per_second: nonzero!(defaults::content::MAX_REQUESTS_PER_SECOND),
                 request_burst: nonzero!(defaults::content::REQUEST_BURST),
                 max_egress_bytes_per_second: NonZeroU64::new(
-                    defaults::content::MAX_EGRESS_BYTES_PER_SECOND as u64,
+                    u64::from(defaults::content::MAX_EGRESS_BYTES_PER_SECOND),
                 )
                 .expect("default egress limit"),
                 egress_burst_bytes: NonZeroU64::new(defaults::content::EGRESS_BURST_BYTES)
@@ -1726,8 +1731,7 @@ pub(crate) fn bind_fixture_root(
     metadata.validate().unwrap();
     let mut block = world.block();
     block
-        .parameters
-        .set_parameter(Parameter::Custom(CustomParameter::new(
+        .set_parameter_for_testing(Parameter::Custom(CustomParameter::new(
             consensus_metadata::handshake_meta_id(),
             iroha_primitives::json::Json::new(metadata),
         )))
@@ -1793,4 +1797,29 @@ pub(crate) fn configure_future_created_autoscale_route_for_test(
         "future-created autoscale fixture must be inactive before creation height"
     );
     (future_lane, future_dataspace)
+}
+
+/// Author the selected Ed25519/secp256k1 policy for initialized Torii fixtures.
+/// An already authored policy is preserved, including negative-test policies.
+/// Pristine-State readiness controls deliberately do not call this helper.
+#[cfg(test)]
+pub(crate) fn author_ready_fixture_crypto_policy(world: &mut iroha_core::state::World) {
+    use iroha_core::state::WorldReadOnly as _;
+    use iroha_crypto::Algorithm;
+    use iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1;
+    if world
+        .view()
+        .parameters()
+        .custom()
+        .contains_key(&CryptoAdmissionPolicyV1::parameter_id())
+    {
+        return;
+    }
+    let policy = CryptoAdmissionPolicyV1::new(vec![Algorithm::Ed25519, Algorithm::Secp256k1])
+        .expect("explicit Torii fixture signing policy");
+    let mut block = world.block();
+    block
+        .set_parameter_for_testing(policy.into_parameter().expect("canonical fixture policy"))
+        .expect("initialize fixture policy projection");
+    block.commit();
 }

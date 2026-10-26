@@ -19,7 +19,7 @@ use iroha_test_samples::{BOB_ID, CARPENTER_ID};
 
 #[test]
 fn intrinsic_body_rejection_keeps_only_pipeline_gas_transfer_under_the_original_entry() {
-    let _fee_guard = crate::status::nexus_fee_test_lock().lock().unwrap();
+    let _fee_guard = crate::status::operator_status_test_guard();
     for batch in [false, true] {
         crate::status::reset_nexus_economics_for_tests();
         let asset = AssetDefinitionId::parse_address_literal(
@@ -28,17 +28,28 @@ fn intrinsic_body_rejection_keeps_only_pipeline_gas_transfer_under_the_original_
         .expect("canonical network XOR fee asset");
         let state = fixture_with_fee_asset(65_536, None, Some(asset.clone()));
         {
-            let mut fees = state.nexus_snapshot().fees;
+            let mut fees = state
+                .world
+                .parameters
+                .view()
+                .get()
+                .root_fees()
+                .expect("explicit fixture root fee policy")
+                .clone();
             fees.base_fee = Quantity::zero();
             {
-                let mut parameters = state.world.parameters.block();
-                parameters
-                    .set_parameter(iroha_data_model::parameter::Parameter::Custom(
+                let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+                    .expect("fund original parameter Cell acquisition");
+                crate::state::set_parameter_cell_for_testing(
+                    &mut parameters,
+                    iroha_data_model::parameter::Parameter::Custom(
                         fees.clone()
                             .into_custom_parameter()
                             .expect("explicit fixture policy"),
-                    ))
-                    .expect("valid fixture monetary projection");
+                    ),
+                    state.world.sccp_committee_generations.allocation_budget(),
+                )
+                .expect("valid fixture monetary projection");
                 parameters.commit();
             }
         }
@@ -54,12 +65,15 @@ fn intrinsic_body_rejection_keeps_only_pipeline_gas_transfer_under_the_original_
             }],
         };
         {
-            let mut parameters = state.world.parameters.block();
+            let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+                .expect("fund original parameter Cell acquisition");
             for parameter in crate::pipeline_gas_policy::parameters_for_testing(gas) {
-                parameters
-                    .get_mut()
-                    .set_parameter(parameter)
-                    .expect("valid fixture parameters");
+                crate::state::set_parameter_cell_for_testing(
+                    &mut parameters,
+                    parameter,
+                    state.world.sccp_committee_generations.allocation_budget(),
+                )
+                .expect("valid fixture parameters");
             }
             parameters.commit();
         }
@@ -79,7 +93,8 @@ fn intrinsic_body_rejection_keeps_only_pipeline_gas_transfer_under_the_original_
             tx.apply();
             setup.commit_world_overlay_for_testing().unwrap();
         }
-        let mut parameters = state.world.parameters.block();
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+            .expect("fund original parameter Cell acquisition");
         let previous = parameters.get().block().fastpq_source();
         let mut intrinsic = previous.intrinsic;
         intrinsic.max_transcripts = 1;
@@ -91,10 +106,12 @@ fn intrinsic_body_rejection_keeps_only_pipeline_gas_transfer_under_the_original_
             1,
         )
         .unwrap();
-        parameters
-            .get_mut()
-            .set_parameter(Parameter::Block(BlockParameter::FastpqSource(profile)))
-            .expect("valid fixture parameters");
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            Parameter::Block(BlockParameter::FastpqSource(profile)),
+            state.world.sccp_committee_generations.allocation_budget(),
+        )
+        .expect("valid fixture parameters");
         parameters.commit();
 
         let marker: Name = "intrinsic_pipeline_body_rollback".parse().unwrap();
@@ -295,7 +312,7 @@ fn unchecked_whole_entry_statement_bytes(bundle: &[TransferTranscript]) -> usize
 
 #[test]
 fn transfer_mint_transfer_keeps_one_accounted_entry_before_d7_relation_activation() {
-    let _fee_guard = crate::status::nexus_fee_test_lock().lock().unwrap();
+    let _fee_guard = crate::status::operator_status_test_guard();
     for batch in [false, true] {
         crate::status::reset_nexus_economics_for_tests();
         let asset = AssetDefinitionId::parse_address_literal(
@@ -304,17 +321,28 @@ fn transfer_mint_transfer_keeps_one_accounted_entry_before_d7_relation_activatio
         .expect("canonical network XOR fee asset");
         let state = fixture_with_fee_asset(65_536, None, Some(asset.clone()));
         {
-            let mut fees = state.nexus_snapshot().fees;
+            let mut fees = state
+                .world
+                .parameters
+                .view()
+                .get()
+                .root_fees()
+                .expect("explicit fixture root fee policy")
+                .clone();
             fees.base_fee = Quantity::zero();
             {
-                let mut parameters = state.world.parameters.block();
-                parameters
-                    .set_parameter(iroha_data_model::parameter::Parameter::Custom(
+                let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+                    .expect("fund original parameter Cell acquisition");
+                crate::state::set_parameter_cell_for_testing(
+                    &mut parameters,
+                    iroha_data_model::parameter::Parameter::Custom(
                         fees.clone()
                             .into_custom_parameter()
                             .expect("explicit fixture policy"),
-                    ))
-                    .expect("valid fixture monetary projection");
+                    ),
+                    state.world.sccp_committee_generations.allocation_budget(),
+                )
+                .expect("valid fixture monetary projection");
                 parameters.commit();
             }
         }

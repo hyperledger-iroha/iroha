@@ -24,7 +24,7 @@ pub(in super::super::super::super) struct CaptureDispatcherCurrentRuntime {
     /// SHA-256 of `ssh-ed25519 <base64>` from the independently approved host key.
     #[arg(long)]
     expected_host_identity_sha256: String,
-    /// Required independently admitted MacStadium host pair, retained on the guest.
+    /// Required independently admitted `MacStadium` host pair, retained on the guest.
     #[arg(long)]
     host_pair: PathBuf,
     #[arg(long)]
@@ -345,11 +345,18 @@ fn capture_native_edge(
 
 impl CaptureDispatcherCurrentRuntime {
     /// Capture a private typed record; do not stop services or change selectors.
+    #[cfg_attr(
+        not(target_os = "linux"),
+        expect(
+            clippy::unused_self,
+            reason = "Linux custody uses the receiver; unsupported platforms preserve the same rejecting interface"
+        )
+    )]
     pub(in super::super::super::super) fn run<W: Write>(&self, output: &mut W) -> Result<()> {
         #[cfg(not(target_os = "linux"))]
         {
             let _ = output;
-            return Err(eyre!("dispatcher runtime capture requires Linux"));
+            Err(eyre!("dispatcher runtime capture requires Linux"))
         }
         #[cfg(target_os = "linux")]
         {

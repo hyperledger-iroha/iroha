@@ -67,7 +67,7 @@ pub struct NodeCapabilitiesResponse {
     pub data_model_version: u32,
     /// Norito schema hash for `SignedTransaction` submit payloads.
     pub signed_transaction_schema_hash_hex: String,
-    /// Cryptography capabilities (SM, default hashes, allow-lists)
+    /// Implementation capabilities, local generation defaults and committed signing policy
     pub crypto: NodeCryptoCapabilities,
     /// Query DSL and projection-index capabilities.
     pub query: NodeQueryCapabilities,
@@ -87,13 +87,13 @@ pub struct NodeCryptoCapabilities {
 #[derive(Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
 /// SM capability manifest exported by the node.
 pub struct NodeSmCapabilities {
-    /// Whether SM helpers are enabled in this node.
+    /// Whether this node contains the SM2 verification implementation; not chain admission.
     pub enabled: bool,
-    /// Default transaction hash algorithm.
+    /// Node-local generation hash preference; it does not select transaction hashing or admission.
     pub default_hash: String,
-    /// Admission allow-list for signing algorithms.
+    /// Exact committed ordinary signing policy, in canonical algorithm tag order.
     pub allowed_signing: Vec<String>,
-    /// Default SM2 distinguishing identifier.
+    /// Node-local SM2 generation DistID; the omitted IVM operand uses the fixed protocol constant.
     pub sm2_distid_default: String,
     /// Whether the OpenSSL/Tongsuo preview backend is toggled on.
     pub openssl_preview: bool,
@@ -352,6 +352,10 @@ pub struct RuntimeUpgradesListResponse {
     pub items: Vec<RuntimeUpgradeListItem>,
 }
 /// GET /v1/runtime/abi/active
+#[expect(
+    clippy::unused_async,
+    reason = "HTTP handlers retain a Future interface for route registration and shared async callers"
+)]
 pub async fn handle_runtime_abi_active(
     state: Arc<iroha_core::state::State>,
 ) -> Result<RuntimeAbiActiveResponse, crate::Error> {
@@ -361,18 +365,30 @@ pub async fn handle_runtime_abi_active(
     })
 }
 /// GET /v1/node/capabilities — advertise the fixed runtime ABI version and defaults
+#[expect(
+    clippy::unused_async,
+    reason = "HTTP handlers retain a Future interface for route registration and shared async callers"
+)]
 pub async fn handle_node_capabilities(
     state: Arc<iroha_core::state::State>,
 ) -> Result<NodeCapabilitiesResponse, crate::Error> {
     let world = state.world_view();
     let crypto_cfg = state.crypto();
-    let allowed_signing: Vec<String> = crypto_cfg
-        .allowed_signing
+    let policy = world
+        .transaction_admission_parameters()
+        .require_crypto_policy()
+        .map_err(|_| {
+            crate::Error::TransactionAdmissionDeferred(
+                ivm::error::ExecutionDeferral::CryptoAdmissionPolicyUnavailable.into(),
+            )
+        })?;
+    let allowed_signing: Vec<String> = policy
+        .allowed_algorithms()
         .iter()
         .map(|algo| algo.as_static_str().to_string())
         .collect();
     let latest_projection_checkpoint = state.query_projection_checkpoint_snapshot();
-    let curve_caps = summarize_curve_capabilities(&crypto_cfg);
+    let curve_caps = summarize_curve_capabilities(policy);
     #[cfg(feature = "sm")]
     let (neon_sm3, neon_sm4, policy_string) = {
         let advert = iroha_crypto::sm::acceleration_advert();
@@ -402,7 +418,9 @@ pub async fn handle_node_capabilities(
         signed_transaction_schema_hash_hex: signed_transaction_schema_hash_hex(),
         crypto: NodeCryptoCapabilities {
             sm: NodeSmCapabilities {
-                enabled: crypto_cfg.sm_helpers_enabled(),
+                enabled: iroha_crypto::Algorithm::Sm2
+                    .require_implementation(iroha_crypto::CryptoOperation::VerifySignature)
+                    .is_ok(),
                 default_hash: crypto_cfg.default_hash.clone(),
                 allowed_signing,
                 sm2_distid_default: crypto_cfg.sm2_distid_default.clone(),
@@ -459,6 +477,10 @@ pub async fn handle_node_capabilities(
     })
 }
 /// GET /v1/privacy/capabilities — return the canonical committed Exact12 manifest.
+#[expect(
+    clippy::unused_async,
+    reason = "HTTP handlers retain a Future interface for route registration and shared async callers"
+)]
 pub async fn handle_privacy_capabilities(
     state: Arc<iroha_core::state::State>,
 ) -> Result<iroha_data_model::privacy::PrivacyExact12CapabilityManifestV1, crate::Error> {
@@ -478,6 +500,10 @@ pub async fn handle_privacy_capabilities(
 }
 /// GET /v1/node/query/projection/checkpoint — return the latest persisted checkpoint descriptor.
 #[must_use]
+#[expect(
+    clippy::unused_async,
+    reason = "HTTP handlers retain a Future interface for route registration and shared async callers"
+)]
 pub async fn handle_node_query_projection_checkpoint(
     state: Arc<iroha_core::state::State>,
 ) -> Option<NodeProjectionCheckpointResponse> {
@@ -516,6 +542,10 @@ fn node_projection_checkpoint_response(
 }
 /// GET /v1/node/query/projection/catalog/{resource} — enumerate the canonical live shard set.
 #[cfg(feature = "app_api")]
+#[expect(
+    clippy::unused_async,
+    reason = "HTTP handlers retain a Future interface for route registration and shared async callers"
+)]
 pub async fn handle_node_query_projection_shard_catalog(
     state: Arc<iroha_core::state::State>,
     resource: String,
@@ -630,8 +660,12 @@ pub async fn handle_node_query_projection_shard_catalog(
         ))),
     }
 }
-/// GET /v1/node/query/projection/shards/{resource}/{partition_id} — export one canonical shard archive.
+/// GET /`v1/node/query/projection/shards/{resource}/{partition_id`} — export one canonical shard archive.
 #[cfg(feature = "app_api")]
+#[expect(
+    clippy::unused_async,
+    reason = "HTTP handlers retain a Future interface for route registration and shared async callers"
+)]
 pub async fn handle_node_query_projection_shard_export(
     state: Arc<iroha_core::state::State>,
     resource: String,
@@ -1171,7 +1205,7 @@ pub fn build_asset_holders_projection_shard_archive(
     > = BTreeMap::new();
     for asset in world.asset_entries_by_definition_iter(&definition_id) {
         let account_id = asset.id().account().clone();
-        let scope = asset.id().scope().clone();
+        let scope = *asset.id().scope();
         let entry = aggregated
             .entry((account_id, scope))
             .or_insert_with(iroha_primitives::numeric::Quantity::zero);
@@ -1244,8 +1278,7 @@ fn projection_export_conversion_error(message: impl Into<String>) -> crate::Erro
 fn validate_projection_partition_id(partition_id: u32) -> Result<(), crate::Error> {
     if partition_id >= QUERY_PROJECTION_DEFAULT_PARTITION_COUNT {
         return Err(projection_export_conversion_error(format!(
-            "partition_id must be less than {}",
-            QUERY_PROJECTION_DEFAULT_PARTITION_COUNT
+            "partition_id must be less than {QUERY_PROJECTION_DEFAULT_PARTITION_COUNT}"
         )));
     }
     Ok(())
@@ -1261,23 +1294,12 @@ fn signed_transaction_schema_hash_hex() -> String {
     hex::encode(norito::schema::identity::frame_hash::<SignedTransaction>())
 }
 fn summarize_curve_capabilities(
-    crypto: &iroha_config::parameters::actual::Crypto,
+    policy: &iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1,
 ) -> NodeCurveCapabilities {
-    let mut ids = crypto.allowed_curve_ids.clone();
-    if ids.is_empty() {
-        ids = iroha_config::parameters::defaults::crypto::derive_curve_ids_from_algorithms(
-            &crypto.allowed_signing,
-        );
-    }
-    if ids.is_empty() {
-        warn!(
-            target: "iroha_torii::runtime",
-            "allowed_curve_ids resolved to an empty list; defaulting to ed25519-only advert"
-        );
-        ids.push(CurveId::ED25519.as_u8());
-    }
-    ids.sort_unstable();
-    ids.dedup();
+    let ids = policy
+        .allowed_curves()
+        .map(CurveId::as_u8)
+        .collect::<Vec<_>>();
     let bitmap = curve_bitmap_from_ids(&ids);
     NodeCurveCapabilities {
         registry_version: CURVE_REGISTRY_VERSION,
@@ -1353,6 +1375,10 @@ mod bitmap_tests {
     }
 }
 /// GET /v1/runtime/metrics — expose runtime metrics summary
+#[expect(
+    clippy::unused_async,
+    reason = "HTTP handlers retain a Future interface for route registration and shared async callers"
+)]
 pub async fn handle_runtime_metrics(
     state: Arc<iroha_core::state::State>,
 ) -> Result<RuntimeMetricsResponse, crate::Error> {
@@ -1382,6 +1408,10 @@ pub async fn handle_runtime_metrics(
     })
 }
 /// GET /v1/runtime/abi/hash — return the canonical ABI hash for the node's active policy.
+#[expect(
+    clippy::unused_async,
+    reason = "HTTP handlers retain a Future interface for route registration and shared async callers"
+)]
 pub async fn handle_runtime_abi_hash(
     _state: Arc<iroha_core::state::State>,
 ) -> Result<RuntimeAbiHashResponse, crate::Error> {
@@ -1426,8 +1456,8 @@ pub struct TxInstr {
     pub wire_id: String,
     pub payload_hex: String,
 }
-fn instruction_box_to_tx_instr(boxed: iroha_data_model::isi::InstructionBox) -> TxInstr {
-    let (wire_id, framed) = iroha_data_model::isi::framed_instruction_payload(&boxed)
+fn instruction_box_to_tx_instr(boxed: &iroha_data_model::isi::InstructionBox) -> TxInstr {
+    let (wire_id, framed) = iroha_data_model::isi::framed_instruction_payload(boxed)
         .expect("instruction must have a canonical V1 wire identifier and Norito frame");
     TxInstr {
         wire_id: wire_id.to_owned(),
@@ -1441,6 +1471,10 @@ pub struct ProposeUpgradeResponse {
     pub tx_instructions: Vec<TxInstr>,
 }
 /// POST /v1/runtime/upgrades/propose
+#[expect(
+    clippy::unused_async,
+    reason = "HTTP handlers retain a Future interface for route registration and shared async callers"
+)]
 pub async fn handle_runtime_propose_upgrade(
     NoritoJson(ProposeUpgradeDto(manifest)): NoritoJson<ProposeUpgradeDto>,
 ) -> Result<ProposeUpgradeResponse, crate::Error> {
@@ -1453,7 +1487,7 @@ pub async fn handle_runtime_propose_upgrade(
     })?;
     let isi = iroha_data_model::isi::runtime_upgrade::ProposeRuntimeUpgrade { manifest_bytes };
     let boxed: iroha_data_model::isi::InstructionBox = isi.into();
-    let tx_instructions = vec![instruction_box_to_tx_instr(boxed)];
+    let tx_instructions = vec![instruction_box_to_tx_instr(&(boxed))];
     Ok(ProposeUpgradeResponse {
         ok: true,
         tx_instructions,
@@ -1502,7 +1536,7 @@ pub async fn handle_runtime_activate_upgrade(
         id: iroha_data_model::runtime::RuntimeUpgradeId(arr),
     };
     let boxed: iroha_data_model::isi::InstructionBox = isi.into();
-    let tx_instructions = vec![instruction_box_to_tx_instr(boxed)];
+    let tx_instructions = vec![instruction_box_to_tx_instr(&(boxed))];
     Ok(ActivateCancelResponse {
         ok: true,
         tx_instructions,
@@ -1536,7 +1570,7 @@ pub async fn handle_runtime_cancel_upgrade(
         id: iroha_data_model::runtime::RuntimeUpgradeId(arr),
     };
     let boxed: iroha_data_model::isi::InstructionBox = isi.into();
-    let tx_instructions = vec![instruction_box_to_tx_instr(boxed)];
+    let tx_instructions = vec![instruction_box_to_tx_instr(&(boxed))];
     Ok(ActivateCancelResponse {
         ok: true,
         tx_instructions,
@@ -1555,7 +1589,7 @@ mod tests {
                 id: iroha_data_model::runtime::RuntimeUpgradeId([0xA5; 32]),
             }
             .into();
-        let draft = instruction_box_to_tx_instr(boxed);
+        let draft = instruction_box_to_tx_instr(&(boxed));
 
         assert_eq!(draft.wire_id, "iroha.runtime_upgrade.cancel");
         let framed = hex::decode(&draft.payload_hex).expect("decode framed instruction hex");
@@ -1621,6 +1655,18 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let world = iroha_core::state::World::default();
+        {
+            let mut block = world.block();
+            let policy =
+                iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                    Algorithm::Ed25519,
+                ])
+                .unwrap();
+            block
+                .set_parameter_for_testing(policy.into_parameter().unwrap())
+                .unwrap();
+            block.commit();
+        }
         let state = State::new_for_testing(world, kura, query_handle);
         let resp = handle_node_capabilities(std::sync::Arc::new(state))
             .await
@@ -1633,6 +1679,11 @@ mod tests {
         assert_eq!(
             resp.data_model_version,
             iroha_data_model::DATA_MODEL_VERSION
+        );
+        assert_eq!(resp.crypto.sm.allowed_signing, vec!["ed25519".to_owned()]);
+        assert_eq!(
+            resp.crypto.curves.allowed_curve_ids,
+            vec![CurveId::ED25519.as_u8()]
         );
         assert_eq!(resp.signed_transaction_schema_hash_hex.len(), 32);
         assert_eq!(
@@ -1722,6 +1773,19 @@ mod tests {
         );
     }
     #[tokio::test]
+    async fn node_capabilities_without_initial_policy_is_local_readiness() {
+        let state = State::new_for_testing(
+            iroha_core::state::World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let error = handle_node_capabilities(Arc::new(state)).await.unwrap_err();
+        assert!(
+            matches!(error, crate::Error::TransactionAdmissionDeferred(original)
+            if original.reason() == ivm::error::ExecutionDeferral::CryptoAdmissionPolicyUnavailable)
+        );
+    }
+    #[tokio::test]
     async fn privacy_capabilities_are_built_from_one_committed_state_view() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
@@ -1780,7 +1844,7 @@ mod tests {
         assert_eq!(decoded, manifest);
         decoded.validate().expect("decoded manifest validates");
         let (parts, body) =
-            crate::utils::respond_with_format(manifest, crate::utils::ResponseFormat::Norito)
+            crate::utils::respond_with_format(&(manifest), crate::utils::ResponseFormat::Norito)
                 .into_parts();
         assert_eq!(
             parts
@@ -1800,7 +1864,8 @@ mod tests {
     async fn node_capabilities_reports_projection_checkpoint_snapshot_when_present() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let world = iroha_core::state::World::default();
+        let mut world = iroha_core::state::World::default();
+        crate::test_utils::author_ready_fixture_crypto_policy(&mut world);
         let state = State::new_for_testing(world, kura, query_handle);
         let expected_hash =
             iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(

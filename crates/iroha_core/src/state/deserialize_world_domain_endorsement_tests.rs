@@ -12,7 +12,7 @@ fn endorsement(
         version: DOMAIN_ENDORSEMENT_VERSION_V1,
         domain_id: domain.clone(),
         committee_id: "endorsement-snapshot-test".to_owned(),
-        statement_hash: Hash::new(&[marker]),
+        statement_hash: Hash::new([marker]),
         issued_at_height: accepted_at_height,
         expires_at_height: accepted_at_height + 10,
         scope: DomainEndorsementScope::default(),
@@ -185,7 +185,7 @@ fn malformed_current_endorsement_indexes_fail_restore() {
                         vec![
                             hashes[0],
                             hashes[1],
-                            HashOf::from_untyped_unchecked(Hash::new(&[0x55_u8])),
+                            HashOf::from_untyped_unchecked(Hash::new([0x55_u8])),
                         ],
                     );
                 }

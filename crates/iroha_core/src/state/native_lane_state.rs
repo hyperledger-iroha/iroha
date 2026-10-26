@@ -43,10 +43,10 @@ impl StateBlock<'_> {
 
     /// Reject any mutation after witness extraction while retaining the original overlay.
     pub(super) fn verify_sumeragi_lane_state_seal(&self) -> Result<(), String> {
-        if let Some(seal) = self.sumeragi_lane_state_seal {
-            if self.sumeragi_lane_state_commitment()?.state_hash() != seal {
-                return Err("global lane state changed after witness capture".into());
-            }
+        if let Some(seal) = self.sumeragi_lane_state_seal
+            && self.sumeragi_lane_state_commitment()?.state_hash() != seal
+        {
+            return Err("global lane state changed after witness capture".into());
         }
         Ok(())
     }
@@ -78,7 +78,7 @@ impl StateBlock<'_> {
 /// Validate a complete actual lane state at an authenticated current or predecessor cut.
 /// This verifies structure and pinned credentials; the caller must independently authenticate
 /// the global state root. No queue-plan, Decision or receipt-driven lifecycle is accepted.
-pub(crate) fn validate_sumeragi_lane_state(
+pub fn validate_sumeragi_lane_state(
     network: iroha_data_model::NetworkId,
     height: u64,
     state: &iroha_data_model::sumeragi_lanes::SumeragiLaneState,
@@ -125,7 +125,7 @@ pub(crate) fn validate_sumeragi_lane_state(
         {
             return Err("invalid lane incarnation or lifecycle bounds".into());
         }
-        if !iroha_data_model::block::consensus::is_valid_committee_size(lane.committee.len())
+        if !iroha_model_base::topology::is_valid_committee_size(lane.committee.len())
             || lane
                 .committee
                 .windows(2)

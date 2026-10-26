@@ -5,7 +5,7 @@ use iroha::client::Client;
 use iroha_crypto::Hash;
 use norito::json::Value;
 /// Parse one canonical governance selector V1 for Clap.
-pub(crate) fn parse_governance_selector_v1(input: &str) -> Result<String, String> {
+pub fn parse_governance_selector_v1(input: &str) -> Result<String, String> {
     if iroha::data_model::governance::is_valid_governance_selector_v1(input) {
         return Ok(input.to_owned());
     }
@@ -15,7 +15,7 @@ pub(crate) fn parse_governance_selector_v1(input: &str) -> Result<String, String
     ))
 }
 /// Parse one canonical lowercase 32-byte governance proposal identifier for Clap.
-pub(crate) fn parse_governance_proposal_id_v1(input: &str) -> Result<String, String> {
+pub fn parse_governance_proposal_id_v1(input: &str) -> Result<String, String> {
     if input.len() == 64
         && input
             .bytes()

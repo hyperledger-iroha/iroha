@@ -3,7 +3,7 @@
 fn assert_actual_sha_cyclic_boundaries_v1(
     segment: usize,
     rows: &[ZkX509ShaBatchRowV1; 7],
-    binding: ZkX509CredentialPreAuxBindingV1,
+    binding: &ZkX509CredentialPreAuxBindingV1,
     terminal: u8,
     ca_calls: &[ZkX509ShaCallBoundaryTerminalV1; ZK_X509_SHA_CA_CALL_COUNT_V1],
 ) {
@@ -205,7 +205,7 @@ fn sha_physical_padding_wrap_has_zero_residues_and_rejects_nonzero_cells() {
                 .count(),
             24
         );
-        let terminal = segment as u8;
+        let terminal = u8::try_from(segment).expect("protocol-bounded index fits u8");
         let boundaries = neutral_ca_call_boundaries();
         let evaluate = |current: &ZkX509ShaBatchRowV1| {
             evaluate_zk_x509_sha_batch_residues_v1(

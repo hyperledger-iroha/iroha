@@ -729,10 +729,8 @@ impl<'a> CanonicalHistorySource<'a> {
                         invalid("native successor omits Iroha parent hash".into())
                     })?;
             }
-            if source_height <= selected_last {
-                if visit(receipt)?.is_break() {
-                    return Ok(false);
-                }
+            if source_height <= selected_last && visit(receipt)?.is_break() {
+                return Ok(false);
             }
             if source_height == target {
                 return Ok(true);

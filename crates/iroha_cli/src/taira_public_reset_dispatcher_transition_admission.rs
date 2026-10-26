@@ -67,36 +67,6 @@ fn protected_validator_config_name(path: &str, release: &str) -> Result<&'static
     Ok(name)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn dispatcher_transition_binds_beacon_config_to_exact_selected_release() {
-        let release = format!("/srv/taira/taira-validator-1/releases/{}", "a".repeat(40));
-        for name in ["config.toml", "beacon.toml"] {
-            assert_eq!(
-                protected_validator_config_name(&format!("{release}/config/{name}"), &release)
-                    .unwrap(),
-                name
-            );
-        }
-        for path in [
-            format!("{release}/config/foreign.toml"),
-            format!("{release}/config/../config/beacon.toml"),
-            format!("{release}/beacon.toml"),
-            format!("{release}-other/config/beacon.toml"),
-            "/srv/taira/taira-validator-2/current/config/beacon.toml".to_owned(),
-            "/private/runtime/taira-public-reset/beacon.toml".to_owned(),
-        ] {
-            assert!(
-                protected_validator_config_name(&path, &release).is_err(),
-                "{path}"
-            );
-        }
-    }
-}
-
 pub(super) fn validate_plan(plan: &Plan) -> Result<()> {
     need(plan.schema == SCHEMA, "exact transition schema required")?;
     validate_lower_hex("operation ID", &plan.operation_id, 32)?;
@@ -488,7 +458,7 @@ fn validate_sealed_boundary(
         "predecessor lease has not expired",
     )?;
     qualification::names(
-        &terminal,
+        terminal,
         "schema qualification_scope deployment_id inventory_sha256 authorization_sha256 authorization_nonce status phase next_step recovery_intent touched_validators edge_touched edge_rollback_complete rollback_next_validator failure_summary rollback_failures",
     )?;
     let _: super::super::super::executor_model::JournalV1 = json::from_value(terminal.clone())?;
@@ -520,7 +490,7 @@ fn validate_sealed_boundary(
         ("phase", expected_phase),
     ] {
         need(
-            text(&terminal, name)? == expected,
+            text(terminal, name)? == expected,
             "completed predecessor receipt differs",
         )?;
     }
@@ -773,4 +743,34 @@ pub(super) fn derive_guard(plan: &Plan, index: usize, bytes: &[u8]) -> Result<Ve
         .dispatcher_sha256
         .clone_from(&plan.candidate.executable.sha256);
     Ok(json::to_vec(&guard)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dispatcher_transition_binds_beacon_config_to_exact_selected_release() {
+        let release = format!("/srv/taira/taira-validator-1/releases/{}", "a".repeat(40));
+        for name in ["config.toml", "beacon.toml"] {
+            assert_eq!(
+                protected_validator_config_name(&format!("{release}/config/{name}"), &release)
+                    .unwrap(),
+                name
+            );
+        }
+        for path in [
+            format!("{release}/config/foreign.toml"),
+            format!("{release}/config/../config/beacon.toml"),
+            format!("{release}/beacon.toml"),
+            format!("{release}-other/config/beacon.toml"),
+            "/srv/taira/taira-validator-2/current/config/beacon.toml".to_owned(),
+            "/private/runtime/taira-public-reset/beacon.toml".to_owned(),
+        ] {
+            assert!(
+                protected_validator_config_name(&path, &release).is_err(),
+                "{path}"
+            );
+        }
+    }
 }

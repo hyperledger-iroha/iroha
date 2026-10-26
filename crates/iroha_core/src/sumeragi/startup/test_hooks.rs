@@ -8,7 +8,7 @@ use iroha_allocation::AllocationBudget;
 use std::cell::RefCell;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Phase {
+pub enum Phase {
     Validation,
     LaneProof,
     ResultPreimage,
@@ -18,7 +18,7 @@ type Hook = Box<dyn FnOnce(&AllocationBudget, Option<&mut CapturedExecWitness>)>
 thread_local! {
     static HOOK: RefCell<Option<(Phase, Hook)>> = const { RefCell::new(None) };
 }
-pub(crate) struct Guard;
+pub struct Guard;
 impl Drop for Guard {
     fn drop(&mut self) {
         HOOK.with(|hook| {
@@ -26,7 +26,7 @@ impl Drop for Guard {
         });
     }
 }
-pub(crate) fn install(
+pub fn install(
     phase: Phase,
     hook: impl FnOnce(&AllocationBudget, Option<&mut CapturedExecWitness>) + 'static,
 ) -> Guard {
@@ -39,11 +39,7 @@ pub(crate) fn install(
     });
     Guard
 }
-pub(crate) fn run(
-    phase: Phase,
-    budget: &AllocationBudget,
-    witness: Option<&mut CapturedExecWitness>,
-) {
+pub fn run(phase: Phase, budget: &AllocationBudget, witness: Option<&mut CapturedExecWitness>) {
     let original = HOOK.with(|slot| {
         let mut slot = slot.borrow_mut();
         if slot

@@ -128,7 +128,7 @@ fn measure_fastpq_source_bundle_inputs<'a>(
 
 /// Validate complete archive shape and input caps without allocating output frames.
 #[cfg(test)]
-pub(crate) fn preflight_fastpq_source_transcripts(
+pub fn preflight_fastpq_source_transcripts(
     transcripts: &BTreeMap<Hash, Vec<TransferTranscript>>,
     limits: FastpqSourceStatementBuildLimits,
 ) -> Result<usize, String> {
@@ -136,9 +136,9 @@ pub(crate) fn preflight_fastpq_source_transcripts(
 }
 
 mod budget;
-pub(crate) use budget::FastpqSourceTranscriptUsage;
+pub use budget::FastpqSourceTranscriptUsage;
 #[cfg(test)]
-pub(crate) use budget::measure_fastpq_source_statement_usage;
+pub use budget::measure_fastpq_source_statement_usage;
 
 #[cfg(test)]
 fn source_statement_public_limits(
@@ -173,7 +173,7 @@ fn source_statement_public_limits(
 #[cfg(test)]
 mod transfer_diagnostic;
 #[cfg(test)]
-pub(crate) use transfer_diagnostic::{
+pub use transfer_diagnostic::{
     TransferArchiveDiagnostic, TransferEntryDiagnostic, prepare_transfer_archive_diagnostic,
 };
 

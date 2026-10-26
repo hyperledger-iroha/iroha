@@ -726,7 +726,7 @@ fn prebuilt_privacy_storage_config_with_governance_dir(
         provider_id: Some(iroha_data_model::sorafs::capacity::ProviderId::new(
             [0x91; 32],
         )),
-        data_dir: data_dir.clone(),
+        data_dir,
         ..Default::default()
     };
     let governance_signer = PrebuiltGovernanceDagSigner::new();
@@ -786,11 +786,12 @@ fn prebuilt_privacy_storage_config_with_governance_dir(
     sorafs_node::config::StorageConfig::from(&storage)
 }
 fn prebuilt_governance_storage_config(data_dir: PathBuf) -> sorafs_node::config::StorageConfig {
+    let governance_dir = data_dir.join("governance");
     let governance_signer = PrebuiltGovernanceDagSigner::new();
     sorafs_node::config::StorageConfig::builder()
         .enabled(true)
-        .data_dir(data_dir.clone())
-        .governance_dir(Some(data_dir.join("governance")))
+        .data_dir(data_dir)
+        .governance_dir(Some(governance_dir))
         .governance_dag_publisher_peer_id(Some(
             String::from_utf8(PREBUILT_GOVERNANCE_SIGNER_PEER_ID.to_vec())
                 .expect("Governance DAG peer id is UTF-8"),
@@ -1614,6 +1615,10 @@ fn bind_asset_alias_for_test(
     height: u64,
     creation_time_ms: u64,
 ) {
+    use iroha_executor_data_model::permission::asset_definition::{
+        AssetDefinitionAliasPermissionScope, CanManageAssetDefinitionAlias,
+    };
+
     let header = BlockHeader::new(
         NonZeroU64::new(height).expect("non-zero height"),
         None,
@@ -1623,9 +1628,7 @@ fn bind_asset_alias_for_test(
     );
     let mut block = app.state.block(header);
     let mut tx = block.transaction();
-    use iroha_executor_data_model::permission::asset_definition::{
-        AssetDefinitionAliasPermissionScope, CanManageAssetDefinitionAlias,
-    };
+
     let resolved = iroha_data_model::asset::ResolvedAssetDefinitionAliasV1::resolve_catalog(
         alias.as_ref(),
         &app.state.nexus_snapshot().dataspace_catalog,
@@ -1700,7 +1703,7 @@ fn sample_iso_bridge_config(alias: &str, account_id: &AccountId) -> actual::IsoB
 }
 #[test]
 fn iso_lifecycle_persistence_error_is_retryable_without_rejection() {
-    let app = mk_app_state_for_tests_with_iso_bridge(Some(sample_iso_bridge_config(
+    let app = mk_app_state_for_tests_with_iso_bridge(Some(&sample_iso_bridge_config(
         "DE89370400440532013000",
         &ALICE_ID,
     )));
@@ -2278,7 +2281,10 @@ fn configure_recipient_lookup_sbp_dataspace_for_test(
     let state = Arc::get_mut(&mut app_state.state).expect("unique state");
     crate::tests_runtime_handlers::assert_initial_nexus_catalog_for_test(state, &nexus);
     let state_view = app_state.state.view();
-    app_state.queue.reconfigure_nexus(&nexus, &state_view, None);
+    app_state
+        .queue
+        .reconfigure_nexus(&nexus, &state_view, None)
+        .expect("original State pool admits Queue privacy projection");
 }
 fn onboarding_alias_test_world(authority: &AccountId, domain_owner: &AccountId) -> World {
     let mut accounts = vec![Account::new(authority.clone()).build(authority)];
@@ -2419,7 +2425,7 @@ fn onboarding_fee_sponsor_enrollment_permission(program_id: &FeeSponsorProgramId
         program_id: program_id.clone(),
     })
 }
-fn register_fee_sponsor_program_for_test(app: &SharedAppState, program_id: FeeSponsorProgramId) {
+fn register_fee_sponsor_program_for_test(app: &SharedAppState, program_id: &FeeSponsorProgramId) {
     let height = next_block_height(app);
     let header = BlockHeader::new(NonZeroU64::new(height).expect("height>0"), None, None, 0, 0);
     let mut block = app.state.block(header);

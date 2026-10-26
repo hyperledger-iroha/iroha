@@ -200,16 +200,16 @@ impl Roots {
         Self::new_with_optional_time_source(None)
     }
 
-    fn new_with_time_source(time_source: iroha_primitives::time::TimeSource) -> Self {
+    fn new_with_time_source(time_source: &iroha_primitives::time::TimeSource) -> Self {
         Self::new_with_optional_time_source(Some(time_source))
     }
 
     fn new_with_optional_time_source(
-        time_source: Option<iroha_primitives::time::TimeSource>,
+        time_source: Option<&iroha_primitives::time::TimeSource>,
     ) -> Self {
         let start = |config| {
             let prepared = CertifiedTestChain::prepare(config).unwrap();
-            if let Some(source) = &time_source {
+            if let Some(source) = time_source {
                 CertifiedTestChain::from_prepared_with_time_source(prepared, source.clone())
             } else {
                 CertifiedTestChain::from_prepared(prepared)
@@ -1032,7 +1032,7 @@ fn native_amx_enrolled_receiver_records_certified_no_without_monetary_or_mainten
     use iroha_data_model::validation_fee::RetailFeeAccountStateV1;
     let (local_clock, time_source) =
         iroha_primitives::time::TimeSource::new_mock(std::time::Duration::from_millis(3_000));
-    let mut roots = Roots::new_with_time_source(time_source);
+    let mut roots = Roots::new_with_time_source(&time_source);
     let transaction = roots.transaction(100, 0x77);
     let begin = roots.begin(&transaction);
     let enrolled = account(&receiver());
@@ -1134,7 +1134,7 @@ fn native_amx_global_source_requires_signed_parent_real_h2_and_exact_instance() 
                 + result
                     .as_ref()
                     .ok()
-                    .and_then(|owner| owner.allocation_bytes())
+                    .and_then(super::retained::RetainedGlobalSource::allocation_bytes)
                     .unwrap_or(0),
             "completed scratch retires while the returned context retains its exact original graph charge"
         );
@@ -1618,7 +1618,7 @@ fn native_amx_caught_completed_failure_cannot_publish_partial_world_effects() {
         .begin_execution_effect_budget(&signed_payload)
         .unwrap();
     attempt
-        .admit_authored_execution_effects(std::slice::from_ref(&write))
+        .admit_authored_execution_effects(std::slice::from_ref(&write).iter())
         .unwrap();
     write.execute(&account(&signer), &mut attempt).unwrap();
     // Exercise the local failure-owner contract after a real staged effect. This unit control

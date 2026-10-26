@@ -1627,12 +1627,14 @@ fn hold_query_fanout_memory_reservation_in_response_body(
     mut response: Response,
     reservation: QueryFanoutMemoryReservation,
 ) -> Response {
+    use http_body_util::BodyExt as _;
+
     if reservation.admission.is_some() {
         return response_memory_custody::hold(response, reservation);
     }
     // Native proof producers already attach their original physical memory token to
     // EncodedBody-owned Bytes. Body-only custody never promotes those tokens to query admission.
-    use http_body_util::BodyExt as _;
+
     response.extensions_mut().insert(reservation.clone());
     let (parts, body) = response.into_parts();
     let guarded_body = body.map_frame(move |frame| {
@@ -1774,14 +1776,16 @@ impl SingularRoutedQueryErrors {
                     norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
                 match utils::encode_norito_bounded(&error, envelope.final_body_bytes) {
                     Ok(bytes) => signed_query_fanout_response_from_norito_bytes(bytes),
-                    Err(error) => return bounded_signed_query_fanout_encode_error_response(error),
+                    Err(error) => {
+                        return bounded_signed_query_fanout_encode_error_response(&(error));
+                    }
                 }
             }
             ResponseFormat::Json => {
                 match utils::encode_json_bounded(&error, envelope.final_body_bytes) {
                     Ok(json) => signed_query_fanout_response_from_json(json),
                     Err(error) => {
-                        return bounded_signed_query_fanout_json_encode_error_response(error);
+                        return bounded_signed_query_fanout_json_encode_error_response(&(error));
                     }
                 }
             }

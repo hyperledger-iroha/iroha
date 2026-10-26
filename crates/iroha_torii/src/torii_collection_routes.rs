@@ -100,8 +100,7 @@ fn list_query_from_query_string(query: Option<&str>) -> Result<ListQuery, Error>
             "invalid_query",
             "query",
             format!(
-                "query strings must not exceed {} bytes; use POST …/query for large filters",
-                COLLECTION_QUERY_MAX_RAW_BYTES
+                "query strings must not exceed {COLLECTION_QUERY_MAX_RAW_BYTES} bytes; use POST …/query for large filters"
             ),
         )
         .into());

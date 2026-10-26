@@ -150,7 +150,7 @@ impl HistoryProducerOwner {
     }
     /// Capture the admitted producer before moving the request into a physical worker.
     pub(crate) fn from_admission(admission: &QueryAdmissionPermit) -> Result<Self, Error> {
-        Self::from_reservation(admission._fanout_memory.as_ref().ok_or_else(capacity)?)
+        Self::from_reservation(admission.fanout_memory.as_ref().ok_or_else(capacity)?)
     }
 
     /// A present outer capability may never disappear into a fresh, wider finality
@@ -807,25 +807,29 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::used_underscore_binding,
+        reason = "The test inspects the original reservation retained solely for its custody and drop lifetime."
+    )]
     fn finality_rejects_missing_or_replaced_present_outer_admission() {
         let inherited = owner(48_000_000);
         let foreign = owner(48_000_000);
         let query = Arc::new(tokio::sync::Semaphore::new(1));
         let mut admission = QueryAdmissionPermit {
             _query: Arc::clone(&query).try_acquire_owned().unwrap(),
-            _heavy: None,
-            _body: None,
-            _fanout_memory: None,
+            heavy: None,
+            body: None,
+            fanout_memory: None,
         };
         inherited.physical_scope(|| {
             assert!(HistoryProducerOwner::validate_finality_inheritance(&admission).is_err());
-            admission._fanout_memory = Some(foreign._reservation.clone());
+            admission.fanout_memory = Some(foreign._reservation.clone());
             assert!(HistoryProducerOwner::validate_finality_inheritance(&admission).is_err());
-            admission._fanout_memory = Some(inherited._reservation.clone());
+            admission.fanout_memory = Some(inherited._reservation.clone());
             HistoryProducerOwner::validate_finality_inheritance(&admission).unwrap();
             assert_eq!(
                 admission
-                    ._fanout_memory
+                    .fanout_memory
                     .as_ref()
                     .unwrap()
                     .admission
@@ -837,6 +841,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::used_underscore_binding,
+        reason = "The test inspects the original reservation retained solely for its custody and drop lifetime."
+    )]
     fn native_history_refuses_response_only_and_foreign_generation_tokens() {
         let permit = Arc::new(tokio::sync::Semaphore::new(1))
             .try_acquire_owned()
@@ -912,9 +920,9 @@ mod tests {
         let query = Arc::new(tokio::sync::Semaphore::new(1));
         let admission = QueryAdmissionPermit {
             _query: query.try_acquire_owned().unwrap(),
-            _heavy: None,
-            _body: None,
-            _fanout_memory: Some(reservation),
+            heavy: None,
+            body: None,
+            fanout_memory: Some(reservation),
         };
         let (started, entered) = tokio::sync::oneshot::channel();
         let (release, held) = std::sync::mpsc::channel();

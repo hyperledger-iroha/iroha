@@ -15,7 +15,7 @@ use iroha_data_model::{
 };
 use std::num::NonZeroU64;
 
-impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
+impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     pub(super) fn controlled_lock_key(
         vm: &IVM,
         pointer: u64,
@@ -69,12 +69,18 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                 let amount = Self::decode_quantity(vm, words[4])?;
                 // The network is the actual admitted ledger domain, never a guest value
                 // or a default chain label. Use the same derivation as native settlement.
-                let network = self.network_id.as_ref().ok_or(ivm::VMError::PermissionDenied)?;
+                let network = self
+                    .network_id
+                    .as_ref()
+                    .ok_or(ivm::VMError::PermissionDenied)?;
                 let custody = crate::smartcontracts::isi::escrow::escrow_custody_account_id(
-                    network, &escrow_id, &asset_definition,
+                    network,
+                    &escrow_id,
+                    &asset_definition,
                 );
                 custody_return = Some(Self::encode_tlv_payload(
-                    PointerType::AccountId, &Self::encode_norito_payload(&custody)?,
+                    PointerType::AccountId,
+                    &Self::encode_norito_payload(&custody)?,
                 )?);
                 InstructionBox::from(OpenControlledAssetLockV1 {
                     source,
@@ -130,13 +136,15 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         };
         if let Some(encoded_custody) = custody_return {
             self.ensure_instruction_queue_allowed(&instruction)?;
-            let instruction_gas = crate::gas::meter_instruction(&instruction, &self.confidential_gas)
-                .map_err(ivm::VMError::VerificationDeferred)?;
+            let instruction_gas =
+                crate::gas::meter_instruction(&instruction, &self.confidential_gas)
+                    .map_err(ivm::VMError::VerificationDeferred)?;
             let output_gas = u64::try_from(encoded_custody.len())
                 .map_err(|_| ivm::VMError::GasCostOverflow)?
                 .checked_mul(ivm::gas::SYSCALL_GAS_PER_BYTE)
                 .ok_or(ivm::VMError::GasCostOverflow)?;
-            let gas = instruction_gas.checked_add(output_gas)
+            let gas = instruction_gas
+                .checked_add(output_gas)
                 .ok_or(ivm::VMError::GasCostOverflow)?;
             // Complete gas, VM allocation, and retained-effect capacity checks before
             // allocating a return or publishing any queue entry or result register.
@@ -182,7 +190,8 @@ mod tests {
         let mut host = CoreHost::new(caller);
         host.set_network_id(
             "hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-                .parse().unwrap(),
+                .parse()
+                .unwrap(),
         );
         host.set_contract_runtime_context(Some(ContractRuntimeExecutionContext {
             contract_subject: controller.subject_id(),
@@ -230,12 +239,17 @@ mod tests {
             .as_any()
             .downcast_ref::<OpenControlledAssetLockV1>()
             .unwrap();
-        let returned = CoreHost::decode_tlv_typed::<AccountId>(
-            &vm, vm.register(10), PointerType::AccountId,
-        ).unwrap();
-        assert_eq!(returned, crate::smartcontracts::isi::escrow::escrow_custody_account_id(
-            host.network_id.as_ref().unwrap(), &opening.lock.escrow_id, &asset,
-        ));
+        let returned =
+            CoreHost::decode_tlv_typed::<AccountId>(&vm, vm.register(10), PointerType::AccountId)
+                .unwrap();
+        assert_eq!(
+            returned,
+            crate::smartcontracts::isi::escrow::escrow_custody_account_id(
+                host.network_id.as_ref().unwrap(),
+                &opening.lock.escrow_id,
+                &asset,
+            )
+        );
         assert_ne!(returned, opening.source);
         assert_ne!(returned, opening.lock.destination);
         assert_ne!(returned, opening.control.controller.subject_id());
@@ -344,7 +358,7 @@ mod tests {
 
     #[test]
     fn compiled_calls_preserve_all_typed_arguments_and_reject_negative_deadlines() {
-        let source = r#"
+        let source = r"
 seiyaku ControlledLock {
     kotoage fn lock(
         bytes key, AccountId source, AccountId destination,
@@ -359,7 +373,7 @@ seiyaku ControlledLock {
         ledger::asset_lock::cancel(key, expected_remaining: remaining);
         ledger::asset_lock::expire(key);
     }
-}"#;
+}";
         let program = kotodama_lang::compiler::Compiler::new()
             .compile_source(source)
             .expect("compile typed native lock calls");
@@ -455,7 +469,7 @@ seiyaku ControlledLock {
         }
     }
 
-    const CUSTODY_SOURCE: &str = r#"seiyaku CustodyReturn {
+    const CUSTODY_SOURCE: &str = r"seiyaku CustodyReturn {
     kotoage fn open(
         bytes key, AccountId source, AccountId destination,
         AssetDefinitionId asset, quantity amount
@@ -467,7 +481,7 @@ seiyaku ControlledLock {
         );
         custody
     }
-}"#;
+}";
 
     fn asset_for(name: &str) -> AssetDefinitionId {
         AssetDefinitionId::derive_from_components(
@@ -598,9 +612,13 @@ seiyaku ControlledLock {
         let mut host = host();
         let mut vm = opening_vm(&asset_for("ds"), b"lock");
         let next = vm.alloc_input_tlv(&[]).unwrap() - ivm::Memory::INPUT_START;
-        vm.alloc_input_tlv(&vec![0; (ivm::Memory::INPUT_SIZE - next) as usize])
-            .unwrap();
-        let heap_before = (vm.alloc_heap(0).unwrap() - ivm::Memory::HEAP_START);
+        vm.alloc_input_tlv(&vec![
+            0;
+            usize::try_from(ivm::Memory::INPUT_SIZE - next)
+                .expect("remaining input fits usize")
+        ])
+        .unwrap();
+        let heap_before = vm.alloc_heap(0).unwrap() - ivm::Memory::HEAP_START;
         vm.memory.set_heap_limit(heap_before).unwrap();
         let argument_table = vm.register(10);
         assert!(matches!(
@@ -608,7 +626,10 @@ seiyaku ControlledLock {
             Err(ivm::VMError::OutOfMemory)
         ));
         assert_eq!(vm.register(10), argument_table);
-        assert_eq!((vm.alloc_heap(0).unwrap() - ivm::Memory::HEAP_START), heap_before);
+        assert_eq!(
+            (vm.alloc_heap(0).unwrap() - ivm::Memory::HEAP_START),
+            heap_before
+        );
         assert!(host.queued.is_empty());
         assert_eq!(host.instruction_queue_count, 0);
         assert_eq!(host.instruction_queue_encoded_bytes, 0);
@@ -626,14 +647,17 @@ seiyaku ControlledLock {
         let mut vm = opening_vm(&asset_for("ds"), b"lock");
         let argument_table = vm.register(10);
         let input_before = vm.alloc_input_tlv(&[]).unwrap();
-        let heap_before = (vm.alloc_heap(0).unwrap() - ivm::Memory::HEAP_START);
+        let heap_before = vm.alloc_heap(0).unwrap() - ivm::Memory::HEAP_START;
         assert!(
             host.syscall(ivm::syscalls::SYSCALL_ASSET_LOCK_OPEN, &mut vm)
                 .is_err()
         );
         assert!(host.queued.is_empty());
         assert_eq!(vm.register(10), argument_table);
-        assert_eq!((vm.alloc_heap(0).unwrap() - ivm::Memory::HEAP_START), heap_before);
+        assert_eq!(
+            (vm.alloc_heap(0).unwrap() - ivm::Memory::HEAP_START),
+            heap_before
+        );
         assert_eq!(vm.alloc_input_tlv(&[]).unwrap(), input_before);
     }
 

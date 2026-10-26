@@ -6,6 +6,8 @@ impl State {
     /// An identical complete authority retains the original State handles and generation,
     /// including during the post-replay Queue handoff. Only an actual source change begins
     /// a publication; refused sources leave the certified World cut unchanged.
+    /// The returned owner is the exact installed privacy graph, shared with Queue
+    /// without a second allocation, including the unchanged-authority handoff.
     ///
     /// # Errors
     /// Rejects status-only registries, altered source bodies or digests,
@@ -15,38 +17,49 @@ impl State {
         manifests: &LaneManifestRegistryHandle,
         catalog: &LaneCatalog,
         governance: &iroha_config::parameters::actual::GovernanceCatalog,
-    ) -> Result<(), LaneLifecycleError> {
-        let mut publication_notice = self.state_view_publication();
-        let mut releases = LaneLifecycleReleases::new(self);
-        let mut state_write_release = self.state_write_lock.defer_notifications();
-        let _state_write_lock = state_write_release.lock();
-        let candidate_bytes = manifests
-            .canonical_materialized_authority_preimage(catalog, governance)
-            .map_err(runtime_catalog_invalid)?;
-        manifests
-            .validate_active_coverage_for_catalog(catalog)
-            .map_err(|error| LaneLifecycleError::ManifestPolicyUnavailable {
-                lane: error.lane,
-                reason: error.message(),
-            })?;
-        {
-            let current = releases.manifests.read();
-            if current
+    ) -> Result<LanePrivacyRegistry, LaneLifecycleError> {
+        let pool = self.ivm_execution_budget();
+        // This scope outlives every physical publication guard on all exits.
+        pool.with_deferred_refund_notifications(|_| {
+            let mut publication_notice = self.state_view_publication();
+            let mut releases = LaneLifecycleReleases::new(self);
+            let mut state_write_release = self.state_write_lock.defer_notifications();
+            let _state_write_lock = state_write_release.lock();
+            let candidate_bytes = manifests
                 .canonical_materialized_authority_preimage(catalog, governance)
-                .is_ok_and(|current_bytes| current_bytes == candidate_bytes)
+                .map_err(runtime_catalog_invalid)?;
+            manifests
+                .validate_active_coverage_for_catalog(catalog)
+                .map_err(|error| LaneLifecycleError::ManifestPolicyUnavailable {
+                    lane: error.lane,
+                    reason: error.message(),
+                })?;
             {
-                return Ok(());
+                let current = releases.manifests.read();
+                if current
+                    .canonical_materialized_authority_preimage(catalog, governance)
+                    .is_ok_and(|current_bytes| current_bytes == candidate_bytes)
+                {
+                    let installed = releases.privacy.read().clone();
+                    if !installed.belongs_to(&pool) {
+                        return Err(LaneLifecycleError::ParameterDeferred(
+                            ivm::error::ExecutionDeferral::LocalInvariantViolation.into(),
+                        ));
+                    }
+                    return Ok(installed);
+                }
             }
-        }
-        let privacy = Arc::new(LanePrivacyRegistry::from_manifest_registry(manifests));
-        let publication = publication_notice.begin();
-        self.install_prepared_lane_manifests_in_publication(
-            Arc::clone(manifests),
-            privacy,
-            &publication,
-            &mut releases,
-        );
-        Ok(())
+            let privacy = LanePrivacyRegistry::try_from_manifest_registry(manifests, &pool)
+                .map_err(LaneLifecycleError::ParameterDeferred)?;
+            let publication = publication_notice.begin();
+            Self::install_prepared_lane_manifests_in_publication(
+                Arc::clone(manifests),
+                privacy.clone(),
+                &publication,
+                &mut releases,
+            );
+            Ok(privacy)
+        })
     }
 
     /// Accept a semantic-preserving refresh without replacing installed State authority.
@@ -58,27 +71,34 @@ impl State {
     pub(crate) fn install_lane_manifests_if_consensus_compatible(
         &self,
         manifests: &LaneManifestRegistryHandle,
-    ) -> bool {
+    ) -> Result<LanePrivacyRegistry, LaneLifecycleError> {
+        let pool = self.ivm_execution_budget();
         let mut releases = LaneLifecycleReleases::new(self);
         let mut state_write_release = self.state_write_lock.defer_notifications();
         let _state_write_lock = state_write_release.lock();
         let nexus = self
             .canonical_runtime
             .view()
-            .nexus_projection(&releases.nexus.read())
-            .expect("persisted canonical runtime must be valid");
-        let Ok(candidate_bytes) = manifests
+            .nexus_projection(&releases.nexus.read())?;
+        let candidate_bytes = manifests
             .canonical_materialized_authority_preimage(&nexus.lane_catalog, &nexus.governance)
-        else {
-            return false;
-        };
+            .map_err(runtime_catalog_invalid)?;
         let current = releases.manifests.read();
-        let Ok(current_bytes) = current
+        let current_bytes = current
             .canonical_materialized_authority_preimage(&nexus.lane_catalog, &nexus.governance)
-        else {
-            return false;
-        };
-        current_bytes == candidate_bytes
+            .map_err(runtime_catalog_invalid)?;
+        if current_bytes != candidate_bytes {
+            return Err(runtime_catalog_invalid(
+                "refreshed manifest changes installed authority",
+            ));
+        }
+        let installed = releases.privacy.read().clone();
+        if !installed.belongs_to(&pool) {
+            return Err(LaneLifecycleError::ParameterDeferred(
+                ivm::error::ExecutionDeferral::LocalInvariantViolation.into(),
+            ));
+        }
+        Ok(installed)
     }
 
     /// Derive effective dataspaces from the configured baseline and protected committed catalog.
@@ -181,23 +201,21 @@ fn materialized_lane_manifests(
                     "configured manifest baseline differs from committed catalog authority",
                 ));
             }
-            baseline
-                .with_runtime_additions(
-                    &runtime.manifests,
-                    &nexus.lane_catalog,
-                    &nexus.dataspace_catalog,
-                    &nexus.governance,
-                )
-                .map_err(runtime_catalog_invalid)?
-        }
-        None => baseline
-            .with_runtime_additions(
-                &[],
+            runtime_catalog_manifest_registry(
+                baseline.as_ref(),
+                &runtime.manifests,
                 &nexus.lane_catalog,
                 &nexus.dataspace_catalog,
                 &nexus.governance,
-            )
-            .map_err(runtime_catalog_invalid)?,
+            )?
+        }
+        None => runtime_catalog_manifest_registry(
+            baseline.as_ref(),
+            &[],
+            &nexus.lane_catalog,
+            &nexus.dataspace_catalog,
+            &nexus.governance,
+        )?,
     };
     registry
         .validate_active_coverage_for_catalog(&nexus.lane_catalog)

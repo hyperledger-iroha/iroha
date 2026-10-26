@@ -42,7 +42,7 @@ impl Run for PlanCommand {
             Self::Prepare(args) => args.run(context),
             Self::List(args) => crate::collection_list::run_list(
                 context,
-                iroha::collections::Collection::SubscriptionPlans,
+                &iroha::collections::Collection::SubscriptionPlans,
                 &args,
             ),
         }
@@ -104,7 +104,7 @@ impl Run for SubscriptionCommand {
             Self::List(args) => {
                 return crate::collection_list::run_list(
                     context,
-                    iroha::collections::Collection::Subscriptions,
+                    &iroha::collections::Collection::Subscriptions,
                     &args,
                 );
             }

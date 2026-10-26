@@ -123,17 +123,16 @@ impl RecordRead {
             self.file = Some(open_named_record(&archive.directory, &self.name)?);
         }
         let file = self.file.as_mut().expect("selected original descriptor");
-        let length = match self.length {
-            Some(length) => length,
-            None => {
-                let length = usize::try_from(file.metadata()?.len()).map_err(|_| {
-                    NativeContextArchiveError::Source("record length exceeds address space")
-                })?;
-                // Pin even a refused finite length. Reconfiguration cannot rebind the original
-                // descriptor or bless an in-place rewrite with a different allocation geometry.
-                self.length = Some(length);
-                length
-            }
+        let length = if let Some(length) = self.length {
+            length
+        } else {
+            let length = usize::try_from(file.metadata()?.len()).map_err(|_| {
+                NativeContextArchiveError::Source("record length exceeds address space")
+            })?;
+            // Pin even a refused finite length. Reconfiguration cannot rebind the original
+            // descriptor or bless an in-place rewrite with a different allocation geometry.
+            self.length = Some(length);
+            length
         };
         if length == 0 || length > archive.maximum.get() {
             return Err(NativeContextArchiveError::Limit {

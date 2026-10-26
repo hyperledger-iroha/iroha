@@ -83,9 +83,7 @@ fn io_constructor_returned_tables_clear_on_caller_success_and_unwind() {
                 assert_eq!(sorted.len(), 158);
                 validate_execution_topology_v1(&declarations, &execution).unwrap();
                 validate_sorted_v1(&declarations, &sorted).unwrap();
-                if unwind {
-                    panic!("injected after base table construction");
-                }
+                assert!(!unwind, "injected after base table construction");
                 drop((execution, sorted));
             })
         });
@@ -118,9 +116,10 @@ fn io_permutation_and_complete_owner_clear_on_success_failure_and_unwind() {
                 } else {
                     trace.validate(tests::challenges()).unwrap();
                 }
-                if mode == 2 {
-                    panic!("injected after complete private trace construction");
-                }
+                assert!(
+                    mode != 2,
+                    "injected after complete private trace construction"
+                );
                 drop(trace);
             })
         });

@@ -105,7 +105,7 @@ struct AccountHistorySseState<F> {
     terminal: bool,
 }
 
-/// GET /v1/accounts/{account_id}/history/sse – live account-history movements.
+/// GET /`v1/accounts/{account_id}/history/sse` – live account-history movements.
 ///
 /// The stream follows the canonical successors of the committed State visible at
 /// admission, waking on State publication like the Explorer streams. Every
@@ -214,19 +214,16 @@ where
                                 state,
                             ));
                         }
-                        let owner = match (state.acquire)() {
-                            Ok(owner) => owner,
-                            Err(_) => {
-                                state.terminal = true;
-                                return Some((
-                                    Ok(stream_error_event(
-                                        "stream_history_capacity",
-                                        "Account history is temporarily beyond local capacity; reconnect to retry.",
-                                        None,
-                                    )),
-                                    state,
-                                ));
-                            }
+                        let owner = if let Ok(owner) = (state.acquire)() { owner } else {
+                            state.terminal = true;
+                            return Some((
+                                Ok(stream_error_event(
+                                    "stream_history_capacity",
+                                    "Account history is temporarily beyond local capacity; reconnect to retry.",
+                                    None,
+                                )),
+                                state,
+                            ));
                         };
                         let current = state.authorization.visibility().clone();
                         let request = Arc::clone(&state.request);
@@ -378,7 +375,7 @@ mod tests {
                 .sign(self.keys.private_key());
             crate::test_utils::commit_native_accepted_inputs(
                 &mut self.chain,
-                vec![AcceptedTransaction::new_unchecked(std::borrow::Cow::Owned(
+                &[AcceptedTransaction::new_unchecked(std::borrow::Cow::Owned(
                     signed,
                 ))],
             );

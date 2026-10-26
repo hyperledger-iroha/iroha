@@ -1,5 +1,9 @@
 // MCP dispatch, route, governance, and argument regressions.
 
+type CanonicalArgumentExtractor = fn(&Map) -> Result<String, String>;
+type CapturedCollectionRequest = (Method, String, Vec<u8>);
+type CapturedCollectionRequests = std::sync::Arc<std::sync::Mutex<Vec<CapturedCollectionRequest>>>;
+
 #[test]
 fn explorer_history_mcp_query_projection_accepts_only_cursor_contract_fields() {
     let flat = norito::json!({
@@ -1899,7 +1903,7 @@ fn extract_subscription_id_argument_requires_canonical_path_field() {
 }
 #[test]
 fn canonical_entity_path_arguments_reject_retired_flat_aliases() {
-    let cases: [(Value, fn(&Map) -> Result<String, String>); 6] = [
+    let cases: [(Value, CanonicalArgumentExtractor); 6] = [
         (
             norito::json!({ "account_id": TEST_ACCOUNT_I105 }),
             extract_account_id_argument,
@@ -2143,7 +2147,7 @@ fn governance_entity_arguments_require_exact_canonical_paths() {
 }
 #[test]
 fn canonical_message_and_ticket_paths_reject_retired_aliases() {
-    let cases: [(Value, fn(&Map) -> Result<String, String>); 6] = [
+    let cases: [(Value, CanonicalArgumentExtractor); 6] = [
         (
             norito::json!({ "msg_id": "msg-001" }),
             extract_iso20022_message_id_argument,
@@ -2930,7 +2934,7 @@ fn collection_tools_advertise_the_shared_collection_query_controls() {
 /// Router capturing each dispatched request's method, path with query and body.
 fn install_collection_request_capturing_router(
     app: &mut SharedAppState,
-    requests: std::sync::Arc<std::sync::Mutex<Vec<(Method, String, Vec<u8>)>>>,
+    requests: CapturedCollectionRequests,
 ) -> McpDispatchRouterOwner {
     let router: axum::Router =
         axum::Router::new().fallback_service(tower::service_fn(move |request: Request<Body>| {

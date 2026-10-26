@@ -207,6 +207,7 @@ fn signed_cancellation_updates_order_and_shared_nonce() {
     let buyer = keypair(0x31);
     let authority = account(&buyer);
     let state = state_with_accounts(&[&buyer]);
+    seed_component_crypto_policy(&state);
     let mut block = state.block(block_header());
     let mut stx = block.transaction_for_callback_testing();
     let policy_digest = activate_policy(&mut stx, &authority);

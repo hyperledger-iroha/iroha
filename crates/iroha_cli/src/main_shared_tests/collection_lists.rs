@@ -2,6 +2,7 @@
 
 use super::*;
 use iroha::collections::{Collection, ListQuery, SortKey, field};
+use std::fmt::Write as _;
 
 #[derive(Debug, Default)]
 struct CollectionTransport {
@@ -82,7 +83,7 @@ impl RunContext for ListContext {
         self.println_data(data)
     }
     fn println_data(&mut self, data: impl std::fmt::Display) -> Result<()> {
-        self.stdout.push_str(&format!("{data}\n"));
+        let _ = writeln!(self.stdout, "{data}");
         Ok(())
     }
     fn client_from_config(&self) -> Result<Client> {
@@ -138,7 +139,6 @@ fn run_list_command(output: OutputSelection, pages: Vec<(u16, &str)>, argv: &[&s
             )
         })
         .collect();
-    let requests = requests;
     ListRun {
         result,
         stdout: context.stdout,

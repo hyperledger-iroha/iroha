@@ -178,7 +178,7 @@ use iroha_crypto::{
 };
 use iroha_data_model::{
     Level, NetworkId,
-    account::{AccountId, curve::CurveId},
+    account::AccountId,
     asset::{AssetDefinitionAlias, prelude::AssetDefinitionId},
     block::BlockHeader,
     compute::{
@@ -200,7 +200,6 @@ use iroha_data_model::{
         FeeSponsorProgramId, LaneCatalog, LaneConfig, LaneSchedulerPolicy,
         LaneSettlementBufferPolicy, LaneStorageProfile, LaneVisibility, UniversalAccountId,
     },
-    peer::Peer,
     privacy::{PrivacyIssuerIdV1, PrivacyPolicyIdV1},
     role::RoleId,
     sorafs::{
@@ -211,8 +210,7 @@ use iroha_data_model::{
     },
     taikai::TaikaiAvailabilityClass,
 };
-use iroha_model_base::chain::ChainId;
-use iroha_model_base::name::Name;
+use iroha_model_base::{chain::ChainId, name::Name, peer::Peer};
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId, topology::ShardId};
 fn resolve_private_key_source(
     inline: Option<WithOrigin<PrivateKey>>,
@@ -565,22 +563,6 @@ impl json::JsonDeserialize for PerProviderSubmittersConfig {
         Ok(Self(inner))
     }
 }
-/// Wrapper around a list of curve identifiers allowing env parsing.
-#[derive(Debug, Clone, Default)]
-pub struct CurveIdListConfig(pub Vec<u8>);
-impl CurveIdListConfig {
-    fn into_vec(self) -> Vec<u8> {
-        self.0
-    }
-    fn default_allowed() -> Self {
-        Self(defaults::crypto::allowed_curve_ids())
-    }
-}
-impl From<Vec<u8>> for CurveIdListConfig {
-    fn from(value: Vec<u8>) -> Self {
-        CurveIdListConfig(value)
-    }
-}
 /// Intrinsic dispatch policy for SM acceleration (`auto`/`force-enable`/`force-disable`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SmIntrinsicsPolicyConfig {
@@ -658,34 +640,6 @@ mod sm_intrinsics_policy_config_tests {
                 "noncanonical policy {value:?} must be rejected"
             );
         }
-    }
-}
-impl From<CurveIdListConfig> for Vec<u8> {
-    fn from(value: CurveIdListConfig) -> Self {
-        value.into_vec()
-    }
-}
-impl json::JsonDeserialize for CurveIdListConfig {
-    fn json_deserialize(
-        parser: &mut json::Parser<'_>,
-    ) -> ::core::result::Result<Self, json::Error> {
-        let list = Vec::<u8>::json_deserialize(parser)?;
-        Ok(CurveIdListConfig(list))
-    }
-}
-impl FromEnvStr for CurveIdListConfig {
-    type Error = core::num::ParseIntError;
-    fn from_env_str(value: Cow<'_, str>) -> std::result::Result<Self, Self::Error> {
-        let mut list = Vec::new();
-        for entry in value.split(',') {
-            let trimmed = entry.trim();
-            if trimmed.is_empty() {
-                continue;
-            }
-            let parsed = trimmed.parse::<u8>()?;
-            list.push(parsed);
-        }
-        Ok(CurveIdListConfig(list))
     }
 }
 /// Hex-encoded byte vector helper used for capability vectors.
@@ -9037,98 +8991,29 @@ pub struct Crypto {
         default = "defaults::crypto::DEFAULT_HASH.to_owned()"
     )]
     pub default_hash: String,
-    /// Signing algorithms allowed for transaction admission (string list).
-    #[config(
-        env = "CRYPTO_ALLOWED_SIGNING",
-        default = "AlgorithmListConfig::from(defaults::crypto::allowed_signing_env())"
-    )]
-    pub allowed_signing: AlgorithmListConfig,
-    /// Default distinguishing identifier applied for SM2 signatures when callers omit one.
+    /// Local SM2 generation default; the IVM omitted operand uses its fixed protocol constant.
     #[config(
         env = "CRYPTO_SM2_DISTID_DEFAULT",
         default = "defaults::crypto::SM2_DISTID_DEFAULT.to_owned()"
     )]
     pub sm2_distid_default: String,
-    /// Curve capability overrides (optional).
-    #[config(nested)]
-    pub curves: CryptoCurves,
-}
-/// Curve capability configuration (user view).
-#[derive(Debug, ReadConfig, Clone)]
-pub struct CryptoCurves {
-    /// Allowed curve identifiers per the account curve registry.
-    #[config(
-        env = "CRYPTO_CURVES_ALLOWED_IDS",
-        default = "CurveIdListConfig::default_allowed()"
-    )]
-    pub allowed_curve_ids: CurveIdListConfig,
 }
 impl Crypto {
     /// Convert this user configuration into the runtime representation.
     #[allow(clippy::too_many_lines)]
     pub fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::Crypto {
-        let mut allowed = Vec::new();
-        for (idx, value) in self.allowed_signing.into_vec().into_iter().enumerate() {
-            match Algorithm::from_str(value.trim()) {
-                Ok(algo) => allowed.push(algo),
-                Err(_) => emitter.emit(Report::new(ParseError::InvalidCryptoConfig).attach(
-                    format!("allowed_signing[{idx}] is not a supported algorithm: {value}"),
-                )),
-            }
-        }
-        if allowed.is_empty() {
-            emitter.emit(ParseError::InvalidCryptoConfig.into());
-            allowed = defaults::crypto::allowed_signing();
-        }
-        if !allowed.contains(&iroha_crypto::Algorithm::Ed25519) {
-            emitter.emit(
-                Report::new(ParseError::InvalidCryptoConfig)
-                    .attach("allowed_signing must include ed25519 for control-plane operations"),
-            );
-            allowed.push(iroha_crypto::Algorithm::Ed25519);
-        }
-        allowed.sort();
-        allowed.dedup();
-        let has_sm2 = allowed
-            .iter()
-            .any(|algo| algo.as_static_str().eq_ignore_ascii_case("sm2"));
-        if has_sm2 && !cfg!(feature = "sm") {
-            emitter.emit(
-                Report::new(ParseError::InvalidCryptoConfig)
-                    .attach("allowed_signing includes `sm2`, but this build lacks SM support"),
-            );
-        }
         let default_hash = if self.default_hash.trim().is_empty() {
             emitter.emit(ParseError::InvalidCryptoConfig.into());
             defaults::crypto::default_hash()
         } else {
             self.default_hash
         };
-        if has_sm2 {
-            if !default_hash.eq_ignore_ascii_case("sm3-256") {
-                emitter.emit(
-                    Report::new(ParseError::InvalidCryptoConfig)
-                        .attach("allowed_signing includes `sm2`, default_hash must be `sm3-256`"),
-                );
-            }
-        } else if default_hash.eq_ignore_ascii_case("sm3-256") {
-            emitter.emit(
-                Report::new(ParseError::InvalidCryptoConfig)
-                    .attach("default_hash `sm3-256` requires allowed_signing to include `sm2`"),
-            );
-        }
         let sm2_distid_default = if self.sm2_distid_default.trim().is_empty() {
             emitter.emit(ParseError::InvalidCryptoConfig.into());
             defaults::crypto::sm2_distid_default()
         } else {
             self.sm2_distid_default
         };
-        if has_sm2 && sm2_distid_default.trim().is_empty() {
-            emitter.emit(
-                Report::new(ParseError::InvalidCryptoConfig)
-                    .attach("sm2_distid_default must be non-empty when `sm2` signing is enabled"),
-            );
-        }
         #[allow(clippy::let_and_return)]
         let enable_sm_openssl_preview = if self.enable_sm_openssl_preview {
             if cfg!(feature = "sm-ffi-openssl") {
@@ -9143,37 +9028,6 @@ impl Crypto {
         } else {
             false
         };
-        let mut allowed_curve_ids = self.curves.allowed_curve_ids.into_vec();
-        if allowed_curve_ids.is_empty() {
-            allowed_curve_ids = defaults::crypto::derive_curve_ids_from_algorithms(&allowed);
-        }
-        if allowed_curve_ids.is_empty() {
-            emitter.emit(
-                Report::new(ParseError::InvalidCryptoConfig)
-                    .attach("crypto.curves.allowed_curve_ids resolved to an empty set; include ed25519 (curve id 0x01)"),
-            );
-            allowed_curve_ids = defaults::crypto::allowed_curve_ids();
-        }
-        allowed_curve_ids.sort_unstable();
-        allowed_curve_ids.dedup();
-        for id in &allowed_curve_ids {
-            match CurveId::try_from(*id) {
-                Ok(curve) => {
-                    let algo = curve.algorithm();
-                    if !allowed.contains(&algo) {
-                        emitter.emit(Report::new(ParseError::InvalidCryptoConfig).attach(format!(
-                            "crypto.curves.allowed_curve_ids includes {id:#04X} ({}) \
-                                     but allowed_signing omits the matching algorithm",
-                            algo.as_static_str()
-                        )));
-                    }
-                }
-                Err(err) => emitter
-                    .emit(Report::new(ParseError::InvalidCryptoConfig).attach(format!(
-                    "crypto.curves.allowed_curve_ids contains unknown identifier {id:#04X}: {err}"
-                ))),
-            }
-        }
         let sm_intrinsics = self.sm_intrinsics;
         if matches!(sm_intrinsics, SmIntrinsicsPolicyConfig::ForceEnable) && !cfg!(feature = "sm") {
             emitter.emit(Report::new(ParseError::InvalidCryptoConfig).attach(
@@ -9184,9 +9038,7 @@ impl Crypto {
             enable_sm_openssl_preview,
             sm_intrinsics: sm_intrinsics.into(),
             default_hash,
-            allowed_signing: allowed,
             sm2_distid_default,
-            allowed_curve_ids,
         }
     }
 }
@@ -9651,8 +9503,9 @@ impl From<LaneValidatorModeConfig> for actual::LaneValidatorMode {
         }
     }
 }
-/// User-level configuration container for public-lane staking.
-#[derive(Debug, Clone, ReadConfig, norito::JsonDeserialize)]
+/// Validator modes and capacity; monetary terms come from committed State.
+#[derive(Debug, Clone, Copy, ReadConfig, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub struct NexusStaking {
     /// Validator activation policy for public lanes.
     #[config(default = "LaneValidatorModeConfig::StakeElected")]
@@ -9660,46 +9513,14 @@ pub struct NexusStaking {
     /// Validator activation policy for restricted/permissioned lanes.
     #[config(default = "LaneValidatorModeConfig::AdminManaged")]
     pub restricted_validator_mode: LaneValidatorModeConfig,
-    /// Minimum bonded stake required to register a validator.
-    #[config(default = "defaults::nexus::staking::min_validator_stake()")]
-    pub min_validator_stake: Quantity,
     /// Maximum number of validators allowed per lane.
     #[config(default = "defaults::nexus::staking::MAX_VALIDATORS")]
     pub max_validators: NonZeroU32,
-    /// Maximum number of stake-share rows retained for one validator.
-    #[config(default = "defaults::nexus::staking::MAX_STAKE_SHARES_PER_VALIDATOR")]
-    pub max_stake_shares_per_validator: NonZeroU32,
-    /// Maximum number of pending unbond requests retained in one stake share.
-    #[config(default = "defaults::nexus::staking::MAX_PENDING_UNBONDS_PER_SHARE")]
-    pub max_pending_unbonds_per_share: NonZeroU32,
-    /// Minimum delay between scheduling and finalising an unbond (milliseconds).
-    #[config(default = "defaults::nexus::staking::UNBONDING_DELAY.into()")]
-    pub unbonding_delay_ms: DurationMs,
-    /// Maximum slash ratio allowed (basis points, `10_000` = 100%).
-    #[config(default = "defaults::nexus::staking::MAX_SLASH_BPS")]
-    pub max_slash_bps: u16,
-    /// Asset definition used for staking bonds (string form).
-    #[config(default = "defaults::nexus::staking::stake_asset_id()")]
-    pub stake_asset_id: String,
-    /// Escrow account that custodies bonded stake (string form).
-    #[config(default = "defaults::nexus::staking::stake_escrow_account_id()")]
-    pub stake_escrow_account_id: String,
-    /// Account that receives slashed stake (string form).
-    #[config(default = "defaults::nexus::staking::slash_sink_account_id()")]
-    pub slash_sink_account_id: String,
 }
 impl_default!(NexusStaking {
     public_validator_mode: LaneValidatorModeConfig::StakeElected,
     restricted_validator_mode: LaneValidatorModeConfig::AdminManaged,
-    min_validator_stake: defaults::nexus::staking::min_validator_stake(),
     max_validators: defaults::nexus::staking::MAX_VALIDATORS,
-    max_stake_shares_per_validator: defaults::nexus::staking::MAX_STAKE_SHARES_PER_VALIDATOR,
-    max_pending_unbonds_per_share: defaults::nexus::staking::MAX_PENDING_UNBONDS_PER_SHARE,
-    unbonding_delay_ms: defaults::nexus::staking::UNBONDING_DELAY.into(),
-    max_slash_bps: defaults::nexus::staking::MAX_SLASH_BPS,
-    stake_asset_id: defaults::nexus::staking::stake_asset_id(),
-    stake_escrow_account_id: defaults::nexus::staking::stake_escrow_account_id(),
-    slash_sink_account_id: defaults::nexus::staking::slash_sink_account_id(),
 });
 impl NexusStaking {
     fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::NexusStaking> {
@@ -9713,44 +9534,10 @@ impl NexusStaking {
             )));
             return None;
         }
-        let reward_recipient_cap = iroha_data_model::validation_fee_rewards::MAX_REWARD_RECIPIENTS;
-        if self.max_stake_shares_per_validator.get() as usize > reward_recipient_cap {
-            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
-                "nexus.staking.max_stake_shares_per_validator must be <= {reward_recipient_cap} to fit one historical reward exposure (found {})",
-                self.max_stake_shares_per_validator
-            )));
-            return None;
-        }
-        if self.max_slash_bps > 10_000 {
-            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
-                "nexus.staking.max_slash_bps must be <= 10000 (found {})",
-                self.max_slash_bps
-            )));
-            return None;
-        }
-        let stake_asset_id = match validate_asset_definition_selector_literal(&self.stake_asset_id)
-        {
-            Ok(value) => value,
-            Err(err) => {
-                emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
-                    "invalid nexus.staking.stake_asset_id `{}`: {err}",
-                    self.stake_asset_id
-                )));
-                return None;
-            }
-        };
         Some(actual::NexusStaking {
             public_validator_mode: self.public_validator_mode.into(),
             restricted_validator_mode: self.restricted_validator_mode.into(),
-            min_validator_stake: self.min_validator_stake,
             max_validators: self.max_validators,
-            max_stake_shares_per_validator: self.max_stake_shares_per_validator,
-            max_pending_unbonds_per_share: self.max_pending_unbonds_per_share,
-            unbonding_delay: self.unbonding_delay_ms.get(),
-            max_slash_bps: self.max_slash_bps,
-            stake_asset_id,
-            stake_escrow_account_id: self.stake_escrow_account_id,
-            slash_sink_account_id: self.slash_sink_account_id,
         })
     }
 }

@@ -42,7 +42,7 @@ fn policy_slot_registration(
             state.attempt.id,
             sequence,
             ParliamentBody::PolicyJury,
-            snapshot.to_vec(),
+            snapshot,
             3,
             request_height,
             pulse_height,
@@ -171,7 +171,7 @@ fn generation_slot_is_above_the_delay_and_every_earlier_generation_slot() {
         .record_hidden_sortition_capacity_failure_batch(
             id,
             policy_slot_registration(&state, 0, &single, 5, 9, session),
-            single,
+            &(single),
         )
         .expect("record sub-floor capacity evidence on slot 9");
     assert!(state.used_pulse_slots.is_empty());
@@ -197,7 +197,7 @@ fn generation_slot_is_above_the_delay_and_every_earlier_generation_slot() {
         .register_sortition_request_batch(
             id,
             policy_slot_registration(&state, 1, &adequate, 6, 19, session),
-            adequate,
+            &(adequate),
         )
         .expect("register the retry on the next boundary");
     assert_eq!(
@@ -214,7 +214,7 @@ fn generation_slot_is_above_the_delay_and_every_earlier_generation_slot() {
         .record_hidden_sortition_capacity_failure_batch(
             saturated_id,
             policy_slot_registration(&saturated, 0, &top, top_slot - 1, top_slot, session),
-            top,
+            &(top),
         )
         .expect("record evidence on the last expressible native slot");
     assert_eq!(
@@ -234,7 +234,7 @@ fn capacity_retry_in_the_same_epoch_window_targets_the_next_boundary() {
         .record_hidden_sortition_capacity_failure_batch(
             id,
             policy_slot_registration(&state, 0, &single, 5, 9, session),
-            single,
+            &(single),
         )
         .expect("record sub-floor capacity evidence on slot 9");
     state.validate().expect("capacity evidence persists");
@@ -261,7 +261,7 @@ fn capacity_retry_in_the_same_epoch_window_targets_the_next_boundary() {
             rejected.register_sortition_request_batch(
                 id,
                 policy_slot_registration(&state, 1, &adequate, 6, claim, session),
-                adequate.clone(),
+                &adequate,
             ),
             Err(ParliamentReducerErrorV1::InvalidSortitionPulseSchedule),
             "{reason}"
@@ -276,7 +276,7 @@ fn capacity_retry_in_the_same_epoch_window_targets_the_next_boundary() {
         .register_sortition_request_batch(
             id,
             policy_slot_registration(&state, 1, &adequate, 6, 19, session),
-            adequate,
+            &(adequate),
         )
         .expect("the retry on the next boundary is accepted");
     let retry = state
@@ -347,7 +347,7 @@ fn no_roster_retry_after_a_consumed_slot_targets_a_later_boundary() {
         old_rule.register_sortition_request_batch(
             id,
             policy_slot_registration(&state, 1, &retry_candidates, 10, 14, session),
-            retry_candidates.clone(),
+            &retry_candidates,
         ),
         Err(ParliamentReducerErrorV1::InvalidSortitionPulseSchedule),
         "request height plus delay is not a native pulse height"
@@ -357,7 +357,7 @@ fn no_roster_retry_after_a_consumed_slot_targets_a_later_boundary() {
         .register_sortition_request_batch(
             id,
             policy_slot_registration(&state, 1, &retry_candidates, 10, 19, session),
-            retry_candidates,
+            &(retry_candidates),
         )
         .expect("the retry targets the later boundary");
     state
@@ -375,7 +375,7 @@ fn persistence_rechecks_every_generation_slot_from_frozen_fields() {
         .record_hidden_sortition_capacity_failure_batch(
             id,
             policy_slot_registration(&state, 0, &single, 5, 9, session),
-            single,
+            &(single),
         )
         .expect("record sub-floor capacity evidence on slot 9");
     let adequate = candidates(220, 3);
@@ -383,7 +383,7 @@ fn persistence_rechecks_every_generation_slot_from_frozen_fields() {
         .register_sortition_request_batch(
             id,
             policy_slot_registration(&state, 1, &adequate, 6, 19, session),
-            adequate,
+            &(adequate),
         )
         .expect("register the retry on slot 19");
     state.validate().expect("the exact schedule persists");
@@ -464,7 +464,7 @@ fn persistence_rechecks_every_generation_slot_from_frozen_fields() {
         .record_hidden_sortition_capacity_failure_batch(
             id,
             policy_slot_registration(&short_epoch, 0, &single, 5, 8, session),
-            single,
+            &(single),
         )
         .expect("record sub-floor capacity evidence on slot 8");
     let adequate = candidates(220, 3);
@@ -472,7 +472,7 @@ fn persistence_rechecks_every_generation_slot_from_frozen_fields() {
         .register_sortition_request_batch(
             id,
             policy_slot_registration(&short_epoch, 1, &adequate, 6, 11, session),
-            adequate,
+            &(adequate),
         )
         .expect("register the retry on slot 11");
     short_epoch
@@ -513,7 +513,7 @@ fn persistence_requires_one_request_height_per_generation_slot() {
         "the fixture delay and epoch length place the generation on slot 20"
     );
     state
-        .register_sortition_request_batch(id, registrations, snapshot)
+        .register_sortition_request_batch(id, registrations, &(snapshot))
         .expect("register the two-body generation on slot 20");
     state.validate().expect("the shared generation persists");
 

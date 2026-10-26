@@ -1223,7 +1223,7 @@ fn indexing_response(indexed: usize, tip: usize) -> Response {
     });
     let mut response = crate::utils::respond_with_status_and_format(
         StatusCode::SERVICE_UNAVAILABLE,
-        envelope,
+        &envelope,
         crate::utils::ResponseFormat::Json,
     );
     let headers = response.headers_mut();

@@ -1496,8 +1496,7 @@ fn decode_orchard_request_v1(
                 value,
                 rho,
                 random_seed,
-                leaf_position,
-                path,
+                (leaf_position, &path),
                 anchor_bytes,
             )
             .map_err(|_| PrivacyWalletBundleErrorV1::at("orchard-spend"))
@@ -1549,7 +1548,7 @@ fn decode_orchard_request_v1(
                 internal_scope,
                 diversifier_index,
                 value,
-                memo,
+                &memo,
             )
             .map_err(|_| PrivacyWalletBundleErrorV1::at("orchard-change"))
         })
@@ -1888,7 +1887,7 @@ fn decode_ivm_request_v1(
                 note,
                 spending_secret,
                 leaf_position,
-                authentication_path,
+                &authentication_path,
             )
             .map_err(|_| PrivacyWalletBundleErrorV1::at("ivm-input"))
         })
@@ -2039,7 +2038,7 @@ fn decode_pq_masp_request_v1(
                 )?,
                 "pq-masp-authentication-path",
             )?;
-            PqMaspInputWitnessV1::new(note, nullifier_secret, leaf_position, authentication_path)
+            PqMaspInputWitnessV1::new(note, nullifier_secret, leaf_position, &authentication_path)
                 .map_err(|_| PrivacyWalletBundleErrorV1::at("pq-masp-input"))
         })
         .collect::<Result<Vec<_>, _>>()?;

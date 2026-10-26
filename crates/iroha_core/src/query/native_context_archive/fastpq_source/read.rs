@@ -22,14 +22,18 @@ use decode::{FundedRecord, SourceDestination};
 
 /// Explicit operation bounds. These never change native validity or certified coverage.
 #[derive(Clone, Copy)]
-pub(crate) struct SourceReadLimits {
+#[expect(
+    clippy::struct_field_names,
+    reason = "Each max_ field is an explicit resource ceiling, distinct from observed work and current usage"
+)]
+pub struct SourceReadLimits {
     pub(crate) max_entries: u32,
     pub(crate) max_statements: u32,
     pub(crate) max_effects_per_statement: usize,
 }
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum SourceReadError {
+pub enum SourceReadError {
     #[error(transparent)]
     Archive(#[from] NativeContextArchiveError),
     #[error(transparent)]
@@ -60,13 +64,17 @@ pub(crate) enum SourceReadError {
 
 /// Freshly verified original facts. This never pretends to restore the previous
 /// execution's allocation custody and cannot be constructed by a wire decoder.
-pub(crate) struct AuthenticatedRecoveredFastpqSource {
+pub struct AuthenticatedRecoveredFastpqSource {
     native: AuthenticatedExecutionBlock,
     contents: SourceContents,
     pool: AllocationBudget,
 }
 // Empty is available only after complete native D7 authentication. It grants no
 // entry inventory and cannot supply any effect tape to the proof producer.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "The original funded source record remains inline with its custody; boxing would add an uncharged allocation"
+)]
 enum SourceContents {
     Complete(FundedRecord),
     Empty(FastpqOrdinarySourceStatementManifestV1),
@@ -109,7 +117,7 @@ impl AuthenticatedRecoveredFastpqSource {
 
 /// One immutable source selection. Every refusal retains the actual native block,
 /// first selected descriptors, partial byte buffers and completed decode stages.
-pub(crate) struct NativeFastpqSourceRead {
+pub struct NativeFastpqSourceRead {
     kura: Arc<Kura>,
     native: Option<AuthenticatedExecutionBlock>,
     pool: AllocationBudget,
@@ -156,6 +164,10 @@ impl NativeFastpqSourceRead {
     /// Only an exact completed isolated replay can replace missing transport.
     /// The original native authority and pool survive; all replacement bytes are
     /// re-read and verified by this same canonical D7/tape join.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Replay refusal retains original source and execution custody without allocating a replacement error"
+    )]
     pub(crate) fn use_replayed_transport(
         &mut self,
         transport: crate::sumeragi::node::ReplayedNativeTransport,

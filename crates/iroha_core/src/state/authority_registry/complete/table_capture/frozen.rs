@@ -1,4 +1,4 @@
-//! Scoped canonical table encoding from the original frozen StateBlock.
+//! Scoped canonical table encoding from the original frozen `StateBlock`.
 //!
 //! Native callbacks come from the same static declarations as committed readers.
 //! They preserve actual native owners and modes, including prepaid storage, and
@@ -13,7 +13,7 @@
 //! membership successor retains its exact admitted original pair/frontier and
 //! awaits complete publication integration. Then retain every canonical cell and history
 //! owner, jointly verify all original owners/modes/predecessors, and integrate
-//! with the sole StatePublication owner. There is deliberately no aggregate
+//! with the sole `StatePublication` owner. There is deliberately no aggregate
 //! success, publication hook, complete root, finality token or alternate policy.
 
 use super::{
@@ -73,13 +73,17 @@ impl FrozenTableCaptureError {
 /// empty table. Native callbacks encode all current rows only; this does not
 /// establish complete source validation. `max_relation_work` is used by the
 /// checked relation only, and grants no new row or execution limits.
-/// Every local encoding refusal leaves the same StateBlock available for retry.
+/// Every local encoding refusal leaves the same `StateBlock` available for retry.
 #[cfg_attr(
     not(test),
     expect(
         dead_code,
         reason = "TODO: consume scoped original tables with all cells, relations and history in StatePublication"
     )
+)]
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
 )]
 pub(in crate::state) fn capture_original_table_once(
     block: &StateBlock<'_>,
@@ -214,18 +218,18 @@ pub(in crate::state) fn capture_original_table_once(
         }
     }
     .map_err(|error| FrozenTableCaptureError(Failure::Leaf(error)))?;
-    if let Some(snapshot) = result.as_ref() {
-        if snapshot.table_id() != table {
-            let expected = owner
-                .table_ids()
-                .find(|identity| *identity == table)
-                .expect("requested table belongs to the original catalog entry");
-            return Err(Failure::Catalog(TableCaptureError::IdentityMismatch {
-                expected,
-                actual: snapshot.table_id(),
-            })
-            .into());
-        }
+    if let Some(snapshot) = result.as_ref()
+        && snapshot.table_id() != table
+    {
+        let expected = owner
+            .table_ids()
+            .find(|identity| *identity == table)
+            .expect("requested table belongs to the original catalog entry");
+        return Err(Failure::Catalog(TableCaptureError::IdentityMismatch {
+            expected,
+            actual: snapshot.table_id(),
+        })
+        .into());
     }
     Ok(result)
 }
@@ -259,6 +263,10 @@ enum MembershipFailure {
 /// Uses its exact State execution-pool refund scope; no committed writer is reopened.
 /// Partial/unprepared, foreign and terminal source phases return no usable group.
 /// No complete-State commitment, finalized anchor or restoration capability is issued.
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 pub(in crate::state) fn capture_original_membership_once(
     block: &StateBlock<'_>,
     scope: &iroha_allocation::AllocationScope<'_>,

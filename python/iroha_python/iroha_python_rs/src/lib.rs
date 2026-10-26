@@ -10824,6 +10824,10 @@ impl Instruction {
     }
     #[classmethod]
     #[pyo3(signature = (trigger_id, authority, contract_address, expected_code_hash_hex, entrypoint, arguments, *, start_ms, period_ms, max_retries, retry_after_ms, chain_discriminant))]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "PyO3 exposes the named Python arguments and its interpreter token as separate Rust parameters"
+    )]
     fn register_scheduled_contract_call(
         _cls: &Bound<'_, PyType>,
         trigger_id: &str,
@@ -10839,15 +10843,25 @@ impl Instruction {
         #[pyo3(from_py_with = exact_chain_discriminant)] chain_discriminant: u16,
     ) -> PyResult<Self> {
         if !arguments.is_exact_instance_of::<PyBytes>() {
-            return Err(PyTypeError::new_err("arguments must be exact immutable bytes"));
+            return Err(PyTypeError::new_err(
+                "arguments must be exact immutable bytes",
+            ));
         }
         let authority = parse_selected_account_id(authority, "authority", chain_discriminant)?;
-        let instruction = scheduled_contract_trigger::build(
-            scheduled_contract_trigger::ScheduledContractCall {
-                trigger_id, authority, contract_address, expected_code_hash_hex, entrypoint,
-                arguments: arguments.as_bytes(), start_ms, period_ms, max_retries, retry_after_ms,
-            },
-        ).map_err(PyValueError::new_err)?;
+        let instruction =
+            scheduled_contract_trigger::build(scheduled_contract_trigger::ScheduledContractCall {
+                trigger_id,
+                authority,
+                contract_address,
+                expected_code_hash_hex,
+                entrypoint,
+                arguments: arguments.as_bytes(),
+                start_ms,
+                period_ms,
+                max_retries,
+                retry_after_ms,
+            })
+            .map_err(PyValueError::new_err)?;
         Ok(Self::new(instruction))
     }
     #[classmethod]
@@ -12706,6 +12720,10 @@ fn batch_outcome_json(outcome: &AssetBatchTransferOutcome) -> PyResult<json::Val
 #[pyfunction]
 #[pyo3(name = "verify_committed_transaction_inclusion", signature = (transaction_hash, transaction_response_bytes, native_finality_proof_chain_json, expected_network_id, expected_chain, trusted_checkpoint, *, expected_chain_discriminant))]
 /// Authenticate a selected full output against an independently anchored finality chain.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "PyO3 exposes the named Python arguments and its interpreter token as separate Rust parameters"
+)]
 fn verify_committed_transaction_inclusion_py(
     py: Python<'_>,
     transaction_hash: &str,
@@ -15799,7 +15817,10 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
         verify_committed_transaction_inclusion_py,
         module
     )?)?;
-    module.add_function(wrap_pyfunction!(scheduled_execution_verification::verify, module)?)?;
+    module.add_function(wrap_pyfunction!(
+        scheduled_execution_verification::verify,
+        module
+    )?)?;
     module.add_function(wrap_pyfunction!(
         contract_arguments::encode_contract_arguments_v1_py,
         module

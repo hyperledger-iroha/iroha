@@ -5,7 +5,7 @@ use super::*;
 /// Internal source provenance selected by the sealed numeric movement kernel.
 /// This is never an instruction argument or a contract-selectable exemption.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum MovementActivity {
+pub enum MovementActivity {
     /// Owner payment or first funding of a native reserve: consume both ceilings.
     Payment,
     /// Exact FI-attested and owner-approved off-ramp: consume gross outgoing only.

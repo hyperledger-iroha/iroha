@@ -159,7 +159,7 @@ world_test!(sccp_route_governance_expected_head_is_scoped_per_subject {
     let parameters = iroha_data_model::sccp::governance::SccpGovernanceSubjectV1::Parameters;
     assert_eq!(
         fresh.head_root,
-        parliament_governance_head_root_v1(&vec![(parameters.clone(), 0_u64)])
+        parliament_governance_head_root_v1(&vec![(parameters, 0_u64)])
     );
     // Another subject's revision leaves the head unchanged; this subject's revision moves it.
     crate::smartcontracts::isi::sccp::store::set_governance_revision(
@@ -171,7 +171,7 @@ world_test!(sccp_route_governance_expected_head_is_scoped_per_subject {
     );
     assert_eq!(
         parliament_expected_head_v1(&kind, &stx).expect("head"),
-        GovernanceExpectedHeadV1::Present(fresh.clone())
+        GovernanceExpectedHeadV1::Present(fresh)
     );
     crate::smartcontracts::isi::sccp::store::set_governance_revision(&mut stx, parameters, 2);
     let GovernanceExpectedHeadV1::Present(moved) =

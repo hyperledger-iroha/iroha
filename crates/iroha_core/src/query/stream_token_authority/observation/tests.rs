@@ -296,6 +296,10 @@ impl Fixture {
     }
 }
 
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "The fixture implements the fallible eligibility-clock callback so clock failures can be exercised separately"
+)]
 fn now() -> Result<StreamTokenEligibilityTimeIntervalV1, Error> {
     Ok(StreamTokenEligibilityTimeIntervalV1 {
         earliest_unix_ms: NOW,

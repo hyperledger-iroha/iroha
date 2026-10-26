@@ -36,7 +36,8 @@ fn select_receiver_head(wallet: &mut Wallet, frozen: &FrozenTransition) {
     marker.payment_key = frozen.credential.body.payment_key;
     marker.generation = selected_generation + 1;
     marker.state = c.head_marker_state();
-    wallet.custody.status = SlotStatus::Released(marker_record(marker, retained.completion_digest));
+    wallet.custody.status =
+        SlotStatus::Released(marker_record(&marker, retained.completion_digest));
     wallet
         .custody
         .retained
@@ -112,7 +113,7 @@ fn select_receiver_head(wallet: &mut Wallet, frozen: &FrozenTransition) {
 fn receive_projection_wallet(burn: bool) -> (Wallet, FrozenTransition, [u8; 32]) {
     let (payer, request, _) = originals();
     let payment: KagemushaWalletPaymentV1 = fixture("KagemushaWalletPaymentV1");
-    let receiver = request.receiver_credential.clone();
+    let receiver = request.receiver_credential;
     assert_ne!(
         receiver.body.wallet_id,
         payment.signed_request().unwrap().body.payer_wallet_id
@@ -121,7 +122,7 @@ fn receive_projection_wallet(burn: bool) -> (Wallet, FrozenTransition, [u8; 32])
     wallet.wallet_id = receiver.body.wallet_id;
     wallet.archive.wallet = wallet.wallet_id;
     let mut boot = bootstrap();
-    boot.credential = receiver.clone();
+    boot.credential = receiver;
     let mut body = boot.capsule.body().clone();
     body.wallet_id = receiver.body.wallet_id;
     body.successor_state = KagemushaWalletStateV1::bootstrap(&receiver, field(92)).unwrap();
@@ -332,7 +333,7 @@ fn payer_projection_wallet(
             online_charge: 0,
         },
     );
-    current.credential = companion.payer_credential.clone();
+    current.credential = companion.payer_credential;
     let mut c = current.capsule.body().clone();
     c.wallet_id = w.wallet_id;
     c.kind = KagemushaWalletOperationKindV1::ArchiveSent;
@@ -406,7 +407,7 @@ fn payer_projection_wallet(
     marker.payment_key = current.credential.body.payment_key;
     marker.generation = 4;
     marker.state = c.head_marker_state();
-    w.custody.status = SlotStatus::Released(marker_record(marker, retained.completion_digest));
+    w.custody.status = SlotStatus::Released(marker_record(&marker, retained.completion_digest));
     w.custody
         .retained
         .insert(c.body().operation_id, retained.clone());
@@ -507,7 +508,7 @@ fn payer_projection_wallet(
     let send_operation = payment.send.statement.operation_id(&w.wallet_id).unwrap();
     let send_capsule = [84; 32];
     w.retain_delivery_test_mapping(
-        NativeIntentV1::user(OperationRequestV1 {
+        &NativeIntentV1::user(OperationRequestV1 {
             request_id: send,
             action: OperationActionV1::Send {
                 request: archive::encode(&request).unwrap(),
@@ -538,7 +539,7 @@ fn payer_projection_wallet(
         archive::encode(&companion.certificates).unwrap(),
     );
     w.retain_delivery_test_mapping(
-        intent,
+        &intent,
         capsule,
         c.receipt_commitment(),
         c.body().operation_id,
@@ -685,7 +686,7 @@ fn noop_later_candidate_uses_ordinary_native_preparation_and_never_reissues_send
         companion.payer_credential.to_canonical_bytes().unwrap(),
         archive::encode(&companion.certificates).unwrap(),
     );
-    payer.retain_delivery_test_preparing(intent).unwrap();
+    payer.retain_delivery_test_preparing(&intent).unwrap();
     assert!(matches!(
         payer.credited_status_for_send(&send, &newer).unwrap(),
         RequestStatusV1::Preparing
@@ -730,7 +731,7 @@ fn verified_delivery_checks_a_new_receipt_before_any_archive_without_writing() {
             companion.payer_credential.to_canonical_bytes().unwrap(),
             archive::encode(&companion.certificates).unwrap(),
         );
-        payer.retain_delivery_test_preparing(intent).unwrap();
+        payer.retain_delivery_test_preparing(&intent).unwrap();
         let root = payer.manifest().unwrap().0;
         let snapshot = payer.snapshot().unwrap();
         let result = payer

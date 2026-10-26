@@ -51,11 +51,14 @@ fn custody_pool(count: usize) -> (World, ValidatorElectionPolicyV1, Vec<KeyPair>
     };
     let policy = ValidatorElectionPolicyV1::from_npos_parameters(&parameters).unwrap();
     {
-        let mut entry = world.parameters.block();
-        entry
-            .get_mut()
-            .set_parameter(Parameter::Custom(parameters.into_custom_parameter()))
-            .expect("valid fixture parameters");
+        let mut entry = crate::state::parameter_cell_block_for_testing(&world)
+            .expect("funded fixture parameter cell");
+        crate::state::set_parameter_cell_for_testing(
+            &mut entry,
+            Parameter::Custom(parameters.into_custom_parameter()),
+            world.sccp_committee_generations.allocation_budget(),
+        )
+        .expect("valid fixture parameters");
         entry.commit();
     }
     let escrow = AccountId::new(keys[0].public_key().clone());
@@ -189,15 +192,18 @@ fn frozen_floors_and_exit_obligations_do_not_follow_mutable_configuration() {
         .public_lane_validators
         .insert((LaneId::SINGLE, owner), record);
     {
-        let mut entry = world.parameters.block();
+        let mut entry = crate::state::parameter_cell_block_for_testing(&world)
+            .expect("funded fixture parameter cell");
         let changed = SumeragiNposParameters {
             min_self_bond: Quantity::from(1000_u64),
             ..Default::default()
         };
-        entry
-            .get_mut()
-            .set_parameter(Parameter::Custom(changed.into_custom_parameter()))
-            .expect("valid fixture parameters");
+        crate::state::set_parameter_cell_for_testing(
+            &mut entry,
+            Parameter::Custom(changed.into_custom_parameter()),
+            world.sccp_committee_generations.allocation_budget(),
+        )
+        .expect("valid fixture parameters");
         entry.commit();
     }
     let view = world.view();
@@ -394,16 +400,9 @@ fn fresh_entropy_requires_actual_threshold_pulse_and_exact_prestate_parent() {
     let mut wrong_parent = hashes.clone();
     wrong_parent[7] = HashOf::from_untyped_unchecked(Hash::new(b"another certified parent"));
     assert!(authenticated_boundary_entropy(&world.view(), &wrong_parent, &current, 10).is_err());
-    let pulse = world
-        .global_beacon_pulses
-        .view()
-        .iter()
-        .next()
-        .unwrap()
-        .1
-        .clone();
+    let pulse = *world.global_beacon_pulses.view().iter().next().unwrap().1;
     for mutation in 0..9 {
-        let mut bad = pulse.clone();
+        let mut bad = pulse;
         match mutation {
             0 => bad.signature[0] ^= 1,
             1 => bad.seed[0] ^= 1,
@@ -450,7 +449,7 @@ pub(super) fn boundary_fixture(
         world.global_beacon_active_session.insert(*id, *value);
     }
     for (id, value) in view.global_beacon_latest_pulse().iter() {
-        world.global_beacon_latest_pulse.insert(*id, value.clone());
+        world.global_beacon_latest_pulse.insert(*id, *value);
     }
     let params = ChainParamsRecord::from_parameters(world.view().parameters().sumeragi());
     let graph = ConsensusSchedule::from_owned_entries(vec![

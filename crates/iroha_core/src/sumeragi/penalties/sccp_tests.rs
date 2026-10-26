@@ -6,8 +6,8 @@ fn sccp_penalty_fixture(start_height: u64) -> (State, Hash, AccountId) {
     use iroha_data_model::sumeragi_finality::certified_result::{
         FLAG_ACTIVE, SccpFinalityHeaderFieldsV1, SccpFinalityHeaderV1,
     };
-    let state = native_penalty_state();
-    install_one_block_delay_npos(&state);
+    let mut state = native_penalty_state();
+    install_one_block_delay_npos(&mut state);
     let validator = add_validator_record(&state, &roster()[1]);
     let mut data = crate::sumeragi::evidence::record::sccp_storage_claim_for_testing();
     let RecordedEvidenceV1::SccpForgery(material) = &mut data.evidence else {

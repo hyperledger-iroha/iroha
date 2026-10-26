@@ -1,4 +1,4 @@
-//! Immutable PoP credentials and pairing scratch retained by one original caller pool.
+//! Immutable `PoP` credentials and pairing scratch retained by one original caller pool.
 //!
 //! This owns cryptographic admission, not epoch, committee geometry, signed-genesis,
 //! source, certificate or freshness authority. The enclosing native reader must retain
@@ -19,7 +19,7 @@ use super::*;
 
 /// Original typed local refusal or original key/PoP rejection; never an authority verdict.
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum CommitteeAdmissionError {
+pub enum CommitteeAdmissionError {
     /// The complete physical graph did not fit its original finite pool.
     #[error(transparent)]
     Admission(#[from] AllocationRefusal),
@@ -38,7 +38,7 @@ pub(crate) enum CommitteeAdmissionError {
     /// The exact original compact-key layout could not be materialized.
     #[error(transparent)]
     KeyAllocation(#[from] PublicKeyAllocationError),
-    /// Compact key inspection failed before the PoP relation.
+    /// Compact key inspection failed before the `PoP` relation.
     #[error("committee member {index} has a malformed key envelope: {error:?}")]
     Envelope {
         /// Position in the original immutable source.
@@ -54,7 +54,7 @@ pub(crate) enum CommitteeAdmissionError {
         /// Original key's algorithm.
         algorithm: Algorithm,
     },
-    /// The original member's exact proof failed the shared uncached PoP relation.
+    /// The original member's exact proof failed the shared uncached `PoP` relation.
     #[error("committee member {index} has an invalid proof of possession: {error:?}")]
     Proof {
         /// Position in the original immutable source.
@@ -66,7 +66,7 @@ pub(crate) enum CommitteeAdmissionError {
 
 /// Why admitted pairing backing was not constructed; neither cause is a key verdict.
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum PairingBackingError {
+pub enum PairingBackingError {
     /// The physical allocator refused the exact admitted layout (original cause).
     #[error(transparent)]
     Allocator(AllocatorRefusal),
@@ -127,7 +127,7 @@ struct Credential {
 /// authenticated parent epoch. This pays only the owned credentials and pairing
 /// context; source/body decoding and other verifier scratch remain separate owners.
 /// This owner alone must not enable the HTTP proof routes.
-pub(crate) struct FundedBlsCommittee {
+pub struct FundedBlsCommittee {
     credentials: ChargedBuffer<Credential>,
     scratch: Mutex<ConsensusAggregateScratch<AllocationCharge>>,
 }
@@ -388,10 +388,7 @@ thread_local! {
 /// The returned flag confirms the selected constructor reached that allocation;
 /// the thread-local selection is cleared even if the caller unwinds.
 #[cfg(test)]
-pub(crate) fn refuse_key_allocation_at<R>(
-    index: usize,
-    operation: impl FnOnce() -> R,
-) -> (R, bool) {
+pub fn refuse_key_allocation_at<R>(index: usize, operation: impl FnOnce() -> R) -> (R, bool) {
     struct Reset;
     impl Drop for Reset {
         fn drop(&mut self) {

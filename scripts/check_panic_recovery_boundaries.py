@@ -169,6 +169,8 @@ CORE_RECOVERY_SOURCE_PATHS = (
 CORE_RECOVERY_SUPPORT_PATHS = tuple(
     Path("crates/iroha_core/src") / name
     for name in (
+        "executor_tests.rs",
+        "executor_privacy_occurrence_tests.rs",
         "executor_account_lineage_tests.rs",
         "executor_contract_deployment_tests.rs",
         "executor_fee_quote_tests.rs",
@@ -192,6 +194,13 @@ CORE_RECOVERY_SUPPORT_PATHS = tuple(
         "executor_stream_token_gateway_permission_tests.rs",
         "executor_stream_token_gateway_check_permission_tests.rs",
         "executor/root_fees.rs",
+        "executor/attachment_custody.rs",
+        "executor/attachment_custody/tests.rs",
+        "executor/attachment_custody/pgc_bootstrap.rs",
+        "executor/attachment_custody/pgc_bootstrap/tests.rs",
+        "executor/attachment_direct.rs",
+        "executor/executable_source.rs",
+        "executor/signed_source_observation.rs",
         "executor_contract_owner_permission_tests.rs",
         "executor_asset_lock_admission_tests.rs",
         "executor_conditional_escrow_repo_admission_tests.rs",
@@ -216,6 +225,7 @@ CORE_RECOVERY_SUPPORT_PATHS = tuple(
         "executor/root_scope/tests/amx_approvals.rs",
         "executor/root_scope/tests/amx_roles.rs",
         "executor/root_scope/tests/role_removal.rs",
+        "executor/root_scope/tests/decode_refusal.rs",
     )
 )
 AUDITED_SOURCE_PATHS = (

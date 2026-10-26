@@ -87,9 +87,9 @@ fn admission() -> (
     (
         QueryAdmissionPermit {
             _query: Arc::clone(&query).try_acquire_owned().unwrap(),
-            _heavy: None,
-            _body: None,
-            _fanout_memory: Some(reservation),
+            heavy: None,
+            body: None,
+            fanout_memory: Some(reservation),
         },
         pool,
         query,
@@ -124,8 +124,8 @@ fn query_admission_retires_original_resources_before_waking_next_worker() {
     let (mut admission, pool, query) = admission();
     let heavy = Arc::new(tokio::sync::Semaphore::new(1));
     let body = Arc::new(tokio::sync::Semaphore::new(1));
-    admission._heavy = Some(Arc::clone(&heavy).try_acquire_owned().unwrap());
-    admission._body = Some(Arc::clone(&body).try_acquire_owned().unwrap());
+    admission.heavy = Some(Arc::clone(&heavy).try_acquire_owned().unwrap());
+    admission.body = Some(Arc::clone(&body).try_acquire_owned().unwrap());
     let owner = history_producer::HistoryProducerOwner::from_admission(&admission).unwrap();
     let metadata = owner.response_metadata().clone();
     drop(owner);

@@ -10,7 +10,7 @@ use std::sync::Arc;
 mod session;
 pub use session::OperationQualificationProgressV1;
 #[cfg(test)]
-pub(crate) use session::{assert_builtin_receive_alias_controls, assert_receive_alias_controls};
+pub use session::{assert_builtin_receive_alias_controls, assert_receive_alias_controls};
 
 use iroha_kagemusha_proof::a_relation::{
     AProofPlan, QProofPlan,
@@ -354,7 +354,7 @@ fn a_plan_with_parameters(
 }
 
 fn import_error(
-    error: impl crate::kagemusha_wallet_proofs_v1::NativeProofError,
+    error: &impl crate::kagemusha_wallet_proofs_v1::NativeProofError,
     rejected: OperationQualificationErrorV1,
 ) -> OperationQualificationErrorV1 {
     if error.is_cancelled() {
@@ -386,31 +386,31 @@ impl QualifiedOperationOwnerV1 {
                 ),
                 _ => return Err(OperationQualificationErrorV1::A(stage)),
             }
-            .map_err(|error| import_error(error, OperationQualificationErrorV1::A(stage))),
+            .map_err(|error| import_error(&error, OperationQualificationErrorV1::A(stage))),
             // One terminal A: stage 0 is its only stage.
             Self::Load(p) => match stage {
                 0 => p.import_terminal_builtin_cancellable(original, config, member, cancellation),
                 _ => return Err(OperationQualificationErrorV1::A(stage)),
             }
-            .map_err(|error| import_error(error, OperationQualificationErrorV1::A(stage))),
+            .map_err(|error| import_error(&error, OperationQualificationErrorV1::A(stage))),
             Self::Send(p) => p
                 .import_a_builtin_cancellable(stage, original, config, member, cancellation)
-                .map_err(|error| import_error(error, OperationQualificationErrorV1::A(stage))),
+                .map_err(|error| import_error(&error, OperationQualificationErrorV1::A(stage))),
             Self::Receive(p) => p
                 .import_a_builtin_cancellable(stage, original, config, member, cancellation)
-                .map_err(|error| import_error(error, OperationQualificationErrorV1::A(stage))),
+                .map_err(|error| import_error(&error, OperationQualificationErrorV1::A(stage))),
             Self::Archive(p) => p
                 .import_a_builtin_cancellable(stage, original, config, member, cancellation)
-                .map_err(|error| import_error(error, OperationQualificationErrorV1::A(stage))),
+                .map_err(|error| import_error(&error, OperationQualificationErrorV1::A(stage))),
             // One terminal A: stage 0 is its only stage.
             Self::Consuming(p) => match stage {
                 0 => p.import_terminal_builtin_cancellable(original, config, member, cancellation),
                 _ => return Err(OperationQualificationErrorV1::A(stage)),
             }
-            .map_err(|error| import_error(error, OperationQualificationErrorV1::A(stage))),
+            .map_err(|error| import_error(&error, OperationQualificationErrorV1::A(stage))),
             Self::Refresh(p) => p
                 .import_a_builtin_cancellable(stage, original, config, member, cancellation)
-                .map_err(|error| import_error(error, OperationQualificationErrorV1::A(stage))),
+                .map_err(|error| import_error(&error, OperationQualificationErrorV1::A(stage))),
         }
     }
     fn import_w_builtin(
@@ -430,16 +430,16 @@ impl QualifiedOperationOwnerV1 {
             }
             Self::Send(p) => p
                 .import_w_builtin_cancellable(stage, original, config, member, cancellation)
-                .map_err(|error| import_error(error, OperationQualificationErrorV1::W(stage))),
+                .map_err(|error| import_error(&error, OperationQualificationErrorV1::W(stage))),
             Self::Receive(p) => p
                 .import_w_builtin_cancellable(stage, original, config, member, cancellation)
-                .map_err(|error| import_error(error, OperationQualificationErrorV1::W(stage))),
+                .map_err(|error| import_error(&error, OperationQualificationErrorV1::W(stage))),
             Self::Archive(p) => p
                 .import_w_builtin_cancellable(stage, original, config, member, cancellation)
-                .map_err(|error| import_error(error, OperationQualificationErrorV1::W(stage))),
+                .map_err(|error| import_error(&error, OperationQualificationErrorV1::W(stage))),
             Self::Refresh(p) => p
                 .import_w_builtin_cancellable(stage, original, config, member, cancellation)
-                .map_err(|error| import_error(error, OperationQualificationErrorV1::W(stage))),
+                .map_err(|error| import_error(&error, OperationQualificationErrorV1::W(stage))),
         }
     }
     pub(super) fn import_a(
@@ -459,29 +459,29 @@ impl QualifiedOperationOwnerV1 {
                     .import_terminal_cancellable(original, config, cancellation),
                 _ => return Err(OperationQualificationErrorV1::A(stage)),
             }
-            .map_err(|error| import_error(error, OperationQualificationErrorV1::A(stage))),
+            .map_err(|error| import_error(&error, OperationQualificationErrorV1::A(stage))),
             Self::Load(p) => match stage {
                 0 => p.import_terminal_cancellable(original, config, cancellation),
                 _ => return Err(OperationQualificationErrorV1::A(stage)),
             }
-            .map_err(|error| import_error(error, OperationQualificationErrorV1::A(stage))),
+            .map_err(|error| import_error(&error, OperationQualificationErrorV1::A(stage))),
             Self::Send(p) => p
                 .import_a_cancellable(stage, original, config, cancellation)
-                .map_err(|error| import_error(error, OperationQualificationErrorV1::A(stage))),
+                .map_err(|error| import_error(&error, OperationQualificationErrorV1::A(stage))),
             Self::Receive(p) => p
                 .import_a_cancellable(stage, original, config, cancellation)
-                .map_err(|error| import_error(error, OperationQualificationErrorV1::A(stage))),
+                .map_err(|error| import_error(&error, OperationQualificationErrorV1::A(stage))),
             Self::Archive(p) => p
                 .import_a_cancellable(stage, original, config, cancellation)
-                .map_err(|error| import_error(error, OperationQualificationErrorV1::A(stage))),
+                .map_err(|error| import_error(&error, OperationQualificationErrorV1::A(stage))),
             Self::Consuming(p) => match stage {
                 0 => p.import_terminal_cancellable(original, config, cancellation),
                 _ => return Err(OperationQualificationErrorV1::A(stage)),
             }
-            .map_err(|error| import_error(error, OperationQualificationErrorV1::A(stage))),
+            .map_err(|error| import_error(&error, OperationQualificationErrorV1::A(stage))),
             Self::Refresh(p) => p
                 .import_a_cancellable(stage, original, config, cancellation)
-                .map_err(|error| import_error(error, OperationQualificationErrorV1::A(stage))),
+                .map_err(|error| import_error(&error, OperationQualificationErrorV1::A(stage))),
         }
     }
     pub(super) fn import_w(
@@ -500,16 +500,16 @@ impl QualifiedOperationOwnerV1 {
             }
             Self::Send(p) => p
                 .import_w_cancellable(stage, original, config, cancellation)
-                .map_err(|error| import_error(error, OperationQualificationErrorV1::W(stage))),
+                .map_err(|error| import_error(&error, OperationQualificationErrorV1::W(stage))),
             Self::Receive(p) => p
                 .import_w_cancellable(stage, original, config, cancellation)
-                .map_err(|error| import_error(error, OperationQualificationErrorV1::W(stage))),
+                .map_err(|error| import_error(&error, OperationQualificationErrorV1::W(stage))),
             Self::Archive(p) => p
                 .import_w_cancellable(stage, original, config, cancellation)
-                .map_err(|error| import_error(error, OperationQualificationErrorV1::W(stage))),
+                .map_err(|error| import_error(&error, OperationQualificationErrorV1::W(stage))),
             Self::Refresh(p) => p
                 .import_w_cancellable(stage, original, config, cancellation)
-                .map_err(|error| import_error(error, OperationQualificationErrorV1::W(stage))),
+                .map_err(|error| import_error(&error, OperationQualificationErrorV1::W(stage))),
         }
     }
 }
@@ -709,25 +709,25 @@ impl QualifiedOperationRouteV1 {
                 0 => p.bind_terminal(seal, cancellation),
                 _ => return Err(OperationQualificationErrorV1::A(stage)),
             }
-            .map_err(|error| import_error(error, OperationQualificationErrorV1::A(stage))),
+            .map_err(|error| import_error(&error, OperationQualificationErrorV1::A(stage))),
             QualifiedOperationOwnerV1::Send(p) => p
                 .bind_a(stage, seal, cancellation)
-                .map_err(|error| import_error(error, OperationQualificationErrorV1::A(stage))),
+                .map_err(|error| import_error(&error, OperationQualificationErrorV1::A(stage))),
             QualifiedOperationOwnerV1::Receive(p) => p
                 .bind_a(stage, seal, cancellation)
-                .map_err(|error| import_error(error, OperationQualificationErrorV1::A(stage))),
+                .map_err(|error| import_error(&error, OperationQualificationErrorV1::A(stage))),
             QualifiedOperationOwnerV1::Archive(p) => p
                 .bind_a(stage, seal, cancellation)
-                .map_err(|error| import_error(error, OperationQualificationErrorV1::A(stage))),
+                .map_err(|error| import_error(&error, OperationQualificationErrorV1::A(stage))),
             // One terminal A: stage 0 is its only stage.
             QualifiedOperationOwnerV1::Consuming(p) => match stage {
                 0 => p.bind_terminal(seal, cancellation),
                 _ => return Err(OperationQualificationErrorV1::A(stage)),
             }
-            .map_err(|error| import_error(error, OperationQualificationErrorV1::A(stage))),
+            .map_err(|error| import_error(&error, OperationQualificationErrorV1::A(stage))),
             QualifiedOperationOwnerV1::Refresh(p) => p
                 .bind_a(stage, seal, cancellation)
-                .map_err(|error| import_error(error, OperationQualificationErrorV1::A(stage))),
+                .map_err(|error| import_error(&error, OperationQualificationErrorV1::A(stage))),
         }
     }
     pub(super) fn bind_w(
@@ -758,16 +758,16 @@ impl QualifiedOperationRouteV1 {
             | QualifiedOperationOwnerV1::Consuming(_) => unreachable!("handled above"),
             QualifiedOperationOwnerV1::Send(p) => p
                 .bind_w(stage, seal, cancellation)
-                .map_err(|error| import_error(error, OperationQualificationErrorV1::W(stage))),
+                .map_err(|error| import_error(&error, OperationQualificationErrorV1::W(stage))),
             QualifiedOperationOwnerV1::Receive(p) => p
                 .bind_w(stage, seal, cancellation)
-                .map_err(|error| import_error(error, OperationQualificationErrorV1::W(stage))),
+                .map_err(|error| import_error(&error, OperationQualificationErrorV1::W(stage))),
             QualifiedOperationOwnerV1::Archive(p) => p
                 .bind_w(stage, seal, cancellation)
-                .map_err(|error| import_error(error, OperationQualificationErrorV1::W(stage))),
+                .map_err(|error| import_error(&error, OperationQualificationErrorV1::W(stage))),
             QualifiedOperationOwnerV1::Refresh(p) => p
                 .bind_w(stage, seal, cancellation)
-                .map_err(|error| import_error(error, OperationQualificationErrorV1::W(stage))),
+                .map_err(|error| import_error(&error, OperationQualificationErrorV1::W(stage))),
         }
     }
 }
@@ -832,12 +832,12 @@ mod cancellation_tests {
     use super::*;
     #[test]
     fn original_import_preserves_cancellation_before_stage_error_mapping() {
-        let cancelled = import_error(Error::Cancelled, OperationQualificationErrorV1::A(2));
+        let cancelled = import_error(&Error::Cancelled, OperationQualificationErrorV1::A(2));
         assert!(matches!(
             cancelled,
             OperationQualificationErrorV1::Cancelled
         ));
-        let rejected = import_error(Error::Proof, OperationQualificationErrorV1::W(3));
+        let rejected = import_error(&Error::Proof, OperationQualificationErrorV1::W(3));
         assert!(matches!(rejected, OperationQualificationErrorV1::W(3)));
     }
 }

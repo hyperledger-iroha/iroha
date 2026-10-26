@@ -51,7 +51,9 @@ fn nexus_reconfigure_does_not_revive_unknown_manifest_without_explicit_reload() 
     nexus.registry = registry_cfg;
     nexus.lane_catalog = expanded.clone();
     nexus.lane_config = iroha_config::parameters::actual::LaneConfig::from_catalog(&expanded);
-    queue.reconfigure_nexus_with_state(&nexus, &state, None);
+    queue
+        .reconfigure_nexus_with_state(&nexus, &state, None)
+        .expect("original State pool admits Queue privacy projection");
     let installed = queue.lane_manifests.read().clone();
     assert_eq!(installed.consensus_policy_digest(), frozen_digest);
     assert_eq!(
@@ -141,7 +143,12 @@ fn nexus_reconfiguration_uses_state_authority_instead_of_empty_or_stale_queue_ca
             let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
             let queue = Queue::test(config_factory(), &time_source);
             if queue_is_stale {
-                queue.install_lane_manifests_for_testing(&registry(stale_validator.clone()));
+                queue
+                    .install_lane_manifests_for_testing(
+                        &registry(stale_validator.clone()),
+                        &state.ivm_execution_budget(),
+                    )
+                    .expect("original fixture pool admits privacy projection");
             }
             assert_ne!(
                 queue.lane_manifests.read().consensus_policy_digest(),
@@ -149,9 +156,13 @@ fn nexus_reconfiguration_uses_state_authority_instead_of_empty_or_stale_queue_ca
                 "the fixture must start with different State and Queue authority"
             );
             if with_view {
-                queue.reconfigure_nexus(&nexus, &state.view(), None);
+                queue
+                    .reconfigure_nexus(&nexus, &state.view(), None)
+                    .expect("original State pool admits Queue privacy projection");
             } else {
-                queue.reconfigure_nexus_with_state(&nexus, &state, None);
+                queue
+                    .reconfigure_nexus_with_state(&nexus, &state, None)
+                    .expect("original State pool admits Queue privacy projection");
             }
             assert!(
                 Arc::ptr_eq(&state.lane_manifests.read(), &installed),

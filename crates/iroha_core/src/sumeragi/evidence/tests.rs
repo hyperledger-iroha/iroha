@@ -516,12 +516,12 @@ fn original_signer_requires_matching_height_and_in_range_roster() {
     let NativeEvidence::VoteEquivocation(first, second) = vote_pair(&chain, 1, 0) else {
         unreachable!()
     };
-    let mut wrong_height = first.clone();
+    let mut wrong_height = first;
     wrong_height.height += 1;
     assert!(
         super::super::evidence_history::verify_from_state(
             &chain.state().view(),
-            &NativeEvidence::VoteEquivocation(wrong_height, second.clone()),
+            &NativeEvidence::VoteEquivocation(wrong_height, second),
             |_, _| Ok(())
         )
         .is_err()
@@ -549,9 +549,7 @@ fn lane_terminal_replay_fence_uses_immutable_retirement_deadline_and_original_in
     let source = World::new();
     let mut world = source.block();
     world
-        .parameters
-        .get_mut()
-        .set_parameter(Parameter::Custom(
+        .set_parameter_for_testing(Parameter::Custom(
             SumeragiNposParameters {
                 evidence_horizon_blocks: 7,
                 slashing_delay_blocks: 3,
@@ -760,9 +758,7 @@ fn local_lane_observations_use_inclusive_retirement_and_never_a_native_height_cl
     let source = World::new();
     let mut world = source.block();
     world
-        .parameters
-        .get_mut()
-        .set_parameter(Parameter::Custom(
+        .set_parameter_for_testing(Parameter::Custom(
             SumeragiNposParameters {
                 evidence_horizon_blocks: 7,
                 slashing_delay_blocks: 3,

@@ -1588,7 +1588,7 @@ async fn resolve_hosted_http_runtime_target_balances_across_distinct_healthy_hos
                 None,
             ),
         ],
-        vec![hosted_http_runtime_replica_plan(
+        &[hosted_http_runtime_replica_plan(
             &temp.path().join("service-canary"),
             1,
             iroha_data_model::soracloud::SoraServiceHealthStatusV1::Unavailable,
@@ -2072,7 +2072,7 @@ async fn resolve_hosted_http_runtime_target_rejects_snapshot_without_peer_identi
             Some("http://127.0.0.1:18080"),
             Some(101),
         )],
-        Vec::new(),
+        &[],
         None,
         Some(hosted_http_service_lease_state(
             iroha_data_model::soracloud::SoraServiceLeaseStatusV1::Active,
@@ -2117,7 +2117,7 @@ async fn resolve_hosted_http_runtime_target_rejects_snapshot_from_different_peer
             Some("http://127.0.0.1:18080"),
             Some(101),
         )],
-        vec![hosted_http_runtime_replica_plan(
+        &[hosted_http_runtime_replica_plan(
             &temp.path().join("service-canary"),
             1,
             iroha_data_model::soracloud::SoraServiceHealthStatusV1::Unavailable,
@@ -2228,7 +2228,7 @@ async fn proxy_soracloud_public_hosted_http_falls_back_to_remote_peer() {
         iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
         iroha_data_model::soracloud::SoraServiceHealthStatusV1::Unavailable,
         Vec::new(),
-        Vec::new(),
+        &[],
         Some(local_peer_id.to_string()),
         Some(hosted_http_service_lease_state(
             iroha_data_model::soracloud::SoraServiceLeaseStatusV1::Active,
@@ -2731,9 +2731,7 @@ fn install_two_peer_npos_roster(
     let mut block = app.state.block(header);
     block
         .world
-        .parameters
-        .get_mut()
-        .set_parameter(Parameter::Custom(
+        .set_parameter_for_testing(Parameter::Custom(
             SumeragiNposParameters::default().into_custom_parameter(),
         ))
         .expect("install the committed NPoS fixture parameters");
@@ -2830,9 +2828,7 @@ async fn authoritative_lane_peers_do_not_fall_back_to_online_peers_when_state_is
         let mut block = app.state.block(header);
         block
             .world
-            .parameters
-            .get_mut()
-            .set_parameter(Parameter::Custom(
+            .set_parameter_for_testing(Parameter::Custom(
                 SumeragiNposParameters::default().into_custom_parameter(),
             ))
             .expect("install the committed NPoS fixture parameters");
@@ -3116,7 +3112,10 @@ async fn authoritative_lane_peers_use_scheduled_global_committee_for_admin_manag
         }
         install_lane_manifest_registry_for_test(state, &[(lane_id, exact_committee.clone())]);
         let state_view = app_mut.state.view();
-        app_mut.queue.reconfigure_nexus(&nexus, &state_view, None);
+        app_mut
+            .queue
+            .reconfigure_nexus(&nexus, &state_view, None)
+            .expect("original State pool admits Queue privacy projection");
     }
     let route = RoutingDecision::new(lane_id, dataspace_id);
     let expected_global = sorted_admin_peer_ids_for_test(&exact_committee);
@@ -3474,7 +3473,10 @@ async fn scheduled_global_route_authority_ignores_local_commit_topology_filterin
             &[(lane_id, exact_remote_committee.clone())],
         );
         let state_view = app_mut.state.view();
-        app_mut.queue.reconfigure_nexus(&nexus, &state_view, None);
+        app_mut
+            .queue
+            .reconfigure_nexus(&nexus, &state_view, None)
+            .expect("original State pool admits Queue privacy projection");
     }
     let route = RoutingDecision::new(lane_id, dataspace_id);
     let expected_global = sorted_admin_peer_ids_for_test(&exact_remote_committee);
@@ -3537,7 +3539,10 @@ async fn incoming_proxy_reads_and_fanout_are_terminal_when_route_ownership_is_st
             &[(lane_id, exact_remote_committee.clone())],
         );
         let state_view = app_mut.state.view();
-        app_mut.queue.reconfigure_nexus(&nexus, &state_view, None);
+        app_mut
+            .queue
+            .reconfigure_nexus(&nexus, &state_view, None)
+            .expect("original State pool admits Queue privacy projection");
     }
     let route = RoutingDecision::new(lane_id, dataspace_id);
     let expected_global = sorted_admin_peer_ids_for_test(&exact_remote_committee);

@@ -1,4 +1,4 @@
-//! Real original domain/bucket images, prepaid relation work and retained encoding custody.
+//! Real original domain/membership images, prepaid relation work and retained encoding custody.
 
 use super::*;
 use crate::{
@@ -69,14 +69,27 @@ fn stage(block: &mut StateBlock<'_>) {
         .domains
         .insert(id("untouched"), Domain::new(id("untouched")).build(&BOB_ID));
     block.world.domains.remove(id("absent"));
-    block.world.domains_by_owner.insert(
-        ALICE_ID.clone(),
-        BTreeSet::from([id("added"), id("shared")]),
-    );
-    block.world.domains_by_owner.insert(
-        BOB_ID.clone(),
-        BTreeSet::from([id("moving"), id("untouched")]),
-    );
+    // Rewrite every membership so both owners' rows carry original preimages.
+    let old: Vec<_> = block
+        .world
+        .domains_by_owner
+        .iter()
+        .map(|(row, ())| row.clone())
+        .collect();
+    for row in old {
+        block.world.domains_by_owner.remove(row);
+    }
+    for (owner, name) in [
+        (&*ALICE_ID, "added"),
+        (&*ALICE_ID, "shared"),
+        (&*BOB_ID, "moving"),
+        (&*BOB_ID, "untouched"),
+    ] {
+        block
+            .world
+            .domains_by_owner
+            .insert((owner.clone(), id(name)), ());
+    }
 }
 fn expected_world() -> World {
     let mut world = fixture();
@@ -167,30 +180,25 @@ fn changed_owner_delete_insert_noop_and_absent_rows_keep_both_original_images() 
 }
 
 #[test]
-fn missing_wrong_foreign_empty_and_wrong_owner_reject_either_original_image() {
+fn missing_wrong_foreign_and_wrong_owner_reject_either_original_image() {
+    let row = |owner: &AccountId, name: &str| (owner.clone(), id(name));
     for previous in [false, true] {
-        for defect in 0..5 {
+        for defect in 0..4 {
             let mut state = state(one_domain());
             if previous {
                 match defect {
                     0 => state.world.domains_by_owner = Storage::new(),
                     1 => {
                         state.world.domains_by_owner =
-                            Storage::from_iter([(BOB_ID.clone(), BTreeSet::from([id("live")]))])
+                            Storage::from_iter([(row(&*BOB_ID, "live"), ())])
                     }
                     2 => {
-                        state.world.domains_by_owner = Storage::from_iter([(
-                            ALICE_ID.clone(),
-                            BTreeSet::from([id("live"), id("ghost")]),
-                        )])
+                        state.world.domains_by_owner = Storage::from_iter([
+                            (row(&*ALICE_ID, "live"), ()),
+                            (row(&*ALICE_ID, "ghost"), ()),
+                        ])
                     }
                     3 => {
-                        state
-                            .world
-                            .domains_by_owner
-                            .insert(BOB_ID.clone(), BTreeSet::new());
-                    }
-                    4 => {
                         state
                             .world
                             .domains
@@ -202,19 +210,22 @@ fn missing_wrong_foreign_empty_and_wrong_owner_reject_either_original_image() {
             let mut block = state.block(header());
             if previous {
                 match defect {
-                    0..=2 => {
+                    0 | 1 => {
                         block
                             .world
                             .domains_by_owner
-                            .insert(ALICE_ID.clone(), BTreeSet::from([id("live")]));
+                            .insert(row(&*ALICE_ID, "live"), ());
                         if defect == 1 {
-                            block.world.domains_by_owner.remove(BOB_ID.clone());
+                            block.world.domains_by_owner.remove(row(&*BOB_ID, "live"));
                         }
                     }
-                    3 => {
-                        block.world.domains_by_owner.remove(BOB_ID.clone());
+                    2 => {
+                        block
+                            .world
+                            .domains_by_owner
+                            .remove(row(&*ALICE_ID, "ghost"));
                     }
-                    4 => {
+                    3 => {
                         block
                             .world
                             .domains
@@ -225,28 +236,22 @@ fn missing_wrong_foreign_empty_and_wrong_owner_reject_either_original_image() {
             } else {
                 match defect {
                     0 => {
-                        block.world.domains_by_owner.remove(ALICE_ID.clone());
+                        block.world.domains_by_owner.remove(row(&*ALICE_ID, "live"));
                     }
                     1 => {
-                        block.world.domains_by_owner.remove(ALICE_ID.clone());
+                        block.world.domains_by_owner.remove(row(&*ALICE_ID, "live"));
                         block
                             .world
                             .domains_by_owner
-                            .insert(BOB_ID.clone(), BTreeSet::from([id("live")]));
+                            .insert(row(&*BOB_ID, "live"), ());
                     }
                     2 => {
                         block
                             .world
                             .domains_by_owner
-                            .insert(ALICE_ID.clone(), BTreeSet::from([id("live"), id("ghost")]));
+                            .insert(row(&*ALICE_ID, "ghost"), ());
                     }
                     3 => {
-                        block
-                            .world
-                            .domains_by_owner
-                            .insert(BOB_ID.clone(), BTreeSet::new());
-                    }
-                    4 => {
                         block
                             .world
                             .domains
@@ -271,7 +276,6 @@ fn missing_wrong_foreign_empty_and_wrong_owner_reject_either_original_image() {
                     },
                     mismatch: match defect {
                         2 => OwnershipMismatch::ForeignDomain,
-                        3 => OwnershipMismatch::EmptyBucket,
                         _ => OwnershipMismatch::MissingDomain,
                     },
                 }
@@ -295,10 +299,10 @@ fn exact_storage_key_owner_relation_has_no_account_or_embedded_id_predicate() {
     freeze(&mut block);
     let original = Original::retain(&block).unwrap();
     without_allocations(|| {
-        validate_original_domain_ownership(&original.rows, &original.index, 388)
+        validate_original_domain_ownership(&original.rows, &original.index, 384)
     })
     .unwrap();
-    let snapshot = capture(&block, limits(), 388).unwrap().unwrap();
+    let snapshot = capture(&block, limits(), 384).unwrap().unwrap();
     assert_equal(
         &snapshot,
         &capture_domains_table_once(&state, limits())
@@ -319,26 +323,33 @@ fn malformed_typed_owner_equality_is_allocation_free_in_both_original_images() {
         if previous {
             state.world.domains =
                 Storage::from_iter([(id("live"), Domain::new(id("live")).build(&owner))]);
-            state.world.domains_by_owner =
-                Storage::from_iter([(owner.clone(), BTreeSet::from([id("live"), id("ghost")]))]);
+            state.world.domains_by_owner = Storage::from_iter([
+                ((owner.clone(), id("live")), ()),
+                ((owner.clone(), id("ghost")), ()),
+            ]);
         }
         let mut block = state.block(header());
         if previous {
             block
                 .world
                 .domains_by_owner
-                .insert(owner.clone(), BTreeSet::from([id("live")]));
+                .remove((owner.clone(), id("ghost")));
         } else {
             // Use the same retained malformed owner for both tables, never parse it.
             block
                 .world
                 .domains
                 .insert(id("live"), Domain::new(id("live")).build(&owner));
-            block.world.domains_by_owner.remove(ALICE_ID.clone());
             block
                 .world
                 .domains_by_owner
-                .insert(owner.clone(), BTreeSet::from([id("live"), id("ghost")]));
+                .remove((ALICE_ID.clone(), id("live")));
+            for name in ["live", "ghost"] {
+                block
+                    .world
+                    .domains_by_owner
+                    .insert((owner.clone(), id(name)), ());
+            }
         }
         freeze(&mut block);
         let original = Original::retain(&block).unwrap();
@@ -477,10 +488,7 @@ fn later_equal_and_changed_target_publications_cannot_refresh_either_original() 
         let mut owners = state.world.domains_by_owner.block();
         if changed {
             rows.insert(id("later"), Domain::new(id("later")).build(&ALICE_ID));
-            owners.insert(
-                ALICE_ID.clone(),
-                BTreeSet::from([id("later"), id("moving"), id("removed"), id("shared")]),
-            );
+            owners.insert((ALICE_ID.clone(), id("later")), ());
         }
         rows.commit();
         owners.commit();
@@ -506,14 +514,8 @@ fn real_replacement_preserves_rewound_domains_and_both_original_modes() {
         rows.insert(id("moving"), Domain::new(id("moving")).build(&BOB_ID));
         rows.commit();
         let mut owners = state.world.domains_by_owner.block();
-        owners.insert(
-            ALICE_ID.clone(),
-            BTreeSet::from([id("removed"), id("shared")]),
-        );
-        owners.insert(
-            BOB_ID.clone(),
-            BTreeSet::from([id("moving"), id("untouched")]),
-        );
+        owners.remove((ALICE_ID.clone(), id("moving")));
+        owners.insert((BOB_ID.clone(), id("moving")), ());
         owners.commit();
     }
     let mut block = state.block_and_revert(header());
@@ -549,10 +551,13 @@ fn real_replacement_preserves_rewound_domains_and_both_original_modes() {
 }
 
 #[test]
-fn unadmitted_physical_work_defers_latent_missing_bucket_without_a_verdict() {
+fn unadmitted_physical_work_defers_latent_missing_membership_without_a_verdict() {
     let state = state(one_domain());
     let mut block = state.block(header());
-    block.world.domains_by_owner.remove(ALICE_ID.clone());
+    block
+        .world
+        .domains_by_owner
+        .remove((ALICE_ID.clone(), id("live")));
     freeze(&mut block);
     assert_eq!(
         capture(&block, limits(), 0).err(),

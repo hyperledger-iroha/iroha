@@ -740,7 +740,7 @@ impl ZkX509Sha256WordCircuitV1 {
         Ok(())
     }
     fn input_bytes(&self) -> Result<Zeroizing<Vec<u8>>, ZkX509Sha256WordAirErrorV1> {
-        if self.input_words.is_empty() || self.input_words.len() % 16 != 0 {
+        if self.input_words.is_empty() || !self.input_words.len().is_multiple_of(16) {
             return Err(ZkX509Sha256WordAirErrorV1::Topology);
         }
         let mut bytes = Zeroizing::new(Vec::new());
@@ -902,7 +902,7 @@ impl WordBuilderV1 {
         id
     }
     fn value(&self, id: WordIdV1) -> u32 {
-        self.words[id.0].value.0 as u32
+        u32::try_from(self.words[id.0].value.0).expect("allocated word is canonical u32")
     }
     fn input(&mut self, value: u32) -> WordIdV1 {
         let id = self.allocate(value);
@@ -957,13 +957,13 @@ impl WordBuilderV1 {
         let sum = inputs.iter().fold(u64::from(constant), |sum, id| {
             sum + u64::from(self.value(*id))
         });
-        let output = self.allocate(sum as u32);
-        let carry = (sum >> 32) as u8;
+        let output = self.allocate(u32::try_from(sum & u64::from(u32::MAX)).expect("masked word"));
+        let carry = u8::try_from(sum >> 32).expect("at most six u32 addends have a one-byte carry");
         let mut padded = [inputs[0]; 5];
         padded[..inputs.len()].copy_from_slice(inputs);
         self.operations.push(WordOperationV1::Add {
             inputs: padded,
-            arity: inputs.len() as u8,
+            arity: u8::try_from(inputs.len()).expect("protocol-bounded index fits u8"),
             constant,
             output,
             carry,
@@ -976,6 +976,12 @@ impl WordBuilderV1 {
 pub fn build_sha256_word_circuit_v1(
     message: &[u8],
 ) -> Result<ZkX509Sha256WordCircuitV1, ZkX509Sha256WordAirErrorV1> {
+    #[cfg(test)]
+    CIRCUIT_BUILD_COUNT_V1.with(|count| {
+        if let Some(current) = count.get() {
+            count.set(Some(current + 1));
+        }
+    });
     let circuit = build_sha256_word_circuit_unchecked_v1(message)?;
     circuit.validate()?;
     Ok(circuit)
@@ -1089,16 +1095,7 @@ fn build_word_memory_trace_v1(
     // Each address is an immutable word: all read ties have exactly the same
     // complete tuple, so unstable in-place sorting preserves canonical bytes
     // without allocating an uncleared stable-sort copy of private events.
-    sorted.sort_unstable_by_key(|access| {
-        (
-            access.address.0,
-            if access.is_write == F::ONE {
-                0_u8
-            } else {
-                1_u8
-            },
-        )
-    });
+    sorted.sort_unstable_by_key(|access| (access.address.0, u8::from(access.is_write != F::ONE)));
     validate_sorted_word_memory_v1(&sorted, words.len())?;
     Ok(WordMemoryTraceV1 {
         execution: execution.into_vec(),
@@ -1662,7 +1659,7 @@ mod tests {
                 channel,
                 producer,
                 consumers: vec![consumer],
-                byte_len: value.len() as u32,
+                byte_len: u32::try_from(value.len()).expect("protocol-bounded index fits u32"),
                 public_value: public.then(|| value.to_vec()),
             },
             producer_value: value.to_vec(),
@@ -2038,4 +2035,29 @@ mod tests {
             Err(ZkX509IoAirErrorV1::PublicInput)
         );
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    static CIRCUIT_BUILD_COUNT_V1: core::cell::Cell<Option<usize>> = const { core::cell::Cell::new(None) };
+}
+
+/// Count actual checked circuit constructions in this test thread, resetting on unwind.
+#[cfg(test)]
+pub(super) fn observe_circuit_builds_v1<T>(operation: impl FnOnce() -> T) -> (T, usize) {
+    struct Scope;
+    impl Drop for Scope {
+        fn drop(&mut self) {
+            CIRCUIT_BUILD_COUNT_V1.set(None);
+        }
+    }
+    assert!(CIRCUIT_BUILD_COUNT_V1.replace(Some(0)).is_none());
+    let _scope = Scope;
+    let output = operation();
+    (
+        output,
+        CIRCUIT_BUILD_COUNT_V1
+            .get()
+            .expect("active circuit observation"),
+    )
 }

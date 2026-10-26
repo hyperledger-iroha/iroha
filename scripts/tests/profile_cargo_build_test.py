@@ -12,7 +12,7 @@ import pytest
 
 
 SCRIPT = Path(__file__).resolve().parents[1] / "profile_cargo_build.py"
-SPEC = importlib.util.spec_from_file_location("profile_cargo_build", SCRIPT)
+SPEC = importlib.util.spec_from_file_location("profile_cargo_build_test_subject", SCRIPT)
 assert SPEC is not None and SPEC.loader is not None
 MODULE = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = MODULE
@@ -58,6 +58,7 @@ def _fake_profile_fixture(
     git.write_text(
         "#!/bin/sh\n"
         "case \" $* \" in\n"
+        "  *\" --stage \"*) exit 0 ;;\n"
         "  *\" --show-toplevel \"*)\n"
         "    previous=\n"
         "    for argument in \"$@\"; do\n"
@@ -1135,6 +1136,29 @@ def test_main_isolates_source_cache_and_rustup_and_cleans_state(
     assert source.read_bytes() == caller_source
     assert MODULE.bounded_tree_fingerprint(fixture["cargo_home"]) == caller_cache
     assert MODULE.bounded_tree_fingerprint(fixture["rustup_home"]) == caller_rustup
+    assert not MODULE.private_state_path(fixture["report"]).exists()
+
+
+@pytest.mark.parametrize("present", [False, True])
+def test_isolated_main_rejects_gitlinks_even_when_the_worktree_path_is_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], present: bool
+) -> None:
+    """Local-only empty gitlink handling must not admit submodules in release snapshots."""
+    fixture = _fake_profile_fixture(tmp_path, monkeypatch)
+    if present:
+        (fixture["root"] / "docs").mkdir()
+    monkeypatch.setattr(MODULE, "git_index_entries", lambda *_: (
+        ("docs", "160000", "a" * 40, 0),
+    ))
+    monkeypatch.setattr(MODULE, "capture_source_snapshot", lambda *_args, **_kwargs:
+                        pytest.fail("isolated capture must reject the gitlink before copying"))
+    returncode = MODULE.main([
+        "--root", str(fixture["root"]), "--target-dir", str(fixture["target"]),
+        "--out", str(fixture["report"]), "--cargo-home", str(fixture["cargo_home"]),
+        "--rustup-home", str(fixture["rustup_home"]), "--", "build",
+    ])
+    assert returncode != 0
+    assert "do not support Git submodules" in capsys.readouterr().err
     assert not MODULE.private_state_path(fixture["report"]).exists()
 
 

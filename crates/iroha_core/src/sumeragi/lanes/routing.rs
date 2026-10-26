@@ -668,16 +668,20 @@ mod tests {
         assert_eq!(committed_root_scope(&absent), None);
         assert_eq!(read_routing_root_scope(&absent).unwrap(), None);
         drop(absent);
-        let mut parameters = world.parameters.block();
-        parameters
-            .set_parameter(Parameter::Custom(CustomParameter::new(
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
+            .expect("original parameter-only fixture block");
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            Parameter::Custom(CustomParameter::new(
                 consensus_metadata::handshake_meta_id(),
                 iroha_primitives::json::Json::from_norito_value_ref(&norito::json::Value::Bool(
                     false,
                 ))
                 .unwrap(),
-            )))
-            .expect("valid fixture parameters");
+            )),
+            world.sccp_committee_generations.allocation_budget(),
+        )
+        .expect("valid fixture parameters");
         parameters.commit();
         let view = world.view();
         assert_eq!(committed_root_scope(&view), None);
@@ -919,15 +923,17 @@ mod tests {
             norito::json::from_str(parameter.payload().get()).unwrap();
         metadata.wire_protocol_version =
             u32::from(iroha_data_model::sumeragi::PROTOCOL_VERSION) + 1;
-        let mut parameters = world.parameters.block();
-        parameters
-            .set_parameter(Parameter::Custom(
-                iroha_data_model::parameter::CustomParameter::new(
-                    consensus_metadata::handshake_meta_id(),
-                    iroha_primitives::json::Json::new(metadata),
-                ),
-            ))
-            .unwrap();
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
+            .expect("original parameter-only fixture block");
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            Parameter::Custom(iroha_data_model::parameter::CustomParameter::new(
+                consensus_metadata::handshake_meta_id(),
+                iroha_primitives::json::Json::new(metadata),
+            )),
+            world.sccp_committee_generations.allocation_budget(),
+        )
+        .unwrap();
         parameters.commit();
         assert_eq!(read_routing_root_scope(&world.view()).unwrap(), None);
     }
@@ -948,10 +954,14 @@ mod tests {
         );
         policy.validate().unwrap();
         let original_parameter = policy.clone().into_custom_parameter();
-        let mut parameters = world.parameters.block();
-        parameters
-            .set_parameter(Parameter::Custom(original_parameter.clone()))
-            .unwrap();
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
+            .expect("original parameter-only fixture block");
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            Parameter::Custom(original_parameter.clone()),
+            world.sccp_committee_generations.allocation_budget(),
+        )
+        .unwrap();
         parameters.commit();
         let view = world.view();
         assert_eq!(
@@ -994,10 +1004,14 @@ mod tests {
             ),
             invalid.into_custom_parameter(),
         ] {
-            let mut parameters = world.parameters.block();
-            parameters
-                .set_parameter(Parameter::Custom(parameter.clone()))
-                .unwrap();
+            let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
+                .expect("original parameter-only fixture block");
+            crate::state::set_parameter_cell_for_testing(
+                &mut parameters,
+                Parameter::Custom(parameter.clone()),
+                world.sccp_committee_generations.allocation_budget(),
+            )
+            .unwrap();
             parameters.commit();
             let view = world.view();
             assert!(

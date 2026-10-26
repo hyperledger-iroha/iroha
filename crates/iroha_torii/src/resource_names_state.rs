@@ -101,7 +101,10 @@ fn snapshot_refusal_reason(error: &WorldStateSnapshotError) -> &'static str {
         WorldStateSnapshotError::DecodeControl(_) => "decode_control",
         WorldStateSnapshotError::RootScopeRead(_) => "root_scope_read",
         WorldStateSnapshotError::Amx(_) => "amx_original",
+        WorldStateSnapshotError::Catalog(_) => "catalog_original",
+        WorldStateSnapshotError::CatalogProjection(_) => "catalog_projection",
         WorldStateSnapshotError::CutChanged { .. } => "cut_changed",
+        WorldStateSnapshotError::ZkX509Retention(_) => "zk_x509_retention",
         WorldStateSnapshotError::Invalid(_) => "invalid_cut_or_original",
     }
 }
@@ -521,6 +524,36 @@ mod tests {
             snapshot_refusal_reason(&WorldStateSnapshotError::Invalid("private original".into())),
             "invalid_cut_or_original"
         );
+        let retained_refusal = iroha_allocation::ChargedBuffer::<u8>::new(
+            1,
+            &iroha_allocation::AllocationBudget::new(0),
+        )
+        .err()
+        .expect("unfunded retained State refuses");
+        for (error, reason) in [
+            (
+                WorldStateSnapshotError::Catalog(
+                    iroha_data_model::nexus::NexusCatalogValidationError::EmptyTransition,
+                ),
+                "catalog_original",
+            ),
+            (
+                WorldStateSnapshotError::CatalogProjection(
+                    iroha_core::state::LaneLifecycleError::Storage("private original".into()),
+                ),
+                "catalog_projection",
+            ),
+            (
+                WorldStateSnapshotError::ZkX509Retention(retained_refusal.into()),
+                "zk_x509_retention",
+            ),
+        ] {
+            assert_eq!(snapshot_refusal_reason(&error), reason);
+            assert_eq!(
+                finalize(Err(refused("snapshot", reason))).status(),
+                StatusCode::SERVICE_UNAVAILABLE
+            );
+        }
         assert_eq!(
             finalize(Err(refused("snapshot", "cut_changed"))).status(),
             StatusCode::SERVICE_UNAVAILABLE

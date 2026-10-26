@@ -50,7 +50,7 @@ impl NodeGate {
     }
 }
 
-pub(crate) struct Operation<'gate>(&'gate NodeGate);
+pub struct Operation<'gate>(&'gate NodeGate);
 impl Drop for Operation<'_> {
     fn drop(&mut self) {
         self.0.state.fetch_sub(OPERATION, Ordering::AcqRel);

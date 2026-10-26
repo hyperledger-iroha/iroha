@@ -76,8 +76,8 @@ use crate::{
 };
 
 /// Retain decoder refusal outside every deterministic instruction/result carrier.
-fn amx_error(error: AmxError, transaction: &mut StateTransaction<'_, '_>) -> Error {
-    if let Some(resource) = classified_decode_refusal(&error)
+fn amx_error(error: &AmxError, transaction: &mut StateTransaction<'_, '_>) -> Error {
+    if let Some(resource) = classified_decode_refusal(error)
         && !cfg!(all(test, sumeragi_core_mutation = "HC19"))
     {
         transaction.arm_local_storage_refusal(crate::state::StateStorageAdmissionError::AmxDecode(
@@ -160,24 +160,24 @@ impl Execute for RegisterAmxDataspaceV1 {
             && !has_permission(&state_transaction.world, authority)
         {
             return Err(amx_error(
-                AmxError::State("registering an AMX dataspace needs genesis or CanSetParameters"),
+                &AmxError::State("registering an AMX dataspace needs genesis or CanSetParameters"),
                 state_transaction,
             ));
         }
         let anchor =
-            decode_anchor(&self.anchor).map_err(|error| amx_error(error, state_transaction))?;
+            decode_anchor(&self.anchor).map_err(|error| amx_error(&error, state_transaction))?;
         let tracker = AmxForeignInstanceV1::new(
             self.instance,
             anchor,
             iroha_data_model::sumeragi_finality::CertifiedResultScope::NonGlobal,
         )
-        .map_err(|error| amx_error(error, state_transaction))?;
+        .map_err(|error| amx_error(&error, state_transaction))?;
         state_transaction
             .world
             .sumeragi_amx
             .get_mut()
             .register_dataspace(self.dataspace, tracker)
-            .map_err(|error| amx_error(error, state_transaction))
+            .map_err(|error| amx_error(&error, state_transaction))
     }
 }
 
@@ -195,7 +195,7 @@ impl Execute for BeginAmxV1 {
             .try_into()
             .map_err(|_| {
                 amx_error(
-                    AmxError::State("AMX block time overflows"),
+                    &AmxError::State("AMX block time overflows"),
                     state_transaction,
                 )
             })?;
@@ -210,8 +210,8 @@ impl Execute for BeginAmxV1 {
             .sumeragi_amx
             .get_mut()
             .begin(height, block_time_ms, cadence_ms, &self.transaction)
-            .map_err(|error| amx_error(error, state_transaction))?;
-        write(&record).map_err(|error| amx_error(error, state_transaction))
+            .map_err(|error| amx_error(&error, state_transaction))?;
+        write(&record).map_err(|error| amx_error(&error, state_transaction))
     }
 }
 
@@ -229,7 +229,7 @@ impl Execute for ExpireAmxV1 {
             .try_into()
             .map_err(|_| {
                 amx_error(
-                    AmxError::State("AMX block time overflows"),
+                    &AmxError::State("AMX block time overflows"),
                     state_transaction,
                 )
             })?;
@@ -238,8 +238,9 @@ impl Execute for ExpireAmxV1 {
             .sumeragi_amx
             .get_mut()
             .expire_one(height, block_time_ms, &self.tx)
-            .map_err(|error| amx_error(error, state_transaction))?;
-        write(&AmxRecordV1::Decision(decision)).map_err(|error| amx_error(error, state_transaction))
+            .map_err(|error| amx_error(&error, state_transaction))?;
+        write(&AmxRecordV1::Decision(decision))
+            .map_err(|error| amx_error(&error, state_transaction))
     }
 }
 
@@ -267,7 +268,7 @@ pub(crate) fn execute_relay_prepared_original(
         .try_into()
         .map_err(|_| {
             amx_error(
-                AmxError::State("AMX block time overflows"),
+                &AmxError::State("AMX block time overflows"),
                 state_transaction,
             )
         })?;
@@ -285,10 +286,10 @@ pub(crate) fn execute_relay_prepared_original(
         .sumeragi_amx
         .get_mut()
         .relay_prepared(height, block_time_ms, &instruction.proof)
-        .map_err(|error| amx_error(error, state_transaction))?;
+        .map_err(|error| amx_error(&error, state_transaction))?;
     if let AmxRelayOutcome::Decided(decision) = outcome {
         write(&AmxRecordV1::Decision(decision))
-            .map_err(|error| amx_error(error, state_transaction))?;
+            .map_err(|error| amx_error(&error, state_transaction))?;
     }
     Ok(())
 }
@@ -305,7 +306,7 @@ impl Execute for RelayAmxHandoffV1 {
             .get_mut()
             .relay_handoff(self.dataspace, &self.proof)
             .map(|_| ())
-            .map_err(|error| amx_error(error, state_transaction))
+            .map_err(|error| amx_error(&error, state_transaction))
     }
 }
 

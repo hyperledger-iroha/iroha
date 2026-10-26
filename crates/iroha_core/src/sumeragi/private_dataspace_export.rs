@@ -63,7 +63,7 @@ impl From<ExecutionAttemptError<ChainReadError>> for ExportError {
     }
 }
 
-/// Project the exact signed private root, original executed genesis result and epoch PoPs.
+/// Project the exact signed private root, original executed genesis result and epoch `PoPs`.
 ///
 /// This local execution claim is submitted only with the parent's owner authorization.
 /// No public genesis body or private transaction is required by the parent registration.
@@ -126,7 +126,7 @@ fn registration_from_chain<V: StateReadOnly>(
     Ok(registration)
 }
 
-/// Project an original executed successor and its fully verified native CommitQC.
+/// Project an original executed successor and its fully verified native `CommitQC`.
 ///
 /// # Errors
 /// Refuses genesis, invalid scope, missing original custody, invalid exact quorums or profiles.

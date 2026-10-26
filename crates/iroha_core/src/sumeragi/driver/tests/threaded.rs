@@ -56,14 +56,14 @@ struct Fakes {
 }
 
 /// One single-validator instance on its threads.
-struct Instance {
+struct DriverInstance {
     running: RunningDriver,
     key: PublicKey,
     instance: Hash32,
     fakes: Fakes,
 }
 
-impl Instance {
+impl DriverInstance {
     fn handle(&self) -> DriverHandle {
         self.running.handle()
     }
@@ -177,7 +177,7 @@ fn spawn_instance<C: Clock + 'static>(
     tag: u8,
     clock: Arc<C>,
     prepare: impl FnOnce(&Fakes),
-) -> Instance {
+) -> DriverInstance {
     let PreparedInstance {
         driver,
         start,
@@ -186,7 +186,7 @@ fn spawn_instance<C: Clock + 'static>(
         fakes,
     } = prepare_instance(tag, clock, prepare);
     let running = driver.spawn(DriverConfig::default(), start).unwrap();
-    Instance {
+    DriverInstance {
         running,
         key,
         instance,
@@ -233,7 +233,8 @@ fn assert_driver_retired(handle: &DriverHandle, fakes: &Fakes) {
 /// when a public delivery handle keeps the input channel connected.
 #[test]
 fn dropping_running_owner_stops_and_joins_with_retained_handle() {
-    let Instance { running, fakes, .. } = spawn_instance(231, Arc::new(SystemClock::new()), |_| {});
+    let DriverInstance { running, fakes, .. } =
+        spawn_instance(231, Arc::new(SystemClock::new()), |_| {});
     let handle = running.handle();
     assert!(handle.ready());
     drop(running);
@@ -244,7 +245,8 @@ fn dropping_running_owner_stops_and_joins_with_retained_handle() {
 /// and without converting orderly completion into a worker-failure report.
 #[test]
 fn caller_unwind_stops_and_joins_running_owner_with_retained_handle() {
-    let Instance { running, fakes, .. } = spawn_instance(232, Arc::new(SystemClock::new()), |_| {});
+    let DriverInstance { running, fakes, .. } =
+        spawn_instance(232, Arc::new(SystemClock::new()), |_| {});
     let handle = running.handle();
     assert!(handle.ready());
     let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
@@ -280,7 +282,7 @@ fn worker_callback_drop_transfers_all_original_joins_without_self_deadlock() {
         running: parking_lot::Mutex::new(None),
         retired,
     });
-    let Instance { running, fakes, .. } = spawn_instance(233, Arc::clone(&clock), |_| {});
+    let DriverInstance { running, fakes, .. } = spawn_instance(233, Arc::clone(&clock), |_| {});
     let handle = running.handle();
     assert!(handle.ready());
     let loop_thread = running.threads.last().unwrap().thread().id();
@@ -599,7 +601,7 @@ fn init_from_the_block_store() {
             h,
             parent,
             parent_result,
-            iroha_sumeragi::sim::driver::encode_tx(0, false, 0),
+            &iroha_sumeragi::sim::driver::encode_tx(0, false, 0),
         );
         let r = Hash32([u8::try_from(h).unwrap(); 32]);
         blocks.append(&b, &commit_qc(&b, r)).unwrap();
@@ -1101,7 +1103,7 @@ fn storage_closure_refuses_buffered_dispatch_and_each_physical_send() {
         2,
         Hash32([1; 32]),
         Hash32([2; 32]),
-        iroha_sumeragi::sim::driver::encode_tx(0, false, 0),
+        &iroha_sumeragi::sim::driver::encode_tx(0, false, 0),
     );
     let message = WireMessage::Qc(commit_qc(&block, Hash32([3; 32])));
     let frame = super::super::serve::frame(&message).unwrap();

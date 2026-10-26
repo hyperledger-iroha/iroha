@@ -288,11 +288,11 @@ struct SetColumns<'a, F> {
 }
 
 /// The coefficients of a key polynomial, or its cached coset.
-fn key_coset<'a, C: PastaCurve>(
-    pk: &'a ProvingKey<C>,
+fn key_coset<C: PastaCurve>(
+    pk: &ProvingKey<C>,
     polynomial: CosetPolynomial,
     coset: usize,
-) -> Result<&'a [C::ScalarExt], KeyError> {
+) -> Result<&[C::ScalarExt], KeyError> {
     match pk.coset_values(polynomial, coset)? {
         Cow::Borrowed(values) => Ok(values),
         Cow::Owned(_) => Err(KeyError::CosetIndex),

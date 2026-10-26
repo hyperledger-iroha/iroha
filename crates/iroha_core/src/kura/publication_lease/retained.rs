@@ -4,7 +4,7 @@ use super::*;
 
 /// Original physical lease and four allocation-free source-bound release batches.
 /// This owner must outlive every enclosing physical guard and frozen State field.
-pub(crate) struct KuraPublicationSlot<'kura> {
+pub struct KuraPublicationSlot<'kura> {
     kura: &'kura Kura,
     lease: Option<KuraPublicationLease<'kura>>,
     releases: KuraPublicationReleases,
@@ -122,7 +122,7 @@ impl Drop for KuraPublicationSlot<'_> {
 }
 
 /// Physical attempt borrowing a cleanup owner which outlives enclosing writers.
-pub(crate) struct KuraPhysicalScope<'scope, 'kura>(&'scope mut KuraPublicationSlot<'kura>);
+pub struct KuraPhysicalScope<'scope, 'kura>(&'scope mut KuraPublicationSlot<'kura>);
 impl<'kura> std::ops::Deref for KuraPhysicalScope<'_, 'kura> {
     type Target = KuraPublicationSlot<'kura>;
     fn deref(&self) -> &Self::Target {

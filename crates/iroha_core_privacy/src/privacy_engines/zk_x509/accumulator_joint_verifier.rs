@@ -30,7 +30,7 @@ impl CaJointVerifierOraclesV1 {
     /// Decode canonical CA records and bind both original auxiliary roots before
     /// every constraint coefficient. The paired MAIN phase checks the MAIN root.
     pub(crate) fn new_v1(
-        public: ZkX509CaAccumulatorStarkPublicV1,
+        public: &ZkX509CaAccumulatorStarkPublicV1,
         schedule: &ZkX509ShaCallScheduleV1,
         main_pre_aux: ZkX509CredentialMainPreAuxV1,
         auxiliary: JointAuxiliaryBindingV1,
@@ -79,7 +79,7 @@ impl CaJointVerifierOraclesV1 {
         ) {
             return Err(ZkX509CaAccumulatorProofErrorV1::TranscriptMismatch);
         }
-        absorb_zk_x509_credential_pre_aux_binding_v1(&mut transcript, pre_aux)
+        absorb_zk_x509_credential_pre_aux_binding_v1(&mut transcript, &pre_aux)
             .map_err(map_credential_pre_aux_error_v1)?;
         aggregate::absorb_aux_roots_v1(
             &mut transcript,
@@ -108,7 +108,7 @@ impl CaJointVerifierOraclesV1 {
         )
         .map_err(map_aggregate_proof_error_v1)?;
         Ok(Self {
-            public,
+            public: *public,
             pre_aux,
             layout,
             proof,
@@ -156,7 +156,7 @@ impl CaJointVerifierDeepV1 {
     pub(crate) fn bind_with_main_v1(
         &mut self,
         main_transcript: &mut TransparentTranscriptV1,
-        openings: JointOriginalOpeningsV1,
+        openings: &JointOriginalOpeningsV1,
     ) -> Result<JointDeepBindingV1, ZkX509CaAccumulatorProofErrorV1> {
         let proof_instance = self.oracles.pre_aux.proof_instance_v1();
         if self.openings.is_some() {
@@ -169,12 +169,12 @@ impl CaJointVerifierDeepV1 {
                 &mut self.oracles.transcript,
             )
             .map_err(map_transparent_proof_error_v1)?;
-        self.openings = Some(openings);
+        self.openings = Some(*openings);
         Ok(binding)
     }
     pub(crate) fn finish_v1(
         mut self,
-        binding: JointDeepBindingV1,
+        binding: &JointDeepBindingV1,
     ) -> Result<(), ZkX509CaAccumulatorProofErrorV1> {
         let proof_instance = self.oracles.pre_aux.proof_instance_v1();
         if !binding.matches_v1(JointSubproofV1::Ca, &self.oracles.transcript)
@@ -227,7 +227,7 @@ impl CaJointVerifierDeepV1 {
         let fixed = compile_ca_accumulator_fixed_columns_v1()
             .map_err(ZkX509CaAccumulatorProofErrorV1::from)?;
         verify_ca_deep_constraints_v1(
-            stage.public,
+            &stage.public,
             &stage.deep,
             self.point,
             &stage.layout,

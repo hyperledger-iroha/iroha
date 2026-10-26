@@ -190,11 +190,13 @@ Lifecycle / Utility
     schedule and ceiling, and circuit and verifier-key versions.
 - 0xFE COMMIT_OUTPUT — Args: none → Return: `u64=0` — Gas: G_commit
 
+The six SM syscalls are mandatory in ABI V1 on every host; node signing allowlists do not enable or disable them. Invalid pointers, encodings, signatures and authentication tags retain their normal validation results.
+
 For the SM4 calls, the host appends the authentication tag to the ciphertext output; callers supply the same layout when invoking the corresponding `OPEN` syscall. `SM4_GCM_*` always uses a 16-byte tag and 12-byte nonce. `SM4_CCM_*` accepts nonce lengths between 7 and 13 bytes and tag sizes {4,6,8,10,12,14,16}; pass the desired tag length in `r14` (use `0` to select 16). Passing `0` in `r12` denotes an empty AAD. Gas charges a fixed SM4 base plus AAD bytes and plaintext/ciphertext bytes inspected, including validation-failure paths after pointer decoding.
 
 Kotodama intrinsics
 - ``crypto::sm3(message: bytes) -> bytes`` mirrors `message` into INPUT with `INPUT_PUBLISH_TLV` and issues `SM3_HASH`, returning a pointer to the digest Blob.
-- ``crypto::sm2::verify(message:, signature:, public_key:[, distid:]) -> bool`` mirrors each Blob argument into INPUT, invokes `SM2_VERIFY`, and returns `true` for valid signatures. Omitting `distid` selects the runtime-configured default (``Sm2PublicKey::default_distid()``, sourced from `crypto.sm2_distid_default`); providing it enforces a custom distinguishing identifier.
+- ``crypto::sm2::verify(message:, signature:, public_key:[, distid:]) -> bool`` mirrors each Blob argument into INPUT, invokes `SM2_VERIFY`, and returns `true` for valid signatures. Omitting `distid` selects the fixed protocol default (``Sm2PublicKey::DEFAULT_DISTID``), independently of the process key-generation default; providing it enforces that explicit distinguishing identifier.
 - ``crypto::verify_signature(message:, signature:, public_key:, scheme:) -> bool`` issues `VERIFY_SIGNATURE`. `scheme` is a compile-time `SignatureScheme::Ed25519`, `SignatureScheme::Secp256k1`, or `SignatureScheme::MlDsa`, which the compiler folds into the scheme code `1`, `2`, or `3`; source code cannot pass any other code.
 - ``context::transaction_time_ms() -> int`` issues `CURRENT_TIME_MS` and returns the deterministic logical execution time in milliseconds. `CoreHost` binds transaction contract calls to the signed transaction creation time, which the signer chooses within the node's admission tolerance, and trigger calls to the block-header creation time; test/default hosts use an explicitly configured value and default to `0`. No host reads wall-clock time while servicing the syscall. `SYSVAR_BLOCK_TIME_MS` returns the same value on every host and is not a source builtin.
 - ``context::authority() -> AccountId`` issues `GET_AUTHORITY` and returns the immediate caller: the transaction or trigger authority for a top-level call, and the calling seiyaku's subject account for a nested call through `CALL_CONTRACT`.
@@ -297,10 +299,11 @@ Notes:
   canonical multisig id derived from the spec (signatories must be single-key accounts).
 
 Assets (FT)
-- 0x20 REGISTER_ASSET — Args: `r10=&AssetDefinitionId, r11=&Blob(UTF-8 display name), r12=numeric_spec:u64, r13=mintability:u64` → 0 — Gas: G_reg_asset
+- 0x20 REGISTER_ASSET — Args: `r10=&AssetDefinitionId, r11=&Blob(UTF-8 display name), r12=numeric_spec:u64, r13=mintability:u64, r14=&DomainId(owning domain)` → 0 — Gas: G_reg_asset
   - `r12` is `0` for `NumericSpec::unconstrained()` and `scale + 1` for a scale in `0..=28`.
   - `r13` carries the `Mintable` tag in its low two bits (`0` infinitely, `1` once, `2` not, `3` limited) and, for limited, the non-zero `u32` token budget in bits 2 and above; the other tags carry no payload. Kotodama writes these as `Mintable::Infinitely`, `Mintable::Once`, `Mintable::Not`, and `Mintable::Limited(tokens)`, and the numeric spec as `NumericSpec::unconstrained()`, `NumericSpec::integer()`, or `NumericSpec::fractional(scale)`.
   - Both words use `iroha_data_model::asset::definition::ivm_registration`, which the compiler and every host share. A malformed word, display name, or definition id traps with `DecodeError`; the registered definition is exactly the named one, with the global balance policy.
+  - `r14` is a required canonical owning domain. Registration uses the global balance policy and requires the executing authority to own that existing domain; a missing domain pointer or a domainless definition is not accepted.
 - 0x21 UNREGISTER_ASSET — Args: `r10=&AssetDefinitionId` → 0 — Gas: G_unreg_asset
 - 0x22 MINT_ASSET — Args: `r10=&AccountId, r11=&AssetDefinitionId, r12=&Quantity` → 0 — Gas: G_mint
 - 0x23 BURN_ASSET — Args: `r10=&AccountId, r11=&AssetDefinitionId, r12=&Quantity` → 0 — Gas: G_burn
@@ -351,6 +354,7 @@ Roles / Permissions
 - 0x33 REVOKE_ROLE — Args: `r10=&AccountId, r11=&Name` → 0 — Gas: G_revoke_role
 - 0x34 GRANT_PERMISSION — Args: `r10=&AccountId, r11=&Name|&Json(Permission)` → 0 — Gas: G_grant_perm
 - 0x35 REVOKE_PERMISSION — Args: `r10=&AccountId, r11=&Name|&Json(Permission)` → 0 — Gas: G_revoke_perm
+  - Deployed runtime calls may mutate only their own exact `CanUseContractPermission`, an exact `CanTransferAsset` whose source is the active immutable contract subject, or `CanExecuteTrigger`/`CanModifyTriggerMetadata` for a trigger owned by that subject. The executor validates the native JSON permission and ownership; foreign sources and triggers, malformed payloads, definition-wide grants, and role mutations are rejected. Manifest trigger callback subjects also require the callback entrypoint's declared instance permission.
 
 Triggers
 - 0x40 CREATE_TRIGGER — Args: `r10=&Json` (trigger spec) → 0 — Gas: G_create_trig
@@ -790,7 +794,7 @@ node enforces that policy unconditionally.
 | 0x18 | REMOVE_SIGNATORY | r10=&AccountId, r11=&Json | u64=0 | asset:gas/G_rm_sig@ivm.core/v2 |
 | 0x19 | SET_ACCOUNT_QUORUM | r10=&AccountId, r11=quorum:u64 | u64=0 | asset:gas/G_set_quorum@ivm.core/v2 |
 | 0x1A | SET_ACCOUNT_DETAIL | r10=&AccountId, r11=&Name, r12=&Json | u64=0 | asset:gas/G_set_detail@ivm.core/v2 + bytes(val) |
-| 0x20 | REGISTER_ASSET | r10=&AssetDefinitionId, r11=&Blob(name), r12=numeric_spec:u64, r13=mintability:u64 | u64=0 | asset:gas/G_reg_asset@ivm.core/v2 |
+| 0x20 | REGISTER_ASSET | r10=&AssetDefinitionId, r11=&Blob(name), r12=numeric_spec:u64, r13=mintability:u64, r14=&DomainId(owning domain) | u64=0 | asset:gas/G_reg_asset@ivm.core/v2 |
 | 0x21 | UNREGISTER_ASSET | r10=&AssetDefinitionId | u64=0 | asset:gas/G_unreg_asset@ivm.core/v2 |
 | 0x22 | MINT_ASSET | r10=&AccountId, r11=&AssetDefinitionId, r12=&Quantity | u64=0 | asset:gas/G_mint@ivm.core/v2 |
 | 0x23 | BURN_ASSET | r10=&AccountId, r11=&AssetDefinitionId, r12=&Quantity | u64=0 | asset:gas/G_burn@ivm.core/v2 |

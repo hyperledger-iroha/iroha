@@ -63,7 +63,7 @@ impl Convert {
             self.network_prefix,
             Some(context.config().account_chain_discriminant),
         )?;
-        let expect_prefix = resolve_address_expect_prefix(&network_context, self.expect_prefix)?;
+        let expect_prefix = resolve_address_expect_prefix(&network_context, self.expect_prefix);
         let input = parse_address_input(self.input.as_str(), Some(expect_prefix))
             .wrap_err("failed to parse address literal")?;
         if self.format == OutputFormat::Json {
@@ -119,7 +119,7 @@ impl Audit {
             self.network_prefix,
             Some(context.config().account_chain_discriminant),
         )?;
-        let expect_prefix = resolve_address_expect_prefix(&network_context, self.expect_prefix)?;
+        let expect_prefix = resolve_address_expect_prefix(&network_context, self.expect_prefix);
         let mut stats = AddressAuditStats::default();
         let mut entries = Vec::with_capacity(inputs.len());
         for (index, raw) in inputs.into_iter().enumerate() {
@@ -234,7 +234,7 @@ impl Normalize {
             self.network_prefix,
             Some(context.config().account_chain_discriminant),
         )?;
-        let expect_prefix = resolve_address_expect_prefix(&network_context, self.expect_prefix)?;
+        let expect_prefix = resolve_address_expect_prefix(&network_context, self.expect_prefix);
         let outputs = self.process_entries(
             &inputs,
             context.i18n(),
@@ -352,8 +352,8 @@ fn resolve_address_network_context(
 fn resolve_address_expect_prefix(
     context: &AddressNetworkContext,
     expect_prefix: Option<u16>,
-) -> Result<u16> {
-    Ok(expect_prefix.unwrap_or(context.chain_discriminant))
+) -> u16 {
+    expect_prefix.unwrap_or(context.chain_discriminant)
 }
 #[derive(JsonSerialize)]
 struct AddressSummary {
@@ -915,8 +915,7 @@ mod tests {
             .expect("input i105");
         let context = resolve_address_network_context(None, Some(output_prefix), None)
             .expect("output prefix resolves");
-        let expect_prefix =
-            resolve_address_expect_prefix(&context, Some(input_prefix)).expect("expect prefix");
+        let expect_prefix = resolve_address_expect_prefix(&context, Some(input_prefix));
         let parsed = parse_address_input(&input, Some(expect_prefix)).expect("input parses");
         let rendered = encode_address_literal(&parsed, output_prefix, OutputFormat::I105)
             .expect("output i105");

@@ -105,6 +105,7 @@ const _: () = assert!(
 );
 const GLOBAL_WILDCARD_KEY: &str = "*";
 const STATE_WILDCARD_KEY: &str = "state:*";
+const DOMAIN_WILDCARD_KEY: &str = "domain:*";
 const HINT_SKIP_DYNAMIC_STATE_PATH: &str = "dynamic state path is not compiler-resolved";
 const HINT_SKIP_CONTRACT_CALL_TARGET: &str = "contract call target is not compiler-resolved";
 const HINT_SKIP_INTERNAL_CALL_TARGET: &str = "internal call target is not compiler-resolved";
@@ -5541,6 +5542,7 @@ impl Compiler {
                             name,
                             spec,
                             mintable,
+                            owning_domain,
                         } => {
                             if let Some(asset_str) = string_map.get(&(func_idx, *asset)) {
                                 let key_asset = DataKey(DataKind::AssetDef, asset_str.clone());
@@ -5550,6 +5552,11 @@ impl Compiler {
                                 push_word(&mut code, encode_addi(10, r_asset, 0)?);
                             }
                             code.extend_from_slice(&publish_tlv);
+                            push_word(&mut code, encode_addi(15, 10, 0)?);
+                            load_pointer(owning_domain, 10, scratch1, DataKind::Domain, &mut code)?;
+                            code.extend_from_slice(&publish_tlv);
+                            push_word(&mut code, encode_addi(14, 10, 0)?);
+                            push_word(&mut code, encode_addi(10, 15, 0)?);
                             let r_name = src_reg(name, scratch1, &mut code)?;
                             let r_spec = src_reg(spec, scratch2, &mut code)?;
                             let r_mint = src_reg(mintable, scratchd, &mut code)?;
@@ -10243,7 +10250,15 @@ fn record_isi_access(
             add_account_hint_rw(access_set, &account);
             add_permission_account_hint_w(access_set, &account, "CanInvokeContractEntrypoint");
         }
-        ir::Instr::RegisterAsset { asset, .. } => {
+        ir::Instr::RegisterAsset {
+            asset,
+            owning_domain,
+            ..
+        } => {
+            access_set.reads.insert(DOMAIN_WILDCARD_KEY.to_owned());
+            if let Some(domain) = parse_domain_temp(string_map, func_idx, *owning_domain) {
+                add_domain_r(access_set, &domain);
+            }
             if let Some(id) = parse_temp::<AssetDefinitionId>(string_map, func_idx, *asset) {
                 add_asset_definition_ownership_r(access_set, &id);
                 add_asset_def_rw(access_set, &id);
@@ -10605,7 +10620,7 @@ fn peer_id_from_json_value(value: &json::Value) -> Option<iroha_model_base::peer
         if let Ok(peer_id) = peer_str.parse::<iroha_model_base::peer::PeerId>() {
             return Some(peer_id);
         }
-        if let Ok(peer) = peer_str.parse::<iroha_data_model::peer::Peer>() {
+        if let Ok(peer) = peer_str.parse::<iroha_model_base::peer::Peer>() {
             return Some(peer.id().clone());
         }
         return None;

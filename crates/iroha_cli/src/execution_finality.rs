@@ -419,12 +419,13 @@ fn read_public_file(path: &Path, maximum: usize) -> Result<Vec<u8>> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt as _;
-        options.custom_flags(
+        options.custom_flags(i32::from_ne_bytes(
             (rustix::fs::OFlags::NOFOLLOW
                 | rustix::fs::OFlags::CLOEXEC
                 | rustix::fs::OFlags::NONBLOCK)
-                .bits() as i32,
-        );
+                .bits()
+                .to_ne_bytes(),
+        ));
     }
     #[cfg(windows)]
     {
@@ -489,7 +490,7 @@ impl VerifySettlementArgs {
             Some(INDEX_FORMAT) => {
                 let index = parse_index(&bytes, self.max_finality_archive_bytes)?;
                 ensure!(
-                    index.finality_batches.len() as u64 + 1 <= self.max_finality_heights,
+                    (index.finality_batches.len() as u64) < self.max_finality_heights,
                     "indexed batch count exceeds total finality height budget"
                 );
                 let directory = bundle_directory(&self.bundle)?;
@@ -502,15 +503,15 @@ impl VerifySettlementArgs {
             }
             _ => return Err(eyre!("unsupported first-release settlement format")),
         };
-        self.verify_carriers_with_stream(bundle, stream)
+        self.verify_carriers_with_stream(&bundle, stream)
     }
     #[cfg(test)]
-    fn verify_carriers(&self, bundle: Bundle) -> Result<Value> {
+    fn verify_carriers(&self, bundle: &Bundle) -> Result<Value> {
         self.verify_carriers_with_stream(bundle, FinalityStream::new(self)?)
     }
     fn verify_carriers_with_stream(
         &self,
-        bundle: Bundle,
+        bundle: &Bundle,
         mut stream: FinalityStream,
     ) -> Result<Value> {
         stream.consume(&bundle.finality)?;
@@ -1047,7 +1048,7 @@ mod tests {
         let fixture = make_fixture(Vec::new(), false);
         let mut args = expectations(&fixture);
         let error = args
-            .verify_carriers(bundle(&fixture))
+            .verify_carriers(&bundle(&fixture))
             .expect_err("not a settlement");
         assert!(
             error
@@ -1058,7 +1059,7 @@ mod tests {
         let foreign = make_fixture(Vec::new(), false);
         args.trusted_checkpoint = foreign.checkpoint_path.clone();
         assert!(
-            args.verify_carriers(bundle(&fixture))
+            args.verify_carriers(&bundle(&fixture))
                 .expect_err("self-consistent untrusted roster")
                 .to_string()
                 .contains("pinned native checkpoint")
@@ -1072,7 +1073,7 @@ mod tests {
         swapped.proofs =
             norito::encode_canonical(&fixture.alternate_block_proofs).expect("alternate proofs");
         assert!(
-            args.verify_carriers(swapped)
+            args.verify_carriers(&swapped)
                 .expect_err("swapped entry proof")
                 .to_string()
                 .contains("input/output proof mismatch")
@@ -1088,18 +1089,18 @@ mod tests {
         let mut swapped_output = bundle(&fixture);
         swapped_output.proofs = norito::encode_canonical(&wrong_output).expect("swapped output");
         assert!(
-            args.verify_carriers(swapped_output)
+            args.verify_carriers(&swapped_output)
                 .expect_err("output for another network input")
                 .to_string()
                 .contains("input/output proof mismatch")
         );
         let mut modified = bundle(&fixture);
         modified.block.push(0);
-        assert!(args.verify_carriers(modified).is_err());
+        assert!(args.verify_carriers(&modified).is_err());
         let mut skipped = bundle(&fixture);
         skipped.finality.push(skipped.finality[0].clone());
         assert!(
-            args.verify_carriers(skipped)
+            args.verify_carriers(&skipped)
                 .expect_err("repeated height")
                 .to_string()
                 .contains("pinned native checkpoint")
@@ -1115,7 +1116,7 @@ mod tests {
             norito::encode_canonical(&mismatched_proofs).expect("mismatched proofs");
         assert!(
             expectations(&fixture)
-                .verify_carriers(mismatched)
+                .verify_carriers(&mismatched)
                 .expect_err("another input's successful output cannot replace the rejection")
                 .to_string()
                 .contains("input/output proof mismatch")
@@ -1127,7 +1128,7 @@ mod tests {
         alternate.proofs =
             norito::encode_canonical(&fixture.alternate_block_proofs).expect("alternate proofs");
         assert!(
-            args.verify_carriers(alternate)
+            args.verify_carriers(&alternate)
                 .expect_err("the selected successful input has no settlement")
                 .to_string()
                 .contains("exactly one explicit settlement")
@@ -1146,13 +1147,13 @@ mod tests {
         );
         // Passing finality and inclusion reaches the actual application instruction check.
         assert!(
-            args.verify_carriers(carriers)
+            args.verify_carriers(&carriers)
                 .expect_err("no settlement")
                 .to_string()
                 .contains("exactly one explicit settlement")
         );
         assert!(
-            args.verify_carriers(bundle(&child))
+            args.verify_carriers(&bundle(&child))
                 .expect_err("skipped pinned height")
                 .to_string()
                 .contains("pinned native checkpoint")
@@ -1167,7 +1168,7 @@ mod tests {
             norito::encode_canonical(&parent.finality).expect("parent"),
         );
         assert!(
-            args.verify_carriers(carriers)
+            args.verify_carriers(&carriers)
                 .expect_err("untrusted successor committee")
                 .to_string()
                 .contains("pinned native checkpoint")
@@ -1190,7 +1191,7 @@ mod tests {
             let mut carriers = bundle(&fixture);
             carriers.finality[0] = norito::encode_canonical(&finality).expect("tampered finality");
             assert!(
-                args.verify_carriers(carriers)
+                args.verify_carriers(&carriers)
                     .expect_err("invalid certificate")
                     .to_string()
                     .contains("pinned native checkpoint")
@@ -1202,7 +1203,7 @@ mod tests {
         ));
         assert!(
             wrong_network
-                .verify_carriers(bundle(&fixture))
+                .verify_carriers(&bundle(&fixture))
                 .expect_err("wrong network")
                 .to_string()
                 .contains("pinned native checkpoint")
@@ -1277,7 +1278,7 @@ mod tests {
         let fixture = make_fixture(vec![settlement.clone().into()], true);
         assert!(
             expectations(&fixture)
-                .verify_carriers(bundle(&fixture))
+                .verify_carriers(&bundle(&fixture))
                 .expect_err("rejected transaction")
                 .to_string()
                 .contains("was rejected")
@@ -1285,14 +1286,14 @@ mod tests {
         let fixture = make_fixture(vec![settlement.clone().into()], false);
         let mut args = expectations(&fixture);
         assert!(
-            args.verify_carriers(bundle(&fixture))
+            args.verify_carriers(&bundle(&fixture))
                 .expect_err("wrong expected outcome")
                 .to_string()
                 .contains("independently selected")
         );
         args.outcome_hash = settlement.proof.statement.outcome_hash;
         assert!(
-            args.verify_carriers(bundle(&fixture))
+            args.verify_carriers(&bundle(&fixture))
                 .expect_err("invalid native proof despite signed QC")
                 .to_string()
                 .contains("native execution proof verification")
@@ -1300,7 +1301,7 @@ mod tests {
         let duplicated = make_fixture(vec![settlement.clone().into(), settlement.into()], false);
         assert!(
             expectations(&duplicated)
-                .verify_carriers(bundle(&duplicated))
+                .verify_carriers(&bundle(&duplicated))
                 .expect_err("ambiguous duplicate settlement")
                 .to_string()
                 .contains("exactly one")
@@ -1377,7 +1378,7 @@ mod tests {
             wagers: vec![],
             resources: vec![],
         };
-        let proof = prove_race_v1(RaceProverRequestV1 {
+        let proof = prove_race_v1(&RaceProverRequestV1 {
             statement: ExecutionPublicInputsV1 {
                 network_id,
                 session_id,
@@ -1415,7 +1416,7 @@ mod tests {
             norito::encode_canonical(&parent.finality).expect("parent finality"),
         );
         let verdict = args
-            .verify_carriers(carriers)
+            .verify_carriers(&carriers)
             .expect("independently authenticated finalized settlement");
         assert_eq!(verdict["verified"].as_bool(), Some(true));
         assert_eq!(verdict["block_height"].as_str(), Some("3"));
@@ -1461,7 +1462,7 @@ mod tests {
             make_fixture_with_signature(vec![invalid_settlement().into()], false, None, false);
         assert!(
             expectations(&fixture)
-                .verify_carriers(bundle(&fixture))
+                .verify_carriers(&bundle(&fixture))
                 .unwrap_err()
                 .to_string()
                 .contains("wallet signature")

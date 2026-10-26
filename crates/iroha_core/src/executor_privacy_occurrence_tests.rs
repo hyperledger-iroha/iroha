@@ -71,7 +71,7 @@ seiyaku PrivacyOccurrenceGuard { permission CanInvokeContractEntrypoint;
             code_hash,
         );
         let mut world = state.world.block();
-        world.contract_code.insert(artifact.clone(), program);
+        world.contract_code.insert(artifact, program);
         world.contract_manifests.insert(
             artifact,
             manifest
@@ -171,7 +171,7 @@ seiyaku PrivacyOccurrenceGuard { permission CanInvokeContractEntrypoint;
                 Scope::External,
                 1,
                 17,
-                [0x63; 512],
+                &[0x63; 512],
             )],
             1,
             &mut rng,
@@ -238,7 +238,7 @@ seiyaku PrivacyOccurrenceGuard { permission CanInvokeContractEntrypoint;
         .expect("bind actual genesis security domain and complete batch");
         // Authorization consumes the prepared witness and independently invokes the production
         // Orchard verifier before returning. No qualification or verifier gate is replaced.
-        let proved = authorize_orchard_bundle_v1(prepared, binding, &limits)
+        let proved = authorize_orchard_bundle_v1(prepared, &binding, &limits)
             .expect("authorize and independently verify the real native Orchard bundle");
         assert!(!proved.authorization.is_empty());
         assert_eq!(proved.public.anchor, *statement.anchor.as_bytes());
@@ -310,7 +310,7 @@ seiyaku PrivacyOccurrenceGuard { permission CanInvokeContractEntrypoint;
                 .is_none()
         );
         let error = crate::executor::Executor::Initial
-            .execute_transaction(&mut transaction, &ALICE_ID, signed, &mut IvmCache::new())
+            .execute_transaction(&mut transaction, &ALICE_ID, &signed, &mut IvmCache::new())
             .map_err(crate::execution_attempt::expect_completed_rejection)
             .expect_err("the real executor must enforce missing production qualification");
         assert!(

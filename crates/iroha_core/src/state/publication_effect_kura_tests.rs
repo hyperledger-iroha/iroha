@@ -92,7 +92,9 @@ fn check_kura_release(partial: bool, unwind: bool) {
                     other => panic!("expected the original last-fence refusal: {other:?}"),
                 }
                 for ((_, lock), probe) in fences[..3].iter().zip(&mut prefix_probes) {
-                    *probe = lock.try_lock().map(|guard| guard.release_deferred());
+                    *probe = lock
+                        .try_lock()
+                        .map(crate::publication_lock::PublicationGuard::release_deferred);
                 }
                 assert!(prefix_probes.iter().all(Option::is_some));
             } else {
@@ -110,7 +112,9 @@ fn check_kura_release(partial: bool, unwind: bool) {
         }
         drop(blocker);
         for ((_, lock), probe) in fences.iter().zip(&mut final_probes) {
-            *probe = lock.try_lock().map(|guard| guard.release_deferred());
+            *probe = lock
+                .try_lock()
+                .map(crate::publication_lock::PublicationGuard::release_deferred);
         }
         assert!(final_probes.iter().all(Option::is_some));
     }));

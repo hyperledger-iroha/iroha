@@ -53,7 +53,7 @@ pub(super) fn authenticate<'view, 'state, 'bound>(
                 .map(|proof| (proof.start_height(), RESERVE)),
             history
                 .as_ref()
-                .and_then(|proof| proof.terminal_height())
+                .and_then(super::super::historical_execution::PreparedStreamTokenHistoryV1::terminal_height)
                 .map(|height| (height, TERMINAL)),
             Some((floor, FLOOR)),
             Some((check.check_height(), CHECK)),

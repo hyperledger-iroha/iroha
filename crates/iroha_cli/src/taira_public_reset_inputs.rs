@@ -74,7 +74,7 @@ pub(super) struct Authorize {
     inventory: PathBuf,
     #[command(flatten)]
     local: LocalInputs,
-    /// Separately trusted owner Ed25519 public-key file in existing TrustedKeyV1 format.
+    /// Separately trusted owner Ed25519 public-key file in existing `TrustedKeyV1` format.
     #[arg(long, value_name = "PATH")]
     trusted_public_key: PathBuf,
     /// Inherited descriptor of a single owner-private regular file containing the key string.

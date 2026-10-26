@@ -378,7 +378,7 @@ fn every_physical_mask_and_lookup_candidate_is_prepaid_after_a_match() {
                 &original,
                 IdentityImage::Predecessor,
                 &mut Work(bound),
-                |_, _, _| {
+                |_, (), _| {
                     inspected.set(inspected.get() + 1);
                     Ok(())
                 },

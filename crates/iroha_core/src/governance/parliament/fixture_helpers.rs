@@ -154,8 +154,7 @@ fn complete_enacted_fixture_body(
                 .freeze_ballot_survivors(
                     governance_attempt_id,
                     ballot_attempt_id,
-                    dropout_root,
-                    survivor_root,
+                    (dropout_root, survivor_root),
                     3,
                     no_recovery_root,
                     10,
@@ -165,8 +164,7 @@ fn complete_enacted_fixture_body(
                 .freeze_timed_ovn_corpus(
                     governance_attempt_id,
                     ballot_attempt_id,
-                    corpus_root,
-                    survivor_root,
+                    (corpus_root, survivor_root),
                     3,
                     timed_commitment_root,
                     11,
@@ -339,10 +337,12 @@ where
         .consume_sortition_pulse_batch(
             governance_attempt_id,
             request_ids,
-            sortition_session,
-            2,
-            sortition_pulse_id,
-            *sortition_pulse_id.as_bytes(),
+            (
+                sortition_session,
+                2,
+                sortition_pulse_id,
+                *sortition_pulse_id.as_bytes(),
+            ),
             network_id,
             &enacted_fixture_governance(&requirements),
         )
@@ -465,10 +465,12 @@ impl ParliamentAttemptStateV1 {
         self.consume_sortition_pulse_batch(
             governance_attempt_id,
             request_ids,
-            request.beacon_session_id,
-            request.pulse_height,
-            pulse_id,
-            *pulse_id.as_bytes(),
+            (
+                request.beacon_session_id,
+                request.pulse_height,
+                pulse_id,
+                *pulse_id.as_bytes(),
+            ),
             network_id,
             governance,
         )?;
@@ -508,9 +510,7 @@ pub(crate) fn seed_npos_policy_for_tests(
     };
     state_transaction
         .world
-        .parameters
-        .get_mut()
-        .set_parameter(iroha_data_model::parameter::Parameter::Custom(
+        .set_parameter_for_testing(iroha_data_model::parameter::Parameter::Custom(
             policy.into_custom_parameter(),
         ))
         .expect("valid fixture parameters");

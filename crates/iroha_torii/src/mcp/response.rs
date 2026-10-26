@@ -172,12 +172,12 @@ pub fn bounded_modern_jsonrpc_http_response(
     max_response_bytes: usize,
 ) -> Response {
     remap_modern_application_error(&mut payload);
-    bounded_jsonrpc_http_response_inner(payload, max_response_bytes)
+    bounded_jsonrpc_http_response_inner(&(payload), max_response_bytes)
 }
 
-fn bounded_jsonrpc_http_response_inner(payload: Value, max_response_bytes: usize) -> Response {
+fn bounded_jsonrpc_http_response_inner(payload: &Value, max_response_bytes: usize) -> Response {
     let response_id = payload.get("id").cloned();
-    let encoded = match json::to_json_bounded_boxed(&payload, max_response_bytes) {
+    let encoded = match json::to_json_bounded_boxed(payload, max_response_bytes) {
         Ok(encoded) => encoded.into_vec(),
         Err(BoundedJsonError::BodyTooLarge) => {
             let mut error = compact_jsonrpc_response_too_large(response_id);

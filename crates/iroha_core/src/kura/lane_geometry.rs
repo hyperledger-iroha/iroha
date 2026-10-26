@@ -37,7 +37,7 @@ use prepared_journal::PreparedGeometryJournalTransition;
 pub(super) use raw_attempt::RawGeometryClaimGate;
 use raw_attempt::RawGeometryMutation;
 pub use raw_attempt::RawGeometryWait;
-pub(crate) use raw_attempt::{RawGeometryAttempt, RawGeometryPhase, RawGeometryReleases};
+pub use raw_attempt::{RawGeometryAttempt, RawGeometryPhase, RawGeometryReleases};
 
 #[cfg(test)]
 std::thread_local! {
@@ -1568,10 +1568,8 @@ impl Kura {
                     "bound canonical storage is missing",
                 ));
             }
-        } else {
-            if blocks_identity.is_some() {
-                preflight_empty_block_store_without_marker(&blocks, None, false)?;
-            }
+        } else if blocks_identity.is_some() {
+            preflight_empty_block_store_without_marker(&blocks, None, false)?;
         }
         configured_catalog_require_store_root_identity(store_root, root_identity)?;
         let parent_identity = configured_geometry_path_identity(
@@ -1958,19 +1956,21 @@ impl Kura {
         &self,
         previous: &LaneConfig,
         updated: &LaneConfig,
-        previous_incarnations: &BTreeMap<LaneId, Hash>,
-        updated_incarnations: &BTreeMap<LaneId, Hash>,
-        previous_activation_heights: &BTreeMap<LaneId, u64>,
-        updated_activation_heights: &BTreeMap<LaneId, u64>,
+        (previous_incarnations, updated_incarnations): (
+            &BTreeMap<LaneId, Hash>,
+            &BTreeMap<LaneId, Hash>,
+        ),
+        (previous_activation_heights, updated_activation_heights): (
+            &BTreeMap<LaneId, u64>,
+            &BTreeMap<LaneId, u64>,
+        ),
         replaced_lane_ids: &BTreeSet<LaneId>,
     ) -> Result<()> {
         self.apply_lane_geometry_transition_inner(
             previous,
             updated,
-            previous_incarnations,
-            updated_incarnations,
-            previous_activation_heights,
-            updated_activation_heights,
+            (previous_incarnations, updated_incarnations),
+            (previous_activation_heights, updated_activation_heights),
             replaced_lane_ids,
             None,
         )
@@ -1982,20 +1982,22 @@ impl Kura {
         &self,
         previous: &LaneConfig,
         updated: &LaneConfig,
-        previous_incarnations: &BTreeMap<LaneId, Hash>,
-        updated_incarnations: &BTreeMap<LaneId, Hash>,
-        previous_activation_heights: &BTreeMap<LaneId, u64>,
-        updated_activation_heights: &BTreeMap<LaneId, u64>,
+        (previous_incarnations, updated_incarnations): (
+            &BTreeMap<LaneId, Hash>,
+            &BTreeMap<LaneId, Hash>,
+        ),
+        (previous_activation_heights, updated_activation_heights): (
+            &BTreeMap<LaneId, u64>,
+            &BTreeMap<LaneId, u64>,
+        ),
         replaced_lane_ids: &BTreeSet<LaneId>,
         transition_height: u64,
     ) -> Result<()> {
         self.apply_lane_geometry_transition_inner(
             previous,
             updated,
-            previous_incarnations,
-            updated_incarnations,
-            previous_activation_heights,
-            updated_activation_heights,
+            (previous_incarnations, updated_incarnations),
+            (previous_activation_heights, updated_activation_heights),
             replaced_lane_ids,
             Some(transition_height),
         )
@@ -2005,10 +2007,14 @@ impl Kura {
         &self,
         previous: &LaneConfig,
         updated: &LaneConfig,
-        previous_incarnations: &BTreeMap<LaneId, Hash>,
-        updated_incarnations: &BTreeMap<LaneId, Hash>,
-        previous_activation_heights: &BTreeMap<LaneId, u64>,
-        updated_activation_heights: &BTreeMap<LaneId, u64>,
+        (previous_incarnations, updated_incarnations): (
+            &BTreeMap<LaneId, Hash>,
+            &BTreeMap<LaneId, Hash>,
+        ),
+        (previous_activation_heights, updated_activation_heights): (
+            &BTreeMap<LaneId, u64>,
+            &BTreeMap<LaneId, u64>,
+        ),
         replaced_lane_ids: &BTreeSet<LaneId>,
         transition_height: Option<u64>,
     ) -> Result<()> {
@@ -2961,7 +2967,7 @@ impl Kura {
         self.require_complete_geometry_binding_at(binding, blocks)?;
         preflight_empty_block_store_without_marker(blocks, Some(binding), true)?;
         let marker = self.read_lane_marker(&blocks.join(MARKER_FILE_NAME))?;
-        self.require_lane_marker_value(&marker, blocks, binding)?;
+        Self::require_lane_marker_value(&marker, blocks, binding)?;
         Ok(())
     }
 
@@ -3133,7 +3139,7 @@ impl Kura {
             // Creation belongs only to the admitted initial/Intent owner. A
             // restored reference cannot recreate a lost marker, including H0.
             let marker = self.read_lane_marker(&marker_path)?;
-            self.require_lane_marker_value(&marker, &blocks, &binding)?;
+            Self::require_lane_marker_value(&marker, &blocks, &binding)?;
         }
         Ok(())
     }
@@ -3147,10 +3153,9 @@ impl Kura {
     ) -> Result<()> {
         let path = blocks_path.join(MARKER_FILE_NAME);
         let marker = self.read_lane_marker(&path)?;
-        self.require_lane_marker_value(&marker, blocks_path, binding)
+        Self::require_lane_marker_value(&marker, blocks_path, binding)
     }
     fn require_lane_marker_value(
-        &self,
         marker: &LaneIncarnationMarker,
         blocks_path: &Path,
         binding: &LaneGeometryBinding,
@@ -3415,7 +3420,7 @@ impl Kura {
     }
     /// Locate existing durable work by its original network, route and incarnation.
     /// Activation comes only from a unique retained authenticated catalog reference;
-    /// a reused LaneId is never substituted. This is private recovery/read authority.
+    /// a reused `LaneId` is never substituted. This is private recovery/read authority.
     #[expect(
         dead_code,
         reason = "TODO: connect retained lane retirement and route consumers; preserve authenticated incarnation identity through historical storage ownership"
@@ -3635,7 +3640,7 @@ impl Kura {
         if &stale == intended {
             return Ok(());
         }
-        self.require_lane_marker_value(&stale, temp.parent().unwrap_or(temp), binding)?;
+        Self::require_lane_marker_value(&stale, temp.parent().unwrap_or(temp), binding)?;
         self.require_geometry_path_identity(temp, false, identity)?;
         Err(self.geometry_error(
             ErrorKind::AlreadyExists,
@@ -4020,10 +4025,10 @@ impl Kura {
         journal: &LaneGeometryJournal,
         custody: Option<&mut RawGeometryMutation<'_, '_>>,
     ) -> Result<()> {
-        match custody {
-            Some(custody) => custody.write(self, journal),
-            None => self.write_lane_geometry_journal(journal),
-        }
+        custody.map_or_else(
+            || self.write_lane_geometry_journal(journal),
+            |custody| custody.write(self, journal),
+        )
     }
     #[cfg(test)]
     fn remove_accounted_geometry_file(&self, path: &Path) -> Result<()> {

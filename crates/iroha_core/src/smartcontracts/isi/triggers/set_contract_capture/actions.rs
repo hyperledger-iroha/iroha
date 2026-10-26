@@ -5,7 +5,7 @@ use super::super::contract_relation::Image;
 use super::*;
 
 /// Ten original publication owners; every source drops before the fixed counter owner.
-pub(crate) struct CheckedActions<'set> {
+pub struct CheckedActions<'set> {
     ids: CommittedStorageView<'set, TriggerId, TriggeringEventType>,
     active_data: CommittedStorageView<'set, TriggerId, ()>,
     active_pipeline: CommittedStorageView<'set, TriggerId, ()>,
@@ -28,6 +28,10 @@ macro_rules! sources {
 }
 impl<'set> CheckedActions<'set> {
     /// Retain all original readers before validating either complete logical image.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Preserve the original trigger codec and publication refusal owners without allocating on the failure path"
+    )]
     pub(crate) fn capture(
         set: &'set Set,
         max_work: u64,
@@ -85,6 +89,10 @@ impl<'set> CheckedActions<'set> {
         Ok(checked)
     }
     /// Materialize all ten source identity Results before any refusal is propagated.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Preserve the original trigger codec and publication refusal owners without allocating on the failure path"
+    )]
     pub(crate) fn matches_current(&self) -> Result<bool, TriggerContractError> {
         let set = self.base.set;
         let data = self.base.data.try_matches_current(&set.data_triggers);
@@ -125,6 +133,10 @@ impl<'set> CheckedActions<'set> {
         Ok(results.into_iter().all(|current| current))
     }
     /// Encode the same selected canonical action frame while every checked source lives.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Preserve the original trigger codec and publication refusal owners without allocating on the failure path"
+    )]
     pub(crate) fn encode(
         &mut self,
         table: ActionTable,
@@ -169,6 +181,10 @@ impl<'set> CheckedActions<'set> {
     }
 }
 impl FrozenContracts<'_> {
+    #[expect(
+        clippy::result_large_err,
+        reason = "Preserve the original trigger codec and publication refusal owners without allocating on the failure path"
+    )]
     fn encode_action(
         &mut self,
         table: ActionTable,
@@ -233,6 +249,10 @@ impl FrozenContracts<'_> {
 }
 impl SetBlock<'_> {
     /// Validate both complete images from the same ten frozen targets and common mode.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Preserve the original trigger codec and publication refusal owners without allocating on the failure path"
+    )]
     pub(crate) fn capture_frozen_action_authority_table(
         &self,
         original: &Set,

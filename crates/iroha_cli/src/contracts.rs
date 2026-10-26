@@ -31,6 +31,7 @@ use local_debug_rendering::{
     build_local_debug_entrypoint, render_durable_state_overlay, render_queued_instructions,
 };
 use reqwest::StatusCode;
+use std::fmt::Write as _;
 use std::{
     collections::BTreeMap,
     fs,
@@ -86,12 +87,12 @@ impl Run for Command {
             Command::Simulate(args) => args.run(context),
             Command::Activity(args) => crate::collection_list::run_list(
                 context,
-                iroha::collections::Collection::ContractActivity,
+                &iroha::collections::Collection::ContractActivity,
                 &args,
             ),
             Command::Events(args) => crate::collection_list::run_list(
                 context,
-                iroha::collections::Collection::ContractEvents,
+                &iroha::collections::Collection::ContractEvents,
                 &args,
             ),
         }
@@ -182,7 +183,7 @@ impl Run for CodeBytesGetArgs {
         Ok(())
     }
 }
-pub(crate) fn contract_artifact_id(
+pub fn contract_artifact_id(
     dataspace_id: u64,
     code_hash: &str,
 ) -> Result<iroha_data_model::smart_contract::ContractArtifactId> {
@@ -406,21 +407,24 @@ struct ContractSubmissionWaitResponse {
     r#final: iroha_torii_shared::PipelineTransactionStatusResponse,
 }
 fn contract_submit_only_response(
-    submit: norito::json::Value,
+    submit: &norito::json::Value,
     trace: Option<norito::json::Value>,
 ) -> norito::json::Value {
-    if let Some(trace) = trace {
-        norito::json!({
-            "submit": submit,
-            "trace": trace,
-            "finalized": false,
-        })
-    } else {
-        norito::json!({
-            "submit": submit,
-            "finalized": false,
-        })
-    }
+    trace.map_or_else(
+        || {
+            norito::json!({
+                "submit": submit,
+                "finalized": false,
+            })
+        },
+        |trace| {
+            norito::json!({
+                "submit": submit,
+                "trace": trace,
+                "finalized": false,
+            })
+        },
+    )
 }
 fn extract_submitted_transaction_hash(
     value: &norito::json::Value,
@@ -483,7 +487,7 @@ impl Run for CallArgs {
                 self.draft_only,
             )?
         };
-        let target = resolve_contract_target(self.target)?;
+        let target = resolve_contract_target(&self.target)?;
         let payload = load_contract_payload_value(
             self.payload.args.as_deref(),
             self.payload.args_file.as_deref(),
@@ -550,7 +554,7 @@ impl Run for CallArgs {
                 r#final: status.r#final,
             })?;
         } else {
-            context.print_data(&contract_submit_only_response(value, trace))?;
+            context.print_data(&contract_submit_only_response(&value, trace))?;
         }
         Ok(())
     }
@@ -575,7 +579,7 @@ impl Run for ViewArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config()?;
         let authority = resolve_contract_authority(context, self.authority.as_deref())?;
-        let target = resolve_contract_target(self.target)?;
+        let target = resolve_contract_target(&self.target)?;
         let payload = load_contract_payload_value(
             self.payload.args.as_deref(),
             self.payload.args_file.as_deref(),
@@ -854,7 +858,7 @@ struct ResolvedContractTarget {
     contract_address: Option<iroha::data_model::smart_contract::ContractAddress>,
     contract_alias: Option<iroha::data_model::smart_contract::ContractAlias>,
 }
-fn resolve_contract_target(args: ContractTargetArgs) -> Result<ResolvedContractTarget> {
+fn resolve_contract_target(args: &ContractTargetArgs) -> Result<ResolvedContractTarget> {
     match (
         args.contract_address.as_deref(),
         args.contract_alias.as_deref(),
@@ -871,9 +875,6 @@ fn resolve_contract_target(args: ContractTargetArgs) -> Result<ResolvedContractT
             contract_address: None,
             contract_alias: Some(alias.parse().wrap_err("invalid --contract-alias")?),
         }),
-        (None, None) => Err(eyre!(
-            "provide exactly one contract target via --contract-address or --contract-alias"
-        )),
         _ => Err(eyre!(
             "provide exactly one contract target via --contract-address or --contract-alias"
         )),
@@ -907,12 +908,12 @@ fn resolve_contract_authority<C: RunContext>(
     context: &mut C,
     authority: Option<&str>,
 ) -> Result<AccountId> {
-    match authority {
-        Some(authority) => {
+    authority.map_or_else(
+        || Ok(context.config().account.clone()),
+        |authority| {
             crate::resolve_account_id(context, authority).wrap_err("failed to resolve --authority")
-        }
-        None => Ok(context.config().account.clone()),
-    }
+        },
+    )
 }
 fn resolve_contract_call_private_key<C: RunContext>(
     context: &C,
@@ -1401,7 +1402,7 @@ fn execute_local_contract_debug_call<C: RunContext>(
     let queued_instruction_count = queued.len();
     let durable_state_mutation_count = durable_state_overlay.len();
     let queued_instructions = render_queued_instructions(&queued)?;
-    let durable_state_overlay_json = render_durable_state_overlay(&durable_state_overlay)?;
+    let durable_state_overlay_json = render_durable_state_overlay(&durable_state_overlay);
     let budget = build_local_debug_budget(&vm, args.gas_limit, entrypoint_pc);
     let fault = run_result
         .as_ref()
@@ -1663,7 +1664,7 @@ fn apply_local_contract_source_map(
     };
     diagnostic.function = Some(entry.function_name.clone());
     diagnostic.current_function = Some(entry.function_name.clone());
-    diagnostic.source_path = entry.source.source_path.clone();
+    diagnostic.source_path.clone_from(&entry.source.source_path);
     diagnostic.line = Some(entry.source.line);
     diagnostic.column = Some(entry.source.column);
 }
@@ -1693,7 +1694,7 @@ fn maybe_render_source_snippet(
         if !excerpt.is_empty() {
             excerpt.push('\n');
         }
-        excerpt.push_str(&format!("{current:>4} | {text}"));
+        let _ = write!(excerpt, "{current:>4} | {text}");
     }
     Some(LocalContractSourceSnippet {
         path: resolved_path.display().to_string(),
@@ -2097,7 +2098,7 @@ mod tests {
 
     #[test]
     fn default_contract_gas_limit_covers_strict_argument_admission_floor() {
-        assert!(DEFAULT_CONTRACT_GAS_LIMIT > 1_048_752);
+        const { assert!(DEFAULT_CONTRACT_GAS_LIMIT > 1_048_752) };
     }
     fn fixture_key_pair(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
@@ -2229,7 +2230,7 @@ mod tests {
     #[test]
     fn contract_submit_only_response_marks_unfinalized() {
         let response =
-            contract_submit_only_response(norito::json!({ "tx_hash_hex": "deadbeef" }), None);
+            contract_submit_only_response(&norito::json!({ "tx_hash_hex": "deadbeef" }), None);
         assert_eq!(
             response
                 .get("finalized")
@@ -2247,7 +2248,7 @@ mod tests {
     #[test]
     fn contract_submit_only_response_keeps_operation_receipt_under_submit() {
         let response = contract_submit_only_response(
-            norito::json!({
+            &norito::json!({
                 "tx_hash_hex": "deadbeef",
                 "operation_receipt": {
                     "operation_kind": "contract_call",
@@ -2837,7 +2838,7 @@ mod tests {
         let authority = fixture_account(0x31);
         let mut ctx = TestContext::new(authority);
         let source = concat!(include_str!("contracts/fixtures/debug_call.ko"), "        ");
-        let program = compile_contract_program(&source);
+        let program = compile_contract_program(source);
         let code_b64 = base64::engine::general_purpose::STANDARD.encode(&program);
         let durable_state_json = format!(
             r#"{{"counter":"0x{}"}}"#,
@@ -3246,8 +3247,7 @@ seiyaku DebugResult { permission Admin;
                 .and_then(norito::json::Value::as_u64),
             Some(overlay.durable_state_overlay().len() as u64)
         );
-        let expected_durable_json = render_durable_state_overlay(overlay.durable_state_overlay())
-            .expect("serialize durable overlay");
+        let expected_durable_json = render_durable_state_overlay(overlay.durable_state_overlay());
         let expected_durable = expected_durable_json
             .as_object()
             .expect("live durable overlay object");
@@ -3291,7 +3291,7 @@ seiyaku DebugResult { permission Admin;
         let fixture = format!(r#"{{"{maximum}":"0x00"}}"#);
         let state = parse_debug_durable_state_fixture(&fixture).expect("maximum StatePath fixture");
         assert_eq!(
-            state.keys().next().map(|path| path.as_ref()),
+            state.keys().next().map(std::convert::AsRef::as_ref),
             Some(maximum.as_str())
         );
         let oversized = format!("{maximum}x");
@@ -3396,7 +3396,7 @@ seiyaku DebugResult { permission Admin;
             iroha_model_base::topology::DataSpaceId::new(0),
         )
         .expect("contract address");
-        let resolved = resolve_contract_target(ContractTargetArgs {
+        let resolved = resolve_contract_target(&ContractTargetArgs {
             contract_address: Some(contract_address.to_string()),
             contract_alias: None,
         })
@@ -3406,7 +3406,7 @@ seiyaku DebugResult { permission Admin;
     }
     #[test]
     fn resolve_contract_target_accepts_contract_alias() {
-        let resolved = resolve_contract_target(ContractTargetArgs {
+        let resolved = resolve_contract_target(&ContractTargetArgs {
             contract_address: None,
             contract_alias: Some("router::dex.universal".to_owned()),
         })
@@ -3423,7 +3423,7 @@ seiyaku DebugResult { permission Admin;
     }
     #[test]
     fn resolve_contract_target_rejects_missing_target() {
-        let err = resolve_contract_target(ContractTargetArgs {
+        let err = resolve_contract_target(&ContractTargetArgs {
             contract_address: None,
             contract_alias: None,
         })

@@ -83,17 +83,17 @@ fn response(
     more: bool,
     cursor: Option<ForwardCursor>,
 ) -> http::Response<Vec<u8>> {
-    encoded_response(QueryResponse::Iterable(QueryOutput::new_bounded(
+    encoded_response(&QueryResponse::Iterable(QueryOutput::new_bounded(
         QueryOutputBatchBox::AssetFiContextSnapshotV1(rows).into(),
         more,
         cursor,
     )))
 }
-fn encoded_response(value: QueryResponse) -> http::Response<Vec<u8>> {
+fn encoded_response(value: &QueryResponse) -> http::Response<Vec<u8>> {
     http::Response::builder()
         .status(StatusCode::OK)
         .header(CONTENT_TYPE, APPLICATION_NORITO)
-        .body(norito::encode_canonical(&value).unwrap())
+        .body(norito::encode_canonical(value).unwrap())
         .unwrap()
 }
 
@@ -157,7 +157,7 @@ fn empty_duplicate_partial_cursor_and_wrong_item_are_refused() {
         response(vec![snapshot.clone()], true, None),
         // Preserve the contradictory count using the real typed codec. The
         // convenience constructor would also set has_more and mask this guard.
-        encoded_response(QueryResponse::Iterable(QueryOutput {
+        encoded_response(&QueryResponse::Iterable(QueryOutput {
             batch: QueryOutputBatchBox::AssetFiContextSnapshotV1(vec![snapshot.clone()]).into(),
             remaining_items: Some(1),
             has_more: false,
@@ -172,7 +172,7 @@ fn empty_duplicate_partial_cursor_and_wrong_item_are_refused() {
                 gas_budget: None,
             }),
         ),
-        encoded_response(QueryResponse::Iterable(QueryOutput::new_bounded(
+        encoded_response(&QueryResponse::Iterable(QueryOutput::new_bounded(
             QueryOutputBatchBox::AccountId(vec![snapshot.account_id.clone()]).into(),
             false,
             None,

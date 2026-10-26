@@ -5,6 +5,10 @@ use crate::sumeragi::body_read::BodyReadPoll;
 use certificate_read::{CertificateRead, CertificateReadError, DecodedCertificate};
 use iroha_sumeragi::availability::BodyRestoration;
 
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Variants retain their original paid owners across suspension and retry without new unbudgeted allocations."
+)]
 enum Phase {
     Absent,
     Certificate(CertificateRead),

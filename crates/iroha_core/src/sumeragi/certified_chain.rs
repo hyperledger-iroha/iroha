@@ -235,6 +235,10 @@ impl From<ChainReadError> for iroha_data_model::sumeragi_finality::ScheduleError
 }
 
 #[derive(Clone, Debug)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Variants retain their original paid owners across suspension and retry without new unbudgeted allocations."
+)]
 enum PrefixHeader {
     Decoded(BlockHeader),
     Funded(artifacts::metadata::FundedMetadata<BlockHeader>),
@@ -879,12 +883,12 @@ fn initialize_frame_admitted(
     original: &mut iroha_allocation::ChargedBuffer<CommittedBlock>,
     result_slot: &mut Option<iroha_allocation::ChargedBuffer<CertifiedResultV1>>,
     block: iroha_data_model::block::SharedSignedBlock,
-    height: u64,
-    root_scope: iroha_data_model::block::consensus::SumeragiRootScope,
+    coordinates: (u64, iroha_data_model::block::consensus::SumeragiRootScope),
     validation: &mut EpochValidationScope,
     budget: &iroha_allocation::AllocationBudget,
     prepared: Option<artifacts::metadata::FundedMetadata<BlockHeader>>,
 ) -> Result<(), ExecutionAttemptError<ChainReadError>> {
+    let (height, root_scope) = coordinates;
     if !original.as_slice().is_empty() {
         return Ok(());
     }
@@ -1010,8 +1014,7 @@ impl AdmittedFrameRead {
                 .expect("original frame slot retained"),
             &mut self.result,
             block,
-            height,
-            root_scope,
+            (height, root_scope),
             validation,
             budget,
             prepared,
@@ -1145,6 +1148,10 @@ pub enum QcVerification {
 // The funded metadata owner cannot shed charges through receipt sharing. Ordinary
 // portable callers retain their existing decoded value; no funded value enters it.
 #[derive(Clone, Debug)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Variants retain their original paid owners across suspension and retry without new unbudgeted allocations."
+)]
 enum PrefixQc {
     Decoded(Qc),
     Funded(artifacts::metadata::FundedMetadata<Qc>),
@@ -1403,6 +1410,7 @@ fn check_result_scope(
 }
 
 /// One crypto context for both random pinned reads and one-pass externally streamed evidence.
+#[derive(Clone, Copy)]
 struct PrefixVerifierContext {
     instance: Hash32,
     root_scope: SumeragiRootScope,
@@ -1444,7 +1452,7 @@ impl PrefixVerifierContext {
         committed: &CommittedBlock,
         artifacts: Option<PrefixArtifacts>,
     ) -> Result<PreparedAdvance, ExecutionAttemptError<ChainReadError>> {
-        self.prepare_advance_with_funding(prefix, committed, artifacts, false, None, None, None)
+        self.prepare_advance_with_funding(prefix, committed, artifacts, (false, None), None, None)
     }
 
     fn prepare_advance_query(
@@ -1454,7 +1462,7 @@ impl PrefixVerifierContext {
         artifacts: Option<PrefixArtifacts>,
         cache: Option<&mut QueryCacheOwner>,
     ) -> Result<PreparedAdvance, ExecutionAttemptError<ChainReadError>> {
-        self.prepare_advance_with_funding(prefix, committed, artifacts, true, cache, None, None)
+        self.prepare_advance_with_funding(prefix, committed, artifacts, (true, cache), None, None)
     }
 
     fn prepare_advance_with_funding(
@@ -1462,13 +1470,13 @@ impl PrefixVerifierContext {
         prefix: &mut VerifiedPrefix,
         committed: &CommittedBlock,
         artifacts: Option<PrefixArtifacts>,
-        query: bool,
-        cache: Option<&mut QueryCacheOwner>,
+        query_cache: (bool, Option<&mut QueryCacheOwner>),
         budget: Option<&iroha_allocation::AllocationBudget>,
         pending_authority: Option<
             &mut Option<iroha_allocation::ChargedShared<funded_authority::FundedPrefixAuthority>>,
         >,
     ) -> Result<PreparedAdvance, ExecutionAttemptError<ChainReadError>> {
+        let (query, cache) = query_cache;
         let height = committed.height;
         if committed.root_scope != prefix.tip.root_scope || !committed.extends(&prefix.tip) {
             return Err(ChainReadError::Discontinuous { height }.into());
@@ -1871,8 +1879,7 @@ fn verify_availability(
     if let Some((table, payload)) = prepared {
         if let Some(budget) = budget {
             return funded_availability::verify(
-                header.instance,
-                config,
+                (header.instance, config),
                 header,
                 &table,
                 payload.as_slice(),
@@ -2231,8 +2238,7 @@ impl AdmittedPrefixPush {
             &mut prefix.prefix,
             self.frame.committed(),
             artifacts.cloned(),
-            false,
-            None,
+            (false, None),
             prefix.original_budget.as_ref(),
             Some(&mut self.pending_authority),
         )?;
@@ -2290,7 +2296,7 @@ impl CertifiedPrefix {
     /// Construct directly in one exact original-pool slot without a complete prefix on the stack.
     /// All authentication is shared with `new`; admission itself confers no source authority.
     /// The immutable authority owns its exact epoch material, native configuration,
-    /// PoP credentials and fallible pairing backing in this original pool.
+    /// `PoP` credentials and fallible pairing backing in this original pool.
     /// TODO(S8): decoded result/genesis graphs, schedule validation/advance and shared
     /// validation error diagnostics still need physical custody. The cache is inline;
     /// prepared SCCP metadata and RS16 scratch have original-pool owners. One-shot AMX
@@ -2579,8 +2585,7 @@ impl CertifiedPrefix {
             &mut self.prefix,
             &committed,
             artifacts,
-            false,
-            None,
+            (false, None),
             budget,
             None,
         )?;
@@ -3299,7 +3304,7 @@ impl<'v> CertifiedChain<'v, StateView<'v>> {
 
     /// Verify an exact pinned history cut before a restored State exists.
     ///
-    /// No StateView is constructed: that concrete generic type only selects this constructor.
+    /// No `StateView` is constructed: that concrete generic type only selects this constructor.
     /// Every body must match the supplied one-based hash cut. Authority comes from verified
     /// signed genesis and the same exact-quorum prefix walk as State-backed offchain reads.
     /// The configured chain ID enters the signature instance checked by every successor QC.

@@ -1,4 +1,4 @@
-//! Independent production-Core generator and byte drift gate for forgery_evidence_v1.json.
+//! Independent production-Core generator and byte drift gate for `forgery_evidence_v1.json`.
 use super::*;
 use crate::smartcontracts::isi::sccp::{
     committee_storage::CommitteeFixtureStorage as _, test_support::retained_generation_fixture,
@@ -17,8 +17,7 @@ use mv::storage::StorageReadOnly as _;
 use norito::{json, json::Value};
 use std::num::NonZeroU64;
 
-#[path = "../reference_fixture_support.rs"]
-mod fixture;
+use crate::smartcontracts::isi::sccp::reference_fixture_support as fixture;
 use fixture::{CAP, GRACE, START, UNTIL, VALIDITY, hx};
 
 const GENERATOR: &str = "two independent generators: python3.11 scripts/sccp_reference/generate.py --write; cargo test -p iroha_core --lib sccp -- --ignored regenerate_forgery_evidence_v1";
@@ -229,7 +228,7 @@ fn evidence_rows() -> Vec<Value> {
         if retained { world.sccp_committee_generations.insert(7, record); }
         let view = world.view();
         let budget = AllocationBudget::new(128 << 20);
-        let answer = if !header.is_active() { Err(ForgeryVerificationError::NotEvidence) } else {
+        let answer = if header.is_active() {
             generation_for_claim(Current(&view), &header, 8, lc).and_then(|generation| {
                 assert_eq!(verify_signature(generation, Hash32([0x77;32]), &header, &qc, &signature, &budget, VerificationControl::Synchronous).unwrap(), message);
                 first_mismatch(generation, execution_height, height, &qc, result, || {
@@ -238,7 +237,7 @@ fn evidence_rows() -> Vec<Value> {
                         chunk_retained.then_some(&root), if witness == "missing" { None } else { Some((&anchor,&path)) }).map_err(anchor_error)
                 })
             })
-        };
+        } else { Err(ForgeryVerificationError::NotEvidence) };
         let outcome = name(answer);
         json!({"label": (label),"description": (description),"input": {
             "header": (hx(header.as_bytes())),"qc": (hx(&qc.encode())),"aggregate_signature": (hx(&signature)),"signature_evm": (hx(&iroha_sccp::v1::committee::signature_to_evm192(&signature).unwrap())),

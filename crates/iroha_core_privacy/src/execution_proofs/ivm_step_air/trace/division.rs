@@ -154,6 +154,7 @@ pub(in super::super) fn witness(left: u64, right: u64, gas: u64, kind: usize) ->
     }
 }
 
+#[derive(Clone, Copy)]
 pub(in super::super) struct Selection {
     pub(in super::super) active: F,
     pub(in super::super) signed: F,

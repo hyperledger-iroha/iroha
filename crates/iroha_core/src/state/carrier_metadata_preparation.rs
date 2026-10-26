@@ -9,7 +9,7 @@ use super::*;
 impl StateBlock<'_> {
     /// Stage the deterministic metadata selected by the caller's checked context.
     ///
-    /// The native CommitQC owner supplies its exact ordered committee. This
+    /// The native `CommitQC` owner supplies its exact ordered committee. This
     /// continuation cannot rotate it or run another lane lifecycle controller.
     #[allow(clippy::too_many_lines)]
     pub(super) fn prepare_deterministic_carrier_metadata(
@@ -76,16 +76,16 @@ impl StateBlock<'_> {
         }
         let current_slot =
             current_axt_slot_from_block(&signed_block.header(), self.nexus.axt.slot_length_ms);
-        if let Some(envelopes) = signed_block.axt_envelopes() {
-            if !envelopes.is_empty() {
-                iroha_logger::trace!(
-                    count = envelopes.len(),
-                    current_slot,
-                    "persisting AXT envelopes from committed block"
-                );
-                self.apply_replayed_axt_envelopes(envelopes, current_slot)
-                    .map_err(|error| invalid(&format!("AXT replay: {error}")))?;
-            }
+        if let Some(envelopes) = signed_block.axt_envelopes()
+            && !envelopes.is_empty()
+        {
+            iroha_logger::trace!(
+                count = envelopes.len(),
+                current_slot,
+                "persisting AXT envelopes from committed block"
+            );
+            self.apply_replayed_axt_envelopes(envelopes, current_slot)
+                .map_err(|error| invalid(&format!("AXT replay: {error}")))?;
         }
         self.block_hashes.push(block_hash);
         self.stage_musubi_resolver_index_checkpoint(

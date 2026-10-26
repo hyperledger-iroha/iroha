@@ -7,7 +7,7 @@ pub use iroha_data_model::sumeragi_finality::{
 /// The exact verified schedule and beacon fields carried by one original execution.
 /// Production returns this only inside the move-only original-pool `RetainedPayload`.
 /// The result commitment consumes both fields by allocation-preserving moves.
-pub(crate) struct NativeExecutionInputs {
+pub struct NativeExecutionInputs {
     /// Full incumbent and successor authority effects.
     pub(crate) schedule: ScheduleOutcome,
     /// Complete authenticated pulse supplied to this same original overlay, if demanded.

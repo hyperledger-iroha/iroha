@@ -9,7 +9,7 @@ use parking_lot::Mutex;
 /// Closed first-release inventory; adding an owner changes the inventory schema.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(usize)]
-pub(crate) enum Family {
+pub enum Family {
     /// Materialized canonical hash and reverse-height associations.
     ResidentCanonical,
     /// All transaction and Kaigi index associations and inventory memberships.
@@ -34,11 +34,11 @@ pub(crate) enum Family {
 }
 
 /// Number of closed first-release component families.
-pub(crate) const FAMILY_COUNT: usize = Family::StorageBytes as usize + 1;
+pub const FAMILY_COUNT: usize = Family::StorageBytes as usize + 1;
 const ALL_MASK: u32 = (1_u32 << FAMILY_COUNT) - 1;
 /// Every required family in the fixed serialization and observation order.
 #[cfg(any(test, feature = "telemetry"))]
-pub(crate) const ALL_FAMILIES: [Family; FAMILY_COUNT] = [
+pub const ALL_FAMILIES: [Family; FAMILY_COUNT] = [
     Family::ResidentCanonical,
     Family::ResidentTransaction,
     Family::ResidentFrontier,
@@ -60,7 +60,7 @@ impl Family {
 
 /// Exact counts in distinct physical representations and actual byte units.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct Usage {
+pub struct Usage {
     /// Stored resident lookup associations, including separate representations.
     pub(crate) resident_associations: u64,
     /// Physical persisted index slots or standalone index records.
@@ -110,7 +110,7 @@ impl Usage {
 
 /// Fixed reason vocabulary; no paths, keys, or remote error text is retained.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Unavailable {
+pub enum Unavailable {
     /// An owner has not completed exact initialization.
     Unregistered,
     /// A required mutation or registry lock is active.
@@ -147,7 +147,7 @@ struct State {
 /// A coherent complete fixed-size resource observation.
 #[cfg(any(test, feature = "telemetry"))]
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct Snapshot {
+pub struct Snapshot {
     /// Generation of this complete observation.
     pub(crate) generation: u64,
     /// Exact component vector in fixed enum order.
@@ -164,7 +164,7 @@ pub(crate) struct Snapshot {
 
 /// Fixed-memory inventory. Its read path does no filesystem work or waiting.
 #[derive(Debug)]
-pub(crate) struct Inventory {
+pub struct Inventory {
     state: Mutex<State>,
 }
 
@@ -184,15 +184,12 @@ impl Default for Inventory {
 
 impl Inventory {
     fn advance(state: &mut State) -> Result<(), Unavailable> {
-        match state.generation.checked_add(1) {
-            Some(next) => {
-                state.generation = next;
-                Ok(())
-            }
-            None => {
-                state.fatal = Some(Unavailable::Arithmetic);
-                Err(Unavailable::Arithmetic)
-            }
+        if let Some(next) = state.generation.checked_add(1) {
+            state.generation = next;
+            Ok(())
+        } else {
+            state.fatal = Some(Unavailable::Arithmetic);
+            Err(Unavailable::Arithmetic)
         }
     }
 
@@ -401,7 +398,7 @@ fn update_high_water(state: &mut State) {
 
 /// Scoped move-only publication ownership; abandoned writes invalidate their families.
 #[must_use]
-pub(crate) struct Mutation<'a> {
+pub struct Mutation<'a> {
     inventory: &'a Inventory,
     mask: u32,
     finished: bool,

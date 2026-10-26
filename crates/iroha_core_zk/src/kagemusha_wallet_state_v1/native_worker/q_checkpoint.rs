@@ -114,9 +114,14 @@ pub(super) struct Original {
     pub(super) private_fold: Option<PrivateFoldBytes>,
 }
 
+#[derive(Clone, Copy)]
+pub(super) struct VerificationKey<'a> {
+    pub(super) key: &'a KeyArtifact<Ep>,
+    pub(super) params: &'a PinnedParams<Ep>,
+}
+
 pub(super) fn encode(
-    key: &KeyArtifact<Ep>,
-    params: &PinnedParams<Ep>,
+    verification: VerificationKey<'_>,
     stage: usize,
     source: [u8; 32],
     original: &Original,
@@ -124,6 +129,7 @@ pub(super) fn encode(
     budget: MemoryBudget,
     cancellation: &Cancellation,
 ) -> Result<PrivateArchiveBytes, Error> {
+    let VerificationKey { key, params } = verification;
     cancellation.check()?;
     let layout = Layout::new(stage, key, requires_fold)?;
     let payload = Payload {
@@ -323,8 +329,10 @@ mod tests {
             private_fold: None,
         };
         let bytes = encode(
-            &metadata,
-            &params,
+            VerificationKey {
+                key: &metadata,
+                params: &params,
+            },
             0,
             source,
             &original,

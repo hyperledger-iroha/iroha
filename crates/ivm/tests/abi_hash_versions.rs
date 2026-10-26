@@ -41,3 +41,24 @@ fn abi_v1_execute_instruction_advertises_only_the_submit_ballot_tag() {
     );
     assert!(!table.contains("RecordSccpMessage"));
 }
+
+#[test]
+fn abi_v1_register_asset_requires_owning_domain() {
+    // The execution host and compiler require the owning-domain pointer in r14.
+    // Keep that argument in the hashed signature; a matching stale golden alone
+    // cannot detect a missing runtime requirement.
+    let table = ivm::syscalls::render_syscalls_markdown_table();
+    let rows: Vec<&str> = table
+        .lines()
+        .filter(|line| line.starts_with("| 0x20 |"))
+        .collect();
+    assert_eq!(rows.len(), 1, "exactly one REGISTER_ASSET row: {rows:?}");
+    let columns: Vec<&str> = rows[0].split('|').map(str::trim).collect();
+    assert_eq!(columns.len(), 7, "canonical syscall table shape: {}", rows[0]);
+    assert_eq!(columns[2], "REGISTER_ASSET");
+    assert_eq!(
+        columns[3],
+        "r10=&AssetDefinitionId, r11=&Blob(name), r12=numeric_spec:u64, r13=mintability:u64, r14=&DomainId(owning domain)"
+    );
+    assert_eq!(columns[4], "u64=0");
+}

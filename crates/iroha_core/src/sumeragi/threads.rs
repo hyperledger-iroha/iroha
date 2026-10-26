@@ -29,7 +29,7 @@ fn sumeragi_stack_size_bytes() -> usize {
 ///
 /// Consensus execution must not rely on platform default stack sizing because
 /// deep recovery and validation paths can exceed small default thread stacks.
-pub(crate) fn sumeragi_thread_builder(name: impl Into<String>) -> std::thread::Builder {
+pub fn sumeragi_thread_builder(name: impl Into<String>) -> std::thread::Builder {
     std::thread::Builder::new()
         .name(name.into())
         .stack_size(sumeragi_stack_size_bytes())

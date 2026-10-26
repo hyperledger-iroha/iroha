@@ -5,7 +5,7 @@ use crate::state::WorldReadOnly;
 use iroha_data_model::asset::{AssetDefinitionId, AssetId};
 use mv::storage::StorageReadOnly as _;
 
-pub(crate) fn reserve_registration(
+pub fn reserve_registration(
     world: &impl WorldReadOnly,
     id: &AssetId,
 ) -> Result<Option<Registration>> {
@@ -34,10 +34,10 @@ pub(super) fn reserve_id(registration: &Registration) -> AssetId {
         registration.balance_scope,
     )
 }
-pub(crate) fn is_reserve_account(world: &impl WorldReadOnly, account: &AccountId) -> Result<bool> {
+pub fn is_reserve_account(world: &impl WorldReadOnly, account: &AccountId) -> Result<bool> {
     has_reference(world, &storage::reserve_account_key(account)?)
 }
-pub(crate) fn is_reserve_definition(
+pub fn is_reserve_definition(
     world: &impl WorldReadOnly,
     definition: &AssetDefinitionId,
 ) -> Result<bool> {

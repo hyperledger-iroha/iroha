@@ -21,6 +21,12 @@ use iroha_core_zk::confidential_v2;
 use iroha_crypto::{ExposedPrivateKey, Hash, HashOf, KeyPair};
 #[cfg(test)]
 use iroha_data_model::isi::UnregisterBox;
+use iroha_data_model::prelude::*;
+use iroha_data_model::private_dataspace::PrivateDataspaceAdmissionPolicy;
+use iroha_data_model::proof::VerifyingKeyId;
+use iroha_data_model::proof::VerifyingKeyRecord;
+use iroha_data_model::sns::DATASPACE_ALIAS_SUFFIX_ID;
+use iroha_data_model::sns::NameSelectorV1;
 use iroha_data_model::{
     account::address::ChainDiscriminantGuard,
     alias_setup::{
@@ -32,10 +38,7 @@ use iroha_data_model::{
     asset::AssetDefinitionAlias,
     block::{
         BlockHeader,
-        consensus::{
-            MAX_VALIDATORS_PER_HEIGHT, SumeragiGenesisContextParameters, SumeragiRootScope,
-            is_valid_committee_size,
-        },
+        consensus::{PublicLaneStakingPolicy, SumeragiGenesisContextParameters, SumeragiRootScope},
     },
     consensus::{ConsensusKeyRecord, ConsensusKeyStatus},
     da::commitment::DaProofPolicyBundle,
@@ -60,10 +63,6 @@ use iroha_data_model::{
         custom::{CustomParameter, CustomParameterId},
         system::{SumeragiConsensusMode, SumeragiNposParameters},
     },
-    prelude::*,
-    private_dataspace::PrivateDataspaceAdmissionPolicy,
-    proof::{VerifyingKeyId, VerifyingKeyRecord},
-    sns::{DATASPACE_ALIAS_SUFFIX_ID, NameSelectorV1},
 };
 use iroha_executor_data_model::permission::{
     account::{
@@ -89,6 +88,7 @@ use iroha_model_base::metadata::Metadata;
 use iroha_model_base::peer::PeerId;
 use iroha_model_base::topology::DataSpaceId;
 use iroha_model_base::topology::LaneId;
+use iroha_model_base::topology::{MAX_VALIDATORS_PER_HEIGHT, is_valid_committee_size};
 use iroha_primitives::addr::{SocketAddr, SocketAddrHost};
 use iroha_primitives::json::Json;
 use iroha_primitives::numeric::{Numeric, Quantity};
@@ -1298,7 +1298,12 @@ fn generate_localnet_runtime<T: Write>(
     let genesis_account_id = AccountId::new(genesis_public_key.clone());
     let assets = effective_localnet_assets_for_client(&opts.assets, &client_identity.account_id);
     let gas_account_id = localnet_gas_account_id(&genesis_public_key);
-    let mut genesis = generate_raw_genesis(&genesis_public_key, opts.consensus_mode, &chain_id)?;
+    let mut genesis = generate_raw_genesis(
+        &genesis_public_key,
+        opts.consensus_mode,
+        &chain_id,
+        localnet_staking_policy(&genesis_public_key, opts.sora_profile, taira)?,
+    )?;
     genesis = append_localnet_private_root_admission_policy(genesis, &chain_id)?;
     if opts.extra_accounts > 0 || !assets.is_empty() {
         genesis = extend_genesis(
@@ -1397,7 +1402,7 @@ fn generate_localnet_runtime<T: Write>(
     } else {
         None
     };
-    genesis = apply_localnet_crypto_overrides(genesis)?;
+    genesis = validate_localnet_crypto_policy(genesis)?;
     let alias_setup_request =
         localnet_alias_setup_request(&genesis_account_id, &client_identity.account_id, taira)?;
     let append_alias_setup_to_current_transaction = npos_bootstrap
@@ -1424,7 +1429,6 @@ fn generate_localnet_runtime<T: Write>(
     let genesis_json_path = out_dir.join("genesis.json");
     let genesis_signed_path = out_dir.join("genesis.signed.nrt");
     let genesis_expected_hash_path = out_dir.join(GENESIS_EXPECTED_HASH_FILE);
-    let gas_account_id = account_id_runtime_literal(&gas_account_id, chain_discriminant);
     let trusted = peers
         .iter()
         .map(|p| format!("{}@{}", p.public_key, hosts.public.addr_literal(p.p2p_port)))
@@ -1476,7 +1480,6 @@ fn generate_localnet_runtime<T: Write>(
         opts.sora_profile,
         lane_manifest_directory.as_deref(),
         dataspace_fault_tolerance,
-        &gas_account_id,
         tx_gossip_overrides,
         logger_filter,
         signature_batch_max_ed25519,
@@ -1592,7 +1595,6 @@ fn generate_localnet_runtime<T: Write>(
                 opts.sora_profile,
                 render_manifests.as_deref(),
                 dataspace_fault_tolerance,
-                &gas_account_id,
                 tx_gossip_overrides,
                 logger_filter,
                 signature_batch_max_ed25519,
@@ -2480,7 +2482,6 @@ fn render_peer_config(
     sora_profile: Option<SoraProfile>,
     lane_manifest_directory: Option<&Path>,
     dataspace_fault_tolerance: Option<u32>,
-    gas_account_id: &str,
     tx_gossip_overrides: Option<LocalnetTxGossipOverrides>,
     logger_filter: Option<&str>,
     signature_batch_max_ed25519: Option<usize>,
@@ -2695,34 +2696,6 @@ fn render_peer_config(
         Value::Integer(i64::from(LOCALNET_LANE_TEU_CAPACITY)),
     );
     nexus.insert("fusion".into(), Value::Table(fusion));
-    let stake_asset_id = localnet_xor_asset_literal();
-    let mut staking = Table::new();
-    staking.insert(
-        "stake_asset_id".into(),
-        Value::String(stake_asset_id.clone()),
-    );
-    staking.insert(
-        "stake_escrow_account_id".into(),
-        Value::String(gas_account_id.to_owned()),
-    );
-    staking.insert(
-        "slash_sink_account_id".into(),
-        Value::String(gas_account_id.to_owned()),
-    );
-    if taira {
-        staking.insert(
-            "unbonding_delay_ms".into(),
-            Value::Integer(
-                i64::try_from(crate::genesis::sccp::UNBONDING_DELAY_MS)
-                    .expect("SCCP unbonding delay fits TOML integer"),
-            ),
-        );
-        staking.insert(
-            "max_slash_bps".into(),
-            Value::Integer(i64::from(crate::genesis::sccp::MAX_SLASH_BPS)),
-        );
-    }
-    nexus.insert("staking".into(), Value::Table(staking));
     if let Some((lane_count, lane_catalog)) = localnet_lane_catalog(sora_profile, taira) {
         nexus.insert("lane_count".into(), Value::Integer(lane_count));
         nexus.insert("lane_catalog".into(), Value::Array(lane_catalog));
@@ -2816,37 +2789,6 @@ fn render_peer_config(
         Value::Integer(i64::try_from(LOCALNET_QUEUE_TTL_MS).expect("queue ttl fits i64")),
     );
     root.insert("queue".into(), Value::Table(queue));
-    let mut crypto = Table::new();
-    let allowed_signing = [
-        iroha_crypto::Algorithm::Ed25519,
-        iroha_crypto::Algorithm::Secp256k1,
-        iroha_crypto::Algorithm::BlsNormal,
-    ];
-    crypto.insert(
-        "allowed_signing".into(),
-        Value::Array(
-            allowed_signing
-                .iter()
-                .map(|algo| Value::String(algo.as_static_str().to_owned()))
-                .collect(),
-        ),
-    );
-    let mut curves = Table::new();
-    let mut curve_ids = allowed_signing
-        .iter()
-        .filter_map(|algo| {
-            iroha_data_model::account::curve::CurveId::try_from_algorithm(*algo).ok()
-        })
-        .map(|curve| i64::from(curve.as_u8()))
-        .collect::<Vec<_>>();
-    curve_ids.sort_unstable();
-    curve_ids.dedup();
-    curves.insert(
-        "allowed_curve_ids".into(),
-        Value::Array(curve_ids.into_iter().map(Value::Integer).collect()),
-    );
-    crypto.insert("curves".into(), Value::Table(curves));
-    root.insert("crypto".into(), Value::Table(crypto));
     let mut streaming = Table::new();
     streaming.insert(
         "identity_public_key".into(),
@@ -3420,14 +3362,24 @@ fn generate_raw_genesis(
     genesis_public_key: &iroha_crypto::PublicKey,
     consensus_mode: SumeragiConsensusMode,
     chain_id: &str,
+    staking_policy: PublicLaneStakingPolicy,
 ) -> Result<RawGenesisTransaction> {
     let chain_id = chain_id
         .parse::<ChainId>()
         .wrap_err("localnet chain id must be canonical")?;
     let npos_epoch_seed = matches!(consensus_mode, SumeragiConsensusMode::Npos)
         .then(|| localnet_npos_epoch_seed(&chain_id));
-    let builder = GenesisBuilder::new_without_executor(chain_id, PathBuf::from("."))
-        .with_sumeragi_context_parameters(SumeragiGenesisContextParameters::recommended());
+    let builder = GenesisBuilder::new_without_executor(
+        chain_id,
+        PathBuf::from("."),
+        iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+            iroha_crypto::Algorithm::Ed25519,
+            iroha_crypto::Algorithm::Secp256k1,
+            iroha_crypto::Algorithm::BlsNormal,
+        ])
+        .expect("explicit canonical genesis producer policy"),
+    )
+    .with_sumeragi_context_parameters(SumeragiGenesisContextParameters::recommended());
     generate_default(
         builder,
         genesis_public_key,
@@ -3435,7 +3387,50 @@ fn generate_raw_genesis(
         consensus_mode,
         None,
         npos_epoch_seed,
+        staking_policy,
     )
+}
+
+/// Select the complete compiled recipe before authoring localnet custody.
+fn localnet_staking_policy(
+    genesis_public_key: &iroha_crypto::PublicKey,
+    sora_profile: Option<SoraProfile>,
+    sccp_enabled: bool,
+) -> Result<PublicLaneStakingPolicy> {
+    use iroha_config::profile::{Profile, ProfileId};
+    let profile_id = if sora_profile.is_some() || sccp_enabled {
+        ProfileId::SoraNexusV1
+    } else {
+        ProfileId::IrohaDevV1
+    };
+    let profile = Profile::compiled(profile_id)?;
+    localnet_staking_policy_from_recipe(
+        profile.genesis_recipe().public_lane_staking.clone(),
+        genesis_public_key,
+        sccp_enabled,
+    )
+}
+
+/// Preserve every recipe term except the explicit disposable custody/SCCP choices.
+fn localnet_staking_policy_from_recipe(
+    mut policy: PublicLaneStakingPolicy,
+    genesis_public_key: &iroha_crypto::PublicKey,
+    sccp_enabled: bool,
+) -> Result<PublicLaneStakingPolicy> {
+    policy.validate()?;
+    ensure!(
+        policy.stake_asset_id == localnet_xor_asset_definition_id(),
+        "selected localnet recipe must name the authored localnet XOR asset"
+    );
+    let custody = localnet_gas_account_id(genesis_public_key);
+    policy.stake_escrow_account_id = custody.clone();
+    policy.slash_sink_account_id = custody;
+    if sccp_enabled {
+        policy.unbonding_delay_ms = crate::genesis::sccp::UNBONDING_DELAY_MS;
+        policy.max_slash_bps = crate::genesis::sccp::MAX_SLASH_BPS;
+    }
+    policy.validate()?;
+    Ok(policy)
 }
 
 fn extend_genesis(
@@ -3725,6 +3720,9 @@ fn apply_parameter_overrides(
     if !should_update {
         return Ok(genesis);
     }
+    // into_builder retains the original signed parameter snapshot. Append only
+    // selected changes; replaying unchanged authority would duplicate staking.
+    let original_parameters = parameters.parameters().collect::<Vec<_>>();
     parameters.block.max_transactions = block_max_transactions;
     if let Some(block_cadence_ms) = block_cadence_ms {
         parameters.sumeragi.block_cadence_ms =
@@ -3743,40 +3741,26 @@ fn apply_parameter_overrides(
             NonZeroU64::new(block_cadence_ms).expect("validated non-zero block cadence"),
         );
     }
-    let pending_parameters = parameters.parameters().collect::<Vec<_>>();
-    if !pending_parameters.is_empty() {
-        for parameter in pending_parameters {
-            builder = builder.append_parameter(parameter);
-        }
+    for parameter in parameters
+        .parameters()
+        .filter(|parameter| !original_parameters.contains(parameter))
+    {
+        builder = builder.append_parameter(parameter);
     }
     builder.build_raw()
 }
-fn apply_localnet_crypto_overrides(
+fn validate_localnet_crypto_policy(
     genesis: RawGenesisTransaction,
 ) -> Result<RawGenesisTransaction> {
-    let mut crypto = genesis.crypto().clone();
-    if !crypto
-        .allowed_signing
-        .iter()
-        .any(|algo| matches!(algo, iroha_crypto::Algorithm::BlsNormal))
+    if !genesis
+        .crypto_admission_policy()
+        .allows(iroha_crypto::Algorithm::BlsNormal)
     {
-        crypto
-            .allowed_signing
-            .push(iroha_crypto::Algorithm::BlsNormal);
+        return Err(eyre!(
+            "localnet genesis validator account controllers require explicitly allowing bls_normal"
+        ));
     }
-    crypto.allowed_signing.sort();
-    crypto.allowed_signing.dedup();
-    crypto.allowed_curve_ids = crypto
-        .allowed_signing
-        .iter()
-        .filter_map(|algo| {
-            iroha_data_model::account::curve::CurveId::try_from_algorithm(*algo).ok()
-        })
-        .map(iroha_data_model::account::curve::CurveId::as_u8)
-        .collect();
-    crypto.allowed_curve_ids.sort_unstable();
-    crypto.allowed_curve_ids.dedup();
-    genesis.into_builder().with_crypto(crypto).build_raw()
+    Ok(genesis)
 }
 fn append_peer_pop(
     genesis: RawGenesisTransaction,
@@ -4238,6 +4222,32 @@ impl BootstrapRegistrations {
         }
     }
 }
+/// Read the original monetary authority before adding bootstrap instructions.
+/// Public alias bindings are appended later by the localnet author and validated
+/// during native staging; the original NPoS XOR pin must already agree here.
+fn localnet_bootstrap_staking_policy(
+    genesis: &RawGenesisTransaction,
+) -> Result<PublicLaneStakingPolicy> {
+    let _chain = crate::genesis::staging::staged_genesis_chain_discriminant(genesis);
+    let parameters = genesis.effective_parameters()?;
+    let policy = PublicLaneStakingPolicy::from_parameters(&parameters)?;
+    if matches!(genesis.consensus_mode(), SumeragiConsensusMode::Npos) {
+        let npos = parameters
+            .custom()
+            .get(&SumeragiNposParameters::parameter_id())
+            .map(SumeragiNposParameters::from_custom_parameter)
+            .transpose()?
+            .flatten()
+            .ok_or_else(|| eyre!("localnet NPoS bootstrap requires original NPoS parameters"))?;
+        ensure!(
+            policy.stake_asset_id == npos.xor_asset_definition_id
+                && policy.stake_asset_id == localnet_xor_asset_definition_id(),
+            "localnet staking policy and original NPoS XOR pin must name the authored localnet XOR asset"
+        );
+    }
+    Ok(policy)
+}
+
 struct LocalnetNposBootstrapContext<'a> {
     peers: &'a [Peer],
     gas_account_id: &'a AccountId,
@@ -4252,6 +4262,7 @@ fn append_localnet_npos_bootstrap(
     genesis: RawGenesisTransaction,
     context: &LocalnetNposBootstrapContext<'_>,
 ) -> Result<RawGenesisTransaction> {
+    let policy = localnet_bootstrap_staking_policy(&genesis)?;
     let peers = context.peers;
     let gas_account_id = context.gas_account_id;
     let stake_amount = context.stake_amount;
@@ -4263,7 +4274,7 @@ fn append_localnet_npos_bootstrap(
     let nexus_domain = DomainId::parse_fully_qualified(LOCALNET_NEXUS_DOMAIN)?;
     let ivm_domain = DomainId::parse_fully_qualified(LOCALNET_IVM_DOMAIN)?;
     let universal_domain = DomainId::parse_fully_qualified(LOCALNET_UNIVERSAL_DOMAIN)?;
-    let stake_asset_id = localnet_xor_asset_definition_id();
+    let stake_asset_id = &policy.stake_asset_id;
     let fee_asset_id = localnet_xor_asset_definition_id();
     let public_validator_lanes = localnet_public_validator_lanes(sora_profile, taira);
     let lane_count = u64::try_from(public_validator_lanes.len())
@@ -4286,12 +4297,16 @@ fn append_localnet_npos_bootstrap(
             builder.append_instruction(Register::domain(Domain::new(universal_domain.clone())));
         registrations.domains.insert(universal_domain.clone());
     }
-    if !registrations.accounts.contains(gas_account_id) {
-        builder =
-            builder.append_instruction(Register::account(Account::new(gas_account_id.clone())));
-        registrations.accounts.insert(gas_account_id.clone());
+    for account in [
+        gas_account_id,
+        &policy.stake_escrow_account_id,
+        &policy.slash_sink_account_id,
+    ] {
+        if registrations.accounts.insert(account.clone()) {
+            builder = builder.append_instruction(Register::account(Account::new(account.clone())));
+        }
     }
-    if !registrations.asset_defs.contains(&stake_asset_id) {
+    if !registrations.asset_defs.contains(stake_asset_id) {
         let definition = AssetDefinition::new(
             stake_asset_id.clone(),
             "XOR".to_owned(),
@@ -4439,8 +4454,8 @@ fn append_localnet_npos_bootstrap(
         builder,
         peers,
         &public_validator_lanes,
-        &stake_asset_id,
-        gas_account_id,
+        stake_asset_id,
+        &policy.stake_escrow_account_id,
         stake_amount,
         taira,
     )
@@ -4452,22 +4467,28 @@ fn append_localnet_npos_bootstrap(
 fn append_localnet_permissioned_support_accounts(
     genesis: RawGenesisTransaction,
     peers: &[Peer],
-    escrow_account_id: &AccountId,
+    gas_account_id: &AccountId,
     taira: bool,
 ) -> Result<RawGenesisTransaction> {
+    let policy = localnet_bootstrap_staking_policy(&genesis)?;
     let nexus_domain = DomainId::parse_fully_qualified(LOCALNET_NEXUS_DOMAIN)?;
-    let registrations = BootstrapRegistrations::from_manifest(&genesis);
+    let mut registrations = BootstrapRegistrations::from_manifest(&genesis);
     let mut builder = genesis.into_builder().next_transaction();
     if !registrations.domains.contains(&nexus_domain) {
         builder = builder.append_instruction(Register::domain(Domain::new(nexus_domain)));
     }
-    if !registrations.accounts.contains(escrow_account_id) {
-        builder =
-            builder.append_instruction(Register::account(Account::new(escrow_account_id.clone())));
+    for account in [
+        gas_account_id,
+        &policy.stake_escrow_account_id,
+        &policy.slash_sink_account_id,
+    ] {
+        if registrations.accounts.insert(account.clone()) {
+            builder = builder.append_instruction(Register::account(Account::new(account.clone())));
+        }
     }
     for peer in peers {
         let validator_id = peer.validator_account_id(taira);
-        if !registrations.accounts.contains(&validator_id) {
+        if registrations.accounts.insert(validator_id.clone()) {
             builder = builder.append_instruction(Register::account(Account::new(validator_id)));
         }
     }
@@ -5041,14 +5062,6 @@ fn generated_config_parameter_name(id: &iroha_config::base::ParameterId) -> Opti
             ],
         ),
         (&["nexus", "fusion"], &["exit_teu"]),
-        (
-            &["nexus", "staking"],
-            &[
-                "stake_asset_id",
-                "stake_escrow_account_id",
-                "slash_sink_account_id",
-            ],
-        ),
         (&["nexus", "registry"], &["manifest_directory"]),
         (&["nexus", "governance"], &["default_module", "modules"]),
         (
@@ -5063,8 +5076,6 @@ fn generated_config_parameter_name(id: &iroha_config::base::ParameterId) -> Opti
                 "transaction_time_to_live_ms",
             ],
         ),
-        (&["crypto"], &["allowed_signing"]),
-        (&["crypto", "curves"], &["allowed_curve_ids"]),
         (
             &["streaming"],
             &[
@@ -7396,6 +7407,7 @@ fn write_start_script(
         "    peer_pid=$(SNAPSHOT_STORE_DIR=\"$SNAPSHOT_STORE_DIR\" LOG_LEVEL=\"${{LOG_LEVEL:-info}}\" LOG_FILTER=\"${{LOG_FILTER:-}}\" IROHAD_BIN=\"$IROHAD_BIN\" IROHA_NETWORK_DIR=\"$DIR\" IROHA_PEER_INDEX=\"$i\" IROHA_PEER_CONFIG=\"${{BEACON_CONFIG:-$DIR/peer${{i}}.toml}}\" IROHA_PEER_LOG=\"$DIR/peer${{i}}.log\" IROHA_PEER_PROCESS_RECORD=\"${{PROCESS_RECORD:-}}\" IROHA_SORA_MODE=\"{sora_mode_env}\" IROHA_TAIRA_MODE=\"{taira_mode_env}\" IROHA_PEER_FRESH_KEY=\"$FRESH_KEY_ARG\" python3 - \"$BEACON_CONFIG\" \"$BEACON_CREDENTIAL\" \"$KAGAMI_BIN\" <<'PY'"
     )?;
     writeln!(start_file, "import os")?;
+    writeln!(start_file, "import shutil")?;
     writeln!(start_file, "import stat")?;
     writeln!(start_file, "import subprocess")?;
     writeln!(start_file, "import sys")?;
@@ -7404,12 +7416,18 @@ fn write_start_script(
     }
     writeln!(start_file)?;
     writeln!(start_file, "env = os.environ.copy()")?;
-    if taira {
-        writeln!(
-            start_file,
-            "env[\"IROHAD_BIN\"] = os.path.realpath(env[\"IROHAD_BIN\"])"
-        )?;
-    }
+    // Resolve a relative executable before isolating the peer's default stores.
+    writeln!(start_file, "binary = shutil.which(env[\"IROHAD_BIN\"])")?;
+    writeln!(start_file, "if binary is None:")?;
+    writeln!(
+        start_file,
+        "    raise RuntimeError(\"iroha3d binary is not executable\")"
+    )?;
+    writeln!(start_file, "env[\"IROHAD_BIN\"] = os.path.realpath(binary)")?;
+    writeln!(
+        start_file,
+        "os.chdir(os.path.join(env[\"IROHA_NETWORK_DIR\"], \"state\", \"peer{{}}\".format(env[\"IROHA_PEER_INDEX\"])))"
+    )?;
     writeln!(start_file, "cmd = [env[\"IROHAD_BIN\"]]")?;
     writeln!(start_file, "if env.get(\"IROHA_SORA_MODE\") == \"1\":")?;
     writeln!(start_file, "    cmd.append(\"--sora\")")?;
@@ -8476,3 +8494,6 @@ impl crate::managed::PreparedLocalnet {
         Ok(key)
     }
 }
+
+#[cfg(test)]
+mod staking_policy_tests;

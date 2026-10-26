@@ -520,19 +520,20 @@ impl<V> std::fmt::Debug for QuantityArchiveMap<V> {
 }
 impl<V> QuantityArchiveMap<V> {
     pub(super) fn belongs_to(&self, budget: &AllocationBudget) -> bool {
-        match &self.frozen {
-            Some(frozen) => {
+        self.frozen.as_ref().map_or_else(
+            || {
+                self.rows
+                    .as_ref()
+                    .is_none_or(|rows| rows.belongs_to(budget))
+            },
+            |frozen| {
                 frozen.belongs_to(budget)
                     && frozen
                         .rows
                         .as_ref()
                         .is_none_or(|rows| rows.belongs_to(budget))
-            }
-            None => self
-                .rows
-                .as_ref()
-                .is_none_or(|rows| rows.belongs_to(budget)),
-        }
+            },
+        )
     }
     fn rows(&self) -> &[(Hash, V)] {
         self.frozen.as_ref().map_or_else(
@@ -619,14 +620,11 @@ impl<V> QuantityArchiveMap<V> {
             .rows
             .as_mut()
             .expect("original reserved archive backing");
-        match rows.as_slice().binary_search_by_key(&hash, |(key, _)| *key) {
-            Ok(index) => {
-                rows.as_mut_slice()[index].1 = value;
-            }
-            Err(_) => {
-                rows.push_reserved((hash, value));
-                rows.as_mut_slice().sort_unstable_by_key(|(key, _)| *key);
-            }
+        if let Ok(index) = rows.as_slice().binary_search_by_key(&hash, |(key, _)| *key) {
+            rows.as_mut_slice()[index].1 = value;
+        } else {
+            rows.push_reserved((hash, value));
+            rows.as_mut_slice().sort_unstable_by_key(|(key, _)| *key);
         }
     }
     /// Transfer complete pending replacements after World application with no allocation.

@@ -1182,38 +1182,41 @@ pub(super) fn evaluate_with_bound_instances_cancellable<C: PastaCurve>(
         return Err(KeyError::CosetIndex.into());
     }
     if !instances.has_short_prefixes() {
-        return match workspace {
-            Some(workspace) => evaluate_with_workspace_cancellable(
-                pk,
-                protocol,
-                compiled,
-                inputs,
-                challenges,
-                filter,
-                workspace,
-                cancellation,
-            ),
-            None => evaluate_cancellable(
-                pk,
-                protocol,
-                compiled,
-                inputs,
-                challenges,
-                filter,
-                cancellation,
-            ),
-        };
+        return workspace.map_or_else(
+            || {
+                evaluate_cancellable(
+                    pk,
+                    protocol,
+                    compiled,
+                    inputs,
+                    challenges,
+                    filter,
+                    cancellation,
+                )
+            },
+            |workspace| {
+                evaluate_with_workspace_cancellable(
+                    pk,
+                    protocol,
+                    compiled,
+                    inputs,
+                    challenges,
+                    filter,
+                    workspace,
+                    cancellation,
+                )
+            },
+        );
     }
     let mut owned;
-    let workspace = match workspace {
-        Some(workspace) => workspace,
-        None => {
-            let bytes = workspace_elements(pk, protocol)?
-                .checked_mul(size_of::<C::ScalarExt>())
-                .ok_or(ProtocolError::Overflow)?;
-            owned = QuotientWorkspace::new(bytes);
-            &mut owned
-        }
+    let workspace = if let Some(workspace) = workspace {
+        workspace
+    } else {
+        let bytes = workspace_elements(pk, protocol)?
+            .checked_mul(size_of::<C::ScalarExt>())
+            .ok_or(ProtocolError::Overflow)?;
+        owned = QuotientWorkspace::new(bytes);
+        &mut owned
     };
     evaluate_inner(
         pk,

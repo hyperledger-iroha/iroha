@@ -16,7 +16,7 @@ pub(crate) fn validate_reserve_durable_state_path(path: &StatePath) -> Result<()
     Ok(())
 }
 
-impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
+impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     fn contract_state_key_matches_namespace(key: &str, prefix: &str) -> bool {
         if let Some(root) = prefix
             .strip_suffix('/')

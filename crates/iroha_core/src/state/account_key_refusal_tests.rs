@@ -33,7 +33,7 @@ fn check_original_refusal<T: Debug>(
     check_value: impl Fn(&T),
     preceding_admissions: impl Fn() -> Result<(), norito::Error>,
     first_admission: impl Fn() -> Result<(), norito::Error>,
-    invalid_context: &str,
+    check_invalid: impl Fn(&json::Error),
 ) {
     let pointer = source.as_ptr();
     let (complete, usage) = with_decode_limits_measured(limits(usize::MAX), || read(source));
@@ -61,7 +61,7 @@ fn check_original_refusal<T: Debug>(
     let (invalid, invalid_usage) =
         with_decode_limits_measured(limits(usize::MAX), || read(&malformed));
     let invalid = invalid.unwrap_err();
-    assert!(matches!(invalid, json::Error::Message(_)));
+    check_invalid(&invalid);
     assert!(!invalid.is_decode_resource_limit());
     let context_limit = complete_demand
         .checked_add(usize::try_from(attempted).unwrap())
@@ -123,10 +123,28 @@ fn check_original_refusal<T: Debug>(
         })
         .unwrap_err();
     assert_eq!(invalid.kind(), DecodeAttemptErrorKind::Invalid);
-    assert!(invalid.into_error().to_string().contains(invalid_context));
+    let norito::Error::Json(invalid) = invalid.into_error() else {
+        panic!("invalid account key must preserve its original JSON error");
+    };
+    check_invalid(&invalid);
     assert_eq!(source.as_ptr(), pointer);
     drop(original);
     assert_eq!(pool.reserved_bytes(), 0);
+}
+
+fn check_invalid_i105_account_key(error: &json::Error) {
+    assert!(
+        matches!(
+            error,
+            json::Error::WithPos {
+                msg: "invalid I105 account identifier",
+                byte: 0,
+                line: 1,
+                col: 1,
+            }
+        ),
+        "canonical account-key error must preserve its exact category and position: {error:?}"
+    );
 }
 
 // This is checkpoint calibration using the same canonical object/entry owners,
@@ -193,7 +211,10 @@ fn upload_account_key_preserves_original_refusal_fields_scope_and_same_source_re
                 .map(|_| ())
                 .map_err(json::Error::into_core_error)
         },
-        "invalid upload owner",
+        |error| {
+            assert!(matches!(error, json::Error::Message(message) if message ==
+                "invalid upload owner: JSON error: invalid I105 account identifier at byte 0 (line 1, col 1)"));
+        },
     );
 }
 
@@ -224,7 +245,7 @@ fn governance_lock_account_key_preserves_original_refusal_fields_scope_and_same_
         },
         || governance_prefix::<GovernanceLockRecord>(&source, "locks", false),
         || reserve_decode_btree_allocation::<AccountId, GovernanceLockRecord>(1),
-        "invalid I105",
+        check_invalid_i105_account_key,
     );
     check_original_refusal(
         &source,
@@ -248,7 +269,7 @@ fn governance_lock_account_key_preserves_original_refusal_fields_scope_and_same_
                 .map(|_| ())
                 .map_err(json::Error::into_core_error)
         },
-        "invalid I105",
+        check_invalid_i105_account_key,
     );
 }
 
@@ -279,7 +300,7 @@ fn governance_slash_account_key_preserves_original_refusal_fields_scope_and_same
         },
         || governance_prefix::<GovernanceSlashEntry>(&source, "slashes", false),
         || reserve_decode_btree_allocation::<AccountId, GovernanceSlashEntry>(1),
-        "invalid I105",
+        check_invalid_i105_account_key,
     );
     check_original_refusal(
         &source,
@@ -300,7 +321,7 @@ fn governance_slash_account_key_preserves_original_refusal_fields_scope_and_same
                 .map(|_| ())
                 .map_err(json::Error::into_core_error)
         },
-        "invalid I105",
+        check_invalid_i105_account_key,
     );
 }
 

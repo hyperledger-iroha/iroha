@@ -331,13 +331,8 @@ pub(crate) fn plan_two_leaf_proof_managed_transition_v1(
             }
         }),
     ];
-    let input_positions = input_commitments.map(|commitment| {
-        if commitment == initial_commitments[0] {
-            0
-        } else {
-            1
-        }
-    });
+    let input_positions =
+        input_commitments.map(|commitment| u32::from(commitment != initial_commitments[0]));
     let authentication_paths = input_commitments.map(|commitment| {
         if commitment == initial_commitments[0] {
             ordered_paths[0]

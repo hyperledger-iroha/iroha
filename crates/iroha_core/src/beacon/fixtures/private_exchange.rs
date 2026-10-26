@@ -181,8 +181,10 @@ pub(super) fn seal_global_threshold_beacon_dkg_private_edge_v1(
 /// Rejects a foreign key, edge, commitment, invalid share or signing failure.
 pub(super) fn accept_global_threshold_beacon_dkg_private_edge_v1(
     session: &GlobalThresholdBeaconDkgSessionV1,
-    dealer_key: &GlobalThresholdBeaconDkgRecipientKeyV1,
-    recipient_key: &GlobalThresholdBeaconDkgRecipientKeyV1,
+    (dealer_key, recipient_key): (
+        &GlobalThresholdBeaconDkgRecipientKeyV1,
+        &GlobalThresholdBeaconDkgRecipientKeyV1,
+    ),
     recipient_signer: &KeyPair,
     recipient_secret: &HybridSecretKey,
     dealer_commitment: &GlobalThresholdBeaconDkgDealerCommitmentV1,

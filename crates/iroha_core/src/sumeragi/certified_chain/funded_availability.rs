@@ -79,8 +79,7 @@ fn zeroed<T: Copy + Default>(
 /// Authentication and the portable bound precede the caller's logical admission;
 /// both physical buffers retain their original charges until deallocation.
 pub(super) fn verify(
-    instance: Hash32,
-    config: &HeightConfig,
+    configured_instance: (Hash32, &HeightConfig),
     header: &BlockHeader,
     availability: &AvailabilityFrame,
     payload: &[u8],
@@ -88,6 +87,7 @@ pub(super) fn verify(
     budget: &AllocationBudget,
     admit: &mut dyn FnMut(usize) -> Result<(), ExecutionDeferred>,
 ) -> Result<(), VerificationReadError> {
+    let (instance, config) = configured_instance;
     #[cfg(all(test, sumeragi_core_mutation = "HC959"))]
     let substituted_pool = AllocationBudget::new(budget.limit_bytes());
     #[cfg(all(test, sumeragi_core_mutation = "HC959"))]

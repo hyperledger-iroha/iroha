@@ -502,7 +502,8 @@ fn accumulate_with_batches_v1<'a>(
                 .mul(F(2).inv().ok_or(ZkX509StarkErrorV1::ProfileMismatch)?)
                 .mul(point_inverse);
             weighted_mask.fill(E::ZERO);
-            let mut caches: [NativeFamilyCacheV1; 2] = core::array::from_fn(|_| NativeFamilyCacheV1::default());
+            let mut caches: [NativeFamilyCacheV1; 2] =
+                core::array::from_fn(|_| NativeFamilyCacheV1::default());
             for (index, (link, &alpha)) in links.iter().zip(alphas).enumerate() {
                 if link.point != point {
                     continue;
@@ -611,6 +612,13 @@ fn accumulate_with_batches_v1<'a>(
     Ok(())
 }
 
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::unnecessary_wraps,
+        reason = "test builds inject allocation failure through this fallible hook"
+    )
+)]
 fn before_allocation_v1() -> Result<(), ZkX509StarkErrorV1> {
     #[cfg(test)]
     allocation_failure::step_v1()?;
@@ -703,7 +711,7 @@ mod tests {
     fn masks_v1() -> Vec<Vec<F>> {
         (0..2 * LINK_COUNT_V1)
             .map(|column| {
-                (0..MASK_DEGREE + 1)
+                (0..=MASK_DEGREE)
                     .map(|i| F((17 * column + 31 * i + 1) as u64))
                     .collect()
             })
@@ -712,6 +720,10 @@ mod tests {
     fn alphas_v1() -> [E; LINK_COUNT_V1] {
         core::array::from_fn(|index| E::canonical([index as u64 + 1, 7, 11, 13]).unwrap())
     }
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "the test adapter implements the fallible transform callback contract"
+    )]
     fn cpu_adapter_v1(
         words: &mut [Vec<u64>],
         root: u64,
@@ -997,7 +1009,7 @@ mod tests {
             assert_eq!(output, before);
             failures += 1;
         }
-        assert!(failures >= 28 && failures < 80);
+        assert!((28..80).contains(&failures));
         assert!(fields_v1(usize::MAX).is_err());
         assert!(extensions_v1(usize::MAX).is_err());
         assert!(payload_v1(usize::MAX, 1, 1).is_err());

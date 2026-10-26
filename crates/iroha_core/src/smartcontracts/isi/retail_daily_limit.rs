@@ -204,7 +204,7 @@ impl Execute for RetailMonetaryMovementV1 {
                 crate::smartcontracts::isi::asset::isi::execute_retail_reserve_mint(
                     stx,
                     authority,
-                    reserve,
+                    &(reserve),
                     self.amount.clone(),
                 )?;
             }

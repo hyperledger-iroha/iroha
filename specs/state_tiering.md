@@ -58,14 +58,14 @@ fast transaction validation.
 
 ## Derived membership indexes
 
-The first-release World uses `(key, member) -> ()` rows for proof status and
-tag membership, account scope membership, asset definition domain/owner and
+The first-release World uses `(key, member) -> ()` rows for domain owners, proof
+status and tag membership, account scope membership, asset definition domain/owner and
 holder indexes, asset definition/domain membership, NFT owner/domain,
-RWA owner/status/frozen state, and escrow seller/buyer/status. The redundant
-`assets_by_account` table is removed; the canonical `assets` account range
-owns that lookup. `asset_definition_asset_counts` and
-`account_scope_account_counts` retain only the small counts used by query
-planning and telemetry.
+RWA owner/status/frozen state, escrow seller/buyer/status, and repo agreement
+initiator/counterparty/custodian. The redundant `assets_by_account` table is
+removed; the canonical `assets` account range owns that lookup.
+`asset_definition_asset_counts` and `account_scope_account_counts` retain only
+the small counts used by query planning and telemetry.
 
 Membership insertion/removal changes a B+tree path and bounded leaves instead
 of cloning a group-sized collection on each transaction's first write.

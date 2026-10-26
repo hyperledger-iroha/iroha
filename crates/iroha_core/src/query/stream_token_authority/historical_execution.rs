@@ -203,7 +203,7 @@ fn authenticate_target(
         || view
             .transactions
             .get(&entry_hash)
-            .map(|height| height.get())
+            .map(std::num::NonZero::get)
             != usize::try_from(execution.height).ok()
     {
         return Err(Error::Execution.into());

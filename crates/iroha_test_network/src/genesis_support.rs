@@ -176,10 +176,12 @@ pub fn sign_prepared_genesis_from_config(
         &genesis_account,
         &topology,
         key_pair,
-        None,
-        None,
-        None,
-        Some(&parsed_config),
+        crate::config::GenesisRuntimeConfig {
+            pipeline_config: None,
+            nexus_config: None,
+            zk_config: None,
+            runtime_config: Some(&parsed_config),
+        },
     )
     .wrap_err("pre-execute canonical prepared genesis")?;
     if !unresolved_hash_replaced && block.hash() != config.genesis_expected_hash {
@@ -257,10 +259,12 @@ pub fn prepare_unpublished_genesis_from_config(
                 &account,
                 &topology,
                 key_pair,
-                None,
-                None,
-                None,
-                Some(&parsed_config),
+                crate::config::GenesisRuntimeConfig {
+                    pipeline_config: None,
+                    nexus_config: None,
+                    zk_config: None,
+                    runtime_config: Some(&parsed_config),
+                },
             )
         },
     )
@@ -419,11 +423,10 @@ fn load_node_config(path: &Path, allow_unresolved_hash: bool) -> Result<(actual:
 mod tests {
     use super::*;
     use iroha_crypto::{Algorithm, bls_normal_pop_prove};
-    use iroha_data_model::block::consensus::{
-        SumeragiGenesisContextParameters, is_valid_committee_size,
-    };
+    use iroha_data_model::block::consensus::SumeragiGenesisContextParameters;
     use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry};
     use iroha_model_base::peer::PeerId;
+    use iroha_model_base::topology::is_valid_committee_size;
     use std::fs;
     const CONFIGURED_HASH: &str =
         "hash:0000000000000000000000000000000000000000000000000000000000000001#C50E";
@@ -455,6 +458,12 @@ mod tests {
             .with_sumeragi_context_parameters(SumeragiGenesisContextParameters::recommended())
     }
     fn prepared_manifest(chain_id: ChainId) -> (RawGenesisTransaction, KeyPair) {
+        let fees = iroha_config::parameters::defaults::nexus::fees::genesis_policy();
+        let staking = iroha_genesis::default_staking_policy(
+            fees.fee_asset_id,
+            fees.fee_sink_account_id.clone(),
+            fees.fee_sink_account_id,
+        );
         let topology = (0..4)
             .map(|_| {
                 let validator = KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
@@ -465,7 +474,18 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let manifest = complete_test_builder_for_topology(
-            GenesisBuilder::new_without_executor(chain_id, "."),
+            GenesisBuilder::new_without_executor(
+                chain_id,
+                ".",
+                iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                    iroha_crypto::Algorithm::Ed25519,
+                    iroha_crypto::Algorithm::Secp256k1,
+                    iroha_crypto::Algorithm::BlsNormal,
+                ])
+                .expect("explicit canonical genesis producer policy"),
+            )
+            .with_staking_policy(staking)
+            .expect("explicit fixture staking policy"),
             topology,
         )
         .build_raw()
@@ -505,10 +525,12 @@ mod tests {
                 &account,
                 &topology,
                 key,
-                None,
-                None,
-                None,
-                Some(&config),
+                crate::config::GenesisRuntimeConfig {
+                    pipeline_config: None,
+                    nexus_config: None,
+                    zk_config: None,
+                    runtime_config: Some(&config),
+                },
             ),
         )
         .expect("derive actual fixture commitments from native execution");
@@ -532,10 +554,12 @@ mod tests {
             &account,
             &topology,
             key,
-            None,
-            None,
-            None,
-            Some(&config),
+            crate::config::GenesisRuntimeConfig {
+                pipeline_config: None,
+                nexus_config: None,
+                zk_config: None,
+                runtime_config: Some(&config),
+            },
         )
         .expect("final fixture must pass the strict native validator without rebinding");
         assert_eq!(actual, staged);
@@ -1011,5 +1035,51 @@ revocation_store_path = "managed/soranet/revocations.norito"
         )
         .expect_err("wrong chain must fail before bundle decoding");
         assert!(error.to_string().contains("differs from expected chain"));
+    }
+}
+
+#[cfg(test)]
+mod staking_author_tests {
+    use super::*;
+    use iroha_data_model::account::address::{ChainDiscriminantGuard, chain_discriminant};
+
+    #[test]
+    fn typed_staking_author_retains_distinct_identities_across_contexts() {
+        let _caller = ChainDiscriminantGuard::enter(753);
+        let fees = iroha_config::parameters::defaults::nexus::fees::genesis_policy();
+        let sink = AccountId::new(
+            iroha_crypto::KeyPair::from_seed(vec![0x6d; 32], iroha_crypto::Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+        );
+        let expected = iroha_genesis::default_staking_policy(
+            fees.fee_asset_id.clone(),
+            fees.fee_sink_account_id.clone(),
+            sink.clone(),
+        );
+        {
+            let _author = ChainDiscriminantGuard::enter(369);
+            let policy = iroha_genesis::default_staking_policy(
+                fees.fee_asset_id.clone(),
+                fees.fee_sink_account_id.clone(),
+                sink.clone(),
+            );
+            assert_eq!(policy, expected);
+            assert_eq!(
+                iroha_data_model::block::consensus::PublicLaneStakingPolicy::from_custom_parameter(
+                    &policy.into_custom_parameter().unwrap()
+                )
+                .unwrap(),
+                expected
+            );
+        }
+        assert_eq!(chain_discriminant(), 753);
+        assert_eq!(expected.stake_asset_id, fees.fee_asset_id);
+        assert_eq!(expected.stake_escrow_account_id, fees.fee_sink_account_id);
+        assert_eq!(expected.slash_sink_account_id, sink);
+        assert_ne!(
+            expected.stake_escrow_account_id,
+            expected.slash_sink_account_id
+        );
     }
 }
