@@ -65,8 +65,17 @@ fn registry_requires_explicit_public_context_selected_policy_and_fresh_quorum() 
         deadline
     );
     let longer = Instant::now() + Duration::from_secs(600);
-    assert_eq!(store.registry_deadline(&bootstrap, &config, provider, longer).unwrap(), longer);
-    assert!(store.registry_deadline(&bootstrap, &config, provider, Instant::now()).is_err());
+    assert_eq!(
+        store
+            .registry_deadline(&bootstrap, &config, provider, longer)
+            .unwrap(),
+        longer
+    );
+    assert!(
+        store
+            .registry_deadline(&bootstrap, &config, provider, Instant::now())
+            .is_err()
+    );
     for mutation in 0..5 {
         let mut changed = config.clone();
         match mutation {

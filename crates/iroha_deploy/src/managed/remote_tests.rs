@@ -22,9 +22,7 @@ fn parent_checkpoint_diagnostic_preserves_installed_context_and_typed_cause() {
         (CheckpointReadError::Http(PublicHttpError::Deadline), false),
         (CheckpointReadError::Http(PublicHttpError::Transport), false),
         (
-            CheckpointReadError::Bootstrap(BootstrapError::Invalid(
-                "checkpoint signature rejected",
-            )),
+            CheckpointReadError::Bootstrap(BootstrapError::Invalid("native certificate rejected")),
             false,
         ),
     ] {
@@ -37,7 +35,7 @@ fn parent_checkpoint_diagnostic_preserves_installed_context_and_typed_cause() {
         assert!(text.contains("network `fixture`"));
         assert!(text.contains(installed.torii_root().as_str()));
         assert!(text.contains(&original));
-        assert_eq!(text.contains("publication or routing"), publication_hint);
+        assert_eq!(text.contains("native Torii API routing"), publication_hint);
         assert_eq!(text.contains("retry the same command"), publication_hint);
         assert_eq!(
             text.contains("Keep any existing context and journals"),
@@ -175,8 +173,8 @@ fn installed_profile_binding_is_exclusive_and_cannot_be_retargeted() {
         Err(Error::ParentDeadline)
     ));
     assert_eq!(
-        directory.read(BINDING, MAX_METADATA).unwrap(),
-        original_bytes
+        directory.read(BINDING, MAX_METADATA).unwrap().as_slice(),
+        original_bytes.as_slice()
     );
     drop(gate);
     let rebound =
@@ -192,8 +190,8 @@ fn installed_profile_binding_is_exclusive_and_cannot_be_retargeted() {
         .is_err()
     );
     assert_eq!(
-        directory.read(BINDING, MAX_METADATA).unwrap(),
-        original_bytes
+        directory.read(BINDING, MAX_METADATA).unwrap().as_slice(),
+        original_bytes.as_slice()
     );
     let restored = PrivateDirectory::open(directory.path()).unwrap();
     assert!(read_binding(&restored).unwrap().context.is_none());
@@ -302,6 +300,57 @@ fn ordinary_context_has_no_remote_status_but_incomplete_binding_is_an_error() {
             .is_err()
     );
     assert!(existing_outer(&store, "../other").is_err());
+}
+
+#[test]
+fn parent_bootstrap_custody_is_separate_and_survives_local_generation_reset() {
+    use iroha_data_model::sumeragi_finality::test_fixtures::NativeFinalityFixture;
+
+    let _guard = super::super::native_test_guard();
+    let temporary = tempfile::tempdir().unwrap();
+    let (store, generation, prepared) =
+        super::super::tests::fixture(&temporary.path().join("managed"), "private");
+    let path = bootstrap_path(&store, "private");
+    assert_eq!(path, store.root().join("parents/private"));
+    assert!(!path.starts_with(generation.path()));
+    assert!(!generation.path().starts_with(&path));
+
+    let checkpoint = NativeFinalityFixture::new().checkpoint();
+    let selected = profile(checkpoint.chain_id(), 753, "https://torii.example/");
+    let parent = BootstrapStore::open(&path).unwrap();
+    parent
+        .accept(&selected, crate::bootstrap::tests::discovered(&checkpoint))
+        .unwrap();
+    let retained = std::fs::read(path.join("accepted.nrt")).unwrap();
+
+    store.reset_captured(&prepared).unwrap();
+    assert!(
+        generation
+            .open_child_optional("generation")
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(std::fs::read(path.join("accepted.nrt")).unwrap(), retained);
+    assert_eq!(
+        parent
+            .load(&selected)
+            .unwrap()
+            .unwrap()
+            .into_verifier()
+            .checkpoint(),
+        &checkpoint
+    );
+    drop(parent);
+    assert_eq!(
+        BootstrapStore::open(&path)
+            .unwrap()
+            .load(&selected)
+            .unwrap()
+            .unwrap()
+            .into_verifier()
+            .checkpoint(),
+        &checkpoint
+    );
 }
 
 #[test]
@@ -596,11 +645,11 @@ fn terminated_attachment_owner_cannot_keep_advertising_attached() {
 }
 
 #[test]
-fn release_lock_contention_exhausts_the_original_deadline_without_http() {
+fn bootstrap_lock_contention_exhausts_the_original_deadline_without_http() {
     let _resources = super::super::native_test_guard();
     let temporary = tempfile::tempdir().unwrap();
     let path = temporary.path().join("release");
-    let owner = ReleaseCheckpointStore::open(&path).unwrap();
+    let owner = BootstrapStore::open(&path).unwrap();
     let deadline = Instant::now() + Duration::from_millis(20);
     assert!(matches!(
         authenticate_parent(
@@ -613,7 +662,7 @@ fn release_lock_contention_exhausts_the_original_deadline_without_http() {
     ));
     assert!(Instant::now() >= deadline);
     drop(owner);
-    ReleaseCheckpointStore::open(&path).unwrap();
+    BootstrapStore::open(&path).unwrap();
 }
 
 #[test]
@@ -1447,7 +1496,7 @@ fn administrative_amx_managed_busy_is_before_origin_signing_and_source_repair() 
     );
     assert!(!directory.path().join("provisioning").exists());
     assert!(!directory.path().join("amx-registration").exists());
-    assert!(!release_path(&store, "private").exists());
+    assert!(!bootstrap_path(&store, "private").exists());
     drop(lease);
     // Releasing the real runtime lease does not manufacture a missing original binding.
     assert!(

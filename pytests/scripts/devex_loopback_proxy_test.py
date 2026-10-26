@@ -1,7 +1,7 @@
 """Exercise only the disposable attachment test controller, never protocol qualification.
 
-Each test uses four fake numeric-loopback HTTP servers and a temporary private CA.
-TLS verification remains enabled and no operating-system trust is changed. Small
+Each test uses four fake numeric-loopback HTTP servers. No remote HTTP endpoint
+is admitted and no operating-system trust is changed. Small
 module constants exercise finite boundaries without writing 256 MiB of captures;
 the normal controller CLI is exercised with its actual defaults as well.
 """
@@ -11,9 +11,7 @@ import http.client
 import http.server
 from pathlib import Path
 import queue
-import shutil
 import socket
-import ssl
 import subprocess
 import sys
 import threading
@@ -23,37 +21,7 @@ import pytest
 
 
 CONTROLLER = (Path(__file__).resolve().parents[2] /
-              "crates/iroha_deploy/src/managed/attachment_installed_tests/tls_proxy.py")
-
-
-@pytest.fixture(scope="module")
-def certificates(tmp_path_factory):
-    root = tmp_path_factory.mktemp("devex-tls-authority")
-    root.chmod(0o700)
-    config = root / "certificate.cnf"
-    config.write_text(
-        "[req]\ndistinguished_name=dn\nx509_extensions=ca\nprompt=no\n"
-        "[dn]\nCN=disposable-controller-test\n"
-        "[ca]\nbasicConstraints=critical,CA:TRUE\nkeyUsage=critical,keyCertSign,cRLSign\n"
-        "[server]\nbasicConstraints=critical,CA:FALSE\n"
-        "keyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\n"
-        "subjectAltName=IP:127.0.0.1,DNS:localhost\n", encoding="ascii")
-    openssl = shutil.which("openssl")
-    assert openssl, "the TLS controller regression requires openssl"
-    commands = [
-        ["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
-         "-config", str(config), "-keyout", str(root / "authority-key.pem"),
-         "-out", str(root / "authority.pem")],
-        ["req", "-new", "-newkey", "rsa:2048", "-nodes", "-config", str(config),
-         "-subj", "/CN=disposable-controller-server",
-         "-keyout", str(root / "private-key.pem"), "-out", str(root / "server.csr")],
-        ["x509", "-req", "-days", "1", "-CAcreateserial", "-in", str(root / "server.csr"),
-         "-CA", str(root / "authority.pem"), "-CAkey", str(root / "authority-key.pem"),
-         "-extfile", str(config), "-extensions", "server", "-out", str(root / "certificate.pem")],
-    ]
-    for command in commands:
-        subprocess.run([openssl, *command], check=True, capture_output=True, timeout=20)
-    return root
+              "crates/iroha_deploy/src/managed/attachment_installed_tests/loopback_proxy.py")
 
 
 @pytest.fixture
@@ -103,15 +71,13 @@ def upstreams():
 
 
 @pytest.fixture
-def controller(tmp_path, certificates, upstreams):
+def controller(tmp_path, upstreams):
     servers, received = upstreams
 
     @contextmanager
     def start(*, bounded=False):
         root = tmp_path / "ingress"
         root.mkdir(mode=0o700)
-        for name in ["certificate.pem", "private-key.pem"]:
-            shutil.copyfile(certificates / name, root / name)
         arguments = [str(root), *[f"http://127.0.0.1:{server.server_port}" for server in servers]]
         if bounded:
             script = (
@@ -135,8 +101,7 @@ def controller(tmp_path, certificates, upstreams):
                     break
                 threading.Event().wait(0.01)
             assert len(ports) == 4 and len(set(ports)) == 4
-            context = ssl.create_default_context(cafile=str(certificates / "authority.pem"))
-            yield root, ports, context, process, received
+            yield root, ports, process, received
         finally:
             process.stdin.close()
             process.wait(timeout=5)
@@ -151,8 +116,8 @@ def controller(tmp_path, certificates, upstreams):
     return start
 
 
-def request(port, context, method="GET", path="/", body=None, headers=None):
-    connection = http.client.HTTPSConnection("127.0.0.1", port, context=context, timeout=3)
+def request(port, method="GET", path="/", body=None, headers=None):
+    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=3)
     try:
         connection.request(method, path, body=body, headers=headers or {})
         response = connection.getresponse()
@@ -161,35 +126,38 @@ def request(port, context, method="GET", path="/", body=None, headers=None):
         connection.close()
 
 
-def test_verified_tls_preserves_four_upstream_bodies_headers_and_checkpoint(controller):
-    with controller() as (root, ports, context, _, received):
+def test_loopback_preserves_four_upstream_bodies_headers_and_native_discovery(controller):
+    with controller() as (root, ports, _, received):
         body = b"\x00\xffexact canonical request\r\n"
         for index, port in enumerate(ports):
             status, headers, response = request(
-                port, context, "POST", "/v1/private?cursor=7", body,
+                port, "POST", "/v1/private?cursor=7", body,
                 {"X-Test-Authority": "signed-runtime-value", "Content-Type": "application/x-norito"})
             assert (status, headers["X-Upstream"], response) == (201, str(index), body)
             peer, method, path, forwarded, payload = received.get(timeout=2)
             assert (peer, method, path, payload) == (index, "POST", "/v1/private?cursor=7", body)
             assert forwarded["X-Test-Authority"] == "signed-runtime-value"
             assert forwarded["Content-Type"] == "application/x-norito"
-        checkpoint = b"\x00signed checkpoint\xff"
-        (root / "checkpoint.nrt").write_bytes(checkpoint)
-        status, headers, response = request(ports[0], context, path="/fixture/checkpoint.nrt")
-        assert (status, headers["Content-Type"], response) == (200, "application/x-norito", checkpoint)
+        for path in ["/v1/accounts/capabilities", "/v1/accounts/faucet/policy", "/status",
+                     "/v1/bridge/finality/1", "/v1/bridge/finality/interval/2/4"]:
+            status, headers, response = request(ports[0], path=path)
+            assert (status, headers["X-Upstream"], response) == (201, "0", b"ready")
+            assert received.get(timeout=2)[:3] == (0, "GET", path)
         assert received.empty()
         capture = (root / "public-requests.bin").read_bytes()
         assert capture.count(body) == 4
         assert capture.count(b"X-Test-Authority: signed-runtime-value") == 4
 
 
-def test_tls_rejects_untrusted_authority_and_wrong_hostname(controller):
-    with controller() as (_, ports, context, _, _):
-        with pytest.raises(ssl.SSLCertVerificationError):
-            request(ports[0], ssl.create_default_context())
-        with socket.create_connection(("127.0.0.1", ports[1]), timeout=2) as raw:
-            with pytest.raises(ssl.SSLCertVerificationError):
-                context.wrap_socket(raw, server_hostname="wrong.invalid")
+@pytest.mark.parametrize("upstream", [
+    "http://localhost:8080/", "http://192.0.2.1:8080/", "https://127.0.0.1:8080/",
+    "http://127.0.0.1/",
+])
+def test_upstream_must_be_explicit_numeric_loopback_http(tmp_path, upstream):
+    result = subprocess.run([sys.executable, str(CONTROLLER), str(tmp_path), *([upstream] * 4)],
+                            input=b"", capture_output=True, timeout=3)
+    assert result.returncode != 0
+    assert not (tmp_path / "ports").exists()
 
 
 @pytest.mark.parametrize("framing", [
@@ -202,56 +170,53 @@ def test_tls_rejects_untrusted_authority_and_wrong_hostname(controller):
     b"Content-Length: 67108865\r\n",
 ])
 def test_invalid_framing_never_reaches_upstream(controller, framing):
-    with controller() as (root, ports, context, _, received):
-        with socket.create_connection(("127.0.0.1", ports[0]), timeout=3) as raw:
-            with context.wrap_socket(raw, server_hostname="127.0.0.1") as channel:
-                channel.sendall(b"POST / HTTP/1.1\r\nHost: localhost\r\n" + framing + b"\r\n")
-                response = http.client.HTTPResponse(channel)
-                response.begin()
-                assert response.status == 502
-                response.read()
+    with controller() as (root, ports, _, received):
+        with socket.create_connection(("127.0.0.1", ports[0]), timeout=3) as channel:
+            channel.sendall(b"POST / HTTP/1.1\r\nHost: localhost\r\n" + framing + b"\r\n")
+            response = http.client.HTTPResponse(channel)
+            response.begin()
+            assert response.status == 502
+            response.read()
         assert received.empty()
         assert not (root / "public-requests.bin").exists()
 
 
-def test_finite_request_response_checkpoint_and_capture_limits(controller):
-    with controller(bounded=True) as (root, ports, context, _, received):
-        assert request(ports[0], context, "POST", body=b"x" * 4096)[0] == 201
+def test_finite_request_response_and_capture_limits(controller):
+    with controller(bounded=True) as (root, ports, _, received):
+        assert request(ports[0], "POST", body=b"x" * 4096)[0] == 201
         assert received.get(timeout=2)[4] == b"x" * 4096
-        assert request(ports[0], context, "POST", body=b"x" * 4097)[0] == 502
+        assert request(ports[0], "POST", body=b"x" * 4097)[0] == 502
         assert received.empty()
-        assert request(ports[0], context, path="/oversized")[0] == 502
+        assert request(ports[0], path="/oversized")[0] == 502
         received.get(timeout=2)
-        (root / "checkpoint.nrt").write_bytes(b"x" * 4097)
-        assert request(ports[0], context, path="/fixture/checkpoint.nrt")[0] == 502
         for _ in range(20):
-            if request(ports[0], context, "POST", body=b"x" * 1024)[0] == 502:
+            if request(ports[0], "POST", body=b"x" * 1024)[0] == 502:
                 break
         else:
             pytest.fail("capture allowance did not close admission")
         assert (root / "public-requests.bin").stat().st_size <= 16384
 
 
-def test_idle_tls_client_cannot_block_listener_or_eof_cleanup(controller):
-    with controller() as (_, ports, context, process, _):
+def test_idle_client_cannot_block_listener_or_eof_cleanup(controller):
+    with controller() as (_, ports, process, _):
         with socket.create_connection(("127.0.0.1", ports[0]), timeout=3):
-            # A second verified handshake must complete while the first socket sends no TLS bytes.
-            assert request(ports[0], context)[0] == 201
+            # A second request must finish while the first socket sends no headers.
+            assert request(ports[0])[0] == 201
             process.stdin.close()
             process.wait(timeout=3)
             assert process.returncode == 0
 
 
 def test_connection_budget_applies_before_request_headers(controller):
-    with controller() as (_, ports, context, process, _):
+    with controller() as (_, ports, process, _):
         channels = []
         try:
             for _ in range(16):
                 raw = socket.create_connection(("127.0.0.1", ports[0]), timeout=3)
-                channels.append(context.wrap_socket(raw, server_hostname="127.0.0.1"))
+                raw.sendall(b"GET / HTTP/1.1\r\n")
+                channels.append(raw)
             with socket.create_connection(("127.0.0.1", ports[0]), timeout=3) as raw:
-                with pytest.raises((ssl.SSLError, ConnectionError, OSError)):
-                    context.wrap_socket(raw, server_hostname="127.0.0.1")
+                assert raw.recv(1) == b""
             process.stdin.close()
             process.wait(timeout=3)
             assert process.returncode == 0

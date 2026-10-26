@@ -1,6 +1,7 @@
 //! Native network discovery and durable identity pins for developer-network bootstrap.
 //!
-//! An installed HTTPS root supplies initial discovery. Signed genesis and native consensus proofs
+//! An installed root supplies initial discovery over HTTPS or explicit numeric-loopback HTTP.
+//! Signed genesis and native consensus proofs
 //! authenticate its checkpoint; owner-private custody retains the exact network and prevents a
 //! later response from replacing it. No separately signed publication or expiring release is used.
 //! A retained checkpoint proves its recorded decision, not that the parent is currently reachable.
@@ -71,7 +72,7 @@ pub struct NetworkMetadata {
     pub account_chain_discriminant: u16,
     /// Compiled native World schema for typed current-state proof interpretation.
     pub native_world_schema: Hash,
-    /// Selected credential-free HTTPS roots for native reads and operations.
+    /// Selected credential-free roots for native reads and operations.
     pub torii_roots: Vec<String>,
     /// Optional exact validator endpoint bindings; empty for native public-root discovery.
     pub peers: Vec<BootstrapPeer>,
@@ -186,10 +187,9 @@ impl BootstrapStore {
         // uninitialized store merely because one file is absent after a crash or replacement.
         let initial = norito::encode_canonical(&BootstrapRecord { accepted: None })
             .map_err(|_| BootstrapError::Invalid("cannot initialize bootstrap custody"))?;
-        let directory = match parent.publish_private_child(
-            name,
-            &[("bootstrap.lock", &[]), ("accepted.nrt", &initial)],
-        ) {
+        let directory = match parent
+            .publish_private_child(name, &[("bootstrap.lock", &[]), ("accepted.nrt", &initial)])
+        {
             Ok(directory) => directory,
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
                 PrivateDirectory::open(parent.path().join(name))?
@@ -219,7 +219,10 @@ impl BootstrapStore {
     ///
     /// # Errors
     /// Changed profile, malformed checkpoint, unsafe or uncertain custody, or missing state.
-    pub fn load(&self, profile: &InstalledNetworkProfile) -> Result<Option<AuthenticatedBootstrap>> {
+    pub fn load(
+        &self,
+        profile: &InstalledNetworkProfile,
+    ) -> Result<Option<AuthenticatedBootstrap>> {
         let state = self
             .state
             .lock()
@@ -257,16 +260,27 @@ impl BootstrapStore {
         if let Some(previous) = self.read_record()?.accepted {
             let previous = authenticate_retained(profile, previous)?;
             if previous.metadata != metadata {
-                return Err(BootstrapError::Invalid("retained network identity or policy changed"));
+                return Err(BootstrapError::Invalid(
+                    "retained network identity or policy changed",
+                ));
             }
             let old = previous.verifier.checkpoint();
             let next = verifier.checkpoint();
-            if next.height() < old.height()
-                || next.height() == old.height() && next != old
-            {
-                return Err(BootstrapError::Invalid("native checkpoint regressed or equivocated"));
+            if next.height() < old.height() {
+                return Err(BootstrapError::Invalid("native checkpoint regressed"));
             }
-            if next == old {
+            if next.height() == old.height() {
+                let trusted = iroha_data_model::sumeragi_finality::SumeragiFinalityVerifier::from_trusted_checkpoint(
+                    old,
+                    &metadata.network_id,
+                    &metadata.chain_id,
+                )
+                .map_err(crate::verify::finality::FinalityError::from)?;
+                trusted
+                    .verify_same_decision(old.tip(), next.tip())
+                    .map_err(crate::verify::finality::FinalityError::from)?;
+                // Alternate exact-quorum certificates can witness the same decision. Keep the
+                // original retained witness rather than treating valid signer variation as a fork.
                 return Ok(previous);
             }
         }
@@ -283,27 +297,39 @@ impl BootstrapStore {
 
     fn check_custody(&self, state: &StoreState) -> Result<()> {
         if state.publication_uncertain {
-            return Err(BootstrapError::Invalid("bootstrap publication uncertain; reopen custody"));
+            return Err(BootstrapError::Invalid(
+                "bootstrap publication uncertain; reopen custody",
+            ));
         }
         self.directory.revalidate()?;
         if FileIdentity::of(&self.directory.open_read("bootstrap.lock")?)?
             != FileIdentity::of(&self.lock)?
         {
-            return Err(BootstrapError::Invalid("bootstrap custody lock was replaced"));
+            return Err(BootstrapError::Invalid(
+                "bootstrap custody lock was replaced",
+            ));
         }
         Ok(())
     }
 
     fn read_record(&self) -> Result<BootstrapRecord> {
-        decode(&self.directory.read("accepted.nrt", MAX_BOOTSTRAP_BYTES)?, MAX_BOOTSTRAP_BYTES)
+        decode(
+            &self.directory.read("accepted.nrt", MAX_BOOTSTRAP_BYTES)?,
+            MAX_BOOTSTRAP_BYTES,
+        )
     }
 
     fn publish(&self, state: &mut StoreState, retained: RetainedBootstrap) -> Result<()> {
         self.check_custody(state)?;
-        let encoded = norito::encode_canonical(&BootstrapRecord { accepted: Some(retained) })
-            .map_err(|_| BootstrapError::Invalid("cannot encode retained bootstrap"))?;
+        let encoded = norito::encode_canonical(&BootstrapRecord {
+            accepted: Some(retained),
+        })
+        .map_err(|_| BootstrapError::Invalid("cannot encode retained bootstrap"))?;
         let _: BootstrapRecord = decode(&encoded, MAX_BOOTSTRAP_BYTES)?;
-        if let Err(error) = self.directory.write_atomic("accepted.nrt", &encoded, PublishMode::Replace) {
+        if let Err(error) =
+            self.directory
+                .write_atomic("accepted.nrt", &encoded, PublishMode::Replace)
+        {
             state.publication_uncertain = true;
             return Err(error.into());
         }
@@ -315,7 +341,10 @@ fn profile_image(profile: &InstalledNetworkProfile) -> Result<Vec<u8>> {
     InstalledNetworkProfiles::new(vec![profile.clone()])?.encode_installation()
 }
 
-fn native_metadata(profile: &InstalledNetworkProfile, native: &NativeBootstrap) -> Result<NetworkMetadata> {
+fn native_metadata(
+    profile: &InstalledNetworkProfile,
+    native: &NativeBootstrap,
+) -> Result<NetworkMetadata> {
     if native.network_id != native.verifier.checkpoint().network_id()
         || native.verifier.checkpoint().chain_id() != profile.chain_id()
         || native.capabilities.schema_version != 1
@@ -325,13 +354,26 @@ fn native_metadata(profile: &InstalledNetworkProfile, native: &NativeBootstrap) 
         || native.faucet.network_id != native.network_id
         || native.faucet.network_prefix != profile.account_chain_discriminant()
     {
-        return Err(BootstrapError::Invalid("native discovery differs from selected network"));
+        return Err(BootstrapError::Invalid(
+            "native discovery differs from selected network",
+        ));
+    }
+    if !native
+        .capabilities
+        .allowed_signing
+        .iter()
+        .any(|algorithm| algorithm == "ed25519")
+    {
+        return Err(BootstrapError::Invalid(
+            "selected network does not admit the managed Ed25519 owner",
+        ));
     }
     iroha::client::AccountFaucetPolicyV1::try_new(
         native.faucet.authority.clone(),
         native.faucet.asset_definition_id.clone(),
         native.faucet.amount.clone(),
-    ).map_err(|_| BootstrapError::Invalid("invalid discovered faucet policy"))?;
+    )
+    .map_err(|_| BootstrapError::Invalid("invalid discovered faucet policy"))?;
     let maximum: iroha_primitives::numeric::Quantity = 1000_u64.into();
     let allowance = native.faucet.amount.clone().min(maximum);
     let root = profile.torii_root().to_string();
@@ -358,36 +400,60 @@ fn native_metadata(profile: &InstalledNetworkProfile, native: &NativeBootstrap) 
     Ok(metadata)
 }
 
-fn authenticate_retained(profile: &InstalledNetworkProfile, retained: RetainedBootstrap) -> Result<AuthenticatedBootstrap> {
+fn authenticate_retained(
+    profile: &InstalledNetworkProfile,
+    retained: RetainedBootstrap,
+) -> Result<AuthenticatedBootstrap> {
     if retained.profile != profile_image(profile)?
         || retained.metadata.network_name != profile.network_name()
         || retained.metadata.chain_id != profile.chain_id()
         || retained.metadata.account_chain_discriminant != profile.account_chain_discriminant()
-        || retained.metadata.torii_roots.first().map(String::as_str) != Some(profile.torii_root().as_str())
+        || retained.metadata.torii_roots.first().map(String::as_str)
+            != Some(profile.torii_root().as_str())
     {
-        return Err(BootstrapError::Invalid("retained bootstrap differs from installed profile"));
+        return Err(BootstrapError::Invalid(
+            "retained bootstrap differs from installed profile",
+        ));
     }
     let verifier = verify_checkpoint(&retained.metadata, &retained.checkpoint)?;
-    Ok(AuthenticatedBootstrap { metadata: retained.metadata, verifier })
+    Ok(AuthenticatedBootstrap {
+        metadata: retained.metadata,
+        verifier,
+    })
 }
 
 fn verify_checkpoint(metadata: &NetworkMetadata, bytes: &[u8]) -> Result<FinalityVerifier> {
     validate_metadata(metadata)?;
     if bytes.is_empty() || bytes.len() > MAX_FINALITY_CHECKPOINT_BYTES {
-        return Err(BootstrapError::Invalid("native checkpoint exceeds byte bound"));
+        return Err(BootstrapError::Invalid(
+            "native checkpoint exceeds byte bound",
+        ));
     }
     let checkpoint = SumeragiFinalityCheckpoint::decode_canonical(bytes)
         .map_err(|_| BootstrapError::Invalid("invalid canonical native checkpoint"))?;
-    let verifier = FinalityVerifier::from_checkpoint(checkpoint, metadata.network_id, &metadata.chain_id)?;
+    if checkpoint.height() < 2 {
+        return Err(BootstrapError::Invalid(
+            "public parent checkpoint lacks a certified successor",
+        ));
+    }
+    let verifier =
+        FinalityVerifier::from_checkpoint(checkpoint, metadata.network_id, &metadata.chain_id)?;
     if verifier.root_scope()? != SumeragiRootScope::Global {
-        return Err(BootstrapError::Invalid("public parent requires a committed global root"));
+        return Err(BootstrapError::Invalid(
+            "public parent requires a committed global root",
+        ));
     }
     Ok(verifier)
 }
 
-fn decode<T: norito::codec::Decode + norito::NoritoSchema>(bytes: &[u8], limit: usize) -> Result<T> {
+fn decode<T: norito::codec::Decode + norito::NoritoSchema>(
+    bytes: &[u8],
+    limit: usize,
+) -> Result<T> {
     if bytes.is_empty() || bytes.len() > limit {
-        return Err(BootstrapError::Invalid("bootstrap material exceeds byte bound"));
+        return Err(BootstrapError::Invalid(
+            "bootstrap material exceeds byte bound",
+        ));
     }
     norito::decode_canonical_with_limits(bytes, norito::canonical_decode_limits(bytes.len()))
         .map_err(|_| BootstrapError::Invalid("bootstrap material is not canonical"))
@@ -396,7 +462,9 @@ fn decode<T: norito::codec::Decode + norito::NoritoSchema>(bytes: &[u8], limit: 
 fn validate_network_name(name: &str) -> Result<()> {
     if name.is_empty()
         || name.len() > 48
-        || !name.bytes().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-')
+        || !name
+            .bytes()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-')
         || !name.as_bytes()[0].is_ascii_lowercase()
     {
         return Err(BootstrapError::Invalid("invalid installed network name"));
@@ -406,14 +474,21 @@ fn validate_network_name(name: &str) -> Result<()> {
 
 fn validate_metadata(metadata: &NetworkMetadata) -> Result<()> {
     validate_network_name(&metadata.network_name)?;
-    metadata.chain_id.parse::<iroha_model_base::chain::ChainId>()
+    metadata
+        .chain_id
+        .parse::<iroha_model_base::chain::ChainId>()
         .map_err(|_| BootstrapError::Invalid("invalid native chain identity"))?;
     if metadata.torii_roots.is_empty() || metadata.torii_roots.len() > 32 {
         return Err(BootstrapError::Invalid("invalid bounded network endpoints"));
     }
     let mut roots = std::collections::BTreeSet::new();
     for root in &metadata.torii_roots {
-        InstalledNetworkProfile::new(metadata.network_name.clone(), root, metadata.chain_id.clone(), metadata.account_chain_discriminant)?;
+        InstalledNetworkProfile::new(
+            metadata.network_name.clone(),
+            root,
+            metadata.chain_id.clone(),
+            metadata.account_chain_discriminant,
+        )?;
         if !roots.insert(root) {
             return Err(BootstrapError::Invalid("duplicate network endpoint"));
         }

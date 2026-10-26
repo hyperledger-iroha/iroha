@@ -1,8 +1,10 @@
 # Kagami and Mochi developer experience
 
 Status: localnet and contract deployment pass installed-runtime end-to-end checks
-on macOS. Live Taira attachment remains blocked by the unavailable signed checkpoint;
-the disposable remote fixture also requires TLS trust setup compatible with its host.
+on macOS. Native Taira discovery is replacing the separately published signed checkpoint;
+live attachment testing remains open. The deployed account capability response includes
+a retired field rejected by the current client. The disposable parent/private fixture
+uses explicit loopback HTTP and awaits verification of the updated native flow.
 The wider native-platform and release gates below remain open. This first release
 requires no backward-compatible command aliases, old wire layouts, or parallel
 orchestration implementations.
@@ -104,7 +106,7 @@ it never upgrades a retained generation in place.
 | DX2 | `iroha_deploy` / Kagami / Mochi | Shared persistent local runtime, generated identity/configuration, authenticated local IPC, managed workspace contexts, `up/status/logs/down/reset`. | Four real peers start without inputs; repeated up and down/up retain identity, funds and contract state; only reset creates a new ledger. |
 | DX3 | Musubi / contract deployment | Shared source/artifact/package deployment API and thin Kagami/Mochi callers with automatic aliases and exact journal recovery. | All three inputs deploy and execute; concurrent and ambiguous attempts preserve original signed transactions and charges. |
 | DX4 | Core / Torii / data model | Independent private dataspace State, execution, storage and artifact scope using native Sumeragi and IVM. | Four-node private execution; cross-dataspace authorization tests; no private canary data in parent storage, routes, events, logs or transport. |
-| DX5 | Deployment / Taira / finality | Governed self-service committee admission, testnet funding, signed network metadata/checkpoint bootstrap, outbound parent anchoring. | Fresh-wallet registration and attachment behind blocked inbound ports; exact instance, quorum, epoch, funding and replay verification. |
+| DX5 | Deployment / Taira / finality | Governed self-service committee admission, testnet funding, native genesis and consensus-certificate bootstrap, outbound parent anchoring. | Fresh-wallet registration and attachment behind blocked inbound ports; exact instance, quorum, epoch, funding and replay verification. |
 | DX6 | Mochi / release | Complete matching native runtime bundles and desktop actions over shared APIs. | Clean-install flows on macOS/Linux ARM64 and x86-64 and Windows x86-64, with no build tools on PATH. |
 | DX7 | CI / runtime | Startup and deployment latency with truthful readiness. | Twenty-run p95: local startup <=30 s, remote attachment <=60 s, small contract deploy on a ready environment <=30 s. |
 
@@ -164,9 +166,10 @@ workflow likewise does not claim reference-host latency qualification. See
   or global replay of private bodies is allowed.
 - Artifact instructions, storage, routing, queries and receipts carry explicit
   dataspace scope. There is no hash-only global fallback for private artifacts.
-- Fresh parent verification may use an independently release-signed native
-  checkpoint. Metadata must bind genesis/network identity and enforce freshness
-  and rollback protection; a queried peer cannot select its own trust root.
+- Initial network discovery uses the installed HTTPS origin, expected chain and
+  address prefix. Signed genesis and certified epoch transitions authenticate parent
+  state. Retained network identity and verified progress cannot be replaced or rewound
+  by later responses. Setup reports certified registration, not fresh quorum readiness.
 - Self-service admission grants only the governed dataspace capabilities. Exact
   rent, fees and original validator staking custody are required. Automatic
   budgets use dedicated managed test wallets and verified faucet allowances.
@@ -271,25 +274,18 @@ use the original certified archive write, never current mutable state. These mod
 and executor boundaries still need their complete runtime, funding,
 crash/restart and privacy qualification before the remote command is declared ready.
 
-`iroha_deploy::bootstrap` now authenticates one canonical native checkpoint
-against an independently installed Ed25519 release authority. Signed metadata
-binds the network label, genesis identity, chain label, reset generation,
-publication serial, HTTPS roots, checkpoint digest/height/block and a validity
-interval no longer than one day. Private exclusive custody retains the release
-watermark across localnet resets; expiry does not discard rollback protection.
-Same-generation identity changes, clock rollback, regressed releases and
-same-height equivocation fail closed. Runtime finality progress remains a
-separate retained checkpoint in `ParentFinalityStore`. Reopening preserves newer
-verified progress; reset generations require separate contexts. Verification
-updates publish durably before exposing a readiness report. Uncertain publication
-requires reopening custody before another update, so retries cannot overwrite
-newer disk state with an older in-memory prefix.
-An observation that exhausts its bounded catch-up page retains its verified prefix
-and continues to report `CatchingUp`; it cannot claim fresh quorum readiness. Other
-observation failures retain the preceding checkpoint. The release watermark records
-an explicit uninitialized state so a failed first download remains retryable without
-treating a missing custody record as a fresh trust decision.
-Initial release, finality, provisioning and attachment directories publish their complete
+`iroha_deploy::bootstrap` discovers the selected network through its installed HTTPS
+origin and verifies signed genesis, certified epoch transitions and the recent native
+checkpoint. It does not require an additional release signer or checkpoint publication.
+Exclusive private custody retains the exact profile, network identity, faucet terms
+and monotonic verified progress. A changed network requires a new context. The native
+World schema is fixed by the compiled reader, not supplied by a response.
+`ParentFinalityStore` retains certified progress and publishes before exposing it.
+Ordinary setup verifies certified parent state and exact transaction receipts. This
+is distinct from fresh quorum observation, which remains mandatory for explicit
+readiness and custody operations. Uncertain publication requires reopening custody;
+missing records never silently become a fresh trust decision.
+Initial bootstrap, finality, provisioning and attachment directories publish their complete
 records and lock files atomically. Native wallet preparation first publishes its exact
 unsigned request with the lock, then retains the quoted payload before signing and the
 signed operation before dispatch. A crash can expose one of these complete durable
@@ -730,19 +726,12 @@ qualify the full native service graph or cold-package fetch. Signed native relea
 reference-host twenty-run p95 measurements remain separate DX6/DX7 outcomes; the 30-second
 admission budget is a configured limit, not measured latency evidence.
 
-The committed `defaults/developer/network-profiles.nrt` supplies the Taira installation
-profile selected by both release packagers, and its published checkpoint has passed
-native signature and finality verification. The HTTP adapter binds explicit SDK contexts
-to the release-approved HTTPS roots, overlaps up to eight independent committee reads,
-and retains one operation deadline plus bounded per-peer tip retries. Every successful
-read still requires independent contiguous-chain and exact-committee verification.
-Authenticated bundle distribution, recurring signed checkpoint publication, fresh committee
-observation and combined dataspace provisioning remain required for remote qualification.
-Checkpoint retrieval failures identify the installed network and credential-free URL while
-preserving the original cause. HTTP 404 directs users to publication or routing at that exact
-location and retry of the same command; absent status does not imply absent retained work.
-Key rotation requires an authenticated
-migration of retained release custody, not a silent fresh store.
+The committed `defaults/developer/network-profiles.nrt` supplies the Taira endpoint,
+chain and address prefix selected by both packagers. Native bootstrap obtains genesis,
+required epoch-boundary certificates and the recent decision through that public
+origin. Bounded reads share the original deadline. Failures identify the selected
+network and endpoint and preserve existing work for the same command's retry.
+Combined live data space provisioning remains an acceptance requirement.
 
 Use focused unit and native filesystem suites while developing; use real
 four-global-plus-four-private node coverage for attachment and privacy. Every new
@@ -774,20 +763,19 @@ Only a contiguous native-verified compact successor can become a parent transact
 local successor observations and confirmed parent receipts remain separate.
 
 `provisioning::RemoteProvisioning` now coordinates the original signed private genesis,
-separate parent owner wallet, fresh parent quorum, canonical faucet and bounded paid SNS
+separate parent owner wallet, certified parent state, canonical faucet and bounded paid SNS
 requests. Its exact public funding policy and operation journals survive local reset.
-Reopening rejects a different child, parent generation, owner or funding authorization.
+Reopening rejects a different child, parent network, owner or funding authorization.
 Once a namespace envelope exists, retry preserves that exact request; before signing,
-an unsigned quote may refresh within the original release's allowance. A fresh parent
+an unsigned quote may refresh within the retained client allowance. A certified parent
 observation after namespace completion selects the certified native World cut used to
 authenticate the active lease owner and generation. Committed parent execution rechecks
 that generation when applying registration; only its verified receipt establishes
 anchoring. Provisioning and relay turns share absolute deadlines. The native supervisor,
 Kagami command and Mochi profile picker call these shared owners; their combined
 real-network qualification remains required before `dataspace up` can meet its
-one-command contract. Installed profile upgrades may raise the retained rollback floor
-without replacing the private ledger. Lower floors and substituted trust keys or
-checkpoint locations fail closed.
+one-command contract. A retained context rejects substituted endpoints, chain labels,
+address prefixes and network identities without replacing its private ledger.
 
 Update source-coupled specifications as behavior lands. Public guides belong in
 the optional sibling `iroha-docs` repository. Keep `status.md` about current

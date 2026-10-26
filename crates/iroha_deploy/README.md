@@ -27,17 +27,12 @@ What exists so far:
   bound into the signed Nexus policy. Parliament and reconciliation launch
   gates remain closed.
 
-- `bootstrap::publication`: offline native release production from independently pinned complete
-  manifest bytes, signed-genesis key/network and a bounded contiguous current finality-proof prefix. Kagami exposes
-  `advanced network-bootstrap prepare`; it derives consensus coordinates, signs the canonical
-  `SignedNetworkCheckpoint`, and atomically prepares `checkpoint.nrt` and `network-profiles.nrt`
-  for an explicitly selected release authority and HTTPS publication location. The schema in its
-  public receipt binds the compiled candidate; preparation does not qualify a live network,
-  publish the endpoint, or authenticate a bundle installation. Release packaging selects the exact
-  committed `defaults/developer/network-profiles.nrt` image automatically: use
-  `cargo xtask kagami-bundle --profile release --out <fresh-directory>` for the matching
-  client/worker/daemon CLI package, or `cargo xtask mochi-bundle --profile release --out <fresh-directory>`
-  for the desktop application. `--network-profiles` is an override for development bundles only.
+- Native bundles include `defaults/developer/network-profiles.nrt`, which selects the
+  public endpoint, chain label and address prefix. Use
+  `cargo xtask kagami-bundle --profile release --out <fresh-directory>` for the CLI
+  package or `cargo xtask mochi-bundle --profile release --out <fresh-directory>` for
+  the desktop application. `--network-profiles` selects an explicit development bundle
+  profile, including numeric-loopback HTTP for a local parent network.
 - `managed`: workspace-scoped private contexts, four-validator process ownership,
   authenticated native control IPC, durable stop/restart/reset and signed readiness.
   `ManagedStore::up` retains the same generation and signer across starts; readiness
@@ -110,23 +105,14 @@ What exists so far:
   stays in Kagami; generation and process ownership have no CLI or GUI dependency.
   Retained private-root fee policies decode under the validated child's account
   profile; verification restores the parent caller's profile on success and failure.
-- `bootstrap`: canonical release-signed native checkpoint verification against an
-  independently installed authority, with private durable release/clock rollback
-  protection and explicit network reset identity. `ParentFinalityStore` retains
-  the advancing native prefix separately and publishes before returning fresh
-  readiness; reopening an older release never rewinds it. The Taira installation profile is
-  bundled from its committed image. A previously retrieved checkpoint passed native
-  verification but has expired; attachment requires a fresh signed checkpoint at the
-  confirmed `https://taira.sora.org/bootstrap/checkpoint.nrt` location, which currently
-  returns HTTP 404 from the validation host. Authenticated bundle distribution,
-  recurring signed checkpoint publication and combined parent-provisioning
-  qualification remain outstanding.
-  Native installation profiles and bounded unsigned HTTPS retrieval select the release
-  independently. Signed account profiles, committee endpoints and optional faucet
-  allowances feed exact parent SDK contexts without forwarding child credentials.
-  Parent profiles require a committed global root. Signed native World schema and
-  optional build-registry roots select cold-download discovery; a fresh committee
-  observation precedes authentication of the provider policy and token signer.
+- `bootstrap`: native discovery through an installed HTTPS root, chain label and address
+  prefix. Signed genesis and compact epoch-boundary certificates authenticate a recent
+  checkpoint without replaying every block or fetching a separate signed publication.
+  Private custody pins the exact network identity, faucet terms and verified progress;
+  a response cannot silently replace a retained network. The native World schema comes
+  from the compiled reader. `ParentFinalityStore` publishes verified progress before
+  exposing it. Ordinary setup uses certified state and original transaction receipts;
+  explicit readiness, custody and registry discovery keep their fresh quorum checks.
   See the [developer acceptance contract](../../specs/kagami_mochi_devex_goals.md).
 - `attachment`: exact compact parent registration/anchor operations using the shared
   wallet journal, explicit fee ceilings and fresh independent parent verification.
@@ -137,13 +123,15 @@ What exists so far:
   loopback certificate reads to this workflow without forwarding private bodies or credentials.
 - `provisioning`: retains the exact child registration, imports its owner into a
   separate public parent wallet, and coordinates the canonical faucet and paid SNS
-  operations under signed release allowances. Fresh parent quorum precedes funding.
+  operations under finite client fee and rent limits. Native certificates establish the
+  parent state used for setup; registration execution enforces current ownership and
+  the exact SNS lease generation.
   One request leases the private dataspace and its owner's default `admin@ALIAS`
   account alias together, with both rents under the original combined allowance.
   Recovery preserves signed journals and the exact original namespace quote,
   expiry, owner label and spending allowance, including failure before journal creation.
   Its state lives outside local reset, so a replacement child cannot silently inherit
-  an existing parent attachment. After namespace completion, a fresh certified parent
+  an existing parent attachment. After namespace completion, a certified parent
   World projection authenticates the exact active owner and lease generation.
   Only `attachment` receipts confirm anchoring. Native supervisor scheduling and CLI/GUI
   wiring share this owner; combined real-network qualification remains outstanding.
@@ -181,8 +169,9 @@ What exists so far:
   its contiguous prefix, including across boundaries. Supplied proofs cannot select
   their own trust roots. `verify::http` supplies native SDK proof retrieval and
   concurrent challenge-bound committee reads, with one operation deadline and
-  bounded per-peer tip retries. Release bootstraps constrain every selected endpoint
-  to the independently signed HTTPS roots. Other gates remain in the phase plan.
+  bounded per-peer tip retries. Native bootstrap constrains every selected endpoint
+  to the installed root retained with the exact network identity. Other gates remain
+  in the phase plan.
 
 The committed definitions are `networks/dev.toml`, `networks/ci.toml` and
 `networks/perf-10k.toml`. The dataspace examples are in `dataspaces/`.

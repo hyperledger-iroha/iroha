@@ -120,8 +120,8 @@ impl FinalitySource for HttpFinalitySource {
     ) -> Result<SumeragiFinalityProof, Self::Error> {
         for client in &self.proof_clients {
             ensure_deadline(self.deadline)?;
-            let bounded = client
-                .with_request_deadline(self.deadline.min(Instant::now() + PER_PEER_BUDGET));
+            let bounded =
+                client.with_request_deadline(self.deadline.min(Instant::now() + PER_PEER_BUDGET));
             let Ok(status) = iroha::blocking::Client::from_client(bounded.clone())
                 .map_err(|_| HttpFinalityError::Read)?
                 .status()

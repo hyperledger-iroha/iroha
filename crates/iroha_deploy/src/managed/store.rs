@@ -620,15 +620,23 @@ impl ManagedStore {
             &retained.prepared,
             &retained.root_kind,
         )?;
-        if let Ok(status) = exchange_until(&directory, ControlAction::Status, deadline) {
-            if status.context != retained.prepared.context {
-                return Err(Error::Invalid(
-                    "worker status belongs to another managed identity".into(),
-                ));
+        let observation_error = match exchange_until(&directory, ControlAction::Status, deadline) {
+            Ok(status) => {
+                if status.context != retained.prepared.context {
+                    return Err(Error::Invalid(
+                        "worker status belongs to another managed identity".into(),
+                    ));
+                }
+                return Ok(status);
             }
-            return Ok(status);
-        }
+            Err(error) => error,
+        };
         if runtime_owned(&directory)? {
+            // An admitted worker may be slow or unreachable. Keep that observation failure;
+            // ownership contention describes only the handoff before a session exists.
+            if directory.read_optional(WORKER, MAX_METADATA)?.is_some() {
+                return Err(observation_error);
+            }
             return Err(Error::Busy(name.into()));
         }
         retained_status(&directory, retained.prepared.context, true)

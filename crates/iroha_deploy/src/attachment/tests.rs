@@ -2,7 +2,7 @@
 //! These tests do not execute parent business rules or qualify a running private network.
 
 use super::*;
-use iroha_crypto::{Algorithm, Hash, KeyPair};
+use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
     block::consensus::{ExecKv, ExecWitness},
     private_dataspace::{PrivateDataspaceAnchorState, PrivateDataspaceRecord},
@@ -202,7 +202,10 @@ fn parent_receipt_is_required_and_retained_across_private_progress_and_restart()
     let initial = store.confirm_record(receipt, &parent).unwrap();
     assert_eq!(initial.child.height, 1);
     assert_eq!(parent.network_name(), "fixture");
-    assert_eq!(parent.verifier().checkpoint().network_id(), fixture.parent.network_id());
+    assert_eq!(
+        parent.verifier().checkpoint().network_id(),
+        fixture.parent.network_id()
+    );
     assert_eq!(
         store.confirmed_child_state().unwrap().cursor(),
         initial.child

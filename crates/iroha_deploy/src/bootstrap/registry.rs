@@ -111,7 +111,9 @@ impl ParentFinalityStore {
             ));
         }
         if Instant::now() >= deadline {
-            return Err(BootstrapError::Invalid("build registry request deadline expired"));
+            return Err(BootstrapError::Invalid(
+                "build registry request deadline expired",
+            ));
         }
         Ok(deadline)
     }

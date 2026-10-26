@@ -1,7 +1,7 @@
-"""Disposable normal-TLS ingress for the ignored native attachment regression.
+"""Disposable numeric-loopback HTTP ingress for the ignored native attachment regression.
 
 This controller never supplies protocol authority. It forwards exact HTTP bodies to
-four independently running loopback validators and serves one release-signed file.
+four independently running loopback validators, including native discovery and finality.
 Its stdin is a lifetime pipe; EOF shuts down the original owned listeners.
 """
 
@@ -9,7 +9,6 @@ import http.client
 import http.server
 import os
 from pathlib import Path
-import ssl
 import sys
 import threading
 import urllib.parse
@@ -62,19 +61,6 @@ def run():
                     raise ValueError("truncated request")
                 capture(self.command.encode() + b" " + self.path.encode() + b"\n" +
                         self.headers.as_bytes() + body + b"\n")
-                if self.command == "GET" and self.path == "/fixture/checkpoint.nrt":
-                    with (root / "checkpoint.nrt").open("rb") as checkpoint:
-                        response = checkpoint.read(MAX_BODY + 1)
-                    if len(response) > MAX_BODY:
-                        raise ValueError("checkpoint exceeds finite body bound")
-                    self.send_response(200)
-                    self.send_header("Content-Type", "application/x-norito")
-                    self.send_header("Content-Length", str(len(response)))
-                    self.send_header("Connection", "close")
-                    self.end_headers()
-                    self.wfile.write(response)
-                    self.close_connection = True
-                    return
                 upstream = self.server.upstream
                 headers = {name: value for name, value in self.headers.items()
                            if name.lower() not in {"host", "connection", "proxy-connection"}}
@@ -114,7 +100,7 @@ def run():
 
         def get_request(self):
             connection, address = super().get_request()
-            # TLS handshakes and request headers share the finite per-connection timeout.
+            # Request headers share the finite per-connection timeout.
             connection.settimeout(15)
             return connection, address
 
@@ -136,11 +122,8 @@ def run():
                 capacity.release()
 
         def handle_error(self, *_):
-            pass  # Aborted TLS/header reads carry no useful public diagnostic.
+            pass  # Aborted header reads carry no useful public diagnostic.
 
-    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    context.minimum_version = ssl.TLSVersion.TLSv1_2
-    context.load_cert_chain(root / "certificate.pem", root / "private-key.pem")
     servers = []
     threads = []
     try:
@@ -148,8 +131,6 @@ def run():
             server = Server(("127.0.0.1", 0), Handler)
             server.upstream = upstream
             # A silent TCP client must not block the listener thread or stdin-EOF shutdown.
-            server.socket = context.wrap_socket(
-                server.socket, server_side=True, do_handshake_on_connect=False)
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
             servers.append(server)

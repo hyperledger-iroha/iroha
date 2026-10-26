@@ -48,11 +48,7 @@ fn selected_provisioning_fields_require_bls_endpoints_and_bounded_faucet_authori
         Some(&faucet.max_operation_fee)
     );
     assert_eq!(options.max_total_fees.len(), 1);
-    assert!(
-        bootstrap
-            .private_operation_options(Instant::now())
-            .is_err()
-    );
+    assert!(bootstrap.private_operation_options(Instant::now()).is_err());
     for mutation in [0, 1, 2, 3, 4, 5, 6] {
         let mut changed = metadata_record.clone();
         match mutation {
@@ -69,7 +65,6 @@ fn selected_provisioning_fields_require_bls_endpoints_and_bounded_faucet_authori
     let mut public_root_only = metadata_record;
     public_root_only.peers.clear();
     validate(&public_root_only).unwrap();
-
 }
 
 #[test]
@@ -104,7 +99,9 @@ fn automatic_parent_clients_use_only_selected_routes_and_never_forward_child_cre
     let mut public_root_only = metadata_record.clone();
     public_root_only.peers.clear();
     let public_bootstrap = authenticated(public_root_only, &checkpoint);
-    public_bootstrap.parent_http_source(&config, deadline).unwrap();
+    public_bootstrap
+        .parent_http_source(&config, deadline)
+        .unwrap();
     let mut changed = config.clone();
     changed.api_token = Some(iroha::secrecy::SecretString::new(
         "private-child-token".into(),

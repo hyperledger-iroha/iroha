@@ -1,6 +1,7 @@
-//! Native developer bootstrap through one installed HTTPS origin and quorum-certified state.
+//! Native developer bootstrap through one installed origin and quorum-certified state.
 //!
-//! The selected origin supplies the initial exact network identity. Signed genesis and native
+//! The selected HTTPS origin, or explicit numeric-loopback development origin, supplies the
+//! initial exact network identity. Signed genesis and native
 //! epoch-boundary certificates authenticate the parent; no separately published checkpoint or
 //! validator HTTP inventory is needed. A returned checkpoint proves its recorded decision,
 //! not a fresh observation from every current validator.
@@ -18,8 +19,7 @@ use iroha_data_model::{
     },
 };
 use iroha_torii_shared::{
-    account_capabilities::AccountCapabilitiesV1,
-    account_faucet_policy::AccountFaucetAdvertisement,
+    account_capabilities::AccountCapabilitiesV1, account_faucet_policy::AccountFaucetAdvertisement,
     route_catalog,
 };
 use url::Url;
@@ -33,14 +33,14 @@ const MAX_PROOF_RESPONSE_BYTES: usize = MAX_FINALITY_BLOCK_BYTES + 64 * 1024;
 /// Exact network, native certified parent checkpoint and independently discovered faucet policy.
 #[derive(Debug)]
 pub struct NativeBootstrap {
-    /// Genesis identity discovered from the installed HTTPS origin and checked against genesis.
-    pub network_id: NetworkId,
+    /// Genesis identity discovered from the installed origin and checked against genesis.
+    pub(super) network_id: NetworkId,
     /// Native checkpoint authenticated by genesis and exact-quorum epoch certificates.
-    pub verifier: FinalityVerifier,
+    pub(super) verifier: FinalityVerifier,
     /// Strict account bootstrap policy, including the admitted signing algorithms.
-    pub capabilities: AccountCapabilitiesV1,
+    pub(super) capabilities: AccountCapabilitiesV1,
     /// Public faucet policy independently bound to the discovered network and address profile.
-    pub faucet: AccountFaucetAdvertisement,
+    pub(super) faucet: AccountFaucetAdvertisement,
 }
 
 /// Discover a selected network and authenticate a compact native parent checkpoint.
@@ -63,7 +63,11 @@ pub fn discover_native_bootstrap(
         |timeout| {
             iroha::blocking::account_bootstrap::Client::new(profile.torii_root().clone(), timeout)
                 .and_then(|client| client.capabilities())
-                .map_err(|_| BootstrapError::Invalid("native account capability discovery failed"))
+                .map_err(|_| {
+                    BootstrapError::Invalid(
+                        "native account discovery failed at /v1/accounts/capabilities; check connectivity and the current API schema",
+                    )
+                })
         },
         |network_id, timeout| {
             iroha::blocking::account_bootstrap::Client::new(profile.torii_root().clone(), timeout)
@@ -88,6 +92,15 @@ fn discover_with(
     {
         return Err(BootstrapError::Invalid(
             "native account capabilities differ from the installed network profile",
+        ));
+    }
+    if !capabilities
+        .allowed_signing
+        .iter()
+        .any(|algorithm| algorithm == "ed25519")
+    {
+        return Err(BootstrapError::Invalid(
+            "selected network does not admit the managed Ed25519 owner",
         ));
     }
     let network_id = capabilities.network_id;
@@ -192,9 +205,12 @@ fn read_parent_checkpoint(
     }
     let checkpoint = compact
         .checkpoint_from_proofs(&genesis_checkpoint, &proofs)
-        .map_err(|_| BootstrapError::Invalid("native parent checkpoint certificates are invalid"))?;
+        .map_err(|_| {
+            BootstrapError::Invalid("native parent checkpoint certificates are invalid")
+        })?;
     remaining(deadline)?;
-    FinalityVerifier::from_checkpoint(checkpoint, network_id, profile.chain_id()).map_err(Into::into)
+    FinalityVerifier::from_checkpoint(checkpoint, network_id, profile.chain_id())
+        .map_err(Into::into)
 }
 
 struct ProofBudget {
@@ -224,11 +240,9 @@ fn read_proof(
         .map_err(|_| BootstrapError::Invalid("native bootstrap proof retrieval failed"))?;
     budget.proofs -= 1;
     budget.bytes -= bytes.len();
-    let proof: SumeragiFinalityProof = norito::decode_canonical_with_limits(
-        &bytes,
-        norito::canonical_decode_limits(bytes.len()),
-    )
-    .map_err(|_| BootstrapError::Invalid("native bootstrap proof is not canonical"))?;
+    let proof: SumeragiFinalityProof =
+        norito::decode_canonical_with_limits(&bytes, norito::canonical_decode_limits(bytes.len()))
+            .map_err(|_| BootstrapError::Invalid("native bootstrap proof is not canonical"))?;
     if proof.height() != height {
         return Err(BootstrapError::Invalid(
             "native bootstrap proof differs from the requested height",

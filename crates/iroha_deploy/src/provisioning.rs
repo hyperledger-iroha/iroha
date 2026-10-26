@@ -43,7 +43,7 @@ use crate::{
         AttachmentIdentity, AttachmentStore, ConfirmedAnchor, LocalPrivateRootSource, RelayParent,
         RelayProgress,
     },
-    bootstrap::{AuthenticatedBootstrap, ParentFinalityStore, FaucetPolicy},
+    bootstrap::{AuthenticatedBootstrap, FaucetPolicy, ParentFinalityStore},
     managed::PreparedLocalnet,
     verify::finality::FinalitySource,
 };
@@ -423,12 +423,12 @@ impl RemoteProvisioning {
         }
     }
 
-    /// Obtain fresh parent quorum, then fund and reserve the exact namespace within one deadline.
+    /// Verify certified parent state, then fund and reserve the namespace within one deadline.
     /// Any existing signed operation is reconciled before another request can be prepared.
     /// Completion here permits registration; it does not establish parent anchoring.
     ///
     /// # Errors
-    /// Expired release/budget, changed policy, unsafe custody, failed quorum or exact operation.
+    /// Expired budget, changed policy, unsafe custody, invalid certificates or failed operation.
     pub fn provision_once(
         &mut self,
         bootstrap: &AuthenticatedBootstrap,

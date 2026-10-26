@@ -3,6 +3,7 @@
 use std::{collections::BTreeSet, time::Instant};
 
 use iroha::config::Config;
+use iroha_crypto::Algorithm;
 use iroha_data_model::{account::AccountId, asset::AssetDefinitionId};
 use iroha_model_base::peer::PeerId;
 use iroha_primitives::numeric::Quantity;
@@ -16,7 +17,7 @@ use super::*;
 pub struct BootstrapPeer {
     /// Exact node identity, independently checked against native certified committee state.
     pub node_id: PeerId,
-    /// Canonical HTTPS root present in the same metadata's approved roots.
+    /// Canonical root present in the selected network's approved roots.
     pub torii_root: String,
 }
 
@@ -26,7 +27,7 @@ pub struct BootstrapPeer {
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_deploy::bootstrap::FaucetPolicyV1")]
 pub struct FaucetPolicy {
-    /// Exact approved HTTPS root serving canonical native faucet routes.
+    /// Exact approved root serving canonical native faucet routes.
     pub torii_root: String,
     /// Independently trusted single-signatory faucet issuer.
     pub issuer: AccountId,
@@ -93,7 +94,9 @@ pub(super) fn validate(metadata: &NetworkMetadata) -> Result<()> {
         let roots = registry.torii_roots.iter().collect::<BTreeSet<_>>();
         if roots.is_empty()
             || roots.len() != registry.torii_roots.len()
-            || roots.iter().any(|root| !metadata.torii_roots.contains(root))
+            || roots
+                .iter()
+                .any(|root| !metadata.torii_roots.contains(root))
         {
             return Err(BootstrapError::Invalid(
                 "build registry must select distinct approved parent roots",
@@ -104,11 +107,11 @@ pub(super) fn validate(metadata: &NetworkMetadata) -> Result<()> {
 }
 
 impl AuthenticatedBootstrap {
-    /// Select the metadata's preferred public wallet context without constructing credentials.
+    /// Select the network's preferred public wallet context without constructing credentials.
     /// A managed wallet imports the retained child owner through its native custody API.
     ///
     /// # Errors
-    /// The metadata's exact chain/profile/endpoint cannot form a canonical SDK wallet context.
+    /// The selected chain/profile/endpoint cannot form a canonical SDK wallet context.
     pub fn wallet_network(&self) -> Result<iroha_wallet::WalletNetwork> {
         let metadata = self.metadata();
         iroha_wallet::WalletNetwork::new(
@@ -157,7 +160,7 @@ impl AuthenticatedBootstrap {
         })
     }
 
-    /// Construct credential-free parent endpoint contexts from selected metadata hints.
+    /// Construct selected parent contexts without forwarding transport credentials.
     ///
     /// The supplied wallet already targets one approved parent root. Its child listener token,
     /// Basic Auth and arbitrary operator credentials cannot be copied to other endpoints.

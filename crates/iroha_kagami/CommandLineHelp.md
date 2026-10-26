@@ -49,8 +49,6 @@ This document contains the help content for the `kagami` command-line program.
 * [`kagami privacy-bootstrap render-taira-release-v1`↴](#kagami-privacy-bootstrap-render-taira-release-v1)
 * [`kagami verify`↴](#kagami-verify)
 * [`kagami advanced`↴](#kagami-advanced)
-* [`kagami advanced network-bootstrap`↴](#kagami-advanced-network-bootstrap)
-* [`kagami advanced network-bootstrap prepare`↴](#kagami-advanced-network-bootstrap-prepare)
 * [`kagami advanced client-configs`↴](#kagami-advanced-client-configs)
 * [`kagami advanced codec`↴](#kagami-advanced-codec)
 * [`kagami advanced codec list-types`↴](#kagami-advanced-codec-list-types)
@@ -1029,59 +1027,11 @@ Advanced low-level helpers for codec conversion, schema generation, block inspec
 
 ###### **Subcommands:**
 
-* `network-bootstrap` — Prepare signed remote-network bootstrap and native installation authorities offline
 * `client-configs` — Generate per-client CLI configs from a base client.toml
 * `codec` — Commands related to Norito codec conversions
 * `kura` — Commands related to block inspection
 * `markdown-help` — Output CLI documentation in Markdown format
 * `schema` — Generate the schema used for code generation in Iroha SDKs
-
-
-
-## `kagami advanced network-bootstrap`
-
-Prepare signed remote-network bootstrap and native installation authorities offline
-
-**Usage:** `kagami advanced network-bootstrap <COMMAND>`
-
-###### **Subcommands:**
-
-* `prepare` — Verify pinned genesis/proofs and atomically prepare canonical public release artifacts
-
-
-
-## `kagami advanced network-bootstrap prepare`
-
-Verify pinned genesis/proofs and atomically prepare canonical public release artifacts
-
-**Usage:** `kagami advanced network-bootstrap prepare [OPTIONS] --genesis-manifest <GENESIS_MANIFEST> --expected-genesis-manifest-sha256 <EXPECTED_GENESIS_MANIFEST_SHA256> --signed-genesis <SIGNED_GENESIS> --genesis-public-key <GENESIS_PUBLIC_KEY> --expected-network-id <EXPECTED_NETWORK_ID> --proof-json <PROOF_JSON> --network-name <NETWORK_NAME> --serial <SERIAL> --generation <GENERATION> --issued-at-ms <ISSUED_AT_MS> --expires-at-ms <EXPIRES_AT_MS> --torii-root <TORII_ROOT> --peer <PEER> --checkpoint-url <CHECKPOINT_URL> --release-public-key <RELEASE_PUBLIC_KEY> --release-key-file <RELEASE_KEY_FILE> --output-dir <OUTPUT_DIR>`
-
-###### **Options:**
-
-* `--genesis-manifest <GENESIS_MANIFEST>` — Exact manifest semantically bound to the independently authenticated signed genesis
-* `--expected-genesis-manifest-sha256 <EXPECTED_GENESIS_MANIFEST_SHA256>` — Manifest SHA256 authenticated independently, for example by native public-inputs metadata
-* `--signed-genesis <SIGNED_GENESIS>` — Original canonical signed genesis, selected independently of peer responses
-* `--genesis-public-key <GENESIS_PUBLIC_KEY>` — Independently selected public key that must authenticate the complete genesis
-* `--expected-network-id <EXPECTED_NETWORK_ID>` — Independently selected exact genesis-derived network identity
-* `--proof-json <PROOF_JSON>` — Existing typed finality-proof JSON, repeated in contiguous height order from 1 through N
-* `--network-name <NETWORK_NAME>` — Exact installed network selection; no official label is inferred
-* `--serial <SERIAL>` — Official monotonic publication serial and resulting installation rollback floor
-* `--generation <GENERATION>` — Explicit monotonic reset generation for this signed genesis
-* `--issued-at-ms <ISSUED_AT_MS>` — Inclusive release validity start in Unix milliseconds
-* `--expires-at-ms <EXPIRES_AT_MS>` — Exclusive expiry; native policy caps validity at one day
-* `--torii-root <TORII_ROOT>` — Approved canonical HTTPS parent root; repeat for each selected root
-* `--peer <PEER>` — Exact BLS public key and approved root as PUBLIC_KEY=HTTPS_ROOT; repeat for every member
-* `--checkpoint-url <CHECKPOINT_URL>` — Independently selected canonical HTTPS location where checkpoint.nrt will be published
-* `--release-public-key <RELEASE_PUBLIC_KEY>` — Independently selected release public key; must match the native signing file
-* `--release-key-file <RELEASE_KEY_FILE>` — Absolute native owner-only canonical release signing-key file (mode 0400 or 0600)
-* `--faucet-root <FAUCET_ROOT>` — Optional approved testnet faucet root; all allowance fields must be supplied together
-* `--faucet-issuer <FAUCET_ISSUER>` — Independently authenticated single-key faucet issuer
-* `--faucet-asset <FAUCET_ASSET>` — Exact sole currency available for automatic fees and namespace rent
-* `--faucet-amount <FAUCET_AMOUNT>` — Positive allowance supplied by one testnet faucet claim
-* `--max-operation-fee <MAX_OPERATION_FEE>` — Finite maximum aggregate fees for one managed parent operation
-* `--max-namespace-rent <MAX_NAMESPACE_RENT>` — Finite maximum combined dataspace and owner-alias one-year namespace rent
-* `--build-registry-root <BUILD_REGISTRY_ROOT>` — Optional approved parent build-registry root; repeat for selected roots
-* `--output-dir <OUTPUT_DIR>` — Fresh directory beneath an existing safe owner-held parent; outputs publish together
 
 
 

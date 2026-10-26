@@ -16,7 +16,10 @@ struct Transport {
 }
 
 impl HttpTransport for Transport {
-    fn send_blocking(&self, request: TransportRequest) -> color_eyre::eyre::Result<Response<Vec<u8>>> {
+    fn send_blocking(
+        &self,
+        request: TransportRequest,
+    ) -> color_eyre::eyre::Result<Response<Vec<u8>>> {
         let bytes = self.responses.get(request.url.path()).cloned();
         let is_proof = request.url.path().contains("/bridge/finality/");
         self.requests.lock().unwrap().push(request);
@@ -58,10 +61,7 @@ fn deadline() -> Instant {
     Instant::now() + Duration::from_secs(30)
 }
 
-fn transport(
-    tip: u64,
-    proofs: &[SumeragiFinalityProof],
-) -> (PublicHttpClient, Arc<Transport>) {
+fn transport(tip: u64, proofs: &[SumeragiFinalityProof]) -> (PublicHttpClient, Arc<Transport>) {
     let mut responses: BTreeMap<_, _> = proofs
         .iter()
         .map(|proof| {
@@ -115,7 +115,12 @@ fn native_bootstrap_skips_ordinary_history_and_preserves_exact_transport_and_pol
         proofs.push(fixture.certify(block));
     }
     // H2–H5 are intentionally unavailable. A full-height replay cannot pass this test.
-    let selected = [proofs[0].clone(), proofs[5].clone(), proofs[6].clone(), proofs[7].clone()];
+    let selected = [
+        proofs[0].clone(),
+        proofs[5].clone(),
+        proofs[6].clone(),
+        proofs[7].clone(),
+    ];
     let (client, raw) = transport(8, &selected);
     let profile = profile(&fixture);
     let expected_faucet = faucet(&fixture);
@@ -138,7 +143,10 @@ fn native_bootstrap_skips_ordinary_history_and_preserves_exact_transport_and_pol
     let requests = raw.requests.lock().unwrap();
     assert_eq!(requests.len(), 5);
     assert_eq!(
-        requests.iter().map(|request| request.url.path()).collect::<Vec<_>>(),
+        requests
+            .iter()
+            .map(|request| request.url.path())
+            .collect::<Vec<_>>(),
         [
             "/native/v1/bridge/finality/1",
             "/native/status/blocks",
@@ -151,9 +159,18 @@ fn native_bootstrap_skips_ordinary_history_and_preserves_exact_transport_and_pol
         assert_eq!(request.url.host_str(), Some("parent.example"));
         assert_eq!(request.method, iroha::http::Method::GET);
         assert!(request.body.is_empty());
-        assert!(request.headers.iter().all(|(name, _)| name.as_str() == "accept"));
+        assert!(
+            request
+                .headers
+                .iter()
+                .all(|(name, _)| name.as_str() == "accept")
+        );
         assert!(!request.direct_loopback);
-        assert!(request.timeout.is_some_and(|timeout| timeout <= Duration::from_secs(30)));
+        assert!(
+            request
+                .timeout
+                .is_some_and(|timeout| timeout <= Duration::from_secs(30))
+        );
         assert!(request.max_response_bytes <= MAX_PROOF_RESPONSE_BYTES);
     }
 }
@@ -163,17 +180,39 @@ fn native_bootstrap_authenticates_epoch_boundary_before_current_proofs() {
     let (fixture, proofs) =
         NativeFinalityFixture::short_npos_boundary_chain_with_explicit_parameters(4);
     let (client, raw) = transport(4, &proofs);
-    let verified = read_parent_checkpoint(&profile(&fixture), fixture.network_id(), deadline(), &client)
-        .unwrap();
+    let verified = read_parent_checkpoint(
+        &profile(&fixture),
+        fixture.network_id(),
+        deadline(),
+        &client,
+    )
+    .unwrap();
     assert_eq!(verified.checkpoint().height(), 4);
-    assert_eq!(verified.checkpoint().block_hash(), fixture.latest().block_header.hash());
-    let paths: Vec<_> = raw.requests.lock().unwrap().iter().map(|request| request.url.path().to_owned()).collect();
+    assert_eq!(
+        verified.checkpoint().block_hash(),
+        fixture.latest().block_header.hash()
+    );
+    let paths: Vec<_> = raw
+        .requests
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|request| request.url.path().to_owned())
+        .collect();
     assert_eq!(paths[2], "/native/v1/bridge/finality/3");
     assert_eq!(paths.iter().filter(|path| path.ends_with("/3")).count(), 1);
     let mut forged = proofs;
     forged[2].block_wire[0] ^= 1;
     let (client, _) = transport(4, &forged);
-    assert!(read_parent_checkpoint(&profile(&fixture), fixture.network_id(), deadline(), &client).is_err());
+    assert!(
+        read_parent_checkpoint(
+            &profile(&fixture),
+            fixture.network_id(),
+            deadline(),
+            &client
+        )
+        .is_err()
+    );
 }
 
 #[test]
@@ -182,13 +221,45 @@ fn native_bootstrap_rejects_foreign_network_chain_genesis_only_and_missing_proof
     let proofs = [fixture.genesis_proof().clone(), fixture.latest().clone()];
     let (client, _) = transport(2, &proofs);
     let foreign = NativeFinalityFixture::start("foreign-native-bootstrap");
-    assert!(read_parent_checkpoint(&profile(&fixture), foreign.network_id(), deadline(), &client).is_err());
-    let wrong_chain = InstalledNetworkProfile::new("fixture".into(), "https://parent.example/native/", "foreign-chain".into(), 369).unwrap();
-    assert!(read_parent_checkpoint(&wrong_chain, fixture.network_id(), deadline(), &client).is_err());
+    assert!(
+        read_parent_checkpoint(
+            &profile(&fixture),
+            foreign.network_id(),
+            deadline(),
+            &client
+        )
+        .is_err()
+    );
+    let wrong_chain = InstalledNetworkProfile::new(
+        "fixture".into(),
+        "https://parent.example/native/",
+        "foreign-chain".into(),
+        369,
+    )
+    .unwrap();
+    assert!(
+        read_parent_checkpoint(&wrong_chain, fixture.network_id(), deadline(), &client).is_err()
+    );
     let (client, _) = transport(1, &proofs);
-    assert!(read_parent_checkpoint(&profile(&fixture), fixture.network_id(), deadline(), &client).is_err());
+    assert!(
+        read_parent_checkpoint(
+            &profile(&fixture),
+            fixture.network_id(),
+            deadline(),
+            &client
+        )
+        .is_err()
+    );
     let (client, _) = transport(2, &proofs[..1]);
-    assert!(read_parent_checkpoint(&profile(&fixture), fixture.network_id(), deadline(), &client).is_err());
+    assert!(
+        read_parent_checkpoint(
+            &profile(&fixture),
+            fixture.network_id(),
+            deadline(),
+            &client
+        )
+        .is_err()
+    );
 }
 
 #[test]
@@ -197,8 +268,19 @@ fn native_bootstrap_refuses_expired_deadline_and_proof_budget_before_network_io(
     let profile = profile(&fixture);
     let (client, raw) = transport(2, &[]);
     assert!(discover_native_bootstrap(&profile, Instant::now()).is_err());
-    assert!(read_parent_checkpoint(&profile, fixture.network_id(), Instant::now(), &client).is_err());
-    for mut budget in [ProofBudget { proofs: 0, bytes: 1 }, ProofBudget { proofs: 1, bytes: 0 }] {
+    assert!(
+        read_parent_checkpoint(&profile, fixture.network_id(), Instant::now(), &client).is_err()
+    );
+    for mut budget in [
+        ProofBudget {
+            proofs: 0,
+            bytes: 1,
+        },
+        ProofBudget {
+            proofs: 1,
+            bytes: 0,
+        },
+    ] {
         assert!(read_proof(&profile, &client, 1, deadline(), &mut budget).is_err());
     }
     assert!(raw.requests.lock().unwrap().is_empty());
@@ -207,13 +289,53 @@ fn native_bootstrap_refuses_expired_deadline_and_proof_budget_before_network_io(
 #[test]
 fn native_bootstrap_rejects_capability_and_faucet_identity_changes() {
     let fixture = NativeFinalityFixture::new_with_explicit_parameters();
-    let (client, raw) = transport(2, &[fixture.genesis_proof().clone(), fixture.latest().clone()]);
+    let (client, raw) = transport(
+        2,
+        &[fixture.genesis_proof().clone(), fixture.latest().clone()],
+    );
     let profile = profile(&fixture);
     let mut policy = capabilities(&fixture);
     policy.network_prefix = 753;
-    assert!(discover_with(&profile, deadline(), &client, |_| Ok(policy), |_, _| panic!("wrong capabilities must stop discovery")).is_err());
+    assert!(
+        discover_with(
+            &profile,
+            deadline(),
+            &client,
+            |_| Ok(policy),
+            |_, _| panic!("wrong capabilities must stop discovery")
+        )
+        .is_err()
+    );
     assert!(raw.requests.lock().unwrap().is_empty());
     let mut policy = faucet(&fixture);
     policy.network_prefix = 753;
-    assert!(discover_with(&profile, deadline(), &client, |_| Ok(capabilities(&fixture)), |_, _| Ok(policy)).is_err());
+    assert!(
+        discover_with(
+            &profile,
+            deadline(),
+            &client,
+            |_| Ok(capabilities(&fixture)),
+            |_, _| Ok(policy)
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn native_bootstrap_refuses_unsupported_owner_before_proofs_or_funding() {
+    let fixture = NativeFinalityFixture::new_with_explicit_parameters();
+    let (client, raw) = transport(2, &[]);
+    let mut policy = capabilities(&fixture);
+    policy.allowed_signing = vec!["secp256k1".into()];
+    assert!(
+        discover_with(
+            &profile(&fixture),
+            deadline(),
+            &client,
+            |_| Ok(policy),
+            |_, _| panic!("unsupported owner must stop before faucet discovery"),
+        )
+        .is_err()
+    );
+    assert!(raw.requests.lock().unwrap().is_empty());
 }

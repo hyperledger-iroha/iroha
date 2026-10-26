@@ -2,11 +2,8 @@
 //! rules or running network are inferred from these self-consistent authentication fixtures.
 
 use super::*;
-use crate::{
-    attachment::tests::Fixture,
-    verify::finality::FinalityAttestation,
-};
-use iroha_crypto::{Algorithm, ExposedPrivateKey, Hash, KeyPair};
+use crate::{attachment::tests::Fixture, verify::finality::FinalityAttestation};
+use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair};
 use iroha_data_model::{sumeragi_finality::SumeragiFinalityProof, transaction::FeePaymentIntent};
 use iroha_model_base::peer::PeerId;
 use iroha_primitives::numeric::Quantity;

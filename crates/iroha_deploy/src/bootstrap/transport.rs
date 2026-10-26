@@ -90,7 +90,6 @@ impl CheckpointTransport {
         };
         Ok((read(1)?, read(2)?))
     }
-
 }
 
 #[cfg(test)]

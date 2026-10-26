@@ -16,7 +16,7 @@ struct Record {
     checkpoint: Vec<u8>,
 }
 
-/// Exclusive custody of one parent generation's advancing native finality prefix.
+/// Exclusive custody of one parent network's advancing native finality prefix.
 ///
 /// Reopening retains newer verified progress even when the bootstrap starts earlier.
 /// A reset needs a separate context. Only verification operations can advance this store;
@@ -30,7 +30,7 @@ pub struct ParentFinalityStore {
 }
 
 impl ParentFinalityStore {
-    /// Create from authenticated native bootstrap material or reopen the same generation.
+    /// Create from authenticated native bootstrap material or reopen the same network.
     /// Missing/corrupt records or locks are not repaired. This does not establish fresh readiness.
     ///
     /// # Errors
@@ -45,10 +45,7 @@ impl ParentFinalityStore {
             .ok_or(BootstrapError::Invalid("parent checkpoint path"))?;
         let parent = OwnerDirectory::open_or_create(parent)?;
         let release = bootstrap.metadata();
-        let initial = record_bytes(
-            &release.network_name,
-            &bootstrap.verifier,
-        )?;
+        let initial = record_bytes(&release.network_name, &bootstrap.verifier)?;
         let (directory, created) = match parent
             .publish_private_child(name, &[("lock", &[]), ("verified.nrt", &initial)])
         {
@@ -70,8 +67,7 @@ impl ParentFinalityStore {
                 &directory.read("verified.nrt", MAX_BOOTSTRAP_BYTES)?,
                 MAX_BOOTSTRAP_BYTES,
             )?;
-            if record.network_name != release.network_name
-            {
+            if record.network_name != release.network_name {
                 return Err(BootstrapError::Invalid(
                     "parent network differs; create a new context",
                 ));
@@ -155,10 +151,18 @@ impl ParentFinalityStore {
     /// Invalid certificates, a regressed tip, bounded-read or durable-publication failure.
     pub fn refresh_certified<S: FinalitySource + ?Sized>(&mut self, source: &S) -> Result<u64> {
         self.revalidate()?;
-        let member = self.verifier.checkpoint().tip().committee.first()
-            .ok_or(BootstrapError::Invalid("parent checkpoint has no committee"))?;
+        let member =
+            self.verifier
+                .checkpoint()
+                .tip()
+                .committee
+                .first()
+                .ok_or(BootstrapError::Invalid(
+                    "parent checkpoint has no committee",
+                ))?;
         let peer = iroha_model_base::peer::PeerId::new(member.public_key.clone());
-        let proof = source.latest_finality_proof(&peer, &rand::random())
+        let proof = source
+            .latest_finality_proof(&peer, &rand::random())
             .map_err(|_| BootstrapError::Invalid("cannot retrieve parent certified tip"))?;
         let mut next = self.verifier.clone();
         next.advance(source, &proof)?;
@@ -242,10 +246,7 @@ impl ParentFinalityStore {
     }
 }
 
-fn record_bytes(
-    network_name: &str,
-    verifier: &FinalityVerifier,
-) -> Result<Vec<u8>> {
+fn record_bytes(network_name: &str, verifier: &FinalityVerifier) -> Result<Vec<u8>> {
     let record = Record {
         network_name: network_name.to_owned(),
         checkpoint: verifier

@@ -1591,6 +1591,173 @@ async fn global_asset_balance_route_requires_exact_holder_scope_and_known_policy
     ));
 }
 
+#[cfg(feature = "app_api")]
+fn commit_dynamic_account_alias_for_routing_test(
+    app: &SharedAppState,
+    owner: &AccountId,
+    alias: &str,
+    dataspace_id: DataSpaceId,
+) {
+    use iroha_core::smartcontracts::Execute;
+    use iroha_data_model::{
+        alias_setup::{
+            AccountAliasRoleV1, AccountProvisionV1, AliasAccountIntentV1, AliasIntentV1,
+            AliasLeaseAcquisitionV1, AliasQuoteGuardV1, ResolvedAccountAliasV1,
+        },
+        isi::alias_setup::EnsureAlias,
+    };
+
+    bind_dynamic_account_alias_for_test(app, owner, alias, dataspace_id);
+    let next_height = app
+        .state
+        .latest_block_header_fast()
+        .map_or(1, |header| header.height().get().saturating_add(1));
+    let mut block = app.state.block(BlockHeader::new(
+        NonZeroU64::new(next_height).expect("non-zero height"),
+        None,
+        None,
+        0,
+        0,
+    ));
+    let mut tx = block.transaction();
+    // The raw lease fixture omits derived account scope. Native alias repair must
+    // populate the same routing index as a committed SNS setup, without buying a lease.
+    EnsureAlias::new(
+        AliasIntentV1::AccountAlias(AliasAccountIntentV1 {
+            alias: ResolvedAccountAliasV1::new(alias.parse().unwrap(), dataspace_id),
+            target_account: owner.clone(),
+            provision: AccountProvisionV1::Existing,
+            role: AccountAliasRoleV1::Additional,
+        }),
+        AliasLeaseAcquisitionV1::new(1, None),
+        AliasQuoteGuardV1 {
+            expected_policy_version: 0,
+            expected_payment_asset: "6TEAJqbb8oEPmLncoNiMRbLEK6tw".parse().unwrap(),
+            max_amount: iroha_primitives::numeric::Quantity::zero(),
+            valid_until_ms: 0,
+        },
+    )
+    .execute(owner, &mut tx)
+    .expect("native alias repair refreshes account scope");
+    tx.apply();
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit native account alias repair");
+}
+
+#[cfg(feature = "app_api")]
+#[tokio::test]
+async fn global_account_reads_survive_sns_namespace_without_physical_catalog() {
+    use iroha_core::sumeragi::test_chain::TestChainConfig;
+    use iroha_data_model::query::{
+        QueryRequest, QueryResponse, SingularQueryOutputBox, account::prelude::FindAccountById,
+    };
+
+    let owner_key = checked_torii_test_ed25519_keypair(0xa7, "SNS-only namespace owner");
+    let stranger_key = checked_torii_test_ed25519_keypair(0xa8, "SNS-only namespace stranger");
+    let owner = AccountId::new(owner_key.public_key().clone());
+    let stranger = AccountId::new(stranger_key.public_key().clone());
+    let world = World::with(
+        [],
+        [
+            Account::new(owner.clone()).build(&owner),
+            Account::new(stranger.clone()).build(&stranger),
+        ],
+        [],
+    );
+    let (mut app, _, chain) = executed_history_test_fixture(
+        TestChainConfig::new(world, 1_000),
+        &owner_key,
+        vec![Log::new(Level::INFO, "SNS account routing fixture".to_owned()).into()],
+        true,
+    );
+    Arc::get_mut(&mut app).unwrap().local_peer_id = Some(chain.validators()[0].0.clone());
+    let private_id = iroha_core::sns::dataspace_id_for_sns_alias("dpn").unwrap();
+    commit_dynamic_account_alias_for_routing_test(&app, &owner, "admin@dpn", private_id);
+    {
+        let state = app.state.view();
+        assert!(state.nexus().dataspace_catalog.by_id(private_id).is_none());
+        assert!(
+            state
+                .world()
+                .account_scope_entry(&owner)
+                .unwrap()
+                .iter()
+                .any(|(id, _)| *id == private_id),
+            "active namespace and account leases must add the logical private scope"
+        );
+    }
+    assert_eq!(
+        super::resolve_torii_target_account_routes(&app, &owner).unwrap(),
+        vec![RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)]
+    );
+    assert!(super::should_execute_route_locally(
+        app.as_ref(),
+        RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+    ));
+    for (authority, key, expected) in [
+        (&owner, &owner_key, StatusCode::OK),
+        (&stranger, &stranger_key, StatusCode::FORBIDDEN),
+    ] {
+        let mut request = authorize_query_for_test(
+            QueryRequest::Singular(FindAccountById::new(owner.clone()).into()),
+            authority.clone(),
+        );
+        request.network_id = *app.state.network_id_ref();
+        let response = super::handler_signed_query(
+            State(app.clone()),
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+            Some(crate::utils::extractors::ExtractAccept(
+                axum::http::HeaderValue::from_static(crate::utils::NORITO_MIME_TYPE),
+            )),
+            crate::NoritoQuery(QueryOptions::default()),
+            versioned_query_for_test(request.sign(key)),
+        )
+        .await
+        .unwrap_or_else(IntoResponse::into_response);
+        assert_eq!(response.status(), expected);
+        if expected == StatusCode::OK {
+            let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
+                .await
+                .unwrap();
+            let QueryResponse::Singular(SingularQueryOutputBox::Account(account)) =
+                norito::decode_from_bytes(&bytes).unwrap()
+            else {
+                panic!("exact account query must return the original domainless account");
+            };
+            assert_eq!(account.id, owner);
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
+#[tokio::test]
+async fn catalogued_account_scope_still_requires_an_authoritative_physical_lane() {
+    let owner = checked_torii_test_account_id(0xa9, "catalogued account scope owner");
+    let private_id = iroha_core::sns::dataspace_id_for_sns_alias("dpn").unwrap();
+    let mut nexus = iroha_config::parameters::actual::Nexus::default();
+    let mut dataspaces = nexus.dataspace_catalog.entries().to_vec();
+    dataspaces.push(iroha_data_model::nexus::DataSpaceMetadata {
+        id: private_id,
+        alias: "dpn".into(),
+        description: None,
+        fault_tolerance: 1,
+    });
+    nexus.dataspace_catalog = iroha_data_model::nexus::DataSpaceCatalog::new(dataspaces).unwrap();
+    nexus.configured_dataspace_catalog = nexus.dataspace_catalog.clone();
+    let app = mk_app_state_for_tests_with_world_and_nexus(
+        World::with([], [Account::new(owner.clone()).build(&owner)], []),
+        nexus,
+    );
+    commit_dynamic_account_alias_for_routing_test(&app, &owner, "admin@dpn", private_id);
+    assert!(matches!(
+        super::resolve_torii_target_account_routes(&app, &owner),
+        Err(iroha_core::queue::RoutingResolveError::NoLaneForDataspace { dataspace_id })
+            if dataspace_id == private_id
+    ));
+}
+
 #[test]
 fn signed_query_scope_classifies_find_asset_by_id_as_target_account() {
     let account_id = checked_torii_test_account_id(0xd9, "derive asset-by-id account fixture key");

@@ -14420,6 +14420,10 @@ fn resolve_torii_target_account_routes(
             entry
                 .iter()
                 .map(|(dataspace_id, _)| *dataspace_id)
+                // SNS-only labels identify a namespace, not a physical ledger hosted by
+                // this Global root. Keep account reads on its actual catalog routes;
+                // configured routes still undergo the normal authority checks below.
+                .filter(|id| state_view.nexus().dataspace_catalog.by_id(*id).is_some())
                 .collect()
         },
     );

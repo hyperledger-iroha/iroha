@@ -1,9 +1,10 @@
-//! Exact installed-location retrieval and independent native-checkpoint authentication tests.
+//! Bounded credential-free native parent-frame retrieval regressions.
 
 use super::*;
 use iroha::http::{HttpTransport, StatusCode, TransportFuture, TransportRequest};
-use iroha_crypto::{Algorithm, KeyPair};
-use iroha_data_model::sumeragi_finality::test_fixtures::NativeFinalityFixture;
+use iroha_data_model::sumeragi_finality::{
+    SumeragiFinalityProof, test_fixtures::NativeFinalityFixture,
+};
 use std::{
     sync::{Arc, Mutex},
     time::Duration,
@@ -12,7 +13,8 @@ use std::{
 #[derive(Debug)]
 struct Transport {
     status: StatusCode,
-    bytes: Vec<u8>,
+    genesis: Vec<u8>,
+    successor: Vec<u8>,
     requests: Mutex<Vec<TransportRequest>>,
 }
 
@@ -21,11 +23,20 @@ impl HttpTransport for Transport {
         &self,
         request: TransportRequest,
     ) -> color_eyre::eyre::Result<iroha::http::Response<Vec<u8>>> {
+        let bytes = match request.url.path() {
+            "/v1/bridge/finality/1" => self.genesis.clone(),
+            "/v1/bridge/finality/2" => self.successor.clone(),
+            _ => panic!("unexpected native parent route"),
+        };
         self.requests.lock().unwrap().push(request);
-        let mut response = iroha::http::Response::new(self.bytes.clone());
+        let mut response = iroha::http::Response::new(bytes);
         *response.status_mut() = self.status;
+        response
+            .headers_mut()
+            .insert("content-type", "application/x-norito".parse().unwrap());
         Ok(response)
     }
+
     fn send(&self, request: TransportRequest) -> TransportFuture<'_> {
         Box::pin(async move { self.send_blocking(request) })
     }
@@ -35,26 +46,16 @@ fn deadline() -> Instant {
     Instant::now() + Duration::from_secs(5)
 }
 
-fn fixture() -> (InstalledNetworkProfile, Vec<u8>) {
-    let checkpoint = NativeFinalityFixture::new().checkpoint();
-    let key = KeyPair::from_seed(vec![61; 32], Algorithm::Ed25519);
-    let release = crate::bootstrap::tests::metadata(&checkpoint);
-    let bytes = crate::bootstrap::tests::signed(release, &checkpoint, &key);
-    let profile = InstalledNetworkProfile::new(
-        "fixture".into(),
-        key.public_key().clone(),
-        5,
-        "https://installed.example/checkpoint.nrt",
-    )
-    .unwrap();
-    (profile, bytes)
-}
-
-fn transport(bytes: Vec<u8>) -> (CheckpointTransport, Arc<Transport>) {
+fn transport(
+    status: StatusCode,
+    genesis: Vec<u8>,
+    successor: Vec<u8>,
+) -> (CheckpointTransport, Arc<Transport>) {
     let raw = Arc::new(Transport {
-        status: StatusCode::OK,
-        bytes,
-        requests: Mutex::new(vec![]),
+        status,
+        genesis,
+        successor,
+        requests: Mutex::new(Vec::new()),
     });
     (
         CheckpointTransport::with_client(PublicHttpClient::with_transport(raw.clone())),
@@ -62,143 +63,105 @@ fn transport(bytes: Vec<u8>) -> (CheckpointTransport, Arc<Transport>) {
     )
 }
 
-#[test]
-fn checkpoint_reader_uses_exact_installed_unsigned_request_and_authenticates_native_checkpoint() {
-    let _ = CheckpointTransport::new();
-    let (profile, bytes) = fixture();
-    let (reader, raw) = transport(bytes);
-    let temporary = tempfile::tempdir().unwrap();
-    let store = ReleaseCheckpointStore::open(&temporary.path().join("release")).unwrap();
-    let authenticated = reader
-        .fetch_with_clock(&profile, &store, deadline(), || Ok(2_000))
-        .unwrap();
-    assert_eq!(authenticated.release().network_name, "fixture");
-    assert_eq!(authenticated.release().serial, 5);
-    assert_eq!(
-        authenticated.into_verifier().checkpoint().height(),
-        NativeFinalityFixture::new().checkpoint().height()
-    );
-    let requests = raw.requests.lock().unwrap();
-    assert_eq!(requests.len(), 1);
-    let request = &requests[0];
-    assert_eq!(request.url, *profile.checkpoint_url());
-    assert_eq!(request.method, iroha::http::Method::GET);
-    assert!(request.headers.is_empty());
-    assert!(request.body.is_empty());
-    assert_eq!(request.max_response_bytes, MAX_DOWNLOADED_CHECKPOINT_BYTES);
-    assert!(
-        request
-            .timeout
-            .is_some_and(|value| value <= Duration::from_secs(5))
-    );
-    assert!(store.read_watermark().unwrap().accepted.is_some());
+fn encoded(proof: &SumeragiFinalityProof) -> Vec<u8> {
+    norito::encode_canonical(proof).unwrap()
 }
 
 #[test]
-fn checkpoint_http_404_uses_exact_installed_url_once_per_call_without_accepting_release() {
-    let (profile, bytes) = fixture();
-    // Even a valid signed checkpoint body cannot turn an HTTP refusal into acceptance.
-    let raw = Arc::new(Transport {
-        status: StatusCode::NOT_FOUND,
-        bytes,
-        requests: Mutex::new(vec![]),
-    });
-    let reader = CheckpointTransport::with_client(PublicHttpClient::with_transport(raw.clone()));
-    let temporary = tempfile::tempdir().unwrap();
-    let store = ReleaseCheckpointStore::open(&temporary.path().join("release")).unwrap();
-    assert!(store.read_watermark().unwrap().accepted.is_none());
-
-    for expected_requests in 1..=2 {
-        assert!(matches!(
-            reader.fetch_and_authenticate(&profile, &store, deadline()),
-            Err(CheckpointReadError::Http(PublicHttpError::Status(404)))
-        ));
-        assert!(store.read_watermark().unwrap().accepted.is_none());
-        let requests = raw.requests.lock().unwrap();
-        assert_eq!(requests.len(), expected_requests);
-        let request = requests.last().unwrap();
-        assert_eq!(request.url, *profile.checkpoint_url());
+fn amx_reader_fetches_only_exact_native_genesis_and_successor_without_credentials() {
+    let _ = CheckpointTransport::new();
+    let fixture = NativeFinalityFixture::new();
+    let checkpoint = fixture.checkpoint();
+    let bootstrap = crate::bootstrap::tests::authenticated(
+        crate::bootstrap::tests::metadata(&checkpoint),
+        &checkpoint,
+    );
+    let (reader, raw) = transport(
+        StatusCode::OK,
+        encoded(fixture.genesis_proof()),
+        encoded(fixture.latest()),
+    );
+    let (genesis, successor) = reader.fetch_amx_pair(&bootstrap, deadline()).unwrap();
+    assert_eq!(genesis, fixture.genesis_proof().block_wire);
+    assert_eq!(successor, fixture.latest().block_wire);
+    let requests = raw.requests.lock().unwrap();
+    assert_eq!(requests.len(), 2);
+    for (index, request) in requests.iter().enumerate() {
         assert_eq!(
             request.url.as_str(),
-            "https://installed.example/checkpoint.nrt"
+            format!("https://torii.example/v1/bridge/finality/{}", index + 1)
         );
         assert_eq!(request.method, iroha::http::Method::GET);
-        assert!(request.headers.is_empty());
+        assert!(
+            !request
+                .headers
+                .iter()
+                .any(|(name, _)| name == "authorization")
+        );
         assert!(request.body.is_empty());
+        assert_eq!(request.max_response_bytes, MAX_PUBLIC_READ_BYTES);
+        assert!(
+            request
+                .timeout
+                .is_some_and(|value| value <= Duration::from_secs(5))
+        );
     }
 }
 
 #[test]
-fn downloaded_bytes_cannot_select_an_authority_label_or_floor_or_replace_installation() {
-    let (profile, bytes) = fixture();
-    let wrong_key = KeyPair::from_seed(vec![62; 32], Algorithm::Ed25519);
-    for (name, key, floor) in [
-        ("fixture", wrong_key.public_key(), 5),
-        ("foreign", &profile.release_trust().public_key, 5),
-        ("fixture", &profile.release_trust().public_key, 6),
-    ] {
-        let installed = InstalledNetworkProfile::new(
-            name.into(),
-            key.clone(),
-            floor,
-            profile.checkpoint_url().as_str(),
-        )
-        .unwrap();
-        let (reader, raw) = transport(bytes.clone());
-        let temporary = tempfile::tempdir().unwrap();
-        let store = ReleaseCheckpointStore::open(&temporary.path().join("release")).unwrap();
-        assert!(
-            reader
-                .fetch_with_clock(&installed, &store, deadline(), || Ok(2_000))
-                .is_err()
-        );
-        assert_eq!(raw.requests.lock().unwrap().len(), 1);
-        assert!(store.read_watermark().unwrap().accepted.is_none());
-    }
-    let installation = crate::bootstrap::InstalledNetworkProfiles::new(vec![profile.clone()])
-        .unwrap()
-        .encode_installation()
-        .unwrap();
-    for response in [bytes[..bytes.len() / 2].to_vec(), installation] {
-        let (reader, _) = transport(response);
-        let temporary = tempfile::tempdir().unwrap();
-        let store = ReleaseCheckpointStore::open(&temporary.path().join("release")).unwrap();
-        assert!(
-            reader
-                .fetch_with_clock(&profile, &store, deadline(), || Ok(2_000))
-                .is_err()
-        );
-        assert!(store.read_watermark().unwrap().accepted.is_none());
-    }
-}
-
-#[test]
-fn checkpoint_reader_samples_expiry_after_download_and_does_not_publish_invalid_clock() {
-    let (profile, bytes) = fixture();
-    for now in [
-        Ok(10_000),
-        Err(BootstrapError::Invalid("local clock unavailable")),
-    ] {
-        let (reader, raw) = transport(bytes.clone());
-        let temporary = tempfile::tempdir().unwrap();
-        let store = ReleaseCheckpointStore::open(&temporary.path().join("release")).unwrap();
-        assert!(
-            reader
-                .fetch_with_clock(&profile, &store, deadline(), || {
-                    assert_eq!(raw.requests.lock().unwrap().len(), 1);
-                    now
-                })
-                .is_err()
-        );
-        assert!(store.read_watermark().unwrap().accepted.is_none());
-    }
-    let (reader, raw) = transport(bytes);
-    let temporary = tempfile::tempdir().unwrap();
-    let store = ReleaseCheckpointStore::open(&temporary.path().join("release")).unwrap();
-    assert!(
-        reader
-            .fetch_and_authenticate(&profile, &store, Instant::now())
-            .is_err()
+fn amx_reader_rejects_wrong_height_malformed_frames_and_http_refusal() {
+    let fixture = NativeFinalityFixture::new();
+    let checkpoint = fixture.checkpoint();
+    let bootstrap = crate::bootstrap::tests::authenticated(
+        crate::bootstrap::tests::metadata(&checkpoint),
+        &checkpoint,
     );
+    let mut tampered = fixture.genesis_proof().clone();
+    tampered.block_wire[0] ^= 1;
+    for genesis in [
+        encoded(fixture.latest()),
+        b"not a canonical proof".to_vec(),
+        encoded(&tampered),
+    ] {
+        let (reader, raw) = transport(StatusCode::OK, genesis, encoded(fixture.latest()));
+        assert!(reader.fetch_amx_pair(&bootstrap, deadline()).is_err());
+        assert_eq!(raw.requests.lock().unwrap().len(), 1);
+    }
+    let (reader, raw) = transport(
+        StatusCode::NOT_FOUND,
+        encoded(fixture.genesis_proof()),
+        encoded(fixture.latest()),
+    );
+    assert!(matches!(
+        reader.fetch_amx_pair(&bootstrap, deadline()),
+        Err(CheckpointReadError::Http(PublicHttpError::Status(404)))
+    ));
+    assert_eq!(raw.requests.lock().unwrap().len(), 1);
+    let (reader, raw) = transport(
+        StatusCode::OK,
+        encoded(fixture.genesis_proof()),
+        encoded(fixture.genesis_proof()),
+    );
+    assert!(reader.fetch_amx_pair(&bootstrap, deadline()).is_err());
+    assert_eq!(raw.requests.lock().unwrap().len(), 2);
+}
+
+#[test]
+fn amx_reader_preserves_the_original_deadline_before_dispatch() {
+    let fixture = NativeFinalityFixture::new();
+    let checkpoint = fixture.checkpoint();
+    let bootstrap = crate::bootstrap::tests::authenticated(
+        crate::bootstrap::tests::metadata(&checkpoint),
+        &checkpoint,
+    );
+    let (reader, raw) = transport(
+        StatusCode::OK,
+        encoded(fixture.genesis_proof()),
+        encoded(fixture.latest()),
+    );
+    assert!(matches!(
+        reader.fetch_amx_pair(&bootstrap, Instant::now()),
+        Err(CheckpointReadError::Http(PublicHttpError::Deadline))
+    ));
     assert!(raw.requests.lock().unwrap().is_empty());
 }

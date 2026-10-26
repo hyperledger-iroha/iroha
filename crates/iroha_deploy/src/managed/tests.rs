@@ -573,6 +573,33 @@ fn unreadable_worker_with_held_lock_is_not_reported_stopped_or_reset() {
 }
 
 #[test]
+fn live_worker_status_preserves_expired_observation_instead_of_ownership_conflict() {
+    let _resources = super::native_test_guard();
+    let temporary = tempfile::tempdir().unwrap();
+    let (store, directory, prepared) = fixture(&temporary.path().join("managed"), "local");
+    let _owned = store::acquire(&directory, "runtime.lock", "local").unwrap();
+    let worker = encode(&WorkerRecord {
+        token: "a".repeat(64),
+    })
+    .unwrap();
+    directory
+        .write_atomic(WORKER, &worker, PublishMode::CreateNew)
+        .unwrap();
+    let _listener = transport::Listener::bind(&directory).unwrap();
+
+    let error = store
+        .status_until("local", std::time::Instant::now())
+        .unwrap_err();
+    assert!(matches!(error, Error::Io(ref error) if error.kind() == std::io::ErrorKind::TimedOut));
+    assert_eq!(
+        directory.read(WORKER, MAX_METADATA).unwrap().as_slice(),
+        worker
+    );
+    assert_eq!(store.prepared("local").unwrap(), prepared);
+    assert!(matches!(store.reset("local"), Err(Error::Busy(_))));
+}
+
+#[test]
 fn stopped_controller_cannot_leave_a_saved_ready_status() {
     let _resources = super::native_test_guard();
     let temporary = tempfile::tempdir().unwrap();

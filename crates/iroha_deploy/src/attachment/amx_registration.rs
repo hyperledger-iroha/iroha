@@ -311,7 +311,6 @@ impl AttachmentStore {
     ) -> Result<()> {
         let identity = &self.record.identity;
         let release = bootstrap.metadata();
-        let now = native(native_operation::now_ms())?;
         if config.network_id != identity.parent_network_id
             || config.chain.as_str() != identity.parent_chain_id
             || config.account_chain_discriminant != release.account_chain_discriminant
@@ -329,7 +328,7 @@ impl AttachmentStore {
                 .any(|root| root == config.torii_api_url.as_str())
         {
             return Err(AttachmentError::Invalid(
-                "AMX administrator selected another or expired authenticated parent",
+                "AMX administrator selected another authenticated parent",
             ));
         }
         Ok(())

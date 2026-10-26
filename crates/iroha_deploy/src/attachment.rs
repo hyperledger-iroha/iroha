@@ -135,7 +135,6 @@ impl AttachmentIdentity {
             || selector.normalized_label() != self.alias
             || self.registration.scope != scope
             || self.ownership_generation == 0
-            || self.parent_generation == 0
             || self.parent_chain_id.is_empty()
             || self.parent_name.is_empty()
         {
@@ -373,8 +372,7 @@ impl AttachmentStore {
         proof: PrivateDataspaceRecordProof,
         parent: &ParentFinalityStore,
     ) -> Result<ConfirmedAnchor> {
-        if parent.network_name() != self.record.identity.parent_name
-        {
+        if parent.network_name() != self.record.identity.parent_name {
             return Err(AttachmentError::Invalid(
                 "parent reset generation differs from attachment",
             ));

@@ -1749,54 +1749,15 @@ fn lagging_checkpoint_is_caught_up_across_observations_before_any_publish() {
 
 #[test]
 fn durable_parent_observation_retains_bounded_certified_progress_but_never_readiness() {
-    use crate::bootstrap::{
-        BootstrapError, NetworkRelease, ParentFinalityStore, ReleaseCheckpointStore, ReleaseTrust,
-        SignedNetworkCheckpoint,
-    };
+    use crate::bootstrap::{BootstrapError, ParentFinalityStore};
 
     let chain = Chain::constant(4, 8);
     let source = Source::new(&chain);
     let checkpoint = chain.verifier_at(2).checkpoint().clone();
-    let signer = KeyPair::from_seed(vec![0xD7; 32], Algorithm::Ed25519);
-    let release = NetworkRelease {
-        network_name: "bounded-progress".into(),
-        serial: 1,
-        generation: 1,
-        network_id: checkpoint.network_id(),
-        chain_id: checkpoint.chain_id().into(),
-        issued_at_ms: 1_000,
-        expires_at_ms: 10_000,
-        torii_roots: vec!["https://torii.example/".into()],
-        account_chain_discriminant: 753,
-        native_world_schema: Hash::new(b"independently qualified fixture World schema"),
-        peers: checkpoint
-            .tip()
-            .committee
-            .iter()
-            .map(|validator| crate::bootstrap::ReleasePeer {
-                node_id: iroha_model_base::peer::PeerId::new(validator.public_key.clone()),
-                torii_root: "https://torii.example/".into(),
-            })
-            .collect(),
-        faucet: None,
-        build_registry: None,
-        checkpoint_hash: Hash::new(checkpoint.encode_canonical().unwrap()),
-        checkpoint_height: checkpoint.height(),
-        checkpoint_block_hash: checkpoint.block_hash().into(),
-    };
-    let bytes = SignedNetworkCheckpoint::sign(release, &checkpoint, signer.private_key())
-        .unwrap()
-        .encode_canonical()
-        .unwrap();
+    let mut metadata = crate::bootstrap::tests::metadata(&checkpoint);
+    metadata.network_name = "bounded-progress".into();
+    let bootstrap = crate::bootstrap::tests::authenticated(metadata, &checkpoint);
     let directory = tempfile::tempdir().unwrap();
-    let release_store = ReleaseCheckpointStore::open(&directory.path().join("release")).unwrap();
-    let bootstrap = release_store
-        .authenticate(
-            &ReleaseTrust::new("bounded-progress".into(), signer.public_key().clone(), 1).unwrap(),
-            &bytes,
-            2_000,
-        )
-        .unwrap();
     let path = directory.path().join("runtime");
     let mut runtime = ParentFinalityStore::open(&path, &bootstrap).unwrap();
     let page = || Budget {

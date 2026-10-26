@@ -21,6 +21,10 @@ fn installed_profiles_require_canonical_https_root_and_exact_network_expectation
     assert_eq!(valid.account_chain_discriminant(), 369);
     for url in [
         "http://network.example/",
+        "http://localhost/",
+        "http://192.168.1.2/",
+        "http://[::ffff:127.0.0.1]/",
+        "ftp://127.0.0.1/",
         "https://NETWORK.example/",
         "https://network.example:443/",
         "https://network.example/a/../",
@@ -88,6 +92,11 @@ fn installed_profiles_require_canonical_https_root_and_exact_network_expectation
     )
     .unwrap();
     assert_eq!(nested.torii_root().path(), "/native/");
+    for url in ["http://127.0.0.1:18080/", "http://[::1]:18080/"] {
+        let local =
+            InstalledNetworkProfile::new("local".into(), url, "fixture-chain".into(), 753).unwrap();
+        assert_eq!(local.torii_root().as_str(), url);
+    }
     let absent = InstalledNetworkProfiles::new(vec![]).unwrap();
     assert!(absent.select("taira").is_err());
     assert!(

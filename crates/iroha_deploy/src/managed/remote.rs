@@ -50,8 +50,7 @@ impl ProfileBinding {
         }
     }
     fn verify(&self, profile: &InstalledNetworkProfile) -> Result<()> {
-        if self != &Self::from_profile(profile)
-        {
+        if self != &Self::from_profile(profile) {
             return Err(Error::Invalid(
                 "retained attachment differs from the installed parent profile".into(),
             ));
@@ -61,13 +60,11 @@ impl ProfileBinding {
 }
 
 fn advance_profile(
-    directory: &PrivateDirectory,
+    _directory: &PrivateDirectory,
     binding: &mut Binding,
     profile: &InstalledNetworkProfile,
 ) -> Result<()> {
-    let _ = directory;
     binding.profile.verify(profile)
-
 }
 
 fn bind_installed_profile(
@@ -106,8 +103,8 @@ struct Activation {
 fn outer_path(store: &ManagedStore, name: &str) -> PathBuf {
     store.root().join("attachments").join(name)
 }
-fn release_path(store: &ManagedStore, name: &str) -> PathBuf {
-    store.root().join("networks").join(name)
+fn bootstrap_path(store: &ManagedStore, name: &str) -> PathBuf {
+    store.root().join("parents").join(name)
 }
 fn existing_outer(store: &ManagedStore, name: &str) -> Result<Option<PrivateDirectory>> {
     validate_name(name)?;
@@ -383,7 +380,7 @@ pub(super) fn build_registry_context(
         .map_err(|error| Error::Invalid(error.to_string()))?;
     let binding = bind_installed_profile(&directory, profile, deadline)?;
     verify_generation_binding(store, name, &binding, prepared)?;
-    let bootstrap = authenticate_parent(&release_path(store, name), profile, deadline, false)?;
+    let bootstrap = authenticate_parent(&bootstrap_path(store, name), profile, deadline, false)?;
     if bootstrap.metadata().network_id != binding.spec.parent_network_id {
         return Err(Error::Invalid(
             "parent reset cannot replace the selected build registry".into(),
@@ -426,29 +423,33 @@ fn authenticate_parent(
     refresh: bool,
 ) -> Result<AuthenticatedBootstrap> {
     remaining(deadline)?;
-    let release = loop {
+    let store = loop {
         match BootstrapStore::open(path) {
-            Ok(release) => break release,
+            Ok(store) => break store,
             Err(BootstrapError::Busy) => thread::sleep(POLL.min(remaining(deadline)?)),
             Err(error) => return Err(Error::Invalid(error.to_string())),
         }
     };
     remaining(deadline)?;
-    if !refresh && let Some(retained) = release.load(profile)
-        .map_err(|error| Error::Invalid(error.to_string()))? {
+    if !refresh
+        && let Some(retained) = store
+            .load(profile)
+            .map_err(|error| Error::Invalid(error.to_string()))?
+    {
         return Ok(retained);
     }
     remaining(deadline)?;
-    let native = discover_native_bootstrap(profile, deadline)
-        .map_err(|source| Error::ParentCheckpoint {
+    let native =
+        discover_native_bootstrap(profile, deadline).map_err(|source| Error::ParentCheckpoint {
             profile: Box::new(profile.clone()),
             source: Box::new(source.into()),
         })?;
-    release.accept(profile, native).map_err(|source| Error::ParentCheckpoint {
-        profile: Box::new(profile.clone()),
-        source: Box::new(source.into()),
-    })
-
+    store
+        .accept(profile, native)
+        .map_err(|source| Error::ParentCheckpoint {
+            profile: Box::new(profile.clone()),
+            source: Box::new(source.into()),
+        })
 }
 
 /// Explicit administrative authorization, separate from config-free SNS attachment.
@@ -509,7 +510,7 @@ impl ManagedStore {
                 "original namespace provisioning is missing".into(),
             ));
         }
-        let bootstrap = authenticate_parent(&release_path(self, name), profile, deadline, false)?;
+        let bootstrap = authenticate_parent(&bootstrap_path(self, name), profile, deadline, false)?;
         // Published source capsules are existing-only here: no HTTP repair or new G1/H2 pair.
         let selection = crate::bootstrap::AmxSourceSelection {
             bootstrap: &bootstrap,
@@ -588,11 +589,16 @@ impl ManagedStore {
                 "dataspace alias must be canonical and private".into(),
             ));
         }
+        let mut discovered = None;
         let directory = if let Some(directory) = existing_outer(self, &request.name)? {
             directory
         } else {
-            let bootstrap =
-                authenticate_parent(&release_path(self, &request.name), profile, deadline, false)?;
+            let bootstrap = authenticate_parent(
+                &bootstrap_path(self, &request.name),
+                profile,
+                deadline,
+                true,
+            )?;
             let spec = PrivateRootSpec {
                 parent_network_id: bootstrap.metadata().network_id,
                 dataspace_id: DataSpaceId::from_hash(&selector.name_hash()),
@@ -607,6 +613,7 @@ impl ManagedStore {
                 account_alias: request.account_alias.clone(),
                 context: None,
             };
+            discovered = Some(bootstrap);
             self.publish_attachment(
                 &request.name,
                 &[("request.lock", b""), (BINDING, &encode(&binding)?)],
@@ -635,8 +642,17 @@ impl ManagedStore {
             )?;
         }
         let spec = binding.spec.clone();
-        let bootstrap =
-            authenticate_parent(&release_path(self, &request.name), profile, deadline, false)?;
+        // Explicit startup refreshes an old context through compact native certificates.
+        // A new context reuses the same discovery already performed above.
+        let bootstrap = match discovered {
+            Some(bootstrap) => bootstrap,
+            None => authenticate_parent(
+                &bootstrap_path(self, &request.name),
+                profile,
+                deadline,
+                true,
+            )?,
+        };
         if bootstrap.metadata().network_id != spec.parent_network_id {
             return Err(Error::Invalid(
                 "parent reset cannot replace the selected AMX private root".into(),
@@ -680,7 +696,14 @@ impl ManagedStore {
         loop {
             remaining(deadline).map_err(|_| attachment_deadline(&last))?;
             let status = self
-                .dataspace_status_until(&request.name, deadline)?
+                .dataspace_status_until(&request.name, deadline)
+                .map_err(|error| {
+                    if Instant::now() >= deadline {
+                        attachment_deadline(&last)
+                    } else {
+                        error
+                    }
+                })?
                 .ok_or_else(|| Error::Invalid("worker has no bound attachment".into()))?;
             if attachment_complete(&status.attachment, deadline)? {
                 return Ok(status);
@@ -777,13 +800,13 @@ impl AttachmentWorker {
         let status = Arc::new(Mutex::new(connecting(binding.profile.name.clone())));
         let shared = Arc::clone(&status);
         let prepared = prepared.clone();
-        let release = release_path(store, name);
+        let bootstrap = bootstrap_path(store, name);
         let thread = thread::Builder::new()
             .name("private-parent-relay".into())
             .stack_size(16 * 1024 * 1024)
             .spawn(move || {
                 relay_loop(
-                    &directory, &release, &binding, &prepared, &shared, &cancelled,
+                    &directory, &bootstrap, &binding, &prepared, &shared, &cancelled,
                 );
             })?;
         Ok(Some(Self { status, thread }))
@@ -836,18 +859,19 @@ pub(super) fn inactive_status(
 
 fn relay_loop(
     directory: &PrivateDirectory,
-    release: &Path,
+    bootstrap_path: &Path,
     binding: &Binding,
     prepared: &PreparedLocalnet,
     status: &Mutex<ManagedAttachmentStatus>,
     cancelled: &Arc<AtomicBool>,
 ) {
     let mut service = None;
-    let mut refresh = false;
+    // Capture a current compact checkpoint after private validators finish starting.
+    let mut refresh = true;
     while !cancelled.load(Ordering::Acquire) {
         let result = relay_turn(
             directory,
-            release,
+            bootstrap_path,
             binding,
             prepared,
             &mut service,
@@ -903,7 +927,7 @@ struct RelayControl<'a> {
 
 fn relay_turn(
     directory: &PrivateDirectory,
-    release_path: &Path,
+    bootstrap_path: &Path,
     binding: &Binding,
     prepared: &PreparedLocalnet,
     service: &mut Option<RemoteProvisioning>,
@@ -927,7 +951,7 @@ fn relay_turn(
     {
         return Err(ManagedAttachmentFailure::ContextRejected);
     }
-    let bootstrap = authenticate_parent(release_path, profile, deadline, refresh)
+    let bootstrap = authenticate_parent(bootstrap_path, profile, deadline, refresh)
         .map_err(|_| ManagedAttachmentFailure::ParentAuthenticationFailed)?;
     if bootstrap.metadata().network_id != binding.spec.parent_network_id {
         return Err(ManagedAttachmentFailure::ContextRejected);

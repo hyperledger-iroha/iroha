@@ -1776,11 +1776,7 @@ mod tests {
                 ))
         ));
         assert!(error.to_string().contains("network `taira`"));
-        assert!(
-            error
-                .to_string()
-                .contains("https://taira.sora.org/bootstrap/checkpoint.nrt")
-        );
+        assert!(error.to_string().contains("https://taira.sora.org/"));
         assert!(error.to_string().contains("retry the same command"));
     }
 

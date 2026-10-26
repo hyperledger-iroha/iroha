@@ -1,4 +1,4 @@
-//! Genuine parent quorum plus deterministic wallet observations for resumable orchestration.
+//! Genuine parent certificates plus deterministic wallet observations for resumable orchestration.
 //! Synthetic execution fixtures test custody/control flow, not live fee or private execution.
 
 use std::{
@@ -6,7 +6,7 @@ use std::{
     num::NonZeroU64,
 };
 
-use iroha_crypto::{Algorithm, ExposedPrivateKey, Hash, KeyPair, SignatureOf};
+use iroha_crypto::{Algorithm, ExposedPrivateKey, Hash, KeyPair};
 use iroha_data_model::{
     alias_setup::{
         AccountAliasRoleV1, AccountProvisionV1, AliasAccountIntentV1, AliasDataSpaceIntentV1,
@@ -15,11 +15,10 @@ use iroha_data_model::{
     block::consensus::SumeragiRootScope,
     isi::alias_setup::EnsureAlias,
     sns::{lease::SnsLeaseProofV1, record_storage_key},
-    sumeragi::{SumeragiFootprint, SumeragiStatus},
     sumeragi_finality::{
-        SumeragiFinalityAttestation, SumeragiFinalityAttestationBody, SumeragiFinalityProof,
-        WorldStateElementKindV1, WorldStateSnapshotEntryV1, WorldStateSnapshotV1,
-        authenticated_genesis, test_fixtures::NativeFinalityFixture, world_state_value_hash_v1,
+        SumeragiFinalityProof, WorldStateElementKindV1, WorldStateSnapshotEntryV1,
+        WorldStateSnapshotV1, authenticated_genesis, test_fixtures::NativeFinalityFixture,
+        world_state_value_hash_v1,
     },
 };
 use iroha_model_base::{peer::PeerId, topology::DataSpaceId};
@@ -181,61 +180,26 @@ impl FinalitySource for Source<'_> {
             Err(std::io::Error::other("unserved fixture height"))
         }
     }
-    fn latest_attestation(
+    fn latest_finality_proof(
         &self,
-        peer: &PeerId,
-        challenge: &[u8; 32],
-    ) -> std::result::Result<crate::verify::finality::FinalityAttestation, Self::Error> {
+        _: &PeerId,
+        _: &[u8; 32],
+    ) -> std::result::Result<SumeragiFinalityProof, Self::Error> {
         self.reads.set(self.reads.get() + 1);
         if self.offline {
             return Err(std::io::Error::other("offline"));
         }
-        let key = (1..=4)
-            .map(|seed| KeyPair::from_seed(vec![seed; 32], Algorithm::BlsNormal))
-            .find(|key| key.public_key() == peer.public_key())
-            .unwrap();
-        let height = self.chain.checkpoint().height();
-        let config_fingerprint = Hash::new(b"fixture config");
-        let body = SumeragiFinalityAttestationBody {
-            observed_at_unix_ms: 1_000_000,
-            challenge: *challenge,
-            network_id: self.chain.network_id(),
-            node_id: peer.clone(),
-            node_fingerprint: Hash::new(peer.encode()),
-            build_fingerprint: Hash::new(b"fixture build"),
-            config_fingerprint,
-            genesis_block_hash: self.chain.genesis().hash(),
-            genesis_finality_proof: self.chain.genesis_proof().clone(),
-            status: SumeragiStatus {
-                protocol_version: iroha_data_model::sumeragi::PROTOCOL_VERSION,
-                config_fingerprint,
-                beacon_horizon: None,
-                instance: self.chain.verifier().instance().0,
-                height: height + 1,
-                view: 0,
-                stage: 0,
-                leader: None,
-                proxy_tail: None,
-                high_qc_view: None,
-                level: 0,
-                start_level: 0,
-                t_retx_ms: 100,
-                committed_height: height,
-                applied_height: height,
-                awaiting: false,
-                signer: Some(key.public_key().clone()),
-                unanchored: false,
-                abstaining: false,
-                halted: None,
-                footprint: SumeragiFootprint::default(),
-            },
-            finality_proof: self.chain.latest().clone(),
-        };
-        Ok(SumeragiFinalityAttestation {
-            signature: SignatureOf::try_from_hash(key.private_key(), body.signing_hash()).unwrap(),
-            body,
-        }
-        .into())
+        Ok(self.chain.latest().clone())
+    }
+
+    fn latest_attestation(
+        &self,
+        _: &PeerId,
+        _: &[u8; 32],
+    ) -> std::result::Result<crate::verify::finality::FinalityAttestation, Self::Error> {
+        Err(std::io::Error::other(
+            "ordinary provisioning requires certified state, not peer readiness",
+        ))
     }
 }
 
@@ -498,14 +462,12 @@ fn exact_owner_import_and_exclusive_custody_survive_reopen_but_not_child_replace
             .unwrap(),
         short_deadline
     );
-    assert!(
+    let original_deadline = Instant::now() + Duration::from_secs(3600);
+    assert_eq!(
         store
-            .turn_deadline(
-                &fixture.bootstrap,
-                Instant::now() + Duration::from_secs(3600)
-            )
-            .unwrap()
-            < Instant::now() + Duration::from_secs(601)
+            .turn_deadline(&fixture.bootstrap, original_deadline)
+            .unwrap(),
+        original_deadline
     );
     assert!(fixture.open().is_err());
     let read_parent = |child: &Config| {
@@ -577,7 +539,7 @@ fn exact_owner_import_and_exclusive_custody_survive_reopen_but_not_child_replace
 }
 
 #[test]
-fn fresh_quorum_precedes_funding_and_pending_namespace_resumes_exact_original_request() {
+fn certified_parent_precedes_funding_and_pending_namespace_resumes_exact_original_request() {
     let fixture = Fixture::new();
     let mut store = fixture.open().unwrap();
     let ops = Operations::new(&store, &fixture);
@@ -597,7 +559,7 @@ fn fresh_quorum_precedes_funding_and_pending_namespace_resumes_exact_original_re
             .provision_with(&fixture.bootstrap, deadline(), &source, &ops)
             .is_err()
     );
-    assert!(source.reads.get() >= 3);
+    assert_eq!(source.reads.get(), 1);
     assert!(ops.calls.borrow().is_empty());
     let source = Source {
         offline: false,

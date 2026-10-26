@@ -1,4 +1,4 @@
-//! Installed HTTPS discovery roots and exact network expectations for native bootstrap.
+//! Installed discovery roots and exact network expectations for native bootstrap.
 
 use std::{collections::BTreeMap, path::Path};
 
@@ -15,7 +15,7 @@ pub const MAX_INSTALLED_NETWORK_PROFILES: usize = 32;
 pub const MAX_INSTALLED_PROFILE_BYTES: usize = 128 * 1024;
 const MAX_TORII_ROOT_BYTES: usize = 2048;
 
-/// One installed network selection, with an HTTPS origin for initial network discovery.
+/// One installed network selection, with HTTPS or numeric-loopback HTTP for initial discovery.
 /// Native bootstrap retains the exact discovered genesis identity and verifies consensus proofs.
 #[derive(Clone, Debug)]
 pub struct InstalledNetworkProfile {
@@ -26,7 +26,8 @@ pub struct InstalledNetworkProfile {
 }
 
 impl InstalledNetworkProfile {
-    /// Select a canonical HTTPS discovery root and exact chain/address expectations.
+    /// Select a canonical discovery root and exact chain/address expectations.
+    /// Remote networks require HTTPS; explicit numeric-loopback development roots may use HTTP.
     /// The installed root provides initial discovery; later responses cannot replace a retained
     /// genesis identity or substitute these chain and account-address selections.
     ///
@@ -51,8 +52,13 @@ impl InstalledNetworkProfile {
         }
         let url = Url::parse(torii_root)
             .map_err(|_| BootstrapError::Invalid("invalid installed Torii root"))?;
+        let numeric_loopback = match url.host() {
+            Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+            Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+            _ => false,
+        };
         if url.as_str() != torii_root
-            || url.scheme() != "https"
+            || !(url.scheme() == "https" || url.scheme() == "http" && numeric_loopback)
             || url.host().is_none()
             || !url.username().is_empty()
             || url.password().is_some()
@@ -61,7 +67,7 @@ impl InstalledNetworkProfile {
             || !url.path().ends_with('/')
         {
             return Err(BootstrapError::Invalid(
-                "installed Torii root must be canonical credential-free HTTPS with a trailing slash",
+                "installed Torii root requires canonical credential-free HTTPS or numeric-loopback HTTP with a trailing slash",
             ));
         }
         Ok(Self {
@@ -77,7 +83,7 @@ impl InstalledNetworkProfile {
         &self.network_name
     }
 
-    /// Exact installed HTTPS root used for native discovery and proof retrieval.
+    /// Exact installed root used for native discovery and proof retrieval.
     pub fn torii_root(&self) -> &Url {
         &self.torii_root
     }

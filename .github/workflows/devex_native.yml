@@ -1,11 +1,11 @@
 name: Native Kagami and Mochi developer bundle
 
-# Manual: native runners need at least 13 GiB RAM, 50 GiB free build storage and OpenSSL.
+# Manual: native runners need at least 13 GiB RAM, 50 GiB free build storage.
 # Select existing runner labels with those resources; no paid runner is implicitly selected.
 # Hosted runner references:
 # https://docs.github.com/en/actions/reference/runners/github-hosted-runners
 # https://docs.github.com/en/actions/reference/runners/larger-runners
-# This gate exercises local native behavior. Official Taira publication and the
+# This gate exercises local native behavior. Live Taira attachment and the
 # twenty-run reference-host latency campaign are separate acceptance requirements.
 on:
   workflow_dispatch:
@@ -160,10 +160,9 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y pkg-config libx11-dev libxi-dev libxcursor-dev libxrandr-dev libxinerama-dev libxkbcommon-dev libwayland-dev libgl1-mesa-dev libudev-dev
-      - name: Check disposable TLS fixture controller tools
+      - name: Check disposable loopback fixture controller tools
         run: |
-          python -c 'import ssl, sys; assert sys.version_info >= (3, 10)'
-          openssl version
+          python -c 'import sys; assert sys.version_info >= (3, 10)'
       - name: Test native filesystem, wallet, environment and contract deployment owners
         run: cargo test --locked --release -p iroha_fs -p iroha_wallet -p iroha_deploy -p iroha_contract_deploy --lib -- --test-threads=1
       - name: Test native Musubi publication, recovery and workspace execution
