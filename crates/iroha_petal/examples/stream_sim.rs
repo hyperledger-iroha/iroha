@@ -216,7 +216,7 @@ fn main() {
             frame_totals(&outcomes).expect("aggregate frame counts fit u64");
         let turn_lanes: u64 = outcomes.iter().map(|o| u64::from(o.turn_lanes)).sum();
         let kana_lanes: u64 = outcomes.iter().map(|o| u64::from(o.kana_lanes)).sum();
-        let seconds = count_as_f64(frames) / camera_fps.unwrap_or(30.0);
+        let seconds: f64 = outcomes.iter().map(|o| o.elapsed_s).sum();
         println!(
             "{:<10} {:>6.0} {:>8.2} {:>8.2} {:>8.2} {:>7} {:>9.1} {:>6.0}% {:>6.0}% {:>6.1}",
             name,
@@ -310,6 +310,7 @@ mod tests {
             field_lanes: u32::MAX,
             turn_lanes: 0,
             kana_lanes: 0,
+            elapsed_s: 0.0,
             mean_decode_ms: 0.0,
         };
         assert_eq!(frame_totals(&[]), Some((0, 0)));

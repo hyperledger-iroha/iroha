@@ -171,6 +171,9 @@ pub struct TrialOutcome {
     pub turn_lanes: u32,
     /// Kana lanes read, summed over the frames (each band at most once per shown frame).
     pub kana_lanes: u32,
+    /// Camera time the trial ran in seconds: until the camera frame after the last one decoded,
+    /// or with a slow decoder until its last push ended.
+    pub elapsed_s: f64,
     /// Mean decode time per frame in milliseconds.
     pub mean_decode_ms: f64,
 }
@@ -241,6 +244,7 @@ pub fn run_stream_trial(payload: &[u8], kind: u8, trial: &StreamTrial) -> TrialO
         field_lanes: 0,
         turn_lanes: 0,
         kana_lanes: 0,
+        elapsed_s: 0.0,
         mean_decode_ms: 0.0,
     };
     let mut index = 0u32;
@@ -333,6 +337,11 @@ pub fn run_stream_trial(payload: &[u8], kind: u8, trial: &StreamTrial) -> TrialO
         outcome.field_lanes += result.lanes.chars().filter(char::is_ascii_digit).count() as u32;
         outcome.turn_lanes += result.turned.len() as u32;
         outcome.kana_lanes += (result.kana.len() / 2) as u32;
+        outcome.elapsed_s = if trial.decoder.is_some() {
+            done_at
+        } else {
+            f64::from(index + 1) / trial.camera_fps
+        };
         if let Some(done) = result.completed {
             outcome.completed_at_s = Some(done_at);
             outcome.payload_matches = done.payload == payload;
