@@ -23,6 +23,9 @@ mod contract_capture;
 mod contract_relation;
 #[path = "set_detachment.rs"]
 mod detachment;
+#[path = "set_time_source.rs"]
+mod time_source;
+pub(crate) use time_source::{ApplyingTimeSourceError, ApplyingTimeSourceWork, CapturedApplyingTimeSource};
 pub(crate) use acquisition::SetBlockAcquisition;
 pub(crate) use action_relation::{ActionTable, scheduled_work as action_source_work};
 pub(crate) use authority_registry::{AUTHORITY_FIELDS, SetReadReleases};
@@ -121,6 +124,8 @@ impl BorrowedTriggerFilter<'_> {
 /// The complete source remains the wire oracle and response identity.
 pub(crate) struct BorrowedTriggerSource<'a> {
     full: &'a dyn norito::core::SerializePayload,
+    persistent_action: &'a dyn norito::core::SerializePayload,
+    retry_state: Option<(u32, u64)>,
     id: &'a TriggerId,
     executable: &'a dyn norito::core::SerializePayload,
     executable_source: &'a ExecutableRef,
@@ -132,6 +137,39 @@ pub(crate) struct BorrowedTriggerSource<'a> {
     metadata: &'a Metadata,
 }
 impl BorrowedTriggerSource<'_> {
+    /// Prepare an unvalidated frame of this original persistent Action while
+    /// its borrowed store fields remain alive. Only the audited fixed-shape
+    /// Time subset is admitted; other shapes refuse before their serializers.
+    ///
+    /// Store traversal, original-contract lookup and lifecycle authentication
+    /// precede this method and still require their own bounded owner. This does
+    /// not journal a change, admit an instruction registry, or activate V2.
+    pub(crate) fn try_prepare_bounded_time_frame(
+        &self,
+        pool: &iroha_allocation::AllocationBudget,
+        limits: norito::core::EncodeWorkLimits,
+    ) -> Result<
+        iroha_data_model::block::execution_output::RetainedActionFrameBytesV1,
+        iroha_data_model::block::execution_output::ActionFrameProductionFailureV1,
+    > {
+        iroha_data_model::block::execution_output::RetainedActionFrameBytesV1::
+            try_encode_unvalidated_payload(&BoundedTimeActionPayload(self), pool, limits)
+    }
+
+    /// Borrow the complete original six-field persistent Action payload.
+    ///
+    /// This uses original IVM bytecode rather than its loaded hash/cache entry.
+    /// It allocates or retains nothing. A lifecycle journal must separately fund
+    /// ownership, normalization, hashing and encoding before retaining a copy.
+    /// This borrowed source alone is not an authenticated lifecycle statement.
+    pub(crate) fn persistent_action(&self) -> &dyn norito::core::SerializePayload {
+        self.persistent_action
+    }
+    /// Actual retry runtime tuple, kept separate from the legacy Action payload.
+    /// Absence stays absent; this accessor does not infer a zero or clear state.
+    pub(crate) fn retry_state(&self) -> Option<(u32, u64)> {
+        self.retry_state
+    }
     /// Original validated trigger name.
     pub(crate) fn id(&self) -> &TriggerId {
         self.id
@@ -179,6 +217,114 @@ impl BorrowedTriggerSource<'_> {
     pub(crate) fn metadata(&self) -> &Metadata {
         self.metadata
     }
+}
+/// Private construction binds the serializer to the visitor's original six
+/// borrowed fields; no caller-supplied payload or hash can replace that source.
+struct BoundedTimeActionPayload<'source, 'borrow>(&'source BorrowedTriggerSource<'borrow>);
+impl norito::core::SerializePayload for BoundedTimeActionPayload<'_, '_> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::Error> {
+        use norito::core::{charge_encode_prewrite, refuse_encode_source};
+        // Charge before any branch inspection. A scope is mandatory here.
+        if !charge_encode_prewrite(0)? {
+            return Err(refuse_encode_source());
+        }
+        let source = self.0;
+        if !matches!(source.filter_source, BorrowedTriggerFilter::Time(_))
+            || source.authority.controller().single_signatory().is_none()
+        {
+            return Err(refuse_encode_source());
+        }
+        admit_bounded_time_executable(source.executable_source)?;
+        admit_bounded_registration_metadata(source.metadata)?;
+        // Every admitted value is still serialized from the original stored
+        // six-field view. In particular the Batch wrapper, arguments and exact
+        // registration numbers are neither removed nor rebuilt here.
+        source.persistent_action.serialize(writer)
+    }
+}
+/// Close the variable-shaped producer surface without invoking a registry,
+/// argument decoder, contract lookup or an owned replacement serializer.
+fn admit_bounded_time_executable(source: &ExecutableRef) -> Result<(), norito::Error> {
+    use norito::core::{charge_encode_prewrite, refuse_encode_source};
+    if !charge_encode_prewrite(0)? {
+        return Err(refuse_encode_source());
+    }
+    let invocation = match source {
+        ExecutableRef::Instructions(items) if items.is_empty() => return Ok(()),
+        ExecutableRef::Batch(items) if items.is_empty() => return Ok(()),
+        ExecutableRef::Batch(items) if items.len() == 1 => match &items[0] {
+            ExecutableBatchItem::ContractCall(invocation) => invocation,
+            _ => return Err(refuse_encode_source()),
+        },
+        _ => return Err(refuse_encode_source()),
+    };
+    // These are the constructor's public entrypoint bounds, not a replacement
+    // for invocation or argument-schema authentication by the execution owner.
+    let entrypoint = invocation.entrypoint.as_str();
+    if entrypoint.is_empty() || entrypoint.len() > 255 {
+        return Err(refuse_encode_source());
+    }
+    // The original trim walks UTF-8 at both ends. Pay a conservative two full
+    // byte visits before either walk; no temporary String is constructed.
+    charge_encode_prewrite(entrypoint.len() * 2)?;
+    if entrypoint.trim() != entrypoint {
+        return Err(refuse_encode_source());
+    }
+    let Some(arguments) = invocation.arguments.as_ref() else {
+        return Err(refuse_encode_source());
+    };
+    if arguments.as_bytes().is_empty()
+        || arguments.as_bytes().len()
+            > iroha_data_model::transaction::executable::MAX_CONTRACT_ARGUMENT_RECORD_BYTES
+    {
+        return Err(refuse_encode_source());
+    }
+    // ContractArgumentRecord retains its original raw Vec<u8> codec: constant
+    // time sizing and charged writer visits for measurement/checksum/output.
+    // Its inner EntrypointArgumentRecordV1 schema is not validated by this gate.
+    Ok(())
+}
+
+/// Normal Register injects exactly these two u64 JSON numbers. Admit their
+/// original lexical bytes; reject additional metadata until its prewrite path
+/// is audited. Empty metadata remains admitted for existing fixed-shape users.
+fn admit_bounded_registration_metadata(metadata: &Metadata) -> Result<(), norito::Error> {
+    use norito::core::{charge_encode_prewrite, refuse_encode_source};
+    if !charge_encode_prewrite(0)? {
+        return Err(refuse_encode_source());
+    }
+    let entries = metadata.iter();
+    if entries.len() == 0 {
+        return Ok(());
+    }
+    if entries.len() != 2 {
+        return Err(refuse_encode_source());
+    }
+    for ((name, json), expected) in entries.zip(["__registered_at_ms", "__registered_block_height"])
+    {
+        let actual: &str = name.as_ref();
+        charge_encode_prewrite(actual.len())?;
+        if actual != expected {
+            return Err(refuse_encode_source());
+        }
+        // Json::as_ref strips quotation marks; get() deliberately does not.
+        let raw = json.get().as_bytes();
+        if raw.is_empty() || raw.len() > 20 {
+            return Err(refuse_encode_source());
+        }
+        charge_encode_prewrite(raw.len())?;
+        let mut value = 0_u64;
+        for (index, &byte) in raw.iter().enumerate() {
+            if !byte.is_ascii_digit() || (index == 0 && byte == b'0' && raw.len() != 1) {
+                return Err(refuse_encode_source());
+            }
+            value = value
+                .checked_mul(10)
+                .and_then(|value| value.checked_add(u64::from(byte - b'0')))
+                .ok_or_else(refuse_encode_source)?;
+        }
+    }
+    Ok(())
 }
 impl norito::core::SerializePayload for BorrowedTriggerSource<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::Error> {
@@ -2197,6 +2343,10 @@ pub(crate) trait BorrowedTriggerSourceReadOnly: SetReadOnly {
             crate::smartcontracts::isi::query::BorrowedSingularStruct::<2>::new([id, &full_action]);
         visitor(Some(&BorrowedTriggerSource {
             full: &full_trigger,
+            persistent_action: &full_action,
+            retry_state: action
+                .retry_state
+                .map(|state| (state.retries_used, state.next_retry_at_ms)),
             id,
             executable: &executable,
             executable_source: &action.executable,
@@ -4487,6 +4637,234 @@ mod dto_tests {
         }
         set
     }
+    include!("set_bounded_registered_time_tests.rs");
+    include!("set_applying_time_source_tests.rs");
+
+    fn bounded_frame_limits() -> norito::core::EncodeWorkLimits {
+        norito::core::EncodeWorkLimits {
+            max_frame_bytes: 65_536,
+            max_byte_visits: 10_000_000,
+            max_operations: 1_000_000,
+            max_depth: 128,
+        }
+    }
+    fn supported_time_set(batch: bool, scheduled: bool, retry: bool) -> Set {
+        let set = Set::default();
+        let mut block = set.block();
+        let mut tx = block.transaction();
+        let executable = if batch {
+            dm::Executable::Batch(ConstVec::new_empty())
+        } else {
+            dm::Executable::Instructions(ConstVec::new_empty())
+        };
+        let filter = dm::TimeEventFilter(if scheduled {
+            ExecutionTime::Schedule(Schedule::starting_at(std::time::Duration::from_secs(1)))
+        } else {
+            ExecutionTime::PreCommit
+        });
+        let mut action = SpecializedAction::new(
+            executable,
+            dm::Repeats::Exactly(3),
+            checked_account_id(),
+            filter,
+        )
+        .unwrap();
+        if retry {
+            action.retry_policy = Some(dm::TimeTriggerRetryPolicy {
+                max_retries: std::num::NonZeroU32::new(2).unwrap(),
+                retry_after_ms: NonZeroU64::new(750).unwrap(),
+            });
+        }
+        tx.add_time_trigger(SpecializedTrigger::new(
+            "bounded_time".parse().unwrap(),
+            action,
+        ))
+        .unwrap();
+        tx.apply();
+        block.commit();
+        set
+    }
+    // Authored only: no current canonical test execution is claimed.
+    #[test]
+    fn bounded_borrowed_time_frames_match_original_action_bytes_for_supported_shapes() {
+        for batch in [false, true] {
+            for (scheduled, retry) in [(false, false), (true, false), (true, true)] {
+                let set = supported_time_set(batch, scheduled, retry);
+                let view = set.view();
+                let original = view.triggers_iter().next().unwrap();
+                let expected = norito::encode_canonical(original.action()).unwrap();
+                let pool = iroha_allocation::AllocationBudget::new(65_536);
+                let mut seen = 0;
+                view.visit_borrowed_trigger_sources(|source| {
+                    let source = source.unwrap();
+                    let retry_before = source.retry_state();
+                    let frame = source
+                        .try_prepare_bounded_time_frame(&pool, bounded_frame_limits())
+                        .unwrap();
+                    assert_eq!(frame.as_bytes(), expected);
+                    assert_eq!(pool.reserved_bytes(), frame.backing_bytes());
+                    assert_eq!(source.retry_state(), retry_before);
+                    drop(frame);
+                    assert_eq!(pool.reserved_bytes(), 0);
+                    seen += 1;
+                    Ok(core::ops::ControlFlow::Continue(()))
+                })
+                .unwrap();
+                assert_eq!(seen, 1);
+            }
+        }
+    }
+    struct MustNotSerialize;
+    impl norito::core::SerializePayload for MustNotSerialize {
+        fn serialize(&self, _: &mut norito::core::Encoder<'_>) -> Result<(), norito::Error> {
+            panic!("unsupported source reached persistent Action serializer")
+        }
+    }
+    fn source_with_probe<'a>(source: &'a BorrowedTriggerSource<'a>) -> BorrowedTriggerSource<'a> {
+        BorrowedTriggerSource {
+            full: source.full,
+            persistent_action: &MustNotSerialize,
+            retry_state: source.retry_state,
+            id: source.id,
+            executable: source.executable,
+            executable_source: source.executable_source,
+            repeats: source.repeats,
+            authority: source.authority,
+            filter: source.filter,
+            filter_source: source.filter_source,
+            retry_policy: source.retry_policy,
+            metadata: source.metadata,
+        }
+    }
+    fn assert_source_frame_refuses(source: &BorrowedTriggerSource<'_>) {
+        use iroha_data_model::block::execution_output::ActionFrameProductionFailureV1;
+        let pool = iroha_allocation::AllocationBudget::new(65_536);
+        let error = source
+            .try_prepare_bounded_time_frame(&pool, bounded_frame_limits())
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            ActionFrameProductionFailureV1::Codec(norito::core::BoundedEncodeWorkError::Refused(
+                norito::core::EncodeWorkRefusal::Source
+            ))
+        ));
+        assert_eq!(pool.peak_reserved_bytes(), 0);
+    }
+    #[test]
+    fn unsupported_original_store_rows_refuse_before_payload_or_backing() {
+        let set = sample_set();
+        let view = set.view();
+        let mut refused = 0;
+        view.visit_borrowed_trigger_sources(|source| {
+            let source = source.unwrap();
+            if !matches!(source.filter_source, BorrowedTriggerFilter::Time(_)) {
+                assert_source_frame_refuses(&source_with_probe(source));
+                refused += 1;
+            }
+            Ok(core::ops::ControlFlow::Continue(()))
+        })
+        .unwrap();
+        assert_eq!(refused, 3);
+    }
+    #[test]
+    fn nonempty_instruction_and_metadata_refuse_before_the_original_payload() {
+        let set = supported_time_set(false, true, false);
+        let view = set.view();
+        let instructions =
+            ExecutableRef::Instructions(ConstVec::from(vec![dm::InstructionBox::from(
+                dm::Log::new(dm::Level::INFO, "not admitted".to_string()),
+            )]));
+        let mut metadata = Metadata::default();
+        metadata.insert("nonempty".parse().unwrap(), dm::Json::new(1));
+        view.visit_borrowed_trigger_sources(|source| {
+            let source = source.unwrap();
+            let mut candidate = source_with_probe(source);
+            candidate.executable_source = &instructions;
+            assert_source_frame_refuses(&candidate);
+            let mut candidate = source_with_probe(source);
+            candidate.metadata = &metadata;
+            assert_source_frame_refuses(&candidate);
+            Ok(core::ops::ControlFlow::Continue(()))
+        })
+        .unwrap();
+    }
+    #[test]
+    fn batch_contract_ivm_and_multisig_refuse_without_invoking_payload() {
+        use iroha_data_model::account::{MultisigMember, MultisigPolicy};
+        let authority = checked_account_id();
+        let address = iroha_data_model::smart_contract::ContractAddress::derive(
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .unwrap(),
+            &authority,
+            7,
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+        )
+        .unwrap();
+        let candidates = [
+            ExecutableRef::Batch(ConstVec::from(vec![ExecutableBatchItem::Instruction(
+                dm::Log::new(dm::Level::INFO, "unadmitted".to_string()).into(),
+            )])),
+            ExecutableRef::ContractCall(ContractInvocation {
+                contract_address: address,
+                expected_code_hash: iroha_crypto::Hash::new(b"unadmitted"),
+                entrypoint: "main".to_string(),
+                arguments: None,
+            }),
+            ExecutableRef::Ivm(HashOf::new(&IvmBytecode::from_compiled(vec![0xAA, 0xBB]))),
+        ];
+        let multisig = dm::AccountId::new_multisig(
+            MultisigPolicy::new(
+                1,
+                vec![MultisigMember::new(checked_keypair().public_key().clone(), 1).unwrap()],
+            )
+            .unwrap(),
+        );
+        let set = supported_time_set(false, true, false);
+        let view = set.view();
+        view.visit_borrowed_trigger_sources(|source| {
+            let source = source.unwrap();
+            for executable in &candidates {
+                let mut candidate = source_with_probe(source);
+                candidate.executable_source = executable;
+                assert_source_frame_refuses(&candidate);
+            }
+            let mut candidate = source_with_probe(source);
+            candidate.authority = &multisig;
+            assert_source_frame_refuses(&candidate);
+            Ok(core::ops::ControlFlow::Continue(()))
+        })
+        .unwrap();
+    }
+    #[test]
+    fn borrowed_source_work_refusal_precedes_output_allocation() {
+        let set = supported_time_set(false, true, true);
+        let view = set.view();
+        let pool = iroha_allocation::AllocationBudget::new(65_536);
+        view.visit_borrowed_trigger_sources(|source| {
+            let error = source
+                .unwrap()
+                .try_prepare_bounded_time_frame(
+                    &pool,
+                    norito::core::EncodeWorkLimits {
+                        max_operations: 0,
+                        ..bounded_frame_limits()
+                    },
+                )
+                .unwrap_err();
+            assert!(matches!(
+                error,
+                iroha_data_model::block::execution_output::ActionFrameProductionFailureV1::Codec(
+                    norito::core::BoundedEncodeWorkError::Refused(
+                        norito::core::EncodeWorkRefusal::Operations
+                    )
+                )
+            ));
+            assert_eq!(pool.peak_reserved_bytes(), 0);
+            Ok(core::ops::ControlFlow::Continue(()))
+        })
+        .unwrap();
+    }
     #[test]
     fn borrowed_trigger_inventory_matches_every_original_typed_action_frame() {
         let set = sample_set();
@@ -4908,3 +5286,7 @@ mod dto_tests {
         assert!(error.contains("code hash"), "unexpected error: {error}");
     }
 }
+
+#[cfg(test)]
+#[path = "set_lifecycle_source_tests.rs"]
+mod lifecycle_source_tests;

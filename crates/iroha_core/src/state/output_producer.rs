@@ -17,7 +17,8 @@ use iroha_data_model::{
     block::{
         SignedBlock,
         execution_output::{
-            ExecutionOutputV1, NetworkExecutionOutputV1, validate_execution_outputs_v1,
+            ExecutionOutputV1, NetworkExecutionOutputV1, NetworkExecutionOutputV2,
+            PipelineExecutionOutputV2, TimeExecutionOutputV2, validate_execution_outputs_v1,
         },
         output_budget::{ExecutionOutputBudget, ExecutionOutputPhase, ReservedExecutionOutput},
     },
@@ -421,6 +422,14 @@ pub use seal::{ExecutionOutputSealError, ExecutionOutputSealMetadata};
 #[path = "output_internal.rs"]
 mod internal;
 
+#[path = "output_time_journal.rs"]
+mod time_journal;
+
+#[cfg(test)]
+#[path = "output_time_journal_test_support.rs"]
+mod time_journal_test_support;
+
+
 #[path = "output_pipeline.rs"]
 mod pipeline;
 
@@ -665,7 +674,11 @@ impl ExecutionOutputProducer<'_, '_, '_> {
             }
             for (row, original) in self.rows.iter().zip(&self.source_entries) {
                 let call = match row {
-                    ExecutionOutputV1::Network(output) => {
+                    ExecutionOutputV1::Network(output)
+                    | ExecutionOutputV1::NetworkWithLifecycle(NetworkExecutionOutputV2 {
+                        execution: output,
+                        ..
+                    }) => {
                         let index = usize::try_from(output.input_index)
                             .map_err(|_| "source index exceeds host width")?;
                         let input = self
@@ -685,10 +698,18 @@ impl ExecutionOutputProducer<'_, '_, '_> {
                         }
                         Hash::from(input.execution_call_hash())
                     }
-                    ExecutionOutputV1::Pipeline(output) => {
+                    ExecutionOutputV1::Pipeline(output)
+                    | ExecutionOutputV1::PipelineWithLifecycle(PipelineExecutionOutputV2 {
+                        execution: output,
+                        ..
+                    }) => {
                         output.invocation.execution_call_hash(self.source.hash())?
                     }
-                    ExecutionOutputV1::Time(output) => {
+                    ExecutionOutputV1::Time(output)
+                    | ExecutionOutputV1::TimeWithLifecycle(TimeExecutionOutputV2 {
+                        execution: output,
+                        ..
+                    }) => {
                         output.invocation.execution_call_hash(self.source.hash())?
                     }
                 };

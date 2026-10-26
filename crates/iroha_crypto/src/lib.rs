@@ -285,10 +285,19 @@ fn validate_public_key_structural_envelope(
     algorithm: Algorithm,
     payload: &[u8],
 ) -> Result<(), ParseError> {
+    public_key_structural_envelope_reason(algorithm, payload)
+        .map_err(|message| ParseError::Invalid(message.to_owned()))
+}
+
+// Original structural predicates shared with the allocation-free bounded encoder.
+fn public_key_structural_envelope_reason(
+    algorithm: Algorithm,
+    payload: &[u8],
+) -> Result<(), &'static str> {
     let exact_len = |expected: usize| {
         (payload.len() == expected && !is_all_zero_material(payload))
             .then_some(())
-            .ok_or_else(|| ParseError::Invalid("invalid public key structural envelope".to_owned()))
+            .ok_or("invalid public key structural envelope")
     };
     match algorithm {
         Algorithm::Ed25519 => exact_len(32),
@@ -296,9 +305,7 @@ fn validate_public_key_structural_envelope(
             exact_len(33)?;
             matches!(payload.first().copied(), Some(0x02 | 0x03))
                 .then_some(())
-                .ok_or_else(|| {
-                    ParseError::Invalid("invalid secp256k1 public key envelope".to_owned())
-                })
+                .ok_or("invalid secp256k1 public key envelope")
         }
         Algorithm::MlDsa => exact_len(ML_DSA_65_PUBLIC_KEY_BYTES),
         Algorithm::BlsNormal => exact_len(48),
@@ -315,26 +322,22 @@ fn validate_public_key_structural_envelope(
             let prefix: [u8; PREFIX_BYTES] = payload
                 .get(..PREFIX_BYTES)
                 .and_then(|bytes| bytes.try_into().ok())
-                .ok_or_else(|| ParseError::Invalid("invalid SM2 public key envelope".to_owned()))?;
+                .ok_or("invalid SM2 public key envelope")?;
             let distid_len = usize::from(u16::from_be_bytes(prefix));
             if distid_len > usize::from(u16::MAX) / 8 {
-                return Err(ParseError::Invalid(
-                    "invalid SM2 public key envelope".to_owned(),
-                ));
+                return Err("invalid SM2 public key envelope");
             }
             let sec1_start = PREFIX_BYTES
                 .checked_add(distid_len)
-                .ok_or_else(|| ParseError::Invalid("invalid SM2 public key envelope".to_owned()))?;
+                .ok_or("invalid SM2 public key envelope")?;
             let expected = sec1_start
                 .checked_add(SEC1_BYTES)
-                .ok_or_else(|| ParseError::Invalid("invalid SM2 public key envelope".to_owned()))?;
+                .ok_or("invalid SM2 public key envelope")?;
             if payload.len() != expected
                 || core::str::from_utf8(&payload[PREFIX_BYTES..sec1_start]).is_err()
                 || payload.get(sec1_start) != Some(&0x04)
             {
-                return Err(ParseError::Invalid(
-                    "invalid SM2 public key envelope".to_owned(),
-                ));
+                return Err("invalid SM2 public key envelope");
             }
             Ok(())
         }
@@ -1923,6 +1926,28 @@ impl PublicKeyCompact {
             .map_err(PublicKeyEnvelopeError::into_parse_error)
     }
 
+    /// Charge original compact bytes before structural inspection; no backend parse.
+    fn bounded_encode_structure(&self) -> Result<bool, norito::core::Error> {
+        let bytes: &[u8] = self.algorithm_and_payload.as_ref();
+        if !norito::core::charge_encode_prewrite(bytes.len())? {
+            return Ok(false);
+        }
+        // Reuse the original fixed-error envelope readers in their original
+        // algorithm-before-payload order, without constructing ParseError.
+        let algorithm =
+            public_key_input::algorithm(bytes).map_err(|_| norito::core::refuse_encode_source())?;
+        let payload =
+            public_key_input::payload(bytes).map_err(|_| norito::core::refuse_encode_source())?;
+        if algorithm == Algorithm::Secp256k1 {
+            // Its structural predicate revisits the SEC1 prefix after the
+            // all-zero scan; that extra byte visit needs its own precharge.
+            norito::core::charge_encode_prewrite(1)?;
+        }
+        public_key_structural_envelope_reason(algorithm, payload)
+            .map_err(|_| norito::core::refuse_encode_source())?;
+        Ok(true)
+    }
+
     fn structural_components(&self) -> Result<(Algorithm, &[u8]), ParseError> {
         let algorithm = self.try_algorithm()?;
         let payload = self.try_payload()?;
@@ -1938,8 +1963,10 @@ impl From<PublicKeyFull> for PublicKeyCompact {
 
 impl norito::core::SerializePayload for PublicKeyCompact {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        self.structural_components()
-            .map_err(|_| norito::core::Error::Message("invalid public key".to_owned()))?;
+        if !self.bounded_encode_structure()? {
+            self.structural_components()
+                .map_err(|_| norito::core::Error::Message("invalid public key".to_owned()))?;
+        }
         <ConstVec<u8> as norito::core::SerializePayload>::serialize(
             &self.algorithm_and_payload,
             writer,
@@ -1949,13 +1976,25 @@ impl norito::core::SerializePayload for PublicKeyCompact {
         // `algorithm_and_payload` is private and every public constructor and
         // Norito decoder establishes its validity. Encoding and sizing are
         // therefore structural and never reparse cryptographic key material.
-        self.structural_components().ok()?;
+        if self.bounded_encode_structure().ok()? {
+            // ConstVec sizing visits each byte again, independently of the
+            // structural scan; pay before entering that loop as well.
+            norito::core::charge_encode_prewrite(self.algorithm_and_payload.len()).ok()?;
+        } else {
+            self.structural_components().ok()?;
+        }
         <ConstVec<u8> as norito::core::SerializePayload>::encoded_len_hint(
             &self.algorithm_and_payload,
         )
     }
     fn encoded_len_exact(&self) -> Option<usize> {
-        self.structural_components().ok()?;
+        if self.bounded_encode_structure().ok()? {
+            // ConstVec sizing visits each byte again, independently of the
+            // structural scan; pay before entering that loop as well.
+            norito::core::charge_encode_prewrite(self.algorithm_and_payload.len()).ok()?;
+        } else {
+            self.structural_components().ok()?;
+        }
         <ConstVec<u8> as norito::core::SerializePayload>::encoded_len_exact(
             &self.algorithm_and_payload,
         )
@@ -3242,3 +3281,6 @@ pub mod error {
     impl std::error::Error for Error {}
 }
 include!("lib_tests.rs");
+
+#[cfg(test)]
+mod bounded_key_encode_tests;

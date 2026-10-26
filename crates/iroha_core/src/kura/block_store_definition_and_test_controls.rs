@@ -266,9 +266,9 @@ pub struct BlockStore {
     data_mmap: Option<MemoryMirror>,
     data_mmap_len: u64,
     /// Canonical inline-body bytes read through either block-store read path.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     body_bytes_read: AtomicU64,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     body_read_calls: AtomicUsize,
     /// Durable prefix validated read-only before emergency Fast recovery.
     fast_prevalidated_count: Option<u64>,
