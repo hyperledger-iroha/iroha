@@ -320,6 +320,11 @@ export interface PetalResolvedScanLimits {
 export const PETAL_DEFAULT_SCAN_LIMITS: PetalResolvedScanLimits;
 /** How long (in milliseconds) a scan session tracks a code from its last decoded pose (500). */
 export const PETAL_TRACK_WINDOW_MS: number;
+/**
+ * The time a scan session's capture may take in milliseconds, turn lanes included, for a capture
+ * whose bands read a lane to try the turn lanes too: a 30 fps camera's frame time (1000 / 30).
+ */
+export const PETAL_CAPTURE_BUDGET_MS: number;
 
 // ------------------------------------------------------------------ primitives
 
@@ -1332,7 +1337,23 @@ export interface PetalScanStats {
   readonly kanaTries: number;
   /** Kana lanes read (up to four per shown frame). */
   readonly kanaLanes: number;
+  /** Captures whose bands read a lane that also tried the turn lanes, having time to spare. */
+  readonly spareTurns: number;
 }
+
+/**
+ * A part of a capture's work, as a scan session times it to tell whether a capture has time to
+ * spare for the turn lanes: finding the code by a full search (`search`) or following it from the
+ * previous capture's pose (`track`), each with taking in the lanes read, merging the held captures
+ * of a shown frame (`merge`), reading the kana lanes of `count` bands (`bands`) and reading the
+ * turn lanes (`turns`).
+ */
+export type PetalWork =
+  | { readonly kind: "search" }
+  | { readonly kind: "track" }
+  | { readonly kind: "merge" }
+  | { readonly kind: "bands"; readonly count: number }
+  | { readonly kind: "turns" };
 
 /** The result of offering one camera frame. */
 export interface PetalScanOutcome {
@@ -1356,7 +1377,12 @@ export interface PetalScanOutcome {
 
 /** Decodes camera frames and reassembles the stream they carry. */
 export class PetalScanSession {
-  constructor(limits?: PetalScanLimits);
+  /**
+   * `workCost` says what a part of a capture costs in milliseconds, given the milliseconds it took;
+   * by default the measured time (`performance.now()`). A model's costs in its place make the
+   * session's choices repeatable, as tests do.
+   */
+  constructor(limits?: PetalScanLimits, workCost?: (work: PetalWork, measuredMs: number) => number);
   readonly limits: PetalResolvedScanLimits;
   stats(): PetalScanStats;
   progress(): PetalProgress;
@@ -1365,11 +1391,12 @@ export class PetalScanSession {
   /**
    * Offers one camera luma plane captured at monotonic time `nowMs`. While the last decoded pose
    * is at most {@link PETAL_TRACK_WINDOW_MS} old, the code is first tracked from it. The katakana
-   * bands are read first, each once per shown frame; only when they read no kana lane are the turn
-   * lanes on top of the decoded field lanes tried, each once per shown frame (a capture whose bands
-   * read leaves its frame's turn lanes to the next capture). After tries that read nothing the
-   * session passes over up to eight captures before it tries again, with separate counts for the
-   * bands and the turn lanes.
+   * bands are read first, each once per shown frame; the turn lanes on top of the decoded field
+   * lanes are tried, each once per shown frame, when the bands read no kana lane or when the
+   * capture's work and the last turn try fit in {@link PETAL_CAPTURE_BUDGET_MS} (otherwise a
+   * capture whose bands read leaves its frame's turn lanes to the next capture). After tries that
+   * read nothing the session passes over up to eight captures before it tries again, with separate
+   * counts for the bands and the turn lanes.
    */
   push(image: PetalLumaLike, nowMs: number): PetalScanOutcome;
 }

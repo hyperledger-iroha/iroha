@@ -403,10 +403,15 @@ their field lanes); `stats().turnTries` and `turnLanes` count tries and lanes
 read. The katakana bands are read the same way, each band once per shown frame
 (the last 12 tried are remembered), with their own back-off of up to eight
 captures after band tries that read nothing (bands out of view or too blurred),
-and they go first: a capture whose bands read a kana lane tries no turn lane,
-and that shown frame's turn lanes wait for its next capture. A turn try costs a
-slow phone core about five tracked decodes and a band try about one, so both
-on one capture overran a frame shown at 12 fps. `outcome.kana` lists the kana
+and they go first: a capture whose bands read a kana lane tries the turn lanes
+too only when its work and the session's last turn try fit a 30 fps camera's
+frame time (`PETAL_CAPTURE_BUDGET_MS`); otherwise that shown frame's turn lanes
+wait for its next capture. A turn try costs a slow phone core about five
+tracked decodes and a band try about one, so both on one capture overran a
+frame shown at 12 fps. The session times its work with `performance.now()`;
+the constructor's second argument, `workCost(work, measuredMs)`, puts a model's
+costs in their place, and `stats().spareTurns` counts the captures that had
+the time. `outcome.kana` lists the kana
 lanes read (`"P0K0P1K1"` for all four); `stats().kanaTries` and `kanaLanes`
 count tries and lanes read. Reset and receive timeouts clear held evidence and
 the turn lanes and bands tried. Lower-level pieces are exported as well:

@@ -104,6 +104,7 @@ import {
 import { DEFAULT_DECODE_OPTIONS } from "./petal/decode.js";
 import { DEFAULT_PALETTE } from "./petal/render.js";
 import {
+  CAPTURE_BUDGET_MS,
   DEFAULT_SCAN_LIMITS,
   KANA_BACKOFF,
   KANA_MEMORY,
@@ -394,3 +395,8 @@ export const PETAL_DEFAULT_DECODE_OPTIONS = DEFAULT_DECODE_OPTIONS;
 export const PETAL_DEFAULT_SCAN_LIMITS = DEFAULT_SCAN_LIMITS;
 /** How long (in milliseconds) a scan session tracks a code from its last decoded pose. */
 export const PETAL_TRACK_WINDOW_MS = TRACK_WINDOW_MS;
+/**
+ * The time a scan session's capture may take in milliseconds, turn lanes included, for a capture
+ * whose bands read a lane to try the turn lanes too: a 30 fps camera's frame time.
+ */
+export const PETAL_CAPTURE_BUDGET_MS = CAPTURE_BUDGET_MS;

@@ -4,6 +4,13 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
 
 ## [Unreleased]
 
+- `PetalScanSession` reads a capture's turn lanes after its bands when it has time to spare: when the
+  capture's work and the session's last turn try fit a 30 fps camera's frame time (`PETAL_CAPTURE_BUDGET_MS`),
+  timed with `performance.now()`. A slow phone core never has the time, so it still leaves them to the shown
+  frame's next capture; a fast decoder whose camera gives it few frames a second gets its turn lanes back. The
+  constructor's second argument, `workCost(work, measuredMs)` (`PetalWork`), puts a model's costs in place of
+  the measured times, and `stats().spareTurns` counts the captures that had the time.
+
 - `@iroha/iroha-js/petal` implements Petal Stream format 5: every frame is a portrait card of 1024 x 1668
   units, the format 3 square with a band of 306 katakana tiles above and below it (`PETAL_LAYOUT.cardHeight`,
   `squareTop`, `kanaTiles`, `kanaDataTiles`, `kanaPilotTiles`, `kanaTileAt`, `kanaInside`, `kanaInked`). Beacons

@@ -2457,32 +2457,71 @@ test("tries that read nothing back off", () => {
   assert.equal(session.push(camera(cardLuma(encoder.cells(32), 512, 2), 32), 32 * 83).turned, "0123");
 });
 
+/** A session whose work costs what `costs` says, however long it took. */
+const costed = (costs) => new PetalScanSession(undefined, (work) => costs(work));
+
+/** Card `frame` of `encoder` with its bands, filmed by a phone held upright. */
+const upright = (encoder, frame, seed) =>
+  cameraCapture(cardLuma(encoder.cells(frame), 768, 2), { width: 1280, height: 720, rotationDeg: 92, seed });
+
 test("an upright camera reads both bands once per shown frame", () => {
   const encoder = new PetalStreamEncoder(payload(3000, 3), 2);
-  // a phone held upright delivers landscape frames with the card turned a quarter
-  const camera = (frame, seed) =>
-    cameraCapture(cardLuma(encoder.cells(frame), 768, 2), { width: 1280, height: 720, rotationDeg: 92, seed });
-  const session = new PetalScanSession();
-  const first = session.push(camera(1, 1), 0);
-  assert.deepEqual([first.lanes, first.kana], ["D0123", "P0K0P1K1"]);
-  // the bands read, so this capture tries no turn lane ...
-  assert.equal(first.turned, "");
-  // ... and a second capture of the same shown frame tries no band again but its turn lanes
-  const again = session.push(camera(1, 2), 33);
-  assert.deepEqual([again.kana, again.turned], ["", "0123"]);
-  const next = session.push(camera(2, 3), 83);
-  assert.deepEqual([next.kana, next.turned], ["P0K0P1K1", ""]);
+  // a fast decoder: every capture has time to spare for the turn lanes too
+  const session = costed(() => 0);
+  const first = session.push(upright(encoder, 1, 1), 0);
+  assert.deepEqual([first.lanes, first.kana, first.turned], ["D0123", "P0K0P1K1", "0123"]);
+  // a second capture of the same shown frame tries no band and no turn lane again
+  const again = session.push(upright(encoder, 1, 2), 33);
+  assert.deepEqual([again.kana, again.turned], ["", ""]);
+  const next = session.push(upright(encoder, 2, 3), 83);
+  assert.deepEqual([next.kana, next.turned], ["P0K0P1K1", "0123"]);
   const stats = session.stats();
   assert.deepEqual([stats.kanaTries, stats.kanaLanes], [4, 8]);
-  assert.deepEqual([stats.turnTries, stats.turnLanes], [4, 4]);
+  assert.deepEqual([stats.turnTries, stats.turnLanes, stats.spareTurns], [8, 8, 2]);
   assert.deepEqual(session._kanaTried.at(-1), { tag: encoder.meta.tag, frame: 2, band: 1 });
   session.reset();
   assert.equal(session._kanaTried.length, 0);
   // the session remembers the last KANA_MEMORY bands it tried
   session._kanaTried = Array.from({ length: KANA_MEMORY }, (_, frame) => ({ tag: 0, frame, band: 0 }));
-  assert.equal(session.push(camera(1, 4), 200).kana, "P0K0P1K1");
+  assert.equal(session.push(upright(encoder, 1, 4), 200).kana, "P0K0P1K1");
   assert.equal(session._kanaTried.length, KANA_MEMORY);
   assert.deepEqual(session._kanaTried[0], { tag: 0, frame: 2, band: 0 });
+});
+
+test("a slow decoder leaves the turn lanes to the next capture", () => {
+  const encoder = new PetalStreamEncoder(payload(3000, 3), 2);
+  // a Pixel 6 held to its Cortex-A55 cores (the reference simulator's model): the bands take the
+  // first capture's spare time
+  const a55 = { search: 105, track: 14.5, merge: 10, bands: 15, turns: 75 };
+  const session = costed((work) => a55[work.kind] * (work.count ?? 1));
+  const first = session.push(upright(encoder, 1, 1), 0);
+  assert.deepEqual([first.kana, first.turned], ["P0K0P1K1", ""]);
+  const again = session.push(upright(encoder, 1, 2), 33);
+  assert.deepEqual([again.kana, again.turned], ["", "0123"]);
+  const next = session.push(upright(encoder, 2, 3), 83);
+  assert.deepEqual([next.kana, next.turned], ["P0K0P1K1", ""]);
+  assert.equal(session.stats().spareTurns, 0);
+});
+
+test("the last turn try tells whether a capture has time to spare", () => {
+  const encoder = new PetalStreamEncoder(payload(3000, 3), 2);
+  const costs = { search: 4, track: 4, merge: 0, bands: 3, turns: 30 };
+  const seen = [];
+  const session = costed((work) => {
+    seen.push(work.kind === "bands" ? `bands${work.count}` : work.kind);
+    return costs[work.kind] * (work.count ?? 1);
+  });
+  // 10 ms of work, and twice that for the turn lanes before any try: they fit
+  const first = session.push(upright(encoder, 1, 1), 0);
+  assert.deepEqual([first.kana, first.turned], ["P0K0P1K1", "0123"]);
+  assert.deepEqual(seen, ["search", "bands2", "turns"]);
+  // the try took 30 ms, which with the next capture's 10 ms does not fit
+  const next = session.push(upright(encoder, 2, 2), 83);
+  assert.deepEqual([next.kana, next.turned], ["P0K0P1K1", ""]);
+  const again = session.push(upright(encoder, 2, 3), 116);
+  assert.deepEqual([again.kana, again.turned], ["", "0123"]);
+  assert.equal(session.stats().spareTurns, 1);
+  assert.throws(() => new PetalScanSession(undefined, 5), TypeError);
 });
 
 test("band tries that read nothing back off and leave the capture to the turn lanes", () => {
@@ -3536,14 +3575,14 @@ test("the declarations type-check a strict browser consumer", () => {
         "  PETAL_LANES, PETAL_LAYOUT, PetalCameraScanner, PetalDecodedFrame, PetalError, PetalLuma, PetalPose,",
         "  PetalScanSession, PetalStreamEncoder, PetalStreamPlayer, decodePetalFrame, decodePetalFrameAt, drawPetalFrame,",
         "  encodeLane, fieldEvidence, mergeFields, petalDrawList, renderPetalFrame,",
-        "  PETAL_TRACK_WINDOW_MS, locateCandidates, trackPetalFrame,",
+        "  PETAL_CAPTURE_BUDGET_MS, PETAL_TRACK_WINDOW_MS, locateCandidates, trackPetalFrame,",
         "  PETAL_TURNS, PetalFrameCells, carrierOrder, carriers, decodeTurnLaneCounted, encodeTurnLane, observedTurns,",
         "  readTurns, turnAngle, turnData, turnFirstId, turnPacket, turnTemplate, turnWhitening,",
         "  PETAL_GLYPHS, PETAL_KANA, decodeKanaLaneCounted, encodeKanaLane, kanaFirstId, kanaPacket, kanaTemplateProbe,",
         "  kanaTileAt, kanaTiles, observeBand, petalCardHeight, readKana,",
         "  type PetalCompleted, type PetalDecodeErrorCode, type PetalFieldEvidence, type PetalLane, type PetalScanOutcome,",
         "  type PetalScanStats, type PetalObservedTurns, type PetalLaneResult, type PetalLaneHeader,",
-        "  type PetalBandReading, type PetalKanaLane, type PetalKanaResult,",
+        "  type PetalBandReading, type PetalKanaLane, type PetalKanaResult, type PetalWork,",
         `} from ${JSON.stringify(declaration)};`,
         "declare const canvas: HTMLCanvasElement;",
         "declare const video: HTMLVideoElement;",
@@ -3620,6 +3659,9 @@ test("the declarations type-check a strict browser consumer", () => {
         "const more: number = petalCardHeight(512) + kanaFirstId(1, \"K1\") + kanaTemplateProbe(0, 1, true, 3, 4) + PETAL_LAYOUT.cardHeight;",
         "void kanaDecoded.corrected; void tileAt?.[0]; void sizes; void more; void list.kanaTiles[0]?.ink; void list.tile.strokeWidth;",
         "void outcome.kana; void session.stats().kanaLanes; void kanaTiles()[0]?.pilot;",
+        "const modelled = new PetalScanSession(undefined, (work: PetalWork, measuredMs: number) =>",
+        "  work.kind === \"bands\" ? 15 * work.count : measuredMs);",
+        "void modelled.stats().spareTurns; void PETAL_CAPTURE_BUDGET_MS;",
         "// @ts-expect-error kana lanes are named P0, K0, P1 or K1",
         "encodeKanaLane(\"P2\", new Uint8Array(20));",
         "const fieldLen: number = PETAL_LANES.F0.wordLen + PETAL_LAYOUT.fieldCells;",

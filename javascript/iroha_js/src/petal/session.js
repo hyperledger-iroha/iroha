@@ -27,15 +27,22 @@
 // after tries that read no kana lane (a camera that does not see the bands, or
 // too blurred for their glyphs and polarity).
 //
-// The bands go first, and a capture whose bands read a kana lane tries no turn
-// lane: the turn lanes of that shown frame wait for its next capture. On a slow
-// phone core a turn try costs five tracked decodes and a band try one, so
-// reading both on one capture overran the time a frame is shown at 12 fps and
-// the session missed the next shown frames. A decoder that sees each shown
-// frame two or three times still reads both; one that sees it once reads the
-// cheaper bands and every frame's field lanes. A band try that reads nothing
-// (bands out of view, too blurred, or a torn capture) leaves the turn lanes to
-// the same capture.
+// The bands go first. A capture whose bands read a kana lane tries the turn
+// lanes too only when it has time to spare: when the work it has done (finding
+// or following the code, a merge, the bands) and what the session's last turn
+// try took fit together in `CAPTURE_BUDGET_MS`, a 30 fps camera's frame time
+// (before the first turn try, twice the work done stands in for it). Otherwise
+// the turn lanes of that shown frame wait for its next capture. On a slow phone
+// core a turn try costs five tracked decodes and a band try one, so reading
+// both on one capture overran the time a frame is shown at 12 fps and the
+// session missed the next shown frames; a fast decoder reads both at once,
+// which matters when its camera gives it few frames a second. A band try that
+// reads nothing (bands out of view, too blurred, or a torn capture) leaves the
+// turn lanes to the same capture.
+//
+// The session times its work on the monotonic clock (`performance.now()`); a
+// `workCost` function given to the constructor puts a model's costs in place
+// of the measured times, as tests do.
 
 import {
   DEFAULT_DECODE_OPTIONS,
@@ -71,6 +78,23 @@ export const TURN_BACKOFF = 8;
 export const KANA_MEMORY = MERGE_WINDOW * KANA_BANDS;
 /** Most captures passed over after band tries that read no kana lane. */
 export const KANA_BACKOFF = 8;
+/**
+ * The time a capture's work may take in milliseconds, turn lanes included, for a capture whose
+ * bands read a lane to try the turn lanes too: a 30 fps camera's frame time, so a decoder that
+ * keeps to it misses no camera frame.
+ */
+export const CAPTURE_BUDGET_MS = 1000 / 30;
+
+// The parts of a capture's work, as the session times them (see the module docs).
+const SEARCH = Object.freeze({ kind: "search" });
+const TRACK = Object.freeze({ kind: "track" });
+const MERGE = Object.freeze({ kind: "merge" });
+const TURNS = Object.freeze({ kind: "turns" });
+
+/** The measured time, as a session on a camera judges its spare time. */
+function measured(_work, measuredMs) {
+  return measuredMs;
+}
 
 /** The header every lane starts with, or `null` for data too short to hold one. */
 function laneHeader(data) {
@@ -145,14 +169,26 @@ export class PetalScanSession {
    * @param {{idleTimeoutMs?: number, absoluteTimeoutMs?: number,
    *   assembler?: {maxPayloadLen?: number, maxPendingAtoms?: number},
    *   decode?: {tryMirrored?: boolean, maxPixels?: number}}} [limits]
+   * @param {(work: {kind: string, count?: number}, measuredMs: number) => number} [workCost]
+   *   What a part of a capture costs in milliseconds, given the milliseconds it took (by default
+   *   the measured time). `work.kind` is `"search"` (finding the code by a full search and taking
+   *   in the lanes read), `"track"` (following the code from the previous capture's pose and taking
+   *   in the lanes read), `"merge"` (merging the held captures of a shown frame), `"bands"` (reading
+   *   the kana lanes of `work.count` bands) or `"turns"` (reading the turn lanes).
    */
-  constructor(limits) {
+  constructor(limits, workCost) {
+    if (workCost !== undefined && typeof workCost !== "function") {
+      throw new TypeError("workCost must be a function");
+    }
     this._limits = resolveScanLimits(limits);
+    this._workCost = workCost ?? measured;
+    /** What the last turn try cost, in milliseconds, or `null` before the first. */
+    this._turnCostMs = null;
     this._assembler = new PetalStreamAssembler(this._limits.assembler);
     this._stats = {
       frames: 0, located: 0, readable: 0, laneD: 0, fieldLanes: 0,
       tracked: 0, inferred: 0, merges: 0, mergedLanes: 0, turnTries: 0, turnLanes: 0,
-      kanaTries: 0, kanaLanes: 0,
+      kanaTries: 0, kanaLanes: 0, spareTurns: 0,
     };
     this._startedMs = null;
     this._progressMs = 0;
@@ -190,8 +226,10 @@ export class PetalScanSession {
    * (`inferred`), merges of two or more captures of one shown frame and the
    * field lanes they recovered (`merges`, `mergedLanes`), turn lanes tried
    * (`turnTries`, each at most once per shown frame) and read (`turnLanes`),
-   * and bands tried (`kanaTries`, each at most once per shown frame) and kana
-   * lanes read (`kanaLanes`, up to four per shown frame).
+   * bands tried (`kanaTries`, each at most once per shown frame) and kana
+   * lanes read (`kanaLanes`, up to four per shown frame), and captures whose
+   * bands read a lane that also tried the turn lanes, having time to spare
+   * (`spareTurns`).
    */
   stats() {
     return Object.freeze({ ...this._stats });
@@ -231,8 +269,8 @@ export class PetalScanSession {
    * When the last frame that decoded is at most `TRACK_WINDOW_MS` old, the
    * code is first followed from its pose (no finder search); a full decode
    * runs when that fails. The bands not yet tried for the capture's shown
-   * frame are read first; the turn lanes are tried only when they read no kana
-   * lane.
+   * frame are read first; the turn lanes are tried when they read no kana lane,
+   * or when the capture has time to spare (see the module docs).
    *
    * @returns {{error: string | null, lanes: string, merged: string, turned: string, kana: string,
    *   progress: object, completed: {meta: object, payload: Uint8Array} | null}}
@@ -259,6 +297,7 @@ export class PetalScanSession {
       this.reset();
     }
     this._stats.frames += 1;
+    const pushStarted = performance.now();
     const pose = this._lastPose;
     const tracked =
       pose !== null && Math.max(nowMs - pose.atMs, 0) <= TRACK_WINDOW_MS
@@ -281,11 +320,30 @@ export class PetalScanSession {
       }
       this._lastPose = { frame: result.frame, atMs: nowMs };
       lanes = this._absorb(result.frame);
+      let spent = this._cost(tracked !== null ? TRACK : SEARCH, pushStarted);
+      const merges = this._stats.merges;
+      let partStarted = performance.now();
       merged = this._merge(image, result.frame);
-      // a capture whose bands read a lane tries no turn lane (see the module docs)
+      if (this._stats.merges > merges) {
+        spent += this._cost(MERGE, partStarted);
+      }
+      const kanaTries = this._stats.kanaTries;
+      partStarted = performance.now();
       kana = this._kana(image, result.frame);
+      const bands = this._stats.kanaTries - kanaTries;
+      if (bands > 0) {
+        spent += this._cost(Object.freeze({ kind: "bands", count: bands }), partStarted);
+      }
+      // a capture whose bands read a lane tries the turn lanes only with time to spare (see the
+      // module docs)
       if (kana === "") {
         turned = this._turn(image, result.frame);
+      } else if (spent + (this._turnCostMs ?? 2 * spent) <= CAPTURE_BUDGET_MS) {
+        const turnTries = this._stats.turnTries;
+        turned = this._turn(image, result.frame);
+        if (this._stats.turnTries > turnTries) {
+          this._stats.spareTurns += 1;
+        }
       }
     }
     // A code that was found but could not be read (`no_orientation`) still
@@ -302,6 +360,11 @@ export class PetalScanSession {
     }
     this._lastRank = progress.rank;
     return Object.freeze({ error, lanes, merged, turned, kana, progress, completed: this._assembler.takeCompleted() });
+  }
+
+  /** What `work` cost, given that it started at `startedMs` on the monotonic clock. */
+  _cost(work, startedMs) {
+    return this._workCost(work, performance.now() - startedMs);
   }
 
   _absorb(frame) {
@@ -357,8 +420,11 @@ export class PetalScanSession {
       this._tried.push({ tag: header.tag, frame: header.frame, sector });
       this._stats.turnTries += 1;
     }
+    const readStarted = performance.now();
+    const results = readTurns(image, frame, skip);
+    this._turnCostMs = this._cost(TURNS, readStarted);
     let turned = "";
-    readTurns(image, frame, skip).forEach((result, sector) => {
+    results.forEach((result, sector) => {
       const header = headers[sector];
       const packet = result === null || header === null ? null : turnPacket(header, sector, result.data);
       if (packet === null) {
