@@ -29,7 +29,7 @@ jobs:
         run: python3 ci/check_docs_i18n_metadata.py --paths docs/formal --json-out target/docs-i18n/formal-metadata.json
       - name: Upload formal docs metadata report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: formal-docs-i18n-metadata-nightly
           path: target/docs-i18n/formal-metadata.json
