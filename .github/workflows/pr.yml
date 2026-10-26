@@ -199,7 +199,7 @@ jobs:
           name: report-coverage
           path: lcov.info
       - name: Upload coverage to Coveralls
-        uses: coverallsapp/github-action@v2.3.6
+        uses: coverallsapp/github-action@v2.3.8
         with:
           file: lcov.info
           format: lcov
