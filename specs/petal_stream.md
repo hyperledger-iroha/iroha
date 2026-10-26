@@ -627,24 +627,24 @@ three frames in four, 16 per polarity lane and 112 per glyph lane), and "Bands" 
 | Condition | Any lane | `D` | Field | Turn | Kana | B/frame | Bands |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | upright, modern 720p | 100 % | 100 % | 100 % | 100 % | 100 % | 844 | 256 |
-| upright, legacy 720p (σ 1.3 px, noise 6, tilt 15°, barrel distortion) | 100 % | 100 % | 100 % | 85 % | 97 % | 792 | 242 |
+| upright, legacy 720p (σ 1.3 px, noise 6, tilt 15°, barrel distortion) | 100 % | 100 % | 100 % | 85 % | 98 % | 797 | 248 |
 | upright, soft 720p (σ 1.8 px, noise 6) | 100 % | 100 % | 100 % | 0 % | 100 % | 588 | 256 |
-| upright, harshest preset (480p, σ 1.7, hand shake, tilt 22°, bloom, ambient 10 %, barrel) | 100 % | 100 % | 73 % | 0 % | 34 % | 268 | 22 |
+| upright, harshest preset (480p, σ 1.7, hand shake, tilt 22°, bloom, ambient 10 %, barrel) | 100 % | 100 % | 73 % | 0 % | 31 % | 266 | 20 |
 | modern 720p | 100 % | 100 % | 100 % | 100 % | 63 % | 736 | 148 |
 | legacy 720p | 100 % | 100 % | 100 % | 54 % | 64 % | 620 | 149 |
-| 480p, fill 0.5–0.9, σ 1.2 px (2.9–4.2 px per petal) | 100 % | 100 % | 100 % | 0–1 % | 44–53 % | 363–424 | 31–92 |
-| 720p blur σ 0.7 / 1.0 / 1.4 / 1.8 / 2.2 px | 100 % | 100 % | 100 % | 100 / 99 / 42 / 0 / 0 % | 62 / 62 / 62 / 57 / 41 % | 736 / 734 / 589 / 455 / 390 | 148 / 148 / 148 / 123 / 58 |
-| 720p defocus σ 2.6 / 3.2 / 4.0 px | 100 % | 100 % | 96 / 38 / 0 % | 0 % | 33 / 21 / 5 % | 346 / 146 / 15 | 28 / 14 / 3 |
-| 480p defocus σ 2.0 / 2.6 / 3.2 px | 100 % | 100 % | 44 / 0 / 0 % | 0 % | 21 / 4 / 0 % | 166 / 14 / 12 | 14 / 2 / 0 |
+| 480p, fill 0.5–0.9, σ 1.2 px (2.9–4.2 px per petal) | 100 % | 100 % | 100 % | 0–1 % | 42–53 % | 362–424 | 30–92 |
+| 720p blur σ 0.7 / 1.0 / 1.4 / 1.8 / 2.2 px | 100 % | 100 % | 100 % | 100 / 99 / 42 / 0 / 0 % | 62 / 62 / 62 / 57 / 41 % | 736 / 734 / 589 / 455 / 389 | 148 / 148 / 148 / 123 / 57 |
+| 720p defocus σ 2.6 / 3.2 / 4.0 px | 100 % | 100 % | 96 / 38 / 0 % | 0 % | 31 / 21 / 4 % | 345 / 145 / 15 | 27 / 13 / 3 |
+| 480p defocus σ 2.0 / 2.6 / 3.2 px | 100 % | 100 % | 44 / 0 / 0 % | 0 % | 18 / 3 / 0 % | 163 / 14 / 12 | 11 / 2 / 0 |
 | 720p noise 3 / 6 / 9 / 13 levels, σ 1.2 px | 100 % | 100 % | 100 % | 87 / 81 / 68 / 51 % | 62 % | 702 / 686 / 653 / 611 | 148 |
 | 720p tilt ≤ 0° / 15° / 25° / 35° / 45°, σ 1.2 px | 100 / 100 / 100 / 100 / 82 % | same | same | 92 / 79 / 58 / 38 / 23 % | 62 / 64 / 66 / 65 / 50 % | 717 / 684 / 636 / 580 / 444 | 148 / 149 / 155 / 152 / 111 |
-| harshest preset | 100 % | 100 % | 40 % | 0 % | 17 % | 151 | 11 |
+| harshest preset | 100 % | 100 % | 40 % | 0 % | 16 % | 150 | 10 |
 
-Upright, the bands add 256 bytes to every frame of the sharp and the soft 720p camera and 242 to the older one's: 44 % more
+Upright, the bands add 256 bytes to every frame of the sharp and the soft 720p camera and 248 to the older one's: 44 % more
 than the 588 bytes the sharp camera reads from the square, and 77 % more than the soft camera's 332, since it cannot read the
 turns. A tile spans two petal pitches, so the kana lanes read where the turns do not: through 1.8 px of blur, 13 levels of
 noise and 35° of tilt, as far as the bands are in view. Like the field, they give way to defocus, and the harshest 480p
-preset reads only polarity lanes, about two in three of them (22 bytes a frame). At other angles the bands add about 150
+preset reads only polarity lanes, about three in five of them (20 bytes a frame). At other angles the bands add about 150
 bytes a frame on a 720p camera and 30–90 on a 480p one.
 
 Light, motion and framing that are not nominal (`stress` example, 24 upright poses per cell; each cell lists a modern 720p /
@@ -653,68 +653,73 @@ lit level; hand shake is a linear blur of the given length):
 
 | Condition | Any lane | `D` | Field | Turn | Kana | B/frame | Bands |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| veiling light 0.2 / 0.35 / 0.5 | 100 / 100 / 100 % | 100 / 100 / 100 % | 100 / 100 / 72–12 % | 100 / 85–23 / 0 % | 100 / 95–89 / 29–4 % | 844 / 783–595 / 261–55 | 256 / 233–205 / 19–3 |
-| auto-exposure gain half the right one | 100 / 100 / 100 % | 100 / 100 / 100 % | 100 / 100 / 61 % | 100 / 82 / 0 % | 100 / 96 / 26 % | 844 / 780 / 225 | 256 / 237 / 17 |
-| auto-exposure gain 1.5× / 2× too high | 100 / 100 / 100 % | 100 / 100 / 100 % | 100 / 100 / 79–80 % | 100 / 88–30 / 0 % | 100 / 96–86 / 33–24 % | 844 / 793–605 / 287–284 | 256 / 237–195 / 21–15 |
-| auto-exposure gain 3× too high | 100 / 100 / 100 % | 100 / 100 / 100 % | 100 / 100 / 0 % | 100 / 0 / 0 % | 100 / 29 / 0 % | 844 / 351 / 12 | 256 / 19 / 0 |
-| illumination gradient half the lit level | 100 / 100 / 100 % | 100 / 100 / 100 % | 100 / 100 / 69 % | 100 / 83 / 0 % | 100 / 95 / 29 % | 844 / 778 / 251 | 256 / 233 / 19 |
-| illumination gradient equal to the lit level | 100 / 100 / 33 % | 100 / 100 / 29 % | 100 / 100 / 6 % | 100 / 27 / 0 % | 100 / 66 / 1 % | 844 / 527 / 24 | 256 / 126 / 1 |
-| glare 0.5 × lit, σ 120 px | 100 / 100 / 92 % | 100 / 100 / 71 % | 100 / 100 / 33 % | 100 / 83 / 0 % | 94 / 85 / 17 % | 836 / 772 / 126 | 248 / 227 / 11 |
+| veiling light 0.2 / 0.35 / 0.5 | 100 / 100 / 100 % | 100 / 100 / 100 % | 100 / 100 / 72–12 % | 100 / 85–23 / 0 % | 100 / 95–91 / 29–4 % | 844 / 783–605 / 261–55 | 256 / 233–214 / 19–3 |
+| auto-exposure gain half the right one | 100 / 100 / 100 % | 100 / 100 / 100 % | 100 / 100 / 61 % | 100 / 82 / 0 % | 100 / 96 / 22 % | 844 / 780 / 223 | 256 / 237 / 14 |
+| auto-exposure gain 1.5× / 2× too high | 100 / 100 / 100 % | 100 / 100 / 100 % | 100 / 100 / 79–80 % | 100 / 88–30 / 0 % | 100 / 96–88 / 33–22 % | 844 / 793–609 / 287–283 | 256 / 237–200 / 21–14 |
+| auto-exposure gain 3× too high | 100 / 100 / 100 % | 100 / 100 / 100 % | 100 / 100 / 0 % | 100 / 0 / 0 % | 100 / 34 / 0 % | 844 / 354 / 12 | 256 / 22 / 0 |
+| illumination gradient half the lit level | 100 / 100 / 100 % | 100 / 100 / 100 % | 100 / 100 / 69 % | 100 / 83 / 0 % | 100 / 95 / 28 % | 844 / 778 / 250 | 256 / 233 / 18 |
+| illumination gradient equal to the lit level | 100 / 100 / 33 % | 100 / 100 / 29 % | 100 / 100 / 6 % | 100 / 27 / 0 % | 100 / 67 / 0 % | 844 / 532 / 24 | 256 / 131 / 0 |
+| glare 0.5 × lit, σ 120 px | 100 / 100 / 92 % | 100 / 100 / 71 % | 100 / 100 / 33 % | 100 / 83 / 0 % | 94 / 85 / 11 % | 836 / 772 / 122 | 248 / 227 / 7 |
 | glare 1.0 × lit, σ 120 px | 100 / 100 / 29 % | 79 / 71 / 0 % | 100 / 82 / 7 % | 100 / 60 / 0 % | 85 / 79 / 6 % | 828 / 649 / 27 | 243 / 223 / 4 |
-| glare 0.8 × lit, σ 40 px | 100 / 100 / 100 % | 100 / 100 / 100 % | 100 / 100 / 48 % | 100 / 90 / 0 % | 98 / 96 / 31 % | 843 / 803 / 185 | 255 / 241 / 20 |
-| banding (display PWM) 30 % deep, 30 px period | 100 / 100 / 100 % | 100 / 100 / 100 % | 100 / 100 / 20 % | 100 / 85 / 0 % | 100 / 88 / 3 % | 844 / 751 / 77 | 256 / 200 / 2 |
-| banding 50 % deep, 30 px period | 100 / 100 / 29 % | 100 / 100 / 29 % | 100 / 100 / 0 % | 100 / 65 / 0 % | 99 / 29 / 0 % | 843 / 552 / 4 | 255 / 55 / 0 |
-| banding 50 % deep, 80 px period | 100 / 96 / 17 % | 100 / 83 / 4 % | 52 / 47 / 5 % | 28 / 4 / 0 % | 43 / 9 / 0 % | 382 / 213 / 17 | 131 / 42 / 0 |
-| hand shake 2 px | 100 / 100 / 100 % | 100 / 100 / 100 % | 100 / 100 / 61 % | 36 / 0 / 0 % | 100 / 78 / 29 % | 681 / 490 / 227 | 256 / 158 / 19 |
-| hand shake 4 px | 100 / 100 / 100 % | 100 / 100 / 100 % | 100 / 100 / 40 % | 23 / 0 / 0 % | 100 / 67 / 25 % | 647 / 439 / 155 | 256 / 107 / 16 |
-| hand shake 9 px | 100 / 100 / 100 % | 100 / 100 / 100 % | 95 / 92 / 0 % | 0 % | 49 / 50 / 1 % | 347 / 337 / 13 | 31 / 32 / 1 |
-| hand shake 14 px | 100 / 100 / 96 % | 100 / 100 / 96 % | 0 / 0 / 0 % | 0 % | 35 / 24 / 0 % | 35 / 27 / 12 | 23 / 15 / 0 |
-| a thumb over one corner blossom | 100 / 100 / 46 % | 100 / 100 / 46 % | 100 / 100 / 38 % | 100 / 93 / 0 % | 100 / 93 / 11 % | 844 / 793 / 133 | 256 / 223 / 7 |
-| a glare spot on one corner blossom | 100 / 100 / 96 % | 100 / 100 / 96 % | 100 / 100 / 48 % | 96 / 42 / 0 % | 100 / 95 / 29 % | 833 / 671 / 184 | 256 / 233 / 19 |
-| one corner outside the frame (the card turned about 45°) | 100 / 100 / 58 % | 100 / 100 / 58 % | 100 / 100 / 10 % | 100 / 65 / 0 % | 50 / 50 / 11 % | 716 / 625 / 48 | 128 / 128 / 7 |
+| glare 0.8 × lit, σ 40 px | 100 / 100 / 100 % | 100 / 100 / 100 % | 100 / 100 / 48 % | 100 / 90 / 0 % | 98 / 96 / 30 % | 843 / 803 / 185 | 255 / 241 / 19 |
+| banding (display PWM) 30 % deep, 30 px period | 100 / 100 / 100 % | 100 / 100 / 100 % | 100 / 100 / 20 % | 100 / 85 / 0 % | 100 / 86 / 3 % | 844 / 746 / 77 | 256 / 195 / 2 |
+| banding 50 % deep, 30 px period | 100 / 100 / 29 % | 100 / 100 / 29 % | 100 / 100 / 0 % | 100 / 65 / 0 % | 98 / 30 / 0 % | 839 / 553 / 4 | 251 / 55 / 0 |
+| banding 50 % deep, 80 px period | 100 / 96 / 17 % | 100 / 83 / 4 % | 52 / 47 / 5 % | 28 / 4 / 0 % | 41 / 9 / 0 % | 377 / 213 / 17 | 126 / 42 / 0 |
+| hand shake 2 px | 100 / 100 / 100 % | 100 / 100 / 100 % | 100 / 100 / 61 % | 36 / 0 / 0 % | 100 / 77 / 28 % | 681 / 485 / 227 | 256 / 153 / 18 |
+| hand shake 4 px | 100 / 100 / 100 % | 100 / 100 / 100 % | 100 / 100 / 40 % | 23 / 0 / 0 % | 98 / 67 / 20 % | 637 / 439 / 151 | 247 / 107 / 13 |
+| hand shake 9 px | 100 / 100 / 100 % | 100 / 100 / 100 % | 95 / 92 / 0 % | 0 % | 50 / 48 / 1 % | 351 / 336 / 13 | 36 / 31 / 1 |
+| hand shake 14 px | 100 / 100 / 96 % | 100 / 100 / 96 % | 0 / 0 / 0 % | 0 % | 30 / 22 / 0 % | 31 / 26 / 12 | 19 / 14 / 0 |
+| a thumb over one corner blossom | 100 / 100 / 46 % | 100 / 100 / 46 % | 100 / 100 / 38 % | 100 / 93 / 0 % | 100 / 92 / 9 % | 844 / 788 / 132 | 256 / 219 / 6 |
+| a glare spot on one corner blossom | 100 / 100 / 96 % | 100 / 100 / 96 % | 100 / 100 / 48 % | 96 / 42 / 0 % | 100 / 95 / 26 % | 833 / 671 / 182 | 256 / 233 / 17 |
+| one corner outside the frame (the card turned about 45°) | 100 / 100 / 58 % | 100 / 100 / 58 % | 100 / 100 / 10 % | 100 / 65 / 0 % | 50 / 50 / 10 % | 716 / 625 / 47 | 128 / 128 / 7 |
 
 The kana lanes stand up to the light as the field does. Veiling light, an auto-exposure gain from half to twice the right one,
 a gradient half the lit level, glare and a covered blossom leave the sharp camera 85–100 % of them and the older camera
 79–96 %, while its turns read in 23–93 %; the harshest 480p preset reads only polarity lanes, about half of them. Three times
-over-exposure leaves the older camera 29 % of its kana lanes and none of its turns; a gradient as strong as the lit level
+over-exposure leaves the older camera a third of its kana lanes and none of its turns; a gradient as strong as the lit level
 leaves it two thirds of them and a quarter of its turns. Banding is the bands' weak spot: 50 % deep at a 30 px period it
-leaves the older camera 29 % of its kana lanes but 65 % of its turns, and at an 80 px period it takes about half or more of
+leaves the older camera 30 % of its kana lanes but 65 % of its turns, and at an 80 px period it takes about half or more of
 every kind of lane on every camera. Hand shake is where the bands do most: 2 and 4 px of motion blur leave the sharp camera
-every kana lane against a third and a quarter of its turns, and the older camera three in four and two in three against
-none; at 9 px both polarity lanes still read in almost every frame. With one corner outside the frame the card is turned by
-about 45° in these poses, and one band is out of view.
+all or almost all of its kana lanes against a third and a quarter of its turns, and the older camera three in four and two
+in three against none; at 9 px both polarity lanes still read in almost every frame. With one corner outside the frame the
+card is turned by about 45° in these poses, and one band is out of view.
 
 End to end (`stream_sim`: 30 fps camera, 1/60 s exposure with blending/tearing, the phone held upright, 8 trials per row,
 received through a scan session that tracks the pose; seconds to complete, mean) for the largest KAGEMUSHA Payment (12,182
-bytes) and, after the slash, a Request-sized message (2,132 bytes). The slower decoders see only that many camera frames a
-second; the rolling shutters expose the rows one after another over the readout time, and upright the rows run along the
-card, so a frame change sweeps across its width. Rows with three figures list the sharp, older and soft 720p cameras:
+bytes) and, after the slash, a Request-sized message (2,132 bytes). The slower cameras deliver only that many frames a second
+to a decoder that reads each of them whatever it reads (a slow decoder's own cost is modelled below); the rolling shutters
+expose the rows one after another over the readout time, and upright the rows run along the card, so a frame change sweeps
+across its width. Rows with three figures list the sharp, older and soft 720p cameras:
 
 | Camera | 8 fps | 10 fps | 12 fps | 15 fps |
 | --- | --- | --- | --- | --- |
-| sharp 720p | 1.77 / 0.25 s | 1.39 / 0.19 s | 1.19 / 0.16 s | 0.93 / 0.12 s |
-| older 720p | 1.82 / 0.25 s | 1.49 / 0.19 s | 1.25 / 0.18 s | 1.01 / 0.13 s |
+| sharp 720p | 1.78 / 0.25 s | 1.40 / 0.20 s | 1.20 / 0.18 s | 0.94 / 0.15 s |
+| older 720p | 1.81 / 0.27 s | 1.47 / 0.22 s | 1.30 / 0.19 s | 1.02 / 0.15 s |
 | soft 720p | 2.64 / 0.40 s | 2.05 / 0.29 s | 1.76 / 0.26 s | 1.32 / 0.19 s |
-| harshest 480p preset | 4.51 / 0.75 s | 3.73 / 0.61 s | 3.17 / 0.52 s | 2.56 / 0.42 s |
-| 720p, decoder keeping up with 20 camera frames a second | 1.78 / 1.89 / 2.58 s | 1.46 / 1.55 / 2.05 s | 1.18 / 1.24 / 1.74 s | 0.96 / 0.98 / 1.40 s |
-| 720p, decoder keeping up with 15 camera frames a second | 1.76 / 1.84 / 2.55 s | 1.40 / 1.48 / 2.02 s | 1.20 / 1.25 / 1.75 s | 0.93 / 1.00 / 1.33 s |
-| 720p, decoder keeping up with 10 camera frames a second | 1.78 / 1.91 / 2.61 s | 1.40 / 1.49 / 2.00 s | 1.49 / 1.62 / 2.26 s | 1.41 / 1.50 / 2.01 s |
-| 720p, rolling shutter, 20 ms readout, 8 ms exposure | 1.80 / 1.83 / 2.73 s | not run | 1.23 / 1.32 / 1.85 s | 0.93 / 0.97 / 1.33 s |
-| 720p, rolling shutter, 30 ms readout, 16 ms exposure | 1.85 / 1.88 / 2.80 s | not run | 1.25 / 1.29 / 1.89 s | 0.96 / 1.05 / 1.40 s |
-| 720p held at any angle | not run | not run | 1.36 / 1.53 / 2.34 s | not run |
+| harshest 480p preset | 4.55 / 0.75 s | 3.74 / 0.62 s | 3.20 / 0.52 s | 2.55 / 0.42 s |
+| 720p, a camera giving the decoder only 20 frames a second | 1.78 / 1.95 / 2.58 s | 1.46 / 1.56 / 2.05 s | 1.36 / 1.46 / 1.74 s | 1.23 / 1.24 / 1.40 s |
+| 720p, a camera giving the decoder only 15 frames a second | 1.87 / 1.97 / 2.55 s | 1.67 / 1.73 / 2.02 s | 1.58 / 1.62 / 1.75 s | 1.33 / 1.39 / 1.33 s |
+| 720p, a camera giving the decoder only 10 frames a second | 2.34 / 2.45 / 2.61 s | 2.00 / 2.05 / 2.00 s | 2.12 / 2.19 / 2.26 s | 2.02 / 2.09 / 2.01 s |
+| 720p, rolling shutter, 20 ms readout, 8 ms exposure | 1.82 / 1.83 / 2.73 s | not run | 1.25 / 1.32 / 1.85 s | 0.96 / 1.02 / 1.33 s |
+| 720p, rolling shutter, 30 ms readout, 16 ms exposure | 1.85 / 1.89 / 2.80 s | not run | 1.28 / 1.32 / 1.89 s | 1.03 / 1.17 / 1.40 s |
+| 720p held at any angle | not run | not run | 1.37 / 1.57 / 2.34 s | not run |
 | format 3, the three 720p cameras at any angle | 2.46 / 2.73 / 4.46 s | 1.99 / 2.39 / 3.57 s | 1.65 / 1.87 / 2.98 s | 1.32 / 1.53 / 2.38 s |
 | format 3, the three 720p cameras, Request | 0.33 / 0.40 / 0.71 s | 0.26 / 0.34 / 0.56 s | 0.23 / 0.29 / 0.48 s | 0.18 / 0.22 / 0.38 s |
 | format 3, harshest 480p preset | 6.32 / 1.08 s | 5.70 / 1.04 s | 5.76 / 1.02 s | 6.31 / 1.29 s |
 | animated QR (Apple Vision), 720p cameras | 6.4 / 1.2 s | 5.1 s | 4.3 s | 3.4 s |
 
-Every trial completed and none delivered a wrong payload. At the default 12 fps a Payment takes 1.19 s on a sharp camera,
-1.25 s on an older one and 1.76 s on a soft one, against 1.65, 1.87 and 2.98 s for format 3 and 6.4 s for the apps' animated
-QR at its 8 fps; a Request takes 0.16–0.26 s. The three 720p cameras read 44–46 kana lanes a second of the 48 that 12 fps
-shows; the harshest 480p preset reads 13 and completes in 3.17 s. The bands keep their lead under both rolling shutters
-(1.23–1.25 s on the sharp camera, 1.85–1.89 s on the soft one and 3.20–3.25 s on the harshest preset at 12 fps) and with
-decoders that keep up with only 20 or 15 camera frames a second. A decoder that keeps up with only 10 does best at 10 or 15
-fps (1.40 s on the sharp camera) and still completes at 12 fps in 1.49 s, where format 3 took 2.07 s. Held at any angle, the
-harshest preset took 5.14 s on average and 3.27 s in the median, against 5.76 s on average for format 3.
+Every trial completed and none delivered a wrong payload. At the default 12 fps a Payment takes 1.20 s on a sharp camera,
+1.30 s on an older one and 1.76 s on a soft one, against 1.65, 1.87 and 2.98 s for format 3 and 6.4 s for the apps' animated
+QR at its 8 fps; a Request takes 0.18–0.26 s. The three 720p cameras read 44–46 kana lanes a second of the 48 that 12 fps
+shows; the harshest 480p preset reads 12 and completes in 3.20 s. The bands keep their lead under both rolling shutters
+(1.25–1.28 s on the sharp camera, 1.85–1.89 s on the soft one and 3.22–3.27 s on the harshest preset at 12 fps). Held at any
+angle, the harshest preset took 5.20 s on average and 3.37 s in the median, against 5.76 s on average for format 3.
+
+A camera that gives the decoder fewer frames a second costs the turn lanes most. The scan session reads a shown frame's
+bands on its first capture and its turn lanes only on a later one (§7 step 10), and at 15 camera frames a second most frames
+shown at 12 fps are captured once, so the sharp and older cameras complete in 1.58 and 1.62 s at 12 fps, where a session that
+read both on every capture took 1.20 and 1.25 s. That model charges a capture nothing for what it reads. On a phone a capture
+that reads both costs the time that makes its decoder slow, and there the bands first are the faster schedule (below).
 
 The QR row is the same cameras and timeline watching the apps' animated QR stream: `IRQR` frames as ZXing draws them at ECC M,
 version 13, 256-byte shards with Cauchy Reed–Solomon parity, the QR box 1.25 times the petal canvas, carrying the message body
@@ -729,31 +734,31 @@ left the same or made slower:
 
 | Camera | Upright (24 trials) | Upright, rolling shutter 30 ms, 16 ms exposure (16) | Any angle (16) |
 | --- | --- | --- | --- |
-| sharp 720p | 1.18 / 1.66 s, 24–0–0 | 1.25 / 1.67 s, 16–0–0 | 1.35 / 1.66 s, 12–4–0 |
-| older 720p | 1.24 / 1.77 s, 24–0–0 | 1.29 / 1.75 s, 16–0–0 | 1.60 / 2.03 s, 12–4–0 |
-| soft 720p | 1.75 / 2.98 s, 24–0–0 | 1.90 / 2.99 s, 16–0–0 | 2.37 / 2.98 s, 12–4–0 |
-| harshest 480p preset | 3.27 / 3.47 s, 23–1–0 | 3.53 / 3.70 s, 14–2–0 | 10.9 / 13.5 s (median 4.07 both), 11–5–0 |
+| sharp 720p | 1.18 / 1.66 s, 24–0–0 | 1.27 / 1.67 s, 16–0–0 | 1.38 / 1.66 s, 11–5–0 |
+| older 720p | 1.28 / 1.77 s, 24–0–0 | 1.32 / 1.75 s, 16–0–0 | 1.63 / 2.03 s, 12–4–0 |
+| soft 720p | 1.75 / 2.98 s, 24–0–0 | 1.89 / 2.99 s, 16–0–0 | 2.37 / 2.98 s, 12–4–0 |
+| harshest 480p preset | 3.30 / 3.47 s, 23–1–0 | 3.55 / 3.70 s, 13–3–0 | 11.7 / 13.5 s (median 4.07 both), 11–5–0 |
 
 No trial was slower with the bands, and none delivered a wrong payload. Held upright, the bands cut a Payment's transfer by
-29–30 % on the sharp and older cameras (about 0.5 s) and by 41 % on the soft one (1.2 s), under the 30 ms rolling shutter by
-25–36 %, and on the harshest 480p preset by 5–6 %. At any angle they cut it by about a fifth, and a quarter of the trials,
-whose bands the frame cut off, took the same time.
+28–29 % on the sharp and older cameras (about 0.5 s) and by 41 % on the soft one (1.2 s), under the 30 ms rolling shutter by
+24–37 %, and on the harshest 480p preset by 4–5 %. At any angle they cut it by about a fifth, and a quarter to a third of the
+trials, whose bands the frame cut off, took the same time.
 
 Decode cost (`decode_cost` example; one thread of an Apple M4 Max, the fastest of 18 runs while other work kept the machine
 busy; upright captures, kana lanes of both bands):
 
 | Capture | Full search | Tracked | Turn lanes | Kana lanes | Merge of 3 captures |
 | --- | --- | --- | --- | --- | --- |
-| modern 720p | 5.2 ms | 0.5 ms | 4.8 ms | 4.3 ms | 0.6 ms |
-| legacy 720p, barrel distortion | 4.8 ms | 0.5 ms | 4.8 ms | 4.2 ms | 0.6 ms |
-| modern 1080p | 11.2 ms | 0.8 ms | 4.9 ms | 4.3 ms | 0.7 ms |
-| 480p, blur 1.2 px | 2.1 ms | 0.4 ms | 3.4 ms | 3.7 ms | 0.6 ms |
-| modern 720p, a thumb over a blossom | 16.2 ms | 2.5 ms | 4.9 ms | 4.3 ms | 0.7 ms |
+| modern 720p | 5.1 ms | 0.5 ms | 4.7 ms | 2.0 ms | 0.6 ms |
+| legacy 720p, barrel distortion | 4.9 ms | 0.5 ms | 5.0 ms | 2.1 ms | 0.7 ms |
+| modern 1080p | 11.9 ms | 0.8 ms | 4.9 ms | 2.2 ms | 0.7 ms |
+| 480p, blur 1.2 px | 2.1 ms | 0.4 ms | 3.5 ms | 1.9 ms | 0.6 ms |
+| modern 720p, a thumb over a blossom | 15.3 ms | 2.5 ms | 4.8 ms | 2.0 ms | 0.7 ms |
 
-Reading the turn lanes, or the kana lanes of both bands, costs about ten times a tracked frame's decode. A scan session
-therefore tries each turn lane and each band once per shown frame, and backs off on a camera whose turns or bands it cannot
-read (§7 steps 9 and 10). On a desktop the Kotlin and Swift ports read a capture's turn lanes in 5–9 ms; ports are expected to
-stay within a factor of 20 of the reference.
+Reading the turn lanes costs about ten times a tracked frame's decode, and the kana lanes of both bands about four times. A
+scan session therefore tries each turn lane and each band once per shown frame, reads the bands first, and backs off on a
+camera whose turns or bands it cannot read (§7 steps 9 and 10). On a desktop the Kotlin and Swift ports read a capture's turn
+lanes in 5–9 ms, and the Swift port its bands in 1–4 ms; ports are expected to stay within a factor of 20 of the reference.
 
 On a phone, format 3 was measured on a Pixel 6 held to its four Cortex-A55 cores at 1.8 GHz (`taskset 0f`; the core type that
 budget 4 GB phones pair with a few faster ones), running the Kotlin SDK on ART, which decoded the camera frames of simulated
@@ -764,15 +769,21 @@ the sharp camera (13–15 camera frames a second decoded), 2.50 s on the older o
 or display was in this loop.
 
 Format 5 was measured the same way, on one upright trial of each camera (three replays each). On those cores a tracked
-capture costs about 14 ms, a full search about 100 ms, the turn lanes 75 ms and the kana lanes of both bands 35–37 ms with
-the reader of §7 step 10, whose first version took 75–83 ms.
-A session that tried the turn lanes and the bands on the same capture spent about 165 ms on it, twice the 83 ms a frame is
-shown at 12 fps: it decoded only 6–9 camera frames a second, missed shown frames, and completed the Payment in 2.51, 2.61
-and 2.65 s on the sharp, older and soft cameras, slower than format 3 on the sharp one. With the bands first (§7 step 10)
-the session decodes 14–15 camera frames a second on the sharp and older cameras and 18–20 on the soft one, and the Payment
-completes in 1.67–1.87 s on the sharp camera, 1.90–2.07 s on the older one and 1.79–1.94 s on the soft one, against 1.82,
-2.50 and 3.08 s with format 3. A decoder that keeps up with every camera frame completes the same trials in 1.17, 1.27 and
-1.73 s.
+capture costs about 14 ms, a full search about 100 ms, the turn lanes 75 ms and the kana lanes of both bands 35–37 ms with the
+reader of §7 step 10, whose first version took 75–83 ms. A session that tried the turn lanes and the bands on the same capture
+spent about 165 ms on it, twice the 83 ms a frame is shown at 12 fps: it decoded only 6–9 camera frames a second, missed shown
+frames, and completed the Payment in 2.51, 2.61 and 2.65 s on the sharp, older and soft cameras, slower than format 3 on the
+sharp one. With the bands first (§7 step 10) the session decodes 14–15 camera frames a second on the sharp and older cameras
+and 18–20 on the soft one, and the Payment completes in 1.67–1.87 s on the sharp camera, 1.90–2.07 s on the older one and
+1.79–1.94 s on the soft one, against 1.82, 2.50 and 3.08 s with format 3. A decoder that keeps up with every camera frame
+completes the same trials in 1.17, 1.27 and 1.73 s.
+
+The simulator models those cores (`stream_sim --phone a55`: a full search 105 ms, a tracked capture 14.5 ms, the turn lanes
+75 ms, a band 15 ms and a merge 10 ms, the newest camera frame taken whenever the decoder is free; 24 upright trials of each
+camera). The Payment takes 1.74, 1.83, 1.90 and 3.94 s on the sharp, older, soft and harshest cameras with the bands first;
+2.03, 2.13, 2.00 and 3.92 s when every capture reads both turns and bands; 2.04, 2.19, 3.09 and 3.84 s with format 3's session,
+which reads no band; and 2.25, 2.39, 3.33 and 4.15 s with the bands blacked out, the band tries that read nothing costing their
+time until the back-off passes them over.
 
 Run the evidence yourself:
 
@@ -784,6 +795,7 @@ cargo run --release -p iroha_petal --example stream_sim -- 24 12182 12 --hide-ba
 cargo run --release -p iroha_petal --example stream_sim -- 8 12182 12 modern,legacy,soft --camera-fps 10
 cargo run --release -p iroha_petal --example stream_sim -- 8 12182 12 --readout-ms 30 --exposure-ms 16
 cargo run --release -p iroha_petal --example stream_sim -- 8 12182 12 --any-rotation
+cargo run --release -p iroha_petal --example stream_sim -- 24 12182 12 --phone a55   # a slow phone core's decode costs
 cargo run --release -p iroha_petal --example decode_cost              # decode time, turn and kana lanes included
 iroha offline petal simulate --camera legacy --bytes 12182 --fps 12   # end to end, through the CLI
 ```
@@ -867,8 +879,10 @@ Implementations: Rust (`crates/iroha_petal`, `iroha offline petal`), Swift (`Iro
 
 ## 12. Open work
 
-* TODO: port format 5 to the SDKs (Kotlin, Swift, JavaScript, C#, Python) and both apps. Until then they implement format 3
-  and test against the `_v3` fixtures, which stay until the ports land.
+* TODO: read the turn lanes on the first capture of a shown frame when the decoder has the time. The scan session reads
+  a shown frame's bands first and its turns on a later capture (§7 step 10), which a slow phone core needs; a fast decoder
+  whose camera gives it few frames a second (dim light) then reads most frames' turns not at all (§8: 1.58 s instead of
+  1.20 s at 15 camera frames a second). A session that knew its spare time per capture could read both there.
 * TODO: physical-device qualification of the matrices in §8, including the OLED/PWM and rolling-shutter effects, the
   exposure-compensation guidance, and the 12 fps default with a real camera on an older 4 GB Android phone.
 * TODO: check the katakana bands with real cameras and screens: how people frame the card (the square or the whole card),

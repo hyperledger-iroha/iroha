@@ -837,7 +837,7 @@ longer than a frame is shown at 12 fps, and the session decoded only six camera
 frames a second; with the bands first it decodes 14–19, and a 12 KB Payment
 shown upright at 12 fps arrives in 1.7–1.9 s on a sharp camera (format 3:
 1.8 s), 1.9–2.1 s on an older one (2.5 s) and 1.8–1.9 s on one too soft for the
-turns (3.1 s). In the reference simulation it takes 1.2, 1.25 and 1.75 s where
+turns (3.1 s). In the reference simulation it takes 1.2, 1.3 and 1.75 s where
 the decoder keeps up with every camera frame; see `specs/petal_stream.md` §8.
 `PetalStreamAssembler` and `PetalScanSession` bound pending atoms, payload
 size (64 KiB by default) and stream lifetime (30 s idle, 180 s absolute), and
