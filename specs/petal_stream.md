@@ -352,8 +352,8 @@ Every lane but the turn lanes starts with a 3-byte header `tag:u8, frame:u16`. T
 ### 5.4 Sender
 
 Send frames `f = f₀, f₀+1, …` at 8–15 frames per second; **12 is the default**: a camera reads practically every frame at
-12 fps, and with format 3 a phone's slowest cores decoded at least 12 of its camera frames a second, about one capture per
-shown frame (§8; what the bands cost there is not measured yet). The sender repeats until the user stops it; the first
+12 fps, and a phone's slowest cores decode 14 to 19 of its camera frames a second, more than one capture per shown frame
+(§8). The sender repeats until the user stops it; the first
 `⌈K / 20.75⌉` frames carry every source atom once in their field lanes and lane `D`, and everything else, the turn and kana
 lanes included, is repair atoms. There is no back-channel; if the receiver needs an acknowledgement it uses its own stream.
 
@@ -485,8 +485,8 @@ The reference algorithm, which the golden captures are calibrated to:
    capture order, then divided by the number of captures) and reads the field lanes not yet read from the mean as in steps 5 and 7,
    local read included. The session offers a merged lane only when its own header names the frame it was merged for, and counts
    merges and merged lanes apart from single-capture lanes. Merging one capture reads exactly what that capture read alone.
-9. **Turn lanes.** The turn lanes are read from a capture whose field lanes decoded on their own (merged lanes are not used).
-   A scan session tries a turn lane once per shown frame: it remembers the last 24 `(tag, frame, sector)` it tried, read or
+9. **Turn lanes.** The turn lanes are read from a capture whose field lanes decoded on their own (merged lanes are not used)
+   and whose bands read no kana lane (step 10). A scan session tries a turn lane once per shown frame: it remembers the last 24 `(tag, frame, sector)` it tried, read or
    not (the four sectors of the last 6 shown frames, cleared with the held evidence when the stream changes), and passes
    those sectors over. Reading turns costs a slow phone core several times a frame's decode (§8), so after a try that reads
    no turn lane the session passes over the next captures that would try one: one capture after the first such try in a row,
@@ -536,26 +536,38 @@ The reference algorithm, which the golden captures are calibrated to:
 10. **Kana lanes.** The bands are read from a capture whose square decoded, under the `(tag, frame)` header its lanes name.
    A scan session reads each band once per shown frame: it remembers the last 12 `(tag, frame, band)` it tried and passes
    those bands over, and after a try that reads no kana lane it passes over the next captures that would try one, as for the
-   turn lanes (step 9) but with its own count (at most 8).
+   turn lanes (step 9) but with its own count (at most 8). The bands go before the turn lanes: a capture first tries the
+   bands, and only when that reads no kana lane (no band is left to try for its shown frame, the capture is one the
+   back-off passes over, or the try reads nothing) does it try the turn lanes on the same capture. A capture whose bands
+   read a kana lane tries no turn lane, and that shown frame's turn lanes wait for its next capture. On a slow phone core a
+   turn try costs about five tracked decodes and a band try about one (§8): both on one capture took longer than a frame is
+   shown at 12 fps, and the session missed the next shown frames.
    1. *Placing.* The square's pose, applied to points beyond the square, places every tile. A tile one of whose corners maps
       outside the image is not read.
-   2. *Samples.* A tile's samples are the bilinear luma at the 12 × 12 points `((i + ½)·25/12, (j + ½)·25/12)` units from its
-      top-left corner (rows `j`, columns `i`), moved by the tile's shift.
-   3. *Templates.* For every glyph and both polarities the template is a coverage raster of the tile: points `−4 + a/2` units
-      (`a = 0 … 66`) on both axes, each the share of its 4 × 4 sub-points `(m − 1.5)/8` units around it that are covered (for a
-      light tile, inside the rounded tile and not inked; for a dark tile, inked), blurred by a Gaussian of `σ` (taps every ½
-      unit out to `⌈3σ / ½⌉`, weights `exp(−d² / (2σ²))` normalised by their sum, points outside counting as zero; rows
-      first), sampled bilinearly at the 12 × 12 points, then mean-centred and scaled to unit length. The blurs are
-      `σ = 1.0, 1.6, 2.4, 3.4, 4.8` units; probes are in the fixture.
-   4. *Pilots.* The *correlation* of samples `x` with a template `t` is `Σ (x − x̄)·t / √(Σ (x − x̄)²)` (0 for flat samples).
-      Every pilot in view is searched under the blur-3.4 template at the shifts `(2·dx, 2·dy)` units within its reach: 4
-      units plus 10 for every 290 units its centre lies beyond the square's edge (above `y = 0` or below `y = 1024`), at most
-      12 more, for the lens distortion the pose extends beyond the square. Shifts run `dy` outer and `dx` inner, both
-      ascending, and a later shift wins only with a larger correlation; a pilot is kept when its best is at least 0.35, and with
-      fewer than two kept the band is not read. The band's blur is the one under which the kept pilots, each at the best of
-      its shift and the eight shifts one unit around it, correlate best in sum (ties to the sharper). Each kept pilot is then
-      refined under that blur from its coarse shift to the best of the eight shifts around it at steps of 1, ½ and ¼ unit in
-      turn; a pilot whose final correlation is below 0.5 is dropped, and with fewer than two left the band is not read.
+   2. *Samples.* A tile is sampled at a grid of points, moved by the tile's shift: the pose maps the tile's centre `o` (its
+      top-left corner plus 12.5 units on both axes, plus the shift) and the points one unit right of it and one unit below it,
+      `o + u` and `o + v` in the image, and grid point `(a, b)`, measured from the tile's centre, is the bilinear luma at
+      `(o + b·v) + a·u`. The fine grid has 12 × 12 points `a, b = (i + ½)·25/12 − 12.5`, the coarse grid 6 × 6 points
+      `(i + ½)·25/6 − 12.5` (rows `b` outer, columns `a` inner). The samples are taken minus their mean; that mean is the
+      tile's *level* and the sum of their squares its *energy*.
+   3. *Templates.* For every blur, two coverage rasters of a tile: points `−4 + a/2` units (`a = 0 … 66`) on both axes, each
+      the share of its 4 × 4 sub-points `(m − 1.5)/8` units around it that lie inside the rounded tile (the *inside*) or on the
+      glyph's strokes (the glyph's *ink*), blurred by a Gaussian of `σ` (taps every ½ unit out to `⌈3σ / ½⌉`, weights
+      `exp(−d² / (2σ²))` normalised by their sum, points outside counting as zero; rows first), sampled bilinearly at the
+      fine grid points and mean-centred. A dark tile's template is the ink, a light tile's is the inside less the ink, point
+      by point; each also has a unit-length copy (divided by its length, at least 10⁻¹²). The blurs are
+      `σ = 1.0, 1.6, 2.4, 3.4, 4.8` units. The *coarse templates* are the same under `σ = 3.4` at the coarse grid points,
+      unit length. Probes of both are in the fixture.
+   4. *Pilots.* The *correlation* of samples `x` with a unit template `t` is `Σ x·t / √energy` (0 when the energy is at most
+      10⁻⁹). Every pilot in view is searched on the coarse grid under its coarse template at the shifts `(2·dx, 2·dy)` units
+      within its reach: 4 units plus 10 for every 290 units its centre lies beyond the square's edge (above `y = 0` or below
+      `y = 1024`), at most 12 more, for the lens distortion the pose extends beyond the square. Shifts run `dy` outer and `dx`
+      inner, both ascending, and a later shift wins only with a larger correlation; a pilot is kept when its best is at least
+      0.35, and with fewer than two kept the band is not read. On the fine grid, the band's blur is the one under which the
+      kept pilots, each at the best of its shift and the eight shifts one unit around it, correlate best in sum (ties to the
+      sharper). Each kept pilot is then refined under that blur from its coarse shift to the best of the eight shifts around
+      it at steps of 1, ½ and ¼ unit in turn; a pilot whose final correlation is below 0.5 is dropped, and with fewer than two
+      left the band is not read.
    5. *Shift field.* The band's shift at a tile centre `(X, Y)` is, per axis, `a₀ + a₁·x + a₂·y` with `x = (X − 512)/512` and
       `y = (Y − ȳ)/145` around the pilots' mean `ȳ`, fitted to the pilots' shifts by least squares (normal equations,
       Gauss–Jordan elimination with partial pivoting); with fewer than three pilots, or a pivot below 10⁻⁹, it is the pilots'
@@ -565,8 +577,10 @@ The reference algorithm, which the golden captures are calibrated to:
       pilot is not read). The threshold at a tile is the midpoint of the two lines there and half their difference is the
       half-contrast; a tile where the half-contrast is at most one grey level is not read. A tile is light when its level
       exceeds the threshold, with `|level − threshold| / half-contrast` as its confidence.
-   7. *Glyphs.* A tile's glyph is the one whose better polarity template correlates best with its samples under the band's blur
-      (ties to the lower symbol), with that correlation minus the next glyph's as its confidence.
+   7. *Glyphs.* Under the band's blur, with `A = Σ x·inside` and `B = Σ x·ink` over the fine samples `x` and the mean-centred
+      templates, a glyph's light-tile correlation is `(A − B) / |inside − ink| / √energy` and its dark-tile correlation
+      `B / |ink| / √energy` (both 0 when the energy is at most 10⁻⁹). A tile's glyph is the one whose better polarity
+      correlates best (ties to the lower symbol), with that correlation minus the next glyph's as its confidence.
    8. *Codewords.* The polarity bits and glyph nibbles form the lanes' words (§3.1); a byte's confidence is the least of its
       tiles' (a tile that is not read has confidence 0 and shows 0 bits). Reed–Solomon with 0, ⅛, ¼, ⅓ and ½ of the parity
       bytes erased (polarity 0, 2, 4, 5 and 8; glyphs 0, 4, 8, 11 and 16), accepting the first word whose check (§5.3) matches
@@ -747,11 +761,18 @@ trials (12,182 bytes, one pose) through a scan session that, as CameraX's analys
 whenever it is free. A capture cost about 16 ms, and about 80 ms when it tried turn lanes. The Payment completed in 1.82 s on
 the sharp camera (13–15 camera frames a second decoded), 2.50 s on the older one (13 a second) and 3.08 s on the soft one
 (26 a second, the back-off passing most of its tries over; 3.36 s without it). The frames came from the simulator: no camera
-or display was in this loop. Format 5 has not been measured on a phone. If its kana lanes cost there what they cost on the M4,
-about as much as the turn lanes, a capture that tries both takes about 140 ms on those cores, longer than the 83 ms a frame
-is shown at 12 fps: such a phone would try every lane of only about seven shown frames a second and miss the others, which
-could make a camera that reads the turns slower than with format 3, while a soft camera, whose turn tries back off, would
-keep most of its gain (§12).
+or display was in this loop.
+
+Format 5 was measured the same way, on one upright trial of each camera (three replays each). On those cores a tracked
+capture costs about 14 ms, a full search about 100 ms, the turn lanes 75 ms and the kana lanes of both bands 35–37 ms with
+the reader of §7 step 10, whose first version took 75–83 ms.
+A session that tried the turn lanes and the bands on the same capture spent about 165 ms on it, twice the 83 ms a frame is
+shown at 12 fps: it decoded only 6–9 camera frames a second, missed shown frames, and completed the Payment in 2.51, 2.61
+and 2.65 s on the sharp, older and soft cameras, slower than format 3 on the sharp one. With the bands first (§7 step 10)
+the session decodes 14–15 camera frames a second on the sharp and older cameras and 18–20 on the soft one, and the Payment
+completes in 1.67–1.87 s on the sharp camera, 1.90–2.07 s on the older one and 1.79–1.94 s on the soft one, against 1.82,
+2.50 and 3.08 s with format 3. A decoder that keeps up with every camera frame completes the same trials in 1.17, 1.27 and
+1.73 s.
 
 Run the evidence yourself:
 
@@ -852,10 +873,6 @@ Implementations: Rust (`crates/iroha_petal`, `iroha offline petal`), Swift (`Iro
   exposure-compensation guidance, and the 12 fps default with a real camera on an older 4 GB Android phone.
 * TODO: check the katakana bands with real cameras and screens: how people frame the card (the square or the whole card),
   the bands' exposure on OLED and LCD screens, and banding, the bands' weak spot in simulation (§8).
-* TODO: measure the kana reader on a slow phone core. If a capture that tries both the turn lanes and the kana lanes takes
-  longer there than a frame is shown (§8 estimates about 140 ms on Cortex-A55 cores, against 83 ms at 12 fps), the scan
-  session must share that time, for example by trying at most one of the two on a capture, or the kana reader must get
-  cheaper; otherwise such a phone skips shown frames and a camera that reads the turns could be slower than with format 3.
 * TODO: check the turn lanes with real cameras and screens. The simulator has no denoising, display subpixels or video
   compression, and a phone's noise reduction and sharpening may smear or ring the petal outlines the turn reader matches;
   hand shake of 2 px already costs two thirds of them in simulation. A camera that cannot read turns still reads the field

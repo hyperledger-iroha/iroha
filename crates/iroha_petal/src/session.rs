@@ -27,6 +27,15 @@
 //! tried are remembered), with its own back-off of at most [`KANA_BACKOFF`]
 //! captures after tries that read no kana lane (a camera that does not see the
 //! bands, or too blurred for their glyphs and polarity).
+//!
+//! The bands go first, and a capture whose bands read a kana lane tries no turn
+//! lane: the turn lanes of that shown frame wait for its next capture. On a slow
+//! phone core a turn try costs five tracked decodes and a band try one, so reading
+//! both on one capture overran the time a frame is shown at 12 fps and the session
+//! missed the next shown frames. A decoder that sees each shown frame two or three
+//! times still reads both; one that sees it once reads the cheaper bands and every
+//! frame's field lanes. A band try that reads nothing (bands out of view, too
+//! blurred, or a torn capture) leaves the turn lanes to the same capture.
 
 use std::collections::VecDeque;
 
@@ -271,8 +280,14 @@ impl ScanSession {
                 self.last_pose = Some((frame.clone(), now_ms));
                 let lanes = self.absorb(frame, now_ms);
                 let merged = self.merge(image, frame);
-                let turned = self.turn(image, frame);
-                (None, lanes, merged, turned, self.kana(image, frame))
+                // a capture whose bands read a lane tries no turn lane (see the module docs)
+                let kana = self.kana(image, frame);
+                let turned = if kana.is_empty() {
+                    self.turn(image, frame)
+                } else {
+                    String::new()
+                };
+                (None, lanes, merged, turned, kana)
             }
             Err(error) => (
                 Some(*error),

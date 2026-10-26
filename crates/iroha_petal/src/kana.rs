@@ -375,6 +375,8 @@ const COARSE_BLUR: usize = 3;
 const COARSE_STEP: f64 = 2.0;
 /// Samples per tile side: points `(i + ½) · 25 / 12` units from the tile's top-left corner.
 pub const KANA_GRID: usize = 12;
+/// Samples per tile side in the coarse pilot search: points `(i + ½) · 25 / 6`.
+pub const KANA_COARSE_GRID: usize = 6;
 /// Template raster step in canvas units.
 const RASTER_STEP: f64 = 0.5;
 /// The raster starts this far outside the tile square, so blur reaches in from the gutter.
@@ -387,18 +389,31 @@ const PILOT_COARSE_MIN: f64 = 0.35;
 const PILOT_MIN: f64 = 0.5;
 
 const POINTS: usize = KANA_GRID * KANA_GRID;
+const COARSE_POINTS: usize = KANA_COARSE_GRID * KANA_COARSE_GRID;
 
-/// Templates of one blur: for every glyph, the light tile (fill coverage) and the dark tile (ink
-/// coverage) at the [`KANA_GRID`] points, mean-centred and scaled to unit length.
+/// The templates of one blur at the [`KANA_GRID`] points, each mean-centred: the tile's inside,
+/// every glyph's ink (a dark tile's template), and every glyph's light-tile template (inside
+/// less ink), with the lengths of the dark and light templates and both as unit vectors.
 struct Templates {
+    inside: [f64; POINTS],
+    ink: Vec<[f64; POINTS]>,
+    light_norm: [f64; GLYPH_COUNT],
+    dark_norm: [f64; GLYPH_COUNT],
     light: Vec<[f64; POINTS]>,
     dark: Vec<[f64; POINTS]>,
 }
 
-/// Coverage of `inside && !inked` (light) or `inked` (dark) on the template raster: raster point
-/// `a` is at `−4 + a / 2` units; each value is the share of its 4 × 4 sub-points
-/// `(m − 1.5) / 8` units around it that are covered.
-fn raster(glyph: u8, light: bool) -> Vec<f64> {
+/// The coarse templates of every glyph under [`COARSE_BLUR`] at the [`KANA_COARSE_GRID`]
+/// points, mean-centred and scaled to unit length: light tiles (inside less ink) and dark tiles
+/// (ink).
+struct CoarseTemplates {
+    light: Vec<[f64; COARSE_POINTS]>,
+    dark: Vec<[f64; COARSE_POINTS]>,
+}
+
+/// Coverage on the template raster: raster point `a` is at `−4 + a / 2` units; each value is the
+/// share of its 4 × 4 sub-points `(m − 1.5) / 8` units around it that `covered` holds.
+fn raster(covered: impl Fn(f64, f64) -> bool) -> Vec<f64> {
     let mut table = vec![0.0; RASTER_SIDE * RASTER_SIDE];
     for b in 0..RASTER_SIDE {
         for a in 0..RASTER_SIDE {
@@ -406,23 +421,17 @@ fn raster(glyph: u8, light: bool) -> Vec<f64> {
                 -RASTER_MARGIN + a as f64 * RASTER_STEP,
                 -RASTER_MARGIN + b as f64 * RASTER_STEP,
             );
-            let mut covered = 0u32;
+            let mut hits = 0u32;
             for n in 0..4 {
                 for m in 0..4 {
                     let (u, v) = (
                         u0 + (f64::from(m) - 1.5) / 8.0,
                         v0 + (f64::from(n) - 1.5) / 8.0,
                     );
-                    let inked = kana_inked(glyph, u, v);
-                    let hit = if light {
-                        kana_inside(u, v) && !inked
-                    } else {
-                        inked
-                    };
-                    covered += u32::from(hit);
+                    hits += u32::from(covered(u, v));
                 }
             }
-            table[b * RASTER_SIDE + a] = f64::from(covered) / 16.0;
+            table[b * RASTER_SIDE + a] = f64::from(hits) / 16.0;
         }
     }
     table
@@ -464,59 +473,97 @@ fn blur_raster(table: &[f64], sigma: f64) -> Vec<f64> {
     pass(&pass(table, true), false)
 }
 
-/// Tile-local coordinate of grid index `i` on either axis.
-fn grid_point(i: usize) -> f64 {
-    (i as f64 + 0.5) * f64::from(KANA_TILE) / KANA_GRID as f64
+/// Tile-local coordinate of grid index `i` on either axis of a grid of `side` points.
+fn grid_point(i: usize, side: usize) -> f64 {
+    (i as f64 + 0.5) * f64::from(KANA_TILE) / side as f64
 }
 
-/// A blurred raster at the [`KANA_GRID`] points (bilinear), mean-centred and scaled to unit
-/// length.
-fn sample_raster(table: &[f64]) -> [f64; POINTS] {
-    let mut out = [0.0; POINTS];
-    for j in 0..KANA_GRID {
-        for i in 0..KANA_GRID {
-            let fa = (grid_point(i) + RASTER_MARGIN) / RASTER_STEP;
-            let fb = (grid_point(j) + RASTER_MARGIN) / RASTER_STEP;
+/// A blurred raster at the `side × side` grid points (bilinear), mean-centred.
+fn sample_raster<const N: usize>(table: &[f64], side: usize) -> [f64; N] {
+    let mut out = [0.0; N];
+    for j in 0..side {
+        for i in 0..side {
+            let fa = (grid_point(i, side) + RASTER_MARGIN) / RASTER_STEP;
+            let fb = (grid_point(j, side) + RASTER_MARGIN) / RASTER_STEP;
             let (a0, b0) = (fa.floor() as usize, fb.floor() as usize);
             let (ta, tb) = (fa - a0 as f64, fb - b0 as f64);
             let at = |a: usize, b: usize| table[b * RASTER_SIDE + a];
             let top = at(a0, b0) * (1.0 - ta) + at(a0 + 1, b0) * ta;
             let bottom = at(a0, b0 + 1) * (1.0 - ta) + at(a0 + 1, b0 + 1) * ta;
-            out[j * KANA_GRID + i] = top * (1.0 - tb) + bottom * tb;
+            out[j * side + i] = top * (1.0 - tb) + bottom * tb;
         }
     }
-    let mean = out.iter().sum::<f64>() / POINTS as f64;
-    let mut norm = 0.0;
+    let mean = out.iter().sum::<f64>() / N as f64;
     for value in &mut out {
         *value -= mean;
-        norm += *value * *value;
-    }
-    let norm = norm.sqrt().max(1e-12);
-    for value in &mut out {
-        *value /= norm;
     }
     out
 }
 
-fn templates() -> &'static [Templates] {
-    static TEMPLATES: OnceLock<Vec<Templates>> = OnceLock::new();
+/// The length of a vector, at least `1e-12`.
+fn norm(values: &[f64]) -> f64 {
+    values.iter().map(|v| v * v).sum::<f64>().sqrt().max(1e-12)
+}
+
+/// A vector scaled by `1 / length`.
+fn scaled<const N: usize>(values: &[f64; N], length: f64) -> [f64; N] {
+    values.map(|v| v / length)
+}
+
+/// The light-tile template of a glyph: the inside less the ink, point by point.
+fn less<const N: usize>(inside: &[f64; N], ink: &[f64; N]) -> [f64; N] {
+    core::array::from_fn(|p| inside[p] - ink[p])
+}
+
+/// Every blur's templates and the coarse templates, built once.
+fn templates() -> &'static (Vec<Templates>, CoarseTemplates) {
+    static TEMPLATES: OnceLock<(Vec<Templates>, CoarseTemplates)> = OnceLock::new();
     TEMPLATES.get_or_init(|| {
-        let rasters: Vec<(Vec<f64>, Vec<f64>)> = (0..GLYPH_COUNT as u8)
-            .map(|g| (raster(g, true), raster(g, false)))
+        let inside = raster(kana_inside);
+        let inks: Vec<Vec<f64>> = (0..GLYPH_COUNT as u8)
+            .map(|g| raster(|u, v| kana_inked(g, u, v)))
             .collect();
-        KANA_BLURS
+        let mut coarse = CoarseTemplates {
+            light: Vec::new(),
+            dark: Vec::new(),
+        };
+        let blurs = KANA_BLURS
             .iter()
-            .map(|&sigma| Templates {
-                light: rasters
-                    .iter()
-                    .map(|(light, _)| sample_raster(&blur_raster(light, sigma)))
-                    .collect(),
-                dark: rasters
-                    .iter()
-                    .map(|(_, dark)| sample_raster(&blur_raster(dark, sigma)))
-                    .collect(),
+            .enumerate()
+            .map(|(index, &sigma)| {
+                let inside_blurred = blur_raster(&inside, sigma);
+                let inside_points: [f64; POINTS] = sample_raster(&inside_blurred, KANA_GRID);
+                let mut t = Templates {
+                    inside: inside_points,
+                    ink: Vec::new(),
+                    light_norm: [0.0; GLYPH_COUNT],
+                    dark_norm: [0.0; GLYPH_COUNT],
+                    light: Vec::new(),
+                    dark: Vec::new(),
+                };
+                for (g, ink) in inks.iter().enumerate() {
+                    let ink_blurred = blur_raster(ink, sigma);
+                    let ink_points: [f64; POINTS] = sample_raster(&ink_blurred, KANA_GRID);
+                    let light = less(&inside_points, &ink_points);
+                    t.light_norm[g] = norm(&light);
+                    t.dark_norm[g] = norm(&ink_points);
+                    t.light.push(scaled(&light, t.light_norm[g]));
+                    t.dark.push(scaled(&ink_points, t.dark_norm[g]));
+                    t.ink.push(ink_points);
+                    if index == COARSE_BLUR {
+                        let coarse_inside: [f64; COARSE_POINTS] =
+                            sample_raster(&inside_blurred, KANA_COARSE_GRID);
+                        let coarse_ink: [f64; COARSE_POINTS] =
+                            sample_raster(&ink_blurred, KANA_COARSE_GRID);
+                        let light = less(&coarse_inside, &coarse_ink);
+                        coarse.light.push(scaled(&light, norm(&light)));
+                        coarse.dark.push(scaled(&coarse_ink, norm(&coarse_ink)));
+                    }
+                }
+                t
             })
-            .collect()
+            .collect();
+        (blurs, coarse)
     })
 }
 
@@ -525,51 +572,72 @@ fn templates() -> &'static [Templates] {
 /// probes for ports.
 #[must_use]
 pub fn template_probe(blur: usize, glyph: u8, light: bool, i: usize, j: usize) -> f64 {
-    let t = &templates()[blur];
+    let t = &templates().0[blur];
     let table = if light { &t.light } else { &t.dark };
     table[usize::from(glyph)][j * KANA_GRID + i]
 }
 
-/// Luma at the grid points of the tile whose top-left corner is `(x, y)` (square coordinates),
-/// moved by `(dx, dy)`, and their mean.
+/// The coarse template value of `glyph` (light or dark tile) at coarse grid point `(i, j)`:
+/// conformance probes for ports.
+#[must_use]
+pub fn coarse_template_probe(glyph: u8, light: bool, i: usize, j: usize) -> f64 {
+    let t = &templates().1;
+    let table = if light { &t.light } else { &t.dark };
+    table[usize::from(glyph)][j * KANA_COARSE_GRID + i]
+}
+
+/// Samples the tile whose top-left corner is `(x, y)` (square coordinates), moved by `shift`, at
+/// the `side × side` grid points into `out`: the pose maps the tile's centre `o` and the points
+/// one unit to its right and below it (`o + u`, `o + v`), and grid point `(a, b)` from the centre
+/// is sampled at `(o + b·v) + a·u`. The samples are left minus their mean; returns that mean and
+/// their energy (the sum of their squares).
 fn sample_tile(
     image: &Luma,
     frame: &DecodedFrame,
     x: f64,
     y: f64,
     shift: (f64, f64),
-) -> ([f64; POINTS], f64) {
-    let mut out = [0.0; POINTS];
+    side: usize,
+    out: &mut [f64],
+) -> (f64, f64) {
+    let half = f64::from(KANA_TILE) / 2.0;
+    let (cx, cy) = (x + half + shift.0, y + half + shift.1);
+    let o = frame.pose.apply(cx, cy);
+    let right = frame.pose.apply(cx + 1.0, cy);
+    let down = frame.pose.apply(cx, cy + 1.0);
+    let (ux, uy) = (right.0 - o.0, right.1 - o.1);
+    let (vx, vy) = (down.0 - o.0, down.1 - o.1);
     let mut sum = 0.0;
-    for j in 0..KANA_GRID {
-        for i in 0..KANA_GRID {
-            let (px, py) = frame
-                .pose
-                .apply(x + grid_point(i) + shift.0, y + grid_point(j) + shift.1);
-            let value = image.sample(px, py);
-            out[j * KANA_GRID + i] = value;
+    for j in 0..side {
+        let b = grid_point(j, side) - half;
+        let (row_x, row_y) = (o.0 + b * vx, o.1 + b * vy);
+        for i in 0..side {
+            let a = grid_point(i, side) - half;
+            let value = image.sample(row_x + a * ux, row_y + a * uy);
+            out[j * side + i] = value;
             sum += value;
         }
     }
-    (out, sum / POINTS as f64)
+    let n = side * side;
+    let mean = sum / n as f64;
+    let mut energy = 0.0;
+    for value in &mut out[..n] {
+        *value -= mean;
+        energy += *value * *value;
+    }
+    (mean, energy)
 }
 
-/// Correlation of samples (mean `mean`) with a unit, mean-centred template.
-fn correlate(samples: &[f64; POINTS], mean: f64, template: &[f64; POINTS]) -> f64 {
-    let (mut dot, mut energy) = (0.0, 0.0);
-    for (x, t) in samples.iter().zip(template) {
-        let centred = x - mean;
-        dot += centred * t;
-        energy += centred * centred;
-    }
+/// Correlation of mean-centred samples of energy `energy` with a unit, mean-centred template.
+fn correlate(samples: &[f64], energy: f64, template: &[f64]) -> f64 {
     if energy <= 1e-9 {
-        0.0
-    } else {
-        dot / energy.sqrt()
+        return 0.0;
     }
+    let dot: f64 = samples.iter().zip(template).map(|(x, t)| x * t).sum();
+    dot / energy.sqrt()
 }
 
-/// Whether every grid point of the tile at `(x, y)` maps inside the image.
+/// Whether every corner of the tile at `(x, y)` maps inside the image.
 fn tile_in_image(image: &Luma, frame: &DecodedFrame, x: f64, y: f64) -> bool {
     let side = f64::from(KANA_TILE);
     [(0.0, 0.0), (side, 0.0), (0.0, side), (side, side)]
@@ -580,8 +648,7 @@ fn tile_in_image(image: &Luma, frame: &DecodedFrame, x: f64, y: f64) -> bool {
         })
 }
 
-/// A pilot as found: its tile centre, the shift that fits it best, that correlation, its level
-/// and its polarity.
+/// A pilot as found: its tile centre, the shift that fits it best, its level and its polarity.
 #[derive(Debug, Clone, Copy)]
 struct FoundPilot {
     centre: (f64, f64),
@@ -598,17 +665,6 @@ fn pilot_reach(y: f64) -> f64 {
     4.0 + 10.0 * (beyond.max(0.0) / 290.0).min(1.2)
 }
 
-/// The template a pilot shows under blur `blur`.
-fn pilot_template(blur: usize, pilot: u8) -> &'static [f64; POINTS] {
-    let (glyph, light) = KANA_PILOT_SYMBOLS[usize::from(pilot)];
-    let t = &templates()[blur];
-    if light {
-        &t.light[usize::from(glyph)]
-    } else {
-        &t.dark[usize::from(glyph)]
-    }
-}
-
 /// The correlation of a pilot tile's samples, moved by `shift`, with its template under `blur`.
 fn pilot_score(
     image: &Luma,
@@ -621,20 +677,50 @@ fn pilot_score(
     let Some(pilot) = t.pilot else {
         return f64::MIN;
     };
-    let (samples, mean) = sample_tile(image, frame, t.x, t.y, shift);
-    correlate(&samples, mean, pilot_template(blur, pilot))
+    let (glyph, light) = KANA_PILOT_SYMBOLS[usize::from(pilot)];
+    let mut samples = [0.0; POINTS];
+    let (_, energy) = sample_tile(image, frame, t.x, t.y, shift, KANA_GRID, &mut samples);
+    let templates = &templates().0[blur];
+    let template = if light {
+        &templates.light[usize::from(glyph)]
+    } else {
+        &templates.dark[usize::from(glyph)]
+    };
+    correlate(&samples, energy, template)
 }
 
-/// Coarse search of a pilot: shifts on a [`COARSE_STEP`] grid within its [`pilot_reach`], under
-/// the [`COARSE_BLUR`] template; returns the best shift and its correlation.
+/// Coarse search of a pilot: shifts on a [`COARSE_STEP`] grid within its [`pilot_reach`],
+/// sampled on the coarse grid under the coarse template; returns the best shift and its
+/// correlation.
 fn coarse_pilot(image: &Luma, frame: &DecodedFrame, tile: usize) -> ((f64, f64), f64) {
-    let reach = pilot_reach(kana_tiles()[tile].centre().1);
+    let t = kana_tiles()[tile];
+    let Some(pilot) = t.pilot else {
+        return ((0.0, 0.0), f64::MIN);
+    };
+    let (glyph, light) = KANA_PILOT_SYMBOLS[usize::from(pilot)];
+    let coarse = &templates().1;
+    let template = if light {
+        &coarse.light[usize::from(glyph)]
+    } else {
+        &coarse.dark[usize::from(glyph)]
+    };
+    let reach = pilot_reach(t.centre().1);
     let steps = (reach / COARSE_STEP).floor() as i32;
+    let mut samples = [0.0; COARSE_POINTS];
     let mut best = ((0.0, 0.0), f64::MIN);
     for dy in -steps..=steps {
         for dx in -steps..=steps {
             let shift = (COARSE_STEP * f64::from(dx), COARSE_STEP * f64::from(dy));
-            let score = pilot_score(image, frame, tile, COARSE_BLUR, shift);
+            let (_, energy) = sample_tile(
+                image,
+                frame,
+                t.x,
+                t.y,
+                shift,
+                KANA_COARSE_GRID,
+                &mut samples,
+            );
+            let score = correlate(&samples, energy, template);
             if score > best.1 {
                 best = (shift, score);
             }
@@ -841,7 +927,8 @@ pub fn observe_band(image: &Luma, frame: &DecodedFrame, band: u8) -> Option<Band
             continue;
         }
         let t = tiles[tile];
-        let (_, level) = sample_tile(image, frame, t.x, t.y, shift);
+        let mut samples = [0.0; POINTS];
+        let (level, _) = sample_tile(image, frame, t.x, t.y, shift, KANA_GRID, &mut samples);
         let (_, light) = KANA_PILOT_SYMBOLS[usize::from(t.pilot?)];
         found.push((
             tile,
@@ -876,7 +963,8 @@ pub fn observe_band(image: &Luma, frame: &DecodedFrame, band: u8) -> Option<Band
     let (Some(light_line), Some(dark_line)) = (light_line, dark_line) else {
         return None;
     };
-    let templates = &templates()[blur];
+    let templates = &templates().0[blur];
+    let mut samples = [0.0; POINTS];
     let readings = kana_data_tiles(band)
         .iter()
         .map(|&tile| {
@@ -886,7 +974,8 @@ pub fn observe_band(image: &Luma, frame: &DecodedFrame, band: u8) -> Option<Band
             }
             let centre = t.centre();
             let shift = field.at(centre);
-            let (samples, mean) = sample_tile(image, frame, t.x, t.y, shift);
+            let (mean, energy) =
+                sample_tile(image, frame, t.x, t.y, shift, KANA_GRID, &mut samples);
             let x = (centre.0 - f64::from(CANVAS) / 2.0) / 512.0;
             let high = light_line.0 + light_line.1 * x;
             let low = dark_line.0 + dark_line.1 * x;
@@ -895,13 +984,21 @@ pub fn observe_band(image: &Luma, frame: &DecodedFrame, band: u8) -> Option<Band
                 return None;
             }
             let threshold = high.midpoint(low);
+            // a light template is the inside less the ink, so one dot product with the inside
+            // and one with each glyph's ink give both polarities' correlations
             let mut scores = [0.0f64; GLYPH_COUNT];
-            for (g, score) in scores.iter_mut().enumerate() {
-                *score = correlate(&samples, mean, &templates.light[g]).max(correlate(
-                    &samples,
-                    mean,
-                    &templates.dark[g],
-                ));
+            if energy > 1e-9 {
+                let root = energy.sqrt();
+                let dot = |template: &[f64; POINTS]| -> f64 {
+                    samples.iter().zip(template).map(|(x, t)| x * t).sum()
+                };
+                let inside = dot(&templates.inside);
+                for (g, score) in scores.iter_mut().enumerate() {
+                    let ink = dot(&templates.ink[g]);
+                    let light = (inside - ink) / templates.light_norm[g] / root;
+                    let dark = ink / templates.dark_norm[g] / root;
+                    *score = light.max(dark);
+                }
             }
             let mut first = 0;
             for g in 1..GLYPH_COUNT {
@@ -1151,7 +1248,7 @@ mod tests {
             }
         }
         // at the sharpest blur no two light templates correlate above 0.8
-        let t = &templates()[0];
+        let t = &templates().0[0];
         for a in 0..GLYPH_COUNT {
             for b in (a + 1)..GLYPH_COUNT {
                 let dot: f64 = t.light[a].iter().zip(&t.light[b]).map(|(x, y)| x * y).sum();

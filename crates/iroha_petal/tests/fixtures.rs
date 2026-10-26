@@ -10,9 +10,10 @@ use iroha_petal::crc::crc32c;
 use iroha_petal::fountain::{mask_words, mix32};
 use iroha_petal::glyphs::{GLYPH_CHARS, STROKES};
 use iroha_petal::kana::{
-    KANA_BLURS, KANA_DATA_TILES, KANA_GLYPH_ATOMS, KANA_GLYPH_PARITY, KANA_GLYPH_WORD, KANA_GRID,
-    KANA_ID_BASE, KANA_POLARITY_ATOMS, KANA_POLARITY_PARITY, KANA_POLARITY_WORD, KanaLane,
-    decode_kana_lane_counted, encode_kana_lane, kana_first_id, kana_packet, template_probe,
+    KANA_BLURS, KANA_COARSE_GRID, KANA_DATA_TILES, KANA_GLYPH_ATOMS, KANA_GLYPH_PARITY,
+    KANA_GLYPH_WORD, KANA_GRID, KANA_ID_BASE, KANA_POLARITY_ATOMS, KANA_POLARITY_PARITY,
+    KANA_POLARITY_WORD, KanaLane, coarse_template_probe, decode_kana_lane_counted,
+    encode_kana_lane, kana_first_id, kana_packet, template_probe,
 };
 use iroha_petal::lanes::{
     ATOM_LEN, ATOMS_PER_FRAME, D_PARITY, FIELD_ATOMS, FIELD_PARITY, FIELD_WORD, FrameCells, Lane,
@@ -300,6 +301,18 @@ fn kana_ids_and_reader_templates_match() {
             .expect("known blur");
         let got = template_probe(
             blur,
+            number(probe, "glyph") as u8,
+            number(probe, "light") == 1,
+            number(probe, "i") as usize,
+            number(probe, "j") as usize,
+        );
+        assert!((got - float(field(probe, "value"))).abs() < 1e-12, "{got}");
+    }
+    assert_eq!(number(reader, "coarse_grid") as usize, KANA_COARSE_GRID);
+    let coarse = array(reader, "coarse_probes");
+    assert!(!coarse.is_empty());
+    for probe in coarse {
+        let got = coarse_template_probe(
             number(probe, "glyph") as u8,
             number(probe, "light") == 1,
             number(probe, "i") as usize,

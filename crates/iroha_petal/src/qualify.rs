@@ -86,6 +86,39 @@ pub struct StreamTrial {
     /// what the square alone carries; the same seed then gives the same poses, phases and noise
     /// as with the bands shown.
     pub hide_bands: bool,
+    /// A slow phone's decoder: when set, every push costs what it would cost there, and the
+    /// session takes only the newest camera frame whenever it is free (dropping the frames that
+    /// arrived while it worked), as `CameraX`'s keep-only-latest analyser does. When unset, every
+    /// camera frame is decoded.
+    pub decoder: Option<DecoderCost>,
+}
+
+/// What the parts of a push cost a phone's decoder, each in milliseconds (see
+/// [`StreamTrial::decoder`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DecoderCost {
+    /// A capture decoded by a full search.
+    pub full_search: f64,
+    /// A capture decoded by tracking the previous pose.
+    pub tracked: f64,
+    /// A try of the turn lanes.
+    pub turns: f64,
+    /// A try of one band's kana lanes.
+    pub band: f64,
+    /// A merge of held captures.
+    pub merge: f64,
+}
+
+impl DecoderCost {
+    /// A Pixel 6 held to its four Cortex-A55 cores at 1.8 GHz, the Kotlin SDK on ART (measured
+    /// 2026-10-26 on simulated captures of 1280 × 720).
+    pub const A55: Self = Self {
+        full_search: 105.0,
+        tracked: 14.5,
+        turns: 75.0,
+        band: 15.0,
+        merge: 10.0,
+    };
 }
 
 impl StreamTrial {
@@ -104,6 +137,7 @@ impl StreamTrial {
             render_size: 768,
             upright: true,
             hide_bands: false,
+            decoder: None,
         }
     }
 }
@@ -210,6 +244,8 @@ pub fn run_stream_trial(payload: &[u8], kind: u8, trial: &StreamTrial) -> TrialO
         mean_decode_ms: 0.0,
     };
     let mut index = 0u32;
+    // when a slow decoder's last push ends, in seconds
+    let mut clock = 0.0f64;
     loop {
         let t = f64::from(index) / trial.camera_fps;
         if t > trial.horizon_s {
@@ -263,9 +299,29 @@ pub fn run_stream_trial(payload: &[u8], kind: u8, trial: &StreamTrial) -> TrialO
                 tear(&a, &b, ((1.0 - share) * a.height as f64) as usize)
             }
         };
+        let before = session.stats();
         let started = Instant::now();
         let result = session.push(&image, (t * 1000.0) as u64);
         decode_ms += started.elapsed().as_secs_f64() * 1000.0;
+        // on a slow decoder the push ends this much later, and the next push takes the newest
+        // camera frame by then
+        let done_at = trial.decoder.map_or(t, |cost| {
+            let after = session.stats();
+            let mut ms = if after.tracked > before.tracked {
+                cost.tracked
+            } else {
+                cost.full_search
+            };
+            if after.turn_tries > before.turn_tries {
+                ms += cost.turns;
+            }
+            ms += cost.band * f64::from(after.kana_tries - before.kana_tries);
+            if after.merges > before.merges {
+                ms += cost.merge;
+            }
+            clock = clock.max(t) + ms / 1000.0;
+            clock
+        });
         outcome.frames += 1;
         if !matches!(
             result.error,
@@ -278,11 +334,16 @@ pub fn run_stream_trial(payload: &[u8], kind: u8, trial: &StreamTrial) -> TrialO
         outcome.turn_lanes += result.turned.len() as u32;
         outcome.kana_lanes += (result.kana.len() / 2) as u32;
         if let Some(done) = result.completed {
-            outcome.completed_at_s = Some(t);
+            outcome.completed_at_s = Some(done_at);
             outcome.payload_matches = done.payload == payload;
             break;
         }
-        index += 1;
+        index = if trial.decoder.is_some() {
+            // the newest camera frame when the push ends, or the next one
+            ((clock * trial.camera_fps).floor() as u32).max(index + 1)
+        } else {
+            index + 1
+        };
     }
     outcome.mean_decode_ms = decode_ms / f64::from(outcome.frames.max(1));
     outcome

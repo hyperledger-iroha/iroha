@@ -23,7 +23,7 @@ use std::sync::atomic::AtomicUsize;
 use trial::next_trial;
 
 use iroha_petal::prng::Xorshift32;
-use iroha_petal::qualify::{CameraModel, StreamTrial, TrialOutcome, run_stream_trial};
+use iroha_petal::qualify::{CameraModel, DecoderCost, StreamTrial, TrialOutcome, run_stream_trial};
 
 /// Keep trial seeds identical across debug and release builds; refuse overflow.
 fn trial_seeds(trial: usize) -> Option<(u32, u64)> {
@@ -72,6 +72,7 @@ fn main() {
     let mut threads = None;
     let mut upright = true;
     let mut hide_bands = false;
+    let mut decoder: Option<DecoderCost> = None;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         let target = match arg.as_str() {
@@ -81,6 +82,24 @@ fn main() {
             }
             "--hide-bands" => {
                 hide_bands = true;
+                continue;
+            }
+            "--phone" => {
+                let name = args.next().expect("--phone needs a name");
+                assert_eq!(name, "a55", "the only phone model is a55");
+                decoder = Some(DecoderCost::A55);
+                continue;
+            }
+            "--band-ms" => {
+                let ms: f64 = args
+                    .next()
+                    .and_then(|v| v.parse().ok())
+                    .filter(|v: &f64| v.is_finite() && *v >= 0.0)
+                    .expect("--band-ms needs a non-negative number");
+                decoder = Some(DecoderCost {
+                    band: ms,
+                    ..decoder.unwrap_or(DecoderCost::A55)
+                });
                 continue;
             }
             "--camera-fps" => &mut camera_fps,
@@ -133,6 +152,12 @@ fn main() {
         },
         if hide_bands { ", bands hidden" } else { "" }
     );
+    if let Some(cost) = decoder {
+        println!(
+            "decoder costs (ms): full search {}, tracked {}, turn lanes {}, a band {}, merge {}; newest frame when free",
+            cost.full_search, cost.tracked, cost.turns, cost.band, cost.merge
+        );
+    }
     println!(
         "{:<10} {:>6} {:>8} {:>8} {:>8} {:>7} {:>9} {:>7} {:>7} {:>6}",
         "camera", "done%", "mean s", "p50 s", "p90 s", "false", "ms/frame", "F%", "T/F%", "K/s"
@@ -165,6 +190,7 @@ fn main() {
                             readout_s: readout_ms.map_or(typical.readout_s, |ms| ms / 1000.0),
                             upright,
                             hide_bands,
+                            decoder,
                             ..typical
                         };
                         let outcome = run_stream_trial(&payload, 1, &spec);

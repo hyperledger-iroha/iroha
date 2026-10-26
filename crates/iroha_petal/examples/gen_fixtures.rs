@@ -7,9 +7,9 @@ use iroha_petal::crc::crc32c;
 use iroha_petal::fountain::{mask_words, mix32};
 use iroha_petal::glyphs::{GLYPH_CHARS, GLYPH_GRID, STROKE_WIDTH, STROKES};
 use iroha_petal::kana::{
-    KANA_BLURS, KANA_DATA_TILES, KANA_GLYPH_ATOMS, KANA_GLYPH_PARITY, KANA_GLYPH_WORD, KANA_GRID,
-    KANA_ID_BASE, KANA_POLARITY_ATOMS, KANA_POLARITY_PARITY, KANA_POLARITY_WORD, KanaLane,
-    kana_first_id, template_probe,
+    KANA_BLURS, KANA_COARSE_GRID, KANA_DATA_TILES, KANA_GLYPH_ATOMS, KANA_GLYPH_PARITY,
+    KANA_GLYPH_WORD, KANA_GRID, KANA_ID_BASE, KANA_POLARITY_ATOMS, KANA_POLARITY_PARITY,
+    KANA_POLARITY_WORD, KanaLane, coarse_template_probe, kana_first_id, template_probe,
 };
 use iroha_petal::lanes::{
     ATOM_LEN, ATOMS_PER_FRAME, D_PARITY, D_WORD, FIELD_ATOMS, FIELD_PARITY, FIELD_WORD, Lane,
@@ -316,11 +316,28 @@ fn main() {
             ));
         }
     }
+    // the coarse templates at a few points of the coarse grid
+    let mut coarse_probes = Vec::new();
+    for (glyph, light, i, j) in [
+        (1u8, true, 0usize, 0usize),
+        (11, false, 2, 3),
+        (13, true, 5, 1),
+        (9, false, 4, 4),
+        (6, true, 1, 5),
+        (12, false, 3, 2),
+    ] {
+        coarse_probes.push(format!(
+            "{{\"glyph\": {glyph}, \"light\": {}, \"i\": {i}, \"j\": {j}, \"value\": {:?}}}",
+            u8::from(light),
+            coarse_template_probe(glyph, light, i, j)
+        ));
+    }
     let _ = writeln!(
         out,
-        "  \"kana_reader\": {{\"blurs\": {}, \"grid\": {KANA_GRID}, \"template_probes\": [\n    {}\n  ]}},",
+        "  \"kana_reader\": {{\"blurs\": {}, \"grid\": {KANA_GRID}, \"coarse_grid\": {KANA_COARSE_GRID}, \"template_probes\": [\n    {}\n  ], \"coarse_probes\": [\n    {}\n  ]}},",
         list(&KANA_BLURS.map(|b| format!("{b:?}"))),
-        kana_probes.join(",\n    ")
+        kana_probes.join(",\n    "),
+        coarse_probes.join(",\n    ")
     );
     // the turn reader's templates at a few points of every blur
     let mut probes = Vec::new();
