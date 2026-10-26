@@ -298,7 +298,7 @@ final class PetalImageTests: XCTestCase {
     }
 
     func testFindersAreSolidBlossomsAndCornersAreOtherwiseBlack() throws {
-        let image = try PetalRenderer.render(cells(1), options: PetalRenderOptions(size: 256, supersample: 2))
+        let image = try PetalRenderer.renderSquare(cells(1), options: PetalRenderOptions(size: 256, supersample: 2))
         func at(_ x: Int, _ y: Int) -> UInt8 { image.pixels[(y * 256 + x) * 3] }
         let scale = 256.0 / 1024.0
         let fx = PetalLayout.finderCenters[0].x * scale
@@ -311,7 +311,7 @@ final class PetalImageTests: XCTestCase {
 
     func testLitPetalsAreDrawnInTheirColourAndDarkCellsShowTheBackdrop() throws {
         let frame = try cells(2)
-        let image = try PetalRenderer.render(frame, options: PetalRenderOptions(size: 1024, supersample: 1))
+        let image = try PetalRenderer.renderSquare(frame, options: PetalRenderOptions(size: 1024, supersample: 1))
         let palette = PetalPalette.standard
         for cell in 0..<PetalLayout.fieldCells {
             let center = PetalLayout.cellCenter(cell)
@@ -332,7 +332,7 @@ final class PetalImageTests: XCTestCase {
 
     func testLitDotsAreDrawnAndUnlitSlotsAreBlack() throws {
         let frame = try cells(3)
-        let image = try PetalRenderer.render(frame, options: PetalRenderOptions(size: 1024, supersample: 1))
+        let image = try PetalRenderer.renderSquare(frame, options: PetalRenderOptions(size: 1024, supersample: 1))
         var checked = 0
         for (ring, slots) in PetalLayout.ringSlots.enumerated() {
             for slot in 0..<slots {
@@ -347,6 +347,62 @@ final class PetalImageTests: XCTestCase {
             }
         }
         XCTAssertEqual(checked, PetalLayout.totalSlots)
+    }
+
+    func testKatakanaTilesShowTheirPolarityAndGlyph() throws {
+        var frame = try cells(4)
+        // arbitrary words put every glyph on light and dark data tiles; the pilots keep their symbols
+        try frame.setKana(PetalKanaLane.allCases.map { lane in
+            (0..<lane.wordLength).map { UInt8(truncatingIfNeeded: $0 &* 0x35 &+ lane.rawValue &* 0x5B) }
+        })
+        XCTAssertEqual(Set(frame.kanaGlyphs).count, PetalGlyphs.glyphCount)
+        XCTAssertTrue(frame.kanaLight.contains(true) && frame.kanaLight.contains(false))
+        let image = try PetalRenderer.render(frame, options: PetalRenderOptions(size: 1024, supersample: 1))
+        XCTAssertEqual(image.width, 1024)
+        XCTAssertEqual(image.height, 1668)
+        XCTAssertEqual(PetalRenderer.cardHeightPixels(512), 834)
+        let palette = PetalPalette.standard
+        let top = PetalLayout.squareTop
+        for (index, tile) in PetalLayout.kanaTiles.enumerated() {
+            // the pixel centres of the tile's square, against the definition
+            let x0 = Int(tile.x.rounded(.up))
+            let y0 = Int((tile.y + top).rounded(.up))
+            for (dx, dy) in [(3, 3), (12, 12), (8, 17), (20, 6)] {
+                let px = x0 + dx
+                let py = y0 + dy
+                let u = Double(px) + 0.5 - tile.x
+                let v = Double(py) + 0.5 - top - tile.y
+                let inked = PetalLayout.kanaInked(glyph: Int(frame.kanaGlyphs[index]), u: u, v: v)
+                let expected: PetalColor
+                switch (inked, frame.kanaLight[index]) {
+                case (true, true): expected = palette.ink
+                case (false, true): expected = palette.light
+                case (true, false): expected = palette.pink
+                case (false, false): expected = palette.background
+                }
+                let at = (py * 1024 + px) * 3
+                let pixel = PetalColor(red: image.pixels[at], green: image.pixels[at + 1], blue: image.pixels[at + 2])
+                XCTAssertEqual(pixel, expected, "tile \(index) at (\(dx), \(dy))")
+            }
+        }
+    }
+
+    func testSoftwareRendersAreByteIdenticalToTheReference() throws {
+        // CRC-32C of the Rust reference `render` output (the whole card) for frames of a 700-byte
+        // stream (turned petals and katakana tiles included)
+        let encoder = try PetalStreamEncoder(payload: PetalTestSupport.payload(700, seed: 2), kind: 2)
+        for (frame, size, supersample, crc) in [
+            (UInt16(0), 512, 2, UInt32(0xFBDF_7940)),
+            (1, 300, 3, 0xB52F_B2C1),
+            (6, 777, 4, 0xCA8B_70B1),
+        ] {
+            let image = try PetalRenderer.render(
+                encoder.cells(frame: frame),
+                options: PetalRenderOptions(size: size, supersample: supersample)
+            )
+            XCTAssertEqual(image.height, PetalRenderer.cardHeightPixels(size))
+            XCTAssertEqual(IrohaPeerCRC32CV1.checksum(image.pixels), crc, "frame \(frame) at \(size) px, \(supersample)x")
+        }
     }
 
     func testRenderRejectsInvalidOptions() throws {
@@ -413,5 +469,43 @@ final class PetalImageTests: XCTestCase {
             XCTAssertTrue(PetalLayout.ringRadii.contains { abs($0 - radius) < 1e-9 })
             XCTAssertEqual(dot.radius, 9)
         }
+        // the katakana tiles: every tile in order, with the cells' symbols, as the card shows them
+        XCTAssertEqual(PetalDrawList.cardHeight, 1668)
+        XCTAssertEqual(PetalDrawList.squareTop, 322)
+        XCTAssertEqual(PetalDrawList.kanaStrokeWidth, 6.5 * 23 / 32)
+        XCTAssertEqual(list.kanaTiles.count, PetalLayout.kanaTileCount)
+        let card = try PetalRenderer.render(frame, options: PetalRenderOptions(size: 1024, supersample: 1))
+        let palette = PetalPalette.standard
+        for (index, tile) in list.kanaTiles.enumerated() {
+            XCTAssertEqual(tile.tile, index)
+            XCTAssertEqual(tile.origin, PetalPoint(x: PetalLayout.kanaTiles[index].x, y: PetalLayout.kanaTiles[index].y))
+            XCTAssertEqual(tile.glyph, Int(frame.kanaGlyphs[index]))
+            XCTAssertEqual(tile.light, frame.kanaLight[index])
+            XCTAssertEqual(tile.glyphColor, tile.light ? palette.ink : palette.pink)
+            // the pixel at the tile centre is the tile's fill or its glyph
+            let px = (tile.origin.x + 12.5).rounded(.down)
+            let py = (tile.origin.y + 12.5).rounded(.down)
+            let inked = PetalLayout.kanaInked(glyph: tile.glyph, u: px + 0.5 - tile.origin.x, v: py + 0.5 - tile.origin.y)
+            let expected = inked ? tile.glyphColor : (tile.light ? palette.light : palette.background)
+            let at = ((Int(py) + Int(PetalLayout.squareTop)) * 1024 + Int(px)) * 3
+            XCTAssertEqual(
+                PetalColor(red: card.pixels[at], green: card.pixels[at + 1], blue: card.pixels[at + 2]),
+                expected,
+                "tile \(index)"
+            )
+        }
+        // glyph strokes in tile-local units, inside the rounded tile
+        for glyph in 0..<PetalGlyphs.glyphCount {
+            let strokes = PetalDrawList.kanaGlyphStrokes(glyph)
+            XCTAssertEqual(strokes.count, PetalGlyphs.strokes(glyph).count)
+            for (stroke, design) in zip(strokes, PetalGlyphs.strokes(glyph)) {
+                for (point, original) in zip(stroke, design) {
+                    XCTAssertEqual(point.x, 1 + original.x * 23 / 32, accuracy: 1e-12)
+                    XCTAssertEqual(point.y, 1 + original.y * 23 / 32, accuracy: 1e-12)
+                    XCTAssertTrue(PetalLayout.kanaInside(u: point.x, v: point.y))
+                }
+            }
+        }
+        XCTAssertTrue(PetalDrawList.kanaGlyphStrokes(16).isEmpty)
     }
 }

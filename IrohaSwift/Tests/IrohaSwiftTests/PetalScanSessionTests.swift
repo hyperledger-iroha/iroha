@@ -35,7 +35,7 @@ final class PetalScanSessionTests: XCTestCase {
         } else {
             cells = encoder.cells(frame: frame)
         }
-        let code = try PetalRenderer.render(cells, options: PetalRenderOptions(size: 512, supersample: 2)).luma()
+        let code = try PetalRenderer.renderSquare(cells, options: PetalRenderOptions(size: 512, supersample: 2)).luma()
         let width = 640
         let height = 480
         let angle = degrees * Double.pi / 180
@@ -192,6 +192,60 @@ final class PetalScanSessionTests: XCTestCase {
         XCTAssertEqual(session.push(try turnedFrame(encoder, 31, degrees: 12), nowMilliseconds: 31 * 83).turned, "0123")
         XCTAssertEqual(session.turnMisses, 0)
         XCTAssertEqual(session.push(try turnedFrame(encoder, 32, degrees: 12), nowMilliseconds: 32 * 83).turned, "0123")
+    }
+
+    func testAnUprightCameraReadsBothBandsOncePerShownFrame() throws {
+        let encoder = try PetalStreamEncoder(payload: Support.payload(3_000, seed: 3), kind: 2)
+        // a phone held upright delivers landscape frames with the card turned a quarter
+        func camera(_ frame: UInt16) throws -> PetalLuma {
+            try Support.turnedCamera(
+                Support.renderCard(encoder, frame: frame, size: 640, supersample: 2),
+                degrees: 92,
+                width: 1120,
+                height: 720
+            )
+        }
+        var session = PetalScanSession()
+        let shown = try camera(1)
+        let first = session.push(shown, nowMilliseconds: 0)
+        XCTAssertEqual(first.lanes, "D0123")
+        XCTAssertEqual(first.kana, "P0K0P1K1")
+        // a capture whose bands read a lane tries no turn lane …
+        XCTAssertEqual(first.turned, "")
+        // … and a second capture of the same shown frame tries no band again but its turn lanes
+        let again = session.push(shown, nowMilliseconds: 33)
+        XCTAssertEqual(again.kana, "")
+        XCTAssertEqual(again.turned, "0123")
+        let next = session.push(try camera(2), nowMilliseconds: 83)
+        XCTAssertEqual(next.kana, "P0K0P1K1")
+        XCTAssertEqual(next.turned, "")
+        XCTAssertEqual(session.stats.kanaTries, 4)
+        XCTAssertEqual(session.stats.kanaLanes, 8)
+        XCTAssertEqual(
+            session.kanaTried.last,
+            PetalScanSession.KanaTry(header: PetalLaneHeader(tag: encoder.meta.tag, frame: 2), band: 1)
+        )
+        session.reset()
+        XCTAssertTrue(session.kanaTried.isEmpty)
+    }
+
+    func testBandTriesThatReadNothingBackOff() throws {
+        let encoder = try PetalStreamEncoder(payload: Support.payload(3_000, seed: 3), kind: 2)
+        var session = PetalScanSession()
+        var triedAt: [UInt16] = []
+        // bare squares: every field lane reads, no band is in view
+        for frame in UInt16(1)...30 {
+            let before = session.stats.kanaTries
+            let outcome = session.push(try turnedFrame(encoder, frame, degrees: 12), nowMilliseconds: UInt64(frame) * 83)
+            XCTAssertTrue(outcome.lanes.hasSuffix("0123"), "frame \(frame)")
+            XCTAssertEqual(outcome.kana, "")
+            if session.stats.kanaTries > before { triedAt.append(frame) }
+        }
+        // after the n-th try that reads nothing, the next min(n, 8) captures that would try are
+        // passed over; each try covers both bands
+        XCTAssertEqual(triedAt, [1, 3, 6, 10, 15, 21, 28])
+        XCTAssertEqual(Int(session.stats.kanaTries), 2 * triedAt.count)
+        XCTAssertEqual(session.kanaMisses, 7)
     }
 
     func testTheSessionRemembersTheTurnLanesOfSixShownFrames() throws {

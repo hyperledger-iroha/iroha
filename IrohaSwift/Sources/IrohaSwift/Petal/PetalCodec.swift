@@ -1,10 +1,10 @@
 import Foundation
 
 // Petal Stream lane codec: xorshift32 whitening, Reed–Solomon over GF(2^8)
-// and the cell layout of the five lanes and the turns on top of them. This
-// file is a line-by-line port of `crates/iroha_petal/src/{prng,rs,lanes}.rs`;
-// the shared golden vectors in `fixtures/petal/petal_stream_v3.json` pin every
-// byte.
+// and the cell layout of the five lanes, the turns on top of them and the
+// katakana tiles of the card's bands. This file is a line-by-line port of
+// `crates/iroha_petal/src/{prng,rs,lanes}.rs`; the shared golden vectors in
+// `fixtures/petal/petal_stream_v5.json` pin every byte.
 
 /// Failures of the Petal lane codec.
 public enum PetalCodecError: Error, Equatable, LocalizedError, Sendable {
@@ -484,10 +484,17 @@ public struct PetalFrameCells: Equatable, Sendable {
     /// Turn position (0–3, see ``PetalTurns/turnAngle(_:)``) of every field
     /// cell: zero for dark petals and for lit petals that carry no turn bits.
     public private(set) var turns: [UInt8]
+    /// The glyph (`0..<16`, see ``PetalGlyphs``) every katakana tile shows, in
+    /// ``PetalLayout/kanaTiles`` order.
+    public private(set) var kanaGlyphs: [UInt8]
+    /// Whether every katakana tile is light (filled, glyph in ink) rather than
+    /// dark (glyph in pink), in ``PetalLayout/kanaTiles`` order.
+    public private(set) var kanaLight: [Bool]
 
     /// Builds the cells from the transmitted codewords of lane `D` and the
     /// four field lanes (sector 0 first), with every petal unturned (see
-    /// ``setTurns(_:)``).
+    /// ``setTurns(_:)``) and only the pilots set among the katakana tiles (see
+    /// ``setKana(_:)``).
     ///
     /// - Throws: ``PetalCodecError/invalidShape`` when a codeword has the
     ///   wrong length or there are not four field codewords.
@@ -523,6 +530,58 @@ public struct PetalFrameCells: Equatable, Sendable {
         self.dots = dots
         self.petals = petals
         turns = [UInt8](repeating: 0, count: PetalLayout.fieldCells)
+        kanaGlyphs = PetalKana.pilotSymbols.glyphs
+        kanaLight = PetalKana.pilotSymbols.light
+    }
+
+    /// Shows the transmitted kana codewords on the data tiles of both bands:
+    /// four words in ``PetalKanaLane/allCases`` order (`P0`, `K0`, `P1`,
+    /// `K1`); the pilots keep their symbols.
+    ///
+    /// - Throws: ``PetalCodecError/invalidShape`` unless there are four
+    ///   codewords of their lanes' lengths.
+    public mutating func setKana(_ words: [[UInt8]]) throws {
+        guard words.count == PetalKanaLane.allCases.count,
+              PetalKanaLane.allCases.allSatisfy({ words[$0.rawValue].count == $0.wordLength }) else {
+            throw PetalCodecError.invalidShape
+        }
+        setKanaValidated(words)
+    }
+
+    mutating func setKanaValidated(_ words: [[UInt8]]) {
+        for band in 0..<PetalLayout.kanaBands {
+            PetalKana.setSymbols(
+                glyphs: &kanaGlyphs,
+                light: &kanaLight,
+                band: band,
+                polarity: words[2 * band],
+                glyphWord: words[2 * band + 1]
+            )
+        }
+    }
+
+    /// Packs the polarity codeword the data tiles of band `band` (`0..<2`)
+    /// show; empty for a band out of range.
+    public func kanaPolarityWord(band: Int) -> [UInt8] {
+        guard (0..<PetalLayout.kanaBands).contains(band) else { return [] }
+        var word = [UInt8](repeating: 0, count: PetalKana.polarityWordLength)
+        for (i, tile) in PetalLayout.kanaDataTable[band].prefix(PetalKana.polarityWordLength * 8).enumerated()
+        where kanaLight[tile] {
+            word[i / 8] |= 1 << (7 - i % 8)
+        }
+        return word
+    }
+
+    /// Packs the glyph codeword the data tiles of band `band` (`0..<2`) show;
+    /// empty for a band out of range.
+    public func kanaGlyphWord(band: Int) -> [UInt8] {
+        guard (0..<PetalLayout.kanaBands).contains(band) else { return [] }
+        var word = [UInt8](repeating: 0, count: PetalKana.glyphWordLength)
+        for (i, tile) in PetalLayout.kanaDataTable[band].enumerated() {
+            let nibble = kanaGlyphs[tile] & 0x0F
+            word[i / 2] |= i % 2 == 0 ? nibble << 4 : nibble
+        }
+        return word
     }
 
     /// Turns the carriers of every sector to show its transmitted turn

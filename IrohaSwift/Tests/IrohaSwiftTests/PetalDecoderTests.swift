@@ -811,20 +811,59 @@ final class PetalDecoderTests: XCTestCase {
         XCTAssertEqual(PetalDecoder.mergeFields([]), [nil, nil, nil, nil])
     }
 
-    // MARK: - Golden captures (`fixtures/petal/petal_captures_v3.json`)
+    // MARK: - Golden captures (`fixtures/petal/petal_captures_v5.json`)
 
     private func captures() throws -> [String: Any] {
-        try XCTUnwrap(Support.capturesFixture, "fixtures/petal/petal_captures_v3.json is missing")
+        try XCTUnwrap(Support.capturesFixture, "fixtures/petal/petal_captures_v5.json is missing")
     }
 
-    /// The recorded data of every lane: lane `D`, the four field lanes and the
-    /// four turn lanes.
+    /// The recorded data of every lane: lane `D`, the four field lanes, the
+    /// four turn lanes and the four kana lanes.
     private func truth(_ entry: [String: Any]) throws -> PetalLaneData {
         PetalLaneData(
             d: try Support.bytes(entry, "d_data"),
             fields: try XCTUnwrap(entry["field_data"] as? [String]).map(Support.hex),
-            turns: try XCTUnwrap(entry["turn_data"] as? [String]).map(Support.hex)
+            turns: try XCTUnwrap(entry["turn_data"] as? [String]).map(Support.hex),
+            kana: try XCTUnwrap(entry["kana_data"] as? [String]).map(Support.hex)
         )
+    }
+
+    /// The header a decoded capture's lanes name: its first atom packet's, or its beacon's.
+    private func headerOf(_ frame: PetalDecodedFrame) throws -> PetalLaneHeader {
+        if let packet = frame.atomPackets.first { return packet.header }
+        return try XCTUnwrap(frame.beacon, "a decoded capture names its frame").header
+    }
+
+    /// Reads the kana lanes of a decoded capture under the header its lanes
+    /// name (no band skipped), checks them against the recorded data and the
+    /// requirements, and returns their names and atoms.
+    @discardableResult
+    private func readKanaLanes(
+        _ name: String,
+        _ image: PetalLuma,
+        _ frame: PetalDecodedFrame,
+        _ entry: [String: Any]
+    ) throws -> (names: String, packets: [PetalAtomPacket]) {
+        let truth = try truth(entry)
+        var names = ""
+        var packets: [PetalAtomPacket] = []
+        for (index, result) in PetalKana.readKana(image, frame: frame, header: try headerOf(frame)).enumerated() {
+            guard let result else { continue }
+            let lane = try XCTUnwrap(PetalKanaLane(rawValue: index))
+            XCTAssertEqual(result.result.data, truth.kana(lane), "\(name): kana lane \(lane.name) data")
+            packets.append(try XCTUnwrap(
+                PetalKana.kanaPacket(result.header, lane: lane, data: result.result.data),
+                "\(name): kana check \(lane.name)"
+            ))
+            names += lane.name
+        }
+        let must = (entry["must_kana"] as? String) ?? ""
+        for required in stride(from: 0, to: must.count, by: 2) {
+            let lane = String(Array(must)[required..<(required + 2)])
+            XCTAssertTrue(names.contains(lane), "\(name): kana \(names), must read \(must)")
+        }
+        XCTAssertEqual(names, try Support.string(entry, "reference_kana"), "\(name): kana lanes read")
+        return (names, packets)
     }
 
     /// Reads the turn lanes of a decoded capture (no sector skipped), checks
@@ -868,7 +907,7 @@ final class PetalDecoderTests: XCTestCase {
         let doc = try captures()
         var assembler = PetalStreamAssembler()
         let entries = try Support.objects(doc, "captures")
-        XCTAssertEqual(entries.count, 12)
+        XCTAssertEqual(entries.count, 16)
         for capture in entries {
             let name = try Support.string(capture, "name")
             let image = try Support.luma(of: capture)
@@ -885,10 +924,14 @@ final class PetalDecoderTests: XCTestCase {
             let turnStarted = DispatchTime.now().uptimeNanoseconds
             let (turned, packets) = try readTurnLanes(name, image, decoded, capture)
             let turnElapsed = Double(DispatchTime.now().uptimeNanoseconds - turnStarted) / 1e6
+            let kanaStarted = DispatchTime.now().uptimeNanoseconds
+            let (kana, kanaPackets) = try readKanaLanes(name, image, decoded, capture)
+            let kanaElapsed = Double(DispatchTime.now().uptimeNanoseconds - kanaStarted) / 1e6
             print(String(
-                format: "petal capture %@ %dx%d: lanes %@ (reference %@), turn lanes %@, distortion %.3f, in %.1f ms + %.1f ms",
-                name, image.width, image.height, decoded.laneLetters, reference, turned, decoded.pose.distortion,
-                elapsed, turnElapsed
+                format: "petal capture %@ %dx%d: lanes %@ (reference %@), turn lanes %@, kana lanes %@, distortion %.3f, "
+                    + "in %.1f ms + %.1f ms + %.1f ms",
+                name, image.width, image.height, decoded.laneLetters, reference, turned, kana, decoded.pose.distortion,
+                elapsed, turnElapsed, kanaElapsed
             ))
             XCTAssertEqual(decoded.mirrored, capture["mirrored"] as? Bool, "\(name): mirror flag")
             let read = readLanes(name, decoded, try truth(capture))
@@ -901,7 +944,7 @@ final class PetalDecoderTests: XCTestCase {
                 "\(name): inferred corner"
             )
             decoded.feed(&assembler)
-            for packet in packets { assembler.push(atoms: packet) }
+            for packet in packets + kanaPackets { assembler.push(atoms: packet) }
         }
         // captures of different frames of the same stream accumulate in one assembler
         XCTAssertGreaterThan(assembler.progress.atomsReceived, 100)
@@ -923,9 +966,10 @@ final class PetalDecoderTests: XCTestCase {
             let followed = try XCTUnwrap(tracked, "\(name): tracking lost the code")
             let reference = try Support.string(pair, "reference_tracked")
             let (turned, _) = try readTurnLanes(name, next, followed, pair)
+            let (kana, _) = try readKanaLanes(name, next, followed, pair)
             print(String(
-                format: "petal track %@ %dx%d: lanes %@ (reference %@), turn lanes %@, in %.1f ms",
-                name, next.width, next.height, followed.laneLetters, reference, turned, elapsed
+                format: "petal track %@ %dx%d: lanes %@ (reference %@), turn lanes %@, kana lanes %@, in %.1f ms",
+                name, next.width, next.height, followed.laneLetters, reference, turned, kana, elapsed
             ))
             let read = readLanes(name, followed, try truth(pair))
             let must = try Support.string(pair, "must_track")
@@ -963,21 +1007,26 @@ final class PetalDecoderTests: XCTestCase {
                 let word = try PetalTurns.encodeTurnLane(sector: sector, data: data)
                 XCTAssertEqual(try PetalTurns.decodeTurnLaneCounted(sector: sector, word).data, data)
             }
+            for lane in PetalKanaLane.allCases {
+                let word = try PetalKana.encodeKanaLane(lane, data: recorded.kana(lane))
+                XCTAssertEqual(try PetalKana.decodeKanaLaneCounted(lane, word).data, recorded.kana(lane))
+            }
             XCTAssertEqual(recorded, encoder.laneData(frame: UInt16(try Support.integer(capture, "frame"))))
         }
     }
 
     func testSoftwareRendererReproducesTheCleanGoldenCapture() throws {
-        // `clean-512` is the reference render (512 px, 3x3 supersampling) of
-        // frame 5 of the `one-pass` stream, converted to luma.
+        // `clean-512` is the reference render (the card 512 px wide, 3x3
+        // supersampling) of frame 5 of the `one-pass` stream, converted to luma.
         let doc = try captures()
         let capture = try XCTUnwrap(try Support.objects(doc, "captures").first {
             ($0["name"] as? String) == "clean-512"
         })
         let encoder = try PetalStreamEncoder(payload: try Support.bytes(doc, "payload_hex"), kind: 2)
-        let rendered = try Support.render(encoder, frame: 5, size: 512, supersample: 3)
+        let rendered = try Support.renderCard(encoder, frame: 5, size: 512, supersample: 3)
         let golden = try Support.luma(of: capture)
         XCTAssertEqual(rendered.width, golden.width)
+        XCTAssertEqual(rendered.height, golden.height)
         let mismatches = zip(rendered.pixels, golden.pixels).filter { $0 != $1 }.count
         XCTAssertEqual(mismatches, 0, "software render differs from the reference in \(mismatches) pixels")
     }

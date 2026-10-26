@@ -3,7 +3,8 @@ import Foundation
 import IrohaSwift
 import SwiftUI
 
-/// Draws one Petal Stream frame as a square, scaled to fit.
+/// Draws one Petal Stream frame as its portrait card (the square code with a
+/// band of katakana tiles above and below it), scaled to fit.
 public struct PetalFrameView: View {
     private let drawList: PetalDrawList
 
@@ -17,18 +18,11 @@ public struct PetalFrameView: View {
 
     public var body: some View {
         Canvas { context, size in
-            let side = min(size.width, size.height)
-            let rect = CGRect(
-                x: (size.width - side) / 2,
-                y: (size.height - side) / 2,
-                width: side,
-                height: side
-            )
             context.withCGContext { cgContext in
-                PetalCoreGraphicsRenderer.draw(drawList, in: cgContext, rect: rect)
+                PetalCoreGraphicsRenderer.draw(drawList, in: cgContext, rect: CGRect(origin: .zero, size: size))
             }
         }
-        .aspectRatio(1, contentMode: .fit)
+        .aspectRatio(PetalCoreGraphicsRenderer.cardAspectRatio, contentMode: .fit)
         .accessibilityLabel(Text("Petal Stream code"))
     }
 }

@@ -51,16 +51,19 @@ final class PetalCameraAnalyzerTests: XCTestCase {
         return buffer
     }
 
-    /// A 640×480 camera frame showing `frame` as a 400 px code.
+    /// A 640×480 camera frame of a phone held upright: the card of `frame`,
+    /// 384 px wide, turned a quarter.
     private func cameraLuma(_ encoder: PetalStreamEncoder, _ frame: UInt16) throws -> PetalLuma {
-        let code = try PetalRenderer.render(
+        let card = try PetalRenderer.render(
             encoder.cells(frame: frame),
-            options: PetalRenderOptions(size: 400, supersample: 2)
+            options: PetalRenderOptions(size: 384, supersample: 2)
         ).luma()
+        let left = (640 - card.height) / 2
+        let top = (480 - card.width) / 2
         var pixels = [UInt8](repeating: 10, count: 640 * 480)
-        for y in 0..<code.height {
-            for x in 0..<code.width {
-                pixels[(y + 40) * 640 + x + 120] = code.pixels[y * code.width + x]
+        for y in 0..<card.width {
+            for x in 0..<card.height {
+                pixels[(y + top) * 640 + x + left] = card.pixels[(card.height - 1 - x) * card.width + y]
             }
         }
         return try PetalLuma(width: 640, height: 480, pixels: pixels)
@@ -125,6 +128,9 @@ final class PetalCameraAnalyzerTests: XCTestCase {
         // the code stays where it is: every frame after the first follows the previous pose
         XCTAssertEqual(analyzer.stats.tracked + 1, analyzer.stats.frames)
         XCTAssertEqual(analyzer.stats.inferred, 0)
+        // the bands of every shown frame are read
+        XCTAssertGreaterThan(analyzer.stats.kanaLanes, 0)
+        XCTAssertTrue(recorder.outcomes.contains { $0.kana == "P0K0P1K1" })
         XCTAssertNotNil(recorder.outcomes.last?.completed)
 
         // frames after completion are ignored until reset

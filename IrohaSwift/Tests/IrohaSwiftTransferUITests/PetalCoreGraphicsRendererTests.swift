@@ -11,7 +11,7 @@ import UIKit
 #endif
 
 /// The CoreGraphics renderer and the SwiftUI player must draw frames the
-/// Petal decoder reads back exactly, turn lanes included.
+/// Petal decoder reads back exactly, turn and kana lanes included.
 final class PetalCoreGraphicsRendererTests: XCTestCase {
     private static let payload: [UInt8] = (0..<300).map {
         UInt8(truncatingIfNeeded: (UInt32($0) &* 2_654_435_761) >> 11)
@@ -50,6 +50,7 @@ final class PetalCoreGraphicsRendererTests: XCTestCase {
             let list = PetalDrawList(cells: encoder.cells(frame: frame))
             let image = try XCTUnwrap(PetalCoreGraphicsRenderer.makeImage(list, size: 768))
             XCTAssertEqual(image.width, 768)
+            XCTAssertEqual(image.height, PetalRenderer.cardHeightPixels(768))
             let captured = try luma(of: image)
             let decoded = try PetalDecoder.decode(captured)
             let expected = encoder.laneData(frame: frame)
@@ -62,6 +63,12 @@ final class PetalCoreGraphicsRendererTests: XCTestCase {
             let turns = PetalTurns.readTurns(captured, frame: decoded)
             for sector in 0..<PetalLayout.sectors {
                 XCTAssertEqual(turns[sector]?.data, expected.turns[sector], "frame \(frame) turn lane \(sector)")
+            }
+            // the katakana tiles, stroked glyphs and all, read as the reference renderer draws them
+            let header = PetalLaneHeader(tag: encoder.meta.tag, frame: frame)
+            let kana = PetalKana.readKana(captured, frame: decoded, header: header)
+            for lane in PetalKanaLane.allCases {
+                XCTAssertEqual(kana[lane.rawValue]?.result.data, expected.kana(lane), "frame \(frame) kana lane \(lane.name)")
             }
         }
     }
@@ -100,6 +107,7 @@ final class PetalCoreGraphicsRendererTests: XCTestCase {
             PetalCoreGraphicsRenderer.makeImage(PetalDrawList(cells: cells), size: 256)
         ))
         let software = try PetalRenderer.render(cells, options: PetalRenderOptions(size: 256, supersample: 4)).luma()
+        XCTAssertEqual(vector.height, software.height)
         // Both rasterise the same geometry; only anti-aliased edges may differ.
         var large = 0
         var total = 0
@@ -128,8 +136,8 @@ final class PetalCoreGraphicsRendererTests: XCTestCase {
 
     /// Render the actual SwiftUI hierarchy on every supported Apple deployment target.
     @MainActor
-    private func hostedImage<Content: View>(of view: Content) throws -> CGImage {
-        let bounds = CGRect(x: 0, y: 0, width: 640, height: 640)
+    private func hostedImage<Content: View>(of view: Content, size: CGSize) throws -> CGImage {
+        let bounds = CGRect(origin: .zero, size: size)
         #if canImport(AppKit)
         let hostingView = NSHostingView(rootView: view)
         hostingView.frame = bounds
@@ -159,10 +167,12 @@ final class PetalCoreGraphicsRendererTests: XCTestCase {
     @MainActor
     func testSwiftUIFrameViewRendersADecodableFrame() throws {
         let encoder = try PetalStreamEncoder(payload: Self.payload, kind: 2)
-        let view = PetalFrameView(cells: encoder.cells(frame: 8)).frame(width: 640, height: 640)
+        // a portrait frame the card fills
+        let size = CGSize(width: 480, height: 782)
+        let view = PetalFrameView(cells: encoder.cells(frame: 8)).frame(width: size.width, height: size.height)
         // Hosting renders on the package's macOS 12 / iOS 15 deployment targets.
         // Where available, also retain the independent ImageRenderer assertions.
-        var images = [("hosted SwiftUI hierarchy", try hostedImage(of: view))]
+        var images = [("hosted SwiftUI hierarchy", try hostedImage(of: view, size: size))]
         if #available(macOS 13.0, iOS 16.0, *) {
             let renderer = ImageRenderer(content: view)
             renderer.scale = 1
@@ -179,6 +189,10 @@ final class PetalCoreGraphicsRendererTests: XCTestCase {
             let turns = PetalTurns.readTurns(captured, frame: decoded)
             for sector in 0..<PetalLayout.sectors {
                 XCTAssertEqual(turns[sector]?.data, expected.turns[sector], "\(name) turn lane \(sector)")
+            }
+            let kana = PetalKana.readKana(captured, frame: decoded, header: PetalLaneHeader(tag: encoder.meta.tag, frame: 8))
+            for lane in PetalKanaLane.allCases {
+                XCTAssertEqual(kana[lane.rawValue]?.result.data, expected.kana(lane), "\(name) kana lane \(lane.name)")
             }
         }
         _ = PetalStreamView(encoder: encoder, framesPerSecond: 10)

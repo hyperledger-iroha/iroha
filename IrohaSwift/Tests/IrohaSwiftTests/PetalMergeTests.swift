@@ -274,10 +274,10 @@ final class PetalMergeTests: XCTestCase {
         XCTAssertEqual(session.merge(image, frame: partial), "0123")
     }
 
-    // MARK: - Golden merge sets (`fixtures/petal/petal_captures_v3.json`)
+    // MARK: - Golden merge sets (`fixtures/petal/petal_captures_v5.json`)
 
     private func fixtures() throws -> [String: Any] {
-        try XCTUnwrap(Support.capturesFixture, "fixtures/petal/petal_captures_v3.json is missing")
+        try XCTUnwrap(Support.capturesFixture, "fixtures/petal/petal_captures_v5.json is missing")
     }
 
     /// The recorded data of lane `D` and the four field lanes of a merge set.

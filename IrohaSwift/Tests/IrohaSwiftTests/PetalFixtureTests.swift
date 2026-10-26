@@ -2,12 +2,12 @@ import XCTest
 @testable import IrohaSwift
 
 /// Conformance against the shared golden vectors in
-/// `fixtures/petal/petal_stream_v3.json` (every section of the file).
+/// `fixtures/petal/petal_stream_v5.json` (every section of the file).
 final class PetalFixtureTests: XCTestCase {
     private typealias Support = PetalTestSupport
 
     private func fixture() throws -> [String: Any] {
-        try XCTUnwrap(Support.streamFixture, "fixtures/petal/petal_stream_v3.json is missing")
+        try XCTUnwrap(Support.streamFixture, "fixtures/petal/petal_stream_v5.json is missing")
     }
 
     /// A fixture number that the reference wrote from a single-precision constant.
@@ -17,8 +17,8 @@ final class PetalFixtureTests: XCTestCase {
 
     func testConstantsAndLayoutMatch() throws {
         let doc = try fixture()
-        XCTAssertEqual(try Support.integer(doc, "fixture_version"), 3)
-        XCTAssertEqual(try Support.string(doc, "format"), "petal-stream-v3")
+        XCTAssertEqual(try Support.integer(doc, "fixture_version"), 5)
+        XCTAssertEqual(try Support.string(doc, "format"), "petal-stream-v5")
         let constants = try Support.object(doc, "constants")
         XCTAssertEqual(Double(try Support.integer(constants, "canvas")), PetalLayout.canvas)
         XCTAssertEqual(try Support.integer(constants, "atom_len"), PetalLane.atomLength)
@@ -42,6 +42,35 @@ final class PetalFixtureTests: XCTestCase {
             XCTAssertEqual(try Support.integer(constants, key), value, key)
         }
         XCTAssertEqual(try Support.integer(constants, "turn_id_base"), Int(PetalTurns.idBase))
+        for (key, value) in [
+            ("card_height", PetalLayout.cardHeight),
+            ("square_top", PetalLayout.squareTop),
+            ("kana_tile", PetalLayout.kanaTile),
+            ("kana_pitch", PetalLayout.kanaPitch),
+            ("kana_glyph_box", PetalLayout.kanaGlyphBox),
+            ("kana_corner", PetalLayout.kanaCorner),
+            ("kana_gap", PetalLayout.kanaGap),
+            ("kana_margin", PetalLayout.kanaMargin),
+            ("kana_finder_clearance", PetalLayout.kanaFinderClearance),
+        ] {
+            XCTAssertEqual(Double(try Support.integer(constants, key)), value, key)
+        }
+        for (key, value) in [
+            ("kana_rows", PetalLayout.kanaRows),
+            ("kana_columns", PetalLayout.kanaColumns),
+            ("kana_bands", PetalLayout.kanaBands),
+            ("kana_pilots", PetalLayout.kanaPilots),
+            ("kana_data_tiles", PetalKana.dataTiles),
+            ("kana_glyph_word", PetalKana.glyphWordLength),
+            ("kana_glyph_parity", PetalKana.glyphParityLength),
+            ("kana_glyph_atoms", PetalKana.glyphAtomCount),
+            ("kana_polarity_word", PetalKana.polarityWordLength),
+            ("kana_polarity_parity", PetalKana.polarityParityLength),
+            ("kana_polarity_atoms", PetalKana.polarityAtomCount),
+        ] {
+            XCTAssertEqual(try Support.integer(constants, key), value, key)
+        }
+        XCTAssertEqual(try Support.integer(constants, "kana_id_base"), Int(PetalKana.idBase))
 
         let layout = try Support.object(doc, "layout")
         XCTAssertEqual(
@@ -83,6 +112,30 @@ final class PetalFixtureTests: XCTestCase {
         XCTAssertEqual(try Support.integers(layout, "data_slots"), PetalLayout.dataSlots)
         XCTAssertEqual(try Support.integers(layout, "gate_slots"), PetalLayout.gateSlots)
         XCTAssertEqual(try Support.integers(layout, "guard_slots"), PetalLayout.guardSlots)
+        let tiles = try XCTUnwrap(layout["kana_tiles"] as? [[NSNumber]])
+        XCTAssertEqual(tiles.count, PetalLayout.kanaTiles.count)
+        for (index, (row, tile)) in zip(tiles, PetalLayout.kanaTiles).enumerated() {
+            XCTAssertEqual(row.prefix(3).map(\.intValue), [tile.band, tile.row, tile.column], "tile \(index)")
+            XCTAssertEqual(row[3].doubleValue, tile.x, "tile \(index) x")
+            XCTAssertEqual(row[4].doubleValue, tile.y, "tile \(index) y")
+            XCTAssertEqual(row[5].intValue, tile.pilot ?? -1, "tile \(index) pilot")
+        }
+        let pilots = try XCTUnwrap(layout["kana_pilot_symbols"] as? [[NSNumber]])
+        XCTAssertEqual(pilots.count, PetalLayout.kanaPilots)
+        for (pilot, row) in pilots.enumerated() {
+            XCTAssertEqual(row[0].intValue, PetalLayout.kanaPilotSymbols[pilot].glyph, "pilot \(pilot) glyph")
+            XCTAssertEqual(row[1].intValue == 1, PetalLayout.kanaPilotSymbols[pilot].light, "pilot \(pilot) polarity")
+        }
+        let glyphs = try Support.object(doc, "glyphs")
+        XCTAssertEqual(Array(try Support.string(glyphs, "chars")), PetalGlyphs.characters)
+        XCTAssertEqual(try XCTUnwrap(glyphs["grid"] as? NSNumber).doubleValue, PetalGlyphs.glyphGrid)
+        XCTAssertEqual(try XCTUnwrap(glyphs["stroke_width"] as? NSNumber).doubleValue, PetalGlyphs.strokeWidth)
+        let strokes = try XCTUnwrap(glyphs["strokes"] as? [[[[NSNumber]]]])
+        XCTAssertEqual(strokes.count, PetalGlyphs.glyphCount)
+        for (glyph, expected) in strokes.enumerated() {
+            let points = expected.map { stroke in stroke.map { PetalPoint(x: $0[0].doubleValue, y: $0[1].doubleValue) } }
+            XCTAssertEqual(PetalGlyphs.strokes(glyph), points, "glyph \(glyph)")
+        }
 
         let palette = try Support.object(doc, "palette")
         func color(_ key: String) throws -> PetalColor {
@@ -93,6 +146,7 @@ final class PetalFixtureTests: XCTestCase {
         XCTAssertEqual(try color("light"), PetalPalette.standard.light)
         XCTAssertEqual(try color("pink"), PetalPalette.standard.pink)
         XCTAssertEqual(try color("backdrop"), PetalPalette.standard.backdrop)
+        XCTAssertEqual(try color("ink"), PetalPalette.standard.ink)
     }
 
     func testChecksumsPRNGAndWhiteningMatch() throws {
@@ -115,6 +169,54 @@ final class PetalFixtureTests: XCTestCase {
         for sector in 0..<PetalLayout.sectors {
             XCTAssertEqual(try Support.bytes(whitening, "F\(sector)"), PetalLane.field(sector).whitening, "F\(sector)")
             XCTAssertEqual(try Support.bytes(whitening, "T\(sector)"), PetalTurns.turnWhitening(sector), "T\(sector)")
+        }
+        for lane in PetalKanaLane.allCases {
+            XCTAssertEqual(try Support.bytes(whitening, lane.name), lane.whitening, lane.name)
+        }
+    }
+
+    func testKanaIDsAndReaderTemplatesMatch() throws {
+        let doc = try fixture()
+        let ids = try Support.object(doc, "kana_first_ids")
+        XCTAssertEqual(try Support.array(ids, "lanes") as? [String], PetalKanaLane.allCases.map(\.name))
+        let frames = try Support.integers(ids, "frames")
+        let expected = try XCTUnwrap(ids["ids"] as? [[NSNumber]])
+        XCTAssertEqual(frames.count, expected.count)
+        for (frame, row) in zip(frames, expected) {
+            XCTAssertEqual(
+                PetalKanaLane.allCases.map { Int(PetalKana.kanaFirstID(frame: UInt16(frame), lane: $0)) },
+                row.map(\.intValue),
+                "frame \(frame)"
+            )
+        }
+        let reader = try Support.object(doc, "kana_reader")
+        XCTAssertEqual(try XCTUnwrap(reader["blurs"] as? [NSNumber]).map(\.doubleValue), PetalKana.blurs)
+        XCTAssertEqual(try Support.integer(reader, "grid"), PetalKana.grid)
+        XCTAssertEqual(try Support.integer(reader, "coarse_grid"), PetalKana.coarseGrid)
+        let probes = try Support.objects(reader, "template_probes")
+        XCTAssertGreaterThanOrEqual(probes.count, PetalKana.blurs.count)
+        for probe in probes {
+            let sigma = try XCTUnwrap(probe["blur"] as? NSNumber).doubleValue
+            let blur = try XCTUnwrap(PetalKana.blurs.firstIndex { abs($0 - sigma) < 1e-12 }, "known blur")
+            let got = PetalKana.templateProbe(
+                blur: blur,
+                glyph: try Support.integer(probe, "glyph"),
+                light: try Support.integer(probe, "light") == 1,
+                i: try Support.integer(probe, "i"),
+                j: try Support.integer(probe, "j")
+            )
+            XCTAssertEqual(got, try XCTUnwrap(probe["value"] as? NSNumber).doubleValue, accuracy: 1e-12, "\(probe)")
+        }
+        let coarse = try Support.objects(reader, "coarse_probes")
+        XCTAssertFalse(coarse.isEmpty)
+        for probe in coarse {
+            let got = PetalKana.coarseTemplateProbe(
+                glyph: try Support.integer(probe, "glyph"),
+                light: try Support.integer(probe, "light") == 1,
+                i: try Support.integer(probe, "i"),
+                j: try Support.integer(probe, "j")
+            )
+            XCTAssertEqual(got, try XCTUnwrap(probe["value"] as? NSNumber).doubleValue, accuracy: 1e-12, "\(probe)")
         }
     }
 
@@ -220,6 +322,28 @@ final class PetalFixtureTests: XCTestCase {
                     XCTAssertEqual(packet.firstID, PetalTurns.turnFirstID(frame: number, sector: sector))
                 }
                 XCTAssertEqual(encoder.words(frame: number).turns, turnWords, "\(name) frame \(number)")
+                let kanaData = try XCTUnwrap(frame["kana_data"] as? [String]).map(Support.hex)
+                let kanaWords = try XCTUnwrap(frame["kana_words"] as? [String]).map(Support.hex)
+                XCTAssertEqual(kanaData.count, PetalKanaLane.allCases.count)
+                XCTAssertEqual(data.kana, kanaData, "\(name) frame \(number)")
+                let kanaHeader = PetalLaneHeader(tag: meta.tag, frame: number)
+                for lane in PetalKanaLane.allCases {
+                    XCTAssertEqual(
+                        try PetalKana.encodeKanaLane(lane, data: kanaData[lane.rawValue]),
+                        kanaWords[lane.rawValue],
+                        "\(name) frame \(number) \(lane.name)"
+                    )
+                    let packet = try XCTUnwrap(
+                        PetalKana.kanaPacket(kanaHeader, lane: lane, data: kanaData[lane.rawValue]),
+                        "\(name) frame \(number) \(lane.name) check"
+                    )
+                    XCTAssertEqual(packet.firstID, PetalKana.kanaFirstID(frame: number, lane: lane))
+                    XCTAssertEqual(packet.atoms.count, lane.atomCount)
+                    // a check binds the lane: the other band's lane of the same kind refuses it
+                    let other = try XCTUnwrap(PetalKanaLane(band: 1 - lane.band, glyph: lane.isGlyph))
+                    XCTAssertNil(PetalKana.kanaPacket(kanaHeader, lane: other, data: kanaData[lane.rawValue]))
+                }
+                XCTAssertEqual(encoder.words(frame: number).kana, kanaWords, "\(name) frame \(number)")
                 XCTAssertEqual(try PetalLane.d.encode(data.d), dWord)
                 for (sector, word) in fieldWords.enumerated() {
                     XCTAssertEqual(
@@ -230,6 +354,21 @@ final class PetalFixtureTests: XCTestCase {
                 }
                 var cells = try PetalFrameCells(d: dWord, fields: fieldWords)
                 try cells.setTurns(turnWords)
+                try cells.setKana(kanaWords)
+                XCTAssertEqual(
+                    String(cells.kanaGlyphs.map { Character(String($0, radix: 16)) }),
+                    try Support.string(frame, "kana_glyphs"),
+                    "\(name) frame \(number) kana glyphs"
+                )
+                XCTAssertEqual(
+                    cells.kanaLight,
+                    Support.bits(try Support.bytes(frame, "kana_light_hex"), count: PetalLayout.kanaTileCount),
+                    "\(name) frame \(number) kana polarity"
+                )
+                for band in 0..<PetalLayout.kanaBands {
+                    XCTAssertEqual(cells.kanaPolarityWord(band: band), kanaWords[2 * band], "\(name) frame \(number)")
+                    XCTAssertEqual(cells.kanaGlyphWord(band: band), kanaWords[2 * band + 1], "\(name) frame \(number)")
+                }
                 XCTAssertEqual(
                     String(cells.turns.map { Character(Unicode.Scalar(48 + $0)) }),
                     try Support.string(frame, "turns"),
@@ -249,11 +388,14 @@ final class PetalFixtureTests: XCTestCase {
                 )
                 XCTAssertEqual(cells, encoder.cells(frame: number))
             }
-            // push every fixture frame through lane decoding and the assembler, with and without
-            // the turn lanes: the turn lanes finish the one-pass stream in fewer frames
+            // push every fixture frame through lane decoding and the assembler, without the turn
+            // and kana lanes, with the turn lanes, and with both: each layer finishes the one-pass
+            // stream in fewer frames
             if name == "one-pass" {
-                var needed = [0, 0]
-                for (index, withTurns) in [false, true].enumerated() {
+                var needed = [0, 0, 0]
+                for index in 0..<3 {
+                    let withTurns = index >= 1
+                    let withKana = index >= 2
                     var assembler = PetalStreamAssembler()
                     for frame in try Support.objects(stream, "frames") {
                         needed[index] += 1
@@ -273,11 +415,19 @@ final class PetalFixtureTests: XCTestCase {
                                 assembler.push(atoms: try XCTUnwrap(PetalTurns.turnPacket(header, sector: sector, data: data)))
                             }
                         }
+                        if withKana {
+                            let header = PetalLaneHeader(tag: meta.tag, frame: UInt16(try Support.integer(frame, "frame")))
+                            let kanaWords = try XCTUnwrap(frame["kana_words"] as? [String]).map(Support.hex)
+                            for (lane, word) in zip(PetalKanaLane.allCases, kanaWords) {
+                                let data = try PetalKana.decodeKanaLaneCounted(lane, word).data
+                                assembler.push(atoms: try XCTUnwrap(PetalKana.kanaPacket(header, lane: lane, data: data)))
+                            }
+                        }
                         if assembler.progress.complete { break }
                     }
                     XCTAssertEqual(try XCTUnwrap(assembler.takeCompleted()).payload, Data(payload))
                 }
-                XCTAssertLessThan(needed[1], needed[0], "\(needed)")
+                XCTAssertTrue(needed[2] < needed[1] && needed[1] < needed[0], "\(needed)")
             }
         }
     }

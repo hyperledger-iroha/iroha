@@ -371,7 +371,7 @@ final class PetalTurnsTests: XCTestCase {
         let words = encoder.words(frame: 3)
         let cells = try PetalFrameCells(d: words.d, fields: words.fields)
         XCTAssertTrue(cells.turns.allSatisfy { $0 == 0 })
-        let image = try PetalRenderer.render(cells, options: PetalRenderOptions(size: 768, supersample: 2)).luma()
+        let image = try PetalRenderer.renderSquare(cells, options: PetalRenderOptions(size: 768, supersample: 2)).luma()
         let decoded = try PetalDecoder.decode(image)
         XCTAssertEqual(decoded.laneLetters, "D0123", "the field lanes read without turns")
         XCTAssertTrue(PetalTurns.readTurns(image, frame: decoded).allSatisfy { $0 == nil })

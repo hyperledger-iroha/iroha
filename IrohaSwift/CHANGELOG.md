@@ -4,6 +4,23 @@ All notable changes to `IrohaSwift` are documented in this file.
 
 ## [Unreleased]
 
+- 2026-10-26: Petal Stream format 5 (no format 3 compatibility: beacon version `0x50`; `0x30`,
+  `0x20` and `0x10` are refused). A frame is a portrait card of 1024 × 1668 units: the format 3
+  square with a band of 306 katakana tiles above and below it (`PetalLayout.cardHeight`,
+  `squareTop`, `kanaTiles`, `kanaTileAt`, `kanaInside`, `kanaInked`; `PetalGlyphs` holds the
+  sixteen katakana). Eight tiles of each band are pilots; the other 298 carry lanes `P0`/`P1`
+  (tile polarity, RS(37, 20), one atom) and `K0`/`K1` (tile katakana, RS(149, 116), seven atoms),
+  each bound by a CRC-32C to the stream tag, frame and lane: up to 53 atoms a frame.
+  `PetalKana` holds the lane codec and the band reader (`readKana`, `observeBand`,
+  `templateProbe`, `coarseTemplateProbe`); `PetalFrameCells.kanaGlyphs`/`kanaLight`/`setKana`,
+  `PetalLaneData.kana`, `PetalScanOutcome.kana` and `PetalScanStats.kanaTries`/`kanaLanes` are
+  new. `PetalScanSession` reads each band once per shown frame with its own back-off, and a
+  capture whose bands read a kana lane tries no turn lane (both on one capture overran a 12 fps
+  frame on a slow phone core). `PetalRenderer.render` draws the card (`cardHeightPixels`;
+  `PetalPalette.ink`), `PetalDrawList.kanaTiles`/`kanaGlyphStrokes` describe the tiles, and
+  `PetalCoreGraphicsRenderer`/`PetalFrameView` draw the portrait card. Fixtures:
+  `petal_stream_v5.json` and `petal_captures_v5.json`.
+
 - 2026-10-26: Petal Stream format 3 (no format 2 compatibility: beacon version `0x30`; `0x20`
   and `0x10` are refused). Every petal is narrower (half-length 6.0, half-width 3.73, notch
   radius 1.12 at 6.24) and turn lanes `T0`–`T3` ride on the field lanes: the first 360 lit

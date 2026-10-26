@@ -8,35 +8,43 @@ import IrohaSwift
 /// The renderer paints a ``PetalDrawList`` in the order the draw list
 /// documents (background, finder blossoms and notches, the faint `天` clipped
 /// to its disc, the lit petals as notched ellipses along their turned axes,
-/// lit ring dots), antialiased, so the result matches the reference software
-/// renderer up to anti-aliasing. Every element class is one path filled once
-/// (one path per petal colour), so a frame of about 1,700 lit petals costs a
-/// handful of fills. The petal notch is drawn: the turn reader tells a petal
-/// from one turned by half a turn by it (`specs/petal_stream.md` §2.3).
+/// lit ring dots, then the katakana tiles of the bands above and below the
+/// square), antialiased, so the result matches the reference software
+/// renderer up to anti-aliasing. Every element class is one path filled or
+/// stroked once (one path per colour), so a frame of about 1,700 lit petals
+/// and 612 tiles costs a handful of draws. The petal notch is drawn: the turn
+/// reader tells a petal from one turned by half a turn by it
+/// (`specs/petal_stream.md` §2.3).
 public enum PetalCoreGraphicsRenderer {
-    /// Draws `drawList` as a square centred in `rect`.
+    /// Width over height of the card: ``PetalDrawList/canvasSize`` over
+    /// ``PetalDrawList/cardHeight``.
+    public static let cardAspectRatio = PetalDrawList.canvasSize / PetalDrawList.cardHeight
+
+    /// Draws the card of `drawList` as large as fits in `rect`, centred.
     ///
     /// The context's user space must have its origin at the top-left with
     /// `y` growing downward, as in UIKit, SwiftUI `Canvas` and flipped AppKit
     /// views. Bitmap contexts created with `CGContext(data:…)` are `y`-up:
     /// flip them first, or use ``makeImage(_:size:)``.
     public static func draw(_ drawList: PetalDrawList, in context: CGContext, rect: CGRect) {
-        let side = min(rect.width, rect.height)
-        guard side > 0, side.isFinite else { return }
         let canvas = CGFloat(PetalDrawList.canvasSize)
-        let scale = side / canvas
+        let cardHeight = CGFloat(PetalDrawList.cardHeight)
+        let scale = min(rect.width / canvas, rect.height / cardHeight)
+        guard scale > 0, scale.isFinite else { return }
         let palette = drawList.palette
         context.saveGState()
         defer { context.restoreGState() }
         // petals are 12 × 7.5 units: only antialiased edges keep their shape and turn
         context.setAllowsAntialiasing(true)
         context.setShouldAntialias(true)
-        context.translateBy(x: rect.midX - side / 2, y: rect.midY - side / 2)
+        context.translateBy(x: rect.midX - canvas * scale / 2, y: rect.midY - cardHeight * scale / 2)
         context.scaleBy(x: scale, y: scale)
 
-        // 1. background
+        // 1. background: the whole card
         context.setFillColor(color(palette.background))
-        context.fill(CGRect(x: 0, y: 0, width: canvas, height: canvas))
+        context.fill(CGRect(x: 0, y: 0, width: canvas, height: cardHeight))
+        // everything else is in square coordinates
+        context.translateBy(x: 0, y: CGFloat(PetalDrawList.squareTop))
 
         // 2. finder blossoms, then the notches cut into the petal tips
         let blossoms = CGMutablePath()
@@ -79,6 +87,43 @@ public enum PetalCoreGraphicsRenderer {
         let dots = CGMutablePath()
         for dot in drawList.dots { dots.addEllipse(in: bounds(dot)) }
         fill(dots, color(palette.pink), in: context)
+
+        // 6. the katakana tiles: light tiles filled, then every glyph stroked in
+        //    its tile's colour (ink on light tiles, pink on dark ones)
+        let lightTiles = CGMutablePath()
+        let inkGlyphs = CGMutablePath()
+        let pinkGlyphs = CGMutablePath()
+        let side = CGFloat(PetalDrawList.kanaTileSize)
+        let corner = CGFloat(PetalDrawList.kanaCorner)
+        for tile in drawList.kanaTiles {
+            let origin = CGAffineTransform(translationX: CGFloat(tile.origin.x), y: CGFloat(tile.origin.y))
+            if tile.light {
+                lightTiles.addRoundedRect(
+                    in: CGRect(x: tile.origin.x, y: tile.origin.y, width: side, height: side),
+                    cornerWidth: corner,
+                    cornerHeight: corner
+                )
+                inkGlyphs.addPath(glyphPaths[tile.glyph], transform: origin)
+            } else {
+                pinkGlyphs.addPath(glyphPaths[tile.glyph], transform: origin)
+            }
+        }
+        fill(lightTiles, color(palette.light), in: context)
+        context.setLineWidth(CGFloat(PetalDrawList.kanaStrokeWidth))
+        context.setLineCap(.round)
+        context.setLineJoin(.round)
+        stroke(inkGlyphs, color(palette.ink), in: context)
+        stroke(pinkGlyphs, color(palette.pink), in: context)
+    }
+
+    /// Every glyph's strokes in tile-local units
+    /// (``PetalDrawList/kanaGlyphStrokes(_:)``), built once.
+    static let glyphPaths: [CGPath] = (0..<PetalGlyphs.glyphCount).map { glyph in
+        let path = CGMutablePath()
+        for polyline in PetalDrawList.kanaGlyphStrokes(glyph) {
+            path.addLines(between: polyline.map { CGPoint(x: $0.x, y: $0.y) })
+        }
+        return path
     }
 
     /// The outline of a petal in its own frame (axis along `x`, centre at the
@@ -124,15 +169,17 @@ public enum PetalCoreGraphicsRenderer {
         return path
     }()
 
-    /// Renders `drawList` into a new opaque sRGB image of `size` × `size`
-    /// pixels; `nil` when `size` is not positive or no context is available.
+    /// Renders the card of `drawList` into a new opaque sRGB image `size`
+    /// pixels wide and ``PetalRenderer/cardHeightPixels(_:)`` tall; `nil` when
+    /// `size` is not positive or no context is available.
     public static func makeImage(_ drawList: PetalDrawList, size: Int) -> CGImage? {
+        let height = PetalRenderer.cardHeightPixels(size)
         guard size > 0, size <= 16_384,
               let space = CGColorSpace(name: CGColorSpace.sRGB),
               let context = CGContext(
                 data: nil,
                 width: size,
-                height: size,
+                height: height,
                 bitsPerComponent: 8,
                 bytesPerRow: 0,
                 space: space,
@@ -140,9 +187,12 @@ public enum PetalCoreGraphicsRenderer {
               ) else {
             return nil
         }
-        context.translateBy(x: 0, y: CGFloat(size))
+        context.translateBy(x: 0, y: CGFloat(height))
         context.scaleBy(x: 1, y: -1)
-        draw(drawList, in: context, rect: CGRect(x: 0, y: 0, width: size, height: size))
+        // the card exactly `size` wide: its height in pixels is rounded
+        let scale = CGFloat(size) / CGFloat(PetalDrawList.canvasSize)
+        let cardHeight = CGFloat(PetalDrawList.cardHeight) * scale
+        draw(drawList, in: context, rect: CGRect(x: 0, y: (CGFloat(height) - cardHeight) / 2, width: CGFloat(size), height: cardHeight))
         return context.makeImage()
     }
 
@@ -151,6 +201,13 @@ public enum PetalCoreGraphicsRenderer {
         context.setFillColor(fillColor)
         context.addPath(path)
         context.fillPath()
+    }
+
+    private static func stroke(_ path: CGPath, _ strokeColor: CGColor, in context: CGContext) {
+        guard !path.isEmpty else { return }
+        context.setStrokeColor(strokeColor)
+        context.addPath(path)
+        context.strokePath()
     }
 
     private static func color(_ color: PetalColor) -> CGColor {

@@ -16,7 +16,7 @@ Features:
 - Collection queries for every Torii collection: typed filter builder with canonical text and JSON forms, cursor pages and on-demand iteration, typed `{code, message, details}` errors
 - Torii HTTP client (balances, transactions, explorer instructions/transactions/RWAs, subscriptions, VPN quote/session/receipt flows, pipeline recovery, time service, ZK attachments, contracts)
 - KAGEMUSHA wallet V1 wire helpers (`KagemushaWalletWireV1`) and the iPhone platform adapter of the Rust wallet Advance provider (`KagemushaWalletApplePlatformV1`)
-- Petal Stream animated optical transport (format 3): stream encoder/assembler, camera-frame decoder and turn reader, software and vector renderers, SwiftUI player and AVFoundation camera analyzer
+- Petal Stream animated optical transport (format 5): stream encoder/assembler, camera-frame decoder, turn and katakana band readers, software and vector renderers, SwiftUI player and AVFoundation camera analyzer
 - Health & metrics helpers (fetch `/v1/health` text probe and `/v1/metrics` Prometheus/JSON payloads)
 - Norito envelope encoder (header + CRC64-XZ)
 - Required Native NoritoBridge integration (`dist/NoritoBridge.xcframework`) powering transfer/mint/burn builders and JSON inspection helpers
@@ -883,19 +883,23 @@ decoding and signature verification.
 ### Petal Stream optical transport
 
 Petal Stream is the animated "streaming QR" in the Sakura-storm look (format
-3): four sakura-blossom finders, a storm of 3,376 petals on 34 concentric bands
-(light inside a faint `天`, pink outside) and three dotted rings. Each frame
-carries five independent lanes (ring dots `D` and the four quarter-turn sectors
-`0`–`3` of the petal field), each one whitened Reed–Solomon codeword of
-fountain-coded 16-byte atoms, and a turn lane on top of every field lane: once
-a field lane is read, the first 360 of its lit petals each show two more bits
-by being turned 0°, 45°, 90° or 135° about their centres. Every fourth frame
-repeats the stream beacon in lane `D`, so a receiver can join at any frame and
-any single readable lane is useful. `Sources/IrohaSwift/Petal/` is a
-function-by-function port of the normative Rust crate `crates/iroha_petal`
-(decoder and turn reader included) and passes the shared fixtures
-`fixtures/petal/petal_stream_v3.json` and
-`fixtures/petal/petal_captures_v3.json`.
+5). A frame is a portrait card: a square of four sakura-blossom finders, a
+storm of 3,376 petals on 34 concentric bands (light inside a faint `天`, pink
+outside) and three dotted rings, with a band of 306 katakana tiles above and
+below it. The square carries five independent lanes (ring dots `D` and the
+four quarter-turn sectors `0`–`3` of the petal field), each one whitened
+Reed–Solomon codeword of fountain-coded 16-byte atoms, and a turn lane on top
+of every field lane: once a field lane is read, the first 360 of its lit petals
+each show two more bits by being turned 0°, 45°, 90° or 135° about their
+centres. Each band carries two kana lanes: its 298 data tiles show one bit in
+their polarity (a light tile with its katakana in ink, or a dark one with it in
+pink: lanes `P0`, `P1`) and four in their katakana (one of イロハニヘトワカレムノケアヒスン:
+lanes `K0`, `K1`). Every fourth frame repeats the stream beacon in lane `D`, so
+a receiver can join at any frame and any single readable lane is useful.
+`Sources/IrohaSwift/Petal/` is a function-by-function port of the normative
+Rust crate `crates/iroha_petal` (decoder, turn and band readers included) and
+passes the shared fixtures `fixtures/petal/petal_stream_v5.json` and
+`fixtures/petal/petal_captures_v5.json`.
 
 ```swift
 // Sender: play an IPM1 message at the default 12 fps. Payloads may be up to
@@ -943,6 +947,24 @@ analyzer.attach(to: videoDataOutput)
   `PetalTurns.observedTurns(_:frame:)` exposes every carrier's decision for
   diagnostics. The reader builds its tables once and reuses its working memory
   across captures.
+- `PetalKana` holds the kana lanes: the codec (`P0`/`P1` one RS(37, 20)
+  codeword of one repair atom, `K0`/`K1` one RS(149, 116) codeword of seven,
+  each closed by a CRC-32C over the stream tag, the frame and the lane) and the
+  band reader. `PetalKana.readKana(_:frame:header:skip:)` places every tile of
+  a decoded capture by the square's pose, finds each band's eight pilot tiles,
+  fits an affine correction, the camera's blur and the light and dark levels to
+  them, and gives each data tile the polarity its level shows and the katakana
+  whose template correlates best; the check also accepts the frames before and
+  after the square's, which a rolling shutter can show. `PetalScanSession`
+  reads each band once per shown frame, with its own back-off, and the bands go
+  first: a capture whose bands read a lane leaves the turn lanes to the shown
+  frame's next capture, because both on one capture overran a 12 fps frame on a
+  slow phone core. `PetalScanOutcome.kana` and
+  `PetalScanStats.kanaTries`/`kanaLanes` report the reads, and
+  `PetalKana.observeBand(_:frame:band:)` exposes every tile's decision. In the
+  reference simulator a 12 KB Payment shown upright at 12 fps arrives in about
+  1.2 s with a sharp 720p camera (1.65 s with format 3) and 1.75 s with a soft
+  one (2.98 s).
 - When a thumb, a glare or the edge of the frame hides one corner blossom,
   three blossoms that form a corner still locate the code: the fourth corner is
   inferred, refined against the dotted rings and reported as
@@ -951,13 +973,15 @@ analyzer.attach(to: videoDataOutput)
   the next frames with `PetalDecoder.track(_:previous:)`, which follows the
   blossoms from the last pose (at most 500 ms old) instead of searching the
   whole image; `PetalScanStats.tracked` and `.inferred` count both.
-- `PetalRenderer` is the pixel-exact reference software renderer;
+- `PetalRenderer` is the pixel-exact reference software renderer of the card
+  (`PetalRenderer.cardHeightPixels(_:)` tall for a given width);
   `PetalDrawList` describes a frame for vector backends (finders, the faint
-  `天`, lit petals as notched ellipses along their turned axes, lit dots) and
+  `天`, lit petals as notched ellipses along their turned axes, lit dots, and
+  the katakana tiles with their glyph strokes, `kanaGlyphStrokes(_:)`) and
   `PetalCoreGraphicsRenderer` / `PetalFrameView` / `PetalStreamView`
-  (`IrohaSwiftTransferUI`) draw it with CoreGraphics and SwiftUI, antialiased
-  and with every petal's notch, which tells the turn reader a petal from one
-  turned by half a turn.
+  (`IrohaSwiftTransferUI`) draw the portrait card with CoreGraphics and
+  SwiftUI, antialiased and with every petal's notch, which tells the turn
+  reader a petal from one turned by half a turn.
 - `PetalCameraAnalyzer` (`IrohaSwiftMobileTransports`) is an
   `AVCaptureVideoDataOutput` delegate that reads the Y plane of bi-planar YUV
   frames (or converts BGRA), reports `PetalScanOutcome` values through a
@@ -967,13 +991,14 @@ analyzer.attach(to: videoDataOutput)
   decoded frames per second and fall back to 640×480 only when it cannot.
   The field lanes are harder to read at 480p; averaging repeated captures of a
   shown frame can recover them. The turn lanes need a camera that resolves the
-  petals' shapes. Automatic exposure over-exposes a mostly black screen, so set
+  petals' shapes. Keep the whole card in view, so the bands are read too.
+  Automatic exposure over-exposes a mostly black screen, so set
   the exposure target bias to about −1 EV
   (`AVCaptureDevice.setExposureTargetBias`) or lock the exposure once the code
   has been seen (`specs/petal_stream.md` section 8).
 
-Run the Petal suites (codec, fixture conformance, golden captures, turn
-lanes, renderer, SwiftUI and camera glue) with:
+Run the Petal suites (codec, fixture conformance, golden captures, turn and
+kana lanes, renderer, SwiftUI and camera glue) with:
 
 ```bash
 swift test --package-path IrohaSwift --disable-automatic-resolution --filter Petal

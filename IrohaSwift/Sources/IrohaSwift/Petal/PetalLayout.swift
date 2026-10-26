@@ -25,6 +25,29 @@ public enum PetalSlotRole: Equatable, Hashable, Sendable {
     case spare
 }
 
+/// One katakana tile of the card (see ``PetalLayout/kanaTiles``).
+public struct PetalKanaTile: Equatable, Hashable, Sendable {
+    /// Band: 0 above the square, 1 below it.
+    public let band: Int
+    /// Row within its band, top first.
+    public let row: Int
+    /// Column, left first.
+    public let column: Int
+    /// Left edge of the tile square in square coordinates.
+    public let x: Double
+    /// Top edge of the tile square in square coordinates (negative above the
+    /// square).
+    public let y: Double
+    /// Index among the pilots of its band, when it is one.
+    public let pilot: Int?
+
+    /// Centre of the tile in square coordinates.
+    public var center: PetalPoint {
+        let half = PetalLayout.kanaTile / 2.0
+        return PetalPoint(x: x + half, y: y + half)
+    }
+}
+
 /// Normative Petal frame geometry (port of `crates/iroha_petal/src/layout.rs`).
 ///
 /// All coordinates are design units on a square canvas of ``canvas`` units
@@ -32,6 +55,11 @@ public enum PetalSlotRole: Equatable, Hashable, Sendable {
 /// scales the canvas to any pixel size; a decoder maps camera pixels back to
 /// design units. Cell order is defined by integer indices only, and the slot
 /// count of every band is a fixed table.
+///
+/// A frame is a *card* of ``canvas`` × ``cardHeight`` units: the square code
+/// with a band of katakana tiles above and below it (see ``PetalKana``).
+/// Square coordinates are used throughout; the card's `y` is the square's plus
+/// ``squareTop``, so band 0 lies at negative `y` and band 1 below ``canvas``.
 public enum PetalLayout {
     /// Canvas side length in design units.
     public static let canvas: Double = 1024
@@ -410,5 +438,185 @@ public enum PetalLayout {
         if u * u + v * v > 1.0 { return false }
         let tip = along - petalNotchDistance
         return tip * tip + across * across > petalNotchRadius * petalNotchRadius
+    }
+
+    // MARK: - The card
+
+    /// Side of a katakana tile (see ``PetalKana``).
+    public static let kanaTile: Double = 25
+    /// Pitch of the katakana tile lattice.
+    public static let kanaPitch: Double = 29
+    /// Side of a tile's glyph box, centred in the tile.
+    public static let kanaGlyphBox: Double = 23
+    /// Corner radius of a tile.
+    public static let kanaCorner: Double = 3
+    /// Tile rows of each band.
+    public static let kanaRows = 10
+    /// Tile columns of each band.
+    public static let kanaColumns = 35
+    /// Gap between a band's lattice and the square.
+    public static let kanaGap: Double = 24
+    /// Margin outside a band's lattice.
+    public static let kanaMargin: Double = 8
+    /// Height of a band with its gap and margin (322 units).
+    public static let kanaBandHeight = kanaMargin + Double(kanaRows) * kanaPitch + kanaGap
+    /// Height of the card: the square with a band above and below it (1668
+    /// units).
+    public static let cardHeight = canvas + 2.0 * kanaBandHeight
+    /// Card `y` of the square's top edge: card coordinates are square
+    /// coordinates plus this in `y`.
+    public static let squareTop = kanaBandHeight
+    /// Tile centres keep at least this distance from every finder centre: the
+    /// blossom's radius, a blossom diameter of clearance, and a tile's
+    /// half-diagonal, so no tile looks like part of a finder.
+    public static let kanaFinderClearance: Double = 198
+    /// Bands: above the square and below it.
+    public static let kanaBands = 2
+    /// Pilot tiles of each band.
+    public static let kanaPilots = 8
+    /// Tiles of each band: the lattice cells clear of the finders.
+    public static let kanaBandTiles = 306
+    /// Tiles of both bands.
+    public static let kanaTileCount = kanaBands * kanaBandTiles
+
+    /// The pilot tiles of each band as `(row, column)` (band 1 mirrors band
+    /// 0's rows, so the pilots sit at the same distances from the square).
+    public static let kanaPilotCells: [[(row: Int, column: Int)]] = [
+        [(0, 0), (0, 17), (0, 34), (4, 0), (4, 34), (9, 8), (9, 17), (9, 26)],
+        [(9, 0), (9, 17), (9, 34), (5, 0), (5, 34), (0, 8), (0, 17), (0, 26)],
+    ]
+    /// What every pilot shows, in pilot order (ロ ケ ヒ ム ス ワ ア カ).
+    public static let kanaPilotSymbols: [(glyph: Int, light: Bool)] = [
+        (1, true), (11, false), (13, true), (9, false), (14, false), (6, true), (12, false), (7, true),
+    ]
+
+    /// Top of band `band`'s lattice in square coordinates.
+    static func kanaLatticeTop(_ band: Int) -> Double {
+        band == 0 ? -kanaBandHeight + kanaMargin : canvas + kanaGap
+    }
+
+    /// Left edge of the lattice (the columns are centred on the card).
+    static let kanaLatticeLeft = (canvas - Double(kanaColumns) * kanaPitch) / 2.0
+
+    /// Every tile of both bands: band 0 first, each in reading order (rows top
+    /// first, columns left first). A lattice cell whose tile centre lies within
+    /// ``kanaFinderClearance`` of a finder centre has no tile (306 tiles per
+    /// band remain).
+    public static let kanaTiles: [PetalKanaTile] = {
+        let inset = (kanaPitch - kanaTile) / 2.0
+        let clearance = kanaFinderClearance
+        var tiles: [PetalKanaTile] = []
+        tiles.reserveCapacity(kanaTileCount)
+        for band in 0..<kanaBands {
+            for row in 0..<kanaRows {
+                for column in 0..<kanaColumns {
+                    let x = kanaLatticeLeft + kanaPitch * Double(column) + inset
+                    let y = kanaLatticeTop(band) + kanaPitch * Double(row) + inset
+                    let half = kanaTile / 2.0
+                    let cx = x + half
+                    let cy = y + half
+                    let clear = finderCenters.allSatisfy { finder in
+                        let dx = cx - finder.x
+                        let dy = cy - finder.y
+                        return dx * dx + dy * dy >= clearance * clearance
+                    }
+                    if !clear { continue }
+                    let pilot = kanaPilotCells[band].firstIndex { $0.row == row && $0.column == column }
+                    tiles.append(PetalKanaTile(band: band, row: row, column: column, x: x, y: y, pilot: pilot))
+                }
+            }
+        }
+        precondition(tiles.count == kanaTileCount, "each band holds \(kanaBandTiles) tiles")
+        return tiles
+    }()
+
+    /// The data tiles of `band` (its tiles that are not pilots) in reading
+    /// order, as indices into ``kanaTiles``; empty for a band out of range.
+    public static func kanaDataTiles(_ band: Int) -> [Int] {
+        (0..<kanaBands).contains(band) ? kanaDataTable[band] : []
+    }
+
+    /// The pilot tiles of `band` in pilot order, as indices into
+    /// ``kanaTiles``; empty for a band out of range.
+    public static func kanaPilotTiles(_ band: Int) -> [Int] {
+        (0..<kanaBands).contains(band) ? kanaPilotTable[band] : []
+    }
+
+    /// ``kanaDataTiles(_:)`` of both bands.
+    static let kanaDataTable: [[Int]] = (0..<kanaBands).map { band in
+        kanaTiles.indices.filter { kanaTiles[$0].band == band && kanaTiles[$0].pilot == nil }
+    }
+
+    /// ``kanaPilotTiles(_:)`` of both bands.
+    static let kanaPilotTable: [[Int]] = (0..<kanaBands).map { band in
+        (0..<kanaPilots).map { pilot in
+            kanaTiles.firstIndex { $0.band == band && $0.pilot == pilot }!
+        }
+    }
+
+    /// Left and top edge and pilot index (`-1` for a data tile) of every tile,
+    /// for the reader's and renderer's inner loops.
+    static let kanaTileX: [Double] = kanaTiles.map(\.x)
+    static let kanaTileY: [Double] = kanaTiles.map(\.y)
+    static let kanaTilePilot: [Int] = kanaTiles.map { $0.pilot ?? -1 }
+
+    /// The tile of every lattice cell (`(band · 10 + row) · 35 + column`), or `-1`.
+    static let kanaLattice: [Int] = {
+        var lattice = [Int](repeating: -1, count: kanaBands * kanaRows * kanaColumns)
+        for (index, tile) in kanaTiles.enumerated() {
+            lattice[(tile.band * kanaRows + tile.row) * kanaColumns + tile.column] = index
+        }
+        return lattice
+    }()
+
+    /// The tile under the square-coordinate point `(x, y)` and the point's
+    /// position inside the tile's square (`0...kanaTile` on both axes), or
+    /// `nil` outside every tile square.
+    public static func kanaTileAt(x: Double, y: Double) -> (tile: Int, u: Double, v: Double)? {
+        let band: Int
+        if y < 0.0 {
+            band = 0
+        } else if y >= canvas {
+            band = 1
+        } else {
+            return nil
+        }
+        let gx = (x - kanaLatticeLeft) / kanaPitch
+        let gy = (y - kanaLatticeTop(band)) / kanaPitch
+        if gx < 0.0 || gy < 0.0 { return nil }
+        let column = gx.rounded(.down)
+        let row = gy.rounded(.down)
+        if column >= Double(kanaColumns) || row >= Double(kanaRows) { return nil }
+        let tile = kanaLattice[(band * kanaRows + Int(row)) * kanaColumns + Int(column)]
+        if tile < 0 { return nil }
+        let inset = (kanaPitch - kanaTile) / 2.0
+        let u = (gx - column) * kanaPitch - inset
+        let v = (gy - row) * kanaPitch - inset
+        guard u >= 0.0, u <= kanaTile, v >= 0.0, v <= kanaTile else { return nil }
+        return (tile, u, v)
+    }
+
+    /// Whether the tile-local point `(u, v)` lies inside the rounded tile square.
+    public static func kanaInside(u: Double, v: Double) -> Bool {
+        let side = kanaTile
+        let corner = kanaCorner
+        guard u >= 0.0, u <= side, v >= 0.0, v <= side else { return false }
+        let cx = PetalNumeric.clamp(u, corner, side - corner)
+        let cy = PetalNumeric.clamp(v, corner, side - corner)
+        return (u - cx) * (u - cx) + (v - cy) * (v - cy) <= corner * corner
+    }
+
+    /// Whether the tile-local point `(u, v)` lies on `glyph`'s strokes: inside
+    /// the tile square and inked in the glyph box (inset by half the
+    /// difference of tile and box); `false` for a glyph out of range.
+    public static func kanaInked(glyph: Int, u: Double, v: Double) -> Bool {
+        (0..<PetalGlyphs.glyphCount).contains(glyph) && inked(glyph, u, v)
+    }
+
+    /// ``kanaInked(glyph:u:v:)`` without the range check.
+    static func inked(_ glyph: Int, _ u: Double, _ v: Double) -> Bool {
+        let inset = (kanaTile - kanaGlyphBox) / 2.0
+        let scale = PetalGlyphs.glyphGrid / kanaGlyphBox
+        return kanaInside(u: u, v: v) && PetalGlyphs.inked(glyph, (u - inset) * scale, (v - inset) * scale)
     }
 }

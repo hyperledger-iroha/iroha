@@ -48,6 +48,10 @@ public struct PetalScanStats: Equatable, Sendable {
     public internal(set) var turnTries: UInt32 = 0
     /// Turn lanes read.
     public internal(set) var turnLanes: UInt32 = 0
+    /// Bands tried (each at most once per shown frame).
+    public internal(set) var kanaTries: UInt32 = 0
+    /// Kana lanes read (up to four per shown frame).
+    public internal(set) var kanaLanes: UInt32 = 0
 
     public init() {}
 }
@@ -67,6 +71,9 @@ public struct PetalScanOutcome: Equatable, Sendable {
     /// Turn lanes read from this capture, as the sector digits of the field
     /// lanes they ride on.
     public let turned: String
+    /// Kana lanes read from this capture, as their names (`P0`, `K0`, `P1`,
+    /// `K1`).
+    public let kana: String
     /// Receive progress after this frame.
     public let progress: PetalProgress
     /// The finished payload, delivered exactly once.
@@ -103,6 +110,23 @@ public struct PetalScanOutcome: Equatable, Sendable {
 /// no turn lane (a camera too soft or too shaky for the turns) the session
 /// passes over the next captures that would try one, one more after every
 /// such try, at most ``turnBackoff``, until a try reads a lane again.
+///
+/// The katakana bands above and below the square are read the same way
+/// (``PetalKana/readKana(_:frame:header:skip:)``): each band once per shown
+/// frame (the last ``kanaMemory`` tried are remembered), with its own back-off
+/// of at most ``kanaBackoff`` captures after tries that read no kana lane (a
+/// camera that does not see the bands, or too blurred for their glyphs and
+/// polarity).
+///
+/// The bands go first, and a capture whose bands read a kana lane tries no
+/// turn lane: the turn lanes of that shown frame wait for its next capture. On
+/// a slow phone core a turn try costs five tracked decodes and a band try one,
+/// so reading both on one capture overran the time a frame is shown at 12 fps
+/// and the session missed the next shown frames. A camera that sees each shown
+/// frame two or three times still reads both; one that sees it once reads the
+/// cheaper bands and every frame's field lanes. A band try that reads nothing
+/// (bands out of view, too blurred, or a torn capture) leaves the turn lanes
+/// to the same capture.
 public struct PetalScanSession: Sendable {
     /// How long a decoded pose stays usable for tracking the next frames.
     public static let trackWindowMilliseconds: UInt64 = 500
@@ -115,6 +139,11 @@ public struct PetalScanSession: Sendable {
     public static let turnMemory = mergeWindow * PetalLayout.sectors
     /// Most captures passed over after tries that read no turn lane.
     public static let turnBackoff = 8
+    /// Bands remembered as tried (the two of each of the last ``mergeWindow``
+    /// shown frames).
+    public static let kanaMemory = mergeWindow * PetalLayout.kanaBands
+    /// Most captures passed over after tries that read no kana lane.
+    public static let kanaBackoff = 8
 
     /// The session limits.
     public let limits: PetalScanLimits
@@ -144,6 +173,17 @@ public struct PetalScanSession: Sendable {
     private(set) var turnMisses = 0
     /// Captures still to pass over before the next try.
     var turnWait = 0
+    /// A band tried: the shown frame and the band.
+    struct KanaTry: Equatable, Sendable {
+        let header: PetalLaneHeader
+        let band: Int
+    }
+    /// The bands tried most recently, oldest first.
+    private(set) var kanaTried: [KanaTry] = []
+    /// Band tries in a row that read no kana lane (at most ``kanaBackoff``).
+    private(set) var kanaMisses = 0
+    /// Captures still to pass over before the next band try.
+    var kanaWait = 0
 
     /// Creates a session.
     public init(limits: PetalScanLimits = PetalScanLimits()) {
@@ -164,11 +204,14 @@ public struct PetalScanSession: Sendable {
         forgetTurns()
     }
 
-    /// Forgets the turn lanes tried and any back-off.
+    /// Forgets the turn lanes and bands tried and any back-off.
     private mutating func forgetTurns() {
         tried.removeAll()
         turnMisses = 0
         turnWait = 0
+        kanaTried.removeAll()
+        kanaMisses = 0
+        kanaWait = 0
     }
 
     /// Offers one camera luma plane captured at monotonic time `nowMilliseconds`.
@@ -189,6 +232,7 @@ public struct PetalScanSession: Sendable {
         let lanes: String
         let merged: String
         let turned: String
+        let kana: String
         switch result {
         case .success(let frame):
             error = nil
@@ -196,12 +240,15 @@ public struct PetalScanSession: Sendable {
             lastPose = (frame, now)
             lanes = absorb(frame)
             merged = merge(image, frame: frame)
-            turned = turn(image, frame: frame)
+            // a capture whose bands read a lane tries no turn lane (see the type's documentation)
+            kana = self.kana(image, frame: frame)
+            turned = kana.isEmpty ? turn(image, frame: frame) : ""
         case .failure(let failure):
             error = failure
             lanes = ""
             merged = ""
             turned = ""
+            kana = ""
         }
         // A code was seen unless no finders were found or the image was unusable.
         if error != .noFinders && error != .unsupportedImage { stats.located &+= 1 }
@@ -216,6 +263,7 @@ public struct PetalScanSession: Sendable {
             lanes: lanes,
             merged: merged,
             turned: turned,
+            kana: kana,
             progress: progress,
             completed: assembler.takeCompleted()
         )
@@ -286,6 +334,40 @@ public struct PetalScanSession: Sendable {
             turnMisses = 0
         }
         return letters
+    }
+
+    /// Tries the bands of this capture's shown frame not tried yet and offers
+    /// the atoms of the kana lanes it reads; after tries that read nothing it
+    /// passes over the next captures that would try a band (see the type's
+    /// documentation).
+    mutating func kana(_ image: PetalLuma, frame: PetalDecodedFrame) -> String {
+        guard let header = Self.shownFrame(frame) else { return "" }
+        let skip = (0..<PetalLayout.kanaBands).map { kanaTried.contains(KanaTry(header: header, band: $0)) }
+        if !skip.contains(false) { return "" }
+        if kanaWait > 0 {
+            kanaWait -= 1
+            return ""
+        }
+        for band in 0..<PetalLayout.kanaBands where !skip[band] {
+            if kanaTried.count == Self.kanaMemory { kanaTried.removeFirst() }
+            kanaTried.append(KanaTry(header: header, band: band))
+            stats.kanaTries &+= 1
+        }
+        var read = ""
+        for (index, result) in PetalKana.readKana(image, frame: frame, header: header, skip: skip).enumerated() {
+            guard let result, let lane = PetalKanaLane(rawValue: index),
+                  let packet = PetalKana.kanaPacket(result.header, lane: lane, data: result.result.data) else { continue }
+            assembler.push(atoms: packet)
+            stats.kanaLanes &+= 1
+            read += lane.name
+        }
+        if read.isEmpty {
+            kanaMisses = min(kanaMisses + 1, Self.kanaBackoff)
+            kanaWait = kanaMisses
+        } else {
+            kanaMisses = 0
+        }
+        return read
     }
 
     /// The shown frame every decoded lane header of `frame` names; `nil` when

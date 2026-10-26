@@ -10,19 +10,26 @@ import Foundation
 /// ``firstAtomID(frame:)``). Any single readable lane is useful on its own. On
 /// top of every field lane, the turns of its lit petals carry four more atoms
 /// from the repair range (see ``PetalTurns``), so a sharp camera reads up to
-/// 37 atoms (592 bytes) a frame.
+/// 37 atoms (592 bytes) from the square. The katakana bands above and below
+/// the square add eight atoms each (see ``PetalKana``): up to 53 atoms (848
+/// bytes) a frame.
 ///
 /// Lane data layouts (all big-endian):
 ///
-/// * every lane but the turn lanes starts with `tag:u8, frame:u16`; `tag` is
-///   the low byte of the payload CRC-32C.
+/// * every lane but the turn and kana lanes starts with `tag:u8, frame:u16`;
+///   `tag` is the low byte of the payload CRC-32C.
 /// * field lanes and non-beacon `D`: atoms (16 bytes each).
 /// * beacon `D`: `version:u8, kind:u8, len:u24, crc:u32`, zero padded.
 /// * turn lanes: `atoms… check:u32`, where the check binds the atoms to the
 ///   header of the field lane they ride on.
+/// * kana lanes: `atoms… check:u32`, where the check binds the atoms to the
+///   stream tag, the frame and the lane.
 public enum PetalStream {
-    /// Version/profile byte of the beacon: format version 3, layout profile 0.
-    public static let formatVersion: UInt8 = 0x30
+    /// Version/profile byte of the beacon: format version 5, layout profile 0.
+    /// Beacons of the retired formats 3 (`0x30`, no katakana bands), 2
+    /// (`0x20`, unturned petals) and 1 (`0x10`, katakana tiles only) are
+    /// refused.
+    public static let formatVersion: UInt8 = 0x50
     /// Largest payload a beacon can describe (`u24`).
     public static let maximumPayloadLength = (1 << 24) - 1
     /// Default receiver payload limit; override with ``PetalAssemblerLimits``.
@@ -204,8 +211,8 @@ public enum PetalDLane: Equatable, Sendable {
     case atoms(PetalAtomPacket)
 }
 
-/// The bytes of every lane of one frame, turn lanes included: lane data, or
-/// transmitted codewords.
+/// The bytes of every lane of one frame, turn and kana lanes included: lane
+/// data, or transmitted codewords.
 public struct PetalLaneData: Equatable, Sendable {
     /// Lane `D`.
     public let d: [UInt8]
@@ -213,11 +220,15 @@ public struct PetalLaneData: Equatable, Sendable {
     public let fields: [[UInt8]]
     /// The turn lanes, sector 0 first.
     public let turns: [[UInt8]]
+    /// The kana lanes in ``PetalKanaLane/allCases`` order: `P0`, `K0`, `P1`,
+    /// `K1`.
+    public let kana: [[UInt8]]
 
-    public init(d: [UInt8], fields: [[UInt8]], turns: [[UInt8]]) {
+    public init(d: [UInt8], fields: [[UInt8]], turns: [[UInt8]], kana: [[UInt8]]) {
         self.d = d
         self.fields = fields
         self.turns = turns
+        self.kana = kana
     }
 
     /// The bytes of `lane`.
@@ -226,6 +237,11 @@ public struct PetalLaneData: Equatable, Sendable {
         case .d: return d
         case .field(let sector): return fields[sector]
         }
+    }
+
+    /// The bytes of kana lane `lane`.
+    public func kana(_ lane: PetalKanaLane) -> [UInt8] {
+        kana[lane.rawValue]
     }
 }
 
@@ -290,7 +306,7 @@ public struct PetalStreamEncoder: Sendable {
         }
     }
 
-    /// The data bytes of every lane of `frame`, turn lanes included.
+    /// The data bytes of every lane of `frame`, turn and kana lanes included.
     public func laneData(frame: UInt16) -> PetalLaneData {
         let header: [UInt8] = [
             meta.tag,
@@ -329,7 +345,13 @@ public struct PetalStreamEncoder: Sendable {
             )
             return PetalTurns.turnDataValidated(laneHeader, sector: sector, atoms: atoms)
         }
-        return PetalLaneData(d: d, fields: fields, turns: turns)
+        let kana = PetalKanaLane.allCases.map { lane -> [UInt8] in
+            var atoms: [UInt8] = []
+            atoms.reserveCapacity(lane.dataLength)
+            appendAtoms(firstID: PetalKana.kanaFirstID(frame: frame, lane: lane), count: lane.atomCount, to: &atoms)
+            return PetalKana.kanaDataValidated(laneHeader, lane: lane, atoms: atoms)
+        }
+        return PetalLaneData(d: d, fields: fields, turns: turns, kana: kana)
     }
 
     /// The transmitted (Reed–Solomon encoded, whitened) codewords of `frame`.
@@ -338,15 +360,18 @@ public struct PetalStreamEncoder: Sendable {
         return PetalLaneData(
             d: PetalLane.d.encodeValidated(data.d),
             fields: PetalLane.fields.map { $0.encodeValidated(data.lane($0)) },
-            turns: data.turns.indices.map { PetalTurns.encodeValidated(sector: $0, data: data.turns[$0]) }
+            turns: data.turns.indices.map { PetalTurns.encodeValidated(sector: $0, data: data.turns[$0]) },
+            kana: PetalKanaLane.allCases.map { PetalKana.encodeValidated($0, data: data.kana($0)) }
         )
     }
 
-    /// Every cell of `frame`, lit and turned, ready to render.
+    /// Every cell of `frame`, lit, turned and with its katakana tiles, ready
+    /// to render.
     public func cells(frame: UInt16) -> PetalFrameCells {
         let words = words(frame: frame)
         var cells = PetalFrameCells(validatedD: words.d, fields: words.fields)
         cells.setTurnsValidated(words.turns)
+        cells.setKanaValidated(words.kana)
         return cells
     }
 }

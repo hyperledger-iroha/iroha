@@ -20,32 +20,39 @@ public struct PetalColor: Equatable, Hashable, Sendable {
 public struct PetalPalette: Equatable, Sendable {
     /// Background.
     public var background: PetalColor
-    /// Finders and the petals inside the `天`.
+    /// Finders, the petals inside the `天` and the light katakana tiles.
     public var light: PetalColor
-    /// Sakura pink of the ring dots and of the petals outside the `天`.
+    /// Sakura pink of the ring dots, of the petals outside the `天` and of the
+    /// glyphs on dark katakana tiles.
     public var pink: PetalColor
     /// The faint `天` drawn under the petals (a tenth of the light colour).
     public var backdrop: PetalColor
+    /// Glyphs on light katakana tiles.
+    public var ink: PetalColor
 
-    public init(background: PetalColor, light: PetalColor, pink: PetalColor, backdrop: PetalColor) {
+    public init(background: PetalColor, light: PetalColor, pink: PetalColor, backdrop: PetalColor, ink: PetalColor) {
         self.background = background
         self.light = light
         self.pink = pink
         self.backdrop = backdrop
+        self.ink = ink
     }
 
-    /// The reference palette: black, pale sakura, sakura pink and a faint `天`.
+    /// The reference palette: black, pale sakura, sakura pink, a faint `天`
+    /// and a deep plum ink.
     public static let standard = PetalPalette(
         background: PetalColor(red: 0, green: 0, blue: 0),
         light: PetalColor(red: 250, green: 235, blue: 244),
         pink: PetalColor(red: 245, green: 175, blue: 208),
-        backdrop: PetalColor(red: 25, green: 24, blue: 24)
+        backdrop: PetalColor(red: 25, green: 24, blue: 24),
+        ink: PetalColor(red: 20, green: 4, blue: 14)
     )
 }
 
 /// Software rendering options.
 public struct PetalRenderOptions: Equatable, Sendable {
-    /// Output side in pixels.
+    /// Output width in pixels; the card is
+    /// ``PetalRenderer/cardHeightPixels(_:)`` pixels tall.
     public var size: Int
     /// Samples per pixel side for anti-aliasing (1–4).
     public var supersample: Int
@@ -66,17 +73,49 @@ public struct PetalRenderOptions: Equatable, Sendable {
 /// concentric bands, each lit petal turned about its centre by its turn. A lit
 /// petal whose centre lies inside the `天` is drawn in the light colour, the
 /// others in sakura pink, over a faint backdrop of the `天` itself, so the
-/// character shows through the storm of petals. The output is pixel-identical
-/// to the Rust reference. Platform code may instead draw a ``PetalDrawList``
-/// with its own 2D API: geometry, turns and polarity are the same.
+/// character shows through the storm of petals. Above and below that square,
+/// the card's two bands show rows of katakana tiles (see ``PetalKana``): a
+/// light tile filled light with its glyph in ink, a dark tile black with its
+/// glyph in pink. The output is pixel-identical to the Rust reference.
+/// Platform code may instead draw a ``PetalDrawList`` with its own 2D API:
+/// geometry, turns, glyphs and polarity are the same.
 public enum PetalRenderer {
-    /// Renders one frame as interleaved RGB.
+    /// Height in pixels of a card rendered `size` pixels wide:
+    /// `size · 1668 / 1024`, rounded.
+    public static func cardHeightPixels(_ size: Int) -> Int {
+        let height = Double(size) * PetalLayout.cardHeight / PetalLayout.canvas
+        return Int((height + 0.5).rounded(.down))
+    }
+
+    /// Renders one frame as interleaved RGB: the card, `options.size` pixels
+    /// wide and ``cardHeightPixels(_:)`` tall, whose square starts
+    /// ``PetalLayout/squareTop`` units below the top edge.
     ///
     /// - Throws: ``PetalImageError/invalidRenderOptions`` when `options.size`
     ///   is not positive or `options.supersample` is outside 1–4.
     public static func render(
         _ cells: PetalFrameCells,
         options: PetalRenderOptions = PetalRenderOptions()
+    ) throws -> PetalRGBImage {
+        try renderRows(cells, options: options, height: cardHeightPixels(options.size), top: PetalLayout.squareTop)
+    }
+
+    /// Renders only the square of the card, `options.size` pixels on a side:
+    /// the decoder's own unit tests work on bare squares.
+    static func renderSquare(
+        _ cells: PetalFrameCells,
+        options: PetalRenderOptions = PetalRenderOptions()
+    ) throws -> PetalRGBImage {
+        try renderRows(cells, options: options, height: options.size, top: 0)
+    }
+
+    /// Renders `height` pixel rows of the card, the first `top` canvas units
+    /// above the square's top edge.
+    private static func renderRows(
+        _ cells: PetalFrameCells,
+        options: PetalRenderOptions,
+        height: Int,
+        top: Double
     ) throws -> PetalRGBImage {
         guard options.size > 0, options.size <= 16_384, (1...4).contains(options.supersample) else {
             throw PetalImageError.invalidRenderOptions
@@ -86,9 +125,9 @@ public enum PetalRenderer {
         let s = options.supersample
         let unit = PetalLayout.canvas / Double(size)
         let n = UInt32(s * s)
-        var data = [UInt8](repeating: 0, count: size * size * 3)
+        var data = [UInt8](repeating: 0, count: size * height * 3)
         data.withUnsafeMutableBufferPointer { data in
-            for py in 0..<size {
+            for py in 0..<height {
                 for px in 0..<size {
                     var r: UInt32 = 0
                     var g: UInt32 = 0
@@ -96,8 +135,8 @@ public enum PetalRenderer {
                     for sy in 0..<s {
                         for sx in 0..<s {
                             let x = (Double(px) + (Double(sx) + 0.5) / Double(s)) * unit
-                            let y = (Double(py) + (Double(sy) + 0.5) / Double(s)) * unit
-                            let color = shader.shade(x, y)
+                            let y = (Double(py) + (Double(sy) + 0.5) / Double(s)) * unit - top
+                            let color = y >= 0.0 && y < PetalLayout.canvas ? shader.shade(x, y) : shader.kana(x, y)
                             r += UInt32(color.red)
                             g += UInt32(color.green)
                             b += UInt32(color.blue)
@@ -110,16 +149,19 @@ public enum PetalRenderer {
                 }
             }
         }
-        return PetalRGBImage(width: size, height: size, pixels: data)
+        return PetalRGBImage(width: size, height: height, pixels: data)
     }
 
     /// Per-sample colour function, shading in the reference's order: finders,
-    /// ring dots, petals, the backdrop `天`, background. Layout tables are
-    /// copied in once so the inner loop touches no lazily initialised globals.
+    /// ring dots, petals, the backdrop `天`, background; outside the square the
+    /// katakana tiles. Layout tables are copied in once so the inner loop
+    /// touches no lazily initialised globals.
     private struct Shader {
         let dots: [Bool]
         let petals: [Bool]
         let turns: [UInt8]
+        let kanaGlyphs: [UInt8]
+        let kanaLight: [Bool]
         let palette: PetalPalette
         let finderCenters = PetalLayout.finderCenters
         let ringRadii = PetalLayout.ringRadii
@@ -137,7 +179,20 @@ public enum PetalRenderer {
             dots = cells.dots
             petals = cells.petals
             turns = cells.turns
+            kanaGlyphs = cells.kanaGlyphs
+            kanaLight = cells.kanaLight
             self.palette = palette
+        }
+
+        /// The colour of a katakana tile at the square-coordinate point
+        /// `(x, y)` outside the square, or the background between tiles.
+        func kana(_ x: Double, _ y: Double) -> PetalColor {
+            guard let (tile, u, v) = PetalLayout.kanaTileAt(x: x, y: y), PetalLayout.kanaInside(u: u, v: v) else {
+                return palette.background
+            }
+            let inked = PetalLayout.inked(Int(kanaGlyphs[tile]), u, v)
+            if kanaLight[tile] { return inked ? palette.ink : palette.light }
+            return inked ? palette.pink : palette.background
         }
 
         /// The colour of the lit petal at `(x, y)`, if any: the cells of the
@@ -229,10 +284,13 @@ public struct PetalRect: Equatable, Sendable {
 /// A platform-neutral vector description of one frame for native 2D APIs
 /// (CoreGraphics, SwiftUI `Canvas`, Metal, …).
 ///
-/// All geometry is in canvas units (``canvasSize`` per side, origin top-left,
-/// `y` down). Paint in this order to reproduce ``PetalRenderer``:
+/// All geometry is in square canvas units (``canvasSize`` per side, origin
+/// at the square's top-left, `y` down); the card extends ``squareTop`` units
+/// above and below the square, so a canvas of ``canvasSize`` × ``cardHeight``
+/// units translated down by ``squareTop`` holds it all. Paint in this order to
+/// reproduce ``PetalRenderer``:
 ///
-/// 1. fill the canvas with ``PetalPalette/background``;
+/// 1. fill the card with ``PetalPalette/background``;
 /// 2. for each finder fill the ``Finder/core`` and every petal circle with
 ///    ``PetalPalette/light``, then fill every notch circle with the background;
 /// 3. fill the ``backdrop`` cells with ``PetalPalette/backdrop``, clipped to
@@ -244,7 +302,15 @@ public struct PetalRect: Equatable, Sendable {
 ///    ``petalNotchDistance`` along ``Petal/angle``). The notch must be drawn:
 ///    it tells a petal from one turned by half a turn, and the turn reader's
 ///    templates include it;
-/// 5. fill every lit ``dots`` circle with ``PetalPalette/pink``.
+/// 5. fill every lit ``dots`` circle with ``PetalPalette/pink``;
+/// 6. for every one of ``kanaTiles``: a light tile is a square of side
+///    ``kanaTileSize`` with corners rounded to radius ``kanaCorner``, filled
+///    with ``PetalPalette/light`` (a dark tile is not filled); then the tile's
+///    glyph is stroked along ``kanaGlyphStrokes(_:)`` (polylines in tile-local
+///    units from the tile's top-left corner, round caps and joins, width
+///    ``kanaStrokeWidth``) in ``PetalPalette/ink`` on a light tile and
+///    ``PetalPalette/pink`` on a dark one. Every stroke lies inside its
+///    rounded tile, so no clip is needed.
 public struct PetalDrawList: Equatable, Sendable {
     /// A circle.
     public struct Circle: Equatable, Sendable {
@@ -282,8 +348,53 @@ public struct PetalDrawList: Equatable, Sendable {
         public let color: PetalColor
     }
 
+    /// One katakana tile of the card's bands.
+    public struct Tile: Equatable, Sendable {
+        /// Tile index (``PetalLayout/kanaTiles`` order).
+        public let tile: Int
+        /// The tile square's top-left corner (square coordinates: negative `y`
+        /// above the square).
+        public let origin: PetalPoint
+        /// The glyph it shows (`0..<16`, see ``PetalGlyphs``).
+        public let glyph: Int
+        /// Whether the tile is light (filled, glyph in ink) rather than dark
+        /// (glyph in pink).
+        public let light: Bool
+        /// Colour of the glyph: ``PetalPalette/ink`` on a light tile,
+        /// ``PetalPalette/pink`` on a dark one.
+        public let glyphColor: PetalColor
+    }
+
     /// Canvas side in design units.
     public static let canvasSize = PetalLayout.canvas
+    /// Height of the card in design units: the square with a band above and
+    /// below it.
+    public static let cardHeight = PetalLayout.cardHeight
+    /// Distance from the card's top edge to the square's, in design units.
+    public static let squareTop = PetalLayout.squareTop
+    /// Side of a katakana tile.
+    public static let kanaTileSize = PetalLayout.kanaTile
+    /// Corner radius of a katakana tile.
+    public static let kanaCorner = PetalLayout.kanaCorner
+    /// Width of a glyph's strokes in design units: the design grid's stroke
+    /// width scaled into the glyph box.
+    public static let kanaStrokeWidth = PetalGlyphs.strokeWidth * PetalLayout.kanaGlyphBox / PetalGlyphs.glyphGrid
+
+    /// The strokes of `glyph` (`0..<16`) in tile-local design units: polylines
+    /// measured from the tile's top-left corner (the glyph box is inset by 1
+    /// unit); empty for a glyph out of range.
+    public static func kanaGlyphStrokes(_ glyph: Int) -> [[PetalPoint]] {
+        (0..<PetalGlyphs.glyphCount).contains(glyph) ? glyphStrokes[glyph] : []
+    }
+
+    /// ``kanaGlyphStrokes(_:)`` of every glyph.
+    static let glyphStrokes: [[[PetalPoint]]] = (0..<PetalGlyphs.glyphCount).map { glyph in
+        let inset = (PetalLayout.kanaTile - PetalLayout.kanaGlyphBox) / 2.0
+        let scale = PetalLayout.kanaGlyphBox / PetalGlyphs.glyphGrid
+        return PetalGlyphs.strokeTable[glyph].map { stroke in
+            stroke.map { PetalPoint(x: inset + $0.x * scale, y: inset + $0.y * scale) }
+        }
+    }
     /// Half the length of a petal along ``Petal/angle``.
     public static let petalHalfLength = PetalLayout.petalHalfLength
     /// Half the width of a petal.
@@ -324,6 +435,8 @@ public struct PetalDrawList: Equatable, Sendable {
     public let petals: [Petal]
     /// The lit ring dots (gates and data dots).
     public let dots: [Circle]
+    /// Every katakana tile of both bands, in tile order.
+    public let kanaTiles: [Tile]
 
     /// Builds the draw list of `cells`.
     public init(cells: PetalFrameCells, palette: PetalPalette = .standard) {
@@ -384,5 +497,15 @@ public struct PetalDrawList: Equatable, Sendable {
             }
         }
         self.dots = dots
+        kanaTiles = PetalLayout.kanaTiles.indices.map { tile in
+            let light = cells.kanaLight[tile]
+            return Tile(
+                tile: tile,
+                origin: PetalPoint(x: PetalLayout.kanaTileX[tile], y: PetalLayout.kanaTileY[tile]),
+                glyph: Int(cells.kanaGlyphs[tile]),
+                light: light,
+                glyphColor: light ? palette.ink : palette.pink
+            )
+        }
     }
 }
