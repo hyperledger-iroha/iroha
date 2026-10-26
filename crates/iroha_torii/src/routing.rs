@@ -39404,15 +39404,20 @@ fn native_contract_emission_source_is_visible(
     output: &iroha_data_model::block::execution_output::ExecutionOutputV1,
     emission: &iroha_data_model::smart_contract::event::ContractEmissionV1,
 ) -> bool {
-    use iroha_data_model::block::execution_output::{ExecutionOutputV1, PipelineEventPositionV1};
+    use iroha_data_model::block::execution_output::{
+        ExecutionOutputV1, NetworkExecutionOutputV2, PipelineEventPositionV1,
+        PipelineExecutionOutputV2,
+    };
     if !emission.contract.dataspace_id().is_ok_and(|id| visibility.allows_dataspace(id)) { return false; }
     match output {
-        ExecutionOutputV1::Network(source) => visibility.allows_external_entrypoint(block, source.input_index as usize),
-        ExecutionOutputV1::Pipeline(source) => match source.invocation.event {
+        ExecutionOutputV1::Network(source)
+        | ExecutionOutputV1::NetworkWithLifecycle(NetworkExecutionOutputV2 { execution: source, .. }) => visibility.allows_external_entrypoint(block, source.input_index as usize),
+        ExecutionOutputV1::Pipeline(source)
+        | ExecutionOutputV1::PipelineWithLifecycle(PipelineExecutionOutputV2 { execution: source, .. }) => match source.invocation.event {
             PipelineEventPositionV1::Network(index) => visibility.allows_external_entrypoint(block, index as usize),
             PipelineEventPositionV1::BlockApproved => true,
         },
-        ExecutionOutputV1::Time(_) => true,
+        ExecutionOutputV1::Time(_) | ExecutionOutputV1::TimeWithLifecycle(_) => true,
     }
 }
 fn native_contract_emission_is_visible_in_block(
@@ -39436,6 +39441,229 @@ fn native_contract_emission_is_visible_in_block(
     }
     Ok(native_contract_emission_source_is_visible(visibility, block, output, emission))
 }
+#[cfg(test)]
+mod native_contract_emission_source_visibility_tests {
+    use super::*;
+    use iroha_data_model::{
+        block::{
+            BlockExecutionContextBundle, ExternalExecutionContext, ExternalExecutionRouteLeg,
+            ExternalExecutionRouteRole, builder::BlockBuilder,
+            execution_output::{
+                ExecutionOutputV1, NetworkExecutionOutputV1, NetworkExecutionOutputV2,
+                PipelineEventPositionV1, PipelineExecutionOutputV1, PipelineExecutionOutputV2,
+                PipelineInvocationV1, TimeExecutionOutputV1, TimeExecutionOutputV2,
+                TimeInvocationV1, TriggerLifecycleEffectsV1, TriggerUseV1,
+            },
+        },
+        events::time::{TimeEvent, TimeInterval},
+        smart_contract::{ContractAddress, entrypoint::*, event::*},
+        transaction::{FeePaymentIntent, TransactionBuilder},
+    };
+    use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
+
+    fn network() -> iroha_data_model::NetworkId {
+        iroha_data_model::NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
+            b"native emission source visibility fixture",
+        )))
+    }
+
+    // This real signed carrier and its exact execution-context routes are a
+    // structural visibility fixture, not an execution or finality receipt.
+    fn block(routes: &[DataSpaceId]) -> SignedBlock {
+        let mut transaction = TransactionBuilder::new(
+            network(), ALICE_ID.clone(), FeePaymentIntent::authority(Vec::new(), None),
+        );
+        transaction.set_creation_time(core::time::Duration::from_millis(1_000));
+        let signed = transaction.with_executable(Executable::Instructions(
+            iroha_primitives::const_vec::ConstVec::new_empty(),
+        )).sign(ALICE_KEYPAIR.private_key());
+        let header = iroha_data_model::block::BlockHeader::new(
+            std::num::NonZeroU64::new(1).unwrap(), None, None, 1_001, 0,
+        );
+        let mut builder = BlockBuilder::new(header);
+        builder.push_transaction(signed);
+        let mut block = builder.build_with_signature(0, ALICE_KEYPAIR.private_key());
+        let (entrypoint_hash, _) = block.external_signed_transaction_at(0).unwrap();
+        let coordinator = LaneId::new(7);
+        let legs = routes.iter().enumerate().map(|(index, dataspace)| {
+            ExternalExecutionRouteLeg::new(
+                if index == 0 { coordinator } else { LaneId::new(8) },
+                *dataspace,
+                if index == 0 { ExternalExecutionRouteRole::Coordinator }
+                else { ExternalExecutionRouteRole::Participant },
+            )
+        }).collect();
+        block.set_execution_context(Some(BlockExecutionContextBundle::new(vec![
+            ExternalExecutionContext::with_routing_plan(
+                entrypoint_hash, coordinator, routes[0],
+                Hash::new(b"visibility fixture route plan"), legs,
+            ),
+        ])));
+        block
+    }
+
+    fn emission(dataspace: DataSpaceId) -> ContractEmissionV1 {
+        let payload_type = EntrypointValueTypeV1 {
+            nodes: vec![EntrypointValueTypeNodeV1::Leaf(EntrypointValueKindV1::Bool)],
+        };
+        ContractEmissionV1 {
+            contract: ContractAddress::derive(&network(), &ALICE_ID, 1, dataspace).unwrap(),
+            code_hash: Hash::new(b"visibility fixture artifact"), entrypoint: 0, event: 0,
+            caller: ALICE_ID.clone(),
+            payload: EntrypointReturnRecordV1 {
+                schema_hash: entrypoint_return_schema_hash_v1(
+                    &norito::encode_canonical(&payload_type).unwrap(),
+                ),
+                atoms: vec![EntrypointValueAtomV1::Bool(true)],
+            },
+            definition: ContractEventDescriptorV1 {
+                name: "VisibleEvent".parse().unwrap(), payload_type,
+            },
+        }
+    }
+
+    fn trigger() -> TriggerUseV1 {
+        TriggerUseV1 {
+            trigger_id: "visibility-source".parse().unwrap(), registered_at_height: 0,
+            action_hash: Hash::new(b"untrusted visibility fixture action, not State evidence"),
+        }
+    }
+
+    fn network_outputs(index: u32) -> [ExecutionOutputV1; 2] {
+        let execution = NetworkExecutionOutputV1 {
+            input_index: index, result: TransactionResult::new(Ok(Vec::new())),
+            completions: Vec::new(),
+        };
+        [ExecutionOutputV1::Network(execution.clone()),
+         ExecutionOutputV1::NetworkWithLifecycle(NetworkExecutionOutputV2 {
+             execution, trigger_lifecycle: TriggerLifecycleEffectsV1::Complete { effects: Vec::new() },
+         })]
+    }
+
+    fn pipeline_outputs(event: PipelineEventPositionV1) -> [ExecutionOutputV1; 2] {
+        let execution = PipelineExecutionOutputV1 {
+            invocation: PipelineInvocationV1 { event, candidate_index: 0, trigger: trigger() },
+            result: TransactionResult::new(Ok(Vec::new())), failure_root: None,
+            completions: Vec::new(),
+        };
+        [ExecutionOutputV1::Pipeline(execution.clone()),
+         ExecutionOutputV1::PipelineWithLifecycle(PipelineExecutionOutputV2 {
+             execution, trigger_lifecycle: TriggerLifecycleEffectsV1::Complete { effects: Vec::new() },
+         })]
+    }
+
+    fn time_outputs() -> [ExecutionOutputV1; 2] {
+        let execution = TimeExecutionOutputV1 {
+            invocation: TimeInvocationV1 {
+                schedule_index: 0, trigger: trigger(),
+                event: TimeEvent { interval: TimeInterval { since_ms: 1_000, length_ms: 1 } },
+            },
+            result: TransactionResult::new(Ok(Vec::new())), failure_root: None,
+            completions: Vec::new(),
+        };
+        [ExecutionOutputV1::Time(execution.clone()),
+         ExecutionOutputV1::TimeWithLifecycle(TimeExecutionOutputV2 {
+             execution, trigger_lifecycle: TriggerLifecycleEffectsV1::Complete { effects: Vec::new() },
+         })]
+    }
+
+    #[test]
+    fn network_v1_v2_require_all_original_route_legs_and_present_input() {
+        let visible = DataSpaceId::new(7);
+        let hidden = DataSpaceId::new(8);
+        let mut block = block(&[visible, hidden]);
+        let emission = emission(visible);
+        let limited = DataspaceReadVisibility::new(BTreeSet::from([visible]), false);
+        let complete = DataspaceReadVisibility::new(BTreeSet::from([visible, hidden]), false);
+        for output in network_outputs(0) {
+            assert!(!native_contract_emission_source_is_visible(&limited, &block, &output, &emission));
+            assert!(native_contract_emission_source_is_visible(&complete, &block, &output, &emission));
+        }
+        for output in network_outputs(1) {
+            assert!(!native_contract_emission_source_is_visible(&complete, &block, &output, &emission));
+        }
+        block.set_execution_context(None);
+        for output in network_outputs(0) {
+            assert!(!native_contract_emission_source_is_visible(&complete, &block, &output, &emission));
+        }
+    }
+
+    #[test]
+    fn pipeline_v1_v2_preserve_network_vs_block_approved_and_time_sources() {
+        let visible = DataSpaceId::new(7);
+        let hidden = DataSpaceId::new(8);
+        let block = block(&[visible, hidden]);
+        let emission = emission(visible);
+        let limited = DataspaceReadVisibility::new(BTreeSet::from([visible]), false);
+        let complete = DataspaceReadVisibility::new(BTreeSet::from([visible, hidden]), false);
+        for output in pipeline_outputs(PipelineEventPositionV1::Network(0)) {
+            assert!(!native_contract_emission_source_is_visible(&limited, &block, &output, &emission));
+            assert!(native_contract_emission_source_is_visible(&complete, &block, &output, &emission));
+        }
+        for output in pipeline_outputs(PipelineEventPositionV1::Network(1)) {
+            assert!(!native_contract_emission_source_is_visible(&complete, &block, &output, &emission));
+        }
+        for output in pipeline_outputs(PipelineEventPositionV1::BlockApproved).into_iter().chain(time_outputs()) {
+            assert!(native_contract_emission_source_is_visible(&limited, &block, &output, &emission));
+        }
+    }
+
+    #[test]
+    fn private_emitting_contract_is_refused_for_every_v1_v2_source_kind() {
+        let visible = DataSpaceId::new(7);
+        let hidden = DataSpaceId::new(8);
+        let block = block(&[visible]);
+        let emission = emission(hidden);
+        let limited = DataspaceReadVisibility::new(BTreeSet::from([visible]), false);
+        let complete = DataspaceReadVisibility::new(BTreeSet::from([visible, hidden]), false);
+        let outputs = network_outputs(0).into_iter()
+            .chain(pipeline_outputs(PipelineEventPositionV1::Network(0)))
+            .chain(pipeline_outputs(PipelineEventPositionV1::BlockApproved))
+            .chain(time_outputs());
+        for output in outputs {
+            assert!(!native_contract_emission_source_is_visible(&limited, &block, &output, &emission));
+            assert!(native_contract_emission_source_is_visible(&complete, &block, &output, &emission));
+        }
+    }
+    #[test]
+    fn external_core_feature_counts_actual_owned_receipt_body_reads() {
+        use iroha_core::{
+            state::World,
+            sumeragi::{
+                finality::NativeFinalityProofBudget,
+                test_chain::{CertifiedTestChain, TestChainConfig},
+            },
+        };
+        use iroha_data_model::sumeragi_finality::MAX_FINALITY_BLOCK_BYTES;
+        let mut chain = CertifiedTestChain::start(TestChainConfig::new(World::new(), 10_000)).unwrap();
+        chain.commit(Vec::new());
+        let frames = iroha_allocation::AllocationBudget::new(33_312_848);
+        let graphs = iroha_allocation::AllocationBudget::new(33_312_848);
+        let owner = NativeFinalityProofBudget::new(
+            frames, graphs,
+            norito::DecodeLimits::new(
+                2_562_487, MAX_FINALITY_BLOCK_BYTES, 33_312_848, 33_312_848,
+                norito::core::MAX_VALUE_NESTING_DEPTH,
+            ),
+        );
+        chain.kura().reset_canonical_query_reads_for_test();
+        assert_eq!(chain.kura().canonical_query_reads_for_test(), (0, 0));
+        let receipt = chain.state().read_certified_ladder_receipt(
+            &owner, std::num::NonZeroU64::new(2).unwrap(),
+            std::num::NonZeroUsize::new(MAX_FINALITY_BLOCK_BYTES).unwrap(),
+            std::time::Instant::now() + std::time::Duration::from_secs(60),
+            &std::sync::atomic::AtomicBool::new(false),
+        ).unwrap();
+        assert_eq!(receipt.as_ref().id(), chain.committed(2).id());
+        let (calls, bytes) = chain.kura().canonical_query_reads_for_test();
+        assert!(calls > 0, "the external Core dependency must count actual physical calls");
+        assert!(bytes > 0, "the request-owned receipt reads actual original body bytes");
+        drop(receipt);
+        chain.kura().reset_canonical_query_reads_for_test();
+        assert_eq!(chain.kura().canonical_query_reads_for_test(), (0, 0));
+    }
+}
+
 /// GET /v1/events/sse – Server-Sent Events stream of JSON events.
 ///
 /// Notes:

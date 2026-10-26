@@ -5624,15 +5624,17 @@ impl Kura {
             .load(Ordering::Relaxed)
     }
     /// Reset this physical store's actual read accounting for a scoped query fixture.
-    #[cfg(test)]
-    pub(crate) fn reset_canonical_query_reads_for_test(&self) {
+    #[doc(hidden)]
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    pub fn reset_canonical_query_reads_for_test(&self) {
         let store = self.block_store.lock();
         store.body_read_calls.store(0, Ordering::Relaxed);
         store.body_bytes_read.store(0, Ordering::Relaxed);
     }
     /// Return actual physical body read calls and bytes; no decoded-cache proxy.
-    #[cfg(test)]
-    pub(crate) fn canonical_query_reads_for_test(&self) -> (usize, u64) {
+    #[doc(hidden)]
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    pub fn canonical_query_reads_for_test(&self) -> (usize, u64) {
         let store = self.block_store.lock();
         (
             store.body_read_calls.load(Ordering::Relaxed),
@@ -7285,9 +7287,9 @@ impl BlockStore {
             read_scratch: Vec::new(),
             data_mmap: None,
             data_mmap_len: 0,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "iroha-core-tests"))]
             body_bytes_read: AtomicU64::new(0),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "iroha-core-tests"))]
             body_read_calls: AtomicUsize::new(0),
             fast_prevalidated_count: None,
             commit_marker_count: 0,
@@ -9544,7 +9546,7 @@ impl BlockStore {
                 data_len: self.data_mmap_len,
             });
         }
-        #[cfg(test)]
+        #[cfg(any(test, feature = "iroha-core-tests"))]
         {
             self.body_read_calls.fetch_add(1, Ordering::Relaxed);
             self.body_bytes_read.fetch_add(length, Ordering::Relaxed);
@@ -9935,7 +9937,7 @@ impl BlockStore {
         start_location_in_data_file: u64,
         dest_buffer: &mut [u8],
     ) -> Result<()> {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "iroha-core-tests"))]
         {
             self.body_read_calls.fetch_add(1, Ordering::Relaxed);
             self.body_bytes_read

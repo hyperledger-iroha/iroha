@@ -27,6 +27,21 @@ use crate::{
     trigger::TriggerId,
 };
 
+#[path = "trigger_lifecycle.rs"]
+mod trigger_lifecycle;
+pub use trigger_lifecycle::action_frame_scanner::{
+    ActionFrameCaptureFailureV1, ActionFrameProductionFailureV1, ActionFrameScanFailureV1,
+    ActionScannerLimitsV1, BoundedActionFrameScannerV1, RetainedActionFrameBytesV1,
+};
+pub use trigger_lifecycle::{
+    TriggerLifecycleActionCodecV1, TriggerLifecycleActionFrameBudgetV1,
+    TriggerLifecycleActionFrameLimitsV1, TriggerLifecycleActionFrameV1,
+    TriggerLifecycleActionSemanticsV1, TriggerLifecycleActionValidatorV1, TriggerLifecycleChangeV1,
+    TriggerLifecycleEffectV1, TriggerLifecycleEffectsV1, TriggerLifecycleOriginV1,
+    TriggerLifecycleOwnerV1, TriggerLifecyclePolicyV1, TriggerLifecycleStateKindV1,
+    TriggerLifecycleRetryStateV1, TriggerLifecycleStateV1,
+};
+
 const PIPELINE_CALL_DOMAIN: &[u8] = b"iroha:pipeline-invocation:v1\0";
 const TIME_CALL_DOMAIN: &[u8] = b"iroha:time-invocation:v1\0";
 
@@ -296,6 +311,13 @@ pub enum ExecutionOutputV1 {
     Pipeline(PipelineExecutionOutputV1),
     /// Full result owned by one scheduled invocation.
     Time(TimeExecutionOutputV1),
+    /// Explicit complete lifecycle coverage for a post-activation Network input.
+    /// Appended after all historical tags; absence is never an empty trace.
+    NetworkWithLifecycle(NetworkExecutionOutputV2),
+    /// Explicit complete lifecycle coverage for a post-activation Pipeline invocation.
+    PipelineWithLifecycle(PipelineExecutionOutputV2),
+    /// Explicit complete lifecycle coverage for a post-activation Time invocation.
+    TimeWithLifecycle(TimeExecutionOutputV2),
 }
 
 /// Full execution result for one network source; the input body is not duplicated.
@@ -385,6 +407,95 @@ pub struct TimeExecutionOutputV1 {
     pub completions: Vec<InvocationCompletionV1>,
 }
 
+/// Trace-bearing successors retain the historical result and invocation model.
+/// Their new enum tags and mandatory trace do not upgrade historical evidence.
+/// Canonical production must select them only at an authenticated activation;
+/// old rows remain available for replay of the retained chain. New full-coverage
+/// verification must use `validate_execution_outputs_with_lifecycle_v1` and must
+/// separately authenticate activation and the complete scanned range.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    norito::NoritoSchema,
+    iroha_schema::IntoSchema,
+    crate::DeriveJsonSerialize,
+    crate::DeriveJsonDeserialize,
+)]
+#[norito_schema(name = "iroha_data_model::block::execution_output::NetworkExecutionOutputV2")]
+#[norito(deny_unknown_fields)]
+pub struct NetworkExecutionOutputV2 {
+    /// Original single-owner result, preserving its call and use hash definitions.
+    pub execution: NetworkExecutionOutputV1,
+    /// Required complete journal; never inferred from a historical row or default.
+    pub trigger_lifecycle: TriggerLifecycleEffectsV1,
+}
+
+/// Trace-bearing Pipeline invocation result with its complete lifecycle journal.
+/// The original invocation and result keep their existing identities; canonical
+/// production still requires authenticated activation and exact committed effects.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    norito::NoritoSchema,
+    iroha_schema::IntoSchema,
+    crate::DeriveJsonSerialize,
+    crate::DeriveJsonDeserialize,
+)]
+#[norito_schema(name = "iroha_data_model::block::execution_output::PipelineExecutionOutputV2")]
+#[norito(deny_unknown_fields)]
+pub struct PipelineExecutionOutputV2 {
+    /// Original single-owner result, preserving its call and use hash definitions.
+    pub execution: PipelineExecutionOutputV1,
+    /// Required complete journal; never inferred from a historical row or default.
+    pub trigger_lifecycle: TriggerLifecycleEffectsV1,
+}
+
+/// Trace-bearing scheduled invocation result with its complete lifecycle journal.
+/// Committed retry or exhaustion effects follow the actual rollback and policy
+/// transaction; this wrapper alone proves neither execution nor activation.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    norito::NoritoSchema,
+    iroha_schema::IntoSchema,
+    crate::DeriveJsonSerialize,
+    crate::DeriveJsonDeserialize,
+)]
+#[norito_schema(name = "iroha_data_model::block::execution_output::TimeExecutionOutputV2")]
+#[norito(deny_unknown_fields)]
+pub struct TimeExecutionOutputV2 {
+    /// Original single-owner result, preserving its call and use hash definitions.
+    pub execution: TimeExecutionOutputV1,
+    /// Required complete journal; never inferred from a historical row or default.
+    pub trigger_lifecycle: TriggerLifecycleEffectsV1,
+}
+
+/// Borrowed fields common to historical and trace-bearing rows. This view grants
+/// no lifecycle coverage; callers must inspect the enclosing variant separately.
+enum ExecutionOutputRef<'a> {
+    Network(&'a NetworkExecutionOutputV1),
+    Pipeline(&'a PipelineExecutionOutputV1),
+    Time(&'a TimeExecutionOutputV1),
+}
+
 /// Borrowed random access to the complete network-input projection.
 ///
 /// Implementations must expose the same immutable ordering throughout a check.
@@ -435,6 +546,79 @@ impl ExecutionInputs for super::SignedBlock {
 }
 
 impl ExecutionOutputV1 {
+    fn execution_ref(&self) -> ExecutionOutputRef<'_> {
+        match self {
+            Self::Network(row) => ExecutionOutputRef::Network(row),
+            Self::Pipeline(row) => ExecutionOutputRef::Pipeline(row),
+            Self::Time(row) => ExecutionOutputRef::Time(row),
+            Self::NetworkWithLifecycle(row) => ExecutionOutputRef::Network(&row.execution),
+            Self::PipelineWithLifecycle(row) => ExecutionOutputRef::Pipeline(&row.execution),
+            Self::TimeWithLifecycle(row) => ExecutionOutputRef::Time(&row.execution),
+        }
+    }
+
+    /// Borrow explicit lifecycle coverage; `None` means historical, not empty.
+    pub fn trigger_lifecycle(&self) -> Option<&TriggerLifecycleEffectsV1> {
+        match self {
+            Self::Network(_) | Self::Pipeline(_) | Self::Time(_) => None,
+            Self::NetworkWithLifecycle(row) => Some(&row.trigger_lifecycle),
+            Self::PipelineWithLifecycle(row) => Some(&row.trigger_lifecycle),
+            Self::TimeWithLifecycle(row) => Some(&row.trigger_lifecycle),
+        }
+    }
+
+    /// Require the explicit complete carrier without claiming native authority.
+    ///
+    /// # Errors
+    /// Rejects historical output. There is no legacy-absence-to-empty conversion.
+    pub fn require_trigger_lifecycle(&self) -> Result<&TriggerLifecycleEffectsV1, String> {
+        self.trigger_lifecycle()
+            .ok_or_else(|| "historical execution output has no complete lifecycle coverage".into())
+    }
+
+    /// Construct an explicit post-activation healthy-work overflow terminal.
+    /// The owner must reserve this exact new row, roll back all body effects,
+    /// and authenticate activation; this constructor supplies no such proof.
+    pub fn network_lifecycle_output_limit_rejection(input_index: u32) -> Self {
+        let Self::Network(execution) = Self::network_output_limit_rejection(input_index) else {
+            unreachable!("fixed Network terminal constructor")
+        };
+        Self::NetworkWithLifecycle(NetworkExecutionOutputV2 {
+            execution,
+            trigger_lifecycle: TriggerLifecycleEffectsV1::Complete {
+                effects: Vec::new(),
+            },
+        })
+    }
+
+    /// Construct a post-activation Pipeline overflow terminal after full rollback.
+    /// This does not encode a genuine rejection's committed quarantine effects.
+    pub fn pipeline_lifecycle_output_limit_rejection(invocation: PipelineInvocationV1) -> Self {
+        let Self::Pipeline(execution) = Self::pipeline_output_limit_rejection(invocation) else {
+            unreachable!("fixed Pipeline terminal constructor")
+        };
+        Self::PipelineWithLifecycle(PipelineExecutionOutputV2 {
+            execution,
+            trigger_lifecycle: TriggerLifecycleEffectsV1::Complete {
+                effects: Vec::new(),
+            },
+        })
+    }
+
+    /// Construct a post-activation Time overflow terminal after full rollback.
+    /// This does not encode a genuine rejection's committed retry-state effects.
+    pub fn time_lifecycle_output_limit_rejection(invocation: TimeInvocationV1) -> Self {
+        let Self::Time(execution) = Self::time_output_limit_rejection(invocation) else {
+            unreachable!("fixed Time terminal constructor")
+        };
+        Self::TimeWithLifecycle(TimeExecutionOutputV2 {
+            execution,
+            trigger_lifecycle: TriggerLifecycleEffectsV1::Complete {
+                effects: Vec::new(),
+            },
+        })
+    }
+
     /// Construct the bounded terminal reserved for one ordinary network source.
     ///
     /// This is a proposed fallback, not evidence that execution has occurred.
@@ -489,17 +673,20 @@ impl ExecutionOutputV1 {
         ) || !self.result().batch_transfer_outcomes().is_empty()
             || self.result().nexus_fee_receipt().is_some()
             || !self.result().contract_events().is_empty()
+            || self
+                .trigger_lifecycle()
+                .is_some_and(|trace| !trace.effects().is_empty())
         {
             return false;
         }
-        let (trigger, diagnostic, completions) = match self {
-            Self::Network(output) => return output.completions.is_empty(),
-            Self::Pipeline(output) => (
+        let (trigger, diagnostic, completions) = match self.execution_ref() {
+            ExecutionOutputRef::Network(output) => return output.completions.is_empty(),
+            ExecutionOutputRef::Pipeline(output) => (
                 &output.invocation.trigger,
                 &output.failure_root,
                 &output.completions,
             ),
-            Self::Time(output) => (
+            ExecutionOutputRef::Time(output) => (
                 &output.invocation.trigger,
                 &output.failure_root,
                 &output.completions,
@@ -520,14 +707,14 @@ impl ExecutionOutputV1 {
     pub fn is_internal_rejection_diagnostic_omitted(&self) -> bool {
         use crate::transaction::error::TransactionRejectionReason;
 
-        let (trigger, diagnostic, completions) = match self {
-            Self::Network(_) => return false,
-            Self::Pipeline(output) => (
+        let (trigger, diagnostic, completions) = match self.execution_ref() {
+            ExecutionOutputRef::Network(_) => return false,
+            ExecutionOutputRef::Pipeline(output) => (
                 &output.invocation.trigger,
                 &output.failure_root,
                 &output.completions,
             ),
-            Self::Time(output) => (
+            ExecutionOutputRef::Time(output) => (
                 &output.invocation.trigger,
                 &output.failure_root,
                 &output.completions,
@@ -552,19 +739,19 @@ impl ExecutionOutputV1 {
 
     /// Borrow the one full result without projecting away its receipts.
     pub fn result(&self) -> &TransactionResult {
-        match self {
-            Self::Network(NetworkExecutionOutputV1 { result, .. })
-            | Self::Pipeline(PipelineExecutionOutputV1 { result, .. })
-            | Self::Time(TimeExecutionOutputV1 { result, .. }) => result,
+        match self.execution_ref() {
+            ExecutionOutputRef::Network(NetworkExecutionOutputV1 { result, .. })
+            | ExecutionOutputRef::Pipeline(PipelineExecutionOutputV1 { result, .. })
+            | ExecutionOutputRef::Time(TimeExecutionOutputV1 { result, .. }) => result,
         }
     }
 
     /// Borrow this output's sole ordered completion collection.
     pub fn completions(&self) -> &[InvocationCompletionV1] {
-        match self {
-            Self::Network(NetworkExecutionOutputV1 { completions, .. })
-            | Self::Pipeline(PipelineExecutionOutputV1 { completions, .. })
-            | Self::Time(TimeExecutionOutputV1 { completions, .. }) => completions,
+        match self.execution_ref() {
+            ExecutionOutputRef::Network(NetworkExecutionOutputV1 { completions, .. })
+            | ExecutionOutputRef::Pipeline(PipelineExecutionOutputV1 { completions, .. })
+            | ExecutionOutputRef::Time(TimeExecutionOutputV1 { completions, .. }) => completions,
         }
     }
 
@@ -582,14 +769,14 @@ impl ExecutionOutputV1 {
         proposal: HashOf<BlockHeader>,
         network_inputs: &S,
     ) -> Result<Hash, String> {
-        match self {
-            Self::Network(NetworkExecutionOutputV1 { input_index, .. }) => Ok(Hash::from(
-                network_input(network_inputs, *input_index)?.execution_call_hash(),
-            )),
-            Self::Pipeline(PipelineExecutionOutputV1 { invocation, .. }) => {
+        match self.execution_ref() {
+            ExecutionOutputRef::Network(NetworkExecutionOutputV1 { input_index, .. }) => Ok(
+                Hash::from(network_input(network_inputs, *input_index)?.execution_call_hash()),
+            ),
+            ExecutionOutputRef::Pipeline(PipelineExecutionOutputV1 { invocation, .. }) => {
                 invocation.execution_call_hash(proposal)
             }
-            Self::Time(TimeExecutionOutputV1 { invocation, .. }) => {
+            ExecutionOutputRef::Time(TimeExecutionOutputV1 { invocation, .. }) => {
                 invocation.execution_call_hash(proposal)
             }
         }
@@ -613,8 +800,8 @@ impl ExecutionOutputV1 {
         if proposal_height == 0 {
             return Err("execution output proposal height is zero".into());
         }
-        let internal = match self {
-            Self::Network(NetworkExecutionOutputV1 {
+        let internal = match self.execution_ref() {
+            ExecutionOutputRef::Network(NetworkExecutionOutputV1 {
                 input_index,
                 result,
                 completions,
@@ -638,6 +825,9 @@ impl ExecutionOutputV1 {
                         || !result.batch_transfer_outcomes().is_empty()
                         || result.nexus_fee_receipt().is_some()
                         || !result.contract_events().is_empty()
+                        || self
+                            .trigger_lifecycle()
+                            .is_some_and(|trace| !trace.effects().is_empty())
                     {
                         return Err("anonymous ballot output cannot retain side outputs".into());
                     }
@@ -658,7 +848,7 @@ impl ExecutionOutputV1 {
                 }
                 None
             }
-            Self::Pipeline(PipelineExecutionOutputV1 {
+            ExecutionOutputRef::Pipeline(PipelineExecutionOutputV1 {
                 invocation,
                 failure_root,
                 ..
@@ -673,7 +863,7 @@ impl ExecutionOutputV1 {
                 }
                 Some((&invocation.trigger, failure_root))
             }
-            Self::Time(TimeExecutionOutputV1 {
+            ExecutionOutputRef::Time(TimeExecutionOutputV1 {
                 invocation,
                 failure_root,
                 ..
@@ -770,6 +960,23 @@ impl ExecutionOutputV1 {
         {
             return Err("completion callback positions are duplicated or unordered".into());
         }
+        if let Some(trace) = self.trigger_lifecycle() {
+            let owner = match self.execution_ref() {
+                ExecutionOutputRef::Network(_) => TriggerLifecycleOwnerV1::Network,
+                ExecutionOutputRef::Pipeline(row) => {
+                    TriggerLifecycleOwnerV1::Pipeline(&row.invocation.trigger)
+                }
+                ExecutionOutputRef::Time(row) => {
+                    TriggerLifecycleOwnerV1::Time(&row.invocation.trigger)
+                }
+            };
+            trace.validate_structure(
+                owner,
+                proposal_height,
+                self.completions(),
+                result.is_err(),
+            )?;
+        }
         Ok(())
     }
 }
@@ -810,14 +1017,14 @@ pub fn validate_execution_outputs_v1<S: ExecutionInputs + ?Sized>(
     let mut calls = BTreeMap::new();
     for output in outputs {
         output.validate_structure(proposal_height, network_inputs)?;
-        match output {
-            ExecutionOutputV1::Network(NetworkExecutionOutputV1 { input_index, .. }) => {
+        match output.execution_ref() {
+            ExecutionOutputRef::Network(NetworkExecutionOutputV1 { input_index, .. }) => {
                 if phase != 0 || usize::try_from(*input_index).ok() != Some(network_count) {
                     return Err("network outputs are missing, duplicated or unordered".into());
                 }
                 network_count += 1;
             }
-            ExecutionOutputV1::Pipeline(PipelineExecutionOutputV1 { invocation, .. }) => {
+            ExecutionOutputRef::Pipeline(PipelineExecutionOutputV1 { invocation, .. }) => {
                 if phase == 2 {
                     return Err("pipeline output follows Time phase".into());
                 }
@@ -831,7 +1038,7 @@ pub fn validate_execution_outputs_v1<S: ExecutionInputs + ?Sized>(
                 }
                 previous_pipeline = Some(position);
             }
-            ExecutionOutputV1::Time(TimeExecutionOutputV1 { invocation, .. }) => {
+            ExecutionOutputRef::Time(TimeExecutionOutputV1 { invocation, .. }) => {
                 phase = 2;
                 if previous_time.is_some_and(|previous| previous >= invocation.schedule_index)
                     || time_event.is_some_and(|previous| previous != invocation.event)
@@ -842,8 +1049,8 @@ pub fn validate_execution_outputs_v1<S: ExecutionInputs + ?Sized>(
                 time_event = Some(invocation.event);
             }
         }
-        let (call, anonymous_network) = match output {
-            ExecutionOutputV1::Network(row) => {
+        let (call, anonymous_network) = match output.execution_ref() {
+            ExecutionOutputRef::Network(row) => {
                 // Resolve once for both the call identity and the exception's
                 // owner kind, preserving bounded random-access input validation.
                 let input = network_input(network_inputs, row.input_index)?;
@@ -864,6 +1071,44 @@ pub fn validate_execution_outputs_v1<S: ExecutionInputs + ?Sized>(
     }
     if network_count != network_inputs.input_count() {
         return Err("execution outputs omit a network source".into());
+    }
+    Ok(())
+}
+
+/// Require explicit lifecycle coverage for every output in one complete block.
+///
+/// This adds carrier and complete Action-frame validation requirements to all
+/// original ownership/receipt/shape checks. There is no default validator. The
+/// supplied implementation must satisfy the bounded full-payload contract; a
+/// header-only or test-only decoder is not a production verifier. Frame counters
+/// span this entire block. Outer decode/index/scratch funding is still required.
+/// It does not infer an activation height, authenticate a checkpoint, or establish
+/// complete history. The native verifier must enforce the selected activation and
+/// absence of gaps across its full certified range. An empty output list is valid
+/// only under those original block/input checks; it says nothing about old history.
+///
+/// # Errors
+/// Refuses historical or mixed carriers and any malformed output collection.
+pub fn validate_execution_outputs_with_lifecycle_v1<
+    S: ExecutionInputs + ?Sized,
+    V: TriggerLifecycleActionValidatorV1 + ?Sized,
+>(
+    outputs: &[ExecutionOutputV1],
+    proposal: HashOf<BlockHeader>,
+    proposal_height: u64,
+    network_inputs: &S,
+    frame_limits: TriggerLifecycleActionFrameLimitsV1,
+    action_validator: &mut V,
+) -> Result<(), String> {
+    for output in outputs {
+        output.require_trigger_lifecycle()?;
+    }
+    validate_execution_outputs_v1(outputs, proposal, proposal_height, network_inputs)?;
+    let mut budget = TriggerLifecycleActionFrameBudgetV1::new(frame_limits);
+    for output in outputs {
+        output
+            .require_trigger_lifecycle()?
+            .validate_action_frames(&mut budget, action_validator)?;
     }
     Ok(())
 }

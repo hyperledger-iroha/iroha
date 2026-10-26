@@ -90,7 +90,7 @@ where
     write_typed_payload_frame_with_prefix::<T, P, _, _>(value, writer, base_flags, |_, _| Ok(()))
 }
 
-fn write_typed_payload_frame_with_prefix<T, P, W, F>(
+pub(super) fn write_typed_payload_frame_with_prefix<T, P, W, F>(
     value: &P,
     writer: &mut W,
     base_flags: u8,
@@ -102,7 +102,22 @@ where
     W: Write + ?Sized,
     F: FnOnce(&mut W, usize) -> Result<(), Error>,
 {
+    let _work = super::encode_work::ValueGuard::enter()?;
     validate_header_flags(base_flags)?;
+    // A bounded frame may not trigger dynamic identity construction, even when
+    // an unrelated operation warmed the memo. Prepay literal hashing before
+    // source serialization or output allocation; the digest uses fixed scratch.
+    let bounded_schema = if super::charge_encode_prewrite(0)? {
+        let name = T::static_frame_name().ok_or_else(super::refuse_encode_source)?;
+        super::charge_encode_prewrite(
+            name.len()
+                .checked_add(128)
+                .ok_or_else(super::refuse_encode_source)?,
+        )?;
+        Some(super::schema_hash_for_name(name))
+    } else {
+        None
+    };
     let first_guard = EncodeContextGuard::enter();
     let mut discard = std::io::sink();
     let mut first_payload = FramedPayloadWriter::new(&mut discard);
@@ -125,7 +140,7 @@ where
     prefix(writer, frame_len)?;
 
     let mut header = Header::new(
-        crate::schema::identity::frame_hash::<T>(),
+        bounded_schema.unwrap_or_else(crate::schema::identity::frame_hash::<T>),
         payload_len_u64,
         first_checksum,
     );
