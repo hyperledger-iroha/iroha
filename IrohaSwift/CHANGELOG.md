@@ -4,6 +4,14 @@ All notable changes to `IrohaSwift` are documented in this file.
 
 ## [Unreleased]
 
+- 2026-10-26: `PetalScanSession` reads a capture's turn lanes after its bands when it has time
+  to spare: when the capture's work and the session's last turn try fit a 30 fps camera's frame
+  time (`captureBudgetMilliseconds`), timed on the monotonic clock. A slow phone core never has
+  the time, so it still leaves them to the shown frame's next capture; a fast decoder whose
+  camera gives it few frames a second gets its turn lanes back. `init(limits:workCost:)` takes a
+  model's costs (`PetalWork`) in place of the measured times, and
+  `PetalScanStats.spareTurns` counts the captures that had the time.
+
 - 2026-10-26: Petal Stream format 5 (no format 3 compatibility: beacon version `0x50`; `0x30`,
   `0x20` and `0x10` are refused). A frame is a portrait card of 1024 × 1668 units: the format 3
   square with a band of 306 katakana tiles above and below it (`PetalLayout.cardHeight`,

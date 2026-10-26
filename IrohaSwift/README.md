@@ -957,9 +957,14 @@ analyzer.attach(to: videoDataOutput)
   whose template correlates best; the check also accepts the frames before and
   after the square's, which a rolling shutter can show. `PetalScanSession`
   reads each band once per shown frame, with its own back-off, and the bands go
-  first: a capture whose bands read a lane leaves the turn lanes to the shown
-  frame's next capture, because both on one capture overran a 12 fps frame on a
-  slow phone core. `PetalScanOutcome.kana` and
+  first: a capture whose bands read a lane tries the turn lanes too only when
+  its work and the session's last turn try fit a 30 fps camera's frame time
+  (`PetalScanSession.captureBudgetMilliseconds`), and otherwise leaves them to
+  the shown frame's next capture, because both on one capture overran a 12 fps
+  frame on a slow phone core. The session times its work on the monotonic
+  clock; `init(limits:workCost:)` takes a model's costs in their place, and
+  `PetalScanStats.spareTurns` counts the captures that had the time.
+  `PetalScanOutcome.kana` and
   `PetalScanStats.kanaTries`/`kanaLanes` report the reads, and
   `PetalKana.observeBand(_:frame:band:)` exposes every tile's decision. In the
   reference simulator a 12 KB Payment shown upright at 12 fps arrives in about

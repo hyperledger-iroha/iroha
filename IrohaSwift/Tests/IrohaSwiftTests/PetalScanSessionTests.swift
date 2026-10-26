@@ -194,39 +194,99 @@ final class PetalScanSessionTests: XCTestCase {
         XCTAssertEqual(session.push(try turnedFrame(encoder, 32, degrees: 12), nowMilliseconds: 32 * 83).turned, "0123")
     }
 
+    /// Card `frame` of `encoder` with its bands, filmed by a phone held upright: a landscape
+    /// frame with the card turned a quarter.
+    private func upright(_ encoder: PetalStreamEncoder, _ frame: UInt16) throws -> PetalLuma {
+        try Support.turnedCamera(
+            Support.renderCard(encoder, frame: frame, size: 640, supersample: 2),
+            degrees: 92,
+            width: 1120,
+            height: 720
+        )
+    }
+
+    /// A session whose work costs what `costs` says, however long it took.
+    private func costed(_ costs: @escaping @Sendable (PetalWork) -> Double) -> PetalScanSession {
+        PetalScanSession(workCost: { work, _ in costs(work) })
+    }
+
     func testAnUprightCameraReadsBothBandsOncePerShownFrame() throws {
         let encoder = try PetalStreamEncoder(payload: Support.payload(3_000, seed: 3), kind: 2)
-        // a phone held upright delivers landscape frames with the card turned a quarter
-        func camera(_ frame: UInt16) throws -> PetalLuma {
-            try Support.turnedCamera(
-                Support.renderCard(encoder, frame: frame, size: 640, supersample: 2),
-                degrees: 92,
-                width: 1120,
-                height: 720
-            )
-        }
-        var session = PetalScanSession()
-        let shown = try camera(1)
+        // a fast decoder: every capture has time to spare for the turn lanes too
+        var session = costed { _ in 0 }
+        let shown = try upright(encoder, 1)
         let first = session.push(shown, nowMilliseconds: 0)
         XCTAssertEqual(first.lanes, "D0123")
         XCTAssertEqual(first.kana, "P0K0P1K1")
-        // a capture whose bands read a lane tries no turn lane …
-        XCTAssertEqual(first.turned, "")
-        // … and a second capture of the same shown frame tries no band again but its turn lanes
+        XCTAssertEqual(first.turned, "0123")
+        // a second capture of the same shown frame tries no band and no turn lane again
         let again = session.push(shown, nowMilliseconds: 33)
         XCTAssertEqual(again.kana, "")
-        XCTAssertEqual(again.turned, "0123")
-        let next = session.push(try camera(2), nowMilliseconds: 83)
+        XCTAssertEqual(again.turned, "")
+        let next = session.push(try upright(encoder, 2), nowMilliseconds: 83)
         XCTAssertEqual(next.kana, "P0K0P1K1")
-        XCTAssertEqual(next.turned, "")
+        XCTAssertEqual(next.turned, "0123")
         XCTAssertEqual(session.stats.kanaTries, 4)
         XCTAssertEqual(session.stats.kanaLanes, 8)
+        XCTAssertEqual(session.stats.turnLanes, 8)
+        XCTAssertEqual(session.stats.spareTurns, 2)
         XCTAssertEqual(
             session.kanaTried.last,
             PetalScanSession.KanaTry(header: PetalLaneHeader(tag: encoder.meta.tag, frame: 2), band: 1)
         )
         session.reset()
         XCTAssertTrue(session.kanaTried.isEmpty)
+    }
+
+    func testASlowDecoderLeavesTheTurnLanesToTheNextCapture() throws {
+        let encoder = try PetalStreamEncoder(payload: Support.payload(3_000, seed: 3), kind: 2)
+        // a Pixel 6 held to its Cortex-A55 cores (the reference simulator's model): the bands
+        // take the first capture's spare time
+        var session = costed { work in
+            switch work {
+            case .search: 105
+            case .track: 14.5
+            case .merge: 10
+            case .bands(let count): 15 * Double(count)
+            case .turns: 75
+            }
+        }
+        let shown = try upright(encoder, 1)
+        let first = session.push(shown, nowMilliseconds: 0)
+        XCTAssertEqual(first.kana, "P0K0P1K1")
+        XCTAssertEqual(first.turned, "")
+        let again = session.push(shown, nowMilliseconds: 33)
+        XCTAssertEqual(again.kana, "")
+        XCTAssertEqual(again.turned, "0123")
+        let next = session.push(try upright(encoder, 2), nowMilliseconds: 83)
+        XCTAssertEqual(next.kana, "P0K0P1K1")
+        XCTAssertEqual(next.turned, "")
+        XCTAssertEqual(session.stats.spareTurns, 0)
+    }
+
+    func testTheLastTurnTryTellsWhetherACaptureHasTimeToSpare() throws {
+        let encoder = try PetalStreamEncoder(payload: Support.payload(3_000, seed: 3), kind: 2)
+        var session = costed { work in
+            switch work {
+            case .search, .track: 4
+            case .bands(let count): 3 * Double(count)
+            case .merge: 0
+            case .turns: 30
+            }
+        }
+        // 10 ms of work, and twice that for the turn lanes before any try: they fit
+        let first = session.push(try upright(encoder, 1), nowMilliseconds: 0)
+        XCTAssertEqual(first.kana, "P0K0P1K1")
+        XCTAssertEqual(first.turned, "0123")
+        // the try took 30 ms, which with the next capture's 10 ms does not fit
+        let shown = try upright(encoder, 2)
+        let next = session.push(shown, nowMilliseconds: 83)
+        XCTAssertEqual(next.kana, "P0K0P1K1")
+        XCTAssertEqual(next.turned, "")
+        let again = session.push(shown, nowMilliseconds: 116)
+        XCTAssertEqual(again.kana, "")
+        XCTAssertEqual(again.turned, "0123")
+        XCTAssertEqual(session.stats.spareTurns, 1)
     }
 
     func testBandTriesThatReadNothingBackOff() throws {

@@ -52,8 +52,28 @@ public struct PetalScanStats: Equatable, Sendable {
     public internal(set) var kanaTries: UInt32 = 0
     /// Kana lanes read (up to four per shown frame).
     public internal(set) var kanaLanes: UInt32 = 0
+    /// Captures whose bands read a lane that also tried the turn lanes, having
+    /// time to spare.
+    public internal(set) var spareTurns: UInt32 = 0
 
     public init() {}
+}
+
+/// A part of a capture's work, as a ``PetalScanSession`` times it to tell
+/// whether a capture has time to spare for the turn lanes (see the session's
+/// documentation).
+public enum PetalWork: Equatable, Sendable {
+    /// Finding the code by a full search and taking in the lanes read.
+    case search
+    /// Following the code from the previous capture's pose and taking in the
+    /// lanes read.
+    case track
+    /// Merging the held captures of a shown frame.
+    case merge
+    /// Reading the kana lanes of this many bands.
+    case bands(Int)
+    /// Reading the turn lanes.
+    case turns
 }
 
 /// The result of offering one camera frame to a ``PetalScanSession``.
@@ -118,15 +138,22 @@ public struct PetalScanOutcome: Equatable, Sendable {
 /// camera that does not see the bands, or too blurred for their glyphs and
 /// polarity).
 ///
-/// The bands go first, and a capture whose bands read a kana lane tries no
-/// turn lane: the turn lanes of that shown frame wait for its next capture. On
-/// a slow phone core a turn try costs five tracked decodes and a band try one,
-/// so reading both on one capture overran the time a frame is shown at 12 fps
-/// and the session missed the next shown frames. A camera that sees each shown
-/// frame two or three times still reads both; one that sees it once reads the
-/// cheaper bands and every frame's field lanes. A band try that reads nothing
-/// (bands out of view, too blurred, or a torn capture) leaves the turn lanes
-/// to the same capture.
+/// The bands go first. A capture whose bands read a kana lane tries the turn
+/// lanes too only when it has time to spare: when the work it has done
+/// (finding or following the code, a merge, the bands) and what the session's
+/// last turn try took fit together in ``captureBudgetMilliseconds``, a 30 fps
+/// camera's frame time (before the first turn try, twice the work done stands
+/// in for it). Otherwise the turn lanes of that shown frame wait for its next
+/// capture. On a slow phone core a turn try costs five tracked decodes and a
+/// band try one, so reading both on one capture overran the time a frame is
+/// shown at 12 fps and the session missed the next shown frames; a fast
+/// decoder reads both at once, which matters when its camera gives it few
+/// frames a second. A band try that reads nothing (bands out of view, too
+/// blurred, or a torn capture) leaves the turn lanes to the same capture.
+///
+/// The session times its work on the monotonic clock; the `workCost` given
+/// to ``init(limits:workCost:)`` puts a model's costs in place of the measured
+/// times, as tests do.
 public struct PetalScanSession: Sendable {
     /// How long a decoded pose stays usable for tracking the next frames.
     public static let trackWindowMilliseconds: UInt64 = 500
@@ -144,6 +171,10 @@ public struct PetalScanSession: Sendable {
     public static let kanaMemory = mergeWindow * PetalLayout.kanaBands
     /// Most captures passed over after tries that read no kana lane.
     public static let kanaBackoff = 8
+    /// The time a capture's work may take, turn lanes included, for a capture
+    /// whose bands read a lane to try the turn lanes too: a 30 fps camera's
+    /// frame time, so a decoder that keeps to it misses no camera frame.
+    public static let captureBudgetMilliseconds = 1000.0 / 30.0
 
     /// The session limits.
     public let limits: PetalScanLimits
@@ -184,11 +215,25 @@ public struct PetalScanSession: Sendable {
     private(set) var kanaMisses = 0
     /// Captures still to pass over before the next band try.
     var kanaWait = 0
+    /// What a part of a capture costs, given the milliseconds it took.
+    private let workCost: @Sendable (PetalWork, Double) -> Double
+    /// What the last turn try cost, in milliseconds.
+    private var turnCostMilliseconds: Double?
 
-    /// Creates a session.
-    public init(limits: PetalScanLimits = PetalScanLimits()) {
+    /// Creates a session whose work costs what `workCost` says, given the part
+    /// of a capture and the milliseconds it took: by default the measured time.
+    public init(
+        limits: PetalScanLimits = PetalScanLimits(),
+        workCost: @escaping @Sendable (PetalWork, Double) -> Double = { _, measured in measured }
+    ) {
         self.limits = limits
+        self.workCost = workCost
         assembler = PetalStreamAssembler(limits: limits.assembler)
+    }
+
+    /// What `work` cost, given that it started at `started` (uptime nanoseconds).
+    private func cost(_ work: PetalWork, since started: UInt64) -> Double {
+        workCost(work, Double(DispatchTime.now().uptimeNanoseconds &- started) / 1e6)
     }
 
     /// Current progress.
@@ -222,6 +267,7 @@ public struct PetalScanSession: Sendable {
             reset()
         }
         stats.frames &+= 1
+        let pushStarted = DispatchTime.now().uptimeNanoseconds
         var tracked: PetalDecodedFrame?
         if let pose = lastPose, Self.elapsed(now, since: pose.at) <= Self.trackWindowMilliseconds {
             tracked = PetalDecoder.track(image, previous: pose.frame, options: limits.decode)
@@ -239,10 +285,27 @@ public struct PetalScanSession: Sendable {
             if frame.inferredCorner != nil { stats.inferred &+= 1 }
             lastPose = (frame, now)
             lanes = absorb(frame)
+            var spent = cost(tracked != nil ? .track : .search, since: pushStarted)
+            let mergesBefore = stats.merges
+            var partStarted = DispatchTime.now().uptimeNanoseconds
             merged = merge(image, frame: frame)
-            // a capture whose bands read a lane tries no turn lane (see the type's documentation)
+            if stats.merges != mergesBefore { spent += cost(.merge, since: partStarted) }
+            let bandsBefore = stats.kanaTries
+            partStarted = DispatchTime.now().uptimeNanoseconds
             kana = self.kana(image, frame: frame)
-            turned = kana.isEmpty ? turn(image, frame: frame) : ""
+            let bands = Int(stats.kanaTries &- bandsBefore)
+            if bands > 0 { spent += cost(.bands(bands), since: partStarted) }
+            // a capture whose bands read a lane tries the turn lanes only with
+            // time to spare (see the type's documentation)
+            if kana.isEmpty {
+                turned = turn(image, frame: frame)
+            } else if spent + (turnCostMilliseconds ?? 2 * spent) <= Self.captureBudgetMilliseconds {
+                let triesBefore = stats.turnTries
+                turned = turn(image, frame: frame)
+                if stats.turnTries != triesBefore { stats.spareTurns &+= 1 }
+            } else {
+                turned = ""
+            }
         case .failure(let failure):
             error = failure
             lanes = ""
@@ -319,8 +382,11 @@ public struct PetalScanSession: Sendable {
             tried.append(TurnTry(header: header, sector: sector))
             stats.turnTries &+= 1
         }
+        let readStarted = DispatchTime.now().uptimeNanoseconds
+        let results = PetalTurns.readTurns(image, frame: frame, skip: skip)
+        turnCostMilliseconds = cost(.turns, since: readStarted)
         var letters = ""
-        for (sector, result) in PetalTurns.readTurns(image, frame: frame, skip: skip).enumerated() {
+        for (sector, result) in results.enumerated() {
             guard let result, let header = headers[sector],
                   let packet = PetalTurns.turnPacket(header, sector: sector, data: result.data) else { continue }
             assembler.push(atoms: packet)
