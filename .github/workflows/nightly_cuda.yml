@@ -64,7 +64,7 @@ jobs:
           cargo test -p norito stage1_helper --features cuda-stage1,stage1-validate -- --nocapture
           cargo test -p norito cuda_stage1_backend_matches_scalar_when_required_or_available --features cuda-stage1,stage1-validate -- --nocapture
       - name: Upload CUDA inventory
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: cuda-nightly-hardware
           path: dist/cuda-nightly

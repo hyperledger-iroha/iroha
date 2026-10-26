@@ -31,7 +31,7 @@ jobs:
       - name: Build WASMs
         run: ./scripts/build_wasm.sh
       - name: Upload WASMs
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wasm
           path: ${{ env.WASM_TARGET_DIR }}

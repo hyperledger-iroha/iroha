@@ -39,7 +39,7 @@ jobs:
           mkdir target/release/pre_build
           mv target/release/irohad target/release/iroha target/release/kagami target/release/pre_build
       - name: Upload binaries
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: bins
           path: target/release/pre_build
@@ -49,7 +49,7 @@ jobs:
           BIN_KAGAMI: target/release/pre_build/kagami
         run: ./scripts/build_wasm.sh
       - name: Upload WASMs
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wasm
           path: ${{ env.WASM_TARGET_DIR }}
@@ -131,7 +131,7 @@ jobs:
           set -o pipefail
           cargo clippy --all-targets --all-features --message-format=json | tee clippy.json
       - name: Upload clippy report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: report-clippy
           path: clippy.json
@@ -194,7 +194,7 @@ jobs:
       - name: Generate lcov report
         run: cargo llvm-cov report --doctests --ignore-filename-regex 'iroha_cli|iroha_torii' --lcov --output-path lcov.info
       - name: Upload lcov report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: report-coverage
           path: lcov.info
@@ -206,7 +206,7 @@ jobs:
           github-token: ${{ github.token }}
       - name: Upload test network artifacts
         if: failure() && (steps.test.outcome == 'failure')
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: test_network_runs
           path: ${{ env.TEST_NETWORK_TMP_DIR }}/irohad_test_network_*
@@ -402,7 +402,7 @@ jobs:
         run: python3 ci/check_docs_i18n_metadata.py --paths docs/formal --json-out target/docs-i18n/formal-metadata.json
       - name: Upload formal docs metadata report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: formal-docs-i18n-metadata
           path: target/docs-i18n/formal-metadata.json
