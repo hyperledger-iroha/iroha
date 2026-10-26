@@ -28,8 +28,8 @@ const CUSTODY_ACCOUNT_FIELDS: &[&str] = &[
     "pipeline.gas.tech_account_id",
     "nexus.fees.fee_sink_account_id",
     "nexus.fees.sponsor_vault_custody_account_id",
-    "nexus.staking.stake_escrow_account_id",
-    "nexus.staking.slash_sink_account_id",
+    "genesis_recipe.public_lane_staking.stake_escrow_account_id",
+    "genesis_recipe.public_lane_staking.slash_sink_account_id",
 ];
 
 /// Governance roles that name the published sample key in Kagami's Taira and a keyless role
@@ -105,29 +105,41 @@ fn copy_kagami_catalog(to: &mut actual::Nexus, from: &actual::Nexus) {
 }
 
 /// The account of every [`CUSTODY_ACCOUNT_FIELDS`] role, in that order.
-fn custody_accounts(pipeline: &actual::Pipeline, nexus: &actual::Nexus) -> [AccountId; 5] {
+fn custody_accounts(
+    pipeline: &actual::Pipeline,
+    nexus: &actual::Nexus,
+    policy: &PublicLaneStakingPolicy,
+) -> [AccountId; 5] {
     let _discriminant = ChainDiscriminantGuard::enter(taira_discriminant());
     let parse = |literal: &str| AccountId::parse_encoded(literal).expect("custody account literal");
     [
         parse(&pipeline.gas.tech_account_id),
         nexus.fees.fee_sink_account_id.clone(),
         nexus.fees.sponsor_vault_custody_account_id.clone(),
-        parse(&nexus.staking.stake_escrow_account_id),
-        parse(&nexus.staking.slash_sink_account_id),
+        policy.stake_escrow_account_id.clone(),
+        policy.slash_sink_account_id.clone(),
     ]
 }
 
 /// Copy Kagami's [`CUSTODY_ACCOUNT_FIELDS`] values into the render, verbatim.
 fn copy_kagami_custody_account(
-    (pipeline, nexus): (&mut actual::Pipeline, &mut actual::Nexus),
-    (from_pipeline, from_nexus): (&actual::Pipeline, &actual::Nexus),
+    (pipeline, nexus, policy): (
+        &mut actual::Pipeline,
+        &mut actual::Nexus,
+        &mut PublicLaneStakingPolicy,
+    ),
+    (from_pipeline, from_nexus, from_policy): (
+        &actual::Pipeline,
+        &actual::Nexus,
+        &PublicLaneStakingPolicy,
+    ),
 ) {
     pipeline.gas.tech_account_id = from_pipeline.gas.tech_account_id.clone();
     nexus.fees.fee_sink_account_id = from_nexus.fees.fee_sink_account_id.clone();
     nexus.fees.sponsor_vault_custody_account_id =
         from_nexus.fees.sponsor_vault_custody_account_id.clone();
-    nexus.staking.stake_escrow_account_id = from_nexus.staking.stake_escrow_account_id.clone();
-    nexus.staking.slash_sink_account_id = from_nexus.staking.slash_sink_account_id.clone();
+    policy.stake_escrow_account_id = from_policy.stake_escrow_account_id.clone();
+    policy.slash_sink_account_id = from_policy.slash_sink_account_id.clone();
 }
 
 /// The account of every [`GOVERNANCE_ACCOUNT_FIELDS`] role, in that order.
@@ -198,13 +210,21 @@ fn line_diff_reports_only_changed_lines() {
 fn catalog_normalization_copies_exactly_the_catalog_fields() {
     let mut kagami = actual::Nexus::default();
     kagami.routing_policy.default_lane = LaneId::new(3);
-    kagami.staking.max_slash_bps = kagami.staking.max_slash_bps.wrapping_add(1);
+    kagami.staking.max_validators = std::num::NonZeroU32::new(
+        kagami
+            .staking
+            .max_validators
+            .get()
+            .checked_add(1)
+            .expect("fixture validator limit can increase"),
+    )
+    .expect("increased fixture validator limit remains nonzero");
     let mut profile = actual::Nexus::default();
     copy_kagami_catalog(&mut profile, &kagami);
     assert_eq!(profile.routing_policy, kagami.routing_policy);
     assert_eq!(
-        profile.staking.max_slash_bps,
-        actual::Nexus::default().staking.max_slash_bps,
+        profile.staking.max_validators,
+        actual::Nexus::default().staking.max_validators,
         "a non-catalog field must not be copied"
     );
     assert_eq!(CATALOG_FIELDS.len(), 8);
@@ -226,22 +246,28 @@ fn custody_normalization_sets_exactly_the_five_custody_roles() {
     from_pipeline.gas.tech_account_id.clone_from(&literal);
     from_nexus.fees.fee_sink_account_id = kagami.clone();
     from_nexus.fees.sponsor_vault_custody_account_id = kagami.clone();
-    from_nexus
-        .staking
-        .stake_escrow_account_id
-        .clone_from(&literal);
-    from_nexus
-        .staking
-        .slash_sink_account_id
-        .clone_from(&literal);
+    let mut from_policy =
+        localnet_staking_policy(KeyPair::random().public_key(), None, false).unwrap();
+    from_policy.stake_escrow_account_id = kagami.clone();
+    from_policy.slash_sink_account_id = kagami.clone();
+    from_policy.min_validator_stake = 99_u64.into();
     from_nexus.fees.fee_asset_id = AssetDefinitionId::derive_from_components(
         iroha_model_base::domain::DomainId::parse_fully_qualified("app.parity").unwrap(),
         "different".parse().unwrap(),
     );
     let (mut pipeline, mut nexus) = (actual::Pipeline::default(), actual::Nexus::default());
     let fee_asset = nexus.fees.fee_asset_id.clone();
-    copy_kagami_custody_account((&mut pipeline, &mut nexus), (&from_pipeline, &from_nexus));
-    let accounts = custody_accounts(&pipeline, &nexus);
+    let mut policy = localnet_staking_policy(KeyPair::random().public_key(), None, false).unwrap();
+    let minimum = policy.min_validator_stake.clone();
+    copy_kagami_custody_account(
+        (&mut pipeline, &mut nexus, &mut policy),
+        (&from_pipeline, &from_nexus, &from_policy),
+    );
+    let accounts = custody_accounts(&pipeline, &nexus, &policy);
+    assert_eq!(
+        policy.min_validator_stake, minimum,
+        "non-custody monetary terms must not change"
+    );
     assert_eq!(accounts.len(), CUSTODY_ACCOUNT_FIELDS.len());
     assert!(accounts.iter().all(|account| *account == kagami));
     assert_eq!(
@@ -316,10 +342,18 @@ fn sora_nexus_v1_genesis_recipe_matches_kagami_taira_genesis() {
     // Localnet custody derives from its exact genesis key; the compiled recipe
     // names published sample custody, just as the other custody checks above.
     expected_fees.fee_sink_account_id = generated_gas.clone();
-    expected_fees.sponsor_vault_custody_account_id = generated_gas;
+    expected_fees.sponsor_vault_custody_account_id = generated_gas.clone();
     assert_eq!(
         signed_fees, expected_fees,
         "all other monetary terms match the signed recipe"
+    );
+    let signed_staking = PublicLaneStakingPolicy::from_parameters(&parameters).unwrap();
+    let mut expected_staking = recipe.public_lane_staking.clone();
+    expected_staking.stake_escrow_account_id = generated_gas.clone();
+    expected_staking.slash_sink_account_id = generated_gas;
+    assert_eq!(
+        signed_staking, expected_staking,
+        "all original staking terms match the authored recipe"
     );
     assert_eq!(
         kagami.manifest.consensus_mode(),

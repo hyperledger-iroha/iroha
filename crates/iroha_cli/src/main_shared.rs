@@ -1,52 +1,102 @@
 //! Iroha client CLI implementation executed by the thin `iroha` binary.
 #![deny(deprecated)]
+// Rust 1.93's generated libtest main builds one pointer array for every test.
+// On 64-bit targets this CLI exceeds Clippy's 16 KiB limit for that generated
+// registry, which has no annotatable source item. All source modules and root
+// functions, impls and traits explicitly deny the lint below.
+// TODO: remove this exception and the source overrides when the pinned Clippy
+// skips rustc-generated test registries.
+#![cfg_attr(
+    all(test, target_pointer_width = "64"),
+    expect(
+        clippy::large_stack_arrays,
+        reason = "rustc's generated libtest registry exceeds 2048 test pointers; executable source items deny this lint separately"
+    )
+)]
 
 use iroha_core::release_identity::CompiledBuildMetadata;
 use iroha_model_base::domain::DomainId;
 
 use iroha_model_base::chain::ChainId;
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod address;
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod audit;
 #[cfg(feature = "bridge")]
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod bridge;
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod cli_output;
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod client_config;
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod collection_list;
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod commands;
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod compute;
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod confidential;
 #[cfg(test)]
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod config_utils;
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod content;
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod contracts;
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod crypto;
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod dataspace_definition;
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod endorsement;
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod execution;
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod execution_finality;
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod gov;
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod ivm_cli;
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod json_utils;
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod jurisdiction;
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod nexus;
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod offline;
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod operator_key;
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod runtime;
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod sccp;
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod soracloud;
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod space_directory;
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod staking;
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod subscriptions;
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod sumeragi;
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod taira;
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod taira_dataspace_deploy;
 pub use taira_dataspace_deploy::{
     DataspaceAuthorityOriginal, VerifiedDataspaceAuthority, dataspace_authority_completion_sha256,
     dataspace_authority_original_inventory, verify_dataspace_authority_originals,
 };
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod taira_public_reset;
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod transaction_journal;
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod transaction_load;
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod zk; // ZK helpers (app API convenience) // IVM/ABI helpers
 use clap::{CommandFactory, FromArgMatches, error::ErrorKind};
 use error_stack::{AttachmentKind, FrameKind, IntoReportCompat, Report, ResultExt, fmt::ColorMode};
@@ -81,6 +131,7 @@ use iroha_service_model::soranet::AnonymityPolicy;
 use norito::json::{self, JsonDeserialize, JsonSerialize};
 use sorafs_manifest::alias_cache::AliasCachePolicy;
 use url::Url;
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn compiled_build_identity() -> core::result::Result<
     iroha_core::release_identity::BuildIdentity,
     iroha_core::release_identity::BuildIdentityError,
@@ -90,6 +141,7 @@ fn compiled_build_identity() -> core::result::Result<
 static BUILD_METADATA: std::sync::OnceLock<CompiledBuildMetadata> = std::sync::OnceLock::new();
 
 /// Install one immutable identity, accepting retries only when exactly identical.
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn install_build_metadata(
     slot: &std::sync::OnceLock<CompiledBuildMetadata>,
     build: CompiledBuildMetadata,
@@ -97,6 +149,7 @@ fn install_build_metadata(
     slot.set(build).is_ok() || slot.get() == Some(&build)
 }
 
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn build_metadata() -> CompiledBuildMetadata {
     BUILD_METADATA.get().copied().unwrap_or_else(|| {
         CompiledBuildMetadata::from_compiled_parts(
@@ -133,6 +186,7 @@ const CLI_JSON_DECODE_LIMITS_V1: norito::DecodeLimits = norito::DecodeLimits::ne
     MAX_CLI_JSON_DECODE_ALLOCATION_BYTES_V1,
     MAX_CLI_JSON_NESTING_DEPTH_V1,
 );
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn validate_executable_fee_payment(
     executable: &Executable,
     fee_payment: &FeePaymentIntent,
@@ -144,6 +198,7 @@ fn validate_executable_fee_payment(
         .map(|_| ())
         .map_err(|err| eyre!(format_gas_limit_validation_error(executable, err)))
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn format_gas_limit_validation_error(
     executable: &Executable,
     err: iroha::data_model::transaction::TransactionGasLimitError,
@@ -168,6 +223,7 @@ fn format_gas_limit_validation_error(
         }
     }
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub(crate) fn apply_cli_gas_limit_override(
     fee_payment: FeePaymentIntent,
     gas_limit: Option<u64>,
@@ -189,6 +245,7 @@ pub(crate) fn apply_cli_gas_limit_override(
         ),
     })
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub(crate) fn quote_and_sign_transaction(
     client: &BlockingClient,
     executable: Executable,
@@ -199,6 +256,7 @@ pub(crate) fn quote_and_sign_transaction(
 }
 
 /// Bound the signed execution lifetime before quoting the exact payload.
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub(crate) fn quote_and_sign_transaction_with_expiry(
     client: &BlockingClient,
     executable: Executable,
@@ -215,6 +273,7 @@ pub(crate) fn quote_and_sign_transaction_with_expiry(
     )
 }
 
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn bound_transaction_payload_lifetime(
     payload: &mut iroha::data_model::transaction::TransactionPayload,
     execution_expiry_ms: u64,
@@ -230,6 +289,7 @@ fn bound_transaction_payload_lifetime(
     Ok(())
 }
 
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn quote_and_sign_transaction_inner(
     client: &BlockingClient,
     executable: Executable,
@@ -239,11 +299,8 @@ fn quote_and_sign_transaction_inner(
 ) -> Result<(SignedTransaction, FeeQuoteResponse)> {
     validate_executable_fee_payment(&executable, &requested_fee_payment)?;
     let account = client.account_client();
-    let draft = iroha::client::AccountTransactionDraft::new(
-        executable.clone(),
-        requested_fee_payment.clone(),
-        metadata,
-    );
+    let draft =
+        iroha::client::AccountTransactionDraft::new(executable, requested_fee_payment, metadata);
 
     let mut payload = account
         .prepare_transaction(draft)
@@ -254,13 +311,14 @@ fn quote_and_sign_transaction_inner(
     let quote = client
         .quote_fees(FeeQuoteRequest::AccountSignature { payload: &payload })
         .wrap_err("Failed to request an exact transaction fee quote")?;
-    validate_executable_fee_payment(&executable, &quote.intent)?;
+    validate_executable_fee_payment(&payload.instructions, &quote.intent)?;
     payload.fee_payment = quote.intent.clone();
     let transaction = account
         .sign_transaction(payload)
         .wrap_err("Failed to sign the exact quoted transaction payload")?;
     Ok((transaction, quote))
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn print_fee_quote_text<C: RunContext + ?Sized>(
     context: &mut C,
     quote: &FeeQuoteResponse,
@@ -289,6 +347,7 @@ fn print_fee_quote_text<C: RunContext + ?Sized>(
     Ok(())
 }
 /// Norito JSON derive macros exported for CLI data definitions.
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub(crate) mod json_macros {
     pub use norito::derive::{JsonDeserialize, JsonSerialize};
 }
@@ -321,6 +380,7 @@ pub(crate) struct OutputSelection {
     /// Render JSON as compact newline-delimited values instead of pretty documents.
     pub(crate) json_lines: bool,
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 impl OutputSelection {
     /// Resolve the explicit option, or default to text on a terminal and JSON otherwise.
     ///
@@ -355,6 +415,7 @@ impl OutputSelection {
 ///
 /// Line-delimited output prints each element of a top-level array on its own line, so list results
 /// and event streams can be consumed with line-oriented tools.
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub(crate) fn render_json_output<T: JsonSerialize + ?Sized>(
     data: &T,
     json_lines: bool,
@@ -396,6 +457,10 @@ enum FeePayerArg {
     Sponsor,
 }
 #[derive(clap::Args, Clone, Debug, Default)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "Field names define the explicit public command-line flags."
+)]
 struct FeePaymentArgs {
     /// Required fee source for every submitted transaction.
     #[arg(long, value_enum, global = true)]
@@ -407,6 +472,7 @@ struct FeePaymentArgs {
     #[arg(long, global = true, value_name = "NONZERO_U64")]
     fee_program_revision: Option<u64>,
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 impl FeePaymentArgs {
     fn selection(&self) -> Result<FeePaymentIntent> {
         match self.fee_payer {
@@ -459,6 +525,7 @@ pub(crate) struct TransactionWaitArgs {
     #[arg(long, default_value_t = 500)]
     pub poll_interval_ms: u64,
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 impl TransactionWaitArgs {
     pub(crate) fn is_enabled(&self) -> bool {
         !self.submit_only
@@ -473,6 +540,7 @@ impl TransactionWaitArgs {
         })
     }
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub(crate) fn wait_for_transaction_applied(
     client: &Client,
     hash: HashOf<iroha::data_model::transaction::SignedTransaction>,
@@ -483,6 +551,10 @@ pub(crate) fn wait_for_transaction_applied(
 /// Iroha Client CLI provides a simple way to interact with the Iroha Web API.
 #[derive(clap::Parser, Debug)]
 #[command(name = "iroha", version = env!("CARGO_PKG_VERSION"), author)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "These are independent global CLI flags, not a state machine."
+)]
 struct Args {
     /// Path to the configuration file.
     ///
@@ -509,7 +581,7 @@ struct Args {
     ///
     /// This runtime-only credential is never inferred from the account key, environment, or
     /// client TOML. The selected node must allowlist its public key for the configured exact
-    /// NetworkId.
+    /// `NetworkId`.
     #[arg(
         long,
         value_name("ABSOLUTE_PATH"),
@@ -572,6 +644,10 @@ struct Args {
     command: Command,
 }
 #[derive(clap::Subcommand, Debug)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "The top-level CLI command is parsed once and dispatched by ownership; inline variants preserve direct subcommand matching."
+)]
 enum Command {
     /// Canonical account reads and account mutations
     #[command(subcommand)]
@@ -620,6 +696,7 @@ enum Command {
 ///
 /// The top-level hash feeds `tx status --hash` and therefore uses raw lowercase hex.
 /// The signed transaction and its checked network identity retain their Norito encoding.
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn transaction_submission_receipt_fields(
     hash: HashOf<SignedTransaction>,
     transaction: &SignedTransaction,
@@ -632,6 +709,7 @@ fn transaction_submission_receipt_fields(
     ])
 }
 /// Context inside which commands run
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 trait RunContext {
     fn config(&self) -> &Config;
     /// SCCP values retained from the same original client configuration file.
@@ -827,6 +905,7 @@ trait RunContext {
 }
 include!("print_json_context.rs");
 /// Runs command
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 trait Run {
     /// Runs command
     ///
@@ -834,6 +913,7 @@ trait Run {
     /// if inner command errors
     fn run<C: RunContext>(self, context: &mut C) -> Result<()>;
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 impl Run for Command {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         use Command::*;
@@ -857,6 +937,7 @@ impl Run for Command {
         }
     }
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 impl Command {
     fn allows_fallback_config(&self) -> bool {
         match self {
@@ -886,6 +967,7 @@ impl Command {
         }
     }
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod explorer {
     use super::*;
     #[derive(clap::Subcommand, Debug)]
@@ -894,7 +976,7 @@ mod explorer {
         Accounts(crate::collection_list::ListArgs),
         /// Read the bounded Domains Explorer feed.
         Domains(crate::collection_list::ListArgs),
-        /// Read the bounded AssetDefinitions Explorer feed.
+        /// Read the bounded `AssetDefinitions` Explorer feed.
         AssetDefinitions(crate::collection_list::ListArgs),
         /// Read the bounded Assets Explorer feed.
         Assets(crate::collection_list::ListArgs),
@@ -908,17 +990,17 @@ mod explorer {
         Transactions(crate::collection_list::ListArgs),
         /// Read node-supplied selective evidence; does not independently verify finality
         TransactionProof(TransactionProof),
-        /// Read the bounded TransactionsLatest Explorer feed.
+        /// Read the bounded `TransactionsLatest` Explorer feed.
         TransactionsLatest(crate::collection_list::ListArgs),
         /// Read the bounded Instructions Explorer feed.
         Instructions(crate::collection_list::ListArgs),
-        /// Read the bounded InstructionsLatest Explorer feed.
+        /// Read the bounded `InstructionsLatest` Explorer feed.
         InstructionsLatest(crate::collection_list::ListArgs),
     }
     /// Arguments of the authenticated, read-only selective evidence request.
     #[derive(clap::Args, Debug)]
     pub struct TransactionProof {
-        /// Canonical transaction entrypoint hash literal (hash:UPPERCASE_HEX#CHECKSUM)
+        /// Canonical transaction entrypoint hash literal (`hash:UPPERCASE_HEX#CHECKSUM`)
         #[arg(short('H'), long, value_parser = parse_proof_hash)]
         pub hash: HashOf<TransactionEntrypoint>,
     }
@@ -969,10 +1051,11 @@ mod explorer {
                     args,
                 ),
             };
-            crate::collection_list::run_list(context, collection, &args)
+            crate::collection_list::run_list(context, &collection, &args)
         }
     }
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod ledger {
     use super::*;
     #[derive(clap::Subcommand, Debug)]
@@ -1006,7 +1089,7 @@ mod ledger {
         Multisig(crate::multisig::Command),
         /// Subscribe to events: state changes, transaction/block/trigger progress
         Events(crate::events::Args),
-        /// Subscribe to full signed blocks (requires CanReadAllLedgerData)
+        /// Subscribe to full signed blocks (requires `CanReadAllLedgerData`)
         Blocks(crate::blocks::Args),
     }
     impl Run for Command {
@@ -1028,6 +1111,7 @@ mod ledger {
         }
     }
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod ops {
     use super::*;
     #[derive(clap::Subcommand, Debug)]
@@ -1067,6 +1151,7 @@ mod ops {
         }
     }
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod app {
     use super::*;
     #[derive(clap::Subcommand, Debug)]
@@ -1122,7 +1207,7 @@ mod app {
         /// Kaigi session helpers
         #[command(subcommand)]
         Kaigi(crate::commands::kaigi::Command),
-        /// SoraFS helpers (pin registry, aliases, replication orders, storage)
+        /// `SoraFS` helpers (pin registry, aliases, replication orders, storage)
         #[command(subcommand)]
         Sorafs(crate::commands::sorafs::Command),
         /// Soracles helpers (evidence bundling)
@@ -1174,15 +1259,15 @@ mod app {
     impl Command {
         pub(super) fn allows_fallback_config(&self) -> bool {
             match self {
+                Self::Zk(command) => command.allows_fallback_config(),
+                Self::Taikai(command) => taikai_allows_fallback_config(command),
+                Self::Sorafs(command) => sorafs_allows_fallback_config(command),
                 Self::Da(
                     crate::commands::da::Command::RentQuote(_)
                     | crate::commands::da::Command::RentLedger(_),
-                ) => true,
-                Self::Zk(command) => command.allows_fallback_config(),
-                Self::Execution(_) => true,
-                Self::Taikai(command) => taikai_allows_fallback_config(command),
-                Self::Sorafs(command) => sorafs_allows_fallback_config(command),
-                Self::SpaceDirectory(crate::space_directory::Command::Manifest(
+                )
+                | Self::Execution(_)
+                | Self::SpaceDirectory(crate::space_directory::Command::Manifest(
                     crate::space_directory::ManifestCommand::Encode(_)
                     | crate::space_directory::ManifestCommand::AuditBundle(_)
                     | crate::space_directory::ManifestCommand::Scaffold(_),
@@ -1224,11 +1309,11 @@ mod app {
             Command as SorafsCommand, IncentivesCommand, IncentivesServiceCommand, ReserveCommand,
         };
         match command {
-            SorafsCommand::Toolkit(_) => true,
-            SorafsCommand::Reserve(
+            SorafsCommand::Toolkit(_)
+            | SorafsCommand::Reserve(
                 ReserveCommand::Quote(_) | ReserveCommand::Ledger(_) | ReserveCommand::Lifecycle(_),
-            ) => true,
-            SorafsCommand::Incentives(
+            )
+            | SorafsCommand::Incentives(
                 IncentivesCommand::Compute(_)
                 | IncentivesCommand::OpenDispute(_)
                 | IncentivesCommand::Dashboard(_),
@@ -1263,6 +1348,7 @@ mod app {
         }
     }
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod tools {
     use super::*;
     #[derive(clap::Subcommand, Debug)]
@@ -1335,8 +1421,9 @@ struct CliHint(String);
 /// The outermost message becomes the report context; every distinct cause in the chain becomes a
 /// printable attachment. Error types that embed their source in their own message would otherwise
 /// show that source twice, so a cause already contained in a shown message is skipped.
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn command_error_report(error: &eyre::Report) -> Report<MainError> {
-    let mut chain = error.chain().map(|cause| cause.to_string());
+    let mut chain = error.chain().map(std::string::ToString::to_string);
     let message = chain.next().unwrap_or_default();
     let mut shown = vec![message.clone()];
     let mut causes = Vec::new();
@@ -1366,6 +1453,7 @@ fn command_error_report(error: &eyre::Report) -> Report<MainError> {
 /// Whether a command error was caused by invalid input rather than by the command itself.
 ///
 /// Invalid list flags and Torii's `invalid_*` collection-query codes are input errors.
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn is_input_error(error: &eyre::Report) -> bool {
     error.chain().any(|cause| {
         cause
@@ -1378,6 +1466,7 @@ fn is_input_error(error: &eyre::Report) -> bool {
     })
 }
 /// Torii's structured guidance for an API error: its hint and the accepted values.
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn api_error_hints(error: &eyre::Report) -> Vec<String> {
     let Some(api) = error
         .chain()
@@ -1394,10 +1483,10 @@ fn api_error_hints(error: &eyre::Report) -> Vec<String> {
         hints.push(hint.to_owned());
     }
     if let Some(expected) = details.expected() {
-        hints.push(match details.actual() {
-            Some(actual) => format!("expected {expected}; got {actual}"),
-            None => format!("expected {expected}"),
-        });
+        hints.push(details.actual().map_or_else(
+            || format!("expected {expected}"),
+            |actual| format!("expected {expected}; got {actual}"),
+        ));
     }
     hints
 }
@@ -1408,6 +1497,7 @@ enum CliErrorKind {
     Command,
     Internal,
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 impl CliErrorKind {
     fn label(self) -> &'static str {
         match self {
@@ -1428,6 +1518,7 @@ impl CliErrorKind {
 }
 #[derive(clap::Args, Debug)]
 struct MarkdownHelp;
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 impl Run for MarkdownHelp {
     fn run<C: RunContext>(self, _context: &mut C) -> Result<()> {
         Ok(())
@@ -1435,6 +1526,7 @@ impl Run for MarkdownHelp {
 }
 #[derive(clap::Args, Debug)]
 struct Version;
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 impl Run for Version {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client_version = build_metadata().version();
@@ -1487,6 +1579,7 @@ impl Run for Version {
 /// Execute the CLI with immutable metadata captured by its executable.
 ///
 /// The process installs its metadata once, before parsing or dispatching commands.
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub fn main_entry(build: CompiledBuildMetadata) -> std::process::ExitCode {
     if !install_build_metadata(&BUILD_METADATA, build) {
         eprintln!("CLI executable build metadata is already installed with a different identity");
@@ -1505,14 +1598,18 @@ pub fn main_entry(build: CompiledBuildMetadata) -> std::process::ExitCode {
         Err(report) => {
             let rendered = render_cli_error(&report, output);
             eprint!("{}", rendered.output);
-            std::process::ExitCode::from(rendered.kind.exit_code() as u8)
+            std::process::ExitCode::from(
+                u8::try_from(rendered.kind.exit_code()).expect("CLI exit-code enumeration fits u8"),
+            )
         }
     }
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn args_command(build: CompiledBuildMetadata) -> clap::Command {
     Args::command().version(build.version())
 }
 #[allow(clippy::too_many_lines)]
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn run() -> ReportResult<std::process::ExitCode, MainError> {
     let raw_args: Vec<std::ffi::OsString> = std::env::args_os().collect();
     let language_override = language_override_from_args(
@@ -1753,6 +1850,7 @@ fn run() -> ReportResult<std::process::ExitCode, MainError> {
     }
     map_command_result(args.command.run(&mut context)).map(|()| std::process::ExitCode::SUCCESS)
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn run_local_dataspace_profile(
     args: &Args,
     output: impl std::io::Write,
@@ -1773,9 +1871,11 @@ fn run_local_dataspace_profile(
         _ => None,
     }
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn map_command_result(result: Result<()>) -> ReportResult<(), MainError> {
     result.map_err(|error| command_error_report(&error))
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn load_runtime_operator_key(args: &Args) -> Result<Option<KeyPair>> {
     match (
         args.operator_private_key_file.as_deref(),
@@ -1789,6 +1889,7 @@ fn load_runtime_operator_key(args: &Args) -> Result<Option<KeyPair>> {
         (None, None) => Ok(None),
     }
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn reject_irrelevant_local_tool_globals(args: &Args, command: &str) -> ReportResult<(), MainError> {
     if args.config.is_some()
         || args.config_fd.is_some()
@@ -1809,6 +1910,7 @@ fn reject_irrelevant_local_tool_globals(args: &Args, command: &str) -> ReportRes
     }
     Ok(())
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn reject_irrelevant_taira_doctor_globals(args: &Args) -> ReportResult<(), MainError> {
     let mut flags = Vec::new();
     if args.config_fd.is_some() || args.config_source_path.is_some() {
@@ -1850,6 +1952,7 @@ fn reject_irrelevant_taira_doctor_globals(args: &Args) -> ReportResult<(), MainE
     ))))
 }
 
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn reject_irrelevant_taira_public_reset_globals(args: &Args) -> ReportResult<(), MainError> {
     let mut flags = Vec::new();
     if args.config.is_some() {
@@ -1914,6 +2017,7 @@ const HELP_REPLACEMENTS: &[(&str, &str)] = &[
     ("Default:", "help.label.default"),
     ("Environment:", "help.label.env"),
 ];
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn language_override_from_args<I, S>(args: I) -> Option<String>
 where
     I: IntoIterator<Item = S>,
@@ -1937,6 +2041,7 @@ where
     }
     None
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn localize_help_text(help: &str, i18n: &Localizer) -> String {
     let mut localized = help.to_string();
     for (needle, key) in HELP_REPLACEMENTS {
@@ -1950,6 +2055,7 @@ fn localize_help_text(help: &str, i18n: &Localizer) -> String {
 /// Scan raw arguments for the explicit output format and `--machine` before clap parses them.
 ///
 /// Argument errors are rendered in the format the caller asked for, even when parsing fails.
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn output_format_override_from_args<I, S>(args: I) -> (Option<OutputFormatArg>, bool)
 where
     I: IntoIterator<Item = S>,
@@ -1979,14 +2085,14 @@ where
         } else if let Some(value) = arg.strip_prefix("-o")
             && !value.is_empty()
             && !arg.starts_with("--")
+            && let Some(format) = parse_output_format(value.strip_prefix('=').unwrap_or(value))
         {
-            if let Some(format) = parse_output_format(value.strip_prefix('=').unwrap_or(value)) {
-                explicit = Some(format);
-            }
+            explicit = Some(format);
         }
     }
     (explicit, machine)
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn parse_output_format(value: &str) -> Option<OutputFormatArg> {
     match value.trim().to_ascii_lowercase().as_str() {
         "json" => Some(OutputFormatArg::Json),
@@ -1995,17 +2101,21 @@ fn parse_output_format(value: &str) -> Option<OutputFormatArg> {
         _ => None,
     }
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn stdout_is_terminal() -> bool {
     use std::io::IsTerminal as _;
     io::stdout().is_terminal()
 }
 /// Output selection for parsed arguments, applying the terminal-dependent default.
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn effective_output(args: &Args) -> OutputSelection {
     OutputSelection::resolve(args.output_format, args.machine, stdout_is_terminal())
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn effective_output_format(args: &Args) -> CliOutputFormat {
     effective_output(args).format
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn color_mode() -> ColorMode {
     if supports_color::on(supports_color::Stream::Stdout).is_some()
         && supports_color::on(supports_color::Stream::Stderr).is_some()
@@ -2017,6 +2127,7 @@ fn color_mode() -> ColorMode {
 }
 /// Client configuration read when neither `--config` nor `--config-fd` is given.
 const DEFAULT_CLIENT_CONFIG_PATH: &str = "client.toml";
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn load_cli_client_config(
     load_path: LoadPath<PathBuf>,
 ) -> ReportResult<(Config, client_config::FilesystemConfig), MainError> {
@@ -2039,7 +2150,7 @@ fn load_cli_client_config(
             )));
         }
     };
-    let source_path = source.path().to_path_buf();
+    let source_path = source.path().clone();
     let filesystem_config =
         client_config::FilesystemConfig::take_from(source.table_mut(), &source_path)
             .into_report()
@@ -2059,6 +2170,7 @@ fn load_cli_client_config(
     }
     Ok((config, filesystem_config))
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn parse_duration_value(raw: &toml::Value) -> Option<Duration> {
     match raw {
         toml::Value::Integer(ms) if *ms >= 0 => u64::try_from(*ms).ok().map(Duration::from_millis),
@@ -2066,6 +2178,7 @@ fn parse_duration_value(raw: &toml::Value) -> Option<Duration> {
         _ => None,
     }
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn apply_transaction_overrides(config: &mut Config, raw: &toml::Value) {
     if let Some(transaction) = raw.get("transaction").and_then(|v| v.as_table()) {
         if let Some(ttl) = transaction
@@ -2082,6 +2195,7 @@ fn apply_transaction_overrides(config: &mut Config, raw: &toml::Value) {
         }
     }
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn try_fallback_config() -> Result<Config> {
     let chain = ChainId::from("offline-cli");
     // Offline-only commands still share the complete client configuration type.
@@ -2102,6 +2216,7 @@ fn try_fallback_config() -> Result<Config> {
     ))
 }
 
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn client_config_with_defaults(
     chain: ChainId,
     network_id: NetworkId,
@@ -2140,9 +2255,11 @@ fn client_config_with_defaults(
     }
 }
 #[cfg(test)]
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub(crate) fn fallback_config() -> Config {
     try_fallback_config().expect("offline fallback config should derive a deterministic key pair")
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn config_to_json(
     config: &Config,
     filesystem_config: &client_config::FilesystemConfig,
@@ -2191,15 +2308,14 @@ fn config_to_json(
         ),
     ])
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn account_admission_hint(err: &(dyn std::error::Error + 'static)) -> Option<String> {
     use iroha::data_model::isi::error::{AccountAdmissionError, AccountAdmissionQuotaScope};
     let mut current: Option<&(dyn std::error::Error + 'static)> = Some(err);
     while let Some(cause) = current {
         if let Some(admission) = cause.downcast_ref::<AccountAdmissionError>() {
             return Some(match admission {
-                AccountAdmissionError::ImplicitAccountCreationDisabled => format!(
-                    "Implicit account creation is disabled; register the destination or pass `--ensure-destination` to add an explicit registration."
-                ),
+                AccountAdmissionError::ImplicitAccountCreationDisabled => "Implicit account creation is disabled; register the destination or pass `--ensure-destination` to add an explicit registration.".to_string(),
                 AccountAdmissionError::InvalidPolicy(invalid) => format!(
                     "Account admission policy is invalid: {}",
                     invalid.reason
@@ -2239,6 +2355,7 @@ fn account_admission_hint(err: &(dyn std::error::Error + 'static)) -> Option<Str
     }
     None
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn map_account_admission_error(err: eyre::Report, i18n: &Localizer) -> eyre::Report {
     if let Some(hint) = account_admission_hint(err.as_ref()) {
         eprintln!(
@@ -2248,6 +2365,7 @@ fn map_account_admission_error(err: eyre::Report, i18n: &Localizer) -> eyre::Rep
     }
     err
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn account_admission_rejected_message(hint: &str, i18n: &Localizer) -> String {
     i18n.t_with("error.account_admission_rejected", &[("hint", hint)])
 }
@@ -2256,6 +2374,7 @@ fn account_admission_rejected_message(hint: &str, i18n: &Localizer) -> String {
 ///
 /// `duration` is a deadline for the whole subscription, not an idle timeout: a stream that keeps
 /// delivering items still stops on time. Each receive waits at most for the time remaining.
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn drive_stream_until_deadline<T, F>(
     mut receive: impl FnMut(Duration) -> iroha::Result<Option<T>>,
     mut on_item: F,
@@ -2287,6 +2406,7 @@ where
     Ok(())
 }
 
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn finish_stream<T>(result: Result<T>, close: iroha::Result<()>) -> Result<T> {
     match (result, close) {
         (Ok(value), Ok(())) => Ok(value),
@@ -2298,6 +2418,7 @@ fn finish_stream<T>(result: Result<T>, close: iroha::Result<()>) -> Result<T> {
     }
 }
 
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn listen_events_message(
     filter: &EventFilterBox,
     timeout: Option<Duration>,
@@ -2318,6 +2439,7 @@ fn listen_events_message(
         },
     )
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn listen_blocks_message(
     height: NonZeroU64,
     timeout: Option<Duration>,
@@ -2338,6 +2460,7 @@ fn listen_blocks_message(
         },
     )
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod events {
     use super::*;
     use iroha::data_model::events::pipeline::{BlockEventFilter, TransactionEventFilter};
@@ -2412,27 +2535,6 @@ mod events {
         }
     }
 
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-
-        #[test]
-        fn malformed_proposal_id_never_degrades_to_an_unfiltered_subscription() {
-            for proposal_id in ["not-hex".to_owned(), "00".repeat(31), "00".repeat(33)] {
-                let error = GovernanceArgs {
-                    proposal_id: Some(proposal_id),
-                    referendum_id: None,
-                }
-                .into_filter()
-                .expect_err("malformed proposal id must fail before opening the event stream");
-                assert_eq!(
-                    error.to_string(),
-                    "--proposal-id must be exactly 32 bytes of hexadecimal"
-                );
-            }
-        }
-    }
-
     fn listen(
         filter: impl Into<EventFilterBox>,
         context: &mut impl RunContext,
@@ -2465,7 +2567,29 @@ mod events {
         };
         finish_stream(result, stream.close())
     }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn malformed_proposal_id_never_degrades_to_an_unfiltered_subscription() {
+            for proposal_id in ["not-hex".to_owned(), "00".repeat(31), "00".repeat(33)] {
+                let error = GovernanceArgs {
+                    proposal_id: Some(proposal_id),
+                    referendum_id: None,
+                }
+                .into_filter()
+                .expect_err("malformed proposal id must fail before opening the event stream");
+                assert_eq!(
+                    error.to_string(),
+                    "--proposal-id must be exactly 32 bytes of hexadecimal"
+                );
+            }
+        }
+    }
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod blocks {
     use super::*;
     use std::num::NonZeroU64;
@@ -2520,6 +2644,7 @@ mod blocks {
         finish_stream(result, stream.close())
     }
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod domain {
     use super::*;
     #[allow(clippy::large_enum_variant)]
@@ -2543,7 +2668,7 @@ mod domain {
             match self {
                 List(args) => crate::collection_list::run_list(
                     context,
-                    iroha::collections::Collection::Domains,
+                    &iroha::collections::Collection::Domains,
                     &args,
                 ),
                 Get(args) => {
@@ -2592,6 +2717,7 @@ mod domain {
         pub id: DomainId,
     }
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod account {
     use super::*;
     use std::fmt::Debug;
@@ -2625,7 +2751,7 @@ mod account {
                 Permission(cmd) => cmd.run(context),
                 List(args) => crate::collection_list::run_list(
                     context,
-                    iroha::collections::Collection::Accounts,
+                    &iroha::collections::Collection::Accounts,
                     &args,
                 ),
                 History(args) => {
@@ -2637,7 +2763,7 @@ mod account {
                         .unwrap_or_else(|| context.config().account.clone());
                     crate::collection_list::run_list(
                         context,
-                        iroha::collections::Collection::AccountHistory(account),
+                        &iroha::collections::Collection::AccountHistory(account),
                         &args.list,
                     )
                 }
@@ -2752,7 +2878,7 @@ mod account {
                         .wrap_err("failed to resolve --id account")?;
                     crate::collection_list::run_list(
                         context,
-                        iroha::collections::Collection::AccountPermissions(account_id),
+                        &iroha::collections::Collection::AccountPermissions(account_id),
                         &args.list,
                     )
                 }
@@ -2786,7 +2912,7 @@ mod account {
         }
     }
     /// Read every effective permission using the shared cursor page contract.
-    pub(crate) fn list_effective_permissions(
+    pub fn list_effective_permissions(
         client: &Client,
         account_id: &AccountId,
     ) -> Result<Vec<Permission>> {
@@ -2852,6 +2978,7 @@ mod account {
         pub role: RoleId,
     }
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod asset {
     use super::*;
     use iroha::data_model::account::AccountAdmissionMode;
@@ -2938,7 +3065,7 @@ mod asset {
                     };
                     crate::collection_list::run_list(
                         context,
-                        iroha::collections::Collection::AccountAssets(account),
+                        &iroha::collections::Collection::AccountAssets(account),
                         &args.list,
                     )
                 }
@@ -2955,7 +3082,7 @@ mod asset {
                     };
                     crate::collection_list::run_list(
                         context,
-                        iroha::collections::Collection::AssetHolders(definition),
+                        &iroha::collections::Collection::AssetHolders(definition),
                         &args.list,
                     )
                 }
@@ -3080,7 +3207,7 @@ mod asset {
                 match self {
                     List(args) => crate::collection_list::run_list(
                         context,
-                        iroha::collections::Collection::AssetDefinitions,
+                        &iroha::collections::Collection::AssetDefinitions,
                         &args,
                     ),
                     Get(args) => {
@@ -3638,7 +3765,7 @@ mod asset {
                 DomainId::try_new("wonderland", "universal").expect("domain id"),
                 "rose".parse().expect("asset name"),
             );
-            let asset_id = AssetId::new(asset_def_id, owner.clone().into());
+            let asset_id = AssetId::new(asset_def_id, owner.clone());
             let args = Transfer {
                 definition: Some(asset_id.definition().clone()),
                 definition_alias: None,
@@ -3712,6 +3839,7 @@ mod asset {
         }
     }
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod nft {
     use super::*;
     #[derive(clap::Subcommand, Debug)]
@@ -3743,7 +3871,7 @@ mod nft {
                 }
                 List(args) => crate::collection_list::run_list(
                     context,
-                    iroha::collections::Collection::Nfts,
+                    &iroha::collections::Collection::Nfts,
                     &args,
                 ),
                 Register(args) => {
@@ -3793,6 +3921,7 @@ mod nft {
         pub id: NftId,
     }
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod rwa {
     use super::*;
     use iroha::data_model::isi::rwa::{
@@ -3843,14 +3972,14 @@ mod rwa {
                 Get(args) => {
                     let entry = crate::collection_list::get_by_id(
                         context,
-                        iroha::collections::Collection::Rwas,
+                        &iroha::collections::Collection::Rwas,
                         &args.id.to_string(),
                     )?;
                     context.print_data(&entry)
                 }
                 List(args) => crate::collection_list::run_list(
                     context,
-                    iroha::collections::Collection::Rwas,
+                    &iroha::collections::Collection::Rwas,
                     &args,
                 ),
                 Register => {
@@ -3975,6 +4104,7 @@ mod rwa {
         pub to: String,
     }
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod peer {
     use super::*;
     use iroha::data_model::isi::register::RegisterPeerWithPop;
@@ -4097,6 +4227,7 @@ mod peer {
         }
     }
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod multisig {
     use super::*;
     use core::convert::TryFrom;
@@ -4735,12 +4866,14 @@ mod multisig {
             .unwrap_or(usize::MAX);
         Ok(entries.into_iter().skip(offset).take(limit).collect())
     }
-    fn format_multisig_intent(intent: &Option<Json>) -> Result<String> {
-        match intent {
-            Some(value) => norito::json::to_json(value)
-                .map_err(|err| eyre!("failed to render multisig intent: {err}")),
-            None => Ok("null".to_owned()),
-        }
+    fn format_multisig_intent(intent: Option<&Json>) -> Result<String> {
+        intent.map_or_else(
+            || Ok("null".to_owned()),
+            |value| {
+                norito::json::to_json(value)
+                    .map_err(|err| eyre!("failed to render multisig intent: {err}"))
+            },
+        )
     }
     fn render_multisig_list_all_text(entries: &[MultisigListAllEntry]) -> Result<String> {
         let mut blocks = Vec::with_capacity(entries.len());
@@ -4752,7 +4885,7 @@ mod multisig {
                 entry.instructions_hash,
                 entry.status,
                 entry.operation_type,
-                format_multisig_intent(&entry.intent)?,
+                format_multisig_intent(entry.intent.as_ref())?,
                 entry.proposed_at_ms,
             ));
         }
@@ -5071,6 +5204,7 @@ mod multisig {
         }
     }
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod query {
     use super::*;
     #[derive(clap::Subcommand, Debug)]
@@ -5129,6 +5263,7 @@ mod query {
         }
     }
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod transaction {
     use super::*;
     use iroha::data_model::{Level as LogLevel, isi::Log};
@@ -5159,7 +5294,7 @@ mod transaction {
         /// Send an empty transaction that logs a message
         Ping(Ping),
         /// Collect an exact fixed-schedule transaction trace for multilane qualification
-        Load(crate::transaction_load::Args),
+        Load(Box<crate::transaction_load::Args>),
         /// Send a transaction using IVM bytecode
         Ivm(Ivm),
         /// Send a transaction using JSON input from stdin
@@ -5171,9 +5306,9 @@ mod transaction {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             use self::Command::*;
             match self {
-                Prepare(args) => crate::transaction_journal::prepare(args, context),
-                Submit(args) => crate::transaction_journal::submit(args, context),
-                Resume(args) => crate::transaction_journal::resume(args, context),
+                Prepare(args) => crate::transaction_journal::prepare(&args, context),
+                Submit(args) => crate::transaction_journal::submit(&args, context),
+                Resume(args) => crate::transaction_journal::resume(&args, context),
                 Status(cmd) => cmd.run(context),
                 Get(cmd) => cmd.run(context),
                 List(cmd) => cmd.run(context),
@@ -5256,7 +5391,7 @@ mod transaction {
             };
             crate::collection_list::run_list(
                 context,
-                iroha::collections::Collection::AccountTransactions(account),
+                &iroha::collections::Collection::AccountTransactions(account),
                 &self.list,
             )
         }
@@ -5304,11 +5439,17 @@ mod transaction {
     fn ping_nonce_seed() -> u64 {
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_nanos() as u64)
+            .map(|d| {
+                u64::from_le_bytes(
+                    d.as_nanos().to_le_bytes()[..8]
+                        .try_into()
+                        .expect("eight-byte nonce seed"),
+                )
+            })
             .unwrap_or(0)
     }
     fn maybe_add_ping_nonce(metadata: &mut Metadata, seed: u64, index: usize) -> bool {
-        if metadata.contains(&*PING_NONCE_KEY) {
+        if metadata.contains(&PING_NONCE_KEY) {
             return false;
         }
         let value = seed.wrapping_add(index as u64);
@@ -5649,6 +5790,7 @@ mod transaction {
         }
     }
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod role {
     use super::*;
     use crate::json_utils;
@@ -5805,6 +5947,7 @@ mod role {
         }
     }
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod parameter {
     use super::*;
     #[derive(clap::Subcommand, Debug)]
@@ -5846,6 +5989,7 @@ mod parameter {
         }
     }
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod trigger {
     use super::*;
     use clap::ValueEnum;
@@ -5858,7 +6002,7 @@ mod trigger {
         /// Retrieve details of a specific trigger
         Get(Id),
         /// Register a trigger
-        Register(Register),
+        Register(Box<Register>),
         /// Unregister a trigger
         Unregister(Id),
         /// Increase the number of trigger executions
@@ -6458,7 +6602,7 @@ mod trigger {
         /// Only Updated events
         Updated,
     }
-    pub(super) fn parse_data_verifying_key_id(
+    pub fn parse_data_verifying_key_id(
         spec: &str,
     ) -> Result<iroha::data_model::proof::VerifyingKeyId> {
         let (backend, name) = spec
@@ -6484,7 +6628,7 @@ mod trigger {
             normalized_name.to_string(),
         ))
     }
-    pub(super) fn parse_data_proof_id(spec: &str) -> Result<iroha::data_model::proof::ProofId> {
+    pub fn parse_data_proof_id(spec: &str) -> Result<iroha::data_model::proof::ProofId> {
         let (backend, hash_hex) = spec
             .split_once(':')
             .ok_or_else(|| eyre!("--data-proof requires BACKEND:HEX format"))?;
@@ -6629,7 +6773,6 @@ mod trigger {
                             definition,
                             owner,
                             self.data_asset_scope
-                                .clone()
                                 .unwrap_or(iroha::data_model::asset::AssetBalanceScope::Global),
                         );
                         DataEventFilter::from(
@@ -6768,6 +6911,7 @@ mod trigger {
         Ok(Value::Object(map))
     }
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod executor {
     use super::*;
     #[derive(clap::Subcommand, Debug)]
@@ -6804,6 +6948,7 @@ mod executor {
         path: PathBuf,
     }
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod metadata {
     use super::*;
     pub mod domain {
@@ -7038,7 +7183,7 @@ mod metadata {
                     Get(args) => {
                         let entry = crate::collection_list::get_by_id(
                             context,
-                            iroha::collections::Collection::Rwas,
+                            &iroha::collections::Collection::Rwas,
                             &args.id.to_string(),
                         )
                         .wrap_err("Failed to get value")?;
@@ -7114,6 +7259,7 @@ mod metadata {
         }
     }
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod repo {
     use super::*;
     use iroha::data_model::{
@@ -7151,13 +7297,13 @@ mod repo {
                 Unwind(args) => args.run(context),
                 List(args) => crate::collection_list::run_list(
                     context,
-                    iroha::collections::Collection::RepoAgreements,
+                    &iroha::collections::Collection::RepoAgreements,
                     &args,
                 ),
                 Get(args) => {
                     let entry = crate::collection_list::get_by_id(
                         context,
-                        iroha::collections::Collection::RepoAgreements,
+                        &iroha::collections::Collection::RepoAgreements,
                         &args.id.to_string(),
                     )?;
                     context.print_data(&entry)
@@ -7346,6 +7492,7 @@ mod repo {
         u64::try_from(millis).unwrap_or(u64::MAX)
     }
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod settlement {
     use super::*;
     use clap::ValueEnum;
@@ -7568,7 +7715,7 @@ mod settlement {
         /// Expected destination asset from the referenced policy
         #[arg(long)]
         pub destination_asset: AssetDefinitionId,
-        /// Payer-scoped settlement identity: REFERENCE$CANONICAL_ACCOUNT
+        /// Payer-scoped settlement identity: `REFERENCE$CANONICAL_ACCOUNT`
         #[arg(long)]
         pub settlement_id: SettlementId,
         /// Destination-currency recipient account or alias
@@ -7656,7 +7803,7 @@ mod settlement {
     }
     #[derive(clap::Args, Debug)]
     pub struct DvpArgs {
-        /// Payer-scoped settlement identity: REFERENCE$CANONICAL_ACCOUNT
+        /// Payer-scoped settlement identity: `REFERENCE$CANONICAL_ACCOUNT`
         #[arg(long)]
         pub settlement_id: SettlementId,
         /// Asset definition delivered in exchange
@@ -7772,7 +7919,7 @@ mod settlement {
     }
     #[derive(clap::Args, Debug)]
     pub struct PvpArgs {
-        /// Payer-scoped settlement identity: REFERENCE$CANONICAL_ACCOUNT
+        /// Payer-scoped settlement identity: `REFERENCE$CANONICAL_ACCOUNT`
         #[arg(long)]
         pub settlement_id: SettlementId,
         /// Primary currency leg asset definition
@@ -8511,6 +8658,7 @@ mod settlement {
         }
     }
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn dump_json_stdout<T>(value: &T) -> Result<()>
 where
     T: JsonSerialize + ?Sized,
@@ -8523,6 +8671,7 @@ where
     io::stdout().write_all(rendered.as_bytes())?;
     Ok(())
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn parse_json_stdin<T>(context: &impl RunContext) -> Result<T>
 where
     T: JsonDeserialize,
@@ -8534,12 +8683,14 @@ where
     }
     parse_json_stdin_unchecked()
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn parse_json_stdin_unchecked<T>() -> Result<T>
 where
     T: JsonDeserialize,
 {
     parse_json(&string_from_stdin()?)
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn parse_json<T>(s: &str) -> Result<T>
 where
     T: JsonDeserialize,
@@ -8555,6 +8706,7 @@ where
     norito::with_decode_limits_scope(CLI_JSON_DECODE_LIMITS_V1, || norito::json::from_json(s))
         .map_err(|err| eyre!("failed to parse JSON: {err}"))
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn resolve_account_id_with(literal: &str) -> Result<AccountId> {
     let trimmed = literal.trim();
     if trimmed.is_empty() {
@@ -8573,12 +8725,14 @@ fn resolve_account_id_with(literal: &str) -> Result<AccountId> {
         .map_err(|err| eyre!("account literal must be canonical I105: {err}"))?;
     Ok(parsed)
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub(crate) fn resolve_account_id<C: RunContext>(_context: &C, literal: &str) -> Result<AccountId> {
     resolve_account_id_with(literal)
 }
 /// Parse a count that must be at least one, such as `--limit` or `--fetch-size`.
 ///
 /// Zero is rejected instead of silently meaning "unbounded" or "default".
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub(crate) fn positive_u64(raw: &str) -> std::result::Result<u64, String> {
     match raw.parse::<u64>() {
         Ok(0) => Err("must be at least 1".to_owned()),
@@ -8586,6 +8740,7 @@ pub(crate) fn positive_u64(raw: &str) -> std::result::Result<u64, String> {
         Err(error) => Err(error.to_string()),
     }
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn parse_asset_balance_scope_literal(
     literal: &str,
 ) -> Result<iroha::data_model::asset::AssetBalanceScope> {
@@ -8605,6 +8760,7 @@ fn parse_asset_balance_scope_literal(
         "asset balance scope must be `global` or `dataspace:<id>`"
     ))
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn resolve_asset_definition_id_by_alias(
     client: &Client,
     alias: &AssetDefinitionAlias,
@@ -8634,13 +8790,16 @@ fn resolve_asset_definition_id_by_alias(
     AssetDefinitionId::parse_address_literal(definition_raw)
         .map_err(|err| eyre!("invalid `asset_definition_id` in alias response: {err}"))
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn parse_asset_definition_literal(literal: &str) -> Result<AssetDefinitionId> {
     AssetDefinitionId::parse_address_literal(literal)
         .map_err(|err| eyre!("asset definition literal: {err}"))
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn parse_domain_id_literal(literal: &str) -> std::result::Result<DomainId, String> {
     DomainId::parse_fully_qualified(literal).map_err(|err| err.to_string())
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn parse_register_account_id(literal: &str) -> Result<AccountId> {
     let trimmed = literal.trim();
     if trimmed.is_empty() {
@@ -8664,13 +8823,16 @@ fn parse_register_account_id(literal: &str) -> Result<AccountId> {
     })?;
     Ok(parsed)
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn string_from_stdin() -> Result<String> {
     let bytes = read_cli_input_bounded(&mut io::stdin().lock(), MAX_CLI_STDIN_BYTES_V1, "stdin")?;
     String::from_utf8(bytes).map_err(|error| eyre!("stdin is not valid UTF-8: {error}"))
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn bytes_from_stdin() -> Result<Vec<u8>> {
     read_cli_input_bounded(&mut io::stdin().lock(), MAX_CLI_STDIN_BYTES_V1, "stdin")
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn read_cli_input_bounded<R: Read>(
     reader: &mut R,
     max_bytes: usize,
@@ -8684,7 +8846,7 @@ fn read_cli_input_bounded<R: Read>(
         let count = loop {
             match reader.read(&mut chunk[..read_len]) {
                 Ok(count) => break count,
-                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
                 Err(error) => return Err(error.into()),
             }
         };
@@ -8700,7 +8862,7 @@ fn read_cli_input_bounded<R: Read>(
     let extra = loop {
         match reader.read(&mut growth_probe) {
             Ok(count) => break count,
-            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
             Err(error) => return Err(error.into()),
         }
     };
@@ -8709,6 +8871,7 @@ fn read_cli_input_bounded<R: Read>(
     }
     Ok(bytes)
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn read_cli_file_bounded(path: &Path, label: &str) -> Result<Vec<u8>> {
     let mut file = fs::File::open(path)
         .wrap_err_with(|| format!("failed to open {label} {}", path.display()))?;
@@ -8737,11 +8900,13 @@ fn read_cli_file_bounded(path: &Path, label: &str) -> Result<Vec<u8>> {
     }
     Ok(bytes)
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn read_cli_text_file_bounded(path: &Path, label: &str) -> Result<String> {
     let bytes = read_cli_file_bounded(path, label)?;
     String::from_utf8(bytes)
         .map_err(|error| eyre!("{label} {} is not valid UTF-8: {error}", path.display()))
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn decode_base64_or_hex(
     input: &str,
     hex_length_err: &'static str,
@@ -8766,14 +8931,15 @@ fn decode_base64_or_hex(
     Ok(out)
 }
 type ReportResult<T, E> = core::result::Result<T, Report<E>>;
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn error_kind_for_report(report: &Report<MainError>) -> CliErrorKind {
     match report.current_context() {
-        MainError::CliArgs(_) => CliErrorKind::Input,
         MainError::Config => CliErrorKind::Config,
-        MainError::TransactionMetadata => CliErrorKind::Input,
         MainError::SerializeConfig => CliErrorKind::Internal,
         MainError::Command(_) => CliErrorKind::Command,
-        MainError::Input(_) => CliErrorKind::Input,
+        MainError::CliArgs(_) | MainError::TransactionMetadata | MainError::Input(_) => {
+            CliErrorKind::Input
+        }
     }
 }
 struct CliRenderedError {
@@ -8787,6 +8953,7 @@ struct CliErrorDescription {
     causes: Vec<String>,
     hints: Vec<String>,
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn describe_cli_error(report: &Report<MainError>) -> CliErrorDescription {
     // `frames()` yields the most recent attachment first; list hints in the order attached.
     let mut hints: Vec<String> = report
@@ -8840,6 +9007,7 @@ fn describe_cli_error(report: &Report<MainError>) -> CliErrorDescription {
         hints,
     }
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn render_cli_error(report: &Report<MainError>, output: OutputSelection) -> CliRenderedError {
     let kind = error_kind_for_report(report);
     let description = describe_cli_error(report);
@@ -8867,6 +9035,7 @@ fn render_cli_error(report: &Report<MainError>, output: OutputSelection) -> CliR
     });
     CliRenderedError { kind, output }
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn render_cli_error_text(
     report: &Report<MainError>,
     description: &CliErrorDescription,
@@ -8899,8 +9068,10 @@ fn render_cli_error_text(
 }
 #[cfg(test)]
 #[path = "main_shared_tests.rs"]
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod tests;
 #[cfg(test)]
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod multisig_json_tests {
     use iroha::crypto::{Algorithm, KeyPair};
     use iroha::data_model::{
@@ -8955,6 +9126,7 @@ mod multisig_json_tests {
     }
 }
 #[cfg(all(test, feature = "cli_integration_harness"))]
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod cli_integration_harness_tests {
     use super::*;
     use iroha::crypto::KeyPair;
@@ -9149,8 +9321,11 @@ mod cli_integration_harness_tests {
         fn positioned_five(seed: u8) -> Vec<Self::Item> {
             (0..5)
                 .map(|index| {
-                    let owner = sample_account_id("universal", seed + index as u8);
-                    Domain::new(DomainId::try_new(&format!("d{index}"), "universal").unwrap())
+                    let owner = sample_account_id(
+                        "universal",
+                        seed + u8::try_from(index).expect("five-row fixture index fits u8"),
+                    );
+                    Domain::new(DomainId::try_new(format!("d{index}"), "universal").unwrap())
                         .build(&owner)
                 })
                 .collect()
@@ -9193,7 +9368,10 @@ mod cli_integration_harness_tests {
 
             let mut accounts: Vec<_> = (0..5)
                 .map(|index| {
-                    let id = sample_account_id("land", seed + index as u8);
+                    let id = sample_account_id(
+                        "land",
+                        seed + u8::try_from(index).expect("five-row fixture index fits u8"),
+                    );
                     Account::new(id.clone()).build(&id)
                 })
                 .collect();
@@ -9211,7 +9389,10 @@ mod cli_integration_harness_tests {
 
             (0..5)
                 .map(|index| {
-                    let id = sample_account_id("land", seed + index as u8);
+                    let id = sample_account_id(
+                        "land",
+                        seed + u8::try_from(index).expect("five-row fixture index fits u8"),
+                    );
                     let mut account = Account::new(id.clone()).build(&id);
                     account
                         .metadata
@@ -9319,7 +9500,7 @@ mod cli_integration_harness_tests {
             let owner = sample_account_id("art", 0x70);
             let mut nfts: Vec<_> = ["n1$art", "n2$art", "n3$art"]
                 .into_iter()
-                .map(|id| Nft::new(id.parse().unwrap(), Default::default()).build(owner.account()))
+                .map(|id| Nft::new(id.parse().unwrap(), Metadata::default()).build(owner.account()))
                 .collect();
             let key: Name = "rank".parse().unwrap();
             nfts[0]
@@ -9364,8 +9545,11 @@ mod cli_integration_harness_tests {
             let owner = sample_account_id("art", seed);
             (0..5)
                 .map(|index| {
-                    Nft::new(format!("n{index}$art").parse().unwrap(), Default::default())
-                        .build(owner.account())
+                    Nft::new(
+                        format!("n{index}$art").parse().unwrap(),
+                        Metadata::default(),
+                    )
+                    .build(owner.account())
                 })
                 .collect()
         }
@@ -9471,16 +9655,13 @@ mod cli_integration_harness_tests {
                 .get()
                 .try_into()
                 .unwrap_or(100);
-            let offset = query.params.pagination.offset_value() as usize;
-            let limit = query
-                .params
-                .pagination
-                .limit_value()
-                .map(|value| value.get() as usize);
+            let offset =
+                usize::try_from(query.params.pagination.offset_value()).unwrap_or(usize::MAX);
+            let limit = query.params.pagination.limit_value().map(|value| {
+                usize::try_from(value.get()).expect("fixture pagination limit fits usize")
+            });
             let start = offset.min(items.len());
-            let end = limit
-                .map(|limit| (start + limit).min(items.len()))
-                .unwrap_or(items.len());
+            let end = limit.map_or(items.len(), |limit| (start + limit).min(items.len()));
             let first_end = start.saturating_add(fetch).min(end);
             let first = items[start..first_end].to_vec();
             let remaining = end.saturating_sub(first_end) as u64;
@@ -9702,6 +9883,8 @@ mod cli_integration_harness_tests {
     }
     #[test]
     fn pagination_sorting_domains_asc() {
+        use iroha::data_model::query::parameters::{FetchSize, Pagination, SortOrder};
+
         PSD_ASC_STARTS.store(0, Ordering::SeqCst);
         PSD_ASC_CONTS.store(0, Ordering::SeqCst);
         let exec = HarnessQueryExecutor::<DomainFixture>::ranked_five(
@@ -9709,7 +9892,7 @@ mod cli_integration_harness_tests {
             &PSD_ASC_STARTS,
             &PSD_ASC_CONTS,
         );
-        use iroha::data_model::query::parameters::{FetchSize, Pagination, SortOrder};
+
         let sorting = Sorting {
             sort_by_metadata_key: Some("rank".parse().unwrap()),
             order: Some(SortOrder::Asc),
@@ -9736,6 +9919,8 @@ mod cli_integration_harness_tests {
     }
     #[test]
     fn pagination_sorting_domains_desc() {
+        use iroha::data_model::query::parameters::{FetchSize, Pagination, SortOrder};
+
         PSD_DESC_STARTS.store(0, Ordering::SeqCst);
         PSD_DESC_CONTS.store(0, Ordering::SeqCst);
         let exec = HarnessQueryExecutor::<DomainFixture>::ranked_five(
@@ -9743,7 +9928,7 @@ mod cli_integration_harness_tests {
             &PSD_DESC_STARTS,
             &PSD_DESC_CONTS,
         );
-        use iroha::data_model::query::parameters::{FetchSize, Pagination, SortOrder};
+
         let sorting = Sorting {
             sort_by_metadata_key: Some("rank".parse().unwrap()),
             order: Some(SortOrder::Desc),
@@ -10098,6 +10283,7 @@ mod cli_integration_harness_tests {
 // It is intentionally behind a feature and unused by default to avoid pulling
 // additional dependencies or affecting production builds.
 #[cfg(all(test, feature = "cli_integration_harness"))]
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod cli_integration_harness {
     use super::*;
     use eyre::eyre;
@@ -10123,6 +10309,7 @@ mod cli_integration_harness {
             .expect("fixture seed must derive a valid keypair")
     }
     /// Minimal mock server for iterable queries; returns static payloads by type.
+    #[derive(Default)]
     pub struct MockQueryServer {
         pub domains: Vec<iroha::data_model::domain::Domain>,
         pub accounts: Vec<iroha::data_model::account::Account>,
@@ -10136,22 +10323,7 @@ mod cli_integration_harness {
         pub abi_version: Option<AbiVersion>,
         pub assets: BTreeMap<AssetId, Asset>,
     }
-    impl Default for MockQueryServer {
-        fn default() -> Self {
-            Self {
-                domains: vec![],
-                accounts: vec![],
-                triggers: vec![],
-                asset_defs: vec![],
-                executor_data_model: None,
-                parameters: None,
-                proof_records: BTreeMap::new(),
-                manifests: BTreeMap::new(),
-                abi_version: None,
-                assets: BTreeMap::new(),
-            }
-        }
-    }
+
     fn sample_account_id(_domain: &str, seed: u8) -> AccountId {
         let key_pair = fixture_key_pair(seed);
         AccountId::new(key_pair.public_key().clone())
@@ -10223,7 +10395,6 @@ mod cli_integration_harness {
                     }),
                 SingularQueryBox::FindAbiVersion(_) => self
                     .abi_version
-                    .clone()
                     .map(SingularQueryOutputBox::AbiVersion)
                     .ok_or_else(|| eyre!("ABI version not configured in MockQueryServer")),
                 SingularQueryBox::FindAssetById(req) => self
@@ -10263,12 +10434,12 @@ mod cli_integration_harness {
                 .get()
                 .try_into()
                 .unwrap_or(100);
-            let offset: usize = query.params.pagination.offset_value() as usize;
-            let limit: Option<usize> = query
-                .params
-                .pagination
-                .limit_value()
-                .map(|n| n.get() as usize);
+            let offset: usize =
+                usize::try_from(query.params.pagination.offset_value()).unwrap_or(usize::MAX);
+            let limit: Option<usize> =
+                query.params.pagination.limit_value().map(|n| {
+                    usize::try_from(n.get()).expect("fixture pagination limit fits usize")
+                });
             if !self.domains.is_empty() {
                 let mut v = self.domains.clone();
                 if let Some(key) = sort_by {
@@ -10287,7 +10458,7 @@ mod cli_integration_harness {
                     });
                 }
                 let start = offset.min(v.len());
-                let end = limit.map(|l| (start + l).min(v.len())).unwrap_or(v.len());
+                let end = limit.map_or(v.len(), |l| (start + l).min(v.len()));
                 let first_end = start.saturating_add(fetch).min(end);
                 let first = v[start..first_end].to_vec();
                 let remaining = end.saturating_sub(first_end) as u64;
@@ -10324,7 +10495,7 @@ mod cli_integration_harness {
                     });
                 }
                 let start = offset.min(v.len());
-                let end = limit.map(|l| (start + l).min(v.len())).unwrap_or(v.len());
+                let end = limit.map_or(v.len(), |l| (start + l).min(v.len()));
                 let first_end = start.saturating_add(fetch).min(end);
                 let first = v[start..first_end].to_vec();
                 let remaining = end.saturating_sub(first_end) as u64;
@@ -10361,7 +10532,7 @@ mod cli_integration_harness {
                     });
                 }
                 let start = offset.min(v.len());
-                let end = limit.map(|l| (start + l).min(v.len())).unwrap_or(v.len());
+                let end = limit.map_or(v.len(), |l| (start + l).min(v.len()));
                 let first_end = start.saturating_add(fetch).min(end);
                 let first = v[start..first_end].to_vec();
                 let remaining = end.saturating_sub(first_end) as u64;
@@ -10463,11 +10634,15 @@ mod cli_integration_harness {
         // Prepare a mock server with two domains
         let owner_w1 = sample_account_id("w1", 9);
         let owner_w2 = sample_account_id("w2", 10);
-        let mut server = MockQueryServer::default();
-        server.domains = vec![
-            Domain::new(DomainId::try_new("w1", "universal").unwrap()).build(owner_w1.account()),
-            Domain::new(DomainId::try_new("w2", "universal").unwrap()).build(owner_w2.account()),
-        ];
+        let server = MockQueryServer {
+            domains: vec![
+                Domain::new(DomainId::try_new("w1", "universal").unwrap())
+                    .build(owner_w1.account()),
+                Domain::new(DomainId::try_new("w2", "universal").unwrap())
+                    .build(owner_w2.account()),
+            ],
+            ..MockQueryServer::default()
+        };
         // Build and execute the query via QueryBuilder against the mock server
         let builder = QueryBuilder::new(&server, FindDomains);
         let out: Vec<Domain> = builder.execute_all().expect("exec ok");
@@ -10583,8 +10758,10 @@ mod cli_integration_harness {
         use iroha::data_model::{account::Account, query::account::prelude::FindAccountById};
         let account_id = sample_account_id("wonderland", 15);
         let account = Account::new(account_id.clone()).build(&account_id);
-        let mut server = MockQueryServer::default();
-        server.accounts = vec![account.clone()];
+        let server = MockQueryServer {
+            accounts: vec![account.clone()],
+            ..MockQueryServer::default()
+        };
         let out = server
             .execute_singular_query(SingularQueryBox::FindAccountById(FindAccountById::new(
                 account_id.account().clone(),
@@ -10616,8 +10793,10 @@ mod cli_integration_harness {
         )
         .expect("trigger action fixture satisfies validation invariants");
         let trigger = Trigger::new(trigger_id.clone(), action);
-        let mut server = MockQueryServer::default();
-        server.triggers = vec![trigger.clone()];
+        let server = MockQueryServer {
+            triggers: vec![trigger.clone()],
+            ..MockQueryServer::default()
+        };
         let out = server
             .execute_singular_query(SingularQueryBox::FindTriggerById(FindTriggerById::new(
                 trigger_id.clone(),
@@ -10635,7 +10814,7 @@ mod cli_integration_harness {
         let code_hash = Hash::new(b"manifest-demo");
         let manifest = ContractManifest {
             seiyaku_name: None,
-            code_hash: Some(code_hash.clone()),
+            code_hash: Some(code_hash),
             abi_hash: None,
             compiler_fingerprint: Some("kotodama-compiler".into()),
             features_bitmap: Some(0b1010),
@@ -10710,7 +10889,7 @@ mod cli_integration_harness {
         use std::collections::BTreeSet;
         let mut server = MockQueryServer::default();
         let executor_model = ExecutorDataModel {
-            parameters: Default::default(),
+            parameters: BTreeMap::default(),
             instructions: BTreeSet::new(),
             permissions: BTreeSet::new(),
             schema: Json::from(norito::json!({ "kind": "demo" })),

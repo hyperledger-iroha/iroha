@@ -3,6 +3,12 @@
 use super::*;
 use crate::{ZK_BACKEND_NATIVE_PIPA_R, ZK_BACKEND_STARK_FRI_V1};
 
+type MetadataMutation = (
+    &'static str,
+    fn(&mut OpenVerifyEnvelope),
+    ProofVerificationError,
+);
+
 fn policy() -> ZkVerifyGuardrails {
     ZkVerifyGuardrails {
         pipa_r_enabled: true,
@@ -313,7 +319,7 @@ fn native_public_binding_verifies_only_its_relation_and_rejects_tampering() {
     // verifier's metadata and resource assertions. Start with an actual valid
     // proof so a malformed native fixture cannot make every negative pass.
     let original: OpenVerifyEnvelope = norito::decode_canonical(&proof.bytes).expect("envelope");
-    let metadata_cases: [(&str, fn(&mut OpenVerifyEnvelope), ProofVerificationError); 5] = [
+    let metadata_cases: [MetadataMutation; 5] = [
         (
             "backend tag",
             |e| e.backend = BackendTag::NativePipaRPasta,

@@ -23,7 +23,7 @@ pub(in crate::taira_public_reset) struct InitializeNativeEdgeCustody {
     /// Independently selected SHA-256 of the actual currently invoked Darwin image.
     #[arg(long, value_name = "SHA256")]
     expected_executable_sha256: String,
-    /// Independently selected public TrustedKeyV1 record, retained in owner-private custody.
+    /// Independently selected public `TrustedKeyV1` record, retained in owner-private custody.
     #[arg(long, value_name = "PATH")]
     trusted_public_key: PathBuf,
     /// Independent SHA-256 of the exact public authority record bytes.

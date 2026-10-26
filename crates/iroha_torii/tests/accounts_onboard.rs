@@ -192,8 +192,23 @@ fn build_onboarding_test_context_at(
         let account_id = AccountId::new(key_pair.public_key().clone());
         Account::new(account_id.clone()).build(&account_id)
     }));
-    let staking = iroha_config::parameters::actual::NexusStaking::default();
-    let stake_asset_id: AssetDefinitionId = staking.stake_asset_id.parse().expect("stake asset");
+    let mut native_config = iroha_core::sumeragi::test_chain::TestChainConfig::new(
+        World::new(),
+        u64::try_from((anchor_time).as_millis()).expect("fixture time fits"),
+    );
+    let staking = native_config
+        .genesis_parameters
+        .iter()
+        .find_map(|parameter| match parameter {
+            Parameter::Custom(custom)
+                if custom.id() == &iroha_data_model::block::consensus::PublicLaneStakingPolicy::parameter_id() =>
+            {
+                Some(iroha_data_model::block::consensus::PublicLaneStakingPolicy::from_custom_parameter(custom).unwrap())
+            }
+            _ => None,
+        })
+        .expect("one explicitly authored original staking policy");
+    let stake_asset_id = staking.stake_asset_id.clone();
     let stake_domain = Domain::new(DomainId::try_new("nexus", "universal").expect("stake domain"))
         .build(&authority_id);
     let stake_definition = AssetDefinition::numeric(
@@ -203,8 +218,7 @@ fn build_onboarding_test_context_at(
         None,
     )
     .build(&authority_id);
-    let escrow_id =
-        AccountId::parse_encoded(&staking.stake_escrow_account_id).expect("canonical stake escrow");
+    let escrow_id = staking.stake_escrow_account_id.clone();
     accounts.push(Account::new(escrow_id.clone()).build(&escrow_id));
     let mut assets = vec![
         fee_asset,
@@ -229,17 +243,11 @@ fn build_onboarding_test_context_at(
         assets,
         [],
     );
-    {
-        let mut block = world.block();
-        block
-            .parameters
-            .get_mut()
-            .set_parameter(Parameter::Custom(
-                SumeragiNposParameters::default().into_custom_parameter(),
-            ))
-            .expect("valid default consensus parameters");
-        block.commit();
-    }
+    world
+        .set_parameter_for_testing(Parameter::Custom(
+            SumeragiNposParameters::default().into_custom_parameter(),
+        ))
+        .expect("valid default consensus parameters");
     install_account_alias_policy(&mut world, &authority_id, &fee_asset_id);
     install_universal_parent_lease(&mut world, &authority_id);
     for permitted in [authority_id.clone(), alternate_id] {
@@ -286,15 +294,18 @@ fn build_onboarding_test_context_at(
             .into(),
         );
     }
-    let chain = fixtures::commit_genesis_fixture(
-        world,
-        chain_id.clone(),
-        &authority_key_pair,
-        genesis_instructions,
-        Some(validator_keys),
-        iroha_primitives::time::TimeSource::new_fixed(anchor_time),
-    );
+    native_config.world = world;
+    native_config.chain_id = chain_id.clone();
+    native_config.genesis_key = authority_key_pair.clone();
+    native_config.genesis_instructions = genesis_instructions;
+    native_config.validator_keys = Some(validator_keys);
+    let chain = iroha_core::sumeragi::test_chain::CertifiedTestChain::start(native_config)
+        .expect("original signed fixture genesis");
     let state = chain.state().clone();
+    assert_eq!(
+        state.view().world().parameters().staking_policy(),
+        Some(&staking)
+    );
     let kura = chain.kura().clone();
     let _network_id = chain.network_id();
     let nexus = state.nexus_snapshot();
@@ -377,16 +388,16 @@ fn build_onboarding_test_context_at(
 
 fn onboarding_plan_request(alias: &str, account_id: &AccountId) -> norito::json::Value {
     json_object(vec![
-        json_entry("version", 1_u64),
+        json_entry("version", &1_u64),
         json_entry("alias", alias),
-        json_entry("account_id", account_id.to_string()),
-        json_entry("permissions", Vec::<String>::new()),
+        json_entry("account_id", &account_id.to_string()),
+        json_entry("permissions", &Vec::<String>::new()),
     ])
 }
 fn onboarding_current_state_request(alias: &str, account_id: &AccountId) -> norito::json::Value {
     json_object(vec![
-        json_entry("version", 1_u64),
-        json_entry("account_id", account_id.to_string()),
+        json_entry("version", &1_u64),
+        json_entry("account_id", &account_id.to_string()),
         json_entry("alias", alias),
     ])
 }
@@ -399,8 +410,8 @@ fn mutation_binding(
         json_entry("schema", "iroha.prepared-operation.binding.v1"),
         json_entry("semantic_hash_hex", semantic_hash_hex),
         json_entry("kind", kind),
-        json_entry("request_id", "22".repeat(32)),
-        json_entry("execution_expires_at_unix_ms", expires_at_unix_ms),
+        json_entry("request_id", &"22".repeat(32)),
+        json_entry("execution_expires_at_unix_ms", &expires_at_unix_ms),
     ])
 }
 fn onboarding_prepare_request(receipt: norito::json::Value) -> norito::json::Value {
@@ -417,7 +428,7 @@ fn onboarding_prepare_request_with_expiry(
         json_entry("schema", "iroha.accounts.onboard.prepare.v1"),
         json_entry(
             "binding",
-            mutation_binding(
+            &mutation_binding(
                 "onboarding",
                 &semantic_hash_hex,
                 expires_at_unix_ms.min(
@@ -429,9 +440,9 @@ fn onboarding_prepare_request_with_expiry(
         ),
         json_entry(
             "fee_payment",
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            &iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         ),
-        json_entry("receipt", receipt),
+        json_entry("receipt", &receipt),
     ])
 }
 fn onboarding_http_request(
@@ -719,7 +730,7 @@ async fn sponsored_onboarding_submit_rejects_old_and_tampered_envelopes() {
     .await;
     assert_eq!(plan.status, StatusCode::OK, "{}", plan.raw_body);
 
-    let old = json_object(vec![json_entry("receipt", plan.payload.clone())]);
+    let old = json_object(vec![json_entry("receipt", &plan.payload)]);
     let rejected = send_onboarding_request(&context.app, "/v1/accounts/onboard", &old).await;
     assert_eq!(
         rejected.status,

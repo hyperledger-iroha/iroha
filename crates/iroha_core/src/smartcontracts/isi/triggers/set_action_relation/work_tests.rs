@@ -192,7 +192,8 @@ fn actual_masked_native_history_below_exact_above_includes_the_terminal_pass() {
     let view = rows.try_committed_view_nonblocking().unwrap();
     assert_eq!(view.current().len(), 2);
     assert_eq!(view.undo().len(), 4);
-    let exact = 2 * (29 * usize::BITS as u64 + 44) + 8 * (17 * usize::BITS as u64 + 26) + 42; //5 head passes*4 +4 Some/None branches +2 complete a/b comparisons9
+    let exact =
+        2 * (29 * u64::from(usize::BITS) + 44) + 8 * (17 * u64::from(usize::BITS) + 26) + 42; //5 head passes*4 +4 Some/None branches +2 complete a/b comparisons9
     let pool = AllocationBudget::new(0);
     for amount in [exact - 1, exact, exact + 1] {
         let mut work = strategy(amount, &pool);

@@ -44,9 +44,7 @@ fn install_catalog(state: &State, catalog: NexusRuntimeCatalogV1) {
     let publication = notice.begin();
     let mut world = state.world.block();
     world
-        .parameters
-        .get_mut()
-        .set_parameter(iroha_data_model::parameter::Parameter::Custom(
+        .set_parameter_for_testing(iroha_data_model::parameter::Parameter::Custom(
             catalog
                 .into_custom_parameter()
                 .expect("canonical protected fixture"),
@@ -273,9 +271,7 @@ fn authorization_reader_rejects_malformed_or_foreign_catalog_authority() {
         ));
         let mut world = state.world.block();
         world
-            .parameters
-            .get_mut()
-            .set_parameter(iroha_data_model::parameter::Parameter::Custom(
+            .set_parameter_for_testing(iroha_data_model::parameter::Parameter::Custom(
                 iroha_data_model::parameter::CustomParameter::new(
                     NexusRuntimeCatalogV1::parameter_id(),
                     iroha_primitives::json::Json::new(norito::json!({"version": 255})),

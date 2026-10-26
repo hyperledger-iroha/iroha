@@ -20,7 +20,7 @@ enum Intent {
 
 #[derive(Debug, Clone, PartialEq, Eq, norito::Encode, norito::Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core_zk::kagemusha_wallet_state_v1::ArchiveIntentV1")]
-pub(crate) struct ArchiveIntentV1 {
+pub struct ArchiveIntentV1 {
     request_id: [u8; 32],
     pub(crate) send_capsule: [u8; 32],
     pub(crate) send_commitment: [u8; 32],

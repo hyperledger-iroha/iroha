@@ -278,6 +278,10 @@ fn control_parts(
 }
 
 /// Recheck after every Parliament enactment in the same original positioned pass.
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Enactment consumes the original positioned certification rather than exposing a reusable capability"
+)]
 pub(in crate::smartcontracts::isi::sccp) fn enact<E: std::fmt::Debug>(
     state: &mut StateBlock<'_>,
     original: CertifiedPause,

@@ -360,8 +360,8 @@ fn verify_original_startup(
     stores: Arc<LaneStores>,
     starting: (LaneId, [u8; 32]),
     original: Option<Arc<StoreOpening>>,
-    frame: (AvailableBody, Qc, PathBuf),
-    expected: (Vec<u8>, usize),
+    frame: &(AvailableBody, Qc, PathBuf),
+    expected: &(Vec<u8>, usize),
     budget: &AllocationBudget,
 ) {
     // Every lifecycle/driver join has completed before these ownership and causal checks.
@@ -501,8 +501,8 @@ pub fn observe_startup_sync_for_test<R>(
         stores,
         (record.lane, record.incarnation),
         original.into_inner(),
-        (body, qc, path),
-        (original_bytes, ceiling),
+        &(body, qc, path),
+        &(original_bytes, ceiling),
         &budget,
     );
     result

@@ -14,7 +14,7 @@ use std::{collections::BTreeMap, sync::Arc};
 
 /// Fixed accounting order, matching source construction's E/T/D/I/M/S dimensions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum SourceDimension {
+pub enum SourceDimension {
     /// Logical executed entries, including entries with no transfers.
     ExecutedEntries,
     /// Complete original transcript occurrences.
@@ -40,7 +40,7 @@ const DIMENSIONS: [SourceDimension; 6] = [
 
 /// Fixed-width exact usage, also used for caller-supplied inclusive ceilings.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct SourceUsage {
+pub struct SourceUsage {
     /// Logical entry count E.
     pub(crate) executed_entries: u64,
     /// Whole occurrence count T.
@@ -112,7 +112,7 @@ impl SourceUsage {
 
 /// Explicit limits; this type supplies no production defaults or policy authority.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct ReservationPolicy {
+pub struct ReservationPolicy {
     /// Ceiling on the complete cumulative logical entry, across physical fragments.
     pub(crate) intrinsic: SourceUsage,
     /// Ceiling on all entries committed or staged in this block ledger.
@@ -121,7 +121,7 @@ pub(crate) struct ReservationPolicy {
 
 /// Frozen adapter-supplied scope; equality checks do not authenticate these values.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct ReservationContext {
+pub struct ReservationContext {
     /// Source height selected by the State owner.
     pub(crate) height: u64,
     /// Authenticated policy commitment to be supplied by the future State adapter.
@@ -135,7 +135,7 @@ pub(crate) struct ReservationContext {
 /// The occurrence constructor fixes T=1; the entry-bundle adapter measures its
 /// complete ordered occurrence slice. This is not a measurement certificate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct OccurrenceUsage {
+pub struct OccurrenceUsage {
     transcripts: u64,
     deltas: u64,
     input_bytes: u64,
@@ -180,7 +180,7 @@ impl OccurrenceUsage {
 
 /// Malformed capability/lifetime/accounting state; never capacity deferral.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ReservationInvariant {
+pub enum ReservationInvariant {
     /// A token belongs to another block ledger instance.
     ForeignLedger,
     /// A requested or token context differs from this ledger's frozen scope.
@@ -230,7 +230,7 @@ pub(crate) enum ReservationInvariant {
 
 /// Typed owner outcome; intrinsic is checked for the whole entry before capacity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ReservationError {
+pub enum ReservationError {
     /// Prospective complete entry usage exceeds its intrinsic inclusive profile.
     Intrinsic {
         /// First exceeded dimension in E/T/D/I/M/S order.
@@ -272,13 +272,13 @@ struct OwnerBinding {
 /// Opaque logical-entry capability, reusable across committed physical fragments.
 /// It grants no execution identity beyond this ledger's internal bookkeeping.
 #[derive(Clone, Debug)]
-pub(crate) struct EntryOwner {
+pub struct EntryOwner {
     binding: OwnerBinding,
 }
 
 /// Opaque replaceable occurrence capability; successful replacement supersedes it.
 #[derive(Clone, Debug)]
-pub(crate) struct OccurrenceSlot {
+pub struct OccurrenceSlot {
     owner: OwnerBinding,
     id: u64,
     generation: u64,
@@ -394,7 +394,7 @@ pub(super) struct ReservationCommitSeal {
 
 /// Block-owned reservations with exclusive, journaled physical transactions.
 /// Private IDs/generations never enter canonical ordering, serialization or hashes.
-pub(crate) struct ReservationLedger {
+pub struct ReservationLedger {
     identity: Arc<()>,
     context: ReservationContext,
     policy: ReservationPolicy,
@@ -519,7 +519,7 @@ impl Undo {
 
 /// Non-cloneable identity of one original quota transaction, including aborted generations.
 /// Public block coordinates and equal journal contents cannot reconstruct this token.
-pub(crate) struct SourceTransactionIdentity {
+pub struct SourceTransactionIdentity {
     ledger: Arc<()>,
     context: ReservationContext,
     generation: u64,
@@ -527,7 +527,7 @@ pub(crate) struct SourceTransactionIdentity {
 
 /// Exclusive physical scope with O(changes) undo storage, without block-map snapshots.
 /// State must pair accounting commit/rollback with its WSV and source side effects.
-pub(crate) struct ReservationTransaction<'a> {
+pub struct ReservationTransaction<'a> {
     ledger: &'a mut ReservationLedger,
     journal: Vec<Undo>,
     generation: u64,
@@ -537,7 +537,7 @@ pub(crate) struct ReservationTransaction<'a> {
 #[cfg(test)]
 /// Constant-size checkpoint bound to a retained prefix of one physical transaction.
 /// Ancestor savepoints survive inner rollback; discarded journal branches do not revive.
-pub(crate) struct ReservationCheckpoint {
+pub struct ReservationCheckpoint {
     identity: Arc<()>,
     context: ReservationContext,
     transaction: u64,
@@ -769,7 +769,7 @@ impl ReservationTransaction<'_> {
     /// Old live slots revive; undo needs no new generation and works even at exhaustion.
     pub(crate) fn rollback(
         &mut self,
-        checkpoint: ReservationCheckpoint,
+        checkpoint: &ReservationCheckpoint,
     ) -> Result<SourceUsage, ReservationError> {
         if !Arc::ptr_eq(&checkpoint.identity, &self.ledger.identity) {
             return Err(ReservationError::Invariant(
@@ -879,7 +879,7 @@ impl Drop for ReservationTransaction<'_> {
 mod tests;
 
 /// Exact complete-entry reservation adapter; occurrence accounting stays internal.
-pub(crate) mod entry_bundle;
+pub mod entry_bundle;
 
 /// Frozen ordinary/mandatory source admission and physical transaction scopes.
-pub(crate) mod admission;
+pub mod admission;

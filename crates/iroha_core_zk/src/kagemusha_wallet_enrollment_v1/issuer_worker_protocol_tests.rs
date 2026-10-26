@@ -8,7 +8,7 @@ fn current_revocation_reply_is_fresh_bound_and_cannot_issue_enrollment_evidence(
     let exchange = request
         .packet(ActionV1::RecheckRevocation, [10; 32], [19; 32], 700_000)
         .unwrap();
-    let current = reply(&exchange, "current", Value::Null);
+    let current = reply(&exchange, "current", &Value::Null);
     assert_eq!(
         request
             .revocation_response(&exchange, &framed(&current))
@@ -43,19 +43,19 @@ fn current_revocation_reply_is_fresh_bound_and_cannot_issue_enrollment_evidence(
         .unwrap();
     assert!(
         request
-            .revocation_response(&inspect, &framed(&reply(&inspect, "current", Value::Null)))
+            .revocation_response(&inspect, &framed(&reply(&inspect, "current", &Value::Null)))
             .is_err()
     );
     assert_eq!(
         request
             .revocation_response(
                 &exchange,
-                &framed(&reply(&exchange, "unavailable", Value::Null))
+                &framed(&reply(&exchange, "unavailable", &Value::Null))
             )
             .unwrap(),
         RevocationOutcomeV1::Unavailable
     );
-    let mut refused = reply(&exchange, "refused", Value::Null);
+    let mut refused = reply(&exchange, "refused", &Value::Null);
     change(&mut refused, "refusal_code", Value::from(6_u16));
     assert_eq!(
         request
@@ -72,7 +72,7 @@ fn current_revocation_reply_is_fresh_bound_and_cannot_issue_enrollment_evidence(
     for outcome in ["evidence", "prepared", "outcome_unknown", "rejected"] {
         assert!(
             request
-                .revocation_response(&exchange, &framed(&reply(&exchange, outcome, Value::Null)))
+                .revocation_response(&exchange, &framed(&reply(&exchange, outcome, &Value::Null)))
                 .is_err()
         );
     }
@@ -80,7 +80,7 @@ fn current_revocation_reply_is_fresh_bound_and_cannot_issue_enrollment_evidence(
         request
             .revocation_response(
                 &exchange,
-                &framed(&reply(&exchange, "current", Value::from("Zg==")))
+                &framed(&reply(&exchange, "current", &Value::from("Zg==")))
             )
             .is_err()
     );
@@ -92,7 +92,7 @@ fn current_revocation_reply_is_fresh_bound_and_cannot_issue_enrollment_evidence(
         apple
             .revocation_response(
                 &apple_exchange,
-                &framed(&reply(&apple_exchange, "current", Value::Null))
+                &framed(&reply(&apple_exchange, "current", &Value::Null))
             )
             .is_err()
     );
@@ -169,7 +169,7 @@ fn journal_and_prepare_replies_bind_every_exact_packet_field() {
     let journal = VerifierExchangeV1::journal([7; 32], [9; 32]).unwrap();
     let prepared = request.preparation.packet([10; 32], [9; 32]).unwrap();
     for (exchange, outcome) in [(&journal, "journal"), (&prepared, "prepared")] {
-        let value = reply(exchange, outcome, Value::Null);
+        let value = reply(exchange, outcome, &Value::Null);
         let check = |value: &Value| {
             if outcome == "journal" {
                 exchange.journal_response(&framed(value)).map(|_| ())
@@ -195,31 +195,31 @@ fn journal_and_prepare_replies_bind_every_exact_packet_field() {
             "evidence",
             "refused",
         ] {
-            assert!(check(&reply(exchange, failure, Value::Null)).is_err());
+            assert!(check(&reply(exchange, failure, &Value::Null)).is_err());
         }
         // Journal and Prepare exchanges never refuse an E1 and never carry a code.
-        let mut refused = reply(exchange, "refused", Value::Null);
+        let mut refused = reply(exchange, "refused", &Value::Null);
         change(&mut refused, "refusal_code", Value::from(9_u16));
         assert!(check(&refused).is_err());
         let mut coded = value.clone();
         change(&mut coded, "refusal_code", Value::from(9_u16));
         assert!(check(&coded).is_err());
-        assert!(check(&reply(exchange, outcome, Value::from("Zg=="))).is_err());
+        assert!(check(&reply(exchange, outcome, &Value::from("Zg=="))).is_err());
     }
     assert_eq!(
         journal
-            .journal_response(&framed(&reply(&journal, "journal", Value::Null)))
+            .journal_response(&framed(&reply(&journal, "journal", &Value::Null)))
             .unwrap(),
         [10; 32]
     );
     assert!(
         journal
-            .prepared_response(&framed(&reply(&journal, "prepared", Value::Null)))
+            .prepared_response(&framed(&reply(&journal, "prepared", &Value::Null)))
             .is_err()
     );
     assert!(
         prepared
-            .journal_response(&framed(&reply(&prepared, "journal", Value::Null)))
+            .journal_response(&framed(&reply(&prepared, "journal", &Value::Null)))
             .is_err()
     );
     assert!(request.preparation.packet([0; 32], [9; 32]).is_err());
@@ -247,7 +247,7 @@ fn completed_evidence_time_can_precede_recovery_but_not_original_or_future_dispa
         let response = reply(
             exchange,
             "evidence",
-            Value::from(STANDARD.encode(&original)),
+            &Value::from(STANDARD.encode(&original)),
         );
         let OutcomeV1::Evidence(evidence) = request.response(exchange, &framed(&response)).unwrap()
         else {
@@ -270,7 +270,7 @@ fn completed_evidence_time_can_precede_recovery_but_not_original_or_future_dispa
         let response = reply(
             &complete,
             "evidence",
-            Value::from(STANDARD.encode(encode(&wrong, MAX_RESULT).unwrap())),
+            &Value::from(STANDARD.encode(encode(&wrong, MAX_RESULT).unwrap())),
         );
         assert!(request.response(&complete, &framed(&response)).is_err());
     }
@@ -296,7 +296,7 @@ fn inspect_preserves_exact_request_and_distinct_result_classes_after_expiry() {
             request.original()
         );
         for outcome in ["unavailable", "outcome_unknown", "refused"] {
-            let mut answer = reply(&inspect, outcome, Value::Null);
+            let mut answer = reply(&inspect, outcome, &Value::Null);
             if outcome == "refused" {
                 change(&mut answer, "refusal_code", Value::from(9_u16));
             }
@@ -315,7 +315,7 @@ fn inspect_preserves_exact_request_and_distinct_result_classes_after_expiry() {
         let response = reply(
             &inspect,
             "evidence",
-            Value::from(STANDARD.encode(&original)),
+            &Value::from(STANDARD.encode(&original)),
         );
         let OutcomeV1::Evidence(observed) = request.response(&inspect, &framed(&response)).unwrap()
         else {
@@ -359,7 +359,7 @@ fn inspect_preserves_exact_request_and_distinct_result_classes_after_expiry() {
 fn request_response_refuses_other_request_preparation_and_exchange_kinds() {
     let request = fixture(false);
     let current = exchange(&request, [9; 32]);
-    let response = framed(&reply(&current, "unavailable", Value::Null));
+    let response = framed(&reply(&current, "unavailable", &Value::Null));
     let changed_time =
         VerifierRequestV1::from_prepared(request.request.clone(), &request.preparation, 1_001)
             .unwrap();
@@ -380,7 +380,7 @@ fn request_response_refuses_other_request_preparation_and_exchange_kinds() {
     for wrong in [&journal, &prepared] {
         assert!(
             request
-                .response(wrong, &framed(&reply(wrong, "unavailable", Value::Null)))
+                .response(wrong, &framed(&reply(wrong, "unavailable", &Value::Null)))
                 .is_err()
         );
     }
@@ -391,7 +391,7 @@ fn request_response_refuses_other_request_preparation_and_exchange_kinds() {
         request
             .response(
                 &wrong_incarnation,
-                &framed(&reply(&wrong_incarnation, "unavailable", Value::Null))
+                &framed(&reply(&wrong_incarnation, "unavailable", &Value::Null))
             )
             .is_err()
     );
@@ -402,7 +402,7 @@ fn request_response_refuses_other_request_preparation_and_exchange_kinds() {
         wrong_incarnation.journal_incarnation(),
         current.journal_incarnation()
     );
-    let mut matching = reply(&wrong_incarnation, "unavailable", Value::Null);
+    let mut matching = reply(&wrong_incarnation, "unavailable", &Value::Null);
     change(
         &mut matching,
         "journal_incarnation",
@@ -465,7 +465,7 @@ fn vectors() -> Value {
                             config.digest(),
                             e,
                             outcome,
-                            Value::Null,
+                            &Value::Null,
                         ))))
                     })
                     .collect::<Vec<_>>();

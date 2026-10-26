@@ -907,6 +907,7 @@ CORE_ADMISSION_STARTUP_STAGES += CORE_REWARD_ACCOUNTING_STAGES
 CORE_MONETARY_AUTHORITY_STAGES = (("exact signed staking and reward monetary authority", (
     'smartcontracts::isi::staking::tests::registration_rejects_changed_signed_monetary_fields_without_custody_writes',
     'smartcontracts::isi::staking::tests::genesis_monetary_scope_requires_exact_height_without_npos_parameters',
+    'smartcontracts::isi::staking::tests::prepared_optional_npos_removal_preserves_monetary_owners_and_exact_genesis_scope',
     'executor::opaque_monetary_tests::raw_ivm_staking_trigger_requires_signed_monetary_plan',
     'executor::opaque_monetary_tests::supplied_proved_staking_effects_require_signed_monetary_plan',
     'smartcontracts::isi::multisig::tests::proposal_attempt::live_multisig_proposal_decode_refusal_retries_original_signed_xor_transfer',
@@ -2312,7 +2313,7 @@ CORE_NATIVE_CONNECTION_STAGES = (
         'sumeragi::lanes::store::refund_tests::batch_read_cancellation_after_cleanup_observation_cannot_be_lost',
         'sumeragi::lanes::registry::tests::isolation_tests::final_inflight_incoming_opening_cleans_cancelled_request_but_keeps_historical_recovery',
         'sumeragi::lanes::registry::tests::proposal_reads::cancelled_incoming_read_retires_request_only_opening_and_preserves_historical_join',
-        'sumeragi::lanes::registry::tests::proposal_reads::cancelled_original_sweep_does_not_wait_for_new_disjoint_opening',
+        'sumeragi::lanes::registry::tests::proposal_reads::original_lane_sweep_does_not_wait_for_new_disjoint_opening',
         'sumeragi::lanes::registry::tests::proposal_reads::original_sweep_preserves_a_later_same_key_native_owner',
         'sumeragi::lanes::registry::tests::proposal_reads::exhausted_registration_identity_refuses_before_new_native_custody',
         'sumeragi::executor::proposal_read_tests::successful_parent_commit_cancels_proposal_read_only_after_original_publication',

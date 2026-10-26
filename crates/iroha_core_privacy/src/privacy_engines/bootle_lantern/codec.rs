@@ -374,7 +374,7 @@ fn typed_polynomial(residues: &[u64], index: usize) -> Option<ProofPolynomialV1>
     let coefficients: [u64; APPLICATION_RING_DEGREE_V1] =
         residues.get(start..end)?.try_into().ok()?;
     Some(
-        ProofPolynomialV1::new(coefficients)
+        ProofPolynomialV1::new(&coefficients)
             .expect("strict proof decoder already established canonical residues"),
     )
 }
@@ -431,7 +431,7 @@ fn validate_challenge(challenge: &[u64]) -> Result<(), ProofCodecErrorV1> {
         }
     }
     let challenge = ProofPolynomialV1::new(
-        challenge
+        &challenge
             .try_into()
             .expect("strict challenge slice has the fixed ring degree"),
     )
@@ -586,6 +586,8 @@ mod tests {
     }
     #[test]
     fn exact_wire_roundtrips_and_component_ranges_partition_the_body() {
+        type ComponentGetter =
+            fn(&BootleLanternPresentationProofV1, usize) -> Option<ProofPolynomialV1>;
         let proof = valid_proof();
         let encoded = proof.encode();
         assert_eq!(PROOF_POLYNOMIALS_V1, 157);
@@ -613,10 +615,7 @@ mod tests {
         assert_eq!(proof.z3().len(), 4 * 64);
         assert_eq!(proof.z4().len(), 4 * 64);
         assert_eq!(PROOF_END, proof.coefficients().len());
-        let component_getters: [(
-            usize,
-            fn(&BootleLanternPresentationProofV1, usize) -> Option<ProofPolynomialV1>,
-        ); 8] = [
+        let component_getters: [(usize, ComponentGetter); 8] = [
             (
                 T_B_POLYNOMIALS_V1,
                 BootleLanternPresentationProofV1::t_b_polynomial,
@@ -889,9 +888,7 @@ mod tests {
         let challenge = &mut eta_exceeded[CHALLENGE_START..HINT_START];
         challenge[..32].fill(8);
         challenge[32] = 0;
-        for index in 33..APPLICATION_RING_DEGREE_V1 {
-            challenge[index] = PROOF_MODULUS_V1 - 8;
-        }
+        challenge[33..APPLICATION_RING_DEGREE_V1].fill(PROOF_MODULUS_V1 - 8);
         assert_eq!(
             BootleLanternPresentationProofV1::from_coefficients(
                 eta_exceeded.clone().into_boxed_slice()

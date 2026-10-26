@@ -41,12 +41,15 @@ fn new_state(
     // Direct executor fixtures declare their immutable scope explicitly. Real
     // genesis/finality cases below still use the signed CertifiedTestChain.
     {
-        let mut parameters = world.parameters.block();
-        parameters
-            .set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&world).unwrap();
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            crate::sumeragi::lanes::routing::test_support::metadata(
                 iroha_data_model::block::consensus::SumeragiRootScope::Global,
-            ))
-            .expect("valid fixture parameters");
+            ),
+            world.sccp_committee_generations.allocation_budget(),
+        )
+        .expect("valid fixture parameters");
         parameters.commit();
     }
     let state = State::new_with_chain_for_testing(world, kura, query_handle, chain_id);
@@ -63,11 +66,14 @@ fn install_pipeline_gas_fixture(
     pipeline: iroha_config::parameters::actual::Pipeline,
 ) {
     {
-        let mut parameters = state.world.parameters.block();
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world).unwrap();
         for parameter in crate::pipeline_gas_policy::parameters_for_testing(pipeline.gas.clone()) {
-            parameters
-                .set_parameter(parameter)
-                .expect("valid committed fixture gas policy");
+            crate::state::set_parameter_cell_for_testing(
+                &mut parameters,
+                parameter,
+                state.world.sccp_committee_generations.allocation_budget(),
+            )
+            .expect("valid committed fixture gas policy");
         }
         parameters.commit();
     }
@@ -102,8 +108,7 @@ fn provision_fee_sponsor_program(
     program_id: &FeeSponsorProgramId,
     asset_definition_id: &AssetDefinitionId,
     instruction: &InstructionBox,
-    allocation: u128,
-    activate_at_height: u64,
+    (allocation, activate_at_height): (u128, u64),
 ) {
     let setup_call_hash = fee_sponsor_setup_hash(program_id);
     let mut state_transaction = state_block.transaction_for_fastpq_testing(setup_call_hash);
@@ -456,17 +461,21 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor() {
     let chain: ChainId = "test-chain".parse().unwrap();
     let mut state = new_state(world, kura, query_handle, chain.clone());
     {
-        let mut fees = state.nexus_snapshot().fees;
+        let mut fees = state.world.parameters.view().get().root_fees().unwrap().clone();
         fees.sponsor_vault_custody_account_id = custody_id.clone();
         {
-            let mut parameters = state.world.parameters.block();
-            parameters
-                .set_parameter(iroha_data_model::parameter::Parameter::Custom(
+            let mut parameters =
+                crate::state::parameter_cell_block_for_testing(&state.world).unwrap();
+            crate::state::set_parameter_cell_for_testing(
+                &mut parameters,
+                iroha_data_model::parameter::Parameter::Custom(
                     fees.clone()
                         .into_custom_parameter()
                         .expect("explicit fixture policy"),
-                ))
-                .expect("valid fixture monetary projection");
+                ),
+                state.world.sccp_committee_generations.allocation_budget(),
+            )
+            .expect("valid fixture monetary projection");
             parameters.commit();
         }
     }
@@ -538,8 +547,7 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor() {
         &program_id,
         &asset_def_id,
         &instruction,
-        init,
-        2,
+        (init, 2),
     );
     let mut state_tx =
         block.transaction_for_fastpq_testing(iroha_crypto::Hash::from(tx.hash_as_entrypoint()));
@@ -569,8 +577,7 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor() {
         .world
         .assets()
         .get(&sponsor_asset)
-        .map(|asset| asset.0.as_numeric().try_mantissa_u128().unwrap())
-        .unwrap_or(0);
+        .map_or(0, |asset| asset.0.as_numeric().try_mantissa_u128().unwrap());
     let custody_balance_after = state_tx
         .world
         .assets()
@@ -639,15 +646,18 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor_via_overlay_pipeline() {
     let chain: ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
     let mut state = new_state(world, kura, query_handle, chain.clone());
     {
-        let mut fees = state.nexus_snapshot().fees;
+        let mut fees = state.world.parameters.view().get().root_fees().unwrap().clone();
         fees.sponsor_vault_custody_account_id = custody_id.clone();
-        let mut parameters = state.world.parameters.block();
-        parameters
-            .set_parameter(iroha_data_model::parameter::Parameter::Custom(
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world).unwrap();
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            iroha_data_model::parameter::Parameter::Custom(
                 fees.into_custom_parameter()
                     .expect("explicit sponsor custody policy"),
-            ))
-            .expect("valid committed sponsor custody policy");
+            ),
+            state.world.sccp_committee_generations.allocation_budget(),
+        )
+        .expect("valid committed sponsor custody policy");
         parameters.commit();
     }
     let program_id = default_fee_sponsor_program_id(&sponsor_id);
@@ -672,8 +682,7 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor_via_overlay_pipeline() {
             &program_id,
             &asset_def_id,
             &instruction,
-            init,
-            1,
+            (init, 1),
         );
     }
     let policy_entries = vec![iroha_data_model::nexus::AxtPolicyBinding {
@@ -773,8 +782,7 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor_via_overlay_pipeline() {
         .world
         .assets()
         .get(&sponsor_asset)
-        .map(|asset| asset.0.as_numeric().try_mantissa_u128().unwrap())
-        .unwrap_or(0);
+        .map_or(0, |asset| asset.0.as_numeric().try_mantissa_u128().unwrap());
     let custody_balance_after = inspect_tx
         .world
         .assets()
@@ -803,8 +811,7 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor_via_overlay_pipeline() {
         .world
         .assets()
         .get(&tech_asset)
-        .map(|asset| asset.0.as_numeric().try_mantissa_u128().unwrap())
-        .unwrap_or(0);
+        .map_or(0, |asset| asset.0.as_numeric().try_mantissa_u128().unwrap());
     assert!(
         payee_balance_after > 0,
         "gas fee recipient must receive sponsored fee units"
@@ -849,13 +856,21 @@ fn genesis_overlay_pipeline_transactions_remain_fee_free() {
     );
     let query_handle = query::store::LiveQueryStore::start_test();
     let chain: ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
-    let mut nexus = iroha_config::parameters::actual::Nexus::default();
-    nexus.fees.base_fee = Quantity::from(1_u32);
-    nexus.fees.per_byte_fee = Quantity::zero();
-    nexus.fees.per_instruction_fee = Quantity::zero();
-    nexus.fees.per_gas_unit_fee = Quantity::from(1_u32);
-    nexus.fees.fee_asset_id = asset_def_id.clone();
-    nexus.fees.fee_sink_account_id = gas_id.clone();
+    let nexus = iroha_config::parameters::actual::Nexus::default();
+    let mut fees = iroha_config::parameters::defaults::nexus::fees::genesis_policy();
+    fees.base_fee = Quantity::from(1_u32);
+    fees.per_byte_fee = Quantity::zero();
+    fees.per_instruction_fee = Quantity::zero();
+    fees.per_gas_unit_fee = Quantity::from(1_u32);
+    fees.fee_asset_id = asset_def_id.clone();
+    fees.fee_sink_account_id = gas_id.clone();
+    // TestChainConfig signs this exact authored policy from its initial World.
+    // Node-local Nexus settings cannot replace the committed currency or rates.
+    world
+        .set_parameter_for_testing(iroha_data_model::parameter::Parameter::Custom(
+            fees.into_custom_parameter().unwrap(),
+        ))
+        .expect("explicit original fee-free-genesis fixture policy");
     let (mut state, _) = State::new_with_chain_and_network_id_and_pre_genesis_nexus_for_testing(
         world,
         nexus.clone(),

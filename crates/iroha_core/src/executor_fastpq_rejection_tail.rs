@@ -1,6 +1,6 @@
 //! Bound the complete post-rejection source tail before signed body work starts.
 //!
-//! At most one retained ballot slash and one PipelineGas transfer share the same
+//! At most one retained ballot slash and one `PipelineGas` transfer share the same
 //! E owner. Nexus burn/receipt settlement contributes no transfer. These public
 //! shape exemplars neither replace the live ledger nor describe an executable
 //! witness; every original quantity uses the widest legal positive encoding.

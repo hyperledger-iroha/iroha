@@ -94,25 +94,29 @@ fn native_packet_proof_binds_every_public_event_and_explicit_entropy() {
     assert!(proof.len() <= 2_472_320);
     for change in 0..11 {
         let mut events = bus.events.clone();
-        if change < 9 {
-            let event = events[0].as_mut().unwrap();
-            match change {
-                0 => event.space = Space::Owner,
-                1 => event.vm ^= 1,
-                2 => event.generation ^= 1,
-                3 => event.index ^= 1,
-                4 => event.write = !event.write,
-                5 => event.before[15] ^= 1,
-                6 => event.after[15] ^= 1,
-                7 => event.before_private ^= 1,
-                _ => event.after_private ^= 1,
+        match change {
+            0..=8 => {
+                let event = events[0].as_mut().unwrap();
+                match change {
+                    0 => event.space = Space::Owner,
+                    1 => event.vm ^= 1,
+                    2 => event.generation ^= 1,
+                    3 => event.index ^= 1,
+                    4 => event.write = !event.write,
+                    5 => event.before[15] ^= 1,
+                    6 => event.after[15] ^= 1,
+                    7 => event.before_private ^= 1,
+                    _ => event.after_private ^= 1,
+                }
             }
-        } else if change == 9 {
-            events[0] = None;
-        } else {
-            // Move an active packet into an existing ordered hole. Reconstruct
-            // its clock and the verifier-owned total through the constructor.
-            events.swap(0, 1);
+            9 => {
+                events[0] = None;
+            }
+            _ => {
+                // Move an active packet into an existing ordered hole. Reconstruct
+                // its clock and the verifier-owned total through the constructor.
+                events.swap(0, 1);
+            }
         }
         let changed = PublicPacketBus::new(events).unwrap();
         assert_ne!(changed.digest().unwrap(), bus.digest().unwrap());

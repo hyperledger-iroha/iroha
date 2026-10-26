@@ -122,20 +122,18 @@ pub async fn handler(
     )
     .await
 }
+type MultisigExecutionSelectors = (
+    AccountId,
+    [u8; 32],
+    MultisigProposalId,
+    HashOf<Vec<InstructionBox>>,
+);
 fn selectors(
     account: &str,
     entrypoint: &str,
     proposal: &str,
     instructions: &str,
-) -> Result<
-    (
-        AccountId,
-        [u8; 32],
-        MultisigProposalId,
-        HashOf<Vec<InstructionBox>>,
-    ),
-    Error,
-> {
+) -> Result<MultisigExecutionSelectors, Error> {
     if account.is_empty()
         || account.len() > 1024
         || [entrypoint, proposal, instructions].iter().any(|s| {

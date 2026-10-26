@@ -181,8 +181,7 @@ pub(super) fn plan(
         let mut transaction = scratch.consensus_effects_transaction()?;
         apply_indexed_slash_to_validator_without_observability(
             &mut transaction,
-            offender.lane_id,
-            &offender.validator,
+            (offender.lane_id, &offender.validator),
             original.key,
             amount.get(),
             header.creation_time_ms,

@@ -188,10 +188,10 @@ impl LaneTransactions for NoTransactions {
         Ok((Vec::new(), ()))
     }
 
-    fn retain_prefix(&self, _: &mut Self::Lease, _: usize) {}
+    fn retain_prefix(&self, (): &mut Self::Lease, _: usize) {}
     fn lease_is_current(
         &self,
-        _: &Self::Lease,
+        (): &Self::Lease,
         _: &iroha_allocation::AllocationBudget,
     ) -> Result<bool, crate::sumeragi::driver::traits::PublicationError> {
         Ok(true)
@@ -337,25 +337,23 @@ impl Fixture {
         let parent = store
             .entry(height - 1)
             .expect("read original committed predecessor")
-            .map(|entry| (entry.commit_qc.block_hash, entry.commit_qc.result))
-            .unwrap_or_else(|| {
-                (
-                    super::super::lane_genesis_hash(&self.chain.network_id(), &record),
-                    super::super::lane_genesis_result(&record),
-                )
-            });
+            .map_or_else(
+                || {
+                    (
+                        super::super::lane_genesis_hash(&self.chain.network_id(), &record),
+                        super::super::lane_genesis_result(&record),
+                    )
+                },
+                |entry| (entry.commit_qc.block_hash, entry.commit_qc.result),
+            );
         let tip = self.chain.height();
         let anchors = Arc::new(GlobalAnchors::new(
             Arc::clone(self.chain.state()),
             Arc::new(AppliedWatch::new(tip, Some(self.anchor(tip)))),
         ));
         let mut executor = LaneExecutor::<_, _, NoTransactions>::begin_recover(
-            record.clone(),
-            config.clone(),
-            instance,
-            anchors,
-            StatelessChecks::new(self.chain.network_id()),
-            None,
+            (record.clone(), config.clone(), instance),
+            (anchors, StatelessChecks::new(self.chain.network_id()), None),
             super::super::lane_genesis_hash(&self.chain.network_id(), &record),
             store.clone(),
             Arc::clone(&self.crypto),
@@ -490,7 +488,7 @@ impl Fixture {
 /// Run a borrowed consumer over the original four-validator chain and certified
 /// lane store. The producer below still executes, signs, prepares and publishes
 /// every requested lane block through the actual native custody path.
-pub(crate) fn with_original_lane_merge_fixture(
+pub fn with_original_lane_merge_fixture(
     test: impl FnOnce(
         &CertifiedTestChain,
         Arc<super::super::registry::LaneStores>,
@@ -1108,8 +1106,7 @@ fn admissibility_retains_original_committed_policy_and_limits_across_publication
     let publish = |algorithm, max_bytes| {
         let mut block = state.world.block();
         block
-            .parameters
-            .set_parameter(
+            .set_parameter_for_testing(
                 CryptoAdmissionPolicyV1::new(vec![algorithm])
                     .unwrap()
                     .into_parameter()
@@ -1117,8 +1114,7 @@ fn admissibility_retains_original_committed_policy_and_limits_across_publication
             )
             .unwrap();
         block
-            .parameters
-            .set_parameter(Parameter::Transaction(TransactionParameter::MaxTxBytes(
+            .set_parameter_for_testing(Parameter::Transaction(TransactionParameter::MaxTxBytes(
                 NonZeroU64::new(max_bytes).unwrap(),
             )))
             .unwrap();
@@ -1172,8 +1168,7 @@ fn admissibility_defers_missing_original_policy_after_later_policy_publication()
     let original_view = state.view();
     let mut block = state.world.block();
     block
-        .parameters
-        .set_parameter(
+        .set_parameter_for_testing(
             CryptoAdmissionPolicyV1::new(vec![Algorithm::Ed25519])
                 .unwrap()
                 .into_parameter()

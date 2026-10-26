@@ -2586,9 +2586,10 @@ struct ProtocolSignature {
 
 fn protocol_signatures() -> Vec<ProtocolSignature> {
     use norito::json::Value as Json;
-    let root = std::env::var_os("IROHA_KAGEMUSHA_TEST_FIXTURE_ROOT")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.."));
+    let root = std::env::var_os("IROHA_KAGEMUSHA_TEST_FIXTURE_ROOT").map_or_else(
+        || std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.."),
+        std::path::PathBuf::from,
+    );
     let path = root.join("fixtures/kagemusha/wallet_v1_vectors.json");
     let text = std::fs::read_to_string(&path).expect("read the wallet vectors");
     let json = norito::json::parse_value(&text).expect("parse the wallet vectors");

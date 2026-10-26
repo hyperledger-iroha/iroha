@@ -16,28 +16,48 @@ fn forged_mint_requires_exact_registered_event_and_payload_binding() {
     };
     let emitter = SccpSourceEmitterV1::Evm(evm.address);
     assert!(
-        bind_finalization(deployment, &emitter, [1; 32], 7, 100, [1; 32], 7, Some(100)).is_ok()
+        bind_finalization(
+            deployment,
+            &emitter,
+            ([1; 32], 7, 100),
+            ([1; 32], 7, Some(100))
+        )
+        .is_ok()
     );
     assert!(
-        bind_finalization(deployment, &emitter, [1; 32], 7, 100, [2; 32], 7, Some(100)).is_err(),
+        bind_finalization(
+            deployment,
+            &emitter,
+            ([1; 32], 7, 100),
+            ([2; 32], 7, Some(100))
+        )
+        .is_err(),
         "a different payload id must not count forged supply"
     );
     assert!(
-        bind_finalization(deployment, &emitter, [1; 32], 7, 100, [1; 32], 8, Some(100)).is_err()
+        bind_finalization(
+            deployment,
+            &emitter,
+            ([1; 32], 7, 100),
+            ([1; 32], 8, Some(100))
+        )
+        .is_err()
     );
     assert!(
-        bind_finalization(deployment, &emitter, [1; 32], 7, 100, [1; 32], 7, Some(101)).is_err()
+        bind_finalization(
+            deployment,
+            &emitter,
+            ([1; 32], 7, 100),
+            ([1; 32], 7, Some(101))
+        )
+        .is_err()
     );
     assert!(
         bind_finalization(
             deployment,
             &SccpSourceEmitterV1::Evm([99; 20]),
-            [1; 32],
-            7,
-            100,
-            [1; 32],
-            7,
-            Some(100)
+            ([1; 32], 7, 100),
+            ([1; 32], 7, Some(100))
         )
         .is_err()
     );
@@ -200,7 +220,7 @@ fn forged_mint_actual_bsc_receipt_proof_counts_once_and_checks_payload_and_windo
     let mut invalid = instruction.clone();
     invalid.proof.payload =
         SccpForgedMintPayloadV1::new(changed_payload.encode().unwrap()).unwrap();
-    assert!(execute_prove(invalid, &authority(1), &mut stx).is_err());
+    assert!(execute_prove(&(invalid), &authority(1), &mut stx).is_err());
     assert_eq!(
         records::get(&*stx.world, &(network, 1))
             .unwrap()
@@ -212,7 +232,7 @@ fn forged_mint_actual_bsc_receipt_proof_counts_once_and_checks_payload_and_windo
     let mut accounting = *records::get(&*stx.world, &(network, 1)).unwrap();
     accounting.forged_supply = u128::MAX - 99;
     records::put(&mut stx, (network, 1), accounting).unwrap();
-    assert!(execute_prove(instruction.clone(), &authority(1), &mut stx).is_err());
+    assert!(execute_prove(&(instruction.clone()), &authority(1), &mut stx).is_err());
     accounting.forged_supply = 0;
     records::put(&mut stx, (network, 1), accounting).unwrap();
     // The source event is real, but an id already recorded for this revision is not forgery.
@@ -234,9 +254,9 @@ fn forged_mint_actual_bsc_receipt_proof_counts_once_and_checks_payload_and_windo
         },
     )
     .unwrap();
-    assert!(execute_prove(instruction.clone(), &authority(1), &mut stx).is_err());
+    assert!(execute_prove(&(instruction.clone()), &authority(1), &mut stx).is_err());
     store::outbound_messages::remove(&mut stx, message_id);
-    execute_prove(instruction.clone(), &authority(1), &mut stx)
+    execute_prove(&(instruction.clone()), &authority(1), &mut stx)
         .expect("actual finalized receipt is priced once");
     assert_eq!(
         records::get(&*stx.world, &(network, 1))
@@ -245,13 +265,13 @@ fn forged_mint_actual_bsc_receipt_proof_counts_once_and_checks_payload_and_windo
         100
     );
     assert!(records::proven(&*stx.world, (network, 1), &message_id));
-    assert!(execute_prove(instruction.clone(), &authority(1), &mut stx).is_err());
+    assert!(execute_prove(&(instruction.clone()), &authority(1), &mut stx).is_err());
     let mut accounting = *records::get(&*stx.world, &(network, 1)).unwrap();
     accounting.opened_at_ms = now - 1;
     accounting.closes_at_ms = now;
     records::put(&mut stx, (network, 1), accounting).unwrap();
     assert!(
-        execute_prove(instruction, &authority(1), &mut stx)
+        execute_prove(&(instruction), &authority(1), &mut stx)
             .unwrap_err()
             .to_string()
             .contains("closed")

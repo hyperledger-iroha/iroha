@@ -27,12 +27,12 @@ use iroha_data_model::validation_fee_rewards::{
 };
 
 /// Validate optional staking and reward recovery before creating historical obligations.
-pub(crate) fn ensure_reward_identity(account: &AccountId) -> Result<(), Error> {
+pub fn ensure_reward_identity(account: &AccountId) -> Result<(), Error> {
     validate_reward_identity(account).map_err(fail)
 }
 
 /// Admission audit before enabling funded reward service on existing stake.
-pub(crate) fn ensure_existing_reward_identities(world: &impl WorldReadOnly) -> Result<(), Error> {
+pub fn ensure_existing_reward_identities(world: &impl WorldReadOnly) -> Result<(), Error> {
     for ((_, validator), row) in world.public_lane_validators().iter() {
         ensure_reward_identity(validator)?;
         ensure_reward_identity(&row.validator)?;
@@ -47,7 +47,7 @@ pub(crate) fn ensure_existing_reward_identities(world: &impl WorldReadOnly) -> R
 }
 
 /// Parent-block bonded stake keyed by its canonical staking owner and validator.
-pub(crate) type HistoricalStake = BTreeMap<(LaneId, AccountId), BTreeMap<AccountId, Quantity>>;
+pub type HistoricalStake = BTreeMap<(LaneId, AccountId), BTreeMap<AccountId, Quantity>>;
 
 /// Reconstruct the exact parent post-state, including positions removed or
 /// recovered by the block currently being executed. Pending unbonds are excluded:
@@ -57,7 +57,7 @@ pub(crate) type HistoricalStake = BTreeMap<(LaneId, AccountId), BTreeMap<Account
 /// `(lane, validator)` prefix. Unrelated retained lanes, validators and block
 /// touches are never traversed. Undo entries from within-block creation churn
 /// are read but not retained: only the first preimage can have earned service.
-pub(crate) fn before_block(
+pub fn before_block(
     block: &StateBlock<'_>,
     validators: &BTreeMap<LaneId, BTreeSet<AccountId>>,
 ) -> Result<HistoricalStake, Error> {
@@ -280,10 +280,10 @@ fn service_count(page: &ValidationFeeExposurePage) -> Result<u64, Error> {
 fn persist_tail(
     stx: &mut StateTransaction<'_, '_>,
     binding: &ValidationFeeTreasuryPayoutBindingV1,
-    archive: ValidationFeeExposureArchive,
+    archive: &ValidationFeeExposureArchive,
     service_start: u64,
 ) -> Result<(), Error> {
-    iroha_data_model::validation_fee_rewards::validate_exposure_archive(&archive).map_err(fail)?;
+    iroha_data_model::validation_fee_rewards::validate_exposure_archive(archive).map_err(fail)?;
     if archive
         .previous
         .as_ref()
@@ -297,7 +297,7 @@ fn persist_tail(
     let service_total = service_start
         .checked_add(service_count(page)?)
         .ok_or_else(|| fail("reward exposure total service overflow"))?;
-    let bytes = norito::to_bytes(&archive).map_err(|error| fail(error.to_string()))?;
+    let bytes = norito::to_bytes(archive).map_err(|error| fail(error.to_string()))?;
     let latest = ValidationFeeExposureArchiveRef {
         recorded_at_height: stx.block_height(),
         page_index: page.page_index,
@@ -396,7 +396,7 @@ pub(super) fn capture_archive(
 /// Bound the original-month service roster at optional validator admission.
 /// Include scheduled validators and block-start registrations removed by earlier
 /// sibling transactions, so later mandatory finality never discovers overflow.
-pub(crate) fn ensure_validator_capacity(
+pub fn ensure_validator_capacity(
     stx: &StateTransaction<'_, '_>,
     lane: LaneId,
     candidate: &AccountId,
@@ -539,7 +539,7 @@ pub(super) fn record_service(
             return Err(fail("reward exposure head differs from its current tail"));
         }
         if append(&mut archive.page, &stakes)? {
-            return persist_tail(stx, binding, archive, head.latest.service_start);
+            return persist_tail(stx, binding, &(archive), head.latest.service_start);
         }
         // The previous block already archived the exact sealed predecessor. There
         // is never a resident array of page locations or an archive work backlog.
@@ -562,10 +562,10 @@ pub(super) fn record_service(
         persist_tail(
             stx,
             binding,
-            ValidationFeeExposureArchive {
+            &(ValidationFeeExposureArchive {
                 page,
                 previous: Some(head.latest),
-            },
+            }),
             head.service_total,
         )?;
         stx.world.smart_contract_state.remove(old_page);
@@ -584,10 +584,10 @@ pub(super) fn record_service(
     persist_tail(
         stx,
         binding,
-        ValidationFeeExposureArchive {
+        &(ValidationFeeExposureArchive {
             page,
             previous: None,
-        },
+        }),
         0,
     )
 }
@@ -615,10 +615,10 @@ pub(super) fn seed_page_for_testing(
     persist_tail(
         stx,
         binding,
-        ValidationFeeExposureArchive {
+        &(ValidationFeeExposureArchive {
             page,
             previous: None,
-        },
+        }),
         0,
     )
     .unwrap();
@@ -746,9 +746,9 @@ mod tests {
                         stakes: BTreeMap::from([(ALICE_ID.clone(), Quantity::one())]),
                     }],
                 },
-                previous: Some(original.latest.clone()),
+                previous: Some(original.latest),
             };
-            assert!(persist_tail(stx, &binding, archive, original.service_total).is_err());
+            assert!(persist_tail(stx, &binding, &archive, original.service_total).is_err());
             assert_eq!(
                 head(stx, &binding, period, &ALICE_ID).unwrap(),
                 Some(original)
@@ -975,10 +975,13 @@ mod tests {
         let npos = SumeragiNposParameters::default();
         let asset = AssetId::new(npos.xor_asset_definition_id.clone(), ALICE_ID.clone());
         {
-            let mut parameters = world.parameters.block();
-            parameters
-                .set_parameter(Parameter::Custom(npos.into_custom_parameter()))
-                .expect("valid fixture parameters");
+            let mut parameters = crate::state::parameter_cell_block_for_testing(&world).unwrap();
+            crate::state::set_parameter_cell_for_testing(
+                &mut parameters,
+                Parameter::Custom(npos.into_custom_parameter()),
+                world.sccp_committee_generations.allocation_budget(),
+            )
+            .expect("valid fixture parameters");
             parameters.commit();
         }
         let self_key = (lane, ALICE_ID.clone(), ALICE_ID.clone());

@@ -278,28 +278,32 @@ impl ConfidentialProver {
         let result = match tree {
             ConfidentialTree::Commitments { root, leaves } => {
                 native::build_confidential_transfer_proof_v2(
-                    &self.network,
-                    &self.asset,
-                    self.spend_key.as_ref(),
+                    crate::confidential_v2::ConfidentialProofContext {
+                        network_id: &self.network,
+                        asset_definition_id: &self.asset,
+                        spend_key: self.spend_key.as_ref(),
+                        circuit_id: circuit,
+                        vk_box: &key,
+                    },
                     leaves,
                     &inputs,
                     &outputs,
                     root,
-                    circuit,
-                    &key,
                 )
             }
             ConfidentialTree::Paths { root, paths } => {
                 native::build_confidential_transfer_proof_v2_with_paths(
-                    &self.network,
-                    &self.asset,
-                    self.spend_key.as_ref(),
+                    crate::confidential_v2::ConfidentialProofContext {
+                        network_id: &self.network,
+                        asset_definition_id: &self.asset,
+                        spend_key: self.spend_key.as_ref(),
+                        circuit_id: circuit,
+                        vk_box: &key,
+                    },
                     paths,
                     &inputs,
                     &outputs,
                     root,
-                    circuit,
-                    &key,
                 )
             }
         }
@@ -357,30 +361,34 @@ impl ConfidentialProver {
             let result = match tree {
                 ConfidentialTree::Commitments { root, leaves } => {
                     native::build_confidential_unshield_proof_v3(
-                        &self.network,
-                        &self.asset,
-                        self.spend_key.as_ref(),
+                        crate::confidential_v2::ConfidentialProofContext {
+                            network_id: &self.network,
+                            asset_definition_id: &self.asset,
+                            spend_key: self.spend_key.as_ref(),
+                            circuit_id: circuit,
+                            vk_box: &key,
+                        },
                         leaves,
                         &inputs,
                         &outputs,
                         public_amount,
                         root,
-                        circuit,
-                        &key,
                     )
                 }
                 ConfidentialTree::Paths { root, paths } => {
                     native::build_confidential_unshield_proof_v3_with_paths(
-                        &self.network,
-                        &self.asset,
-                        self.spend_key.as_ref(),
+                        crate::confidential_v2::ConfidentialProofContext {
+                            network_id: &self.network,
+                            asset_definition_id: &self.asset,
+                            spend_key: self.spend_key.as_ref(),
+                            circuit_id: circuit,
+                            vk_box: &key,
+                        },
                         paths,
                         &inputs,
                         &outputs,
                         public_amount,
                         root,
-                        circuit,
-                        &key,
                     )
                 }
             }
@@ -399,28 +407,32 @@ impl ConfidentialProver {
         let result = match tree {
             ConfidentialTree::Commitments { root, leaves } => {
                 native::build_confidential_unshield_proof_v2(
-                    &self.network,
-                    &self.asset,
-                    self.spend_key.as_ref(),
+                    crate::confidential_v2::ConfidentialProofContext {
+                        network_id: &self.network,
+                        asset_definition_id: &self.asset,
+                        spend_key: self.spend_key.as_ref(),
+                        circuit_id: circuit,
+                        vk_box: &key,
+                    },
                     leaves,
                     &inputs,
                     public_amount,
                     root,
-                    circuit,
-                    &key,
                 )
             }
             ConfidentialTree::Paths { root, paths } => {
                 native::build_confidential_unshield_proof_v2_with_paths(
-                    &self.network,
-                    &self.asset,
-                    self.spend_key.as_ref(),
+                    crate::confidential_v2::ConfidentialProofContext {
+                        network_id: &self.network,
+                        asset_definition_id: &self.asset,
+                        spend_key: self.spend_key.as_ref(),
+                        circuit_id: circuit,
+                        vk_box: &key,
+                    },
                     paths,
                     &inputs,
                     public_amount,
                     root,
-                    circuit,
-                    &key,
                 )
             }
         }

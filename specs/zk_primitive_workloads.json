@@ -949,9 +949,9 @@
    "consumer": "kaigi",
    "role": "Public identity inputs of the Kaigi authorization and usage relations: digest of the canonical Norito bytes of the call identifier, the host account and the subject account.",
    "family": "native",
-   "primitive": "digest384",
-   "output_bytes": 48,
-   "domain_separation": "GoldilocksDigestDomainV1 frame: catalog, protocol, profile, role, phase, level, index, counter, then tagged exact-length payload fields in seven-byte chunks; catalog=iroha-kaigi-first-release-v1, protocol=kaigi-authorization-v1, profile=poseidon-x7-goldilocks-6x64-v1, role=call-id or account-id, phase=canonical-norito, coordinates zero.",
+   "primitive": "blake3",
+   "output_bytes": 32,
+   "domain_separation": "NativeCommitmentFrameV1: complete canonical tagged frame, catalog=iroha-kaigi-first-release-v1, protocol=kaigi-authorization-v1, fixed native-commitment-blake3-256-v1 profile, role=call-id or account-id, phase=canonical-norito, coordinates zero, one exact-length canonical Norito payload. All 256 digest bits are preserved.",
    "sites": [
     {
      "path": "crates/iroha_data_model/src/kaigi/authorization.rs",
@@ -962,23 +962,23 @@
     {
      "path": "crates/iroha_data_model/src/kaigi/authorization.rs",
      "symbol": "pub struct KaigiAuthorizationIdentitiesV1 {",
-     "literals": ["pub call_id: GoldilocksDigest384V1,"],
+     "literals": ["pub call_id: KaigiIdentityDigestV1,"],
      "compiled": "production"
     }
    ],
    "pinned_value": {
-    "words": ["0xe69637e2f1fd81d2", "0x7d8b68f13700deac", "0x17ca24006e051ed6", "0x0bec8048fc1fdf62", "0x3d589bf3292c474c", "0x4f1af501656d52f5"],
-    "encoding": "Six 64-bit words of the host identity of the unit-test vector; the value bytes are the little-endian words concatenated.",
+    "words": ["0xdab6bea523d03bb2", "0x28feb001a773041e", "0x0399b013dbe5a2f9", "0x89dd062dc106f3ac"],
+    "encoding": "Four full 64-bit little-endian words of the fixed external host identity vector; all 32 bytes are preserved.",
     "forms_scanned": "As for the catalog commitment.",
     "carriers": {
-     "crates/iroha_data_model/src/kaigi/authorization.rs": ["word-hex"]
+     "crates/iroha_data_model/src/kaigi/authorization.rs": ["word-hex", "word-hex-reversed", "bytes-hex"]
     }
    },
    "canonical_native": {
-    "decision": "changes-with-profile",
+    "decision": "already-blake3",
     "security_model": "classical-rom (the native PIPA-R relation over Pasta with IPA openings)",
     "required_property": "collision resistance: two accounts or calls with one identity would be interchangeable in a proof",
-    "note": "The digests are hashed natively and never recomputed in a circuit. Their six words each are public context of the authorization relation, so a 32-byte identity changes the instance layout, the verifying keys and the proof fixtures; the change is made together with the relation.",
+    "note": "The native frame now produces 32-byte identities. Their four words are injected without reduction as public Pasta context values; authorization and usage have 25 and 21 public rows and owner-derived k=12. Current native qualification remains pending.",
     "transcript_seed_check": {
      "binds_proof_internals": true,
      "finding": "The Core adapter projects the three identities into the public context of the relation as words; they are instance values that every proof binds.",
@@ -986,17 +986,17 @@
       {
        "path": "crates/iroha_core/src/smartcontracts/isi/kaigi/privacy/authorization_v1.rs",
        "symbol": "call_id: identities.call_id.words(),",
-       "literals": ["pub(crate) fn context_from_ledger_v1("]
+       "literals": ["pub fn context_from_ledger_v1("]
       }
      ],
-     "coordination": "The Kaigi authorization and usage relations (P.7): instance layout, verifying keys and proof fixtures."
+     "coordination": "The current authorization and usage relations, typed registry geometry, Core and JavaScript host are migrated together; current real-proof/native validation remains pending."
     }
    },
    "surface": {
     "type_tokens": ["KaigiAuthorizationIdentitiesV1", "KaigiAuthorizationContextV1", "kaigi_account_identity_v1"],
     "extensions": [".rs", ".kt", ".kts", ".java", ".swift", ".ts", ".js", ".mjs", ".cjs", ".py", ".cs", ".json", ".b64", ".norito", ".toml", ".yaml", ".yml", ".txt", ".tsv"],
     "exclude_prefixes": ["specs/", "scripts/", "docs/", "dist/"],
-    "scope_note": "The identity type, the relation context that carries its eighteen words and the account-identity helper.",
+    "scope_note": "The exact 32-byte identity type, relation contexts carrying four full u64 words per identity, and the account-identity helper.",
     "type_files": ["crates/iroha_core/src/privacy_release_evidence/kaigi.rs", "crates/iroha_core/src/smartcontracts/isi/kaigi/privacy.rs", "crates/iroha_core/src/smartcontracts/isi/kaigi/privacy/authorization_v1.rs", "crates/iroha_core/tests/kaigi_privacy.rs", "crates/iroha_core_zk/src/kaigi_authorization_v1_tests.rs", "crates/iroha_core_zk/src/native_pipa_r.rs", "crates/iroha_data_model/src/kaigi/authorization.rs", "crates/iroha_data_model/tests/fixtures/additional_frame_owner_identity_observations.json", "crates/iroha_js_host/src/kaigi_authorization_v1.rs", "crates/kaigi_zk/src/authorization_v1.rs", "crates/kaigi_zk/src/authorization_v1/tests.rs", "crates/kaigi_zk/src/native.rs", "crates/kaigi_zk/src/tests.rs", "crates/kaigi_zk/src/usage_v1.rs"],
     "sdk_owners": [
      {
@@ -3080,9 +3080,9 @@
      "roles": ["ledger.identity-hash"],
      "note": "Current matches are the scalar helper comment distinguishing field bytes from ledger digests and operator-auth tests using ledger hashes. The Kaigi proof entry point delegates to the inventoried native PIPA-R transcript."
     },
-    "digest384": {
+    "blake3": {
      "class": "role",
-     "note": "Authorization identities.",
+     "note": "Canonical native32 authorization identities, injected as four full u64 public words per identity.",
      "roles": ["kaigi.authorization-identity"]
     },
     "iroha-hash": {
@@ -3092,16 +3092,12 @@
     },
     "poseidon": {
      "class": "role",
-     "note": "The relation's sponge and the profile label of the identity digest.",
+     "note": "Proof-internal authorization and usage relation sponge over Pasta.",
      "roles": ["kaigi.relation-poseidon"]
     },
     "sha2-256": {
      "class": "evidence-metadata",
      "note": "Norito type-name tags and fixture digests in SDK code."
-    },
-    "shake": {
-     "class": "test-or-tooling",
-     "note": "A test comment naming the independent reference implementation."
     }
    }
   },
@@ -5189,6 +5185,8 @@
    "crates/iroha_core_privacy/src/privacy_engines/zk_x509/sha256_word_air.rs": ["sha2-256", "sha3"],
    "crates/iroha_core_privacy/src/privacy_engines/zk_x509/sha_call_bus_rfc_binding_tests.rs": ["digest384", "sha2-256"],
    "crates/iroha_core_privacy/src/privacy_engines/zk_x509/sha_call_bus_stark.rs": ["digest384", "sha2-256", "sha3"],
+   "crates/iroha_core_privacy/src/privacy_engines/zk_x509/sha_circuit_reuse_tests.rs": ["sha2-256"],
+   "crates/iroha_core_privacy/src/privacy_engines/zk_x509/sha_fixed_schedule_reuse_tests.rs": ["sha2-256"],
    "crates/iroha_core_privacy/src/privacy_engines/zk_x509/sha_word_stark.rs": ["sha2-256", "sha3"],
    "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark.rs": ["digest384", "sha2-256", "sha3"],
    "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/der_and_native_proof_tests.rs": ["sha2-256", "sha3"],
@@ -5554,7 +5552,7 @@
    "crates/iroha_data_model/src/isi/soracloud.rs": ["iroha-hash"],
    "crates/iroha_data_model/src/isi/zk.rs": ["iroha-hash"],
    "crates/iroha_data_model/src/kaigi.rs": ["iroha-hash"],
-   "crates/iroha_data_model/src/kaigi/authorization.rs": ["digest384", "iroha-hash", "poseidon", "shake"],
+   "crates/iroha_data_model/src/kaigi/authorization.rs": ["blake3", "iroha-hash"],
    "crates/iroha_data_model/src/kaigi/scalar.rs": ["blake2b"],
    "crates/iroha_data_model/src/nexus/axt.rs": ["blake2b", "iroha-hash", "poseidon"],
    "crates/iroha_data_model/src/nexus/axt/tests.rs": ["iroha-hash", "poseidon"],
@@ -6319,7 +6317,7 @@
    "crates/ivm_abi/tests/axt_policy_vectors.rs": ["iroha-hash"],
    "crates/ivm_abi/tests/norito_pointer_abi_roundtrip.rs": ["iroha-hash"],
    "crates/ivm_artifact_admission/src/policy.rs": ["poseidon"],
-   "crates/kaigi_zk/src/authorization_v1.rs": ["poseidon"],
+   "crates/kaigi_zk/src/authorization_v1.rs": ["blake3", "poseidon"],
    "crates/kaigi_zk/src/authorization_v1/tests.rs": ["poseidon"],
    "crates/kaigi_zk/src/lib.rs": ["poseidon"],
    "crates/kaigi_zk/src/relation_v1.rs": ["poseidon"],
@@ -6700,9 +6698,9 @@
    },
    "crates/iroha_data_model/src/kaigi/authorization.rs": {
     "hash_canonical_identity_v1": {
-     "primitives": ["digest384"],
-     "domains": ["canonical-norito", "iroha-kaigi-first-release-v1", "kaigi-authorization-v1", "poseidon-x7-goldilocks-6x64-v1"],
-     "returns": "Result<GoldilocksDigest384V1, norito::core::Error>",
+     "primitives": ["blake3"],
+     "domains": ["canonical-norito", "iroha-kaigi-first-release-v1", "kaigi-authorization-v1"],
+     "returns": "Result<KaigiIdentityDigestV1, norito::core::Error>",
      "role": "kaigi.authorization-identity"
     }
    },
@@ -7130,7 +7128,7 @@
   },
   "test_only_counts": {
    "crates/iroha_core_privacy/src/privacy_state/public_reserve_digest_tests.rs": 1,
-   "crates/iroha_data_model/src/kaigi/authorization.rs": 1,
+   "crates/iroha_data_model/src/kaigi/authorization.rs": 2,
    "crates/iroha_data_model/src/privacy/tests/protocol_and_proofs.rs": 2,
    "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe.rs": 17,
    "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/active.rs": 14,
@@ -7592,12 +7590,6 @@
   },
   "consumers_that_change": [
    {
-    "role": "kaigi.authorization-identity",
-    "change": "call_id, host_id and subject_id become 32-byte values: KaigiAuthorizationIdentitiesV1 and its schema, the eighteen context words of KaigiAuthorizationContextV1, the instance layout, verifying keys and proof fixtures of the authorization and usage relations, the Core adapter and the native JavaScript host.",
-    "wire": "Instruction and record layouts that carry the identities change; relation keys are regenerated.",
-    "coordination": "The Kaigi authorization and usage relations (P.7): instance layout, verifying keys and proof fixtures."
-   },
-   {
     "role": "execution.catalog-identity-sha384",
     "change": "The execution catalog identity is computed with the canonical frame instead of SHA-384 of a label; every frame of the fork changes with it.",
     "wire": "Execution proof statements and proofs change; proof fixtures are regenerated.",
@@ -7790,6 +7782,12 @@
     "change": "Current source uses the frozen canonical BLAKE3-256 frame for this role. Complete coherent fixture, SDK and proof-context qualification remains required; source inventory consistency is not security or release certification.",
     "wire": "The qPCS transcript context changes with them.",
     "coordination": "The ZK-AMS admission relation and the MKHE proof profile that C.5 completes and H.2 freezes; no MKHE identity changes on its own."
+   },
+   {
+    "role": "kaigi.authorization-identity",
+    "change": "The candidate migrates the model codec and native public identities to 32 bytes together with authorization/usage relation geometry, owner-derived keys, Core and JavaScript adapters; current native validation is pending.",
+    "wire": "Exact 32-byte identity codec and four full u64 context words per identity; current proof fixtures require native validation.",
+    "coordination": "The Kaigi authorization and usage relations (P.7): instance layout, verifying keys and proof fixtures."
    }
   ]
  },

@@ -5,10 +5,12 @@ const VARIABLE_CHANNELS: [u32; 9] = [5, 7, 9, 21, 23, 12, 15, 18, 25];
 #[test]
 fn variable_output_public_pair_geometry_covers_every_disclosure_shape() {
     for disclosed in 0..=4 {
-        let mut shape = ZkX509Rfc5280StarkShapeV1::default();
-        shape.disclosed_attribute_count = disclosed;
+        let mut shape = ZkX509Rfc5280StarkShapeV1 {
+            disclosed_attribute_count: disclosed,
+            ..ZkX509Rfc5280StarkShapeV1::default()
+        };
         for i in 0..usize::from(disclosed) {
-            shape.disclosed_attribute_indices[i] = i as u8;
+            shape.disclosed_attribute_indices[i] = u8::try_from(i).expect("fixture value fits u8");
         }
         let schedule = compile_zk_x509_rfc5280_stark_fixed_schedule_v1(shape).unwrap();
         let shift = u32::from(disclosed) * 2;
@@ -92,7 +94,10 @@ fn variable_output_actual_pairs_bind_counts_lengths_metadata_and_fp4_at_both_dep
                 counts[slot] += usize::from(row[BASE_D] == F::ONE);
             }
             if length && entry.offset == 7 {
-                assert_eq!(row[BASE_F].0 as usize, counts[slot]);
+                assert_eq!(
+                    usize::try_from(row[BASE_F].0).expect("fixture value fits usize"),
+                    counts[slot]
+                );
             }
         }
         for (index, count) in counts.into_iter().enumerate() {
@@ -191,16 +196,14 @@ fn variable_output_constructors_and_multiplicities_read_original_der_at_both_dep
         for (index, node) in nodes.into_iter().enumerate() {
             let signature = index >= 5;
             let capacity = if signature { 72 } else { 4096 };
-            let (start, length) = node
-                .map(|n| {
-                    let s = if signature {
-                        usize::from(n.content_start) + 1
-                    } else {
-                        usize::from(n.start)
-                    };
-                    (s, usize::from(n.content_end) - s)
-                })
-                .unwrap_or((0, 0));
+            let (start, length) = node.map_or((0, 0), |n| {
+                let s = if signature {
+                    usize::from(n.content_start) + 1
+                } else {
+                    usize::from(n.start)
+                };
+                (s, usize::from(n.content_end) - s)
+            });
             for length_row in [false, true] {
                 for offset in 0..if length_row { 8 } else { capacity } {
                     let mut row = [F::ZERO; ZK_X509_RFC5280_STARK_BASE_WIDTH_V1];
@@ -239,7 +242,7 @@ fn variable_output_constructors_and_multiplicities_read_original_der_at_both_dep
                 let ordinal = usize::from(node.node);
                 assert_eq!(
                     variable_output::node_multiplicity(&nodes, document, ordinal),
-                    length as u16
+                    u16::try_from(length).expect("fixture value fits u16")
                 );
                 let row_index = material.schedule.starts
                     [ZkX509Rfc5280StarkFamilyV1::SourceNode as usize]
@@ -367,7 +370,7 @@ fn variable_output_coherent_shadow_products_cannot_preserve_authenticated_der_bo
                     current_aux,
                     after,
                     &fixed,
-                    der_challenges_v1(),
+                    &der_challenges_v1(),
                     &challenges_v1(),
                 )
                 .unwrap()
@@ -468,8 +471,14 @@ fn variable_output_lengths_match_canonical_big_endian_io_at_both_depths() {
                 expected_length as u64
             );
             assert_eq!(length.producer_value[..6], [0; 6]);
-            assert_eq!(length.producer_value[6], (expected_length / 256) as u8);
-            assert_eq!(length.producer_value[7], (expected_length % 256) as u8);
+            assert_eq!(
+                length.producer_value[6],
+                u8::try_from(expected_length / 256).expect("fixture value fits u8")
+            );
+            assert_eq!(
+                length.producer_value[7],
+                u8::try_from(expected_length % 256).expect("fixture value fits u8")
+            );
             saw_long |= expected_length >= 256;
             for (offset, &value) in length.producer_value.iter().enumerate() {
                 let mut row = [F::ZERO; ZK_X509_RFC5280_STARK_BASE_WIDTH_V1];
@@ -494,9 +503,18 @@ fn variable_output_big_endian_length_boundary_255_256_257_preserves_every_byte()
         // Constructor-level span fixture only; the real canonical channel test above
         // independently checks complete DER parser output and both chain depths.
         let mut node = original;
-        node.content_end = node.start + length as u16;
+        node.content_end = node.start + u16::try_from(length).expect("fixture value fits u16");
         assert!(node.content_end > node.content_start);
-        let bytes = [0, 0, 0, 0, 0, 0, (length / 256) as u8, (length % 256) as u8];
+        let bytes = [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            u8::try_from(length / 256).expect("fixture value fits u8"),
+            u8::try_from(length % 256).expect("fixture value fits u8"),
+        ];
         let mut rows = vec![[F::ZERO; ZK_X509_RFC5280_STARK_BASE_WIDTH_V1]; 8];
         for (offset, row) in rows.iter_mut().enumerate() {
             row[BASE_VALUE] = F(u64::from(bytes[offset]));

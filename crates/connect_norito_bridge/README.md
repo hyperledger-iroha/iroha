@@ -86,7 +86,7 @@ unprovisioned runtime fails unavailable. Full real-wallet and physical-device
 qualification remain open.
 
 Observation selector 4 takes an empty identity and returns diagnostic UTF-8 JSON
-(`iroha.kagemusha.fold-metrics.v2`) in DATA kind 12 with zero sequence/detail. Its
+(`iroha.kagemusha.fold-metrics.v3`) in DATA kind 12 with zero sequence/detail. Its
 131,072-byte limit is specific to this selector; financial DATA limits do not change.
 The open, non-closing handle is still required. The call reads only the bounded
 background log, acquires no custody and does not cancel or schedule proofs. Unknown
@@ -151,6 +151,9 @@ clears the retained suffix while counters preserve visible loss. Poisoned log
 locks recover their observation state. JSON allocation belongs only to selector4,
 never the return path of a monetary operation.
 
+Fold `ordinal` is the head's durable sub-proof count when the turn began and `stages`
+the head's whole schedule with Ω, or null for a turn that ended before reading it;
+together they say how far a head's fold has come.
 Fold `micros` retains its eight enclosing phases. Each row also has `verification`
 counter deltas (including verification/generator memo hits) and nested `engineMicros`
 for `key_import`, `key_rebuild`, `witness`, `prove`, `self_verify` and `commit`.
@@ -232,3 +235,16 @@ platform-inapplicable codes as protocol errors. Closing the handle only releases
 before an immutable digest selection, and nothing is returned until both are durable; a missing
 selected original is refused. Recovery may complete a missing selection for a present valid
 original. This local mechanism does not establish protection against complete filesystem rollback.
+
+### X.509 ownership-signing preparation
+
+`connect_norito_zk_x509_prepare_ownership_signing_v1` and its Kotlin JNI adapter accept
+one bounded canonical Norito `PrivacyStatementV1::IrohaZkX509StarkP256V1` and
+return the ordinary native holder's exact public signing message and SHA-256
+digest. A P-256/SHA-256 message signer signs the message; a prehash signer signs
+the digest. Signing the digest with a message signer hashes twice and fails
+ownership verification. Normalize the signature to low-s fixed 64-byte `r || s`
+for the witness constructor. The subject signing key stays with the caller.
+Both C output buffers use `iroha_privacy_free_buffer`; failure publishes neither.
+This signing preparation does not authenticate governance State or provide
+proving, paired-host transport, transaction submission, or release qualification.

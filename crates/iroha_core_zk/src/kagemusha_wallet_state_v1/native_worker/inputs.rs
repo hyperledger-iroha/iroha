@@ -98,12 +98,18 @@ pub(super) fn receive_signatures(
     renewed: bool,
     root: [[u64; 4]; 2],
 ) -> Result<Vec<SignatureWitness>, Error> {
+    receive_signatures_under(objects, key(credential, CREDENTIAL_KEY)?, renewed, root)
+}
+/// The same merged leaf with the own receipt (slot 0) under `own`: Receive admission
+/// signs its placeholder own receipt under a key other than the payment key.
+pub(super) fn receive_signatures_under(
+    objects: &[Vec<u8>; 9],
+    own: [[u64; 4]; 2],
+    renewed: bool,
+    root: [[u64; 4]; 2],
+) -> Result<Vec<SignatureWitness>, Error> {
     let mut witnesses = vec![
-        signature(
-            ObjectKind::Receipt,
-            &objects[6],
-            key(credential, CREDENTIAL_KEY)?,
-        )?,
+        signature(ObjectKind::Receipt, &objects[6], own)?,
         signature(
             ObjectKind::Receipt,
             &objects[2],
@@ -160,6 +166,26 @@ fn incoming_send_selector(payment: &KagemushaWalletPaymentV1) -> Result<u8, Erro
         .unwrap_or(0);
     Ok(2 + selected)
 }
+/// Receive's compiled route: a Request quoting an earlier credential of this incarnation
+/// is ReceiveRenewed, and the Payment's lineage controls select the incoming σ_send key.
+pub(super) fn receive_route(
+    renewed: bool,
+    payment: &KagemushaWalletPaymentV1,
+) -> Result<OperationRoute, Error> {
+    let route = OperationRoute {
+        variant: if renewed {
+            Variant::ReceiveRenewed
+        } else {
+            Variant::Receive
+        },
+        own: 6,
+        incoming: Some(incoming_send_selector(payment)?),
+    };
+    if !compiled_routes().contains(&route) {
+        return Err(Error::Invalid("uncompiled native operation route"));
+    }
+    Ok(route)
+}
 fn selector(step: &ReleasedStep) -> Result<OperationRoute, Error> {
     use KagemushaWalletOperationKindV1 as K;
     use KagemushaWalletRetainedInputRoleV1 as R;
@@ -181,14 +207,11 @@ fn selector(step: &ReleasedStep) -> Result<OperationRoute, Error> {
                 custody_codec::decode(original(step, R::Request)?)?;
             let payment: KagemushaWalletPaymentV1 =
                 custody_codec::decode(original(step, R::Payment)?)?;
-            let variant = if request.receiver_credential.credential_digest()
-                == step.frozen.credential.credential_digest()
-            {
-                Variant::Receive
-            } else {
-                Variant::ReceiveRenewed
-            };
-            (variant, 6, Some(incoming_send_selector(&payment)?))
+            return receive_route(
+                request.receiver_credential.credential_digest()
+                    != step.frozen.credential.credential_digest(),
+                &payment,
+            );
         }
         K::ArchiveSent => {
             let evidence: KagemushaWalletCreditedV1 =
@@ -374,7 +397,6 @@ impl Fields {
 
 impl NativeFoldWorkerV1 {
     fn owner(
-        &self,
         preparation: &PreparationV1<'_>,
         custody: &mut FoldCustodyV1<'_>,
         predecessor: bool,
@@ -464,25 +486,25 @@ impl NativeFoldWorkerV1 {
             fold_metrics::stage(FoldStageV1::Q);
             self.sources
                 .import_q_cancellable(route, checkpoints, originals, self.read, token)
-                .map_err(artifact)?;
+                .map_err(|error| artifact(&error))?;
         } else if checkpoints < stages {
             let position = checkpoints - q_count;
             if position % 2 == 1 {
                 fold_metrics::stage(FoldStageV1::W);
                 self.sources
                     .import_w_cancellable(route, position / 2, originals, self.read, token)
-                    .map_err(artifact)?;
+                    .map_err(|error| artifact(&error))?;
             } else {
                 fold_metrics::stage(FoldStageV1::A);
                 self.sources
                     .import_a_cancellable(route, position / 2, originals, self.read, token)
-                    .map_err(artifact)?;
+                    .map_err(|error| artifact(&error))?;
             }
         } else {
             fold_metrics::stage(FoldStageV1::Omega);
             self.sources
                 .import_omega_cancellable(originals, self.read, token)
-                .map_err(artifact)?;
+                .map_err(|error| artifact(&error))?;
         }
         cancellation.check()
     }
@@ -630,9 +652,9 @@ impl NativeFoldWorkerV1 {
         super::retention::count(|counts| counts.derivations += 1);
         let preparation = proof(PreparationV1::new(&self.installed))?
             .with_cancellation(cancellation.prover_token());
-        let owner = self.owner(&preparation, custody, false)?;
+        let owner = Self::owner(&preparation, custody, false)?;
         let current = if predecessor.is_some() {
-            Some(self.owner(&preparation, custody, true)?)
+            Some(Self::owner(&preparation, custody, true)?)
         } else {
             None
         };
@@ -1047,7 +1069,7 @@ mod tests {
                 assert_eq!(
                     incoming_send_selector(&payment).unwrap(),
                     2 + if carried_controls <= 3 {
-                        carried_controls as u8
+                        u8::try_from(carried_controls).expect("two-bit controls")
                     } else {
                         0
                     }

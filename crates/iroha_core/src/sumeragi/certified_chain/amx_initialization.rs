@@ -2,7 +2,7 @@
 //!
 //! Shared native I/O and signed-genesis authentication remain the only kernels. This stage
 //! supplies neither result finality nor a lifetime-free recovery job. The same raw frame and
-//! prepaid body transfer into CertifiedChain before this empty stage retires.
+//! prepaid body transfer into `CertifiedChain` before this empty stage retires.
 
 use super::*;
 use iroha_data_model::{
@@ -12,7 +12,7 @@ use iroha_data_model::{
 
 /// Private original-source initialization used by the native AMX reader.
 /// An unfinished stage retains its exact pool, slot, raw bytes and prepaid body.
-pub(crate) struct AmxChainInitialization<'v, V: StateReadOnly> {
+pub struct AmxChainInitialization<'v, V: StateReadOnly> {
     view: &'v V,
     // Retire completed policy values/charges before the body/raw source and pool.
     authentication: Option<OriginalGenesisRead>,
@@ -21,7 +21,7 @@ pub(crate) struct AmxChainInitialization<'v, V: StateReadOnly> {
     completed: bool,
 }
 impl<'v, V: StateReadOnly> AmxChainInitialization<'v, V> {
-    /// Select the same State-pinned genesis identity as CertifiedChain::new, without I/O.
+    /// Select the same State-pinned genesis identity as `CertifiedChain::new`, without I/O.
     pub(crate) fn new(view: &'v V) -> Result<Self, ExecutionAttemptError<ChainReadError>> {
         Ok(Self {
             view,

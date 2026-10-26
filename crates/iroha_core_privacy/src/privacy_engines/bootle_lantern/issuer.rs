@@ -44,6 +44,7 @@ use super::{
 use crate::privacy_engines::prover_randomness::{
     HealthCheckedCryptoRngV1, ProverRandomnessErrorV1,
 };
+use core::ops::Add;
 use iroha_data_model::{
     NetworkId,
     privacy::{
@@ -68,7 +69,7 @@ pub const BOOTLE_LANTERN_ISSUER_PROFILE_DESCRIPTOR_V1: &[u8] = b"falcon512-ntru-
 /// This descriptor is shared by the broker and the native release composer so
 /// neither executable can silently redefine the slot, operations, custody,
 /// authentication, RNG, replay, export, or lifecycle contract.
-pub const TAIRA_BOOTLE_LANTERN_BROKER_CONTRACT_V1: &[u8] = b"binary:taira_bootle_lantern_broker|slot:55|operations:authenticate=119,prepare-authorization=120,validate-request=121,issue-validated=122|transport:stock-runtime-provider-broker-v1-same-service-uid|credentials:three-explicit-systemd-encrypted-or-container-read-only-bind-files+nofollow+effective-service-owner-or-exact-unit-systemd-root-owner+mode0400+single-link+bounded-read+immutable-opened-snapshot|authentication:opaque-bearer-domain-hash+constant-time-fixed-digest-compare+stable-principal-seed+bounded-nonzero-request-context+exact-height-lifetime|issuer:native-falcon512-key-from-exact-seed|rng:core-owned-rand_core_06-OsRng-per-prepare-or-issue|policy:epoch1-active+no-required-disclosures+eight-empty-allowlists|public-export:canonical-InstructionBox-registration-bytes+sha256+complete-public-policy-json|state:torii-only-preflight-claim-complete-fail|lifecycle:joined-SIGINT+SIGTERM-orderly-cleanup|first-release:no-legacy-or-direct-issuance";
+pub const TAIRA_BOOTLE_LANTERN_BROKER_CONTRACT_V1: &[u8] = b"binary:taira_bootle_lantern_broker|slot:55|operations:authenticate=119,prepare-authorization=120,validate-request=121,issue-validated=122|transport:stock-runtime-provider-broker-v1-same-service-uid|credentials:three-explicit-systemd-encrypted-or-container-read-only-bind-files+nofollow+effective-service-owner-or-exact-unit-systemd-root-owner+mode0400+single-link+bounded-read+immutable-opened-snapshot|authentication:opaque-bearer-domain-hash+constant-time-fixed-digest-compare+stable-principal-seed+bounded-nonzero-request-context+exact-height-lifetime|issuer:native-falcon512-key-from-exact-seed|rng:core-owned-SysRng-per-prepare-or-issue|policy:epoch1-active+no-required-disclosures+eight-empty-allowlists|public-export:canonical-InstructionBox-registration-bytes+sha256+complete-public-policy-json|state:torii-only-preflight-claim-complete-fail|lifecycle:joined-SIGINT+SIGTERM-orderly-cleanup|first-release:no-legacy-or-direct-issuance";
 /// Exact authorization/request/response wire contract owned by this implementation.
 ///
 /// Header validation establishes the structural message purpose. Complete cryptographic purpose
@@ -416,6 +417,16 @@ impl BootleLanternIssuerKeyPairV1 {
             && policy.validate().is_ok()
     }
 }
+/// Governed statement, chain and issuer-policy bindings for blind issuance.
+#[derive(Clone, Copy, Debug)]
+pub struct BootleLanternIssuanceContextV1<'a> {
+    /// Canonical privacy statement context.
+    pub context: &'a PrivacyStatementContextV1,
+    /// Authoritative genesis hash for the chain.
+    pub canonical_genesis_hash: [u8; 32],
+    /// Governed issuer policy checked by the operation.
+    pub policy: &'a BootleLanternIssuerPolicyV1,
+}
 /// Generate and atomically register one bounded blind-issuance authorization.
 ///
 /// `requester_authorization_digest` is the issuer deployment's non-zero authorization decision (for
@@ -428,15 +439,18 @@ impl BootleLanternIssuerKeyPairV1 {
 /// lifetime, unhealthy randomness, identifier collision exhaustion, or any persistence failure.
 pub fn issuer_authorize_blind_issuance_with_rng_v1<R: TryCryptoRng + TryRng>(
     issuer: &BootleLanternIssuerKeyPairV1,
-    context: &PrivacyStatementContextV1,
-    canonical_genesis_hash: [u8; 32],
-    policy: &BootleLanternIssuerPolicyV1,
+    issuance: BootleLanternIssuanceContextV1<'_>,
     requester_authorization_digest: [u8; 32],
     issued_at_height: u64,
     expires_at_height: u64,
     store: &dyn BootleLanternIssuanceStoreV1,
     rng: &mut R,
 ) -> Result<BootleLanternIssuanceAuthorizationV1, BootleLanternIssuanceErrorV1> {
+    let BootleLanternIssuanceContextV1 {
+        context,
+        canonical_genesis_hash,
+        policy,
+    } = issuance;
     let credential_scope_digest = validate_authorization_candidate_inputs_v1(
         issuer,
         context,
@@ -471,7 +485,7 @@ pub fn issuer_authorize_blind_issuance_with_rng_v1<R: TryCryptoRng + TryRng>(
             authorization.expires_at_height,
         ) {
             Ok(()) => return Ok(authorization),
-            Err(BootleLanternIssuanceStoreErrorV1::AuthorizationExists) => continue,
+            Err(BootleLanternIssuanceStoreErrorV1::AuthorizationExists) => {}
             Err(_) => return Err(BootleLanternIssuanceErrorV1::IssuanceStoreFailed),
         }
     }
@@ -493,14 +507,17 @@ pub fn issuer_prepare_blind_issuance_authorization_candidate_with_rng_v1<
     R: TryCryptoRng + TryRng,
 >(
     issuer: &BootleLanternIssuerKeyPairV1,
-    context: &PrivacyStatementContextV1,
-    canonical_genesis_hash: [u8; 32],
-    policy: &BootleLanternIssuerPolicyV1,
+    issuance: BootleLanternIssuanceContextV1<'_>,
     requester_authorization_digest: [u8; 32],
     issued_at_height: u64,
     expires_at_height: u64,
     rng: &mut R,
 ) -> Result<BootleLanternIssuanceAuthorizationV1, BootleLanternIssuanceErrorV1> {
+    let BootleLanternIssuanceContextV1 {
+        context,
+        canonical_genesis_hash,
+        policy,
+    } = issuance;
     let credential_scope_digest = validate_authorization_candidate_inputs_v1(
         issuer,
         context,
@@ -551,9 +568,11 @@ pub fn issuer_prepare_blind_issuance_authorization_candidate_v1(
     let mut rng = SysRng;
     issuer_prepare_blind_issuance_authorization_candidate_with_rng_v1(
         issuer,
-        context,
-        canonical_genesis_hash,
-        policy,
+        crate::privacy_engines::bootle_lantern::issuer::BootleLanternIssuanceContextV1 {
+            context,
+            canonical_genesis_hash,
+            policy,
+        },
         requester_authorization_digest,
         issued_at_height,
         expires_at_height,
@@ -1343,14 +1362,17 @@ pub fn issuer_issue_validated_blind_issuance_request_encoded_with_rng_v1<
     R: TryCryptoRng + TryRng,
 >(
     issuer: &BootleLanternIssuerKeyPairV1,
-    context: &PrivacyStatementContextV1,
-    canonical_genesis_hash: [u8; 32],
-    policy: &BootleLanternIssuerPolicyV1,
+    issuance: BootleLanternIssuanceContextV1<'_>,
     authorization: &BootleLanternIssuanceAuthorizationV1,
     request_bytes: &[u8],
     current_height: u64,
     rng: &mut R,
 ) -> Result<BootleLanternBlindIssuanceResponseV1, BootleLanternIssuanceErrorV1> {
+    let BootleLanternIssuanceContextV1 {
+        context,
+        canonical_genesis_hash,
+        policy,
+    } = issuance;
     let validated = validate_encoded_request_for_issuer_v1(
         issuer,
         context,
@@ -1366,8 +1388,10 @@ pub fn issuer_issue_validated_blind_issuance_request_encoded_with_rng_v1<
     let response = issue_claimed_request_v1(
         issuer,
         validated.matrix_seed,
-        &validated.scope,
-        validated.scope_digest,
+        IssuerSigningScopeV1 {
+            scope: &validated.scope,
+            scope_digest: validated.scope_digest,
+        },
         policy,
         &validated.request,
         &mut tag_rng,
@@ -1398,9 +1422,11 @@ pub fn issuer_issue_validated_blind_issuance_request_encoded_v1(
     let mut rng = SysRng;
     issuer_issue_validated_blind_issuance_request_encoded_with_rng_v1(
         issuer,
-        context,
-        canonical_genesis_hash,
-        policy,
+        crate::privacy_engines::bootle_lantern::issuer::BootleLanternIssuanceContextV1 {
+            context,
+            canonical_genesis_hash,
+            policy,
+        },
         authorization,
         request_bytes,
         current_height,
@@ -1516,24 +1542,29 @@ fn validate_encoded_request_v1(
 /// exact cached response without consuming the supplied RNG.
 pub fn issuer_blind_issue_once_encoded_with_rng_v1<R: TryCryptoRng + TryRng>(
     issuer: &BootleLanternIssuerKeyPairV1,
-    context: &PrivacyStatementContextV1,
-    canonical_genesis_hash: [u8; 32],
-    policy: &BootleLanternIssuerPolicyV1,
+    issuance: BootleLanternIssuanceContextV1<'_>,
     authorization: &BootleLanternIssuanceAuthorizationV1,
     request_bytes: &[u8],
     current_height: u64,
     store: &dyn BootleLanternIssuanceStoreV1,
     rng: &mut R,
 ) -> Result<BootleLanternBlindIssuanceResponseV1, BootleLanternIssuanceErrorV1> {
+    let BootleLanternIssuanceContextV1 {
+        context,
+        canonical_genesis_hash,
+        policy,
+    } = issuance;
     let request = BootleLanternBlindIssuanceRequestV1::decode_exact(
         request_bytes,
         u32::try_from(BLIND_ISSUANCE_REQUEST_BYTES_V1).expect("fixed ILQ1 request length fits u32"),
     )?;
     issuer_blind_issue_once_with_rng_v1(
         issuer,
-        context,
-        canonical_genesis_hash,
-        policy,
+        crate::privacy_engines::bootle_lantern::issuer::BootleLanternIssuanceContextV1 {
+            context,
+            canonical_genesis_hash,
+            policy,
+        },
         authorization,
         &request,
         current_height,
@@ -1551,15 +1582,18 @@ pub fn issuer_blind_issue_once_encoded_with_rng_v1<R: TryCryptoRng + TryRng>(
 /// authorization to fresh.
 pub(crate) fn issuer_blind_issue_once_with_rng_v1<R: TryCryptoRng + TryRng>(
     issuer: &BootleLanternIssuerKeyPairV1,
-    context: &PrivacyStatementContextV1,
-    canonical_genesis_hash: [u8; 32],
-    policy: &BootleLanternIssuerPolicyV1,
+    issuance: BootleLanternIssuanceContextV1<'_>,
     authorization: &BootleLanternIssuanceAuthorizationV1,
     request: &BootleLanternBlindIssuanceRequestV1,
     current_height: u64,
     store: &dyn BootleLanternIssuanceStoreV1,
     rng: &mut R,
 ) -> Result<BootleLanternBlindIssuanceResponseV1, BootleLanternIssuanceErrorV1> {
+    let BootleLanternIssuanceContextV1 {
+        context,
+        canonical_genesis_hash,
+        policy,
+    } = issuance;
     require_active_policy_v1(policy)?;
     if !issuer.matches_policy(policy) {
         return Err(BootleLanternIssuanceErrorV1::IssuerKeyPolicyMismatch);
@@ -1610,8 +1644,10 @@ pub(crate) fn issuer_blind_issue_once_with_rng_v1<R: TryCryptoRng + TryRng>(
     let issue_result = issue_claimed_request_v1(
         issuer,
         matrix_seed,
-        &scope,
-        scope_digest,
+        IssuerSigningScopeV1 {
+            scope: &scope,
+            scope_digest,
+        },
         policy,
         request,
         &mut tag_rng,
@@ -1651,16 +1687,24 @@ pub(crate) fn issuer_blind_issue_once_with_rng_v1<R: TryCryptoRng + TryRng>(
     }
     Ok(response)
 }
+#[derive(Clone, Copy)]
+struct IssuerSigningScopeV1<'a> {
+    scope: &'a BootleLanternCredentialScopeV1,
+    scope_digest: [u8; 32],
+}
 fn issue_claimed_request_v1<RTag: TryCryptoRng + TryRng, RPreimage: TryCryptoRng + TryRng>(
     issuer: &BootleLanternIssuerKeyPairV1,
     matrix_seed: super::transcript::MatrixSeedV1,
-    scope: &BootleLanternCredentialScopeV1,
-    scope_digest: [u8; 32],
+    signing_scope: IssuerSigningScopeV1<'_>,
     policy: &BootleLanternIssuerPolicyV1,
     request: &BootleLanternBlindIssuanceRequestV1,
     tag_rng: &mut RTag,
     preimage_rng: &mut RPreimage,
 ) -> Result<BootleLanternBlindIssuanceResponseV1, BootleLanternIssuanceErrorV1> {
+    let IssuerSigningScopeV1 {
+        scope,
+        scope_digest,
+    } = signing_scope;
     let mut checked_tag_rng =
         HealthCheckedCryptoRngV1::new(tag_rng).map_err(map_randomness_error_v1)?;
     let tag = sample_tag_v1(&mut checked_tag_rng)?;
@@ -1781,6 +1825,10 @@ fn map_store_claim_error_v1(
 ///
 /// Rejects response, policy, scope, disclosure, norm, or application-equation
 /// mismatch. Holder state is consumed and wiped on every path.
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "The holder state and issuer response must be consumed and zeroized on success and every failure path."
+)]
 pub fn holder_finalize_blind_issuance_v1(
     state: BootleLanternBlindIssuanceStateV1,
     context: &PrivacyStatementContextV1,
@@ -1982,24 +2030,24 @@ fn masked_target_v1(
         .map_err(|_| BootleLanternIssuanceErrorV1::MatrixExpansionFailed)?;
     let attribute_polynomials = attributes.map(ApplicationPolynomialV1::from_direct_attribute);
     let mut target = [ApplicationPolynomialV1::ZERO; APPLICATION_ROWS_V1];
-    for row in 0..APPLICATION_ROWS_V1 {
-        for column in 0..randomness.len() {
+    for (row, output) in target.iter_mut().enumerate() {
+        for (column, randomizer) in randomness.iter().enumerate() {
             let coefficient = a_r
                 .get(
                     u16::try_from(row).expect("fixed row fits u16"),
                     u16::try_from(column).expect("fixed column fits u16"),
                 )
                 .ok_or(BootleLanternIssuanceErrorV1::MatrixExpansionFailed)?;
-            target[row] = target[row].add(coefficient.multiply(randomness[column]));
+            *output = output.add(coefficient.multiply(*randomizer));
         }
-        for column in 0..attribute_polynomials.len() {
+        for (column, attribute) in attribute_polynomials.iter().enumerate() {
             let coefficient = a_m
                 .get(
                     u16::try_from(row).expect("fixed row fits u16"),
                     u16::try_from(column).expect("fixed column fits u16"),
                 )
                 .ok_or(BootleLanternIssuanceErrorV1::MatrixExpansionFailed)?;
-            target[row] = target[row].add(coefficient.multiply(attribute_polynomials[column]));
+            *output = output.add(coefficient.multiply(*attribute));
         }
     }
     Ok(target)
@@ -2045,7 +2093,7 @@ fn centered_r512_to_r64_rank8_v1(
         for (coefficient, output_coefficient) in coefficients.iter_mut().enumerate() {
             *output_coefficient = i64::from(input[8 * coefficient + row]);
         }
-        output[row] = ApplicationPolynomialV1::from_centered_coefficients(*coefficients);
+        output[row] = ApplicationPolynomialV1::from_centered_coefficients(&coefficients);
     }
     Ok(output)
 }
@@ -2544,7 +2592,7 @@ mod tests {
                 self.state ^= self.state << 13;
                 self.state ^= self.state >> 7;
                 self.state ^= self.state << 17;
-                *byte = self.state as u8;
+                *byte = self.state.to_le_bytes()[0];
             }
             Ok(())
         }
@@ -2681,9 +2729,11 @@ mod tests {
             let mut authorization_rng = TestRng::healthy(0x1f83_d9ab_fb41_bd6b);
             let authorization = issuer_authorize_blind_issuance_with_rng_v1(
                 &issuer,
-                &context,
-                genesis_hash,
-                &policy,
+                crate::privacy_engines::bootle_lantern::issuer::BootleLanternIssuanceContextV1 {
+                    context: &context,
+                    canonical_genesis_hash: genesis_hash,
+                    policy: &policy,
+                },
                 [0x71; 32],
                 10,
                 20,
@@ -2705,9 +2755,11 @@ mod tests {
             let mut issuer_issuance_rng = TestRng::healthy(0xa54f_f53a_5f1d_36f1);
             let response = issuer_blind_issue_once_encoded_with_rng_v1(
                 &issuer,
-                &context,
-                genesis_hash,
-                &policy,
+                crate::privacy_engines::bootle_lantern::issuer::BootleLanternIssuanceContextV1 {
+                    context: &context,
+                    canonical_genesis_hash: genesis_hash,
+                    policy: &policy,
+                },
                 &authorization,
                 &request_wire,
                 11,
@@ -2823,9 +2875,11 @@ mod tests {
         let mut rng = TestRng::healthy(0x510e_527f_ade6_82d1);
         let authorization = issuer_prepare_blind_issuance_authorization_candidate_with_rng_v1(
             &fixture.issuer,
-            &fixture.context,
-            fixture.genesis_hash,
-            &fixture.policy,
+            crate::privacy_engines::bootle_lantern::issuer::BootleLanternIssuanceContextV1 {
+                context: &fixture.context,
+                canonical_genesis_hash: fixture.genesis_hash,
+                policy: &fixture.policy,
+            },
             [0x81; 32],
             21,
             31,
@@ -2924,9 +2978,11 @@ mod tests {
         assert!(
             issuer_issue_validated_blind_issuance_request_encoded_with_rng_v1(
                 &fixture.issuer,
-                &fixture.context,
-                fixture.genesis_hash,
-                &fixture.policy,
+                crate::privacy_engines::bootle_lantern::issuer::BootleLanternIssuanceContextV1 {
+                    context: &fixture.context,
+                    canonical_genesis_hash: fixture.genesis_hash,
+                    policy: &fixture.policy
+                },
                 &fixture.authorization,
                 &substituted_request,
                 11,
@@ -2938,9 +2994,11 @@ mod tests {
         assert!(
             issuer_issue_validated_blind_issuance_request_encoded_with_rng_v1(
                 &fixture.issuer,
-                &fixture.context,
-                [0; 32],
-                &fixture.policy,
+                crate::privacy_engines::bootle_lantern::issuer::BootleLanternIssuanceContextV1 {
+                    context: &fixture.context,
+                    canonical_genesis_hash: [0; 32],
+                    policy: &fixture.policy
+                },
                 &fixture.authorization,
                 &request_wire,
                 11,
@@ -2952,9 +3010,11 @@ mod tests {
         let mut issue_rng = TestRng::healthy(0x9b05_688c_2b3e_6c1f);
         let response = issuer_issue_validated_blind_issuance_request_encoded_with_rng_v1(
             &fixture.issuer,
-            &fixture.context,
-            fixture.genesis_hash,
-            &fixture.policy,
+            crate::privacy_engines::bootle_lantern::issuer::BootleLanternIssuanceContextV1 {
+                context: &fixture.context,
+                canonical_genesis_hash: fixture.genesis_hash,
+                policy: &fixture.policy,
+            },
             &fixture.authorization,
             &request_wire,
             11,
@@ -3212,9 +3272,11 @@ mod tests {
         let store = fresh_store_v1(fixture);
         let error = issuer_blind_issue_once_encoded_with_rng_v1(
             &fixture.issuer,
-            &fixture.context,
-            fixture.genesis_hash,
-            &fixture.policy,
+            crate::privacy_engines::bootle_lantern::issuer::BootleLanternIssuanceContextV1 {
+                context: &fixture.context,
+                canonical_genesis_hash: fixture.genesis_hash,
+                policy: &fixture.policy,
+            },
             &fixture.authorization,
             &malformed,
             11,
@@ -3318,9 +3380,11 @@ mod tests {
         assert_eq!(
             issuer_authorize_blind_issuance_with_rng_v1(
                 &fixture.issuer,
-                &fixture.context,
-                fixture.genesis_hash,
-                &fixture.policy,
+                crate::privacy_engines::bootle_lantern::issuer::BootleLanternIssuanceContextV1 {
+                    context: &fixture.context,
+                    canonical_genesis_hash: fixture.genesis_hash,
+                    policy: &fixture.policy
+                },
                 raw(0x93),
                 10,
                 20,
@@ -3433,9 +3497,11 @@ mod tests {
             let store = BootleLanternInMemoryIssuanceStoreV1::new();
             let error = issuer_authorize_blind_issuance_with_rng_v1(
                 &fixture.issuer,
-                &fixture.context,
-                fixture.genesis_hash,
-                &fixture.policy,
+                crate::privacy_engines::bootle_lantern::issuer::BootleLanternIssuanceContextV1 {
+                    context: &fixture.context,
+                    canonical_genesis_hash: fixture.genesis_hash,
+                    policy: &fixture.policy,
+                },
                 requester_digest,
                 issued_at_height,
                 expires_at_height,
@@ -3496,9 +3562,11 @@ mod tests {
             let store = fresh_store_v1(fixture);
             let error = issuer_blind_issue_once_with_rng_v1(
                 &fixture.issuer,
-                &context,
-                canonical_genesis_hash,
-                &fixture.policy,
+                crate::privacy_engines::bootle_lantern::issuer::BootleLanternIssuanceContextV1 {
+                    context: &context,
+                    canonical_genesis_hash,
+                    policy: &fixture.policy,
+                },
                 &fixture.authorization,
                 &fixture.request,
                 11,
@@ -3525,9 +3593,11 @@ mod tests {
         let store = fresh_store_v1(fixture);
         let error = issuer_blind_issue_once_with_rng_v1(
             &fixture.issuer,
-            &fixture.context,
-            other_genesis,
-            &fixture.policy,
+            crate::privacy_engines::bootle_lantern::issuer::BootleLanternIssuanceContextV1 {
+                context: &fixture.context,
+                canonical_genesis_hash: other_genesis,
+                policy: &fixture.policy,
+            },
             &fixture.authorization,
             &fixture.request,
             11,
@@ -3551,9 +3621,11 @@ mod tests {
         let expired_store = fresh_store_v1(fixture);
         let error = issuer_blind_issue_once_with_rng_v1(
             &fixture.issuer,
-            &fixture.context,
-            fixture.genesis_hash,
-            &fixture.policy,
+            crate::privacy_engines::bootle_lantern::issuer::BootleLanternIssuanceContextV1 {
+                context: &fixture.context,
+                canonical_genesis_hash: fixture.genesis_hash,
+                policy: &fixture.policy,
+            },
             &fixture.authorization,
             &fixture.request,
             fixture.authorization.expires_at_height + 1,
@@ -3570,9 +3642,11 @@ mod tests {
         let rotated_store = fresh_store_v1(fixture);
         let error = issuer_blind_issue_once_with_rng_v1(
             &fixture.issuer,
-            &fixture.context,
-            fixture.genesis_hash,
-            &rotated_policy,
+            crate::privacy_engines::bootle_lantern::issuer::BootleLanternIssuanceContextV1 {
+                context: &fixture.context,
+                canonical_genesis_hash: fixture.genesis_hash,
+                policy: &rotated_policy,
+            },
             &fixture.authorization,
             &fixture.request,
             11,
@@ -3605,9 +3679,11 @@ mod tests {
         let wrong_key_store = fresh_store_v1(fixture);
         let error = issuer_blind_issue_once_with_rng_v1(
             &wrong_key,
-            &fixture.context,
-            fixture.genesis_hash,
-            &fixture.policy,
+            crate::privacy_engines::bootle_lantern::issuer::BootleLanternIssuanceContextV1 {
+                context: &fixture.context,
+                canonical_genesis_hash: fixture.genesis_hash,
+                policy: &fixture.policy,
+            },
             &fixture.authorization,
             &fixture.request,
             11,
@@ -3625,9 +3701,11 @@ mod tests {
         let mut authorization_rng = TestRng::healthy(0x1319_8a2e_0370_7344);
         let new_authorization = issuer_authorize_blind_issuance_with_rng_v1(
             &fixture.issuer,
-            &fixture.context,
-            fixture.genesis_hash,
-            &fixture.policy,
+            crate::privacy_engines::bootle_lantern::issuer::BootleLanternIssuanceContextV1 {
+                context: &fixture.context,
+                canonical_genesis_hash: fixture.genesis_hash,
+                policy: &fixture.policy,
+            },
             raw(0x92),
             10,
             20,
@@ -3641,9 +3719,11 @@ mod tests {
         );
         let error = issuer_blind_issue_once_with_rng_v1(
             &fixture.issuer,
-            &fixture.context,
-            fixture.genesis_hash,
-            &fixture.policy,
+            crate::privacy_engines::bootle_lantern::issuer::BootleLanternIssuanceContextV1 {
+                context: &fixture.context,
+                canonical_genesis_hash: fixture.genesis_hash,
+                policy: &fixture.policy,
+            },
             &new_authorization,
             &fixture.request,
             11,
@@ -3673,9 +3753,11 @@ mod tests {
         let mut issuer_issuance_rng = TestRng::healthy(0xa54f_f53a_5f1d_36f1);
         let response = issuer_blind_issue_once_encoded_with_rng_v1(
             &fixture.issuer,
-            &fixture.context,
-            fixture.genesis_hash,
-            &fixture.policy,
+            crate::privacy_engines::bootle_lantern::issuer::BootleLanternIssuanceContextV1 {
+                context: &fixture.context,
+                canonical_genesis_hash: fixture.genesis_hash,
+                policy: &fixture.policy,
+            },
             &fixture.authorization,
             &request_wire,
             11,
@@ -3686,9 +3768,11 @@ mod tests {
         let expected = response.encode().expect("canonical response");
         let cached = issuer_blind_issue_once_encoded_with_rng_v1(
             &fixture.issuer,
-            &fixture.context,
-            fixture.genesis_hash,
-            &fixture.policy,
+            crate::privacy_engines::bootle_lantern::issuer::BootleLanternIssuanceContextV1 {
+                context: &fixture.context,
+                canonical_genesis_hash: fixture.genesis_hash,
+                policy: &fixture.policy,
+            },
             &fixture.authorization,
             &request_wire,
             fixture.authorization.expires_at_height + 1,
@@ -3732,9 +3816,11 @@ mod tests {
             completion.expect("scope/policy substitution reaches issuer cache validation");
             let error = issuer_blind_issue_once_encoded_with_rng_v1(
                 &fixture.issuer,
-                &fixture.context,
-                fixture.genesis_hash,
-                &fixture.policy,
+                crate::privacy_engines::bootle_lantern::issuer::BootleLanternIssuanceContextV1 {
+                    context: &fixture.context,
+                    canonical_genesis_hash: fixture.genesis_hash,
+                    policy: &fixture.policy,
+                },
                 &fixture.authorization,
                 &request_wire,
                 11,
@@ -3754,9 +3840,11 @@ mod tests {
         let store = fresh_store_v1(fixture);
         let error = issuer_blind_issue_once_with_rng_v1(
             &fixture.issuer,
-            &fixture.context,
-            fixture.genesis_hash,
-            &fixture.policy,
+            crate::privacy_engines::bootle_lantern::issuer::BootleLanternIssuanceContextV1 {
+                context: &fixture.context,
+                canonical_genesis_hash: fixture.genesis_hash,
+                policy: &fixture.policy,
+            },
             &fixture.authorization,
             &fixture.request,
             11,
@@ -3767,9 +3855,11 @@ mod tests {
         assert_eq!(error, BootleLanternIssuanceErrorV1::RandomnessUnavailable);
         let retry_error = issuer_blind_issue_once_with_rng_v1(
             &fixture.issuer,
-            &fixture.context,
-            fixture.genesis_hash,
-            &fixture.policy,
+            crate::privacy_engines::bootle_lantern::issuer::BootleLanternIssuanceContextV1 {
+                context: &fixture.context,
+                canonical_genesis_hash: fixture.genesis_hash,
+                policy: &fixture.policy,
+            },
             &fixture.authorization,
             &fixture.request,
             11,
@@ -3797,9 +3887,11 @@ mod tests {
         );
         let error = issuer_blind_issue_once_with_rng_v1(
             &fixture.issuer,
-            &fixture.context,
-            fixture.genesis_hash,
-            &fixture.policy,
+            crate::privacy_engines::bootle_lantern::issuer::BootleLanternIssuanceContextV1 {
+                context: &fixture.context,
+                canonical_genesis_hash: fixture.genesis_hash,
+                policy: &fixture.policy,
+            },
             &fixture.authorization,
             &fixture.request,
             11,
@@ -3817,9 +3909,11 @@ mod tests {
         let mut issuer_issuance_rng = TestRng::healthy(0xa54f_f53a_5f1d_36f1);
         let error = issuer_blind_issue_once_with_rng_v1(
             &fixture.issuer,
-            &fixture.context,
-            fixture.genesis_hash,
-            &fixture.policy,
+            crate::privacy_engines::bootle_lantern::issuer::BootleLanternIssuanceContextV1 {
+                context: &fixture.context,
+                canonical_genesis_hash: fixture.genesis_hash,
+                policy: &fixture.policy,
+            },
             &fixture.authorization,
             &fixture.request,
             11,
@@ -3830,9 +3924,11 @@ mod tests {
         assert_eq!(error, BootleLanternIssuanceErrorV1::IssuanceStoreFailed);
         let retry_error = issuer_blind_issue_once_with_rng_v1(
             &fixture.issuer,
-            &fixture.context,
-            fixture.genesis_hash,
-            &fixture.policy,
+            crate::privacy_engines::bootle_lantern::issuer::BootleLanternIssuanceContextV1 {
+                context: &fixture.context,
+                canonical_genesis_hash: fixture.genesis_hash,
+                policy: &fixture.policy,
+            },
             &fixture.authorization,
             &fixture.request,
             11,

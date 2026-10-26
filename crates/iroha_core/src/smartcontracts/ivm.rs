@@ -191,7 +191,7 @@ pub(crate) fn active_runtime_abi_hash(
             continue;
         }
         match active {
-            Some((best_height, _, _)) if activated_at < best_height => continue,
+            Some((best_height, _, _)) if activated_at < best_height => {}
             Some((best_height, _, _)) if activated_at == best_height => {
                 unreachable!("duplicate activation heights were rejected above")
             }
@@ -350,10 +350,10 @@ pub fn map_vm_error_with_context_to_validation(
                 message,
             });
         }
-        match fault {
-            Some(fault) => ValidationFail::IvmFault(fault),
-            None => program_admission_error(error.into_unmetered()),
-        }
+        fault.map_or_else(
+            || program_admission_error(error.into_unmetered()),
+            ValidationFail::IvmFault,
+        )
     })
 }
 #[cfg(test)]

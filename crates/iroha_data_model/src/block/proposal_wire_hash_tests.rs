@@ -336,7 +336,7 @@ fn checked_resultless_comparison_binds_signatures_and_all_seven_payload_fields()
                 .npos_consensus_effects
                 .as_mut()
                 .unwrap()
-                .penalty_actions = Default::default();
+                .penalty_actions = crate::consensus::NposPenaltyActions::default();
         }),
     ];
     for (field, edit) in edits {

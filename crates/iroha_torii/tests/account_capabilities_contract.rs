@@ -33,8 +33,7 @@ fn bootstrap_router(cfg: &Root) -> (TestApiRouterRuntime, Arc<State>) {
     .expect("explicit no-Ed25519 bootstrap fixture policy");
     let mut block = world.block();
     block
-        .parameters
-        .set_parameter(policy.into_parameter().unwrap())
+        .set_parameter_for_testing(policy.into_parameter().unwrap())
         .unwrap();
     block.commit();
     let state = Arc::new(State::new_with_chain_and_network_id_for_testing(

@@ -293,8 +293,7 @@ impl RegistryDispute {
         map.insert(
             "replication_order_id_hex".into(),
             self.replication_order_id_hex
-                .map(Value::String)
-                .unwrap_or(Value::Null),
+                .map_or(Value::Null, Value::String),
         );
         map.insert("kind".into(), Value::String(self.kind));
         map.insert(
@@ -304,9 +303,7 @@ impl RegistryDispute {
         map.insert("description".into(), Value::String(self.description));
         map.insert(
             "requested_remedy".into(),
-            self.requested_remedy
-                .map(Value::String)
-                .unwrap_or(Value::Null),
+            self.requested_remedy.map_or(Value::Null, Value::String),
         );
         map.insert("status".into(), Value::String(self.status));
         map.insert(
@@ -318,15 +315,11 @@ impl RegistryDispute {
         );
         map.insert(
             "resolution_outcome".into(),
-            self.resolution_outcome
-                .map(Value::String)
-                .unwrap_or(Value::Null),
+            self.resolution_outcome.map_or(Value::Null, Value::String),
         );
         map.insert(
             "resolution_notes".into(),
-            self.resolution_notes
-                .map(Value::String)
-                .unwrap_or(Value::Null),
+            self.resolution_notes.map_or(Value::Null, Value::String),
         );
         map.insert(
             "evidence_digest_hex".into(),
@@ -334,13 +327,11 @@ impl RegistryDispute {
         );
         map.insert(
             "evidence_media_type".into(),
-            self.evidence_media_type
-                .map(Value::String)
-                .unwrap_or(Value::Null),
+            self.evidence_media_type.map_or(Value::Null, Value::String),
         );
         map.insert(
             "evidence_uri".into(),
-            self.evidence_uri.map(Value::String).unwrap_or(Value::Null),
+            self.evidence_uri.map_or(Value::Null, Value::String),
         );
         map.insert(
             "evidence_size_bytes".into(),
@@ -380,7 +371,7 @@ where
     I: IntoIterator<Item = (&'a ProviderId, &'a CapacityDeclarationRecord)>,
 {
     let mut out = Vec::new();
-    for (provider_id, record) in records.into_iter() {
+    for (provider_id, record) in records {
         let provider_id_hex = provider_id.as_bytes().encode_hex::<String>();
         let declaration = norito::decode_from_bytes::<CapacityDeclarationV1>(&record.declaration)
             .map_err(|source| RegistryError::DecodeDeclaration {
@@ -729,12 +720,20 @@ impl PinRegistryMetricsSummary {
             match &order.status {
                 ReplicationOrderStatusProjection::Pending => {
                     summary.orders_pending = summary.orders_pending.saturating_add(1);
+                    #[expect(
+                        clippy::cast_precision_loss,
+                        reason = "histogram samples use approximate floating-point epoch durations"
+                    )]
                     let slack = order.deadline_epoch().saturating_sub(order.issued_epoch()) as f64;
                     summary.deadline_slack_epochs.push(slack);
                 }
                 ReplicationOrderStatusProjection::Completed { .. } => {
                     summary.orders_completed = summary.orders_completed.saturating_add(1);
                     if let Some(completion_epoch) = order.completion_epoch() {
+                        #[expect(
+                            clippy::cast_precision_loss,
+                            reason = "histogram samples use approximate floating-point epoch durations"
+                        )]
                         let latency = completion_epoch.saturating_sub(order.issued_epoch()) as f64;
                         summary.completion_latencies.push(latency);
                         if completion_epoch <= order.deadline_epoch() {
@@ -942,11 +941,11 @@ fn governance_refs_from_metadata(
     };
     entries
         .into_iter()
-        .filter_map(|entry| parse_governance_reference(entry, manifest_digest_hex))
+        .filter_map(|entry| parse_governance_reference(&(entry), manifest_digest_hex))
         .collect()
 }
 fn parse_governance_reference(
-    value: Value,
+    value: &Value,
     manifest_digest_hex: &str,
 ) -> Option<GovernanceReference> {
     let object = value.as_object()?;
@@ -1014,15 +1013,12 @@ impl GovernanceReference {
             "cid".into(),
             self.cid
                 .as_ref()
-                .map(|cid| Value::String(cid.clone()))
-                .unwrap_or(Value::Null),
+                .map_or(Value::Null, |cid| Value::String(cid.clone())),
         );
         map.insert("kind".into(), Value::String(self.kind.as_str().to_owned()));
         map.insert(
             "effective_at".into(),
-            optional_rfc3339(self.effective_at_unix)
-                .map(Value::String)
-                .unwrap_or(Value::Null),
+            optional_rfc3339(self.effective_at_unix).map_or(Value::Null, Value::String),
         );
         map.insert(
             "effective_at_unix".into(),
@@ -1096,8 +1092,7 @@ pub(crate) fn lineage_to_json(lineage: &ManifestLineageSummary) -> Result<Value,
         lineage
             .successor_of_hex
             .as_ref()
-            .map(|hex| Value::String(hex.clone()))
-            .unwrap_or(Value::Null),
+            .map_or(Value::Null, |hex| Value::String(hex.clone())),
     );
     map.insert("head_hex".into(), Value::String(lineage.head_hex.clone()));
     map.insert(
@@ -1326,9 +1321,10 @@ fn collect_manifest_lineages(
             for index in indices {
                 let selection = &mut selections[*index];
                 selection.count = selection.count.saturating_add(1);
-                let replace = selection.best.as_ref().map_or(true, |current| {
-                    lineage_candidate_is_better(&candidate, current)
-                });
+                let replace = selection
+                    .best
+                    .as_ref()
+                    .is_none_or(|current| lineage_candidate_is_better(&candidate, current));
                 if replace {
                     selection.best = Some(candidate.clone());
                 }
@@ -1607,8 +1603,7 @@ impl RegistryManifest {
             "successor_of_hex".into(),
             self.successor_of_hex
                 .as_ref()
-                .map(|hex| Value::String(hex.clone()))
-                .unwrap_or(Value::Null),
+                .map_or(Value::Null, |hex| Value::String(hex.clone())),
         );
         map.insert(
             "status_timestamp_unix".into(),
@@ -1624,8 +1619,7 @@ impl RegistryManifest {
             "council_envelope_digest_hex".into(),
             self.council_envelope_digest_hex
                 .as_ref()
-                .map(|hex| Value::String(hex.clone()))
-                .unwrap_or(Value::Null),
+                .map_or(Value::Null, |hex| Value::String(hex.clone())),
         );
         Ok(Value::Object(map))
     }
@@ -2108,8 +2102,7 @@ fn replication_order_to_json(order: &ReplicationOrderV1) -> Result<Value, json::
                 assignment
                     .lane
                     .as_ref()
-                    .map(|lane| Value::String(lane.clone()))
-                    .unwrap_or(Value::Null),
+                    .map_or(Value::Null, |lane| Value::String(lane.clone())),
             );
             Ok(Value::Object(assignment_json))
         })

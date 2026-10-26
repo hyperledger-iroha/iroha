@@ -4,11 +4,11 @@
 //! [`super::smt`]: the `parent_state_root` over witnessed pre-values and the
 //! `post_state_root` over witnessed post-values. FASTPQ transcripts and batches
 //! carried by the witness never affect either root.
-use super::smt::{KvPair, compute_consensus_post_state_root, compute_post_state_root};
+use super::smt::{KvPair, compute_post_state_root};
 use iroha_crypto::Hash;
 use iroha_data_model::block::consensus::ExecWitness;
 /// Split an [`ExecWitness`] into SMT read and write pairs, preserving witness order.
-pub(crate) fn witness_pairs(witness: &ExecWitness) -> (Vec<KvPair>, Vec<KvPair>) {
+pub fn witness_pairs(witness: &ExecWitness) -> (Vec<KvPair>, Vec<KvPair>) {
     let reads = witness
         .reads
         .iter()
@@ -23,17 +23,8 @@ pub(crate) fn witness_pairs(witness: &ExecWitness) -> (Vec<KvPair>, Vec<KvPair>)
 }
 /// Convert an `ExecWitness` into SMT `KvPair` slices and compute the `post_state_root`.
 pub fn post_state_from_witness(w: &ExecWitness) -> Hash {
-    try_post_state_from_witness(w).unwrap_or_else(|error| {
-        let mut preimage = b"iroha:sumeragi:invalid-exec-witness".to_vec();
-        preimage.push(0);
-        preimage.extend_from_slice(error.as_bytes());
-        Hash::new(preimage)
-    })
-}
-/// Checked variant used before a validator signs execution roots.
-pub fn try_post_state_from_witness(w: &ExecWitness) -> Result<Hash, &'static str> {
     let (reads, writes) = witness_pairs(w);
-    compute_consensus_post_state_root(&reads, &writes)
+    compute_post_state_root(&reads, &writes)
 }
 /// Compute the `parent_state_root` using only the witnessed reads (pre-values).
 /// When a block writes state, only pre-values for written keys are included.

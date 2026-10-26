@@ -139,7 +139,7 @@ fn apply_implicit_creation_fee(
                 state_transaction,
                 authority,
                 created_account,
-                payer_asset_id,
+                &(payer_asset_id),
                 fee.amount.clone(),
             )?;
         }
@@ -251,19 +251,18 @@ pub(super) fn ensure_receiving_account(
     if policy.mode != AccountAdmissionMode::ImplicitReceive {
         return Err(AccountAdmissionError::ImplicitAccountCreationDisabled.into());
     }
-    if let Some((asset_def_id, amount)) = value_hint {
-        if let Some(required) = policy.min_initial_amount_for(asset_def_id) {
-            if amount < required {
-                return Err(AccountAdmissionError::MinInitialAmountUnsatisfied(
-                    AccountAdmissionMinInitialAmountUnsatisfied {
-                        asset_definition: asset_def_id.clone(),
-                        required: required.clone(),
-                        provided: amount.clone(),
-                    },
-                )
-                .into());
-            }
-        }
+    if let Some((asset_def_id, amount)) = value_hint
+        && let Some(required) = policy.min_initial_amount_for(asset_def_id)
+        && amount < required
+    {
+        return Err(AccountAdmissionError::MinInitialAmountUnsatisfied(
+            AccountAdmissionMinInitialAmountUnsatisfied {
+                asset_definition: asset_def_id.clone(),
+                required: required.clone(),
+                provided: amount.clone(),
+            },
+        )
+        .into());
     }
     let max_creations = policy.max_implicit_creations_per_tx();
     if state_transaction.implicit_account_creations_in_tx >= max_creations {
@@ -364,7 +363,7 @@ mod tests {
         _domain_id: DomainId,
         authority: &AccountId,
     ) -> iroha_data_model::account::Account {
-        iroha_data_model::account::NewAccount::new(account_id.clone()).build(authority)
+        iroha_data_model::account::NewAccount::new(account_id).build(authority)
     }
     fn test_state(mut world: World, policy: AccountAdmissionPolicy) -> State {
         let custom = policy.into_custom_parameter();
@@ -378,9 +377,16 @@ mod tests {
             .into_parameter()
             .unwrap(),
         );
-        world.parameters = mv::cell::Cell::new(
-            crate::state::StateParameters::try_from(params).expect("valid fixture parameters"),
-        );
+        let authored =
+            crate::state::StateParameters::try_from(params).expect("valid fixture parameters");
+        let budget = world.sccp_committee_generations.allocation_budget();
+        let retained = crate::pipeline_gas_policy::RetainedStateParameters::try_copy_for_testing(
+            &authored, budget,
+        )
+        .expect("retain complete account fixture parameters");
+        let controls = mv::cell::CellInitialization::try_reserve(budget)
+            .expect("fund complete account fixture parameter controls");
+        world.parameters = controls.initialize(retained, None);
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         State::new_for_testing(world, kura, query)

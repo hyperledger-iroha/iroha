@@ -259,7 +259,7 @@ mod tests {
                 note.clone(),
                 [0x55; 32],
                 0,
-                [[0x66; 32]; PRIVATE_NOTE_TREE_DEPTH_V1],
+                &[[0x66; 32]; PRIVATE_NOTE_TREE_DEPTH_V1],
             ),
             Err(IvmPrivateNoteRelationErrorV1::SpendingAuthorityMismatch)
         );
@@ -268,7 +268,7 @@ mod tests {
                 note.clone(),
                 secret,
                 0,
-                [[0; 32]; PRIVATE_NOTE_TREE_DEPTH_V1],
+                &[[0; 32]; PRIVATE_NOTE_TREE_DEPTH_V1],
             ),
             Err(IvmPrivateNoteRelationErrorV1::ZeroWitnessComponent)
         );
@@ -281,7 +281,7 @@ mod tests {
             note.clone(),
             secret,
             0,
-            [[0x66; 32]; PRIVATE_NOTE_TREE_DEPTH_V1],
+            &[[0x66; 32]; PRIVATE_NOTE_TREE_DEPTH_V1],
         )
         .expect("input");
         let output = IvmPrivateNoteOutputWitnessV1::new(note).expect("output");

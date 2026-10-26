@@ -78,12 +78,12 @@ fn execute_check(
 }
 
 fn apply(
-    instruction: MutateSorafsFinalPromotionAccountCustody,
+    instruction: &MutateSorafsFinalPromotionAccountCustody,
     authority: &AccountId,
     tx: &mut StateTransaction<'_, '_>,
 ) -> Result<(), HistoryError> {
     // Bound every action before history reads; Check deliberately has no mutation digest.
-    encode(&instruction)?;
+    encode(instruction)?;
     let current = history::read_control::<AccountPurpose>(tx.world(), &instruction.deployment_id)?;
     if current.as_ref().map_or(0, |row| row.index.revision) != instruction.expected_control_revision
         || current.as_ref().map_or([0; 32], |row| row.index.digest)
@@ -100,7 +100,7 @@ fn apply(
     }
     if matches!(&instruction.action, Action::Check(_)) {
         return execute_check(
-            &instruction,
+            instruction,
             authority,
             tx,
             current.as_ref().ok_or(HistoryError::Conflict)?,
@@ -123,7 +123,7 @@ fn apply(
             deployment: &instruction.deployment_id,
             expected_revision: instruction.expected_control_revision,
             expected_digest: instruction.expected_control_digest,
-            request_digest: request_digest(&instruction, authority)?,
+            request_digest: request_digest(instruction, authority)?,
             action,
         },
     )?;
@@ -144,7 +144,7 @@ impl Execute for MutateSorafsFinalPromotionAccountCustody {
         {
             return Err(rejected(HistoryError::BindingMismatch));
         }
-        apply(self, authority, tx).map_err(rejected)
+        apply(&(self), authority, tx).map_err(rejected)
     }
 }
 

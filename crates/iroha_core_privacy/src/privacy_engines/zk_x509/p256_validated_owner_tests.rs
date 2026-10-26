@@ -178,9 +178,9 @@ fn validated_arithmetic_owner_matches_checked_rows_and_aux_without_revalidation(
                 );
             }
         }
-        columns
-            .iter_mut()
-            .for_each(|column| super::super::private_table::zeroize_fields_v1(column));
+        for column in &mut columns {
+            super::super::private_table::zeroize_fields_v1(column);
+        }
     }
     assert_eq!(checked_constructors_v1(), before + 2);
     let post_base = super::tests::main_post_base_v1(71);

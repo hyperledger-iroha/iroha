@@ -63,6 +63,12 @@ time = { workspace = true }
 tracing = { workspace = true }
 zeroize = { version = "1.8.2", default-features = false, features = ["alloc", "std"] }
 
+# macOS admits the existing immutable Metal bundle and bounded deterministic
+# transform backend. Other targets keep their driverless dependency defaults;
+# explicit fastpq-gpu consumers still own CUDA toolkit selection.
+[target.'cfg(target_os = "macos")'.dependencies]
+fastpq_prover = { path = "../fastpq_prover", features = ["fastpq-gpu"] }
+
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1.1.4", features = ["fs", "process"] }
 

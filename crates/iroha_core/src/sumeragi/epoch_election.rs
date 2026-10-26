@@ -8,7 +8,7 @@
 mod owned;
 mod plan;
 use crate::execution_attempt::ExecutionAttemptError as Attempt;
-pub(crate) use owned::{
+pub use owned::{
     BoundaryCaptureError, FrozenEpochBoundary, capture_continuation, retain_outcome_schedule,
     retain_schedule,
 };
@@ -278,7 +278,7 @@ impl<'a> CheckedElectionView<'a> {
 
     /// Rank every custody-eligible candidate without allocating a pool-sized ranking buffer.
     /// E+1 prepares the target beacon transcript after this E election; selection requires
-    /// the exact consented BLS identity and real PoP, never future beacon-share readiness.
+    /// the exact consented BLS identity and real `PoP`, never future beacon-share readiness.
     pub(super) fn select(
         &self,
         network: NetworkId,
@@ -570,11 +570,11 @@ pub(super) fn authenticated_boundary_entropy(
 
 /// Canonical independent election entropy projection from the genuinely certified B−1 pulse.
 /// Runtime and history readers share this exact domain; the caller must authenticate the pulse.
-pub(crate) use iroha_data_model::sumeragi_finality::election_seed;
+pub use iroha_data_model::sumeragi_finality::election_seed;
 
 /// Freeze the exact original-prestate boundary with complete retained allocation custody.
 /// The returned sealed capability is the only input accepted by the native boundary finalizer.
-pub(crate) fn freeze_boundary(
+pub fn freeze_boundary(
     world: &impl WorldReadOnly,
     hashes: &(impl BlockHashRead + ?Sized),
     current: &ValidatorEpochContextV1,

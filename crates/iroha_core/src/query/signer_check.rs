@@ -5,6 +5,16 @@
 //! authority. Purpose-owned wrappers must check current custody and both UTC endpoints before
 //! producing their distinct successes. Historical finality alone is not a current-authority read.
 
+/// Exact signed check purpose, challenge, network, and finalized floor.
+type CheckCoordinates = (
+    NativeCustodyCheckPurposeV1,
+    [u8; 32],
+    [u8; 32],
+    u64,
+    [u8; 32],
+    Option<HeightContextId>,
+);
+
 use crate::state::{State, StateReadOnly, StateView, TransactionsReadOnly};
 use iroha_crypto::{Algorithm, HashOf, Signature};
 use iroha_data_model::{
@@ -58,7 +68,7 @@ fn check_history_span_v1(floor_height: u64, applied_height: u64) -> Result<(), E
 
 /// Shared proof failures, mapped into each purpose's payload-free public errors.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum NativeCheckErrorV1 {
+pub enum NativeCheckErrorV1 {
     Invalid,
     Expired,
     Entropy,
@@ -71,7 +81,7 @@ use NativeCheckErrorV1 as Error;
 
 /// Independent coordinates, not a decoded authority capability.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct NativeCheckFloorV1 {
+pub struct NativeCheckFloorV1 {
     pub(crate) height: u64,
     pub(crate) block_hash: [u8; 32],
     pub(crate) context_id: HeightContextId,
@@ -89,7 +99,7 @@ impl NativeCheckFloorV1 {
 
 /// Original monotonic lifetime, started before pure expectation validation and entropy.
 /// There is no Clone, decoded constructor or renewal method.
-pub(crate) struct NativeCheckRoundV1 {
+pub struct NativeCheckRoundV1 {
     started: Instant,
     max_elapsed: Duration,
     challenge: Option<[u8; 32]>,
@@ -166,7 +176,7 @@ impl NativeCheckRoundV1 {
 
 /// Closed native purposes; none can substitute for another's proof consumer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum NativeCustodyCheckPurposeV1 {
+pub enum NativeCustodyCheckPurposeV1 {
     FinalPromotion,
     FinalPromotionAccount,
     ReleaseManifest,
@@ -183,7 +193,7 @@ pub(crate) enum NativeCustodyCheckPurposeV1 {
 /// The role-13 and role-16 variants bind signed Checks to execution evidence only. Their
 /// Core instructions remain closed and cannot produce signer or topology authority.
 #[derive(Clone, Copy)]
-pub(crate) enum NativeCustodyCheckRefV1<'a> {
+pub enum NativeCustodyCheckRefV1<'a> {
     FinalPromotion(&'a MutateSorafsFinalPromotionAuthority),
     FinalPromotionAccount(&'a MutateSorafsFinalPromotionAccountCustody),
     #[cfg_attr(
@@ -207,19 +217,7 @@ pub(crate) enum NativeCustodyCheckRefV1<'a> {
     Topology(&'a MutateSorafsTopologyAuthority),
 }
 impl NativeCustodyCheckRefV1<'_> {
-    fn coordinates(
-        &self,
-    ) -> Result<
-        (
-            NativeCustodyCheckPurposeV1,
-            [u8; 32],
-            [u8; 32],
-            u64,
-            [u8; 32],
-            Option<HeightContextId>,
-        ),
-        Error,
-    > {
+    fn coordinates(&self) -> Result<CheckCoordinates, Error> {
         match self {
             Self::FinalPromotion(instruction) => {
                 let FinalPromotionAuthorityActionV1::Check(check) = &instruction.action else {
@@ -346,7 +344,7 @@ impl NativeCustodyCheckRefV1<'_> {
 }
 
 /// Frozen signed envelope and independent coordinates. Only exact native binding constructs it.
-pub(crate) struct BoundNativeCheckV1 {
+pub struct BoundNativeCheckV1 {
     purpose: NativeCustodyCheckPurposeV1,
     chain_id: binding::BoundChainId,
     network_id: [u8; 32],
@@ -369,12 +367,10 @@ impl BoundNativeCheckV1 {
 
 mod binding;
 pub use binding::NativeCheckBindingErrorV1;
-pub(crate) use binding::{BindingFailure, BindingScope, SignedCheckAttempt, bind_signed_check_v1};
+pub use binding::{BindingFailure, BindingScope, SignedCheckAttempt, bind_signed_check_v1};
 
 /// Structural envelope sizing only; no signature, custody, action or fee approval is established.
-pub(crate) fn validate_account_transaction_envelope_v1(
-    payload: &TransactionPayload,
-) -> Result<(), Error> {
+pub fn validate_account_transaction_envelope_v1(payload: &TransactionPayload) -> Result<(), Error> {
     crate::query::signer_check::with_native_check_read_limits(|| {
         // Bound the borrowed input before decoding it into the canonical builder. The same sole
         // envelope ceiling bounds this necessary payload prefix, without estimating wire overhead.
@@ -400,7 +396,7 @@ pub(crate) fn validate_account_transaction_envelope_v1(
 }
 
 /// The first-release native profile has one Ed25519 account and no algorithm fallback.
-pub(crate) fn validate_native_signatory_v1(authority: &AccountId) -> Result<(), Error> {
+pub fn validate_native_signatory_v1(authority: &AccountId) -> Result<(), Error> {
     if authority
         .try_signatory()
         .and_then(|key| key.try_algorithm().ok())
@@ -413,7 +409,7 @@ pub(crate) fn validate_native_signatory_v1(authority: &AccountId) -> Result<(), 
 
 /// Retain the exact native External frame without cloning the borrowed signed graph.
 /// Executor callers must retain local refusal; a query facade may project a payload-free error.
-pub(crate) fn native_signed_transaction_frame_attempt_v1(
+pub fn native_signed_transaction_frame_attempt_v1(
     signed: &SignedTransaction,
 ) -> Result<Vec<u8>, crate::execution_attempt::ExecutionAttemptError<Error>> {
     validate_native_signed_profile_v1(signed)?;
@@ -441,7 +437,7 @@ fn validate_native_signed_profile_v1(
 /// Sole canonical signed native profile. Action, independent scope, spending and current custody
 /// remain the caller's owners; no successful structural/signature check grants those authorities.
 /// Local codec and allocation refusals retain their original attempt classification.
-pub(crate) fn native_signed_entry_frame_v1(
+pub fn native_signed_entry_frame_v1(
     entry: &TransactionEntrypoint,
 ) -> Result<Vec<u8>, crate::execution_attempt::ExecutionAttemptError<Error>> {
     let TransactionEntrypoint::External(signed) = entry else {
@@ -468,7 +464,7 @@ fn native_codec_attempt_error(
     crate::execution_attempt::norito_decode_attempt_error(error, |_| Error::Transaction)
 }
 
-pub(crate) fn bounded_entry(entry: &TransactionEntrypoint) -> Result<Vec<u8>, Error> {
+pub fn bounded_entry(entry: &TransactionEntrypoint) -> Result<Vec<u8>, Error> {
     bounded_frame(entry)
 }
 
@@ -500,7 +496,7 @@ fn bounded_frame_attempt<T: norito::NoritoSerialize>(
 
 /// Actual same-State view retained until the purpose wrapper finishes eligibility checks.
 /// This private execution proof is not itself a fresh-custody success.
-pub(crate) struct AuthenticatedCheckExecutionCutV1<'state, 'bound> {
+pub struct AuthenticatedCheckExecutionCutV1<'state, 'bound> {
     view: StateView<'state>,
     data: execution::CheckExecutionDataV1,
     bound: &'bound mut Option<BoundNativeCheckV1>,
@@ -529,15 +525,15 @@ impl AuthenticatedCheckExecutionCutV1<'_, '_> {
 }
 
 mod certified_walk;
-pub(crate) use certified_walk::{
+pub use certified_walk::{
     SignerCertifiedBlockV1, SignerCertifiedWalkV1, with_native_check_read_limits,
 };
 
 mod execution;
-pub(crate) use execution::{BorrowedCheckExecutionCutV1, PreparedCheckExecutionV1};
+pub use execution::{BorrowedCheckExecutionCutV1, PreparedCheckExecutionV1};
 
 /// Authenticate the exact Check while borrowing its original slot through late purpose checks.
-pub(crate) fn authenticate_applied_check_v1<'state, 'bound>(
+pub fn authenticate_applied_check_v1<'state, 'bound>(
     state: &'state Arc<State>,
     purpose: NativeCustodyCheckPurposeV1,
     bound: &'bound mut Option<BoundNativeCheckV1>,
@@ -570,7 +566,7 @@ pub(crate) fn authenticate_applied_check_v1<'state, 'bound>(
 }
 
 #[cfg(any(test, feature = "iroha-core-tests"))]
-pub(crate) mod fixture;
+pub mod fixture;
 
 #[cfg(test)]
 mod tests;

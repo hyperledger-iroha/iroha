@@ -253,7 +253,7 @@ impl<'owner, 'tx> Invocation<'owner, 'tx> {
             bootstrap.total_supply,
             &public_keys,
             &balances,
-            TranscriptBindingV1 {
+            &TranscriptBindingV1 {
                 network_id: context.network_id.as_bytes(),
                 genesis_hash: context.genesis_hash,
                 action_index,

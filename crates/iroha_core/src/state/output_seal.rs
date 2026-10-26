@@ -16,7 +16,7 @@ use crate::queue::RoutingDecision;
 
 /// Block validation supplies the actual fragment count before attachment.
 /// Rows, sources, receipts, transcripts and applying policy remain State-owned.
-pub(crate) struct ExecutionOutputSealMetadata {
+pub struct ExecutionOutputSealMetadata {
     /// Exact fixed-width X produced by the same post-execution finalizer.
     pub(crate) sccp_finality_header: iroha_data_model::sumeragi_finality::SccpFinalityHeaderV1,
     /// Actual fragment count after the finalizer's deterministic State changes.
@@ -25,7 +25,7 @@ pub(crate) struct ExecutionOutputSealMetadata {
 
 /// Keep source-specific validation errors intact across State's consuming seal.
 #[derive(Debug)]
-pub(crate) enum ExecutionOutputSealError<E> {
+pub enum ExecutionOutputSealError<E> {
     /// Original local storage admission refused; the carrier is retryable.
     Storage(crate::state::StateStorageAdmissionError),
     /// The State owner, retained source or canonical attachment was inconsistent.
@@ -148,10 +148,10 @@ impl StateBlock<'_> {
                 Err("captured execution witness changed after sealing".into())
             }
             _ => {
-                if let Some(previous) = sealed.witness_surface.as_ref() {
-                    if previous.as_ref() != &surface {
-                        return Err("execution surface changed after witness capture".into());
-                    }
+                if let Some(previous) = sealed.witness_surface.as_ref()
+                    && previous.as_ref() != &surface
+                {
+                    return Err("execution surface changed after witness capture".into());
                 }
                 sealed.witness_hash = Some(hash);
                 sealed.witness_surface = Some(Box::new(surface));
@@ -317,6 +317,7 @@ impl StateBlock<'_> {
             },
         ));
         owner.finished = true;
+        drop(owner);
         Ok(events)
     }
 
@@ -572,6 +573,7 @@ impl StateBlock<'_> {
                     .expect("original execution output owner")
                     .execution_output_plan = Some(ExecutionOutputPlanState::Sealed(sealed));
                 owner.finished = true;
+                drop(owner);
                 Ok(())
             }
             Err(error) => {

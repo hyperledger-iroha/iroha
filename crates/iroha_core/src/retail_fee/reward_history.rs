@@ -43,7 +43,7 @@ fn read_u64(world: &impl WorldReadOnly, path: &StatePath) -> Result<Option<u64>,
 ///
 /// An ordered seek reads one frontier row, irrespective of wallet/history count.
 /// Pending credits already carry the complete earning policy and do not widen this bound.
-pub(crate) fn oldest_unsettled_policy_month(
+pub fn oldest_unsettled_policy_month(
     world: &impl WorldReadOnly,
     now_ms: u64,
 ) -> Result<u64, FeeReadError> {
@@ -74,14 +74,14 @@ pub(crate) fn oldest_unsettled_policy_month(
 }
 
 /// Last earning month durably sealed against any further authentic fee credit.
-pub(crate) fn reward_history_closed_through(
+pub fn reward_history_closed_through(
     world: &impl WorldReadOnly,
 ) -> Result<Option<u64>, FeeReadError> {
     read_u64(world, &closed_key())
 }
 
 /// Refuse any new fee credit or enrollment referring to retired earning history.
-pub(crate) fn ensure_reward_history_open(
+pub fn ensure_reward_history_open(
     world: &impl WorldReadOnly,
     period: u64,
 ) -> Result<(), FeeReadError> {
@@ -105,18 +105,18 @@ pub(super) fn update(
         ensure_reward_history_open(world, period)
             .map_err(|error| world_read_error(world, error))?;
     }
-    if let Some(old_key) = &old_key {
-        if read_u64(world, old_key).map_err(|error| world_read_error(world, error))? != Some(1) {
-            return Err(invalid("retail reward frontier is absent or malformed"));
-        }
+    if let Some(old_key) = &old_key
+        && read_u64(world, old_key).map_err(|error| world_read_error(world, error))? != Some(1)
+    {
+        return Err(invalid("retail reward frontier is absent or malformed"));
     }
     if old_key == new_key {
         return Ok(());
     }
-    if let Some(new_key) = &new_key {
-        if world.smart_contract_state.get(new_key).is_some() {
-            return Err(invalid("retail reward frontier already exists"));
-        }
+    if let Some(new_key) = &new_key
+        && world.smart_contract_state.get(new_key).is_some()
+    {
+        return Err(invalid("retail reward frontier already exists"));
     }
     let encoded = norito::to_bytes(&1u64)
         .map_err(|error| norito_decode_attempt_error(error, |error| error.to_string()))
@@ -135,7 +135,7 @@ pub(super) fn update(
 /// The ordered index makes this constant work. New enrollment starts in the
 /// current month; reopening settles its retained period first. Queued original-
 /// month credits must be flushed before the durable closure seal can advance.
-pub(crate) fn reward_history_is_closed(
+pub fn reward_history_is_closed(
     stx: &mut StateTransaction<'_, '_>,
     period: u64,
 ) -> Result<bool, InstructionExecutionError> {
@@ -204,10 +204,10 @@ pub fn validate_reward_history_frontier(world: &impl WorldReadOnly) -> Result<()
     let mut expected = BTreeMap::new();
     let mut actual = BTreeMap::new();
     let closed = read_u64(world, &closed_key())?;
-    if let Some(period) = closed {
-        if honiara_month_bounds(period)?.0 != period {
-            return Err("noncanonical closed reward history month".to_owned().into());
-        }
+    if let Some(period) = closed
+        && honiara_month_bounds(period)?.0 != period
+    {
+        return Err("noncanonical closed reward history month".to_owned().into());
     }
     for (path, bytes) in world.smart_contract_state().iter() {
         if path.as_ref().starts_with(STATE_PREFIX) {

@@ -12,6 +12,14 @@ pub enum TryReadError {
     IO(#[source] std::io::Error, PathBuf),
     /// Error (de)serializing state snapshot
     Serialization(#[source] norito::json::Error),
+    /// Original parameter Cell controls refused snapshot restoration: {0}
+    StateParameterCell(#[source] mv::cell::CellInitializationError),
+    /// The original observed parameter decoder could not finish restoration: {0}
+    StateParameterDecode(#[source] norito::core::DecodeAttemptError),
+    /// The original parameter graph reader refused restoration: {0}
+    StateParameterIngress(#[source] crate::pipeline_gas_policy::ParameterIngressError),
+    /// Fresh World initialization failed before snapshot replay: {0}
+    StateWorldInitialization(#[source] crate::state::WorldConstructionError),
     /// Local State history allocation refused restore; this is not evidence of snapshot corruption: {0}
     StateAdmission(#[source] crate::state::StateAdmissionError),
     /// The original State reader or publication is locally unavailable during snapshot restore
@@ -35,6 +43,10 @@ pub enum TryReadError {
     /// Local snapshot read-buffer allocation admission refused: {0}
     PayloadAllocation(#[source] iroha_allocation::AllocationRefusal),
     /// The allocator could not supply {requested_bytes} prepaid snapshot payload bytes
+    #[expect(
+        clippy::doc_markdown,
+        reason = "displaydoc field placeholders must retain their exact format syntax"
+    )]
     PayloadAllocatorFailure {
         /// Exact requested byte allocation; no buffer was installed.
         requested_bytes: usize,
@@ -106,6 +118,13 @@ pub enum TryReadError {
     },
     /// A committed snapshot requires original signed-genesis and certified-history execution on fresh State
     NativeExecutionReplayRequired,
+    /// Snapshot at height `{snapshot_height}` has no certified successor block in Kura to authenticate its World
+    SuccessorRequired {
+        /// Height of the snapshot tip.
+        snapshot_height: u64,
+    },
+    /// Restored snapshot World is not the certified World: {0}
+    WorldAuthentication(String),
     /// Snapshot exact network id mismatch (expected `{expected}`, got `{actual}`)
     NetworkIdMismatch {
         /// Expected genesis-derived network id from configuration.
@@ -153,6 +172,26 @@ pub enum TryReadError {
 impl From<crate::state::deserialize::StateRestoreError> for TryReadError {
     fn from(error: crate::state::deserialize::StateRestoreError) -> Self {
         match error {
+            crate::state::deserialize::StateRestoreError::Parameters(error) => {
+                use crate::{
+                    pipeline_gas_policy::ParameterIngressAttemptError,
+                    state::ParameterCellRestoreError,
+                };
+                match error {
+                    ParameterCellRestoreError::Initialization(original) => {
+                        Self::StateParameterCell(original)
+                    }
+                    ParameterCellRestoreError::Ingress(ParameterIngressAttemptError::Codec(
+                        original,
+                    )) => Self::StateParameterDecode(original),
+                    ParameterCellRestoreError::Ingress(ParameterIngressAttemptError::Original(
+                        original,
+                    )) => Self::StateParameterIngress(original),
+                }
+            }
+            crate::state::deserialize::StateRestoreError::WorldInitialization(original) => {
+                Self::StateWorldInitialization(original)
+            }
             crate::state::deserialize::StateRestoreError::NativeExecutionReplayRequired => {
                 Self::NativeExecutionReplayRequired
             }
@@ -187,6 +226,57 @@ impl From<crate::state::deserialize::StateRestoreError> for TryReadError {
                 Self::StateEvidence(error)
             }
             crate::state::deserialize::StateRestoreError::Sccp(error) => Self::StateSccp(error),
+            crate::state::deserialize::StateRestoreError::SuccessorRequired { height } => {
+                Self::SuccessorRequired {
+                    snapshot_height: height,
+                }
+            }
+            error @ (crate::state::deserialize::StateRestoreError::WorldMismatch { .. }
+            | crate::state::deserialize::StateRestoreError::WorldVerification(_)) => {
+                Self::WorldAuthentication(error.to_string())
+            }
+        }
+    }
+}
+impl TryReadError {
+    /// A local refusal or an identity/consistency conflict. Neither an older snapshot
+    /// generation nor an empty State with full replay may hide it, so restore stops on it.
+    #[must_use]
+    pub fn halts_restore(&self) -> bool {
+        use crate::{
+            state::SccpRestoreError, sumeragi::evidence::record::EvidenceRecordRestoreError,
+        };
+        match self {
+            Self::IO(_, _)
+            | Self::PayloadAllocation(_)
+            | Self::PayloadAllocatorFailure { .. }
+            | Self::StateVmInitialization(_)
+            | Self::StateRead(_)
+            | Self::StateAdmission(_)
+            | Self::StateExecutionDeferred(_)
+            | Self::StateNativeSchedule(_)
+            | Self::StateNativeLaneCustody(_)
+            | Self::StateBeaconSession(_)
+            // The decoder routes only local AMX admission refusals here.
+            | Self::StateNativeAmx(_)
+            | Self::ChainIdMismatch { .. }
+            | Self::NetworkIdMismatch { .. }
+            | Self::ZkConfigInstall(_)
+            | Self::MismatchedHeight { .. } => true,
+            // Nested resource refusals halt; completed rejections of the data do not.
+            Self::StateEvidence(error) => matches!(
+                error,
+                EvidenceRecordRestoreError::Logical(_)
+                    | EvidenceRecordRestoreError::Preparation(_)
+                    | EvidenceRecordRestoreError::Storage(_)
+            ),
+            Self::StateSccp(error) => matches!(
+                error,
+                SccpRestoreError::Storage(_)
+                    | SccpRestoreError::Admission(_)
+                    | SccpRestoreError::ReconciliationDecode(_)
+            ),
+            _ => false,
         }
     }
 }
@@ -196,6 +286,10 @@ pub(super) enum TryWriteError {
     /// Local snapshot read-buffer allocation admission refused: {0}
     PayloadAllocation(#[source] iroha_allocation::AllocationRefusal),
     /// The allocator could not supply {requested_bytes} prepaid snapshot payload bytes
+    #[expect(
+        clippy::doc_markdown,
+        reason = "displaydoc field placeholders must retain their exact format syntax"
+    )]
     PayloadAllocatorFailure {
         /// Exact requested byte allocation; original generation evidence remains valid.
         requested_bytes: usize,
@@ -323,6 +417,17 @@ mod evidence_restore_tests {
         let error = TryReadError::from(StateRestoreError::Evidence(
             EvidencePreparationError::Admission(expected).into(),
         ));
+        assert!(
+            error.halts_restore(),
+            "a local resource refusal stops restore"
+        );
+        assert!(
+            !TryReadError::StateEvidence(EvidenceRecordRestoreError::Json(
+                norito::json::Error::Message("invalid evidence".to_owned())
+            ))
+            .halts_restore(),
+            "a completed rejection lets restore try an older generation"
+        );
         assert!(matches!(&error, TryReadError::StateEvidence(
             EvidenceRecordRestoreError::Preparation(EvidencePreparationError::Admission(actual))
         ) if matches!(actual, iroha_allocation::AllocationRefusal::Capacity {..})));
@@ -357,6 +462,17 @@ mod sccp_restore_tests {
         let error = TryReadError::from(StateRestoreError::Sccp(SccpRestoreError::Admission(
             original,
         )));
+        assert!(
+            error.halts_restore(),
+            "a local resource refusal stops restore"
+        );
+        assert!(
+            !TryReadError::StateSccp(SccpRestoreError::Json(norito::json::Error::Message(
+                "invalid SCCP state".to_owned()
+            )))
+            .halts_restore(),
+            "a completed rejection lets restore try an older generation"
+        );
         let TryReadError::StateSccp(SccpRestoreError::Admission(actual)) = error else {
             panic!("original resource refusal is not snapshot syntax or invalid protocol data");
         };
@@ -369,5 +485,182 @@ mod sccp_restore_tests {
             .try_reserve_bytes(8)
             .expect("original pool released its owner");
         assert_eq!(retry.remaining_bytes(), 8);
+    }
+}
+
+#[cfg(test)]
+mod parameter_restore_tests {
+    //! Parameter restore preserves the original local owner through snapshot errors.
+    use super::TryReadError;
+    use crate::{
+        pipeline_gas_policy::{ParameterIngressAttemptError, ParameterIngressError},
+        state::{
+            ParameterCellRestoreError, WorldConstructionError, deserialize::StateRestoreError,
+        },
+    };
+    use iroha_allocation::{AllocationBudget, ChargedBufferError};
+    use mv::cell::CellInitializationError;
+
+    #[test]
+    fn parameter_and_world_control_refusals_keep_the_original_pool() {
+        let pool = AllocationBudget::new(64);
+        let held = pool.try_reserve_bytes(64).unwrap();
+        let refusal = || pool.try_reserve_bytes(8).unwrap_err();
+        let cell = TryReadError::from(StateRestoreError::Parameters(
+            ParameterCellRestoreError::Initialization(
+                CellInitializationError::Admission(refusal()),
+            ),
+        ));
+        let TryReadError::StateParameterCell(CellInitializationError::Admission(original)) = cell
+        else {
+            panic!("parameter Cell refusal must retain its typed cause");
+        };
+        assert_eq!(original, refusal());
+        let ingress = TryReadError::from(StateRestoreError::Parameters(
+            ParameterCellRestoreError::Ingress(ParameterIngressAttemptError::Original(
+                ParameterIngressError::Allocation(ChargedBufferError::Admission(refusal())),
+            )),
+        ));
+        let TryReadError::StateParameterIngress(ParameterIngressError::Allocation(
+            ChargedBufferError::Admission(original),
+        )) = ingress
+        else {
+            panic!("parameter graph refusal must retain its typed cause");
+        };
+        assert_eq!(original, refusal());
+        let world = TryReadError::from(StateRestoreError::WorldInitialization(
+            WorldConstructionError::ParameterCell(CellInitializationError::Admission(refusal())),
+        ));
+        let TryReadError::StateWorldInitialization(WorldConstructionError::ParameterCell(
+            CellInitializationError::Admission(original),
+        )) = world
+        else {
+            panic!("World initialization refusal must retain its typed cause");
+        };
+        assert_eq!(original, refusal());
+        assert_eq!(pool.reserved_bytes(), 64);
+        drop(held);
+        assert_eq!(pool.reserved_bytes(), 0);
+    }
+
+    #[test]
+    fn parameter_decode_restore_keeps_the_observed_attempt() {
+        let original = ParameterIngressAttemptError::observe::<()>(|| {
+            Err(ParameterIngressError::Codec(norito::Error::LengthMismatch))
+        })
+        .unwrap_err();
+        let error = TryReadError::from(StateRestoreError::Parameters(
+            ParameterCellRestoreError::Ingress(original),
+        ));
+        assert!(matches!(error, TryReadError::StateParameterDecode(_)));
+    }
+}
+
+#[cfg(test)]
+mod restore_cause_tests {
+    //! Original finite-pool refusals retain their type and retry owner.
+    use super::TryReadError;
+    use crate::{
+        pipeline_gas_policy::{ParameterIngressAttemptError, ParameterIngressError},
+        state::{ParameterCellRestoreError, deserialize::StateRestoreError},
+    };
+    use iroha_allocation::{AllocationBudget, ChargedBuffer, ChargedBufferError};
+    use mv::cell::{CellInitialization, CellInitializationError};
+    use std::error::Error as _;
+
+    #[test]
+    fn parameter_graph_restore_keeps_original_refusal_and_same_pool_retry() {
+        let pool = AllocationBudget::new(64);
+        let pressure = ChargedBuffer::<u8>::new(64, &pool).unwrap();
+        let refused = ChargedBuffer::<u8>::new(1, &pool)
+            .err()
+            .expect("actual refusal");
+        let ChargedBufferError::Admission(original) = &refused else {
+            panic!("original finite pool refusal required");
+        };
+        let expected = original.clone();
+        let error = TryReadError::from(StateRestoreError::Parameters(
+            ParameterCellRestoreError::Ingress(ParameterIngressAttemptError::Original(
+                ParameterIngressError::Allocation(refused),
+            )),
+        ));
+        assert!(error.source().unwrap().is::<ParameterIngressError>());
+        let TryReadError::StateParameterIngress(ParameterIngressError::Allocation(
+            ChargedBufferError::Admission(original),
+        )) = error
+        else {
+            panic!("typed parameter cause must survive transport");
+        };
+        assert_eq!(original, expected);
+        assert_eq!(pool.reserved_bytes(), 64);
+        drop(pressure);
+        drop(ChargedBuffer::<u8>::new(1, &pool).unwrap());
+        assert_eq!(pool.reserved_bytes(), 0);
+    }
+
+    #[test]
+    fn parameter_cell_restore_keeps_original_refusal_and_same_pool_retry() {
+        let bytes = CellInitialization::<u64>::allocation_layouts()
+            .iter()
+            .map(std::alloc::Layout::size)
+            .sum();
+        let pool = AllocationBudget::new(bytes);
+        let pressure = ChargedBuffer::<u8>::new(bytes, &pool).unwrap();
+        let refused = CellInitialization::<u64>::try_reserve(&pool)
+            .err()
+            .expect("actual Cell refusal");
+        let CellInitializationError::Admission(original) = &refused else {
+            panic!("original finite pool refusal required");
+        };
+        let expected = original.clone();
+        let error = TryReadError::from(StateRestoreError::Parameters(
+            ParameterCellRestoreError::Initialization(refused),
+        ));
+        assert!(error.source().unwrap().is::<CellInitializationError>());
+        let TryReadError::StateParameterCell(CellInitializationError::Admission(original)) = error
+        else {
+            panic!("typed Cell cause must survive transport");
+        };
+        assert_eq!(original, expected);
+        assert_eq!(pool.reserved_bytes(), bytes);
+        drop(pressure);
+        drop(CellInitialization::<u64>::try_reserve(&pool).unwrap());
+        assert_eq!(pool.reserved_bytes(), 0);
+    }
+
+    #[test]
+    fn world_initialization_restore_keeps_original_parameter_cause() {
+        let pool = AllocationBudget::new(64);
+        let pressure = ChargedBuffer::<u8>::new(64, &pool).unwrap();
+        let refused = ChargedBuffer::<u8>::new(1, &pool)
+            .err()
+            .expect("actual refusal");
+        let ChargedBufferError::Admission(original) = &refused else {
+            panic!("original finite pool refusal required");
+        };
+        let expected = original.clone();
+        let error = TryReadError::from(StateRestoreError::WorldInitialization(
+            crate::state::WorldConstructionError::Parameters(ParameterIngressError::Allocation(
+                refused,
+            )),
+        ));
+        assert!(
+            error
+                .source()
+                .unwrap()
+                .is::<crate::state::WorldConstructionError>()
+        );
+        let TryReadError::StateWorldInitialization(
+            crate::state::WorldConstructionError::Parameters(ParameterIngressError::Allocation(
+                ChargedBufferError::Admission(original),
+            )),
+        ) = error
+        else {
+            panic!("typed World cause must survive transport");
+        };
+        assert_eq!(original, expected);
+        drop(pressure);
+        drop(ChargedBuffer::<u8>::new(1, &pool).unwrap());
+        assert_eq!(pool.reserved_bytes(), 0);
     }
 }

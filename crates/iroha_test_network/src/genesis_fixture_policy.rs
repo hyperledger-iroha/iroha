@@ -24,15 +24,19 @@ pub(super) fn policy_bound_proposal(
             entries,
             key,
             chain_id(),
-            test_network_crypto_admission_policy(),
-            None,
-            None,
-            None,
-            None,
-            None,
-            Some(iroha_core::state::default_genesis_confidential_policy_hash()),
-            None,
-            default_test_network_staking_policy(),
+            crate::config::GenesisPolicyConfig {
+                genesis_crypto: crate::config::test_network_crypto_admission_policy(),
+                da_proof_policies: None,
+                nexus_config: None,
+                zk_config: None,
+                consensus_handshake_meta: None,
+                consensus_mode_override: None,
+                confidential_policy_hash: Some(
+                    iroha_core::state::default_genesis_confidential_policy_hash(),
+                ),
+                preview_cadence_ms: None,
+                ..Default::default()
+            },
         );
     let (proposal, manifest) = bind_proposal(proposal, manifest, &account, &topology, &key, None)
         .expect("bind original fixture policy before testing result handling");
@@ -51,7 +55,16 @@ pub(super) fn bind_proposal(
     let (executed, _, manifest) =
         genesis_policy::execute_generated_genesis(proposal, manifest, key, true, |candidate| {
             preexecute_genesis_with_runtime_config(
-                candidate, account, topology, key, None, nexus, None, None,
+                candidate,
+                account,
+                topology,
+                key,
+                crate::config::GenesisRuntimeConfig {
+                    pipeline_config: None,
+                    nexus_config: nexus,
+                    zk_config: None,
+                    runtime_config: None,
+                },
             )
         })?;
     Ok((

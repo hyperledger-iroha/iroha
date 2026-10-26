@@ -605,8 +605,7 @@ impl Sandbox {
     pub fn with_max_execution_depth(self, depth: u8) -> Self {
         let mut world = self.state.world.block();
         world
-            .parameters
-            .set_parameter(Parameter::SmartContract(
+            .set_parameter_for_testing(Parameter::SmartContract(
                 iroha_data_model::parameter::SmartContractParameter::ExecutionDepth(depth),
             ))
             .expect("valid fixture parameters");
@@ -641,7 +640,7 @@ impl Sandbox {
             let instructions =
                 transfers_batched::<N_INSTRUCTIONS>(src, quantity_per_instruction, dest);
             TransactionBuilder::new(
-                self.state.network_id_ref().clone(),
+                *self.state.network_id_ref(),
                 GENESIS_ACCOUNT.id.clone(),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )

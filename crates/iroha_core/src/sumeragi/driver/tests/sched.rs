@@ -43,7 +43,7 @@ fn result_of(parent_result: &Hash32, block: &AvailableBody) -> Hash32 {
 
 /// A block of `height` on `(parent, parent_result)` and its result.
 fn child(height: u64, parent: (Hash32, Hash32), tag: u64) -> (AvailableBody, Hash32, Hash32) {
-    let b = block(height, parent.0, parent.1, encode_tx(tag, false, 4));
+    let b = block(height, parent.0, parent.1, &encode_tx(tag, false, 4));
     let r = result_of(&parent.1, &b);
     let bh = hash(&b);
     (b, bh, r)
@@ -1117,23 +1117,7 @@ fn original_boundary_config_survives_retry_and_is_delivered_atomically() {
             if let ExecOp::Commit(commit) = op {
                 assert_eq!(commit.block, block);
                 assert_eq!(commit.qc, certificate);
-                if !refused {
-                    rig.sched.done(
-                        rig.now,
-                        ExecDone::Committed(Err(PublicationError::Retryable(
-                            "physical refusal".into(),
-                        ))),
-                    );
-                    assert!(
-                        rig.sched
-                            .take_events()
-                            .iter()
-                            .all(|event| !matches!(event, Event::BlockApplied { .. }))
-                    );
-                    assert_eq!(rig.sched.applied(), 0);
-                    rig.now += 1_000;
-                    refused = true;
-                } else {
+                if refused {
                     assert_eq!(
                         rig.sched
                             .done(rig.now, ExecDone::Committed(Ok(Box::new(original.clone())))),
@@ -1141,6 +1125,21 @@ fn original_boundary_config_survives_retry_and_is_delivered_atomically() {
                     );
                     break;
                 }
+                rig.sched.done(
+                    rig.now,
+                    ExecDone::Committed(Err(PublicationError::Retryable(
+                        "physical refusal".into(),
+                    ))),
+                );
+                assert!(
+                    rig.sched
+                        .take_events()
+                        .iter()
+                        .all(|event| !matches!(event, Event::BlockApplied { .. }))
+                );
+                assert_eq!(rig.sched.applied(), 0);
+                rig.now += 1_000;
+                refused = true;
             } else {
                 rig.finish(op);
             }
@@ -1454,7 +1453,7 @@ fn due_control_build_progresses_under_replenished_drive_and_partial_ingress() {
     );
 }
 
-/// The execution worker's apply completion precedes Core's BlockApplied acceptance.
+/// The execution worker's apply completion precedes Core's `BlockApplied` acceptance.
 /// An original queued build must survive that first source activation without running early.
 #[test]
 fn successor_build_waits_for_core_parent_activation_and_keeps_empty_readiness() {

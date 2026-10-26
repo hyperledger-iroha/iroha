@@ -273,6 +273,37 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
 }
 
 #[cfg(test)]
+impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
+    pub(in crate::kagemusha_wallet_state_v1) fn retain_delivery_test_preparing(
+        &mut self,
+        request: &NativeIntentV1,
+    ) -> Result<(), Error> {
+        let (mut selected, mut manifest) = self.manifest()?;
+        let bytes = archive::encode(request)?;
+        let mut entry = Entry::bound(&self.scheme_id, &self.wallet_id, request, &bytes);
+        entry.request = Some(self.archive.write_object(&bytes, REQUEST_MAX_BYTES)?);
+        self.publish_preparation(&mut selected, &mut manifest, request.request_id(), &entry)
+    }
+
+    pub(in crate::kagemusha_wallet_state_v1) fn retain_delivery_test_mapping(
+        &mut self,
+        request: &NativeIntentV1,
+        capsule: [u8; 32],
+        commitment: [u8; 32],
+        operation: [u8; 32],
+    ) -> Result<(), Error> {
+        let (mut selected, mut manifest) = self.manifest()?;
+        let bytes = archive::encode(request)?;
+        let mut entry = Entry::bound(&self.scheme_id, &self.wallet_id, request, &bytes);
+        entry.request = Some(self.archive.write_object(&bytes, REQUEST_MAX_BYTES)?);
+        entry.capsule = Some(capsule);
+        entry.capsule_commitment = Some(commitment);
+        entry.operation = Some(operation);
+        self.publish_preparation(&mut selected, &mut manifest, request.request_id(), &entry)
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::kagemusha_wallet_state_v1::tests::fixture;
@@ -322,36 +353,5 @@ mod tests {
             identity,
             NativeIntentV1::archive_identity(&capsule, &wallet, &[6; 10])
         );
-    }
-}
-
-#[cfg(test)]
-impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
-    pub(in crate::kagemusha_wallet_state_v1) fn retain_delivery_test_preparing(
-        &mut self,
-        request: NativeIntentV1,
-    ) -> Result<(), Error> {
-        let (mut selected, mut manifest) = self.manifest()?;
-        let bytes = archive::encode(&request)?;
-        let mut entry = Entry::bound(&self.scheme_id, &self.wallet_id, &request, &bytes);
-        entry.request = Some(self.archive.write_object(&bytes, REQUEST_MAX_BYTES)?);
-        self.publish_preparation(&mut selected, &mut manifest, request.request_id(), &entry)
-    }
-
-    pub(in crate::kagemusha_wallet_state_v1) fn retain_delivery_test_mapping(
-        &mut self,
-        request: NativeIntentV1,
-        capsule: [u8; 32],
-        commitment: [u8; 32],
-        operation: [u8; 32],
-    ) -> Result<(), Error> {
-        let (mut selected, mut manifest) = self.manifest()?;
-        let bytes = archive::encode(&request)?;
-        let mut entry = Entry::bound(&self.scheme_id, &self.wallet_id, &request, &bytes);
-        entry.request = Some(self.archive.write_object(&bytes, REQUEST_MAX_BYTES)?);
-        entry.capsule = Some(capsule);
-        entry.capsule_commitment = Some(commitment);
-        entry.operation = Some(operation);
-        self.publish_preparation(&mut selected, &mut manifest, request.request_id(), &entry)
     }
 }

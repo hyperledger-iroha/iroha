@@ -505,11 +505,7 @@ pub(crate) fn validate_contract_lifecycle_call(
     let pending = pending_contract_lifecycle(world, contract_address)?;
     match (kind, pending) {
         (EntryPointKind::Hajimari, Some(pending @ PendingContractLifecycle::Hajimari { .. }))
-            if pending.code_hash() == executing_code_hash =>
-        {
-            Ok(Some(pending))
-        }
-        (EntryPointKind::Kaizen, Some(pending @ PendingContractLifecycle::Kaizen { .. }))
+        | (EntryPointKind::Kaizen, Some(pending @ PendingContractLifecycle::Kaizen { .. }))
             if pending.code_hash() == executing_code_hash =>
         {
             Ok(Some(pending))
@@ -646,16 +642,18 @@ pub(crate) fn validate_contract_lifecycle_state_completion(
             .map_err(|error| {
                 ValidationFail::InternalError(format!("invalid upgraded state path: {error}"))
             })?;
-        let value = match overlay.get(&path) {
-            Some(value) => value.as_deref(),
-            None => world.smart_contract_state().get(&path).map(Vec::as_slice),
-        }
-        .ok_or_else(|| {
-            ValidationFail::NotPermitted(format!(
-                "kaizen/改善 did not initialize new scalar state `{}`",
-                state.name
-            ))
-        })?;
+        let value = overlay
+            .get(&path)
+            .map_or_else(
+                || world.smart_contract_state().get(&path).map(Vec::as_slice),
+                |value| value.as_deref(),
+            )
+            .ok_or_else(|| {
+                ValidationFail::NotPermitted(format!(
+                    "kaizen/改善 did not initialize new scalar state `{}`",
+                    state.name
+                ))
+            })?;
         ivm::host::validate_persisted_state_value_payload(&state.ty, value).map_err(|error| {
             ValidationFail::NotPermitted(format!(
                 "kaizen/改善 initialized new scalar state `{}` with an invalid value: {error}",
@@ -1093,6 +1091,11 @@ struct BorrowedBoundContractRecord<'a> {
     code_bytes: &'a [u8],
 }
 
+/// Borrow the complete bound record of one instance.
+///
+/// Its only fallible steps are artifact-scope checks, all of the artifact named
+/// by the instance's address and code hash; every other gap makes it absent.
+/// [`validate_bound_contract_records_by_subject`] relies on this shape.
 fn borrow_bound_contract_record<'a>(
     state: &'a impl StateReadOnly,
     contract_address: &'a ContractAddress,
@@ -1204,10 +1207,17 @@ pub fn snapshot_bound_contract_records_by_subject(
 /// Validate the ordered registry reads required by an owned contract snapshot.
 ///
 /// Hosts with a live query state resolve called contracts from that state and do
-/// not consume an eager snapshot. This retains the snapshot's setup-time scope
-/// checks and incomplete-read behavior without cloning any deployed bytecode,
-/// manifests, subjects or alias records. Incomplete bindings remain absent just
-/// as they do in [`snapshot_bound_contract_records_by_subject`].
+/// not consume an eager snapshot. This returns the snapshot's setup-time result
+/// without cloning any deployed bytecode, manifests, subjects or alias records.
+/// Incomplete bindings remain absent just as they do in
+/// [`snapshot_bound_contract_records_by_subject`], so they cannot fail it.
+///
+/// Only the artifact-scope checks of [`borrow_bound_contract_record`] can fail,
+/// and all checks of one instance name the same artifact, so its first check
+/// decides it. After an exact check reads a Global root, every remaining check
+/// is admitted. Under a private root only an instance of another dataspace can
+/// fail, and it repeats the exact check. Setup therefore no longer derives a
+/// subject or decodes the root once per deployed contract.
 ///
 /// # Errors
 /// Returns the first scope rejection or original local decode refusal in the
@@ -1215,8 +1225,30 @@ pub fn snapshot_bound_contract_records_by_subject(
 pub fn validate_bound_contract_records_by_subject(
     state: &impl StateReadOnly,
 ) -> Result<(), ExecutionAttemptError<ValidationFail>> {
-    for (contract_address, _) in state.world().contract_instances().iter() {
-        let _ = borrow_bound_contract_record(state, contract_address)?;
+    use iroha_data_model::block::consensus::SumeragiRootScope;
+
+    let world = state.world();
+    // Dataspace of the private root that an earlier exact check admitted.
+    let mut private_root = None;
+    for (contract_address, code_hash) in world.contract_instances().iter() {
+        let Ok(artifact_id) = ContractArtifactId::for_address(contract_address, *code_hash) else {
+            continue;
+        };
+        if private_root == Some(artifact_id.dataspace_id) {
+            continue;
+        }
+        crate::executor::root_scope::ensure_committed_artifact_scope(world, &artifact_id)?;
+        if private_root.is_none() {
+            // The exact check above has just read this immutable root.
+            match crate::sumeragi::lanes::routing::read_routing_root_scope(world) {
+                Ok(Some(SumeragiRootScope::Global)) => return Ok(()),
+                Ok(Some(SumeragiRootScope::Dataspace { dataspace_id, .. })) => {
+                    private_root = Some(dataspace_id);
+                }
+                // A root that cannot be read again keeps every exact check.
+                Ok(None) | Err(_) => {}
+            }
+        }
     }
     Ok(())
 }
@@ -1416,12 +1448,16 @@ mod tests {
         let domain = Domain::new(dom.clone()).build(&auth);
         let account = Account::new(auth.clone()).build(&auth);
         let mut world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
-        let mut parameters = world.parameters.block();
-        parameters
-            .set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
+            .expect("funded parameter fixture block");
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            crate::sumeragi::lanes::routing::test_support::metadata(
                 iroha_data_model::block::consensus::SumeragiRootScope::Global,
-            ))
-            .expect("valid fixture parameters");
+            ),
+            world.sccp_committee_generations.allocation_budget(),
+        )
+        .expect("valid fixture parameters");
         parameters.commit();
         let mut permissions = permission::Permissions::new();
         assert!(
@@ -1453,8 +1489,7 @@ mod tests {
         let dataspace_id = iroha_model_base::topology::DataSpaceId::new(u64::MAX);
         transaction
             .world
-            .parameters
-            .set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
+            .set_parameter_for_testing(crate::sumeragi::lanes::routing::test_support::metadata(
                 iroha_data_model::block::consensus::SumeragiRootScope::Dataspace {
                     parent_network_id: state.network_id,
                     dataspace_id,
@@ -1964,7 +1999,7 @@ seiyaku LifecycleTwo { permission CanRunLifecycleTwo;
             let (bytes, manifest) = lifecycle_contract(source);
             let hash = manifest.code_hash.unwrap();
             let id = ContractArtifactId::for_address(&address, hash).unwrap();
-            transaction.world.contract_code.insert(id.clone(), bytes);
+            transaction.world.contract_code.insert(id, bytes);
             transaction.world.contract_manifests.insert(id, manifest);
             hash
         };
@@ -2509,12 +2544,14 @@ seiyaku LifecycleAba { permission CanRunLifecycleAba;
             iroha_data_model::pipeline_validity_policy::PipelineValidityPolicyV1::protocol_default(
             );
         policy.ivm_max_cycles_upper_bound = 1;
-        let mut parameters = state.world.parameters.block();
-        parameters
-            .set_parameter(iroha_data_model::parameter::Parameter::Custom(
-                policy.into_custom_parameter(),
-            ))
-            .expect("valid committed admission ceiling");
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+            .expect("funded parameter fixture block");
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            iroha_data_model::parameter::Parameter::Custom(policy.into_custom_parameter()),
+            state.world.sccp_committee_generations.allocation_budget(),
+        )
+        .expect("valid committed admission ceiling");
         parameters.commit();
         let mut block = state.block(default_header(1));
         assert_eq!(block.pipeline.ivm_max_cycles_upper_bound.get(), 1);

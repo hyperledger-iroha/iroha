@@ -21,7 +21,7 @@ impl HttpTransport for NoTransport {
     }
 }
 
-pub(super) fn client_with_base_url(url: Url) -> Client {
+pub fn client_with_base_url(url: &Url) -> Client {
     // Fixed public test keys use the same canonical configuration parser as external clients.
     // No private SDK fields or compatibility cache are changed by this fixture.
     let source = format!(
@@ -49,7 +49,7 @@ nonce = false
         .expect("valid immutable native integration client")
 }
 
-pub(super) fn compatible_capabilities_response() -> eyre::Result<http::Response<Vec<u8>>> {
+pub fn compatible_capabilities_response() -> eyre::Result<http::Response<Vec<u8>>> {
     let hash = hex::encode(norito::schema::identity::frame_hash::<
         iroha_data_model::transaction::SignedTransaction,
     >());

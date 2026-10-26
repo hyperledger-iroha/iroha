@@ -1,5 +1,15 @@
 //! Grouped Iroha Core integration tests.
 
+#[cfg(feature = "zk-tests")]
+#[path = "../common/native_genesis.rs"]
+mod native_genesis;
+#[cfg(feature = "zk-tests")]
+#[path = "../common/world_fixture.rs"]
+mod test_world;
+#[cfg(feature = "zk-tests")]
+#[path = "../common/zk_components.rs"]
+mod zk_components;
+
 #[path = "../../src/manifest_signing_test_support.rs"]
 mod manifest_signing_test_support;
 #[path = "../private_settlement_responder_attestation.rs"]

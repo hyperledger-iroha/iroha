@@ -9,7 +9,7 @@ use super::*;
 /// This is not a caller-selected limit or a retained runtime cache.
 const MAX_STORED_BYTES: usize = 16 << 20;
 
-fn capture_io(error: io::Error) -> Error {
+fn capture_io(error: &io::Error) -> Error {
     match error.kind() {
         io::ErrorKind::InvalidData | io::ErrorKind::InvalidInput | io::ErrorKind::UnexpectedEof => {
             Error::Inventory
@@ -24,7 +24,7 @@ struct Captured(Error);
 
 impl From<io::Error> for Captured {
     fn from(error: io::Error) -> Self {
-        Self(capture_io(error))
+        Self(capture_io(&error))
     }
 }
 

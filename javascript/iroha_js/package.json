@@ -233,6 +233,7 @@
     "build:dist": "node ./scripts/build-dist.mjs",
     "bundle:check": "node ./scripts/bundle-size-check.mjs",
     "test": "npm run build:native && node ./scripts/run-test-profile.mjs unit",
+    "test:local": "python3.12 -E -s -B ../../scripts/test_js_local.py",
     "test:dist": "npm run build:dist && node ./scripts/run-test-profile.mjs unit",
     "test:native-provenance": "node ./scripts/run-test-profile.mjs native-provenance",
     "test:sorafs-native": "node ./scripts/run-test-profile.mjs sorafs-native",

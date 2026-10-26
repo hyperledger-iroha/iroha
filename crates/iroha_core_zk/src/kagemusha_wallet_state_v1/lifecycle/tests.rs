@@ -5,6 +5,9 @@ use super::*;
 #[path = "intake_tests.rs"]
 mod intake;
 
+#[path = "receive_retry_tests.rs"]
+mod receive_retry;
+
 use crate::kagemusha_wallet_advance_v1::kagemusha_wallet_archive_object_digest_v1 as object_digest;
 
 /// Which mock derivation a proof consumed.
@@ -64,6 +67,25 @@ impl NativePreparation for TestProofs {
         }
         if let Some(archive) = request.archive_request().filter(|_| self.archive_plans) {
             let plan = archive::encode(&archive_step(source, archive)?)?;
+            let prepared = TestPreparedV1 {
+                plan: object_digest(&plan),
+                origin: TestOriginV1::Plan,
+            };
+            return Ok((plan, prepared));
+        }
+        if let Some(OperationActionV1::Receive { .. }) =
+            request.user_request().map(|request| &request.action)
+            && self.refuse_receive_admission
+        {
+            return Err(Error::Invalid(
+                crate::kagemusha_wallet_state_v1::native_worker::RECEIVE_ADMISSION_REFUSAL,
+            ));
+        }
+        if let Some(action @ OperationActionV1::Receive { .. }) =
+            request.user_request().map(|request| &request.action)
+            && self.receive_plans
+        {
+            let plan = archive::encode(&receive_retry::receive_step(source, action)?)?;
             let prepared = TestPreparedV1 {
                 plan: object_digest(&plan),
                 origin: TestOriginV1::Plan,
@@ -132,6 +154,11 @@ impl NativePreparation for TestProofs {
         } else {
             request.user_request().map(|request| &request.action)
                 == Some(&OperationActionV1::Retire)
+                || self.receive_plans
+                    && matches!(
+                        request.user_request().map(|request| &request.action),
+                        Some(OperationActionV1::Receive { .. })
+                    )
         };
         if !planned
             || prepared.capsule.body().predecessor_capsule_digest
@@ -290,10 +317,12 @@ fn speculation(wallet: &mut Wallet) -> TestSpeculativeV1 {
         &map_state,
         request().kind(),
         None,
-        manifest.issued_requests,
-        manifest.direct_anchors,
-        manifest.finality_epochs,
-        manifest.blacklist.clone(),
+        crate::kagemusha_wallet_state_v1::preparation_custody::PreparationSelectionV1 {
+            issued: manifest.issued_requests,
+            anchors: manifest.direct_anchors,
+            epochs: manifest.finality_epochs,
+            blacklist: manifest.blacklist.clone(),
+        },
     )
     .unwrap();
     let (plan, _) = wallet
@@ -816,10 +845,12 @@ fn historical_send() -> (Wallet, FrozenTransition, OperationRequestV1) {
         &boot.capsule.body().successor_state,
         KagemushaWalletOperationKindV1::RefreshPolicy,
         Some(KagemushaWalletPolicyUpdateKindV1::SchemePolicy),
-        manifest.issued_requests,
-        manifest.direct_anchors,
-        manifest.finality_epochs,
-        manifest.blacklist.clone(),
+        crate::kagemusha_wallet_state_v1::preparation_custody::PreparationSelectionV1 {
+            issued: manifest.issued_requests,
+            anchors: manifest.direct_anchors,
+            epochs: manifest.finality_epochs,
+            blacklist: manifest.blacklist.clone(),
+        },
     )
     .unwrap();
     policy_custody
@@ -875,7 +906,7 @@ fn historical_send() -> (Wallet, FrozenTransition, OperationRequestV1) {
     };
     wallet
         .retain_delivery_test_mapping(
-            NativeIntentV1::user(request.clone()),
+            &NativeIntentV1::user(request.clone()),
             send.capsule.custody_digest(),
             send.capsule.receipt_commitment(),
             send.capsule.body().operation_id,
@@ -1113,7 +1144,7 @@ fn missing_completion_requires_readable_canonical_operation_locator_and_matching
     let signatures = wallet.custody.signatures;
     wallet
         .retain_delivery_test_mapping(
-            NativeIntentV1::user(request.clone()),
+            &NativeIntentV1::user(request.clone()),
             field(1),
             send.capsule.receipt_commitment(),
             operation,
@@ -1585,10 +1616,12 @@ fn source_rotation_does_not_rebase_a_durable_plan_or_repeat_proving() {
         &map_state,
         request().kind(),
         None,
-        manifest.issued_requests,
-        manifest.direct_anchors,
-        manifest.finality_epochs,
-        manifest.blacklist.clone(),
+        crate::kagemusha_wallet_state_v1::preparation_custody::PreparationSelectionV1 {
+            issued: manifest.issued_requests,
+            anchors: manifest.direct_anchors,
+            epochs: manifest.finality_epochs,
+            blacklist: manifest.blacklist.clone(),
+        },
     )
     .unwrap();
     let (plan, _) = wallet
@@ -1648,7 +1681,7 @@ fn deferred_archive(wallet: &mut Wallet) -> ([u8; 32], Vec<u8>, [u8; 32]) {
         .unwrap();
     wallet
         .retain_delivery_test_mapping(
-            NativeIntentV1::user(OperationRequestV1 {
+            &NativeIntentV1::user(OperationRequestV1 {
                 request_id: send,
                 action: OperationActionV1::Send {
                     request: request.clone(),
@@ -1680,7 +1713,7 @@ fn deferred_archive(wallet: &mut Wallet) -> ([u8; 32], Vec<u8>, [u8; 32]) {
         archive::encode(&companion.certificates).unwrap(),
     );
     let archive = intent.request_id();
-    wallet.retain_delivery_test_preparing(intent).unwrap();
+    wallet.retain_delivery_test_preparing(&intent).unwrap();
     wallet.proofs.archive_plans = true;
     (send, credited, archive)
 }
@@ -2076,6 +2109,8 @@ fn native_intent_is_canonical_and_does_not_decode_the_foreign_request_layout() {
 
 #[test]
 fn model_intake_refusal_preserves_all_refresh_receive_and_unload_originals_before_preparation() {
+    use KagemushaWalletPolicyUpdateKindV1 as K;
+
     let scheme: KagemushaWalletSchemeV1 = fixture("KagemushaWalletSchemeV1");
     let credential: KagemushaWalletCredentialV1 = fixture("KagemushaWalletCredentialV1");
     // Intake validates canonical shape only. The empty set confers no issuer authority;
@@ -2088,7 +2123,6 @@ fn model_intake_refusal_preserves_all_refresh_receive_and_unload_originals_befor
         payer_credential: credential.to_canonical_bytes().unwrap(),
         certificates: certificates.clone(),
     }];
-    use KagemushaWalletPolicyUpdateKindV1 as K;
     for (kind, update) in [
         (K::Credential, credential.to_canonical_bytes().unwrap()),
         (
@@ -2135,7 +2169,7 @@ fn model_intake_refusal_preserves_all_refresh_receive_and_unload_originals_befor
         let mut w = wallet();
         // Resolve the mock ledger scope outside the constrained decoder. No fixture
         // construction or proof authority is introduced inside the observed read.
-        w.proofs.ledger_scope = Some((scheme.clone(), "wallet-test-chain".into()));
+        w.proofs.ledger_scope = Some((scheme, "wallet-test-chain".into()));
         let root = w.manifest().unwrap().0;
         let allocation_limit = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 64);
         let mut refusal_limits = vec![
@@ -2378,10 +2412,12 @@ fn unsynced_head_move_after_the_binding_check_stops_at_the_final_source_check() 
         &map_state,
         request().kind(),
         None,
-        manifest.issued_requests,
-        manifest.direct_anchors,
-        manifest.finality_epochs,
-        manifest.blacklist.clone(),
+        crate::kagemusha_wallet_state_v1::preparation_custody::PreparationSelectionV1 {
+            issued: manifest.issued_requests,
+            anchors: manifest.direct_anchors,
+            epochs: manifest.finality_epochs,
+            blacklist: manifest.blacklist.clone(),
+        },
     )
     .unwrap();
     let (plan, _) = wallet
@@ -2433,10 +2469,12 @@ fn proven_successor_is_checked_on_durable_custody_before_capsule_publication() {
         &map_state,
         request().kind(),
         None,
-        manifest.issued_requests,
-        manifest.direct_anchors,
-        manifest.finality_epochs,
-        manifest.blacklist.clone(),
+        crate::kagemusha_wallet_state_v1::preparation_custody::PreparationSelectionV1 {
+            issued: manifest.issued_requests,
+            anchors: manifest.direct_anchors,
+            epochs: manifest.finality_epochs,
+            blacklist: manifest.blacklist.clone(),
+        },
     )
     .unwrap()
     .original(crate::kagemusha_wallet_state_v1::PreparationOriginalV1::CurrentCredential)
@@ -2986,7 +3024,7 @@ fn check_fresh_send_receipt(open: bool) {
         *original = archive::encode(&issued).unwrap();
         wallet
             .retain_delivery_test_mapping(
-                NativeIntentV1::user(request.clone()),
+                &NativeIntentV1::user(request.clone()),
                 send.capsule.custody_digest(),
                 send.capsule.receipt_commitment(),
                 send.capsule.body().operation_id,

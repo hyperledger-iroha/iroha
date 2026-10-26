@@ -1,4 +1,4 @@
-//! Production HTTPS transport for governed SoraFS compliance feeds.
+//! Production HTTPS transport for governed `SoraFS` compliance feeds.
 //!
 //! The controller validates URL policy, public DNS answers, redirects, and configured trust pins.
 //! This transport enforces the runtime side of that contract: a bounded system resolver, exact
@@ -83,6 +83,10 @@ impl ResolverPool {
             Arc::new(resolve_system_hostname),
         )
     }
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "pool initialization owns the resolver until all independently owned worker clones have been launched"
+    )]
     fn new_with(
         worker_count: usize,
         queue_capacity: usize,
@@ -175,14 +179,20 @@ impl ResolverPool {
             Ok(Err(ResolveFailure::ProviderPanic)) => Err(GatewayComplianceError::InvalidFeed(
                 "DNS resolver provider panicked".into(),
             )),
-            Ok(Err(ResolveFailure::Deadline)) => Err(GatewayComplianceError::FetchTimeout),
-            Err(mpsc::RecvTimeoutError::Timeout) => Err(GatewayComplianceError::FetchTimeout),
+            Ok(Err(ResolveFailure::Deadline)) | Err(mpsc::RecvTimeoutError::Timeout) => {
+                Err(GatewayComplianceError::FetchTimeout)
+            }
+
             Err(mpsc::RecvTimeoutError::Disconnected) => Err(GatewayComplianceError::InvalidFeed(
                 "DNS resolver unavailable".into(),
             )),
         }
     }
 }
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "each detached worker owns the receiver and resolver for its complete thread lifetime"
+)]
 fn resolver_worker(receiver: Arc<Mutex<Receiver<ResolveJob>>>, resolver: Arc<Resolver>) {
     loop {
         let job = {
@@ -369,7 +379,7 @@ fn fetch_pinned(
         .get(request.url.clone())
         .timeout(remaining)
         .send()
-        .map_err(map_reqwest_error)?;
+        .map_err(|value| map_reqwest_error(&value))?;
     let connected_address = response
         .remote_addr()
         .map(|address| address.ip())
@@ -570,7 +580,7 @@ fn remaining_time(
         .filter(|remaining| !remaining.is_zero())
         .ok_or(GatewayComplianceError::FetchTimeout)
 }
-fn map_reqwest_error(error: reqwest::Error) -> GatewayComplianceError {
+fn map_reqwest_error(error: &reqwest::Error) -> GatewayComplianceError {
     if error.is_timeout() {
         GatewayComplianceError::FetchTimeout
     } else {

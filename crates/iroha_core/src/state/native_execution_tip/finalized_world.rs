@@ -6,7 +6,7 @@
 //! published World at H: the latter is bound by H+1's parent World root.
 //! TODO: consume this original-source check only after complete State authority,
 //! bounded capture work, allocation custody and durable witness-node ownership
-//! are implemented. It must never promote an IvmCompleteStateRootClaimV1.
+//! are implemented. It must never promote an `IvmCompleteStateRootClaimV1`.
 
 use super::*;
 use crate::state::world_projection::WorldStateAccumulator;

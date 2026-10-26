@@ -470,6 +470,10 @@ impl InMemoryTlePartialReleaseSignerV1 {
     ///
     /// Returns an adapter error if the public transcript or secret share does
     /// not match the frozen participant seat.
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "The constructor consumes and zeroizes the secret components before returning"
+    )]
     pub fn from_components(
         public_state: TleKeySessionPublicStateV1,
         participant_index: u16,
@@ -592,7 +596,7 @@ pub(crate) mod tests {
     use std::sync::Arc;
 
     use super::*;
-    pub(crate) use iroha_core_timed_ovn::tle::test_fixtures::*;
+    pub use iroha_core_timed_ovn::tle::test_fixtures::*;
 
     #[expect(
         clippy::large_types_passed_by_value,
@@ -688,7 +692,7 @@ pub(crate) mod tests {
             tle_key.public_state().key_session_id,
             opening_attempt
                 .ballot(&ballot_attempt_id)
-                .and_then(|ballot| ballot.tle_key_session_id())
+                .and_then(super::super::governance::parliament::ParliamentBallotStateV1::tle_key_session_id)
                 .expect("fixture ballot TLE key session")
         );
 
@@ -791,8 +795,10 @@ pub(crate) mod tests {
             .freeze_ballot_survivors(
                 governance_attempt_id,
                 ballot_attempt_id,
-                reducer_binding.dropout_root.expect("dropout root"),
-                reducer_binding.survivor_root.expect("survivor root"),
+                (
+                    reducer_binding.dropout_root.expect("dropout root"),
+                    reducer_binding.survivor_root.expect("survivor root"),
+                ),
                 reducer_binding.survivors.expect("survivor count"),
                 reducer_binding.no_recovery_root.expect("no-recovery root"),
                 survivor_freeze_height,
@@ -802,8 +808,10 @@ pub(crate) mod tests {
             .freeze_timed_ovn_corpus(
                 governance_attempt_id,
                 ballot_attempt_id,
-                reducer_binding.corpus_root.expect("corpus root"),
-                reducer_binding.survivor_root.expect("survivor root"),
+                (
+                    reducer_binding.corpus_root.expect("corpus root"),
+                    reducer_binding.survivor_root.expect("survivor root"),
+                ),
                 reducer_binding
                     .accepted_ballots
                     .expect("accepted ballot count"),

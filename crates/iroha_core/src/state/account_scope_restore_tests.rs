@@ -271,7 +271,10 @@ fn account_removal_primary_reassignment_and_absent_touch_survive_replacement() {
         assert!(replacement.account_scope_directory.get(&bob).is_none());
         {
             let mut tx = replacement.transaction_without_telemetry(LaneConfig::default(), 0);
-            tx.insert_account_alias_binding(alias("replacement", 31, Some("new")), alice.clone());
+            tx.insert_account_alias_binding(
+                &(alias("replacement", 31, Some("new"))),
+                &(alice.clone()),
+            );
             tx.apply();
         }
         if commit {

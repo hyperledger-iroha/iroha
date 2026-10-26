@@ -106,10 +106,10 @@ fn resume_selected_a_send_then_b_to_c_unload_with_restart_and_replay() {
         "NATIVE_SELECTED_SEND_RESUMED request_id=212 exact_retained_request=true no_new_load=true"
     );
     finish_exchange(
-        output,
-        sources,
-        setup,
-        target_bytes,
+        &output,
+        &sources,
+        &setup,
+        &target_bytes,
         [
             Participant {
                 wallet: a,
@@ -130,7 +130,7 @@ fn resume_selected_a_send_then_b_to_c_unload_with_restart_and_replay() {
                 frames: frames_c,
             },
         ],
-        send,
+        &send,
         payment,
     );
 }
@@ -606,10 +606,10 @@ fn continue_completed_a_send_then_b_to_c_unload_with_restart_and_replay() {
         "NATIVE_COMPLETED_SEND_REOPENED request_id=212 exact_payment=true new_payment_signatures=0 no_advance=true"
     );
     finish_exchange(
-        output,
-        sources,
-        setup,
-        target_bytes,
+        &output,
+        &sources,
+        &setup,
+        &target_bytes,
         [
             Participant {
                 wallet: a,
@@ -630,7 +630,7 @@ fn continue_completed_a_send_then_b_to_c_unload_with_restart_and_replay() {
                 frames: frames_c,
             },
         ],
-        send,
+        &send,
         payment,
     );
 }

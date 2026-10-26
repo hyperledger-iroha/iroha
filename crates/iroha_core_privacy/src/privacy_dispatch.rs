@@ -157,13 +157,13 @@ pub struct PrivacyRoleDispatchRowV1 {
 impl PrivacyRoleDispatchRowV1 {
     /// The registered protocol of this row's role.
     #[must_use]
-    pub const fn protocol_id(&self) -> PrivacyProtocolIdV1 {
+    pub const fn protocol_id(self) -> PrivacyProtocolIdV1 {
         self.role.protocol_id()
     }
 
     /// Whether the ledger effect of this role can be reached.
     #[must_use]
-    pub const fn state_effects(&self) -> PrivacyRoleStateEffectsV1 {
+    pub const fn state_effects(self) -> PrivacyRoleStateEffectsV1 {
         match (self.verification, self.effect_class) {
             (PrivacyRoleVerificationV1::Unsupported(_), _) => {
                 PrivacyRoleStateEffectsV1::Unreachable

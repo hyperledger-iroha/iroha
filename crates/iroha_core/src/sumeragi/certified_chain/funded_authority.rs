@@ -1,7 +1,7 @@
 //! One caller-funded native successor authority borrowing its original parent epoch.
 //!
 //! The captured parent owns the authenticated epoch. This owner creates exactly one
-//! generic committee and epoch box, plus the admitted PoP credentials and aggregate
+//! generic committee and epoch box, plus the admitted `PoP` credentials and aggregate
 //! pairing context, from one complete reservation in the original source pool. The
 //! shared native certificate, availability and boundary relations consume a borrowed
 //! projection; there is no second verifier or independently reconstructed authority.

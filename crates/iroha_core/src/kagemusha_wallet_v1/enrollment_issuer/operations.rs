@@ -6,10 +6,9 @@ impl<R: EnrollmentIssuerRuntimeV1> EnrollmentIssuerV1<R> {
     /// A retained worker refusal, verified against its retained original, answers every other
     /// operation unchanged.
     fn require_not_rejected(&self, session: &EnrollmentIssuerSessionV1) -> Result<()> {
-        match self.journal.verified_worker_refusal(&session.attempt)? {
-            Some(reason) => Err(Refused(reason)),
-            None => Ok(()),
-        }
+        self.journal
+            .verified_worker_refusal(&session.attempt)?
+            .map_or(Ok(()), |reason| Err(Refused(reason)))
     }
 
     fn configuration(

@@ -88,7 +88,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
     match args.first().map(String::as_str){
         Some("prove") if args.len()==3=>{
-            let request:RaceProverRequestV1=read_exact(&args[1])?;let start=Instant::now();let proof=prove_race_v1(request)?;
+            let request:RaceProverRequestV1=read_exact(&args[1])?;let start=Instant::now();let proof=prove_race_v1(&request)?;
             let bytes=proof.encode();fs::write(&args[2],&bytes)?;
             println!("native proof verified; bytes={} elapsed_seconds={:.3}",bytes.len(),start.elapsed().as_secs_f64());
         },

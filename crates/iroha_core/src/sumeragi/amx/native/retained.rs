@@ -46,10 +46,8 @@ pub enum GraphError {
 }
 impl From<iroha_data_model::sumeragi_amx::AmxError> for GraphError {
     fn from(error: iroha_data_model::sumeragi_amx::AmxError) -> Self {
-        match crate::sumeragi::amx::classified_decode_refusal(&error) {
-            Some(resource) => Self::Codec(resource),
-            None => Self::Invalid(error.to_string()),
-        }
+        crate::sumeragi::amx::classified_decode_refusal(&error)
+            .map_or_else(|| Self::Invalid(error.to_string()), Self::Codec)
     }
 }
 fn codec_clone_error(error: norito::core::DecodeAttemptError) -> GraphError {
@@ -233,6 +231,7 @@ impl RetainedGlobalSource {
 }
 
 /// Original initial registration inputs lent until complete World admission.
+#[derive(Clone, Copy)]
 pub(super) struct RegistrationSource<'a> {
     pub(super) dataspace: iroha_model_base::topology::DataSpaceId,
     pub(super) global: &'a RetainedGlobalSource,

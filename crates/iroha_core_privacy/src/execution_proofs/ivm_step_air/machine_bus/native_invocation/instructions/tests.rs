@@ -26,9 +26,11 @@ pub(in super::super) fn artifact_with_literals(
         let post_pad =
             (4 - (bytes.len() - original.header_len() + data_offset + data_bytes) % 4) % 4;
         bytes.extend(LITERAL_SECTION_MAGIC);
-        bytes.extend((literals.len() as u32).to_le_bytes());
-        bytes.extend((post_pad as u32).to_le_bytes());
-        bytes.extend((data_bytes as u32).to_le_bytes());
+        bytes.extend(
+            (u32::try_from(literals.len()).expect("bounded fixture literals")).to_le_bytes(),
+        );
+        bytes.extend((u32::try_from(post_pad).expect("alignment padding")).to_le_bytes());
+        bytes.extend((u32::try_from(data_bytes).expect("bounded fixture bytes")).to_le_bytes());
         for index in 0..literals.len() {
             bytes.extend(
                 encode_literal_descriptor(LiteralKindV1::I64, (data_offset + index * 8) as u64)

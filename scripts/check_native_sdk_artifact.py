@@ -208,6 +208,8 @@ PRIVACY_BRIDGE_JNI_EXPORTS = tuple(
 
 REQUIRED_SYMBOLS: Mapping[str, tuple[str, ...]] = {
     "c-jni": (
+        "connect_norito_zk_x509_prepare_ownership_signing_v1",
+        "Java_org_hyperledger_iroha_sdk_privacy_ZkX509SigningPreparationNative_prepare",
         *CONFIDENTIAL_PROVER_C_EXPORTS,
         *KAGEMUSHA_WALLET_C_EXPORTS,
         *CONFIDENTIAL_PROVER_JNI_EXPORTS,

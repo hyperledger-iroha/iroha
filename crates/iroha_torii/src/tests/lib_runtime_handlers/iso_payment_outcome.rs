@@ -115,7 +115,7 @@ impl IsoPaymentOutcomeFixture {
         while chain.height() < history_height {
             chain.commit(Vec::new());
         }
-        let mut app = mk_app_state_for_tests_with_iso_bridge(Some(config.clone()));
+        let mut app = mk_app_state_for_tests_with_iso_bridge(Some(&config));
         let unique = Arc::get_mut(&mut app).expect("unique fixture app");
         unique.state = chain.state().clone();
         unique.kura = chain.kura().clone();
@@ -143,7 +143,7 @@ impl IsoPaymentOutcomeFixture {
             )
             .expect("original payment profile");
         runtime
-            .admit_authenticated_inbound("outcome-payment", metadata, parties)
+            .admit_authenticated_inbound("outcome-payment", &(metadata), parties)
             .expect("durable original payment");
         let (mut payload, context) = {
             let world = app.state.world_view();
@@ -718,7 +718,7 @@ impl IsoPaymentOutcomeFixture {
         let store = tempfile::tempdir().unwrap();
         let mut config = self.config.clone();
         config.store_dir = Some(store.path().to_owned());
-        let mut app = mk_app_state_for_tests_with_iso_bridge(Some(config.clone()));
+        let mut app = mk_app_state_for_tests_with_iso_bridge(Some(&config));
         let unique = Arc::get_mut(&mut app).unwrap();
         unique.state = self.chain.state().clone();
         unique.kura = self.chain.kura().clone();
@@ -745,7 +745,7 @@ impl IsoPaymentOutcomeFixture {
             )
             .unwrap();
         runtime
-            .admit_authenticated_inbound("other-gateway-payment", metadata, parties)
+            .admit_authenticated_inbound("other-gateway-payment", &(metadata), parties)
             .unwrap();
         let (mut payload, context) = runtime
             .build_pacs008_payload(
@@ -895,40 +895,35 @@ fn iso_native_business_locator_refuses_absent_and_private_root_authority() {
             .unwrap()
             .is_some()
     );
-    let absent_root = mk_app_state_for_tests_with_world(World::default());
-    let mut block = absent_root.state.block(BlockHeader::new(
-        NonZeroU64::new(1).unwrap(),
-        None,
-        None,
-        0,
-        0,
-    ));
-    let mut transaction = block.transaction();
-    assert!(
-        transaction
-            .world_mut_for_testing()
-            .parameters_mut_for_testing()
-            .remove_custom_parameter(
-                &iroha_data_model::parameter::system::consensus_metadata::handshake_meta_id()
-            )
-            .expect("remove root metadata through admitted parameter mutation")
-            .is_some(),
-        "remove the Global root metadata seeded by the general test app helper"
+    let mut absent_world = World::default();
+    crate::test_utils::author_ready_fixture_crypto_policy(&mut absent_world);
+    // Construct genuine absence; the general app fixture authors a Global root.
+    let absent_root = IrohaState::new_for_testing(
+        absent_world,
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
     );
-    transaction.apply();
-    block.commit_world_overlay_for_testing().unwrap();
-    for app in [
-        absent_root,
-        app_with_root_scope_for_handler_test(World::default(), true),
-    ] {
+    assert!(
+        !absent_root
+            .view()
+            .world()
+            .parameters()
+            .custom()
+            .contains_key(
+                &iroha_data_model::parameter::system::consensus_metadata::handshake_meta_id()
+            ),
+        "the absent-root fixture must not author Global root metadata"
+    );
+    let private_root = app_with_root_scope_for_handler_test(World::default(), true);
+    for state in [&absent_root, private_root.state.as_ref()] {
         assert_ne!(
-            iroha_core::sumeragi::lanes::routing::committed_root_scope(app.state.view().world()),
+            iroha_core::sumeragi::lanes::routing::committed_root_scope(state.view().world()),
             Some(iroha_data_model::block::consensus::SumeragiRootScope::Global)
         );
         let mut selected = request.clone();
-        selected.intent.network_id = *app.state.network_id_ref();
+        selected.intent.network_id = *state.network_id_ref();
         // Even an exact selected network cannot turn missing/private root authority
         // into an observation of Global business absence or success.
-        assert!(canonical_iso_business_locator(&app.state, &selected).is_err());
+        assert!(canonical_iso_business_locator(state, &selected).is_err());
     }
 }

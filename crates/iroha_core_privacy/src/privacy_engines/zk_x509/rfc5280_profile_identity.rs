@@ -17,12 +17,7 @@ const _: () = assert!(NODE_PREFIX_END <= CALENDAR_END);
 fn classification<A: PolynomialAirFieldV1>(
     output: &mut [A; RESIDUES],
     index: &mut usize,
-    family: A,
-    active: A,
-    target: A,
-    flag: A,
-    inverse: A,
-    delta: A,
+    (family, active, target, flag, inverse, delta): (A, A, A, A, A, A),
     subfamily: bool,
 ) {
     for residue in [
@@ -52,12 +47,14 @@ pub(super) fn residues<A: PolynomialAirFieldV1>(
         classification(
             &mut output,
             &mut index,
-            bytes,
-            active,
-            active,
-            row[FIXED_FLAGS + 2 * slot],
-            row[FIXED_FLAGS + 2 * slot + 1],
-            row[BASE_ROLE].sub(A::from_base(F(purpose))),
+            (
+                bytes,
+                active,
+                active,
+                row[FIXED_FLAGS + 2 * slot],
+                row[FIXED_FLAGS + 2 * slot + 1],
+                row[BASE_ROLE].sub(A::from_base(F(purpose))),
+            ),
             false,
         );
     }
@@ -65,14 +62,16 @@ pub(super) fn residues<A: PolynomialAirFieldV1>(
     classification(
         &mut output,
         &mut index,
-        bytes,
-        active,
-        ku,
-        row[KU_LEAF],
-        row[KU_LEAF + 1],
-        row[BASE_DOCUMENT]
-            .sub(A::from_base(F(5)))
-            .sub(row[BASE_CERT2_ACTIVE]),
+        (
+            bytes,
+            active,
+            ku,
+            row[KU_LEAF],
+            row[KU_LEAF + 1],
+            row[BASE_DOCUMENT]
+                .sub(A::from_base(F(5)))
+                .sub(row[BASE_CERT2_ACTIVE]),
+        ),
         true,
     );
     output[index] = bytes
@@ -95,24 +94,28 @@ pub(super) fn residues<A: PolynomialAirFieldV1>(
         classification(
             &mut output,
             &mut index,
-            node,
-            active,
-            active,
-            row[NODE_FLAGS + 2 * slot],
-            row[NODE_FLAGS + 2 * slot + 1],
-            row[BASE_ROLE].sub(A::from_base(F(role as u64))),
+            (
+                node,
+                active,
+                active,
+                row[NODE_FLAGS + 2 * slot],
+                row[NODE_FLAGS + 2 * slot + 1],
+                row[BASE_ROLE].sub(A::from_base(F(role as u64))),
+            ),
             false,
         );
     }
     classification(
         &mut output,
         &mut index,
-        node,
-        active,
-        active,
-        row[NODE_FLAGS + 4],
-        row[NODE_FLAGS + 5],
-        row[BASE_DOCUMENT],
+        (
+            node,
+            active,
+            active,
+            row[NODE_FLAGS + 4],
+            row[NODE_FLAGS + 5],
+            row[BASE_DOCUMENT],
+        ),
         false,
     );
     let extension = row[NODE_FLAGS + 2];
@@ -120,12 +123,14 @@ pub(super) fn residues<A: PolynomialAirFieldV1>(
         classification(
             &mut output,
             &mut index,
-            node,
-            active,
-            extension,
-            row[NODE_FLAGS + 6 + 2 * ordinal],
-            row[NODE_FLAGS + 7 + 2 * ordinal],
-            row[BASE_INSTANCE].sub(A::from_base(F(ordinal as u64))),
+            (
+                node,
+                active,
+                extension,
+                row[NODE_FLAGS + 6 + 2 * ordinal],
+                row[NODE_FLAGS + 7 + 2 * ordinal],
+                row[BASE_INSTANCE].sub(A::from_base(F(ordinal as u64))),
+            ),
             true,
         );
     }
@@ -144,7 +149,6 @@ pub(super) fn residues<A: PolynomialAirFieldV1>(
     output
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn populate_classification(
     row: &mut ZkX509Rfc5280StarkBaseRowV1,
     column: usize,
@@ -155,7 +159,6 @@ fn populate_classification(
     row[column + 1] = gate.mul(delta.inverse_or_zero_canonical_v1());
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(super) fn populate_fixed_byte(row: &mut ZkX509Rfc5280StarkBaseRowV1, certificate_two: F) {
     let active = row[BASE_ACTIVE];
     for (slot, purpose) in [6, 7, 10].into_iter().enumerate() {
@@ -167,7 +170,6 @@ pub(super) fn populate_fixed_byte(row: &mut ZkX509Rfc5280StarkBaseRowV1, certifi
     populate_classification(row, KU_LEAF, gate, delta);
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(super) fn populate_source_node(row: &mut ZkX509Rfc5280StarkBaseRowV1) {
     let active = row[BASE_ACTIVE];
     for (slot, role) in [

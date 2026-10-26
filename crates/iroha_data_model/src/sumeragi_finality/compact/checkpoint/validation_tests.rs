@@ -300,25 +300,26 @@ fn compact_epoch_validation_host_timing() {
             {
                 let before = validation_counts::calls();
                 let start = Instant::now();
-                let mut validation = shared.then(EpochValidationScope::new);
-                let actual = if epoch == 0 {
-                    let checkpoint =
-                        SumeragiCommitCheckpointV1::from_authenticated_genesis_with_validation(
+                let actual = {
+                    let mut validation = shared.then(EpochValidationScope::new);
+                    if epoch == 0 {
+                        let checkpoint =
+                            SumeragiCommitCheckpointV1::from_authenticated_genesis_with_validation(
+                                &native,
+                                validation.as_mut(),
+                            )
+                            .unwrap();
+                        SumeragiCommitVerifierV1::from_trusted_epoch_checkpoint_with_validation(
+                            &checkpoint,
                             &native,
                             validation.as_mut(),
                         )
                         .unwrap();
-                    SumeragiCommitVerifierV1::from_trusted_epoch_checkpoint_with_validation(
-                        &checkpoint,
-                        &native,
-                        validation.as_mut(),
-                    )
-                    .unwrap();
-                    checkpoint
-                } else {
-                    read_and_restore(&bytes, &native, validation.as_mut()).unwrap()
+                        checkpoint
+                    } else {
+                        read_and_restore(&bytes, &native, validation.as_mut()).unwrap()
+                    }
                 };
-                drop(validation);
                 let wall_ns = start.elapsed().as_nanos();
                 let calls = validation_counts::calls() - before;
                 assert_eq!(calls, if shared { 1 << epoch } else { 4 << epoch });

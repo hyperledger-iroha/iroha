@@ -6,11 +6,14 @@ use iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1;
 
 fn commit_policy(world: &World, algorithm: Algorithm) {
     let policy = CryptoAdmissionPolicyV1::new(vec![algorithm]).unwrap();
-    let mut original = world.parameters.block();
-    original
-        .get_mut()
-        .set_parameter(policy.into_parameter().unwrap())
-        .unwrap();
+    let mut original = crate::state::parameter_cell_block_for_testing(&world)
+        .expect("funded original parameter-only fixture block");
+    crate::state::set_parameter_cell_for_testing(
+        &mut original,
+        policy.into_parameter().unwrap(),
+        world.sccp_committee_generations.allocation_budget(),
+    )
+    .unwrap();
     original.commit();
 }
 
@@ -60,7 +63,9 @@ fn restored_history_requires_policy_in_each_initialized_original_cut() {
 fn unchanged_parameter_commit_restores_the_same_initialized_current_and_predecessor_cut() {
     let world = World::default();
     // An absent undo does not make an uninitialized current value acceptable.
-    world.parameters.block().commit();
+    crate::state::parameter_cell_block_for_testing(&world)
+        .expect("funded original parameter-only fixture block")
+        .commit();
     assert!(world.parameters.predecessor_view().get().is_none());
     for height in [1, 2, 3] {
         assert!(validate_restored_crypto_policy(&world, height).is_err());
@@ -70,12 +75,15 @@ fn unchanged_parameter_commit_restores_the_same_initialized_current_and_predeces
     validate_restored_crypto_policy(&world, 1).unwrap();
     // A real unchanged block removes the undo payload. Canonical MV replacement
     // then reads the unchanged current value as its original predecessor.
-    world.parameters.block().commit();
+    crate::state::parameter_cell_block_for_testing(&world)
+        .expect("funded original parameter-only fixture block")
+        .commit();
     assert!(world.parameters.predecessor_view().get().is_none());
     let before = norito::json::to_json(&world).unwrap();
     for height in [2, 3] {
         validate_restored_crypto_policy(&world, height).unwrap();
-        let replacement = world.parameters.block_and_revert();
+        let replacement = crate::state::parameter_cell_block_and_revert_for_testing(&world)
+            .expect("funded original parameter-only replacement");
         assert_eq!(
             replacement
                 .get_before_block()

@@ -108,7 +108,7 @@ mod json_value_tests {
         peer::ExposedKeyPair,
         [u16; 2],
         iroha_model_base::chain::ChainId,
-        std::collections::BTreeSet<iroha_data_model::prelude::Peer>,
+        std::collections::BTreeSet<iroha_model_base::peer::Peer>,
         std::collections::BTreeMap<iroha_crypto::PublicKey, Vec<u8>>,
     );
     fn sample_topology() -> SampleTopology {
@@ -439,7 +439,7 @@ struct PeerEnv<'a> {
     p2p_public_address: iroha_primitives::addr::SocketAddr,
     p2p_address: iroha_primitives::addr::SocketAddr,
     api_address: iroha_primitives::addr::SocketAddr,
-    trusted_peers: std::collections::BTreeSet<&'a iroha_data_model::peer::Peer>,
+    trusted_peers: std::collections::BTreeSet<&'a iroha_model_base::peer::Peer>,
     trusted_peers_pop: std::collections::BTreeMap<iroha_crypto::PublicKey, Vec<u8>>,
 }
 impl<'a> PeerEnv<'a> {
@@ -449,7 +449,7 @@ impl<'a> PeerEnv<'a> {
         streaming_identity: Option<&'a peer::ExposedKeyPair>,
         [port_p2p, port_api]: [u16; 2],
         chain: &'a iroha_model_base::chain::ChainId,
-        topology: &'a std::collections::BTreeSet<iroha_data_model::peer::Peer>,
+        topology: &'a std::collections::BTreeSet<iroha_model_base::peer::Peer>,
         trusted_peers_pop: std::collections::BTreeMap<iroha_crypto::PublicKey, Vec<u8>>,
     ) -> Self {
         let p2p_public_address = topology
@@ -952,7 +952,7 @@ impl<'a> BuildOrPull<'a> {
         prepared_runtime: Option<&'a std::collections::BTreeMap<u16, PreparedRuntimeConfig>>,
         chain: &'a iroha_model_base::chain::ChainId,
         network: &'a std::collections::BTreeMap<u16, peer::PeerInfo>,
-        topology: &'a std::collections::BTreeSet<iroha_data_model::peer::Peer>,
+        topology: &'a std::collections::BTreeSet<iroha_model_base::peer::Peer>,
     ) -> Self {
         let trusted_peers_pop = trusted_peers_pop_map(network);
         Self::Pull {
@@ -975,7 +975,7 @@ impl<'a> BuildOrPull<'a> {
         prepared_runtime: Option<&'a std::collections::BTreeMap<u16, PreparedRuntimeConfig>>,
         chain: &'a iroha_model_base::chain::ChainId,
         network: &'a std::collections::BTreeMap<u16, peer::PeerInfo>,
-        topology: &'a std::collections::BTreeSet<iroha_data_model::peer::Peer>,
+        topology: &'a std::collections::BTreeSet<iroha_model_base::peer::Peer>,
     ) -> Self {
         let trusted_peers_pop = trusted_peers_pop_map(network);
         let mut peers = network.iter();
@@ -1027,7 +1027,7 @@ impl<'a> BuildOrPull<'a> {
         genesis: &'a GenesisArtifactSettings,
         runtime: Option<&'a PreparedRuntimeConfig>,
         chain: &'a iroha_model_base::chain::ChainId,
-        topology: &'a std::collections::BTreeSet<iroha_data_model::peer::Peer>,
+        topology: &'a std::collections::BTreeSet<iroha_model_base::peer::Peer>,
         trusted_peers_pop: &std::collections::BTreeMap<iroha_crypto::PublicKey, Vec<u8>>,
         peer_info: &'a peer::PeerInfo,
         peer_index: u16,
@@ -1061,7 +1061,7 @@ impl<'a> BuildOrPull<'a> {
         prepared_runtime: Option<&'a std::collections::BTreeMap<u16, PreparedRuntimeConfig>>,
         chain: &'a iroha_model_base::chain::ChainId,
         network: &'a std::collections::BTreeMap<u16, peer::PeerInfo>,
-        topology: &'a std::collections::BTreeSet<iroha_data_model::peer::Peer>,
+        topology: &'a std::collections::BTreeSet<iroha_model_base::peer::Peer>,
         trusted_peers_pop: &std::collections::BTreeMap<iroha_crypto::PublicKey, Vec<u8>>,
     ) -> std::collections::BTreeMap<IrohadRef, Irohad<'a, Image>> {
         network

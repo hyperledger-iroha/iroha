@@ -112,7 +112,7 @@ impl Execute for RegisterAtomicPrivateSettlementPrepareV1 {
             .consume_private_settlement_carrier_binding_v1(payload_digest, instruction_digest)
             .map_err(|_| invalid_carrier())?;
         state_transaction
-            .apply_private_settlement_prepare_locks_v1(self.barrier)
+            .apply_private_settlement_prepare_locks_v1(&(self.barrier))
             .map_err(|_| invalid_carrier())?;
         Ok(())
     }
@@ -138,7 +138,7 @@ impl Execute for AbortAtomicPrivateSettlementV1 {
             .map_err(|_| invalid_abort())?;
 
         let finalized_height = state_transaction.block_height();
-        let receipt = private_settlement_abort_receipt_v1(self, authority, finalized_height)?;
+        let receipt = private_settlement_abort_receipt_v1(&(self), authority, finalized_height)?;
         state_transaction
             .apply_private_settlement_abort_v1(receipt)
             .map_err(|_| invalid_abort())?;
@@ -147,7 +147,7 @@ impl Execute for AbortAtomicPrivateSettlementV1 {
 }
 
 fn private_settlement_abort_receipt_v1(
-    carrier: AbortAtomicPrivateSettlementV1,
+    carrier: &AbortAtomicPrivateSettlementV1,
     authority: &AccountId,
     finalized_height: u64,
 ) -> Result<PrivateSettlementAbortReceiptV1, Error> {
@@ -202,10 +202,10 @@ mod tests {
         let height = manifest.expiry_height;
         let expected_digest = manifest.manifest_digest().expect("manifest digest");
         let receipt = private_settlement_abort_receipt_v1(
-            AbortAtomicPrivateSettlementV1::new(
+            &(AbortAtomicPrivateSettlementV1::new(
                 manifest.clone(),
                 PrivateSettlementAbortReasonV1::ParticipantRejected,
-            ),
+            )),
             &sponsor,
             height,
         )
@@ -228,7 +228,7 @@ mod tests {
         let (outsider, _) = gen_account_in("private-settlement-abort-outsider");
         assert!(
             private_settlement_abort_receipt_v1(
-                AbortAtomicPrivateSettlementV1::new(
+                &AbortAtomicPrivateSettlementV1::new(
                     manifest.clone(),
                     PrivateSettlementAbortReasonV1::ParticipantRejected,
                 ),
@@ -239,7 +239,7 @@ mod tests {
         );
         assert!(
             private_settlement_abort_receipt_v1(
-                AbortAtomicPrivateSettlementV1::new(
+                &AbortAtomicPrivateSettlementV1::new(
                     manifest.clone(),
                     PrivateSettlementAbortReasonV1::ParticipantRejected,
                 ),
@@ -250,7 +250,7 @@ mod tests {
         );
         assert!(
             private_settlement_abort_receipt_v1(
-                AbortAtomicPrivateSettlementV1::new(
+                &AbortAtomicPrivateSettlementV1::new(
                     manifest.clone(),
                     PrivateSettlementAbortReasonV1::Expired,
                 ),

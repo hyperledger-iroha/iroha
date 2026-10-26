@@ -1242,7 +1242,7 @@ fn actual_native_all_control_masks_preserve_committed_payment_and_conservation()
     }
     assert_eq!(device_a.platform.with(|state| state.sign_calls), signatures);
     assert_eq!(a.epoch_progress().unwrap(), initial_epoch);
-    masks.sort();
+    masks.sort_unstable();
     assert_eq!(masks, (0_u32..=3).collect::<Vec<_>>());
     // Public originals and exact terminal source identity bind the optional renewal
     // continuation to these SAME two persisted incarnations; they grant no new balance.

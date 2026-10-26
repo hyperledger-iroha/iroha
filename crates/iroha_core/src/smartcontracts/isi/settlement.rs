@@ -1,4 +1,7 @@
 //! Host execution for exact-consent atomic payments, bilateral settlements and native FX corridors.
+/// Source and destination assets for each of the two settlement legs.
+type SettlementAssetPairs = ((AssetId, AssetId), (AssetId, AssetId));
+
 use super::*;
 mod atomic;
 use crate::smartcontracts::isi::asset::isi::{
@@ -16,7 +19,6 @@ use iroha_data_model::isi::error::{AssetTransferAdmissionError, InstructionEvalu
 use iroha_data_model::isi::{ResolvedSettlementMovement, SettlementDetails};
 use iroha_data_model::{
     asset::{AssetBalancePolicy, AssetBalanceScope, AssetId},
-    events::data::prelude::{ConfigurationEvent, ParameterChanged},
     isi::{
         error::{InstructionExecutionError, InvalidParameterError},
         settlement::{
@@ -298,14 +300,14 @@ fn resolve_settlement_leg_asset_ids(
     let deposit = AssetId::with_scope(
         leg.asset_definition_id().clone(),
         leg.to().clone(),
-        withdraw.scope().clone(),
+        *withdraw.scope(),
     );
     Ok((withdraw, deposit))
 }
 fn resolve_authorized_settlement_leg_asset_ids(
     stx: &StateTransaction<'_, '_>,
     leg: &SettlementLeg,
-    authorized_source: AssetId,
+    authorized_source: &AssetId,
 ) -> Result<(AssetId, AssetId), Error> {
     if authorized_source.account() != leg.from()
         || authorized_source.definition() != leg.asset_definition_id()
@@ -337,11 +339,11 @@ fn resolve_authorized_settlement_leg_asset_ids(
     };
     let withdraw = stx
         .world
-        .resolve_asset_id_for_scope_hint(&authorized_source, dataspace_hint)?;
+        .resolve_asset_id_for_scope_hint(authorized_source, dataspace_hint)?;
     let deposit = AssetId::with_scope(
         leg.asset_definition_id().clone(),
         leg.to().clone(),
-        withdraw.scope().clone(),
+        *withdraw.scope(),
     );
     Ok((withdraw, deposit))
 }
@@ -356,11 +358,7 @@ fn ensure_leg_quantity(leg: &SettlementLeg) -> Result<(), Error> {
 fn scoped_fx_leg_asset_ids(leg: &SettlementLeg, dataspace: DataSpaceId) -> (AssetId, AssetId) {
     let scope = AssetBalanceScope::Dataspace(dataspace);
     (
-        AssetId::with_scope(
-            leg.asset_definition_id().clone(),
-            leg.from().clone(),
-            scope.clone(),
-        ),
+        AssetId::with_scope(leg.asset_definition_id().clone(), leg.from().clone(), scope),
         AssetId::with_scope(leg.asset_definition_id().clone(), leg.to().clone(), scope),
     )
 }
@@ -402,24 +400,13 @@ fn fx_corridor_escrow_account(
         &policy.destination_asset_definition_id,
     )
 }
-fn persist_fx_policy_registry(
+fn prepare_fx_policy_registry(
     stx: &mut StateTransaction<'_, '_>,
     registry: FxCorridorPolicyRegistry,
-) {
-    let next = registry.into_custom_parameter();
-    let previous = {
-        let parameters = stx.world.parameters.get_mut();
-        let previous = parameters.custom().get(next.id()).cloned();
-        parameters
-            .set_parameter(Parameter::Custom(next.clone()))
-            .expect("FX corridor registry is not a pipeline fee parameter");
-        previous.unwrap_or_else(|| next.clone())
-    };
-    stx.world
-        .emit_events(Some(ConfigurationEvent::Changed(ParameterChanged {
-            old_value: Parameter::Custom(previous),
-            new_value: Parameter::Custom(next),
-        })));
+) -> Result<crate::state::PreparedParameterChange, Error> {
+    let next = Parameter::Custom(registry.into_custom_parameter());
+    stx.prepare_parameter_change(&next, None, None)
+        .map_err(|original| stx.parameter_change_instruction_error(original))
 }
 fn validate_fx_oracle_evidence(
     stx: &StateTransaction<'_, '_>,
@@ -585,7 +572,7 @@ fn settlement_consent_sources(
                 .then(|| stx.world.roles.get(&role_key.id))
                 .flatten()
         })
-        .flat_map(|role| role.permissions());
+        .flat_map(iroha_data_model::Role::permissions);
     direct_permissions
         .chain(role_permissions)
         .filter_map(|permission| CanExecuteSettlement::try_from(permission).ok())
@@ -637,7 +624,7 @@ fn validate_dvp_preconditions(
     intent_hash: Hash,
     delivery_leg: &SettlementLeg,
     payment_leg: &SettlementLeg,
-) -> Result<((AssetId, AssetId), (AssetId, AssetId)), Error> {
+) -> Result<SettlementAssetPairs, Error> {
     ensure_settlement_namespace_owner(settlement_id, &[delivery_leg.from(), payment_leg.from()])?;
     ensure_settlement_id_unused(stx, settlement_id)?;
     if delivery_leg.from() != authority {
@@ -665,7 +652,7 @@ fn validate_dvp_preconditions(
     ensure_leg_accounts(stx, payment_leg)?;
     let delivery_assets = resolve_settlement_leg_asset_ids(stx, delivery_leg)?;
     let payment_assets =
-        resolve_authorized_settlement_leg_asset_ids(stx, payment_leg, payment_source)?;
+        resolve_authorized_settlement_leg_asset_ids(stx, payment_leg, &(payment_source))?;
     validate_authorized_numeric_asset_pair(
         stx,
         authority,
@@ -685,7 +672,7 @@ fn validate_pvp_preconditions(
     intent_hash: Hash,
     primary_leg: &SettlementLeg,
     counter_leg: &SettlementLeg,
-) -> Result<((AssetId, AssetId), (AssetId, AssetId)), Error> {
+) -> Result<SettlementAssetPairs, Error> {
     ensure_settlement_namespace_owner(settlement_id, &[primary_leg.from(), counter_leg.from()])?;
     ensure_settlement_id_unused(stx, settlement_id)?;
     if primary_leg.from() != authority {
@@ -713,7 +700,7 @@ fn validate_pvp_preconditions(
     ensure_leg_accounts(stx, counter_leg)?;
     let primary_assets = resolve_settlement_leg_asset_ids(stx, primary_leg)?;
     let counter_assets =
-        resolve_authorized_settlement_leg_asset_ids(stx, counter_leg, counter_source)?;
+        resolve_authorized_settlement_leg_asset_ids(stx, counter_leg, &(counter_source))?;
     validate_authorized_numeric_asset_pair(
         stx,
         authority,
@@ -906,29 +893,26 @@ impl Execute for SetFxCorridorPolicy {
         }
         validate_fx_policy_entities(stx, &self.policy)?;
         let mut registry = fx_policy_registry(stx)?;
-        let expected_revision = match registry.get(&self.policy.policy_id) {
-            Some(previous) => {
-                if previous.owner != self.policy.owner
-                    || previous.corridor_id() != self.policy.corridor_id()
-                {
-                    return Err(invalid_fx_parameter(
-                        "FX corridor owner and canonical corridor identity are immutable",
-                    ));
-                }
-                previous
-                    .revision
-                    .checked_add(1)
-                    .ok_or_else(|| invalid_fx_parameter("FX corridor policy revision overflow"))?
+        let expected_revision = if let Some(previous) = registry.get(&self.policy.policy_id) {
+            if previous.owner != self.policy.owner
+                || previous.corridor_id() != self.policy.corridor_id()
+            {
+                return Err(invalid_fx_parameter(
+                    "FX corridor owner and canonical corridor identity are immutable",
+                ));
             }
-            None => {
-                let escrow = fx_corridor_escrow_account(stx, &self.policy);
-                if stx.world.account(&escrow).is_ok() {
-                    return Err(invalid_fx_parameter(
-                        "FX corridor registration requires its deterministic protocol escrow account to be absent",
-                    ));
-                }
-                1
+            previous
+                .revision
+                .checked_add(1)
+                .ok_or_else(|| invalid_fx_parameter("FX corridor policy revision overflow"))?
+        } else {
+            let escrow = fx_corridor_escrow_account(stx, &self.policy);
+            if stx.world.account(&escrow).is_ok() {
+                return Err(invalid_fx_parameter(
+                    "FX corridor registration requires its deterministic protocol escrow account to be absent",
+                ));
             }
+            1
         };
         if self.policy.revision != expected_revision {
             return Err(invalid_fx_parameter(format!(
@@ -936,7 +920,10 @@ impl Execute for SetFxCorridorPolicy {
             )));
         }
         registry.upsert(self.policy);
-        persist_fx_policy_registry(stx, registry);
+        let prepared = prepare_fx_policy_registry(stx, registry)?;
+        stx.world
+            .install_parameter_change(prepared)
+            .map_err(|original| stx.parameter_change_instruction_error(original))?;
         Ok(())
     }
 }
@@ -1108,6 +1095,12 @@ impl Execute for SettleFxCorridor {
                 },
             }),
         );
+        registry.usage.insert(policy.policy_id.clone(), next_usage);
+        // Admit the complete successor and its notifications before asset effects.
+        let next = Parameter::Custom(registry.into_custom_parameter());
+        let prepared_registry = stx
+            .prepare_fx_usage_parameter_change(&next)
+            .map_err(|original| stx.parameter_change_instruction_error(original))?;
         execute_native_fx_numeric_asset_pair(
             stx,
             authority,
@@ -1119,8 +1112,9 @@ impl Execute for SettleFxCorridor {
             destination_leg.quantity().clone(),
             &policy,
         )?;
-        registry.usage.insert(policy.policy_id.clone(), next_usage);
-        persist_fx_policy_registry(stx, registry);
+        stx.world
+            .install_parameter_change(prepared_registry)
+            .map_err(|original| stx.parameter_change_instruction_error(original))?;
         stx.world
             .settlement_receipts
             .insert(self.settlement_id.clone(), receipt);
@@ -1434,6 +1428,8 @@ mod tests {
     mod atomic;
     #[path = "namespace_tests.rs"]
     mod namespace;
+    #[path = "parameter_publication_tests.rs"]
+    mod parameter_publication;
     use super::*;
     use crate::{kura::Kura, prelude::World, query::store::LiveQueryStore, state::State};
     use iroha_data_model::{
@@ -1698,6 +1694,18 @@ mod tests {
             ],
             [],
         );
+        // Explicit component authority for the Ed25519 fixture and deterministic escrow.
+        let crypto = iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+            iroha_crypto::Algorithm::Ed25519,
+        ])
+        .expect("FX fixture crypto policy");
+        world
+            .set_parameter_for_testing(
+                crypto
+                    .into_parameter()
+                    .expect("FX fixture crypto parameter"),
+            )
+            .expect("fund the FX fixture crypto policy");
         world.account_permissions.insert(
             ALICE_ID.clone(),
             BTreeSet::from([Permission::from(CanSetFxCorridorPolicy {
@@ -1787,6 +1795,18 @@ mod tests {
             recipient_alias,
             BOB_ID.clone(),
         ));
+        // Component corridor custody owns its policy before the first snapshot.
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
+            .expect("funded component parameter fixture");
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            crate::sumeragi::test_chain::crypto_fixture_policy()
+                .into_parameter()
+                .expect("canonical fixture crypto policy"),
+            world.sccp_committee_generations.allocation_budget(),
+        )
+        .expect("install original fixture crypto policy");
+        parameters.commit();
         let state = State::new(
             world,
             Kura::blank_kura_for_testing(),
@@ -1817,12 +1837,12 @@ mod tests {
     }
     fn insert_active_fx_alias(
         stx: &mut StateTransaction<'_, '_>,
-        alias: AccountAlias,
-        account_id: AccountId,
+        alias: &AccountAlias,
+        account_id: &AccountId,
     ) {
-        let selector = crate::sns::selector_for_account_alias(&alias, &stx.nexus.dataspace_catalog)
+        let selector = crate::sns::selector_for_account_alias(alias, &stx.nexus.dataspace_catalog)
             .expect("canonical FX alias selector");
-        let address = AccountAddress::from_account_id(&account_id)
+        let address = AccountAddress::from_account_id(account_id)
             .expect("FX alias owner must encode as an address");
         let record = NameRecordV1::new(
             selector.clone(),
@@ -2056,14 +2076,14 @@ mod tests {
         for (label, domain) in [("hbl_recipient", "hbl"), ("ubl_recipient", "ubl")] {
             insert_active_fx_alias(
                 &mut stx,
-                AccountAlias::new(
+                &(AccountAlias::new(
                     label.parse().expect("alias label"),
                     Some(AccountAliasDomain::new(
                         domain.parse().expect("alias domain"),
                     )),
                     policy.destination_dataspace,
-                ),
-                BOB_ID.clone(),
+                )),
+                &(BOB_ID),
             );
         }
         assert_smart_contract_parameter_contains(
@@ -2091,14 +2111,14 @@ mod tests {
         stx.world.remove_account_alias_bindings_for_account(&BOB_ID);
         insert_active_fx_alias(
             &mut stx,
-            AccountAlias::new(
+            &(AccountAlias::new(
                 "other_recipient".parse().expect("alias label"),
                 Some(AccountAliasDomain::new(
                     "other".parse().expect("alias domain"),
                 )),
                 policy.destination_dataspace,
-            ),
-            BOB_ID.clone(),
+            )),
+            &(BOB_ID),
         );
         assert_smart_contract_parameter_contains(
             fx_settlement(&policy, "fx_non_allowed_recipient_domain", 1)
@@ -2577,6 +2597,18 @@ mod tests {
             [alice_delivery, bob_payment],
             [],
         );
+        // Component account registration owns its policy before the first snapshot.
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
+            .expect("funded component parameter fixture");
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            crate::sumeragi::test_chain::crypto_fixture_policy()
+                .into_parameter()
+                .expect("canonical fixture crypto policy"),
+            world.sccp_committee_generations.allocation_budget(),
+        )
+        .expect("install original fixture crypto policy");
+        parameters.commit();
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new(world, kura, query);

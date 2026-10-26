@@ -320,7 +320,7 @@ impl Run for ManifestFetchArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         crate::collection_list::run_list(
             context,
-            iroha::collections::Collection::UaidManifests(self.uaid),
+            &iroha::collections::Collection::UaidManifests(self.uaid),
             &self.list,
         )
     }

@@ -349,7 +349,7 @@ impl Actor {
     #[cfg(feature = "telemetry")]
     pub(super) fn owned_status(
         &self,
-        target: TelemetryStatusTarget,
+        target: &TelemetryStatusTarget,
         build: &iroha_torii_shared::status::BuildStatus,
     ) -> Result<OwnedStatus, StatusSnapshotError> {
         let height =

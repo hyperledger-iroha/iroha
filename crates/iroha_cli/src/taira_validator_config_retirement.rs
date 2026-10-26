@@ -19,7 +19,7 @@ const PREFIX: &str = "taira.validator-config-retirement";
 
 /// Native configuration retirement without loading client credentials.
 #[derive(Debug, clap::Args)]
-pub(crate) struct RetireValidatorConfig {
+pub struct RetireValidatorConfig {
     /// Prepare private siblings, install while stopped, or restore before any startup intent.
     #[arg(long, value_enum)]
     action: Action,
@@ -46,6 +46,13 @@ struct Request {
 
 impl RetireValidatorConfig {
     /// Execute with inherited updater custody and emit only the retained public receipt.
+    #[cfg_attr(
+        not(target_os = "linux"),
+        expect(
+            clippy::unused_self,
+            reason = "Linux custody uses the receiver; unsupported platforms preserve the same rejecting interface"
+        )
+    )]
     pub(crate) fn run_without_client_config(&self, mut output: impl Write) -> Result<()> {
         #[cfg(target_os = "linux")]
         {
@@ -149,14 +156,12 @@ fn project(bytes: &[u8]) -> Result<(Zeroizing<Vec<u8>>, bool)> {
                 if let Some(value) = zk.get("halo2") {
                     ensure!(value.is_table(), "retired zk.halo2 is not a table");
                 }
-                if let Some(value) = zk.remove("halo2") {
+                zk.remove("halo2").is_some_and(|value| {
                     let mut retired = toml::Table::new();
                     retired.insert("retired".into(), value);
                     crate::soracloud::zeroize_taira_toml_table(&mut retired);
                     true
-                } else {
-                    false
-                }
+                })
             }
             None => false,
         };
@@ -284,15 +289,15 @@ fn validate_receipt(receipt: &json::Value, plan: &json::Value, kind: &str) -> Re
         if kind == "installed" {
             let installed = field(row, "installed_stamp")?;
             stamp_value(installed)?;
-            if !changed {
-                ensure!(
-                    installed == field(row, "before_stamp")?,
-                    "no-op retirement changed config custody"
-                );
-            } else {
+            if changed {
                 ensure!(
                     same_renamed_file(installed, field(row, "staged_stamp")?)?,
                     "installed config is not the prepared sibling"
+                );
+            } else {
+                ensure!(
+                    installed == field(row, "before_stamp")?,
+                    "no-op retirement changed config custody"
                 );
             }
         }
@@ -311,7 +316,7 @@ fn same_renamed_file(a: &json::Value, b: &json::Value) -> Result<bool> {
 }
 
 /// Join the only supported config metadata transition without changing peer trust.
-pub(crate) fn validate_retirement_records(
+pub fn validate_retirement_records(
     prepared: &json::Value,
     installed: &json::Value,
     plan: &json::Value,

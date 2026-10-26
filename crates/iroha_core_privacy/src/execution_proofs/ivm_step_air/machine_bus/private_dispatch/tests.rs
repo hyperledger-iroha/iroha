@@ -177,9 +177,7 @@ pub(super) fn bytes(value: u64) -> [u8; 16] {
     u128::from(value).to_le_bytes()
 }
 pub(super) fn event(
-    space: Space,
-    generation: u16,
-    index: u32,
+    (space, generation, index): (Space, u16, u32),
     before: u64,
     after: u64,
     write: bool,
@@ -202,7 +200,7 @@ pub(super) fn event(
 }
 pub(super) fn carries(row: &mut [F], left: u64, right: u64, subtract: bool) {
     let mut carry = 0u64;
-    for i in 0..4 {
+    for (i, field) in row.iter_mut().enumerate().take(4) {
         let a = (left >> (16 * i)) & 0xffff;
         let b = (right >> (16 * i)) & 0xffff;
         carry = if subtract {
@@ -210,7 +208,7 @@ pub(super) fn carries(row: &mut [F], left: u64, right: u64, subtract: bool) {
         } else {
             (a + b + carry) >> 16
         };
-        row[i] = F(carry);
+        *field = F(carry);
     }
 }
 
@@ -232,7 +230,8 @@ impl Fixture {
         gas: u64,
         cycles: u64,
     ) -> Self {
-        let clocks = core::array::from_fn(|i| 100 + i as u32 * 10);
+        let clocks =
+            core::array::from_fn(|i| 100 + u32::try_from(i).expect("bounded fixture value") * 10);
         let schedule = Schedule::new(7, clocks).unwrap();
         let mut row = [F::ZERO; WIDTH];
         row[SCALAR + scalar::COMPARE
@@ -317,9 +316,7 @@ impl Fixture {
             (CYCLE_WRITE, CYCLE_OWNER, cycles, cycles + 1, true),
         ] {
             p[slot] = event(
-                Space::Owner,
-                0,
-                index,
+                (Space::Owner, 0, index),
                 before,
                 after,
                 write,
@@ -328,15 +325,16 @@ impl Fixture {
                 false,
             );
         }
-        let mut after_pc = pc + 4;
-        if child || role == Role::Jump {
+        let mut after_pc = if child || role == Role::Jump {
             let delta = if wide::opcode(w) == wide::control::JAL {
                 i64::from(wide::imm16(w))
             } else {
                 i64::from(wide::imm24(w))
             };
-            after_pc = pc.wrapping_add_signed(delta * 4);
-        }
+            pc.wrapping_add_signed(delta * 4)
+        } else {
+            pc + 4
+        };
         if child {
             row[CHILD_INVERSE] = F(3).inv().unwrap();
             for (slot, generation, index, before, after) in [
@@ -345,9 +343,7 @@ impl Fixture {
                 (CHILD_PARENT, 11, 2, 0, 3),
             ] {
                 p[slot] = event(
-                    Space::Owner,
-                    generation,
-                    index,
+                    (Space::Owner, generation, index),
                     before,
                     after,
                     true,
@@ -357,9 +353,7 @@ impl Fixture {
                 );
             }
             p[CHILD_PROTECTED_PC] = event(
-                Space::Owner,
-                11,
-                RETURN_PC_OWNER,
+                (Space::Owner, 11, RETURN_PC_OWNER),
                 0,
                 pc + 4,
                 true,
@@ -368,9 +362,7 @@ impl Fixture {
                 false,
             );
             p[LINK_WRITE] = event(
-                Space::Register,
-                0,
-                1,
+                (Space::Register, 0, 1),
                 97,
                 pc + 4,
                 true,
@@ -386,9 +378,7 @@ impl Fixture {
             row[PARENT_LIVE] = F(u64::from(!root));
             row[PARENT_INVERSE] = F(parent).inv().unwrap_or(F::ZERO);
             p[RETURN_REGISTER] = event(
-                Space::Register,
-                0,
-                1,
+                (Space::Register, 0, 1),
                 raw_return,
                 raw_return,
                 false,
@@ -402,9 +392,7 @@ impl Fixture {
                 (RETURN_PARENT, 3, 2, parent, parent, false),
             ] {
                 p[slot] = event(
-                    Space::Owner,
-                    generation,
-                    index,
+                    (Space::Owner, generation, index),
                     before,
                     after,
                     write,
@@ -414,9 +402,7 @@ impl Fixture {
                 );
             }
             p[RETURN_PROTECTED_PC] = event(
-                Space::Owner,
-                3,
-                RETURN_PC_OWNER,
+                (Space::Owner, 3, RETURN_PC_OWNER),
                 target,
                 target,
                 false,
@@ -430,9 +416,12 @@ impl Fixture {
         }
         if memory {
             p[MEMORY_BASE] = event(
-                Space::Register,
-                0,
-                if store { wide::rd(w) } else { wide::rs1(w) } as u32,
+                (
+                    Space::Register,
+                    0,
+                    u32::try_from(if store { wide::rd(w) } else { wide::rs1(w) })
+                        .expect("bounded fixture value"),
+                ),
                 base,
                 base,
                 false,
@@ -445,9 +434,11 @@ impl Fixture {
             // The memory effect owns the loaded value; this dispatcher-only
             // fixture still carries the sole atomic destination's exact shape.
             p[SCALAR_DESTINATION] = event(
-                Space::Register,
-                0,
-                wide::rd(w) as u32,
+                (
+                    Space::Register,
+                    0,
+                    u32::try_from(wide::rd(w)).expect("bounded fixture value"),
+                ),
                 if wide::rd(w) == wide::rs1(w) { base } else { 0 },
                 0,
                 true,
@@ -458,9 +449,11 @@ impl Fixture {
         }
         if store {
             p[STORE_VALUE] = event(
-                Space::Register,
-                0,
-                wide::rs1(w) as u32,
+                (
+                    Space::Register,
+                    0,
+                    u32::try_from(wide::rs1(w)).expect("bounded fixture value"),
+                ),
                 u64::MAX - 3,
                 u64::MAX - 3,
                 false,
@@ -479,9 +472,7 @@ impl Fixture {
             );
         }
         p[CALL_DEPTH] = event(
-            Space::Owner,
-            0,
-            CALL_DEPTH_OWNER,
+            (Space::Owner, 0, CALL_DEPTH_OWNER),
             depth,
             depth_after,
             child || returning,
@@ -490,9 +481,7 @@ impl Fixture {
             false,
         );
         p[PC_WRITE] = event(
-            Space::Owner,
-            0,
-            PC_OWNER,
+            (Space::Owner, 0, PC_OWNER),
             pc,
             after_pc,
             true,
@@ -501,9 +490,7 @@ impl Fixture {
             false,
         );
         p[RUNNING_WRITE] = event(
-            Space::Owner,
-            0,
-            RUNNING_OWNER,
+            (Space::Owner, 0, RUNNING_OWNER),
             1,
             u64::from(row[HALT] == F::ZERO),
             true,
@@ -527,9 +514,7 @@ impl Fixture {
         }
         let previous = self.packets.fields[CALL_DEPTH];
         self.packets.fields[CALL_DEPTH] = event(
-            Space::Owner,
-            0,
-            CALL_DEPTH_OWNER,
+            (Space::Owner, 0, CALL_DEPTH_OWNER),
             before,
             after,
             previous[packet::WRITE] == F::ONE,
@@ -539,7 +524,8 @@ impl Fixture {
         );
     }
     pub(super) fn padding() -> Self {
-        let clocks = core::array::from_fn(|i| 100 + i as u32 * 10);
+        let clocks =
+            core::array::from_fn(|i| 100 + u32::try_from(i).expect("bounded fixture value") * 10);
         let packets = [[F::ZERO; packet::WIDTH]; PORTS];
         Self {
             schedule: Schedule::new(7, clocks).unwrap(),
@@ -766,7 +752,11 @@ fn unique_global_clocks_and_exact_original_history_ports_are_required() {
 fn private_dispatch_polynomials_remain_degree_two_over_original_columns() {
     use crate::execution_proofs::stark::proof_managed_note_stark::degree_audit::measured_maximum_affine_degree_v1;
     let program = program();
-    let schedule = Schedule::new(7, core::array::from_fn(|i| i as u32)).unwrap();
+    let schedule = Schedule::new(
+        7,
+        core::array::from_fn(|i| u32::try_from(i).expect("bounded fixture value")),
+    )
+    .unwrap();
     let measured = measured_maximum_affine_degree_v1(
         [0x9a; 32],
         [WIDTH + PORTS * packet::WIDTH, 0, 0, 0, 0],
@@ -865,13 +855,11 @@ fn every_owned_producer_is_joined_to_the_same_private_history_window() {
     }
     let mut fields = [[F::ZERO; packet::WIDTH]; PORTS];
     fields[RUNNING_WRITE] = event(
-        Space::Owner,
-        0,
-        RUNNING_OWNER,
+        (Space::Owner, 0, RUNNING_OWNER),
         0,
         0,
         true,
-        RUNNING_WRITE as u32,
+        u32::try_from(RUNNING_WRITE).expect("bounded fixture value"),
         false,
         false,
     );
@@ -887,13 +875,11 @@ fn every_owned_producer_is_joined_to_the_same_private_history_window() {
         None
     ));
     fields[CALL_DEPTH] = event(
-        Space::Owner,
-        0,
-        CALL_DEPTH_OWNER,
+        (Space::Owner, 0, CALL_DEPTH_OWNER),
         0,
         1,
         true,
-        CALL_DEPTH as u32,
+        u32::try_from(CALL_DEPTH).expect("bounded fixture value"),
         false,
         false,
     );

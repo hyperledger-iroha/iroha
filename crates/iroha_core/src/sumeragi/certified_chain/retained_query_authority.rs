@@ -45,7 +45,7 @@ impl PrefixAuthority {
 
 /// The actual original material, committee, parsed credentials and pairing scratch.
 /// Declaration order destroys every payload allocation before returning its credits;
-/// ChargedShared separately retains shell credit through physical deallocation.
+/// `ChargedShared` separately retains shell credit through physical deallocation.
 pub(super) struct RetainedQueryAuthority {
     authority: VerifiedAuthority,
     payload: AllocationReservation,
@@ -63,7 +63,7 @@ pub(super) struct QueryAuthorityReservation {
 }
 
 /// Optional cache refusal remains separate from the original native proof verdict.
-pub(crate) struct QueryCacheOwner {
+pub struct QueryCacheOwner {
     pub(super) budget: AllocationBudget,
     refusal: Option<ExecutionDeferred>,
 }
@@ -145,6 +145,10 @@ impl QueryCacheOwner {
     }
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+)]
 fn share_original(
     value: RetainedQueryAuthority,
     shell: &mut AllocationReservation,
@@ -180,13 +184,13 @@ fn share_original(
 }
 
 #[cfg(test)]
-pub(crate) fn query_authority_shell_layout() -> std::alloc::Layout {
+pub fn query_authority_shell_layout() -> std::alloc::Layout {
     ChargedShared::<RetainedQueryAuthority>::allocation_layout()
 }
 #[cfg(test)]
 thread_local! { static REFUSE_SHELL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
 #[cfg(test)]
-pub(crate) fn with_refused_query_authority_shell<T>(check: impl FnOnce() -> T) -> T {
+pub fn with_refused_query_authority_shell<T>(check: impl FnOnce() -> T) -> T {
     struct Restore;
     impl Drop for Restore {
         fn drop(&mut self) {

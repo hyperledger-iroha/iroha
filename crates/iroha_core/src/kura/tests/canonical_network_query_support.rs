@@ -1,10 +1,10 @@
 /// Default network used only by structural, unauthenticated projection tests.
-pub(crate) fn canonical_query_network_id() -> iroha_data_model::NetworkId {
+pub fn canonical_query_network_id() -> iroha_data_model::NetworkId {
     native_storage_network_id()
 }
 
 /// Original native execution and physical custody for canonical query fixtures.
-pub(crate) struct CanonicalQueryStore {
+pub struct CanonicalQueryStore {
     /// Executing State and its authoritative committed hash cut.
     pub(crate) state: Arc<State>,
     /// Actual physical store used by the State query reader.

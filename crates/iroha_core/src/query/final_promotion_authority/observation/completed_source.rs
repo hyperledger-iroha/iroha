@@ -91,12 +91,12 @@ pub(super) fn authenticate_completed_source(
         || view
             .transactions
             .get(&reserve_hash)
-            .map(|index| index.get())
+            .map(std::num::NonZero::get)
             != usize::try_from(original.reserved.height).ok()
         || view
             .transactions
             .get(&complete_hash)
-            .map(|index| index.get())
+            .map(std::num::NonZero::get)
             != usize::try_from(expected.execution.height).ok()
     {
         return Err(Error::Execution.into());

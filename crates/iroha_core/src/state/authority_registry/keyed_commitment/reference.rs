@@ -20,45 +20,45 @@ use super::{
 const ROOT_DOMAIN: &[u8] = b"iroha:state-keyed-commitment:reference-oracle:root:v1\0";
 
 /// Deliberate contract violations of the faulty oracle variants.
-pub(crate) mod fault {
+pub mod fault {
     /// The conforming oracle.
-    pub(crate) const NONE: u8 = 0;
+    pub const NONE: u8 = 0;
     /// K1: the root omits the schema descriptor.
-    pub(crate) const SCHEMA_UNBOUND: u8 = 1;
+    pub const SCHEMA_UNBOUND: u8 = 1;
     /// K2: the root binds the number of applied change sets.
-    pub(crate) const HISTORY_DEPENDENT: u8 = 2;
+    pub const HISTORY_DEPENDENT: u8 = 2;
     /// K3: the root binds the committed keys but not their values.
-    pub(crate) const VALUE_NOT_IN_ROOT: u8 = 12;
+    pub const VALUE_NOT_IN_ROOT: u8 = 12;
     /// K4: inclusion verification ignores the claimed value.
-    pub(crate) const VALUE_UNBOUND: u8 = 3;
+    pub const VALUE_UNBOUND: u8 = 3;
     /// K5: an entry with an empty value verifies as absent.
-    pub(crate) const EMPTY_VALUE_IS_ABSENT: u8 = 4;
+    pub const EMPTY_VALUE_IS_ABSENT: u8 = 4;
     /// K6: range verification accepts any subset of the committed entries.
-    pub(crate) const RANGE_INCOMPLETE: u8 = 5;
+    pub const RANGE_INCOMPLETE: u8 = 5;
     /// K6: the upper bound of a range is treated as inclusive.
-    pub(crate) const RANGE_UPPER_INCLUSIVE: u8 = 6;
+    pub const RANGE_UPPER_INCLUSIVE: u8 = 6;
     /// K6: claimed entries outside the interval are dropped instead of rejected.
-    pub(crate) const RANGE_OUTSIDE_CLAIM_IGNORED: u8 = 14;
+    pub const RANGE_OUTSIDE_CLAIM_IGNORED: u8 = 14;
     /// K7: point lookups ignore the table.
-    pub(crate) const TABLE_UNBOUND: u8 = 7;
+    pub const TABLE_UNBOUND: u8 = 7;
     /// K8: a cell accepts nonempty keys.
-    pub(crate) const CELL_KEY_UNCHECKED: u8 = 8;
+    pub const CELL_KEY_UNCHECKED: u8 = 8;
     /// K9: bytes after the canonical witness are ignored.
-    pub(crate) const TRAILING_BYTES: u8 = 9;
+    pub const TRAILING_BYTES: u8 = 9;
     /// K10: a refused change set leaves its earlier changes applied.
-    pub(crate) const NON_ATOMIC_APPLY: u8 = 10;
+    pub const NON_ATOMIC_APPLY: u8 = 10;
     /// K11: once the State holds more than sixteen entries, the incrementally updated
     /// root binds the number of applied change sets and drifts from a cold build.
-    pub(crate) const LARGE_STATE_DRIFT: u8 = 13;
+    pub const LARGE_STATE_DRIFT: u8 = 13;
     /// K12: verification does not compare the witness with the root.
-    pub(crate) const ROOT_UNBOUND: u8 = 11;
+    pub const ROOT_UNBOUND: u8 = 11;
 }
 
 type Entries = BTreeMap<(u32, Vec<u8>), Vec<u8>>;
 
 /// The oracle: every committed entry, keyed by canonical table position and key bytes.
 #[derive(Clone, Debug)]
-pub(crate) struct Reference<const FAULT: u8 = { fault::NONE }> {
+pub struct Reference<const FAULT: u8 = { fault::NONE }> {
     schema: StateSchema,
     entries: Entries,
     applied: u64,

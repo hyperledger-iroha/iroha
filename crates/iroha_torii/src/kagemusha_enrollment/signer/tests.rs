@@ -194,12 +194,12 @@ fn scalar_owners_zeroize_on_drop_and_errors_do_not_contain_originals() {
         io::ErrorKind::TimedOut,
         io::ErrorKind::Interrupted,
     ] {
-        let error = custody(io::Error::new(kind, "sensitive credential payload"));
+        let error = custody(&io::Error::new(kind, "sensitive credential payload"));
         assert!(matches!(error, Error::Unavailable));
         assert!(!error.to_string().contains("sensitive"));
     }
     assert!(matches!(
-        custody(io::Error::new(
+        custody(&io::Error::new(
             io::ErrorKind::PermissionDenied,
             "private source"
         )),

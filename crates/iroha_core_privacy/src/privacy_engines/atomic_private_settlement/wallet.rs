@@ -80,7 +80,7 @@ impl AtomicPrivateSettlementInputSecretV1 {
     pub fn new(
         spending_secret: [u8; 32],
         leaf_position: u32,
-        authentication_path: [[u8; 32]; PRIVATE_NOTE_TREE_DEPTH_V1],
+        authentication_path: &[[u8; 32]; PRIVATE_NOTE_TREE_DEPTH_V1],
     ) -> Result<Self, AtomicPrivateSettlementWalletErrorV1> {
         if spending_secret.iter().all(|byte| *byte == 0)
             || authentication_path
@@ -92,7 +92,7 @@ impl AtomicPrivateSettlementInputSecretV1 {
         Ok(Self {
             spending_secret,
             leaf_position,
-            authentication_path,
+            authentication_path: *authentication_path,
         })
     }
 }
@@ -718,12 +718,12 @@ pub fn plan_atomic_private_settlement_bootstrap_v1(
         AtomicPrivateSettlementInputSecretV1::new(
             input_spending_secrets[0],
             planned.input_positions[0],
-            planned.authentication_paths[0],
+            &planned.authentication_paths[0],
         )?,
         AtomicPrivateSettlementInputSecretV1::new(
             input_spending_secrets[1],
             planned.input_positions[1],
-            planned.authentication_paths[1],
+            &planned.authentication_paths[1],
         )?,
     ];
     Ok(AtomicPrivateSettlementBootstrapPlanV1 {
@@ -767,12 +767,12 @@ pub fn plan_atomic_private_settlement_initial_inputs_v1(
         AtomicPrivateSettlementInputSecretV1::new(
             spending_secrets[0],
             planned.input_positions[0],
-            planned.authentication_paths[0],
+            &planned.authentication_paths[0],
         )?,
         AtomicPrivateSettlementInputSecretV1::new(
             spending_secrets[1],
             planned.input_positions[1],
-            planned.authentication_paths[1],
+            &planned.authentication_paths[1],
         )?,
     ])
 }
@@ -1040,7 +1040,7 @@ fn decode_owner_bundle(
         inputs.push(AtomicPrivateSettlementInputSecretV1::new(
             spending_secret,
             leaf_position,
-            authentication_path,
+            &authentication_path,
         )?);
     }
     cursor.finish()?;
@@ -1082,7 +1082,7 @@ pub fn encode_atomic_private_settlement_wallet_bundle_v1(
     validate_wallet_id(wallet_id)?;
     let mut inspection =
         validate_public_artifacts(manifest, statement, capsule, policy, audit_plaintext)?;
-    inspection.wallet_id = wallet_id.to_owned();
+    wallet_id.clone_into(&mut inspection.wallet_id);
     if audit_plaintext.inputs.len() != PRIVATE_SETTLEMENT_INPUT_SLOTS_V1 {
         return Err(AtomicPrivateSettlementWalletErrorV1::SecretMaterial);
     }
@@ -1178,7 +1178,7 @@ pub fn consume_atomic_private_settlement_wallet_bundle_v1(
         policy,
         &decoded.audit_plaintext,
     )?;
-    expected.wallet_id = expected_wallet_id.to_owned();
+    expected_wallet_id.clone_into(&mut expected.wallet_id);
     if decoded.inspection != expected {
         return Err(if decoded.inspection.wallet_id == expected.wallet_id {
             AtomicPrivateSettlementWalletErrorV1::PublicBinding
@@ -1191,13 +1191,13 @@ pub fn consume_atomic_private_settlement_wallet_bundle_v1(
         AtomicPrivateSettlementInputWitnessV1::new(
             first.spending_secret,
             first.leaf_position,
-            first.authentication_path,
+            &first.authentication_path,
         )
         .map_err(|_| AtomicPrivateSettlementWalletErrorV1::SecretMaterial)?,
         AtomicPrivateSettlementInputWitnessV1::new(
             second.spending_secret,
             second.leaf_position,
-            second.authentication_path,
+            &second.authentication_path,
         )
         .map_err(|_| AtomicPrivateSettlementWalletErrorV1::SecretMaterial)?,
     ];
@@ -1298,13 +1298,13 @@ mod tests {
             AtomicPrivateSettlementInputSecretV1::new(
                 [0x81; 32],
                 0,
-                core::array::from_fn(|level| [0x40 + u8::try_from(level).unwrap(); 32]),
+                &core::array::from_fn(|level| [0x40 + u8::try_from(level).unwrap(); 32]),
             )
             .expect("first secret"),
             AtomicPrivateSettlementInputSecretV1::new(
                 [0x82; 32],
                 1,
-                core::array::from_fn(|level| [0x80 + u8::try_from(level).unwrap(); 32]),
+                &core::array::from_fn(|level| [0x80 + u8::try_from(level).unwrap(); 32]),
             )
             .expect("second secret"),
         ]
@@ -1595,9 +1595,9 @@ mod tests {
         statement.validate().expect("valid proof statement");
 
         let inputs = [
-            AtomicPrivateSettlementInputSecretV1::new([0x81; 32], 0, first_path)
+            AtomicPrivateSettlementInputSecretV1::new([0x81; 32], 0, &first_path)
                 .expect("first membership secret"),
-            AtomicPrivateSettlementInputSecretV1::new([0x82; 32], 1, second_path)
+            AtomicPrivateSettlementInputSecretV1::new([0x82; 32], 1, &second_path)
                 .expect("second membership secret"),
         ];
         let encoded = encode_atomic_private_settlement_wallet_bundle_v1(

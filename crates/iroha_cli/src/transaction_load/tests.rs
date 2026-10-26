@@ -180,6 +180,10 @@ impl Recorder for MemoryRecorder {
         Ok(())
     }
 }
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "The test transport independently injects preparation, observation, submission, and identity failures."
+)]
 struct FakeBackend {
     clock: Arc<TestClock>,
     preparation_delay: i64,
@@ -247,7 +251,7 @@ impl Backend for FakeBackend {
             let hash = exact_hash(if self.duplicate_hash {
                 1
             } else {
-                plan.sequence as u8
+                u8::try_from(plan.sequence).expect("fixture sequence fits u8")
             });
             Ok(Prepared {
                 payload: hash,
@@ -470,11 +474,13 @@ fn collector_observes_applied_before_delayed_ack_without_reordering_or_replay() 
             backend.clone(),
             clock.clone(),
             recorder.clone(),
-            &schedule,
-            &bounds,
-            &mut rows,
-            0..len,
-            Cohort::Measurement,
+            PhaseRun {
+                schedule: &schedule,
+                bounds: &bounds,
+                records: &mut rows,
+                range: 0..len,
+                cohort: Cohort::Measurement,
+            },
             &mut BTreeSet::new(),
         ))
         .expect("complete cohort");
@@ -516,11 +522,13 @@ fn preparation_pressure_invalidates_instead_of_moving_the_offer_schedule() {
             backend.clone(),
             clock,
             Arc::new(MemoryRecorder::default()),
-            &schedule,
-            &bounds,
-            &mut rows,
-            0..len,
-            Cohort::Measurement,
+            PhaseRun {
+                schedule: &schedule,
+                bounds: &bounds,
+                records: &mut rows,
+                range: 0..len,
+                cohort: Cohort::Measurement,
+            },
             &mut BTreeSet::new(),
         ))
         .expect_err("late signer must fail");
@@ -551,11 +559,13 @@ fn submission_ambiguity_never_replays_or_becomes_an_accepted_trace() {
             backend.clone(),
             clock,
             Arc::new(MemoryRecorder::default()),
-            &schedule,
-            &bounds,
-            &mut rows,
-            0..len,
-            Cohort::Measurement,
+            PhaseRun {
+                schedule: &schedule,
+                bounds: &bounds,
+                records: &mut rows,
+                range: 0..len,
+                cohort: Cohort::Measurement,
+            },
             &mut BTreeSet::new(),
         ))
         .expect_err("ambiguous submission");
@@ -599,11 +609,13 @@ fn cached_outcomes_and_local_capacity_exhaustion_fail_with_all_identities_retain
                     backend.clone(),
                     clock,
                     recorder,
-                    &schedule,
-                    &bounds,
-                    &mut rows,
-                    0..len,
-                    Cohort::Measurement,
+                    PhaseRun {
+                        schedule: &schedule,
+                        bounds: &bounds,
+                        records: &mut rows,
+                        range: 0..len,
+                        cohort: Cohort::Measurement
+                    },
                     &mut BTreeSet::new()
                 ))
                 .is_err()
@@ -636,11 +648,13 @@ fn duplicate_prepared_hash_is_rejected_before_it_can_replay() {
             backend.clone(),
             clock,
             Arc::new(MemoryRecorder::default()),
-            &schedule,
-            &bounds,
-            &mut rows,
-            0..len,
-            Cohort::Measurement,
+            PhaseRun {
+                schedule: &schedule,
+                bounds: &bounds,
+                records: &mut rows,
+                range: 0..len,
+                cohort: Cohort::Measurement,
+            },
             &mut BTreeSet::new(),
         ))
         .expect_err("duplicate hash");
@@ -655,7 +669,9 @@ fn strict_trace_encoding_and_publication_require_complete_rows_and_absent_paths(
     let schedule = Schedule::from_args(&args).expect("schedule");
     let mut rows = schedule.plan(&args.seed, 1).expect("plan");
     for (index, row) in rows.iter_mut().enumerate() {
-        row.hash = Some(exact_hash(index as u8 + 1));
+        row.hash = Some(exact_hash(
+            u8::try_from(index).expect("fixture row index fits u8") + 1,
+        ));
         row.offer_ns = Some(row.plan.scheduled_offset_ns);
         row.acknowledgment_ns = Some(row.plan.scheduled_offset_ns + 2000);
         row.submission_finished = true;
@@ -785,11 +801,13 @@ fn full_engine_accepts_ready_ack_and_applied_exactly_at_measurement_deadline() {
             Arc::new(backend),
             clock.clone(),
             Arc::new(MemoryRecorder::default()),
-            &schedule,
-            &bounds,
-            &mut rows,
-            0..1,
-            Cohort::Measurement,
+            PhaseRun {
+                schedule: &schedule,
+                bounds: &bounds,
+                records: &mut rows,
+                range: 0..1,
+                cohort: Cohort::Measurement,
+            },
             &mut BTreeSet::new(),
         ))
         .expect("inclusive terminal boundary");
@@ -819,11 +837,13 @@ fn full_engine_rejects_warmup_completions_exactly_at_measurement_origin() {
                 Arc::new(backend),
                 clock.clone(),
                 Arc::new(MemoryRecorder::default()),
-                &schedule,
-                &bounds,
-                &mut rows,
-                0..1,
-                Cohort::Warmup,
+                PhaseRun {
+                    schedule: &schedule,
+                    bounds: &bounds,
+                    records: &mut rows,
+                    range: 0..1,
+                    cohort: Cohort::Warmup
+                },
                 &mut BTreeSet::new()
             ))
             .is_err()
@@ -855,11 +875,13 @@ fn full_engine_consumes_preparation_ready_at_offer_timer_without_catchup() {
             Arc::new(backend),
             clock,
             Arc::new(MemoryRecorder::default()),
-            &schedule,
-            &bounds,
-            &mut rows,
-            0..1,
-            Cohort::Measurement,
+            PhaseRun {
+                schedule: &schedule,
+                bounds: &bounds,
+                records: &mut rows,
+                range: 0..1,
+                cohort: Cohort::Measurement,
+            },
             &mut BTreeSet::new(),
         ))
         .expect("ready exact-slot signer");
@@ -950,11 +972,13 @@ fn full_engine_releases_completed_capacity_at_the_next_exact_offer_boundary() {
                 backend.clone(),
                 clock,
                 Arc::new(MemoryRecorder::default()),
-                &schedule,
-                &bounds,
-                &mut rows,
-                0..len,
-                Cohort::Measurement,
+                PhaseRun {
+                    schedule: &schedule,
+                    bounds: &bounds,
+                    records: &mut rows,
+                    range: 0..len,
+                    cohort: Cohort::Measurement,
+                },
                 &mut BTreeSet::new(),
             ))
             .expect("capacity completes at each exact next offer");
@@ -994,11 +1018,13 @@ fn engine_retains_failure_stages_without_remote_credentials_or_unbounded_status_
                 Arc::new(backend),
                 clock,
                 recorder.clone(),
-                &schedule,
-                &bounds,
-                &mut rows,
-                0..len,
-                Cohort::Measurement,
+                PhaseRun {
+                    schedule: &schedule,
+                    bounds: &bounds,
+                    records: &mut rows,
+                    range: 0..len,
+                    cohort: Cohort::Measurement,
+                },
                 &mut BTreeSet::new(),
             ))
             .expect_err("external stage failure invalidates collection");
@@ -1060,7 +1086,9 @@ fn trace_allocation_includes_header_rows_and_closing_bytes_without_partial_publi
     let schedule = Schedule::from_args(&args).unwrap();
     let mut rows = schedule.plan(&args.seed, 1).unwrap();
     for (index, row) in rows.iter_mut().enumerate() {
-        row.hash = Some(exact_hash(index as u8 + 1));
+        row.hash = Some(exact_hash(
+            u8::try_from(index).expect("fixture row index fits u8") + 1,
+        ));
         row.offer_ns = Some(row.plan.scheduled_offset_ns);
         row.acknowledgment_ns = Some(row.plan.scheduled_offset_ns + 2000);
         row.submission_finished = true;
@@ -1295,11 +1323,13 @@ fn local_barrier_is_independent_of_global_observation_and_delayed_ack_order() {
                 backend.clone(),
                 clock.clone(),
                 recorder.clone(),
-                &schedule,
-                &bounds,
-                &mut rows,
-                0..1,
-                Cohort::Measurement,
+                PhaseRun {
+                    schedule: &schedule,
+                    bounds: &bounds,
+                    records: &mut rows,
+                    range: 0..1,
+                    cohort: Cohort::Measurement,
+                },
                 &mut BTreeSet::new(),
             ))
             .expect("both evidence owners finish in the original window");
@@ -1368,11 +1398,13 @@ fn local_missing_cached_global_wrong_height_hash_and_rejections_cannot_close_a_t
                 backend.clone(),
                 clock.clone(),
                 recorder.clone(),
-                &schedule,
-                &bounds,
-                &mut rows,
-                0..1,
-                Cohort::Measurement,
+                PhaseRun {
+                    schedule: &schedule,
+                    bounds: &bounds,
+                    records: &mut rows,
+                    range: 0..1,
+                    cohort: Cohort::Measurement,
+                },
                 &mut BTreeSet::new(),
             ))
             .expect_err("global success cannot substitute for exact local application");
@@ -1426,11 +1458,13 @@ fn local_height_conflict_fails_when_local_arrives_before_global() {
             Arc::new(backend),
             clock,
             Arc::new(MemoryRecorder::default()),
-            &schedule,
-            &bounds,
-            &mut rows,
-            0..1,
-            Cohort::Measurement,
+            PhaseRun {
+                schedule: &schedule,
+                bounds: &bounds,
+                records: &mut rows,
+                range: 0..1,
+                cohort: Cohort::Measurement,
+            },
             &mut BTreeSet::new(),
         ))
         .expect_err("height conflict");
@@ -1459,11 +1493,13 @@ fn local_barrier_retains_in_flight_capacity_until_the_original_peer_applies() {
             backend.clone(),
             clock,
             Arc::new(MemoryRecorder::default()),
-            &schedule,
-            &bounds,
-            &mut rows,
-            0..len,
-            Cohort::Measurement,
+            PhaseRun {
+                schedule: &schedule,
+                bounds: &bounds,
+                records: &mut rows,
+                range: 0..len,
+                cohort: Cohort::Measurement,
+            },
             &mut BTreeSet::new(),
         ));
         assert_eq!(result.is_ok(), succeeds);
@@ -1491,11 +1527,13 @@ fn local_warmup_application_at_measurement_origin_fails_despite_earlier_global_s
                 Arc::new(backend),
                 clock.clone(),
                 Arc::new(MemoryRecorder::default()),
-                &schedule,
-                &bounds,
-                &mut rows,
-                0..1,
-                Cohort::Warmup,
+                PhaseRun {
+                    schedule: &schedule,
+                    bounds: &bounds,
+                    records: &mut rows,
+                    range: 0..1,
+                    cohort: Cohort::Warmup
+                },
                 &mut BTreeSet::new()
             ))
             .is_err()
@@ -1544,11 +1582,13 @@ fn local_cached_applied_keeps_polling_until_state_without_changing_global_latenc
             Arc::new(backend),
             clock,
             recorder.clone(),
-            &schedule,
-            &bounds,
-            &mut rows,
-            0..1,
-            Cohort::Measurement,
+            PhaseRun {
+                schedule: &schedule,
+                bounds: &bounds,
+                records: &mut rows,
+                range: 0..1,
+                cohort: Cohort::Measurement,
+            },
             &mut BTreeSet::new(),
         ))
         .expect("cache cannot close but later local StateApplied can");
@@ -1593,11 +1633,13 @@ fn global_and_local_share_the_original_observation_capacity_and_deadline() {
                 Arc::new(backend),
                 clock.clone(),
                 Arc::new(MemoryRecorder::default()),
-                &schedule,
-                &bounds,
-                &mut rows,
-                0..1,
-                Cohort::Measurement,
+                PhaseRun {
+                    schedule: &schedule,
+                    bounds: &bounds,
+                    records: &mut rows,
+                    range: 0..1,
+                    cohort: Cohort::Measurement
+                },
                 &mut BTreeSet::new()
             ))
             .is_err()
@@ -1631,11 +1673,13 @@ fn deadline_crossing_between_due_scopes_never_dispatches_or_counts_the_second_re
         backend.clone(),
         clock.clone(),
         Arc::new(MemoryRecorder::default()),
-        &schedule,
-        &bounds,
-        &mut records,
-        0..1,
-        Cohort::Measurement,
+        PhaseRun {
+            schedule: &schedule,
+            bounds: &bounds,
+            records: &mut records,
+            range: 0..1,
+            cohort: Cohort::Measurement,
+        },
         &mut BTreeSet::new(),
     ));
     assert!(result.is_err());
@@ -1843,7 +1887,7 @@ fn terminal_receipt_binds_actual_writer_digests_without_human_output() {
     terminal_receipt::emit(&args, 4, journal, trace, &mut reply).unwrap();
     assert!(reply.len() <= terminal_receipt::MAX_REPLY_BYTES);
     assert_eq!(reply.last(), Some(&b'\n'));
-    assert_eq!(reply.iter().filter(|byte| **byte == b'\n').count(), 1);
+    assert_eq!(reply.split(|byte| *byte == b'\n').count() - 1, 1);
     let value: Value = json::from_slice(&reply).unwrap();
     assert_eq!(value.as_object().unwrap().len(), 12);
     assert_eq!(value["operation"].as_str(), Some("transaction_load"));
@@ -1954,6 +1998,16 @@ fn terminal_pair_rejects_earlier_leaf_replacement_during_later_scan() {
 
 #[test]
 fn terminal_digest_counts_actual_short_writes_and_propagates_flush_failure() {
+    struct FailingFlush;
+    impl std::io::Write for FailingFlush {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Err(std::io::Error::other("test flush failure"))
+        }
+    }
+
     struct ShortWriter(Vec<u8>);
     impl std::io::Write for ShortWriter {
         fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
@@ -1974,15 +2028,7 @@ fn terminal_digest_counts_actual_short_writes_and_propagates_flush_failure() {
         identity.raw_sha256,
         <[u8; 32]>::from(Sha256::digest(b"abcdef"))
     );
-    struct FailingFlush;
-    impl std::io::Write for FailingFlush {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            Ok(bytes.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Err(std::io::Error::other("test flush failure"))
-        }
-    }
+
     assert!(
         terminal_receipt::DigestWriter::new(FailingFlush)
             .finish()

@@ -159,7 +159,7 @@ fn native_key_records_bind_curve_schema_relation_length_and_compiled_key() {
                 .unwrap(),
             None
         );
-        changed.vk_len = MAX_KEY_BYTES as u32 + 1;
+        changed.vk_len = u32::try_from(MAX_KEY_BYTES).expect("key byte cap fits u32") + 1;
         assert!(
             crate::validate_and_prepare_verifying_key_record_v1(&id, &changed)
                 .map_err(expect_rejected)
@@ -244,9 +244,9 @@ fn native_real_proofs_obey_relation_policy_caps_and_preverify() {
             crate::PreverifyResult::Accepted
         );
         assert!(
-            !verify(BACKEND, &proof, None)
+            verify(BACKEND, &proof, None)
                 .map_err(expect_rejected)
-                .is_ok()
+                .is_err()
         );
         let mut bad = envelope.clone();
         bad.aux.push(1);
@@ -272,13 +272,13 @@ fn native_real_proofs_obey_relation_policy_caps_and_preverify() {
                 .is_err()
         );
         assert!(
-            !verify(
+            verify(
                 BACKEND,
                 &ProofBox::new(BACKEND.into(), norito::encode_canonical(&bad).unwrap()),
                 Some(&key)
             )
             .map_err(expect_rejected)
-            .is_ok()
+            .is_err()
         );
     }
 }
@@ -321,13 +321,13 @@ fn native_framing_fixture_has_exact_schema_but_cannot_verify() {
             <[u8; 32]>::from(iroha_crypto::Hash::new(&fixture.public_inputs))
         );
         assert!(
-            !verify(
+            verify(
                 BACKEND,
                 &ProofBox::new(BACKEND.into(), fixture.proof_bytes),
                 Some(&key)
             )
             .map_err(expect_rejected)
-            .is_ok()
+            .is_err()
         );
     }
 }

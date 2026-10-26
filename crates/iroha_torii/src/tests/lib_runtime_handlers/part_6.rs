@@ -1,6 +1,6 @@
 #[tokio::test]
 async fn finality_proof_routes_require_heavy_query_admission() {
-    let mut app = mk_app_state_for_tests();
+    let mut app = mk_native_app_state_for_tests();
     let app_mut = Arc::get_mut(&mut app).expect("unique Torii app fixture");
     app_mut.query_heavy_inflight = Arc::new(tokio::sync::Semaphore::new(0));
     app_mut.query_queue_timeout = Duration::from_millis(1);
@@ -39,7 +39,7 @@ async fn finality_proof_routes_require_heavy_query_admission() {
 }
 #[tokio::test]
 async fn zk_tree_queries_require_heavy_admission_before_state_integrity_work() {
-    let mut app = mk_app_state_for_tests();
+    let mut app = mk_native_app_state_for_tests();
     let app_mut = Arc::get_mut(&mut app).expect("unique Torii app fixture");
     app_mut.query_heavy_inflight = Arc::new(tokio::sync::Semaphore::new(0));
     app_mut.query_queue_timeout = Duration::ZERO;
@@ -89,7 +89,7 @@ async fn zk_tree_queries_require_heavy_admission_before_state_integrity_work() {
 #[cfg(feature = "zk-verify-batch")]
 #[tokio::test]
 async fn diagnostic_openings_require_compute_admission_when_native_operations_disabled() {
-    let mut app = mk_app_state_for_tests();
+    let mut app = mk_native_app_state_for_tests();
     let app_mut = Arc::get_mut(&mut app).expect("unique Torii app fixture");
     Arc::get_mut(&mut app_mut.state)
         .expect("unique core state fixture")
@@ -123,7 +123,7 @@ async fn diagnostic_openings_require_compute_admission_when_native_operations_di
 #[cfg(feature = "zk-verify-batch")]
 #[tokio::test]
 async fn diagnostic_openings_require_compute_admission_when_native_operations_enabled() {
-    let mut app = mk_app_state_for_tests();
+    let mut app = mk_native_app_state_for_tests();
     let app_mut = Arc::get_mut(&mut app).expect("unique Torii app fixture");
     Arc::get_mut(&mut app_mut.state)
         .expect("unique core state fixture")
@@ -265,7 +265,7 @@ async fn bridge_finality_read_routes_fail_closed_on_empty_or_duplicate_tokens() 
 }
 #[tokio::test]
 async fn heavy_finality_routes_reject_unsupported_accept_before_rate_and_admission() {
-    let mut app = mk_app_state_for_tests();
+    let mut app = mk_native_app_state_for_tests();
     let app_mut = Arc::get_mut(&mut app).expect("unique Torii app fixture");
     app_mut.rate_limiter = limits::RateLimiter::new(Some(1), Some(8));
     app_mut.query_inflight = Arc::new(tokio::sync::Semaphore::new(0));
@@ -608,10 +608,10 @@ fn explorer_heavy_history_routes_are_bound_to_cancellation_safe_worker() {
         let start = source
             .find(marker)
             .unwrap_or_else(|| panic!("missing exact function marker `{marker}`"));
-        let open = source[start..]
-            .find('{')
-            .map(|offset| start + offset)
-            .unwrap_or_else(|| panic!("function `{marker}` has no body"));
+        let open = source[start..].find('{').map_or_else(
+            || panic!("function `{marker}` has no body"),
+            |offset| start + offset,
+        );
         let mut depth = 0_usize;
         for (offset, byte) in source.as_bytes()[open..].iter().enumerate() {
             match byte {
@@ -755,10 +755,31 @@ fn explorer_heavy_history_routes_are_bound_to_cancellation_safe_worker() {
             admitted.contains("admission:crate::QueryAdmissionPermit"),
             "Explorer wrapper `{admitted_handler}` must own its admission permit"
         );
+        if admitted_handler == "handle_v1_explorer_blocks_admitted" {
+            // The block feed installs its narrower source budget before the
+            // original allocation scope, so it retains physical admission in
+            // a specialized recoverable worker across those separate phases.
+            for boundary in [
+                "spawn_blocking_recoverable(move||{",
+                "let_admission=admission;",
+                "HistoryProducerOwner::from_admission(&_admission)?",
+                "owner.physical_scope(||{",
+                "join_recoverable(worker).await",
+            ] {
+                assert!(
+                    admitted.contains(boundary),
+                    "block worker missing {boundary}"
+                );
+            }
+        } else {
+            assert!(
+                admitted.contains("run_admitted_blocking(admission,"),
+                "Explorer wrapper `{admitted_handler}` must retain admission in the blocking worker"
+            );
+        }
         assert!(
-            admitted.contains("run_admitted_blocking(admission,")
-                && admitted.contains(&format!("{sync_handler}(")),
-            "Explorer wrapper `{admitted_handler}` must retain admission in the blocking worker around `{sync_handler}`"
+            admitted.contains(&format!("{sync_handler}(")),
+            "Explorer wrapper `{admitted_handler}` must call `{sync_handler}` inside its worker"
         );
     }
     for (route, http_handler, admitted_handler, sync_handler) in details {
@@ -1329,7 +1350,7 @@ fn seed_public_soracloud_world() -> World {
                 health_window_secs: std::num::NonZeroU32::new(30).expect("window"),
                 automatic_rollback_failures: std::num::NonZeroU32::new(1).expect("rollback"),
             },
-            economics: Default::default(),
+            economics: iroha_data_model::soracloud::SoraHttpServiceEconomicsV1::default(),
             state_bindings: Vec::new(),
             lease_volumes: Vec::new(),
             handlers: vec![
@@ -1624,7 +1645,7 @@ fn seed_authoritative_hosted_http_revision(
                     staker: validator_account_id.clone(),
                     bonded: Quantity::from(1_u64),
                     pending_unbonds: BTreeMap::new(),
-                    metadata: Default::default(),
+                    metadata: iroha_model_base::metadata::Metadata::default(),
                 },
             );
             stake_tx.apply();
@@ -1786,7 +1807,7 @@ fn seed_public_hosted_http_current_app_with_service_lease(
             Some("http://127.0.0.1:18080"),
             Some(101),
         )],
-        vec![hosted_http_runtime_replica_plan(
+        &[hosted_http_runtime_replica_plan(
             &temp.path().join("service-canary"),
             1,
             candidate_health,
@@ -1803,7 +1824,7 @@ fn seed_public_hosted_http_current_app_with_replica_plans(
     baseline_health: iroha_data_model::soracloud::SoraServiceHealthStatusV1,
     candidate_health: iroha_data_model::soracloud::SoraServiceHealthStatusV1,
     baseline_replica_plans: Vec<SoracloudRuntimeReplicaPlan>,
-    candidate_replica_plans: Vec<SoracloudRuntimeReplicaPlan>,
+    candidate_replica_plans: &[SoracloudRuntimeReplicaPlan],
 ) -> SharedAppState {
     seed_public_hosted_http_current_app_with_replica_plans_and_snapshot_peer_id(
         temp,
@@ -1908,7 +1929,7 @@ fn seed_hosted_http_public_lane_validator(
                 staker: validator.clone(),
                 bonded: Quantity::from(1_u64),
                 pending_unbonds: BTreeMap::new(),
-                metadata: Default::default(),
+                metadata: iroha_model_base::metadata::Metadata::default(),
             },
         );
     tx.apply();
@@ -2082,7 +2103,7 @@ fn seed_public_hosted_http_current_app_with_replica_plans_and_snapshot_peer_id(
     baseline_health: iroha_data_model::soracloud::SoraServiceHealthStatusV1,
     _candidate_health: iroha_data_model::soracloud::SoraServiceHealthStatusV1,
     baseline_replica_plans: Vec<SoracloudRuntimeReplicaPlan>,
-    candidate_replica_plans: Vec<SoracloudRuntimeReplicaPlan>,
+    candidate_replica_plans: &[SoracloudRuntimeReplicaPlan],
 
     snapshot_local_peer_id: Option<String>,
     service_lease: Option<iroha_data_model::soracloud::SoraServiceLeaseStateV1>,
@@ -2123,7 +2144,7 @@ fn seed_public_hosted_http_current_app_with_replica_plans_and_snapshot_peer_id(
         "derive canonical hosted-http current remote host fixture key",
     );
     let candidate_assignments = assignments_for(
-        &candidate_replica_plans,
+        candidate_replica_plans,
         0x60,
         "derive canonical hosted-http inactive remote host fixture key",
     );
@@ -2150,10 +2171,7 @@ fn seed_public_hosted_http_current_app_with_replica_plans_and_snapshot_peer_id(
             baseline_assignments.as_slice(),
             baseline_replica_plans.as_slice(),
         ),
-        (
-            candidate_assignments.as_slice(),
-            candidate_replica_plans.as_slice(),
-        ),
+        (candidate_assignments.as_slice(), candidate_replica_plans),
     ] {
         for (assignment, replica_plan) in assignments.iter().zip(replica_plans) {
             if assignment.2.as_str() != local_peer_id_string.as_str() {
@@ -3079,54 +3097,172 @@ async fn soracloud_public_split_app_routes_hosted_live_and_local_vault_on_one_no
 }
 
 pub fn app_with_root_scope_for_handler_test(world: World, private: bool) -> SharedAppState {
-    use iroha_data_model::{
-        block::consensus::SumeragiRootScope,
-        parameter::{
-            custom::CustomParameter,
-            system::{
-                ConsensusFingerprint, ConsensusHandshakeMetadata, SumeragiConsensusMode,
-                consensus_metadata,
-            },
-        },
-    };
-    let mut context =
-        iroha_data_model::block::consensus::SumeragiGenesisContextParameters::recommended();
+    use iroha_core::sumeragi::test_chain::TestChainConfig;
+    use iroha_data_model::block::consensus::SumeragiRootScope;
+
+    let mut config = TestChainConfig::new(world, 1_000);
     if private {
-        context.root_scope = SumeragiRootScope::Dataspace {
+        config.root_scope = SumeragiRootScope::Dataspace {
             parent_network_id: NetworkId::from_genesis_hash(
                 HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA7; 32])),
             ),
             dataspace_id: DataSpaceId::new(u64::MAX - 1),
         };
+        let dataspace_id = DataSpaceId::new(u64::MAX - 1);
+        use iroha_data_model::nexus::{
+            DataSpaceCatalog, DataSpaceMetadata, LaneCatalog, LaneConfig,
+        };
+        let mut nexus = iroha_config::parameters::actual::Nexus::default();
+        nexus.lane_catalog = LaneCatalog::new(
+            1_u32.try_into().unwrap(),
+            vec![LaneConfig {
+                dataspace_id,
+                alias: "native-root-scope".into(),
+                ..LaneConfig::default()
+            }],
+        )
+        .unwrap();
+        nexus.configured_lane_catalog = nexus.lane_catalog.clone();
+        nexus.lane_config =
+            iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+        nexus.dataspace_catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata {
+            id: dataspace_id,
+            alias: "native-root-scope".into(),
+            description: None,
+            fault_tolerance: 1,
+        }])
+        .unwrap();
+        nexus.configured_dataspace_catalog = nexus.dataspace_catalog.clone();
+        nexus.routing_policy.default_dataspace = dataspace_id;
+        config.nexus = Some(nexus);
     }
-    let metadata = ConsensusHandshakeMetadata {
-        mode: SumeragiConsensusMode::Permissioned,
-        block_cadence_ms: NonZeroU64::new(1_000).unwrap(),
-        wire_protocol_version: u32::from(iroha_data_model::sumeragi::PROTOCOL_VERSION),
-        consensus_fingerprint: ConsensusFingerprint::new([0xB7; 32]),
-        sumeragi_context: context,
-    };
-    metadata.validate().unwrap();
-    let app = mk_app_state_for_tests_with_world(world);
-    let mut block = app.state.block(BlockHeader::new(
-        NonZeroU64::new(1).unwrap(),
+    mk_native_app_state_for_tests_with_options_and_scope(
+        config.world,
         None,
         None,
-        0,
-        0,
-    ));
-    let mut transaction = block.transaction();
-    transaction
-        .world_mut_for_testing()
-        .parameters_mut_for_testing()
-        .set_parameter(Parameter::Custom(CustomParameter::new(
-            consensus_metadata::handshake_meta_id(),
-            Json::new(metadata),
-        )))
-        .expect("valid fixture parameters");
-    transaction.apply();
-    block.commit_world_overlay_for_testing().unwrap();
-    app
+        None,
+        None,
+        config.nexus,
+        config.root_scope,
+    )
+}
+
+#[tokio::test]
+async fn unauthenticated_native_root_never_opens_listener_routes() {
+    use tower::ServiceExt as _;
+
+    let mut app = mk_app_state_for_tests();
+    let inner = Arc::get_mut(&mut app).unwrap();
+    inner.require_api_token = false;
+    inner.api_token_digests = Arc::new(limits::ApiTokenDigestSet::from_tokens([
+        "listener-owner-token",
+    ]));
+    assert_eq!(app.state.authenticated_root_scope(), None);
+    assert!(app.is_private_root());
+    let router = axum::Router::new()
+        .fallback(any(|| async { "must not reach handler" }))
+        .layer(axum::middleware::from_fn_with_state(
+            app.clone(),
+            enforce_api_token,
+        ));
+    for descriptor in [
+        route_catalog::core::HEALTH,
+        route_catalog::core::LIVEZ,
+        route_catalog::core::READYZ,
+        route_catalog::diagnostic::STATUS,
+        route_catalog::sorafs::SITE_MANIFEST,
+        route_catalog::core::API_VERSION,
+    ] {
+        for method in [Method::GET, Method::HEAD, Method::POST] {
+            for token in [None, Some("wrong-token"), Some("listener-owner-token")] {
+                let mut request = axum::http::Request::builder()
+                    .method(method.clone())
+                    .uri(descriptor.path())
+                    .extension(MatchedRouteMetadata::from_descriptor(descriptor))
+                    .body(Body::empty())
+                    .unwrap();
+                if let Some(token) = token {
+                    request
+                        .headers_mut()
+                        .insert(HEADER_API_TOKEN, HeaderValue::from_str(token).unwrap());
+                }
+                assert!(matches!(
+                    validate_api_token(&app, request.headers()),
+                    Err(Error::AppServiceUnavailable {
+                        code: "native_root_scope_unavailable",
+                        ..
+                    })
+                ));
+                assert!(
+                    app.authenticated_api_token_principal(request.headers())
+                        .is_none()
+                );
+                let response = router.clone().oneshot(request).await.unwrap();
+                assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+                assert_eq!(
+                    response.headers()[axum::http::header::CACHE_CONTROL],
+                    "private, no-store"
+                );
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn authenticated_native_root_closes_private_diagnostics_during_publication() {
+    use tower::ServiceExt as _;
+
+    for private in [false, true] {
+        let mut app = app_with_root_scope_for_handler_test(World::new(), private);
+        let inner = Arc::get_mut(&mut app).unwrap();
+        inner.require_api_token = false;
+        inner.api_token_digests = Arc::new(limits::ApiTokenDigestSet::from_tokens([
+            "listener-owner-token",
+        ]));
+        app.state.with_held_header_for_reader_test(|_| {
+            assert!(app.state.try_view_once().is_err());
+            assert_eq!(app.is_private_root(), private);
+        });
+        let router = axum::Router::new()
+            .fallback(any(|| async { "authenticated diagnostic" }))
+            .layer(axum::middleware::from_fn_with_state(
+                app.clone(),
+                enforce_api_token,
+            ))
+            .layer(axum::middleware::from_fn_with_state(
+                app,
+                enforce_required_api_token_private_no_store,
+            ));
+        for token in [None, Some("listener-owner-token")] {
+            let mut request = axum::http::Request::builder()
+                .uri(route_catalog::diagnostic::STATUS.path())
+                .extension(MatchedRouteMetadata::from_descriptor(
+                    route_catalog::diagnostic::STATUS,
+                ))
+                .body(Body::empty())
+                .unwrap();
+            if let Some(token) = token {
+                request
+                    .headers_mut()
+                    .insert(HEADER_API_TOKEN, HeaderValue::from_str(token).unwrap());
+            }
+            let response = router.clone().oneshot(request).await.unwrap();
+            assert_eq!(
+                response.status(),
+                if private && token.is_none() {
+                    StatusCode::UNAUTHORIZED
+                } else {
+                    StatusCode::OK
+                }
+            );
+            if private {
+                assert_eq!(
+                    response.headers()[axum::http::header::CACHE_CONTROL],
+                    "private, no-store"
+                );
+            }
+        }
+    }
 }
 
 #[tokio::test]

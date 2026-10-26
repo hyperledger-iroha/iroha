@@ -696,7 +696,7 @@ fn reserve_ledger_plan_preserves_sub_micro_and_wide_quantities() {
     let reserve = sample_account_id("reserve-ledger-escrow");
     let plan = build_reserve_ledger_plan(
         Path::new("quote.json"),
-        projection,
+        &(projection),
         &provider,
         &treasury,
         &reserve,
@@ -1039,6 +1039,8 @@ include!("../incentives_ledger_tests.rs");
 test_items! {
 #[cfg(unix)]
 fn handshake_token_issue_generates_verifiable_token() {
+use std::os::unix::fs::MetadataExt as _;
+
     let mut ctx = TestContext::new();
     let keypair = generate_mldsa_keypair(MlDsaSuite::MlDsa44).expect("keypair");
     let mut secret_file = NamedTempFile::new().expect("secret file");
@@ -1103,7 +1105,7 @@ fn handshake_token_issue_generates_verifiable_token() {
     assert_eq_compact! { json["token_id_hex"] => Value::from(hex::encode(artifacts.token.token_id())) };
     assert!(json.get("token_base64url").is_none());
     assert!(json.get("token_hex").is_none());
-    use std::os::unix::fs::MetadataExt as _;
+
     assert_eq!(
         fs::metadata(&output_path).expect("token metadata").mode() & 0o077,
         0
@@ -1197,7 +1199,7 @@ fn handshake_token_issue_floors_only_default_wall_clock_time() {
     assert_eq!(artifacts.expires_dt.nanosecond(), 0);
     assert_eq!(artifacts.token.issued_at(), default_seconds);
     assert_eq!(artifacts.token.expires_at(), default_seconds + 600);
-    assert_eq!(artifacts.issued_dt.unix_timestamp(), default_seconds as i64);
+    assert_eq!(artifacts.issued_dt.unix_timestamp(), i64::try_from(default_seconds).expect("fixture timestamp fits i64"));
 }
 #[cfg(unix)]
 fn handshake_token_id_reports_expected_digest() {
@@ -1432,7 +1434,7 @@ fn gateway_provider_spec_rejects_missing_fields() {
         "--gateway-provider",
     )
     .expect_err("missing provider-id should fail");
-    assert_compact! { err.to_string().contains("provider-id"); "unexpected error: {err}" };
+    assert_compact! { err.clone().contains("provider-id"); "unexpected error: {err}" };
 }
 fn validate_hex_digest_enforces_format() {
     let valid = validate_hex_digest(&"ab".repeat(32), "--flag").expect("valid digest");
@@ -1850,12 +1852,12 @@ json_response_fixture!(StatusCode::OK, &norito::json!({
     }
     }
 fn transparency_explorer_canary_fixture_json(
-    value: Value,
+    value: &Value,
 ) -> Result<TransparencyExplorerCanaryHttpResponse> {
     Ok(TransparencyExplorerCanaryHttpResponse {
         status: StatusCode::OK,
         content_type: Some("application/json".to_string()),
-        body: norito::json::to_vec(&value)?,
+        body: norito::json::to_vec(value)?,
     })
 }
 fn transparency_explorer_canary_fixture_response(
@@ -1884,7 +1886,7 @@ fn transparency_explorer_canary_fixture_response(
                 "proof_token_issuances": []
             })
         };
-        return transparency_explorer_canary_fixture_json(value);
+        return transparency_explorer_canary_fixture_json(&(value));
     }
     if path.ends_with("/v1/sorafs/transparency/explorer/ui") {
         return Ok(TransparencyExplorerCanaryHttpResponse {
@@ -1895,12 +1897,14 @@ fn transparency_explorer_canary_fixture_response(
     }
     if path.ends_with("/v1/sorafs/transparency/tokens") {
         assert_eq_compact! { parsed.query_pairs().find(|(key, _)| key == "limit").map(|(_, value)| value.into_owned()) => Some("6".to_string()) };
-        return transparency_explorer_canary_fixture_json(norito::json!({
-            "schema": "sorafs.transparency.proof_token_issuances.v1",
-            "payload_bytes_included": false,
-            "private_digest_keys_included": false,
-            "entries": []
-        }));
+        return transparency_explorer_canary_fixture_json(
+            &(norito::json!({
+                "schema": "sorafs.transparency.proof_token_issuances.v1",
+                "payload_bytes_included": false,
+                "private_digest_keys_included": false,
+                "entries": []
+            })),
+        );
     }
     panic!("unexpected transparency explorer canary route: {url}");
 }
@@ -1992,52 +1996,56 @@ fn transparency_publication_canary_fixture_response(
         norito::json!({})
     };
     if path.ends_with("/v1/sorafs/transparency/cycles") {
-        return transparency_explorer_canary_fixture_json(norito::json!({
-            "schema": "sorafs.transparency.cycles.v1",
-            "published_cycle_count": 1_u64,
-            "returned_cycle_count": 1_u64,
-            "limit": 3_u64,
-            "truncated": false,
-            "cycles": [
-                {
-                    "cycle_id_hex": cycle_id,
+        return transparency_explorer_canary_fixture_json(
+            &(norito::json!({
+                "schema": "sorafs.transparency.cycles.v1",
+                "published_cycle_count": 1_u64,
+                "returned_cycle_count": 1_u64,
+                "limit": 3_u64,
+                "truncated": false,
+                "cycles": [
+                    {
+                        "cycle_id_hex": cycle_id,
+                        "block_hash_hex": ("b2".repeat(32)),
+                        "publication_hash_hex": ("c3".repeat(32)),
+                        "entry_root_hex": ("d4".repeat(32)),
+                        "encoded_blake3": ("e5".repeat(32)),
+                        "source_entry": {
+                            "labels": publisher_labels
+                        }
+                    }
+                ]
+            })),
+        );
+    }
+    if path.ends_with(&format!("/v1/sorafs/transparency/cycles/{cycle_id}")) {
+        return transparency_explorer_canary_fixture_json(
+            &(norito::json!({
+                "schema": "sorafs.transparency.cycle_publication.v1",
+                "cycle_id_hex": cycle_id,
+                "encoded_blake3": ("e5".repeat(32)),
+                "proof_count": 2_u64,
+                "returned_proof_count": 1_u64,
+                "limit": 3_u64,
+                "truncated_proofs": true,
+                "entry": {
+                    "labels": publisher_labels
+                },
+                "verification": {
+                    "valid": true,
+                    "all_proofs_verified": true,
                     "block_hash_hex": ("b2".repeat(32)),
                     "publication_hash_hex": ("c3".repeat(32)),
                     "entry_root_hex": ("d4".repeat(32)),
-                    "encoded_blake3": ("e5".repeat(32)),
-                    "source_entry": {
-                        "labels": publisher_labels
-                    }
+                    "proof_count": 2_u64
+                },
+                "publication": {
+                    "proofs": [
+                        { "public_subject": "manifest-must-not-leak" }
+                    ]
                 }
-            ]
-        }));
-    }
-    if path.ends_with(&format!("/v1/sorafs/transparency/cycles/{cycle_id}")) {
-        return transparency_explorer_canary_fixture_json(norito::json!({
-            "schema": "sorafs.transparency.cycle_publication.v1",
-            "cycle_id_hex": cycle_id,
-            "encoded_blake3": ("e5".repeat(32)),
-            "proof_count": 2_u64,
-            "returned_proof_count": 1_u64,
-            "limit": 3_u64,
-            "truncated_proofs": true,
-            "entry": {
-                "labels": publisher_labels
-            },
-            "verification": {
-                "valid": true,
-                "all_proofs_verified": true,
-                "block_hash_hex": ("b2".repeat(32)),
-                "publication_hash_hex": ("c3".repeat(32)),
-                "entry_root_hex": ("d4".repeat(32)),
-                "proof_count": 2_u64
-            },
-            "publication": {
-                "proofs": [
-                    { "public_subject": "manifest-must-not-leak" }
-                ]
-            }
-        }));
+            })),
+        );
     }
     panic!("unexpected transparency publication canary route: {url}");
 }

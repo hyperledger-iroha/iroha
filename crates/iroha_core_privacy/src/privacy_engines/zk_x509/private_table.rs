@@ -8,17 +8,14 @@ use crate::privacy_engines::transparent_stark::GoldilocksFieldV1 as F;
 /// step also erases inline payloads left in vacated `Option` slots after a move.
 /// Capacity is reserved before construction; insertion never reallocates and
 /// mutable access exposes only the initialized slice.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(super) struct ClearingVecV1<T>(Vec<T>);
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<T> core::fmt::Debug for ClearingVecV1<T> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str("ClearingVecV1 { <private owners redacted> }")
     }
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<T> ClearingVecV1<T> {
     /// Reserve the full capacity before writing the first private value.
     pub(super) fn try_with_capacity_v1(
@@ -60,7 +57,6 @@ impl<T> ClearingVecV1<T> {
     }
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<T> core::ops::Deref for ClearingVecV1<T> {
     type Target = [T];
 
@@ -69,14 +65,12 @@ impl<T> core::ops::Deref for ClearingVecV1<T> {
     }
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<T> core::ops::DerefMut for ClearingVecV1<T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<T> Drop for ClearingVecV1<T> {
     fn drop(&mut self) {
         use zeroize::Zeroize;
@@ -222,13 +216,11 @@ pub(super) fn zeroize_field_rows_v1<R: AsMut<[F]>>(rows: &mut [R]) {
 }
 
 /// Overwrite a flat field column while preserving its initialized length.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(super) fn zeroize_fields_v1(mut fields: &mut [F]) {
     zeroize_field_rows_v1(core::slice::from_mut(&mut fields));
 }
 
 /// Overwrite private primitive words before their containing allocation is freed.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(super) fn zeroize_words_v1<T: zeroize::Zeroize + Default + PartialEq>(words: &mut [T]) {
     #[cfg(test)]
     if inspection::enabled_v1() {

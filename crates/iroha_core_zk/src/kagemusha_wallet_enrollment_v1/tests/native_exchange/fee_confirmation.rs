@@ -358,21 +358,21 @@ fn actual_a_acknowledges_certified_fee_payout_with_restart_and_exact_retry() {
         );
         let proof: SumeragiFinalityProof = decode(&bytes);
         assert_eq!(proof.height(), height);
-        let accepted_block = verifier.verify(&proof).unwrap();
+        let decision = verifier.verify(&proof).unwrap();
         if height == paid_height {
-            let (index, _) = accepted_block
+            let (index, _) = decision
                 .block()
                 .external_transactions()
                 .enumerate()
                 .find(|(_, tx)| tx.hash().as_ref() == &payout.transaction)
                 .expect("exact paid transaction in certified payout block");
-            assert!(accepted_block.block().output_error(index).is_none());
+            assert!(decision.block().output_error(index).is_none());
         }
         if height + 1 == through {
-            previous = Some(accepted_block.clone());
+            previous = Some(decision.clone());
         }
         if height == through {
-            terminal = Some(accepted_block);
+            terminal = Some(decision);
         }
     }
     let terminal = terminal.unwrap();

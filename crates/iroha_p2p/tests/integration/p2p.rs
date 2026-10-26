@@ -7,9 +7,10 @@ use iroha_config::parameters::{
     defaults::network::{DEFAULT_AEAD_FRAME_OVERHEAD_BYTES, TRUST_GOSSIP},
 };
 use iroha_crypto::KeyPair;
-use iroha_data_model::prelude::{NetworkId, Peer};
+use iroha_data_model::prelude::NetworkId;
 use iroha_futures::supervisor::ShutdownSignal;
 use iroha_logger::{prelude::*, test_logger};
+use iroha_model_base::peer::Peer;
 use iroha_p2p::{NetworkHandle, network::message::*, peer::message::PeerMessage};
 use iroha_primitives::addr::socket_addr;
 use norito::codec::{Decode, Encode};

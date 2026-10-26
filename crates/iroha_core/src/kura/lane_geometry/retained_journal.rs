@@ -303,10 +303,10 @@ impl RetainedGeometryJournal {
             }
             return Ok(());
         }
-        if !self.renamed {
-            self.verify_current()?;
-        } else {
+        if self.renamed {
             self.verify_namespace()?;
+        } else {
+            self.verify_current()?;
         }
         if self.pending.is_none()
             && self.current.is_some()
@@ -338,35 +338,29 @@ impl RetainedGeometryJournal {
         if self.pending.is_none() {
             let existing = kura
                 .open_optional_bound_progress_file(&self.namespace, &self.namespace.index_path)?;
-            let (file, writable) = match existing {
-                Some(file) => {
-                    Self::verify_bytes(&file, bytes, &self.namespace.index_path)?;
-                    (file, false)
-                }
-                None => {
-                    #[cfg(unix)]
-                    let file = File::from(
-                        rustix::fs::openat(
-                            &self.namespace.directories[0].file,
-                            JOURNAL_TEMP_FILE_NAME,
-                            rustix::fs::OFlags::RDWR
-                                | rustix::fs::OFlags::CREATE
-                                | rustix::fs::OFlags::EXCL
-                                | rustix::fs::OFlags::NOFOLLOW
-                                | rustix::fs::OFlags::CLOEXEC,
-                            rustix::fs::Mode::from_raw_mode(0o600),
-                        )
-                        .map_err(|error| {
-                            Error::IO(error.into(), self.namespace.index_path.clone())
-                        })?,
-                    );
-                    #[cfg(not(unix))]
-                    return Err(self.error(
-                        "retained journal publication requires descriptor-relative creation",
-                    ));
-                    #[cfg(unix)]
-                    (file, true)
-                }
+            let (file, writable) = if let Some(file) = existing {
+                Self::verify_bytes(&file, bytes, &self.namespace.index_path)?;
+                (file, false)
+            } else {
+                #[cfg(unix)]
+                let file = File::from(
+                    rustix::fs::openat(
+                        &self.namespace.directories[0].file,
+                        JOURNAL_TEMP_FILE_NAME,
+                        rustix::fs::OFlags::RDWR
+                            | rustix::fs::OFlags::CREATE
+                            | rustix::fs::OFlags::EXCL
+                            | rustix::fs::OFlags::NOFOLLOW
+                            | rustix::fs::OFlags::CLOEXEC,
+                        rustix::fs::Mode::from_raw_mode(0o600),
+                    )
+                    .map_err(|error| Error::IO(error.into(), self.namespace.index_path.clone()))?,
+                );
+                #[cfg(not(unix))]
+                return Err(self
+                    .error("retained journal publication requires descriptor-relative creation"));
+                #[cfg(unix)]
+                (file, true)
             };
             self.pending = Some(PendingWrite {
                 file,
@@ -385,7 +379,7 @@ impl RetainedGeometryJournal {
                 writer
                     .seek(SeekFrom::Start(0))
                     .and_then(|_| writer.write_all(bytes))
-                    .and_then(|_| writer.set_len(bytes.len() as u64))
+                    .and_then(|()| writer.set_len(bytes.len() as u64))
                     .map_err(|error| Error::IO(error, self.namespace.index_path.clone()))?;
             }
             Self::verify_bytes(&pending.file, bytes, &self.namespace.index_path)?;

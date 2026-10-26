@@ -36,13 +36,16 @@ fn write(key: &str) -> InstructionBox {
 fn pipeline_fixture(bytes: u64, triggers: Vec<Trigger>) -> (Box<State>, SignedBlock) {
     let state = Box::new(fixture(bytes, None));
     {
-        let mut parameters = state.world.parameters.block();
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+            .expect("fund original parameter Cell acquisition");
         let mut policy = parameters.get().block().execution_output();
         policy.max_pipeline_triggers = u32::try_from(triggers.len()).unwrap();
-        parameters
-            .get_mut()
-            .set_parameter(Parameter::Block(BlockParameter::ExecutionOutput(policy)))
-            .expect("valid fixture parameters");
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            Parameter::Block(BlockParameter::ExecutionOutput(policy)),
+            state.world.sccp_committee_generations.allocation_budget(),
+        )
+        .expect("valid fixture parameters");
         parameters.commit();
     }
     {

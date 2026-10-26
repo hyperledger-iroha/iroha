@@ -19,7 +19,6 @@ impl ZkX509ProofInstanceV1 {
         Self(nonce)
     }
     /// Consume exactly the next 32 checked bytes before any private mask draw.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     pub(crate) fn sample_v1<R: rand::TryCryptoRng + ?Sized>(
         rng: &mut crate::privacy_engines::prover_randomness::HealthCheckedTryCryptoRngV1<'_, R>,
     ) -> Result<Self, crate::privacy_engines::prover_randomness::TryCryptoProverRandomnessErrorV1>
@@ -97,7 +96,10 @@ mod tests {
             }
         }
         fn byte(index: usize) -> u8 {
-            (index as u8).wrapping_mul(73).wrapping_add(11)
+            u8::try_from(index)
+                .expect("proof digest index fits u8")
+                .wrapping_mul(73)
+                .wrapping_add(11)
         }
     }
     impl TryRng for RecordingRng {

@@ -257,7 +257,7 @@ pub(in crate::peer) struct CreditStream<E: Enc, T: Pload + ClassifyTopic> {
     cursor: usize,
     binding: Binding,
     crypto: cryptographer::Cryptographer<E>,
-    peer: iroha_data_model::peer::Peer,
+    peer: iroha_model_base::peer::Peer,
     connection: ConnectionId,
     caps: crate::network::TopicFrameCaps,
     failed: bool,
@@ -284,7 +284,7 @@ impl<E: Enc, T: Pload + ClassifyTopic> CreditStream<E, T> {
         transport: negotiation::OwnedTransport,
         binding: Binding,
         crypto: cryptographer::Cryptographer<E>,
-        peer: iroha_data_model::peer::Peer,
+        peer: iroha_model_base::peer::Peer,
         connection: ConnectionId,
         CreditStreamConfig {
             caps,

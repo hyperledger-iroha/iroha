@@ -342,6 +342,7 @@ NATIVE_CORE_TEST_OWNERS = (
         'binding_refuses_unpublished_execution_and_captures_the_published_tip',
     )),
     ('native original execution and undo', 'state/native_execution_tip.rs', 'state/native_execution_tip/tests.rs', 'tests', 'state::native_execution_tip::tests', (
+        'authenticated_root_scope_requires_native_execution_and_survives_publication',
         'original_genesis_and_worker_publish_exact_tip_with_undo',
         'rejected_original_preparation_and_discard_preserve_committed_tip',
         'replacement_reads_exact_tip_undo_and_abandonment_restores_original_cut',
@@ -351,6 +352,8 @@ NATIVE_CORE_TEST_OWNERS = (
         'funded_tip_admission_is_atomic_and_original_pool_bound',
         'snapshot_json_preserves_genesis_undo_absence_distinction',
         'restore_rebuilds_sparse_history_checkpoints_from_verified_snapshot_prefix',
+        'restore_requires_the_certified_successor_of_the_snapshot_tip',
+        'restore_passes_each_certified_height_once_to_its_observer',
         'restore_preserves_original_pool_refusal_release_and_same_source_retry',
         'restore_preserves_cumulative_prefix_decode_refusal_and_same_source_retry',
         'restore_keeps_corrupt_native_history_a_completed_schema_rejection',

@@ -785,9 +785,10 @@ fn child_depth_and_ordinal_overflow_refuse_without_wraparound() {
         let result = custody.contract(0, &account(2), |frame| {
             if depth {
                 // Exercise the exact terminal guard without fabricating 33 signed paths.
-                frame.binding = ActionInvocationBindingV1::Contract {
+                frame.binding = InvocationBinding::Contract {
                     root_index: 0,
-                    call_path: vec![0; ACTION_INVOCATION_MAX_CALL_PATH_DEPTH_V1],
+                    path: [0; ACTION_INVOCATION_MAX_CALL_PATH_DEPTH_V1],
+                    depth: ACTION_INVOCATION_MAX_CALL_PATH_DEPTH_V1,
                 };
             } else {
                 frame.next_child = u32::MAX;

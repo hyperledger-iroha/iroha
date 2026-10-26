@@ -5,7 +5,7 @@ struct TestRng(u64);
 impl rand::TryRng for TestRng {
     type Error = std::io::Error;
     fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
-        Ok(self.try_next_u64()? as u32)
+        Ok(u32::try_from(self.try_next_u64()? & u64::from(u32::MAX)).expect("low word fits u32"))
     }
     fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
         Ok({

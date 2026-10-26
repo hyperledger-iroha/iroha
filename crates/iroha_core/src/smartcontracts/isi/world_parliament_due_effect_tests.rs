@@ -119,7 +119,7 @@ fn parliament_sorafs_provider_owner_enacts_at_the_exact_due_height() {
     };
     use iroha_executor_data_model::permission::sorafs::CanOperateSorafsRepair;
 
-    let state = blank_test_state();
+    let state = component_state_with_crypto_policy(blank_test_state());
     let block = new_dummy_block_at_height(
         NonZeroU64::new(PARLIAMENT_DUE_CERTIFICATE_HEIGHT).expect("due height is nonzero"),
     );
@@ -477,7 +477,7 @@ fn parliament_sorafs_admission_council_enacts_only_the_exact_certified_effect() 
             ProviderAdmissionCouncilPolicyV1, governance::ProviderAdmissionGovernanceActionV1,
         },
     };
-    let state = blank_test_state();
+    let state = component_state_with_crypto_policy(blank_test_state());
     // Provider admission records require a real nonzero observation timestamp.
     let header = BlockHeader::new(
         NonZeroU64::new(PARLIAMENT_DUE_CERTIFICATE_HEIGHT).unwrap(),

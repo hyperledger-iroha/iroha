@@ -87,7 +87,7 @@ fn fixture_with_assignment(assignment: bool) -> (CertifiedTestChain, PrivateSett
         // The genuine genesis lane step closes assignments absent from policy.
         // Commit this exact fixed committee so the selected H2 route stays live.
         let mut policy = SumeragiLanePolicy::for_chain(
-            Default::default(),
+            iroha_data_model::parameter::system::SumeragiParameters::default(),
             iroha_sumeragi::availability::recommended_data_availability_layout(),
         );
         policy.fixed.push(SumeragiFixedLane {
@@ -109,7 +109,7 @@ fn fixture_with_assignment(assignment: bool) -> (CertifiedTestChain, PrivateSett
             lane: key.route.lane_id,
             dataspace: key.route.dataspace_id,
             incarnation: *key.route.lane_incarnation.as_ref(),
-            params: Default::default(),
+            params: iroha_data_model::parameter::system::SumeragiParameters::default(),
             committee: members,
             created_at: 0,
             active_from: 1,

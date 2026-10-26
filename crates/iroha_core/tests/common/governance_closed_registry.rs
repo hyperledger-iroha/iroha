@@ -8,7 +8,7 @@ use iroha_data_model::{
     zk::BackendTag,
 };
 
-pub(super) fn unqualified_key(circuit_id: &str) -> (VerifyingKeyId, VerifyingKeyRecord) {
+pub fn unqualified_key(circuit_id: &str) -> (VerifyingKeyId, VerifyingKeyRecord) {
     let id = VerifyingKeyId::new(NATIVE_BACKEND, "unqualified");
     // Deliberately opaque rejected input. The role gate must reject before key decode.
     let key = VerifyingKeyBox::new(NATIVE_BACKEND.to_owned(), vec![1, 2, 3, 4]);
@@ -28,7 +28,7 @@ pub(super) fn unqualified_key(circuit_id: &str) -> (VerifyingKeyId, VerifyingKey
     (id, record)
 }
 
-pub(super) fn retained_election(id: &VerifyingKeyId, record: &VerifyingKeyRecord) -> ElectionState {
+pub fn retained_election(id: &VerifyingKeyId, record: &VerifyingKeyRecord) -> ElectionState {
     // Test-only retained-state adversary: this record was NOT created by a valid proof.
     ElectionState {
         options: 2,

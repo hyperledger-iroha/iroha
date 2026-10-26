@@ -1,4 +1,4 @@
-//! Typed arguments for local SoraFS artifact operations.
+//! Typed arguments for local `SoraFS` artifact operations.
 
 use super::*;
 

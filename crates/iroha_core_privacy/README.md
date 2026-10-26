@@ -43,20 +43,52 @@ material without node storage. Neither evidence nor fixture features belong
 in production shipping graphs. These features do not introduce runtime
 switches for IVM syscalls or opcodes.
 
+On macOS, the target dependency also enables the existing FASTPQ `fastpq-gpu`
+feature, including when this crate uses `--no-default-features`. Eligible
+transforms use Metal only after the immutable compiled bundle and device are
+admitted and the complete staging allowance fits the existing memory budget.
+Absent or refused bundles, unsupported targets, and insufficient headroom retain
+the deterministic CPU path; uncertain device completion still refuses proving.
+This target forwarding leaves other platforms' dependency defaults unchanged
+and adds no CUDA compiler discovery to driverless Linux builds. Hardware
+availability does not establish complete-proof performance or release readiness.
+
 Bootle/Lantern interprets its five fixed `u64` rejection-constant limbs through
 an explicit 64-byte little-endian integer encoding on both 32-bit and 64-bit
 hosts. The constants, Q256 thresholds, random draw order and sampling-profile
 identity remain unchanged. Known-answer tests pin all four integer constants,
 exact reciprocal floor bounds, standard/bimodal thresholds and the profile digest.
 
-Focused validation uses the checkout's persistent Cargo lane and native
-jobserver:
+The ordinary `privacy_engines::zk_x509::holder` API derives the exact wallet
+ownership-signature digest and its canonical public message, constructs a bounded
+owned witness, and produces a complete self-verified MAIN/CA credential proof.
+Message-signing APIs such as `SHA256withECDSA` consume `ownership_signing_message_v1`;
+prehash-signing APIs consume `ownership_challenge_v1`. Both sign the same once-hashed
+message; passing the digest to a message signer would hash twice and is rejected. The wallet keeps the subject
+signing key. The consuming prover clears the owned witness and its encoded
+buffer on return or unwind. The API is present with default features and with
+`--no-default-features`; it does not require `privacy-release-evidence`.
+The consuming `ZkX509HolderAttemptV1` checks the full six-term estimate only
+at preparation, then the remaining proving/publication/submission/clock terms
+before the native prover. `ZkX509PendingCredentialProofV1::release` rechecks the
+unchanged original statement against newly authenticated State and chain time,
+checks publication/submission/clock reserve, and only then exposes the exact
+proof bytes. Explicit local times must progress forwards. Neither a cached
+snapshot nor the local budget establishes wall-clock freshness on an idle chain.
+Paired-host enrollment, authenticated encrypted transport, host revocation and
+mobile/desktop bindings remain separate X.5 work. Native availability does not
+claim resource qualification or change the current consensus profile policy.
+
+Focused validation reuses the ordinary warm target and native jobserver. Use a
+stable `--target-slot` only when another build runs concurrently:
 
 ```sh
-scripts/cargo_fast.sh --target-slot zk --stable-local-metadata --incremental -- check -p iroha_core_privacy --lib
-scripts/cargo_fast.sh --target-slot zk --stable-local-metadata --incremental -- check -p iroha_core_privacy --lib --features test-utils,privacy-release-evidence
-scripts/cargo_fast.sh --target-slot zk --stable-local-metadata --incremental -- test -p iroha_core_privacy --lib
-scripts/cargo_fast.sh --target-slot zk --stable-local-metadata --incremental -- test -p iroha_core_privacy --lib material_fixture
+scripts/cargo_fast.sh --stable-local-metadata --incremental -- check -p iroha_core_privacy --lib
+scripts/cargo_fast.sh --stable-local-metadata --incremental -- check -p iroha_core_privacy --lib --features test-utils,privacy-release-evidence
+scripts/cargo_fast.sh --stable-local-metadata --incremental -- test -p iroha_core_privacy --lib
+scripts/cargo_fast.sh --stable-local-metadata --incremental -- test -p iroha_core_privacy --lib material_fixture
+scripts/cargo_fast.sh --stable-local-metadata --incremental -- test -p iroha_core_privacy --test zk_x509_holder_prover
+scripts/cargo_fast.sh --stable-local-metadata --incremental -- test -p iroha_core_privacy --no-default-features --test zk_x509_holder_prover
 ```
 
 The ordinary suite preserves protocol assertions and ignored qualification

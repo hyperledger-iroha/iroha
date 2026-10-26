@@ -5,7 +5,7 @@ use super::*;
 /// Initialize snapshot fixture custody through the canonical registration and mint paths.
 #[cfg(test)]
 pub(super) fn registered_custody_world_for_test(
-    world: World,
+    mut world: World,
     asset: &AssetId,
     balance: Quantity,
 ) -> World {
@@ -19,12 +19,9 @@ pub(super) fn registered_custody_world_for_test(
         "positive custody fixtures use canonical network XOR"
     );
     {
-        let mut parameters = world.parameters.block();
-        parameters
-            .get_mut()
-            .set_parameter(Parameter::Custom(npos.into_custom_parameter()))
+        world
+            .set_parameter_for_testing(Parameter::Custom(npos.into_custom_parameter()))
             .expect("valid fixture parameters");
-        parameters.commit();
     }
     let state = State::new(
         world,

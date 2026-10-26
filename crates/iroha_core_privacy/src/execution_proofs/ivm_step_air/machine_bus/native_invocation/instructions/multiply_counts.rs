@@ -20,15 +20,24 @@ const COUNTS: [u8; 3] = [
 // into Source, Instructions or the native interpreter.
 fn expected(opcode: u8, left: u64, right: u64) -> u64 {
     match opcode {
-        wide::arithmetic::MUL => (u128::from(left) * u128::from(right)) as u64,
-        wide::arithmetic::MULH => {
-            ((i128::from(u64::cast_signed(left)) * i128::from(u64::cast_signed(right))) >> 64)
-                as u64
-        }
+        wide::arithmetic::MUL => u64::from_le_bytes(
+            u128::to_le_bytes(u128::from(left) * u128::from(right))[..8]
+                .try_into()
+                .expect("low-byte width"),
+        ),
+        wide::arithmetic::MULH => u64::from_le_bytes(
+            i128::to_le_bytes(
+                (i128::from(u64::cast_signed(left)) * i128::from(u64::cast_signed(right))) >> 64,
+            )[..8]
+                .try_into()
+                .expect("low-byte width"),
+        ),
         wide::arithmetic::MULHU => ((u128::from(left) * u128::from(right)) >> 64) as u64,
-        wide::arithmetic::MULHSU => {
-            ((i128::from(u64::cast_signed(left)) * i128::from(right)) >> 64) as u64
-        }
+        wide::arithmetic::MULHSU => u64::from_le_bytes(
+            i128::to_le_bytes((i128::from(u64::cast_signed(left)) * i128::from(right)) >> 64)[..8]
+                .try_into()
+                .expect("low-byte width"),
+        ),
         wide::arithmetic::POPCNT => u64::from(left.count_ones()),
         wide::arithmetic::CLZ => u64::from(left.leading_zeros()),
         wide::arithmetic::CTZ => u64::from(left.trailing_zeros()),
@@ -51,7 +60,10 @@ fn check_expression(native: &NativeInvocation, window: usize, word: u32, left: u
     let second = &native.packets()[start + 18];
     let output = &native.packets()[start + 19];
     assert!(first.enabled());
-    assert_eq!(first.index(), wide::rs1(word) as u32);
+    assert_eq!(
+        first.index(),
+        u32::try_from(wide::rs1(word)).expect("bounded fixture value")
+    );
     assert_eq!(value(first, false), left);
     assert_eq!(first.before(), first.after());
     assert_eq!(first.before_private(), 0);
@@ -59,7 +71,10 @@ fn check_expression(native: &NativeInvocation, window: usize, word: u32, left: u
     let product = PRODUCTS.contains(&wide::opcode(word));
     assert_eq!(second.enabled(), product);
     if product {
-        assert_eq!(second.index(), wide::rs2(word) as u32);
+        assert_eq!(
+            second.index(),
+            u32::try_from(wide::rs2(word)).expect("bounded fixture value")
+        );
         assert_eq!(value(second, false), right);
         assert_eq!(second.before(), second.after());
         assert_eq!(second.before_private(), 0);
@@ -70,7 +85,10 @@ fn check_expression(native: &NativeInvocation, window: usize, word: u32, left: u
     let destination = wide::rd(word);
     assert_eq!(output.enabled(), destination != 0);
     if destination != 0 {
-        assert_eq!(output.index(), destination as u32);
+        assert_eq!(
+            output.index(),
+            u32::try_from(destination).expect("bounded fixture value")
+        );
         assert_eq!(
             value(output, true),
             expected(wide::opcode(word), left, right)
@@ -175,7 +193,11 @@ fn native_counts_cover_every_bit_and_zero_with_full_sixty_four_results() {
     for inputs in inputs.chunks(14) {
         let mut body = Vec::new();
         for (index, _) in inputs.iter().enumerate() {
-            body.push(enc::encode_literal(wide::memory::LDI64, 4, index as u16));
+            body.push(enc::encode_literal(
+                wide::memory::LDI64,
+                4,
+                u16::try_from(index).expect("bounded fixture value"),
+            ));
             body.extend(COUNTS.map(|opcode| enc::encode_rr(opcode, 6, 4, 255)));
         }
         let (native, budget) = native(artifact_with_literals(&body, 0, inputs));

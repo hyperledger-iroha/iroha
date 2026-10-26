@@ -458,7 +458,7 @@ impl PendingDriver {
         };
         let original_budget = budget.clone();
         let joiner = OriginalJoiner::start_preparing(move |receive| {
-            let _completion = CompletionOwner(context.control.clone());
+            let completion_owner = CompletionOwner(context.control.clone());
             context.control.wake.bind_current();
             context
                 .registration
@@ -570,7 +570,7 @@ impl PendingDriver {
             // those callbacks must not unwind before worker handoff is received.
             #[cfg(all(test, sumeragi_core_mutation = "HC407"))]
             {
-                drop(_completion);
+                drop(completion_owner);
                 drop(context);
             }
             #[cfg(test)]
@@ -578,7 +578,7 @@ impl PendingDriver {
             DriverJoiner::join_workers(receive, retirement);
             #[cfg(not(all(test, sumeragi_core_mutation = "HC407")))]
             {
-                drop(_completion);
+                drop(completion_owner);
                 drop(context);
             }
         })?;

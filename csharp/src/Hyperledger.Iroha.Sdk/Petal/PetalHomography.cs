@@ -350,3 +350,132 @@ public readonly struct PetalHomography : IEquatable<PetalHomography>
         return true;
     }
 }
+
+/// <summary>
+/// A camera pose: a homography from the canvas onto undistorted image pixels, followed by
+/// radial lens distortion about the image centre.
+/// </summary>
+/// <remarks>
+/// A pixel that an undistorted camera would see at <c>u</c> is seen at
+/// <c>c + (u − c) · (1 + k · |u − c|² / s²)</c>, with <c>c</c> the image centre, <c>k</c> the
+/// <see cref="Distortion"/> (negative is barrel) and <c>s = 0.8 · max(width, height)</c>.
+/// <c>k = 0</c> is a plain homography. Every operation repeats the reference's IEEE double
+/// expressions in the same order.
+/// </remarks>
+public readonly record struct PetalPose
+{
+    // Explicit fields so the hot path calls the homography in place instead of copying it.
+    private readonly PetalHomography homography;
+    private readonly double distortion;
+    private readonly PetalPoint center;
+    private readonly double scale2;
+
+    /// <summary>Creates a pose.</summary>
+    /// <param name="homography">Canvas to undistorted pixels.</param>
+    /// <param name="distortion">Radial distortion coefficient <c>k</c>.</param>
+    /// <param name="center">Distortion centre in pixels.</param>
+    /// <param name="scale2">Squared distortion scale <c>s²</c> in pixels².</param>
+    public PetalPose(PetalHomography homography, double distortion, PetalPoint center, double scale2)
+    {
+        this.homography = homography;
+        this.distortion = distortion;
+        this.center = center;
+        this.scale2 = scale2;
+    }
+
+    /// <summary>Canvas to undistorted pixels.</summary>
+    public PetalHomography Homography { get => homography; init => homography = value; }
+
+    /// <summary>Radial distortion coefficient <c>k</c> (negative is barrel).</summary>
+    public double Distortion { get => distortion; init => distortion = value; }
+
+    /// <summary>Distortion centre in pixels.</summary>
+    public PetalPoint Center { get => center; init => center = value; }
+
+    /// <summary>Squared distortion scale <c>s²</c> in pixels².</summary>
+    public double Scale2 { get => scale2; init => scale2 = value; }
+
+    /// <summary>A pose without lens distortion.</summary>
+    /// <param name="homography">Canvas to image pixels.</param>
+    /// <returns>The plain pose (centre <c>(0, 0)</c>, <c>s² = 1</c>).</returns>
+    public static PetalPose Plain(PetalHomography homography) => new(homography, 0.0, new PetalPoint(0.0, 0.0), 1.0);
+
+    /// <summary>Maps a canvas point to image pixels.</summary>
+    /// <param name="x">Canvas x.</param>
+    /// <param name="y">Canvas y.</param>
+    /// <returns>The image point.</returns>
+    public PetalPoint Apply(double x, double y)
+    {
+        Apply(x, y, out var px, out var py);
+        return new PetalPoint(px, py);
+    }
+
+    /// <summary>
+    /// The pose with distortion <paramref name="distortion"/> that takes the canvas points
+    /// <paramref name="source"/> to the image points <paramref name="destination"/> of a
+    /// <paramref name="width"/> × <paramref name="height"/> image.
+    /// </summary>
+    /// <remarks>
+    /// The image points are undistorted (six fixed-point rounds of
+    /// <c>u = d / (1 + k|u|²/s²)</c> on the offsets <c>d</c> from the image centre, starting from
+    /// <c>u = d</c>; skipped when <c>k = 0</c>) and mapped back through <c>c + u</c>, then the
+    /// homography is fitted to them.
+    /// </remarks>
+    /// <param name="source">Canvas points.</param>
+    /// <param name="destination">Image points, same count, at least four.</param>
+    /// <param name="distortion">Radial distortion <c>k</c>.</param>
+    /// <param name="width">Image width in pixels.</param>
+    /// <param name="height">Image height in pixels.</param>
+    /// <returns>The pose, or <see langword="null"/> for degenerate input.</returns>
+    public static PetalPose? Fit(
+        ReadOnlySpan<PetalPoint> source,
+        ReadOnlySpan<PetalPoint> destination,
+        double distortion,
+        int width,
+        int height)
+    {
+        var center = new PetalPoint(width / 2.0, height / 2.0);
+        var side = 0.8 * Math.Max(width, height);
+        var scale2 = side * side;
+        Span<PetalPoint> undistorted = destination.Length <= 16
+            ? stackalloc PetalPoint[destination.Length]
+            : new PetalPoint[destination.Length];
+        for (var i = 0; i < destination.Length; i++)
+        {
+            var (dx, dy) = (destination[i].X - center.X, destination[i].Y - center.Y);
+            var (ux, uy) = (dx, dy);
+            if (distortion != 0.0)
+            {
+                for (var round = 0; round < 6; round++)
+                {
+                    var factor = 1.0 + distortion * (ux * ux + uy * uy) / scale2;
+                    ux = dx / factor;
+                    uy = dy / factor;
+                }
+            }
+
+            // `c + (p − c)` even without distortion, exactly as the reference
+            undistorted[i] = new PetalPoint(center.X + ux, center.Y + uy);
+        }
+
+        if (PetalHomography.FromPoints(source, undistorted) is not { } homography)
+            return null;
+        return new PetalPose(homography, distortion, center, scale2);
+    }
+
+    /// <summary>Maps a canvas point without constructing a <see cref="PetalPoint"/>.</summary>
+    internal void Apply(double x, double y, out double px, out double py)
+    {
+        homography.Apply(x, y, out var ux, out var uy);
+        if (distortion == 0.0)
+        {
+            (px, py) = (ux, uy);
+            return;
+        }
+
+        var (dx, dy) = (ux - center.X, uy - center.Y);
+        var factor = 1.0 + distortion * (dx * dx + dy * dy) / scale2;
+        px = center.X + dx * factor;
+        py = center.Y + dy * factor;
+    }
+}

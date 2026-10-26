@@ -218,7 +218,7 @@ impl ParliamentAttemptStateV1 {
         &mut self,
         governance_attempt_id: GovernanceAttemptId,
         registrations: Vec<ParliamentSortitionRequestRegistrationV1>,
-        candidate_snapshot: Vec<AccountId>,
+        candidate_snapshot: &[AccountId],
     ) -> Result<(), ParliamentReducerErrorV1> {
         self.validate_sortition_registration_batch_v1(governance_attempt_id, &registrations)?;
 
@@ -228,7 +228,7 @@ impl ParliamentAttemptStateV1 {
                 governance_attempt_id,
                 entry.sequence,
                 entry.request,
-                candidate_snapshot.clone(),
+                candidate_snapshot.to_vec(),
             )?;
         }
         *self = next;
@@ -253,11 +253,11 @@ impl ParliamentAttemptStateV1 {
         &mut self,
         governance_attempt_id: GovernanceAttemptId,
         registrations: Vec<ParliamentSortitionRequestRegistrationV1>,
-        candidate_snapshot: Vec<AccountId>,
+        candidate_snapshot: &[AccountId],
     ) -> Result<(), ParliamentReducerErrorV1> {
         self.validate_sortition_registration_batch_v1(governance_attempt_id, &registrations)?;
         if hidden_ballot_population_meets_anonymity_floor_v1(candidate_snapshot.len())
-            || !candidate_snapshot_fits_resource_bounds_v1(&candidate_snapshot)
+            || !candidate_snapshot_fits_resource_bounds_v1(candidate_snapshot)
             || !candidate_snapshot.windows(2).all(|pair| pair[0] < pair[1])
             || !registrations.iter().any(|entry| {
                 self.required_bodies.iter().any(|required| {
@@ -277,7 +277,7 @@ impl ParliamentAttemptStateV1 {
                 governance_attempt_id,
                 entry.sequence,
                 entry.request,
-                candidate_snapshot.clone(),
+                candidate_snapshot.to_vec(),
             )?;
         }
         if retry_budget_exhausted
@@ -722,19 +722,17 @@ impl ParliamentAttemptStateV1 {
         )
         .map_err(|_| ParliamentReducerErrorV1::ImmutableBindingMismatch)?;
 
-        let candidate_snapshot_index = match self
+        let candidate_snapshot_index = if let Some(index) = self
             .candidate_snapshots
             .iter()
             .position(|persisted| persisted == &candidate_snapshot)
         {
-            Some(index) => u32::try_from(index)
-                .map_err(|_| ParliamentReducerErrorV1::InvalidCandidateSnapshot)?,
-            None => {
-                let index = u32::try_from(self.candidate_snapshots.len())
-                    .map_err(|_| ParliamentReducerErrorV1::InvalidCandidateSnapshot)?;
-                self.candidate_snapshots.push(candidate_snapshot);
-                index
-            }
+            u32::try_from(index).map_err(|_| ParliamentReducerErrorV1::InvalidCandidateSnapshot)?
+        } else {
+            let index = u32::try_from(self.candidate_snapshots.len())
+                .map_err(|_| ParliamentReducerErrorV1::InvalidCandidateSnapshot)?;
+            self.candidate_snapshots.push(candidate_snapshot);
+            index
         };
 
         if let Some(previous_id) = election_predecessor {
@@ -793,10 +791,12 @@ impl ParliamentAttemptStateV1 {
         &mut self,
         governance_attempt_id: GovernanceAttemptId,
         request_ids: Vec<SortitionRequestId>,
-        beacon_session_id: BeaconSessionId,
-        pulse_height: u64,
-        pulse_id: BeaconPulseId,
-        pulse_output: [u8; 32],
+        (beacon_session_id, pulse_height, pulse_id, pulse_output): (
+            BeaconSessionId,
+            u64,
+            BeaconPulseId,
+            [u8; 32],
+        ),
         network_id: &NetworkId,
         governance: &Governance,
     ) -> Result<(), ParliamentReducerErrorV1> {

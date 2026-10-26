@@ -181,7 +181,7 @@ fn transact_at_original_invocation(
     operation: impl FnOnce(&mut StateTransaction<'_, '_>) -> Result<(), InstructionExecutionError>,
 ) -> Result<(), InstructionExecutionError> {
     let header = block_header_at(height, now_unix);
-    let mut block = state.block(header.clone());
+    let mut block = state.block(header);
     let mut transaction = block.transaction_for_fastpq_testing(invocation);
     operation(&mut transaction)?;
     transaction.apply();
@@ -296,7 +296,7 @@ fn domain_retirement_rejects_active_sorafs_reserve_backing_atomically() {
         // domain and uses the canonical World mutator to retain both indexes.
         let definition_id = asset_definition();
         transaction.world.insert_asset_definition_entry(
-            definition_id.clone(),
+            &(definition_id.clone()),
             AssetDefinition::numeric(
                 definition_id.clone(),
                 "XOR".to_owned(),
@@ -924,7 +924,7 @@ fn committed_record_queries_enforce_limits_budgets_and_corruption_checks() {
     let mut maximum_page = build_policy_state();
     {
         let header = block_header_at(2, NOW + 1);
-        let mut block = maximum_page.block(header.clone());
+        let mut block = maximum_page.block(header);
         let mut transaction = block.transaction();
         for marker in 1_u8..=129 {
             let provider_id = ProviderId::new([marker; 32]);
@@ -984,7 +984,7 @@ fn committed_record_queries_enforce_limits_budgets_and_corruption_checks() {
     let mut mismatched_key = build_policy_state();
     {
         let header = block_header_at(2, NOW + 1);
-        let mut block = mismatched_key.block(header.clone());
+        let mut block = mismatched_key.block(header);
         let mut transaction = block.transaction();
         let mut account = ReserveProviderAccountV1 {
             terms: terms_for(ProviderId::new([0x21; 32]), provider.clone()),
@@ -1024,7 +1024,7 @@ fn committed_record_queries_enforce_limits_budgets_and_corruption_checks() {
     let mut oversized_record = build_policy_state();
     {
         let header = block_header_at(2, NOW + 1);
-        let mut block = oversized_record.block(header.clone());
+        let mut block = oversized_record.block(header);
         let mut transaction = block.transaction();
         transaction.world.smart_contract_state.insert(
             reserve_provider_key(ProviderId::new([0x31; 32])),
@@ -1363,7 +1363,7 @@ fn committed_event_query_accepts_maximum_page_with_full_metering() {
     })
     .expect("commit reserve policy");
     let header = block_header_at(2, NOW + 1);
-    let mut block = state.block(header.clone());
+    let mut block = state.block(header);
     let mut transaction = block.transaction();
     let template = read_persisted_event(transaction.world(), 1)
         .expect("read initial reserve event")
@@ -1438,7 +1438,7 @@ fn committed_event_queries_fail_closed_on_corruption_and_resource_exhaustion() {
     let mut missing_head = build_policy_state();
     {
         let header = block_header_at(2, NOW + 1);
-        let mut block = missing_head.block(header.clone());
+        let mut block = missing_head.block(header);
         let mut transaction = block.transaction();
         let mut reserve_state = read_reserve_state(transaction.world())
             .expect("read reserve state")
@@ -1462,7 +1462,7 @@ fn committed_event_queries_fail_closed_on_corruption_and_resource_exhaustion() {
     let mut oversized = build_policy_state();
     {
         let header = block_header_at(2, NOW + 1);
-        let mut block = oversized.block(header.clone());
+        let mut block = oversized.block(header);
         let mut transaction = block.transaction();
         transaction.world.smart_contract_state.insert(
             event_key(1),
@@ -1481,7 +1481,7 @@ fn committed_event_queries_fail_closed_on_corruption_and_resource_exhaustion() {
     let mut orphan = build_policy_state();
     {
         let header = block_header_at(2, NOW + 1);
-        let mut block = orphan.block(header.clone());
+        let mut block = orphan.block(header);
         let mut transaction = block.transaction();
         let mut record = read_persisted_event(transaction.world(), 1)
             .expect("read policy event")

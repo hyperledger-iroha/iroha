@@ -23,6 +23,16 @@ block_max_transactions = 512
 ivm_gas_limit_per_block = 50000000
 npos_min_self_bond = 1
 
+[genesis_recipe.public_lane_staking]
+min_validator_stake = "1"
+max_stake_shares_per_validator = 256
+max_pending_unbonds_per_share = 8
+unbonding_delay_ms = 0
+max_slash_bps = 10000
+stake_asset_id = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
+stake_escrow_account_id = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
+slash_sink_account_id = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
+
 [genesis_recipe.root_fees]
 fee_asset_id = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
 fee_sink_account_id = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"

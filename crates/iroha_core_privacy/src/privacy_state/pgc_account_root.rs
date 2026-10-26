@@ -49,8 +49,9 @@ pub enum PrivacyPgcAccountStateRootErrorV1 {
 /// 64 entries; no partial-table or caller-selected root form exists.
 ///
 /// # Errors
-/// Returns the exact structural refusal, or the original canonical encoding failure with its
-/// scoped allocation origin. Namespace bytes always use the canonical V1 layout.
+/// Rejects an invalid namespace, epoch, supply, account count, ordering, or curve point,
+/// and the reserved all-zero derived root. Canonical namespace encoding failures retain
+/// their original scoped allocation origin.
 pub fn derive_privacy_pgc_account_state_root_v1(
     namespace: PrivacyNamespaceV1,
     epoch: u64,

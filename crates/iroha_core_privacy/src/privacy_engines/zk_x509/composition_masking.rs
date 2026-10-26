@@ -61,7 +61,6 @@ impl QuotientChunkGeometryV1 {
     }
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 mod prover {
     use super::super::private_table::{PrivateTableV1, zeroize_words_v1};
     use super::*;

@@ -132,6 +132,10 @@ fn immediate_amount(word: u32) -> Option<u64> {
 }
 
 #[derive(Clone, Copy, Debug)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Statement tags are independent authenticated before/after register bits"
+)]
 struct ShiftStepStatement {
     word: u32,
     before_pc: u32,
@@ -446,7 +450,14 @@ pub(super) fn bank_witness(opcode: u8, left: u64, amount: u64) -> [F; BANK_WIDTH
         // Write all four positions; a private amount must not choose an address.
         bank[SELECTORS + 4 * stage..SELECTORS + 4 * (stage + 1)]
             .copy_from_slice(&stage_selectors(F(digit & 1), F(digit >> 1)));
-        value = kind.apply(value, (digit << (2 * stage)) as u32);
+        value = kind.apply(
+            value,
+            u32::from_le_bytes(
+                u64::to_le_bytes(digit << (2 * stage))[..4]
+                    .try_into()
+                    .expect("low-byte width"),
+            ),
+        );
         for position in 0..WORD_BITS {
             bank[STAGE + stage * WORD_BITS + position] = F((value >> position) & 1);
         }
@@ -521,7 +532,10 @@ impl ProofManagedNoteStarkAdapterV1 for ShiftStepAdapter {
             policies: vec![[NoteCopyCellPolicyV1::Inactive; NOTE_COPY_WIDTH_V1]; TRACE_SIZE],
             sigma: (0..TRACE_SIZE)
                 .map(|row| {
-                    std::array::from_fn(|column| (row * NOTE_COPY_WIDTH_V1 + column + 1) as u32)
+                    std::array::from_fn(|column| {
+                        u32::try_from(row * NOTE_COPY_WIDTH_V1 + column + 1)
+                            .expect("bounded circuit index")
+                    })
                 })
                 .collect(),
         })
@@ -553,8 +567,7 @@ impl ProofManagedNoteStarkAdapterV1 for ShiftStepAdapter {
 
     fn profile_constraint_residues_v1(
         &self,
-        current: &[F],
-        _: &[F],
+        (current, _): (&[F], &[F]),
         _: &[F],
         _: &[F],
         fixed: &[F],

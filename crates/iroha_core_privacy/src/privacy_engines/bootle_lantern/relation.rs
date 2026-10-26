@@ -16,6 +16,7 @@ use super::{
     ring::ApplicationPolynomialV1,
     transcript::{MatrixRoleV1, MatrixSeedV1, expand_application_matrix_v1},
 };
+use core::ops::Add;
 use iroha_data_model::privacy::{
     BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1, BootleLanternIssuerPolicyV1,
     IrohaBootleLanternAnoncredStatementV1,
@@ -117,12 +118,12 @@ impl BootleLanternApplicationRelationV1 {
     /// Fixed row count.
     #[must_use]
     pub const fn rows(&self) -> usize {
-        APPLICATION_ROWS_V1
+        self.public_offset.len()
     }
     /// Fixed witness-column count.
     #[must_use]
-    pub const fn columns(&self) -> usize {
-        APPLICATION_WITNESS_POLYNOMIALS_V1
+    pub fn columns(&self) -> usize {
+        self.matrix.len() / self.rows()
     }
     /// Borrow one matrix polynomial.
     #[must_use]
@@ -661,9 +662,11 @@ mod tests {
             let mut authorization_rng = TestRng::new([0x16; 32]);
             let authorization = issuer_authorize_blind_issuance_with_rng_v1(
                 &issuer_key_pair,
-                &context,
-                genesis_hash(),
-                &policy,
+                crate::privacy_engines::bootle_lantern::issuer::BootleLanternIssuanceContextV1 {
+                    context: &context,
+                    canonical_genesis_hash: genesis_hash(),
+                    policy: &policy,
+                },
                 raw(16),
                 10,
                 20,
@@ -686,9 +689,11 @@ mod tests {
             let mut issuer_issuance_rng = TestRng::new([0x14; 32]);
             let response = issuer_blind_issue_once_with_rng_v1(
                 &issuer_key_pair,
-                &context,
-                genesis_hash(),
-                &policy,
+                crate::privacy_engines::bootle_lantern::issuer::BootleLanternIssuanceContextV1 {
+                    context: &context,
+                    canonical_genesis_hash: genesis_hash(),
+                    policy: &policy,
+                },
                 &authorization,
                 &request,
                 10,

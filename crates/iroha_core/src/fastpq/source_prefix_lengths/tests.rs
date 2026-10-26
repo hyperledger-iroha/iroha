@@ -17,8 +17,8 @@ use iroha_test_samples::{ALICE_ID, BOB_ID};
 fn limits() -> PrefixLengthLimits {
     PrefixLengthLimits {
         max_deltas: 128,
-        max_input_frame_bytes: 4_000_000,
-        max_public_statement_frame_bytes: 4_000_000,
+        input_frame_ceiling_bytes: 4_000_000,
+        public_statement_ceiling_bytes: 4_000_000,
     }
 }
 
@@ -224,8 +224,8 @@ fn exact_inclusive_caps_pass_and_failed_input_or_public_counts_are_atomic() {
     let (batch, authority) = hashes();
     let cap = PrefixLengthLimits {
         max_deltas: 1,
-        max_input_frame_bytes: exact.input_frame_bytes,
-        max_public_statement_frame_bytes: exact.public_statement_frame_bytes,
+        input_frame_ceiling_bytes: exact.input_frame_bytes,
+        public_statement_ceiling_bytes: exact.public_statement_frame_bytes,
     };
     let mut accepted = SourcePrefixFrameSizer::new(batch, authority, cap).unwrap();
     assert_eq!(
@@ -237,9 +237,9 @@ fn exact_inclusive_caps_pass_and_failed_input_or_public_counts_are_atomic() {
     for input in [true, false] {
         let mut low = cap;
         if input {
-            low.max_input_frame_bytes -= 1;
+            low.input_frame_ceiling_bytes -= 1;
         } else {
-            low.max_public_statement_frame_bytes -= 1;
+            low.public_statement_ceiling_bytes -= 1;
         }
         let mut failed = SourcePrefixFrameSizer::new(batch, authority, low).unwrap();
         let error = failed

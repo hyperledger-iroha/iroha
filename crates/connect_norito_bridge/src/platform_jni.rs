@@ -39,6 +39,7 @@ mod kagemusha_wallet_advance;
 mod kagemusha_wallet_observation;
 mod kagemusha_wallet_review;
 mod privacy_intent;
+mod zk_x509_holder;
 
 include!("platform_jni/part_1.rs");
 include!("platform_jni/part_2.rs");

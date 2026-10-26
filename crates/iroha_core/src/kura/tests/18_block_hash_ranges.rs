@@ -52,16 +52,16 @@ mod block_hash_ranges {
         store
             .ensure_hashes_file()
             .unwrap()
-            .try_io(|file| file.stream_position())
+            .try_io(std::io::Seek::stream_position)
             .unwrap()
     }
 
-    fn assert_range_error(error: Error, start: u64, count: usize) {
+    fn assert_range_error(error: &Error, start: u64, count: usize) {
         assert!(
             matches!(error, Error::OutOfBoundsBlockRead {
                 start_block_height,
                 block_count,
-            } if start_block_height == start && block_count == count),
+            } if *start_block_height == start && *block_count == count),
             "a rejected hash range must retain its exact requested start and count"
         );
     }
@@ -71,28 +71,28 @@ mod block_hash_ranges {
         assert_eq!(checked_block_hash_read_range(0, 0, 0).unwrap(), (0, 0));
         assert_eq!(checked_block_hash_read_range(2, 0, 64).unwrap(), (64, 0));
         assert_eq!(checked_block_hash_read_range(1, 2, 96).unwrap(), (32, 64));
-        assert_range_error(checked_block_hash_read_range(2, 0, 63).unwrap_err(), 2, 0);
-        assert_range_error(checked_block_hash_read_range(1, 2, 95).unwrap_err(), 1, 2);
+        assert_range_error(&checked_block_hash_read_range(2, 0, 63).unwrap_err(), 2, 0);
+        assert_range_error(&checked_block_hash_read_range(1, 2, 95).unwrap_err(), 1, 2);
     }
 
     #[test]
     fn checked_range_rejects_offset_length_and_end_overflow() {
         let offset_overflow = u64::MAX / SIZE_OF_BLOCK_HASH + 1;
         assert_range_error(
-            checked_block_hash_read_range(offset_overflow, 1, u64::MAX).unwrap_err(),
+            &checked_block_hash_read_range(offset_overflow, 1, u64::MAX).unwrap_err(),
             offset_overflow,
             1,
         );
         let end_overflow = u64::MAX / SIZE_OF_BLOCK_HASH;
         assert_range_error(
-            checked_block_hash_read_range(end_overflow, 1, u64::MAX).unwrap_err(),
+            &checked_block_hash_read_range(end_overflow, 1, u64::MAX).unwrap_err(),
             end_overflow,
             1,
         );
         // On 32-bit platforms no usize count can overflow a u64 byte length.
         if let Ok(count) = usize::try_from(offset_overflow) {
             assert_range_error(
-                checked_block_hash_read_range(0, count, u64::MAX).unwrap_err(),
+                &checked_block_hash_read_range(0, count, u64::MAX).unwrap_err(),
                 0,
                 count,
             );
@@ -114,7 +114,7 @@ mod block_hash_ranges {
         for (start, count) in cases {
             set_hash_cursor(&mut store, 7);
             assert_range_error(
-                store.read_block_hashes(start, count).unwrap_err(),
+                &store.read_block_hashes(start, count).unwrap_err(),
                 start,
                 count,
             );

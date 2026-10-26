@@ -101,15 +101,15 @@ fn check_lifecycle_instructions<'a>(
     let mut registrations = 0;
     for instruction in instructions {
         let any = instruction.as_any();
-        if let Some(RegisterBox::Trigger(reg)) = any.downcast_ref::<RegisterBox>() {
-            if reg.object.id() == id {
-                if !original_root || &reg.object != selected {
-                    return Err(refusal(
-                        "selected trigger has an unrelated or nested registration",
-                    ));
-                }
-                registrations += 1;
+        if let Some(RegisterBox::Trigger(reg)) = any.downcast_ref::<RegisterBox>()
+            && reg.object.id() == id
+        {
+            if !original_root || &reg.object != selected {
+                return Err(refusal(
+                    "selected trigger has an unrelated or nested registration",
+                ));
             }
+            registrations += 1;
         }
         let changed = matches!(any.downcast_ref::<UnregisterBox>(), Some(UnregisterBox::Trigger(op)) if &op.object == id)
             || matches!(any.downcast_ref::<SetKeyValueBox>(), Some(SetKeyValueBox::Trigger(op)) if &op.object == id)
@@ -231,7 +231,9 @@ fn scheduled_disposition(output: &ExecutionOutputV1) -> PyResult<&'static str> {
         }
         Some(TriggerFailureRootV1::ReturnedBeforeRollback(_))
         | Some(TriggerFailureRootV1::DeclaredInstructionProjection(_)) => Ok("rejected"),
-        None => Err(refusal("rejected Time output has no native disposition root")),
+        None => Err(refusal(
+            "rejected Time output has no native disposition root",
+        )),
     }
 }
 
@@ -394,10 +396,10 @@ pub(super) fn authenticate(
                     "Time output changed the action, authority, registration or retry chain",
                 ));
             }
-            if let Some((_, next)) = retry {
-                if time_ms < next {
-                    return Err(refusal("Time retry precedes its authenticated eligibility"));
-                }
+            if let Some((_, next)) = retry
+                && time_ms < next
+            {
+                return Err(refusal("Time retry precedes its authenticated eligibility"));
             }
             let disposition = scheduled_disposition(output)?;
             let result_ok = row.result.is_ok();
@@ -457,6 +459,10 @@ pub(super) fn authenticate(
 
 #[pyfunction]
 #[pyo3(name = "verify_scheduled_trigger_execution_v1", signature = (original_signed_registration, trigger_id, native_finality_proof_chain_json, expected_network_id, expected_chain, trusted_checkpoint, *, expected_chain_discriminant))]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "PyO3 exposes the named Python arguments and its interpreter token as separate Rust parameters"
+)]
 pub(super) fn verify(
     py: Python<'_>,
     original_signed_registration: &Bound<'_, PyBytes>,

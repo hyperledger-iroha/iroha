@@ -5,14 +5,16 @@
 //! `std::any::type_name` reports this crate's Rust paths.
 
 /// Map a recorded nominal Rust path to the path the type has in `iroha_core_zk`.
-pub(crate) fn relocated_rust_path(nominal: &str) -> String {
-    if let Some(rest) = nominal.strip_prefix("iroha_core::zk_stark::") {
-        format!("iroha_core_zk::stark::{rest}")
-    } else if let Some(rest) = nominal.strip_prefix("iroha_core::zk::") {
-        format!("iroha_core_zk::{rest}")
-    } else {
-        nominal.to_owned()
-    }
+pub fn relocated_rust_path(nominal: &str) -> String {
+    nominal.strip_prefix("iroha_core::zk_stark::").map_or_else(
+        || {
+            nominal.strip_prefix("iroha_core::zk::").map_or_else(
+                || nominal.to_owned(),
+                |rest| format!("iroha_core_zk::{rest}"),
+            )
+        },
+        |rest| format!("iroha_core_zk::stark::{rest}"),
+    )
 }
 
 #[cfg(test)]

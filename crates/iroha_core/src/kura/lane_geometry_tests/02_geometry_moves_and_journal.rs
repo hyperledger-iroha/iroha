@@ -189,10 +189,8 @@ fn files_applied_phase_rolls_forward_when_catalog_is_already_authoritative() {
     kura.apply_lane_geometry_transition(
         &initial,
         &extended,
-        &initial_incarnations,
-        &extended_incarnations,
-        &initial_activations,
-        &extended_activations,
+        (&initial_incarnations, &extended_incarnations),
+        (&initial_activations, &extended_activations),
         &BTreeSet::new(),
     )
     .expect("prepare transition");
@@ -244,10 +242,8 @@ fn primary_alias_update_and_restart_preserve_exact_instance_and_chain() {
     kura.apply_lane_geometry_transition(
         &initial,
         &updated,
-        &incarnations,
-        &incarnations,
-        &activations,
-        &activations,
+        (&incarnations, &incarnations),
+        (&activations, &activations),
         &BTreeSet::new(),
     )
     .expect("alias metadata cannot move an instance");
@@ -339,10 +335,11 @@ fn two_lane_alias_update_and_restart_preserve_exact_instances_and_chain() {
     kura.apply_lane_geometry_transition_at_height(
         &base,
         &initial,
-        &BTreeMap::from([(LaneId::SINGLE, incarnations[&LaneId::SINGLE])]),
-        &incarnations,
-        &BTreeMap::from([(LaneId::SINGLE, 0)]),
-        &activations,
+        (
+            &BTreeMap::from([(LaneId::SINGLE, incarnations[&LaneId::SINGLE])]),
+            &incarnations,
+        ),
+        (&BTreeMap::from([(LaneId::SINGLE, 0)]), &activations),
         &BTreeSet::new(),
         0,
     )
@@ -388,10 +385,8 @@ fn two_lane_alias_update_and_restart_preserve_exact_instances_and_chain() {
     kura.apply_lane_geometry_transition(
         &initial,
         &updated,
-        &incarnations,
-        &incarnations,
-        &activations,
-        &activations,
+        (&incarnations, &incarnations),
+        (&activations, &activations),
         &BTreeSet::new(),
     )
     .expect("two alias updates share the exact existing objects");
@@ -443,10 +438,8 @@ fn reference_publication_does_not_lock_canonical_block_store() {
             kura.apply_lane_geometry_transition(
                 &initial,
                 &updated,
-                &incarnations,
-                &updated_incarnations,
-                &activations,
-                &updated_activations,
+                (&incarnations, &updated_incarnations),
+                (&activations, &updated_activations),
                 &BTreeSet::new(),
             )
         });
@@ -506,10 +499,8 @@ fn lane_geometry_recovery_holds_sidecar_lock() {
     kura.apply_lane_geometry_transition(
         &initial,
         &updated,
-        &incarnations,
-        &updated_incarnations,
-        &activations,
-        &updated_activations,
+        (&incarnations, &updated_incarnations),
+        (&activations, &updated_activations),
         &BTreeSet::new(),
     )
     .expect("apply reference publication");
@@ -587,10 +578,8 @@ fn recovery_publishes_uncertain_boundary_before_rolling_tail_forward() {
     kura.apply_lane_geometry_transition(
         &base,
         &one,
-        &base_incarnations,
-        &one_incarnations,
-        &base_activations,
-        &one_activations,
+        (&base_incarnations, &one_incarnations),
+        (&base_activations, &one_activations),
         &BTreeSet::new(),
     )
     .expect("apply first transition");
@@ -599,10 +588,8 @@ fn recovery_publishes_uncertain_boundary_before_rolling_tail_forward() {
     kura.apply_lane_geometry_transition(
         &one,
         &two,
-        &one_incarnations,
-        &two_incarnations,
-        &one_activations,
-        &two_activations,
+        (&one_incarnations, &two_incarnations),
+        (&one_activations, &two_activations),
         &BTreeSet::new(),
     )
     .expect("apply second transition");
@@ -659,10 +646,8 @@ fn recovery_rejects_stale_incarnation_marker() {
     kura.apply_lane_geometry_transition(
         &initial,
         &extended,
-        &initial_incarnations,
-        &extended_incarnations,
-        &initial_activations,
-        &extended_activations,
+        (&initial_incarnations, &extended_incarnations),
+        (&initial_activations, &extended_activations),
         &BTreeSet::new(),
     )
     .expect("prepare transition");
@@ -706,10 +691,8 @@ fn transition_rejects_occupied_instance_before_intent_publication() {
     kura.apply_lane_geometry_transition(
         &initial,
         &extended,
-        &initial_incarnations,
-        &extended_incarnations,
-        &initial_activations,
-        &extended_activations,
+        (&initial_incarnations, &extended_incarnations),
+        (&initial_activations, &extended_activations),
         &BTreeSet::new(),
     )
     .expect_err("unowned instance collision must fail before publishing an intent");
@@ -751,10 +734,8 @@ fn transition_rejects_symlink_lane_target() {
     kura.apply_lane_geometry_transition(
         &initial,
         &extended,
-        &initial_incarnations,
-        &extended_incarnations,
-        &initial_activations,
-        &extended_activations,
+        (&initial_incarnations, &extended_incarnations),
+        (&initial_activations, &extended_activations),
         &BTreeSet::new(),
     )
     .expect_err("symlink target must fail closed");
@@ -858,10 +839,8 @@ fn journal_publication_forces_a_paused_usage_scan_to_retry_exactly() {
     let publication = kura.apply_lane_geometry_transition(
         &initial,
         &extended,
-        &initial_incarnations,
-        &extended_incarnations,
-        &initial_activations,
-        &extended_activations,
+        (&initial_incarnations, &extended_incarnations),
+        (&initial_activations, &extended_activations),
         &BTreeSet::new(),
     );
     let remained_paused = matches!(

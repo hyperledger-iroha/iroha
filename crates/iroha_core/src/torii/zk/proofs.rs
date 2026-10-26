@@ -397,7 +397,7 @@ mod tests {
             verified_at_height: Some(42),
             bridge: None,
         };
-        stx.world.insert_proof_record(rec_verified);
+        stx.world.insert_proof_record(&(rec_verified));
         stx.world
             .proof_tags
             .insert(id_verified.clone(), vec![*b"PROF"]);
@@ -416,7 +416,7 @@ mod tests {
             verified_at_height: Some(43),
             bridge: None,
         };
-        stx.world.insert_proof_record(rec_rejected);
+        stx.world.insert_proof_record(&(rec_rejected));
         stx.apply();
         block
             .commit_world_overlay_for_testing()
@@ -467,7 +467,7 @@ mod tests {
             verified_at_height: Some(10),
             bridge: None,
         };
-        stx.world.insert_proof_record(rec_early);
+        stx.world.insert_proof_record(&(rec_early));
         // Proof with verified height 25
         let id_late = ProofId {
             backend: backend.into(),
@@ -481,7 +481,7 @@ mod tests {
             verified_at_height: Some(25),
             bridge: None,
         };
-        stx.world.insert_proof_record(rec_late);
+        stx.world.insert_proof_record(&(rec_late));
         // Submitted proof (no height) should only appear when no bounds are requested.
         let id_submitted = ProofId {
             backend: backend.into(),
@@ -495,7 +495,7 @@ mod tests {
             verified_at_height: None,
             bridge: None,
         };
-        stx.world.insert_proof_record(rec_submitted);
+        stx.world.insert_proof_record(&(rec_submitted));
         stx.apply();
         block
             .commit_world_overlay_for_testing()
@@ -605,7 +605,7 @@ mod tests {
             2,
         );
         let (_, rec_bridge) = bridge_record(backend, [0x01; 32], bridge_proof, 5);
-        stx.world.insert_proof_record(rec_bridge);
+        stx.world.insert_proof_record(&(rec_bridge));
         // Bridge proof with a later range.
         let later_proof = bridge_proof_record(
             BridgeProofRange {
@@ -617,10 +617,10 @@ mod tests {
             3,
         );
         let (id_later, rec_later) = bridge_record(backend, [0x02; 32], later_proof, 6);
-        stx.world.insert_proof_record(rec_later);
+        stx.world.insert_proof_record(&(rec_later));
         // Non-bridge proof should be filtered out.
         let (_, plain) = plain_record("halo2/ipa", [0x03; 32], ProofStatus::Verified, Some(7));
-        stx.world.insert_proof_record(plain);
+        stx.world.insert_proof_record(&(plain));
         stx.apply();
         block
             .commit_world_overlay_for_testing()
@@ -670,7 +670,7 @@ mod tests {
                 ProofStatus::Verified,
                 Some(u64::from(height)),
             );
-            stx.world.insert_proof_record(record);
+            stx.world.insert_proof_record(&(record));
         }
         stx.apply();
         block

@@ -24,6 +24,10 @@ pub(in crate::state) use retained_semantic::{
     RetainedSemanticRows,
 };
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 impl CanonicalTableLeafSet {
     /// Build both table indexes from one canonical streaming value per row.
     ///
@@ -92,12 +96,12 @@ impl CanonicalTableLeafSet {
         for (key, value) in rows {
             builder
                 .push(key, || project(value), limit)
-                .map_err(|error| error.into_leaf())?;
+                .map_err(retained_semantic::RetainedSemanticError::into_leaf)?;
         }
         builder.seal_rows();
         builder
             .advance_finalizer(limit)
-            .map_err(|error| error.into_leaf())?;
+            .map_err(retained_semantic::RetainedSemanticError::into_leaf)?;
         builder.take_once()
     }
 
@@ -163,6 +167,10 @@ impl CanonicalTableLeafSet {
 mod funding_tests;
 
 /// Exact retained canonical row framing plus complete ordered Merkle levels.
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 fn ordered_retained_bytes(rows: usize, retained: usize) -> Result<usize, LeafError> {
     let nodes = if rows == 0 {
         0

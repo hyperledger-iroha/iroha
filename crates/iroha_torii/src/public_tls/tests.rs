@@ -37,7 +37,7 @@ use tokio_rustls::{
 const HOST: &str = "provider.localhost";
 const IO_TIMEOUT: Duration = Duration::from_secs(3);
 struct Identity {
-    _root: tempfile::TempDir,
+    root: tempfile::TempDir,
     directory: PrivateDirectory,
     ca: Vec<u8>,
     leaf: Vec<u8>,
@@ -80,7 +80,7 @@ impl Identity {
             handshake_timeout: Duration::from_secs(1),
         };
         Self {
-            _root: root,
+            root,
             directory,
             ca: ca.der().as_ref().to_vec(),
             leaf,
@@ -140,7 +140,6 @@ impl Server {
         let https = PreparedHttps::load(&identity.config)
             .unwrap()
             .bind()
-            .await
             .unwrap();
         let https_address = https.listener.local_addr().unwrap();
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
@@ -289,10 +288,10 @@ fn bounded_identity_loader_rejects_bad_key_empty_oversized_and_replaced_files() 
     let mut config = identity.config.clone();
     config
         .certificate_chain
-        .push(identity._root.path().join("identity/bad-chain.der"));
+        .push(identity.root.path().join("identity/bad-chain.der"));
     assert!(PreparedHttps::load(&config).is_err());
     let mut config = identity.config.clone();
-    config.private_key = identity._root.path().join("identity/missing.der");
+    config.private_key = identity.root.path().join("identity/missing.der");
     assert!(PreparedHttps::load(&config).is_err());
     identity
         .directory

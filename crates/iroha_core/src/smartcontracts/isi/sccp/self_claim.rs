@@ -135,6 +135,10 @@ fn recipient_claims(
     payload.amount > fee
         && AccountAddress::matches_account_id_bytes(authority, payload.recipient.bytes)
 }
+#[expect(
+    clippy::result_large_err,
+    reason = "SCCP refusal retains the original execution or validation owner without allocating during rejection"
+)]
 fn decode_payload(
     submit: &SubmitSccpInboundMessageV1,
 ) -> Result<SccpTransferPayloadRefV1<'_>, SccpAdmissionRejectV1> {
@@ -224,6 +228,10 @@ pub(super) fn eligible_from(
 /// # Errors
 ///
 /// Rejects a transaction that is not a self-claim or whose claim is invalid.
+#[expect(
+    clippy::result_large_err,
+    reason = "SCCP refusal retains the original execution or validation owner without allocating during rejection"
+)]
 pub fn preverify(
     world: &(impl WorldReadOnly + ?Sized),
     view: &(impl SccpAdmissionView + ?Sized),

@@ -1019,13 +1019,13 @@ async fn cancelled_attachment_request_retains_admission_in_real_sanitizer_worker
     use axum::{Router, routing::post};
     use tower::ServiceExt as _;
 
-    let _data_dir = crate::test_utils::TestDataDirGuard::new();
+    let data_dir = crate::test_utils::TestDataDirGuard::new();
     let _auth_guard = crate::tests_runtime_handlers::app_auth_test_guard(
         crate::app_auth::CanonicalRequestAuthConfig::default(),
     );
     let key_pair = checked_torii_test_ed25519_keypair(0x46, "ZK sanitizer cancellation key");
     let account_id = AccountId::new(key_pair.public_key().clone());
-    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world(
+    let mut app = crate::tests_runtime_handlers::mk_native_app_state_for_tests_with_world(
         crate::tests_runtime_handlers::world_with_account(&account_id),
     );
     let app_state = Arc::get_mut(&mut app).expect("unique sanitizer cancellation app state");
@@ -1034,7 +1034,7 @@ async fn cancelled_attachment_request_retains_admission_in_real_sanitizer_worker
     let method = axum::http::Method::POST;
     let uri: axum::http::Uri = "/v1/zk/attachments".parse().expect("attachment URI");
     let body = br#"{"attachment":"cancel-real-sanitizer"}"#;
-    let missing_sanitizer = _data_dir.path().join("missing-attachment-sanitizer");
+    let missing_sanitizer = data_dir.path().join("missing-attachment-sanitizer");
 
     for (mode, executable) in [
         (
@@ -1069,7 +1069,8 @@ async fn cancelled_attachment_request_retains_admission_in_real_sanitizer_worker
                 ProofBodyAdmissionState::new(app.clone(), 1024),
                 proof_body_admission_middleware,
             ));
-        let headers = crate::tests_runtime_handlers::signed_app_headers(
+        let headers = crate::tests_runtime_handlers::signed_network_app_headers(
+            app.state.network_id_ref(),
             &account_id,
             &key_pair,
             &method,
@@ -1140,7 +1141,7 @@ async fn cancelled_attachment_get_retains_admission_in_real_sanitizer_worker() {
     let key_pair = checked_torii_test_ed25519_keypair(0x47, "ZK export cancellation key");
     let account_id = AccountId::new(key_pair.public_key().clone());
     let tenant = crate::zk_attachments::AttachmentTenant::from_account(&account_id);
-    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world(
+    let mut app = crate::tests_runtime_handlers::mk_native_app_state_for_tests_with_world(
         crate::tests_runtime_handlers::world_with_account(&account_id),
     );
     let app_state = Arc::get_mut(&mut app).expect("unique export cancellation app state");
@@ -1212,7 +1213,8 @@ async fn cancelled_attachment_get_retains_admission_in_real_sanitizer_worker() {
     let uri: axum::http::Uri = format!("/v1/zk/attachments/{}", metadata.id)
         .parse()
         .expect("attachment export URI");
-    let headers = crate::tests_runtime_handlers::signed_app_headers(
+    let headers = crate::tests_runtime_handlers::signed_network_app_headers(
+        app.state.network_id_ref(),
         &account_id,
         &key_pair,
         &method,
@@ -1401,14 +1403,20 @@ fn settlement_replay_maps_to_conflict_without_claiming_new_success() {
 #[tokio::test]
 async fn optional_canonical_body_auth_busy_source_preserves_capacity_and_nonce() {
     use axum::{Extension, Router, routing::post};
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        mpsc,
+    };
     use tower::ServiceExt as _;
-    use std::sync::{atomic::{AtomicUsize, Ordering}, mpsc};
 
     async fn probe(
         Extension(visibility): Extension<ToriiAccountReadVisibility>,
         Extension(calls): Extension<Arc<AtomicUsize>>,
     ) -> StatusCode {
-        assert!(visibility.is_signed(), "capacity must never select anonymous visibility");
+        assert!(
+            visibility.is_signed(),
+            "capacity must never select anonymous visibility"
+        );
         calls.fetch_add(1, Ordering::SeqCst);
         StatusCode::NO_CONTENT
     }
@@ -1419,14 +1427,18 @@ async fn optional_canonical_body_auth_busy_source_preserves_capacity_and_nonce()
         let headers = crate::tests_runtime_handlers::signed_app_headers(
             &iroha_test_samples::ALICE_ID,
             &iroha_test_samples::ALICE_KEYPAIR,
-            &method, &uri, body,
+            &method,
+            &uri,
+            body,
         );
         let method = method.clone();
         let uri = uri.clone();
         move || {
             let mut request = axum::http::Request::builder()
-                .method(method.clone()).uri(uri.clone())
-                .body(Body::from(body.as_slice())).expect("canonical request");
+                .method(method.clone())
+                .uri(uri.clone())
+                .body(Body::from(body.as_slice()))
+                .expect("canonical request");
             *request.headers_mut() = headers.clone();
             request
         }
@@ -1435,13 +1447,18 @@ async fn optional_canonical_body_auth_busy_source_preserves_capacity_and_nonce()
         let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world(
             crate::tests_runtime_handlers::world_with_account(&iroha_test_samples::ALICE_ID),
         );
-        Arc::get_mut(&mut app).expect("unshared test app").query_queue_timeout = queue_timeout;
+        Arc::get_mut(&mut app)
+            .expect("unshared test app")
+            .query_queue_timeout = queue_timeout;
         let calls = Arc::new(AtomicUsize::new(0));
         let router = Router::new()
             .route("/v1/accounts/query", post(probe))
             .layer(Extension(Arc::clone(&calls)))
             .layer(axum::middleware::from_fn_with_state(
-                OptionalCanonicalAccountBodyAuthState { app: app.clone(), max_body_bytes: 1024 },
+                OptionalCanonicalAccountBodyAuthState {
+                    app: app.clone(),
+                    max_body_bytes: 1024,
+                },
                 enforce_optional_canonical_account_body_authentication,
             ));
         (app, router, calls)
@@ -1449,11 +1466,15 @@ async fn optional_canonical_body_auth_busy_source_preserves_capacity_and_nonce()
     let hold_publication = |state: Arc<iroha_core::state::State>| {
         let (held_tx, held_rx) = mpsc::sync_channel(1);
         let (release_tx, release_rx) = mpsc::sync_channel::<()>(1);
-        let holder = std::thread::spawn(move || state.with_held_header_for_reader_test(|_| {
-            held_tx.send(()).expect("notify original writer acquired");
-            let _ = release_rx.recv();
-        }));
-        held_rx.recv_timeout(std::time::Duration::from_secs(5)).expect("original header writer");
+        let holder = std::thread::spawn(move || {
+            state.with_held_header_for_reader_test(|_| {
+                held_tx.send(()).expect("notify original writer acquired");
+                let _ = release_rx.recv();
+            })
+        });
+        held_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("original header writer");
         (release_tx, holder)
     };
 
@@ -1462,13 +1483,24 @@ async fn optional_canonical_body_auth_busy_source_preserves_capacity_and_nonce()
     let (app, router, calls) = router_for(Duration::ZERO);
     let request = signed_request();
     let (release, holder) = hold_publication(app.state.clone());
-    let refused = router.clone().oneshot(request()).await.expect("capacity response");
+    let refused = router
+        .clone()
+        .oneshot(request())
+        .await
+        .expect("capacity response");
     drop(release);
     holder.join().expect("release original writer");
-    assert_eq!(refused.status(), StatusCode::TOO_MANY_REQUESTS,
-        "real source contention cannot become invalid credentials");
+    assert_eq!(
+        refused.status(),
+        StatusCode::TOO_MANY_REQUESTS,
+        "real source contention cannot become invalid credentials"
+    );
     assert_eq!(calls.load(Ordering::SeqCst), 0);
-    let accepted = router.clone().oneshot(request()).await.expect("same request after release");
+    let accepted = router
+        .clone()
+        .oneshot(request())
+        .await
+        .expect("same request after release");
     assert_eq!(accepted.status(), StatusCode::NO_CONTENT);
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     let replayed = router.oneshot(request()).await.expect("replay response");

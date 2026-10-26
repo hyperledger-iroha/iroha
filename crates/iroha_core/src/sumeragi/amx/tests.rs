@@ -400,7 +400,7 @@ fn amx_caught_error_keeps_same_decoder_owner_through_transaction_and_block() {
     let before = block.world.sumeragi_amx.get().clone();
     let mut transaction = block.transaction();
     norito::with_decode_limits_scope(refused_decode_limits(), || {
-        let _caught = super::amx_error(error, &mut transaction);
+        let _caught = super::amx_error(&error, &mut transaction);
         assert_eq!(
             transaction.require_storage_admission(),
             Err(expected.clone())
@@ -439,7 +439,7 @@ fn amx_intrinsic_decoder_failure_cannot_latch_a_local_storage_refusal() {
     let state = blank_state();
     let mut block = state.block(header(1));
     let mut transaction = block.transaction();
-    let _ = super::amx_error(error, &mut transaction);
+    let _ = super::amx_error(&error, &mut transaction);
     assert!(transaction.require_storage_admission().is_ok());
     drop(transaction);
     assert!(block.require_storage_admission().is_ok());
@@ -525,7 +525,7 @@ fn amx_relay_decode_refusal_keeps_original_undecided_record_and_retries_proof() 
             )
             .unwrap();
     }
-    seeded.begin(1, 1 * 4000, 1_000, &tx).unwrap();
+    seeded.begin(1, 4000, 1_000, &tx).unwrap();
     let state = blank_state();
     let mut block = state.block(header(2));
     *block.world.sumeragi_amx.get_mut() = seeded.clone();

@@ -438,7 +438,7 @@ impl CircuitDescriptorV2 {
 /// V2 descriptor digest, with a domain distinct from V1.
 #[must_use]
 pub fn descriptor_digest_v2(bytes: &[u8]) -> [u8; 32] {
-    blake2b_personal::<32>(b"PIPA-v2-CircDesc", &[bytes])
+    blake2b_personal::<32>(crate::contract::DESCRIPTOR_DIGEST_DOMAIN, &[bytes])
 }
 
 impl ProtocolDescriptor {

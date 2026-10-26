@@ -26,7 +26,7 @@ type ExpectedRows<K> = Vec<(K, usize, usize)>;
 // Independent, test-only observation of actual native key/value allocations.
 // Test clones and its reference overlay are outside the observed production kernel.
 fn expected<K: mv::Key, V: mv::Value>(
-    images: mv::storage::FrozenStorageImages<'_, K, V>,
+    images: &mv::storage::FrozenStorageImages<'_, K, V>,
 ) -> (ExpectedRows<K>, ExpectedRows<K>) {
     let current: ExpectedRows<K> = images
         .current_entries()
@@ -78,7 +78,7 @@ fn original_group_all_fourteen_lookup_pairs_reuse_funded_descriptors_and_revisio
         let budget = state.ivm_execution_budget();
         macro_rules! expected_fields {
             ($($field:ident),+ $(,)?) => { $(
-                let $field = expected(block.world.$field.frozen_images().unwrap());
+                let $field = expected(&(block.world.$field.frozen_images().unwrap()));
             )+ };
         }
         expected_fields!(

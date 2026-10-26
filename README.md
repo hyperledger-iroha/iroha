@@ -103,19 +103,19 @@ work:
 
 ```bash
 # Fast source-check loop; Git commits do not invalidate status-only build metadata.
-scripts/cargo_fast.sh --stable-local-metadata -- check -p iroha_core --lib
+scripts/cargo_fast.sh --stable-local-metadata --incremental -- check -p iroha_core --lib
 
 # Iterate on the node leaves together (irohad, iroha_cli, iroha_torii and
 # iroha_kagami in one invocation) so they share one feature-unified iroha_core
 # artifact per edit. Per-crate checks still catch crate-specific feature gates.
 scripts/cargo_fast.sh --stable-local-metadata --incremental --node-set
 
-# Repeated tests in a stable target lane; incremental test compilation uses more disk.
-scripts/cargo_fast.sh --target-slot core-tests --incremental -- \
+# Repeated tests reuse the same warm target as ordinary local builds.
+scripts/cargo_fast.sh --stable-local-metadata --incremental -- \
   test -p iroha_core --lib <test_name>
 
 # Runnable optimized binaries without paying the production release-profile cost.
-scripts/cargo_fast.sh --stable-local-metadata -- \
+scripts/cargo_fast.sh --stable-local-metadata --incremental -- \
   build --profile local-release -p irohad --bin iroha3d
 ```
 
@@ -123,7 +123,11 @@ Omit `--jobs` to let Cargo use its native jobserver; use `--jobs N` only to cap
 memory-heavy local builds. Use a small number of
 stable `--target-slot` names only when concurrent tasks need isolated Cargo
 locks; creating a fresh dated or temporary target for every build defeats
-incremental reuse. For intentionally cold or isolated lanes, use
+incremental reuse. Dev and test profiles both enable incremental compilation;
+the contributor `scripts/dev_workflow.sh` runs its affected checks through the
+same wrapper with stable local metadata and the existing target. Existing target
+overrides remain explicit; the workflow never creates a dated build directory.
+For intentionally cold, memory-constrained or isolated lanes, use
 `--no-incremental` to improve `sccache` reuse across targets. Incremental mode
 (`--incremental` or inherited `CARGO_INCREMENTAL=1`) explicitly disables
 config-selected compiler wrappers so a configured `sccache` cannot reactivate.

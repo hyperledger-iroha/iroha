@@ -23,7 +23,7 @@
 //!   cannot race metadata admission and make the worker allocate an unbounded
 //!   buffer; inline registry keys are verified by reference instead of being cloned.
 //! - This module is strictly app-facing and non-forking. It must not affect consensus.
-//! - Enabled and paced via `iroha_config` (torii.zk_prover_enabled, torii.zk_prover_scan_period_secs).
+//! - Enabled and paced via `iroha_config` (`torii.zk_prover_enabled`, `torii.zk_prover_scan_period_secs`).
 //!
 //! The worker verifies `ProofAttachment` payloads (single or list, Norito or JSON)
 //! using core backend verifiers and records per-proof metadata. It never mutates WSV.
@@ -1462,7 +1462,7 @@ fn try_gc_reports_once() -> std::io::Result<usize> {
     ensure_dirs()?;
     let ttl = Duration::from_secs(cfg_reports_ttl_secs());
     let now = crate::utils::unix_now_ms();
-    let ttl_ms = ttl.as_millis() as u64;
+    let ttl_ms = u64::try_from(ttl.as_millis()).unwrap_or(u64::MAX);
     let mut deleted = 0usize;
     let _guard = report_summary_lock().lock();
     visit_report_summaries_locked(|summary| {
@@ -1645,7 +1645,9 @@ fn processing_context_put_record(
     processing_context_put_option_u64(hasher, record.activation_height);
     processing_context_put_option_u64(hasher, record.withdraw_height);
     hasher.update([u8::from(record.status)]);
-    hasher.update([verification_height.is_some_and(|height| record.is_active_at(height)) as u8]);
+    hasher.update([u8::from(
+        verification_height.is_some_and(|height| record.is_active_at(height)),
+    )]);
     // The commitment, rather than another copy of the potentially large key,
     // defines verifier identity. A prior success remains valid if storage moves
     // between an inline key and the same commitment-backed external key.
@@ -1659,7 +1661,7 @@ fn proof_processing_context_hash(
     processing_context_put_bytes(&mut hasher, b"iroha:torii:zk-prover-retry-context:v1");
     processing_context_put_str(&mut hasher, ctx.build_identity.version());
     processing_context_put_option_str(&mut hasher, Some(ctx.build_identity.source_commit()));
-    hasher.update([cfg!(feature = "zk-stark") as u8]);
+    hasher.update([u8::from(cfg!(feature = "zk-stark"))]);
     hasher.update(
         u64::try_from(ctx.allowed_backends.len())
             .unwrap_or(u64::MAX)
@@ -1681,32 +1683,29 @@ fn proof_processing_context_hash(
             .unwrap_or(u64::MAX)
             .to_be_bytes(),
     );
-    match verifier_view {
-        Some(view) => {
-            hasher.update([1]);
-            processing_context_put_bytes(&mut hasher, &compute_zk_consensus_policy_hash(&view.zk));
-            let verification_height = u64::try_from(view.height()).unwrap_or(u64::MAX);
-            let world = view.world();
-            let verifying_keys = world.verifying_keys();
-            for attachment in attachments {
-                processing_context_put_str(&mut hasher, attachment.backend.as_str());
-                processing_context_put_str(&mut hasher, attachment.vk_ref.backend.as_str());
-                processing_context_put_str(&mut hasher, &attachment.vk_ref.name);
-                processing_context_put_record(
-                    &mut hasher,
-                    verifying_keys.get(&attachment.vk_ref),
-                    Some(verification_height),
-                );
-            }
+    if let Some(view) = verifier_view {
+        hasher.update([1]);
+        processing_context_put_bytes(&mut hasher, &compute_zk_consensus_policy_hash(&view.zk));
+        let verification_height = u64::try_from(view.height()).unwrap_or(u64::MAX);
+        let world = view.world();
+        let verifying_keys = world.verifying_keys();
+        for attachment in attachments {
+            processing_context_put_str(&mut hasher, attachment.backend.as_str());
+            processing_context_put_str(&mut hasher, attachment.vk_ref.backend.as_str());
+            processing_context_put_str(&mut hasher, &attachment.vk_ref.name);
+            processing_context_put_record(
+                &mut hasher,
+                verifying_keys.get(&attachment.vk_ref),
+                Some(verification_height),
+            );
         }
-        None => {
-            hasher.update([0]);
-            for attachment in attachments {
-                processing_context_put_str(&mut hasher, attachment.backend.as_str());
-                processing_context_put_str(&mut hasher, attachment.vk_ref.backend.as_str());
-                processing_context_put_str(&mut hasher, &attachment.vk_ref.name);
-                processing_context_put_record(&mut hasher, None, None);
-            }
+    } else {
+        hasher.update([0]);
+        for attachment in attachments {
+            processing_context_put_str(&mut hasher, attachment.backend.as_str());
+            processing_context_put_str(&mut hasher, attachment.vk_ref.backend.as_str());
+            processing_context_put_str(&mut hasher, &attachment.vk_ref.name);
+            processing_context_put_record(&mut hasher, None, None);
         }
     }
     hex::encode(hasher.finalize())
@@ -1938,20 +1937,18 @@ fn process_proof_attachment_in_view(
     if !errors.is_empty() {
         return result(errors, circuit_id, retryable, terminal_error);
     }
-    let view = match verifier_view {
-        Some(view) => view,
-        None => {
-            errors.push("verifying key lookup requires core state".into());
-            return result(errors, circuit_id, true, false);
-        }
+    let view = if let Some(view) = verifier_view {
+        view
+    } else {
+        errors.push("verifying key lookup requires core state".into());
+        return result(errors, circuit_id, true, false);
     };
     let verification_height = u64::try_from(view.height()).unwrap_or(u64::MAX);
-    let record = match view.world().verifying_keys().get(vk_id) {
-        Some(record) => record,
-        None => {
-            errors.push("verifying key not found in registry".into());
-            return result(errors, circuit_id, true, false);
-        }
+    let record = if let Some(record) = view.world().verifying_keys().get(vk_id) {
+        record
+    } else {
+        errors.push("verifying key not found in registry".into());
+        return result(errors, circuit_id, true, false);
     };
     if !record.is_active_at(verification_height) {
         errors.push("verifying key is not active".into());
@@ -2324,10 +2321,7 @@ fn process_attachment_snapshot_at(
                     })?;
                     #[cfg(not(test))]
                     let processed = verify()?;
-                    if !processed.report.ok {
-                        saw_retryable_failure |= processed.retryable;
-                        saw_terminal_failure |= !processed.retryable;
-                    } else {
+                    if processed.report.ok {
                         completed_proof_indices.extend(index);
                         checkpoint_completed_proofs(
                             loc,
@@ -2336,6 +2330,9 @@ fn process_attachment_snapshot_at(
                             &completed_proof_indices,
                             &current_processing_context_hash,
                         )?;
+                    } else {
+                        saw_retryable_failure |= processed.retryable;
+                        saw_terminal_failure |= !processed.retryable;
                     }
                     proofs.push(processed.report);
                 }
@@ -2417,7 +2414,7 @@ fn process_attachment_snapshot_at(
         completed_proof_indices: if retryable {
             completed_proof_indices
         } else {
-            Default::default()
+            Vec::default()
         },
         processing_context_hash: retryable.then_some(processing_context_hash).flatten(),
     };
@@ -2722,7 +2719,10 @@ async fn run_budgeted_scan_reserved(
             telemetry_clone.with_metrics(|tel| tel.set_torii_zk_prover_inflight(prev));
             #[cfg(test)]
             {
-                MAX_INFLIGHT_OBSERVED.fetch_max(prev as usize, AtomicOrdering::SeqCst);
+                MAX_INFLIGHT_OBSERVED.fetch_max(
+                    usize::try_from(prev).expect("inflight count is bounded by semaphore capacity"),
+                    AtomicOrdering::SeqCst,
+                );
             }
             let result = crate::panic_recovery::join_recoverable(
                 crate::panic_recovery::spawn_blocking_recoverable(move || {
@@ -2768,7 +2768,10 @@ async fn run_budgeted_scan_reserved(
     telemetry.with_metrics(|tel| {
         tel.set_torii_zk_prover_inflight(0);
         tel.set_torii_zk_prover_pending(remaining);
-        tel.record_torii_zk_prover_scan(bytes_processed, scan_elapsed(start).as_millis() as u64);
+        tel.record_torii_zk_prover_scan(
+            bytes_processed,
+            u64::try_from(scan_elapsed(start).as_millis()).unwrap_or(u64::MAX),
+        );
     });
     if errors.is_empty()
         && !stopped_by_shutdown
@@ -2783,7 +2786,7 @@ async fn run_budgeted_scan_reserved(
         processed_reports,
         bytes_processed,
         #[cfg(test)]
-        duration_ms: scan_elapsed(start).as_millis() as u64,
+        duration_ms: u64::try_from(scan_elapsed(start).as_millis()).unwrap_or(u64::MAX),
         #[cfg(test)]
         remaining_pending: remaining,
         budget_exhausted: budget_reason,
@@ -3671,7 +3674,12 @@ mod tests {
                 "unexpected compressed-{label} rejection: {error}"
             );
         }
-        let oversized = vec![0_u8; PROOF_ATTACHMENT_BODY_MAX_BYTES_V1 as usize + 1];
+        let oversized = vec![
+            0_u8;
+            usize::try_from(PROOF_ATTACHMENT_BODY_MAX_BYTES_V1)
+                .expect("fixture bound fits usize")
+                + 1
+        ];
         let error = decode_proof_attachments("application/x-norito", &oversized)
             .expect_err("oversized proof body must fail before decoding");
         assert!(
@@ -3989,6 +3997,8 @@ mod tests {
     }
     #[test]
     fn native_pipa_r_worker_policy_is_bounded_and_invalidates_retry_context() {
+        type ZkConfigurationCase = (fn(&mut Zk), &'static str);
+
         use iroha_config::parameters::actual::Zk;
         let backend = "pipa-r/pasta";
         let envelope = iroha_data_model::zk::OpenVerifyEnvelope {
@@ -4034,7 +4044,7 @@ mod tests {
             )
         };
         let baseline_hash = hash(&baseline);
-        let cases: [(fn(&mut Zk), &str); 3] = [
+        let cases: [ZkConfigurationCase; 3] = [
             (|zk| zk.pipa_r.enabled = false, "verification is disabled"),
             (|zk| zk.pipa_r.max_envelope_bytes = 1, "max_envelope_bytes"),
             (|zk| zk.pipa_r.max_proof_bytes = 1, "max_proof_bytes"),
@@ -4509,8 +4519,14 @@ mod tests {
         ensure_dirs().expect("create prover directories");
         let id = "ab".repeat(32);
         let path = report_path_from_sanitized(&id);
-        std::fs::write(&path, vec![b'x'; (REPORT_FILE_MAX_BYTES as usize) + 1])
-            .expect("write oversized report");
+        std::fs::write(
+            &path,
+            vec![
+                b'x';
+                (usize::try_from(REPORT_FILE_MAX_BYTES).expect("fixture bound fits usize")) + 1
+            ],
+        )
+        .expect("write oversized report");
         assert_eq!(
             try_load_report(&id)
                 .expect_err("oversized report must be rejected")
@@ -4828,7 +4844,8 @@ mod tests {
     fn gc_reports_once_deletes_only_expired_reports_and_retains_fresh_index() {
         let _env = TestDataDirGuard::new();
         init_test_cfg();
-        let ttl_ms = Duration::from_secs(cfg_reports_ttl_secs()).as_millis() as u64;
+        let ttl_ms = u64::try_from(Duration::from_secs(cfg_reports_ttl_secs()).as_millis())
+            .unwrap_or(u64::MAX);
         let now = crate::utils::unix_now_ms();
         let fresh_processed_ms = now.saturating_sub(ttl_ms.saturating_div(2));
         let expired = sample_report(
@@ -4865,7 +4882,8 @@ mod tests {
     fn gc_reports_once_keeps_reports_when_none_are_expired() {
         let _env = TestDataDirGuard::new();
         init_test_cfg();
-        let ttl_ms = Duration::from_secs(cfg_reports_ttl_secs()).as_millis() as u64;
+        let ttl_ms = u64::try_from(Duration::from_secs(cfg_reports_ttl_secs()).as_millis())
+            .unwrap_or(u64::MAX);
         let fresh = sample_report(
             "21".repeat(32),
             true,
@@ -4911,7 +4929,8 @@ mod tests {
     fn gc_reports_once_deletes_expired_index_entries_even_when_report_file_is_missing() {
         let _env = TestDataDirGuard::new();
         init_test_cfg();
-        let ttl_ms = Duration::from_secs(cfg_reports_ttl_secs()).as_millis() as u64;
+        let ttl_ms = u64::try_from(Duration::from_secs(cfg_reports_ttl_secs()).as_millis())
+            .unwrap_or(u64::MAX);
         persist_report_summaries_locked(&[ProverReportSummary {
             id: "32".repeat(32),
             ok: false,

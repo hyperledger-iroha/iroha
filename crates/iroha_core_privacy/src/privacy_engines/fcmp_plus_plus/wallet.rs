@@ -136,7 +136,7 @@ impl WalletSecretSha256V1 {
         self.compress_block_v1();
         let mut output = WalletSecretCopyValueV1([0_u8; 32]);
         for index in 0..32 {
-            output.0[index] = (self.state[index / 4] >> (24 - (8 * (index % 4)))) as u8;
+            output.0[index] = self.state[index / 4].to_be_bytes()[index % 4];
         }
         output
     }
@@ -203,6 +203,9 @@ impl Drop for FcmpWalletNoteV1 {
 }
 impl FcmpWalletNoteV1 {
     /// Construct and validate a spendable note opening.
+    ///
+    /// # Errors
+    /// Rejects invalid secrets or an output whose key and commitment do not match their openings.
     pub fn new(
         output: FcmpOutputTupleV1,
         mut spend_x: [u8; 32],
@@ -224,6 +227,13 @@ impl FcmpWalletNoteV1 {
     }
     /// Construct a note from borrowed secret openings without creating raw
     /// by-value copies in the caller.
+    ///
+    /// # Errors
+    /// Rejects invalid secrets or an output whose key and commitment do not match their openings.
+    #[expect(
+        clippy::trivially_copy_pass_by_ref,
+        reason = "Borrowing secret inputs keeps raw copies inside the explicit zeroizing owner boundary."
+    )]
     pub fn new_borrowed(
         output: FcmpOutputTupleV1,
         spend_x: &[u8; 32],
@@ -243,6 +253,14 @@ impl FcmpWalletNoteV1 {
             commitment_mask,
         )
     }
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "Taking ownership ensures every accepted secret is zeroized on success, failure, and unwind before the caller can reuse it."
+    )]
+    #[expect(
+        clippy::op_ref,
+        reason = "Borrowed arithmetic avoids copying secret values out of their zeroizing owners."
+    )]
     fn from_secret_owners_v1(
         output: FcmpOutputTupleV1,
         spend_x_bytes: WalletSecretCopyValueV1<[u8; 32]>,
@@ -264,10 +282,10 @@ impl FcmpWalletNoteV1 {
             return Err(FcmpNativeErrorV1::WalletNoteEncoding);
         }
         let output_key = decode_edwards_point(output.components().0, false)?;
-        let spend_component = Zeroizing::new(&ED25519_BASEPOINT_POINT * spend_x.expose_ref());
-        let output_component = Zeroizing::new(&generator_t() * output_y.expose_ref());
+        let spend_component = Zeroizing::new(ED25519_BASEPOINT_POINT * spend_x.expose_ref());
+        let output_component = Zeroizing::new(generator_t() * output_y.expose_ref());
         let expected_output = Zeroizing::new(&*spend_component + &*output_component);
-        if &*expected_output != &output_key {
+        if *expected_output != output_key {
             return Err(FcmpNativeErrorV1::WalletNoteEncoding);
         }
         FcmpOutputCommitmentOpeningV1::new_borrowed(
@@ -309,6 +327,9 @@ impl FcmpWalletNoteV1 {
         &self.commitment_mask
     }
     /// Reconstruct the validated range-proof witness carried by this note.
+    ///
+    /// # Errors
+    /// Rejects an invalid amount/mask opening for the retained output commitment.
     pub fn commitment_opening(&self) -> Result<FcmpOutputCommitmentOpeningV1, FcmpNativeErrorV1> {
         FcmpOutputCommitmentOpeningV1::new_borrowed(
             self.output,
@@ -393,6 +414,9 @@ fn model_output(output: PrivacyFcmpOutputTupleV1) -> Result<FcmpOutputTupleV1, F
     )
 }
 /// Derive the sole first-release recipient identity from a canonical X25519 public key.
+///
+/// # Errors
+/// Rejects an invalid or noncanonical recipient public key.
 pub fn derive_fcmp_recipient_id_v1(
     recipient_public_key: [u8; 32],
 ) -> Result<PrivacyRecipientIdV1, FcmpNativeErrorV1> {
@@ -404,6 +428,9 @@ pub fn derive_fcmp_recipient_id_v1(
     Ok(PrivacyRecipientIdV1::new(hash.finalize().into()))
 }
 /// Derive a canonical X25519 public key from a non-zero wallet secret.
+///
+/// # Errors
+/// Rejects an invalid recipient secret or derived public key.
 pub fn fcmp_recipient_public_key_v1(
     mut recipient_secret_key: [u8; 32],
 ) -> Result<[u8; 32], FcmpNativeErrorV1> {
@@ -474,6 +501,9 @@ fn parsed_ciphertext(
 }
 /// Validate the exact public FCMP++ wallet ciphertext shape and all public
 /// bindings available to consensus.
+///
+/// # Errors
+/// Rejects malformed ciphertexts, invalid keys, or a recipient/output binding mismatch.
 pub fn validate_fcmp_encrypted_output_v1(
     _pool_id: PrivacyPoolIdV1,
     expected_output: PrivacyFcmpOutputTupleV1,
@@ -491,6 +521,9 @@ pub fn validate_fcmp_encrypted_output_v1(
     parsed_ciphertext(encrypted).map(|_| ())
 }
 /// Encrypt one fixed-width spendable FCMP++ wallet note.
+///
+/// # Errors
+/// Rejects invalid keys or note/output bindings, unhealthy randomness, encoding failures, or authenticated-encryption failures.
 pub fn encrypt_fcmp_wallet_note_v1(
     rng: &mut (impl TryRng + TryCryptoRng),
     pool_id: PrivacyPoolIdV1,
@@ -511,9 +544,9 @@ pub fn encrypt_fcmp_wallet_note_v1(
     if ephemeral_secret.iter().all(|byte| *byte == 0) {
         return Err(FcmpNativeErrorV1::EncryptedOutputRandomness);
     }
-    let ephemeral_public = x25519_public_key_v1(&*ephemeral_secret)
+    let ephemeral_public = x25519_public_key_v1(*ephemeral_secret)
         .map_err(|_| FcmpNativeErrorV1::EncryptedOutputKey)?;
-    let shared = x25519_shared_secret_v1(&*ephemeral_secret, recipient_public_key)
+    let shared = x25519_shared_secret_v1(*ephemeral_secret, recipient_public_key)
         .map_err(|_| FcmpNativeErrorV1::EncryptedOutputKey)?;
     let ephemeral_public_key = PrivacyEncryptionKeyV1::new(ephemeral_public);
     let aad = aad_v1(pool_id, recipient, ephemeral_public_key, output);
@@ -557,6 +590,9 @@ pub fn encrypt_fcmp_wallet_note_v1(
 }
 #[cfg(test)]
 /// Decrypt and authenticate one fixed-width FCMP++ wallet note.
+///
+/// # Errors
+/// Rejects invalid ciphertext/key bindings, failed authentication, malformed plaintext, or an inconsistent note opening.
 pub fn decrypt_fcmp_wallet_note_v1(
     pool_id: PrivacyPoolIdV1,
     expected_output: PrivacyFcmpOutputTupleV1,
@@ -894,7 +930,7 @@ mod tests {
 
         fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
             for byte in destination {
-                *byte = ((self.cursor % self.period) as u8)
+                *byte = (self.cursor % self.period).to_le_bytes()[0]
                     .wrapping_mul(31)
                     .wrapping_add(7);
                 self.cursor += 1;

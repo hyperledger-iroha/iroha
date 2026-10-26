@@ -6,6 +6,7 @@
 
 use super::store;
 use crate::state::WorldReadOnly;
+use iroha_data_model::block::consensus::PublicLaneStakingPolicy;
 use iroha_data_model::sccp::params::{
     SCCP_MIN_EPOCH_MS_V1, SccpParameterContextV1, SccpParametersError, SccpParametersV1,
 };
@@ -17,11 +18,17 @@ pub enum SccpPolicyError {
     /// An intrinsic parameter or current liability-window bound failed.
     #[error(transparent)]
     Parameters(#[from] SccpParametersError),
-    /// The configured staking duration cannot be represented by the protocol clock.
-    #[error("SCCP staking unbonding delay exceeds the u64 millisecond clock")]
-    UnbondingDelayOverflow,
+    /// An existing SCCP scope has no original committed monetary policy.
+    #[error("SCCP requires an original committed public_lane_staking_v1")]
+    MissingStakingPolicy,
+    /// The retained genesis or predecessor binding does not match the original cut.
+    #[error("SCCP staking monetary authority does not match the original State source")]
+    OriginalStakingSourceMismatch,
+    /// Retained liabilities cannot survive removal of the SCCP parameter owner.
+    #[error("retained SCCP generations require the original SCCP parameters")]
+    MissingSccpParameters,
     /// A slashable committee requires a nonzero pinned slash rate.
-    #[error("SCCP requires pinned nexus.staking.max_slash_bps >= 1")]
+    #[error("SCCP requires committed staking max_slash_bps >= 1")]
     ZeroSlashRate,
     /// An already retained generation remains liable beyond the proposed staking delay.
     #[error(
@@ -79,10 +86,9 @@ pub fn validate_epoch(blocks: u64, cadence_ms: u64) -> Result<(), SccpPolicyErro
 pub fn validate_staking_policy(
     world: &(impl WorldReadOnly + ?Sized),
     parameters: &SccpParametersV1,
-    staking: &iroha_config::parameters::actual::NexusStaking,
+    staking: &PublicLaneStakingPolicy,
 ) -> Result<(), SccpPolicyError> {
-    let unbonding_delay_ms = u64::try_from(staking.unbonding_delay.as_millis())
-        .map_err(|_| SccpPolicyError::UnbondingDelayOverflow)?;
+    let unbonding_delay_ms = staking.unbonding_delay_ms;
     if staking.max_slash_bps == 0 {
         return Err(SccpPolicyError::ZeroSlashRate);
     }
@@ -106,6 +112,44 @@ pub fn validate_staking_policy(
         }
     }
     Ok(())
+}
+
+/// Validate a proposed original monetary successor against current SCCP policy
+/// and every retained generation. A disabled value-moving switch keeps liabilities.
+///
+/// This is also called by monetary parameter preparation before any MV mutation;
+/// the caller supplies the candidate, not a node-local projection or default.
+///
+/// # Errors
+/// Returns the exact current or retained liability violation. Orphaned retained
+/// generations are invalid even if the SCCP parameter cell is absent.
+pub fn validate_staking_successor(
+    world: &(impl WorldReadOnly + ?Sized),
+    staking: &PublicLaneStakingPolicy,
+) -> Result<(), SccpPolicyError> {
+    match parameters(world) {
+        Some(parameters) => validate_staking_policy(world, &parameters, staking),
+        None if world.sccp_committee_generations().iter().next().is_none() => Ok(()),
+        None => Err(SccpPolicyError::MissingSccpParameters),
+    }
+}
+
+/// Validate the exact committed policy from one complete original World cut.
+/// This is the startup/restore boundary; node configuration is not an input.
+///
+/// # Errors
+/// Missing original monetary authority and unsafe retained liabilities fail closed.
+pub fn validate_committed_staking_policy(
+    world: &(impl WorldReadOnly + ?Sized),
+) -> Result<(), SccpPolicyError> {
+    if parameters(world).is_none() && world.sccp_committee_generations().iter().next().is_none() {
+        return Ok(());
+    }
+    let staking = world
+        .parameters()
+        .staking_policy()
+        .ok_or(SccpPolicyError::MissingStakingPolicy)?;
+    validate_staking_successor(world, staking)
 }
 
 /// Return the SCCP parameters, or `None` when SCCP does not exist on this network.
@@ -154,8 +198,15 @@ mod tests {
 mod policy_tests {
     use super::*;
     use crate::state::World;
-    use iroha_config::parameters::actual::NexusStaking;
-    use std::time::Duration;
+    fn staking_policy(delay: u64, slash: u16) -> PublicLaneStakingPolicy {
+        let asset = iroha_config::parameters::defaults::nexus::fees::fee_asset_id()
+            .parse()
+            .unwrap();
+        let mut policy = crate::sumeragi::test_chain::staking_fixture_policy(asset);
+        policy.unbonding_delay_ms = delay;
+        policy.max_slash_bps = slash;
+        policy
+    }
 
     #[test]
     fn epoch_floor_exact_one_below_and_overflow_are_distinct() {
@@ -178,35 +229,105 @@ mod policy_tests {
     }
 
     #[test]
-    fn pinned_staking_exact_delay_zero_slash_and_delay_overflow() {
+    fn committed_staking_exact_delay_zero_slash_and_full_clock_range() {
         let world = World::default();
         let world = world.view();
         let parameters = SccpParametersV1::taira_default();
         let exact = parameters.committee_validity_ms + parameters.forgery_evidence_grace_ms;
-        let mut staking = NexusStaking {
-            unbonding_delay: Duration::from_millis(exact),
-            max_slash_bps: 1,
-            ..Default::default()
-        };
+        let mut staking = staking_policy(exact, 1);
         validate_staking_policy(&world, &parameters, &staking).unwrap();
-        staking.unbonding_delay = Duration::from_millis(exact - 1);
+        staking.unbonding_delay_ms = exact - 1;
         assert_eq!(
             validate_staking_policy(&world, &parameters, &staking),
             Err(SccpPolicyError::Parameters(
                 SccpParametersError::UnbondingDelayTooShort
             ))
         );
-        staking.unbonding_delay = Duration::from_millis(exact);
+        staking.unbonding_delay_ms = exact;
         staking.max_slash_bps = 0;
         assert_eq!(
             validate_staking_policy(&world, &parameters, &staking),
             Err(SccpPolicyError::ZeroSlashRate)
         );
         staking.max_slash_bps = 1;
-        staking.unbonding_delay = Duration::from_secs(u64::MAX);
+        staking.unbonding_delay_ms = u64::MAX;
+        validate_staking_policy(&world, &parameters, &staking).unwrap();
+    }
+    #[test]
+    fn disabled_sccp_requires_original_policy_and_checks_candidate_without_installing() {
+        use iroha_data_model::parameter::Parameter;
+        let mut world = World::default();
+        validate_committed_staking_policy(&world.view()).unwrap();
+        let mut parameters = SccpParametersV1::taira_default();
+        parameters.enabled = false;
+        {
+            let mut block = world.block();
+            *block.sccp_parameters.get_mut() = Some(parameters);
+            block.commit();
+        }
         assert_eq!(
-            validate_staking_policy(&world, &parameters, &staking),
-            Err(SccpPolicyError::UnbondingDelayOverflow)
+            validate_committed_staking_policy(&world.view()),
+            Err(SccpPolicyError::MissingStakingPolicy)
+        );
+        let exact = parameters.committee_validity_ms + parameters.forgery_evidence_grace_ms;
+        let mut policy = staking_policy(exact, 1);
+        world
+            .set_parameter_for_testing(Parameter::Custom(
+                policy.clone().into_custom_parameter().unwrap(),
+            ))
+            .unwrap();
+        validate_committed_staking_policy(&world.view()).unwrap();
+        let original = world.view().parameters().staking_policy().unwrap().clone();
+        policy.unbonding_delay_ms -= 1;
+        assert_eq!(
+            validate_staking_successor(&world.view(), &policy),
+            Err(SccpPolicyError::Parameters(
+                SccpParametersError::UnbondingDelayTooShort
+            ))
+        );
+        assert_eq!(world.view().parameters().staking_policy(), Some(&original));
+        validate_committed_staking_policy(&world.view()).unwrap();
+    }
+
+    #[test]
+    fn retained_generation_cannot_be_underfunded_or_orphaned_by_successor() {
+        use crate::smartcontracts::isi::sccp::generation_record::RetainedSccpGeneration;
+        let world = crate::state::sccp_snapshot_state::tests::sccp_world();
+        let budget = world.sccp_committee_generations.allocation_budget().clone();
+        let parameters = parameters(&world.view()).unwrap();
+        let delay = parameters.committee_validity_ms + parameters.forgery_evidence_grace_ms;
+        let policy = staking_policy(delay, 1);
+        let mut retained = (**world.sccp_committee_generations.view().get(&1).unwrap()).clone();
+        retained.validity_ms = parameters.committee_validity_ms;
+        retained.grace_ms = parameters.forgery_evidence_grace_ms + 1;
+        retained.deadline_ms = retained.start_timestamp_ms + retained.validity_ms;
+        retained.liable_until_lc = retained.start_lc + retained.validity_ms + retained.grace_ms;
+        let retained = RetainedSccpGeneration::admit(&retained, &budget).unwrap();
+        {
+            let mut block = world.block();
+            block
+                .sccp_committee_generations
+                .try_insert_admitted(1, retained)
+                .unwrap();
+            block.commit();
+        }
+        assert_eq!(
+            validate_staking_successor(&world.view(), &policy),
+            Err(SccpPolicyError::RetainedLiability {
+                generation: 1,
+                validity_ms: parameters.committee_validity_ms,
+                grace_ms: parameters.forgery_evidence_grace_ms + 1,
+                unbonding_delay_ms: delay
+            })
+        );
+        {
+            let mut block = world.block();
+            *block.sccp_parameters.get_mut() = None;
+            block.commit();
+        }
+        assert_eq!(
+            validate_staking_successor(&world.view(), &policy),
+            Err(SccpPolicyError::MissingSccpParameters)
         );
     }
 }

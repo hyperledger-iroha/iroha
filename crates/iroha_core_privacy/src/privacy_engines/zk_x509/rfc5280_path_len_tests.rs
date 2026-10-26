@@ -35,7 +35,8 @@ fn local_rows(slot: usize, value: Option<u32>, present: bool) -> (Rows, Fixed, V
     let magnitude = 4 - first;
     let sign = usize::from(bytes[first] & 0x80 != 0);
     let length = if slot == 0 { 0 } else { magnitude + sign };
-    let slack = number.wrapping_sub(slot.saturating_sub(1) as u32);
+    let slack =
+        number.wrapping_sub(u32::try_from(slot.saturating_sub(1)).expect("fixture value fits u32"));
     let fixed = core::array::from_fn(|offset| {
         let mut fixed = [F::ZERO; ZK_X509_RFC5280_STARK_FIXED_WIDTH_V1];
         fixed[ZkX509Rfc5280StarkFamilyV1::BasicConstraints as usize] = F::ONE;
@@ -119,7 +120,7 @@ fn every_u32_der_boundary_has_exact_complete_private_bytes_and_slack() {
             let (rows, fixed, encoded) = local_rows(slot, Some(value), true);
             assert_eq!(
                 valid(&rows, &fixed),
-                value >= slot as u32 - 1,
+                value >= u32::try_from(slot).expect("fixture value fits u32") - 1,
                 "slot={slot},value={value}"
             );
             let actual = rows

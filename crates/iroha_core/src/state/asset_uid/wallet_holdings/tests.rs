@@ -131,12 +131,12 @@ impl Fixture {
             .chain(records.iter().map(|r| &r.custody));
         let assets = [(&wallet, 11), (&other, 67)]
             .into_iter()
-            .chain(
-                records
-                    .iter()
-                    .enumerate()
-                    .map(|(n, r)| (&r.custody, (n as u32 + 1) * 3)),
-            )
+            .chain(records.iter().enumerate().map(|(n, r)| {
+                (
+                    &r.custody,
+                    (u32::try_from(n).expect("fixture custody index fits u32") + 1) * 3,
+                )
+            }))
             .map(|(a, n)| Asset::new(AssetId::new(definition.clone(), a.clone()), n));
         let world =
             World::with_assets(

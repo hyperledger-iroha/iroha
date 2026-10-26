@@ -111,7 +111,7 @@ pub(super) fn run_vega_stage_v1(
     )?;
     let mut proof_rng = EvidenceRng06::new(proof_seed);
     let prepared = prepare_vega_privacy_action_with_rng_v1(
-        vega_release_transaction_context_v1()?,
+        &vega_release_transaction_context_v1()?,
         public_input,
         witness_material,
         &device_signing_key,
@@ -684,7 +684,7 @@ pub(super) fn vega_release_fixture_v1()
             vega_cbor_text_v1("1980-06-15"),
         ),
     ]);
-    let birth_item = vega_cbor_tag_v1(24, vega_cbor_bytes_v1(&birth_inner));
+    let birth_item = vega_cbor_tag_v1(24, &(vega_cbor_bytes_v1(&birth_inner)));
     let birth_digest: [u8; 32] = Sha256::digest(&birth_item).into();
     let device_key = vega_cbor_map_v1(vec![
         (vega_cbor_unsigned_v1(1), vega_cbor_unsigned_v1(2)),
@@ -695,15 +695,15 @@ pub(super) fn vega_release_fixture_v1()
     let validity_info = vega_cbor_map_v1(vec![
         (
             vega_cbor_text_v1("signed"),
-            vega_cbor_tag_v1(0, vega_cbor_text_v1("2025-01-01T00:00:00Z")),
+            vega_cbor_tag_v1(0, &vega_cbor_text_v1("2025-01-01T00:00:00Z")),
         ),
         (
             vega_cbor_text_v1("validFrom"),
-            vega_cbor_tag_v1(0, vega_cbor_text_v1("2025-01-01T00:00:00Z")),
+            vega_cbor_tag_v1(0, &vega_cbor_text_v1("2025-01-01T00:00:00Z")),
         ),
         (
             vega_cbor_text_v1("validUntil"),
-            vega_cbor_tag_v1(0, vega_cbor_text_v1("2035-08-17T12:34:56Z")),
+            vega_cbor_tag_v1(0, &vega_cbor_text_v1("2035-08-17T12:34:56Z")),
         ),
     ]);
     let value_digests = vega_cbor_map_v1(vec![(
@@ -730,7 +730,7 @@ pub(super) fn vega_release_fixture_v1()
         ),
         (vega_cbor_text_v1("validityInfo"), validity_info),
     ]);
-    let mso_payload = vega_cbor_tag_v1(24, vega_cbor_bytes_v1(&mso_inner));
+    let mso_payload = vega_cbor_tag_v1(24, &(vega_cbor_bytes_v1(&mso_inner)));
     let sig_structure = vega_cbor_array_v1(vec![
         vega_cbor_text_v1("Signature1"),
         vega_cbor_bytes_v1(&[0xa1, 0x01, 0x26]),
@@ -860,8 +860,8 @@ fn vega_cbor_map_v1(mut entries: Vec<(Vec<u8>, Vec<u8>)>) -> Vec<u8> {
     }
     encoded
 }
-fn vega_cbor_tag_v1(tag: u64, value: Vec<u8>) -> Vec<u8> {
+fn vega_cbor_tag_v1(tag: u64, value: &[u8]) -> Vec<u8> {
     let mut encoded = vega_cbor_head_v1(6, tag);
-    encoded.extend_from_slice(&value);
+    encoded.extend_from_slice(value);
     encoded
 }

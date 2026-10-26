@@ -412,11 +412,14 @@ mod tests {
             iroha_core_zk::verify_backend(VK_BACKEND, &proof, Some(&key))
                 .expect("valid authorization proof verification completes")
         );
-        for row in 0..31 {
+        for row in 0..kaigi_zk::authorization_v1::KAIGI_AUTHORIZATION_INSTANCE_ROWS_V1 {
             let mut changed = envelope.clone();
             let mut inner: iroha_data_model::zk::NativePipaRProofV1 =
                 norito::decode_canonical(&changed.proof_bytes).unwrap();
-            assert_eq!(inner.public_inputs.len(), 31);
+            assert_eq!(
+                inner.public_inputs.len(),
+                kaigi_zk::authorization_v1::KAIGI_AUTHORIZATION_INSTANCE_ROWS_V1
+            );
             let bytes = &mut inner.public_inputs[row];
             let zero = bytes.iter().all(|byte| *byte == 0);
             bytes.fill(0);

@@ -41,12 +41,12 @@ impl Fixture {
         }
     }
     /// A marker that checks the state lock when it is released on this test's only thread.
-    fn marker(&self, id: u32) -> Option<FoldRetentionV1> {
-        Some(FoldRetentionV1::new(Marker {
+    fn marker(&self, id: u32) -> FoldRetentionV1 {
+        FoldRetentionV1::new(Marker {
             id,
             unlocked: Some(Arc::downgrade(&self.scheduler.0)),
             dropped: Arc::clone(&self.dropped),
-        }))
+        })
     }
     fn dropped(&self) -> Vec<u32> {
         self.dropped.lock().unwrap().clone()
@@ -58,7 +58,7 @@ impl Fixture {
             .take_retained()
             .and_then(FoldRetentionV1::downcast::<Marker>)
             .map(|marker| marker.id);
-        let (_, publication) = attempt.release(self.marker(id));
+        let (_, publication) = attempt.release(Some(self.marker(id)));
         (resumed, publication)
     }
     /// The marker a new attempt's locked prepare resumes, if any.

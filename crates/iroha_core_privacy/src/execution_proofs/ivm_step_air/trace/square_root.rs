@@ -25,7 +25,7 @@ pub(in super::super) fn witness(value: u64, gas: u64) -> d::Witness {
     } else {
         let (mut lo, mut hi) = (0_u64, 1_u64 << 32);
         while lo + 1 < hi {
-            let middle = (lo + hi) / 2;
+            let middle = u64::midpoint(lo, hi);
             if u128::from(middle) * u128::from(middle) <= u128::from(value) {
                 lo = middle;
             } else {
@@ -83,9 +83,7 @@ pub(in super::super) fn append_residues(
     product: &[F],
     sources: Sources<'_>,
     gas_digits: &[F],
-    active: F,
-    out_of_gas: F,
-    assertion_failed: F,
+    (active, out_of_gas, assertion_failed): (F, F, F),
 ) {
     let initial = out.len();
     let success = active.sub(out_of_gas);

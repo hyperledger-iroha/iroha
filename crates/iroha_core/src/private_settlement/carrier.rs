@@ -40,28 +40,28 @@ fn canonical_digest_v1<T: norito::NoritoSerialize>(
 }
 
 /// Hash one exact pre-finality committee-certified bundle.
-pub(crate) fn private_settlement_commit_bundle_digest_v1(
+pub fn private_settlement_commit_bundle_digest_v1(
     bundle: &PrivateSettlementCommitBundleV1,
 ) -> Result<Hash, norito::Error> {
     canonical_digest_v1(COMMIT_BUNDLE_DIGEST_DOMAIN_V1, bundle)
 }
 
 /// Hash the exact direct carrier instruction authorized by the sponsor.
-pub(crate) fn private_settlement_carrier_instruction_digest_v1(
+pub fn private_settlement_carrier_instruction_digest_v1(
     instruction: &FinalizeAtomicPrivateSettlementV1,
 ) -> Result<Hash, norito::Error> {
     canonical_digest_v1(CARRIER_INSTRUCTION_DIGEST_DOMAIN_V1, instruction)
 }
 
 /// Hash the exact direct abort carrier instruction authorized by the sponsor.
-pub(crate) fn private_settlement_abort_carrier_instruction_digest_v1(
+pub fn private_settlement_abort_carrier_instruction_digest_v1(
     instruction: &AbortAtomicPrivateSettlementV1,
 ) -> Result<Hash, norito::Error> {
     canonical_digest_v1(ABORT_CARRIER_INSTRUCTION_DIGEST_DOMAIN_V1, instruction)
 }
 
 /// Hash the exact direct all-Prepare control-lock carrier instruction.
-pub(crate) fn private_settlement_prepare_lock_carrier_instruction_digest_v1(
+pub fn private_settlement_prepare_lock_carrier_instruction_digest_v1(
     instruction: &RegisterAtomicPrivateSettlementPrepareV1,
 ) -> Result<Hash, norito::Error> {
     canonical_digest_v1(
@@ -72,7 +72,7 @@ pub(crate) fn private_settlement_prepare_lock_carrier_instruction_digest_v1(
 
 /// One-shot identity installed from an exact signed carrier transaction.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct PrivateSettlementCarrierBindingV1 {
+pub struct PrivateSettlementCarrierBindingV1 {
     payload_digest: Hash,
     instruction_digest: Hash,
     signed_transaction_bytes: u64,
@@ -121,7 +121,7 @@ impl PrivateSettlementCarrierBindingV1 {
 /// executable must contain that carrier and nothing else, the signed authority
 /// must be the manifest sponsor, and the signed fee intent must be byte-for-byte
 /// equal to the manifest fee intent.
-pub(crate) fn signed_private_settlement_carrier_binding_v1(
+pub fn signed_private_settlement_carrier_binding_v1(
     transaction: &SignedTransaction,
 ) -> Result<Option<PrivateSettlementCarrierBindingV1>, ValidationFail> {
     let explicit_carrier_count = transaction
@@ -243,7 +243,7 @@ fn not_permitted() -> ValidationFail {
 
 /// Closed failure while consuming a transaction-scoped carrier binding.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
-pub(crate) enum PrivateSettlementCarrierBindingErrorV1 {
+pub enum PrivateSettlementCarrierBindingErrorV1 {
     /// No exact direct carrier was installed from the current signed payload.
     #[error("the current signed transaction has no bound private-settlement carrier")]
     MissingBinding,
@@ -551,9 +551,6 @@ mod tests {
         let second = private_settlement_commit_bundle_digest_v1(&bundle)
             .expect("fixture encodes canonically");
         assert_eq!(first, second);
-        assert_ne!(
-            first,
-            Hash::new(&norito::encode_canonical(&bundle).unwrap())
-        );
+        assert_ne!(first, Hash::new(norito::encode_canonical(&bundle).unwrap()));
     }
 }

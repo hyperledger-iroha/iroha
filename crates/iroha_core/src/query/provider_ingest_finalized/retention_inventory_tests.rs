@@ -11,7 +11,7 @@ fn retention_checkpoint_inventory_accepts_only_exact_crash_boundary_sets() {
     archive.insert(second.clone()).expect("insert second");
     archive.insert(third.clone()).expect("insert third");
     let (_prior_fence, _prior_prepared, prior_proposal) =
-        prepared_compaction_for_test(&archive, second.key.clone());
+        prepared_compaction_for_test(&archive, second.key);
     let authority = TestRetentionAuthority::new();
     let binding = authority.binding();
     let prior_approval = ProviderIngestFinalizedArchiveRetentionApprovalRecordV1::try_new(
@@ -25,7 +25,7 @@ fn retention_checkpoint_inventory_accepts_only_exact_crash_boundary_sets() {
     let prior_outcome = compact_for_test(&archive, second.key);
     archive.insert(fourth.clone()).expect("insert fourth");
     let (_approved_fence, approved_prepared, approved_proposal) =
-        prepared_compaction_for_test(&archive, third.key.clone());
+        prepared_compaction_for_test(&archive, third.key);
     let (_alternate_fence, alternate_prepared, _alternate_proposal) =
         prepared_compaction_for_test(&archive, fourth.key);
     let approval = ProviderIngestFinalizedArchiveRetentionApprovalRecordV1::try_new(

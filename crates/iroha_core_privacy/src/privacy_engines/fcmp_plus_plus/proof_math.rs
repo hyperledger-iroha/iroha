@@ -3,6 +3,7 @@
 //! Selene/Helios arithmetic and the exact Blake2b transcript remain here so the IFC1 consensus
 //! codec stays byte-for-byte pinned. The proof equations, IPA, generators container, and MSM
 //! implementation live in `iroha_zkp_halo2::generalized_bulletproof`.
+type CommitmentVectors<P> = (Vec<P>, Vec<P>);
 use super::{
     FcmpNativeErrorV1,
     field::{
@@ -384,7 +385,7 @@ impl ProverTranscript {
         &mut self,
         vector: Vec<S::Point>,
         scalar: Vec<S::Point>,
-    ) -> Result<(Vec<S::Point>, Vec<S::Point>), GeneralizedBulletproofErrorV1>
+    ) -> Result<CommitmentVectors<S::Point>, GeneralizedBulletproofErrorV1>
     where
         Self: SharedProverTranscript<S>,
     {
@@ -493,7 +494,7 @@ impl<'a> VerifierTranscript<'a> {
         &mut self,
         vector_count: usize,
         scalar_count: usize,
-    ) -> Result<(Vec<S::Point>, Vec<S::Point>), FcmpNativeErrorV1> {
+    ) -> Result<CommitmentVectors<S::Point>, FcmpNativeErrorV1> {
         self.digest.update(
             u32::try_from(vector_count)
                 .map_err(|_| FcmpNativeErrorV1::TreeFull)?

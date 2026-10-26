@@ -178,6 +178,10 @@ struct SourceContractGroupFileV1 {
 }
 #[derive(Debug, crate::json_macros::JsonDeserialize)]
 #[norito(deny_unknown_fields)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "Field names are the exact file-name keys of the pinned source-contract fixture schema."
+)]
 struct SourceContractGroupPreimageV1 {
     tests_rs: String,
     commitment_mask_rs: String,
@@ -545,8 +549,7 @@ fn fixture_output_opening_owns_success_error_mismatch_and_unwind_slots() {
     assert_eq!(prover_secret_copy_owner_drops(), 9);
     reset_prover_secret_copy_owner_drops();
     let error = fcmp_fixture_output_opening_v1(0, 0, 0, 0)
-        .err()
-        .expect("identity fixture opening must reject");
+        .expect_err("identity fixture opening must reject");
     assert_eq!(error, FcmpNativeErrorV1::EdwardsPointIdentity);
     assert_eq!(prover_secret_copy_owner_drops(), 8);
     reset_prover_secret_copy_owner_drops();
@@ -565,8 +568,7 @@ fn fixture_output_opening_owns_success_error_mismatch_and_unwind_slots() {
             )
         },
     )
-    .err()
-    .expect("missing positive amount component must mismatch");
+    .expect_err("missing positive amount component must mismatch");
     assert_eq!(mismatch, FcmpNativeErrorV1::RangeCommitmentOpeningMismatch);
     assert_eq!(prover_secret_copy_owner_drops(), 6);
     reset_prover_secret_copy_owner_drops();
@@ -598,7 +600,7 @@ fn fixture_output_opening_owns_success_error_mismatch_and_unwind_slots() {
                         &ED25519_BASEPOINT_POINT,
                         mask_scalar.expose_ref(),
                     );
-                    let amount_point = Zeroizing::new(&*amount_component + &*mask_component);
+                    let amount_point = Zeroizing::new(*amount_component + *mask_component);
                     let _ = core::hint::black_box((
                         &*output_key_point,
                         &*linking_point,
@@ -647,8 +649,7 @@ fn fixture_rerandomization_owns_success_error_and_unwind_slots() {
     assert_eq!(prover_secret_copy_owner_drops(), 16);
     reset_prover_secret_copy_owner_drops();
     let error = fcmp_fixture_rerandomization_v1(61, 67, 71, 0)
-        .err()
-        .expect("zero final rerandomization scalar must reject");
+        .expect_err("zero final rerandomization scalar must reject");
     assert_eq!(error, FcmpNativeErrorV1::ScalarEncoding);
     assert_eq!(prover_secret_copy_owner_drops(), 16);
     reset_prover_secret_copy_owner_drops();
@@ -905,8 +906,7 @@ fn fixture_leaf_coordinate_scope_owns_success_error_and_unwind() {
         },
         hash_selene,
     )
-    .err()
-    .expect("injected third-point conversion failure");
+    .expect_err("injected third-point conversion failure");
     assert_eq!(conversion_error, FcmpNativeErrorV1::EdwardsPointEncoding);
     assert_eq!(conversions.get(), 3);
     assert_eq!(prover_secret_scalar_owner_drops(), 4);
@@ -916,8 +916,7 @@ fn fixture_leaf_coordinate_scope_owns_success_error_and_unwind() {
         secret_edwards_to_wei25519_v1,
         hash_selene,
     )
-    .err()
-    .expect("empty canonical Selene hash must reject");
+    .expect_err("empty canonical Selene hash must reject");
     assert_eq!(empty_hash_error, FcmpNativeErrorV1::BranchWidth);
     assert_eq!(prover_secret_scalar_owner_drops(), 0);
     reset_prover_secret_scalar_owner_drops();
@@ -928,8 +927,7 @@ fn fixture_leaf_coordinate_scope_owns_success_error_and_unwind() {
             Err(FcmpNativeErrorV1::ArithmeticInvariant)
         },
     )
-    .err()
-    .expect("injected hash failure");
+    .expect_err("injected hash failure");
     assert_eq!(hash_error, FcmpNativeErrorV1::ArithmeticInvariant);
     assert_eq!(prover_secret_scalar_owner_drops(), 12);
     reset_prover_secret_scalar_owner_drops();
@@ -939,9 +937,7 @@ fn fixture_leaf_coordinate_scope_owns_success_error_and_unwind() {
             with_fcmp_fixture_leaf_coordinate_owners_v1(
                 &leaves,
                 |point| {
-                    if conversions == 2 {
-                        panic!("exercise hidden-leaf conversion unwind");
-                    }
+                    assert!(conversions != 2, "exercise hidden-leaf conversion unwind");
                     conversions += 1;
                     secret_edwards_to_wei25519_v1(point)
                 },
@@ -1277,8 +1273,7 @@ fn fixture_secret_cycle_source_has_no_raw_coordinate_hash_or_branch_boundary() {
 #[test]
 fn invalid_path_fixture_replacement_owns_success_error_and_zeroize_slots() {
     reset_prover_secret_copy_owner_drops();
-    let mut helios_values = Vec::with_capacity(1);
-    helios_values.push(HelioseleneField::ONE);
+    let helios_values = vec![HelioseleneField::ONE];
     let helios_capacity = helios_values.capacity();
     let helios_pointer = helios_values.as_ptr();
     let mut helios = AdditionalBranch::ToHelios(helios_values);
@@ -1306,8 +1301,7 @@ fn invalid_path_fixture_replacement_owns_success_error_and_zeroize_slots() {
     };
     assert!(helios_values.is_empty());
     reset_prover_secret_copy_owner_drops();
-    let mut selene_values = Vec::with_capacity(1);
-    selene_values.push(Field25519::ONE);
+    let selene_values = vec![Field25519::ONE];
     let selene_capacity = selene_values.capacity();
     let selene_pointer = selene_values.as_ptr();
     let mut selene = AdditionalBranch::ToSelene(selene_values);

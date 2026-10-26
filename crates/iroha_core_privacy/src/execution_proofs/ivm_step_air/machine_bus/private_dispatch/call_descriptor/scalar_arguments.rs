@@ -162,7 +162,7 @@ impl<'p> Schedule<'p> {
         })
     }
     fn clock(&self, slot: usize) -> u32 {
-        self.first_clock + slot as u32
+        self.first_clock + u32::try_from(slot).expect("validated player or port count")
     }
     fn original(&self) -> super::Schedule {
         super::Schedule::with_clocks(
@@ -237,13 +237,16 @@ fn activity(schedule: &Schedule<'_>, row: &Row<'_>, index: usize) -> F {
 }
 fn read_header(
     out: &mut Vec<F>,
+
     p: &[F; packet::WIDTH],
+
     schedule: &Schedule<'_>,
+
     index: usize,
+
     port: usize,
-    space: Space,
-    generation: F,
-    cell: F,
+    (space, generation, cell): (Space, F, F),
+
     enabled: F,
 ) {
     let space = F(space as u64);
@@ -320,9 +323,7 @@ fn append_word(out: &mut Vec<F>, schedule: &Schedule<'_>, row: &Row<'_>, index: 
         schedule,
         index,
         EARLY,
-        Space::Initialization,
-        parent,
-        cell,
+        (Space::Initialization, parent, cell),
         enabled,
     );
     out.push(p[EARLY][BEFORE].sub(pack(&w[INITIALIZED..INITIALIZED + 16])));
@@ -335,15 +336,15 @@ fn append_word(out: &mut Vec<F>, schedule: &Schedule<'_>, row: &Row<'_>, index: 
         out.push(chosen.mul(F::ONE.sub(w[INITIALIZED + byte])));
     }
     // Memory permissions repeat the exact parent bitmap after WORD gas.
-    for field in 0..packet::WIDTH {
+    for (field, (early, late)) in p[EARLY].iter().zip(&p[LATE]).enumerate() {
         let expected = if field == CLOCK {
             enabled.mul(F(u64::from(
                 schedule.clock(schedule.shape.word_slot(index, LATE)),
             )))
         } else {
-            p[EARLY][field]
+            *early
         };
-        out.push(p[LATE][field].sub(expected));
+        out.push(late.sub(expected));
     }
     for (port, gas, borrow, charge) in [(NODE, NODE_GAS, NODE_BORROW, 1), (DEBIT, GAS, BORROW, 8)] {
         let previous = if port == DEBIT {
@@ -393,9 +394,7 @@ fn append_word(out: &mut Vec<F>, schedule: &Schedule<'_>, row: &Row<'_>, index: 
         schedule,
         index,
         MEMORY,
-        Space::Memory,
-        F::ZERO,
-        cell,
+        (Space::Memory, F::ZERO, cell),
         enabled,
     );
     out.push(p[MEMORY][BEFORE_TAG].sub(pack(&w[PRIVATE..PRIVATE + 16])));
@@ -540,8 +539,7 @@ pub(super) fn append_residues(
         }
         private_history::append_residues(
             out,
-            history.current,
-            history.next,
+            (history.current, history.next),
             history.aux,
             history.next_aux,
             history.fixed,

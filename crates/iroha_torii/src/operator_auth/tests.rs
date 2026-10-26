@@ -91,9 +91,8 @@ fn test_bootstrap_token(label: &str) -> String {
 fn test_session_token(seed: u8) -> String {
     encode_b64url(&[seed; SESSION_TOKEN_BYTES])
 }
-fn build_operator_auth(config: ToriiOperatorAuth, data_dir: &Path) -> OperatorAuth {
-    OperatorAuth::new(config, data_dir.to_path_buf(), MaybeTelemetry::disabled())
-        .expect("operator auth")
+fn build_operator_auth(config: &ToriiOperatorAuth, data_dir: &Path) -> OperatorAuth {
+    OperatorAuth::new(config, data_dir, MaybeTelemetry::disabled()).expect("operator auth")
 }
 fn session_authority(auth: &OperatorAuth) -> EnrollmentAuthority {
     EnrollmentAuthority::Session(
@@ -157,7 +156,7 @@ fn credential_inventory_is_stable_and_never_exposes_public_keys() {
         OperatorAuthLockout::default(),
         vec![OperatorWebAuthnAlgorithm::Es256],
     );
-    let auth = build_operator_auth(config, tempdir.path());
+    let auth = build_operator_auth(&(config), tempdir.path());
     auth.insert_credential(
         es256_credential(b"z-credential", 7, 200),
         session_authority(&auth),
@@ -202,7 +201,7 @@ fn credential_deletion_requires_a_canonical_bounded_known_id() {
         OperatorAuthLockout::default(),
         vec![OperatorWebAuthnAlgorithm::Es256],
     );
-    let auth = build_operator_auth(config, tempdir.path());
+    let auth = build_operator_auth(&(config), tempdir.path());
     auth.insert_credential(
         es256_credential(b"delete-me", 0, 1),
         session_authority(&auth),
@@ -249,7 +248,7 @@ fn last_credential_requires_a_bootstrap_recovery_path() {
         OperatorAuthLockout::default(),
         vec![OperatorWebAuthnAlgorithm::Es256],
     );
-    let auth = build_operator_auth(config, tempdir.path());
+    let auth = build_operator_auth(&(config), tempdir.path());
     auth.insert_credential(
         es256_credential(b"only-credential", 0, 1),
         session_authority(&auth),
@@ -263,7 +262,7 @@ fn last_credential_requires_a_bootstrap_recovery_path() {
         vec![OperatorWebAuthnAlgorithm::Es256],
     );
     no_bootstrap.tokens.clear();
-    let restarted = build_operator_auth(no_bootstrap, tempdir.path());
+    let restarted = build_operator_auth(&(no_bootstrap), tempdir.path());
     let error = restarted
         .delete_credential(
             &encode_b64url(b"only-credential"),
@@ -286,7 +285,7 @@ fn last_credential_requires_a_bootstrap_recovery_path() {
         OperatorAuthLockout::default(),
         vec![OperatorWebAuthnAlgorithm::Es256],
     );
-    let restarted = build_operator_auth(with_bootstrap, tempdir.path());
+    let restarted = build_operator_auth(&(with_bootstrap), tempdir.path());
     let deleted = restarted
         .delete_credential(
             &encode_b64url(b"only-credential"),
@@ -303,7 +302,7 @@ fn credential_deletion_is_persisted_across_restart() {
         OperatorAuthLockout::default(),
         vec![OperatorWebAuthnAlgorithm::Es256],
     );
-    let auth = build_operator_auth(config, tempdir.path());
+    let auth = build_operator_auth(&(config), tempdir.path());
     auth.insert_credential(es256_credential(b"removed", 0, 1), session_authority(&auth))
         .expect("insert removed credential");
     auth.insert_credential(
@@ -324,7 +323,7 @@ fn credential_deletion_is_persisted_across_restart() {
         vec![OperatorWebAuthnAlgorithm::Es256],
     );
     restart.tokens.clear();
-    let restarted = build_operator_auth(restart, tempdir.path());
+    let restarted = build_operator_auth(&(restart), tempdir.path());
     let credentials = restarted.credentials_read().expect("credential state");
     assert_eq!(credentials.len(), 1);
     assert_eq!(credentials[0].id, b"retained");
@@ -337,7 +336,7 @@ fn credential_deletion_changes_nothing_when_persistence_fails() {
         OperatorAuthLockout::default(),
         vec![OperatorWebAuthnAlgorithm::Es256],
     );
-    let mut auth = build_operator_auth(config, tempdir.path());
+    let mut auth = build_operator_auth(&(config), tempdir.path());
     auth.insert_credential(
         es256_credential(b"delete-me", 0, 1),
         session_authority(&auth),
@@ -389,7 +388,7 @@ fn credential_deletion_invalidates_all_sessions_and_challenges() {
         OperatorAuthLockout::default(),
         vec![OperatorWebAuthnAlgorithm::Es256],
     );
-    let auth = build_operator_auth(config, tempdir.path());
+    let auth = build_operator_auth(&(config), tempdir.path());
     auth.insert_credential(es256_credential(b"revoked", 0, 1), session_authority(&auth))
         .expect("insert revoked credential");
     auth.insert_credential(
@@ -429,7 +428,7 @@ fn credential_deletion_rechecks_each_captured_session_generation() {
         OperatorAuthLockout::default(),
         vec![OperatorWebAuthnAlgorithm::Es256],
     );
-    let auth = build_operator_auth(config, tempdir.path());
+    let auth = build_operator_auth(&(config), tempdir.path());
     auth.insert_credential(
         es256_credential(b"first-delete", 0, 1),
         session_authority(&auth),
@@ -525,7 +524,7 @@ fn credential_deletion_rejects_an_in_flight_stale_session_enrollment() {
         OperatorAuthLockout::default(),
         vec![OperatorWebAuthnAlgorithm::Es256],
     );
-    let auth = build_operator_auth(config, tempdir.path());
+    let auth = build_operator_auth(&(config), tempdir.path());
     auth.insert_credential(es256_credential(b"revoked", 0, 1), session_authority(&auth))
         .expect("insert revoked credential");
     auth.insert_credential(
@@ -571,8 +570,8 @@ fn origin_allows_default_port_and_trailing_slash() {
 fn credential_id_requires_matching_id_and_raw_id() {
     let encoded = encode_b64url(b"credential");
     let payload = json_object(vec![
-        json_entry("id", encoded.clone()),
-        json_entry("rawId", encoded),
+        json_entry("id", &(encoded)),
+        json_entry("rawId", &(encoded)),
     ]);
     let object = payload.as_object().expect("credential object");
     assert_eq!(
@@ -581,14 +580,14 @@ fn credential_id_requires_matching_id_and_raw_id() {
     );
 
     let mismatch = json_object(vec![
-        json_entry("id", encode_b64url(b"credential-a")),
-        json_entry("rawId", encode_b64url(b"credential-b")),
+        json_entry("id", &(encode_b64url(b"credential-a"))),
+        json_entry("rawId", &(encode_b64url(b"credential-b"))),
     ]);
     let error = parse_credential_id(mismatch.as_object().expect("credential object"))
         .expect_err("mismatched identifiers must fail closed");
     assert_eq!(error.code, "operator_webauthn_payload_invalid");
 
-    let missing_raw_id = json_object(vec![json_entry("id", encode_b64url(b"credential"))]);
+    let missing_raw_id = json_object(vec![json_entry("id", &(encode_b64url(b"credential")))]);
     assert!(parse_credential_id(missing_raw_id.as_object().expect("credential object")).is_err());
 }
 #[test]
@@ -630,7 +629,7 @@ async fn webauthn_options_require_an_exact_empty_body() {
 #[test]
 fn client_data_rejects_cross_origin_contexts() {
     for extra in [
-        json_entry("crossOrigin", true),
+        json_entry("crossOrigin", &(true)),
         json_entry("topOrigin", "https://embedder.example"),
     ] {
         let payload = json_object(vec![
@@ -659,7 +658,7 @@ fn credentials_lock_fails_closed_after_poison() {
         },
         vec![OperatorWebAuthnAlgorithm::Es256],
     );
-    let auth = build_operator_auth(config, tempdir.path());
+    let auth = build_operator_auth(&(config), tempdir.path());
     {
         let mut creds = auth.credentials_write().expect("credential lock");
         creds.push(StoredCredential {
@@ -687,7 +686,7 @@ fn credential_store_uncertainty_quarantines_memory_and_authorizations() {
         OperatorAuthLockout::default(),
         vec![OperatorWebAuthnAlgorithm::Es256],
     );
-    let auth = build_operator_auth(config, tempdir.path());
+    let auth = build_operator_auth(&(config), tempdir.path());
     auth.credentials_write()
         .expect("credential lock")
         .push(es256_credential(b"quarantine", 0, 1));
@@ -733,11 +732,7 @@ fn operator_auth_rejects_zero_ephemeral_duration() {
         .expect("WebAuthn config")
         .challenge_ttl = Duration::ZERO;
 
-    let error = match OperatorAuth::new(
-        config,
-        tempdir.path().to_path_buf(),
-        MaybeTelemetry::disabled(),
-    ) {
+    let error = match OperatorAuth::new(&(config), tempdir.path(), MaybeTelemetry::disabled()) {
         Ok(_) => panic!("zero challenge TTL must fail initialization"),
         Err(error) => error,
     };
@@ -753,11 +748,7 @@ fn operator_auth_requires_an_exact_first_enrollment_path() {
     );
     config.tokens.clear();
     assert!(matches!(
-        OperatorAuth::new(
-            config,
-            tempdir.path().to_path_buf(),
-            MaybeTelemetry::disabled(),
-        ),
+        OperatorAuth::new(&(config), tempdir.path(), MaybeTelemetry::disabled(),),
         Err(OperatorAuthInitError::InvalidPolicy(_))
     ));
 
@@ -796,8 +787,8 @@ fn operator_auth_requires_an_exact_first_enrollment_path() {
     .expect("non-zero capacity");
     assert!(matches!(
         OperatorAuth::new(
-            oversized_capacity,
-            tempdir.path().to_path_buf(),
+            &(oversized_capacity),
+            tempdir.path(),
             MaybeTelemetry::disabled(),
         ),
         Err(OperatorAuthInitError::InvalidPolicy(_))
@@ -811,7 +802,7 @@ fn enrolled_operator_auth_restarts_without_a_bootstrap_token() {
         OperatorAuthLockout::default(),
         vec![OperatorWebAuthnAlgorithm::Es256],
     );
-    let auth = build_operator_auth(config, tempdir.path());
+    let auth = build_operator_auth(&config, tempdir.path());
     let signing_key =
         SigningKey::try_generate_from_rng(&mut SysRng).expect("test key entropy available");
     auth.insert_credential(
@@ -837,12 +828,8 @@ fn enrolled_operator_auth_restarts_without_a_bootstrap_token() {
         vec![OperatorWebAuthnAlgorithm::Es256],
     );
     restart.tokens.clear();
-    let restarted = OperatorAuth::new(
-        restart,
-        tempdir.path().to_path_buf(),
-        MaybeTelemetry::disabled(),
-    )
-    .expect("persisted credential owns restart admission");
+    let restarted = OperatorAuth::new(&(restart), tempdir.path(), MaybeTelemetry::disabled())
+        .expect("persisted credential owns restart admission");
     assert!(restarted.has_credentials().expect("credential state"));
 }
 #[tokio::test]
@@ -855,7 +842,7 @@ async fn operator_auth_preserves_fractional_per_minute_rate() {
     );
     config.rate_per_minute = std::num::NonZeroU32::new(1);
     config.burst = std::num::NonZeroU32::new(1);
-    let auth = build_operator_auth(config, tempdir.path());
+    let auth = build_operator_auth(&(config), tempdir.path());
 
     assert!(auth.limiter.allow("operator").await);
     assert!(!auth.limiter.allow("operator").await);
@@ -873,7 +860,7 @@ fn registration_options_reports_challenge_rng_failure() {
         OperatorAuthLockout::default(),
         vec![OperatorWebAuthnAlgorithm::Es256],
     );
-    let auth = build_operator_auth(config, tempdir.path());
+    let auth = build_operator_auth(&(config), tempdir.path());
     let ctx = AuthContext {
         key: "registration-rng".to_owned(),
         enrollment_authority: EnrollmentAuthority::None,
@@ -893,7 +880,7 @@ fn authentication_options_reports_challenge_rng_failure() {
         OperatorAuthLockout::default(),
         vec![OperatorWebAuthnAlgorithm::Es256],
     );
-    let auth = build_operator_auth(config, tempdir.path());
+    let auth = build_operator_auth(&(config), tempdir.path());
     auth.credentials_write()
         .expect("credential lock")
         .push(StoredCredential {
@@ -923,7 +910,7 @@ fn challenge_and_session_admission_fail_closed_at_capacity() {
         vec![OperatorWebAuthnAlgorithm::Es256],
     );
     config.ephemeral_state_capacity = NonZeroUsize::new(1).expect("non-zero capacity");
-    let auth = build_operator_auth(config, tempdir.path());
+    let auth = build_operator_auth(&(config), tempdir.path());
     auth.credentials_write()
         .expect("credential lock")
         .push(StoredCredential {
@@ -966,7 +953,7 @@ fn issue_session_reports_token_rng_failure() {
         OperatorAuthLockout::default(),
         vec![OperatorWebAuthnAlgorithm::Es256],
     );
-    let auth = build_operator_auth(config, tempdir.path());
+    let auth = build_operator_auth(&(config), tempdir.path());
     let err = match auth.issue_session_with_rng(
         b"credential-id",
         Duration::from_secs(60),
@@ -1054,14 +1041,14 @@ fn operator_session_header_accepts_only_one_canonical_32_byte_token() {
 async fn session_header_missing_and_invalid_errors_are_exact_across_auth_paths() {
     let tempdir = tempfile::tempdir().expect("tempdir");
     let auth = build_operator_auth(
-        base_operator_auth_config(
+        &(base_operator_auth_config(
             vec!["bootstrap".to_owned()],
             OperatorAuthLockout {
                 failures: None,
                 ..OperatorAuthLockout::default()
             },
             vec![OperatorWebAuthnAlgorithm::Es256],
-        ),
+        )),
         tempdir.path(),
     );
 
@@ -1206,7 +1193,11 @@ fn build_auth_data_registration(
     auth_data.push(flags);
     auth_data.extend_from_slice(&sign_count.to_be_bytes());
     auth_data.extend_from_slice(&[0u8; 16]);
-    auth_data.extend_from_slice(&(credential_id.len() as u16).to_be_bytes());
+    auth_data.extend_from_slice(
+        &u16::try_from(credential_id.len())
+            .expect("fixture credential length fits u16")
+            .to_be_bytes(),
+    );
     auth_data.extend_from_slice(credential_id);
     auth_data.extend_from_slice(cose_key);
     auth_data
@@ -1228,14 +1219,14 @@ fn build_registration_payload(
     attestation_object: &[u8],
 ) -> norito::json::Value {
     let response = json_object(vec![
-        json_entry("clientDataJSON", encode_b64url(client_data_json)),
-        json_entry("attestationObject", encode_b64url(attestation_object)),
+        json_entry("clientDataJSON", &(encode_b64url(client_data_json))),
+        json_entry("attestationObject", &(encode_b64url(attestation_object))),
     ]);
     let credential_id = encode_b64url(credential_id);
     json_object(vec![
-        json_entry("id", credential_id.clone()),
-        json_entry("rawId", credential_id),
-        json_entry("response", response),
+        json_entry("id", &(credential_id)),
+        json_entry("rawId", &(credential_id)),
+        json_entry("response", &(response)),
         json_entry("type", "public-key"),
     ])
 }
@@ -1246,15 +1237,15 @@ fn build_assertion_payload(
     signature: &[u8],
 ) -> norito::json::Value {
     let response = json_object(vec![
-        json_entry("clientDataJSON", encode_b64url(client_data_json)),
-        json_entry("authenticatorData", encode_b64url(authenticator_data)),
-        json_entry("signature", encode_b64url(signature)),
+        json_entry("clientDataJSON", &(encode_b64url(client_data_json))),
+        json_entry("authenticatorData", &(encode_b64url(authenticator_data))),
+        json_entry("signature", &(encode_b64url(signature))),
     ]);
     let credential_id = encode_b64url(credential_id);
     json_object(vec![
-        json_entry("id", credential_id.clone()),
-        json_entry("rawId", credential_id),
-        json_entry("response", response),
+        json_entry("id", &(credential_id)),
+        json_entry("rawId", &(credential_id)),
+        json_entry("response", &(response)),
         json_entry("type", "public-key"),
     ])
 }
@@ -1345,7 +1336,7 @@ async fn operator_auth_registration_login_and_rollover_es256() {
         OperatorAuthLockout::default(),
         vec![OperatorWebAuthnAlgorithm::Es256],
     );
-    let auth = build_operator_auth(config, tempdir.path());
+    let auth = build_operator_auth(&(config), tempdir.path());
     let headers = headers_with_operator_token("bootstrap");
     let ctx = auth
         .authorize_bootstrap(&headers, Some(loopback_ip()), ACTION_REGISTER_OPTIONS)
@@ -1440,7 +1431,7 @@ fn authentication_counter_changes_only_after_persistence_succeeds() {
         OperatorAuthLockout::default(),
         vec![OperatorWebAuthnAlgorithm::Es256],
     );
-    let mut auth = build_operator_auth(config, tempdir.path());
+    let mut auth = build_operator_auth(&config, tempdir.path());
     let signing_key =
         SigningKey::try_generate_from_rng(&mut SysRng).expect("test key entropy available");
     let credential_id = random_bytes(16).expect("credential id");
@@ -1504,7 +1495,7 @@ fn authentication_counter_cannot_fall_back_to_zero() {
         OperatorAuthLockout::default(),
         vec![OperatorWebAuthnAlgorithm::Es256],
     );
-    let auth = build_operator_auth(config, tempdir.path());
+    let auth = build_operator_auth(&config, tempdir.path());
     let signing_key =
         SigningKey::try_generate_from_rng(&mut SysRng).expect("test key entropy available");
     let credential_id = random_bytes(16).expect("credential id");
@@ -1612,11 +1603,7 @@ fn persisted_credentials_are_validated_strictly_at_startup() {
             OperatorAuthLockout::default(),
             vec![OperatorWebAuthnAlgorithm::Es256],
         );
-        let error = match OperatorAuth::new(
-            config,
-            tempdir.path().to_path_buf(),
-            MaybeTelemetry::disabled(),
-        ) {
+        let error = match OperatorAuth::new(&(config), tempdir.path(), MaybeTelemetry::disabled()) {
             Ok(_) => panic!("{label} must fail startup"),
             Err(error) => error,
         };
@@ -1640,11 +1627,7 @@ fn persisted_credential_file_is_bounded_before_json_allocation() {
     );
     config.credential_capacity = capacity;
     assert!(matches!(
-        OperatorAuth::new(
-            config,
-            tempdir.path().to_path_buf(),
-            MaybeTelemetry::disabled(),
-        ),
+        OperatorAuth::new(&(config), tempdir.path(), MaybeTelemetry::disabled(),),
         Err(OperatorAuthInitError::CredentialLoad(_))
     ));
 }
@@ -1838,25 +1821,17 @@ fn credential_store_rejects_a_second_live_owner() {
         OperatorAuthLockout::default(),
         vec![OperatorWebAuthnAlgorithm::Es256],
     );
-    let owner = build_operator_auth(config.clone(), tempdir.path());
+    let owner = build_operator_auth(&(config), tempdir.path());
 
-    let error = match OperatorAuth::new(
-        config.clone(),
-        tempdir.path().to_path_buf(),
-        MaybeTelemetry::disabled(),
-    ) {
+    let error = match OperatorAuth::new(&(config), tempdir.path(), MaybeTelemetry::disabled()) {
         Ok(_) => panic!("a second credential-store owner must be rejected"),
         Err(error) => error,
     };
     assert!(matches!(error, OperatorAuthInitError::CredentialLoad(_)));
 
     drop(owner);
-    OperatorAuth::new(
-        config,
-        tempdir.path().to_path_buf(),
-        MaybeTelemetry::disabled(),
-    )
-    .expect("credential-store ownership is released on drop");
+    OperatorAuth::new(&(config), tempdir.path(), MaybeTelemetry::disabled())
+        .expect("credential-store ownership is released on drop");
 }
 #[cfg(any(target_vendor = "apple", target_os = "linux"))]
 #[test]
@@ -2008,11 +1983,7 @@ fn credential_capacity_is_enforced_for_load_and_rollover() {
         vec![OperatorWebAuthnAlgorithm::Es256],
     );
     config.credential_capacity = NonZeroUsize::new(1).expect("non-zero capacity");
-    let error = match OperatorAuth::new(
-        config,
-        tempdir.path().to_path_buf(),
-        MaybeTelemetry::disabled(),
-    ) {
+    let error = match OperatorAuth::new(&(config), tempdir.path(), MaybeTelemetry::disabled()) {
         Ok(_) => panic!("oversized credential store must fail startup"),
         Err(error) => error,
     };
@@ -2025,7 +1996,7 @@ fn credential_capacity_is_enforced_for_load_and_rollover() {
         vec![OperatorWebAuthnAlgorithm::Es256],
     );
     config.credential_capacity = NonZeroUsize::new(1).expect("non-zero capacity");
-    let auth = build_operator_auth(config, empty.path());
+    let auth = build_operator_auth(&(config), empty.path());
     let credential = |id| StoredCredential {
         id: vec![id],
         public_key: signing_key
@@ -2067,11 +2038,7 @@ fn persisted_credential_algorithm_must_match_active_policy() {
         OperatorAuthLockout::default(),
         vec![OperatorWebAuthnAlgorithm::Ed25519],
     );
-    let error = match OperatorAuth::new(
-        config,
-        tempdir.path().to_path_buf(),
-        MaybeTelemetry::disabled(),
-    ) {
+    let error = match OperatorAuth::new(&(config), tempdir.path(), MaybeTelemetry::disabled()) {
         Ok(_) => panic!("credential outside active algorithm policy must fail startup"),
         Err(error) => error,
     };
@@ -2085,7 +2052,7 @@ async fn operator_token_only_bootstraps_credential_enrollment() {
         OperatorAuthLockout::default(),
         vec![OperatorWebAuthnAlgorithm::Es256],
     );
-    let auth = build_operator_auth(config, tempdir.path());
+    let auth = build_operator_auth(&(config), tempdir.path());
     let headers = headers_with_operator_token("operator-token");
     auth.authorize_bootstrap(&headers, Some(loopback_ip()), ACTION_REGISTER_OPTIONS)
         .await
@@ -2104,7 +2071,7 @@ fn bootstrap_enrollment_cannot_race_past_first_credential() {
         OperatorAuthLockout::default(),
         vec![OperatorWebAuthnAlgorithm::Es256],
     );
-    let auth = build_operator_auth(config, tempdir.path());
+    let auth = build_operator_auth(&config, tempdir.path());
     let public_key = SigningKey::try_generate_from_rng(&mut SysRng)
         .expect("test key entropy available")
         .verifying_key()
@@ -2143,7 +2110,7 @@ async fn persisted_first_credential_disables_bootstrap_after_restart() {
         OperatorAuthLockout::default(),
         vec![OperatorWebAuthnAlgorithm::Es256],
     );
-    let auth = build_operator_auth(config.clone(), tempdir.path());
+    let auth = build_operator_auth(&config, tempdir.path());
     let public_key = SigningKey::try_generate_from_rng(&mut SysRng)
         .expect("test key entropy available")
         .verifying_key()
@@ -2163,7 +2130,7 @@ async fn persisted_first_credential_disables_bootstrap_after_restart() {
     .expect("first credential should persist");
     drop(auth);
 
-    let restarted = build_operator_auth(config, tempdir.path());
+    let restarted = build_operator_auth(&(config), tempdir.path());
     let headers = headers_with_operator_token("bootstrap");
     let error = restarted
         .authorize_bootstrap(&headers, Some(loopback_ip()), ACTION_REGISTER_OPTIONS)
@@ -2179,7 +2146,7 @@ async fn api_token_never_bootstraps_operator_auth() {
         OperatorAuthLockout::default(),
         vec![OperatorWebAuthnAlgorithm::Es256],
     );
-    let auth = build_operator_auth(config, tempdir.path());
+    let auth = build_operator_auth(&(config), tempdir.path());
     let mut headers = base_headers();
     headers.insert("x-api-token", HeaderValue::from_static("bootstrap"));
     let error = auth
@@ -2201,7 +2168,7 @@ async fn operator_auth_enforces_mtls_and_lockout() {
         vec![OperatorWebAuthnAlgorithm::Es256],
     );
     config.require_mtls = true;
-    let auth = build_operator_auth(config, tempdir.path());
+    let auth = build_operator_auth(&(config), tempdir.path());
     let err = auth
         .authorize_login(&base_headers(), None, ACTION_LOGIN_OPTIONS)
         .await
@@ -2238,7 +2205,7 @@ fn login_options_do_not_clear_assertion_failures() {
     };
     let config =
         base_operator_auth_config(Vec::new(), lockout, vec![OperatorWebAuthnAlgorithm::Es256]);
-    let auth = build_operator_auth(config, tempdir.path());
+    let auth = build_operator_auth(&(config), tempdir.path());
     auth.credentials_write()
         .expect("credential lock")
         .push(StoredCredential {
@@ -2271,7 +2238,7 @@ fn operational_errors_do_not_advance_lockout() {
     };
     let config =
         base_operator_auth_config(Vec::new(), lockout, vec![OperatorWebAuthnAlgorithm::Es256]);
-    let auth = build_operator_auth(config, tempdir.path());
+    let auth = build_operator_auth(&(config), tempdir.path());
     let ctx = AuthContext {
         key: "caller".to_owned(),
         enrollment_authority: EnrollmentAuthority::None,
@@ -2297,7 +2264,7 @@ async fn full_lockout_state_does_not_starve_valid_unseen_identity() {
     let mut config =
         base_operator_auth_config(Vec::new(), lockout, vec![OperatorWebAuthnAlgorithm::Es256]);
     config.ephemeral_state_capacity = NonZeroUsize::new(1).expect("non-zero capacity");
-    let auth = build_operator_auth(config, tempdir.path());
+    let auth = build_operator_auth(&(config), tempdir.path());
     auth.lockout
         .record_failure("198.51.100.1")
         .expect("first identity fits");
@@ -2423,7 +2390,7 @@ async fn operator_auth_rejects_forwarded_mtls_from_untrusted_proxy() {
         vec![OperatorWebAuthnAlgorithm::Es256],
     );
     config.require_mtls = true;
-    let auth = build_operator_auth(config, tempdir.path());
+    let auth = build_operator_auth(&(config), tempdir.path());
     let mut headers = base_headers();
     headers.insert(
         HEADER_MTLS_FORWARD,
@@ -2447,7 +2414,7 @@ async fn operator_auth_key_uses_remote_ip_when_internal_header_missing() {
         OperatorAuthLockout::default(),
         vec![OperatorWebAuthnAlgorithm::Es256],
     );
-    let auth = build_operator_auth(config, tempdir.path());
+    let auth = build_operator_auth(&(config), tempdir.path());
     let remote_ip: IpAddr = "198.51.100.33".parse().expect("remote ip");
     let ctx = auth
         .authorize_login(&HeaderMap::new(), Some(remote_ip), ACTION_LOGIN_OPTIONS)
@@ -2463,7 +2430,7 @@ async fn operator_auth_key_prefers_injected_header_over_transport_remote_ip() {
         OperatorAuthLockout::default(),
         vec![OperatorWebAuthnAlgorithm::Es256],
     );
-    let auth = build_operator_auth(config, tempdir.path());
+    let auth = build_operator_auth(&(config), tempdir.path());
     let mut headers = HeaderMap::new();
     headers.insert(
         limits::REMOTE_ADDR_HEADER,
@@ -2597,9 +2564,9 @@ fn es256_signature_verify_rejects_high_s_signature_material() {
     let low_s_bytes = low_s.to_bytes();
     let mut high_s_bytes = [0_u8; 64];
     high_s_bytes[..32].copy_from_slice(&low_s_bytes[..32]);
-    let mut borrow = 0_u16;
+    let mut borrow = 0_u8;
     for i in (0..32).rev() {
-        let minuend = i16::from(P256_ORDER[i]) - i16::from(borrow as u8);
+        let minuend = i16::from(P256_ORDER[i]) - i16::from(borrow);
         let subtrahend = i16::from(low_s_bytes[32 + i]);
         if minuend >= subtrahend {
             high_s_bytes[32 + i] =

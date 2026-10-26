@@ -115,7 +115,7 @@ fn actual_charged_load_then_unload_exports_same_chain_native_absorption() {
         &mut setup,
         41,
         load.clone(),
-        Some(ledger_error("permanent replay key conflicts")),
+        Some(&ledger_error("permanent replay key conflicts")),
     );
     let retry = execute(&mut setup, 41, unload.clone(), None);
     assert_ne!(retry, unload_transaction);
@@ -134,7 +134,7 @@ fn actual_charged_load_then_unload_exports_same_chain_native_absorption() {
         &mut setup,
         41,
         stale,
-        Some(ledger_error("permanent replay key conflicts")),
+        Some(&ledger_error("permanent replay key conflicts")),
     );
     assert_eq!(ledger_rows(&setup), rows);
     require_conservation(&setup, [892, 0, 8, 100]);

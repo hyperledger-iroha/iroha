@@ -51,7 +51,7 @@ fn document_and_time_buffers_clear_after_partial_and_semantic_errors() {
         .enumerate()
         .map(|(offset, &value)| ZkX509Rfc5280SourceCellV1 {
             document: 1,
-            address: offset as u16,
+            address: u16::try_from(offset).expect("fixture value fits u16"),
             value,
         })
         .collect();
@@ -88,9 +88,7 @@ fn semantic_owner_clears_late_failure_success_and_unwind() {
         let (result, observations) = observe_v1(|| {
             std::panic::catch_unwind(move || {
                 let _owned = owned;
-                if unwind {
-                    panic!("injected with complete semantic owner");
-                }
+                assert!(!unwind, "injected with complete semantic owner")
             })
         });
         assert_eq!(result.is_err(), unwind);

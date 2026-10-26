@@ -3,7 +3,7 @@ use super::*;
 use crate::RelayRole;
 use futures::FutureExt;
 use iroha_crypto::{Algorithm, KeyPair};
-use iroha_data_model::peer::Peer;
+use iroha_model_base::peer::Peer;
 
 fn peer(seed: u8) -> Peer {
     let key = KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal).unwrap();

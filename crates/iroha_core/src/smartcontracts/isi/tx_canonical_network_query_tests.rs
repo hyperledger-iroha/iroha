@@ -219,7 +219,7 @@ fn canonical_query_keeps_sealed_outer_identity_authority_time_and_result_filters
     ));
 }
 
-fn replace_outputs_untrusted(block: &SignedBlock, rows: Vec<ExecutionOutputV1>) -> SignedBlock {
+fn replace_outputs_untrusted(block: &SignedBlock, rows: &Vec<ExecutionOutputV1>) -> SignedBlock {
     let mut value = norito::json::to_value(block).unwrap();
     value
         .as_object_mut()
@@ -228,7 +228,7 @@ fn replace_outputs_untrusted(block: &SignedBlock, rows: Vec<ExecutionOutputV1>) 
         .unwrap()
         .as_object_mut()
         .unwrap()
-        .insert("outputs".into(), norito::json::to_value(&rows).unwrap());
+        .insert("outputs".into(), norito::json::to_value(rows).unwrap());
     norito::json::from_value(value).unwrap()
 }
 
@@ -262,7 +262,7 @@ fn canonical_query_refuses_resultless_missing_foreign_and_internal_substituted_r
                 rows.swap(0, 1);
             }
         }
-        let untrusted = replace_outputs_untrusted(&block, rows);
+        let untrusted = replace_outputs_untrusted(&block, &(rows));
         let before = untrusted.encode_wire().unwrap();
         assert!(
             matches!(

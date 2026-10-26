@@ -39,7 +39,8 @@ does not need to be proved inside the arithmetic circuit. The full public input 
 Fiat–Shamir transcript before commitments/challenges are used. A replaceable prover learns no wallet
 secret and cannot choose a different result or replay without generating another valid proof.
 
-Settlement must use `verify_game_proof_for_history_v1`. It compares the actual retained checkpoint and
+Settlement must use `verify_game_proof_for_history_v1` with the retained checkpoint, anchors, forced
+batches, participant roster and epoch grouped in `GameProofHistoryV1`. It compares the actual retained checkpoint and
 forced batches, verifies the certified prefix root and state root, requires exact slot-ordered forced
 controls, and derives pre-tick DNF events from chain state. The AIR binds that intermediate state at
 the checkpoint row. Consensus removals after a cryptographically proved terminal boundary have no

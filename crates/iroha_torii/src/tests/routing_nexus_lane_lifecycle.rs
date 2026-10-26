@@ -52,9 +52,7 @@ fn lane_lifecycle_status_exposes_native_runtime_root_and_propagates_invalid_stat
     let expected = runtime.canonical_hash().unwrap();
     let mut world = state.world.block();
     world
-        .parameters
-        .get_mut()
-        .set_parameter(Parameter::Custom(runtime.into_custom_parameter().unwrap()))
+        .set_parameter_for_testing(Parameter::Custom(runtime.into_custom_parameter().unwrap()))
         .expect("install the committed runtime catalog fixture");
     world.commit();
     let status = handle_get_nexus_lane_lifecycle(&state).unwrap();
@@ -63,9 +61,7 @@ fn lane_lifecycle_status_exposes_native_runtime_root_and_propagates_invalid_stat
     assert_eq!(status.incarnation_root, before.incarnation_root);
     let mut world = state.world.block();
     world
-        .parameters
-        .get_mut()
-        .set_parameter(Parameter::Custom(CustomParameter::new(
+        .set_parameter_for_testing(Parameter::Custom(CustomParameter::new(
             NexusRuntimeCatalogV1::parameter_id(),
             iroha_primitives::json::Json::new(norito::json!({"version": 255})),
         )))

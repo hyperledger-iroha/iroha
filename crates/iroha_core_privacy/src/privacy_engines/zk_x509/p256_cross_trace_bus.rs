@@ -31,12 +31,10 @@
 //!
 //! The aggregate adapter registers these source-attached auxiliary columns and
 //! terminal chain in the production verifier.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::p256_external_binding_air::{
     P256ExternalBindingFixedAccessV1, P256ExternalBindingRowV1, P256ExternalBindingTraceV1,
     p256_input_selection_byte_v1,
 };
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::p256_value_bus::{
     P256ValueAccessKindV1, P256ValueBusBaseEndpointTraceV1, P256ValueBusErrorV1,
     P256ValueBusFixedAccessV1, p256_value_bus_base_execution_source_cell_v1,
@@ -61,7 +59,6 @@ use crate::privacy_engines::transparent_stark::PrivacyOuterDigestV1;
 use crate::privacy_engines::transparent_stark::{
     GoldilocksFieldV1 as F, PolynomialAirFieldV1, TransparentStarkErrorV1, TransparentTranscriptV1,
 };
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 use std::sync::Arc;
 use thiserror::Error;
 /// Independent tagged-product lanes.
@@ -314,7 +311,6 @@ pub enum P256CrossTraceBusErrorV1 {
     #[error("zk-X509 P-256 cross-trace topology is invalid")]
     Topology,
     /// A source row is not the verifier-selected committed cell.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error("zk-X509 P-256 cross-trace source is invalid")]
     Source,
     /// A multiplicity is unsupported, missing, duplicated, or inconsistent.
@@ -324,7 +320,6 @@ pub enum P256CrossTraceBusErrorV1 {
     #[error("zk-X509 P-256 cross-trace challenges are invalid")]
     Challenge,
     /// A product, addition chain, boundary, or terminal constraint failed.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error("zk-X509 P-256 cross-trace constraint failed")]
     Constraint,
     /// A bounded allocation or checked index exceeded the release envelope.
@@ -339,7 +334,6 @@ impl From<P256ExternalBindingErrorV1> for P256CrossTraceBusErrorV1 {
         }
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl From<P256ValueBusErrorV1> for P256CrossTraceBusErrorV1 {
     fn from(error: P256ValueBusErrorV1) -> Self {
         match error {
@@ -357,7 +351,6 @@ pub struct P256CrossTraceRegularFixedRowV1 {
     pub(crate) boundary: P256CrossTraceBoundaryFixedV1,
 }
 /// Challenge-dependent row for an ordinary product segment.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct P256CrossTraceRegularAuxRowV1 {
     /// Active-gated copies of actual committed source cells.
@@ -403,7 +396,6 @@ pub fn build_zk_x509_p256_cross_trace_regular_aux_v1(
     Ok(rows)
 }
 /// Build one deterministic ordinary auxiliary row for a streaming consumer.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub fn build_regular_row_v1(
     fixed: P256CrossTraceRegularFixedRowV1,
     source_values: [F; P256_CROSS_TRACE_EVENT_SLOTS_V1],
@@ -555,7 +547,6 @@ pub struct P256CrossTraceSinkFixedV1 {
 }
 impl P256CrossTraceSinkFixedV1 {
     /// Allocated compact verifier schedule payload.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     pub(crate) fn allocated_heap_bytes_v1(&self) -> usize {
         super::allocation_payload::vector_v1(&self.logical)
     }
@@ -642,11 +633,14 @@ impl P256CrossTraceSinkFixedV1 {
                 let tag = match p256_selected_input_writer_id_v1(byte / 32)? {
                     Some(id) => P256CrossTraceTagV1 {
                         endpoint: P256CrossTraceEndpointV1::Writer,
-                        address: writer_address_v1(id.0, limb as u8)?,
+                        address: writer_address_v1(
+                            id.0,
+                            u8::try_from(limb).expect("protocol-bounded index fits u8"),
+                        )?,
                     },
                     None => P256CrossTraceTagV1 {
                         endpoint: P256CrossTraceEndpointV1::DigestInput,
-                        address: limb as u32,
+                        address: u32::try_from(limb).expect("protocol-bounded index fits u32"),
                     },
                 };
                 events[0] = P256CrossTraceEventFixedV1::active(tag);
@@ -666,13 +660,11 @@ impl P256CrossTraceSinkFixedV1 {
         })
     }
     /// Logical non-padding row count.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     pub(crate) fn logical_rows_v1(&self) -> usize {
         self.logical.len()
     }
 }
 /// Compile the compact role-derived sink schedule.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub fn compile_zk_x509_p256_cross_trace_sink_fixed_v1(
     role: P256EcdsaRoleV1,
 ) -> Result<P256CrossTraceSinkFixedV1, P256CrossTraceBusErrorV1> {
@@ -683,7 +675,6 @@ pub fn compile_zk_x509_p256_cross_trace_sink_fixed_v1(
 /// Construction makes one compact logical-row pass to validate local equalities and compute the
 /// terminal. Consumers then pull the exact padded row sequence in a second pass. No million-row
 /// auxiliary or fixed `Vec` is retained.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub struct P256CrossTraceSinkStreamV1<'a> {
     binding: &'a P256ExternalBindingTraceV1,
     fixed: Arc<P256CrossTraceSinkFixedV1>,
@@ -692,13 +683,11 @@ pub struct P256CrossTraceSinkStreamV1<'a> {
     running: [F; P256_CROSS_TRACE_LANES_V1],
     next_row: usize,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl core::fmt::Debug for P256CrossTraceSinkStreamV1<'_> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str("P256CrossTraceSinkStreamV1 { <private stream redacted> }")
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for P256CrossTraceSinkStreamV1<'_> {
     fn drop(&mut self) {
         super::private_table::zeroize_fields_v1(&mut self.running);
@@ -710,7 +699,6 @@ impl Drop for P256CrossTraceSinkStreamV1<'_> {
 }
 
 /// Prepare the binder sink stream from the binder's committed base copies.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub fn build_zk_x509_p256_cross_trace_sink_v1(
     binding: &P256ExternalBindingTraceV1,
     challenges: P256CrossTraceChallengesV1,
@@ -730,7 +718,6 @@ pub fn build_zk_x509_p256_cross_trace_sink_v1(
         next_row: 0,
     })
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn compute_sink_terminal_v1(
     fixed: &P256CrossTraceSinkFixedV1,
     binding: &P256ExternalBindingTraceV1,
@@ -759,7 +746,6 @@ fn compute_sink_terminal_v1(
     }
     Ok(running)
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<'a> P256CrossTraceSinkStreamV1<'a> {
     /// Restart deterministic row replay without recompiling the schedule or
     /// recomputing the terminal.
@@ -845,7 +831,6 @@ pub fn evaluate_zk_x509_p256_cross_trace_sink_row_constraints_v1(
 /// Pure pointwise sink residues over the three committed writer/external
 /// equality pairs. Keeping these separate makes the local binding surface
 /// independently testable without allocating the complete sink product.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub fn evaluate_zk_x509_p256_cross_trace_sink_local_constraints_v1(
     fixed: P256CrossTraceSinkFixedRowV1,
     binding: &P256ExternalBindingRowV1,
@@ -863,7 +848,6 @@ pub fn evaluate_zk_x509_p256_cross_trace_sink_local_constraints_v1(
     }
     residues
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn sink_source_values_v1(
     binding: &P256ExternalBindingRowV1,
 ) -> [F; P256_CROSS_TRACE_EVENT_SLOTS_V1] {
@@ -878,7 +862,6 @@ fn sink_source_values_v1(
 }
 /// Native replay of the same affine source used at F/Fp4 openings. Inactive
 /// neighboring-byte values are zero; no witness-selected event or address exists.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn sink_stream_source_values_v1(
     binding: &P256ExternalBindingTraceV1,
     row: usize,
@@ -897,7 +880,6 @@ fn sink_stream_source_values_v1(
     }
     Ok(sources)
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn sink_binding_row_v1(
     binding: &P256ExternalBindingTraceV1,
     row: usize,
@@ -912,7 +894,6 @@ fn sink_binding_row_v1(
             external_cells: [F::ZERO; P256_EXTERNAL_BINDINGS_PER_ROW_V1],
         })
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn validate_binding_fixed_schedule_v1(
     binding: &P256ExternalBindingTraceV1,
 ) -> Result<(), P256CrossTraceBusErrorV1> {
@@ -921,9 +902,9 @@ fn validate_binding_fixed_schedule_v1(
         || binding.rows.iter().zip(expected).any(|(row, expected)| {
             row.fixed
                 != core::array::from_fn(|slot| {
-                    expected[slot]
-                        .map(|source| source.fixed)
-                        .unwrap_or(P256ExternalBindingFixedAccessV1::Inactive)
+                    expected[slot].map_or(P256ExternalBindingFixedAccessV1::Inactive, |source| {
+                        source.fixed
+                    })
                 })
         })
     {
@@ -969,7 +950,6 @@ pub struct P256CrossTraceWriterAuxRowV1<A = F> {
     /// Source terminal repeated as a degree-zero column.
     pub(crate) terminal: [A; P256_CROSS_TRACE_LANES_V1],
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl zeroize::Zeroize for P256CrossTraceWriterAuxRowV1 {
     fn zeroize(&mut self) {
         zeroize::Zeroize::zeroize(&mut self.event_values);
@@ -981,13 +961,11 @@ impl zeroize::Zeroize for P256CrossTraceWriterAuxRowV1 {
 }
 /// Either an independently compiled oracle schedule or the exact retained
 /// verifier schedule borrowed through the immutable MAIN bound capability.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone)]
 enum P256CrossTraceWriterFixedReplayV1<'a> {
     Compiled(Arc<P256CrossTraceWriterSourceFixedV1>),
     Bound(&'a P256CrossTraceWriterSourceFixedV1),
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256CrossTraceWriterFixedReplayV1<'_> {
     fn source_v1(&self) -> &P256CrossTraceWriterSourceFixedV1 {
         match self {
@@ -997,7 +975,6 @@ impl P256CrossTraceWriterFixedReplayV1<'_> {
     }
 }
 /// Constant-memory deterministic provider for the `2^19` writer-source auxiliary rows.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub struct P256CrossTraceWriterSourceStreamV1<'a> {
     value_bus: &'a P256ValueBusBaseEndpointTraceV1,
     fixed: P256CrossTraceWriterFixedReplayV1<'a>,
@@ -1006,13 +983,11 @@ pub struct P256CrossTraceWriterSourceStreamV1<'a> {
     running: [F; P256_CROSS_TRACE_LANES_V1],
     next_row: usize,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl core::fmt::Debug for P256CrossTraceWriterSourceStreamV1<'_> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str("P256CrossTraceWriterSourceStreamV1 { <private stream redacted> }")
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for P256CrossTraceWriterSourceStreamV1<'_> {
     fn drop(&mut self) {
         super::private_table::zeroize_fields_v1(&mut self.running);
@@ -1025,7 +1000,6 @@ impl Drop for P256CrossTraceWriterSourceStreamV1<'_> {
 
 impl P256CrossTraceWriterSourceFixedV1 {
     /// Allocated compact verifier schedule payload.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     pub(crate) fn allocated_heap_bytes_v1(&self) -> usize {
         super::allocation_payload::vector_v1(&self.multiplicities)
     }
@@ -1052,7 +1026,10 @@ impl P256CrossTraceWriterSourceFixedV1 {
             let id = p256_selected_input_writer_id_v1(word)?
                 .ok_or(P256CrossTraceBusErrorV1::Topology)?;
             for limb in 0..P256_VALUE_BUS_LIMBS_V1 {
-                let address = writer_address_v1(id.0, limb as u8)? as usize;
+                let address = writer_address_v1(
+                    id.0,
+                    u8::try_from(limb).expect("protocol-bounded index fits u8"),
+                )? as usize;
                 let multiplicity = multiplicities
                     .get_mut(address)
                     .ok_or(P256CrossTraceBusErrorV1::Topology)?;
@@ -1164,7 +1141,6 @@ impl P256CrossTraceWriterSourceFixedV1 {
 /// A first pass validates every selected source and computes the terminal. The
 /// returned provider then regenerates all `2^20` rows sequentially without
 /// retaining the roughly 272 MiB row-major auxiliary trace.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub fn build_zk_x509_p256_cross_trace_writer_source_v1(
     value_bus: &P256ValueBusBaseEndpointTraceV1,
     role: P256EcdsaRoleV1,
@@ -1189,7 +1165,6 @@ pub fn build_zk_x509_p256_cross_trace_writer_source_v1(
         next_row: 0,
     })
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn compute_writer_terminal_v1(
     value_bus: &P256ValueBusBaseEndpointTraceV1,
     fixed: &P256CrossTraceWriterSourceFixedV1,
@@ -1207,13 +1182,12 @@ fn compute_writer_terminal_v1(
     }
     Ok(running)
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<'a> P256CrossTraceWriterSourceStreamV1<'a> {
     /// Borrow the exact schedule and terminal already checked during MAIN bind.
     /// The capability has no public/raw constructor and fixes the endpoint,
     /// signature role, opaque token and derived terminal to the same owner.
     pub(super) fn from_bound_main_v1(
-        bound: super::p256_aggregate_adapter::P256MainBoundWriterReplayV1<'a>,
+        bound: &super::p256_aggregate_adapter::P256MainBoundWriterReplayV1<'a>,
     ) -> Result<Self, P256CrossTraceBusErrorV1> {
         let value_bus = bound.endpoint_v1();
         let challenges = bound.challenges_v1();
@@ -1288,10 +1262,8 @@ pub fn evaluate_zk_x509_p256_cross_trace_writer_row_constraints_v1<A: Polynomial
     challenges: P256CrossTraceChallengesV1,
 ) -> Vec<A> {
     let mut residues = Vec::with_capacity(P256_CROSS_TRACE_WRITER_CONSTRAINT_COUNT_V1);
-    for slot in 0..P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1 {
-        residues.push(
-            current.event_values[slot].sub(fixed.events[slot].active.mul(source_values[slot])),
-        );
+    for (slot, source) in source_values.into_iter().enumerate() {
+        residues.push(current.event_values[slot].sub(fixed.events[slot].active.mul(source)));
     }
     for slot in 0..P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1 {
         for lane in 0..P256_CROSS_TRACE_LANES_V1 {
@@ -1364,7 +1336,6 @@ pub fn evaluate_zk_x509_p256_cross_trace_writer_row_constraints_v1<A: Polynomial
     }
     residues
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn build_writer_row_v1(
     fixed: P256CrossTraceWriterFixedRowV1,
     source_values: [F; P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1],
@@ -1442,7 +1413,6 @@ fn build_writer_row_v1(
     }
 }
 /// Four final residues equating the fully chained source product to the independent sink product.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub fn evaluate_zk_x509_p256_cross_trace_terminal_constraints_v1(
     final_source: [F; P256_CROSS_TRACE_LANES_V1],
     sink: [F; P256_CROSS_TRACE_LANES_V1],
@@ -1481,14 +1451,13 @@ fn writer_cell_at_execution_ordinal_v1(
     }
     Ok(None)
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn projected_writer_source_values_v1(
     value_bus: &P256ValueBusBaseEndpointTraceV1,
     packed_ordinal: usize,
     fixed: P256CrossTraceWriterFixedRowV1,
 ) -> Result<[F; P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1], P256CrossTraceBusErrorV1> {
     let mut values = [F::ZERO; P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1];
-    for slot in 0..P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1 {
+    for (slot, output) in values.iter_mut().enumerate() {
         let ordinal = packed_ordinal
             .checked_mul(P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1)
             .and_then(|ordinal| ordinal.checked_add(slot))
@@ -1501,8 +1470,14 @@ fn projected_writer_source_values_v1(
         if fixed.events[slot].active == F::ONE {
             let address = u32::try_from(fixed.events[slot].address.0)
                 .map_err(|_| P256CrossTraceBusErrorV1::Resource)?;
-            let expected_id = address / P256_VALUE_BUS_LIMBS_V1 as u32;
-            let expected_limb = (address % P256_VALUE_BUS_LIMBS_V1 as u32) as u8;
+            let expected_id = address
+                / u32::try_from(P256_VALUE_BUS_LIMBS_V1).expect("protocol-bounded index fits u32");
+            let expected_limb = u8::try_from(
+                address
+                    % u32::try_from(P256_VALUE_BUS_LIMBS_V1)
+                        .expect("protocol-bounded index fits u32"),
+            )
+            .expect("16-limb remainder fits u8");
             if !matches!(
                 actual_fixed,
                 P256ValueBusFixedAccessV1::Active {
@@ -1515,7 +1490,7 @@ fn projected_writer_source_values_v1(
                 return Err(P256CrossTraceBusErrorV1::Source);
             }
         }
-        values[slot] = value;
+        *output = value;
     }
     Ok(values)
 }
@@ -1523,7 +1498,7 @@ fn writer_address_v1(id: u32, limb: u8) -> Result<u32, P256CrossTraceBusErrorV1>
     if usize::from(limb) >= P256_VALUE_BUS_LIMBS_V1 {
         return Err(P256CrossTraceBusErrorV1::Topology);
     }
-    id.checked_mul(P256_VALUE_BUS_LIMBS_V1 as u32)
+    id.checked_mul(u32::try_from(P256_VALUE_BUS_LIMBS_V1).expect("protocol-bounded index fits u32"))
         .and_then(|address| address.checked_add(u32::from(limb)))
         .ok_or(P256CrossTraceBusErrorV1::Resource)
 }
@@ -1680,15 +1655,17 @@ mod tests {
         let selected_word = |id: u32| {
             let mut bytes = [0_u8; 32];
             for limb in 0..16 {
-                let address = writer_address_v1(id, limb as u8).unwrap();
-                let value = writer_values
-                    .get(&address)
-                    .copied()
-                    .unwrap_or(F(
-                        (u64::from(address).wrapping_mul(73).wrapping_add(19)) & 65535
-                    ));
-                bytes[30 - 2 * limb..32 - 2 * limb]
-                    .copy_from_slice(&(value.0 as u16).to_be_bytes());
+                let address = writer_address_v1(
+                    id,
+                    u8::try_from(limb).expect("protocol-bounded index fits u8"),
+                )
+                .unwrap();
+                let value = writer_values.get(&address).copied().unwrap_or_else(|| {
+                    F((u64::from(address).wrapping_mul(73).wrapping_add(19)) & 0xffff)
+                });
+                bytes[30 - 2 * limb..32 - 2 * limb].copy_from_slice(
+                    &(u16::try_from(value.0 & 0xffff).expect("masked limb")).to_be_bytes(),
+                );
             }
             bytes
         };
@@ -1697,7 +1674,9 @@ mod tests {
             public_key_y_be: selected_word(48),
             r_be: selected_word(52),
             s_be: selected_word(53),
-            digest_be: core::array::from_fn(|i| (i * 7 + 3) as u8),
+            digest_be: core::array::from_fn(|i| {
+                u8::try_from(i * 7 + 3).expect("protocol-bounded index fits u8")
+            }),
         };
         let rows = sources
             .into_iter()
@@ -1787,12 +1766,19 @@ mod tests {
                             .unwrap(),
                     ));
                 if let Some(id) = p256_selected_input_writer_id_v1(word).unwrap() {
-                    let address = writer_address_v1(id.0, limb as u8).unwrap();
+                    let address = writer_address_v1(
+                        id.0,
+                        u8::try_from(limb).expect("protocol-bounded index fits u8"),
+                    )
+                    .unwrap();
                     let entry = writers.entry(address).or_insert((value, 0));
                     assert_eq!(entry.0, value);
                     entry.1 += 1;
                 } else {
-                    digest.push((limb as u32, value));
+                    digest.push((
+                        u32::try_from(limb).expect("protocol-bounded index fits u32"),
+                        value,
+                    ));
                 }
             }
         }
@@ -1959,7 +1945,8 @@ mod tests {
                                 2 => P256CrossTraceEndpointV1::ScalarArithmetic,
                                 _ => P256CrossTraceEndpointV1::ScalarWindow,
                             },
-                            address: (row * P256_CROSS_TRACE_EVENT_SLOTS_V1 + slot) as u32,
+                            address: u32::try_from(row * P256_CROSS_TRACE_EVENT_SLOTS_V1 + slot)
+                                .expect("protocol-bounded index fits u32"),
                         })
                     } else {
                         P256CrossTraceEventFixedV1::inactive()
@@ -2018,8 +2005,10 @@ mod tests {
                         } else {
                             P256CrossTraceEventFixedV1::active(P256CrossTraceTagV1 {
                                 endpoint: P256CrossTraceEndpointV1::Writer,
-                                address: (row * P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1 + slot)
-                                    as u32,
+                                address: u32::try_from(
+                                    row * P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1 + slot,
+                                )
+                                .expect("protocol-bounded index fits u32"),
                             })
                         }
                     }),
@@ -2110,7 +2099,10 @@ mod tests {
             assert_eq!(dynamic.first().copied(), Some(0));
             assert_eq!(
                 dynamic.last().copied(),
-                Some((p256_external_binding_dynamic_sources_v1(role) - 1) as u32)
+                Some(
+                    u32::try_from(p256_external_binding_dynamic_sources_v1(role) - 1)
+                        .expect("protocol-bounded index fits u32")
+                )
             );
             let sink = compile_zk_x509_p256_cross_trace_sink_fixed_v1(role).expect("sink");
             assert_eq!(sink.logical_rows_v1(), p256_external_binding_rows_v1(role));
@@ -2146,13 +2138,7 @@ mod tests {
                 Err(P256CrossTraceBusErrorV1::Topology)
             );
             let writers = P256CrossTraceWriterSourceFixedV1::compile_v1(role).expect("writers");
-            assert_eq!(
-                writers.active_source_cells_v1(),
-                match role {
-                    P256EcdsaRoleV1::CertificateOrCrl => 14_240,
-                    P256EcdsaRoleV1::WalletOwnership => 14_240,
-                }
-            );
+            assert_eq!(writers.active_source_cells_v1(), 14_240);
             assert_eq!(
                 writers.total_uses_v1(),
                 p256_external_binding_active_equalities_v1(role) + 64
@@ -2168,7 +2154,7 @@ mod tests {
             assert_eq!(writers.multiplicities[47 * P256_VALUE_BUS_LIMBS_V1], 65);
             assert_eq!(
                 writers.multiplicities[53 * P256_VALUE_BUS_LIMBS_V1],
-                1 + usize::from(role == P256EcdsaRoleV1::WalletOwnership) as u16
+                1 + u16::from(role == P256EcdsaRoleV1::WalletOwnership)
             );
             assert_eq!(
                 p256_cross_trace_events_v1(role),
@@ -2700,8 +2686,10 @@ mod tests {
         );
         // Four independent lanes reduce the tagged-multiset collision bound
         // below 2^-176 for the exact maximum first-release event count.
-        let field = (u128::from(u64::MAX) - u128::from(u32::MAX) + 1) as f64;
-        let ratio = P256_CROSS_TRACE_WALLET_EVENTS_V1 as f64 / field;
+        let field = 2_f64.powi(64) - 2_f64.powi(32) + 1.0;
+        let ratio = f64::from(
+            u32::try_from(P256_CROSS_TRACE_WALLET_EVENTS_V1).expect("event bound fits u32"),
+        ) / field;
         assert!(ratio.powi(4) < 2_f64.powi(-176));
     }
 }

@@ -49,7 +49,13 @@ impl Fixture {
         descriptors: [u64; 10],
         mask: u16,
     ) -> Self {
-        let schedule = Schedule::new(7, length, write, core::array::from_fn(|i| i as u32)).unwrap();
+        let schedule = Schedule::new(
+            7,
+            length,
+            write,
+            core::array::from_fn(|i| u32::try_from(i).expect("bounded fixture value")),
+        )
+        .unwrap();
         let address = if selected { address } else { 0 };
         let active = if selected { active } else { 0 };
         let live = active != 0;
@@ -337,8 +343,13 @@ fn private_access_residues_have_bounded_polynomial_degree() {
     let total = WIDTH + 5 + 12 * packet::WIDTH;
     for length in [8, 16] {
         for write in [false, true] {
-            let schedule =
-                Schedule::new(7, length, write, core::array::from_fn(|i| i as u32)).unwrap();
+            let schedule = Schedule::new(
+                7,
+                length,
+                write,
+                core::array::from_fn(|i| u32::try_from(i).expect("bounded fixture value")),
+            )
+            .unwrap();
             let degree = measured_maximum_affine_degree_v1(
                 [119; 32],
                 [total, 0, 0, 0, 0],

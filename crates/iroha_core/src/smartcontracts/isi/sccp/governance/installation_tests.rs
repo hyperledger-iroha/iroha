@@ -55,7 +55,7 @@ fn initialize(stx: &mut StateTransaction<'_, '_>, instance: [u8; 32]) -> SccpReg
             })
         })
         .collect();
-    install_generation(stx, 1, generation.clone()).expect("retained resolved committee fixture");
+    install_generation(stx, 1, &(generation)).expect("retained resolved committee fixture");
     store::committee_current::set(stx, 1);
     let constructor = ConstructorArgsV1 {
         taira_network_id: *stx.network_id().as_bytes(),

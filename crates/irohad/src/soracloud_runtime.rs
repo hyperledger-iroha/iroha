@@ -40,9 +40,7 @@ use iroha_core::soracloud_runtime::{
     SoracloudRuntimeSnapshot,
 };
 use iroha_core::state::{State, StateReadOnly, StateView, WorldReadOnly};
-use iroha_core::{
-    executor::quote_nexus_fee_admission_draft, queue::Queue, tx::AcceptedTransaction,
-};
+use iroha_core::{executor::quote_nexus_fee_admission_draft, queue::Queue};
 use iroha_crypto::Hash;
 #[cfg(test)]
 use iroha_crypto::KeyPair;
@@ -833,19 +831,11 @@ impl SoracloudRuntimeMutationSink for QueuedSoracloudRuntimeMutationSink {
                     "external signer refused internal Soracloud runtime mutation at `{endpoint}`: {error:?}"
                 )
             })?;
-        let parameters = self.state.transaction_admission_parameters();
-        let admission_policy = parameters.require_crypto_policy().map_err(|error| {
-            eyre::eyre!("internal Soracloud runtime mutation at `{endpoint}` requires committed crypto admission policy: {error}")
-        })?;
-        let accepted = AcceptedTransaction::accept(
-            tx,
-            self.state.network_id_ref(),
-            parameters.sumeragi().max_clock_drift(),
-            parameters.transaction(),
-            admission_policy,
-        )
+        let accepted = {
+            let parameters = self.state.transaction_admission_parameters();
+            crate::accept_internal_transaction(tx, self.state.network_id_ref(), &parameters)
+        }
         .wrap_err_with(|| format!("accept internal Soracloud runtime mutation at `{endpoint}`"))?;
-        drop(parameters);
         self.queue
             .push_with_lane_with_state(accepted, self.state.as_ref())
             .map(|_| ())

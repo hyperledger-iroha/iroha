@@ -535,13 +535,14 @@ fn terminal_late_result_slot(gap: bool, cancel: bool) {
     let mut target = OriginalReceipt::new(&view, 3, &budget).unwrap();
     context.with(|| target.acquire_body()).unwrap();
     let target_body = target.body.as_ref().unwrap().clone();
-    let mut original_gap = None;
-    if gap {
+    let original_gap = if gap {
         context.with(|| target.decode(3, prefix, &budget)).unwrap();
         let mut predecessor = OriginalReceipt::new(&view, 2, &budget).unwrap();
         context.with(|| predecessor.acquire_body()).unwrap();
-        original_gap = Some(predecessor);
-    }
+        Some(predecessor)
+    } else {
+        None
+    };
     drop(cursor);
     reader.terminal = Some(TerminalSelection {
         target,

@@ -25,7 +25,9 @@ use super::{
     SwitchingKey, SwitchingKeyKind,
     coins::{COIN_SEED_BYTES, EntropySource},
     poly::RnsPoly,
-    threshold::{DealerKeyShares, SecretKeyShare, ThresholdContext, ThresholdError},
+    threshold::{
+        DealerKeyShares, SecretKeyShare, SubsetSecretKeyShare, ThresholdContext, ThresholdError,
+    },
 };
 use zeroize::Zeroizing;
 
@@ -307,6 +309,24 @@ pub fn threshold_dealer<'profile>(
 #[must_use]
 pub fn threshold_share_words(share: &SecretKeyShare) -> Zeroizing<Vec<u64>> {
     Zeroizing::new(share.words_for_fixture().to_vec())
+}
+
+/// Copy a converted share's words into a clearing independent-oracle buffer.
+#[must_use]
+pub fn threshold_subset_share_words(share: &SubsetSecretKeyShare) -> Zeroizing<Vec<u64>> {
+    Zeroizing::new(share.words_for_fixture().to_vec())
+}
+
+/// Observe the original share buffer address without allocating or copying words.
+#[must_use]
+pub fn threshold_share_buffer_address(share: &SecretKeyShare) -> usize {
+    share.words_for_fixture().as_ptr() as usize
+}
+
+/// Observe the converted share buffer address without allocating or copying words.
+#[must_use]
+pub fn threshold_subset_share_buffer_address(share: &SubsetSecretKeyShare) -> usize {
+    share.words_for_fixture().as_ptr() as usize
 }
 
 #[cfg(test)]

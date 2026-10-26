@@ -113,10 +113,12 @@ fn load(f: &Authority, expected: [u8; 32], runtime: RuntimeBindings) -> Result<A
         expected,
         runtime,
         f.allowlist.clone(),
-        &[],
-        LineageArtifact {
-            descriptor: b"missing",
-            verifying_key: b"missing",
+        ArtifactOriginals {
+            steps: &[],
+            lineage: LineageArtifact {
+                descriptor: b"missing",
+                verifying_key: b"missing",
+            },
         },
     )
 }
@@ -218,7 +220,7 @@ fn transport_requires_exact_proof_and_two_canonical_finite_claims() {
 
 #[test]
 fn foreign_challenge_limbs_preserve_all_256_bits_without_reduction() {
-    let bytes = std::array::from_fn(|i| i as u8);
+    let bytes = std::array::from_fn(|i| u8::try_from(i).unwrap());
     let [low, high] = limbs(&bytes);
     assert_eq!(&low[..16], &bytes[..16]);
     assert_eq!(&high[..16], &bytes[16..]);
@@ -247,8 +249,8 @@ fn lineage_digest_matches_independent_integer_rp57_endian_and_order_vector() {
     .unwrap();
     let public = KagemushaWalletLineagePublicV1 {
         version: 1,
-        scheme_id: std::array::from_fn(|i| i as u8),
-        relation_id: std::array::from_fn(|i| (31 - i) as u8),
+        scheme_id: std::array::from_fn(|i| u8::try_from(i).unwrap()),
+        relation_id: std::array::from_fn(|i| u8::try_from(31 - i).unwrap()),
         head: KagemushaWalletStateCommitmentV1 {
             value: Fp::from(3).to_repr(),
         },
@@ -921,7 +923,7 @@ fn model_admission_and_recursive_input_tapes_share_role_capacities() {
         MAX_OMEGA_RAW_BYTES + MAX_SIGMA_RAW_BYTES,
         PAYMENT_RAW_PROOF_BUDGET
     );
-    assert!(OMEGA_TRANSPORT_CAP <= KAGEMUSHA_WALLET_LINEAGE_PROOF_CAP_V1);
+    const { assert!(OMEGA_TRANSPORT_CAP <= KAGEMUSHA_WALLET_LINEAGE_PROOF_CAP_V1) };
 }
 
 /// A genuine k16 Pallas PIPA-R key in the installed Omega profile whose only relation copies
@@ -929,8 +931,8 @@ fn model_admission_and_recursive_input_tapes_share_role_capacities() {
 /// free), and every canonical instance has a real proof. The
 /// wallet's Omega relation cannot be proved under an installed scheme here (its public outputs
 /// bind that scheme), so this relation stands in for it: the installed verifier's complete
-/// lineage boundary then runs on real proof bytes, namely the exact transport split, D_A over
-/// the public fields and acc_P, the instances that bind acc_V, full verification and both
+/// lineage boundary then runs on real proof bytes, namely the exact transport split, `D_A` over
+/// the public fields and `acc_P`, the instances that bind `acc_V`, full verification and both
 /// decides on the shared owners. It is never a wallet relation or a catalog member.
 #[derive(Clone)]
 struct TransportRelation {

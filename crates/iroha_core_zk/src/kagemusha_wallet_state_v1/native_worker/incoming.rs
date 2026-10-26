@@ -578,7 +578,10 @@ mod tests {
             let selected =
                 FoldInput::from_normalized(point, original.source_k(), *original.challenges())
                     .unwrap();
-            assert_eq!(selected.source_k(), k as u32);
+            assert_eq!(
+                selected.source_k(),
+                u32::try_from(k).expect("fixture domain fits u32")
+            );
             assert_eq!(selected.challenges(), original.challenges());
             assert_ne!(selected.g(), original.g());
             selected.decide(&params, MemoryBudget::DEFAULT).unwrap();
@@ -587,11 +590,11 @@ mod tests {
                 assert!(matches!(original.decide(&insufficient, budget),
                     Err(iroha_plonk_recursion::Error::Parameters(IpaError::ParamsTooSmall {
                         needed, available: 3
-                    })) if needed == k as u32));
+                    })) if needed == u32::try_from(k).expect("fixture domain fits u32")));
                 assert!(matches!(original.corrected(&insufficient, budget),
                     Err(iroha_plonk_recursion::Error::Parameters(IpaError::ParamsTooSmall {
                         needed, available: 3
-                    })) if needed == k as u32));
+                    })) if needed == u32::try_from(k).expect("fixture domain fits u32")));
                 assert!(matches!(
                     corrected_point(&original, &insufficient, budget, None),
                     Err(Error::Proof("native fold source or proof"))

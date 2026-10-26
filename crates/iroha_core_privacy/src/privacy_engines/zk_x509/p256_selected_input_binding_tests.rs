@@ -17,7 +17,7 @@ fn byte_row(byte: usize, active: bool) -> [F; P256_BINDING_SINK_BASE_WIDTH_V1] {
     let dummy =
         p256_input_selection_byte_v1(&ZK_X509_P256_OPTIONAL_CERTIFICATE_DUMMY_V1, byte).unwrap();
     let real = if active {
-        ((byte * 73 + 19) % 256) as u8
+        u8::try_from((byte * 73 + 19) % 256).expect("protocol-bounded index fits u8")
     } else {
         p256_inactive_real_byte_v1(byte).unwrap()
     };
@@ -192,8 +192,8 @@ fn every_selected_pair_binds_actual_opened_bytes_in_f_and_fp4_with_optional_sele
             );
             current_aux.terminal = [F(11); 4];
             next_aux.terminal = [F(11); 4];
-            let aux = flatten_regular_aux_v1(current_aux);
-            let next_aux = flatten_regular_aux_v1(next_aux);
+            let aux = flatten_regular_aux_v1(&current_aux);
+            let next_aux = flatten_regular_aux_v1(&next_aux);
             let evaluate =
                 |a: &[F; P256_BINDING_SINK_BASE_WIDTH_V1],
                  b: &[F; P256_BINDING_SINK_BASE_WIDTH_V1],
@@ -234,7 +234,9 @@ fn every_selected_pair_binds_actual_opened_bytes_in_f_and_fp4_with_optional_sele
             // product copy must still reject either half of the packed limb.
             for half in 0..2 {
                 let mut changed = [base, next];
-                let value = (changed[half][SINK_SELECTION_SELECTED_BASE].0 as u8) ^ 1;
+                let value = (u8::try_from(changed[half][SINK_SELECTION_SELECTED_BASE].0 & 0xff)
+                    .expect("masked selector byte"))
+                    ^ 1;
                 changed[half][SINK_SELECTION_SELECTED_BASE] = F(u64::from(value));
                 write_byte_bits_v1(
                     &mut changed[half]
@@ -382,7 +384,7 @@ fn inactive_neighbor_sources_at_both_region_edges_and_every_odd_row_are_gated_in
         current_aux.terminal = [F(17); 4];
         // Continuation authenticates only the next entering product and constant
         // terminal; next-row active factors are constrained at their own row.
-        let aux = flatten_regular_aux_v1(current_aux);
+        let aux = flatten_regular_aux_v1(&current_aux);
         let residues = evaluate_p256_binding_sink_aggregate_residues_v1(
             &base,
             &next,

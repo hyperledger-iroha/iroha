@@ -93,7 +93,7 @@ fn validate_modern_request(
     let valid_id = request_object
         .get("id")
         .is_some_and(valid_modern_request_id);
-    if !valid_id && !(request_object.get("id").is_none() && method.starts_with("notifications/")) {
+    if !(valid_id || request_object.get("id").is_none() && method.starts_with("notifications/")) {
         return Err(invalid_request(
             request_id,
             "stateless MCP requests require a non-null string or integer id; notifications omit id",
@@ -171,8 +171,10 @@ fn validate_modern_request(
 
 fn valid_modern_request_id(value: &Value) -> bool {
     match value {
-        Value::String(_) | Value::Number(norito::json::native::Number::I64(_)) => true,
-        Value::Number(norito::json::native::Number::U64(_)) => true,
+        Value::String(_)
+        | Value::Number(
+            norito::json::native::Number::I64(_) | norito::json::native::Number::U64(_),
+        ) => true,
         Value::Number(norito::json::native::Number::U128(value)) => u64::try_from(*value).is_ok(),
         _ => false,
     }
@@ -574,7 +576,7 @@ mod tests {
 
     use super::*;
 
-    fn modern_request(method: &str, extra_params: Value) -> Value {
+    fn modern_request(method: &str, extra_params: &Value) -> Value {
         let mut params = extra_params.as_object().cloned().unwrap_or_default();
         params.insert(
             "_meta".into(),
@@ -607,7 +609,7 @@ mod tests {
 
     #[test]
     fn modern_requests_require_matching_version_and_method_headers() {
-        let request = modern_request("tools/list", norito::json!({}));
+        let request = modern_request("tools/list", &(norito::json!({})));
         let headers = modern_headers("tools/list");
         assert_eq!(
             validate_request(&headers, &request).expect("valid modern request"),
@@ -630,7 +632,7 @@ mod tests {
     fn modern_tool_calls_validate_plain_and_encoded_names() {
         let request = modern_request(
             "tools/call",
-            norito::json!({ "name": "iroha.health", "arguments": {} }),
+            &(norito::json!({ "name": "iroha.health", "arguments": {} })),
         );
         let mut headers = modern_headers("tools/call");
         headers.insert(HEADER_NAME, HeaderValue::from_static("iroha.health"));
@@ -638,14 +640,14 @@ mod tests {
 
         let tabbed_request = modern_request(
             "tools/call",
-            norito::json!({ "name": "iroha.\thealth", "arguments": {} }),
+            &(norito::json!({ "name": "iroha.\thealth", "arguments": {} })),
         );
         headers.insert(HEADER_NAME, HeaderValue::from_static("iroha.\thealth"));
         validate_request(&headers, &tabbed_request).expect("plain name with an internal tab");
 
         let unicode_request = modern_request(
             "tools/call",
-            norito::json!({ "name": "iroha.健康", "arguments": {} }),
+            &(norito::json!({ "name": "iroha.健康", "arguments": {} })),
         );
         headers.insert(
             HEADER_NAME,
@@ -671,7 +673,7 @@ mod tests {
         );
         assert_eq!(error.payload.get("id").and_then(Value::as_u64), Some(7));
 
-        let request = modern_request("tools/list", norito::json!({}));
+        let request = modern_request("tools/list", &(norito::json!({})));
         let mut duplicated = modern_headers("tools/list");
         duplicated.append(HEADER_METHOD, HeaderValue::from_static("tools/list"));
         let error = validate_request(&duplicated, &request).expect_err("duplicate method header");
@@ -684,7 +686,7 @@ mod tests {
 
     #[test]
     fn modern_metadata_accepts_the_schema_without_extra_string_constraints() {
-        let mut request = modern_request("tools/list", norito::json!({}));
+        let mut request = modern_request("tools/list", &(norito::json!({})));
         request
             .pointer_mut("/params/_meta/io.modelcontextprotocol~1clientInfo")
             .expect("client info")
@@ -728,7 +730,7 @@ mod tests {
             norito::json!({ "extensions": { "org.hyperledger.iroha/tools": true } }),
             norito::json!({ "extensions": { "unprefixed": {} } }),
         ] {
-            let mut request = modern_request("tools/list", norito::json!({}));
+            let mut request = modern_request("tools/list", &(norito::json!({})));
             request
                 .pointer_mut("/params/_meta/io.modelcontextprotocol~1clientCapabilities")
                 .expect("client capabilities")
@@ -749,7 +751,7 @@ mod tests {
             (META_PROGRESS_TOKEN, Value::Bool(true)),
             (META_LOG_LEVEL, Value::String("verbose".to_owned())),
         ] {
-            let mut request = modern_request("tools/list", norito::json!({}));
+            let mut request = modern_request("tools/list", &(norito::json!({})));
             request
                 .pointer_mut("/params/_meta")
                 .and_then(Value::as_object_mut)
@@ -771,7 +773,7 @@ mod tests {
                 "icons": [{ "src": "icon.png", "theme": "midnight" }]
             }),
         ] {
-            let mut request = modern_request("tools/list", norito::json!({}));
+            let mut request = modern_request("tools/list", &(norito::json!({})));
             request
                 .pointer_mut("/params/_meta/io.modelcontextprotocol~1clientInfo")
                 .expect("client info")
@@ -787,7 +789,7 @@ mod tests {
 
     #[test]
     fn modern_batch_requires_the_mutually_declared_iroha_tools_extension() {
-        let mut request = modern_request("tools/call_batch", norito::json!({ "calls": [] }));
+        let mut request = modern_request("tools/call_batch", &(norito::json!({ "calls": [] })));
         let error = validate_request(&modern_headers("tools/call_batch"), &request)
             .expect_err("batch extension was not declared by the client");
         assert_eq!(
@@ -820,7 +822,7 @@ mod tests {
 
     #[test]
     fn modern_invalid_ids_are_not_echoed_in_error_responses() {
-        let mut request = modern_request("tools/list", norito::json!({}));
+        let mut request = modern_request("tools/list", &(norito::json!({})));
         request
             .as_object_mut()
             .expect("request")
@@ -833,7 +835,7 @@ mod tests {
 
     #[test]
     fn unsupported_modern_versions_report_requested_and_supported_values() {
-        let mut request = modern_request("tools/list", norito::json!({}));
+        let mut request = modern_request("tools/list", &(norito::json!({})));
         request
             .pointer_mut("/params/_meta/io.modelcontextprotocol~1protocolVersion")
             .expect("protocol metadata")

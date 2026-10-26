@@ -66,10 +66,7 @@ mod strict_verifying_key_preparation_tests {
                 }
             })
             .expect_err("an empty activation window must not enter persistent state");
-        assert!(
-            error.to_string().contains("greater"),
-            "unexpected error: {error}"
-        );
+        assert!(error.contains("greater"), "unexpected error: {error}");
     }
 
     #[test]
@@ -85,10 +82,7 @@ mod strict_verifying_key_preparation_tests {
                 }
             })
             .expect_err("nonportable metadata must not poison registry rehydration");
-        assert!(
-            error.to_string().contains("metadata URI"),
-            "unexpected error: {error}"
-        );
+        assert!(error.contains("metadata URI"), "unexpected error: {error}");
     }
 
     #[test]
@@ -115,10 +109,7 @@ mod strict_verifying_key_preparation_tests {
                 }
             })
             .expect_err("an off-ledger key declaration must obey the backend container bound");
-        assert!(
-            error.to_string().contains("declared"),
-            "unexpected error: {error}"
-        );
+        assert!(error.contains("declared"), "unexpected error: {error}");
     }
     #[test]
     fn record_preparation_rejects_noncanonical_native_schema_hash() {
@@ -133,10 +124,7 @@ mod strict_verifying_key_preparation_tests {
                 }
             })
             .expect_err("a production native key must bind the circuit's canonical schema");
-        assert!(
-            error.to_string().contains("schema hash"),
-            "unexpected error: {error}"
-        );
+        assert!(error.contains("schema hash"), "unexpected error: {error}");
     }
     #[test]
     fn binding_only_ivm_verifier_records_are_not_admitted() {
@@ -154,10 +142,7 @@ mod strict_verifying_key_preparation_tests {
                 }
             })
             .expect_err("binding-only Halo2 IVM key must not enter state");
-        assert!(
-            halo2_error.to_string().contains("not admitted"),
-            "{halo2_error}"
-        );
+        assert!(halo2_error.contains("not admitted"), "{halo2_error}");
 
         let stark_id = VerifyingKeyId::new(ZK_BACKEND_STARK_FRI_V1, "ivm-binding");
         let mut stark_record = VerifyingKeyRecord::new(
@@ -177,10 +162,7 @@ mod strict_verifying_key_preparation_tests {
                 }
             })
             .expect_err("binding-only STARK IVM key must not enter state");
-        assert!(
-            stark_error.to_string().contains("not admitted"),
-            "{stark_error}"
-        );
+        assert!(stark_error.contains("not admitted"), "{stark_error}");
     }
     #[test]
     fn record_preparation_rejects_oversized_stark_off_ledger_declaration() {
@@ -203,10 +185,7 @@ mod strict_verifying_key_preparation_tests {
                 }
             })
             .expect_err("an off-ledger STARK key declaration must obey the backend bound");
-        assert!(
-            error.to_string().contains("declared"),
-            "unexpected error: {error}"
-        );
+        assert!(error.contains("declared"), "unexpected error: {error}");
     }
     #[test]
     fn native_preparation_rejects_oversized_container_before_backend_decode() {
@@ -228,9 +207,7 @@ mod strict_verifying_key_preparation_tests {
         })
         .expect_err("oversized native key must fail before backend decoding");
         assert!(
-            error
-                .to_string()
-                .contains("invalid native PIPA-R key container"),
+            error.contains("invalid native PIPA-R key container"),
             "unexpected error: {error}"
         );
     }

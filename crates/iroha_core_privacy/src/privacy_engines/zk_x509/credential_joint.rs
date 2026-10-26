@@ -119,7 +119,7 @@ impl JointOracleCheckpointsV1 {
     pub(crate) fn derive_point_v1(
         self,
         auxiliary: JointAuxiliaryBindingV1,
-        mut admissible: impl FnMut(E) -> bool,
+        admissible: impl FnMut(E) -> bool,
     ) -> Result<JointPointV1, Error> {
         let proof_instance = auxiliary.proof_instance;
         let mut transcript = Transcript::new(
@@ -139,7 +139,7 @@ impl JointOracleCheckpointsV1 {
                 &self.fri_mask_roots[1].to_bytes(),
             ],
         )?;
-        let point = transcript.challenge_fp4_where(POINT_DOMAIN, |point| admissible(point))?;
+        let point = transcript.challenge_fp4_where(POINT_DOMAIN, admissible)?;
         Ok(JointPointV1 {
             proof_instance,
             point,
@@ -167,7 +167,7 @@ impl JointPointV1 {
         transcript.absorb(
             POINT_DOMAIN,
             &[
-                &[family.index() as u8],
+                &[u8::try_from(family.index()).expect("joint family ordinal fits u8")],
                 &self.sampled_state.to_bytes(),
                 &self.point.to_be_bytes(),
             ],

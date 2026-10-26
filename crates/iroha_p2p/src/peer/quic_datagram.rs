@@ -497,7 +497,7 @@ mod tests {
             .authenticate(InboundSourceByteBudget {
                 shared: Arc::clone(&budget),
                 peer_reserve: None,
-                decode_scratch: SharedByteBudget::new(1024, 0).expect("decode scratch owner"),
+                decode_scratch: SharedByteBudget::new(1024, 0).expect("test decode scratch"),
             })
             .await
             .expect("activate ingress");
@@ -556,7 +556,7 @@ mod tests {
             .authenticate(InboundSourceByteBudget {
                 shared: budget,
                 peer_reserve: None,
-                decode_scratch: SharedByteBudget::new(1024, 0).expect("decode scratch owner"),
+                decode_scratch: SharedByteBudget::new(1024, 0).expect("test decode scratch"),
             })
             .await
             .expect("activate ingress after draining pre-authentication traffic");

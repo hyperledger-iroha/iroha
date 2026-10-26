@@ -3946,8 +3946,8 @@ mod run {
     };
     use crate::Priority;
     use crate::network::message::{ClassifyTopic, Topic};
-    use iroha_data_model::peer::Peer;
     use iroha_logger::prelude::*;
+    use iroha_model_base::peer::Peer;
     use norito::codec::Decode;
     use tokio::time::Instant;
     fn frame_plaintext_cap_for<E: Enc>(max_frame_bytes: usize) -> usize {
@@ -4769,7 +4769,7 @@ mod run {
         use super::*;
         use crate::Priority;
         use iroha_crypto::encryption::ChaCha20Poly1305;
-        use iroha_data_model::peer::Peer;
+        use iroha_model_base::peer::Peer;
         use norito::codec::{Decode, Encode};
         use std::{sync::Arc, time::Duration};
         #[test]
@@ -5903,7 +5903,7 @@ mod state {
     //! Module for peer stages.
     use super::{cryptographer::Cryptographer, *};
     use iroha_crypto::{KeyPair, PublicKey, Signature};
-    use iroha_data_model::peer::Peer;
+    use iroha_model_base::peer::Peer;
     use iroha_primitives::addr::SocketAddr;
     #[derive(Clone, Debug, Encode, Decode)]
     #[norito(decode_from_slice)]
@@ -6490,7 +6490,7 @@ mod state {
                         let (send_hi, recv_hi) = conn
                             .open_bi()
                             .await
-                            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+                            .map_err(|e| std::io::Error::other(e.to_string()))?;
                         let lo = tokio::time::timeout_at(deadline, conn.open_bi()).await;
                         let (send_low, recv_low) = match lo {
                             Ok(Ok((s, r))) => (Some(s), Some(r)),
@@ -6503,10 +6503,8 @@ mod state {
                         Ok::<_, std::io::Error>(Connection::from_quic(
                             connection_id,
                             conn,
-                            send_hi,
-                            recv_hi,
-                            send_low,
-                            recv_low,
+                            (send_hi, recv_hi),
+                            send_low.zip(recv_low),
                             datagram_ingress,
                             Some(remote),
                             transport_binding,
@@ -6525,9 +6523,7 @@ mod state {
                     }
                 }
                 Err(last_err
-                    .unwrap_or_else(|| {
-                        std::io::Error::new(std::io::ErrorKind::Other, "quic dial failed")
-                    })
+                    .unwrap_or_else(|| std::io::Error::other("quic dial failed"))
                     .into())
             }
             let tcp_opts = crate::transport::TcpConnectOptions {
@@ -6640,7 +6636,7 @@ mod state {
                                             },
                                             else => {
                                                 break Err(tcp_err.or(quic_err).unwrap_or_else(|| {
-                                                    std::io::Error::new(std::io::ErrorKind::Other, "dial failed").into()
+                                                    std::io::Error::other("dial failed").into()
                                                 }));
                                             }
                                         }
@@ -7594,7 +7590,7 @@ pub(crate) use run::{checked_data_message_wire_len, data_message_wire_len_from_p
 pub mod message {
     //! Module for peer messages
     use super::*;
-    use iroha_data_model::peer::Peer;
+    use iroha_model_base::peer::Peer;
     /// Connection-local count of reliable deliveries which crossed a peer
     /// dispatch worker but have not yet left their final local consumer.
     ///
@@ -8496,14 +8492,13 @@ impl Connection {
     pub(crate) fn from_quic(
         id: ConnectionId,
         quic: quinn::Connection,
-        send_hi: quinn::SendStream,
-        recv_hi: quinn::RecvStream,
-        send_low: Option<quinn::SendStream>,
-        recv_low: Option<quinn::RecvStream>,
+        (send_hi, recv_hi): (quinn::SendStream, quinn::RecvStream),
+        low: Option<(quinn::SendStream, quinn::RecvStream)>,
         quic_datagrams: Option<QuicDatagramIngress>,
         remote_addr: Option<SocketAddr>,
         transport_binding: TransportBinding,
     ) -> Self {
+        let (send_low, recv_low) = low.unzip();
         Connection {
             id,
             read: Box::new(recv_hi),

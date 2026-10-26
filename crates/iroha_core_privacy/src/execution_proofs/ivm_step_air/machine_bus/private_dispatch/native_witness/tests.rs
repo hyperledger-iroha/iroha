@@ -85,14 +85,14 @@ fn bit_and_limb_transfers_cover_full_unsigned_width() {
             assert_eq!(carry[3], F(u64::from(value.overflowing_add(right).1)));
             carries(&mut carry, value, right, true);
             assert_eq!(carry[3], F(u64::from(value.overflowing_sub(right).1)));
-            for limb in 0..4 {
+            for (limb, &actual) in carry.iter().enumerate() {
                 let shift = (limb + 1) * 16;
                 let mask = if shift == 64 {
                     u64::MAX
                 } else {
                     (1_u64 << shift) - 1
                 };
-                assert_eq!(carry[limb], F(u64::from((value & mask) < (right & mask))));
+                assert_eq!(actual, F(u64::from((value & mask) < (right & mask))));
             }
         }
     }

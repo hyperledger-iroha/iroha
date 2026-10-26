@@ -299,6 +299,10 @@ capture_world_table_once!(
     "world.tx_sequences"
 );
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 fn capture_trigger_action_once(
     state: &State,
     table: crate::smartcontracts::triggers::set::ActionTable,
@@ -335,6 +339,10 @@ fn capture_trigger_action_once(
     }
     Ok(Some(outcome?))
 }
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 fn capture_trigger_data_once(
     state: &State,
     limits: LeafLimits,
@@ -345,6 +353,10 @@ fn capture_trigger_data_once(
         limits,
     )
 }
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 fn capture_trigger_pipeline_once(
     state: &State,
     limits: LeafLimits,
@@ -355,6 +367,10 @@ fn capture_trigger_pipeline_once(
         limits,
     )
 }
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 fn capture_trigger_time_once(
     state: &State,
     limits: LeafLimits,
@@ -365,6 +381,10 @@ fn capture_trigger_time_once(
         limits,
     )
 }
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 fn capture_trigger_by_call_once(
     state: &State,
     limits: LeafLimits,
@@ -375,6 +395,10 @@ fn capture_trigger_by_call_once(
         limits,
     )
 }
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 fn capture_trigger_contracts_once(
     state: &State,
     limits: LeafLimits,
@@ -1041,6 +1065,10 @@ use aggregate::{
         dead_code,
         reason = "TODO: bind original frozen tables, cells and history before State/Kura publication consumes this owner"
     )
+)]
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
 )]
 fn capture_actual_state_tables_once(
     state: &State,
@@ -1859,12 +1887,7 @@ mod tests {
             .expect("bounded exact interval");
         let verified = CanonicalTableLeafSet::verify_paired_raw_range(
             "world.roles",
-            limits(),
-            &before.root(),
-            &before.lookup_root(),
-            &before.ordered_root(),
-            start,
-            end,
+            limits(),(&before.root(), &before.lookup_root(), &before.ordered_root()),(start, end),
             1,
             8 * 1024,
             &proof,
@@ -1889,12 +1912,7 @@ mod tests {
         assert!(matches!(
             CanonicalTableLeafSet::verify_paired_raw_range(
                 "world.roles",
-                limits(),
-                &before.root(),
-                &omitted.lookup_root(),
-                &omitted.ordered_root(),
-                start,
-                end,
+                limits(),(&before.root(), &omitted.lookup_root(), &omitted.ordered_root()),(start, end),
                 1,
                 8 * 1024,
                 &omitted_proof,
@@ -1925,12 +1943,7 @@ mod tests {
             .expect("bounded exact interval");
         let verified = CanonicalTableLeafSet::verify_paired_raw_range(
             "world.viral_binding_claims",
-            limits(),
-            &before.root(),
-            &before.lookup_root(),
-            &before.ordered_root(),
-            start,
-            end,
+            limits(),(&before.root(), &before.lookup_root(), &before.ordered_root()),(start, end),
             1,
             8 * 1024,
             &proof,
@@ -1953,12 +1966,7 @@ mod tests {
         assert!(matches!(
             CanonicalTableLeafSet::verify_paired_raw_range(
                 "world.viral_binding_claims",
-                limits(),
-                &before.root(),
-                &changed.lookup_root(),
-                &changed.ordered_root(),
-                start,
-                end,
+                limits(),(&before.root(), &changed.lookup_root(), &changed.ordered_root()),(start, end),
                 1,
                 8 * 1024,
                 &changed_proof,
@@ -2195,12 +2203,7 @@ mod tests {
             .expect("digest-only range has bounded size");
         let verified = CanonicalTableLeafSet::verify_paired_raw_range(
             "world.contract_code",
-            limits,
-            &captured.root(),
-            &captured.lookup_root(),
-            &captured.ordered_root(),
-            &start,
-            &end,
+            limits,(&captured.root(), &captured.lookup_root(), &captured.ordered_root()),(&start, &end),
             1,
             4096,
             &proof,
@@ -2283,12 +2286,7 @@ mod tests {
             .expect("bounded digest-only history range");
         let verified = CanonicalTableLeafSet::verify_paired_raw_range(
             "world.oracle_history",
-            limits,
-            &captured.root(),
-            &captured.lookup_root(),
-            &captured.ordered_root(),
-            &start,
-            &end,
+            limits,(&captured.root(), &captured.lookup_root(), &captured.ordered_root()),(&start, &end),
             1,
             4096,
             &proof,

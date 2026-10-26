@@ -66,7 +66,7 @@ fn seed_parliament_no_roster_retry_fixture(
         })
         .collect();
     attempt
-        .register_sortition_request_batch(governance_attempt_id, registrations, candidates)
+        .register_sortition_request_batch(governance_attempt_id, registrations, &candidates)
         .expect("register the initial generation");
     attempt
         .fail_sortition_generation_with_empty_roster_for_tests(

@@ -154,6 +154,73 @@ impl WalkStart {
     }
 }
 
+/// The native identity of one committed height, as an authenticated descending
+/// walk or the State's own execution tip established it. It is a node-local
+/// resumption point for a later walk, never imported, decoded or persisted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct AuthenticatedExecutionIdentity {
+    height: u64,
+    iroha: HashOf<BlockHeader>,
+    core: iroha_sumeragi::types::Hash32,
+    result: iroha_sumeragi::types::Hash32,
+}
+
+impl AuthenticatedExecutionIdentity {
+    /// The State's own authenticated execution tip.
+    pub(crate) fn tip(tip: super::NativeExecutionTip) -> Self {
+        let start = WalkStart::tip(tip);
+        Self {
+            height: start.height,
+            iroha: start.iroha,
+            core: start.core,
+            result: start.result,
+        }
+    }
+
+    /// A receipt's own identity. Only valid for a receipt an authenticated walk visited.
+    pub(crate) fn of(receipt: &crate::sumeragi::certified_chain::CommittedBlock) -> Self {
+        Self {
+            height: receipt.height(),
+            iroha: receipt.block_hash(),
+            core: receipt.core_hash(),
+            result: receipt.result(),
+        }
+    }
+
+    /// The identity the parent of an authenticated-walk receipt must present,
+    /// or `None` for genesis.
+    pub(crate) fn parent_of(
+        receipt: &crate::sumeragi::certified_chain::CommittedBlock,
+    ) -> Option<Self> {
+        let header = receipt.header()?;
+        Some(Self {
+            height: receipt
+                .height()
+                .checked_sub(1)
+                .filter(|height| *height != 0)?,
+            iroha: receipt.block().header().prev_block_hash()?,
+            core: header.parent_hash,
+            result: header.parent_result,
+        })
+    }
+
+    pub(crate) const fn height(&self) -> u64 {
+        self.height
+    }
+
+    pub(crate) const fn iroha_hash(&self) -> HashOf<BlockHeader> {
+        self.iroha
+    }
+
+    pub(crate) const fn core_hash(&self) -> iroha_sumeragi::types::Hash32 {
+        self.core
+    }
+
+    pub(crate) const fn result(&self) -> iroha_sumeragi::types::Hash32 {
+        self.result
+    }
+}
+
 impl<'a> CanonicalHistorySource<'a> {
     /// Borrow this exact captured source's physical allocation owner.
     /// No pool is created, replaced or inferred from a later State view.
@@ -454,6 +521,43 @@ impl<'a> CanonicalHistorySource<'a> {
         .map(drop)
     }
 
+    /// One bounded chunk of a descending walk resumed below an identity that an
+    /// earlier authenticated walk of this same history returned, instead of at
+    /// the tip. The start must still be this source's journal entry; every frame
+    /// from it down to `first` is read and checked exactly as from the tip.
+    /// Node-local resumption only: it must never feed on-chain metering.
+    pub(crate) fn visit_executed_backwards_from_identity(
+        &self,
+        start: AuthenticatedExecutionIdentity,
+        first: NonZeroUsize,
+        before_read: impl FnMut(u64, u64) -> Result<(), ExecutionAttemptError<QueryExecutionFail>>,
+        mut visit: impl FnMut(
+            crate::sumeragi::certified_chain::CommittedBlock,
+        ) -> Result<(), ExecutionAttemptError<QueryExecutionFail>>,
+    ) -> Result<(), ExecutionAttemptError<QueryExecutionFail>> {
+        let last = usize::try_from(start.height)
+            .ok()
+            .and_then(NonZeroUsize::new)
+            .ok_or(QueryExecutionFail::GasBudgetExceeded)?;
+        // The captured tip only supplies the native root scope; the walk itself
+        // rechecks the start and every lower frame against this journal.
+        self.walk_tip(first, last)?;
+        self.walk_backwards(
+            WalkStart {
+                height: start.height,
+                iroha: start.iroha,
+                core: start.core,
+                result: start.result,
+            },
+            first,
+            last,
+            None,
+            before_read,
+            |value| visit(value.into_owned()).map(|()| core::ops::ControlFlow::Continue(())),
+        )
+        .map(drop)
+    }
+
     /// [`Self::visit_executed_backwards_until`] for off-chain readers: the walk
     /// starts at the nearest verified checkpoint at or above `last` instead of
     /// the tip, so it reads at most
@@ -625,10 +729,8 @@ impl<'a> CanonicalHistorySource<'a> {
                         invalid("native successor omits Iroha parent hash".into())
                     })?;
             }
-            if source_height <= selected_last {
-                if visit(receipt)?.is_break() {
-                    return Ok(false);
-                }
+            if source_height <= selected_last && visit(receipt)?.is_break() {
+                return Ok(false);
             }
             if source_height == target {
                 return Ok(true);

@@ -439,7 +439,7 @@ mod tests {
                 note.clone(),
                 [0x41; 32],
                 0,
-                [[0x42; 32]; PQ_MASP_TREE_DEPTH_V1],
+                &[[0x42; 32]; PQ_MASP_TREE_DEPTH_V1],
             ),
             Err(PqMaspRelationErrorV1::NullifierKeyMismatch)
         );
@@ -448,7 +448,7 @@ mod tests {
                 note.clone(),
                 [0x31; 32],
                 0,
-                [[0; 32]; PQ_MASP_TREE_DEPTH_V1],
+                &[[0; 32]; PQ_MASP_TREE_DEPTH_V1],
             ),
             Err(PqMaspRelationErrorV1::ZeroWitnessComponent)
         );
@@ -456,7 +456,7 @@ mod tests {
             note.clone(),
             [0x31; 32],
             0,
-            [[0x42; 32]; PQ_MASP_TREE_DEPTH_V1],
+            &[[0x42; 32]; PQ_MASP_TREE_DEPTH_V1],
         )
         .expect("input");
         let output = PqMaspOutputWitnessV1::new(note).expect("output");

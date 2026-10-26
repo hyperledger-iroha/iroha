@@ -1,4 +1,4 @@
-//! Runtime-only, role-separated signing boundary for production PoTR receipts.
+//! Runtime-only, role-separated signing boundary for production `PoTR` receipts.
 //!
 //! Torii constructs the canonical receipt, but it never owns or derives the provider key. Gateway
 //! Ed25519 and provider ML-DSA-65 operations are routed through distinct runtime services. Torii
@@ -39,7 +39,7 @@ pub enum PotrSignerServiceError {
     #[error("runtime signer refused request")]
     Refused,
 }
-/// Public, non-secret qualification for one PoTR runtime signer.
+/// Public, non-secret qualification for one `PoTR` runtime signer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PotrRuntimeProviderQualificationV1 {
     revision: u64,
@@ -71,7 +71,7 @@ impl PotrRuntimeProviderQualificationV1 {
         Self::new(binding.policy_sequence, binding.policy_digest)
     }
 }
-/// Independently configured identity and policy binding for one PoTR signer.
+/// Independently configured identity and policy binding for one `PoTR` signer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PotrRuntimeProviderBindingV1 {
     handle: String,
@@ -124,7 +124,7 @@ impl PotrRuntimeProviderBindingV1 {
         Ok(())
     }
 }
-/// Stable identities of the independently administered PoTR policy reader.
+/// Stable identities of the independently administered `PoTR` policy reader.
 ///
 /// These public, non-secret pins keep the immutable finalized-state source and admission-material
 /// resolver distinct from the reader facade and both runtime signer roles.
@@ -200,7 +200,7 @@ pub enum PotrAdmissionReaderError {
     /// The reader cannot satisfy the supplied exact policy floor.
     #[error("PoTR admission reader is stale")]
     Stale,
-    /// The provider or its PoTR key is revoked at the requested finality point.
+    /// The provider or its `PoTR` key is revoked at the requested finality point.
     #[error("PoTR provider admission is revoked")]
     Revoked,
     /// The reader refused the exact bounded query.
@@ -412,7 +412,7 @@ impl PotrAdmissionMaterialResolverV1 for PotrAdmissionRegistryResolverV1 {
         Ok(admission)
     }
 }
-/// Production exact-finalized PoTR admission reader.
+/// Production exact-finalized `PoTR` admission reader.
 #[derive(Clone)]
 pub struct PotrFinalizedAdmissionReaderV1 {
     reader_id: [u8; 32],
@@ -584,7 +584,7 @@ pub enum PotrFinalizedAdmissionReaderConfigError {
     #[error("PoTR finalized reader component identities must be distinct")]
     IdentityCollision,
 }
-/// Runtime-only Ed25519 signer for the gateway role of a PoTR receipt.
+/// Runtime-only Ed25519 signer for the gateway role of a `PoTR` receipt.
 ///
 /// Implementations use a qualified deployment-owned signing provider. `signer_id` is a non-secret
 /// stable deployment identity for the signer instance, not a key handle or credential.
@@ -607,7 +607,7 @@ pub trait PotrGatewaySignerV1: Send + Sync {
     /// Returns an error if the signer service is unavailable or refuses to
     /// provide its active public key.
     fn public_key(&self) -> Result<[u8; 32], PotrSignerServiceError>;
-    /// Sign the exact domain-separated canonical PoTR payload.
+    /// Sign the exact domain-separated canonical `PoTR` payload.
     ///
     /// # Errors
     ///
@@ -615,7 +615,7 @@ pub trait PotrGatewaySignerV1: Send + Sync {
     /// exact canonical receipt payload.
     fn sign(&self, payload: &[u8]) -> Result<Vec<u8>, PotrSignerServiceError>;
 }
-/// Runtime-only ML-DSA-65 signer for the provider role of a PoTR receipt.
+/// Runtime-only ML-DSA-65 signer for the provider role of a `PoTR` receipt.
 ///
 /// The declared provider identity and public key are checked against the current council-verified
 /// admission on every operation. This makes provider revocation and key rotation fail closed
@@ -646,7 +646,7 @@ pub trait PotrProviderSignerV1: Send + Sync {
     /// Returns an error if the signer service is unavailable or refuses to
     /// provide its active public key.
     fn public_key(&self) -> Result<Vec<u8>, PotrSignerServiceError>;
-    /// Sign the exact domain-separated canonical PoTR payload.
+    /// Sign the exact domain-separated canonical `PoTR` payload.
     ///
     /// # Errors
     ///
@@ -748,7 +748,7 @@ fn qualify_provider_signer(
     }
     Ok(())
 }
-/// Externally administered PoTR signer roles plus non-secret reader pins.
+/// Externally administered `PoTR` signer roles plus non-secret reader pins.
 ///
 /// Torii accepts this object before API construction, then binds the two signer
 /// roles to its own finalized [`State`] and council-verified admission
@@ -1339,7 +1339,7 @@ fn validate_provider_public_key(public_key: &[u8]) -> Result<(), PotrReceiptRunt
         .map(|_| ())
         .map_err(|_| PotrReceiptRuntimeSigningError::InvalidProviderPublicKey)
 }
-/// Invalid construction of the role-separated PoTR runtime boundary.
+/// Invalid construction of the role-separated `PoTR` runtime boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum PotrRuntimeSignerConfigError {
     /// A configured signer handle is malformed.
@@ -1405,13 +1405,13 @@ pub enum PotrRuntimeSignerConfigError {
     /// The production finalized admission reader could not be constructed.
     #[error("PoTR finalized admission reader configuration is invalid")]
     FinalizedReader(PotrFinalizedAdmissionReaderConfigError),
-    /// PoTR is enabled without the exact public runtime binding.
+    /// `PoTR` is enabled without the exact public runtime binding.
     #[error("enabled PoTR requires an exact runtime binding")]
     MissingRuntimeConfiguration,
-    /// A PoTR runtime binding was retained while the service is disabled.
+    /// A `PoTR` runtime binding was retained while the service is disabled.
     #[error("disabled PoTR must not retain a runtime binding")]
     DisabledRuntimeConfiguration,
-    /// Enabled PoTR configuration has no injected runtime signer roles.
+    /// Enabled `PoTR` configuration has no injected runtime signer roles.
     #[error("enabled PoTR runtime configuration requires injected signer roles")]
     MissingRuntimeSignerRoles,
     /// Runtime roles were injected without an enabled exact configuration.
@@ -1424,7 +1424,7 @@ pub enum PotrRuntimeSignerConfigError {
     #[error("PoTR runtime signer roles require a council-verified admission registry")]
     MissingAdmissionRegistry,
 }
-/// Fail-closed PoTR receipt signing and policy-binding failure.
+/// Fail-closed `PoTR` receipt signing and policy-binding failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub(crate) enum PotrReceiptRuntimeSigningError {
     /// The gateway adapter changed its stable administrative identity.
@@ -1457,10 +1457,10 @@ pub(crate) enum PotrReceiptRuntimeSigningError {
     /// The admission was not active when the request began.
     #[error("PoTR provider admission is not active")]
     InactiveAdmission,
-    /// The signed deadline differs from the council-verified provider QoS.
+    /// The signed deadline differs from the council-verified provider `QoS`.
     #[error("PoTR receipt deadline does not match governed provider QoS")]
     AdmissionDeadlineMismatch,
-    /// The signed storage tier differs from the council-verified provider QoS.
+    /// The signed storage tier differs from the council-verified provider `QoS`.
     #[error("PoTR receipt tier does not match governed provider QoS")]
     AdmissionTierMismatch,
     /// The unsigned receipt violates canonical semantic invariants.
@@ -1487,7 +1487,7 @@ pub(crate) enum PotrReceiptRuntimeSigningError {
     /// The runtime provider key is not a canonical ML-DSA-65 public key.
     #[error("PoTR provider signer returned an invalid ML-DSA-65 public key")]
     InvalidProviderPublicKey,
-    /// No governed PoTR key is present in active provider policy.
+    /// No governed `PoTR` key is present in active provider policy.
     #[error("PoTR provider policy has no ML-DSA-65 key")]
     ProviderPolicyUnavailable,
     /// The runtime provider key does not match active governed policy.
@@ -2945,6 +2945,49 @@ mod tests {
     }
     #[test]
     fn signer_identity_and_object_reuse_are_rejected() {
+        struct DualRoleSigner;
+        impl PotrGatewaySignerV1 for DualRoleSigner {
+            fn handle(&self) -> &str {
+                GATEWAY_HANDLE
+            }
+            fn signer_id(&self) -> [u8; 32] {
+                GATEWAY_SIGNER_ID
+            }
+            fn qualification(
+                &self,
+            ) -> Result<PotrRuntimeProviderQualificationV1, PotrSignerServiceError> {
+                Ok(GATEWAY_QUALIFICATION)
+            }
+            fn public_key(&self) -> Result<[u8; 32], PotrSignerServiceError> {
+                Err(PotrSignerServiceError::Refused)
+            }
+            fn sign(&self, _payload: &[u8]) -> Result<Vec<u8>, PotrSignerServiceError> {
+                Err(PotrSignerServiceError::Refused)
+            }
+        }
+        impl PotrProviderSignerV1 for DualRoleSigner {
+            fn handle(&self) -> &str {
+                PROVIDER_HANDLE
+            }
+            fn signer_id(&self) -> [u8; 32] {
+                PROVIDER_SIGNER_ID
+            }
+            fn qualification(
+                &self,
+            ) -> Result<PotrRuntimeProviderQualificationV1, PotrSignerServiceError> {
+                Ok(PROVIDER_BASELINE_QUALIFICATION)
+            }
+            fn provider_id(&self) -> Result<[u8; 32], PotrSignerServiceError> {
+                Err(PotrSignerServiceError::Refused)
+            }
+            fn public_key(&self) -> Result<Vec<u8>, PotrSignerServiceError> {
+                Err(PotrSignerServiceError::Refused)
+            }
+            fn sign(&self, _payload: &[u8]) -> Result<Vec<u8>, PotrSignerServiceError> {
+                Err(PotrSignerServiceError::Refused)
+            }
+        }
+
         let fixture = fixture();
         let invalid_policy_gateway = Arc::new(TestGatewaySigner {
             signer_id: GATEWAY_SIGNER_ID,
@@ -3015,48 +3058,7 @@ mod tests {
             .expect_err("shared runtime identity must fail"),
             PotrRuntimeSignerConfigError::SharedSignerIdentity
         );
-        struct DualRoleSigner;
-        impl PotrGatewaySignerV1 for DualRoleSigner {
-            fn handle(&self) -> &str {
-                GATEWAY_HANDLE
-            }
-            fn signer_id(&self) -> [u8; 32] {
-                GATEWAY_SIGNER_ID
-            }
-            fn qualification(
-                &self,
-            ) -> Result<PotrRuntimeProviderQualificationV1, PotrSignerServiceError> {
-                Ok(GATEWAY_QUALIFICATION)
-            }
-            fn public_key(&self) -> Result<[u8; 32], PotrSignerServiceError> {
-                Err(PotrSignerServiceError::Refused)
-            }
-            fn sign(&self, _payload: &[u8]) -> Result<Vec<u8>, PotrSignerServiceError> {
-                Err(PotrSignerServiceError::Refused)
-            }
-        }
-        impl PotrProviderSignerV1 for DualRoleSigner {
-            fn handle(&self) -> &str {
-                PROVIDER_HANDLE
-            }
-            fn signer_id(&self) -> [u8; 32] {
-                PROVIDER_SIGNER_ID
-            }
-            fn qualification(
-                &self,
-            ) -> Result<PotrRuntimeProviderQualificationV1, PotrSignerServiceError> {
-                Ok(PROVIDER_BASELINE_QUALIFICATION)
-            }
-            fn provider_id(&self) -> Result<[u8; 32], PotrSignerServiceError> {
-                Err(PotrSignerServiceError::Refused)
-            }
-            fn public_key(&self) -> Result<Vec<u8>, PotrSignerServiceError> {
-                Err(PotrSignerServiceError::Refused)
-            }
-            fn sign(&self, _payload: &[u8]) -> Result<Vec<u8>, PotrSignerServiceError> {
-                Err(PotrSignerServiceError::Refused)
-            }
-        }
+
         let shared = Arc::new(DualRoleSigner);
         let gateway: Arc<dyn PotrGatewaySignerV1> = shared.clone();
         let provider: Arc<dyn PotrProviderSignerV1> = shared;
@@ -3076,6 +3078,31 @@ mod tests {
     }
     #[test]
     fn admission_reader_cannot_reuse_or_drift_into_a_signer_trust_domain() {
+        struct DriftingAdmissionReader {
+            identity_reads: AtomicUsize,
+            snapshot: PotrAdmissionSnapshotV1,
+            query_calls: Arc<AtomicUsize>,
+        }
+        impl PotrAdmissionReaderV1 for DriftingAdmissionReader {
+            fn reader_id(&self) -> [u8; 32] {
+                if self.identity_reads.fetch_add(1, Ordering::SeqCst) == 0 {
+                    ADMISSION_READER_ID
+                } else {
+                    [0x77; 32]
+                }
+            }
+            fn active_admission(
+                &self,
+                _provider_id: [u8; 32],
+                _requested_at_ms: u64,
+                _recorded_at_ms: u64,
+                _minimum: &PotrAdmissionPolicyBindingV1,
+            ) -> Result<PotrAdmissionSnapshotV1, PotrAdmissionReaderError> {
+                self.query_calls.fetch_add(1, Ordering::SeqCst);
+                Ok(self.snapshot.clone())
+            }
+        }
+
         let fixture = fixture();
         let gateway = Arc::new(TestGatewaySigner {
             signer_id: GATEWAY_SIGNER_ID,
@@ -3117,30 +3144,7 @@ mod tests {
             .expect_err("reader and signer identities must remain distinct"),
             PotrRuntimeSignerConfigError::AdmissionReaderSharesSignerIdentity
         );
-        struct DriftingAdmissionReader {
-            identity_reads: AtomicUsize,
-            snapshot: PotrAdmissionSnapshotV1,
-            query_calls: Arc<AtomicUsize>,
-        }
-        impl PotrAdmissionReaderV1 for DriftingAdmissionReader {
-            fn reader_id(&self) -> [u8; 32] {
-                if self.identity_reads.fetch_add(1, Ordering::SeqCst) == 0 {
-                    ADMISSION_READER_ID
-                } else {
-                    [0x77; 32]
-                }
-            }
-            fn active_admission(
-                &self,
-                _provider_id: [u8; 32],
-                _requested_at_ms: u64,
-                _recorded_at_ms: u64,
-                _minimum: &PotrAdmissionPolicyBindingV1,
-            ) -> Result<PotrAdmissionSnapshotV1, PotrAdmissionReaderError> {
-                self.query_calls.fetch_add(1, Ordering::SeqCst);
-                Ok(self.snapshot.clone())
-            }
-        }
+
         let query_calls = Arc::new(AtomicUsize::new(0));
         let drifting_reader = Arc::new(DriftingAdmissionReader {
             identity_reads: AtomicUsize::new(0),

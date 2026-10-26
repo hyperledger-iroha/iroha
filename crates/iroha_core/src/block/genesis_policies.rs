@@ -3,8 +3,9 @@
 //! Validate the pristine State once for the complete bootstrap operation. Each
 //! source-specific validator runs before either projection changes. Decode into
 //! a disposable candidate, then move both capabilities and the candidate together.
-//! TODO(F4): fund the canonical parameter/MV backing and nested leaves before
-//! live adoption; this source-authentication owner does not claim allocation custody.
+//! Every unpublished parameter graph is funded from the original World pool.
+//! TODO(original-source-admission): original signed-input retention and capability-selection backing remain with
+//! the authenticated source owner; they are not retroactively admitted here.
 
 use iroha_data_model::block::SignedBlock;
 
@@ -63,9 +64,14 @@ impl GenesisPolicies {
         selected
             .staking
             .validate_installation(block, overlay, state, generation)?;
-        let mut candidate = overlay.world.parameters.get().clone();
-        selected.crypto.initialize_candidate(&mut candidate)?;
-        selected.staking.initialize_candidate(&mut candidate)?;
+        let predecessor = overlay.world.parameters.get().clone();
+        let budget = overlay.world.sccp_committee_generations.allocation_budget();
+        let crypto = selected
+            .crypto
+            .initialize_candidate(&predecessor, block, budget)?;
+        let candidate = selected
+            .staking
+            .initialize_candidate(&crypto, block, budget)?;
         selected
             .crypto
             .policy_for_parameters(&block.header(), &candidate)
@@ -74,6 +80,11 @@ impl GenesisPolicies {
             .staking
             .policy_for_parameters(&block.header(), &candidate)
             .map_err(|_| invalid("combined candidate lost its original staking policy"))?;
+        if !predecessor.same_version(overlay.world.parameters.get()) {
+            return Err(BlockValidationError::ExecutionDeferred(
+                ivm::error::ExecutionDeferral::LocalInvariantViolation.into(),
+            ));
+        }
         // No fallible decoder or source check follows the first overlay write.
         // Both retained source owners move with their exact validated projections.
         *overlay.world.parameters.get_mut() = candidate;

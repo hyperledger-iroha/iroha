@@ -99,12 +99,11 @@ fn assert_physical_prefix(slot: &StateEffectLocks<'_>, blocked_index: usize) {
 fn refusal<G>(
     state: &Arc<State>,
     blocker: G,
-    expected: iroha_allocation::release::ReleaseWait,
+    expected: &iroha_allocation::release::ReleaseWait,
     field: &'static str,
     blocked_index: usize,
     before: &[(&'static str, String)],
-    blocker_registration: &mut iroha_allocation::release::ReleaseRegistration,
-    prefix_registration: &mut iroha_allocation::release::ReleaseRegistration,
+    (blocker_registration, prefix_registration): (&mut iroha_allocation::release::ReleaseRegistration, &mut iroha_allocation::release::ReleaseRegistration),
 ) {
     // Retained cleanup precedes the outer fence, as in the real publisher.
     let mut cleanup = StateEffectLocks::new(state);
@@ -113,7 +112,7 @@ fn refusal<G>(
     let (actual_field, wait) = cleanup.try_prepare().expect_err("actual original blocker");
     assert_eq!(actual_field, field);
     assert_eq!(
-        wait, expected,
+        &wait, expected,
         "refusal must return the exact blocking source and observation"
     );
     assert_physical_prefix(&cleanup, blocked_index);
@@ -187,10 +186,10 @@ fn every_effect_reader_and_writer_refusal_retains_original_prefix_and_wait() {
             $(
                 let held = state.$field.read();
                 let expected = state.$field.try_write_or_wait().err().expect("actual original reader");
-                refusal(&state, held, expected, stringify!($field), index, &before, &mut blocker_registration, &mut prefix_registration);
+                refusal(&state, held, &(expected), stringify!($field), index, &before,(&mut blocker_registration, &mut prefix_registration));
                 let held = state.$field.write();
                 let expected = state.$field.try_write_or_wait().err().expect("actual original writer");
-                refusal(&state, held, expected, stringify!($field), index, &before, &mut blocker_registration, &mut prefix_registration);
+                refusal(&state, held, &(expected), stringify!($field), index, &before,(&mut blocker_registration, &mut prefix_registration));
                 index += 1;
             )*
             index
@@ -290,7 +289,7 @@ fn synchronous_effect_preparation_releases_prefix_while_waiting_for_the_last_ori
     let prefix = effect_indexes!(free_prefix);
     drop(blocker);
     let completed = if early.is_ok() {
-        early.clone()
+        early
     } else {
         done_rx.recv_timeout(Duration::from_secs(5))
     };

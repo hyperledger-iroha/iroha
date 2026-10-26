@@ -335,7 +335,7 @@ pub fn verify_private_settlement_auditor_view_attestation_v1(
 ///
 /// # Errors
 ///
-/// Rejects a signer outside the roster, body substitution, malformed PoP, or
+/// Rejects a signer outside the roster, body substitution, malformed `PoP`, or
 /// invalid BLS signature.
 pub fn verify_private_settlement_availability_share_v1(
     share: &PrivateSettlementAvailabilityShareV1,

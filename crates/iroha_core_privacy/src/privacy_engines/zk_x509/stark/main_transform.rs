@@ -179,13 +179,17 @@ impl MainTraceCosetEvaluatorV1 {
         if self.device_columns == 0 {
             let result = columns
                 .par_iter()
-                .map(|column| match selected {
-                    Some(indices) => {
-                        selected_coset::evaluate_v1(column, native_log, common_log, indices)
-                    }
-                    None => masked_trace_coefficients_on_coset_v1(column, native_log, common_log)
-                        .map(Column::from_vec_v1)
-                        .map_err(aggregate::map_transparent_error_v1),
+                .map(|column| {
+                    selected.map_or_else(
+                        || {
+                            masked_trace_coefficients_on_coset_v1(column, native_log, common_log)
+                                .map(Column::from_vec_v1)
+                                .map_err(aggregate::map_transparent_error_v1)
+                        },
+                        |indices| {
+                            selected_coset::evaluate_v1(column, native_log, common_log, indices)
+                        },
+                    )
                 })
                 .collect::<Result<Vec<_>, _>>()?;
             self.receipt.cpu_columns += columns.len();
@@ -348,7 +352,10 @@ mod tests {
     fn device_allowance_preserves_cpu_admission_and_all_reserves() {
         let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
         let plan = main_resources::MainProverBufferPlanV1::new_v1(&layout).unwrap();
-        let cap = super::super::super::super::profile::ZK_X509_PROVER_PEAK_MEMORY_BYTES_V1 as usize;
+        let cap = usize::try_from(
+            super::super::super::super::profile::ZK_X509_PROVER_PEAK_MEMORY_BYTES_V1,
+        )
+        .expect("fixture value fits usize");
         let baseline = plan.check_before_sources_v1(0).unwrap();
         let assembly_limit = cap - baseline;
         // The 12 GiB ceiling still reserves 6 GiB of native sources, 1 GiB
@@ -444,9 +451,7 @@ mod tests {
                     };
                     evaluator.evaluate_with_v1(&columns, 4, 6, |batch, _| {
                         batch[0][0] = 999;
-                        if unwind {
-                            panic!("injected dispatch unwind");
-                        }
+                        assert!(!unwind, "injected dispatch unwind");
                         Err(AggregateStarkErrorV1::AllocationFailure)
                     })
                 }));

@@ -320,9 +320,9 @@ fn high_s_p256_signature(signature: P256Signature) -> P256Signature {
     let low_s_bytes = low_s.to_bytes();
     let mut high_s_bytes = [0_u8; P256_XMLDSIG_SIGNATURE_LEN];
     high_s_bytes[..32].copy_from_slice(&low_s_bytes[..32]);
-    let mut borrow = 0_u16;
+    let mut borrow = 0_u8;
     for i in (0..32).rev() {
-        let minuend = i16::from(P256_ORDER[i]) - i16::from(borrow as u8);
+        let minuend = i16::from(P256_ORDER[i]) - i16::from(borrow);
         let subtrahend = i16::from(low_s_bytes[32 + i]);
         if minuend >= subtrahend {
             high_s_bytes[32 + i] =
@@ -500,7 +500,7 @@ fn signed_pacs008_xml_with_raw_self_closing_signed_info_signature() -> String {
 }
 fn signed_pacs008_xml_with_fixed_width_signature_value() -> String {
     signed_pacs008_xml_from_unsigned_with_signature_encoding(
-        unsigned_pacs008_xml(),
+        &(unsigned_pacs008_xml()),
         XML_C14N_1_0,
         false,
         true,
@@ -572,13 +572,13 @@ fn signed_pacs008_xml_with_extra_sgntr_carrier() -> String {
             "<Sgntr><SignedInfo><SignatureMethod>ignored</SignatureMethod></SignedInfo><SignatureValue>ignored</SignatureValue></Sgntr></FIToFICstmrCdtTrf>",
             1,
         );
-    signed_pacs008_xml_from_unsigned(unsigned, XML_C14N_1_0, false, true)
+    signed_pacs008_xml_from_unsigned(&(unsigned), XML_C14N_1_0, false, true)
 }
 fn signed_pacs008_xml_with_same_document_reference() -> String {
     let reference_id = "doc-001";
     let unsigned = unsigned_pacs008_xml_with_document_id(reference_id);
     signed_pacs008_xml_from_unsigned_with_reference_uri_and_signature_encoding(
-        unsigned,
+        &(unsigned),
         XML_C14N_1_0,
         &format!("#{reference_id}"),
         false,
@@ -590,7 +590,7 @@ fn signed_pacs008_xml_with_inherited_namespace_same_document_reference() -> Stri
     let reference_id = "doc-001";
     let unsigned = unsigned_pacs008_xml_with_inherited_default_namespace_reference_id(reference_id);
     signed_pacs008_xml_from_unsigned_with_reference_uri_and_signature_encoding(
-        unsigned,
+        &(unsigned),
         XML_C14N_1_0,
         &format!("#{reference_id}"),
         false,
@@ -608,7 +608,7 @@ fn signed_pacs008_xml_with_app_header_outside_same_document_reference() -> Strin
         &document,
     );
     signed_pacs008_xml_from_unsigned_with_reference_uri_and_signature_encoding(
-        unsigned,
+        &(unsigned),
         XML_C14N_1_0,
         &format!("#{reference_id}"),
         false,
@@ -621,7 +621,7 @@ fn signed_pacs008_xml_with_header_only_same_document_reference() -> String {
     let unsigned =
         unsigned_pacs008_xml().replacen("<GrpHdr>", &format!(r#"<GrpHdr Id="{reference_id}">"#), 1);
     signed_pacs008_xml_from_unsigned_with_reference_uri_and_signature_encoding(
-        unsigned,
+        &(unsigned),
         XML_C14N_1_0,
         &format!("#{reference_id}"),
         false,
@@ -633,7 +633,7 @@ fn signed_pacs008_xml_with_reference_c14n_transform() -> String {
     let reference_id = "doc-001";
     let unsigned = unsigned_pacs008_xml_with_inherited_unused_namespace_reference_id(reference_id);
     signed_pacs008_xml_from_unsigned_with_reference_options(
-        unsigned,
+        &(unsigned),
         XML_C14N_1_0,
         &format!("#{reference_id}"),
         false,
@@ -1459,7 +1459,7 @@ fn unsigned_pacs008_xml_with_comments() -> String {
 }
 fn signed_pacs008_xml_with_character_reference_message_id() -> String {
     signed_pacs008_xml_from_unsigned(
-        unsigned_pacs008_xml_with_message_id("sig&amp;001"),
+        &(unsigned_pacs008_xml_with_message_id("sig&amp;001")),
         XML_C14N_1_0,
         false,
         true,
@@ -1476,7 +1476,7 @@ fn unsigned_pacs008_xml_with_prefixed_attribute() -> String {
 }
 fn signed_pacs008_xml_with_xml_namespace_attribute() -> String {
     signed_pacs008_xml_from_unsigned(
-        unsigned_pacs008_xml_with_xml_namespace_attribute(),
+        &(unsigned_pacs008_xml_with_xml_namespace_attribute()),
         XML_C14N_1_0,
         false,
         true,
@@ -1484,7 +1484,7 @@ fn signed_pacs008_xml_with_xml_namespace_attribute() -> String {
 }
 fn signed_pacs008_xml_with_prefixed_attribute() -> String {
     signed_pacs008_xml_from_unsigned(
-        unsigned_pacs008_xml_with_prefixed_attribute(),
+        &(unsigned_pacs008_xml_with_prefixed_attribute()),
         XML_C14N_1_0,
         false,
         true,
@@ -1775,14 +1775,14 @@ fn signed_pacs008_xml_with_c14n_algorithm_and_signed_info_options(
     sign_canonical_signed_info: bool,
 ) -> String {
     signed_pacs008_xml_from_unsigned(
-        unsigned_pacs008_xml(),
+        &(unsigned_pacs008_xml()),
         c14n_algorithm,
         self_closing_signed_info_methods,
         sign_canonical_signed_info,
     )
 }
 fn signed_pacs008_xml_from_unsigned(
-    unsigned: String,
+    unsigned: &str,
     c14n_algorithm: &str,
     self_closing_signed_info_methods: bool,
     sign_canonical_signed_info: bool,
@@ -1796,7 +1796,7 @@ fn signed_pacs008_xml_from_unsigned(
     )
 }
 fn signed_pacs008_xml_from_unsigned_with_signature_encoding(
-    unsigned: String,
+    unsigned: &str,
     c14n_algorithm: &str,
     self_closing_signed_info_methods: bool,
     sign_canonical_signed_info: bool,
@@ -1812,7 +1812,7 @@ fn signed_pacs008_xml_from_unsigned_with_signature_encoding(
     )
 }
 fn signed_pacs008_xml_from_unsigned_with_reference_uri_and_signature_encoding(
-    unsigned: String,
+    unsigned: &str,
     c14n_algorithm: &str,
     reference_uri: &str,
     self_closing_signed_info_methods: bool,
@@ -1830,7 +1830,7 @@ fn signed_pacs008_xml_from_unsigned_with_reference_uri_and_signature_encoding(
     )
 }
 fn signed_pacs008_xml_from_unsigned_with_reference_options(
-    unsigned: String,
+    unsigned: &str,
     c14n_algorithm: &str,
     reference_uri: &str,
     self_closing_signed_info_methods: bool,
@@ -1842,7 +1842,7 @@ fn signed_pacs008_xml_from_unsigned_with_reference_options(
         .find("</FIToFICstmrCdtTrf>")
         .expect("signature insertion point");
     let reference_target =
-        xml_signature_reference_target(&unsigned, reference_uri).expect("reference target");
+        xml_signature_reference_target(unsigned, reference_uri).expect("reference target");
     let reference_c14n_mode = reference_c14n_algorithm
         .map(xml_canonicalization_mode)
         .transpose()
@@ -1862,7 +1862,7 @@ fn signed_pacs008_xml_from_unsigned_with_reference_options(
         self_closing_signed_info_methods,
         reference_c14n_algorithm,
     );
-    let mut signature_namespace_scope = xml_namespace_bindings_before_offset(&unsigned, insertion)
+    let mut signature_namespace_scope = xml_namespace_bindings_before_offset(unsigned, insertion)
         .expect("signature ancestor namespace scope");
     if let Some(default_namespace) = signature_namespace_scope
         .iter_mut()
@@ -2890,10 +2890,10 @@ fn remove_xml_element(payload: &str, tag: &str) -> String {
     let start = payload
         .find(&open)
         .unwrap_or_else(|| panic!("fixture must contain <{tag}>"));
-    let close_start = payload[start..]
-        .find(&close)
-        .map(|offset| start + offset)
-        .unwrap_or_else(|| panic!("fixture must contain </{tag}>"));
+    let close_start = payload[start..].find(&close).map_or_else(
+        || panic!("fixture must contain </{tag}>"),
+        |offset| start + offset,
+    );
     let end = close_start + close.len();
     let mut stripped = payload.to_owned();
     stripped.replace_range(start..end, "");
@@ -2993,7 +2993,7 @@ fn inbound_metadata(message_id: &str, message_type: &str) -> IsoMessageMetadata 
 }
 fn record_original(runtime: &Iso20022BridgeRuntime, message_id: &str, message_type: &str) {
     assert!(
-        runtime.check_and_record_inbound(message_id, inbound_metadata(message_id, message_type)),
+        runtime.check_and_record_inbound(message_id, &(inbound_metadata(message_id, message_type))),
         "record original {message_id}"
     );
 }
@@ -3012,7 +3012,7 @@ fn record_lifecycle(runtime: &Iso20022BridgeRuntime, message_id: &str, message_t
     }
     assert!(
         runtime
-            .admit_inbound(message_id, metadata, parties, false)
+            .admit_inbound(message_id, &(metadata), parties, false)
             .is_ok(),
         "record lifecycle {message_id}"
     );
@@ -3272,16 +3272,17 @@ fn der_tlv(tag: u8, content: Vec<u8>) -> Vec<u8> {
 }
 fn der_length(len: usize) -> Vec<u8> {
     if len < 0x80 {
-        return vec![len as u8];
+        return vec![u8::try_from(len).expect("short DER length fits one byte")];
     }
     let mut bytes = Vec::new();
     let mut remaining = len;
     while remaining > 0 {
-        bytes.push((remaining & 0xff) as u8);
+        bytes.push(remaining.to_le_bytes()[0]);
         remaining >>= 8;
     }
     bytes.reverse();
-    let mut out = vec![0x80 | bytes.len() as u8];
+    let mut out =
+        vec![0x80 | u8::try_from(bytes.len()).expect("usize length uses at most eight bytes")];
     out.extend(bytes);
     out
 }
@@ -3387,12 +3388,12 @@ fn assert_required_x509_policy_path_payload_rejected(
     assert!(matches!(err, MsgError::ValidationFailed));
 }
 fn assert_x509_trust_anchor_payload_accepted(
-    payload: String,
+    payload: &str,
     trust_anchor_pin: String,
     configure_profile: impl FnOnce(&mut actual::IsoBridgeProfile),
     expected: &str,
 ) {
-    let metadata = validate_require_verified_signed_payload(&payload, move |profile| {
+    let metadata = validate_require_verified_signed_payload(payload, move |profile| {
         profile.signature_public_key_sha256_pins.clear();
         profile.x509_trust_anchor_sha256_pins = vec![trust_anchor_pin];
         configure_profile(profile);
@@ -3401,12 +3402,12 @@ fn assert_x509_trust_anchor_payload_accepted(
     assert!(metadata.embedded_signature_detected());
 }
 fn assert_x509_trust_anchor_payload_rejected(
-    payload: String,
+    payload: &str,
     trust_anchor_pin: String,
     configure_profile: impl FnOnce(&mut actual::IsoBridgeProfile),
     expected: &str,
 ) {
-    let err = validate_require_verified_signed_payload(&payload, move |profile| {
+    let err = validate_require_verified_signed_payload(payload, move |profile| {
         profile.signature_public_key_sha256_pins.clear();
         profile.x509_trust_anchor_sha256_pins = vec![trust_anchor_pin];
         configure_profile(profile);
@@ -3415,11 +3416,11 @@ fn assert_x509_trust_anchor_payload_rejected(
     assert!(matches!(err, MsgError::ValidationFailed));
 }
 fn assert_require_verified_signed_payload_accepted(
-    payload: String,
+    payload: &str,
     expected: &str,
     expected_business_message_id: Option<&str>,
 ) {
-    let metadata = validate_require_verified_signed_payload(&payload, |_| {}).expect(expected);
+    let metadata = validate_require_verified_signed_payload(payload, |_| {}).expect(expected);
     assert!(metadata.embedded_signature_detected());
     if let Some(expected_business_message_id) = expected_business_message_id {
         assert_eq!(
@@ -3428,8 +3429,8 @@ fn assert_require_verified_signed_payload_accepted(
         );
     }
 }
-fn assert_require_verified_signed_payload_rejected(payload: String, expected: &str) {
-    let err = validate_require_verified_signed_payload(&payload, |_| {}).expect_err(expected);
+fn assert_require_verified_signed_payload_rejected(payload: &str, expected: &str) {
+    let err = validate_require_verified_signed_payload(payload, |_| {}).expect_err(expected);
     assert!(matches!(err, MsgError::ValidationFailed));
 }
 macro_rules! signed_payload_tests {
@@ -3447,7 +3448,8 @@ macro_rules! rejected_signed_payload_tests {
             $(
                 #[test]
                 fn $name() {
-                    assert_require_verified_signed_payload_rejected($payload, $expected);
+                    let payload = $payload;
+                    assert_require_verified_signed_payload_rejected(&payload, $expected);
                 }
             )+
         };
@@ -3474,7 +3476,7 @@ fn sample_world(asset_alias: Option<&str>) -> World {
             iroha_config::parameters::actual::LaneConfig::default(),
             0,
         );
-        tx.bind_asset_definition_alias(&asset_definition_id, alias, None, None, 10_000)
+        tx.bind_asset_definition_alias(&asset_definition_id, &(alias), None, None, 10_000)
             .expect("bind alias");
         tx.apply();
         block.commit();
@@ -3901,7 +3903,12 @@ fn runtime_from_config_rejects_blank_business_service_allowlist_entries() {
 }
 #[test]
 fn runtime_from_config_rejects_padded_profile_identity_fields() {
-    let cases: [(&str, fn(&mut actual::IsoBridgeProfile), &str); 3] = [
+    type ProfileMutationCase = (
+        &'static str,
+        fn(&mut actual::IsoBridgeProfile),
+        &'static str,
+    );
+    let cases: [ProfileMutationCase; 3] = [
         (
             "profile id",
             |profile: &mut actual::IsoBridgeProfile| profile.id = " padded-profile".to_owned(),
@@ -3936,7 +3943,12 @@ fn runtime_from_config_rejects_padded_profile_identity_fields() {
 }
 #[test]
 fn runtime_from_config_rejects_padded_message_profile_fields() {
-    let cases: [(&str, fn(&mut actual::IsoMessageProfile), &str); 4] = [
+    type MessageMutationCase = (
+        &'static str,
+        fn(&mut actual::IsoMessageProfile),
+        &'static str,
+    );
+    let cases: [MessageMutationCase; 4] = [
         (
             "message_type",
             |message: &mut actual::IsoMessageProfile| {
@@ -4185,26 +4197,26 @@ fn live_profile_rejects_app_header_message_definition_mismatch() {
 }
 signed_payload_tests! {
     require_verified_profile_accepts_valid_p256_xmldsig_xades: assert_require_verified_signed_payload_accepted(
-        signed_pacs008_xml(),
+        &signed_pacs008_xml(),
         "valid XMLDSig/XAdES payload should pass require-verified profile",
         None,
     );
     require_verified_profile_accepts_xades_signed_properties_reference: assert_require_verified_signed_payload_accepted(
-        signed_pacs008_xml_with_signed_properties_reference(),
+        &signed_pacs008_xml_with_signed_properties_reference(),
         "XAdES SignedProperties Reference digest should verify",
         Some("sig-001"),
     );
     require_verified_profile_accepts_prefixed_xades_signed_properties_reference: assert_require_verified_signed_payload_accepted(
-        signed_pacs008_xml_with_prefixed_xades_signed_properties(),
+        &signed_pacs008_xml_with_prefixed_xades_signed_properties(),
         "prefixed XAdES SignedProperties should bind to the supported namespace",
         Some("sig-001"),
     );
     require_verified_profile_rejects_prefixed_xades_with_wrong_namespace: assert_require_verified_signed_payload_rejected(
-        signed_pacs008_xml_with_wrong_prefixed_xades_namespace(),
+        &signed_pacs008_xml_with_wrong_prefixed_xades_namespace(),
         "prefixed XAdES elements must bind to the supported XAdES namespace",
     );
     require_verified_profile_rejects_unprefixed_xades_with_wrong_default_namespace: assert_require_verified_signed_payload_rejected(
-        signed_pacs008_xml_with_wrong_default_xades_namespace(),
+        &signed_pacs008_xml_with_wrong_default_xades_namespace(),
         "unprefixed XAdES elements must reject wrong default namespaces",
     );
 }
@@ -5604,7 +5616,7 @@ fn supported_xml_key_material_enforces_key_info_shape() {
 #[test]
 fn supported_xml_x509_certificate_chain_bounds_reject_duplicates_and_overlong_chains() {
     let valid = (0..XML_SIGNATURE_MAX_X509_CERTIFICATES)
-        .map(|index| vec![index as u8])
+        .map(|index| vec![u8::try_from(index).expect("certificate fixture index is at most eight")])
         .collect::<Vec<_>>();
     ensure_xml_signature_certificate_chain_bounds(&valid)
         .expect("maximum supported unique X509 chain should be accepted");
@@ -5617,7 +5629,7 @@ fn supported_xml_x509_certificate_chain_bounds_reject_duplicates_and_overlong_ch
         .expect_err("duplicate X509 DER entries must fail closed");
     assert!(matches!(err, MsgError::ValidationFailed));
     let overlong = (0..=XML_SIGNATURE_MAX_X509_CERTIFICATES)
-        .map(|index| vec![index as u8])
+        .map(|index| vec![u8::try_from(index).expect("certificate fixture index is at most eight")])
         .collect::<Vec<_>>();
     let err = ensure_xml_signature_certificate_chain_bounds(&overlong)
         .expect_err("overlong X509 chain must fail closed");
@@ -5907,32 +5919,32 @@ fn require_verified_profile_rejects_unpinned_public_key() {
 }
 signed_payload_tests! {
     require_verified_profile_accepts_comments_in_no_comments_c14n: assert_require_verified_signed_payload_accepted(
-        signed_pacs008_xml_with_comments(),
+        &signed_pacs008_xml_with_comments(),
         "no-comments C14N should omit XML comments before digest and signature checks",
         Some("sig-001"),
     );
     require_verified_profile_accepts_character_references_in_payload_digest: assert_require_verified_signed_payload_accepted(
-        signed_pacs008_xml_with_character_reference_message_id(),
+        &signed_pacs008_xml_with_character_reference_message_id(),
         "canonicalized character references should satisfy the XMLDSig digest",
         Some("sig&001"),
     );
     require_verified_profile_accepts_xml_namespace_attribute_in_payload_digest: assert_require_verified_signed_payload_accepted(
-        signed_pacs008_xml_with_xml_namespace_attribute(),
+        &signed_pacs008_xml_with_xml_namespace_attribute(),
         "implicit xml namespace attributes should satisfy the XMLDSig digest",
         Some("sig-001"),
     );
     require_verified_profile_accepts_prefixed_attribute_in_payload_digest: assert_require_verified_signed_payload_accepted(
-        signed_pacs008_xml_with_prefixed_attribute(),
+        &signed_pacs008_xml_with_prefixed_attribute(),
         "prefixed payload attributes should satisfy the XMLDSig digest",
         Some("sig-001"),
     );
     require_verified_profile_accepts_xml_namespace_attribute_in_signed_info: assert_require_verified_signed_payload_accepted(
-        signed_pacs008_xml_with_signed_info_xml_namespace_attribute(),
+        &signed_pacs008_xml_with_signed_info_xml_namespace_attribute(),
         "implicit xml namespace attributes should canonicalize inside SignedInfo",
         Some("sig-001"),
     );
     require_verified_profile_accepts_same_document_id_reference: assert_require_verified_signed_payload_accepted(
-        signed_pacs008_xml_with_same_document_reference(),
+        &signed_pacs008_xml_with_same_document_reference(),
         "same-document #id XMLDSig references should verify",
         Some("sig-001"),
     );
@@ -5970,7 +5982,7 @@ fn require_verified_profile_rejects_parsed_fields_from_another_xml_source() {
     let parsed_payload = signed_pacs008_xml();
     let parsed = parse_xml_message("pacs.008", parsed_payload.as_bytes()).expect("parse payload A");
     let signed_payload = signed_pacs008_xml_from_unsigned(
-        unsigned_pacs008_xml_with_message_id("sig-002"),
+        &(unsigned_pacs008_xml_with_message_id("sig-002")),
         XML_C14N_1_0,
         false,
         true,
@@ -6004,30 +6016,30 @@ fn require_verified_profile_rejects_developer_format_field_provenance() {
 }
 signed_payload_tests! {
     require_verified_profile_rejects_same_document_reference_outside_signature_carrier: assert_require_verified_signed_payload_rejected(
-        signed_pacs008_xml_with_header_only_same_document_reference(),
+        &signed_pacs008_xml_with_header_only_same_document_reference(),
         "same-document payload Reference must cover the XMLDSig carrier",
     );
     require_verified_profile_rejects_same_document_reference_with_semantic_header_outside: assert_require_verified_signed_payload_rejected(
-        signed_pacs008_xml_with_app_header_outside_same_document_reference(),
+        &signed_pacs008_xml_with_app_header_outside_same_document_reference(),
         "every bridge-consumed field must be covered by the verified Reference",
     );
     require_verified_profile_accepts_reference_c14n_transform: assert_require_verified_signed_payload_accepted(
-        signed_pacs008_xml_with_reference_c14n_transform(),
+        &signed_pacs008_xml_with_reference_c14n_transform(),
         "payload Reference C14N transform should drive digest canonicalization",
         Some("sig-001"),
     );
     require_verified_profile_accepts_inherited_prefixed_attribute_in_signed_info: assert_require_verified_signed_payload_accepted(
-        signed_pacs008_xml_with_signed_info_inherited_prefixed_attribute(),
+        &signed_pacs008_xml_with_signed_info_inherited_prefixed_attribute(),
         "exclusive C14N should inherit namespaces visibly used by SignedInfo attributes",
         Some("sig-001"),
     );
     require_verified_profile_accepts_prefixed_signed_info_with_inherited_namespace: assert_require_verified_signed_payload_accepted(
-        signed_pacs008_xml_with_prefixed_signature_namespace(),
+        &signed_pacs008_xml_with_prefixed_signature_namespace(),
         "prefixed XMLDSig SignedInfo should inherit the Signature namespace",
         None,
     );
     require_verified_profile_accepts_sgntr_wrapped_signature_carrier: assert_require_verified_signed_payload_accepted(
-        signed_pacs008_xml_with_sgntr_signature_carrier(),
+        &signed_pacs008_xml_with_sgntr_signature_carrier(),
         "Sgntr wrappers with one direct XMLDSig Signature must verify",
         None,
     );
@@ -6048,30 +6060,30 @@ fn require_verified_profile_rejects_unprefixed_signature_with_wrong_default_name
 }
 signed_payload_tests! {
     require_verified_profile_accepts_inclusive_c14n_with_unused_inherited_namespace: assert_require_verified_signed_payload_accepted(
-        signed_pacs008_xml_with_inclusive_unused_signature_namespace(),
+        &signed_pacs008_xml_with_inclusive_unused_signature_namespace(),
         "inclusive XML canonicalization should carry inherited root namespaces",
         None,
     );
     require_verified_profile_rejects_exclusive_bytes_declared_as_inclusive_c14n: assert_require_verified_signed_payload_rejected(
-        signed_pacs008_xml_with_exclusive_bytes_declared_as_inclusive(),
+        &signed_pacs008_xml_with_exclusive_bytes_declared_as_inclusive(),
         "declared inclusive C14N must not verify exclusive canonical bytes",
     );
     require_verified_profile_accepts_fixed_width_ecdsa_signature_value: assert_require_verified_signed_payload_accepted(
-        signed_pacs008_xml_with_fixed_width_signature_value(),
+        &signed_pacs008_xml_with_fixed_width_signature_value(),
         "XMLDSig ECDSA SignatureValue should accept fixed-width r||s bytes",
         None,
     );
     require_verified_profile_accepts_self_closing_signed_info_methods: assert_require_verified_signed_payload_accepted(
-        signed_pacs008_xml_with_self_closing_signed_info(),
+        &signed_pacs008_xml_with_self_closing_signed_info(),
         "supported canonicalizer must expand self-closing SignedInfo methods",
         None,
     );
     require_verified_profile_rejects_raw_self_closing_signed_info_signature: assert_require_verified_signed_payload_rejected(
-        signed_pacs008_xml_with_raw_self_closing_signed_info_signature(),
+        &signed_pacs008_xml_with_raw_self_closing_signed_info_signature(),
         "signature must be checked against canonical SignedInfo bytes",
     );
     require_verified_profile_rejects_extra_sgntr_signature_carrier: assert_require_verified_signed_payload_rejected(
-        signed_pacs008_xml_with_extra_sgntr_carrier(),
+        &signed_pacs008_xml_with_extra_sgntr_carrier(),
         "extra XMLDSig/Sgntr signature carriers must fail closed",
     );
     require_verified_profile_accepts_certificate_chain_with_pinned_issuer: assert_pinned_certificate_chain_accepted(
@@ -6086,7 +6098,7 @@ signed_payload_tests! {
 #[test]
 fn require_verified_profile_accepts_x509_certificate_chain_trust_anchor() {
     assert_x509_trust_anchor_payload_accepted(
-        signed_pacs008_xml_with_x509_certificate_chain(),
+        &(signed_pacs008_xml_with_x509_certificate_chain()),
         test_x509_chain_root_certificate_pin(),
         |_| {},
         "X.509 chain signed by a pinned trust anchor should pass",
@@ -6099,7 +6111,7 @@ fn require_verified_profile_rejects_x509_xades_missing_signing_certificate_v2() 
         &signed_properties_xml,
     );
     assert_x509_trust_anchor_payload_rejected(
-        payload,
+        &(payload),
         test_x509_chain_root_certificate_pin(),
         |_| {},
         "X.509 XAdES signatures must identify the signing certificate",
@@ -6113,7 +6125,7 @@ fn require_verified_profile_rejects_x509_xades_signing_certificate_wrong_digest(
         &signed_properties_xml,
     );
     assert_x509_trust_anchor_payload_rejected(
-        payload,
+        &(payload),
         test_x509_chain_root_certificate_pin(),
         |_| {},
         "XAdES SigningCertificateV2 digest must match the signer leaf",
@@ -6128,7 +6140,7 @@ fn require_verified_profile_rejects_x509_xades_signing_certificate_wrong_algorit
         &signed_properties_xml,
     );
     assert_x509_trust_anchor_payload_rejected(
-        payload,
+        &(payload),
         test_x509_chain_root_certificate_pin(),
         |_| {},
         "XAdES SigningCertificateV2 must use SHA-256 cert digests",
@@ -6145,7 +6157,7 @@ fn require_verified_profile_rejects_x509_xades_duplicate_signing_certificate_v2(
         &signed_properties_xml,
     );
     assert_x509_trust_anchor_payload_rejected(
-        payload,
+        &(payload),
         test_x509_chain_root_certificate_pin(),
         |_| {},
         "duplicate XAdES SigningCertificateV2 entries must fail closed",
@@ -6209,7 +6221,7 @@ fn require_verified_profile_rejects_x509_xades_signing_certificate_v2_outside_si
         &signed_properties_xml,
     );
     assert_x509_trust_anchor_payload_rejected(
-        payload,
+        &(payload),
         test_x509_chain_root_certificate_pin(),
         |_| {},
         "SigningCertificateV2 outside SignedSignatureProperties must fail closed",
@@ -6244,10 +6256,10 @@ fn require_verified_profile_rejects_directly_pinned_x509_noncritical_signer_key_
 #[test]
 fn require_verified_profile_accepts_trust_anchor_x509_critical_signer_key_usage() {
     assert_x509_trust_anchor_payload_accepted(
-        signed_pacs008_xml_with_signer_key_usage_x509_certificate_chain(
+        &(signed_pacs008_xml_with_signer_key_usage_x509_certificate_chain(
             TEST_X509_SIGNER_KEY_USAGE_CRITICAL_LEAF_CERTIFICATE_DER_B64,
             true,
-        ),
+        )),
         test_x509_signer_key_usage_root_certificate_pin(),
         |_| {},
         "trust-anchor signer leaf with critical digitalSignature should pass",
@@ -6256,10 +6268,10 @@ fn require_verified_profile_accepts_trust_anchor_x509_critical_signer_key_usage(
 #[test]
 fn require_verified_profile_rejects_trust_anchor_x509_noncritical_signer_key_usage() {
     assert_x509_trust_anchor_payload_rejected(
-        signed_pacs008_xml_with_signer_key_usage_x509_certificate_chain(
+        &(signed_pacs008_xml_with_signer_key_usage_x509_certificate_chain(
             TEST_X509_SIGNER_KEY_USAGE_NONCRITICAL_LEAF_CERTIFICATE_DER_B64,
             true,
-        ),
+        )),
         test_x509_signer_key_usage_root_certificate_pin(),
         |_| {},
         "trust-anchor chains must not bypass non-critical signer KeyUsage",
@@ -6303,7 +6315,7 @@ fn require_verified_profile_rejects_certificate_chain_with_revoked_leaf() {
         issuer_sha256,
     } = signed_pacs008_xml_with_certificate_chain();
     assert_x509_trust_anchor_payload_rejected(
-        payload,
+        &(payload),
         issuer_sha256,
         move |profile| profile.revoked_certificate_sha256 = vec![leaf_sha256],
         "revoked leaf certificate pins must override matching issuer trust pins",
@@ -6440,7 +6452,7 @@ fn require_verified_profile_rejects_missing_signature() {
 fn require_verified_profile_rejects_unsupported_canonicalization_method() {
     let payload = signed_pacs008_xml_with_x509_certificate_chain();
     assert_x509_trust_anchor_payload_rejected(
-        payload,
+        &(payload),
         "22".repeat(32),
         |_| {},
         "untrusted X.509 chains must fail closed",
@@ -6450,7 +6462,7 @@ fn require_verified_profile_rejects_unsupported_canonicalization_method() {
 fn require_verified_profile_rejects_missing_x509_certificate_policy_oid() {
     let payload = signed_pacs008_xml_with_x509_certificate_chain();
     assert_x509_trust_anchor_payload_rejected(
-        payload,
+        &(payload),
         test_x509_chain_root_certificate_pin(),
         |profile| {
             profile.x509_required_certificate_policy_oids = vec![TEST_X509_POLICY_OID.to_owned()];
@@ -6462,7 +6474,7 @@ fn require_verified_profile_rejects_missing_x509_certificate_policy_oid() {
 fn require_verified_profile_rejects_wrong_x509_certificate_policy_oid() {
     let payload = signed_pacs008_xml_with_policy_x509_certificate_chain();
     assert_x509_trust_anchor_payload_rejected(
-        payload,
+        &(payload),
         test_x509_policy_root_certificate_pin(),
         |profile| {
             profile.x509_required_certificate_policy_oids =
@@ -6538,7 +6550,7 @@ fn require_verified_profile_rejects_x509_inhibit_any_policy_extension() {
 #[test]
 fn require_verified_profile_rejects_missing_x509_crl_when_required() {
     assert_x509_trust_anchor_payload_rejected(
-        signed_pacs008_xml_with_crl_x509_certificate_chain(None),
+        &(signed_pacs008_xml_with_crl_x509_certificate_chain(None)),
         test_x509_crl_root_certificate_pin(),
         |profile| profile.x509_require_crl_revocation_check = true,
         "profiles requiring CRL revocation checking must fail without CRL material",
@@ -6546,7 +6558,7 @@ fn require_verified_profile_rejects_missing_x509_crl_when_required() {
 }
 signed_payload_tests! {
     require_verified_profile_accepts_x509_certificate_with_configured_crl: assert_x509_trust_anchor_payload_accepted(
-        signed_pacs008_xml_with_crl_x509_certificate_chain(None),
+        &signed_pacs008_xml_with_crl_x509_certificate_chain(None),
         test_x509_crl_root_certificate_pin(),
         |profile| {
             profile.x509_require_crl_revocation_check = true;
@@ -6555,13 +6567,13 @@ signed_payload_tests! {
         "configured CRL material should satisfy required signer revocation checking",
     );
     require_verified_profile_accepts_x509_certificate_with_embedded_crl: assert_x509_trust_anchor_payload_accepted(
-        signed_pacs008_xml_with_crl_x509_certificate_chain(Some(TEST_X509_CRL_EMPTY_DER_B64)),
+        &signed_pacs008_xml_with_crl_x509_certificate_chain(Some(TEST_X509_CRL_EMPTY_DER_B64)),
         test_x509_crl_root_certificate_pin(),
         |profile| profile.x509_require_crl_revocation_check = true,
         "embedded CRL material should satisfy required signer revocation checking",
     );
     require_verified_profile_rejects_x509_crl_not_yet_fresh_at_signing_time: assert_x509_trust_anchor_payload_rejected(
-        signed_pacs008_xml_with_crl_x509_certificate_chain_at(None, "2026-05-01T12:00:00Z"),
+        &signed_pacs008_xml_with_crl_x509_certificate_chain_at(None, "2026-05-01T12:00:00Z"),
         test_x509_crl_root_certificate_pin(),
         |profile| {
             profile.x509_require_crl_revocation_check = true;
@@ -6580,7 +6592,7 @@ fn require_verified_profile_rejects_x509_crl_outside_key_info() {
             1,
         );
     assert_x509_trust_anchor_payload_rejected(
-        payload,
+        &(payload),
         test_x509_crl_root_certificate_pin(),
         |profile| profile.x509_require_crl_revocation_check = true,
         "CRL material outside signed KeyInfo/X509Data must fail closed",
@@ -6594,7 +6606,7 @@ fn require_verified_profile_rejects_x509_crl_in_key_info_outside_x509_data() {
         1,
     );
     assert_x509_trust_anchor_payload_rejected(
-        payload,
+        &(payload),
         test_x509_crl_root_certificate_pin(),
         |profile| profile.x509_require_crl_revocation_check = true,
         "CRL material outside X509Data must fail closed",
@@ -6604,7 +6616,7 @@ fn require_verified_profile_rejects_x509_crl_in_key_info_outside_x509_data() {
 fn require_verified_profile_rejects_x509_certificate_revoked_by_configured_crl() {
     let payload = signed_pacs008_xml_with_crl_x509_certificate_chain(None);
     assert_x509_trust_anchor_payload_rejected(
-        payload,
+        &(payload),
         test_x509_crl_root_certificate_pin(),
         |profile| {
             profile.x509_crl_der_base64 = vec![TEST_X509_CRL_REVOKED_DER_B64.to_owned()];
@@ -6616,7 +6628,7 @@ fn require_verified_profile_rejects_x509_certificate_revoked_by_configured_crl()
 fn require_verified_profile_rejects_expired_x509_crl() {
     let payload = signed_pacs008_xml_with_crl_x509_certificate_chain(None);
     assert_x509_trust_anchor_payload_rejected(
-        payload,
+        &(payload),
         test_x509_crl_root_certificate_pin(),
         |profile| {
             profile.x509_require_crl_revocation_check = true;
@@ -6628,7 +6640,7 @@ fn require_verified_profile_rejects_expired_x509_crl() {
 #[test]
 fn require_verified_profile_rejects_x509_crl_from_wrong_issuer() {
     assert_x509_trust_anchor_payload_rejected(
-        signed_pacs008_xml_with_crl_x509_certificate_chain(None),
+        &(signed_pacs008_xml_with_crl_x509_certificate_chain(None)),
         test_x509_crl_root_certificate_pin(),
         |profile| {
             profile.x509_require_crl_revocation_check = true;
@@ -6639,7 +6651,7 @@ fn require_verified_profile_rejects_x509_crl_from_wrong_issuer() {
 }
 signed_payload_tests! {
     require_verified_profile_rejects_missing_x509_ocsp_when_required: assert_x509_trust_anchor_payload_rejected(
-        signed_pacs008_xml_with_ocsp_x509_certificate_chain(None),
+        &signed_pacs008_xml_with_ocsp_x509_certificate_chain(None),
         test_x509_ocsp_root_certificate_pin(),
         |profile| profile.x509_require_ocsp_revocation_check = true,
         "profiles requiring OCSP revocation checking must fail without OCSP material",
@@ -6654,7 +6666,7 @@ fn require_verified_profile_accepts_x509_certificate_with_configured_ocsp() {
     );
     let response_der_base64 = fixture.response_der_base64.clone();
     assert_x509_trust_anchor_payload_accepted(
-        fixture.payload,
+        &(fixture.payload),
         fixture.trust_anchor_pin,
         move |profile| {
             profile.x509_require_ocsp_revocation_check = true;
@@ -6671,7 +6683,7 @@ fn require_verified_profile_accepts_x509_certificate_with_embedded_ocsp() {
         XML_SIGNATURE_TEST_SIGNING_TIME,
     );
     assert_x509_trust_anchor_payload_accepted(
-        fixture.payload,
+        &(fixture.payload),
         fixture.trust_anchor_pin,
         |profile| profile.x509_require_ocsp_revocation_check = true,
         "embedded OCSP material should satisfy required signer revocation checking",
@@ -6686,7 +6698,7 @@ fn require_verified_profile_rejects_x509_ocsp_not_yet_fresh_at_signing_time() {
     );
     let response_der_base64 = fixture.response_der_base64.clone();
     assert_x509_trust_anchor_payload_rejected(
-        fixture.payload,
+        &(fixture.payload),
         fixture.trust_anchor_pin,
         move |profile| {
             profile.x509_require_ocsp_revocation_check = true;
@@ -6711,7 +6723,7 @@ fn require_verified_profile_rejects_x509_ocsp_outside_key_info() {
             1,
         );
     assert_x509_trust_anchor_payload_rejected(
-        payload,
+        &(payload),
         fixture.trust_anchor_pin,
         |profile| profile.x509_require_ocsp_revocation_check = true,
         "OCSP material outside signed KeyInfo/X509Data must fail closed",
@@ -6733,7 +6745,7 @@ fn require_verified_profile_rejects_x509_ocsp_in_key_info_outside_x509_data() {
         1,
     );
     assert_x509_trust_anchor_payload_rejected(
-        payload,
+        &(payload),
         fixture.trust_anchor_pin,
         |profile| profile.x509_require_ocsp_revocation_check = true,
         "OCSP material outside X509Data must fail closed",
@@ -6748,7 +6760,7 @@ fn require_verified_profile_rejects_x509_certificate_revoked_by_configured_ocsp(
     );
     let response_der_base64 = fixture.response_der_base64.clone();
     assert_x509_trust_anchor_payload_rejected(
-        fixture.payload,
+        &(fixture.payload),
         fixture.trust_anchor_pin,
         move |profile| profile.x509_ocsp_response_der_base64 = vec![response_der_base64],
         "configured OCSP material must reject revoked signer certificates",
@@ -6759,7 +6771,7 @@ fn require_verified_profile_accepts_delegated_x509_ocsp_responder() {
     let fixture = signed_pacs008_xml_with_generated_delegated_ocsp_x509_certificate_chain(true);
     let response_der_base64 = fixture.response_der_base64.clone();
     assert_x509_trust_anchor_payload_accepted(
-        fixture.payload,
+        &(fixture.payload),
         fixture.trust_anchor_pin,
         move |profile| {
             profile.x509_require_ocsp_revocation_check = true;
@@ -6773,7 +6785,7 @@ fn require_verified_profile_rejects_delegated_x509_ocsp_without_responder_certif
     let fixture = signed_pacs008_xml_with_generated_delegated_ocsp_x509_certificate_chain(false);
     let response_der_base64 = fixture.response_der_base64.clone();
     assert_x509_trust_anchor_payload_rejected(
-        fixture.payload,
+        &(fixture.payload),
         fixture.trust_anchor_pin,
         move |profile| {
             profile.x509_require_ocsp_revocation_check = true;
@@ -6786,7 +6798,7 @@ fn require_verified_profile_rejects_delegated_x509_ocsp_without_responder_certif
 fn require_verified_profile_rejects_x509_chain_missing_trust_anchor_certificate() {
     let payload = signed_pacs008_xml_with_leaf_x509_certificate();
     assert_x509_trust_anchor_payload_rejected(
-        payload,
+        &(payload),
         test_x509_chain_root_certificate_pin(),
         |_| {},
         "leaf-only X.509 key info must not satisfy a root-anchor profile",
@@ -6796,7 +6808,7 @@ fn require_verified_profile_rejects_x509_chain_missing_trust_anchor_certificate(
 fn require_verified_profile_rejects_non_ca_x509_trust_anchor() {
     let payload = signed_pacs008_xml_with_leaf_x509_certificate();
     assert_x509_trust_anchor_payload_rejected(
-        payload,
+        &(payload),
         test_x509_leaf_certificate_pin(),
         |_| {},
         "non-CA certificates must not act as X.509 trust anchors",
@@ -6809,7 +6821,7 @@ fn require_verified_profile_rejects_x509_chain_issuer_mismatch() {
         &format!("<X509Certificate>{TEST_X509_CERTIFICATE_DER_B64}</X509Certificate></X509Data>"),
     );
     assert_x509_trust_anchor_payload_rejected(
-        payload,
+        &(payload),
         sha256_hex(
             &BASE64_STANDARD
                 .decode(TEST_X509_CERTIFICATE_DER_B64)
@@ -6867,7 +6879,7 @@ fn require_verified_profile_rejects_signed_info_method_unsupported_attributes() 
     });
     for payload in [canonicalization_payload, signature_payload] {
         assert_require_verified_signed_payload_rejected(
-            payload,
+            &(payload),
             "unsupported SignedInfo method attributes must fail closed",
         );
     }
@@ -6906,14 +6918,14 @@ fn require_verified_profile_rejects_reference_unsupported_attributes() {
         digest_method_payload,
     ] {
         assert_require_verified_signed_payload_rejected(
-            payload,
+            &(payload),
             "unsupported Reference attributes must fail closed",
         );
     }
 }
 signed_payload_tests! {
     require_verified_profile_rejects_extra_reference_transform: assert_require_verified_signed_payload_rejected(
-        signed_pacs008_xml_with_extra_reference_transform(),
+        &signed_pacs008_xml_with_extra_reference_transform(),
         "Reference transforms outside the supported set must fail closed",
     );
 }
@@ -6925,7 +6937,7 @@ fn require_verified_profile_rejects_signing_certificate_v2_digest_tampering() {
         .payload
         .replace(&fixture.signing_certificate_digest, &tampered_digest);
     assert_x509_trust_anchor_payload_rejected(
-        payload,
+        &(payload),
         fixture.issuer_sha256,
         |_| {},
         "SigningCertificateV2 digest tampering must fail closed",
@@ -7465,7 +7477,7 @@ fn checked_in_colr012_fixture_records_collateral_context() {
     let message_id = Iso20022BridgeRuntime::lifecycle_message_id("colr.012", &parsed)
         .expect("colr.012 durable id");
     assert_eq!(message_id, "colr.012:COLR-FIXTURE-1");
-    assert!(runtime.check_and_record_inbound(&message_id, metadata));
+    assert!(runtime.check_and_record_inbound(&message_id, &(metadata)));
     let outcome = runtime
         .apply_inbound_lifecycle_message(&message_id, "colr.012", &parsed)
         .expect("record colr.012 lifecycle");
@@ -8117,7 +8129,7 @@ fn live_profile_idempotency_rejects_validated_business_message_id_and_uetr_repla
     let first_metadata = runtime
         .validate_profile_submission(profile, "pacs.008", &first, first_payload.as_bytes())
         .expect("first live-profile message validates");
-    assert!(runtime.check_and_record_inbound("rail-msg-1", first_metadata));
+    assert!(runtime.check_and_record_inbound("rail-msg-1", &(first_metadata)));
     let uetr_replay_payload = live_pacs008_xml(
         "SWIFT-REPLAY-2",
         "pacs.008.001.08",
@@ -8136,7 +8148,7 @@ fn live_profile_idempotency_rejects_validated_business_message_id_and_uetr_repla
             uetr_replay_payload.as_bytes(),
         )
         .expect("case-drifted UETR replay still validates before idempotency");
-    assert!(!runtime.check_and_record_inbound("rail-msg-2", uetr_replay_metadata));
+    assert!(!runtime.check_and_record_inbound("rail-msg-2", &(uetr_replay_metadata)));
     let biz_replay_payload = live_pacs008_xml(
         "SWIFT-REPLAY-1",
         "pacs.008.001.08",
@@ -8155,7 +8167,7 @@ fn live_profile_idempotency_rejects_validated_business_message_id_and_uetr_repla
             biz_replay_payload.as_bytes(),
         )
         .expect("business-message replay still validates before idempotency");
-    assert!(!runtime.check_and_record_inbound("rail-msg-3", biz_replay_metadata));
+    assert!(!runtime.check_and_record_inbound("rail-msg-3", &(biz_replay_metadata)));
     assert_eq!(
         runtime
             .uetr_index
@@ -8267,8 +8279,8 @@ fn profile_idempotency_rejects_replayed_uetr() {
         "snapshot".to_owned(),
         false,
     );
-    assert!(runtime.check_and_record_inbound("msg-1", first));
-    assert!(!runtime.check_and_record_inbound("msg-2", replay));
+    assert!(runtime.check_and_record_inbound("msg-1", &(first)));
+    assert!(!runtime.check_and_record_inbound("msg-2", &(replay)));
 }
 #[test]
 fn profile_idempotency_rejects_replayed_business_message_id() {
@@ -8297,8 +8309,8 @@ fn profile_idempotency_rejects_replayed_business_message_id() {
         "snapshot".to_owned(),
         false,
     );
-    assert!(runtime.check_and_record_inbound("msg-1", first));
-    assert!(!runtime.check_and_record_inbound("msg-2", replay));
+    assert!(runtime.check_and_record_inbound("msg-1", &(first)));
+    assert!(!runtime.check_and_record_inbound("msg-2", &(replay)));
     assert_eq!(
         runtime
             .business_message_id_index
@@ -8331,7 +8343,7 @@ fn concurrent_admission_commits_one_complete_identity_tuple() {
                 false,
             );
             barrier.wait();
-            runtime.check_and_record_inbound(&format!("race-message-{suffix}"), metadata)
+            runtime.check_and_record_inbound(&format!("race-message-{suffix}"), &(metadata))
         }));
     }
     barrier.wait();
@@ -8384,8 +8396,8 @@ fn pacs009_group_message_id_owns_payment_replay_reservation() {
         "snapshot".to_owned(),
         false,
     );
-    assert!(runtime.check_and_record_inbound(&first_id, first_metadata));
-    assert!(!runtime.check_and_record_inbound(&replay_id, replay_metadata));
+    assert!(runtime.check_and_record_inbound(&first_id, &(first_metadata)));
+    assert!(!runtime.check_and_record_inbound(&replay_id, &(replay_metadata)));
 
     let missing_group_id = parse_message(
         "pacs.009",
@@ -8418,9 +8430,10 @@ fn durable_in_flight_reservation_pins_capacity_until_transaction_binding() {
         "snapshot".to_owned(),
         false,
     );
-    assert!(runtime.check_and_record_inbound("in-flight", metadata));
+    assert!(runtime.check_and_record_inbound("in-flight", &(metadata)));
     assert!(
-        !runtime.check_and_record_inbound("capacity-racer", inbound_metadata("racer", "pacs.008")),
+        !runtime
+            .check_and_record_inbound("capacity-racer", &(inbound_metadata("racer", "pacs.008"))),
         "an unresolved reservation must not be evicted to admit another payment"
     );
     assert!(runtime.update_message_context("in-flight", IsoMessageContext::default()));
@@ -8445,7 +8458,7 @@ fn rejected_original_identity_blocks_both_exact_and_changed_retries() {
         "snapshot".to_owned(),
         false,
     );
-    assert!(runtime.check_and_record_inbound("exact-retry", original.clone()));
+    assert!(runtime.check_and_record_inbound("exact-retry", &(original)));
     assert!(runtime.mark_rejected(
         "exact-retry",
         Some("definite pre-admission rejection".to_owned()),
@@ -8453,8 +8466,8 @@ fn rejected_original_identity_blocks_both_exact_and_changed_retries() {
     ));
     let mut changed = original.clone();
     changed.payload_hash = Some("payload-replacement".to_owned());
-    assert!(!runtime.check_and_record_inbound("exact-retry", changed));
-    assert!(!runtime.check_and_record_inbound("exact-retry", original));
+    assert!(!runtime.check_and_record_inbound("exact-retry", &(changed)));
+    assert!(!runtime.check_and_record_inbound("exact-retry", &(original)));
 }
 #[test]
 fn queued_lifecycle_rejection_keeps_transaction_identity_and_blocks_retry() {
@@ -8462,7 +8475,7 @@ fn queued_lifecycle_rejection_keeps_transaction_identity_and_blocks_retry() {
     let original_id = "queued-lifecycle-rejection";
     let lifecycle_id = "queued-lifecycle-rejection-status";
     let original = inbound_metadata(original_id, "pacs.008");
-    assert!(runtime.check_and_record_inbound(original_id, original.clone()));
+    assert!(runtime.check_and_record_inbound(original_id, &(original)));
     runtime.mark_accepted(original_id, "tx-queued-lifecycle-rejection");
     record_lifecycle(&runtime, lifecycle_id, "pacs.002");
     assert_eq!(
@@ -8493,7 +8506,7 @@ fn queued_lifecycle_rejection_keeps_transaction_identity_and_blocks_retry() {
         Some(original_id)
     );
     assert!(
-        !runtime.check_and_record_inbound(original_id, original),
+        !runtime.check_and_record_inbound(original_id, &(original)),
         "an already-queued transaction must not become retryable from lifecycle status alone"
     );
     assert!(runtime.mark_transaction_applied("tx-queued-lifecycle-rejection", SystemTime::now()));
@@ -8507,7 +8520,9 @@ fn candidate_execution_events_do_not_terminalize_queued_iso_payment() {
     let message_id = "candidate-execution-is-not-final";
     let hash_text = "11".repeat(32);
     let hash = crate::parse_signed_transaction_hash(&hash_text).expect("canonical hash");
-    assert!(runtime.check_and_record_inbound(message_id, inbound_metadata(message_id, "pacs.008")));
+    assert!(
+        runtime.check_and_record_inbound(message_id, &(inbound_metadata(message_id, "pacs.008")))
+    );
     runtime.mark_accepted(message_id, &hash_text);
 
     let approved = iroha_data_model::events::pipeline::TransactionEvent {
@@ -8612,10 +8627,10 @@ fn retry_replacement_rejects_conflicting_uetr() {
         "snapshot".to_owned(),
         false,
     );
-    assert!(runtime.check_and_record_inbound("msg-1", first));
-    assert!(runtime.check_and_record_inbound("msg-2", second));
+    assert!(runtime.check_and_record_inbound("msg-1", &(first)));
+    assert!(runtime.check_and_record_inbound("msg-2", &(second)));
     runtime.mark_rejected("msg-1", Some("retry allowed".to_owned()), Some("ED05"));
-    assert!(!runtime.check_and_record_inbound("msg-1", conflicting_retry));
+    assert!(!runtime.check_and_record_inbound("msg-1", &(conflicting_retry)));
     assert_eq!(
         runtime
             .uetr_index
@@ -8651,10 +8666,10 @@ fn retry_replacement_rejects_conflicting_business_message_id() {
         "snapshot".to_owned(),
         false,
     );
-    assert!(runtime.check_and_record_inbound("msg-1", first));
-    assert!(runtime.check_and_record_inbound("msg-2", second));
+    assert!(runtime.check_and_record_inbound("msg-1", &(first)));
+    assert!(runtime.check_and_record_inbound("msg-2", &(second)));
     runtime.mark_rejected("msg-1", Some("retry allowed".to_owned()), Some("ED05"));
-    assert!(!runtime.check_and_record_inbound("msg-1", conflicting_retry));
+    assert!(!runtime.check_and_record_inbound("msg-1", &(conflicting_retry)));
     assert_eq!(
         runtime
             .business_message_id_index
@@ -8680,7 +8695,7 @@ fn durable_store_reloads_message_status() {
             "snapshot".to_owned(),
             false,
         );
-        assert!(runtime.check_and_record_inbound("persisted-msg", metadata));
+        assert!(runtime.check_and_record_inbound("persisted-msg", &(metadata)));
         runtime.update_message_context(
             "persisted-msg",
             IsoMessageContext {
@@ -8725,7 +8740,7 @@ fn durable_store_reloads_message_status() {
         "snapshot".to_owned(),
         false,
     );
-    assert!(!reloaded.check_and_record_inbound("persisted-replay", replay));
+    assert!(!reloaded.check_and_record_inbound("persisted-replay", &(replay)));
 }
 #[test]
 fn configured_durable_store_must_be_available_at_startup() {
@@ -9233,7 +9248,7 @@ fn startup_writer_temp_cleanup_is_budgeted_before_unlink() {
         };
 
         let error =
-            read_startup_record_entry(entry, &mut directory_entries, &mut budget, "message")
+            read_startup_record_entry(&(entry), &mut directory_entries, &mut budget, "message")
                 .expect_err("a crash temp cannot bypass startup bounds");
 
         assert!(error.to_string().contains(expected), "{error:?}");
@@ -9561,14 +9576,14 @@ fn lowering_store_capacity_preserves_every_unexpired_replay_identity() {
         for message_id in ["old", "middle", "tie-a", "tie-z"] {
             assert!(runtime.check_and_record_inbound(
                 message_id,
-                IsoMessageMetadata::inbound(
+                &(IsoMessageMetadata::inbound(
                     "generic-iso20022",
                     "pacs.008",
                     (None, Some(format!("{message_id}-biz")), None),
                     format!("{message_id}-hash"),
                     "snapshot".to_owned(),
                     false,
-                ),
+                )),
             ));
             runtime.mark_accepted(message_id, &format!("tx-{message_id}"));
             runtime.mark_settled(message_id, SystemTime::now());
@@ -9613,14 +9628,14 @@ fn lowering_store_capacity_preserves_every_unexpired_replay_identity() {
     }
     assert!(!reloaded.check_and_record_inbound(
         "capacity-rejected",
-        IsoMessageMetadata::inbound(
+        &(IsoMessageMetadata::inbound(
             "generic-iso20022",
             "pacs.008",
             (None, Some("capacity-rejected-biz".to_owned()), None),
             "capacity-rejected-hash".to_owned(),
             "snapshot".to_owned(),
             false,
-        ),
+        )),
     ));
 }
 fn assert_digest_correct_record_mutation_is_rejected(
@@ -9636,14 +9651,14 @@ fn assert_digest_correct_record_mutation_is_rejected(
             .expect("enabled");
         assert!(runtime.check_and_record_inbound(
             message_id,
-            IsoMessageMetadata::inbound(
+            &(IsoMessageMetadata::inbound(
                 "generic-iso20022",
                 "pacs.008",
                 (None, Some(format!("{message_id}-biz")), None),
                 format!("{message_id}-hash"),
                 "snapshot".to_owned(),
                 false,
-            ),
+            )),
         ));
         runtime.mark_accepted(message_id, &format!("tx-{message_id}"));
     }
@@ -9677,14 +9692,14 @@ fn assert_digest_correct_audit_mutation_is_rejected(
         for message_id in ["audit-a", "audit-b"] {
             assert!(runtime.check_and_record_inbound(
                 message_id,
-                IsoMessageMetadata::inbound(
+                &(IsoMessageMetadata::inbound(
                     "generic-iso20022",
                     "pacs.008",
                     (None, Some(format!("{case}-{message_id}-biz")), None),
                     format!("{case}-{message_id}-hash"),
                     "snapshot".to_owned(),
                     false,
-                ),
+                )),
             ));
         }
     }
@@ -9718,27 +9733,27 @@ fn durable_store_retention_is_independent_from_dedupe_ttl() {
         .expect("enabled");
     assert!(runtime.check_and_record_inbound(
         "ttl-kept-a",
-        IsoMessageMetadata::inbound(
+        &(IsoMessageMetadata::inbound(
             "generic-iso20022",
             "pacs.008",
             (None, Some("ttl-kept-a-biz".to_owned()), None),
             "ttl-kept-a-hash".to_owned(),
             "snapshot".to_owned(),
             false,
-        ),
+        )),
     ));
     runtime.mark_accepted("ttl-kept-a", "tx-ttl-kept-a");
     std::thread::sleep(Duration::from_millis(1));
     assert!(runtime.check_and_record_inbound(
         "ttl-kept-b",
-        IsoMessageMetadata::inbound(
+        &(IsoMessageMetadata::inbound(
             "generic-iso20022",
             "pacs.008",
             (None, Some("ttl-kept-b-biz".to_owned()), None),
             "ttl-kept-b-hash".to_owned(),
             "snapshot".to_owned(),
             false,
-        ),
+        )),
     ));
     assert!(runtime.message_status("ttl-kept-a").is_some());
     assert!(runtime.message_status("ttl-kept-b").is_some());
@@ -9762,28 +9777,28 @@ fn durable_store_never_evicts_an_unexpired_identity_for_capacity() {
         .expect("enabled");
     assert!(runtime.check_and_record_inbound(
         "compact-old",
-        IsoMessageMetadata::inbound(
+        &(IsoMessageMetadata::inbound(
             "generic-iso20022",
             "pacs.008",
             (None, Some("compact-old-biz".to_owned()), None),
             "compact-old-hash".to_owned(),
             "snapshot".to_owned(),
             false,
-        ),
+        )),
     ));
     runtime.mark_accepted("compact-old", "tx-compact-old");
     runtime.mark_settled("compact-old", SystemTime::now());
     std::thread::sleep(Duration::from_millis(1));
     assert!(!runtime.check_and_record_inbound(
         "compact-new",
-        IsoMessageMetadata::inbound(
+        &(IsoMessageMetadata::inbound(
             "generic-iso20022",
             "pacs.008",
             (None, Some("compact-new-biz".to_owned()), None),
             "compact-new-hash".to_owned(),
             "snapshot".to_owned(),
             false,
-        ),
+        )),
     ));
     assert!(runtime.message_status("compact-old").is_some());
     assert!(runtime.message_status("compact-new").is_none());
@@ -9829,14 +9844,14 @@ fn durable_store_compacts_records_older_than_retention_window() {
         .expect("enabled");
     assert!(runtime.check_and_record_inbound(
         "age-expired",
-        IsoMessageMetadata::inbound(
+        &(IsoMessageMetadata::inbound(
             "generic-iso20022",
             "pacs.008",
             (None, Some("age-expired-biz".to_owned()), None),
             "age-expired-hash".to_owned(),
             "snapshot".to_owned(),
             false,
-        ),
+        )),
     ));
     runtime.mark_accepted("age-expired", "tx-age-expired");
     runtime.mark_settled("age-expired", SystemTime::now());
@@ -9881,14 +9896,14 @@ fn durable_store_writes_tamper_evident_audit_index() {
     ] {
         assert!(runtime.check_and_record_inbound(
             message_id,
-            IsoMessageMetadata::inbound(
+            &(IsoMessageMetadata::inbound(
                 "generic-iso20022",
                 "pacs.008",
                 (None, Some(business_id.to_owned()), None),
                 payload_hash.to_owned(),
                 "snapshot".to_owned(),
                 false,
-            ),
+            )),
         ));
         runtime.mark_accepted(message_id, tx_hash);
     }
@@ -9968,14 +9983,14 @@ fn durable_store_exports_external_audit_notary_spool() {
         .expect("enabled");
     assert!(runtime.check_and_record_inbound(
         "external-audit-msg",
-        IsoMessageMetadata::inbound(
+        &(IsoMessageMetadata::inbound(
             "generic-iso20022",
             "pacs.008",
             (None, Some("external-audit-biz".to_owned()), None),
             "external-audit-hash".to_owned(),
             "snapshot".to_owned(),
             false,
-        ),
+        )),
     ));
     runtime.mark_accepted("external-audit-msg", "tx-external-audit");
     let local = read_audit_index(&store);
@@ -10032,14 +10047,14 @@ async fn external_audit_write_failure_marks_runtime_unhealthy_and_retries() {
 
     assert!(runtime.check_and_record_inbound(
         "external-audit-failure",
-        IsoMessageMetadata::inbound(
+        &(IsoMessageMetadata::inbound(
             "generic-iso20022",
             "pacs.008",
             (None, Some("external-audit-failure-biz".to_owned()), None),
             "external-audit-failure-hash".to_owned(),
             "snapshot".to_owned(),
             false,
-        ),
+        )),
     ));
     assert!(!runtime.audit_persistence_is_healthy());
 
@@ -10069,14 +10084,14 @@ fn durable_store_exports_audit_index_matching_persisted_manifest() {
         .expect("enabled");
     assert!(runtime.check_and_record_inbound(
         "audit-export",
-        IsoMessageMetadata::inbound(
+        &(IsoMessageMetadata::inbound(
             "generic-iso20022",
             "pacs.008",
             (None, Some("audit-export-biz".to_owned()), None),
             "audit-export-hash".to_owned(),
             "snapshot".to_owned(),
             false,
-        ),
+        )),
     ));
     runtime.mark_accepted("audit-export", "tx-export");
     let exported = runtime.audit_index();
@@ -10118,14 +10133,14 @@ fn durable_store_audit_index_stops_startup_on_tampered_record() {
         ] {
             assert!(runtime.check_and_record_inbound(
                 message_id,
-                IsoMessageMetadata::inbound(
+                &(IsoMessageMetadata::inbound(
                     "generic-iso20022",
                     "pacs.008",
                     (None, Some(business_id.to_owned()), None),
                     payload_hash.to_owned(),
                     "snapshot".to_owned(),
                     false,
-                ),
+                )),
             ));
             runtime.mark_accepted(message_id, tx_hash);
         }
@@ -10156,14 +10171,14 @@ fn durable_store_rejects_tampered_record_body() {
             .expect("enabled");
         assert!(runtime.check_and_record_inbound(
             "tamper-msg",
-            IsoMessageMetadata::inbound(
+            &(IsoMessageMetadata::inbound(
                 "generic-iso20022",
                 "pacs.008",
                 (None, Some("tamper-biz".to_owned()), None),
                 "tamper-hash".to_owned(),
                 "snapshot".to_owned(),
                 false,
-            ),
+            )),
         ));
         runtime.mark_accepted("tamper-msg", "tx-original");
     }
@@ -10205,14 +10220,14 @@ fn durable_store_rejects_missing_record_digest() {
             .expect("enabled");
         assert!(runtime.check_and_record_inbound(
             "missing-digest-msg",
-            IsoMessageMetadata::inbound(
+            &(IsoMessageMetadata::inbound(
                 "generic-iso20022",
                 "pacs.008",
                 (None, Some("missing-digest-biz".to_owned()), None),
                 "missing-digest-hash".to_owned(),
                 "snapshot".to_owned(),
                 false,
-            ),
+            )),
         ));
     }
     let path = store
@@ -10247,14 +10262,14 @@ fn durable_store_rejects_malformed_record_digest() {
             .expect("enabled");
         assert!(runtime.check_and_record_inbound(
             "bad-digest-msg",
-            IsoMessageMetadata::inbound(
+            &(IsoMessageMetadata::inbound(
                 "generic-iso20022",
                 "pacs.008",
                 (None, Some("bad-digest-biz".to_owned()), None),
                 "bad-digest-hash".to_owned(),
                 "snapshot".to_owned(),
                 false,
-            ),
+            )),
         ));
     }
     let path = store
@@ -10438,14 +10453,14 @@ fn durable_store_rejects_digest_correct_message_id_filename_drift() {
             .expect("enabled");
         assert!(runtime.check_and_record_inbound(
             "filename-drift",
-            IsoMessageMetadata::inbound(
+            &(IsoMessageMetadata::inbound(
                 "generic-iso20022",
                 "pacs.008",
                 (None, Some("filename-drift-biz".to_owned()), None),
                 "filename-drift-hash".to_owned(),
                 "snapshot".to_owned(),
                 false,
-            ),
+            )),
         ));
         runtime.mark_accepted("filename-drift", "tx-filename-drift");
     }
@@ -10473,14 +10488,14 @@ fn durable_store_rejects_symlinked_record_on_reload() {
             .expect("enabled");
         assert!(runtime.check_and_record_inbound(
             "symlinked-record",
-            IsoMessageMetadata::inbound(
+            &(IsoMessageMetadata::inbound(
                 "generic-iso20022",
                 "pacs.008",
                 (None, Some("symlinked-record-biz".to_owned()), None),
                 "symlinked-record-hash".to_owned(),
                 "snapshot".to_owned(),
                 false,
-            ),
+            )),
         ));
         runtime.mark_accepted("symlinked-record", "tx-symlinked-record");
     }
@@ -10507,14 +10522,14 @@ fn durable_store_rejects_symlinked_messages_dir_on_reload() {
             .expect("enabled");
         assert!(runtime.check_and_record_inbound(
             "symlinked-messages-dir",
-            IsoMessageMetadata::inbound(
+            &(IsoMessageMetadata::inbound(
                 "generic-iso20022",
                 "pacs.008",
                 (None, Some("symlinked-messages-dir-biz".to_owned()), None),
                 "symlinked-messages-dir-hash".to_owned(),
                 "snapshot".to_owned(),
                 false,
-            ),
+            )),
         ));
         runtime.mark_accepted("symlinked-messages-dir", "tx-symlinked-messages-dir");
     }
@@ -10694,14 +10709,14 @@ fn durable_store_refuses_oversized_update_without_mutating_original_record() {
         .expect("enabled");
     assert!(runtime.check_and_record_inbound(
         "oversized-persist",
-        IsoMessageMetadata::inbound(
+        &(IsoMessageMetadata::inbound(
             "generic-iso20022",
             "pacs.008",
             (None, Some("oversized-persist-biz".to_owned()), None),
             "oversized-persist-hash".to_owned(),
             "snapshot".to_owned(),
             false,
-        ),
+        )),
     ));
     let path = store
         .path()
@@ -11359,7 +11374,7 @@ fn unrepresentable_replay_expiry_refuses_admission_without_mutation() {
         let metadata = IsoMessageMetadata::default();
         let parties = runtime.compatibility_test_parties(&metadata);
         assert_eq!(
-            runtime.admit_inbound("overflowing-expiry", metadata, parties, false),
+            runtime.admit_inbound("overflowing-expiry", &(metadata), parties, false),
             Err(IsoAdmissionError::PersistenceUnavailable)
         );
         assert!(runtime.records.is_empty());
@@ -11488,7 +11503,7 @@ fn alternating_status_history_refuses_entry_overflow_before_memory_or_disk_mutat
     let metadata = inbound_metadata(message_id, "pacs.008");
     let parties = runtime.compatibility_test_parties(&metadata);
     runtime
-        .admit_authenticated_inbound(message_id, metadata, parties)
+        .admit_authenticated_inbound(message_id, &(metadata), parties)
         .expect("precommit replay identity");
     let admitted = runtime.records.get(message_id).expect("admitted record");
     record.metadata = admitted.metadata.clone();
@@ -11891,7 +11906,7 @@ fn participant_catalog_binds_initial_from_and_scopes_reads_to_both_parties() {
     runtime
         .admit_authenticated_inbound(
             "participant-payment",
-            inbound_metadata("participant-payment", "pacs.008"),
+            &(inbound_metadata("participant-payment", "pacs.008")),
             parties,
         )
         .expect("durable authenticated admission");
@@ -11903,7 +11918,7 @@ fn participant_catalog_binds_initial_from_and_scopes_reads_to_both_parties() {
     runtime
         .admit_authenticated_inbound(
             "other-payment",
-            inbound_metadata("other-payment", "pacs.008"),
+            &(inbound_metadata("other-payment", "pacs.008")),
             other_parties,
         )
         .expect("second durable authenticated admission");
@@ -12000,7 +12015,7 @@ fn lifecycle_roles_reject_cross_party_updates() {
     runtime
         .admit_authenticated_inbound(
             "owned-payment",
-            inbound_metadata("owned-payment", "pacs.008"),
+            &(inbound_metadata("owned-payment", "pacs.008")),
             parties,
         )
         .expect("original admitted");
@@ -12121,7 +12136,7 @@ fn lifecycle_apply_rejects_original_pruned_after_authorization() {
     runtime
         .admit_authenticated_inbound(
             "expiry-boundary-original",
-            inbound_metadata("expiry-boundary-original", "pacs.008"),
+            &(inbound_metadata("expiry-boundary-original", "pacs.008")),
             original_parties,
         )
         .expect("original admitted");
@@ -12152,7 +12167,7 @@ fn lifecycle_apply_rejects_original_pruned_after_authorization() {
     runtime
         .admit_authenticated_inbound(
             "expiry-boundary-return",
-            lifecycle_metadata.clone(),
+            &(lifecycle_metadata),
             lifecycle_parties.parties().clone(),
         )
         .expect("lifecycle identity admitted after retention pruning");
@@ -12185,7 +12200,7 @@ fn lifecycle_apply_rejects_original_pruned_after_authorization() {
     assert_eq!(
         runtime.admit_authenticated_inbound(
             "expiry-boundary-return",
-            lifecycle_metadata,
+            &(lifecycle_metadata),
             lifecycle_parties.parties().clone(),
         ),
         Err(IsoAdmissionError::Duplicate),
@@ -12215,7 +12230,7 @@ fn lifecycle_authorization_rejects_prune_readmit_aba_and_old_settlement_hash() {
     runtime
         .admit_authenticated_inbound(
             "aba-original",
-            inbound_metadata("aba-original-v1", "pacs.008"),
+            &(inbound_metadata("aba-original-v1", "pacs.008")),
             original_parties,
         )
         .expect("first incarnation admitted");
@@ -12247,7 +12262,7 @@ fn lifecycle_authorization_rejects_prune_readmit_aba_and_old_settlement_hash() {
     runtime
         .admit_authenticated_inbound(
             "aba-status",
-            inbound_metadata("aba-status", "pacs.002"),
+            &(inbound_metadata("aba-status", "pacs.002")),
             authorization.parties().clone(),
         )
         .expect("lifecycle admission prunes the expired first incarnation");
@@ -12259,7 +12274,7 @@ fn lifecycle_authorization_rejects_prune_readmit_aba_and_old_settlement_hash() {
     runtime
         .admit_authenticated_inbound(
             "aba-original",
-            inbound_metadata("aba-original-v2", "pacs.008"),
+            &(inbound_metadata("aba-original-v2", "pacs.008")),
             replacement_parties,
         )
         .expect("replacement incarnation admitted");
@@ -12312,7 +12327,7 @@ fn counterparty_owns_every_return_and_securities_lifecycle_message() {
     runtime
         .admit_authenticated_inbound(
             "return-role-payment",
-            inbound_metadata("return-role-payment", "pacs.008"),
+            &(inbound_metadata("return-role-payment", "pacs.008")),
             payment_parties,
         )
         .expect("payment original admitted");
@@ -12356,7 +12371,7 @@ fn counterparty_owns_every_return_and_securities_lifecycle_message() {
     runtime
         .admit_authenticated_inbound(
             "sese.023:securities-role-trade",
-            inbound_metadata("sese.023:securities-role-trade", "sese.023"),
+            &(inbound_metadata("sese.023:securities-role-trade", "sese.023")),
             securities_parties,
         )
         .expect("securities original admitted");
@@ -12412,7 +12427,8 @@ fn settling_pacs002_requires_successful_transaction_evidence() {
     runtime.mark_accepted("settlement-evidence", "tx-settlement-evidence");
     let lifecycle_id = "settlement-evidence-status";
     assert!(
-        runtime.check_and_record_inbound(lifecycle_id, inbound_metadata(lifecycle_id, "pacs.002"))
+        runtime
+            .check_and_record_inbound(lifecycle_id, &(inbound_metadata(lifecycle_id, "pacs.002")))
     );
     let lifecycle = parse_message(
         "pacs.002",
@@ -12487,7 +12503,7 @@ fn unexpired_replay_tombstone_survives_detail_pruning_and_restart() {
         .expect("runtime")
         .expect("enabled");
     let metadata = inbound_metadata("durable-replay", "pacs.008");
-    assert!(runtime.check_and_record_inbound("durable-replay", metadata.clone()));
+    assert!(runtime.check_and_record_inbound("durable-replay", &(metadata)));
     runtime.mark_accepted("durable-replay", "tx-durable-replay");
     runtime.mark_settled("durable-replay", SystemTime::now());
     runtime
@@ -12502,7 +12518,7 @@ fn unexpired_replay_tombstone_survives_detail_pruning_and_restart() {
     let reloaded = Iso20022BridgeRuntime::from_config(&config)
         .expect("restart loads tombstone")
         .expect("enabled");
-    assert!(!reloaded.check_and_record_inbound("durable-replay", metadata));
+    assert!(!reloaded.check_and_record_inbound("durable-replay", &(metadata)));
 }
 
 #[test]
@@ -12516,11 +12532,11 @@ fn protected_replay_capacity_fails_closed_without_mutation() {
         .expect("enabled");
     let first = runtime.compatibility_test_parties(&inbound_metadata("one", "pacs.008"));
     runtime
-        .admit_authenticated_inbound("one", inbound_metadata("one", "pacs.008"), first)
+        .admit_authenticated_inbound("one", &(inbound_metadata("one", "pacs.008")), first)
         .expect("first admission");
     let second = runtime.compatibility_test_parties(&inbound_metadata("two", "pacs.008"));
     assert_eq!(
-        runtime.admit_authenticated_inbound("two", inbound_metadata("two", "pacs.008"), second,),
+        runtime.admit_authenticated_inbound("two", &(inbound_metadata("two", "pacs.008")), second,),
         Err(IsoAdmissionError::ProtectedCapacity)
     );
     assert!(!runtime.records.contains_key("two"));
@@ -12541,7 +12557,7 @@ fn detail_persistence_failure_keeps_the_precommitted_replay_tombstone() {
     let metadata = inbound_metadata("precommitted-replay", "pacs.008");
     let parties = runtime.compatibility_test_parties(&metadata);
     assert_eq!(
-        runtime.admit_authenticated_inbound("precommitted-replay", metadata.clone(), parties,),
+        runtime.admit_authenticated_inbound("precommitted-replay", &(metadata), parties,),
         Err(IsoAdmissionError::PersistenceUnavailable)
     );
     assert!(!runtime.records.contains_key("precommitted-replay"));
@@ -12559,7 +12575,7 @@ fn detail_persistence_failure_keeps_the_precommitted_replay_tombstone() {
         .expect("enabled");
     let parties = reloaded.compatibility_test_parties(&metadata);
     assert_eq!(
-        reloaded.admit_authenticated_inbound("precommitted-replay", metadata, parties),
+        reloaded.admit_authenticated_inbound("precommitted-replay", &(metadata), parties),
         Err(IsoAdmissionError::Duplicate)
     );
 }
@@ -12622,7 +12638,7 @@ fn persisted_record_rejects_same_id_profile_policy_drift_on_restart() {
             .expect("enabled");
         assert!(runtime.check_and_record_inbound(
             "profile-policy-pinned",
-            inbound_metadata("profile-policy-pinned", "pacs.008"),
+            &(inbound_metadata("profile-policy-pinned", "pacs.008")),
         ));
         let status = runtime
             .message_status("profile-policy-pinned")
@@ -12647,8 +12663,9 @@ fn persisted_record_rejects_same_id_profile_policy_drift_on_restart() {
 
 #[test]
 fn profile_policy_digest_covers_every_security_and_message_constraint() {
+    type PolicyMutation = (&'static str, fn(&mut TradfiRailProfile));
     let base = profiles::default_profile("generic-iso20022").expect("default profile");
-    let mutations: &[(&str, fn(&mut TradfiRailProfile))] = &[
+    let mutations: &[PolicyMutation] = &[
         ("id", |profile| profile.id.push_str("-changed")),
         ("rail", |profile| profile.rail = TradfiRail::SwiftCbprPlus),
         ("embedded signature policy", |profile| {
@@ -12765,14 +12782,14 @@ fn conflicting_v2_replay_and_transaction_identities_stop_startup() {
         for message_id in ["tx-owner-a", "tx-owner-b"] {
             assert!(runtime.check_and_record_inbound(
                 message_id,
-                IsoMessageMetadata::inbound(
+                &(IsoMessageMetadata::inbound(
                     "generic-iso20022",
                     "pacs.008",
                     (None, Some(format!("{message_id}-biz")), None),
                     format!("{message_id}-hash"),
                     "snapshot".to_owned(),
                     false,
-                ),
+                )),
             ));
             runtime.mark_accepted(message_id, &format!("{message_id}-transaction"));
         }
@@ -12810,14 +12827,14 @@ fn conflicting_v2_replay_and_transaction_identities_stop_startup() {
         for message_id in ["replay-owner-a", "replay-owner-b"] {
             assert!(runtime.check_and_record_inbound(
                 message_id,
-                IsoMessageMetadata::inbound(
+                &(IsoMessageMetadata::inbound(
                     "generic-iso20022",
                     "pacs.008",
                     (None, Some(format!("{message_id}-biz")), None),
                     format!("{message_id}-hash"),
                     "snapshot".to_owned(),
                     false,
-                ),
+                )),
             ));
         }
     }
@@ -12900,14 +12917,14 @@ fn persisted_iso_records_regenerate_a_missing_v3_audit_index() {
             .expect("enabled");
         assert!(runtime.check_and_record_inbound(
             "audit-required",
-            IsoMessageMetadata::inbound(
+            &(IsoMessageMetadata::inbound(
                 "generic-iso20022",
                 "pacs.008",
                 (None, Some("audit-required-biz".to_owned()), None),
                 "audit-required-hash".to_owned(),
                 "snapshot".to_owned(),
                 false,
-            ),
+            )),
         ));
     }
     fs::remove_file(
@@ -13019,14 +13036,14 @@ fn valid_but_stale_iso_audit_index_is_regenerated_after_validation() {
             .expect("enabled");
         assert!(runtime.check_and_record_inbound(
             "stale-audit",
-            IsoMessageMetadata::inbound(
+            &(IsoMessageMetadata::inbound(
                 "generic-iso20022",
                 "pacs.008",
                 (None, Some("stale-audit-biz".to_owned()), None),
                 "stale-audit-hash".to_owned(),
                 "snapshot".to_owned(),
                 false,
-            ),
+            )),
         ));
     }
     rewrite_persisted_audit_index(&store, |object| {

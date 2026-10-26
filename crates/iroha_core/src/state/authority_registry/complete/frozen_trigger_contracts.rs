@@ -5,6 +5,10 @@ use crate::state::{
     StateBlock, block_field::AggregatePublication, is_stable_state_view_generation,
 };
 /// Preserve actual ten Set targets/modes and original State pool through both-image checks.
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 pub(in crate::state) fn capture(
     block: &StateBlock<'_>,
     limits: LeafLimits,

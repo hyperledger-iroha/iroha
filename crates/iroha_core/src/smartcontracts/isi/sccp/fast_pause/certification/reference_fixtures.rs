@@ -24,8 +24,7 @@ use iroha_sccp::v1::{
 };
 use norito::{json, json::Value};
 
-#[path = "../../../../../../../iroha_sccp/tests/reference_support/python_json.rs"]
-mod python_json;
+use crate::smartcontracts::isi::sccp::reference_fixture_support::python_json;
 
 const NETWORK: SccpNetworkV1 = SccpNetworkV1::EthereumMainnet;
 const T0: u64 = 8_000;
@@ -41,7 +40,7 @@ fn indices(v: &Value, key: &str) -> Vec<usize> {
         .as_array()
         .unwrap()
         .iter()
-        .map(|v| v.as_u64().unwrap() as usize)
+        .map(|v| usize::try_from(v.as_u64().unwrap()).expect("fixture value fits usize"))
         .collect()
 }
 fn hex(bytes: &[u8]) -> String {
@@ -50,7 +49,7 @@ fn hex(bytes: &[u8]) -> String {
 fn anchor(v: &Value) -> GovernanceAnchorV1 {
     GovernanceAnchorV1 {
         height: number(v, "height"),
-        position: number(v, "position") as u32,
+        position: u32::try_from(number(v, "position")).expect("fixture value fits u32"),
         timestamp_ms: number(v, "timestamp_ms"),
     }
 }
@@ -135,8 +134,8 @@ fn snapshot(world: &impl WorldReadOnly, time: u64) -> Value {
 fn state_expected(inputs: &Value) -> Value {
     let state = blank_state();
     let mut block = state.block(header(2));
-    let k = number(inputs, "panel_seats") as usize;
-    let quorum = (2 * k + 2) / 3;
+    let k = usize::try_from(number(inputs, "panel_seats")).expect("fixture value fits usize");
+    let quorum = (2 * k).div_ceil(3);
     {
         let mut tx = block.transaction();
         let activation = if string(inputs, "activation") == "InboundOnly" {
@@ -144,7 +143,11 @@ fn state_expected(inputs: &Value) -> Value {
         } else {
             SccpRouteActivationV1::Bidirectional
         };
-        setup(&mut tx, activation, k as u32);
+        setup(
+            &mut tx,
+            activation,
+            u32::try_from(k).expect("fixture value fits u32"),
+        );
         tx.apply();
     }
     let mut snapshots = Vec::new();
@@ -252,7 +255,7 @@ fn state_expected(inputs: &Value) -> Value {
                     head,
                     endorsement_root,
                     endorsement_count,
-                    quorum: quorum as u32,
+                    quorum: u32::try_from(quorum).expect("fixture value fits u32"),
                     incident_root,
                     effect_preimage_hash: SccpFastPauseCertificateV1::effect_hash(
                         *block.network_id(),
@@ -262,8 +265,12 @@ fn state_expected(inputs: &Value) -> Value {
                     certified_at_height: number(op, "height"),
                     certified_at_ms: time,
                 };
-                apply_enactment::<()>(&mut block, certificate, number(op, "position") as u32)
-                    .unwrap();
+                apply_enactment::<()>(
+                    &mut block,
+                    certificate,
+                    u32::try_from(number(op, "position")).expect("fixture value fits u32"),
+                )
+                .unwrap();
             }
             "seed_rounds" => {
                 let mut tx = block.transaction();
@@ -280,7 +287,10 @@ fn state_expected(inputs: &Value) -> Value {
                     if role == SccpPanelRoleV1::Primary && k == 5 {
                         assert_eq!(result, Err(NoResult::InsufficientEligibleEndorsements));
                     } else {
-                        assert_eq!(result.unwrap().1, quorum as u32);
+                        assert_eq!(
+                            result.unwrap().1,
+                            u32::try_from(quorum).expect("fixture value fits u32")
+                        );
                     }
                     store::fast_pause_rounds::insert(&mut tx, (NETWORK, role), round).unwrap();
                 }
@@ -301,8 +311,13 @@ fn expected(row: &Value) -> Value {
     let state = blank_state();
     let mut block = state.block(header(2));
     let mut tx = block.transaction();
-    let k = input["panel_seats"].as_u64().unwrap_or(9) as usize;
-    setup(&mut tx, SccpRouteActivationV1::Bidirectional, k as u32);
+    let k = usize::try_from(input["panel_seats"].as_u64().unwrap_or(9))
+        .expect("fixture value fits usize");
+    setup(
+        &mut tx,
+        SccpRouteActivationV1::Bidirectional,
+        u32::try_from(k).expect("fixture value fits u32"),
+    );
     match string(row, "category") {
         "certification" => {
             let panel = panel(
@@ -336,7 +351,7 @@ fn expected(row: &Value) -> Value {
                 NETWORK,
                 role(input),
                 number(input, "time"),
-                number(input, "eligible") as u32,
+                u32::try_from(number(input, "eligible")).expect("fixture value fits u32"),
             );
             match result {
                 Ok((_, count)) => json!({"outcome":"Certified","endorsement_count":count}),
@@ -349,11 +364,12 @@ fn expected(row: &Value) -> Value {
                 &panel,
                 9,
                 number(input, "time_ms"),
-                number(input, "eligible") as u32,
+                u32::try_from(number(input, "eligible")).expect("fixture value fits u32"),
             )
             .unwrap();
-            let member = &panel.drawn[number(input, "member") as usize];
-            json!({"owners":(owners[..18].to_vec()),"primary_member_counts":(counts(&panel,&owners,SccpPanelRoleV1::Primary,9,number(input,"eligible") as u32,member))})
+            let member = &panel.drawn
+                [usize::try_from(number(input, "member")).expect("fixture value fits usize")];
+            json!({"owners":(owners[..18].to_vec()),"primary_member_counts":(counts(&panel,&owners,SccpPanelRoleV1::Primary,9,u32::try_from(number(input,"eligible")).expect("fixture value fits u32"),member))})
         }
         "endorsement" => {
             let panel = panel(&tx, 9, &(0..27).collect::<Vec<_>>(), 1);
@@ -375,7 +391,8 @@ fn expected(row: &Value) -> Value {
                 )
                 .unwrap();
             }
-            let member = number(input, "member") as usize;
+            let member =
+                usize::try_from(number(input, "member")).expect("fixture value fits usize");
             let outside = authority(99);
             let account = panel.drawn.get(member).unwrap_or(&outside);
             let instruction = EndorseSccpFastPauseV1 {
@@ -1334,10 +1351,12 @@ fn build() -> Value {
     {
         let f = &row["fields"];
         let fields = ControlLeafV1 {
-            route_revision: number(f, "route_revision") as u32,
+            route_revision: u32::try_from(number(f, "route_revision"))
+                .expect("fixture value fits u32"),
             control_nonce: number(f, "control_nonce"),
-            track: number(f, "track") as u8,
-            parliament_paused: number(f, "parliament_paused") as u8,
+            track: u8::try_from(number(f, "track")).expect("fixture value fits u8"),
+            parliament_paused: u8::try_from(number(f, "parliament_paused"))
+                .expect("fixture value fits u8"),
             fast_pause_until_ms: number(f, "fast_pause_until_ms"),
             certificate_id: bytes32(f, "certificate_id"),
             effect_hash: bytes32(f, "effect_hash"),

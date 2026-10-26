@@ -1,31 +1,42 @@
 //! Payload streams: the sender-side [`StreamEncoder`] and the receiver-side
 //! [`StreamAssembler`].
 //!
-//! Every frame carries a handful of fountain atoms, one lane at a time:
-//! lane `P` one atom, lane `K` five, and lane `D` one atom — except on every
+//! Every frame carries a handful of fountain atoms, one lane at a time: each
+//! of the four field lanes five atoms, and lane `D` one atom — except on every
 //! fourth frame (`frame % 4 == 0`), when lane `D` carries the stream *beacon*
 //! instead, so a receiver can join at any frame within a fraction of a second.
 //! Atom ids run contiguously over the atoms actually sent (see
-//! [`first_atom_id`]). Any single readable lane is useful on its own.
+//! [`first_atom_id`]). Any single readable lane is useful on its own. On top of
+//! every field lane, the turns of its lit petals carry four more atoms from the
+//! repair range (see [`crate::turns`]), so a sharp camera reads up to 37 atoms
+//! (592 bytes) from the square. The katakana bands above and below the square add
+//! eight atoms each (see [`crate::kana`]): up to 53 atoms (848 bytes) a frame.
 //!
 //! Lane data layouts (all big-endian):
 //!
 //! * every lane starts with `tag:u8, frame:u16`; `tag` is the low byte of the
 //!   payload CRC-32C.
-//! * lanes `P`, `K` and non-beacon `D`: `atoms…` (16 bytes each).
+//! * field lanes and non-beacon `D`: `atoms…` (16 bytes each).
 //! * beacon `D`: `version:u8, kind:u8, len:u24, crc:u32`, zero padded.
+//! * turn lanes: `atoms… check:u32`, where the check binds the atoms to the header
+//!   of the field lane they ride on.
+//! * kana lanes: `atoms… check:u32`, where the check binds the atoms to the stream
+//!   tag, the frame and the lane.
 
 use std::collections::VecDeque;
 
 use crate::crc::crc32c;
 use crate::fountain::{Atom, FountainDecoder, encode_atom, split_payload};
+use crate::kana::{KanaKind, KanaLane, encode_kana_lane, kana_data, kana_first_id};
 use crate::lanes::{
-    ATOM_LEN, D_ATOMS, D_DATA, FrameCells, K_ATOMS, K_DATA, LANE_HEADER_LEN, Lane, P_ATOMS, P_DATA,
-    encode_lane,
+    ATOM_LEN, ATOMS_PER_FRAME, D_ATOMS, D_DATA, FIELD_ATOMS, FIELD_DATA, FrameCells,
+    LANE_HEADER_LEN, Lane, encode_lane,
 };
+use crate::layout::{KANA_BANDS, SECTORS};
+use crate::turns::{TURN_ATOMS, encode_turn_lane, turn_data, turn_first_id};
 
-/// Version/profile byte of the beacon: format version 1, layout profile 0.
-pub const FORMAT_VERSION: u8 = 0x10;
+/// Version/profile byte of the beacon: format version 5, layout profile 0.
+pub const FORMAT_VERSION: u8 = 0x50;
 /// Largest payload a beacon can describe (`u24`).
 pub const MAX_PAYLOAD_LEN: usize = (1 << 24) - 1;
 /// Default receiver payload limit; override with [`AssemblerLimits`].
@@ -45,9 +56,9 @@ pub const fn is_beacon_frame(frame: u16) -> bool {
 #[must_use]
 pub const fn atoms_in_frame(frame: u16) -> usize {
     if is_beacon_frame(frame) {
-        P_ATOMS + K_ATOMS
+        ATOMS_PER_FRAME - D_ATOMS
     } else {
-        P_ATOMS + D_ATOMS + K_ATOMS
+        ATOMS_PER_FRAME
     }
 }
 
@@ -58,15 +69,17 @@ pub const fn atoms_in_frame(frame: u16) -> usize {
 #[must_use]
 pub fn first_atom_id(frame: u16) -> u32 {
     let f = u32::from(frame);
-    f * (P_ATOMS + D_ATOMS + K_ATOMS) as u32 - f.div_ceil(u32::from(BEACON_INTERVAL))
+    f * ATOMS_PER_FRAME as u32 - f.div_ceil(u32::from(BEACON_INTERVAL))
 }
 
-fn lane_first_id(lane: Lane, frame: u16) -> u32 {
+/// Fountain id of the first atom `lane` carries in `frame`: the field lanes come first, in
+/// sector order, then lane `D`.
+#[must_use]
+pub fn lane_first_id(lane: Lane, frame: u16) -> u32 {
     let base = first_atom_id(frame);
     match lane {
-        Lane::P => base,
-        Lane::D => base + P_ATOMS as u32,
-        Lane::K => base + (P_ATOMS + if is_beacon_frame(frame) { 0 } else { D_ATOMS }) as u32,
+        Lane::Field(sector) => base + u32::from(sector) * FIELD_ATOMS as u32,
+        Lane::D => base + (SECTORS * FIELD_ATOMS) as u32,
     }
 }
 
@@ -178,18 +191,13 @@ fn parse_atoms(lane: Lane, data: &[u8], header: LaneHeader, count: usize) -> Ato
     }
 }
 
-/// Parses the data bytes of lane `P` or lane `K`.
+/// Parses the data bytes of a field lane.
 #[must_use]
 pub fn parse_atom_lane(lane: Lane, data: &[u8]) -> Option<AtomPacket> {
-    let count = match lane {
-        Lane::P => P_ATOMS,
-        Lane::K => K_ATOMS,
-        Lane::D => return None,
-    };
-    if data.len() != lane.data_len() {
+    if lane == Lane::D || data.len() != lane.data_len() {
         return None;
     }
-    Some(parse_atoms(lane, data, parse_header(data), count))
+    Some(parse_atoms(lane, data, parse_header(data), FIELD_ATOMS))
 }
 
 /// Parses the data bytes of lane `D`.
@@ -273,18 +281,22 @@ impl StreamEncoder {
             .collect()
     }
 
-    /// The data bytes of every lane of `frame`: `(P, K, D)`.
+    /// The data bytes of every lane of `frame`, turn lanes included.
     #[must_use]
-    pub fn lane_data(&self, frame: u16) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+    pub fn lane_data(&self, frame: u16) -> LaneData {
         let header = [self.meta.tag(), (frame >> 8) as u8, frame as u8];
+        let lane_header = LaneHeader {
+            tag: self.meta.tag(),
+            frame,
+        };
         let build = |lane: Lane, body: Vec<u8>| {
             let mut data = header.to_vec();
             data.extend_from_slice(&body);
             debug_assert_eq!(data.len(), lane.data_len());
             data
         };
-        let p = build(Lane::P, self.atoms(lane_first_id(Lane::P, frame), P_ATOMS));
-        let k = build(Lane::K, self.atoms(lane_first_id(Lane::K, frame), K_ATOMS));
+        let fields = Lane::FIELDS
+            .map(|lane| build(lane, self.atoms(lane_first_id(lane, frame), FIELD_ATOMS)));
         let d = if is_beacon_frame(frame) {
             let mut body = vec![FORMAT_VERSION, self.meta.kind];
             body.extend_from_slice(&self.meta.len.to_be_bytes()[1..]);
@@ -295,26 +307,104 @@ impl StreamEncoder {
         } else {
             build(Lane::D, self.atoms(lane_first_id(Lane::D, frame), D_ATOMS))
         };
-        debug_assert_eq!((p.len(), k.len()), (P_DATA, K_DATA));
-        (p, k, d)
+        debug_assert!(fields.iter().all(|f| f.len() == FIELD_DATA));
+        let turns = core::array::from_fn(|s| {
+            let sector = s as u8;
+            turn_data(
+                lane_header,
+                sector,
+                &self.atoms(turn_first_id(frame, sector), TURN_ATOMS),
+            )
+        });
+        let kana = core::array::from_fn(|b| {
+            [KanaKind::Polarity, KanaKind::Glyph].map(|kind| {
+                let lane = KanaLane {
+                    band: b as u8,
+                    kind,
+                };
+                kana_data(
+                    lane_header,
+                    lane,
+                    &self.atoms(kana_first_id(frame, lane), lane.atoms()),
+                )
+            })
+        });
+        LaneData {
+            d,
+            fields,
+            turns,
+            kana,
+        }
     }
 
-    /// The transmitted codewords of `frame`: `(P, K, D)`.
+    /// The transmitted codewords of `frame`.
     #[must_use]
-    pub fn words(&self, frame: u16) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
-        let (p, k, d) = self.lane_data(frame);
-        (
-            encode_lane(Lane::P, &p),
-            encode_lane(Lane::K, &k),
-            encode_lane(Lane::D, &d),
-        )
+    pub fn words(&self, frame: u16) -> LaneData {
+        let data = self.lane_data(frame);
+        LaneData {
+            d: encode_lane(Lane::D, &data.d),
+            fields: core::array::from_fn(|s| encode_lane(Lane::FIELDS[s], &data.fields[s])),
+            turns: core::array::from_fn(|s| encode_turn_lane(s as u8, &data.turns[s])),
+            kana: core::array::from_fn(|b| {
+                [KanaKind::Polarity, KanaKind::Glyph].map(|kind| {
+                    let lane = KanaLane {
+                        band: b as u8,
+                        kind,
+                    };
+                    encode_kana_lane(lane, &data.kana[b][usize::from(kind == KanaKind::Glyph)])
+                })
+            }),
+        }
     }
 
-    /// Every cell of `frame`, ready to render.
+    /// Every cell of `frame`, lit, turned and with its katakana tiles, ready to render.
     #[must_use]
     pub fn cells(&self, frame: u16) -> FrameCells {
-        let (p, k, d) = self.words(frame);
-        FrameCells::from_words(&p, &k, &d)
+        let words = self.words(frame);
+        let mut cells = FrameCells::from_words(
+            &words.d,
+            [
+                &words.fields[0],
+                &words.fields[1],
+                &words.fields[2],
+                &words.fields[3],
+            ],
+        );
+        cells.set_turns([
+            &words.turns[0],
+            &words.turns[1],
+            &words.turns[2],
+            &words.turns[3],
+        ]);
+        cells.set_kana([
+            [&words.kana[0][0], &words.kana[0][1]],
+            [&words.kana[1][0], &words.kana[1][1]],
+        ]);
+        cells
+    }
+}
+
+/// The bytes of every lane of one frame: lane data, or transmitted codewords.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LaneData {
+    /// Lane `D`.
+    pub d: Vec<u8>,
+    /// The field lanes, sector 0 first.
+    pub fields: [Vec<u8>; SECTORS],
+    /// The turn lanes, sector 0 first.
+    pub turns: [Vec<u8>; SECTORS],
+    /// The kana lanes: `kana[band]` is `[polarity, glyphs]`, band 0 (above the square) first.
+    pub kana: [[Vec<u8>; 2]; KANA_BANDS],
+}
+
+impl LaneData {
+    /// The bytes of `lane`.
+    #[must_use]
+    pub fn lane(&self, lane: Lane) -> &[u8] {
+        match lane {
+            Lane::D => &self.d,
+            Lane::Field(sector) => &self.fields[usize::from(sector)],
+        }
     }
 }
 
@@ -331,7 +421,7 @@ impl Default for AssemblerLimits {
     fn default() -> Self {
         Self {
             max_payload_len: DEFAULT_MAX_PAYLOAD_LEN,
-            max_pending_atoms: 128,
+            max_pending_atoms: 512,
         }
     }
 }
@@ -549,14 +639,9 @@ mod tests {
         frame: u16,
         lanes: &[Lane],
     ) {
-        let (p, k, d) = encoder.words(frame);
+        let words = encoder.words(frame);
         for lane in lanes {
-            let word = match lane {
-                Lane::P => &p,
-                Lane::K => &k,
-                Lane::D => &d,
-            };
-            let data = decode_lane(*lane, word, &[]).expect("clean lane");
+            let data = decode_lane(*lane, words.lane(*lane), &[]).expect("clean lane");
             match lane {
                 Lane::D => assembler.push_d_lane(&parse_d_lane(&data).expect("d lane")),
                 _ => assembler.push_atoms(&parse_atom_lane(*lane, &data).expect("atoms")),
@@ -571,10 +656,11 @@ mod tests {
             assert_eq!(first_atom_id(frame), expected, "frame {frame}");
             expected += atoms_in_frame(frame) as u32;
         }
-        assert_eq!(atoms_in_frame(0), 6);
-        assert_eq!(atoms_in_frame(1), 7);
-        assert_eq!(lane_first_id(Lane::K, 4), first_atom_id(4) + 1);
-        assert_eq!(lane_first_id(Lane::K, 5), first_atom_id(5) + 2);
+        assert_eq!(atoms_in_frame(0), 20);
+        assert_eq!(atoms_in_frame(1), 21);
+        assert_eq!(lane_first_id(Lane::Field(0), 4), first_atom_id(4));
+        assert_eq!(lane_first_id(Lane::Field(3), 5), first_atom_id(5) + 15);
+        assert_eq!(lane_first_id(Lane::D, 5), first_atom_id(5) + 20);
         // the frame counter wraps on a beacon frame, so ids repeat cleanly
         assert!(is_beacon_frame(0) && 65_536u32.is_multiple_of(u32::from(BEACON_INTERVAL)));
     }
@@ -585,12 +671,7 @@ mod tests {
         let encoder = StreamEncoder::new(&data, 2).unwrap();
         let mut assembler = StreamAssembler::new(AssemblerLimits::default());
         for frame in 0..encoder.systematic_frames() as u16 {
-            feed_frame(
-                &mut assembler,
-                &encoder,
-                frame,
-                &[Lane::D, Lane::P, Lane::K],
-            );
+            feed_frame(&mut assembler, &encoder, frame, &Lane::ALL);
         }
         let done = assembler.take_completed().expect("complete");
         assert_eq!(done.payload, data);
@@ -602,7 +683,7 @@ mod tests {
     fn any_single_lane_is_enough_given_a_beacon() {
         let data = payload(400, 22);
         let encoder = StreamEncoder::new(&data, 1).unwrap();
-        for lane in [Lane::P, Lane::K, Lane::D] {
+        for lane in Lane::ALL {
             let mut assembler = StreamAssembler::new(AssemblerLimits::default());
             feed_frame(&mut assembler, &encoder, 0, &[Lane::D]);
             for frame in 0..400u16 {
@@ -628,21 +709,11 @@ mod tests {
         let mut assembler = StreamAssembler::new(AssemblerLimits::default());
         // frames 1..: no beacon among them until frame 4
         for frame in 1..4u16 {
-            feed_frame(
-                &mut assembler,
-                &encoder,
-                frame,
-                &[Lane::P, Lane::K, Lane::D],
-            );
+            feed_frame(&mut assembler, &encoder, frame, &Lane::ALL);
         }
         assert!(assembler.progress().meta.is_none());
         for frame in 4..encoder.systematic_frames() as u16 + 4 {
-            feed_frame(
-                &mut assembler,
-                &encoder,
-                frame,
-                &[Lane::P, Lane::K, Lane::D],
-            );
+            feed_frame(&mut assembler, &encoder, frame, &Lane::ALL);
         }
         assert_eq!(assembler.take_completed().expect("complete").payload, data);
     }
@@ -658,12 +729,7 @@ mod tests {
         while !assembler.progress().complete {
             if rng.next_u32() % 10 < 6 {
                 // 60 % of the frames are readable
-                feed_frame(
-                    &mut assembler,
-                    &encoder,
-                    frame,
-                    &[Lane::D, Lane::P, Lane::K],
-                );
+                feed_frame(&mut assembler, &encoder, frame, &Lane::ALL);
             }
             frame = frame.wrapping_add(1);
             shown += 1;
@@ -695,12 +761,7 @@ mod tests {
         });
         // atoms before any beacon are dropped, not buffered
         for frame in 1..4u16 {
-            feed_frame(
-                &mut assembler,
-                &encoder,
-                frame,
-                &[Lane::P, Lane::K, Lane::D],
-            );
+            feed_frame(&mut assembler, &encoder, frame, &Lane::ALL);
         }
         feed_frame(&mut assembler, &encoder, 4, &[Lane::D]);
         assert_eq!(assembler.progress().rank, 0);
@@ -720,10 +781,10 @@ mod tests {
 
     #[test]
     fn corrupt_atoms_are_caught_by_the_payload_crc() {
-        let data = payload(200, 25);
+        let data = payload(2_000, 25);
         let encoder = StreamEncoder::new(&data, 1).unwrap();
         let mut assembler = StreamAssembler::new(AssemblerLimits::default());
-        feed_frame(&mut assembler, &encoder, 0, &[Lane::D, Lane::K]);
+        feed_frame(&mut assembler, &encoder, 0, &[Lane::D, Lane::Field(1)]);
         // atom 0 arrives with a valid header but a wrong body
         assembler.push_atoms(&AtomPacket {
             header: LaneHeader {
@@ -733,24 +794,17 @@ mod tests {
             first_id: 0,
             atoms: vec![[0xEE; ATOM_LEN]],
         });
-        for frame in 1..encoder.systematic_frames() as u16 {
-            feed_frame(
-                &mut assembler,
-                &encoder,
-                frame,
-                &[Lane::P, Lane::K, Lane::D],
-            );
+        let mut frame = 1u16;
+        while assembler.progress().integrity_failures == 0 {
+            feed_frame(&mut assembler, &encoder, frame, &Lane::ALL);
+            frame += 1;
+            assert!(frame < 100, "the corrupt atom was never caught");
         }
         assert!(assembler.take_completed().is_none());
         assert_eq!(assembler.progress().integrity_failures, 1);
         // clean repair frames after the reset recover the payload
         for frame in 100..600u16 {
-            feed_frame(
-                &mut assembler,
-                &encoder,
-                frame,
-                &[Lane::P, Lane::K, Lane::D],
-            );
+            feed_frame(&mut assembler, &encoder, frame, &Lane::ALL);
             if assembler.progress().complete {
                 break;
             }
@@ -773,18 +827,22 @@ mod tests {
     #[test]
     fn beacon_roundtrip_through_lane_d() {
         let encoder = StreamEncoder::new(&payload(77, 9), 3).unwrap();
-        let (_, _, d) = encoder.lane_data(512);
+        let d = encoder.lane_data(512).d;
         let DLane::Beacon(beacon) = parse_d_lane(&d).unwrap() else {
             panic!("beacon expected")
         };
         assert_eq!(beacon.meta, encoder.meta());
         assert_eq!(beacon.header.frame, 512);
         assert!(parse_d_lane(&d[..11]).is_none());
-        let mut bad = d.clone();
-        bad[3] = 0x20;
-        assert!(parse_d_lane(&bad).is_none());
+        // the retired formats 1 (katakana tiles), 2 (unturned petals) and 3 (no bands) are
+        // refused
+        for retired in [0x10, 0x20, 0x30] {
+            let mut bad = d.clone();
+            bad[3] = retired;
+            assert!(parse_d_lane(&bad).is_none());
+        }
         // non-beacon frames carry an atom instead
-        let (_, _, d) = encoder.lane_data(513);
+        let d = encoder.lane_data(513).d;
         assert!(matches!(parse_d_lane(&d), Some(DLane::Atoms(_))));
     }
 }

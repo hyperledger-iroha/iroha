@@ -94,7 +94,7 @@ pub enum DaReceiptSpoolError {
     )]
     FilenameMismatch {
         /// Path that failed.
-        path: PathBuf,
+        path: Box<std::path::Path>,
         /// Lane identifier parsed from the filename.
         filename_lane: LaneId,
         /// Epoch parsed from the filename.
@@ -531,16 +531,15 @@ pub fn load_receipt_entries(spool_dir: &Path) -> Result<Vec<DaReceiptEntry>, DaR
         if let Some((_, expected)) = duplicate_receipts
             .iter()
             .find(|(receipt, _)| receipt == &receipt_entry.receipt)
+            && *expected != filename_key.fingerprint
         {
-            if *expected != filename_key.fingerprint {
-                return Err(DaReceiptSpoolError::DuplicateFingerprintConflict {
-                    lane: receipt_entry.lane_epoch.lane_id,
-                    epoch: receipt_entry.lane_epoch.epoch,
-                    sequence: receipt_entry.sequence,
-                    expected: *expected,
-                    observed: filename_key.fingerprint,
-                });
-            }
+            return Err(DaReceiptSpoolError::DuplicateFingerprintConflict {
+                lane: receipt_entry.lane_epoch.lane_id,
+                epoch: receipt_entry.lane_epoch.epoch,
+                sequence: receipt_entry.sequence,
+                expected: *expected,
+                observed: filename_key.fingerprint,
+            });
         }
         duplicate_receipts.push((receipt_entry.receipt.clone(), filename_key.fingerprint));
         if seen_keys
@@ -775,7 +774,7 @@ fn decode_receipt(
         || filename_key.storage_ticket != receipt.storage_ticket
     {
         return Err(DaReceiptSpoolError::FilenameMismatch {
-            path: path.to_path_buf(),
+            path: path.into(),
             filename_lane: filename_key.lane_id,
             filename_epoch: filename_key.epoch,
             filename_sequence: filename_key.sequence,
@@ -865,10 +864,10 @@ pub fn plan_committable_receipts(
             |highest| highest.saturating_add(1),
         );
         for (sequence, entry) in entries {
-            if let Some(highest) = base_floor {
-                if sequence <= highest {
-                    continue;
-                }
+            if let Some(highest) = base_floor
+                && sequence <= highest
+            {
+                continue;
             }
             if sequence != expected {
                 return Err(DaReceiptQueueError::MissingSequence {
@@ -1037,18 +1036,18 @@ pub fn prune_spool(spool_dir: &Path, cursors: &BTreeMap<LaneEpoch, u64>) -> DaRe
                 continue;
             }
         };
-        if let Some(highest) = cursors.get(&entry.lane_epoch) {
-            if entry.sequence <= *highest {
-                if let Err(err) = std::fs::remove_file(&path) {
-                    report.remove_failures = report.remove_failures.saturating_add(1);
-                    iroha_logger::warn!(
-                        ?err,
-                        path = %path.display(),
-                        "failed to prune stale DA receipt file"
-                    );
-                } else {
-                    report.removed_stale = report.removed_stale.saturating_add(1);
-                }
+        if let Some(highest) = cursors.get(&entry.lane_epoch)
+            && entry.sequence <= *highest
+        {
+            if let Err(err) = std::fs::remove_file(&path) {
+                report.remove_failures = report.remove_failures.saturating_add(1);
+                iroha_logger::warn!(
+                    ?err,
+                    path = %path.display(),
+                    "failed to prune stale DA receipt file"
+                );
+            } else {
+                report.removed_stale = report.removed_stale.saturating_add(1);
             }
         }
     }

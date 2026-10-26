@@ -4,6 +4,10 @@ use super::*;
 use iroha_allocation::release::DeferredRelease;
 use mv::PublicationPreparationError;
 
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Publication transitions retain the original admitted storage owner without another allocation"
+)]
 enum Phase<'storage> {
     Original(DetachedTransactionsBlock),
     Prepared(PreparedTransactionsBlock<'storage>),
@@ -14,7 +18,11 @@ enum Phase<'storage> {
 /// An aggregate installs this inert slot before preparing any sibling. Its
 /// physical-only release pass must finish before it destroys any slot.
 #[must_use = "retain this slot in the owner of all enclosing publication fences"]
-pub(crate) struct DetachedTransactionsPublicationSlot<'storage, Installation> {
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Attempt, retry eligibility, publication completion and physical release are independent owner facts"
+)]
+pub struct DetachedTransactionsPublicationSlot<'storage, Installation> {
     target: &'storage TransactionsStorage,
     phase: Option<Phase<'storage>>,
     writer: Option<MembershipWriter<'storage>>,
@@ -164,23 +172,22 @@ impl<'storage, Installation> DetachedTransactionsPublicationSlot<'storage, Insta
         let Some(Phase::Prepared(prepared)) = self.phase.as_mut() else {
             unreachable!()
         };
-        if !matches!(&prepared.publication, MembershipPublication::Repeated) {
-            if let Err(error) = prepared
+        if !matches!(&prepared.publication, MembershipPublication::Repeated)
+            && let Err(error) = prepared
                 .block
                 ._guard
                 .history
                 .as_mut()
                 .expect("original history")
                 .prepare()
-            {
-                let refusal = match error {
-                    MembershipAdmissionError::Busy(wait) => PublicationPreparationError::Busy(wait),
-                    MembershipAdmissionError::Changed(_) => PublicationPreparationError::Changed,
-                    MembershipAdmissionError::Poisoned => PublicationPreparationError::Poisoned,
-                    _ => unreachable!("native reattachment performs no allocation admission"),
-                };
-                return self.refuse(refusal);
-            }
+        {
+            let refusal = match error {
+                MembershipAdmissionError::Busy(wait) => PublicationPreparationError::Busy(wait),
+                MembershipAdmissionError::Changed(_) => PublicationPreparationError::Changed,
+                MembershipAdmissionError::Poisoned => PublicationPreparationError::Poisoned,
+                _ => unreachable!("native reattachment performs no allocation admission"),
+            };
+            return self.refuse(refusal);
         }
         self.complete = true;
         self.retryable = true;

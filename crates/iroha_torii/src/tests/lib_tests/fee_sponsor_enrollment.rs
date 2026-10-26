@@ -22,8 +22,8 @@ async fn fee_enrollment_point_read_observes_native_revocation_and_exact_registra
         mk_app_state_for_tests_with_world(iroha_core::state::World::with([domain], accounts, []));
     let program = FeeSponsorProgramId::new(sponsor.clone(), "dpn".parse().unwrap());
     let unrelated = FeeSponsorProgramId::new(sponsor.clone(), "other".parse().unwrap());
-    register_fee_sponsor_program_for_test(&app, program.clone());
-    register_fee_sponsor_program_for_test(&app, unrelated.clone());
+    register_fee_sponsor_program_for_test(&app, &(program));
+    register_fee_sponsor_program_for_test(&app, &(unrelated));
     let expected_key = FeeSponsorEnrollmentKey {
         program_id: program.clone(),
         beneficiary: beneficiary.clone(),
@@ -231,7 +231,7 @@ async fn fee_enrollment_point_read_rejects_expired_replayed_and_substituted_auth
     );
     let app = mk_app_state_for_tests_with_world(world_with_account(&sponsor));
     let program = FeeSponsorProgramId::new(sponsor.clone(), "dpn".parse().unwrap());
-    register_fee_sponsor_program_for_test(&app, program.clone());
+    register_fee_sponsor_program_for_test(&app, &(program));
     let method = axum::http::Method::POST;
     let uri: axum::http::Uri = route_catalog::fees::SPONSOR_ENROLLMENT_BY_ID_PATH
         .parse()

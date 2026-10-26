@@ -399,11 +399,12 @@ fn load_witness() -> crate::admin_sigma::LoadWitness {
 #[test]
 #[ignore = "genuine Load sigma k12 plus four serialized-bus2 Q0 k16 proofs; explicit resource handoff"]
 fn genuine_load_public_inverse_prepared_and_native_proof_parity() {
+    use crate::admin_sigma::LoadCircuit;
+
     assert!(
-        !cfg!(debug_assertions),
+        !std::hint::black_box(cfg!(debug_assertions)),
         "run real-family measurement with --release"
     );
-    use crate::admin_sigma::LoadCircuit;
     let sigma_params = PinnedParams::<Eq>::derive(12).unwrap();
     let sigma_circuit = LoadCircuit::new(&load_witness());
     let sigma_instances = sigma_circuit.instances();

@@ -1,4 +1,4 @@
-//! Pre-decode admission for SoraNet privacy telemetry collectors.
+//! Pre-decode admission for `SoraNet` privacy telemetry collectors.
 use crate::operator_signatures::AuthenticatedOperatorPublicKey;
 #[cfg(feature = "telemetry")]
 use crate::{
@@ -20,7 +20,7 @@ use iroha_data_model::soranet::privacy_metrics::{
 };
 use iroha_torii_shared::ErrorEnvelope;
 use std::net::IpAddr;
-/// Maximum encoded body accepted by either SoraNet privacy ingest route.
+/// Maximum encoded body accepted by either `SoraNet` privacy ingest route.
 pub const SORANET_PRIVACY_INGEST_MAX_BODY_BYTES: usize = 128 * 1024;
 const RETIRED_SORANET_PRIVACY_TOKEN_HEADERS: [&str; 2] = ["x-soranet-privacy-token", "x-api-token"];
 #[derive(Clone)]
@@ -144,7 +144,7 @@ pub async fn enforce_soranet_privacy_collector_authentication(
     next.run(request).await
 }
 #[cfg(feature = "telemetry")]
-/// Record one authenticated SoraNet privacy event.
+/// Record one authenticated `SoraNet` privacy event.
 pub async fn handler_post_soranet_privacy_event(
     State(app): State<SharedAppState>,
     Extension(_collector): Extension<VerifiedSoranetPrivacyCollector>,
@@ -155,7 +155,7 @@ pub async fn handler_post_soranet_privacy_event(
         .map(IntoResponse::into_response)
 }
 #[cfg(feature = "telemetry")]
-/// Record one authenticated SoraNet privacy collector share.
+/// Record one authenticated `SoraNet` privacy collector share.
 pub async fn handler_post_soranet_privacy_share(
     State(app): State<SharedAppState>,
     Extension(collector): Extension<VerifiedSoranetPrivacyCollector>,

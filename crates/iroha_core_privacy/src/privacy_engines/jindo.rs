@@ -437,6 +437,10 @@ impl JindoPreparedPrivacyActionV1 {
     }
     /// This component action has no inferred ledger mutation.
     #[must_use]
+    #[expect(
+        clippy::unused_self,
+        reason = "The effect is queried through a validated action receipt, whose type certifies the fixed effect."
+    )]
     pub const fn effect(&self) -> JindoPrivacyActionEffectV1 {
         JindoPrivacyActionEffectV1::ActionVerificationAndFinalityOnly
     }
@@ -541,6 +545,10 @@ impl SignedJindoPrivacyActionV1 {
     }
     /// This component action has no inferred ledger mutation.
     #[must_use]
+    #[expect(
+        clippy::unused_self,
+        reason = "The effect is queried through a validated action receipt, whose type certifies the fixed effect."
+    )]
     pub const fn effect(&self) -> JindoPrivacyActionEffectV1 {
         JindoPrivacyActionEffectV1::ActionVerificationAndFinalityOnly
     }
@@ -702,8 +710,12 @@ fn derive_canonical_transaction_intent_digest_v1(
 ///
 /// Returns a closed error for non-canonical context or witness input, native
 /// proving failure, binding drift, or resource-limit violation.
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "The proving boundary consumes the secret witness so it is zeroized on every return and unwind."
+)]
 pub fn prepare_jindo_privacy_action_with_rng_v1<R>(
-    context: JindoPrivacyActionTransactionContextV1,
+    context: &JindoPrivacyActionTransactionContextV1,
     witness: JindoPrivacyActionWitnessV1,
     canonical_genesis_hash: [u8; 32],
     rng: &mut R,
@@ -717,7 +729,7 @@ where
     if context.network_id.as_bytes() != &canonical_genesis_hash {
         return Err(JindoPrivacyActionBuildErrorV1::NetworkIdMismatch);
     }
-    validate_transaction_context_v1(&context)?;
+    validate_transaction_context_v1(context)?;
     witness.validate()?;
     let profile = crate::privacy_profiles::compiled_privacy_profile_v1(
         PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1,
@@ -765,7 +777,7 @@ where
     let draft_statement =
         PrivacyStatementV1::IrohaJindoPolynomialCommitmentV1(native_statement.clone());
     let transaction_intent_digest =
-        derive_canonical_transaction_intent_digest_v1(&context, draft_statement)?;
+        derive_canonical_transaction_intent_digest_v1(context, draft_statement)?;
     let mut final_statement = native_statement;
     final_statement.context.transaction_intent_digest = transaction_intent_digest;
     let typed_statement =
@@ -816,7 +828,7 @@ where
     let encoded_proof_envelope_bytes = u32::try_from(envelope_encoding.len())
         .map_err(|_| JindoPrivacyActionBuildErrorV1::EncodedLengthOverflow)?;
     let proof_envelope_hash = *Hash::new(&envelope_encoding).as_ref();
-    let final_payload = transaction_payload_v1(&context, final_envelope)?;
+    let final_payload = transaction_payload_v1(context, final_envelope)?;
     let validated_intent = final_payload
         .validate_privacy_transaction_intent_binding_v1()
         .map_err(|_| JindoPrivacyActionBuildErrorV1::FinalIntentBinding)?;
@@ -843,7 +855,7 @@ where
 ///
 /// Returns the same closed failures as [`prepare_jindo_privacy_action_with_rng_v1`].
 pub fn prepare_jindo_privacy_action_v1(
-    context: JindoPrivacyActionTransactionContextV1,
+    context: &JindoPrivacyActionTransactionContextV1,
     witness: JindoPrivacyActionWitnessV1,
     canonical_genesis_hash: [u8; 32],
 ) -> Result<JindoPreparedPrivacyActionV1, JindoPrivacyActionBuildErrorV1> {
@@ -916,7 +928,7 @@ pub fn sign_prepared_jindo_privacy_action_v1(
 ///
 /// Returns a closed validation, proving, binding, or signing error.
 pub fn build_signed_privacy_action_with_rng_v1<R>(
-    context: JindoPrivacyActionTransactionContextV1,
+    context: &JindoPrivacyActionTransactionContextV1,
     witness: JindoPrivacyActionWitnessV1,
     canonical_genesis_hash: [u8; 32],
     private_key: &PrivateKey,
@@ -939,7 +951,7 @@ where
 ///
 /// Returns the same closed failures as [`build_signed_privacy_action_with_rng_v1`].
 pub fn build_signed_privacy_action_v1(
-    context: JindoPrivacyActionTransactionContextV1,
+    context: &JindoPrivacyActionTransactionContextV1,
     witness: JindoPrivacyActionWitnessV1,
     canonical_genesis_hash: [u8; 32],
     private_key: &PrivateKey,
@@ -972,7 +984,8 @@ mod tests {
     impl rand::TryRng for TestRng {
         type Error = std::io::Error;
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
-            Ok(self.try_next_u64()? as u32)
+            Ok(u32::try_from(self.try_next_u64()? & u64::from(u32::MAX))
+                .expect("low word fits u32"))
         }
         fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
             Ok({
@@ -1095,7 +1108,7 @@ mod tests {
         let mut coefficients = [0_i128; JINDO_RING_DEGREE_V1];
         coefficients[0] = delta;
         polynomial.add_assign(
-            &ring::JindoRnsPolynomialV1::from_balanced_coefficients(coefficients, moduli),
+            &ring::JindoRnsPolynomialV1::from_balanced_coefficients(&coefficients, moduli),
             moduli,
         );
     }
@@ -1121,7 +1134,9 @@ mod tests {
         for count in [1, 3] {
             assert!(matches!(
                 witness_error(
-                    (0..count).map(|i| vec![field(i as u64 + 1)]).collect(),
+                    (0..count)
+                        .map(|i| vec![field(u64::try_from(i).expect("fixture index") + 1)])
+                        .collect(),
                     field(1)
                 ),
                 JindoPrivacyActionWitnessErrorV1::InvalidPolynomialCount { .. }
@@ -1206,7 +1221,7 @@ mod tests {
     #[test]
     fn action_builder_rejects_public_boundary_errors_before_randomness() {
         let zero_genesis = prepare_jindo_privacy_action_with_rng_v1(
-            action_context(),
+            &action_context(),
             action_witness(),
             [0; 32],
             &mut PanicRng,
@@ -1218,7 +1233,7 @@ mod tests {
         let mut oversized_time = action_context();
         oversized_time.creation_time = Duration::from_secs(u64::MAX);
         let oversized_time = prepare_jindo_privacy_action_with_rng_v1(
-            oversized_time,
+            &oversized_time,
             action_witness(),
             [0xA7; 32],
             &mut PanicRng,
@@ -1228,7 +1243,7 @@ mod tests {
             Err(JindoPrivacyActionBuildErrorV1::CreationTimeOutOfRange)
         ));
         let wrong_key = build_signed_privacy_action_with_rng_v1(
-            action_context(),
+            &action_context(),
             action_witness(),
             [0xA7; 32],
             &foreign_private_key(),
@@ -1242,7 +1257,7 @@ mod tests {
     #[test]
     fn deterministic_action_api_builds_one_bound_signed_component_action() {
         let prepared = prepare_jindo_privacy_action_with_rng_v1(
-            action_context(),
+            &action_context(),
             action_witness(),
             [0xA7; 32],
             &mut TestRng::new(0x6a6a_29d0_0044_0001),
@@ -1250,7 +1265,10 @@ mod tests {
         .expect("deterministic Jindo action proving");
         assert_eq!(prepared.polynomial_count(), 4);
         assert_eq!(prepared.coefficient_counts(), &[4, 2, 2, 2]);
-        assert_eq!(prepared.proof_bytes(), JINDO_NATIVE_PROOF_BYTES_V1 as u32);
+        assert_eq!(
+            prepared.proof_bytes(),
+            u32::try_from(JINDO_NATIVE_PROOF_BYTES_V1).expect("fixed proof size fits u32")
+        );
 
         assert_ne!(prepared.transaction_intent_digest(), [0; 32]);
         assert_ne!(prepared.statement_digest(), [0; 32]);

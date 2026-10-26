@@ -37,7 +37,10 @@ fn union_plan_uses_exact_existing_roles_streams_and_five_native_endpoints() {
     let mut distinct = std::collections::BTreeSet::new();
     for segment in 0..4 {
         let sha = layout
-            .registered_segment(SegmentAdapterIdV1::Sha256CallBus, segment as u16)
+            .registered_segment(
+                SegmentAdapterIdV1::Sha256CallBus,
+                u16::try_from(segment).expect("fixture value fits u16"),
+            )
             .unwrap();
         for lane in 0..4 {
             assert_eq!(
@@ -307,7 +310,10 @@ fn centered_registration_contributions_recompose_and_cancel_each_private_center(
         let mut expected = E::ZERO;
         for segment in 0..4 {
             let sha = layout
-                .registered_segment(SegmentAdapterIdV1::Sha256CallBus, segment as u16)
+                .registered_segment(
+                    SegmentAdapterIdV1::Sha256CallBus,
+                    u16::try_from(segment).expect("fixture value fits u16"),
+                )
                 .unwrap();
             let sha_aux = vec![vec![F(23 + segment as u64); rows]; sha.segment.aux_width];
             let actual = plan
@@ -449,22 +455,24 @@ fn lane_streamed_quartic_matches_dense_original_masks_and_atomic_chunk_sink() {
                     .enumerate()
                 {
                     let evaluated = stripe.evaluate_v1(source).unwrap();
-                    for row in 0..n {
+                    for (row, product) in products[index / 4].iter_mut().enumerate() {
                         let x = stripe.shift.mul(root.pow(row as u128));
                         let expected = source
                             .iter()
                             .rev()
                             .fold(F::ZERO, |value, c| value.mul(x).add(*c));
                         assert_eq!(evaluated[row], expected);
-                        products[index / 4][row] = products[index / 4][row].mul(evaluated[row]);
+                        *product = product.mul(evaluated[row]);
                     }
                 }
-                for row in 0..n {
+                for (row, (source_product, target_product)) in
+                    products[0].iter().zip(&products[1]).enumerate()
+                {
                     let at = ordinal + 8 * row;
                     values[at] = values[at].add(
                         alphas[lane].mul_base(
-                            products[1][row]
-                                .sub(products[0][row])
+                            target_product
+                                .sub(*source_product)
                                 .mul(denominator.at_v1(4, row).unwrap()),
                         ),
                     );
@@ -486,8 +494,12 @@ fn lane_streamed_quartic_matches_dense_original_masks_and_atomic_chunk_sink() {
             composition_coefficient_chunks_v1(&recovered, dense.len() - 1, &layout).unwrap();
         let cap = layout.fri_degree_cap(AGGREGATE_PARAMETERS_V1).unwrap();
         let mut accumulator = vec![vec![Vec::new(); COMPOSITION_DEGREE_CHUNKS]; SECURITY_LANES];
-        add_main_composition_coefficient_chunks_v1(&mut accumulator, &[chunks.clone()], cap)
-            .unwrap();
+        add_main_composition_coefficient_chunks_v1(
+            &mut accumulator,
+            std::slice::from_ref(&chunks),
+            cap,
+        )
+        .unwrap();
         assert_eq!(accumulator[0][0].as_slice(), &recovered[..]);
         assert_eq!(&accumulator[0][0][..dense.len()], dense.as_slice());
         assert!(

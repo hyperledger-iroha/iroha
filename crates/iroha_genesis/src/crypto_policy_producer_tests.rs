@@ -265,32 +265,48 @@ fn policy_field_and_public_manifest_reader_preserve_actual_local_refusal_and_ret
         0,
         usize::MAX,
     ));
-    let field_error = zero
+    let mut field_identity = None;
+    let attempt = zero
         .with(|| {
-            RawGenesisTransaction::decode_value::<CryptoAdmissionPolicyV1>(
-                value.clone(),
-                "crypto_admission_policy",
-            )
+            norito::core::classify_decode_attempt(|| {
+                RawGenesisTransaction::decode_value::<CryptoAdmissionPolicyV1>(
+                    value.clone(),
+                    "crypto_admission_policy",
+                )
+                .map_err(|error| {
+                    let norito::json::Error::ScopedDecodeResource(original) = &error else {
+                        panic!("the original scoped policy refusal must not become a message: {error:?}");
+                    };
+                    field_identity = Some(original.clone());
+                    error.into_core_error()
+                })
+            })
         })
         .expect_err("the actual policy list reader needs decoder allowance");
-    let field_identity = match &field_error {
-        norito::json::Error::ScopedDecodeResource(original) => original.clone(),
-        other => panic!("the original scoped policy refusal must not become a message: {other:?}"),
-    };
-    let attempt = norito::core::classify_decode_attempt(|| {
-        Err::<CryptoAdmissionPolicyV1, _>(norito::Error::Json(field_error))
-    })
-    .unwrap_err();
+    assert_eq!(
+        attempt.kind(),
+        norito::core::DecodeAttemptErrorKind::EnclosingLimit
+    );
+    let expected = attempt
+        .local_refusal()
+        .expect("borrow original policy reader owner");
     let original = attempt
         .into_local_refusal()
         .expect("original policy reader owner");
-    let expected = norito::core::classify_decode_attempt(|| {
-        Err::<(), _>(norito::Error::ScopedDecodeResource(field_identity))
-    })
-    .unwrap_err()
-    .into_local_refusal()
-    .unwrap();
     assert_eq!(original, expected);
+    let norito::Error::ScopedDecodeResource(restored_identity) = original.clone().into_error()
+    else {
+        panic!("the classified refusal must preserve its original scoped identity");
+    };
+    assert_eq!(
+        restored_identity,
+        field_identity.expect("actual policy reader identity")
+    );
+    let replay = zero
+        .with(|| norito::core::classify_decode_attempt(|| Err::<(), _>(original.into_error())))
+        .expect_err("a saved refusal cannot acquire a fresh observer identity");
+    assert_eq!(replay.kind(), norito::core::DecodeAttemptErrorKind::Invalid);
+    assert!(replay.local_refusal().is_none());
     let public_error = zero
         .with(|| {
             RawGenesisTransaction::from_json_slice_at_path(

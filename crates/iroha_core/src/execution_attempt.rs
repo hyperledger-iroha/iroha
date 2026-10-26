@@ -504,18 +504,20 @@ pub(crate) fn prepared_signature_block_attempt_error<E>(
         PreparedSignatureBlockError::Decode(PreparedDecodeError::Destination(
             BlockSignatureCustodyError::ControlAdmission(original),
         )) => ExecutionAttemptError::Deferred(original.into()),
-        PreparedSignatureBlockError::Decode(PreparedDecodeError::Destination(
-            BlockSignatureCustodyError::ControlAllocation(original),
-        )) => ExecutionAttemptError::Deferred(control(original)),
-        PreparedSignatureBlockError::PenaltyActions(
+        PreparedSignatureBlockError::Decode(
+            PreparedDecodeError::Destination(BlockSignatureCustodyError::ControlAllocation(
+                original,
+            ))
+            | PreparedDecodeError::Scope(PreparedDecodeScopeError::Allocation(original)),
+        )
+        | PreparedSignatureBlockError::PenaltyActions(
             NposPenaltyActionsCustodyError::ControlAllocation(
                 original @ PrepaidSharedError::Allocator { .. },
             ),
-        ) => ExecutionAttemptError::Deferred(control(original)),
-        PreparedSignatureBlockError::Scope(PreparedDecodeScopeError::Allocation(original))
-        | PreparedSignatureBlockError::Decode(PreparedDecodeError::Scope(
-            PreparedDecodeScopeError::Allocation(original),
-        )) => ExecutionAttemptError::Deferred(control(original)),
+        )
+        | PreparedSignatureBlockError::Scope(PreparedDecodeScopeError::Allocation(original)) => {
+            ExecutionAttemptError::Deferred(control(original))
+        }
         PreparedSignatureBlockError::Scope(PreparedDecodeScopeError::Reservation(_))
         | PreparedSignatureBlockError::Decode(PreparedDecodeError::Scope(
             PreparedDecodeScopeError::Reservation(_),
@@ -831,7 +833,7 @@ impl crate::state::StateTransaction<'_, '_> {
     /// registry defects retain their existing validation diagnostic.
     pub(crate) fn hydrate_zk_snapshots_for_execution<QS>(
         &mut self,
-        host: &mut crate::smartcontracts::ivm::host::CoreHostImpl<QS>,
+        host: &mut crate::smartcontracts::ivm::host::CoreHostImpl<'_, '_, QS>,
     ) -> Result<(), ValidationFail>
     where
         QS: Default + crate::smartcontracts::ivm::host::QueryStateAccess,

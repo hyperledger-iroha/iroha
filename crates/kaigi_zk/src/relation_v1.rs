@@ -11,7 +11,6 @@ use iroha_plonk::{
     frontend::{Cell, Error, Layouter, Value},
 };
 use zeroize::{DefaultIsZeroes, Zeroizing};
-pub(super) const GOLDILOCKS_MODULUS_V1: u64 = 0xffff_ffff_0000_0001;
 pub(super) type AssignedValue = (Cell, Value<Scalar>);
 #[derive(Clone, Copy)]
 pub(super) struct ScalarSlots<const N: usize>(pub(super) [Scalar; N]);
@@ -57,7 +56,6 @@ pub(super) struct KaigiRelationConfigV1 {
     pub(super) range_bit: Column<Advice>,
     pub(super) q_absorb: Selector,
     pub(super) q_range: Selector,
-    pub(super) q_goldilocks: Selector,
 }
 impl KaigiRelationConfigV1 {
     pub(super) fn configure(meta: &mut ConstraintSystem<Scalar>, instance_rows: usize) -> Self {
@@ -80,7 +78,6 @@ impl KaigiRelationConfigV1 {
         meta.enable_constant(constants);
         let q_absorb = meta.selector();
         let q_range = meta.selector();
-        let q_goldilocks = meta.selector();
         meta.create_gate("Kaigi framed sponge absorption", |meta| {
             let q = meta.query_selector(q_absorb);
             (0..3)
@@ -107,14 +104,6 @@ impl KaigiRelationConfigV1 {
                 q * (acc - bit - next * Scalar::from(2)),
             ]
         });
-        meta.create_gate("Kaigi canonical Goldilocks limb", |meta| {
-            vec![
-                meta.query_selector(q_goldilocks)
-                    * (meta.query_advice(previous[0], Rotation::cur())
-                        + meta.query_advice(previous[1], Rotation::cur())
-                        - Expression::Constant(Scalar::from(GOLDILOCKS_MODULUS_V1 - 1))),
-            ]
-        });
         Self {
             poseidon,
             instance,
@@ -125,7 +114,6 @@ impl KaigiRelationConfigV1 {
             range_bit,
             q_absorb,
             q_range,
-            q_goldilocks,
         }
     }
 }

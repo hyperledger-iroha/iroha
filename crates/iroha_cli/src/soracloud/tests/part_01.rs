@@ -256,7 +256,7 @@ fn taira_inrou_canary_storage_accounts_for_distinct_temporary_and_shared_limits(
     );
     validate_taira_inrou_canary_storage(resources, &bundle.service)
         .expect("temporary storage and shared leases have separate budgets");
-    let mut wrong_resources = resources.clone();
+    let mut wrong_resources = *resources;
     wrong_resources.ephemeral_storage_bytes = shared.max_total_bytes;
     let _ = validate_taira_inrou_canary_storage(&wrong_resources, &bundle.service)
         .expect_err("shared volume capacity must not replace the temporary budget");
@@ -886,7 +886,7 @@ fn taira_inrou_canary_durable_state_advances_only_for_a_new_guest_boot() {
     let state_bytes = fs::read(&state_path).expect("read installed durable state");
     let state: Value = json::from_slice(&state_bytes).expect("decode installed durable state");
     assert_eq!(
-        state.as_object().map(|object| object.len()),
+        state.as_object().map(std::collections::BTreeMap::len),
         Some(7),
         "durable state must have the exact V1 fields"
     );
@@ -1596,14 +1596,14 @@ fn taira_validator_config_binding_installs_exact_typed_profiles_atomically() {
     bind_taira_inrou_validator_configs(&config_dir, &receipt)
         .expect("bind all four exact Taira Inrou validator configs");
 
-    for peer_index in 0..TAIRA_INROU_VALIDATOR_CONFIG_COUNT_V1 {
+    for (peer_index, (_, previous)) in before.iter().enumerate() {
         let path = config_dir.join(format!("peer{peer_index}.toml"));
         let metadata = fs::symlink_metadata(&path).expect("inspect bound validator config");
         assert!(metadata.is_file());
         assert_eq!(metadata.permissions().mode() & 0o7777, 0o600);
         assert_ne!(
             (metadata.dev(), metadata.ino()),
-            (before[peer_index].1.dev, before[peer_index].1.ino)
+            (previous.dev, previous.ino)
         );
         let source = Zeroizing::new(
             fs::read_to_string(&path).expect("read bound validator config for typed assertion"),
@@ -2212,6 +2212,10 @@ fn test_inrou_placement_targets(count: usize) -> BTreeSet<SoraInrouPlacementTarg
         })
         .collect()
 }
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "The fixture directly supplies the optional preseed-capacity argument used by these tests."
+)]
 fn test_inrou_preseed_capacity() -> Option<NonZeroU64> {
     Some(NonZeroU64::new(64 * 1024 * 1024).expect("nonzero test SoraFS capacity"))
 }
@@ -2459,6 +2463,9 @@ fn template_renderer_is_single_pass_for_adversarial_substitutions() {
 
 #[test]
 fn canonical_template_outputs_match_current_v1_manifest() {
+    const OUTPUT_NAMES: &str = "site_package_json webapp_root_package_json webapp_frontend_package_json pii_app_root_package_json pii_app_frontend_package_json hayahi_app_root_package_json site_app_vue single_api_api_dev_server_mjs http_service_build_sh http_service_build_and_sync_sh http_service_server_mjs split_app_live_server_mjs http_service_readme split_app_frontend_package_json split_app_frontend_app_vue split_app_vault_dev_server_mjs split_app_vault_contract_ko split_app_live_readme split_app_vault_readme split_app_readme split_app_existing_repo_readme site_readme single_api_api_readme single_api_app_readme webapp_readme pii_app_readme hayahi_app_readme";
+    const EXPECTED: &str = include_str!("../assets/v1/tests/canonical_template_outputs.manifest");
+
     let outputs = [
         site_package_json("travel-ops"),
         webapp_root_package_json("travel-ops"),
@@ -2488,8 +2495,7 @@ fn canonical_template_outputs_match_current_v1_manifest() {
         pii_app_readme("travel_ops"),
         hayahi_app_readme("travel_ops"),
     ];
-    const OUTPUT_NAMES: &str = "site_package_json webapp_root_package_json webapp_frontend_package_json pii_app_root_package_json pii_app_frontend_package_json hayahi_app_root_package_json site_app_vue single_api_api_dev_server_mjs http_service_build_sh http_service_build_and_sync_sh http_service_server_mjs split_app_live_server_mjs http_service_readme split_app_frontend_package_json split_app_frontend_app_vue split_app_vault_dev_server_mjs split_app_vault_contract_ko split_app_live_readme split_app_vault_readme split_app_readme split_app_existing_repo_readme site_readme single_api_api_readme single_api_app_readme webapp_readme pii_app_readme hayahi_app_readme";
-    const EXPECTED: &str = include_str!("../assets/v1/tests/canonical_template_outputs.manifest");
+
     let expected: Vec<_> = EXPECTED.lines().filter(|line| !line.is_empty()).collect();
     let names: Vec<_> = OUTPUT_NAMES.split_ascii_whitespace().collect();
     assert_eq!([outputs.len(), expected.len(), names.len()], [27; 3]);

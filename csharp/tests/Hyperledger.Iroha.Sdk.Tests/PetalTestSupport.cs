@@ -7,13 +7,13 @@ namespace Hyperledger.Iroha.Sdk.Tests;
 /// <summary>Shared helpers of the Petal Stream tests.</summary>
 internal static class PetalTestSupport
 {
-    private static readonly Lazy<JsonDocument> StreamFixture = new(() => Load("petal_stream_v1.json"));
-    private static readonly Lazy<JsonDocument> CaptureFixture = new(() => Load("petal_captures_v1.json"));
+    private static readonly Lazy<JsonDocument> StreamFixture = new(() => Load("petal_stream_v5.json"));
+    private static readonly Lazy<JsonDocument> CaptureFixture = new(() => Load("petal_captures_v5.json"));
 
-    /// <summary><c>fixtures/petal/petal_stream_v1.json</c>.</summary>
+    /// <summary><c>fixtures/petal/petal_stream_v5.json</c>.</summary>
     public static JsonElement Stream => StreamFixture.Value.RootElement;
 
-    /// <summary><c>fixtures/petal/petal_captures_v1.json</c>.</summary>
+    /// <summary><c>fixtures/petal/petal_captures_v5.json</c>.</summary>
     public static JsonElement Captures => CaptureFixture.Value.RootElement;
 
     /// <summary>Deterministic payload from xorshift32, as the Rust tests build it.</summary>
@@ -30,23 +30,101 @@ internal static class PetalTestSupport
 
     public static long Number(JsonElement element, string key) => element.GetProperty(key).GetInt64();
 
+    public static string Text(JsonElement element, string key) => element.GetProperty(key).GetString()!;
+
     public static long[] Numbers(JsonElement element, string key) =>
         element.GetProperty(key).EnumerateArray().Select(static value => value.GetInt64()).ToArray();
 
+    /// <summary>A list of hex strings, such as <c>field_data</c> or <c>field_words</c>.</summary>
+    public static byte[][] HexList(JsonElement element, string key) =>
+        element.GetProperty(key).EnumerateArray().Select(static value => Convert.FromHexString(value.GetString()!)).ToArray();
+
+    /// <summary>One flag per field cell, cell 0 in the most significant bit of byte 0.</summary>
+    public static bool[] Flags(byte[] bitmap) =>
+        Enumerable.Range(0, PetalLayout.FieldCells).Select(cell => ((bitmap[cell / 8] >> (7 - cell % 8)) & 1) == 1).ToArray();
+
+    /// <summary>The recorded data of every lane of a fixture entry: lane <c>D</c>, then the four field lanes.</summary>
+    public static (PetalLane Lane, byte[] Data)[] Truth(JsonElement entry)
+    {
+        var fields = HexList(entry, "field_data");
+        return [(PetalLane.D, Hex(entry, "d_data")), .. fields.Select(static (data, sector) => (PetalLanes.Field(sector), data))];
+    }
+
+    /// <summary>
+    /// The recorded data of every lane of an entry, turn and kana lanes included (<c>d_data</c>,
+    /// <c>field_data</c>, <c>turn_data</c>, <c>kana_data</c>).
+    /// </summary>
+    public static PetalLaneData LaneData(JsonElement entry) =>
+        new(Hex(entry, "d_data"), HexList(entry, "field_data"), HexList(entry, "turn_data"), HexList(entry, "kana_data"));
+
+    /// <summary>Checks every decoded lane against the recorded data and returns the lane letters.</summary>
+    public static string ReadLanes(string name, PetalDecodedFrame frame, (PetalLane Lane, byte[] Data)[] truth)
+    {
+        foreach (var (lane, expected) in truth)
+        {
+            if (frame.Lane(lane) is { } result)
+                Assert.True(expected.AsSpan().SequenceEqual(result.Data), $"{name}: lane {PetalLanes.Letter(lane)} data");
+        }
+
+        return frame.Lanes;
+    }
+
     /// <summary>Inflates a <c>luma_zlib_base64</c> fixture entry (or the plane under <paramref name="key"/>).</summary>
-    public static PetalLuma LumaOf(JsonElement entry, string key = "luma_zlib_base64")
+    public static PetalLuma LumaOf(JsonElement entry, string key = "luma_zlib_base64") =>
+        LumaOf(entry, (int)Number(entry, "width"), (int)Number(entry, "height"), key);
+
+    /// <summary>Inflates a fixture plane whose size is recorded elsewhere (the captures of a merge set).</summary>
+    public static PetalLuma LumaOf(JsonElement entry, int width, int height, string key = "luma_zlib_base64")
     {
         var compressed = Convert.FromBase64String(entry.GetProperty(key).GetString()!);
         using var input = new MemoryStream(compressed);
         using var zlib = new ZLibStream(input, CompressionMode.Decompress);
         using var output = new MemoryStream();
         zlib.CopyTo(output);
-        return new PetalLuma((int)Number(entry, "width"), (int)Number(entry, "height"), output.ToArray());
+        return new PetalLuma(width, height, output.ToArray());
     }
 
-    /// <summary>Renders a frame of <paramref name="encoder"/> to luma.</summary>
+    /// <summary>Asserts that every lane of <paramref name="decoded"/> decoded to <paramref name="truth"/>.</summary>
+    public static void AssertAllLanes(PetalDecodedFrame decoded, PetalLaneData truth, string name)
+    {
+        Assert.True(decoded.D is not null && truth.D.AsSpan().SequenceEqual(decoded.D.Data), $"{name}: lane D");
+        for (var sector = 0; sector < PetalLayout.Sectors; sector++)
+        {
+            var field = decoded.Fields[sector];
+            Assert.True(field is not null && truth.Fields[sector].AsSpan().SequenceEqual(field.Data), $"{name}: field lane {sector}");
+        }
+    }
+
+    /// <summary>
+    /// Asserts that every turn lane of <paramref name="image"/> under <paramref name="decoded"/> reads
+    /// as <paramref name="truth"/> with nothing corrected.
+    /// </summary>
+    public static void AssertAllTurnLanes(PetalLuma image, PetalDecodedFrame decoded, PetalLaneData truth, string name)
+    {
+        var turns = PetalTurns.ReadTurns(image, decoded);
+        for (var sector = 0; sector < PetalLayout.Sectors; sector++)
+        {
+            var turn = turns[sector];
+            Assert.True(turn is not null && truth.Turns[sector].AsSpan().SequenceEqual(turn.Data), $"{name}: turn lane {sector}");
+            Assert.Equal(0, turn.Corrected);
+        }
+    }
+
+    /// <summary>Renders the card of a frame of <paramref name="encoder"/> to luma.</summary>
     public static PetalLuma RenderLuma(PetalStreamEncoder encoder, ushort frame, int size, int supersample) =>
         PetalRenderer.Render(encoder.Cells(frame), new PetalRenderOptions { Size = size, Supersample = supersample }).ToLuma();
+
+    /// <summary>
+    /// Renders only the square of a frame of <paramref name="encoder"/> to luma, <paramref name="size"/>
+    /// pixels on a side: the decoder's own tests (pixel positions, painting over a blossom) work on
+    /// bare squares, as the reference's do.
+    /// </summary>
+    public static PetalLuma SquareLuma(PetalStreamEncoder encoder, ushort frame, int size, int supersample) =>
+        Square(encoder.Cells(frame), size, supersample).ToLuma();
+
+    /// <summary>Renders only the square of <paramref name="cells"/>, <paramref name="size"/> pixels on a side.</summary>
+    public static PetalRgbImage Square(PetalFrameCells cells, int size, int supersample) =>
+        PetalRenderer.RenderSquare(cells, new PetalRenderOptions { Size = size, Supersample = supersample });
 
     /// <summary>Applies a pixel remapping <c>target(x, y) = source(f(x, y))</c> to a square image.</summary>
     public static PetalLuma Transform(PetalLuma source, Func<int, int, (int X, int Y)> map)
@@ -116,6 +194,38 @@ internal static class PetalTestSupport
         return output;
     }
 
+    /// <summary>
+    /// The image warped by barrel distortion about its centre, as a cheap lens does: pixel
+    /// <c>p</c> shows what an undistorted camera saw at <c>c + (p − c) / (1 + k r²/s²)</c>.
+    /// </summary>
+    public static PetalLuma Barrel(PetalLuma image, double k)
+    {
+        var (w, h) = (image.Width, image.Height);
+        var (cx, cy) = (w / 2.0, h / 2.0);
+        var side = 0.8 * Math.Max(w, h);
+        var scale2 = side * side;
+        var output = new PetalLuma(w, h);
+        for (var y = 0; y < h; y++)
+        {
+            for (var x = 0; x < w; x++)
+            {
+                var (dx, dy) = (x + 0.5 - cx, y + 0.5 - cy);
+                // invert p_d = c + u (1 + k |u|²/s²) for the undistorted offset u
+                var (ux, uy) = (dx, dy);
+                for (var round = 0; round < 8; round++)
+                {
+                    var f = 1.0 + k * (ux * ux + uy * uy) / scale2;
+                    ux = dx / f;
+                    uy = dy / f;
+                }
+
+                output.Data[y * w + x] = (byte)Math.Round(image.Sample(cx + ux, cy + uy), MidpointRounding.AwayFromZero);
+            }
+        }
+
+        return output;
+    }
+
     public static PetalLuma Mirror(PetalLuma image)
     {
         var data = new byte[image.Data.Length];
@@ -131,16 +241,10 @@ internal static class PetalTestSupport
     /// <summary>Feeds the clean lanes of one encoder frame to an assembler.</summary>
     public static void FeedFrame(PetalStreamAssembler assembler, PetalStreamEncoder encoder, ushort frame, params PetalLane[] lanes)
     {
-        var (p, k, d) = encoder.Words(frame);
+        var words = encoder.Words(frame);
         foreach (var lane in lanes)
         {
-            var word = lane switch
-            {
-                PetalLane.P => p,
-                PetalLane.K => k,
-                _ => d,
-            };
-            Assert.True(PetalLanes.TryDecodeLane(lane, word, [], out var data), "clean lane");
+            Assert.True(PetalLanes.TryDecodeLane(lane, words.Lane(lane), [], out var data), "clean lane");
             if (lane == PetalLane.D)
                 assembler.PushDLane(PetalStream.ParseDLane(data) ?? throw new InvalidOperationException("d lane"));
             else
@@ -148,8 +252,24 @@ internal static class PetalTestSupport
         }
     }
 
-    private static JsonDocument Load(string name) =>
-        JsonDocument.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Fixtures", "petal", name)));
+    /// <summary>
+    /// Loads <c>fixtures/petal/<paramref name="name"/></c>: the copy next to the test assembly when
+    /// the project links it, otherwise the repository's file found by walking up from the assembly.
+    /// </summary>
+    private static JsonDocument Load(string name)
+    {
+        var copy = Path.Combine(AppContext.BaseDirectory, "Fixtures", "petal", name);
+        if (File.Exists(copy))
+            return JsonDocument.Parse(File.ReadAllText(copy));
+        for (var directory = new DirectoryInfo(AppContext.BaseDirectory); directory is not null; directory = directory.Parent)
+        {
+            var candidate = Path.Combine(directory.FullName, "fixtures", "petal", name);
+            if (File.Exists(candidate))
+                return JsonDocument.Parse(File.ReadAllText(candidate));
+        }
+
+        throw new FileNotFoundException($"fixtures/petal/{name} was not found above the test assembly", name);
+    }
 }
 
 /// <summary>The 64-bit LCG of the Rust Reed–Solomon tests.</summary>
@@ -301,7 +421,11 @@ internal static class PetalCaptureSimulator
         return fitted;
     }
 
-    /// <summary>Captures a rendered frame with the simulated camera.</summary>
+    /// <summary>
+    /// Captures a rendered frame (a card, see <see cref="PetalRenderer.Render"/>, or a bare square)
+    /// with the simulated camera. The camera's geometry is in square coordinates (the square's
+    /// top-left corner is the origin); a card's bands lie above and below it.
+    /// </summary>
     public static PetalLuma Capture(PetalRgbImage source, PetalCaptureConfig config)
     {
         var (w, h) = (config.Width, config.Height);
@@ -319,9 +443,10 @@ internal static class PetalCaptureSimulator
         }
 
         var scale = sourceWidth / 1024.0;
+        var top = source.Height > source.Width ? PetalLayout.SquareTop : 0.0;
         double SampleSource(double x, double y)
         {
-            var (sx, sy) = (x * scale, y * scale);
+            var (sx, sy) = (x * scale, (y + top) * scale);
             if (sx < 0.0 || sy < 0.0 || sx >= sourceWidth || sy >= source.Height)
                 return 0.0;
             var fx = Math.Clamp(sx - 0.5, 0.0, sourceWidth - 1);

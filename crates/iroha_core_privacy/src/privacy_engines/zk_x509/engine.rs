@@ -1,24 +1,22 @@
 //! Native zk-X509 engine boundary.
 //!
-//! The consensus verifier is present in every node build. Prover preparation and proof construction
-//! are compiled only for tests or the explicitly non-shipping `privacy-release-evidence` workflow.
+//! The consensus verifier and complete native prover are present in ordinary builds. Holder-side
+//! ownership and clearing witness buffers are exposed through [`super::holder`]; release fixtures
+//! and process diagnostics remain separate from that product API.
 //!
 //! The sole credential path constructs and independently verifies the bound `X5S1` MAIN/compact-CA
 //! envelope. A native reference check, projection-only proof, or collection of unbound subproofs is
 //! never accepted as a credential proof.
 #[cfg(test)]
 use super::prover_observation::{PhaseTimerV1, PhaseV1};
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::{
     accumulator_stark::{ZkX509CaAccumulatorProofErrorV1, stages::commit_ca_through_auxiliary_v1},
     codec::{ZkX509WitnessCodecErrorV1, ZkX509WitnessV1},
     credential_pre_aux::ZkX509CredentialPreAuxErrorV1,
     credential_stark::encode_zk_x509_credential_envelope_v1,
+    errors::ZkX509RelationErrorV1,
     main_assembly::{ZkX509MainAssemblyErrorV1, build_zk_x509_main_trace_assembly_v1},
-    relation::{
-        ZkX509GovernanceV1, ZkX509RelationErrorV1, ZkX509RelationOutputV1,
-        validate_reference_relation_v1,
-    },
+    relation::{ZkX509GovernanceV1, ZkX509RelationOutputV1, validate_reference_relation_v1},
     stark::{
         ZkX509StarkErrorV1, commit_zk_x509_main_base_phase_v1_with_rng, finish_joint_main_ca_v1,
     },
@@ -71,17 +69,13 @@ use super::{
         compile_zk_x509_rfc_statement_from_authoritative_state_v1,
     },
 };
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 use crate::privacy_engines::prover_randomness::{
     HealthCheckedTryCryptoRngV1, TryCryptoProverRandomnessErrorV1,
 };
 use crate::privacy_state::PrivacyZkX509AuthoritativeStateV1;
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 use crate::privacy_state::validate_privacy_zk_x509_statement_state_v1;
 use iroha_data_model::privacy::IrohaZkX509StarkP256StatementV1;
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 use iroha_data_model::privacy::PrivacyConsensusLimitsV1;
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 use rand::TryCryptoRng;
 use thiserror::Error;
 const COMPILED_PROFILE_DIGEST_DOMAIN_V1: &[u8] = b"iroha.zk-x509.compiled-profile.v1";
@@ -96,10 +90,12 @@ const SHA_DISCLOSURE_SHAPE_COUNT_V1: usize = 5;
 // Native derivation and independent framing bind the joint MAIN/CA private links,
 // quotient blinding, selected P256 inputs and RFC output metadata in this candidate.
 // Native diagnostics and independent framing bind the required proof-instance nonce.
+// Every fixed child and composite digest also binds the canonical 32-byte native
+// BLAKE3 catalog; a catalog change requires coherent rederivation of this pin.
 // TODO: complete native credential, hiding and resource qualification before activating this profile.
 const ZK_X509_COMPILED_PROFILE_DIGEST_V1: Option<[u8; 32]> = Some([
-    0xfb, 0x4d, 0xc4, 0xd0, 0xb2, 0xce, 0x27, 0x7e, 0x23, 0xd3, 0xde, 0x9d, 0x4c, 0xcd, 0x6c, 0x32,
-    0xc9, 0xa9, 0xb0, 0xef, 0x5b, 0x39, 0xf7, 0xc9, 0x63, 0xf8, 0xb9, 0x14, 0xcf, 0x15, 0x86, 0x0b,
+    0x5e, 0x85, 0xf3, 0x26, 0x4b, 0x77, 0xa1, 0x86, 0x46, 0xfa, 0x1c, 0xbc, 0x28, 0x82, 0x6b, 0xaa,
+    0xb4, 0xbe, 0x60, 0xeb, 0xf3, 0xdf, 0x6a, 0xf8, 0xd3, 0xad, 0xa0, 0x69, 0x79, 0xc3, 0xab, 0xde,
 ]);
 /// Exact algebraic-schedule-bearing profile required by MAIN.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -117,13 +113,11 @@ impl ZkX509CompiledProfileV1 {
     }
 }
 /// Canonically decoded and reference-validated private prover input.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PreparedZkX509ProverInputV1 {
     witness: ZkX509WitnessV1,
     projection: ZkX509RelationOutputV1,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl PreparedZkX509ProverInputV1 {
     /// Borrow the sole canonical witness representation.
     pub(crate) const fn witness(&self) -> &ZkX509WitnessV1 {
@@ -158,57 +152,41 @@ fn compile_zk_x509_consensus_public_inputs_v1(
 }
 /// Native prover preparation or credential-proof failure.
 #[derive(Debug, PartialEq, Eq, Error)]
-#[cfg_attr(
-    not(any(test, feature = "privacy-release-evidence")),
-    derive(Clone, Copy)
-)]
-#[doc(hidden)]
 pub enum ZkX509EngineErrorV1 {
     /// Persisted state, roots, epochs, policy, or trusted block time mismatch.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error("zk-X509 authoritative state validation failed: {0}")]
     InvalidAuthoritativeState(String),
     /// Private witness bytes are not the sole exact bounded grammar.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error(transparent)]
     WitnessCodec(#[from] ZkX509WitnessCodecErrorV1),
     /// Decode followed by encode did not reproduce the exact input bytes.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error("zk-X509 witness codec failed its exact round-trip invariant")]
     WitnessRoundTripMismatch,
     /// Strict RFC 5280/reference relation failure.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error(transparent)]
     ReferenceRelation(#[from] ZkX509RelationErrorV1),
     /// Canonical challenge-independent MAIN material could not be assembled.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error(transparent)]
     MainAssembly(#[from] ZkX509MainAssemblyErrorV1),
     /// Joint MAIN/compact-CA challenge derivation failed.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error(transparent)]
     CredentialPreAux(#[from] ZkX509CredentialPreAuxErrorV1),
     /// Complete MAIN proof construction failed.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error(transparent)]
     MainProofConstruction(#[from] ZkX509StarkErrorV1),
     /// Dedicated compact-CA proof construction failed.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error(transparent)]
     CaProofConstruction(#[from] ZkX509CaAccumulatorProofErrorV1),
     /// Prover entropy was unavailable or failed the first-release health policy.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error(transparent)]
     ProverRandomness(#[from] TryCryptoProverRandomnessErrorV1),
     /// Canonical credential envelope or consensus-context binding failure.
     #[error(transparent)]
     CredentialProof(#[from] ZkX509CredentialProofErrorV1),
     /// Producer-generated X5S1 bytes failed the independent consensus verifier.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error("zk-X509 credential prover self-check failed")]
     ProverSelfCheckFailed,
     /// Canonical MAIN assembly did not reproduce prover preparation exactly.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error("zk-X509 canonical prover projection mismatch")]
     ProverProjectionMismatch,
     /// The canonical SHA algebraic compiler or schedule rejected its profile.
@@ -231,7 +209,7 @@ fn verify_zk_x509_credential_subproofs_v1(
     consensus_public: &ZkX509ConsensusPublicInputsV1,
     main_aggregate: &[u8],
     ca_subproof: &[u8],
-    joint_openings: JointOriginalOpeningsV1,
+    joint_openings: &JointOriginalOpeningsV1,
 ) -> Result<(), ZkX509EngineErrorV1> {
     construct_zk_x509_compiled_profile_v1()?;
     let sha_shape = ZkX509ShaCallPublicShapeV1 {
@@ -247,14 +225,18 @@ fn verify_zk_x509_credential_subproofs_v1(
         consensus_public.credential_binding,
         main_aggregate,
     )
-    .map_err(|_error| {
+    .map_err(|error| {
         #[cfg(test)]
-        prover_diagnostic::record_public_verifier_error_v1("credential-main", &_error);
+        prover_diagnostic::record_public_verifier_error_v1("credential-main", &error);
+        #[cfg(not(test))]
+        let _ = error;
         ZkX509CredentialProofErrorV1::MainProof
     })?;
-    let ca_base_root = ca_accumulator_base_root_from_proof_v1(ca_subproof).map_err(|_error| {
+    let ca_base_root = ca_accumulator_base_root_from_proof_v1(ca_subproof).map_err(|error| {
         #[cfg(test)]
-        prover_diagnostic::record_public_verifier_error_v1("credential-ca", &_error);
+        prover_diagnostic::record_public_verifier_error_v1("credential-ca", &error);
+        #[cfg(not(test))]
+        let _ = error;
         ZkX509CredentialProofErrorV1::CaProof
     })?;
     let credential_binding = derive_zk_x509_credential_pre_aux_binding_v1(
@@ -262,15 +244,17 @@ fn verify_zk_x509_credential_subproofs_v1(
         ca_profile_digest_v1().map_err(|_| ZkX509CredentialProofErrorV1::CaProof)?,
         ca_public_digest_v1(
             proof_instance,
-            consensus_public.credential_binding.ca_public_v1(),
+            &consensus_public.credential_binding.ca_public_v1(),
             &sha_schedule,
         )
         .map_err(|_| ZkX509CredentialProofErrorV1::CaProof)?,
         ca_base_root,
     )
-    .map_err(|_error| {
+    .map_err(|error| {
         #[cfg(test)]
-        prover_diagnostic::record_public_verifier_error_v1("credential-cross-binding", &_error);
+        prover_diagnostic::record_public_verifier_error_v1("credential-cross-binding", &error);
+        #[cfg(not(test))]
+        let _ = error;
         ZkX509CredentialProofErrorV1::CrossSubproofMismatch
     })?;
     let auxiliary =
@@ -280,14 +264,14 @@ fn verify_zk_x509_credential_subproofs_v1(
         statement,
         &consensus_public.rfc_statement,
         consensus_public.credential_binding,
-        credential_binding,
+        &credential_binding,
         auxiliary,
         &sha_schedule,
         main_aggregate,
     )
     .map_err(|_| ZkX509CredentialProofErrorV1::MainProof)?;
     let ca = CaJointVerifierOraclesV1::new_v1(
-        consensus_public.credential_binding.ca_public_v1(),
+        &consensus_public.credential_binding.ca_public_v1(),
         &sha_schedule,
         main_pre_aux,
         auxiliary,
@@ -306,9 +290,9 @@ fn verify_zk_x509_credential_subproofs_v1(
     let binding = main
         .bind_ca_openings_v1(&mut ca, joint_openings)
         .map_err(|_| ZkX509CredentialProofErrorV1::CrossSubproofMismatch)?;
-    main.finish_v1(binding)
+    main.finish_v1(&binding)
         .map_err(|_| ZkX509CredentialProofErrorV1::MainProof)?;
-    ca.finish_v1(binding)
+    ca.finish_v1(&binding)
         .map_err(|_| ZkX509CredentialProofErrorV1::CaProof)?;
     Ok(())
 }
@@ -328,9 +312,11 @@ pub fn verify_zk_x509_credential_proof_v1(
 ) -> Result<(), ZkX509EngineErrorV1> {
     let consensus_public =
         compile_zk_x509_consensus_public_inputs_v1(statement, authoritative_state, genesis_hash)?;
-    let envelope = decode_zk_x509_credential_envelope_v1(encoded_proof).inspect_err(|_error| {
+    let envelope = decode_zk_x509_credential_envelope_v1(encoded_proof).inspect_err(|error| {
         #[cfg(test)]
-        prover_diagnostic::record_public_verifier_error_v1("credential-envelope-decode", _error);
+        prover_diagnostic::record_public_verifier_error_v1("credential-envelope-decode", error);
+        #[cfg(not(test))]
+        let _ = error;
     })?;
     if envelope.public != consensus_public.credential_binding {
         return Err(ZkX509CredentialProofErrorV1::PublicBindingMismatch.into());
@@ -341,10 +327,9 @@ pub fn verify_zk_x509_credential_proof_v1(
         &consensus_public,
         envelope.main_aggregate,
         envelope.ca_subproof,
-        envelope.joint_openings,
+        &envelope.joint_openings,
     )
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn validate_witness_round_trip_v1(
     witness: &ZkX509WitnessV1,
     encoded_witness: &[u8],
@@ -363,7 +348,6 @@ fn validate_witness_round_trip_v1(
 ///
 /// This function performs no proof construction. Its output is the only
 /// admitted input to the credential-proof constructor.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn prepare_zk_x509_prover_input_v1(
     statement: &IrohaZkX509StarkP256StatementV1,
     authoritative_state: &PrivacyZkX509AuthoritativeStateV1,
@@ -419,7 +403,6 @@ pub(crate) fn prepare_zk_x509_prover_input_v1(
 /// stops further source construction and entropy use under the existing process
 /// quarantine. Callers must not depend on identical RNG state across failures.
 #[allow(clippy::too_many_arguments)]
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[doc(hidden)]
 pub fn prove_zk_x509_credential_proof_v1_with_rng<R: TryCryptoRng>(
     statement: &IrohaZkX509StarkP256StatementV1,
@@ -501,9 +484,11 @@ pub fn prove_zk_x509_credential_proof_v1_with_rng<R: TryCryptoRng>(
     )?;
     #[cfg(test)]
     prover_diagnostic::capture_public_unverified_candidate_v1(&encoded);
-    let envelope = decode_zk_x509_credential_envelope_v1(&encoded).map_err(|_error| {
+    let envelope = decode_zk_x509_credential_envelope_v1(&encoded).map_err(|error| {
         #[cfg(test)]
-        prover_diagnostic::record_public_verifier_error_v1("credential-envelope-decode", &_error);
+        prover_diagnostic::record_public_verifier_error_v1("credential-envelope-decode", &error);
+        #[cfg(not(test))]
+        let _ = error;
         ZkX509EngineErrorV1::ProverSelfCheckFailed
     })?;
     if envelope.proof_instance != proof_instance
@@ -522,14 +507,16 @@ pub fn prove_zk_x509_credential_proof_v1_with_rng<R: TryCryptoRng>(
         &consensus_public,
         envelope.main_aggregate,
         envelope.ca_subproof,
-        envelope.joint_openings,
+        &envelope.joint_openings,
     )
-    .map_err(|_error| {
+    .map_err(|error| {
         #[cfg(test)]
         prover_diagnostic::record_public_verifier_error_v1(
             "credential-subproof-self-check",
-            &_error,
+            &error,
         );
+        #[cfg(not(test))]
+        let _ = error;
         ZkX509EngineErrorV1::ProverSelfCheckFailed
     })?;
     #[cfg(test)]
@@ -782,7 +769,43 @@ mod tests {
     }
     // Historical profile tests must use the exact old public descriptors,
     // rather than accidentally mixing a new closure with an old SHA-padding pin.
+    // Fixed rejection-fixture bytes from the authenticated pre-catalog-change
+    // native 29-field manifest. These are never accepted by production code.
+    // Reusing current schedule digests would synthesize a different old profile.
+    fn restore_historical_catalog_schedule_fields_v1(fields: &mut [Vec<u8>]) {
+        assert_eq!(fields.len(), COMPILED_PROFILE_FIELD_COUNT_V1);
+        for (field, encoded) in [
+            (
+                22,
+                "d2f034439a77e29c78931c0994aaf83cfd9b10e2b44504b9c7ced6142459ad5abf60ad6edaf5b90d79c7682f0aa81a01",
+            ),
+            (
+                23,
+                "f25dd4fdd2260511779086bba2419aeab283927874a2398f5857578740e0432db5e48ce48fdc50bb6af33ab5a8179433",
+            ),
+            (
+                24,
+                "6b3585b3ae53e81a01e46815ffecc2076e7c9c008b1ff2a5d1ae2581973501830c80c6cdb7961063bca7e9a069769b49",
+            ),
+            (
+                25,
+                "f5b536183b0918b59b9b772f8b836f2f7a3672172aae2fe68ee387f7ec776ed7c23a5b6e1a8b73c17c7bffc56715ad2a",
+            ),
+            (
+                26,
+                "c7ecda6b0db3b644c0b94e51ca830462e360f16b43ed47773f980e81a704e60440528812e0412a3159c92336008cc0b3",
+            ),
+            (
+                28,
+                "fb201720f6dada59a0ee686e12c0a0c418c5376ce44ec1b3f21ace0159499f3597d0a75b0539cf4924d727a8f3485f19",
+            ),
+        ] {
+            fields[field] = hex::decode(encoded).expect("fixed historical schedule digest");
+        }
+    }
+
     fn restore_retired_public_terminal_profile_descriptors_v1(fields: &mut [Vec<u8>]) {
+        restore_historical_catalog_schedule_fields_v1(fields);
         assert_eq!(fields.len(), COMPILED_PROFILE_FIELD_COUNT_V1);
         fields[9] = b"field=goldilocks-fp4:w4=7:base=0xffffffff00000001|wire=X5S1-containing-exactly-one-X5M1-and-one-X5C1-v1|x5m1=claims-plus-length-delimited-aggregate-only-no-fixed-sidecar|main-logical-registrations=49|main-same-log-trace-groups=6-logs5,8,15,16,18,19|main-physical-roots=one-joined-base-and-one-joined-aux|main-physical-commitment-chunks=80|physical-chunk-columns=64|max-native-trace-log2=19|compact-ca-dedicated-log13-subproof-depth12|sha-fixed-calls=29-across-four-log19-slices|p256-binding-sink-degree=3-including-fixed-selectors|sha-capacity-and-call-degree=6-including-fixed-selectors|sha-digest-address=polynomial-select|sha-fixed-algebraic-width=472-verifier-derived-no-proof-bytes|p256-log19-fixed-algebraic-width=404-six-role-schedules-alias-fifteen-registrations-verifier-derived-no-proof-bytes|fixed-polynomials=verifier-derived-at-deep-and-native-translates|shared-x5b1-challenges=single-joined-main-base-root+ca-base-root+main-and-ca-public-profile+exact272-fields-ordered-sha-call,rfc,projection,io,der,sha-word-memory,sha-word-base-fold,p256-value,p256-cross,p256-scalar,p256-arithmetic-copy+one-opaque-main-post-base-token|main-io=statement-only-exact40+5d-declarations+logical55922+4736d-active-rows+fixed-capacity262144|main-trace-hiding-coefficients=1816|ca-trace-hiding-coefficients=696|fri-mask-oracles=1-fp4-per-subproof-roots-before-batching|lde-column-batch=8|max-constraint-degree=7|fri-rate=9over64|main-fri-blowup=8|ca-lde-log2=16|fri-queries=136-distinct-without-replacement|composition-fp4-lanes=1|fri-batching-m=3|affine-arities=2,2,2|fri-folding=2|fri-leaves=ordered-low-high-pairs|main-fri-terminal-length=1024-degree143|ca-fri-terminal-length=1024-degree143|deep-points=1-per-subproof-current+next-openings|ca-deep-constraints=all1379-fp4-verifier-fixed-polynomials-current-only-query-rows|main-deep-constraints=all49-fp4-native-vanishing-six-chunk-recomposition-verifier-fixed-polynomials-current-only-query-rows|grinding-bits=20|target-soundness-bits=128|rfc5280-temporal-air=base285-aux280-fixed102-constraints1681-degree4-authenticated72-times-73-relations-38bit-slack-affine-loglookup-30-relations|rbr-budget-bits=157|random-oracle-kappa=256|max-ro-queries-log2=64|max-encoded-combined-bound=9420938|max-proof-bytes=9437184|peak-memory-ceiling-bytes=12884901888|address-space-ceiling-bytes=34359738368|prover-target-seconds=300|release-evidence-schema=deterministic-X5S1-KAT+public-binding-mutations+wire-corruption-and-truncation+maximum-shape-process-measurement|shared-stark-v1=q136-blowup8-digest384-fp4-blocked-pending-independent-qualification|activation=unavailable".to_vec();
         fields[10] = b"zk-x509-main-assembly-v1-incompatible:strict-reference-prover-invariant:exact-der-rfc-projection-ca-sources:29-verifier-positioned-sha-witnesses:five-p256-equations:optional-slot2-rfc-zero-source-and-public-valid-dummy-selector:statement-compiled-deduplicated-sequential-byte-io:exact-witness-declaration-replay:logical-active-row-census:exact49-registrations:no-host-verification-substitute:verifier-terminal-replay=complete:activation=governance-gated".to_vec();
@@ -819,12 +842,16 @@ mod tests {
         substituted[17] = b"substituted-current-sha-call-descriptor".to_vec();
         substituted[27] = b"substituted-current-p256-descriptor".to_vec();
         substituted[28] = vec![0x91; 48];
+        for field in &mut substituted[22..27] {
+            *field = vec![0xa7; 48];
+        }
         restore_retired_public_terminal_profile_descriptors_v1(&mut canonical);
         restore_retired_public_terminal_profile_descriptors_v1(&mut substituted);
         assert_eq!(substituted, canonical);
         assert_eq!(canonical[28].len(), 48);
+        assert!(canonical[22..27].iter().all(|digest| digest.len() == 48));
         for (field, (retired, current)) in canonical.iter().zip(fields).enumerate() {
-            if ![9, 10, 12, 13, 14, 17, 27, 28].contains(&field) {
+            if ![9, 10, 12, 13, 14, 17, 22, 23, 24, 25, 26, 27, 28].contains(&field) {
                 assert_eq!(retired, current);
             }
         }
@@ -951,6 +978,7 @@ mod tests {
             .iter()
             .map(|field| field.to_vec())
             .collect::<Vec<_>>();
+        restore_historical_catalog_schedule_fields_v1(&mut predecessor);
         let descriptor = core::str::from_utf8(&predecessor[9]).unwrap();
         let marker = "-eku-canonical-profile-uuid-oids";
         assert_eq!(descriptor.matches(marker).count(), 1);
@@ -981,6 +1009,7 @@ mod tests {
             .iter()
             .map(|field| field.to_vec())
             .collect::<Vec<_>>();
+        restore_historical_catalog_schedule_fields_v1(&mut predecessor);
         let descriptor = core::str::from_utf8(&predecessor[9]).unwrap();
         let marker = "source-node-root-kind-active-gated-helper-";
         assert_eq!(descriptor.matches(marker).count(), 1);

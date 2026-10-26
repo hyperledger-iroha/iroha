@@ -2,7 +2,7 @@ use super::commands::{DiagnosticsArgs, LanesArgs, ParamsArgs, StatusArgs};
 use crate::{CliOutputFormat, RunContext};
 use eyre::Result;
 use norito::json::Value;
-pub(crate) fn status<C: RunContext>(context: &mut C, _args: StatusArgs) -> Result<()> {
+pub fn status<C: RunContext>(context: &mut C, _args: StatusArgs) -> Result<()> {
     let client = context.client_from_config()?;
     let value = client.get_sumeragi_status_json()?;
     match context.output_format() {
@@ -10,7 +10,7 @@ pub(crate) fn status<C: RunContext>(context: &mut C, _args: StatusArgs) -> Resul
         CliOutputFormat::Json => context.print_data(&value),
     }
 }
-pub(crate) fn lanes<C: RunContext>(context: &mut C, args: LanesArgs) -> Result<()> {
+pub fn lanes<C: RunContext>(context: &mut C, args: LanesArgs) -> Result<()> {
     context.operator_key_pair().ok_or_else(|| {
         eyre::eyre!(
             "consensus lanes require --operator-private-key-file or --operator-private-key-fd"
@@ -25,7 +25,7 @@ pub(crate) fn lanes<C: RunContext>(context: &mut C, args: LanesArgs) -> Result<(
     let lanes = client.get_sumeragi_lanes()?;
     context.print_data(&lanes)
 }
-pub(crate) fn diagnostics<C: RunContext>(context: &mut C, _args: DiagnosticsArgs) -> Result<()> {
+pub fn diagnostics<C: RunContext>(context: &mut C, _args: DiagnosticsArgs) -> Result<()> {
     let client = context.client_from_config()?;
     let operator_key = context
         .operator_key_pair()
@@ -40,7 +40,7 @@ pub(crate) fn diagnostics<C: RunContext>(context: &mut C, _args: DiagnosticsArgs
         CliOutputFormat::Json => context.print_data(&value),
     }
 }
-pub(crate) fn params<C: RunContext>(context: &mut C, _args: ParamsArgs) -> Result<()> {
+pub fn params<C: RunContext>(context: &mut C, _args: ParamsArgs) -> Result<()> {
     let client = context.client_from_config()?;
     let value = client.get_sumeragi_params_json()?;
     match context.output_format() {

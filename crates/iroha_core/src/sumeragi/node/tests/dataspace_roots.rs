@@ -11,7 +11,7 @@ use iroha_model_base::{domain::DomainId, topology::DataSpaceId};
 use mv::storage::StorageReadOnly as _;
 
 struct DataspaceChain {
-    chain: Chain,
+    chain: NodeTestChain,
     manifest: iroha_genesis::RawGenesisTransaction,
     nexus: iroha_config::parameters::actual::Nexus,
     pipeline: iroha_config::parameters::actual::Pipeline,
@@ -76,6 +76,10 @@ impl DataspaceChain {
             .expect("original signed private genesis and its physical scope policies")
     }
 
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     fn with_genesis_instructions(
         parent: NetworkId,
         id: DataSpaceId,
@@ -248,7 +252,7 @@ impl DataspaceChain {
                 None,
             )?;
         Ok(Self {
-            chain: Chain {
+            chain: NodeTestChain {
                 genesis,
                 keys,
                 chain_id,
@@ -264,15 +268,17 @@ impl DataspaceChain {
 
     fn state(&self, previous: Option<&Arc<Kura>>) -> (Arc<State>, Arc<Kura>) {
         let network = NetworkId::from_genesis_hash(self.chain.genesis.hash());
-        let (mut state, kura) = match previous {
-            None => State::new_with_chain_and_network_id_and_pre_genesis_nexus_for_testing(
-                bootstrap_world(),
-                self.nexus.clone(),
-                LiveQueryStore::start_test(),
-                self.chain.chain_id.clone(),
-                network,
-            ),
-            Some(kura) => {
+        let (mut state, kura) = previous.map_or_else(
+            || {
+                State::new_with_chain_and_network_id_and_pre_genesis_nexus_for_testing(
+                    bootstrap_world(),
+                    self.nexus.clone(),
+                    LiveQueryStore::start_test(),
+                    self.chain.chain_id.clone(),
+                    network,
+                )
+            },
+            |kura| {
                 let mut world = bootstrap_world();
                 crate::sns::try_seed_default_namespace_policies(
                     &mut world,
@@ -303,8 +309,8 @@ impl DataspaceChain {
                 state.install_active_lane_markers_for_tests();
                 state.configure_test_runtime_defaults();
                 (state, Arc::clone(kura))
-            }
-        };
+            },
+        );
         state.set_nexus_from_config(self.nexus.clone()).unwrap();
         state.set_pipeline(self.pipeline.clone());
         state.install_lane_manifests_for_testing(&Arc::new(

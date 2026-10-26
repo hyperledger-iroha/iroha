@@ -297,11 +297,12 @@ fn load_signature_inverse_binds_digest_slot_order_and_original_signature() {
 #[test]
 #[ignore = "two Load signature profiles: two k16 keygens/imports and eight proofs; explicit resource handoff"]
 fn genuine_load_signature_public_inverse_native_proof_parity() {
+    use iroha_plonk::keys::{KeygenConfigV2, keygen_pk_from_vk_v2, keygen_pk_v2};
+
     assert!(
-        !cfg!(debug_assertions),
+        !std::hint::black_box(cfg!(debug_assertions)),
         "run real-family measurement with --release"
     );
-    use iroha_plonk::keys::{KeygenConfigV2, keygen_pk_from_vk_v2, keygen_pk_v2};
     let mut paired_proofs = 0usize;
     for (plan, witnesses) in load_cases() {
         // A new owner makes each measured admission's public-column cache cold.

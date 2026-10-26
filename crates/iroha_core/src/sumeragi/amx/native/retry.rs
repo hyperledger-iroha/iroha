@@ -33,9 +33,9 @@ struct CompletedOccurrence {
     occurrence: Occurrence,
 }
 
-/// Inline owner attached to one original SignatureDecodeAttempt.
+/// Inline owner attached to one original `SignatureDecodeAttempt`.
 /// No unrelated State cache or equal-value deduplication participates.
-pub(crate) struct NativeAmxLegPreparations {
+pub struct NativeAmxLegPreparations {
     pending: Option<PendingOccurrence>,
     parked: Option<ChargedBuffer<Option<PendingOccurrence>>>,
     staged: Option<CompletedOccurrence>,
@@ -289,8 +289,8 @@ fn signed(input: &TransactionEntrypoint) -> Option<&SignedTransaction> {
     }
 }
 
-/// Exclusive short-lived StateTransaction borrow of the actual original input.
-pub(crate) struct NativeAmxLegExecution<'attempt> {
+/// Exclusive short-lived `StateTransaction` borrow of the actual original input.
+pub struct NativeAmxLegExecution<'attempt> {
     bank: &'attempt mut NativeAmxLegPreparations,
     input: &'attempt TransactionEntrypoint,
     input_index: usize,
@@ -465,7 +465,7 @@ impl<'attempt> NativeAmxLegExecution<'attempt> {
     }
 }
 
-pub(crate) enum LegExecutionError<E> {
+pub enum LegExecutionError<E> {
     Decode(AmxLegDecodeErrorV1),
     Metadata(ChargedBufferError),
     Invariant,

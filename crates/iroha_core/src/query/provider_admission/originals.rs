@@ -99,10 +99,9 @@ pub fn with_genesis_provider_admission_originals_v1<R>(
             if let Some(initializer) = instruction
                 .as_any()
                 .downcast_ref::<InitializeSorafsProviderAdmissionV1>()
+                && selected.replace(initializer).is_some()
             {
-                if selected.replace(initializer).is_some() {
-                    return Err(invalid);
-                }
+                return Err(invalid);
             }
         }
     }

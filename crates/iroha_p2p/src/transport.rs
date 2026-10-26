@@ -451,7 +451,7 @@ pub mod quic {
             tls.alpn_protocols = vec![P2P_ALPN.to_vec()];
             let tls = Arc::new(tls);
             let crypto = QuinnRustlsClientConfig::try_from(tls)
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+                .map_err(|e| io::Error::other(e.to_string()))?;
             let mut client = ClientConfig::new(Arc::new(crypto));
             client.transport_config(transport);
             endpoint.set_default_client_config(client);
@@ -466,10 +466,10 @@ pub mod quic {
             let connecting = self
                 .endpoint
                 .connect(remote, server_name)
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+                .map_err(|e| io::Error::other(e.to_string()))?;
             connecting
                 .await
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))
+                .map_err(|e| io::Error::other(e.to_string()))
         }
     }
     fn build_transport_config(_cfg: DialerConfig) -> io::Result<Arc<TransportConfig>> {

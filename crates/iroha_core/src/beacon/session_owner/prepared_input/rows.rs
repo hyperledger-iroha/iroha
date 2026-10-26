@@ -133,7 +133,7 @@ impl SerializePayload for Peer {
     }
 }
 
-pub(super) struct Recipient {
+pub(super) struct PreparedRecipient {
     pub(super) recipient_index: u16,
     pub(super) validator: Peer,
     pub(super) x25519_public_key: [u8; 32],
@@ -141,7 +141,7 @@ pub(super) struct Recipient {
     pub(super) signature: PreparedSignatureDecode,
     ready: bool,
 }
-impl Recipient {
+impl PreparedRecipient {
     pub(super) fn new(
         source: &PublicKey,
         budget: &AllocationBudget,
@@ -159,20 +159,20 @@ impl Recipient {
         })
     }
 }
-impl FieldDestination for Recipient {
+impl FieldDestination for PreparedRecipient {
     type Error = DestinationError;
 }
-inline_field!(Recipient, 0, recipient_index, u16);
-impl DecodeField<1, PeerId> for Recipient {
+inline_field!(PreparedRecipient, 0, recipient_index, u16);
+impl DecodeField<1, PeerId> for PreparedRecipient {
     type Value = ();
     fn decode_field(&mut self, field: CanonicalField<'_, PeerId>) -> DecodeResult<()> {
         field.with_payload(|bytes| self.validator.decode(bytes))
     }
 }
-inline_field!(Recipient, 2, x25519_public_key, [u8; 32]);
-bytes_field!(Recipient, 3, mlkem768_public_key);
-signature_field!(Recipient, 4);
-impl Row for Recipient {
+inline_field!(PreparedRecipient, 2, x25519_public_key, [u8; 32]);
+bytes_field!(PreparedRecipient, 3, mlkem768_public_key);
+signature_field!(PreparedRecipient, 4);
+impl Row for PreparedRecipient {
     type Wire = GlobalThresholdBeaconDkgRecipientKeyV1;
     fn decode(&mut self, bytes: &[u8]) -> DecodeResult<()> {
         self.reset();
@@ -191,7 +191,7 @@ impl Row for Recipient {
         self.ready
     }
 }
-impl SerializePayload for Recipient {
+impl SerializePayload for PreparedRecipient {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), norito::Error> {
         #[derive(norito::NoritoSerialize)]
         struct View<'a> {
@@ -217,14 +217,14 @@ impl SerializePayload for Recipient {
     }
 }
 
-pub(super) struct Dealer {
+pub(super) struct PreparedDealer {
     pub(super) dealer_index: u16,
     pub(super) coefficient_commitments: CopySequence<[u8; 96]>,
     pub(super) constant_term_proof: GlobalThresholdBeaconDkgConstantProofV1,
     pub(super) signature: PreparedSignatureDecode,
     ready: bool,
 }
-impl Dealer {
+impl PreparedDealer {
     pub(super) fn new(
         threshold: u16,
         budget: &AllocationBudget,
@@ -241,24 +241,24 @@ impl Dealer {
         })
     }
 }
-impl FieldDestination for Dealer {
+impl FieldDestination for PreparedDealer {
     type Error = DestinationError;
 }
-inline_field!(Dealer, 0, dealer_index, u16);
-impl DecodeField<1, Vec<[u8; 96]>> for Dealer {
+inline_field!(PreparedDealer, 0, dealer_index, u16);
+impl DecodeField<1, Vec<[u8; 96]>> for PreparedDealer {
     type Value = ();
     fn decode_field(&mut self, field: CanonicalField<'_, Vec<[u8; 96]>>) -> DecodeResult<()> {
         field.with_payload(|bytes| self.coefficient_commitments.decode(bytes))
     }
 }
 inline_field!(
-    Dealer,
+    PreparedDealer,
     2,
     constant_term_proof,
     GlobalThresholdBeaconDkgConstantProofV1
 );
-signature_field!(Dealer, 3);
-impl Row for Dealer {
+signature_field!(PreparedDealer, 3);
+impl Row for PreparedDealer {
     type Wire = GlobalThresholdBeaconDkgDealerCommitmentV1;
     fn decode(&mut self, bytes: &[u8]) -> DecodeResult<()> {
         self.reset();
@@ -276,7 +276,7 @@ impl Row for Dealer {
         self.ready
     }
 }
-impl SerializePayload for Dealer {
+impl SerializePayload for PreparedDealer {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), norito::Error> {
         #[derive(norito::NoritoSerialize)]
         struct View<'a> {

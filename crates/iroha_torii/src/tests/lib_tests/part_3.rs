@@ -186,13 +186,20 @@ async fn account_alias_enumeration_rejects_signed_caller_without_exact_scope() {
         ],
         [],
     );
-    let app = mk_app_state_for_tests_with_world(world);
+    let app = mk_native_app_state_for_tests_with_world(world);
     bind_account_alias_for_test(&app, &target, "merchant@universal");
     let method = Method::GET;
     let uri: axum::http::Uri = format!("/v1/accounts/{target}/aliases")
         .parse()
         .expect("account aliases uri");
-    let headers = signed_app_headers(&caller, &caller_keypair, &method, &uri, &[]);
+    let headers = crate::tests_runtime_handlers::signed_network_app_headers(
+        app.state.network_id_ref(),
+        &caller,
+        &caller_keypair,
+        &method,
+        &uri,
+        &[],
+    );
     let error = match handler_account_aliases(
         State(app),
         method,
@@ -387,6 +394,7 @@ async fn alias_lookup_by_account_returns_empty_fanout_result_when_offline_route_
         &body,
         "alias_lookup_by_account",
     )
+    .await
     .expect("original signed caller");
     let routes = torii_target_account_routes(app.as_ref(), &authority).unwrap();
     let (allowed, denied) =
@@ -1023,7 +1031,7 @@ async fn identifier_program_registration_rejects_both_diagnostic_bfv_profiles() 
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn identifier_policies_enforce_token_policy() {
-    let mut app = mk_app_state_for_tests();
+    let mut app = mk_native_app_state_for_tests();
     {
         let state = Arc::get_mut(&mut app).expect("unique app state");
         state.require_api_token = true;
@@ -1151,9 +1159,9 @@ async fn identifier_draft_preflight_rejects_bfv_before_input_or_runtime_work() {
 #[tokio::test]
 async fn identifier_execution_unsupported_backend_has_typed_availability_error() {
     let response = identifier_execution_error(
-        identifier_resolution::IdentifierResolutionError::UnsupportedBackend(
+        &(identifier_resolution::IdentifierResolutionError::UnsupportedBackend(
             RamLfeBackend::HkdfSha3_512PrfV1,
-        ),
+        )),
     )
     .into_response();
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
@@ -1179,7 +1187,7 @@ async fn identifier_execution_unsupported_backend_has_typed_availability_error()
 #[tokio::test]
 async fn identifier_execution_internal_errors_remain_redacted() {
     let response = identifier_execution_error(
-        identifier_resolution::IdentifierResolutionError::Signing("private marker".to_owned()),
+        &(identifier_resolution::IdentifierResolutionError::Signing("private marker".to_owned())),
     )
     .into_response();
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
@@ -1325,6 +1333,7 @@ async fn identifier_owner_nonce_is_exact_lowerhex_nonzero_and_bounded() {
                 &uri.parse().unwrap(),
                 &body
             )
+            .await
             .is_err()
         );
     }
@@ -1332,7 +1341,7 @@ async fn identifier_owner_nonce_is_exact_lowerhex_nonzero_and_bounded() {
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn identifier_resolve_enforces_token_policy() {
-    let mut app = mk_app_state_for_tests();
+    let mut app = mk_native_app_state_for_tests();
     {
         let state = Arc::get_mut(&mut app).expect("unique app state");
         state.require_api_token = true;
@@ -2010,7 +2019,7 @@ async fn bond_routes_serve_registered_records_and_report_unknown_bonds() {
             claimed_at_ms: None,
         });
     }
-    let app = mk_app_state_for_tests_with_world(world);
+    let app = mk_native_app_state_for_tests_with_world(world);
     let response = handler_bond_get(
         State(app.clone()),
         HeaderMap::new(),
@@ -2159,7 +2168,7 @@ async fn bond_routes_serve_registered_records_and_report_unknown_bonds() {
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn identifier_claim_receipt_enforces_token_policy() {
-    let mut app = mk_app_state_for_tests();
+    let mut app = mk_native_app_state_for_tests();
     {
         let state = Arc::get_mut(&mut app).expect("unique app state");
         state.require_api_token = true;
@@ -3074,7 +3083,7 @@ async fn proof_record_fanout_requests_the_binary_format_required_by_its_decoder(
 }
 #[tokio::test]
 async fn proof_record_get_advertises_cache_and_304() {
-    let app = mk_app_state_for_tests();
+    let app = mk_native_app_state_for_tests();
     let id = seed_proof_record(&app, "debug-proof", [0xAB; 32]);
     let first = handler_proof_record_get(
         State(app.clone()),
@@ -3365,9 +3374,7 @@ async fn proof_retention_status_reports_the_committed_retention_policy() {
         let mut block = app.state.block(header);
         let mut stx = block.transaction();
         stx.world
-            .parameters_mut_for_testing()
-            .get_mut()
-            .set_parameter(Parameter::Custom(policy.clone().into_custom_parameter()))
+            .set_parameter_for_testing(Parameter::Custom(policy.clone().into_custom_parameter()))
             .expect("valid fixture parameters");
         stx.apply();
         block
@@ -3375,7 +3382,7 @@ async fn proof_retention_status_reports_the_committed_retention_policy() {
             .expect("policy block commit should succeed");
     }
     let status =
-        crate::routing::handle_proof_retention_status(app.state.clone()).expect("retention status");
+        crate::routing::handle_proof_retention_status(&(app.state)).expect("retention status");
     assert_eq!(
         u64::try_from(status.cap_per_backend).expect("fits u64"),
         policy.proofs.proof_history_cap
@@ -3534,7 +3541,7 @@ fn axt_reject_query_response_carries_headers() {
 }
 #[tokio::test]
 async fn proof_get_egress_throttled_returns_retry_after() {
-    let mut app = mk_app_state_for_tests();
+    let mut app = mk_native_app_state_for_tests();
     let _ = seed_proof_record(&app, "debug-proof", [0xBB; 32]);
     {
         let state = Arc::get_mut(&mut app).expect("unique app");
@@ -3578,7 +3585,7 @@ async fn proof_body_limit_rejects_oversize_body() {
 }
 #[tokio::test]
 async fn proof_request_rate_limit_counts_requests_instead_of_body_chunks() {
-    let mut app = mk_app_state_for_tests();
+    let mut app = mk_native_app_state_for_tests();
     {
         let state = Arc::get_mut(&mut app).expect("unique app state");
         state.proof_rate_limiter = limits::RateLimiter::new(Some(2), Some(60));
@@ -3598,7 +3605,7 @@ async fn proof_request_rate_limit_counts_requests_instead_of_body_chunks() {
 }
 #[tokio::test]
 async fn proof_request_rate_limit_admits_max_body_cost_and_throttles_repetition() {
-    let mut app = mk_app_state_for_tests();
+    let mut app = mk_native_app_state_for_tests();
     {
         let state = Arc::get_mut(&mut app).expect("unique app state");
         state.proof_rate_limiter = limits::RateLimiter::new(Some(1), Some(1));

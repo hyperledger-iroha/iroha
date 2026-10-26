@@ -1,6 +1,6 @@
 //! Authenticated Torii API and embedded shell for the SFM-4b3 evidence viewer.
 //!
-//! Canonical account signatures identify callers. WebAuthn assertions and
+//! Canonical account signatures identify callers. `WebAuthn` assertions and
 //! rotating grants remain runtime-only; response bodies and durable receipts
 //! contain payload-free metadata or canonical Norito envelopes only.
 use crate::{JsonBody, SharedAppState};
@@ -116,7 +116,7 @@ pub struct EvidenceErasureRequestDto {
     quarantine_id_hex: String,
     idempotency_key_hex: String,
 }
-/// Issue an exact case/round/object/account/role-bound WebAuthn challenge.
+/// Issue an exact case/round/object/account/role-bound `WebAuthn` challenge.
 pub async fn handle_post_evidence_session_challenge(
     State(state): State<SharedAppState>,
     headers: HeaderMap,
@@ -180,7 +180,7 @@ pub async fn handle_post_evidence_session_challenge(
     }
     response
 }
-/// Consume a WebAuthn assertion and return one case-bound rotating-grant session.
+/// Consume a `WebAuthn` assertion and return one case-bound rotating-grant session.
 pub async fn handle_post_evidence_session(
     State(state): State<SharedAppState>,
     headers: HeaderMap,

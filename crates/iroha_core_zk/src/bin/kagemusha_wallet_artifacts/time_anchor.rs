@@ -70,7 +70,7 @@ fn response(
     Ok(anchor)
 }
 
-pub(super) fn run(path: &str) -> io::Result<()> {
+pub fn run(path: &str) -> io::Result<()> {
     let source = Original::open(path, REQUEST_MAX, None)?;
     let request = request(&source.bytes)?;
     let request_sha = BlobV1::of(&source.bytes).sha256;

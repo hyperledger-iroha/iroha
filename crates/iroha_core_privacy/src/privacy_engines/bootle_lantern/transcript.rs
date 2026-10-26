@@ -352,7 +352,7 @@ pub fn derive_proof_polynomial_v1(
             u8::try_from(index).expect("ring index fits u8"),
         )?;
     }
-    ProofPolynomialV1::new(coefficients).map_err(|_| TranscriptErrorV1::InternalInvariant)
+    ProofPolynomialV1::new(&coefficients).map_err(|_| TranscriptErrorV1::InternalInvariant)
 }
 fn validate_coordinate(role: MatrixRoleV1, row: u16, column: u16) -> Result<(), TranscriptErrorV1> {
     let (rows, columns) = role.dimensions();
@@ -581,6 +581,9 @@ impl PresentationTranscriptV1 {
 }
 impl BlindIssuanceRequestTranscriptV1 {
     /// Construct a fully bound P1 transcript with honest issuance fields.
+    ///
+    /// # Errors
+    /// Rejects malformed request bindings or reserved-zero matrix and relation digests.
     pub fn new(
         binding: BlindIssuanceRequestChallengeBindingV1,
         matrix_seed: MatrixSeedV1,
@@ -628,16 +631,16 @@ impl ProofTranscriptCoreV1 {
     #[cfg(test)]
     pub(crate) fn derive_bytes(
         &self,
-        stage: &[u8],
+        phase_label: &[u8],
         components: &[&[u8]],
         output: &mut [u8],
     ) -> Result<(), TranscriptErrorV1> {
-        if stage.is_empty() {
+        if phase_label.is_empty() {
             return Err(TranscriptErrorV1::EmptyStageTag);
         }
         let mut state = Shake256::default();
         absorb_frame_checked(&mut state, PRESENTATION_STAGE_DOMAIN_V1)?;
-        absorb_frame_checked(&mut state, stage)?;
+        absorb_frame_checked(&mut state, phase_label)?;
         absorb_transcript_binding_v1(&mut state, self.binding)?;
         absorb_frame_checked(&mut state, self.matrix_seed.parameter_digest())?;
         absorb_frame_checked(&mut state, self.matrix_seed.public_parameter_seed())?;
@@ -659,7 +662,7 @@ impl ProofTranscriptCoreV1 {
     /// Rejects an empty row, an oversized coordinate, or transcript framing failure.
     pub(crate) fn derive_ternary_row(
         &self,
-        stage: &[u8],
+        phase_label: &[u8],
         components: &[&[u8]],
         row: u16,
         columns: usize,
@@ -674,7 +677,7 @@ impl ProofTranscriptCoreV1 {
         coordinate[..2].copy_from_slice(&row.to_be_bytes());
         coordinate[2..].copy_from_slice(&columns_u32.to_be_bytes());
         let mut state = Shake256::default();
-        absorb_stage_prefix(self, &mut state, stage, components)?;
+        absorb_stage_prefix(self, &mut state, phase_label, components)?;
         absorb_frame_checked(&mut state, &coordinate)?;
         let mut reader = state.finalize_xof();
         while output.len() < columns {
@@ -699,7 +702,7 @@ impl ProofTranscriptCoreV1 {
     /// Returns transcript framing or bounded uniform-rejection failure.
     pub(crate) fn derive_uniform_polynomials(
         &self,
-        stage: &[u8],
+        phase_label: &[u8],
         components: &[&[u8]],
         count: usize,
     ) -> Result<Vec<ProofPolynomialV1>, TranscriptErrorV1> {
@@ -710,7 +713,7 @@ impl ProofTranscriptCoreV1 {
         )?;
         let count_u32 = u32::try_from(count).map_err(|_| TranscriptErrorV1::FieldTooLarge)?;
         let mut state = Shake256::default();
-        absorb_stage_prefix(self, &mut state, stage, components)?;
+        absorb_stage_prefix(self, &mut state, phase_label, components)?;
         absorb_frame_checked(&mut state, &count_u32.to_be_bytes())?;
         let mut reader = state.finalize_xof();
         for _ in 0..count {
@@ -731,7 +734,7 @@ impl ProofTranscriptCoreV1 {
                 *coefficient = accepted.ok_or(TranscriptErrorV1::UniformRejectionExhausted)?;
             }
             output.push(
-                ProofPolynomialV1::new(coefficients)
+                ProofPolynomialV1::new(&coefficients)
                     .map_err(|_| TranscriptErrorV1::InternalInvariant)?,
             );
         }
@@ -747,7 +750,7 @@ impl ProofTranscriptCoreV1 {
     /// Returns transcript framing or bounded uniform-rejection failure.
     pub(crate) fn derive_uniform_scalars(
         &self,
-        stage: &[u8],
+        phase_label: &[u8],
         components: &[&[u8]],
         count: usize,
     ) -> Result<Vec<u64>, TranscriptErrorV1> {
@@ -756,7 +759,7 @@ impl ProofTranscriptCoreV1 {
             fixed_capacity_vec_v1(count, MAX_STAGED_UNIFORM_SCALARS_V1, "uniform_scalars")?;
         let count_u32 = u32::try_from(count).map_err(|_| TranscriptErrorV1::FieldTooLarge)?;
         let mut state = Shake256::default();
-        absorb_stage_prefix(self, &mut state, stage, components)?;
+        absorb_stage_prefix(self, &mut state, phase_label, components)?;
         absorb_frame_checked(&mut state, SCALAR_SHAPE_V1)?;
         absorb_frame_checked(&mut state, &count_u32.to_be_bytes())?;
         let mut reader = state.finalize_xof();
@@ -815,14 +818,14 @@ fn fixed_capacity_vec_v1<T>(
 fn absorb_stage_prefix(
     transcript: &ProofTranscriptCoreV1,
     state: &mut Shake256,
-    stage: &[u8],
+    phase_label: &[u8],
     components: &[&[u8]],
 ) -> Result<(), TranscriptErrorV1> {
-    if stage.is_empty() {
+    if phase_label.is_empty() {
         return Err(TranscriptErrorV1::EmptyStageTag);
     }
     absorb_frame_checked(state, PRESENTATION_STAGE_DOMAIN_V1)?;
-    absorb_frame_checked(state, stage)?;
+    absorb_frame_checked(state, phase_label)?;
     absorb_transcript_binding_v1(state, transcript.binding)?;
     absorb_frame_checked(state, transcript.matrix_seed.parameter_digest())?;
     absorb_frame_checked(state, transcript.matrix_seed.public_parameter_seed())?;
@@ -1043,7 +1046,7 @@ fn derive_challenge_from_transcript_binding_v1(
             };
         }
         let challenge =
-            ProofPolynomialV1::new(challenge).map_err(|_| TranscriptErrorV1::InternalInvariant)?;
+            ProofPolynomialV1::new(&challenge).map_err(|_| TranscriptErrorV1::InternalInvariant)?;
         if challenge_eta_is_valid_v1(&challenge) {
             return Ok(challenge);
         }
@@ -1207,7 +1210,7 @@ mod tests {
                 PROOF_MODULUS_V1 - coefficients[source]
             };
         }
-        ProofPolynomialV1::new(coefficients).expect("canonical challenge fixture")
+        ProofPolynomialV1::new(&coefficients).expect("canonical challenge fixture")
     }
     fn centered_first_half(challenge: &ProofPolynomialV1) -> [i64; APPLICATION_RING_DEGREE_V1 / 2] {
         core::array::from_fn(|index| challenge.centered_coefficient(index))

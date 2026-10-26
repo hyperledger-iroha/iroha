@@ -86,9 +86,7 @@ impl ScalarFixture {
             (RUNNING_WRITE, RUNNING_OWNER, 1, 1, true),
         ] {
             fixture.packets.fields[slot] = event(
-                Space::Owner,
-                0,
-                owner,
+                (Space::Owner, 0, owner),
                 before,
                 after,
                 write,
@@ -133,9 +131,11 @@ impl ScalarFixture {
         ] {
             if enabled {
                 fixture.packets.fields[slot] = event(
-                    Space::Register,
-                    0,
-                    register as u32,
+                    (
+                        Space::Register,
+                        0,
+                        u32::try_from(register).expect("bounded fixture value"),
+                    ),
                     record.before.registers[register],
                     if write {
                         record.after.registers[register]
@@ -745,7 +745,11 @@ fn composed_private_scalar_polynomials_have_degree_four() {
         ivm::ivm_mode::ZK,
     );
     let program = Program::new(artifact).unwrap();
-    let schedule = Schedule::new(7, core::array::from_fn(|i| i as u32)).unwrap();
+    let schedule = Schedule::new(
+        7,
+        core::array::from_fn(|i| u32::try_from(i).expect("bounded fixture value")),
+    )
+    .unwrap();
     let measured = measured_maximum_affine_degree_v1(
         [0x3d; 32],
         [super::super::WIDTH + PORTS * packet::WIDTH, 0, 0, 0, 0],

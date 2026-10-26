@@ -6,7 +6,7 @@ use mv::{BlockAcquisition, BlockMode, BlockRetirement};
 macro_rules! trigger_acquisition {
     ($($field:ident: ($key:ty, $value:ty)),+ $(,)?) => {
         /// Inert original field slots retained across all fallible initialization.
-        pub(crate) struct SetBlockAcquisition<'set> {
+        pub struct SetBlockAcquisition<'set> {
             $($field: Option<mv::storage::BlockAcquisitionSlot<'set, $key, $value>>,)+
         }
 

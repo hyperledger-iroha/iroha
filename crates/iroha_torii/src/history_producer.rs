@@ -150,7 +150,7 @@ impl HistoryProducerOwner {
     }
     /// Capture the admitted producer before moving the request into a physical worker.
     pub(crate) fn from_admission(admission: &QueryAdmissionPermit) -> Result<Self, Error> {
-        Self::from_reservation(admission._fanout_memory.as_ref().ok_or_else(capacity)?)
+        Self::from_reservation(admission.fanout_memory.as_ref().ok_or_else(capacity)?)
     }
 
     /// A present outer capability may never disappear into a fresh, wider finality
@@ -245,6 +245,64 @@ impl HistoryProducerOwner {
             self.budget.cold_frames.clone(),
             self.budget.allocations.clone(),
         )
+    }
+
+    /// Native page bytes collected by the Explorer query adapter before projection.
+    pub(crate) fn source_frame_bytes(&self) -> usize {
+        self.budget.envelope.route_body_bytes
+    }
+
+    /// All post-scan allocation phases of the block collection: internal native
+    /// JSON, its decoded retained graph, projection scratch, public JSON and
+    /// native cursor/hash text. Every phase spends this same cumulative owner.
+    #[cfg(feature = "app_api")]
+    pub(crate) fn block_feed_output_reserve(&self) -> Result<usize, Error> {
+        let envelope = self.budget.envelope;
+        [
+            envelope.route_body_bytes,
+            envelope.accumulator_retained_bytes,
+            envelope.candidate_allocation_bytes,
+            envelope.route_body_bytes,
+            crate::explorer::EXPLORER_HISTORY_RESPONSE_METADATA_BYTES,
+        ]
+        .into_iter()
+        .try_fold(0usize, |sum, bytes| sum.checked_add(bytes))
+        .ok_or_else(|| self.owner_capacity())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn allocation_limit_for_test(&self) -> usize {
+        self.budget.allocation_limits.max_total_allocated_bytes()
+    }
+
+    /// Bound source decoding to the remaining cumulative grant while leaving
+    /// `response_reserve` bytes for cursor and response construction. The child
+    /// context never replaces this owner: install it first, then this owner's
+    /// allocation scope, so refused source charges cannot spend the output reserve.
+    /// Callers retain physical custody across the separately scoped phases.
+    pub(crate) fn source_allocation_context(
+        &self,
+        response_reserve: usize,
+    ) -> Result<DecodeBudgetContext, Error> {
+        let limits = self.budget.allocation_limits;
+        let spent = usize::try_from(self.budget.allocations.consumed_allocated_bytes())
+            .map_err(|_| self.owner_capacity())?;
+        let source_bytes = limits
+            .max_total_allocated_bytes()
+            .checked_sub(spent)
+            .and_then(|remaining| remaining.checked_sub(response_reserve))
+            .ok_or_else(|| self.owner_capacity())?;
+        DecodeBudgetContext::try_new_owned(
+            DecodeLimits::new(
+                limits.max_sequence_elements(),
+                limits.max_field_bytes(),
+                limits.max_total_elements(),
+                source_bytes,
+                limits.max_nesting_depth(),
+            ),
+            &self.budget.response_metadata,
+        )
+        .map_err(|_| self.owner_capacity())
     }
 
     /// Prepay finality's complete source/output and graph corridors from this
@@ -442,6 +500,154 @@ mod tests {
     }
 
     #[test]
+    fn source_allocation_context_preserves_response_room_and_original_accounting() {
+        let owner = owner(48_000_000);
+        let reserved = 1024;
+        owner
+            .scope(|| norito::core::reserve_decode_allocation(128))
+            .unwrap();
+        let before = owner.allocation_context().consumed_allocated_bytes();
+        let source = owner.source_allocation_context(reserved).unwrap();
+        let available = owner.budget.allocation_limits.max_total_allocated_bytes()
+            - usize::try_from(before).unwrap()
+            - reserved;
+        source
+            .with(|| owner.scope(|| norito::core::reserve_decode_allocation(available)))
+            .unwrap();
+        assert!(
+            source
+                .with(|| owner.scope(|| norito::core::reserve_decode_allocation(1)))
+                .is_err()
+        );
+        owner
+            .scope(|| norito::core::reserve_decode_allocation(reserved))
+            .unwrap();
+        assert_eq!(
+            owner.allocation_context().consumed_allocated_bytes(),
+            owner.budget.allocation_limits.max_total_allocated_bytes() as u64
+        );
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn block_feed_budget_exhaustion_keeps_a_serializable_short_page_and_cursor() {
+        use iroha_core::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
+        use std::num::NonZeroUsize;
+        let mut chain =
+            CertifiedTestChain::start(TestChainConfig::new(iroha_core::state::World::new(), 1_000))
+                .unwrap();
+        chain.commit(Vec::new());
+        let state = Arc::clone(chain.state());
+        let measured = owner(48_000_000);
+        let newest = NonZeroUsize::new(2).unwrap();
+        measured
+            .scope(|| {
+                state.read_canonical_history_block(newest, &measured.canonical_history_budget())
+            })
+            .unwrap();
+        let first = measured.allocation_context().consumed_allocated_bytes() as usize;
+        measured
+            .scope(|| {
+                state.read_canonical_history_block(
+                    NonZeroUsize::MIN,
+                    &measured.canonical_history_budget(),
+                )
+            })
+            .unwrap();
+        let second = measured.allocation_context().consumed_allocated_bytes() as usize - first;
+        assert!(first > 0 && second > 0);
+
+        let request = owner(48_000_000);
+        let output_reserve = request.block_feed_output_reserve().unwrap();
+        let selected = std::alloc::Layout::array::<crate::explorer_history::HistoryBlockRow>(100)
+            .unwrap()
+            .size();
+        let source = first + second / 2;
+        let burn = request.budget.allocation_limits.max_total_allocated_bytes()
+            - output_reserve
+            - selected
+            - source;
+        request
+            .scope(|| norito::core::reserve_decode_allocation(burn))
+            .unwrap();
+        let summaries = crate::explorer_history::ExplorerBlockSummaryCache::new(16);
+        let response = request
+            .physical_scope(|| {
+                crate::routing::handle_v1_explorer_blocks_sync(
+                    Arc::clone(&state),
+                    crate::routing::MaybeTelemetry::disabled(),
+                    crate::routing::DataspaceReadVisibility::all_for_tests(),
+                    crate::explorer::ExplorerCursorQuery {
+                        cursor: None,
+                        limit: 100,
+                    },
+                    (crate::routing::EXPLORER_BLOCK_HEIGHTS_ALL, &summaries),
+                )
+            })
+            .expect("source exhaustion still permits cursor and response serialization");
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let payload: norito::json::Value = norito::json::from_slice(&bytes).unwrap();
+        let rows = payload
+            .get("items")
+            .and_then(norito::json::Value::as_array)
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0].get("height").and_then(norito::json::Value::as_u64),
+            Some(2)
+        );
+        let cursor = payload
+            .get("pagination")
+            .and_then(|page| page.get("next_cursor"))
+            .and_then(norito::json::Value::as_str)
+            .expect("unread block continuation");
+        let next = owner(48_000_000);
+        let response = next
+            .physical_scope(|| {
+                crate::routing::handle_v1_explorer_blocks_sync(
+                    state,
+                    crate::routing::MaybeTelemetry::disabled(),
+                    crate::routing::DataspaceReadVisibility::all_for_tests(),
+                    crate::explorer::ExplorerCursorQuery {
+                        cursor: Some(cursor.to_owned()),
+                        limit: 100,
+                    },
+                    (crate::routing::EXPLORER_BLOCK_HEIGHTS_ALL, &summaries),
+                )
+            })
+            .unwrap();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let resumed: norito::json::Value = norito::json::from_slice(&bytes).unwrap();
+        let rows = resumed
+            .get("items")
+            .and_then(norito::json::Value::as_array)
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0].get("height").and_then(norito::json::Value::as_u64),
+            Some(1)
+        );
+        assert!(
+            resumed
+                .get("pagination")
+                .and_then(|page| page.get("next_cursor"))
+                .unwrap()
+                .is_null()
+        );
+    }
+
+    #[test]
+    fn source_allocation_context_refuses_a_reserve_larger_than_its_owner() {
+        let owner = owner(48_000_000);
+        assert!(owner.source_allocation_context(usize::MAX).is_err());
+        assert_eq!(owner.allocation_context().consumed_allocated_bytes(), 0);
+    }
+
+    #[test]
     fn native_history_counters_are_cumulative_across_physical_scopes() {
         let owner = owner(48 * 1024 * 1024);
         let amount = owner.response_bytes();
@@ -601,25 +807,29 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::used_underscore_binding,
+        reason = "The test inspects the original reservation retained solely for its custody and drop lifetime."
+    )]
     fn finality_rejects_missing_or_replaced_present_outer_admission() {
         let inherited = owner(48_000_000);
         let foreign = owner(48_000_000);
         let query = Arc::new(tokio::sync::Semaphore::new(1));
         let mut admission = QueryAdmissionPermit {
             _query: Arc::clone(&query).try_acquire_owned().unwrap(),
-            _heavy: None,
-            _body: None,
-            _fanout_memory: None,
+            heavy: None,
+            body: None,
+            fanout_memory: None,
         };
         inherited.physical_scope(|| {
             assert!(HistoryProducerOwner::validate_finality_inheritance(&admission).is_err());
-            admission._fanout_memory = Some(foreign._reservation.clone());
+            admission.fanout_memory = Some(foreign._reservation.clone());
             assert!(HistoryProducerOwner::validate_finality_inheritance(&admission).is_err());
-            admission._fanout_memory = Some(inherited._reservation.clone());
+            admission.fanout_memory = Some(inherited._reservation.clone());
             HistoryProducerOwner::validate_finality_inheritance(&admission).unwrap();
             assert_eq!(
                 admission
-                    ._fanout_memory
+                    .fanout_memory
                     .as_ref()
                     .unwrap()
                     .admission
@@ -631,6 +841,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::used_underscore_binding,
+        reason = "The test inspects the original reservation retained solely for its custody and drop lifetime."
+    )]
     fn native_history_refuses_response_only_and_foreign_generation_tokens() {
         let permit = Arc::new(tokio::sync::Semaphore::new(1))
             .try_acquire_owned()
@@ -706,9 +920,9 @@ mod tests {
         let query = Arc::new(tokio::sync::Semaphore::new(1));
         let admission = QueryAdmissionPermit {
             _query: query.try_acquire_owned().unwrap(),
-            _heavy: None,
-            _body: None,
-            _fanout_memory: Some(reservation),
+            heavy: None,
+            body: None,
+            fanout_memory: Some(reservation),
         };
         let (started, entered) = tokio::sync::oneshot::channel();
         let (release, held) = std::sync::mpsc::channel();

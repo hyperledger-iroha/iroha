@@ -168,6 +168,9 @@ impl BootleLanternHolderPhaseV1 {
 pub struct BootleLanternHolderHandleV1([u8; 32]);
 impl BootleLanternHolderHandleV1 {
     /// Construct a handle from the exact non-zero issuance-authorization digest.
+    ///
+    /// # Errors
+    /// Rejects the reserved all-zero authorization digest.
     pub fn new(bytes: [u8; 32]) -> Result<Self, BootleLanternHolderStoreErrorV1> {
         if bytes == [0; 32] {
             return Err(BootleLanternHolderStoreErrorV1::InvalidInput);
@@ -242,18 +245,27 @@ pub trait BootleLanternHolderKeyWrapperV1: Send + Sync + core::fmt::Debug {
     /// Opaque, non-secret deployment handle.
     fn handle(&self) -> &str;
     /// Qualify the current provider and public policy revision.
+    ///
+    /// # Errors
+    /// Returns an external-provider error if its current qualification cannot be established.
     fn qualification(
         &self,
     ) -> Result<BootleLanternHolderProviderQualificationV1, BootleLanternHolderExternalErrorV1>;
     /// Active non-secret wrapping-key identifier.
     fn active_key_id(&self) -> &str;
     /// Wrap one ephemeral 256-bit DEK under the exact context.
+    ///
+    /// # Errors
+    /// Returns an external-provider error if the DEK cannot be wrapped under the requested context.
     fn wrap_dek(
         &self,
         context: [u8; 32],
         dek: &[u8; 32],
     ) -> Result<Vec<u8>, BootleLanternHolderExternalErrorV1>;
     /// Unwrap one persisted DEK under the exact context and key identifier.
+    ///
+    /// # Errors
+    /// Returns an external-provider error if the key, context, or wrapped DEK cannot be authenticated and unwrapped.
     fn unwrap_dek(
         &self,
         key_id: &str,
@@ -285,6 +297,9 @@ impl BootleLanternHolderSealedHeadV1 {
     /// Full manifest, namespace, and revision validation is performed by the
     /// vault when the provider returns this value. This constructor enforces
     /// the provider-independent allocation and non-zero bounds first.
+    ///
+    /// # Errors
+    /// Rejects invalid generation/revision values or a payload exceeding the sealed-head bound.
     pub fn from_canonical_parts_v1(
         generation: u64,
         revision: [u8; 32],
@@ -324,15 +339,24 @@ pub trait BootleLanternHolderSealedHeadStoreV1: Send + Sync + core::fmt::Debug {
     /// Opaque, non-secret deployment handle.
     fn handle(&self) -> &str;
     /// Qualify the current provider and public policy revision.
+    ///
+    /// # Errors
+    /// Returns an external-provider error if its current qualification cannot be established.
     fn qualification(
         &self,
     ) -> Result<BootleLanternHolderProviderQualificationV1, BootleLanternHolderExternalErrorV1>;
     /// Load the latest sealed head for one exact vault namespace.
+    ///
+    /// # Errors
+    /// Returns an external-provider error if the latest head cannot be read authoritatively.
     fn load_v1(
         &self,
         vault_id: [u8; 32],
     ) -> Result<Option<BootleLanternHolderSealedHeadV1>, BootleLanternHolderExternalErrorV1>;
     /// Atomically replace the exact expected revision with `next`.
+    ///
+    /// # Errors
+    /// Returns an external-provider error if the revision does not match or durable replacement fails.
     fn compare_and_swap_v1(
         &self,
         vault_id: [u8; 32],
@@ -347,6 +371,9 @@ pub struct BootleLanternHolderStoreConfigV1 {
 }
 impl BootleLanternHolderStoreConfigV1 {
     /// Construct a bounded holder-vault configuration.
+    ///
+    /// # Errors
+    /// Rejects zero or excessive record capacity.
     pub fn new(max_records: usize) -> Result<Self, BootleLanternHolderStoreErrorV1> {
         if max_records == 0 || max_records > HOLDER_HARD_MAX_RECORDS_V1 {
             return Err(BootleLanternHolderStoreErrorV1::ConfigurationInvalid);
@@ -468,7 +495,7 @@ impl core::fmt::Debug for HolderEnvelopeV1 {
             .field("entry_generation", &self.header.entry_generation)
             .field("ciphertext_len", &self.ciphertext.len())
             .field("private_payload", &"<redacted>")
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 struct PendingSecretV1 {
@@ -659,6 +686,9 @@ impl BootleLanternFileHolderStoreV1 {
         &self.root
     }
     /// Return the authoritative phase of one holder handle.
+    ///
+    /// # Errors
+    /// Rejects an unknown handle, invalid retained state, or a storage/custody failure.
     pub fn phase_v1(
         &self,
         handle: BootleLanternHolderHandleV1,
@@ -677,6 +707,9 @@ impl BootleLanternFileHolderStoreV1 {
     ///
     /// Repeating the same authorization/context/policy/attributes returns the exact already-durable
     /// request without consuming RNG. Every substituted replay fails closed.
+    ///
+    /// # Errors
+    /// Rejects substituted bindings or invalid attributes, unhealthy randomness, proof construction failures, and durable-custody failures.
     pub fn prepare_blind_issuance_with_rng_v1<R: TryCryptoRng + TryRng>(
         &self,
         context: &PrivacyStatementContextV1,
@@ -763,6 +796,9 @@ impl BootleLanternFileHolderStoreV1 {
     }
     #[cfg(test)]
     /// Read the exact already-durable `ILQ1` for transport retry.
+    ///
+    /// # Errors
+    /// Rejects missing or incorrectly bound pending state and storage/custody failures.
     pub fn pending_request_v1(
         &self,
         handle: BootleLanternHolderHandleV1,
@@ -796,6 +832,9 @@ impl BootleLanternFileHolderStoreV1 {
     /// Once this returns, process loss cannot require another issuer response:
     /// [`Self::resume_cached_response_v1`] can complete the transition after reopen. Canonical but
     /// substituted response bindings fail without changing an existing pending record.
+    ///
+    /// # Errors
+    /// Rejects invalid response framing or bindings, incorrect holder phase, and durable-custody failures.
     pub fn cache_issuer_response_v1(
         &self,
         handle: BootleLanternHolderHandleV1,
@@ -886,6 +925,9 @@ impl BootleLanternFileHolderStoreV1 {
     /// The cache transition commits independently first, so a crash cannot
     /// lose the response. Cryptographic rejection then durably discards only
     /// that untrusted response and restores the original pending state.
+    ///
+    /// # Errors
+    /// Rejects invalid response bindings or cryptography and storage/custody failures during caching or finalization.
     pub fn accept_issuer_response_v1(
         &self,
         handle: BootleLanternHolderHandleV1,
@@ -909,6 +951,9 @@ impl BootleLanternFileHolderStoreV1 {
     /// A correctly bound but cryptographically invalid untrusted response is
     /// removed by a durable transition back to `Pending`; the original ILQ1
     /// state remains usable with a later legitimate response.
+    ///
+    /// # Errors
+    /// Rejects missing or invalid cached state, cryptographic rejection, or a durable-custody failure.
     pub fn resume_cached_response_v1(
         &self,
         handle: BootleLanternHolderHandleV1,
@@ -931,6 +976,9 @@ impl BootleLanternFileHolderStoreV1 {
     }
     #[cfg(test)]
     /// Produce one complete presentation while keeping credential material local.
+    ///
+    /// # Errors
+    /// Rejects invalid presentation bindings, unavailable credentials, unhealthy randomness, or proof construction failures.
     pub fn prove_presentation_encoded_with_rng_v1<R: TryCryptoRng + TryRng>(
         &self,
         handle: BootleLanternHolderHandleV1,
@@ -2250,8 +2298,7 @@ fn encode_finalized_secret_v1(
         secret.policy_record_digest,
         secret.response_digest,
     ]
-    .iter()
-    .any(|digest| *digest == [0; 32])
+    .contains(&[0; 32])
     {
         return Err(BootleLanternHolderStoreErrorV1::InternalInvariant);
     }
@@ -2318,8 +2365,7 @@ fn decode_finalized_secret_v1(
             policy_record_digest,
             response_digest,
         ]
-        .iter()
-        .any(|digest| *digest == [0; 32])
+        .contains(&[0; 32])
     {
         return Err(BootleLanternHolderStoreErrorV1::Corrupt);
     }
@@ -2353,8 +2399,7 @@ fn encode_rejected_secret_v1(
             policy_record_digest,
             response_digest,
         ]
-        .iter()
-        .any(|digest| *digest == [0; 32])
+        .contains(&[0; 32])
     {
         return Err(BootleLanternHolderStoreErrorV1::InternalInvariant);
     }
@@ -2445,7 +2490,7 @@ fn decode_rejected_secret_v1(
         || take_array_v1::<7>(bytes, &mut offset)? != [0; 7]
         || offset != bytes.len()
         || reason == 0
-        || bindings.iter().any(|digest| *digest == [0; 32])
+        || bindings.contains(&[0; 32])
     {
         return Err(BootleLanternHolderStoreErrorV1::Corrupt);
     }
@@ -2577,7 +2622,7 @@ fn load_or_create_manifest_v1(
         .map_err(map_external_provider_error_v1)?;
     ensure_sealed_qualification_v1(store, qualification)?;
     if let Some(head) = loaded {
-        return validate_sealed_head_v1(head, vault_id, config.max_records);
+        return validate_sealed_head_v1(&head, vault_id, config.max_records);
     }
     let empty = HolderManifestV1::empty(vault_id)?;
     let next = empty.sealed_head()?;
@@ -2588,7 +2633,7 @@ fn load_or_create_manifest_v1(
                 .map_err(|_| BootleLanternHolderStoreErrorV1::DurabilityUncertain)?
                 .ok_or(BootleLanternHolderStoreErrorV1::DurabilityUncertain)?;
             ensure_sealed_qualification_v1(store, qualification)?;
-            let recovered = validate_sealed_head_v1(authoritative, vault_id, config.max_records)?;
+            let recovered = validate_sealed_head_v1(&authoritative, vault_id, config.max_records)?;
             if recovered != empty {
                 return Err(BootleLanternHolderStoreErrorV1::RollbackDetected);
             }
@@ -2600,7 +2645,7 @@ fn load_or_create_manifest_v1(
                 .map_err(|_| BootleLanternHolderStoreErrorV1::DurabilityUncertain)?
                 .ok_or(BootleLanternHolderStoreErrorV1::RollbackDetected)?;
             ensure_sealed_qualification_v1(store, qualification)?;
-            let recovered = validate_sealed_head_v1(authoritative, vault_id, config.max_records)?;
+            let recovered = validate_sealed_head_v1(&authoritative, vault_id, config.max_records)?;
             if recovered != empty {
                 return Err(BootleLanternHolderStoreErrorV1::RollbackDetected);
             }
@@ -2656,7 +2701,7 @@ fn publish_manifest_v1(
 }
 #[cfg(any(unix, test))]
 fn validate_sealed_head_v1(
-    head: BootleLanternHolderSealedHeadV1,
+    head: &BootleLanternHolderSealedHeadV1,
     vault_id: [u8; 32],
     max_records: usize,
 ) -> Result<HolderManifestV1, BootleLanternHolderStoreErrorV1> {
@@ -2762,7 +2807,7 @@ fn poison_on_integrity_error_v1(
 fn validate_runtime_handle_v1(value: &str) -> Result<(), BootleLanternHolderStoreErrorV1> {
     if value.is_empty()
         || value.len() > HOLDER_KEY_ID_MAX_BYTES_V1
-        || !value.as_bytes().iter().all(|byte| byte.is_ascii_graphic())
+        || !value.as_bytes().iter().all(u8::is_ascii_graphic)
     {
         return Err(BootleLanternHolderStoreErrorV1::ProviderUnqualified);
     }
@@ -2947,7 +2992,7 @@ fn validate_object_namespace_v1(
     let mut has_orphans = false;
     for entry in fs::read_dir(objects_root).map_err(|_| BootleLanternHolderStoreErrorV1::Backend)? {
         let entry = entry.map_err(|_| BootleLanternHolderStoreErrorV1::Backend)?;
-        let (_, digest, envelope) = load_holder_object_entry_v1(entry)?;
+        let (_, digest, envelope) = load_holder_object_entry_v1(&entry)?;
         if let Some(active_entry) = active.get(&digest) {
             validate_envelope_against_entry_v1(&envelope, manifest.vault_id, active_entry)?;
             observed.insert(digest);
@@ -2966,7 +3011,7 @@ fn validate_object_namespace_v1(
 }
 #[cfg(any(unix, test))]
 fn load_holder_object_entry_v1(
-    entry: fs::DirEntry,
+    entry: &fs::DirEntry,
 ) -> Result<(PathBuf, [u8; 32], HolderEnvelopeV1), BootleLanternHolderStoreErrorV1> {
     let path = entry.path();
     let name = entry
@@ -3018,7 +3063,7 @@ fn remove_orphan_holder_objects_v1(
     let mut removed = false;
     for entry in fs::read_dir(objects_root).map_err(|_| BootleLanternHolderStoreErrorV1::Backend)? {
         let entry = entry.map_err(|_| BootleLanternHolderStoreErrorV1::Backend)?;
-        let (path, digest, envelope) = load_holder_object_entry_v1(entry)?;
+        let (path, digest, envelope) = load_holder_object_entry_v1(&entry)?;
         if let Some(active_entry) = active.get(&digest) {
             validate_envelope_against_entry_v1(&envelope, manifest.vault_id, active_entry)?;
             observed.insert(digest);
@@ -3097,7 +3142,7 @@ fn read_regular_bounded_v1(
         if bytes.len() as u64 != path_metadata.len() {
             return Err(BootleLanternHolderStoreErrorV1::Corrupt);
         }
-        return Ok(bytes);
+        Ok(bytes)
     }
     #[cfg(not(unix))]
     {
@@ -3316,7 +3361,7 @@ mod tests {
                 self.state ^= self.state << 13;
                 self.state ^= self.state >> 7;
                 self.state ^= self.state << 17;
-                *byte = self.state as u8;
+                *byte = self.state.to_le_bytes()[0];
             }
             Ok(())
         }
@@ -3361,7 +3406,7 @@ mod tests {
         }
     }
     impl BootleLanternHolderKeyWrapperV1 for TestWrapper {
-        fn handle(&self) -> &str {
+        fn handle(&self) -> &'static str {
             "kms://bootle/holder-primary"
         }
         fn qualification(
@@ -3370,7 +3415,7 @@ mod tests {
         {
             Ok(*self.qualification.lock().unwrap())
         }
-        fn active_key_id(&self) -> &str {
+        fn active_key_id(&self) -> &'static str {
             "kms://bootle/holder-key-1"
         }
         fn wrap_dek(
@@ -3434,7 +3479,7 @@ mod tests {
         }
     }
     impl BootleLanternHolderSealedHeadStoreV1 for TestHeads {
-        fn handle(&self) -> &str {
+        fn handle(&self) -> &'static str {
             "sealed://bootle/holder-head-primary"
         }
         fn qualification(
@@ -3633,9 +3678,11 @@ mod tests {
         let mut authorization_rng = TestRng::healthy(0x1f83_d9ab_fb41_bd6b);
         let authorization = issuer_authorize_blind_issuance_with_rng_v1(
             &issuer,
-            &context,
-            genesis_hash,
-            &policy,
+            crate::privacy_engines::bootle_lantern::issuer::BootleLanternIssuanceContextV1 {
+                context: &context,
+                canonical_genesis_hash: genesis_hash,
+                policy: &policy,
+            },
             digest(0x43),
             10,
             20,
@@ -3678,9 +3725,11 @@ mod tests {
         let mut issuer_rng = TestRng::healthy(0xa54f_f53a_5f1d_36f1);
         let response = issuer_blind_issue_once_encoded_with_rng_v1(
             &issuer,
-            &context,
-            genesis_hash,
-            &policy,
+            crate::privacy_engines::bootle_lantern::issuer::BootleLanternIssuanceContextV1 {
+                context: &context,
+                canonical_genesis_hash: genesis_hash,
+                policy: &policy,
+            },
             &authorization,
             prepared.request_bytes(),
             11,
@@ -4198,7 +4247,12 @@ mod tests {
             (
                 1,
                 digest(1),
-                vec![0; BOOTLE_LANTERN_HOLDER_MAX_MANIFEST_BYTES_V1 as usize + 1],
+                vec![
+                    0;
+                    usize::try_from(BOOTLE_LANTERN_HOLDER_MAX_MANIFEST_BYTES_V1)
+                        .expect("manifest cap fits address space")
+                        + 1
+                ],
             ),
         ] {
             assert!(
@@ -4232,9 +4286,12 @@ mod tests {
             response_digest: [0; 32],
             predecessor_envelope_digest: [0; 32],
             entry_generation: 2,
-            plaintext_len: BOOTLE_LANTERN_HOLDER_PENDING_PLAINTEXT_BYTES_V1 as u32,
-            ciphertext_len: (BOOTLE_LANTERN_HOLDER_PENDING_PLAINTEXT_BYTES_V1
-                + HOLDER_AEAD_TAG_BYTES_V1) as u32,
+            plaintext_len: u32::try_from(BOOTLE_LANTERN_HOLDER_PENDING_PLAINTEXT_BYTES_V1)
+                .expect("pending plaintext bound"),
+            ciphertext_len: u32::try_from(
+                BOOTLE_LANTERN_HOLDER_PENDING_PLAINTEXT_BYTES_V1 + HOLDER_AEAD_TAG_BYTES_V1,
+            )
+            .expect("pending ciphertext bound"),
             key_id_len: 5,
             wrapped_dek_len: 32,
             nonce: [7; 24],

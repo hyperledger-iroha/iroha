@@ -35,6 +35,22 @@ enum Hook {
     PanicWhileMerging,
 }
 
+/// Cancellation and fault-observation controls for one test operation.
+#[derive(Clone, Copy)]
+struct Controls<'a> {
+    cancellation: Option<&'a CancellationToken>,
+    audit: Option<&'a Audit>,
+    hook: Hook,
+}
+
+impl Controls<'_> {
+    const NONE: Self = Self {
+        cancellation: None,
+        audit: None,
+        hook: Hook::None,
+    };
+}
+
 fn task_count(plan: &Plan) -> usize {
     assert!(
         plan.concurrency > 0,
@@ -245,6 +261,11 @@ fn dynamic_msm<C: PastaCurve, const SECRET: bool>(
         windows.zeroize();
     }
     CancellationToken::checkpoint(cancellation)?;
+    // Release scratch only after every buffer and joined task has finished.
+    drop(windows);
+    drop(digits);
+    drop(skip);
+    drop(_scratch);
     Ok(result)
 }
 
@@ -254,10 +275,13 @@ fn execute<C: PastaCurve, const SECRET: bool>(
     bases: &[C::AffineExt],
     original: Plan,
     shared: &SharedMemoryBudget,
-    cancellation: Option<&CancellationToken>,
-    observation: (Option<&Audit>, Hook),
+    controls: Controls<'_>,
 ) -> Result<C, MsmError> {
-    let (audit, hook) = observation;
+    let Controls {
+        cancellation,
+        audit,
+        hook,
+    } = controls;
     task_count(&original);
     let selected = match arm {
         Arm::Current => original,
@@ -289,14 +313,14 @@ fn execute<C: PastaCurve, const SECRET: bool>(
     }
 }
 
-type Inputs<C> = (
-    Zeroizing<Vec<<C as PastaCurve>::ScalarExt>>,
-    Vec<<C as PastaCurve>::AffineExt>,
-    C,
-);
-
 /// Known public generator multiples give an independent exact group oracle.
 /// Only synthetic scalars are secret-mode inputs, and their owner wipes on drop.
+struct Inputs<C: PastaCurve> {
+    scalars: Zeroizing<Vec<C::ScalarExt>>,
+    bases: Vec<C::AffineExt>,
+    expected: C,
+}
+
 fn inputs<C: PastaCurve>(n: usize, bounded: bool, edge_cases: bool) -> Inputs<C> {
     let mut rng = ChaCha20Rng::seed_from_u64(0x7363_6865_6475_6c65);
     let mut scalars = Zeroizing::new(Vec::with_capacity(n));
@@ -333,7 +357,11 @@ fn inputs<C: PastaCurve>(n: usize, bounded: bool, edge_cases: bool) -> Inputs<C>
     }
     let mut bases = vec![C::AffineExt::identity(); n];
     C::batch_normalize(&points, &mut bases);
-    (scalars, bases, C::generator() * *total)
+    Inputs {
+        scalars,
+        bases,
+        expected: C::generator() * *total,
+    }
 }
 
 fn assert_group<C: PastaCurve>(actual: C, expected: C) {
@@ -352,7 +380,11 @@ fn check_modes<C: PastaCurve, const SECRET: bool>(
         .num_threads(workers)
         .build()
         .unwrap();
-    let (scalars, bases, expected) = inputs::<C>(n, bounded, true);
+    let Inputs {
+        scalars,
+        bases,
+        expected,
+    } = inputs::<C>(n, bounded, true);
     let scalar_before = Zeroizing::new(scalars.to_vec());
     let bases_before = bases.clone();
     let original = plan(n, bits, workers, 64 << 20).unwrap();
@@ -376,8 +408,10 @@ fn check_modes<C: PastaCurve, const SECRET: bool>(
                     &bases,
                     original,
                     &shared,
-                    None,
-                    (matches!(arm, Arm::Dynamic).then_some(&audit), Hook::None),
+                    Controls {
+                        audit: matches!(arm, Arm::Dynamic).then_some(&audit),
+                        ..Controls::NONE
+                    },
                 )
                 .unwrap();
                 assert_group(result, expected);
@@ -410,23 +444,15 @@ fn bounded_schedules_handle_point_chunks_and_zero_scalars() {
             .num_threads(4)
             .build()
             .unwrap();
-        let (_, bases, _) = inputs::<C>(65, false, true);
+        let Inputs { bases, .. } = inputs::<C>(65, false, true);
         let scalars = Zeroizing::new(vec![C::ScalarExt::ZERO; bases.len()]);
         let original = plan(scalars.len(), 255, 4, 64 << 20).unwrap();
         pool.install(|| {
             for arm in [Arm::Current, Arm::FineWaves, Arm::Dynamic] {
                 let shared = SharedMemoryBudget::new(original.bytes);
                 assert_group(
-                    execute::<C, true>(
-                        arm,
-                        &scalars,
-                        &bases,
-                        original,
-                        &shared,
-                        None,
-                        (None, Hook::None),
-                    )
-                    .unwrap(),
+                    execute::<C, true>(arm, &scalars, &bases, original, &shared, Controls::NONE)
+                        .unwrap(),
                     C::identity(),
                 );
                 assert_eq!(shared.in_use_bytes(), 0);
@@ -476,7 +502,11 @@ fn bounded_schedules_cancel_unwind_and_retry() {
             .num_threads(4)
             .build()
             .unwrap();
-        let (scalars, bases, expected) = inputs::<C>(65, false, true);
+        let Inputs {
+            scalars,
+            bases,
+            expected,
+        } = inputs::<C>(65, false, true);
         let original = plan(scalars.len(), 255, 4, 64 << 20).unwrap();
         let fine = fine_plan(scalars.len(), original);
         let shared = SharedMemoryBudget::new(original.bytes);
@@ -491,8 +521,10 @@ fn bounded_schedules_cancel_unwind_and_retry() {
                         &bases,
                         original,
                         &shared,
-                        Some(&cancelled),
-                        (None, Hook::None),
+                        Controls {
+                            cancellation: Some(&cancelled),
+                            ..Controls::NONE
+                        },
                     ),
                     Err(MsmError::Cancelled)
                 );
@@ -507,8 +539,11 @@ fn bounded_schedules_cancel_unwind_and_retry() {
                     &bases,
                     original,
                     &shared,
-                    Some(&token),
-                    (Some(&audit), Hook::CancelAfterTask),
+                    Controls {
+                        cancellation: Some(&token),
+                        audit: Some(&audit),
+                        hook: Hook::CancelAfterTask,
+                    },
                 ),
                 Err(MsmError::Cancelled)
             );
@@ -524,8 +559,10 @@ fn bounded_schedules_cancel_unwind_and_retry() {
                     &bases,
                     original,
                     &shared,
-                    Some(&CancellationToken::new()),
-                    (None, Hook::None),
+                    Controls {
+                        cancellation: Some(&CancellationToken::new()),
+                        ..Controls::NONE
+                    },
                 )
                 .unwrap(),
                 expected,
@@ -540,8 +577,11 @@ fn bounded_schedules_cancel_unwind_and_retry() {
                         &bases,
                         original,
                         &shared,
-                        None,
-                        (Some(&audit), hook),
+                        Controls {
+                            audit: Some(&audit),
+                            hook,
+                            ..Controls::NONE
+                        },
                     )
                 }));
                 assert!(result.is_err());
@@ -555,8 +595,10 @@ fn bounded_schedules_cancel_unwind_and_retry() {
                         &bases,
                         original,
                         &shared,
-                        Some(&fresh),
-                        (None, Hook::None),
+                        Controls {
+                            cancellation: Some(&fresh),
+                            ..Controls::NONE
+                        },
                     )
                     .unwrap(),
                     expected,
@@ -586,8 +628,10 @@ fn bounded_schedules_cancel_unwind_and_retry() {
                     &bases,
                     original,
                     &shared,
-                    Some(&CancellationToken::new()),
-                    (None, Hook::None),
+                    Controls {
+                        cancellation: Some(&CancellationToken::new()),
+                        ..Controls::NONE
+                    },
                 )
                 .unwrap(),
                 expected,
@@ -612,7 +656,11 @@ fn bounded_dynamic_nested_workers_join_without_new_admission() {
             .num_threads(4)
             .build()
             .unwrap();
-        let (scalars, bases, expected) = inputs::<C>(65, false, true);
+        let Inputs {
+            scalars,
+            bases,
+            expected,
+        } = inputs::<C>(65, false, true);
         let original = plan(scalars.len(), 255, 4, 64 << 20).unwrap();
         let fine = fine_plan(scalars.len(), original);
         let shared = SharedMemoryBudget::new(2 * original.bytes);
@@ -644,7 +692,11 @@ fn bounded_window_scheduling_component_diagnostic() {
             .num_threads(4)
             .build()
             .unwrap();
-        let (scalars, bases, expected) = inputs::<C>(65536, false, false);
+        let Inputs {
+            scalars,
+            bases,
+            expected,
+        } = inputs::<C>(65536, false, false);
         let scalar_before = Zeroizing::new(scalars.to_vec());
         let bases_before = bases.clone();
         let original = plan(scalars.len(), 255, 4, 64 << 20).unwrap();
@@ -669,12 +721,24 @@ fn bounded_window_scheduling_component_diagnostic() {
         let order = [[0, 1, 2, 3, 3, 2, 1, 0], [1, 0, 3, 2, 2, 3, 0, 1]];
         pool.install(|| {
             for arm in arms {
-                assert_group(execute::<C, true>(arm, &scalars, &bases, original, &shared, None, (None, Hook::None)).unwrap(), expected);
+                assert_group(
+                    execute::<C, true>(arm, &scalars, &bases, original, &shared, Controls::NONE)
+                        .unwrap(),
+                    expected,
+                );
             }
             for (block, sequence) in order.iter().enumerate() {
                 for (position, &index) in sequence.iter().enumerate() {
                     let start = Instant::now();
-                    let actual = execute::<C, true>(arms[index], &scalars, &bases, original, &shared, None, (None, Hook::None)).unwrap();
+                    let actual = execute::<C, true>(
+                        arms[index],
+                        &scalars,
+                        &bases,
+                        original,
+                        &shared,
+                        Controls::NONE,
+                    )
+                    .unwrap();
                     let elapsed_ns = start.elapsed().as_nanos();
                     assert_group(actual, expected);
                     assert_eq!(shared.in_use_bytes(), 0);

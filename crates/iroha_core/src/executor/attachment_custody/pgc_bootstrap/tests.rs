@@ -165,7 +165,7 @@ impl Fixture {
             self.bootstrap.total_supply,
             &self.public_keys,
             &self.balances,
-            TranscriptBindingV1 {
+            &TranscriptBindingV1 {
                 network_id: self.network.as_bytes(),
                 genesis_hash: *self.network.as_bytes(),
                 action_index: index,

@@ -13,13 +13,18 @@ fn expected(opcode: u8, left: u64, right: u64) -> u64 {
     match opcode {
         wide::arithmetic::MUL => left.wrapping_mul(right),
         wide::arithmetic::MULHU => ((u128::from(left) * u128::from(right)) >> 64) as u64,
-        wide::arithmetic::MULHSU => {
-            ((i128::from(u64::cast_signed(left)) * i128::from(right)) >> 64) as u64
-        }
-        wide::arithmetic::MULH => {
-            ((i128::from(u64::cast_signed(left)) * i128::from(u64::cast_signed(right))) >> 64)
-                as u64
-        }
+        wide::arithmetic::MULHSU => u64::from_le_bytes(
+            i128::to_le_bytes((i128::from(u64::cast_signed(left)) * i128::from(right)) >> 64)[..8]
+                .try_into()
+                .expect("low-byte width"),
+        ),
+        wide::arithmetic::MULH => u64::from_le_bytes(
+            i128::to_le_bytes(
+                (i128::from(u64::cast_signed(left)) * i128::from(u64::cast_signed(right))) >> 64,
+            )[..8]
+                .try_into()
+                .expect("low-byte width"),
+        ),
         _ => panic!("multiplication fixture opcode"),
     }
 }

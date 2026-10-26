@@ -225,7 +225,11 @@ impl CanonicalRequestAuthRuntime {
 }
 fn auth_runtime() -> &'static RwLock<CanonicalRequestAuthRuntime> {
     static STATE: OnceLock<RwLock<CanonicalRequestAuthRuntime>> = OnceLock::new();
-    STATE.get_or_init(|| RwLock::new(CanonicalRequestAuthRuntime::new(Default::default())))
+    STATE.get_or_init(|| {
+        RwLock::new(CanonicalRequestAuthRuntime::new(
+            crate::app_auth::CanonicalRequestAuthConfig::default(),
+        ))
+    })
 }
 fn auth_runtime_snapshot() -> (CanonicalRequestAuthConfig, Arc<ReplayCache>) {
     let guard = auth_runtime()
@@ -342,7 +346,8 @@ fn canonical_request_pair_limit_error() -> crate::Error {
     )))
 }
 
-fn canonical_request_capacity_error() -> crate::Error {
+/// Preserve canonical authentication resource refusal as a query-capacity response.
+pub(crate) fn canonical_request_capacity_error() -> crate::Error {
     crate::Error::Query(ValidationFail::QueryFailed(
         QueryExecutionFail::CapacityLimit,
     ))
@@ -1170,10 +1175,14 @@ pub fn canonical_authentication_error(error: crate::Error) -> crate::Error {
     }
 }
 
+// The outer option records whether authorization capture is active; the inner
+// option records whether publication refused the view.
+type CapturedPublicationRelease = Option<Option<iroha_allocation::release::ReleaseWait>>;
+
 thread_local! {
     /// The block publication that refused this thread's authorization view, recorded only while
     /// a caller that can wait for it captures (`Some`); `None` when nobody captures.
-    static PUBLICATION_RELEASE: std::cell::RefCell<Option<Option<iroha_allocation::release::ReleaseWait>>> =
+    static PUBLICATION_RELEASE: std::cell::RefCell<CapturedPublicationRelease> =
         const { std::cell::RefCell::new(None) };
 }
 
@@ -1195,7 +1204,7 @@ pub fn authorization_view_error(error: iroha_core::state::StateViewError) -> cra
 fn capture_publication_release<T>(
     authorize: impl FnOnce() -> T,
 ) -> (T, Option<iroha_allocation::release::ReleaseWait>) {
-    struct Restore(Option<Option<iroha_allocation::release::ReleaseWait>>);
+    struct Restore(CapturedPublicationRelease);
     impl Drop for Restore {
         fn drop(&mut self) {
             let outer = self.0.take();
@@ -1216,7 +1225,8 @@ fn capture_publication_release<T>(
 /// Replay evidence is published only after a successful view, so the same request is authorized
 /// again once that exact publication releases, until `wait` elapses. After the deadline, or when
 /// no waiter registration fits `waiters`, the original capacity refusal is returned unchanged.
-pub(crate) async fn authorize_after_publication<T>(
+#[cfg(test)]
+pub async fn authorize_after_publication<T>(
     waiters: &iroha_core::state::AllocationBudget,
     wait: std::time::Duration,
     authorize: impl FnMut() -> Result<T, crate::Error>,
@@ -1226,9 +1236,9 @@ pub(crate) async fn authorize_after_publication<T>(
         .0
 }
 
-/// [`authorize_after_publication`], also reporting whether its final refusal came from a
+/// Authorize after publication, reporting whether its final refusal came from a
 /// block publication (`true`) rather than from the request or its owner's limits.
-pub(crate) async fn authorize_after_publication_outcome<T>(
+pub async fn authorize_after_publication_outcome<T>(
     waiters: &iroha_core::state::AllocationBudget,
     wait: std::time::Duration,
     mut authorize: impl FnMut() -> Result<T, crate::Error>,
@@ -1394,10 +1404,8 @@ pub fn decode_bounded_canonical_base64_value(
     }
     let padding = if encoded.ends_with("==") {
         2
-    } else if encoded.ends_with('=') {
-        1
     } else {
-        0
+        usize::from(encoded.ends_with('='))
     };
     let Some(decoded_bytes) = encoded
         .len()
@@ -1693,11 +1701,27 @@ fn validate_expected_account(
     }
     Ok(())
 }
+/// Proof that this exact HTTP operation already published its replay evidence.
+///
+/// This capability retains no decoded identity or signer list. Its fields are private and it
+/// is minted only after successful replay insertion; it never replaces credential verification.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct CanonicalRequestReplayAdmission {
+    request_binding: Hash,
+    replay_key: Hash,
+}
+
+struct CanonicalRequestReplayContext<'a> {
+    request_binding: Hash,
+    admission: &'a mut Option<CanonicalRequestReplayAdmission>,
+}
+
 fn check_replay(
     account: &AccountId,
     nonce: &str,
     replay_cache: &ReplayCache,
     minimum_ttl: Duration,
+    replay: Option<&mut CanonicalRequestReplayContext<'_>>,
 ) -> Result<(), crate::Error> {
     const DOMAIN: &[u8] = b"iroha:app-auth:replay:v1\0";
     let replay_key = Hash::new_from_writer(|mut writer| {
@@ -1711,6 +1735,13 @@ fn check_replay(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
         ))
     })?;
+    if replay.as_ref().is_some_and(|context| {
+        context.admission.as_ref().is_some_and(|admitted| {
+            admitted.request_binding == context.request_binding && admitted.replay_key == replay_key
+        })
+    }) {
+        return Ok(());
+    }
     match replay_cache.check_and_insert_digest_with_minimum_ttl(replay_key, minimum_ttl) {
         Ok(()) => Ok(()),
         Err(ReplayInsertError::Replay) => Err(crate::Error::Query(ValidationFail::NotPermitted(
@@ -1721,7 +1752,14 @@ fn check_replay(
                 iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
             )))
         }
+    }?;
+    if let Some(context) = replay {
+        *context.admission = Some(CanonicalRequestReplayAdmission {
+            request_binding: context.request_binding,
+            replay_key,
+        });
     }
+    Ok(())
 }
 
 fn finish_verified_canonical_request(
@@ -1731,12 +1769,13 @@ fn finish_verified_canonical_request(
     nonce: &str,
     replay_cache: &ReplayCache,
     minimum_ttl: Duration,
+    replay: Option<&mut CanonicalRequestReplayContext<'_>>,
 ) -> Result<VerifiedCanonicalRequest, crate::Error> {
     // Every source-sized clone and container reservation is complete before
     // this call. Publishing replay evidence is therefore the final fallible
     // admission step and cannot burn a valid nonce for a result-allocation
     // failure.
-    check_replay(&account, nonce, replay_cache, minimum_ttl)?;
+    check_replay(&account, nonce, replay_cache, minimum_ttl, replay)?;
     Ok(VerifiedCanonicalRequest {
         account,
         signer,
@@ -1748,7 +1787,7 @@ fn finish_verified_canonical_request(
 pub fn validate_iter_query_for_authority<Q>(
     state: &Arc<CoreState>,
     authority: &AccountId,
-    query: Q,
+    query: &Q,
 ) -> Result<(), crate::Error>
 where
     Q: Query + 'static,
@@ -1764,7 +1803,7 @@ where
     };
     let iter = QueryWithParams {
         query: (),
-        query_payload: norito::codec::Encode::encode(&query),
+        query_payload: norito::codec::Encode::encode(query),
         item: query.query_item_kind(),
         predicate_bytes: norito::codec::Encode::encode(&CompoundPredicate::<Q::Item>::PASS),
         selector_bytes: norito::codec::Encode::encode(&SelectorTuple::<Q::Item>::default()),
@@ -1831,6 +1870,7 @@ pub fn verify_canonical_body_request(
                     auth.nonce,
                     &replay_cache,
                     auth_config.nonce_ttl,
+                    None,
                 )
             }
         }
@@ -1857,6 +1897,7 @@ pub fn verify_canonical_request(
         expected_account,
         state.network_id_ref(),
         context,
+        None,
     )
 }
 /// Borrowed HTTP target and exact body authenticated as one canonical request.
@@ -1895,8 +1936,90 @@ pub fn verify_canonical_network_request(
         expected_account,
         network_id,
         context,
+        None,
     )
 }
+
+/// Reverify an internally retried HTTP operation while retaining only its replay admission.
+/// External callers use [`verify_canonical_network_request`] and never receive this capability.
+pub(crate) fn verify_canonical_network_request_with_replay_admission(
+    state: &Arc<CoreState>,
+    network_id: &NetworkId,
+    headers: &HeaderMap,
+    request: CanonicalRequestParts<'_>,
+    context: &norito::core::DecodeBudgetContext,
+    admission: &mut Option<CanonicalRequestReplayAdmission>,
+) -> Result<Option<VerifiedCanonicalRequest>, crate::Error> {
+    if network_id != state.network_id_ref() {
+        return Err(crate::Error::Query(ValidationFail::NotPermitted(
+            "request verifier NetworkId does not match Core state".to_owned(),
+        )));
+    }
+    let request_binding = canonical_request_replay_binding(network_id, headers, request)?;
+    verify_canonical_request_for_network(
+        state,
+        headers,
+        request,
+        None,
+        network_id,
+        context,
+        Some(&mut CanonicalRequestReplayContext {
+            request_binding,
+            admission,
+        }),
+    )
+}
+
+/// Hash exact inputs without retaining a request-sized concatenation. Length prefixes also
+/// distinguish absent, repeated and empty headers; malformed inputs still fail normal verification.
+fn canonical_request_replay_binding(
+    network_id: &NetworkId,
+    headers: &HeaderMap,
+    CanonicalRequestParts { method, uri, body }: CanonicalRequestParts<'_>,
+) -> Result<Hash, crate::Error> {
+    fn field(writer: &mut dyn std::io::Write, bytes: &[u8]) -> std::io::Result<()> {
+        let length = u64::try_from(bytes.len()).map_err(std::io::Error::other)?;
+        writer.write_all(&length.to_le_bytes())?;
+        writer.write_all(bytes)
+    }
+    Hash::new_from_writer(|mut writer| {
+        writer.write_all(b"iroha:app-auth:http-replay-admission:v1\0")?;
+        norito::core::write_canonical_to_writer(network_id, &mut writer)
+            .map_err(std::io::Error::other)?;
+        field(writer, method.as_str().as_bytes())?;
+        field(writer, uri.scheme_str().unwrap_or_default().as_bytes())?;
+        field(
+            writer,
+            uri.authority()
+                .map_or("", |value| value.as_str())
+                .as_bytes(),
+        )?;
+        field(
+            writer,
+            uri.path_and_query()
+                .map_or_else(|| uri.path(), |value| value.as_str())
+                .as_bytes(),
+        )?;
+        field(writer, body)?;
+        for name in [
+            HEADER_ACCOUNT,
+            HEADER_SIGNATURE,
+            HEADER_TIMESTAMP_MS,
+            HEADER_NONCE,
+            HEADER_WITNESS,
+        ] {
+            let values = headers.get_all(name);
+            let count = u64::try_from(values.iter().count()).map_err(std::io::Error::other)?;
+            writer.write_all(&count.to_le_bytes())?;
+            for value in values.iter() {
+                field(writer, value.as_bytes())?;
+            }
+        }
+        Ok(())
+    })
+    .map_err(|_| canonical_request_capacity_error())
+}
+
 fn verify_canonical_request_for_network(
     state: &Arc<CoreState>,
     headers: &HeaderMap,
@@ -1904,6 +2027,7 @@ fn verify_canonical_request_for_network(
     expected_account: Option<&AccountId>,
     network_id: &NetworkId,
     context: &norito::core::DecodeBudgetContext,
+    replay: Option<&mut CanonicalRequestReplayContext<'_>>,
 ) -> Result<Option<VerifiedCanonicalRequest>, crate::Error> {
     context.with(|| {
 
@@ -1992,6 +2116,7 @@ fn verify_canonical_request_for_network(
             &witness.nonce,
             &replay_cache,
             auth_config.nonce_ttl,
+            replay,
         )?));
     }
     if account_hdr.is_none()
@@ -2067,6 +2192,7 @@ fn verify_canonical_request_for_network(
         nonce,
         &replay_cache,
         auth_config.nonce_ttl,
+        replay,
     )?))
 
     })
@@ -2095,6 +2221,7 @@ pub fn verify_fee_quote_canonical_request(
             None,
             state.network_id_ref(),
             context,
+            None,
         ) {
             Ok(verified) => return Ok(verified),
             Err(error) => error,
@@ -2178,6 +2305,7 @@ pub fn verify_fee_quote_canonical_request(
             nonce,
             &replay_cache,
             auth_config.nonce_ttl,
+            None,
         )?))
     })
 }
@@ -2571,12 +2699,14 @@ mod tests {
         Signature::try_new(private_key, payload).expect("test fixture signing should succeed")
     }
     fn noncanonical_standard_base64_pad_bit_alias(encoded: &str) -> String {
+        const ALPHABET: &[u8; 64] =
+            b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
         assert!(
             encoded.ends_with("=="),
             "64-byte signatures encode with == padding"
         );
-        const ALPHABET: &[u8; 64] =
-            b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
         let mut bytes = encoded.as_bytes().to_vec();
         let index = bytes.len() - 3;
         let value = ALPHABET
@@ -2604,7 +2734,7 @@ mod tests {
         let query = iroha_data_model::query::escrow::prelude::FindAssetEscrowsBySeller {
             seller: ALICE_ID.clone(),
         };
-        validate_iter_query_for_authority(&state, &ALICE_ID, query)
+        validate_iter_query_for_authority(&state, &ALICE_ID, &(query))
             .expect("the seller-specific tag must retain same-account query authorization");
     }
     #[test]
@@ -3145,6 +3275,11 @@ mod tests {
 
     #[test]
     fn bounded_witness_frame_identity_matches_original_observations() {
+        fn typed_contract<T: norito::NoritoSerialize + for<'de> norito::NoritoDeserialize<'de>>()
+        -> [u8; 16] {
+            norito::schema::identity::frame_hash::<T>()
+        }
+
         use norito::NoritoSchema as _;
         let source =
             include_str!("../tests/fixtures/bounded_request_witness_frame_identity.v1.json");
@@ -3162,10 +3297,7 @@ mod tests {
             BoundedCanonicalRequestWitnessV1::frame_name(),
             fixture["root_nominal"].as_str().unwrap()
         );
-        fn typed_contract<T: norito::NoritoSerialize + for<'de> norito::NoritoDeserialize<'de>>()
-        -> [u8; 16] {
-            norito::schema::identity::frame_hash::<T>()
-        }
+
         let hash = typed_contract::<BoundedCanonicalRequestWitnessV1>();
         for direction in [
             "serialize_hash",
@@ -4328,21 +4460,220 @@ mod tests {
         }
     }
     #[test]
+    fn internal_replay_admission_is_exact_and_never_replaces_verification() {
+        let _guard = test_guard(CanonicalRequestAuthConfig::default());
+        let key_pair = checked_app_auth_key_fixture();
+        let account = AccountId::new(key_pair.public_key().clone());
+        let state = minimal_state_with_account(&account);
+        let method = Method::POST;
+        let uri: Uri = "/v1/accounts/query?limit=500".parse().unwrap();
+        let body = br#"{"limit":500}"#;
+        const NONCE: &str = "internal-replay-exact-request";
+        let headers = signed_headers_for_test(
+            state.network_id_ref(),
+            &account,
+            &key_pair,
+            &method,
+            &uri,
+            body,
+            NONCE,
+        );
+        let request = CanonicalRequestParts {
+            method: &method,
+            uri: &uri,
+            body,
+        };
+        let mut admission = None;
+        let mut invalid_headers = headers.clone();
+        invalid_headers.insert(HEADER_SIGNATURE, "invalid".parse().unwrap());
+        verify_canonical_network_request_with_replay_admission(
+            &state,
+            state.network_id_ref(),
+            &invalid_headers,
+            request,
+            &standalone_auth_context(),
+            &mut admission,
+        )
+        .expect_err("failed credentials never create a replay capability");
+        assert!(admission.is_none());
+        for _ in 0..2 {
+            let verified = verify_canonical_network_request_with_replay_admission(
+                &state,
+                state.network_id_ref(),
+                &headers,
+                request,
+                &standalone_auth_context(),
+                &mut admission,
+            )
+            .expect("same internal operation can authenticate each attempt")
+            .unwrap();
+            assert_eq!(verified.account, account);
+        }
+        assert!(admission.is_some());
+        let assert_replay = |error| {
+            assert!(matches!(error,
+            crate::Error::Query(ValidationFail::NotPermitted(message))
+                if message == "request nonce already used"))
+        };
+        assert_replay(
+            verify_canonical_network_request(
+                &state,
+                state.network_id_ref(),
+                &headers,
+                request,
+                None,
+                &standalone_auth_context(),
+            )
+            .expect_err("a separate HTTP operation cannot reuse the capability"),
+        );
+        for (changed_method, changed_uri, changed_body) in [
+            (Method::POST, uri.clone(), br#"{"limit":1}"#.as_slice()),
+            (Method::GET, uri.clone(), body.as_slice()),
+            (
+                Method::POST,
+                "/v1/accounts/query?limit=1".parse().unwrap(),
+                body.as_slice(),
+            ),
+        ] {
+            let changed_headers = signed_headers_for_test(
+                state.network_id_ref(),
+                &account,
+                &key_pair,
+                &changed_method,
+                &changed_uri,
+                changed_body,
+                NONCE,
+            );
+            assert_replay(
+                verify_canonical_network_request_with_replay_admission(
+                    &state,
+                    state.network_id_ref(),
+                    &changed_headers,
+                    CanonicalRequestParts {
+                        method: &changed_method,
+                        uri: &changed_uri,
+                        body: changed_body,
+                    },
+                    &standalone_auth_context(),
+                    &mut admission,
+                )
+                .expect_err("new valid credentials for a changed request cannot reuse the nonce"),
+            );
+        }
+        // Only timestamp/signature headers change; the target and body stay identical.
+        let timestamp_ms = headers[HEADER_TIMESTAMP_MS]
+            .to_str()
+            .unwrap()
+            .parse::<u64>()
+            .unwrap()
+            + 1;
+        let message = canonical_network_request_signature_message(
+            state.network_id_ref(),
+            &method,
+            &uri,
+            body,
+            timestamp_ms,
+            NONCE,
+        )
+        .unwrap();
+        let mut changed_headers = headers.clone();
+        changed_headers.insert(
+            HEADER_TIMESTAMP_MS,
+            timestamp_ms.to_string().parse().unwrap(),
+        );
+        changed_headers.insert(
+            HEADER_SIGNATURE,
+            signature_header_value(&checked_signature(key_pair.private_key(), &message))
+                .unwrap()
+                .parse()
+                .unwrap(),
+        );
+        assert_replay(
+            verify_canonical_network_request_with_replay_admission(
+                &state,
+                state.network_id_ref(),
+                &changed_headers,
+                request,
+                &standalone_auth_context(),
+                &mut admission,
+            )
+            .expect_err("valid changed auth headers cannot reuse the nonce"),
+        );
+        let missing = minimal_state_without_accounts_for_network(state.network_id_ref().clone());
+        let missing_error = verify_canonical_network_request_with_replay_admission(
+            &missing,
+            missing.network_id_ref(),
+            &headers,
+            request,
+            &standalone_auth_context(),
+            &mut admission,
+        )
+        .expect_err("an exact capability cannot bypass current account authorization");
+        assert_missing_account_rejection(missing_error);
+
+        // An already-used nonce of another valid account cannot borrow this admission.
+        let other_key = checked_app_auth_key_fixture();
+        let other_account = AccountId::new(other_key.public_key().clone());
+        let other_state = minimal_state_with_account_and_network_id(
+            &other_account,
+            state.network_id_ref().clone(),
+        );
+        let other_headers = signed_headers_for_test(
+            other_state.network_id_ref(),
+            &other_account,
+            &other_key,
+            &method,
+            &uri,
+            body,
+            NONCE,
+        );
+        verify_canonical_network_request(
+            &other_state,
+            other_state.network_id_ref(),
+            &other_headers,
+            request,
+            None,
+            &standalone_auth_context(),
+        )
+        .expect("other account's first independent request");
+        assert_replay(
+            verify_canonical_network_request_with_replay_admission(
+                &other_state,
+                other_state.network_id_ref(),
+                &other_headers,
+                request,
+                &standalone_auth_context(),
+                &mut admission,
+            )
+            .expect_err("capabilities cannot cross accounts"),
+        );
+        verify_canonical_network_request_with_replay_admission(
+            &state,
+            state.network_id_ref(),
+            &headers,
+            request,
+            &standalone_auth_context(),
+            &mut admission,
+        )
+        .expect("rejected changes leave the original capability intact");
+    }
+
+    #[test]
     fn replay_cache_capacity_fails_closed_without_evicting_live_nonces() {
         let cache = ReplayCache::new(Duration::from_secs(300), nonzero!(2_usize));
         let account = ALICE_ID.clone();
         let ttl = Duration::from_secs(300);
-        check_replay(&account, "protected-a", &cache, ttl).expect("first nonce");
-        check_replay(&account, "protected-b", &cache, ttl).expect("second nonce");
-        let saturated =
-            check_replay(&account, "overflow", &cache, ttl).expect_err("full cache must reject");
+        check_replay(&account, "protected-a", &cache, ttl, None).expect("first nonce");
+        check_replay(&account, "protected-b", &cache, ttl, None).expect("second nonce");
+        let saturated = check_replay(&account, "overflow", &cache, ttl, None)
+            .expect_err("full cache must reject");
         assert!(matches!(
             saturated,
             crate::Error::Query(ValidationFail::QueryFailed(
                 iroha_data_model::query::error::QueryExecutionFail::CapacityLimit
             ))
         ));
-        let replay = check_replay(&account, "protected-a", &cache, ttl)
+        let replay = check_replay(&account, "protected-a", &cache, ttl, None)
             .expect_err("capacity pressure must preserve the first nonce");
         match replay {
             crate::Error::Query(ValidationFail::NotPermitted(message)) => {

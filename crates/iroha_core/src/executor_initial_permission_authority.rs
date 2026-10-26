@@ -1237,9 +1237,9 @@ fn validate_initial_permission_or_role_mutation(
 fn initial_authority_has_exact_permission(
     state_transaction: &StateTransaction<'_, '_>,
     authority: &AccountId,
-    permission: Permission,
+    permission: &Permission,
 ) -> Result<bool, ValidationFail> {
-    authority_has_permission(&state_transaction.world, authority, &permission)
+    authority_has_permission(&state_transaction.world, authority, permission)
 }
 fn can_unregister_domain_initial(
     state_transaction: &StateTransaction<'_, '_>,
@@ -1252,10 +1252,10 @@ fn can_unregister_domain_initial(
     initial_authority_has_exact_permission(
         state_transaction,
         authority,
-        executor_permission::domain::CanUnregisterDomain {
+        &(executor_permission::domain::CanUnregisterDomain {
             domain: domain.clone(),
         }
-        .into(),
+        .into()),
     )
 }
 fn can_modify_domain_metadata_initial(
@@ -1269,10 +1269,10 @@ fn can_modify_domain_metadata_initial(
     initial_authority_has_exact_permission(
         state_transaction,
         authority,
-        executor_permission::domain::CanModifyDomainMetadata {
+        &(executor_permission::domain::CanModifyDomainMetadata {
             domain: domain.clone(),
         }
-        .into(),
+        .into()),
     )
 }
 fn can_unregister_account_initial(
@@ -1286,10 +1286,10 @@ fn can_unregister_account_initial(
     initial_authority_has_exact_permission(
         state_transaction,
         authority,
-        executor_permission::account::CanUnregisterAccount {
+        &(executor_permission::account::CanUnregisterAccount {
             account: account.clone(),
         }
-        .into(),
+        .into()),
     )
 }
 fn can_replace_account_controller_initial(
@@ -1303,10 +1303,10 @@ fn can_replace_account_controller_initial(
     initial_authority_has_exact_permission(
         state_transaction,
         authority,
-        executor_permission::account::CanReplaceAccountController {
+        &(executor_permission::account::CanReplaceAccountController {
             account: account.clone(),
         }
-        .into(),
+        .into()),
     )
 }
 fn initial_accounts_share_active_lineage(
@@ -1351,10 +1351,10 @@ fn can_unregister_asset_definition_initial(
     initial_authority_has_exact_permission(
         state_transaction,
         authority,
-        executor_permission::asset_definition::CanUnregisterAssetDefinition {
+        &(executor_permission::asset_definition::CanUnregisterAssetDefinition {
             asset_definition: asset_definition.clone(),
         }
-        .into(),
+        .into()),
     )
 }
 fn can_register_nft_initial(
@@ -1368,10 +1368,10 @@ fn can_register_nft_initial(
     initial_authority_has_exact_permission(
         state_transaction,
         authority,
-        executor_permission::nft::CanRegisterNft {
+        &(executor_permission::nft::CanRegisterNft {
             domain: domain.clone(),
         }
-        .into(),
+        .into()),
     )
 }
 fn can_unregister_nft_initial(
@@ -1385,7 +1385,7 @@ fn can_unregister_nft_initial(
     initial_authority_has_exact_permission(
         state_transaction,
         authority,
-        executor_permission::nft::CanUnregisterNft { nft: nft.clone() }.into(),
+        &(executor_permission::nft::CanUnregisterNft { nft: nft.clone() }.into()),
     )
 }
 fn can_modify_nft_metadata_initial(
@@ -1399,7 +1399,7 @@ fn can_modify_nft_metadata_initial(
     initial_authority_has_exact_permission(
         state_transaction,
         authority,
-        executor_permission::nft::CanModifyNftMetadata { nft: nft.clone() }.into(),
+        &(executor_permission::nft::CanModifyNftMetadata { nft: nft.clone() }.into()),
     )
 }
 fn can_modify_trigger_initial(
@@ -1413,10 +1413,10 @@ fn can_modify_trigger_initial(
     initial_authority_has_exact_permission(
         state_transaction,
         authority,
-        executor_permission::trigger::CanModifyTrigger {
+        &(executor_permission::trigger::CanModifyTrigger {
             trigger: trigger.clone(),
         }
-        .into(),
+        .into()),
     )
 }
 fn can_unregister_trigger_initial(
@@ -1430,10 +1430,10 @@ fn can_unregister_trigger_initial(
     initial_authority_has_exact_permission(
         state_transaction,
         authority,
-        executor_permission::trigger::CanUnregisterTrigger {
+        &(executor_permission::trigger::CanUnregisterTrigger {
             trigger: trigger.clone(),
         }
-        .into(),
+        .into()),
     )
 }
 fn can_execute_trigger_initial(
@@ -1447,10 +1447,10 @@ fn can_execute_trigger_initial(
     initial_authority_has_exact_permission(
         state_transaction,
         authority,
-        executor_permission::trigger::CanExecuteTrigger {
+        &(executor_permission::trigger::CanExecuteTrigger {
             trigger: trigger.clone(),
         }
-        .into(),
+        .into()),
     )
 }
 fn can_modify_trigger_metadata_initial(
@@ -1464,10 +1464,10 @@ fn can_modify_trigger_metadata_initial(
     initial_authority_has_exact_permission(
         state_transaction,
         authority,
-        executor_permission::trigger::CanModifyTriggerMetadata {
+        &(executor_permission::trigger::CanModifyTriggerMetadata {
             trigger: trigger.clone(),
         }
-        .into(),
+        .into()),
     )
 }
 fn can_burn_asset_initial(
@@ -1490,10 +1490,10 @@ fn can_burn_asset_initial(
     initial_authority_has_exact_permission(
         state_transaction,
         authority,
-        executor_permission::asset::CanBurnAssetWithDefinition {
+        &(executor_permission::asset::CanBurnAssetWithDefinition {
             asset_definition: asset.definition().clone(),
         }
-        .into(),
+        .into()),
     )
 }
 fn can_modify_asset_metadata_initial(
@@ -1516,10 +1516,10 @@ fn can_modify_asset_metadata_initial(
     initial_authority_has_exact_permission(
         state_transaction,
         authority,
-        executor_permission::asset::CanModifyAssetMetadataWithDefinition {
+        &(executor_permission::asset::CanModifyAssetMetadataWithDefinition {
             asset_definition: asset.definition().clone(),
         }
-        .into(),
+        .into()),
     )
 }
 fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBox) -> bool {
@@ -1869,8 +1869,11 @@ fn validate_initial_native_instruction_authority(
         let permission = executor_permission::sorafs::CanManageSorafsStreamTokenCustody {
             provider_id: mutation.provider_id,
         };
-        if initial_authority_has_exact_permission(state_transaction, authority, permission.into())?
-        {
+        if initial_authority_has_exact_permission(
+            state_transaction,
+            authority,
+            &(permission.into()),
+        )? {
             return Ok(());
         }
         return deny("Exact provider-scoped stream-token custody permission is required");
@@ -1908,7 +1911,7 @@ fn validate_initial_native_instruction_authority(
                 .into()
             }
         };
-        if initial_authority_has_exact_permission(state_transaction, authority, permission)? {
+        if initial_authority_has_exact_permission(state_transaction, authority, &(permission))? {
             return Ok(());
         }
         return deny("Exact deployment-scoped final-promotion action permission is required");
@@ -1938,7 +1941,7 @@ fn validate_initial_native_instruction_authority(
                 .into()
             }
         };
-        if initial_authority_has_exact_permission(state_transaction, authority, permission)? {
+        if initial_authority_has_exact_permission(state_transaction, authority, &(permission))? {
             return Ok(());
         }
         return deny("Exact deployment-scoped account-custody action permission is required");
@@ -1995,7 +1998,7 @@ fn validate_initial_native_instruction_authority(
                 || initial_authority_has_exact_permission(
                     state_transaction,
                     authority,
-                    executor_permission::parameter::CanSetHijiriParameters.into(),
+                    &(executor_permission::parameter::CanSetHijiriParameters.into()),
                 )?
             {
                 return Ok(());
@@ -2017,7 +2020,7 @@ fn validate_initial_native_instruction_authority(
             || initial_authority_has_exact_permission(
                 state_transaction,
                 authority,
-                executor_permission::parameter::CanSetParameters.into(),
+                &(executor_permission::parameter::CanSetParameters.into()),
             )?
         {
             return Ok(());
@@ -2032,7 +2035,7 @@ fn validate_initial_native_instruction_authority(
             || initial_authority_has_exact_permission(
                 state_transaction,
                 authority,
-                executor_permission::executor::CanUpgradeExecutor.into(),
+                &(executor_permission::executor::CanUpgradeExecutor.into()),
             )?
         {
             return Ok(());
@@ -2080,7 +2083,7 @@ fn validate_initial_native_instruction_authority(
         && !initial_authority_has_exact_permission(
             state_transaction,
             authority,
-            executor_permission::peer::CanManagePeers.into(),
+            &(executor_permission::peer::CanManagePeers.into()),
         )?
     {
         return deny("peer registration requires CanManagePeers");
@@ -2095,10 +2098,13 @@ fn validate_initial_native_instruction_authority(
                     || initial_authority_has_exact_permission(
                         state_transaction,
                         authority,
-                        executor_permission::peer::CanManagePeers.into(),
+                        &(executor_permission::peer::CanManagePeers.into()),
                     )?
             }
-            RegisterBox::Domain(_) => true,
+            RegisterBox::Domain(_)
+            | RegisterBox::AssetDefinition(_)
+            | RegisterBox::Role(_)
+            | RegisterBox::Trigger(_) => true,
             RegisterBox::Nft(register) => can_register_nft_initial(
                 state_transaction,
                 authority,
@@ -2115,9 +2121,6 @@ fn validate_initial_native_instruction_authority(
                 {
                     return deny("account registration cannot seed reserved native metadata");
                 }
-                true
-            }
-            RegisterBox::AssetDefinition(_) | RegisterBox::Role(_) | RegisterBox::Trigger(_) => {
                 true
             }
         };
@@ -2147,7 +2150,7 @@ fn validate_initial_native_instruction_authority(
                     || initial_authority_has_exact_permission(
                         state_transaction,
                         authority,
-                        executor_permission::peer::CanManagePeers.into(),
+                        &(executor_permission::peer::CanManagePeers.into()),
                     )?
             }
             UnregisterBox::Domain(unregister) => {
@@ -2348,14 +2351,14 @@ fn validate_initial_native_instruction_authority(
     }
     let recovery_account = any
         .downcast_ref::<iroha_data_model::isi::ReplaceAccountController>()
-        .map(|instruction| instruction.account())
+        .map(iroha_data_model::isi::ReplaceAccountController::account)
         .or_else(|| {
             any.downcast_ref::<iroha_data_model::isi::SetAccountRecoveryPolicy>()
-                .map(|instruction| instruction.account())
+                .map(iroha_data_model::isi::SetAccountRecoveryPolicy::account)
         })
         .or_else(|| {
             any.downcast_ref::<iroha_data_model::isi::ClearAccountRecoveryPolicy>()
-                .map(|instruction| instruction.account())
+                .map(iroha_data_model::isi::ClearAccountRecoveryPolicy::account)
         });
     if let Some(account) = recovery_account
         && !is_genesis

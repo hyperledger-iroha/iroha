@@ -15,7 +15,7 @@ use super::ordinary_predicate_json_value;
 
 /// Resolve a non-empty dotted object path; empty paths and empty segments never match.
 #[inline]
-pub(crate) fn predicate_value_at_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
+pub fn predicate_value_at_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
     if path.is_empty() {
         return None;
     }
@@ -34,13 +34,13 @@ pub(crate) fn predicate_value_at_path<'a>(value: &'a Value, path: &str) -> Optio
 
 /// Whether `value` is the JSON string `expected`.
 #[inline]
-pub(crate) fn predicate_value_equals_str(value: &Value, expected: &str) -> bool {
+pub fn predicate_value_equals_str(value: &Value, expected: &str) -> bool {
     matches!(value, Value::String(raw) if raw == expected)
 }
 
 /// Whether `values` contains the JSON string `expected`.
 #[inline]
-pub(crate) fn predicate_values_contain_str(values: &[Value], expected: &str) -> bool {
+pub fn predicate_values_contain_str(values: &[Value], expected: &str) -> bool {
     values
         .iter()
         .any(|value| predicate_value_equals_str(value, expected))
@@ -49,7 +49,7 @@ pub(crate) fn predicate_values_contain_str(values: &[Value], expected: &str) -> 
 /// Parse a domain filter value as a fully-qualified domain, or as a name in the universal
 /// dataspace.
 #[inline]
-pub(crate) fn parse_domain_predicate_value(raw: &str) -> Option<DomainId> {
+pub fn parse_domain_predicate_value(raw: &str) -> Option<DomainId> {
     DomainId::parse_fully_qualified(raw)
         .ok()
         .or_else(|| DomainId::try_new(raw, "universal").ok())
@@ -58,10 +58,7 @@ pub(crate) fn parse_domain_predicate_value(raw: &str) -> Option<DomainId> {
 /// Narrow the best candidate-id set to its intersection with `candidates`; the first
 /// constraint seeds the set.
 #[inline]
-pub(crate) fn intersect_candidate_ids<T: Ord>(
-    best: &mut Option<BTreeSet<T>>,
-    candidates: BTreeSet<T>,
-) {
+pub fn intersect_candidate_ids<T: Ord>(best: &mut Option<BTreeSet<T>>, candidates: BTreeSet<T>) {
     if let Some(current) = best {
         current.retain(|id| candidates.contains(id));
     } else {
@@ -71,7 +68,7 @@ pub(crate) fn intersect_candidate_ids<T: Ord>(
 
 /// Project `item` to JSON on first use and borrow the cached projection.
 #[inline]
-pub(crate) fn cached_predicate_json_value<'a, T: JsonSerialize + ?Sized>(
+pub fn cached_predicate_json_value<'a, T: JsonSerialize + ?Sized>(
     cache: &'a mut Option<Value>,
     item: &T,
 ) -> Option<&'a Value> {
@@ -87,7 +84,7 @@ pub(crate) fn cached_predicate_json_value<'a, T: JsonSerialize + ?Sized>(
 /// decides the condition without projecting the item. Other fields are read from
 /// the item's JSON projection; an item without a projection skips those
 /// conditions, while a missing path fails `equals`/`in` and `exists`.
-pub(crate) fn predicate_matches_with_aliases<T: JsonSerialize + ?Sized>(
+pub fn predicate_matches_with_aliases<T: JsonSerialize + ?Sized>(
     predicate: &PredicateJson,
     item: &T,
     aliases: impl Fn(&T, &str) -> Vec<String>,

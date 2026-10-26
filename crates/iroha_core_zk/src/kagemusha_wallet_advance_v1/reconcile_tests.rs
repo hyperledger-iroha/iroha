@@ -309,11 +309,11 @@ fn wallet_advance_v1_reconcile_released_record_loss_never_signs_again() {
         let cause = KagemushaWalletProviderErrorV1::LostCustody(
             KagemushaWalletLostCustodyV1::CompletionLost,
         );
-        let lost = Err(cause);
-        assert_eq!(provider.status(&slot), lost, "{damage}");
+        let expected_loss = Err(cause);
+        assert_eq!(provider.status(&slot), expected_loss, "{damage}");
         assert_eq!(
             provider.reconcile(&slot, &TestOwnerV1),
-            lost,
+            expected_loss,
             "{damage}: even with an owner"
         );
         assert_eq!(

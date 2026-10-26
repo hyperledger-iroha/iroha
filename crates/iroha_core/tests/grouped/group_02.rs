@@ -1,5 +1,12 @@
 //! Grouped Iroha Core integration tests.
 
+#[cfg(feature = "zk-tests")]
+#[path = "../common/governance_closed_registry.rs"]
+mod closed_registry;
+#[cfg(feature = "zk-tests")]
+#[path = "../common/governance_closed_state.rs"]
+mod closed_state;
+
 #[path = "../gov_min_duration.rs"]
 mod gov_min_duration;
 #[path = "../gov_plain_ballot.rs"]

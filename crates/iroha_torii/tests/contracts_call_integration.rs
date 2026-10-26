@@ -672,7 +672,7 @@ async fn run_contract_view_response_in_test_overlay(
     // public routed-read authority; this fixture intentionally has no certified committee.
     let request = json::from_str(&body).expect("view DTO");
     let (status, bytes) =
-        iroha_torii::handle_post_contract_view(app.state.clone(), iroha_torii::NoritoJson(request))
+        iroha_torii::handle_post_contract_view(&(app.state), iroha_torii::NoritoJson(request))
             .expect("local contract view");
     (
         status,
@@ -722,7 +722,7 @@ async fn contracts_call_prepares_exact_payload_and_requires_durable_admission() 
     assert_eq!(applied_deploy, 1);
     let missing_limit_payload = iroha_torii::json_object(vec![
         iroha_torii::json_entry("entrypoint", "main"),
-        iroha_torii::json_entry("authority", creds.account.clone()),
+        iroha_torii::json_entry("authority", &creds.account),
         iroha_torii::json_entry("contract_address", contract_address.as_str()),
     ]);
     let missing_limit_body = json::to_json(&missing_limit_payload).expect("serialize call request");
@@ -805,13 +805,13 @@ async fn contracts_call_prepares_exact_payload_and_requires_durable_admission() 
     assert_eq!(queue.active_len(), 0);
     let transaction_ttl_ms = 900_000_u64;
     let call_payload = iroha_torii::json_object(vec![
-        iroha_torii::json_entry("authority", creds.account.clone()),
+        iroha_torii::json_entry("authority", &creds.account),
         iroha_torii::json_entry("contract_address", contract_address.as_str()),
         iroha_torii::json_entry("entrypoint", "main"),
-        iroha_torii::json_entry("transaction_ttl_ms", transaction_ttl_ms),
+        iroha_torii::json_entry("transaction_ttl_ms", &transaction_ttl_ms),
         iroha_torii::json_entry(
             "fee_payment",
-            FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(5_000)),
+            &FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(5_000)),
         ),
     ]);
     let call_body = json::to_json(&call_payload).expect("serialize call request");
@@ -956,7 +956,7 @@ async fn contracts_view_decodes_literal_and_persisted_bytes_returns() {
         .parse::<AssetDefinitionId>()
         .expect("asset definition id");
     let init_payload = iroha_torii::json_object(vec![
-        iroha_torii::json_entry("asset_input", asset_definition_id.to_string()),
+        iroha_torii::json_entry("asset_input", &asset_definition_id.to_string()),
         iroha_torii::json_entry(
             "target_bytes",
             "0x7269736b5f7661756c743a3a7269736b2e756e6976657273616c",
@@ -964,7 +964,7 @@ async fn contracts_view_decodes_literal_and_persisted_bytes_returns() {
     ]);
     let hajimari_payload = iroha_torii::json_object(vec![iroha_torii::json_entry(
         "asset_input",
-        asset_definition_id.to_string(),
+        &asset_definition_id.to_string(),
     )]);
     run_contract_hajimari_in_test_overlay(
         &app,
@@ -1127,11 +1127,11 @@ async fn contracts_view_roundtrips_account_id_literals_and_persisted_state() {
     assert_eq!(applied_deploy, 1);
     let hajimari_payload = iroha_torii::json_object(vec![iroha_torii::json_entry(
         "account_id",
-        initial_account.clone(),
+        &initial_account,
     )]);
     let bind_payload = iroha_torii::json_object(vec![iroha_torii::json_entry(
         "account_id",
-        creds.account.to_string(),
+        &creds.account.to_string(),
     )]);
     run_contract_hajimari_in_test_overlay(
         &app,
@@ -1234,8 +1234,8 @@ async fn contracts_call_configure_roundtrips_account_id_map_state() {
         "post-apply alias state missing or inactive: alias_target={alias_target:?}"
     );
     let configure_payload = iroha_torii::json_object(vec![
-        iroha_torii::json_entry("admin_account", creds.account.to_string()),
-        iroha_torii::json_entry("inori_account", creds.account.to_string()),
+        iroha_torii::json_entry("admin_account", &creds.account.to_string()),
+        iroha_torii::json_entry("inori_account", &creds.account.to_string()),
     ]);
     let configure_body = iroha_torii::test_utils::contract_call_request_json(
         &creds.account,
@@ -1455,8 +1455,8 @@ async fn contracts_call_persists_declared_state_after_mint_asset() {
         .await;
     let write_payload = iroha_torii::json_object(vec![
         iroha_torii::json_entry("amount", "7"),
-        iroha_torii::json_entry("user", creds.account.clone()),
-        iroha_torii::json_entry("asset_definition_id", asset_definition_id.to_string()),
+        iroha_torii::json_entry("user", &creds.account),
+        iroha_torii::json_entry("asset_definition_id", &asset_definition_id.to_string()),
     ]);
     let write_body = iroha_torii::test_utils::contract_call_request_json(
         &creds.account,
@@ -1547,8 +1547,8 @@ async fn contracts_call_persists_n3x_like_state_after_mint_asset() {
     let init_prepared = prepare_contract_execution(&app, init_body).await;
     execute_prepared_contract_in_test_overlay(&state, &init_prepared, 4);
     let deposit_payload = iroha_torii::json_object(vec![
-        iroha_torii::json_entry("user", creds.account.clone()),
-        iroha_torii::json_entry("asset_definition_id", asset_definition_id.to_string()),
+        iroha_torii::json_entry("user", &creds.account),
+        iroha_torii::json_entry("asset_definition_id", &asset_definition_id.to_string()),
         iroha_torii::json_entry("usdt_in", "1"),
         iroha_torii::json_entry("usdc_in", "2"),
         iroha_torii::json_entry("kusd_in", "3"),
@@ -1647,8 +1647,8 @@ async fn contracts_call_executes_n3x_like_burn_after_mint_asset() {
     let init_prepared = prepare_contract_execution(&app, init_body).await;
     execute_prepared_contract_in_test_overlay(&state, &init_prepared, 4);
     let deposit_payload = iroha_torii::json_object(vec![
-        iroha_torii::json_entry("user", creds.account.clone()),
-        iroha_torii::json_entry("asset_definition_id", asset_definition_id.to_string()),
+        iroha_torii::json_entry("user", &creds.account),
+        iroha_torii::json_entry("asset_definition_id", &asset_definition_id.to_string()),
         iroha_torii::json_entry("usdt_in", "1"),
         iroha_torii::json_entry("usdc_in", "2"),
         iroha_torii::json_entry("kusd_in", "3"),
@@ -1665,8 +1665,8 @@ async fn contracts_call_executes_n3x_like_burn_after_mint_asset() {
     let deposit_prepared = prepare_contract_execution(&app, deposit_body).await;
     execute_prepared_contract_in_test_overlay(&state, &deposit_prepared, 5);
     let burn_payload = iroha_torii::json_object(vec![
-        iroha_torii::json_entry("user", creds.account.clone()),
-        iroha_torii::json_entry("asset_definition_id", asset_definition_id.to_string()),
+        iroha_torii::json_entry("user", &creds.account),
+        iroha_torii::json_entry("asset_definition_id", &asset_definition_id.to_string()),
         iroha_torii::json_entry("n3x_amount", "6"),
     ]);
     let burn_body = iroha_torii::test_utils::contract_call_request_json(

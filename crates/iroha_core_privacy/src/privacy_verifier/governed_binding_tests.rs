@@ -1,7 +1,8 @@
 #[test]
 fn every_governed_envelope_binding_fails_closed_when_tampered() {
+    type EnvelopeMutation = (&'static str, fn(&mut PrivacyProofEnvelopeV1));
     let (envelope, activation, network_id) = valid_envelope();
-    let mutations: [(&str, fn(&mut PrivacyProofEnvelopeV1)); 9] = [
+    let mutations: [EnvelopeMutation; 9] = [
         ("protocol", |value| {
             value.protocol_id = PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1
         }),
@@ -30,8 +31,9 @@ fn every_governed_envelope_binding_fails_closed_when_tampered() {
 }
 #[test]
 fn every_statement_context_artifact_binding_fails_closed_when_tampered() {
+    type ContextMutation = (&'static str, fn(&mut PrivacyStatementContextV1));
     let (envelope, activation, network_id) = valid_envelope();
-    let mutations: [(&str, fn(&mut PrivacyStatementContextV1)); 5] = [
+    let mutations: [ContextMutation; 5] = [
         ("statement-parameter-id", |context| {
             context.parameter_id.0[0] ^= 1
         }),

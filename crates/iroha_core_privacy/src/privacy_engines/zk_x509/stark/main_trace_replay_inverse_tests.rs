@@ -237,8 +237,8 @@ fn native_replay_final_short_batch_preserves_global_mask_indices_and_exact_capac
     let arrays = (0..8)
         .map(|row| {
             [
-                F((row * row + 17 * 8 + 3) as u64),
-                F((row * row + 17 * 9 + 3) as u64),
+                F(u64::try_from(row * row + 17 * 8 + 3).expect("fixture value fits u64")),
+                F(u64::try_from(row * row + 17 * 9 + 3).expect("fixture value fits u64")),
             ]
         })
         .collect::<Vec<_>>();

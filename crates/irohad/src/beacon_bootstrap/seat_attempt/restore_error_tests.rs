@@ -120,15 +120,15 @@ fn original_checkpoint_enclosing_refusal_keeps_the_prepared_owner_and_same_sourc
         .authority
         .checkpoint_context(
             restored.finality.clock(),
-            1,
-            restored.signer_index,
+            (1, restored.signer_index),
             &restored.signer,
-            HANDLE,
-            7,
-            head.context.public_output_hash,
-            [0; 32],
-            [0; 32],
-            head.context.producer_intent_hash,
+            (HANDLE, 7),
+            (
+                head.context.public_output_hash,
+                [0; 32],
+                [0; 32],
+                head.context.producer_intent_hash,
+            ),
         )
         .unwrap();
     let public_limits = norito::canonical_decode_limits(restored.durable.public_source().len());

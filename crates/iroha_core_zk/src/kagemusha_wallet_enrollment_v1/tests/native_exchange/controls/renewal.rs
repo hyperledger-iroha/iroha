@@ -494,10 +494,10 @@ fn actual_native_renewal_and_daily_monthly_rollover_preserve_received_value() {
     let renewed1 = terms::renewal(&original_b, &issuer, 20000);
     let mut skipped_body = renewed1.body;
     skipped_body.renewal_sequence = 2;
-    let skipped = terms::issue(skipped_body, &issuer);
+    let skipped = terms::issue(&skipped_body, &issuer);
     let mut foreign_body = renewed1.body;
     foreign_body.regulatory_policy.time_anchor_max_response_ms += 1;
-    let foreign = terms::issue(foreign_body, &issuer);
+    let foreign = terms::issue(&foreign_body, &issuer);
     for (label, credential) in [
         ("skipped-renewal", skipped),
         ("changed-immutable-policy", foreign),

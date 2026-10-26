@@ -3,7 +3,7 @@
 use super::*;
 use packet::{Event, Space};
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 struct Shape {
     root: bool,
     selected: bool,
@@ -101,8 +101,12 @@ struct Fixture {
 }
 impl Fixture {
     fn new(shape: Shape) -> Self {
-        let schedule =
-            Schedule::new(7, shape.root, core::array::from_fn(|i| (20 + i) as u32)).unwrap();
+        let schedule = Schedule::new(
+            7,
+            shape.root,
+            core::array::from_fn(|i| u32::try_from(20 + i).expect("bounded fixture value")),
+        )
+        .unwrap();
         let mut values = [0_u64; WORDS];
         if shape.selected {
             values[SP] = if shape.root {
@@ -230,7 +234,7 @@ impl Fixture {
                     packets[7 + i] = event(
                         Space::Owner,
                         shape.parent,
-                        4 + i as u32,
+                        4 + u32::try_from(i).expect("bounded fixture value"),
                         values[word],
                         values[word],
                         false,
@@ -269,7 +273,7 @@ impl Fixture {
                     packets[17 + i] = event(
                         Space::Owner,
                         0,
-                        16 + i as u32,
+                        16 + u32::try_from(i).expect("bounded fixture value"),
                         0,
                         values[word],
                         true,
@@ -348,7 +352,7 @@ fn successful_entry_checks_exact_alignment_counts_caps_and_canonical_empty_argum
     let mut empty = Shape::child();
     empty.argument = 0;
     empty.argument_words = 0;
-    assert!(Fixture::new(empty.clone()).accepts());
+    assert!(Fixture::new(empty).accepts());
     empty.argument = ivm::Memory::STACK_START;
     assert!(!Fixture::new(empty).accepts());
     for mutation in 0..8 {
@@ -466,7 +470,12 @@ fn original_descriptor_publication_residues_have_degree_three() {
     use crate::execution_proofs::stark::proof_managed_note_stark::degree_audit::measured_maximum_affine_degree_v1;
     let total = WIDTH + 8 + (PORTS + 1) * packet::WIDTH;
     for root in [false, true] {
-        let schedule = Schedule::new(7, root, core::array::from_fn(|i| (20 + i) as u32)).unwrap();
+        let schedule = Schedule::new(
+            7,
+            root,
+            core::array::from_fn(|i| u32::try_from(20 + i).expect("bounded fixture value")),
+        )
+        .unwrap();
         let degree = measured_maximum_affine_degree_v1(
             [141; 32],
             [total, 0, 0, 0, 0],
@@ -525,7 +534,7 @@ fn genuine_native_frame_owner_entries_match_all_original_descriptor_fields() {
             let fixture = Fixture::new(Shape {
                 root,
                 selected: true,
-                parent: if root { 0 } else { 1 },
+                parent: u16::from(!root),
                 generation: if root { 1 } else { 2 },
                 sp: value("sp"),
                 stack_top: value("stack_top"),
@@ -579,7 +588,7 @@ fn genuine_native_call_runtime_entries_match_original_operands_and_installed_des
         let fixture = Fixture::new(Shape {
             root,
             selected: true,
-            parent: if root { 0 } else { 1 },
+            parent: u16::from(!root),
             generation: if root { 1 } else { 2 },
             sp: value(4),
             stack_top: entry["owner"]["stack_top"].as_u64().unwrap(),

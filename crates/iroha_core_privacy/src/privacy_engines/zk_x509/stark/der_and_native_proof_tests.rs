@@ -221,7 +221,7 @@ fn registered_degree_and_fri_capacity_boundaries_fail_closed() {
         "the exact DER quotient must exercise multiple FRI chunks"
     );
     assert!(
-        expected_quotient <= (expected_chunk_capacity + 1) * COMPOSITION_DEGREE_CHUNKS - 1,
+        expected_quotient < (expected_chunk_capacity + 1) * COMPOSITION_DEGREE_CHUNKS,
         "all six authenticated chunks must cover the exact DER quotient"
     );
     let mut invalid = der_layout();
@@ -311,7 +311,7 @@ fn interpolated_masked_degree_seven_quotient_attains_registered_bound() {
         "the exact quotient must exercise more than one composition chunk"
     );
     assert!(
-        measured_degree <= (fri_input_degree + 1) * COMPOSITION_DEGREE_CHUNKS - 1,
+        measured_degree < (fri_input_degree + 1) * COMPOSITION_DEGREE_CHUNKS,
         "the registered chunks must cover the exact quotient bound"
     );
 }
@@ -931,13 +931,14 @@ fn x5m1_main_envelope_is_canonical_bounded_and_adversarially_strict() {
 #[test]
 fn der_statement_digest_and_x5p1_envelope_are_exact_and_fail_closed() {
     let shape = ZkX509DerStarkShapeV1;
-    let digest = der_public_digest_v1(&shape).expect("DER public digest");
+    let digest = der_public_digest_v1(shape).expect("DER public digest");
     // Independent SHA3-384 of the exact catalog/protocol/profile frame and
-    // ordered DER descriptors plus the constant public registration label.
+    // ordered DER descriptors plus the constant public registration label, using
+    // the canonical 32-byte native BLAKE3 catalog commitment.
     // The MAIN profile label includes family 1 and public nonce [0x5a; 32].
     assert_eq!(
         hex::encode(digest.to_bytes()),
-        "156c6dd358a46edb4840d5e4b66c529ff7f0a21af94e6eb267d76b94316b1bc5942bbf024b414971be062659f1b4bcb9"
+        "3e6c7479e5095dd5ccf078478f4d75b9de0b098ffa3248e9f163e9495a96c320b0152f6afa652cd521704f2d4af99a0e"
     );
     let claims = ZkX509DerStarkTerminalClaimsV1 {
         input_byte: [F(3), F(5), F(7), F(11)],
@@ -1027,11 +1028,10 @@ fn der_statement_digest_and_x5p1_envelope_are_exact_and_fail_closed() {
     assert!(decode_der_segmented_proof_envelope_v1(&rejected_draft_magic).is_err());
     // A valid envelope cannot make an invalid inner aggregate proof
     // verifier-visible as a different wire format.
-    assert!(verify_zk_x509_der_segmented_stark_v1(&shape, &encoded).is_err());
+    assert!(verify_zk_x509_der_segmented_stark_v1(shape, &encoded).is_err());
 }
 #[test]
 fn der_sampled_fixed_rows_match_reduced_full_lde_for_every_column_family() {
-    let _guard = proof_guard();
     fn native_row(
         document_count: usize,
         parser_rows: usize,
@@ -1063,6 +1063,7 @@ fn der_sampled_fixed_rows_match_reduced_full_lde_for_every_column_family() {
         }
         row
     }
+    let _guard = proof_guard();
     let trace_log2 = 5;
     let lde_log2 = trace_log2 + BLOWUP_LOG2;
     let trace_size = 1_usize << trace_log2;
@@ -1104,8 +1105,9 @@ fn der_sampled_fixed_rows_match_reduced_full_lde_for_every_column_family() {
         layout.trace_log2 = trace_log2;
         layout.lde_log2 = lde_log2;
         let full_lde = fixed_lde_columns_v1(&columns, layout).expect("full fixed LDE");
-        for index in 0..lde_size {
-            let x = F(GOLDILOCKS_GENERATOR_V1).mul(lde_root.pow(index as u128));
+        let query_points =
+            (0..lde_size).map(|index| F(GOLDILOCKS_GENERATOR_V1).mul(lde_root.pow(index as u128)));
+        for (index, x) in query_points.enumerate() {
             let sampled = der_fixed_row_at_point_for_shape_v1(
                 document_count,
                 parser_rows,
@@ -1145,8 +1147,9 @@ fn der_sampled_fixed_rows_match_reduced_full_lde_for_every_column_family() {
         layout.trace_log2 = trace_log2;
         layout.lde_log2 = lde_log2;
         let full_lde = fixed_lde_columns_v1(&columns, layout).expect("edge full fixed LDE");
-        for index in 0..lde_size {
-            let x = F(GOLDILOCKS_GENERATOR_V1).mul(lde_root.pow(index as u128));
+        let query_points =
+            (0..lde_size).map(|index| F(GOLDILOCKS_GENERATOR_V1).mul(lde_root.pow(index as u128)));
+        for (index, x) in query_points.enumerate() {
             let sampled = der_fixed_row_at_point_for_shape_v1(
                 document_count,
                 parser_rows,
@@ -1202,7 +1205,7 @@ fn malformed_der_wires_reject_before_sampled_fixed_evaluation() {
         malformed_inner[..malformed_inner.len() - 1].to_vec(),
         malformed_inner,
     ] {
-        assert!(verify_zk_x509_der_segmented_stark_v1(&shape, &malformed).is_err());
+        assert!(verify_zk_x509_der_segmented_stark_v1(shape, &malformed).is_err());
     }
     assert_eq!(
         DER_FIXED_OPENING_EVALUATIONS_V1.load(std::sync::atomic::Ordering::SeqCst),
@@ -1332,7 +1335,7 @@ fn der_opened_row_evaluator_binds_both_rows_fixed_schedule_claims_and_lane_mixes
             &trace_groups[0].aux_next,
             &fixed_current,
             &fixed_next,
-            challenges,
+            &challenges,
             public,
             claims,
             &alphas[lane],

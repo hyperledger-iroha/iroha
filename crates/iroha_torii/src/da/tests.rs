@@ -758,8 +758,10 @@ fn pdp_commitment_header_value_matches_base64_payload() {
 fn manifest_response_pdp_header_is_optional_when_missing() {
     let dir = tempdir().expect("dir");
     let (_context, manifest_artifact, manifest_hash) = write_sample_manifest_artifact(dir.path());
-    let response =
-        utils::respond_value_with_format(Value::Object(Default::default()), ResponseFormat::Json);
+    let response = utils::respond_value_with_format(
+        &(Value::Object(BTreeMap::default())),
+        ResponseFormat::Json,
+    );
     let response = attach_pdp_commitment_header_from_spool(
         dir.path(),
         &manifest_artifact,
@@ -793,8 +795,10 @@ fn manifest_response_attaches_pdp_commitment_header() {
         *context.artifacts.fingerprint.as_bytes(),
     );
     fs::write(&path, &bytes).expect("commitment file");
-    let response =
-        utils::respond_value_with_format(Value::Object(Default::default()), ResponseFormat::Json);
+    let response = utils::respond_value_with_format(
+        &(Value::Object(BTreeMap::default())),
+        ResponseFormat::Json,
+    );
     let response = attach_pdp_commitment_header_from_spool(
         dir.path(),
         &manifest_artifact,
@@ -824,8 +828,10 @@ fn manifest_response_rejects_corrupt_pdp_commitment_sidecar() {
         *context.artifacts.fingerprint.as_bytes(),
     );
     fs::write(&path, b"not a PDP commitment").expect("commitment file");
-    let response =
-        utils::respond_value_with_format(Value::Object(Default::default()), ResponseFormat::Json);
+    let response = utils::respond_value_with_format(
+        &(Value::Object(BTreeMap::default())),
+        ResponseFormat::Json,
+    );
     let err = attach_pdp_commitment_header_from_spool(
         dir.path(),
         &manifest_artifact,
@@ -856,8 +862,10 @@ fn manifest_response_rejects_pdp_commitment_manifest_digest_mismatch() {
         *context.artifacts.fingerprint.as_bytes(),
     );
     fs::write(&path, &bytes).expect("digest-mismatched PDP commitment");
-    let response =
-        utils::respond_value_with_format(Value::Object(Default::default()), ResponseFormat::Json);
+    let response = utils::respond_value_with_format(
+        &(Value::Object(BTreeMap::default())),
+        ResponseFormat::Json,
+    );
     let err = attach_pdp_commitment_header_from_spool(
         dir.path(),
         &manifest_artifact,
@@ -994,6 +1002,15 @@ fn taikai_availability_rejects_rendition_window_that_misses_segment() {
 }
 #[test]
 fn taikai_ingest_tags_include_availability_and_proof_policy() {
+    fn value_for(metadata: &ExtraMetadata, key: &str) -> String {
+        let entry = metadata
+            .items
+            .iter()
+            .find(|entry| entry.key == key)
+            .unwrap_or_else(|| panic!("missing metadata entry `{key}`"));
+        String::from_utf8(entry.value.clone()).expect("utf8 value")
+    }
+
     let mut metadata = taikai_metadata();
     metadata.items.extend([
         MetadataEntry::new(
@@ -1020,14 +1037,6 @@ fn taikai_ingest_tags_include_availability_and_proof_policy() {
         &retention,
         1024,
     );
-    fn value_for(metadata: &ExtraMetadata, key: &str) -> String {
-        let entry = metadata
-            .items
-            .iter()
-            .find(|entry| entry.key == key)
-            .unwrap_or_else(|| panic!("missing metadata entry `{key}`"));
-        String::from_utf8(entry.value.clone()).expect("utf8 value")
-    }
     assert_eq!(
         value_for(&metadata, taikai::META_TAIKAI_AVAILABILITY_CLASS),
         "cold"
@@ -1450,9 +1459,7 @@ fn seed_da_admission_parameter(app: &crate::SharedAppState, parameter: CustomPar
     let mut transaction = block.transaction();
     transaction
         .world_mut_for_testing()
-        .parameters_mut_for_testing()
-        .get_mut()
-        .set_parameter(Parameter::Custom(parameter))
+        .set_parameter_for_testing(Parameter::Custom(parameter))
         .expect("valid fixture parameters");
     transaction.apply();
     block
@@ -2036,7 +2043,7 @@ fn validate_request_rejects_non_power_two_chunks() {
     request.chunk_size = 1_500;
     let canonical = normalize_payload(&request).expect("normalize payload");
     let err = match validate_request(&request, canonical.as_slice()) {
-        Ok(_) => panic!("expected validation to reject non power-of-two chunk size"),
+        Ok(()) => panic!("expected validation to reject non power-of-two chunk size"),
         Err(err) => err,
     };
     assert_eq!(err.0, StatusCode::BAD_REQUEST);
@@ -2520,7 +2527,7 @@ fn taikai_envelope_generation_computes_pointers() {
     assert_eq!(envelope.segment_sequence, 42);
     assert_eq!(
         envelope.ingest.chunk_count,
-        chunk_store.chunks().len() as u32
+        u32::try_from(chunk_store.chunks().len()).expect("fixture chunk count fits u32")
     );
     assert!(envelope.ingest.car.cid_multibase.starts_with('b'));
     let indexes: TaikaiEnvelopeIndexes =
@@ -2828,7 +2835,7 @@ async fn ingest_response_binary_body_advertises_exact_current_owner() {
         &expected[6..22],
         &norito::schema::identity::frame_hash::<DaIngestResponse>()
     );
-    let response = utils::respond_with_format(value, ResponseFormat::Norito);
+    let response = utils::respond_with_format(&(value), ResponseFormat::Norito);
     assert_eq!(response.status(), StatusCode::OK);
     let body = axum::body::to_bytes(response.into_body(), 4096)
         .await

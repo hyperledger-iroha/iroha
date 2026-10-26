@@ -105,9 +105,10 @@ state_test! { sync apply_without_execution_keeps_world_peer_append_scoped_to_che
         nexus.dataspace_catalog = dataspace_catalog_with_extra(restricted_dataspace);
         nexus.staking.public_validator_mode = LaneValidatorMode::StakeElected;
         nexus.staking.restricted_validator_mode = LaneValidatorMode::StakeElected;
-        nexus.staking.min_validator_stake = 100_u64.into();
     }
-    let state = State::new_with_nexus_for_testing(World::default(), nexus, query);
+    let mut world = World::default();
+    set_staking_minimum_for_test(&mut world, 100);
+    let state = State::new_with_nexus_for_testing(world, nexus, query);
     let_row! { public_keypairs: Vec<_> = (0..4) .map(|_| crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal)) .collect() };
     let_row! { restricted_keypairs: Vec<_> = (0..4) .map(|_| crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal)) .collect() };
     let_row! { base_topology: Vec<_> = public_keypairs .iter() .map(|kp| PeerId::new(kp.public_key().clone())) .collect() };
@@ -203,10 +204,10 @@ state_test! { sync apply_without_execution_keeps_npos_commit_topology_without_wo
     let query = LiveQueryStore::start_test();
     let state = State::new_for_testing(World::default(), kura, query);
     {
-        let mut params = state.world.parameters.block();
-        params.set_parameter(Parameter::Custom(
+        let mut params = crate::state::parameter_cell_block_for_testing(&state.world).expect("funded original parameter-only fixture block");
+        crate::state::set_parameter_cell_for_testing(&mut params, Parameter::Custom(
             SumeragiNposParameters::default().into_custom_parameter(),
-        )).expect("valid fixture parameters");
+        ), state.world.sccp_committee_generations.allocation_budget()).expect("valid fixture parameters");
         params.commit();
     }
     let keypairs = configure_commit_topology(&state, 4);
@@ -243,13 +244,14 @@ state_test! { sync apply_without_execution_keeps_active_candidate_outside_suppli
     let query = LiveQueryStore::start_test();
     let mut nexus = iroha_config::parameters::actual::Nexus::default();
     nexus.staking.public_validator_mode = LaneValidatorMode::StakeElected;
-    nexus.staking.min_validator_stake = 100_u64.into();
-    let state = State::new_with_nexus_for_testing(World::default(), nexus, query);
+    let mut world = World::default();
+    set_staking_minimum_for_test(&mut world, 100);
+    let state = State::new_with_nexus_for_testing(world, nexus, query);
     {
-        let mut params = state.world.parameters.block();
-        params.set_parameter(Parameter::Custom(
+        let mut params = crate::state::parameter_cell_block_for_testing(&state.world).expect("funded original parameter-only fixture block");
+        crate::state::set_parameter_cell_for_testing(&mut params, Parameter::Custom(
             SumeragiNposParameters::default().into_custom_parameter(),
-        )).expect("valid fixture parameters");
+        ), state.world.sccp_committee_generations.allocation_budget()).expect("valid fixture parameters");
         params.commit();
     }
     let keypairs = configure_commit_topology(&state, 4);
@@ -322,10 +324,10 @@ state_test! { sync apply_without_execution_uses_npos_parameters_for_commit_topol
     let query = LiveQueryStore::start_test();
     let state = State::new_for_testing(World::default(), kura, query);
     {
-        let mut params = state.world.parameters.block();
-        params.set_parameter(Parameter::Custom(
+        let mut params = crate::state::parameter_cell_block_for_testing(&state.world).expect("funded original parameter-only fixture block");
+        crate::state::set_parameter_cell_for_testing(&mut params, Parameter::Custom(
             SumeragiNposParameters::default().into_custom_parameter(),
-        )).expect("valid fixture parameters");
+        ), state.world.sccp_committee_generations.allocation_budget()).expect("valid fixture parameters");
         params.commit();
     }
     let keypairs = configure_commit_topology(&state, 4);

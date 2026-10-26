@@ -8,14 +8,14 @@
 /// normalization: portable `OpenVerify` identifiers remain lowercase ASCII and
 /// their existing grammar is checked separately. Other component names remain
 /// available for generic public-input bindings.
-pub(super) fn circuit_id_uses_reserved_ivm_namespace(circuit_id: &str) -> bool {
+pub fn circuit_id_uses_reserved_ivm_namespace(circuit_id: &str) -> bool {
     circuit_id.trim().split([':', '/']).any(|component| {
         component == "ivm" || component.starts_with("ivm-") || component.starts_with("ivm_")
     })
 }
 
 #[cfg(test)]
-pub(super) const RESERVED_RELATIONS: &[&str] = &[
+pub const RESERVED_RELATIONS: &[&str] = &[
     "ivm",
     "ivm-execution-v1",
     "ivm_execution_v1",

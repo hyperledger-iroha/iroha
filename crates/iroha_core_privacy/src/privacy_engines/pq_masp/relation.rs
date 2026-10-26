@@ -156,7 +156,7 @@ impl PqMaspInputWitnessV1 {
         note: PqMaspNotePlaintextV1,
         nullifier_secret: [u8; 32],
         leaf_position: u32,
-        authentication_path: [[u8; 32]; PQ_MASP_TREE_DEPTH_V1],
+        authentication_path: &[[u8; 32]; PQ_MASP_TREE_DEPTH_V1],
     ) -> Result<Self, PqMaspRelationErrorV1> {
         validate_note_v1(&note)?;
         if is_zero(&nullifier_secret) || authentication_path.iter().any(|sibling| is_zero(sibling))
@@ -170,7 +170,7 @@ impl PqMaspInputWitnessV1 {
             note,
             nullifier_secret,
             leaf_position,
-            authentication_path,
+            authentication_path: *authentication_path,
         })
     }
     /// Borrow the committed plaintext.

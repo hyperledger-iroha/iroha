@@ -28,7 +28,7 @@ fn telemetry_constructor_keeps_original_world_pool_and_accepts_block_admission()
     let header =
         iroha_data_model::block::BlockHeader::new(core::num::NonZeroU64::MIN, None, None, 0, 0);
     let block = state
-        .try_block(header.clone())
+        .try_block(header)
         .expect("original World admission scope");
     drop(block);
     assert!(

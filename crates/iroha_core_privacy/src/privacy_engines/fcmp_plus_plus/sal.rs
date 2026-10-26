@@ -110,6 +110,10 @@ impl SalSecretScalarCanonicalityStateV1 {
             greater_update: Choice::from(0),
         }
     }
+    #[expect(
+        clippy::trivially_copy_pass_by_ref,
+        reason = "Borrowing secret inputs keeps raw copies inside the explicit zeroizing owner boundary."
+    )]
     fn observe_byte_v1(&mut self, byte: &u8, modulus_byte: &u8) {
         self.prefix_decided = self.less | self.greater;
         self.prefix_equal = !self.prefix_decided;
@@ -288,6 +292,9 @@ pub struct FcmpSalProofV1 {
 }
 impl FcmpSalProofV1 {
     /// Construct from the exact upstream point/scalar order.
+    ///
+    /// # Errors
+    /// Rejects noncanonical points or scalars.
     pub fn new(
         points: [[u8; 32]; SAL_POINT_COUNT_V1],
         scalars: [[u8; 32]; SAL_SCALAR_COUNT_V1],
@@ -301,6 +308,9 @@ impl FcmpSalProofV1 {
         Ok(Self { points, scalars })
     }
     /// Decode exactly 384 bytes in `P,A,B,R_O,R_P,R_L` then response order.
+    ///
+    /// # Errors
+    /// Rejects an incorrect proof length or noncanonical points and scalars.
     pub fn decode(bytes: &[u8]) -> Result<Self, FcmpNativeErrorV1> {
         if bytes.len() != FCMP_SAL_PROOF_BYTES_V1 {
             return Err(FcmpNativeErrorV1::ProofLength {
@@ -378,6 +388,9 @@ impl core::fmt::Debug for FcmpSalWitnessV1 {
 }
 impl FcmpSalWitnessV1 {
     /// Construct a witness from four canonical scalars.
+    ///
+    /// # Errors
+    /// Rejects noncanonical witness scalars.
     pub fn new(
         mut x: [u8; 32],
         mut y: [u8; 32],
@@ -390,6 +403,10 @@ impl FcmpSalWitnessV1 {
         let r_r_i_bytes = FcmpSalSecretScalarEncodingV1::take(&mut r_r_i);
         Self::from_secret_scalar_encoding_owners_v1(x_bytes, y_bytes, r_i_bytes, r_r_i_bytes)
     }
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "Taking ownership ensures every accepted secret is zeroized on success, failure, and unwind before the caller can reuse it."
+    )]
     pub(super) fn from_secret_scalar_encoding_owners_v1(
         x_bytes: FcmpSalSecretScalarEncodingV1,
         y_bytes: FcmpSalSecretScalarEncodingV1,
@@ -453,13 +470,13 @@ fn validate_sal_witness_relation_v1(
     witness: &FcmpSalWitnessV1,
 ) -> Result<(), FcmpNativeErrorV1> {
     let [o_tilde, i_tilde, r, _c_tilde, key_image] = public_points(public)?;
-    let g = ED25519_BASEPOINT_POINT;
-    let t = generator_t();
-    let u = generator_u();
-    let v = generator_v();
-    let expected_o = (g * witness.x) + (t * witness.y);
-    let expected_r = (v * witness.r_i) + (t * witness.r_r_i);
-    let expected_l = (i_tilde * witness.x) - (u * (witness.x * witness.r_i));
+    let basepoint = ED25519_BASEPOINT_POINT;
+    let output_blinder = generator_t();
+    let linking_blinder = generator_u();
+    let rerandomization_base = generator_v();
+    let expected_o = (basepoint * witness.x) + (output_blinder * witness.y);
+    let expected_r = (rerandomization_base * witness.r_i) + (output_blinder * witness.r_r_i);
+    let expected_l = (i_tilde * witness.x) - (linking_blinder * (witness.x * witness.r_i));
     if expected_o != o_tilde || expected_r != r || expected_l != key_image {
         return Err(FcmpNativeErrorV1::SalWitnessMismatch);
     }
@@ -470,6 +487,9 @@ fn validate_sal_witness_relation_v1(
 ///
 /// `context_hash` must be the protocol-domain-separated digest of the complete authoritative
 /// statement. The function rejects a witness that does not open O~, R, and L exactly.
+///
+/// # Errors
+/// Rejects a mismatched witness relation, unhealthy randomness, proof construction failures, or a failed prover self-check.
 pub fn prove_fcmp_sal_v1(
     rng: &mut (impl TryRng + TryCryptoRng),
     context_hash: [u8; 32],
@@ -500,7 +520,6 @@ fn retry_sal_prover_v1<T>(
         match prove_once() {
             Ok(proof) => return Ok(proof),
             Err(FcmpNativeErrorV1::SalProofPointIdentity | FcmpNativeErrorV1::SalChallengeZero) => {
-                continue;
             }
             Err(error) => return Err(error),
         }
@@ -514,10 +533,10 @@ fn prove_fcmp_sal_once_v1(
     witness: &FcmpSalWitnessV1,
 ) -> Result<FcmpSalProofV1, FcmpNativeErrorV1> {
     let [_o_tilde, i_tilde, _r, _c_tilde, _key_image] = public_points(public)?;
-    let g = ED25519_BASEPOINT_POINT;
-    let t = generator_t();
-    let u = generator_u();
-    let v = generator_v();
+    let basepoint = ED25519_BASEPOINT_POINT;
+    let output_blinder = generator_t();
+    let linking_blinder = generator_u();
+    let rerandomization_base = generator_v();
     let x_r_i = witness.x * witness.r_i;
     let alpha = random_scalar(rng)?;
     let beta = random_scalar(rng)?;
@@ -527,25 +546,31 @@ fn prove_fcmp_sal_once_v1(
     let r_z = random_scalar(rng)?;
     let r_p = random_scalar(rng)?;
     let r_r_p = random_scalar(rng)?;
-    let p = (g * witness.x) + (v * witness.r_i) + (u * x_r_i) + (t * r_p);
-    let alpha_g = g * alpha;
-    let a = alpha_g + (v * beta) + (u * ((alpha * witness.r_i) + (beta * witness.x))) + (t * delta);
-    let b = (u * (alpha * beta)) + (t * mu);
-    let r_o = alpha_g + (t * r_y);
-    let r_p_point = (u * r_z) + (t * r_r_p);
-    let r_l = (i_tilde * alpha) - (u * r_z);
+    let p = (basepoint * witness.x)
+        + (rerandomization_base * witness.r_i)
+        + (linking_blinder * x_r_i)
+        + (output_blinder * r_p);
+    let alpha_g = basepoint * alpha;
+    let a = alpha_g
+        + (rerandomization_base * beta)
+        + (linking_blinder * ((alpha * witness.r_i) + (beta * witness.x)))
+        + (output_blinder * delta);
+    let b = (linking_blinder * (alpha * beta)) + (output_blinder * mu);
+    let r_o = alpha_g + (output_blinder * r_y);
+    let r_p_point = (linking_blinder * r_z) + (output_blinder * r_r_p);
+    let r_l = (i_tilde * alpha) - (linking_blinder * r_z);
     let proof_points = [p, a, b, r_o, r_p_point, r_l];
     if proof_points.iter().any(EdwardsPoint::is_identity) {
         return Err(FcmpNativeErrorV1::SalProofPointIdentity);
     }
-    let e = challenge(context_hash, public, &proof_points)?;
-    let s_alpha = alpha + (e * witness.x);
-    let s_beta = beta + (e * witness.r_i);
-    let s_delta = mu + (e * delta) + (r_p * e * e);
-    let s_y = r_y + (e * witness.y);
-    let s_z = r_z + (e * x_r_i);
+    let challenge_scalar = challenge(context_hash, public, &proof_points)?;
+    let s_alpha = alpha + (challenge_scalar * witness.x);
+    let s_beta = beta + (challenge_scalar * witness.r_i);
+    let s_delta = mu + (challenge_scalar * delta) + (r_p * challenge_scalar * challenge_scalar);
+    let s_y = r_y + (challenge_scalar * witness.y);
+    let s_z = r_z + (challenge_scalar * x_r_i);
     let r_p_double_quote = r_p - witness.y - witness.r_r_i;
-    let s_r_p = r_r_p + (e * r_p_double_quote);
+    let s_r_p = r_r_p + (challenge_scalar * r_p_double_quote);
     FcmpSalProofV1::new(
         proof_points.map(|point| point.compress().to_bytes()),
         [s_alpha, s_beta, s_delta, s_y, s_z, s_r_p].map(|scalar| scalar.to_bytes()),
@@ -556,6 +581,9 @@ fn prove_fcmp_sal_once_v1(
 /// Success means the proof authorizes the hidden output key and binds the key image to the same
 /// secret used in O~, while proving the required bilinear conjunction. Membership and tuple
 /// re-randomization remain the responsibility of the FCMP circuit verifier.
+///
+/// # Errors
+/// Rejects invalid public/proof points or scalars, transcript failures, or a failed linking equation.
 pub fn verify_fcmp_sal_v1(
     context_hash: [u8; 32],
     public: &FcmpProofInputPublicV1,
@@ -579,33 +607,38 @@ pub fn verify_fcmp_sal_v1(
         .try_into()
         .map_err(|_| FcmpNativeErrorV1::ArithmeticInvariant)?;
     let [p, a, b, r_o, r_p, r_l] = points;
-    let g = ED25519_BASEPOINT_POINT;
-    let t = generator_t();
-    let u = generator_u();
-    let v = generator_v();
-    let e = challenge(context_hash, public, &[p, a, b, r_o, r_p, r_l])?;
+    let basepoint = ED25519_BASEPOINT_POINT;
+    let output_blinder = generator_t();
+    let linking_blinder = generator_u();
+    let rerandomization_base = generator_v();
+    let challenge_scalar = challenge(context_hash, public, &[p, a, b, r_o, r_p, r_l])?;
     let equations = [
         sum_terms(&[
-            (e * e, p),
-            (e, a),
+            (challenge_scalar * challenge_scalar, p),
+            (challenge_scalar, a),
             (Scalar::ONE, b),
-            (-(s_alpha * e), g),
-            (-(s_beta * e), v),
-            (-(s_alpha * s_beta), u),
-            (-s_delta, t),
+            (-(s_alpha * challenge_scalar), basepoint),
+            (-(s_beta * challenge_scalar), rerandomization_base),
+            (-(s_alpha * s_beta), linking_blinder),
+            (-s_delta, output_blinder),
         ]),
-        sum_terms(&[(Scalar::ONE, r_o), (e, o_tilde), (-s_alpha, g), (-s_y, t)]),
+        sum_terms(&[
+            (Scalar::ONE, r_o),
+            (challenge_scalar, o_tilde),
+            (-s_alpha, basepoint),
+            (-s_y, output_blinder),
+        ]),
         sum_terms(&[
             (Scalar::ONE, r_p),
-            (e, p - o_tilde - r),
-            (-s_z, u),
-            (-s_r_p, t),
+            (challenge_scalar, p - o_tilde - r),
+            (-s_z, linking_blinder),
+            (-s_r_p, output_blinder),
         ]),
         sum_terms(&[
             (Scalar::ONE, r_l),
-            (e, key_image),
+            (challenge_scalar, key_image),
             (-s_alpha, i_tilde),
-            (s_z, u),
+            (s_z, linking_blinder),
         ]),
     ];
     if equations
@@ -1209,7 +1242,7 @@ mod tests {
 
         fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
             for byte in destination {
-                *byte = ((self.cursor % self.period) as u8)
+                *byte = (self.cursor % self.period).to_le_bytes()[0]
                     .wrapping_mul(43)
                     .wrapping_add(11);
                 self.cursor += 1;

@@ -42,6 +42,10 @@ fn initializer(fixture: &Fixture) -> InitializeSorafsProviderAdmissionV1 {
 }
 
 /// A chain whose genesis (authorized by `key(1)`'s account, at `NOW`) carries `instructions`.
+#[expect(
+    clippy::result_large_err,
+    reason = "The fixture propagates the original startup failure and retained runtime ownership"
+)]
 fn chain(
     instructions: Vec<InstructionBox>,
     existing_owner: Option<(ProviderId, AccountId)>,

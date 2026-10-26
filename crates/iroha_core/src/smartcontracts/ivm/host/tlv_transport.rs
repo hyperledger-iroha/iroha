@@ -28,7 +28,7 @@ fn write_tlv_payload(
     append(Hash::new(payload).as_ref())
 }
 
-impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
+impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     pub(super) fn alloc_tlv_payload(
         vm: &mut IVM,
         pointer_type: PointerType,

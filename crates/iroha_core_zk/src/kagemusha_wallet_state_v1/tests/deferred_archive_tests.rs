@@ -18,7 +18,7 @@ fn preparing() -> (Wallet, [u8; 32], Vec<u8>) {
     let (mut w, send, _) = payer_projection_wallet(true, Some(true));
     let original = newer_receipt();
     let (companion, request, _) = originals();
-    w.retain_delivery_test_preparing(NativeIntentV1::retained_delivery_test_originals(
+    w.retain_delivery_test_preparing(&NativeIntentV1::retained_delivery_test_originals(
         &fixture("KagemushaWalletPaymentV1"),
         [84; 32],
         archive::encode(&request).unwrap(),
@@ -424,7 +424,7 @@ fn open_request_identity_survives_exact_completed_anchor_and_collected_send_retr
     assert!(open.body.is_open(), "production receiver-first intent");
     let payment: KagemushaWalletPaymentV1 = fixture("KagemushaWalletPaymentV1");
     w.retain_delivery_test_mapping(
-        NativeIntentV1::user(OperationRequestV1 {
+        &NativeIntentV1::user(OperationRequestV1 {
             request_id: send,
             action: OperationActionV1::Send {
                 request: archive::encode(&open).unwrap(),
@@ -456,7 +456,7 @@ fn open_request_identity_survives_exact_completed_anchor_and_collected_send_retr
     let mut foreign = open;
     foreign.body.amount += 1;
     w.retain_delivery_test_mapping(
-        NativeIntentV1::user(OperationRequestV1 {
+        &NativeIntentV1::user(OperationRequestV1 {
             request_id: send,
             action: OperationActionV1::Send {
                 request: archive::encode(&foreign).unwrap(),
@@ -508,7 +508,7 @@ fn fresh_open_send_retains_first_intent_before_verified_membership_and_recovers_
         received.body = received.body.open();
         assert!(received.body.is_open());
         w.retain_delivery_test_mapping(
-            NativeIntentV1::user(OperationRequestV1 {
+            &NativeIntentV1::user(OperationRequestV1 {
                 request_id: request.request_id,
                 action: OperationActionV1::Send {
                     request: archive::encode(&received).unwrap(),

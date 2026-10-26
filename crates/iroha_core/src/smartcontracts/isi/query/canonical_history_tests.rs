@@ -2,7 +2,7 @@ use iroha_data_model::query::error::QueryExecutionFail;
 
 #[tokio::test]
 async fn block_and_header_queries_fail_on_hash_only_history_gap() -> Result<()> {
-    let state = state_with_test_blocks_and_transactions(3, 1, 1)?;
+    let state = state_with_test_blocks_and_transactions(3, 1, 1);
     state
         .kura()
         .corrupt_canonical_body_for_testing(nonzero!(2_usize))
@@ -34,7 +34,7 @@ async fn block_and_header_queries_fail_on_hash_only_history_gap() -> Result<()> 
 
 #[tokio::test]
 async fn find_block_header_by_hash() -> Result<()> {
-    let state = state_with_test_blocks_and_transactions(1, 1, 1)?;
+    let state = state_with_test_blocks_and_transactions(1, 1, 1);
     let state_view = state.view();
     let block = state_view
         .all_blocks(nonzero!(1_usize))

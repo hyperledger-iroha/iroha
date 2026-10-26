@@ -16,7 +16,6 @@
 //!
 //! The aggregate zk-X509 STARK commits every source trace before evaluating
 //! these equalities; this AIR has no standalone activation path.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::p256_trace::{P256EcdsaTraceMaterialV1, P256ReductionSourceV1};
 use super::{
     p256_air::ZkX509P256ModulusV1,
@@ -28,7 +27,6 @@ use super::{
         P256_WINDOW_EXTERNAL_LIMBS_PER_ROW_V1, P256WindowCoordinateV1, P256WindowScalarV1,
     },
 };
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::{
     p256_air::{P256_BASE_MODULUS_BE_V1, P256_SCALAR_MODULUS_BE_V1, ZkX509P256ArithmeticKindV1},
     p256_reduction_air::{p256_low_s_limb_cell_v1, p256_reduction_limb_cells_v1},
@@ -52,7 +50,6 @@ pub const P256_EXTERNAL_INITIAL_VALUES_V1: usize = 850;
 /// Verifier-owned constant initial values.
 pub const P256_EXTERNAL_CONSTANT_INITIAL_VALUES_V1: usize = 457;
 /// Input initial values with an explicit external or auxiliary owner.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub const P256_EXTERNAL_INPUT_INITIAL_VALUES_V1: usize = 393;
 /// Window candidate limbs bound across all 128 selectors.
 pub const P256_EXTERNAL_WINDOW_CANDIDATE_BINDINGS_V1: usize =
@@ -146,13 +143,9 @@ const PUBLIC_KEY_Y_ID_V1: u32 = 48;
 const PUBLIC_KEY_Z_ID_V1: u32 = 49;
 const SIGNATURE_R_ID_V1: u32 = 52;
 const SIGNATURE_S_ID_V1: u32 = 53;
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 const R_INVERSE_ID_V1: u32 = 54;
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 const R_INVERSE_ONE_ID_V1: u32 = 55;
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 const S_INVERSE_ID_V1: u32 = 56;
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 const S_INVERSE_ONE_ID_V1: u32 = 57;
 const DIGEST_REDUCTION_OUTPUT_ID_V1: u32 = 58;
 const VARIABLE_IDENTITY_X_ID_V1: u32 = 59;
@@ -160,9 +153,7 @@ const VARIABLE_IDENTITY_Y_ID_V1: u32 = 60;
 const VARIABLE_IDENTITY_Z_ID_V1: u32 = 61;
 const WINDOW_INITIAL_START_V1: usize = 79;
 const WINDOW_INITIAL_STRIDE_V1: usize = 12;
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 const RESULT_Z_INVERSE_ID_V1: u32 = 847;
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 const RESULT_Z_INVERSE_ONE_ID_V1: u32 = 848;
 const RESULT_X_REDUCTION_OUTPUT_ID_V1: u32 = 849;
 const ZERO_BE_V1: [u8; 32] = [0; 32];
@@ -252,7 +243,6 @@ pub enum P256UnresolvedByteIoKindV1 {
     /// Strict-DER signature scalar s.
     SignatureS,
     /// Exact SHA-256/prehash word before scalar reduction.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     DigestWord,
 }
 /// Committed source of one unresolved byte word.
@@ -263,7 +253,6 @@ pub enum P256UnresolvedByteIoKindV1 {
     variant_size_differences,
     reason = "boxing a tiny verifier manifest would add allocation and lose Copy semantics"
 )]
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum P256UnresolvedByteIoSourceV1 {
     /// One canonical value-bus writer.
@@ -280,7 +269,6 @@ pub enum P256UnresolvedByteIoSourceV1 {
     },
 }
 /// One typed byte-I/O endpoint that is intentionally unresolved here.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct P256UnresolvedByteIoEndpointV1 {
     /// Semantic byte word.
@@ -289,15 +277,17 @@ pub struct P256UnresolvedByteIoEndpointV1 {
     pub(crate) source: P256UnresolvedByteIoSourceV1,
 }
 /// Exact Qx, Qy, r, s, and digest manifest in verifier-fixed order.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct P256UnresolvedByteIoManifestV1 {
     /// Five unresolved endpoints in the order documented above.
     pub(crate) endpoints: [P256UnresolvedByteIoEndpointV1; 5],
 }
 /// The only three input writers that are internal inverse witnesses.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "Each field identifies a distinct inverse column, separate from the source column."
+)]
 pub struct P256InverseAuxiliaryManifestV1 {
     /// Inverse used to prove r is nonzero.
     pub(crate) r_inverse: P256ValueIdV1,
@@ -390,7 +380,6 @@ pub struct P256ExternalBindingCrossSourceV1 {
     pub(crate) external: P256ExternalBindingCrossExternalSourceV1,
 }
 /// Three deterministic pointwise equalities.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct P256ExternalBindingRowV1 {
     /// Verifier-regenerated addresses.
@@ -401,7 +390,6 @@ pub struct P256ExternalBindingRowV1 {
     pub(crate) external_cells: [F; P256_EXTERNAL_BINDINGS_PER_ROW_V1],
 }
 /// Complete deterministic binding trace and its two ownership manifests.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, PartialEq, Eq)]
 pub struct P256ExternalBindingTraceV1 {
     /// Verifier-fixed ECDSA role.
@@ -415,24 +403,21 @@ pub struct P256ExternalBindingTraceV1 {
     /// Exactly the r, s, and result-z inverse inputs.
     pub(crate) inverse_auxiliaries: P256InverseAuxiliaryManifestV1,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl core::fmt::Debug for P256ExternalBindingTraceV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
             .debug_struct("P256ExternalBindingTraceV1")
             .field("role", &self.role)
             .field("private_material", &"<redacted>")
-            .finish()
+            .finish_non_exhaustive()
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn zeroize_external_binding_rows_v1(rows: &mut [P256ExternalBindingRowV1]) {
     for row in rows {
         super::private_table::zeroize_fields_v1(&mut row.writer_cells);
         super::private_table::zeroize_fields_v1(&mut row.external_cells);
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256ExternalBindingTraceV1 {
     /// Recursively overwrite every private source and copied witness cell.
     ///
@@ -455,7 +440,6 @@ impl P256ExternalBindingTraceV1 {
             && self.input_selection.selected.private_is_zeroized_v1()
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for P256ExternalBindingTraceV1 {
     fn drop(&mut self) {
         self.zeroize_private_v1();
@@ -469,38 +453,30 @@ pub enum P256ExternalBindingErrorV1 {
     #[error("zk-X509 P-256 external-binding topology is invalid")]
     Topology,
     /// Initial inputs are missing, duplicated, aliased, or unowned.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error("zk-X509 P-256 external-binding ownership is invalid")]
     Ownership,
     /// A verifier-owned constant or its fixed writer is wrong.
     #[error("zk-X509 P-256 external-binding constant is invalid")]
     Constant,
     /// A value-bus execution writer address or copied cell is wrong.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error("zk-X509 P-256 external-binding writer source is invalid")]
     WriterSource,
     /// A window, reduction, low-s, or copied external cell is wrong.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error("zk-X509 P-256 external-binding external source is invalid")]
     ExternalSource,
     /// Two pointwise source cells are unequal.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error("zk-X509 P-256 external-binding equality is invalid")]
     Equality,
     /// A field or limb encoding is noncanonical.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error("zk-X509 P-256 external-binding range is invalid")]
     Range,
     /// Inactive slots or the final padding count are noncanonical.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error("zk-X509 P-256 external-binding padding is invalid")]
     Padding,
     /// A low-degree row residue is nonzero.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error("zk-X509 P-256 external-binding row constraint failed")]
     Constraint,
     /// The optional-certificate selector or canonical inactive source is invalid.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error("zk-X509 P-256 optional-certificate selection is invalid")]
     OptionalCertificateSelection,
     /// Length or index arithmetic exceeded the fixed envelope.
@@ -512,7 +488,6 @@ pub enum P256ExternalBindingErrorV1 {
 /// `real` is always the exact RFC/SHA source tuple.  For an inactive slot its
 /// Qx, Qy, r, and s words must be zero while its digest is SHA-256(empty).
 /// `selected` is the tuple compiled by the ordinary, ungated P-256 chip.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct P256OptionalCertificateSelectionV1 {
     /// RFC-derived Boolean selector: zero for depth two, one for depth three.
@@ -522,13 +497,11 @@ pub struct P256OptionalCertificateSelectionV1 {
     /// Exact tuple consumed by the fixed P-256 certificate instance.
     pub(crate) selected: P256EcdsaWitnessV1,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl core::fmt::Debug for P256OptionalCertificateSelectionV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str("P256OptionalCertificateSelectionV1 { <private material redacted> }")
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256OptionalCertificateSelectionV1 {
     /// Evaluate the complete low-degree selector relation.
     ///
@@ -588,7 +561,6 @@ impl P256OptionalCertificateSelectionV1 {
     }
 }
 /// Select the exact tuple consumed by the fixed optional P-256 instance.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub fn select_zk_x509_optional_certificate_p256_witness_v1(
     active: u8,
     real: P256EcdsaWitnessV1,
@@ -884,7 +856,6 @@ pub fn compile_zk_x509_p256_external_cross_sources_v1(
 ///
 /// This narrow constructor remains private so production callers cannot
 /// substitute an arbitrary endpoint for the role-bound base material.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn build_external_binding_from_execution_endpoint_v1(
     material: &P256EcdsaTraceMaterialV1,
     value_bus: &P256ValueBusBaseEndpointTraceV1,
@@ -930,7 +901,6 @@ fn build_external_binding_from_execution_endpoint_v1(
 /// The role check happens before projecting the execution endpoint. This is
 /// the production constructor used by MAIN; it does not rebuild the value bus
 /// and cannot depend on any post-X5B1 product accumulator.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub fn build_zk_x509_p256_external_binding_trace_v1(
     material: &P256EcdsaTraceMaterialV1,
     value_bus: &P256ValueBusBaseSourceV1,
@@ -945,7 +915,6 @@ pub fn build_zk_x509_p256_external_binding_trace_v1(
             .map_err(map_writer_error_v1)?,
     )
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256ExternalBindingTraceV1 {
     /// Validate exact coverage, ownership, source copies, equality, and padding.
     pub(crate) fn validate_v1(
@@ -1025,12 +994,12 @@ impl P256ExternalBindingTraceV1 {
     /// The selected tuple must already be the exact input compiled into this P-256 instance.
     pub(crate) fn bind_optional_certificate_selection_v1(
         &mut self,
-        selection: P256OptionalCertificateSelectionV1,
+        selection: &P256OptionalCertificateSelectionV1,
         material: &P256EcdsaTraceMaterialV1,
         value_bus: &P256ValueBusBaseEndpointTraceV1,
     ) -> Result<(), P256ExternalBindingErrorV1> {
         let previous = self.input_selection;
-        self.input_selection = selection;
+        self.input_selection = *selection;
         if let Err(error) = self.validate_v1(material, value_bus) {
             self.input_selection = previous;
             return Err(error);
@@ -1038,7 +1007,6 @@ impl P256ExternalBindingTraceV1 {
         Ok(())
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn p256_byte_io_witness_v1(
     material: &P256EcdsaTraceMaterialV1,
     manifest: P256UnresolvedByteIoManifestV1,
@@ -1100,7 +1068,6 @@ fn p256_byte_io_witness_v1(
 /// verifier-regenerated addresses and openings of the already-committed source
 /// traces.  Every active slot copies both sources and constrains equality.
 /// Inactive slots additionally constrain both committed copies to zero.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub fn evaluate_zk_x509_p256_external_binding_row_constraints_v1(
     fixed: [P256ExternalBindingFixedAccessV1; P256_EXTERNAL_BINDINGS_PER_ROW_V1],
     row: &P256ExternalBindingRowV1,
@@ -1139,21 +1106,18 @@ struct ExpectedInitialV1 {
     owner: ExpectedInitialOwnerV1,
     constant: Option<[u8; 32]>,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Debug)]
 struct ExpectedTopologyV1 {
     initial: Vec<ExpectedInitialV1>,
     byte_io: P256UnresolvedByteIoManifestV1,
     inverse_auxiliaries: P256InverseAuxiliaryManifestV1,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ExpectedBindingV1 {
     fixed: P256ExternalBindingFixedAccessV1,
     writer: F,
     external: F,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ExpectedBindingV1 {
     const fn inactive() -> Self {
         Self {
@@ -1163,14 +1127,12 @@ impl ExpectedBindingV1 {
         }
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn zeroize_expected_bindings_v1(bindings: &mut [ExpectedBindingV1]) {
     for binding in bindings {
         super::private_table::zeroize_fields_v1(core::slice::from_mut(&mut binding.writer));
         super::private_table::zeroize_fields_v1(core::slice::from_mut(&mut binding.external));
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn expected_slots_v1(
     material: &P256EcdsaTraceMaterialV1,
     value_bus: &P256ValueBusBaseEndpointTraceV1,
@@ -1178,7 +1140,6 @@ fn expected_slots_v1(
     let topology = validate_material_topology_v1(material)?;
     expected_slots_with_topology_v1(material, value_bus, &topology)
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn expected_slots_with_topology_v1(
     material: &P256EcdsaTraceMaterialV1,
     value_bus: &P256ValueBusBaseEndpointTraceV1,
@@ -1380,7 +1341,6 @@ fn expected_slots_with_topology_v1(
     }
     Ok(expected)
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn validate_material_topology_v1(
     material: &P256EcdsaTraceMaterialV1,
 ) -> Result<ExpectedTopologyV1, P256ExternalBindingErrorV1> {
@@ -1589,7 +1549,6 @@ fn validate_material_topology_v1(
         inverse_auxiliaries,
     })
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn validate_input_ownership_v1(
     material: &P256EcdsaTraceMaterialV1,
     expected: &[ExpectedInitialV1],
@@ -1677,7 +1636,6 @@ fn validate_input_ownership_v1(
     }
     Ok(())
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn validate_inverse_relation_v1(
     material: &P256EcdsaTraceMaterialV1,
     operation_index: usize,
@@ -1869,7 +1827,6 @@ fn push_input_v1(
         constant: None,
     });
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn expected_byte_io_manifest_v1() -> P256UnresolvedByteIoManifestV1 {
     P256UnresolvedByteIoManifestV1 {
         endpoints: [
@@ -1987,7 +1944,6 @@ fn expected_window_output_id_v1(
         u32::try_from(index).map_err(|_| P256ExternalBindingErrorV1::Resource)?,
     ))
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn final_result_operation_v1(coordinate: usize) -> Result<usize, P256ExternalBindingErrorV1> {
     if coordinate >= 3 {
         return Err(P256ExternalBindingErrorV1::Topology);
@@ -2010,7 +1966,6 @@ fn derived_id_v1(operation: usize) -> Result<P256ValueIdV1, P256ExternalBindingE
         u32::try_from(id).map_err(|_| P256ExternalBindingErrorV1::Resource)?,
     ))
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn writer_cell_v1(
     value_bus: &P256ValueBusBaseEndpointTraceV1,
     topology: &ExpectedTopologyV1,
@@ -2045,7 +2000,6 @@ fn writer_cell_v1(
     )
     .map_err(map_writer_error_v1)
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn validate_reduction_word_v1(
     trace: &super::p256_reduction_air::P256ReductionTraceV1,
     word_be: [u8; 32],
@@ -2063,7 +2017,6 @@ fn validate_reduction_word_v1(
     }
     Ok(())
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn coordinate_index_v1(coordinate: P256WindowCoordinateV1) -> usize {
     match coordinate {
         P256WindowCoordinateV1::X => 0,
@@ -2087,14 +2040,12 @@ fn bytes_be_to_limbs_le_v1(bytes: [u8; 32]) -> [u16; P256_VALUE_BUS_LIMBS_V1] {
         u16::from_be_bytes([bytes[offset], bytes[offset + 1]])
     })
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn modulus_bytes_v1(modulus: ZkX509P256ModulusV1) -> [u8; 32] {
     match modulus {
         ZkX509P256ModulusV1::BaseField => P256_BASE_MODULUS_BE_V1,
         ZkX509P256ModulusV1::ScalarField => P256_SCALAR_MODULUS_BE_V1,
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn map_writer_error_v1(error: P256ValueBusErrorV1) -> P256ExternalBindingErrorV1 {
     match error {
         P256ValueBusErrorV1::Resource => P256ExternalBindingErrorV1::Resource,
@@ -2174,7 +2125,10 @@ mod tests {
             [seed; 32],
             [seed.wrapping_add(1); 32],
             core::array::from_fn::<_, ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1, _>(|index| {
-                zk_x509_test_digest384_v1(seed.wrapping_add(index as u8).wrapping_add(2))
+                zk_x509_test_digest384_v1(
+                    seed.wrapping_add(u8::try_from(index & 0xff).expect("masked fixture byte"))
+                        .wrapping_add(2),
+                )
             }),
         );
         derive_zk_x509_credential_pre_aux_binding_v1(
@@ -2191,19 +2145,20 @@ mod tests {
         secret[31] = seed.max(1);
         let key = SigningKey::from_slice(&secret).expect("valid key");
         let digest = core::array::from_fn(|index| {
-            seed.wrapping_mul(31)
-                .wrapping_add((index as u8).wrapping_mul(17))
+            seed.wrapping_mul(31).wrapping_add(
+                (u8::try_from(index & 0xff).expect("masked fixture byte")).wrapping_mul(17),
+            )
         });
         let signature: Signature = key.sign_prehash(&digest).expect("signature");
         let signature = signature.normalize_s();
         let encoded = key.verifying_key().to_sec1_point(false);
-        let mut public_key_x_be = [0_u8; 32];
-        let mut public_key_y_be = [0_u8; 32];
-        public_key_x_be.copy_from_slice(encoded.x().expect("x"));
-        public_key_y_be.copy_from_slice(encoded.y().expect("y"));
+        let mut horizontal = [0_u8; 32];
+        let mut vertical = [0_u8; 32];
+        horizontal.copy_from_slice(encoded.x().expect("x"));
+        vertical.copy_from_slice(encoded.y().expect("y"));
         P256EcdsaWitnessV1 {
-            public_key_x_be,
-            public_key_y_be,
+            public_key_x_be: horizontal,
+            public_key_y_be: vertical,
             r_be: signature.r().to_bytes().into(),
             s_be: signature.s().to_bytes().into(),
             digest_be: digest,
@@ -2234,7 +2189,7 @@ mod tests {
                 rows[row] = P256ValueBusBaseCellV1 {
                     fixed: P256ValueBusFixedAccessV1::Active {
                         id: initial.id,
-                        limb: limb as u8,
+                        limb: u8::try_from(limb).expect("protocol-bounded index fits u8"),
                         access: P256ValueAccessKindV1::Write,
                         modulus: initial.modulus,
                         value_kind: match initial.kind {
@@ -2256,7 +2211,7 @@ mod tests {
                 rows[row] = P256ValueBusBaseCellV1 {
                     fixed: P256ValueBusFixedAccessV1::Active {
                         id: linked.c,
-                        limb: limb as u8,
+                        limb: u8::try_from(limb).expect("protocol-bounded index fits u8"),
                         access: P256ValueAccessKindV1::Write,
                         modulus: linked.operation.modulus,
                         value_kind: P256ValueKindV1::Derived,
@@ -2641,7 +2596,7 @@ mod tests {
             Err(P256ExternalBindingErrorV1::Topology)
         );
         let bound = base
-            .bind_v1(post_base_v1(0x41))
+            .bind_v1(&post_base_v1(0x41))
             .expect("source remains bindable after external base construction");
         bound
             .execution_aux_source_v1()
@@ -2846,7 +2801,7 @@ mod tests {
         let inactive = select_zk_x509_optional_certificate_p256_witness_v1(0, inactive_real)
             .expect("canonical inactive selection");
         trace
-            .bind_optional_certificate_selection_v1(inactive, &material, &value_bus)
+            .bind_optional_certificate_selection_v1(&inactive, &material, &value_bus)
             .expect("bind inactive selection");
         trace
             .validate_v1(&material, &value_bus)
@@ -2855,7 +2810,7 @@ mod tests {
         let mut forged = retained;
         forged.selected.public_key_x_be[0] ^= 1;
         assert_eq!(
-            trace.bind_optional_certificate_selection_v1(forged, &material, &value_bus),
+            trace.bind_optional_certificate_selection_v1(&forged, &material, &value_bus),
             Err(P256ExternalBindingErrorV1::OptionalCertificateSelection)
         );
         assert_eq!(trace.input_selection, retained);

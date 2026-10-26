@@ -58,7 +58,7 @@ impl rand::TryRng for PeriodicRng {
 
     fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
         for byte in destination {
-            *byte = ((self.cursor % self.period) as u8)
+            *byte = (self.cursor % self.period).to_le_bytes()[0]
                 .wrapping_mul(73)
                 .wrapping_add(19);
             self.cursor += 1;
@@ -1180,13 +1180,13 @@ fn root_blind_response_encoding_clears_both_nonce_owners_on_every_exit() {
     assert_eq!(prover_secret_scalar_owner_drops(), 4);
 
     reset_prover_secret_scalar_owner_drops();
-    let later_error = (|| -> Result<(), FcmpNativeErrorV1> {
+    let later_error: Result<(), FcmpNativeErrorV1> = {
         let mut nonce = ProverSecretScalarV1(Field25519::ONE);
         let _response = nonce.encode_public_and_clear_v1();
         assert_eq!(nonce.expose_ref(), &Field25519::ZERO);
         assert_eq!(prover_secret_scalar_owner_drops(), 1);
         Err(FcmpNativeErrorV1::ArithmeticInvariant)
-    })();
+    };
     assert_eq!(later_error, Err(FcmpNativeErrorV1::ArithmeticInvariant));
     assert_eq!(prover_secret_scalar_owner_drops(), 2);
 

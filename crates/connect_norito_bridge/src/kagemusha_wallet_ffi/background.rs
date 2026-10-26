@@ -1,8 +1,11 @@
 //! One bounded maintenance worker per opaque wallet, with Core-owned admission.
 //!
 //! Recovery, receipt verification, one eligible fold sub-proof and one exact Archive
-//! attempt share this worker. It parks without custody or proof priority. Coalesced events
-//! and relative timer hints select another source read; they never grant admission.
+//! attempt share this worker. Each proof is prepared and published under the wallet owner,
+//! and proved without it. Payment priority observes bounded fold fairness (Λ/Ω §5.6).
+//! The worker parks without custody or proof priority. Coalesced events and relative timer
+//! hints select another source read; they never grant admission. Each turn supplies its own
+//! backlog hint to decide whether an activity update wakes the worker.
 
 use super::*;
 #[cfg(test)]
@@ -62,11 +65,12 @@ impl Inner {
     }
 }
 impl state::FoldObserverV1 for Inner {
-    fn sub_proof(&self, mut record: state::FoldSubProofV1) {
+    fn sub_proof(&self, record: &state::FoldSubProofV1) {
+        let mut record = *record;
         record.peak_rss_bytes = peak_rss_bytes();
         let id = {
             let mut control = self.lock();
-            control.fold.record(record);
+            control.fold.record(&record);
             control.fold.counts().sub_proofs
         };
         observation::capture(self, id);
@@ -247,7 +251,9 @@ impl Background {
         self.inner.lock().payments += 1;
         self.inner.ready.notify_all();
         Payment {
-            priority: Some(scheduler.payment_for(class)),
+            // Every caller takes priority before the wallet owner, so a starved fold's running
+            // sub-proof can take that owner to publish while this payment waits.
+            priority: Some(scheduler.fair_payment_for(class)),
             background: self,
         }
     }
@@ -265,7 +271,7 @@ impl Background {
         self.inner.notify();
     }
     /// Record a finished execution/speculation observation without scheduling work.
-    pub(super) fn record_native_work(&self, record: state::NativeWorkRecordV1) {
+    pub(super) fn record_native_work(&self, record: &state::NativeWorkRecordV1) {
         self.inner.lock().fold.record_native_work(record);
     }
     /// Observation-only fold telemetry: the last 64 sub-proofs and cumulative counts.

@@ -103,6 +103,8 @@ fn receipt_proof<T>(value: Result<T, ProofError>) -> Result<T, Error> {
         other => proof(other),
     }
 }
+type CoordinatorAdmissionResult<F, P, S> =
+    Result<NativeWalletCoordinatorV1<F, P, S>, (RuntimeCustodyV1<F, P>, S, Error)>;
 
 impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> AdmittedWalletV1<F, P> {
     /// Consume original admission and bind the one complete producer grant to its native root.
@@ -110,16 +112,17 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> AdmittedWalletV1<F, P
     ///
     /// # Errors
     /// Changed installation/genesis, unavailable custody or inconsistent native state.
+    #[expect(
+        clippy::result_large_err,
+        reason = "failed activation returns the original custody and source owners without an allocation"
+    )]
     fn into_coordinator<S: OriginalSourceV1 + Send>(
         self,
         native_genesis: &Arc<SumeragiFinalityVerifier>,
         originals: S,
         read: ReadConfig,
         budget: MemoryBudget,
-    ) -> Result<
-        Coordinator<AdvanceHandle<F, P>, ProviderArchive<F, P>, NativeWalletProofsV1<F, P, S>>,
-        (RuntimeCustodyV1<F, P>, S, Error),
-    > {
+    ) -> CoordinatorAdmissionResult<F, P, S> {
         let (
             provider,
             installed,
@@ -193,7 +196,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> AdmittedWalletV1<F, P
             drop(observations);
             let originals = originals
                 .into_inner()
-                .unwrap_or_else(|error| error.into_inner());
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let custody = match custody.try_into_provider() {
                 Ok(provider) => RuntimeCustodyV1::Exclusive(provider),
                 Err(handle) => RuntimeCustodyV1::Shared(handle),
@@ -259,6 +262,16 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
         bytes: &[u8],
     ) -> Result<NativePreparedOperationV1, Error> {
         let prepared = self.derive(request, source, custody, bytes)?;
+        // Every never-selected Receive, planned now or validated again from its durable plan,
+        // proceeds toward Advance only if its fold cannot burn the Payment (§3.2 receive
+        // admission). Recovery of an Advance-selected Receive resolves before any derivation.
+        if request.kind() == KagemushaWalletOperationKindV1::Receive {
+            self.worker.receive_admission(
+                &proof(PreparationV1::new(&self.installed))?,
+                &prepared,
+                source.released(),
+            )?;
+        }
         Ok(NativePreparedOperationV1::new(
             prepared,
             bytes,

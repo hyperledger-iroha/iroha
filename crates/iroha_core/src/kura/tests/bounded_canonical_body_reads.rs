@@ -38,7 +38,7 @@ fn canonical_cold_read_control_refusal_retains_release_owner_and_exact_retry() {
     assert!(!kura.canonical_storage_poisoned.load(Ordering::Acquire));
     assert!(kura.block_data.lock().cached_body(0).is_none());
     drop(held);
-    assert!(matches!(wake.as_mut().poll(&mut context), Poll::Ready(_)));
+    assert!(matches!(wake.as_mut().poll(&mut context), Poll::Ready(())));
     let admitted = kura.get_block(height, &budget).unwrap().unwrap();
     assert!(admitted.belongs_to(&budget));
     assert_eq!(admitted.encode_wire().unwrap(), original_wire);

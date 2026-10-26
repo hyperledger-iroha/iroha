@@ -66,7 +66,7 @@ pub enum DaSpoolError {
     )]
     FilenameMismatch {
         /// Path that failed.
-        path: PathBuf,
+        path: Box<std::path::Path>,
         /// Lane identifier parsed from the filename.
         filename_lane: LaneId,
         /// Epoch parsed from the filename.
@@ -277,10 +277,10 @@ fn revalidate_regular_commitment_file(
 ///
 /// Propagates [`DaSpoolError`] when the spool directory cannot be read.
 pub fn load_commitment_store(spool_dir: &Path) -> Result<DaCommitmentStore, DaSpoolError> {
-    match load_commitment_bundle(spool_dir)? {
-        Some(bundle) => Ok(DaCommitmentStore::from_bundle(bundle.commitments())),
-        None => Ok(DaCommitmentStore::default()),
-    }
+    load_commitment_bundle(spool_dir)?.map_or_else(
+        || Ok(DaCommitmentStore::default()),
+        |bundle| Ok(DaCommitmentStore::from_bundle(bundle.commitments())),
+    )
 }
 #[cfg(test)]
 fn is_da_commitment_file(path: &Path) -> Result<bool, DaSpoolError> {
@@ -409,7 +409,7 @@ fn decode_commitment_record(
         || filename_key.storage_ticket != record.storage_ticket
     {
         return Err(DaSpoolError::FilenameMismatch {
-            path: path.to_path_buf(),
+            path: path.into(),
             filename_lane: filename_key.lane_id,
             filename_epoch: filename_key.epoch,
             filename_sequence: filename_key.sequence,

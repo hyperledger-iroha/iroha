@@ -197,7 +197,11 @@ pub fn export_race_parity_json_v1() -> Result<norito::json::Value, RaceSimulatio
                         };
                         1 | 16
                             | steer
-                            | if (state.tick + slot as u32 * 11) % 90 < 25 {
+                            | if (state.tick
+                                + u32::try_from(slot).expect("validated player or port count") * 11)
+                                % 90
+                                < 25
+                            {
                                 32
                             } else {
                                 0

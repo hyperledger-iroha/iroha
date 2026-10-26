@@ -828,7 +828,9 @@ fn wallet_advance_v1_enrollment_retains_full_core_request_bound_across_restart()
             )
             .unwrap(),
     );
-    let request: Vec<u8> = (0..524_288).map(|index| (index % 251) as u8).collect();
+    let request: Vec<u8> = (0..524_288)
+        .map(|index| u8::try_from(index % 251).unwrap())
+        .collect();
     assert_eq!(
         KAGEMUSHA_WALLET_ENROLLMENT_REQUEST_MAX_BYTES_V1,
         request.len()
@@ -1253,6 +1255,16 @@ fn wallet_advance_v1_enrollment_fresh_cannot_reset_an_active_marker_or_missing_k
 
 #[test]
 fn wallet_advance_v1_enrollment_fresh_invalid_record_or_missing_creation_policy_refuses() {
+    // Deliberately malformed current intent omits its required creation-policy field.
+    #[derive(norito::Encode, norito::Decode, norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_core::zk::kagemusha_wallet_advance_v1::IntentV1")]
+    struct IncompleteIntent {
+        version: u16,
+        slot: [u8; 32],
+        challenge: KagemushaWalletEnrollmentChallengeV1,
+        anchor_kind: u8,
+        profile: u8,
+    }
     let device = fresh_device(0xa6);
     device
         .platform
@@ -1289,16 +1301,6 @@ fn wallet_advance_v1_enrollment_fresh_invalid_record_or_missing_creation_policy_
             object: "key_generation_attempt"
         })
     );
-    // Deliberately malformed current intent omits its required creation-policy field.
-    #[derive(norito::Encode, norito::Decode, norito::NoritoSchema)]
-    #[norito_schema(name = "iroha_core::zk::kagemusha_wallet_advance_v1::IntentV1")]
-    struct IncompleteIntent {
-        version: u16,
-        slot: [u8; 32],
-        challenge: KagemushaWalletEnrollmentChallengeV1,
-        anchor_kind: u8,
-        profile: u8,
-    }
     let old = IncompleteIntent {
         version: 1,
         slot: intent.slot,

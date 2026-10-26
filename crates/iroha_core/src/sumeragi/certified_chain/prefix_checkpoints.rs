@@ -24,7 +24,7 @@ use super::*;
 const MAX_CHECKPOINTS: usize = 256;
 
 /// One original completed native prefix with independent persistent custody.
-pub(crate) struct PrefixCheckpoint {
+pub struct PrefixCheckpoint {
     height: u64,
     block_hash: HashOf<IrohaHeader>,
     wire: (u64, Hash),
@@ -57,7 +57,7 @@ impl PrefixCheckpoint {
 
 /// Bounded sorted storage; exact fixed capacity and every shared entry are prepaid.
 #[derive(Default)]
-pub(crate) struct FinalityPrefixCheckpoints {
+pub struct FinalityPrefixCheckpoints {
     entries: parking_lot::Mutex<Option<ChargedBuffer<ChargedShared<PrefixCheckpoint>>>>,
 }
 impl FinalityPrefixCheckpoints {

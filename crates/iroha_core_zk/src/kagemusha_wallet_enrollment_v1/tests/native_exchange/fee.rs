@@ -1,4 +1,4 @@
-//! Separate genuine fee-bearing Send, historical Request custody, and ArchiveReceive replay.
+//! Separate genuine fee-bearing Send, historical Request custody, and `ArchiveReceive` replay.
 //!
 //! Export a NEW dedicated target, fund it through ordinary Core execution, then run this
 //! producer on the SAME retained custody. Never clone or reuse the consumed zero-fee ABC A.
@@ -497,10 +497,10 @@ fn actual_native_fee_send_retains_historical_claim_across_restart_and_archive() 
         3
     );
     let signatures = device_a.platform.with(|state| state.sign_calls);
-    let retained_snapshot = a.snapshot().unwrap();
+    let sender_snapshot = a.snapshot().unwrap();
     drop(a);
     let mut a = sources.open(&device_a, &f, &frames_a);
-    assert_eq!(a.snapshot().unwrap(), retained_snapshot);
+    assert_eq!(a.snapshot().unwrap(), sender_snapshot);
     assert_eq!(complete(a.execute(send.clone()).unwrap()), payment_bytes);
     assert_eq!(
         a.fee_claim(digests.credit_id).unwrap(),

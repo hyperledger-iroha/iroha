@@ -1193,7 +1193,7 @@ pub fn build_signed_jindo_polynomial_evaluation_action_v1(
         metadata: context.metadata,
     };
     let signed = build_signed_jindo_privacy_action_v1(
-        native_context,
+        &native_context,
         request.witness,
         canonical_genesis_hash,
         private_key,
@@ -1222,7 +1222,7 @@ pub fn build_signed_vega_credential_presentation_action_v1(
         metadata: context.metadata,
     };
     let signed = build_signed_vega_privacy_action_v1(
-        native_context,
+        &native_context,
         request.input,
         request.witness_material,
         &request.device_signing_key,
@@ -1421,7 +1421,7 @@ pub fn build_signed_verange_action_v1(
         generator_digest: parameters.generator_digest(),
     };
     let native_statement =
-        VeRangeType1BatchStatementV1::new(request.bit_length, commitments, transcript)
+        VeRangeType1BatchStatementV1::new(request.bit_length, commitments, &transcript)
             .map_err(|_| PrivacyNativeActionErrorV1::at("verange-native-statement"))?;
     let proof = prove_batch(&native_statement, &values, &request.blindings, &mut SysRng)
         .map_err(|_| PrivacyNativeActionErrorV1::at("verange-proving"))?
@@ -1879,7 +1879,7 @@ pub fn build_signed_anonymous_pgc_payment_action_v1(
         &current_balances,
         recipient_count,
         invariant,
-        transcript,
+        &transcript,
     )
     .map_err(|_| PrivacyNativeActionErrorV1::at("pgc-native-statement"))?;
     let native_witness = AnonymousPgcPaymentWitnessV1 {
@@ -1993,7 +1993,10 @@ pub(crate) fn validate_orchard_ordered_context(
 ) -> Result<(), PrivacyNativeActionErrorV1> {
     validate_context(context)?;
     // The signed model stores milliseconds; never silently round an independently fixed plan.
-    if context.creation_time.subsec_nanos() % 1_000_000 != 0
+    if !context
+        .creation_time
+        .subsec_nanos()
+        .is_multiple_of(1_000_000)
         || context
             .time_to_live
             .is_some_and(|ttl| ttl.subsec_nanos() % 1_000_000 != 0)
@@ -2074,7 +2077,7 @@ fn build_signed_orchard_action_v1(
         &consensus_limits,
     )
     .map_err(|_| PrivacyNativeActionErrorV1::at("orchard-consensus-binding"))?;
-    let proved = authorize_orchard_bundle_v1(prepared, binding, &consensus_limits)
+    let proved = authorize_orchard_bundle_v1(prepared, &binding, &consensus_limits)
         .map_err(|_| PrivacyNativeActionErrorV1::at("orchard-authorization"))?;
     if proved.public.anchor != draft.anchor
         || proved.public.value_balance != draft.value_balance

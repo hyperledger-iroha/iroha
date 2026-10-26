@@ -1035,7 +1035,7 @@ def test_source_lookup_and_phone_key_checks_have_distinct_authorities() -> None:
 
 
 def test_compiled_source_profiles_are_a_kagemusha_only_digest_gate() -> None:
-    """A compiled built-in profile is a binary-digest admission, never a strict lookup hint.
+    """A compiled built-in profile checks its semantic ABI and exact originals, never a strict lookup hint.
 
     It is recorded out of plan only while KAGEMUSHA is its sole production caller; a caller
     of the delivery plan makes it open F.4 work, so this test fails until the census is
@@ -1049,10 +1049,11 @@ def test_compiled_source_profiles_are_a_kagemusha_only_digest_gate() -> None:
         ("crates/iroha_plonk/src/keys/keygen/builtin.rs", "digest_identity", "source"),
         ("crates/iroha_plonk/src/keys/keygen/builtin.rs", "unavailable", "unsupported"),
         ("crates/iroha_plonk/src/keys/keygen/builtin/generated.rs", "digest_identity", "source"),
+        ("crates/iroha_plonk/src/contract.rs", "digest_identity", "source"),
     }
     lookup = {site[0] for site in entry(CENSUS, "plonk.source_lookup")["sites"]}
     assert not {row[0] for row in rows} & lookup
-    api = ("BuiltinSourceProfileV1", "BuiltinSourceMemberV1", "builtin_source_identity_v1")
+    api = ("BuiltinSourceProfileV1", "BuiltinSourceMemberV1", "builtin_contract_v1")
     callers = set()
     for path in sorted((ROOT / "crates").glob("*/src/**/*.rs")):
         relative = path.relative_to(ROOT).as_posix()
@@ -1066,17 +1067,21 @@ def test_compiled_source_profiles_are_a_kagemusha_only_digest_gate() -> None:
     assert all("kagemusha" in caller for caller in callers), sorted(callers)
 
 
-def test_slash_reads_of_the_node_local_staking_projection_stay_open() -> None:
-    """The slash path compares node-local staking fields: an open F.4 dependence."""
+def test_slash_monetary_reads_use_committed_policy_without_closing_other_nexus_work() -> None:
+    """Slash monetary authority moved to State; remaining SORA Nexus policy stays open."""
     nexus = entry(CENSUS, "cfg.nexus.policy")
     assert nexus["status"] == "open" and nexus["owner"] == "F.4"
     staking = "crates/iroha_core/src/smartcontracts/isi/staking.rs"
     rows = {site[2] for site in nexus["sites"] if site[0] == staking and site[1] == "node_policy_read"}
-    assert {"staking.max_slash_bps", "staking.max_stake_shares_per_validator",
-            "staking.slash_sink_account_id"} <= rows
+    assert not {"staking.max_slash_bps", "staking.max_stake_shares_per_validator",
+                "staking.slash_sink_account_id"} & rows
+    assert "staking.max_validators" in rows
     source = (ROOT / staking).read_text(encoding="utf-8")
-    assert "let max_slash_bps = state_transaction.nexus.staking.max_slash_bps;" in source
-    assert "slash_within_limit(amount, &slashable_exposure, max_slash_bps)?" in source
+    slash = source.split("fn apply_slash_to_validator_inner(", 1)[1].split("\nfn ", 1)[0]
+    assert "state_transaction.nexus.staking" not in slash
+    assert ".staking_monetary_policy()" in slash
+    assert "let allowed = slash_within_limit(amount, &slashable_exposure, max_slash_bps);" in slash
+    assert "if !allowed {" in slash
 
 
 def test_refresh_rewrites_counts_only(tmp_path: Path) -> None:

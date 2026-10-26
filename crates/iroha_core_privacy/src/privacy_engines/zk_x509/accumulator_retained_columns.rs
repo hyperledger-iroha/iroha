@@ -45,7 +45,7 @@ impl core::fmt::Debug for CaOriginalMaskedColumnsV1 {
             .debug_struct("CaOriginalMaskedColumnsV1")
             .field("family", &self.family)
             .field("coefficients", &"<redacted>")
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 impl CaOriginalMaskedColumnsV1 {

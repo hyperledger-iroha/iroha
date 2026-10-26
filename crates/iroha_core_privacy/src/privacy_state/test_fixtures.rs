@@ -569,7 +569,7 @@ impl PgcPersistedFixture {
                 PrivacyRootRetentionAnchorV1::new(key.epoch(), key.root())
                     .expect("pruned root anchor")
             })
-            .or(head.retention_anchor());
+            .or_else(|| head.retention_anchor());
         let retained_roots = self
             .roots
             .view()

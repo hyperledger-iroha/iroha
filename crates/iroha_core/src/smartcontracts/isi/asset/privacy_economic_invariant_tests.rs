@@ -416,8 +416,7 @@ fn faulty_verifier_general_bridge_moves_only_existing_source_units() {
             PrivacyStatementDigestV1::new([statement; 32]),
             &definition,
             AssetBalanceScope::Global,
-            &ALICE_ID,
-            destination,
+            (&ALICE_ID, destination),
             Quantity::from(amount),
         )
     };

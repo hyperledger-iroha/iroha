@@ -278,7 +278,7 @@ fn sign_paid(
         .sign(key.private_key())
 }
 
-/// Signed NPoS genesis: the owner's `retail.bpng` domain, fee funding and validator keys.
+/// Signed `NPoS` genesis: the owner's `retail.bpng` domain, fee funding and validator keys.
 fn start_chain(
     keys: &Keys,
     domain: &DomainId,
@@ -662,8 +662,7 @@ fn store_lane_block(
         &anchors,
         &history,
         &record.merged,
-        &body,
-        &qc,
+        (&body, &qc),
     )
     .expect("authenticate and reproduce actual lane admission");
     store

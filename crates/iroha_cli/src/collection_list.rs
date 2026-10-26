@@ -78,7 +78,7 @@ impl ListArgs {
 
 /// An invalid list flag, rendered as an input error (exit code 4).
 #[derive(Debug)]
-pub(crate) struct ListInputError(pub(crate) ListQueryError);
+pub struct ListInputError(pub(crate) ListQueryError);
 
 impl std::fmt::Display for ListInputError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -105,13 +105,11 @@ fn flag_name(parameter: &str) -> Option<&'static str> {
 }
 
 /// Columns shown in text mode when `--select` is not given.
-pub(crate) fn default_columns(collection: &Collection) -> &'static [&'static str] {
+pub fn default_columns(collection: &Collection) -> &'static [&'static str] {
     match collection {
-        Collection::Domains => &["id", "owned_by"],
         Collection::Accounts => &["id", "label", "uaid"],
         Collection::AssetDefinitions => &["id", "name", "alias", "owned_by"],
-        Collection::Nfts => &["id", "owned_by"],
-        Collection::Rwas => &["id", "owned_by", "quantity", "status"],
+        Collection::Rwas | Collection::ExplorerRwas => &["id", "owned_by", "quantity", "status"],
         Collection::AccountAssets(_) => &["asset", "asset_alias", "scope", "quantity"],
         Collection::AccountPermissions(_) => &["name", "payload"],
         Collection::AssetHolders(_) => &["account_id", "scope", "quantity"],
@@ -125,13 +123,14 @@ pub(crate) fn default_columns(collection: &Collection) -> &'static [&'static str
         Collection::ExplorerDomains => &["id", "owned_by", "accounts", "assets", "nfts"],
         Collection::ExplorerAssetDefinitions => &["id", "owned_by", "total_quantity"],
         Collection::ExplorerAssets => &["id", "account_id", "definition_id", "value"],
-        Collection::ExplorerNfts => &["id", "owned_by"],
-        Collection::ExplorerRwas => &["id", "owned_by", "quantity", "status"],
+        Collection::Domains | Collection::Nfts | Collection::ExplorerNfts => &["id", "owned_by"],
         Collection::ExplorerBlocks => &["height", "hash", "created_at", "transactions_total"],
-        Collection::ExplorerTransactions => &["block", "hash", "authority", "status"],
-        Collection::ExplorerTransactionsLatest => &["block", "hash", "authority", "status"],
-        Collection::ExplorerInstructions => &["block", "transaction_hash", "index", "kind"],
-        Collection::ExplorerInstructionsLatest => &["block", "transaction_hash", "index", "kind"],
+        Collection::ExplorerTransactions | Collection::ExplorerTransactionsLatest => {
+            &["block", "hash", "authority", "status"]
+        }
+        Collection::ExplorerInstructions | Collection::ExplorerInstructionsLatest => {
+            &["block", "transaction_hash", "index", "kind"]
+        }
         Collection::RepoAgreements => &["id", "status", "initiator", "counterparty"],
         Collection::ContractActivity => &[
             "block_height",
@@ -158,9 +157,9 @@ pub(crate) fn default_columns(collection: &Collection) -> &'static [&'static str
 }
 
 /// Run one collection `list` command: a single page, or every page with `--all`.
-pub(crate) fn run_list<C: RunContext>(
+pub fn run_list<C: RunContext>(
     context: &mut C,
-    collection: Collection,
+    collection: &Collection,
     args: &ListArgs,
 ) -> Result<()> {
     let query = args.to_query().map_err(ListInputError)?;
@@ -168,7 +167,7 @@ pub(crate) fn run_list<C: RunContext>(
         .wrap_err("failed to initialize the collection client")?;
     let columns: Vec<String> = query.select.as_ref().map_or_else(
         || {
-            default_columns(&collection)
+            default_columns(collection)
                 .iter()
                 .map(|column| (*column).to_owned())
                 .collect()
@@ -182,7 +181,7 @@ pub(crate) fn run_list<C: RunContext>(
     );
     if !args.all {
         let page = client
-            .list_page(&collection, &query)
+            .list_page(collection, &query)
             .wrap_err_with(|| format!("failed to list {collection}"))?;
         return print_page(context, &page, &columns);
     }
@@ -310,16 +309,16 @@ fn cell(row: &Value, path: &str) -> String {
 }
 
 /// Read the one row of `collection` whose `id` equals `id`, or fail when it does not exist.
-pub(crate) fn get_by_id<C: RunContext>(
+pub fn get_by_id<C: RunContext>(
     context: &mut C,
-    collection: Collection,
+    collection: &Collection,
     id: &str,
 ) -> Result<Value> {
     let client = BlockingClient::from_client(context.client_from_config()?)
         .wrap_err("failed to initialize the collection client")?;
     let query = ListQuery::new().filter(field("id").eq(id)).limit(1);
     let page = client
-        .list_page(&collection, &query)
+        .list_page(collection, &query)
         .wrap_err_with(|| format!("failed to read {collection} `{id}`"))?;
     page.items
         .into_iter()

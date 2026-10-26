@@ -12,7 +12,7 @@ use iroha_data_model::fastpq::{
     FastpqSourceEffectCoverageV1, build_fastpq_ordinary_source_statement_manifest_v1,
 };
 use std::{alloc::Layout, io, sync::Arc};
-pub(crate) use witness::{AdmittedQuantityArchive, CapturedExecWitness, CapturedQuantityEntry};
+pub use witness::{AdmittedQuantityArchive, CapturedExecWitness, CapturedQuantityEntry};
 
 type SourceResult<T> = Result<T, ExecutionAttemptError<String>>;
 fn owner(message: &str) -> ExecutionAttemptError<String> {

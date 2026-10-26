@@ -4,6 +4,82 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
 
 ## [Unreleased]
 
+- `PetalScanSession` reads a capture's turn lanes after its bands when it has time to spare: when the
+  capture's work and the session's last turn try fit a 30 fps camera's frame time (`PETAL_CAPTURE_BUDGET_MS`),
+  timed with `performance.now()`. A slow phone core never has the time, so it still leaves them to the shown
+  frame's next capture; a fast decoder whose camera gives it few frames a second gets its turn lanes back. The
+  constructor's second argument, `workCost(work, measuredMs)` (`PetalWork`), puts a model's costs in place of
+  the measured times, and `stats().spareTurns` counts the captures that had the time.
+
+- `@iroha/iroha-js/petal` implements Petal Stream format 5: every frame is a portrait card of 1024 x 1668
+  units, the format 3 square with a band of 306 katakana tiles above and below it (`PETAL_LAYOUT.cardHeight`,
+  `squareTop`, `kanaTiles`, `kanaDataTiles`, `kanaPilotTiles`, `kanaTileAt`, `kanaInside`, `kanaInked`). Beacons
+  carry version `0x50`; format 3's `0x30` is refused like `0x20` and `0x10`. Eight tiles of each band are pilots
+  with fixed symbols; each of the other 298 shows one of sixteen katakana (`PETAL_GLYPHS`, stroke polylines on a
+  32-unit grid, `isGlyphInked`, `glyphStrokes`), light (filled, the glyph in the new palette colour `ink`) or dark
+  (the glyph in pink). The tiles' polarity is a lane `P0`/`P1` (37-byte words with 17 parity bytes, one atom)
+  and their katakana a lane `K0`/`K1` (149-byte words with 33 parity bytes, seven atoms), each closed by a
+  CRC-32C over the stream tag, the frame and the lane, with repair ids from 2³¹ + 2²⁰ (`PETAL_KANA`,
+  `kanaFirstId`, `kanaCheck`, `kanaData`, `kanaPacket`, `kanaWhitening`, `encodeKanaLane`,
+  `decodeKanaLaneCounted`): a card carries up to 53 atoms. Lane data and words gain `kana` (`P0`, `K0`, `P1`,
+  `K1`), `PetalFrameCells` gains `kanaGlyphs` and `kanaLight` (constructor arguments, `setKana`,
+  `kanaPolarityWord`, `kanaGlyphWord`), `renderPetalFrame` draws the whole card (`petalCardHeight(size)`
+  pixels tall, byte-identical to the reference), and draw lists carry `cardHeight`, `squareTop`, the tile
+  shape with every glyph's strokes and `kanaTiles`, which `drawPetalFrame` and the player draw. `readKana`
+  reads the bands of a decoded capture: the square's pose placed beyond the square, pilots found by a coarse
+  search and refined, an affine shift field and level lines fitted to them, and every tile's polarity and
+  glyph read against blurred templates; a lane passes when its check matches the square's frame or the frame
+  after or before it (`observeBand`, `kanaTemplateProbe` and `kanaCoarseTemplateProbe` for diagnostics and
+  conformance). `PetalScanSession` reads each band once per shown frame before the turn lanes, tries no turn
+  lane on a capture whose bands read a kana lane, backs off after band tries that read nothing (at most eight
+  captures, counted apart from the turn lanes'), and reports `outcome.kana` and `stats().kanaTries` and
+  `kanaLanes`. The unit suite checks `fixtures/petal/petal_stream_v5.json` and `petal_captures_v5.json`
+  exactly (`test/petalKana.test.js` holds the band tests).
+- `@iroha/iroha-js/petal` implements Petal Stream format 3 and removes formats 1 and 2 (beacons carry
+  version `0x30`; `0x20` and `0x10` are refused). The katakana tile lanes `P` and `K` (with `PETAL_GLYPHS`,
+  `tileCenter`, the glyph templates, `templateSigmas` and `tileMatchError`) give way to a field of 3,376
+  petals in four sectors, the field lanes `F0`-`F3` (105-byte words with 22 parity bytes), and the rings
+  move to radii 405, 440 and 475. On top of each field lane, the first 360 lit petals of its sector (in the
+  fixed shuffled `carrierOrder`) are turned by 0°, 45°, 90° or 135° and carry a turn lane `T0`-`T3`
+  (90-byte words with 22 parity bytes): four repair atoms with ids from 2³¹ (`turnFirstId`) and a CRC-32C
+  check that binds them to the header of the field lane they ride on (`turnData`, `turnPacket`,
+  `encodeTurnLane`, `decodeTurnLaneCounted`, `PETAL_TURNS`). Petals are narrower (half-length 6,
+  half-width 3.73) and their notch (radius 1.12 at 6.24) is always drawn. Frames carry 21 atoms (20 on
+  beacon frames) plus up to 16 turn atoms, and 512 atoms are buffered before the first beacon.
+  `PetalFrameCells` holds `dots`, `petals` and `turns` (`setTurns`, `turnWord`), lane data and words are
+  `{ d, fields, turns }`, and decoded frames carry `fields` and a `PetalPose` (`decodePetalFrameAt` takes
+  one) with radial lens distortion, searched while field lanes stay unread; unread sectors are read again
+  from local levels, `fieldEvidence` and `mergeFields` average repeated captures of one shown frame,
+  `readTurns` reads the turn lanes of a decoded capture (`observedTurns` and `turnTemplate` for
+  diagnostics and conformance), and `PetalScanSession` tries each turn lane once per shown frame,
+  backs off after tries that read nothing, and counts `fieldLanes`, `mergedLanes`, `turnTries` and
+  `turnLanes` (`outcome.turned`). Draw-list petals carry their axis
+  (the outward direction plus the turn). The player defaults to 12 fps and draws petals turned, notched
+  and antialiased. The unit suite checks `fixtures/petal/petal_stream_v3.json` and
+  `petal_captures_v3.json` exactly.
+- Added the asset movement feed of `GET /v1/assets/{definition_id}/movements`: `assetMovements(definitionId)`
+  on `ToriiClient` and `ToriiBrowserClient` is a history collection of every committed movement of the
+  definition, newest first (`TRANSFER`, `MINT`, `BURN`, `OFFLINE_LOAD`, `OFFLINE_UNLOAD`, `OFFLINE_FEE`,
+  and `OFFLINE_CHARGE` for the online charge of a Load or an Unload, with `result_ok: false` for a failed
+  transaction's attempted movement). Its rows are decoded with the new
+  strict `decodeAssetMovementRow` (`decodeAssetMovementRows` for a page's items) unless the query has
+  `select`; `ASSET_MOVEMENT_KINDS` and `ASSET_MOVEMENT_ROW_FIELDS` name the kinds and fields
+  (`ToriiAssetMovementRow`). Torii answers from a node-local index: `503 asset_movements_indexing` with
+  `Retry-After` while it catches up, and `asset_movements_not_retained` below its retained floor. It needs a
+  validator build that includes the feed.
+- `queryMultisigProposals` and `resolveMultisigProposal` take `includeApprovals: true` to receive
+  `approvals`: one `{ approver, approved_at_ms, block_height }` per approver in `proposal.approvals`, in the
+  order the approvals landed (`MultisigProposalApproval`). The node reads the times from committed blocks,
+  so they need no ledger change; an approval it did not see has null time and height. Without the flag the
+  request and response are unchanged.
+- Added the account alias join of `GET /v1/accounts`: `accountsInAliasScope(scope, { limit, cursor,
+  accountId })` builds the query for the accounts that hold an active alias in `scope` (`domain.dataspace`,
+  or `dataspace`) and selects `id`, `uaid` and `aliases`; `decodeAccountAliasRows` and `decodeAccountAliases`
+  decode the items exactly; `accountAliasScope` returns the scope of an alias literal;
+  `ACCOUNT_ALIAS_FIELDS` and `ACCOUNT_ALIAS_ROW_FIELDS` name the fields. One page replaces one
+  `POST /v1/aliases/by-account` per account. Torii computes `alias_scopes` and `aliases` only for queries that
+  mention them, from the bindings the signed caller may read, and needs a validator build that includes
+  the join.
 - Removed the Parliament timed-OVN ballot and Parliament TLE client APIs: the
   wallet and release reads and the proof request on `ToriiClient`, their path
   builders, response parsers, frame codec and constants, the nine ballot

@@ -52,11 +52,11 @@ pub struct CaJointComponentFixtureV1 {
 impl CaJointComponentFixtureV1 {
     pub(crate) fn verify_v1(
         &self,
-        public: ZkX509CaAccumulatorStarkPublicV1,
+        public: &ZkX509CaAccumulatorStarkPublicV1,
         schedule: &ZkX509ShaCallScheduleV1,
         pre_aux: ZkX509CredentialMainPreAuxV1,
         encoded: &[u8],
-        openings: JointOriginalOpeningsV1,
+        openings: &JointOriginalOpeningsV1,
     ) -> Result<(), ZkX509CaAccumulatorProofErrorV1> {
         let oracle =
             CaJointVerifierOraclesV1::new_v1(public, schedule, pre_aux, self.auxiliary, encoded)?;
@@ -83,7 +83,7 @@ impl CaJointComponentFixtureV1 {
         .map_err(map_transparent_proof_error_v1)?;
         let mut opened = oracle.open_joint_point_v1(point)?;
         let binding = opened.bind_with_main_v1(&mut main, openings)?;
-        opened.finish_v1(binding)
+        opened.finish_v1(&binding)
     }
 }
 /// Share one genuine CA Merkle/FRI construction across all hostile component tests.
@@ -121,9 +121,9 @@ pub fn fixture_v1() -> &'static CaJointComponentFixtureV1 {
         )
         .unwrap();
         let mut opened = oracle.open_joint_point_v1(point).unwrap();
-        let binding = opened.bind_with_main_v1(&mut main, [E::ONE; 24]).unwrap();
+        let binding = opened.bind_with_main_v1(&mut main, &[E::ONE; 24]).unwrap();
         let openings = binding.openings_v1();
-        let encoded = opened.finish_v1(binding).unwrap();
+        let encoded = opened.finish_v1(&binding).unwrap();
         CaJointComponentFixtureV1 {
             evidence: (public, schedule, encoded),
             auxiliary,
@@ -137,11 +137,11 @@ fn actual_ca_joint_fri_binds_every_original_supplemental_opening_and_paired_main
     let (public, schedule, encoded) = &fixture.evidence;
     let verify = |openings| {
         fixture.verify_v1(
-            *public,
+            public,
             schedule,
             credential_main_pre_aux_v1(),
             encoded,
-            openings,
+            &openings,
         )
     };
     assert!(encoded.len() <= ZK_X509_CA_ACCUMULATOR_MAX_PROOF_BYTES_V1);

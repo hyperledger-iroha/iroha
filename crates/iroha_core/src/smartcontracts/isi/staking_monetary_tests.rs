@@ -83,7 +83,7 @@ fn registration_monetary_plan_rejects_every_changed_effect_before_custody_writes
         validator.clone(),
         1_000_u64.into(),
         Metadata::default(),
-        fixture_registration_plan(&stx, lane, &validator, &1_000_u64.into()),
+        fixture_registration_plan(&stx, lane, &validator, Quantity::from(1_000_u64)),
     );
     let original = stx
         .world
@@ -159,17 +159,13 @@ fn staking_asset_resolution_requires_the_exact_committed_network_currency() {
         .unwrap();
     parameters.xor_asset_definition_id = other;
     stx.world
-        .parameters
-        .get_mut()
-        .set_parameter(Parameter::Custom(parameters.into_custom_parameter()))
+        .set_parameter_for_testing(Parameter::Custom(parameters.into_custom_parameter()))
         .expect("valid fixture parameters");
     assert!(
         stake_context(
             &stx.world,
-            &stx.nexus.dataspace_catalog,
-            &stx.nexus.staking,
-            &validator,
-            stx.block_unix_timestamp_ms()
+            stx.staking_monetary_policy().unwrap(),
+            &validator
         )
         .is_err()
     );
@@ -280,7 +276,7 @@ fn staking_registration_rejects_wrong_xor_shape_with_transaction_rollback() {
 }
 
 #[test]
-fn staking_configuration_and_reward_custody_reject_registered_xor_lookalike() {
+fn typed_staking_policy_and_reward_custody_reject_registered_xor_lookalike() {
     let state = setup_state();
     let mut block = state.block(block_header_with_height(1));
     let mut stx = block.transaction_for_callback_testing();
@@ -301,15 +297,9 @@ fn staking_configuration_and_reward_custody_reject_registered_xor_lookalike() {
     // An existing numeric asset with the same public name still has no network-currency
     // authority. Staking and funded reward custody both require the committed identity.
     for configured in [&committed_xor, &lookalike] {
-        stx.nexus.staking.stake_asset_id = configured.to_string();
-        stx.nexus.fees.fee_asset_id = configured.clone();
-        let stake_result = stake_context(
-            &stx.world,
-            &stx.nexus.dataspace_catalog,
-            &stx.nexus.staking,
-            &validator,
-            stx.block_unix_timestamp_ms(),
-        );
+        let mut policy = stx.staking_monetary_policy().unwrap().clone();
+        policy.stake_asset_id = configured.clone();
+        let stake_result = stake_context(&stx.world, &policy, &validator);
         let rewards = crate::state::validate_network_xor_asset(&stx.world, configured);
         if configured == &committed_xor {
             assert_eq!(stake_result.unwrap().asset_definition, committed_xor);
@@ -342,7 +332,7 @@ fn final_unbond_rejects_changed_signed_request_without_releasing_custody() {
         let mut block = state.block(block_header_with_height(1));
         let mut stx = block.transaction_for_callback_testing();
         let (validator, _, _, _) = prepare_accounts(&mut stx);
-        stx.nexus.staking.unbonding_delay = Duration::ZERO;
+
         RegisterPublicLaneValidator::new(
             lane,
             validator.clone(),
@@ -350,7 +340,7 @@ fn final_unbond_rejects_changed_signed_request_without_releasing_custody() {
             validator.clone(),
             1_000_u64.into(),
             Metadata::default(),
-            fixture_registration_plan(&stx, lane, &validator, &1_000_u64.into()),
+            fixture_registration_plan(&stx, lane, &validator, Quantity::from(1_000_u64)),
         )
         .execute(&validator, &mut stx)
         .unwrap();
@@ -381,7 +371,7 @@ fn final_unbond_rejects_changed_signed_request_without_releasing_custody() {
     let mut state_block = state.block(block.as_ref().header());
     let mut stx = state_block.transaction_for_fastpq_testing(Hash::prehashed([0xE3; Hash::LENGTH]));
     stx.nexus = nexus;
-    let good = fixture_unbond_plan(&stx, lane, &validator, &validator, &request_id);
+    let good = fixture_unbond_plan(&stx, lane, &validator, &validator, request_id);
     let reserve_before = stx
         .world
         .public_lane_stake_reserves
@@ -451,7 +441,7 @@ fn final_unbond_rejects_mismatched_share_identity_and_rolls_back_transaction() {
         let mut block = state.block(block_header_with_height(1));
         let mut stx = block.transaction_for_callback_testing();
         let (validator, delegator, _, _) = prepare_accounts(&mut stx);
-        stx.nexus.staking.unbonding_delay = Duration::ZERO;
+
         RegisterPublicLaneValidator::new(
             lane,
             validator.clone(),
@@ -459,7 +449,7 @@ fn final_unbond_rejects_mismatched_share_identity_and_rolls_back_transaction() {
             validator.clone(),
             1_000_u64.into(),
             Metadata::default(),
-            fixture_registration_plan(&stx, lane, &validator, &1_000_u64.into()),
+            fixture_registration_plan(&stx, lane, &validator, Quantity::from(1_000_u64)),
         )
         .execute(&validator, &mut stx)
         .unwrap();
@@ -493,7 +483,7 @@ fn final_unbond_rejects_mismatched_share_identity_and_rolls_back_transaction() {
     let (plan, share_before, validator_before, custody_before, reserve_before, balances_before) = {
         let mut stx = state_block.transaction_for_callback_testing();
         stx.nexus = nexus.clone();
-        let plan = fixture_unbond_plan(&stx, lane, &validator, &validator, &request_id);
+        let plan = fixture_unbond_plan(&stx, lane, &validator, &validator, request_id);
         let balances = (
             stx.world.assets.get(&plan.source_asset).cloned(),
             stx.world.assets.get(&plan.destination_asset).cloned(),
@@ -619,13 +609,13 @@ fn final_unbond_rejects_mismatched_share_identity_and_rolls_back_transaction() {
     );
     assert_eq!(
         stx.world.public_lane_stake_reserves.get(&plan.source_asset),
-        Some(&quantity_sub(reserve_before.unwrap(), request.amount.clone()).unwrap()),
+        Some(&quantity_sub(&(reserve_before.unwrap()), &(request.amount.clone())).unwrap()),
     );
     assert_eq!(
         stx.world.assets.get(&plan.source_asset).unwrap().as_ref(),
         &quantity_sub(
-            balances_before.0.unwrap().as_ref().clone(),
-            request.amount.clone()
+            &(balances_before.0.unwrap().as_ref().clone()),
+            &(request.amount.clone())
         )
         .unwrap(),
     );
@@ -635,7 +625,11 @@ fn final_unbond_rejects_mismatched_share_identity_and_rolls_back_transaction() {
             .get(&plan.destination_asset)
             .unwrap()
             .as_ref(),
-        &quantity_add(balances_before.1.unwrap().as_ref().clone(), request.amount).unwrap(),
+        &quantity_add(
+            &(balances_before.1.unwrap().as_ref().clone()),
+            &(request.amount)
+        )
+        .unwrap(),
     );
 }
 

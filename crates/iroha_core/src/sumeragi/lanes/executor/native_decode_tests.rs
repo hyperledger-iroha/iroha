@@ -81,10 +81,10 @@ impl LaneTransactions for NoRows {
         Ok((Vec::new(), ()))
     }
 
-    fn retain_prefix(&self, _: &mut Self::Lease, _: usize) {}
+    fn retain_prefix(&self, (): &mut Self::Lease, _: usize) {}
     fn lease_is_current(
         &self,
-        _: &Self::Lease,
+        (): &Self::Lease,
         _: &iroha_allocation::AllocationBudget,
     ) -> Result<bool, crate::sumeragi::driver::traits::PublicationError> {
         Ok(true)
@@ -286,12 +286,12 @@ impl Fixture {
         time_source: iroha_primitives::time::TimeSource,
     ) -> LaneRecovery<Anchor, IntrinsicComponentCheck, NoRows> {
         LaneExecutor::begin_recover(
-            self.record.clone(),
-            self.body.source().config().clone(),
-            self.body.source().instance(),
-            self.anchor.clone(),
-            IntrinsicComponentCheck,
-            None,
+            (
+                self.record.clone(),
+                self.body.source().config().clone(),
+                self.body.source().instance(),
+            ),
+            (self.anchor.clone(), IntrinsicComponentCheck, None),
             self.genesis,
             self.store.clone(),
             self.crypto.clone(),

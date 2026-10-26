@@ -47,7 +47,9 @@ fn maximum_credential_bound_sources_preserve_joint_binding_and_terminal_handoffs
     let pre_aux = ZkX509CredentialMainPreAuxV1::fixture_for_test_v1(
         [0x81; 32],
         assembly.verifier_profile.compiled_profile_digest,
-        core::array::from_fn(|index| test_stark_digest_v1(index as u8 + 1)),
+        core::array::from_fn(|index| {
+            test_stark_digest_v1(u8::try_from(index).expect("fixture value fits u8") + 1)
+        }),
     );
     let binding = derive_zk_x509_credential_pre_aux_binding_v1(
         pre_aux,
@@ -66,7 +68,7 @@ fn maximum_credential_bound_sources_preserve_joint_binding_and_terminal_handoffs
     });
     let p256 = P256MainBaseSourceV1::new_v1(&assembly).unwrap();
     let mut source = MainLog19BoundTraceGroupSourceV1::bind_from_phase_v1(
-        &layout, &assembly, sha, p256, binding,
+        &layout, &assembly, sha, p256, &binding,
     )
     .expect("actual maximum BoundSources phase without mask/commitment work");
     assert_eq!(source.post_base, binding.main_post_base());
@@ -212,6 +214,7 @@ fn deterministic_projection_proof_roundtrips_and_has_a_protocol_kat() {
         .map(|query| query.index)
         .collect::<BTreeSet<_>>();
     assert_eq!(indices.len(), QUERY_COUNT);
+    // The canonical 32-byte native BLAKE3 catalog binds every transcript frame.
     let digest: [u8; 32] = Sha256::digest(proof).into();
     eprintln!(
         "zk-x509-native-projection-proof-sha256={}",
@@ -219,7 +222,7 @@ fn deterministic_projection_proof_roundtrips_and_has_a_protocol_kat() {
     );
     assert_eq!(
         hex::encode(digest),
-        "0dd4a27570de1f36d102a887c61929bb8f94776afeba6568720e7758ca49aa2a",
+        "6f42a655b97ec22fbd4bab70cf04c401bb17d6d30d6897f4c885ba68897b4cac",
         "update only when the canonical projection proof protocol intentionally changes"
     );
 }
@@ -274,11 +277,12 @@ fn deterministic_proof_roundtrips_and_has_unique_post_grinding_queries() {
         .map(|query| query.index)
         .collect::<BTreeSet<_>>();
     assert_eq!(indices.len(), QUERY_COUNT);
+    // The canonical 32-byte native BLAKE3 catalog binds every transcript frame.
     let digest: [u8; 32] = Sha256::digest(proof).into();
     eprintln!("zk-x509-native-io-proof-sha256={}", hex::encode(digest));
     assert_eq!(
         hex::encode(digest),
-        "165791adcb5b95e31ec00387bc9ea82577977ff7c96e26ed7829fe7a784b1f94",
+        "672c2f231ed044de2ffc6aee74c686777dadaabdbec2a58a464afda6581af69f",
         "update only when the canonical proof protocol intentionally changes"
     );
 }
@@ -747,8 +751,9 @@ fn every_projection_public_field_and_output_rejects_proof_replay() {
         };
         mutations.push(("disclosed_attributes.index", changed));
         let mut changed = baseline.clone();
-        changed.disclosed_attributes[disclosure].attribute_digest =
-            PrivacyAttributeDigestV1::new([0x90 + disclosure as u8; 32]);
+        changed.disclosed_attributes[disclosure].attribute_digest = PrivacyAttributeDigestV1::new(
+            [0x90 + u8::try_from(disclosure).expect("fixture value fits u8"); 32],
+        );
         mutations.push(("disclosed_attributes.attribute_digest", changed));
     }
     let mut changed = baseline.clone();
@@ -943,88 +948,88 @@ fn compact_ca_registration_is_single_fixed_capacity_and_fail_closed() {
 fn main_provider_registry_is_exactly_six_closed_ordered_groups() {
     let layout = AggregateProofLayoutV1::for_full_profile_v1().expect("canonical MAIN layout");
     {
-        let mut a = MockMainTraceGroupSourceV1::default();
-        let mut b = MockMainTraceGroupSourceV1::default();
-        let mut c = MockMainTraceGroupSourceV1::default();
-        let mut d = MockMainTraceGroupSourceV1::default();
-        let mut e = MockMainTraceGroupSourceV1::default();
+        let mut first = MockMainTraceGroupSourceV1::default();
+        let mut second = MockMainTraceGroupSourceV1::default();
+        let mut third = MockMainTraceGroupSourceV1::default();
+        let mut fourth = MockMainTraceGroupSourceV1::default();
+        let mut fifth = MockMainTraceGroupSourceV1::default();
         assert!(matches!(
             MainTraceProviderSetV1::new_v1(
                 &layout,
                 vec![
-                    MainTraceGroupProviderV1::TestLog5(&mut a),
-                    MainTraceGroupProviderV1::TestLog8(&mut b),
-                    MainTraceGroupProviderV1::Log15(&mut c),
-                    MainTraceGroupProviderV1::TestLog16(&mut d),
-                    MainTraceGroupProviderV1::Log18(&mut e),
+                    MainTraceGroupProviderV1::TestLog5(&mut first),
+                    MainTraceGroupProviderV1::TestLog8(&mut second),
+                    MainTraceGroupProviderV1::Log15(&mut third),
+                    MainTraceGroupProviderV1::TestLog16(&mut fourth),
+                    MainTraceGroupProviderV1::Log18(&mut fifth),
                 ],
             ),
             Err(ZkX509StarkErrorV1::ProfileMismatch)
         ));
     }
     {
-        let mut a = MockMainTraceGroupSourceV1::default();
-        let mut b = MockMainTraceGroupSourceV1::default();
-        let mut c = MockMainTraceGroupSourceV1::default();
-        let mut d = MockMainTraceGroupSourceV1::default();
-        let mut e = MockMainTraceGroupSourceV1::default();
-        let mut f = MockMainTraceGroupSourceV1::default();
+        let mut first = MockMainTraceGroupSourceV1::default();
+        let mut second = MockMainTraceGroupSourceV1::default();
+        let mut third = MockMainTraceGroupSourceV1::default();
+        let mut fourth = MockMainTraceGroupSourceV1::default();
+        let mut fifth = MockMainTraceGroupSourceV1::default();
+        let mut sixth = MockMainTraceGroupSourceV1::default();
         assert!(matches!(
             MainTraceProviderSetV1::new_v1(
                 &layout,
                 vec![
-                    MainTraceGroupProviderV1::TestLog8(&mut a),
-                    MainTraceGroupProviderV1::TestLog5(&mut b),
-                    MainTraceGroupProviderV1::Log15(&mut c),
-                    MainTraceGroupProviderV1::TestLog16(&mut d),
-                    MainTraceGroupProviderV1::Log18(&mut e),
-                    MainTraceGroupProviderV1::Log19(&mut f),
+                    MainTraceGroupProviderV1::TestLog8(&mut first),
+                    MainTraceGroupProviderV1::TestLog5(&mut second),
+                    MainTraceGroupProviderV1::Log15(&mut third),
+                    MainTraceGroupProviderV1::TestLog16(&mut fourth),
+                    MainTraceGroupProviderV1::Log18(&mut fifth),
+                    MainTraceGroupProviderV1::Log19(&mut sixth),
                 ],
             ),
             Err(ZkX509StarkErrorV1::ProfileMismatch)
         ));
     }
     {
-        let mut a = MockMainTraceGroupSourceV1::default();
-        let mut b = MockMainTraceGroupSourceV1::default();
-        let mut c = MockMainTraceGroupSourceV1::default();
-        let mut d = MockMainTraceGroupSourceV1::default();
-        let mut e = MockMainTraceGroupSourceV1::default();
-        let mut f = MockMainTraceGroupSourceV1::default();
+        let mut first = MockMainTraceGroupSourceV1::default();
+        let mut second = MockMainTraceGroupSourceV1::default();
+        let mut third = MockMainTraceGroupSourceV1::default();
+        let mut fourth = MockMainTraceGroupSourceV1::default();
+        let mut fifth = MockMainTraceGroupSourceV1::default();
+        let mut sixth = MockMainTraceGroupSourceV1::default();
         assert!(matches!(
             MainTraceProviderSetV1::new_v1(
                 &layout,
                 vec![
-                    MainTraceGroupProviderV1::TestLog5(&mut a),
-                    MainTraceGroupProviderV1::TestLog5(&mut b),
-                    MainTraceGroupProviderV1::Log15(&mut c),
-                    MainTraceGroupProviderV1::TestLog16(&mut d),
-                    MainTraceGroupProviderV1::Log18(&mut e),
-                    MainTraceGroupProviderV1::Log19(&mut f),
+                    MainTraceGroupProviderV1::TestLog5(&mut first),
+                    MainTraceGroupProviderV1::TestLog5(&mut second),
+                    MainTraceGroupProviderV1::Log15(&mut third),
+                    MainTraceGroupProviderV1::TestLog16(&mut fourth),
+                    MainTraceGroupProviderV1::Log18(&mut fifth),
+                    MainTraceGroupProviderV1::Log19(&mut sixth),
                 ],
             ),
             Err(ZkX509StarkErrorV1::ProfileMismatch)
         ));
     }
     {
-        let mut a = MockMainTraceGroupSourceV1::default();
-        let mut b = MockMainTraceGroupSourceV1::default();
-        let mut c = MockMainTraceGroupSourceV1::default();
-        let mut d = MockMainTraceGroupSourceV1::default();
-        let mut e = MockMainTraceGroupSourceV1::default();
-        let mut f = MockMainTraceGroupSourceV1::default();
-        let mut g = MockMainTraceGroupSourceV1::default();
+        let mut first = MockMainTraceGroupSourceV1::default();
+        let mut second = MockMainTraceGroupSourceV1::default();
+        let mut third = MockMainTraceGroupSourceV1::default();
+        let mut fourth = MockMainTraceGroupSourceV1::default();
+        let mut fifth = MockMainTraceGroupSourceV1::default();
+        let mut sixth = MockMainTraceGroupSourceV1::default();
+        let mut extra = MockMainTraceGroupSourceV1::default();
         assert!(matches!(
             MainTraceProviderSetV1::new_v1(
                 &layout,
                 vec![
-                    MainTraceGroupProviderV1::TestLog5(&mut a),
-                    MainTraceGroupProviderV1::TestLog8(&mut b),
-                    MainTraceGroupProviderV1::Log15(&mut c),
-                    MainTraceGroupProviderV1::TestLog16(&mut d),
-                    MainTraceGroupProviderV1::Log18(&mut e),
-                    MainTraceGroupProviderV1::Log19(&mut f),
-                    MainTraceGroupProviderV1::Log19(&mut g),
+                    MainTraceGroupProviderV1::TestLog5(&mut first),
+                    MainTraceGroupProviderV1::TestLog8(&mut second),
+                    MainTraceGroupProviderV1::Log15(&mut third),
+                    MainTraceGroupProviderV1::TestLog16(&mut fourth),
+                    MainTraceGroupProviderV1::Log18(&mut fifth),
+                    MainTraceGroupProviderV1::Log19(&mut sixth),
+                    MainTraceGroupProviderV1::Log19(&mut extra),
                 ],
             ),
             Err(ZkX509StarkErrorV1::ProfileMismatch)
@@ -1033,37 +1038,44 @@ fn main_provider_registry_is_exactly_six_closed_ordered_groups() {
     {
         let mut changed = layout.clone();
         changed.common_lde_log2 -= 1;
-        let mut a = MockMainTraceGroupSourceV1::default();
-        let mut b = MockMainTraceGroupSourceV1::default();
-        let mut c = MockMainTraceGroupSourceV1::default();
-        let mut d = MockMainTraceGroupSourceV1::default();
-        let mut e = MockMainTraceGroupSourceV1::default();
-        let mut f = MockMainTraceGroupSourceV1::default();
+        let mut first = MockMainTraceGroupSourceV1::default();
+        let mut second = MockMainTraceGroupSourceV1::default();
+        let mut third = MockMainTraceGroupSourceV1::default();
+        let mut fourth = MockMainTraceGroupSourceV1::default();
+        let mut fifth = MockMainTraceGroupSourceV1::default();
+        let mut sixth = MockMainTraceGroupSourceV1::default();
         assert!(matches!(
             MainTraceProviderSetV1::new_v1(
                 &changed,
-                mock_main_group_providers_v1([&mut a, &mut b, &mut c, &mut d, &mut e, &mut f,]),
+                mock_main_group_providers_v1([
+                    &mut first,
+                    &mut second,
+                    &mut third,
+                    &mut fourth,
+                    &mut fifth,
+                    &mut sixth,
+                ]),
             ),
             Err(ZkX509StarkErrorV1::ProfileMismatch)
         ));
     }
     {
-        let mut a = MockMainTraceGroupSourceV1::default();
-        let mut b = MockMainTraceGroupSourceV1::default();
-        let mut c = MockMainTraceGroupSourceV1::default();
-        let mut d = MockMainTraceGroupSourceV1::default();
-        let mut e = MockMainTraceGroupSourceV1::default();
-        let mut f = MockMainTraceGroupSourceV1::default();
+        let mut first = MockMainTraceGroupSourceV1::default();
+        let mut second = MockMainTraceGroupSourceV1::default();
+        let mut third = MockMainTraceGroupSourceV1::default();
+        let mut fourth = MockMainTraceGroupSourceV1::default();
+        let mut fifth = MockMainTraceGroupSourceV1::default();
+        let mut sixth = MockMainTraceGroupSourceV1::default();
         assert!(matches!(
             MainOpenedProviderSetV1::new_v1(
                 &layout,
                 vec![
-                    MainOpenedGroupProviderV1::TestLog5(&mut a),
-                    MainOpenedGroupProviderV1::TestLog8(&mut b),
-                    MainOpenedGroupProviderV1::TestLog16(&mut c),
-                    MainOpenedGroupProviderV1::TestLog15(&mut d),
-                    MainOpenedGroupProviderV1::TestLog18(&mut e),
-                    MainOpenedGroupProviderV1::TestLog19(&mut f),
+                    MainOpenedGroupProviderV1::TestLog5(&mut first),
+                    MainOpenedGroupProviderV1::TestLog8(&mut second),
+                    MainOpenedGroupProviderV1::TestLog16(&mut third),
+                    MainOpenedGroupProviderV1::TestLog15(&mut fourth),
+                    MainOpenedGroupProviderV1::TestLog18(&mut fifth),
+                    MainOpenedGroupProviderV1::TestLog19(&mut sixth),
                 ],
             ),
             Err(ZkX509StarkErrorV1::ProfileMismatch)
@@ -1073,16 +1085,21 @@ fn main_provider_registry_is_exactly_six_closed_ordered_groups() {
 #[test]
 fn main_provider_routes_every_group_column_through_verifier_owned_slices() {
     let layout = AggregateProofLayoutV1::for_full_profile_v1().expect("canonical MAIN layout");
-    let mut log5 = MockMainTraceGroupSourceV1::default();
-    let mut log8 = MockMainTraceGroupSourceV1::default();
-    let mut log15 = MockMainTraceGroupSourceV1::default();
-    let mut log16 = MockMainTraceGroupSourceV1::default();
-    let mut log18 = MockMainTraceGroupSourceV1::default();
-    let mut log19 = MockMainTraceGroupSourceV1::default();
+    let mut small_group = MockMainTraceGroupSourceV1::default();
+    let mut medium_group = MockMainTraceGroupSourceV1::default();
+    let mut projection_group = MockMainTraceGroupSourceV1::default();
+    let mut lookup_group = MockMainTraceGroupSourceV1::default();
+    let mut io_group = MockMainTraceGroupSourceV1::default();
+    let mut large_group = MockMainTraceGroupSourceV1::default();
     let mut providers = MainTraceProviderSetV1::new_v1(
         &layout,
         mock_main_group_providers_v1([
-            &mut log5, &mut log8, &mut log15, &mut log16, &mut log18, &mut log19,
+            &mut small_group,
+            &mut medium_group,
+            &mut projection_group,
+            &mut lookup_group,
+            &mut io_group,
+            &mut large_group,
         ]),
     )
     .expect("exact MAIN providers");
@@ -1144,11 +1161,16 @@ fn main_provider_routes_every_group_column_through_verifier_owned_slices() {
             .is_err()
     );
     drop(providers);
-    log19.short_base_column = true;
+    large_group.short_base_column = true;
     let mut providers = MainTraceProviderSetV1::new_v1(
         &layout,
         mock_main_group_providers_v1([
-            &mut log5, &mut log8, &mut log15, &mut log16, &mut log18, &mut log19,
+            &mut small_group,
+            &mut medium_group,
+            &mut projection_group,
+            &mut lookup_group,
+            &mut io_group,
+            &mut large_group,
         ]),
     )
     .expect("short-column adversary registry");
@@ -1158,12 +1180,17 @@ fn main_provider_routes_every_group_column_through_verifier_owned_slices() {
             .is_err()
     );
     drop(providers);
-    log19.short_base_column = false;
-    log19.noncanonical_aux_column = true;
+    large_group.short_base_column = false;
+    large_group.noncanonical_aux_column = true;
     let mut providers = MainTraceProviderSetV1::new_v1(
         &layout,
         mock_main_group_providers_v1([
-            &mut log5, &mut log8, &mut log15, &mut log16, &mut log18, &mut log19,
+            &mut small_group,
+            &mut medium_group,
+            &mut projection_group,
+            &mut lookup_group,
+            &mut io_group,
+            &mut large_group,
         ]),
     )
     .expect("noncanonical-column adversary registry");
@@ -1206,7 +1233,7 @@ fn main_projection_source_matches_every_direct_native_column() {
         );
     }
     projection
-        .bind_challenges_v1(post_base)
+        .bind_challenges_v1(&post_base)
         .expect("bind projection challenges");
     for local_column in 0..ZK_X509_PROJECTION_AUX_WIDTH_V1 {
         assert_eq!(
@@ -1221,7 +1248,7 @@ fn main_projection_source_matches_every_direct_native_column() {
             "aux column {local_column}"
         );
     }
-    assert!(projection.bind_challenges_v1(post_base).is_err());
+    assert!(projection.bind_challenges_v1(&post_base).is_err());
     assert!(
         projection
             .native_base_column_v1(registration, ZK_X509_PROJECTION_BASE_WIDTH_V1)
@@ -1240,20 +1267,20 @@ fn main_projection_source_matches_every_direct_native_column() {
             .native_base_column_v1(io_registration, 0)
             .is_err()
     );
-    let mut log5 = MockMainTraceGroupSourceV1::default();
-    let mut log8 = MockMainTraceGroupSourceV1::default();
-    let mut log16 = MockMainTraceGroupSourceV1::default();
-    let mut log18 = MockMainTraceGroupSourceV1::default();
-    let mut log19 = MockMainTraceGroupSourceV1::default();
+    let mut small_group = MockMainTraceGroupSourceV1::default();
+    let mut medium_group = MockMainTraceGroupSourceV1::default();
+    let mut lookup_group = MockMainTraceGroupSourceV1::default();
+    let mut io_group = MockMainTraceGroupSourceV1::default();
+    let mut large_group = MockMainTraceGroupSourceV1::default();
     let mut providers = MainTraceProviderSetV1::new_v1(
         &layout,
         vec![
-            MainTraceGroupProviderV1::TestLog5(&mut log5),
-            MainTraceGroupProviderV1::TestLog8(&mut log8),
+            MainTraceGroupProviderV1::TestLog5(&mut small_group),
+            MainTraceGroupProviderV1::TestLog8(&mut medium_group),
             MainTraceGroupProviderV1::Log15(&mut projection),
-            MainTraceGroupProviderV1::TestLog16(&mut log16),
-            MainTraceGroupProviderV1::Log18(&mut log18),
-            MainTraceGroupProviderV1::Log19(&mut log19),
+            MainTraceGroupProviderV1::TestLog16(&mut lookup_group),
+            MainTraceGroupProviderV1::Log18(&mut io_group),
+            MainTraceGroupProviderV1::Log19(&mut large_group),
         ],
     )
     .expect("production projection registry");
@@ -1343,7 +1370,7 @@ fn main_projection_fixed_rows_and_residues_match_direct_common_domain_adapter() 
             .collect::<Vec<_>>()
     };
     let mut source =
-        MainProjectionVerifierConstraintSourceV1::for_main_v1(&layout, &statement, post_base)
+        MainProjectionVerifierConstraintSourceV1::for_main_v1(&layout, &statement, &post_base)
             .expect("verifier-safe projection source");
     let next_stride = layout.trace_groups[registration.trace_group]
         .next_stride(layout.common_lde_log2)
@@ -1567,7 +1594,7 @@ fn main_projection_verifier_cache_reuses_caps_and_rejects_the_273rd_opening() {
     let (statement, _) = crate::privacy_engines::zk_x509::projection_air::tests::fixture();
     let post_base = projection_provider_post_base_v1(&statement);
     let mut source =
-        MainProjectionVerifierConstraintSourceV1::for_main_v1(&layout, &statement, post_base)
+        MainProjectionVerifierConstraintSourceV1::for_main_v1(&layout, &statement, &post_base)
             .expect("verifier projection source");
     let next_stride = layout.trace_groups[registration.trace_group]
         .next_stride(layout.common_lde_log2)
@@ -1630,13 +1657,13 @@ fn main_projection_concrete_verifier_routes_through_the_closed_provider_set() {
     let (statement, _) = crate::privacy_engines::zk_x509::projection_air::tests::fixture();
     let post_base = projection_provider_post_base_v1(&statement);
     let mut projection =
-        MainProjectionVerifierConstraintSourceV1::for_main_v1(&layout, &statement, post_base)
+        MainProjectionVerifierConstraintSourceV1::for_main_v1(&layout, &statement, &post_base)
             .expect("concrete projection verifier");
-    let mut log5 = MockMainTraceGroupSourceV1::default();
-    let mut log8 = MockMainTraceGroupSourceV1::default();
-    let mut log16 = MockMainTraceGroupSourceV1::default();
-    let mut log18 = MockMainTraceGroupSourceV1::default();
-    let mut log19 = MockMainTraceGroupSourceV1::default();
+    let mut small_group = MockMainTraceGroupSourceV1::default();
+    let mut medium_group = MockMainTraceGroupSourceV1::default();
+    let mut lookup_group = MockMainTraceGroupSourceV1::default();
+    let mut io_group = MockMainTraceGroupSourceV1::default();
+    let mut large_group = MockMainTraceGroupSourceV1::default();
     let next_stride = layout.trace_groups[registration.trace_group]
         .next_stride(layout.common_lde_log2)
         .expect("projection next stride");
@@ -1656,12 +1683,12 @@ fn main_projection_concrete_verifier_routes_through_the_closed_provider_set() {
     let mut providers = MainOpenedProviderSetV1::new_v1(
         &layout,
         vec![
-            MainOpenedGroupProviderV1::TestLog5(&mut log5),
-            MainOpenedGroupProviderV1::TestLog8(&mut log8),
+            MainOpenedGroupProviderV1::TestLog5(&mut small_group),
+            MainOpenedGroupProviderV1::TestLog8(&mut medium_group),
             MainOpenedGroupProviderV1::Projection(&mut projection),
-            MainOpenedGroupProviderV1::TestLog16(&mut log16),
-            MainOpenedGroupProviderV1::TestLog18(&mut log18),
-            MainOpenedGroupProviderV1::TestLog19(&mut log19),
+            MainOpenedGroupProviderV1::TestLog16(&mut lookup_group),
+            MainOpenedGroupProviderV1::TestLog18(&mut io_group),
+            MainOpenedGroupProviderV1::TestLog19(&mut large_group),
         ],
     )
     .expect("closed provider set with concrete projection verifier");
@@ -1680,12 +1707,12 @@ fn main_projection_concrete_verifier_routes_through_the_closed_provider_set() {
     let mut providers = MainOpenedProviderSetV1::new_v1(
         &layout,
         vec![
-            MainOpenedGroupProviderV1::TestLog5(&mut log5),
-            MainOpenedGroupProviderV1::TestLog8(&mut log8),
+            MainOpenedGroupProviderV1::TestLog5(&mut small_group),
+            MainOpenedGroupProviderV1::TestLog8(&mut medium_group),
             MainOpenedGroupProviderV1::Projection(&mut projection),
-            MainOpenedGroupProviderV1::TestLog16(&mut log16),
-            MainOpenedGroupProviderV1::TestLog18(&mut log18),
-            MainOpenedGroupProviderV1::TestLog19(&mut log19),
+            MainOpenedGroupProviderV1::TestLog16(&mut lookup_group),
+            MainOpenedGroupProviderV1::TestLog18(&mut io_group),
+            MainOpenedGroupProviderV1::TestLog19(&mut large_group),
         ],
     )
     .expect("closed provider set");
@@ -1705,7 +1732,7 @@ fn main_projection_prover_streams_fixed_polynomials_without_verifier_cache() {
     let (statement, _) = crate::privacy_engines::zk_x509::projection_air::tests::fixture();
     let post_base = projection_provider_post_base_v1(&statement);
     let source =
-        MainProjectionProverConstraintSourceV1::for_main_v1(&layout, &statement, post_base)
+        MainProjectionProverConstraintSourceV1::for_main_v1(&layout, &statement, &post_base)
             .expect("streaming projection prover source");
     let fixed_rows =
         compile_zk_x509_projection_stark_fixed_rows_v1(&statement).expect("projection fixed rows");
@@ -1761,16 +1788,21 @@ fn main_composition_and_opened_evaluator_share_one_exact_checked_path() {
         .collect::<Vec<_>>();
     let query_index = 123_456;
     let lane = 0;
-    let mut log5 = MockMainTraceGroupSourceV1::default();
-    let mut log8 = MockMainTraceGroupSourceV1::default();
-    let mut log15 = MockMainTraceGroupSourceV1::default();
-    let mut log16 = MockMainTraceGroupSourceV1::default();
-    let mut log18 = MockMainTraceGroupSourceV1::default();
-    let mut log19 = MockMainTraceGroupSourceV1::default();
+    let mut small_group = MockMainTraceGroupSourceV1::default();
+    let mut medium_group = MockMainTraceGroupSourceV1::default();
+    let mut projection_group = MockMainTraceGroupSourceV1::default();
+    let mut lookup_group = MockMainTraceGroupSourceV1::default();
+    let mut io_group = MockMainTraceGroupSourceV1::default();
+    let mut large_group = MockMainTraceGroupSourceV1::default();
     let mut providers = MainOpenedProviderSetV1::new_v1(
         &layout,
         mock_main_opened_group_providers_v1([
-            &mut log5, &mut log8, &mut log15, &mut log16, &mut log18, &mut log19,
+            &mut small_group,
+            &mut medium_group,
+            &mut projection_group,
+            &mut lookup_group,
+            &mut io_group,
+            &mut large_group,
         ]),
     )
     .expect("exact MAIN providers");
@@ -1968,87 +2000,96 @@ fn main_composition_and_opened_evaluator_share_one_exact_checked_path() {
     );
     let mut short_mix = mixes.clone();
     short_mix[0][lane].base.pop();
-    let mut evaluator = MainOpenedRowEvaluatorV1 {
-        providers: &mut providers,
-        alphas: &alphas,
-        link_alphas: &[E::ONE; 192],
-        mixes: &short_mix,
-    };
-    assert!(
-        aggregate::AggregateOpenedRowEvaluatorV1::evaluate_opened_row_v1(
-            &mut evaluator,
-            query_index,
-            lane,
-            &trace_groups,
-            &composition_chunks,
-        )
-        .is_err()
-    );
-    drop(evaluator);
+    {
+        let mut evaluator = MainOpenedRowEvaluatorV1 {
+            providers: &mut providers,
+            alphas: &alphas,
+            link_alphas: &[E::ONE; 192],
+            mixes: &short_mix,
+        };
+        assert!(
+            aggregate::AggregateOpenedRowEvaluatorV1::evaluate_opened_row_v1(
+                &mut evaluator,
+                query_index,
+                lane,
+                &trace_groups,
+                &composition_chunks,
+            )
+            .is_err()
+        );
+    }
     let mut short_mix_lanes = mixes.clone();
     short_mix_lanes[0].pop();
-    let mut evaluator = MainOpenedRowEvaluatorV1 {
-        providers: &mut providers,
-        alphas: &alphas,
-        link_alphas: &[E::ONE; 192],
-        mixes: &short_mix_lanes,
-    };
-    assert!(
-        aggregate::AggregateOpenedRowEvaluatorV1::evaluate_opened_row_v1(
-            &mut evaluator,
-            query_index,
-            lane,
-            &trace_groups,
-            &composition_chunks,
-        )
-        .is_err()
-    );
-    drop(evaluator);
+    {
+        let mut evaluator = MainOpenedRowEvaluatorV1 {
+            providers: &mut providers,
+            alphas: &alphas,
+            link_alphas: &[E::ONE; 192],
+            mixes: &short_mix_lanes,
+        };
+        assert!(
+            aggregate::AggregateOpenedRowEvaluatorV1::evaluate_opened_row_v1(
+                &mut evaluator,
+                query_index,
+                lane,
+                &trace_groups,
+                &composition_chunks,
+            )
+            .is_err()
+        );
+    }
     let mut malformed_layout = layout.clone();
     malformed_layout.trace_groups.clear();
     assert!(validate_main_fri_mixes_v1(&malformed_layout, &[]).is_err());
     let mut inconsistent_mix = mixes.clone();
     inconsistent_mix[1][lane].composition[0] = inconsistent_mix[1][lane].composition[0].add(E::ONE);
-    let mut evaluator = MainOpenedRowEvaluatorV1 {
-        providers: &mut providers,
-        alphas: &alphas,
-        link_alphas: &[E::ONE; 192],
-        mixes: &inconsistent_mix,
-    };
-    assert!(
-        aggregate::AggregateOpenedRowEvaluatorV1::evaluate_opened_row_v1(
-            &mut evaluator,
-            query_index,
-            lane,
-            &trace_groups,
-            &composition_chunks,
-        )
-        .is_err()
-    );
-    drop(evaluator);
-    let mut evaluator = MainOpenedRowEvaluatorV1 {
-        providers: &mut providers,
-        alphas: &alphas,
-        link_alphas: &[E::ONE; 192],
-        mixes: &mixes,
-    };
-    assert!(
-        aggregate::AggregateOpenedRowEvaluatorV1::evaluate_opened_row_v1(
-            &mut evaluator,
-            query_index,
-            lane,
-            &trace_groups,
-            &composition_chunks[..COMPOSITION_DEGREE_CHUNKS - 1],
-        )
-        .is_err()
-    );
-    drop(evaluator);
+    {
+        let mut evaluator = MainOpenedRowEvaluatorV1 {
+            providers: &mut providers,
+            alphas: &alphas,
+            link_alphas: &[E::ONE; 192],
+            mixes: &inconsistent_mix,
+        };
+        assert!(
+            aggregate::AggregateOpenedRowEvaluatorV1::evaluate_opened_row_v1(
+                &mut evaluator,
+                query_index,
+                lane,
+                &trace_groups,
+                &composition_chunks,
+            )
+            .is_err()
+        );
+    }
+    {
+        let mut evaluator = MainOpenedRowEvaluatorV1 {
+            providers: &mut providers,
+            alphas: &alphas,
+            link_alphas: &[E::ONE; 192],
+            mixes: &mixes,
+        };
+        assert!(
+            aggregate::AggregateOpenedRowEvaluatorV1::evaluate_opened_row_v1(
+                &mut evaluator,
+                query_index,
+                lane,
+                &trace_groups,
+                &composition_chunks[..COMPOSITION_DEGREE_CHUNKS - 1],
+            )
+            .is_err()
+        );
+    }
     drop(providers);
-    log5.short_residues = true;
+    small_group.short_residues = true;
     let mut providers = MainOpenedProviderSetV1::new_v1(
         &layout,
         mock_main_opened_group_providers_v1([
-            &mut log5, &mut log8, &mut log15, &mut log16, &mut log18, &mut log19,
+            &mut small_group,
+            &mut medium_group,
+            &mut projection_group,
+            &mut lookup_group,
+            &mut io_group,
+            &mut large_group,
         ]),
     )
     .expect("short-residue adversary registry");
@@ -2064,12 +2105,17 @@ fn main_composition_and_opened_evaluator_share_one_exact_checked_path() {
         .is_err()
     );
     drop(providers);
-    log5.short_residues = false;
-    log5.noncanonical_residues = true;
+    small_group.short_residues = false;
+    small_group.noncanonical_residues = true;
     let mut providers = MainOpenedProviderSetV1::new_v1(
         &layout,
         mock_main_opened_group_providers_v1([
-            &mut log5, &mut log8, &mut log15, &mut log16, &mut log18, &mut log19,
+            &mut small_group,
+            &mut medium_group,
+            &mut projection_group,
+            &mut lookup_group,
+            &mut io_group,
+            &mut large_group,
         ]),
     )
     .expect("noncanonical-residue adversary registry");
@@ -2085,12 +2131,17 @@ fn main_composition_and_opened_evaluator_share_one_exact_checked_path() {
         .is_err()
     );
     drop(providers);
-    log5.noncanonical_residues = false;
-    log5.short_fixed_row = true;
+    small_group.noncanonical_residues = false;
+    small_group.short_fixed_row = true;
     let mut providers = MainOpenedProviderSetV1::new_v1(
         &layout,
         mock_main_opened_group_providers_v1([
-            &mut log5, &mut log8, &mut log15, &mut log16, &mut log18, &mut log19,
+            &mut small_group,
+            &mut medium_group,
+            &mut projection_group,
+            &mut lookup_group,
+            &mut io_group,
+            &mut large_group,
         ]),
     )
     .expect("short-fixed-row adversary registry");
@@ -2106,12 +2157,17 @@ fn main_composition_and_opened_evaluator_share_one_exact_checked_path() {
         .is_err()
     );
     drop(providers);
-    log5.short_fixed_row = false;
-    log5.noncanonical_fixed_row = true;
+    small_group.short_fixed_row = false;
+    small_group.noncanonical_fixed_row = true;
     let mut providers = MainOpenedProviderSetV1::new_v1(
         &layout,
         mock_main_opened_group_providers_v1([
-            &mut log5, &mut log8, &mut log15, &mut log16, &mut log18, &mut log19,
+            &mut small_group,
+            &mut medium_group,
+            &mut projection_group,
+            &mut lookup_group,
+            &mut io_group,
+            &mut large_group,
         ]),
     )
     .expect("noncanonical-fixed-row adversary registry");
@@ -2753,18 +2809,20 @@ fn main_coefficient_accumulator_geometry_is_independent_of_values_and_cancellati
             );
             for lane in 0..SECURITY_LANES {
                 for chunk in 0..COMPOSITION_DEGREE_CHUNKS {
-                    for degree in 0..extents[chunk] {
+                    for (degree, expected_coefficient) in expected[lane][chunk][..extents[chunk]]
+                        .iter_mut()
+                        .enumerate()
+                    {
                         let coefficient = if mode == 0 {
                             E::ZERO
                         } else if mode == 2 && stage == 2 {
-                            expected[lane][chunk][degree].neg()
+                            expected_coefficient.neg()
                         } else {
                             let value = (stage * 100 + lane * 50 + chunk * 8 + degree + 1) as u64;
                             E::canonical([value, value + 1, value + 2, value + 3]).unwrap()
                         };
                         contribution[lane][chunk].push(coefficient);
-                        expected[lane][chunk][degree] =
-                            expected[lane][chunk][degree].add(coefficient);
+                        *expected_coefficient = expected_coefficient.add(coefficient);
                     }
                 }
             }
@@ -2870,7 +2928,7 @@ fn main_finish_verifier_and_consensus_source_use_only_the_closed_release_path() 
         .find("aux_openings.commitment.root != trace_group.aux_root")
         .expect("auxiliary root equality");
     let publish = finish
-        .find("trace_group.base_frontier =")
+        .find(".clone_from(&base_openings.commitment.frontier)")
         .expect("opening publication");
     assert!(base_replay < base_root_check && aux_replay < base_root_check);
     assert!(base_root_check < publish && aux_root_check < publish);
@@ -2951,7 +3009,7 @@ fn main_finish_verifier_and_consensus_source_use_only_the_closed_release_path() 
     assert!(engine_production.contains("MainJointVerifierOraclesV1::new_v1"));
     assert!(engine_production.contains("CaJointVerifierOraclesV1::new_v1"));
     assert!(engine_production.contains(".bind_ca_openings_v1"));
-    assert_eq!(engine_production.matches(".finish_v1(binding)").count(), 2);
+    assert_eq!(engine_production.matches(".finish_v1(&binding)").count(), 2);
     assert!(!engine_production.contains("ConsensusVerifierUnavailable"));
 }
 #[test]
@@ -3006,7 +3064,7 @@ fn main_local_transcript_separates_binding_before_base_after_aux_and_wrong_outer
         )
         .expect("MAIN layout");
         if order == 1 {
-            absorb_zk_x509_credential_pre_aux_binding_v1(&mut transcript, binding)
+            absorb_zk_x509_credential_pre_aux_binding_v1(&mut transcript, &binding)
                 .expect("premature binding still frames distinctly");
         }
         aggregate::absorb_base_roots_v1(
@@ -3016,7 +3074,7 @@ fn main_local_transcript_separates_binding_before_base_after_aux_and_wrong_outer
         )
         .expect("ordered base roots");
         if order == 0 {
-            absorb_zk_x509_credential_pre_aux_binding_v1(&mut transcript, binding)
+            absorb_zk_x509_credential_pre_aux_binding_v1(&mut transcript, &binding)
                 .expect("canonical binding");
         }
         aggregate::absorb_aux_roots_v1(
@@ -3026,7 +3084,7 @@ fn main_local_transcript_separates_binding_before_base_after_aux_and_wrong_outer
         )
         .expect("ordered aux roots");
         if order == 2 {
-            absorb_zk_x509_credential_pre_aux_binding_v1(&mut transcript, binding)
+            absorb_zk_x509_credential_pre_aux_binding_v1(&mut transcript, &binding)
                 .expect("late binding still frames distinctly");
         }
         derive_constraint_alphas_v1(&mut transcript, &layout).expect("alphas")[0][0][0]
@@ -3045,7 +3103,7 @@ fn main_local_transcript_separates_binding_before_base_after_aux_and_wrong_outer
     assert_ne!(
         canonical,
         alpha(0, changed_binding),
-        "changing only the outer-bound log19 root must separate"
+        "changing only the outer-bound large_group root must separate"
     );
 }
 #[test]

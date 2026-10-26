@@ -190,7 +190,7 @@ fn check_prime_difference_classes_v1(
     if !is_prime_u64(modulus) {
         return Err(JindoUnitDifferenceCertificateErrorV1::ModulusNotPrime { modulus });
     }
-    if (modulus - 1) % u64::from(ROOT_ORDER_V1) != 0 {
+    if !(modulus - 1).is_multiple_of(u64::from(ROOT_ORDER_V1)) {
         return Err(JindoUnitDifferenceCertificateErrorV1::ModulusNotNttFriendly { modulus });
     }
     if mod_pow_u64(psi, u64::from(ROOT_ORDER_V1), modulus) != 1

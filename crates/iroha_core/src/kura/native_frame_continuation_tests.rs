@@ -209,9 +209,10 @@ fn original_raw_frame_narrower_scope_replay_retains_physical_charge_and_source()
             let layout = Layout::array::<u8>(wire.len()).unwrap();
             let pool = AllocationBudget::new(wire.len());
             let mut source = Original::new(&chain, owned);
-            let wide = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, PROBE, 64);
+            let generous_limits =
+                norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, PROBE, 64);
             // Measure actual original metadata plus frame admission at the physical refusal.
-            let spent = norito::with_decode_limits_scope(wide, || {
+            let spent = norito::with_decode_limits_scope(generous_limits, || {
                 let (result, denied) = refuse_one_layout_during(layout, || source.read(&pool));
                 assert!(denied && matches!(result, Err(Error::NativeFrameConstruction(_))));
                 let norito::Error::TotalAllocationExceeded { attempted, limit } =
@@ -248,7 +249,7 @@ fn original_raw_frame_narrower_scope_replay_retains_physical_charge_and_source()
                 assert!(destination.budget.same_pool(&pool));
                 assert_eq!(error.into_local_refusal().unwrap(), original);
             });
-            let bytes = norito::with_decode_limits_scope(wide, || source.read(&pool))
+            let bytes = norito::with_decode_limits_scope(generous_limits, || source.read(&pool))
                 .unwrap()
                 .unwrap();
             assert_eq!(bytes.as_slice(), wire);
@@ -278,8 +279,9 @@ fn original_raw_frame_partial_backing_survives_narrower_replay_and_abandonment()
             .write_da_block_bytes(2, &wire[..wire.len() - 1])
             .unwrap();
         let pool = AllocationBudget::new(wire.len());
-        let wide = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, PROBE, 64);
-        let spent = norito::with_decode_limits_scope(wide, || {
+        let generous_limits =
+            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, PROBE, 64);
+        let spent = norito::with_decode_limits_scope(generous_limits, || {
             assert!(matches!(
                 source.read(&pool),
                 Err(Error::CanonicalBlockWireMismatch { height: 2 })
@@ -328,7 +330,7 @@ fn original_raw_frame_partial_backing_survives_narrower_replay_and_abandonment()
         // or a different error is allowed to replace the completed partial read.
         let layout = Layout::array::<u8>(wire.len() - 1).unwrap();
         let (result, allocated) = refuse_one_layout_during(layout, || {
-            norito::with_decode_limits_scope(wide, || source.read(&pool))
+            norito::with_decode_limits_scope(generous_limits, || source.read(&pool))
         });
         assert!(!allocated);
         assert!(matches!(

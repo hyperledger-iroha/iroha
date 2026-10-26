@@ -64,7 +64,7 @@ async fn iterable_query_engines_reject_noncanonical_payloads_before_global_execu
         account::prelude::FindAccountsWithAsset,
         domain::prelude::{FindDomains, FindDomainsByAccountId},
     };
-    let state = state_with_test_blocks_and_transactions(1, 1, 0)?;
+    let state = state_with_test_blocks_and_transactions(1, 1, 0);
     let state_view = state.view();
     let query_handle = state_view.query_handle().clone();
     let mut trailing_unit = norito::codec::Encode::encode(&FindDomains);

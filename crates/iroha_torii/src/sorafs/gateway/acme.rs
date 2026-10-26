@@ -1,4 +1,4 @@
-//! Deterministic ACME automation harness for the SoraFS gateway.
+//! Deterministic ACME automation harness for the `SoraFS` gateway.
 use super::provider::{GatewayProviderBindingErrorV1, GatewayProviderBindingV1};
 use blake3::Hasher;
 use std::{
@@ -328,10 +328,10 @@ where
         if !self.config.enabled {
             return Ok(None);
         }
-        if let Some(next_attempt) = self.state.next_attempt {
-            if now < next_attempt {
-                return Ok(None);
-            }
+        if let Some(next_attempt) = self.state.next_attempt
+            && now < next_attempt
+        {
+            return Ok(None);
         }
         if !self.needs_renewal(now) {
             return Ok(None);
@@ -341,7 +341,7 @@ where
             account_email: self.config.account_email.clone(),
             directory_url: self.config.directory_url.clone(),
             dns_provider_id: self.config.dns_provider_id.clone(),
-            challenge: self.config.challenge.clone(),
+            challenge: self.config.challenge,
         };
         qualify_acme_client(&self.client_binding, &self.client)?;
         let result = self.client.order_certificate(&order);
@@ -373,11 +373,11 @@ where
         }
     }
     fn needs_renewal(&self, now: SystemTime) -> bool {
-        self.state.bundle.as_ref().map_or(true, |bundle| {
+        self.state.bundle.as_ref().is_none_or(|bundle| {
             bundle
                 .not_after
                 .checked_sub(self.config.renewal_window)
-                .map_or(true, |renew_at| now >= renew_at)
+                .is_none_or(|renew_at| now >= renew_at)
         })
     }
     fn next_deadline(&self, bundle: &CertificateBundle) -> SystemTime {
@@ -399,11 +399,13 @@ where
         let mut buf = [0u8; 8];
         buf.copy_from_slice(&hash.as_bytes()[..8]);
         let spread = u64::from_le_bytes(buf);
-        let max_ns = self
-            .config
-            .retry_jitter
-            .as_nanos()
-            .min(u128::from(u64::MAX)) as u64;
+        let max_ns = u64::try_from(
+            self.config
+                .retry_jitter
+                .as_nanos()
+                .min(u128::from(u64::MAX)),
+        )
+        .expect("retry jitter was clamped to u64::MAX");
         if max_ns == 0 {
             return Duration::ZERO;
         }

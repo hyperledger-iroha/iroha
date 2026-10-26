@@ -377,15 +377,15 @@ fn validate_feed_registration(
             history_depth.get()
         )));
     }
-    if let Some(existing) = world.oracle_feeds.get(&feed.feed_id) {
-        if existing.feed_config_version >= feed.feed_config_version {
-            return Err(signature_err(format!(
-                "feed `{}` already registered with version {} (incoming {})",
-                feed.feed_id.as_str(),
-                existing.feed_config_version.0,
-                feed.feed_config_version.0
-            )));
-        }
+    if let Some(existing) = world.oracle_feeds.get(&feed.feed_id)
+        && existing.feed_config_version >= feed.feed_config_version
+    {
+        return Err(signature_err(format!(
+            "feed `{}` already registered with version {} (incoming {})",
+            feed.feed_id.as_str(),
+            existing.feed_config_version.0,
+            feed.feed_config_version.0
+        )));
     }
     Ok(())
 }
@@ -1826,11 +1826,10 @@ fn start_stage_if_needed(
         .stages
         .iter_mut()
         .find(|record| record.stage == stage)
+        && record.started_at.is_none()
     {
-        if record.started_at.is_none() {
-            record.started_at = Some(now);
-            record.deadline = stage_deadline(stage, cfg, now);
-        }
+        record.started_at = Some(now);
+        record.deadline = stage_deadline(stage, cfg, now);
     }
 }
 fn enact_change(

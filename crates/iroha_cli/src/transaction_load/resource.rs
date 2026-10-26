@@ -22,11 +22,15 @@ const MAX_SAMPLES: u64 = 100_000;
 /// Required private probe inputs and exact resource sampling geometry.
 #[derive(clap::Args, Debug)]
 #[group(id = "TransactionLoadResourceArgs")]
+#[expect(
+    clippy::struct_field_names,
+    reason = "The resource prefix preserves the generated long flags when this argument group is flattened into transaction-load CLI arguments."
+)]
 pub(super) struct Args {
     /// Absolute admitted Python interpreter; invoked directly with `-B -S`.
     #[arg(long, value_name = "PATH")]
     resource_program: PathBuf,
-    /// Absolute fixed resource_probe_worker.py in its admitted five-file source namespace.
+    /// Absolute fixed `resource_probe_worker.py` in its admitted five-file source namespace.
     #[arg(long, value_name = "PATH")]
     resource_worker: PathBuf,
     /// Existing owner-only runtime probe configuration; never copied to evidence.
@@ -100,14 +104,15 @@ impl Plan {
             start_lag_ns,
             final_offset_ns,
             samples,
-            lifetime: Duration::from_nanos(lifetime_ns as u64),
+            lifetime: Duration::from_nanos(u64::try_from(lifetime_ns)?),
         })
     }
     fn request(self, kind: Kind, sequence: u64) -> Request {
         Request {
             kind,
             sequence,
-            timeout_ms: (self.timeout_ns / 1_000_000) as u64,
+            timeout_ms: u64::try_from(self.timeout_ns / 1_000_000)
+                .expect("admitted resource timeout is positive"),
         }
     }
     fn value(self) -> Value {

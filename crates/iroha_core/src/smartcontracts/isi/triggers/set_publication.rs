@@ -1,5 +1,12 @@
 //! Prepare all original trigger journals before publishing any component.
 
+/// Original detached journal, refusal, and cleanup owner returned together.
+type PublicationFailure<Admission, Installation, E> = (
+    DetachedSet<Admission>,
+    SetPublicationError<E>,
+    AbortedSet<Installation>,
+);
+
 use super::*;
 use mv::{
     PublicationPreparationError,
@@ -9,7 +16,7 @@ use std::convert::Infallible;
 
 /// A local preparation refusal retains the entire original trigger journal.
 #[derive(Debug)]
-pub(crate) enum SetPublicationError<E> {
+pub enum SetPublicationError<E> {
     /// Installation capacity was refused before acquiring any component writer.
     Admission(E),
     /// The exact component is busy or no longer has its captured predecessor.
@@ -25,7 +32,7 @@ pub(crate) enum SetPublicationError<E> {
 ///
 /// This is not a State/finality authorization. The enclosing publisher must
 /// prepare all other State components before consuming this owner.
-pub(crate) struct PreparedSet<'target, Admission, Installation> {
+pub struct PreparedSet<'target, Admission, Installation> {
     original: Option<AcquiredSet<'target, Admission, Installation>>,
 }
 
@@ -89,7 +96,7 @@ define_set_publication_components! {
 
 /// Original released trigger participants and their enclosing resource owners.
 /// Retain through the entire State publication interval before cleanup.
-pub(crate) struct PublishedSet<Admission, Installation> {
+pub struct PublishedSet<Admission, Installation> {
     _data_triggers: PublishedPublication<TriggerId, LoadedAction<DataEventFilter>, (), ()>,
     _pipeline_triggers:
         PublishedPublication<TriggerId, LoadedAction<PipelineEventFilterBox>, (), ()>,
@@ -107,11 +114,15 @@ pub(crate) struct PublishedSet<Admission, Installation> {
 }
 
 /// Original abort notifications retained until every enclosing writer unlocks.
-pub(crate) struct AbortedSet<Installation> {
+pub struct AbortedSet<Installation> {
     _components: [Option<mv::PublicationCleanup<()>>; 10],
     _installation: Option<Installation>,
 }
 
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Each phase transfers the original admitted set owner without allocating during capture or publication"
+)]
 enum SetPublicationPhase<'target, Admission> {
     Original(DetachedSet<Admission>),
     Components(SetPublicationComponents<'target, Admission>),
@@ -121,7 +132,11 @@ enum SetPublicationPhase<'target, Admission> {
 /// Normal refusal recovers exact journals while keeping every original deferred release here.
 /// Caught unwind and terminal release allow cleanup only; this grants no State authority.
 #[must_use = "retain this slot until every enclosing physical writer releases"]
-pub(crate) struct DetachedSetPublicationSlot<'target, Admission, Installation> {
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Publication, retry, recovery and release are independent custody obligations retained through unwind"
+)]
+pub struct DetachedSetPublicationSlot<'target, Admission, Installation> {
     target: &'target Set,
     phase: Option<SetPublicationPhase<'target, Admission>>,
     attempted: bool,
@@ -154,13 +169,17 @@ impl<Admission> DetachedSet<Admission> {
     /// Standalone preparation delegates to the same caller-owned slot engine.
     /// An enclosing aggregate must retain its slot before calling the borrowed method
     /// if its own physical siblings also need to survive a callee unwind.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Preserve the original trigger codec and publication refusal owners without allocating on the failure path"
+    )]
     pub(crate) fn try_prepare_publication<Installation, E>(
         self,
         target: &Set,
         admit: impl FnOnce(&Self, &Set) -> Result<Installation, E>,
     ) -> Result<
         PreparedSet<'_, Admission, Installation>,
-        (Self, SetPublicationError<E>, AbortedSet<Installation>),
+        PublicationFailure<Admission, Installation, E>,
     > {
         let mut slot = self.publication_slot(target);
         match slot.try_prepare(admit) {

@@ -205,10 +205,10 @@ impl<R: EnrollmentIssuerRuntimeV1> EnrollmentIssuerV1<R> {
             .request_key(&account_digest, &dispatch.request_id)?;
         let stable = dispatch.stable_selection().map_err(|_| Invalid)?;
         let prior = self.journal.read(&key)?;
-        if let Some(prior) = &prior {
-            if prior.selection().stable_selection != stable {
-                return Err(Selection);
-            }
+        if let Some(prior) = &prior
+            && prior.selection().stable_selection != stable
+        {
+            return Err(Selection);
         }
         // A durably retained terminal refusal is recovered from the journal alone: answering
         // it unchanged needs no live provider, worker or signer dependency.

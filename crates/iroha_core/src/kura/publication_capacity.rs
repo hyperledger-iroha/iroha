@@ -13,11 +13,7 @@ impl Kura {
         let (persisted_count, unindexed_bytes) = self.persisted_count_and_unindexed_bytes()?;
         self.pending_block_bytes(persisted_count, unindexed_bytes)
     }
-    fn sync_bound_evidence_namespace(
-        &self,
-        namespace: &BoundProgressNamespace,
-        kind: &str,
-    ) -> Result<()> {
+    fn sync_bound_evidence_namespace(namespace: &BoundProgressNamespace, kind: &str) -> Result<()> {
         for (index, directory) in namespace.directories.iter().enumerate() {
             let result = if index == 0 {
                 sync_indexed_sidecar_dir_handle(&directory.file)

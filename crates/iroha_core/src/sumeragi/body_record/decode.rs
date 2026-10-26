@@ -78,6 +78,10 @@ impl BodyRecordDecode {
 
     /// Decode using the raw buffer's exact State pool; errors return every original owner.
     /// On success the source is released only after both complete admitted destinations exist.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     pub(in crate::sumeragi) fn complete(
         mut self,
         budget: &AllocationBudget,

@@ -10,7 +10,7 @@
 //! TODO: bind the complete cut to atomic State root publication and recovery.
 
 use super::lane_manifest_policy::StateAuthorityCaptureError;
-use crate::state::{State, StateViewError, is_stable_state_view_generation};
+use crate::state::{State, StateViewError, WorldReadOnly, is_stable_state_view_generation};
 use iroha_config::parameters::actual::{
     Nexus, NexusConsensusPolicyDigestError, nexus_consensus_policy_preimage_with_runtime_policies,
 };
@@ -40,6 +40,7 @@ impl NexusStaticAuthorityV1 {
     /// policy identity. Complete root resource admission is a separate gate.
     pub(super) fn from_actual(
         nexus: &Nexus,
+        original_fees: Option<&iroha_data_model::block::consensus::RootFeePolicy>,
         compliance_policy_digest: Option<[u8; 32]>,
         lane_manifest_policy_digest: Option<[u8; 32]>,
     ) -> Result<Self, NexusConsensusPolicyDigestError> {
@@ -47,6 +48,7 @@ impl NexusStaticAuthorityV1 {
             version: Self::VERSION,
             bare_policy_preimage: nexus_consensus_policy_preimage_with_runtime_policies(
                 nexus,
+                original_fees,
                 compliance_policy_digest,
                 lane_manifest_policy_digest,
             )?,
@@ -91,6 +93,7 @@ pub(super) fn canonical_preimage_once(
         }
         let authority = NexusStaticAuthorityV1::from_actual(
             &view.nexus,
+            view.world.parameters().root_fees(),
             compliance_digest,
             Some(manifest_digest),
         )
@@ -98,15 +101,14 @@ pub(super) fn canonical_preimage_once(
         let encoded = norito::encode_canonical(&authority)
             .map_err(|error| format!("effective Nexus policy cannot be encoded: {error}"))?;
         drop(view);
-        let Some(current) = state
-            .try_nexus_snapshot_once()
-            .map_err(StateViewError::Runtime)?
-        else {
-            return Ok(None);
-        };
-        let current_authority =
-            NexusStaticAuthorityV1::from_actual(&current, compliance_digest, Some(manifest_digest))
-                .map_err(|error| format!("current Nexus policy is invalid: {error}"))?;
+        let current = state.try_view_once()?;
+        let current_authority = NexusStaticAuthorityV1::from_actual(
+            &current.nexus,
+            current.world.parameters().root_fees(),
+            compliance_digest,
+            Some(manifest_digest),
+        )
+        .map_err(|error| format!("current Nexus policy is invalid: {error}"))?;
         let installed_now = state.lane_manifests.read().clone();
         installed_now.validate_materialized_source_projection()?;
         if authority != current_authority
@@ -131,7 +133,7 @@ pub(super) fn canonical_preimage_once(
 pub(super) struct BorrowedNexusPolicy<'a> {
     nexus: &'a Nexus,
     runtime: &'a crate::state::SnapshotNexusRuntime,
-    fees: &'a iroha_data_model::block::consensus::RootFeePolicy,
+    fees: Option<&'a iroha_data_model::block::consensus::RootFeePolicy>,
     configured_lane_catalog_hash: [u8; 32],
     compliance_digest: Option<[u8; 32]>,
     manifest_digest: Option<[u8; 32]>,
@@ -142,7 +144,7 @@ impl<'a> BorrowedNexusPolicy<'a> {
     pub(super) fn new(
         nexus: &'a Nexus,
         runtime: &'a crate::state::SnapshotNexusRuntime,
-        fees: &'a iroha_data_model::block::consensus::RootFeePolicy,
+        fees: Option<&'a iroha_data_model::block::consensus::RootFeePolicy>,
         compliance_digest: Option<[u8; 32]>,
         manifest_digest: Option<[u8; 32]>,
     ) -> Result<Self, norito::Error> {
@@ -187,7 +189,7 @@ impl<'a> BorrowedNexusPolicy<'a> {
                 Seq(catalog
                     .lanes()
                     .iter()
-                    .map(|lane| lane.borrowed_consensus_projection()))
+                    .map(iroha_data_model::nexus::LaneConfig::borrowed_consensus_projection))
             ),
         )?;
         Ok(Self {
@@ -234,7 +236,8 @@ impl norito::SerializePayload for BorrowedNexusPolicy<'_> {
                 runtime.owner_policy.routing_default_dataspace.as_u64(),
                 Seq(nexus.routing_policy.rules.iter().map(|rule| record!(
                     rule.lane.as_u32(),
-                    rule.dataspace.map(|id| id.as_u64()),
+                    rule.dataspace
+                        .map(iroha_model_base::topology::DataSpaceId::as_u64),
                     Ref(&rule.matcher.account),
                     Ref(&rule.matcher.instruction)
                 )))
@@ -242,17 +245,9 @@ impl norito::SerializePayload for BorrowedNexusPolicy<'_> {
             record!(
                 mode_tag(runtime.owner_policy.public_validator_mode),
                 mode_tag(runtime.owner_policy.restricted_validator_mode),
-                Ref(&nexus.staking.min_validator_stake),
-                runtime.owner_policy.max_validators,
-                nexus.staking.max_stake_shares_per_validator.get(),
-                nexus.staking.max_pending_unbonds_per_share.get(),
-                duration(nexus.staking.unbonding_delay),
-                nexus.staking.max_slash_bps,
-                Ref(&nexus.staking.stake_asset_id),
-                Ref(&nexus.staking.stake_escrow_account_id),
-                Ref(&nexus.staking.slash_sink_account_id)
+                runtime.owner_policy.max_validators
             ),
-            Ref(self.fees),
+            self.fees.map(norito::core::PayloadRef),
             record!(duration(nexus.hf_shared_leases.drain_grace)),
             record!(
                 nexus.uploaded_models.max_plaintext_bytes_per_model,
@@ -385,8 +380,16 @@ mod tests {
     use std::{num::NonZeroU32, path::PathBuf, sync::Arc, time::Duration};
 
     fn materialized_state() -> State {
+        let mut world = World::new();
+        world
+            .set_parameter_for_testing(iroha_data_model::parameter::Parameter::Custom(
+                iroha_config::parameters::defaults::nexus::fees::genesis_policy()
+                    .into_custom_parameter()
+                    .unwrap(),
+            ))
+            .unwrap();
         let state = State::new_for_testing(
-            World::new(),
+            world,
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         );
@@ -430,12 +433,17 @@ mod tests {
         effective.autoscale.scale_out_window_blocks = std::num::NonZeroU16::new(19).unwrap();
         effective.fees.base_fee = 37_u32.into();
         let runtime = runtime(&effective);
-        let expected =
-            NexusStaticAuthorityV1::from_actual(&effective, Some([3; 32]), Some([4; 32])).unwrap();
+        let expected = NexusStaticAuthorityV1::from_actual(
+            &effective,
+            Some(&effective.fees),
+            Some([3; 32]),
+            Some([4; 32]),
+        )
+        .unwrap();
         let actual = BorrowedNexusPolicy::new(
             &baseline,
             &runtime,
-            &effective.fees,
+            Some(&effective.fees),
             Some([3; 32]),
             Some([4; 32]),
         )
@@ -444,25 +452,117 @@ mod tests {
         let mut enabled = baseline.clone();
         enabled.compliance.enabled = true;
         assert!(
-            BorrowedNexusPolicy::new(&enabled, &runtime, &effective.fees, None, Some([4; 32]))
-                .is_err()
+            BorrowedNexusPolicy::new(
+                &enabled,
+                &runtime,
+                Some(&effective.fees),
+                None,
+                Some([4; 32])
+            )
+            .is_err()
         );
         enabled.compliance.enabled = false;
         enabled.autoscale.scale_in_latency_ratio = f64::NAN;
         assert!(
-            BorrowedNexusPolicy::new(&enabled, &runtime, &effective.fees, None, Some([4; 32]))
-                .is_err()
+            BorrowedNexusPolicy::new(
+                &enabled,
+                &runtime,
+                Some(&effective.fees),
+                None,
+                Some([4; 32])
+            )
+            .is_err()
         );
     }
 
     fn authority(nexus: &Nexus) -> NexusStaticAuthorityV1 {
-        let expected = NexusStaticAuthorityV1::from_actual(nexus, None, Some([0xA5; 32]))
-            .expect("valid static Nexus policy");
+        let expected =
+            NexusStaticAuthorityV1::from_actual(nexus, Some(&nexus.fees), None, Some([0xA5; 32]))
+                .expect("valid static Nexus policy");
         let runtime = runtime(nexus);
         let borrowed =
-            BorrowedNexusPolicy::new(nexus, &runtime, &nexus.fees, None, Some([0xA5; 32])).unwrap();
+            BorrowedNexusPolicy::new(nexus, &runtime, Some(&nexus.fees), None, Some([0xA5; 32]))
+                .unwrap();
         super::super::policy_borrowed::assert_same_payload(&borrowed, &expected);
         expected
+    }
+
+    #[test]
+    fn borrowed_original_fee_option_preserves_owned_bytes_under_both_layouts() {
+        use super::super::policy_borrowed::record;
+        use iroha_data_model::block::consensus::RootFeePolicy;
+        use norito::core::{DecodeFlagsGuard, PayloadRef, SerializePayload, serialize_to_buffer};
+
+        #[derive(Encode)]
+        struct OwnedFees {
+            fees: Option<RootFeePolicy>,
+        }
+
+        let mut original = iroha_config::parameters::defaults::nexus::fees::genesis_policy();
+        original.base_fee = 37_u32.into();
+        for owned in [
+            OwnedFees { fees: None },
+            OwnedFees {
+                fees: Some(original),
+            },
+        ] {
+            let borrowed = owned.fees.as_ref().map(PayloadRef);
+            let borrowed_record = record!(owned.fees.as_ref().map(PayloadRef));
+            if let (Some(original), Some(view)) = (&owned.fees, &borrowed) {
+                assert!(std::ptr::eq(original, view.0));
+                assert_eq!(view.encoded_len_hint(), original.encoded_len_hint());
+                assert_eq!(view.encoded_len_exact(), original.encoded_len_exact());
+            }
+            for flags in [0, norito::core::default_encode_flags()] {
+                let _flags = DecodeFlagsGuard::enter(flags);
+                let mut actual = Vec::new();
+                let mut expected = Vec::new();
+                serialize_to_buffer(&borrowed, &mut actual).unwrap();
+                serialize_to_buffer(&owned.fees, &mut expected).unwrap();
+                assert_eq!(actual, expected, "original fee option, flags={flags}");
+                if owned.fees.is_none() {
+                    assert_eq!(actual, [0], "absence retains the canonical Option tag");
+                }
+                assert_eq!(borrowed.encoded_len_hint(), owned.fees.encoded_len_hint());
+                assert_eq!(borrowed.encoded_len_exact(), owned.fees.encoded_len_exact());
+                actual.clear();
+                expected.clear();
+                serialize_to_buffer(&borrowed_record, &mut actual).unwrap();
+                serialize_to_buffer(&owned, &mut expected).unwrap();
+                assert_eq!(actual, expected, "original fee record field, flags={flags}");
+            }
+        }
+    }
+
+    #[test]
+    fn explicit_absent_fee_preimage_and_present_original_use_one_typed_option_codec() {
+        let mut nexus = Nexus::default();
+        let runtime = runtime(&nexus);
+        let policy = iroha_config::parameters::defaults::nexus::fees::genesis_policy();
+        let absent =
+            NexusStaticAuthorityV1::from_actual(&nexus, None, None, Some([0xA5; 32])).unwrap();
+        let present =
+            NexusStaticAuthorityV1::from_actual(&nexus, Some(&policy), None, Some([0xA5; 32]))
+                .unwrap();
+        assert_ne!(
+            absent, present,
+            "absence cannot synthesize default monetary authority"
+        );
+        for (fees, expected) in [(None, &absent), (Some(&policy), &present)] {
+            let borrowed =
+                BorrowedNexusPolicy::new(&nexus, &runtime, fees, None, Some([0xA5; 32])).unwrap();
+            super::super::policy_borrowed::assert_same_payload(&borrowed, expected);
+        }
+        nexus.fees.base_fee = 123_u32.into();
+        assert_eq!(
+            NexusStaticAuthorityV1::from_actual(&nexus, None, None, Some([0xA5; 32])).unwrap(),
+            absent
+        );
+        assert_eq!(
+            NexusStaticAuthorityV1::from_actual(&nexus, Some(&policy), None, Some([0xA5; 32]))
+                .unwrap(),
+            present
+        );
     }
 
     #[test]
@@ -476,6 +576,7 @@ mod tests {
             policy.policy_digest(),
             nexus_consensus_policy_digest_with_runtime_policies(
                 &Nexus::default(),
+                Some(&iroha_config::parameters::defaults::nexus::fees::genesis_policy()),
                 None,
                 Some([0xA5; 32])
             )
@@ -521,17 +622,30 @@ mod tests {
         let mut changed = baseline.clone();
         changed.atomic_private_settlement.activation_height = Some(10);
         assert_ne!(authority(&changed), original, "atomic settlement policy");
-        let changed = NexusStaticAuthorityV1::from_actual(&baseline, None, Some([0xA6; 32]))
-            .expect("changed manifest policy identity");
+        let changed = NexusStaticAuthorityV1::from_actual(
+            &baseline,
+            Some(&baseline.fees),
+            None,
+            Some([0xA6; 32]),
+        )
+        .expect("changed manifest policy identity");
         assert_ne!(changed, original, "loaded manifest authority");
         let mut compliance = baseline;
         compliance.compliance.enabled = true;
-        let left =
-            NexusStaticAuthorityV1::from_actual(&compliance, Some([0x11; 32]), Some([0xA5; 32]))
-                .expect("bound compliance policy");
-        let right =
-            NexusStaticAuthorityV1::from_actual(&compliance, Some([0x12; 32]), Some([0xA5; 32]))
-                .expect("changed compliance policy");
+        let left = NexusStaticAuthorityV1::from_actual(
+            &compliance,
+            Some(&compliance.fees),
+            Some([0x11; 32]),
+            Some([0xA5; 32]),
+        )
+        .expect("bound compliance policy");
+        let right = NexusStaticAuthorityV1::from_actual(
+            &compliance,
+            Some(&compliance.fees),
+            Some([0x12; 32]),
+            Some([0xA5; 32]),
+        )
+        .expect("changed compliance policy");
         assert_ne!(left, right, "loaded compliance authority");
     }
 
@@ -563,11 +677,11 @@ mod tests {
     fn static_nexus_policy_rejects_invalid_ratio_and_missing_compliance_identity() {
         let mut nexus = Nexus::default();
         nexus.autoscale.scale_out_latency_ratio = f64::NAN;
-        assert!(NexusStaticAuthorityV1::from_actual(&nexus, None, None).is_err());
+        assert!(NexusStaticAuthorityV1::from_actual(&nexus, None, None, None).is_err());
         let mut nexus = Nexus::default();
         nexus.compliance.enabled = true;
         assert_eq!(
-            NexusStaticAuthorityV1::from_actual(&nexus, None, None),
+            NexusStaticAuthorityV1::from_actual(&nexus, None, None, None),
             Err(NexusConsensusPolicyDigestError::MissingCompliancePolicyDigest)
         );
     }
@@ -579,9 +693,13 @@ mod tests {
             .lane_manifests
             .read()
             .baseline_consensus_policy_digest();
-        let expected =
-            NexusStaticAuthorityV1::from_actual(&state.nexus_snapshot(), None, Some(digest))
-                .unwrap();
+        let expected = NexusStaticAuthorityV1::from_actual(
+            &state.nexus_snapshot(),
+            state.world.parameters.view().get().root_fees(),
+            None,
+            Some(digest),
+        )
+        .unwrap();
         let encoded = canonical_preimage_once(&state)
             .expect("valid State authority")
             .expect("stable generation");
@@ -594,14 +712,22 @@ mod tests {
             .expect("updated State authority")
             .expect("stable generation");
         assert_eq!(changed, encoded, "local cache is not monetary authority");
-        let mut policy = state.nexus_snapshot().fees;
+        let mut policy = state
+            .world
+            .parameters
+            .view()
+            .get()
+            .root_fees()
+            .unwrap()
+            .clone();
         policy.base_fee = 123_u32.into();
-        let mut parameters = state.world.parameters.block();
-        parameters
-            .set_parameter(iroha_data_model::parameter::Parameter::Custom(
-                policy.into_custom_parameter().unwrap(),
-            ))
-            .unwrap();
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world).unwrap();
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            iroha_data_model::parameter::Parameter::Custom(policy.into_custom_parameter().unwrap()),
+            state.world.sccp_committee_generations.allocation_budget(),
+        )
+        .unwrap();
         parameters.commit();
         let committed = canonical_preimage_once(&state).unwrap().unwrap();
         assert_ne!(

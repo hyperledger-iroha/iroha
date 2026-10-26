@@ -47,7 +47,8 @@ fn row(seed: u8, dataspace: u64) -> AssetDefinitionDirectHomeV1 {
 }
 
 fn add_native(tx: &mut StateTransaction<'_, '_>, ds: DataSpaceId, seed: u8) {
-    tx.world.insert_asset_definition_entry(id(), definition());
+    tx.world
+        .insert_asset_definition_entry(&(id()), definition());
     tx.world
         .axt_asset_incarnations
         .insert(id(), incarnation(seed));
@@ -311,7 +312,8 @@ fn native_registration_refuses_existing_row_universal_home_and_foreign_incarnati
     let state = state_with(World::default());
     let mut block = state.block(header());
     let mut tx = block.transaction();
-    tx.world.insert_asset_definition_entry(id(), definition());
+    tx.world
+        .insert_asset_definition_entry(&(id()), definition());
     tx.world.axt_asset_incarnations.insert(id(), incarnation(1));
     assert!(
         tx.register_direct_asset_definition_home(&id(), incarnation(2), DataSpaceId::new(7))

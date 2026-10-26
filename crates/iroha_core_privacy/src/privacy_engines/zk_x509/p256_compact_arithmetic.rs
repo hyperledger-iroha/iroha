@@ -76,7 +76,7 @@ impl CompactOperationV1 {
         let limb = |value: F| u16::try_from(value.0).map_err(|_| ZkX509P256AirErrorV1::Constraint);
         let bit = |value: F| {
             if value.0 <= 1 {
-                Ok(value.0 as u8)
+                u8::try_from(value.0).map_err(|_| ZkX509P256AirErrorV1::Constraint)
             } else {
                 Err(ZkX509P256AirErrorV1::Constraint)
             }
@@ -107,7 +107,7 @@ impl CompactOperationV1 {
         // carry cell exists in the committed rows, and no new cell is introduced.
         for (coefficient, original) in rows.iter().enumerate() {
             let mut regenerated = result.expanded.base_row(ZkX509P256ArithmeticFixedRowV1 {
-                coefficient: coefficient as u8,
+                coefficient: u8::try_from(coefficient).expect("arithmetic coefficient fits u8"),
                 ..fixed
             })?;
             let matches = &regenerated == original;
@@ -193,7 +193,7 @@ impl core::fmt::Debug for P256CompactArithmeticTraceV1 {
         formatter
             .debug_struct("P256CompactArithmeticTraceV1")
             .field("private_material", &"<redacted>")
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -278,7 +278,8 @@ impl P256CompactArithmeticTraceV1 {
             .ok_or(ZkX509P256AirErrorV1::Topology)?;
         Ok(ZkX509P256ArithmeticFixedRowV1 {
             operation: u32::try_from(index).map_err(|_| ZkX509P256AirErrorV1::Topology)?,
-            coefficient: (row % P256_ARITHMETIC_ROWS_PER_OPERATION_V1) as u8,
+            coefficient: u8::try_from(row % P256_ARITHMETIC_ROWS_PER_OPERATION_V1)
+                .expect("arithmetic coefficient fits u8"),
             kind: operation.topology.kind,
             modulus: operation.topology.modulus,
         })
@@ -513,9 +514,7 @@ mod tests {
                             P256CompactArithmeticTraceV1::from_trace_v1(&raw, usize::MAX).unwrap();
                         assert_eq!(compact.rows_v1(), raw.rows());
                         constructed.set(true);
-                        if unwind {
-                            panic!("exercise compact allocation unwind");
-                        }
+                        assert!(!unwind, "exercise compact allocation unwind");
                         drop(compact);
                     }));
                     assert!(

@@ -48,11 +48,7 @@ pub fn load_location_provider_attestations<'world>(
 }
 
 /// Run the same predicate while preserving an original physical read refusal.
-pub(crate) fn try_load_location_provider_attestations<
-    'world,
-    W: MusubiEvidenceRead<Q>,
-    Q: Default,
->(
+pub fn try_load_location_provider_attestations<'world, W: MusubiEvidenceRead<Q>, Q: Default>(
     archive: &MusubiArchiveRecordV1,
     location: &MusubiArchiveLocationV1,
     world: &'world W,
@@ -73,7 +69,7 @@ pub(crate) fn try_load_location_provider_attestations<
 }
 
 /// Original immutable-location verification cursor; verified signatures never repeat on retry.
-pub(crate) struct ProviderAttestationValidation<Q> {
+pub struct ProviderAttestationValidation<Q> {
     queries: [Q; 1],
     initialized: bool,
     next: usize,

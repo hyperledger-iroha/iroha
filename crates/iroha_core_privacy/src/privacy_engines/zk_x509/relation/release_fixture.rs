@@ -4,6 +4,9 @@
 //! uses the exact closed grammar rather than a platform certificate builder.
 //! It is compiled only for tests and the isolated privacy-release runner.
 use super::*;
+#[path = "../../../../tests/common/zk_x509_der.rs"]
+mod fixture_der;
+use crate::privacy_engines::zk_x509::presentation::derive_zk_x509_presentation_bounds_v1;
 use crate::{
     privacy_engines::zk_x509::{
         codec::ZkX509AttributeOpeningV1,
@@ -13,7 +16,8 @@ use crate::{
         },
         profile::{
             ZK_X509_MAX_ATTRIBUTE_VALUE_BYTES_V1, ZK_X509_MAX_CHAIN_DEPTH_V1,
-            ZK_X509_MAX_CRL_BYTES_V1, ZK_X509_MAX_SERIAL_BYTES_V1, ZK_X509_MIN_CHAIN_DEPTH_V1,
+            ZK_X509_MAX_CRL_BYTES_V1, ZK_X509_MAX_CRL_ENTRIES_V1, ZK_X509_MAX_SERIAL_BYTES_V1,
+            ZK_X509_MIN_CHAIN_DEPTH_V1,
         },
     },
     privacy_state::{
@@ -22,6 +26,7 @@ use crate::{
         load_privacy_zk_x509_authoritative_state_v1, privacy_zk_x509_ca_namespace_v1,
     },
 };
+use fixture_der::*;
 use iroha_crypto::{Algorithm, KeyPair};
 #[cfg(any(test, feature = "test-utils"))]
 use iroha_crypto::{Hash, HashOf};
@@ -39,17 +44,17 @@ use iroha_data_model::{
     privacy::{
         PrivacyChallengeV1, PrivacyConsensusLimitsV1, PrivacyIssuerIdV1, PrivacyPolicyDigestV1,
         PrivacyPolicyIdV1, PrivacyRootPublicationV1, PrivacyRootRoleV1, PrivacyRootV1,
-        PrivacyStatementContextV1, PrivacyX509KeyUsageRequirementV1, PrivacyX509TrustStoreDigestV1,
-        PrivacyZkX509DisclosedAttributeV1, PrivacyZkX509PresentationWindowV1,
+        PrivacyStatementContextV1, PrivacyX509ExtendedKeyUsageV1, PrivacyX509KeyUsageRequirementV1,
+        PrivacyX509TrustStoreDigestV1, PrivacyZkX509CertificateValidityV1,
+        PrivacyZkX509CrlUpdateIntervalV1, PrivacyZkX509DisclosedAttributeV1,
+        PrivacyZkX509PresentationBoundsV1, PrivacyZkX509PresentationWindowV1,
         ZK_X509_MAX_CERTIFICATE_BYTES_V1, ZK_X509_MAX_CRL_AGE_SECONDS_V1,
     },
 };
 use mv::storage::Storage;
 use p256::ecdsa::{
-    Signature as P256Signature, SigningKey as P256SigningKey,
-    signature::{Signer as _, hazmat::PrehashSigner as _},
+    Signature as P256Signature, SigningKey as P256SigningKey, signature::hazmat::PrehashSigner as _,
 };
-use time::OffsetDateTime;
 const CRL_THIS_UPDATE: u64 = 1_672_531_200; // 2023-01-01T00:00:00Z
 const CRL_NEXT_UPDATE: u64 = CRL_THIS_UPDATE + 300;
 const VALIDATION_TIME: u64 = CRL_THIS_UPDATE + 60;
@@ -474,9 +479,11 @@ fn build_zk_x509_fixture_with_copy_capacity_v1(
     } else {
         (root_name.as_slice(), &root_key, root_ski.as_slice())
     };
-    let leaf_serial = maximum_shape
-        .then_some(MAXIMUM_LEAF_SERIAL_V1.as_slice())
-        .unwrap_or(CANONICAL_LEAF_SERIAL_V1.as_slice());
+    let leaf_serial = if maximum_shape {
+        MAXIMUM_LEAF_SERIAL_V1.as_slice()
+    } else {
+        CANONICAL_LEAF_SERIAL_V1.as_slice()
+    };
     let extended_key_usages = if maximum_copy_shape {
         vec![
             PrivacyX509ExtendedKeyUsageV1::ClientAuthentication,
@@ -522,7 +529,9 @@ fn build_zk_x509_fixture_with_copy_capacity_v1(
         leaf_issuer_ski,
         crl_number,
         revoked_serials,
-        times,
+        times.crl_this_update_unix_seconds,
+        times.crl_next_update_unix_seconds,
+        times.revoked_at_unix_seconds,
     )?;
     let mut certificate_chain_der = vec![leaf_der];
     if let Some(intermediate_der) = intermediate_der {
@@ -715,9 +724,12 @@ fn build_zk_x509_fixture_with_copy_capacity_v1(
             || resource_shape.disclosed_value_lengths
                 != [
                     2,
-                    ZK_X509_MAX_ATTRIBUTE_VALUE_BYTES_V1 as u16,
-                    ZK_X509_MAX_ATTRIBUTE_VALUE_BYTES_V1 as u16,
-                    ZK_X509_MAX_ATTRIBUTE_VALUE_BYTES_V1 as u16,
+                    u16::try_from(ZK_X509_MAX_ATTRIBUTE_VALUE_BYTES_V1)
+                        .expect("fixed attribute bound fits u16"),
+                    u16::try_from(ZK_X509_MAX_ATTRIBUTE_VALUE_BYTES_V1)
+                        .expect("fixed attribute bound fits u16"),
+                    u16::try_from(ZK_X509_MAX_ATTRIBUTE_VALUE_BYTES_V1)
+                        .expect("fixed attribute bound fits u16"),
                 ]
             || resource_shape.maximum_disclosed_value_bytes as usize
                 != ZK_X509_MAX_ATTRIBUTE_VALUE_BYTES_V1
@@ -906,6 +918,7 @@ fn authoritative_state_v1(
     certificate_policy: PrivacyZkX509CertificatePolicyRecordV1,
     crl: PrivacyZkX509CrlRecordV1,
 ) -> Result<PrivacyZkX509AuthoritativeStateV1, &'static str> {
+    let policy_id = certificate_policy.policy_id;
     let mut commitments = Storage::<PrivacyCommitmentKeyV1, PrivacyStateItemRecordV1>::new();
     commitments.insert(
         PrivacyCommitmentKeyV1::zk_x509_trust_anchor_revision(
@@ -923,11 +936,8 @@ fn authoritative_state_v1(
             certificate_policy.record_epoch,
         )
         .map_err(|_| "release policy revision key failed")?,
-        PrivacyStateItemRecordV1::zk_x509_certificate_policy_governance(
-            certificate_policy.clone(),
-            1,
-        )
-        .map_err(|_| "release policy state record failed")?,
+        PrivacyStateItemRecordV1::zk_x509_certificate_policy_governance(certificate_policy, 1)
+            .map_err(|_| "release policy state record failed")?,
     );
     commitments.insert(
         PrivacyCommitmentKeyV1::zk_x509_crl_current(crl.trust_anchor_id, crl.certificate_policy_id)
@@ -976,286 +986,13 @@ fn authoritative_state_v1(
     );
     load_privacy_zk_x509_authoritative_state_v1(
         trust_anchor.trust_anchor_id,
-        certificate_policy.policy_id,
+        policy_id,
         PrivacyConsensusLimitsV1::taira_default().retained_root_count,
         &commitments.view(),
         &roots.view(),
         &root_heads.view(),
     )
     .map_err(|_| "release authoritative state join failed")
-}
-fn p256_key(seed: u8) -> Result<P256SigningKey, &'static str> {
-    let mut bytes = [0_u8; 32];
-    bytes[31] = seed;
-    P256SigningKey::from_slice(&bytes).map_err(|_| "invalid deterministic P-256 key")
-}
-#[allow(clippy::too_many_arguments)]
-fn certificate(
-    serial: &[u8],
-    issuer: &[u8],
-    subject: &[u8],
-    subject_key: &P256SigningKey,
-    issuer_key: &P256SigningKey,
-    subject_key_identifier: &[u8],
-    authority_key_identifier: &[u8],
-    ca_path_len: Option<u32>,
-    validity_der: &[u8],
-) -> Vec<u8> {
-    certificate_with_extension_profile_v1(
-        serial,
-        issuer,
-        subject,
-        subject_key,
-        issuer_key,
-        FixtureCertificateExtensionsV1 {
-            subject_key_identifier,
-            authority_key_identifier,
-            ca_path_len,
-            extended_key_usages: &[PrivacyX509ExtendedKeyUsageV1::ClientAuthentication],
-        },
-        validity_der,
-    )
-}
-
-struct FixtureCertificateExtensionsV1<'a> {
-    subject_key_identifier: &'a [u8],
-    authority_key_identifier: &'a [u8],
-    ca_path_len: Option<u32>,
-    extended_key_usages: &'a [PrivacyX509ExtendedKeyUsageV1],
-}
-
-fn certificate_with_extension_profile_v1(
-    serial: &[u8],
-    issuer: &[u8],
-    subject: &[u8],
-    subject_key: &P256SigningKey,
-    issuer_key: &P256SigningKey,
-    extensions: FixtureCertificateExtensionsV1<'_>,
-    validity_der: &[u8],
-) -> Vec<u8> {
-    let FixtureCertificateExtensionsV1 {
-        subject_key_identifier,
-        authority_key_identifier,
-        ca_path_len,
-        extended_key_usages,
-    } = extensions;
-    let spki = spki(subject_key);
-    let basic_constraints = ca_path_len.map_or_else(
-        || sequence(&[]),
-        |path_len| sequence(&[tlv(0x01, &[0xff]), integer(u64::from(path_len))]),
-    );
-    let key_usage = if ca_path_len.is_some() {
-        bit_string(&[0x06], 1)
-    } else {
-        bit_string(&[0x80], 7)
-    };
-    let mut extensions = vec![
-        extension(
-            OID_AUTHORITY_KEY_IDENTIFIER,
-            false,
-            &aki_inner(authority_key_identifier),
-        ),
-        extension(
-            OID_SUBJECT_KEY_IDENTIFIER,
-            false,
-            &octet_string(subject_key_identifier),
-        ),
-        extension(OID_KEY_USAGE, true, &key_usage),
-        extension(OID_BASIC_CONSTRAINTS, true, &basic_constraints),
-    ];
-    if ca_path_len.is_none() {
-        extensions.push(extension(
-            OID_EXTENDED_KEY_USAGE,
-            true,
-            &sequence(
-                &extended_key_usages
-                    .iter()
-                    .map(|usage| {
-                        object_identifier(match usage {
-                            PrivacyX509ExtendedKeyUsageV1::ClientAuthentication => {
-                                OID_CLIENT_AUTHENTICATION
-                            }
-                            PrivacyX509ExtendedKeyUsageV1::DocumentSigning => {
-                                ZK_X509_DOCUMENT_SIGNING_EKU_DER_VALUE_V1
-                            }
-                            PrivacyX509ExtendedKeyUsageV1::WalletIdentity => {
-                                ZK_X509_WALLET_IDENTITY_EKU_DER_VALUE_V1
-                            }
-                        })
-                    })
-                    .collect::<Vec<_>>(),
-            ),
-        ));
-    }
-    let tbs = sequence(&[
-        tlv(0xa0, &integer(2)),
-        positive_integer(serial),
-        ZK_X509_ECDSA_WITH_SHA256_ALGORITHM_IDENTIFIER_DER_V1.to_vec(),
-        issuer.to_vec(),
-        validity_der.to_vec(),
-        subject.to_vec(),
-        spki,
-        tlv(0xa3, &sequence(&extensions)),
-    ]);
-    let signature: P256Signature = issuer_key.sign(&tbs);
-    sequence(&[
-        tbs,
-        ZK_X509_ECDSA_WITH_SHA256_ALGORITHM_IDENTIFIER_DER_V1.to_vec(),
-        bit_string(signature.to_der().as_bytes(), 0),
-    ])
-}
-fn crl(
-    issuer: &[u8],
-    issuer_key: &P256SigningKey,
-    authority_key_identifier: &[u8],
-    number: u64,
-    revoked_serials: &[Vec<u8>],
-    times: ZkX509ReleaseTimesV1,
-) -> Result<Vec<u8>, &'static str> {
-    let extensions = sequence(&[
-        extension(
-            OID_AUTHORITY_KEY_IDENTIFIER,
-            false,
-            &aki_inner(authority_key_identifier),
-        ),
-        extension(OID_CRL_NUMBER, false, &integer(number)),
-    ]);
-    let mut fields = vec![
-        integer(1),
-        ZK_X509_ECDSA_WITH_SHA256_ALGORITHM_IDENTIFIER_DER_V1.to_vec(),
-        issuer.to_vec(),
-        time_tlv_v1(times.crl_this_update_unix_seconds)?,
-        time_tlv_v1(times.crl_next_update_unix_seconds)?,
-    ];
-    if !revoked_serials.is_empty() {
-        let revoked_at = time_tlv_v1(times.revoked_at_unix_seconds)?;
-        fields.push(sequence(
-            &revoked_serials
-                .iter()
-                .map(|serial| sequence(&[positive_integer(serial), revoked_at.clone()]))
-                .collect::<Vec<_>>(),
-        ));
-    }
-    fields.push(tlv(0xa0, &extensions));
-    let tbs = sequence(&fields);
-    let signature: P256Signature = issuer_key.sign(&tbs);
-    Ok(sequence(&[
-        tbs,
-        ZK_X509_ECDSA_WITH_SHA256_ALGORITHM_IDENTIFIER_DER_V1.to_vec(),
-        bit_string(signature.to_der().as_bytes(), 0),
-    ]))
-}
-/// Encode one RFC 5280 `Validity` sequence.
-fn validity_der_v1(validity: PrivacyZkX509CertificateValidityV1) -> Result<Vec<u8>, &'static str> {
-    Ok(sequence(&[
-        time_tlv_v1(validity.not_before_unix_seconds())?,
-        time_tlv_v1(validity.not_after_unix_seconds())?,
-    ]))
-}
-/// Encode one RFC 5280 `Time`: `UTCTime` through 2049 and `GeneralizedTime`
-/// from 2050, exactly as the closed profile requires.
-fn time_tlv_v1(unix_seconds: u64) -> Result<Vec<u8>, &'static str> {
-    let unix_seconds = i64::try_from(unix_seconds)
-        .map_err(|_| "release fixture time exceeds signed timestamp range")?;
-    let date_time = OffsetDateTime::from_unix_timestamp(unix_seconds)
-        .map_err(|_| "release fixture time is outside the supported calendar")?;
-    let year = date_time.year();
-    let (tag, year_text) = match year {
-        1950..=2049 => (0x17, format!("{:02}", year.rem_euclid(100))),
-        2050..=9999 => (0x18, format!("{year:04}")),
-        _ => return Err("release fixture time is outside the RFC 5280 calendar"),
-    };
-    let encoded = format!(
-        "{year_text}{:02}{:02}{:02}{:02}{:02}Z",
-        u8::from(date_time.month()),
-        date_time.day(),
-        date_time.hour(),
-        date_time.minute(),
-        date_time.second(),
-    );
-    Ok(tlv(tag, encoded.as_bytes()))
-}
-fn spki(key: &P256SigningKey) -> Vec<u8> {
-    let point = key.verifying_key().to_sec1_point(false);
-    sequence(&[
-        ZK_X509_P256_PUBLIC_KEY_ALGORITHM_IDENTIFIER_DER_V1.to_vec(),
-        bit_string(point.as_bytes(), 0),
-    ])
-}
-fn name(attributes: &[(&[u8], u8, &[u8])]) -> Vec<u8> {
-    sequence(
-        &attributes
-            .iter()
-            .map(|(oid, tag, value)| {
-                tlv(0x31, &sequence(&[object_identifier(oid), tlv(*tag, value)]))
-            })
-            .collect::<Vec<_>>(),
-    )
-}
-fn extension(oid: &[u8], critical: bool, inner: &[u8]) -> Vec<u8> {
-    let mut fields = vec![object_identifier(oid)];
-    if critical {
-        fields.push(tlv(0x01, &[0xff]));
-    }
-    fields.push(octet_string(inner));
-    sequence(&fields)
-}
-fn aki_inner(identifier: &[u8]) -> Vec<u8> {
-    sequence(&[tlv(0x80, identifier)])
-}
-fn object_identifier(contents: &[u8]) -> Vec<u8> {
-    tlv(0x06, contents)
-}
-fn octet_string(contents: &[u8]) -> Vec<u8> {
-    tlv(0x04, contents)
-}
-fn bit_string(bytes: &[u8], unused_bits: u8) -> Vec<u8> {
-    let mut contents = Vec::with_capacity(bytes.len() + 1);
-    contents.push(unused_bits);
-    contents.extend_from_slice(bytes);
-    tlv(0x03, &contents)
-}
-fn integer(value: u64) -> Vec<u8> {
-    if value == 0 {
-        return tlv(0x02, &[0]);
-    }
-    let bytes = value.to_be_bytes();
-    let first = bytes
-        .iter()
-        .position(|byte| *byte != 0)
-        .unwrap_or(bytes.len() - 1);
-    let mut magnitude = bytes[first..].to_vec();
-    if magnitude[0] & 0x80 != 0 {
-        magnitude.insert(0, 0);
-    }
-    tlv(0x02, &magnitude)
-}
-fn positive_integer(magnitude: &[u8]) -> Vec<u8> {
-    let mut contents = magnitude.to_vec();
-    if contents.first().is_some_and(|byte| byte & 0x80 != 0) {
-        contents.insert(0, 0);
-    }
-    tlv(0x02, &contents)
-}
-fn sequence(values: &[Vec<u8>]) -> Vec<u8> {
-    tlv(0x30, &values.concat())
-}
-fn tlv(tag: u8, contents: &[u8]) -> Vec<u8> {
-    let mut encoded = vec![tag];
-    if contents.len() < 128 {
-        encoded.push(contents.len() as u8);
-    } else {
-        let bytes = contents.len().to_be_bytes();
-        let first = bytes
-            .iter()
-            .position(|byte| *byte != 0)
-            .unwrap_or(bytes.len() - 1);
-        let length = &bytes[first..];
-        encoded.push(0x80 | length.len() as u8);
-        encoded.extend_from_slice(length);
-    }
-    encoded.extend_from_slice(contents);
-    encoded
 }
 #[cfg(test)]
 mod tests {
@@ -1549,7 +1286,7 @@ mod tests {
             reference_statement_context_v1(),
             TRUSTED_BLOCK_TIMESTAMP_MS + 1_000,
             network_wallet,
-            crl.clone(),
+            crl,
         )
         .expect("signed network release CRL successor fixture");
         let successor_crl = successor.authoritative_state.crl_record();
@@ -1602,9 +1339,12 @@ mod tests {
             fixture.resource_shape.disclosed_value_lengths,
             [
                 2,
-                ZK_X509_MAX_ATTRIBUTE_VALUE_BYTES_V1 as u16,
-                ZK_X509_MAX_ATTRIBUTE_VALUE_BYTES_V1 as u16,
-                ZK_X509_MAX_ATTRIBUTE_VALUE_BYTES_V1 as u16,
+                u16::try_from(ZK_X509_MAX_ATTRIBUTE_VALUE_BYTES_V1)
+                    .expect("fixed attribute bound fits u16"),
+                u16::try_from(ZK_X509_MAX_ATTRIBUTE_VALUE_BYTES_V1)
+                    .expect("fixed attribute bound fits u16"),
+                u16::try_from(ZK_X509_MAX_ATTRIBUTE_VALUE_BYTES_V1)
+                    .expect("fixed attribute bound fits u16"),
             ]
         );
         assert_eq!(
@@ -1808,7 +1548,9 @@ mod tests {
             &root_ski,
             7,
             revoked_serials,
-            ZkX509ReleaseTimesV1::FIXED_V1,
+            ZkX509ReleaseTimesV1::FIXED_V1.crl_this_update_unix_seconds,
+            ZkX509ReleaseTimesV1::FIXED_V1.crl_next_update_unix_seconds,
+            ZkX509ReleaseTimesV1::FIXED_V1.revoked_at_unix_seconds,
         )
         .expect("matching authoritative CRL DER");
         let issuer = parse_certificate_v1(&fixture.witness.certificate_chain_der[1])

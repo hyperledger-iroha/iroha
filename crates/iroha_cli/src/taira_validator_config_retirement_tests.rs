@@ -86,7 +86,15 @@ fn retirement_rejects_inherited_malformed_or_non_table_inputs() {
     ] {
         assert!(project(bytes).is_err());
     }
-    assert!(project(&vec![b' '; LIMIT as usize + 1]).is_err());
+    assert!(
+        project(&vec![
+            b' ';
+            usize::try_from(LIMIT)
+                .expect("bounded input limit fits usize")
+                + 1
+        ])
+        .is_err()
+    );
 }
 
 #[test]

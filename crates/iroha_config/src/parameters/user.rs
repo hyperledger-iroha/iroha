@@ -200,7 +200,6 @@ use iroha_data_model::{
         FeeSponsorProgramId, LaneCatalog, LaneConfig, LaneSchedulerPolicy,
         LaneSettlementBufferPolicy, LaneStorageProfile, LaneVisibility, UniversalAccountId,
     },
-    peer::Peer,
     privacy::{PrivacyIssuerIdV1, PrivacyPolicyIdV1},
     role::RoleId,
     sorafs::{
@@ -211,8 +210,7 @@ use iroha_data_model::{
     },
     taikai::TaikaiAvailabilityClass,
 };
-use iroha_model_base::chain::ChainId;
-use iroha_model_base::name::Name;
+use iroha_model_base::{chain::ChainId, name::Name, peer::Peer};
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId, topology::ShardId};
 fn resolve_private_key_source(
     inline: Option<WithOrigin<PrivateKey>>,
@@ -9505,8 +9503,9 @@ impl From<LaneValidatorModeConfig> for actual::LaneValidatorMode {
         }
     }
 }
-/// User-level configuration container for public-lane staking.
-#[derive(Debug, Clone, ReadConfig, norito::JsonDeserialize)]
+/// Validator modes and capacity; monetary terms come from committed State.
+#[derive(Debug, Clone, Copy, ReadConfig, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub struct NexusStaking {
     /// Validator activation policy for public lanes.
     #[config(default = "LaneValidatorModeConfig::StakeElected")]
@@ -9514,46 +9513,14 @@ pub struct NexusStaking {
     /// Validator activation policy for restricted/permissioned lanes.
     #[config(default = "LaneValidatorModeConfig::AdminManaged")]
     pub restricted_validator_mode: LaneValidatorModeConfig,
-    /// Minimum bonded stake required to register a validator.
-    #[config(default = "defaults::nexus::staking::min_validator_stake()")]
-    pub min_validator_stake: Quantity,
     /// Maximum number of validators allowed per lane.
     #[config(default = "defaults::nexus::staking::MAX_VALIDATORS")]
     pub max_validators: NonZeroU32,
-    /// Maximum number of stake-share rows retained for one validator.
-    #[config(default = "defaults::nexus::staking::MAX_STAKE_SHARES_PER_VALIDATOR")]
-    pub max_stake_shares_per_validator: NonZeroU32,
-    /// Maximum number of pending unbond requests retained in one stake share.
-    #[config(default = "defaults::nexus::staking::MAX_PENDING_UNBONDS_PER_SHARE")]
-    pub max_pending_unbonds_per_share: NonZeroU32,
-    /// Minimum delay between scheduling and finalising an unbond (milliseconds).
-    #[config(default = "defaults::nexus::staking::UNBONDING_DELAY.into()")]
-    pub unbonding_delay_ms: DurationMs,
-    /// Maximum slash ratio allowed (basis points, `10_000` = 100%).
-    #[config(default = "defaults::nexus::staking::MAX_SLASH_BPS")]
-    pub max_slash_bps: u16,
-    /// Asset definition used for staking bonds (string form).
-    #[config(default = "defaults::nexus::staking::stake_asset_id()")]
-    pub stake_asset_id: String,
-    /// Escrow account that custodies bonded stake (string form).
-    #[config(default = "defaults::nexus::staking::stake_escrow_account_id()")]
-    pub stake_escrow_account_id: String,
-    /// Account that receives slashed stake (string form).
-    #[config(default = "defaults::nexus::staking::slash_sink_account_id()")]
-    pub slash_sink_account_id: String,
 }
 impl_default!(NexusStaking {
     public_validator_mode: LaneValidatorModeConfig::StakeElected,
     restricted_validator_mode: LaneValidatorModeConfig::AdminManaged,
-    min_validator_stake: defaults::nexus::staking::min_validator_stake(),
     max_validators: defaults::nexus::staking::MAX_VALIDATORS,
-    max_stake_shares_per_validator: defaults::nexus::staking::MAX_STAKE_SHARES_PER_VALIDATOR,
-    max_pending_unbonds_per_share: defaults::nexus::staking::MAX_PENDING_UNBONDS_PER_SHARE,
-    unbonding_delay_ms: defaults::nexus::staking::UNBONDING_DELAY.into(),
-    max_slash_bps: defaults::nexus::staking::MAX_SLASH_BPS,
-    stake_asset_id: defaults::nexus::staking::stake_asset_id(),
-    stake_escrow_account_id: defaults::nexus::staking::stake_escrow_account_id(),
-    slash_sink_account_id: defaults::nexus::staking::slash_sink_account_id(),
 });
 impl NexusStaking {
     fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::NexusStaking> {
@@ -9567,44 +9534,10 @@ impl NexusStaking {
             )));
             return None;
         }
-        let reward_recipient_cap = iroha_data_model::validation_fee_rewards::MAX_REWARD_RECIPIENTS;
-        if self.max_stake_shares_per_validator.get() as usize > reward_recipient_cap {
-            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
-                "nexus.staking.max_stake_shares_per_validator must be <= {reward_recipient_cap} to fit one historical reward exposure (found {})",
-                self.max_stake_shares_per_validator
-            )));
-            return None;
-        }
-        if self.max_slash_bps > 10_000 {
-            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
-                "nexus.staking.max_slash_bps must be <= 10000 (found {})",
-                self.max_slash_bps
-            )));
-            return None;
-        }
-        let stake_asset_id = match validate_asset_definition_selector_literal(&self.stake_asset_id)
-        {
-            Ok(value) => value,
-            Err(err) => {
-                emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
-                    "invalid nexus.staking.stake_asset_id `{}`: {err}",
-                    self.stake_asset_id
-                )));
-                return None;
-            }
-        };
         Some(actual::NexusStaking {
             public_validator_mode: self.public_validator_mode.into(),
             restricted_validator_mode: self.restricted_validator_mode.into(),
-            min_validator_stake: self.min_validator_stake,
             max_validators: self.max_validators,
-            max_stake_shares_per_validator: self.max_stake_shares_per_validator,
-            max_pending_unbonds_per_share: self.max_pending_unbonds_per_share,
-            unbonding_delay: self.unbonding_delay_ms.get(),
-            max_slash_bps: self.max_slash_bps,
-            stake_asset_id,
-            stake_escrow_account_id: self.stake_escrow_account_id,
-            slash_sink_account_id: self.slash_sink_account_id,
         })
     }
 }

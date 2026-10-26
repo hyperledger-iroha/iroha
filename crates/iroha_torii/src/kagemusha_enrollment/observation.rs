@@ -212,14 +212,18 @@ impl TlsRoot {
         {
             return Err(Error::Selection);
         }
-        let original = RetainedFile::open_private(path).map_err(custody)?;
-        let snapshot = original.snapshot().map_err(custody)?;
-        let length = original.file().metadata().map_err(custody)?.len();
+        let original = RetainedFile::open_private(path).map_err(|error| custody(&error))?;
+        let snapshot = original.snapshot().map_err(|error| custody(&error))?;
+        let length = original
+            .file()
+            .metadata()
+            .map_err(|error| custody(&error))?
+            .len();
         if !(1..=MAX_TLS_ROOT as u64).contains(&length) {
             return Err(Error::Invalid);
         }
         let mut bytes = vec![0; usize::try_from(length).map_err(|_| Error::Invalid)?];
-        iroha_fs::read_exact_at(original.file(), &mut bytes, 0).map_err(custody)?;
+        iroha_fs::read_exact_at(original.file(), &mut bytes, 0).map_err(|error| custody(&error))?;
         let owner = Self { original, snapshot };
         owner.revalidate()?;
         // Reject a PEM bundle, concatenated certificate, or trailing DATA. The
@@ -235,7 +239,7 @@ impl TlsRoot {
     }
 
     fn revalidate(&self) -> Result<()> {
-        if self.original.snapshot().map_err(custody)? != self.snapshot {
+        if self.original.snapshot().map_err(|error| custody(&error))? != self.snapshot {
             return Err(Error::Selection);
         }
         Ok(())
@@ -256,15 +260,15 @@ impl Credential {
         {
             return Err(Error::Selection);
         }
-        let original = RetainedFile::open_private(path).map_err(custody)?;
-        let snapshot = original.snapshot().map_err(custody)?;
+        let original = RetainedFile::open_private(path).map_err(|value| custody(&value))?;
+        let snapshot = original.snapshot().map_err(|value| custody(&value))?;
         let owner = Self { original, snapshot };
         owner.authorization()?;
         Ok(owner)
     }
 
     fn revalidate(&self) -> Result<()> {
-        if self.original.snapshot().map_err(custody)? != self.snapshot {
+        if self.original.snapshot().map_err(|value| custody(&value))? != self.snapshot {
             return Err(Error::Selection);
         }
         Ok(())
@@ -272,13 +276,20 @@ impl Credential {
 
     fn authorization(&self) -> Result<HeaderValue> {
         self.revalidate()?;
-        let length = self.original.file().metadata().map_err(custody)?.len();
+        let length = self
+            .original
+            .file()
+            .metadata()
+            .map_err(|value| custody(&value))?
+            .len();
         if !(1..=MAX_CREDENTIAL as u64).contains(&length) {
             return Err(Error::Invalid);
         }
-        let mut value = Zeroizing::new(vec![0_u8; length as usize + 7]);
+        let length = usize::try_from(length).map_err(|_| Error::Invalid)?;
+        let mut value = Zeroizing::new(vec![0_u8; length + 7]);
         value[..7].copy_from_slice(b"Bearer ");
-        iroha_fs::read_exact_at(self.original.file(), &mut value[7..], 0).map_err(custody)?;
+        iroha_fs::read_exact_at(self.original.file(), &mut value[7..], 0)
+            .map_err(|value| custody(&value))?;
         self.revalidate()?;
         if !value[7..]
             .iter()
@@ -292,7 +303,7 @@ impl Credential {
     }
 }
 
-fn custody(error: io::Error) -> Error {
+fn custody(error: &io::Error) -> Error {
     match error.kind() {
         io::ErrorKind::InvalidInput | io::ErrorKind::InvalidData => Error::Invalid,
         io::ErrorKind::PermissionDenied => Error::Selection,

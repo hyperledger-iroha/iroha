@@ -519,7 +519,10 @@ fn wallet_advance_v1_completion_released_loss_is_never_resigned() {
     ));
     // Both missing: lost.
     s.store.remove_file(&dir(&f), &names[0]);
-    assert_eq!(load().map(|pair| pair.map(|pair| pair.into_value())), lost);
+    assert_eq!(
+        load().map(|pair| pair.map(super::super::capsule::KagemushaWalletLoadedPairV1::into_value)),
+        lost
+    );
     // Both corrupt, or holding another record: lost.
     s.store.write_new(&dir(&f), &names[0], b"corrupt");
     let other = completion_for(&f, &s.capsule, 0x09)
@@ -530,7 +533,10 @@ fn wallet_advance_v1_completion_released_loss_is_never_resigned() {
         &names[1],
         &super::super::capsule::encode_file::<Record>(1, BOOT_A, &other).expect("file"),
     );
-    assert_eq!(load().map(|pair| pair.map(|pair| pair.into_value())), lost);
+    assert_eq!(
+        load().map(|pair| pair.map(super::super::capsule::KagemushaWalletLoadedPairV1::into_value)),
+        lost
+    );
 }
 
 #[test]

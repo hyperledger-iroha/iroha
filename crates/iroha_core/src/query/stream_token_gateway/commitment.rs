@@ -7,7 +7,7 @@ use iroha_data_model::{account::AccountId, isi::sorafs::MutateSorafsStreamTokenG
 const MAX_INSTRUCTION_COMMITMENT_BYTES: usize = 64 * 1024;
 
 /// Bind the complete native action and actual signing authority under one bounded domain.
-pub(crate) fn instruction_digest(
+pub fn instruction_digest(
     instruction: &MutateSorafsStreamTokenGateway,
     authority: &AccountId,
 ) -> Result<[u8; 32], TransitionError> {

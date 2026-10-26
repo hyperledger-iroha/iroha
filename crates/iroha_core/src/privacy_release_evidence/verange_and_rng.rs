@@ -35,7 +35,7 @@ fn run_verange_stage_v1(
         })
         .collect::<Result<Vec<_>, _>>()?;
     let binding = verange_binding_v1(profile, [0x22; 32])?;
-    let statement = VeRangeType1BatchStatementV1::new(profile, commitments.clone(), binding)
+    let statement = VeRangeType1BatchStatementV1::new(profile, commitments.clone(), &binding)
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
     let mut rng = EvidenceRng06::new(stage_seed_v1(
         PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
@@ -57,7 +57,7 @@ fn run_verange_stage_v1(
             mutated_digest[0] ^= 0x80;
             let mutated_binding = verange_binding_v1(profile, mutated_digest)?;
             let mutated =
-                VeRangeType1BatchStatementV1::new(profile, commitments.clone(), mutated_binding)
+                VeRangeType1BatchStatementV1::new(profile, commitments.clone(), &mutated_binding)
                     .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
             if verify_batch_encoded(&mutated, &proof_bytes).is_ok() {
                 return Err(PrivacyReleaseEvidenceErrorClassV1::PublicStatementMutationAccepted);

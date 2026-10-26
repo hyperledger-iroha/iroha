@@ -15,9 +15,9 @@ fn assert_complete_numeric_construction(documents: &[&[u8]]) {
     let base = build_zk_x509_der_stark_base_v1(documents).expect("valid numeric base");
     validate_zk_x509_der_stark_base_trace_v1(&base).expect("every base transition");
     let challenges = construction_challenges();
-    let trace = build_zk_x509_der_stark_trace_v1(base, challenges).expect("complete bus closure");
+    let trace = build_zk_x509_der_stark_trace_v1(base, &challenges).expect("complete bus closure");
     let claims = zk_x509_der_stark_terminal_claims_v1(&trace).unwrap();
-    let schedule = compile_zk_x509_der_stark_fixed_schedule_v1(ZkX509DerStarkShapeV1).unwrap();
+    let schedule = compile_zk_x509_der_stark_fixed_schedule_v1(ZkX509DerStarkShapeV1);
     let comparator_end =
         ZK_X509_DER_STARK_MAX_PARSER_ROWS_V1 + trace.base.private_shape.comparator_rows;
     let indices = (0..=trace.base.private_shape.parser_rows)
@@ -38,7 +38,7 @@ fn assert_complete_numeric_construction(documents: &[&[u8]]) {
             &zk_x509_der_stark_aggregate_aux_row_v1(&trace, next).unwrap(),
             &schedule.fixed_row(index).unwrap(),
             &schedule.fixed_row(next).unwrap(),
-            challenges,
+            &challenges,
             ZkX509DerStarkPublicTerminalsV1,
             claims,
             &mut residues,
@@ -63,9 +63,13 @@ fn long_length_rows_snapshot_state_before_consuming_the_length_octet() {
             }
             let mut document = tag.to_vec();
             match length {
-                0..=127 => document.push(length as u8),
-                128..=255 => document.extend_from_slice(&[0x81, length as u8]),
-                _ => document.extend_from_slice(&[0x82, (length >> 8) as u8, length as u8]),
+                0..=127 => document.push(length.to_le_bytes()[0]),
+                128..=255 => document.extend_from_slice(&[0x81, length.to_le_bytes()[0]]),
+                _ => document.extend_from_slice(&[
+                    0x82,
+                    length.to_le_bytes()[1],
+                    length.to_le_bytes()[0],
+                ]),
             }
             document.resize(document.len() + length, 0x5a);
             assert_complete_numeric_construction(&[&document]);
@@ -98,7 +102,10 @@ fn oid_and_bit_string_flags_end_before_the_boundary_row() {
     ] {
         for nested in [false, true] {
             let document = if nested {
-                let mut encoded = vec![0x30, primitive.len() as u8];
+                let mut encoded = vec![
+                    0x30,
+                    u8::try_from(primitive.len()).expect("fixture value fits u8"),
+                ];
                 encoded.extend_from_slice(&primitive);
                 encoded
             } else {
@@ -157,7 +164,7 @@ fn ordinary_and_maximum_release_documents_satisfy_complete_numeric_der_air() {
 
 #[test]
 fn inactive_local_auxiliary_template_matches_generic_witness_equations() {
-    let schedule = compile_zk_x509_der_stark_fixed_schedule_v1(ZkX509DerStarkShapeV1).unwrap();
+    let schedule = compile_zk_x509_der_stark_fixed_schedule_v1(ZkX509DerStarkShapeV1);
     let null = [0x05, 0x00];
     for count in 1..=ZK_X509_DER_STARK_MAX_DOCUMENTS_V1 {
         let documents = vec![null.as_slice(); count];
@@ -206,7 +213,7 @@ fn inactive_local_auxiliary_template_matches_generic_witness_equations() {
 fn inactive_auxiliary_reconstruction_preserves_active_rows_and_both_carry_domains() {
     for document in [&[0x05, 0x00][..], &[0x31, 0x04, 0x05, 0x00, 0x05, 0x00][..]] {
         let base = build_zk_x509_der_stark_base_v1(&[document]).unwrap();
-        let mut trace = build_zk_x509_der_stark_trace_v1(base, construction_challenges()).unwrap();
+        let mut trace = build_zk_x509_der_stark_trace_v1(base, &construction_challenges()).unwrap();
         let parser_end = trace.base.private_shape.parser_rows;
         let comparator_rows = trace.base.private_shape.comparator_rows;
         assert_eq!(comparator_rows > 0, document[0] == 0x31);
@@ -233,7 +240,7 @@ fn inactive_auxiliary_reconstruction_preserves_active_rows_and_both_carry_domain
                 trace.aux_rows[parser_end + index]
             );
         }
-        let schedule = compile_zk_x509_der_stark_fixed_schedule_v1(ZkX509DerStarkShapeV1).unwrap();
+        let schedule = compile_zk_x509_der_stark_fixed_schedule_v1(ZkX509DerStarkShapeV1);
         for index in [
             parser_end,
             ZK_X509_DER_STARK_MAX_PARSER_ROWS_V1 - 1,
@@ -273,10 +280,9 @@ fn inactive_auxiliary_reconstruction_preserves_active_rows_and_both_carry_domain
                 ),
                 (AUX_INPUT_BYTE_BEFORE, AUX_INPUT_BYTE_AFTER),
             ] {
-                for lane in 0..ZK_X509_DER_STARK_BUS_LANES_V1 {
-                    expected[before + lane] = carry[after + lane];
-                    expected[after + lane] = carry[after + lane];
-                }
+                let carried = &carry[after..after + ZK_X509_DER_STARK_BUS_LANES_V1];
+                expected[before..before + ZK_X509_DER_STARK_BUS_LANES_V1].copy_from_slice(carried);
+                expected[after..after + ZK_X509_DER_STARK_BUS_LANES_V1].copy_from_slice(carried);
             }
             assert_eq!(
                 zk_x509_der_stark_aggregate_aux_row_v1(&trace, index).unwrap(),
@@ -291,7 +297,7 @@ fn inactive_auxiliary_reconstruction_preserves_active_rows_and_both_carry_domain
 fn inactive_auxiliary_template_keeps_shape_row_and_resource_errors() {
     let document = [0x05, 0x00];
     let base = build_zk_x509_der_stark_base_v1(&[&document]).unwrap();
-    let trace = build_zk_x509_der_stark_trace_v1(base, construction_challenges()).unwrap();
+    let trace = build_zk_x509_der_stark_trace_v1(base, &construction_challenges()).unwrap();
     let padding_index = trace.base.private_shape.parser_rows;
     assert_eq!(
         zk_x509_der_stark_aggregate_aux_row_v1(&trace, ZK_X509_DER_STARK_TRACE_SIZE_V1),

@@ -66,9 +66,7 @@ fn native_getgas_unused_operand_bytes_never_authorize_register_reads() {
         for (slot, register) in [(SCALAR_LEFT, rs1), (SCALAR_RIGHT, rs2)] {
             let mut forged = fixture.clone();
             forged.0.packets.fields[slot] = event(
-                Space::Register,
-                0,
-                u32::from(register),
+                (Space::Register, 0, u32::from(register)),
                 0,
                 0,
                 false,

@@ -237,13 +237,13 @@ where
             invalid_parameter(message)
         });
     }
-    let limits = match current.as_deref() {
-        Some(current) => current.decode_limits(bytes.len(), limits),
-        None => {
-            crate::smartcontracts::isi::query::singular_query_decode_limits(bytes.len(), limits)
-        }
-    }
-    .map_err(InstructionExecutionError::Query)?;
+    let limits = current
+        .as_deref()
+        .map_or_else(
+            || crate::smartcontracts::isi::query::singular_query_decode_limits(bytes.len(), limits),
+            |current| current.decode_limits(bytes.len(), limits),
+        )
+        .map_err(InstructionExecutionError::Query)?;
     let (value, allocation_bytes) = if current.is_some() {
         let (value, usage) = norito::core::with_decode_limits_measured(limits, || {
             decode_canonical_with_limits::<T>(bytes, limits)
@@ -526,7 +526,7 @@ fn read_status_with_current(
     }
     Ok(Some(status))
 }
-/// Fully validated active PoP publications used by privacy-preserving consumers.
+/// Fully validated active `PoP` publications used by privacy-preserving consumers.
 pub(super) struct ActivePopPublicationsV1 {
     pub(super) status: PopRegistryStatusV1,
     pub(super) issuer_policy_digest: [u8; 32],
@@ -546,12 +546,9 @@ pub(super) struct PinnedPopPublicationsV1 {
 pub(super) fn read_pinned_publications(
     world: &impl WorldReadOnly,
     issuer_policy_digest: [u8; 32],
-    commitment_root: [u8; 32],
-    commitment_tree_version: u64,
-    revocation_root: [u8; 32],
-    revocation_list_version: u64,
-    registry_audit_sequence: u64,
-    registry_audit_head: [u8; 32],
+    (commitment_root, commitment_tree_version): ([u8; 32], u64),
+    (revocation_root, revocation_list_version): ([u8; 32], u64),
+    (registry_audit_sequence, registry_audit_head): (u64, [u8; 32]),
 ) -> Result<PinnedPopPublicationsV1, InstructionExecutionError> {
     let current_policy = read_policy(world)?
         .ok_or_else(|| corrupt_state("pinned PoP publications have no issuer policy"))?;
@@ -595,7 +592,7 @@ pub(super) fn read_pinned_publications(
         decode_revocation_payload(&revocation_record.canonical_revocation_list_payload, true)?;
     Ok(PinnedPopPublicationsV1 { root, revocations })
 }
-/// Load the exact signed active PoP root and revocation snapshot.
+/// Load the exact signed active `PoP` root and revocation snapshot.
 pub(super) fn read_active_publications(
     world: &impl WorldReadOnly,
 ) -> Result<Option<ActivePopPublicationsV1>, InstructionExecutionError> {
@@ -749,7 +746,9 @@ fn read_root_with_current(
         Some(current) => decode_state_for_current(bytes, "PoP root publication", current)?,
         None => decode_state(bytes, "PoP root publication")?,
     };
-    let record_resident_bytes = current.as_deref().map(|current| current.resident_bytes());
+    let record_resident_bytes = current
+        .as_deref()
+        .map(super::query::SingularQueryCurrentAllocation::resident_bytes);
     let root = match current.as_deref_mut() {
         Some(current) => {
             decode_root_payload_for_current(&record.canonical_root_payload, true, current)?
@@ -824,7 +823,9 @@ fn read_revocation_publication_with_current(
         Some(current) => decode_state_for_current(bytes, "PoP revocation publication", current)?,
         None => decode_state(bytes, "PoP revocation publication")?,
     };
-    let record_resident_bytes = current.as_deref().map(|current| current.resident_bytes());
+    let record_resident_bytes = current
+        .as_deref()
+        .map(super::query::SingularQueryCurrentAllocation::resident_bytes);
     let publication = match current.as_deref_mut() {
         Some(current) => decode_revocation_payload_for_current(
             &record.canonical_revocation_list_payload,
@@ -924,9 +925,10 @@ fn read_revocation_with_current(
     nonce_commitment: [u8; 32],
     mut current: Option<&mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation>,
 ) -> Result<Option<PopRevocationRecordV1>, InstructionExecutionError> {
-    let retained_base_bytes = current
-        .as_deref()
-        .map_or(0, |current| current.resident_bytes());
+    let retained_base_bytes = current.as_deref().map_or(
+        0,
+        super::query::SingularQueryCurrentAllocation::resident_bytes,
+    );
     let Some(record) =
         read_revocation_record_with_current(world, nonce_commitment, current.as_deref_mut())?
     else {
@@ -1288,7 +1290,9 @@ fn read_audit_record_with_current(
         Some(current) => decode_state_for_current(bytes, "PoP registry audit link", current)?,
         None => decode_state(bytes, "PoP registry audit link")?,
     };
-    let record_resident_bytes = current.as_deref().map(|current| current.resident_bytes());
+    let record_resident_bytes = current
+        .as_deref()
+        .map(super::query::SingularQueryCurrentAllocation::resident_bytes);
     let expected = match current.as_deref_mut() {
         Some(current) => audit_digest_for_current(
             record.sequence,
@@ -1340,9 +1344,10 @@ fn read_audit_with_current(
     sequence: u64,
     mut current: Option<&mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation>,
 ) -> Result<Option<PopRegistryAuditDigestRecordV1>, InstructionExecutionError> {
-    let retained_base_bytes = current
-        .as_deref()
-        .map_or(0, |current| current.resident_bytes());
+    let retained_base_bytes = current.as_deref().map_or(
+        0,
+        super::query::SingularQueryCurrentAllocation::resident_bytes,
+    );
     let Some(record) = read_audit_record_with_current(world, sequence, current.as_deref_mut())?
     else {
         return Ok(None);
@@ -2391,8 +2396,7 @@ mod tests {
     fn batch(
         keypair: &KeyPair,
         root_byte: u8,
-        tree_size: u64,
-        tree_version: u64,
+        (tree_size, tree_version): (u64, u64),
         list_version: u64,
         previous_root_digest: Option<[u8; 32]>,
         commitments: Vec<PopCredentialCommitmentV1>,
@@ -2545,8 +2549,7 @@ mod tests {
         batch(
             operator,
             1,
-            1,
-            1,
+            (1, 1),
             1,
             None,
             vec![commitment(1, nonce(1), root_digest, 1, 1)],
@@ -2751,7 +2754,7 @@ mod tests {
                 candidate
             })
             .collect();
-        let oversized = batch(&operator, 1, 257, 1, 1, None, commitments, Vec::new());
+        let oversized = batch(&operator, 1, (257, 1), 1, None, commitments, Vec::new());
         assert!(
             CommitSorafsPopCredentialBatch::new(encode(&oversized))
                 .execute(&authority, &mut stx)
@@ -2773,8 +2776,7 @@ mod tests {
         let duplicate = batch(
             &operator,
             2,
-            2,
-            2,
+            (2, 2),
             2,
             Some([1; 32]),
             vec![commitment(1, nonce(2), [2; 32], 2, 2)],
@@ -2788,8 +2790,7 @@ mod tests {
         let outdated = batch(
             &operator,
             2,
-            2,
-            1,
+            (2, 1),
             2,
             Some([1; 32]),
             vec![commitment(2, nonce(2), [2; 32], 1, 2)],
@@ -2893,7 +2894,7 @@ mod tests {
         let commitments = (1_u8..=17)
             .map(|value| commitment(value, nonce(value), root_digest, 1, 1))
             .collect();
-        let initial = batch(&operator, 1, 17, 1, 1, None, commitments, Vec::new());
+        let initial = batch(&operator, 1, (17, 1), 1, None, commitments, Vec::new());
         CommitSorafsPopCredentialBatch::new(encode(&initial))
             .execute(&authority, &mut stx)
             .expect("initial credential batch");

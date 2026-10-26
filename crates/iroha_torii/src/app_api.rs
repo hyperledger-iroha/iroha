@@ -204,26 +204,25 @@ fn validate_manifest(
             "app API manifest app_id must not be empty",
         ));
     }
-    if let (Some(expected), Some(actual)) = (expected_cid, manifest.content_cid.as_deref()) {
-        if actual != expected {
-            return Err(json_error(
-                StatusCode::CONFLICT,
-                format!("app API manifest content_cid `{actual}` does not match request CID"),
-            ));
-        }
+    if let (Some(expected), Some(actual)) = (expected_cid, manifest.content_cid.as_deref())
+        && actual != expected
+    {
+        return Err(json_error(
+            StatusCode::CONFLICT,
+            format!("app API manifest content_cid `{actual}` does not match request CID"),
+        ));
     }
     if let (Some(expected), Some(actual)) = (
         expected_manifest_digest_hex,
         manifest.manifest_digest_hex.as_deref(),
-    ) {
-        if !actual.eq_ignore_ascii_case(expected) {
-            return Err(json_error(
-                StatusCode::CONFLICT,
-                format!(
-                    "app API manifest manifest_digest_hex `{actual}` does not match stored manifest"
-                ),
-            ));
-        }
+    ) && !actual.eq_ignore_ascii_case(expected)
+    {
+        return Err(json_error(
+            StatusCode::CONFLICT,
+            format!(
+                "app API manifest manifest_digest_hex `{actual}` does not match stored manifest"
+            ),
+        ));
     }
     if manifest.routes.is_empty() {
         return Err(json_error(
@@ -334,7 +333,7 @@ fn manifest_to_json(manifest: &ToriiAppApiManifestV1) -> Value {
     let mut object = Map::new();
     object.insert(
         "schema_version".into(),
-        Value::from(manifest.schema_version as u64),
+        Value::from(u64::from(manifest.schema_version)),
     );
     object.insert("app_id".into(), Value::from(manifest.app_id.clone()));
     object.insert(
@@ -422,11 +421,15 @@ fn read_api_manifest_payload(
             )
         })
 }
-async fn load_api_manifest_by_cid(
+#[expect(
+    clippy::result_large_err,
+    reason = "Manifest validation preserves the complete HTTP rejection response for the caller."
+)]
+fn load_api_manifest_by_cid(
     state: &SharedAppState,
     cid: &str,
 ) -> Result<ToriiAppApiManifestV1, Response> {
-    let stored = crate::sorafs::api::resolve_site_manifest_by_cid_unchecked(state, cid).await?;
+    let stored = crate::sorafs::api::resolve_site_manifest_by_cid_unchecked(state, cid)?;
     let payload = read_api_manifest_payload(state, &stored)?;
     let mut manifest = json::from_slice::<ToriiAppApiManifestV1>(&payload).map_err(|err| {
         json_error(
@@ -468,7 +471,7 @@ where
         .uri(uri.clone())
         .body(())
         .expect("valid request from existing URI");
-    let (mut parts, _) = request.into_parts();
+    let (mut parts, ()) = request.into_parts();
     crate::NoritoQuery::<T>::from_request_parts(&mut parts, &())
         .await
         .map(|crate::NoritoQuery(value)| value)
@@ -496,17 +499,17 @@ fn attach_dispatch_headers(
     if let Ok(value) = HeaderValue::from_str(&source.app_id) {
         response.headers_mut().insert("x-torii-app-api-id", value);
     }
-    if let Some(cid) = source.content_cid.as_ref() {
-        if let Ok(value) = HeaderValue::from_str(cid) {
-            response.headers_mut().insert("x-torii-app-api-cid", value);
-        }
+    if let Some(cid) = source.content_cid.as_ref()
+        && let Ok(value) = HeaderValue::from_str(cid)
+    {
+        response.headers_mut().insert("x-torii-app-api-cid", value);
     }
-    if let Some(service_id) = source.service_id.as_ref() {
-        if let Ok(value) = HeaderValue::from_str(service_id) {
-            response
-                .headers_mut()
-                .insert("x-torii-app-api-service", value);
-        }
+    if let Some(service_id) = source.service_id.as_ref()
+        && let Ok(value) = HeaderValue::from_str(service_id)
+    {
+        response
+            .headers_mut()
+            .insert("x-torii-app-api-service", value);
     }
     if let Ok(value) = HeaderValue::from_str(&route.adapter) {
         response
@@ -728,10 +731,9 @@ pub async fn handle_get_app_api_bindings(State(app): State<SharedAppState>) -> R
     );
     body.insert(
         "active_service_id".into(),
-        candidates
-            .first()
-            .map(|candidate| Value::from(candidate.service_id.clone()))
-            .unwrap_or(Value::Null),
+        candidates.first().map_or(Value::Null, |candidate| {
+            Value::from(candidate.service_id.clone())
+        }),
     );
     body.insert(
         "items".into(),
@@ -743,7 +745,7 @@ pub async fn handle_get_app_api_cid_manifest(
     State(app): State<SharedAppState>,
     Path(cid): Path<String>,
 ) -> Response {
-    let manifest = match load_api_manifest_by_cid(&app, &cid).await {
+    let manifest = match load_api_manifest_by_cid(&app, &cid) {
         Ok(value) => value,
         Err(response) => return response,
     };
@@ -757,7 +759,7 @@ pub async fn handle_get_app_api_cid_path(
     ConnectInfo(remote): ConnectInfo<SocketAddr>,
     Path((cid, raw_path)): Path<(String, String)>,
 ) -> Response {
-    let manifest = match load_api_manifest_by_cid(&app, &cid).await {
+    let manifest = match load_api_manifest_by_cid(&app, &cid) {
         Ok(value) => value,
         Err(response) => return response,
     };
@@ -795,7 +797,7 @@ pub async fn handle_post_app_api_cid_path(
     Path((cid, raw_path)): Path<(String, String)>,
     body: Bytes,
 ) -> Response {
-    let manifest = match load_api_manifest_by_cid(&app, &cid).await {
+    let manifest = match load_api_manifest_by_cid(&app, &cid) {
         Ok(value) => value,
         Err(response) => return response,
     };
@@ -841,7 +843,7 @@ pub async fn handle_get_app_api_active_path(
                 "active app API binding has no routes or content_cid",
             );
         };
-        match load_api_manifest_by_cid(&app, cid).await {
+        match load_api_manifest_by_cid(&app, cid) {
             Ok(value) => value,
             Err(response) => return response,
         }
@@ -896,7 +898,7 @@ pub async fn handle_post_app_api_active_path(
                 "active app API binding has no routes or content_cid",
             );
         };
-        match load_api_manifest_by_cid(&app, cid).await {
+        match load_api_manifest_by_cid(&app, cid) {
             Ok(value) => value,
             Err(response) => return response,
         }

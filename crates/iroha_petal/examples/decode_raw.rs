@@ -45,7 +45,8 @@ fn main() {
         _ => None,
     };
     let config = config.map(|c| fit_to_frame(&c, 4.0));
-    let mut session = ScanSession::new(ScanLimits::default());
+    // frames read from files keep no camera waiting: every capture has time for the turn lanes
+    let mut session = ScanSession::with_work_cost(ScanLimits::default(), |_, _| 0.0);
     let started = std::time::Instant::now();
     for index in 0..count {
         let raw = std::fs::read(format!("{dir}/frame_{index:04}.y8")).expect("frame");

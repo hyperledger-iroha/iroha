@@ -1,6 +1,6 @@
 //! Four actual original frozen account-rekey owners and one exact both-image relation.
 //! Scoped rows do not establish complete State, instruction validity or AXT authority.
-//! TODO: join all remaining original relations/cells/history to StatePublication and Kura.
+//! TODO: join all remaining original relations/cells/history to `StatePublication` and Kura.
 use super::{CanonicalTableLeafSet, CanonicalTablePairedSnapshot, LeafError, LeafLimits};
 use crate::state::{
     StateBlock, authority_registry::grouped_ownership::validate_original_account_rekeys,
@@ -59,6 +59,10 @@ impl<'frozen> Original<'frozen> {
     }
 }
 /// Check both original images and encode actual current rows using the original State pool.
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 pub(in crate::state) fn capture(
     block: &StateBlock<'_>,
     limits: LeafLimits,

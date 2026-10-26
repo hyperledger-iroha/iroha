@@ -188,7 +188,7 @@ fn sample_credential_randomness_from_seed_bounded_v1(
         }
         if norm_squared <= norm_squared_bound {
             let polynomials = core::array::from_fn(|index| {
-                ApplicationPolynomialV1::from_centered_coefficients(centered[index])
+                ApplicationPolynomialV1::from_centered_coefficients(&centered[index])
             });
             return Ok((
                 CredentialRandomnessV1 {
@@ -272,6 +272,12 @@ fn cdf_155_sample_v1(stream: &mut Aes256CtrV1<'_>) -> usize {
     }
     index
 }
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss,
+    reason = "The pinned LaZeR Bernoulli sampler requires these exact binary64-to-integer thresholds and rounding steps."
+)]
 fn ber_exp_v1(stream: &mut Aes256CtrV1<'_>, mut exponent: f64) -> bool {
     const LN_2: f64 = f64::from_bits(0x3fe6_2e42_fefa_39ef);
     let mut bytes = Zeroizing::new([0_u8; 16]);
@@ -287,6 +293,10 @@ fn ber_exp_v1(stream: &mut Aes256CtrV1<'_>, mut exponent: f64) -> bool {
     let threshold = (exp_small_v1(-exponent) * (1_u64 << 53) as f64) as u64;
     first_accepts && second < threshold
 }
+#[expect(
+    clippy::suboptimal_flops,
+    reason = "Separate multiply/add rounding preserves the pinned fdlibm sampler and its byte-exact known answers."
+)]
 fn exp_small_v1(value: f64) -> f64 {
     const C1: f64 = 1.666_666_666_666_660_2e-1;
     const C2: f64 = -2.777_777_777_701_559_3e-3;

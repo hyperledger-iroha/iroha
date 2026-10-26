@@ -554,15 +554,15 @@ pub(super) fn validate(
             .ok_or_else(|| fail("reward cursor credit overflow"))?;
         if expected != cursor.credited_xor
             || allocation.xor_minor.checked_sub(expected) != Some(unmaterialized)
-            || match &cursor.next_archive {
-                None => cursor.service_offset != 0 || cursor.page_index != 0,
-                Some(reference) => {
+            || cursor.next_archive.as_ref().map_or(
+                cursor.service_offset != 0 || cursor.page_index != 0,
+                |reference| {
                     cursor.service_offset == 0
                         || reference.recorded_at_height == 0
                         || reference.page_index != cursor.page_index
                         || reference.service_start >= remaining
-                }
-            }
+                },
+            )
         {
             return Err(
                 fail("reward allocation cursor differs from credited historical suffix").into(),

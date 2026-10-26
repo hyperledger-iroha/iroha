@@ -1,8 +1,8 @@
 //! Scaffold tests for ZK asset registration and authenticated commitment-tree state.
 
 #![cfg(feature = "zk-tests")]
-#[path = "common/zk_components.rs"]
-mod zk_components;
+use crate::root_scope_fixture;
+use crate::zk_components;
 use iroha_config::parameters::defaults;
 use iroha_core::{
     kura::Kura,
@@ -27,8 +27,6 @@ use iroha_test_samples::gen_account_in;
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
 use std::{num::NonZeroU64, str::FromStr};
-#[path = "common/root_scope_fixture.rs"]
-mod root_scope_fixture;
 use zk_components::execute_isi_component;
 const NATIVE_PIPA_R_BACKEND: &str = "pipa-r/pasta";
 fn set_confidential_policy_mode(
@@ -72,12 +70,12 @@ fn register_zk_asset_writes_policy_metadata() {
         ))
         .into(),
     ] {
-        execute_isi_component(&mut stx, &owner, instr).unwrap();
+        execute_isi_component(&mut stx, &owner, &(instr)).unwrap();
     }
     // Register zk policy
     let reg = iroha_data_model::isi::zk::RegisterZkAsset::new(asset_def_id.clone(), None);
     let ib: InstructionBox = reg.into();
-    execute_isi_component(&mut stx, &owner, ib).unwrap();
+    execute_isi_component(&mut stx, &owner, &(ib)).unwrap();
     stx.apply();
     block
         .commit_empty_block_for_testing()
@@ -141,10 +139,10 @@ fn register_zk_asset_without_shielding_sets_transparent_policy() {
         ))
         .into(),
     ] {
-        execute_isi_component(&mut stx, &owner, instr).unwrap();
+        execute_isi_component(&mut stx, &owner, &(instr)).unwrap();
     }
     let reg = iroha_data_model::isi::zk::RegisterZkAsset::new(asset_def_id.clone(), None);
-    execute_isi_component(&mut stx, &owner, InstructionBox::from(reg)).unwrap();
+    execute_isi_component(&mut stx, &owner, &(InstructionBox::from(reg))).unwrap();
     stx.apply();
     block
         .commit_empty_block_for_testing()
@@ -221,12 +219,12 @@ fn register_zk_asset_rejects_noncanonical_unshield_verifier() {
         }
         .into(),
     ] {
-        execute_isi_component(&mut stx, &owner, instruction)
+        execute_isi_component(&mut stx, &owner, &(instruction))
             .expect("set up verifier-binding fixture");
     }
     let registration =
         iroha_data_model::isi::zk::RegisterZkAsset::new(asset_def_id.clone(), Some(wrong_vk_id));
-    let error = execute_isi_component(&mut stx, &owner, registration.into())
+    let error = execute_isi_component(&mut stx, &owner, &(registration.into()))
         .expect_err("a transfer circuit cannot define unshield tree semantics");
     assert!(
         format!("{error:?}").contains("vk_unshield"),
@@ -264,11 +262,11 @@ fn schedule_confidential_policy_transition_records_pending() {
         ))
         .into(),
     ] {
-        execute_isi_component(&mut stx, &owner, instr).unwrap();
+        execute_isi_component(&mut stx, &owner, &(instr)).unwrap();
     }
     // Register asset with convertible policy (allow shield/unshield).
     let reg = iroha_data_model::isi::zk::RegisterZkAsset::new(asset_def_id.clone(), None);
-    execute_isi_component(&mut stx, &owner, reg.into()).unwrap();
+    execute_isi_component(&mut stx, &owner, &(reg.into())).unwrap();
     set_confidential_policy_mode(&mut stx, &asset_def_id, ConfidentialPolicyMode::Convertible);
     stx.apply();
     block
@@ -286,10 +284,10 @@ fn schedule_confidential_policy_transition_records_pending() {
         asset_def_id.clone(),
         ConfidentialPolicyMode::ShieldedOnly,
         effective_height,
-        transition_id.clone(),
+        transition_id,
         Some(defaults::confidential::POLICY_TRANSITION_WINDOW_BLOCKS),
     );
-    execute_isi_component(&mut stx2, &owner, schedule.into()).unwrap();
+    execute_isi_component(&mut stx2, &owner, &(schedule.into())).unwrap();
     stx2.apply();
     block2
         .commit_empty_block_for_testing()
@@ -354,7 +352,8 @@ fn stale_confidential_downgrade_is_discarded_and_metadata_remains_coherent() {
         .into(),
         iroha_data_model::isi::zk::RegisterZkAsset::new(asset_def_id.clone(), None).into(),
     ] {
-        execute_isi_component(&mut stx, &owner, instruction).expect("setup instruction succeeds");
+        execute_isi_component(&mut stx, &owner, &(instruction))
+            .expect("setup instruction succeeds");
     }
     let transition = ConfidentialPolicyTransition {
         new_mode: ConfidentialPolicyMode::TransparentOnly,
@@ -447,10 +446,10 @@ fn confidential_policy_transition_applies_at_effective_height() {
         ))
         .into(),
     ] {
-        execute_isi_component(&mut stx, &owner, instr).unwrap();
+        execute_isi_component(&mut stx, &owner, &(instr)).unwrap();
     }
     let reg = iroha_data_model::isi::zk::RegisterZkAsset::new(asset_def_id.clone(), None);
-    execute_isi_component(&mut stx, &owner, reg.into()).unwrap();
+    execute_isi_component(&mut stx, &owner, &(reg.into())).unwrap();
     set_confidential_policy_mode(&mut stx, &asset_def_id, ConfidentialPolicyMode::Convertible);
     stx.apply();
     block
@@ -467,10 +466,10 @@ fn confidential_policy_transition_applies_at_effective_height() {
         asset_def_id.clone(),
         ConfidentialPolicyMode::ShieldedOnly,
         effective_height,
-        transition_id.clone(),
+        transition_id,
         Some(defaults::confidential::POLICY_TRANSITION_WINDOW_BLOCKS),
     );
-    execute_isi_component(&mut stx2, &owner, schedule.into()).unwrap();
+    execute_isi_component(&mut stx2, &owner, &(schedule.into())).unwrap();
     stx2.apply();
     block2
         .commit_empty_block_for_testing()
@@ -491,10 +490,10 @@ fn confidential_policy_transition_applies_at_effective_height() {
         asset_def_id.clone(),
         ConfidentialPolicyMode::Convertible,
         next_effective,
-        transition_id_2.clone(),
+        transition_id_2,
         None,
     );
-    execute_isi_component(&mut stx3, &owner, reschedule.into()).unwrap();
+    execute_isi_component(&mut stx3, &owner, &(reschedule.into())).unwrap();
     stx3.apply();
     block3
         .commit_world_overlay_for_testing()
@@ -544,10 +543,10 @@ fn cancel_confidential_policy_transition_clears_pending() {
         ))
         .into(),
     ] {
-        execute_isi_component(&mut stx, &owner, instr).unwrap();
+        execute_isi_component(&mut stx, &owner, &(instr)).unwrap();
     }
     let reg = iroha_data_model::isi::zk::RegisterZkAsset::new(asset_def_id.clone(), None);
-    execute_isi_component(&mut stx, &owner, reg.into()).unwrap();
+    execute_isi_component(&mut stx, &owner, &(reg.into())).unwrap();
     set_confidential_policy_mode(&mut stx, &asset_def_id, ConfidentialPolicyMode::Convertible);
     stx.apply();
     block
@@ -564,15 +563,15 @@ fn cancel_confidential_policy_transition_clears_pending() {
         asset_def_id.clone(),
         ConfidentialPolicyMode::ShieldedOnly,
         effective_height,
-        transition_id.clone(),
+        transition_id,
         Some(defaults::confidential::POLICY_TRANSITION_WINDOW_BLOCKS),
     );
-    execute_isi_component(&mut stx2, &owner, schedule.into()).unwrap();
+    execute_isi_component(&mut stx2, &owner, &(schedule.into())).unwrap();
     let cancel = iroha_data_model::isi::zk::CancelConfidentialPolicyTransition::new(
         asset_def_id.clone(),
-        transition_id.clone(),
+        transition_id,
     );
-    execute_isi_component(&mut stx2, &owner, cancel.into()).unwrap();
+    execute_isi_component(&mut stx2, &owner, &(cancel.into())).unwrap();
     stx2.apply();
     block2
         .commit_empty_block_for_testing()
@@ -598,8 +597,7 @@ fn cancel_confidential_policy_transition_clears_pending() {
     assert!(
         policy_json
             .get("pending_transition")
-            .map(|value| value.is_null())
-            .unwrap_or(true),
+            .is_none_or(norito::json::Value::is_null),
         "pending transition metadata should be cleared"
     );
 }
@@ -864,7 +862,7 @@ fn frontier_checkpoints_respect_reorg_depth_bound() {
             .into(),
             iroha_data_model::isi::zk::RegisterZkAsset::new(asset_def_id.clone(), None).into(),
         ] {
-            execute_isi_component(&mut stx, &owner, instr).unwrap();
+            execute_isi_component(&mut stx, &owner, &(instr)).unwrap();
         }
         stx.apply();
         block
@@ -883,7 +881,7 @@ fn frontier_checkpoints_respect_reorg_depth_bound() {
         let mut block = state.block(header);
         let mut stx = block.transaction();
         let mut commitment = [0u8; 32];
-        commitment[0] = h as u8;
+        commitment[0] = u8::try_from(h).expect("fixture height fits u8");
         let mut zk_state = stx
             .world
             .zk_assets()

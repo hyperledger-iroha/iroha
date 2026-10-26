@@ -25,6 +25,10 @@ impl SelectedRead {
 }
 
 /// The mutex only arbitrates ownership; native I/O and final authority Drop run outside it.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Variants retain their original paid owners across suspension and retry without new unbudgeted allocations."
+)]
 enum ReadSlot {
     Available(Option<SelectedRead>),
     InFlight,
@@ -198,6 +202,10 @@ impl LaneFrameSource {
     }
 }
 impl LaneFrameSource {
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "The request owns its original paid cancellation control through completion."
+    )]
     fn block_with_interest(
         &self,
         lane: LaneId,
@@ -234,6 +242,10 @@ impl LaneFrameSource {
             Ok(Some(result))
         })
     }
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "The request owns its original paid cancellation control through this read attempt."
+    )]
     fn wait_with_interest(
         &self,
         lane: LaneId,

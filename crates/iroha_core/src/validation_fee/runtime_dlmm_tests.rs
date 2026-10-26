@@ -13,7 +13,7 @@ pub(super) fn execute_pool(
     code: &[u8],
     authority: &AccountId,
     entrypoint: &str,
-    arguments: Json,
+    arguments: &Json,
 ) -> Result<HostExecutionArtifacts, ivm::VMError> {
     let parsed = ivm::ProgramMetadata::parse(code).unwrap();
     let descriptor = parsed
@@ -25,7 +25,7 @@ pub(super) fn execute_pool(
         .find(|entry| entry.name == entrypoint)
         .unwrap();
     let schema = descriptor.argument_schema.as_ref().unwrap();
-    let encoded = ivm_abi::arguments::encode_argument_record_from_json(schema, &arguments).unwrap();
+    let encoded = ivm_abi::arguments::encode_argument_record_from_json(schema, arguments).unwrap();
     let arguments = ivm::prepare_argument_record_with_gas_limit(
         schema,
         std::sync::Arc::from(encoded),
@@ -115,7 +115,7 @@ pub(super) fn execute_signed_pool(
     code: &[u8],
     signer: &KeyPair,
     entrypoint: &str,
-    arguments: Json,
+    arguments: &Json,
 ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<TransactionRejectionReason>> {
     let prepared = ivm::prepare_contract(std::sync::Arc::<[u8]>::from(code)).unwrap();
     let schema = prepared
@@ -125,7 +125,7 @@ pub(super) fn execute_signed_pool(
         .as_ref()
         .unwrap();
     let arguments =
-        ivm_abi::arguments::encode_argument_record_from_json(schema, &arguments).unwrap();
+        ivm_abi::arguments::encode_argument_record_from_json(schema, arguments).unwrap();
     execute_signed_body(
         block,
         signer,
@@ -302,7 +302,7 @@ fn production_dlmm_rounds_at_native_asset_precision_and_conserves_both_direction
                 "bin_liquidity_cap": "0",
             }));
             setup.apply();
-            execute_signed_pool(block, &pool, &code, &key_pair(55), "hajimari", initialize)
+            execute_signed_pool(block, &pool, &code, &key_pair(55), "hajimari", &initialize)
                 .expect("signed production initialization consumes the pending lifecycle");
             execute_signed_pool(
                 block,
@@ -310,7 +310,7 @@ fn production_dlmm_rounds_at_native_asset_precision_and_conserves_both_direction
                 &code,
                 &key_pair(55),
                 "seed_bin",
-                Json::from(norito::json!({
+                &Json::from(norito::json!({
                     "position_id": "precision-liquidity", "bin_id": (bin.to_string()),
                     "base_amount": liquidity, "quote_amount": liquidity,
                 })),
@@ -340,7 +340,7 @@ fn production_dlmm_rounds_at_native_asset_precision_and_conserves_both_direction
                         &code,
                         &key_pair(2),
                         "swap_exact_in_quote_public",
-                        Json::from(norito::json!({
+                        &Json::from(norito::json!({
                             "amount_in": bad_input,
                             "min_out": bad_minimum,
                         })),
@@ -375,15 +375,9 @@ fn production_dlmm_rounds_at_native_asset_precision_and_conserves_both_direction
             let arguments =
                 Json::from(norito::json!({"amount_in": input_amount, "min_out": expected}));
             let mut preview = block.transaction();
-            let artifacts = execute_pool(
-                &mut preview,
-                &pool,
-                &code,
-                &trader,
-                entrypoint,
-                arguments.clone(),
-            )
-            .expect("full real pool execution at a non-integral bin price");
+            let artifacts =
+                execute_pool(&mut preview, &pool, &code, &trader, entrypoint, &arguments)
+                    .expect("full real pool execution at a non-integral bin price");
             let instructions = artifacts.queued_instructions_with_authority();
             assert_eq!(instructions.len(), 2);
             assert!(
@@ -402,7 +396,7 @@ fn production_dlmm_rounds_at_native_asset_precision_and_conserves_both_direction
             );
             drop(artifacts);
             drop(preview);
-            execute_signed_pool(block, &pool, &code, &key_pair(2), entrypoint, arguments)
+            execute_signed_pool(block, &pool, &code, &key_pair(2), entrypoint, &arguments)
                 .expect("signed execution accepts the exact native asset output");
             let snapshot = block.transaction();
             let stx = &snapshot;

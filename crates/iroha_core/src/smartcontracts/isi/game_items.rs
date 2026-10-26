@@ -224,10 +224,7 @@ pub(super) fn apply_item_payouts(
     }
 }
 /// Cross-check retained item stakes against the exact shared native custody records.
-pub(crate) fn validate_restored_items(
-    world: &World,
-    session: &GameSessionRecordV1,
-) -> Result<(), String> {
+pub fn validate_restored_items(world: &World, session: &GameSessionRecordV1) -> Result<(), String> {
     let closed = matches!(session.phase, GamePhaseV1::Settled | GamePhaseV1::Cancelled);
     if session.item_stakes.len() > session.participants.len()
         || session
@@ -347,7 +344,7 @@ mod tests {
         let mut st = payout_transaction(&mut block);
         fund_payout_fixture(&mut st, &mut session);
         let owner = session.participants[0].account.clone();
-        let domain_id = DomainId::try_new(&"a".repeat(63), &"b".repeat(63)).unwrap();
+        let domain_id = DomainId::try_new("a".repeat(63), "b".repeat(63)).unwrap();
         let domain = Domain::new(domain_id.clone()).build(&owner);
         st.world.domains.insert(domain_id.clone(), domain);
         let nft_id = NftId::new(domain_id, "n".repeat(255).parse().unwrap());

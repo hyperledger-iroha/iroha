@@ -1069,8 +1069,11 @@ impl PrivateProgram {
     }
 
     fn source(&self) -> String {
+        // Exercise the ordinary counter policy through authenticated private listeners.
+        // Custom application-token administration has separate executor coverage; the
+        // lifecycle initializer still requires its exact native entrypoint permission.
         format!(
-            "seiyaku {} {{ permission CanInvokeContractEntrypoint; state int value; hajimari() {{ value = 0; }} kotoage fn set(int next) authorize(CanInvokeContractEntrypoint) {{ value = next; }} view fn current() authorize(anyone) -> int {{ return value; }} view fn secret() authorize(anyone) -> string {{ return \"{}\"; }} }}",
+            "seiyaku {} {{ state int value; hajimari() {{ value = 0; }} kotoage fn set(int next) authorize(anyone) {{ value = next; }} view fn current() authorize(anyone) -> int {{ return value; }} view fn secret() authorize(anyone) -> string {{ return \"{}\"; }} }}",
             self.name,
             self.result()
         )

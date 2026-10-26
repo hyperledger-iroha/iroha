@@ -107,6 +107,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::used_underscore_binding,
+        reason = "The test measures the original pool retained solely to own the bounded signer fixture."
+    )]
     fn torii_fixture_signing_authenticates_its_bounded_canonical_frame() {
         let signing = ManifestSigningFixture::new(1);
         let key = KeyPair::try_from_seed(vec![73; 32], Algorithm::Ed25519).unwrap();
@@ -144,6 +148,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::used_underscore_binding,
+        reason = "The test measures the original pool retained solely to own the bounded signer fixture."
+    )]
     fn torii_fixture_context_clone_keeps_only_its_original_counter_after_owner_drop() {
         let signing = ManifestSigningFixture::new(2);
         let pool = signing._pool.clone();

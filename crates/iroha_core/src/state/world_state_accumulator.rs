@@ -1,7 +1,7 @@
 //! Complete World state accumulator: the World state roots of the execution result `R`
 //! (`specs/sumeragi.md` §4.1, Appendix E, E51).
 //!
-//! The accumulator is an incremental homomorphic multiset hash (LtHash16) over every canonical
+//! The accumulator is an incremental homomorphic multiset hash (`LtHash16`) over every canonical
 //! World entry that the exhaustive authority registry declares, including the trigger owner's
 //! authoritative stores. Derived indexes and local delivery buffers are excluded by the same
 //! registry, so the accumulator commits to exactly the independent World authority.
@@ -49,8 +49,8 @@ use iroha_data_model::sumeragi_finality::{
 use mv::{Key, Value, storage::StorageReadOnly};
 use norito::codec::Encode;
 
-/// Number of 16-bit lanes of the accumulator (LtHash16, 2 KiB of state).
-pub(crate) const LANES: usize = 1024;
+/// Number of 16-bit lanes of the accumulator (`LtHash16`, 2 KiB of state).
+pub const LANES: usize = 1024;
 const LANE_BYTES: usize = 2 * LANES;
 const SCHEMA_START: &[u8] = b"iroha:world-state:schema:start:v1\0";
 const SCHEMA_FIELD: &[u8] = b"iroha:world-state:schema:field:v1\0";
@@ -66,7 +66,7 @@ const CELL: u8 = 1;
 /// heap, so the World overlays that embed this cell (and its per-transaction undo slot) stay
 /// small.
 #[derive(Clone, PartialEq, Eq)]
-pub(crate) struct WorldStateAccumulator {
+pub struct WorldStateAccumulator {
     lanes: Box<[u16; LANES]>,
     entries: u64,
 }
@@ -692,8 +692,7 @@ pub enum WorldStateVerificationError {
 
 impl crate::state::State {
     /// Check the stored World state accumulator against a cold capture of the complete
-    /// committed World, in `O(N)` (startup after replay, and any restored World before use).
-    /// Returns the verified World state root.
+    /// committed World, in `O(N)` (startup after replay). Returns the verified World state root.
     ///
     /// # Errors
     /// The stored accumulator differs from the World it claims to commit, the World cannot be
@@ -703,19 +702,42 @@ impl crate::state::State {
     ) -> Result<Hash, WorldStateVerificationError> {
         // The value every reader of the committed World sees.
         let stored = self.view().world.state_accumulator.get().clone();
-        let block = self
-            .world
-            .try_block(&self.ivm_execution_budget())
-            .map_err(|error| {
-                if cfg!(all(test, sumeragi_core_mutation = "HC82")) {
-                    WorldStateVerificationError::Capture(error.to_string())
-                } else {
-                    WorldStateVerificationError::Acquisition(error)
-                }
-            })?;
+        self.world
+            .verify_captured_accumulator(&stored, &self.ivm_execution_budget())
+    }
+}
+
+impl crate::state::World {
+    /// Check the stored World state accumulator against a cold capture of this complete World,
+    /// in `O(N)`; a restored World is checked before any State is built on it. Returns the
+    /// verified World state root.
+    ///
+    /// # Errors
+    /// The stored accumulator differs from the World it claims to commit, the World cannot be
+    /// acquired or a value cannot be encoded.
+    pub(crate) fn verify_state_accumulator(
+        &self,
+        execution_budget: &iroha_allocation::AllocationBudget,
+    ) -> Result<Hash, WorldStateVerificationError> {
+        let stored = self.state_accumulator.view().get().clone();
+        self.verify_captured_accumulator(&stored, execution_budget)
+    }
+
+    fn verify_captured_accumulator(
+        &self,
+        stored: &WorldStateAccumulator,
+        execution_budget: &iroha_allocation::AllocationBudget,
+    ) -> Result<Hash, WorldStateVerificationError> {
+        let block = self.try_block(execution_budget).map_err(|error| {
+            if cfg!(all(test, sumeragi_core_mutation = "HC82")) {
+                WorldStateVerificationError::Capture(error.to_string())
+            } else {
+                WorldStateVerificationError::Acquisition(error)
+            }
+        })?;
         let captured =
             WorldStateAccumulator::capture(&block).map_err(WorldStateVerificationError::Capture)?;
-        if stored != captured {
+        if *stored != captured {
             return Err(WorldStateVerificationError::Mismatch {
                 stored_root: stored
                     .root()
@@ -745,7 +767,10 @@ mod inventory_tests;
 
 #[path = "world_state_snapshot.rs"]
 mod world_state_snapshot;
-pub use world_state_snapshot::{ProviderAdmissionSnapshotOriginalsV1, WorldStateSnapshotError};
+pub use world_state_snapshot::{
+    NativeResourceNamesSnapshotV1, NativeZkX509StateV1, ProviderAdmissionSnapshotOriginalsV1,
+    WorldStateSnapshotError,
+};
 
 #[path = "world_state_cut.rs"]
-pub(crate) mod world_state_cut;
+pub mod world_state_cut;

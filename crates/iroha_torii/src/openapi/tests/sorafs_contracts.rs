@@ -53,6 +53,7 @@ fn contract_word_set(inventory: &str) -> BTreeSet<&str> {
     contract_words(inventory).into_iter().collect()
 }
 /// Expected type and exact scalar value; a missing or differently typed field fails.
+#[derive(Clone, Copy)]
 enum ScalarContract<'a> {
     Text(&'a str),
     Unsigned(u64),

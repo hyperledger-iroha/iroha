@@ -29,7 +29,7 @@ fn setup(effect: KagemushaWalletEffectV1) -> (MemoryArchive, ReleasedStep, Sourc
     let record: KagemushaWalletCompletionRecordV1 = fixture("KagemushaWalletCompletionRecordV1");
     let released = ReleasedStep {
         frozen: FrozenTransition {
-            credential: credential.clone(),
+            credential,
             capsule,
         },
         retained: Retained {

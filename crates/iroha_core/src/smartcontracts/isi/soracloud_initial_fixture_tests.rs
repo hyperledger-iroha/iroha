@@ -153,7 +153,7 @@ fn state_with_soracloud_permission_on_chain(
     // It still has no authenticated root; Initial-executor tests apply signed genesis below.
     {
         let mut seed = world.block();
-        seed.parameters.set_parameter(
+        seed.set_parameter_for_testing(
             iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
                 iroha_crypto::Algorithm::Ed25519,
                 iroha_crypto::Algorithm::Secp256k1,
@@ -1101,7 +1101,7 @@ fn service_runtime_mutations_require_exact_validator_placement() -> Result<(), e
     .execute(&ALICE_ID, &mut stx)
     .expect_err("ordered mailbox admission remains disabled even for a manager");
     assert_invariant_contains(
-        closed_mailbox,
+        &(closed_mailbox),
         "disabled until consensus can re-execute the exact admitted IVM bundle",
     );
     assert!(stx.world.soracloud_mailbox_messages.is_empty());
@@ -1184,7 +1184,7 @@ fn service_runtime_mutations_require_exact_validator_placement() -> Result<(), e
         .execute(&ALICE_ID, &mut stx)
         .expect_err("Core must independently keep ordered mailbox execution disabled");
     assert_invariant_contains(
-        core_error,
+        &(core_error),
         "disabled until consensus can re-execute the exact admitted IVM bundle",
     );
     assert!(stx.world.soracloud_mailbox_messages.is_empty());
@@ -1399,15 +1399,13 @@ fn rollout_provenance(
     }
 }
 fn sample_bundle_with_state_binding(
-    service_name: &str,
-    service_version: &str,
+    (service_name, service_version): (&str, &str),
     canary_percent: u8,
     binding_name: &str,
     key_prefix: &str,
     encryption: SoraStateEncryptionV1,
     mutability: SoraStateMutabilityV1,
-    max_item_bytes: u64,
-    max_total_bytes: u64,
+    (max_item_bytes, max_total_bytes): (u64, u64),
 ) -> SoraDeploymentBundleV1 {
     let mut bundle = sample_bundle(service_name, service_version, canary_percent);
     bundle.container.capabilities.allow_state_writes = true;
@@ -1425,13 +1423,17 @@ fn sample_bundle_with_state_binding(
     bundle
 }
 fn state_mutation_provenance(
-    service_name: &iroha_model_base::name::Name,
-    binding_name: &iroha_model_base::name::Name,
-    state_key: &str,
+    (service_name, binding_name, state_key): (
+        &iroha_model_base::name::Name,
+        &iroha_model_base::name::Name,
+        &str,
+    ),
     operation: SoraStateMutationOperationV1,
-    value_size_bytes: Option<u64>,
-    payload_commitment: Option<Hash>,
-    encryption: SoraStateEncryptionV1,
+    (value_size_bytes, payload_commitment, encryption): (
+        Option<u64>,
+        Option<Hash>,
+        SoraStateEncryptionV1,
+    ),
     governance_tx_hash: Hash,
     fhe_input_admission_proof: Option<SoracloudFheInputAdmissionProofV1>,
 ) -> ManifestProvenance {

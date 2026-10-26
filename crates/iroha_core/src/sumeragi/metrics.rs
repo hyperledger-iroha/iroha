@@ -34,9 +34,9 @@ use iroha_telemetry::metrics::sumeragi::{
 use super::driver::Backlog;
 use crate::telemetry::StateTelemetry;
 
-/// Most heights whose first-execution or CommitQC time is retained at once (per kind).
+/// Most heights whose first-execution or `CommitQC` time is retained at once (per kind).
 ///
-/// Applying runs at most two heights behind the CommitQC (§10.2), and a node executes the
+/// Applying runs at most two heights behind the `CommitQC` (§10.2), and a node executes the
 /// proposals of its current height only, so the bound is never reached in operation; it keeps
 /// the recorder bounded whatever the input.
 pub const MAX_TIMED_HEIGHTS: usize = 64;

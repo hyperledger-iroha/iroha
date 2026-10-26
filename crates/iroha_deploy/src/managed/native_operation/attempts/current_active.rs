@@ -15,7 +15,7 @@ pub(super) struct CurrentActiveRead<'history, 'snapshot> {
 impl CurrentActiveRead<'_, '_> {
     pub(super) fn covers(&self, scope: &HistoryScope) -> bool {
         !norito::core::decode_limits_active()
-            && std::ptr::eq(scope, &self.history.scope)
+            && std::ptr::eq(scope, &raw const self.history.scope)
             && scope.covers_semantic_original(
                 self.snapshot,
                 &self.history.operation,

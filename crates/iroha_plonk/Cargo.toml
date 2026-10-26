@@ -51,7 +51,3 @@ sha2 = { version = "0.11.1", features = ["alloc"] }
 [dev-dependencies]
 # Fallible OS probes for isolated evaluator diagnostics, never protocol code.
 iroha_measurement = { workspace = true }
-
-[build-dependencies]
-# Compile the actual local source identity; never accept a supplied digest.
-sha2 = "0.11.1"

@@ -3,7 +3,7 @@
 use super::*;
 
 /// Reconcile durable reward history as well as live staking and fee backing at a restore cut.
-pub(crate) fn validate_public_lane_stake_reserves_for_restore(
+pub fn validate_public_lane_stake_reserves_for_restore(
     world: &impl WorldReadOnly,
 ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<String>> {
     crate::validation_fee_rewards::validate_fee_reward_history(world)
@@ -12,7 +12,7 @@ pub(crate) fn validate_public_lane_stake_reserves_for_restore(
 }
 
 /// Reconcile pinned custody with all bonded and pending shares and exact asset backing.
-pub(crate) fn validate_public_lane_stake_reserves(
+pub fn validate_public_lane_stake_reserves(
     world: &impl WorldReadOnly,
 ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<String>> {
     crate::validation_fee_rewards::validate_fee_custody_backing(world)
@@ -162,17 +162,21 @@ mod tests {
             Quantity::from(125_u64),
         );
         {
-            let mut parameters = world.parameters.block();
-            parameters
-                .set_parameter(iroha_data_model::parameter::Parameter::Custom(
+            let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
+                .expect("funded original parameter-only fixture block");
+            crate::state::set_parameter_cell_for_testing(
+                &mut parameters,
+                iroha_data_model::parameter::Parameter::Custom(
                     SumeragiNposParameters {
                         evidence_horizon_blocks: 1,
                         slashing_delay_blocks: 1,
                         ..SumeragiNposParameters::default()
                     }
                     .into_custom_parameter(),
-                ))
-                .expect("valid fixture parameters");
+                ),
+                world.sccp_committee_generations.allocation_budget(),
+            )
+            .expect("valid fixture parameters");
             parameters.commit();
         }
         let key = (LaneId::SINGLE, ALICE_ID.clone());

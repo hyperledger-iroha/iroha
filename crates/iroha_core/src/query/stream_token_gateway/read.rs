@@ -18,7 +18,7 @@ use super::{
 
 /// Actual execution prefix or complete committed block cut; neither variant invents an execution.
 #[derive(Clone, Copy)]
-pub(crate) enum GatewayReadCut<'a> {
+pub enum GatewayReadCut<'a> {
     /// Exact current native instruction context, supplied only by the executor.
     Execution(&'a Execution),
     /// All successful instructions at or before an actual committed State height.
@@ -59,10 +59,10 @@ fn position(execution: &Execution) -> (u64, u32, u32) {
 }
 
 /// Shared lazy row lookup, including a transition's staged writes when called by that owner.
-pub(crate) type ReadResult = Result<Option<GatewayRow>, TransitionError>;
+pub type ReadResult = Result<Option<GatewayRow>, TransitionError>;
 
 /// Load and validate one permanent original admission and its exact replay index.
-pub(crate) fn admission(
+pub fn admission(
     policy: &Policy,
     head: GatewayHeadV1,
     cut: GatewayReadCut<'_>,
@@ -101,7 +101,7 @@ pub(crate) fn admission(
 }
 
 /// Load a quota incarnation, preserving the distinction between retirement and missing state.
-pub(crate) fn quota(
+pub fn quota(
     scope: [u8; 32],
     now: u64,
     get: impl Fn(&GatewayRowKey) -> ReadResult,
@@ -136,7 +136,7 @@ pub(crate) fn quota(
 }
 
 /// Load the permanent lifecycle marker independently of any live row.
-pub(crate) fn lifecycle(
+pub fn lifecycle(
     scope: [u8; 32],
     get: impl Fn(&GatewayRowKey) -> ReadResult,
 ) -> Result<QuotaLifecycleV1, TransitionError> {
@@ -147,7 +147,7 @@ pub(crate) fn lifecycle(
 }
 
 /// Authenticate the original live lease, immutable identity and active quota incarnation.
-pub(crate) fn live_lease(
+pub fn live_lease(
     original: &AdmissionRowV1,
     now: u64,
     get: impl Fn(&GatewayRowKey) -> ReadResult,
@@ -186,7 +186,7 @@ pub(crate) fn live_lease(
 }
 
 /// Load the permanent first ordered acknowledgement, retaining its original execution.
-pub(crate) fn acknowledgement(
+pub fn acknowledgement(
     original: &AdmissionRowV1,
     head: GatewayHeadV1,
     cut: GatewayReadCut<'_>,
@@ -220,7 +220,7 @@ pub(crate) fn acknowledgement(
 }
 
 /// Load an exact terminal grant; a missing terminal is not evidence of completed release.
-pub(crate) fn terminal(
+pub fn terminal(
     original: &AdmissionRowV1,
     head: GatewayHeadV1,
     cut: GatewayReadCut<'_>,

@@ -1,4 +1,4 @@
-//! Telemetry helpers for the SoraFS gateway TLS automation surface.
+//! Telemetry helpers for the `SoraFS` gateway TLS automation surface.
 use super::acme::CertificateBundle;
 #[cfg(feature = "telemetry")]
 use iroha_core::telemetry::Telemetry;
@@ -67,15 +67,15 @@ impl TlsStateSnapshot {
         } else {
             "ech-disabled".to_string()
         }];
-        if let Some(expiry) = self.expiry {
-            if let Some(value) = format_timestamp(expiry) {
-                parts.push(format!("expiry={value}"));
-            }
+        if let Some(expiry) = self.expiry
+            && let Some(value) = format_timestamp(expiry)
+        {
+            parts.push(format!("expiry={value}"));
         }
-        if let Some(renewed) = self.last_success {
-            if let Some(value) = format_timestamp(renewed) {
-                parts.push(format!("renewed-at={value}"));
-            }
+        if let Some(renewed) = self.last_success
+            && let Some(value) = format_timestamp(renewed)
+        {
+            parts.push(format!("renewed-at={value}"));
         }
         if let Some(err) = &self.last_error {
             parts.push(format!("last-error={}", sanitize(err)));

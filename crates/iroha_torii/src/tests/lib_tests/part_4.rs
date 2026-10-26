@@ -181,7 +181,7 @@ async fn verified_source_admission_precedes_body_polling_and_transfers_one_slot(
 }
 #[tokio::test]
 async fn proof_body_absolute_deadline_rejects_continuous_trickle() {
-    let trickle = futures_util::stream::unfold((), |_| async {
+    let trickle = futures_util::stream::unfold((), |()| async {
         tokio::time::sleep(Duration::from_millis(5)).await;
         Some((
             Ok::<_, std::convert::Infallible>(Bytes::from_static(b"x")),
@@ -199,7 +199,7 @@ async fn proof_json_egress_charges_the_exact_serialized_response_bytes() {
     let payload = norito::json!({"status": "exact-json-egress"});
     let expected = norito::json::to_vec(&payload).expect("encode expected response");
     assert!(expected.len() > 1);
-    let mut limited_app = mk_app_state_for_tests();
+    let mut limited_app = mk_native_app_state_for_tests();
     {
         let state = Arc::get_mut(&mut limited_app).expect("unique app state");
         state.proof_limits.retry_after = std::time::Duration::from_secs(7);
@@ -225,7 +225,7 @@ async fn proof_json_egress_charges_the_exact_serialized_response_bytes() {
             .and_then(|value| value.to_str().ok()),
         Some("7")
     );
-    let mut exact_app = mk_app_state_for_tests();
+    let mut exact_app = mk_native_app_state_for_tests();
     Arc::get_mut(&mut exact_app)
         .expect("unique app state")
         .proof_egress_limiter = limits::RateLimiter::new_u64(Some(1), Some(expected.len() as u64));
@@ -257,7 +257,7 @@ async fn buffered_proof_response_egress_charges_exact_bytes_and_preserves_body()
         response
     };
     let remote = Some(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
-    let mut limited_app = mk_app_state_for_tests();
+    let mut limited_app = mk_native_app_state_for_tests();
     Arc::get_mut(&mut limited_app)
         .expect("unique limited app state")
         .proof_egress_limiter = limits::RateLimiter::new_u64(
@@ -281,7 +281,7 @@ async fn buffered_proof_response_egress_charges_exact_bytes_and_preserves_body()
             ..
         }
     ));
-    let mut exact_app = mk_app_state_for_tests();
+    let mut exact_app = mk_native_app_state_for_tests();
     Arc::get_mut(&mut exact_app)
         .expect("unique exact app state")
         .proof_egress_limiter = limits::RateLimiter::new_u64(

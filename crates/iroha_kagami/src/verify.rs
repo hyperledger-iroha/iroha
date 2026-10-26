@@ -12,7 +12,6 @@ use clap::Parser;
 use color_eyre::eyre::{Result, WrapErr as _, eyre};
 use iroha_data_model::{
     asset::{AssetDefinitionAlias, AssetDefinitionId},
-    block::consensus::is_valid_committee_size,
     isi::{Register, asset_alias::SetAssetDefinitionAlias},
     parameter::{
         custom::CustomParameterId,
@@ -21,8 +20,7 @@ use iroha_data_model::{
     prelude::AssetDefinition,
 };
 use iroha_genesis::RawGenesisTransaction;
-use iroha_model_base::domain::DomainId;
-use iroha_model_base::peer::PeerId;
+use iroha_model_base::{domain::DomainId, peer::PeerId, topology::is_valid_committee_size};
 use std::{
     collections::{BTreeMap, HashSet},
     io::{BufWriter, Write},

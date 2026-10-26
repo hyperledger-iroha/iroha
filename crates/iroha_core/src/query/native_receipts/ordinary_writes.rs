@@ -28,7 +28,7 @@ use std::alloc::Layout;
 
 /// A source/canonical failure remains distinct from original-pool resource refusal.
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum WriteDecodeError {
+pub enum WriteDecodeError {
     /// The caller offered encoded bytes retained by a different original pool.
     #[error("native write source belongs to another allocation pool")]
     ForeignPool,
@@ -49,7 +49,7 @@ pub(crate) enum WriteDecodeError {
 /// Decoded archive fields with independent, move-only custody of every ordinary write.
 /// Lane payload bytes borrow the original charged frame and confer no authority before the
 /// complete commitment matches the independently authenticated native result.
-pub(crate) struct DecodedProjection<'a> {
+pub struct DecodedProjection<'a> {
     /// Original carrier height.
     pub(crate) carrier_height: u64,
     /// Original carrier identity.
@@ -198,6 +198,7 @@ impl<'a> RawWrites<'a> {
 fn array<T>(count: usize) -> Result<Layout, AllocationRefusal> {
     Layout::array::<T>(count).map_err(|_| AllocationRefusal::DemandOverflow)
 }
+#[derive(Clone, Copy)]
 struct Demand {
     bytes: usize,
     charges: usize,
@@ -211,10 +212,10 @@ struct Construction {
 }
 impl Drop for Construction {
     fn drop(&mut self) {
-        if std::thread::panicking() {
-            if let Some(charges) = self.charges.take() {
-                std::mem::forget(charges);
-            }
+        if std::thread::panicking()
+            && let Some(charges) = self.charges.take()
+        {
+            std::mem::forget(charges);
         }
     }
 }
@@ -297,7 +298,7 @@ impl Construction {
 /// Decode the sole canonical projection frame while prepaying its exact ordinary-write graph.
 /// Input bytes must already belong to this original pool. No witness allocation happens before
 /// the complete checked demand is admitted; capacity failure preserves the original refusal.
-pub(crate) fn decode_projection<'a>(
+pub fn decode_projection<'a>(
     bytes: &'a ChargedBuffer<u8>,
     budget: &AllocationBudget,
 ) -> Result<DecodedProjection<'a>, WriteDecodeError> {

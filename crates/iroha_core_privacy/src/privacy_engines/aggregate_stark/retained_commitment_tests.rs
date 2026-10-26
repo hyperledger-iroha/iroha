@@ -146,7 +146,9 @@ fn changed_selected_source_global_index_group_width_and_phase_roles_fail_closed(
             3 => (LEAF, NODE, 0, 9),
             4 => (LEAF, NODE, usize::from(u16::MAX), 8),
             5 => {
-                changed.iter_mut().for_each(|column| column.swap(17, 1));
+                for column in &mut changed {
+                    column.swap(17, 1);
+                }
                 (LEAF, NODE, usize::from(u16::MAX), 9)
             }
             _ => unreachable!(),

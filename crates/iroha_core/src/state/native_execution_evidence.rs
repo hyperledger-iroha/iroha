@@ -1,6 +1,6 @@
 //! Bounded chronological authentication of global carriers and their complete lane state.
 //!
-//! The sole native certificate embedded in SignedBlockWire authenticates R and its mandatory
+//! The sole native certificate embedded in `SignedBlockWire` authenticates R and its mandatory
 //! complete lane-state proof. No old finality artifact or separately encoded proof is accepted.
 //! Genesis execution remains untrusted until its actual H2 successor is fully verified.
 
@@ -15,7 +15,7 @@ use std::sync::Arc;
 pub struct NativeExecutionEvidenceLimits {
     /// Maximum contiguous carriers, including signed genesis and empty carriers.
     pub max_carriers: u64,
-    /// Maximum complete SignedBlockWire bytes per carrier, including native certificate.
+    /// Maximum complete `SignedBlockWire` bytes per carrier, including native certificate.
     pub max_carrier_bytes: u64,
     /// Maximum canonical complete context projection bytes per carrier.
     pub max_context_bytes: u64,
@@ -244,11 +244,11 @@ impl NativeExecutionEvidenceVerifier {
                 .pending_genesis
                 .take()
                 .ok_or("native genesis projection is missing")?;
-            accept_genesis(self.accept_verified(genesis.into_committed(), projection)?)?;
+            accept_genesis(self.accept_verified(&(genesis.into_committed()), projection)?)?;
         } else if self.pending_genesis.is_some() {
             return Err("native successor did not authenticate the original genesis result".into());
         }
-        let receipt = self.accept_verified(verified.into_committed(), projection)?;
+        let receipt = self.accept_verified(&(verified.into_committed()), projection)?;
         self.retained_bytes = retained;
         Ok(Some(receipt))
     }
@@ -264,7 +264,7 @@ impl NativeExecutionEvidenceVerifier {
 
     fn accept_verified(
         &mut self,
-        committed: CommittedBlock,
+        committed: &CommittedBlock,
         evidence: NativeExecutionProjectionV1,
     ) -> Result<VerifiedNativeExecutionCarrier, String> {
         let block = committed.block().clone();

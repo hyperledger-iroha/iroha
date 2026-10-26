@@ -3,6 +3,84 @@
 use super::*;
 
 #[test]
+fn selected_nondefault_staking_recipe_reaches_native_genesis_without_node_overrides() -> Result<()>
+{
+    use iroha_data_model::block::consensus::PublicLaneStakingPolicy;
+    let mut profile = crate::config::NexusProfile::sora_defaults()?;
+    profile.staking_policy.min_validator_stake = 37_u64.into();
+    profile.staking_policy.max_stake_shares_per_validator = 13_u32.try_into().unwrap();
+    profile.staking_policy.max_pending_unbonds_per_share = 9_u32.try_into().unwrap();
+    profile.staking_policy.unbonding_delay_ms = 987_654;
+    profile.staking_policy.max_slash_bps = 997;
+    let expected = instructions::nexus_staking_policy(&profile)?;
+    let config = ChaosConfig {
+        seed: Some(37),
+        nexus: Some(profile),
+        ..test_chaos_config()
+    };
+    let network = test_prepared_network_builder(&config)?.build();
+    let genesis = network.genesis();
+    assert!(
+        genesis
+            .0
+            .output_results()
+            .all(|result| result.as_ref().is_ok())
+    );
+    let originals = genesis
+        .0
+        .external_transactions()
+        .filter_map(|transaction| match transaction.instructions() {
+            Executable::Instructions(instructions) => Some(instructions.iter()),
+            _ => None,
+        })
+        .flatten()
+        .filter_map(|instruction| instruction.as_any().downcast_ref::<SetParameter>())
+        .filter_map(|set| match set.inner() {
+            Parameter::Custom(custom)
+                if custom.id() == &PublicLaneStakingPolicy::parameter_id() =>
+            {
+                Some(custom)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        originals.len(),
+        1,
+        "one authored policy across preview and final signing"
+    );
+    assert_eq!(
+        PublicLaneStakingPolicy::from_custom_parameter(originals[0])?,
+        expected
+    );
+    for layer in network.config_layers() {
+        if let Some(staking) = layer
+            .get("nexus")
+            .and_then(TomlValue::as_table)
+            .and_then(|nexus| nexus.get("staking"))
+            .and_then(TomlValue::as_table)
+        {
+            for field in [
+                "min_validator_stake",
+                "max_stake_shares_per_validator",
+                "max_pending_unbonds_per_share",
+                "unbonding_delay_ms",
+                "max_slash_bps",
+                "stake_asset_id",
+                "stake_escrow_account_id",
+                "slash_sink_account_id",
+            ] {
+                assert!(
+                    !staking.contains_key(field),
+                    "retired node monetary field {field}"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn make_network_builder_emits_only_native_sumeragi_config() -> Result<()> {
     init_instruction_registry();
     let pipeline_time = Duration::from_millis(300);

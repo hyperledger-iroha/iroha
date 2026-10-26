@@ -223,10 +223,7 @@ where
         None => eyre::eyre!("status retry budget exhausted"),
     };
     Err(terminal).wrap_err_with(|| {
-        format!(
-            "status retry budget exhausted after {:?} hitting {}",
-            retry_budget, endpoint
-        )
+        format!("status retry budget exhausted after {retry_budget:?} hitting {endpoint}")
     })
 }
 /// Wait for the next non-empty block and return the refreshed status, tolerating timeouts.

@@ -107,8 +107,32 @@ Torii listener access controls still apply. `GET /v1/node/capabilities` is publi
 as well: `getNodeCapabilities()` reads it without credentials, and the
 transaction preflight caches only a successful, matching probe.
 
-Ordinary source-checkout unit tests can use a separate current Debug N-API
-producer. From the repository root, select the worktree's existing warm Cargo
+Run the complete source-checkout unit profile with a current authenticated Debug
+N-API artifact from the SDK directory:
+
+```bash
+npm run test:local -- --target-dir /absolute/iroha/target/cargo-fast/<existing-lane>
+```
+
+The runner requires macOS, Python 3.12, full Xcode selected through
+`DEVELOPER_DIR` or `xcode-select`, stock Rust 1.93.1 and Node. Select an existing
+canonical Cargo lane under `target/cargo-fast` or `target/qualification`; the
+runner does not create a Cargo target. It builds the current native artifact,
+verifies custody, runs the entire `unit` profile and verifies the same producer
+record again even when tests fail. Logs and native evidence remain in a private
+`target/qualification/js-*` directory. When sccache is available, the runner
+first probes the stock compiler using a short private temporary directory so
+daemon startup sockets fit macOS path limits. That startup directory stays
+available to the daemon; its path is recorded alongside the logs. Inherited native artifact selectors
+and non-Debug native profiles are rejected. The unit profile includes provenance
+and SoraFS coverage; the one-GiB heavy profile and live Torii integration remain
+separate provisioned checks.
+
+Keep native source inputs unchanged until the final verification finishes. If
+other work is editing those inputs, run in a separate Git worktree with its own
+Cargo lane so concurrent edits cannot invalidate the artifact during tests.
+
+To invoke the same producer directly from the repository root, select the worktree's existing warm Cargo
 lane and create a private run directory under this checkout's
 `target/qualification`. The producer and loader require the artifact to remain
 in that canonical subtree; `mktemp -d` creates the owned mode `0700` parent:
@@ -131,8 +155,11 @@ current canonical Python 3.12 and Node executables, stock Rust 1.99.1 tools,
 and the selected Xcode's macOS SDK, clang and Apple linker. The producer uses
 locked, offline Cargo with one job, incremental compilation disabled and zero
 Debug symbols; it creates no additional Cargo target.
-The producer uses sccache's persistent server mode so its private compiler
-scratch path does not overflow macOS's per-process Unix socket path limit.
+Cargo freshly probes the pinned compiler instead of reusing cached compiler
+probe failures from an earlier run.
+The producer uses sccache's persistent server mode. For direct invocations,
+start or reuse the daemon from short temporary scratch before entering the
+retained artifact path; its startup notification socket also has a macOS path limit.
 It retains the actual compiler JSON, complete dep-info after Cargo's natural successful terminal, original source
 and native build inputs, exact tools, and independently copied emitted bytes.
 The real Node consumer checks the current ABI and required exports before the
@@ -234,13 +261,14 @@ surface is then captured as an immutable runtime dependency; later environment
 changes and mutable `globalThis` overrides cannot retarget it. The registry
 publishes one executable tree, `dist/`; development
 `src/` and `scripts/` copies stay in the source checkout. The registry artifact includes only
-two portable examples, `recipes/iso_bridge_builder.mjs` and
-`recipes/nexus_app_transfer.mjs`, plus their shared `recipes/iso_bridge_context.mjs`
-configuration helper. The wider recipe catalog is kept in the
-source repository where its native and live-service prerequisites are
-available. Both examples require an authenticated matching native host for
-canonical account validation. ISO XML rendering can run offline with that host;
-submission additionally needs the runtime signer and Torii endpoint.
+two examples: `recipes/iso_bridge_builder.mjs` and
+`recipes/nexus_app_transfer.mjs`, together with the ISO builder's required
+configuration helper, `recipes/iso_bridge_context.mjs`. Both examples require a
+matching verified native binding for canonical account validation; the ISO builder
+also requires it when only generating XML. ISO XML rendering can run offline with
+that host; submission additionally needs the runtime signer and Torii endpoint.
+The wider recipe catalog is kept in the source repository where its native and
+live-service prerequisites are available.
 
 `build:dist` publishes the JavaScript source tree. `prepack` builds that tree,
 and `test:pack-install` verifies exact source/distribution parity and the package's
@@ -318,13 +346,30 @@ native dispatch. Fixture-bundle and Governance DAG block entries use `bytes`.
 
 ## Petal Stream optical transport
 
-`@iroha/iroha-js/petal` is Petal Stream, the animated optical transport used to
-hand over a payload (for example a KAGEMUSHA `IPM1` peer message) from one
-screen to a camera. Each square frame shows four sakura-blossom finders, a
-`天`-shaped field of 256 tiles and three dotted rings. Tile polarity (lane `P`),
-the katakana in each tile (lane `K`) and the ring dots (lane `D`) are three
-independent Reed-Solomon codewords carrying fountain-coded 16-byte atoms, so any
-readable lane of any frame helps and lost frames only cost time.
+`@iroha/iroha-js/petal` is Petal Stream (format 5), the animated optical
+transport used to hand over a payload (for example a KAGEMUSHA `IPM1` peer
+message) from one screen to a camera. Each frame is a portrait card of
+1024 × 1668 design units: a square code with a band of katakana tiles above and
+below it. The square shows four sakura-blossom finders, three dotted rings and
+inside them a storm of 3,376 petals on 34 concentric bands, white inside the
+SORA `天` and pink outside it. The ring dots (lane `D`) and the lit petals of the
+field's four sectors (lanes `F0`-`F3`) are five independent Reed-Solomon
+codewords carrying fountain-coded 16-byte atoms. On top of each field lane, the
+first 360 lit petals of its sector are turned by 0°, 45°, 90° or 135° about
+their centres: a turn lane (`T0`-`T3`) of four more atoms, which a camera that
+resolves the petals' shapes reads once the field lane has said which petals are
+lit. Each band holds 306 rounded tiles, eight of them pilots with fixed symbols;
+each of the other 298 shows one of sixteen katakana (イロハニヘトワカレムノケアヒスン),
+light (filled, the glyph in ink) or dark (the glyph in pink). The polarity of a
+band's tiles is a lane `P0`/`P1` of one atom and their katakana a lane `K0`/`K1`
+of seven, each closed by a CRC-32C that binds the atoms to the stream tag, the
+frame and the lane: a card carries up to 53 atoms (848 bytes). A phone held
+upright sees both bands; a camera that frames only the square reads the square
+as before. Any readable lane of any frame helps and lost frames only cost time.
+Beacons carry version `0x50`; those of the retired formats 3, 2 and 1 (`0x30`,
+`0x20`, `0x10`) are refused. The player shows 12 frames per second by default
+and draws the whole card, every petal turned, notched and antialiased and every
+glyph stroked.
 
 The module is a port of the `iroha_petal` Rust reference: the encoder is
 bit-exact and the decoder follows the reference step by step. It is pure
@@ -343,7 +388,6 @@ const encoder = new PetalStreamEncoder(payloadBytes, /* kind */ 2);
 const player = new PetalStreamPlayer({
   encoder,
   context: canvas.getContext("2d"),
-  fps: 8,
 });
 player.start();
 
@@ -373,35 +417,85 @@ inferred from the other three and refined against the rings
 count both cases). Apps with their own camera pipeline can call
 `session.push(luma, nowMs)` directly with a `PetalLuma` built by
 `PetalLuma.fromStrided` (a camera Y plane), `PetalLuma.fromRgba` or
-`PetalLuma.fromImageData`. When a tile lane is missing, the session averages
-repeated captures keyed by the tag and frame counter in independently decoded
-lane headers. It holds at most six shown frames and four captures each, levels
-each capture by its own finders, and accepts a recovered lane only if its header
-matches that frame. `outcome.merged` lists newly recovered tile lanes;
-`stats().merges`, `mergedP` and `mergedK` count attempts and recovery. Reset and
-receive timeouts clear held evidence. The wire format is unchanged.
-Lower-level pieces are exported as well:
-`decodePetalFrame`, `decodePetalFrameAt` and `trackPetalFrame`, the finder
+`PetalLuma.fromImageData`. When a capture misses field lanes, the session keeps
+the level of every petal under that capture's pose, keyed by the tag and frame
+counter its decoded lane headers name. It holds at most six shown frames and
+four captures each, reads the missing field lanes from the cell-by-cell mean of
+the held captures, and accepts a recovered lane only if its own header names
+that frame. `outcome.merged` lists newly recovered field lanes (sector digits);
+`stats().merges` and `mergedLanes` count attempts and recoveries. Every field
+lane a capture decodes also lets the session read the turn lane on top of it,
+once per shown frame: the session remembers the last 24 turn lanes it tried and
+does not look at those petals again, and after tries that read nothing (a camera
+too soft or too shaky for the turns) it passes over up to eight captures before
+it tries again, because reading turns costs a slow phone core several times a
+frame's decode. `outcome.turned` lists the turn lanes read (the sector digits of
+their field lanes); `stats().turnTries` and `turnLanes` count tries and lanes
+read. The katakana bands are read the same way, each band once per shown frame
+(the last 12 tried are remembered), with their own back-off of up to eight
+captures after band tries that read nothing (bands out of view or too blurred),
+and they go first: a capture whose bands read a kana lane tries the turn lanes
+too only when its work and the session's last turn try fit a 30 fps camera's
+frame time (`PETAL_CAPTURE_BUDGET_MS`); otherwise that shown frame's turn lanes
+wait for its next capture. A turn try costs a slow phone core about five
+tracked decodes and a band try about one, so both on one capture overran a
+frame shown at 12 fps. The session times its work with `performance.now()`;
+the constructor's second argument, `workCost(work, measuredMs)`, puts a model's
+costs in their place, and `stats().spareTurns` counts the captures that had
+the time. `outcome.kana` lists the kana
+lanes read (`"P0K0P1K1"` for all four); `stats().kanaTries` and `kanaLanes`
+count tries and lanes read. Reset and receive timeouts clear held evidence and
+the turn lanes and bands tried. Lower-level pieces are exported as well:
+`decodePetalFrame`, `decodePetalFrameAt` and `trackPetalFrame`, `PetalPose`,
+`fieldEvidence` and `mergeFields`, `readTurns` (with `observedTurns` and
+`turnTemplate` for diagnostics and conformance), `readKana` (with
+`observeBand`, `kanaTemplateProbe` and `kanaCoarseTemplateProbe`), the finder
 search (`locate`, `locateCandidates`, `selectTriple`, `followFinder`), the
-software `renderPetalFrame` (RGBA output, ready for `ImageData`), the vector
-`petalDrawList` and `drawPetalFrame`, `PetalStreamAssembler`, the lane codecs
-(`encodeLane`, `decodeLane`, `PetalFrameCells`), `PetalReedSolomon`, the
-fountain code (`maskWords`, `encodeAtom`, `PetalFountainDecoder`) and `crc32c`.
+software `renderPetalFrame` (the whole card, `petalCardHeight(size)` pixels
+tall; RGBA output, ready for `ImageData`), the vector `petalDrawList` (each lit
+petal with its axis: the outward direction plus its turn; each tile with its
+glyph, polarity and colours, over the glyphs' stroke polylines in tile units)
+and `drawPetalFrame`, `PetalStreamAssembler`, the lane codecs (`encodeLane`,
+`decodeLane`, `PetalFrameCells` with its `turns`, `kanaGlyphs` and
+`kanaLight`), the turn lane codecs (`PETAL_TURNS`, `carrierOrder`, `carriers`,
+`turnData`, `turnPacket`, `encodeTurnLane`, `decodeTurnLaneCounted`), the kana
+lane codecs (`PETAL_KANA`, `kanaFirstId`, `kanaData`, `kanaPacket`,
+`encodeKanaLane`, `decodeKanaLaneCounted`), the card's geometry
+(`PETAL_LAYOUT`, `kanaTiles`, `kanaTileAt`, `kanaInked`) and glyphs
+(`PETAL_GLYPHS`, `isGlyphInked`), `PetalReedSolomon`, the fountain code
+(`maskWords`, `encodeAtom`, `PetalFountainDecoder`) and `crc32c`.
 A reassembled payload is only delivered after its CRC-32C matches the beacon;
 it carries no authentication of its own.
 
-The decoder reads the tile lanes (`P` and `K`) against the light and dark levels
-measured at the finders first. A lane that does not decode that way is re-read
-with a normalised read that rescales every tile by its own contrast, so
-over-exposure, veiling light and shadows cost little (a deep glare still defeats
-every lane in the frames it covers); lane `K` still needs a camera that resolves
-the glyphs, and lane `D` carries the stream alone when nothing else reads. The
-scanner does not change the camera's settings, so set the stream up for it
-(`specs/petal_stream.md` section 8, "Scanner guidance"):
+Every petal is one bit, thresholded per sector and colour against the light and
+dark levels measured at the finders. While field lanes stay unread the decoder
+searches the pose for the barrel distortion of cheap lenses, and a lane the
+finder levels cannot read is read again from local levels, which rescale every
+petal by its neighbourhood, so over-exposure, veiling light, shadows and banding
+cost little (a deep glare still defeats every lane in the frames it covers);
+lane `D` carries the stream alone when nothing else reads. The turn reader
+samples every carrier petal in its own outward frame, after correcting the pose
+by a cubic fitted to the carriers' centroids, fits the camera's blur, and
+decides each turn with the lit neighbours subtracted; a turn lane passes only
+when its check matches the header of the field lane it rides on. From a fitted
+blur of 3.2 canvas units on (a soft or distant camera) it reads no turn lanes and
+the field lanes and lane `D` carry the stream as before. The band reader extends
+the square's pose beyond the square to place every tile, finds each band's
+pilots by a small search around their places, fits an affine correction to their
+offsets that moves every tile, lets them choose the blur of the glyph templates
+and the levels that tell light tiles from dark ones, and then reads each tile's
+polarity from its level and its glyph from the best-correlating template; a kana
+lane passes when its check matches the square's frame or the frame before or
+after it (a rolling shutter can show a band of a neighbouring frame), and its
+atoms take that frame's ids. The scanner does not change the camera's settings,
+so set the stream up for it (`specs/petal_stream.md` section 8):
 
 - Ask `getUserMedia` for about 1280×720; the default `maxSide` of 1280 already
   matches it. Only drop to 640 when the device cannot sustain about 5 decoded
-  frames per second, because at 480p only lanes `P` and `D` read.
+  frames per second, because at 480p a little defocus already costs the field.
+- Show the whole card with its width filling the screen's width, and scan with
+  the phone held upright, so the camera's long side runs along the card and
+  sees both bands.
 - Automatic exposure over-exposes a mostly black screen. Where the browser
   supports it, apply an exposure compensation of about -1 EV to the video track
   once the stream is open (Chrome on Android exposes it; feature-detect with
@@ -415,9 +509,14 @@ if (track.getCapabilities?.().exposureCompensation) {
 ```
 
 `test/petal.test.js` checks the shared fixtures in `fixtures/petal/`
-(`petal_stream_v1.json`, and the golden camera captures and tracking pairs in
-`petal_captures_v1.json`) and ports the reference unit tests; run it on its own
-with `node --test test/petal.test.js`.
+(`petal_stream_v5.json`, turn and kana lanes, the tiles and glyphs and the turn
+and kana readers' template probes included, and the sixteen golden camera
+captures and two tracking pairs in `petal_captures_v5.json`, whose turn and kana
+lanes it reads exactly as the reference) and ports the reference unit tests;
+`test/petalKana.test.js` ports the reference's glyph, card layout, kana lane and
+band reader tests and pins the reader's intermediates on the golden captures, and
+`test/petalMerge.test.js` the merge sets. Run them on their own with
+`node --test test/petal.test.js test/petalKana.test.js test/petalMerge.test.js`.
 
 ## Atomic private settlement transport
 
@@ -2529,11 +2628,17 @@ TypeScript consumers do not need ambient Node types.
 
 `withCanonicalReadRetry({ method, path, signal, operation })` retries known
 read-only Torii routes after typed HTTP 429 capacity or rate refusals. Build and
-sign the request inside `operation(attempt)` so every attempt has fresh nonce
-and timestamp headers, and pass `signal` to the transport. The helper permits
-three retries within ten seconds, honors `retryAfter` HTTP header text or
-`retryAfterSeconds` on the thrown error, and preserves the final error. Writes,
-unknown routes, authentication errors and transport failures execute once.
+sign the request inside `operation(attempt, { signal, timeoutMs })` so every attempt
+has fresh nonce and timestamp headers, and forward that attempt's signal and timeout
+to the transport. Each attempt has 45 seconds (the server's 30-second routed-read
+deadline plus transport and response margin), within one 100-second total deadline.
+At most three retries are allowed; a new attempt starts only when its complete
+45-second allowance fits. The exported `CANONICAL_READ_ATTEMPT_TIMEOUT_MS` and
+`CANONICAL_READ_TOTAL_TIMEOUT_MS` define these bounds. The helper honors `retryAfter`
+HTTP header text or `retryAfterSeconds` without shortening it, and preserves the
+last explicit refusal when no retry fits. Writes and unknown routes execute once
+with the caller's signal and no read-specific timeout. Authentication errors and
+ambiguous transport failures are never retried.
 
 > **Recipe:** run `node javascript/iroha_js/recipes/iso_alias.mjs` to exercise
 > the lookup endpoints from the CLI. The script accepts `ISO_ALIAS_LABEL` and
@@ -3606,8 +3711,9 @@ non-compliant interbank payloads.
 
 The `recipes/iso_bridge_builder.mjs` example wires those helpers into a CLI that
 requires retained UETR/native terms from environment variables or a JSON config
-file, prints the generated XML, and optionally submits with a runtime operator
-signer when `ISO_SUBMIT=1`. Sample payment builders also require caller-owned
+file, validates settlement accounts through the verified native binding, prints
+the generated XML, and optionally submits with a runtime operator signer when
+`ISO_SUBMIT=1`. Sample payment builders also require caller-owned
 `uetr` and `nexusSettlement`; only demo envelope fields receive defaults.
 
 ## Contract Deployment Helpers
@@ -4696,6 +4802,7 @@ With `IROHA_TORII_INTEGRATION_MUTATE=1`, the suite now:
 | repo agreements | `torii.repoAgreements` | `POST /v1/repo/agreements/query` |
 | account assets | `torii.accountAssets(accountId)` | `POST /v1/accounts/{account_id}/assets/query` |
 | asset holders | `torii.assetHolders(definitionId)` | `POST /v1/assets/{definition_id}/holders/query` |
+| asset movements | `torii.assetMovements(definitionId)` | `POST /v1/assets/{definition_id}/movements/query` |
 | transactions | `torii.transactions` | `POST /v1/transactions/query` |
 | account transactions | `torii.accountTransactions(accountId)` | `POST /v1/accounts/{account_id}/transactions/query` |
 
@@ -4766,8 +4873,8 @@ only for `metadata.*` fields and travel in the JSON form.
 filter, projection, ordering and cursor controls. Pages require `next_cursor`
 on the wire (a nonempty token or null); unknown envelope fields are rejected.
 
-Transactions, account transactions, `contractActivity`, `contractEvents` and
-`accountHistory(accountId)` are history collections: rows come
+Transactions, account transactions, `contractActivity`, `contractEvents`,
+`accountHistory(accountId)` and `assetMovements(definitionId)` are history collections: rows come
 newest first by `block_height`, then `block_index` (the position within the
 block; account movements also carry `movement_index`), and `sort`, `includeTotal` and `aggregate` are rejected. Each page has
 a bounded scan budget, so a page may hold fewer than `limit` items, even none,

@@ -95,9 +95,7 @@ fn malformed_original_deadline_cannot_release_retained_custody() {
 fn parameters(world: &mut WorldBlock<'_>, horizon: u64, delay: u64) {
     use iroha_data_model::parameter::{Parameter, system::SumeragiNposParameters};
     world
-        .parameters
-        .get_mut()
-        .set_parameter(Parameter::Custom(
+        .set_parameter_for_testing(Parameter::Custom(
             SumeragiNposParameters {
                 evidence_horizon_blocks: horizon,
                 slashing_delay_blocks: delay,
@@ -253,8 +251,7 @@ fn creation_pins_once_and_capacity_is_reclaimed_only_after_retirement_delay() {
         &mut state,
         &world,
         &Nexus::default(),
-        &network,
-        "custody-test",
+        (&network, "custody-test"),
         None,
         10,
         &custody_budget(),
@@ -271,8 +268,7 @@ fn creation_pins_once_and_capacity_is_reclaimed_only_after_retirement_delay() {
             &mut state,
             &world,
             &Nexus::default(),
-            &network,
-            "custody-test",
+            (&network, "custody-test"),
             None,
             10,
             &custody_budget(),
@@ -284,8 +280,7 @@ fn creation_pins_once_and_capacity_is_reclaimed_only_after_retirement_delay() {
         &mut state,
         &world,
         &Nexus::default(),
-        &network,
-        "custody-test",
+        (&network, "custody-test"),
         None,
         11,
         &custody_budget(),
@@ -726,12 +721,13 @@ fn sample_state_admission_refuses_unfunded_source() {
 
 #[test]
 fn original_sample_state_constructor_refuses_with_typed_sample_cause() {
+    use iroha_data_model::sumeragi_lanes::{LaneSamplesAdmissionError, SumeragiLaneSample};
+
     if crate::unit_test_support::run_in_isolated_harness(
         "sumeragi::lanes::custody::tests::original_sample_state_constructor_refuses_with_typed_sample_cause",
     ) {
         return;
     }
-    use iroha_data_model::sumeragi_lanes::{LaneSamplesAdmissionError, SumeragiLaneSample};
     let mut world = World::default();
     world.sumeragi_lanes = mv::cell::Cell::new(SumeragiLaneState {
         samples: vec![SumeragiLaneSample {
@@ -943,8 +939,9 @@ fn lane_pool_refusal_adapters_preserve_exact_original_release_and_nonwaiting_dem
 /// controls only and do not claim a forced physical-allocation or successful-admission test.
 #[test]
 fn lane_admission_invariants_never_masquerade_as_allocator_or_semantic_failures() {
-    use iroha_allocation::{ChargedShared, PrepaidBufferError};
     use iroha_data_model::sumeragi_lanes::{LaneSamplesAdmissionError, SumeragiLaneSample};
+
+    use iroha_allocation::{ChargedShared, PrepaidBufferError};
     let pool = AllocationBudget::new(0);
     let mut empty = pool.try_reserve_bytes(0).unwrap();
     let backing_shortage = ChargedBuffer::<SumeragiLaneSample>::from_reservation(1, &mut empty)
@@ -1178,8 +1175,7 @@ fn original_signer_creation_refusal_preserves_exact_stake_cut_and_last_owner_cha
         &mut state,
         &world,
         &Nexus::default(),
-        &network,
-        "custody-test",
+        (&network, "custody-test"),
         Some(&policy),
         10,
         &pool,
@@ -1219,8 +1215,7 @@ fn original_signer_creation_refusal_preserves_exact_stake_cut_and_last_owner_cha
         &mut state,
         &world,
         &Nexus::default(),
-        &network,
-        "custody-test",
+        (&network, "custody-test"),
         Some(&policy),
         10,
         &pool,

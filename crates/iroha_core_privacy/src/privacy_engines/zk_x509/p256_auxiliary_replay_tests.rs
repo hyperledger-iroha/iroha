@@ -154,9 +154,10 @@ fn arithmetic_auxiliary_bound_terminals_and_batches_match_checked_raw_streams() 
         let before = counts_v1();
         let fixture = p256_main_canonical_materials_for_test_v1().unwrap();
         let mut base =
-            P256MainBaseSourceV1::from_materials_v1(&fixture.materials, fixture.selection).unwrap();
+            P256MainBaseSourceV1::from_materials_v1(&fixture.materials, &fixture.selection)
+                .unwrap();
         let token = super::tests::main_post_base_v1(seed);
-        let mut bound = base.bind_v1(token).unwrap();
+        let mut bound = base.bind_v1(&token).unwrap();
         assert_eq!(counts_v1().0, before.0 + P256_X5S1_SIGNATURES_V1);
         assert!(base.private_is_zeroized_v1());
         let retained = bound.allocated_payload_bytes_v1();
@@ -216,7 +217,7 @@ fn arithmetic_auxiliary_bound_terminals_and_batches_match_checked_raw_streams() 
                     token.p256_arithmetic_copy(),
                 )
                 .unwrap();
-                for row in 0..P256_ARITHMETIC_AGGREGATE_TRACE_SIZE_V1 {
+                for (row, _) in columns[0].iter().enumerate() {
                     let expected = reference.next_aux_row_v1().unwrap().unwrap();
                     for offset in 0..8 {
                         assert_eq!(columns[offset][row], expected[first + offset]);
@@ -525,7 +526,9 @@ fn arithmetic_selected_partial_scalar_row_is_erased_if_fixed_replay_fails() {
 fn arithmetic_selected_full_native_rows_match_dense_for_all_signatures_and_tokens() {
     for seed in [71, 79] {
         let mut base = p256_main_base_source_fixture_for_test_v1().unwrap();
-        let bound = base.bind_v1(super::tests::main_post_base_v1(seed)).unwrap();
+        let bound = base
+            .bind_v1(&super::tests::main_post_base_v1(seed))
+            .unwrap();
         assert!(base.private_is_zeroized_v1());
         let retained = bound.allocated_payload_bytes_v1();
         for signature in 0..P256_X5S1_SIGNATURES_V1 {

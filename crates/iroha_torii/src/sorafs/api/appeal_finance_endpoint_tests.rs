@@ -44,7 +44,7 @@ fn appeal_pricing_quote_uses_baseline_config() {
         urgency: Some("normal".to_owned()),
         panel_size: Some(7),
     };
-    let input = appeal_quote_input(request, config).expect("valid quote input");
+    let input = appeal_quote_input(&(request), config).expect("valid quote input");
     let quote = config.quote(input).expect("baseline quote");
     let value = appeal_pricing_quote_json(&policy, input, &quote);
     let deposit = quote.deposit_xor.to_string();
@@ -69,7 +69,7 @@ fn appeal_pricing_quote_rejects_unknown_class() {
         urgency: None,
         panel_size: None,
     };
-    let err = appeal_quote_input(request, &config).expect_err("unknown class rejected");
+    let err = appeal_quote_input(&(request), &config).expect_err("unknown class rejected");
     assert!(err.contains("unknown appeal class"));
 }
 #[test]
@@ -288,11 +288,13 @@ async fn appeal_finance_disburse_handler_returns_juror_plan() {
 #[tokio::test]
 async fn appeal_finance_deposit_endpoint_requires_canonical_request_auth() {
     let (app, _temp_dir, auth) = sorafs_app_state_with_appeal_finance_governance_publisher();
-    let body = appeal_finance_deposit_body(appeal_finance_deposit_request(
-        &auth.provider.account,
-        &auth.buyer.account,
-        Some(&auth.provider.account),
-    ));
+    let body = appeal_finance_deposit_body(
+        &(appeal_finance_deposit_request(
+            &auth.provider.account,
+            &auth.buyer.account,
+            Some(&auth.provider.account),
+        )),
+    );
     let response = handle_post_sorafs_appeal_finance_deposit(
         State(app),
         HeaderMap::new(),
@@ -306,11 +308,13 @@ async fn appeal_finance_deposit_endpoint_requires_canonical_request_auth() {
 #[tokio::test]
 async fn appeal_finance_deposit_endpoint_rejects_payer_mismatch() {
     let (app, _temp_dir, auth) = sorafs_app_state_with_appeal_finance_governance_publisher();
-    let body = appeal_finance_deposit_body(appeal_finance_deposit_request(
-        &auth.buyer.account,
-        &auth.provider.account,
-        Some(&auth.provider.account),
-    ));
+    let body = appeal_finance_deposit_body(
+        &(appeal_finance_deposit_request(
+            &auth.buyer.account,
+            &auth.provider.account,
+            Some(&auth.provider.account),
+        )),
+    );
     let response = post_appeal_finance_deposit(app, &auth.provider, body).await;
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }
@@ -637,9 +641,9 @@ async fn appeal_finance_deposit_endpoint_durably_enqueues_open_asset_lock() {
     );
     let expected =
         appeal_finance_deposit_expectation(request.clone()).expect("valid deposit expectation");
-    let (mut app, _temp_dir, native_chain) =
+    let (mut app, temp_dir, native_chain) =
         sorafs_app_state_with_appeal_finance_asset_lock_world(&auth, &expected.asset_definition_id);
-    configure_appeal_finance_settlement_submitter(&mut app, &auth.provider, _temp_dir.path());
+    configure_appeal_finance_settlement_submitter(&mut app, &auth.provider, temp_dir.path());
     seed_appeal_finance_finalized_anchor(&native_chain);
     let asset_definition_id = request.asset_definition_id.clone();
     let destination_account = request.destination_account.clone();
@@ -648,7 +652,7 @@ async fn appeal_finance_deposit_endpoint_durably_enqueues_open_asset_lock() {
         .clone()
         .expect("release authority fixture");
     let expires_at_ms = request.expires_at_ms;
-    let body = appeal_finance_deposit_body(request);
+    let body = appeal_finance_deposit_body(&(request));
     let replay_body = body.clone();
     let response = post_appeal_finance_deposit(app.clone(), &auth.provider, body).await;
     assert_eq!(response.status(), StatusCode::ACCEPTED);
@@ -872,10 +876,12 @@ async fn appeal_finance_deposit_confirm_endpoint_requires_canonical_request_auth
     );
     let expected =
         appeal_finance_deposit_expectation(request.clone()).expect("valid deposit expectation");
-    let body = appeal_finance_deposit_confirm_body(appeal_finance_deposit_confirm_request(
-        &request,
-        expected.escrow_id.as_hash().to_string(),
-    ));
+    let body = appeal_finance_deposit_confirm_body(
+        &(appeal_finance_deposit_confirm_request(
+            &request,
+            expected.escrow_id.as_hash().to_string(),
+        )),
+    );
     let response = handle_post_sorafs_appeal_finance_deposit_confirm(
         State(app),
         HeaderMap::new(),
@@ -899,10 +905,12 @@ async fn appeal_finance_deposit_confirm_endpoint_confirms_runtime_asset_lock() {
     let (app, _temp_dir, mut native_chain) =
         sorafs_app_state_with_appeal_finance_asset_lock_world(&auth, &expected.asset_definition_id);
     seed_appeal_finance_asset_lock(&mut native_chain, &expected);
-    let body = appeal_finance_deposit_confirm_body(appeal_finance_deposit_confirm_request(
-        &request,
-        expected.escrow_id.as_hash().to_string(),
-    ));
+    let body = appeal_finance_deposit_confirm_body(
+        &(appeal_finance_deposit_confirm_request(
+            &request,
+            expected.escrow_id.as_hash().to_string(),
+        )),
+    );
     let response = post_appeal_finance_deposit_confirm(app, &auth.provider, body).await;
     assert_eq!(response.status(), StatusCode::OK);
     let value = api_test_response_json(response).await;
@@ -1006,9 +1014,9 @@ async fn appeal_finance_deposit_submit_settlement_endpoint_queues_next_step() {
     );
     let expected =
         appeal_finance_deposit_expectation(request.clone()).expect("valid deposit expectation");
-    let (mut app, _temp_dir, mut native_chain) =
+    let (mut app, temp_dir, mut native_chain) =
         sorafs_app_state_with_appeal_finance_asset_lock_world(&auth, &expected.asset_definition_id);
-    configure_appeal_finance_settlement_submitter(&mut app, &auth.provider, _temp_dir.path());
+    configure_appeal_finance_settlement_submitter(&mut app, &auth.provider, temp_dir.path());
     seed_appeal_finance_asset_lock(&mut native_chain, &expected);
     let confirmation =
         appeal_finance_deposit_confirm_request(&request, expected.escrow_id.as_hash().to_string());
@@ -1208,9 +1216,9 @@ async fn appeal_finance_deposit_submit_settlement_fails_closed_without_runtime_p
     );
     let expected =
         appeal_finance_deposit_expectation(request.clone()).expect("valid deposit expectation");
-    let (mut app, _temp_dir, mut native_chain) =
+    let (mut app, temp_dir, mut native_chain) =
         sorafs_app_state_with_appeal_finance_asset_lock_world(&auth, &expected.asset_definition_id);
-    configure_appeal_finance_settlement_submitter(&mut app, &auth.provider, _temp_dir.path());
+    configure_appeal_finance_settlement_submitter(&mut app, &auth.provider, temp_dir.path());
     Arc::get_mut(&mut app)
         .expect("unique app state")
         .sorafs_appeal_settlement_submitter
@@ -1322,7 +1330,7 @@ async fn appeal_finance_deposit_reconcile_endpoint_reports_in_progress_and_settl
 #[tokio::test]
 async fn appeal_finance_report_endpoint_requires_canonical_request_auth() {
     let (app, _temp_dir, _auth) = sorafs_app_state_with_appeal_finance_governance_publisher();
-    let body = appeal_finance_report_body(appeal_finance_report_fixture());
+    let body = appeal_finance_report_body(&(appeal_finance_report_fixture()));
     let response = handle_post_sorafs_appeal_finance_report(
         State(app),
         HeaderMap::new(),
@@ -1339,14 +1347,14 @@ async fn appeal_finance_writes_require_finance_publisher_role() {
     let report_response = post_appeal_finance_report(
         app.clone(),
         &auth.buyer,
-        appeal_finance_report_body(appeal_finance_report_fixture()),
+        appeal_finance_report_body(&(appeal_finance_report_fixture())),
     )
     .await;
     assert_forbidden_role(report_response, SORAFS_APPEAL_FINANCE_PUBLISHER_ROLE).await;
     let rollup_response = post_appeal_finance_weekly_rollup(
         app.clone(),
         &auth.buyer,
-        appeal_finance_weekly_rollup_body(appeal_finance_weekly_rollup_fixture()),
+        appeal_finance_weekly_rollup_body(&(appeal_finance_weekly_rollup_fixture())),
     )
     .await;
     assert_forbidden_role(rollup_response, SORAFS_APPEAL_FINANCE_PUBLISHER_ROLE).await;
@@ -1356,7 +1364,7 @@ async fn appeal_finance_writes_require_finance_publisher_role() {
 async fn appeal_finance_report_endpoint_publishes_to_governance_dag() {
     let (app, _temp_dir, auth) = sorafs_app_state_with_appeal_finance_governance_publisher();
     let report = appeal_finance_report_fixture();
-    let body = appeal_finance_report_body(report.clone());
+    let body = appeal_finance_report_body(&(report));
     let response = post_appeal_finance_report(app.clone(), &auth.provider, body).await;
     assert_eq!(response.status(), StatusCode::ACCEPTED);
     let value = api_test_response_json(response).await;
@@ -1393,9 +1401,9 @@ async fn appeal_finance_report_endpoint_publishes_to_governance_dag() {
 #[tokio::test]
 async fn privacy_aggregate_source_event_endpoint_requires_canonical_request_auth() {
     let (app, _temp_dir, _auth) = sorafs_app_state_with_orderbook_auth();
-    let body = privacy_aggregate_source_event_body(privacy_aggregate_source_event_request(
-        "privacy-event-a",
-    ));
+    let body = privacy_aggregate_source_event_body(
+        &(privacy_aggregate_source_event_request("privacy-event-a")),
+    );
     let response = handle_post_sorafs_transparency_privacy_aggregate_source_event(
         State(app),
         HeaderMap::new(),
@@ -1409,9 +1417,9 @@ async fn privacy_aggregate_source_event_endpoint_requires_canonical_request_auth
 #[tokio::test]
 async fn privacy_aggregate_source_event_endpoint_requires_source_publisher_role() {
     let (app, _temp_dir, auth) = sorafs_app_state_with_orderbook_auth();
-    let body = privacy_aggregate_source_event_body(privacy_aggregate_source_event_request(
-        "privacy-event-role-denied",
-    ));
+    let body = privacy_aggregate_source_event_body(
+        &(privacy_aggregate_source_event_request("privacy-event-role-denied")),
+    );
     let response = post_privacy_aggregate_source_event(app.clone(), &auth.buyer, body).await;
     assert_forbidden_role(response, SORAFS_TRANSPARENCY_SOURCE_PUBLISHER_ROLE).await;
     assert_eq!(app.sorafs_node.privacy_aggregate_source_event_count(), 0);
@@ -1419,9 +1427,9 @@ async fn privacy_aggregate_source_event_endpoint_requires_source_publisher_role(
 #[tokio::test]
 async fn privacy_aggregate_source_event_endpoint_records_event_for_cycle_publication() {
     let (app, _temp_dir, auth) = sorafs_app_state_with_orderbook_auth();
-    let body = privacy_aggregate_source_event_body(privacy_aggregate_source_event_request(
-        "privacy-event-a",
-    ));
+    let body = privacy_aggregate_source_event_body(
+        &(privacy_aggregate_source_event_request("privacy-event-a")),
+    );
     let response = post_privacy_aggregate_source_event(app.clone(), &auth.provider, body).await;
     assert_eq!(response.status(), StatusCode::ACCEPTED);
     let value = api_test_response_json(response).await;
@@ -1438,7 +1446,7 @@ async fn privacy_aggregate_source_event_endpoint_records_event_for_cycle_publica
 async fn privacy_aggregate_source_event_endpoint_replays_exact_duplicate_event() {
     let (app, _temp_dir, auth) = sorafs_app_state_with_orderbook_auth();
     let request = privacy_aggregate_source_event_request("privacy-event-a");
-    let body = privacy_aggregate_source_event_body(request);
+    let body = privacy_aggregate_source_event_body(&(request));
     let first =
         post_privacy_aggregate_source_event(app.clone(), &auth.provider, body.clone()).await;
     assert_eq!(first.status(), StatusCode::ACCEPTED);
@@ -1490,7 +1498,7 @@ fn privacy_aggregate_publish_due_rejects_caller_supplied_prf_output() {
 #[tokio::test]
 async fn privacy_aggregate_publish_due_endpoint_requires_canonical_request_auth() {
     let (app, _temp_dir, _auth) = sorafs_app_state_with_privacy_aggregate_schedule();
-    let body = privacy_aggregate_publish_due_body(privacy_aggregate_publish_due_request(211));
+    let body = privacy_aggregate_publish_due_body(&(privacy_aggregate_publish_due_request(211)));
     let response = handle_post_sorafs_transparency_privacy_aggregate_publish_due(
         State(app),
         HeaderMap::new(),
@@ -1504,7 +1512,7 @@ async fn privacy_aggregate_publish_due_endpoint_requires_canonical_request_auth(
 #[tokio::test]
 async fn privacy_aggregate_publish_due_endpoint_requires_cycle_publisher_role() {
     let (app, _temp_dir, auth) = sorafs_app_state_with_privacy_aggregate_schedule();
-    let body = privacy_aggregate_publish_due_body(privacy_aggregate_publish_due_request(211));
+    let body = privacy_aggregate_publish_due_body(&(privacy_aggregate_publish_due_request(211)));
     let response = post_privacy_aggregate_publish_due(app.clone(), &auth.buyer, body).await;
     assert_forbidden_role(response, SORAFS_TRANSPARENCY_CYCLE_PUBLISHER_ROLE).await;
     assert_eq!(app.sorafs_node.pending_governance_publication_count(), 0);
@@ -1513,7 +1521,7 @@ async fn privacy_aggregate_publish_due_endpoint_requires_cycle_publisher_role() 
 async fn privacy_aggregate_publish_due_endpoint_publishes_configured_cycle() {
     let (app, _temp_dir, auth) = sorafs_app_state_with_privacy_aggregate_schedule();
     let source_body = privacy_aggregate_source_event_body(
-        privacy_aggregate_source_event_request_at("privacy-event-a", 110),
+        &(privacy_aggregate_source_event_request_at("privacy-event-a", 110)),
     );
     let source_response =
         post_privacy_aggregate_source_event(app.clone(), &auth.provider, source_body).await;
@@ -1521,7 +1529,7 @@ async fn privacy_aggregate_publish_due_endpoint_publishes_configured_cycle() {
     let response = post_privacy_aggregate_publish_due(
         app.clone(),
         &auth.provider,
-        privacy_aggregate_publish_due_body(privacy_aggregate_publish_due_request(211)),
+        privacy_aggregate_publish_due_body(&(privacy_aggregate_publish_due_request(211))),
     )
     .await;
     assert_eq!(response.status(), StatusCode::OK);
@@ -1555,7 +1563,7 @@ async fn privacy_aggregate_publish_due_endpoint_publishes_configured_cycle() {
     let repeat = post_privacy_aggregate_publish_due(
         app,
         &auth.provider,
-        privacy_aggregate_publish_due_body(privacy_aggregate_publish_due_request(211)),
+        privacy_aggregate_publish_due_body(&(privacy_aggregate_publish_due_request(211))),
     )
     .await;
     assert_eq!(repeat.status(), StatusCode::OK);
@@ -1569,7 +1577,7 @@ async fn privacy_aggregate_publish_due_endpoint_commits_empty_suppression_window
     let response = post_privacy_aggregate_publish_due(
         app,
         &auth.provider,
-        privacy_aggregate_publish_due_body(privacy_aggregate_publish_due_request(211)),
+        privacy_aggregate_publish_due_body(&(privacy_aggregate_publish_due_request(211))),
     )
     .await;
     assert_eq!(response.status(), StatusCode::OK);
@@ -1581,7 +1589,7 @@ async fn privacy_aggregate_publish_due_endpoint_commits_empty_suppression_window
 async fn appeal_finance_weekly_rollup_endpoint_publishes_to_governance_dag() {
     let (app, _temp_dir, auth) = sorafs_app_state_with_appeal_finance_governance_publisher();
     let rollup = appeal_finance_weekly_rollup_fixture();
-    let body = appeal_finance_weekly_rollup_body(rollup.clone());
+    let body = appeal_finance_weekly_rollup_body(&(rollup));
     let response = post_appeal_finance_weekly_rollup(app.clone(), &auth.provider, body).await;
     assert_eq!(response.status(), StatusCode::ACCEPTED);
     let value = api_test_response_json(response).await;

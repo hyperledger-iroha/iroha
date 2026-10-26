@@ -662,6 +662,10 @@ impl ProverSecretEdwardsCanonicalityStateV1 {
             greater_update: Choice::from(0),
         }
     }
+    #[expect(
+        clippy::trivially_copy_pass_by_ref,
+        reason = "Borrowing secret inputs keeps raw copies inside the explicit zeroizing owner boundary."
+    )]
     fn observe_byte_v1(&mut self, byte: &u8, modulus_byte: &u8) {
         self.prefix_decided = self.less | self.greater;
         self.prefix_equal = !self.prefix_decided;
@@ -766,6 +770,9 @@ pub struct FcmpInputRerandomizationV1 {
 }
 impl FcmpInputRerandomizationV1 {
     /// Decode four canonical non-zero Ed25519 scalars.
+    ///
+    /// # Errors
+    /// Rejects noncanonical rerandomization scalars.
     pub fn new(
         mut output: [u8; 32],
         mut linking: [u8; 32],
@@ -783,6 +790,10 @@ impl FcmpInputRerandomizationV1 {
             commitment,
         )
     }
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "Taking ownership ensures every accepted secret is zeroized on success, failure, and unwind before the caller can reuse it."
+    )]
     fn from_rerandomization_secret_byte_owners_v1(
         output: ProverSecretCopyValueV1<[u8; 32]>,
         linking: ProverSecretCopyValueV1<[u8; 32]>,
@@ -915,6 +926,9 @@ impl FcmpProverInputV1 {
     /// Making the commitment rerandomization explicit lets the transaction
     /// builder choose output commitment masks that satisfy the mandatory
     /// aggregate balance equation before hashing the authoritative statement.
+    ///
+    /// # Errors
+    /// Rejects invalid scalar or point encodings, inconsistent secret openings, or invalid membership paths.
     pub fn new(
         output: FcmpOutputTupleV1,
         mut spend_x: [u8; 32],
@@ -934,6 +948,10 @@ impl FcmpProverInputV1 {
             additional_branches,
         )
     }
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "Taking ownership ensures every accepted secret is zeroized on success, failure, and unwind before the caller can reuse it."
+    )]
     fn from_secret_byte_owners_v1(
         output: FcmpOutputTupleV1,
         spend_x_bytes: ProverSecretCopyValueV1<[u8; 32]>,
@@ -1039,12 +1057,22 @@ impl FcmpProverInputV1 {
         }
     }
     /// Number of layers represented by this path.
+    ///
+    /// # Errors
+    /// Returns an arithmetic-invariant error if the stored layer count cannot be represented.
     pub fn layers(&self) -> Result<u8, FcmpNativeErrorV1> {
         u8::try_from(self.additional_branches.len() + 1)
             .map_err(|_| FcmpNativeErrorV1::ArithmeticInvariant)
     }
     /// Derive the complete authoritative O~/I~/R/C~/L public relation before
     /// hashing the typed transaction statement.
+    ///
+    /// # Errors
+    /// Rejects invalid stored points or rerandomization that fails the spend-authorization witness relation.
+    #[expect(
+        clippy::op_ref,
+        reason = "Borrowed arithmetic avoids copying secret values out of their zeroizing owners."
+    )]
     pub fn public_input(&self) -> Result<FcmpProofInputPublicV1, FcmpNativeErrorV1> {
         let (output_bytes, linking_bytes, commitment_bytes) = self.output.component_refs_v1();
         let output = prover_secret_decode_edwards_point_v1(output_bytes)?;
@@ -1125,6 +1153,10 @@ type FcmpFixtureSpendableOutputV1 = (
     ProverSecretCopyValueV1<[u8; 32]>,
 );
 #[cfg(any(test, feature = "test-utils", feature = "privacy-release-evidence"))]
+#[expect(
+    clippy::op_ref,
+    reason = "Borrowed arithmetic avoids copying secret values out of their zeroizing owners."
+)]
 fn fcmp_fixture_spendable_output_from_scalars_v1(
     mut spend_x: Scalar,
     mut output_y: Scalar,
@@ -1157,6 +1189,10 @@ fn fcmp_fixture_spendable_output_from_scalars_v1(
     Ok((output, spend_x_bytes, output_y_bytes))
 }
 #[cfg(any(test, feature = "test-utils", feature = "privacy-release-evidence"))]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Taking ownership ensures every accepted secret is zeroized on success, failure, and unwind before the caller can reuse it."
+)]
 fn with_fcmp_fixture_u64_secret_owners_v1<T>(
     spend_x: ProverSecretCopyValueV1<u64>,
     output_y: ProverSecretCopyValueV1<u64>,
@@ -1218,6 +1254,10 @@ pub fn fcmp_test_spendable_output_v1(
     (output, spend_x.expose_copy(), output_y.expose_copy())
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Taking ownership ensures every accepted secret is zeroized on success, failure, and unwind before the caller can reuse it."
+)]
 fn with_fcmp_fixture_output_u64_secret_owners_v1<T>(
     output_key: ProverSecretCopyValueV1<u64>,
     linking: ProverSecretCopyValueV1<u64>,
@@ -1233,6 +1273,10 @@ fn with_fcmp_fixture_output_u64_secret_owners_v1<T>(
     )
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
+#[expect(
+    clippy::op_ref,
+    reason = "Borrowed arithmetic avoids copying secret values out of their zeroizing owners."
+)]
 fn fcmp_fixture_output_opening_v1(
     mut output_key: u64,
     mut linking: u64,
@@ -1274,6 +1318,10 @@ fn fcmp_fixture_output_opening_v1(
     )
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Taking ownership ensures every accepted secret is zeroized on success, failure, and unwind before the caller can reuse it."
+)]
 fn with_fcmp_fixture_rerandomization_u64_secret_owners_v1<T>(
     output: ProverSecretCopyValueV1<u64>,
     linking: ProverSecretCopyValueV1<u64>,
@@ -1621,7 +1669,7 @@ fn replace_first_secret_coordinate_v1(
     Ok(())
 }
 #[cfg(feature = "privacy-release-evidence")]
-pub(crate) fn fcmp_release_invalid_path_fixture_v1() -> Result<
+pub fn fcmp_release_invalid_path_fixture_v1() -> Result<
     (
         Vec<FcmpProverInputV1>,
         Vec<FcmpOutputCommitmentOpeningV1>,
@@ -1862,6 +1910,10 @@ impl Drop for PreparedEdBlind {
         self.decomposition.zeroize();
     }
 }
+#[expect(
+    clippy::op_ref,
+    reason = "Borrowed arithmetic avoids copying secret values out of their zeroizing owners."
+)]
 fn prepare_ed_blind(
     generator: EdwardsPoint,
     scalar: &Scalar,
@@ -2149,7 +2201,7 @@ fn prove_fcmp_plus_plus_once_v1(
         {
             return Err(FcmpNativeErrorV1::ArithmeticInvariant);
         }
-        let input_blind_v_claim = PointWithDlog {
+        let linking_rerandomization_claim = PointWithDlog {
             point: (input_blind_v_variables[0], input_blind_v_variables[1]),
             dlog: input_blind_u_claim.dlog.clone(),
             divisor: input_blind_v_divisor,
@@ -2179,7 +2231,7 @@ fn prove_fcmp_plus_plus_once_v1(
                 amount_commitment: (commitment_variables[0], commitment_variables[1]),
                 output_blind: output_blind_claim,
                 input_blind_u: input_blind_u_claim,
-                input_blind_v: input_blind_v_claim,
+                input_blind_v: linking_rerandomization_claim,
                 input_blind_blind: input_blind_blind_claim,
                 commitment_blind: commitment_blind_claim,
             },
@@ -2347,7 +2399,7 @@ fn prove_fcmp_plus_plus_once_v1(
             &mut c1_commitment_openings,
             &mut c2_commitment_openings,
             public,
-            prepared.transcripted.clone(),
+            &prepared.transcripted.clone(),
         )?;
     }
     if c1_commitment_openings.next().is_some() || c2_commitment_openings.next().is_some() {
@@ -2438,9 +2490,7 @@ fn retry_membership_prover<T>(
                 | FcmpNativeErrorV1::DlogWitnessPole
                 | FcmpNativeErrorV1::CircuitProverCommitmentIdentity
                 | FcmpNativeErrorV1::InnerProductRoundIdentity,
-            ) => {
-                continue;
-            }
+            ) => {}
             Err(error) => return Err(error),
         }
     }
@@ -2527,6 +2577,9 @@ fn preflight_fcmp_plus_plus_v1(
 /// pole, exhaust its non-zero transcript challenge sampler, or produce an identity inner-product
 /// round point with negligible probability; the prover rebuilds the commitments and transcript with
 /// fresh randomness at a fixed bound instead of exposing an honest-abort failure.
+///
+/// # Errors
+/// Rejects invalid inputs or openings, unhealthy randomness, proof construction failures, or a failed complete prover self-check.
 pub fn prove_fcmp_plus_plus_v1(
     rng: &mut (impl TryRng + TryCryptoRng),
     context_hash: [u8; 32],

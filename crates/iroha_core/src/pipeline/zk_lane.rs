@@ -226,8 +226,7 @@ impl ZkLaneHandle {
         let digest = task.digest();
         if let Some(cache) = RESULT_CACHE.get() {
             match cache.admit(digest, Instant::now()) {
-                CacheAdmission::Cached => return true,
-                CacheAdmission::Inflight => return true,
+                CacheAdmission::Cached | CacheAdmission::Inflight => return true,
                 CacheAdmission::Accepted => {}
             }
         }
@@ -422,6 +421,10 @@ impl RetryRing {
             inner: std::sync::Mutex::new(VecDeque::new()),
         }
     }
+    #[expect(
+        clippy::result_large_err,
+        reason = "Queue refusal returns the original proof job so submission can retry without another allocation"
+    )]
     fn enqueue(&self, task: ZkTask) -> Result<usize, ZkTask> {
         match self.inner.lock() {
             Ok(mut queue) => {
@@ -575,19 +578,19 @@ fn set_retry_ring_depth(depth: usize) {
     });
 }
 fn enqueue_retry_task(retry_ring: &RetryRing, task: ZkTask, full_reason: &str) -> bool {
-    match retry_ring.enqueue(task) {
-        Ok(depth) => {
+    retry_ring.enqueue(task).map_or_else(
+        |_| {
+            record_lane_drop(full_reason);
+            false
+        },
+        |depth| {
             with_metrics(|metrics| {
                 metrics.zk_lane_retry_enqueued_total.inc();
             });
             set_retry_ring_depth(depth);
             true
-        }
-        Err(_) => {
-            record_lane_drop(full_reason);
-            false
-        }
-    }
+        },
+    )
 }
 struct WorkerPool {
     work_txs: Vec<std_mpsc::SyncSender<ZkTask>>,
@@ -620,6 +623,10 @@ impl WorkerPool {
             next_worker: 0,
         }
     }
+    #[expect(
+        clippy::result_large_err,
+        reason = "Queue refusal returns the original proof job so submission can retry without another allocation"
+    )]
     fn dispatch(&mut self, mut job: ZkTask) -> Result<(), ZkTask> {
         if self.work_txs.is_empty() {
             return Err(job);
@@ -667,7 +674,7 @@ impl WorkerPool {
 fn resolve_worker_threads(configured: usize) -> usize {
     if configured == 0 {
         let detected = std::thread::available_parallelism()
-            .map(|count| count.get())
+            .map(std::num::NonZero::get)
             .unwrap_or(1);
         detected.clamp(AUTO_WORKER_MIN, AUTO_WORKER_MAX)
     } else {
@@ -716,9 +723,10 @@ fn process_job(job: ZkTask) {
     if let Some(cache) = RESULT_CACHE.get() {
         cache.record(dig, Instant::now());
     }
-    emit_outcome(job, dig, outcome);
+    emit_outcome(&job, dig, outcome);
+    drop(job);
 }
-fn emit_outcome(job: ZkTask, dig: [u8; 32], outcome: TraceCheckOutcome) {
+fn emit_outcome(job: &ZkTask, dig: [u8; 32], outcome: TraceCheckOutcome) {
     let transport_desc = job.transport_capabilities.as_ref().map(|caps| {
         format!(
             "suite={}, datagram={}, max_dgram={}, feedback_ms={}, privacy={:?}",
@@ -1144,7 +1152,7 @@ mod tests {
     #[test]
     fn worker_threads_auto_is_bounded() {
         let expected = std::thread::available_parallelism()
-            .map(|count| count.get())
+            .map(std::num::NonZero::get)
             .unwrap_or(1)
             .clamp(AUTO_WORKER_MIN, AUTO_WORKER_MAX);
         assert_eq!(resolve_worker_threads(0), expected);

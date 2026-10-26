@@ -131,6 +131,9 @@ fn decode_note_material_v1(
     })
 }
 /// Derive the private-IVM recipient identity from a strict canonical X25519 public key.
+///
+/// # Errors
+/// Rejects an invalid or noncanonical recipient public key.
 pub fn derive_ivm_private_recipient_id_v1(
     recipient_public_key: [u8; 32],
 ) -> Result<PrivacyRecipientIdV1, IvmPrivateNoteWalletErrorV1> {
@@ -141,6 +144,9 @@ pub fn derive_ivm_private_recipient_id_v1(
     Ok(PrivacyRecipientIdV1::new(hash.finalize().into()))
 }
 /// Derive a strict canonical X25519 public key from a wallet secret.
+///
+/// # Errors
+/// Rejects an invalid secret or derived recipient public key.
 pub fn ivm_private_recipient_public_key_v1(
     recipient_secret_key: &[u8; 32],
 ) -> Result<[u8; 32], IvmPrivateNoteWalletErrorV1> {
@@ -229,6 +235,9 @@ fn parsed_ciphertext(
 }
 /// Validate the exact public shape and bindings of one private-IVM wallet
 /// ciphertext. Authentication remains recipient-local.
+///
+/// # Errors
+/// Rejects malformed ciphertexts, invalid keys, or inconsistent public output bindings.
 pub fn validate_ivm_private_encrypted_output_v1(
     _pool_id: PrivacyPoolIdV1,
     _program_id: PrivacyProgramIdV1,
@@ -302,6 +311,9 @@ fn encrypt_note_material_v1(
     Ok(encrypted)
 }
 /// Encrypt one fixed-width private note.
+///
+/// # Errors
+/// Rejects invalid note/key bindings, unhealthy randomness, encoding failures, or authenticated-encryption failures.
 pub fn encrypt_ivm_private_wallet_note_v1(
     rng: &mut (impl TryRng + TryCryptoRng),
     pool_id: PrivacyPoolIdV1,
@@ -348,7 +360,7 @@ pub fn encrypt_ivm_private_wallet_note_v1(
 /// The caller must already have derived `commitment` under its governed note
 /// profile. The supplied ephemeral secret is retained only in restricted audit
 /// material; a fresh authenticated nonce is obtained from `rng`.
-pub(crate) fn encrypt_ivm_private_wallet_note_for_commitment_with_opening_v1(
+pub fn encrypt_ivm_private_wallet_note_for_commitment_with_opening_v1(
     rng: &mut (impl TryRng + TryCryptoRng),
     pool_id: PrivacyPoolIdV1,
     program_id: PrivacyProgramIdV1,
@@ -455,6 +467,9 @@ pub fn validate_ivm_private_wallet_encryption_opening_v1(
 }
 #[cfg(test)]
 /// Decrypt, authenticate, and commitment-check one fixed-width private note.
+///
+/// # Errors
+/// Rejects malformed ciphertext/key bindings, failed authentication, invalid plaintext, or a commitment mismatch.
 pub fn decrypt_ivm_private_wallet_note_v1(
     pool_id: PrivacyPoolIdV1,
     program_id: PrivacyProgramIdV1,
@@ -511,7 +526,7 @@ mod tests {
             }
         }
         fn healthy_byte(index: usize) -> u8 {
-            (index as u8).wrapping_mul(41).wrapping_add(3)
+            index.to_le_bytes()[0].wrapping_mul(41).wrapping_add(3)
         }
     }
     impl rand::TryRng for AuditedRng {
@@ -557,7 +572,7 @@ mod tests {
                 AuditedEntropyMode::Constant(byte) => destination.fill(byte),
                 AuditedEntropyMode::Period(period) => {
                     for (index, byte) in destination.iter_mut().enumerate() {
-                        *byte = ((index % usize::from(period)) as u8)
+                        *byte = ((index % usize::from(period)).to_le_bytes()[0])
                             .wrapping_mul(41)
                             .wrapping_add(3);
                     }
@@ -835,7 +850,7 @@ mod tests {
             core::array::from_fn(AuditedRng::healthy_byte);
         assert_eq!(
             encrypted.ephemeral_public_key.into_bytes(),
-            x25519_public_key_v1(&expected_secret).expect("healthy ephemeral key")
+            x25519_public_key_v1(expected_secret).expect("healthy ephemeral key")
         );
         let expected_nonce = (EPHEMERAL_SECRET_BYTES_V1
             ..EPHEMERAL_SECRET_BYTES_V1 + PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_NONCE_BYTES_V1)
@@ -956,8 +971,8 @@ mod tests {
         let recipient_public = ivm_private_recipient_public_key_v1(&recipient_secret).unwrap();
         let commitment = derive_note_commitment_v1(&note).unwrap();
         let encoded = encode_note_material_v1(&note, commitment);
-        let ephemeral_secret = core::array::from_fn(|index| (index as u8) * 7 + 3);
-        let nonce = core::array::from_fn(|index| (index as u8) * 5 + 11);
+        let ephemeral_secret = core::array::from_fn(|index| index.to_le_bytes()[0] * 7 + 3);
+        let nonce = core::array::from_fn(|index| index.to_le_bytes()[0] * 5 + 11);
         let encrypted = encrypt_note_material_v1(
             pool,
             program,

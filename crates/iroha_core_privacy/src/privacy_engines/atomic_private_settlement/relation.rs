@@ -48,7 +48,7 @@ const SETTLEMENT_DUMMY_INPUT_MEMO_DOMAIN_V1: &[u8] =
     b"iroha.atomic-private-settlement.input.dummy.v1";
 
 /// Semantic descriptor for the settlement-only IVM relation binding.
-pub(crate) const ATOMIC_PRIVATE_SETTLEMENT_RELATION_DESCRIPTOR_V1: &[u8] = b"iroha-atomic-private-settlement-relation-v1:separate-from-transparent-amx:ivm-private-note-fixed-2-input-3-output:balanced-only:positive-input-membership-only:zero-valued-virtual-dummies-with-nonzero-authority-rho-blinding-and-path:input-openings=public-air-sha256-binding-of-exact-ordered-value-authority-rho-blinding-memo:payer=purpose-separated-fixed-input-controller-authorization:output-memos=auditor-plaintext-commitment+payer-change-role+sponsor-reimbursement-terms:reimbursement-success-fee-carriers=2:asset=salted-auditor-approved-pool-binding:public=canonical-manifest-intent-proof-binding+statement+genesis:post-proof-artifacts=manifest+committee-qc+carrier:successor=proof-statement-bound-root+epoch:successor-correctness=validator-derived-frontier";
+pub const ATOMIC_PRIVATE_SETTLEMENT_RELATION_DESCRIPTOR_V1: &[u8] = b"iroha-atomic-private-settlement-relation-v1:separate-from-transparent-amx:ivm-private-note-fixed-2-input-3-output:balanced-only:positive-input-membership-only:zero-valued-virtual-dummies-with-nonzero-authority-rho-blinding-and-path:input-openings=public-air-sha256-binding-of-exact-ordered-value-authority-rho-blinding-memo:payer=purpose-separated-fixed-input-controller-authorization:output-memos=auditor-plaintext-commitment+payer-change-role+sponsor-reimbursement-terms:reimbursement-success-fee-carriers=2:asset=salted-auditor-approved-pool-binding:public=canonical-manifest-intent-proof-binding+statement+genesis:post-proof-artifacts=manifest+committee-qc+carrier:successor=proof-statement-bound-root+epoch:successor-correctness=validator-derived-frontier";
 
 /// Public, redacted failure at the settlement proof relation boundary.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
@@ -124,7 +124,7 @@ impl AtomicPrivateSettlementInputWitnessV1 {
     pub fn new(
         spending_secret: [u8; 32],
         leaf_position: u32,
-        authentication_path: [[u8; 32]; PRIVATE_NOTE_TREE_DEPTH_V1],
+        authentication_path: &[[u8; 32]; PRIVATE_NOTE_TREE_DEPTH_V1],
     ) -> Result<Self, AtomicPrivateSettlementRelationErrorV1> {
         if spending_secret.iter().all(|byte| *byte == 0)
             || authentication_path
@@ -136,7 +136,7 @@ impl AtomicPrivateSettlementInputWitnessV1 {
         Ok(Self {
             spending_secret,
             leaf_position,
-            authentication_path,
+            authentication_path: *authentication_path,
         })
     }
 }
@@ -201,6 +201,9 @@ fn settlement_program_v1() -> Result<PrivateProgramV1, AtomicPrivateSettlementRe
 }
 
 /// Return the fixed program identifier used by settlement wallet ciphertext AAD.
+///
+/// # Errors
+/// Returns an invariant error if the fixed settlement program or its identifier cannot be derived.
 pub fn atomic_private_settlement_program_id_v1()
 -> Result<iroha_data_model::privacy::PrivacyProgramIdV1, AtomicPrivateSettlementRelationErrorV1> {
     derive_private_program_id_v1(&settlement_program_v1()?)
@@ -215,7 +218,7 @@ fn synthetic_asset_v1() -> Result<AssetDefinitionId, AtomicPrivateSettlementRela
     Ok(AssetDefinitionId::derive_from_components(domain, name))
 }
 
-pub(crate) fn validate_public_binding_v1(
+pub fn validate_public_binding_v1(
     manifest: &PrivateSettlementProofIntentV1,
     statement: &PrivateSettlementProofStatementV1,
     canonical_genesis_hash: [u8; 32],
@@ -319,7 +322,7 @@ fn context_digest_v1(
     Ok(digest)
 }
 
-pub(crate) fn internal_statement_v1(
+pub fn internal_statement_v1(
     manifest: &PrivateSettlementProofIntentV1,
     statement: &PrivateSettlementProofStatementV1,
 ) -> Result<IrohaIvmPrivateNoteStarkStatementV1, AtomicPrivateSettlementRelationErrorV1> {
@@ -385,7 +388,7 @@ pub(crate) fn internal_statement_v1(
     Ok(internal)
 }
 
-pub(crate) fn relation_profile_v1(
+pub fn relation_profile_v1(
     manifest: &PrivateSettlementProofIntentV1,
     statement: &PrivateSettlementProofStatementV1,
 ) -> Result<PrivateNoteRelationProfileV1, AtomicPrivateSettlementRelationErrorV1> {
@@ -695,13 +698,13 @@ pub(super) fn validate_audit_openings_v1_for_intent(
     Ok(())
 }
 
-pub(crate) struct CompiledAtomicPrivateSettlementRelationV1 {
+pub struct CompiledAtomicPrivateSettlementRelationV1 {
     pub(crate) internal_statement: IrohaIvmPrivateNoteStarkStatementV1,
     pub(crate) witness: IvmPrivateNoteWitnessV1,
     pub(crate) profile: PrivateNoteRelationProfileV1,
 }
 
-pub(crate) fn compile_witness_v1(
+pub fn compile_witness_v1(
     manifest: &PrivateSettlementProofIntentV1,
     statement: &PrivateSettlementProofStatementV1,
     witness: &AtomicPrivateSettlementProverWitnessV1,
@@ -758,7 +761,7 @@ pub(crate) fn compile_witness_v1(
             note,
             spend.spending_secret,
             spend.leaf_position,
-            spend.authentication_path,
+            &spend.authentication_path,
             profile,
         )
         .map_err(|_| AtomicPrivateSettlementRelationErrorV1::InvalidWitness)?;
@@ -869,6 +872,48 @@ pub fn atomic_private_settlement_dummy_input_memo_digest_v1(
         input_index,
         dummy_domain,
     )
+}
+
+// Used only while the native preparation owner is filling a statement; it is never a verifier.
+pub(super) fn output_memo_digests_from_bound_preparation_v1(
+    statement: &PrivateSettlementProofStatementV1,
+) -> Result<[[u8; 32]; PRIVATE_SETTLEMENT_OUTPUT_SLOTS_V1], AtomicPrivateSettlementRelationErrorV1>
+{
+    let change_material = norito::encode_canonical(&(
+        (
+            statement.network_id,
+            statement.bundle_id,
+            statement.leg_ordinal,
+            statement.route,
+            statement.authority_context_height,
+            statement.pool_id,
+            statement.asset_binding_commitment,
+            statement.audit_plaintext_commitment,
+            statement.audit_input_commitment,
+        ),
+        (
+            statement.audit_policy_digest,
+            statement.audit_key_epoch,
+            statement.fee_intent_digest,
+            statement.reimbursement_terms_commitment,
+            statement.reimbursement_leg_ordinal,
+            statement.expiry_height,
+            statement.proof_profile_digest,
+        ),
+    ))
+    .map_err(|_| AtomicPrivateSettlementRelationErrorV1::CanonicalEncoding)?;
+    let change = framed_digest_v1(
+        SETTLEMENT_CHANGE_MEMO_DOMAIN_V1,
+        &[
+            &change_material,
+            PRIVATE_SETTLEMENT_PROOF_PROFILE_DESCRIPTOR_V1,
+        ],
+    )?;
+    Ok([
+        *statement.audit_plaintext_commitment.as_ref(),
+        change,
+        *statement.reimbursement_terms_commitment.as_ref(),
+    ])
 }
 
 #[cfg(test)]
@@ -1121,13 +1166,13 @@ mod tests {
                     AtomicPrivateSettlementInputWitnessV1::new(
                         secrets[0],
                         u32::try_from(active_position).unwrap(),
-                        path,
+                        &path,
                     )
                     .expect("live membership"),
                     AtomicPrivateSettlementInputWitnessV1::new(
                         secrets[1],
                         u32::try_from(active_position ^ 1).unwrap(),
-                        [[0xED; 32]; PRIVATE_NOTE_TREE_DEPTH_V1],
+                        &[[0xED; 32]; PRIVATE_NOTE_TREE_DEPTH_V1],
                     )
                     .expect("virtual dummy secret and fixed-shape path"),
                 ],
@@ -1549,46 +1594,4 @@ mod tests {
             Err(AtomicPrivateSettlementRelationErrorV1::InvalidAuditMaterial)
         );
     }
-}
-
-// Used only while the native preparation owner is filling a statement; it is never a verifier.
-pub(super) fn output_memo_digests_from_bound_preparation_v1(
-    statement: &PrivateSettlementProofStatementV1,
-) -> Result<[[u8; 32]; PRIVATE_SETTLEMENT_OUTPUT_SLOTS_V1], AtomicPrivateSettlementRelationErrorV1>
-{
-    let change_material = norito::encode_canonical(&(
-        (
-            statement.network_id,
-            statement.bundle_id,
-            statement.leg_ordinal,
-            statement.route,
-            statement.authority_context_height,
-            statement.pool_id,
-            statement.asset_binding_commitment,
-            statement.audit_plaintext_commitment,
-            statement.audit_input_commitment,
-        ),
-        (
-            statement.audit_policy_digest,
-            statement.audit_key_epoch,
-            statement.fee_intent_digest,
-            statement.reimbursement_terms_commitment,
-            statement.reimbursement_leg_ordinal,
-            statement.expiry_height,
-            statement.proof_profile_digest,
-        ),
-    ))
-    .map_err(|_| AtomicPrivateSettlementRelationErrorV1::CanonicalEncoding)?;
-    let change = framed_digest_v1(
-        SETTLEMENT_CHANGE_MEMO_DOMAIN_V1,
-        &[
-            &change_material,
-            PRIVATE_SETTLEMENT_PROOF_PROFILE_DESCRIPTOR_V1,
-        ],
-    )?;
-    Ok([
-        *statement.audit_plaintext_commitment.as_ref(),
-        change,
-        *statement.reimbursement_terms_commitment.as_ref(),
-    ])
 }

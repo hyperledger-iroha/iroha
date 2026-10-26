@@ -204,7 +204,7 @@ struct ShellCharges {
 /// The live retained validator must acquire this alongside its other admission
 /// before execution; constructing it after execution supplies no such guarantee.
 #[must_use = "retain the original finite shell capacity through capture and publication"]
-pub(crate) struct WorldJournalShellReservation {
+pub struct WorldJournalShellReservation {
     capacity: ShellCapacity,
 }
 
@@ -299,7 +299,7 @@ fn charge_field(
 
 /// The previous original installation still owns its physical shells.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct ShellsNotRetired;
+pub struct ShellsNotRetired;
 
 /// Moves only into a complete installation or its delayed cleanup, after its
 /// Boxes and Vec in field order. Shared capacity cannot refund while either the

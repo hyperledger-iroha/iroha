@@ -898,10 +898,7 @@ fn validated_witness_guard_failure_requires_recovery_without_reexecuting_origina
             let outcome = worker.retain_validated_execution(
                 &block,
                 hash,
-                valid,
-                overlay,
-                committee,
-                recorded_events,
+                (valid, overlay, committee, recorded_events),
                 due_work_max_lag_ms,
                 max_clock_drift_ms,
                 None, // This isolated handoff does not return an execution verdict.

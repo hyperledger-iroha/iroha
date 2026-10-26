@@ -21,6 +21,10 @@ const _: () = assert!(CONSUMER_ROWS <= FIXED_SEMANTIC_CONSUMER_ROWS_V1);
 
 /// Public endpoint identity, reconstructed without reading witness cells.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "the fixed census describes independent node and copy properties"
+)]
 pub(super) struct Slot {
     pub(super) embedded: bool,
     pub(super) consumer: bool,
@@ -42,9 +46,9 @@ fn equality_slot(id: usize, offset: usize, consumer: bool) -> Option<Slot> {
     use ZkX509Rfc5280GrammarRoleV1 as R;
     let (document, certificate_coefficient, role, instance) = match (id, consumer) {
         (0, false) => (0, 0, R::CertificateIssuer, 0),
-        (0, true) => (1, 0, R::CertificateSubject, 1),
+        (0 | 6, true) => (1, 0, R::CertificateSubject, 1),
         (1, false) => (3, 1, R::EmbeddedAkiIdentifier, 0),
-        (1, true) => (9, 1, R::EmbeddedSki, 0),
+        (1 | 7, true) => (9, 1, R::EmbeddedSki, 0),
         (2, false) => (1, 0, R::CertificateIssuer, 0),
         (2, true) => (1, 1, R::CertificateSubject, 1),
         (3, false) => (8, 1, R::EmbeddedAkiIdentifier, 0),
@@ -54,9 +58,7 @@ fn equality_slot(id: usize, offset: usize, consumer: bool) -> Option<Slot> {
         (5, false) => (13, 0, R::EmbeddedAkiIdentifier, 0),
         (5, true) => (14, 0, R::EmbeddedSki, 0),
         (6, false) => (2, 1, R::CrlIssuer, 2),
-        (6, true) => (1, 0, R::CertificateSubject, 1),
         (7, false) => (12, 5, R::EmbeddedAkiIdentifier, 0),
-        (7, true) => (9, 1, R::EmbeddedSki, 0),
         _ => return None,
     };
     let identifier = id % 2 == 1;
@@ -184,7 +186,6 @@ pub(super) fn rows(family: ZkX509Rfc5280StarkFamilyV1) -> usize {
     }
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(super) fn active_rows(family: ZkX509Rfc5280StarkFamilyV1, certificate_two: bool) -> usize {
     let equality = (3 + usize::from(certificate_two)) * (NAME_BYTES + IDENTIFIER_BYTES);
     let embedded = (11 + 4 * usize::from(certificate_two)) * EMBEDDED_BYTES;
@@ -355,12 +356,10 @@ pub(super) fn residues<A: PolynomialAirFieldV1>(
     output
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(super) struct Sources<'a> {
     nodes: [Option<&'a ZkX509Rfc5280NodeProvenanceV1>; 46],
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<'a> Sources<'a> {
     pub(super) fn new(trace: &'a ZkX509Rfc5280TraceV1) -> Result<Self, ZkX509Rfc5280StarkErrorV1> {
         let depth = trace.certificates.len();
@@ -382,7 +381,7 @@ impl<'a> Sources<'a> {
             let document = slot.document + slot.certificate_coefficient * u64::from(depth == 3);
             let source = trace
                 .semantic_provenance
-                .get(document as usize)
+                .get(usize::try_from(document).map_err(|_| ZkX509Rfc5280StarkErrorV1::Source)?)
                 .ok_or(ZkX509Rfc5280StarkErrorV1::Source)?;
             let mut matching = source.nodes.iter().filter(|node| {
                 u64::from(node.document) == document
@@ -419,7 +418,6 @@ impl<'a> Sources<'a> {
     }
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(super) fn populate_rows(
     trace: &ZkX509Rfc5280TraceV1,
     sources: &Sources<'_>,

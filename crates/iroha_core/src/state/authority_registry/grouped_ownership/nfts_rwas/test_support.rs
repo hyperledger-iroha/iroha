@@ -19,12 +19,12 @@ pub(in crate::state) fn domain() -> DomainId {
     DomainId::try_new("grouped", "universal").unwrap()
 }
 
-/// Canonical original nft_id fixture.
+/// Canonical original `nft_id` fixture.
 pub(in crate::state) fn nft_id() -> NftId {
     NftId::new(domain(), "lot".parse().unwrap())
 }
 
-/// Canonical original rwa_id fixture.
+/// Canonical original `rwa_id` fixture.
 pub(in crate::state) fn rwa_id() -> RwaId {
     RwaId::generated(domain(), Hash::new(b"grouped source"))
 }

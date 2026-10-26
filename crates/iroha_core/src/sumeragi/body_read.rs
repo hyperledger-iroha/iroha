@@ -39,6 +39,10 @@ pub trait BodyReadJob: Send {
 }
 
 /// Storage progress before cryptographic and complete-codeword verification.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Variants retain their original paid owners across suspension and retry without new unbudgeted allocations."
+)]
 pub enum BodyReadPoll {
     /// The requested file was genuinely absent when this job was opened.
     Absent,
@@ -150,17 +154,14 @@ impl FileBodyRead {
         // The operation lock and child directory both retire before this call returns.
         let _guard = custody.lock().map_err(BodyReadError::Io)?;
         custody.revalidate().map_err(BodyReadError::Io)?;
-        let state = match ArtifactRead::open_in_child(
+        let state = ArtifactRead::open_in_child(
             &custody.directory,
             &format!("{:020}", source.height()),
             &hex::encode(source.block_hash().0),
             max_bytes,
         )
         .map_err(BodyReadError::Io)?
-        {
-            Some(read) => ReadState::Reading(read),
-            None => ReadState::Absent,
-        };
+        .map_or_else(|| ReadState::Absent, ReadState::Reading);
         custody.revalidate().map_err(BodyReadError::Io)?;
         Ok(Self {
             source,

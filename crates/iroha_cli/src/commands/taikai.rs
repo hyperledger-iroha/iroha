@@ -806,10 +806,7 @@ fn parse_hex_32(value: &str, field: &str) -> Result<[u8; 32]> {
     Ok(out)
 }
 fn build_cek_hkdf_salt(explicit: Option<&str>) -> Result<[u8; 32]> {
-    let salt = match explicit {
-        Some(hex) => parse_hex_32(hex, "hkdf-salt"),
-        None => random_cek_hkdf_salt(),
-    }?;
+    let salt = explicit.map_or_else(random_cek_hkdf_salt, |hex| parse_hex_32(hex, "hkdf-salt"))?;
     if salt.iter().all(|byte| *byte == 0) {
         return Err(eyre!("hkdf-salt must not be all zero"));
     }
@@ -1506,10 +1503,11 @@ fn sync_policy_output_parent(_path: &Path) -> std::io::Result<()> {
 #[cfg(unix)]
 fn set_policy_no_follow(options: &mut OpenOptions) {
     use std::os::unix::fs::OpenOptionsExt as _;
-    options.custom_flags(
+    options.custom_flags(i32::from_ne_bytes(
         (rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::CLOEXEC | rustix::fs::OFlags::NONBLOCK)
-            .bits() as i32,
-    );
+            .bits()
+            .to_ne_bytes(),
+    ));
 }
 
 #[cfg(windows)]

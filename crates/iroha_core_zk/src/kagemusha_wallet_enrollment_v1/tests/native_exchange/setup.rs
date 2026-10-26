@@ -124,28 +124,7 @@ impl LedgerSetup {
     }
 }
 
-fn require_account_key(account: &AccountId, seed: u8) -> KeyPair {
-    let key = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
-    assert_eq!(account, &AccountId::new(key.public_key().clone()));
-    key
-}
-
-pub(super) fn bind_identity(
-    f: &mut Fixture,
-    account: AccountId,
-    asset: KagemushaWalletAssetScopeV1,
-    seed: u8,
-) {
-    f.account_key = require_account_key(&account, seed);
-    f.account = account;
-    f.asset = asset;
-    // This is an explicit authenticated actor fixture, independently bound for each account.
-    f.config.actor = norito::encode_canonical(&f.account).unwrap();
-    f.config.policy.asset_digest = f.asset.asset_digest();
-    f.challenge.account_digest = kagemusha_wallet_account_digest_v1(&f.account).unwrap();
-    f.challenge.asset_digest = f.asset.asset_digest();
-    f.challenge.enrollment_policy = f.config.policy.policy_digest().unwrap();
-}
+pub(super) use crate::kagemusha_wallet_advance_v1::engineering_fixture::bind_identity;
 
 #[test]
 fn distinct_account_identity_binds_challenge_actor_and_signature() {

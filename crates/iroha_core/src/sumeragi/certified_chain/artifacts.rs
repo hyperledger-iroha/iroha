@@ -25,6 +25,10 @@ use crate::sumeragi::{
 
 pub(in crate::sumeragi) mod metadata;
 
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Variants retain their original paid owners across suspension and retry without new unbudgeted allocations."
+)]
 enum Stage {
     Certificate(CertificateRead),
     Projecting(PayloadBuild<FundedDecodedCertificate>),
@@ -156,7 +160,7 @@ impl std::error::Error for PrefixArtifactsError {
 
 /// Sealed source-bound decoded artifacts; this grants no certificate or execution authority.
 #[derive(Clone)]
-pub(crate) struct PrefixArtifacts {
+pub struct PrefixArtifacts {
     decoded: FundedDecodedCertificate,
     payload: PayloadBytes,
 }

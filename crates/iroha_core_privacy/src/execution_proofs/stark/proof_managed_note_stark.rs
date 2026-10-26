@@ -223,10 +223,8 @@ fn map_aggregate_error_v1(error: aggregate::AggregateStarkErrorV1) -> ProofManag
         aggregate::AggregateStarkErrorV1::InvalidLayout => {
             ProofManagedNoteStarkErrorV1::InvalidProfile
         }
-        aggregate::AggregateStarkErrorV1::InvalidProofShape => {
-            ProofManagedNoteStarkErrorV1::ProofWire
-        }
-        aggregate::AggregateStarkErrorV1::MalformedProof
+        aggregate::AggregateStarkErrorV1::InvalidProofShape
+        | aggregate::AggregateStarkErrorV1::MalformedProof
         | aggregate::AggregateStarkErrorV1::ProofTooLarge
         | aggregate::AggregateStarkErrorV1::NonCanonicalField => {
             ProofManagedNoteStarkErrorV1::ProofWire
@@ -323,7 +321,7 @@ fn validate_note_fri_soundness_v1(
         uniform_rejection_sampling: true,
         claimed_query_error_bits: PROOF_MANAGED_NOTE_FRI_QUERY_ERROR_BITS_V1,
     };
-    aggregate::validate_affine_batched_fri_theorem2_v1(parameters, &layout, certificate)
+    aggregate::validate_affine_batched_fri_theorem2_v1(parameters, &layout, &certificate)
         .map_err(map_aggregate_error_v1)
 }
 impl ProofManagedNoteStarkProtocolV1 {
@@ -350,7 +348,8 @@ impl ProofManagedNoteStarkProtocolV1 {
             self.parameters.query_count,
         )
         .map_err(map_transparent_error_v1)?;
-        let consensus_proof_cap = self.domains.digest_context.maximum_proof_bytes_v1();
+        let consensus_proof_cap =
+            super::transparent_stark::TransparentStarkDigestContextV1::maximum_proof_bytes_v1();
         // This retained driver is execution-only; privacy remains in its original module.
         let maximum_native_log = PROOF_MANAGED_NOTE_MAX_NATIVE_TRACE_LOG2_V1;
         let minimum_commitment_bits = PROOF_MANAGED_NOTE_FRI_COMMITMENT_ERROR_BITS_MIN_V1;
@@ -478,8 +477,7 @@ pub trait ProofManagedNoteStarkAdapterV1: Sync {
     /// Evaluate profile-only polynomial residues at one current/next row pair.
     fn profile_constraint_residues_v1(
         &self,
-        current_base: &[F],
-        next_base: &[F],
+        base_rows: (&[F], &[F]),
         current_aux: &[F],
         next_aux: &[F],
         fixed: &[F],
@@ -574,7 +572,7 @@ impl NoteCopyScheduleV1 {
     ) -> Result<Vec<Vec<F>>, ProofManagedNoteStarkErrorV1> {
         self.validate(trace_size)?;
         let mut columns = vec![vec![F::ZERO; trace_size]; NOTE_COPY_FIXED_WIDTH_V1];
-        for row in 0..trace_size {
+        for (row, policy) in self.policies.iter().enumerate().take(trace_size) {
             for column in 0..NOTE_COPY_WIDTH_V1 {
                 let identity = row
                     .checked_mul(NOTE_COPY_WIDTH_V1)
@@ -586,7 +584,7 @@ impl NoteCopyScheduleV1 {
                         .map_err(|_| ProofManagedNoteStarkErrorV1::Resource)?);
                 columns[COPY_FIXED_SIGMA_OFFSET + column][row] =
                     F(u64::from(self.sigma[row][column]));
-                match self.policies[row][column] {
+                match policy[column] {
                     NoteCopyCellPolicyV1::Inactive => {
                         columns[COPY_FIXED_INACTIVE_OFFSET + column][row] = F::ONE;
                     }
@@ -627,7 +625,7 @@ pub fn derive_note_copy_challenges_v1(
         beta: F::ZERO,
         gamma: F::ZERO,
     }; NOTE_COPY_LANES_V1];
-    for lane in lanes.iter_mut() {
+    for lane in &mut lanes {
         lane.beta = transcript
             .challenge_field(NOTE_COPY_BETA_LABEL_V1)
             .map_err(map_transparent_error_v1)?;
@@ -1642,10 +1640,8 @@ fn derive_deep_mixes_v1(
 fn all_constraint_residues_v1<A: ProofManagedNoteStarkAdapterV1>(
     adapter: &A,
     prepared: &PreparedNoteProfileV1,
-    current_base: &[F],
-    next_base: &[F],
-    current_aux: &[F],
-    next_aux: &[F],
+    (current_base, next_base): (&[F], &[F]),
+    (current_aux, next_aux): (&[F], &[F]),
     fixed: &[F],
     copy_challenges: NoteCopyChallengesV1,
     profile_challenges: &A::ProfileChallenges,
@@ -1666,8 +1662,7 @@ fn all_constraint_residues_v1<A: ProofManagedNoteStarkAdapterV1>(
         copy_challenges,
     )?);
     let profile = ZeroizingBaseFieldValuesV1::from(adapter.profile_constraint_residues_v1(
-        current_base,
-        next_base,
+        (current_base, next_base),
         current_aux,
         next_aux,
         fixed,
@@ -1721,10 +1716,8 @@ fn validate_native_constraints_v1<A: ProofManagedNoteStarkAdapterV1>(
             let residues = all_constraint_residues_v1(
                 adapter,
                 prepared,
-                &current_base,
-                &next_base,
-                &current_aux,
-                &next_aux,
+                (&current_base, &next_base),
+                (&current_aux, &next_aux),
                 &fixed,
                 copy_challenges,
                 profile_challenges,
@@ -1740,8 +1733,7 @@ fn validate_native_constraints_v1<A: ProofManagedNoteStarkAdapterV1>(
 fn composition_lanes_v1<A: ProofManagedNoteStarkAdapterV1>(
     adapter: &A,
     prepared: &PreparedNoteProfileV1,
-    base_lde: &[Vec<F>],
-    aux_lde: &[Vec<F>],
+    (base_lde, aux_lde): (&[Vec<F>], &[Vec<F>]),
     fixed_lde: &[Vec<F>],
     copy_challenges: NoteCopyChallengesV1,
     profile_challenges: &A::ProfileChallenges,
@@ -1809,10 +1801,8 @@ fn composition_lanes_v1<A: ProofManagedNoteStarkAdapterV1>(
                 let residues = all_constraint_residues_v1(
                     adapter,
                     prepared,
-                    &current_base,
-                    &next_base,
-                    &current_aux,
-                    &next_aux,
+                    (&current_base, &next_base),
+                    (&current_aux, &next_aux),
                     &fixed,
                     copy_challenges,
                     profile_challenges,
@@ -2131,8 +2121,7 @@ pub fn prove_proof_managed_note_stark_v1_with_rng<A: ProofManagedNoteStarkAdapte
     let compositions = ZeroizingExtensionFieldCubeV1::from(composition_lanes_v1(
         adapter,
         &prepared,
-        &base_lde,
-        &aux_lde,
+        (&base_lde, &aux_lde),
         &fixed_lde,
         copy_challenges,
         &profile_challenges,
@@ -2402,10 +2391,8 @@ impl<A: ProofManagedNoteStarkAdapterV1> AggregateOpenedRowEvaluatorV1
         let residues = all_constraint_residues_v1(
             self.adapter,
             self.prepared,
-            &opening.base_current,
-            &opening.base_next,
-            &opening.aux_current,
-            &opening.aux_next,
+            (&opening.base_current, &opening.base_next),
+            (&opening.aux_current, &opening.aux_next),
             &fixed,
             self.copy_challenges,
             self.profile_challenges,

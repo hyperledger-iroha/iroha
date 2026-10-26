@@ -70,6 +70,28 @@ fn an_unselected_snapshot_never_changes_current_source_custody() {
 
 #[test]
 fn preparation_draft_must_equal_the_rederived_draft_and_actual_successor() {
+    fn view<'a>(
+        store: &'a mut MemoryArchive,
+        source: &SourceCustodyV1,
+        state: &KagemushaWalletStateV1,
+        manifest: &manifest::Manifest,
+    ) -> PreparationCustodyV1<'a> {
+        PreparationCustodyV1::new(
+            store,
+            source,
+            state,
+            KagemushaWalletOperationKindV1::Retiring,
+            None,
+            crate::kagemusha_wallet_state_v1::preparation_custody::PreparationSelectionV1 {
+                issued: manifest.issued_requests,
+                anchors: manifest.direct_anchors,
+                epochs: manifest.finality_epochs,
+                blacklist: manifest.blacklist.clone(),
+            },
+        )
+        .unwrap()
+    }
+
     let mut wallet = wallet();
     wallet.commit(bootstrap()).unwrap();
     let (_, manifest) = wallet.manifest().unwrap();
@@ -90,25 +112,6 @@ fn preparation_draft_must_equal_the_rederived_draft_and_actual_successor() {
         source: manifest.capsule,
         draft,
     };
-    fn view<'a>(
-        store: &'a mut MemoryArchive,
-        source: &SourceCustodyV1,
-        state: &KagemushaWalletStateV1,
-        manifest: &manifest::Manifest,
-    ) -> PreparationCustodyV1<'a> {
-        PreparationCustodyV1::new(
-            store,
-            source,
-            state,
-            KagemushaWalletOperationKindV1::Retiring,
-            None,
-            manifest.issued_requests,
-            manifest.direct_anchors,
-            manifest.finality_epochs,
-            manifest.blacklist.clone(),
-        )
-        .unwrap()
-    }
 
     let custody = TransitionCustodyV1::new(
         Some(plan(wrong)),

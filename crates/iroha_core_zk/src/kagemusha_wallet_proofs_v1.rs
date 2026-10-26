@@ -81,10 +81,9 @@ pub enum Error {
 impl Error {
     /// Preserve the original local owner; completed codec invalidity remains Authority.
     pub(crate) fn decode_attempt(error: norito::core::DecodeAttemptError) -> Self {
-        match error.into_local_refusal() {
-            Ok(original) => Self::DecodeResource(original),
-            Err(_) => Self::Authority,
-        }
+        error
+            .into_local_refusal()
+            .map_or_else(|_| Self::Authority, Self::DecodeResource)
     }
 
     /// Carry an existing coordinator read refusal across native preparation unchanged.
@@ -108,6 +107,10 @@ impl Error {
 /// The artifact owner obtains these from its frozen native package/configuration. Requiring
 /// the signed manifest to carry them does not require release-review/sign-off receipts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "Each binding names the protocol digest it authenticates."
+)]
 pub struct RuntimeBindings {
     /// Installed Eq protocol identity.
     pub eq_protocol_digest: [u8; 32],
@@ -152,11 +155,21 @@ pub struct StepArtifact<'a> {
 }
 
 /// Original descriptor and verifying-key bytes of the one Omega transport artifact.
+#[derive(Clone, Copy)]
 pub struct LineageArtifact<'a> {
     /// Canonical V2 descriptor.
     pub descriptor: &'a [u8],
     /// Canonical native verifying key.
     pub verifying_key: &'a [u8],
+}
+
+/// Exact original byte inventory for authenticating one complete verifier set.
+#[derive(Clone, Copy)]
+pub struct ArtifactOriginals<'a> {
+    /// Every sigma artifact in the signed allowlist order.
+    pub steps: &'a [StepArtifact<'a>],
+    /// The one lineage transport artifact.
+    pub lineage: LineageArtifact<'a>,
 }
 
 struct Key<C: PastaCurve> {
@@ -353,9 +366,9 @@ impl ArtifactSet {
         expected_manifest: [u8; 32],
         runtime: RuntimeBindings,
         allowlist: KagemushaWalletVerifyingKeyAllowlistV1,
-        steps: &[StepArtifact<'_>],
-        lineage: LineageArtifact<'_>,
+        originals: ArtifactOriginals<'_>,
     ) -> Result<Self, Error> {
+        let ArtifactOriginals { steps, lineage } = originals;
         authority(scheme.validate())?;
         authority(manifest.verify(&scheme, signer))?;
         if expected_manifest == [0; 32] || manifest.manifest_digest() != expected_manifest {
@@ -415,14 +428,12 @@ impl ArtifactSet {
         let mut keys = BTreeMap::new();
         for (selector, binding, vk, proof_bytes) in decoded {
             let k = u32::from(binding.descriptor().k);
-            let pinned = match params.get(&k) {
-                Some(p) => Arc::clone(p),
-                None => {
-                    let p =
-                        Arc::new(PinnedParams::<Eq>::for_domain(k).map_err(|_| Error::Profile)?);
-                    params.insert(k, Arc::clone(&p));
-                    p
-                }
+            let pinned = if let Some(p) = params.get(&k) {
+                Arc::clone(p)
+            } else {
+                let p = Arc::new(PinnedParams::<Eq>::for_domain(k).map_err(|_| Error::Profile)?);
+                params.insert(k, Arc::clone(&p));
+                p
             };
             keys.insert(
                 selector,
@@ -696,10 +707,9 @@ impl ArtifactSet {
     }
 }
 
-fn decode_transport(
-    bytes: &[u8],
-    proof_bytes: usize,
-) -> Result<(&[u8], AccumulatorT<Ep>, AccumulatorT<Eq>), Error> {
+type DecodedTransport<'a> = (&'a [u8], AccumulatorT<Ep>, AccumulatorT<Eq>);
+
+fn decode_transport(bytes: &[u8], proof_bytes: usize) -> Result<DecodedTransport<'_>, Error> {
     if proof_bytes == 0 || proof_bytes.checked_add(2 * ACCUMULATOR_BYTES) != Some(bytes.len()) {
         return Err(Error::Proof);
     }

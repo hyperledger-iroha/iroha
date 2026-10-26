@@ -27,9 +27,11 @@ fn original_incumbent() -> (CertifiedTestChain, KeyPair) {
     validators.sort_by_key(|key| PeerId::new(key.public_key().clone()));
     let peer_key = validators[0].clone();
     let peer = PeerId::new(peer_key.public_key().clone());
-    let staking = iroha_config::parameters::actual::NexusStaking::default();
-    let definition: AssetDefinitionId = staking.stake_asset_id.parse().unwrap();
-    let escrow = AccountId::parse_encoded(&staking.stake_escrow_account_id).unwrap();
+    let monetary = crate::sumeragi::test_chain::staking_fixture_policy(
+        SumeragiNposParameters::default().xor_asset_definition_id,
+    );
+    let definition = monetary.stake_asset_id.clone();
+    let escrow = monetary.stake_escrow_account_id.clone();
     let amount = Quantity::from(1_000_u32);
     let source = AssetId::new(definition.clone(), owner.clone());
     let destination = AssetId::new(definition.clone(), escrow.clone());
@@ -52,6 +54,13 @@ fn original_incumbent() -> (CertifiedTestChain, KeyPair) {
         [],
     );
     let mut config = TestChainConfig::new(world, 1_000);
+    assert_eq!(config.genesis_parameters.len(), 1);
+    config.genesis_parameters[0] = Parameter::Custom(
+        monetary
+            .clone()
+            .into_custom_parameter()
+            .expect("explicit original staking authority"),
+    );
     config.validator_keys = Some(validators);
     config.consensus_mode = iroha_data_model::parameter::system::SumeragiConsensusMode::Npos;
     config.genesis_parameters.push(Parameter::Custom(
@@ -70,6 +79,17 @@ fn original_incumbent() -> (CertifiedTestChain, KeyPair) {
         .into(),
     );
     let chain = CertifiedTestChain::start(config).unwrap();
+    assert_eq!(
+        chain
+            .state()
+            .view()
+            .world()
+            .parameters()
+            .require_staking_policy()
+            .unwrap(),
+        &monetary,
+        "actual signed genesis retains this fixture's monetary authority",
+    );
     (chain, owner_key)
 }
 
@@ -107,9 +127,11 @@ fn original_preparation() -> (CertifiedTestChain, KeyPair, ValidatorCommitteeOpe
         .iter()
         .map(|key| AccountId::new(key.public_key().clone()))
         .collect::<Vec<_>>();
-    let staking = iroha_config::parameters::actual::NexusStaking::default();
-    let definition: AssetDefinitionId = staking.stake_asset_id.parse().unwrap();
-    let escrow = AccountId::parse_encoded(&staking.stake_escrow_account_id).unwrap();
+    let monetary = crate::sumeragi::test_chain::staking_fixture_policy(
+        SumeragiNposParameters::default().xor_asset_definition_id,
+    );
+    let definition = monetary.stake_asset_id.clone();
+    let escrow = monetary.stake_escrow_account_id.clone();
     let world = World::with_assets(
         [Domain::new(DomainId::try_new("nexus", "universal").unwrap()).build(&accounts[0])],
         accounts
@@ -133,6 +155,13 @@ fn original_preparation() -> (CertifiedTestChain, KeyPair, ValidatorCommitteeOpe
         [],
     );
     let mut config = TestChainConfig::new(world, 1_000);
+    assert_eq!(config.genesis_parameters.len(), 1);
+    config.genesis_parameters[0] = Parameter::Custom(
+        monetary
+            .clone()
+            .into_custom_parameter()
+            .expect("explicit original staking authority"),
+    );
     config.validator_keys = Some(keys.clone());
     config.consensus_mode = iroha_data_model::parameter::system::SumeragiConsensusMode::Npos;
     config.genesis_parameters.extend([
@@ -171,6 +200,17 @@ fn original_preparation() -> (CertifiedTestChain, KeyPair, ValidatorCommitteeOpe
         );
     }
     let mut chain = CertifiedTestChain::start(config).unwrap();
+    assert_eq!(
+        chain
+            .state()
+            .view()
+            .world()
+            .parameters()
+            .require_staking_policy()
+            .unwrap(),
+        &monetary,
+        "actual signed genesis retains this fixture's monetary authority",
+    );
 
     struct Beacon {
         session: ValidatedGlobalThresholdBeaconSessionV1,

@@ -120,7 +120,8 @@ impl DaPublisher {
     pub(super) fn publish(&self, request_bytes: &[u8]) -> Result<DaPublisherReceipt> {
         let request: DaIngestRequest = decode_from_bytes(request_bytes)
             .map_err(|err| eyre!("failed to decode DA ingest request: {err}"))?;
-        if request.network_id != self.network_id || request.owner != self.account {
+        let owner_matches = request.owner == self.account;
+        if request.network_id != self.network_id || !owner_matches {
             return Err(eyre!(
                 "DA ingest request network or owner does not match the configured canonical HTTP signer"
             ));
@@ -319,10 +320,11 @@ fn validate_da_ingest_response(
             "Torii DA pin scope does not match the submitted request authorization"
         ));
     }
+    let payload_matches = receipt.blob_hash == request.payload_hash;
     if receipt.client_blob_id != request.client_blob_id
         || receipt.lane_id != request.lane_id
         || receipt.epoch != request.epoch
-        || receipt.blob_hash != request.payload_hash
+        || !payload_matches
         || receipt.storage_ticket != scope.storage_ticket
         || receipt.manifest_hash.as_bytes() != scope.manifest_hash.as_bytes()
     {

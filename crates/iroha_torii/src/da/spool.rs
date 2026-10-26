@@ -361,8 +361,9 @@ impl DaSpooler {
             while jobs.len() < batch_max {
                 match rx.try_recv() {
                     Ok(job) => jobs.push(job),
-                    Err(mpsc::error::TryRecvError::Empty) => break,
-                    Err(mpsc::error::TryRecvError::Disconnected) => break,
+                    Err(
+                        mpsc::error::TryRecvError::Empty | mpsc::error::TryRecvError::Disconnected,
+                    ) => break,
                 }
             }
             let drained = jobs.len();

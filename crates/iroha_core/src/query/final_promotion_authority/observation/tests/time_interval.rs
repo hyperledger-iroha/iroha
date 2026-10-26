@@ -36,7 +36,12 @@ fn finite_utc_interval_requires_both_custody_endpoints_at_one_applied_cut() {
         let mut f = Fixture::new();
         let pending = f.pending();
         assert_eq!(
-            f.commit(NOW, vec![pending.signed_transaction().clone()], true, true),
+            f.commit(
+                NOW,
+                std::slice::from_ref(pending.signed_transaction()),
+                true,
+                true
+            ),
             [true]
         );
         let samples = std::cell::Cell::new(0);
@@ -84,7 +89,7 @@ fn malformed_interval_is_rejected_before_native_eligibility() {
         assert_eq!(
             f.commit(
                 NOW,
-                vec![
+                &[
                     pending.signed_transaction().clone(),
                     f.sign(revoke.into(), 1, NOW),
                 ],
@@ -126,7 +131,7 @@ fn reserved_interval_checks_execution_lower_bound_and_exclusive_expiry_upper_bou
             assert_eq!(
                 f.commit(
                     NOW + 2,
-                    vec![pending.signed_transaction().clone()],
+                    std::slice::from_ref(pending.signed_transaction()),
                     true,
                     true
                 ),
@@ -175,12 +180,7 @@ fn completed_interval_cannot_authorize_without_exact_complete_source_proof() {
                 },
             ));
             assert_eq!(
-                f.commit(
-                    NOW + 1,
-                    vec![f.sign(complete.into(), 2, NOW + 1)],
-                    true,
-                    true
-                ),
+                f.commit(NOW + 1, &[f.sign(complete.into(), 2, NOW + 1)], true, true),
                 [true]
             );
             let row = native_operation_row(&f);
@@ -198,7 +198,7 @@ fn completed_interval_cannot_authorize_without_exact_complete_source_proof() {
             assert_eq!(
                 f.commit(
                     NOW + 2,
-                    vec![pending.signed_transaction().clone()],
+                    std::slice::from_ref(pending.signed_transaction()),
                     true,
                     true
                 ),

@@ -17,7 +17,11 @@ use iroha_data_model::query::error::QueryExecutionFail;
 /// The caller retains the exact native target descriptor acquired before any body I/O.
 /// Signed genesis and every actual tip-to-parent source count against one allowance.
 /// No source refusal falls back to a prefix, checkpoint or different physical pool.
-pub(crate) fn read_event_execution(
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "The one-use captured history source must retire when this read attempt completes."
+)]
+pub fn read_event_execution(
     source: crate::state::CanonicalHistorySource<'_>,
     chain_id: &ChainId,
     network: NetworkId,

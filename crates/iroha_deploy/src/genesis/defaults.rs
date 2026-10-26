@@ -140,7 +140,7 @@ mod tests {
             "61CtjvNd9T3THAR65GsMVHr82Bjc",
         ] {
             let asset = AssetDefinitionId::parse_address_literal(literal).unwrap();
-            let policy = crate::genesis::default_staking_policy(
+            let policy = iroha_genesis::default_staking_policy(
                 asset.clone(),
                 custody.clone(),
                 custody.clone(),

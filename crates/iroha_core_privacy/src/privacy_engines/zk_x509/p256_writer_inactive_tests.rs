@@ -18,7 +18,7 @@ fn fixed_row(multiplicities: [u16; 2]) -> P256CrossTraceWriterFixedRowV1 {
             } else {
                 P256CrossTraceEventFixedV1::active(P256CrossTraceTagV1 {
                     endpoint: P256CrossTraceEndpointV1::Writer,
-                    address: 23 + slot as u32,
+                    address: 23 + u32::try_from(slot).expect("protocol-bounded index fits u32"),
                 })
             }
         }),

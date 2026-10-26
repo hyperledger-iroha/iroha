@@ -62,14 +62,14 @@ fn zero_test_witness_preserves_canonical_and_malformed_row_effects() {
 
 fn assert_lookup_inverse_witnesses(
     trace: &ZkX509DerStarkTraceV1,
-    challenges: ZkX509DerStarkChallengesV1,
+    challenges: &ZkX509DerStarkChallengesV1,
 ) {
     for (index, (base, aux)) in trace.base.rows.iter().zip(&trace.aux_rows).enumerate() {
         let parser = index < trace.base.private_shape.parser_rows;
         let phase = pack_bits_v1(&base[BASE_PHASE_BITS..BASE_PHASE_BITS + 3]).0;
         let consuming = parser
             && matches!(
-                phase as usize,
+                usize::try_from(phase).expect("fixture value fits usize"),
                 PHASE_IDENTIFIER_FIRST
                     | PHASE_IDENTIFIER_HIGH
                     | PHASE_LENGTH_FIRST
@@ -89,7 +89,7 @@ fn assert_lookup_inverse_witnesses(
                         base[BASE_BYTE_VALUE],
                     ),
                     lane,
-                    &challenges,
+                    challenges,
                 );
                 let inverse = denominator.inv().unwrap_or(F::ZERO);
                 let zero = F(u64::from(denominator == F::ZERO));
@@ -111,7 +111,7 @@ fn assert_lookup_inverse_witnesses(
                         AUX_BYTE_RIGHT_QUERY_ZERO + lane,
                     ),
                 ] {
-                    let denominator = byte_denominator_v1(tuple, lane, &challenges);
+                    let denominator = byte_denominator_v1(tuple, lane, challenges);
                     let inverse = denominator.inv().unwrap_or(F::ZERO);
                     let zero = F(u64::from(denominator == F::ZERO));
                     assert_eq!(aux[inverse_column], inverse);
@@ -257,8 +257,7 @@ fn transcript_challenge_schedule_is_lane_major_base_bound_and_pinned() {
 }
 #[test]
 fn fixed_schedule_is_exact_over_parser_comparator_and_padding_boundaries() {
-    let schedule =
-        compile_zk_x509_der_stark_fixed_schedule_v1(ZkX509DerStarkShapeV1).expect("fixed schedule");
+    let schedule = compile_zk_x509_der_stark_fixed_schedule_v1(ZkX509DerStarkShapeV1);
     assert_eq!(
         schedule.active_rows(),
         ZK_X509_DER_STARK_FIXED_NON_PADDING_ROWS_V1
@@ -316,10 +315,8 @@ fn private_geometry_cannot_change_public_transcript_or_fixed_schedule() {
         public.transcript_bytes(),
         b"zk-x509-der-stark-fixed-registration-v1"
     );
-    let first_schedule =
-        compile_zk_x509_der_stark_fixed_schedule_v1(public).expect("first schedule");
-    let second_schedule =
-        compile_zk_x509_der_stark_fixed_schedule_v1(public).expect("second schedule");
+    let first_schedule = compile_zk_x509_der_stark_fixed_schedule_v1(public);
+    let second_schedule = compile_zk_x509_der_stark_fixed_schedule_v1(public);
     for index in [
         0,
         ZK_X509_DER_STARK_MAX_PARSER_ROWS_V1 - 1,
@@ -467,8 +464,7 @@ fn numeric_air_rejects_nonminimal_identifier_length_and_primitive_families() {
     let rejects_pair = |index: usize,
                         current: [F; ZK_X509_DER_STARK_BASE_WIDTH_V1],
                         next: [F; ZK_X509_DER_STARK_BASE_WIDTH_V1]| {
-        let schedule =
-            compile_zk_x509_der_stark_fixed_schedule_v1(ZkX509DerStarkShapeV1).expect("schedule");
+        let schedule = compile_zk_x509_der_stark_fixed_schedule_v1(ZkX509DerStarkShapeV1);
         let fixed = schedule.fixed_row(index).expect("fixed");
         let next_fixed = schedule.fixed_row(index + 1).expect("next fixed");
         evaluate_zk_x509_der_stark_base_residues_v1(
@@ -569,8 +565,7 @@ fn every_canonical_streaming_and_set_row_satisfies_numeric_base_air() {
         0x30, 0x0a, 0x31, 0x04, 0x05, 0x00, 0x05, 0x00, 0x02, 0x02, 0x00, 0x80,
     ];
     let base = build_zk_x509_der_stark_base_v1(&[&nested]).expect("numeric DER base");
-    let schedule =
-        compile_zk_x509_der_stark_fixed_schedule_v1(ZkX509DerStarkShapeV1).expect("fixed schedule");
+    let schedule = compile_zk_x509_der_stark_fixed_schedule_v1(ZkX509DerStarkShapeV1);
     for index in 0..base.rows.len() {
         let native_index =
             zk_x509_der_stark_compact_row_native_index_v1(&base.private_shape, index)
@@ -640,8 +635,7 @@ fn every_canonical_streaming_and_set_row_satisfies_numeric_base_air() {
 fn adversarial_activity_restart_inactive_payload_and_document_count_fail() {
     let integer = [0x02, 0x01, 0x01];
     let base = build_zk_x509_der_stark_base_v1(&[&integer]).expect("numeric DER base");
-    let schedule =
-        compile_zk_x509_der_stark_fixed_schedule_v1(ZkX509DerStarkShapeV1).expect("schedule");
+    let schedule = compile_zk_x509_der_stark_fixed_schedule_v1(ZkX509DerStarkShapeV1);
     let mut dropped = base.clone();
     dropped.rows[1][BASE_ROW_ACTIVE] = F::ZERO;
     assert_eq!(
@@ -715,8 +709,7 @@ fn every_active_base_cell_is_algebraically_observed() {
         0x30, 0x0a, 0x31, 0x04, 0x05, 0x00, 0x05, 0x00, 0x02, 0x02, 0x00, 0x80,
     ];
     let base = build_zk_x509_der_stark_base_v1(&[&nested]).expect("numeric DER base");
-    let schedule =
-        compile_zk_x509_der_stark_fixed_schedule_v1(ZkX509DerStarkShapeV1).expect("fixed schedule");
+    let schedule = compile_zk_x509_der_stark_fixed_schedule_v1(ZkX509DerStarkShapeV1);
     for row_index in 0..base.rows.len() {
         for column in 0..ZK_X509_DER_STARK_BASE_WIDTH_V1 {
             // The lookup multiplicity is committed in the base trace and
@@ -746,16 +739,18 @@ fn every_active_base_cell_is_algebraically_observed() {
             let current_fixed = schedule.fixed_row(native_index).expect("current fixed");
             let next_fixed = schedule.fixed_row(native_index + 1).expect("next fixed");
             let current_residues =
-                match try_low_degree_aux(&changed_base.rows[row_index], &current_fixed) {
-                    Ok(current_aux) => evaluate_zk_x509_der_stark_base_residues_v1(
-                        &changed_base.rows[row_index],
-                        &next,
-                        &current_aux,
-                        &current_fixed,
-                        &next_fixed,
-                    ),
-                    Err(_) => vec![F::ONE],
-                };
+                try_low_degree_aux(&changed_base.rows[row_index], &current_fixed).map_or_else(
+                    |_| vec![F::ONE],
+                    |current_aux| {
+                        evaluate_zk_x509_der_stark_base_residues_v1(
+                            &changed_base.rows[row_index],
+                            &next,
+                            &current_aux,
+                            &current_fixed,
+                            &next_fixed,
+                        )
+                    },
+                );
             let family_first =
                 row_index == 0 || row_index == changed_base.private_shape.parser_rows;
             let previous_residues = if family_first {
@@ -793,10 +788,9 @@ fn complete_numeric_trace_closes_stack_set_document_and_byte_buses() {
     ];
     let challenges = challenges();
     let base = build_zk_x509_der_stark_base_v1(&[&nested]).expect("base");
-    let trace = build_zk_x509_der_stark_trace_v1(base, challenges).expect("complete DER trace");
-    let schedule =
-        compile_zk_x509_der_stark_fixed_schedule_v1(ZkX509DerStarkShapeV1).expect("fixed schedule");
-    let public = derive_zk_x509_der_stark_public_terminals_v1(&ZkX509DerStarkShapeV1, &challenges)
+    let trace = build_zk_x509_der_stark_trace_v1(base, &challenges).expect("complete DER trace");
+    let schedule = compile_zk_x509_der_stark_fixed_schedule_v1(ZkX509DerStarkShapeV1);
+    let public = derive_zk_x509_der_stark_public_terminals_v1(ZkX509DerStarkShapeV1, &challenges)
         .expect("public terminal");
     let private_document_product = derive_zk_x509_der_stark_private_document_product_v1(
         &trace.base.private_shape,
@@ -848,7 +842,7 @@ fn complete_numeric_trace_closes_stack_set_document_and_byte_buses() {
             &next_aux,
             &fixed,
             &next_fixed,
-            challenges,
+            &challenges,
             public,
             terminal_claims,
         )
@@ -860,7 +854,7 @@ fn complete_numeric_trace_closes_stack_set_document_and_byte_buses() {
             &next_aux,
             &fixed,
             &next_fixed,
-            challenges,
+            &challenges,
             public,
             terminal_claims,
             &mut reusable_residues,
@@ -889,9 +883,8 @@ fn native_column_streaming_is_an_exact_transpose_at_all_boundaries() {
     let ordered_set = [0x31, 0x04, 0x05, 0x00, 0x05, 0x00];
     let challenges = challenges();
     let base = build_zk_x509_der_stark_base_v1(&[&ordered_set]).expect("base");
-    let trace = build_zk_x509_der_stark_trace_v1(base, challenges).expect("complete DER trace");
-    let schedule =
-        compile_zk_x509_der_stark_fixed_schedule_v1(ZkX509DerStarkShapeV1).expect("fixed schedule");
+    let trace = build_zk_x509_der_stark_trace_v1(base, &challenges).expect("complete DER trace");
+    let schedule = compile_zk_x509_der_stark_fixed_schedule_v1(ZkX509DerStarkShapeV1);
     let comparator_end =
         ZK_X509_DER_STARK_MAX_PARSER_ROWS_V1 + trace.base.private_shape.comparator_rows;
     let mut sample_rows = vec![
@@ -931,13 +924,13 @@ fn native_column_streaming_is_an_exact_transpose_at_all_boundaries() {
         }
     }
     for column_index in 0..ZK_X509_DER_STARK_FIXED_WIDTH_V1 {
-        let column = build_zk_x509_der_stark_native_fixed_column_v1(&schedule, column_index)
+        let column = build_zk_x509_der_stark_native_fixed_column_v1(schedule, column_index)
             .expect("fixed column");
         assert_eq!(column.len(), ZK_X509_DER_STARK_TRACE_SIZE_V1);
         for row in sample_rows.iter().copied() {
             assert_eq!(
                 column[row],
-                zk_x509_der_stark_native_fixed_cell_v1(&schedule, row, column_index)
+                zk_x509_der_stark_native_fixed_cell_v1(schedule, row, column_index)
                     .expect("fixed cell")
             );
         }
@@ -951,7 +944,7 @@ fn native_column_streaming_is_an_exact_transpose_at_all_boundaries() {
             .is_err()
     );
     assert!(
-        build_zk_x509_der_stark_native_fixed_column_v1(&schedule, ZK_X509_DER_STARK_FIXED_WIDTH_V1)
+        build_zk_x509_der_stark_native_fixed_column_v1(schedule, ZK_X509_DER_STARK_FIXED_WIDTH_V1)
             .is_err()
     );
 }
@@ -962,10 +955,9 @@ fn every_auxiliary_cell_and_post_commitment_base_cell_is_observed() {
     ];
     let challenges = challenges();
     let base = build_zk_x509_der_stark_base_v1(&[&nested]).expect("base");
-    let trace = build_zk_x509_der_stark_trace_v1(base, challenges).expect("complete DER trace");
-    let schedule =
-        compile_zk_x509_der_stark_fixed_schedule_v1(ZkX509DerStarkShapeV1).expect("fixed schedule");
-    let public = derive_zk_x509_der_stark_public_terminals_v1(&ZkX509DerStarkShapeV1, &challenges)
+    let trace = build_zk_x509_der_stark_trace_v1(base, &challenges).expect("complete DER trace");
+    let schedule = compile_zk_x509_der_stark_fixed_schedule_v1(ZkX509DerStarkShapeV1);
+    let public = derive_zk_x509_der_stark_public_terminals_v1(ZkX509DerStarkShapeV1, &challenges)
         .expect("public");
     let terminal_claims = zk_x509_der_stark_terminal_claims_v1(&trace).expect("terminal claims");
     let fixed = schedule.fixed_row(0).expect("fixed");
@@ -982,7 +974,7 @@ fn every_auxiliary_cell_and_post_commitment_base_cell_is_observed() {
             &next_aux,
             &fixed,
             &next_fixed,
-            challenges,
+            &challenges,
             public,
             terminal_claims,
         )
@@ -1010,7 +1002,7 @@ fn every_auxiliary_cell_and_post_commitment_base_cell_is_observed() {
         &trace.aux_rows[next_index],
         &fixed,
         &next_fixed,
-        challenges,
+        &challenges,
         public,
         terminal_claims,
     )
@@ -1038,7 +1030,7 @@ fn every_auxiliary_cell_and_post_commitment_base_cell_is_observed() {
         &trace.aux_rows[next_index],
         &fixed,
         &next_fixed,
-        challenges,
+        &challenges,
         public,
         terminal_claims,
     )
@@ -1054,13 +1046,13 @@ fn adversarial_bus_challenge_shape_and_terminal_mutations_fail_closed() {
     let canonical_base = build_zk_x509_der_stark_base_v1(&[&nested]).expect("canonical base");
     let mut invalid_challenges = canonical_challenges;
     invalid_challenges.tuple[0][0] = F::ZERO;
-    assert!(build_zk_x509_der_stark_trace_v1(canonical_base.clone(), invalid_challenges).is_err());
+    assert!(build_zk_x509_der_stark_trace_v1(canonical_base.clone(), &invalid_challenges).is_err());
     invalid_challenges = canonical_challenges;
     invalid_challenges.tuple[1] = invalid_challenges.tuple[0];
-    assert!(build_zk_x509_der_stark_trace_v1(canonical_base.clone(), invalid_challenges).is_err());
+    assert!(build_zk_x509_der_stark_trace_v1(canonical_base.clone(), &invalid_challenges).is_err());
     invalid_challenges = canonical_challenges;
     invalid_challenges.byte_lookup[2] = invalid_challenges.byte_lookup[1];
-    assert!(build_zk_x509_der_stark_trace_v1(canonical_base.clone(), invalid_challenges).is_err());
+    assert!(build_zk_x509_der_stark_trace_v1(canonical_base.clone(), &invalid_challenges).is_err());
     let queried_byte_row = canonical_base
         .rows
         .iter()
@@ -1079,9 +1071,9 @@ fn adversarial_bus_challenge_shape_and_terminal_mutations_fail_closed() {
     assert_ne!(invalid_challenges.byte_lookup[0], F::ZERO);
     assert!(invalid_challenges.validate().is_ok());
     let collision_trace =
-        build_zk_x509_der_stark_trace_v1(canonical_base.clone(), invalid_challenges)
+        build_zk_x509_der_stark_trace_v1(canonical_base.clone(), &invalid_challenges)
             .expect("zero denominator is a complete lookup case");
-    assert_lookup_inverse_witnesses(&collision_trace, invalid_challenges);
+    assert_lookup_inverse_witnesses(&collision_trace, &invalid_challenges);
     let collision_terminals =
         zk_x509_der_stark_terminals_v1(&collision_trace).expect("collision terminals");
     assert_ne!(
@@ -1093,8 +1085,7 @@ fn adversarial_bus_challenge_shape_and_terminal_mutations_fail_closed() {
         collision_terminals.byte_table_zero_count,
         collision_terminals.byte_query_zero_count
     );
-    let collision_schedule = compile_zk_x509_der_stark_fixed_schedule_v1(ZkX509DerStarkShapeV1)
-        .expect("collision schedule");
+    let collision_schedule = compile_zk_x509_der_stark_fixed_schedule_v1(ZkX509DerStarkShapeV1);
     let collision_index = ZK_X509_DER_STARK_TRACE_SIZE_V1 - 1;
     let collision_current =
         zk_x509_der_stark_aggregate_base_row_v1(&collision_trace.base, collision_index)
@@ -1119,7 +1110,7 @@ fn adversarial_bus_challenge_shape_and_terminal_mutations_fail_closed() {
         &collision_schedule
             .fixed_row(0)
             .expect("collision next fixed"),
-        invalid_challenges,
+        &invalid_challenges,
         ZkX509DerStarkPublicTerminalsV1,
         zk_x509_der_stark_terminal_claims_v1(&collision_trace).expect("collision terminal claims"),
     )
@@ -1141,7 +1132,7 @@ fn adversarial_bus_challenge_shape_and_terminal_mutations_fail_closed() {
     changed.rows[stack_pop][BASE_PAYLOAD + 5] =
         changed.rows[stack_pop][BASE_PAYLOAD + 5].add(F::ONE);
     assert!(
-        build_zk_x509_der_stark_trace_v1(changed, canonical_challenges).is_err(),
+        build_zk_x509_der_stark_trace_v1(changed, &canonical_challenges).is_err(),
         "wrong restored parent frame must break the stack permutation"
     );
     changed = canonical_base.clone();
@@ -1153,20 +1144,19 @@ fn adversarial_bus_challenge_shape_and_terminal_mutations_fail_closed() {
     changed.rows[queried_byte][BASE_BYTE_LOOKUP_MULTIPLICITY] =
         changed.rows[queried_byte][BASE_BYTE_LOOKUP_MULTIPLICITY].add(F::ONE);
     assert!(
-        build_zk_x509_der_stark_trace_v1(changed, canonical_challenges).is_err(),
+        build_zk_x509_der_stark_trace_v1(changed, &canonical_challenges).is_err(),
         "wrong table multiplicity must break the byte lookup"
     );
     changed = canonical_base.clone();
     changed.private_shape.document_lengths[0] += 1;
     assert!(
-        build_zk_x509_der_stark_trace_v1(changed, canonical_challenges).is_err(),
+        build_zk_x509_der_stark_trace_v1(changed, &canonical_challenges).is_err(),
         "private document lengths must bind the document product"
     );
-    let trace = build_zk_x509_der_stark_trace_v1(canonical_base.clone(), canonical_challenges)
+    let trace = build_zk_x509_der_stark_trace_v1(canonical_base.clone(), &canonical_challenges)
         .expect("canonical trace");
-    assert_lookup_inverse_witnesses(&trace, canonical_challenges);
-    let schedule =
-        compile_zk_x509_der_stark_fixed_schedule_v1(ZkX509DerStarkShapeV1).expect("schedule");
+    assert_lookup_inverse_witnesses(&trace, &canonical_challenges);
+    let schedule = compile_zk_x509_der_stark_fixed_schedule_v1(ZkX509DerStarkShapeV1);
     let final_index = ZK_X509_DER_STARK_TRACE_SIZE_V1 - 1;
     let current = zk_x509_der_stark_aggregate_base_row_v1(&trace.base, final_index).expect("base");
     let next = zk_x509_der_stark_aggregate_base_row_v1(&trace.base, 0).expect("next");
@@ -1175,7 +1165,7 @@ fn adversarial_bus_challenge_shape_and_terminal_mutations_fail_closed() {
     let fixed = schedule.fixed_row(final_index).expect("fixed");
     let next_fixed = schedule.fixed_row(0).expect("next fixed");
     let public =
-        derive_zk_x509_der_stark_public_terminals_v1(&ZkX509DerStarkShapeV1, &canonical_challenges)
+        derive_zk_x509_der_stark_public_terminals_v1(ZkX509DerStarkShapeV1, &canonical_challenges)
             .expect("public");
     let mut terminal_claims =
         zk_x509_der_stark_terminal_claims_v1(&trace).expect("terminal claims");
@@ -1187,7 +1177,7 @@ fn adversarial_bus_challenge_shape_and_terminal_mutations_fail_closed() {
         &next_aux,
         &fixed,
         &next_fixed,
-        canonical_challenges,
+        &canonical_challenges,
         public,
         terminal_claims,
     )
@@ -1224,7 +1214,7 @@ fn complete_evaluator_has_witness_independent_residue_shape() {
             &next_aux,
             &fixed,
             &next_fixed,
-            challenges,
+            &challenges,
             public,
             terminal_claims,
         )
@@ -1305,7 +1295,7 @@ fn independently_interpolated_complete_air_degree_matches_registration() {
                     &affine_row(seed, 4, point),
                     &affine_row(seed, 5, point),
                     &affine_row(seed, 6, point),
-                    challenges,
+                    &challenges,
                     public,
                     terminal_claims,
                 )
@@ -1346,7 +1336,7 @@ fn rejected_der_binding_and_trace_drop_clear_owned_field_tables() {
     let mut invalid_challenges = challenges();
     invalid_challenges.tuple[0][0] = F::ZERO;
     let (result, erasures) =
-        observe_v1(|| build_zk_x509_der_stark_trace_v1(base, invalid_challenges));
+        observe_v1(|| build_zk_x509_der_stark_trace_v1(base, &invalid_challenges));
     assert_eq!(result, Err(ZkX509DerStarkErrorV1::Challenge));
     assert!(erasures.iter().any(|erasure| {
         erasure.cells == 3 * ZK_X509_DER_STARK_BASE_WIDTH_V1

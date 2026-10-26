@@ -6,14 +6,18 @@ import android.util.AttributeSet
 import android.view.View
 
 /**
- * A square [View] that plays a Petal stream: frame `0, 1, 2, …` of a
- * [PetalStreamEncoder] at [framesPerSecond], wrapping after frame 65535.
+ * A portrait [View] that plays a Petal stream: frame `0, 1, 2, …` of a
+ * [PetalStreamEncoder] at [framesPerSecond], wrapping after frame 65535. Each
+ * frame is a card of 1024 × 1668 design units: the square code with a band of
+ * katakana tiles above and below it, as large as the view's content area allows.
  *
  * It is framework-agnostic: use it from XML layouts, from code, or from
  * Jetpack Compose through `AndroidView`. Call [setStream], then [start]; the
  * view keeps the screen on while it plays and pauses its timer while it is
- * detached from a window. Frames are encoded on the UI thread, which costs well
- * under a millisecond even for a 10 KB payload. Use from the UI thread only.
+ * detached from a window. Frames are encoded on the UI thread (about 0.5 ms per
+ * frame for a 12 KB payload on a desktop JVM, the turn and kana lanes' repair
+ * atoms included) and drawn by a [PetalCanvasRenderer], one path per colour,
+ * every lit petal turned and notched. Use from the UI thread only.
  */
 class PetalStreamView @JvmOverloads constructor(
     context: Context,
@@ -32,7 +36,9 @@ class PetalStreamView @JvmOverloads constructor(
             encoder?.let { showFrame(it, frame) }
         }
 
-    /** Display rate in frames per second (`0 < fps <= 60`, default 8). */
+    /**
+     * Display rate in frames per second (`0 < fps <= 60`, default [DEFAULT_FRAMES_PER_SECOND]).
+     */
     var framesPerSecond: Double = DEFAULT_FRAMES_PER_SECOND
         set(value) {
             require(value > 0.0 && value <= 60.0) { "frames per second must be in (0, 60]" }
@@ -95,23 +101,30 @@ class PetalStreamView @JvmOverloads constructor(
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val width = getDefaultSize(suggestedMinimumWidth, widthMeasureSpec)
         val height = getDefaultSize(suggestedMinimumHeight, heightMeasureSpec)
-        val side = minOf(width, height)
-        setMeasuredDimension(side, side)
+        // the largest card that fits, padding included
+        val horizontal = paddingLeft + paddingRight
+        val vertical = paddingTop + paddingBottom
+        val cardWidth = minOf((width - horizontal).toFloat(), (height - vertical) / CARD_ASPECT).coerceAtLeast(0f)
+        setMeasuredDimension(
+            Math.round(cardWidth) + horizontal,
+            Math.round(PetalCanvasRenderer.cardHeight(cardWidth)) + vertical,
+        )
     }
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
         val list = drawList ?: return
-        val availableWidth = width - paddingLeft - paddingRight
-        val availableHeight = height - paddingTop - paddingBottom
-        val side = minOf(availableWidth, availableHeight)
-        if (side <= 0) return
+        val availableWidth = (width - paddingLeft - paddingRight).toFloat()
+        val availableHeight = (height - paddingTop - paddingBottom).toFloat()
+        val cardWidth = minOf(availableWidth, availableHeight / CARD_ASPECT)
+        if (cardWidth <= 0f) return
+        val cardHeight = PetalCanvasRenderer.cardHeight(cardWidth)
         renderer.draw(
             canvas,
             list,
-            paddingLeft + (availableWidth - side) / 2f,
-            paddingTop + (availableHeight - side) / 2f,
-            side.toFloat(),
+            paddingLeft + (availableWidth - cardWidth) / 2f,
+            paddingTop + (availableHeight - cardHeight) / 2f,
+            cardWidth,
         )
     }
 
@@ -128,7 +141,14 @@ class PetalStreamView @JvmOverloads constructor(
 
     private fun frameIntervalMillis(): Long = Math.max(1L, Math.round(1000.0 / framesPerSecond))
 
-    private companion object {
-        const val DEFAULT_FRAMES_PER_SECOND = 8.0
+    companion object {
+        /**
+         * Default display rate: 12 frames a second, of which a 30 fps camera reads practically
+         * every frame (`specs/petal_stream.md` §5.4).
+         */
+        const val DEFAULT_FRAMES_PER_SECOND = 12.0
+
+        /** Height over width of a card: 1668 / 1024. */
+        const val CARD_ASPECT = (PetalDrawList.CARD_HEIGHT / PetalDrawList.CANVAS).toFloat()
     }
 }

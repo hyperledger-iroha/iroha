@@ -104,8 +104,12 @@ mod tests {
                     ]
                 );
                 if template.digit == 1 {
-                    assert_eq!(template.offset, counts[template.group as usize] as u64);
-                    counts[template.group as usize] += 1;
+                    assert_eq!(
+                        template.offset,
+                        counts[usize::try_from(template.group).expect("fixture value fits usize")]
+                            as u64
+                    );
+                    counts[usize::try_from(template.group).expect("fixture value fits usize")] += 1;
                 } else if template.terminator == 1 {
                     z.push(position);
                 } else {

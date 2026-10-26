@@ -6,6 +6,10 @@ use crate::kagemusha_wallet_advance_v1::KagemushaWalletDestructiveConfirmationV1
 /// Display DATA describing the exact retained state whose custody would be destroyed.
 /// Gross balance and core burns are not a fully folded spendable-value verdict.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent retained custody obligations must all be disclosed, not collapsed into an exclusive phase"
+)]
 pub struct CustodyDeletionReviewV1 {
     /// A committed operation still lacks its released completion.
     pub pending: bool,
@@ -165,8 +169,13 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> AdvanceHandle<F, P> {
         &mut self,
         review: ReviewedCustodyDeletionV1,
     ) -> Result<CustodyDeletionProgressV1, ProviderError> {
+        let ReviewedCustodyDeletionV1 {
+            owner,
+            confirmation,
+            projection: _,
+        } = review;
         self.require_custody_operations()?;
-        if !Arc::ptr_eq(&self.deletion_owner, &review.owner) {
+        if !Arc::ptr_eq(&self.deletion_owner, &owner) {
             return Err(ProviderError::Invalid {
                 field: "custody.review owner",
             });
@@ -180,7 +189,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> AdvanceHandle<F, P> {
             .map_err(|_| ProviderError::Invalid {
                 field: "provider handle poisoned",
             })?
-            .delete_custody(&self.slot, &review.confirmation)?;
+            .delete_custody(&self.slot, &confirmation)?;
         let result = deleted(&status)?;
         self.deletion = DeletionState::Deleted;
         Ok(result)

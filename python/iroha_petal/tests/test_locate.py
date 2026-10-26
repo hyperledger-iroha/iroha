@@ -13,7 +13,7 @@ from __future__ import annotations
 import random
 import unittest
 
-from petal_test_support import captures_fixture, luma_of, rendered
+from petal_test_support import captures_fixture, luma_of, rendered_square
 
 from iroha_petal.image import Luma
 from iroha_petal.locate import (
@@ -143,8 +143,8 @@ def as_tuples(components) -> list:
 
 
 def clean_frame() -> Luma:
-    # payload [9; 200], kind 1, frame 1, 512 px with 2x2 supersampling
-    return rendered(bytes([9] * 200), 1, 1, 512, 2).to_luma()
+    # payload [9; 200], kind 1, frame 1, the square at 512 px with 2x2 supersampling
+    return rendered_square(bytes([9] * 200), 1, 1, 512, 2).to_luma()
 
 
 class LocateTest(unittest.TestCase):
@@ -302,8 +302,8 @@ class LocateTest(unittest.TestCase):
         self.assertLess(abs(found.x - 36.0), 1.5, found)
         self.assertLess(abs(found.y - 36.0), 1.5, found)
         self.assertEqual(found.size, 60.0)
-        # nothing bright near the centre of the canvas corner gap
-        self.assertIsNone(follow(image, Finder(140.0, 36.0, 30.0)))
+        # nothing bright in the canvas corner gap between a blossom and the rings
+        self.assertIsNone(follow(image, Finder(100.0, 15.0, 30.0)))
         # a blossom more than 0.75 diameters away is refused even when it is found
         self.assertIsNone(follow(image, Finder(36.0 + 40.0, 36.0, 40.0)))
         # absurd expectations (a broken pose) are refused and never overflow

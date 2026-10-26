@@ -231,7 +231,6 @@ impl MainCaPrivatePlanV1 {
     }
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl MainCaPrivatePlanV1 {
     // Direct DEEP replay borrows the retained original coefficients and owns
     // only a deferred extension column and bounded public opening metadata.
@@ -389,7 +388,6 @@ impl MainCaPrivatePlanV1 {
 #[path = "main_ca_links_tests.rs"]
 mod tests;
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl MainCaPrivatePlanV1 {
     const QUOTIENT_LOG_V1: u8 = 20;
     const QUOTIENT_ROWS_V1: usize = 1 << Self::QUOTIENT_LOG_V1;
@@ -698,11 +696,9 @@ impl MainCaPrivatePlanV1 {
 }
 
 /// One public stripe table supplies all108 native endpoint inverses by rotation.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 struct CaEndpointDenominatorsV1 {
     values: Vec<F>,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl CaEndpointDenominatorsV1 {
     fn new_v1(
         stripe: main_quotient_stripes::MainQuotientStripeV1,
@@ -752,18 +748,15 @@ impl CaEndpointDenominatorsV1 {
 
 /// Selected original SHA polynomials, retained through the shared DEEP phase.
 /// The constructor is the only path from the original committed mask replay.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(super) struct MainCaOriginalAuxiliaryV1 {
     coordinates: [ColumnV1; CA_MAIN_EXTRA_OPENINGS_V1],
     columns: PrivateTableV1<Vec<F>>,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl core::fmt::Debug for MainCaOriginalAuxiliaryV1 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str("MainCaOriginalAuxiliaryV1 { <original coefficients redacted> }")
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl MainCaOriginalAuxiliaryV1 {
     pub(super) fn payload_bound_v1() -> usize {
         CA_MAIN_EXTRA_OPENINGS_V1

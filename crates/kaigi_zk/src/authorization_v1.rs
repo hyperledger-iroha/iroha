@@ -1,8 +1,8 @@
 //! Final V1 role-aware Kaigi authorization relation.
 //!
-//! One instance column binds all 31 ordered public scalars. Network and roster
+//! One instance column binds all 25 ordered public scalars. Network and roster
 //! bytes are injected as four little-endian u64 limbs; each identity uses all
-//! six canonical Goldilocks limbs. Core must authenticate these identities,
+//! four complete little-endian u64 words. Core must authenticate these identities,
 //! the permanent call namespace, the pre-state, and participation sequence.
 //! This relation makes no hidden Merkle-path or ledger-membership claim.
 //!
@@ -30,25 +30,30 @@ use crate::relation_v1::{
 };
 
 /// Fixed log2 domain size for the complete authorization relation.
-pub const KAIGI_AUTHORIZATION_CIRCUIT_K_V1: u32 = 13;
+pub const KAIGI_AUTHORIZATION_CIRCUIT_K_V1: u32 = 12;
 /// Exactly one instance column contains this many scalars.
-pub const KAIGI_AUTHORIZATION_INSTANCE_ROWS_V1: usize = 31;
+pub const KAIGI_AUTHORIZATION_INSTANCE_ROWS_V1: usize = 25;
 /// Canonical circuit identity for the final authorization relation.
 pub const KAIGI_AUTHORIZATION_CIRCUIT_ID_V1: &str = "pipa-r/pasta/kaigi-authorization-v1";
 /// Exact native registry label for the compiled authorization relation.
 pub const KAIGI_AUTHORIZATION_BACKEND_V1: &str = "pipa-r/pasta/kaigi-authorization-v1";
 /// Canonical public-input schema for the final authorization relation.
 pub const KAIGI_AUTHORIZATION_PUBLIC_INPUTS_SCHEMA_V1: &[u8] = b"kaigi-authorization-v1";
-/// Goldilocks modulus; every identity limb is strictly below this value.
-pub const KAIGI_IDENTITY_FIELD_MODULUS_V1: u64 = crate::relation_v1::GOLDILOCKS_MODULUS_V1;
+/// Number of full u64 words in each native BLAKE3-256 identity.
+pub const KAIGI_IDENTITY_WORDS_V1: usize = 4;
 
-const CONTEXT_WORDS: usize = 28;
-const SEQUENCE_ROW: usize = 22;
-const ACTION_ROW: usize = 23;
-const ROOT_ROW: usize = 24;
-const COMMITMENT_ROW: usize = 28;
-const NULLIFIER_ROW: usize = 29;
-const AUTHORIZATION_ROW: usize = 30;
+const CALL_ROW: usize = 4;
+const HOST_ROW: usize = CALL_ROW + KAIGI_IDENTITY_WORDS_V1;
+const SUBJECT_ROW: usize = HOST_ROW + KAIGI_IDENTITY_WORDS_V1;
+const SEQUENCE_ROW: usize = SUBJECT_ROW + KAIGI_IDENTITY_WORDS_V1;
+/// Network, complete call/host/subject identities and participation sequence.
+pub(super) const IDENTITY_WORDS: usize = SEQUENCE_ROW + 1;
+const ACTION_ROW: usize = IDENTITY_WORDS;
+const ROOT_ROW: usize = ACTION_ROW + 1;
+const CONTEXT_WORDS: usize = ROOT_ROW + 4;
+const COMMITMENT_ROW: usize = CONTEXT_WORDS;
+const NULLIFIER_ROW: usize = COMMITMENT_ROW + 1;
+const AUTHORIZATION_ROW: usize = NULLIFIER_ROW + 1;
 const DOMAIN_COMMITMENT: u64 = 0x4b41_4947_4956_3143;
 const DOMAIN_NULLIFIER: u64 = 0x4b41_4947_4956_314e;
 const DOMAIN_AUTHORIZATION: u64 = 0x4b41_4947_4956_3141;
@@ -85,13 +90,6 @@ impl TryFrom<u64> for KaigiAuthorizationActionV1 {
 pub enum KaigiAuthorizationErrorV1 {
     /// The action tag is outside the closed four-value set.
     UnknownAction(u64),
-    /// An identity contains a noncanonical Goldilocks limb.
-    NoncanonicalIdentityLimb {
-        /// Identity role containing the invalid limb.
-        role: &'static str,
-        /// Zero-based limb index.
-        limb: usize,
-    },
     /// Host actions require subject equal to host and sequence zero.
     InvalidHostRole,
     /// Participant actions require a distinct subject and positive sequence.
@@ -104,9 +102,6 @@ impl fmt::Display for KaigiAuthorizationErrorV1 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::UnknownAction(value) => write!(f, "unknown Kaigi authorization action {value}"),
-            Self::NoncanonicalIdentityLimb { role, limb } => {
-                write!(f, "noncanonical Goldilocks {role} limb {limb}")
-            }
             Self::InvalidHostRole => {
                 f.write_str("host action requires host subject and sequence zero")
             }
@@ -124,12 +119,12 @@ impl std::error::Error for KaigiAuthorizationErrorV1 {}
 pub struct KaigiAuthorizationContextV1 {
     /// Exact genesis-derived network bytes, injected without field reduction.
     pub network_id: [u8; 32],
-    /// Complete six-lane canonical call identity digest.
-    pub call_id: [u64; 6],
-    /// Complete six-lane canonical host account identity digest.
-    pub host_id: [u64; 6],
-    /// Complete six-lane canonical subject account identity digest.
-    pub subject_id: [u64; 6],
+    /// Complete native 32-byte call identity digest.
+    pub call_id: [u64; KAIGI_IDENTITY_WORDS_V1],
+    /// Complete native 32-byte host account identity digest.
+    pub host_id: [u64; KAIGI_IDENTITY_WORDS_V1],
+    /// Complete native 32-byte subject account identity digest.
+    pub subject_id: [u64; KAIGI_IDENTITY_WORDS_V1],
     /// Ledger-owned participation sequence; zero is reserved for the host.
     pub participation_sequence: u64,
     /// Exact authorization action.
@@ -139,19 +134,8 @@ pub struct KaigiAuthorizationContextV1 {
 }
 
 impl KaigiAuthorizationContextV1 {
-    /// Check limb canonicality and the role/sequence contract.
+    /// Check the role and sequence contract for complete native identities.
     pub fn validate(&self) -> Result<(), KaigiAuthorizationErrorV1> {
-        for (role, limbs) in [
-            ("call", &self.call_id),
-            ("host", &self.host_id),
-            ("subject", &self.subject_id),
-        ] {
-            for (limb, value) in limbs.iter().enumerate() {
-                if *value >= KAIGI_IDENTITY_FIELD_MODULUS_V1 {
-                    return Err(KaigiAuthorizationErrorV1::NoncanonicalIdentityLimb { role, limb });
-                }
-            }
-        }
         match self.action {
             KaigiAuthorizationActionV1::HostCreate | KaigiAuthorizationActionV1::HostEnd => {
                 if self.subject_id != self.host_id || self.participation_sequence != 0 {
@@ -172,7 +156,11 @@ impl KaigiAuthorizationContextV1 {
         for (index, chunk) in self.network_id.chunks_exact(8).enumerate() {
             words[index] = Scalar::from(u64::from_le_bytes(chunk.try_into().expect("fixed limb")));
         }
-        for (offset, limbs) in [(4, self.call_id), (10, self.host_id), (16, self.subject_id)] {
+        for (offset, limbs) in [
+            (CALL_ROW, self.call_id),
+            (HOST_ROW, self.host_id),
+            (SUBJECT_ROW, self.subject_id),
+        ] {
             for (index, limb) in limbs.into_iter().enumerate() {
                 words[offset + index] = Scalar::from(limb);
             }
@@ -268,13 +256,13 @@ impl KaigiAuthorizationOutputsV1 {
 /// Typed single-column statement with one immutable row order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct KaigiAuthorizationPublicInputsV1 {
-    /// Context whose 28 scalars occupy rows 0 through 27.
+    /// Context whose 22 scalars occupy rows 0 through 21.
     pub context: KaigiAuthorizationContextV1,
-    /// C, N and A occupy rows 28, 29 and 30 respectively.
+    /// C, N and A occupy rows 22, 23 and 24 respectively.
     pub outputs: KaigiAuthorizationOutputsV1,
 }
 impl KaigiAuthorizationPublicInputsV1 {
-    /// Encode network[4], call[6], host[6], subject[6], sequence, action,
+    /// Encode network[4], call[4], host[4], subject[4], sequence, action,
     /// pre-root[4], C, N, A into the sole instance column.
     #[must_use]
     pub fn instance(&self) -> [Scalar; KAIGI_AUTHORIZATION_INSTANCE_ROWS_V1] {
@@ -288,16 +276,19 @@ impl KaigiAuthorizationPublicInputsV1 {
 }
 
 fn compute_words(words: &[Scalar; CONTEXT_WORDS], blinding: Scalar) -> KaigiAuthorizationOutputsV1 {
-    let commitment =
-        compute_identity_commitment_v1(words[..23].try_into().expect("fixed identity"), blinding);
-    let mut payload = Zeroizing::new(ScalarSlots::<31>::default());
-    payload.0[..23].copy_from_slice(&words[..23]);
-    payload.0[23] = words[ACTION_ROW];
-    let nullifier = sponge(DOMAIN_NULLIFIER, &payload.0[..24]);
-    payload.0[24..28].copy_from_slice(&words[ROOT_ROW..CONTEXT_WORDS]);
-    payload.0[28] = commitment;
-    payload.0[29] = nullifier;
-    payload.0[30] = blinding;
+    let commitment = compute_identity_commitment_v1(
+        words[..IDENTITY_WORDS].try_into().expect("fixed identity"),
+        blinding,
+    );
+    let mut payload =
+        Zeroizing::new(ScalarSlots::<KAIGI_AUTHORIZATION_INSTANCE_ROWS_V1>::default());
+    payload.0[..IDENTITY_WORDS].copy_from_slice(&words[..IDENTITY_WORDS]);
+    payload.0[ACTION_ROW] = words[ACTION_ROW];
+    let nullifier = sponge(DOMAIN_NULLIFIER, &payload.0[..ROOT_ROW]);
+    payload.0[ROOT_ROW..CONTEXT_WORDS].copy_from_slice(&words[ROOT_ROW..CONTEXT_WORDS]);
+    payload.0[COMMITMENT_ROW] = commitment;
+    payload.0[NULLIFIER_ROW] = nullifier;
+    payload.0[AUTHORIZATION_ROW] = blinding;
     let authorization = sponge(DOMAIN_AUTHORIZATION, &payload.0);
     KaigiAuthorizationOutputsV1 {
         commitment,
@@ -306,10 +297,13 @@ fn compute_words(words: &[Scalar; CONTEXT_WORDS], blinding: Scalar) -> KaigiAuth
     }
 }
 
-pub(super) fn compute_identity_commitment_v1(identity: &[Scalar; 23], blinding: Scalar) -> Scalar {
-    let mut payload = Zeroizing::new(ScalarSlots::<24>::default());
-    payload.0[..23].copy_from_slice(identity);
-    payload.0[23] = blinding;
+pub(super) fn compute_identity_commitment_v1(
+    identity: &[Scalar; IDENTITY_WORDS],
+    blinding: Scalar,
+) -> Scalar {
+    let mut payload = Zeroizing::new(ScalarSlots::<{ IDENTITY_WORDS + 1 }>::default());
+    payload.0[..IDENTITY_WORDS].copy_from_slice(identity);
+    payload.0[ACTION_ROW] = blinding;
     sponge(DOMAIN_COMMITMENT, &payload.0)
 }
 
@@ -317,7 +311,7 @@ pub(super) fn assign_identity_commitment_v1(
     layouter: &mut impl Layouter<Scalar>,
     shared: &KaigiRelationConfigV1,
     offset: usize,
-    identity: &[AssignedValue; 23],
+    identity: &[AssignedValue; IDENTITY_WORDS],
     secret: AssignedValue,
 ) -> Result<AssignedValue, Error> {
     let mut payload = identity.to_vec();
@@ -490,31 +484,6 @@ impl Circuit<Scalar> for KaigiAuthorizationCircuitV1 {
                 (cells[row], words[row]),
             )?;
             offset += 65;
-            if (4..22).contains(&row) {
-                let complement = words[row]
-                    .map(|value| Scalar::from(KAIGI_IDENTITY_FIELD_MODULUS_V1 - 1) - value);
-                let complement_cell = layouter.assign_region(
-                    || "Kaigi Goldilocks complement",
-                    |mut region| {
-                        config.shared.q_goldilocks.enable(&mut region, offset)?;
-                        let value = region
-                            .assign_advice(config.shared.previous[0], offset, words[row])?
-                            .cell();
-                        region.constrain_equal(value, cells[row])?;
-                        Ok(region
-                            .assign_advice(config.shared.previous[1], offset, complement)?
-                            .cell())
-                    },
-                )?;
-                offset += 1;
-                assign_range::<64>(
-                    &mut layouter,
-                    &config.shared,
-                    offset,
-                    (complement_cell, complement),
-                )?;
-                offset += 65;
-            }
         }
         assign_roles(
             &mut layouter,
@@ -524,22 +493,24 @@ impl Circuit<Scalar> for KaigiAuthorizationCircuitV1 {
             &words,
             (secret, blinding),
         )?;
-        offset += 7;
-        let mut payload = cells[..23]
+        offset += KAIGI_IDENTITY_WORDS_V1 + 1;
+        let mut payload = cells[..IDENTITY_WORDS]
             .iter()
             .copied()
-            .zip(words[..23].iter().copied())
+            .zip(words[..IDENTITY_WORDS].iter().copied())
             .collect::<Vec<_>>();
         payload.push((secret, blinding));
         let commitment = assign_identity_commitment_v1(
             &mut layouter,
             &config.shared,
             offset,
-            payload[..23].try_into().expect("fixed identity"),
+            payload[..IDENTITY_WORDS]
+                .try_into()
+                .expect("fixed identity"),
             (secret, blinding),
         )?;
         offset += (payload.len() + 2).div_ceil(2) * (POSEIDON_ROUNDS + 1);
-        payload[23] = (cells[ACTION_ROW], words[ACTION_ROW]);
+        payload[ACTION_ROW] = (cells[ACTION_ROW], words[ACTION_ROW]);
         let nullifier = assign_sponge(
             &mut layouter,
             &config.shared,
@@ -587,19 +558,19 @@ fn assign_roles(
             let mut selected = Value::known(false);
             let mut sum = Value::known(Scalar::ZERO);
             let mut previous_sum = None;
-            for index in 0..6 {
+            for index in 0..KAIGI_IDENTITY_WORDS_V1 {
                 let row = offset + index;
                 config.q_host_identity.enable(&mut region, row)?;
                 config.q_identity_difference.enable(&mut region, row)?;
                 for (column, source) in [
                     (config.shared.value, ACTION_ROW),
-                    (config.shared.previous[0], 10 + index),
-                    (config.shared.previous[1], 16 + index),
+                    (config.shared.previous[0], HOST_ROW + index),
+                    (config.shared.previous[1], SUBJECT_ROW + index),
                 ] {
                     let cell = region.assign_advice(column, row, words[source])?.cell();
                     region.constrain_equal(cell, cells[source])?;
                 }
-                let difference = words[10 + index] - words[16 + index];
+                let difference = words[HOST_ROW + index] - words[SUBJECT_ROW + index];
                 let inverse = difference.zip(selected).map(|(difference, selected)| {
                     if selected {
                         Scalar::ZERO
@@ -626,7 +597,7 @@ fn assign_roles(
                         .cell(),
                 );
             }
-            let row = offset + 6;
+            let row = offset + KAIGI_IDENTITY_WORDS_V1;
             config.q_role.enable(&mut region, row)?;
             for (column, source) in [
                 (config.shared.value, ACTION_ROW),
@@ -652,7 +623,10 @@ fn assign_roles(
             let difference = region
                 .assign_advice(config.shared.input[0], row, sum)?
                 .cell();
-            region.constrain_equal(difference, previous_sum.expect("six fixed identity limbs"))?;
+            region.constrain_equal(
+                difference,
+                previous_sum.expect("four complete identity words"),
+            )?;
             Ok(())
         },
     )

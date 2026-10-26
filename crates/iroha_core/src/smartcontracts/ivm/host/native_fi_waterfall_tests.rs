@@ -14,9 +14,8 @@ use iroha_data_model::{
 };
 use iroha_model_base::{domain::DomainId, topology::DataSpaceId};
 use iroha_test_samples::{ALICE_ID, BOB_ID};
-use ivm::IVMHost;
 
-const SOURCE: &str = r#"seiyaku LinkedFiSettlement {
+const SOURCE: &str = r"seiyaku LinkedFiSettlement {
     kotoage fn settle(
         bytes key, AccountId wallet, AssetDefinitionId asset,
         quantity amount, quantity remaining, int policy_revision, int link_revision
@@ -32,7 +31,7 @@ const SOURCE: &str = r#"seiyaku LinkedFiSettlement {
         );
         ledger::asset_lock::expire_with_waterfall(key: key, policy_revision: policy_revision, link_revision: link_revision);
     }
-}"#;
+}";
 
 #[test]
 fn compiled_linked_fi_and_waterfall_calls_preserve_full_revision_pins_and_native_terms() {

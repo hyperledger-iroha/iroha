@@ -2369,13 +2369,15 @@ pub mod torii {
     pub const QUERY_FANOUT_MAX_WORKING_SET_BYTES: Bytes = Bytes(48_000_000);
     /// Persistent SCCP history-node backing, independent of transient query leases.
     pub const SCCP_HISTORY_CACHE_MAX_BYTES: Bytes = Bytes(8_000_000);
-    /// Minimum aggregate V1 query-memory pool for four ingress slots plus one fanout.
-    pub const QUERY_FANOUT_MIN_POOL_BYTES_V1: u64 = 20_000_000;
+    /// Minimum aggregate V1 query-memory pool for ingress, retained bodies and one fanout.
+    // Includes one retained maximum body while all four ingress slots still
+    // admit the fixed 8 KiB transport chunk.
+    pub const QUERY_FANOUT_MIN_POOL_BYTES_V1: u64 = 20_100_000;
     /// Source-derived route/catalogue/key/candidate bytes in one V1 fanout.
     pub const QUERY_FANOUT_FIXED_OVERHEAD_BYTES_V1: u64 = 9_561_666;
     /// Variable-size units retained by the conservative V1 pre-body envelope.
     pub const QUERY_FANOUT_PREBODY_UNITS_V1: u64 = 15;
-    /// Divisor reserving one quarter of aggregate query memory for ingress.
+    /// Divisor reserving one quarter of aggregate query memory for ingress and retry bodies.
     pub const QUERY_MEMORY_INGRESS_POOL_DIVISOR_V1: u64 = 4;
     /// Independently admitted signed-query ingress bodies.
     pub const QUERY_MEMORY_INGRESS_SLOTS_V1: u64 = 4;
@@ -2389,9 +2391,9 @@ pub mod torii {
     pub const TORII_PROXY_HTTP_FIXED_MEMORY_HEADROOM_V1: u64 = 64 * 1024 * 1024;
     /// Variable-size representations in the internal proxy HTTP memory envelope.
     pub const TORII_PROXY_HTTP_MEMORY_PHASE_UNITS_V1: u64 = 4;
-    /// Maximum time a query waits for execution capacity before Torii rejects it.
-    /// A solo proof burst can occupy all heavy-query permits for more than one
-    /// second; keep a finite queue deadline below the outer HTTP route timeout.
+    /// Capacity wait allowance; App routed reads share one absolute deadline across
+    /// body admission, authentication, execution and all larger-owner retries.
+    /// Zero retains fail-fast admission without a zero-length execution deadline.
     pub const QUERY_QUEUE_TIMEOUT_MS: u64 = 30_000;
     /// Absolute deadline for one admitted App routed-read body.
     pub const APP_API_ROUTED_READ_BODY_READ_TIMEOUT_MS: u64 = 10_000;
@@ -2439,8 +2441,11 @@ pub mod torii {
             max_working_set_bytes,
             max_content_bytes,
         )?;
-        let ingress_slot_bytes =
-            aggregate_bytes / QUERY_MEMORY_INGRESS_POOL_DIVISOR_V1 / QUERY_MEMORY_INGRESS_SLOTS_V1;
+        // A maximum routed-read body remains charged independently while its
+        // execution owner is replaced. Match Torii's partition of the ingress quarter.
+        let ingress_slot_bytes = (aggregate_bytes / QUERY_MEMORY_INGRESS_POOL_DIVISOR_V1)
+            .checked_sub(fanout_phase)?
+            / QUERY_MEMORY_INGRESS_SLOTS_V1;
         ingress_slot_bytes
             .checked_sub(QUERY_INGRESS_FIXED_OVERHEAD_BYTES_V1)
             .map(|remaining| {
@@ -3622,41 +3627,12 @@ pub mod nexus {
         /// Slot-bound deadline for proofs/DA bundles to arrive before a transaction aborts.
         pub const WINDOW_SLOTS: u16 = 2;
     }
-    /// Public-lane staking defaults.
+    /// Public-lane validator capacity defaults. Monetary policy has no node defaults.
     pub mod staking {
-        use super::super::{NonZeroU32, Quantity};
+        use super::super::NonZeroU32;
         use nonzero_ext::nonzero;
-        use std::time::Duration;
-        /// Minimum bonded stake required to register a validator (asset base units).
-        pub fn min_validator_stake() -> Quantity {
-            Quantity::from(1_u64)
-        }
         /// Maximum number of validators allowed per lane.
         pub const MAX_VALIDATORS: NonZeroU32 = nonzero!(32_u32);
-        /// Maximum number of stake-share rows retained for one validator.
-        pub const MAX_STAKE_SHARES_PER_VALIDATOR: NonZeroU32 = nonzero!(256_u32);
-        /// Maximum number of pending unbond requests retained in one stake share.
-        pub const MAX_PENDING_UNBONDS_PER_SHARE: NonZeroU32 = nonzero!(8_u32);
-        /// Minimum delay between scheduling and finalising unbonds.
-        pub const UNBONDING_DELAY: Duration = Duration::from_secs(0);
-        /// Maximum slash ratio (basis points, `10_000` = 100%).
-        pub const MAX_SLASH_BPS: u16 = 10_000;
-        /// Escrow account that custodies bonded stake.
-        pub const STAKE_ESCROW_ACCOUNT_ID: &str = super::fees::FEE_SINK_ACCOUNT_ID;
-        /// Account that receives slashed stake (treasury/burn sink).
-        pub const SLASH_SINK_ACCOUNT_ID: &str = super::fees::FEE_SINK_ACCOUNT_ID;
-        /// Canonical XOR asset used by both staking and Nexus fees.
-        pub fn stake_asset_id() -> String {
-            super::fees::fee_asset_id()
-        }
-        /// Escrow account that custodies bonded stake.
-        pub fn stake_escrow_account_id() -> String {
-            STAKE_ESCROW_ACCOUNT_ID.to_string()
-        }
-        /// Account that receives slashed stake (treasury/burn sink).
-        pub fn slash_sink_account_id() -> String {
-            SLASH_SINK_ACCOUNT_ID.to_string()
-        }
     }
     /// Universal fee schedule defaults.
     pub mod fees {

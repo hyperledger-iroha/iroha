@@ -44,16 +44,14 @@ fn state() -> State {
     };
     policy.validate().expect("valid native policy fixture");
     // Component setup supplies committed native policy/state, not a certificate substitute.
-    let mut parameters = world.parameters.view().get().clone();
-    parameters
-        .set_parameter(Parameter::Custom(policy.into_custom_parameter()))
+    world
+        .set_parameter_for_testing(Parameter::Custom(policy.into_custom_parameter()))
         .expect("valid fixture parameters");
-    parameters
-        .set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
+    world
+        .set_parameter_for_testing(crate::sumeragi::lanes::routing::test_support::metadata(
             SumeragiRootScope::Global,
         ))
         .expect("valid fixture parameters");
-    world.parameters = mv::cell::Cell::new(parameters);
     let mut lanes = SumeragiLaneState::default();
     lanes.upsert(SumeragiLaneRecord {
         da_layout: iroha_sumeragi::availability::recommended_data_availability_layout(),
@@ -194,7 +192,7 @@ fn native_ordering_lane_uses_independently_resolved_physical_policy() {
             unreachable!()
         };
         let mut tx = block.transaction();
-        StateBlock::validate_stateful_admission(signed, &mut tx, native, token, None).unwrap();
+        StateBlock::validate_stateful_admission(signed, &mut tx, native, &(token), None).unwrap();
         assert_eq!(tx.current_lane_id, Some(LaneId::new(1)));
         assert_eq!(tx.current_dataspace_id, Some(DataSpaceId::UNIVERSAL));
     });
@@ -632,7 +630,7 @@ fn missing_governed_and_private_physical_manifests_cannot_use_native_number_coll
             };
             let mut tx = block.transaction();
             assert!(matches!(
-                StateBlock::validate_stateful_admission(signed, &mut tx, native, token, None),
+                StateBlock::validate_stateful_admission(signed, &mut tx, native, &(token), None),
                 Err(TransactionRejectionReason::Validation(_))
             ));
             assert_eq!(tx.current_lane_id, Some(native.lane_id));
@@ -731,9 +729,9 @@ fn ordinary_capture_requires_immutable_metadata_even_with_valid_lane_policy() {
     let state = state();
     let source = carrier(vec![input(&state, "no scope fallback")]);
     before_effects(&state, &source, false, |block| {
-        let mut parameters = block.world.parameters.get().clone();
-        parameters
-            .set_parameter(Parameter::Custom(
+        block
+            .world
+            .set_parameter_for_testing(Parameter::Custom(
                 iroha_data_model::parameter::custom::CustomParameter::new(
                     iroha_data_model::parameter::system::consensus_metadata::handshake_meta_id(),
                     iroha_primitives::json::Json::from_norito_value_ref(
@@ -743,7 +741,6 @@ fn ordinary_capture_requires_immutable_metadata_even_with_valid_lane_policy() {
                 ),
             ))
             .expect("valid fixture parameters");
-        *block.world.parameters.get_mut() = parameters;
         let budget = AllocationBudget::new(1024 * 1024);
         let mut owner = CapturedNetworkPolicyRoutes::reserve(&source, &budget).unwrap();
         owner

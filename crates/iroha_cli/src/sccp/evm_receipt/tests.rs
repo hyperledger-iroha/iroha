@@ -187,7 +187,7 @@ fn bsc_receipt_ancestry_retains_milliseconds_and_profile_window() {
             SccpNetworkV1::BscMainnet,
             &GENESIS_PROFILES,
             &anchor,
-            &[header.clone()],
+            std::slice::from_ref(&header),
             1
         )
         .is_ok()
@@ -232,7 +232,7 @@ fn signed_raw(selected: ReceiptTarget, nonce: u64) -> Vec<u8> {
     .sign(&EvmSigningKey::from_secret([7; 32]).unwrap())
     .unwrap()
     .raw()
-    .to_vec()
+    .clone()
 }
 
 fn rpc_receipt(hash: [u8; 32], index: u64, success: bool) -> EvmReceipt {
@@ -299,7 +299,6 @@ impl InclusionFixture {
             false,
         ))
         .unwrap();
-        let mut receipt = receipt;
         receipt.block_hash = header.hash;
         Self {
             raw,

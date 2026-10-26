@@ -369,11 +369,10 @@ fn original_cold_da_refunds_follow_all_rebuild_and_rewind_writers() {
         assert!(Pin::new(&mut pending).poll(&mut context).is_pending());
         let failed = mode == 1 || mode == 3;
         let mut rebuild = || {
-            if let Some(acquired) = acquired.as_mut() {
-                acquired.rewind_da_indexes_to_height(1)
-            } else {
-                state.ensure_da_indexes_hydrated()
-            }
+            acquired.as_mut().map_or_else(
+                || state.ensure_da_indexes_hydrated(),
+                |acquired| acquired.rewind_da_indexes_to_height(1),
+            )
         };
         let result = if failed {
             norito::with_decode_limits_scope(decode_limits(), rebuild)

@@ -65,7 +65,7 @@ pub(super) use verifying_keys::CheckedVerifyingKeys;
 
 /// Original native image whose exact grouping is being checked.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum GroupImage {
+pub enum GroupImage {
     /// Published rows.
     Current,
     /// Exact logical predecessor reconstructed from original undo entries.
@@ -74,7 +74,7 @@ pub(crate) enum GroupImage {
 
 /// Failure of one exact grouping relation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum GroupMismatch {
+pub enum GroupMismatch {
     /// A canonical source row is missing from its expected group.
     MissingMember,
     /// A materialized group has no members.
@@ -85,7 +85,7 @@ pub(crate) enum GroupMismatch {
 
 /// Local work/publication refusals remain distinct from inconsistent indexes.
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
-pub(crate) enum GroupedOwnershipError {
+pub enum GroupedOwnershipError {
     /// Retry locally with sufficient admitted work; no validity verdict follows.
     #[error("grouped ownership capture exceeds its local work bound")]
     WorkLimit,
@@ -138,10 +138,10 @@ fn get_at<'a, K: mv::Key, V: mv::Value>(
     image: GroupImage,
     key: &K,
 ) -> Option<&'a V> {
-    if image == GroupImage::Predecessor {
-        if let Some(prior) = view.undo().get(key) {
-            return prior.as_ref();
-        }
+    if image == GroupImage::Predecessor
+        && let Some(prior) = view.undo().get(key)
+    {
+        return prior.as_ref();
     }
     view.current().get(key)
 }

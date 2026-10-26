@@ -1,8 +1,6 @@
 #[test]
 fn rejected_live_batch_business_execution_still_charges_nexus_fee() {
-    let _guard = crate::status::nexus_fee_test_lock()
-        .lock()
-        .expect("nexus fee test lock");
+    let _guard = crate::status::operator_status_test_guard();
     crate::status::reset_nexus_economics_for_tests();
     let chain_id = ChainId::from("rejected-live-batch-fee-test");
     let (payer_id, payer_keypair) = gen_account_in("wonderland");
@@ -37,14 +35,15 @@ fn rejected_live_batch_business_execution_still_charges_nexus_fee() {
         [payer_asset, sink_asset],
         [],
     );
-    let mut nexus = iroha_config::parameters::actual::Nexus::default();
-    nexus.fees.base_fee = Quantity::from(1_u32);
-    nexus.fees.per_byte_fee = Quantity::zero();
-    nexus.fees.per_instruction_fee = Quantity::zero();
-    nexus.fees.per_gas_unit_fee = Quantity::zero();
-    nexus.fees.fee_asset_id = asset_definition_id.clone();
-    nexus.fees.fee_sink_account_id = sink_id.clone();
-    let state = configured_component_state(world, chain_id.clone(), nexus);
+    let nexus = iroha_config::parameters::actual::Nexus::default();
+    let mut fees = iroha_config::parameters::defaults::nexus::fees::genesis_policy();
+    fees.base_fee = Quantity::from(1_u32);
+    fees.per_byte_fee = Quantity::zero();
+    fees.per_instruction_fee = Quantity::zero();
+    fees.per_gas_unit_fee = Quantity::zero();
+    fees.fee_asset_id = asset_definition_id.clone();
+    fees.fee_sink_account_id = sink_id.clone();
+    let state = configured_component_state(world, chain_id.clone(), nexus, fees);
     let (max_clock_drift, tx_limits) = {
         let state_view = state.world.view();
         let params = state_view.parameters();
@@ -170,9 +169,7 @@ fn rejected_live_batch_business_execution_still_charges_nexus_fee() {
 #[test]
 fn rejected_contract_only_batch_vm_error_still_charges_nexus_fee() {
     let manifest_signing = crate::manifest_signing_test_support::ManifestSigningFixture::new();
-    let _guard = crate::status::nexus_fee_test_lock()
-        .lock()
-        .expect("nexus fee test lock");
+    let _guard = crate::status::operator_status_test_guard();
     crate::status::reset_nexus_economics_for_tests();
     let chain_id = ChainId::from("rejected-contract-batch-fee-test");
     let (payer_id, payer_keypair) = gen_account_in("wonderland");
@@ -278,14 +275,15 @@ ledger::account::set_metadata(
     world
         .account_permissions_mut_for_testing()
         .insert(payer_id.clone(), permissions);
-    let mut nexus = iroha_config::parameters::actual::Nexus::default();
-    nexus.fees.base_fee = Quantity::from(1_u32);
-    nexus.fees.per_byte_fee = Quantity::zero();
-    nexus.fees.per_instruction_fee = Quantity::zero();
-    nexus.fees.per_gas_unit_fee = Quantity::zero();
-    nexus.fees.fee_asset_id = asset_definition_id.clone();
-    nexus.fees.fee_sink_account_id = sink_id.clone();
-    let state = configured_component_state(world, chain_id.clone(), nexus);
+    let nexus = iroha_config::parameters::actual::Nexus::default();
+    let mut fees = iroha_config::parameters::defaults::nexus::fees::genesis_policy();
+    fees.base_fee = Quantity::from(1_u32);
+    fees.per_byte_fee = Quantity::zero();
+    fees.per_instruction_fee = Quantity::zero();
+    fees.per_gas_unit_fee = Quantity::zero();
+    fees.fee_asset_id = asset_definition_id.clone();
+    fees.fee_sink_account_id = sink_id.clone();
+    let state = configured_component_state(world, chain_id.clone(), nexus, fees);
     let (max_clock_drift, tx_limits) = {
         let state_view = state.world.view();
         let params = state_view.parameters();

@@ -149,3 +149,198 @@ fn contract_permission_delegation_rejects_shared_and_undeclared_names() {
         Err(VMError::NoritoInvalid)
     ));
 }
+
+fn transfer_permission_call(
+    host: &mut WsvHost,
+    vm: &mut IVM,
+    recipient: &AccountId,
+    permission: &Json,
+    syscall: u32,
+) -> Result<u64, VMError> {
+    let recipient = vm
+        .alloc_input_tlv(&tlv(
+            PointerType::AccountId,
+            &norito::to_bytes(recipient).unwrap(),
+        ))
+        .unwrap();
+    let permission = vm
+        .alloc_input_tlv(&tlv(
+            PointerType::Json,
+            &norito::to_bytes(permission).unwrap(),
+        ))
+        .unwrap();
+    vm.set_register(10, recipient);
+    vm.set_register(11, permission);
+    host.syscall(syscall, vm)
+}
+
+#[test]
+fn exact_transfer_json_delegation_uses_effect_subject_and_can_be_revoked() {
+    let (mut host, mut vm, contract, actor) = fixture();
+    host.bind_contract_runtime_context(actor.clone(), contract.clone(), "manage".into())
+        .unwrap();
+    let definition = AssetDefinitionId::derive_from_components(
+        DomainId::try_new("wonderland", "universal").unwrap(),
+        "rose".parse().unwrap(),
+    );
+    let bucket = AssetId::with_scope(definition, contract.subject_id(), AssetBalanceScope::Global);
+    let permission = Json::from_str_norito(&format!(
+        r#"{{"name":"CanTransferAsset","payload":{{"asset":"{bucket}"}}}}"#,
+    ))
+    .unwrap();
+    let exact = PermissionToken::TransferAssetBucket(bucket);
+    transfer_permission_call(
+        &mut host,
+        &mut vm,
+        &actor,
+        &permission,
+        syscalls::SYSCALL_GRANT_PERMISSION,
+    )
+    .unwrap();
+    assert!(host.wsv.has_permission(&actor, &exact));
+    assert!(matches!(
+        transfer_permission_call(
+            &mut host,
+            &mut vm,
+            &actor,
+            &permission,
+            syscalls::SYSCALL_GRANT_PERMISSION,
+        ),
+        Err(VMError::PermissionDenied)
+    ));
+    transfer_permission_call(
+        &mut host,
+        &mut vm,
+        &actor,
+        &permission,
+        syscalls::SYSCALL_REVOKE_PERMISSION,
+    )
+    .unwrap();
+    assert!(!host.wsv.has_permission(&actor, &exact));
+    assert!(matches!(
+        transfer_permission_call(
+            &mut host,
+            &mut vm,
+            &actor,
+            &permission,
+            syscalls::SYSCALL_REVOKE_PERMISSION,
+        ),
+        Err(VMError::PermissionDenied)
+    ));
+}
+
+#[test]
+fn exact_transfer_json_delegation_rejects_foreign_source_and_broad_tokens() {
+    let (mut host, mut vm, contract, actor) = fixture();
+    host.bind_contract_runtime_context(actor.clone(), contract.clone(), "manage".into())
+        .unwrap();
+    host.wsv
+        .grant_permission(&contract.subject_id(), PermissionToken::ManagePermissions);
+    let definition = AssetDefinitionId::derive_from_components(
+        DomainId::try_new("wonderland", "universal").unwrap(),
+        "rose".parse().unwrap(),
+    );
+    let foreign = AssetId::with_scope(definition.clone(), actor.clone(), AssetBalanceScope::Global);
+    for source in [
+        format!(r#"{{"name":"CanTransferAsset","payload":{{"asset":"{foreign}"}}}}"#),
+        format!(
+            r#"{{"name":"CanTransferAssetWithDefinition","payload":{{"asset_definition":"{definition}"}}}}"#
+        ),
+    ] {
+        let permission = Json::from_str_norito(&source).unwrap();
+        for syscall in [
+            syscalls::SYSCALL_GRANT_PERMISSION,
+            syscalls::SYSCALL_REVOKE_PERMISSION,
+        ] {
+            assert!(matches!(
+                transfer_permission_call(&mut host, &mut vm, &actor, &permission, syscall),
+                Err(VMError::PermissionDenied)
+            ));
+        }
+    }
+    assert!(
+        !host
+            .wsv
+            .has_permission(&actor, &PermissionToken::TransferAssetBucket(foreign))
+    );
+}
+
+#[test]
+fn exact_trigger_json_delegation_requires_owner_and_can_be_revoked() {
+    for name in ["CanExecuteTrigger", "CanModifyTriggerMetadata"] {
+        let (mut host, mut vm, contract, actor) = fixture();
+        host.bind_contract_runtime_context(actor.clone(), contract.clone(), "manage".into())
+            .unwrap();
+        let trigger: Name = "owned_trigger".parse().unwrap();
+        host.wsv.triggers.insert(trigger.to_string(), true);
+        host.wsv
+            .trigger_authorities
+            .insert(trigger.to_string(), contract.subject_id());
+        let permission = Json::from_str_norito(&format!(
+            r#"{{"name":"{name}","payload":{{"trigger":"{trigger}"}}}}"#
+        ))
+        .unwrap();
+        let exact = if name == "CanExecuteTrigger" {
+            PermissionToken::ExecuteTrigger(trigger)
+        } else {
+            PermissionToken::ModifyTriggerMetadata(trigger)
+        };
+        transfer_permission_call(
+            &mut host,
+            &mut vm,
+            &actor,
+            &permission,
+            syscalls::SYSCALL_GRANT_PERMISSION,
+        )
+        .unwrap();
+        assert!(host.wsv.has_permission(&actor, &exact));
+        transfer_permission_call(
+            &mut host,
+            &mut vm,
+            &actor,
+            &permission,
+            syscalls::SYSCALL_REVOKE_PERMISSION,
+        )
+        .unwrap();
+        assert!(!host.wsv.has_permission(&actor, &exact));
+        host.wsv
+            .trigger_authorities
+            .insert("owned_trigger".into(), actor.clone());
+        assert!(matches!(
+            transfer_permission_call(
+                &mut host,
+                &mut vm,
+                &actor,
+                &permission,
+                syscalls::SYSCALL_GRANT_PERMISSION
+            ),
+            Err(VMError::PermissionDenied)
+        ));
+    }
+}
+
+#[test]
+fn exact_trigger_json_delegation_rejects_missing_malformed_and_broad_tokens() {
+    let (mut host, mut vm, contract, actor) = fixture();
+    host.bind_contract_runtime_context(actor.clone(), contract, "manage".into())
+        .unwrap();
+    for source in [
+        r#"{"name":"CanExecuteTrigger","payload":{"trigger":"missing"}}"#,
+        r#"{"name":"CanModifyTriggerMetadata","payload":{"trigger":"missing"}}"#,
+        r#"{"name":"CanExecuteTrigger","payload":{}}"#,
+        r#"{"name":"CanModifyTriggerMetadata","payload":{"trigger":12}}"#,
+        r#"{"name":"CanModifyTrigger","payload":{"trigger":"missing"}}"#,
+        r#"{"name":"CanRegisterTrigger","payload":{}}"#,
+    ] {
+        let permission = Json::from_str_norito(source).unwrap();
+        for syscall in [
+            syscalls::SYSCALL_GRANT_PERMISSION,
+            syscalls::SYSCALL_REVOKE_PERMISSION,
+        ] {
+            assert!(matches!(
+                transfer_permission_call(&mut host, &mut vm, &actor, &permission, syscall),
+                Err(VMError::PermissionDenied | VMError::NoritoInvalid)
+            ));
+        }
+    }
+}

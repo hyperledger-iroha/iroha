@@ -227,7 +227,7 @@ impl Fixture {
         FiContextAssertionExpectation {
             network_id: self.checkpoint.network_id(),
             chain_id: self.checkpoint.chain_id(),
-            checkpoint_sha256: sha256(&self.checkpoint_bytes).into(),
+            checkpoint_sha256: sha256(&self.checkpoint_bytes),
             checkpoint_height: 2,
             checkpoint_context_id: self.checkpoint_context,
             asset_owner: &self.owner,

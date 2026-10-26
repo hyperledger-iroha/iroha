@@ -18,9 +18,8 @@ fn retained_delivery_with_open_request(
     for row in vectors()["envelopes"].as_array().unwrap() {
         let envelope: KagemushaWalletEnvelopeV1 =
             archive::decode(&hex::decode(row["canonical_hex"].as_str().unwrap()).unwrap()).unwrap();
-        match envelope.message {
-            KagemushaWalletMessageV1::Request { request: original } => request = Some(original),
-            _ => {}
+        if let KagemushaWalletMessageV1::Request { request: original } = envelope.message {
+            request = Some(original);
         }
     }
     let request = request
@@ -60,7 +59,7 @@ fn retained_delivery_with_open_request(
             online_charge: 0,
         },
     );
-    archived.credential = companion.payer_credential.clone();
+    archived.credential = companion.payer_credential;
     let mut body = archived.capsule.body().clone();
     body.wallet_id = wallet.wallet_id;
     body.kind = KagemushaWalletOperationKindV1::ArchiveSent;
@@ -149,7 +148,8 @@ fn retained_delivery_with_open_request(
     marker.payment_key = archived.credential.body.payment_key;
     marker.generation = retained.selected_generation + 1;
     marker.state = capsule.head_marker_state();
-    wallet.custody.status = SlotStatus::Released(marker_record(marker, retained.completion_digest));
+    wallet.custody.status =
+        SlotStatus::Released(marker_record(&marker, retained.completion_digest));
     wallet.publish_manifest(selected, &manifest).unwrap();
     let send_id = [77; 32];
     let send_operation = payment
@@ -180,7 +180,7 @@ fn retained_delivery_with_open_request(
         },
     });
     wallet
-        .retain_delivery_test_mapping(send, send_capsule, send_commitment, send_operation)
+        .retain_delivery_test_mapping(&send, send_capsule, send_commitment, send_operation)
         .unwrap();
     // Send completion/capsule/source are absent: only the explicit permanent tombstone is
     // available. A regression that reopens archive_send_source cannot pass this test.
@@ -205,7 +205,7 @@ fn retained_delivery_with_open_request(
     );
     wallet
         .retain_delivery_test_mapping(
-            intent,
+            &intent,
             archive_capsule,
             capsule.receipt_commitment(),
             operation,

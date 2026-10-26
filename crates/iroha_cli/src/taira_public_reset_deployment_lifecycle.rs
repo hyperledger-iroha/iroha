@@ -35,10 +35,10 @@ fn local_targets(admitted: &HostAdmission) -> Vec<HostTarget> {
         .iter()
         .filter(|validator| &validator.endpoint.host_identity_sha256 == identity)
         .cloned()
-        .map(HostTarget::Validator)
+        .map(|value| HostTarget::Validator(Box::new(value)))
         .chain(
             (&admitted.inventory.edge.endpoint.host_identity_sha256 == identity)
-                .then(|| HostTarget::Edge(admitted.inventory.edge.clone())),
+                .then(|| HostTarget::Edge(Box::new(admitted.inventory.edge.clone()))),
         )
         .collect()
 }
@@ -435,7 +435,7 @@ fn admission_for_target(admitted: &HostAdmission, target: HostTarget) -> Result<
         ));
     }
     let mut selected = admitted.clone();
-    selected.request.host_slug = target.slug().to_owned();
+    target.slug().clone_into(&mut selected.request.host_slug);
     selected.target = target;
     selected.guard = guard;
     Ok(selected)
@@ -713,10 +713,10 @@ mod tests {
         );
         let mut separate = admitted.clone();
         separate.inventory.edge.endpoint.host_identity_sha256 = "b".repeat(64);
-        separate.target = HostTarget::Edge(separate.inventory.edge.clone());
+        separate.target = HostTarget::Edge(Box::new(separate.inventory.edge.clone()));
         assert!(!owns_validator(&separate));
         assert_eq!(local_targets(&separate).len(), 1);
-        separate.target = HostTarget::Validator(separate.inventory.validators[1].clone());
+        separate.target = HostTarget::Validator(Box::new(separate.inventory.validators[1].clone()));
         assert!(owns_validator(&separate));
         assert_eq!(local_targets(&separate).len(), 4);
     }

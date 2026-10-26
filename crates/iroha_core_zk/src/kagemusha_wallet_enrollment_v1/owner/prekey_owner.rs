@@ -6,6 +6,10 @@ use crate::kagemusha_wallet_enrollment_v1::prekey::{
 use rand::rand_core::TryRng as _;
 
 #[derive(Clone)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "retain the original verified permit inline with its exclusive pending owner"
+)]
 pub(super) enum Pending {
     Dispatch {
         dispatch: Box<PreKeyDispatchV1>,
@@ -350,7 +354,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> EnrollmentOwnerV1<F, 
         // recovery DATA only; permit/account admission below rechecks it before any effect.
         self.client_expired(&dispatch, &client_digest)?;
         if let (Some(original), Some(slot)) = (&dispatch.previous_permit, slot) {
-            let selected = self.decode_slot(&dispatch, original, &slot)?;
+            let selected = Self::decode_slot(&dispatch, original, &slot)?;
             let permit = KagemushaEnrollmentPermitV1::decode_canonical(
                 original,
                 &self.config.scheme,
@@ -406,10 +410,9 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> EnrollmentOwnerV1<F, 
         if let Some(Pending::Account {
             original, message, ..
         }) = &self.pending
+            && original == bytes
         {
-            if original == bytes {
-                return Ok(*message);
-            }
+            return Ok(*message);
         }
         let Some(Pending::Dispatch {
             dispatch,
@@ -447,10 +450,10 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> EnrollmentOwnerV1<F, 
                 .min(self.config.session_expires_at_ms),
         )
         .map_err(Error::Original)?;
-        let selected = match &dispatch.previous_permit {
-            Some(original) => original.as_slice(),
-            None => bytes,
-        };
+        let selected = dispatch
+            .previous_permit
+            .as_ref()
+            .map_or(bytes, Vec::as_slice);
         let retained = match self.provider.prekey_retain(
             &dispatch.request_id,
             PreKeyRecordV1::Accepted,
@@ -491,7 +494,6 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> EnrollmentOwnerV1<F, 
         Ok(message)
     }
     fn decode_slot(
-        &self,
         dispatch: &PreKeyDispatchV1,
         permit: &[u8],
         bytes: &[u8],
@@ -549,7 +551,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> EnrollmentOwnerV1<F, 
         dispatch
             .require_permit_selection(&permit)
             .map_err(Error::Original)?;
-        let selection = self.decode_slot(&dispatch, &accepted, &selected)?;
+        let selection = Self::decode_slot(&dispatch, &accepted, &selected)?;
         if permit.body.purpose != KagemushaEnrollmentPermitPurposeV1::Fresh
             || permit.body.challenge != scope.challenge
             || permit.body.created_at_ms != scope.dates.issued_at_ms
@@ -655,7 +657,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> EnrollmentOwnerV1<F, 
             .prekey_read(&dispatch.request_id, PreKeyRecordV1::Slot)?
             .ok_or(Error::Original("selected pre-key slot lost"))?;
         if dispatch.previous_permit.as_deref() != Some(accepted.as_slice())
-            || self.decode_slot(&dispatch, &accepted, &slot)?.slot != selected.0
+            || Self::decode_slot(&dispatch, &accepted, &slot)?.slot != selected.0
         {
             return Err(Error::Original("pre-key retained selection changed"));
         }
@@ -751,18 +753,18 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> EnrollmentOwnerV1<F, 
         // Complete custody of this owner's actual vendor reply before any elapsed-time
         // refusal. The following session/permit checks still refuse expired authorization;
         // this branch cannot create a key, change an attempt, or refresh its dates.
-        if let Some((scope, slot)) = &self.selected {
-            if self.provider.has_retained_generation(slot) {
-                if scope.challenge != permit.body.challenge
-                    || scope.dates.issued_at_ms != permit.body.created_at_ms
-                    || scope.dates.expires_at_ms != permit.body.expires_at_ms
-                    || scope.account != dispatch.account
-                    || scope.asset != dispatch.asset
-                {
-                    return Err(Error::Original("retained generation selection changed"));
-                }
-                self.provider.status(slot)?;
+        if let Some((scope, slot)) = &self.selected
+            && self.provider.has_retained_generation(slot)
+        {
+            if scope.challenge != permit.body.challenge
+                || scope.dates.issued_at_ms != permit.body.created_at_ms
+                || scope.dates.expires_at_ms != permit.body.expires_at_ms
+                || scope.account != dispatch.account
+                || scope.asset != dispatch.asset
+            {
+                return Err(Error::Original("retained generation selection changed"));
             }
+            self.provider.status(slot)?;
         }
         if permit.body.observed_at_ms < self.config.session_valid_from_ms
             || permit.body.observed_at_ms >= self.config.session_expires_at_ms
@@ -808,94 +810,86 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> EnrollmentOwnerV1<F, 
             issued_at_ms: first.body.created_at_ms,
             expires_at_ms: first.body.expires_at_ms,
         };
-        let (slot, fresh) = match existing {
-            Some(bytes) => {
-                let slot = self.decode_slot(&dispatch, &original, &bytes)?;
-                // A visible Slot selection (possibly left by an uncertain publication) is
-                // made durable on a fresh inode with the originals it names before any use.
-                self.provider.prekey_adopt(
-                    &dispatch.request_id,
-                    &[
-                        PreKeyRecordV1::Client,
-                        PreKeyRecordV1::Accepted,
-                        PreKeyRecordV1::Slot,
-                    ],
-                )?;
-                (slot, false)
-            }
-            None => {
-                // A resumed permit with neither Slot nor Phase is ambiguous in the
-                // presence of orphan custody. Keep the strict scan before selecting any
-                // new binding; a lost original E1 must not mint a replacement key.
-                if dispatch.previous_permit.is_some()
-                    && self
-                        .provider
-                        .enrollment_phase(&dispatch.request_id)?
-                        .is_none()
-                {
-                    self.provider.enrollment_slot(
-                        &first.body.challenge,
-                        super::super::credential::platform_key_profile(
-                            &self.config.policy.platform,
-                        ),
-                        dates,
-                    )?;
-                }
-                // The durable phase binding precedes the Slot selection; an interrupted
-                // selection reuses the slot its binding already names.
-                let binding = self.provider.select_enrollment_binding(
-                    &KagemushaWalletEnrollmentBindingV1::new(
-                        dispatch.request_id,
-                        KagemushaWalletSlotIdV1::generate()
-                            .map_err(KagemushaWalletProviderErrorV1::Unavailable)?
-                            .0,
-                        kagemusha_wallet_prekey_client_digest_v1(&client),
-                        dispatch.client_nonce,
-                        permit_digest,
-                        first.body.challenge,
-                        dates,
-                        super::super::credential::platform_key_profile(
-                            &self.config.policy.platform,
-                        ),
-                        self.provider.enrollment_generation_policy()?,
-                        self.provider.anchor_policy(),
-                    ),
-                )?;
-                // A Slot selection is first published only under an authenticated `PreIntent`
-                // whose slot holds no custody; a lost Slot of a later phase is never rebuilt.
-                let phase = self.provider.enrollment_phase(&dispatch.request_id)?;
-                if !matches!(
-                    phase.map(|state| state.phase),
-                    Some(KagemushaWalletEnrollmentPhaseV1::PreIntent)
-                ) || self
-                    .provider
-                    .slots()?
-                    .contains(&KagemushaWalletSlotIdV1(binding.slot))
-                {
-                    return Err(Error::Provider(
-                        KagemushaWalletProviderErrorV1::UnavailableCustodyData {
-                            object: "selected pre-key slot",
-                        },
-                    ));
-                }
-                let candidate = SlotSelection {
-                    version: 1,
-                    client_nonce: dispatch.client_nonce,
-                    permit_digest,
-                    slot: binding.slot,
-                    generation_policy: binding.generation_policy,
-                };
-                let bytes = norito::encode_canonical(&candidate)
-                    .map_err(|_| Error::Original("pre-key slot encoding"))?;
-                match self.provider.prekey_retain(
-                    &dispatch.request_id,
+        let (slot, fresh) = if let Some(bytes) = existing {
+            let slot = Self::decode_slot(&dispatch, &original, &bytes)?;
+            // A visible Slot selection (possibly left by an uncertain publication) is
+            // made durable on a fresh inode with the originals it names before any use.
+            self.provider.prekey_adopt(
+                &dispatch.request_id,
+                &[
+                    PreKeyRecordV1::Client,
+                    PreKeyRecordV1::Accepted,
                     PreKeyRecordV1::Slot,
-                    &bytes,
-                )? {
-                    PreKeyPublicationV1::Published => (candidate, true),
-                    PreKeyPublicationV1::Existing(bytes) => {
-                        (self.decode_slot(&dispatch, &original, &bytes)?, false)
-                    }
+                ],
+            )?;
+            (slot, false)
+        } else {
+            // A resumed permit with neither Slot nor Phase is ambiguous in the
+            // presence of orphan custody. Keep the strict scan before selecting any
+            // new binding; a lost original E1 must not mint a replacement key.
+            if dispatch.previous_permit.is_some()
+                && self
+                    .provider
+                    .enrollment_phase(&dispatch.request_id)?
+                    .is_none()
+            {
+                self.provider.enrollment_slot(
+                    &first.body.challenge,
+                    super::super::credential::platform_key_profile(&self.config.policy.platform),
+                    dates,
+                )?;
+            }
+            // The durable phase binding precedes the Slot selection; an interrupted
+            // selection reuses the slot its binding already names.
+            let binding = self.provider.select_enrollment_binding(
+                &KagemushaWalletEnrollmentBindingV1::new(
+                    dispatch.request_id,
+                    KagemushaWalletSlotIdV1::generate()
+                        .map_err(KagemushaWalletProviderErrorV1::Unavailable)?
+                        .0,
+                    kagemusha_wallet_prekey_client_digest_v1(&client),
+                    dispatch.client_nonce,
+                    permit_digest,
+                    first.body.challenge,
+                    dates,
+                    super::super::credential::platform_key_profile(&self.config.policy.platform),
+                    self.provider.enrollment_generation_policy()?,
+                    self.provider.anchor_policy(),
+                ),
+            )?;
+            // A Slot selection is first published only under an authenticated `PreIntent`
+            // whose slot holds no custody; a lost Slot of a later phase is never rebuilt.
+            let phase = self.provider.enrollment_phase(&dispatch.request_id)?;
+            if !matches!(
+                phase.map(|state| state.phase),
+                Some(KagemushaWalletEnrollmentPhaseV1::PreIntent)
+            ) || self
+                .provider
+                .slots()?
+                .contains(&KagemushaWalletSlotIdV1(binding.slot))
+            {
+                return Err(Error::Provider(
+                    KagemushaWalletProviderErrorV1::UnavailableCustodyData {
+                        object: "selected pre-key slot",
+                    },
+                ));
+            }
+            let candidate = SlotSelection {
+                version: 1,
+                client_nonce: dispatch.client_nonce,
+                permit_digest,
+                slot: binding.slot,
+                generation_policy: binding.generation_policy,
+            };
+            let bytes = norito::encode_canonical(&candidate)
+                .map_err(|_| Error::Original("pre-key slot encoding"))?;
+            match self
+                .provider
+                .prekey_retain(&dispatch.request_id, PreKeyRecordV1::Slot, &bytes)?
+            {
+                PreKeyPublicationV1::Published => (candidate, true),
+                PreKeyPublicationV1::Existing(bytes) => {
+                    (Self::decode_slot(&dispatch, &original, &bytes)?, false)
                 }
             }
         };

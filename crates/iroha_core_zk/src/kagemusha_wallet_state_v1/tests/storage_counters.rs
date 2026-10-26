@@ -150,11 +150,11 @@ impl Recorder {
             }
             value
         });
-        self.emit(operation, counters, w.custody.calls.since(before));
+        self.emit(operation, &counters, w.custody.calls.since(before));
         value
     }
 
-    fn emit(&mut self, operation: &str, counters: Counters, calls: Calls) {
+    fn emit(&mut self, operation: &str, counters: &Counters, calls: Calls) {
         let fields = counters
             .fields()
             .iter()
@@ -182,7 +182,7 @@ impl Recorder {
             calls.prune,
             calls.resources,
         );
-        self.lines.push((operation.to_owned(), counters, calls));
+        self.lines.push((operation.to_owned(), *counters, calls));
     }
 
     fn fold<F: KagemushaWalletFsV1>(&mut self, w: &mut ShadowWallet<F>, operation: &str) {
@@ -263,7 +263,7 @@ fn coordinator_run<F: KagemushaWalletFsV1>(
     });
     let mut w = w;
     let opened = w.custody.calls;
-    recorder.emit("coordinator_open", open, opened);
+    recorder.emit("coordinator_open", &open, opened);
     w.scheduler().set_activity(true, false);
     let template: KagemushaWalletPaymentV1 = fixture("KagemushaWalletPaymentV1");
 
@@ -384,53 +384,6 @@ fn std_root() -> (tempfile::TempDir, KagemushaWalletStdFsV1) {
 
 #[test]
 fn coordinator_storage_counts_are_deterministic_and_filesystem_independent() {
-    let simulated = coordinator_run(SimFs::new(), "sim", Policy::NotRequired, false);
-    let again = coordinator_run(SimFs::new(), "sim", Policy::NotRequired, false);
-    let (_temp, fs) = std_root();
-    let native = coordinator_run(fs, "std", Policy::NotRequired, false);
-    let counts = |lines: &[(String, Counters, Calls)]| {
-        lines
-            .iter()
-            .map(|(operation, c, _)| {
-                let mut c = *c;
-                c.staged_sync_nanos = 0;
-                c.publish_sync_nanos = 0;
-                c.dir_sync_nanos = 0;
-                c.file_sync_nanos = 0;
-                (operation.clone(), c)
-            })
-            .collect::<Vec<_>>()
-    };
-    assert_eq!(counts(&simulated), counts(&again));
-    assert_eq!(
-        counts(&simulated),
-        counts(&native),
-        "the simulator and std::fs run the same store primitives"
-    );
-    let operation = |name: &str| {
-        simulated
-            .iter()
-            .find(|(operation, _, _)| operation == name)
-            .map(|(_, c, calls)| (*c, *calls))
-            .unwrap_or_else(|| panic!("{name} recorded"))
-    };
-    for name in [
-        "bootstrap_commit",
-        "receive_commit",
-        "refresh_policy_commit",
-        "send_commit",
-        "load_commit",
-        "unload_commit",
-    ] {
-        let (c, calls) = operation(name);
-        assert_eq!((calls.advance, calls.publish), (1, 1), "{name}");
-        assert!(c.index_node_saves > 0, "{name}");
-    }
-    let (receive, _) = operation("receive_fold_turn_1");
-    assert_eq!(
-        receive.map_inserts, 1,
-        "folding a Receive inserts its credit into the persistent credit tree"
-    );
     // Baseline per operation (Android policy): fsync-class calls, provider archive puts and
     // protected-storage probes, Advance excluded. Storage optimizations update this table.
     // Archive phases: within one phase only the first access reconciles (with its probes) and
@@ -467,6 +420,53 @@ fn coordinator_storage_counts_are_deterministic_and_filesystem_independent() {
         ("snapshot", 0, 0, 134),
         ("send_exact_retry", 0, 0, 36),
     ];
+
+    let simulated = coordinator_run(SimFs::new(), "sim", Policy::NotRequired, false);
+    let again = coordinator_run(SimFs::new(), "sim", Policy::NotRequired, false);
+    let (_temp, fs) = std_root();
+    let native = coordinator_run(fs, "std", Policy::NotRequired, false);
+    let counts = |lines: &[(String, Counters, Calls)]| {
+        lines
+            .iter()
+            .map(|(operation, c, _)| {
+                let mut c = *c;
+                c.staged_sync_nanos = 0;
+                c.publish_sync_nanos = 0;
+                c.dir_sync_nanos = 0;
+                c.file_sync_nanos = 0;
+                (operation.clone(), c)
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(counts(&simulated), counts(&again));
+    assert_eq!(
+        counts(&simulated),
+        counts(&native),
+        "the simulator and std::fs run the same store primitives"
+    );
+    let operation = |name: &str| {
+        simulated
+            .iter()
+            .find(|(operation, _, _)| operation == name)
+            .map_or_else(|| panic!("{name} recorded"), |(_, c, calls)| (*c, *calls))
+    };
+    for name in [
+        "bootstrap_commit",
+        "receive_commit",
+        "refresh_policy_commit",
+        "send_commit",
+        "load_commit",
+        "unload_commit",
+    ] {
+        let (c, calls) = operation(name);
+        assert_eq!((calls.advance, calls.publish), (1, 1), "{name}");
+        assert!(c.index_node_saves > 0, "{name}");
+    }
+    let (receive, _) = operation("receive_fold_turn_1");
+    assert_eq!(
+        receive.map_inserts, 1,
+        "folding a Receive inserts its credit into the persistent credit tree"
+    );
     let actual = simulated
         .iter()
         .map(|(operation, c, _)| {

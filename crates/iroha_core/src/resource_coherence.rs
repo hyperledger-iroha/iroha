@@ -10,7 +10,7 @@ use crate::state::WorldReadOnly;
 
 /// A semantic policy or authenticated schedule inconsistency.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-pub(crate) enum PolicyCoherenceError {
+pub enum PolicyCoherenceError {
     /// The final candidate cannot describe its two successor heights.
     #[error("two successor heights cannot follow committed height {committed_height}")]
     HeightOverflow { committed_height: u64 },
@@ -60,7 +60,7 @@ fn scheduled_cap(
 }
 
 /// Validate the final invocation/block candidate without mutating either policy owner.
-pub(crate) fn validate_final_policy(
+pub fn validate_final_policy(
     world: &impl WorldReadOnly,
     committed_height: u64,
 ) -> Result<(), PolicyCoherenceError> {
@@ -90,7 +90,7 @@ pub(crate) fn validate_final_policy(
 mod tests;
 
 /// Check restored original policies against both admitted successor schedule slots.
-pub(crate) fn validate_restored_policy(
+pub fn validate_restored_policy(
     world: &impl WorldReadOnly,
     committed_height: u64,
 ) -> Result<(), PolicyCoherenceError> {

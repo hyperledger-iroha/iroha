@@ -1,4 +1,4 @@
-//! Chain-authoritative SoraFS reserve/rent HTTP boundary.
+//! Chain-authoritative `SoraFS` reserve/rent HTTP boundary.
 //!
 //! V1 deliberately has no process-local reserve model. Mutation routes accept one exact
 //! caller-signed native instruction and forward that transaction to strict durable ingress. Read
@@ -457,7 +457,7 @@ fn validate_reserve_signed_transaction(
     let view = state.state.query_view();
     let policy = FindSorafsReservePolicy::new()
         .execute(&view)
-        .map_err(reserve_query_error_response)?;
+        .map_err(|value| reserve_query_error_response(&value))?;
     let authority = transaction.authority();
     match route {
         ReserveCommandRouteV1::RequestMovement(expected_kind) => {
@@ -467,7 +467,7 @@ fn validate_reserve_signed_transaction(
             }
             let account = FindSorafsReserveProviderById::new(request.provider_id)
                 .execute(&view)
-                .map_err(reserve_query_error_response)?;
+                .map_err(|value| reserve_query_error_response(&value))?;
             require_provider_authority(authority, &account)?;
             require_current_provider_binding(
                 request.expected_provider_revision,
@@ -487,7 +487,7 @@ fn validate_reserve_signed_transaction(
             require_subject(authority, &policy.policy.decision_authority, "decision")?;
             let movement = FindSorafsReserveMovementById::new(decision.movement_id)
                 .execute(&view)
-                .map_err(reserve_query_error_response)?;
+                .map_err(|value| reserve_query_error_response(&value))?;
             if movement.status != ReserveMovementStatusV1::Pending {
                 return Err(json_error(
                     StatusCode::CONFLICT,
@@ -496,7 +496,7 @@ fn validate_reserve_signed_transaction(
             }
             let account = FindSorafsReserveProviderById::new(movement.provider_id)
                 .execute(&view)
-                .map_err(reserve_query_error_response)?;
+                .map_err(|value| reserve_query_error_response(&value))?;
             require_current_provider_binding(
                 decision.expected_provider_revision,
                 decision.policy_digest,
@@ -509,7 +509,7 @@ fn validate_reserve_signed_transaction(
             require_subject(authority, &policy.policy.operations_authority, "operations")?;
             let account = FindSorafsReserveProviderById::new(draw.provider_id)
                 .execute(&view)
-                .map_err(reserve_query_error_response)?;
+                .map_err(|value| reserve_query_error_response(&value))?;
             require_current_provider_binding(
                 draw.expected_provider_revision,
                 draw.policy_digest,
@@ -521,7 +521,7 @@ fn validate_reserve_signed_transaction(
             let repayment = one_instruction::<RepaySorafsReserveCredit>(transaction)?;
             let account = FindSorafsReserveProviderById::new(repayment.provider_id)
                 .execute(&view)
-                .map_err(reserve_query_error_response)?;
+                .map_err(|value| reserve_query_error_response(&value))?;
             require_provider_authority(authority, &account)?;
             require_current_provider_binding(
                 repayment.expected_provider_revision,
@@ -534,7 +534,7 @@ fn validate_reserve_signed_transaction(
             let appeal = one_instruction::<SubmitSorafsReserveAppeal>(transaction)?;
             let account = FindSorafsReserveProviderById::new(appeal.provider_id)
                 .execute(&view)
-                .map_err(reserve_query_error_response)?;
+                .map_err(|value| reserve_query_error_response(&value))?;
             require_provider_authority(authority, &account)?;
             require_current_provider_binding(
                 appeal.expected_provider_revision,
@@ -554,7 +554,7 @@ fn validate_reserve_signed_transaction(
             require_subject(authority, &policy.policy.decision_authority, "decision")?;
             let appeal = FindSorafsReserveAppealById::new(decision.appeal_id)
                 .execute(&view)
-                .map_err(reserve_query_error_response)?;
+                .map_err(|value| reserve_query_error_response(&value))?;
             if appeal.status != iroha_data_model::sorafs::reserve::ReserveAppealStatusV1::Pending {
                 return Err(json_error(
                     StatusCode::CONFLICT,
@@ -563,7 +563,7 @@ fn validate_reserve_signed_transaction(
             }
             let account = FindSorafsReserveProviderById::new(appeal.provider_id)
                 .execute(&view)
-                .map_err(reserve_query_error_response)?;
+                .map_err(|value| reserve_query_error_response(&value))?;
             require_current_provider_binding(
                 decision.expected_provider_revision,
                 decision.policy_digest,
@@ -770,7 +770,7 @@ pub async fn handle_get_sorafs_reserve_policy(
         };
         let policy = match FindSorafsReservePolicy::new().execute(&view) {
             Ok(policy) => policy,
-            Err(error) => return reserve_query_error_response(error),
+            Err(error) => return reserve_query_error_response(&(error)),
         };
         if let Err(response) = require_reserve_operator(&account, &policy) {
             return response;
@@ -799,7 +799,7 @@ pub async fn handle_get_sorafs_reserve_providers(
         let view = state.state.query_view();
         let policy = match FindSorafsReservePolicy::new().execute(&view) {
             Ok(policy) => policy,
-            Err(error) => return reserve_query_error_response(error),
+            Err(error) => return reserve_query_error_response(&(error)),
         };
         if let Err(response) = require_reserve_operator(&account, &policy) {
             return response;
@@ -812,7 +812,7 @@ pub async fn handle_get_sorafs_reserve_providers(
         .execute(&view)
         {
             Ok(page) => crate::JsonBody(page).into_response(),
-            Err(error) => reserve_query_error_response(error),
+            Err(error) => reserve_query_error_response(&(error)),
         }
     })
     .await
@@ -846,11 +846,11 @@ pub async fn handle_get_sorafs_reserve_provider(
         };
         let policy = match FindSorafsReservePolicy::new().execute(&view) {
             Ok(policy) => policy,
-            Err(error) => return reserve_query_error_response(error),
+            Err(error) => return reserve_query_error_response(&(error)),
         };
         let provider = match FindSorafsReserveProviderById::new(provider_id).execute(&view) {
             Ok(provider) => provider,
-            Err(error) => return reserve_query_error_response(error),
+            Err(error) => return reserve_query_error_response(&(error)),
         };
         if caller.subject_id() != provider.terms.provider_account.subject_id()
             && require_reserve_operator(&caller, &policy).is_err()
@@ -884,7 +884,7 @@ pub async fn handle_get_sorafs_reserve_movements(
         let view = state.state.query_view();
         let policy = match FindSorafsReservePolicy::new().execute(&view) {
             Ok(policy) => policy,
-            Err(error) => return reserve_query_error_response(error),
+            Err(error) => return reserve_query_error_response(&(error)),
         };
         if let Err(response) = require_reserve_operator(&caller, &policy) {
             return response;
@@ -897,7 +897,7 @@ pub async fn handle_get_sorafs_reserve_movements(
         .execute(&view)
         {
             Ok(page) => crate::JsonBody(page).into_response(),
-            Err(error) => reserve_query_error_response(error),
+            Err(error) => reserve_query_error_response(&(error)),
         }
     })
     .await
@@ -931,11 +931,11 @@ pub async fn handle_get_sorafs_reserve_movement(
         };
         let policy = match FindSorafsReservePolicy::new().execute(&view) {
             Ok(policy) => policy,
-            Err(error) => return reserve_query_error_response(error),
+            Err(error) => return reserve_query_error_response(&(error)),
         };
         let movement = match FindSorafsReserveMovementById::new(movement_id).execute(&view) {
             Ok(movement) => movement,
-            Err(error) => return reserve_query_error_response(error),
+            Err(error) => return reserve_query_error_response(&(error)),
         };
         if let Err(response) =
             require_provider_or_operator_for_id(&view, &caller, movement.provider_id, &policy)
@@ -966,7 +966,7 @@ pub async fn handle_get_sorafs_reserve_appeals(
         let view = state.state.query_view();
         let policy = match FindSorafsReservePolicy::new().execute(&view) {
             Ok(policy) => policy,
-            Err(error) => return reserve_query_error_response(error),
+            Err(error) => return reserve_query_error_response(&(error)),
         };
         if let Err(response) = require_reserve_operator(&caller, &policy) {
             return response;
@@ -979,7 +979,7 @@ pub async fn handle_get_sorafs_reserve_appeals(
         .execute(&view)
         {
             Ok(page) => crate::JsonBody(page).into_response(),
-            Err(error) => reserve_query_error_response(error),
+            Err(error) => reserve_query_error_response(&(error)),
         }
     })
     .await
@@ -1013,11 +1013,11 @@ pub async fn handle_get_sorafs_reserve_appeal(
         };
         let policy = match FindSorafsReservePolicy::new().execute(&view) {
             Ok(policy) => policy,
-            Err(error) => return reserve_query_error_response(error),
+            Err(error) => return reserve_query_error_response(&(error)),
         };
         let appeal = match FindSorafsReserveAppealById::new(appeal_id).execute(&view) {
             Ok(appeal) => appeal,
-            Err(error) => return reserve_query_error_response(error),
+            Err(error) => return reserve_query_error_response(&(error)),
         };
         if let Err(response) =
             require_provider_or_operator_for_id(&view, &caller, appeal.provider_id, &policy)
@@ -1048,7 +1048,7 @@ pub async fn handle_get_sorafs_reserve_events(
         let view = state.state.query_view();
         let policy = match FindSorafsReservePolicy::new().execute(&view) {
             Ok(policy) => policy,
-            Err(error) => return reserve_query_error_response(error),
+            Err(error) => return reserve_query_error_response(&(error)),
         };
         if let Err(response) = require_reserve_operator(&caller, &policy) {
             return response;
@@ -1061,7 +1061,7 @@ pub async fn handle_get_sorafs_reserve_events(
         .execute(&view)
         {
             Ok(page) => crate::JsonBody(page).into_response(),
-            Err(error) => reserve_query_error_response(error),
+            Err(error) => reserve_query_error_response(&(error)),
         }
     })
     .await
@@ -1086,7 +1086,7 @@ pub async fn handle_get_sorafs_reserve_events_stream(
         let view = state.state.query_view();
         let policy = match FindSorafsReservePolicy::new().execute(&view) {
             Ok(policy) => policy,
-            Err(error) => return reserve_query_error_response(error),
+            Err(error) => return reserve_query_error_response(&(error)),
         };
         if let Err(response) = require_reserve_operator(&caller, &policy) {
             return response;
@@ -1099,7 +1099,7 @@ pub async fn handle_get_sorafs_reserve_events_stream(
         .execute(&view)
         {
             Ok(page) => page,
-            Err(error) => return reserve_query_error_response(error),
+            Err(error) => return reserve_query_error_response(&(error)),
         };
         drop(view);
         Sse::new(reserve_event_stream(
@@ -1135,7 +1135,7 @@ pub async fn handle_get_sorafs_reserve_events_ws(
         let view = state.state.query_view();
         let policy = match FindSorafsReservePolicy::new().execute(&view) {
             Ok(policy) => policy,
-            Err(error) => return reserve_query_error_response(error),
+            Err(error) => return reserve_query_error_response(&(error)),
         };
         if let Err(response) = require_reserve_operator(&caller, &policy) {
             return response;
@@ -1148,7 +1148,7 @@ pub async fn handle_get_sorafs_reserve_events_ws(
         .execute(&view)
         {
             Ok(page) => page,
-            Err(error) => return reserve_query_error_response(error),
+            Err(error) => return reserve_query_error_response(&(error)),
         };
         drop(view);
         let preauth_guard = crate::take_preauth_upgrade_guard(preauth_guard);
@@ -1470,7 +1470,7 @@ fn require_provider_or_operator_for_id(
     }
     let provider = FindSorafsReserveProviderById::new(provider_id)
         .execute(view)
-        .map_err(reserve_query_error_response)?;
+        .map_err(|value| reserve_query_error_response(&value))?;
     if caller.subject_id() == provider.terms.provider_account.subject_id() {
         Ok(())
     } else {
@@ -1528,12 +1528,12 @@ fn anchored_record_response<T: norito::json::JsonSerialize>(
     };
     JsonBody(crate::json_object(vec![
         crate::json_entry("schema", "sorafs.reserve.finalized_record.v1"),
-        crate::json_entry("finalized_cursor", cursor),
-        crate::json_entry(field, record),
+        crate::json_entry("finalized_cursor", &(cursor)),
+        crate::json_entry(field, &record),
     ]))
     .into_response()
 }
-fn reserve_query_error_response(error: QueryExecutionFail) -> Response {
+fn reserve_query_error_response(error: &QueryExecutionFail) -> Response {
     let status = match error {
         QueryExecutionFail::Find(
             FindError::SorafsReservePolicy
@@ -1553,7 +1553,7 @@ fn reserve_query_error_response(error: QueryExecutionFail) -> Response {
             "authoritative finalized SoraFS reserve query failed"
         );
     }
-    json_error(status, reserve_query_public_message(&error))
+    json_error(status, reserve_query_public_message(error))
 }
 fn reserve_query_public_message(error: &QueryExecutionFail) -> String {
     match error {
@@ -1717,8 +1717,8 @@ fn json_error(status: StatusCode, message: impl Into<String>) -> Response {
     (
         status,
         JsonBody(crate::json_object(vec![
-            crate::json_entry("error", status.canonical_reason().unwrap_or("error")),
-            crate::json_entry("message", message.into()),
+            crate::json_entry("error", &(status.canonical_reason().unwrap_or("error"))),
+            crate::json_entry("message", &(message.into())),
         ])),
     )
         .into_response()

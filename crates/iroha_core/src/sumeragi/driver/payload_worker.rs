@@ -96,6 +96,10 @@ impl PayloadWork {
     /// # Errors
     ///
     /// Returns the original action unchanged when it is not payload work.
+    #[expect(
+        clippy::result_large_err,
+        reason = "A rejected conversion returns the original action without allocating."
+    )]
     pub fn from_action(action: Action) -> Result<Self, Action> {
         match action {
             Action::AuthorPayload {
@@ -309,7 +313,7 @@ impl PayloadWorker {
         }
         progress.refused |= !self.deferred.is_empty();
         self.author(&mut progress)?;
-        self.receive(&mut progress)?;
+        self.receive(&mut progress);
         self.read(bodies, blocks, net, &mut progress)?;
         self.send(net, &mut progress)?;
         progress.retry |= self.has_runnable();
@@ -722,7 +726,7 @@ impl PayloadWorker {
         Ok(())
     }
 
-    fn receive(&mut self, progress: &mut PayloadProgress) -> io::Result<()> {
+    fn receive(&mut self, progress: &mut PayloadProgress) {
         // Round-robin across runnable identities, so a refused early key cannot starve later rows.
         let key = self
             .incoming
@@ -737,7 +741,7 @@ impl PayloadWorker {
                     .map(|(k, _)| *k)
             });
         let Some(key) = key else {
-            return Ok(());
+            return;
         };
         self.incoming_cursor = Some(key);
         let mut incoming = self
@@ -762,7 +766,6 @@ impl PayloadWorker {
                 self.incoming.insert(key, incoming);
             }
         }
-        Ok(())
     }
 
     fn read(
@@ -976,32 +979,30 @@ impl PayloadWorker {
                             .expect("encoded original manifest")
                             .clone(),
                     )
+                } else if let Some((index, frame)) = &outgoing.row_frame
+                    && *index == peer.next - 1
+                {
+                    Some(frame.clone())
                 } else {
-                    if let Some((index, frame)) = &outgoing.row_frame
-                        && *index == peer.next - 1
+                    match outgoing
+                        .job
+                        .chunk(peer.next - 1, &self.budget, &*self.crypto)
                     {
-                        Some(frame.clone())
-                    } else {
-                        match outgoing
-                            .job
-                            .chunk(peer.next - 1, &self.budget, &*self.crypto)
-                        {
-                            Ok(Some(chunk)) => {
-                                let frame = super::serve::frame(&WireMessage::PayloadChunk(chunk))
-                                    .ok_or_else(|| fault("signed row encoding"))?;
-                                outgoing.row_frame = Some((peer.next - 1, frame.clone()));
-                                Some(frame)
-                            }
-                            Ok(None) => {
-                                peer.complete = true;
-                                None
-                            }
-                            Err(error) if error.is_local_refusal() => {
-                                progress.refused = true;
-                                None
-                            }
-                            Err(error) => return Err(fault(error)),
+                        Ok(Some(chunk)) => {
+                            let frame = super::serve::frame(&WireMessage::PayloadChunk(chunk))
+                                .ok_or_else(|| fault("signed row encoding"))?;
+                            outgoing.row_frame = Some((peer.next - 1, frame.clone()));
+                            Some(frame)
                         }
+                        Ok(None) => {
+                            peer.complete = true;
+                            None
+                        }
+                        Err(error) if error.is_local_refusal() => {
+                            progress.refused = true;
+                            None
+                        }
+                        Err(error) => return Err(fault(error)),
                     }
                 };
                 if let Some(frame) = frame {

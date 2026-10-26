@@ -224,11 +224,11 @@ impl CaAwaitingJointOpeningsV1 {
     pub(crate) fn bind_with_main_v1(
         &mut self,
         main_transcript: &mut TransparentTranscriptV1,
-        main_values: [E; 24],
+        main_values: &[E; 24],
     ) -> Result<JointDeepBindingV1, ZkX509CaAccumulatorProofErrorV1> {
         let proof_instance = self.oracles.original.binding.proof_instance_v1();
         JointOriginalOpeningsV1 {
-            main: main_values,
+            main: *main_values,
             ca: self.extra_values,
         }
         .bind_both_v1(
@@ -243,7 +243,7 @@ impl CaAwaitingJointOpeningsV1 {
     /// The caller still must verify the completed MAIN+CA credential together.
     pub(crate) fn finish_v1(
         mut self,
-        binding: JointDeepBindingV1,
+        binding: &JointDeepBindingV1,
     ) -> Result<Vec<u8>, ZkX509CaAccumulatorProofErrorV1> {
         let proof_instance = self.oracles.original.binding.proof_instance_v1();
         if !binding.matches_v1(JointSubproofV1::Ca, &self.oracles.transcript)

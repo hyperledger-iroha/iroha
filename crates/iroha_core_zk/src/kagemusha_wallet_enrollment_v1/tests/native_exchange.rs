@@ -40,6 +40,8 @@ mod archive;
 mod automatic_maintenance;
 #[path = "native_exchange/controls.rs"]
 mod controls;
+#[path = "native_exchange/enrollment_cohort.rs"]
+mod enrollment_cohort;
 #[path = "native_exchange/fee.rs"]
 mod fee;
 #[path = "native_exchange/fee_confirmation.rs"]
@@ -538,7 +540,7 @@ fn executable_hash() -> String {
     use std::io::Read as _;
     let mut file = fs::File::open(std::env::current_exe().unwrap()).unwrap();
     let mut hash = Sha256::new();
-    let mut bytes = [0_u8; 65536];
+    let mut bytes = vec![0_u8; 65_536];
     loop {
         let length = file.read(&mut bytes).unwrap();
         if length == 0 {
@@ -967,10 +969,10 @@ fn run_exchange(automatic_maintenance_handoff: bool) {
     );
     let payment_ab = complete(a.resume().unwrap().expect("selected Send remains pending"));
     finish_exchange_to(
-        (output, automatic_maintenance_handoff),
-        sources,
-        setup,
-        target_bytes,
+        (&output, automatic_maintenance_handoff),
+        &sources,
+        &setup,
+        &target_bytes,
         [
             Participant {
                 wallet: a,
@@ -991,7 +993,7 @@ fn run_exchange(automatic_maintenance_handoff: bool) {
                 frames: frames_c,
             },
         ],
-        send_ab,
+        &send_ab,
         payment_ab,
     );
 }
@@ -1010,12 +1012,12 @@ fn retain_frames(device: &HostDevice, frames: &[Vec<u8>; 4]) {
 }
 
 fn finish_exchange(
-    output: PathBuf,
-    sources: Sources,
-    setup: LedgerSetup,
-    target_bytes: Vec<u8>,
+    output: &Path,
+    sources: &Sources,
+    setup: &LedgerSetup,
+    target_bytes: &[u8],
     participants: [Participant; 3],
-    send_ab: OperationRequestV1,
+    send_ab: &OperationRequestV1,
     payment_ab: Vec<u8>,
 ) {
     finish_exchange_to(
@@ -1030,12 +1032,12 @@ fn finish_exchange(
 }
 
 fn finish_exchange_to(
-    (output, automatic_maintenance_handoff): (PathBuf, bool),
-    sources: Sources,
-    setup: LedgerSetup,
-    target_bytes: Vec<u8>,
+    (output, automatic_maintenance_handoff): (&Path, bool),
+    sources: &Sources,
+    setup: &LedgerSetup,
+    target_bytes: &[u8],
     participants: [Participant; 3],
-    send_ab: OperationRequestV1,
+    send_ab: &OperationRequestV1,
     payment_ab: Vec<u8>,
 ) {
     let OperationActionV1::Send {
@@ -1425,10 +1427,10 @@ struct ExchangeOriginals {
 // Shared unchanged Unload/proof/conservation/export assertions. Entry requires both
 // independently verified Archive branches and their exact retained originals.
 fn finish_unload(
-    output: PathBuf,
-    sources: Sources,
-    setup: LedgerSetup,
-    target_bytes: Vec<u8>,
+    output: &Path,
+    sources: &Sources,
+    setup: &LedgerSetup,
+    target_bytes: &[u8],
     participants: [Participant; 3],
     originals: ExchangeOriginals,
 ) {
@@ -1490,9 +1492,9 @@ fn finish_unload(
         "this campaign has no burned credit"
     );
     let b_final_credit_status = message_census::retain_credit_status(
-        &output,
+        output,
         "b-final-credit-status",
-        &sources,
+        sources,
         &b_status,
         &request_ab,
         &payment_ab,
@@ -1652,7 +1654,7 @@ fn finish_unload(
     // It never replaces the genuine released claim or performs another monetary operation.
     let c_before_negative = c.snapshot().unwrap();
     let c_sign_calls = device_c.platform.with(|state| state.sign_calls);
-    let bad_sigma_claim = proof_negative::claim(&sources, &device_c, &claim);
+    let bad_sigma_claim = proof_negative::claim(sources, &device_c, &claim);
     assert_eq!(c.snapshot().unwrap(), c_before_negative);
     assert_eq!(
         device_c.platform.with(|state| state.sign_calls),
@@ -1722,7 +1724,7 @@ fn finish_unload(
         .collect::<Vec<_>>();
     let result = norito::json!({ "schema": "iroha.kagemusha.native-abc-result.v1",
         "source_pins": (source_pins()), "binary_sha256": (executable_hash()),
-        "target_sha256": (sha(&target_bytes)), "native_unload_payout": "100",
+        "target_sha256": (sha(target_bytes)), "native_unload_payout": "100",
         "executed_ledger_setup_sha256": (setup.manifest_sha256),
         "a_account_digest": (hex::encode(kagemusha_wallet_account_digest_v1(&f.account).unwrap())),
         "b_account_digest": (hex::encode(kagemusha_wallet_account_digest_v1(&f_b.account).unwrap())),

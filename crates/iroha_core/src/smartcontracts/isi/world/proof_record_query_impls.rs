@@ -33,11 +33,10 @@ impl ValidQuery for iroha_data_model::query::proof::prelude::FindProofRecords {
                         .proofs()
                         .get(&proof_id)
                         .filter(|record| {
-                            if let Some(predicate) = predicate_json.as_ref() {
-                                predicate_matches_proof_record(predicate, record)
-                            } else {
-                                filter.applies(*record)
-                            }
+                            predicate_json.as_ref().map_or_else(
+                                || filter.applies(*record),
+                                |predicate| predicate_matches_proof_record(predicate, record),
+                            )
                         })
                         .cloned()
                 }));
@@ -45,11 +44,10 @@ impl ValidQuery for iroha_data_model::query::proof::prelude::FindProofRecords {
         }
         let iter: Box<dyn Iterator<Item = iroha_data_model::proof::ProofRecord> + '_> =
             Box::new(world.proofs().iter().filter_map(move |(_, record)| {
-                let matches = if let Some(predicate) = predicate_json.as_ref() {
-                    predicate_matches_proof_record(predicate, record)
-                } else {
-                    filter.applies(record)
-                };
+                let matches = predicate_json.as_ref().map_or_else(
+                    || filter.applies(record),
+                    |predicate| predicate_matches_proof_record(predicate, record),
+                );
                 matches.then(|| record.clone())
             }));
         Ok(iter)

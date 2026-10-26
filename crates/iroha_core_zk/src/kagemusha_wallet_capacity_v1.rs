@@ -83,6 +83,10 @@ pub enum KagemushaWalletCapacityShortfallV1 {
 
 /// Admission memory budgets under both quotient plans (see the module documentation).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "Memory estimates retain byte units in each public field name."
+)]
 pub struct KagemushaWalletProvingMemoryV1 {
     /// Every coset column transformed at once: the fastest plan.
     pub fused_bytes: u64,

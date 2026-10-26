@@ -182,18 +182,18 @@ struct IngressEndpointStats {
 }
 impl IngressStats {
     fn ensure_endpoints(&self, labels: &[String]) {
-        if let Ok(mut guard) = self.endpoint_stats.lock() {
-            if guard.is_empty() {
-                *guard = labels
-                    .iter()
-                    .cloned()
-                    .map(|endpoint| IngressEndpointStats {
-                        endpoint,
-                        failover_total: 0,
-                        unhealthy_total: 0,
-                    })
-                    .collect();
-            }
+        if let Ok(mut guard) = self.endpoint_stats.lock()
+            && guard.is_empty()
+        {
+            *guard = labels
+                .iter()
+                .cloned()
+                .map(|endpoint| IngressEndpointStats {
+                    endpoint,
+                    failover_total: 0,
+                    unhealthy_total: 0,
+                })
+                .collect();
         }
     }
     fn record_failover(&self, endpoint_idx: usize) {
@@ -476,8 +476,7 @@ impl EndpointHealthPool {
             let label = self
                 .labels
                 .get(endpoint_idx)
-                .map(String::as_str)
-                .unwrap_or("<unknown>");
+                .map_or("<unknown>", String::as_str);
             attempted = attempted.saturating_add(1);
             match operation(endpoint_idx, label) {
                 Ok(value) => {
@@ -541,14 +540,18 @@ impl EndpointHealthPool {
                 }
             }
         }
-        match last_error {
-            Some(err) => Err(err).wrap_err_with(|| {
-                format!("ingress operation `{op_name}` failed after {attempted} attempt(s)")
-            }),
-            None => Err(eyre!(
-                "ingress operation `{op_name}` failed without making an endpoint attempt"
-            )),
-        }
+        last_error.map_or_else(
+            || {
+                Err(eyre!(
+                    "ingress operation `{op_name}` failed without making an endpoint attempt"
+                ))
+            },
+            |err| {
+                Err(err).wrap_err_with(|| {
+                    format!("ingress operation `{op_name}` failed after {attempted} attempt(s)")
+                })
+            },
+        )
     }
     fn run_with_failover_until_some_at_with_preference_and_limit<T, F>(
         &self,
@@ -579,8 +582,7 @@ impl EndpointHealthPool {
             let label = self
                 .labels
                 .get(endpoint_idx)
-                .map(String::as_str)
-                .unwrap_or("<unknown>");
+                .map_or("<unknown>", String::as_str);
             attempted = attempted.saturating_add(1);
             match operation(endpoint_idx, label) {
                 Ok(Some(value)) => {
@@ -651,14 +653,18 @@ impl EndpointHealthPool {
         if observed_empty {
             return Ok(None);
         }
-        match last_error {
-            Some(err) => Err(err).wrap_err_with(|| {
-                format!("ingress operation `{op_name}` failed after {attempted} attempt(s)")
-            }),
-            None => Err(eyre!(
-                "ingress operation `{op_name}` failed without making an endpoint attempt"
-            )),
-        }
+        last_error.map_or_else(
+            || {
+                Err(eyre!(
+                    "ingress operation `{op_name}` failed without making an endpoint attempt"
+                ))
+            },
+            |err| {
+                Err(err).wrap_err_with(|| {
+                    format!("ingress operation `{op_name}` failed after {attempted} attempt(s)")
+                })
+            },
+        )
     }
     fn run_with_failover_excluding_at<T, F>(
         &self,
@@ -691,8 +697,7 @@ impl EndpointHealthPool {
             let label = self
                 .labels
                 .get(endpoint_idx)
-                .map(String::as_str)
-                .unwrap_or("<unknown>");
+                .map_or("<unknown>", String::as_str);
             attempted = attempted.saturating_add(1);
             match operation(endpoint_idx, label) {
                 Ok(value) => {
@@ -756,16 +761,13 @@ impl EndpointHealthPool {
                 }
             }
         }
-        match last_error {
-            Some(err) => Err(err).wrap_err_with(|| {
+        last_error.map_or_else(|| Err(eyre!(
+                "ingress operation `{op_name}` failed without making an alternate endpoint attempt"
+            )), |err| Err(err).wrap_err_with(|| {
                 format!(
                     "ingress operation `{op_name}` failed after {attempted} alternate attempt(s)"
                 )
-            }),
-            None => Err(eyre!(
-                "ingress operation `{op_name}` failed without making an alternate endpoint attempt"
-            )),
-        }
+            }))
     }
     fn probe_due_at(&self, state: &EndpointHealthState, now: Instant) -> bool {
         state
@@ -793,9 +795,9 @@ impl EndpointHealthPool {
         let _lag_snapshot_age = lag_snapshot
             .as_ref()
             .map(|snapshot| now.saturating_duration_since(snapshot.observed_at));
-        lag_snapshot
-            .as_ref()
-            .map(|snapshot| {
+        lag_snapshot.as_ref().map_or_else(
+            || vec![false; len],
+            |snapshot| {
                 snapshot
                     .peer_heights
                     .iter()
@@ -806,8 +808,8 @@ impl EndpointHealthPool {
                         })
                     })
                     .collect::<Vec<_>>()
-            })
-            .unwrap_or_else(|| vec![false; len])
+            },
+        )
     }
     fn attempt_order_with_state(
         &self,
@@ -872,9 +874,8 @@ impl EndpointHealthPool {
                 }
             }
             if let Some(unhealthy_until) = endpoint_state.unhealthy_until {
-                let should_replace = forced_probe
-                    .map(|(_, current_until)| unhealthy_until < current_until)
-                    .unwrap_or(true);
+                let should_replace =
+                    forced_probe.is_none_or(|(_, current_until)| unhealthy_until < current_until);
                 if should_replace {
                     forced_probe = Some((idx, unhealthy_until));
                 }
@@ -1199,8 +1200,7 @@ impl IngressEndpointPool {
                 endpoint = %self
                     .endpoints
                     .get(endpoint_idx)
-                    .map(|endpoint| endpoint.label.as_str())
-                    .unwrap_or("<unknown>"),
+                    .map_or("<unknown>", |endpoint| endpoint.label.as_str()),
                 "reserved fault-target peer away from client ingress"
             );
         }
@@ -1351,14 +1351,18 @@ impl IngressEndpointPool {
                 }
             }
         }
-        match last_error {
-            Some(err) => Err(err).wrap_err_with(|| {
-                format!("ingress operation `{op_name}` failed after {attempted} attempt(s)")
-            }),
-            None => Err(eyre!(
-                "ingress operation `{op_name}` failed without making an endpoint attempt"
-            )),
-        }
+        last_error.map_or_else(
+            || {
+                Err(eyre!(
+                    "ingress operation `{op_name}` failed without making an endpoint attempt"
+                ))
+            },
+            |err| {
+                Err(err).wrap_err_with(|| {
+                    format!("ingress operation `{op_name}` failed after {attempted} attempt(s)")
+                })
+            },
+        )
     }
     fn run_with_failover_excluding<T, F>(
         &self,
@@ -1425,9 +1429,9 @@ impl IngressEndpointPool {
             .get(endpoint_idx)
             .ok_or_else(|| eyre!("endpoint index {endpoint_idx} out of range"))?;
         let client = tune_ingress_client(
-            endpoint
+            &(endpoint
                 .peer
-                .client_for(&signer.id, signer.key_pair.private_key().clone()),
+                .client_for(&signer.id, signer.key_pair.private_key().clone())),
             mode,
             self.submit_request_timeout,
         )?;
@@ -1894,9 +1898,10 @@ fn sumeragi_phase_operator_keypair() -> KeyPair {
     Signatory::Peer.key_pair().clone()
 }
 fn izanami_npos_parameters(peer_count: usize) -> SumeragiNposParameters {
-    let mut params = SumeragiNposParameters::default();
-    params.max_validators = u32::try_from(peer_count.max(1)).unwrap_or(u32::MAX);
-    params
+    SumeragiNposParameters {
+        max_validators: u32::try_from(peer_count.max(1)).unwrap_or(u32::MAX),
+        ..SumeragiNposParameters::default()
+    }
 }
 fn npos_min_self_bond_from_genesis(genesis: &GenesisBlock) -> Result<Quantity> {
     let mut params = Parameters::default();
@@ -2135,6 +2140,11 @@ fn effective_ingress_request_timeout(config: &ChaosConfig) -> Duration {
         baseline
     }
 }
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "TPS is nonnegative and ceil rounds the pacing floor; the saturating float conversion and usize fallback bound extreme inputs."
+)]
 fn apply_shared_host_stable_soak_profile(config: &mut ChaosConfig) {
     if !is_shared_host_stable_soak(config) {
         return;
@@ -2219,7 +2229,7 @@ fn log_effective_consensus_soak_overrides(config: &ChaosConfig) {
     let block_cadence_ms = u64::try_from(
         config
             .pipeline_time
-            .map_or_else(default_izanami_pipeline_time, |duration| duration)
+            .unwrap_or_else(default_izanami_pipeline_time)
             .as_millis(),
     )
     .unwrap_or(u64::MAX);
@@ -2299,8 +2309,19 @@ fn make_network_builder_with_sorafs(
         .pipeline_time
         .unwrap_or_else(default_izanami_pipeline_time);
     builder = builder.with_block_cadence(pipeline_time);
+    let staking_policy = config
+        .nexus
+        .as_ref()
+        .map(instructions::nexus_staking_policy)
+        .transpose()?;
     if let Some(profile) = &config.nexus {
         builder = builder.with_config_table(profile.config_layer.clone());
+        builder = builder.with_genesis_staking_policy(
+            staking_policy
+                .as_ref()
+                .expect("selected profile policy")
+                .clone(),
+        );
         let gas_account = instructions::nexus_gas_account_id()?;
         let mut root_fees = profile.root_fees.clone();
         root_fees.fee_sink_account_id = gas_account.clone();
@@ -2310,19 +2331,10 @@ fn make_network_builder_with_sorafs(
         )));
         let gas_account_id = gas_account.to_string();
         builder = builder.with_config_layer(move |layer| {
-            layer
-                .write(
-                    ["pipeline", "gas", "tech_account_id"],
-                    gas_account_id.clone(),
-                )
-                .write(
-                    ["nexus", "staking", "stake_escrow_account_id"],
-                    gas_account_id.clone(),
-                )
-                .write(
-                    ["nexus", "staking", "slash_sink_account_id"],
-                    gas_account_id.clone(),
-                );
+            layer.write(
+                ["pipeline", "gas", "tech_account_id"],
+                gas_account_id.clone(),
+            );
         });
     }
     if let Some(profile) = config.nexus.as_ref() {
@@ -2335,8 +2347,7 @@ fn make_network_builder_with_sorafs(
                 config.peer_count,
                 profile.bootstrap_public_lanes.as_slice(),
                 npos_params.min_self_bond(),
-                &profile.stake_asset_id,
-                &instructions::nexus_gas_account_id()?,
+                staking_policy.as_ref().expect("selected profile policy"),
             )?);
     }
     if let Ok(filter) = std::env::var("RUST_LOG") {
@@ -2529,7 +2540,7 @@ fn extract_nexus_bootstrap_post_topology(
             instructions::peer_keypair(index)?.public_key().clone(),
         ));
     }
-    let stake_asset = profile.stake_asset_id.clone();
+    let stake_asset = profile.staking_policy.stake_asset_id.clone();
     let fee_asset = profile.fee_asset_id.clone();
     let mut neutral_tx = Vec::new();
     let mut stake_tx = Vec::new();
@@ -2896,8 +2907,7 @@ impl IzanamiRunner {
                 config
                     .nexus
                     .as_ref()
-                    .map(|profile| profile.bootstrap_public_lanes.as_slice())
-                    .unwrap_or(&[]),
+                    .map_or(&[], |profile| profile.bootstrap_public_lanes.as_slice()),
             )?;
             info!(
                 target: "izanami::preflight",
@@ -2974,20 +2984,22 @@ impl IzanamiRunner {
             let (tx, rx) = mpsc::channel(IZANAMI_THROUGHPUT_CONFIRMATION_QUEUE_CAP);
             (
                 Some(tx),
-                Some(self.spawn_confirmation_audit_worker(
+                Some(Self::spawn_confirmation_audit_worker(
                     &metrics,
                     &ingress_pool,
                     &run_control,
                     rx,
-                    confirmation_audit_wait_options.clone(),
+                    confirmation_audit_wait_options,
                 )),
             )
         } else {
             (None, None)
         };
         let faulty_handles = self.spawn_fault_tasks(
-            &config_layers,
-            &genesis,
+            FaultGenesis {
+                config_layers: &config_layers,
+                genesis: &genesis,
+            },
             &run_control,
             &ingress_pool,
             run_started_at,
@@ -3000,10 +3012,12 @@ impl IzanamiRunner {
             &run_control,
             &mut rng,
             &submission_counter,
-            prebuilt_pool,
-            confirmation_audit_tx.clone(),
-            confirmation_audit_seed,
-            confirmation_audit_wait_options.clone(),
+            LoadSubmissionConfig {
+                prebuilt_pool,
+                confirmation_audit_tx: confirmation_audit_tx.clone(),
+                confirmation_audit_seed,
+                confirmation_audit_wait_options,
+            },
         );
         drop(confirmation_audit_tx);
         let soft_target_kpi =
@@ -3018,12 +3032,14 @@ impl IzanamiRunner {
                 self.config.progress_interval,
                 self.config.progress_timeout,
                 self.config.latency_p95_threshold,
-                &run_control,
-                Some(ingress_pool.as_ref()),
-                Some(metrics.as_ref()),
-                soft_target_kpi,
-                fault_start_at,
-                fault_end_at,
+                TargetProgressContext {
+                    run_control: &run_control,
+                    ingress_pool: Some(ingress_pool.as_ref()),
+                    metrics: Some(metrics.as_ref()),
+                    target_blocks_soft_kpi: soft_target_kpi,
+                    fault_start_at,
+                    fault_end_at,
+                },
             )
             .await
         } else if let Some(threshold) = self.config.latency_p95_threshold {
@@ -3042,12 +3058,14 @@ impl IzanamiRunner {
                 self.config.progress_interval,
                 self.config.progress_timeout,
                 self.config.latency_p95_threshold,
-                &run_control,
-                Some(ingress_pool.as_ref()),
-                Some(metrics.as_ref()),
-                true,
-                fault_start_at,
-                fault_end_at,
+                TargetProgressContext {
+                    run_control: &run_control,
+                    ingress_pool: Some(ingress_pool.as_ref()),
+                    metrics: Some(metrics.as_ref()),
+                    target_blocks_soft_kpi: true,
+                    fault_start_at,
+                    fault_end_at,
+                },
             )
             .await
         } else {
@@ -3117,7 +3135,7 @@ impl IzanamiRunner {
                 sumeragi_status_start,
                 sample_sumeragi_status_digest(&self.peers).await.ok(),
             ) {
-                (Some(start), Some(end)) => Some(end.delta_from(start)),
+                (Some(start), Some(end)) => Some(end.delta_from(&(start))),
                 _ => None,
             }
         } else {
@@ -3147,7 +3165,64 @@ impl IzanamiRunner {
         let snapshot = metrics.snapshot();
         let ingress_snapshot = ingress_stats.snapshot();
         let ingress_endpoint_stats = ingress_stats.endpoint_snapshots();
-        if let Some(err) = run_error {
+        run_error.map_or_else(|| {
+            info!(
+                target: "izanami::summary",
+                offered = snapshot.offered,
+                ingress_accepted = snapshot.ingress_accepted,
+                blocking_applied_success = snapshot.blocking_applied_success,
+                confirmation_sampled = snapshot.confirmation_sampled,
+                confirmation_applied = snapshot.confirmation_applied,
+                confirmation_failed = snapshot.confirmation_failed,
+                confirmation_budget_skipped = snapshot.confirmation_budget_skipped,
+                confirmation_queue_dropped = snapshot.confirmation_queue_dropped,
+                confirmation_shutdown_noise = snapshot.confirmation_shutdown_noise,
+                submit_plans_started = snapshot.submit_plans_started,
+                submit_plans_shutdown_skipped = snapshot.submit_plans_shutdown_skipped,
+                submit_tasks_shutdown_aborted = snapshot.submit_tasks_shutdown_aborted,
+                submit_latency_samples = snapshot.submit_latency_samples,
+                submit_latency_p50_ms = snapshot.submit_latency_p50_ms,
+                submit_latency_p95_ms = snapshot.submit_latency_p95_ms,
+                submit_latency_p99_ms = snapshot.submit_latency_p99_ms,
+                submit_latency_max_ms = snapshot.submit_latency_max_ms,
+                prebuilt_tx_buffer_capacity = snapshot.prebuilt_tx_buffer_capacity,
+                prebuilt_tx_workers = snapshot.prebuilt_tx_workers,
+                prebuilt_tx_built = snapshot.prebuilt_tx_built,
+                prebuilt_tx_used = snapshot.prebuilt_tx_used,
+                prebuilt_tx_fallback = snapshot.prebuilt_tx_fallback,
+                prebuilt_tx_skipped = snapshot.prebuilt_tx_skipped,
+                prebuilt_tx_build_failures = snapshot.prebuilt_tx_build_failures,
+                successes = snapshot.successes,
+                failures = snapshot.failures,
+                expected_failures = snapshot.expected_failures,
+                unexpected_successes = snapshot.unexpected_successes,
+                inflight_current = snapshot.inflight_current,
+                inflight_peak = snapshot.inflight_peak,
+                backlog_depth = snapshot.backlog_depth,
+                backlog_peak = snapshot.backlog_peak,
+                submitters = snapshot.submitters,
+                izanami_ingress_failover_total = ingress_snapshot.failover_total,
+                izanami_ingress_endpoint_unhealthy_total = ingress_snapshot.endpoint_unhealthy_total,
+                final_quorum_min_height = progress_snapshot.map(|progress| progress.quorum_min_height),
+                final_strict_min_height = progress_snapshot.map(|progress| progress.strict_min_height),
+                final_max_peer_height_skew = progress_snapshot.map(|progress| progress.max_peer_height_skew),
+                final_quorum_block_interval_p50_ms = progress_snapshot.and_then(|progress| progress.quorum_block_interval_p50_ms),
+                final_quorum_block_interval_p95_ms = progress_snapshot.and_then(|progress| progress.quorum_block_interval_p95_ms),
+                final_quorum_block_interval_samples = progress_snapshot.and_then(|progress| progress.quorum_block_interval_samples),
+                final_strict_block_interval_p50_ms = progress_snapshot.and_then(|progress| progress.strict_block_interval_p50_ms),
+                final_strict_block_interval_p95_ms = progress_snapshot.and_then(|progress| progress.strict_block_interval_p95_ms),
+                final_strict_block_interval_samples = progress_snapshot.and_then(|progress| progress.strict_block_interval_samples),
+                final_quorum_min_txs_approved = progress_snapshot.map(|progress| progress.quorum_min_txs_approved),
+                final_strict_min_txs_approved = progress_snapshot.map(|progress| progress.strict_min_txs_approved),
+                final_max_peer_txs_approved_skew = progress_snapshot.map(|progress| progress.max_peer_txs_approved_skew),
+                first_progress_after_fault_start_height = progress_snapshot.and_then(|progress| progress.first_progress_after_fault_start_height),
+                first_progress_after_fault_end_height = progress_snapshot.and_then(|progress| progress.first_progress_after_fault_end_height),
+                ?sumeragi_status_delta,
+                ?ingress_endpoint_stats,
+                "izanami run complete"
+            );
+            Ok(())
+        }, |err| {
             warn!(
                 target: "izanami::summary",
                 offered = snapshot.offered,
@@ -3205,72 +3280,17 @@ impl IzanamiRunner {
                 "izanami run finished with errors"
             );
             Err(err)
-        } else {
-            info!(
-                target: "izanami::summary",
-                offered = snapshot.offered,
-                ingress_accepted = snapshot.ingress_accepted,
-                blocking_applied_success = snapshot.blocking_applied_success,
-                confirmation_sampled = snapshot.confirmation_sampled,
-                confirmation_applied = snapshot.confirmation_applied,
-                confirmation_failed = snapshot.confirmation_failed,
-                confirmation_budget_skipped = snapshot.confirmation_budget_skipped,
-                confirmation_queue_dropped = snapshot.confirmation_queue_dropped,
-                confirmation_shutdown_noise = snapshot.confirmation_shutdown_noise,
-                submit_plans_started = snapshot.submit_plans_started,
-                submit_plans_shutdown_skipped = snapshot.submit_plans_shutdown_skipped,
-                submit_tasks_shutdown_aborted = snapshot.submit_tasks_shutdown_aborted,
-                submit_latency_samples = snapshot.submit_latency_samples,
-                submit_latency_p50_ms = snapshot.submit_latency_p50_ms,
-                submit_latency_p95_ms = snapshot.submit_latency_p95_ms,
-                submit_latency_p99_ms = snapshot.submit_latency_p99_ms,
-                submit_latency_max_ms = snapshot.submit_latency_max_ms,
-                prebuilt_tx_buffer_capacity = snapshot.prebuilt_tx_buffer_capacity,
-                prebuilt_tx_workers = snapshot.prebuilt_tx_workers,
-                prebuilt_tx_built = snapshot.prebuilt_tx_built,
-                prebuilt_tx_used = snapshot.prebuilt_tx_used,
-                prebuilt_tx_fallback = snapshot.prebuilt_tx_fallback,
-                prebuilt_tx_skipped = snapshot.prebuilt_tx_skipped,
-                prebuilt_tx_build_failures = snapshot.prebuilt_tx_build_failures,
-                successes = snapshot.successes,
-                failures = snapshot.failures,
-                expected_failures = snapshot.expected_failures,
-                unexpected_successes = snapshot.unexpected_successes,
-                inflight_current = snapshot.inflight_current,
-                inflight_peak = snapshot.inflight_peak,
-                backlog_depth = snapshot.backlog_depth,
-                backlog_peak = snapshot.backlog_peak,
-                submitters = snapshot.submitters,
-                izanami_ingress_failover_total = ingress_snapshot.failover_total,
-                izanami_ingress_endpoint_unhealthy_total = ingress_snapshot.endpoint_unhealthy_total,
-                final_quorum_min_height = progress_snapshot.map(|progress| progress.quorum_min_height),
-                final_strict_min_height = progress_snapshot.map(|progress| progress.strict_min_height),
-                final_max_peer_height_skew = progress_snapshot.map(|progress| progress.max_peer_height_skew),
-                final_quorum_block_interval_p50_ms = progress_snapshot.and_then(|progress| progress.quorum_block_interval_p50_ms),
-                final_quorum_block_interval_p95_ms = progress_snapshot.and_then(|progress| progress.quorum_block_interval_p95_ms),
-                final_quorum_block_interval_samples = progress_snapshot.and_then(|progress| progress.quorum_block_interval_samples),
-                final_strict_block_interval_p50_ms = progress_snapshot.and_then(|progress| progress.strict_block_interval_p50_ms),
-                final_strict_block_interval_p95_ms = progress_snapshot.and_then(|progress| progress.strict_block_interval_p95_ms),
-                final_strict_block_interval_samples = progress_snapshot.and_then(|progress| progress.strict_block_interval_samples),
-                final_quorum_min_txs_approved = progress_snapshot.map(|progress| progress.quorum_min_txs_approved),
-                final_strict_min_txs_approved = progress_snapshot.map(|progress| progress.strict_min_txs_approved),
-                final_max_peer_txs_approved_skew = progress_snapshot.map(|progress| progress.max_peer_txs_approved_skew),
-                first_progress_after_fault_start_height = progress_snapshot.and_then(|progress| progress.first_progress_after_fault_start_height),
-                first_progress_after_fault_end_height = progress_snapshot.and_then(|progress| progress.first_progress_after_fault_end_height),
-                ?sumeragi_status_delta,
-                ?ingress_endpoint_stats,
-                "izanami run complete"
-            );
-            Ok(())
-        }
+        })
     }
     fn seeded_rng(&self) -> Result<StdRng> {
         seeded_rng_from_seed(self.config.seed)
     }
     fn spawn_fault_tasks(
         &self,
-        config_layers: &Arc<Vec<Table>>,
-        genesis: &Arc<GenesisBlock>,
+        FaultGenesis {
+            config_layers,
+            genesis,
+        }: FaultGenesis<'_>,
         run_control: &Arc<RunControl>,
         ingress_pool: &Arc<IngressEndpointPool>,
         run_started_at: Instant,
@@ -3596,7 +3616,7 @@ impl IzanamiRunner {
                         }
                     };
                     let metadata = submission_metadata(submission_counter.as_ref());
-                    let transaction = match {
+                    let prepared_transaction = {
                         let account = client.account_client();
                         account
                             .prepare_transaction(iroha::client::AccountTransactionDraft::new(
@@ -3608,7 +3628,8 @@ impl IzanamiRunner {
                                 metadata,
                             ))
                             .and_then(|payload| account.sign_transaction(payload))
-                    } {
+                    };
+                    let transaction = match prepared_transaction {
                         Ok(transaction) => transaction,
                         Err(err) => {
                             metrics.record_prebuilt_tx_build_failure();
@@ -3685,6 +3706,10 @@ impl IzanamiRunner {
         }
         Some(PrebuiltTransactionPool::new(prepared))
     }
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "Load pacing intentionally projects worker counts into approximate floating-point durations."
+    )]
     fn spawn_load_supervisors(
         &self,
         metrics: &Arc<Metrics>,
@@ -3692,10 +3717,12 @@ impl IzanamiRunner {
         run_control: &Arc<RunControl>,
         rng: &mut StdRng,
         submission_counter: &Arc<AtomicU64>,
-        prebuilt_pool: Option<PrebuiltTransactionPool>,
-        confirmation_audit_tx: Option<mpsc::Sender<SubmissionAuditCandidate>>,
-        confirmation_audit_seed: u64,
-        confirmation_audit_wait_options: TransactionWaitOptions,
+        LoadSubmissionConfig {
+            prebuilt_pool,
+            confirmation_audit_tx,
+            confirmation_audit_seed,
+            confirmation_audit_wait_options,
+        }: LoadSubmissionConfig,
     ) -> Vec<JoinHandle<()>> {
         let submission_confirmation = submission_confirmation_mode(&self.config);
         let workload = Arc::clone(&self.workload);
@@ -3752,7 +3779,6 @@ impl IzanamiRunner {
                 let workload = Arc::clone(&workload);
                 let semaphore = Arc::clone(&semaphore);
                 let confirmation_audit_tx = confirmation_audit_tx.clone();
-                let confirmation_audit_wait_options = confirmation_audit_wait_options.clone();
                 tokio::spawn(async move {
                     let start = Instant::now();
                     let mut next_tick = start + phase_delay;
@@ -3894,7 +3920,7 @@ impl IzanamiRunner {
                         let confirmation_audit_tx = confirmation_audit_tx.clone();
                         let run_control = Arc::clone(&run_control);
                         let confirmation_audit_wait_options =
-                            confirmation_audit_wait_options.clone();
+                            confirmation_audit_wait_options;
                         submissions.spawn(async move {
                             let _backlog_guard = BacklogGuard::new(Arc::clone(&metrics));
                             submit_plan(
@@ -3904,12 +3930,7 @@ impl IzanamiRunner {
                                 semaphore,
                                 &metrics,
                                 &submission_counter,
-                                &workload,
-                                submitter_idx,
-                                confirmation_audit_tx,
-                                confirmation_audit_seed,
-                                &run_control,
-                                &confirmation_audit_wait_options,
+                                SubmissionContext { workload: &workload, submitter_idx, confirmation_audit_tx, confirmation_audit_seed, run_control: &run_control, confirmation_audit_wait_options: &confirmation_audit_wait_options },
                             )
                             .await;
                         });
@@ -3932,7 +3953,6 @@ impl IzanamiRunner {
         handles
     }
     fn spawn_confirmation_audit_worker(
-        &self,
         metrics: &Arc<Metrics>,
         ingress_pool: &Arc<IngressEndpointPool>,
         run_control: &Arc<RunControl>,
@@ -4002,7 +4022,7 @@ impl IzanamiRunner {
                     &run_control,
                     &metrics,
                     candidate,
-                    wait_options.clone(),
+                    wait_options,
                 )
                 .await;
             }
@@ -4074,18 +4094,20 @@ fn effective_prebuild_tx_workers(config: &ChaosConfig) -> usize {
     host_parallelism.min(config.submitters.max(1)).max(1)
 }
 fn effective_prebuilt_submit_batch_size(submission_tps: f64) -> usize {
-    if submission_tps >= IZANAMI_STRESS_STABLE_INGRESS_CAP_BYPASS_TPS as f64 {
+    if submission_tps >= IZANAMI_STRESS_STABLE_INGRESS_CAP_BYPASS_TPS {
         IZANAMI_PREBUILT_SUBMIT_BATCH_SIZE
     } else {
         1
     }
 }
 fn prebuild_attempt_limit(buffer_capacity: usize, worker_count: usize) -> u64 {
-    buffer_capacity
-        .saturating_mul(IZANAMI_PREBUILD_ATTEMPT_MULTIPLIER)
-        .max(buffer_capacity)
-        .max(worker_count)
-        .min(u64::MAX as usize) as u64
+    u64::try_from(
+        buffer_capacity
+            .saturating_mul(IZANAMI_PREBUILD_ATTEMPT_MULTIPLIER)
+            .max(buffer_capacity)
+            .max(worker_count),
+    )
+    .unwrap_or(u64::MAX)
 }
 fn plan_is_prebuild_safe(
     plan: &TransactionPlan,
@@ -4168,7 +4190,7 @@ async fn wait_for_submission_capacity(
     true
 }
 fn tune_ingress_client(
-    client: Client,
+    client: &Client,
     mode: SubmissionConfirmationMode,
     request_timeout: Duration,
 ) -> Result<Client> {
@@ -4190,20 +4212,17 @@ async fn await_worker_shutdown_with_timeout(
     timeout: Duration,
 ) {
     for mut handle in handles {
-        match time::timeout(timeout, &mut handle).await {
-            Ok(result) => {
-                let _ = result;
-            }
-            Err(_) => {
-                warn!(
-                    target: "izanami::run",
-                    worker_kind,
-                    ?timeout,
-                    "worker shutdown timed out; aborting task"
-                );
-                handle.abort();
-                let _ = handle.await;
-            }
+        if let Ok(result) = time::timeout(timeout, &mut handle).await {
+            let _ = result;
+        } else {
+            warn!(
+                target: "izanami::run",
+                worker_kind,
+                ?timeout,
+                "worker shutdown timed out; aborting task"
+            );
+            handle.abort();
+            let _ = handle.await;
         }
     }
 }
@@ -4223,8 +4242,7 @@ fn sampled_peer_heights_with_ids(peers: &[NetworkPeer]) -> Vec<(PeerId, u64)> {
             (
                 peer.id().clone(),
                 peer.best_effort_block_height()
-                    .map(|height| height.total)
-                    .unwrap_or(0),
+                    .map_or(0, |height| height.total),
             )
         })
         .collect()
@@ -4369,7 +4387,7 @@ impl SumeragiStatusDigest {
             committed_height_advance: 0,
         }
     }
-    fn delta_from(self, start: Self) -> Self {
+    fn delta_from(self, start: &Self) -> Self {
         Self {
             committed_height_advance: self
                 .status
@@ -4578,6 +4596,12 @@ impl BlockIntervalTracker {
             samples: self.total_weight,
         })
     }
+    #[expect(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "The display quantile uses the existing floating-point nearest rank, clamped to the positive total weight before conversion."
+    )]
     fn quantile_ms(&self, quantile: f64) -> u64 {
         debug_assert!((0.0..=1.0).contains(&quantile));
         if self.total_weight == 0 {
@@ -4814,6 +4838,40 @@ fn enforce_latency_p95_gate(
     }
     Ok(())
 }
+/// Shared genesis inputs used by fault workers.
+struct FaultGenesis<'a> {
+    config_layers: &'a Arc<Vec<Table>>,
+    genesis: &'a Arc<GenesisBlock>,
+}
+
+/// Prebuilt submission storage and confirmation audit settings.
+struct LoadSubmissionConfig {
+    prebuilt_pool: Option<PrebuiltTransactionPool>,
+    confirmation_audit_tx: Option<mpsc::Sender<SubmissionAuditCandidate>>,
+    confirmation_audit_seed: u64,
+    confirmation_audit_wait_options: TransactionWaitOptions,
+}
+
+/// Progress monitoring controls and the observed fault window.
+struct TargetProgressContext<'a> {
+    run_control: &'a RunControl,
+    ingress_pool: Option<&'a IngressEndpointPool>,
+    metrics: Option<&'a Metrics>,
+    target_blocks_soft_kpi: bool,
+    fault_start_at: Instant,
+    fault_end_at: Instant,
+}
+
+/// Shared submission accounting and confirmation audit context.
+struct SubmissionContext<'a> {
+    workload: &'a Arc<WorkloadEngine>,
+    submitter_idx: usize,
+    confirmation_audit_tx: Option<mpsc::Sender<SubmissionAuditCandidate>>,
+    confirmation_audit_seed: u64,
+    run_control: &'a RunControl,
+    confirmation_audit_wait_options: &'a TransactionWaitOptions,
+}
+
 async fn wait_for_target_blocks(
     peers: &[NetworkPeer],
     target_blocks: u64,
@@ -4821,12 +4879,14 @@ async fn wait_for_target_blocks(
     progress_interval: Duration,
     progress_timeout: Duration,
     latency_p95_threshold: Option<Duration>,
-    run_control: &RunControl,
-    ingress_pool: Option<&IngressEndpointPool>,
-    metrics: Option<&Metrics>,
-    target_blocks_soft_kpi: bool,
-    fault_start_at: Instant,
-    fault_end_at: Instant,
+    TargetProgressContext {
+        run_control,
+        ingress_pool,
+        metrics,
+        target_blocks_soft_kpi,
+        fault_start_at,
+        fault_end_at,
+    }: TargetProgressContext<'_>,
 ) -> Result<TargetProgressResult> {
     let start = Instant::now();
     let mut progress = ProgressState::new(start);
@@ -5099,9 +5159,8 @@ async fn wait_for_target_blocks(
                     tolerated_failures
                 ));
             }
-            let should_log = strict_tolerated_stall_logged_at.map_or(true, |last| {
-                now.saturating_duration_since(last) >= progress_interval
-            });
+            let should_log = strict_tolerated_stall_logged_at
+                .is_none_or(|last| now.saturating_duration_since(last) >= progress_interval);
             if should_log {
                 let lagging = sampled_heights
                     .iter()
@@ -5125,9 +5184,8 @@ async fn wait_for_target_blocks(
                 strict_tolerated_stall_logged_at = Some(now);
             }
         } else {
-            let should_log = strict_tolerated_stall_logged_at.map_or(true, |last| {
-                now.saturating_duration_since(last) >= progress_interval
-            });
+            let should_log = strict_tolerated_stall_logged_at
+                .is_none_or(|last| now.saturating_duration_since(last) >= progress_interval);
             if should_log && strict_progress.stalled(now, progress_interval) {
                 let lagging = sampled_heights
                     .iter()
@@ -5297,7 +5355,7 @@ impl PrebuiltTransactionPool {
         self.target_len
     }
 }
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 struct SubmissionAuditBudget {
     window_started_at: Option<Instant>,
     confirmations_in_window: u32,
@@ -5322,14 +5380,6 @@ impl SubmissionAuditBudget {
         }
         self.confirmations_in_window = self.confirmations_in_window.saturating_add(1);
         true
-    }
-}
-impl Default for SubmissionAuditBudget {
-    fn default() -> Self {
-        Self {
-            window_started_at: None,
-            confirmations_in_window: 0,
-        }
     }
 }
 struct SubmissionOutcome {
@@ -5442,10 +5492,12 @@ enum MintPrecheck {
     SkipMissing,
     SkipQueryFailed,
 }
-fn evaluate_mint_precheck<E>(result: Result<Option<u32>, E>) -> MintPrecheck {
+fn evaluate_mint_precheck<E>(result: &Result<Option<u32>, E>) -> MintPrecheck {
     match result {
-        Ok(Some(0)) | Ok(None) => MintPrecheck::SkipMissing,
-        Ok(Some(on_chain)) => MintPrecheck::Proceed { on_chain },
+        Ok(Some(0) | None) => MintPrecheck::SkipMissing,
+        Ok(Some(on_chain)) => MintPrecheck::Proceed {
+            on_chain: *on_chain,
+        },
         Err(_) => MintPrecheck::SkipQueryFailed,
     }
 }
@@ -5456,13 +5508,15 @@ enum BurnPrecheck {
     SkipInsufficient { on_chain: u32 },
     SkipQueryFailed,
 }
-fn evaluate_burn_precheck<E>(result: Result<Option<u32>, E>, burn_amount: u32) -> BurnPrecheck {
+fn evaluate_burn_precheck<E>(result: &Result<Option<u32>, E>, burn_amount: u32) -> BurnPrecheck {
     match result {
         Ok(None) => BurnPrecheck::SkipMissing,
-        Ok(Some(on_chain)) if on_chain <= burn_amount => {
-            BurnPrecheck::SkipInsufficient { on_chain }
-        }
-        Ok(Some(on_chain)) => BurnPrecheck::Proceed { on_chain },
+        Ok(Some(on_chain)) if *on_chain <= burn_amount => BurnPrecheck::SkipInsufficient {
+            on_chain: *on_chain,
+        },
+        Ok(Some(on_chain)) => BurnPrecheck::Proceed {
+            on_chain: *on_chain,
+        },
         Err(_) => BurnPrecheck::SkipQueryFailed,
     }
 }
@@ -5510,6 +5564,11 @@ struct PrebuiltLoadSupervisor {
     confirmation_audit_wait_options: TransactionWaitOptions,
     shutdown_drain_timeout: Duration,
 }
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "Nonnegative elapsed time and configured TPS are floored and saturating-converted to the due transaction count."
+)]
 fn spawn_prebuilt_load_supervisor(args: PrebuiltLoadSupervisor) -> JoinHandle<()> {
     tokio::spawn(async move {
         let PrebuiltLoadSupervisor {
@@ -5582,15 +5641,17 @@ fn spawn_prebuilt_load_supervisor(args: PrebuiltLoadSupervisor) -> JoinHandle<()
                     break;
                 }
                 metrics.record_backlog_spawn();
-                let submitter_idx = (batch_start as usize) % submitters;
+                let submitter_idx = usize::try_from(
+                    batch_start % u64::try_from(submitters).expect("submitter count fits u64"),
+                )
+                .expect("remainder is bounded by submitter count");
                 let metrics_for_task = Arc::clone(&metrics);
                 let ingress_pool_for_task = Arc::clone(&ingress_pool);
                 let workload_for_task = Arc::clone(&workload);
                 let semaphore_for_task = Arc::clone(&semaphore);
                 let confirmation_audit_tx_for_task = confirmation_audit_tx.clone();
                 let run_control_for_task = Arc::clone(&run_control);
-                let confirmation_audit_wait_options_for_task =
-                    confirmation_audit_wait_options.clone();
+                let confirmation_audit_wait_options_for_task = confirmation_audit_wait_options;
                 submissions.spawn(async move {
                     let _backlog_guard = BacklogGuard::new(Arc::clone(&metrics_for_task));
                     submit_prebuilt_batch(
@@ -5599,12 +5660,15 @@ fn spawn_prebuilt_load_supervisor(args: PrebuiltLoadSupervisor) -> JoinHandle<()
                         submission_confirmation,
                         semaphore_for_task,
                         &metrics_for_task,
-                        &workload_for_task,
-                        submitter_idx,
-                        confirmation_audit_tx_for_task,
-                        confirmation_audit_seed,
-                        &run_control_for_task,
-                        &confirmation_audit_wait_options_for_task,
+                        SubmissionContext {
+                            workload: &workload_for_task,
+                            submitter_idx,
+                            confirmation_audit_tx: confirmation_audit_tx_for_task,
+                            confirmation_audit_seed,
+                            run_control: &run_control_for_task,
+                            confirmation_audit_wait_options:
+                                &confirmation_audit_wait_options_for_task,
+                        },
                     )
                     .await;
                 });
@@ -5648,12 +5712,14 @@ async fn submit_prebuilt_plan(
     submission_confirmation: SubmissionConfirmationMode,
     semaphore: Arc<Semaphore>,
     metrics: &Arc<Metrics>,
-    workload: &Arc<WorkloadEngine>,
-    submitter_idx: usize,
-    confirmation_audit_tx: Option<mpsc::Sender<SubmissionAuditCandidate>>,
-    confirmation_audit_seed: u64,
-    run_control: &RunControl,
-    confirmation_audit_wait_options: &TransactionWaitOptions,
+    SubmissionContext {
+        workload,
+        submitter_idx,
+        confirmation_audit_tx,
+        confirmation_audit_seed,
+        run_control,
+        confirmation_audit_wait_options,
+    }: SubmissionContext<'_>,
 ) {
     let PreparedTransactionSubmission { plan, payload, .. } = prepared;
     let signer = plan.signer.clone();
@@ -5678,23 +5744,22 @@ async fn submit_prebuilt_plan(
         workload.record_result(&plan, false).await;
         return;
     }
-    let permit = match semaphore.acquire_owned().await {
-        Ok(permit) => permit,
-        Err(_) => {
-            warn!(
-                target: "izanami::workload",
-                plan = plan_label,
-                submitter_idx,
-                "submission permit channel closed before prebuilt submit"
-            );
-            if expect_success {
-                metrics.record_failure();
-            } else {
-                metrics.record_expected_failure();
-            }
-            workload.record_result(&plan, false).await;
-            return;
+    let permit = if let Ok(permit) = semaphore.acquire_owned().await {
+        permit
+    } else {
+        warn!(
+            target: "izanami::workload",
+            plan = plan_label,
+            submitter_idx,
+            "submission permit channel closed before prebuilt submit"
+        );
+        if expect_success {
+            metrics.record_failure();
+        } else {
+            metrics.record_expected_failure();
         }
+        workload.record_result(&plan, false).await;
+        return;
     };
     metrics.record_inflight_acquired();
     let _inflight_guard = InflightGuard::new(Arc::clone(metrics), permit);
@@ -5786,12 +5851,14 @@ async fn submit_prebuilt_batch(
     submission_confirmation: SubmissionConfirmationMode,
     semaphore: Arc<Semaphore>,
     metrics: &Arc<Metrics>,
-    workload: &Arc<WorkloadEngine>,
-    submitter_idx: usize,
-    confirmation_audit_tx: Option<mpsc::Sender<SubmissionAuditCandidate>>,
-    confirmation_audit_seed: u64,
-    run_control: &RunControl,
-    confirmation_audit_wait_options: &TransactionWaitOptions,
+    SubmissionContext {
+        workload,
+        submitter_idx,
+        confirmation_audit_tx,
+        confirmation_audit_seed,
+        run_control,
+        confirmation_audit_wait_options,
+    }: SubmissionContext<'_>,
 ) {
     if batch.len() == 1 {
         if let Some(prepared) = batch.pop() {
@@ -5801,12 +5868,14 @@ async fn submit_prebuilt_batch(
                 submission_confirmation,
                 semaphore,
                 metrics,
-                workload,
-                submitter_idx,
-                confirmation_audit_tx,
-                confirmation_audit_seed,
-                run_control,
-                confirmation_audit_wait_options,
+                SubmissionContext {
+                    workload,
+                    submitter_idx,
+                    confirmation_audit_tx,
+                    confirmation_audit_seed,
+                    run_control,
+                    confirmation_audit_wait_options,
+                },
             )
             .await;
         }
@@ -5814,25 +5883,24 @@ async fn submit_prebuilt_batch(
     }
     let batch_len = batch.len();
     let permit_count = u32::try_from(batch_len).unwrap_or(u32::MAX);
-    let permit = match semaphore.clone().acquire_many_owned(permit_count).await {
-        Ok(permit) => permit,
-        Err(_) => {
-            warn!(
-                target: "izanami::workload",
-                batch_len,
-                submitter_idx,
-                "submission permit channel closed before prebuilt batch submit"
-            );
-            for submission in batch {
-                if submission.plan.expect_success {
-                    metrics.record_failure();
-                } else {
-                    metrics.record_expected_failure();
-                }
-                workload.record_result(&submission.plan, false).await;
+    let permit = if let Ok(permit) = semaphore.clone().acquire_many_owned(permit_count).await {
+        permit
+    } else {
+        warn!(
+            target: "izanami::workload",
+            batch_len,
+            submitter_idx,
+            "submission permit channel closed before prebuilt batch submit"
+        );
+        for submission in batch {
+            if submission.plan.expect_success {
+                metrics.record_failure();
+            } else {
+                metrics.record_expected_failure();
             }
-            return;
+            workload.record_result(&submission.plan, false).await;
         }
+        return;
     };
     metrics.record_inflight_acquired_many(u64::try_from(batch_len).unwrap_or(u64::MAX));
     let _inflight_guard = InflightBatchGuard::new(Arc::clone(metrics), permit, batch_len);
@@ -5946,12 +6014,14 @@ async fn submit_plan(
     semaphore: Arc<Semaphore>,
     metrics: &Arc<Metrics>,
     submission_counter: &Arc<AtomicU64>,
-    workload: &Arc<WorkloadEngine>,
-    submitter_idx: usize,
-    confirmation_audit_tx: Option<mpsc::Sender<SubmissionAuditCandidate>>,
-    confirmation_audit_seed: u64,
-    run_control: &RunControl,
-    confirmation_audit_wait_options: &TransactionWaitOptions,
+    SubmissionContext {
+        workload,
+        submitter_idx,
+        confirmation_audit_tx,
+        confirmation_audit_seed,
+        run_control,
+        confirmation_audit_wait_options,
+    }: SubmissionContext<'_>,
 ) {
     let ingress_pool = Arc::clone(ingress_pool);
     let signer = plan.signer.clone();
@@ -6017,10 +6087,13 @@ async fn submit_plan(
         let precheck = match query_result {
             Ok((resolved_endpoint_idx, on_chain)) => {
                 pinned_trigger_endpoint = Some(resolved_endpoint_idx);
-                evaluate_burn_precheck(Ok::<Option<u32>, color_eyre::Report>(on_chain), burn_amount)
+                evaluate_burn_precheck(
+                    &(Ok::<Option<u32>, color_eyre::Report>(on_chain)),
+                    burn_amount,
+                )
             }
             Err(err) => {
-                evaluate_burn_precheck(Err::<Option<u32>, color_eyre::Report>(err), burn_amount)
+                evaluate_burn_precheck(&(Err::<Option<u32>, color_eyre::Report>(err)), burn_amount)
             }
         };
         match precheck {
@@ -6086,9 +6159,9 @@ async fn submit_plan(
         let precheck = match query_result {
             Ok((resolved_endpoint_idx, on_chain)) => {
                 pinned_trigger_endpoint = Some(resolved_endpoint_idx);
-                evaluate_mint_precheck(Ok::<Option<u32>, color_eyre::Report>(on_chain))
+                evaluate_mint_precheck(&(Ok::<Option<u32>, color_eyre::Report>(on_chain)))
             }
-            Err(err) => evaluate_mint_precheck(Err::<Option<u32>, color_eyre::Report>(err)),
+            Err(err) => evaluate_mint_precheck(&(Err::<Option<u32>, color_eyre::Report>(err))),
         };
         match precheck {
             MintPrecheck::Proceed { on_chain } => {
@@ -6127,23 +6200,22 @@ async fn submit_plan(
             }
         }
     }
-    let permit = match semaphore.acquire_owned().await {
-        Ok(permit) => permit,
-        Err(_) => {
-            warn!(
-                target: "izanami::workload",
-                plan = plan_label,
-                submitter_idx,
-                "submission permit channel closed before submit"
-            );
-            if expect_success {
-                metrics.record_failure();
-            } else {
-                metrics.record_expected_failure();
-            }
-            workload.record_result(&plan, false).await;
-            return;
+    let permit = if let Ok(permit) = semaphore.acquire_owned().await {
+        permit
+    } else {
+        warn!(
+            target: "izanami::workload",
+            plan = plan_label,
+            submitter_idx,
+            "submission permit channel closed before submit"
+        );
+        if expect_success {
+            metrics.record_failure();
+        } else {
+            metrics.record_expected_failure();
         }
+        workload.record_result(&plan, false).await;
+        return;
     };
     metrics.record_inflight_acquired();
     let _inflight_guard = InflightGuard::new(Arc::clone(&metrics), permit);
@@ -6284,10 +6356,10 @@ async fn submit_plan(
                                 submitter_idx,
                                 |peer| {
                                     let client = tune_ingress_client(
-                                        peer.client_for(
+                                        &(peer.client_for(
                                             &signer_for_submit.id,
                                             signer_for_submit.key_pair.private_key().clone(),
-                                        ),
+                                        )),
                                         SubmissionConfirmationMode::AcceptedByIngress,
                                         ingress_pool_for_submit.submit_request_timeout,
                                     )?;
@@ -6322,7 +6394,7 @@ async fn submit_plan(
                         "confirm_transaction_plan",
                         submitted.endpoint_idx,
                         &signer_for_submit,
-                        submitted.hash.clone(),
+                        submitted.hash,
                         applied_confirmation_wait_options(),
                     )?;
                 }
@@ -6401,7 +6473,7 @@ async fn query_trigger_repetitions_on_endpoint(
     match spawn_blocking(move || {
         match ingress_pool.run_on_endpoint("query_trigger_repetitions", endpoint_idx, |peer| {
             let client = tune_ingress_client(
-                peer.client_for(&signer.id, signer.key_pair.private_key().clone()),
+                &(peer.client_for(&signer.id, signer.key_pair.private_key().clone())),
                 SubmissionConfirmationMode::AcceptedByIngress,
                 ingress_pool.submit_request_timeout,
             )?;
@@ -6421,7 +6493,7 @@ async fn query_trigger_repetitions_on_endpoint(
                     endpoint_idx,
                     |peer| {
                         let client = tune_ingress_client(
-                            peer.client_for(&signer.id, signer.key_pair.private_key().clone()),
+                            &(peer.client_for(&signer.id, signer.key_pair.private_key().clone())),
                             SubmissionConfirmationMode::AcceptedByIngress,
                             ingress_pool.submit_request_timeout,
                         )?;
@@ -6448,7 +6520,7 @@ fn submit_repeatable_trigger_plan_on_endpoint(
 ) -> Result<SubmissionOutcome> {
     let submit_to_endpoint = |resolved_endpoint_idx: usize, peer: &NetworkPeer| {
         let client = tune_ingress_client(
-            peer.client_for(&signer.id, signer.key_pair.private_key().clone()),
+            &(peer.client_for(&signer.id, signer.key_pair.private_key().clone())),
             SubmissionConfirmationMode::AcceptedByIngress,
             ingress_pool.submit_request_timeout,
         )?;
@@ -6497,7 +6569,7 @@ fn submit_repeatable_trigger_plan_on_endpoint(
             "confirm_repeatable_trigger_plan",
             submission.endpoint_idx,
             signer,
-            submission.hash.clone(),
+            submission.hash,
             applied_confirmation_wait_options(),
         )?;
     }
@@ -6523,7 +6595,7 @@ async fn reconcile_repeatable_trigger_with_endpoint(
                 .sync_trigger_repetitions(trigger_id, Some(on_chain))
                 .await;
         }
-        Ok((_resolved_endpoint_idx, Some(_))) | Ok((_resolved_endpoint_idx, None)) => {
+        Ok((_resolved_endpoint_idx, Some(_) | None)) => {
             workload.sync_trigger_repetitions(trigger_id, None).await;
         }
         Err(err) => {
@@ -6578,7 +6650,10 @@ fn confirmation_audit_has_deadline_budget(
 }
 fn submission_deadline_budget(mode: SubmissionConfirmationMode) -> Duration {
     let request_budget = Duration::from_millis(IZANAMI_INGRESS_REQUEST_TIMEOUT_MS)
-        .saturating_mul(IZANAMI_INGRESS_MAX_ATTEMPTS as u32)
+        .saturating_mul(
+            u32::try_from(IZANAMI_INGRESS_MAX_ATTEMPTS)
+                .expect("configured ingress attempts fit u32"),
+        )
         .saturating_add(
             Duration::from_millis(IZANAMI_QUEUE_TIMEOUT_RETRY_BACKOFF_MS)
                 .saturating_mul(IZANAMI_QUEUE_TIMEOUT_RETRY_ATTEMPTS),
@@ -6654,13 +6729,13 @@ fn wait_for_transaction_applied_with_failover(
                         .ok_or_else(|| eyre!("endpoint index {endpoint_idx} out of range"))?;
                     let peer = &endpoint.peer;
                     let client = tune_ingress_client(
-                        peer.client_for(&signer.id, signer.key_pair.private_key().clone()),
+                        &(peer.client_for(&signer.id, signer.key_pair.private_key().clone())),
                         SubmissionConfirmationMode::AcceptedByIngress,
                         ingress_pool.submit_request_timeout,
                     )?;
                     let Some(response) = client
                         .client()
-                        .get_transaction_status_response_global(hash.clone())?
+                        .get_transaction_status_response_global(hash)?
                     else {
                         return Ok(None);
                     };
@@ -6784,7 +6859,7 @@ async fn audit_submitted_transaction(
         hash,
         plan_label,
     } = candidate;
-    let log_hash = hash.clone();
+    let log_hash = hash;
     let ingress_pool = Arc::clone(ingress_pool);
     let run_control = Arc::clone(run_control);
     let metrics = Arc::clone(metrics);
@@ -7241,6 +7316,12 @@ impl LatencySummary {
         }
     }
 }
+#[expect(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "The display percentile preserves the existing floating-point nearest rank, clamped to the positive sample count before conversion."
+)]
 fn percentile_from_sorted(sorted: &[u64], percentile: f64) -> u64 {
     debug_assert!(!sorted.is_empty());
     debug_assert!((0.0..=1.0).contains(&percentile));
@@ -7302,13 +7383,12 @@ mod tests {
         std::env::var("IZANAMI_ALLOW_NET")
             .or_else(|_| std::env::var("IROHA_ALLOW_NET"))
             .ok()
-            .map(|val| {
+            .is_some_and(|val| {
                 matches!(
                     val.to_ascii_lowercase().as_str(),
                     "1" | "true" | "yes" | "on" | "y"
                 )
             })
-            .unwrap_or(false)
     }
     fn checked_izanami_ed25519_key_fixture() -> KeyPair {
         KeyPair::try_random_with_algorithm(iroha_crypto::Algorithm::Ed25519)
@@ -7551,42 +7631,42 @@ mod tests {
     #[test]
     fn evaluate_mint_precheck_handles_trigger_states() {
         assert_eq!(
-            evaluate_mint_precheck::<color_eyre::eyre::Report>(Ok(Some(3))),
+            evaluate_mint_precheck::<color_eyre::eyre::Report>(&(Ok(Some(3)))),
             MintPrecheck::Proceed { on_chain: 3 }
         );
         assert_eq!(
-            evaluate_mint_precheck::<color_eyre::eyre::Report>(Ok(Some(0))),
+            evaluate_mint_precheck::<color_eyre::eyre::Report>(&(Ok(Some(0)))),
             MintPrecheck::SkipMissing
         );
         assert_eq!(
-            evaluate_mint_precheck::<color_eyre::eyre::Report>(Ok(None)),
+            evaluate_mint_precheck::<color_eyre::eyre::Report>(&(Ok(None))),
             MintPrecheck::SkipMissing
         );
         assert_eq!(
-            evaluate_mint_precheck::<&'static str>(Err("boom")),
+            evaluate_mint_precheck::<&'static str>(&(Err("boom"))),
             MintPrecheck::SkipQueryFailed
         );
     }
     #[test]
     fn evaluate_burn_precheck_handles_trigger_states() {
         assert_eq!(
-            evaluate_burn_precheck::<color_eyre::eyre::Report>(Ok(Some(5)), 3),
+            evaluate_burn_precheck::<color_eyre::eyre::Report>(&(Ok(Some(5))), 3),
             BurnPrecheck::Proceed { on_chain: 5 }
         );
         assert_eq!(
-            evaluate_burn_precheck::<color_eyre::eyre::Report>(Ok(Some(3)), 3),
+            evaluate_burn_precheck::<color_eyre::eyre::Report>(&(Ok(Some(3))), 3),
             BurnPrecheck::SkipInsufficient { on_chain: 3 }
         );
         assert_eq!(
-            evaluate_burn_precheck::<color_eyre::eyre::Report>(Ok(Some(1)), 2),
+            evaluate_burn_precheck::<color_eyre::eyre::Report>(&(Ok(Some(1))), 2),
             BurnPrecheck::SkipInsufficient { on_chain: 1 }
         );
         assert_eq!(
-            evaluate_burn_precheck::<color_eyre::eyre::Report>(Ok(None), 1),
+            evaluate_burn_precheck::<color_eyre::eyre::Report>(&(Ok(None)), 1),
             BurnPrecheck::SkipMissing
         );
         assert_eq!(
-            evaluate_burn_precheck::<&'static str>(Err("boom"), 1),
+            evaluate_burn_precheck::<&'static str>(&(Err("boom")), 1),
             BurnPrecheck::SkipQueryFailed
         );
     }
@@ -7710,8 +7790,7 @@ mod tests {
             config
                 .nexus
                 .as_ref()
-                .map(|profile| profile.bootstrap_public_lanes.as_slice())
-                .unwrap_or(&[]),
+                .map_or(&[], |profile| profile.bootstrap_public_lanes.as_slice()),
         )?;
         let expected_bootstrap_bindings = config.nexus.as_ref().map_or(0, |profile| {
             config
@@ -7759,7 +7838,7 @@ mod tests {
                     .downcast_ref::<RegisterBox>()
                     .is_some_and(|register| match register {
                         RegisterBox::AssetDefinition(definition) => {
-                            definition.object.id == profile.stake_asset_id
+                            definition.object.id == profile.staking_policy.stake_asset_id
                                 || definition.object.id == profile.fee_asset_id
                         }
                         _ => false,
@@ -7821,7 +7900,10 @@ mod tests {
                     .push(definition.object.id.clone());
             }
         }
-        for asset_id in [&profile.stake_asset_id, &profile.fee_asset_id] {
+        for asset_id in [
+            &profile.staking_policy.stake_asset_id,
+            &profile.fee_asset_id,
+        ] {
             let txs = registrations.get(asset_id).cloned().unwrap_or_default();
             let tx_details: Vec<_> = txs
                 .iter()
@@ -7980,7 +8062,8 @@ mod tests {
         assert!(is_shared_host_stable_soak(&config));
         apply_shared_host_stable_soak_profile(&mut config);
         assert_eq!(
-            config.tps, 5.0,
+            config.tps.to_bits(),
+            5.0_f64.to_bits(),
             "shared-host soak should preserve canonical 5 TPS pacing"
         );
         assert!(
@@ -8035,7 +8118,7 @@ mod tests {
             )),
             "permissioned shared-host soak should use the same DA steady-state latency gate default"
         );
-        assert_eq!(config.tps, 7.0);
+        assert_eq!(config.tps.to_bits(), 7.0_f64.to_bits());
         assert_eq!(config.max_inflight, 14);
         assert!(
             config.progress_timeout
@@ -8058,7 +8141,8 @@ mod tests {
         assert!(is_shared_host_stable_soak(&config));
         apply_shared_host_stable_soak_profile(&mut config);
         assert_eq!(
-            config.tps, IZANAMI_SHARED_HOST_SOAK_TPS_FLOOR,
+            config.tps.to_bits(),
+            IZANAMI_SHARED_HOST_SOAK_TPS_FLOOR.to_bits(),
             "shared-host soak should enforce canonical minimum TPS for deterministic pilots"
         );
         assert_eq!(
@@ -8105,7 +8189,10 @@ mod tests {
             "single frozen peer should still use shared-host stable soak policy"
         );
         apply_shared_host_stable_soak_profile(&mut config);
-        assert_eq!(config.tps, IZANAMI_SHARED_HOST_SOAK_TPS_FLOOR);
+        assert_eq!(
+            config.tps.to_bits(),
+            IZANAMI_SHARED_HOST_SOAK_TPS_FLOOR.to_bits()
+        );
         assert_eq!(
             config.pipeline_time,
             Some(Duration::from_millis(
@@ -9761,7 +9848,7 @@ mod tests {
         set.spawn(async {});
         set.spawn(async {});
         let deadline = Instant::now() + Duration::from_secs(1);
-        while set.len() > 0 && Instant::now() < deadline {
+        while !set.is_empty() && Instant::now() < deadline {
             tokio::task::yield_now().await;
             drain_ready_submissions(&mut set);
         }
@@ -9897,12 +9984,14 @@ mod tests {
             Duration::from_millis(200),
             Duration::from_secs(5),
             None,
-            &run_control,
-            None,
-            None,
-            false,
-            Instant::now(),
-            Instant::now(),
+            TargetProgressContext {
+                run_control: &run_control,
+                ingress_pool: None,
+                metrics: None,
+                target_blocks_soft_kpi: false,
+                fault_start_at: Instant::now(),
+                fault_end_at: Instant::now(),
+            },
         )
         .await?;
         assert!(progress.target_reached);
@@ -9936,12 +10025,14 @@ mod tests {
             Duration::from_millis(200),
             Duration::from_secs(30),
             None,
-            &run_control,
-            None,
-            None,
-            true,
-            Instant::now(),
-            Instant::now(),
+            TargetProgressContext {
+                run_control: &run_control,
+                ingress_pool: None,
+                metrics: None,
+                target_blocks_soft_kpi: true,
+                fault_start_at: Instant::now(),
+                fault_end_at: Instant::now(),
+            },
         )
         .await?;
         assert!(
@@ -9981,12 +10072,14 @@ mod tests {
             Duration::from_millis(200),
             Duration::from_secs(30),
             Some(Duration::from_millis(1)),
-            &run_control,
-            None,
-            None,
-            true,
-            Instant::now(),
-            Instant::now(),
+            TargetProgressContext {
+                run_control: &run_control,
+                ingress_pool: None,
+                metrics: None,
+                target_blocks_soft_kpi: true,
+                fault_start_at: Instant::now(),
+                fault_end_at: Instant::now(),
+            },
         )
         .await;
         network.shutdown().await;
@@ -10011,12 +10104,14 @@ mod tests {
             Duration::from_millis(5),
             Duration::from_secs(1),
             None,
-            &run_control,
-            None,
-            None,
-            true,
-            Instant::now(),
-            Instant::now(),
+            TargetProgressContext {
+                run_control: &run_control,
+                ingress_pool: None,
+                metrics: None,
+                target_blocks_soft_kpi: true,
+                fault_start_at: Instant::now(),
+                fault_end_at: Instant::now(),
+            },
         )
         .await
         .expect_err("explicit stop must terminate target monitoring");
@@ -10184,11 +10279,11 @@ mod tests {
         current.high_qc_view = Some(3);
         current.awaiting = true;
         let end = SumeragiStatusDigest::from_status(current.clone());
-        let delta = end.clone().delta_from(start.clone());
+        let delta = end.clone().delta_from(&(start));
         assert_eq!(delta.status, current);
         assert_eq!(delta.status.protocol_version, 1);
         assert_eq!(delta.committed_height_advance, 3);
-        assert_eq!(start.delta_from(end).committed_height_advance, 0);
+        assert_eq!(start.delta_from(&(end)).committed_height_advance, 0);
     }
     #[test]
     fn diagnostic_copy_preserves_logs_configs_and_genesis_payloads() -> Result<()> {
@@ -10527,7 +10622,10 @@ mod tests {
     fn submission_deadline_budget_covers_ingress_retries() {
         let budget = submission_deadline_budget(SubmissionConfirmationMode::AcceptedByIngress);
         let minimum_retry_window = Duration::from_millis(IZANAMI_INGRESS_REQUEST_TIMEOUT_MS)
-            .saturating_mul(IZANAMI_INGRESS_MAX_ATTEMPTS as u32);
+            .saturating_mul(
+                u32::try_from(IZANAMI_INGRESS_MAX_ATTEMPTS)
+                    .expect("configured ingress attempts fit u32"),
+            );
         assert!(
             budget >= minimum_retry_window,
             "submitter deadline guard must cover the configured ingress retry window"
@@ -10609,7 +10707,8 @@ mod tests {
             !is_shutdown_noise_status_read_failure("audit_confirmation", &err, &run_control),
             "status reads should not be ignored before shutdown starts"
         );
-        let elapsed_run_control = RunControl::new(Instant::now() - Duration::from_secs(1));
+        let elapsed_run_control =
+            RunControl::new(Instant::now().checked_sub(Duration::from_secs(1)).unwrap());
         assert!(
             is_shutdown_noise_status_read_failure("audit_confirmation", &err, &elapsed_run_control),
             "status reads should be ignored after the run deadline elapses"
@@ -10772,17 +10871,20 @@ mod tests {
             config.nexus.as_ref().unwrap().fee_asset_id
         );
         let expected_gas_account = expected_gas.to_string();
-        for path in [
-            &["pipeline", "gas", "tech_account_id"][..],
-            &["nexus", "staking", "stake_escrow_account_id"][..],
-            &["nexus", "staking", "slash_sink_account_id"][..],
-        ] {
+        let staking =
+            iroha_data_model::block::consensus::PublicLaneStakingPolicy::from_parameters(&params)?;
+        assert_eq!(
+            staking,
+            instructions::nexus_staking_policy(config.nexus.as_ref().unwrap())?
+        );
+        assert_eq!(staking.stake_escrow_account_id, expected_gas);
+        assert_eq!(staking.slash_sink_account_id, expected_gas);
+        for path in [&["pipeline", "gas", "tech_account_id"][..]] {
             let actual = layers.iter().rev().find_map(|layer| read_str(layer, path));
             assert_eq!(
                 actual.as_deref(),
                 Some(expected_gas_account.as_str()),
-                "config override for {:?} should use deterministic Izanami gas account",
-                path
+                "config override for {path:?} should use deterministic Izanami gas account"
             );
         }
         Ok(())
@@ -10846,7 +10948,7 @@ mod tests {
                 return Err(err);
             }
         };
-        timeout(Duration::from_secs(20), runner.run())
+        Box::pin(timeout(Duration::from_secs(20), runner.run()))
             .await
             .map_err(|_| eyre!("runner timed out before deadline"))??;
         Ok(())

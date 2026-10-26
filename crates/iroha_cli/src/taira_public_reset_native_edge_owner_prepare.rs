@@ -7,8 +7,8 @@ use super::super::super::super::validate_absolute_normal_path;
 use super::*;
 
 #[derive(clap::Args, Debug)]
-pub(crate) struct PrepareNativeEdgeOwner {
-    /// Independently admitted MacStadium host pair.
+pub struct PrepareNativeEdgeOwner {
+    /// Independently admitted `MacStadium` host pair.
     #[arg(long, value_name = "PATH")]
     host_pair: PathBuf,
     /// Independent SHA-256 pin of the exact host-pair bytes.
@@ -99,7 +99,7 @@ fn projected_plan_reference(pin: &PublicPin, output: &Path) -> NativePublicFileV
     reference
 }
 
-pub(crate) fn prepare<W: Write>(args: &PrepareNativeEdgeOwner, output: &mut W) -> Result<()> {
+pub fn prepare<W: Write>(args: &PrepareNativeEdgeOwner, output: &mut W) -> Result<()> {
     // Resolve the actual OS account before any selected input supplies custody.
     let (uid, gid, user, home) = native_account()?;
     let mut pair_pin = pinned_private(
@@ -107,8 +107,9 @@ pub(crate) fn prepare<W: Write>(args: &PrepareNativeEdgeOwner, output: &mut W) -
         &args.expected_host_pair_sha256,
         MAX_REQUEST,
     )?;
-    let hosts: host_pair::ResetHostPairV1 =
-        json::from_slice(&pair_pin.bytes(MAX_REQUEST as usize)?)?;
+    let hosts: host_pair::ResetHostPairV1 = json::from_slice(
+        &pair_pin.bytes(usize::try_from(MAX_REQUEST).expect("bounded input limit fits usize"))?,
+    )?;
     hosts.validate()?;
     let native = &hosts.native_edge;
     let fixed_custody = Path::new(&home).join(".local/share/iroha/taira/public-reset-v1");
@@ -170,7 +171,7 @@ pub(crate) fn prepare<W: Write>(args: &PrepareNativeEdgeOwner, output: &mut W) -
     )?;
     let nginx_raw = nginx_pin.bytes(MAX_PLAN)?;
     let nginx: json::Value = json::from_slice(&nginx_raw)?;
-    let operation = plan_operation(&nginx)?.to_owned();
+    let operation = plan_operation(&nginx)?.clone();
     opaque_names(&args.opaque_journal, &operation)?;
     let publication_path = plan_destination(&nginx)?;
     let publication_pin = PublicPin::open(&publication_path, MAX_PLAN as u64, true)?;
@@ -250,7 +251,7 @@ pub(crate) fn prepare<W: Write>(args: &PrepareNativeEdgeOwner, output: &mut W) -
     let plan_pin = PublicPin::private_child(&staging, "adoption-plan.json", MAX_PLAN as u64)?;
     request.adoption_plan = projected_plan_reference(&plan_pin, &args.output);
     let request_wire = json::to_json(&request)?;
-    if request_wire.len() > MAX_REQUEST as usize {
+    if request_wire.len() > usize::try_from(MAX_REQUEST).expect("bounded input limit fits usize") {
         return Err(eyre!("native owner request exceeds its finite bound"));
     }
     claims(&request, &sha256_hex(request_wire.as_bytes()))?;

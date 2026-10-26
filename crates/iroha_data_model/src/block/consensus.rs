@@ -17,7 +17,10 @@ use crate::{
 };
 use core::{fmt, num::NonZeroU64};
 use iroha_crypto::{Hash, HashOf};
-use iroha_model_base::{peer::PeerId, topology::DataSpaceId, topology::LaneId};
+use iroha_model_base::{
+    peer::PeerId,
+    topology::{DataSpaceId, LaneId, is_valid_committee_size},
+};
 use iroha_primitives::numeric::{Numeric, Quantity};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, DecodeAll, Encode};
@@ -42,26 +45,6 @@ pub type Height = u64;
 pub type View = u64;
 /// Validator index within the active set.
 pub type ValidatorIndex = u32;
-/// Consensus-wide lower bound for one voting roster.
-///
-/// Every production committee has the exact `3f + 1` shape and tolerates at
-/// least one Byzantine validator.
-pub const MIN_VALIDATORS_PER_HEIGHT: usize = 4;
-/// Maximum Byzantine validators tolerated by one frozen height context.
-pub const MAX_FAULTS_PER_HEIGHT: usize = 10;
-/// Consensus-wide upper bound for one voting roster.
-///
-/// This is a protocol admission limit, not a local resource-tuning knob.  It
-/// must stay aligned with the production reducer and the formal Sumeragi
-/// model so every admitted wire value has a representable verified state.
-pub const MAX_VALIDATORS_PER_HEIGHT: usize = 3 * MAX_FAULTS_PER_HEIGHT + 1;
-/// Returns whether `validator_count` has the production `3f + 1` geometry.
-#[must_use]
-pub const fn is_valid_committee_size(validator_count: usize) -> bool {
-    validator_count >= MIN_VALIDATORS_PER_HEIGHT
-        && validator_count <= MAX_VALIDATORS_PER_HEIGHT
-        && (validator_count - 1).is_multiple_of(3)
-}
 /// Permissioned Sumeragi handshake and domain-separation tag.
 pub const PERMISSIONED_TAG: &str = "iroha3-consensus::permissioned-sumeragi@v1";
 /// `NPoS` Sumeragi handshake and domain-separation tag.

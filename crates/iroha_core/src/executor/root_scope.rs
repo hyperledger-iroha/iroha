@@ -14,7 +14,7 @@ use crate::{
 
 /// Read execution authority from the original genesis capability or immutable committed metadata.
 /// A header-shaped bootstrap overlay has no authority on its own.
-pub(crate) fn execution_root_scope(
+pub fn execution_root_scope(
     state: &mut StateTransaction<'_, '_>,
 ) -> Result<SumeragiRootScope, ValidationFail> {
     if let Some(genesis) = state.genesis_execution_scope.as_ref() {
@@ -52,7 +52,7 @@ pub(crate) fn execution_root_scope(
 }
 
 /// Bind an unbound code hash to the actual source's already-captured execution dataspace.
-pub(crate) fn captured_artifact_id(
+pub fn captured_artifact_id(
     state: &mut StateTransaction<'_, '_>,
     code_hash: iroha_crypto::Hash,
 ) -> Result<iroha_data_model::smart_contract::ContractArtifactId, ValidationFail> {
@@ -63,7 +63,7 @@ pub(crate) fn captured_artifact_id(
 }
 
 /// Exact source-owned native execution dataspace, without an implicit universal default.
-pub(crate) fn captured_dataspace(
+pub fn captured_dataspace(
     state: &mut StateTransaction<'_, '_>,
 ) -> Result<iroha_model_base::topology::DataSpaceId, ValidationFail> {
     let scope = execution_root_scope(state)?;
@@ -83,7 +83,7 @@ pub(crate) fn captured_dataspace(
 
 /// Private contracts execute through exact on-chain addresses, including atomic batches.
 /// Unbound raw IVM/proved overlays cannot acquire a root-local durable-state namespace.
-pub(crate) fn ensure_executable_scope(
+pub fn ensure_executable_scope(
     state: &mut StateTransaction<'_, '_>,
     executable: &iroha_data_model::transaction::Executable,
 ) -> Result<(), ValidationFail> {
@@ -103,7 +103,7 @@ pub(crate) fn ensure_executable_scope(
 }
 
 /// Require an address-bound call to stay in the signed private root, including its native route.
-pub(crate) fn ensure_contract_scope(
+pub fn ensure_contract_scope(
     state: &mut StateTransaction<'_, '_>,
     address: &iroha_data_model::smart_contract::ContractAddress,
 ) -> Result<(), ValidationFail> {
@@ -121,7 +121,7 @@ pub(crate) fn ensure_contract_scope(
 }
 
 /// Check a live nested lookup or retained durable-effect authorization against immutable World.
-pub(crate) fn ensure_committed_contract_scope(
+pub fn ensure_committed_contract_scope(
     world: &impl crate::state::WorldReadOnly,
     address: &iroha_data_model::smart_contract::ContractAddress,
 ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
@@ -140,7 +140,7 @@ pub(crate) fn ensure_committed_contract_scope(
 
 /// Require registry reads to belong to the immutable root's exact dataspace.
 /// Global roots may read any explicitly addressed artifact; scope is never inferred.
-pub(crate) fn ensure_committed_artifact_scope(
+pub fn ensure_committed_artifact_scope(
     world: &impl crate::state::WorldReadOnly,
     artifact: &iroha_data_model::smart_contract::ContractArtifactId,
 ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
@@ -149,7 +149,7 @@ pub(crate) fn ensure_committed_artifact_scope(
 
 /// Borrow the same root owner without allocating an artifact identifier on Global.
 /// Address dataspace derivation occurs only when the existing private scope needs it.
-pub(crate) fn ensure_committed_address_artifact_scope(
+pub fn ensure_committed_address_artifact_scope(
     world: &impl crate::state::WorldReadOnly,
     address: &iroha_data_model::smart_contract::ContractAddress,
 ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
@@ -205,7 +205,7 @@ fn ensure_address_scope(
 
 /// Enforce the signed root's authority on each actual instruction before native or custom execution.
 /// Static transaction routing is insufficient for generated instructions and deferred multisig.
-pub(crate) fn ensure_instruction_scope(
+pub fn ensure_instruction_scope(
     instruction: &InstructionBox,
     state: &mut StateTransaction<'_, '_>,
 ) -> Result<(), ValidationFail> {

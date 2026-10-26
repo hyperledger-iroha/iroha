@@ -63,7 +63,7 @@ fn check<C: PastaCurve>() {
     assert_eq!(foreign.binding(), producer.binding());
     let mut substituted = original.clone();
     let foreign_vk = foreign.vk().to_bytes();
-    substituted[44..44 + foreign_vk.len()].copy_from_slice(&foreign_vk);
+    substituted[44..44 + foreign_vk.len()].copy_from_slice(foreign_vk);
     assert!(matches!(
         iroha_plonk::ProvingKey::from_artifact_v2(
             &substituted,

@@ -22,7 +22,7 @@ use zeroize::Zeroize;
 /// Transfer, full redemption and redemption with optional change are separate
 /// compiled relations, even when two of them have equally sized public columns.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Kind {
+pub enum Kind {
     Transfer,
     Full,
     Change,
@@ -167,6 +167,8 @@ struct Chips<'a> {
     range: &'a mut RunningSumChip<Fp>,
     hash: SpongeChip<Fp>,
 }
+type OutputCells = (Bit<Fp>, Word<Fp>, Word<Fp>);
+
 struct InputCells {
     present: Bit<Fp>,
     amount: Word<Fp>,
@@ -195,7 +197,7 @@ impl Chips<'_> {
         self.glue
             .boolean(region, value.map_or(Value::unknown(), Value::known))
     }
-    fn zero(&self, region: &mut Region<'_, Fp>, word: &Word<Fp>) -> Result<(), Error> {
+    fn zero(region: &mut Region<'_, Fp>, word: &Word<Fp>) -> Result<(), Error> {
         GlueChip::assert_constant(region, word, Fp::ZERO)
     }
     fn optional_nonzero(
@@ -217,7 +219,7 @@ impl Chips<'_> {
     ) -> Result<(), Error> {
         let equal = self.glue.is_equal(region, left, right)?;
         let selected = self.glue.and(region, &equal, present)?;
-        self.zero(region, selected.word())
+        Self::zero(region, selected.word())
     }
     fn hash(
         &mut self,
@@ -314,7 +316,7 @@ impl Chips<'_> {
         asset: &Word<Fp>,
         mandatory: bool,
         owner: Option<&Word<Fp>>,
-    ) -> Result<(Bit<Fp>, Word<Fp>, Word<Fp>), Error> {
+    ) -> Result<OutputCells, Error> {
         let present = self.present(region, output.map(|o| o.present))?;
         if mandatory {
             GlueChip::assert_constant(region, present.word(), Fp::ONE)?;
@@ -324,13 +326,12 @@ impl Chips<'_> {
         for word in [&amount, &rho] {
             self.optional_nonzero(region, word, &present)?;
         }
-        let owner = match owner {
-            Some(owner) => owner.clone(),
-            None => {
-                let owner = self.word(region, output.map(|o| o.owner))?;
-                self.optional_nonzero(region, &owner, &present)?;
-                owner
-            }
+        let owner = if let Some(owner) = owner {
+            owner.clone()
+        } else {
+            let owner = self.word(region, output.map(|o| o.owner))?;
+            self.optional_nonzero(region, &owner, &present)?;
+            owner
         };
         let commitment = self.hash(region, NOTE, &[amount.clone(), rho, owner, asset.clone()])?;
         if mandatory {
@@ -385,7 +386,7 @@ impl Chips<'_> {
         )?;
         let delta = self.glue.sub(region, &root, &second_root)?;
         let claimed_delta = self.glue.mul(region, &delta, second.present.word())?;
-        self.zero(region, &claimed_delta)?;
+        Self::zero(region, &claimed_delta)?;
         let total = self.glue.add(region, &first.amount, &second.amount)?;
         let mut public = vec![
             first.commitment.clone(),

@@ -1,6 +1,7 @@
 //! Original-funded durable lane frames with retained startup, read and publication owners.
 //!
-//! One exclusive instance owner validates its entire recovered prefix before exposing a tip.
+//! One exclusive instance owner authenticates its durable tip frame before exposing it; every
+//! lower frame is authenticated by the read that first uses it.
 //! Complete signed availability and the original CommitQC share one canonical atomic frame.
 
 use super::{
@@ -307,7 +308,7 @@ impl FileLaneBlockStore {
         faults: Arc<dyn Faults>,
     ) -> io::Result<LaneStoreOpen> {
         if schedule.instance() != *instance {
-            return Err(invalid("lane schedule belongs to another instance").into());
+            return Err(invalid("lane schedule belongs to another instance"));
         }
         let dir = root.join(hex::encode(instance.0));
         durable_artifact::establish_dir(&*faults, &dir)?;
@@ -338,21 +339,21 @@ impl FileLaneBlockStore {
                         .parse::<u64>()
                         .map_err(|_| invalid(format!("unexpected lane frame {name}")))?;
                     if name != frame_name(height) {
-                        return Err(invalid(format!("non-canonical lane frame name {name}")).into());
+                        return Err(invalid(format!("non-canonical lane frame name {name}")));
                     }
                     heights.push(height);
                 }
                 None if name.ends_with(".tmp") => {
                     directory.remove_private(name)?;
                 }
-                None => return Err(invalid(format!("unexpected lane file {name}")).into()),
+                None => return Err(invalid(format!("unexpected lane file {name}"))),
             }
             Ok(())
         })?;
         heights.sort_unstable();
         for (i, height) in heights.iter().enumerate() {
             if *height != i as u64 + 1 {
-                return Err(invalid("lane heights are not contiguous from one").into());
+                return Err(invalid("lane heights are not contiguous from one"));
             }
         }
         directory.require_same_lock(LOCK_NAME, &ownership)?;
@@ -430,6 +431,10 @@ impl FileLaneBlockStore {
         self.batch_with_interest(height, requested)
     }
 
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "The request owns its original paid cancellation control until batch cleanup completes."
+    )]
     fn batch_with_interest(
         &self,
         height: u64,
@@ -548,7 +553,7 @@ impl FileLaneBlockStore {
 
     /// Observe the durable tip only after the original retained read authenticates.
     /// The completed artifact stays in the same pending slot for its normal consumer;
-    /// runtime BlockStore::height remains the infallible already-committed height.
+    /// runtime `BlockStore::height` remains the infallible already-committed height.
     ///
     /// # Errors
     /// Propagates the original incomplete attempt or authentication/storage rejection

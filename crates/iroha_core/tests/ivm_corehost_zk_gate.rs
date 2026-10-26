@@ -18,7 +18,7 @@ fn attachment() -> ProofAttachment {
         VerifyingKeyId::new("pipa-r/pasta", "fixture"),
     )
 }
-fn assert_generic_bridge_rejected(instruction: InstructionBox) {
+fn assert_generic_bridge_rejected(instruction: &InstructionBox) {
     let mut program = ProgramMetadata::default().encode();
     program.extend_from_slice(
         &encoding::wide::encode_sys(
@@ -33,7 +33,7 @@ fn assert_generic_bridge_rejected(instruction: InstructionBox) {
     assert!(
         matches!(vm.load_program(&program), Err(ivm::VMError::GenericSyscallNotAllowed { syscall }) if syscall == expected_syscall)
     );
-    let payload = norito::to_bytes(&instruction).unwrap();
+    let payload = norito::to_bytes(instruction).unwrap();
     let mut tlv = Vec::new();
     tlv.extend_from_slice(&(PointerType::NoritoBytes as u16).to_be_bytes());
     tlv.push(1);
@@ -53,23 +53,23 @@ fn assert_generic_bridge_rejected(instruction: InstructionBox) {
 #[test]
 fn generic_submit_ballot_without_verify_is_rejected() {
     assert_generic_bridge_rejected(
-        SubmitBallot {
+        &(SubmitBallot {
             election_id: "election1".into(),
             ciphertext: vec![0; 32],
             ballot_proof: attachment(),
             nullifier: [1; 32],
         }
-        .into(),
+        .into()),
     );
 }
 #[test]
 fn generic_finalize_election_without_verify_is_rejected() {
     assert_generic_bridge_rejected(
-        FinalizeElection {
+        &(FinalizeElection {
             election_id: "election1".into(),
             tally: vec![1, 0, 0],
             tally_proof: attachment(),
         }
-        .into(),
+        .into()),
     );
 }

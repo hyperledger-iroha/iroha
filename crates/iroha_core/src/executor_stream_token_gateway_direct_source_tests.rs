@@ -386,17 +386,16 @@ mod gateway_direct_source {
         let mut tx = block.transaction();
         tx.current_direct_stream_token_gateway_instruction_index = Some(77);
         assert!(
-            Executor::Initial
-                .execute_contract_invocation(
-                    &mut tx,
-                    &ALICE_ID,
-                    &call(&state),
-                    &mut IvmCache::new(),
-                    50_000_000,
-                    1_000,
-                    None,
-                )
-                .is_err()
+            Executor::execute_contract_invocation(
+                &mut tx,
+                &ALICE_ID,
+                &call(&state),
+                &mut IvmCache::new(),
+                (50_000_000, 1_000),
+                None,
+                None,
+            )
+            .is_err()
         );
         assert_eq!(
             tx.current_direct_stream_token_gateway_instruction_index,

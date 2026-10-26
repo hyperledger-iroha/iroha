@@ -19,15 +19,21 @@ enum IndexResourceFormat {
 fn index_resource_kind(path: &Path) -> Option<(ResourceFamily, IndexResourceFormat, bool)> {
     let file_name = path.file_name()?.to_str()?;
     let prepend = file_name.ends_with(".prepend.tmp");
-    let (name, temporary) = if let Some(main) = file_name.strip_suffix(".prepend.tmp") {
-        (main, true)
-    } else if let Some(main) = file_name.strip_suffix(".tmp") {
-        (main, true)
-    } else if file_name == EVICTION_COMPACTION_INDEX_FILE_NAME {
-        (INDEX_FILE_NAME, true)
-    } else {
-        (file_name, false)
-    };
+    let (name, temporary) = file_name.strip_suffix(".prepend.tmp").map_or_else(
+        || {
+            file_name.strip_suffix(".tmp").map_or_else(
+                || {
+                    if file_name == EVICTION_COMPACTION_INDEX_FILE_NAME {
+                        (INDEX_FILE_NAME, true)
+                    } else {
+                        (file_name, false)
+                    }
+                },
+                |main| (main, true),
+            )
+        },
+        |main| (main, true),
+    );
 
     let (family, format) = match name {
         crate::query::index_status::QueryIndexJournal::JOURNAL_FILE => (ResourceFamily::QueryMarkerRecords, IndexResourceFormat::Singleton(crate::query::index_status::QueryIndexJournal::JOURNAL_MAX_BYTES)),
@@ -151,11 +157,11 @@ fn index_resource_file_usage_with_admission_hooks(
     let bytes = opened.len();
     let entries = match format {
         IndexResourceFormat::Fixed(width) if width != 0 && bytes % width == 0 => bytes / width,
-        IndexResourceFormat::Fixed(_) => return Err(Missing::InvalidInventory),
         IndexResourceFormat::Singleton(maximum) if bytes > 0 && bytes <= maximum => 1,
-        IndexResourceFormat::Singleton(_) => return Err(Missing::InvalidInventory),
         IndexResourceFormat::TemporarySingleton(maximum) if temporary && bytes <= maximum => 1,
-        IndexResourceFormat::TemporarySingleton(_) => return Err(Missing::InvalidInventory),
+        IndexResourceFormat::Fixed(_)
+        | IndexResourceFormat::Singleton(_)
+        | IndexResourceFormat::TemporarySingleton(_) => return Err(Missing::InvalidInventory),
         IndexResourceFormat::SidecarV1 => {
             let layout = SidecarIndexLayout::read_from(&mut file, bytes)
                 .map_err(|_| Missing::InvalidInventory)?;

@@ -20,6 +20,9 @@ fn invalid<T>(result: Result<T, KagemushaWalletValidationErrorV1>) -> Result<T, 
     })
 }
 
+/// Exact selected manifest digest and its original bytes.
+pub type ArchiveCheckpointV1 = ([u8; 32], Vec<u8>);
+
 /// The only authority for operation completion. Production callers use [`AdvanceHandle`].
 ///
 /// Implementors must uphold the Advance contract: no released result without a durable
@@ -31,7 +34,7 @@ pub trait Custody {
     ///
     /// # Errors
     /// Missing selected data or unavailable custody is an error, never `None`.
-    fn archive_checkpoint(&mut self) -> Result<Option<([u8; 32], Vec<u8>)>, ProviderError>;
+    fn archive_checkpoint(&mut self) -> Result<Option<ArchiveCheckpointV1>, ProviderError>;
     /// Bind durable index roots in a new metadata generation without changing the head.
     ///
     /// # Errors

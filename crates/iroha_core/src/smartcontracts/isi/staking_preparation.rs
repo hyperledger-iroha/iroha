@@ -47,9 +47,9 @@ fn check_deposit(
     let destination_after = if context.staker_asset == context.escrow_asset {
         source_balance
     } else {
-        let remaining = quantity_sub(source_balance, amount.clone())?;
+        let remaining = quantity_sub(&(source_balance), &(amount.clone()))?;
         ensure_public_lane_reserves_after_debit(world, &context.staker_asset, &remaining)?;
-        quantity_add(balance(world, &context.escrow_asset), amount.clone())?
+        quantity_add(&(balance(world, &context.escrow_asset)), &(amount.clone()))?
     };
     prepare_stake_custody_credit(
         world,
@@ -110,7 +110,7 @@ pub fn prepare_public_lane_plan(
     let lane = request.lane_id;
     let monetary = |source_asset, destination_asset, amount, precondition| {
         PublicLanePreparedPlanV1::Monetary(PublicLaneMonetaryPlanV1 {
-            network_scope: scope.clone(),
+            network_scope: scope,
             valid_until_height: expiry,
             source_asset,
             destination_asset,
@@ -122,10 +122,11 @@ pub fn prepare_public_lane_plan(
         PublicLanePreparationOperationV1::Registration(intent) => {
             let context = stake_context(
                 world,
-                &state.nexus().dataspace_catalog,
-                &state.nexus().staking,
+                world
+                    .parameters()
+                    .require_staking_policy()
+                    .map_err(|error| invalid(&error.to_string()))?,
                 &intent.validator,
-                observed_ledger_time_ms,
             )?;
             check_deposit(world, lane, &intent.validator, &context, &intent.amount)?;
             let lead =
@@ -155,10 +156,11 @@ pub fn prepare_public_lane_plan(
             let record = validator_record(world, lane, &intent.validator)?;
             let context = stake_context(
                 world,
-                &state.nexus().dataspace_catalog,
-                &state.nexus().staking,
+                world
+                    .parameters()
+                    .require_staking_policy()
+                    .map_err(|error| invalid(&error.to_string()))?,
                 &intent.staker,
-                observed_ledger_time_ms,
             )?;
             check_deposit(world, lane, &intent.validator, &context, &intent.amount)?;
             monetary(
@@ -207,7 +209,7 @@ pub fn prepare_public_lane_plan(
             )?
             .ok_or_else(|| invalid("no funded reward entitlement is available to claim"))?;
             let plan = PublicLaneRewardClaimPlanV1 {
-                network_scope: scope.clone(),
+                network_scope: scope,
                 valid_until_height: expiry,
                 fee_claim,
             };

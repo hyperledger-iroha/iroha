@@ -211,11 +211,7 @@ async fn supervise_peer_monitor_workers(
                     crate::ToriiCriticalWorkerExit::StoppedByShutdown
                 }
             }
-            Some(Ok(crate::ToriiCriticalWorkerExit::StoppedByShutdown)) => {
-                abort_peer_monitor_workers(&mut workers).await;
-                crate::ToriiCriticalWorkerExit::UnexpectedExit
-            }
-            Some(Ok(crate::ToriiCriticalWorkerExit::UnexpectedExit)) => {
+            Some(Ok(crate::ToriiCriticalWorkerExit::StoppedByShutdown | crate::ToriiCriticalWorkerExit::UnexpectedExit)) => {
                 abort_peer_monitor_workers(&mut workers).await;
                 crate::ToriiCriticalWorkerExit::UnexpectedExit
             }

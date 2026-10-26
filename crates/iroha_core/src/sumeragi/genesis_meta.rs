@@ -40,12 +40,14 @@ pub fn staged_genesis_nexus_amx_context_preimage(staged: &StateBlock<'_>) -> Vec
             activation_height: lineage.activation_height,
         })
         .collect::<Vec<_>>();
-    let authored_nexus = crate::pipeline_gas_policy::with_root_fees(
-        staged.nexus.clone(),
-        staged.world().parameters(),
-    );
+    let authored_fees = staged
+        .world()
+        .parameters()
+        .root_fees()
+        .expect("validated signed genesis retains its mandatory fee policy");
     sumeragi_nexus_amx_context_preimage(
-        &authored_nexus,
+        &staged.nexus,
+        Some(authored_fees),
         &staged.pipeline,
         &eligible_validators,
         &retained_lane_lineage,
@@ -100,11 +102,7 @@ pub(crate) mod tests {
     use iroha_primitives::numeric::Quantity;
     use std::num::NonZeroU64;
 
-    pub(crate) fn lane_record(
-        peer: &PeerId,
-        lane: LaneId,
-        stake: u64,
-    ) -> PublicLaneValidatorRecord {
+    pub fn lane_record(peer: &PeerId, lane: LaneId, stake: u64) -> PublicLaneValidatorRecord {
         let validator = AccountId::new(peer.public_key().clone());
         PublicLaneValidatorRecord {
             lane_id: lane,
@@ -121,7 +119,7 @@ pub(crate) mod tests {
         }
     }
 
-    pub(crate) fn lane_hash_world(records: &[(LaneId, PeerId, u64)]) -> State {
+    pub fn lane_hash_world(records: &[(LaneId, PeerId, u64)]) -> State {
         let world = World::default();
         {
             let mut block = world.block();
@@ -152,7 +150,7 @@ pub(crate) mod tests {
         )
     }
 
-    pub(crate) fn genesis_header() -> BlockHeader {
+    pub fn genesis_header() -> BlockHeader {
         BlockHeader::new(
             NonZeroU64::new(1).expect("non-zero test height"),
             None,
@@ -274,9 +272,7 @@ pub(crate) mod tests {
         {
             let mut world = changed_amx.world.block();
             world
-                .parameters
-                .get_mut()
-                .set_parameter(iroha_data_model::parameter::Parameter::Custom(
+                .set_parameter_for_testing(iroha_data_model::parameter::Parameter::Custom(
                     crate::pipeline_validity_policy::policy_of(&pipeline).into_custom_parameter(),
                 ))
                 .unwrap();
@@ -322,9 +318,7 @@ pub(crate) mod tests {
         {
             let mut world = drifted.world.block();
             world
-                .parameters
-                .get_mut()
-                .set_parameter(iroha_data_model::parameter::Parameter::Custom(
+                .set_parameter_for_testing(iroha_data_model::parameter::Parameter::Custom(
                     crate::pipeline_validity_policy::policy_of(&pipeline).into_custom_parameter(),
                 ))
                 .unwrap();
@@ -355,9 +349,7 @@ pub(crate) mod tests {
         };
         staged
             .world
-            .parameters
-            .get_mut()
-            .set_parameter(Parameter::Custom(policy.clone().into_custom_parameter()))
+            .set_parameter_for_testing(Parameter::Custom(policy.clone().into_custom_parameter()))
             .unwrap();
         let authored = staged_genesis_execution_policy_hash(&staged).unwrap();
         assert_ne!(

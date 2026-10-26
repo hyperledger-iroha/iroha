@@ -238,7 +238,6 @@ async fn closed_pipeline_projection_channel_is_a_critical_exit() {
 async fn torii_reusable_tcp_listener_binds_loopback() {
     let addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0);
     let listener = bind_torii_tcp_listener(SocketAddr::Ipv4(addr.into()))
-        .await
         .expect("Torii reusable listener should bind");
     assert_ne!(
         listener
@@ -258,7 +257,6 @@ async fn torii_reusable_tcp_listener_rejects_active_listener() {
         StdSocketAddr::V6(_) => unreachable!("test binds IPv4 loopback"),
     };
     let err = bind_torii_tcp_listener(SocketAddr::Ipv4(addr.into()))
-        .await
         .expect_err("active listener must not be shadowed by reusable bind");
     assert_eq!(err.kind(), std::io::ErrorKind::AddrInUse);
 }

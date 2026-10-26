@@ -274,9 +274,10 @@ fn supplemental_openings_of_original_auxiliary_columns_bind_through_real_fri() {
 }
 
 fn complete_oods_fixture_with_supplemental_v1(selected: Option<AggregateSupplementalColumnV1>) {
-    let with_supplemental = selected.is_some();
     use rand::SeedableRng as _;
     use rand_chacha::ChaCha12Rng;
+
+    let with_supplemental = selected.is_some();
     for trace_layout in [
         AggregateTraceLayoutV1::GroupedCurrent,
         AggregateTraceLayoutV1::JoinedCurrent,

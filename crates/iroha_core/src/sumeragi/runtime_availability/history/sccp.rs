@@ -2,7 +2,7 @@
 //!
 //! The decoded snapshot supplies no historical authority. This owner walks the original
 //! signed genesis and every native successor, then joins each exact archive delta to its
-//! complete ordinary-write root. No historical NativeExecutionTip is constructed. All
+//! complete ordinary-write root. No historical `NativeExecutionTip` is constructed. All
 //! pending archive backing belongs to the captured State's original pool. Ordinary carrier
 //! bytes are released after one successful consume; no height-sized descriptor is allocated.
 
@@ -21,6 +21,10 @@ struct Pending {
     read: LanePayloadRead,
 }
 impl Pending {
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "The original receipt retires after its source is transferred into the pending archive read."
+    )]
     fn new(source: CommittedBlock, bytes: ChargedBuffer<u8>, capture: &HistoryCapture) -> Self {
         let read = LanePayloadRead::new(bytes, capture.budget.clone(), capture.network, &source);
         Self {
@@ -32,7 +36,7 @@ impl Pending {
     }
 }
 /// One original committed carrier and exact funded archived preimage. No public constructor.
-pub(crate) struct SccpCarrier {
+pub struct SccpCarrier {
     source: SharedSignedBlock,
     core: Hash32,
     result: Hash32,
@@ -60,7 +64,7 @@ impl SccpCarrier {
 /// Read state retaining partial I/O, verified prefix and original bytes across local refusal.
 /// A carrier is provisional until the complete prefix/tip check succeeds. Only the private
 /// restoration reducer consumes it; no public restoration authority is returned mid-stream.
-pub(crate) struct SccpHistoryRead {
+pub struct SccpHistoryRead {
     capture: HistoryCapture,
     archive: Option<NativeContextArchive>,
     read: Option<NativeContextRead>,

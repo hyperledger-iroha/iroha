@@ -47,14 +47,16 @@ fn state(domain: &DomainId, host: &AccountId) -> State {
     );
     // Relay setup registers ordinary accounts before the refusal under test.
     // This explicit component policy grants no authenticated genesis authority.
-    let mut parameters = world.parameters.block();
-    parameters
-        .set_parameter(
-            crate::sumeragi::test_chain::crypto_fixture_policy()
-                .into_parameter()
-                .expect("canonical relay fixture crypto policy"),
-        )
-        .expect("install the relay fixture's original crypto policy");
+    let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
+        .expect("funded parameter fixture block");
+    crate::state::set_parameter_cell_for_testing(
+        &mut parameters,
+        crate::sumeragi::test_chain::crypto_fixture_policy()
+            .into_parameter()
+            .expect("canonical relay fixture crypto policy"),
+        world.sccp_committee_generations.allocation_budget(),
+    )
+    .expect("install the relay fixture's original crypto policy");
     parameters.commit();
     State::new(
         world,

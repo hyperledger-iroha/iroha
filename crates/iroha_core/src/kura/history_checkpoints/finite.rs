@@ -182,7 +182,7 @@ fn insert(records: &mut ChargedBuffer<Record>, record: Record) {
 
 /// The bounded lookup result lives entirely on the caller's stack.
 #[derive(Clone, Copy, Default)]
-pub(crate) struct Candidates {
+pub struct Candidates {
     values: [Option<(u64, HistoryCheckpoint)>; CANDIDATES],
     length: usize,
 }

@@ -690,6 +690,10 @@ pub struct ToriiHostedHttpProxyRequestV1 {
 /// Canonical first-release Torii request body forwarded over the P2P control plane.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::derive::NoritoSchema)]
 #[norito_schema(name = "iroha_core::torii_proxy::ToriiProxyRequestKindV1")]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "The canonical request schema retains each routed transaction or read request inline"
+)]
 pub enum ToriiProxyRequestKindV1 {
     /// Submit a signed transaction to the authoritative lane validator.
     #[codec(index = 0)]

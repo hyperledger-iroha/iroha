@@ -974,7 +974,7 @@ fn governance_metadata_is_encrypted_with_configured_key() {
         MetadataEncryption::chacha20poly1305_with_label(Some("primary"))
     );
     assert_ne!(entry.value, secret);
-    let decryptor = SymmetricEncryptor::<ChaCha20Poly1305>::new_with_key(&key).expect("decryptor");
+    let decryptor = SymmetricEncryptor::<ChaCha20Poly1305>::new_with_key(key).expect("decryptor");
     let plaintext = decryptor
         .decrypt_easy(entry.key.as_bytes(), &entry.value)
         .expect("decrypt");
@@ -1014,7 +1014,7 @@ fn public_metadata_cannot_declare_encryption() {
 #[test]
 fn governance_metadata_rejects_label_mismatch() {
     let key = [0x22u8; 32];
-    let encryptor = SymmetricEncryptor::<ChaCha20Poly1305>::new_with_key(&key).expect("encryptor");
+    let encryptor = SymmetricEncryptor::<ChaCha20Poly1305>::new_with_key(key).expect("encryptor");
     let ciphertext = encryptor
         .encrypt_easy(b"gov-notes".as_ref(), b"payload".as_ref())
         .expect("encrypt payload");
@@ -1035,7 +1035,7 @@ fn governance_metadata_rejects_label_mismatch() {
 #[test]
 fn governance_metadata_requires_label_when_expected() {
     let key = [0x33u8; 32];
-    let encryptor = SymmetricEncryptor::<ChaCha20Poly1305>::new_with_key(&key).expect("encryptor");
+    let encryptor = SymmetricEncryptor::<ChaCha20Poly1305>::new_with_key(key).expect("encryptor");
     let ciphertext = encryptor
         .encrypt_easy(b"gov-notes".as_ref(), b"payload".as_ref())
         .expect("encrypt payload");
@@ -1056,7 +1056,7 @@ fn governance_metadata_requires_label_when_expected() {
 #[test]
 fn governance_metadata_accepts_matching_label_ciphertext() {
     let key = [0x44u8; 32];
-    let encryptor = SymmetricEncryptor::<ChaCha20Poly1305>::new_with_key(&key).expect("encryptor");
+    let encryptor = SymmetricEncryptor::<ChaCha20Poly1305>::new_with_key(key).expect("encryptor");
     let ciphertext = encryptor
         .encrypt_easy(b"gov-notes".as_ref(), b"payload".as_ref())
         .expect("encrypt payload");
@@ -1811,10 +1811,10 @@ fn load_chunk_record_fixture(name: &str) -> Vec<ChunkRecordFixture> {
                 .next()
                 .and_then(|v| v.parse::<u32>().ok())
                 .unwrap_or_else(|| panic!("missing length in fixture line `{line}`"));
-            let digest_hex = parts
-                .next()
-                .map(ToString::to_string)
-                .unwrap_or_else(|| panic!("missing digest in fixture line `{line}`"));
+            let digest_hex = parts.next().map_or_else(
+                || panic!("missing digest in fixture line `{line}`"),
+                ToString::to_string,
+            );
             Some(ChunkRecordFixture {
                 file_name,
                 offset,
@@ -1887,8 +1887,8 @@ pub(super) fn format_base_id(
     fingerprint: &ReplayFingerprint,
 ) -> String {
     let lane_hex = format!("{:08x}", lane_id.as_u32());
-    let epoch_hex = format!("{:016x}", epoch);
-    let sequence_hex = format!("{:016x}", sequence);
+    let epoch_hex = format!("{epoch:016x}");
+    let sequence_hex = format!("{sequence:016x}");
     let ticket_hex = hex::encode(ticket.as_ref());
     let fingerprint_hex = hex::encode(fingerprint.as_bytes());
     format!("{lane_hex}-{epoch_hex}-{sequence_hex}-{ticket_hex}-{fingerprint_hex}")

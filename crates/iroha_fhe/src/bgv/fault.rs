@@ -26,6 +26,8 @@ pub enum FaultPoint {
     ThresholdAfterFirstPolynomial,
     /// Offline dealer, after calculating a share but before marking it issued.
     ThresholdBeforeShareRelease,
+    /// Local subset conversion, after the first secret limb was weighted in place.
+    ThresholdAfterFirstSubsetLimb,
 }
 
 #[cfg(any(test, feature = "bgv-test-fixtures"))]

@@ -4,6 +4,56 @@ All notable changes to `IrohaSwift` are documented in this file.
 
 ## [Unreleased]
 
+- 2026-10-26: `PetalScanSession` reads a capture's turn lanes after its bands when it has time
+  to spare: when the capture's work and the session's last turn try fit a 30 fps camera's frame
+  time (`captureBudgetMilliseconds`), timed on the monotonic clock. A slow phone core never has
+  the time, so it still leaves them to the shown frame's next capture; a fast decoder whose
+  camera gives it few frames a second gets its turn lanes back. `init(limits:workCost:)` takes a
+  model's costs (`PetalWork`) in place of the measured times, and
+  `PetalScanStats.spareTurns` counts the captures that had the time.
+
+- 2026-10-26: Petal Stream format 5 (no format 3 compatibility: beacon version `0x50`; `0x30`,
+  `0x20` and `0x10` are refused). A frame is a portrait card of 1024 × 1668 units: the format 3
+  square with a band of 306 katakana tiles above and below it (`PetalLayout.cardHeight`,
+  `squareTop`, `kanaTiles`, `kanaTileAt`, `kanaInside`, `kanaInked`; `PetalGlyphs` holds the
+  sixteen katakana). Eight tiles of each band are pilots; the other 298 carry lanes `P0`/`P1`
+  (tile polarity, RS(37, 20), one atom) and `K0`/`K1` (tile katakana, RS(149, 116), seven atoms),
+  each bound by a CRC-32C to the stream tag, frame and lane: up to 53 atoms a frame.
+  `PetalKana` holds the lane codec and the band reader (`readKana`, `observeBand`,
+  `templateProbe`, `coarseTemplateProbe`); `PetalFrameCells.kanaGlyphs`/`kanaLight`/`setKana`,
+  `PetalLaneData.kana`, `PetalScanOutcome.kana` and `PetalScanStats.kanaTries`/`kanaLanes` are
+  new. `PetalScanSession` reads each band once per shown frame with its own back-off, and a
+  capture whose bands read a kana lane tries no turn lane (both on one capture overran a 12 fps
+  frame on a slow phone core). `PetalRenderer.render` draws the card (`cardHeightPixels`;
+  `PetalPalette.ink`), `PetalDrawList.kanaTiles`/`kanaGlyphStrokes` describe the tiles, and
+  `PetalCoreGraphicsRenderer`/`PetalFrameView` draw the portrait card. Fixtures:
+  `petal_stream_v5.json` and `petal_captures_v5.json`.
+
+- 2026-10-26: Petal Stream format 3 (no format 2 compatibility: beacon version `0x30`; `0x20`
+  and `0x10` are refused). Every petal is narrower (half-length 6.0, half-width 3.73, notch
+  radius 1.12 at 6.24) and turn lanes `T0`–`T3` ride on the field lanes: the first 360 lit
+  petals of a sector, in a fixed shuffled order, are turned by 0°, 45°, 90° or 135° to show two
+  more bits each, one RS(90, 68) codeword of four repair atoms and a CRC-32C check bound to the
+  field lane's header; a frame carries up to 37 atoms. `PetalTurns` holds the carrier order, the
+  turn lane codec and the reader (`readTurns`, `observedTurns`, `turnTemplate`);
+  `PetalFrameCells.turns`/`setTurns`/`turnWord`, `PetalLaneData.turns`,
+  `PetalScanOutcome.turned` and `PetalScanStats.turnTries`/`turnLanes` are new, and
+  `PetalScanSession` tries each turn lane once per shown frame and, after tries that read
+  nothing, passes over up to eight captures before it tries again (reading turns costs a slow
+  phone core several times a frame's decode). `PetalDrawList` petal angles include the turn, and
+  `PetalCoreGraphicsRenderer` draws the petal notch, antialiased. Fixtures:
+  `petal_stream_v3.json` and `petal_captures_v3.json`.
+
+- 2026-10-25: Petal Stream format 2 (no format 1 compatibility: beacon version `0x20`,
+  `0x10` is refused). The katakana tile field and lanes `P`/`K` are replaced by 3,376 petals
+  on 34 bands in four sectors (`PetalLane.field(0...3)`, 105-byte codewords) beside lane `D`
+  on rings at radii 405/440/475; a frame carries 21 atoms. The decoder adds the local read, a
+  lens-distortion search (`PetalPose`) and `PetalDecoder.fieldEvidence`/`mergeFields`;
+  `PetalScanStats` counts `laneD`, `fieldLanes` and `mergedLanes`; `PetalDrawList` lists the
+  `天` backdrop and lit petals. `PetalGlyphs` and the tile APIs are removed. Fixtures:
+  `petal_stream_v2.json` and `petal_captures_v2.json`. `PetalStreamView.defaultFramesPerSecond`
+  is 12.
+
 - 2026-10-18: Bridge ABI 30 (no ABI 29 compatibility). Removed the Parliament timed-OVN/TLE
   wallet and client APIs: the native casting-proof, registration and ballot wallet functions
   with their seed-handle, trust-anchor and Keychain seed types, the `ToriiClient`

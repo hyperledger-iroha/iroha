@@ -29,7 +29,7 @@ use iroha_data_model::{
 };
 
 /// Original codec refusals retain local retry authority before error diagnostics.
-pub(crate) fn candidate_policy_attempt_error(
+pub fn candidate_policy_attempt_error(
     error: ParliamentCandidateTestingErrorV1,
 ) -> ExecutionAttemptError<&'static str> {
     const INVALID: &str = "Network genesis has no authenticated original candidate policy";
@@ -168,7 +168,7 @@ impl StateTransaction<'_, '_> {
 
 /// Require the sealed genesis output to reproduce exactly the optional original slot.
 /// Comparison uses original canonical values and introduces no second decoder.
-pub(crate) fn validate_genesis_output(
+pub fn validate_genesis_output(
     original: &SignedBlock,
     state: &StateBlock<'_>,
 ) -> Result<(), &'static str> {

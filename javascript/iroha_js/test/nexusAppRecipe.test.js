@@ -19,9 +19,8 @@ test("Nexus App transfer recipe executes the canonical native codec end to end",
     {
       cwd: PACKAGE_ROOT,
       encoding: "utf8",
-      // Native local-unit verification has a 180-second dependency-hash bound.
-      // Allow that mandatory check plus 30 seconds for the transfer recipe.
-      timeout: 210_000,
+      // Native custody verification may take up to 180 seconds before the recipe runs.
+      timeout: 240_000,
       env: { ...process.env, NO_COLOR: "1" },
     },
   );

@@ -31,6 +31,10 @@ use thiserror::Error;
 /// Error code returned when public alias setup tries to claim an operator-catalogued dataspace.
 pub const CATALOGUED_DATASPACE_BOOTSTRAP_REQUIRED_CODE: &str = "alias.catalog.bootstrap_required";
 /// Read an exact governed grant without allowing a malformed reservation to disappear.
+#[expect(
+    clippy::result_large_err,
+    reason = "Alias failures retain the original execution refusal inline without allocating during resource exhaustion"
+)]
 fn dataspace_bootstrap_grant(
     world: &impl WorldReadOnly,
     selector: &NameSelectorV1,
@@ -87,20 +91,26 @@ impl AliasSetupError {
     }
 
     /// Consume the original local refusal, returning this completed error unchanged otherwise.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Alias failures retain the original execution refusal inline without allocating during resource exhaustion"
+    )]
     pub(crate) fn into_deferral(self) -> Result<crate::execution_attempt::ExecutionDeferred, Self> {
         let Self {
             code,
             message,
             deferred,
         } = self;
-        match deferred {
-            Some(original) => Ok(original),
-            None => Err(Self {
-                code,
-                message,
-                deferred: None,
-            }),
-        }
+        deferred.map_or_else(
+            || {
+                Err(Self {
+                    code,
+                    message,
+                    deferred: None,
+                })
+            },
+            Ok,
+        )
     }
 
     fn from_sns_with_code(code: &'static str, error: crate::sns::SnsError) -> Self {
@@ -158,6 +168,10 @@ fn sns_error(error: crate::sns::SnsError) -> AliasSetupError {
 /// # Errors
 /// Returns `alias.name.invalid` when the resolved dataspace or domain name
 /// cannot form a selector, or account-alias text is not canonical.
+#[expect(
+    clippy::result_large_err,
+    reason = "Alias failures retain the original execution refusal inline without allocating during resource exhaustion"
+)]
 pub fn selector_for_resolved_alias_target(
     target: &AliasTargetV1,
 ) -> Result<NameSelectorV1, AliasSetupError> {
@@ -189,6 +203,10 @@ pub fn selector_for_resolved_alias_target(
 ///
 /// Returns [`AliasSetupError`] if the fixed dataspace-id metadata key cannot be
 /// represented by the data model.
+#[expect(
+    clippy::result_large_err,
+    reason = "Alias failures retain the original execution refusal inline without allocating during resource exhaustion"
+)]
 pub fn alias_registration_metadata(target: &AliasTargetV1) -> Result<Metadata, AliasSetupError> {
     let mut metadata = Metadata::default();
     if let AliasTargetV1::Dataspace(dataspace) = target {
@@ -213,6 +231,10 @@ pub fn alias_intent_owner(intent: &AliasIntentV1) -> &AccountId {
         AliasIntentV1::AccountAlias(value) => &value.target_account,
     }
 }
+#[expect(
+    clippy::result_large_err,
+    reason = "Alias failures retain the original execution refusal inline without allocating during resource exhaustion"
+)]
 fn expected_controller(owner: &AccountId) -> Result<NameControllerV1, AliasSetupError> {
     AccountAddress::from_account_id(owner)
         .map(|address| NameControllerV1::account(&address))
@@ -223,6 +245,10 @@ fn expected_controller(owner: &AccountId) -> Result<NameControllerV1, AliasSetup
             )
         })
 }
+#[expect(
+    clippy::result_large_err,
+    reason = "Alias failures retain the original execution refusal inline without allocating during resource exhaustion"
+)]
 fn validate_text_id_pair(
     world: &impl WorldReadOnly,
     catalog: &DataSpaceCatalog,
@@ -306,18 +332,15 @@ fn validate_text_id_pair(
             Ok(false)
         }
         Err(crate::sns::SnsError::NotFound(_)) if planned == Some(expected) => Ok(false),
-        Err(crate::sns::SnsError::NotFound(_)) => match planned {
-            Some(planned) => Err(AliasSetupError::new(
+        Err(crate::sns::SnsError::NotFound(_)) => planned.map_or_else(|| Err(AliasSetupError::new(
+                "alias.catalog.unknown_mapping",
+                format!("dataspace alias `{name}` is not registered"),
+            )), |planned| Err(AliasSetupError::new(
                 crate::sns::ALIAS_CATALOG_MAPPING_CONFLICT_CODE,
                 format!(
                     "planned dataspace alias `{name}` maps to {planned}, not expected id {expected}"
                 ),
-            )),
-            None => Err(AliasSetupError::new(
-                "alias.catalog.unknown_mapping",
-                format!("dataspace alias `{name}` is not registered"),
-            )),
-        },
+            ))),
         Err(error) => Err(sns_error(error)),
     }
 }
@@ -327,6 +350,10 @@ fn validate_text_id_pair(
 ///
 /// Returns [`AliasSetupError`] for unknown or conflicting live static/SNS
 /// mappings, or for a non-deterministic ID on a new dataspace target.
+#[expect(
+    clippy::result_large_err,
+    reason = "Alias failures retain the original execution refusal inline without allocating during resource exhaustion"
+)]
 pub fn validate_resolved_alias_target(
     world: &impl WorldReadOnly,
     catalog: &DataSpaceCatalog,
@@ -345,6 +372,10 @@ pub fn validate_resolved_alias_target(
 ///
 /// Returns [`AliasSetupError`] when the guard has expired, its policy version or payment asset
 /// differs from live policy, or the exact charge exceeds the authorized cap.
+#[expect(
+    clippy::result_large_err,
+    reason = "Alias failures retain the original execution refusal inline without allocating during resource exhaustion"
+)]
 pub fn validate_alias_quote_guard(
     world: &impl WorldReadOnly,
     quote: &crate::sns::LeaseQuote,
@@ -433,6 +464,10 @@ fn authority_can_manage_alias_target(
 ///
 /// Returns [`AliasSetupError`] when the authority is neither the explicit owner
 /// nor an exact-scope alias manager.
+#[expect(
+    clippy::result_large_err,
+    reason = "Alias failures retain the original execution refusal inline without allocating during resource exhaustion"
+)]
 pub fn validate_alias_intent_authority(
     world: &impl WorldReadOnly,
     authority: &AccountId,
@@ -449,6 +484,10 @@ pub fn validate_alias_intent_authority(
         "authority must own or hold exact management permission for the alias intent",
     ))
 }
+#[expect(
+    clippy::result_large_err,
+    reason = "Alias failures retain the original execution refusal inline without allocating during resource exhaustion"
+)]
 fn active_alias_lifecycle_record(
     world: &impl WorldReadOnly,
     catalog: &DataSpaceCatalog,
@@ -480,6 +519,10 @@ fn active_alias_lifecycle_record(
 ///
 /// Returns [`AliasSetupError`] for mapping, ownership/permission, lifecycle,
 /// expiry-CAS, policy, asset, cap, or deadline conflicts.
+#[expect(
+    clippy::result_large_err,
+    reason = "Alias failures retain the original execution refusal inline without allocating during resource exhaustion"
+)]
 pub fn classify_alias_lease_renewal(
     world: &impl WorldReadOnly,
     catalog: &DataSpaceCatalog,
@@ -500,7 +543,7 @@ pub fn classify_alias_lease_renewal(
     }
     let quote = crate::sns::quote_resolved_name_renewal(
         world,
-        selector,
+        &(selector),
         renewal.expected_current_expiry_ms,
         renewal.target_expiry_ms,
         now_ms,
@@ -509,6 +552,10 @@ pub fn classify_alias_lease_renewal(
     validate_alias_quote_guard(world, &quote, &renewal.quote_guard, now_ms)?;
     Ok(quote)
 }
+#[expect(
+    clippy::result_large_err,
+    reason = "Alias failures retain the original execution refusal inline without allocating during resource exhaustion"
+)]
 fn policy_payment_asset(
     policy: &iroha_data_model::sns::SuffixPolicyV1,
 ) -> Result<AssetDefinitionId, AliasSetupError> {
@@ -522,6 +569,10 @@ fn policy_payment_asset(
         )
     })
 }
+#[expect(
+    clippy::result_large_err,
+    reason = "Alias failures retain the original execution refusal inline without allocating during resource exhaustion"
+)]
 pub(crate) fn validate_alias_auto_renew_ranges(
     config: &AliasAutoRenewConfigV1,
 ) -> Result<(), AliasSetupError> {
@@ -548,6 +599,10 @@ pub(crate) fn validate_alias_auto_renew_ranges(
     }
     Ok(())
 }
+#[expect(
+    clippy::result_large_err,
+    reason = "Alias failures retain the original execution refusal inline without allocating during resource exhaustion"
+)]
 fn validate_alias_auto_renew_config(
     world: &impl WorldReadOnly,
     target: &AliasTargetV1,
@@ -607,6 +662,10 @@ fn validate_alias_auto_renew_config(
 ///
 /// Returns [`AliasSetupError`] for mapping, lease state, owner, revision,
 /// configuration-range, policy-version, or payment-asset conflicts.
+#[expect(
+    clippy::result_large_err,
+    reason = "Alias failures retain the original execution refusal inline without allocating during resource exhaustion"
+)]
 pub fn classify_alias_auto_renew(
     world: &impl WorldReadOnly,
     catalog: &DataSpaceCatalog,
@@ -663,6 +722,10 @@ pub fn classify_alias_auto_renew(
     }
     Ok(AliasLifecyclePlanDispositionV1::Apply)
 }
+#[expect(
+    clippy::result_large_err,
+    reason = "Alias failures retain the original execution refusal inline without allocating during resource exhaustion"
+)]
 fn existing_record(
     world: &impl WorldReadOnly,
     selector: &NameSelectorV1,
@@ -674,6 +737,10 @@ fn existing_record(
         Err(error) => Err(sns_error(error)),
     }
 }
+#[expect(
+    clippy::result_large_err,
+    reason = "Alias failures retain the original execution refusal inline without allocating during resource exhaustion"
+)]
 fn ensure_active_parent_record(
     world: &impl WorldReadOnly,
     target: &AliasTargetV1,
@@ -694,6 +761,10 @@ fn ensure_active_parent_record(
     }
     Ok(())
 }
+#[expect(
+    clippy::result_large_err,
+    reason = "Alias failures retain the original execution refusal inline without allocating during resource exhaustion"
+)]
 fn validate_parent_resource(
     world: &impl WorldReadOnly,
     planned_dataspaces: &BTreeMap<iroha_model_base::name::Name, DataSpaceId>,
@@ -746,6 +817,10 @@ fn validate_parent_resource(
         }
     }
 }
+#[expect(
+    clippy::result_large_err,
+    reason = "Alias failures retain the original execution refusal inline without allocating during resource exhaustion"
+)]
 fn validate_existing_record(
     record: &NameRecordV1,
     owner: &AccountId,
@@ -826,12 +901,16 @@ fn exact_permissions_present(world: &impl WorldReadOnly, intent: &AliasIntentV1)
         .iter()
         .all(|permission| world.account_contains_inherent_permission(owner, permission))
 }
+#[expect(
+    clippy::result_large_err,
+    reason = "Alias failures retain the original execution refusal inline without allocating during resource exhaustion"
+)]
 fn classify_domain_state(
     world: &impl WorldReadOnly,
     intent: &iroha_data_model::alias_setup::AliasDomainIntentV1,
 ) -> Result<bool, AliasSetupError> {
-    for (indexed_owner, domains) in world.domains_by_owner().iter() {
-        if domains.contains(&intent.domain.canonical_name) && indexed_owner != &intent.owner {
+    for ((indexed_owner, domain_id), ()) in world.domains_by_owner().iter() {
+        if domain_id == &intent.domain.canonical_name && indexed_owner != &intent.owner {
             return Err(AliasSetupError::new(
                 "alias.owner.conflict",
                 format!(
@@ -841,10 +920,11 @@ fn classify_domain_state(
             ));
         }
     }
-    let owner_index_missing = !world
-        .domains_by_owner()
-        .get(&intent.owner)
-        .is_some_and(|domains| domains.contains(&intent.domain.canonical_name));
+    let owner_index_missing = !crate::state::range_bounds::index_contains(
+        world.domains_by_owner(),
+        &intent.owner,
+        &intent.domain.canonical_name,
+    );
     let Some(domain) = world.domains().get(&intent.domain.canonical_name) else {
         return Ok(true);
     };
@@ -870,6 +950,10 @@ fn classify_domain_state(
     }
     Ok(owner_index_missing)
 }
+#[expect(
+    clippy::result_large_err,
+    reason = "Alias failures retain the original execution refusal inline without allocating during resource exhaustion"
+)]
 fn classify_account_state(
     world: &impl WorldReadOnly,
     intent: &iroha_data_model::alias_setup::AliasAccountIntentV1,
@@ -997,6 +1081,10 @@ fn classify_account_state(
 /// Returns [`AliasSetupError`] for unknown/mismatched text-to-ID mappings, inactive
 /// leases, owner/controller/metadata drift, binding drift, primary drift, or a
 /// missing account required by [`AccountProvisionV1::Existing`].
+#[expect(
+    clippy::result_large_err,
+    reason = "Alias failures retain the original execution refusal inline without allocating during resource exhaustion"
+)]
 pub fn classify_alias_intent(
     world: &impl WorldReadOnly,
     catalog: &DataSpaceCatalog,
@@ -1025,6 +1113,10 @@ pub fn classify_alias_intent(
 /// Returns the same coded failures as [`classify_alias_intent`], and
 /// `alias.domain.endorsement_required` when an absent domain cannot be created
 /// from the declarative setup model under the active policy.
+#[expect(
+    clippy::result_large_err,
+    reason = "Alias failures retain the original execution refusal inline without allocating during resource exhaustion"
+)]
 pub fn classify_alias_intent_with_endorsement_policy(
     world: &impl WorldReadOnly,
     catalog: &DataSpaceCatalog,
@@ -1053,6 +1145,10 @@ pub fn classify_alias_intent_with_endorsement_policy(
 ///
 /// Returns the same coded drift errors as [`classify_alias_intent`], plus any
 /// conflict between a planned parent, live state, and the child's pinned ID.
+#[expect(
+    clippy::result_large_err,
+    reason = "Alias failures retain the original execution refusal inline without allocating during resource exhaustion"
+)]
 pub fn classify_alias_intent_with_planned_dataspaces(
     world: &impl WorldReadOnly,
     catalog: &DataSpaceCatalog,
@@ -1080,6 +1176,10 @@ pub fn classify_alias_intent_with_planned_dataspaces(
 ///
 /// Returns the same coded drift errors as [`classify_alias_intent`], including
 /// absent, inactive, or conflicting parent resources.
+#[expect(
+    clippy::result_large_err,
+    reason = "Alias failures retain the original execution refusal inline without allocating during resource exhaustion"
+)]
 pub fn classify_alias_intent_with_planned_parents(
     world: &impl WorldReadOnly,
     catalog: &DataSpaceCatalog,
@@ -1109,6 +1209,10 @@ pub fn classify_alias_intent_with_planned_parents(
 /// Returns the same coded failures as [`classify_alias_intent_with_planned_parents`],
 /// and `alias.domain.endorsement_required` when an absent domain cannot be
 /// represented by the declarative setup intent under the active policy.
+#[expect(
+    clippy::result_large_err,
+    reason = "Alias failures retain the original execution refusal inline without allocating during resource exhaustion"
+)]
 pub fn classify_alias_intent_with_planned_parents_and_endorsement_policy(
     world: &impl WorldReadOnly,
     catalog: &DataSpaceCatalog,
@@ -1211,6 +1315,10 @@ pub const fn target_suffix_id(target: &AliasTargetV1) -> u16 {
 ///
 /// Returns [`AliasSetupError`] when the namespace is unknown, the configured fee asset is invalid
 /// or absent, or either the policy or a pricing tier names a different payment asset.
+#[expect(
+    clippy::result_large_err,
+    reason = "Alias failures retain the original execution refusal inline without allocating during resource exhaustion"
+)]
 pub fn validate_configured_alias_payment_asset(
     world: &impl WorldReadOnly,
     target: &AliasTargetV1,
@@ -1411,9 +1519,7 @@ mod tests {
                 0,
             );
             transaction
-                .parameters
-                .get_mut()
-                .set_parameter(Parameter::Custom(
+                .set_parameter_for_testing(Parameter::Custom(
                     grant
                         .clone()
                         .into_custom_parameter()

@@ -16,7 +16,7 @@ pub(super) fn fixture(
     preparation::tests::prepare(journal, &mut attempt, &dispatch);
     (dispatch, attempt, signer)
 }
-pub(crate) fn unprepared_fixture(
+pub fn unprepared_fixture(
     journal: &mut EnrollmentJournalV1,
 ) -> (PreKeyDispatchV1, EnrollmentAttemptV1, SigningKey) {
     let root = SigningKey::from_slice(&[1; 32]).unwrap();
@@ -266,7 +266,7 @@ fn signed_wrong_attempt_window_scope_and_nonce_cannot_enter_journal() {
     assert_eq!(journal.permit(&attempt, &changed), Err(Conflict));
 }
 
-pub(crate) fn account_request(
+pub fn account_request(
     dispatch: &PreKeyDispatchV1,
     attempt: &EnrollmentAttemptV1,
 ) -> iroha_core_zk::kagemusha_wallet_enrollment_v1::RequestV1 {

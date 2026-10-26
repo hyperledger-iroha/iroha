@@ -86,13 +86,13 @@ mod planner_tests {
                         state.record_hidden_sortition_capacity_failure_batch(
                             id,
                             payload.requests.clone(),
-                            snapshot,
+                            &(snapshot),
                         )
                     } else {
                         state.register_sortition_request_batch(
                             id,
                             payload.requests.clone(),
-                            snapshot,
+                            &(snapshot),
                         )
                     }
                 }
@@ -603,7 +603,7 @@ mod planner_tests {
             id,
             1,
             ParliamentBody::PolicyJury,
-            retry_snapshot,
+            &(retry_snapshot),
             3,
             23,
             // The first native pulse height at or after 23 plus the ten-block delay.
@@ -661,14 +661,14 @@ mod planner_tests {
                         id,
                         0,
                         ParliamentBody::PolicyJury,
-                        single.clone(),
+                        &(single.clone()),
                         3,
                         10,
                         20,
                         logical,
                     ),
                 }],
-                single,
+                &(single),
             )
             .expect("record sub-floor capacity evidence");
         let governance = Governance {
@@ -692,7 +692,7 @@ mod planner_tests {
             id,
             1,
             ParliamentBody::PolicyJury,
-            grown,
+            &(grown),
             3,
             11,
             // The evidence generation holds slot 20; height 21 is not a native pulse height.
@@ -742,14 +742,14 @@ mod planner_tests {
                         id,
                         0,
                         ParliamentBody::PolicyJury,
-                        single.clone(),
+                        &(single.clone()),
                         3,
                         10,
                         20,
                         logical,
                     ),
                 }],
-                single,
+                &(single),
             )
             .expect("record sub-floor capacity evidence");
         let governance = Governance {
@@ -774,14 +774,14 @@ mod planner_tests {
                         id,
                         1,
                         ParliamentBody::PolicyJury,
-                        still_small.clone(),
+                        &(still_small.clone()),
                         3,
                         11,
                         23,
                         logical,
                     ),
                 }],
-                still_small,
+                &(still_small),
             )
             .expect("a submitter may still record the unchanged shortfall");
     }

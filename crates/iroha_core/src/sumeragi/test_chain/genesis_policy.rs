@@ -10,7 +10,7 @@ use iroha_crypto::{Hash, KeyPair};
 use iroha_data_model::{
     NetworkId,
     account::AccountId,
-    block::SignedBlock,
+    block::{SignedBlock, consensus::PublicLaneStakingPolicy},
     isi::InstructionBox,
     parameter::{
         Parameter,
@@ -50,7 +50,7 @@ pub(super) fn npos_genesis_parameters(npos: Option<SumeragiNposParameters>) -> V
 ///
 /// # Errors
 /// Any rejection other than the policy mismatch, with the failing execution outputs.
-pub(crate) fn staged_genesis_policies(
+pub fn staged_genesis_policies(
     genesis: SignedBlock,
     topology: &Topology,
     genesis_account: &AccountId,
@@ -107,19 +107,27 @@ pub(crate) fn staged_genesis_policies(
 /// `configured` returns a fresh, fully configured State with no committed block for the given
 /// network. The provisional State and its network identity are discarded; the returned State
 /// belongs to the returned genesis, which [`startup::apply_genesis`] accepts unchanged. The
-/// consensus mode is `NPoS` exactly when `npos` is supplied.
+/// consensus mode is `NPoS` exactly when the supplied policies include `NPoS` parameters.
+/// The staking policy is explicit author input and is included in the original signed parameters.
+/// State construction never supplies monetary policy authority.
 ///
 /// # Errors
 /// The genesis cannot be built or signed, or original native execution rejects it.
-pub(crate) fn signed_genesis_fixture_for_state(
+pub fn signed_genesis_fixture_for_state(
     chain_id: &ChainId,
     genesis_key: &KeyPair,
     validators: &[(PeerId, Vec<u8>)],
     instructions: Vec<InstructionBox>,
     genesis_time_ms: u64,
-    npos: Option<SumeragiNposParameters>,
+    policies: (Option<SumeragiNposParameters>, PublicLaneStakingPolicy),
     mut configured: impl FnMut(NetworkId) -> State,
 ) -> Result<(SignedBlock, State), String> {
+    let (npos, staking) = policies;
+    let staking = Parameter::Custom(
+        staking
+            .into_custom_parameter()
+            .map_err(|error| format!("authored fixture staking policy: {error}"))?,
+    );
     let mode = if npos.is_some() {
         ConsensusMode::Npos
     } else {
@@ -130,11 +138,15 @@ pub(crate) fn signed_genesis_fixture_for_state(
         genesis_key,
         validators,
         instructions,
-        npos_genesis_parameters(npos),
-        mode.into(),
-        iroha_data_model::block::consensus::SumeragiRootScope::Global,
-        genesis_time_ms,
-        std::num::NonZeroU64::MIN,
+        npos_genesis_parameters(npos)
+            .into_iter()
+            .chain([staking])
+            .collect(),
+        (
+            mode.into(),
+            iroha_data_model::block::consensus::SumeragiRootScope::Global,
+        ),
+        (genesis_time_ms, std::num::NonZeroU64::MIN),
     )?;
     let account = AccountId::new(genesis_key.public_key().clone());
     let topology = Topology::new(
@@ -181,7 +193,7 @@ mod tests {
     use crate::{
         kura::Kura,
         query::store::LiveQueryStore,
-        state::{StateReadOnly, World},
+        state::{StateReadOnly, World, WorldReadOnly},
     };
 
     #[test]
@@ -254,7 +266,14 @@ mod tests {
             &validators,
             Vec::new(),
             1_000,
-            None,
+            (
+                None,
+                super::super::staking_fixture_policy(
+                    iroha_config::parameters::defaults::nexus::fees::fee_asset_id()
+                        .parse()
+                        .unwrap(),
+                ),
+            ),
             configured,
         )
         .unwrap();
@@ -271,6 +290,126 @@ mod tests {
         startup::apply_genesis(&state, genesis, &account, ConsensusMode::Permissioned, None)
             .expect("the signed policies are the ones original execution derives");
         assert_eq!(state.view().height(), 1);
+    }
+
+    #[test]
+    fn state_bound_fixture_preserves_all_explicit_staking_terms_in_signed_and_committed_policy() {
+        use iroha_data_model::{
+            asset::AssetDefinitionId, isi::SetParameter, transaction::Executable,
+        };
+        use iroha_model_base::domain::DomainId;
+
+        iroha_genesis::init_instruction_registry();
+        let chain_id = ChainId::from("state-bound-explicit-staking");
+        let key = KeyPair::from_seed(vec![0xCE; 32], Algorithm::Ed25519);
+        let account = AccountId::new(key.public_key().clone());
+        let custody = |seed| {
+            AccountId::new(
+                KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519)
+                    .public_key()
+                    .clone(),
+            )
+        };
+        let mut authored = iroha_genesis::default_staking_policy(
+            AssetDefinitionId::derive_from_components(
+                DomainId::parse_fully_qualified("staking.example").unwrap(),
+                "bond".parse().unwrap(),
+            ),
+            custody(0xB5),
+            custody(0xB6),
+        );
+        authored.min_validator_stake = "17.25".parse().unwrap();
+        authored.max_stake_shares_per_validator = 19_u32.try_into().unwrap();
+        authored.max_pending_unbonds_per_share = 3_u32.try_into().unwrap();
+        authored.unbonding_delay_ms = 123_456;
+        authored.max_slash_bps = 4321;
+        let configured = |network| {
+            let world = World::with(
+                [Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&account)],
+                [Account::new(account.clone()).build(&account)],
+                [],
+            );
+            let mut state = State::new_with_chain_and_network_id_for_testing(
+                world,
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+                chain_id.clone(),
+                network,
+            );
+            assert!(state.view().world().parameters().staking_policy().is_none());
+            // Force the provisional/re-sign path while keeping the authored policy fixed.
+            let mut pipeline = state.pipeline_snapshot();
+            pipeline.amx_group_budget_ms += 1;
+            state.set_pipeline(pipeline);
+            state
+        };
+        let (genesis, state) = signed_genesis_fixture_for_state(
+            &chain_id,
+            &key,
+            &super::super::fixture_validators(),
+            Vec::new(),
+            1_000,
+            (None, authored.clone()),
+            configured,
+        )
+        .unwrap();
+        let signed = genesis
+            .external_transactions()
+            .flat_map(|transaction| {
+                let Executable::Instructions(instructions) = transaction.instructions() else {
+                    panic!("genesis contains original instruction batches");
+                };
+                instructions.iter()
+            })
+            .filter_map(|instruction| instruction.as_any().downcast_ref::<SetParameter>())
+            .filter_map(|set| match set.inner() {
+                Parameter::Custom(custom)
+                    if custom.id() == &PublicLaneStakingPolicy::parameter_id() =>
+                {
+                    Some(PublicLaneStakingPolicy::from_custom_parameter(custom).unwrap())
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            signed,
+            vec![authored.clone()],
+            "one complete authored signed snapshot"
+        );
+        assert_eq!(state.view().height(), 0);
+        assert!(state.view().world().parameters().staking_policy().is_none());
+        startup::apply_genesis(&state, genesis, &account, ConsensusMode::Permissioned, None)
+            .expect("native execution accepts the same explicit original policy");
+        let view = state.view();
+        assert_eq!(view.height(), 1);
+        assert_eq!(view.world().parameters().staking_policy(), Some(&authored));
+    }
+
+    #[test]
+    fn state_bound_fixture_rejects_invalid_authorship_before_state_construction() {
+        let key = KeyPair::from_seed(vec![0xCE; 32], Algorithm::Ed25519);
+        let mut authored = super::super::staking_fixture_policy(
+            iroha_config::parameters::defaults::nexus::fees::fee_asset_id()
+                .parse()
+                .unwrap(),
+        );
+        authored.max_slash_bps = 10_001;
+        let error = signed_genesis_fixture_for_state(
+            &ChainId::from("invalid-authored-staking"),
+            &key,
+            &[],
+            Vec::new(),
+            1_000,
+            (None, authored),
+            |_| panic!("invalid authored staking must be rejected before configuring State"),
+        )
+        .err()
+        .expect("invalid authored monetary policy must fail");
+        assert!(
+            error.starts_with("authored fixture staking policy: "),
+            "{error}"
+        );
+        assert!(error.contains("slash"), "{error}");
     }
 
     #[test]

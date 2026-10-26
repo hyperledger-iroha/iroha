@@ -21,16 +21,16 @@ fn record(change: impl FnOnce(&mut Work)) {
         }
     });
 }
-pub(super) fn record_leaf() {
+pub fn record_leaf() {
     record(|work| work.leaves += 1);
 }
-pub(super) fn record_lock() {
+pub fn record_lock() {
     record(|work| work.locks += 1);
 }
-pub(super) fn record_inventory_entry() {
+pub fn record_inventory_entry() {
     record(|work| work.entries += 1);
 }
-pub(super) fn record_decode() {
+pub fn record_decode() {
     record(|work| work.decodes += 1);
 }
 fn measured<T>(read: impl FnOnce() -> T) -> (T, Work, CustodyWorkV1) {
@@ -134,6 +134,7 @@ fn journal_inventory_scope_preserves_actual_leaf_lock_decode_work_and_budgets() 
 fn journal_inventory_scope_keeps_native_precedence_fresh_bytes_and_original_retry() {
     use std::{fs, os::unix::fs::PermissionsExt as _};
     let root = tempfile::tempdir().unwrap();
+    fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
     let created = Journal::create_preparation(
         &root.path().join("journal"),
         &norito::json!({"request": 17}),
@@ -283,7 +284,7 @@ fn journal_inventory_scope_respects_surrounding_roots_at_both_fences() {
         &norito::json!({"request": 17}),
     )
     .unwrap();
-    let other = PrivateDirectory::open_or_create(&root.path().join("other")).unwrap();
+    let other = PrivateDirectory::open_or_create(root.path().join("other")).unwrap();
     for at_entry in [false, true] {
         iroha_fs::custody_transaction(|| -> Result<()> {
             other.join_custody_transaction()?;

@@ -20,7 +20,7 @@ async fn push_records_teu_using_router_assignment() {
     nexus.routing_policy.default_lane = test_lane;
     nexus.routing_policy.default_dataspace = test_dataspace;
     let state = State::new_with_nexus_for_testing(
-        world_with_test_domains(),
+        world_with_explicit_queue_fees(world_with_test_domains(), zero_rate_routing_fees()),
         nexus,
         LiveQueryStore::start_test(),
     );
@@ -120,7 +120,7 @@ fn expired_event_uses_the_authoritative_full_plan() {
     nexus.routing_policy.default_lane = expected.lane_id;
     nexus.routing_policy.default_dataspace = expected.dataspace_id;
     let state = State::new_with_nexus_for_testing(
-        world_with_test_domains(),
+        world_with_explicit_queue_fees(world_with_test_domains(), zero_rate_routing_fees()),
         nexus,
         LiveQueryStore::start_test(),
     );

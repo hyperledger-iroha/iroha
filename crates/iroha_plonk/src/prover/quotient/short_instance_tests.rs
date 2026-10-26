@@ -23,7 +23,7 @@ fn short_instance_cosets_match_dense_coefficients_and_keep_storage() {
     fn check<C: PastaCurve>() {
         let pk = key::<C>();
         let n = pk.domain().n();
-        let prefixes: Vec<Vec<C::ScalarExt>> = [0, 1, 2, 3, 4, 5, 16]
+        let prefixes: Vec<Vec<C::ScalarExt>> = [0_u64, 1, 2, 3, 4, 5, 16]
             .into_iter()
             .map(|len| {
                 (0..len)

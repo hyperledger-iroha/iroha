@@ -36,7 +36,7 @@ pub fn get(app: &SharedAppState, id: &str) -> Result<Response, Error> {
     };
     Ok(crate::utils::JsonBody(record.clone()).into_response())
 }
-pub fn list(app: &SharedAppState, params: NftOfferListParams) -> Response {
+pub fn list(app: &SharedAppState, params: &NftOfferListParams) -> Response {
     let view = app.state.view();
     let mut rows = Vec::new();
     let mut next = None;

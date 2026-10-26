@@ -146,7 +146,7 @@ mod startup_preparation_tests {
         let peer_endpoints: Vec<_> = (0..3)
             .map(|_| TcpListener::bind("127.0.0.1:0").unwrap())
             .collect();
-        let myself = iroha_data_model::peer::Peer::new(
+        let myself = iroha_model_base::peer::Peer::new(
             fixture.config.network.address.value().clone(),
             validator_keys[0].public_key().clone(),
         );
@@ -154,7 +154,7 @@ mod startup_preparation_tests {
             .iter()
             .zip(validator_keys.iter().skip(1))
             .map(|(endpoint, key)| {
-                iroha_data_model::peer::Peer::new(
+                iroha_model_base::peer::Peer::new(
                     endpoint.local_addr().unwrap().into(),
                     key.public_key().clone(),
                 )

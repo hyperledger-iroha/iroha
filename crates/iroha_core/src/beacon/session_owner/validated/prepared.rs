@@ -80,6 +80,10 @@ impl PreparedGlobalThresholdBeaconSessionVerificationV1 {
     /// Returns this exact prepared owner and the unchanged source graph together
     /// with the original error. Scratch is reset on refusal; no shared session is
     /// published and no input allocation is dropped, repriced or re-admitted.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Failed sealing returns the original paid secret or session owner without a new fallible allocation"
+    )]
     pub fn seal(
         mut self,
         source: RetainedPayload<GlobalThresholdBeaconKeySessionV1>,

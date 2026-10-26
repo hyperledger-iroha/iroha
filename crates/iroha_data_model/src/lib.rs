@@ -150,8 +150,7 @@ pub mod parliament_casting;
 #[path = "governance/types.rs"]
 #[doc(hidden)]
 pub mod parliament_types;
-/// Peer and network-topology types.
-pub mod peer;
+mod peer;
 /// Permission token and grant model.
 pub mod permission;
 /// Provider-backed phone-control challenge, credential and provider policy.
@@ -247,7 +246,6 @@ pub use crate::events::{EventBox, EventFilterBox, TriggeringEventType};
 pub use crate::executor::{Executor, ExecutorDataModel};
 pub use crate::ipfs::IpfsPath;
 pub use crate::nft::{NewNft, Nft, NftId};
-pub use crate::peer::Peer;
 pub use crate::permission::Permission;
 pub use crate::query::{
     AnyQueryBox, CommittedTransaction, QueryBox, QueryOutput, QueryOutputBatchBox,
@@ -359,7 +357,6 @@ pub mod prelude {
         },
         nft::prelude::*,
         parameter::prelude::*,
-        peer::prelude::*,
         permission::prelude::*,
         query::prelude::*,
         ram_lfe::prelude::*,
@@ -378,6 +375,7 @@ pub mod prelude {
         Algorithm, ExposedPrivateKey, Hash, HashOf, KeyPair, MerkleTree, PrivateKey, PublicKey,
         Signature, SignatureOf,
     };
+    pub use iroha_model_base::peer::Peer;
     pub use iroha_primitives::{
         json::Json,
         numeric::{Numeric, NumericOperationError, NumericSpec, Quantity, numeric},

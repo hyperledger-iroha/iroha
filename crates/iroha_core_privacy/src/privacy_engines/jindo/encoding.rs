@@ -28,7 +28,7 @@ pub fn encode_coefficient_slots_v1(values: &[JindoFieldElementV1]) -> Option<Jin
             i128::from(limbs[0]);
     }
     Some(JindoRnsPolynomialV1::from_balanced_coefficients(
-        coefficients,
+        &coefficients,
         JINDO_INNER_MODULI_V1,
     ))
 }
@@ -38,7 +38,7 @@ pub fn decode_coefficient_slots_v1(
 ) -> [JindoFieldElementV1; JINDO_ENCODING_SLOTS_V1] {
     let mut values = [JindoFieldElementV1::ZERO; JINDO_ENCODING_SLOTS_V1];
     let base = JindoFieldElementV1::from_u64(JINDO_ENCODING_BASE_V1);
-    for slot in 0..JINDO_ENCODING_SLOTS_V1 {
+    for (slot, output) in values.iter_mut().enumerate() {
         let mut value = JindoFieldElementV1::ZERO;
         for digit in (0..JINDO_ENCODING_EXPONENT_V1).rev() {
             let coefficient = polynomial.balanced_coefficient(
@@ -47,7 +47,7 @@ pub fn decode_coefficient_slots_v1(
             );
             value = value * base + JindoFieldElementV1::from_i128(coefficient);
         }
-        values[slot] = value;
+        *output = value;
     }
     values
 }
@@ -62,7 +62,7 @@ pub fn decode_exact_coefficient_slots_v1(
 ) -> [JindoFieldElementV1; JINDO_ENCODING_SLOTS_V1] {
     let mut values = [JindoFieldElementV1::ZERO; JINDO_ENCODING_SLOTS_V1];
     let base = JindoFieldElementV1::from_u64(JINDO_ENCODING_BASE_V1);
-    for slot in 0..JINDO_ENCODING_SLOTS_V1 {
+    for (slot, output) in values.iter_mut().enumerate() {
         let mut value = JindoFieldElementV1::ZERO;
         for digit in (0..JINDO_ENCODING_EXPONENT_V1).rev() {
             value = value * base
@@ -70,7 +70,7 @@ pub fn decode_exact_coefficient_slots_v1(
                     coefficients[digit * JINDO_ENCODING_SLOTS_V1 + slot],
                 );
         }
-        values[slot] = value;
+        *output = value;
     }
     values
 }
@@ -78,10 +78,10 @@ fn div_rem_small(limbs: &mut [u64; 4], divisor: u64) -> u64 {
     let mut remainder = 0_u128;
     for limb in limbs.iter_mut().rev() {
         let numerator = (remainder << 64) | u128::from(*limb);
-        *limb = (numerator / u128::from(divisor)) as u64;
+        *limb = u64::try_from(numerator / u128::from(divisor)).expect("quotient limb fits u64");
         remainder = numerator % u128::from(divisor);
     }
-    remainder as u64
+    u64::try_from(remainder).expect("remainder is below u64 divisor")
 }
 #[cfg(test)]
 mod tests {
@@ -155,7 +155,7 @@ mod tests {
         let coefficients: [i128; JINDO_RING_DEGREE_V1] =
             core::array::from_fn(|index| (index as i128 % 31) - 15);
         let encoded =
-            JindoRnsPolynomialV1::from_balanced_coefficients(coefficients, JINDO_INNER_MODULI_V1);
+            JindoRnsPolynomialV1::from_balanced_coefficients(&coefficients, JINDO_INNER_MODULI_V1);
         assert_eq!(
             decode_exact_coefficient_slots_v1(&coefficients),
             decode_coefficient_slots_v1(&encoded)

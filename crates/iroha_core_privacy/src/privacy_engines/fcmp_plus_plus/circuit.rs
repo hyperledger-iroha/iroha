@@ -5,6 +5,9 @@
 //! verifier builds the exact same constraints as the prover: hidden points are proved on their
 //! embedded curve, divisor evaluations bind every discrete logarithm, public rerandomizations are
 //! checked with incomplete addition, and every tree layer is checked with set membership.
+type CommitmentsAndOpenings<P, F> = (Vec<SecretPoint<P>>, Vec<VectorCommitmentOpening<F>>);
+type DiscreteLogChallengeSet<F> = (DiscreteLogChallenge<F>, Vec<ChallengedGenerator<F>>);
+type DiscreteLogGeneratorChallenge<F> = (DiscreteLogChallenge<F>, ChallengedGenerator<F>);
 #[cfg(test)]
 use super::proof_math::FcmpProofRandomSource;
 use super::{
@@ -53,7 +56,7 @@ pub(super) struct DlogParameters {
 }
 impl DlogParameters {
     const fn new(scalar_bits: usize) -> Self {
-        let x_coefficients = (scalar_bits + 1) / 2;
+        let x_coefficients = scalar_bits.div_ceil(2);
         Self {
             scalar_bits,
             x_coefficients,
@@ -63,7 +66,7 @@ impl DlogParameters {
     }
     fn validate(self) -> Result<(), FcmpNativeErrorV1> {
         if !(3..=255).contains(&self.scalar_bits)
-            || self.x_coefficients != (self.scalar_bits + 1) / 2
+            || self.x_coefficients != self.scalar_bits.div_ceil(2)
             || self.x_coefficients_minus_one + 1 != self.x_coefficients
             || self.yx_coefficients + 2 != self.x_coefficients
         {
@@ -122,7 +125,7 @@ impl VectorCommitmentTape {
     pub(super) fn new(commitment_len: usize) -> Result<Self, FcmpNativeErrorV1> {
         if commitment_len == 0
             || !commitment_len.is_power_of_two()
-            || commitment_len % COMMITMENT_WORD_LEN != 0
+            || !commitment_len.is_multiple_of(COMMITMENT_WORD_LEN)
         {
             return Err(FcmpNativeErrorV1::ArithmeticInvariant);
         }
@@ -269,6 +272,10 @@ std::thread_local! {
         const { core::cell::Cell::new(0) };
 }
 impl SecretDlogCoefficientV1 {
+    #[expect(
+        clippy::trivially_copy_pass_by_ref,
+        reason = "Borrowing secret inputs keeps raw copies inside the explicit zeroizing owner boundary."
+    )]
     fn copy_from_borrowed(value: &u64) -> Self {
         Self(*value)
     }
@@ -580,8 +587,7 @@ impl<F: ProofScalar> ProverVectorCommitmentTape<F> {
         mut self,
         generators: ProofGeneratorView<'_, S>,
         masks: &[F],
-    ) -> Result<(Vec<SecretPoint<S::Point>>, Vec<VectorCommitmentOpening<F>>), FcmpNativeErrorV1>
-    {
+    ) -> Result<CommitmentsAndOpenings<S::Point, F>, FcmpNativeErrorV1> {
         if self.values.len() != self.layout.commitments || masks.len() != self.values.len() {
             return Err(FcmpNativeErrorV1::ArithmeticInvariant);
         }
@@ -866,10 +872,10 @@ impl<S: ProofSuite> Circuit<S> {
                 (None, None) => {
                     self.mul_with_witness(Some(left.clone()), Some(right.clone()), None)
                 }
-                _ => return Err(FcmpNativeErrorV1::ArithmeticInvariant),
+                _ => Err(FcmpNativeErrorV1::ArithmeticInvariant),
             },
             _ if self.prover.is_none() => self.mul_with_witness(left, right, None),
-            _ => return Err(FcmpNativeErrorV1::ArithmeticInvariant),
+            _ => Err(FcmpNativeErrorV1::ArithmeticInvariant),
         }
     }
     pub(super) fn inverse(
@@ -969,14 +975,14 @@ impl<S: ProofSuite> Circuit<S> {
     }
     pub(super) fn member_of_list(
         &mut self,
-        member: LinComb<S::Scalar>,
+        member: &LinComb<S::Scalar>,
         list: Vec<LinComb<S::Scalar>>,
     ) -> Result<(), FcmpNativeErrorV1> {
         let mut list = list.into_iter();
         let first = list.next().ok_or(FcmpNativeErrorV1::ArithmeticInvariant)?;
-        let mut carry = first - &member;
+        let mut carry = first - member;
         for item in list {
-            let next = item - &member;
+            let next = item - member;
             let (_, _, output) = self.mul(Some(carry), Some(next))?;
             carry = LinComb::from(output);
         }
@@ -1015,13 +1021,13 @@ impl<S: ProofSuite> Circuit<S> {
             }
             aggregated_list.push(aggregate(tuple));
         }
-        self.member_of_list(member, aggregated_list)
+        self.member_of_list(&member, aggregated_list)
     }
-    pub(super) fn statement<'a>(
+    pub(super) fn statement(
         self,
-        generators: ProofGeneratorView<'a, S>,
+        generators: ProofGeneratorView<'_, S>,
         vector_commitments: Vec<S::Point>,
-    ) -> Result<ArithmeticCircuitStatement<'a, S>, FcmpNativeErrorV1> {
+    ) -> Result<ArithmeticCircuitStatement<'_, S>, FcmpNativeErrorV1> {
         if self.muls > generators.g_bold.len() || self.prover.is_some() {
             return Err(FcmpNativeErrorV1::ArithmeticInvariant);
         }
@@ -1032,13 +1038,13 @@ impl<S: ProofSuite> Circuit<S> {
             Vec::new(),
         )?)
     }
-    pub(super) fn proving_statement<'a>(
+    pub(super) fn proving_statement(
         self,
-        generators: ProofGeneratorView<'a, S>,
+        generators: ProofGeneratorView<'_, S>,
         vector_commitments: Vec<S::Point>,
     ) -> Result<
         (
-            ArithmeticCircuitStatement<'a, S>,
+            ArithmeticCircuitStatement<'_, S>,
             ArithmeticCircuitWitness<S>,
         ),
         FcmpNativeErrorV1,
@@ -1082,28 +1088,33 @@ impl<F: ProofScalar> GeneratorTable<F> {
         generator: (F, F),
         parameters: DlogParameters,
     ) -> Result<Self, FcmpNativeErrorV1> {
+        fn double<F: ProofScalar>(
+            curve_coefficient: F,
+            (x1, y1): (F, F),
+        ) -> Result<(F, F), FcmpNativeErrorV1> {
+            // mdbl-2007-bl, normalized from the X/Y/Z representation used by
+            // the pinned EC gadget.
+            let xx = x1 * x1;
+            let tangent_term = curve_coefficient + (xx + xx.double());
+            let y1y1 = y1 * y1;
+            let double_square = y1y1.double();
+            let sss = (y1 * double_square).double().double();
+            let rr = double_square * double_square;
+            let cross_term = ((x1 + double_square) * (x1 + double_square)) - xx - rr;
+            let horizontal_term = (tangent_term * tangent_term) - cross_term.double();
+            let x3 = horizontal_term.double() * y1;
+            let y3 = (tangent_term * (cross_term - horizontal_term)) - rr.double();
+            let inverse = sss.invert().ok_or(FcmpNativeErrorV1::ArithmeticInvariant)?;
+            Ok((x3 * inverse, y3 * inverse))
+        }
+
         parameters.validate()?;
         if (generator.1.square())
             != ((generator.0.square() * generator.0) + (curve.a * generator.0) + curve.b)
         {
             return Err(FcmpNativeErrorV1::ArithmeticInvariant);
         }
-        fn double<F: ProofScalar>(a: F, (x1, y1): (F, F)) -> Result<(F, F), FcmpNativeErrorV1> {
-            // mdbl-2007-bl, normalized from the X/Y/Z representation used by
-            // the pinned EC gadget.
-            let xx = x1 * x1;
-            let w = a + (xx + xx.double());
-            let y1y1 = y1 * y1;
-            let r = y1y1.double();
-            let sss = (y1 * r).double().double();
-            let rr = r * r;
-            let b = ((x1 + r) * (x1 + r)) - xx - rr;
-            let h = (w * w) - b.double();
-            let x3 = h.double() * y1;
-            let y3 = (w * (b - h)) - rr.double();
-            let inverse = sss.invert().ok_or(FcmpNativeErrorV1::ArithmeticInvariant)?;
-            Ok((x3 * inverse, y3 * inverse))
-        }
+
         let mut points = Vec::with_capacity(parameters.scalar_bits);
         points.push(generator);
         while points.len() < parameters.scalar_bits {
@@ -1237,13 +1248,7 @@ fn discrete_log_challenge_once<S: ProofSuite, T: CircuitTranscript>(
     curve: &CurveSpec<S::Scalar>,
     parameters: DlogParameters,
     generators: &[&GeneratorTable<S::Scalar>],
-) -> Result<
-    Option<(
-        DiscreteLogChallenge<S::Scalar>,
-        Vec<ChallengedGenerator<S::Scalar>>,
-    )>,
-    FcmpNativeErrorV1,
-> {
+) -> Result<Option<DiscreteLogChallengeSet<S::Scalar>>, FcmpNativeErrorV1> {
     parameters.validate()?;
     if generators.is_empty()
         || generators
@@ -1343,13 +1348,7 @@ pub(super) fn discrete_log_challenge<S: ProofSuite, T: CircuitTranscript>(
     curve: &CurveSpec<S::Scalar>,
     parameters: DlogParameters,
     generators: &[&GeneratorTable<S::Scalar>],
-) -> Result<
-    (
-        DiscreteLogChallenge<S::Scalar>,
-        Vec<ChallengedGenerator<S::Scalar>>,
-    ),
-    FcmpNativeErrorV1,
-> {
+) -> Result<DiscreteLogChallengeSet<S::Scalar>, FcmpNativeErrorV1> {
     for _ in 0..MAX_DLOG_CHALLENGE_ATTEMPTS_V1 {
         if let Some(challenge) =
             discrete_log_challenge_once::<S, T>(transcript, curve, parameters, generators)?
@@ -1436,7 +1435,7 @@ pub(super) fn discrete_log<S: ProofSuite>(
     circuit: &mut Circuit<S>,
     curve: &CurveSpec<S::Scalar>,
     parameters: DlogParameters,
-    point: PointWithDlog,
+    point: &PointWithDlog,
     challenge: &DiscreteLogChallenge<S::Scalar>,
     challenged_generator: &ChallengedGenerator<S::Scalar>,
 ) -> Result<OnCurve, FcmpNativeErrorV1> {
@@ -1506,16 +1505,16 @@ pub(super) fn first_layer<S: ProofSuite, T: CircuitTranscript>(
     v_table: &GeneratorTable<S::Scalar>,
     g_table: &GeneratorTable<S::Scalar>,
     output_key_tilde: (S::Scalar, S::Scalar),
-    output_blind: PointWithDlog,
+    output_blind: &PointWithDlog,
     output_key: (Variable, Variable),
     linking_generator_tilde: (S::Scalar, S::Scalar),
-    input_blind_u: PointWithDlog,
+    input_blind_u: &PointWithDlog,
     linking_generator: (Variable, Variable),
     rerandomization_commitment: (S::Scalar, S::Scalar),
-    input_blind_v: PointWithDlog,
-    input_blind_blind: PointWithDlog,
+    input_blind_v: &PointWithDlog,
+    input_blind_blind: &PointWithDlog,
     pseudo_out: (S::Scalar, S::Scalar),
-    commitment_blind: PointWithDlog,
+    commitment_blind: &PointWithDlog,
     amount_commitment: (Variable, Variable),
     branch: Vec<Vec<Variable>>,
 ) -> Result<(), FcmpNativeErrorV1> {
@@ -1597,13 +1596,7 @@ pub(super) fn additional_layer_discrete_log_challenge<S: ProofSuite, T: CircuitT
     curve: &CurveSpec<S::Scalar>,
     parameters: DlogParameters,
     h_table: &GeneratorTable<S::Scalar>,
-) -> Result<
-    (
-        DiscreteLogChallenge<S::Scalar>,
-        ChallengedGenerator<S::Scalar>,
-    ),
-    FcmpNativeErrorV1,
-> {
+) -> Result<DiscreteLogGeneratorChallenge<S::Scalar>, FcmpNativeErrorV1> {
     let (challenge, generators) =
         discrete_log_challenge::<S, T>(transcript, curve, parameters, &[h_table])?;
     let [generator]: [ChallengedGenerator<S::Scalar>; 1] = generators
@@ -1616,12 +1609,9 @@ pub(super) fn additional_layer<S: ProofSuite>(
     circuit: &mut Circuit<S>,
     curve: &CurveSpec<S::Scalar>,
     parameters: DlogParameters,
-    challenged_h: &(
-        DiscreteLogChallenge<S::Scalar>,
-        ChallengedGenerator<S::Scalar>,
-    ),
+    challenged_h: &DiscreteLogGeneratorChallenge<S::Scalar>,
     blinded_hash: (S::Scalar, S::Scalar),
-    blind: PointWithDlog,
+    blind: &PointWithDlog,
     hash: (Variable, Variable),
     branch: Vec<Variable>,
 ) -> Result<(), FcmpNativeErrorV1> {
@@ -1636,7 +1626,7 @@ pub(super) fn additional_layer<S: ProofSuite>(
     let hash = circuit.on_curve(curve, hash)?;
     circuit.incomplete_add_fixed(blinded_hash, blind, hash)?;
     circuit.member_of_list(
-        LinComb::from(hash.x()),
+        &LinComb::from(hash.x()),
         branch.into_iter().map(LinComb::from).collect(),
     )
 }
@@ -1689,9 +1679,10 @@ mod tests {
     }
     impl AddAssign for TrackingScalar {
         fn add_assign(&mut self, rhs: Self) {
-            if TRACKING_PANIC_ON_ADD_ASSIGN.with(|flag| flag.replace(false)) {
-                panic!("tracking scalar add-assign panic");
-            }
+            assert!(
+                !TRACKING_PANIC_ON_ADD_ASSIGN.with(|flag| flag.replace(false)),
+                "tracking scalar add-assign panic"
+            );
             *self = *self + rhs;
         }
     }
@@ -1710,9 +1701,10 @@ mod tests {
         const ONE: Self = Self(1);
         const SCALAR_BITS: usize = 64;
         fn from_u64(value: u64) -> Self {
-            if TRACKING_PANIC_ON_FROM_U64.with(|flag| flag.replace(false)) {
-                panic!("tracking scalar from-u64 panic");
-            }
+            assert!(
+                !TRACKING_PANIC_ON_FROM_U64.with(|flag| flag.replace(false)),
+                "tracking scalar from-u64 panic"
+            );
             Self(value)
         }
         fn decode(bytes: [u8; 32]) -> Option<Self> {

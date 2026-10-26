@@ -736,6 +736,15 @@ Historical time model [E]:
   sub-proof through a cooperative cancellation token checked at Rayon task boundaries, which
   frees its memory; the fold resumes from the last checkpoint. The payment path then has the
   device to itself (σ_recv proving peaks at 45–49 MiB, decides at 16.4 MiB [M]).
+- **Bounded fairness.** Steady payments must not starve the fold. Each sub-proof that payment
+  priority aborts counts once, and a durable checkpoint or Ω, proved or adopted, clears the
+  count. After two aborted sub-proofs in a row (`FOLD_FAIRNESS_CANCELLATIONS`), the next payment
+  that takes priority before the wallet owner (every app call through the bridge) waits for the
+  running sub-proof to finish and publish its checkpoint, instead of aborting it; no other
+  sub-proof starts meanwhile, and a speculative σ_send admission follows the same rule. That
+  payment waits at most one sub-proof (about 30–60 s on a Pixel 6), and while payments keep
+  arriving the fold publishes at least once per three of them. A payment issued while already
+  holding the wallet owner never waits, because the publication needs that owner.
 - **Order.** Folding runs in step order whenever the app runs or the phone charges. Receive
   needs no fold to complete; only the next Send, Unload or device move waits for the backlog.
 

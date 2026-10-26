@@ -207,6 +207,10 @@ fn contains<G: EscrowKey, K: EscrowKey>(
     Ok(found)
 }
 
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "This projection implements the fallible grouped ownership callback signature"
+)]
 fn seller<'a>(
     record: &'a AssetEscrowRecord,
     _: &mut EscrowWork,
@@ -220,6 +224,10 @@ fn buyer<'a>(
     work.prepay(1)?;
     Ok(record.buyer.as_ref())
 }
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "This projection implements the fallible grouped ownership callback signature"
+)]
 fn status<'a>(
     record: &'a AssetEscrowRecord,
     _: &mut EscrowWork,

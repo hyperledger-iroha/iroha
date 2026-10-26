@@ -197,9 +197,9 @@ impl MultisigHistoryFixture {
         } else {
             &self.first
         };
-        let signed = self.chain.sign(signer, instructions, next_time);
-        let entrypoint_hash = signed.hash_as_entrypoint().to_string();
-        let outcomes = self.chain.commit_at(next_time, vec![signed]);
+        let transaction = self.chain.sign(signer, instructions, next_time);
+        let entrypoint_hash = transaction.hash_as_entrypoint().to_string();
+        let outcomes = self.chain.commit_at(next_time, vec![transaction]);
         assert_eq!(outcomes.len(), 1);
         HistorySubmission {
             entrypoint_hash,
@@ -406,6 +406,7 @@ async fn account_history_sparse_pages_advance_by_public_blocks_without_losing_mo
                     collections::prepare(&specs::ACCOUNT_HISTORY, &scope, &query, &limits).unwrap();
                 let page = account_subrow_page(
                     fixture.chain.state(),
+                    &collection_history_read_budget(true, limits.bytes).unwrap(),
                     &prepared,
                     &fixture.recipient,
                     None,
@@ -452,6 +453,7 @@ async fn account_history_sparse_pages_advance_by_public_blocks_without_losing_mo
     assert!(
         account_subrow_page(
             fixture.chain.state(),
+            &collection_history_read_budget(true, limits.bytes).unwrap(),
             &prepared,
             &fixture.recipient,
             None,

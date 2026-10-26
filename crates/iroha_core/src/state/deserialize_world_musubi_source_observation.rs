@@ -27,7 +27,7 @@ mod sealed {
 }
 
 /// Native immutable borrow carriers admitted by this semantic observation owner.
-/// The private supertrait prevents third-party WorldReadOnly implementations.
+/// The private supertrait prevents third-party `WorldReadOnly` implementations.
 pub(in crate::state) trait MusubiObservationCut:
     MusubiSourceReadOnly + sealed::NativeCut
 {

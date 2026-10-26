@@ -138,7 +138,7 @@ fn recovered_visible_frame_keeps_original_owner_until_fsync_succeeds() {
             .as_ptr(),
         pointer
     );
-    assert_eq!(opening.validated, 0);
+    assert!(!opening.tip_authenticated);
     assert_eq!(opening.store.height(), 0);
     assert!(
         FileLaneBlockStore::begin_open(

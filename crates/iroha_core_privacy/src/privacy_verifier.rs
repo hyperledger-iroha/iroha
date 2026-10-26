@@ -764,7 +764,7 @@ fn verify_privacy_envelope_after_compiled_activation_v1(
                 generator_digest: parameters.generator_digest(),
             };
             let native_statement =
-                VeRangeType1BatchStatementV1::new(profile, commitments, transcript).map_err(
+                VeRangeType1BatchStatementV1::new(profile, commitments, &transcript).map_err(
                     |source| {
                         PrivacyVerificationErrorV1::NativeVeRange(Box::new(
                             PrivacyVeRangeVerificationFailureV1 { source },
@@ -1788,7 +1788,7 @@ fn verify_anonymous_pgc_payment_v1(
         &current_balance_ciphertexts,
         recipient_count,
         pool_invariant,
-        transcript,
+        &transcript,
     )
     .map_err(native_pgc_error)?;
     let verified =
@@ -2078,10 +2078,6 @@ pub struct PrivacyZkX509StateFailureV1 {
     pub code: PrivacyZkX509StateFailureCodeV1,
 }
 #[derive(Debug, Error)]
-#[cfg_attr(
-    not(any(test, feature = "privacy-release-evidence")),
-    derive(Clone, Copy)
-)]
 #[error("native X.509 verification failed: {source}")]
 pub struct PrivacyZkX509VerificationFailureV1 {
     source: ZkX509EngineErrorV1,
@@ -2495,7 +2491,7 @@ mod tests {
             generator_digest: parameters.generator_digest(),
         };
         let native_statement =
-            VeRangeType1BatchStatementV1::new(native_profile, native_commitments, transcript)
+            VeRangeType1BatchStatementV1::new(native_profile, native_commitments, &transcript)
                 .expect("native statement");
         let proof = prove_batch(
             &native_statement,
@@ -2714,9 +2710,11 @@ mod tests {
             let mut authorization_rng = KatRng::new([0xB9; 32]);
             let authorization = issuer_authorize_blind_issuance_with_rng_v1(
                 &issuer_key_pair,
-                &context,
-                genesis_hash,
-                &policy,
+                crate::privacy_engines::bootle_lantern::issuer::BootleLanternIssuanceContextV1 {
+                    context: &context,
+                    canonical_genesis_hash: genesis_hash,
+                    policy: &policy,
+                },
                 [0xBA; 32],
                 10,
                 20,
@@ -2739,9 +2737,11 @@ mod tests {
             let mut issuer_issuance_rng = KatRng::new([0xB6; 32]);
             let issuance_response = issuer_blind_issue_once_with_rng_v1(
                 &issuer_key_pair,
-                &context,
-                genesis_hash,
-                &policy,
+                crate::privacy_engines::bootle_lantern::issuer::BootleLanternIssuanceContextV1 {
+                    context: &context,
+                    canonical_genesis_hash: genesis_hash,
+                    policy: &policy,
+                },
                 &authorization,
                 &issuance_request,
                 10,
@@ -2905,7 +2905,7 @@ mod tests {
                 &TEST_CONSENSUS_LIMITS,
             )
             .expect("canonical Orchard runtime consensus binding");
-            let (public, authorization) = orchard_native_fixture(1, [0xA7; 32], consensus_binding);
+            let (public, authorization) = orchard_native_fixture(1, [0xA7; 32], &consensus_binding);
             assert_eq!(
                 public.anchor,
                 snapshot.current_root().into_bytes(),
@@ -3292,7 +3292,7 @@ mod tests {
                 &current_ciphertexts,
                 usize::try_from(recipient_count).expect("recipient count"),
                 native_invariant,
-                transcript,
+                &transcript,
             )
             .expect("native PGC statement");
             let witness = AnonymousPgcPaymentWitnessV1 {

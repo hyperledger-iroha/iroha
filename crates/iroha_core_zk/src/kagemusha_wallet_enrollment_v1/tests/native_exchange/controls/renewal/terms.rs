@@ -9,11 +9,11 @@ fn signature(seed: u8, message: &[u8]) -> KagemushaWalletSignerOutputV1<'static>
 }
 
 pub(super) fn issue(
-    body: KagemushaWalletCredentialBodyV1,
+    body: &KagemushaWalletCredentialBodyV1,
     certificate: &KagemushaWalletSignerCertificateV1,
 ) -> KagemushaWalletCredentialV1 {
     assert_eq!(certificate.body.key, public_key(&signing_key(79)));
-    KagemushaWalletCredentialV1::sign(body, certificate, signature(79, &body.signing_message()))
+    KagemushaWalletCredentialV1::sign(*body, certificate, signature(79, &body.signing_message()))
         .unwrap()
 }
 
@@ -34,7 +34,7 @@ pub(super) fn renewal(
     )
     .as_ref();
     body.issuer_certificate = certificate.certificate_digest();
-    let next = issue(body, certificate);
+    let next = issue(&body, certificate);
     next.validate_replacement_of(previous).unwrap();
     next
 }
@@ -120,7 +120,7 @@ fn fixture_signed_renewal_preserves_enrollment_and_quota_signatures_bind_boundar
     assert!(second.validate_replacement_of(&old).is_err());
     let mut body = first.body;
     body.regulatory_policy.time_anchor_max_response_ms += 1;
-    let foreign = issue(body, issuer);
+    let foreign = issue(&body, issuer);
     foreign.verify(&f.config.scheme, issuer).unwrap();
     assert!(foreign.validate_replacement_of(&old).is_err());
     let regulator = super::super::terms::certificate(

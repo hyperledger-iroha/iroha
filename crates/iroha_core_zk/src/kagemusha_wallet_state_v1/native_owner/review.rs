@@ -403,7 +403,7 @@ pub struct SpeculativeProofV1 {
     nonce: [u8; 32],
 }
 
-fn speculative_source_error(error: WalletSourcesErrorV1) -> Error {
+fn speculative_source_error(error: &WalletSourcesErrorV1) -> Error {
     if error.is_cancelled() {
         Error::Cancelled
     } else if error.is_unavailable() {
@@ -455,7 +455,7 @@ impl SpeculativeProofV1 {
         let imported = self
             .sources
             .bind_sigma_cancellable(self.step.selector(), self.read, Some(token.prover_token()))
-            .map_err(speculative_source_error)?;
+            .map_err(|error| speculative_source_error(&error))?;
         token.check()?;
         let preparation =
             proof(PreparationV1::new(&self.installed))?.with_cancellation(token.prover_token());
@@ -592,10 +592,12 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
             &map_state,
             kind,
             None,
-            manifest.issued_requests,
-            manifest.direct_anchors,
-            manifest.finality_epochs,
-            manifest.blacklist.clone(),
+            crate::kagemusha_wallet_state_v1::preparation_custody::PreparationSelectionV1 {
+                issued: manifest.issued_requests,
+                anchors: manifest.direct_anchors,
+                epochs: manifest.finality_epochs,
+                blacklist: manifest.blacklist.clone(),
+            },
         )?;
         let credential = custody
             .original(PreparationOriginalV1::CurrentCredential)?
@@ -836,10 +838,12 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
                 &map_state,
                 KagemushaWalletOperationKindV1::Send,
                 None,
-                manifest.issued_requests,
-                manifest.direct_anchors,
-                manifest.finality_epochs,
-                manifest.blacklist.clone(),
+                crate::kagemusha_wallet_state_v1::preparation_custody::PreparationSelectionV1 {
+                    issued: manifest.issued_requests,
+                    anchors: manifest.direct_anchors,
+                    epochs: manifest.finality_epochs,
+                    blacklist: manifest.blacklist.clone(),
+                },
             )?;
             proof(PreparationV1::new(&self.proofs.installed))?.prepare_operation(
                 &intent,
@@ -874,7 +878,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
                     self.proofs.read,
                     Some(job.job.token().prover_token()),
                 )
-                .map_err(speculative_source_error)?;
+                .map_err(|error| speculative_source_error(&error))?;
         }
         Ok(Some(SpeculativeProofV1 {
             job: job.job.clone(),

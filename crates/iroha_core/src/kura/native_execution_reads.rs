@@ -636,6 +636,75 @@ impl Kura {
         }))
     }
 
+    /// Fingerprint an inline canonical source without reading its body. Reuse of
+    /// derived summaries requires this exact metadata image before and after the
+    /// original read. Appends deliberately invalidate the fingerprint as well.
+    /// Evicted sidecars have separate custody and are never summary-cache inputs.
+    pub(crate) fn canonical_summary_source_token(
+        &self,
+        height: u64,
+        hash: HashOf<BlockHeader>,
+    ) -> Result<Option<[u8; 32]>> {
+        let Some(source) = self.native_frame_read(height, hash)? else {
+            return Ok(None);
+        };
+        if source.binding.start == EVICTED_BLOCK_START {
+            return Ok(None);
+        }
+        let mut fingerprint = blake3::Hasher::new();
+        fingerprint.update(b"iroha-canonical-summary-source-v1");
+        fingerprint.update(&height.to_le_bytes());
+        fingerprint.update(hash.as_ref());
+        fingerprint.update(&source.binding.start.to_le_bytes());
+        fingerprint.update(&source.binding.wire_len.to_le_bytes());
+        let journals = &source.binding.journals;
+        for journal in [
+            &journals.data,
+            &journals.index,
+            &journals.hashes,
+            &journals.commit_marker,
+        ] {
+            for metadata in [&journal.file, &journal.directory] {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::MetadataExt as _;
+                    for value in [
+                        metadata.dev(),
+                        metadata.ino(),
+                        metadata.nlink(),
+                        metadata.len(),
+                    ] {
+                        fingerprint.update(&value.to_le_bytes());
+                    }
+                    for value in [
+                        metadata.mtime(),
+                        metadata.mtime_nsec(),
+                        metadata.ctime(),
+                        metadata.ctime_nsec(),
+                    ] {
+                        fingerprint.update(&value.to_le_bytes());
+                    }
+                }
+                #[cfg(windows)]
+                {
+                    for value in [
+                        u64::from(metadata.volume_serial_number().unwrap_or_default()),
+                        metadata.file_index().unwrap_or_default(),
+                        u64::from(metadata.number_of_links().unwrap_or_default()),
+                        metadata.file_size(),
+                        metadata.creation_time(),
+                        metadata.last_write_time(),
+                    ] {
+                        fingerprint.update(&value.to_le_bytes());
+                    }
+                }
+                #[cfg(all(not(unix), not(windows)))]
+                return Ok(None);
+            }
+        }
+        Ok(Some(*fingerprint.finalize().as_bytes()))
+    }
+
     /// Capture the same original slot while retaining the actual shared storage owner.
     pub(crate) fn native_frame_read_owned(
         self: &Arc<Self>,

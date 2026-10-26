@@ -168,10 +168,10 @@ impl EnrollmentJournalV1 {
         let original = dispatch.encode().map_err(|_| Invalid)?;
         self.read_permit(attempt, &dispatch.native_dispatch_nonce)?
             .map(|record| {
-                if record.dispatch != original {
-                    Err(Conflict)
-                } else {
+                if record.dispatch == original {
                     Ok(record.permit)
+                } else {
+                    Err(Conflict)
                 }
             })
             .transpose()

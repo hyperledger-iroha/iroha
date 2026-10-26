@@ -25,15 +25,15 @@ use iroha_data_model::{
     prelude::*,
     sumeragi_lanes::SumeragiLanePolicy,
 };
-use iroha_deploy::genesis::{
-    ConsensusPolicy, default_staking_policy, generate_default, validate_consensus_mode,
-};
+use iroha_deploy::genesis::{ConsensusPolicy, generate_default, validate_consensus_mode};
 #[cfg(test)]
 use iroha_executor_data_model::permission::{
     parameter::{CanSetHijiriParameters, CanSetParameters},
     query::CanReadAllLedgerData,
 };
-use iroha_genesis::{GenesisBuilder, RawGenesisTransaction, validate_genesis_manifest_json};
+use iroha_genesis::{
+    GenesisBuilder, RawGenesisTransaction, default_staking_policy, validate_genesis_manifest_json,
+};
 use iroha_model_base::chain::ChainId;
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;

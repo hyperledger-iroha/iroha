@@ -49,7 +49,11 @@ pub(in crate::smartcontracts::isi) fn execute_verified_controlled_waterfall_batc
             &custody,
             &beneficiary,
             custody_to_beneficiary,
-            if is_retained_return { NumericAssetTransferSourcePolicy::NativeEscrowReturn } else { NumericAssetTransferSourcePolicy::NativeEscrowCustody },
+            if is_retained_return {
+                NumericAssetTransferSourcePolicy::NativeEscrowReturn
+            } else {
+                NumericAssetTransferSourcePolicy::NativeEscrowCustody
+            },
         ),
     ];
     // Both sources must cover their entire debit before any incoming credit.
@@ -62,8 +66,7 @@ pub(in crate::smartcontracts::isi) fn execute_verified_controlled_waterfall_batc
             .world
             .assets
             .get(source)
-            .map(|value| value.as_ref().clone())
-            .unwrap_or_else(Quantity::zero);
+            .map_or_else(Quantity::zero, |value| value.as_ref().clone());
         balance
             .checked_sub(amount)
             .map_err(|_| MathError::NotEnoughQuantity)?;
@@ -81,11 +84,19 @@ pub(in crate::smartcontracts::isi) fn execute_verified_controlled_waterfall_batc
             source.clone(),
             destination.clone(),
             amount,
-            NumericAssetTransferScopePolicy::Ambient,
-            NumericAssetTransferAuthorityPolicy::ProtocolAuthorized,
-            source_policy,
-            if source_policy == NumericAssetTransferSourcePolicy::NativeEscrowReturn { NumericAssetTransferControlPolicy::RetainedPayerReturn } else { NumericAssetTransferControlPolicy::Enforce },
-            NumericAssetDestinationAdmissionPolicy::ExistingAccount,
+            NumericAssetTransferPolicy {
+                scope_policy: NumericAssetTransferScopePolicy::Ambient,
+                authority_policy: NumericAssetTransferAuthorityPolicy::ProtocolAuthorized,
+                source_policy,
+                control_policy: if source_policy
+                    == NumericAssetTransferSourcePolicy::NativeEscrowReturn
+                {
+                    NumericAssetTransferControlPolicy::RetainedPayerReturn
+                } else {
+                    NumericAssetTransferControlPolicy::Enforce
+                },
+                destination_admission: NumericAssetDestinationAdmissionPolicy::ExistingAccount,
+            },
         )?);
     }
     let authorization = NumericAssetMovementAuthorization {

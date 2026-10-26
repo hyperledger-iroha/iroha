@@ -78,23 +78,22 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
         let marker_digest = *marker.marker_digest();
         let credential = self.proofs.enrollment.credential_digest();
         let manifest = self.proofs.installed.verifier().manifest_digest();
-        let plan: BootstrapPlanV1 = match self
+        let plan: BootstrapPlanV1 = if let Some(bytes) = self
             .archive
             .get(ArchiveKey::BootstrapPreparation, PLAN_MAX)?
         {
-            Some(bytes) => archive::decode(&bytes)?,
-            None => {
-                let plan = BootstrapPlanV1 {
-                    version: 1,
-                    marker: marker_digest,
-                    credential,
-                    manifest,
-                    nonce: NativeChoicesV1::fresh_nonce(&[0; 32])?,
-                };
-                self.archive
-                    .put(ArchiveKey::BootstrapPreparation, &archive::encode(&plan)?)?;
-                plan
-            }
+            archive::decode(&bytes)?
+        } else {
+            let plan = BootstrapPlanV1 {
+                version: 1,
+                marker: marker_digest,
+                credential,
+                manifest,
+                nonce: NativeChoicesV1::fresh_nonce(&[0; 32])?,
+            };
+            self.archive
+                .put(ArchiveKey::BootstrapPreparation, &archive::encode(&plan)?)?;
+            plan
         };
         let restoration = iroha_plonk::work_metrics::WorkTimer::start(
             iroha_plonk::work_metrics::WorkPhase::SourceRestore,

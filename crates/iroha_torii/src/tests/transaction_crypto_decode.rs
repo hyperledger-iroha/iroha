@@ -316,14 +316,14 @@ async fn batch_decoder_rejects_bad_second_item_without_partial_result() {
     let original = signed_fixture().encode_versioned();
     let batch = norito::to_bytes(&vec![original.clone(), original.clone()]).unwrap();
     assert_eq!(
-        super::decode_transaction_batch_request(Bytes::from(batch), 2)
+        super::decode_transaction_batch_request(&Bytes::from(batch), 2)
             .unwrap()
             .len(),
         2
     );
     let unavailable = retag_versioned_key(&original, GOST as u8);
     let batch = norito::to_bytes(&vec![original.clone(), unavailable]).unwrap();
-    let error = super::decode_transaction_batch_request(Bytes::from(batch), 2).unwrap_err();
+    let error = super::decode_transaction_batch_request(&Bytes::from(batch), 2).unwrap_err();
     assert_actual_retagged_error(&error, "invalid_transaction_batch_payload");
     if !parser_is_missing() {
         assert!(
@@ -333,7 +333,7 @@ async fn batch_decoder_rejects_bad_second_item_without_partial_result() {
     assert_retagged_response(error.into_response()).await;
     let malformed = retag_versioned_key(&original, 0xff);
     let batch = norito::to_bytes(&vec![original, malformed]).unwrap();
-    let error = super::decode_transaction_batch_request(Bytes::from(batch), 2).unwrap_err();
+    let error = super::decode_transaction_batch_request(&Bytes::from(batch), 2).unwrap_err();
     assert!(
         matches!(&error, crate::Error::AppQueryValidation { code: "invalid_transaction_batch_payload", message } if message.contains("item 1"))
     );
@@ -342,7 +342,7 @@ async fn batch_decoder_rejects_bad_second_item_without_partial_result() {
         norito::to_bytes(&vec![signed_fixture().encode_versioned()]).unwrap();
     *corrupt_envelope.last_mut().unwrap() ^= 1;
     let error =
-        super::decode_transaction_batch_request(Bytes::from(corrupt_envelope), 2).unwrap_err();
+        super::decode_transaction_batch_request(&Bytes::from(corrupt_envelope), 2).unwrap_err();
     assert!(matches!(
         &error,
         crate::Error::AppQueryValidation {

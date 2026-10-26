@@ -1,7 +1,16 @@
 //! End-to-end stream simulation: a screen animating Petal frames, a phone
 //! camera watching it (frame blending and rolling-shutter tearing included).
 //!
-//! `cargo run --release -p iroha_petal --example stream_sim -- [trials] [payload bytes] [display fps] [camera filter]`
+//! `cargo run --release -p iroha_petal --example stream_sim -- [trials] [payload bytes] [display fps] [cameras]
+//! [--camera-fps N] [--exposure-ms N] [--readout-ms N] [--any-rotation] [--hide-bands] [--threads N]`
+//!
+//! `cameras` is a comma-separated list of camera names (default: all). `--camera-fps` models a
+//! decoder that keeps up with only that many camera frames a second (default 30), `--readout-ms`
+//! a rolling shutter that reads the rows out over that time (default 0: every row at once),
+//! `--any-rotation` a receiving phone held at any angle instead of upright, `--hide-bands` cards
+//! whose katakana bands are blacked out (the square alone, under the same seeds), and `--threads`
+//! runs that many trials at once (default: every core). `T/F%` is the turn lanes read per field
+//! lane decoded, `K/s` the kana lanes read per second.
 #[path = "support/count.rs"]
 mod count;
 
@@ -14,7 +23,7 @@ use std::sync::atomic::AtomicUsize;
 use trial::next_trial;
 
 use iroha_petal::prng::Xorshift32;
-use iroha_petal::qualify::{CameraModel, StreamTrial, TrialOutcome, run_stream_trial};
+use iroha_petal::qualify::{CameraModel, DecoderCost, StreamTrial, TrialOutcome, run_stream_trial};
 
 /// Keep trial seeds identical across debug and release builds; refuse overflow.
 fn trial_seeds(trial: usize) -> Option<(u32, u64)> {
@@ -44,35 +53,122 @@ fn percentile(times: &[f64], value: u8) -> f64 {
         .unwrap_or(f64::NAN)
 }
 
-/// Widen each trial's frame counts before summing, refusing aggregate overflow.
+/// Widen each trial's frame and field-lane counts before summing, refusing aggregate overflow.
 fn frame_totals(outcomes: &[TrialOutcome]) -> Option<(u64, u64)> {
     outcomes
         .iter()
-        .try_fold((0_u64, 0_u64), |(frames, k_frames), outcome| {
+        .try_fold((0_u64, 0_u64), |(frames, field_lanes), outcome| {
             Some((
                 frames.checked_add(u64::from(outcome.frames))?,
-                k_frames.checked_add(u64::from(outcome.lanes[1]))?,
+                field_lanes.checked_add(u64::from(outcome.field_lanes))?,
             ))
         })
 }
 
 fn main() {
+    let mut positional = Vec::new();
+    // unset options keep `StreamTrial::typical` exactly
+    let (mut camera_fps, mut exposure_ms, mut readout_ms) = (None, None, None);
+    let mut threads = None;
+    let mut upright = true;
+    let mut hide_bands = false;
+    let mut decoder: Option<DecoderCost> = None;
     let mut args = std::env::args().skip(1);
-    let trials: usize = args.next().and_then(|a| a.parse().ok()).unwrap_or(8);
-    let payload_len: usize = args.next().and_then(|a| a.parse().ok()).unwrap_or(2048);
-    let fps: f64 = args.next().and_then(|a| a.parse().ok()).unwrap_or(8.0);
-    let filter = args.next();
+    while let Some(arg) = args.next() {
+        let target = match arg.as_str() {
+            "--any-rotation" => {
+                upright = false;
+                continue;
+            }
+            "--hide-bands" => {
+                hide_bands = true;
+                continue;
+            }
+            "--phone" => {
+                let name = args.next().expect("--phone needs a name");
+                assert_eq!(name, "a55", "the only phone model is a55");
+                decoder = Some(DecoderCost::A55);
+                continue;
+            }
+            "--band-ms" => {
+                let ms: f64 = args
+                    .next()
+                    .and_then(|v| v.parse().ok())
+                    .filter(|v: &f64| v.is_finite() && *v >= 0.0)
+                    .expect("--band-ms needs a non-negative number");
+                decoder = Some(DecoderCost {
+                    band: ms,
+                    ..decoder.unwrap_or(DecoderCost::A55)
+                });
+                continue;
+            }
+            "--camera-fps" => &mut camera_fps,
+            "--exposure-ms" => &mut exposure_ms,
+            "--readout-ms" => &mut readout_ms,
+            "--threads" => {
+                threads = Some(
+                    args.next()
+                        .and_then(|v| v.parse::<usize>().ok())
+                        .filter(|v| *v > 0)
+                        .expect("--threads needs a positive count"),
+                );
+                continue;
+            }
+            _ => {
+                positional.push(arg);
+                continue;
+            }
+        };
+        *target = Some(
+            args.next()
+                .and_then(|v| v.parse::<f64>().ok())
+                .filter(|v| v.is_finite() && *v > 0.0)
+                .unwrap_or_else(|| panic!("{arg} needs a positive number")),
+        );
+    }
+    let mut positional = positional.into_iter();
+    let trials: usize = positional.next().and_then(|a| a.parse().ok()).unwrap_or(8);
+    let payload_len: usize = positional
+        .next()
+        .and_then(|a| a.parse().ok())
+        .unwrap_or(2048);
+    let fps: f64 = positional
+        .next()
+        .and_then(|a| a.parse().ok())
+        .unwrap_or(12.0);
+    let filter = positional.next();
     if let Some(last) = trials.checked_sub(1) {
         trial_seeds(last).expect("requested trial range exceeds deterministic seed arithmetic");
     }
-    println!("payload {payload_len} B, display {fps} fps, camera 30 fps, exposure 1/60 s");
     println!(
-        "{:<10} {:>6} {:>8} {:>8} {:>8} {:>7} {:>9} {:>7}",
-        "camera", "done%", "mean s", "p50 s", "p90 s", "false", "ms/frame", "K%"
+        "payload {payload_len} B, display {fps} fps, camera {} fps, exposure {:.1} ms, readout {} ms, {}{}",
+        camera_fps.unwrap_or(30.0),
+        exposure_ms.unwrap_or(1000.0 / 60.0),
+        readout_ms.unwrap_or(0.0),
+        if upright {
+            "upright phone"
+        } else {
+            "any rotation"
+        },
+        if hide_bands { ", bands hidden" } else { "" }
     );
-    let threads = std::thread::available_parallelism().map_or(4, usize::from);
+    if let Some(cost) = decoder {
+        println!(
+            "decoder costs (ms): full search {}, tracked {}, turn lanes {}, a band {}, merge {}; newest frame when free",
+            cost.full_search, cost.tracked, cost.turns, cost.band, cost.merge
+        );
+    }
+    println!(
+        "{:<10} {:>6} {:>8} {:>8} {:>8} {:>7} {:>9} {:>7} {:>7} {:>6}",
+        "camera", "done%", "mean s", "p50 s", "p90 s", "false", "ms/frame", "F%", "T/F%", "K/s"
+    );
+    let threads =
+        threads.unwrap_or_else(|| std::thread::available_parallelism().map_or(4, usize::from));
     for name in CameraModel::NAMES {
-        if filter.as_ref().is_some_and(|f| !name.contains(f.as_str())) {
+        if filter
+            .as_ref()
+            .is_some_and(|f| !f.split(',').any(|wanted| name.contains(wanted)))
+        {
             continue;
         }
         let camera = CameraModel::named(name).expect("known camera");
@@ -86,9 +182,16 @@ fn main() {
                             trial_seeds(trial).expect("trial range was checked before spawning");
                         let mut rng = Xorshift32::new(payload_seed);
                         let payload: Vec<u8> = (0..payload_len).map(|_| rng.next_byte()).collect();
+                        let typical = StreamTrial::typical(camera, camera_seed);
                         let spec = StreamTrial {
                             display_fps: fps,
-                            ..StreamTrial::typical(camera, camera_seed)
+                            camera_fps: camera_fps.unwrap_or(typical.camera_fps),
+                            exposure_s: exposure_ms.map_or(typical.exposure_s, |ms| ms / 1000.0),
+                            readout_s: readout_ms.map_or(typical.readout_s, |ms| ms / 1000.0),
+                            upright,
+                            hide_bands,
+                            decoder,
+                            ..typical
                         };
                         let outcome = run_stream_trial(&payload, 1, &spec);
                         outcomes.lock().unwrap().push(outcome);
@@ -109,9 +212,13 @@ fn main() {
             .iter()
             .filter(|o| o.completed_at_s.is_some() && !o.payload_matches)
             .count();
-        let (frames, k_frames) = frame_totals(&outcomes).expect("aggregate frame counts fit u64");
+        let (frames, field_lanes) =
+            frame_totals(&outcomes).expect("aggregate frame counts fit u64");
+        let turn_lanes: u64 = outcomes.iter().map(|o| u64::from(o.turn_lanes)).sum();
+        let kana_lanes: u64 = outcomes.iter().map(|o| u64::from(o.kana_lanes)).sum();
+        let seconds: f64 = outcomes.iter().map(|o| o.elapsed_s).sum();
         println!(
-            "{:<10} {:>6.0} {:>8.1} {:>8.1} {:>8.1} {:>7} {:>9.1} {:>6.0}%",
+            "{:<10} {:>6.0} {:>8.2} {:>8.2} {:>8.2} {:>7} {:>9.1} {:>6.0}% {:>6.0}% {:>6.1}",
             name,
             100.0 * completed / n,
             times.iter().sum::<f64>() / completed.max(1.0),
@@ -119,7 +226,9 @@ fn main() {
             percentile(&times, 90),
             wrong,
             outcomes.iter().map(|o| o.mean_decode_ms).sum::<f64>() / n,
-            100.0 * count_as_f64(k_frames) / count_as_f64(frames.max(1))
+            25.0 * count_as_f64(field_lanes) / count_as_f64(frames.max(1)),
+            100.0 * count_as_f64(turn_lanes) / count_as_f64(field_lanes.max(1)),
+            count_as_f64(kana_lanes) / seconds.max(1e-9)
         );
     }
 }
@@ -197,7 +306,11 @@ mod tests {
             payload_matches: false,
             frames: u32::MAX,
             located: 0,
-            lanes: [0, u32::MAX, 0],
+            lane_d: 0,
+            field_lanes: u32::MAX,
+            turn_lanes: 0,
+            kana_lanes: 0,
+            elapsed_s: 0.0,
             mean_decode_ms: 0.0,
         };
         assert_eq!(frame_totals(&[]), Some((0, 0)));

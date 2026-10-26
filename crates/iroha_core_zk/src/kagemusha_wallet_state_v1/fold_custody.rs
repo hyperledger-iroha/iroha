@@ -151,11 +151,8 @@ impl<'a> FoldCustodyV1<'a> {
             &state,
             plan.request.kind(),
             refresh,
-            self.issued,
-            self.anchors,
-            self.epochs,
-            // A fold replays committed steps; a later local list never refuses them.
-            None,
+            crate::kagemusha_wallet_state_v1::preparation_custody::PreparationSelectionV1 { issued: self.issued, anchors: self.anchors, epochs: self.epochs, blacklist: // A fold replays committed steps; a later local list never refuses them.
+            None },
         )?;
         Ok((&plan.request, &plan.native, &plan.draft, custody))
     }

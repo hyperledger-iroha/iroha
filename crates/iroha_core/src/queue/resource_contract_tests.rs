@@ -55,18 +55,14 @@ fn resource_contract_accept(
 
 /// A queue fixture whose committed global payload limit is `max_block_bytes`.
 fn resource_contract_state(max_block_bytes: u32) -> State {
-    let world = world_with_test_domains();
-    {
-        let mut parameters = world.parameters.block();
-        parameters
-            .set_parameter(iroha_data_model::parameter::Parameter::Sumeragi(
-                iroha_data_model::parameter::system::SumeragiParameter::MaxBlockBytes(
-                    std::num::NonZeroU32::new(max_block_bytes).expect("nonzero payload limit"),
-                ),
-            ))
-            .expect("valid fixture parameters");
-        parameters.commit();
-    }
+    let mut world = world_with_test_domains();
+    world
+        .set_parameter_for_testing(iroha_data_model::parameter::Parameter::Sumeragi(
+            iroha_data_model::parameter::system::SumeragiParameter::MaxBlockBytes(
+                std::num::NonZeroU32::new(max_block_bytes).expect("nonzero payload limit"),
+            ),
+        ))
+        .expect("valid fixture parameters");
     let mut state = State::new(
         world,
         Kura::blank_kura_for_testing(),
@@ -199,7 +195,7 @@ fn queue_admission_and_proposer_selection_share_the_includable_bound() {
     for boundary in 0..3 {
         let queue = Arc::new(Queue::test(config_factory(), &time));
         let push = |transaction: AcceptedTransaction<'static>| match boundary {
-            0 => queue.push(transaction, state.view()).map(|_| ()),
+            0 => queue.push(transaction, state.view()),
             1 => queue
                 .push_with_lane_with_state(transaction, &state)
                 .map(|_| ()),
@@ -407,9 +403,7 @@ fn includable_bound_follows_the_route_and_an_unreadable_policy_defers() {
     {
         let mut world = state.world.block();
         world
-            .parameters
-            .get_mut()
-            .set_parameter(Parameter::Custom(policy.into_custom_parameter()))
+            .set_parameter_for_testing(Parameter::Custom(policy.into_custom_parameter()))
             .expect("valid fixture parameters");
         world.commit();
     }
@@ -673,6 +667,9 @@ fn default_limits_admit_and_select_the_largest_includable_transaction() {
 struct DeferredInclusionAccess(Option<crate::execution_attempt::ExecutionDeferred>);
 
 impl QueueAdmissionStateAccess for DeferredInclusionAccess {
+    fn execution_budget(&self) -> iroha_allocation::AllocationBudget {
+        panic!("admission continued after a deferred includable assessment")
+    }
     fn authority_exists(&mut self, _authority: &AccountId) -> bool {
         panic!("admission continued after a deferred includable assessment")
     }
@@ -771,6 +768,7 @@ fn deferred_includable_assessment_defers_queue_admission_without_custody() {
             CheckedTransaction::new_unchecked(transaction.clone()),
             plan,
             &mut DeferredInclusionAccess(Some(original.into())),
+            &mut QueuePrivacyRetirements::default(),
             #[cfg(feature = "telemetry")]
             view.telemetry,
         ) else {
@@ -817,16 +815,12 @@ fn committed_zk_policy_state(
     policy: &iroha_data_model::zk_validity_policy::ZkValidityPolicyV1,
     node: Option<iroha_config::parameters::actual::Zk>,
 ) -> State {
-    let world = world_with_test_domains();
-    {
-        let mut parameters = world.parameters.block();
-        parameters
-            .set_parameter(iroha_data_model::parameter::Parameter::Custom(
-                policy.clone().into_custom_parameter(),
-            ))
-            .expect("valid fixture parameters");
-        parameters.commit();
-    }
+    let mut world = world_with_test_domains();
+    world
+        .set_parameter_for_testing(iroha_data_model::parameter::Parameter::Custom(
+            policy.clone().into_custom_parameter(),
+        ))
+        .expect("valid fixture parameters");
     let mut state = State::new(
         world,
         Kura::blank_kura_for_testing(),

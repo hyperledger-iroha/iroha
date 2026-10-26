@@ -117,7 +117,7 @@ mod tests {
         .unwrap()
     }
 
-    fn target(location: norito::json::Value, source: norito::json::Value) -> norito::json::Value {
+    fn target(location: &norito::json::Value, source: &norito::json::Value) -> norito::json::Value {
         norito::json!({
             "schema": TARGET_SCHEMA,
             "source_pins": source,
@@ -157,7 +157,7 @@ mod tests {
         assert!(selected_locator(&data, &expected, root).is_err());
         assert!(
             selected_originals(
-                &target(locator(private.path()), expected.clone()),
+                &target(&locator(private.path()), &expected),
                 SELECTION_SCHEMA,
                 &expected,
                 root,
@@ -189,7 +189,7 @@ mod tests {
     fn independently_selected_locator_reopens_the_same_sealed_inode_without_writes() {
         let (_temporary, private, identity) = original();
         let selected_pins = pins(None);
-        let manifest = target(locator(private.path()), selected_pins.clone());
+        let manifest = target(&locator(private.path()), &selected_pins);
         let path =
             selected_locator(&manifest, &selected_pins, private.path().parent().unwrap()).unwrap();
         let name = hex::encode(identity.sha256);
@@ -228,7 +228,7 @@ mod tests {
         for changed in SOURCE_PINS {
             assert!(
                 selected_locator(
-                    &target(locator(private.path()), pins(Some(changed))),
+                    &target(&locator(private.path()), &pins(Some(changed))),
                     &selected,
                     root,
                 )
@@ -241,9 +241,7 @@ mod tests {
             norito::json!({ "schema": "retired-locator", "path": (private.path().to_str().unwrap()) }),
             locator(root.parent().unwrap()),
         ] {
-            assert!(
-                selected_locator(&target(location, selected.clone()), &selected, root).is_err()
-            );
+            assert!(selected_locator(&target(&location, &selected), &selected, root).is_err());
         }
         let missing = norito::json!({ "schema": TARGET_SCHEMA, "source_pins": (selected.clone()) });
         assert!(selected_locator(&missing, &selected, root).is_err());
@@ -257,7 +255,7 @@ mod tests {
         let private =
             iroha_fs::PrivateDirectory::open_or_create(temporary.path().join("originals")).unwrap();
         let selected = pins(None);
-        let manifest = target(locator(private.path()), selected.clone());
+        let manifest = target(&locator(private.path()), &selected);
         let path =
             selected_locator(&manifest, &selected, private.path().parent().unwrap()).unwrap();
         fs::write(
@@ -304,7 +302,7 @@ mod tests {
                 _ => unreachable!(),
             }
             let selected = pins(None);
-            let manifest = target(locator(private.path()), selected.clone());
+            let manifest = target(&locator(private.path()), &selected);
             let path =
                 selected_locator(&manifest, &selected, private.path().parent().unwrap()).unwrap();
             let source = DirectoryOriginalsV1::open_existing(path, 1024).unwrap();

@@ -56,6 +56,10 @@ fn position(job: &FastpqWitnessJob) -> Result<Hash, DurableError> {
 impl FastpqCompletedEntry {
     /// Persist exact produced bytes at their source-position key atomically. Every failure
     /// returns the same source/artifact owner; queue delivery alone never advances it.
+    #[expect(
+        clippy::result_large_err,
+        reason = "FASTPQ refusal returns original source custody and its paid work admission without allocating an error box"
+    )]
     pub(super) fn persist(self, kura: &Kura) -> Result<FastpqWitnessJob, (Self, DurableError)> {
         let result = self.persist_ref(kura);
         match result {
@@ -137,6 +141,12 @@ impl FastpqWitnessJob {
         self.next_statement += 1;
         Ok(true)
     }
+}
+
+/// Inspect the actual durable position without introducing a test-side encoder.
+#[cfg(test)]
+pub(super) fn position_for_test(job: &FastpqWitnessJob) -> Result<Hash, DurableError> {
+    position(job)
 }
 
 #[cfg(test)]
@@ -237,8 +247,7 @@ mod tests {
         let short = store(proof_len - 1);
         let (completed, _) = completed
             .persist(&short)
-            .err()
-            .expect("real immutable object limit");
+            .expect_err("real immutable object limit");
         assert_eq!(completed.job.next_statement, 0);
         assert_eq!(
             std::ptr::from_ref(completed.job.source.entry(0).unwrap().effects()),
@@ -301,10 +310,4 @@ mod tests {
                 .unwrap()
         );
     }
-}
-
-/// Inspect the actual durable position without introducing a test-side encoder.
-#[cfg(test)]
-pub(super) fn position_for_test(job: &FastpqWitnessJob) -> Result<Hash, DurableError> {
-    position(job)
 }

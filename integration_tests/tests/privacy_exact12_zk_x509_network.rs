@@ -1148,7 +1148,7 @@ async fn canonical_zk_x509_action_survives_four_peer_activation_replay_and_resta
         let initial_resource_certificate = resource_certificate.clone();
         let build_actions = tokio::task::spawn_blocking(move || {
             build_privacy_release_zk_x509_network_actions_v1(
-                action_context,
+                &(action_context),
                 trusted_block_timestamp_ms,
                 [0x5A; 32],
                 &initial_resource_certificate,
@@ -1493,7 +1493,7 @@ async fn canonical_zk_x509_action_survives_four_peer_activation_replay_and_resta
         let current_crl = actions.crl.clone();
         let build_semantic_replay = tokio::task::spawn_blocking(move || {
             build_privacy_release_zk_x509_semantic_replay_v1(
-                semantic_action_context,
+                &(semantic_action_context),
                 semantic_trusted_block_timestamp_ms,
                 current_crl,
                 [0x6B; 32],

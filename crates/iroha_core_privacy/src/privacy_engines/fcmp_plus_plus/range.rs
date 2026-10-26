@@ -246,6 +246,10 @@ impl ScalarVector {
         }
         Ok(vector)
     }
+    #[expect(
+        clippy::op_ref,
+        reason = "Borrowed arithmetic avoids copying secret values out of their zeroizing owners."
+    )]
     fn powers(mut value: Scalar, len: usize) -> Result<Self, FcmpNativeErrorV1> {
         let value = RangeSecretCopyValueV1::take(&mut value);
         if len == 0 {
@@ -263,6 +267,10 @@ impl ScalarVector {
     fn len(&self) -> usize {
         self.0.len()
     }
+    #[expect(
+        clippy::op_ref,
+        reason = "Borrowed arithmetic avoids copying secret values out of their zeroizing owners."
+    )]
     fn add_scalar(mut self, mut scalar: Scalar) -> Self {
         let scalar = RangeSecretCopyValueV1::take(&mut scalar);
         for value in self.0.iter_mut() {
@@ -270,6 +278,10 @@ impl ScalarVector {
         }
         self
     }
+    #[expect(
+        clippy::op_ref,
+        reason = "Borrowed arithmetic avoids copying secret values out of their zeroizing owners."
+    )]
     fn sub_scalar(mut self, mut scalar: Scalar) -> Self {
         let scalar = RangeSecretCopyValueV1::take(&mut scalar);
         for value in self.0.iter_mut() {
@@ -277,6 +289,10 @@ impl ScalarVector {
         }
         self
     }
+    #[expect(
+        clippy::op_ref,
+        reason = "Borrowed arithmetic avoids copying secret values out of their zeroizing owners."
+    )]
     fn mul_scalar(mut self, mut scalar: Scalar) -> Self {
         let scalar = RangeSecretCopyValueV1::take(&mut scalar);
         for value in self.0.iter_mut() {
@@ -329,7 +345,7 @@ impl ScalarVector {
         Ok(())
     }
     fn split(self) -> Result<(Self, Self), FcmpNativeErrorV1> {
-        if self.len() <= 1 || self.len() % 2 != 0 {
+        if self.len() <= 1 || !self.len().is_multiple_of(2) {
             return Err(FcmpNativeErrorV1::RangeArithmeticInvariant);
         }
         let half = self.len() / 2;
@@ -348,7 +364,7 @@ impl PointVector {
         self.0.len()
     }
     fn split(mut self) -> Result<(Self, Self), FcmpNativeErrorV1> {
-        if self.len() <= 1 || self.len() % 2 != 0 {
+        if self.len() <= 1 || !self.len().is_multiple_of(2) {
             return Err(FcmpNativeErrorV1::RangeArithmeticInvariant);
         }
         let right = self.0.split_off(self.len() / 2);
@@ -417,31 +433,36 @@ fn monero_hash_to_point(bytes: [u8; 32]) -> Result<EdwardsPoint, FcmpNativeError
         reduced = reduced.wrapping_sub(&modulus);
     }
     let square = Field25519::new(&reduced).square();
-    let v = square + square;
-    let w = v + Field25519::ONE;
-    let a = field25519_from_u64(486_662);
-    let x_polynomial = w.square() - (a.square() * v);
+    let doubled_square = square + square;
+    let shifted_square = doubled_square + Field25519::ONE;
+    let curve_coefficient = field25519_from_u64(486_662);
+    let x_polynomial = shifted_square.square() - (curve_coefficient.square() * doubled_square);
     // The upstream construction deliberately shadows `v` with the
     // denominator polynomial inside this block.  Using the hash-derived
     // `v` here instead maps to an invalid Edwards encoding.
     let polynomial_v = x_polynomial;
     let v3 = polynomial_v * polynomial_v * polynomial_v;
-    let uv3 = w * v3;
+    let uv3 = shifted_square * v3;
     let v7 = v3 * v3 * polynomial_v;
-    let uv7 = w * v7;
+    let uv7 = shifted_square * v7;
     let inverse_eight = invert_field25519(field25519_from_u64(8))
         .ok_or(FcmpNativeErrorV1::RangeArithmeticInvariant)?;
     let exponent = (-field25519_from_u64(5) * inverse_eight).retrieve();
     let x_candidate = uv3 * uv7.pow(&exponent);
-    let x = x_candidate.square() * x_polynomial;
-    let first_y = w - x;
-    let alternate_y = w + x;
+    let candidate_check = x_candidate.square() * x_polynomial;
+    let first_y = shifted_square - candidate_check;
+    let alternate_y = shifted_square + candidate_check;
     let sign = !field25519_is_zero(first_y) && !field25519_is_zero(alternate_y);
-    let z = -a * if sign { Field25519::ONE } else { v };
-    let denominator = z + w;
-    let y = (z - w)
+    let signed_scale = -curve_coefficient
+        * if sign {
+            Field25519::ONE
+        } else {
+            doubled_square
+        };
+    let denominator = signed_scale + shifted_square;
+    let edwards_y = (signed_scale - shifted_square)
         * invert_field25519(denominator).ok_or(FcmpNativeErrorV1::RangeGeneratorDerivation)?;
-    let mut encoded = encode_field25519(y);
+    let mut encoded = encode_field25519(edwards_y);
     encoded[31] |= u8::from(sign) << 7;
     let point = CompressedEdwardsY(encoded)
         .decompress()
@@ -492,6 +513,9 @@ fn transcript_prefix() -> Result<[u8; 32], FcmpNativeErrorV1> {
     })
 }
 /// Digest the complete Monero BP+ basis used by the FCMP profile.
+///
+/// # Errors
+/// Reports invalid generator derivation or canonical transcript encoding.
 pub fn fcmp_bp_plus_generator_digest_v1() -> Result<[u8; 32], FcmpNativeErrorV1> {
     let generators = bp_plus_generators()?;
     let mut hasher = Sha256::new();
@@ -535,6 +559,9 @@ impl Drop for FcmpOutputCommitmentOpeningV1 {
 }
 impl FcmpOutputCommitmentOpeningV1 {
     /// Construct one strict-positive `u64` commitment opening.
+    ///
+    /// # Errors
+    /// Rejects an invalid scalar mask or an amount/mask opening that does not match the output commitment.
     pub fn new(
         output: FcmpOutputTupleV1,
         mut amount: u64,
@@ -546,6 +573,13 @@ impl FcmpOutputCommitmentOpeningV1 {
     }
     /// Construct an opening from borrowed secrets without creating raw
     /// by-value copies in the caller.
+    ///
+    /// # Errors
+    /// Rejects an invalid scalar mask or an amount/mask opening that does not match the output commitment.
+    #[expect(
+        clippy::trivially_copy_pass_by_ref,
+        reason = "Borrowing secret inputs keeps raw copies inside the explicit zeroizing owner boundary."
+    )]
     pub fn new_borrowed(
         output: FcmpOutputTupleV1,
         amount: &u64,
@@ -555,6 +589,14 @@ impl FcmpOutputCommitmentOpeningV1 {
         let mask_bytes = RangeSecretCopyValueV1::copy_from_ref(mask);
         Self::from_secret_owners_v1(output, amount, mask_bytes)
     }
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "Taking ownership ensures every accepted secret is zeroized on success, failure, and unwind before the caller can reuse it."
+    )]
+    #[expect(
+        clippy::op_ref,
+        reason = "Borrowed arithmetic avoids copying secret values out of their zeroizing owners."
+    )]
     fn from_secret_owners_v1(
         output: FcmpOutputTupleV1,
         amount: RangeSecretCopyValueV1<u64>,
@@ -573,8 +615,8 @@ impl FcmpOutputCommitmentOpeningV1 {
             return Err(FcmpNativeErrorV1::RangeWitnessOutOfRange);
         }
         let amount_scalar = RangeSecretCopyValueV1::new(Scalar::from(*amount.expose_ref()));
-        let amount_component = Zeroizing::new(&amount_generator()? * amount_scalar.expose_ref());
-        let mask_component = Zeroizing::new(&ED25519_BASEPOINT_POINT * mask.expose_ref());
+        let amount_component = Zeroizing::new(amount_generator()? * amount_scalar.expose_ref());
+        let mask_component = Zeroizing::new(ED25519_BASEPOINT_POINT * mask.expose_ref());
         let commitment = Zeroizing::new(&*amount_component + &*mask_component);
         if commitment.compress().to_bytes() != output.components().2 {
             return Err(FcmpNativeErrorV1::RangeCommitmentOpeningMismatch);
@@ -636,10 +678,12 @@ fn range_lr_len(outputs: usize) -> Result<usize, FcmpNativeErrorV1> {
     if !generators.is_power_of_two() {
         return Err(FcmpNativeErrorV1::RangeArithmeticInvariant);
     }
-    Ok(usize::try_from(generators.ilog2())
-        .map_err(|_| FcmpNativeErrorV1::RangeArithmeticInvariant)?)
+    usize::try_from(generators.ilog2()).map_err(|_| FcmpNativeErrorV1::RangeArithmeticInvariant)
 }
 /// Exact aggregate range-proof byte width for `outputs`.
+///
+/// # Errors
+/// Rejects unsupported output counts or overflow while calculating the canonical proof length.
 pub fn fcmp_range_proof_size_v1(outputs: usize) -> Result<usize, FcmpNativeErrorV1> {
     let lr = range_lr_len(outputs)?;
     6_usize
@@ -653,15 +697,14 @@ pub fn fcmp_range_proof_size_v1(outputs: usize) -> Result<usize, FcmpNativeError
 }
 impl FcmpRangeProofV1 {
     fn from_parts(
-        a: EdwardsPoint,
-        wip_a: EdwardsPoint,
-        wip_b: EdwardsPoint,
+        commitments: &(EdwardsPoint, EdwardsPoint, EdwardsPoint),
         r_answer: &Scalar,
         s_answer: &Scalar,
         delta_answer: &Scalar,
         l: Vec<EdwardsPoint>,
         r: Vec<EdwardsPoint>,
     ) -> Result<Self, FcmpNativeErrorV1> {
+        let &(a, wip_a, wip_b) = commitments;
         let encode_point = |point: EdwardsPoint| {
             if point.is_identity() || !point.is_torsion_free() {
                 Err(FcmpNativeErrorV1::RangeProofPoint)
@@ -681,6 +724,9 @@ impl FcmpRangeProofV1 {
         })
     }
     /// Decode one exact fixed-shape range proof.
+    ///
+    /// # Errors
+    /// Rejects an unsupported output count, incorrect proof length, or noncanonical point/scalar encoding.
     pub fn decode(bytes: &[u8], outputs: usize) -> Result<Self, FcmpNativeErrorV1> {
         let expected = fcmp_range_proof_size_v1(outputs)?;
         if bytes.len() != expected {
@@ -720,7 +766,6 @@ impl FcmpRangeProofV1 {
         for _ in 0..lr {
             r.push(take()?);
         }
-        drop(take);
         if cursor != bytes.len() {
             return Err(FcmpNativeErrorV1::RangeProofLength {
                 actual: bytes.len(),
@@ -749,6 +794,9 @@ impl FcmpRangeProofV1 {
         })
     }
     /// Encode without attacker-selected vector lengths.
+    ///
+    /// # Errors
+    /// Rejects unsupported output counts or a proof whose inner-product vectors have the wrong shape.
     pub fn encode(&self, outputs: usize) -> Result<Vec<u8>, FcmpNativeErrorV1> {
         if self.l.len() != range_lr_len(outputs)? || self.r.len() != self.l.len() {
             return Err(FcmpNativeErrorV1::RangeProofShape);
@@ -791,6 +839,10 @@ impl Drop for RangeWitnessCommitment {
         self.zeroize();
     }
 }
+#[expect(
+    clippy::op_ref,
+    reason = "Borrowed arithmetic avoids copying secret values out of their zeroizing owners."
+)]
 fn range_witness_matches_public_commitment_v1(
     amount_generator: &EdwardsPoint,
     point: &EdwardsPoint,
@@ -1122,6 +1174,10 @@ struct AHatComputation {
     z_pow: ScalarVector,
     a_hat: EdwardsPoint,
 }
+#[expect(
+    clippy::op_ref,
+    reason = "Borrowed arithmetic avoids copying secret values out of their zeroizing owners."
+)]
 fn compute_a_hat(
     mut commitments: PointVector,
     generators: &BpPlusGenerators,
@@ -1217,14 +1273,12 @@ fn wip_y_vector(y: Scalar, len: usize) -> Result<ScalarVector, FcmpNativeErrorV1
 }
 fn next_wip_generators(
     transcript: &mut RangeTranscript,
-    mut g_1: PointVector,
-    mut g_2: PointVector,
-    mut h_1: PointVector,
-    mut h_2: PointVector,
+    generator_halves: (PointVector, PointVector, PointVector, PointVector),
     left: EdwardsPoint,
     right: EdwardsPoint,
     y_inverse_n_hat: Scalar,
 ) -> Result<(Scalar, Scalar, Scalar, Scalar, PointVector, PointVector), FcmpNativeErrorV1> {
+    let (mut g_1, mut g_2, mut h_1, mut h_2) = generator_halves;
     if g_1.len() != g_2.len() || h_1.len() != h_2.len() || g_1.len() != h_1.len() {
         return Err(FcmpNativeErrorV1::RangeArithmeticInvariant);
     }
@@ -1250,16 +1304,20 @@ fn next_wip_generators(
         PointVector(h),
     ))
 }
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Taking ownership ensures every accepted secret is zeroized on success, failure, and unwind before the caller can reuse it."
+)]
 fn prove_wip(
     rng: &mut (impl TryRng + TryCryptoRng),
     generators: BpPlusGenerators,
-    p: EdwardsPoint,
-    y: Scalar,
+    commitment: EdwardsPoint,
+    weight: Scalar,
     transcript: &mut RangeTranscript,
     witness: WipWitness,
 ) -> Result<WipProof, FcmpNativeErrorV1> {
     #[cfg(not(debug_assertions))]
-    let _ = p;
+    let _ = commitment;
     if generators.len() == 0
         || !generators.len().is_power_of_two()
         || generators.len() != witness.a.len()
@@ -1279,7 +1337,7 @@ fn prove_wip(
         .try_reserve_exact(lr_len)
         .map_err(|_| FcmpNativeErrorV1::RangeArithmeticInvariant)?;
     let r_proof_allocation_capacity = r_proof.capacity();
-    let mut y_vector = wip_y_vector(y, generators.len())?;
+    let mut y_vector = wip_y_vector(weight, generators.len())?;
     let mut g_bold = PointVector(generators.g_bold);
     let mut h_bold = PointVector(generators.h_bold);
     let mut inverses = Zeroizing::new(Vec::new());
@@ -1323,7 +1381,7 @@ fn prove_wip(
             .weighted_inner_product(&witness.b, &y_vector)?;
         terms.push(&inner_product, &amount_generator)?;
         terms.push(&witness.alpha, &ED25519_BASEPOINT_POINT)?;
-        if terms.evaluate()? != p {
+        if terms.evaluate()? != commitment {
             return Err(FcmpNativeErrorV1::RangeArithmeticInvariant);
         }
     }
@@ -1399,7 +1457,13 @@ fn prove_wip(
         debug_assert_eq!(l_proof.capacity(), l_proof_allocation_capacity);
         debug_assert_eq!(r_proof.capacity(), r_proof_allocation_capacity);
         let (challenge, inverse, challenge_squared, inverse_squared, next_g, next_h) =
-            next_wip_generators(transcript, g_1, g_2, h_1, h_2, left, right, y_inverse_n_hat)?;
+            next_wip_generators(
+                transcript,
+                (g_1, g_2, h_1, h_2),
+                left,
+                right,
+                y_inverse_n_hat,
+            )?;
         g_bold = next_g;
         h_bold = next_h;
         a = a_1
@@ -1419,21 +1483,21 @@ fn prove_wip(
     {
         return Err(FcmpNativeErrorV1::RangeArithmeticInvariant);
     }
-    let r = random_nonzero_scalar(rng)?;
-    let s = random_nonzero_scalar(rng)?;
+    let response_randomness = random_nonzero_scalar(rng)?;
+    let scalar_mask = random_nonzero_scalar(rng)?;
     let delta = random_nonzero_scalar(rng)?;
     let eta = random_nonzero_scalar(rng)?;
-    let r_y = Zeroizing::new(*r * y_vector.0[0]);
+    let r_y = Zeroizing::new(*response_randomness * y_vector.0[0]);
     let mut a_terms = SecretMultiexpBuilder::new(4)?;
-    a_terms.push(&r, &g_bold.0[0])?;
-    a_terms.push(&s, &h_bold.0[0])?;
-    let proof_a_amount = Zeroizing::new((*r_y * b.0[0]) + (*s * y_vector.0[0] * a.0[0]));
+    a_terms.push(&response_randomness, &g_bold.0[0])?;
+    a_terms.push(&scalar_mask, &h_bold.0[0])?;
+    let proof_a_amount = Zeroizing::new((*r_y * b.0[0]) + (*scalar_mask * y_vector.0[0] * a.0[0]));
     a_terms.push(&proof_a_amount, &amount_generator)?;
     a_terms.push(&delta, &ED25519_BASEPOINT_POINT)?;
     let proof_a = a_terms.evaluate()? * inverse_eight;
     let mut b_terms = SecretMultiexpBuilder::new(2)?;
-    let proof_b_amount = Zeroizing::new(*r_y * *s);
-    b_terms.push(&proof_b_amount, &amount_generator)?;
+    let product_amount = Zeroizing::new(*r_y * *scalar_mask);
+    b_terms.push(&product_amount, &amount_generator)?;
     b_terms.push(&eta, &ED25519_BASEPOINT_POINT)?;
     let proof_b = b_terms.evaluate()? * inverse_eight;
     if proof_a.is_identity() || proof_b.is_identity() {
@@ -1445,8 +1509,8 @@ fn prove_wip(
         r: core::mem::take(&mut *r_proof),
         a: proof_a,
         b: proof_b,
-        r_answer: RangeSecretCopyValueV1::new(*r + (a.0[0] * challenge)),
-        s_answer: RangeSecretCopyValueV1::new(*s + (b.0[0] * challenge)),
+        r_answer: RangeSecretCopyValueV1::new(*response_randomness + (a.0[0] * challenge)),
+        s_answer: RangeSecretCopyValueV1::new(*scalar_mask + (b.0[0] * challenge)),
         delta_answer: RangeSecretCopyValueV1::new(
             *eta + (*delta * challenge) + (*alpha * challenge * challenge),
         ),
@@ -1479,7 +1543,7 @@ fn challenge_products(challenges: &[(Scalar, Scalar)]) -> Result<Vec<Scalar>, Fc
             }
         }
     }
-    if products.iter().any(|value| *value == Scalar::ZERO) {
+    if products.contains(&Scalar::ZERO) {
         return Err(FcmpNativeErrorV1::RangeChallengeZero);
     }
     Ok(products)
@@ -1490,7 +1554,7 @@ fn decode_scalar(bytes: [u8; 32]) -> Result<Scalar, FcmpNativeErrorV1> {
         .ok_or(FcmpNativeErrorV1::ScalarEncoding)
 }
 fn verify_wip(
-    generators: BpPlusGenerators,
+    generators: &BpPlusGenerators,
     p: EdwardsPoint,
     y: Scalar,
     transcript: &mut RangeTranscript,
@@ -1678,9 +1742,7 @@ fn prove_range_once(
         delta_answer,
     } = wip;
     FcmpRangeProofV1::from_parts(
-        proof_a,
-        a,
-        b,
+        &(proof_a, a, b),
         r_answer.expose_ref(),
         s_answer.expose_ref(),
         delta_answer.expose_ref(),
@@ -1715,6 +1777,9 @@ fn preflight_fcmp_range_v1(
 }
 #[cfg(test)]
 /// Produce the sole aggregate strict-positive `u64` output range proof.
+///
+/// # Errors
+/// Rejects invalid openings, unhealthy randomness, proof construction failures, or a failed prover self-check.
 pub fn prove_fcmp_range_v1(
     rng: &mut (impl TryRng + TryCryptoRng),
     context_hash: [u8; 32],
@@ -1740,9 +1805,7 @@ fn retry_range_prover_v1<T>(
     for _ in 0..MAX_PROVER_RESTARTS_V1 {
         match prove_once() {
             Ok(proof) => return Ok(proof),
-            Err(FcmpNativeErrorV1::RangeProofPoint | FcmpNativeErrorV1::RangeChallengeZero) => {
-                continue;
-            }
+            Err(FcmpNativeErrorV1::RangeProofPoint | FcmpNativeErrorV1::RangeChallengeZero) => {}
             Err(error) => return Err(error),
         }
     }
@@ -1778,9 +1841,12 @@ fn verify_range_with_mode(
         &mut transcript,
         proof_a,
     )?;
-    verify_wip(generators, a_hat, y, &mut transcript, proof)
+    verify_wip(&generators, a_hat, y, &mut transcript, proof)
 }
 /// Verify the aggregate range proof against the ordered new commitments.
+///
+/// # Errors
+/// Rejects malformed proof shapes, invalid points or scalars, or a failed range-proof equation.
 pub fn verify_fcmp_range_v1(
     context_hash: [u8; 32],
     outputs: &[FcmpOutputTupleV1],
@@ -2293,7 +2359,7 @@ mod tests {
             .expect("fail-closed preflight mismatch");
         assert!(owned_check < mismatch);
         assert!(!preflight.contains("amount_generator * Scalar::from(witness.amount)"));
-        assert!(!preflight.contains("ED25519_BASEPOINT_POINT * witness.mask"));
+        assert!(!preflight.contains("&ED25519_BASEPOINT_POINT * &witness.mask"));
         assert!(!preflight.contains("let expected ="));
         let public_entry = source
             .split_once("pub fn prove_fcmp_range_v1(")
@@ -2368,7 +2434,7 @@ mod tests {
 
         fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
             for byte in destination {
-                *byte = ((self.cursor % self.period) as u8)
+                *byte = (self.cursor % self.period).to_le_bytes()[0]
                     .wrapping_mul(59)
                     .wrapping_add(13);
                 self.cursor += 1;
@@ -2616,8 +2682,8 @@ mod tests {
         assert!(!prove_wip.contains("b_terms.push(*"));
         assert!(prove_wip.contains("let proof_a_amount = Zeroizing::new("));
         assert!(prove_wip.contains("a_terms.push(&proof_a_amount, &amount_generator)"));
-        assert!(prove_wip.contains("let proof_b_amount = Zeroizing::new("));
-        assert!(prove_wip.contains("b_terms.push(&proof_b_amount, &amount_generator)"));
+        assert!(prove_wip.contains("let product_amount = Zeroizing::new("));
+        assert!(prove_wip.contains("b_terms.push(&product_amount, &amount_generator)"));
         let prove_range = source
             .split_once("fn prove_range_once(")
             .expect("range prover")

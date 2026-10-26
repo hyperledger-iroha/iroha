@@ -566,6 +566,31 @@ def test_wallet_prover_inventory_covers_native_owners_and_consumable_jobs() -> N
     assert "iroha_android_privacy_ConfidentialProverNative" not in jni
 
 
+
+def test_x509_signing_preparation_requires_both_current_native_exports() -> None:
+    """A current mobile artifact cannot omit the C or JNI signing-preparation path."""
+    c_symbol = "connect_norito_zk_x509_prepare_ownership_signing_v1"
+    jni_symbol = "Java_org_hyperledger_iroha_sdk_privacy_ZkX509SigningPreparationNative_prepare"
+    required = MODULE.REQUIRED_SYMBOLS["c-jni"]
+    header = (REPO_ROOT / "crates/connect_norito_bridge/include/connect_norito_bridge.h").read_text()
+    owner = (REPO_ROOT / "crates/connect_norito_bridge/src/zk_x509_holder_ffi.rs").read_text()
+    jni = (REPO_ROOT / "crates/connect_norito_bridge/src/platform_jni/zk_x509_holder.rs").read_text()
+    assert re.search(r"\b" + c_symbol + r"\s*\(", header)
+    assert re.search(r"\bfn\s+" + c_symbol + r"\s*\(", owner)
+    assert re.search(r"\bfn\s+" + jni_symbol + r"\s*\(", jni)
+    assert "iroha_zk_x509_prepare_ownership_signing_v1" not in header + owner
+    for missing in (c_symbol, jni_symbol):
+        assert missing in required
+        library = types.SimpleNamespace(**{symbol: object() for symbol in required if symbol != missing})
+        with mock.patch.object(MODULE.ctypes, "CDLL", return_value=library):
+            try:
+                MODULE.probe_c_abi(Path("test-only-library"), required)
+            except MODULE.ArtifactContractError as error:
+                assert "missing required symbols" in str(error)
+                assert missing in str(error)
+            else:
+                raise AssertionError(f"mobile artifact without {missing} was accepted")
+
 def test_csharp_wallet_inventory_matches_actual_native_imports() -> None:
     """Every managed wallet P/Invoke is a mandatory packaged C# export."""
     source = (REPO_ROOT / "csharp/src/Hyperledger.Iroha.Sdk/Privacy/ConfidentialWalletNative.cs").read_text()

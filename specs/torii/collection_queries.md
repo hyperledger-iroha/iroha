@@ -33,6 +33,7 @@ Design rules:
 | RWA lots | `GET /v1/rwas` | `POST /v1/rwas/query` |
 | account assets | `GET /v1/accounts/{account_id}/assets` | `POST /v1/accounts/{account_id}/assets/query` |
 | asset holders | `GET /v1/assets/{definition_id}/holders` | `POST /v1/assets/{definition_id}/holders/query` |
+| asset movements | `GET /v1/assets/{definition_id}/movements` | `POST /v1/assets/{definition_id}/movements/query` |
 | transactions | — | `POST /v1/transactions/query` |
 | account transactions | `GET /v1/accounts/{account_id}/transactions` | `POST /v1/accounts/{account_id}/transactions/query` |
 | repo agreements | `GET /v1/repo/agreements` | `POST /v1/repo/agreements/query` |
@@ -47,7 +48,7 @@ Design rules:
 | bond entitlements | `GET /v1/bonds/{bond_id}/entitlements` | — |
 
 `GET` and `POST …/query` are equivalent; `POST` additionally supports
-`aggregate` and avoids URL length limits. Responses are JSON. Transactions, account movements, contract activity and events
+`aggregate` and avoids URL length limits. Responses are JSON. Transactions, account movements, asset movements, contract activity and events
 are [history collections](#history-collections) with a few
 restrictions.
 
@@ -55,7 +56,8 @@ Collection planning, source scans, filtering, projection and final JSON encoding
 run on a blocking worker under the request's original query-memory owner.
 Cancelling the HTTP task does not release that owner while the worker or its
 response bytes still retain backing. One-shot reads resolve their current
-visibility without first constructing a long-lived stream admission scope.
+visibility once, from one State view, without first constructing a long-lived
+stream admission scope.
 Domain, account and NFT sources evaluate available scalar fields before
 serializing metadata. Unknown metadata predicates remain undecided through
 `and`, `or` and `not`; every surviving complete row still passes the ordinary
@@ -96,8 +98,11 @@ entries before the cursor, with a limit of 1,048,576 storage entries per request
 Rows with equal sort values are ordered by their identity.
 
 **Memory admission.** `torii.query_fanout_max_retained_bytes` bounds aggregate
-query memory (default 512,000,000 bytes); one quarter belongs to independent
-signed-query ingress and the rest backs query owners.
+query memory (default 512,000,000 bytes); one quarter funds independent
+signed-query ingress and a retained routed-body pool, and the rest backs query
+owners. The retained-body pool is one maximum owner source phase; each exact
+POST body leases its actual reserved capacity there until its last byte clone
+is dropped, including while an execution owner is released for growth.
 `torii.query_fanout_max_working_set_bytes` (default 48,000,000 bytes) is the
 largest owner one read can hold. A collection read starts with the smallest
 owner whose limits admit its request target and declared body: complete
@@ -117,7 +122,12 @@ the scratch phase with runtime ordering and projection; cursor JSON, its frame
 and base64 output are charged for their actual overlap. Every read, with or
 without a body, waits within the finite query admission queue
 (`torii.query_queue_timeout_ms`) when every complete owner is occupied; a body
-stays unread until its read owns a working set. A read is refused with
+stays unread until its read owns a working set. For routed reads this is one
+absolute deadline across body admission, authentication, publication waits,
+execution and every owner tier. Zero selects fail-fast capacity admission.
+Each retry verifies canonical credentials again, retaining only a fixed-size
+capability bound to this exact request so its nonce is admitted once; a separate
+HTTP replay remains forbidden. A read is refused with
 `query_capacity_exceeded` only after that deadline or when the queue's waiter
 count (`torii.query_max_inflight`) is full. A signed read that arrives while a
 block is being published waits for that publication instead of being refused.
@@ -251,6 +261,7 @@ Request problems return `400` with the standard error envelope:
 | `invalid_cursor` | malformed cursors or cursors from a different query |
 | `invalid_include_total` | non-boolean values |
 | `query_scan_limit_exceeded` | reads that exceed the row, group, distinct-value or byte budget, and history pages that exhaust their budget without a safe continuation |
+| `asset_movements_not_retained` | asset movement reads that need movements below the node's retained floor (`details.expected`) |
 
 `details.field` names the control; when a data field is at fault,
 `details.actual` names it and `details.expected` lists the accepted fields as a
@@ -273,7 +284,7 @@ absent.
 | Collection | Fields (type) | Default order |
 | --- | --- | --- |
 | domains | `id` (string, *sort*), `owned_by` (string, *sort*), `logo` (string or null), `metadata.*` | `id` |
-| accounts | `id` (string, *sort*), `label` (string or null, *sort*), `uaid` (string or null, *sort*), `metadata.*` | `id` |
+| accounts | `id` (string, *sort*), `label` (string or null, *sort*), `uaid` (string or null, *sort*), `metadata.*`; on request [`alias_scopes`](#account-aliases) (list of strings), [`aliases`](#account-aliases) (JSON) | `id` |
 | asset definitions | `id`, `name`, `alias`, `owned_by`, `owning_domain` (strings, *sort*), `mintable` (string), `alias_binding.alias`, `alias_binding.status` (strings), `alias_binding.lease_expiry_ms`, `alias_binding.grace_until_ms`, `alias_binding.bound_at_ms` (numbers, *sort*), `metadata.*` | `id` |
 | NFTs | `id`, `owned_by` (strings, *sort*), `metadata.*` (the NFT content) | `id` |
 | RWA lots | `id`, `owned_by`, `primary_reference`, `status` (strings, *sort*), `quantity` (decimal, *sort*), `is_frozen` (bool), `metadata.*` | `id` |
@@ -289,6 +300,7 @@ absent.
 | contract activity | `authority`, `entrypoint_hash`, `contract_address`, `contract_alias`, `contract_entrypoint` (strings), `timestamp_ms`, `block_height`, `block_index` (numbers), `result_ok` (bool), `contract_payload`, `fee_payment` (JSON) | newest first |
 | bonds | `id`, `vault`, `terms.issuer`, `terms.paying_agent`, `terms.payment_asset`, `terms.identifiers.isin`, `state.lifecycle` (strings, *sort*), `terms.coupon_rate_bps`, `terms.coupon_frequency`, `terms.issue_date_ms`, `terms.maturity_date_ms` (numbers, *sort*), `state.outstanding_units`, `state.redeemed_units`, `state.retired_units` (decimals, *sort*), `state.transfers_frozen` (bool), `terms`, `state` (JSON); each item is the complete `BondRecord` | `id` |
 | bond entitlements | `id` (`<index>:<holder>`), `bond`, `holder` (strings, *sort*), `index`, `claimed_at_ms` (number or null) (numbers, *sort*), `units`, `amount` (decimals, *sort*), `claimed` (bool) | `id` (cash flow, then holder) |
+| asset movements | `id` (`<tx_hash>:<movement_index>`), `kind` (`TRANSFER`, `MINT`, `BURN`, `OFFLINE_LOAD`, `OFFLINE_UNLOAD`, `OFFLINE_FEE`, `OFFLINE_CHARGE`), `asset_definition_id`, `tx_hash`, `authority`, `from_account_id` (string or null for `MINT`), `to_account_id` (string or null for `BURN`) (strings), `timestamp_ms`, `block_height`, `block_index`, `movement_index` (numbers), `amount` (decimal), `result_ok` (bool) | newest chain position first, then descending movement index |
 | contract events | `event_id`, `provenance` (always `emitted`), `authority`, `execution_hash_hex`, `block_hash_hex`, `contract_address`, `event_kind` (strings), `schema_version`, `timestamp_ms`, `block_height`, `output_index`, `emission_index` (numbers), `result_ok` (always true), `participants`, `asset_ids` (lists of strings), `numeric_fields`, `payload`, `emission`, `fee_payment` (JSON) | descending `block_height`, `output_index`, `emission_index` |
 
 Subscription status is a lower-case string (`active`, `paused`, `past_due`,
@@ -303,6 +315,46 @@ Asset definition items carry the complete definition record (including
 List-valued fields match element-wise: `asset_definition_ids = "…"` and
 `asset_ids in […]` select rows where any element matches, and `!=`/`not in`
 select rows where none does. Lists cannot be sorted or range-compared.
+
+### Account aliases
+
+An account's alias bindings are not stored on its row. `alias_scopes` and `aliases` join them
+onto it, and only for a query that mentions one of them (in `filter`, `select`, `sort` or
+`aggregate`); every other accounts read returns exactly the fields above. Both come from the
+bindings that are active now and still resolve to the account, as the caller may read them: an
+alias of a public dataspace needs nothing, any other needs the signed caller's
+`CanResolveAccountAlias` for the alias, its domain or (for a domainless alias) its dataspace. For
+an account whose row the caller can see (the ordinary accounts visibility rules), an alias is
+disclosed exactly when `POST /v1/aliases/by-account` for that account, naming the alias's own
+dataspace and domain, would return it.
+
+| Field | Value |
+| --- | --- |
+| `alias_scopes` | List of strings, one per distinct scope: the text after `@` in the alias (`domain.dataspace`, or `dataspace` for a domainless alias). Filterable, not sortable. |
+| `aliases` | List of `{alias, dataspace, domain, is_primary}` (`domain` is absent for a domainless alias), ordered by `alias` as in the by-account response; at most 64 per account, else `query_capacity_exceeded`. Selectable, not filterable. |
+
+`alias_scopes` is a list so that a condition applies to one binding: `alias_scopes = "mibank.bpng"`
+keeps the accounts holding an alias in that scope, and never one with a `mibank` alias in another
+dataspace and a `bpng` alias in another domain. It is computed from the disclosed bindings only, so
+a filter cannot reveal an alias the caller may not read; an account without disclosed aliases has
+`alias_scopes = []`, so `alias_scopes != "x"` keeps it. Rows keep the visibility and the
+page/scan limits of every accounts read (see Order and scan cost): a selective filter can return a
+short page with a `next_cursor`. The join visits a bounded number of index entries under
+one query-wide allowance, including hidden and inactive entries; it refuses with
+`query_capacity_exceeded` if that allowance is spent. Scope filtering precedes alias-output
+projection: a nonmatching account with more than 64 aliases does not fail a scoped inventory.
+Alias containers and strings are bounded by the admitted scratch bytes before retention.
+
+```text
+GET /v1/accounts?filter=alias_scopes = "mibank.bpng"&select=id,uaid,aliases&limit=500
+→ {"items": [{"id": "sorau…", "uaid": null,
+              "aliases": [{"alias": "alice@mibank.bpng", "dataspace": "bpng",
+                           "domain": "mibank", "is_primary": true}]}, …],
+   "next_cursor": null}
+```
+
+One page of such a read replaces one `POST /v1/aliases/by-account` per account. With `id = "…" and`
+in the filter it is a point lookup of one account.
 
 ## History collections
 
@@ -398,6 +450,51 @@ a rejected output retaining emissions is invalid.
   visibility of that committed input's route legs. Block-approved and Time
   callbacks use their public source event and the emitting contract's scope.
 
+### Asset movements
+
+`/v1/assets/{definition_id}/movements` lists every committed movement of one asset
+definition, one row per movement, newest first by `(block_height, block_index,
+movement_index)`. Instead of walking committed blocks for each page, the node folds every
+committed block once into a local index, so a page costs the same at any chain length and a
+`block_height > N` filter examines only the rows above `N`.
+
+- `TRANSFER`, `MINT` and `BURN` rows are exactly what account history projects for the
+  transaction: instruction legs in instruction order, then applied batch receipts and executed
+  multisig movements. A transfer is one row from its source to its destination (account history's
+  outgoing and incoming legs), a mint has a null `from_account_id`, a burn a null
+  `to_account_id`, and a transfer to oneself names the same account twice.
+- KAGEMUSHA Loads, Unloads and fee claims move value inside the executor, without a transfer
+  instruction. Top-level `iroha.kagemusha.wallet.ledger.v1` instructions of successful
+  transactions add an `OFFLINE_LOAD` row (payer to reserve) when the immutable issuance record
+  names the transaction, and an `OFFLINE_UNLOAD` row (reserve to the unloading account) or an
+  `OFFLINE_FEE` row (reserve to the fee beneficiary) when the immutable payout record names it.
+  A quoted online charge is its own `OFFLINE_CHARGE` row after the leg it belongs to: payer to the
+  charge beneficiary for a Load, reserve to the charge beneficiary for an Unload. An Unload whose
+  whole value is its charge has only its `OFFLINE_CHARGE` row, and a retry that finds an earlier
+  payout moved nothing and has no row. Amounts are the registered atomic units at the registered
+  scale.
+- `movement_index` counts the transaction's movements in that order, across asset definitions;
+  `id` is `<tx_hash>:<movement_index>`. `authority` is the transaction's signer and
+  `timestamp_ms` its creation time, as account history reports them.
+- A failed transaction keeps its attempted instruction legs with `result_ok: false`, so activity
+  counts include failures; batch receipts, multisig executions and KAGEMUSHA records exist only
+  for successful transactions. Sum the `result_ok = true` rows for the value moved.
+- Visibility is account history's: a row is visible when the caller reads every data space of its
+  transaction's committed route legs, or reads all ledger data. Hidden rows count toward a page's
+  budget of 20,000 examined rows; a page that spends it continues strictly below a public block
+  boundary.
+- A read brings the index up to the committed tip itself when at most 64 blocks are missing. A
+  longer gap, as after a restart, is folded by one background pass; until it reaches the tip,
+  reads answer `503 asset_movements_indexing` with `Retry-After`, the indexed height in
+  `details.actual` and the committed tip in `details.expected`, never a silently incomplete page.
+  A node started in emergency Fast mode answers `503 emergency_fast_history_unavailable`.
+- The index keeps at most 500,000 rows. Past that it drops its oldest blocks, and a read that
+  needs movements below the retained floor answers `400 asset_movements_not_retained` with the
+  floor height in `details.expected`; `block_height >= <floor>` reads what is retained. A block
+  the node cannot project raises the floor above it.
+- The index changes nothing the chain executes, so it ships with an in-place node update and
+  covers the existing history.
+
 ## Aggregates
 
 `POST` only. Grouping happens after filtering; `having` filters grouped rows
@@ -485,6 +582,32 @@ with a continuation. Follow every continuation until `next_cursor` is null.
 Cursors bind the collection, complete filter and current visibility scope.
 History continuations also retain the committed snapshot hash and height.
 Changing `select` or `limit` between pages is allowed.
+
+The blocks feed seeks bounds on `height` in the filter's top-level `and`
+instead of walking from the snapshot tip: `height <= 1000` starts the walk at
+height 1000 and `height >= 901` ends it below height 901, so
+`filter=height >= 901 and height <= 1000&limit=100` can read that range in one
+page with a null `next_cursor` when it fits the request budget. Disjunctions and negations never narrow the
+walk, the complete filter still decides every row, and a continuation binds
+the bounds that issued it. Disjoint height ranges can therefore be read
+concurrently. A source-budget refusal after at least one row ends the native
+page at the unread height; its continuation resumes there. Adaptive admission
+retains that original owner-capacity refusal even when the page is successful,
+releases the smaller owner, and retries within the configured owner ladder. A
+partial page at the largest admitted owner remains a valid continuation. Canonical
+block reads capture and recheck the committed hash journal without constructing a
+World/runtime projection inside the source decoder budget. Cursor metadata,
+native page JSON, the public retained graph, projection scratch and final JSON
+capacity remain reserved under the original request owner. A required block
+that exceeds its entire source budget still returns the permanent history-budget
+error instead of an empty advancing page.
+
+The blocks feed retains at most 16,384 fixed-size summaries across all readers.
+Entries bind the exact allowed data space set and read-all permission, committed
+height/hash, and the original inline journal metadata image. An append or source
+change invalidates reuse; unavailable or evicted sidecars always use the canonical
+reader. Warm summaries skip body decoding without bypassing journal identity,
+poison or recovery checks. This cache changes neither the wire DTO nor visibility.
 
 | Feed | Filterable/projectable DTO fields |
 | --- | --- |

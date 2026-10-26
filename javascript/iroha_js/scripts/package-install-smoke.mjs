@@ -40,7 +40,7 @@ function run(command, args, options = {}) {
     child.once("close", (code, signal) => {
       const output = Buffer.concat(stdout).toString("utf8");
       const errors = Buffer.concat(stderr).toString("utf8");
-      if (code !== 0 || signal !== null) {
+      if (code !== (options.expectedExitCode ?? 0) || signal !== null) {
         rejectRun(
           new Error(
             `${command} ${args.join(" ")} failed with code=${code} signal=${signal}:\n${output}\n${errors}`,
@@ -236,6 +236,9 @@ async function main() {
       "if (sdk.computeIvmArtifactHashes !== artifact.computeIvmArtifactHashes) {",
       '  throw new Error("root and ivm-artifact subpath exports differ");',
       "}",
+      "for (const [name, value] of Object.entries(codec)) {",
+      '  if (sdk[name] !== value) throw new Error(`root and transaction-codec subpath export differ: ${name}`);',
+      "}",
       'for (const name of ["getPrivacyCapabilitiesV1", "parsePrivacyCapabilitySnapshotV1", "decodePrivacyExact12CapabilityManifestV1", "getPrivacyExact12CapabilityManifestV1"]) {',
       '  if (Object.hasOwn(sdk, name)) throw new Error(`root leaks optional privacy export: ${name}`);',
       "}",
@@ -312,36 +315,40 @@ async function main() {
       "recipes",
       "iso_bridge_builder.mjs",
     );
+    const { ISO_PAYMENT_INTENT } = await import("../test/fixtures/isoNativePayment.js");
+    const isoEnvironment = { ...process.env };
+    for (const name of Object.keys(isoEnvironment)) {
+      if (name.startsWith("ISO_")) delete isoEnvironment[name];
+    }
+    delete isoEnvironment.IROHA_JS_NATIVE_DIR;
+    // Supply every retained business term so the installed recipe reaches its
+    // canonical account validation. A portable install must fail there before
+    // emitting XML or submitting; the native ISO suite covers successful output.
     const isoBuilder = await run(process.execPath, [installedIsoBuilderRecipe], {
       cwd: consumerRoot,
+      expectedExitCode: 1,
       env: {
-        ...process.env,
+        ...isoEnvironment,
+        ISO_KIND: "pacs.008",
+        ISO_SUBMIT: "0",
+        ISO_DRY_RUN: "1",
         ISO_MESSAGE_ID: "package-smoke-message",
         ISO_CREATION_TIME: "2026-01-01T00:00:00.000Z",
         ISO_INSTRUCTION_ID: "package-smoke-instruction",
-        ISO_BUILDER_CONFIG: "",
-        ISO_SUBMIT: "0",
-        ISO_DRY_RUN: "1",
-        ISO_UETR: "123e4567-e89b-42d3-a456-426614174000",
-        ISO_NETWORK_ID: "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
-        ISO_EXPIRES_AT_HEIGHT: "100",
-        ISO_SOURCE_ACCOUNT_ID: "sorauﾛ1P5ﾁXEｴﾕGjgﾕﾚﾎﾕｸﾁEtﾀ3ﾂｺ2gALｺﾒefﾍ8DLgｾoCVGUYHS5",
-        ISO_TARGET_ACCOUNT_ID: "sorauﾛ1PﾜdﾎｼﾋﾉNｸdﾁﾑkiﾇ3ｵﾓaPBQDTｲKqｼqｵrﾗｶwSQ1ﾌﾅQU61Y7",
-        ISO_ASSET_DEFINITION_ID: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+        ISO_UETR: ISO_PAYMENT_INTENT.uetr,
+        ISO_NETWORK_ID: ISO_PAYMENT_INTENT.nexusSettlement.networkId.toString(),
+        ISO_EXPIRES_AT_HEIGHT: String(ISO_PAYMENT_INTENT.nexusSettlement.expiresAtHeight),
+        ISO_SOURCE_ACCOUNT_ID: ISO_PAYMENT_INTENT.nexusSettlement.sourceAccountId,
+        ISO_TARGET_ACCOUNT_ID: ISO_PAYMENT_INTENT.nexusSettlement.targetAccountId,
+        ISO_ASSET_DEFINITION_ID: ISO_PAYMENT_INTENT.nexusSettlement.assetDefinitionId,
       },
     });
-    for (const expected of [
-      "<MsgId>package-smoke-message</MsgId>",
-      "<InstrId>package-smoke-instruction</InstrId>",
-      '<IntrBkSttlmAmt Ccy="EUR">100.00</IntrBkSttlmAmt>',
-      "<UETR>123e4567-e89b-42d3-a456-426614174000</UETR>",
-      "sorauﾛ1P5ﾁXEｴﾕGjgﾕﾚﾎﾕｸﾁEtﾀ3ﾂｺ2gALｺﾒefﾍ8DLgｾoCVGUYHS5",
-      "sorauﾛ1PﾜdﾎｼﾋﾉNｸdﾁﾑkiﾇ3ｵﾓaPBQDTｲKqｼqｵrﾗｶwSQ1ﾌﾅQU61Y7",
-      "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-    ]) {
-      if (!isoBuilder.stdout.includes(expected)) {
-        throw new Error(`packed ISO builder recipe output is missing: ${expected}`);
-      }
+    if (!isoBuilder.stderr.includes("ERR_IROHA_NATIVE_BINDING") ||
+        !/nativeStatus: ['"]missing_file['"]/u.test(isoBuilder.stderr)) {
+      throw new Error(`packed ISO builder recipe did not report its missing native binding: ${isoBuilder.stderr}`);
+    }
+    if (isoBuilder.stdout.trim() !== "") {
+      throw new Error("packed ISO builder recipe progressed without its required native binding");
     }
 
     if (process.argv.includes("--native-wallet")) {

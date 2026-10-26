@@ -77,6 +77,10 @@ fn main_transcript_is_release_only_and_domain_separated() {
     assert_ne!(first.state(), focused.state());
 }
 #[derive(Default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent fault flags exercise combinations of malformed source outputs"
+)]
 struct MockMainTraceGroupSourceV1 {
     short_base_column: bool,
     noncanonical_aux_column: bool,
@@ -207,30 +211,44 @@ impl MainOpenedConstraintTestSourceV1 for MockMainTraceGroupSourceV1 {
         Ok(residues)
     }
 }
-fn mock_main_group_providers_v1<'a>(
-    sources: [&'a mut MockMainTraceGroupSourceV1; FULL_PROFILE_TRACE_GROUPS_V1],
-) -> Vec<MainTraceGroupProviderV1<'a>> {
-    let [log5, log8, log15, log16, log18, log19] = sources;
+fn mock_main_group_providers_v1(
+    sources: [&mut MockMainTraceGroupSourceV1; FULL_PROFILE_TRACE_GROUPS_V1],
+) -> Vec<MainTraceGroupProviderV1<'_>> {
+    let [
+        small_group,
+        medium_group,
+        projection_group,
+        lookup_group,
+        io_group,
+        large_group,
+    ] = sources;
     vec![
-        MainTraceGroupProviderV1::TestLog5(log5),
-        MainTraceGroupProviderV1::TestLog8(log8),
-        MainTraceGroupProviderV1::Log15(log15),
-        MainTraceGroupProviderV1::TestLog16(log16),
-        MainTraceGroupProviderV1::Log18(log18),
-        MainTraceGroupProviderV1::Log19(log19),
+        MainTraceGroupProviderV1::TestLog5(small_group),
+        MainTraceGroupProviderV1::TestLog8(medium_group),
+        MainTraceGroupProviderV1::Log15(projection_group),
+        MainTraceGroupProviderV1::TestLog16(lookup_group),
+        MainTraceGroupProviderV1::Log18(io_group),
+        MainTraceGroupProviderV1::Log19(large_group),
     ]
 }
-fn mock_main_opened_group_providers_v1<'a>(
-    sources: [&'a mut MockMainTraceGroupSourceV1; FULL_PROFILE_TRACE_GROUPS_V1],
-) -> Vec<MainOpenedGroupProviderV1<'a>> {
-    let [log5, log8, log15, log16, log18, log19] = sources;
+fn mock_main_opened_group_providers_v1(
+    sources: [&mut MockMainTraceGroupSourceV1; FULL_PROFILE_TRACE_GROUPS_V1],
+) -> Vec<MainOpenedGroupProviderV1<'_>> {
+    let [
+        small_group,
+        medium_group,
+        projection_group,
+        lookup_group,
+        io_group,
+        large_group,
+    ] = sources;
     vec![
-        MainOpenedGroupProviderV1::TestLog5(log5),
-        MainOpenedGroupProviderV1::TestLog8(log8),
-        MainOpenedGroupProviderV1::TestLog15(log15),
-        MainOpenedGroupProviderV1::TestLog16(log16),
-        MainOpenedGroupProviderV1::TestLog18(log18),
-        MainOpenedGroupProviderV1::TestLog19(log19),
+        MainOpenedGroupProviderV1::TestLog5(small_group),
+        MainOpenedGroupProviderV1::TestLog8(medium_group),
+        MainOpenedGroupProviderV1::TestLog15(projection_group),
+        MainOpenedGroupProviderV1::TestLog16(lookup_group),
+        MainOpenedGroupProviderV1::TestLog18(io_group),
+        MainOpenedGroupProviderV1::TestLog19(large_group),
     ]
 }
 fn mock_main_opened_groups_v1(
@@ -312,16 +330,17 @@ fn channel(
     value: &[u8],
     public: bool,
 ) -> ZkX509IoChannelWitnessV1 {
+    let consumer_count = consumers.len();
     ZkX509IoChannelWitnessV1 {
         declaration: ZkX509IoChannelDeclarationV1 {
             channel,
             producer,
-            consumers: consumers.clone(),
-            byte_len: value.len() as u32,
+            consumers,
+            byte_len: u32::try_from(value.len()).expect("fixture value fits u32"),
             public_value: public.then(|| value.to_vec()),
         },
         producer_value: value.to_vec(),
-        consumer_values: vec![value.to_vec(); consumers.len()],
+        consumer_values: vec![value.to_vec(); consumer_count],
     }
 }
 fn fixture_witnesses() -> Vec<ZkX509IoChannelWitnessV1> {
@@ -407,9 +426,7 @@ fn io_materializer_owners_clear_columns_on_validation_failure_and_unwind() {
                         F(crate::privacy_engines::transparent_stark::GOLDILOCKS_MODULUS_V1);
                     assert!(validate_io_base_constraints_v1(&material, challenges).is_err());
                 }
-                if mode == 2 {
-                    panic!("injected after IO materializer transfer");
-                }
+                assert!(mode != 2, "injected after IO materializer transfer");
                 drop(material);
             })
         });
@@ -435,9 +452,7 @@ fn main_io_provider_uses_clearing_columns_and_preserves_borrowed_source() {
         let (result, observations) = observe_v1(|| {
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
                 let _provider = provider;
-                if unwind {
-                    panic!("injected with admitted IO source provider");
-                }
+                assert!(!unwind, "injected with admitted IO source provider")
             }))
         });
         assert_eq!(result.is_err(), unwind);
@@ -543,7 +558,7 @@ fn main_io_statement_only_compiler_matches_every_honest_legacy_fixed_row_and_col
     }
     let post_base = projection_provider_post_base_v1(&statement);
     let prover =
-        MainIoProverConstraintSourceV1::for_main_v1(&layout, &statement, &source, post_base)
+        MainIoProverConstraintSourceV1::for_main_v1(&layout, &statement, &source, &post_base)
             .expect("MAIN I/O prover constraint source");
     let mut streamed_columns = 0_usize;
     assert!(matches!(
@@ -559,16 +574,16 @@ fn main_io_statement_only_compiler_matches_every_honest_legacy_fixed_row_and_col
     let mut forged_source = source.clone();
     forged_source.execution[0].channel = forged_source.execution[0].channel.add(F::ONE);
     assert!(
-            MainIoProverConstraintSourceV1::for_main_v1(
-                &layout,
-                &statement,
-                &forged_source,
-                post_base,
-            )
-            .is_err(),
-            "the prover fixed source must validate witness topology against the public compiler"
-        );
-    let verifier = MainIoVerifierConstraintSourceV1::for_main_v1(&layout, &statement, post_base)
+        MainIoProverConstraintSourceV1::for_main_v1(
+            &layout,
+            &statement,
+            &forged_source,
+            &post_base,
+        )
+        .is_err(),
+        "the prover fixed source must validate witness topology against the public compiler"
+    );
+    let verifier = MainIoVerifierConstraintSourceV1::for_main_v1(&layout, &statement, &post_base)
         .expect("MAIN I/O verifier constraint source");
     assert_eq!(prover.fixed_schedule, schedule);
     assert_eq!(verifier.fixed_schedule, schedule);
@@ -610,11 +625,7 @@ fn main_io_fixed_same_address_schedule_and_topology_are_independent_of_private_b
     assert_eq!(honest_fixed, changed_fixed);
     assert_ne!(honest_execution.as_slice(), changed_execution.as_slice());
     assert_ne!(honest_sorted.as_slice(), changed_sorted.as_slice());
-    assert!(
-        honest_fixed[FIX_SORT_SAME_ADDRESS_NEXT]
-            .iter()
-            .any(|value| *value == F::ONE)
-    );
+    assert!(honest_fixed[FIX_SORT_SAME_ADDRESS_NEXT].contains(&F::ONE));
     let schedule = MainIoFixedScheduleV1::compile_v1(layout, &statement, logical_active_rows)
         .expect("statement-only schedule");
     schedule
@@ -702,10 +713,8 @@ fn full_main_io_registration_is_capacity_but_d0_through_d4_use_logical_selectors
         let residues = io_constraint_residues_v1(
             layout,
             plan.logical_active_rows,
-            &current_base,
-            &next_base,
-            &current_aux,
-            &next_aux,
+            (&current_base, &next_base),
+            (&current_aux, &next_aux),
             &fixed,
             io_challenges_fixture_v1(),
         )
@@ -717,10 +726,8 @@ fn full_main_io_registration_is_capacity_but_d0_through_d4_use_logical_selectors
         let capacity_residues = io_constraint_residues_v1(
             layout,
             layout.active_rows,
-            &current_base,
-            &next_base,
-            &current_aux,
-            &next_aux,
+            (&current_base, &next_base),
+            (&current_aux, &next_aux),
             &fixed,
             io_challenges_fixture_v1(),
         )
@@ -757,10 +764,8 @@ fn io_logical_geometry_rejects_zero_over_capacity_and_noncanonical_two_count_lay
         io_constraint_residues_v1(
             full,
             0,
-            &base,
-            &base,
-            &aux,
-            &aux,
+            (&base, &base),
+            (&aux, &aux),
             &fixed,
             io_challenges_fixture_v1(),
         ),
@@ -770,10 +775,8 @@ fn io_logical_geometry_rejects_zero_over_capacity_and_noncanonical_two_count_lay
         io_constraint_residues_v1(
             full,
             ZK_X509_IO_FIXED_CAPACITY_ROWS_V1 + 1,
-            &base,
-            &base,
-            &aux,
-            &aux,
+            (&base, &base),
+            (&aux, &aux),
             &fixed,
             io_challenges_fixture_v1(),
         ),
@@ -932,12 +935,12 @@ fn phased_full_main_io_provider_enforces_base_then_token_then_aux_and_rejects_ta
         .expect("failed-bind adversary base phase");
     failed_bind.base_columns[EXEC_VALUE][source.logical_active_rows] = F::ONE;
     assert!(matches!(
-        failed_bind.bind_challenges_v1(post_base),
+        failed_bind.bind_challenges_v1(&post_base),
         Err(ZkX509StarkErrorV1::IoWitness)
     ));
     failed_bind.base_columns[EXEC_VALUE][source.logical_active_rows] = F::ZERO;
     assert!(matches!(
-        failed_bind.bind_challenges_v1(post_base),
+        failed_bind.bind_challenges_v1(&post_base),
         Err(ZkX509StarkErrorV1::TranscriptMismatch)
     ));
     assert!(failed_bind.aux_columns.is_none());
@@ -990,7 +993,7 @@ fn phased_full_main_io_provider_enforces_base_then_token_then_aux_and_rejects_ta
         .validate_base_phase_v1()
         .expect("restored base phase");
     provider
-        .bind_challenges_v1(post_base)
+        .bind_challenges_v1(&post_base)
         .expect("opaque post-base token binds I/O auxiliary phase");
     assert!(provider.bind_attempted);
     assert_eq!(provider.post_base, Some(post_base));
@@ -999,7 +1002,7 @@ fn phased_full_main_io_provider_enforces_base_then_token_then_aux_and_rejects_ta
         .validate_bound_phase_v1()
         .expect("validated post-token auxiliary phase");
     assert!(matches!(
-        provider.bind_challenges_v1(post_base),
+        provider.bind_challenges_v1(&post_base),
         Err(ZkX509StarkErrorV1::TranscriptMismatch)
     ));
     let aux_column = provider
@@ -1064,7 +1067,7 @@ fn phased_full_main_io_provider_enforces_base_then_token_then_aux_and_rejects_ta
     assert!(provider.native_base_column_v1(registration, 0).is_err());
     assert!(provider.native_aux_column_v1(registration, 0).is_err());
     assert!(matches!(
-        provider.bind_challenges_v1(post_base),
+        provider.bind_challenges_v1(&post_base),
         Err(ZkX509StarkErrorV1::TranscriptMismatch)
     ));
 }
@@ -1079,7 +1082,7 @@ fn main_io_verifier_rejects_registration_query_next_x_width_and_noncanonical_wit
         .registered_segment(SegmentAdapterIdV1::Projection, 0)
         .expect("wrong registration");
     let post_base = projection_provider_post_base_v1(&statement);
-    let mut source = MainIoVerifierConstraintSourceV1::for_main_v1(&layout, &statement, post_base)
+    let mut source = MainIoVerifierConstraintSourceV1::for_main_v1(&layout, &statement, &post_base)
         .expect("MAIN I/O verifier source");
     let original_schedule = source.fixed_schedule.clone();
     let original_challenges = source.challenges;
@@ -1238,10 +1241,10 @@ fn main_io_closed_log18_verifier_matches_prover_residues_and_reuses_bounded_cach
         .expect("MAIN I/O registration");
     let post_base = projection_provider_post_base_v1(&statement);
     let prover =
-        MainIoProverConstraintSourceV1::for_main_v1(&layout, &statement, &source, post_base)
+        MainIoProverConstraintSourceV1::for_main_v1(&layout, &statement, &source, &post_base)
             .expect("MAIN I/O prover constraint source");
     let mut verifier =
-        MainIoVerifierConstraintSourceV1::for_main_v1(&layout, &statement, post_base)
+        MainIoVerifierConstraintSourceV1::for_main_v1(&layout, &statement, &post_base)
             .expect("MAIN I/O verifier constraint source");
     let query_index = 17;
     let next_query_index = verifier
@@ -1257,20 +1260,20 @@ fn main_io_closed_log18_verifier_matches_prover_residues_and_reuses_bounded_cach
         aux_current: &aux,
         aux_next: &aux,
     };
-    let mut log5 = MockMainTraceGroupSourceV1::default();
-    let mut log8 = MockMainTraceGroupSourceV1::default();
-    let mut log15 = MockMainTraceGroupSourceV1::default();
-    let mut log16 = MockMainTraceGroupSourceV1::default();
-    let mut log19 = MockMainTraceGroupSourceV1::default();
+    let mut small_group = MockMainTraceGroupSourceV1::default();
+    let mut medium_group = MockMainTraceGroupSourceV1::default();
+    let mut projection_group = MockMainTraceGroupSourceV1::default();
+    let mut lookup_group = MockMainTraceGroupSourceV1::default();
+    let mut large_group = MockMainTraceGroupSourceV1::default();
     let mut providers = MainOpenedProviderSetV1::new_v1(
         &layout,
         vec![
-            MainOpenedGroupProviderV1::TestLog5(&mut log5),
-            MainOpenedGroupProviderV1::TestLog8(&mut log8),
-            MainOpenedGroupProviderV1::TestLog15(&mut log15),
-            MainOpenedGroupProviderV1::TestLog16(&mut log16),
+            MainOpenedGroupProviderV1::TestLog5(&mut small_group),
+            MainOpenedGroupProviderV1::TestLog8(&mut medium_group),
+            MainOpenedGroupProviderV1::TestLog15(&mut projection_group),
+            MainOpenedGroupProviderV1::TestLog16(&mut lookup_group),
             MainOpenedGroupProviderV1::Io(&mut verifier),
-            MainOpenedGroupProviderV1::TestLog19(&mut log19),
+            MainOpenedGroupProviderV1::TestLog19(&mut large_group),
         ],
     )
     .expect("closed MAIN provider set");
@@ -1398,10 +1401,12 @@ fn projection_layout() -> SegmentLayoutV1 {
 fn projection_provider_post_base_v1(
     statement: &IrohaZkX509StarkP256StatementV1,
 ) -> ZkX509CredentialMainPostBaseChallengesV1 {
-    let consensus_context_digest =
-        ZkX509CredentialPublicBindingV1::from_consensus_context_v1(statement, [0x91; 32])
-            .expect("projection fixture consensus binding")
-            .consensus_context_digest;
+    let consensus_context_digest = ZkX509CredentialPublicBindingV1::from_consensus_context_v1(
+        statement,
+        *statement.context.network_id.as_bytes(),
+    )
+    .expect("projection fixture consensus binding")
+    .consensus_context_digest;
     derive_zk_x509_credential_pre_aux_binding_v1(
         ZkX509CredentialMainPreAuxV1::fixture_for_test_v1(
             consensus_context_digest,
@@ -1606,7 +1611,7 @@ fn main_log19_source_fixture_v1(
     MainLog19VerifierConstraintSourceV1::for_main_v1(
         layout,
         &main_log19_statement_fixture_v1(),
-        p256_main_provider_post_base_fixture_v1(),
+        &p256_main_provider_post_base_fixture_v1(),
     )
     .expect("closed mixed log19 verifier source")
 }

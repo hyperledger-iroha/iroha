@@ -23,7 +23,7 @@ pub(in super::super) fn copy_exact(source: &Path, target: &Path, pin: &Pin) -> R
     options
         .read(true)
         .write(true)
-        .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32);
+        .custom_flags((rustix::fs::OFlags::NOFOLLOW.bits()).cast_signed());
     let mut output = match options.create_new(true).mode(0o600).open(&staged) {
         Ok(file) => {
             // Only the exclusively created descriptor may normalize a mode masked by umask.
@@ -48,8 +48,8 @@ pub(in super::super) fn copy_exact(source: &Path, target: &Path, pin: &Pin) -> R
     let (_, snapshot) = open_pinned_regular(&staged, "partial transition copy")?;
     ensure_pinned_unchanged(&staged, "partial transition copy", &output, &snapshot)?;
     let mut offset = 0u64;
-    let mut left = [0u8; 64 * 1024];
-    let mut right = [0u8; 64 * 1024];
+    let mut left = vec![0u8; 64 * 1024].into_boxed_slice();
+    let mut right = vec![0u8; 64 * 1024].into_boxed_slice();
     while offset < meta.len() {
         let n = usize::try_from((meta.len() - offset).min(left.len() as u64))?;
         input.read_exact(&mut left[..n])?;

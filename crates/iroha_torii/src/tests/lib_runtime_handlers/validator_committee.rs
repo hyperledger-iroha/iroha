@@ -93,7 +93,7 @@ async fn validator_committee_status_serves_exact_finality_and_closed_queries() {
         "target_epoch=2&target_epoch=3",
     ] {
         use axum::extract::FromRequestParts as _;
-        let (mut parts, _) = axum::http::Request::builder()
+        let (mut parts, ()) = axum::http::Request::builder()
             .uri(format!("/v1/nexus/validator-committee?{query}"))
             .body(())
             .unwrap()
@@ -109,9 +109,9 @@ async fn validator_committee_status_serves_exact_finality_and_closed_queries() {
 #[tokio::test]
 async fn validator_committee_status_refuses_exhausted_memory_before_reading_state() {
     use crate::validator_committee::{CommitteeStatusQuery, handler_validator_committee_status};
-    // This State has no certified history: a read before capacity admission
-    // would return an unavailable/error response instead of the capacity refusal.
-    let app = mk_app_state_for_tests();
+    // This authenticated State has only genesis, not the requested epoch: a read
+    // before capacity admission would return an unavailable/error instead of capacity refusal.
+    let app = mk_native_app_state_for_tests();
     let available = app.query_fanout_inflight.available_permits();
     let held = app
         .query_fanout_inflight

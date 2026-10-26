@@ -14,7 +14,7 @@ use crate::sumeragi::finality::{NativeCommitCertificateReadErrorV1, read_commit_
 /// Reconstruct one path against an original retained completed chunk root.
 ///
 /// Each leaf comes from the exact original successor's signed parent hash and result;
-/// this also covers genesis without inventing a genesis CommitQC. Acquisition and bounded
+/// this also covers genesis without inventing a genesis `CommitQC`. Acquisition and bounded
 /// canonical decoding use the caller's pool. A fixed logarithmic stack replaces a copied
 /// 4096-leaf graph. No DATA becomes an anchor unless the completed root matches the
 /// original committed state. The caller must still verify its complete forgery certificate.

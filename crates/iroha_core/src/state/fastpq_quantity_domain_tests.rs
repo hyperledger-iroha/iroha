@@ -219,8 +219,7 @@ fn check_full_quantity_ledger() {
                 .world
                 .assets
                 .get(&source_id)
-                .map(|value| value.as_ref().clone())
-                .unwrap_or_else(Quantity::zero),
+                .map_or_else(Quantity::zero, |value| value.as_ref().clone()),
             from_before
         );
         assert_eq!(
@@ -228,8 +227,7 @@ fn check_full_quantity_ledger() {
                 .world
                 .assets
                 .get(&destination_id)
-                .map(|value| value.as_ref().clone())
-                .unwrap_or_else(Quantity::zero),
+                .map_or_else(Quantity::zero, |value| value.as_ref().clone()),
             to_before
         );
         if index == 2 {
@@ -252,14 +250,12 @@ fn check_full_quantity_ledger() {
             .world
             .assets
             .get(&source_id)
-            .map(|value| value.as_ref().clone())
-            .unwrap_or_else(Quantity::zero);
+            .map_or_else(Quantity::zero, |value| value.as_ref().clone());
         let observed_destination = block
             .world
             .assets
             .get(&destination_id)
-            .map(|value| value.as_ref().clone())
-            .unwrap_or_else(Quantity::zero);
+            .map_or_else(Quantity::zero, |value| value.as_ref().clone());
         assert_eq!(observed_source, from_after);
         assert_eq!(observed_destination, to_after);
         assert_eq!(
@@ -559,7 +555,7 @@ fn check_supply_changes_between_transfers() {
             fastpq_prover::gadgets::public_transfer_statement::PublicTransferLimits::default();
         let tree_limits = fastpq_prover::gadgets::public_transfer_statement::TransferSmtBuildLimits::for_update_limit(4).unwrap();
         let error = crate::fastpq::quantity_statement_from_finalized_transcripts_for_testing(
-            inputs.clone(),
+            inputs,
             bundle,
             public_limits,
             tree_limits,
@@ -577,7 +573,7 @@ fn check_supply_changes_between_transfers() {
             assert_eq!(transcript.batch_hash, call);
             let produced =
                 crate::fastpq::quantity_statement_from_finalized_transcripts_for_testing(
-                    inputs.clone(),
+                    inputs,
                     std::slice::from_ref(&bundle[index]),
                     public_limits,
                     tree_limits,

@@ -3,24 +3,27 @@
 
 """From a camera luma plane to lane data.
 
-The decoder locates the corner finders, derives a homography for each
-orientation hypothesis, ranks the hypotheses by their ring gates and the ``天``
-mask, picks the one whose lane ``D`` codeword checks out (or whose tile lanes
-read), then reads the tiles and dots. Every tile is classified *jointly*: the
-8x8 sample patch is compared against the 32 hypotheses (polarity x glyph) and
-the best match wins, so the katakana and the light/dark bit help each other.
-Cells the decoder is unsure about become Reed-Solomon erasures.
+The decoder locates the corner finders (four, or three with the fourth
+inferred), derives a pose for each orientation hypothesis, ranks the
+orientations by how well the ring gates line up (lane ``D`` must check out),
+then reads the dots and the petal field. Every petal is one bit: its level,
+normalised by the finder levels, is compared with a threshold computed for its
+codeword and colour class (the petals inside the ``天`` are lighter than the
+pink ones). Bytes the decoder is unsure about become Reed-Solomon erasures.
 
-When a thumb, a glare or the edge of the frame hides one corner blossom, the
-other three locate the code and the hidden corner is inferred, then moved to
-where the three dotted rings line up best. :func:`track_frame` follows a code
-from the previous frame's pose without searching the whole image.
+When some field lanes do not decode, the pose is searched for radial lens
+distortion: a cheap camera's barrel distortion moves the petals by a third of
+their pitch at the edge of a 480p frame, while the finders that fix the
+homography sit far outside the field. Field lanes the finder levels leave
+unread are read again from *local levels*, every cell rescaled by its
+neighbourhood, so shadows, glare, banding and veiling light cancel.
 
-The tile *level read* judges every patch against the light and dark levels
-measured at the finders. When it leaves lane ``P`` or ``K`` unreadable, the
-*normalised read* is tried: it rescales each patch (and each template) by its
-own contrast, so over-exposure, veiling light, glare, shadows and gradients
-cancel out.
+A camera sees each shown frame two to four times. :func:`field_evidence` keeps
+what one capture shows of the petal field, and :func:`merge_fields` reads the
+field lanes from the average of several captures of one shown frame, which
+recovers lanes that noise, display banding or hand shake cost each capture
+alone. :func:`track_frame` follows a code from the previous frame's pose
+without searching the whole image.
 
 This is an operation-by-operation port of the Rust reference in IEEE double
 precision, including the order of every floating-point sum, so it reads the
@@ -33,28 +36,31 @@ import enum
 import math
 from dataclasses import dataclass, replace
 from functools import reduce
-from operator import add, mul, sub
+from operator import add
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
-from ._numeric import F64_MAX, NAN, f64_max, f64_min, ieee_div, total_key
-from .glyphs import GLYPH_COUNT, TEMPLATE_N, TEMPLATES
-from .image import Homography, Luma
-from .lanes import D_WORD, K_WORD, P_WORD, FrameCells, Lane, decode_lane_counted
+from ._numeric import F64_MAX, NAN, f64_max, ieee_div, total_key
+from .image import Luma, Pose
+from .lanes import D_WORD, FIELD_LANES, FIELD_WORD, FrameCells, Lane, decode_lane_counted
 from .layout import (
+    BAND_COUNT,
+    BAND_OFFSETS,
+    DOT_RADIUS,
+    FIELD_CELLS,
     FINDER_CENTERS,
-    GLYPH_BOX,
-    MASK,
+    PETAL_RADIUS,
     RING_COUNT,
-    TILE_COUNT,
-    TILE_ORIGIN,
-    TILE_PITCH,
+    SECTORS,
     TOTAL_SLOTS,
+    cell_band_slot,
+    cell_center,
+    cell_light,
     data_slots,
     gate_slots,
     guard_slots,
+    sector_cells,
     slot_center,
     split_slot,
-    tile_center,
 )
 from .locate import Finder, FinderSet, candidates, follow
 from .rs import RsError
@@ -66,27 +72,30 @@ __all__ = [
     "DecodedFrame",
     "DecodeErrorKind",
     "DecodeError",
+    "FieldEvidence",
     "decode_frame",
     "decode_frame_at",
     "track_frame",
     "observed_cells",
-    "tile_match_error",
-    "INK_ON_LIGHT",
-    "PINK_ON_DARK",
+    "field_evidence",
+    "merge_fields",
 ]
 
-_PATCH = TEMPLATE_N
-_CELLS = _PATCH * _PATCH
-_HYPOTHESES = 2 * GLYPH_COUNT
-#: Relative level of the glyph ink on a light tile (ink / light fill).
-INK_ON_LIGHT = 0.04
-#: Relative level of a pink glyph on a dark tile (pink / light fill).
-PINK_ON_DARK = 0.83
-#: Cells cut from each end of a sorted patch to find its robust darkest and brightest level.
-_PATCH_CUT = _CELLS // 10
-#: Tiles whose contrast is below this fraction of the median tile contrast become erasures
-#: in the normalised read.
-_WEAK_TILE = 0.25
+#: Distortion steps tried, relative to the starting pose, when a plain pose leaves field
+#: lanes unread; the best is then refined by +-:data:`_DISTORTION_REFINE`.
+_DISTORTION_STEPS = (-0.03, -0.06, -0.09, -0.12, -0.16, 0.03)
+#: Final refinement step of the distortion search.
+_DISTORTION_REFINE = 0.015
+#: A colour class with fewer cells in a codeword than this takes the codeword's threshold.
+_CLASS_MIN_CELLS = 16
+#: Field cells within this distance of a cell are its neighbourhood for the local read.
+_NEIGHBOURHOOD = 32.0
+#: Cells averaged at each end of a sorted neighbourhood for its local dark and lit levels.
+_NEIGHBOURHOOD_ENDS = 5
+#: Field cells of a sector that carry the bits of its codeword.
+_FIELD_BITS = FIELD_WORD * 8
+_NOT_SKIPPED = (False,) * SECTORS
+_NO_FIELDS: Tuple[Optional["LaneResult"], ...] = (None,) * SECTORS
 
 
 @dataclass(frozen=True)
@@ -95,14 +104,9 @@ class DecodeOptions:
 
     #: Also try horizontally mirrored images (front-camera previews).
     try_mirrored: bool = True
-    #: Blur widths (in template cells) tried for glyph matching.
-    template_sigmas: Tuple[float, ...] = (0.0, 0.5, 0.8, 1.1, 1.5)
     #: Largest image (in pixels) the decoder accepts; larger frames should be
     #: downscaled by the caller. Bounds memory and work on hostile input.
     max_pixels: int = 12_000_000
-
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "template_sigmas", tuple(float(s) for s in self.template_sigmas))
 
 
 @dataclass(frozen=True)
@@ -123,35 +127,44 @@ class LaneResult:
 class DecodedFrame:
     """Everything read from one camera frame."""
 
-    #: Canvas-to-pixel homography that was used.
-    homography: Homography
+    #: Canvas-to-pixel pose that was used.
+    pose: Pose
     #: Orientation: how many quarter turns the code is rotated.
     rotation: int
     #: Whether the image was mirrored.
     mirrored: bool
-    #: Lane ``P`` result.
-    p: Optional[LaneResult]
-    #: Lane ``K`` result.
-    k: Optional[LaneResult]
     #: Lane ``D`` result.
     d: Optional[LaneResult]
+    #: Field lane results, sector 0 first.
+    fields: Tuple[Optional[LaneResult], ...] = _NO_FIELDS
     #: The corner finder that was hidden (by a finger, a glare or the edge of
     #: the frame) and inferred from the other three, as its canonical index:
     #: 0 top-left, 1 top-right, 2 bottom-right, 3 bottom-left of the upright code.
     inferred_corner: Optional[int] = None
 
+    def __post_init__(self) -> None:
+        fields = tuple(self.fields)
+        if len(fields) != SECTORS:
+            raise ValueError("a frame has four field lanes")
+        object.__setattr__(self, "fields", fields)
+
     @property
     def lanes_ok(self) -> int:
         """Number of lanes that decoded."""
-        return (self.p is not None) + (self.k is not None) + (self.d is not None)
+        return (self.d is not None) + sum(1 for f in self.fields if f is not None)
+
+    def lane(self, lane: Lane) -> Optional[LaneResult]:
+        """The result of ``lane``, when it decoded."""
+        if lane is Lane.D:
+            return self.d
+        return self.fields[FIELD_LANES.index(lane)]
 
     @property
     def lanes(self) -> str:
-        """Lanes that decoded, as letters from ``"PKD"``."""
-        return "".join(
-            letter
-            for letter, result in (("P", self.p), ("K", self.k), ("D", self.d))
-            if result is not None
+        """The lanes that decoded, as letters: ``D`` and the sector digits ``0``-``3``."""
+        letters = "D" if self.d is not None else ""
+        return letters + "".join(
+            lane.letter for lane, result in zip(FIELD_LANES, self.fields) if result is not None
         )
 
     def d_lane(self) -> Optional[DLane]:
@@ -168,7 +181,7 @@ class DecodedFrame:
     def atom_packets(self) -> List[AtomPacket]:
         """Atom packets from every lane that decoded."""
         packets = []
-        for lane, result in ((Lane.P, self.p), (Lane.K, self.k)):
+        for lane, result in zip(FIELD_LANES, self.fields):
             if result is not None:
                 packet = parse_atom_lane(lane, result.data)
                 if packet is not None:
@@ -183,7 +196,7 @@ class DecodedFrame:
         d_lane = self.d_lane()
         if d_lane is not None:
             assembler.push_d_lane(d_lane)
-        for lane, result in ((Lane.P, self.p), (Lane.K, self.k)):
+        for lane, result in zip(FIELD_LANES, self.fields):
             if result is not None:
                 packet = parse_atom_lane(lane, result.data)
                 if packet is not None:
@@ -196,7 +209,7 @@ class DecodeErrorKind(enum.Enum):
     #: The image is empty, smaller than 48 pixels on a side, or larger than
     #: :attr:`DecodeOptions.max_pixels`.
     UNSUPPORTED_IMAGE = "petal image has an unsupported size"
-    #: The four corner finders were not found.
+    #: No set of corner finders (four, or three forming a corner) was found.
     NO_FINDERS = "petal finders not found"
     #: Finders were found but no orientation produced a readable lane.
     NO_ORIENTATION = "no petal orientation produced a readable lane"
@@ -213,9 +226,12 @@ class DecodeError(Exception):
 Projector = Callable[[float, float], float]
 
 
-def _projector(image: Luma, h: Homography) -> Projector:
-    """``image.sample(*h.apply(x, y))`` as one fast closure."""
-    m0, m1, m2, m3, m4, m5, m6, m7, m8 = h.m
+def _projector(image: Luma, pose: Pose) -> Projector:
+    """``image.sample(*pose.apply(x, y))`` as one fast closure."""
+    m0, m1, m2, m3, m4, m5, m6, m7, m8 = pose.homography.m
+    k = pose.distortion
+    ox, oy = pose.center
+    scale2 = pose.scale2
     data = image.data
     w = image.width
     wm1 = w - 1
@@ -223,14 +239,7 @@ def _projector(image: Luma, h: Homography) -> Projector:
     fwm1 = float(wm1)
     fhm1 = float(hm1)
 
-    def project(x: float, y: float) -> float:
-        den = m6 * x + m7 * y + m8
-        if den == 0.0:
-            px = ieee_div(m0 * x + m1 * y + m2, den)
-            py = ieee_div(m3 * x + m4 * y + m5, den)
-        else:
-            px = (m0 * x + m1 * y + m2) / den
-            py = (m3 * x + m4 * y + m5) / den
+    def sample(px: float, py: float) -> float:
         fx = px - 0.5
         fy = py - 0.5
         if fx != fx or fy != fy:
@@ -255,7 +264,55 @@ def _projector(image: Luma, h: Homography) -> Projector:
         bottom = data[r1 + x0] * (1.0 - tx) + data[r1 + x1] * tx
         return top * (1.0 - ty) + bottom * ty
 
-    return project
+    if k == 0.0:
+
+        def project(x: float, y: float) -> float:
+            den = m6 * x + m7 * y + m8
+            if den == 0.0:
+                return sample(
+                    ieee_div(m0 * x + m1 * y + m2, den), ieee_div(m3 * x + m4 * y + m5, den)
+                )
+            # inlined `sample`
+            fx = (m0 * x + m1 * y + m2) / den - 0.5
+            fy = (m3 * x + m4 * y + m5) / den - 0.5
+            if fx != fx or fy != fy:
+                return NAN
+            if fx < 0.0:
+                fx = 0.0
+            elif fx > fwm1:
+                fx = fwm1
+            if fy < 0.0:
+                fy = 0.0
+            elif fy > fhm1:
+                fy = fhm1
+            x0 = int(fx)
+            y0 = int(fy)
+            x1 = x0 + 1 if x0 < wm1 else wm1
+            y1 = y0 + 1 if y0 < hm1 else hm1
+            tx = fx - x0
+            ty = fy - y0
+            r0 = y0 * w
+            r1 = y1 * w
+            top = data[r0 + x0] * (1.0 - tx) + data[r0 + x1] * tx
+            bottom = data[r1 + x0] * (1.0 - tx) + data[r1 + x1] * tx
+            return top * (1.0 - ty) + bottom * ty
+
+        return project
+
+    def project_distorted(x: float, y: float) -> float:
+        den = m6 * x + m7 * y + m8
+        if den == 0.0:
+            ux = ieee_div(m0 * x + m1 * y + m2, den)
+            uy = ieee_div(m3 * x + m4 * y + m5, den)
+        else:
+            ux = (m0 * x + m1 * y + m2) / den
+            uy = (m3 * x + m4 * y + m5) / den
+        dx = ux - ox
+        dy = uy - oy
+        factor = 1.0 + ieee_div(k * (dx * dx + dy * dy), scale2)
+        return sample(ox + dx * factor, oy + dy * factor)
+
+    return project_distorted
 
 
 class _Reference:
@@ -353,68 +410,13 @@ def _reference_levels(project: Projector, inferred: Optional[int] = None) -> Opt
     return _Reference(tuple(lit), tuple(dark))
 
 
-_SLOT_POINTS = tuple(slot_center(*split_slot(flat)) for flat in range(TOTAL_SLOTS))
-_GATES = gate_slots()
-_GUARDS = guard_slots()
-_GATES_BY_RING = tuple(tuple(s for s in _GATES if split_slot(s)[0] == ring) for ring in range(3))
-_GUARDS_BY_RING = tuple(tuple(s for s in _GUARDS if split_slot(s)[0] == ring) for ring in range(3))
-_DATA_SLOTS = data_slots()
-_DATA_RINGS = tuple(split_slot(slot)[0] for slot in _DATA_SLOTS)
+_CANONICAL = tuple((float(x), float(y)) for x, y in FINDER_CENTERS)
 
 
-def _normalised_dot(project: Projector, reference: _Reference, flat: int) -> float:
-    x, y = _SLOT_POINTS[flat]
-    lit, dark = reference.at(x, y)
-    return ieee_div(_dot_samples(project, x, y, 3.5) - dark, lit - dark)
-
-
-def _sequential_sum(values: Sequence[float]) -> float:
-    """Left-to-right float sum, as Rust's ``Iterator::sum`` computes it."""
-    return reduce(add, values) if values else 0.0
-
-
-def _gate_score(project: Projector, reference: _Reference) -> float:
-    gates = [_normalised_dot(project, reference, s) for s in _GATES]
-    guards = [_normalised_dot(project, reference, s) for s in _GUARDS]
-    return _sequential_sum(gates) / len(gates) - _sequential_sum(guards) / len(guards)
-
-
-#: Centres of the lattice cells outside the ``天`` mask (no tile is ever drawn there),
-#: row-major.
-_EMPTY_CELLS = tuple(
-    (TILE_ORIGIN + TILE_PITCH * (col + 0.5), TILE_ORIGIN + TILE_PITCH * (row + 0.5))
-    for row, line in enumerate(MASK)
-    for col, mark in enumerate(line)
-    if mark != "#"
-)
-
-
-def _mask_score(project: Projector, reference: _Reference) -> float:
-    """How well the ``天`` lines up: the mean normalised level over the tiles (each sampled
-    at five points across the tile, so a glyph stroke at the centre does not decide it)
-    minus the mean over the empty lattice cells.
-
-    The mask is symmetric left to right but not top to bottom, so this tells the four
-    quarter turns apart even when the ring gates are damaged.
-    """
-
-    def level_sum(points: Sequence[Tuple[float, float]]) -> float:
-        total = None
-        at = reference.at
-        for x, y in points:
-            lit, dark = at(x, y)
-            samples = project(x + 0.0, y + 0.0)
-            samples += project(x + 8.0, y + 0.0)
-            samples += project(x + -8.0, y + 0.0)
-            samples += project(x + 0.0, y + 8.0)
-            samples += project(x + 0.0, y + -8.0)
-            value = ieee_div(samples / 5.0 - dark, lit - dark)
-            total = value if total is None else total + value
-        return 0.0 if total is None else total
-
-    tiles = level_sum(_TILE_CENTERS) / TILE_COUNT
-    empty = level_sum(_EMPTY_CELLS) / len(_EMPTY_CELLS)
-    return tiles - empty
+def _fit_pose(image: Luma, dst: Sequence[Tuple[float, float]], distortion: float) -> Optional[Pose]:
+    """The pose with lens distortion ``distortion`` through the four finder centres ``dst``
+    (image pixels, in canonical corner order)."""
+    return Pose.fit(_CANONICAL, dst, distortion, image.width, image.height)
 
 
 def _canonical_corner(index: int, rotation: int, mirrored: bool) -> int:
@@ -425,26 +427,53 @@ def _canonical_corner(index: int, rotation: int, mirrored: bool) -> int:
     return (index + 4 - rotation) % 4
 
 
+_SLOT_POINTS = tuple(slot_center(*split_slot(flat)) for flat in range(TOTAL_SLOTS))
+_GATES = gate_slots()
+_GUARDS = guard_slots()
+_GATES_BY_RING = tuple(
+    tuple(s for s in _GATES if split_slot(s)[0] == ring) for ring in range(RING_COUNT)
+)
+_GUARDS_BY_RING = tuple(
+    tuple(s for s in _GUARDS if split_slot(s)[0] == ring) for ring in range(RING_COUNT)
+)
+_DATA_SLOTS = data_slots()
+_DATA_RINGS = tuple(split_slot(slot)[0] for slot in _DATA_SLOTS)
+#: Sample spread of a ring dot, in canvas units.
+_DOT_SPREAD = 0.32 * DOT_RADIUS
+#: Sample spread of a petal, in canvas units.
+_PETAL_SPREAD = 0.4 * PETAL_RADIUS
+
 #: The five sample points of every ring slot, in flat slot order (``_dot_samples`` with
-#: spread 3.5, coordinates computed exactly as there).
+#: the dot spread, coordinates computed exactly as there).
 _RING_SAMPLES = tuple(
-    (x + 0.0, y + 0.0, x + 3.5, y + 0.0, x + -3.5, y + 0.0, x + 0.0, y + 3.5, x + 0.0, y + -3.5)
+    (
+        x + 0.0,
+        y + 0.0,
+        x + _DOT_SPREAD,
+        y + 0.0,
+        x + -_DOT_SPREAD,
+        y + 0.0,
+        x + 0.0,
+        y + _DOT_SPREAD,
+        x + 0.0,
+        y + -_DOT_SPREAD,
+    )
     for x, y in _SLOT_POINTS
 )
 
 
 def _ring_brightness(image: Luma, corners: Sequence[Tuple[float, float]]) -> Optional[float]:
-    """The brightness summed over all ring slots under the pose that maps the canonical
-    corners onto ``corners`` (in quad order).
+    """The brightness summed over all ring slots under the plain pose that maps the
+    canonical corners onto ``corners`` (in quad order).
 
     The slots form the same set of points under every quarter turn and mirror of the
-    canvas (80, 92 and 104 are multiples of four), so the value does not depend on the
+    canvas (88, 100 and 108 are multiples of four), so the value does not depend on the
     orientation.
     """
-    h = Homography.from_points(_CANONICAL, corners)
-    if h is None:
+    pose = _fit_pose(image, corners, 0.0)
+    if pose is None:
         return None
-    project = _projector(image, h)
+    project = _projector(image, pose)
     # every sample is at least +0.0 (or NaN), so starting the sum at 0.0, as the
     # reference's `dot_samples` and slot sum do, adds nothing
     total = 0.0
@@ -465,7 +494,7 @@ def _refine_inferred_corner(
 
     A 13 x 13 search in steps of 2 % of the mean leg around the parallelogram estimate,
     then a 9 x 9 search in steps of 0.5 % around the best point. The rings fix the
-    geometry only; the orientation is decided afterwards by the gates and the ``天``.
+    geometry only; the orientation is decided afterwards by the gates and the lanes.
     """
     points = [(f.x, f.y) for f in corners]
     sx, sy = points[inferred]
@@ -498,6 +527,27 @@ def _refine_inferred_corner(
     return tuple(refined)
 
 
+def _normalised_dot(project: Projector, reference: _Reference, flat: int) -> float:
+    x, y = _SLOT_POINTS[flat]
+    lit, dark = reference.at(x, y)
+    return ieee_div(_dot_samples(project, x, y, _DOT_SPREAD) - dark, lit - dark)
+
+
+def _sequential_sum(values: Sequence[float]) -> float:
+    """Left-to-right float sum, as Rust's ``Iterator::sum`` computes it.
+
+    (Python's built-in ``sum`` of floats is compensated from 3.12 on, so it is never
+    used where the reference sums.)
+    """
+    return reduce(add, values) if values else 0.0
+
+
+def _gate_score(project: Projector, reference: _Reference) -> float:
+    gates = [_normalised_dot(project, reference, s) for s in _GATES]
+    guards = [_normalised_dot(project, reference, s) for s in _GUARDS]
+    return _sequential_sum(gates) / len(gates) - _sequential_sum(guards) / len(guards)
+
+
 def _read_dots(project: Projector, reference: _Reference) -> Tuple[bytearray, List[float]]:
     """Read lane ``D``: the transmitted bytes and per-byte confidence."""
     # per-ring thresholds from the gates (lit) and guards (dark)
@@ -523,25 +573,27 @@ def _read_dots(project: Projector, reference: _Reference) -> Tuple[bytearray, Li
     return word, confidence
 
 
+def _read_lane_d(project: Projector, reference: _Reference) -> Optional[LaneResult]:
+    """Lane ``D`` under one pose."""
+    word, confidence = _read_dots(project, reference)
+    return _decode_with_erasures(Lane.D, word, confidence)
+
+
 def _decode_with_erasures(
     lane: Lane, word: bytes, confidence: Sequence[float]
 ) -> Optional[LaneResult]:
     """Try Reed-Solomon with growing numbers of erasures, least confident first.
 
-    The schedule erases 0, 1/8, 1/4, 1/3 and 1/2 of the parity bytes, and for lane ``K`` also
-    2/3. Lanes ``D`` and ``P`` stop at 1/2: their words have only 11 and 13 parity bytes, and a
-    further erasure step leaves so few spare ones that it accepts wrong codewords (lane ``D``
-    at 7 erasures: about 0.4 % of random words, and 5 wrong lanes in 2 900 simulated harsh
-    frames; lane ``P`` at 8: 2 wrong lanes in 600 banded 480p frames). Capping them costs
-    0.65 % of the lane ``D`` reads and 0.15 % of the lane ``P`` reads in those frames.
+    The schedule erases 0, 1/8, 1/4, 1/3 and 1/2 of the parity bytes (integer division:
+    lane ``D`` 0, 1, 2, 3, 5; a field lane 0, 2, 5, 7, 11), the least confident bytes
+    first with ties in position order. Lane ``D`` has only 11 parity bytes, and a further
+    step leaves so few spare ones that it accepts wrong codewords (at 7 erasures about
+    0.4 % of random words).
     """
     nsym = lane.parity_len
     order = sorted(range(len(word)), key=lambda i: total_key(confidence[i]))
-    counts = [0, nsym // 8, nsym // 4, nsym // 3, nsym // 2]
-    if lane is Lane.K:
-        counts.append(nsym * 2 // 3)
-    schedule = []
-    for count in counts:
+    schedule: List[int] = []
+    for count in (0, nsym // 8, nsym // 4, nsym // 3, nsym // 2):
         if not schedule or schedule[-1] != count:
             schedule.append(count)
     for erasures in schedule:
@@ -558,365 +610,322 @@ def _decode_with_erasures(
     return None
 
 
-def _read_lane_d(project: Projector, reference: _Reference) -> Optional[LaneResult]:
-    """Lane ``D`` under one pose."""
-    word, confidence = _read_dots(project, reference)
-    return _decode_with_erasures(Lane.D, word, confidence)
+def _two_means(values: Sequence[float]) -> float:
+    """The two-means threshold of a set of values: start at their mean, then move to the
+    midpoint of the means of the values above and at or below the threshold, at most
+    eight times, stopping when it moves less than 1e-4 or one side is empty. Sums run in
+    the order given."""
+    count = len(values)
+    threshold = reduce(add, values) / count
+    for _ in range(8):
+        high = [v for v in values if v > threshold]
+        highs = len(high)
+        lows = count - highs
+        if lows == 0 or highs == 0:
+            break
+        low = [v for v in values if not v > threshold]
+        following = 0.5 * (reduce(add, low, 0.0) / lows + reduce(add, high, 0.0) / highs)
+        moved = abs(following - threshold)
+        threshold = following
+        if moved < 1e-4:
+            break
+    return threshold
 
 
-_PATTERNS: Dict[float, Tuple[Tuple[float, ...], ...]] = {}
+#: The bit-carrying cells of every sector, in bit order.
+_SECTOR_BITS = tuple(sector_cells(sector)[:_FIELD_BITS] for sector in range(SECTORS))
+#: Whether each bit-carrying cell of every sector lies in the ``天`` (light class).
+_SECTOR_LIGHT = tuple(tuple(cell_light(c) for c in cells) for cells in _SECTOR_BITS)
+_CELL_CENTERS = tuple(cell_center(cell) for cell in range(FIELD_CELLS))
 
 
-def _build_patterns(sigma: float) -> Tuple[Tuple[float, ...], ...]:
-    """``pred[b * 16 + g]``: expected normalised patch for polarity ``b``, glyph ``g``."""
-    cached = _PATTERNS.get(sigma)
-    if cached is not None:
-        return cached
-    raw = []
-    for i in range(-2, 3):
-        if sigma < 0.05:
-            raw.append(1.0 if i == 0 else 0.0)
+def _clamp_unit(value: float) -> float:
+    if value < 0.0:
+        return 0.0
+    if value > 1.0:
+        return 1.0
+    return value
+
+
+#: The five sample points of every field cell (``_dot_samples`` with the petal spread,
+#: coordinates computed exactly as there).
+_FIELD_SAMPLES = tuple(
+    (
+        x + 0.0,
+        y + 0.0,
+        x + _PETAL_SPREAD,
+        y + 0.0,
+        x + -_PETAL_SPREAD,
+        y + 0.0,
+        x + 0.0,
+        y + _PETAL_SPREAD,
+        x + 0.0,
+        y + -_PETAL_SPREAD,
+    )
+    for x, y in _CELL_CENTERS
+)
+#: ``(1 - u, u, 1 - v, v)`` of every field cell for :meth:`_Reference.at`.
+_FIELD_WEIGHTS = tuple(
+    (1.0 - u, u, 1.0 - v, v)
+    for u, v in ((_clamp_unit(x / 1024.0), _clamp_unit(y / 1024.0)) for x, y in _CELL_CENTERS)
+)
+
+
+def _field_levels(project: Projector, reference: _Reference) -> List[float]:
+    """The level of every field cell under one pose, normalised by the finder levels."""
+    l0, l1, l2, l3 = reference.lit
+    d0, d1, d2, d3 = reference.dark
+    out = []
+    append = out.append
+    for (ax, ay, bx, by, cx, cy, dx, dy, ex, ey), (iu, u, iv, v) in zip(
+        _FIELD_SAMPLES, _FIELD_WEIGHTS
+    ):
+        lit = (l0 * iu + l1 * u) * iv + (l3 * iu + l2 * u) * v
+        dark = (d0 * iu + d1 * u) * iv + (d3 * iu + d2 * u) * v
+        samples = project(ax, ay)
+        samples += project(bx, by)
+        samples += project(cx, cy)
+        samples += project(dx, dy)
+        samples += project(ex, ey)
+        scale = lit - dark
+        if scale != 0.0:
+            append((samples / 5.0 - dark) / scale)
         else:
-            raw.append(math.exp(-(float(i) * float(i)) / (2.0 * sigma * sigma)))
-    total = _sequential_sum(raw)
-    kernel = [v / total for v in raw]
-    pred = []
-    for polarity in range(2):
-        for template in TEMPLATES:
-            coverage = [c / 255.0 for c in template]
-            blurred = [0.0] * _CELLS
-            for v in range(_PATCH):
-                for u in range(_PATCH):
-                    acc = 0.0
-                    for ky, wy in enumerate(kernel):
-                        sy = v + ky - 2
-                        if not 0 <= sy < _PATCH:
-                            continue
-                        for kx, wx in enumerate(kernel):
-                            sx = u + kx - 2
-                            if 0 <= sx < _PATCH:
-                                acc += wx * wy * coverage[sy * _PATCH + sx]
-                    blurred[v * _PATCH + u] = acc
-            if polarity == 1:
-                pattern = tuple(1.0 - (1.0 - INK_ON_LIGHT) * ink for ink in blurred)
-            else:
-                pattern = tuple(PINK_ON_DARK * ink for ink in blurred)
-            pred.append(pattern)
-    patterns = tuple(pred)
-    if sigma == sigma:
-        _PATTERNS[sigma] = patterns
-    return patterns
+            append(ieee_div(samples / 5.0 - dark, scale))
+    return out
 
 
-class _TileRead:
-    __slots__ = ("light", "glyph", "polarity_margin", "glyph_margin", "error")
-
-    def __init__(
-        self, light: bool, glyph: int, polarity_margin: float, glyph_margin: float, error: float
-    ) -> None:
-        self.light = light
-        self.glyph = glyph
-        self.polarity_margin = polarity_margin
-        self.glyph_margin = glyph_margin
-        self.error = error
+_NEIGHBOURS: Optional[Tuple[Tuple[int, ...], ...]] = None
 
 
-_HALF_BOX = GLYPH_BOX / 2.0
-_CELL = GLYPH_BOX / _PATCH
-_QUARTER = ((-0.25, -0.25), (0.25, -0.25), (-0.25, 0.25), (0.25, 0.25))
-_TILE_CENTERS = tuple(tile_center(t) for t in range(TILE_COUNT))
-_NOT_ERASED = (False,) * TILE_COUNT
+def _neighbourhoods() -> Tuple[Tuple[int, ...], ...]:
+    """The neighbourhood of every field cell: the cells (itself included) whose centres
+    lie within :data:`_NEIGHBOURHOOD` units, in index order. Bands are 11 units apart, so
+    only the three bands on either side can hold neighbours. Built on first use."""
+    global _NEIGHBOURS
+    if _NEIGHBOURS is None:
+        limit = _NEIGHBOURHOOD * _NEIGHBOURHOOD
+        # Cells are bucketed on a grid wider than the neighbourhood radius, so every
+        # neighbour lies in one of the 3 x 3 buckets around a cell; the distance test and
+        # the band range below are the reference's.
+        pitch = _NEIGHBOURHOOD + 1.0
+        buckets: Dict[Tuple[int, int], List[int]] = {}
+        for cell, (x, y) in enumerate(_CELL_CENTERS):
+            buckets.setdefault((int(x // pitch), int(y // pitch)), []).append(cell)
+        table = []
+        for cell, (x, y) in enumerate(_CELL_CENTERS):
+            band, _ = cell_band_slot(cell)
+            first = BAND_OFFSETS[max(band - 3, 0)]
+            last = BAND_OFFSETS[min(band + 4, BAND_COUNT)]
+            bx = int(x // pitch)
+            by = int(y // pitch)
+            around = []
+            for gx in (bx - 1, bx, bx + 1):
+                for gy in (by - 1, by, by + 1):
+                    for other in buckets.get((gx, gy), ()):
+                        if first <= other < last:
+                            ox, oy = _CELL_CENTERS[other]
+                            ex = ox - x
+                            ey = oy - y
+                            if ex * ex + ey * ey <= limit:
+                                around.append(other)
+            around.sort()
+            table.append(tuple(around))
+        _NEIGHBOURS = tuple(table)
+    return _NEIGHBOURS
 
 
-def _sample_patches(project: Projector) -> List[List[float]]:
-    """The raw 8x8 luma patch of every tile, as captured (no reference levels applied).
+def _local_levels(levels: Sequence[float]) -> List[float]:
+    """Cell levels rescaled by their neighbourhood: the mean of the lowest and of the
+    highest :data:`_NEIGHBOURHOOD_ENDS` levels around a cell become 0 and 1 (a span below
+    0.05 counts as 0.05).
 
-    ``patches[tile][v * 8 + u]`` is the mean of four bilinear samples at +-1/4 cell.
+    About half the petals around any cell are lit, so shadows, glare, banding and veiling
+    light, which the finder levels cannot describe, cancel.
     """
-    cell = _CELL
-    half = _HALF_BOX
-    offsets = tuple((ox * cell, oy * cell) for ox, oy in _QUARTER)
-    (ax, ay), (bx, by), (cx_, cy_), (dx, dy) = offsets
-    patches: List[List[float]] = []
-    for cx, cy in _TILE_CENTERS:
-        patch: List[float] = []
-        for v in range(_PATCH):
-            gy = cy - half + (v + 0.5) * cell
-            for u in range(_PATCH):
-                gx = cx - half + (u + 0.5) * cell
-                total = project(gx + ax, gy + ay)
-                total += project(gx + bx, gy + by)
-                total += project(gx + cx_, gy + cy_)
-                total += project(gx + dx, gy + dy)
-                patch.append(total / 4.0)
-        patches.append(patch)
-    return patches
+    # the plain order is Rust's `total_cmp` order unless a NaN is present (zeros of
+    # either sign tie, which no sum below can tell apart)
+    ordered = sorted if all(v == v for v in levels) else _sorted_total
+    out = []
+    append = out.append
+    for cell, around in enumerate(_neighbourhoods()):
+        values = ordered([levels[o] for o in around])
+        count = len(values)
+        ends = min(_NEIGHBOURHOOD_ENDS, count // 2)
+        if ends < 1:
+            ends = 1
+        low = reduce(add, values[:ends]) / ends
+        high = reduce(add, values[count - ends :]) / ends
+        span = high - low
+        if not span > 0.05:  # `f64::max(0.05)`: a NaN span yields 0.05
+            span = 0.05
+        append((levels[cell] - low) / span)
+    return out
 
 
 def _sorted_total(values: Sequence[float]) -> List[float]:
     """``values`` ascending in Rust's ``f64::total_cmp`` order."""
-    total = sum(values)
-    if total == total:
-        # no NaN: the plain order is the total order (zeros of either sign tie, which no
-        # result below can tell apart)
-        return sorted(values)
     return sorted(values, key=total_key)
 
 
-def _patch_levels(values: Sequence[float]) -> Tuple[float, float]:
-    """The robust darkest and brightest level of a patch: the values ``_PATCH_CUT`` cells in
-    from either end of the sorted cells."""
-    ordered = _sorted_total(values)
-    return ordered[_PATCH_CUT], ordered[_CELLS - 1 - _PATCH_CUT]
+def _read_word(
+    levels: Sequence[float], sector: int, margins: float
+) -> Tuple[bytearray, List[float], float]:
+    """The transmitted word of one sector read from cell levels, each byte's confidence
+    (the smallest margin of its bits), and ``margins`` with every bit's margin from its
+    threshold added in bit order."""
+    cells = _SECTOR_BITS[sector]
+    light = _SECTOR_LIGHT[sector]
+    values = [levels[c] for c in cells]
+    every = _two_means(values)
+    # the light (`天`) and pink petals are thresholded apart: their lit levels differ
+    members = [v for v, is_light in zip(values, light) if is_light]
+    light_threshold = every if len(members) < _CLASS_MIN_CELLS else _two_means(members)
+    members = [v for v, is_light in zip(values, light) if not is_light]
+    pink_threshold = every if len(members) < _CLASS_MIN_CELLS else _two_means(members)
+    word = bytearray(FIELD_WORD)
+    confidence = [F64_MAX] * FIELD_WORD
+    for bit, (value, is_light) in enumerate(zip(values, light)):
+        threshold = light_threshold if is_light else pink_threshold
+        if value > threshold:
+            word[bit >> 3] |= 1 << (7 - (bit & 7))
+        margin = abs(value - threshold)
+        margins += margin
+        if margin < confidence[bit >> 3]:
+            confidence[bit >> 3] = margin
+    return word, confidence, margins
 
 
-def _apply_levels(values: Sequence[float], low: float, high: float, floor: float) -> List[float]:
-    """``values`` with ``low`` mapped to 0 and ``high`` to 1, clamped to [-0.25, 1.25]."""
-    span = high - low
-    if not span > floor:  # `f64::max`: a NaN span yields the floor
-        span = floor
-    out = []
-    for value in values:
-        level = (value - low) / span
-        if level < -0.25:  # `f64::clamp`: NaN passes through
-            level = -0.25
-        elif level > 1.25:
-            level = 1.25
-        out.append(level)
-    return out
+def _read_sectors(
+    levels: Sequence[float], skip: Sequence[bool]
+) -> Tuple[List[Optional[LaneResult]], float]:
+    """One read of the field lanes from cell levels with per-codeword, per-colour
+    thresholds, skipping the sectors in ``skip``, and how far the cells read sit from
+    their thresholds on average (one running sum over the sectors read)."""
+    separation = 0.0
+    counted = 0
+    results: List[Optional[LaneResult]] = [None] * SECTORS
+    for sector in range(SECTORS):
+        if skip[sector]:
+            continue
+        word, confidence, separation = _read_word(levels, sector, separation)
+        counted += _FIELD_BITS
+        results[sector] = _decode_with_erasures(FIELD_LANES[sector], word, confidence)
+    return results, separation / max(counted, 1)
 
 
-def _rescale(values: Sequence[float], floor: float) -> List[float]:
-    """Maps a patch's own darkest level to 0 and brightest to 1, with ``floor`` as the smallest
-    span that counts as contrast."""
-    low, high = _patch_levels(values)
-    return _apply_levels(values, low, high, floor)
+def _read_fields(
+    levels: Sequence[float], skip: Sequence[bool]
+) -> Tuple[List[Optional[LaneResult]], float]:
+    """The field lanes read from normalised cell levels, skipping the sectors in ``skip``,
+    and the separation of that first read. Sectors the levels leave unread are read again
+    from their :func:`_local_levels`."""
+    results, separation = _read_sectors(levels, skip)
+    unread = [not skip[s] and results[s] is None for s in range(SECTORS)]
+    if any(unread):
+        retry, _ = _read_sectors(_local_levels(levels), [not u for u in unread])
+        for sector in range(SECTORS):
+            if results[sector] is None:
+                results[sector] = retry[sector]
+    return results, separation
 
 
-_RESCALED_PATTERNS: Dict[float, Tuple[Tuple[float, ...], ...]] = {}
+class _FieldRead:
+    """A read of the field under one pose."""
+
+    __slots__ = ("pose", "project", "reference", "levels", "fields", "decoded", "separation")
+
+    def __init__(
+        self,
+        pose: Pose,
+        project: Projector,
+        reference: _Reference,
+        levels: List[float],
+        fields: List[Optional[LaneResult]],
+        separation: float,
+    ) -> None:
+        self.pose = pose
+        self.project = project
+        self.reference = reference
+        self.levels = levels
+        self.fields = fields
+        self.decoded = sum(1 for f in fields if f is not None)
+        self.separation = separation
+
+    def better_than(self, other: "_FieldRead") -> bool:
+        """More lanes, then a clearer separation."""
+        return (self.decoded, self.separation) > (other.decoded, other.separation)
+
+    def finish(self) -> "_FieldRead":
+        """Reads the sectors this pose left unread again from their local levels."""
+        if self.decoded < SECTORS:
+            unread = [f is None for f in self.fields]
+            retry, _ = _read_sectors(_local_levels(self.levels), [not u for u in unread])
+            for sector in range(SECTORS):
+                if self.fields[sector] is None:
+                    self.fields[sector] = retry[sector]
+            self.decoded = sum(1 for f in self.fields if f is not None)
+        return self
 
 
-def _rescaled_patterns(sigma: float) -> Tuple[Tuple[float, ...], ...]:
-    """The templates of ``sigma`` rescaled like the patches of the normalised read."""
-    cached = _RESCALED_PATTERNS.get(sigma)
-    if cached is not None:
-        return cached
-    patterns = tuple(tuple(_rescale(pattern, 0.001)) for pattern in _build_patterns(sigma))
-    if sigma == sigma:
-        _RESCALED_PATTERNS[sigma] = patterns
-    return patterns
-
-
-def _classify(
-    patches: Sequence[Sequence[float]],
-    sigmas: Sequence[float],
-    rescale_templates: bool,
-    erased: Sequence[bool],
-) -> List[_TileRead]:
-    """Picks for every patch the polarity and glyph whose template matches best.
-
-    The template blur is chosen per frame, by the lowest total error. With
-    ``rescale_templates`` the templates are rescaled like the patches; tiles flagged in
-    ``erased`` get zero margins, so they are the first the Reed-Solomon decoder treats as
-    erasures.
-    """
-    best_total = F64_MAX
-    best_reads: List[_TileRead] = []
-    tiles = len(patches)
-    if tiles == 0:
-        return best_reads
-    # cell-major, so that one cell of every tile is compared at a time
-    cells = list(zip(*patches))
-    for sigma in sigmas:
-        pred = _rescaled_patterns(sigma) if rescale_templates else _build_patterns(sigma)
-        # errors[h * tiles + t] accumulates sum_c (patch[t][c] - pred[h][c])^2
-        # over c in order, exactly like the reference's per-tile fold.
-        errors: Optional[List[float]] = None
-        for c in range(_CELLS):
-            observed = cells[c] * _HYPOTHESES
-            expected: List[float] = []
-            for h in range(_HYPOTHESES):
-                expected += [pred[h][c]] * tiles
-            diff = list(map(sub, observed, expected))
-            squares = map(mul, diff, diff)
-            errors = list(squares) if errors is None else list(map(add, errors, squares))
-        assert errors is not None
-        total = 0.0
-        reads = []
-        hypotheses = range(_HYPOTHESES)
-        for tile in range(tiles):
-            row = errors[tile::tiles]
-            best = min(hypotheses, key=row.__getitem__)
-            polarity = best // GLYPH_COUNT
-            glyph = best % GLYPH_COUNT
-            error = row[best]
-            other = F64_MAX
-            start = (1 - polarity) * GLYPH_COUNT
-            for value in row[start : start + GLYPH_COUNT]:
-                if value < other:
-                    other = value
-            other_glyph = F64_MAX
-            start = polarity * GLYPH_COUNT
-            for g in range(GLYPH_COUNT):
-                if g != glyph:
-                    value = row[start + g]
-                    if value < other_glyph:
-                        other_glyph = value
-            total += error
-            if erased[tile]:
-                reads.append(_TileRead(polarity == 1, glyph, 0.0, 0.0, error))
-            else:
-                reads.append(
-                    _TileRead(polarity == 1, glyph, other - error, other_glyph - error, error)
-                )
-        if total < best_total:
-            best_total = total
-            best_reads = reads
-    return best_reads
-
-
-def _read_tiles(
-    patches: Sequence[Sequence[float]], reference: _Reference, sigmas: Sequence[float]
-) -> List[_TileRead]:
-    """The level read: every patch is judged against the light and dark levels measured at
-    the finders, interpolated to the tile."""
-    levelled = []
-    for raw, (cx, cy) in zip(patches, _TILE_CENTERS):
-        lit, dark = reference.at(cx, cy)
-        scale = lit - dark
-        if scale != 0.0:
-            levelled.append([(value - dark) / scale for value in raw])
-        else:
-            levelled.append([ieee_div(value - dark, scale) for value in raw])
-    return _classify(levelled, sigmas, False, _NOT_ERASED)
-
-
-@dataclass(frozen=True)
-class _TileEvidence:
-    """Raw canonical tile patches and finder levels from one decoded capture."""
-
-    patches: Sequence[Sequence[float]]
-    reference: _Reference
-
-
-def _tile_evidence(
-    image: Luma, frame: DecodedFrame, options: DecodeOptions
-) -> Optional[_TileEvidence]:
-    """Sample a usable capture under its independently decoded canonical pose."""
-    if not _supported(image, options) or (
-        frame.inferred_corner is not None and not 0 <= frame.inferred_corner <= 3
-    ):
+def _read_field_at(
+    image: Luma, dst: Sequence[Tuple[float, float]], distortion: float, inferred: Optional[int]
+) -> Optional[_FieldRead]:
+    """The field under the pose with distortion ``distortion`` through ``dst`` (no local
+    read)."""
+    pose = _fit_pose(image, dst, distortion)
+    if pose is None:
         return None
-    project = _projector(image, frame.homography)
-    reference = _reference_levels(project, frame.inferred_corner)
+    project = _projector(image, pose)
+    reference = _reference_levels(project, inferred)
     if reference is None:
         return None
-    return _TileEvidence(_sample_patches(project), reference)
+    levels = _field_levels(project, reference)
+    fields, separation = _read_sectors(levels, _NOT_SKIPPED)
+    return _FieldRead(pose, project, reference, levels, fields, separation)
 
 
-def _levelled_patches(
-    patches: Sequence[Sequence[float]], reference: _Reference
-) -> List[List[float]]:
-    """Level each capture by its own finders before averaging its samples."""
-    levelled = []
-    for raw, (cx, cy) in zip(patches, _TILE_CENTERS):
-        lit, dark = reference.at(cx, cy)
-        levelled.append([ieee_div(value - dark, lit - dark) for value in raw])
-    return levelled
+def _read_field_searching(
+    image: Luma,
+    dst: Sequence[Tuple[float, float]],
+    start: float,
+    inferred: Optional[int],
+    first: Optional[_FieldRead] = None,
+) -> Optional[_FieldRead]:
+    """Reads the field through the finder centres ``dst``, starting from lens distortion
+    ``start``, and searches the distortion while some field lane stays unread: ``start``
+    plus each of :data:`_DISTORTION_STEPS` in turn, then the best +-
+    :data:`_DISTORTION_REFINE`. The pose that decodes the most lanes wins (ties: the
+    clearer separation); the search stops once every lane decodes. Lanes the winning pose
+    still leaves unread are read again from its local levels.
 
-
-def _mean_patches(sets: Sequence[Sequence[Sequence[float]]]) -> List[List[float]]:
-    """Cell-by-cell mean, summed in capture order like the Rust reference."""
-    mean = [[0.0] * _CELLS for _ in range(TILE_COUNT)]
-    for patches in sets:
-        for total, patch in zip(mean, patches):
-            for cell, value in enumerate(patch):
-                total[cell] += value
-    count = float(len(sets))
-    return [[value / count for value in patch] for patch in mean]
-
-
-def _merge_tiles(
-    evidence: Sequence[_TileEvidence], options: DecodeOptions
-) -> Tuple[Optional[LaneResult], Optional[LaneResult]]:
-    """Decode averaged tile lanes; the caller must check their shown-frame headers."""
-    if not evidence:
-        return None, None
-    levelled = _mean_patches([_levelled_patches(e.patches, e.reference) for e in evidence])
-    reads = _classify(levelled, options.template_sigmas, False, _NOT_ERASED)
-    (p_word, p_conf), (k_word, k_conf) = _tile_words(reads)
-    p = _decode_with_erasures(Lane.P, p_word, p_conf)
-    k = _decode_with_erasures(Lane.K, k_word, k_conf)
-    if p is None or k is None:
-        raw = _mean_patches([e.patches for e in evidence])
-        reads = _read_tiles_normalised(raw, options.template_sigmas)
-        (p_word, p_conf), (k_word, k_conf) = _tile_words(reads)
-        if p is None:
-            p = _decode_with_erasures(Lane.P, p_word, p_conf)
-        if k is None:
-            k = _decode_with_erasures(Lane.K, k_word, k_conf)
-    return p, k
-
-
-def _read_tiles_normalised(
-    patches: Sequence[Sequence[float]], sigmas: Sequence[float]
-) -> List[_TileRead]:
-    """The normalised read: every patch and every template is rescaled by its own contrast
-    before they are compared, so the judgement does not depend on absolute levels."""
-    levels = [_patch_levels(raw) for raw in patches]
-    spans = [high - low for low, high in levels]
-    median = _sorted_total(spans)[TILE_COUNT // 2]
-    weak = _WEAK_TILE * median
-    erased = [span < weak for span in spans]
-    # `_rescale(raw, 1.0)` with the levels found above (the same sort, done once)
-    scaled = [_apply_levels(raw, low, high, 1.0) for raw, (low, high) in zip(patches, levels)]
-    return _classify(scaled, sigmas, True, erased)
-
-
-WordConfidence = Tuple[bytearray, List[float]]
-
-
-def _tile_words(reads: Sequence[_TileRead]) -> Tuple[WordConfidence, WordConfidence]:
-    p = bytearray(P_WORD)
-    p_conf = [F64_MAX] * P_WORD
-    k = bytearray(K_WORD)
-    k_conf = [F64_MAX] * K_WORD
-    for tile, read in enumerate(reads):
-        if read.light:
-            p[tile >> 3] |= 1 << (7 - (tile & 7))
-        p_conf[tile >> 3] = f64_min(p_conf[tile >> 3], read.polarity_margin)
-        k[tile >> 1] |= read.glyph << 4 if tile % 2 == 0 else read.glyph
-        k_conf[tile >> 1] = f64_min(
-            k_conf[tile >> 1], f64_min(read.glyph_margin, read.polarity_margin)
-        )
-    return (p, p_conf), (k, k_conf)
-
-
-def _read_tile_lanes(
-    patches: Sequence[Sequence[float]], reference: _Reference, sigmas: Sequence[float]
-) -> Tuple[Optional[LaneResult], Optional[LaneResult]]:
-    """Lanes ``P`` and ``K`` from one set of patches: the level read first, then, for any
-    lane still unreadable, the normalised read."""
-    reads = _read_tiles(patches, reference, sigmas)
-    (p_word, p_conf), (k_word, k_conf) = _tile_words(reads)
-    p = _decode_with_erasures(Lane.P, p_word, p_conf)
-    k = _decode_with_erasures(Lane.K, k_word, k_conf)
-    if p is None or k is None:
-        reads = _read_tiles_normalised(patches, sigmas)
-        (p_word, p_conf), (k_word, k_conf) = _tile_words(reads)
-        if p is None:
-            p = _decode_with_erasures(Lane.P, p_word, p_conf)
-        if k is None:
-            k = _decode_with_erasures(Lane.K, k_word, k_conf)
-    return p, k
-
-
-_CANONICAL = tuple((float(x), float(y)) for x, y in FINDER_CENTERS)
+    ``first``, when given, is the read at ``start`` the caller already made (the read is
+    deterministic, so it is not repeated).
+    """
+    best = first if first is not None else _read_field_at(image, dst, start, inferred)
+    if best is None:
+        return None
+    if best.decoded == SECTORS:
+        return best
+    for step in _DISTORTION_STEPS:
+        read = _read_field_at(image, dst, start + step, inferred)
+        if read is not None and read.better_than(best):
+            best = read
+            if best.decoded == SECTORS:
+                return best
+    centre = best.pose.distortion
+    for k in (centre - _DISTORTION_REFINE, centre + _DISTORTION_REFINE):
+        read = _read_field_at(image, dst, k, inferred)
+        if read is not None and read.better_than(best):
+            best = read
+    return best.finish()
 
 
 def _hypotheses(
     finders: Sequence[Finder], try_mirrored: bool
-) -> List[Tuple[int, bool, Homography]]:
+) -> List[Tuple[int, bool, List[Tuple[float, float]]]]:
+    """The four orientation hypotheses (and four mirrored ones): quarter turns, mirrored,
+    and the finder centres in canonical corner order."""
     out = []
     for mirrored in (False, True):
         if mirrored and not try_mirrored:
@@ -926,9 +935,7 @@ def _hypotheses(
             for i in range(4):
                 q = finders[(rotation + 4 - i) % 4] if mirrored else finders[(i + rotation) % 4]
                 dst.append((q.x, q.y))
-            h = Homography.from_points(_CANONICAL, dst)
-            if h is not None:
-                out.append((rotation, mirrored, h))
+            out.append((rotation, mirrored, dst))
     return out
 
 
@@ -939,22 +946,6 @@ def _supported(image: Luma, options: DecodeOptions) -> bool:
         and image.width * image.height <= options.max_pixels
         and len(image.data) == image.width * image.height
     )
-
-
-def _finish(
-    project: Projector,
-    options: DecodeOptions,
-    rotation: int,
-    mirrored: bool,
-    h: Homography,
-    reference: _Reference,
-    d: Optional[LaneResult],
-) -> DecodedFrame:
-    if d is None:
-        d = _read_lane_d(project, reference)
-    patches = _sample_patches(project)
-    p, k = _read_tile_lanes(patches, reference, options.template_sigmas)
-    return DecodedFrame(homography=h, rotation=rotation, mirrored=mirrored, p=p, k=k, d=d)
 
 
 def _decode(image: Luma, options: DecodeOptions) -> DecodedFrame:
@@ -972,48 +963,70 @@ def _decode(image: Luma, options: DecodeOptions) -> DecodedFrame:
 def _decode_candidate(
     image: Luma, options: DecodeOptions, finder_set: FinderSet
 ) -> Optional[DecodedFrame]:
-    """One candidate finder set: orientation hypotheses ranked by gate score + ``天``
-    score; lane ``D`` under the best three whose gate score is at least 0.2, then the tile
-    lanes under the best four."""
+    """One candidate finder set: orientation hypotheses ranked by gate score; lane ``D``
+    under the best three whose gate score is at least 0.2, then the field lanes under the
+    best four."""
     index = finder_set.inferred
     corners = finder_set.corners
     if index is not None:
         corners = _refine_inferred_corner(image, corners, index)
     scored = []
-    for rotation, mirrored, h in _hypotheses(corners, options.try_mirrored):
+    for rotation, mirrored, dst in _hypotheses(corners, options.try_mirrored):
         inferred = None if index is None else _canonical_corner(index, rotation, mirrored)
-        project = _projector(image, h)
+        pose = _fit_pose(image, dst, 0.0)
+        if pose is None:
+            continue
+        project = _projector(image, pose)
         reference = _reference_levels(project, inferred)
         if reference is None:
             continue
         gate = _gate_score(project, reference)
-        mask = _mask_score(project, reference)
-        scored.append((gate, mask, rotation, mirrored, h, reference, project, inferred))
-    # stable sort, highest score first (Rust: `(b.0 + b.1).total_cmp(&(a.0 + a.1))`)
-    scored.sort(key=lambda entry: total_key(entry[0] + entry[1]), reverse=True)
-    # 1. the ring beacon is the cheapest and strongest orientation check (the order is by
-    #    gate + `天` score, so a weak gate further down does not end the search)
-    for gate, _, rotation, mirrored, h, reference, project, inferred in scored[:3]:
+        scored.append((gate, rotation, mirrored, dst, pose, project, reference, inferred))
+    # stable sort, highest gate score first (Rust: `b.0.total_cmp(&a.0)`)
+    scored.sort(key=lambda entry: total_key(entry[0]), reverse=True)
+    # 1. the ring beacon is the cheapest and strongest orientation check
+    for gate, rotation, mirrored, dst, pose, project, reference, inferred in scored[:3]:
         if gate < 0.2:
             continue
         d = _read_lane_d(project, reference)
         if d is not None:
-            frame = _finish(project, options, rotation, mirrored, h, reference, d)
-            return replace(frame, inferred_corner=inferred)
-    # 2. fall back to the tile lanes under the most promising orientations
-    for _, _, rotation, mirrored, h, reference, project, inferred in scored[:4]:
-        patches = _sample_patches(project)
-        p, k = _read_tile_lanes(patches, reference, options.template_sigmas)
-        if p is not None or k is not None:
+            read = _read_field_searching(image, dst, 0.0, inferred)
             return DecodedFrame(
-                homography=h,
+                pose=pose if read is None else read.pose,
                 rotation=rotation,
                 mirrored=mirrored,
-                p=p,
-                k=k,
-                d=_read_lane_d(project, reference),
+                d=d,
+                fields=_NO_FIELDS if read is None else tuple(read.fields),
                 inferred_corner=inferred,
             )
+    # 2. fall back to the field lanes under the most promising orientations: a wrong
+    #    orientation reads permuted petals, which no field codeword accepts. Strong lens
+    #    distortion can hide both lane D and the field from a plain pose, so the distortion
+    #    is searched under the best orientation whose gates line up even when its plain
+    #    pose reads nothing.
+    for position, (gate, rotation, mirrored, dst, _, _, _, inferred) in enumerate(scored[:4]):
+        plain = _read_field_at(image, dst, 0.0, inferred)
+        if plain is None:
+            continue
+        confident = position == 0 and gate >= 0.2
+        # the local read costs a sort per cell: only the best orientation gets it for free
+        if plain.decoded == SECTORS:
+            read = plain
+        elif plain.decoded == 0 and not confident:
+            read = plain.finish() if position == 0 else plain
+        else:
+            searched = _read_field_searching(image, dst, 0.0, inferred, plain)
+            read = searched if searched is not None else plain.finish()
+        if read.decoded == 0:
+            continue
+        return DecodedFrame(
+            pose=read.pose,
+            rotation=rotation,
+            mirrored=mirrored,
+            d=_read_lane_d(read.project, read.reference),
+            fields=tuple(read.fields),
+            inferred_corner=inferred,
+        )
     return None
 
 
@@ -1022,8 +1035,7 @@ def _track(image: Luma, previous: DecodedFrame, options: DecodeOptions) -> Optio
     # a frame built by the caller may name a corner that does not exist
     if not _supported(image, options) or (corner is not None and not 0 <= corner <= 3):
         return None
-    h0 = previous.homography
-    apply = h0.apply
+    apply = previous.pose.apply
     expected = []
     for cx, cy in FINDER_CENTERS:
         x, y = apply(cx, cy)
@@ -1075,32 +1087,21 @@ def _track(image: Luma, previous: DecodedFrame, options: DecodeOptions) -> Optio
     corners: Tuple[Finder, ...] = tuple(f for f in found if f is not None)
     if inferred is not None:
         corners = _refine_inferred_corner(image, corners, inferred)
-    h = Homography.from_points(_CANONICAL, [(f.x, f.y) for f in corners])
-    if h is None:
+    points = [(f.x, f.y) for f in corners]
+    read = _read_field_searching(image, points, previous.pose.distortion, inferred)
+    if read is None:
         return None
-    project = _projector(image, h)
-    reference = _reference_levels(project, inferred)
-    if reference is None:
-        return None
-    d = _read_lane_d(project, reference)
-    patches = _sample_patches(project)
-    p, k = _read_tile_lanes(patches, reference, options.template_sigmas)
-    if p is None and k is None and d is None:
+    d = _read_lane_d(read.project, read.reference)
+    if d is None and read.decoded == 0:
         return None
     return DecodedFrame(
-        homography=h,
+        pose=read.pose,
         rotation=previous.rotation,
         mirrored=previous.mirrored,
-        p=p,
-        k=k,
         d=d,
+        fields=tuple(read.fields),
         inferred_corner=inferred,
     )
-
-
-def _scale(h: Homography, factor: int) -> Homography:
-    f = float(factor)
-    return Homography((f, 0.0, 0.0, 0.0, f, 0.0, 0.0, 0.0, 1.0)).compose(h)
 
 
 def _downscale_factor(image: Luma, max_side: Optional[int]) -> int:
@@ -1119,10 +1120,11 @@ def decode_frame(
 
     Tries the finder candidates of :func:`iroha_petal.locate.candidates` in order
     and returns the first that reads. For each, the orientation hypotheses (four
-    quarter turns, optionally mirrored) are ranked by the ring gates plus the
-    ``天``; lane ``D`` is tried under the best three whose gate score is at least
-    0.2, then the tile lanes under the best four. A candidate with a hidden
-    corner blossom reports it in :attr:`DecodedFrame.inferred_corner`.
+    quarter turns, optionally mirrored) are ranked by the ring gates; lane ``D``
+    is tried under the best three whose gate score is at least 0.2 (the field is
+    then read under the winner, with a lens-distortion search when a field lane
+    stays unread), then the field lanes under the best four. A candidate with a
+    hidden corner blossom reports it in :attr:`DecodedFrame.inferred_corner`.
 
     Raises :class:`DecodeError` with :attr:`DecodeErrorKind.UNSUPPORTED_IMAGE`
     for unusable images, :attr:`DecodeErrorKind.NO_FINDERS` when no code is
@@ -1130,8 +1132,8 @@ def decode_frame(
     yields a readable lane.
 
     ``max_side`` (off by default) first box-filters images whose longer side
-    exceeds it by the smallest integer factor that fits; the returned
-    homography still maps into the original image's pixel coordinates.
+    exceeds it by the smallest integer factor that fits; the returned pose
+    still maps into the original image's pixel coordinates.
     """
     if options is None:
         options = DecodeOptions()
@@ -1139,7 +1141,7 @@ def decode_frame(
     if factor == 1:
         return _decode(image, options)
     frame = _decode(image.downscaled(factor), options)
-    return replace(frame, homography=_scale(frame.homography, factor))
+    return replace(frame, pose=frame.pose.scaled(factor))
 
 
 def track_frame(
@@ -1154,11 +1156,12 @@ def track_frame(
     when its blossom is re-found within a quarter diameter of that prediction (so a thumb
     beside it does not count). When exactly one corner is missing it is placed at the
     prediction and refined against the rings like an inferred corner. The orientation is
-    kept from the previous frame. Returns ``None`` when the image is unusable, the
-    previous pose is broken, two corners are lost or no lane decodes; the caller then
-    runs :func:`decode_frame`.
+    kept from the previous frame and its lens distortion is the starting point of the
+    distortion search. Returns ``None`` when the image is unusable, the previous pose is
+    broken, two corners are lost or no lane decodes; the caller then runs
+    :func:`decode_frame`.
 
-    ``previous.homography`` must map into the pixel coordinates of ``image``.
+    ``previous.pose`` must map into the pixel coordinates of ``image``.
     """
     if options is None:
         options = DecodeOptions()
@@ -1166,67 +1169,123 @@ def track_frame(
 
 
 def decode_frame_at(
-    image: Luma, homography: Homography, options: Optional[DecodeOptions] = None
+    image: Luma, pose: Pose, options: Optional[DecodeOptions] = None
 ) -> Optional[DecodedFrame]:
-    """Read all lanes with a known canvas-to-pixel homography (no finder search).
+    """Read all lanes with a known canvas-to-pixel pose (no finder search, no distortion
+    search).
 
     Returns ``None`` when the image is unusable (see
     :attr:`DecodeErrorKind.UNSUPPORTED_IMAGE`) or the finder reference levels
-    are too weak. Used by trackers that already know the pose, by refinement
-    passes and by qualification tooling with a ground-truth pose.
+    are too weak. The reference levels come from all four corner finders, so a
+    frame whose corner blossom is hidden is refused here; :func:`decode_frame`
+    and :func:`track_frame` read such frames by inferring that corner. Used by
+    refinement passes and by qualification tooling with a ground-truth pose.
     """
     if options is None:
         options = DecodeOptions()
     if not _supported(image, options):
         return None
-    project = _projector(image, homography)
+    project = _projector(image, pose)
     reference = _reference_levels(project)
     if reference is None:
         return None
-    return _finish(project, options, 0, False, homography, reference, None)
+    fields, _ = _read_fields(_field_levels(project, reference), _NOT_SKIPPED)
+    return DecodedFrame(
+        pose=pose,
+        rotation=0,
+        mirrored=False,
+        d=_read_lane_d(project, reference),
+        fields=tuple(fields),
+    )
+
+
+class FieldEvidence:
+    """What one capture shows of a frame's petal field: the level of every field cell
+    sampled under the capture's decoded pose and normalised by that capture's finder
+    levels. Captures of one shown frame merge with :func:`merge_fields`."""
+
+    __slots__ = ("levels",)
+
+    def __init__(self, levels: Sequence[float]) -> None:
+        levels = tuple(float(v) for v in levels)
+        if len(levels) != FIELD_CELLS:
+            raise ValueError("field evidence holds one level per field cell")
+        #: The normalised level of every field cell.
+        self.levels: Tuple[float, ...] = levels
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, FieldEvidence):
+            return NotImplemented
+        return self.levels == other.levels
+
+    def __repr__(self) -> str:
+        return f"FieldEvidence({len(self.levels)} levels)"
+
+
+def field_evidence(
+    image: Luma, frame: DecodedFrame, options: Optional[DecodeOptions] = None
+) -> Optional[FieldEvidence]:
+    """The field evidence of ``image`` under the pose ``frame`` was decoded with.
+
+    Returns ``None`` when the image is unusable (see
+    :attr:`DecodeErrorKind.UNSUPPORTED_IMAGE`), the frame names a corner that does not
+    exist, or the finder levels under that pose are too weak.
+    """
+    if options is None:
+        options = DecodeOptions()
+    corner = frame.inferred_corner
+    # a frame built by the caller may name a corner that does not exist
+    if not _supported(image, options) or (corner is not None and not 0 <= corner <= 3):
+        return None
+    project = _projector(image, frame.pose)
+    reference = _reference_levels(project, corner)
+    if reference is None:
+        return None
+    return FieldEvidence(_field_levels(project, reference))
+
+
+def merge_fields(
+    evidence: Sequence[FieldEvidence], skip: Sequence[bool] = _NOT_SKIPPED
+) -> Tuple[Optional[LaneResult], ...]:
+    """The field lanes from several captures of one shown frame: the cell-by-cell mean of
+    their levels (summed in capture order, then divided by the number of captures), read
+    as one capture's levels are, local read included.
+
+    Averaging cancels the sensor noise, banding and shake that differ between captures;
+    one evidence reads exactly the field lanes :func:`decode_frame` read from that
+    capture's pose. The caller checks that every evidence comes from captures of the same
+    shown frame: a lane read here names its frame in its own header. Sectors in ``skip``
+    are not read.
+    """
+    if not evidence:
+        return _NO_FIELDS
+    if len(skip) != SECTORS:
+        raise ValueError("skip names the four sectors")
+    mean = [0.0] * FIELD_CELLS
+    for capture in evidence:
+        mean = list(map(add, mean, capture.levels))
+    count = float(len(evidence))
+    mean = [value / count for value in mean]
+    fields, _ = _read_fields(mean, skip)
+    return tuple(fields)
 
 
 def observed_cells(
     image: Luma, frame: DecodedFrame, options: Optional[DecodeOptions] = None
 ) -> Optional[FrameCells]:
-    """Build the cells a decoder believes it saw, for diagnostics.
-
-    Tiles are taken from the level read (the one that judges against the finder levels),
-    even for a frame whose lanes were rescued by the normalised read.
-    """
+    """Build the cells a decoder believes it saw under ``frame``'s pose, for diagnostics:
+    every codeword thresholded as the first read of :func:`decode_frame` thresholds it
+    (no local read). The petals are left unturned
+    (:func:`~iroha_petal.turns.observed_turns` reports the turns)."""
     if options is None:
         options = DecodeOptions()
-    if not _supported(image, options):
+    evidence = field_evidence(image, frame, options)
+    if evidence is None:
         return None
-    project = _projector(image, frame.homography)
+    project = _projector(image, frame.pose)
     reference = _reference_levels(project, frame.inferred_corner)
     if reference is None:
         return None
-    patches = _sample_patches(project)
-    reads = _read_tiles(patches, reference, options.template_sigmas)
-    (p, _), (k, _) = _tile_words(reads)
     d, _ = _read_dots(project, reference)
-    return FrameCells.from_words(bytes(p), bytes(k), bytes(d))
-
-
-def tile_match_error(
-    image: Luma, frame: DecodedFrame, options: Optional[DecodeOptions] = None
-) -> Optional[float]:
-    """Mean squared tile-match error of the level read, a quick image-quality indicator.
-
-    It can be large for a frame whose lanes were rescued by the normalised read, which is
-    the point: the finder levels did not describe that picture.
-    """
-    if options is None:
-        options = DecodeOptions()
-    if not _supported(image, options):
-        return None
-    project = _projector(image, frame.homography)
-    reference = _reference_levels(project, frame.inferred_corner)
-    if reference is None:
-        return None
-    patches = _sample_patches(project)
-    reads = _read_tiles(patches, reference, options.template_sigmas)
-    if not reads:
-        return NAN
-    return _sequential_sum([r.error for r in reads]) / len(reads)
+    words = [bytes(_read_word(evidence.levels, sector, 0.0)[0]) for sector in range(SECTORS)]
+    return FrameCells.from_words(bytes(d), words)

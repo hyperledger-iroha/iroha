@@ -20,7 +20,7 @@ const FIXED: [&str; 9] = [
 
 /// Credential-free local replay of retained completed allocation originals.
 #[derive(Debug, clap::Args)]
-pub(crate) struct VerifyAuthority {
+pub struct VerifyAuthority {
     /// Direct current-owner private bundle directory, with its original inventory.
     #[arg(long)]
     bundle: PathBuf,
@@ -292,6 +292,9 @@ impl VerifiedDataspaceAuthority {
         &self.projection
     }
     /// Serialize the verified diagnostic projection with lossless decimal IDs and heights.
+    ///
+    /// # Errors
+    /// Returns an error if the authority projection cannot be encoded.
     pub fn projection_bytes(&self) -> Result<Vec<u8>> {
         Ok(json::to_vec(&self.projection)?)
     }
@@ -465,7 +468,6 @@ fn verify(
     }
     let (phases, peers) =
         completion.replay(&plan, &effective, &prepared, &retained_tips, &mut read)?;
-    drop(read);
     require(
         consumed.len() == inventory.files.len(),
         "authority inventory contains unrelated or unconsumed originals",
@@ -527,7 +529,7 @@ fn revalidate_directory(journal: &Journal, inventory: &Inventory) -> Result<()> 
         })
         .collect::<Result<BTreeSet<_>>>()?;
     require(
-        names == closure_names(inventory) && journal._lock.metadata()?.len() == 0,
+        names == closure_names(inventory) && journal.lock.metadata()?.len() == 0,
         "authority directory contains missing or unrelated files",
     )?;
     for row in &inventory.files {

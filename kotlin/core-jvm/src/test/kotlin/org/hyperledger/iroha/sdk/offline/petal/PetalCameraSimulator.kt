@@ -154,7 +154,11 @@ internal object PetalCameraSimulator {
         return fitted
     }
 
-    /** Captures [source] (a rendered frame) with the simulated camera. */
+    /**
+     * Captures [source] (a rendered card, see [PetalRenderer.render], or a bare square) with the
+     * simulated camera. The camera's geometry is in square coordinates (the square's top-left corner
+     * is the origin); a card's bands lie above and below it.
+     */
     fun capture(source: PetalRgb, config: PetalCaptureConfig): PetalLuma {
         val w = config.width
         val h = config.height
@@ -171,9 +175,10 @@ internal object PetalCameraSimulator {
             Math.pow(value, 2.2)
         }
         val scale = srcW / 1024.0
+        val top = if (srcH > srcW) PetalLayout.SQUARE_TOP else 0.0
         fun sampleSource(x: Double, y: Double): Double {
             val sx = x * scale
-            val sy = y * scale
+            val sy = (y + top) * scale
             if (sx < 0.0 || sy < 0.0 || sx >= srcW || sy >= srcH) return 0.0
             val fx = (sx - 0.5).coerceIn(0.0, (srcW - 1).toDouble())
             val fy = (sy - 0.5).coerceIn(0.0, (srcH - 1).toDouble())

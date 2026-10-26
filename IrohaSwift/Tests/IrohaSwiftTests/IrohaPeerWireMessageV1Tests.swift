@@ -26,18 +26,23 @@ final class IrohaPeerWireMessageV1Tests: XCTestCase {
     }
 
     func testWireLimitHardCeilingsRejectLargerAllocationPolicies() {
-        XCTAssertEqual(IrohaPeerWireLimitsV1.maximumWalletProfileBytes, 14_146)
+        let ceiling = IrohaPeerWireLimitsV1.maximumWalletProfileBytes
+        XCTAssertEqual(ceiling, 14_146)
         XCTAssertTrue(IrohaPeerWireLimitsV1.areValid(
             maximumCanonicalBytes: 14_146,
             maximumWalletEncodedBytes: 14_146
         ))
+        XCTAssertTrue(IrohaPeerWireLimitsV1.areValid(
+            maximumCanonicalBytes: 14_113,
+            maximumWalletEncodedBytes: 14_113
+        ))
         XCTAssertFalse(IrohaPeerWireLimitsV1.areValid(
-            maximumCanonicalBytes: 14_147,
+            maximumCanonicalBytes: ceiling + 1,
             maximumWalletEncodedBytes: 14_146
         ))
         XCTAssertFalse(IrohaPeerWireLimitsV1.areValid(
             maximumCanonicalBytes: 14_146,
-            maximumWalletEncodedBytes: 14_147
+            maximumWalletEncodedBytes: ceiling + 1
         ))
     }
 

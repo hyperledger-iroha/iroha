@@ -145,8 +145,8 @@ pub fn peer(
     name: &str,
     port: u16,
     public_key: iroha_crypto::PublicKey,
-) -> iroha_data_model::peer::Peer {
-    iroha_data_model::peer::Peer::new(
+) -> iroha_model_base::peer::Peer {
+    iroha_model_base::peer::Peer::new(
         iroha_primitives::addr::SocketAddrHost {
             host: name.to_owned().into(),
             port,
@@ -158,7 +158,7 @@ pub fn peer(
 #[allow(single_use_lifetimes)]
 pub fn topology<'a>(
     peers: impl Iterator<Item = &'a PeerInfo>,
-) -> std::collections::BTreeSet<iroha_data_model::peer::Peer> {
+) -> std::collections::BTreeSet<iroha_model_base::peer::Peer> {
     peers
         .map(|peer_info| {
             peer(

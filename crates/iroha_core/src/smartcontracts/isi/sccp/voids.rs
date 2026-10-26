@@ -99,7 +99,7 @@ pub fn releases_inline(sender: &AccountId) -> bool {
 /// Fails when SCCP is absent, the revision is unknown or `Staged`, the proof does not verify
 /// or does not prove a void of this deployment, or [`apply_void`] fails.
 pub fn execute_submit_void(
-    instruction: SubmitSccpOutboundVoidV1,
+    instruction: &SubmitSccpOutboundVoidV1,
     _authority: &AccountId,
     state_transaction: &mut StateTransaction<'_, '_>,
 ) -> Result<(), Error> {
@@ -111,7 +111,7 @@ pub fn execute_submit_void(
     let deployment = store::routes::get(world, &network)
         .and_then(|route| route.revisions.get(&revision))
         .filter(|record| record.activation != SccpRouteActivationV1::Staged)
-        .map(|record| record.deployment.clone())
+        .map(|record| record.deployment)
         .ok_or_else(|| refuse(format_args!("revision {revision} does not accept proofs")))?;
     let verified =
         light_clients::verify_source_proof(state_transaction, network, &instruction.proof)?;
@@ -236,7 +236,7 @@ mod tests {
         let state = blank_state();
         let mut block = state.block(header(3));
         let mut stx = block.transaction();
-        let error = execute_submit_void(SampleInstructions::void(), &authority(1), &mut stx)
+        let error = execute_submit_void(&(SampleInstructions::void()), &authority(1), &mut stx)
             .expect_err("no SCCP");
         assert!(error.to_string().contains("does not exist"), "{error}");
     }

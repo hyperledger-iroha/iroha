@@ -96,10 +96,7 @@ fn prepare_scheduled_reward_fixture(
     two_validators: bool,
 ) -> ScheduledRewardFixture {
     let deployer = account(55);
-    let config = crate::sumeragi::test_chain::TestChainConfig::new(
-        validation_fee_payout_world(&deployer),
-        EARNING_TIME - 30_000,
-    );
+    let config = validation_fee_payout_config(&deployer, EARNING_TIME - 30_000);
     let (mut chain, _, _, _) =
         signed_original_fixtures::signed_fee_registry_root_fixture_with_config(config);
     while chain.height() < 19 {
@@ -878,7 +875,7 @@ fn signed_nominator_claim_batch_rolls_back_and_stale_parallel_quotes_cannot_pay(
 
 /// Execute real scheduled funding for two validators, replay unfinished accrual,
 /// then withdraw both validators' and both nominators' exact signed entitlements.
-pub(crate) fn scheduled_two_validator_reward_replay() {
+pub fn scheduled_two_validator_reward_replay() {
     scheduled_conversion_automatically_funds_nominator_signed_claims(false, true);
 }
 

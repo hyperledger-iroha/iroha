@@ -1,4 +1,4 @@
-//! Genuine online Load-charge and quoted Unload execution through ordinary StateExecutor.
+//! Genuine online Load-charge and quoted Unload execution through ordinary `StateExecutor`.
 //!
 //! Each scenario starts a fresh component chain from the same genuine dedicated target.
 //! Real installed Bootstrap/Unload proofs are mandatory; no World rows or verifier results
@@ -199,7 +199,7 @@ fn execute(
     setup: &mut ExecutedKagemushaSetup,
     seed: u8,
     instruction: KagemushaWalletLedgerV1,
-    expected: Option<TransactionRejectionReason>,
+    expected: Option<&TransactionRejectionReason>,
 ) -> [u8; 32] {
     let height = setup.chain.height() + 1;
     let tx = setup
@@ -212,7 +212,7 @@ fn execute(
     );
     let committed = setup.chain.committed(height);
     assert_eq!(committed.block().external_transactions().count(), 1);
-    assert_eq!(committed.block().output_error(0), expected.as_ref());
+    assert_eq!(committed.block().output_error(0), expected);
     hash
 }
 
@@ -387,7 +387,7 @@ fn actual_charged_load_is_atomic_and_retains_exact_receipt_through_replay() {
         &mut setup,
         41,
         good.clone(),
-        Some(ledger_error("ledger record unavailable")),
+        Some(&ledger_error("ledger record unavailable")),
     );
     assert_eq!(ledger_rows(&setup), before);
     require_conservation(&setup, [900, 0, 0, 100]);
@@ -423,7 +423,7 @@ fn actual_charged_load_is_atomic_and_retains_exact_receipt_through_replay() {
             )),
         ),
     ] {
-        execute(&mut setup, 41, instruction, Some(reason));
+        execute(&mut setup, 41, instruction, Some(&reason));
         assert_eq!(
             ledger_rows(&setup),
             before,
@@ -441,7 +441,7 @@ fn actual_charged_load_is_atomic_and_retains_exact_receipt_through_replay() {
         &mut setup,
         41,
         good.clone(),
-        Some(ledger_error("permanent replay key conflicts")),
+        Some(&ledger_error("permanent replay key conflicts")),
     );
     assert_eq!(ledger_rows(&setup), rows);
     require_conservation(&setup, [797, 0, 3, 200]);
@@ -456,14 +456,14 @@ fn actual_charged_load_is_atomic_and_retains_exact_receipt_through_replay() {
         &mut setup,
         41,
         good,
-        Some(ledger_error("permanent replay key conflicts")),
+        Some(&ledger_error("permanent replay key conflicts")),
     );
     let stale = load_command(&input, &charges.load, setup.recipients[1].clone(), 250);
     execute(
         &mut setup,
         41,
         stale,
-        Some(ledger_error("permanent replay key conflicts")),
+        Some(&ledger_error("permanent replay key conflicts")),
     );
     assert_eq!(ledger_rows(&setup), rows);
     require_conservation(&setup, [797, 0, 3, 200]);
@@ -513,7 +513,7 @@ fn actual_charged_unload_pays_account_and_beneficiary_exactly_once() {
                 input.scheme.scheme_id(),
                 Action::Unload(norito::encode_canonical(claim).unwrap()),
             ),
-            Some(reason),
+            Some(&reason),
         );
         assert_eq!(ledger_rows(&setup), before);
         require_conservation(&setup, [900, 0, 0, 100]);
@@ -557,7 +557,7 @@ fn actual_charged_unload_pays_account_and_beneficiary_exactly_once() {
                 input.scheme.scheme_id(),
                 Action::Unload(norito::encode_canonical(claim).unwrap()),
             ),
-            Some(reason),
+            Some(&reason),
         );
         assert_eq!(ledger_rows(&setup), rows);
         require_conservation(&setup, [995, 0, 5, 0]);

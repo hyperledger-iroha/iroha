@@ -160,7 +160,7 @@ fn kagami_build_command(cargo: &str, repo: &Path, target_dir: &Path, profile: &s
         .arg("iroha_kagami")
         .arg("--bin")
         .arg("kagami")
-        .env("CARGO_TARGET_DIR", &target_dir);
+        .env("CARGO_TARGET_DIR", target_dir);
     if profile != "debug" {
         command.arg("--profile").arg(profile);
     }

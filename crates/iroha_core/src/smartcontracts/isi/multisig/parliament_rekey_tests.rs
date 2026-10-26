@@ -139,7 +139,7 @@ fn exhausted_validation_fee_attempt_for_rekey_test(
             .record_hidden_sortition_capacity_failure_batch(
                 governance_attempt_id,
                 registrations,
-                Vec::new(),
+                &[],
             )
             .expect("exhaust hidden-electorate capacity for rejected-attempt fixture");
         attempt
@@ -241,7 +241,7 @@ fn account_rekey_rejects_active_parliament_candidate_without_partial_mutation() 
                 sequence: 0,
                 request,
             }],
-            candidates,
+            &candidates,
         )
         .expect("freeze active Parliament candidate snapshot");
     tx.world
@@ -291,11 +291,8 @@ fn account_rekey_rejects_immutable_validation_fee_authorization_without_partial_
         old_account,
         "register fee proposal operator"
     );
-    let proposal = validation_fee_policy_proposal_for_rekey_test(
-        &old_account,
-        treasury,
-        tx.network_id.clone(),
-    );
+    let proposal =
+        validation_fee_policy_proposal_for_rekey_test(&old_account, treasury, tx.network_id);
     let proposal_id = proposal.fingerprint();
     let attempt = crate::governance::parliament::enacted_parliament_attempt_for_testing(
         &proposal,
@@ -522,7 +519,7 @@ fn account_rekey_rejects_terminal_validation_fee_without_proven_exhaustion() {
     let proposal = validation_fee_policy_proposal_for_rekey_test(
         &old_account,
         new_account_id(&checked_keypair()),
-        tx.network_id.clone(),
+        tx.network_id,
     );
     let proposal_id = proposal.fingerprint();
     tx.world
@@ -586,7 +583,7 @@ fn account_rekey_preserves_exhausted_terminal_validation_fee_history() {
     let proposal = validation_fee_policy_proposal_for_rekey_test(
         &old_account,
         new_account_id(&checked_keypair()),
-        tx.network_id.clone(),
+        tx.network_id,
     );
     let proposal_id = proposal.fingerprint();
     let proposal_bytes = norito::encode_canonical(&proposal)

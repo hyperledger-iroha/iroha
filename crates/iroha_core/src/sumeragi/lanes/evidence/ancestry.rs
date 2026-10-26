@@ -81,9 +81,7 @@ impl<Config: Borrow<HeightConfig>> LaneAncestry<Config> {
                 || pinned.epoch.authority_generation != Hash32(genesis.result)
                 || pinned.epoch.first_height != 0
                 || pinned.epoch.last_height != u64::MAX
-                || !iroha_data_model::block::consensus::is_valid_committee_size(
-                    pinned.committee.n(),
-                )
+                || !iroha_model_base::topology::is_valid_committee_size(pinned.committee.n())
             {
                 return Err(LaneAncestryError::Authority);
             }

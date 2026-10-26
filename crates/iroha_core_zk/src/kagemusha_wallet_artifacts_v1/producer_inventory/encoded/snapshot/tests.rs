@@ -12,7 +12,7 @@ fn physical_capture_io_distinguishes_unavailability_from_corruption() {
         ErrorKind::UnexpectedEof,
     ] {
         assert!(matches!(
-            capture_io(io::Error::from(kind)),
+            capture_io(&io::Error::from(kind)),
             Error::Inventory
         ));
     }
@@ -24,14 +24,14 @@ fn physical_capture_io_distinguishes_unavailability_from_corruption() {
         ErrorKind::Other,
     ] {
         assert!(matches!(
-            capture_io(io::Error::from(kind)),
+            capture_io(&io::Error::from(kind)),
             Error::Unavailable
         ));
     }
 }
 
 fn fixture(
-    raws: &[&[u8]],
+    originals: &[&[u8]],
 ) -> (
     tempfile::TempDir,
     PrivateDirectory,
@@ -41,7 +41,7 @@ fn fixture(
     let root =
         PrivateDirectory::open_or_create(temp.path().canonicalize().unwrap().join("data")).unwrap();
     let mut entries = Vec::new();
-    for raw in raws {
+    for raw in originals {
         let stored = zstd::stream::encode_all(*raw, 1).unwrap();
         let row = EncodedOriginalV1 {
             original: BlobV1::of(raw),
@@ -65,13 +65,13 @@ fn fixture(
 
 #[test]
 fn snapshot_reads_exact_originals_repeatedly_without_persisting_decoded_data() {
-    let raws: &[&[u8]] = &[b"first exact original", b"second exact original"];
-    let (_temp, root, mut source) = fixture(raws);
+    let originals: &[&[u8]] = &[b"first exact original", b"second exact original"];
+    let (_temp, root, mut source) = fixture(originals);
     let before = root.entries(10).unwrap();
     source
         .with_snapshot::<_, Error>(|snapshot| {
             for _ in 0..3 {
-                for raw in raws {
+                for raw in originals {
                     let mut reader = snapshot.open(BlobV1::of(raw).sha256)?;
                     let mut bytes = Vec::new();
                     reader.read_to_end(&mut bytes).unwrap();
@@ -82,17 +82,17 @@ fn snapshot_reads_exact_originals_repeatedly_without_persisting_decoded_data() {
             Ok(())
         })
         .unwrap();
-    assert_eq!(source.observed.lock().unwrap().len(), raws.len());
+    assert_eq!(source.observed.lock().unwrap().len(), originals.len());
     assert_eq!(root.entries(10).unwrap(), before);
     // Runtime reads continue through the same observed native directory owner.
-    let digest = BlobV1::of(raws[0]).sha256;
+    let digest = BlobV1::of(originals[0]).sha256;
     let mut bytes = Vec::new();
     source
         .open(digest)
         .unwrap()
         .read_to_end(&mut bytes)
         .unwrap();
-    assert_eq!(bytes, raws[0]);
+    assert_eq!(bytes, originals[0]);
     std::fs::rename(
         root.path().join(hex::encode(digest)),
         root.path().join("old"),
@@ -103,8 +103,8 @@ fn snapshot_reads_exact_originals_repeatedly_without_persisting_decoded_data() {
 
 #[test]
 fn snapshot_shares_one_immutable_view_with_concurrent_readers_and_live_reads_do_not() {
-    let raws: &[&[u8]] = &[b"first shared original", b"second shared original"];
-    let (_temp, root, source) = fixture(raws);
+    let originals: &[&[u8]] = &[b"first shared original", b"second shared original"];
+    let (_temp, root, source) = fixture(originals);
     // A live directory keeps its per-read custody checks on the thread holding it.
     assert!(source.shared_view().is_none());
     let before = root.entries(10).unwrap();
@@ -115,7 +115,7 @@ fn snapshot_shares_one_immutable_view_with_concurrent_readers_and_live_reads_do_
                 for _ in 0..4 {
                     scope.spawn(|| {
                         for _ in 0..3 {
-                            for raw in raws {
+                            for raw in originals {
                                 let mut bytes = Vec::new();
                                 view.open_shared(BlobV1::of(raw).sha256)
                                     .unwrap()
@@ -134,14 +134,14 @@ fn snapshot_shares_one_immutable_view_with_concurrent_readers_and_live_reads_do_
             // Every reader has joined; the exclusive handle reads the same bytes.
             let mut bytes = Vec::new();
             snapshot
-                .open(BlobV1::of(raws[1]).sha256)?
+                .open(BlobV1::of(originals[1]).sha256)?
                 .read_to_end(&mut bytes)
                 .unwrap();
-            assert_eq!(bytes, raws[1]);
+            assert_eq!(bytes, originals[1]);
             Ok(())
         })
         .unwrap();
-    assert_eq!(source.observed.lock().unwrap().len(), raws.len());
+    assert_eq!(source.observed.lock().unwrap().len(), originals.len());
     assert_eq!(root.entries(10).unwrap(), before);
 }
 

@@ -30,8 +30,8 @@ enum PetalTestSupport {
         return object
     }
 
-    static let streamFixture: [String: Any]? = try? loadJSON("petal_stream_v1.json")
-    static let capturesFixture: [String: Any]? = try? loadJSON("petal_captures_v1.json")
+    static let streamFixture: [String: Any]? = try? loadJSON("petal_stream_v5.json")
+    static let capturesFixture: [String: Any]? = try? loadJSON("petal_captures_v5.json")
 
     static func object(_ value: [String: Any], _ key: String) throws -> [String: Any] {
         guard let object = value[key] as? [String: Any] else { throw Failure.malformed(key) }
@@ -95,6 +95,16 @@ enum PetalTestSupport {
         bytes.map { String(format: "%02x", $0) }.joined()
     }
 
+    /// One flag per field cell, cell 0 in the most significant bit of byte 0.
+    static func flags(_ bitmap: [UInt8]) -> [Bool] {
+        bits(bitmap, count: PetalLayout.fieldCells)
+    }
+
+    /// The first `count` bits of `bitmap`, most significant bit of byte 0 first.
+    static func bits(_ bitmap: [UInt8], count: Int) -> [Bool] {
+        (0..<count).map { (bitmap[$0 / 8] >> (7 - $0 % 8)) & 1 == 1 }
+    }
+
     /// Inflates a zlib (RFC 1950) stream of exactly `expectedLength` bytes.
     static func inflate(_ compressed: Data, expectedLength: Int) throws -> [UInt8] {
         var stream = z_stream()
@@ -122,7 +132,7 @@ enum PetalTestSupport {
     }
 
     /// Decodes a capture, tracking-pair or negative entry of
-    /// `petal_captures_v1.json` (`key` names the zlib + base64 plane).
+    /// `petal_captures_v5.json` (`key` names the zlib + base64 plane).
     static func luma(of entry: [String: Any], key: String = "luma_zlib_base64") throws -> PetalLuma {
         let width = try integer(entry, "width")
         let height = try integer(entry, "height")
@@ -157,8 +167,23 @@ enum PetalTestSupport {
         try transform(image) { x, y in (image.width - 1 - x, y) }
     }
 
-    /// The software render of `frame` as luma.
+    /// The software render of the square of `frame` (no katakana bands) as
+    /// luma: the decoder tests work on bare squares.
     static func render(
+        _ encoder: PetalStreamEncoder,
+        frame: UInt16,
+        size: Int,
+        supersample: Int
+    ) throws -> PetalLuma {
+        try PetalRenderer.renderSquare(
+            encoder.cells(frame: frame),
+            options: PetalRenderOptions(size: size, supersample: supersample)
+        ).luma()
+    }
+
+    /// The software render of the whole card of `frame` as luma, `size`
+    /// pixels wide.
+    static func renderCard(
         _ encoder: PetalStreamEncoder,
         frame: UInt16,
         size: Int,
@@ -170,6 +195,30 @@ enum PetalTestSupport {
         ).luma()
     }
 
+    /// A landscape camera frame of a phone held upright: `image` (a card
+    /// render) turned by `degrees` about its centre (bilinear resampling), at
+    /// its own scale, centred on a dim background of `width` × `height`.
+    static func turnedCamera(_ image: PetalLuma, degrees: Double, width: Int, height: Int) throws -> PetalLuma {
+        let angle = degrees * Double.pi / 180
+        let (s, c) = (sin(angle), cos(angle))
+        let halfWidth = Double(image.width) / 2
+        let halfHeight = Double(image.height) / 2
+        var pixels = [UInt8](repeating: 9, count: width * height)
+        for y in 0..<height {
+            for x in 0..<width {
+                let u = Double(x) + 0.5 - Double(width) / 2
+                let v = Double(y) + 0.5 - Double(height) / 2
+                // the source point the camera pixel shows: the inverse turn
+                let sx = c * u + s * v + halfWidth
+                let sy = -s * u + c * v + halfHeight
+                if sx >= 0, sy >= 0, sx < Double(image.width), sy < Double(image.height) {
+                    pixels[y * width + x] = UInt8(image.sample(x: sx, y: sy).rounded())
+                }
+            }
+        }
+        return try PetalLuma(width: width, height: height, pixels: pixels)
+    }
+
     /// Feeds clean lanes of `frame` straight into an assembler.
     static func feed(
         _ assembler: inout PetalStreamAssembler,
@@ -179,16 +228,12 @@ enum PetalTestSupport {
     ) throws {
         let words = encoder.words(frame: frame)
         for lane in lanes {
+            let data = try lane.decode(words.lane(lane))
             switch lane {
-            case .p:
-                let data = try PetalLane.p.decode(words.p)
-                assembler.push(atoms: try XCTUnwrap(PetalStream.parseAtomLane(.p, data: data)))
-            case .k:
-                let data = try PetalLane.k.decode(words.k)
-                assembler.push(atoms: try XCTUnwrap(PetalStream.parseAtomLane(.k, data: data)))
             case .d:
-                let data = try PetalLane.d.decode(words.d)
                 assembler.push(dLane: try XCTUnwrap(PetalStream.parseDLane(data)))
+            case .field:
+                assembler.push(atoms: try XCTUnwrap(PetalStream.parseAtomLane(lane, data: data)))
             }
         }
     }

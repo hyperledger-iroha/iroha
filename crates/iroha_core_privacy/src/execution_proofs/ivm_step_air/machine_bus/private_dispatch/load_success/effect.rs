@@ -120,9 +120,7 @@ pub(super) fn append_residues(out: &mut Vec<F>, schedule: Schedule, row: &[F; su
             .sub(row[OUTPUT])
             .sub(row[STACK]),
     );
-    for i in 9..14 {
-        out.push(less[i]);
-    }
+    out.extend_from_slice(&less[9..14]);
     for &v in &word(row, ADDRESS_WORD)[..3] {
         out.push(v);
     }
@@ -151,9 +149,7 @@ pub(super) fn append_residues(out: &mut Vec<F>, schedule: Schedule, row: &[F; su
         out,
         memory,
         schedule,
-        Space::Memory,
-        F::ZERO,
-        cell,
+        (Space::Memory, F::ZERO, cell),
         32,
         selected,
         F::ZERO,
@@ -196,9 +192,7 @@ pub(super) fn append_residues(out: &mut Vec<F>, schedule: Schedule, row: &[F; su
         out,
         write,
         schedule,
-        Space::Register,
-        F::ZERO,
-        destination,
+        (Space::Register, F::ZERO, destination),
         33,
         enabled,
         enabled,

@@ -201,10 +201,15 @@ const _: () = {
             == SHA_OPERATION_READS_PER_BLOCK_V1
     );
     assert!(
-        SHA_OPERATION_EXPANSION_READS_PER_BLOCK_V1 % SHA_OPERATION_EXPANSION_READ_SLOTS_V1 == 0
+        SHA_OPERATION_EXPANSION_READS_PER_BLOCK_V1
+            .is_multiple_of(SHA_OPERATION_EXPANSION_READ_SLOTS_V1)
     );
-    assert!(SHA_OPERATION_ROUND_READS_PER_BLOCK_V1 % SHA_OPERATION_ROUND_READ_SLOTS_V1 == 0);
-    assert!(SHA_OPERATION_FINAL_READS_PER_BLOCK_V1 % SHA_OPERATION_FINAL_READ_SLOTS_V1 == 0);
+    assert!(
+        SHA_OPERATION_ROUND_READS_PER_BLOCK_V1.is_multiple_of(SHA_OPERATION_ROUND_READ_SLOTS_V1)
+    );
+    assert!(
+        SHA_OPERATION_FINAL_READS_PER_BLOCK_V1.is_multiple_of(SHA_OPERATION_FINAL_READ_SLOTS_V1)
+    );
     assert!(
         SHA_WORDS_PER_BLOCK_V1 + SHA_OPERATION_READS_PER_BLOCK_V1
             == SHA_WORD_CAPACITY_MEMORY_ROWS_PER_BLOCK_V1
@@ -367,8 +372,7 @@ impl NonzeroSeriesV1 {
         }
         let last_row = match *self {
             Self::Empty => None,
-            Self::One(last) | Self::Two(_, last) => Some(last.row),
-            Self::Affine { last, .. } => Some(last.row),
+            Self::One(last) | Self::Two(_, last) | Self::Affine { last, .. } => Some(last.row),
             Self::Repeated { last_row, .. } => Some(last_row),
         };
         if last_row.is_some_and(|last_row| point.row <= last_row) {
@@ -495,6 +499,13 @@ struct RepeatZoneV1 {
     axis: RepeatZoneAxisV1,
     series: BTreeMap<(usize, usize), NonzeroSeriesV1>,
 }
+#[derive(Clone, Copy)]
+struct KeyedCellV1 {
+    segment: usize,
+    local_column: usize,
+    row: usize,
+}
+
 struct StructuralBuilderV1 {
     physical_segment: usize,
     inner: ZkX509FixedAlgebraicScheduleBuilderV1,
@@ -629,7 +640,7 @@ impl StructuralBuilderV1 {
             || start >= end
             || end > ZK_X509_SHA_SEGMENT_ROWS_V1
             || period < 2
-            || (end - start) % period != 0
+            || !(end - start).is_multiple_of(period)
             || !columns.iter().any(|selected| *selected)
             || (matches!(axis, RepeatZoneAxisV1::Calls { .. }) && !self.call_axis_group_active)
         {
@@ -690,15 +701,18 @@ impl StructuralBuilderV1 {
     }
     fn observe_family_keyed_v1(
         &mut self,
-        segment: usize,
-        local_column: usize,
-        row: usize,
+        cell: KeyedCellV1,
         family: u8,
         block: CallAxisBlockV1,
         word_position: u32,
         occurrence: u32,
         value: F,
     ) -> Result<(), ZkX509ShaFixedAlgebraicErrorV1> {
+        let KeyedCellV1 {
+            segment,
+            local_column,
+            row,
+        } = cell;
         if value == F::ZERO {
             return Ok(());
         }
@@ -738,18 +752,23 @@ impl StructuralBuilderV1 {
     }
     fn observe_keyed_v1(
         &mut self,
-        segment: usize,
-        local_column: usize,
-        row: usize,
+        cell: KeyedCellV1,
         block: CallAxisBlockV1,
         word_position: u32,
         occurrence: u32,
         value: F,
     ) -> Result<(), ZkX509ShaFixedAlgebraicErrorV1> {
-        self.observe_family_keyed_v1(
+        let KeyedCellV1 {
             segment,
             local_column,
             row,
+        } = cell;
+        self.observe_family_keyed_v1(
+            KeyedCellV1 {
+                segment,
+                local_column,
+                row,
+            },
             REPEAT_FAMILY_SORTED_MEMORY_V1,
             block,
             word_position,
@@ -1106,16 +1125,25 @@ fn emit_rfc_message_event_v1(
     }
     Ok(())
 }
+#[derive(Clone, Copy)]
+struct WordRowPositionV1 {
+    segment: usize,
+    row: usize,
+    address: usize,
+}
 fn emit_word_row_v1(
     output: &mut StructuralBuilderV1,
     circuit: &ZkX509Sha256WordCircuitV1,
     input_indices: &[Option<usize>],
     manifest: ZkX509ShaCallManifestV1,
     consumer: Option<ZkX509ShaRfcConsumerChannelsV1>,
-    segment: usize,
-    row: usize,
-    address: usize,
+    position: WordRowPositionV1,
 ) -> Result<(), ZkX509ShaFixedAlgebraicErrorV1> {
+    let WordRowPositionV1 {
+        segment,
+        row,
+        address,
+    } = position;
     let word = circuit
         .stark_words_v1()
         .get(address)
@@ -1129,7 +1157,7 @@ fn emit_word_row_v1(
     )?;
     let input_word = input_indices.get(address).copied().flatten();
     for message_byte in 0..4 {
-        let fixed = input_word.map_or(true, |input| {
+        let fixed = input_word.is_none_or(|input| {
             input
                 .checked_mul(4)
                 .and_then(|offset| offset.checked_add(message_byte))
@@ -1422,16 +1450,7 @@ fn interleaved_execution_memory_v1(
         .try_reserve_exact(execution.len())
         .map_err(|_| ZkX509ShaFixedAlgebraicErrorV1::Resource)?;
     sorted.extend_from_slice(&execution);
-    sorted.sort_by_key(|access| {
-        (
-            access.address.0,
-            if access.is_write == F::ONE {
-                0_u8
-            } else {
-                1_u8
-            },
-        )
-    });
+    sorted.sort_by_key(|access| (access.address.0, u8::from(access.is_write != F::ONE)));
     if sorted != circuit.stark_memory_v1().sorted {
         return Err(ZkX509ShaFixedAlgebraicErrorV1::Topology);
     }
@@ -2174,9 +2193,11 @@ fn emit_call_topology_v1(
                 &input_indices,
                 manifest,
                 consumer,
-                segment,
-                row,
-                word_cursor,
+                WordRowPositionV1 {
+                    segment,
+                    row,
+                    address: word_cursor,
+                },
             )?;
             word_cursor = word_cursor
                 .checked_add(1)
@@ -2201,9 +2222,11 @@ fn emit_call_topology_v1(
             &input_indices,
             manifest,
             consumer,
-            segment,
-            row,
-            word_cursor,
+            WordRowPositionV1 {
+                segment,
+                row,
+                address: word_cursor,
+            },
         )?;
         word_cursor = word_cursor
             .checked_add(1)
@@ -2305,9 +2328,11 @@ fn emit_call_topology_v1(
             }
             if !operation_read_phase_axis {
                 output.observe_family_keyed_v1(
-                    segment,
-                    FIX_MEMORY_EXECUTION_ADDRESS,
-                    row,
+                    KeyedCellV1 {
+                        segment,
+                        local_column: FIX_MEMORY_EXECUTION_ADDRESS,
+                        row,
+                    },
                     REPEAT_FAMILY_EXECUTION_READ_V1,
                     CallAxisBlockV1::Sha(
                         u32::try_from(block)
@@ -2369,18 +2394,22 @@ fn emit_call_topology_v1(
                 let occurrence = u32::try_from(sorted_occurrence)
                     .map_err(|_| ZkX509ShaFixedAlgebraicErrorV1::Resource)?;
                 output.observe_keyed_v1(
-                    segment,
-                    FIX_MEMORY_SORTED_ADDRESS,
-                    row,
+                    KeyedCellV1 {
+                        segment,
+                        local_column: FIX_MEMORY_SORTED_ADDRESS,
+                        row,
+                    },
                     block,
                     word_position,
                     occurrence,
                     sorted.address,
                 )?;
                 output.observe_keyed_v1(
-                    segment,
-                    FIX_MEMORY_SORTED_WRITE,
-                    row,
+                    KeyedCellV1 {
+                        segment,
+                        local_column: FIX_MEMORY_SORTED_WRITE,
+                        row,
+                    },
                     block,
                     word_position,
                     occurrence,
@@ -2388,13 +2417,15 @@ fn emit_call_topology_v1(
                 )?;
                 if memory_index + 1 < memory_rows {
                     output.observe_keyed_v1(
-                        segment,
-                        if same_next {
-                            FIX_MEMORY_SAME_NEXT
-                        } else {
-                            FIX_MEMORY_NEW_NEXT
+                        KeyedCellV1 {
+                            segment,
+                            local_column: if same_next {
+                                FIX_MEMORY_SAME_NEXT
+                            } else {
+                                FIX_MEMORY_NEW_NEXT
+                            },
+                            row,
                         },
-                        row,
                         block,
                         word_position,
                         if same_next { occurrence } else { u32::MAX },
@@ -2407,18 +2438,22 @@ fn emit_call_topology_v1(
                 let occurrence = u32::try_from(sorted_occurrence)
                     .map_err(|_| ZkX509ShaFixedAlgebraicErrorV1::Resource)?;
                 output.observe_keyed_v1(
-                    segment,
-                    FIX_MEMORY_SORTED_ADDRESS,
-                    row,
+                    KeyedCellV1 {
+                        segment,
+                        local_column: FIX_MEMORY_SORTED_ADDRESS,
+                        row,
+                    },
                     CallAxisBlockV1::Initial,
                     word_position,
                     occurrence,
                     sorted.address,
                 )?;
                 output.observe_keyed_v1(
-                    segment,
-                    FIX_MEMORY_SORTED_WRITE,
-                    row,
+                    KeyedCellV1 {
+                        segment,
+                        local_column: FIX_MEMORY_SORTED_WRITE,
+                        row,
+                    },
                     CallAxisBlockV1::Initial,
                     word_position,
                     occurrence,
@@ -2426,13 +2461,15 @@ fn emit_call_topology_v1(
                 )?;
                 if memory_index + 1 < memory_rows {
                     output.observe_keyed_v1(
-                        segment,
-                        if same_next {
-                            FIX_MEMORY_SAME_NEXT
-                        } else {
-                            FIX_MEMORY_NEW_NEXT
+                        KeyedCellV1 {
+                            segment,
+                            local_column: if same_next {
+                                FIX_MEMORY_SAME_NEXT
+                            } else {
+                                FIX_MEMORY_NEW_NEXT
+                            },
+                            row,
                         },
-                        row,
                         CallAxisBlockV1::Initial,
                         word_position,
                         if same_next { occurrence } else { u32::MAX },
@@ -3567,9 +3604,11 @@ mod tests {
             let call_start = call * 20;
             builder
                 .observe_keyed_v1(
-                    0,
-                    FIX_MEMORY_NEW_NEXT,
-                    call_start + 3,
+                    KeyedCellV1 {
+                        segment: 0,
+                        local_column: FIX_MEMORY_NEW_NEXT,
+                        row: call_start + 3,
+                    },
                     CallAxisBlockV1::Sha(0),
                     9,
                     u32::MAX,
@@ -3578,9 +3617,11 @@ mod tests {
                 .expect("first block boundary");
             builder
                 .observe_keyed_v1(
-                    0,
-                    FIX_MEMORY_NEW_NEXT,
-                    call_start + 7,
+                    KeyedCellV1 {
+                        segment: 0,
+                        local_column: FIX_MEMORY_NEW_NEXT,
+                        row: call_start + 7,
+                    },
                     CallAxisBlockV1::Sha(1),
                     9,
                     u32::MAX,
@@ -3589,9 +3630,11 @@ mod tests {
                 .expect("second block boundary");
             builder
                 .observe_keyed_v1(
-                    0,
-                    FIX_MEMORY_SORTED_ADDRESS,
-                    call_start + 11,
+                    KeyedCellV1 {
+                        segment: 0,
+                        local_column: FIX_MEMORY_SORTED_ADDRESS,
+                        row: call_start + 11,
+                    },
                     CallAxisBlockV1::Sha(0),
                     9,
                     0,
@@ -3600,9 +3643,11 @@ mod tests {
                 .expect("first sorted occurrence");
             builder
                 .observe_keyed_v1(
-                    0,
-                    FIX_MEMORY_SORTED_ADDRESS,
-                    call_start + 13,
+                    KeyedCellV1 {
+                        segment: 0,
+                        local_column: FIX_MEMORY_SORTED_ADDRESS,
+                        row: call_start + 13,
+                    },
                     CallAxisBlockV1::Sha(0),
                     9,
                     1,
@@ -3618,7 +3663,8 @@ mod tests {
             schedule.atoms_v1(),
             &[
                 ZkX509FixedAlgebraicAtomV1::Repeated {
-                    column: FIX_MEMORY_NEW_NEXT as u16,
+                    column: u16::try_from(FIX_MEMORY_NEW_NEXT)
+                        .expect("protocol-bounded index fits u16"),
                     first: 3,
                     count: 3,
                     stride: 20,
@@ -3626,7 +3672,8 @@ mod tests {
                     step: F::ZERO,
                 },
                 ZkX509FixedAlgebraicAtomV1::Repeated {
-                    column: FIX_MEMORY_NEW_NEXT as u16,
+                    column: u16::try_from(FIX_MEMORY_NEW_NEXT)
+                        .expect("protocol-bounded index fits u16"),
                     first: 7,
                     count: 3,
                     stride: 20,
@@ -3634,7 +3681,8 @@ mod tests {
                     step: F::ZERO,
                 },
                 ZkX509FixedAlgebraicAtomV1::Repeated {
-                    column: FIX_MEMORY_SORTED_ADDRESS as u16,
+                    column: u16::try_from(FIX_MEMORY_SORTED_ADDRESS)
+                        .expect("protocol-bounded index fits u16"),
                     first: 11,
                     count: 3,
                     stride: 20,
@@ -3642,7 +3690,8 @@ mod tests {
                     step: F::ZERO,
                 },
                 ZkX509FixedAlgebraicAtomV1::Repeated {
-                    column: FIX_MEMORY_SORTED_ADDRESS as u16,
+                    column: u16::try_from(FIX_MEMORY_SORTED_ADDRESS)
+                        .expect("protocol-bounded index fits u16"),
                     first: 13,
                     count: 3,
                     stride: 20,
@@ -3925,12 +3974,10 @@ mod tests {
             );
         }
         assert_eq!(
-            schedule
-                .native_row_v1(
-                    (memory_start + sorted.len() - 1) as u64,
-                    &mut [F::ZERO; ZK_X509_SHA_BATCH_FIXED_WIDTH_V1],
-                )
-                .map(|()| ()),
+            schedule.native_row_v1(
+                (memory_start + sorted.len() - 1) as u64,
+                &mut [F::ZERO; ZK_X509_SHA_BATCH_FIXED_WIDTH_V1],
+            ),
             Ok(())
         );
         let assert_rejected = |malformed: &[WordMemoryAccessV1]| {
@@ -3947,13 +3994,13 @@ mod tests {
                 Err(ZkX509ShaFixedAlgebraicErrorV1::Topology)
             );
         };
-        let mut malformed_order = sorted.to_vec();
+        let mut malformed_order = sorted.clone();
         malformed_order.swap(0, 7);
         assert_rejected(&malformed_order);
-        let mut malformed_write = sorted.to_vec();
+        let mut malformed_write = sorted.clone();
         malformed_write[0].is_write = F::ZERO;
         assert_rejected(&malformed_write);
-        let mut malformed_address = sorted.to_vec();
+        let mut malformed_address = sorted.clone();
         malformed_address
             .last_mut()
             .expect("last sorted row")
@@ -3962,7 +4009,7 @@ mod tests {
         )
         .expect("word bound"));
         assert_rejected(&malformed_address);
-        let mut malformed_occurrence = sorted.to_vec();
+        let mut malformed_occurrence = sorted.clone();
         let first_address_two = malformed_occurrence
             .iter()
             .position(|access| access.address == F(2))
@@ -4199,9 +4246,11 @@ mod tests {
         );
         assert_eq!(
             lifecycle.observe_keyed_v1(
-                0,
-                FIX_MEMORY_NEW_NEXT,
-                ZK_X509_SHA_SEGMENT_ROWS_V1,
+                KeyedCellV1 {
+                    segment: 0,
+                    local_column: FIX_MEMORY_NEW_NEXT,
+                    row: ZK_X509_SHA_SEGMENT_ROWS_V1
+                },
                 CallAxisBlockV1::Sha(0),
                 4,
                 u32::MAX,
@@ -4211,9 +4260,11 @@ mod tests {
         );
         lifecycle
             .observe_keyed_v1(
-                0,
-                FIX_MEMORY_NEW_NEXT,
-                10,
+                KeyedCellV1 {
+                    segment: 0,
+                    local_column: FIX_MEMORY_NEW_NEXT,
+                    row: 10,
+                },
                 CallAxisBlockV1::Sha(0),
                 4,
                 u32::MAX,
@@ -4222,9 +4273,11 @@ mod tests {
             .expect("first sorted key point");
         assert_eq!(
             lifecycle.observe_keyed_v1(
-                0,
-                FIX_MEMORY_NEW_NEXT,
-                10,
+                KeyedCellV1 {
+                    segment: 0,
+                    local_column: FIX_MEMORY_NEW_NEXT,
+                    row: 10
+                },
                 CallAxisBlockV1::Sha(0),
                 4,
                 u32::MAX,
@@ -4247,9 +4300,11 @@ mod tests {
             .expect("bounded call-axis group");
         capped
             .observe_keyed_v1(
-                0,
-                FIX_MEMORY_NEW_NEXT,
-                1,
+                KeyedCellV1 {
+                    segment: 0,
+                    local_column: FIX_MEMORY_NEW_NEXT,
+                    row: 1,
+                },
                 CallAxisBlockV1::Sha(0),
                 0,
                 u32::MAX,

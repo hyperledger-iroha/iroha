@@ -1,5 +1,6 @@
 #[test]
 fn installing_manifests_populates_privacy_registry() {
+    let fixture_budget = iroha_allocation::AllocationBudget::new(1024 * 1024);
     use iroha_crypto::privacy::{LaneCommitmentId, LanePrivacyCommitment, MerkleCommitment};
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let queue = Queue::test(config_factory(), &time_source);
@@ -22,7 +23,9 @@ fn installing_manifests_populates_privacy_registry() {
         },
     );
     let manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
-    queue.install_lane_manifests_for_testing(&manifests);
+    queue
+        .install_lane_manifests_for_testing(&manifests, &fixture_budget)
+        .expect("original fixture pool admits privacy projection");
     let registry = queue.lane_privacy_registry();
     assert!(
         registry
@@ -67,20 +70,24 @@ async fn governance_manifest_allows_multisig_propose_envelope_from_live_signer()
     let world = World::with([domain], [signer, cosigner, validator, multisig], []);
     // Explicit Global metadata belongs to this admission component fixture;
     // it does not authenticate signed genesis, native history or publication.
-    let mut parameters = world.parameters.block();
-    parameters
-        .set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
+    let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
+        .expect("funded original parameter-only fixture block");
+    crate::state::set_parameter_cell_for_testing(
+        &mut parameters,
+        crate::sumeragi::lanes::routing::test_support::metadata(
             iroha_data_model::block::consensus::SumeragiRootScope::Global,
-        ))
-        .expect("valid fixture parameters");
+        ),
+        world.sccp_committee_generations.allocation_budget(),
+    )
+    .expect("valid fixture parameters");
     parameters.commit();
-    let mut state = State::new(world, kura, query_handle);
+    let mut state = State::new(
+        world_with_explicit_queue_fees(world, zero_rate_routing_fees()),
+        kura,
+        query_handle,
+    );
     {
         let nexus = state.nexus.get_mut();
-        nexus.fees.base_fee = Quantity::zero();
-        nexus.fees.per_byte_fee = Quantity::zero();
-        nexus.fees.per_instruction_fee = Quantity::zero();
-        nexus.fees.per_gas_unit_fee = Quantity::zero();
         nexus.lane_config =
             iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
     }
@@ -105,8 +112,12 @@ async fn governance_manifest_allows_multisig_propose_envelope_from_live_signer()
     };
     statuses.insert(LaneId::SINGLE, status);
     let manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
-    queue.reconfigure_nexus_with_state(&state.nexus_snapshot(), &state, None);
-    queue.install_lane_manifests_for_testing(&manifests);
+    queue
+        .reconfigure_nexus_with_state(&state.nexus_snapshot(), &state, None)
+        .expect("original State pool admits Queue privacy projection");
+    queue
+        .install_lane_manifests_for_testing(&manifests, &state.ivm_execution_budget())
+        .expect("original fixture pool admits privacy projection");
     let tx = accepted_tx_with(
         signer_id,
         &signer_key,
@@ -223,8 +234,10 @@ async fn lane_compliance_policy_blocks_transactions() {
         },
     );
     let manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
-    queue.install_lane_manifests_for_testing(&manifests);
-    *queue.lane_privacy_registry.write() = Arc::new(LanePrivacyRegistry::empty());
+    queue
+        .install_lane_manifests_for_testing(&manifests, &state.ivm_execution_budget())
+        .expect("original fixture pool admits privacy projection");
+    *queue.lane_privacy_registry.write() = LanePrivacyRegistry::empty();
     assert!(
         queue.lane_privacy_registry().is_empty(),
         "test uses a stale cache"
@@ -304,7 +317,9 @@ async fn lane_compliance_policy_blocks_transactions() {
             &BTreeSet::from([LaneId::SINGLE]),
         )
         .expect("actual current manifest cut");
-    let registry = Arc::new(LanePrivacyRegistry::from_manifest_registry(&snapshot));
+    let registry =
+        LanePrivacyRegistry::try_from_manifest_registry(&snapshot, &state.ivm_execution_budget())
+            .expect("original fixture pool admits the stale privacy graph");
     let verified = verify_lane_privacy_proofs(&registry, LaneId::SINGLE, &privacy_proofs)
         .expect("manifest-backed privacy proof passes despite an empty local cache");
     assert_eq!(verified, BTreeSet::from([LaneCommitmentId::new(9)]));
@@ -336,9 +351,12 @@ async fn lane_compliance_policy_blocks_transactions() {
         LaneId::SINGLE,
         revoked_status,
     )])));
-    queue.install_lane_manifests_for_testing(&revoked);
+    queue
+        .install_lane_manifests_for_testing(&revoked, &state.ivm_execution_budget())
+        .expect("original fixture pool admits privacy projection");
     *queue.lane_privacy_registry.write() =
-        Arc::new(LanePrivacyRegistry::from_manifest_registry(&manifests));
+        LanePrivacyRegistry::try_from_manifest_registry(&manifests, &state.ivm_execution_budget())
+            .expect("original fixture pool admits the stale privacy graph");
     let mut revoked_metadata = Metadata::default();
     revoked_metadata.insert(
         "revoked_privacy_test".parse().expect("metadata key"),
@@ -369,7 +387,9 @@ async fn lane_compliance_policy_blocks_transactions() {
             &BTreeSet::from([LaneId::SINGLE]),
         )
         .expect("actual manifest cut after revocation");
-    let registry = Arc::new(LanePrivacyRegistry::from_manifest_registry(&snapshot));
+    let registry =
+        LanePrivacyRegistry::try_from_manifest_registry(&snapshot, &state.ivm_execution_budget())
+            .expect("original fixture pool admits the stale privacy graph");
     assert_eq!(
         verify_lane_privacy_proofs(&registry, LaneId::SINGLE, &privacy_proofs),
         Err(
@@ -402,4 +422,710 @@ async fn lane_compliance_policy_blocks_transactions() {
     unregistered_proof
         .verify_signature()
         .expect("original revoked carrier remains unchanged");
+}
+
+fn funded_privacy_manifest_fixture() -> LaneManifestRegistryHandle {
+    Arc::new(LaneManifestRegistry::from_statuses(BTreeMap::from([(
+        LaneId::SINGLE,
+        LaneManifestStatus {
+            lane: LaneId::SINGLE,
+            alias: "default".to_owned(),
+            dataspace: DataSpaceId::UNIVERSAL,
+            visibility: LaneVisibility::Public,
+            storage: LaneStorageProfile::FullReplica,
+            governance: None,
+            manifest_path: Some(PathBuf::from("/fixture/privacy.json")),
+            governance_rules: None,
+            privacy_commitments: vec![LanePrivacyCommitment::merkle(
+                LaneCommitmentId::new(7),
+                MerkleCommitment::from_root_bytes([0x11; 32], 4),
+            )],
+        },
+    )])))
+}
+
+#[test]
+fn admission_privacy_cache_requires_original_pool_and_preserves_owner_on_refusal() {
+    let (_clock, time) = TimeSource::new_mock(Duration::default());
+    let queue = Queue::test(config_factory(), &time);
+    let original_pool = iroha_allocation::AllocationBudget::new(1024 * 1024);
+    let sibling_pool = iroha_allocation::AllocationBudget::new(original_pool.limit_bytes());
+    let manifests = funded_privacy_manifest_fixture();
+    let first = queue
+        .admission_privacy_registry_for(
+            &manifests,
+            &original_pool,
+            &mut QueuePrivacyRetirements::default(),
+        )
+        .unwrap();
+    let original_bytes = original_pool.reserved_bytes();
+    assert!(original_bytes > 0);
+    assert!(first.belongs_to(&original_pool));
+    assert!(!first.belongs_to(&sibling_pool));
+    assert!(LanePrivacyRegistry::ptr_eq(
+        &first,
+        &queue
+            .admission_privacy_registry_for(
+                &manifests,
+                &original_pool,
+                &mut QueuePrivacyRetirements::default()
+            )
+            .unwrap(),
+    ));
+    assert_eq!(original_pool.reserved_bytes(), original_bytes);
+
+    let occupied = sibling_pool
+        .try_reserve_bytes(sibling_pool.limit_bytes())
+        .unwrap();
+    let refused = queue
+        .admission_privacy_registry_for(
+            &manifests,
+            &sibling_pool,
+            &mut QueuePrivacyRetirements::default(),
+        )
+        .expect_err("same manifest identity cannot spend a different pool's cached owner");
+    assert!(matches!(
+        refused.allocation_refusal(),
+        Some(iroha_allocation::AllocationRefusal::Capacity { .. })
+    ));
+    {
+        let cache = queue.admission_privacy_registry.lock();
+        let (source, retained) = cache.as_ref().unwrap();
+        assert!(Arc::ptr_eq(source, &manifests));
+        assert!(LanePrivacyRegistry::ptr_eq(retained, &first));
+    }
+    assert_eq!(original_pool.reserved_bytes(), original_bytes);
+    assert_eq!(sibling_pool.reserved_bytes(), sibling_pool.limit_bytes());
+    drop(occupied);
+    let retried = queue
+        .admission_privacy_registry_for(
+            &manifests,
+            &sibling_pool,
+            &mut QueuePrivacyRetirements::default(),
+        )
+        .unwrap();
+    assert!(retried.belongs_to(&sibling_pool));
+    assert!(!retried.belongs_to(&original_pool));
+    assert!(!LanePrivacyRegistry::ptr_eq(&first, &retried));
+    assert_eq!(first, retried);
+    assert_eq!(
+        original_pool.reserved_bytes(),
+        original_bytes,
+        "old reader retains its original charge"
+    );
+    drop(first);
+    assert_eq!(original_pool.reserved_bytes(), 0);
+    let retry_bytes = sibling_pool.reserved_bytes();
+    assert!(retry_bytes > 0);
+    drop(queue);
+    assert_eq!(
+        sibling_pool.reserved_bytes(),
+        retry_bytes,
+        "last sampled owner still retains its graph"
+    );
+    drop(retried);
+    assert_eq!(sibling_pool.reserved_bytes(), 0);
+}
+
+#[test]
+fn queue_privacy_install_refusal_keeps_manifest_cache_and_retained_graph() {
+    let (_clock, time) = TimeSource::new_mock(Duration::default());
+    let queue = Queue::test(config_factory(), &time);
+    let budget = iroha_allocation::AllocationBudget::new(1024 * 1024);
+    let original = funded_privacy_manifest_fixture();
+    queue
+        .install_lane_manifests_for_testing(&original, &budget)
+        .unwrap();
+    let installed = queue.lane_privacy_registry();
+    let cached = queue
+        .admission_privacy_registry_for(&original, &budget, &mut QueuePrivacyRetirements::default())
+        .unwrap();
+    let retained = budget.reserved_bytes();
+    assert!(retained > 0);
+    let replacement = funded_privacy_manifest_fixture();
+    let occupied = budget
+        .try_reserve_bytes(budget.limit_bytes() - retained)
+        .unwrap();
+    let refused = queue
+        .install_lane_manifests_for_testing(&replacement, &budget)
+        .unwrap_err();
+    assert!(matches!(
+        refused.allocation_refusal(),
+        Some(iroha_allocation::AllocationRefusal::Capacity { .. })
+    ));
+    assert!(Arc::ptr_eq(&queue.lane_manifests.read(), &original));
+    assert!(LanePrivacyRegistry::ptr_eq(
+        &queue.lane_privacy_registry(),
+        &installed
+    ));
+    {
+        let cache = queue.admission_privacy_registry.lock();
+        let (source, retained) = cache.as_ref().unwrap();
+        assert!(Arc::ptr_eq(source, &original));
+        assert!(LanePrivacyRegistry::ptr_eq(retained, &cached));
+    }
+    assert_eq!(budget.reserved_bytes(), budget.limit_bytes());
+    drop(occupied);
+    assert_eq!(budget.reserved_bytes(), retained);
+    queue
+        .install_lane_manifests_for_testing(&replacement, &budget)
+        .unwrap();
+    assert!(Arc::ptr_eq(&queue.lane_manifests.read(), &replacement));
+    assert!(!LanePrivacyRegistry::ptr_eq(
+        &queue.lane_privacy_registry(),
+        &installed
+    ));
+    assert_eq!(queue.lane_privacy_registry(), installed);
+    drop(queue);
+    drop(installed);
+    drop(cached);
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+struct QueuePrivacyRefundObserver {
+    queue: std::sync::Weak<Queue>,
+    expected: LaneManifestRegistryHandle,
+    wakes: AtomicUsize,
+}
+
+impl std::task::Wake for QueuePrivacyRefundObserver {
+    fn wake(self: Arc<Self>) {
+        self.wake_by_ref();
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
+        let queue = self.queue.upgrade().expect("live Queue during publication");
+        let manifests = queue
+            .lane_manifests
+            .try_write()
+            .expect("refund callback follows the manifest writer");
+        let privacy = queue
+            .lane_privacy_registry
+            .try_write()
+            .expect("refund callback follows the privacy writer");
+        let cache = queue
+            .admission_privacy_registry
+            .try_lock()
+            .expect("refund callback follows the admission cache writer");
+        assert!(Arc::ptr_eq(&manifests, &self.expected));
+        let (source, owner) = cache.as_ref().expect("published admission owner");
+        assert!(Arc::ptr_eq(source, &self.expected));
+        assert!(LanePrivacyRegistry::ptr_eq(&privacy, owner));
+        self.wakes.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+#[test]
+fn queue_privacy_publication_refunds_after_all_original_writers_release() {
+    let (_clock, time) = TimeSource::new_mock(Duration::default());
+    let queue = Arc::new(Queue::test(config_factory(), &time));
+    let budget = iroha_allocation::AllocationBudget::new(1024 * 1024);
+    let original = funded_privacy_manifest_fixture();
+    queue
+        .install_lane_manifests_for_testing(&original, &budget)
+        .unwrap();
+    let retained = budget.reserved_bytes();
+    assert!(retained > 0);
+    let wait = match budget.try_reserve_bytes(budget.limit_bytes()).unwrap_err() {
+        iroha_allocation::AllocationRefusal::Capacity { release, .. } => release,
+        other => panic!("expected occupied original pool: {other:?}"),
+    };
+    // The waiter has its own explicit fixture pool, separate from graph custody.
+    let waiter_pool = iroha_allocation::AllocationBudget::new(4096);
+    let mut prepaid = waiter_pool
+        .try_reserve(iroha_allocation::release::ReleaseRegistration::allocation_layout())
+        .unwrap();
+    let mut registration =
+        iroha_allocation::release::ReleaseRegistration::from_reservation(&mut prepaid).unwrap();
+    let replacement = funded_privacy_manifest_fixture();
+    let observer = Arc::new(QueuePrivacyRefundObserver {
+        queue: Arc::downgrade(&queue),
+        expected: Arc::clone(&replacement),
+        wakes: AtomicUsize::new(0),
+    });
+    let waker = std::task::Waker::from(Arc::clone(&observer));
+    assert!(
+        registration
+            .poll_wait(&wait, &mut std::task::Context::from_waker(&waker),)
+            .is_pending()
+    );
+    queue
+        .install_lane_manifests_for_testing(&replacement, &budget)
+        .unwrap();
+    assert!(observer.wakes.load(Ordering::SeqCst) > 0);
+    assert_eq!(
+        budget.reserved_bytes(),
+        retained,
+        "one graph remains after replacement"
+    );
+    drop(registration);
+    drop(prepaid);
+    assert_eq!(waiter_pool.reserved_bytes(), 0);
+    drop(queue);
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn queue_reconfiguration_and_route_preserve_accepted_owners_on_privacy_refusal() {
+    let state = State::new(
+        world_with_test_domains(),
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    );
+    let (_clock, time) = TimeSource::new_mock(Duration::default());
+    let queue = Queue::test(config_factory(), &time);
+    let manifests = funded_privacy_manifest_fixture();
+    queue.install_lane_manifests_with_state_for_testing(&manifests, &state);
+    let nexus = state.nexus_snapshot();
+    let view = state.view();
+    let tx = accepted_tx_by_someone(&time);
+    // Model an accepted Queue cache that must catch up to the observed State.
+    queue.routing_policy.write().default_lane = LaneId::new(99);
+    let old_policy = queue.routing_policy.read().clone();
+    let old_router = Arc::clone(&queue.router.read());
+    let old_lanes = Arc::clone(&queue.lane_catalog.read());
+    let old_dataspaces = Arc::clone(&queue.dataspace_catalog.read());
+    let old_privacy = queue.lane_privacy_registry();
+    let generation = state.state_view_generation();
+    let budget = state.ivm_execution_budget();
+    let retained = budget.reserved_bytes();
+    let occupied = budget
+        .try_reserve_bytes(budget.limit_bytes() - retained)
+        .unwrap();
+    for refusal in [
+        queue.reconfigure_nexus(&nexus, &view, None).unwrap_err(),
+        queue
+            .reconfigure_nexus_with_state(&nexus, &state, None)
+            .unwrap_err(),
+        queue
+            .reconfigure_nexus_with_state_if_needed(&nexus, &state, None)
+            .unwrap_err(),
+    ] {
+        assert!(matches!(
+            refusal.allocation_refusal(),
+            Some(iroha_allocation::AllocationRefusal::Capacity { .. })
+        ));
+        assert!(Arc::ptr_eq(&queue.lane_manifests.read(), &manifests));
+        assert!(LanePrivacyRegistry::ptr_eq(
+            &queue.lane_privacy_registry(),
+            &old_privacy
+        ));
+        assert!(Arc::ptr_eq(&queue.router.read(), &old_router));
+        assert!(Arc::ptr_eq(&queue.lane_catalog.read(), &old_lanes));
+        assert!(Arc::ptr_eq(
+            &queue.dataspace_catalog.read(),
+            &old_dataspaces
+        ));
+        assert_eq!(*queue.routing_policy.read(), old_policy);
+        let cache = queue.admission_privacy_registry.lock();
+        let (source, owner) = cache.as_ref().unwrap();
+        assert!(Arc::ptr_eq(source, &manifests));
+        assert!(LanePrivacyRegistry::ptr_eq(owner, &old_privacy));
+    }
+    let route_error = queue.route_plan_with_state(&tx, &state).unwrap_err();
+    assert!(
+        matches!(route_error, RoutingResolveError::Deferred(ref original)
+        if matches!(original.allocation_refusal(), Some(iroha_allocation::AllocationRefusal::Capacity { .. })))
+    );
+    assert_eq!(state.state_view_generation(), generation);
+    assert_eq!(budget.reserved_bytes(), budget.limit_bytes());
+    drop(occupied);
+    assert!(
+        queue
+            .reconfigure_nexus_with_state_if_needed(&nexus, &state, None)
+            .expect("retry against the same original pool")
+    );
+    assert!(queue.nexus_routing_matches(&nexus));
+    assert_eq!(queue.lane_privacy_registry(), old_privacy);
+    assert!(queue.lane_privacy_registry().belongs_to(&budget));
+    assert_eq!(state.state_view_generation(), generation);
+}
+
+struct ForeignQueuePrivacyRefundObserver {
+    queue: std::sync::Weak<Queue>,
+    state: Arc<State>,
+    expected_cache_source: Option<LaneManifestRegistryHandle>,
+    wakes: AtomicUsize,
+    failed_probes: AtomicUsize,
+}
+
+impl std::task::Wake for ForeignQueuePrivacyRefundObserver {
+    fn wake(self: Arc<Self>) {
+        self.wake_by_ref();
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
+        // Record contention instead of panicking in a callback during unwind.
+        self.wakes.fetch_add(1, Ordering::SeqCst);
+        let Ok(_lifecycle) = self.state.try_lock_lane_lifecycle_work_admission() else {
+            self.failed_probes.fetch_or(1, Ordering::SeqCst);
+            return;
+        };
+        let queue = self.queue.upgrade().expect("live Queue during refund");
+        let Some(manifests) = queue.lane_manifests.try_write() else {
+            self.failed_probes.fetch_or(2, Ordering::SeqCst);
+            return;
+        };
+        let Some(privacy) = queue.lane_privacy_registry.try_write() else {
+            self.failed_probes.fetch_or(4, Ordering::SeqCst);
+            return;
+        };
+        let Some(cache) = queue.admission_privacy_registry.try_lock() else {
+            self.failed_probes.fetch_or(8, Ordering::SeqCst);
+            return;
+        };
+        let valid = cache.as_ref().is_some_and(|(source, owner)| {
+            owner.belongs_to(&self.state.ivm_execution_budget())
+                && if let Some(expected) = &self.expected_cache_source {
+                    Arc::ptr_eq(source, expected)
+                } else {
+                    Arc::ptr_eq(source, &manifests) && LanePrivacyRegistry::ptr_eq(owner, &privacy)
+                }
+        });
+        if !valid {
+            self.failed_probes.fetch_or(16, Ordering::SeqCst);
+        }
+    }
+}
+
+fn privacy_refund_registration(
+    budget: &iroha_allocation::AllocationBudget,
+    observer: &Arc<ForeignQueuePrivacyRefundObserver>,
+) -> (
+    iroha_allocation::AllocationBudget,
+    iroha_allocation::release::ReleaseRegistration,
+) {
+    assert!(
+        budget.reserved_bytes() > 0,
+        "the Queue is the only graph owner"
+    );
+    let wait = match budget.try_reserve_bytes(budget.limit_bytes()).unwrap_err() {
+        iroha_allocation::AllocationRefusal::Capacity { release, .. } => release,
+        other => panic!("expected the actual occupied foreign pool: {other:?}"),
+    };
+    let waiter_pool = iroha_allocation::AllocationBudget::new(4096);
+    let mut prepaid = waiter_pool
+        .try_reserve(iroha_allocation::release::ReleaseRegistration::allocation_layout())
+        .unwrap();
+    let mut registration =
+        iroha_allocation::release::ReleaseRegistration::from_reservation(&mut prepaid).unwrap();
+    let waker = std::task::Waker::from(Arc::clone(observer));
+    assert!(
+        registration
+            .poll_wait(&wait, &mut std::task::Context::from_waker(&waker))
+            .is_pending()
+    );
+    (waiter_pool, registration)
+}
+
+#[test]
+fn foreign_privacy_publication_refunds_after_actual_route_lifecycle_fence() {
+    let (state, time) = current_admission_queue_fixture();
+    let manifests = funded_privacy_manifest_fixture();
+    drop(state.install_lane_manifests_for_testing(&manifests));
+    let state = Arc::new(state);
+    let queue = Arc::new(Queue::test(config_factory(), &time));
+    let foreign_pool = iroha_allocation::AllocationBudget::new(1024 * 1024);
+    queue
+        .install_lane_manifests_for_testing(&manifests, &foreign_pool)
+        .unwrap();
+    // No external privacy clone survives: both final graph references are Queue-owned.
+    queue.routing_policy.write().default_lane = LaneId::new(99);
+    let observer = Arc::new(ForeignQueuePrivacyRefundObserver {
+        queue: Arc::downgrade(&queue),
+        state: Arc::clone(&state),
+        expected_cache_source: None,
+        wakes: AtomicUsize::new(0),
+        failed_probes: AtomicUsize::new(0),
+    });
+    let (waiter_pool, registration) = privacy_refund_registration(&foreign_pool, &observer);
+    let tx = accepted_tx_by_someone(&time);
+    queue
+        .route_plan_with_state(&tx, &state)
+        .expect("actual route refresh succeeds");
+    assert!(observer.wakes.load(Ordering::SeqCst) > 0);
+    assert_eq!(
+        observer.failed_probes.load(Ordering::SeqCst),
+        0,
+        "callback sees released lifecycle/Queue guards and the exact new owner pair"
+    );
+    assert_eq!(foreign_pool.reserved_bytes(), 0);
+    assert!(queue.nexus_routing_matches(&state.nexus_snapshot()));
+    drop(registration);
+    assert_eq!(waiter_pool.reserved_bytes(), 0);
+}
+
+#[test]
+fn foreign_privacy_cache_refunds_after_actual_admission_success_and_rejection() {
+    for reject in [false, true] {
+        let (mut state, time) = current_admission_queue_fixture();
+        let tx = accepted_tx_by_someone(&time);
+        register_accepted_tx_authority_for_queue_test(&mut state, &tx);
+        let state = Arc::new(state);
+        let queue = Arc::new(Queue::test(config_factory(), &time));
+        queue
+            .reconfigure_nexus_with_state(&state.nexus_snapshot(), &state, None)
+            .unwrap();
+        let manifests = funded_privacy_manifest_fixture();
+        queue
+            .install_lane_manifests_for_testing(&manifests, &state.ivm_execution_budget())
+            .unwrap();
+        if reject {
+            let policy = LaneCompliancePolicy {
+                id: LaneCompliancePolicyId::new(Hash::prehashed([0xBA; 32])),
+                version: 1,
+                lane_id: LaneId::SINGLE,
+                dataspace_id: DataSpaceId::UNIVERSAL,
+                jurisdiction: JurisdictionSet::default(),
+                deny: vec![LaneComplianceRule {
+                    selector: ParticipantSelector {
+                        account: Some(AccountId::new(ALICE_KEYPAIR.public_key().clone())),
+                        ..ParticipantSelector::default()
+                    },
+                    reason_code: Some("post-cache rejection control".to_owned()),
+                    jurisdiction_override: JurisdictionSet::default(),
+                }],
+                allow: Vec::new(),
+                transfer_limits: Vec::new(),
+                audit_controls: AuditControls::default(),
+                metadata: Metadata::default(),
+            };
+            *queue.lane_compliance.write() = Some(Arc::new(
+                LaneComplianceEngine::from_policies(vec![policy], false).unwrap(),
+            ));
+        }
+        let foreign_pool = iroha_allocation::AllocationBudget::new(1024 * 1024);
+        drop(
+            queue
+                .admission_privacy_registry_for(
+                    &manifests,
+                    &foreign_pool,
+                    &mut QueuePrivacyRetirements::default(),
+                )
+                .unwrap(),
+        );
+        let observer = Arc::new(ForeignQueuePrivacyRefundObserver {
+            queue: Arc::downgrade(&queue),
+            state: Arc::clone(&state),
+            expected_cache_source: Some(Arc::clone(&manifests)),
+            wakes: AtomicUsize::new(0),
+            failed_probes: AtomicUsize::new(0),
+        });
+        let (waiter_pool, registration) = privacy_refund_registration(&foreign_pool, &observer);
+        let original = tx.entrypoint_bytes().to_vec();
+        let result = queue.push_with_lane_with_state(tx, &state);
+        if reject {
+            let failure =
+                result.expect_err("actual compliance rejection follows cache replacement");
+            assert!(matches!(failure.err, Error::LaneComplianceDenied { .. }));
+            assert_eq!(
+                failure.tx.entrypoint_bytes().as_slice(),
+                original.as_slice()
+            );
+            assert_eq!(queue.active_len(), 0);
+        } else {
+            result.expect("actual admission succeeds after the cache replacement");
+            assert_eq!(queue.active_len(), 1);
+        }
+        assert!(observer.wakes.load(Ordering::SeqCst) > 0);
+        assert_eq!(
+            observer.failed_probes.load(Ordering::SeqCst),
+            0,
+            "callback sees released lifecycle/Queue guards and the exact new owner pair"
+        );
+        assert_eq!(foreign_pool.reserved_bytes(), 0);
+        drop(registration);
+        assert_eq!(waiter_pool.reserved_bytes(), 0);
+    }
+}
+
+#[test]
+fn foreign_privacy_retirement_survives_error_and_unwind_after_both_replacements() {
+    // The actual replacement methods receive custody owned before the genuine
+    // lifecycle guard. Exercise cleanup after their return as well as on unwind.
+    for publish in [false, true] {
+        for unwind in [false, true] {
+            let (state, time) = current_admission_queue_fixture();
+            let manifests = funded_privacy_manifest_fixture();
+            drop(state.install_lane_manifests_for_testing(&manifests));
+            let state = Arc::new(state);
+            let queue = Arc::new(Queue::test(config_factory(), &time));
+            let foreign_pool = iroha_allocation::AllocationBudget::new(1024 * 1024);
+            if publish {
+                queue
+                    .install_lane_manifests_for_testing(&manifests, &foreign_pool)
+                    .unwrap();
+                queue.routing_policy.write().default_lane = LaneId::new(99);
+            } else {
+                drop(
+                    queue
+                        .admission_privacy_registry_for(
+                            &manifests,
+                            &foreign_pool,
+                            &mut QueuePrivacyRetirements::default(),
+                        )
+                        .unwrap(),
+                );
+            }
+            let observer = Arc::new(ForeignQueuePrivacyRefundObserver {
+                queue: Arc::downgrade(&queue),
+                state: Arc::clone(&state),
+                expected_cache_source: (!publish).then(|| Arc::clone(&manifests)),
+                wakes: AtomicUsize::new(0),
+                failed_probes: AtomicUsize::new(0),
+            });
+            let (waiter_pool, registration) = privacy_refund_registration(&foreign_pool, &observer);
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let mut retired = QueuePrivacyRetirements::default();
+                let _lifecycle = state.lock_lane_lifecycle_work_admission();
+                if publish {
+                    queue
+                        .sync_nexus_routing_with_state(&state, &mut retired)
+                        .unwrap();
+                } else {
+                    drop(
+                        queue
+                            .admission_privacy_registry_for(
+                                &manifests,
+                                &state.ivm_execution_budget(),
+                                &mut retired,
+                            )
+                            .unwrap(),
+                    );
+                }
+                assert_eq!(observer.wakes.load(Ordering::SeqCst), 0);
+                assert!(foreign_pool.reserved_bytes() > 0);
+                assert!(state.try_lock_lane_lifecycle_work_admission().is_err());
+                if unwind {
+                    panic!("intentional post-replacement unwind");
+                }
+                Err::<(), _>("intentional post-replacement error")
+            }));
+            if unwind {
+                assert!(result.is_err());
+            } else {
+                assert_eq!(result.unwrap(), Err("intentional post-replacement error"));
+            }
+            assert!(observer.wakes.load(Ordering::SeqCst) > 0);
+            assert_eq!(
+                observer.failed_probes.load(Ordering::SeqCst),
+                0,
+                "callback sees released lifecycle/Queue guards and the exact new owner pair"
+            );
+            assert_eq!(foreign_pool.reserved_bytes(), 0);
+            drop(registration);
+            assert_eq!(waiter_pool.reserved_bytes(), 0);
+        }
+    }
+}
+
+#[test]
+fn batch_privacy_retirement_storage_uses_exact_input_count_and_original_pool() {
+    let (mut state, time) = current_admission_queue_fixture();
+    let tx = accepted_tx_by_someone(&time);
+    register_accepted_tx_authority_for_queue_test(&mut state, &tx);
+    let queue = Queue::test(config_factory(), &time);
+    let plan = queue.route_plan_with_state(&tx, &state).unwrap();
+    let original = tx.entrypoint_bytes().to_vec();
+    let budget = state.ivm_execution_budget();
+    let prior = budget.reserved_bytes();
+    let occupied = budget
+        .try_reserve_bytes(budget.limit_bytes() - prior)
+        .unwrap();
+    assert_eq!(
+        queue
+            .push_batch_with_lane_with_state_and_routing_plans(Vec::new(), &state)
+            .unwrap(),
+        0
+    );
+    let expected = budget
+        .try_reserve(std::alloc::Layout::array::<QueuePrivacyRetirements>(2).unwrap())
+        .unwrap_err();
+    let failure = queue
+        .push_batch_with_lane_with_state_and_routing_plans(
+            vec![(tx.clone(), plan.clone()), (tx.clone(), plan.clone())],
+            &state,
+        )
+        .unwrap_err();
+    let Error::Deferred(original_refusal) = failure.err else {
+        panic!("typed storage refusal");
+    };
+    assert_eq!(original_refusal.allocation_refusal(), Some(&expected));
+    assert!(matches!(original_refusal.allocation_refusal(),
+        Some(iroha_allocation::AllocationRefusal::Capacity { requested_bytes, .. })
+        if *requested_bytes == std::alloc::Layout::array::<QueuePrivacyRetirements>(2).unwrap().size()));
+    assert_eq!(
+        failure.tx.entrypoint_bytes().as_slice(),
+        original.as_slice()
+    );
+    assert_eq!(queue.active_len(), 0);
+    assert_eq!(budget.reserved_bytes(), budget.limit_bytes());
+    drop(occupied);
+    assert_eq!(budget.reserved_bytes(), prior);
+    let retry = queue
+        .push_batch_with_lane_with_state_and_routing_plans(
+            vec![(tx.clone(), plan.clone()), (tx, plan)],
+            &state,
+        )
+        .expect_err("same two-input batch admits storage and reaches its original duplicate");
+    assert!(matches!(retry.err, Error::IsInQueue));
+    assert_eq!(retry.tx.entrypoint_bytes().as_slice(), original.as_slice());
+    assert_eq!(queue.active_len(), 1);
+}
+
+#[test]
+fn batch_foreign_privacy_refunds_after_accepted_prefix_failure_releases_lifecycle() {
+    let (mut state, time) = current_admission_queue_fixture();
+    let tx = accepted_tx_by_someone(&time);
+    register_accepted_tx_authority_for_queue_test(&mut state, &tx);
+    let state = Arc::new(state);
+    let queue = Arc::new(Queue::test(config_factory(), &time));
+    queue
+        .reconfigure_nexus_with_state(&state.nexus_snapshot(), &state, None)
+        .unwrap();
+    let manifests = funded_privacy_manifest_fixture();
+    queue
+        .install_lane_manifests_for_testing(&manifests, &state.ivm_execution_budget())
+        .unwrap();
+    let plan = queue.route_plan_with_state(&tx, &state).unwrap();
+    let foreign_pool = iroha_allocation::AllocationBudget::new(1024 * 1024);
+    drop(
+        queue
+            .admission_privacy_registry_for(
+                &manifests,
+                &foreign_pool,
+                &mut QueuePrivacyRetirements::default(),
+            )
+            .unwrap(),
+    );
+    let observer = Arc::new(ForeignQueuePrivacyRefundObserver {
+        queue: Arc::downgrade(&queue),
+        state: Arc::clone(&state),
+        expected_cache_source: Some(Arc::clone(&manifests)),
+        wakes: AtomicUsize::new(0),
+        failed_probes: AtomicUsize::new(0),
+    });
+    let (waiter_pool, registration) = privacy_refund_registration(&foreign_pool, &observer);
+    let original = tx.entrypoint_bytes().to_vec();
+    let failure = queue
+        .push_batch_with_lane_with_state_and_routing_plans(
+            vec![(tx.clone(), plan.clone()), (tx, plan)],
+            &state,
+        )
+        .expect_err("the second identical input is already in the accepted prefix");
+    assert!(matches!(failure.err, Error::IsInQueue));
+    assert_eq!(
+        failure.tx.entrypoint_bytes().as_slice(),
+        original.as_slice()
+    );
+    assert_eq!(queue.active_len(), 1);
+    assert!(observer.wakes.load(Ordering::SeqCst) > 0);
+    assert_eq!(
+        observer.failed_probes.load(Ordering::SeqCst),
+        0,
+        "callback sees released lifecycle/Queue guards and the exact new owner pair"
+    );
+    assert_eq!(foreign_pool.reserved_bytes(), 0);
+    drop(registration);
+    assert_eq!(waiter_pool.reserved_bytes(), 0);
 }

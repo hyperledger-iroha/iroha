@@ -47,9 +47,9 @@ fn assert_release_fixture_rfc_column_preflight_v1(maximum: bool) {
     let der_challenges = der_challenges_v1();
     let challenges = challenges_v1();
     let provider =
-        ZkX509Rfc5280StarkColumnProviderV1::fixture_v1(material, der_challenges, &challenges)
+        ZkX509Rfc5280StarkColumnProviderV1::fixture_v1(material, &der_challenges, &challenges)
             .expect("release RFC column provider and terminal claims");
-    let der_trace = build_zk_x509_der_stark_trace_v1(assembly.der_base.clone(), der_challenges)
+    let der_trace = build_zk_x509_der_stark_trace_v1(assembly.der_base.clone(), &der_challenges)
         .expect("release DER complete native trace");
     let der_terminals =
         zk_x509_der_stark_terminal_claims_v1(&der_trace).expect("DER terminal claims");
@@ -79,7 +79,7 @@ fn assert_release_fixture_rfc_column_preflight_v1(maximum: bool) {
                     &unused_aux,
                     &unused_aux,
                     &material.fixed_row(row).unwrap(),
-                    der_challenges,
+                    &der_challenges,
                     &challenges,
                     claims,
                 )
@@ -179,7 +179,7 @@ fn assert_release_fixture_rfc_column_preflight_v1(maximum: bool) {
                 &current_aux[index],
                 &next_aux[index],
                 &material.fixed_row(row).unwrap(),
-                der_challenges,
+                &der_challenges,
                 &challenges,
                 claims,
             )
@@ -233,7 +233,7 @@ fn assert_release_fixture_rfc_column_preflight_v1(maximum: bool) {
             &wrong_terminal_aux,
             &next_aux[checkpoints.binary_search(&last).unwrap()],
             &material.fixed_row(last).unwrap(),
-            der_challenges,
+            &der_challenges,
             &challenges,
             claims,
         )
@@ -263,7 +263,7 @@ fn crl_number_profile_lookup_requires_the_exact_embedded_der_extent() {
     let values = PrivateTableV1::new(
         build_zk_x509_rfc5280_stark_aux_column_v1(
             &material,
-            der_challenges_v1(),
+            &der_challenges_v1(),
             &challenges_v1(),
             column,
             &ZkX509ShaUnionCentersV1::identity_fixture_v1(),
@@ -287,7 +287,7 @@ fn crl_number_profile_lookup_requires_the_exact_embedded_der_extent() {
     let (result, erased) = super::super::private_table::inspection::observe_v1(|| {
         build_zk_x509_rfc5280_stark_aux_column_v1(
             &material,
-            der_challenges_v1(),
+            &der_challenges_v1(),
             &challenges_v1(),
             column,
             &ZkX509ShaUnionCentersV1::identity_fixture_v1(),
@@ -407,7 +407,7 @@ fn decimal_source_rows_bind_their_nonzero_digit_decomposition() {
     let unused_aux = [F::ZERO; ZK_X509_RFC5280_STARK_AUX_WIDTH_V1];
     let claims = compile_zk_x509_rfc5280_stark_terminal_claims_v1(
         &material,
-        der_challenges_v1(),
+        &der_challenges_v1(),
         &challenges_v1(),
     )
     .unwrap();
@@ -423,7 +423,7 @@ fn decimal_source_rows_bind_their_nonzero_digit_decomposition() {
                 &unused_aux,
                 &unused_aux,
                 &fixed,
-                der_challenges_v1(),
+                &der_challenges_v1(),
                 &challenges_v1(),
                 claims,
             )
@@ -528,7 +528,7 @@ fn local_base_prefix_v1(
         &unused,
         &unused,
         &fixed,
-        der_challenges_v1(),
+        &der_challenges_v1(),
         &challenges_v1(),
         ZkX509Rfc5280StarkTerminalClaimsV1::canonical_identity_v1(),
     )
@@ -819,7 +819,7 @@ fn assert_source_node_root_base_rows_v1(material: &ZkX509Rfc5280StarkBaseMateria
             &unused,
             &unused,
             &fixed,
-            der_challenges_v1(),
+            &der_challenges_v1(),
             &challenges_v1(),
             ZkX509Rfc5280StarkTerminalClaimsV1::canonical_identity_v1(),
         )

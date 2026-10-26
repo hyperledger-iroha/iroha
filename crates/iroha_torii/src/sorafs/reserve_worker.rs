@@ -1,4 +1,4 @@
-//! Pure state-machine logic for the durable native SoraFS reserve worker.
+//! Pure state-machine logic for the durable native `SoraFS` reserve worker.
 //!
 //! This module deliberately contains no queue, signer, filesystem, or wall-clock
 //! access. The supervised runtime supplies one coherent finalized snapshot and

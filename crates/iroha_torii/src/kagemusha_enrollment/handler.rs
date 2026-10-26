@@ -29,10 +29,9 @@ fn failure(error: IssuerError) -> Response {
     let mut response = (status, "enrollment operation unavailable or rejected").into_response();
     if let Some((name, value)) =
         outcome.map(iroha_torii_shared::kagemusha_enrollment::EnrollmentServiceOutcomeV1::header)
+        && let Ok(value) = HeaderValue::from_str(&value)
     {
-        if let Ok(value) = HeaderValue::from_str(&value) {
-            response.headers_mut().insert(name, value);
-        }
+        response.headers_mut().insert(name, value);
     }
     response
 }

@@ -6,6 +6,11 @@ mod tests {
         PrivacyProposedLifecycleV1,
     };
     use iroha_schema::{Declaration, MetaMap, NamedFieldsMeta, TypeId};
+    type ActivationMutation = (
+        CompiledPrivacyProfileValidationErrorV1,
+        fn(&mut PrivacyProtocolActivationRecordV1),
+    );
+
     struct SchemaOrderAb;
     impl TypeId for SchemaOrderAb {
         fn id() -> String {
@@ -278,13 +283,20 @@ mod tests {
                     .any(|window| window == stale_geometry)
             );
         }
-        let private_geometry = proof_managed_note_stark_geometry_digest_v1(&PRIVATE_NOTE_DOMAINS_V1)
-            .expect("private-note geometry digest");
+        let private_geometry =
+            proof_managed_note_stark_geometry_digest_v1(&PRIVATE_NOTE_DOMAINS_V1)
+                .expect("private-note geometry digest");
         let masp_geometry = proof_managed_note_stark_geometry_digest_v1(&PQ_MASP_DOMAINS_V1)
             .expect("PQ-MASP geometry digest");
         assert_ne!(private_geometry, masp_geometry);
-        assert_ne!(private_geometry, crate::privacy_engines::transparent_stark::PrivacyOuterDigestV1::default());
-        assert_ne!(masp_geometry, crate::privacy_engines::transparent_stark::PrivacyOuterDigestV1::default());
+        assert_ne!(
+            private_geometry,
+            crate::privacy_engines::transparent_stark::PrivacyOuterDigestV1::default()
+        );
+        assert_ne!(
+            masp_geometry,
+            crate::privacy_engines::transparent_stark::PrivacyOuterDigestV1::default()
+        );
         assert_ne!(
             proof_managed_note_stark_profile_digest_v1(
                 &PRIVATE_NOTE_DOMAINS_V1,
@@ -596,10 +608,7 @@ mod tests {
             );
             validate_compiled_privacy_activation_v1(&valid)
                 .expect("exact compiled activation is accepted");
-            let mutations: [(
-                CompiledPrivacyProfileValidationErrorV1,
-                fn(&mut PrivacyProtocolActivationRecordV1),
-            ); 8] = [
+            let mutations: [ActivationMutation; 8] = [
                 (
                     CompiledPrivacyProfileValidationErrorV1::ProofSystemMismatch,
                     |record| record.proof_system_id = PrivacyProofSystemIdV1::Halo2IpaPasta,
@@ -754,10 +763,7 @@ mod tests {
         );
         let valid = fcmp_activation();
         validate_compiled_privacy_activation_v1(&valid).expect("exact FCMP++ activation");
-        let mutations: [(
-            CompiledPrivacyProfileValidationErrorV1,
-            fn(&mut PrivacyProtocolActivationRecordV1),
-        ); 8] = [
+        let mutations: [ActivationMutation; 8] = [
             (
                 CompiledPrivacyProfileValidationErrorV1::ProofSystemMismatch,
                 |record| record.proof_system_id = PrivacyProofSystemIdV1::Halo2IpaPasta,
@@ -1011,10 +1017,7 @@ mod tests {
         }
         let valid = bootle_lantern_activation();
         validate_compiled_privacy_activation_v1(&valid).expect("exact profile");
-        let mutations: [(
-            CompiledPrivacyProfileValidationErrorV1,
-            fn(&mut PrivacyProtocolActivationRecordV1),
-        ); 8] = [
+        let mutations: [ActivationMutation; 8] = [
             (
                 CompiledPrivacyProfileValidationErrorV1::ProofSystemMismatch,
                 |record| {
@@ -1480,10 +1483,7 @@ mod tests {
     fn jindo_compiled_profile_rejects_every_binding_and_policy_mismatch() {
         let valid = jindo_activation();
         validate_compiled_privacy_activation_v1(&valid).expect("exact profile");
-        let mutations: [(
-            CompiledPrivacyProfileValidationErrorV1,
-            fn(&mut PrivacyProtocolActivationRecordV1),
-        ); 8] = [
+        let mutations: [ActivationMutation; 8] = [
             (
                 CompiledPrivacyProfileValidationErrorV1::ProofSystemMismatch,
                 |record| {
@@ -1539,10 +1539,7 @@ mod tests {
     fn every_compiled_cryptographic_binding_is_immutable() {
         let valid = verange_activation();
         validate_compiled_privacy_activation_v1(&valid).expect("exact profile");
-        let mutations: [(
-            CompiledPrivacyProfileValidationErrorV1,
-            fn(&mut PrivacyProtocolActivationRecordV1),
-        ); 7] = [
+        let mutations: [ActivationMutation; 7] = [
             (
                 CompiledPrivacyProfileValidationErrorV1::ProofSystemMismatch,
                 |record| {
@@ -1679,22 +1676,24 @@ mod tests {
             },
         );
         invalid.push(verange_over);
-        let mut pgc_n_over = pgc_activation();
-        pgc_n_over.protocol_limits = PrivacyProtocolActivationLimitsV1::AnonymousPgcKOutOfNV1(
-            AnonymousPgcActivationLimitsV1 {
-                max_anonymity_set_size: 65,
-                max_recipient_count: 8,
-            },
-        );
-        invalid.push(pgc_n_over);
-        let mut pgc_k_over = pgc_activation();
-        pgc_k_over.protocol_limits = PrivacyProtocolActivationLimitsV1::AnonymousPgcKOutOfNV1(
-            AnonymousPgcActivationLimitsV1 {
-                max_anonymity_set_size: 64,
-                max_recipient_count: 9,
-            },
-        );
-        invalid.push(pgc_k_over);
+        let mut oversized_anonymity_set = pgc_activation();
+        oversized_anonymity_set.protocol_limits =
+            PrivacyProtocolActivationLimitsV1::AnonymousPgcKOutOfNV1(
+                AnonymousPgcActivationLimitsV1 {
+                    max_anonymity_set_size: 65,
+                    max_recipient_count: 8,
+                },
+            );
+        invalid.push(oversized_anonymity_set);
+        let mut excess_recipients = pgc_activation();
+        excess_recipients.protocol_limits =
+            PrivacyProtocolActivationLimitsV1::AnonymousPgcKOutOfNV1(
+                AnonymousPgcActivationLimitsV1 {
+                    max_anonymity_set_size: 64,
+                    max_recipient_count: 9,
+                },
+            );
+        invalid.push(excess_recipients);
         let mut pgc_bad_closed_set = pgc_activation();
         pgc_bad_closed_set.protocol_limits =
             PrivacyProtocolActivationLimitsV1::AnonymousPgcKOutOfNV1(
@@ -1791,10 +1790,7 @@ mod tests {
             },
         ));
         validate_compiled_privacy_activation_v1(&valid).expect("exact compiled profile");
-        let mutations: [(
-            CompiledPrivacyProfileValidationErrorV1,
-            fn(&mut PrivacyProtocolActivationRecordV1),
-        ); 8] = [
+        let mutations: [ActivationMutation; 8] = [
             (
                 CompiledPrivacyProfileValidationErrorV1::ProofSystemMismatch,
                 |record| {

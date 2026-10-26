@@ -469,9 +469,9 @@ fn snapshot_capture_refuses_active_publisher_without_waiting() {
         // Manifest refresh authenticates its catalog binding under the State writer;
         // rejecting an unbound registry publishes no replacement State generation.
         assert!(
-            !state.install_lane_manifests_if_consensus_compatible(&Arc::new(
+            state.install_lane_manifests_if_consensus_compatible(&Arc::new(
                 LaneManifestRegistry::default()
-            ))
+            )).is_err()
         );
         assert!(crate::snapshot::CapturedStateSnapshot::capture(&state).is_ok());
     });

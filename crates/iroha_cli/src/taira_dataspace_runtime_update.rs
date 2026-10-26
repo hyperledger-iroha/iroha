@@ -1170,6 +1170,13 @@ impl Verified {
 
     /// Export only exact already-admitted public originals. Private configurations
     /// and measured binaries remain in the actual Linux custody verifier.
+    #[cfg_attr(
+        not(target_os = "linux"),
+        expect(
+            clippy::unused_self,
+            reason = "Linux custody uses the receiver; unsupported platforms preserve the same rejecting interface"
+        )
+    )]
     pub(super) fn public_originals(&self) -> Result<BTreeMap<String, Vec<u8>>> {
         #[cfg(not(target_os = "linux"))]
         {
@@ -1334,7 +1341,7 @@ impl Verified {
                     rustix::fs::Mode::empty(),
                 )?);
                 let mut hash = Sha256::new();
-                let mut buffer = [0u8; 65536];
+                let mut buffer = vec![0u8; 65_536].into_boxed_slice();
                 loop {
                     let n = file.read(&mut buffer)?;
                     if n == 0 {
@@ -1376,6 +1383,13 @@ impl Verified {
     }
 
     /// Retained producer claims, compared with authenticated finality before completion.
+    #[cfg_attr(
+        not(target_os = "linux"),
+        expect(
+            clippy::unused_self,
+            reason = "Linux custody uses the receiver; unsupported platforms preserve the same rejecting interface"
+        )
+    )]
     pub(super) fn retained_tip_claims(&self) -> Result<RetainedTips> {
         #[cfg(not(target_os = "linux"))]
         {
@@ -1392,6 +1406,13 @@ impl Verified {
         }
     }
 
+    #[cfg_attr(
+        not(target_os = "linux"),
+        expect(
+            clippy::unused_self,
+            reason = "Linux custody uses the receiver; unsupported platforms preserve the same rejecting interface"
+        )
+    )]
     pub(super) fn revalidate(&self) -> Result<()> {
         #[cfg(not(target_os = "linux"))]
         {
@@ -1771,8 +1792,7 @@ mod tests {
             let mut units = Vec::new();
             for peer in 0..4 {
                 let role = format!("taira-validator-{}", peer + 1);
-                let raw = if let Some(prior) = &prior_records {
-                    base64::engine::general_purpose::STANDARD
+                let raw = prior_records.as_ref().map_or_else(|| format!("ExecStart={old_daemon} --config /srv/taira/{role}/current/config/beacon.toml --sora\n").into_bytes(), |prior| base64::engine::general_purpose::STANDARD
                         .decode(
                             text(
                                 &rows(field(&prior["intent.json"], "units").unwrap()).unwrap()
@@ -1781,10 +1801,7 @@ mod tests {
                             )
                             .unwrap(),
                         )
-                        .unwrap()
-                } else {
-                    format!("ExecStart={old_daemon} --config /srv/taira/{role}/current/config/beacon.toml --sora\n").into_bytes()
-                };
+                        .unwrap());
                 let changed = std::str::from_utf8(&raw)
                     .unwrap()
                     .replace(&old_daemon, &daemon)
@@ -1794,13 +1811,14 @@ mod tests {
                     "after_sha256":(digest(&changed))}));
             }
             put(plan, "units", norito::json!(units));
-            let mut before = if let Some(prior) = &prior_records {
-                field(&prior["cohort-ready.json"], "observations")
-                    .unwrap()
-                    .clone()
-            } else {
-                records["retained-entry.json"].clone()
-            };
+            let mut before = prior_records.as_ref().map_or_else(
+                || records["retained-entry.json"].clone(),
+                |prior| {
+                    field(&prior["cohort-ready.json"], "observations")
+                        .unwrap()
+                        .clone()
+                },
+            );
             for (peer, row) in before.as_array_mut().unwrap().iter_mut().enumerate() {
                 put(
                     row.get_mut("public").unwrap(),

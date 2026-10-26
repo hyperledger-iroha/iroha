@@ -6,7 +6,7 @@
 use super::*;
 use crate::{
     execution_attempt::ExecutionAttemptError,
-    sumeragi::certified_chain::{CertifiedChain, ChainReadError, CommittedBlock},
+    sumeragi::certified_chain::{CertifiedBlock, CertifiedChain, ChainReadError, CommittedBlock},
 };
 use iroha_allocation::{AllocationBudget, AllocationCharge};
 use iroha_sumeragi::types::Hash32;
@@ -21,7 +21,7 @@ pub struct NativeExecutionTip(NativeExecutionTipRecord);
     Clone, Copy, Debug, PartialEq, Eq, norito::json::JsonSerialize, norito::json::JsonDeserialize,
 )]
 #[norito(deny_unknown_fields)]
-pub(crate) struct NativeExecutionTipRecord {
+pub struct NativeExecutionTipRecord {
     pub(crate) root_scope: iroha_data_model::block::consensus::SumeragiRootScope,
     pub(crate) height: u64,
     pub(crate) creation_time_ms: u64,
@@ -73,7 +73,7 @@ impl NativeExecutionTip {
 /// Complete fixed current/undo snapshot projection, still unauthenticated.
 #[derive(norito::json::JsonSerialize, norito::json::JsonDeserialize)]
 #[norito(deny_unknown_fields)]
-pub(crate) struct NativeExecutionTipSnapshot {
+pub struct NativeExecutionTipSnapshot {
     revert: Option<NativeExecutionTipUndo>,
     blocks: Option<NativeExecutionTipRecord>,
 }
@@ -85,7 +85,7 @@ struct NativeExecutionTipUndo {
     value: Option<NativeExecutionTipRecord>,
 }
 
-pub(crate) type TipCell = Cell<Option<NativeExecutionTip>, AllocationCharge>;
+pub type TipCell = Cell<Option<NativeExecutionTip>, AllocationCharge>;
 
 /// Reserve actual initial payload/control allocations before moving fixed values.
 pub(in crate::state) fn empty_cell(
@@ -121,8 +121,21 @@ fn initialize(
 pub(in crate::state) enum TipRestoreError {
     /// Only the original fresh-State genesis execution can authenticate this result.
     GenesisReplayRequired,
+    /// Kura holds no certified successor of the claimed tip, so nothing certifies the World
+    /// published at that height.
+    SuccessorRequired {
+        /// Height of the claimed tip.
+        height: u64,
+    },
     /// Authenticated history contradicts or cannot establish the decoded claim.
     History(String),
+    /// A snapshot field checked against the same certified walk contradicts that history.
+    Field {
+        /// The snapshot field.
+        field: &'static str,
+        /// How the certified history refutes it.
+        message: String,
+    },
     /// The exact local pool cannot fund the original Cell.
     Admission(StateStorageAdmissionError),
     /// Original native history resources refused this unfinished local attempt.
@@ -188,6 +201,13 @@ impl NativeExecutionTipSnapshot {
 
     /// Restore authority by checking original native history, never by trusting
     /// the decoded Cell or World. H1-only restart must replay signed genesis.
+    ///
+    /// The certified successor of the tip in Kura extends the same verified walk: its
+    /// `parent_world_state_root` is the root of the World published at the tip, which the
+    /// caller must match against a cold capture of the decoded World (E51, E56).
+    ///
+    /// Every certified block from genesis through the tip also passes through `observe`, so
+    /// callers that check other snapshot fields against the same history share this walk.
     pub(in crate::state) fn restore(
         self,
         budget: &AllocationBudget,
@@ -195,22 +215,34 @@ impl NativeExecutionTipSnapshot {
         network: &iroha_data_model::NetworkId,
         hashes: &[HashOf<BlockHeader>],
         kura: &Kura,
-    ) -> Result<TipCell, TipRestoreError> {
+        observe: &mut dyn FnMut(&CertifiedBlock) -> Result<(), TipRestoreError>,
+    ) -> Result<RestoredNativeTip, TipRestoreError> {
         let height = u64::try_from(hashes.len()).map_err(|error| error.to_string())?;
         if height == 0 {
             if self.blocks.is_some() || self.revert.is_some() {
                 return Err("empty history cannot carry native execution tip or undo".into());
             }
-            return initialize(budget, None, None).map_err(TipRestoreError::Admission);
+            return Ok(RestoredNativeTip {
+                cell: initialize(budget, None, None).map_err(TipRestoreError::Admission)?,
+                world_root: None,
+            });
         }
         if height == 1 {
             // Strict daemon startup classifies this separately and constructs
             // fresh State before node::prepare replays the stored signed genesis.
             // A decoded H1 result never authorizes World or bypasses original replay.
-            // Nonempty export recovery remains disabled until S9 authenticates full World.
             return Err(TipRestoreError::GenesisReplayRequired);
         }
-        let chain = CertifiedChain::from_pinned(chain_id, network, hashes, kura, budget)
+        let successor = height + 1;
+        let successor_hash = usize::try_from(successor)
+            .ok()
+            .and_then(core::num::NonZeroUsize::new)
+            .and_then(|successor| kura.get_block_hash(successor))
+            .ok_or(TipRestoreError::SuccessorRequired { height })?;
+        let mut pinned = Vec::with_capacity(hashes.len() + 1);
+        pinned.extend_from_slice(hashes);
+        pinned.push(successor_hash);
+        let chain = CertifiedChain::from_pinned(chain_id, network, &pinned, kura, budget)
             .map_err(TipRestoreError::from)?;
         // One verified walk over the native prefix authenticates the tip and its
         // predecessor and records history checkpoints for off-chain readers.
@@ -221,8 +253,9 @@ impl NativeExecutionTipSnapshot {
             None
         };
         let mut current = None;
-        let mut walk = chain.walk(2, height);
-        while let Some(block) = next_restored_record(&mut walk)? {
+        let mut walk = chain.walk(1, height);
+        observe_restored_genesis(&mut walk, observe)?;
+        while let Some(block) = next_restored_record(&mut walk, observe)? {
             checkpoints.record_sparse(block.height, checkpoint_of(block));
             previous = current.replace(block).or(previous);
         }
@@ -236,13 +269,52 @@ impl NativeExecutionTipSnapshot {
                 "snapshot native execution tip/undo differs from verified native prefix".into(),
             );
         }
-        initialize(
-            budget,
-            Some(NativeExecutionTip(current)),
-            Some(Some(NativeExecutionTip(previous))),
-        )
-        .map_err(TipRestoreError::Admission)
+        drop(walk);
+        // The sequential cursor stands at the tip, so the successor costs one certificate.
+        let world_root = restored_successor_world_root(&chain, successor, current)?;
+        Ok(RestoredNativeTip {
+            cell: initialize(
+                budget,
+                Some(NativeExecutionTip(current)),
+                Some(Some(NativeExecutionTip(previous))),
+            )
+            .map_err(TipRestoreError::Admission)?,
+            world_root: Some(world_root),
+        })
     }
+}
+
+/// An authenticated native tip and the certified root of the World published at it.
+pub(in crate::state) struct RestoredNativeTip {
+    /// The funded tip Cell with its authenticated predecessor undo.
+    pub(in crate::state) cell: TipCell,
+    /// `parent_world_state_root` of the tip's certified successor; `None` for empty history.
+    pub(in crate::state) world_root: Option<Hash>,
+}
+
+// The successor's certified header must extend the authenticated tip; its certified result
+// then binds the World published at the tip as its parent World state root.
+#[inline(never)]
+fn restored_successor_world_root(
+    chain: &CertifiedChain<'_, StateView<'_>>,
+    successor: u64,
+    tip: NativeExecutionTipRecord,
+) -> Result<Hash, TipRestoreError> {
+    let certified = chain
+        .certified(successor)
+        .map_err(TipRestoreError::from)?
+        .into_authenticated_execution()
+        .map_err(|error| error.to_string())?;
+    let committed = certified.committed();
+    if committed.block().header().prev_block_hash() != Some(tip.iroha_hash)
+        || !committed.header().is_some_and(|header| {
+            header.parent_hash == Hash32(tip.core_hash)
+                && header.parent_result == Hash32(tip.result)
+        })
+    {
+        return Err("certified successor does not extend the snapshot tip".into());
+    }
+    Ok(committed.commitment().execution.parent_world_state_root)
 }
 
 // Keep the complete H1 receipt outside the restore frame. It retires before the
@@ -257,23 +329,34 @@ fn restored_genesis_record(
     Ok(record(genesis.committed()))
 }
 
+// Genesis passes only through the observer. Its body signature alone cannot authenticate
+// its execution R, so an H2 tip takes its genesis predecessor from the H2 anchor instead.
+#[inline(never)]
+fn observe_restored_genesis(
+    walk: &mut impl Iterator<Item = Result<CertifiedBlock, ExecutionAttemptError<ChainReadError>>>,
+    observe: &mut dyn FnMut(&CertifiedBlock) -> Result<(), TipRestoreError>,
+) -> Result<(), TipRestoreError> {
+    let genesis = walk
+        .next()
+        .ok_or("verified native prefix ended before the snapshot tip")?
+        .map_err(TipRestoreError::from)?;
+    observe(&genesis)
+}
+
 // The iterator owns the same source-bound prefix and advances in the same order.
 // Complete certificate/result return temporaries belong to one step, rather than
 // remaining reserved in restore's frame while its next native decode runs.
 #[inline(never)]
 fn next_restored_record(
-    walk: &mut impl Iterator<
-        Item = Result<
-            crate::sumeragi::certified_chain::CertifiedBlock,
-            ExecutionAttemptError<ChainReadError>,
-        >,
-    >,
+    walk: &mut impl Iterator<Item = Result<CertifiedBlock, ExecutionAttemptError<ChainReadError>>>,
+    observe: &mut dyn FnMut(&CertifiedBlock) -> Result<(), TipRestoreError>,
 ) -> Result<Option<NativeExecutionTipRecord>, TipRestoreError> {
     let Some(certified) = walk.next() else {
         return Ok(None);
     };
+    let certified = certified.map_err(TipRestoreError::from)?;
+    observe(&certified)?;
     let block = certified
-        .map_err(TipRestoreError::from)?
         .into_authenticated_execution()
         .map_err(|error| error.to_string())?;
     Ok(Some(record(block.committed())))
@@ -427,6 +510,24 @@ pub(in crate::state) fn original_cell<'a>(
     target
         .try_block_acquisition_with_backing(backing, successor, budget)
         .map_err(|_| Error::PolicyIdentity)
+}
+
+impl State {
+    /// Root scope established by original native execution or authenticated recovery.
+    ///
+    /// This copies only the opaque native-tip Cell. Successors preserve this scope,
+    /// so reading it needs neither a compound State view nor a publication retry.
+    /// It grants no height, result, freshness, or World authority. Absence means
+    /// native execution has not established a scope; callers must not infer Global.
+    #[must_use]
+    pub fn authenticated_root_scope(
+        &self,
+    ) -> Option<iroha_data_model::block::consensus::SumeragiRootScope> {
+        self.native_execution_tip
+            .view()
+            .get()
+            .map(NativeExecutionTip::root_scope)
+    }
 }
 
 impl StateView<'_> {

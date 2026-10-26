@@ -96,9 +96,7 @@ fn effective_catalog(
 fn seed_committed_catalog(state: &mut State, runtime: NexusRuntimeCatalogV1) {
     let mut world = state.world.block();
     world
-        .parameters
-        .get_mut()
-        .set_parameter(iroha_data_model::parameter::Parameter::Custom(
+        .set_parameter_for_testing(iroha_data_model::parameter::Parameter::Custom(
             runtime
                 .into_custom_parameter()
                 .expect("structurally valid protected test state"),

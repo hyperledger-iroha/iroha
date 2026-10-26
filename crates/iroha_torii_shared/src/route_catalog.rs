@@ -4052,6 +4052,13 @@ pub mod application_api {
         ACCOUNTS_BY_ACCOUNT_ID_PERMISSIONS_QUERY_POST => dataspace_post("application.accounts_by_account_id_permissions_query_post", "/v1/accounts/{account_id}/permissions/query");
         ACCOUNTS_BY_ACCOUNT_ID_TRANSACTIONS_GET => dataspace_get("application.accounts_by_account_id_transactions_get", "/v1/accounts/{account_id}/transactions");
         ACCOUNTS_BY_ACCOUNT_ID_HISTORY_GET => dataspace_get("application.accounts_by_account_id_history_get", "/v1/accounts/{account_id}/history");
+        ///
+        /// Every committed movement of one asset definition, newest first, from the node's
+        /// movement index; `503 asset_movements_indexing` while it catches up with the tip.
+        ASSETS_BY_DEFINITION_ID_MOVEMENTS_GET => dataspace_get("application.assets_by_definition_id_movements_get", "/v1/assets/{definition_id}/movements");
+        ///
+        /// The asset movement feed with its controls as a JSON body.
+        ASSETS_BY_DEFINITION_ID_MOVEMENTS_QUERY_POST => dataspace_post("application.assets_by_definition_id_movements_query_post", "/v1/assets/{definition_id}/movements/query");
         PROOFS_QUERY_POST => signed_compute_post("application.proofs_query_post", "/v1/proofs/query");
         ZK_PROOF_TAGS_BY_BACKEND_BY_HASH_GET => app_get("application.zk_proof_tags_by_backend_by_hash_get", "/v1/zk/proof-tags/{backend}/{hash}");
         DOMAINS_GET => dataspace_get("application.domains_get", "/v1/domains");

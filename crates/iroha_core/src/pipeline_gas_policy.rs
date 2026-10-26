@@ -9,6 +9,16 @@
 
 use std::{collections::BTreeSet, str::FromStr as _};
 
+mod gas_admission;
+pub use gas_admission::{AdmittedGas, GasAdmissionError, GasCustody};
+
+mod retained;
+pub(crate) use retained::PreparedParameters;
+pub use retained::{ParameterRetentionError, RetainedStateParameters};
+mod ingress;
+pub(crate) use ingress::ParameterIngressAttemptError;
+pub use ingress::ParameterIngressError;
+
 use iroha_config::parameters::actual::{Gas, GasLiquidity, GasRate, GasVolatility};
 use iroha_data_model::{
     account::{
@@ -25,24 +35,6 @@ use iroha_data_model::{
 };
 use iroha_primitives::{json::Json, numeric::Numeric};
 
-/// The bootstrap value is explicit owned state; reading it never allocates a
-/// replacement default or mistakes it for committed monetary authority.
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum RootFeeProjection {
-    Bootstrap(RootFeePolicy),
-    Committed(RootFeePolicy),
-}
-impl RootFeeProjection {
-    fn bootstrap() -> Self {
-        Self::Bootstrap(iroha_config::parameters::defaults::nexus::fees::genesis_policy())
-    }
-    fn effective(&self) -> &RootFeePolicy {
-        match self {
-            Self::Bootstrap(value) | Self::Committed(value) => value,
-        }
-    }
-}
-
 /// One MV value owning canonical parameters and validated execution projections.
 ///
 /// Only `parameters` is serialized or committed. The derived fields are rebuilt
@@ -54,7 +46,7 @@ pub struct StateParameters {
     pipeline: PipelineValidityPolicyV1,
     fraud: FraudAdmissionPolicyV1,
     zk: iroha_data_model::zk_validity_policy::ZkValidityPolicyV1,
-    root_fees: RootFeeProjection,
+    root_fees: Option<RootFeePolicy>,
     // None is the explicit uninitialized pre-genesis state, never a fallback.
     crypto: Option<CryptoAdmissionPolicyV1>,
     // None is explicit pre-genesis absence, never a node-local monetary default.
@@ -69,7 +61,7 @@ impl Default for StateParameters {
             pipeline: PipelineValidityPolicyV1::protocol_default(),
             fraud: FraudAdmissionPolicyV1::protocol_default(),
             zk: iroha_data_model::zk_validity_policy::ZkValidityPolicyV1::protocol_default(),
-            root_fees: RootFeeProjection::bootstrap(),
+            root_fees: None,
             crypto: None,
             staking: None,
         }
@@ -111,9 +103,7 @@ impl TryFrom<Parameters> for StateParameters {
             .custom()
             .get(&RootFeePolicy::parameter_id())
             .map(|custom| root_fee_policy(custom.payload()))
-            .transpose()?
-            .map(RootFeeProjection::Committed)
-            .unwrap_or_else(RootFeeProjection::bootstrap);
+            .transpose()?;
         let crypto = parameters
             .custom()
             .get(&CryptoAdmissionPolicyV1::parameter_id())
@@ -150,20 +140,6 @@ fn root_fee_policy(payload: &Json) -> Result<RootFeePolicy, norito::Error> {
     payload.try_into_any_norito::<RootFeePolicy>()
 }
 
-/// Replace the process-local cache with the exact committed monetary projection.
-/// The deterministic bootstrap value never authorizes ordinary execution: that
-/// requires the committed parameter. Genesis alone may start with an empty State.
-pub(crate) fn with_root_fees(
-    mut nexus: iroha_config::parameters::actual::Nexus,
-    parameters: &StateParameters,
-) -> iroha_config::parameters::actual::Nexus {
-    if cfg!(all(test, sumeragi_core_mutation = "HC396")) {
-        return nexus;
-    }
-    nexus.fees = parameters.effective_root_fees().clone();
-    nexus
-}
-
 impl StateParameters {
     /// Borrow the validated fee projection from this exact parameters version.
     pub fn gas(&self) -> &Gas {
@@ -189,16 +165,7 @@ impl StateParameters {
     /// Borrow the complete monetary policy derived from this exact committed version.
     /// Absence is permitted only before signed genesis has installed the required policy.
     pub fn root_fees(&self) -> Option<&RootFeePolicy> {
-        match &self.root_fees {
-            RootFeeProjection::Bootstrap(_) => None,
-            RootFeeProjection::Committed(value) => Some(value),
-        }
-    }
-
-    /// Borrow the deterministic projection even for the original pre-genesis cut.
-    /// Ordinary execution must still require `root_fees()` to be present.
-    pub(crate) fn effective_root_fees(&self) -> &RootFeePolicy {
-        self.root_fees.effective()
+        self.root_fees.as_ref()
     }
 
     /// Borrow the policy from this exact parameters version, if genesis initialized it.
@@ -271,15 +238,13 @@ impl StateParameters {
             if !is_genesis
                 && !cfg!(all(test, sumeragi_core_mutation = "HC399"))
                 && let Some(previous) = previous
-            {
-                if previous.fee_asset_id != next.fee_asset_id
+                && (previous.fee_asset_id != next.fee_asset_id
                     || previous.sponsor_vault_custody_account_id
-                        != next.sponsor_vault_custody_account_id
-                {
-                    return Err(norito::Error::Message(
-                        "root fee currency and sponsor custody are immutable after genesis".into(),
-                    ));
-                }
+                        != next.sponsor_vault_custody_account_id)
+            {
+                return Err(norito::Error::Message(
+                    "root fee currency and sponsor custody are immutable after genesis".into(),
+                ));
             }
             Ok(())
         })
@@ -325,7 +290,7 @@ impl StateParameters {
             let root_fees = root_fee_policy(custom.payload())?;
             validate_root_fees(&root_fees)?;
             self.parameters.set_parameter(parameter);
-            self.root_fees = RootFeeProjection::Committed(root_fees);
+            self.root_fees = Some(root_fees);
         } else if let iroha_data_model::parameter::Parameter::Custom(custom) = &parameter
             && custom.id().name().as_ref() == PublicLaneStakingPolicy::PARAMETER_ID_STR
         {
@@ -386,7 +351,7 @@ impl StateParameters {
                 self.zk =
                     iroha_data_model::zk_validity_policy::ZkValidityPolicyV1::protocol_default();
             }
-            RootFeePolicy::PARAMETER_ID_STR => self.root_fees = RootFeeProjection::bootstrap(),
+            RootFeePolicy::PARAMETER_ID_STR => self.root_fees = None,
             _ => {}
         }
         Ok(previous)
@@ -479,18 +444,18 @@ const TECH_ACCOUNT: &str = "ivm_gas_tech_account_id";
 const ACCEPTED_ASSETS: &str = "ivm_gas_accepted_assets";
 const RATES: &str = "ivm_gas_units_per_gas";
 
+/// Borrowed identities; classification never constructs owned names.
+pub(crate) const PARAMETER_NAMES: [&str; 3] = [TECH_ACCOUNT, ACCEPTED_ASSETS, RATES];
+
 /// The three committed fee fields protected from executor reconciliation.
 pub(crate) fn parameter_ids() -> [CustomParameterId; 3] {
-    [TECH_ACCOUNT, ACCEPTED_ASSETS, RATES]
-        .map(|name| name.parse().expect("static fee parameter id"))
+    PARAMETER_NAMES.map(|name| name.parse().expect("static fee parameter id"))
 }
 
-#[derive(crate::json_macros::JsonDeserialize)]
 #[cfg_attr(
     any(test, feature = "iroha-core-tests"),
     derive(crate::json_macros::JsonSerialize)
 )]
-#[norito(deny_unknown_fields)]
 struct CommittedGasRate {
     asset: String,
     units_per_gas: u64,
@@ -499,21 +464,31 @@ struct CommittedGasRate {
     volatility_class: Option<String>,
 }
 
-fn canonical_asset(value: &str, field: &str) -> Result<AssetDefinitionId, String> {
-    let asset = AssetDefinitionId::parse_address_literal(value)
-        .map_err(|error| format!("invalid {field} asset `{value}`: {error}"))?;
-    if value != asset.canonical_address() {
-        return Err(format!(
-            "{field} asset `{value}` is not a canonical asset definition address"
-        ));
+impl norito::json::JsonDeserialize for CommittedGasRate {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> Result<Self, norito::json::Error> {
+        gas_admission::decode_ordinary_rate(parser)
     }
-    Ok(asset)
+}
+
+fn canonical_asset(value: &str, field: &str) -> Result<AssetDefinitionId, String> {
+    // The maintained fixed-size Base58 parser already enforces canonical spelling:
+    // no whitespace/prefix, exactly 21 bytes, fixed version/checksum and UUIDv4.
+    // An extra leading Base58 zero changes the decoded length, so re-rendering a
+    // temporary String adds no validation and would require a second allocation.
+    AssetDefinitionId::parse_address_literal(value)
+        .map_err(|error| format!("invalid {field} asset `{value}`: {error}"))
 }
 
 /// Decode a committed canonical receiver without consulting node address prefixes.
-pub(crate) fn receiver_id(value: &str) -> Result<AccountId, norito::Error> {
+pub fn receiver_id(value: &str) -> Result<AccountId, norito::Error> {
     let decode = || AccountAddress::parse_encoded(value, None)?.to_account_id();
-    decode().map_err(|error| match error {
+    decode().map_err(receiver_error)
+}
+
+fn receiver_error(error: AccountAddressError) -> norito::Error {
+    match error {
         AccountAddressError::DecodeResourceLimit => {
             norito::Error::Json(norito::json::Error::DecodeResourceLimit)
         }
@@ -522,7 +497,7 @@ pub(crate) fn receiver_id(value: &str) -> Result<AccountId, norito::Error> {
             norito::Error::ScopedDecodeResource(origin)
         }
         other => norito::Error::Message(other.to_string()),
-    })
+    }
 }
 
 fn technical_account(payload: &Json) -> Result<String, norito::Error> {
@@ -570,18 +545,8 @@ fn rates(payload: &Json) -> Result<Vec<GasRate>, norito::Error> {
                     parsed
                 }
             };
-            let liquidity = match value.liquidity_profile {
-                None => GasLiquidity::default(),
-                Some(text) => GasLiquidity::from_str(&text).map_err(|()| {
-                    norito::Error::Message(format!("invalid {RATES} liquidity `{text}`"))
-                })?,
-            };
-            let volatility = match value.volatility_class {
-                None => GasVolatility::default(),
-                Some(text) => GasVolatility::from_str(&text).map_err(|()| {
-                    norito::Error::Message(format!("invalid {RATES} volatility `{text}`"))
-                })?,
-            };
+            let liquidity = rate_liquidity(value.liquidity_profile.as_deref())?;
+            let volatility = rate_volatility(value.volatility_class.as_deref())?;
             // Zero retains the current Nexus convention: signature-bound gas is
             // priced by Nexus instead of creating a second pipeline transfer.
             Ok(GasRate {
@@ -595,11 +560,31 @@ fn rates(payload: &Json) -> Result<Vec<GasRate>, norito::Error> {
         .collect()
 }
 
+fn rate_liquidity(value: Option<&str>) -> Result<GasLiquidity, norito::Error> {
+    value.map_or_else(
+        || Ok(GasLiquidity::default()),
+        |text| {
+            GasLiquidity::from_str(text)
+                .map_err(|()| norito::Error::Message(format!("invalid {RATES} liquidity `{text}`")))
+        },
+    )
+}
+fn rate_volatility(value: Option<&str>) -> Result<GasVolatility, norito::Error> {
+    value.map_or_else(
+        || Ok(GasVolatility::default()),
+        |text| {
+            GasVolatility::from_str(text).map_err(|()| {
+                norito::Error::Message(format!("invalid {RATES} volatility `{text}`"))
+            })
+        },
+    )
+}
+
 /// Validate a fee parameter before ordinary authorized `SetParameter` commits it.
 ///
 /// Returns false for another parameter, or an error for malformed fee policy.
 #[cfg(test)]
-pub(crate) fn validate_parameter(custom: &CustomParameter) -> Result<bool, norito::Error> {
+pub fn validate_parameter(custom: &CustomParameter) -> Result<bool, norito::Error> {
     apply_parameter(&mut Gas::default(), custom)
 }
 
@@ -617,7 +602,7 @@ fn apply_parameter(gas: &mut Gas, custom: &CustomParameter) -> Result<bool, nori
 ///
 /// A malformed carried value is an error; it never selects local configuration
 /// or silently falls back to a default.
-pub(crate) fn from_parameters(parameters: &Parameters) -> Result<Gas, norito::Error> {
+pub fn from_parameters(parameters: &Parameters) -> Result<Gas, norito::Error> {
     let mut policy = Gas::default();
     let [technical_id, assets_id, rates_id] = parameter_ids();
     if let Some(value) = parameters.custom().get(&technical_id) {
@@ -636,7 +621,7 @@ pub(crate) fn from_parameters(parameters: &Parameters) -> Result<Gas, norito::Er
 ///
 /// This helper authors parameters; it is never a runtime configuration fallback.
 #[cfg(any(test, feature = "iroha-core-tests"))]
-pub(crate) fn parameters_for_testing(gas: Gas) -> [iroha_data_model::parameter::Parameter; 3] {
+pub fn parameters_for_testing(gas: Gas) -> [iroha_data_model::parameter::Parameter; 3] {
     use iroha_data_model::parameter::Parameter;
     let rates = gas
         .units_per_gas
@@ -862,7 +847,7 @@ mod tests {
     fn zk_projection_and_bootstrap_fees_share_original_atomic_parameter_owner() {
         use iroha_data_model::zk_validity_policy::{ZkValidityPolicyError, ZkValidityPolicyV1};
         let mut owner = StateParameters::default();
-        let bootstrap = owner.effective_root_fees().clone();
+        let bootstrap = owner.root_fees().cloned();
         assert!(owner.root_fees().is_none());
         let mut policy = ZkValidityPolicyV1::protocol_default();
         policy.gas.proof_base += 7;
@@ -870,7 +855,7 @@ mod tests {
         let zero = norito::DecodeLimits::new(0, 0, 0, 0, 0);
         let original = owner.clone();
         norito::with_decode_limits_scope(zero, || {
-            assert_eq!(owner.effective_root_fees(), &bootstrap);
+            assert_eq!(owner.root_fees(), bootstrap.as_ref());
             assert_eq!(owner.zk_policy(), &ZkValidityPolicyV1::protocol_default());
             let error = owner.set_parameter(update.clone()).unwrap_err();
             assert!(norito::core::decode_error_matches_active_limits(&error));
@@ -901,7 +886,7 @@ mod tests {
             .remove_custom_parameter(&ZkValidityPolicyV1::parameter_id())
             .unwrap();
         assert_eq!(owner.zk_policy(), &ZkValidityPolicyV1::protocol_default());
-        assert_eq!(owner.effective_root_fees(), &bootstrap);
+        assert_eq!(owner.root_fees(), bootstrap.as_ref());
     }
 
     #[test]

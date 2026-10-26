@@ -34,7 +34,7 @@ fn bind_root(transaction: &mut StateTransaction<'_, '_>, signed: &SignedTransact
 
 #[test]
 fn preparation_refusal_is_fee_free_but_admitted_business_failure_charges_actual_work() {
-    let _fee_guard = crate::status::nexus_fee_test_lock().lock().unwrap();
+    let _fee_guard = crate::status::operator_status_test_guard();
     for batch in [false, true] {
         for maximum in [1, 2] {
             let asset = AssetDefinitionId::parse_address_literal(
@@ -508,7 +508,7 @@ fn failing_forgery_invalidates_carrier_without_rejection_fee_or_partial_record()
     use iroha_data_model::{
         isi::sccp::SubmitSccpForgeryEvidenceV1, sccp::params::SccpParametersV1,
     };
-    let _fee_guard = crate::status::nexus_fee_test_lock().lock().unwrap();
+    let _fee_guard = crate::status::operator_status_test_guard();
     let asset = AssetDefinitionId::parse_address_literal(
         &iroha_config::parameters::defaults::nexus::fees::fee_asset_id(),
     )

@@ -142,7 +142,7 @@ impl fmt::Debug for VegaMdlWitnessV1 {
                 &self.birth_date_issuer_signed_item.len(),
             )
             .field("private_values", &"[REDACTED]")
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 /// Canonical Figure 9 ECDSA witness `(r, s^-1 mod n)`.
@@ -304,7 +304,7 @@ impl fmt::Debug for VegaMdlValidatedWitnessV1 {
             .debug_struct("VegaMdlValidatedWitnessV1")
             .field("lookup_entries", &self.lookup.addresses.len())
             .field("private_values", &"[REDACTED]")
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 /// Parse and preflight the complete Figure 9 witness.
@@ -939,7 +939,7 @@ mod tests {
     }
     fn cbor_tag(tag: u64, value: Vec<u8>) -> Vec<u8> {
         let mut encoded = cbor_head(6, tag);
-        encoded.extend_from_slice(&value);
+        encoded.extend(value);
         encoded
     }
     fn signing_key(seed: u8) -> SigningKey {

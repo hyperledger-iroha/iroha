@@ -74,13 +74,13 @@ impl ZkAcePrivacyWitnessV1 {
     }
     fn validate(&self) -> Result<(), ZkAcePrivacyWitnessValidationErrorV1> {
         if self.identity_root == [0; 32] {
-            return Err(ZkAcePrivacyWitnessValidationErrorV1::ZeroIdentityRoot);
+            return Err(ZkAcePrivacyWitnessValidationErrorV1::IdentityRoot);
         }
         if self.identity_blinding == [0; 32] {
-            return Err(ZkAcePrivacyWitnessValidationErrorV1::ZeroIdentityBlinding);
+            return Err(ZkAcePrivacyWitnessValidationErrorV1::IdentityBlinding);
         }
         if self.replay_secret == [0; 32] {
-            return Err(ZkAcePrivacyWitnessValidationErrorV1::ZeroReplaySecret);
+            return Err(ZkAcePrivacyWitnessValidationErrorV1::ReplaySecret);
         }
         Ok(())
     }
@@ -126,13 +126,13 @@ impl Zeroize for ZkAcePrivacyWitnessV1 {
 pub enum ZkAcePrivacyWitnessValidationErrorV1 {
     /// The external identity root is the all-zero sentinel.
     #[error("ZK-ACE identity root witness must be non-zero")]
-    ZeroIdentityRoot,
+    IdentityRoot,
     /// The identity blinding is the all-zero sentinel.
     #[error("ZK-ACE identity blinding witness must be non-zero")]
-    ZeroIdentityBlinding,
+    IdentityBlinding,
     /// The replay secret is the all-zero sentinel.
     #[error("ZK-ACE replay secret witness must be non-zero")]
-    ZeroReplaySecret,
+    ReplaySecret,
 }
 /// Transcript family frozen into the dedicated proof implementation.
 pub const ZK_ACE_PRIVACY_TRANSCRIPT_LABEL_V1: &str = "iroha:privacy:zk-ace:transparent-stark:v1";
@@ -161,7 +161,11 @@ pub const ZK_ACE_DIGEST384_PARAMETER_SHA3_256_V1: &str =
 /// Exact independent-lane Poseidon profile used by the native hash and AIR.
 pub const ZK_ACE_POSEIDON_PROFILE_V1: &[u8] = b"poseidon-x7-goldilocks-digest384:lanes6-independent:width3:rate2:capacity1:full8:partial57:parameter-generator=shake256-rejection-sampling-u64le-below-goldilocks-v1:parameters-sha3-256=84c5055b47cc7289835e0a5f31d4563849244ffddbf51f5d67b1db95222ce3e6";
 /// Native and consensus proof byte ceiling.
-pub const ZK_ACE_PRIVACY_MAX_PROOF_BYTES_V1: u32 = MAX_PROOF_BYTES as u32;
+pub const ZK_ACE_PRIVACY_MAX_PROOF_BYTES_V1: u32 = {
+    assert!(MAX_PROOF_BYTES <= u32::MAX as usize);
+    let bytes = MAX_PROOF_BYTES.to_le_bytes();
+    u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
+};
 /// Frozen SHA-256 self-authentication digest of every verifier-profile field below.
 ///
 /// SHA-256 is retained here only as a non-STARK artifact checksum. It is never

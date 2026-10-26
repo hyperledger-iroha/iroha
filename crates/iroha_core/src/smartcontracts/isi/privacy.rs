@@ -91,8 +91,9 @@ use iroha_data_model::{
         PrivacyProtocolLimitsTighteningV1, PrivacyRootManagementV1, PrivacyRootPublicationV1,
         PrivacyRootRoleV1, PrivacyStatementDigestV1, PrivacyStatementV1,
         PrivacyValueBalanceDirectionV1, PrivacyVegaIssuerRecordV1, PrivacyZkAcePolicyLifecycleV1,
-        PrivacyZkAmsActionV1, PrivacyZkX509CrlRecordV1, PrivacyZkX509RecordLifecycleV1,
-        PrivacyZkX509TrustAnchorRecordV1, TAIRA_PRIVACY_MAX_PGC_BOOTSTRAP_PROOF_BYTES_V1,
+        PrivacyZkAmsActionV1, PrivacyZkX509CrlRecordV1, PrivacyZkX509PresentationBoundsV1,
+        PrivacyZkX509RecordLifecycleV1, PrivacyZkX509TrustAnchorRecordV1,
+        TAIRA_PRIVACY_MAX_PGC_BOOTSTRAP_PROOF_BYTES_V1,
         VEGA_MAX_ISSUER_RECORD_REVISIONS_PER_LINEAGE_V1, VEGA_MAX_ISSUER_RECORDS_V1,
         ZK_X509_MAX_CERTIFICATE_POLICY_RECORDS_V1, ZK_X509_MAX_CRL_AGE_SECONDS_V1,
         ZK_X509_MAX_CRL_LINEAGES_V1, ZK_X509_MAX_RECORD_REVISIONS_PER_LINEAGE_V1,
@@ -173,7 +174,7 @@ fn privacy_verification_error(
         original => original,
     };
     let message = format!("privacy proof admission rejected: {error}");
-    let invariant = match &error {
+    let invariant = match error {
         PrivacyVerificationErrorV1::CompiledActivation(_)
         | PrivacyVerificationErrorV1::CanonicalEncoding(_)
         | PrivacyVerificationErrorV1::AnonymousPgcRoot { .. } => true,
@@ -256,6 +257,7 @@ type PreparedProofManagedNoteApplyV1 = (
     Vec<(PrivacyCommitmentKeyV1, PrivacyStateItemRecordV1)>,
     PrivacyProofManagedPoolAccumulatorStateV1,
 );
+#[derive(Clone, Copy)]
 struct ProofManagedNoteApplyContextV1<'a, 'block, 'state> {
     effect: &'a VerifiedProofManagedPoolLedgerEffectV1,
     snapshot: &'a PrivacyProofManagedPoolSnapshotV1,
@@ -264,6 +266,7 @@ struct ProofManagedNoteApplyContextV1<'a, 'block, 'state> {
     expected_action_index: u32,
     state_transaction: &'a StateTransaction<'block, 'state>,
 }
+#[derive(Clone, Copy)]
 enum TypedProofManagedNoteApplyV1<'a> {
     IvmPrivateNote {
         statement: &'a IrohaIvmPrivateNoteStarkStatementV1,
@@ -634,7 +637,7 @@ impl Execute for TransitionPrivacyProtocolLifecycleV1 {
             .world
             .privacy_activations
             .get(&key)
-            .cloned()
+            .copied()
             .ok_or_else(|| {
                 invalid_privacy_parameter(format!(
                     "privacy protocol {:?} is not registered",
@@ -1184,9 +1187,9 @@ impl Execute for BootstrapPrivacyProofManagedPoolV1 {
             || {
                 self.bootstrap
                     .initial_note_commitments()
-                    .map_or(0, |values| values.len())
+                    .map_or(0, <[iroha_data_model::privacy::PrivacyCommitmentV1]>::len)
             },
-            |values| values.len(),
+            <[iroha_data_model::privacy::PrivacyFcmpOutputTupleV1]>::len,
         );
         let mut output_records = Vec::new();
         output_records
@@ -2006,33 +2009,33 @@ fn apply_zk_x509_root_append_v1(
         .privacy_root_heads
         .insert(plan.head_key, plan.next_head);
 }
-// TODO(X.6): take this verdict from the canonical interval definition
-// (`PrivacyZkX509PresentationBoundsV1::from_crl(record.update_interval())`
-// containing the block second). The predicate below is the same on every block
-// second within the RFC 5280 calendar; it is pinned as a `deferred` site in
-// specs/zk_x509_presentation_interval_sites.json and compared with the
-// definition by `deferred_sites_equal_the_canonical_definition_on_a_boundary_grid`.
+// Registration and rotation use the same signed-interval definition as proof
+// admission. Eligibility never selects an older CRL: State holds only the exact
+// governed current revision, and a rejected successor leaves it unchanged.
 fn validate_zk_x509_crl_freshness_v1(
     record: PrivacyZkX509CrlRecordV1,
     block_timestamp_ms: u64,
 ) -> Result<(), Error> {
     let block_unix_seconds = block_timestamp_ms / 1_000;
-    if block_unix_seconds < record.this_update_unix_seconds
-        || block_unix_seconds >= record.next_update_unix_seconds
+    if PrivacyZkX509PresentationBoundsV1::from_crl(record.update_interval())
+        .is_ok_and(|bounds| bounds.contains_unix_seconds(block_unix_seconds))
     {
-        return Err(invalid_privacy_parameter(
-            "X.509 signed CRL is not current at the executing block timestamp",
-        ));
+        return Ok(());
     }
-    let age = block_unix_seconds
-        .checked_sub(record.this_update_unix_seconds)
-        .ok_or_else(|| invalid_privacy_parameter("X.509 signed CRL begins in the future"))?;
-    if age > ZK_X509_MAX_CRL_AGE_SECONDS_V1 {
-        return Err(invalid_privacy_parameter(format!(
-            "X.509 signed CRL age {age}s exceeds the {ZK_X509_MAX_CRL_AGE_SECONDS_V1}s freshness limit"
-        )));
+    // Keep useful diagnostics after the canonical rejection. These branches
+    // cannot admit a record or extend the RFC 5280 calendar.
+    if block_unix_seconds < record.next_update_unix_seconds {
+        if let Some(age) = block_unix_seconds.checked_sub(record.this_update_unix_seconds) {
+            if age > ZK_X509_MAX_CRL_AGE_SECONDS_V1 {
+                return Err(invalid_privacy_parameter(format!(
+                    "X.509 signed CRL age {age}s exceeds the {ZK_X509_MAX_CRL_AGE_SECONDS_V1}s freshness limit"
+                )));
+            }
+        }
     }
-    Ok(())
+    Err(invalid_privacy_parameter(
+        "X.509 signed CRL is not current at the executing block timestamp",
+    ))
 }
 fn validate_current_zk_x509_ca_root_v1(
     trust_anchor: PrivacyZkX509TrustAnchorRecordV1,
@@ -3373,7 +3376,7 @@ impl Execute for RegisterPrivacyVegaIssuerV1 {
         state_transaction.preflight_privacy_action(expected_action_index, encoded_action_bytes)?;
         require_registered_vega_protocol(state_transaction)?;
         execute_register_privacy_vega_issuer_after_admission_v1(
-            self,
+            &(self),
             expected_action_index,
             encoded_action_bytes,
             state_transaction,
@@ -3381,7 +3384,7 @@ impl Execute for RegisterPrivacyVegaIssuerV1 {
     }
 }
 fn execute_register_privacy_vega_issuer_after_admission_v1(
-    instruction: RegisterPrivacyVegaIssuerV1,
+    instruction: &RegisterPrivacyVegaIssuerV1,
     expected_action_index: u32,
     encoded_action_bytes: u64,
     state_transaction: &mut StateTransaction<'_, '_>,
@@ -3437,7 +3440,7 @@ impl Execute for RotatePrivacyVegaIssuerV1 {
         state_transaction.preflight_privacy_action(expected_action_index, encoded_action_bytes)?;
         require_registered_vega_protocol(state_transaction)?;
         execute_rotate_privacy_vega_issuer_after_admission_v1(
-            self,
+            &(self),
             expected_action_index,
             encoded_action_bytes,
             state_transaction,
@@ -3445,7 +3448,7 @@ impl Execute for RotatePrivacyVegaIssuerV1 {
     }
 }
 fn execute_rotate_privacy_vega_issuer_after_admission_v1(
-    instruction: RotatePrivacyVegaIssuerV1,
+    instruction: &RotatePrivacyVegaIssuerV1,
     expected_action_index: u32,
     encoded_action_bytes: u64,
     state_transaction: &mut StateTransaction<'_, '_>,
@@ -3543,7 +3546,7 @@ impl Execute for RevokePrivacyVegaIssuerV1 {
         state_transaction.preflight_privacy_action(expected_action_index, encoded_action_bytes)?;
         require_registered_vega_protocol(state_transaction)?;
         execute_revoke_privacy_vega_issuer_after_admission_v1(
-            self,
+            &(self),
             expected_action_index,
             encoded_action_bytes,
             state_transaction,
@@ -3551,7 +3554,7 @@ impl Execute for RevokePrivacyVegaIssuerV1 {
     }
 }
 fn execute_revoke_privacy_vega_issuer_after_admission_v1(
-    instruction: RevokePrivacyVegaIssuerV1,
+    instruction: &RevokePrivacyVegaIssuerV1,
     expected_action_index: u32,
     encoded_action_bytes: u64,
     state_transaction: &mut StateTransaction<'_, '_>,
@@ -4015,7 +4018,10 @@ impl PreparedPrivacySubmissionV1 {
             if let Some(root) = fcmp_root
                 && current_epoch == snapshot.current_epoch()
                 && current_root == snapshot.current_root()
-                && snapshot.fcmp_accumulator_state().map(|state| state.root()) != Some(root)
+                && snapshot
+                    .fcmp_accumulator_state()
+                    .map(iroha_core_privacy::privacy_state::PrivacyFcmpAccumulatorStateV1::root)
+                    != Some(root)
             {
                 return Err(invalid_privacy_parameter(
                     "FCMP++ statement typed root differs from the authoritative curve frontier",
@@ -5509,8 +5515,7 @@ impl PreparedPrivacySubmissionV1 {
                     self.envelope.statement_digest,
                     &effect.asset_definition_id,
                     effect.public_balance_scope,
-                    &effect.source,
-                    &effect.destination,
+                    (&effect.source, &effect.destination),
                     amount,
                 )?;
                 state_transaction
@@ -6493,7 +6498,7 @@ mod tests {
             total_supply,
             &public_keys,
             &encrypted_balances,
-            TranscriptBindingV1 {
+            &TranscriptBindingV1 {
                 network_id: network_id.as_bytes(),
                 genesis_hash: *network_id.as_bytes(),
                 action_index: 0,
@@ -6658,7 +6663,7 @@ mod tests {
                     &current_balances,
                     recipient_count,
                     pool_invariant,
-                    TranscriptBindingV1 {
+                    &TranscriptBindingV1 {
                         network_id: &TEST_GENESIS_HASH,
                         genesis_hash: TEST_GENESIS_HASH,
                         action_index: 0,
@@ -7584,6 +7589,8 @@ mod tests {
     }
     #[test]
     fn bootle_lantern_submit_policy_resolution_is_exact_and_fail_closed() {
+        type StatementMutation = fn(&mut IrohaBootleLanternAnoncredStatementV1);
+
         let policy = bootle_lantern_policy(1, BootleLanternIssuerPolicyLifecycleV1::Active);
         let statement = bootle_lantern_statement(&policy);
         let key = PrivacyCommitmentKeyV1::bootle_lantern_issuer_policy(
@@ -7608,7 +7615,7 @@ mod tests {
                 .expect("exact active policy"),
             policy
         );
-        let statement_mutations: [(&str, fn(&mut IrohaBootleLanternAnoncredStatementV1), &str); 6] = [
+        let statement_mutations: [(&str, StatementMutation, &str); 6] = [
             (
                 "issuer",
                 |statement| statement.issuer_id.0[0] ^= 1,
@@ -9326,6 +9333,7 @@ mod tests {
         let original_pointer = bytes.as_ptr();
         let original_bytes = bytes.clone();
         let mut block = state.block(activation_execution_header(&state));
+        let original_refusal;
         {
             let mut transaction = block.transaction();
             grant_governance(&mut transaction);
@@ -9357,6 +9365,7 @@ mod tests {
                 original.kind(),
                 norito::core::DecodeLocalRefusalKind::EnclosingLimit
             );
+            original_refusal = original.clone();
             assert!(
                 retained.allocation_refusal().is_none(),
                 "no fabricated pool release source"
@@ -9375,7 +9384,21 @@ mod tests {
             source.attachments().unwrap().occurrences()[0].bytes,
             original_bytes
         );
-        let mut retry = block.transaction();
+        // The original local refusal remains latched on its carrier. A new child
+        // of that carrier cannot turn the failed attempt into a fresh one.
+        match block.try_transaction() {
+            Err(crate::state::StateStorageAdmissionError::RootScopeDecode(original)) => {
+                assert_eq!(original, original_refusal);
+            }
+            Err(other) => panic!("original root-scope refusal changed: {other:?}"),
+            Ok(_) => panic!("refused carrier must not grant a fresh child"),
+        }
+        assert_eq!(block.committed_fragment_count(), 0);
+        drop(block);
+        // Retry the unchanged signed source against the same State predecessor,
+        // with a fresh execution carrier after abandoning the refused one.
+        let mut retry_block = state.block(activation_execution_header(&state));
+        let mut retry = retry_block.transaction();
         grant_governance(&mut retry);
         let mut custody = AttachmentCustody::new(&source).unwrap();
         Executor::Initial

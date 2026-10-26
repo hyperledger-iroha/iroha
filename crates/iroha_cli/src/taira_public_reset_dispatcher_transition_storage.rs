@@ -353,7 +353,7 @@ fn bytes_exact(path: &Path, bytes: &[u8], mode: u32) -> Result<()> {
         need(bytes.starts_with(&prefix), "partial record prefix differs")?;
         let mut output = OpenOptions::new()
             .append(true)
-            .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32)
+            .custom_flags((rustix::fs::OFlags::NOFOLLOW.bits()).cast_signed())
             .open(&temporary)?;
         need(
             output.metadata()?.ino() == snapshot.ino && output.metadata()?.dev() == snapshot.dev,
@@ -366,7 +366,7 @@ fn bytes_exact(path: &Path, bytes: &[u8], mode: u32) -> Result<()> {
             .write(true)
             .create_new(true)
             .mode(mode)
-            .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32)
+            .custom_flags((rustix::fs::OFlags::NOFOLLOW.bits()).cast_signed())
             .open(&temporary)?;
         file.set_permissions(fs::Permissions::from_mode(mode))?;
         file.write_all(bytes)?;
@@ -702,13 +702,13 @@ pub(super) fn transition(
             &root.join("new-dispatcher"),
             &plan.candidate.executable,
         )?;
-        for index in 0..SLUGS.len() {
+        for (index, new_guard) in new.iter().enumerate() {
             copy_exact(
                 Path::new(&plan.predecessor.guards[index].path),
                 &root.join(format!("old-guard-{index}")),
                 &plan.predecessor.guards[index],
             )?;
-            bytes_exact(&root.join(format!("new-guard-{index}")), &new[index], 0o600)?;
+            bytes_exact(&root.join(format!("new-guard-{index}")), new_guard, 0o600)?;
         }
         let ids = Identities {
             plan_sha256: sha256_hex(bytes),
@@ -809,7 +809,9 @@ pub(super) fn transition(
             "{}-guard-{index}",
             if successor { "new" } else { "rollback" }
         ));
-        if !successor {
+        if successor {
+            same(&staging, &ids.new_guards[index])?;
+        } else {
             same(
                 &staging,
                 &restore
@@ -817,8 +819,6 @@ pub(super) fn transition(
                     .ok_or_else(|| eyre!("restoration missing"))?
                     .guards[index],
             )?;
-        } else {
-            same(&staging, &ids.new_guards[index])?;
         }
         move_exact(&staging, target, &desired)?;
         event(
@@ -941,6 +941,13 @@ pub(super) fn no_references_at(proc_root: &Path, device: u64, inode: u64) -> Res
     Ok(())
 }
 #[cfg(not(target_os = "linux"))]
+#[cfg_attr(
+    test,
+    expect(
+        clippy::unnecessary_wraps,
+        reason = "Non-Linux tests retain the fallible process-census interface"
+    )
+)]
 fn no_references(_device: u64, _inode: u64) -> Result<()> {
     #[cfg(test)]
     {

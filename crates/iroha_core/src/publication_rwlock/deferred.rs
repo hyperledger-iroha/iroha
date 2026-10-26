@@ -3,7 +3,7 @@
 use super::*;
 
 /// Coalesces releases from this exact lock after enclosing guards have dropped.
-pub(crate) struct DeferredPublicationRwLock<'lock, T> {
+pub struct DeferredPublicationRwLock<'lock, T> {
     lock: &'lock PublicationRwLock<T>,
     releases: DeferredReleaseBatch,
 }
@@ -54,7 +54,7 @@ impl<'lock, T> DeferredPublicationRwLock<'lock, T> {
 macro_rules! deferred_guard {
     ($name:ident, $original:ident) => {
         /// Physically unlocks on Drop; the original notification stays outside.
-        pub(crate) struct $name<'scope, 'lock, T> {
+        pub struct $name<'scope, 'lock, T> {
             guard: Option<$original<'lock, T>>,
             releases: &'scope mut DeferredReleaseBatch,
         }

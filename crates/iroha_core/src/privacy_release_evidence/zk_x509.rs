@@ -72,6 +72,10 @@ pub struct PrivacyReleaseZkX509ResourceEnvironmentV1 {
 )]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "The canonical resource evidence independently attests each isolation capability"
+)]
 pub struct PrivacyReleaseZkX509ResourceProcessLimitsV1 {
     /// Reviewed wall-clock ceiling, in milliseconds.
     pub elapsed_ceiling_millis: u64,
@@ -690,7 +694,7 @@ fn zk_x509_network_draft_envelope_v1(
 /// context validation, proving, verification, or signing fails, the time budget is exceeded,
 /// or the verifier accepts the deliberately corrupted proof.
 pub fn build_privacy_release_zk_x509_network_actions_v1(
-    transaction_context: PrivacyReleaseTransactionContextV1,
+    transaction_context: &PrivacyReleaseTransactionContextV1,
     trusted_block_timestamp_ms: u64,
     proof_seed: [u8; 32],
     resource_certificate: &PrivacyReleaseZkX509ResourceCertificateV1,
@@ -705,7 +709,7 @@ pub fn build_privacy_release_zk_x509_network_actions_v1(
         intent,
         transaction: canonical_transaction,
     } = prepare_zk_x509_network_action_v1(
-        &transaction_context,
+        transaction_context,
         trusted_block_timestamp_ms,
         proof_seed,
         resource_certificate,
@@ -730,7 +734,7 @@ pub fn build_privacy_release_zk_x509_network_actions_v1(
         return Err(PrivacyReleaseEvidenceErrorClassV1::ProofCorruptionAccepted);
     }
     let malformed_payload = zk_x509_network_transaction_payload_v1(
-        &transaction_context,
+        transaction_context,
         zk_x509_network_envelope_v1(profile, &fixture.statement, malformed_proof)?,
     )?;
     let malformed_transaction =
@@ -759,7 +763,7 @@ pub fn build_privacy_release_zk_x509_network_actions_v1(
 ///
 /// This invokes exactly one independent native prover run with its own authenticated proof ceiling
 /// and `admission_reserve`. The supplied current CRL is used only to derive and validate the exact
-/// epoch, CRLNumber, and predecessor-digest transition. No pair-time or process-memory observation
+/// epoch, `CRLNumber`, and predecessor-digest transition. No pair-time or process-memory observation
 /// is produced.
 ///
 /// # Errors
@@ -768,7 +772,7 @@ pub fn build_privacy_release_zk_x509_network_actions_v1(
 /// invalid, proving, verification, or signing fails, or the proof and admission time budget is exceeded.
 #[allow(clippy::too_many_arguments)]
 pub fn build_privacy_release_zk_x509_semantic_replay_v1(
-    transaction_context: PrivacyReleaseTransactionContextV1,
+    transaction_context: &PrivacyReleaseTransactionContextV1,
     trusted_block_timestamp_ms: u64,
     current_crl: PrivacyZkX509CrlRecordV1,
     proof_seed: [u8; 32],
@@ -778,13 +782,13 @@ pub fn build_privacy_release_zk_x509_semantic_replay_v1(
 ) -> Result<PrivacyReleaseZkX509SemanticReplayV1, PrivacyReleaseEvidenceErrorClassV1> {
     let build_started = Instant::now();
     let prepared = prepare_zk_x509_network_action_v1(
-        &transaction_context,
+        transaction_context,
         trusted_block_timestamp_ms,
         proof_seed,
         resource_certificate,
         admission_reserve,
         private_key,
-        &ZkX509NetworkCrlLineageV1::Successor(current_crl),
+        &ZkX509NetworkCrlLineageV1::Successor(&current_crl),
         &build_started,
     )?;
     Ok(PrivacyReleaseZkX509SemanticReplayV1 {
@@ -794,9 +798,9 @@ pub fn build_privacy_release_zk_x509_semantic_replay_v1(
     })
 }
 #[derive(Clone)]
-enum ZkX509NetworkCrlLineageV1 {
+enum ZkX509NetworkCrlLineageV1<'a> {
     Origin,
-    Successor(PrivacyZkX509CrlRecordV1),
+    Successor(&'a PrivacyZkX509CrlRecordV1),
 }
 struct PreparedZkX509NetworkActionV1 {
     profile: CompiledPrivacyProfileV1,
@@ -813,7 +817,7 @@ fn prepare_zk_x509_network_action_v1(
     resource_certificate: &PrivacyReleaseZkX509ResourceCertificateV1,
     admission_reserve: Duration,
     private_key: &PrivateKey,
-    crl_lineage: &ZkX509NetworkCrlLineageV1,
+    crl_lineage: &ZkX509NetworkCrlLineageV1<'_>,
     build_started: &Instant,
 ) -> Result<PreparedZkX509NetworkActionV1, PrivacyReleaseEvidenceErrorClassV1> {
     let protocol_id = PrivacyProtocolIdV1::IrohaZkX509StarkP256V1;
@@ -901,7 +905,7 @@ fn build_zk_x509_network_fixture_for_lineage_v1(
     context: PrivacyStatementContextV1,
     trusted_block_timestamp_ms: u64,
     wallet_account: AccountId,
-    crl_lineage: &ZkX509NetworkCrlLineageV1,
+    crl_lineage: &ZkX509NetworkCrlLineageV1<'_>,
 ) -> Result<ZkX509ReleaseFixtureV1, PrivacyReleaseEvidenceErrorClassV1> {
     match crl_lineage {
         ZkX509NetworkCrlLineageV1::Origin => build_zk_x509_network_release_fixture_v1(
@@ -914,7 +918,7 @@ fn build_zk_x509_network_fixture_for_lineage_v1(
                 context,
                 trusted_block_timestamp_ms,
                 wallet_account,
-                (*current_crl).clone(),
+                **current_crl,
             )
         }
     }
@@ -1360,7 +1364,7 @@ pub(super) fn run_zk_x509_stage_v1(
         }
     };
     let public_statement_material = zk_x509_release_public_statement_material_v1(
-        public_statement_material,
+        &(public_statement_material),
         fixture.resource_shape,
     )?;
     Ok(StageMaterialV1 {
@@ -1376,7 +1380,7 @@ pub(super) fn run_zk_x509_stage_v1(
 pub(super) const ZK_X509_RELEASE_PUBLIC_MATERIAL_DOMAIN_V1: &[u8] =
     b"iroha.privacy.release.zk-x509-public-statement-and-resource-shape.v1";
 pub(super) fn zk_x509_release_public_statement_material_v1(
-    statement_material: Vec<u8>,
+    statement_material: &[u8],
     resource_shape: ZkX509ReleaseResourceShapeV1,
 ) -> Result<Vec<u8>, PrivacyReleaseEvidenceErrorClassV1> {
     resource_shape
@@ -1399,7 +1403,7 @@ pub(super) fn zk_x509_release_public_statement_material_v1(
     );
     material.extend_from_slice(ZK_X509_RELEASE_PUBLIC_MATERIAL_DOMAIN_V1);
     material.extend_from_slice(&statement_len.to_be_bytes());
-    material.extend_from_slice(&statement_material);
+    material.extend_from_slice(statement_material);
     material.push(resource_shape.certificate_chain_depth);
     for certificate_der_length in resource_shape.certificate_der_lengths {
         material.extend_from_slice(&certificate_der_length.to_be_bytes());

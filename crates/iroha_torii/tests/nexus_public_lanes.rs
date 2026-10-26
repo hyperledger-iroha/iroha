@@ -51,15 +51,6 @@ fn with_loopback_connect_info(mut request: Request<Body>) -> Request<Body> {
         ))));
     request
 }
-fn configure_nexus_staking(state: &mut State, escrow: &AccountId) {
-    let mut nexus = state.nexus_snapshot();
-    nexus.staking.stake_asset_id = stake_asset_definition_id().to_string();
-    nexus.staking.stake_escrow_account_id = escrow.to_string();
-    nexus.staking.slash_sink_account_id = escrow.to_string();
-    state
-        .set_nexus(nexus)
-        .expect("configure Nexus staking for public-lane fixture");
-}
 fn relax_consensus_key_activation_for_tests(state: &mut State) {
     let mut sumeragi_params = state.view().world().parameters().sumeragi.clone();
     sumeragi_params.key_activation_lead_blocks = 0;
@@ -67,10 +58,9 @@ fn relax_consensus_key_activation_for_tests(state: &mut State) {
 }
 #[tokio::test]
 async fn nexus_public_lane_endpoints_exist() {
-    let (world, validator_keypair, validator, delegator, escrow) = sample_world();
+    let (world, validator_keypair, validator, delegator, _escrow) = sample_world();
     let kura = Kura::blank_kura_for_testing();
     let mut state = State::new_for_testing(world, Arc::clone(&kura), LiveQueryStore::start_test());
-    configure_nexus_staking(&mut state, &escrow);
     relax_consensus_key_activation_for_tests(&mut state);
     seed_public_lane_state(&state, &validator_keypair, &validator, &delegator);
     let local_peer_id = PeerId::from(validator_keypair.public_key().clone());
@@ -97,10 +87,9 @@ async fn nexus_public_lane_endpoints_exist() {
 }
 #[tokio::test]
 async fn nexus_public_lane_endpoints_list_records() {
-    let (world, validator_keypair, validator, delegator, escrow) = sample_world();
+    let (world, validator_keypair, validator, delegator, _escrow) = sample_world();
     let kura = Kura::blank_kura_for_testing();
     let mut state = State::new_for_testing(world, Arc::clone(&kura), LiveQueryStore::start_test());
-    configure_nexus_staking(&mut state, &escrow);
     relax_consensus_key_activation_for_tests(&mut state);
     seed_public_lane_state(&state, &validator_keypair, &validator, &delegator);
     let local_peer_id = PeerId::from(validator_keypair.public_key().clone());
@@ -170,7 +159,7 @@ fn sample_world() -> (World, KeyPair, AccountId, AccountId, AccountId) {
     let delegator_asset_id = AssetId::new(asset_definition_id.clone(), delegator_id.clone());
     let validator_asset = Asset::new(validator_asset_id, Quantity::from(10_000_u64));
     let delegator_asset = Asset::new(delegator_asset_id, Quantity::from(10_000_u64));
-    let world = World::with_assets(
+    let mut world = World::with_assets(
         [domain],
         [validator, delegator, escrow],
         [asset_definition],
@@ -180,15 +169,19 @@ fn sample_world() -> (World, KeyPair, AccountId, AccountId, AccountId) {
     let npos = SumeragiNposParameters::default();
     npos.validate()
         .expect("valid committed NPoS fixture parameters");
-    {
-        let mut block = world.block();
-        block
-            .parameters
-            .get_mut()
-            .set_parameter(Parameter::Custom(npos.into_custom_parameter()))
-            .expect("install valid committed NPoS fixture parameters");
-        block.commit();
-    }
+    world
+        .set_parameter_for_testing(Parameter::Custom(npos.into_custom_parameter()))
+        .expect("install valid committed NPoS fixture parameters");
+    let profile =
+        iroha_config::profile::Profile::compiled(iroha_config::profile::ProfileId::IrohaDevV1)
+            .unwrap();
+    let mut staking = profile.genesis_recipe().public_lane_staking.clone();
+    staking.stake_asset_id = stake_asset_definition_id();
+    staking.stake_escrow_account_id = escrow_id.clone();
+    staking.slash_sink_account_id = escrow_id.clone();
+    world
+        .set_parameter_for_testing(Parameter::Custom(staking.into_custom_parameter().unwrap()))
+        .expect("explicit original fixture staking policy");
     (
         world,
         validator_keypair,
@@ -206,14 +199,15 @@ fn seed_public_lane_state(
     validator: &AccountId,
     delegator: &AccountId,
 ) {
-    let nexus = state.nexus_snapshot();
-    let definition: AssetDefinitionId = nexus
-        .staking
-        .stake_asset_id
-        .parse()
-        .expect("configured fixture asset");
-    let escrow = AccountId::parse_encoded(&nexus.staking.stake_escrow_account_id)
-        .expect("configured fixture custody");
+    let view = state.view();
+    let staking = view
+        .world()
+        .parameters()
+        .staking_policy()
+        .expect("original fixture policy");
+    let definition = staking.stake_asset_id.clone();
+    let escrow = staking.stake_escrow_account_id.clone();
+    drop(view);
     let mut block = state.block(block_header(1));
     let mut tx = block.transaction();
     let manage_consensus_keys = Permission::from(CanManageConsensusKeys);

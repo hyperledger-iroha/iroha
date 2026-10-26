@@ -7,7 +7,9 @@ mod support;
 use iroha_fhe::bgv::{
     BgvError, BgvParameters, BgvProfile, SecretKey,
     fixtures::{self, FixtureEntropy},
-    threshold::{DealerKeyShares, SecretKeyShare, ThresholdContext, ThresholdError},
+    threshold::{
+        DealerKeyShares, SecretKeyShare, ThresholdContext, ThresholdError, ThresholdSelection,
+    },
 };
 use num_bigint::BigInt;
 use support::oracle;
@@ -493,4 +495,248 @@ fn a_canonical_malicious_share_fails_the_independent_key_oracle() {
     // This explicit fixture mutation cannot enter the opaque production owner.
     points[2].1[0] = (points[2].1[0] + 1) % primes(&profile)[0];
     assert_ne!(interpolate(&profile, &points), expected);
+}
+
+#[test]
+fn every_admitted_subset_converts_in_place_against_independent_field_oracle() {
+    let profile = profile();
+    let expected = expected_words(&profile, &secret(&profile));
+    for threshold in [1, 2, 3, 5] {
+        let context = context(&profile, threshold);
+        for mask in 1_u32..32 {
+            if mask.count_ones() < u32::from(threshold) {
+                continue;
+            }
+            let selected: Vec<_> = context
+                .participants()
+                .iter()
+                .enumerate()
+                .filter_map(|(index, &id)| ((mask >> index) & 1 == 1).then_some(id))
+                .collect();
+            let mut dealer = dealer(&profile, context.clone(), 93);
+            let instance = *dealer.instance();
+            let plan = ThresholdSelection::new(&profile, &context, instance, &selected)
+                .expect("canonical subset");
+            let mut sums = vec![BigInt::from(0); expected.len()];
+            for &id in &selected {
+                let share = dealer.take_share(id).expect("share");
+                let original = fixtures::threshold_share_words(&share);
+                let address = fixtures::threshold_share_buffer_address(&share);
+                let bytes = share.secret_buffer_bytes();
+                let converted = share
+                    .try_into_subset_additive(&profile, &plan)
+                    .expect("local conversion");
+                assert_eq!(converted.context(), &context);
+                assert_eq!(converted.instance(), &instance);
+                assert_eq!(converted.participant(), id);
+                assert_eq!(converted.selection_identity(), plan.identity());
+                assert!(!format!("{converted:?}").contains("words"));
+                assert_eq!(converted.secret_buffer_bytes(), bytes);
+                assert_eq!(
+                    fixtures::threshold_subset_share_buffer_address(&converted),
+                    address
+                );
+                let actual = fixtures::threshold_subset_share_words(&converted);
+                // Independent signed-integer formula, without production modular kernels.
+                for (limb, prime) in primes(&profile).into_iter().enumerate() {
+                    let modulus = BigInt::from(prime);
+                    let mut numerator = BigInt::from(1);
+                    let mut denominator = BigInt::from(1);
+                    for &other in &selected {
+                        if other != id {
+                            numerator *= -BigInt::from(other);
+                            denominator *= BigInt::from(id) - BigInt::from(other);
+                        }
+                    }
+                    let weight = oracle::rem(
+                        &(numerator * oracle::inverse(&denominator, &modulus)),
+                        &modulus,
+                    );
+                    for coefficient in 0..profile.degree() {
+                        let index = limb * profile.degree() + coefficient;
+                        assert_eq!(
+                            actual[index],
+                            oracle::word_mod(&(BigInt::from(original[index]) * &weight), prime)
+                        );
+                        sums[index] += BigInt::from(actual[index]);
+                    }
+                }
+            }
+            for (limb, prime) in primes(&profile).into_iter().enumerate() {
+                for coefficient in 0..profile.degree() {
+                    let index = limb * profile.degree() + coefficient;
+                    assert_eq!(oracle::word_mod(&sums[index], prime), expected[index]);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn canonical_subset_plan_rejects_malformed_input_and_binds_every_public_dimension() {
+    let profile = profile();
+    let context = context(&profile, 2);
+    let instance = [7; 32];
+    for (ids, expected) in [
+        (&[][..], ThresholdError::InsufficientShares),
+        (&[1][..], ThresholdError::InsufficientShares),
+        (&[1, 2, 7, 19, 211, 212][..], ThresholdError::TooManyShares),
+        (&[1, 1][..], ThresholdError::DuplicateParticipant),
+        (&[2, 1][..], ThresholdError::InvalidRoster),
+        (&[1, 2, 1][..], ThresholdError::InvalidRoster),
+        (&[0, 1][..], ThresholdError::UnknownParticipant),
+        (&[1, 212][..], ThresholdError::UnknownParticipant),
+    ] {
+        assert_eq!(
+            ThresholdSelection::new(&profile, &context, instance, ids).unwrap_err(),
+            expected
+        );
+    }
+    let ids = [1, 2, 7];
+    let base = ThresholdSelection::new(&profile, &context, instance, &ids).expect("base");
+    assert_eq!(base.context(), &context);
+    assert_eq!(base.instance(), &instance);
+    assert_eq!(base.participants(), ids);
+    assert_eq!(
+        base.identity(),
+        ThresholdSelection::new(&profile, &context, instance, &ids)
+            .expect("same")
+            .identity()
+    );
+    assert_ne!(
+        base.identity(),
+        ThresholdSelection::new(&profile, &context, [8; 32], &ids)
+            .expect("other instance")
+            .identity()
+    );
+    for subset in [&[1, 2][..], &[1, 2, 19][..], &[1, 2, 7, 19][..]] {
+        assert_ne!(
+            base.identity(),
+            ThresholdSelection::new(&profile, &context, instance, subset)
+                .expect("other subset")
+                .identity()
+        );
+    }
+    for other in [
+        ThresholdContext::new(&profile, [82; 32], 17, 2, context.participants().to_vec()).unwrap(),
+        ThresholdContext::new(&profile, [81; 32], 18, 2, context.participants().to_vec()).unwrap(),
+        ThresholdContext::new(&profile, [81; 32], 17, 3, context.participants().to_vec()).unwrap(),
+        ThresholdContext::new(&profile, [81; 32], 17, 2, vec![1, 2, 7, 19, 212]).unwrap(),
+    ] {
+        assert_ne!(
+            base.identity(),
+            ThresholdSelection::new(&profile, &other, instance, &ids)
+                .expect("other context")
+                .identity()
+        );
+    }
+    let other_profile =
+        BgvProfile::new(BgvParameters::derive(5, 257, (40, 2), (41, 1), 1).expect("parameters"))
+            .expect("other profile");
+    assert_eq!(
+        ThresholdSelection::new(&other_profile, &context, instance, &ids).unwrap_err(),
+        ThresholdError::ProfileMismatch
+    );
+    let other_context = ThresholdContext::new(
+        &other_profile,
+        [81; 32],
+        17,
+        2,
+        context.participants().to_vec(),
+    )
+    .expect("other profile context");
+    assert_ne!(
+        base.identity(),
+        ThresholdSelection::new(&other_profile, &other_context, instance, &ids)
+            .expect("other profile selection")
+            .identity()
+    );
+}
+
+#[test]
+fn subset_conversion_refusals_return_unchanged_owner_for_corrected_metadata_retry() {
+    use std::error::Error as _;
+    let profile = profile();
+    let context = context(&profile, 2);
+    let ids = [1, 2, 7];
+    let mut dealer = dealer(&profile, context.clone(), 94);
+    let instance = *dealer.instance();
+    let valid = ThresholdSelection::new(&profile, &context, instance, &ids).expect("valid");
+    let mut share = dealer.take_share(1).expect("share");
+    let original = fixtures::threshold_share_words(&share);
+    let address = fixtures::threshold_share_buffer_address(&share);
+    let other_profile =
+        BgvProfile::new(BgvParameters::derive(5, 257, (40, 2), (41, 1), 1).expect("parameters"))
+            .expect("other profile");
+    let other_context = ThresholdContext::new(
+        &other_profile,
+        [81; 32],
+        17,
+        2,
+        context.participants().to_vec(),
+    )
+    .expect("other profile context");
+    let other_selection = ThresholdSelection::new(&other_profile, &other_context, instance, &ids)
+        .expect("other profile selection");
+    for (supplied_profile, plan) in [(&other_profile, &valid), (&profile, &other_selection)] {
+        let error = share
+            .try_into_subset_additive(supplied_profile, plan)
+            .unwrap_err();
+        assert_eq!(error.reason(), ThresholdError::ProfileMismatch);
+        let (reason, retained) = error.into_parts();
+        assert_eq!(reason, ThresholdError::ProfileMismatch);
+        share = retained;
+        assert_eq!(fixtures::threshold_share_words(&share), original);
+        assert_eq!(fixtures::threshold_share_buffer_address(&share), address);
+    }
+    for other in [
+        ThresholdContext::new(&profile, [82; 32], 17, 2, context.participants().to_vec()).unwrap(),
+        ThresholdContext::new(&profile, [81; 32], 18, 2, context.participants().to_vec()).unwrap(),
+        ThresholdContext::new(&profile, [81; 32], 17, 3, context.participants().to_vec()).unwrap(),
+        ThresholdContext::new(&profile, [81; 32], 17, 2, vec![1, 2, 7, 19, 212]).unwrap(),
+    ] {
+        let plan = ThresholdSelection::new(&profile, &other, instance, &ids).expect("other");
+        let error = share.try_into_subset_additive(&profile, &plan).unwrap_err();
+        assert_eq!(error.reason(), ThresholdError::ContextMismatch);
+        assert_eq!(
+            error.to_string(),
+            ThresholdError::ContextMismatch.to_string()
+        );
+        assert!(!format!("{error:?}").contains("words"));
+        assert_eq!(error.source().unwrap().to_string(), error.to_string());
+        let (reason, retained) = error.into_parts();
+        assert_eq!(reason, ThresholdError::ContextMismatch);
+        share = retained;
+        assert_eq!(fixtures::threshold_share_words(&share), original);
+        assert_eq!(fixtures::threshold_share_buffer_address(&share), address);
+    }
+    for (plan, expected) in [
+        (
+            ThresholdSelection::new(&profile, &context, [9; 32], &ids).unwrap(),
+            ThresholdError::InstanceMismatch,
+        ),
+        (
+            ThresholdSelection::new(&profile, &context, instance, &[2, 7]).unwrap(),
+            ThresholdError::ParticipantNotSelected,
+        ),
+    ] {
+        let error = share.try_into_subset_additive(&profile, &plan).unwrap_err();
+        assert_eq!(error.reason(), expected);
+        let (reason, retained) = error.into_parts();
+        assert_eq!(reason, expected);
+        share = retained;
+        assert_eq!(fixtures::threshold_share_words(&share), original);
+        assert_eq!(fixtures::threshold_share_buffer_address(&share), address);
+    }
+    let converted = share
+        .try_into_subset_additive(&profile, &valid)
+        .expect("corrected retry");
+    assert_eq!(
+        fixtures::threshold_subset_share_buffer_address(&converted),
+        address
+    );
+    assert_eq!(converted.selection_identity(), valid.identity());
+    assert_eq!(converted.context(), &context);
+    assert_eq!(converted.instance(), &instance);
+    assert_eq!(converted.participant(), 1);
 }

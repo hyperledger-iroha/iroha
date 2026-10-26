@@ -1048,6 +1048,47 @@ mod tests {
     }
 
     #[test]
+    fn private_asset_batches_preserve_requested_query_in_unsupported_response() {
+        for (batch, expected_label) in [
+            (
+                QueryOutputBatchBox::AssetUidPolicyViewV1(Vec::new()),
+                "AssetUidPolicyViewV1",
+            ),
+            (
+                QueryOutputBatchBox::AssetFiRelationshipViewV1(Vec::new()),
+                "AssetFiRelationshipViewV1",
+            ),
+            (
+                QueryOutputBatchBox::AssetUidEnrollmentViewV1(Vec::new()),
+                "AssetUidEnrollmentViewV1",
+            ),
+            (
+                QueryOutputBatchBox::AssetEscrowScopeOriginalV1(Vec::new()),
+                "AssetEscrowScopeOriginalV1",
+            ),
+            (
+                QueryOutputBatchBox::AssetFiTransferReceiptV1(Vec::new()),
+                "AssetFiTransferReceiptV1",
+            ),
+            (
+                QueryOutputBatchBox::AssetFiContextSnapshotV1(Vec::new()),
+                "AssetFiContextSnapshotV1",
+            ),
+        ] {
+            for requested in StateQueryKind::all() {
+                let output =
+                    QueryOutput::new(QueryOutputBatchBoxTuple::from_batch(batch.clone()), 0, None);
+                let error = parse_iterable_output(requested, output).expect_err(
+                    "a private asset batch cannot become an empty page of another query kind",
+                );
+                assert!(
+                    matches!(error, StateQueryError::UnexpectedBatch { kind, actual }
+                    if kind == requested && actual == expected_label)
+                );
+            }
+        }
+    }
+    #[test]
     fn batch_label_handles_rwa_and_escrow_variants() {
         assert_eq!(
             batch_label(&QueryOutputBatchBox::RwaId(Vec::new())),

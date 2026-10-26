@@ -64,7 +64,7 @@ const PROVIDER_FIELDS: [&str; 3] = [
 /// Environment variables cannot override this signed source; private TOML values are scrubbed.
 fn configured_beacon_credential_memory(config: &[u8], path: &Path) -> Result<NonZeroUsize> {
     use iroha_config::{base::toml::TomlSource, parameters::actual};
-    if config.len() > CONFIG_LIMIT as usize {
+    if config.len() > usize::try_from(CONFIG_LIMIT).expect("bounded input limit fits usize") {
         return Err(eyre!("beacon validator config exceeds its source bound"));
     }
     let text =
@@ -656,8 +656,8 @@ pub(super) fn plan_genesis(
     )?;
     let roster = validated
         .validator_pops()
-        .iter()
-        .map(|(key, _)| PeerId::new(key.clone()))
+        .keys()
+        .map(|key| PeerId::new(key.clone()))
         .collect::<BTreeSet<_>>();
     if roster != plan.request.target_roster.iter().cloned().collect()
         || validated.consensus_metadata().mode
@@ -712,7 +712,7 @@ fn observe_new(
     loop {
         ensure_local_deadline(Some(deadline))?;
         match observer.observe(clients, inventory.chain_discriminant, deadline)? {
-            HeightObservationV1::Verified(height) => return Ok(height),
+            HeightObservationV1::Verified(height) => return Ok(*height),
             HeightObservationV1::Pending => std::thread::sleep(
                 Duration::from_millis(100).min(deadline.saturating_duration_since(Instant::now())),
             ),
@@ -1001,18 +1001,18 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
                 "pre_edge",
                 kind,
             )?;
-            let observed =
+            let observation =
                 observe_new(&mut observer, &clients, &self.admitted.inventory, deadline)?;
-            if phase_height < 4 && observed.committed_height().get() != phase_height {
+            if phase_height < 4 && observation.committed_height().get() != phase_height {
                 return Err(eyre!(
                     "genesis DKG missed an exact public-edge phase cutoff; retain this attempt"
                 ));
             }
             reset::inputs::write_new_private(
                 &root.join(format!("after-{kind}.json")),
-                &canonical_json_report_bytes(&json::to_value(&observed)?)?,
+                &canonical_json_report_bytes(&json::to_value(&observation)?)?,
             )?;
-            let proof = observed
+            let proof = observation
                 .proof_at(NonZeroU64::new(phase_height).ok_or_else(|| eyre!("invalid DKG phase"))?)
                 .ok_or_else(|| eyre!("required authenticated DKG phase finality is unavailable"))?;
             reset::inputs::write_new_private(
@@ -1026,11 +1026,11 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
                 4 => {}
                 _ => return Err(eyre!("unexpected DKG phase")),
             }
-            final_height = Some(observed);
+            final_height = Some(observation);
         }
-        let observed = final_height
+        let observation = final_height
             .ok_or_else(|| eyre!("beacon bootstrap omitted required ledger operations"))?;
-        if observed.committed_height().get()
+        if observation.committed_height().get()
             < self
                 .admitted
                 .inventory
@@ -1071,7 +1071,7 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
         }
         assemble_args.extend([
             "--certificate-height".into(),
-            observed
+            observation
                 .committed_height()
                 .get()
                 .checked_add(1)
@@ -1466,7 +1466,7 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             ]);
             let result = self.run_beacon_native(args, vec![descriptor], deadline);
             // Child failure cannot leave a private launch copy available for reuse.
-            let scrub = file.set_len(0).and_then(|_| file.sync_all());
+            let scrub = file.set_len(0).and_then(|()| file.sync_all());
             result?;
             scrub?;
             self.closure
@@ -1572,7 +1572,13 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
         }
         let result = (|| {
             let submitted = root.join("install.submitted.json");
-            if !submitted.try_exists()? {
+            if submitted.try_exists()? {
+                let (claimed, _) =
+                    read_public::<InstallEnvelopeV1>(&submitted, "beacon submitted claim")?;
+                if json::to_value(&claimed)? != json::to_value(&retained)? {
+                    return Err(eyre!("beacon submission claim changed its exact envelope"));
+                }
+            } else {
                 if recovery_only {
                     return Err(eyre!("beacon recovery cannot create a submission claim"));
                 }
@@ -1583,12 +1589,6 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
                     &canonical_json_report_bytes(&json::to_value(&retained)?)?,
                 )?;
                 let _accepted_or_ambiguous = blocking.submit_transaction(&transaction);
-            } else {
-                let (claimed, _) =
-                    read_public::<InstallEnvelopeV1>(&submitted, "beacon submitted claim")?;
-                if json::to_value(&claimed)? != json::to_value(&retained)? {
-                    return Err(eyre!("beacon submission claim changed its exact envelope"));
-                }
             }
             if root.join("install.applied.json").try_exists()? {
                 let receipt = validate_installation_proof(
@@ -1780,9 +1780,9 @@ fn validate_installation_proof(
     let mut verifier = genesis_verifier(&genesis, &inventory.chain_id)?;
     let mut carrier = None;
     for proof in &proofs {
-        let verified = verifier.verify(proof)?;
+        let authenticated = verifier.verify(proof)?;
         if proof.block_header.height().get() == native.bundle.finalization_draft.effective_height {
-            carrier = Some(verified);
+            carrier = Some(authenticated);
         }
     }
     let certified =
@@ -1824,10 +1824,12 @@ pub(super) struct ActiveBinding {
     pub(super) unit_sha256: String,
 }
 
+type ProviderProjection = (ProviderActivationV1, Zeroizing<Vec<u8>>, PathBuf, Vec<u8>);
+
 fn provider_projection(
     admitted: &HostAdmission,
     validator: &ValidatorV1,
-) -> Result<(ProviderActivationV1, Zeroizing<Vec<u8>>, PathBuf, Vec<u8>)> {
+) -> Result<ProviderProjection> {
     let inventory = &admitted.inventory;
     let root = ceremony_root(inventory);
     let source = artifact(&validator.artifacts, "config")?;
@@ -2137,7 +2139,7 @@ pub(super) fn activate_provider(admitted: &HostAdmission, validator: &ValidatorV
     }
     verify_regular_hash(&unit_source, &marker.unit_sha256)?;
     let mut unit_artifact = artifact(&validator.artifacts, "validator_unit")?.clone();
-    unit_artifact.sha256 = marker.unit_sha256.clone();
+    unit_artifact.sha256.clone_from(&marker.unit_sha256);
     unit_artifact.size = unit.len() as u64;
     publish_provider_unit(
         &unit_source,
@@ -2331,9 +2333,11 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
         // Read-only reconciliation can prove completion or authorize an exact
         // forward continuation; this request itself never publishes provider files.
         self.dispatch(
-            &validator.slug,
-            &validator.endpoint,
-            &validator.service_root,
+            HostDispatchTarget {
+                slug: &validator.slug,
+                endpoint: &validator.endpoint,
+                _service_root: &validator.service_root,
+            },
             HostAction::BeaconActivate,
             None,
             true,
@@ -2518,8 +2522,14 @@ mod tests {
         }
         assert!(configured_beacon_credential_memory(&[0xff], path).is_err());
         assert!(
-            configured_beacon_credential_memory(&vec![b' '; CONFIG_LIMIT as usize + 1], path)
-                .is_err()
+            configured_beacon_credential_memory(
+                &vec![
+                    b' ';
+                    usize::try_from(CONFIG_LIMIT).expect("bounded input limit fits usize") + 1
+                ],
+                path
+            )
+            .is_err()
         );
     }
 
@@ -2721,7 +2731,7 @@ mod tests {
                     let seat = index + 1;
                     PreparedBeaconUnitV1 {
                         validator: (*slug).into(),
-                        signer_index: seat as u16,
+                        signer_index: u16::try_from(seat).expect("fixture value fits u16"),
                         credential_path: format!(
                             "/var/lib/taira/.public-reset-control-v1/beacon/{network}/ceremony/attempt-{attempt}-seat-{seat}/{CREDENTIAL_FILE}"
                         ),

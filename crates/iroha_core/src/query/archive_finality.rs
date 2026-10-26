@@ -13,7 +13,7 @@ use crate::{
 
 /// A failure to bind an archive operation to one exact durable, committed chain boundary.
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum ArchiveFinalityError {
+pub enum ArchiveFinalityError {
     #[error("archive State is bound to another Kura instance")]
     ForeignKura,
     #[error("archive State or block differs from the frozen durable Kura boundary")]
@@ -43,7 +43,7 @@ impl From<crate::execution_attempt::ExecutionAttemptError<ChainReadError>>
 }
 
 /// One immutable State view and its exact durable Kura boundary.
-pub(crate) struct CertifiedArchiveView<'v, V: StateReadOnly + ?Sized> {
+pub struct CertifiedArchiveView<'v, V: StateReadOnly + ?Sized> {
     kura: &'v Kura,
     boundary: ExactReplayBoundary,
     chain: CertifiedChain<'v, V>,

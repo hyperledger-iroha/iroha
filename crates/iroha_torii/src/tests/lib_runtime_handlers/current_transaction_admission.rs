@@ -169,6 +169,13 @@ async fn anonymous_entrypoint_unavailable_returns_503_before_queue_mutation() {
     use tower::ServiceExt as _;
     let (app, _, _, _) = lifecycle_ordinary_fixture(true);
     let entry = crate::anonymous_ballot_test_support::entrypoint(*app.state.network_id_ref());
+    let original =
+        routing::accept_transaction_for_ingress(&app.state, entry.clone(), &app.telemetry)
+            .expect_err("anonymous verifier remains unavailable after ordinary policy admission");
+    assert!(
+        matches!(original, super::Error::TransactionAdmissionDeferred(original)
+        if original.reason() == ivm::error::ExecutionDeferral::VerifierInitializationUnavailable)
+    );
     let endpoint = route_catalog::pipeline::TRANSACTION_ENTRYPOINT.path();
     let router = axum::Router::new()
         .route(
@@ -200,6 +207,7 @@ async fn anonymous_entrypoint_unavailable_returns_503_before_queue_mutation() {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(response.headers()[axum::http::header::RETRY_AFTER], "1");
         assert!(response.headers().get("x-iroha-reject-code").is_none());
         assert!(
             response
@@ -212,7 +220,12 @@ async fn anonymous_entrypoint_unavailable_returns_503_before_queue_mutation() {
             .unwrap();
         let envelope: iroha_torii_shared::ErrorEnvelope =
             norito::decode_from_bytes(&bytes).unwrap();
-        assert_eq!(envelope.code(), "anonymous_ballot_unavailable");
+        assert_eq!(envelope.code(), "transaction_admission_deferred");
+        assert_eq!(
+            envelope.details.as_ref().unwrap().retry_after_seconds,
+            Some(1)
+        );
+        assert_eq!(app.queue.active_len(), 0);
         assert!(lifecycle_pending_wire(&app).is_empty());
     }
 }
@@ -231,8 +244,7 @@ mod committed_crypto_policy_admission {
         if let Some(policy) = policy {
             let mut block = world.block();
             block
-                .parameters
-                .set_parameter(policy.into_parameter().unwrap())
+                .set_parameter_for_testing(policy.into_parameter().unwrap())
                 .unwrap();
             block.commit();
         }
@@ -255,7 +267,7 @@ mod committed_crypto_policy_admission {
     }
 
     fn ingress(
-        state: Arc<IrohaState>,
+        state: &Arc<IrohaState>,
         transaction: &SignedTransaction,
         mode: usize,
     ) -> Result<AcceptedTransaction<'static>, Error> {
@@ -294,8 +306,7 @@ mod committed_crypto_policy_admission {
                 .is_err()
         );
         for mode in 0..3 {
-            let error =
-                ingress(state.clone(), &transaction, mode).expect_err("no genesis policy owner");
+            let error = ingress(&state, &transaction, mode).expect_err("no genesis policy owner");
             assert!(
                 matches!(&error, Error::TransactionAdmissionDeferred(original)
                 if original.reason() == ivm::error::ExecutionDeferral::CryptoAdmissionPolicyUnavailable)
@@ -322,8 +333,7 @@ mod committed_crypto_policy_admission {
         ));
         let original = transaction.encode_versioned();
         for mode in 0..3 {
-            let accepted =
-                ingress(allowed.clone(), &transaction, mode).expect("explicit member admitted");
+            let accepted = ingress(&allowed, &transaction, mode).expect("explicit member admitted");
             assert_eq!(accepted.external(), Some(&transaction));
             assert_eq!(transaction.encode_versioned(), original);
         }
@@ -331,8 +341,7 @@ mod committed_crypto_policy_admission {
             CryptoAdmissionPolicyV1::new(vec![iroha_crypto::Algorithm::Secp256k1]).unwrap(),
         ));
         for mode in 0..3 {
-            match ingress(denied.clone(), &transaction, mode)
-                .expect_err("no implicit Ed25519 membership")
+            match ingress(&denied, &transaction, mode).expect_err("no implicit Ed25519 membership")
             {
                 Error::AcceptTransaction(AcceptTransactionFail::SignatureVerification(failure)) => {
                     assert_eq!(
@@ -352,8 +361,7 @@ mod committed_crypto_policy_admission {
             CryptoAdmissionPolicyV1::new(vec![iroha_crypto::Algorithm::Secp256k1]).unwrap();
         let mut block = world.block();
         block
-            .parameters
-            .set_parameter(policy.clone().into_parameter().unwrap())
+            .set_parameter_for_testing(policy.clone().into_parameter().unwrap())
             .unwrap();
         block.commit();
         crate::test_utils::author_ready_fixture_crypto_policy(&mut world);

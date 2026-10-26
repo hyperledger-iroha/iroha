@@ -280,8 +280,7 @@ mod tests {
     ) -> Quantity {
         st.world
             .asset(&AssetId::of(asset.clone(), account.clone()))
-            .map(|asset| (**asset.value()).clone())
-            .unwrap_or_else(|_| Quantity::zero())
+            .map_or_else(|_| Quantity::zero(), |asset| (**asset.value()).clone())
     }
 
     #[test]

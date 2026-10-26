@@ -126,16 +126,19 @@ impl OrchardSpendProverInputV1 {
     /// The derived note commitment must reach `expected_anchor`. This keeps raw upstream Orchard
     /// component parsing inside native Rust and makes a partial path, malformed field element,
     /// wrong key/address, or stale anchor unrepresentable as a prepared prover input.
+    ///
+    /// # Errors
+    /// Rejects malformed spending keys, addresses, fields, notes, paths, or a derived root that differs from the expected anchor.
     pub fn from_wallet_parts_v1(
         spending_key: [u8; 32],
         recipient: [u8; 43],
         value: u64,
         rho: [u8; 32],
         random_seed: [u8; 32],
-        leaf_position: u32,
-        authentication_path: [[u8; 32]; ORCHARD_TREE_DEPTH_V1 as usize],
+        merkle_path: (u32, &[[u8; 32]; ORCHARD_TREE_DEPTH_V1 as usize]),
         expected_anchor: [u8; 32],
     ) -> Result<Self, OrchardSpendInputErrorV1> {
+        let (leaf_position, authentication_path) = merkle_path;
         let spending_key = Option::<SpendingKey>::from(SpendingKey::from_bytes(spending_key))
             .ok_or(OrchardSpendInputErrorV1::SpendingKey)?;
         let recipient = Option::<Address>::from(Address::from_raw_address_bytes(&recipient))
@@ -244,26 +247,29 @@ impl OrchardChangeProverInputV1 {
         scope: Scope,
         diversifier_index: u32,
         value: u64,
-        memo: [u8; 512],
+        memo: &[u8; 512],
     ) -> Self {
         Self {
             spending_key,
             scope,
             diversifier_index,
             value,
-            memo,
+            memo: *memo,
         }
     }
     /// Parse one exact wallet-controlled change opening.
     ///
     /// `internal_scope` selects the sole two ZIP-32 scopes without exposing
     /// upstream Orchard key types across wallet-worker boundaries.
+    ///
+    /// # Errors
+    /// Rejects an invalid spending key, recipient derivation, or change note.
     pub fn from_wallet_parts_v1(
         spending_key: [u8; 32],
         internal_scope: bool,
         diversifier_index: u32,
         value: u64,
-        memo: [u8; 512],
+        memo: &[u8; 512],
     ) -> Result<Self, OrchardChangeInputErrorV1> {
         let spending_key = Option::<SpendingKey>::from(SpendingKey::from_bytes(spending_key))
             .ok_or(OrchardChangeInputErrorV1::SpendingKey)?;
@@ -885,11 +891,11 @@ impl OrchardUpstreamRngV1 {
         }
         let mut offset = 0;
         while offset < destination.len() {
-            if self.cursor == ORCHARD_UPSTREAM_RNG_BLOCK_BYTES_V1 {
-                if let Err(error) = self.try_refill_v1() {
-                    destination.zeroize();
-                    return Err(error);
-                }
+            if self.cursor == ORCHARD_UPSTREAM_RNG_BLOCK_BYTES_V1
+                && let Err(error) = self.try_refill_v1()
+            {
+                destination.zeroize();
+                return Err(error);
             }
             let copied =
                 (ORCHARD_UPSTREAM_RNG_BLOCK_BYTES_V1 - self.cursor).min(destination.len() - offset);
@@ -971,11 +977,11 @@ fn public_draft_from_bundle_v1<T: Authorization>(bundle: &Bundle<T, i64>) -> Orc
 }
 fn encode_authorized_bundle_v1(
     bundle: &Bundle<Authorized, i64>,
-    consensus_binding: PrivacyNativeConsensusBindingV1,
+    consensus_binding: &PrivacyNativeConsensusBindingV1,
 ) -> Result<OrchardProvedBundleV1, OrchardProverErrorV1> {
     let draft = public_draft_from_bundle_v1(bundle);
     let public = OrchardBundlePublicV1 {
-        consensus_binding,
+        consensus_binding: *consensus_binding,
         anchor: draft.anchor,
         value_balance: draft.value_balance,
         actions: draft.actions,
@@ -1194,8 +1200,8 @@ pub fn prepare_orchard_bundle_v1(
 ///     binding: PrivacyNativeConsensusBindingV1,
 ///     limits: &PrivacyConsensusLimitsV1,
 /// ) {
-///     authorize_orchard_bundle_v1(prepared, binding.clone(), limits).unwrap();
-///     authorize_orchard_bundle_v1(prepared, binding, limits).unwrap();
+///     authorize_orchard_bundle_v1(prepared, &binding, limits).unwrap();
+///     authorize_orchard_bundle_v1(prepared, &binding, limits).unwrap();
 /// }
 /// ```
 ///
@@ -1205,14 +1211,14 @@ pub fn prepare_orchard_bundle_v1(
 /// signing/encoding failure, or any result rejected by the independent production verifier.
 pub fn authorize_orchard_bundle_v1(
     prepared: OrchardPreparedBundleV1,
-    consensus_binding: PrivacyNativeConsensusBindingV1,
+    consensus_binding: &PrivacyNativeConsensusBindingV1,
     consensus_limits: &PrivacyConsensusLimitsV1,
 ) -> Result<OrchardProvedBundleV1, OrchardProverErrorV1> {
     consensus_binding
         .validate(consensus_limits)
         .map_err(|_| OrchardProverErrorV1::ConsensusBinding)?;
     let public = OrchardBundlePublicV1 {
-        consensus_binding,
+        consensus_binding: *consensus_binding,
         anchor: prepared.draft.anchor,
         value_balance: prepared.draft.value_balance,
         actions: prepared.draft.actions.clone(),
@@ -1236,13 +1242,17 @@ pub fn authorize_orchard_bundle_v1(
             &prepared.signing_keys,
         )
         .map_err(|_| OrchardProverErrorV1::Authorization)?;
-    let proved = encode_authorized_bundle_v1(&authorized, consensus_binding)?;
-    if proved.public != public {
+    let encoded_bundle = encode_authorized_bundle_v1(&authorized, consensus_binding)?;
+    if encoded_bundle.public != public {
         return Err(OrchardProverErrorV1::OutputShape);
     }
-    verify_orchard_bundle_v1(&proved.public, &proved.authorization, consensus_limits)
-        .map_err(|_| OrchardProverErrorV1::SelfCheck)?;
-    Ok(proved)
+    verify_orchard_bundle_v1(
+        &encoded_bundle.public,
+        &encoded_bundle.authorization,
+        consensus_limits,
+    )
+    .map_err(|_| OrchardProverErrorV1::SelfCheck)?;
+    Ok(encoded_bundle)
 }
 /// Verify one complete first-release Orchard V3 bundle.
 ///
@@ -1381,7 +1391,7 @@ pub(crate) mod tests {
     pub fn build_fixture(
         action_count: u8,
         rng_seed: [u8; 32],
-        consensus_binding: PrivacyNativeConsensusBindingV1,
+        consensus_binding: &PrivacyNativeConsensusBindingV1,
     ) -> (OrchardBundlePublicV1, Vec<u8>) {
         let version = BundleVersion::orchard_v3();
         let mut rng = StdRng::from_seed(rng_seed);
@@ -1408,7 +1418,7 @@ pub(crate) mod tests {
         // proof-independent public action bytes.
         let draft = public_draft_from_bundle_v1(&proven);
         let raw = OrchardBundlePublicV1 {
-            consensus_binding,
+            consensus_binding: *consensus_binding,
             anchor: draft.anchor,
             value_balance: draft.value_balance,
             actions: draft.actions,
@@ -1418,21 +1428,21 @@ pub(crate) mod tests {
         let authorized = proven
             .apply_signatures(&mut rng, sighash, &[])
             .expect("apply canonical Orchard signatures");
-        let proved = encode_authorized_bundle_v1(&authorized, consensus_binding)
+        let encoded_bundle = encode_authorized_bundle_v1(&authorized, consensus_binding)
             .expect("encode canonical Orchard authorization");
-        (proved.public, proved.authorization)
+        (encoded_bundle.public, encoded_bundle.authorization)
     }
     pub fn fixture() -> &'static (OrchardBundlePublicV1, Vec<u8>) {
         static FIXTURE: OnceLock<(OrchardBundlePublicV1, Vec<u8>)> = OnceLock::new();
-        FIXTURE.get_or_init(|| build_fixture(1, [0xA7; 32], consensus_binding(0x44)))
+        FIXTURE.get_or_init(|| build_fixture(1, [0xA7; 32], &consensus_binding(0x44)))
     }
     fn two_action_fixture() -> &'static (OrchardBundlePublicV1, Vec<u8>) {
         static FIXTURE: OnceLock<(OrchardBundlePublicV1, Vec<u8>)> = OnceLock::new();
-        FIXTURE.get_or_init(|| build_fixture(2, [0xB8; 32], consensus_binding(0x55)))
+        FIXTURE.get_or_init(|| build_fixture(2, [0xB8; 32], &consensus_binding(0x55)))
     }
     fn alternate_one_action_fixture() -> &'static (OrchardBundlePublicV1, Vec<u8>) {
         static FIXTURE: OnceLock<(OrchardBundlePublicV1, Vec<u8>)> = OnceLock::new();
-        FIXTURE.get_or_init(|| build_fixture(1, [0xC9; 32], consensus_binding(0x66)))
+        FIXTURE.get_or_init(|| build_fixture(1, [0xC9; 32], &consensus_binding(0x66)))
     }
     #[derive(Clone, Copy)]
     enum ProverEntropyModeV1 {
@@ -1468,7 +1478,7 @@ pub(crate) mod tests {
             match self.0 {
                 ProverEntropyModeV1::Healthy => {
                     for (index, byte) in destination.iter_mut().enumerate() {
-                        *byte = (index as u8).wrapping_mul(73).wrapping_add(19);
+                        *byte = index.to_le_bytes()[0].wrapping_mul(73).wrapping_add(19);
                     }
                     Ok(())
                 }
@@ -1482,7 +1492,7 @@ pub(crate) mod tests {
                         *byte = if index < half {
                             0xA5
                         } else {
-                            (index as u8).wrapping_mul(73).wrapping_add(19)
+                            index.to_le_bytes()[0].wrapping_mul(73).wrapping_add(19)
                         };
                     }
                     Ok(())
@@ -1491,7 +1501,7 @@ pub(crate) mod tests {
                     let half = destination.len() / 2;
                     for (index, byte) in destination.iter_mut().enumerate() {
                         *byte = if index < half {
-                            (index as u8).wrapping_mul(73).wrapping_add(19)
+                            index.to_le_bytes()[0].wrapping_mul(73).wrapping_add(19)
                         } else {
                             0x5A
                         };
@@ -1500,7 +1510,9 @@ pub(crate) mod tests {
                 }
                 ProverEntropyModeV1::Period(period) => {
                     for (index, byte) in destination.iter_mut().enumerate() {
-                        *byte = ((index % period) as u8).wrapping_mul(29).wrapping_add(7);
+                        *byte = ((index % period).to_le_bytes()[0])
+                            .wrapping_mul(29)
+                            .wrapping_add(7);
                     }
                     Ok(())
                 }
@@ -1510,7 +1522,7 @@ pub(crate) mod tests {
                         .iter_mut()
                         .take(partial)
                         .enumerate()
-                        .for_each(|(index, byte)| *byte = index as u8);
+                        .for_each(|(index, byte)| *byte = index.to_le_bytes()[0]);
                     Err(ProverEntropyErrorV1)
                 }
             }
@@ -1544,7 +1556,9 @@ pub(crate) mod tests {
         fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
             self.requests.push(destination.len());
             for byte in destination {
-                *byte = (self.cursor as u8).wrapping_mul(73).wrapping_add(19);
+                *byte = self.cursor.to_le_bytes()[0]
+                    .wrapping_mul(73)
+                    .wrapping_add(19);
                 self.cursor += 1;
             }
             Ok(())
@@ -1566,7 +1580,7 @@ pub(crate) mod tests {
             self.requests += 1;
             let partial = destination.len() / 2;
             for (index, byte) in destination.iter_mut().take(partial).enumerate() {
-                *byte = index as u8;
+                *byte = index.to_le_bytes()[0];
             }
             panic!("deterministically invalid input reached entropy")
         }
@@ -1642,7 +1656,7 @@ pub(crate) mod tests {
             Scope::External,
             u32::from(seed),
             value,
-            [seed; 512],
+            &[seed; 512],
         )
     }
     #[test]
@@ -1654,8 +1668,7 @@ pub(crate) mod tests {
             valid.value,
             valid.rho,
             valid.random_seed,
-            valid.leaf_position,
-            valid.authentication_path,
+            (valid.leaf_position, &valid.authentication_path),
             valid.anchor,
         )
         .expect("complete wallet spend opens the retained anchor");
@@ -1667,8 +1680,7 @@ pub(crate) mod tests {
                 wrong_owner.value,
                 wrong_owner.rho,
                 wrong_owner.random_seed,
-                wrong_owner.leaf_position,
-                wrong_owner.authentication_path,
+                (wrong_owner.leaf_position, &wrong_owner.authentication_path),
                 wrong_owner.anchor,
             )
             .expect_err("a foreign recipient must fail before proving"),
@@ -1684,8 +1696,7 @@ pub(crate) mod tests {
                 stale.value,
                 stale.rho,
                 stale.random_seed,
-                stale.leaf_position,
-                stale.authentication_path,
+                (stale.leaf_position, &stale.authentication_path),
                 stale_anchor,
             )
             .expect_err("a stale retained anchor must fail"),
@@ -1701,8 +1712,7 @@ pub(crate) mod tests {
                 malformed_path.value,
                 malformed_path.rho,
                 malformed_path.random_seed,
-                malformed_path.leaf_position,
-                authentication_path,
+                (malformed_path.leaf_position, &authentication_path),
                 malformed_path.anchor,
             )
             .expect_err("a noncanonical path element must fail"),
@@ -1716,8 +1726,10 @@ pub(crate) mod tests {
                 malformed_recipient.value,
                 malformed_recipient.rho,
                 malformed_recipient.random_seed,
-                malformed_recipient.leaf_position,
-                malformed_recipient.authentication_path,
+                (
+                    malformed_recipient.leaf_position,
+                    &malformed_recipient.authentication_path
+                ),
                 malformed_recipient.anchor,
             )
             .expect_err("a noncanonical recipient must fail"),
@@ -1731,8 +1743,10 @@ pub(crate) mod tests {
                 malformed_rho.value,
                 [u8::MAX; 32],
                 malformed_rho.random_seed,
-                malformed_rho.leaf_position,
-                malformed_rho.authentication_path,
+                (
+                    malformed_rho.leaf_position,
+                    &malformed_rho.authentication_path
+                ),
                 malformed_rho.anchor,
             )
             .expect_err("a noncanonical rho must fail"),
@@ -1746,11 +1760,11 @@ pub(crate) mod tests {
                 orchard_empty_root_v1(),
                 Vec::new(),
                 vec![change_input(0x31, 17)],
-                ORCHARD_MAX_ACTIONS_V1 as u8,
+                u8::try_from(ORCHARD_MAX_ACTIONS_V1).expect("fixed action bound"),
                 &mut ProverEntropyRngV1(ProverEntropyModeV1::Healthy),
             )
             .expect("prepare production Orchard proof");
-            authorize_orchard_bundle_v1(prepared, consensus_binding(0x6A), &consensus_limits())
+            authorize_orchard_bundle_v1(prepared, &consensus_binding(0x6A), &consensus_limits())
                 .expect("authorize production Orchard proof")
         })
     }
@@ -1802,28 +1816,40 @@ pub(crate) mod tests {
     }
     #[test]
     fn production_prover_builds_change_signs_encodes_and_self_verifies() {
-        let proved = production_prover_fixture();
-        assert_eq!(proved.public.actions.len(), ORCHARD_MAX_ACTIONS_V1);
-        assert_eq!(proved.public.value_balance, -17);
+        let encoded_bundle = production_prover_fixture();
+        assert_eq!(encoded_bundle.public.actions.len(), ORCHARD_MAX_ACTIONS_V1);
+        assert_eq!(encoded_bundle.public.value_balance, -17);
         assert_eq!(
-            proved.authorization.len(),
+            encoded_bundle.authorization.len(),
             orchard_authorization_wire_size_v1(ORCHARD_MAX_ACTIONS_V1)
                 .expect("maximum-action wire")
         );
-        verify_orchard_bundle_v1(&proved.public, &proved.authorization, &consensus_limits())
-            .expect("production output independently verifies");
-        let mut changed_public = proved.public.clone();
+        verify_orchard_bundle_v1(
+            &encoded_bundle.public,
+            &encoded_bundle.authorization,
+            &consensus_limits(),
+        )
+        .expect("production output independently verifies");
+        let mut changed_public = encoded_bundle.public.clone();
         changed_public.actions[0].encrypted_note[317] ^= 0x80;
         assert!(
-            verify_orchard_bundle_v1(&changed_public, &proved.authorization, &consensus_limits())
-                .is_err()
+            verify_orchard_bundle_v1(
+                &changed_public,
+                &encoded_bundle.authorization,
+                &consensus_limits()
+            )
+            .is_err()
         );
-        let mut changed_authorization = proved.authorization.clone();
+        let mut changed_authorization = encoded_bundle.authorization.clone();
         let middle = changed_authorization.len() / 2;
         changed_authorization[middle] ^= 1;
         assert!(
-            verify_orchard_bundle_v1(&proved.public, &changed_authorization, &consensus_limits())
-                .is_err()
+            verify_orchard_bundle_v1(
+                &encoded_bundle.public,
+                &changed_authorization,
+                &consensus_limits()
+            )
+            .is_err()
         );
     }
     #[test]
@@ -1842,19 +1868,23 @@ pub(crate) mod tests {
         assert_eq!(draft.actions.len(), 1);
         assert_eq!(draft.value_balance, -23);
         let binding = consensus_binding(0x72);
-        let proved = authorize_orchard_bundle_v1(prepared, binding, &consensus_limits())
+        let encoded_bundle = authorize_orchard_bundle_v1(prepared, &binding, &consensus_limits())
             .expect("consume prepared state and authorize exact actions");
         assert_eq!(
             entropy.requests,
             [ORCHARD_PROVER_ENTROPY_BYTES_V1],
             "authorization must continue the retained zeroizing bridge without re-entering caller entropy"
         );
-        assert_eq!(proved.public.consensus_binding, binding);
-        assert_eq!(proved.public.anchor, draft.anchor);
-        assert_eq!(proved.public.value_balance, draft.value_balance);
-        assert_eq!(proved.public.actions, draft.actions);
-        verify_orchard_bundle_v1(&proved.public, &proved.authorization, &consensus_limits())
-            .expect("authorized exact draft verifies");
+        assert_eq!(encoded_bundle.public.consensus_binding, binding);
+        assert_eq!(encoded_bundle.public.anchor, draft.anchor);
+        assert_eq!(encoded_bundle.public.value_balance, draft.value_balance);
+        assert_eq!(encoded_bundle.public.actions, draft.actions);
+        verify_orchard_bundle_v1(
+            &encoded_bundle.public,
+            &encoded_bundle.authorization,
+            &consensus_limits(),
+        )
+        .expect("authorized exact draft verifies");
     }
     #[test]
     fn authorize_consumes_and_rejects_a_malformed_mandatory_binding() {
@@ -1869,7 +1899,7 @@ pub(crate) mod tests {
         let mut invalid_binding = consensus_binding(0x73);
         invalid_binding.genesis_hash = [0; 32];
         assert_eq!(
-            authorize_orchard_bundle_v1(prepared, invalid_binding, &consensus_limits())
+            authorize_orchard_bundle_v1(prepared, &invalid_binding, &consensus_limits())
                 .expect_err("zero genesis must fail before authorization"),
             OrchardProverErrorV1::ConsensusBinding
         );
@@ -2062,7 +2092,8 @@ pub(crate) mod tests {
     }
     #[test]
     fn upstream_bridge_output_is_bound_to_every_entropy_byte() {
-        let entropy = core::array::from_fn(|index| (index as u8).wrapping_mul(73).wrapping_add(19));
+        let entropy =
+            core::array::from_fn(|index| index.to_le_bytes()[0].wrapping_mul(73).wrapping_add(19));
         let mut baseline_rng =
             OrchardUpstreamRngV1::from_entropy_v1(&entropy).expect("fixed entropy shape");
         let mut baseline = [0_u8; ORCHARD_UPSTREAM_RNG_BLOCK_BYTES_V1];

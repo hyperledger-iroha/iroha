@@ -132,7 +132,7 @@ fn prove(
 }
 
 fn set_enabled(stx: &mut StateTransaction<'_, '_>, enabled: bool) {
-    let mut params = store::parameters::get(&*stx.world).clone().expect("SCCP");
+    let mut params = (*store::parameters::get(&*stx.world)).expect("SCCP");
     params.enabled = enabled;
     store::parameters::set(stx, Some(params));
 }
@@ -161,9 +161,7 @@ fn parent() -> Parent {
             let mut stx = block.transaction();
             // Fee quoting needs the explicit immutable root scope of the network.
             stx.world
-                .parameters
-                .get_mut()
-                .set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
+                .set_parameter_for_testing(crate::sumeragi::lanes::routing::test_support::metadata(
                     iroha_data_model::block::consensus::SumeragiRootScope::Global,
                 ))
                 .expect("fixture global metadata");
@@ -171,9 +169,7 @@ fn parent() -> Parent {
             fees.fee_asset_id =
                 iroha_data_model::sccp::escrow::sccp_taira_xor_asset_definition_id();
             stx.world
-                .parameters
-                .get_mut()
-                .set_parameter(iroha_data_model::parameter::Parameter::Custom(
+                .set_parameter_for_testing(iroha_data_model::parameter::Parameter::Custom(
                     fees.into_custom_parameter().unwrap(),
                 ))
                 .expect("committed fixture fee policy");
@@ -579,13 +575,27 @@ fn fund(stx: &mut StateTransaction<'_, '_>, network: SccpNetworkV1, amount: u128
         .expect("liability");
 }
 
-fn set_fee_sink(stx: &mut StateTransaction<'_, '_>, sink: &AccountId) {
-    stx.nexus.fees.fee_sink_account_id = sink.clone();
+fn set_fee_sink(state: &State, sink: &AccountId) {
+    let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+        .expect("original funded fee fixture block");
+    let mut fees = parameters
+        .root_fees()
+        .expect("explicit fixture fees")
+        .clone();
+    fees.fee_sink_account_id = sink.clone();
+    crate::state::set_parameter_cell_for_testing(
+        &mut parameters,
+        iroha_data_model::parameter::Parameter::Custom(fees.into_custom_parameter().unwrap()),
+        state.world.sccp_committee_generations.allocation_budget(),
+    )
+    .expect("author original eligibility fee policy");
+    parameters.commit();
 }
 
 #[test]
 fn only_an_exempt_settle_makes_the_self_claim_fee_due() {
     let state = funded_xor_state(&account(RELAYER), 1_000 * ONE_XOR);
+    set_fee_sink(&state, &account(0x30));
     let mut block = state.block(header(4));
     let mut stx = block.transaction_for_fastpq_testing(Hash::new(b"exempt-settle-fee"));
     install_value_route(
@@ -598,7 +608,6 @@ fn only_an_exempt_settle_makes_the_self_claim_fee_due() {
     fund(&mut stx, ETH, 100 * ONE_XOR);
     let sink = account(0x30);
     super::recipients::ensure_registered(&mut stx, &sink).expect("sink");
-    set_fee_sink(&mut stx, &sink);
     set_enabled(&mut stx, false);
     let paid_recipient = account(0x23);
     let relayed_recipient = account(0x24);
@@ -814,9 +823,6 @@ fn charged_parent_self_claim_is_not_reclassified_by_expired_executing_world() {
     }
     let mut block = parent.state.block(header(3));
     let mut stx = block.transaction();
-    stx.nexus.fees = nexus().fees;
-    stx.nexus.fees.fee_asset_id =
-        iroha_data_model::sccp::escrow::sccp_taira_xor_asset_definition_id().clone();
     let transaction = signed(
         &ed25519(RECIPIENT),
         vec![SettleSccpV1::inbound(parent.settleable).into()],

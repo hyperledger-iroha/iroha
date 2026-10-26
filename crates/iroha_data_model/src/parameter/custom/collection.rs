@@ -192,6 +192,23 @@ impl CustomParameters {
             .expect("unadmitted custom parameter authoring removal")
     }
 
+    /// Filter an unadmitted authoring collection in place without allocating.
+    ///
+    /// Visits immutable values in their canonical identity order. Retained owners
+    /// are refused before calling the predicate, preserving their exact backing
+    /// and custody; authoring values keep their original array capacity.
+    ///
+    /// # Errors
+    /// Refuses retained mutation before inspecting or changing any entry.
+    pub fn try_retain_authoring(
+        &mut self,
+        keep: impl FnMut(&CustomParameter) -> bool,
+    ) -> Result<(), CustomParametersAdmissionError> {
+        self.require_authoring()?;
+        self.entries.retain(keep);
+        Ok(())
+    }
+
     /// Build an authoring collection, applying later values of the same identity.
     ///
     /// # Errors

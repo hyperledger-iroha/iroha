@@ -225,9 +225,7 @@ fn installation_decoder_refusal_keeps_original_state_and_changed_overlay_cannot_
             GenesisCryptoPolicy::install(&mut initial, &block, overlay, &state, generation)?;
             overlay
                 .world
-                .parameters
-                .get_mut()
-                .set_parameter(policy(Algorithm::Secp256k1).into_parameter().unwrap())
+                .set_parameter_for_testing(policy(Algorithm::Secp256k1).into_parameter().unwrap())
                 .unwrap();
             assert!(overlay.crypto_admission_policy().is_err());
             {
@@ -436,9 +434,7 @@ fn header_and_unpublished_current_policy_cannot_replace_retained_genesis_authori
         let mut overlay = state.block(block.header());
         overlay
             .world
-            .parameters
-            .get_mut()
-            .set_parameter(policy(Algorithm::Ed25519).into_parameter().unwrap())
+            .set_parameter_for_testing(policy(Algorithm::Ed25519).into_parameter().unwrap())
             .unwrap();
         assert!(overlay.genesis_crypto_policy.is_none());
         assert!(overlay.world.parameters.get().crypto_policy().is_some());
@@ -456,11 +452,14 @@ fn header_and_unpublished_current_policy_cannot_replace_retained_genesis_authori
 fn ordinary_policy_borrows_original_preimage_across_pending_applied_and_rolled_back_changes() {
     let state = state();
     let expected = policy(Algorithm::Ed25519);
-    let mut parameters = state.world.parameters.block();
-    parameters
-        .get_mut()
-        .set_parameter(expected.clone().into_parameter().unwrap())
-        .unwrap();
+    let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+        .expect("funded original parameter-only fixture block");
+    crate::state::set_parameter_cell_for_testing(
+        &mut parameters,
+        expected.clone().into_parameter().unwrap(),
+        state.world.sccp_committee_generations.allocation_budget(),
+    )
+    .unwrap();
     parameters.commit();
     let before = crate::snapshot::canonical_state_snapshot_bytes(&state);
     // Structural owner control only: these headers grant no native publication authority.
@@ -481,9 +480,7 @@ fn ordinary_policy_borrows_original_preimage_across_pending_applied_and_rolled_b
             let mut transaction = overlay.transaction();
             transaction
                 .world
-                .parameters
-                .get_mut()
-                .set_parameter(policy(Algorithm::Secp256k1).into_parameter().unwrap())
+                .set_parameter_for_testing(policy(Algorithm::Secp256k1).into_parameter().unwrap())
                 .unwrap();
             assert_eq!(transaction.crypto_admission_policy().unwrap(), &expected);
             transaction.apply();
@@ -498,9 +495,7 @@ fn ordinary_policy_borrows_original_preimage_across_pending_applied_and_rolled_b
             assert_eq!(sibling.crypto_admission_policy().unwrap(), &expected);
             sibling
                 .world
-                .parameters
-                .get_mut()
-                .set_parameter(policy(Algorithm::Ed25519).into_parameter().unwrap())
+                .set_parameter_for_testing(policy(Algorithm::Ed25519).into_parameter().unwrap())
                 .unwrap();
             assert_eq!(sibling.crypto_admission_policy().unwrap(), &expected);
         }
@@ -520,20 +515,26 @@ fn ordinary_policy_borrows_original_preimage_across_pending_applied_and_rolled_b
 fn replacement_policy_borrows_original_undo_and_rejects_current_only_signed_algorithm() {
     let state = state();
     let older = policy(Algorithm::Ed25519);
-    let mut initial = state.world.parameters.block();
-    initial
-        .get_mut()
-        .set_parameter(older.clone().into_parameter().unwrap())
-        .unwrap();
+    let mut initial = crate::state::parameter_cell_block_for_testing(&state.world)
+        .expect("funded original parameter-only fixture block");
+    crate::state::set_parameter_cell_for_testing(
+        &mut initial,
+        older.clone().into_parameter().unwrap(),
+        state.world.sccp_committee_generations.allocation_budget(),
+    )
+    .unwrap();
     initial.commit();
     let retained_old = state.query_view();
     let wider =
         CryptoAdmissionPolicyV1::new(vec![Algorithm::Ed25519, Algorithm::Secp256k1]).unwrap();
-    let mut update = state.world.parameters.block();
-    update
-        .get_mut()
-        .set_parameter(wider.clone().into_parameter().unwrap())
-        .unwrap();
+    let mut update = crate::state::parameter_cell_block_for_testing(&state.world)
+        .expect("funded original parameter-only fixture block");
+    crate::state::set_parameter_cell_for_testing(
+        &mut update,
+        wider.clone().into_parameter().unwrap(),
+        state.world.sccp_committee_generations.allocation_budget(),
+    )
+    .unwrap();
     update.commit();
     // A structural cell publication control: the same-height selector must use its
     // retained undo. No fabricated header or this test grants native history authority.
@@ -580,7 +581,9 @@ fn replacement_policy_borrows_original_undo_and_rejects_current_only_signed_algo
     );
     drop(view);
     // An unchanged next cell commit has no distinct undo and legitimately uses current.
-    state.world.parameters.block().commit();
+    crate::state::parameter_cell_block_for_testing(&state.world)
+        .expect("funded original parameter-only fixture block")
+        .commit();
     let unchanged = state.query_view();
     assert_eq!(
         unchanged
@@ -685,11 +688,14 @@ fn public_genesis_policy_inspection_authenticates_original_and_keeps_callback_re
 #[test]
 fn local_crypto_settings_do_not_change_original_policy_or_execution_digest() {
     let state = state();
-    let mut parameters = state.world.parameters.block();
-    parameters
-        .get_mut()
-        .set_parameter(policy(Algorithm::Secp256k1).into_parameter().unwrap())
-        .unwrap();
+    let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+        .expect("funded original parameter-only fixture block");
+    crate::state::set_parameter_cell_for_testing(
+        &mut parameters,
+        policy(Algorithm::Secp256k1).into_parameter().unwrap(),
+        state.world.sccp_committee_generations.allocation_budget(),
+    )
+    .unwrap();
     parameters.commit();
     let nexus = state.nexus_snapshot();
     state.install_lane_manifests_for_testing(&std::sync::Arc::new(

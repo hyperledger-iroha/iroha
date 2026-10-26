@@ -1,7 +1,7 @@
 //! Narrow native sources for the existing Musubi semantic predicates.
 //!
 //! Retains exactly fourteen original table generations and one original Copy
-//! revision. Acquisition creates no full WorldView, catalog, row copy or epoch
+//! revision. Acquisition creates no full `WorldView`, catalog, row copy or epoch
 //! collector participant. This local source cut does not establish State finality.
 
 use super::super::*;
@@ -10,14 +10,14 @@ use std::convert::Infallible;
 
 #[path = "deserialize_world_musubi_source_traits.rs"]
 mod source_traits;
-pub(crate) use source_traits::{
+pub use source_traits::{
     MusubiSourceReadOnly,
     access::{MusubiEvidenceRead, ReadFailure, next_if_row, try_next_if_row},
 };
 
 #[path = "deserialize_world_musubi_source_full_read.rs"]
 mod full_read;
-pub(crate) use full_read::{KeyWorkCursor, LookupCursor, LookupResolution, MusubiRead};
+pub use full_read::{KeyWorkCursor, LookupCursor, LookupResolution, MusubiRead};
 
 /// An original source acquisition refusal, separate from semantic validity.
 #[derive(Debug, Clone, PartialEq, Eq)]

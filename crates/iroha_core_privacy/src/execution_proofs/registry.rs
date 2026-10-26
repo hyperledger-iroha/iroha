@@ -3,15 +3,12 @@
 //! This module is not part of any adapter's source commitment. Add later relations here with an exact descriptor. Registration resolves this
 //! closed catalog; neither callers nor registrants may upload code, replace parameters or alias IDs.
 
-use super::{error::ExecutionProofErrorV1, proof};
+use super::{GameProofHistoryV1, error::ExecutionProofErrorV1, proof};
 use iroha_crypto::Hash;
 use iroha_data_model::{
     NetworkId,
     execution_proofs::{ExecutionProofEnvelopeV1, ExecutionProofProfileV1},
-    game::{
-        GameCheckpointV1, GameForcedBatchV1, GameManifestV1, GameOutcomeV1, GameParticipantV1,
-        GameTranscriptAnchorV1,
-    },
+    game::{GameManifestV1, GameOutcomeV1},
 };
 
 #[derive(Clone, Copy)]
@@ -56,6 +53,9 @@ pub fn compiled_execution_profiles_v1() -> Vec<ExecutionProofProfileV1> {
 }
 
 /// Validate application-neutral manifest bounds using its exact immutable compiled adapter.
+///
+/// # Errors
+/// Rejects unsupported application identifiers and manifests outside the selected compiled adapter bounds.
 pub fn validate_game_manifest_v1(manifest: &GameManifestV1) -> Result<(), ExecutionProofErrorV1> {
     match CompiledAdapterV1::for_manifest(manifest)? {
         CompiledAdapterV1::RaceV1 => proof::validate_race_manifest_v1(manifest),
@@ -63,6 +63,9 @@ pub fn validate_game_manifest_v1(manifest: &GameManifestV1) -> Result<(), Execut
 }
 
 /// Validate opaque participant data using the manifest's compiled adapter.
+///
+/// # Errors
+/// Rejects unsupported adapters and participant data that fails the selected adapter’s decoding or semantic checks.
 pub fn validate_game_participant_v1(
     manifest: &GameManifestV1,
     data: &[u8],
@@ -74,6 +77,9 @@ pub fn validate_game_participant_v1(
 
 /// Return the exact immutable equipment requirements of the compiled adapter.
 /// This only describes requirements; the typed wallet clauses must independently authorize them.
+///
+/// # Errors
+/// Rejects unsupported adapters and invalid participant data before producing resource requirements.
 pub fn game_resource_requirements_v1(
     manifest: &GameManifestV1,
     data: &[u8],
@@ -87,6 +93,9 @@ pub fn game_resource_requirements_v1(
 }
 
 /// Validate opaque input batches before accepting their commitments or reveals.
+///
+/// # Errors
+/// Rejects unsupported adapters and malformed or invalid input batches.
 pub fn validate_game_input_v1(
     manifest: &GameManifestV1,
     input: &[u8],
@@ -97,6 +106,9 @@ pub fn validate_game_input_v1(
 }
 
 /// Compute the initial state commitment prescribed by the exact compiled application.
+///
+/// # Errors
+/// Rejects unsupported adapters, invalid manifests, and player counts outside the selected simulation bounds.
 pub fn initial_game_state_root_v1(
     network: &NetworkId,
     manifest: &GameManifestV1,
@@ -110,6 +122,9 @@ pub fn initial_game_state_root_v1(
 }
 
 /// Verify execution and return only the adapter-authenticated generic outcome.
+///
+/// # Errors
+/// Rejects unsupported profiles, malformed proof envelopes, and proofs or outcome bindings rejected by the compiled adapter.
 pub fn verify_execution_proof_v1(
     envelope: &ExecutionProofEnvelopeV1,
 ) -> Result<GameOutcomeV1, ExecutionProofErrorV1> {
@@ -119,27 +134,19 @@ pub fn verify_execution_proof_v1(
 }
 
 /// Verify execution and its binding to every retained checkpoint, forced input and removal.
+///
+/// # Errors
+/// Rejects unsupported profiles, invalid execution proofs, and mismatches with the retained manifest, outcome, checkpoint, forced inputs, participants or epoch.
 pub fn verify_game_proof_for_history_v1(
     envelope: &ExecutionProofEnvelopeV1,
     manifest: &GameManifestV1,
     outcome: &GameOutcomeV1,
-    checkpoint: Option<&GameCheckpointV1>,
-    anchors: &[GameTranscriptAnchorV1],
-    batches: &[GameForcedBatchV1],
-    participants: &[GameParticipantV1],
-    epoch: u64,
+    history: GameProofHistoryV1<'_>,
 ) -> Result<(), ExecutionProofErrorV1> {
     match CompiledAdapterV1::for_envelope(envelope)? {
-        CompiledAdapterV1::RaceV1 => proof::verify_race_proof_for_history_v1(
-            envelope,
-            manifest,
-            outcome,
-            checkpoint,
-            anchors,
-            batches,
-            participants,
-            epoch,
-        ),
+        CompiledAdapterV1::RaceV1 => {
+            proof::verify_race_proof_for_history_v1(envelope, manifest, outcome, history)
+        }
     }
 }
 
@@ -226,7 +233,14 @@ mod tests {
         use norito::json::{self, JsonDeserialize, Value};
 
         fn hex(bytes: &[u8]) -> String {
-            bytes.iter().map(|byte| format!("{byte:02X}")).collect()
+            use core::fmt::Write as _;
+            bytes.iter().fold(
+                String::with_capacity(bytes.len() * 2),
+                |mut output, byte| {
+                    write!(output, "{byte:02X}").expect("writing to String cannot fail");
+                    output
+                },
+            )
         }
         fn check<T: Encode + JsonDeserialize>(row: &Value) -> T {
             let value: T = json::from_value(row["value"].clone()).unwrap();

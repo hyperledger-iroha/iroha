@@ -14,31 +14,6 @@ use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
 };
-/// Author fixture staking bounds using explicit typed monetary identities before genesis signing.
-///
-/// This fresh-genesis helper never reads node configuration or fills an absent runtime policy.
-#[must_use]
-pub fn staking_policy(
-    stake_asset_id: iroha_data_model::asset::AssetDefinitionId,
-    stake_escrow_account_id: AccountId,
-    slash_sink_account_id: AccountId,
-) -> iroha_data_model::block::consensus::PublicLaneStakingPolicy {
-    use iroha_config::parameters::defaults::nexus::staking;
-    iroha_data_model::block::consensus::PublicLaneStakingPolicy {
-        min_validator_stake: staking::min_validator_stake(),
-        max_stake_shares_per_validator: staking::MAX_STAKE_SHARES_PER_VALIDATOR,
-        max_pending_unbonds_per_share: staking::MAX_PENDING_UNBONDS_PER_SHARE,
-        unbonding_delay_ms: staking::UNBONDING_DELAY
-            .as_millis()
-            .try_into()
-            .expect("fixed author delay fits"),
-        max_slash_bps: staking::MAX_SLASH_BPS,
-        stake_asset_id,
-        stake_escrow_account_id,
-        slash_sink_account_id,
-    }
-}
-
 /// Exact placeholder accepted while a genesis hash is not yet known.
 ///
 /// The placeholder is replaced only in memory by the explicit preparation helpers
@@ -201,10 +176,12 @@ pub fn sign_prepared_genesis_from_config(
         &genesis_account,
         &topology,
         key_pair,
-        None,
-        None,
-        None,
-        Some(&parsed_config),
+        crate::config::GenesisRuntimeConfig {
+            pipeline_config: None,
+            nexus_config: None,
+            zk_config: None,
+            runtime_config: Some(&parsed_config),
+        },
     )
     .wrap_err("pre-execute canonical prepared genesis")?;
     if !unresolved_hash_replaced && block.hash() != config.genesis_expected_hash {
@@ -282,10 +259,12 @@ pub fn prepare_unpublished_genesis_from_config(
                 &account,
                 &topology,
                 key_pair,
-                None,
-                None,
-                None,
-                Some(&parsed_config),
+                crate::config::GenesisRuntimeConfig {
+                    pipeline_config: None,
+                    nexus_config: None,
+                    zk_config: None,
+                    runtime_config: Some(&parsed_config),
+                },
             )
         },
     )
@@ -444,11 +423,10 @@ fn load_node_config(path: &Path, allow_unresolved_hash: bool) -> Result<(actual:
 mod tests {
     use super::*;
     use iroha_crypto::{Algorithm, bls_normal_pop_prove};
-    use iroha_data_model::block::consensus::{
-        SumeragiGenesisContextParameters, is_valid_committee_size,
-    };
+    use iroha_data_model::block::consensus::SumeragiGenesisContextParameters;
     use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry};
     use iroha_model_base::peer::PeerId;
+    use iroha_model_base::topology::is_valid_committee_size;
     use std::fs;
     const CONFIGURED_HASH: &str =
         "hash:0000000000000000000000000000000000000000000000000000000000000001#C50E";
@@ -481,7 +459,7 @@ mod tests {
     }
     fn prepared_manifest(chain_id: ChainId) -> (RawGenesisTransaction, KeyPair) {
         let fees = iroha_config::parameters::defaults::nexus::fees::genesis_policy();
-        let staking = staking_policy(
+        let staking = iroha_genesis::default_staking_policy(
             fees.fee_asset_id,
             fees.fee_sink_account_id.clone(),
             fees.fee_sink_account_id,
@@ -547,10 +525,12 @@ mod tests {
                 &account,
                 &topology,
                 key,
-                None,
-                None,
-                None,
-                Some(&config),
+                crate::config::GenesisRuntimeConfig {
+                    pipeline_config: None,
+                    nexus_config: None,
+                    zk_config: None,
+                    runtime_config: Some(&config),
+                },
             ),
         )
         .expect("derive actual fixture commitments from native execution");
@@ -574,10 +554,12 @@ mod tests {
             &account,
             &topology,
             key,
-            None,
-            None,
-            None,
-            Some(&config),
+            crate::config::GenesisRuntimeConfig {
+                pipeline_config: None,
+                nexus_config: None,
+                zk_config: None,
+                runtime_config: Some(&config),
+            },
         )
         .expect("final fixture must pass the strict native validator without rebinding");
         assert_eq!(actual, staged);
@@ -1070,14 +1052,14 @@ mod staking_author_tests {
                 .public_key()
                 .clone(),
         );
-        let expected = staking_policy(
+        let expected = iroha_genesis::default_staking_policy(
             fees.fee_asset_id.clone(),
             fees.fee_sink_account_id.clone(),
             sink.clone(),
         );
         {
             let _author = ChainDiscriminantGuard::enter(369);
-            let policy = staking_policy(
+            let policy = iroha_genesis::default_staking_policy(
                 fees.fee_asset_id.clone(),
                 fees.fee_sink_account_id.clone(),
                 sink.clone(),

@@ -1,4 +1,4 @@
-//! Closed registry freshness: real file membership, assets, staging and fail-closed inputs.
+//! Standalone source provenance: real membership, assets, staging and input integrity.
 
 #[path = "../build_support/source_identity.rs"]
 mod source_identity;
@@ -96,7 +96,7 @@ fn source_assets_dependency_lock_and_membership_change_identity() {
         let changed = workspace.digest();
         assert_ne!(
             previous, changed,
-            "input {name} must invalidate compiled entries"
+            "input {name} must change the source provenance"
         );
         previous = changed;
     }
@@ -147,7 +147,7 @@ fn generated_data_and_ignored_build_outputs_do_not_create_self_hash_cycle() {
 }
 
 #[test]
-fn staging_without_byte_changes_does_not_change_mathematical_identity() {
+fn staging_without_byte_changes_does_not_change_source_provenance() {
     let workspace = Workspace::new();
     workspace.write("crates/proof/src/new.rs", b"pub const X: u64 = 1;\n");
     let before = workspace.digest();

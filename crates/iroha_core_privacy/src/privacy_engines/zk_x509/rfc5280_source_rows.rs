@@ -301,9 +301,7 @@ mod tests {
                     assert_ne!(compact, retained);
                     compact[0].clear();
                     assert!(compact[0].is_empty());
-                    if unwind {
-                        panic!("injected private family-owner unwind");
-                    }
+                    assert!(!unwind, "injected private family-owner unwind");
                     Err::<(), _>(ZkX509Rfc5280StarkErrorV1::Source)
                 })
             });

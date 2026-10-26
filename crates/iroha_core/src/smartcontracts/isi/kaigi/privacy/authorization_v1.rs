@@ -24,7 +24,7 @@ use kaigi_zk::Scalar as Fp;
 use std::collections::BTreeSet;
 
 /// Resolve the immutable participation owner through authenticated rekey state.
-pub(crate) fn original_participant_v1(
+pub fn original_participant_v1(
     state: &StateTransaction<'_, '_>,
     ledger: &KaigiPrivateParticipationLedgerV1,
     host: &AccountId,
@@ -94,7 +94,7 @@ fn original_participant_in_component_v1(
 /// The counts come from a validated call record. Admission must not consume
 /// space needed to leave or end that same call. A host end releases all future
 /// leave reservations because the call becomes permanently terminal.
-pub(crate) fn ensure_action_capacity_v1(
+pub fn ensure_action_capacity_v1(
     nullifier_count: usize,
     live_participants: usize,
     action: KaigiAuthorizationActionV1,
@@ -141,7 +141,7 @@ use kaigi_zk::authorization_v1::{
 /// In particular, `subject` is the immutable original participation owner,
 /// which can differ from its authenticated active rekey successor.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn context_from_ledger_v1(
+pub fn context_from_ledger_v1(
     network_id: NetworkId,
     call_id: &KaigiId,
     host: &AccountId,
@@ -169,12 +169,12 @@ pub(crate) fn context_from_ledger_v1(
     Ok(context)
 }
 
-/// Require one exact 31-row column and all externally authenticated values.
+/// Require one exact 25-row column and all externally authenticated values.
 ///
 /// C and N are canonical raw Pasta scalar representations, never `Hash`
 /// values. A is a circuit output: its correctness requires the subsequent
 /// canonical proof verification, not an independently chosen instruction field.
-pub(crate) fn verify_public_inputs_v1(
+pub fn verify_public_inputs_v1(
     columns: &[Vec<Fp>],
     context: &KaigiAuthorizationContextV1,
     commitment: &[u8; 32],
@@ -190,7 +190,7 @@ pub(crate) fn verify_public_inputs_v1(
     };
     if column.len() != KAIGI_AUTHORIZATION_INSTANCE_ROWS_V1 {
         return Err(privacy_error(
-            "Kaigi authorization requires exactly 31 instance rows",
+            "Kaigi authorization requires exactly 25 instance rows",
         ));
     }
     let commitment = Option::<Fp>::from(Fp::from_repr(*commitment))
@@ -202,7 +202,7 @@ pub(crate) fn verify_public_inputs_v1(
         outputs: KaigiAuthorizationOutputsV1 {
             commitment,
             nullifier,
-            authorization: column[30],
+            authorization: column[KAIGI_AUTHORIZATION_INSTANCE_ROWS_V1 - 1],
         },
     }
     .instance();
@@ -375,7 +375,8 @@ mod tests {
             &nullifier,
         )
         .unwrap();
-        for row in 0..30 {
+        // A is proof-owned; every preceding row is externally authenticated.
+        for row in 0..KAIGI_AUTHORIZATION_INSTANCE_ROWS_V1 - 1 {
             let mut changed = column.clone();
             changed[row] += Fp::from(1);
             assert!(
@@ -386,7 +387,8 @@ mod tests {
         for malformed in [
             Vec::new(),
             vec![column.clone(), column.clone()],
-            vec![column[..30].to_vec()],
+            vec![column[..KAIGI_AUTHORIZATION_INSTANCE_ROWS_V1 - 1].to_vec()],
+            vec![vec![Fp::from(0); 31]],
             vec![[column.clone(), vec![Fp::from(1)]].concat()],
         ] {
             assert!(

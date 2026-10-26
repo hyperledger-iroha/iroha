@@ -874,12 +874,11 @@ fn write_private_webhook_file_atomic(
         }
         directory.file.sync_all()
     })();
-    if prepared.is_err() {
-        if let Ok(Some((_, identity))) =
+    if prepared.is_err()
+        && let Ok(Some((_, identity))) =
             inspect_private_webhook_file(directory, &temporary_name, None)
-        {
-            let _ = unlink_private_webhook_entry(directory, &temporary_path, Some(identity), false);
-        }
+    {
+        let _ = unlink_private_webhook_entry(directory, &temporary_path, Some(identity), false);
     }
     prepared
 }
@@ -1207,7 +1206,7 @@ fn encode_pending_delivery(pd: &PendingDelivery) -> std::io::Result<String> {
     );
     payload.insert(
         "attempts".into(),
-        norito::json::Value::from(pd.attempts as u64),
+        norito::json::Value::from(u64::from(pd.attempts)),
     );
     payload.insert(
         "next_attempt_ms".into(),
@@ -1831,13 +1830,13 @@ fn validate_parsed_webhook_url(
         ));
     };
     if policy.enabled {
-        if let Host::Domain(domain) = host {
-            if is_localhost_domain(domain) {
-                return Err((
-                    StatusCode::FORBIDDEN,
-                    "webhook url host `localhost` is not allowed".to_string(),
-                ));
-            }
+        if let Host::Domain(domain) = host
+            && is_localhost_domain(domain)
+        {
+            return Err((
+                StatusCode::FORBIDDEN,
+                "webhook url host `localhost` is not allowed".to_string(),
+            ));
         }
         match host {
             Host::Ipv4(v4) => {
@@ -1862,13 +1861,17 @@ fn validate_parsed_webhook_url(
     Ok(())
 }
 /// POST /v1/webhooks – create a webhook entry.
+#[expect(
+    clippy::unused_async,
+    reason = "HTTP handlers retain a Future interface for route registration and shared async callers"
+)]
 pub async fn handle_create_webhook(
     crate::utils::extractors::JsonOnly(req): crate::utils::extractors::JsonOnly<WebhookCreate>,
 ) -> axum::response::Response {
-    if let Some(ref expr) = req.filter {
-        if let Err(e) = validate_webhook_filter(expr) {
-            return (StatusCode::BAD_REQUEST, format!("invalid filter: {e}")).into_response();
-        }
+    if let Some(ref expr) = req.filter
+        && let Err(e) = validate_webhook_filter(expr)
+    {
+        return (StatusCode::BAD_REQUEST, format!("invalid filter: {e}")).into_response();
     }
     let policy = webhook_security_policy();
     let url = match validate_webhook_url_for_create(&req.url, &policy) {
@@ -1931,6 +1934,10 @@ pub async fn handle_create_webhook(
     (StatusCode::CREATED, body).into_response()
 }
 /// GET /v1/webhooks – list current webhook entries.
+#[expect(
+    clippy::unused_async,
+    reason = "HTTP handlers retain a Future interface for route registration and shared async callers"
+)]
 pub async fn handle_list_webhooks() -> impl IntoResponse {
     let guard = lock_registry();
     let mut entries: Vec<_> = guard
@@ -1989,12 +1996,12 @@ fn hmac_sha256_hex(secret: &[u8], body: &[u8]) -> String {
         i_key_pad[i] = key[i] ^ 0x36;
     }
     let mut inner = Sha256::new();
-    inner.update(&i_key_pad);
+    inner.update(i_key_pad);
     inner.update(body);
     let inner_sum = inner.finalize();
     let mut outer = Sha256::new();
-    outer.update(&o_key_pad);
-    outer.update(&inner_sum);
+    outer.update(o_key_pad);
+    outer.update(inner_sum);
     let mac = outer.finalize();
     hex::encode(mac)
 }
@@ -2052,10 +2059,13 @@ pub fn enqueue_event_for_matching_webhooks(
         );
         return;
     }
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64;
+    let now = u64::try_from(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis(),
+    )
+    .unwrap_or(u64::MAX);
     // Snapshot registry to minimize lock duration
     let entries: Vec<(u64, RegisteredWebhook)> = lock_registry()
         .items
@@ -2099,10 +2109,10 @@ pub fn enqueue_event_for_matching_webhooks(
             );
             break;
         }
-        if let Some(ref expr) = w.filter {
-            if !event_rows_match_filter(&event_rows, expr) {
-                continue;
-            }
+        if let Some(ref expr) = w.filter
+            && !event_rows_match_filter(&event_rows, expr)
+        {
+            continue;
         }
         let delivery_id = match new_delivery_id(id, now) {
             Ok(delivery_id) => delivery_id,
@@ -2491,10 +2501,6 @@ fn validate_webhook_filter_value(
 fn validate_webhook_filter(
     expr: &crate::filter::FilterExpr,
 ) -> Result<(), WebhookFilterValidationError> {
-    use crate::filter::FilterExpr as F;
-
-    crate::filter::validate_filter(expr)?;
-
     fn validate_ordering(
         field: &str,
         value: &norito::json::Value,
@@ -2511,7 +2517,6 @@ fn validate_webhook_filter(
             .map(|_| ())
             .ok_or_else(|| invalid_webhook_filter_value(field, "an unsigned integer"))
     }
-
     fn visit(expr: &F) -> Result<(), WebhookFilterValidationError> {
         match expr {
             F::And(children) | F::Or(children) => {
@@ -2545,6 +2550,10 @@ fn validate_webhook_filter(
             }
         }
     }
+
+    use crate::filter::FilterExpr as F;
+
+    crate::filter::validate_filter(expr)?;
 
     visit(expr)
 }
@@ -3027,7 +3036,7 @@ fn value_to_filter_expr(v: &norito::json::Value) -> Option<crate::filter::Filter
 fn io_timeout_error(operation: &str, duration: Duration) -> std::io::Error {
     std::io::Error::new(
         std::io::ErrorKind::TimedOut,
-        format!("{operation} timed out after {:?}", duration),
+        format!("{operation} timed out after {duration:?}"),
     )
 }
 fn io_invalid_input(message: impl Into<String>) -> std::io::Error {
@@ -3046,14 +3055,13 @@ async fn resolve_destination_addrs(
     let Some(port) = url.port_or_known_default() else {
         return Err(io_invalid_input("webhook url missing port"));
     };
-    if policy.enabled {
-        if let Host::Domain(domain) = host {
-            if is_localhost_domain(domain) {
-                return Err(io_permission_denied(
-                    "webhook destination host `localhost` is not allowed",
-                ));
-            }
-        }
+    if policy.enabled
+        && let Host::Domain(domain) = host
+        && is_localhost_domain(domain)
+    {
+        return Err(io_permission_denied(
+            "webhook destination host `localhost` is not allowed",
+        ));
     }
     match host {
         Host::Ipv4(v4) => {
@@ -3163,12 +3171,9 @@ async fn http_post_plain(
     body: &[u8],
 ) -> std::io::Result<u16> {
     // Very small plain HTTP/1.1 client for http:// (no TLS).
-    if url.scheme() != "http" {
-        Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "invalid scheme for plain HTTP client",
-        ))
-    } else {
+    if url.scheme() == "http" {
+        use tokio::{io::AsyncWriteExt, net::TcpStream};
+
         let mut path = url.path().to_string();
         if path.is_empty() {
             path = "/".to_string();
@@ -3177,7 +3182,7 @@ async fn http_post_plain(
             path.push('?');
             path.push_str(query);
         }
-        use tokio::{io::AsyncWriteExt, net::TcpStream};
+
         let timeouts = http_timeout_config();
         let mut stream =
             match tokio::time::timeout(timeouts.connect, TcpStream::connect(connect_addr)).await {
@@ -3186,12 +3191,12 @@ async fn http_post_plain(
                 Err(_) => return Err(io_timeout_error("tcp connect", timeouts.connect)),
             };
         let mut req = Vec::new();
-        req.extend_from_slice(format!("POST {} HTTP/1.1\r\n", path).as_bytes());
-        req.extend_from_slice(format!("Host: {}\r\n", host_header).as_bytes());
+        req.extend_from_slice(format!("POST {path} HTTP/1.1\r\n").as_bytes());
+        req.extend_from_slice(format!("Host: {host_header}\r\n").as_bytes());
         req.extend_from_slice(b"Connection: close\r\n");
         req.extend_from_slice(b"User-Agent: iroha-torii-webhook/1\r\n");
         for (k, v) in headers {
-            req.extend_from_slice(format!("{}: {}\r\n", k, v).as_bytes());
+            req.extend_from_slice(format!("{k}: {v}\r\n").as_bytes());
         }
         req.extend_from_slice(format!("Content-Length: {}\r\n", body.len()).as_bytes());
         req.extend_from_slice(b"\r\n");
@@ -3207,6 +3212,10 @@ async fn http_post_plain(
         tokio::time::timeout(timeouts.read, read_webhook_http_status(&mut stream))
             .await
             .map_err(|_| io_timeout_error("tcp read", timeouts.read))?
+    } else {
+        Err(std::io::Error::other(
+            "invalid scheme for plain HTTP client",
+        ))
     }
 }
 async fn read_webhook_http_status<R>(reader: R) -> io::Result<u16>
@@ -3510,16 +3519,12 @@ async fn ws_send(
             )
             .await
             .map_err(|_| io_timeout_error("websocket handshake", timeouts.connect))?
-            .map_err(|e| {
-                std::io::Error::new(std::io::ErrorKind::Other, format!("ws connect: {e}"))
-            })?
+            .map_err(|e| std::io::Error::other(format!("ws connect: {e}")))?
         }
         None => tokio::time::timeout(timeouts.connect, connect_async(req))
             .await
             .map_err(|_| io_timeout_error("websocket connect", timeouts.connect))?
-            .map_err(|e| {
-                std::io::Error::new(std::io::ErrorKind::Other, format!("ws connect: {e}"))
-            })?,
+            .map_err(|e| std::io::Error::other(format!("ws connect: {e}")))?,
     };
     tokio::time::timeout(
         timeouts.write,
@@ -3527,7 +3532,7 @@ async fn ws_send(
     )
     .await
     .map_err(|_| io_timeout_error("websocket write", timeouts.write))?
-    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("ws send: {e}")))?;
+    .map_err(|e| std::io::Error::other(format!("ws send: {e}")))?;
     let _ = tokio::time::timeout(timeouts.write, ws.close(None)).await;
     Ok(200)
 }
@@ -3536,7 +3541,7 @@ fn backoff_delay(policy: &WebhookPolicy, attempts: u32) -> Duration {
     let max_ms = policy.backoff_max.as_millis().max(base_ms);
     let pow = attempts.saturating_sub(1).min(31);
     let delay_ms = base_ms.saturating_mul(1u128 << pow).min(max_ms);
-    Duration::from_millis(delay_ms as u64)
+    Duration::from_millis(u64::try_from(delay_ms).unwrap_or(u64::MAX))
 }
 async fn try_deliver(pd: &PendingDelivery) -> bool {
     let mut headers = vec![("Content-Type", pd.content_type.clone())];
@@ -3993,31 +3998,28 @@ async fn process_queue_once() -> Duration {
             Ok(file) => file,
             Err(e) => {
                 iroha_logger::warn!(%e, ?path, "failed to read pending webhook delivery");
-                if e.kind() == std::io::ErrorKind::InvalidData {
-                    if let Err(remove_err) =
+                if e.kind() == std::io::ErrorKind::InvalidData
+                    && let Err(remove_err) =
                         remove_queue_file(Arc::clone(&directory), path.clone(), None).await
-                    {
-                        iroha_logger::warn!(
-                            %remove_err,
-                            ?path,
-                            "failed to remove invalid webhook payload"
-                        );
-                    }
+                {
+                    iroha_logger::warn!(
+                        %remove_err,
+                        ?path,
+                        "failed to remove invalid webhook payload"
+                    );
                 }
                 continue;
             }
         };
-        let mut pd = match decode_pending_delivery(&file.bytes) {
-            Some(p) => p,
-            None => {
-                if let Err(e) =
-                    remove_queue_file(Arc::clone(&directory), path.clone(), Some(file.identity))
-                        .await
-                {
-                    iroha_logger::warn!(%e, ?path, "failed to remove invalid webhook payload");
-                }
-                continue;
+        let mut pd = if let Some(p) = decode_pending_delivery(&file.bytes) {
+            p
+        } else {
+            if let Err(e) =
+                remove_queue_file(Arc::clone(&directory), path.clone(), Some(file.identity)).await
+            {
+                iroha_logger::warn!(%e, ?path, "failed to remove invalid webhook payload");
             }
+            continue;
         };
         if !pending_delivery_registration_is_current(&pd) {
             iroha_logger::info!(
@@ -4036,10 +4038,13 @@ async fn process_queue_once() -> Duration {
             continue;
         }
         // Wait until next_attempt
-        let now_ms = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64;
+        let now_ms = u64::try_from(
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis(),
+        )
+        .unwrap_or(u64::MAX);
         if now_ms < pd.next_attempt_ms {
             let delay = Duration::from_millis(pd.next_attempt_ms.saturating_sub(now_ms));
             next_due = Some(next_due.map_or(delay, |current: Duration| current.min(delay)));
@@ -4101,12 +4106,15 @@ async fn process_queue_once() -> Duration {
                 continue;
             }
             let delay = backoff_delay(&policy, pd.attempts);
-            let next = SystemTime::now()
-                .checked_add(delay)
-                .unwrap_or_else(SystemTime::now)
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis() as u64;
+            let next = u64::try_from(
+                SystemTime::now()
+                    .checked_add(delay)
+                    .unwrap_or_else(SystemTime::now)
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis(),
+            )
+            .unwrap_or(u64::MAX);
             pd.next_attempt_ms = next;
             match encode_pending_delivery(&pd) {
                 Ok(encoded) => {

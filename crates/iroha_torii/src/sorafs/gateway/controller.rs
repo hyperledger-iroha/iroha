@@ -1,4 +1,4 @@
-//! ACME automation controller wiring for the SoraFS gateway TLS surface.
+//! ACME automation controller wiring for the `SoraFS` gateway TLS surface.
 #[cfg(feature = "telemetry")]
 use super::telemetry::record_renewal_metrics;
 use super::{
@@ -117,7 +117,7 @@ impl TlsAutomationHandle {
         loop {
             tokio::select! {
                 biased;
-                _ = shutdown.receive() => {
+                () = shutdown.receive() => {
                     iroha_logger::info!("SoraFS TLS automation loop received shutdown signal");
                     return crate::ToriiCriticalWorkerExit::StoppedByShutdown;
                 }

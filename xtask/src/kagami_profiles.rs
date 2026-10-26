@@ -6,7 +6,6 @@ use iroha_data_model::{
     NetworkId,
     account::AccountId,
     asset::AssetDefinitionId,
-    block::consensus::is_valid_committee_size,
     isi::SetParameter,
     parameter::{
         Parameter,
@@ -16,6 +15,7 @@ use iroha_data_model::{
 };
 use iroha_genesis::{GenesisTopologyEntry, RawGenesisTransaction, decode_signed_genesis};
 use iroha_model_base::peer::PeerId;
+use iroha_model_base::topology::is_valid_committee_size;
 use iroha_primitives::addr::{SocketAddr, SocketAddrV4};
 use norito::json;
 use sha2::Sha256;

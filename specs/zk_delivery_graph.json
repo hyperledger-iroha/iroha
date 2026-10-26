@@ -689,7 +689,47 @@
       "acceptance": [
         "No large proof is copied into guest heap or fetched from an external RPC. Wrong type/role, cross-transaction/invocation, changed, reused, missing or unconsumed declarations fail atomically; nested calls preserve exact authority and lifetime. A proof attachment is data, never a reusable verification capability."
       ],
-      "status": "planned"
+      "status": "in_progress",
+      "evidence": {
+        "source": "bf7defad2bac0079209de1802351ec4a0d343ff4 plus the adopted reviewed implementation union and the exact I.2 inline-binding lint correction. The current branch is optimizations. dist/zk-delivery-handoff/reports/current-i2-matrix-native-retry-root-2026-10-25/command-0.stdout records the actual selected outcomes; the enclosing command failed 101 (53 passed, 10 failed), because all ten X509 provider fixtures fail at startup with OriginalGenesisExecution(BlockInTheFuture). This is bounded component evidence, not a passed batch or whole-source/release qualification. The running queue is not assumed complete.",
+        "paths": [
+          "crates/iroha_core/src/executor.rs",
+          "crates/iroha_core/src/executor/attachment_custody.rs",
+          "crates/iroha_core/src/executor/attachment_custody/host.rs",
+          "crates/iroha_core/src/executor/attachment_custody/tests.rs",
+          "crates/iroha_core/src/smartcontracts/ivm/host.rs",
+          "crates/iroha_core/src/smartcontracts/ivm/host/attachment_lifecycle.rs",
+          "crates/iroha_core/src/smartcontracts/ivm/host/attachment_lifecycle_tests.rs"
+        ],
+        "commands": [
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 8 -- test --locked -p iroha_core --lib --features zk-tests,privacy-release-evidence -- world_state_snapshot::zk_x509::tests:: attachment_host_ actual_host_ executor::attachment_custody::tests:: smartcontracts::isi::kaigi::privacy:: --nocapture --test-threads=1",
+            "outcome": "failed"
+          }
+        ],
+        "acceptance": [
+          {
+            "clause": "Retain immutable authenticated attachments under host custody and expose typed small handles scoped to transaction, authorized invocation and committed action index.",
+            "state": "partial",
+            "proof": "crates/iroha_core/src/executor/attachment_custody.rs and crates/iroha_core/src/smartcontracts/ivm/host/attachment_lifecycle.rs retain the original authenticated signed source and bind action/invocation handles to original ownership, generation and authorized nested paths. The real current command records all 45 selected custody and actual-host controls passing, including depth 32/33, child-ordinal/generation overflow, original-owner substitution, root/child authority, duplicate/missing/unconsumed slots, rollback and unwind. The typed X509 native consumer is a separate unadopted I.3 packet; general production operation admission remains closed where no native consumer exists."
+          },
+          {
+            "clause": "No large proof is copied into guest heap or fetched from an external RPC.",
+            "state": "partial",
+            "proof": "crates/iroha_core/src/executor/attachment_custody/tests.rs::original_signed_source_and_every_consumed_byte_remain_borrowed and actual host lifecycle tests pass in the recorded current command. Attachments remain borrowed in host custody; full-size end-to-end guest/input/literal and every product consumer/resource path remain I.4/I.6 work, not a completed shipping proof path."
+          },
+          {
+            "clause": "Wrong type/role, cross-transaction/invocation, changed, reused, missing or unconsumed declarations fail atomically; nested calls preserve exact authority and lifetime.",
+            "state": "partial",
+            "proof": "crates/iroha_core/src/smartcontracts/ivm/host/attachment_lifecycle_tests.rs and crates/iroha_core/src/executor/attachment_custody/tests.rs pass all 45 selected controls for wrong type/role/actor, original signed transaction, action index, child path, reuse, omission, swallowed error and unwind. Native handler migration, finalized receipt correlation and genuine multi-action four-validator atomicity remain unfinished local work."
+          },
+          {
+            "clause": "A proof attachment is data, never a reusable verification capability.",
+            "state": "partial",
+            "proof": "crates/iroha_core/src/executor/attachment_custody.rs exposes one-consuming original-owner data custody; copied tokens and signed clones do not transfer authority, and actual tests reject re-consumption. No successful proof receipt/capability is fabricated. I.3/I.4 still must bind each concrete consumer and finalized action outcome."
+          }
+        ]
+      }
     },
     {
       "id": "I.3",
@@ -1084,7 +1124,54 @@
       "acceptance": [
         "Reject malformed, replayed, wrong-epoch and wrong-ciphertext shares; insufficient participation fails and the declared threshold succeeds. Verify secret lifecycle and malicious-party cases without borrowing consensus quorum rules."
       ],
-      "status": "planned"
+      "status": "in_progress",
+      "evidence": {
+        "source": "bf7defad2bac0079209de1802351ec4a0d343ff4 plus the adopted reviewed seven-file C.4 subset-additive implementation and the later two-line ownership-inventory tooling classification. Current native results are recorded in dist/zk-delivery-handoff/reports/current-c4-warm-native-root-2026-10-25/result.json: both exact Cargo commands exited 0; the 62-file scoped before/after source maps are identical (iroha_fhe, measurement sources, manifests, Cargo.lock and ownership inventory), not a whole-workspace capture. All seven tested providers match reviewed manifest ece6c07bbeba0d83709de419beaf4c19e439db510a8b2ad9a46ce70b808e1378. The later inventory edit only describes and classifies .oss-scanner/Dockerfile as tooling; the first checker run failed on that unlisted comment and the exact rerun passed 1040 files/23 primitives. No complete threshold service, malicious-security, C.3 parameter or release qualification is claimed.",
+        "paths": [
+          "crates/iroha_fhe/src/bgv/fault.rs",
+          "crates/iroha_fhe/src/bgv/fixtures.rs",
+          "crates/iroha_fhe/src/bgv/threshold.rs",
+          "crates/iroha_fhe/tests/bgv_clearing.rs",
+          "crates/iroha_fhe/tests/bgv_surface.rs",
+          "crates/iroha_fhe/tests/bgv_threshold.rs",
+          "specs/fhe_ownership_inventory.json"
+        ],
+        "commands": [
+          {
+            "command": "cd /Users/takemiyamakoto/devstuff/iroha && scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 8 -- test --locked -p iroha_fhe",
+            "outcome": "passed"
+          },
+          {
+            "command": "cd /Users/takemiyamakoto/devstuff/iroha && scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 8 -- test --locked -p iroha_fhe --no-default-features --test bgv_threshold --test bgv_clearing",
+            "outcome": "passed"
+          },
+          {
+            "command": "cd /Users/takemiyamakoto/devstuff/iroha && /opt/homebrew/bin/python3.12 -B scripts/check_fhe_ownership_map.py",
+            "outcome": "failed"
+          },
+          {
+            "command": "cd /Users/takemiyamakoto/devstuff/iroha && /opt/homebrew/bin/python3.12 -B scripts/check_fhe_ownership_map.py",
+            "outcome": "passed"
+          }
+        ],
+        "acceptance": [
+          {
+            "clause": "Implement explicit participant threshold, key generation, epoch custody and verifiable decryption shares.",
+            "state": "partial",
+            "proof": "crates/iroha_fhe/src/bgv/threshold.rs implements an explicit participant threshold/context, offline trusted-dealer key sharing, canonical borrowed subsets and consuming in-place additive conversion. Current default and scalar tests pass with the scoped source held. Caller-supplied profile/key-context/epoch metadata is not authenticated key registration or epoch authority. Actual key delivery and authenticated durable custody ownership, malicious-secure VSS/DKG, qualified public/evaluation-key relations, masked ciphertext-bound verifiable decryption shares and application integration remain unimplemented and can be developed on this Mac. C.3 candidate profiles/noise/security remain unqualified."
+          },
+          {
+            "clause": "Reject malformed, replayed, wrong-epoch and wrong-ciphertext shares; insufficient participation fails and the declared threshold succeeds.",
+            "state": "partial",
+            "proof": "crates/iroha_fhe/tests/bgv_threshold.rs passes all 13 tests in each current default/scalar run: malformed, duplicate, unordered, unknown, insufficient and wrong-context/profile/epoch/instance metadata reject before mutation, admitted subsets agree with an independent main/special-limb field oracle, and refusal returns the unchanged original owner for corrected-metadata retry. These are local selection/interpolation controls, not threshold ciphertext decryption or proof of a malicious share. Ciphertext/request/purpose binding, authenticated epoch transitions, durable replay/disclosure/retry state, genuine declared-threshold decryption success and wrong-ciphertext rejection remain ordinary implementation work on this Mac."
+          },
+          {
+            "clause": "Verify secret lifecycle and malicious-party cases without borrowing consensus quorum rules.",
+            "state": "partial",
+            "proof": "crates/iroha_fhe/tests/bgv_clearing.rs passes 14 tests in each current default/scalar run; crates/iroha_fhe/tests/bgv_surface.rs passes 5 tests. The complete current default iroha_fhe run passes 255 unit/integration tests plus 5 compile-fail docs, with 6 measurement tests ignored; the scalar threshold/clearing run passes 27 tests. Controls cover non-Clone opacity, zero additional allocation with an allocator counterfactual, exact buffer custody, original-owner recovery, clearing on success/refusal/drop and injected mid-conversion unwind. specs/fhe_ownership_inventory.json passes the repaired 1040-file/23-primitive census; the initial failure and exact successful rerun are both recorded. The forged-share control expressly shows metadata checks are not algebraic proofs. Malicious contributions/complaints, custody across restarts, reusable retry-secure opening, original-pool physical funding and broader secret stack/register/side-channel review remain open; available implementation/security work is not a platform exception. Thresholds are explicit and never derived from consensus quorums."
+          }
+        ]
+      }
     },
     {
       "id": "C.5",
@@ -1776,7 +1863,68 @@
       "acceptance": [
         "Retain q=136 unless a full joint reduction coherently updates masks/descriptors/DER degrees/IO inequalities/CA digests/fixtures. Distinguish classical-ROM/qROM and work-normalized/absolute claims; P-256 is classical. Preserve proof 9,437,184 bytes, 300-second target/CRL age, server RSS 12 GiB and enforced address space 32 GiB; measure worker counts and full phase attribution."
       ],
-      "status": "planned"
+      "status": "in_progress",
+      "evidence": {
+        "source": "bf7defad2bac0079209de1802351ec4a0d343ff4 plus current adopted local implementation. The source-pinned dist/zk-delivery-handoff/reports/current-x509-full-credential-retry1-root-2026-10-25/result.json completed three genuine complete credential proofs with separate replay using the same native verifier implementation and negative controls. Ordinary and maximum each encode 9,412,944 bytes and take 1060.961117s / 1053.277860s; RSS is 9,393,373,184 / 9,468,788,736 bytes. Both fail the unchanged 300-second and 1% unattributed-phase gates (19,511 / 19,832 ppm). The holder proof verifies but release correctly refuses its expired deadline. These are non-isolated local measurements: Swift and later GPU validation overlapped. They predate the subsequently adopted fixed-schedule/fixed-matrix and macOS feature-forwarding changes, so they do not qualify current performance. Darwin does not establish Linux 32 GiB RLIMIT_AS enforcement; no network submission occurred. Earlier commands below keep their recorded source scopes; prepared I.3 packets are not adopted work.",
+        "paths": [
+          "crates/iroha_core_privacy/src/privacy_engines/zk_x509/sha_word_stark.rs",
+          "crates/iroha_core_privacy/src/privacy_engines/zk_x509/sha256_word_air.rs",
+          "crates/iroha_core_privacy/src/privacy_engines/zk_x509/sha_circuit_reuse_tests.rs",
+          "crates/iroha_core_privacy/src/privacy_engines/zk_x509/fixed_algebraic_p256.rs",
+          "crates/iroha_core_privacy/src/privacy_engines/zk_x509/engine.rs",
+          "specs/zk_first_release_goals.md",
+          "scripts/zk_resource_harness.py",
+          "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/registration_phase_tests.rs"
+        ],
+        "commands": [
+          {
+            "command": "cd /Users/takemiyamakoto/devstuff/iroha && scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 8 -- test --locked -p iroha_core_privacy --lib -- privacy_engines::zk_x509::engine::tests:: privacy_engines::zk_x509::holder:: privacy_engines::zk_x509::fixed_algebraic_p256::tests::current_catalog_binds_every_child_and_composite_descriptor privacy_engines::zk_x509::fixed_algebraic_p256::tests::composite_pin_rejects_same_shape_algebraic_child_mutation privacy_engines::zk_x509::fixed_algebraic_p256::tests::atom_count_and_descriptor_digest_are_exact_and_deterministic privacy_engines::zk_x509::fixed_algebraic_p256::tests::selected_input_writers_match_closed_native_fixed_rows_in_both_roles privacy_engines::zk_x509::credential_pre_aux::tests::exact_two_root_schedule_has_a_stable_known_answer privacy_engines::zk_x509::stark::tests::der_statement_digest_and_x5p1_envelope_are_exact_and_fail_closed privacy_engines::transparent_stark::tests::digest_binds_protocol_profile_role_phase_level_index_counter_and_bytes privacy_engines::zk_x509::sha_word_stark::circuit_reuse_tests:: privacy_engines::zk_x509::sha_word_stark::tests::fixed_capacity_private_lengths_and_padding_boundaries_validate privacy_engines::zk_x509::sha_word_stark::tests::fixed_capacity_rejects_cap_and_padding_selector_mutations privacy_engines::zk_x509::sha256_word_air::tests::raw_word_private_owners_clear_on_success_partial_error_and_unwind --test-threads=1 --nocapture",
+            "outcome": "passed"
+          },
+          {
+            "command": "cd /Users/takemiyamakoto/devstuff/iroha && scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 8 -- test --locked -p iroha_core_privacy --lib privacy_engines::zk_x509::sha_word_stark::circuit_reuse_tests::full_supported_capacity_reuse_matches_original_every_row_and_column -- --exact --ignored --nocapture --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "cd /Users/takemiyamakoto/devstuff/iroha && scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 8 -- test --locked -p iroha_core_privacy --lib -- privacy_engines::zk_x509::stark::tests::deterministic_projection_proof_roundtrips_and_has_a_protocol_kat privacy_engines::zk_x509::stark::tests::deterministic_proof_roundtrips_and_has_unique_post_grinding_queries --exact --nocapture --test-threads=1",
+            "outcome": "failed"
+          },
+          {
+            "command": "cd /Users/takemiyamakoto/devstuff/iroha && scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 8 -- test --locked -p iroha_core_privacy --lib -- privacy_engines::zk_x509::holder:: privacy_engines::zk_x509::engine::prover_diagnostic::holder_diagnostic_ privacy_engines::zk_x509::stark::tests::deterministic_projection_proof_roundtrips_and_has_a_protocol_kat privacy_engines::zk_x509::stark::tests::deterministic_proof_roundtrips_and_has_unique_post_grinding_queries --nocapture --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "cd /Users/takemiyamakoto/devstuff/iroha && scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 8 -- check --locked -p iroha_core_privacy --lib --features privacy-release-evidence",
+            "outcome": "passed"
+          },
+          {
+            "command": "/opt/homebrew/opt/python@3.12/bin/python3.12 -B /Users/takemiyamakoto/devstuff/iroha/scripts/zk_resource_harness.py run --repository /Users/takemiyamakoto/devstuff/iroha --hardware local-macos-host-observed --profile release-complete49-MAIN-plus-compactCA --config taira-default-ordinary-rayon8 --cache-policy cold --output-root /Users/takemiyamakoto/devstuff/iroha/dist/zk-delivery-handoff/reports/current-x509-full-credential-retry1-root-2026-10-25/ordinary-harness --interval-ms 100 --timeout-seconds 7200 --record-arguments -- /Users/takemiyamakoto/devstuff/iroha/target/release/deps/iroha_core_privacy-f6481cae5ec5309c --exact privacy_engines::zk_x509::engine::prover_diagnostic::ordinary_depth_two_credential_proof_with_retained_public_receipt --ignored --nocapture --test-threads=1 --color never",
+            "outcome": "failed"
+          }
+        ],
+        "acceptance": [
+          {
+            "clause": "Complete MAIN/CA ECDSA-to-DER/RFC semantics, correlated-opening hiding, joint transcript reduction, holder linkability/nullifiers and certificate leakage; optimize actual maximum proof generation without reducing coverage.",
+            "state": "partial",
+            "proof": "crates/iroha_core_privacy/src/privacy_engines/zk_x509/engine.rs has now produced complete ordinary, maximum and holder proofs and replayed them separately using the same native verifier implementation at the retained source boundary. The source-pinned dist/zk-delivery-handoff/reports/current-x509-full-credential-retry1-root-2026-10-25/result.json completed three genuine complete credential proofs with separate replay using the same native verifier implementation and negative controls. Ordinary and maximum each encode 9,412,944 bytes and take 1060.961117s / 1053.277860s; RSS is 9,393,373,184 / 9,468,788,736 bytes. Both fail the unchanged 300-second and 1% unattributed-phase gates (19,511 / 19,832 ppm). The holder proof verifies but release correctly refuses its expired deadline. These are non-isolated local measurements: Swift and later GPU validation overlapped. They predate the subsequently adopted fixed-schedule/fixed-matrix and macOS feature-forwarding changes, so they do not qualify current performance. Darwin does not establish Linux 32 GiB RLIMIT_AS enforcement; no network submission occurred. MAIN/CA relation, correlated-opening hiding, Fiat-Shamir joint reduction, leakage and whole-prover side-channel review remain unfinished."
+          },
+          {
+            "clause": "Retain q=136 unless a full joint reduction coherently updates masks/descriptors/DER degrees/IO inequalities/CA digests/fixtures.",
+            "state": "partial",
+            "proof": "specs/zk_first_release_goals.md and crates/iroha_core_privacy/src/privacy_engines/zk_x509/engine.rs preserve q=136, masks, ordered descriptors, degrees, IO constraints and CA geometry. Current native profile tests pass after the coherent catalog identity correction; all six historical rejection profiles retain their original expected hashes. No full joint reduction or coherent security qualification has been established."
+          },
+          {
+            "clause": "Distinguish classical-ROM/qROM and work-normalized/absolute claims; P-256 is classical.",
+            "state": "unmet",
+            "proof": "specs/zk_first_release_goals.md retains open relation, adaptive transcript/hiding and whole-prover security review. This work supplies no new classical-ROM/qROM reduction or work-normalized/absolute claim; P-256 remains classical."
+          },
+          {
+            "clause": "Preserve proof 9,437,184 bytes, 300-second target/CRL age, server RSS 12 GiB and enforced address space 32 GiB; measure worker counts and full phase attribution.",
+            "state": "partial",
+            "proof": "specs/zk_first_release_goals.md preserves q=136, 9,437,184 proof bytes, 300 seconds and CRL age, 12 GiB RSS and 32 GiB address space. The source-pinned dist/zk-delivery-handoff/reports/current-x509-full-credential-retry1-root-2026-10-25/result.json completed three genuine complete credential proofs with separate replay using the same native verifier implementation and negative controls. Ordinary and maximum each encode 9,412,944 bytes and take 1060.961117s / 1053.277860s; RSS is 9,393,373,184 / 9,468,788,736 bytes. Both fail the unchanged 300-second and 1% unattributed-phase gates (19,511 / 19,832 ppm). The holder proof verifies but release correctly refuses its expired deadline. These are non-isolated local measurements: Swift and later GPU validation overlapped. They predate the subsequently adopted fixed-schedule/fixed-matrix and macOS feature-forwarding changes, so they do not qualify current performance. Darwin does not establish Linux 32 GiB RLIMIT_AS enforcement; no network submission occurred. Current optimizations require their focused parity and fresh full-proof measurements; no speed or release claim is inferred."
+          }
+        ]
+      }
     },
     {
       "id": "X.4",
@@ -2232,7 +2380,7 @@
       ],
       "status": "in_progress",
       "evidence": {
-        "source": "3cec95295cd863a4cd278dc5114bcd9243bee2b4 plus the externally changed integration working tree, reassessed 2026-10-12. Historical source-pinned SDK run at the earlier 6043d97c4003da4bbb3fc772d9a0548b3f456b16 working-tree checkpoint passed 63 tests, failed 0 and ignored 2 fixture exporters; binary SHA-256 75357b7edbd6b24571e4776e18dcbdda893b5a06d8054e8231c969204e09416c. This is not current-source consumer qualification. Of its 20 selected source pins, 17 still match and 3 changed (Cargo.lock, Norito core.rs, Torii utils.rs). Earlier literal merge markers no longer appear in the inspected Core/model/SDK/Torii source at the latest read, but the changed dependency candidate has not been built or tested. Prior 46-module/54-SDK runs and two scratch mutations are older checkpoint evidence; wallet checks remain separate component scope. Latest read-only offline workspace dependency resolution failed because blobby v0.3.1 is not cached; no fetch was performed.",
+        "source": "3cec95295cd863a4cd278dc5114bcd9243bee2b4 plus the externally changed integration working tree, reassessed 2026-10-12. Historical source-pinned SDK run at the earlier 6043d97c4003da4bbb3fc772d9a0548b3f456b16 working-tree checkpoint passed 63 tests, failed 0 and ignored 2 fixture exporters; binary SHA-256 75357b7edbd6b24571e4776e18dcbdda893b5a06d8054e8231c969204e09416c. This is not current-source consumer qualification. Of its 20 selected source pins, 17 still match and 3 changed (Cargo.lock, Norito core.rs, Torii utils.rs). Earlier literal merge markers no longer appear in the inspected Core/model/SDK/Torii source at the latest read, but the changed dependency candidate has not been built or tested. Prior 46-module/54-SDK runs and two scratch mutations are older checkpoint evidence; wallet checks remain separate component scope. That checkpoint also had an offline blobby-cache refusal; the user subsequently authorized dependency installation and current Core/native builds have run. It is historical evidence, not a current unresolved installation permission or hardware blocker.",
         "paths": [
           "crates/iroha/src/workflow.rs",
           "crates/iroha/src/workflow/contract.rs",
@@ -3167,7 +3315,85 @@
       "acceptance": [
         "Test host substitution, MITM, replay/tampering, host revocation and witness erasure; document compromised authorized-host leakage. Measure actual supported-device memory and server worker configurations. A shipping holder-controlled path is part of X.4, not an optional benchmark tool."
       ],
-      "status": "planned"
+      "status": "in_progress",
+      "evidence": {
+        "source": "bf7defad2bac0079209de1802351ec4a0d343ff4 plus current adopted local implementation. The source-pinned dist/zk-delivery-handoff/reports/current-x509-full-credential-retry1-root-2026-10-25/result.json completed three genuine complete credential proofs with separate replay using the same native verifier implementation and negative controls. Ordinary and maximum each encode 9,412,944 bytes and take 1060.961117s / 1053.277860s; RSS is 9,393,373,184 / 9,468,788,736 bytes. Both fail the unchanged 300-second and 1% unattributed-phase gates (19,511 / 19,832 ppm). The holder proof verifies but release correctly refuses its expired deadline. These are non-isolated local measurements: Swift and later GPU validation overlapped. They predate the subsequently adopted fixed-schedule/fixed-matrix and macOS feature-forwarding changes, so they do not qualify current performance. Darwin does not establish Linux 32 GiB RLIMIT_AS enforcement; no network submission occurred. Earlier commands below keep their recorded source scopes; prepared I.3 packets are not adopted work.",
+        "paths": [
+          "crates/iroha_core_privacy/src/privacy_engines/zk_x509/holder.rs",
+          "crates/iroha_core_privacy/src/privacy_engines/zk_x509/codec.rs",
+          "crates/iroha_core_privacy/src/privacy_engines/zk_x509/credential_stark.rs",
+          "crates/iroha_core_privacy/src/privacy_engines/zk_x509/engine.rs",
+          "crates/iroha_core_privacy/tests/zk_x509_holder_prover.rs",
+          "crates/iroha_core_privacy/README.md",
+          "scripts/tests/check_zk_x509_presentation_interval_test.py",
+          "specs/zk_x509_presentation_interval_sites.json",
+          "specs/zk_first_release_goals.md",
+          "crates/iroha_core_privacy/src/privacy_engines/zk_x509/holder/lifecycle.rs",
+          "IrohaSwift/Sources/IrohaSwift/ZkX509SigningPreparationV1.swift",
+          "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/ZkX509SigningPreparationV1.kt",
+          "crates/iroha_core/src/state/world_state_snapshot/zk_x509.rs"
+        ],
+        "commands": [
+          {
+            "command": "cd /Users/takemiyamakoto/devstuff/iroha && scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 8 -- test --locked -p iroha_core_privacy --lib -- privacy_engines::zk_x509::engine::tests:: privacy_engines::zk_x509::holder:: privacy_engines::zk_x509::fixed_algebraic_p256::tests::current_catalog_binds_every_child_and_composite_descriptor privacy_engines::zk_x509::fixed_algebraic_p256::tests::composite_pin_rejects_same_shape_algebraic_child_mutation privacy_engines::zk_x509::fixed_algebraic_p256::tests::atom_count_and_descriptor_digest_are_exact_and_deterministic privacy_engines::zk_x509::fixed_algebraic_p256::tests::selected_input_writers_match_closed_native_fixed_rows_in_both_roles privacy_engines::zk_x509::credential_pre_aux::tests::exact_two_root_schedule_has_a_stable_known_answer privacy_engines::zk_x509::stark::tests::der_statement_digest_and_x5p1_envelope_are_exact_and_fail_closed privacy_engines::transparent_stark::tests::digest_binds_protocol_profile_role_phase_level_index_counter_and_bytes privacy_engines::zk_x509::sha_word_stark::circuit_reuse_tests:: privacy_engines::zk_x509::sha_word_stark::tests::fixed_capacity_private_lengths_and_padding_boundaries_validate privacy_engines::zk_x509::sha_word_stark::tests::fixed_capacity_rejects_cap_and_padding_selector_mutations privacy_engines::zk_x509::sha256_word_air::tests::raw_word_private_owners_clear_on_success_partial_error_and_unwind --test-threads=1 --nocapture",
+            "outcome": "passed"
+          },
+          {
+            "command": "cd /Users/takemiyamakoto/devstuff/iroha && scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 8 -- test --locked -p iroha_core_privacy --test zk_x509_holder_prover",
+            "outcome": "passed"
+          },
+          {
+            "command": "cd /Users/takemiyamakoto/devstuff/iroha && scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 8 -- test --locked -p iroha_core_privacy --no-default-features --test zk_x509_holder_prover",
+            "outcome": "passed"
+          },
+          {
+            "command": "cd /Users/takemiyamakoto/devstuff/iroha && scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 8 -- test --locked -p iroha_core_privacy --lib -- privacy_engines::zk_x509::stark::tests::deterministic_projection_proof_roundtrips_and_has_a_protocol_kat privacy_engines::zk_x509::stark::tests::deterministic_proof_roundtrips_and_has_unique_post_grinding_queries --exact --nocapture --test-threads=1",
+            "outcome": "failed"
+          },
+          {
+            "command": "cd /Users/takemiyamakoto/devstuff/iroha && scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 8 -- test --locked -p iroha_core_privacy --lib -- privacy_engines::zk_x509::holder:: privacy_engines::zk_x509::engine::prover_diagnostic::holder_diagnostic_ privacy_engines::zk_x509::stark::tests::deterministic_projection_proof_roundtrips_and_has_a_protocol_kat privacy_engines::zk_x509::stark::tests::deterministic_proof_roundtrips_and_has_unique_post_grinding_queries --nocapture --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "cd /Users/takemiyamakoto/devstuff/iroha && scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 8 -- check --locked -p iroha_core_privacy --lib --features privacy-release-evidence",
+            "outcome": "passed"
+          },
+          {
+            "command": "/opt/homebrew/opt/python@3.12/bin/python3.12 -B /Users/takemiyamakoto/devstuff/iroha/scripts/zk_resource_harness.py run --repository /Users/takemiyamakoto/devstuff/iroha --hardware local-macos-host-observed --profile release-complete49-MAIN-plus-compactCA --config taira-default-ordinary-rayon8 --cache-policy cold --output-root /Users/takemiyamakoto/devstuff/iroha/dist/zk-delivery-handoff/reports/current-x509-full-credential-retry1-root-2026-10-25/ordinary-harness --interval-ms 100 --timeout-seconds 7200 --record-arguments -- /Users/takemiyamakoto/devstuff/iroha/target/release/deps/iroha_core_privacy-f6481cae5ec5309c --exact privacy_engines::zk_x509::engine::prover_diagnostic::ordinary_depth_two_credential_proof_with_retained_public_receipt --ignored --nocapture --test-threads=1 --color never",
+            "outcome": "failed"
+          },
+          {
+            "command": "./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.privacy.ZkX509SigningPreparationV1Test --tests org.hyperledger.iroha.sdk.privacy.ZkX509SigningPreparationNativeTests --tests org.hyperledger.iroha.sdk.privacy.ZkX509SigningPreparationJavaConsumerTest --rerun-tasks --max-workers=2 --console=plain",
+            "outcome": "passed"
+          },
+          {
+            "command": "/opt/homebrew/bin/python3.12 -B scripts/test_swift_local.py --jobs 8",
+            "outcome": "passed"
+          }
+        ],
+        "acceptance": [
+          {
+            "clause": "Provide wallet/mobile/desktop/server proving with subject signing key retained by the wallet, paired-host enrollment, mutually authenticated encrypted handoff, exact job binding and local verification.",
+            "state": "partial",
+            "proof": "crates/iroha_core_privacy/src/privacy_engines/zk_x509/holder.rs and crates/iroha_core_privacy/src/privacy_engines/zk_x509/holder/lifecycle.rs expose the ordinary local owned prover with exact signing message/digest and subject key retained by the wallet. Adopted C/JNI, Kotlin/Java and Swift signing preparation converts bounded canonical statement bytes through that owner. Retained native C boundary four controls, Kotlin/Java six controls and complete Swift 2337 main plus 115 mobile tests pass at their held pre-matrix source. Signing preparation is not the full SDK prover, authenticated remote State or paired-host enrollment/encrypted job handoff; those remain local implementation work."
+          },
+          {
+            "clause": "Test host substitution, MITM, replay/tampering, host revocation and witness erasure; document compromised authorized-host leakage.",
+            "state": "partial",
+            "proof": "crates/iroha_core_privacy/src/privacy_engines/zk_x509/codec.rs owns and clears witness data; crates/iroha_core_privacy/src/privacy_engines/zk_x509/holder.rs consumes it with Zeroizing encoded bytes. crates/iroha_core_privacy/src/privacy_engines/zk_x509/holder/lifecycle.rs owns signed metadata before parsing, and current native tests pass explicit clearing, partial-parse and unwind controls plus original-statement/genesis refusal before output. crates/iroha_core_privacy/README.md documents authorized-host witness disclosure and caller-retained copies. Paired-host substitution/MITM/replay/tampering/revocation and remote witness-erasure validation remain missing ordinary Mac work. Drop tests do not prove physical erasure, constant-time behavior or secrecy from an authorized compromised host."
+          },
+          {
+            "clause": "Measure actual supported-device memory and server worker configurations.",
+            "state": "unmet",
+            "proof": "crates/iroha_core_privacy/README.md leaves supported-device memory and server worker configuration measurements open. No complete ordinary/maximum credential proof resource run exists for the current candidate. Local worker ownership, bounded memory/backpressure and Mac server measurements are ordinary work; physical phone and other-platform qualification are separate later measurements. A.1 activation/security remains unqualified."
+          },
+          {
+            "clause": "A shipping holder-controlled path is part of X.4, not an optional benchmark tool.",
+            "state": "partial",
+            "proof": "crates/iroha_core_privacy/src/privacy_engines/zk_x509/holder/lifecycle.rs was exercised by a genuine complete holder proof: proof verification succeeds and release refuses after deadline, so there is no successful timely holder delivery. The owned trusted-node acquisition in crates/iroha_core/src/state/world_state_snapshot/zk_x509.rs is adopted; its ten current native tests fail at future-genesis fixture startup before provider assertions. The reviewed historical-time fixture repair is not credited before adoption/rerun. I.3 typed submission, authenticated pairing, all SDK proving and X.4 network delivery remain unfinished."
+          }
+        ]
+      }
     },
     {
       "id": "X.6",
@@ -3186,50 +3412,68 @@
       ],
       "status": "in_progress",
       "evidence": {
-        "source": "3de44399e2e30a4fa05d71a517d6c9dbe18f66c6 plus three uncommitted X.6 source/test/spec providers. Current captured component passed all 22 actual default-feature tests; five concurrent IVM-only changes outside its compiler dependency graph were preserved. No full lifecycle or network qualification.",
+        "source": "bf7defad2bac0079209de1802351ec4a0d343ff4 plus current adopted local implementation. The source-pinned dist/zk-delivery-handoff/reports/current-x509-full-credential-retry1-root-2026-10-25/result.json completed three genuine complete credential proofs with separate replay using the same native verifier implementation and negative controls. Ordinary and maximum each encode 9,412,944 bytes and take 1060.961117s / 1053.277860s; RSS is 9,393,373,184 / 9,468,788,736 bytes. Both fail the unchanged 300-second and 1% unattributed-phase gates (19,511 / 19,832 ppm). The holder proof verifies but release correctly refuses its expired deadline. These are non-isolated local measurements: Swift and later GPU validation overlapped. They predate the subsequently adopted fixed-schedule/fixed-matrix and macOS feature-forwarding changes, so they do not qualify current performance. Darwin does not establish Linux 32 GiB RLIMIT_AS enforcement; no network submission occurred. Earlier commands below keep their recorded source scopes; prepared I.3 packets are not adopted work.",
         "paths": [
+          "crates/iroha_core/src/smartcontracts/isi/privacy.rs",
+          "crates/iroha_core/src/smartcontracts/isi/privacy/tests/zk_x509_governance_tests.rs",
+          "crates/iroha_core_privacy/src/privacy_state.rs",
           "crates/iroha_data_model/src/privacy/zk_x509_interval.rs",
           "crates/iroha_data_model/tests/zk_x509_presentation_interval.rs",
-          "specs/zk_x509_presentation_interval.md"
+          "specs/zk_x509_presentation_interval.md",
+          "specs/zk_x509_presentation_interval_sites.json",
+          "scripts/tests/check_zk_x509_presentation_interval_test.py",
+          "crates/iroha_core_privacy/src/privacy_engines/zk_x509/holder/lifecycle.rs"
         ],
         "commands": [
           {
-            "command": "cd /Users/takemiyamakoto/devstuff/iroha/dist/zk-delivery-handoff/candidate-builds/x6-current-2026-10-18 && CARGO_TARGET_DIR=/Users/takemiyamakoto/devstuff/iroha/target/zk-x6-current-20261018 CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 cargo test --locked --offline --jobs 1 -p iroha_data_model --test zk_x509_presentation_interval --no-run --message-format=json-render-diagnostics",
+            "command": "cd /Users/takemiyamakoto/devstuff/iroha && scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 8 -- test --locked -p iroha_core_privacy --lib -- privacy_engines::zk_x509::engine::tests:: privacy_engines::zk_x509::holder:: privacy_engines::zk_x509::fixed_algebraic_p256::tests::current_catalog_binds_every_child_and_composite_descriptor privacy_engines::zk_x509::fixed_algebraic_p256::tests::composite_pin_rejects_same_shape_algebraic_child_mutation privacy_engines::zk_x509::fixed_algebraic_p256::tests::atom_count_and_descriptor_digest_are_exact_and_deterministic privacy_engines::zk_x509::fixed_algebraic_p256::tests::selected_input_writers_match_closed_native_fixed_rows_in_both_roles privacy_engines::zk_x509::credential_pre_aux::tests::exact_two_root_schedule_has_a_stable_known_answer privacy_engines::zk_x509::stark::tests::der_statement_digest_and_x5p1_envelope_are_exact_and_fail_closed privacy_engines::transparent_stark::tests::digest_binds_protocol_profile_role_phase_level_index_counter_and_bytes privacy_engines::zk_x509::sha_word_stark::circuit_reuse_tests:: privacy_engines::zk_x509::sha_word_stark::tests::fixed_capacity_private_lengths_and_padding_boundaries_validate privacy_engines::zk_x509::sha_word_stark::tests::fixed_capacity_rejects_cap_and_padding_selector_mutations privacy_engines::zk_x509::sha256_word_air::tests::raw_word_private_owners_clear_on_success_partial_error_and_unwind --test-threads=1 --nocapture",
             "outcome": "passed"
           },
           {
-            "command": "cd /Users/takemiyamakoto/devstuff/iroha/dist/zk-delivery-handoff/candidate-builds/x6-current-2026-10-18 && /Users/takemiyamakoto/devstuff/iroha/dist/zk-delivery-handoff/reports/x6-current-2026-10-18/zk_x509_presentation_interval --test-threads=1",
+            "command": "cd /Users/takemiyamakoto/devstuff/iroha && scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 8 -- test --locked -p iroha_data_model --test zk_x509_presentation_interval",
             "outcome": "passed"
           },
           {
-            "command": "/opt/homebrew/bin/python3.12 -B scripts/check_zk_x509_presentation_interval.py",
+            "command": "cd /Users/takemiyamakoto/devstuff/iroha && scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 8 -- test --locked -p iroha_core --lib --features iroha-core-tests smartcontracts::isi::privacy::tests::zk_x509_governance_tests -- --test-threads=1",
             "outcome": "passed"
           },
           {
-            "command": "/Users/takemiyamakoto/devstuff/iroha/dist/zk-delivery-handoff/tools/python-20261018/bin/python -B -m pytest -p no:cacheprovider scripts/tests/check_zk_x509_presentation_interval_test.py scripts/tests/check_zk_delivery_plan_test.py -q",
+            "command": "cd /Users/takemiyamakoto/devstuff/iroha && scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 8 -- test --locked -p iroha_core_privacy --lib -- privacy_engines::zk_x509::stark::tests::deterministic_projection_proof_roundtrips_and_has_a_protocol_kat privacy_engines::zk_x509::stark::tests::deterministic_proof_roundtrips_and_has_unique_post_grinding_queries --exact --nocapture --test-threads=1",
+            "outcome": "failed"
+          },
+          {
+            "command": "cd /Users/takemiyamakoto/devstuff/iroha && scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 8 -- test --locked -p iroha_core_privacy --lib -- privacy_engines::zk_x509::holder:: privacy_engines::zk_x509::engine::prover_diagnostic::holder_diagnostic_ privacy_engines::zk_x509::stark::tests::deterministic_projection_proof_roundtrips_and_has_a_protocol_kat privacy_engines::zk_x509::stark::tests::deterministic_proof_roundtrips_and_has_unique_post_grinding_queries --nocapture --test-threads=1",
             "outcome": "passed"
+          },
+          {
+            "command": "cd /Users/takemiyamakoto/devstuff/iroha && scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 8 -- check --locked -p iroha_core_privacy --lib --features privacy-release-evidence",
+            "outcome": "passed"
+          },
+          {
+            "command": "/opt/homebrew/opt/python@3.12/bin/python3.12 -B /Users/takemiyamakoto/devstuff/iroha/scripts/zk_resource_harness.py run --repository /Users/takemiyamakoto/devstuff/iroha --hardware local-macos-host-observed --profile release-complete49-MAIN-plus-compactCA --config taira-default-ordinary-rayon8 --cache-policy cold --output-root /Users/takemiyamakoto/devstuff/iroha/dist/zk-delivery-handoff/reports/current-x509-full-credential-retry1-root-2026-10-25/ordinary-harness --interval-ms 100 --timeout-seconds 7200 --record-arguments -- /Users/takemiyamakoto/devstuff/iroha/target/release/deps/iroha_core_privacy-f6481cae5ec5309c --exact privacy_engines::zk_x509::engine::prover_diagnostic::ordinary_depth_two_credential_proof_with_retained_public_receipt --ignored --nocapture --test-threads=1 --color never",
+            "outcome": "failed"
           }
         ],
         "acceptance": [
           {
             "clause": "Implement deterministic newest-eligible CRL selection and supersession across merged CRL/policy/anchor events; derive end-to-end deadlines from signed CA times, earliest certificate expiry and public presentation window.",
             "state": "partial",
-            "proof": "crates/iroha_data_model/src/privacy/zk_x509_interval.rs derives the inclusive deadline from canonical original signed interval bounds, earliest certificate expiry and public window; the borrowed schedule compares the whole original statement to the authenticated selection supplied by its caller. The helper does not authenticate or choose newest-eligible material. Integrated deterministic selection across merged CRL/policy/anchor events remains unimplemented and can be developed and tested on this Mac; this is not a platform exception."
+            "proof": "crates/iroha_core_privacy/src/privacy_state.rs joins newest active anchor/policy revisions, the sole governed current CRL and exact CA root/head without older fallback. crates/iroha_core/src/smartcontracts/isi/privacy/tests/zk_x509_governance_tests.rs now passes all six controls, including every event permutation under both legal 1+2 and 2+1 adjacent-block partitions, committed-state continuity and stale original rejection. crates/iroha_core_privacy/src/privacy_engines/zk_x509/holder/lifecycle.rs performs real signed-material preflight before deriving earliest certificate/CRL/public interval deadlines and retains the exact original through owned prepare/prove/release. Its native controls pass, but successful complete credential release and authenticated external State/time acquisition remain open."
           },
           {
             "clause": "Budget observation/preparation/proving/publication jitter/submission/clock margin; test deterministic sequential/overlapped selection, spacing/skipped CRLs, withholding, slow issuers, near expiry and merged-event starvation.",
             "state": "partial",
-            "proof": "crates/iroha_data_model/tests/zk_x509_presentation_interval.rs retains all 14 original tests and adds eight actual passing controls for all six explicit checked millisecond budget terms, each term exhausting the deadline, exact completion boundary, overflow, supersession and redacted private bounds. No implicit overlap credit or default budget is allowed. Sequential/overlapped lifecycle selection, skipped/withheld CRLs, issuer delay and starvation remain to be implemented and exercised on this Mac."
+            "proof": "crates/iroha_core_privacy/src/privacy_engines/zk_x509/holder/lifecycle.rs enforces six-term scheduling and consumes the pending proof on release. The retained full holder proof exceeds its budget and correctly refuses release, not a successful within-window delivery. Existing 23 model and six Core temporal controls remain bounded component evidence. Fresh acquisition/provider assertions, timed current-source maximum proving, withholding/starvation and network rollover remain open."
           },
           {
             "clause": "Resolve quiet-chain semantics: no empty blocks or claimed 300-second wall-clock freshness from blocktime/wallet TTL alone.",
             "state": "unmet",
-            "proof": "specs/zk_x509_presentation_interval.md explicitly limits the helper to local scheduling and disclaims wall-clock freshness from an idle chain. The consensus/holder quiet-chain lifecycle and its temporal controls have not been implemented or executed; no empty-block production or wallet TTL authority was introduced. This remaining integration can run on the Mac and is not a platform TODO."
+            "proof": "specs/zk_x509_presentation_interval.md refuses 300-second wall-clock freshness from an idle chain, cached block time or wallet TTL. No empty blocks or manufactured clock authority are added. The owned lifecycle accepts explicit observed times but does not supply or authenticate quiet-chain acquisition, freshness, retry or abort policy; that complete product path remains ordinary implementation/network-validation work."
           },
           {
             "clause": "Native temporal controls cover date boundaries, same-block order, revocation precedence and permissions; X.4 owns final maximum-proof/rollover network measurements.",
             "state": "partial",
-            "proof": "crates/iroha_data_model/tests/zk_x509_presentation_interval.rs passes the complete 22-test original integration target, including date/deadline boundaries and exact supersession. These are model controls, not native same-block ordering, revocation-precedence, permission or maximum-proof/rollover network evidence. Native holder execution and four-validator temporal controls remain unimplemented/unexecuted and can run on this Mac; X.4 retains final measured network ownership."
+            "proof": "crates/iroha_core/src/smartcontracts/isi/privacy/tests/zk_x509_governance_tests.rs passes all six native tests: exact state/budget atomicity including permissions, expired CRL immediate revocation with no fallback, legal merged ordering, inclusive signed calendar bounds and real Register/Rotate boundaries. crates/iroha_data_model/tests/zk_x509_presentation_interval.rs passes 23/23, and owned lifecycle controls pass inside the 37-library batch. Prior 18-case Python guards are retained as historical component evidence. Negative pending-proof release controls do not establish a successful full proof. X.4 retains final ordinary/maximum proof, resources and four-validator rollover measurements."
           }
         ]
       }
@@ -3392,7 +3636,7 @@
       ],
       "status": "in_progress",
       "evidence": {
-        "source": "fc87999769992cf9ecb0b3b46440bd9a77c4e24e plus adopted Rust SDK diagnostic, shared-recorder and pinned-harness changes. Current 2026-10-12 live-source validation: shared recorder118 passed/1 ignored, harness55 passed, SDK4 passed, and original harness2 accepted plus expected error/unwind2 rejected with strict independent replay. Historical FASTPQ/X509 evidence retains its original scope; no new whole-prover, all-SDK, mobile or release qualification.",
+        "source": "bf7defad2bac0079209de1802351ec4a0d343ff4 plus current adopted local implementation. The source-pinned dist/zk-delivery-handoff/reports/current-x509-full-credential-retry1-root-2026-10-25/result.json completed three genuine complete credential proofs with separate replay using the same native verifier implementation and negative controls. Ordinary and maximum each encode 9,412,944 bytes and take 1060.961117s / 1053.277860s; RSS is 9,393,373,184 / 9,468,788,736 bytes. Both fail the unchanged 300-second and 1% unattributed-phase gates (19,511 / 19,832 ppm). The holder proof verifies but release correctly refuses its expired deadline. These are non-isolated local measurements: Swift and later GPU validation overlapped. They predate the subsequently adopted fixed-schedule/fixed-matrix and macOS feature-forwarding changes, so they do not qualify current performance. Darwin does not establish Linux 32 GiB RLIMIT_AS enforcement; no network submission occurred. Earlier commands below keep their recorded source scopes; prepared I.3 packets are not adopted work.",
         "paths": [
           "crates/iroha_measurement/src/schema.rs",
           "crates/iroha_measurement/src/recorder.rs",
@@ -3451,6 +3695,10 @@
           {
             "command": "python3 dist/zk-delivery-handoff/scripts/run_e1_current_regressions_2026_10_12.py",
             "outcome": "passed"
+          },
+          {
+            "command": "/opt/homebrew/opt/python@3.12/bin/python3.12 -B /Users/takemiyamakoto/devstuff/iroha/scripts/zk_resource_harness.py run --repository /Users/takemiyamakoto/devstuff/iroha --hardware local-macos-host-observed --profile release-complete49-MAIN-plus-compactCA --config taira-default-ordinary-rayon8 --cache-policy cold --output-root /Users/takemiyamakoto/devstuff/iroha/dist/zk-delivery-handoff/reports/current-x509-full-credential-retry1-root-2026-10-25/ordinary-harness --interval-ms 100 --timeout-seconds 7200 --record-arguments -- /Users/takemiyamakoto/devstuff/iroha/target/release/deps/iroha_core_privacy-f6481cae5ec5309c --exact privacy_engines::zk_x509::engine::prover_diagnostic::ordinary_depth_two_credential_proof_with_retained_public_receipt --ignored --nocapture --test-threads=1 --color never",
+            "outcome": "failed"
           }
         ],
         "acceptance": [
@@ -3461,8 +3709,8 @@
           },
           {
             "clause": "Unattributed proving time is at most 1%; record cache/warm-cold policy, named reference hardware, source/artifact/profile/config identity and raw failures.",
-            "state": "met",
-            "proof": "Attribution::within_limit in crates/iroha_measurement/src/report.rs decides the bound in exact integer arithmetic; cargo test --locked -p iroha_core_privacy --features fastpq-replay-measurement --test fastpq_phase_tree_measurement -- --nocapture passed (4 tests: prove 15 ppm and verify 21 ppm unattributed at public-call granularity, one phase holding 993,437 ppm of the proving root) and python3 scripts/zk_resource_harness.py run --hardware Mac13,2/apple-m1-ultra/20c/128GiB --profile test+fastpq-replay-measurement --config defaults --cache-policy warm --output-root /private/tmp/claude-501/-Users-takemiyamakoto-devstuff-iroha/e97c4ffe-38a2-4a0a-ad0a-4610af601e8a/scratchpad/status/logs-m1e1-p3/runs -- target/zk-plan-ivm/debug/deps/fastpq_phase_tree_measurement-2b48c821b08d91ec eight_row_transfer_prove_and_verify_have_complete_phase_trees --exact --nocapture was accepted with 16 and 21 ppm, its report naming the cache policy, the operator-asserted hardware, profile and config beside observed host facts, the source commit with its dirty digest and the artifact digest. The plan author ruled the root-exclusive ratio and this FASTPQ run plus the thin X509 adapter tests of crates/iroha_core_privacy/src/privacy_engines/zk_x509/prover_observation.rs (cargo test --locked -p iroha_core_privacy --features fastpq-replay-measurement --lib -- prover_observation phase_tree_record_is_retained, 21 passed) sufficient for E.1, the complete X509 run being owned by X.3 (scratchpad/codex/E.1-q1.md); failed, rejected and unwound flows are retained as records and runs (test_failed_commands_are_recorded_and_earlier_failures_are_never_erased in python3 -m pytest -q -p no:cacheprovider scripts/tests/zk_resource_harness_test.py). Current Rust SDK evidence in crates/iroha/tests/sdk_phase_tree_measurement.rs retains source/binary/profile/config/cache identity in the original harness; successful2 and error/unwind2 are separate immutable runs, not salvaged successes. The 2026-10-12 SDK measurements do not replace the historical genuine proving demonstration or qualify current whole-prover performance."
+            "state": "partial",
+            "proof": "scripts/zk_resource_harness.py preserves the strict 1% attribution criterion and retained failures. The source-pinned dist/zk-delivery-handoff/reports/current-x509-full-credential-retry1-root-2026-10-25/result.json completed three genuine complete credential proofs with separate replay using the same native verifier implementation and negative controls. Ordinary and maximum each encode 9,412,944 bytes and take 1060.961117s / 1053.277860s; RSS is 9,393,373,184 / 9,468,788,736 bytes. Both fail the unchanged 300-second and 1% unattributed-phase gates (19,511 / 19,832 ppm). The holder proof verifies but release correctly refuses its expired deadline. These are non-isolated local measurements: Swift and later GPU validation overlapped. They predate the subsequently adopted fixed-schedule/fixed-matrix and macOS feature-forwarding changes, so they do not qualify current performance. Darwin does not establish Linux 32 GiB RLIMIT_AS enforcement; no network submission occurred. Adopted narrow phase spans cover real omitted operations, but no current full-proof rerun establishes that the gap is closed. Existing harness positive/mutation tests are component evidence, not proof that every real workload meets the criterion."
           },
           {
             "clause": "Separate projections, local scheduling and consensus limits.",
@@ -3499,7 +3747,67 @@
       "acceptance": [
         "Test backend/semantic-role/key substitution, authorization/usage lifecycle, revoked participants, replay and rollback. Canonical native digests and committed relation-selecting VK identities cannot depend on local config; private material is never logged."
       ],
-      "status": "planned"
+      "status": "in_progress",
+      "evidence": {
+        "source": "bf7defad2bac0079209de1802351ec4a0d343ff4 plus the adopted reviewed implementation union and the exact I.2 inline-binding lint correction. The current branch is optimizations. dist/zk-delivery-handoff/reports/current-i2-matrix-native-retry-root-2026-10-25/command-0.stdout records the actual selected outcomes; the enclosing command failed 101 (53 passed, 10 failed), because all ten X509 provider fixtures fail at startup with OriginalGenesisExecution(BlockInTheFuture). This is bounded component evidence, not a passed batch or whole-source/release qualification. The running queue is not assumed complete.",
+        "paths": [
+          "crates/iroha_core/src/smartcontracts/isi/kaigi/privacy.rs",
+          "crates/iroha_core/src/smartcontracts/isi/kaigi/privacy/authorization_v1.rs",
+          "crates/iroha_core/tests/kaigi_privacy.rs",
+          "crates/iroha_core_zk/src/kaigi_authorization_v1_tests.rs",
+          "crates/iroha_core_zk/src/kaigi_usage_v1_tests.rs",
+          "crates/iroha_core_zk/src/lib.rs",
+          "crates/iroha_core_zk/src/native_pipa_r.rs",
+          "crates/iroha_data_model/src/kaigi/authorization.rs",
+          "crates/iroha_js_host/src/kaigi_authorization_v1.rs",
+          "crates/iroha_js_host/src/kaigi_usage_v1.rs",
+          "crates/kaigi_zk/README.md",
+          "crates/kaigi_zk/src/authorization_v1.rs",
+          "crates/kaigi_zk/src/authorization_v1/tests.rs",
+          "crates/kaigi_zk/src/native.rs",
+          "crates/kaigi_zk/src/relation_v1.rs",
+          "crates/kaigi_zk/src/tests.rs",
+          "crates/kaigi_zk/src/usage_v1.rs",
+          "crates/kaigi_zk/src/usage_v1/tests.rs",
+          "specs/kaigi_privacy_design.md"
+        ],
+        "commands": [
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 8 -- test --locked -p iroha_core --lib --features zk-tests,privacy-release-evidence -- world_state_snapshot::zk_x509::tests:: attachment_host_ actual_host_ executor::attachment_custody::tests:: smartcontracts::isi::kaigi::privacy:: --nocapture --test-threads=1",
+            "outcome": "failed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 8 -- test --locked -p iroha_data_model --lib --release -- kaigi::authorization::tests --nocapture --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 8 -- test --locked -p kaigi_zk --lib --release -- --nocapture --test-threads=1",
+            "outcome": "passed"
+          }
+        ],
+        "acceptance": [
+          {
+            "clause": "Complete authorization/usage relations, retained account participation, canonical key/schema/HPKE binding, bounded accounting and authenticated relay recovery.",
+            "state": "partial",
+            "proof": "crates/kaigi_zk/src/authorization_v1.rs and crates/kaigi_zk/src/usage_v1.rs now have actual current native32 controls: all 28 kaigi_zk tests pass, including all four roles, full public identity words, private blinding, range constraints and genuine PIPA-R authorization/usage proofs. crates/iroha_core/src/smartcontracts/isi/kaigi/privacy/authorization_v1.rs passes real ledger projection/role/original-subject controls in the eight-test Core subset. Complete participation/key/HPKE binding, relay recovery and shipping accounting remain open."
+          },
+          {
+            "clause": "Ship operation-v1 with genuine maximum proofs, direct witness/constraint mutations, all supported SDKs, four-peer effects and current-genesis restart/replay.",
+            "state": "partial",
+            "proof": "crates/kaigi_zk/src/authorization_v1/tests.rs and crates/kaigi_zk/src/usage_v1/tests.rs exercise genuine proof roundtrips and context mutations, but these are component proofs, not the complete operation-v1 maximum workload delivered through all SDKs, direct/prepared/Kotodama and four-validator restart/current-genesis replay. Those are feasible local implementation and validation work."
+          },
+          {
+            "clause": "Test backend/semantic-role/key substitution, authorization/usage lifecycle, revoked participants, replay and rollback.",
+            "state": "partial",
+            "proof": "crates/kaigi_zk/src/native.rs and crates/kaigi_zk/src/authorization_v1/tests.rs exercise wrong proving kind, context and all public rows; crates/iroha_core/src/smartcontracts/isi/kaigi/privacy/authorization_v1.rs tests original subject across leave/rejoin. Complete revoked-participant, native effect rollback, relay and cross-SDK lifecycle flows still require execution."
+          },
+          {
+            "clause": "Canonical native digests and committed relation-selecting VK identities cannot depend on local config; private material is never logged.",
+            "state": "partial",
+            "proof": "crates/iroha_data_model/src/kaigi/authorization.rs binds canonical framed native digest bytes; crates/iroha_core_zk/src/native_pipa_r.rs delegates k to the relation owner. Tests keep witness storage redacted and owned. Full committed key/HPKE/schema selection and global weakest-composition review remain unfinished; no local-config or source-hash identity claim is introduced."
+          }
+        ]
+      }
     },
     {
       "id": "P.8",
@@ -3818,7 +4126,69 @@
       "acceptance": [
         "Independent deterministic vectors and role/context substitution tests cover actual consumers; update manifests/lockfile together and remove superseded implementations directly. Security labels reflect each actual weakest composition. Digest choice remains semantic committed profile data, never a source-file identity."
       ],
-      "status": "planned"
+      "status": "in_progress",
+      "evidence": {
+        "source": "bf7defad2bac0079209de1802351ec4a0d343ff4 plus the adopted reviewed implementation union and the exact I.2 inline-binding lint correction. The current branch is optimizations. dist/zk-delivery-handoff/reports/current-i2-matrix-native-retry-root-2026-10-25/command-0.stdout records the actual selected outcomes; the enclosing command failed 101 (53 passed, 10 failed), because all ten X509 provider fixtures fail at startup with OriginalGenesisExecution(BlockInTheFuture). This is bounded component evidence, not a passed batch or whole-source/release qualification. The running queue is not assumed complete.",
+        "paths": [
+          "crates/iroha_core/src/smartcontracts/isi/kaigi/privacy.rs",
+          "crates/iroha_core/src/smartcontracts/isi/kaigi/privacy/authorization_v1.rs",
+          "crates/iroha_core/tests/kaigi_privacy.rs",
+          "crates/iroha_core_zk/src/kaigi_authorization_v1_tests.rs",
+          "crates/iroha_core_zk/src/kaigi_usage_v1_tests.rs",
+          "crates/iroha_core_zk/src/lib.rs",
+          "crates/iroha_core_zk/src/native_pipa_r.rs",
+          "crates/iroha_data_model/src/kaigi/authorization.rs",
+          "crates/iroha_js_host/src/kaigi_authorization_v1.rs",
+          "crates/iroha_js_host/src/kaigi_usage_v1.rs",
+          "crates/kaigi_zk/README.md",
+          "crates/kaigi_zk/src/authorization_v1.rs",
+          "crates/kaigi_zk/src/authorization_v1/tests.rs",
+          "crates/kaigi_zk/src/native.rs",
+          "crates/kaigi_zk/src/relation_v1.rs",
+          "crates/kaigi_zk/src/tests.rs",
+          "crates/kaigi_zk/src/usage_v1.rs",
+          "crates/kaigi_zk/src/usage_v1/tests.rs",
+          "specs/kaigi_privacy_design.md",
+          "crates/iroha_crypto/src/native_commitment.rs",
+          "specs/zk_primitive_workloads.json"
+        ],
+        "commands": [
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 8 -- test --locked -p iroha_core --lib --features zk-tests,privacy-release-evidence -- world_state_snapshot::zk_x509::tests:: attachment_host_ actual_host_ executor::attachment_custody::tests:: smartcontracts::isi::kaigi::privacy:: --nocapture --test-threads=1",
+            "outcome": "failed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 8 -- test --locked -p iroha_data_model --lib --release -- kaigi::authorization::tests --nocapture --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 8 -- test --locked -p kaigi_zk --lib --release -- --nocapture --test-threads=1",
+            "outcome": "passed"
+          }
+        ],
+        "acceptance": [
+          {
+            "clause": "Implement the selected canonical native digest consistently across catalog commitments, Kaigi authorization, confidential spentness, MKHE proof hashes, schemas, SDKs and fixtures; complete BN254 Poseidon parameter correction and replace obsolete PQ-library dependencies.",
+            "state": "partial",
+            "proof": "crates/iroha_data_model/src/kaigi/authorization.rs now uses the canonical native BLAKE3 framed digest for Kaigi authorization. crates/kaigi_zk/src/authorization_v1.rs and crates/kaigi_zk/src/usage_v1.rs use exact native32 geometry; crates/iroha_core_zk/src/native_pipa_r.rs delegates Kaigi parameter k to its actual owner while preserving unrelated confidential geometry. The adopted 19-file packet preserves existing visibility and signed-genesis/domain-lease fixture repairs. Broader confidential spentness/MKHE/SDK migration, BN254 Poseidon correction and obsolete PQ-library retirement are still local implementation work; no workspace dependency change was needed or claimed for this Kaigi slice."
+          },
+          {
+            "clause": "Independent deterministic vectors and role/context substitution tests cover actual consumers; update manifests/lockfile together and remove superseded implementations directly.",
+            "state": "partial",
+            "proof": "crates/iroha_data_model/src/kaigi/authorization.rs passes all 10 selected model tests, and crates/kaigi_zk/src/authorization_v1/tests.rs plus crates/kaigi_zk/src/usage_v1/tests.rs pass all 28 crate tests in naturally completed current commands. These include actual PIPA-R authorization (3456 bytes, k=12) and usage (3424 bytes, k=12) proof roundtrips and every public-row/context replay mutation control. crates/iroha_core/src/smartcontracts/isi/kaigi/privacy/authorization_v1.rs and crates/iroha_core/src/smartcontracts/isi/kaigi/privacy.rs pass eight Core controls in the failed 53/10 batch, including external-row/scalar refusals, context/role projection and original-subject reuse. CoreZK/JS-host and complete shipping lifecycle qualification remain separately pending. Full independent consumer coverage and dependency retirement remain open."
+          },
+          {
+            "clause": "Security labels reflect each actual weakest composition.",
+            "state": "partial",
+            "proof": "specs/zk_primitive_workloads.json preserves native digest roles and weakest-composition distinctions. Kaigi digest replacement does not turn signature/Halo2 proofs into post-quantum proofs or establish a shipping operation. Complete security/composition review remains H.1/H.2/V.4 work."
+          },
+          {
+            "clause": "Digest choice remains semantic committed profile data, never a source-file identity.",
+            "state": "partial",
+            "proof": "crates/iroha_crypto/src/native_commitment.rs is unchanged by the Kaigi slice; model authorization uses explicit catalog/protocol/domain framing, not source-file hashes. Exact12 catalog rows and X509 29-field profile/schedule pins are not changed by this delta. Source/artifact custody still changes and requires fresh native validation; identical mathematical identity does not recycle old whole-source qualification."
+          }
+        ]
+      }
     }
   ],
   "deliveries": [

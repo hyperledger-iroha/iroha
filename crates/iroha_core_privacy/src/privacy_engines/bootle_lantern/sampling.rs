@@ -560,7 +560,7 @@ impl ProofRandomnessV1 {
         for coefficient in &mut coefficients {
             *coefficient = self.uniform_modulus(domain, PROOF_MODULUS_V1)?;
         }
-        ProofPolynomialV1::new(coefficients).map_err(|_| SamplingErrorV1::InternalInvariant)
+        ProofPolynomialV1::new(&coefficients).map_err(|_| SamplingErrorV1::InternalInvariant)
     }
     /// Draw one polynomial with independent ternary coefficients.
     pub(crate) fn ternary_polynomial(
@@ -571,7 +571,7 @@ impl ProofRandomnessV1 {
         for coefficient in &mut coefficients {
             *coefficient = self.ternary(domain)?;
         }
-        Ok(ProofPolynomialV1::from_centered_coefficients(coefficients))
+        Ok(ProofPolynomialV1::from_centered_coefficients(&coefficients))
     }
     /// Draw one centered discrete-Gaussian polynomial for a closed profile.
     pub(crate) fn gaussian_polynomial(
@@ -582,7 +582,7 @@ impl ProofRandomnessV1 {
         for coefficient in &mut coefficients {
             *coefficient = self.gaussian_coefficient(profile)?;
         }
-        Ok(ProofPolynomialV1::from_centered_coefficients(coefficients))
+        Ok(ProofPolynomialV1::from_centered_coefficients(&coefficients))
     }
     /// Apply the rejection decision fixed by `profile`.
     ///

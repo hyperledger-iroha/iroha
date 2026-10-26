@@ -114,10 +114,10 @@ fn log19_public_at_point_v1(
         .map_err(|_| ZkX509StarkErrorV1::InternalInvariant)
 }
 
-fn opened_rows_v1<'a>(
+fn opened_rows_v1(
     registration: RegisteredSegmentLayoutV1,
-    groups: &'a [aggregate::AggregateOpenedDeepTraceGroupV1],
-) -> Result<RegisteredOpenedRowsV1<'a, E>, ZkX509StarkErrorV1> {
+    groups: &[aggregate::AggregateOpenedDeepTraceGroupV1],
+) -> Result<RegisteredOpenedRowsV1<'_, E>, ZkX509StarkErrorV1> {
     let group = groups
         .get(registration.trace_group)
         .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?;
@@ -354,7 +354,7 @@ fn main_deep_composition_v1(
             MainFp4AirEvaluatorV1::P256(evaluator) => {
                 p256_main_registration_from_main_layout_v1(registration)?;
                 let fixed = &prepared.rows[index];
-                evaluator.evaluate_residues_v1(opening, fixed, p256.challenges)?
+                evaluator.evaluate_residues_v1(opening, fixed, &p256.challenges)?
             }
             MainFp4AirEvaluatorV1::Projection(evaluator) => {
                 if registration != projection.registration {
@@ -379,7 +379,7 @@ fn main_deep_composition_v1(
                 opening,
                 &prepared.public[0].der,
                 &prepared.public[1].der,
-                DerMainFp4AirContextV1 {
+                &DerMainFp4AirContextV1 {
                     challenges: log19.post_base.der(),
                     public: log19.der_public,
                 },
@@ -387,7 +387,7 @@ fn main_deep_composition_v1(
             MainFp4AirEvaluatorV1::Rfc5280(evaluator) => evaluator.evaluate_residues_v1(
                 opening,
                 &prepared.public[0].rfc,
-                RfcMainFp4AirContextV1 {
+                &RfcMainFp4AirContextV1 {
                     der: log19.post_base.der(),
                     rfc: *log19.post_base.rfc5280(),
                 },
@@ -425,11 +425,12 @@ fn main_deep_composition_v1(
                 evaluator.evaluate_residues_v1(
                     &current,
                     &next,
-                    ShaMainFp4AirContextV1 {
+                    &ShaMainFp4AirContextV1 {
                         word: log19.post_base.sha_word(),
                         call: log19.post_base.sha(),
                         rfc: *log19.post_base.rfc5280(),
-                        segment: segment as u8,
+                        segment: u8::try_from(segment)
+                            .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
                     },
                 )?
             }
@@ -528,12 +529,14 @@ pub(super) fn verify_main_deep_constraints_with_ca_v1(
     let groups = aggregate::canonical_deep_trace_groups_v1(deep, AGGREGATE_PARAMETERS_V1, &shared)
         .map_err(map_aggregate_error_v1)?;
     let prepared = prepare_main_deep_fixed_v1(layout, point, p256, projection, io, log19)
-        .inspect_err(|_error| {
+        .inspect_err(|error| {
             #[cfg(test)]
             super::super::super::engine::prover_diagnostic::record_public_verifier_error_v1(
                 "main-oods-fixed-evaluation",
-                _error,
+                error,
             );
+            #[cfg(not(test))]
+            let _ = error;
         })?;
     let expected = main_deep_composition_v1(
         layout,
@@ -547,12 +550,14 @@ pub(super) fn verify_main_deep_constraints_with_ca_v1(
         log19,
         &prepared,
     )
-    .inspect_err(|_error| {
+    .inspect_err(|error| {
         #[cfg(test)]
         super::super::super::engine::prover_diagnostic::record_public_verifier_error_v1(
             "main-oods-residues",
-            _error,
+            error,
         );
+        #[cfg(not(test))]
+        let _ = error;
     })?;
     if !key_plan.admissible_v1(point, &shared)? {
         return Err(ZkX509StarkErrorV1::ConstraintOpening);
@@ -588,7 +593,7 @@ pub(in super::super) fn verify_standalone_der_oods_v1(
     layout: &AggregateProofLayoutV1,
     deep: &aggregate::AggregateDeepProofV1,
     point: E,
-    challenges: ZkX509DerStarkChallengesV1,
+    challenges: &ZkX509DerStarkChallengesV1,
     public: ZkX509DerStarkPublicTerminalsV1,
     claims: ZkX509DerStarkTerminalClaimsV1,
     alphas: &[Vec<E>],

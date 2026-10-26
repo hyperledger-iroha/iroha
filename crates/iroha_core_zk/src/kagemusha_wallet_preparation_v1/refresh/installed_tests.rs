@@ -30,7 +30,7 @@ use crate::{
 type Operation = KagemushaWalletOperationKindV1;
 type InputRole = KagemushaWalletRetainedInputRoleV1;
 
-fn key<C: Circuit<Fp>>(circuit: C, params: &PinnedParams<Eq>) -> ProvingKey<Eq> {
+fn key<C: Circuit<Fp>>(circuit: &C, params: &PinnedParams<Eq>) -> ProvingKey<Eq> {
     keygen_pk_v2(
         params,
         &circuit.without_witnesses(),
@@ -97,9 +97,9 @@ fn credential(
 }
 
 fn release(
-    credential: KagemushaWalletCredentialV1,
-    state: KagemushaWalletStateV1,
-    statement: KagemushaWalletStatementV1,
+    credential: &KagemushaWalletCredentialV1,
+    state: &KagemushaWalletStateV1,
+    statement: &KagemushaWalletStatementV1,
     sigma: KagemushaWalletStepProofV1,
     payment: &SigningKey,
 ) -> ReleasedStep {
@@ -112,15 +112,15 @@ fn release(
         operation_id: statement.operation_id(&state.core.wallet_id).unwrap(),
         kind: Operation::Bootstrap,
         predecessor_capsule_digest: [0; 32],
-        successor_state: state,
-        statement,
+        successor_state: *state,
+        statement: *statement,
         predecessor_lineage: KagemushaWalletLineageSlotV1::None,
         step_proof: sigma,
         payment_digest: [0; 32],
         map_openings: vec![],
         retained_inputs: vec![],
         output: KagemushaWalletOutputDescriptorV1::for_transition(
-            &statement,
+            statement,
             &proof_digest,
             &[0; 32],
         )
@@ -132,18 +132,18 @@ fn release(
         .seal([0; 32])
         .expect("synthetic opening");
 
-    let signer = KagemushaWalletReceiptSignerV1::from_credential(&credential).unwrap();
+    let signer = KagemushaWalletReceiptSignerV1::from_credential(credential).unwrap();
     let body = KagemushaWalletReceiptBodyV1::derive(
         &signer,
-        &statement,
+        statement,
         &proof_digest,
         capsule.receipt_commitment(),
         [0; 32],
     )
     .unwrap();
     let receipt = KagemushaWalletReceiptV1::sign(
-        &credential,
-        &statement,
+        credential,
+        statement,
         &proof_digest,
         body.capsule_commitment,
         [0; 32],
@@ -151,14 +151,14 @@ fn release(
     )
     .unwrap();
     let package = KagemushaWalletPackageV1::new(
-        statement,
+        *statement,
         KagemushaWalletLineageSlotV1::None,
         capsule.body().step_proof.clone(),
         receipt,
     );
     let output = norito::encode_canonical(&package).unwrap();
     let record = KagemushaWalletCompletionRecordV1::new(&capsule, receipt, output).unwrap();
-    record.verify(&credential, &capsule).unwrap();
+    record.verify(credential, &capsule).unwrap();
     ReleasedStep {
         retained: Retained {
             selected_generation: 1,
@@ -169,7 +169,7 @@ fn release(
             record,
         },
         frozen: FrozenTransition {
-            credential,
+            credential: *credential,
             capsule,
         },
     }
@@ -181,14 +181,14 @@ fn release(
 fn rebase_update(
     mut source: Source,
     scheme: KagemushaWalletSchemeV1,
-    current: KagemushaWalletCredentialV1,
-    state: KagemushaWalletStateV1,
+    current: &KagemushaWalletCredentialV1,
+    state: &KagemushaWalletStateV1,
 ) -> Source {
     let kind = source.originals().kind;
     source.scheme = scheme;
-    source.current = current;
-    source.successor = current;
-    source.state = state;
+    source.current = *current;
+    source.successor = *current;
+    source.state = *state;
     source.certificate = certificate(&scheme, &source.signing, source.certificate.body.role);
     let cert = &source.certificate;
     let original = source.complete_original();
@@ -280,7 +280,7 @@ fn installed_public_refresh_proves_all_four_updates_and_rejects_resigned_bad_sig
         lineage: [Fp::ZERO; 18],
         statement: [Fp::ZERO; 26],
     };
-    let bootstrap_key = key(BootstrapCircuit::new(&blank), &params);
+    let bootstrap_key = key(&BootstrapCircuit::new(&blank), &params);
     let decoded = Source::policy().decode().unwrap();
     let state_blank = StateWitness {
         core: blank.core,
@@ -288,7 +288,7 @@ fn installed_public_refresh_proves_all_four_updates_and_rejects_resigned_bad_sig
         lineage: blank.lineage,
     };
     let refresh_key = key(
-        RefreshCircuit::new(&RefreshWitness {
+        &RefreshCircuit::new(&RefreshWitness {
             predecessor: state_blank,
             successor: state_blank,
             statement: blank.statement,
@@ -314,7 +314,7 @@ fn installed_public_refresh_proves_all_four_updates_and_rejects_resigned_bad_sig
             &enrollment.to_canonical_bytes().unwrap(),
         )
         .unwrap();
-    let enrollment_set = KagemushaWalletCertificateSetV1::new(vec![enrollment.clone()]).unwrap();
+    let enrollment_set = KagemushaWalletCertificateSetV1::new(vec![enrollment]).unwrap();
     let enrollment_set_bytes = norito::to_bytes(&enrollment_set).unwrap();
     let set_owner = preparation
         .authenticate_credential_set(
@@ -409,7 +409,7 @@ fn installed_public_refresh_proves_all_four_updates_and_rejects_resigned_bad_sig
             MemoryBudget::DEFAULT,
         )
         .unwrap();
-    let released = release(credential, state, statement, sigma, &payment);
+    let released = release(&credential, &state, &statement, sigma, &payment);
     preparation
         .receipt_tape(&owner, &released, MemoryBudget::DEFAULT)
         .unwrap();
@@ -420,7 +420,7 @@ fn installed_public_refresh_proves_all_four_updates_and_rejects_resigned_bad_sig
         Source::quota(),
         Source::anchor(),
     ] {
-        let source = rebase_update(source, scheme, credential, state);
+        let source = rebase_update(source, scheme, &credential, &state);
         let next = if source.successor == credential {
             preparation
                 .authenticate_credential(
@@ -531,7 +531,7 @@ fn installed_public_refresh_proves_all_four_updates_and_rejects_resigned_bad_sig
         );
         let mut sigma = released.frozen.capsule.body().step_proof.clone();
         sigma.bytes[32] ^= 1;
-        let resigned = release(credential, state, statement, sigma, &payment);
+        let resigned = release(&credential, &state, &statement, sigma, &payment);
         assert!(
             preparation
                 .prepare_refresh(

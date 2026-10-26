@@ -551,7 +551,7 @@ fn speculate(owner: &Arc<Owner>, job: state::SpeculativeSendJobV1) {
                 Ok(None) => true,
                 Err(_) => false,
             };
-            owner.background.record_native_work(turn.finish(returned));
+            owner.background.record_native_work(&turn.finish(returned));
         });
 }
 pub(crate) fn execute_reviewed(invocation: &exchange::Invocation, token: u64) -> Result<Response> {
@@ -565,7 +565,7 @@ pub(crate) fn execute_reviewed(invocation: &exchange::Invocation, token: u64) ->
     });
     owner
         .background
-        .record_native_work(turn.finish(result.is_ok()));
+        .record_native_work(&turn.finish(result.is_ok()));
     let response = result?;
     if response.kind == 65 {
         owner.background.retry(&owner)?;

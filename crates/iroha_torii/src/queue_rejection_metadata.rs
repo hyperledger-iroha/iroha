@@ -1,7 +1,6 @@
 impl Error {
     fn status_code_for_queue_error(err: &queue::Error) -> StatusCode {
         match err {
-            queue::Error::Deferred(_) => StatusCode::TOO_MANY_REQUESTS,
             queue::Error::SccpForgeryIngress(error) => {
                 if error.is_local() {
                     StatusCode::SERVICE_UNAVAILABLE
@@ -13,24 +12,24 @@ impl Error {
                     StatusCode::BAD_REQUEST
                 }
             }
-            queue::Error::Full
+            queue::Error::Deferred(_)
+            | queue::Error::Full
             | queue::Error::LatencySaturated
             | queue::Error::MaximumTransactionsPerUser => StatusCode::TOO_MANY_REQUESTS,
             queue::Error::Expired | queue::Error::TransactionDomainMismatch(_) => {
                 StatusCode::BAD_REQUEST
             }
-            queue::Error::UnsupportedTransactionAdmission { .. } => StatusCode::BAD_REQUEST,
-            queue::Error::UnresolvedRoute { .. } => StatusCode::BAD_REQUEST,
-            queue::Error::InBlockchain => StatusCode::CONFLICT,
-            queue::Error::IsInQueue => StatusCode::CONFLICT,
-            queue::Error::UnregisteredAuthority { .. } => StatusCode::FORBIDDEN,
+            queue::Error::UnsupportedTransactionAdmission { .. }
+            | queue::Error::UnresolvedRoute { .. } => StatusCode::BAD_REQUEST,
+            queue::Error::InBlockchain | queue::Error::IsInQueue => StatusCode::CONFLICT,
+            queue::Error::UnregisteredAuthority { .. }
+            | queue::Error::GovernanceNotPermitted { .. }
+            | queue::Error::LaneComplianceDenied { .. }
+            | queue::Error::LanePrivacyProofRejected { .. } => StatusCode::FORBIDDEN,
             queue::Error::Governance(_) => StatusCode::INTERNAL_SERVER_ERROR,
-            queue::Error::GovernanceNotPermitted { .. } => StatusCode::FORBIDDEN,
-            queue::Error::LaneComplianceDenied { .. } => StatusCode::FORBIDDEN,
-            queue::Error::LanePrivacyProofRejected { .. } => StatusCode::FORBIDDEN,
             queue::Error::NexusFeeAdmissionRejected { .. } => StatusCode::UNPROCESSABLE_ENTITY,
-            queue::Error::NexusFeeAdmissionConfigInvalid { .. } => StatusCode::SERVICE_UNAVAILABLE,
-            queue::Error::AdmissionInvariant { .. } => StatusCode::SERVICE_UNAVAILABLE,
+            queue::Error::NexusFeeAdmissionConfigInvalid { .. }
+            | queue::Error::AdmissionInvariant { .. } => StatusCode::SERVICE_UNAVAILABLE,
         }
     }
     fn queue_error_summary(err: &queue::Error) -> (&'static str, &'static str) {

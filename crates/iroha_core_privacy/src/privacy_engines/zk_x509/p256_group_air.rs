@@ -114,24 +114,26 @@ pub fn p256_complete_add_v1<C: P256BaseFieldCircuitV1>(
     let yz_product = circuit.multiply_v1(left_yz, right_yz)?;
     let yy_plus_zz = circuit.add_v1(yy, zz)?;
     let yz_pairs = circuit.subtract_v1(yz_product, yy_plus_zz)?;
-    let left_xz = circuit.add_v1(left.x, left.z)?;
-    let right_xz = circuit.add_v1(right.x, right.z)?;
-    let xz_product = circuit.multiply_v1(left_xz, right_xz)?;
+    let left_horizontal_depth = circuit.add_v1(left.x, left.z)?;
+    let right_horizontal_depth = circuit.add_v1(right.x, right.z)?;
+    let horizontal_depth_product =
+        circuit.multiply_v1(left_horizontal_depth, right_horizontal_depth)?;
     let xx_plus_zz = circuit.add_v1(xx, zz)?;
-    let xz_pairs = circuit.subtract_v1(xz_product, xx_plus_zz)?;
+    let horizontal_depth_pairs = circuit.subtract_v1(horizontal_depth_product, xx_plus_zz)?;
     let b_times_zz = circuit.multiply_v1(curve_b, zz)?;
-    let bzz_part = circuit.subtract_v1(xz_pairs, b_times_zz)?;
+    let bzz_part = circuit.subtract_v1(horizontal_depth_pairs, b_times_zz)?;
     let bzz_twice = circuit.add_v1(bzz_part, bzz_part)?;
-    let bzz3_part = circuit.add_v1(bzz_twice, bzz_part)?;
-    let yy_minus_bzz3 = circuit.subtract_v1(yy, bzz3_part)?;
-    let yy_plus_bzz3 = circuit.add_v1(yy, bzz3_part)?;
+    let triple_curve_depth = circuit.add_v1(bzz_twice, bzz_part)?;
+    let yy_minus_bzz3 = circuit.subtract_v1(yy, triple_curve_depth)?;
+    let yy_plus_bzz3 = circuit.add_v1(yy, triple_curve_depth)?;
     let zz_twice = circuit.add_v1(zz, zz)?;
     let zz3 = circuit.add_v1(zz_twice, zz)?;
-    let b_times_xz = circuit.multiply_v1(curve_b, xz_pairs)?;
+    let curve_cross_product = circuit.multiply_v1(curve_b, horizontal_depth_pairs)?;
     let zz3_plus_xx = circuit.add_v1(zz3, xx)?;
-    let bxz_part = circuit.subtract_v1(b_times_xz, zz3_plus_xx)?;
-    let bxz_twice = circuit.add_v1(bxz_part, bxz_part)?;
-    let bxz3_part = circuit.add_v1(bxz_twice, bxz_part)?;
+    let curve_cross_difference = circuit.subtract_v1(curve_cross_product, zz3_plus_xx)?;
+    let doubled_cross_difference =
+        circuit.add_v1(curve_cross_difference, curve_cross_difference)?;
+    let bxz3_part = circuit.add_v1(doubled_cross_difference, curve_cross_difference)?;
     let xx_twice = circuit.add_v1(xx, xx)?;
     let xx3 = circuit.add_v1(xx_twice, xx)?;
     let xx3_minus_zz3 = circuit.subtract_v1(xx3, zz3)?;
@@ -165,9 +167,9 @@ pub fn p256_complete_double_v1<C: P256BaseFieldCircuitV1>(
     let b_times_zz = circuit.multiply_v1(curve_b, zz)?;
     let bzz_part = circuit.subtract_v1(b_times_zz, xz2)?;
     let bzz_twice = circuit.add_v1(bzz_part, bzz_part)?;
-    let bzz3_part = circuit.add_v1(bzz_twice, bzz_part)?;
-    let yy_minus_bzz3 = circuit.subtract_v1(yy, bzz3_part)?;
-    let yy_plus_bzz3 = circuit.add_v1(yy, bzz3_part)?;
+    let triple_curve_depth = circuit.add_v1(bzz_twice, bzz_part)?;
+    let yy_minus_bzz3 = circuit.subtract_v1(yy, triple_curve_depth)?;
+    let yy_plus_bzz3 = circuit.add_v1(yy, triple_curve_depth)?;
     let y_fragment = circuit.multiply_v1(yy_plus_bzz3, yy_minus_bzz3)?;
     let x_fragment = circuit.multiply_v1(yy_minus_bzz3, xy2)?;
     let zz_twice = circuit.add_v1(zz, zz)?;
@@ -187,8 +189,8 @@ pub fn p256_complete_double_v1<C: P256BaseFieldCircuitV1>(
     let x_right = circuit.multiply_v1(bxz6_part, yz2)?;
     let x = circuit.subtract_v1(x_fragment, x_right)?;
     let z_product = circuit.multiply_v1(yz2, yy)?;
-    let z_twice = circuit.add_v1(z_product, z_product)?;
-    let z = circuit.add_v1(z_twice, z_twice)?;
+    let doubled_output_depth = circuit.add_v1(z_product, z_product)?;
+    let z = circuit.add_v1(doubled_output_depth, doubled_output_depth)?;
     Ok(P256ProjectiveValueV1 { x, y, z })
 }
 /// Build the variable-base table `[0]P, [1]P, ..., [15]P`.

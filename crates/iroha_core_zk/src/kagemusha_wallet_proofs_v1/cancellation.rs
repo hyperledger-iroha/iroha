@@ -2,7 +2,7 @@
 //! Invalid inputs, resource failures and cancellation never share a soft-verdict flag.
 
 /// Exact error classification, implemented explicitly for each native source family.
-pub(crate) trait NativeProofError {
+pub trait NativeProofError {
     fn is_cancelled(&self) -> bool;
     /// Move an actual unfinished original read through the native proof boundary.
     fn into_read_refusal(self) -> Option<norito::core::DecodeLocalRefusal>
