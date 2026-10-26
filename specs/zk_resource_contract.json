@@ -138,11 +138,11 @@
           "name": "guest_heap_and_input_window_accept_their_bound_and_refuse_one_over"
         },
         {
-          "path": "crates/iroha_core/src/smartcontracts/ivm/host.rs",
+          "path": "crates/iroha_core/src/smartcontracts/ivm/host_tests.rs",
           "name": "committed_output_budget_accepts_the_exact_limit_and_refuses_one_over"
         },
         {
-          "path": "crates/iroha_core/src/smartcontracts/ivm/host.rs",
+          "path": "crates/iroha_core/src/smartcontracts/ivm/host_tests.rs",
           "name": "bounded_host_stops_queue_growth_before_push"
         }
       ]
@@ -392,7 +392,7 @@
         },
         {
           "stage": "follower",
-          "path": "crates/iroha_core/src/executor.rs",
+          "path": "crates/iroha_core/src/executor_tests.rs",
           "name": "preverify_attachments_reject_malformed_attachment_shapes_before_vk_lookup",
           "features": [
             "zk-preverify"
@@ -6433,15 +6433,15 @@
       ],
       "tests": [
         {
-          "path": "crates/iroha_core/src/smartcontracts/ivm/host.rs",
+          "path": "crates/iroha_core/src/smartcontracts/ivm/host_tests.rs",
           "name": "committed_output_budget_accepts_the_exact_limit_and_refuses_one_over"
         },
         {
-          "path": "crates/iroha_core/src/smartcontracts/ivm/host.rs",
+          "path": "crates/iroha_core/src/smartcontracts/ivm/host_tests.rs",
           "name": "bounded_host_stops_queue_growth_before_push"
         },
         {
-          "path": "crates/iroha_core/src/smartcontracts/ivm/host.rs",
+          "path": "crates/iroha_core/src/smartcontracts/ivm/host_tests.rs",
           "name": "tooling_output_limit_cannot_widen_consensus_budget"
         },
         {
@@ -6477,11 +6477,11 @@
       ],
       "tests": [
         {
-          "path": "crates/iroha_core/src/smartcontracts/ivm/host.rs",
+          "path": "crates/iroha_core/src/smartcontracts/ivm/host_tests.rs",
           "name": "committed_output_budget_accepts_the_exact_limit_and_refuses_one_over"
         },
         {
-          "path": "crates/iroha_core/src/smartcontracts/ivm/host.rs",
+          "path": "crates/iroha_core/src/smartcontracts/ivm/host_tests.rs",
           "name": "tooling_output_limit_cannot_widen_consensus_budget"
         },
         {
@@ -6513,7 +6513,7 @@
       ],
       "tests": [
         {
-          "path": "crates/iroha_core/src/smartcontracts/ivm/host.rs",
+          "path": "crates/iroha_core/src/smartcontracts/ivm/host_tests.rs",
           "name": "committed_output_budget_accepts_the_exact_limit_and_refuses_one_over"
         }
       ]

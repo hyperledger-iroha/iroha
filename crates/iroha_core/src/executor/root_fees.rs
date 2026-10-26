@@ -18,10 +18,10 @@ fn scope(
 
 /// Validate the captured predecessor policy without reading a later parameter value.
 /// Presence is mandatory; the only unconfigured context is H1, whose caller skips fees.
-pub(super) fn effective(
+pub(super) fn effective<'a>(
     world: &impl WorldReadOnly,
-    captured: &RootFeePolicy,
-) -> Result<RootFeePolicy, ExecutionAttemptError<NexusFeeAdmissionError>> {
+    captured: &'a RootFeePolicy,
+) -> Result<&'a RootFeePolicy, ExecutionAttemptError<NexusFeeAdmissionError>> {
     if world.parameters().root_fees().is_none() {
         return Err(invalid("committed root fee policy is absent").into());
     }
@@ -51,7 +51,7 @@ pub(super) fn effective(
             .into());
         }
     }
-    Ok(captured.clone())
+    Ok(captured)
 }
 
 /// Select sponsor custody from the authored H1 policy or the frozen predecessor policy.
@@ -75,7 +75,8 @@ pub fn sponsor_vault_custody<'a>(
                 )
             })?
     } else {
-        &state_transaction.nexus.fees
+        execution_policy(state_transaction)
+            .map_err(|reason| InstructionExecutionError::InvariantViolation(reason.into()))?
     };
     Ok(&policy.sponsor_vault_custody_account_id)
 }
@@ -92,27 +93,38 @@ pub fn validate_committed(
     effective(world, policy).map(|_| ())
 }
 
-/// Public quoting is evaluated against the supplied committed World. A caller-supplied
-/// Nexus value cannot supply monetary policy; the usual captured view takes no clone.
-pub(super) fn quote_nexus<'a>(
+/// Borrow the exact immutable original parameter owner selected for ordinary execution.
+/// A retained handle clone may extend this lifetime across disjoint transaction writes;
+/// it shares the already funded graph and never clones a monetary projection.
+pub(super) fn execution_parameters<'a>(
+    transaction: &'a StateTransaction<'_, '_>,
+) -> &'a crate::pipeline_gas_policy::RetainedStateParameters {
+    if cfg!(all(test, sumeragi_core_mutation = "HC397")) {
+        transaction.world.parameters.get()
+    } else {
+        transaction.world.parameters.get_before_block()
+    }
+}
+
+/// Borrow original fees; a later current policy cannot repair original absence.
+pub(super) fn execution_policy<'a>(
+    transaction: &'a StateTransaction<'_, '_>,
+) -> Result<&'a RootFeePolicy, &'static str> {
+    execution_parameters(transaction)
+        .root_fees()
+        .ok_or("original committed root fee policy is absent")
+}
+
+/// Public quotes borrow monetary policy from the exact supplied committed World.
+/// Node-local configuration is used only for nonmonetary sponsor admission settings.
+pub(super) fn quote_policy(
     world: &impl WorldReadOnly,
-    nexus: &'a iroha_config::parameters::actual::Nexus,
-) -> Result<
-    std::borrow::Cow<'a, iroha_config::parameters::actual::Nexus>,
-    ExecutionAttemptError<NexusFeeAdmissionError>,
-> {
+) -> Result<&RootFeePolicy, ExecutionAttemptError<NexusFeeAdmissionError>> {
     let policy = world
         .parameters()
         .root_fees()
         .ok_or_else(|| invalid("committed root fee policy is absent"))?;
-    let policy = effective(world, policy)?;
-    if policy == nexus.fees {
-        Ok(std::borrow::Cow::Borrowed(nexus))
-    } else {
-        let mut projected = nexus.clone();
-        projected.fees = policy;
-        Ok(std::borrow::Cow::Owned(projected))
-    }
+    effective(world, policy)
 }
 
 pub(super) fn currency(
@@ -217,15 +229,17 @@ mod tests {
             ),
             dataspace_id: ds,
         };
-        let mut parameters = world.parameters.block();
-        parameters
-            .set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
-                scope,
-            ))
-            .expect("valid fixture parameters");
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&world).unwrap();
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            crate::sumeragi::lanes::routing::test_support::metadata(scope),
+            world.sccp_committee_generations.allocation_budget(),
+        )
+        .expect("valid fixture parameters");
         if with_policy {
-            parameters
-                .set_parameter(Parameter::Custom(
+            crate::state::set_parameter_cell_for_testing(
+                &mut parameters,
+                Parameter::Custom(
                     RootFeePolicy {
                         fee_asset_id: asset.clone(),
                         base_fee: 2_u32.into(),
@@ -236,8 +250,10 @@ mod tests {
                     }
                     .into_custom_parameter()
                     .unwrap(),
-                ))
-                .expect("valid fixture parameters");
+                ),
+                world.sccp_committee_generations.allocation_budget(),
+            )
+            .expect("valid fixture parameters");
         }
         parameters.commit();
         let mut nexus = iroha_config::parameters::actual::Nexus::default();
@@ -265,14 +281,78 @@ mod tests {
         nexus.fees.fee_asset_id = asset.clone();
         let state = State::new_with_nexus_for_testing(world, nexus, LiveQueryStore::start_test());
         if !with_policy {
-            let mut parameters = state.world.parameters.block();
-            parameters
+            let mut parameters =
+                crate::state::parameter_cell_block_for_testing(&state.world).unwrap();
+            let mut malformed = parameters.get().get().clone();
+            malformed
                 .remove_custom_parameter(&RootFeePolicy::parameter_id())
                 .expect("root fee policy removal is permitted")
                 .expect("fixture authors the removed root fee policy");
+            let retained =
+                crate::pipeline_gas_policy::RetainedStateParameters::try_copy_for_testing(
+                    &malformed,
+                    state.world.sccp_committee_generations.allocation_budget(),
+                )
+                .expect("funded malformed original fee-policy fixture");
+            *parameters.get_mut() = retained;
             parameters.commit();
         }
         (state, ds, asset)
+    }
+
+    #[test]
+    fn exact_original_fee_owner_survives_pending_and_applied_siblings_without_allocation() {
+        let (state, _, _) = fixture(true, true);
+        let original_view = state.world.parameters.view();
+        let original = original_view.get().clone();
+        let before = original.root_fees().unwrap();
+        let mut next = before.clone();
+        next.base_fee = Quantity::from(17_u32);
+        let mut block = state.block(BlockHeader::new(2.try_into().unwrap(), None, None, 1000, 0));
+        {
+            let mut tx = block.transaction();
+            tx.world
+                .set_parameter_for_testing(Parameter::Custom(
+                    next.clone().into_custom_parameter().unwrap(),
+                ))
+                .unwrap();
+            assert_eq!(tx.world.parameters().root_fees(), Some(&next));
+            assert_eq!(
+                crate::test_allocations::allocations_during(|| {
+                    let retained = execution_parameters(&tx).clone();
+                    assert!(retained.same_version(&original));
+                    assert!(std::ptr::eq(execution_policy(&tx).unwrap(), before));
+                }),
+                0
+            );
+            tx.apply();
+        }
+        {
+            let sibling = block.transaction();
+            assert_eq!(sibling.world.parameters().root_fees(), Some(&next));
+            assert!(std::ptr::eq(execution_policy(&sibling).unwrap(), before));
+            assert!(std::ptr::eq(
+                quote_policy(&sibling.world).unwrap(),
+                sibling.world.parameters().root_fees().unwrap()
+            ));
+        }
+        drop(block);
+        assert!(original.same_version(state.world.parameters.view().get()));
+        // Explicitly publish the same complete policy in a new parameter-only fixture
+        // generation. The old snapshot must remain exact while the new block borrows it.
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world).unwrap();
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            Parameter::Custom(next.clone().into_custom_parameter().unwrap()),
+            state.world.sccp_committee_generations.allocation_budget(),
+        )
+        .unwrap();
+        parameters.commit();
+        let mut next_block =
+            state.block(BlockHeader::new(2.try_into().unwrap(), None, None, 1000, 0));
+        let tx = next_block.transaction();
+        assert_eq!(execution_policy(&tx).unwrap(), &next);
+        assert_eq!(original_view.get().root_fees(), Some(before));
     }
 
     #[test]
@@ -281,7 +361,7 @@ mod tests {
         let mut block = state.block(BlockHeader::new(1.try_into().unwrap(), None, None, 0, 0));
         let mut tx = block.transaction();
         assert!(is_initial_genesis_context(&tx));
-        let frozen = tx.nexus.fees.clone();
+        let frozen = execution_policy(&tx).unwrap().clone();
         let mut authored = frozen.clone();
         authored.sponsor_vault_custody_account_id = ALICE_ID.clone();
         assert_ne!(
@@ -289,9 +369,7 @@ mod tests {
             frozen.sponsor_vault_custody_account_id
         );
         tx.world
-            .parameters
-            .get_mut()
-            .set_parameter(Parameter::Custom(
+            .set_parameter_for_testing(Parameter::Custom(
                 authored.clone().into_custom_parameter().unwrap(),
             ))
             .unwrap();
@@ -299,15 +377,20 @@ mod tests {
             sponsor_vault_custody(&tx).unwrap(),
             &authored.sponsor_vault_custody_account_id
         );
-        assert_eq!(tx.nexus.fees, frozen);
-        tx.world
-            .parameters
-            .get_mut()
+        assert_eq!(*execution_policy(&tx).unwrap(), frozen);
+        let mut malformed = tx.world.parameters.get().get().clone();
+        malformed
             .remove_custom_parameter(&RootFeePolicy::parameter_id())
             .expect("root fee policy removal is permitted")
             .expect("fixture authors the removed root fee policy");
+        let retained = crate::pipeline_gas_policy::RetainedStateParameters::try_copy_for_testing(
+            &malformed,
+            tx.world.sccp_committee_generations.allocation_budget(),
+        )
+        .expect("funded malformed original fee-policy fixture");
+        *tx.world.parameters.get_mut() = retained;
         assert!(sponsor_vault_custody(&tx).is_err());
-        assert_eq!(tx.nexus.fees, frozen);
+        assert_eq!(*execution_policy(&tx).unwrap(), frozen);
     }
 
     #[test]
@@ -316,7 +399,7 @@ mod tests {
         let mut block = state.block(BlockHeader::new(2.try_into().unwrap(), None, None, 1000, 0));
         let mut tx = block.transaction();
         assert!(!is_initial_genesis_context(&tx));
-        let frozen = tx.nexus.fees.clone();
+        let frozen = execution_policy(&tx).unwrap().clone();
         let mut different = frozen.clone();
         different.sponsor_vault_custody_account_id = ALICE_ID.clone();
         assert_ne!(
@@ -326,9 +409,7 @@ mod tests {
         // Direct fixture mutation deliberately differs from the predecessor. A normal
         // SetParameter rejects post-genesis custody changes before reaching this state.
         tx.world
-            .parameters
-            .get_mut()
-            .set_parameter(Parameter::Custom(
+            .set_parameter_for_testing(Parameter::Custom(
                 different.into_custom_parameter().unwrap(),
             ))
             .unwrap();
@@ -336,7 +417,7 @@ mod tests {
             sponsor_vault_custody(&tx).unwrap(),
             &frozen.sponsor_vault_custody_account_id
         );
-        assert_eq!(tx.nexus.fees, frozen);
+        assert_eq!(*execution_policy(&tx).unwrap(), frozen);
     }
 
     #[test]
@@ -345,6 +426,10 @@ mod tests {
         let view = state.view();
         let world = view.world();
         assert!(std::ptr::eq(world.parameters(), world.parameters.get()));
+        assert!(std::ptr::eq(
+            world.parameters().get(),
+            world.parameters.get().get()
+        ));
         validate_committed(world).unwrap();
 
         let (missing, _, _) = fixture(false, true);
@@ -359,36 +444,32 @@ mod tests {
         let (state, _, asset) = fixture(true, true);
         let mut block = state.block(BlockHeader::new(2.try_into().unwrap(), None, None, 1000, 0));
         let mut tx = block.transaction();
-        let before = tx.nexus.fees.clone();
+        let before = execution_policy(&tx).unwrap().clone();
         let frozen_gas = tx.pipeline.gas.clone();
         let mut next = before.clone();
         next.base_fee = 7_u32.into();
         next.per_gas_unit_fee = 9_u32.into();
         tx.world
-            .parameters
-            .get_mut()
-            .set_parameter(Parameter::Custom(
+            .set_parameter_for_testing(Parameter::Custom(
                 next.clone().into_custom_parameter().unwrap(),
             ))
             .unwrap();
         Executor::validate_root_fee_policy(&mut tx).unwrap();
         assert_eq!(tx.world.parameters().root_fees(), Some(&next));
-        assert_eq!(tx.nexus.fees, before);
-        assert_eq!(tx.nexus.fees.fee_asset_id, asset);
+        assert_eq!(*execution_policy(&tx).unwrap(), before);
+        assert_eq!(execution_policy(&tx).unwrap().fee_asset_id, asset);
         assert_eq!(tx.pipeline.gas, frozen_gas);
         let original_parameters = tx.world.parameters().clone();
         assert!(
             tx.world
-                .parameters
-                .get_mut()
-                .set_parameter(Parameter::Custom(CustomParameter::new(
+                .set_parameter_for_testing(Parameter::Custom(CustomParameter::new(
                     RootFeePolicy::parameter_id(),
                     iroha_primitives::json::Json::new("malformed policy"),
                 )))
                 .is_err()
         );
         assert_eq!(tx.world.parameters(), &original_parameters);
-        assert_eq!(tx.nexus.fees, before);
+        assert_eq!(*execution_policy(&tx).unwrap(), before);
         assert_eq!(tx.pipeline.gas, frozen_gas);
     }
 
@@ -440,15 +521,20 @@ mod tests {
     fn private_fee_readers_preserve_local_scope_decode_refusal_and_retry() {
         let (state, ds, asset) = fixture(true, true);
         let view = state.view();
-        let original = effective(view.world(), &view.nexus().fees).unwrap();
+        let captured = view
+            .world()
+            .parameters()
+            .root_fees()
+            .expect("the fixture authors its committed private fee policy");
+        let original = effective(view.world(), captured).unwrap();
         for reader in 0..4 {
             let refused = norito::with_decode_limits_scope(
                 norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX),
                 || {
                     match reader {
-                        0 => quote_nexus(view.world(), view.nexus()).map(|_| ()),
-                        1 => effective(view.world(), &view.nexus().fees).map(|_| ()),
-                        2 => currency(view.world(), &view.nexus().fees, 0).map(|_| ()),
+                        0 => quote_policy(view.world()).map(|_| ()),
+                        1 => effective(view.world(), captured).map(|_| ()),
+                        2 => currency(view.world(), captured, 0).map(|_| ()),
                         _ => private_scope(view.world(), Some(ds)).map(|_| ()),
                     }
                     .unwrap_err()
@@ -459,14 +545,8 @@ mod tests {
                 "reader {reader}: {refused:?}"
             );
         }
-        assert_eq!(
-            effective(view.world(), &view.nexus().fees).unwrap(),
-            original
-        );
-        assert_eq!(
-            currency(view.world(), &view.nexus().fees, 0).unwrap(),
-            asset
-        );
+        assert_eq!(effective(view.world(), captured).unwrap(), original);
+        assert_eq!(currency(view.world(), captured, 0).unwrap(), asset);
         assert_eq!(private_scope(view.world(), Some(ds)).unwrap(), Some(ds));
         assert!(!permits_public_exemption(view.world()).unwrap());
     }
@@ -513,7 +593,9 @@ mod tests {
             .get(&RootFeePolicy::parameter_id())
             .unwrap()
             .clone();
-        let original = view.world().parameters().clone();
+        // This component fixture exercises the mutable authoring projection;
+        // committed readers retain the immutable original-pool wrapper above it.
+        let original = view.world().parameters().get().clone();
         for restore in [false, true] {
             let baseline = pool.reserved_bytes();
             let context = original_fee_decode_context(&pool, 0);
@@ -525,7 +607,7 @@ mod tests {
                     norito::core::classify_decode_attempt(|| {
                         if restore {
                             crate::pipeline_gas_policy::StateParameters::try_from(
-                                (**view.world().parameters()).clone(),
+                                (**view.world().parameters().get()).clone(),
                             )
                             .map(|_| ())
                         } else {
@@ -580,7 +662,7 @@ mod tests {
             assert_eq!(retry, original);
             assert_eq!(
                 crate::pipeline_gas_policy::StateParameters::try_from(
-                    (**view.world().parameters()).clone()
+                    (**view.world().parameters().get()).clone()
                 )
                 .unwrap(),
                 original
@@ -626,7 +708,10 @@ mod tests {
                 &before,
                 "refused input and projection remain atomic"
             );
-            assert_eq!(tx.nexus.fees, *before.root_fees().unwrap());
+            assert_eq!(
+                *execution_policy(&tx).unwrap(),
+                *before.root_fees().unwrap()
+            );
             let original = tx
                 .borrow_execution_deferral()
                 .expect("actual parameter installer records a local refusal")
@@ -662,7 +747,7 @@ mod tests {
             Some(&parameter)
         );
         assert_eq!(
-            retry.nexus.fees,
+            *execution_policy(&retry).unwrap(),
             *before.root_fees().unwrap(),
             "the current block keeps predecessor fees"
         );
@@ -708,7 +793,7 @@ mod tests {
             let mut block =
                 state.block(BlockHeader::new(2.try_into().unwrap(), None, None, 1000, 0));
             let mut tx = block.transaction();
-            let before = tx.nexus.fees.clone();
+            let before = execution_policy(&tx).unwrap().clone();
             let gas = tx.pipeline.gas.clone();
             let context = original_fee_decode_context(&pool, root_bytes);
             assert!(
@@ -731,24 +816,37 @@ mod tests {
             assert_eq!(moved.decode_refusal(), Some(&original));
             assert!(tx.is_execution_deferred());
             assert!(tx.borrow_execution_deferral().is_none());
-            assert_eq!(tx.nexus.fees.fee_asset_id, before.fee_asset_id);
             assert_eq!(
-                tx.nexus.fees.fee_sink_account_id,
+                execution_policy(&tx).unwrap().fee_asset_id,
+                before.fee_asset_id
+            );
+            assert_eq!(
+                execution_policy(&tx).unwrap().fee_sink_account_id,
                 before.fee_sink_account_id
             );
-            assert_eq!(tx.nexus.fees.base_fee, before.base_fee);
-            assert_eq!(tx.nexus.fees.per_byte_fee, before.per_byte_fee);
+            assert_eq!(execution_policy(&tx).unwrap().base_fee, before.base_fee);
             assert_eq!(
-                tx.nexus.fees.per_instruction_fee,
+                execution_policy(&tx).unwrap().per_byte_fee,
+                before.per_byte_fee
+            );
+            assert_eq!(
+                execution_policy(&tx).unwrap().per_instruction_fee,
                 before.per_instruction_fee
             );
-            assert_eq!(tx.nexus.fees.per_gas_unit_fee, before.per_gas_unit_fee);
             assert_eq!(
-                tx.nexus.fees.sponsor_vault_custody_account_id,
+                execution_policy(&tx).unwrap().per_gas_unit_fee,
+                before.per_gas_unit_fee
+            );
+            assert_eq!(
+                execution_policy(&tx)
+                    .unwrap()
+                    .sponsor_vault_custody_account_id,
                 before.sponsor_vault_custody_account_id
             );
             assert_eq!(
-                tx.nexus.fees.successful_claim_fee_exempt_authorities,
+                execution_policy(&tx)
+                    .unwrap()
+                    .successful_claim_fee_exempt_authorities,
                 before.successful_claim_fee_exempt_authorities
             );
             assert_eq!(tx.pipeline.gas, gas);
@@ -782,8 +880,14 @@ mod tests {
         let gas = retry.pipeline.gas.clone();
         Executor::validate_root_fee_policy(&mut retry).unwrap();
         assert!(!retry.is_execution_deferred());
-        assert_eq!(retry.nexus.fees.base_fee, Quantity::from(2_u32));
-        assert_eq!(retry.nexus.fees.per_gas_unit_fee, Quantity::from(4_u32));
+        assert_eq!(
+            execution_policy(&retry).unwrap().base_fee,
+            Quantity::from(2_u32)
+        );
+        assert_eq!(
+            execution_policy(&retry).unwrap().per_gas_unit_fee,
+            Quantity::from(4_u32)
+        );
         assert_eq!(retry.pipeline.gas, gas);
         assert_eq!(
             retry
@@ -977,9 +1081,7 @@ mod tests {
         let original = tx.world.parameters().clone();
         assert!(
             tx.world
-                .parameters
-                .get_mut()
-                .set_parameter(Parameter::Custom(CustomParameter::new(
+                .set_parameter_for_testing(Parameter::Custom(CustomParameter::new(
                     RootFeePolicy::parameter_id(),
                     iroha_primitives::json::Json::new(false),
                 )))

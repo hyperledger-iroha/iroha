@@ -179,6 +179,12 @@ mod bond_admission {
                 nexus.fees.per_gas_unit_fee = Quantity::zero();
                 nexus.fees.fee_asset_id = fee_asset.clone();
                 nexus.fees.fee_sink_account_id = accounts[OUTSIDER].clone();
+                // Author the selected monetary policy in the original signed genesis.
+                config.genesis_parameters.push(
+                    iroha_data_model::parameter::Parameter::Custom(
+                        nexus.fees.clone().into_custom_parameter().unwrap(),
+                    ),
+                );
                 config.nexus = Some(nexus);
             }
             Self {

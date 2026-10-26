@@ -393,6 +393,7 @@ mod gateway_direct_source {
                 &mut IvmCache::new(),
                 (50_000_000, 1_000),
                 None,
+                None,
             )
             .is_err()
         );

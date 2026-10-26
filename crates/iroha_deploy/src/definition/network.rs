@@ -10,10 +10,8 @@ use iroha_config_base::{
     read::{ConfigReader, FinalWrap, ReadConfig as ReadConfigTrait},
 };
 use iroha_crypto::{Algorithm, PublicKey};
-use iroha_data_model::{
-    account::{AccountId, address::ChainDiscriminantGuard},
-    block::consensus::MAX_VALIDATORS_PER_HEIGHT,
-};
+use iroha_data_model::account::{AccountId, address::ChainDiscriminantGuard};
+use iroha_model_base::topology::MAX_VALIDATORS_PER_HEIGHT;
 use iroha_primitives::numeric::Quantity;
 
 use super::{

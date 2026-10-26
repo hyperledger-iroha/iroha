@@ -186,7 +186,6 @@ pub(super) fn rows(family: ZkX509Rfc5280StarkFamilyV1) -> usize {
     }
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(super) fn active_rows(family: ZkX509Rfc5280StarkFamilyV1, certificate_two: bool) -> usize {
     let equality = (3 + usize::from(certificate_two)) * (NAME_BYTES + IDENTIFIER_BYTES);
     let embedded = (11 + 4 * usize::from(certificate_two)) * EMBEDDED_BYTES;
@@ -357,12 +356,10 @@ pub(super) fn residues<A: PolynomialAirFieldV1>(
     output
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(super) struct Sources<'a> {
     nodes: [Option<&'a ZkX509Rfc5280NodeProvenanceV1>; 46],
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<'a> Sources<'a> {
     pub(super) fn new(trace: &'a ZkX509Rfc5280TraceV1) -> Result<Self, ZkX509Rfc5280StarkErrorV1> {
         let depth = trace.certificates.len();
@@ -421,7 +418,6 @@ impl<'a> Sources<'a> {
     }
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(super) fn populate_rows(
     trace: &ZkX509Rfc5280TraceV1,
     sources: &Sources<'_>,

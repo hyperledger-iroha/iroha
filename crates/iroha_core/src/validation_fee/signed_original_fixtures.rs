@@ -71,10 +71,7 @@ pub(super) fn signed_fee_registry_root_fixture() -> (
     Hash,
 ) {
     let deployer = AccountId::new(key_pair(55).public_key().clone());
-    let config = crate::sumeragi::test_chain::TestChainConfig::new(
-        validation_fee_payout_world(&deployer),
-        1_000,
-    );
+    let config = validation_fee_payout_config(&deployer, 1_000);
     signed_fee_registry_root_fixture_with_config(config)
 }
 
@@ -189,10 +186,7 @@ pub fn signed_payout_lifecycle_registry_fixture() -> (
     ValidationFeeTreasuryPayoutBindingV1,
 ) {
     let deployer = AccountId::new(key_pair(55).public_key().clone());
-    let config = crate::sumeragi::test_chain::TestChainConfig::new(
-        validation_fee_payout_world(&deployer),
-        1_000,
-    );
+    let config = validation_fee_payout_config(&deployer, 1_000);
     signed_payout_lifecycle_registry_fixture_with_config(config)
 }
 
@@ -266,7 +260,12 @@ pub fn with_original_validation_fee_payout_state_at_height(
         "generic-testnet".parse().expect("chain id"),
         validation_fee_test_network_id(),
     );
-    let config = configure(component);
+    let mut config = configure(component);
+    // This exact-due caller supplies component settings, not pre-genesis monetary authority.
+    config.consensus_mode = iroha_data_model::parameter::system::SumeragiConsensusMode::Npos;
+    config
+        .genesis_parameters
+        .extend(validation_fee_payout_genesis_parameters());
     let (mut chain, deployer, code, code_hash) =
         signed_fee_registry_root_fixture_with_config(config);
     while chain.height() < height - 1 {

@@ -6,10 +6,9 @@ use core::num::NonZeroU64;
 use ff::PrimeField as _;
 use iroha_config::parameters::actual::VerifyingKeyRef;
 use iroha_core::{
-    kura::Kura,
-    query::store::LiveQueryStore,
     smartcontracts::Execute,
-    state::{State, StateReadOnly, StateTransaction, WorldReadOnly},
+    state::{StateReadOnly, StateTransaction, WorldReadOnly, default_zk_config},
+    sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
 };
 use iroha_core_zk::hash_vk;
 use iroha_core_zk::{ZK_BACKEND_NATIVE_PIPA_R, native_pipa_r};
@@ -30,7 +29,7 @@ use iroha_data_model::{
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::name::Name;
 use iroha_primitives::json::Json;
-use iroha_test_samples::{ALICE_ID, gen_account_in};
+use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, gen_account_in};
 use kaigi_zk::{Scalar, native::NativeRelationV1};
 use kaigi_zk::{
     authorization_v1::{
@@ -236,22 +235,43 @@ fn usage_instruction(tx: &StateTransaction<'_, '_>, record: &KaigiRecord) -> Rec
         ),
     }
 }
-fn new_state() -> State {
-    let mut state = State::new_for_testing(
-        test_world::world_with_test_accounts(),
-        Kura::blank_kura_for_testing(),
-        LiveQueryStore::start_test(),
-    );
-    state
-        .edit_zk_for_testing(|zk| zk.pipa_r.enabled = true)
-        .expect("fixture ZK settings install");
-    state
-        .edit_zk_for_testing(|zk| zk.verify_timeout = Duration::ZERO)
-        .expect("fixture ZK settings install");
-    state
-        .edit_zk_for_testing(|zk| zk.kaigi_authorization_vk = Some(authorization_key().reference()))
-        .expect("fixture ZK settings install");
-    state
+fn new_chain(usage_vk: Option<VerifyingKeyRef>) -> CertifiedTestChain {
+    let mut zk = default_zk_config();
+    zk.pipa_r.enabled = true;
+    zk.verify_timeout = Duration::ZERO;
+    zk.kaigi_authorization_vk = Some(authorization_key().reference());
+    zk.kaigi_usage_vk = usage_vk;
+    let mut config = TestChainConfig::new(test_world::world_with_test_accounts(), 0);
+    config.zk = Some(zk);
+    config.genesis_key = ALICE_KEYPAIR.clone();
+    let domain = DomainId::try_new("kaigi", "universal").unwrap();
+    config
+        .genesis_instructions
+        .push(Register::domain(Domain::new(domain.clone())).into());
+    let chain = CertifiedTestChain::start(config)
+        .expect("authenticated genesis installs Kaigi, crypto policy and domain lease");
+    {
+        let state = chain.state().view();
+        assert_eq!(
+            state.world().domain(&domain).unwrap().owned_by(),
+            &*ALICE_ID
+        );
+        assert_eq!(
+            iroha_core::sns::active_domain_owner(state.world(), &domain, 1)
+                .expect("canonical signed-genesis domain lease"),
+            Some(ALICE_ID.clone())
+        );
+    }
+    chain
+}
+fn post_genesis_header(chain: &CertifiedTestChain) -> BlockHeader {
+    BlockHeader::new(
+        NonZeroU64::new(chain.height().checked_add(1).expect("next fixture height")).unwrap(),
+        Some(chain.genesis().hash()),
+        None,
+        1,
+        0,
+    )
 }
 fn register_key(tx: &mut StateTransaction<'_, '_>, key: &GovernedKey) {
     iroha_data_model::isi::verifying_keys::RegisterVerifyingKey {
@@ -273,9 +293,6 @@ fn seed(tx: &mut StateTransaction<'_, '_>, label: &str) -> (NewKaigi, AccountId,
     let domain = DomainId::try_new("kaigi", "universal").unwrap();
     let (host, _) = gen_account_in("kaigi");
     let (participant, _) = gen_account_in("kaigi");
-    Register::domain(Domain::new(domain.clone()))
-        .execute(&ALICE_ID, tx)
-        .unwrap();
     for account in [&host, &participant] {
         Register::account(Account::new(account.clone()))
             .execute(&ALICE_ID, tx)
@@ -341,14 +358,9 @@ fn mutate_instance_row(proof: &[u8], row: usize, expected_rows: usize) -> Vec<u8
 #[test]
 fn kaigi_private_create_join_leave_rejoin_and_end_use_real_ledger_bound_proofs() {
     use KaigiAuthorizationActionV1::{HostEnd, Join, Leave};
-    let state = new_state();
-    let mut block = state.block(BlockHeader::new(
-        NonZeroU64::new(1).unwrap(),
-        None,
-        None,
-        0,
-        0,
-    ));
+    let chain = new_chain(None);
+    let state = chain.state();
+    let mut block = state.block(post_genesis_header(&chain));
     let mut tx = block.transaction();
     let (call, host, participant) = seed(&mut tx, "privacy");
     let created = create_private(&mut tx, &call);
@@ -494,14 +506,9 @@ fn kaigi_private_create_join_leave_rejoin_and_end_use_real_ledger_bound_proofs()
 
 #[test]
 fn kaigi_authorization_rejects_metadata_root_cap_and_admission_tampering() {
-    let state = new_state();
-    let mut block = state.block(BlockHeader::new(
-        NonZeroU64::new(1).unwrap(),
-        None,
-        None,
-        0,
-        0,
-    ));
+    let chain = new_chain(None);
+    let state = chain.state();
+    let mut block = state.block(post_genesis_header(&chain));
     let mut tx = block.transaction();
     let (call, host, participant) = seed(&mut tx, "admission");
     let empty_create = CreateKaigi {
@@ -659,17 +666,9 @@ fn kaigi_authorization_rejects_metadata_root_cap_and_admission_tampering() {
 
 #[test]
 fn usage_summary_emitted_only_for_exact_host_context_and_fresh_segment() {
-    let mut state = new_state();
-    state
-        .edit_zk_for_testing(|zk| zk.kaigi_usage_vk = Some(usage_key().reference()))
-        .expect("fixture ZK settings install");
-    let mut block = state.block(BlockHeader::new(
-        NonZeroU64::new(1).unwrap(),
-        None,
-        None,
-        0,
-        0,
-    ));
+    let chain = new_chain(Some(usage_key().reference()));
+    let state = chain.state();
+    let mut block = state.block(post_genesis_header(&chain));
     let mut tx = block.transaction();
     let (call, host, participant) = seed(&mut tx, "usage");
     register_key(&mut tx, usage_key());
@@ -714,7 +713,7 @@ fn usage_summary_emitted_only_for_exact_host_context_and_fresh_segment() {
     usage
         .clone()
         .execute(&host, &mut tx)
-        .expect("final 25-row host usage proof");
+        .expect("final 21-row host usage proof");
     let events = tx.world.take_external_events();
     let summary = events
         .iter()

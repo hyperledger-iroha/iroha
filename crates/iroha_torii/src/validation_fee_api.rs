@@ -1203,9 +1203,7 @@ mod tests {
                     .unwrap();
             }
             stx.world
-                .parameters_mut_for_testing()
-                .get_mut()
-                .set_parameter(Parameter::Custom(
+                .set_parameter_for_testing(Parameter::Custom(
                     registry.clone().into_custom_parameter().expect(
                         "validation-fee fixture registry fits the canonical JSON parameter",
                     ),

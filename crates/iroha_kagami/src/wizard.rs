@@ -6,9 +6,8 @@ use color_eyre::eyre::{Context as _, Result, ensure, eyre};
 use inquire::{Select, Text};
 use iroha_config::parameters::{actual, defaults};
 use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair, PublicKey, bls_normal_pop_verify};
-use iroha_data_model::peer::Peer;
 use iroha_genesis::validate_genesis_manifest_json;
-use iroha_model_base::peer::PeerId;
+use iroha_model_base::peer::{Peer, PeerId};
 use iroha_primitives::addr::SocketAddr;
 use norito::json::{self, Value as JsonValue};
 use std::{
@@ -379,7 +378,7 @@ fn resolve_trusted_peers_pop(
             "Sora wizard validator roster is missing authoritative PoPs for: {missing:?}"
         ));
     }
-    if !iroha_data_model::block::consensus::is_valid_committee_size(pops.len()) {
+    if !iroha_model_base::topology::is_valid_committee_size(pops.len()) {
         return Err(eyre!(
             "Sora wizard authoritative validator roster must contain an exact 3f + 1 committee of 4, 7, ... 31 PoPs; got {}",
             pops.len()

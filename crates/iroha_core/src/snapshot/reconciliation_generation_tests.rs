@@ -7,11 +7,12 @@ fn initial_snapshot_generation_owned_root_without_current_is_not_found() {
                 .expect("independent reset custody marker");
         }
         for emergency_fast in [false, true] {
-            let error = bind_current_snapshot_generation_with_mode(
+            let error = bind_snapshot_generation_with_mode(
                 root.path(),
                 1024,
                 TEST_CHUNK_SIZE,
                 emergency_fast,
+                None,
             )
             .err()
             .expect("no snapshot has been published");
@@ -32,11 +33,12 @@ fn initial_snapshot_generation_current_without_generations_is_fatal_io() {
     let pointer = format!("{}\n", "11".repeat(32));
     std::fs::write(&pointer_path, &pointer).expect("published current pointer");
     for emergency_fast in [false, true] {
-        let error = bind_current_snapshot_generation_with_mode(
+        let error = bind_snapshot_generation_with_mode(
             root.path(),
             1024,
             TEST_CHUNK_SIZE,
             emergency_fast,
+            None,
         )
         .err()
         .expect("published pointer cannot refer to missing storage");
@@ -215,7 +217,7 @@ async fn ordinary_signed_snapshot_rejects_kura_tail_loss_without_mutation() {
         Ok(_) => panic!("ordinary signed snapshot must not repair a lost Kura suffix"),
         Err(error) => error,
     };
-    assert!(matches!(error, TryReadError::NativeExecutionReplayRequired));
+    assert!(matches!(error, TryReadError::SuccessorRequired { .. }));
     assert_eq!(tail_loss_kura.blocks_count(), 1);
     assert_eq!(tail_loss_kura.exact_durable_blocks_count().unwrap(), 1);
     assert_eq!(
@@ -286,7 +288,10 @@ async fn signed_native_snapshot_cannot_replace_missing_historical_bodies() {
     )
     .err()
     .expect("a locally signed cache cannot replace original certified history");
-    assert!(matches!(error, TryReadError::NativeExecutionReplayRequired));
+    assert!(matches!(
+        error,
+        TryReadError::SuccessorRequired { snapshot_height: 3 }
+    ));
     assert_eq!(target.blocks_count(), 0);
     assert_eq!(target.exact_durable_blocks_count().unwrap(), 0);
     for height in 1..=3 {
@@ -667,9 +672,7 @@ fn commit_custom_parameter_for_snapshot(
     let mut transaction = block.transaction();
     transaction
         .world
-        .parameters
-        .get_mut()
-        .set_parameter(iroha_data_model::parameter::Parameter::Custom(parameter))
+        .set_parameter_for_testing(iroha_data_model::parameter::Parameter::Custom(parameter))
         .expect("valid fixture parameters");
     transaction.apply();
     block
@@ -803,9 +806,20 @@ async fn snapshot_restore_refuses_a_malformed_committed_zk_policy() {
     *payload = json::to_value(&malformed).unwrap();
     let serialized = snapshot_json_with_mutation(&original, &snapshot);
     write_snapshot_bundle_from_bytes(&store_dir, serialized.as_bytes(), &key_pair);
-    let Err(error) = read_snapshot_with_node_zk(
+    // The malformed newer generation falls through to the authentic one it replaced.
+    read_snapshot_with_node_zk(
         &state,
         &store_dir,
+        &key_pair,
+        &crate::state::default_zk_config(),
+    )
+    .expect("the authentic older generation restores");
+    // Alone, the malformed generation is refused with its exact cause.
+    let malformed_store = tmp_root.path().join("malformed-snapshot");
+    write_snapshot_bundle_from_bytes(&malformed_store, serialized.as_bytes(), &key_pair);
+    let Err(error) = read_snapshot_with_node_zk(
+        &state,
+        &malformed_store,
         &key_pair,
         &crate::state::default_zk_config(),
     ) else {
@@ -1129,7 +1143,7 @@ async fn snapshot_generation_gc_retains_current_and_previous_only() {
     );
 }
 #[tokio::test]
-async fn idempotent_gc_fails_closed_when_rollback_chronology_is_ambiguous() {
+async fn idempotent_gc_retains_one_deterministic_rollback_predecessor() {
     let tmp_root = tempdir().unwrap();
     let store_dir = tmp_root.path().join("snapshot");
     let key_pair = checked_random_snapshot_keypair();
@@ -1144,7 +1158,7 @@ async fn idempotent_gc_fails_closed_when_rollback_chronology_is_ambiguous() {
     let second_extra_name = second_extra.name.clone();
     let (store_identity, current) =
         publish_test_snapshot_generation(&store_dir, current_bytes, &key_pair);
-    let error = publish_snapshot_current_pointer(
+    publish_snapshot_current_pointer(
         &store_dir,
         store_identity,
         &current,
@@ -1153,16 +1167,56 @@ async fn idempotent_gc_fails_closed_when_rollback_chronology_is_ambiguous() {
         key_pair.public_key(),
         &snapshot_read_budget_for_testing(),
     )
-    .expect_err("GC must not invent chronology for multiple authenticated extras");
-    assert!(matches!(error, TryWriteError::PublicationIntegrity(_)));
+    .expect("signed height and name order the rollback predecessor");
     assert_eq!(current_generation_name(&store_dir), current_name);
     let generations_dir = store_dir.join(SNAPSHOT_GENERATIONS_DIR_NAME);
-    for name in [current_name, first_extra_name, second_extra_name] {
-        assert!(
-            generations_dir.join(name).is_dir(),
-            "ambiguous GC must preserve every authenticated generation"
-        );
-    }
+    // Equal signed heights: the greater name is the one retained rollback predecessor.
+    let (removed, retained) = if first_extra_name < second_extra_name {
+        (first_extra_name, second_extra_name)
+    } else {
+        (second_extra_name, first_extra_name)
+    };
+    assert!(generations_dir.join(current_name).is_dir());
+    assert!(generations_dir.join(retained).is_dir());
+    assert!(!generations_dir.join(removed).exists());
+}
+#[tokio::test]
+async fn gc_removes_nothing_when_the_published_manifest_cannot_be_read_back() {
+    let tmp_root = tempdir().unwrap();
+    let store_dir = tmp_root.path().join("snapshot");
+    let key_pair = checked_random_snapshot_keypair();
+    write_snapshot_bundle_from_bytes(&store_dir, b"old current generation", &key_pair);
+    let old_name = current_generation_name(&store_dir);
+    let (_, extra) =
+        publish_test_snapshot_generation(&store_dir, b"older extra generation", &key_pair);
+    let plan = |published: &PublishedSnapshotGeneration| {
+        plan_snapshot_generation_gc(
+            published,
+            Some(&old_name),
+            defaults::snapshot::MAX_PAYLOAD_BYTES,
+            TEST_CHUNK_SIZE,
+            key_pair.public_key(),
+            &snapshot_read_budget_for_testing(),
+        )
+        .unwrap()
+    };
+    let (_, readable) =
+        publish_test_snapshot_generation(&store_dir, b"new current generation", &key_pair);
+    assert!(
+        plan(&readable)
+            .removals
+            .iter()
+            .any(|removal| removal.path.ends_with(&extra.name)),
+        "a readable published manifest ranks the unrelated generation for removal"
+    );
+    // A published generation the verification key cannot read back ranks nothing, so none
+    // of the other, still authenticated generations may be removed.
+    let (_, unreadable) = publish_test_snapshot_generation(
+        &store_dir,
+        b"newer current generation",
+        &checked_random_snapshot_keypair(),
+    );
+    assert!(plan(&unreadable).removals.is_empty());
 }
 #[tokio::test]
 async fn generation_gc_entry_limit_is_enforced_while_enumerating() {
@@ -1858,7 +1912,7 @@ async fn merkle_empty_snapshot_uses_one_leaf_commitment() {
     ));
 }
 #[tokio::test]
-async fn native_snapshot_cannot_initialize_consensus_without_original_replay() {
+async fn native_snapshot_at_the_kura_tip_waits_for_its_certified_successor() {
     let root = tempdir().unwrap();
     let mut chain = native_snapshot_chain();
     chain.commit(Vec::new());
@@ -1879,12 +1933,12 @@ async fn native_snapshot_cannot_initialize_consensus_without_original_replay() {
         });
     assert!(matches!(
         result,
-        Err(TryReadError::NativeExecutionReplayRequired)
+        Err(TryReadError::SuccessorRequired { snapshot_height: 3 })
     ));
     assert_eq!(
         initializer_calls.get(),
         0,
-        "replay fence precedes typed State initialization"
+        "the signed manifest refuses the tip before any payload is read"
     );
     assert_eq!(budget.reserved_bytes(), 0);
     assert_eq!(state.committed_height(), 3);
@@ -1896,4 +1950,214 @@ async fn native_snapshot_cannot_initialize_consensus_without_original_replay() {
         std::fs::read(root.path().join(SNAPSHOT_CURRENT_FILE_NAME)).unwrap(),
         pointer
     );
+}
+#[tokio::test]
+async fn native_snapshot_restores_its_world_against_the_certified_successor() {
+    let root = tempdir().unwrap();
+    let mut chain = native_snapshot_chain();
+    chain.commit(Vec::new());
+    chain.commit(Vec::new());
+    let key = checked_random_snapshot_keypair();
+    try_write_snapshot(chain.state(), root.path(), &key, TEST_CHUNK_SIZE).unwrap();
+    let snapshot_tip = chain.state().latest_block_hash_fast();
+    let snapshot_root = chain.state().verify_world_state_accumulator().unwrap();
+    chain.commit(Vec::new());
+    let budget = snapshot_read_budget_for_testing();
+    let restored = strict_snapshot_read_for_custody_test(
+        root.path(),
+        chain.state(),
+        chain.kura(),
+        &key,
+        &budget,
+        &|_| Ok(()),
+    )
+    .expect("the certified successor authenticates the restored World");
+    assert_eq!(restored.committed_height(), 3);
+    assert_eq!(restored.latest_block_hash_fast(), snapshot_tip);
+    assert_eq!(
+        restored.verify_world_state_accumulator().unwrap(),
+        snapshot_root
+    );
+    assert_eq!(
+        snapshot_root,
+        chain
+            .committed(4)
+            .commitment()
+            .execution
+            .parent_world_state_root
+    );
+}
+#[tokio::test]
+async fn native_snapshot_with_a_tampered_world_is_refused_against_its_successor() {
+    let root = tempdir().unwrap();
+    let mut chain = native_snapshot_chain();
+    chain.commit(Vec::new());
+    chain.commit(Vec::new());
+    let key = checked_random_snapshot_keypair();
+    // Change one hex digit of the stored accumulator in place, keeping the canonical field
+    // order: the World no longer matches what it claims to commit.
+    let mut tampered = exact_snapshot_payload_bytes(chain.state());
+    let payload = std::str::from_utf8(&tampered).unwrap();
+    let cell = payload
+        .find("\"state_accumulator\":")
+        .expect("snapshot World carries its state accumulator");
+    let value = cell
+        + payload[cell..]
+            .find("\"blocks\":\"")
+            .expect("the accumulator Cell holds a hex payload")
+        + "\"blocks\":\"".len();
+    let end = value + payload[value..].find('"').expect("hex payload ends");
+    tampered[end - 1] = if tampered[end - 1] == b'0' {
+        b'1'
+    } else {
+        b'0'
+    };
+    write_snapshot_bundle_from_bytes(root.path(), &tampered, &key);
+    chain.commit(Vec::new());
+    let budget = snapshot_read_budget_for_testing();
+    let error = strict_snapshot_read_for_custody_test(
+        root.path(),
+        chain.state(),
+        chain.kura(),
+        &key,
+        &budget,
+        &|_| Ok(()),
+    )
+    .err()
+    .expect("a World that differs from its certified root never restores");
+    assert!(
+        matches!(&error, TryReadError::WorldAuthentication(reason) if reason.contains("stored World state root")),
+        "{error:?}"
+    );
+    assert_eq!(budget.reserved_bytes(), 0);
+    assert_eq!(chain.kura().exact_durable_blocks_count().unwrap(), 4);
+}
+/// Restart-cost probe over an `IROHA_RESTART_PROBE_BLOCKS`-block certified chain: snapshot
+/// write, snapshot restore against the successor, and full replay from genesis.
+/// Run explicitly with `--ignored --nocapture`.
+#[tokio::test]
+#[ignore = "timing probe"]
+async fn restart_cost_probe() {
+    let blocks = std::env::var("IROHA_RESTART_PROBE_BLOCKS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(200);
+    let mut chain = native_snapshot_chain();
+    let started = std::time::Instant::now();
+    while chain.height() < blocks {
+        chain.commit(Vec::new());
+    }
+    eprintln!("built {} blocks in {:?}", chain.height(), started.elapsed());
+    let root = tempdir().unwrap();
+    let key = checked_random_snapshot_keypair();
+    let started = std::time::Instant::now();
+    try_write_snapshot(chain.state(), root.path(), &key, TEST_CHUNK_SIZE).unwrap();
+    eprintln!("snapshot write: {:?}", started.elapsed());
+    chain.commit(Vec::new());
+    let budget = snapshot_read_budget_for_testing();
+    let started = std::time::Instant::now();
+    let restored = strict_snapshot_read_for_custody_test(
+        root.path(),
+        chain.state(),
+        chain.kura(),
+        &key,
+        &budget,
+        &|_| Ok(()),
+    )
+    .expect("restore below the Kura tip");
+    eprintln!(
+        "snapshot restore at height {}: {:?}",
+        restored.committed_height(),
+        started.elapsed()
+    );
+    drop(restored);
+    let mut replay = native_snapshot_chain();
+    let started = std::time::Instant::now();
+    replay
+        .replay_from(&chain)
+        .expect("full replay from genesis");
+    eprintln!(
+        "full replay of {} blocks: {:?}",
+        chain.height(),
+        started.elapsed()
+    );
+}
+#[tokio::test]
+async fn current_snapshot_above_the_kura_tip_restores_an_older_generation() {
+    let root = tempdir().unwrap();
+    let mut chain = native_snapshot_chain();
+    chain.commit(Vec::new());
+    chain.commit(Vec::new());
+    let key = checked_random_snapshot_keypair();
+    try_write_snapshot(chain.state(), root.path(), &key, TEST_CHUNK_SIZE).unwrap();
+    let anchor_height = chain.state().view().height();
+    let anchor_tip = chain.state().latest_block_hash_fast();
+    chain.commit(Vec::new());
+    chain.commit(Vec::new());
+    try_write_snapshot(chain.state(), root.path(), &key, TEST_CHUNK_SIZE).unwrap();
+    // Kura lost the blocks after the anchor's successor, so the current snapshot is above its
+    // durable tip; the older generation and the retained blocks restore the node.
+    let lane_manifests = chain.state().lane_manifests.read().clone();
+    let restored = try_read_snapshot_with_initializer(
+        &iroha_allocation::AllocationBudget::new(
+            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+        ),
+        root.path(),
+        chain.kura(),
+        &lane_manifests,
+        &chain.state().nexus_snapshot(),
+        LiveQueryStore::start_test,
+        BlockCount(anchor_height + 1),
+        TEST_CHUNK_SIZE,
+        defaults::snapshot::MAX_PAYLOAD_BYTES,
+        SnapshotResourcePolicy::default(),
+        key.public_key(),
+        &chain.state().chain_id,
+        &chain.state().network_id,
+        &|_| Ok(()),
+        #[cfg(feature = "telemetry")]
+        StateTelemetry::new(<_>::default(), true),
+        &snapshot_read_budget_for_testing(),
+    )
+    .expect("the older generation below the Kura tip restores");
+    assert_eq!(restored.committed_height(), anchor_height);
+    assert_eq!(restored.latest_block_hash_fast(), anchor_tip);
+}
+#[tokio::test]
+async fn shutdown_snapshot_at_the_tip_restores_the_newest_older_generation() {
+    let root = tempdir().unwrap();
+    let mut chain = native_snapshot_chain();
+    chain.commit(Vec::new());
+    chain.commit(Vec::new());
+    let key = checked_random_snapshot_keypair();
+    try_write_snapshot(chain.state(), root.path(), &key, TEST_CHUNK_SIZE).unwrap();
+    let anchor_tip = chain.state().latest_block_hash_fast();
+    chain.commit(Vec::new());
+    // The shutdown snapshot at the Kura tip becomes current; GC retains the older anchor.
+    try_write_snapshot(chain.state(), root.path(), &key, TEST_CHUNK_SIZE).unwrap();
+    let budget = snapshot_read_budget_for_testing();
+    let restored = strict_snapshot_read_for_custody_test(
+        root.path(),
+        chain.state(),
+        chain.kura(),
+        &key,
+        &budget,
+        &|_| Ok(()),
+    )
+    .expect("the newest generation below the Kura tip restores");
+    assert_eq!(restored.committed_height(), 3);
+    assert_eq!(restored.latest_block_hash_fast(), anchor_tip);
+    drop(restored);
+    // A same-height republication after restart keeps the anchor for the next restart.
+    try_write_snapshot(chain.state(), root.path(), &key, TEST_CHUNK_SIZE).unwrap();
+    let again = strict_snapshot_read_for_custody_test(
+        root.path(),
+        chain.state(),
+        chain.kura(),
+        &key,
+        &budget,
+        &|_| Ok(()),
+    )
+    .expect("a second restart without new blocks still restores the anchor");
+    assert_eq!(again.committed_height(), 3);
 }

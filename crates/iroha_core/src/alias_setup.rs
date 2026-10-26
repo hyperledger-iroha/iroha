@@ -1519,9 +1519,7 @@ mod tests {
                 0,
             );
             transaction
-                .parameters
-                .get_mut()
-                .set_parameter(Parameter::Custom(
+                .set_parameter_for_testing(Parameter::Custom(
                     grant
                         .clone()
                         .into_custom_parameter()

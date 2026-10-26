@@ -715,17 +715,19 @@ fn network_xor_resolver_requires_exact_committed_identity() {
             .expect("completed pin read")
             .is_none()
     );
-    let mut parameters = world.parameters.block();
-    parameters
-        .get_mut()
-        .set_parameter(Parameter::Custom(
+    let mut parameters = crate::state::parameter_cell_block_for_testing(&world).unwrap();
+    crate::state::set_parameter_cell_for_testing(
+        &mut parameters,
+        Parameter::Custom(
             SumeragiNposParameters {
                 xor_asset_definition_id: other.clone(),
                 ..Default::default()
             }
             .into_custom_parameter(),
-        ))
-        .expect("valid fixture parameters");
+        ),
+        world.sccp_committee_generations.allocation_budget(),
+    )
+    .expect("valid fixture parameters");
     parameters.commit();
     assert_eq!(
         resolve_network_xor_asset_definition(&world.view(), &other.to_string(), 0)
@@ -8325,9 +8327,9 @@ pub(crate) mod valid {
             params.sumeragi.key_overlap_grace_blocks = 2;
             params.sumeragi.key_expiry_grace_blocks = 1;
             let mut world = World::new();
-            world.parameters = mv::cell::Cell::new(
-                crate::state::StateParameters::try_from(params).expect("valid fixture parameters"),
-            );
+            world
+                .set_sumeragi_for_testing(params.sumeragi)
+                .expect("valid original consensus fixture");
             insert_consensus_key(
                 &mut world,
                 "leader",
@@ -9866,21 +9868,17 @@ pub(crate) mod tests {
     }
 
     fn configured_component_state(
-        world: World,
+        mut world: World,
         chain_id: ChainId,
         nexus: iroha_config::parameters::actual::Nexus,
+        fees: iroha_data_model::block::consensus::RootFeePolicy,
     ) -> State {
-        let mut parameters = world.parameters.block();
-        parameters
-            .set_parameter(iroha_data_model::parameter::Parameter::Custom(
-                nexus
-                    .fees
-                    .clone()
-                    .into_custom_parameter()
+        world
+            .set_parameter_for_testing(iroha_data_model::parameter::Parameter::Custom(
+                fees.into_custom_parameter()
                     .expect("explicit fixture fee policy"),
             ))
             .expect("valid fixture fee policy");
-        parameters.commit();
         let (mut state, _) = State::new_with_chain_and_network_id_and_pre_genesis_nexus_for_testing(
             world,
             nexus.clone(),
@@ -9972,15 +9970,17 @@ pub(crate) mod tests {
                 Vec::new()
             };
             // This fixture tests signed policy ownership, without claiming funded admission.
-            let mut nexus = iroha_config::parameters::actual::Nexus::default();
-            nexus.fees.base_fee = iroha_primitives::numeric::Quantity::zero();
-            nexus.fees.per_byte_fee = iroha_primitives::numeric::Quantity::zero();
-            nexus.fees.per_instruction_fee = iroha_primitives::numeric::Quantity::zero();
-            nexus.fees.per_gas_unit_fee = iroha_primitives::numeric::Quantity::zero();
+            let nexus = iroha_config::parameters::actual::Nexus::default();
+            let mut fees = iroha_config::parameters::defaults::nexus::fees::genesis_policy();
+            fees.base_fee = iroha_primitives::numeric::Quantity::zero();
+            fees.per_byte_fee = iroha_primitives::numeric::Quantity::zero();
+            fees.per_instruction_fee = iroha_primitives::numeric::Quantity::zero();
+            fees.per_gas_unit_fee = iroha_primitives::numeric::Quantity::zero();
             let state = configured_component_state(
                 World::new(),
                 ChainId::from("component-staking-author"),
                 nexus,
+                fees,
             );
             let chain = component_chain_with_genesis_parameters(state, parameters);
             let view = chain.state().view();
@@ -9999,13 +9999,17 @@ pub(crate) mod tests {
         let domain = Domain::new(domain_id).build(authority);
         let account = Account::new(authority.clone()).build(authority);
         let mut world = World::with([domain], [account], []);
-        let mut params = iroha_data_model::parameter::system::Parameters::default();
-        params.transaction = params
-            .transaction
-            .with_ingress_enforcement(require_height_ttl, require_sequence);
-        world.parameters = mv::cell::Cell::new(
-            crate::state::StateParameters::try_from(params).expect("valid fixture parameters"),
-        );
+        use iroha_data_model::parameter::{Parameter, TransactionParameter};
+        world
+            .set_parameter_for_testing(Parameter::Transaction(
+                TransactionParameter::RequireHeightTtl(require_height_ttl),
+            ))
+            .expect("valid original transaction height fixture");
+        world
+            .set_parameter_for_testing(Parameter::Transaction(
+                TransactionParameter::RequireSequence(require_sequence),
+            ))
+            .expect("valid original transaction sequence fixture");
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         State::new_with_chain_and_network_id_for_testing(
@@ -11632,41 +11636,52 @@ seiyaku DynamicTarget { permission CanWriteCounters;
             &iroha_config::parameters::defaults::nexus::fees::fee_asset_id(),
         )
         .expect("canonical network XOR identity");
-        let world = World::with(
+        // Seed the component's entities before signed genesis. Ordinary ISIs
+        // cannot register accounts before that genesis installs its policy.
+        let world = World::with_assets(
             [Domain::new(domain).build(&authority)],
             [
                 Account::new(authority.clone()).build(&authority),
                 Account::new(fee_sink.clone()).build(&authority),
             ],
-            [],
-        );
-        let mut nexus = iroha_config::parameters::actual::Nexus::default();
-        nexus.fees.fee_asset_id = fee_asset.clone();
-        nexus.fees.fee_sink_account_id = fee_sink.clone();
-        nexus.fees.base_fee = Quantity::zero();
-        nexus.fees.per_byte_fee = Quantity::zero();
-        nexus.fees.per_instruction_fee = Quantity::zero();
-        nexus.fees.per_gas_unit_fee = Quantity::zero();
-        let state = configured_component_state(world, chain_id, nexus);
-        {
-            let mut genesis = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
-            let mut transaction = genesis.transaction();
-            Register::asset_definition(AssetDefinition::numeric(
+            [AssetDefinition::numeric(
                 fee_asset.clone(),
                 "sealed fee",
                 iroha_data_model::asset::AssetBalancePolicy::Global,
                 None,
-            ))
-            .execute(&authority, &mut transaction)
-            .unwrap();
-            Mint::asset_quantity(1_u32, AssetId::new(fee_asset.clone(), authority.clone()))
-                .execute(&authority, &mut transaction)
-                .unwrap();
-            transaction.apply();
-            genesis.commit_world_overlay_for_testing().unwrap();
-        }
+            )
+            .build(&authority)],
+            [Asset::new(
+                AssetId::new(fee_asset.clone(), authority.clone()),
+                Quantity::from(1_u32),
+            )],
+            [],
+        );
+        let nexus = iroha_config::parameters::actual::Nexus::default();
+        let mut fees = iroha_config::parameters::defaults::nexus::fees::genesis_policy();
+        fees.fee_asset_id = fee_asset.clone();
+        fees.fee_sink_account_id = fee_sink.clone();
+        fees.base_fee = Quantity::zero();
+        fees.per_byte_fee = Quantity::zero();
+        fees.per_instruction_fee = Quantity::zero();
+        fees.per_gas_unit_fee = Quantity::zero();
+        let state = configured_component_state(world, chain_id, nexus, fees);
+        assert!(
+            state
+                .transaction_admission_parameters()
+                .crypto_policy()
+                .is_none(),
+            "the original signed genesis must install the ordinary policy"
+        );
         let mut native_chain = component_chain(state);
         let state = Arc::clone(native_chain.state());
+        assert!(
+            state
+                .transaction_admission_parameters()
+                .require_crypto_policy()
+                .expect("signed genesis committed its ordinary policy")
+                .allows(keypair.public_key().algorithm())
+        );
         let metadata_key = Name::from_str("sealed_reveal_executed").expect("metadata key");
         let mut builder = TransactionBuilder::new(
             state.network_id,
@@ -11830,16 +11845,19 @@ seiyaku DynamicTarget { permission CanWriteCounters;
         nexus.fees.per_gas_unit_fee = Quantity::zero();
         // Lane zero remains global/universal; the signed native policy authorizes DS7 separately.
         {
-            let mut parameters = world.parameters.block();
-            parameters
-                .set_parameter(iroha_data_model::parameter::Parameter::Custom(
+            let mut parameters = crate::state::parameter_cell_block_for_testing(&world).unwrap();
+            crate::state::set_parameter_cell_for_testing(
+                &mut parameters,
+                iroha_data_model::parameter::Parameter::Custom(
                     nexus
                         .fees
                         .clone()
                         .into_custom_parameter()
                         .expect("signed zero-fee fixture policy"),
-                ))
-                .expect("valid committed fixture fee policy");
+                ),
+                world.sccp_committee_generations.allocation_budget(),
+            )
+            .expect("valid committed fixture fee policy");
             parameters.commit();
         }
         let state = State::new_with_pre_genesis_nexus_for_testing(

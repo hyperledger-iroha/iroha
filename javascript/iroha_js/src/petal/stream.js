@@ -1,37 +1,52 @@
 // Payload streams: the sender-side encoder and the receiver-side assembler.
 //
-// Every frame carries a handful of fountain atoms, one lane at a time: lane P
-// one atom, lane K five, and lane D one atom, except on every fourth frame
-// (`frame % 4 == 0`), when lane D carries the stream beacon instead, so a
+// Every frame carries a handful of fountain atoms, one lane at a time: each of
+// the four field lanes five atoms, and lane D one atom, except on every fourth
+// frame (`frame % 4 == 0`), when lane D carries the stream beacon instead, so a
 // receiver can join at any frame within a fraction of a second. Atom ids run
 // contiguously over the atoms actually sent (see `firstAtomId`). Any single
-// readable lane is useful on its own.
+// readable lane is useful on its own. On top of every field lane, the turns of
+// its lit petals carry four more atoms from the repair range (see `turns.js`),
+// so a sharp camera reads up to 37 atoms (592 bytes) from the square. The
+// katakana bands above and below the square add eight atoms each (see
+// `kana.js`): up to 53 atoms (848 bytes) a frame.
 //
 // Lane data layouts (all big-endian):
 //
-// * every lane starts with `tag:u8, frame:u16`; `tag` is the low byte of the
-//   payload CRC-32C.
-// * lanes P, K and non-beacon D: `atoms...` (16 bytes each).
+// * every lane but the turn and kana lanes starts with `tag:u8, frame:u16`;
+//   `tag` is the low byte of the payload CRC-32C.
+// * field lanes and non-beacon D: `atoms...` (16 bytes each).
 // * beacon D: `version:u8, kind:u8, len:u24, crc:u32`, zero padded.
+// * turn lanes: `atoms... check:u32`, where the check binds the atoms to the
+//   header of the field lane they ride on.
+// * kana lanes: `atoms... check:u32`, where the check binds the atoms to the
+//   stream tag, the frame and the lane.
 
 import { crc32c } from "./crc.js";
 import { PetalFountainDecoder, encodeAtom, splitPayload } from "./fountain.js";
+import { KANA_LANES, encodeKanaLane, kanaData, kanaFirstId, kanaLaneSpec } from "./kana.js";
 import {
   ATOM_LEN,
   ATOMS_PER_FRAME,
   D_ATOMS,
   D_DATA,
-  K_ATOMS,
+  FIELD_ATOMS,
+  FIELD_LANES,
   LANE_HEADER_LEN,
-  P_ATOMS,
   PetalFrameCells,
   encodeLane,
   laneSpec,
 } from "./lanes.js";
+import { SECTORS } from "./layout.js";
 import { PetalError, requireIndex, toBytes } from "./support.js";
+import { TURN_ATOMS, encodeTurnLane, turnData, turnFirstId } from "./turns.js";
 
-/** Version/profile byte of the beacon: format version 1, layout profile 0. */
-export const FORMAT_VERSION = 0x10;
+/**
+ * Version/profile byte of the beacon: format version 5, layout profile 0. Beacons of the retired
+ * formats 3 (`0x30`, no katakana bands), 2 (`0x20`, unturned petals) and 1 (`0x10`, katakana tiles
+ * only) are refused.
+ */
+export const FORMAT_VERSION = 0x50;
 /** Largest payload a beacon can describe (`u24`). */
 export const MAX_PAYLOAD_LEN = 2 ** 24 - 1;
 /** Default receiver payload limit; override with the assembler limits. */
@@ -39,7 +54,7 @@ export const DEFAULT_MAX_PAYLOAD_LEN = 65536;
 /** A beacon replaces the lane-D atom on frames divisible by this interval. */
 export const BEACON_INTERVAL = 4;
 /** Default number of atoms buffered while waiting for the first beacon. */
-export const DEFAULT_MAX_PENDING_ATOMS = 128;
+export const DEFAULT_MAX_PENDING_ATOMS = 512;
 
 const BEACON_BODY_LEN = 9;
 
@@ -57,7 +72,7 @@ export function isBeaconFrame(frame) {
 
 /** Fountain atoms carried by `frame`. */
 export function atomsInFrame(frame) {
-  return isBeaconFrame(frame) ? P_ATOMS + K_ATOMS : P_ATOMS + D_ATOMS + K_ATOMS;
+  return isBeaconFrame(frame) ? ATOMS_PER_FRAME - D_ATOMS : ATOMS_PER_FRAME;
 }
 
 /**
@@ -71,11 +86,14 @@ export function firstAtomId(frame) {
   return f * ATOMS_PER_FRAME - Math.ceil(f / BEACON_INTERVAL);
 }
 
-function laneFirstId(lane, frame) {
+/**
+ * Fountain id of the first atom `lane` carries in `frame`: the field lanes
+ * come first, in sector order, then lane D.
+ */
+export function laneFirstId(lane, frame) {
+  const spec = laneSpec(lane);
   const base = firstAtomId(frame);
-  if (lane === "P") return base;
-  if (lane === "D") return base + P_ATOMS;
-  return base + P_ATOMS + (frame % BEACON_INTERVAL === 0 ? 0 : D_ATOMS);
+  return spec.sector === null ? base + SECTORS * FIELD_ATOMS : base + spec.sector * FIELD_ATOMS;
 }
 
 /**
@@ -105,7 +123,8 @@ function parseAtoms(lane, data, header, count) {
 }
 
 /**
- * Parses the data bytes of lane P or lane K.
+ * Parses the data bytes of a field lane (`"F0"` ... `"F3"`); `null` for lane D
+ * or a wrong length.
  *
  * @returns {{header: {tag: number, frame: number}, firstId: number, atoms: Uint8Array[]} | null}
  */
@@ -118,7 +137,7 @@ export function parseAtomLane(lane, data) {
   if (bytes.length !== spec.dataLen) {
     return null;
   }
-  return parseAtoms(lane, bytes, parseHeader(bytes), spec.atoms);
+  return parseAtoms(lane, bytes, parseHeader(bytes), FIELD_ATOMS);
 }
 
 /**
@@ -194,9 +213,11 @@ export class PetalStreamEncoder {
   }
 
   /**
-   * The data bytes of every lane of `frame` (a counter reduced modulo 65536).
+   * The data bytes of every lane of `frame` (a counter reduced modulo 65536):
+   * lane D, the four field lanes and the four turn lanes, sector 0 first, and
+   * the four kana lanes (`P0`, `K0`, `P1`, `K1`).
    *
-   * @returns {{p: Uint8Array, k: Uint8Array, d: Uint8Array}}
+   * @returns {{d: Uint8Array, fields: Uint8Array[], turns: Uint8Array[], kana: Uint8Array[]}}
    */
   laneData(frame) {
     const f = frameNumber(frame);
@@ -206,10 +227,11 @@ export class PetalStreamEncoder {
       data.set(header);
       return data;
     };
-    const p = build("P");
-    this._atoms(laneFirstId("P", f), P_ATOMS, p, LANE_HEADER_LEN);
-    const k = build("K");
-    this._atoms(laneFirstId("K", f), K_ATOMS, k, LANE_HEADER_LEN);
+    const fields = FIELD_LANES.map((lane) => {
+      const data = build(lane);
+      this._atoms(laneFirstId(lane, f), FIELD_ATOMS, data, LANE_HEADER_LEN);
+      return data;
+    });
     const d = build("D");
     if (f % BEACON_INTERVAL === 0) {
       const { kind, len, crc } = this._meta;
@@ -231,23 +253,44 @@ export class PetalStreamEncoder {
     } else {
       this._atoms(laneFirstId("D", f), D_ATOMS, d, LANE_HEADER_LEN);
     }
-    return { p, k, d };
+    const laneHeader = { tag: this._meta.tag, frame: f };
+    const turns = [];
+    for (let sector = 0; sector < SECTORS; sector += 1) {
+      const atoms = new Uint8Array(TURN_ATOMS * ATOM_LEN);
+      this._atoms(turnFirstId(f, sector), TURN_ATOMS, atoms, 0);
+      turns.push(turnData(laneHeader, sector, atoms));
+    }
+    const kana = KANA_LANES.map((lane) => {
+      const count = kanaLaneSpec(lane).atoms;
+      const atoms = new Uint8Array(count * ATOM_LEN);
+      this._atoms(kanaFirstId(f, lane), count, atoms, 0);
+      return kanaData(laneHeader, lane, atoms);
+    });
+    return { d, fields, turns, kana };
   }
 
   /**
    * The transmitted codewords of `frame`.
    *
-   * @returns {{p: Uint8Array, k: Uint8Array, d: Uint8Array}}
+   * @returns {{d: Uint8Array, fields: Uint8Array[], turns: Uint8Array[], kana: Uint8Array[]}}
    */
   words(frame) {
-    const { p, k, d } = this.laneData(frame);
-    return { p: encodeLane("P", p), k: encodeLane("K", k), d: encodeLane("D", d) };
+    const { d, fields, turns, kana } = this.laneData(frame);
+    return {
+      d: encodeLane("D", d),
+      fields: fields.map((data, sector) => encodeLane(FIELD_LANES[sector], data)),
+      turns: turns.map((data, sector) => encodeTurnLane(sector, data)),
+      kana: kana.map((data, index) => encodeKanaLane(KANA_LANES[index], data)),
+    };
   }
 
-  /** Every cell of `frame`, ready to render. */
+  /** Every cell of `frame`, lit, turned and with its katakana tiles, ready to render. */
   cells(frame) {
-    const { p, k, d } = this.words(frame);
-    return PetalFrameCells.fromWords(p, k, d);
+    const { d, fields, turns, kana } = this.words(frame);
+    const cells = PetalFrameCells.fromWords(d, fields);
+    cells.setTurns(turns);
+    cells.setKana(kana);
+    return cells;
   }
 }
 
@@ -270,7 +313,7 @@ export class PetalStreamAssembler {
   /**
    * @param {{maxPayloadLen?: number, maxPendingAtoms?: number}} [limits]
    *   largest accepted payload (default 65536) and atoms buffered while
-   *   waiting for the first beacon (default 128; zero buffers nothing)
+   *   waiting for the first beacon (default 512; zero buffers nothing)
    */
   constructor(limits) {
     this._limits = Object.freeze(resolveLimits(limits));

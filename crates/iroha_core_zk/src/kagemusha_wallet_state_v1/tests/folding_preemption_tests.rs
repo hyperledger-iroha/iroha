@@ -228,10 +228,12 @@ fn fold_telemetry_reports_each_sub_proof_and_cancellation_cause_without_idle_wak
         }
     );
     let first = observed.metrics().records()[0];
+    // Three checkpoints and Ω: every turn that read the schedule names the head's four.
     assert_eq!(
         (
             first.sequence,
             first.ordinal,
+            first.stages,
             first.operation,
             first.stage,
             first.outcome,
@@ -240,6 +242,7 @@ fn fold_telemetry_reports_each_sub_proof_and_cancellation_cause_without_idle_wak
         (
             0,
             0,
+            Some(4),
             Some(KagemushaWalletOperationKindV1::Bootstrap),
             None,
             FoldOutcomeV1::Checkpoint,
@@ -302,7 +305,10 @@ fn fold_telemetry_reports_each_sub_proof_and_cancellation_cause_without_idle_wak
         .map(FoldOutcomeV1::Cancelled)
     );
     for record in cancelled.records().iter().skip(1) {
-        assert_eq!((record.sequence, record.ordinal), (0, 1));
+        assert_eq!(
+            (record.sequence, record.ordinal, record.stages),
+            (0, 1, Some(4))
+        );
         assert_eq!(
             record.operation,
             Some(KagemushaWalletOperationKindV1::Bootstrap)
@@ -332,8 +338,8 @@ fn fold_telemetry_reports_each_sub_proof_and_cancellation_cause_without_idle_wak
     assert_eq!(wallet.fold_once().unwrap(), FoldStatus::Folded(0));
     let folded = *observed.metrics().records().back().unwrap();
     assert_eq!(
-        (folded.ordinal, folded.stage, folded.outcome),
-        (3, Some(FoldStageV1::Omega), FoldOutcomeV1::Folded)
+        (folded.ordinal, folded.stages, folded.stage, folded.outcome),
+        (3, Some(4), Some(FoldStageV1::Omega), FoldOutcomeV1::Folded)
     );
     // An idle wake records nothing.
     let before = observed.metrics();
@@ -345,8 +351,13 @@ fn fold_telemetry_reports_each_sub_proof_and_cancellation_cause_without_idle_wak
     assert_eq!(wallet.fold_once().unwrap(), FoldStatus::Folded(0));
     let adopted = *observed.metrics().records().back().unwrap();
     assert_eq!(
-        (adopted.ordinal, adopted.stage, adopted.outcome),
-        (3, Some(FoldStageV1::Omega), FoldOutcomeV1::Adopted)
+        (
+            adopted.ordinal,
+            adopted.stages,
+            adopted.stage,
+            adopted.outcome
+        ),
+        (3, Some(4), Some(FoldStageV1::Omega), FoldOutcomeV1::Adopted)
     );
     assert_eq!(adopted.phase(FoldPhaseV1::Prove), Duration::ZERO);
     assert_eq!(

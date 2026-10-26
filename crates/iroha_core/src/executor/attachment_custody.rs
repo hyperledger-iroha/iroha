@@ -6,10 +6,10 @@
 //! verification remain their existing owners' responsibilities. A caller must
 //! supply an already authorized actor, never one read from a guest request.
 //!
-//! TODO(I.2, I.3, I.4): integrate this owner with actual host entry/child/exit,
-//! native consumers and the same atomic State attempt. Until then the existing
-//! no-authoritative-consumer admission refusal remains mandatory. This module
-//! neither applies effects nor turns consumption into proof acceptance.
+//! Deployed contract entry/child/exit and rollback borrow this same owner.
+//! TODO(I.2, I.3, I.4): complete typed native consumers, raw/proved-root custody
+//! and their same atomic State attempt. Unsupported-consumer admission remains
+//! closed. Consumption is bookkeeping, never proof acceptance or an effect.
 
 use iroha_data_model::{
     account::AccountId,
@@ -73,12 +73,66 @@ pub(crate) enum CustodyError {
     /// A declared action was not explicitly completed before invocation/attempt exit.
     #[error("attachment action {0} remains unconsumed")]
     UnconsumedAction(u32),
+    /// Business rollback cannot discard an opened or consumed signed declaration.
+    #[error("attachment declaration cannot survive rollback of its effects")]
+    RolledBack,
     /// Only a contract invocation can open a child, within the signed depth bound.
     #[error("attachment child invocation is outside the contract path bound")]
     InvalidChild,
     /// The host's monotone invocation/child ordinal would overflow.
     #[error("attachment invocation generation or ordinal exhausted")]
     GenerationExhausted,
+}
+
+// Runtime call paths have the schema's fixed bound and require no heap allocation.
+#[expect(
+    variant_size_differences,
+    reason = "the bounded contract path stays inline to avoid an uncharged execution-time allocation"
+)]
+#[derive(Clone, Copy)]
+enum InvocationBinding {
+    Transaction,
+    Direct {
+        instruction_index: u32,
+    },
+    Contract {
+        root_index: u32,
+        path: [u32; ACTION_INVOCATION_MAX_CALL_PATH_DEPTH_V1],
+        depth: usize,
+    },
+}
+impl InvocationBinding {
+    #[cfg(test)]
+    fn contract(root_index: u32) -> Self {
+        Self::Contract {
+            root_index,
+            path: [0; ACTION_INVOCATION_MAX_CALL_PATH_DEPTH_V1],
+            depth: 0,
+        }
+    }
+    fn matches(self, declared: &ActionInvocationBindingV1) -> bool {
+        match (self, declared) {
+            (Self::Transaction, ActionInvocationBindingV1::Transaction) => true,
+            (
+                Self::Direct {
+                    instruction_index: actual,
+                },
+                ActionInvocationBindingV1::Direct { instruction_index },
+            ) => actual == *instruction_index,
+            (
+                Self::Contract {
+                    root_index: actual,
+                    path,
+                    depth,
+                },
+                ActionInvocationBindingV1::Contract {
+                    root_index,
+                    call_path,
+                },
+            ) => actual == *root_index && &path[..depth] == call_path.as_slice(),
+            _ => false,
+        }
+    }
 }
 
 /// Proof-free values supplied by the native consumer, not copied from the guest.
@@ -200,7 +254,7 @@ impl<'tx> AttachmentCustody<'tx> {
         visit: impl FnOnce(&mut Invocation<'_, 'tx>) -> Result<T, E>,
     ) -> Result<T, E> {
         self.invoke(
-            ActionInvocationBindingV1::Transaction,
+            InvocationBinding::Transaction,
             self.owner.source.authority(),
             visit,
         )
@@ -214,32 +268,27 @@ impl<'tx> AttachmentCustody<'tx> {
         visit: impl FnOnce(&mut Invocation<'_, 'tx>) -> Result<T, E>,
     ) -> Result<T, E> {
         self.invoke(
-            ActionInvocationBindingV1::Direct { instruction_index },
+            InvocationBinding::Direct { instruction_index },
             actor,
             visit,
         )
     }
 
-    /// Visit an already authorized root contract call at its exact batch position.
+    /// Test-only lexical root for isolated custody and native-consumer controls.
+    /// Production roots come only from the original call through `contract_host`.
+    #[cfg(test)]
     pub(crate) fn contract<T, E: From<CustodyError>>(
         &mut self,
         root_index: u32,
         actor: &AccountId,
         visit: impl FnOnce(&mut Invocation<'_, 'tx>) -> Result<T, E>,
     ) -> Result<T, E> {
-        self.invoke(
-            ActionInvocationBindingV1::Contract {
-                root_index,
-                call_path: Vec::new(),
-            },
-            actor,
-            visit,
-        )
+        self.invoke(InvocationBinding::contract(root_index), actor, visit)
     }
 
     fn invoke<T, E: From<CustodyError>>(
         &mut self,
-        binding: ActionInvocationBindingV1,
+        binding: InvocationBinding,
         actor: &AccountId,
         visit: impl FnOnce(&mut Invocation<'_, 'tx>) -> Result<T, E>,
     ) -> Result<T, E> {
@@ -250,6 +299,7 @@ impl<'tx> AttachmentCustody<'tx> {
             binding,
             actor,
             generation,
+            #[cfg(test)]
             next_child: 0,
         };
         frame.run(visit)
@@ -277,9 +327,10 @@ impl<'tx> AttachmentCustody<'tx> {
 pub(crate) struct Invocation<'owner, 'tx> {
     owner: &'owner Owner<'tx>,
     attempt: &'owner mut Attempt,
-    binding: ActionInvocationBindingV1,
+    binding: InvocationBinding,
     actor: &'owner AccountId,
     generation: u64,
+    #[cfg(test)]
     next_child: u32,
 }
 
@@ -303,7 +354,7 @@ impl<'owner, 'tx> Invocation<'owner, 'tx> {
         self.attempt.ensure_active()?;
         if let Some(attachments) = self.owner.source.attachments() {
             for action in attachments.actions() {
-                if action.invocation == self.binding
+                if self.binding.matches(&action.invocation)
                     && self.attempt.completed & bit(action.action_index) == 0
                 {
                     return self
@@ -327,7 +378,7 @@ impl<'owner, 'tx> Invocation<'owner, 'tx> {
                 .attempt
                 .refuse(CustodyError::MissingAction(request.index));
         };
-        if action.invocation != self.binding {
+        if !self.binding.matches(&action.invocation) {
             return self
                 .attempt
                 .refuse(CustodyError::WrongInvocation(request.index));
@@ -463,25 +514,27 @@ impl<'owner, 'tx> Invocation<'owner, 'tx> {
         Ok(())
     }
 
-    /// Enter the next child in actual call order, under its separately authorized actor.
-    /// Parent handles remain usable only by the parent after a successful child exit.
+    /// Test-only lexical child for isolated custody controls. Actual production
+    /// children are entered only by the authenticated Core host dispatch.
+    #[cfg(test)]
     pub(crate) fn child<T, E: From<CustodyError>>(
         &mut self,
         actor: &AccountId,
         visit: impl FnOnce(&mut Invocation<'_, 'tx>) -> Result<T, E>,
     ) -> Result<T, E> {
         self.attempt.ensure_active()?;
-        let ActionInvocationBindingV1::Contract {
+        let InvocationBinding::Contract {
             root_index,
-            call_path,
-        } = &self.binding
+            mut path,
+            depth,
+        } = self.binding
         else {
             return self
                 .attempt
                 .refuse(CustodyError::InvalidChild)
                 .map_err(E::from);
         };
-        if call_path.len() >= ACTION_INVOCATION_MAX_CALL_PATH_DEPTH_V1 {
+        if depth >= ACTION_INVOCATION_MAX_CALL_PATH_DEPTH_V1 {
             return self
                 .attempt
                 .refuse(CustodyError::InvalidChild)
@@ -493,12 +546,12 @@ impl<'owner, 'tx> Invocation<'owner, 'tx> {
                 .refuse(CustodyError::GenerationExhausted)
                 .map_err(E::from);
         };
-        let mut child_path = call_path.clone();
-        child_path.push(self.next_child);
+        path[depth] = self.next_child;
         self.next_child = next_child;
-        let binding = ActionInvocationBindingV1::Contract {
-            root_index: *root_index,
-            call_path: child_path,
+        let binding = InvocationBinding::Contract {
+            root_index,
+            path,
+            depth: depth + 1,
         };
         let generation = self.attempt.next_generation()?;
         let mut child = Invocation {
@@ -507,6 +560,7 @@ impl<'owner, 'tx> Invocation<'owner, 'tx> {
             binding,
             actor,
             generation,
+            #[cfg(test)]
             next_child: 0,
         };
         child.run(visit)
@@ -530,6 +584,9 @@ impl Drop for InvocationGuard<'_, '_, '_> {
 fn bit(index: u32) -> u16 {
     1_u16 << index
 }
+
+mod host;
+pub(crate) use host::ContractCustody;
 
 /// Bounded native PGC relation consumer; no executor or State authority.
 pub(crate) mod pgc_bootstrap;

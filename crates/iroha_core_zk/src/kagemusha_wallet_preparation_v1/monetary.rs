@@ -545,6 +545,32 @@ pub struct ReceiveSourceFieldsV1 {
     pub(crate) predecessor: native_receive::PredecessorInput,
 }
 
+/// Receive's verdict tapes before Advance (§3.2 receive admission), in the fold's order.
+/// Both states open under their stable lineage identity, and the own receipt that
+/// Advance has not signed yet is a placeholder under `own_key`.
+pub struct ReceiveAdmissionFieldsV1 {
+    pub(crate) before: StateWitness,
+    pub(crate) after: StateWitness,
+    pub(crate) statement: [Fp; 26],
+    pub(crate) consumed: IndexedInsert<Fp>,
+    pub(crate) incoming_statement: [Fp; 26],
+    pub(crate) objects: [Vec<u8>; 9],
+    /// The placeholder receipt's SEC1 key, never the payment key.
+    pub(crate) own_key: [u8; 65],
+    /// The Request quotes an earlier credential of this incarnation.
+    pub(crate) renewed: bool,
+    pub(crate) payment: KagemushaWalletPaymentV1,
+}
+
+// Receive admission's placeholder own receipt: nonzero canonical digests in place of the
+// proof digest and capsule commitment that only Advance fixes, under this fixed key.
+const ADMISSION_DIGEST: [u8; 32] = {
+    let mut digest = [0; 32];
+    digest[0] = 1;
+    digest
+};
+const ADMISSION_KEY: [u8; 32] = [0x5a; 32];
+
 /// Verified original field projection; Q proofs remain mandatory independent inputs.
 pub struct ReceiveFoldFieldsV1 {
     pub(crate) transition: native_receive::Transition,
@@ -1156,6 +1182,100 @@ impl PreparationV1<'_> {
         })
     }
 
+    /// Receive admission's verdict tapes before Advance (§3.2). They equal the fold's
+    /// [`Self::receive_source_fields`] except where no incoming result reads them: the
+    /// receiver lineage opens with its exact stable identity but the committed core's
+    /// burned and pending-outgoing values and the empty credit root, and the own receipt,
+    /// which Advance has not signed yet, is a placeholder under its own key.
+    /// # Errors
+    /// Not a Receive derived from `source`, or changed originals.
+    pub(crate) fn receive_admission_fields(
+        &self,
+        owner: &AuthenticatedCredentialV1,
+        source: &ReleasedStep,
+        prepared: &MonetaryStepV1,
+    ) -> Result<ReceiveAdmissionFieldsV1, Error> {
+        if prepared.statement.effect.kind() != KagemushaWalletOperationKindV1::Receive
+            || prepared.manifest_digest != self.installed.verifier().manifest_digest()
+            || prepared.source_capsule_digest != source.frozen.capsule.custody_digest()
+        {
+            return Err(Error::Authority);
+        }
+        let original = prepared
+            .payment_original
+            .as_deref()
+            .ok_or(Error::Authority)?;
+        let payer = prepared.payer.as_ref().ok_or(Error::Authority)?;
+        let incoming = incoming_original::payment(original)?;
+        let before = &source.frozen.capsule.body().successor_state;
+        let quoted = &prepared.request.receiver_credential;
+        let quoted_certificate = authority(prepared.request.certificates.certificate(
+            &quoted.body.issuer_certificate,
+            KagemushaWalletSignerRoleV1::Enrollment,
+        ))?;
+        let (receipt, own_key) =
+            admission_receipt(owner, &prepared.statement, &incoming.payment_digest)?;
+        Ok(ReceiveAdmissionFieldsV1 {
+            before: self.state_fields(owner, before, &self.admission_lineage(owner, before)?)?,
+            after: self.state_fields(
+                owner,
+                &prepared.state,
+                &self.admission_lineage(owner, &prepared.state)?,
+            )?,
+            statement: self.statement_fields(owner, &prepared.statement)?,
+            consumed: *prepared.maps.first().ok_or(Error::Authority)?,
+            incoming_statement: incoming.incoming_statement,
+            objects: [
+                signed_tape(
+                    authority(incoming.payment.signed_request())?
+                        .body
+                        .transcript(),
+                    &incoming.payment.request.signature,
+                ),
+                payer.credential_tape.clone(),
+                incoming.receipt,
+                incoming.compact,
+                incoming.omega,
+                incoming.payment.send.step_proof.bytes.clone(),
+                receipt,
+                signed_tape(quoted.body.transcript(), &quoted.signature),
+                signed_tape(
+                    quoted_certificate.body.transcript(),
+                    &quoted_certificate.signature,
+                ),
+            ],
+            own_key,
+            renewed: quoted.credential_digest() != owner.credential.credential_digest(),
+            payment: incoming.payment,
+        })
+    }
+
+    // The receiver lineage as Receive admission opens it: the stable identity exactly, and
+    // for the adjusted values that no incoming result reads, the committed core and the
+    // empty credit root.
+    fn admission_lineage(
+        &self,
+        owner: &AuthenticatedCredentialV1,
+        state: &KagemushaWalletStateV1,
+    ) -> Result<KagemushaWalletLineagePublicV1, Error> {
+        let scheme = self.installed.verifier().scheme();
+        Ok(KagemushaWalletLineagePublicV1 {
+            version: KAGEMUSHA_WALLET_VERSION_V1,
+            scheme_id: scheme.scheme_id(),
+            relation_id: scheme.relation_id,
+            head: authority(state.commitment())?,
+            wallet_id: state.core.wallet_id,
+            credential_digest: state.core.credential_digest,
+            payment_key: owner.credential.body.payment_key,
+            lifecycle: state.core.lifecycle,
+            policy_epoch: state.core.policy_epoch,
+            enabled_controls: state.core.enabled_controls,
+            burned_total: state.core.burned_total,
+            pending_outgoing_root: state.core.pending_outgoing_root,
+            credit_digest_root: kagemusha_wallet_empty_map_root_v1(),
+        })
+    }
+
     /// Reconstruct all nine Receive tapes before the independent Q proofs exist,
     /// including both original proof carriers, the quoted credential through renewal,
     /// and the step witness whose relation A1 proves inline. The canonical A relation
@@ -1246,6 +1366,35 @@ fn proposed_receive_burn(
             amount
         })
         .ok_or(Error::Authority)
+}
+
+// Receive admission's own-receipt tape and its SEC1 key: the actual receipt body of this
+// statement and Payment over the placeholder digests, signed under the placeholder key.
+// The merged leaf checks it only as its hard own slot, which no incoming result reads.
+fn admission_receipt(
+    owner: &AuthenticatedCredentialV1,
+    statement: &KagemushaWalletStatementV1,
+    payment_digest: &[u8; 32],
+) -> Result<(Vec<u8>, [u8; 65]), Error> {
+    use p256::ecdsa::signature::Signer as _;
+    let signer = authority(KagemushaWalletReceiptSignerV1::from_credential(
+        &owner.credential,
+    ))?;
+    let body = authority(KagemushaWalletReceiptBodyV1::derive(
+        &signer,
+        statement,
+        &ADMISSION_DIGEST,
+        ADMISSION_DIGEST,
+        *payment_digest,
+    ))?;
+    let key = p256::ecdsa::SigningKey::from_slice(&ADMISSION_KEY).map_err(|_| Error::Authority)?;
+    let signature: p256::ecdsa::Signature = key.sign(&body.signing_message());
+    let signature = authority(KagemushaDeviceSignatureV1::from_raw_bytes(
+        &signature.normalize_s().unwrap_or(signature).to_bytes(),
+    ))?;
+    let point = key.verifying_key().to_encoded_point(false);
+    let sec1 = <[u8; 65]>::try_from(point.as_bytes()).map_err(|_| Error::Authority)?;
+    Ok((signed_tape(body.transcript(), &signature), sec1))
 }
 
 fn receive_credit_route(

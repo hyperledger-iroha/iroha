@@ -268,7 +268,6 @@ impl ZkX509CredentialPreAuxBindingV1 {
         self.main_post_base.sha()
     }
     /// SHA word-memory and base-error-folding challenges.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     pub(crate) const fn sha_word(self) -> ZkX509ShaWordStarkChallengesV1 {
         self.main_post_base.sha_word()
     }
@@ -968,7 +967,8 @@ mod tests {
             &[&encoded],
         )
         .expect("challenge KAT frame");
-        // Emit both native values before either old-pin assertion can stop diagnostics.
+        // Independent SHA3 framing and ordered 272-field sampling bind the current
+        // 32-byte native BLAKE3 catalog; emit both values for release reproduction.
         eprintln!(
             "X509_PRE_AUX_CHALLENGE_KAT_V1={}",
             hex::encode(challenge_digest.to_bytes())
@@ -979,11 +979,11 @@ mod tests {
         );
         assert_eq!(
             hex::encode(challenge_digest.to_bytes()),
-            "12aab996200e37d217d8883ba45745ed327c94271d58fdade39e834120204218915d30d60fef9e380fd266ee8bdf7987"
+            "d55e9341f7d49f604abe86e7c4905fe32cb007c6d096b9ea23d5178871eb515878f6c8b92e4ddb77051ba08fd8b08292"
         );
         assert_eq!(
             hex::encode(binding.transcript_state().to_bytes()),
-            "18f3950d69fb451b3c8746e481a23a7de9fab93014d0d7286d5f8938bb60a7be610a0fe32be8684c5e8989e42c21e449"
+            "aa88c0e82593e78c087645cc8e5f394e51419bd9be20b7b8a865c8a5f67106bfb9e6a1e66cb7afcf3d185a6371e58a1d"
         );
     }
     #[test]

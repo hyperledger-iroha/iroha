@@ -8,7 +8,6 @@
 //!
 //! The transcript challenges must be sampled only after both endpoint and
 //! address-sorted traces have been committed.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::private_table::{PrivateTableV1, zeroize_fields_v1};
 use crate::privacy_engines::transparent_stark::{
     GoldilocksFieldV1 as F, TransparentStarkErrorV1, TransparentTranscriptV1,
@@ -91,7 +90,6 @@ pub struct ZkX509IoChannelDeclarationV1 {
     pub(crate) public_value: Option<Vec<u8>>,
 }
 /// Endpoint values used to generate one channel witness.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, PartialEq, Eq)]
 pub struct ZkX509IoChannelWitnessV1 {
     /// Fixed topology.
@@ -101,13 +99,11 @@ pub struct ZkX509IoChannelWitnessV1 {
     /// Consumer bytes in declaration order.
     pub(crate) consumer_values: Vec<Vec<u8>>,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl core::fmt::Debug for ZkX509IoChannelWitnessV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str("ZkX509IoChannelWitnessV1 { <private material redacted> }")
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ZkX509IoChannelWitnessV1 {
     pub(crate) fn zeroize_private_v1(&mut self) {
         use super::private_table::zeroize_words_v1;
@@ -119,13 +115,11 @@ impl ZkX509IoChannelWitnessV1 {
         self.consumer_values.clear();
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for ZkX509IoChannelWitnessV1 {
     fn drop(&mut self) {
         self.zeroize_private_v1();
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct IoAccessV1 {
     pub(crate) channel: F,
@@ -135,7 +129,6 @@ pub struct IoAccessV1 {
     pub(crate) endpoint: ZkX509IoEndpointV1,
 }
 /// Erase initialized private access cells while preserving public endpoint topology.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub fn zeroize_io_accesses_v1(accesses: &mut [IoAccessV1]) {
     for access in accesses {
         zeroize_fields_v1(core::slice::from_mut(&mut access.channel));
@@ -187,7 +180,6 @@ impl ZkX509IoChallengesV1 {
         Ok(())
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct IoPermutationRowV1 {
     pub(crate) execution: IoAccessV1,
@@ -198,7 +190,6 @@ pub struct IoPermutationRowV1 {
     pub(crate) sorted_product_after: [F; IO_PERMUTATION_LANES_V1],
 }
 /// Main byte-channel tables and challenge-dependent auxiliary products.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, PartialEq, Eq)]
 pub struct ZkX509IoTraceV1 {
     pub(crate) declarations: Vec<ZkX509IoChannelDeclarationV1>,
@@ -206,13 +197,11 @@ pub struct ZkX509IoTraceV1 {
     pub(crate) sorted: Vec<IoAccessV1>,
     pub(crate) permutation_rows: Vec<IoPermutationRowV1>,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl core::fmt::Debug for ZkX509IoTraceV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str("ZkX509IoTraceV1 { <private material redacted> }")
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn zeroize_io_permutation_rows_v1(rows: &mut [IoPermutationRowV1]) {
     for row in rows {
         zeroize_io_accesses_v1(core::slice::from_mut(&mut row.execution));
@@ -223,7 +212,6 @@ fn zeroize_io_permutation_rows_v1(rows: &mut [IoPermutationRowV1]) {
         zeroize_fields_v1(&mut row.sorted_product_after);
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for ZkX509IoTraceV1 {
     fn drop(&mut self) {
         zeroize_io_accesses_v1(&mut self.execution);
@@ -239,22 +227,18 @@ pub enum ZkX509IoAirErrorV1 {
     #[error("zk-X509 cross-segment I/O topology is invalid")]
     Topology,
     /// A byte, address, or write flag is outside its canonical range.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error("zk-X509 cross-segment I/O range constraint is invalid")]
     Range,
     /// The address-sorted one-write/read-consistency state machine is invalid.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error("zk-X509 cross-segment I/O sorted memory is invalid")]
     SortedMemory,
     /// A public-input read differs from verifier-supplied bytes.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error("zk-X509 cross-segment public I/O binding is invalid")]
     PublicInput,
     /// Fiat-Shamir tuple-compression challenges are invalid.
     #[error("zk-X509 cross-segment I/O challenges are invalid")]
     Challenge,
     /// A grand-product transition or final permutation equality is invalid.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error("zk-X509 cross-segment I/O permutation is invalid")]
     Permutation,
     /// Bounded row or allocation arithmetic failed.
@@ -283,7 +267,6 @@ pub fn derive_zk_x509_io_challenges_v1(
     })
 }
 /// Construct and validate the complete cross-segment byte-copy trace.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub fn build_zk_x509_io_trace_v1(
     witnesses: &[ZkX509IoChannelWitnessV1],
     challenges: ZkX509IoChallengesV1,
@@ -301,7 +284,6 @@ pub fn build_zk_x509_io_trace_v1(
     Ok(trace)
 }
 /// Channel declarations and the private execution and address-sorted tables.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 type IoBaseTablesV1 = (
     Vec<ZkX509IoChannelDeclarationV1>,
     PrivateTableV1<IoAccessV1>,
@@ -312,7 +294,6 @@ type IoBaseTablesV1 = (
 ///
 /// A STARK prover commits these tables before deriving the permutation challenges. Keeping this
 /// phase separate prevents a caller from building a challenge-adaptive base trace.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(super) fn build_zk_x509_io_base_tables_v1(
     witnesses: &[ZkX509IoChannelWitnessV1],
 ) -> Result<IoBaseTablesV1, ZkX509IoAirErrorV1> {
@@ -369,7 +350,6 @@ pub(super) fn build_zk_x509_io_base_tables_v1(
     validate_sorted_v1(&declarations, &sorted)?;
     Ok((declarations, execution, sorted))
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ZkX509IoTraceV1 {
     /// Number of globally bound endpoint byte accesses.
     #[cfg(test)]
@@ -497,7 +477,6 @@ pub fn validate_declarations_v1(
     }
     Ok(())
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn append_channel_execution_v1(
     execution: &mut Vec<IoAccessV1>,
     witness: &ZkX509IoChannelWitnessV1,
@@ -550,7 +529,6 @@ fn append_channel_execution_v1(
     }
     Ok(())
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn io_access_v1(
     channel: u32,
     offset: usize,
@@ -566,7 +544,6 @@ fn io_access_v1(
         endpoint,
     })
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn validate_execution_topology_v1(
     declarations: &[ZkX509IoChannelDeclarationV1],
     execution: &[IoAccessV1],
@@ -611,7 +588,6 @@ fn validate_execution_topology_v1(
     }
     Ok(())
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn validate_sorted_v1(
     declarations: &[ZkX509IoChannelDeclarationV1],
     sorted: &[IoAccessV1],
@@ -663,7 +639,6 @@ fn validate_sorted_v1(
     }
     Ok(())
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn validate_sorted_access_range_v1(
     access: IoAccessV1,
     declarations: &[ZkX509IoChannelDeclarationV1],
@@ -680,7 +655,6 @@ fn validate_sorted_access_range_v1(
     }
     Ok(())
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn build_permutation_rows_v1(
     execution: &[IoAccessV1],
     sorted: &[IoAccessV1],
@@ -714,7 +688,6 @@ fn build_permutation_rows_v1(
     }
     Ok(rows)
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn validate_permutation_rows_v1(
     execution: &[IoAccessV1],
     sorted: &[IoAccessV1],
@@ -753,7 +726,6 @@ fn validate_permutation_rows_v1(
     }
     Ok(())
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn compress_access_v1(access: IoAccessV1, challenge: ZkX509IoLaneChallengesV1) -> F {
     challenge
         .beta

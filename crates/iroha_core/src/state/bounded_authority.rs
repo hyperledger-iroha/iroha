@@ -13,7 +13,6 @@ pub(super) struct LaneAuthorityInputs {
     pub(super) dataspace_id: DataSpaceId,
     pub(super) autoscale_validator_set: Option<Vec<PeerId>>,
     pub(super) validator_mode: LaneValidatorMode,
-    pub(super) minimum_stake: Quantity,
     pub(super) max_validators: u32,
 }
 pub(super) fn staking_validator_limit_from(configured: u32) -> Option<usize> {

@@ -24,7 +24,7 @@ async fn sse_filters_by_proof_envelope_hash() {
         iroha_torii::json_entry("op", "eq"),
         iroha_torii::json_entry(
             "args",
-            iroha_torii::json_array(vec!["proof_envelope_hash", want_hex.as_str()]),
+            &iroha_torii::json_array(vec!["proof_envelope_hash", want_hex.as_str()]),
         ),
     ]);
     let filter = iroha_torii::filter::FilterExpr::from_json_value(filter_value)

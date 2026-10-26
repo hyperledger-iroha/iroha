@@ -108,7 +108,6 @@ pub(super) fn populate_fixed_v1(
     Ok(())
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(super) fn populate_node_classification_v1(row: &mut ZkX509Rfc5280StarkBaseRowV1) {
     for (index, role) in TIME_ROLES.into_iter().enumerate() {
         let difference = row[BASE_ROLE].sub(F(role as u64));
@@ -390,7 +389,6 @@ pub(super) const RESIDUES_V1: usize = 85;
 // The caller admits a digit row from one of the two closed time templates,
 // so offset < length and both operands are canonical. The selected template
 // can depend on the private DER time tag even at a fixed public position.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn populate_decimal_inverses_v1(
     row: &mut ZkX509Rfc5280StarkBaseRowV1,
     template: temporal::DecimalTemplateV1,
@@ -399,7 +397,6 @@ fn populate_decimal_inverses_v1(
     row[BASE_G] = F(template.length - template.offset - 1).inverse_or_zero_canonical_v1();
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(super) fn append_temporal_rows_v1(
     trace: &ZkX509Rfc5280TraceV1,
     family_rows: &mut [PrivateTableV1<ZkX509Rfc5280StarkBaseRowV1>; FAMILY_COUNT_V1],
@@ -494,7 +491,6 @@ pub(super) fn append_temporal_rows_v1(
     Ok(())
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(super) fn append_relation_rows_v1(
     trace: &ZkX509Rfc5280TraceV1,
     semantic: &ZkX509Rfc5280SemanticWitnessV1,

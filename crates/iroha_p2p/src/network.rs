@@ -26,9 +26,10 @@ use iroha_config::parameters::actual::{
     Network as Config, SoranetHandshake as ActualSoranetHandshake,
 };
 use iroha_crypto::{Algorithm, Hash, KeyPair, Signature};
-use iroha_data_model::{NetworkId, prelude::Peer};
+use iroha_data_model::NetworkId;
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use iroha_logger::prelude::*;
+use iroha_model_base::peer::Peer;
 use iroha_model_base::peer::PeerId;
 use iroha_primitives::addr::SocketAddr;
 use norito::{
@@ -9365,8 +9366,7 @@ mod accept_stream_tests {
         LaneProfile, Network as NetCfg, RelayMode, SoranetPrivacy as ActualSoranetPrivacy,
     };
     use iroha_crypto::{KeyPair, encryption::ChaCha20Poly1305};
-    use iroha_data_model::peer::Peer;
-    use iroha_model_base::peer::PeerId;
+    use iroha_model_base::peer::{Peer, PeerId};
     use iroha_primitives::addr::socket_addr;
     use norito::codec::{Decode, DecodeAll, Encode};
     use std::time::Duration;
@@ -16780,7 +16780,7 @@ mod tests;
 pub mod message {
     //! Module for network messages
     use super::*;
-    use iroha_data_model::peer::Peer;
+    use iroha_model_base::peer::Peer;
     use norito::codec::{Decode, Encode};
     /// Priority for network messages.
     #[derive(Clone, Copy, Debug, Encode, Decode, PartialEq, Eq)]

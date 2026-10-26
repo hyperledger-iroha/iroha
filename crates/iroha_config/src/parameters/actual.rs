@@ -31,7 +31,6 @@ use iroha_data_model::{
         LaneConfig as LaneConfigMetadata, LaneSchedulerPolicy, LaneSettlementBufferPolicy,
         LaneStorageProfile, LaneVisibility, UniversalAccountId,
     },
-    peer::Peer,
     privacy::{PrivacyIssuerIdV1, PrivacyPolicyIdV1},
     soracloud::SoraPublishedInrouGuestImageArtifactV1,
     sorafs::{
@@ -44,10 +43,12 @@ use iroha_data_model::{
     taikai::TaikaiAvailabilityClass,
     transaction::FeePaymentIntent,
 };
-use iroha_model_base::chain::ChainId;
-use iroha_model_base::domain::DomainId;
-use iroha_model_base::name::Name;
-use iroha_model_base::peer::PeerId;
+use iroha_model_base::{
+    chain::ChainId,
+    domain::DomainId,
+    name::Name,
+    peer::{Peer, PeerId},
+};
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId, topology::ShardId};
 use iroha_primitives::{
     addr::SocketAddr,
@@ -3052,47 +3053,22 @@ pub struct Queue {
     /// Maximum number of entries scanned per expired-transaction sweep.
     pub expired_cull_batch: NonZeroUsize,
 }
-/// Nexus staking configuration (public lanes).
-#[derive(Debug, Clone)]
+/// Validator activation and capacity configuration for public lanes.
+/// Monetary staking terms belong exclusively to the original committed policy.
+#[derive(Debug, Clone, Copy)]
 pub struct NexusStaking {
     /// Validator activation policy for public lanes.
     pub public_validator_mode: LaneValidatorMode,
     /// Validator activation policy for restricted/permissioned lanes.
     pub restricted_validator_mode: LaneValidatorMode,
-    /// Minimum bonded stake required to register or bond as a validator.
-    pub min_validator_stake: Quantity,
     /// Maximum number of validators allowed per lane.
     pub max_validators: NonZeroU32,
-    /// Maximum number of stake-share rows retained for one validator.
-    pub max_stake_shares_per_validator: NonZeroU32,
-    /// Maximum number of pending unbond requests retained in one stake share.
-    pub max_pending_unbonds_per_share: NonZeroU32,
-    /// Minimum delay between scheduling and finalising an unbond (milliseconds).
-    pub unbonding_delay: Duration,
-    /// Maximum slash ratio allowed (basis points, `10_000` = 100%).
-    pub max_slash_bps: u16,
-    /// Asset definition used for staking bonds (string form).
-    pub stake_asset_id: String,
-    /// Escrow account that holds bonded stake (string form).
-    pub stake_escrow_account_id: String,
-    /// Account that receives slashed stake (string form).
-    pub slash_sink_account_id: String,
 }
 impl_default!(NexusStaking => {
         Self {
             public_validator_mode: LaneValidatorMode::StakeElected,
             restricted_validator_mode: LaneValidatorMode::AdminManaged,
-            min_validator_stake: defaults::nexus::staking::min_validator_stake(),
             max_validators: defaults::nexus::staking::MAX_VALIDATORS,
-            max_stake_shares_per_validator:
-                defaults::nexus::staking::MAX_STAKE_SHARES_PER_VALIDATOR,
-            max_pending_unbonds_per_share:
-                defaults::nexus::staking::MAX_PENDING_UNBONDS_PER_SHARE,
-            unbonding_delay: defaults::nexus::staking::UNBONDING_DELAY,
-            max_slash_bps: defaults::nexus::staking::MAX_SLASH_BPS,
-            stake_asset_id: defaults::nexus::staking::stake_asset_id(),
-            stake_escrow_account_id: defaults::nexus::staking::stake_escrow_account_id(),
-            slash_sink_account_id: defaults::nexus::staking::slash_sink_account_id(),
         }
 });
 impl NexusStaking {
@@ -3506,7 +3482,8 @@ pub struct Nexus {
     pub storage: NexusStorage,
     /// Staking guardrails for public lanes.
     pub staking: NexusStaking,
-    /// Universal fee schedule for Nexus transactions.
+    /// Explicit fee recipe for genesis authors. Runtime authority comes from the
+    /// original committed root fee parameter passed to the consensus projections.
     pub fees: iroha_data_model::block::consensus::RootFeePolicy,
     /// Shared Hugging Face lease policy.
     pub hf_shared_leases: NexusHfSharedLeases,
@@ -3705,14 +3682,14 @@ pub enum NexusConsensusPolicyDigestError {
     MissingCompliancePolicyDigest,
 }
 #[derive(Encode)]
-struct NexusConsensusPolicyPreimageV1 {
+struct NexusConsensusPolicyPreimageV1<'a> {
     version: u8,
     configured_lane_catalog_hash: [u8; 32],
     dataspaces: Vec<NexusConsensusDataspaceV1>,
     dataspace_fee_sponsor_program_ids: Vec<(u64, FeeSponsorProgramId)>,
     routing: NexusConsensusRoutingV1,
     staking: NexusConsensusStakingV1,
-    fees: iroha_data_model::block::consensus::RootFeePolicy,
+    fees: Option<norito::core::PayloadRef<'a, iroha_data_model::block::consensus::RootFeePolicy>>,
     hf_shared_leases: NexusConsensusHfSharedLeasesV1,
     uploaded_models: NexusConsensusUploadedModelsV1,
     endorsement: NexusConsensusEndorsementV1,
@@ -3756,15 +3733,7 @@ struct NexusConsensusDurationV1 {
 struct NexusConsensusStakingV1 {
     public_validator_mode: u8,
     restricted_validator_mode: u8,
-    min_validator_stake: Quantity,
     max_validators: u32,
-    max_stake_shares_per_validator: u32,
-    max_pending_unbonds_per_share: u32,
-    unbonding_delay: NexusConsensusDurationV1,
-    max_slash_bps: u16,
-    stake_asset_id: String,
-    stake_escrow_account_id: String,
-    slash_sink_account_id: String,
 }
 #[derive(Encode)]
 struct NexusConsensusHfSharedLeasesV1 {
@@ -3924,8 +3893,9 @@ fn nexus_consensus_unit_ratio_bits(
 #[cfg(test)]
 pub fn nexus_consensus_policy_digest(
     nexus: &Nexus,
+    original_fees: Option<&iroha_data_model::block::consensus::RootFeePolicy>,
 ) -> core::result::Result<[u8; 32], NexusConsensusPolicyDigestError> {
-    nexus_consensus_policy_digest_with_compliance(nexus, None)
+    nexus_consensus_policy_digest_with_compliance(nexus, original_fees, None)
 }
 /// Compute the canonical Nexus policy digest while binding the loaded compliance policy set.
 ///
@@ -3938,11 +3908,21 @@ pub fn nexus_consensus_policy_digest(
 #[cfg(test)]
 pub fn nexus_consensus_policy_digest_with_compliance(
     nexus: &Nexus,
+    original_fees: Option<&iroha_data_model::block::consensus::RootFeePolicy>,
     compliance_policy_digest: Option<[u8; 32]>,
 ) -> core::result::Result<[u8; 32], NexusConsensusPolicyDigestError> {
-    nexus_consensus_policy_digest_with_runtime_policies(nexus, compliance_policy_digest, None)
+    nexus_consensus_policy_digest_with_runtime_policies(
+        nexus,
+        original_fees,
+        compliance_policy_digest,
+        None,
+    )
 }
-/// Compute the canonical Nexus digest with loaded compliance and lane-manifest policy sets.
+/// Compute the canonical Nexus digest with the original root fee policy and loaded policy sets.
+///
+/// `original_fees` borrows the caller's exact authored or retained parameter policy.
+/// `None` commits actual pre-genesis absence; runtime owners must require the mandatory
+/// original policy before exposing a current consensus view. No node-local fee value is read.
 ///
 /// Passing `None` for a policy set commits that absence, so it cannot match a validator that loaded
 /// a concrete registry digest. Runtime callers should always pass the installed lane-manifest
@@ -3953,12 +3933,14 @@ pub fn nexus_consensus_policy_digest_with_compliance(
 /// policy-set digest, as required by [`nexus_consensus_policy_preimage_with_runtime_policies`].
 pub fn nexus_consensus_policy_digest_with_runtime_policies(
     nexus: &Nexus,
+    original_fees: Option<&iroha_data_model::block::consensus::RootFeePolicy>,
     compliance_policy_digest: Option<[u8; 32]>,
     lane_manifest_policy_digest: Option<[u8; 32]>,
 ) -> core::result::Result<[u8; 32], NexusConsensusPolicyDigestError> {
     const DOMAIN: &[u8] = b"iroha:nexus:consensus-policy:v1\0";
     let encoded = nexus_consensus_policy_preimage_with_runtime_policies(
         nexus,
+        original_fees,
         compliance_policy_digest,
         lane_manifest_policy_digest,
     )?;
@@ -3966,6 +3948,8 @@ pub fn nexus_consensus_policy_digest_with_runtime_policies(
 }
 /// Return the exact bare Norito V1 preimage used by the Nexus consensus-policy digest.
 ///
+/// The monetary field encodes `original_fees` directly, preserving the distinction
+/// between pre-genesis absence and a present zero-fee policy without cloning its backing.
 /// This makes the complete static policy value available to the State authority
 /// owner without duplicating the digest's field selection. Encoding fixes the
 /// V1 flags, so ambient codec settings cannot alter peer policy identity.
@@ -3977,6 +3961,7 @@ pub fn nexus_consensus_policy_digest_with_runtime_policies(
 /// no authenticated policy-set digest.
 pub fn nexus_consensus_policy_preimage_with_runtime_policies(
     nexus: &Nexus,
+    original_fees: Option<&iroha_data_model::block::consensus::RootFeePolicy>,
     compliance_policy_digest: Option<[u8; 32]>,
     lane_manifest_policy_digest: Option<[u8; 32]>,
 ) -> core::result::Result<Vec<u8>, NexusConsensusPolicyDigestError> {
@@ -4058,17 +4043,9 @@ pub fn nexus_consensus_policy_preimage_with_runtime_policies(
             restricted_validator_mode: lane_validator_mode_tag(
                 nexus.staking.restricted_validator_mode,
             ),
-            min_validator_stake: nexus.staking.min_validator_stake.clone(),
             max_validators: nexus.staking.max_validators.get(),
-            max_stake_shares_per_validator: nexus.staking.max_stake_shares_per_validator.get(),
-            max_pending_unbonds_per_share: nexus.staking.max_pending_unbonds_per_share.get(),
-            unbonding_delay: nexus.staking.unbonding_delay.into(),
-            max_slash_bps: nexus.staking.max_slash_bps,
-            stake_asset_id: nexus.staking.stake_asset_id.clone(),
-            stake_escrow_account_id: nexus.staking.stake_escrow_account_id.clone(),
-            slash_sink_account_id: nexus.staking.slash_sink_account_id.clone(),
         },
-        fees: nexus.fees.clone(),
+        fees: original_fees.map(norito::core::PayloadRef),
         hf_shared_leases: NexusConsensusHfSharedLeasesV1 {
             drain_grace: nexus.hf_shared_leases.drain_grace.into(),
         },
@@ -5702,7 +5679,10 @@ pub struct SumeragiLaneLifecycleEntry {
 /// change proposal assembly or deterministic validation.
 ///
 /// The projection deliberately excludes local storage paths, worker pool
-/// sizing, caches, and telemetry. It includes the validated lane geometry,
+/// sizing, caches, and telemetry. Monetary terms come only from `original_fees`:
+/// a present policy is the exact authored or retained root parameter, while `None`
+/// records actual pre-genesis absence. Current runtime owners enforce presence.
+/// It includes the validated lane geometry,
 /// dataspace and routing catalogs, lane election/fee/AXT/DA policy, the five
 /// deterministic AMX budgets, and staged active public-lane validator records.
 /// It also commits the complete retained lane-incarnation lineage, including
@@ -5717,11 +5697,14 @@ pub struct SumeragiLaneLifecycleEntry {
 #[must_use]
 pub fn sumeragi_nexus_amx_context_preimage(
     nexus: &Nexus,
+    original_fees: Option<&iroha_data_model::block::consensus::RootFeePolicy>,
     pipeline: &Pipeline,
     active_validators: &[GenesisActiveNexusLaneRecord],
     retained_lane_lineage: &[SumeragiLaneLifecycleEntry],
 ) -> Vec<u8> {
     use iroha_data_model::nexus::{NexusAmxContextWriterV1, tag};
+    let _canonical_flags =
+        norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
     let mut preimage = NexusAmxContextWriterV1::new();
     preimage.field(tag::LANE_COUNT, &nexus.lane_catalog.lane_count().get());
     let (_, consensus_lanes) = nexus.lane_catalog.consensus_projection();
@@ -5789,59 +5772,14 @@ pub fn sumeragi_nexus_amx_context_preimage(
         &restricted_validator_mode,
     );
     preimage.field(
-        tag::STAKING_MIN_VALIDATOR_STAKE,
-        &nexus.staking.min_validator_stake,
-    );
-    preimage.field(
         tag::STAKING_MAX_VALIDATORS,
         &nexus.staking.max_validators.get(),
     );
+    // The exact caller-owned original policy is encoded once as a typed option.
+    // No node-local fee defaults, account rendering or monetary mirror is consulted.
     preimage.field(
-        tag::STAKING_MAX_STAKE_SHARES_PER_VALIDATOR,
-        &nexus.staking.max_stake_shares_per_validator.get(),
-    );
-    preimage.field(
-        tag::STAKING_MAX_PENDING_UNBONDS_PER_SHARE,
-        &nexus.staking.max_pending_unbonds_per_share.get(),
-    );
-    preimage.field(
-        tag::STAKING_UNBONDING_DELAY_NS,
-        &nexus.staking.unbonding_delay.as_nanos(),
-    );
-    preimage.field(tag::STAKING_MAX_SLASH_BPS, &nexus.staking.max_slash_bps);
-    preimage.field(tag::STAKING_STAKE_ASSET_ID, &nexus.staking.stake_asset_id);
-    preimage.field(
-        tag::STAKING_STAKE_ESCROW_ACCOUNT_ID,
-        &nexus.staking.stake_escrow_account_id,
-    );
-    preimage.field(
-        tag::STAKING_SLASH_SINK_ACCOUNT_ID,
-        &nexus.staking.slash_sink_account_id,
-    );
-    preimage.field(tag::FEES_ASSET, &nexus.fees.fee_asset_id);
-    preimage.field(tag::FEES_SINK, &nexus.fees.fee_sink_account_id);
-    preimage.field(tag::FEES_BASE, &nexus.fees.base_fee);
-    preimage.field(tag::FEES_PER_BYTE, &nexus.fees.per_byte_fee);
-    preimage.field(tag::FEES_PER_INSTRUCTION, &nexus.fees.per_instruction_fee);
-    preimage.field(tag::FEES_PER_GAS_UNIT, &nexus.fees.per_gas_unit_fee);
-    preimage.field(
-        tag::FEES_SPONSOR_VAULT_CUSTODY_ACCOUNT_ID,
-        &nexus.fees.sponsor_vault_custody_account_id,
-    );
-
-    let successful_claim_fee_exempt_authorities = nexus
-        .fees
-        .successful_claim_fee_exempt_authorities
-        .iter()
-        .map(|authority| {
-            authority
-                .canonical_i105()
-                .expect("validated Nexus fee-exempt authority must encode as canonical I105")
-        })
-        .collect::<Vec<_>>();
-    preimage.field(
-        tag::FEES_SUCCESSFUL_CLAIM_EXEMPT_AUTHORITIES,
-        &successful_claim_fee_exempt_authorities,
+        tag::ROOT_FEE_POLICY,
+        &original_fees.map(norito::core::PayloadRef),
     );
     preimage.field(
         tag::DATASPACE_FEE_SPONSOR_PROGRAM_IDS,
@@ -5992,12 +5930,14 @@ pub fn sumeragi_nexus_amx_context_preimage(
 #[must_use]
 pub fn sumeragi_nexus_amx_context_hash(
     nexus: &Nexus,
+    original_fees: Option<&iroha_data_model::block::consensus::RootFeePolicy>,
     pipeline: &Pipeline,
     active_validators: &[GenesisActiveNexusLaneRecord],
     retained_lane_lineage: &[SumeragiLaneLifecycleEntry],
 ) -> Hash {
     Hash::new(sumeragi_nexus_amx_context_preimage(
         nexus,
+        original_fees,
         pipeline,
         active_validators,
         retained_lane_lineage,

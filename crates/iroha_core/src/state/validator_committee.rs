@@ -296,10 +296,9 @@ fn validate_current_beacon(
     Ok(())
 }
 
-/// Authenticate both presence and absence from the exact snapshot cut with the same native
-/// verifier used by recovery. World supplies no authority to that reader. Genesis-only checks
-/// authenticate its signed authority, not its execution roots; startup must reexecute genesis.
-pub fn validate_committed_progress(
+/// Check one snapshot cut with its own certified walk.
+#[cfg(test)]
+pub(crate) fn validate_committed_progress(
     world: &impl WorldReadOnly,
     chain_id: &iroha_model_base::chain::ChainId,
     network: iroha_data_model::NetworkId,
@@ -307,37 +306,104 @@ pub fn validate_committed_progress(
     kura: &crate::kura::Kura,
     budget: &iroha_allocation::AllocationBudget,
 ) -> Result<(), Attempt<String>> {
-    use crate::sumeragi::{certified_chain::CertifiedChain, schedule::ConsensusSchedule};
-    use iroha_data_model::parameter::system::ConsensusMode;
-    validate_persisted_progress(world)?;
     let height = u64::try_from(hashes.len()).map_err(|_| "committed height overflows")?;
     if height == 0 {
-        if !world.consensus_schedule().entries().is_empty()
-            || world
-                .validator_committee_transitions()
-                .iter()
-                .next()
-                .is_some()
-            || world.global_beacon_pulses().iter().next().is_some()
-            || world.global_beacon_pulse_slots().iter().next().is_some()
-            || world.global_beacon_latest_pulse().iter().next().is_some()
-            || world.global_beacon_key_sessions().iter().next().is_some()
-            || world.active_global_beacon_key_session().is_some()
-        {
-            return Err("uncommitted State invents native authority or preparation".into());
-        }
-        return Ok(());
+        return validate_empty_progress(world);
     }
-    let reader = CertifiedChain::from_pinned(chain_id, &network, hashes, kura, budget)
-        .map_err(|error| error.map_rejection(|error| error.to_string()))?;
-    let mut graph: Option<ConsensusSchedule> = None;
-    let mut historical_obligations = std::collections::BTreeMap::new();
-    let mut observed = std::collections::BTreeSet::new();
-    let mut observed_pulses = 0_usize;
-    let mut latest_pulse = None;
+    let mut progress = CommittedProgress::start(world, network, height)?;
+    let reader = crate::sumeragi::certified_chain::CertifiedChain::from_pinned(
+        chain_id, &network, hashes, kura, budget,
+    )
+    .map_err(|error| error.map_rejection(|error| error.to_string()))?;
     for certified in reader.walk(1, height) {
-        let certified =
-            certified.map_err(|error| error.map_rejection(|error| error.to_string()))?;
+        progress
+            .observe(&certified.map_err(|error| error.map_rejection(|error| error.to_string()))?)?;
+    }
+    progress.finish()
+}
+
+/// The cut of an empty history holds no native authority or preparation at all.
+pub(crate) fn validate_empty_progress(world: &impl WorldReadOnly) -> Result<(), Attempt<String>> {
+    validate_persisted_progress(world)?;
+    if !world.consensus_schedule().entries().is_empty()
+        || world
+            .validator_committee_transitions()
+            .iter()
+            .next()
+            .is_some()
+        || world.global_beacon_pulses().iter().next().is_some()
+        || world.global_beacon_pulse_slots().iter().next().is_some()
+        || world.global_beacon_latest_pulse().iter().next().is_some()
+        || world.global_beacon_key_sessions().iter().next().is_some()
+        || world.active_global_beacon_key_session().is_some()
+    {
+        return Err("uncommitted State invents native authority or preparation".into());
+    }
+    Ok(())
+}
+
+/// Authenticate both presence and absence from the exact snapshot cut with the same native
+/// verifier used by recovery. World supplies no authority to that reader. Genesis-only checks
+/// authenticate its signed authority, not its execution roots; startup must reexecute genesis.
+///
+/// The cut takes one certified block at a time, so that a single walk from signed genesis
+/// checks the snapshot World and its predecessor together.
+pub(crate) struct CommittedProgress<'w, W> {
+    world: &'w W,
+    network: iroha_data_model::NetworkId,
+    height: u64,
+    next: u64,
+    graph: Option<crate::sumeragi::schedule::ConsensusSchedule>,
+    historical_obligations: std::collections::BTreeMap<PeerId, u64>,
+    observed: std::collections::BTreeSet<u64>,
+    observed_pulses: usize,
+    latest_pulse: Option<crate::beacon::GlobalThresholdBeaconPulseLinkV1>,
+}
+
+impl<'w, W: WorldReadOnly> CommittedProgress<'w, W> {
+    /// Check the persisted preparations of the cut at a positive `height`; an empty cut is
+    /// [`validate_empty_progress`].
+    pub(crate) fn start(
+        world: &'w W,
+        network: iroha_data_model::NetworkId,
+        height: u64,
+    ) -> Result<Self, Attempt<String>> {
+        validate_persisted_progress(world)?;
+        if height == 0 {
+            return Err("an empty cut has no certified prefix to observe".into());
+        }
+        Ok(Self {
+            world,
+            network,
+            height,
+            next: 1,
+            graph: None,
+            historical_obligations: std::collections::BTreeMap::new(),
+            observed: std::collections::BTreeSet::new(),
+            observed_pulses: 0,
+            latest_pulse: None,
+        })
+    }
+
+    /// The committed height of this cut.
+    pub(crate) fn height(&self) -> u64 {
+        self.height
+    }
+
+    /// Check the next certified block of the cut, oldest first from genesis.
+    pub(crate) fn observe(
+        &mut self,
+        certified: &crate::sumeragi::certified_chain::CertifiedBlock,
+    ) -> Result<(), Attempt<String>> {
+        use iroha_data_model::parameter::system::ConsensusMode;
+        if certified.height() != self.next || self.next > self.height {
+            return Err("committee progress observed a block outside its exact cut".into());
+        }
+        self.next = self
+            .next
+            .checked_add(1)
+            .ok_or("committed height overflows")?;
+        let (world, network, height) = (self.world, self.network, self.height);
         if let Some(pulse) = &certified.commitment().beacon {
             let slot = (
                 iroha_data_model::governance::types::BeaconSessionId::for_network_v1(&network),
@@ -350,33 +416,35 @@ pub fn validate_committed_progress(
                     "restored beacon pulse differs from its exact certified native result".into(),
                 );
             }
-            observed_pulses = observed_pulses
+            self.observed_pulses = self
+                .observed_pulses
                 .checked_add(1)
                 .ok_or("pulse count overflows")?;
-            latest_pulse = Some(
+            self.latest_pulse = Some(
                 crate::beacon::validate_persisted_global_threshold_beacon_pulse_v1(pulse)
                     .map_err(|error| error.to_string())?,
             );
         }
         let schedule = &certified.commitment().schedule;
         let current = &schedule.current;
-        graph = Some(
-            graph
+        self.graph = Some(
+            self.graph
+                .take()
                 .map_or_else(
-                    || ConsensusSchedule::from_genesis_outcome(schedule),
+                    || crate::sumeragi::schedule::ConsensusSchedule::from_genesis_outcome(schedule),
                     |previous| previous.advanced(schedule),
                 )
                 .map_err(|error| error.to_string())?,
         );
         if current.mode == ConsensusMode::Npos {
             add_obligations(
-                &mut historical_obligations,
+                &mut self.historical_obligations,
                 current.committee.iter().map(|seat| seat.validator.clone()),
                 current.authorization.last_height,
             );
         }
         let Some(boundary) = &schedule.boundary else {
-            continue;
+            return Ok(());
         };
         let outcome = &boundary.next.authorization;
         if let Some(preparation) = &boundary.preparation {
@@ -388,7 +456,7 @@ pub fn validate_committed_progress(
                 || preparation.selection_height != certified.height()
                 || certified.block().header().prev_block_hash()
                     != Some(preparation.selection_anchor)
-                || !observed.insert(preparation.target_epoch)
+                || !self.observed.insert(preparation.target_epoch)
             {
                 return Err(
                     "committee snapshot changes or duplicates a certified preparation".into(),
@@ -396,7 +464,7 @@ pub fn validate_committed_progress(
             }
             preparation.validate_against_preparing_authorization(outcome)?;
             add_obligations(
-                &mut historical_obligations,
+                &mut self.historical_obligations,
                 preparation
                     .committee
                     .iter()
@@ -464,69 +532,90 @@ pub fn validate_committed_progress(
                 return Err("epoch boundary resets genesis authorization".into());
             }
         }
+        Ok(())
     }
-    if world.global_beacon_pulses().iter().count() != observed_pulses
-        || world.global_beacon_pulse_slots().iter().count() != observed_pulses
-        || world.global_beacon_latest_pulse().iter().count() != usize::from(latest_pulse.is_some())
-        || world
-            .global_beacon_latest_pulse()
-            .get(&super::GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY)
-            != latest_pulse.as_ref()
-    {
-        return Err("restored beacon history adds or omits certified native pulse work".into());
-    }
-    let graph = graph.ok_or("committed native prefix is empty")?;
-    if world.consensus_schedule().canonical() != &graph {
-        return Err("restored native schedule differs from the exact certified cut".into());
-    }
-    let next = graph
-        .ready(
-            height
-                .checked_add(1)
-                .ok_or("next authority height overflows")?,
-        )
-        .map_err(|error| error.to_string())?;
-    validate_current_beacon(
-        world,
-        &next.epoch.generation(),
-        &next.epoch.authorization,
-        height,
-    )?;
-    let mut live_obligations = std::collections::BTreeMap::new();
-    if next.epoch.mode == ConsensusMode::Npos {
-        add_obligations(
-            &mut live_obligations,
-            next.epoch
-                .committee
-                .iter()
-                .map(|seat| seat.validator.clone()),
-            next.epoch.authorization.last_height,
-        );
-        for (_, transition) in world
-            .validator_committee_transitions()
-            .iter()
-            .filter(|(_, transition)| transition.outcome.is_none())
+
+    /// Check the cut's World against everything its complete certified prefix established.
+    pub(crate) fn finish(self) -> Result<(), Attempt<String>> {
+        use iroha_data_model::parameter::system::ConsensusMode;
+        let Self {
+            world,
+            height,
+            next,
+            graph,
+            mut historical_obligations,
+            observed,
+            observed_pulses,
+            latest_pulse,
+            ..
+        } = self;
+        if height.checked_add(1) != Some(next) {
+            return Err("committed native prefix ended before the snapshot cut".into());
+        }
+        if world.global_beacon_pulses().iter().count() != observed_pulses
+            || world.global_beacon_pulse_slots().iter().count() != observed_pulses
+            || world.global_beacon_latest_pulse().iter().count()
+                != usize::from(latest_pulse.is_some())
+            || world
+                .global_beacon_latest_pulse()
+                .get(&super::GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY)
+                != latest_pulse.as_ref()
         {
+            return Err("restored beacon history adds or omits certified native pulse work".into());
+        }
+        let graph = graph.ok_or("committed native prefix is empty")?;
+        if world.consensus_schedule().canonical() != &graph {
+            return Err("restored native schedule differs from the exact certified cut".into());
+        }
+        let next = graph
+            .ready(
+                height
+                    .checked_add(1)
+                    .ok_or("next authority height overflows")?,
+            )
+            .map_err(|error| error.to_string())?;
+        validate_current_beacon(
+            world,
+            &next.epoch.generation(),
+            &next.epoch.authorization,
+            height,
+        )?;
+        let mut live_obligations = std::collections::BTreeMap::new();
+        if next.epoch.mode == ConsensusMode::Npos {
             add_obligations(
                 &mut live_obligations,
-                transition
-                    .preparation
+                next.epoch
                     .committee
                     .iter()
                     .map(|seat| seat.validator.clone()),
-                transition.preparation.last_height,
+                next.epoch.authorization.last_height,
             );
+            for (_, transition) in world
+                .validator_committee_transitions()
+                .iter()
+                .filter(|(_, transition)| transition.outcome.is_none())
+            {
+                add_obligations(
+                    &mut live_obligations,
+                    transition
+                        .preparation
+                        .committee
+                        .iter()
+                        .map(|seat| seat.validator.clone()),
+                    transition.preparation.last_height,
+                );
+            }
         }
+        for (peer, through) in &live_obligations {
+            let retained = historical_obligations.entry(peer.clone()).or_default();
+            *retained = (*retained).max(*through);
+        }
+        if observed.len() != world.validator_committee_transitions().iter().count() {
+            return Err("committee snapshot contains an uncertified preparation".into());
+        }
+        validate_retained_staking_obligations(world, &historical_obligations, &live_obligations)
+            .map_err(Into::into)
     }
-    for (peer, through) in &live_obligations {
-        let retained = historical_obligations.entry(peer.clone()).or_default();
-        *retained = (*retained).max(*through);
-    }
-    if observed.len() != world.validator_committee_transitions().iter().count() {
-        return Err("committee snapshot contains an uncertified preparation".into());
-    }
-    validate_retained_staking_obligations(world, &historical_obligations, &live_obligations)
-        .map_err(Into::into)
 }
 
 /// Resolve the incumbent validator generation from the authenticated committed result.

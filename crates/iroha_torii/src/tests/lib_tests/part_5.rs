@@ -1025,7 +1025,7 @@ async fn cancelled_attachment_request_retains_admission_in_real_sanitizer_worker
     );
     let key_pair = checked_torii_test_ed25519_keypair(0x46, "ZK sanitizer cancellation key");
     let account_id = AccountId::new(key_pair.public_key().clone());
-    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world(
+    let mut app = crate::tests_runtime_handlers::mk_native_app_state_for_tests_with_world(
         crate::tests_runtime_handlers::world_with_account(&account_id),
     );
     let app_state = Arc::get_mut(&mut app).expect("unique sanitizer cancellation app state");
@@ -1069,7 +1069,8 @@ async fn cancelled_attachment_request_retains_admission_in_real_sanitizer_worker
                 ProofBodyAdmissionState::new(app.clone(), 1024),
                 proof_body_admission_middleware,
             ));
-        let headers = crate::tests_runtime_handlers::signed_app_headers(
+        let headers = crate::tests_runtime_handlers::signed_network_app_headers(
+            app.state.network_id_ref(),
             &account_id,
             &key_pair,
             &method,
@@ -1140,7 +1141,7 @@ async fn cancelled_attachment_get_retains_admission_in_real_sanitizer_worker() {
     let key_pair = checked_torii_test_ed25519_keypair(0x47, "ZK export cancellation key");
     let account_id = AccountId::new(key_pair.public_key().clone());
     let tenant = crate::zk_attachments::AttachmentTenant::from_account(&account_id);
-    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world(
+    let mut app = crate::tests_runtime_handlers::mk_native_app_state_for_tests_with_world(
         crate::tests_runtime_handlers::world_with_account(&account_id),
     );
     let app_state = Arc::get_mut(&mut app).expect("unique export cancellation app state");
@@ -1212,7 +1213,8 @@ async fn cancelled_attachment_get_retains_admission_in_real_sanitizer_worker() {
     let uri: axum::http::Uri = format!("/v1/zk/attachments/{}", metadata.id)
         .parse()
         .expect("attachment export URI");
-    let headers = crate::tests_runtime_handlers::signed_app_headers(
+    let headers = crate::tests_runtime_handlers::signed_network_app_headers(
+        app.state.network_id_ref(),
         &account_id,
         &key_pair,
         &method,

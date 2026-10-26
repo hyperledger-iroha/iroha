@@ -87,14 +87,12 @@ const _: () = assert!(P256_REDUCTION_STARK_FIXED_WIDTH_V1 == P256_LOW_S_STARK_FI
 const _: () = assert!(P256_REDUCTION_STARK_CONSTRAINT_DEGREE_V1 <= 4);
 const _: () = assert!(P256_LOW_S_STARK_CONSTRAINT_DEGREE_V1 <= 4);
 /// Verifier-fixed limb row.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct P256ReductionFixedRowV1 {
     /// Little-endian 16-bit limb index.
     pub(crate) limb: u8,
 }
 /// Complete exact reduction trace.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, PartialEq, Eq)]
 pub struct P256ReductionTraceV1 {
     /// Verifier-regenerated row topology.
@@ -102,20 +100,17 @@ pub struct P256ReductionTraceV1 {
     /// Committed witness rows.
     pub(crate) base: [[F; P256_REDUCTION_BASE_WIDTH_V1]; P256_REDUCTION_ROWS_V1],
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl core::fmt::Debug for P256ReductionTraceV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str("P256ReductionTraceV1 { <private trace redacted> }")
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for P256ReductionTraceV1 {
     fn drop(&mut self) {
         self.zeroize_private_v1();
     }
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256ReductionTraceV1 {
     /// Overwrite every committed reduction row.
     pub(crate) fn zeroize_private_v1(&mut self) {
@@ -150,7 +145,6 @@ impl P256ReductionTraceV1 {
 ///
 /// This is the narrow pointwise surface used by the aggregate value/byte
 /// bindings; it does not expose or reinterpret the internal carry witness.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub fn p256_reduction_limb_cells_v1(
     trace: &P256ReductionTraceV1,
     limb: usize,
@@ -176,7 +170,6 @@ pub enum P256ReductionAirErrorV1 {
     #[error("zk-X509 P-256 reduction topology is invalid")]
     Topology,
     /// A claimed reduction or canonical comparison is false.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error("zk-X509 P-256 reduction witness is invalid")]
     InvalidWitness,
     /// A local or transition polynomial identity is nonzero.
@@ -188,7 +181,6 @@ pub enum P256ReductionAirErrorV1 {
     Allocation,
 }
 /// Exact fixed trace proving `s <= floor(n/2)`.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, PartialEq, Eq)]
 pub struct P256LowSTraceV1 {
     /// Verifier-regenerated limb rows.
@@ -196,20 +188,17 @@ pub struct P256LowSTraceV1 {
     /// Committed low-s comparison rows.
     pub(crate) base: [[F; P256_LOW_S_BASE_WIDTH_V1]; P256_REDUCTION_ROWS_V1],
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl core::fmt::Debug for P256LowSTraceV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str("P256LowSTraceV1 { <private trace redacted> }")
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for P256LowSTraceV1 {
     fn drop(&mut self) {
         self.zeroize_private_v1();
     }
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256LowSTraceV1 {
     /// Overwrite every committed low-s comparison row.
     pub(crate) fn zeroize_private_v1(&mut self) {
@@ -234,7 +223,6 @@ impl P256LowSTraceV1 {
     }
 }
 /// Read the scalar cell constrained by one low-s comparison limb.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub fn p256_low_s_limb_cell_v1(
     trace: &P256LowSTraceV1,
     limb: usize,
@@ -253,7 +241,6 @@ pub fn p256_low_s_opened_binding_cell_v1<A: PolynomialAirFieldV1>(
     base[LOW_S_VALUE]
 }
 /// Build the exact wallet low-s comparison trace.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub fn build_p256_low_s_trace_v1(
     scalar_be: [u8; 32],
 ) -> Result<P256LowSTraceV1, P256ReductionAirErrorV1> {
@@ -286,7 +273,6 @@ pub fn build_p256_low_s_trace_v1(
     Ok(trace)
 }
 /// Evaluate one exact low-s comparison row.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub fn evaluate_p256_low_s_row_constraints_v1(
     fixed: P256ReductionFixedRowV1,
     base: &[F; P256_LOW_S_BASE_WIDTH_V1],
@@ -333,7 +319,6 @@ pub fn evaluate_p256_low_s_row_constraints_v1(
     Ok(residues)
 }
 /// Build the canonical fixed trace for one arbitrary 256-bit word.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub fn build_p256_reduction_trace_v1(
     word_be: [u8; 32],
 ) -> Result<P256ReductionTraceV1, P256ReductionAirErrorV1> {
@@ -402,7 +387,6 @@ pub fn build_p256_reduction_trace_v1(
     Ok(trace)
 }
 /// Evaluate one exact reduction row.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub fn evaluate_p256_reduction_row_constraints_v1(
     fixed: P256ReductionFixedRowV1,
     base: &[F; P256_REDUCTION_BASE_WIDTH_V1],
@@ -776,7 +760,6 @@ fn append_range_residues_v1<A: PolynomialAirFieldV1>(residues: &mut Vec<A>, valu
 fn boolean_residue_v1<A: PolynomialAirFieldV1>(value: A) -> A {
     value.mul(value.sub(A::ONE))
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn less_than_witness_v1(
     value: [u16; LIMBS],
     modulus: [u16; LIMBS],
@@ -799,7 +782,6 @@ fn less_than_witness_v1(
     }
     Ok((difference, borrow))
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn subtract_be_v1(mut left: [u8; 32], right: [u8; 32]) -> Option<[u8; 32]> {
     let mut borrow = 0_i16;
     for index in (0..32).rev() {
@@ -820,7 +802,6 @@ fn bytes_be_to_limbs_le_v1(bytes: [u8; 32]) -> [u16; LIMBS] {
         u16::from_le_bytes([bytes[low], bytes[low - 1]])
     })
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn limbs_le_to_bytes_be_v1(limbs: [u16; LIMBS]) -> [u8; 32] {
     let mut bytes = [0_u8; 32];
     for (limb, value) in limbs.into_iter().enumerate() {
@@ -830,7 +811,6 @@ fn limbs_le_to_bytes_be_v1(limbs: [u16; LIMBS]) -> [u8; 32] {
     }
     bytes
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn write_bits_v1(target: &mut [F], value: u16) {
     for (bit, cell) in target.iter_mut().enumerate() {
         *cell = F(u64::from((value >> bit) & 1));

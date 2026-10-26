@@ -16979,17 +16979,27 @@ fn hf_revision_parser_rejects_mutable_and_noncanonical_references() {
 fn leave_hf_shared_lease_last_member_uses_configured_drain_grace() -> Result<(), eyre::Report> {
     permissioned_soracloud_state!(kura, mut state);
     {
-        let mut fees = state.nexus_snapshot().fees;
+        let mut fees = state
+            .world
+            .parameters
+            .view()
+            .root_fees()
+            .expect("signed fixture fee policy")
+            .clone();
         fees.fee_sink_account_id = ALICE_ID.clone();
         {
-            let mut parameters = state.world.parameters.block();
-            parameters
-                .set_parameter(iroha_data_model::parameter::Parameter::Custom(
+            let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+                .expect("funded parameter fixture block");
+            crate::state::set_parameter_cell_for_testing(
+                &mut parameters,
+                iroha_data_model::parameter::Parameter::Custom(
                     fees.clone()
                         .into_custom_parameter()
                         .expect("explicit fixture policy"),
-                ))
-                .expect("valid fixture monetary projection");
+                ),
+                state.world.sccp_committee_generations.allocation_budget(),
+            )
+            .expect("valid fixture monetary projection");
             parameters.commit();
         }
     }
@@ -17079,17 +17089,27 @@ fn leave_hf_shared_lease_last_member_uses_configured_drain_grace() -> Result<(),
 fn hf_shared_lease_registration_does_not_create_runtime_service() -> Result<(), eyre::Report> {
     permissioned_soracloud_state!(kura, state);
     {
-        let mut fees = state.nexus_snapshot().fees;
+        let mut fees = state
+            .world
+            .parameters
+            .view()
+            .root_fees()
+            .expect("signed fixture fee policy")
+            .clone();
         fees.fee_sink_account_id = ALICE_ID.clone();
         {
-            let mut parameters = state.world.parameters.block();
-            parameters
-                .set_parameter(iroha_data_model::parameter::Parameter::Custom(
+            let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+                .expect("funded parameter fixture block");
+            crate::state::set_parameter_cell_for_testing(
+                &mut parameters,
+                iroha_data_model::parameter::Parameter::Custom(
                     fees.clone()
                         .into_custom_parameter()
                         .expect("explicit fixture policy"),
-                ))
-                .expect("valid fixture monetary projection");
+                ),
+                state.world.sccp_committee_generations.allocation_budget(),
+            )
+            .expect("valid fixture monetary projection");
             parameters.commit();
         }
     }
@@ -17156,17 +17176,27 @@ fn hf_shared_lease_registration_does_not_create_runtime_service() -> Result<(), 
 fn renew_hf_shared_lease_active_window_queues_next_window() -> Result<(), eyre::Report> {
     permissioned_soracloud_state!(kura, state);
     {
-        let mut fees = state.nexus_snapshot().fees;
+        let mut fees = state
+            .world
+            .parameters
+            .view()
+            .root_fees()
+            .expect("signed fixture fee policy")
+            .clone();
         fees.fee_sink_account_id = BOB_ID.clone();
         {
-            let mut parameters = state.world.parameters.block();
-            parameters
-                .set_parameter(iroha_data_model::parameter::Parameter::Custom(
+            let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+                .expect("funded parameter fixture block");
+            crate::state::set_parameter_cell_for_testing(
+                &mut parameters,
+                iroha_data_model::parameter::Parameter::Custom(
                     fees.clone()
                         .into_custom_parameter()
                         .expect("explicit fixture policy"),
-                ))
-                .expect("valid fixture monetary projection");
+                ),
+                state.world.sccp_committee_generations.allocation_budget(),
+            )
+            .expect("valid fixture monetary projection");
             parameters.commit();
         }
     }

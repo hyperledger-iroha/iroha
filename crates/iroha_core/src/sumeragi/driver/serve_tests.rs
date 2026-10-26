@@ -442,7 +442,7 @@ fn admitted_maximum_frames_fit_frame_overhead_and_the_block_sync_frame() {
         },
     };
 
-    let count = iroha_data_model::block::consensus::MAX_VALIDATORS_PER_HEIGHT;
+    let count = iroha_model_base::topology::MAX_VALIDATORS_PER_HEIGHT;
     assert_eq!(count, 31);
     let keys: Vec<PublicKey> = (0..count)
         .map(|index| {

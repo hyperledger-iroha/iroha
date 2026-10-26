@@ -706,7 +706,7 @@ mod model {
             }
             if usize::try_from(self.max_validators)
                 .ok()
-                .is_none_or(|count| !crate::block::consensus::is_valid_committee_size(count))
+                .is_none_or(|count| !iroha_model_base::topology::is_valid_committee_size(count))
             {
                 return Err("max_validators must be a bounded 3f + 1 committee size (4..=31)");
             }

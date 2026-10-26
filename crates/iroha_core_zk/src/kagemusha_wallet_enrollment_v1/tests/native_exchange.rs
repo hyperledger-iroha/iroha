@@ -38,6 +38,8 @@ use std::{
 mod archive;
 #[path = "native_exchange/controls.rs"]
 mod controls;
+#[path = "native_exchange/enrollment_cohort.rs"]
+mod enrollment_cohort;
 #[path = "native_exchange/fee.rs"]
 mod fee;
 #[path = "native_exchange/fee_confirmation.rs"]

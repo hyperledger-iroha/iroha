@@ -732,8 +732,8 @@ native parsing and verifier-fixed tables; the reference profile uses canonical
 UUID OIDs. The coherent correction uses those canonical constants and adds
 all seven supported EKU combinations plus retired-identifier rejection. The
 SourceNode retention and complete node-query census tests retain their full
-replay assertions for the mandatory copy endpoints. Fresh optimized Mac and
-Linux artifacts confirm all 29 fields of profile
+replay assertions for the mandatory copy endpoints. Retained optimized Mac and
+Linux artifacts using the prior 48-byte catalog confirm all 29 fields of profile
 `fb4dc4d0b2ce277e23d3de9d4ccd6c32c9a9b0ef5b39f7c963f8b914cf15860b`,
 with an exact 2,841/73 test census. After the verified three-literal fixture
 correction, both fresh native runs pass all 218 selected controls with zero
@@ -741,8 +741,9 @@ failures or skips. Signed path-length, capacity, omission, all source observatio
 and compiler/artifact custody pass. Authentic proof hashes match across platforms.
 The standalone DER remains 1,527,952 bytes and takes 268.121060 seconds on Mac
 and 268.733106 seconds on Linux. Both verifications and every original mutation
-and timing assertion pass. Complete current ordinary and maximum credential
-proofs, including the unchanged 300-second, proof-size, RSS and address-space
+and timing assertion pass. Fresh ordinary and maximum credential proofs under
+the current 32-byte native BLAKE3 catalog, including the unchanged 300-second,
+proof-size, RSS and address-space
 limits, remain required. Original 215-pass/three-failure runs remain retained.
 
 The latest eighteen-target Core/Kagami build and all 262 selected native
@@ -830,8 +831,8 @@ Test-only public phase counters now separate composition joins and source adapte
 the fixed diagnostic receipt grows by 1,680 bytes within the existing runtime
 reserve, without changing proof, time, RSS or address-space limits.
 
-The latest Linux maximum (`epoch26-rfc-linux-maximum4`) produces **9,412,944
-bytes** on corrected profile
+The retained Linux maximum (`epoch26-rfc-linux-maximum4`) produces **9,412,944
+bytes** under the prior 48-byte catalog on profile
 `fb4dc4d0b2ce277e23d3de9d4ccd6c32c9a9b0ef5b39f7c963f8b914cf15860b`.
 Producer self-verification, independent replay, wrong-genesis, corruption and all
 32 nonce-byte substitutions pass. A separate fresh public verifier passes in
@@ -840,7 +841,8 @@ Producer self-verification, independent replay, wrong-genesis, corruption and al
 bound, not an exact measured peak. The unchanged limits remain 9,437,184 proof
 bytes, 12 GiB RSS, literal hard/soft 32 GiB `RLIMIT_AS` and **300 seconds**.
 Proof size and memory gates pass, but proving takes **1,437.185689 seconds**, so
-the complete maximum still fails. All 65 phase timers, exact test artifacts and
+the measured maximum fails. These retained measurements do not qualify the
+current native BLAKE3-catalog profile. All 65 phase timers, exact test artifacts and
 full source observations pass their custody checks. Nested timers are not
 additive; the 11.59-second terminal-link phase is too small to explain the gap.
 The preceding Metal maximum verifies the complete proof but fails the time and
@@ -1362,10 +1364,14 @@ latest `notBefore` and ends at or before the earliest `notAfter` of every
 certificate in the path, and ends strictly before the CRL `nextUpdate`. State
 admission, the native relation, the DER-to-bounds helper, the in-relation
 numeric rows and the RFC 5280 AIR base constraints agree on genuinely signed
-boundary paths. The native relation and the DER-to-bounds helper are compiled
-with the prover, for tests and the `privacy-release-evidence` feature only; no
-SDK builds an X509 statement yet, and no complete proof was generated at those
-shapes.
+boundary paths. Ordinary builds expose the native relation, DER-to-bounds
+helper and complete local holder prover. The holder API derives the exact wallet
+ownership challenge, accepts bounded owned witness inputs without a subject
+private key, and self-verifies the complete MAIN/CA proof. SDK statement builders,
+native bindings and paired-host enrollment/transport remain open. Release fixtures
+and process diagnostics remain test/evidence-only. Matching ordinary-build,
+full-proof and resource validation of this API remains required; preceding proof
+results do not qualify this source.
 
 The latest Linux CPU maximum proof is 9,412,944 bytes, under the unchanged
 9,437,184-byte cap, with SHA-256

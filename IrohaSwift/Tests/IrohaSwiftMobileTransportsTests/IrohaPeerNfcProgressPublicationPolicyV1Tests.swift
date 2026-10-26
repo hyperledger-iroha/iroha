@@ -116,6 +116,53 @@ final class IrohaPeerNfcProgressPublicationPolicyV1Tests: XCTestCase {
         XCTAssertEqual(events.map(\.attempt), [1, 1, 1, 1, 1, 2, 2, 2, 3, 3, 3, 3])
     }
 
+    func testRetainedPaymentRestoresDeliveryProgressOnceAcrossContacts() {
+        var events: [IrohaPeerNfcProgressEventV1] = []
+        let reporter = IrohaPeerNfcReaderProgressReporterV1 { events.append($0) }
+        reporter.checkpointRetained(paymentBytes: 120, acknowledgementBytes: nil)
+        reporter.emit(.contactLost)
+        reporter.emit(.tagDetected)
+        reporter.checkpointRetained(paymentBytes: 120, acknowledgementBytes: nil)
+        XCTAssertEqual(events.map(\.stage), [.paymentPrepared, .contactLost, .tagDetected])
+        XCTAssertEqual(events.first?.bytes, 120)
+    }
+
+    func testRetainedAcknowledgementDoesNotInventAnotherPaymentOrCommit() {
+        var events: [IrohaPeerNfcProgressEventV1] = []
+        let reporter = IrohaPeerNfcReaderProgressReporterV1 { events.append($0) }
+        reporter.checkpointRetained(paymentBytes: 120, acknowledgementBytes: 80)
+        reporter.checkpointRetained(paymentBytes: 120, acknowledgementBytes: 80)
+        reporter.finishPayment()
+        XCTAssertEqual(events.map(\.stage), [.ackPersisted, .complete])
+        XCTAssertEqual(events.first?.bytes, 80)
+    }
+
+    func testSuccessfulPaymentPublishesCompleteOnceAndRetiresLateCallbacks() {
+        var events: [IrohaPeerNfcProgressEventV1] = []
+        var failures: [IrohaPeerNfcReaderTerminalDiagnosticV1] = []
+        let reporter = IrohaPeerNfcReaderProgressReporterV1(
+            terminalHandler: { failures.append($0) }, handler: { events.append($0) })
+        reporter.emit(.ackPersisted)
+        reporter.finishPayment()
+        reporter.finishPayment()
+        reporter.emit(.contactLost)
+        reporter.finish(error: CancellationError())
+        XCTAssertEqual(events.map(\.stage), [.ackPersisted, .complete])
+        XCTAssertTrue(failures.isEmpty)
+    }
+
+    func testFailureAndRequestOnlyRetirementCannotPublishPaymentCompletion() {
+        for failed in [false, true] {
+            var events: [IrohaPeerNfcProgressEventV1] = []
+            let reporter = IrohaPeerNfcReaderProgressReporterV1(
+                terminalHandler: { _ in }, handler: { events.append($0) })
+            if failed { reporter.finish(error: CancellationError()) }
+            else { reporter.invalidate() }
+            reporter.finishPayment()
+            XCTAssertTrue(events.isEmpty)
+        }
+    }
+
     func testInvalidationDrainsOldProgressAndSuppressesItAfterRestart() {
         let eventsLock = NSLock()
         var oldStages: [IrohaPeerNfcProgressStageV1] = []
@@ -300,6 +347,40 @@ final class IrohaPeerNfcReaderOperationGateV1Tests: XCTestCase {
         XCTAssertFalse(gate.connectInFlight)
     }
 
+    func testWokenConnectTimerOwnsOnlyItsOwnPendingConnect() {
+        var gate = IrohaPeerNfcReaderOperationGateV1()
+        let epoch = gate.beginOperation()
+
+        XCTAssertTrue(gate.beginConnect(capturedEpoch: epoch))
+        let first = gate.connectGeneration
+        XCTAssertTrue(gate.isConnecting(generation: first))
+        XCTAssertTrue(gate.finishConnect(capturedEpoch: epoch))
+        XCTAssertFalse(gate.isConnecting(generation: first), "The connect callback already won")
+
+        XCTAssertTrue(gate.beginConnect(capturedEpoch: epoch))
+        let second = gate.connectGeneration
+        XCTAssertNotEqual(first, second)
+        XCTAssertFalse(gate.isConnecting(generation: first),
+                       "An earlier contact's timer cannot end the next contact's connect")
+        XCTAssertTrue(gate.isConnecting(generation: second))
+    }
+
+    func testReaderTimersFinishOnlyTheWaitTheyOwn() throws {
+        let packageRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(contentsOf: packageRoot.appendingPathComponent(
+            "Sources/IrohaSwiftMobileTransports/IrohaPeerNfcCoreNFCV1.swift"), encoding: .utf8)
+        // CoreNFC timers are checked inside finish's locked terminal transition, not before it.
+        XCTAssertTrue(source.contains("expectedConnect.map({ operationGate.isConnecting(generation: $0) }) ?? true"))
+        XCTAssertTrue(source.contains("expectedRecoveryWait.map({ recoveryWait == $0 }) ?? true"))
+        XCTAssertTrue(source.contains("expectedConnect: connectGeneration"))
+        XCTAssertTrue(source.contains("expectedRecoveryWait: waitToken"))
+        XCTAssertEqual(source.components(separatedBy: "recoveryWait = nil").count - 1, 3,
+                       "Both detection paths and terminal cleanup retire the armed recovery wait")
+    }
+
     func testDuplicateDetectionCannotStartConcurrentConnect() {
         var gate = IrohaPeerNfcReaderOperationGateV1()
         let epoch = gate.beginOperation()
@@ -415,13 +496,17 @@ final class IrohaPeerNfcReaderPlatformCallGateV1Tests: XCTestCase {
         let normalizedSource = source.split(separator: "\n")
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .joined(separator: "\n")
-        // Both terminal branches retire progress after the platform-call
-        // barrier; failure also publishes its typed terminal diagnostic.
+        // The platform-call barrier precedes every per-session progress
+        // transition; renewal retains the logical reporter for its successor.
         XCTAssertTrue(normalizedSource.contains("""
             platformCallGate?.invalidate()
             switch result {
+            case .failure(is IrohaPeerNfcReaderContinuationErrorV1):
+            progressReporter?.emit(.contactLost)
+            progressReporter?.invalidate()
             case .failure(let error): progressReporter?.finish(error: error)
-            case .success: progressReporter?.invalidate()
+            case .success(.payment): progressReporter?.finishPayment()
+            case .success(.request): progressReporter?.invalidate()
             }
             task?.cancel()
             if invalidating { session?.invalidate() }
@@ -535,34 +620,21 @@ final class IrohaPeerNfcRetryGateV1Tests: XCTestCase {
 
     func testPublicRetryPolicyBoundsAreFinite() {
         XCTAssertTrue(IrohaPeerNfcReaderRetryPolicyV1.areValid(
-            maximumContactAttempts: 1,
-            redetectionTimeoutMilliseconds: 1
-        ))
+            redetectionTimeoutMilliseconds: 1, minimumRestartIntervalMilliseconds: 1))
         XCTAssertTrue(IrohaPeerNfcReaderRetryPolicyV1.areValid(
-            maximumContactAttempts: 10,
-            redetectionTimeoutMilliseconds: 30_000
-        ))
+            redetectionTimeoutMilliseconds: 30_000, minimumRestartIntervalMilliseconds: 1_000))
         XCTAssertFalse(IrohaPeerNfcReaderRetryPolicyV1.areValid(
-            maximumContactAttempts: 0,
-            redetectionTimeoutMilliseconds: 1
-        ))
+            redetectionTimeoutMilliseconds: 0, minimumRestartIntervalMilliseconds: 250))
         XCTAssertFalse(IrohaPeerNfcReaderRetryPolicyV1.areValid(
-            maximumContactAttempts: 11,
-            redetectionTimeoutMilliseconds: 1
-        ))
+            redetectionTimeoutMilliseconds: 30_001, minimumRestartIntervalMilliseconds: 250))
         XCTAssertFalse(IrohaPeerNfcReaderRetryPolicyV1.areValid(
-            maximumContactAttempts: 1,
-            redetectionTimeoutMilliseconds: 0
-        ))
+            redetectionTimeoutMilliseconds: 30_000, minimumRestartIntervalMilliseconds: 0))
         XCTAssertFalse(IrohaPeerNfcReaderRetryPolicyV1.areValid(
-            maximumContactAttempts: 1,
-            redetectionTimeoutMilliseconds: 30_001
-        ))
+            redetectionTimeoutMilliseconds: 30_000, minimumRestartIntervalMilliseconds: 1_001))
     }
 
-    func testDuplicateDetectionDoesNotConsumeAnotherAttempt() {
+    func testDuplicateDetectionCannotClaimAnInFlightConnection() {
         let retryGate = IrohaPeerNfcRetryGateV1(.init(
-            maximumContactAttempts: 2,
             redetectionTimeoutMilliseconds: 1_000
         ))
         var operationGate = IrohaPeerNfcReaderOperationGateV1()
@@ -582,27 +654,107 @@ final class IrohaPeerNfcRetryGateV1Tests: XCTestCase {
             operationGate: &operationGate,
             capturedEpoch: epoch
         ))
-        XCTAssertFalse(retryGate.mayRedetect())
+        XCTAssertTrue(retryGate.mayRedetect())
     }
 
-    func testThreeAttemptsAreBoundedAndRedetectionClosesAfterThird() {
-        let gate = IrohaPeerNfcRetryGateV1(.init(
-            maximumContactAttempts: 3,
-            redetectionTimeoutMilliseconds: 3_000
-        ))
-
-        XCTAssertTrue(gate.beginContactAttempt())
-        XCTAssertTrue(gate.mayRedetect())
-        XCTAssertTrue(gate.beginContactAttempt())
-        XCTAssertTrue(gate.mayRedetect())
-        XCTAssertTrue(gate.beginContactAttempt())
+    func testRepeatedContactsUseElapsedRecoveryBudgetInsteadOfAnAttemptCap() {
+        let clock = IrohaPeerNfcRecoveryTestClockV1()
+        let gate = IrohaPeerNfcRetryGateV1(.default, now: { clock.read() })
+        for _ in 0..<12 {
+            XCTAssertTrue(gate.beginContactAttempt())
+            XCTAssertTrue(gate.mayRedetect())
+            clock.advance(1_000_000_000)
+        }
+        XCTAssertEqual(gate.redetectionTimeoutNanoseconds, 18_000_000_000)
+        clock.advance(18_000_000_000)
         XCTAssertFalse(gate.mayRedetect())
         XCTAssertFalse(gate.beginContactAttempt())
-        XCTAssertEqual(gate.redetectionTimeoutNanoseconds, 3_000_000_000)
+        XCTAssertEqual(gate.redetectionTimeoutNanoseconds, 0)
     }
 }
 
 final class IrohaPeerNfcStartupRecoveryV1Tests: XCTestCase {
+#if os(iOS) && canImport(CoreNFC)
+    func testExpiredRfSessionCompletesFromExactDurableAckWithoutReopeningOrCreatingValue() throws {
+        let request = try irohaPeerWalletExchangeMessageV1(kind: .request, payload: Data(repeating: 0x31, count: 96))
+        let payment = try irohaPeerWalletExchangeMessageV1(kind: .payment, payload: Data(repeating: 0x32, count: 192))
+        let acknowledgement = try irohaPeerWalletExchangeMessageV1(kind: .credited, payload: Data(repeating: 0x33, count: 80))
+        let policy = IrohaPeerNfcProfilePolicyV1(profile: .kagemushaWalletV1)
+        let session = Data((1...IrohaPeerNfcV1.sessionIDBytes).map(UInt8.init))
+        let prepared = try IrohaPeerNfcSenderCheckpointV1(
+            sessionID: session, receiveRequest: request.encoded, payment: payment.encoded,
+            profilePolicy: policy)
+        let saved = try IrohaPeerNfcSenderCheckpointV1(
+            sessionID: session, receiveRequest: request.encoded, payment: payment.encoded,
+            durableAcknowledgement: acknowledgement.encoded, profilePolicy: policy)
+        var events: [IrohaPeerNfcProgressEventV1] = []
+        let owner = IrohaPeerNfcReaderOperationContextV1(checkpoint: prepared.encoded,
+                                                       onTypedProgress: { events.append($0) })
+        defer { owner.cancel() }
+        XCTAssertNil(try IrohaPeerNfcReaderServiceV1.completeRenewalFromDurableAcknowledgement(
+            owner, profilePolicy: policy, limits: .default), "A Payment alone still needs its receiver")
+        owner.checkpoints.store(saved.encoded)
+        let result = try XCTUnwrap(IrohaPeerNfcReaderServiceV1.completeRenewalFromDurableAcknowledgement(
+            owner, profilePolicy: policy, limits: .default))
+        XCTAssertEqual(result.checkpoint.encoded, saved.encoded)
+        XCTAssertEqual(result.acknowledgement, acknowledgement)
+        XCTAssertEqual(result.confirmationState, .responseUnknown)
+        XCTAssertNil(owner.preparation.currentTask, "Locally completing a durable receipt cannot dispatch a factory")
+        XCTAssertEqual(events.map(\.stage), [.ackPersisted, .complete])
+
+        let cancelled = IrohaPeerNfcReaderOperationContextV1(checkpoint: saved.encoded, onTypedProgress: nil)
+        cancelled.cancel()
+        XCTAssertThrowsError(try IrohaPeerNfcReaderServiceV1.completeRenewalFromDurableAcknowledgement(
+            cancelled, profilePolicy: policy, limits: .default)) { XCTAssertTrue($0 is CancellationError) }
+        var corrupted = saved.encoded
+        corrupted[corrupted.count - 1] ^= 1
+        let invalid = IrohaPeerNfcReaderOperationContextV1(checkpoint: corrupted, onTypedProgress: nil)
+        defer { invalid.cancel() }
+        XCTAssertThrowsError(try IrohaPeerNfcReaderServiceV1.completeRenewalFromDurableAcknowledgement(
+            invalid, profilePolicy: policy, limits: .default), "Retained bytes must still pass authoritative binding checks")
+    }
+
+    func testFinalResponseDeadlineCompletesOnlyFromTheRetainedDurableAcknowledgement() async throws {
+        for confirmationReachedReceiver in [false, true] {
+            let request = try irohaPeerWalletExchangeMessageV1(kind: .request, payload: Data(repeating: 0x31, count: 96))
+            let payment = try irohaPeerWalletExchangeMessageV1(kind: .payment, payload: Data(repeating: 0x32, count: 192))
+            let acknowledgement = try irohaPeerWalletExchangeMessageV1(kind: .credited, payload: Data(repeating: 0x33, count: 80))
+            let limits = IrohaPeerNfcLimitsV1(maximumReadChunkBytes: 240, maximumWriteChunkBytes: 203)
+            let harness = try IrohaPeerNfcStartupRecoveryHarnessV1(
+                startupStatus: .success,
+                sessionID: Data((1...IrohaPeerNfcV1.sessionIDBytes).map(UInt8.init)),
+                request: request, payment: payment, acknowledgement: acknowledgement, limits: limits)
+            let result = try await IrohaPeerNfcReaderExchangeV1.run(
+                profilePolicy: .init(profile: .kagemushaWalletV1), limits: limits,
+                transceive: { command in
+                    if case .confirmAcknowledgement = command {
+                        let savedBytes = await harness.durableCheckpoint()
+                        let saved = try XCTUnwrap(savedBytes)
+                        let checkpoint = try IrohaPeerNfcSenderCheckpointV1.decode(
+                            saved, profilePolicy: .init(profile: .kagemushaWalletV1), limits: limits)
+                        XCTAssertEqual(checkpoint.durableAcknowledgement, acknowledgement)
+                        if confirmationReachedReceiver { _ = try await harness.transceive(command) }
+                        throw IrohaPeerNfcReaderServiceV1.responseDeadlineFailure(for: command.operation)
+                    }
+                    return try await harness.transceive(command)
+                }, loadOrCreateDurableCheckpoint: { info, received in
+                    try await harness.loadOrCreateCheckpoint(info: info, request: received)
+                }, updateDurableCheckpoint: { await harness.updateCheckpoint($0) })
+            XCTAssertEqual(result.acknowledgement, acknowledgement)
+            XCTAssertEqual(result.confirmationState, .responseUnknown)
+            let snapshot = await harness.snapshot()
+            XCTAssertEqual(snapshot.durableDebitCount, 1)
+            XCTAssertEqual(snapshot.receiverDurableCommitCount, 1)
+            XCTAssertEqual(snapshot.selectCount, 1, "A final reply timeout must not reopen RF")
+            XCTAssertEqual(snapshot.phase, confirmationReachedReceiver ? .complete : .acknowledgementReady)
+        }
+        for command in IrohaPeerNfcOperationV1.allCases where command != .confirmAcknowledgement {
+            XCTAssertEqual(IrohaPeerNfcReaderServiceV1.responseDeadlineFailure(for: command)
+                as? IrohaPeerNfcCoreNFCErrorV1, .platformCallTimedOut)
+        }
+    }
+#endif
+
     func testFirstSelectNotReadyThenOneOperationCompletesWithOneDurableDebit()
         async throws {
         for startupStatus in [
@@ -625,7 +777,6 @@ final class IrohaPeerNfcStartupRecoveryV1Tests: XCTestCase {
                 limits: limits
             )
             let retryGate = IrohaPeerNfcRetryGateV1(.init(
-                maximumContactAttempts: 3,
                 redetectionTimeoutMilliseconds: 3_000
             ))
             var result: IrohaPeerNfcReaderExchangeResultV1?
@@ -974,7 +1125,7 @@ final class IrohaPeerNfcDurabilityLeaseV1Tests: XCTestCase {
         )
 
         XCTAssertTrue(source.contains(
-            "maximumDurabilityTimeoutMilliseconds: UInt64 = 5_000"
+            "maximumDurabilityTimeoutMilliseconds: UInt64 = 30_000"
         ))
         XCTAssertTrue(source.contains("case paymentAdmissionTimedOut"))
         XCTAssertTrue(source.contains("case durableCommitTimedOut"))

@@ -1087,44 +1087,91 @@ fn remove_asset_definition_associated_permissions(
         }
     }
 }
-fn resolve_config_account_literal(
-    world: &impl crate::state::WorldReadOnly,
-    dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
-    raw: &str,
-    field_path: &'static str,
-    now_ms: u64,
-) -> Result<AccountId, Error> {
-    crate::block::parse_account_literal_with_world(world, dataspace_catalog, raw, now_ms)
-            .map_err(|error| {
-                InstructionExecutionError::InvariantViolation(error.to_string().into())
-            })?
-            .ok_or_else(|| {
-                InstructionExecutionError::InvariantViolation(
-                    format!(
-                        "invalid {field_path} account literal `{raw}`: expected canonical I105 account id or on-chain alias"
-                    )
-                    .into(),
-                )
-            })
+/// Monetary references from the execution's predecessor and its pending World version.
+/// Both are required: replacing a parameter cannot release a predecessor reference,
+/// and a new parameter must not publish a dangling account or currency.
+fn monetary_policy_cuts<'a>(
+    transaction: &'a StateTransaction<'_, '_>,
+) -> Result<
+    [(
+        &'static str,
+        &'a iroha_data_model::block::consensus::RootFeePolicy,
+        &'a iroha_data_model::block::consensus::PublicLaneStakingPolicy,
+    ); 2],
+    Error,
+> {
+    let original_fees = transaction
+        .root_fee_policy()
+        .map_err(|message| InstructionExecutionError::InvariantViolation(message.into()))?;
+    let original_staking = transaction
+        .staking_monetary_policy()
+        .map_err(|error| InstructionExecutionError::InvariantViolation(error.to_string().into()))?;
+    let current = transaction.world.parameters();
+    let current_fees = current.root_fees().ok_or_else(|| {
+        InstructionExecutionError::InvariantViolation(
+            "current World parameters omit the committed root fee policy".into(),
+        )
+    })?;
+    let current_staking = current
+        .require_staking_policy()
+        .map_err(|error| InstructionExecutionError::InvariantViolation(error.to_string().into()))?;
+    Ok([
+        ("original", original_fees, original_staking),
+        ("pending/current", current_fees, current_staking),
+    ])
 }
-fn config_account_matches(
-    world: &impl crate::state::WorldReadOnly,
-    dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
-    raw: &str,
-    account_id: &AccountId,
-    field_path: &'static str,
-    now_ms: u64,
-) -> Result<bool, Error> {
-    let configured =
-        resolve_config_account_literal(world, dataspace_catalog, raw, field_path, now_ms)?;
-    Ok(configured == *account_id)
+
+fn ensure_account_not_retained_by_monetary_policy(
+    transaction: &StateTransaction<'_, '_>,
+    account: &AccountId,
+) -> Result<(), Error> {
+    for (cut, fees, staking) in monetary_policy_cuts(transaction)? {
+        let reference = if &fees.fee_sink_account_id == account {
+            Some("committed root fee sink")
+        } else if &fees.sponsor_vault_custody_account_id == account {
+            Some("committed sponsor vault custody")
+        } else if fees
+            .successful_claim_fee_exempt_authorities
+            .contains(account)
+        {
+            Some("committed successful-claim exemption authority")
+        } else if &staking.stake_escrow_account_id == account {
+            Some("committed staking escrow account")
+        } else if &staking.slash_sink_account_id == account {
+            Some("committed staking slash sink account")
+        } else {
+            None
+        };
+        if let Some(reference) = reference {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!("cannot unregister account {account}: it is the {reference} in the {cut} parameter cut").into(),
+            ));
+        }
+    }
+    Ok(())
 }
-fn parse_config_asset_definition_id(
-    world: &impl crate::state::WorldReadOnly,
-    raw: &str,
-    now_ms: u64,
-) -> Option<AssetDefinitionId> {
-    crate::block::parse_asset_definition_literal_with_world(world, raw, now_ms)
+
+/// Preserve original and pending monetary currencies before individual or domain retirement.
+/// This borrowed preflight performs no alias resolution, JSON decode or policy cloning.
+pub(crate) fn ensure_asset_definition_not_retained_by_monetary_policy(
+    transaction: &StateTransaction<'_, '_>,
+    definition: &AssetDefinitionId,
+) -> Result<(), Error> {
+    for (cut, fees, staking) in monetary_policy_cuts(transaction)? {
+        let reference = if &fees.fee_asset_id == definition {
+            Some("immutable committed root fee currency")
+        } else if &staking.stake_asset_id == definition {
+            Some("committed staking asset definition")
+        } else {
+            None
+        };
+        if let Some(reference) = reference {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!("cannot retire asset definition {definition}: it is the {reference} in the {cut} parameter cut").into(),
+            ));
+        }
+    }
+    Ok(())
 }
 /// Check, without mutating state, the identity rules `Register<Account>` applies to the
 /// built `account` before it is inserted: reserved native metadata keys, controller
@@ -1684,47 +1731,7 @@ impl Execute for Unregister<Account> {
                     .into(),
                 ));
         }
-        let nexus_fee_sink_matches = state_transaction.nexus.fees.fee_sink_account_id == account_id;
-        let nexus_stake_escrow_matches = config_account_matches(
-            &state_transaction.world,
-            &state_transaction.nexus.dataspace_catalog,
-            &state_transaction.nexus.staking.stake_escrow_account_id,
-            &account_id,
-            "nexus.staking.stake_escrow_account_id",
-            state_transaction.block_unix_timestamp_ms(),
-        )?;
-        let nexus_slash_sink_matches = config_account_matches(
-            &state_transaction.world,
-            &state_transaction.nexus.dataspace_catalog,
-            &state_transaction.nexus.staking.slash_sink_account_id,
-            &account_id,
-            "nexus.staking.slash_sink_account_id",
-            state_transaction.block_unix_timestamp_ms(),
-        )?;
-        if nexus_fee_sink_matches {
-            return Err(InstructionExecutionError::InvariantViolation(
-                    format!(
-                        "cannot unregister account {account_id}: it is the committed root fee sink; commit a replacement root fee policy first"
-                    )
-                    .into(),
-                ));
-        }
-        if nexus_stake_escrow_matches {
-            return Err(InstructionExecutionError::InvariantViolation(
-                    format!(
-                        "cannot unregister account {account_id}: it is configured as nexus staking escrow account (`nexus.staking.stake_escrow_account_id`); update nexus config first"
-                    )
-                    .into(),
-                ));
-        }
-        if nexus_slash_sink_matches {
-            return Err(InstructionExecutionError::InvariantViolation(
-                    format!(
-                        "cannot unregister account {account_id}: it is configured as nexus staking slash sink account (`nexus.staking.slash_sink_account_id`); update nexus config first"
-                    )
-                    .into(),
-                ));
-        }
+        ensure_account_not_retained_by_monetary_policy(state_transaction, &account_id)?;
         if state_transaction
             .content
             .publish_allow_accounts
@@ -2641,38 +2648,10 @@ impl Execute for Unregister<AssetDefinition> {
                     .into(),
                 ));
         }
-        if parse_config_asset_definition_id(
-            &state_transaction.world,
-            &state_transaction
-                .nexus
-                .fees
-                .fee_asset_id
-                .canonical_address(),
-            state_transaction.block_unix_timestamp_ms(),
-        )
-        .is_some_and(|configured| configured == asset_definition_id)
-        {
-            return Err(InstructionExecutionError::InvariantViolation(
-                    format!(
-                        "cannot unregister asset definition {asset_definition_id}: it is the immutable committed root fee currency"
-                    )
-                    .into(),
-                ));
-        }
-        if parse_config_asset_definition_id(
-            &state_transaction.world,
-            &state_transaction.nexus.staking.stake_asset_id,
-            state_transaction.block_unix_timestamp_ms(),
-        )
-        .is_some_and(|configured| configured == asset_definition_id)
-        {
-            return Err(InstructionExecutionError::InvariantViolation(
-                    format!(
-                        "cannot unregister asset definition {asset_definition_id}: it is configured as nexus staking asset definition (`nexus.staking.stake_asset_id`); update nexus config first"
-                    )
-                    .into(),
-                ));
-        }
+        ensure_asset_definition_not_retained_by_monetary_policy(
+            state_transaction,
+            &asset_definition_id,
+        )?;
         if let Some((agreement_id, _)) =
             state_transaction
                 .world

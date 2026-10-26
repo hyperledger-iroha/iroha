@@ -43,6 +43,7 @@ enum IrohaPeerNfcReaderFailureCodeV1: String, Sendable {
     case adapterOperationInProgress = "adapter.operationInProgress"
     case adapterRetryExhausted = "adapter.retryExhausted"
     case adapterReaderOperationTimedOut = "adapter.readerOperationTimedOut"
+    case adapterInvalidReaderBudget = "adapter.invalidReaderBudget"
     case adapterCardSessionTimedOut = "adapter.cardSessionTimedOut"
     case adapterPlatformCallTimedOut = "adapter.platformCallTimedOut"
 }
@@ -127,6 +128,7 @@ struct IrohaPeerNfcReaderTerminalDiagnosticV1: Equatable, Sendable {
             case .operationInProgress: return (.adapterOperationInProgress, nil, nil)
             case .retryExhausted: return (.adapterRetryExhausted, nil, nil)
             case .readerOperationTimedOut: return (.adapterReaderOperationTimedOut, nil, nil)
+            case .invalidReaderBudget: return (.adapterInvalidReaderBudget, nil, nil)
             case .cardSessionTimedOut: return (.adapterCardSessionTimedOut, nil, nil)
             case .platformCallTimedOut: return (.adapterPlatformCallTimedOut, nil, nil)
             }

@@ -13,9 +13,6 @@
 //!
 //! The aggregate zk-X509 proof commits the arithmetic trace and all 128 window traces before
 //! sampling these challenges; this bus has no standalone activation path.
-#[cfg(not(any(test, feature = "privacy-release-evidence")))]
-use super::p256_window_air::P256WindowScalarV1;
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::{
     credential_pre_aux::ZkX509CredentialMainPostBaseChallengesV1,
     p256_air::{
@@ -42,10 +39,8 @@ pub const P256_SCALAR_BIT_BUS_WINDOWS_PER_SCALAR_V1: usize = 64;
 /// Scalars consumed by ECDSA verification: `u1` and `u2`.
 pub const P256_SCALAR_BIT_BUS_SCALARS_V1: usize = 2;
 /// Verifier-owned arithmetic operation supplying the `u1` scalar.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub const P256_SCALAR_BIT_BUS_U1_C_OPERATION_V1: u32 = 13;
 /// Verifier-owned arithmetic operation supplying the `u2` scalar.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub const P256_SCALAR_BIT_BUS_U2_C_OPERATION_V1: u32 = 14;
 /// Pointwise bit copies in the complete schedule.
 pub const P256_SCALAR_BIT_BUS_ACTIVE_BITS_V1: usize =
@@ -69,9 +64,7 @@ pub const P256_SCALAR_BIT_BUS_STARK_CONSTRAINT_COUNT_V1: usize = 67;
 /// Maximum total polynomial degree.
 pub const P256_SCALAR_BIT_BUS_STARK_CONSTRAINT_DEGREE_V1: u8 = 3;
 const P256_SCALAR_BITS_V1: usize = 256;
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 const P256_SCALAR_LIMBS_V1: usize = 16;
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 const P256_SCALAR_LIMB_BITS_V1: usize = 16;
 const P256_SCALAR_BIT_BUS_PRODUCT_STATES_V1: usize = P256_SCALAR_BIT_BUS_FACTORS_PER_ROW_V1 + 1;
 const STARK_ARITHMETIC_BITS: usize = 0;
@@ -94,7 +87,6 @@ const _: () = assert!(P256_SCALAR_BIT_BUS_ROWS_V1 == 171);
 const _: () = assert!(P256_SCALAR_BIT_BUS_FACTOR_SLOTS_V1 == 513);
 const _: () =
     assert!(P256_SCALAR_BIT_BUS_FACTOR_SLOTS_V1 - P256_SCALAR_BIT_BUS_ACTIVE_BITS_V1 == 1);
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 const _: () = assert!(P256_SCALAR_LIMBS_V1 * P256_SCALAR_LIMB_BITS_V1 == P256_SCALAR_BITS_V1);
 const _: () = assert!(
     STARK_WINDOW_BITS + P256_SCALAR_BIT_BUS_FACTORS_PER_ROW_V1
@@ -106,7 +98,6 @@ const _: () = assert!(
 );
 const _: () = assert!(STARK_FIXED_PADDING + 1 == P256_SCALAR_BIT_BUS_STARK_FIXED_WIDTH_V1);
 /// One verifier-fixed scalar result supplying 64 window nibbles.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct P256ScalarBitSourceV1 {
     /// `u1` or `u2`; sources must be supplied in that order.
@@ -192,11 +183,9 @@ pub enum P256ScalarBitBusErrorV1 {
     #[error("zk-X509 P-256 scalar-bit bus topology is invalid")]
     Topology,
     /// An arithmetic endpoint is not its committed scalar `c` bit.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error("zk-X509 P-256 scalar-bit arithmetic source binding is invalid")]
     ArithmeticSource,
     /// A window endpoint is not its committed selector bit.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error("zk-X509 P-256 scalar-bit window source binding is invalid")]
     WindowSource,
     /// A bit, padding value, or product encoding is non-canonical.
@@ -206,19 +195,15 @@ pub enum P256ScalarBitBusErrorV1 {
     #[error("zk-X509 P-256 scalar-bit bus challenges are invalid")]
     Challenge,
     /// A pointwise arithmetic/window bit equality is false.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error("zk-X509 P-256 scalar-bit pointwise equality is invalid")]
     Equality,
     /// A product boundary, intermediate state, or transition is invalid.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error("zk-X509 P-256 scalar-bit product constraint is invalid")]
     Constraint,
     /// Arithmetic and window terminal products differ.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error("zk-X509 P-256 scalar-bit terminal products differ")]
     Terminal,
     /// A base or auxiliary operation was attempted in the wrong phase.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error("zk-X509 P-256 scalar-bit bus phase is invalid")]
     Phase,
     /// Length or allocation arithmetic exceeded a fixed bound.
@@ -274,7 +259,6 @@ pub fn derive_zk_x509_p256_scalar_bit_bus_challenges_v1(
     Ok(P256ScalarBitBusChallengesV1 { lanes })
 }
 /// Convert one big-endian window bit to its arithmetic `c` limb and little-endian bit position.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub fn p256_scalar_window_bit_to_c_position_v1(
     window: usize,
     bit: usize,
@@ -659,11 +643,9 @@ pub fn build_p256_scalar_bit_bus_stark_trace_v1(
 /// Construction validates the arithmetic and window sources before retaining
 /// only the six committed base columns. Challenge-dependent products are not
 /// present in this type and cannot be obtained from it.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub struct P256ScalarBitBusBaseMaterialV1 {
     rows: Vec<[F; P256_SCALAR_BIT_BUS_STARK_BASE_WIDTH_V1]>,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl core::fmt::Debug for P256ScalarBitBusBaseMaterialV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -672,7 +654,6 @@ impl core::fmt::Debug for P256ScalarBitBusBaseMaterialV1 {
             .finish()
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256ScalarBitBusBaseMaterialV1 {
     /// Validate both committed sources and build the canonical padded base
     /// domain without accepting any auxiliary challenge.
@@ -785,13 +766,11 @@ impl P256ScalarBitBusBaseMaterialV1 {
         self.rows.is_empty()
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for P256ScalarBitBusBaseMaterialV1 {
     fn drop(&mut self) {
         self.zeroize_private_v1();
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn validate_scalar_bit_bus_base_row_v1(
     row_index: usize,
     row: &[F; P256_SCALAR_BIT_BUS_STARK_BASE_WIDTH_V1],
@@ -830,12 +809,10 @@ fn validate_scalar_bit_bus_base_row_v1(
     }
     Ok(())
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 struct P256ScalarBitBusColumnFillGuardV1<'a> {
     output: &'a mut [F],
     committed: bool,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<'a> P256ScalarBitBusColumnFillGuardV1<'a> {
     fn new_v1(output: &'a mut [F]) -> Self {
         Self {
@@ -850,7 +827,6 @@ impl<'a> P256ScalarBitBusColumnFillGuardV1<'a> {
         self.committed = true;
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for P256ScalarBitBusColumnFillGuardV1<'_> {
     fn drop(&mut self) {
         if !self.committed {
@@ -859,12 +835,10 @@ impl Drop for P256ScalarBitBusColumnFillGuardV1<'_> {
     }
 }
 /// Challenge-independent committed base-row replay.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug)]
 pub struct P256ScalarBitBusStarkBaseRowProviderV1<'a> {
     material: &'a P256ScalarBitBusBaseMaterialV1,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<'a> P256ScalarBitBusStarkBaseRowProviderV1<'a> {
     fn new_v1(
         material: &'a P256ScalarBitBusBaseMaterialV1,
@@ -934,7 +908,6 @@ impl P256ScalarBitBusStarkFixedProviderV1 {
         p256_scalar_bit_bus_stark_fixed_row_v1(row, self.trace_size)
     }
     /// One verifier-regenerated fixed cell.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     pub(crate) fn fixed_cell_v1(
         self,
         row: usize,
@@ -946,7 +919,6 @@ impl P256ScalarBitBusStarkFixedProviderV1 {
         Ok(self.fixed_row_v1(row)?[column])
     }
     /// Replay one full verifier-owned fixed column transactionally.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     pub(crate) fn fill_fixed_column_v1(
         self,
         column: usize,
@@ -967,12 +939,10 @@ impl P256ScalarBitBusStarkFixedProviderV1 {
 ///
 /// Binding is poison-on-attempt: the sole transition is consumed before any
 /// fallible validation or product computation.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub struct P256ScalarBitBusBaseSourceV1 {
     material: Option<P256ScalarBitBusBaseMaterialV1>,
     bind_attempted: bool,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl core::fmt::Debug for P256ScalarBitBusBaseSourceV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -982,7 +952,6 @@ impl core::fmt::Debug for P256ScalarBitBusBaseSourceV1 {
             .finish_non_exhaustive()
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256ScalarBitBusBaseSourceV1 {
     /// Allocated committed scalar rows, including unused capacity.
     pub(crate) fn allocated_heap_bytes_v1(&self) -> usize {
@@ -1094,7 +1063,6 @@ impl P256ScalarBitBusBaseSourceV1 {
         self.material.is_none()
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for P256ScalarBitBusBaseSourceV1 {
     fn drop(&mut self) {
         self.zeroize_private_v1();
@@ -1103,13 +1071,11 @@ impl Drop for P256ScalarBitBusBaseSourceV1 {
 /// Post-X5B1 scalar-bit bus capability.
 ///
 /// Only this type can mint challenge-dependent product replay and expose the two terminal families.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub struct P256ScalarBitBusBoundSourceV1 {
     material: Option<P256ScalarBitBusBaseMaterialV1>,
     post_base: Option<ZkX509CredentialMainPostBaseChallengesV1>,
     terminals: [[F; P256_SCALAR_BIT_BUS_LANES_V1]; 2],
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl core::fmt::Debug for P256ScalarBitBusBoundSourceV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -1118,7 +1084,6 @@ impl core::fmt::Debug for P256ScalarBitBusBoundSourceV1 {
             .finish_non_exhaustive()
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256ScalarBitBusBoundSourceV1 {
     /// Allocated committed scalar rows, including unused capacity.
     pub(crate) fn allocated_heap_bytes_v1(&self) -> usize {
@@ -1179,14 +1144,12 @@ impl P256ScalarBitBusBoundSourceV1 {
                 .all(|value| *value == F::ZERO)
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for P256ScalarBitBusBoundSourceV1 {
     fn drop(&mut self) {
         self.zeroize_private_v1();
     }
 }
 /// Challenge-bound constant-memory auxiliary replay.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub struct P256ScalarBitBusStarkAuxSourceV1<'a> {
     material: &'a P256ScalarBitBusBaseMaterialV1,
     challenges: P256ScalarBitBusChallengesV1,
@@ -1195,7 +1158,6 @@ pub struct P256ScalarBitBusStarkAuxSourceV1<'a> {
     window_running: [F; P256_SCALAR_BIT_BUS_LANES_V1],
     next_row: usize,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl core::fmt::Debug for P256ScalarBitBusStarkAuxSourceV1<'_> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -1205,7 +1167,6 @@ impl core::fmt::Debug for P256ScalarBitBusStarkAuxSourceV1<'_> {
             .finish()
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<'a> P256ScalarBitBusStarkAuxSourceV1<'a> {
     fn new_v1(
         material: &'a P256ScalarBitBusBaseMaterialV1,
@@ -1320,13 +1281,11 @@ impl<'a> P256ScalarBitBusStarkAuxSourceV1<'a> {
             && self.next_row == P256_SCALAR_BIT_BUS_STARK_TRACE_SIZE_V1
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for P256ScalarBitBusStarkAuxSourceV1<'_> {
     fn drop(&mut self) {
         self.zeroize_private_v1();
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn scalar_bit_bus_aux_row_v1(
     material: &P256ScalarBitBusBaseMaterialV1,
     row_index: usize,
@@ -1372,7 +1331,6 @@ fn scalar_bit_bus_aux_row_v1(
     }
     Ok(aux)
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn compute_scalar_bit_bus_terminals_v1(
     material: &P256ScalarBitBusBaseMaterialV1,
     challenges: P256ScalarBitBusChallengesV1,
@@ -1541,14 +1499,12 @@ pub fn evaluate_p256_scalar_bit_bus_stark_residues_over_field_v1<A: PolynomialAi
     }
     Ok(residues)
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ExpectedAccessV1 {
     fixed: P256ScalarBitBusFixedAccessV1,
     arithmetic_bit: F,
     window_bit: F,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ExpectedAccessV1 {
     const fn inactive() -> Self {
         Self {
@@ -1558,7 +1514,6 @@ impl ExpectedAccessV1 {
         }
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn expected_accesses_v1(
     sources: &[P256ScalarBitSourceV1],
     windows: &[P256WindowTraceV1],
@@ -1619,7 +1574,6 @@ fn expected_accesses_v1(
     expected.push(ExpectedAccessV1::inactive());
     Ok(expected)
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn validate_sources_v1(
     sources: &[P256ScalarBitSourceV1],
     arithmetic_trace: &ZkX509P256ArithmeticTraceV1,
@@ -1714,7 +1668,6 @@ const fn expected_scalar_v1(index: usize) -> Result<P256WindowScalarV1, P256Scal
         _ => Err(P256ScalarBitBusErrorV1::Topology),
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn map_arithmetic_error_v1(error: ZkX509P256AirErrorV1) -> P256ScalarBitBusErrorV1 {
     match error {
         ZkX509P256AirErrorV1::Topology => P256ScalarBitBusErrorV1::Topology,
@@ -1722,7 +1675,6 @@ fn map_arithmetic_error_v1(error: ZkX509P256AirErrorV1) -> P256ScalarBitBusError
         _ => P256ScalarBitBusErrorV1::ArithmeticSource,
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn map_window_error_v1(error: P256WindowAirErrorV1) -> P256ScalarBitBusErrorV1 {
     match error {
         P256WindowAirErrorV1::Topology | P256WindowAirErrorV1::Index => {

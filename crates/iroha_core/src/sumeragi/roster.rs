@@ -59,8 +59,7 @@ mod tests {
     use super::filter_validators_from_trusted;
     use iroha_config::parameters::actual::TrustedPeers;
     use iroha_crypto::{Algorithm, KeyPair, PublicKey, bls_normal_pop_prove};
-    use iroha_data_model::peer::Peer;
-    use iroha_model_base::peer::PeerId;
+    use iroha_model_base::peer::{Peer, PeerId};
     use std::collections::BTreeMap;
 
     fn bls_key(seed: &[u8]) -> KeyPair {

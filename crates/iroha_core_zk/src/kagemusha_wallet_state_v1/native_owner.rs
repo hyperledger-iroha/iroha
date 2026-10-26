@@ -246,6 +246,16 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
         bytes: &[u8],
     ) -> Result<NativePreparedOperationV1, Error> {
         let prepared = self.derive(request, source, custody, bytes)?;
+        // Every never-selected Receive, planned now or validated again from its durable plan,
+        // proceeds toward Advance only if its fold cannot burn the Payment (§3.2 receive
+        // admission). Recovery of an Advance-selected Receive resolves before any derivation.
+        if request.kind() == KagemushaWalletOperationKindV1::Receive {
+            self.worker.receive_admission(
+                &proof(PreparationV1::new(&self.installed))?,
+                &prepared,
+                source.released(),
+            )?;
+        }
         Ok(NativePreparedOperationV1::new(
             prepared,
             bytes,

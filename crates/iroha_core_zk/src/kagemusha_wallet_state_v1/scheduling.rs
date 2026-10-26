@@ -16,6 +16,14 @@
 //! cancelling it, so a confirmed payment finds the proof finished and no two provers overlap.
 //! Its job uses the wallet owner only before admission, so that wait never needs the owner.
 //! Close cancels it; dropping its [`Speculation`] cancels it and discards what it made.
+//!
+//! Bounded fairness (Λ/Ω §5.6) keeps steady payments from starving the fold. Each sub-proof
+//! that payment priority cancels counts once; a durable publication, proved or adopted, clears
+//! the count. After [`FOLD_FAIRNESS_CANCELLATIONS`] cancellations in a row, a payment that
+//! takes priority without the wallet owner ([`Scheduler::fair_payment_for`]) and a speculation
+//! let the running sub-proof finish and settle its publication first; no other sub-proof starts
+//! while they wait. A payment that already holds the owner never waits for that publication,
+//! which needs the owner.
 
 use std::{
     any::Any,
@@ -26,6 +34,21 @@ use super::{
     Error, FoldStatus,
     fold_metrics::{FoldCallClassV1, FoldCancelCauseV1, FoldObserverV1, FoldTurnV1},
 };
+
+/// Sub-proofs that payment priority may cancel in a row, with no durable fold publication
+/// between them, before the next payment that can wait lets the running sub-proof publish
+/// (bounded fairness, Λ/Ω §5.6). While payments keep arriving, the fold then publishes at
+/// least once per `FOLD_FAIRNESS_CANCELLATIONS + 1` of them, and each waits at most one
+/// sub-proof and its publication.
+pub const FOLD_FAIRNESS_CANCELLATIONS: u32 = 2;
+
+/// Durable fold progress for bounded fairness: a published checkpoint or a recorded Ω.
+const fn progressed(result: Result<FoldStatus, &Error>) -> bool {
+    matches!(
+        result,
+        Ok(FoldStatus::Checkpoint { .. } | FoldStatus::Folded(_))
+    )
+}
 
 /// Cloneable cancellation token checked at proving task boundaries.
 #[derive(Debug, Clone)]
@@ -111,6 +134,12 @@ struct State {
     speculating: Option<Cancellation>,
     // Close admits no later speculation.
     closed: bool,
+    // Sub-proofs payment priority cancelled since the last durable fold publication.
+    starved: u32,
+    // The attempt whose proof released the slot and whose publication has not settled.
+    publishing: Option<u64>,
+    // Calls letting a starved fold's sub-proof publish first; no sub-proof starts meanwhile.
+    yielding: usize,
 }
 
 impl State {
@@ -119,6 +148,21 @@ impl State {
             self.cause = self.cause.or(Some(cause));
             token.cancel();
         }
+    }
+
+    /// Payment priority's signal: cancel the running sub-proof, counted once for fairness.
+    fn preempt(&mut self, cause: FoldCancelCauseV1) {
+        if self.running.is_some() && self.cause.is_none() {
+            self.starved = self.starved.saturating_add(1);
+        }
+        self.cancel(cause);
+    }
+
+    /// Whether a call that can wait without the wallet owner must first let the starved
+    /// fold's running sub-proof finish and settle its publication.
+    fn starving(&self) -> bool {
+        self.starved >= FOLD_FAIRNESS_CANCELLATIONS
+            && (self.running.is_some() || self.publishing.is_some())
     }
 }
 
@@ -143,7 +187,8 @@ impl Inner {
 /// it permits resumption from the last durable checkpoint. No payment state is rolled back.
 /// An `ingest` never cancels or waits: the sub-proof keeps proving outside the wallet owner.
 /// Payment priority, inactivity and close also drop the volatile fold state retained between
-/// sub-proofs; an ingest leaves it.
+/// sub-proofs; an ingest leaves it. A host that takes priority before the wallet owner uses
+/// [`Self::fair_payment_for`], so steady payments cannot starve the fold (bounded fairness).
 #[derive(Clone)]
 pub struct Scheduler(Arc<Inner>);
 
@@ -212,9 +257,36 @@ impl Scheduler {
     /// confirmed payment can use it, and only then may this payment prove.
     #[must_use]
     pub fn payment_for(&self, class: FoldCallClassV1) -> PaymentGuard {
+        self.prioritize(self.0.lock(), class)
+    }
+
+    /// [`Self::payment_for`] for a host call that does not hold the wallet owner, with bounded
+    /// fold fairness (Λ/Ω §5.6). After [`FOLD_FAIRNESS_CANCELLATIONS`] sub-proofs in a row were
+    /// cancelled for payments with no durable fold publication between them, it lets the
+    /// running sub-proof finish and settle its publication before taking priority, instead of
+    /// cancelling it. It waits at most that one sub-proof, and no other sub-proof starts
+    /// meanwhile. With fewer cancellations, or no sub-proof running, it is `payment_for`.
+    ///
+    /// Never call it while holding the wallet owner: the publication takes that owner.
+    #[must_use]
+    pub fn fair_payment_for(&self, class: FoldCallClassV1) -> PaymentGuard {
         let mut state = self.0.lock();
+        state.yielding += 1;
+        while state.starving() {
+            state = self
+                .0
+                .idle
+                .wait(state)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+        }
+        state.yielding -= 1;
+        // Priority is taken under the same lock, so no sub-proof starts in between.
+        self.prioritize(state, class)
+    }
+
+    fn prioritize(&self, mut state: MutexGuard<'_, State>, class: FoldCallClassV1) -> PaymentGuard {
         state.payments += 1;
-        state.cancel(class.cause());
+        state.preempt(class.cause());
         while state.running.is_some() || state.speculating.is_some() {
             state = self
                 .0
@@ -270,6 +342,7 @@ impl Scheduler {
         let mut state = self.0.lock();
         if !state.eligible
             || state.payments != 0
+            || state.yielding != 0
             || state.running.is_some()
             || state.speculating.is_some()
         {
@@ -293,6 +366,12 @@ impl Scheduler {
     #[cfg(test)]
     pub(super) fn holds_retained_for_test(&self) -> bool {
         self.0.lock().retained.is_some()
+    }
+
+    /// Sub-proofs payment priority cancelled since the last durable fold publication.
+    #[cfg(test)]
+    pub(super) fn starved_for_test(&self) -> u32 {
+        self.0.lock().starved
     }
 
     /// Test support for the genuine fold flows: apply `change` in place to a ready retained
@@ -465,26 +544,33 @@ impl<T> Drop for SpeculationRun<T> {
 impl Scheduler {
     /// Admit `job`'s speculative proof. It waits until no payment holds priority and no other
     /// speculation runs, then cancels and joins a running fold sub-proof and drops the
-    /// retained fold state, like payment priority. `None` after close, or once the job's call
-    /// has ended its speculation.
+    /// retained fold state, like payment priority. Like [`Self::fair_payment_for`], it first
+    /// lets a starved fold's running sub-proof finish and settle its publication, and no
+    /// sub-proof starts while it waits. `None` after close, or once the job's call has ended
+    /// its speculation.
     ///
     /// Call it without the wallet owner, and keep the admitted proof off that owner: payments
     /// wait for the proof while possibly holding it.
     #[must_use]
     pub fn speculate<T>(&self, job: &SpeculationJob<T>) -> Option<SpeculationRun<T>> {
         let mut state = self.0.lock();
-        loop {
+        state.yielding += 1;
+        let admissible = loop {
             if state.closed || job.0.token.check().is_err() {
-                return None;
+                break false;
             }
-            if state.payments == 0 && state.speculating.is_none() {
-                break;
+            if state.payments == 0 && state.speculating.is_none() && !state.starving() {
+                break true;
             }
             state = self
                 .0
                 .idle
                 .wait(state)
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
+        };
+        state.yielding -= 1;
+        if !admissible {
+            return None;
         }
         {
             let mut speculated = job.0.lock();
@@ -494,7 +580,7 @@ impl Scheduler {
             *speculated = Speculated::Proving;
         }
         state.speculating = Some(job.0.token.clone());
-        state.cancel(FoldCallClassV1::Payment.cause());
+        state.preempt(FoldCallClassV1::Payment.cause());
         while state.running.is_some() {
             state = self
                 .0
@@ -544,6 +630,14 @@ impl FoldGuard {
         self.scheduler.report(turn, result, cause, ingests);
     }
 
+    /// A turn that made fold progress durable at its locked prepare, by adopting an
+    /// interrupted publication, clears the fairness count like a publication.
+    pub(super) fn adopted(&self, status: FoldStatus) {
+        if progressed(Ok(status)) {
+            self.scheduler.0.lock().starved = 0;
+        }
+    }
+
     /// Take the value the previous sub-proof's checkpoint publication promoted for this
     /// attempt. A value still parked by an unsettled publication is evicted instead: this
     /// attempt runs cold and that publication finds its slot gone. Called once, at the locked
@@ -560,13 +654,17 @@ impl FoldGuard {
     /// Release the slot of a sub-proof whose proof finished, before its locked publication.
     /// A payment waiting for the slot proceeds; the publication re-checks the fold fields
     /// under the wallet owner. `retained` is parked under this attempt atomically with the
-    /// release, unless a payment holds priority, the scheduler is ineligible or this
+    /// release, unless a payment holds or awaits priority, the scheduler is ineligible or this
     /// sub-proof's signal was cancelled: then it is dropped before the slot is released, so a
     /// joining payment never runs beside it. The proved job keeps only the returned
-    /// publication identity, never the value. Returns the ingests the sub-proof overlapped.
+    /// publication identity, never the value; a fair payment waits until it settles. Returns
+    /// the ingests the sub-proof overlapped.
     pub(super) fn release(mut self, retained: Option<FoldRetentionV1>) -> (u32, FoldPublicationV1) {
         let mut state = self.scheduler.0.lock();
-        let parks = state.eligible && state.payments == 0 && self.token.check().is_ok();
+        let parks = state.eligible
+            && state.payments == 0
+            && state.yielding == 0
+            && self.token.check().is_ok();
         let displaced = if !parks && retained.is_some() {
             drop(state);
             drop(retained);
@@ -587,6 +685,7 @@ impl FoldGuard {
             None
         };
         let ingests = state.ingests;
+        state.publishing = Some(self.attempt);
         state.running = None;
         drop(state);
         // Anything displaced is released after the state lock, like every retained value.
@@ -597,6 +696,7 @@ impl FoldGuard {
             scheduler: self.scheduler.clone(),
             attempt: self.attempt,
             published: false,
+            progressed: false,
         };
         (ingests, publication)
     }
@@ -614,11 +714,13 @@ impl FoldGuard {
 /// payment holds priority or the scheduler is ineligible. Every other end drops it: a
 /// discarded, failed or refused publication, a completed Ω, or this identity dropped
 /// unpublished. A value already evicted, taken or invalidated is never recreated, and a newer
-/// attempt's value is never cleared or promoted.
+/// attempt's value is never cleared or promoted. Its end also settles the fairness wait: a
+/// durable checkpoint or Ω clears the count, and every end lets a waiting payment proceed.
 pub(super) struct FoldPublicationV1 {
     scheduler: Scheduler,
     attempt: u64,
     published: bool,
+    progressed: bool,
 }
 
 impl FoldPublicationV1 {
@@ -626,6 +728,7 @@ impl FoldPublicationV1 {
     /// checkpoint keeps it.
     pub(super) fn settle(mut self, result: Result<FoldStatus, &Error>) {
         self.published = matches!(result, Ok(FoldStatus::Checkpoint { .. }));
+        self.progressed = progressed(result);
     }
 }
 
@@ -633,9 +736,19 @@ impl Drop for FoldPublicationV1 {
     fn drop(&mut self) {
         let released = {
             let mut state = self.scheduler.0.lock();
+            if state.publishing == Some(self.attempt) {
+                state.publishing = None;
+            }
+            if self.progressed {
+                state.starved = 0;
+            }
             match state.retained.take() {
                 Some(Slot::Pending { attempt, value }) if attempt == self.attempt => {
-                    if self.published && state.eligible && state.payments == 0 {
+                    if self.published
+                        && state.eligible
+                        && state.payments == 0
+                        && state.yielding == 0
+                    {
                         state.retained = Some(Slot::Ready(value));
                         None
                     } else {
@@ -649,6 +762,8 @@ impl Drop for FoldPublicationV1 {
                 }
             }
         };
+        // A fair payment or speculation waiting for this publication proceeds.
+        self.scheduler.0.idle.notify_all();
         drop(released);
     }
 }
@@ -678,6 +793,62 @@ impl Scheduler {
         });
         guard.report(turn, result.as_ref().copied());
         result.map(|_| true)
+    }
+
+    /// Host test support: like [`Self::sub_proof_for_test`], but a finished `work` releases the
+    /// slot like a proved sub-proof and returns its publication, which the caller settles under
+    /// the wallet owner as `fold_publish` does. `None` without running `work` when no sub-proof
+    /// may start.
+    ///
+    /// # Errors
+    /// The error of `work`, including `Cancelled` after an activity, close or priority signal.
+    pub fn proved_sub_proof_for_test(
+        &self,
+        sequence: u128,
+        work: impl FnOnce(&Cancellation) -> Result<(), Error>,
+    ) -> Result<Option<PublicationForTest>, Error> {
+        let Some(guard) = self.start() else {
+            return Ok(None);
+        };
+        let mut turn = FoldTurnV1::start();
+        turn.select(sequence, 0);
+        super::fold_metrics::enter(super::FoldPhaseV1::Prove);
+        if let Err(error) = work(&guard.token).and_then(|()| guard.token.check()) {
+            guard.report(turn, Err(&error));
+            return Err(error);
+        }
+        let (ingests, publication) = guard.release(None);
+        Ok(Some(PublicationForTest {
+            scheduler: self.clone(),
+            turn,
+            ingests,
+            sequence,
+            publication,
+        }))
+    }
+}
+
+/// Host test support: the publication of a sub-proof that
+/// [`Scheduler::proved_sub_proof_for_test`] released. Dropping it unsettled discards it.
+#[cfg(any(test, feature = "test-utils"))]
+pub struct PublicationForTest {
+    scheduler: Scheduler,
+    turn: FoldTurnV1,
+    ingests: u32,
+    sequence: u128,
+    publication: FoldPublicationV1,
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+impl PublicationForTest {
+    /// Settle it as a durable checkpoint and report its turn, as `fold_publish` does.
+    pub fn checkpoint(self) {
+        let result = Ok::<_, &Error>(FoldStatus::Checkpoint {
+            sequence: self.sequence,
+            ordinal: 0,
+        });
+        self.publication.settle(result);
+        self.scheduler.report(self.turn, result, None, self.ingests);
     }
 }
 
@@ -767,6 +938,9 @@ mod cancellation_tests {
 
 #[cfg(test)]
 mod retention_tests;
+
+#[cfg(test)]
+mod fairness_tests;
 
 #[cfg(test)]
 mod speculation_tests {

@@ -31,10 +31,6 @@ pub struct PredicateInputs {
     /// Exact signature witnesses for every slot of the merged Q1: the hard own
     /// receipt first, then the original incoming soft slots.
     pub signatures: Vec<SignatureWitness>,
-    /// Fully source-verified predecessor Pallas claim, not an incoming verdict.
-    pub predecessor_pallas: AccumulatorT<Ep>,
-    /// Fully source-verified predecessor Vesta claim.
-    pub predecessor_vesta: AccumulatorT<Eq>,
     /// Compiled incoming selector, bound again to decoded lineage by Objects.
     pub incoming_selector: u8,
 }

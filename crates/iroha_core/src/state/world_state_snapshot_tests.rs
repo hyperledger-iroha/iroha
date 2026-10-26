@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::{
+    interlane::LanePrivacyRegistry,
     state::World,
     sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
 };
@@ -695,11 +696,11 @@ fn certified_world_cut_survives_equivalent_and_refused_manifest_refresh() {
         // A new materialization of the exact source is what each watcher tick supplies.
         let equivalent = Arc::new(original.rebind(&nexus.lane_catalog, &nexus.governance));
         assert!(!Arc::ptr_eq(&original, &equivalent));
-        assert!(state.install_lane_manifests_if_consensus_compatible(&equivalent));
+        assert!(state.install_lane_manifests_if_consensus_compatible(&equivalent).is_ok());
         assert_proof();
         assert_eq!(state.state_view_generation(), generation);
         assert!(Arc::ptr_eq(&state.lane_manifests.read(), &original));
-        assert!(Arc::ptr_eq(&state.lane_privacy_registry.read(), &privacy));
+        assert!(LanePrivacyRegistry::ptr_eq(&state.lane_privacy_registry.read(), &privacy));
 
         let directory = tempfile::tempdir().unwrap();
         let alias = &nexus.lane_catalog.lanes()[0].alias;
@@ -725,11 +726,11 @@ fn certified_world_cut_survives_equivalent_and_refused_manifest_refresh() {
                 .unwrap(),
         );
         for rejected in [changed, Arc::new(LaneManifestRegistry::default())] {
-            assert!(!state.install_lane_manifests_if_consensus_compatible(&rejected));
+            assert!(state.install_lane_manifests_if_consensus_compatible(&rejected).is_err());
             assert_proof();
             assert_eq!(state.state_view_generation(), generation);
             assert!(Arc::ptr_eq(&state.lane_manifests.read(), &original));
-            assert!(Arc::ptr_eq(&state.lane_privacy_registry.read(), &privacy));
+            assert!(LanePrivacyRegistry::ptr_eq(&state.lane_privacy_registry.read(), &privacy));
         }
     }
     // A real native successor still retires the former cut. No generation check is relaxed.
@@ -839,7 +840,7 @@ fn replayed_world_cut_survives_exact_startup_queue_handoff_without_another_block
     assert_proof();
     assert_eq!(state.state_view_generation(), generation);
     assert!(Arc::ptr_eq(&state.lane_manifests.read(), &original));
-    assert!(Arc::ptr_eq(&state.lane_privacy_registry.read(), &privacy));
+    assert!(LanePrivacyRegistry::ptr_eq(&state.lane_privacy_registry.read(), &privacy));
     assert_eq!(
         replay.height(),
         2,
@@ -1549,6 +1550,111 @@ fn names_publisher_requires_actual_native_root_and_complete_exact_cut_originals(
             .is_err()
     );
     assert!(!called.get());
+}
+
+#[test]
+fn retained_names_snapshot_keeps_its_certified_cut_across_real_publication() {
+    let (mut chain, reader, asset) = names_chain();
+    let state = std::sync::Arc::clone(chain.state());
+    let tip = chain.committed(2);
+    let budget = AllocationBudget::new(32 * 1024 * 1024);
+    let retained = state
+        .capture_native_resource_names_snapshot_v1(&reader, &budget)
+        .unwrap();
+    assert_eq!(retained.view().height(), 2);
+    let domains = retained.view().world.domains().iter().count();
+    // The fixture submits its signed clock transaction when no business
+    // transaction is supplied. This real commit must complete while the capture
+    // remains alive: no World writer or publication lease may survive acquisition.
+    chain.commit_at(3_000, Vec::new());
+    assert_eq!(state.view().height(), 3);
+    assert!(matches!(
+        state.with_native_resource_names_snapshot_v1(&tip, &reader, &budget, |_, _, _, _| Ok(())),
+        Err(WorldStateSnapshotError::CutChanged {
+            requested_height: 2,
+            observed_height: 3
+        })
+    ));
+    retained
+        .with_native_resource_names_snapshot_v1(&tip, |snapshot, aliases, _, names| {
+            assert_eq!(
+                snapshot.root().unwrap(),
+                tip.commitment().execution.world_state_root
+            );
+            require_complete_table_count(snapshot, "world.domains", domains)?;
+            assert_eq!(aliases.len(), 1);
+            assert_eq!(aliases[0].0, &asset);
+            assert_eq!(names.len(), 2);
+            Ok(())
+        })
+        .unwrap();
+    assert!(
+        retained
+            .with_native_resource_names_snapshot_v1::<()>(&chain.committed(3), |_, _, _, _| {
+                panic!("a newer certified tip must not label older originals")
+            })
+            .is_err()
+    );
+    assert!(budget.reserved_bytes() > 0);
+    drop(retained);
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn retained_names_snapshot_requires_current_permission_before_and_after_encoding() {
+    use std::collections::BTreeSet;
+    for revoke_during_encoding in [false, true] {
+        let (chain, reader, _) = names_chain();
+        let state = chain.state();
+        let tip = chain.committed(2);
+        let budget = AllocationBudget::new(32 * 1024 * 1024);
+        let retained = state
+            .capture_native_resource_names_snapshot_v1(&reader, &budget)
+            .unwrap();
+        let revoke = || {
+            let mut permissions = state.world.account_permissions.block();
+            permissions.insert(reader.clone(), BTreeSet::new());
+            permissions.commit();
+        };
+        if !revoke_during_encoding {
+            revoke();
+        }
+        let called = Cell::new(false);
+        let result = retained.with_native_resource_names_snapshot_v1(&tip, |_, _, _, _| {
+            called.set(true);
+            revoke();
+            Ok(())
+        });
+        assert!(result.is_err());
+        assert_eq!(called.get(), revoke_during_encoding);
+        drop(retained);
+        assert_eq!(budget.reserved_bytes(), 0);
+    }
+}
+
+#[test]
+fn retained_names_snapshot_requires_original_capture_permission_and_budget() {
+    let (chain, reader, _) = names_chain();
+    let state = chain.state();
+    let budget = AllocationBudget::new(32 * 1024 * 1024);
+    assert!(
+        state
+            .capture_native_resource_names_snapshot_v1(chain.genesis_account(), &budget)
+            .is_err()
+    );
+    assert!(
+        state
+            .capture_native_resource_names_snapshot_v1(&reader, &AllocationBudget::new(0))
+            .is_err()
+    );
+    assert_eq!(budget.reserved_bytes(), 0);
+    *state.native_world_cut.lock() = None;
+    assert!(
+        state
+            .capture_native_resource_names_snapshot_v1(&reader, &budget)
+            .is_err()
+    );
+    assert_eq!(budget.reserved_bytes(), 0);
 }
 
 #[test]

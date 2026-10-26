@@ -184,7 +184,7 @@ async fn contract_code_artifact_read_rejects_unsigned_requests() {
         .parse()
         .expect("contract code URI");
     let error = match handler_get_contract_code_bytes(
-        State(mk_app_state_for_tests()),
+        State(mk_native_app_state_for_tests()),
         Method::GET,
         uri,
         HeaderMap::new(),
@@ -213,7 +213,7 @@ async fn multisig_spec_rejects_unsigned_alias_selector() {
         },
     };
     let error = handler_post_multisig_spec(
-        State(mk_app_state_for_tests()),
+        State(mk_native_app_state_for_tests()),
         Method::POST,
         routing::ENDPOINT_MULTISIG_SPEC
             .parse()
@@ -242,9 +242,10 @@ async fn multisig_proposals_query_rejects_unsigned_alias_selector() {
         status: Vec::new(),
         cursor: None,
         limit: None,
+        include_approvals: false,
     };
     let error = handler_post_multisig_proposals_query(
-        State(mk_app_state_for_tests()),
+        State(mk_native_app_state_for_tests()),
         Method::POST,
         routing::ENDPOINT_MULTISIG_PROPOSALS_QUERY
             .parse()
@@ -271,9 +272,10 @@ async fn multisig_proposals_resolve_rejects_unsigned_alias_selector() {
             multisig_account_alias: Some("banking@centralbank.universal".to_owned()),
         },
         proposal_id: "de".repeat(32).parse().unwrap(),
+        include_approvals: false,
     };
     let error = handler_post_multisig_proposals_resolve(
-        State(mk_app_state_for_tests()),
+        State(mk_native_app_state_for_tests()),
         Method::POST,
         routing::ENDPOINT_MULTISIG_PROPOSALS_RESOLVE
             .parse()
@@ -299,7 +301,7 @@ async fn multisig_reads_reject_unsigned_concrete_account_selectors() {
         multisig_account_alias: None,
     };
     let spec = handler_post_multisig_spec(
-        State(mk_app_state_for_tests()),
+        State(mk_native_app_state_for_tests()),
         Method::POST,
         routing::ENDPOINT_MULTISIG_SPEC
             .parse()
@@ -315,7 +317,7 @@ async fn multisig_reads_reject_unsigned_concrete_account_selectors() {
     .into_response();
     assert_eq!(spec.status(), StatusCode::UNAUTHORIZED);
     let query = handler_post_multisig_proposals_query(
-        State(mk_app_state_for_tests()),
+        State(mk_native_app_state_for_tests()),
         Method::POST,
         routing::ENDPOINT_MULTISIG_PROPOSALS_QUERY
             .parse()
@@ -327,6 +329,7 @@ async fn multisig_reads_reject_unsigned_concrete_account_selectors() {
             status: Vec::new(),
             cursor: None,
             limit: None,
+            include_approvals: false,
         }),
     )
     .await
@@ -334,7 +337,7 @@ async fn multisig_reads_reject_unsigned_concrete_account_selectors() {
     .into_response();
     assert_eq!(query.status(), StatusCode::UNAUTHORIZED);
     let resolve = handler_post_multisig_proposals_resolve(
-        State(mk_app_state_for_tests()),
+        State(mk_native_app_state_for_tests()),
         Method::POST,
         routing::ENDPOINT_MULTISIG_PROPOSALS_RESOLVE
             .parse()
@@ -344,6 +347,7 @@ async fn multisig_reads_reject_unsigned_concrete_account_selectors() {
         multisig_read_payload(routing::MultisigProposalsResolveRequestDto {
             selector: selector(),
             proposal_id: ("a".repeat(64)).parse().unwrap(),
+            include_approvals: false,
         }),
     )
     .await
@@ -544,7 +548,7 @@ async fn multisig_read_handler_requires_api_token_and_signed_viewer_auth() {
 }
 #[tokio::test]
 async fn browser_read_endpoints_are_not_throttled_by_deploy_limiter() {
-    let app = mk_app_state_for_tests_with_options(None, Some((1, 1)), None, None);
+    let app = mk_native_app_state_for_tests_with_options(None, Some((1, 1)), None, None);
     let headers = HeaderMap::new();
     let remote_ip = std::net::IpAddr::from([127, 0, 0, 1]);
     let key = super::rate_limit_key(
@@ -599,6 +603,7 @@ async fn browser_read_endpoints_are_not_throttled_by_deploy_limiter() {
         status: Vec::new(),
         cursor: None,
         limit: None,
+        include_approvals: false,
     };
     let query_response = handler_post_multisig_proposals_query(
         State(app.clone()),
@@ -617,6 +622,7 @@ async fn browser_read_endpoints_are_not_throttled_by_deploy_limiter() {
     let resolve_request = routing::MultisigProposalsResolveRequestDto {
         selector: selector(),
         proposal_id: "de".repeat(32).parse().unwrap(),
+        include_approvals: false,
     };
     let resolve_response = handler_post_multisig_proposals_resolve(
         State(app),
@@ -635,7 +641,7 @@ async fn browser_read_endpoints_are_not_throttled_by_deploy_limiter() {
 }
 #[tokio::test]
 async fn browser_read_endpoints_use_route_scoped_query_rate_keys() {
-    let mut app = mk_app_state_for_tests();
+    let mut app = mk_native_app_state_for_tests();
     {
         let state = Arc::get_mut(&mut app).expect("unique app state");
         state.rate_limiter = limits::RateLimiter::new(Some(1), Some(1));
@@ -676,6 +682,7 @@ async fn browser_read_endpoints_use_route_scoped_query_rate_keys() {
         status: Vec::new(),
         cursor: None,
         limit: None,
+        include_approvals: false,
     };
     let query_response = handler_post_multisig_proposals_query(
         State(app),
@@ -1110,7 +1117,7 @@ fn api_token_evaluator_has_one_exact_header_policy() {
 }
 #[test]
 fn validate_api_token_rejects_missing_or_unconfigured() {
-    let mut app = mk_app_state_for_tests();
+    let mut app = mk_native_app_state_for_tests();
     let state = Arc::get_mut(&mut app).expect("unique app state");
     state.require_api_token = true;
     state.api_token_digests = Arc::new(limits::ApiTokenDigestSet::default());
@@ -1135,7 +1142,7 @@ fn assert_unconfigured_api_token_error(error: Error) {
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn direct_result_handler_fails_closed_with_no_configured_api_tokens() {
-    let mut app = mk_app_state_for_tests();
+    let mut app = mk_native_app_state_for_tests();
     let state = Arc::get_mut(&mut app).expect("unique app state");
     state.require_api_token = true;
     state.api_token_digests = Arc::new(limits::ApiTokenDigestSet::default());
@@ -1147,7 +1154,7 @@ async fn direct_result_handler_fails_closed_with_no_configured_api_tokens() {
 }
 #[tokio::test]
 async fn direct_transaction_ingress_fails_closed_before_queue_or_rate_work() {
-    let mut app = mk_app_state_for_tests();
+    let mut app = mk_native_app_state_for_tests();
     let state = Arc::get_mut(&mut app).expect("unique app state");
     state.require_api_token = true;
     state.api_token_digests = Arc::new(limits::ApiTokenDigestSet::default());
@@ -1220,7 +1227,7 @@ fn contract_call_admission_test_receipt() -> routing::ContractCallResponseDto {
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn prepared_contract_call_requires_canonical_ingress_before_success() {
-    let mut app = mk_app_state_for_tests();
+    let mut app = mk_native_app_state_for_tests();
     let state = Arc::get_mut(&mut app).expect("unique app state");
     state.require_api_token = true;
     state.api_token_digests = Arc::new(limits::ApiTokenDigestSet::default());

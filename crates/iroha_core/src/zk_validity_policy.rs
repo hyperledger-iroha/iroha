@@ -498,7 +498,8 @@ pub fn effective_zk(installed: Zk, parameters: &Parameters) -> Zk {
 /// Returns an error when the payload is malformed, violates a structural or
 /// coherence rule, or lowers the per-height transition limit below a committed
 /// pending count.
-pub fn validate_set_parameter(
+#[cfg(test)]
+fn validate_set_parameter(
     custom: &CustomParameter,
     pending_transition_counts: impl IntoIterator<Item = (u64, u32)>,
 ) -> Result<bool, ZkValidityPolicyChangeError> {
@@ -506,6 +507,19 @@ pub fn validate_set_parameter(
         return Ok(false);
     };
     let policy = policy?;
+    validate_pending_transitions(&policy, pending_transition_counts)?;
+    Ok(true)
+}
+
+/// Check retained transitions against an already admitted and intrinsically
+/// validated successor. The instruction path must not decode the policy again.
+///
+/// # Errors
+/// Rejects a successor whose per-height limit is below a retained pending count.
+pub(crate) fn validate_pending_transitions(
+    policy: &ZkValidityPolicyV1,
+    pending_transition_counts: impl IntoIterator<Item = (u64, u32)>,
+) -> Result<(), ZkValidityPolicyChangeError> {
     let maximum = policy.confidential.policy_transition_max_per_height;
     for (effective_height, count) in pending_transition_counts {
         if count > maximum {
@@ -516,7 +530,7 @@ pub fn validate_set_parameter(
             });
         }
     }
-    Ok(true)
+    Ok(())
 }
 
 #[cfg(test)]

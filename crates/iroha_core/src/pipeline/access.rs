@@ -2611,6 +2611,40 @@ mod tests {
     fn wonderland_domain_id() -> DomainId {
         DomainId::try_new("wonderland", "universal").expect("static domain id")
     }
+    /// Explicit policy for isolated trigger-access components, without genesis or finality.
+    fn trigger_component_world() -> World {
+        let mut world = crate::pipeline::overlay::test_support::with_global_root(World::default());
+        let policy = iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+            iroha_crypto::Algorithm::Ed25519,
+        ])
+        .expect("explicit trigger fixture signing algorithm");
+        world
+            .set_parameter_for_testing(
+                policy
+                    .into_parameter()
+                    .expect("canonical trigger fixture policy"),
+            )
+            .expect("admit the trigger component's explicit original policy");
+        world
+    }
+    #[test]
+    fn trigger_component_policy_does_not_claim_committed_genesis() {
+        let state = State::new(
+            trigger_component_world(),
+            crate::kura::Kura::blank_kura_for_testing(),
+            crate::query::store::LiveQueryStore::start_test(),
+        );
+        assert_eq!(state.committed_height(), 0);
+        assert_eq!(state.kura().blocks_count(), 0);
+        assert_eq!(
+            state
+                .transaction_admission_parameters()
+                .require_crypto_policy()
+                .expect("explicit component prerequisite")
+                .allowed_algorithms(),
+            &[iroha_crypto::Algorithm::Ed25519]
+        );
+    }
     fn new_wonderland_account(account_id: &AccountId) -> iroha_data_model::account::NewAccount {
         Account::new(account_id.clone())
     }
@@ -4179,14 +4213,49 @@ seiyaku DynamicAccessCounter { permission CanEnactGovernance;
             crate::query::store::LiveQueryStore::start_test(),
         );
         {
-            let mut parameters = state.world.parameters.block();
-            parameters
-                .set_parameter(iroha_data_model::parameter::Parameter::SmartContract(
+            // Preserve the original parameter-only commit and every other World cut.
+            // Fund both physical generations and the publication identity first.
+            let budget = state.world.sccp_committee_generations.allocation_budget();
+            let [current, undo] = mv::cell::Cell::<
+                crate::pipeline_gas_policy::RetainedStateParameters,
+                iroha_allocation::AllocationCharge,
+            >::allocation_layouts();
+            let successor_layout = mv::cell::CellPublicationSuccessor::allocation_layout();
+            let mut reservation = budget
+                .try_reserve_layouts([current, undo, successor_layout])
+                .expect("admit fixture parameter block");
+            let charges = mv::cell::CellAllocationCharges::new(
+                reservation.try_split(current).expect("current generation"),
+                reservation.try_split(undo).expect("undo generation"),
+            );
+            let backing = mv::cell::CellGenerationBacking::try_from_charges(budget, charges)
+                .unwrap_or_else(|_| panic!("funded fixture parameter generations"));
+            let successor = mv::cell::CellPublicationSuccessor::try_from_charge(
+                budget,
+                reservation
+                    .try_split(successor_layout)
+                    .expect("successor identity"),
+            )
+            .unwrap_or_else(|_| panic!("funded fixture parameter successor"));
+            let mut acquisition = state
+                .world
+                .parameters
+                .try_block_acquisition_with_backing(backing, successor, budget)
+                .unwrap_or_else(|_| panic!("original fixture parameter pool"));
+            acquisition
+                .try_initialize(mv::BlockMode::Ordinary)
+                .expect("acquire fixture parameter block");
+            let mut parameters = mv::BlockAcquisition::into_block(acquisition);
+            crate::state::set_parameter_cell_for_testing(
+                &mut parameters,
+                iroha_data_model::parameter::Parameter::SmartContract(
                     iroha_data_model::parameter::SmartContractParameter::Memory(
                         core::num::NonZeroU64::new(64).expect("test heap limit is non-zero"),
                     ),
-                ))
-                .expect("valid fixture parameters");
+                ),
+                budget,
+            )
+            .expect("valid fixture parameters");
             parameters.commit();
         }
         let view = state.block(prepass_test_header());
@@ -5517,18 +5586,7 @@ seiyaku DynamicAccessCounter { permission CanEnactGovernance;
         use nonzero_ext::nonzero;
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
-        let world = crate::pipeline::overlay::test_support::with_global_root(World::default());
-        // Component account writes require an authored policy before the block snapshot.
-        let mut parameters = world.parameters.block();
-        parameters
-            .set_parameter(
-                crate::sumeragi::test_chain::crypto_fixture_policy()
-                    .into_parameter()
-                    .expect("canonical fixture crypto policy"),
-            )
-            .expect("install fixture crypto policy");
-        parameters.commit();
-        let state = State::new(world, kura, query);
+        let state = State::new(trigger_component_world(), kura, query);
         let alice = iroha_test_samples::ALICE_ID.clone();
         let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut st_block = state.block(header);
@@ -5611,18 +5669,7 @@ seiyaku DynamicAccessCounter { permission CanEnactGovernance;
         use nonzero_ext::nonzero;
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
-        let world = crate::pipeline::overlay::test_support::with_global_root(World::default());
-        // Component account writes require an authored policy before the block snapshot.
-        let mut parameters = world.parameters.block();
-        parameters
-            .set_parameter(
-                crate::sumeragi::test_chain::crypto_fixture_policy()
-                    .into_parameter()
-                    .expect("canonical fixture crypto policy"),
-            )
-            .expect("install fixture crypto policy");
-        parameters.commit();
-        let state = State::new(world, kura, query);
+        let state = State::new(trigger_component_world(), kura, query);
         let alice = iroha_test_samples::ALICE_ID.clone();
         let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut st_block = state.block(header);
@@ -5686,18 +5733,7 @@ seiyaku DynamicAccessCounter { permission CanEnactGovernance;
         access_set_cache_clear();
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
-        let world = crate::pipeline::overlay::test_support::with_global_root(World::default());
-        // Component account writes require an authored policy before the block snapshot.
-        let mut parameters = world.parameters.block();
-        parameters
-            .set_parameter(
-                crate::sumeragi::test_chain::crypto_fixture_policy()
-                    .into_parameter()
-                    .expect("canonical fixture crypto policy"),
-            )
-            .expect("install fixture crypto policy");
-        parameters.commit();
-        let state = State::new(world, kura, query);
+        let state = State::new(trigger_component_world(), kura, query);
         let alice = iroha_test_samples::ALICE_ID.clone();
         let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut st_block = state.block(header);
@@ -5836,18 +5872,7 @@ seiyaku DynamicAccessCounter { permission CanEnactGovernance;
         access_set_cache_clear();
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
-        let world = crate::pipeline::overlay::test_support::with_global_root(World::default());
-        // Component account writes require an authored policy before the block snapshot.
-        let mut parameters = world.parameters.block();
-        parameters
-            .set_parameter(
-                crate::sumeragi::test_chain::crypto_fixture_policy()
-                    .into_parameter()
-                    .expect("canonical fixture crypto policy"),
-            )
-            .expect("install fixture crypto policy");
-        parameters.commit();
-        let state = State::new(world, kura, query);
+        let state = State::new(trigger_component_world(), kura, query);
         let alice = iroha_test_samples::ALICE_ID.clone();
         let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut st_block = state.block(header);

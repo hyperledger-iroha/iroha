@@ -4,7 +4,7 @@
 use super::*;
 use crate::{
     state::output_capacity::producer::network::{fee_decode_test_scope, penalty_decode_test_scope},
-    sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
+    sumeragi::test_chain::CertifiedTestChain,
 };
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::account::AccountId;
@@ -38,19 +38,21 @@ fn fixture_with_registered_policy() -> PenaltyFixture {
     gov.slash_receiver_account = receiver.clone();
     gov.slash_double_vote_bps = 2_000;
     gov.conviction_step_blocks = 1;
-    let mut nexus = component.nexus_snapshot();
-    nexus.fees.base_fee = Quantity::from(1_u32);
-    nexus.fees.per_byte_fee = Quantity::zero();
-    nexus.fees.per_instruction_fee = Quantity::zero();
-    nexus.fees.per_gas_unit_fee = Quantity::zero();
-    nexus.fees.fee_asset_id = asset.clone();
-    nexus.fees.fee_sink_account_id = BOB_ID.clone();
-    let mut config = TestChainConfig::new(
-        crate::validation_fee::tests::validation_fee_payout_world(&deployer),
-        1_000,
-    );
+    let nexus = component.nexus_snapshot();
+    let mut fees = iroha_config::parameters::defaults::nexus::fees::genesis_policy();
+    fees.base_fee = Quantity::from(1_u32);
+    fees.per_byte_fee = Quantity::zero();
+    fees.per_instruction_fee = Quantity::zero();
+    fees.per_gas_unit_fee = Quantity::zero();
+    fees.fee_asset_id = asset.clone();
+    fees.fee_sink_account_id = BOB_ID.clone();
+    let mut config = crate::validation_fee::tests::validation_fee_payout_config(&deployer, 1_000);
     config.governance = Some(gov);
     config.nexus = Some(nexus);
+    config.genesis_parameters.push(Parameter::Custom(
+        fees.into_custom_parameter()
+            .expect("explicit signed penalty-refusal fee policy"),
+    ));
     config.pipeline = component.pipeline;
     let parameters = component.world.parameters.view().block();
     config.genesis_parameters.extend([

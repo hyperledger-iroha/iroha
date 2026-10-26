@@ -239,7 +239,7 @@ struct PeerSettings {
     healthcheck: bool,
     chain: iroha_model_base::chain::ChainId,
     network: std::collections::BTreeMap<u16, peer::PeerInfo>,
-    topology: std::collections::BTreeSet<iroha_data_model::peer::Peer>,
+    topology: std::collections::BTreeSet<iroha_model_base::peer::Peer>,
     prepared_runtime: Option<std::collections::BTreeMap<u16, PreparedRuntimeConfig>>,
 }
 #[derive(Debug)]
@@ -296,7 +296,7 @@ impl PeerSettings {
                 .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
     }
     fn validate_committee_size(count: u16) -> Result<(), Error> {
-        if !iroha_data_model::block::consensus::is_valid_committee_size(usize::from(count)) {
+        if !iroha_model_base::topology::is_valid_committee_size(usize::from(count)) {
             return Err(Error::InvalidPeerCount { actual: count });
         }
         Ok(())

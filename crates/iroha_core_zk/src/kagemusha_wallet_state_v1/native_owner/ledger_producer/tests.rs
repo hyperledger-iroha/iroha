@@ -1,6 +1,7 @@
-//! Direct Unload finality on genuine native BLS certificates and Merkle membership, with
-//! explicit mock archive and manifest custody. Fixture execution rows are synthetic: these
-//! tests cover outcome custody and claim binding, not a World Unload or a payout.
+//! Load preparation and direct Unload finality with genuine native certificates and membership.
+//! Most tests use explicit mock archive and manifest custody; the on-disk test uses the real
+//! provider with test hardware. Proof acceptance and execution rows remain synthetic: these
+//! tests cover custody and claim binding, not execution by a ledger or a payout.
 use super::super::ledger_outcome::tests::{
     advance, boundary, bytes, certify, genesis, ledger_wallet, original, other_quorum, rejected,
     restart, signed_action, successor_epoch_block,
@@ -439,4 +440,176 @@ fn direct_confirmation_host_timing() {
         offered.len(),
         total.as_secs_f64() * 200.0,
     );
+}
+
+#[test]
+fn first_confirmed_load_prepares_and_retries_exactly_across_restart() {
+    let (mut wallet, scope) = super::super::activation::ledger_load_fixture(true);
+    let request = [0x70; 32];
+    let first = wallet
+        .prepare_ledger_load_in_scope(request, 500, scope)
+        .unwrap();
+    let decoded: KagemushaWalletLedgerV1 = archive::decode(&first).unwrap();
+    assert!(
+        matches!(decoded.action, KagemushaWalletLedgerActionV1::IssueLoad {
+        ordinal: 0, request_id, amount: 500, charge: None, ..
+    } if request_id == request)
+    );
+    let (selected, manifest) = wallet.manifest().unwrap();
+    assert!(
+        archive::encode(&manifest).unwrap().len()
+            <= crate::kagemusha_wallet_advance_v1::KAGEMUSHA_WALLET_ARCHIVE_MANIFEST_MAX_BYTES_V1
+    );
+    let publications = wallet.custody.publication_calls;
+    assert_eq!(
+        wallet
+            .prepare_ledger_load_in_scope(request, 500, scope)
+            .unwrap(),
+        first
+    );
+    assert_eq!(wallet.custody.publication_calls, publications);
+    let mut wallet = Coordinator::new(
+        wallet.custody,
+        wallet.archive,
+        wallet.proofs,
+        wallet.scheme_id,
+        wallet.wallet_id,
+    )
+    .unwrap();
+    assert_eq!(
+        wallet
+            .prepare_ledger_load_in_scope(request, 500, scope)
+            .unwrap(),
+        first
+    );
+    assert_eq!(wallet.manifest().unwrap().0, selected);
+    assert!(matches!(
+        wallet.prepare_ledger_load_in_scope([0x71; 32], 500, scope),
+        Err(Error::OperationConflict)
+    ));
+    assert!(matches!(
+        wallet.prepare_ledger_load_in_scope(request, 501, scope),
+        Err(Error::Invalid("changed ledger Load request"))
+    ));
+    assert_eq!(wallet.manifest().unwrap().0, selected);
+}
+
+#[test]
+fn unconfirmed_load_reserves_nothing_and_preserves_the_activation() {
+    let (mut wallet, scope) = super::super::activation::ledger_load_fixture(false);
+    let before = wallet.manifest().unwrap().0;
+    let publications = wallet.custody.publication_calls;
+    assert!(matches!(
+        wallet.prepare_ledger_load_in_scope([0x70; 32], 500, scope),
+        Err(Error::Invalid("ledger activation unconfirmed"))
+    ));
+    let (after, manifest) = wallet.manifest().unwrap();
+    assert_eq!(before, after);
+    assert_eq!(wallet.custody.publication_calls, publications);
+    assert_eq!(manifest.ledger_load_plans, IndexRoot::default());
+    assert_eq!(manifest.ledger_load_ordinals, IndexRoot::default());
+}
+
+#[test]
+fn first_load_uses_real_provider_archive_and_checkpoint_on_disk() {
+    use crate::kagemusha_wallet_advance_v1::{
+        KagemushaWalletProviderOptionsV1, KagemushaWalletProviderV1,
+        KagemushaWalletPublishOutcomeV1, KagemushaWalletStdFsV1,
+        test_support::enrolled_state_provider,
+    };
+    use crate::kagemusha_wallet_state_v1::tests::{TestProofs, signer};
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("custody");
+    assert!(matches!(
+        KagemushaWalletStdFsV1::create_root(&root),
+        KagemushaWalletPublishOutcomeV1::Published
+    ));
+    let credential: KagemushaWalletCredentialV1 = fixture("KagemushaWalletCredentialV1");
+    let key_seed = signer(&credential).to_bytes()[0];
+    let challenge = KagemushaWalletEnrollmentChallengeV1 {
+        version: 1,
+        scheme_id: credential.body.scheme_id,
+        asset_digest: credential.body.asset_digest,
+        account_digest: credential.body.account_digest,
+        app_policy: credential.body.app_policy,
+        enrollment_policy: [0x32; 32],
+        issuer_nonce: [key_seed; 32],
+    };
+    assert_eq!(
+        KagemushaWalletMarkerV1::enrollment(&challenge, credential.body.payment_key).unwrap(),
+        fixture("KagemushaWalletMarkerV1")
+    );
+    let (provider, platform, slot) = enrolled_state_provider(
+        KagemushaWalletStdFsV1::open(&root).unwrap(),
+        &challenge,
+        key_seed,
+        &archive::encode(&credential).unwrap(),
+    );
+    let custody = AdvanceHandle::new(provider, slot);
+    let archive = custody.archive(credential.body.scheme_id, credential.body.wallet_id);
+    let mut wallet = Coordinator::new(
+        custody,
+        archive,
+        TestProofs::default(),
+        credential.body.scheme_id,
+        credential.body.wallet_id,
+    )
+    .unwrap();
+    let scope = super::super::activation::initialize_ledger_load_fixture(&mut wallet, true);
+    drop(wallet);
+    let provider = KagemushaWalletProviderV1::open(
+        KagemushaWalletStdFsV1::open(&root).unwrap(),
+        platform.clone(),
+        credential.body.scheme_id,
+        KagemushaWalletProviderOptionsV1 {
+            ballast_bytes: 2_048,
+        },
+    )
+    .unwrap();
+    let custody = AdvanceHandle::new(provider, slot);
+    let archive = custody.archive(credential.body.scheme_id, credential.body.wallet_id);
+    let mut wallet = Coordinator::new(
+        custody,
+        archive,
+        TestProofs::default(),
+        credential.body.scheme_id,
+        credential.body.wallet_id,
+    )
+    .unwrap();
+    let request = [0x70; 32];
+    wallet.open_archive_call();
+    let first = wallet
+        .prepare_ledger_load_in_scope(request, 500, scope)
+        .unwrap();
+    wallet.close_archive_call(true).unwrap();
+    let selected = wallet.manifest().unwrap().0;
+    drop(wallet);
+    let provider = KagemushaWalletProviderV1::open(
+        KagemushaWalletStdFsV1::open(&root).unwrap(),
+        platform,
+        credential.body.scheme_id,
+        KagemushaWalletProviderOptionsV1 {
+            ballast_bytes: 2_048,
+        },
+    )
+    .unwrap();
+    let custody = AdvanceHandle::new(provider, slot);
+    let archive = custody.archive(credential.body.scheme_id, credential.body.wallet_id);
+    let mut wallet = Coordinator::new(
+        custody,
+        archive,
+        TestProofs::default(),
+        credential.body.scheme_id,
+        credential.body.wallet_id,
+    )
+    .unwrap();
+    wallet.open_archive_call();
+    assert_eq!(
+        wallet
+            .prepare_ledger_load_in_scope(request, 500, scope)
+            .unwrap(),
+        first
+    );
+    wallet.close_archive_call(true).unwrap();
+    assert_eq!(wallet.manifest().unwrap().0, selected);
 }

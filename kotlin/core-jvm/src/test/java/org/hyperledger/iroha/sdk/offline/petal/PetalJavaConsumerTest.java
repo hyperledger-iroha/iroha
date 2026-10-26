@@ -38,10 +38,17 @@ final class PetalJavaConsumerTest {
       assertTrue(result.isSuccess(), "frame " + frame);
       assertNull(result.getError());
       final PetalDecodedFrame decoded = result.getFrame();
-      assertEquals("PKD", decoded.getLanes());
-      assertArrayEquals(encoder.laneData(frame).p(), decoded.getP().getData());
+      assertEquals("D0123", decoded.getLanes());
+      assertArrayEquals(encoder.laneData(frame).field(0), decoded.field(0).getData());
+      assertArrayEquals(encoder.laneData(frame).d(), decoded.getD().getData());
       if (PetalStream.isBeaconFrame(frame)) {
         assertEquals(encoder.getMeta(), decoded.beacon().getMeta());
+      }
+      // the katakana bands of the card carry four more lanes
+      final List<PetalKanaResult> kana =
+          PetalKana.readKana(luma, decoded, decoded.atomPackets().get(0).getHeader());
+      for (final PetalKanaLane lane : PetalKanaLane.ALL) {
+        assertArrayEquals(encoder.laneData(frame).kana(lane), kana.get(lane.ordinal()).getResult().getData());
       }
       decoded.feed(assembler);
     }
@@ -96,7 +103,12 @@ final class PetalJavaConsumerTest {
     assertNull(decoded.getInferredCorner());
     final PetalDecodedFrame followed = PetalDecoder.track(luma, decoded);
     assertNotNull(followed);
-    assertEquals("PKD", followed.getLanes());
+    assertEquals("D0123", followed.getLanes());
+    assertEquals(0.0, followed.getPose().getDistortion());
+    assertNotNull(PetalDecoder.decodeAt(luma, followed.getPose()));
+    // without lens distortion a pose is its homography
+    final PetalPose plain = PetalPose.plain(followed.getPose().getHomography());
+    assertArrayEquals(followed.getPose().apply(100.0, 200.0), plain.apply(100.0, 200.0));
     assertEquals(500L, PetalScanSession.TRACK_WINDOW_MILLIS);
     final PetalScanSession session = new PetalScanSession();
     session.push(luma, 0L);
@@ -106,26 +118,80 @@ final class PetalJavaConsumerTest {
   }
 
   @Test
+  void javaReadsTheTurnLanesOfACapture() {
+    final PetalStreamEncoder encoder = new PetalStreamEncoder(payload(3000), 2);
+    final PetalLuma luma = PetalRenderer.render(encoder.cells(5), new PetalRenderOptions(512, 2)).toLuma();
+    final PetalDecodedFrame decoded = PetalDecoder.decode(luma).getFrame();
+    assertNotNull(decoded);
+    final List<PetalLaneResult> turns = PetalTurns.readTurns(luma, decoded);
+    assertEquals(4, turns.size());
+    for (int sector = 0; sector < 4; sector++) {
+      assertArrayEquals(encoder.laneData(5).turn(sector), turns.get(sector).getData());
+      final byte[] field = decoded.field(sector).getData();
+      final PetalLaneHeader header = new PetalLaneHeader(field[0] & 0xFF, ((field[1] & 0xFF) << 8) | (field[2] & 0xFF));
+      final PetalAtomPacket packet = PetalTurns.turnPacket(header, sector, turns.get(sector).getData());
+      assertNotNull(packet);
+      assertEquals(PetalTurns.turnFirstId(5, sector), packet.getFirstId());
+    }
+    final List<PetalLaneResult> skipped = PetalTurns.readTurns(luma, decoded, new boolean[] {true, true, false, true});
+    assertNull(skipped.get(0));
+    assertNotNull(skipped.get(2));
+    final PetalObservedTurns observed = PetalTurns.observedTurns(luma, decoded);
+    assertNotNull(observed);
+    assertEquals(4 * PetalTurns.TURN_CARRIERS, observed.getCarriers().size());
+    assertEquals(Integer.MIN_VALUE, PetalTurns.TURN_ID_BASE);
+    assertEquals(90, PetalTurns.TURN_WORD);
+    // a session with time to spare reads a shown frame's bands and turn lanes on its first capture,
+    // each once
+    final PetalScanSession session = new PetalScanSession(PetalScanLimits.DEFAULT, (work, measuredMillis) -> 0.0);
+    final PetalScanOutcome first = session.push(luma, 0L);
+    assertEquals("P0K0P1K1", first.getKana());
+    assertEquals("0123", first.getTurned());
+    assertEquals("", session.push(luma, 33L).getTurned());
+    assertEquals(4L, session.stats().getTurnLanes());
+    assertEquals(4L, session.stats().getKanaLanes());
+    assertEquals(1L, session.stats().getSpareTurns());
+    // one whose bands take that time reads the turn lanes on the next capture
+    final PetalScanSession slow =
+        new PetalScanSession(PetalScanLimits.DEFAULT, (work, measuredMillis) -> work instanceof PetalWork.Bands ? 40.0 : 0.0);
+    assertEquals("", slow.push(luma, 0L).getTurned());
+    assertEquals("0123", slow.push(luma, 33L).getTurned());
+    assertEquals(0L, slow.stats().getSpareTurns());
+  }
+
+  @Test
   void javaReadsTheCodecAndDrawListSurface() {
-    final byte[] data = new byte[PetalLanes.P_DATA];
-    final byte[] word = PetalLanes.encodeLane(PetalLane.P, data);
+    final byte[] data = new byte[PetalLanes.FIELD_DATA];
+    final PetalLane lane = PetalLane.field(2);
+    assertEquals(PetalLane.F2, lane);
+    assertEquals('2', lane.getLetter());
+    final byte[] word = PetalLanes.encodeLane(lane, data);
     word[0] ^= 0x5A;
-    assertArrayEquals(data, PetalLanes.decodeLane(PetalLane.P, word));
+    assertArrayEquals(data, PetalLanes.decodeLane(lane, word));
+    assertEquals(5, PetalLane.ALL.size());
     final PetalReedSolomonException failure =
         assertThrows(PetalReedSolomonException.class, () -> PetalLanes.decodeLane(PetalLane.D, new byte[3]));
     assertEquals(PetalReedSolomonException.Reason.INVALID_SHAPE, failure.getReason());
 
     final PetalStreamEncoder encoder = new PetalStreamEncoder(payload(64), 3);
     final PetalDrawList list = PetalDrawList.of(encoder.cells(5), PetalPalette.DEFAULT);
-    assertEquals(PetalLayout.TILE_COUNT, list.getTiles().size());
     assertEquals(24, list.getFinderDiscs().size());
     assertFalse(list.getDots().isEmpty());
-    final List<double[]> strokes = PetalGlyphs.strokes(list.getTiles().get(0).getGlyph());
-    assertFalse(strokes.isEmpty());
-    assertEquals(PetalLayout.GLYPH_BOX / PetalGlyphs.GLYPH_GRID, PetalDrawList.GLYPH_SCALE);
-    final PetalDLane lane = PetalStream.parseDLane(encoder.laneData(4).d());
-    assertNotNull(lane);
-    assertTrue(lane.isBeacon());
-    assertEquals(PetalStream.firstAtomId(5), PetalStream.parseAtomLane(PetalLane.P, encoder.laneData(5).p()).getFirstId());
+    final List<PetalDrawPetal> petals = list.getPetals();
+    assertFalse(petals.isEmpty());
+    assertEquals(PetalLayout.isLightCell(petals.get(0).getCell()), petals.get(0).getLight());
+    assertFalse(list.getBackdropCells().isEmpty());
+    assertEquals(PetalLayout.BACKDROP_RADIUS, PetalDrawList.BACKDROP_RADIUS);
+    assertEquals(6.0, PetalDrawList.PETAL_HALF_LENGTH);
+    assertEquals(3.73, PetalDrawList.PETAL_HALF_WIDTH);
+    final PetalDrawPetal first = petals.get(0);
+    assertEquals(
+        PetalLayout.cellAngle(first.getCell()) + PetalTurns.turnAngle(first.getTurn()), first.getAngle());
+    final PetalDLane dLane = PetalStream.parseDLane(encoder.laneData(4).d());
+    assertNotNull(dLane);
+    assertTrue(dLane.isBeacon());
+    assertEquals(
+        PetalStream.firstAtomId(5) + 5,
+        PetalStream.parseAtomLane(PetalLane.F1, encoder.laneData(5).field(1)).getFirstId());
   }
 }

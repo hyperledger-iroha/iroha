@@ -168,11 +168,11 @@ fn membership_probe_callback(
     })
 }
 
-fn held_cell_observation<V: mv::Value>(
-    target: &mv::cell::Cell<V>,
-    journal: mv::cell::Detached<V, ()>,
+fn held_cell_observation<V: mv::Value, Charge: Send + Sync + 'static>(
+    target: &mv::cell::Cell<V, Charge>,
+    journal: mv::cell::Detached<V, (), Charge>,
 ) -> (
-    mv::cell::Detached<V, ()>,
+    mv::cell::Detached<V, (), Charge>,
     iroha_allocation::release::ReleaseWait,
     PublicationCleanup<()>,
 ) {
@@ -222,10 +222,8 @@ fn assert_state_exit_releases_all_original_writers(exit: StateExit) {
         crate::unit_test_support::release_registration(&state.ivm_execution_budget());
     let before = crate::snapshot::canonical_state_snapshot_hash(&state).unwrap();
     let mut parameters = Some(
-        state
-            .world
-            .parameters
-            .block()
+        crate::state::parameter_cell_block_for_testing(&state.world)
+            .expect("funded original parameter-only fixture block")
             .try_detach(|_| Ok::<_, ()>(()))
             .unwrap(),
     );
@@ -353,10 +351,8 @@ fn acquired_runtime_result_drop_releases_membership_before_world_notification() 
     let mut registration =
         crate::unit_test_support::release_registration(&state.ivm_execution_budget());
     let before = crate::snapshot::canonical_state_snapshot_hash(&state).unwrap();
-    let parameters = state
-        .world
-        .parameters
-        .block()
+    let parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+        .expect("funded original parameter-only fixture block")
         .try_detach(|_| Ok::<_, ()>(()))
         .unwrap();
     let membership = membership_probe_before_stage(&state);

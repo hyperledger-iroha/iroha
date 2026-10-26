@@ -4,6 +4,7 @@
 //! Capsules and completion records here are structurally valid G1 frames; their receipt
 //! signatures are canonical but not bound to a credential, which the persistence layer never
 //! needs (receipt verification belongs to the advance and reconcile owners).
+#![cfg_attr(not(test), allow(dead_code))]
 
 use iroha_data_model::kagemusha::{
     KagemushaDevicePublicKeyV1, KagemushaDeviceSignatureV1, KagemushaWalletCompletionRecordV1,
@@ -28,14 +29,15 @@ use p256::ecdsa::{
 };
 
 use super::{
-    KagemushaWalletAnchorPolicyV1, KagemushaWalletDurableStoreV1, KagemushaWalletFreshGenerationV1,
+    KagemushaWalletAnchorPolicyV1, KagemushaWalletFreshGenerationV1,
     KagemushaWalletKeyGenerationPolicyV1, KagemushaWalletKeyGenerationRequestV1,
     KagemushaWalletKeyGenerationV1, KagemushaWalletKeyProfileV1, KagemushaWalletMarkerRecordV1,
     KagemushaWalletNotPublishedV1, KagemushaWalletPlatformSignatureV1, KagemushaWalletPlatformV1,
     KagemushaWalletProbeV1, KagemushaWalletPublishOutcomeV1, KagemushaWalletRemoveOutcomeV1,
     KagemushaWalletSignMessageV1, KagemushaWalletSimFsV1, KagemushaWalletSlotIdV1,
-    KagemushaWalletUnavailableV1, kagemusha_wallet_prepare_root_v1,
-    kagemusha_wallet_prepare_slot_dirs_v1,
+    KagemushaWalletUnavailableV1,
+    layout::{kagemusha_wallet_prepare_root_v1, kagemusha_wallet_prepare_slot_dirs_v1},
+    store::KagemushaWalletDurableStoreV1,
 };
 
 /// Hardware key profile used by every simulated enrollment.
@@ -99,12 +101,12 @@ impl WalletFixtureV1 {
 }
 
 /// Deterministic P-256 key from `seed`.
-pub(super) fn signing_key(seed: u8) -> SigningKey {
+pub fn signing_key(seed: u8) -> SigningKey {
     SigningKey::from_slice(&[seed; 32]).expect("signing key")
 }
 
 /// Canonical public key of `key`.
-pub(super) fn public_key(key: &SigningKey) -> KagemushaDevicePublicKeyV1 {
+pub fn public_key(key: &SigningKey) -> KagemushaDevicePublicKeyV1 {
     KagemushaDevicePublicKeyV1::from_sec1_bytes(
         key.verifying_key().to_encoded_point(false).as_bytes(),
     )
@@ -561,7 +563,7 @@ pub struct FakePlatformV1 {
 
 impl FakePlatformV1 {
     /// Fake platform with `policy` whose next generated key is `signing_key(next_key_seed)`.
-    pub(super) fn new(policy: KagemushaWalletAnchorPolicyV1, next_key_seed: u8) -> Self {
+    pub fn new(policy: KagemushaWalletAnchorPolicyV1, next_key_seed: u8) -> Self {
         Self {
             state: Arc::new(Mutex::new(FakeStateV1 {
                 keys: BTreeMap::new(),
@@ -691,11 +693,11 @@ impl FakePlatformV1 {
             Domain::LedgerControl => super::KagemushaWalletMarkerPhaseV1::Terminal,
             _ => return,
         };
-        let dir = super::kagemusha_wallet_markers_dir_v1(slot);
+        let dir = super::layout::kagemusha_wallet_markers_dir_v1(slot);
         let names: Vec<String> = fs
             .visible_names(&dir)
             .into_iter()
-            .filter(|name| super::kagemusha_wallet_parse_marker_name_v1(name).is_some())
+            .filter(|name| super::layout::kagemusha_wallet_parse_marker_name_v1(name).is_some())
             .collect();
         let verdict = match names.as_slice() {
             [only] => fs
@@ -801,13 +803,13 @@ impl KagemushaWalletPlatformV1 for FakePlatformV1 {
                 // The records must already survive power loss before the provider is called.
                 let durable = fs.fork();
                 durable.power_loss(super::KagemushaWalletSimPowerLossV1::DropUnsynced);
-                let dir = super::kagemusha_wallet_slot_dir_v1(&slot);
+                let dir = super::layout::kagemusha_wallet_slot_dir_v1(&slot);
                 let intent = durable
-                    .visible_file(&dir, super::KAGEMUSHA_WALLET_INTENT_NAME_V1)
+                    .visible_file(&dir, super::layout::KAGEMUSHA_WALLET_INTENT_NAME_V1)
                     .and_then(|bytes| {
                         super::decode_envelope_v1::<super::KagemushaWalletIntentV1>(
                             &bytes,
-                            super::KAGEMUSHA_WALLET_INTENT_MAX_BYTES_V1,
+                            super::enrollment::KAGEMUSHA_WALLET_INTENT_MAX_BYTES_V1,
                         )
                         .ok()
                     });
@@ -820,7 +822,10 @@ impl KagemushaWalletPlatformV1 for FakePlatformV1 {
                 });
                 if !bound
                     || durable
-                        .visible_file(&dir, super::KAGEMUSHA_WALLET_KEY_GENERATION_ATTEMPT_NAME_V1)
+                        .visible_file(
+                            &dir,
+                            super::layout::KAGEMUSHA_WALLET_KEY_GENERATION_ATTEMPT_NAME_V1,
+                        )
                         .is_none()
                 {
                     state
@@ -926,6 +931,7 @@ impl KagemushaWalletPlatformV1 for FakePlatformV1 {
         self.with(|state| state.boot)
     }
 
+    #[cfg(test)]
     fn live_enrollment_clock_for_test(
         &self,
     ) -> Option<Result<([u8; 32], u128), KagemushaWalletUnavailableV1>> {
@@ -1002,18 +1008,18 @@ impl FakePlatformV1 {
         let Some(fs) = state.guard.as_ref() else {
             return;
         };
-        let slot_names = fs.visible_names(&super::kagemusha_wallet_slot_dir_v1(slot));
+        let slot_names = fs.visible_names(&super::layout::kagemusha_wallet_slot_dir_v1(slot));
         let markers = fs
-            .visible_names(&super::kagemusha_wallet_markers_dir_v1(slot))
+            .visible_names(&super::layout::kagemusha_wallet_markers_dir_v1(slot))
             .into_iter()
-            .filter(|name| super::kagemusha_wallet_parse_marker_name_v1(name).is_some())
+            .filter(|name| super::layout::kagemusha_wallet_parse_marker_name_v1(name).is_some())
             .count();
         let intent = slot_names
             .iter()
-            .any(|name| name == super::KAGEMUSHA_WALLET_INTENT_NAME_V1);
+            .any(|name| name == super::layout::KAGEMUSHA_WALLET_INTENT_NAME_V1);
         let abandoned = slot_names
             .iter()
-            .any(|name| name == super::KAGEMUSHA_WALLET_ABANDONED_NAME_V1);
+            .any(|name| name == super::layout::KAGEMUSHA_WALLET_ABANDONED_NAME_V1);
         if !intent || abandoned || markers != 0 || state.keys.contains_key(slot) {
             state.violations.push(format!(
                 "key generated with intent {intent} abandoned {abandoned} markers {markers}"
@@ -1027,11 +1033,11 @@ impl FakePlatformV1 {
         let Some(fs) = state.guard.as_ref() else {
             return;
         };
-        let dir = super::kagemusha_wallet_markers_dir_v1(slot);
+        let dir = super::layout::kagemusha_wallet_markers_dir_v1(slot);
         let names: Vec<String> = fs
             .visible_names(&dir)
             .into_iter()
-            .filter(|name| super::kagemusha_wallet_parse_marker_name_v1(name).is_some())
+            .filter(|name| super::layout::kagemusha_wallet_parse_marker_name_v1(name).is_some())
             .collect();
         let record = match names.as_slice() {
             [only] => fs.visible_file(&dir, only).and_then(|bytes| {
@@ -1048,14 +1054,13 @@ impl FakePlatformV1 {
                 }
             )
         });
-        let anchored = state.policy == KagemushaWalletAnchorPolicyV1::NotRequired
-            || record.as_ref().is_some_and(|record| {
-                state
-                    .anchors
-                    .get(slot)
-                    .and_then(|bytes| super::KagemushaWalletAnchorV1::decode(bytes).ok())
-                    == Some(super::KagemushaWalletAnchorV1::naming(record))
-            });
+        let anchored =
+            state.policy == KagemushaWalletAnchorPolicyV1::NotRequired
+                || record.as_ref().is_some_and(|record| {
+                    state.anchors.get(slot).and_then(|bytes| {
+                        super::anchor::KagemushaWalletAnchorV1::decode(bytes).ok()
+                    }) == Some(super::anchor::KagemushaWalletAnchorV1::naming(record))
+                });
         if !terminal || !anchored {
             state.violations.push(format!(
                 "key deleted under markers {names:?} anchored {anchored}"
@@ -1192,7 +1197,7 @@ impl
 pub(super) const TEST_BALLAST_BYTES: u64 = 2_048;
 
 /// Provider options of simulated flows.
-pub(super) fn test_options() -> super::KagemushaWalletProviderOptionsV1 {
+pub fn test_options() -> super::KagemushaWalletProviderOptionsV1 {
     super::KagemushaWalletProviderOptionsV1 {
         ballast_bytes: TEST_BALLAST_BYTES,
     }
@@ -1367,4 +1372,43 @@ pub fn bootstrapped_provider<F: super::KagemushaWalletFsV1>(
             .expect("bootstrap"),
     );
     (provider, platform, slot, capsule)
+}
+
+/// Enroll an existing state-owner vector through the real provider using explicit test hardware.
+pub(crate) fn enrolled_state_provider<F: super::KagemushaWalletFsV1>(
+    fs: F,
+    challenge: &KagemushaWalletEnrollmentChallengeV1,
+    key_seed: u8,
+    credential: &[u8],
+) -> (
+    super::KagemushaWalletProviderV1<F, FakePlatformV1>,
+    FakePlatformV1,
+    KagemushaWalletSlotIdV1,
+) {
+    let platform = FakePlatformV1::new(KagemushaWalletAnchorPolicyV1::NotRequired, key_seed);
+    let mut provider = super::KagemushaWalletProviderV1::open(
+        fs,
+        platform.clone(),
+        challenge.scheme_id,
+        test_options(),
+    )
+    .expect("state fixture provider");
+    let super::KagemushaWalletEnrollmentStepV1::Enrolled { slot, .. } = provider
+        .test_begin_enrollment(
+            challenge,
+            PROFILE,
+            super::KagemushaWalletEnrollmentDatesV1 {
+                issued_at_ms: 1,
+                expires_at_ms: 600_001,
+            },
+        )
+        .expect("state fixture enrollment")
+    else {
+        panic!("state fixture not enrolled")
+    };
+    provider
+        .retain_enrollment_request(&slot, b"state fixture request")
+        .unwrap();
+    provider.store_credential(&slot, 0, credential).unwrap();
+    (provider, platform, slot)
 }

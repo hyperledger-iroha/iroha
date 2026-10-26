@@ -991,8 +991,10 @@ fn execute_torii_explorer_asset_definition_local_source_read_admitted(
             ResponseFormat::Json,
         );
     };
-    let assets =
-        crate::explorer::definition_instance_count_from_world(&world, definition_id, visibility);
+    let assets = crate::explorer::definition_instance_count_from_world(
+        &visibility.in_world(&world),
+        definition_id,
+    );
     let zero_locked_quantity = iroha_primitives::numeric::Quantity::zero();
     let (locked_quantity, circulating_quantity) = if definition_id == &app.state.gov.voting_asset_id
     {

@@ -621,7 +621,7 @@ fn apply_contract_call_execution_context(
 }
 #[cfg(any(test, feature = "iroha-core-tests"))]
 fn begin_overlay_access_log<QS>(
-    host: &mut crate::smartcontracts::ivm::host::CoreHostImpl<QS>,
+    host: &mut crate::smartcontracts::ivm::host::CoreHostImpl<'_, '_, QS>,
     capture_access_log: bool,
 ) -> Result<(), OverlayBuildError>
 where
@@ -635,7 +635,7 @@ where
 }
 #[cfg(any(test, feature = "iroha-core-tests"))]
 fn finish_overlay_access_log<QS>(
-    host: &mut crate::smartcontracts::ivm::host::CoreHostImpl<QS>,
+    host: &mut crate::smartcontracts::ivm::host::CoreHostImpl<'_, '_, QS>,
     capture_access_log: bool,
 ) -> Result<Option<ivm::host::AccessLog>, OverlayBuildError>
 where
@@ -735,7 +735,7 @@ pub(crate) fn resolve_streaming_metadata<R: StateReadOnly>(
 pub(crate) fn apply_streaming_metadata<
     QS: Default + crate::smartcontracts::ivm::host::QueryStateAccess,
 >(
-    host: &mut crate::smartcontracts::ivm::host::CoreHostImpl<QS>,
+    host: &mut crate::smartcontracts::ivm::host::CoreHostImpl<'_, '_, QS>,
     metadata: StreamingOverlayMetadata,
 ) {
     if let Some(snapshot) = metadata.transport {
@@ -3041,6 +3041,8 @@ where
                     .expect("contract invocation parser must set entrypoint"),
             });
             let mut host: crate::smartcontracts::ivm::host::CoreHostImpl<
+                '_,
+                '_,
                 crate::smartcontracts::ivm::host::QueryStateSlot<_>,
             > = crate::smartcontracts::ivm::host::CoreHostImpl::<
                 crate::smartcontracts::ivm::host::QueryStateSlot<_>,
@@ -3525,6 +3527,8 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
                     .expect("contract invocation parser must set entrypoint"),
             });
             let mut host: crate::smartcontracts::ivm::host::CoreHostImpl<
+                '_,
+                '_,
                 crate::smartcontracts::ivm::host::QueryStateSlot<_>,
             > = crate::smartcontracts::ivm::host::CoreHostImpl::<
                 crate::smartcontracts::ivm::host::QueryStateSlot<_>,
@@ -3779,14 +3783,12 @@ pub(crate) mod test_support {
     use iroha_model_base::chain::ChainId;
 
     /// Component fixture with explicit committed global-root metadata.
-    pub fn with_global_root(world: crate::state::World) -> crate::state::World {
-        let mut parameters = world.parameters.block();
-        parameters
-            .set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
+    pub(crate) fn with_global_root(mut world: crate::state::World) -> crate::state::World {
+        world
+            .set_parameter_for_testing(crate::sumeragi::lanes::routing::test_support::metadata(
                 iroha_data_model::block::consensus::SumeragiRootScope::Global,
             ))
             .expect("valid fixture parameters");
-        parameters.commit();
         world
     }
 
@@ -8632,7 +8634,7 @@ fn run_vm(vm: &mut ivm::IVM) -> Result<(), OverlayBuildError> {
 #[cfg(any(test, feature = "iroha-core-tests"))]
 fn run_vm_with_host<QS: crate::smartcontracts::ivm::host::QueryStateAccess + Default>(
     vm: &mut ivm::IVM,
-    host: &mut crate::smartcontracts::ivm::host::CoreHostImpl<QS>,
+    host: &mut crate::smartcontracts::ivm::host::CoreHostImpl<'_, '_, QS>,
 ) -> Result<bool, OverlayBuildError> {
     host.clear_axt_reject();
     let result = vm.run_with_host(host);
@@ -8643,7 +8645,7 @@ fn run_vm_with_host<QS: crate::smartcontracts::ivm::host::QueryStateAccess + Def
 
 #[cfg(any(test, feature = "iroha-core-tests"))]
 fn finish_vm_run_with_host<QS: crate::smartcontracts::ivm::host::QueryStateAccess + Default>(
-    host: &mut crate::smartcontracts::ivm::host::CoreHostImpl<QS>,
+    host: &mut crate::smartcontracts::ivm::host::CoreHostImpl<'_, '_, QS>,
     result: Result<(), ivm::VMError>,
 ) -> Result<(), OverlayBuildError> {
     match result {

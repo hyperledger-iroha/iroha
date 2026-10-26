@@ -10620,7 +10620,7 @@ fn peer_id_from_json_value(value: &json::Value) -> Option<iroha_model_base::peer
         if let Ok(peer_id) = peer_str.parse::<iroha_model_base::peer::PeerId>() {
             return Some(peer_id);
         }
-        if let Ok(peer) = peer_str.parse::<iroha_data_model::peer::Peer>() {
+        if let Ok(peer) = peer_str.parse::<iroha_model_base::peer::Peer>() {
             return Some(peer.id().clone());
         }
         return None;

@@ -252,9 +252,7 @@ fn public_fee_reward_claim_rejects_wrong_network_xor_without_writes_and_retries_
                 changed.xor_asset_definition_id = substitute;
                 changed.validate().unwrap();
                 stx.world
-                    .parameters
-                    .get_mut()
-                    .set_parameter(Parameter::Custom(changed.into_custom_parameter()))
+                    .set_parameter_for_testing(Parameter::Custom(changed.into_custom_parameter()))
                     .expect("valid fixture parameters");
             } else {
                 // Scale eighteen still admits this scale-nine payment. If HC58 omits
@@ -314,9 +312,7 @@ fn public_fee_reward_claim_rejects_wrong_network_xor_without_writes_and_retries_
             // Restore only the deliberately changed currency relation. The claim
             // source, original authorized claim plan, fee credit and original instruction persist.
             stx.world
-                .parameters
-                .get_mut()
-                .set_parameter(Parameter::Custom(
+                .set_parameter_for_testing(Parameter::Custom(
                     original_parameters.into_custom_parameter(),
                 ))
                 .expect("valid fixture parameters");
@@ -658,9 +654,7 @@ fn fee_reward_claim_refuses_currency_substitution_and_stale_credit() {
             ..Default::default()
         };
         stx.world
-            .parameters
-            .get_mut()
-            .set_parameter(Parameter::Custom(params.into_custom_parameter()))
+            .set_parameter_for_testing(Parameter::Custom(params.into_custom_parameter()))
             .expect("valid fixture parameters");
         let before = stx
             .world
@@ -695,9 +689,7 @@ fn fee_reward_claim_refuses_currency_substitution_and_stale_credit() {
             "rejected currency cannot alter the credit, receipt sequence or reserve"
         );
         stx.world
-            .parameters
-            .get_mut()
-            .set_parameter(Parameter::Custom(
+            .set_parameter_for_testing(Parameter::Custom(
                 SumeragiNposParameters::default().into_custom_parameter(),
             ))
             .expect("valid fixture parameters");

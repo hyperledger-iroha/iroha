@@ -207,7 +207,7 @@ async fn pipeline_status_handler_returns_typed_norito_when_requested() {
     use iroha_torii_shared::PipelineTransactionStatusResponse;
     let keypair = checked_torii_test_ed25519_keypair(0x29, "derive Torii typed-status fixture key");
     let authority = AccountId::new(keypair.public_key().clone());
-    let app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+    let app = mk_native_app_state_for_tests_with_world(world_with_account(&authority));
     let tx = checked_torii_test_transaction(
         TransactionBuilder::new(
             *app.state.network_id_ref(),
@@ -622,7 +622,7 @@ async fn pipeline_status_handler_cache_hit_ignores_tx_rate_limiter_pressure() {
 }
 #[tokio::test]
 async fn pipeline_status_handler_charges_cache_hits_before_local_reads() {
-    let mut app = mk_app_state_for_tests();
+    let mut app = mk_native_app_state_for_tests();
     let tx_hash =
         HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::prehashed([0x73; Hash::LENGTH]));
     {
@@ -1948,6 +1948,13 @@ fn native_ingress_app_with_config_for_test(
     let validator = prepared.validator_keys[0].clone();
     let chain =
         CertifiedTestChain::from_prepared(prepared).expect("execute signed native ingress genesis");
+    native_ingress_app_from_chain_for_test(&chain, validator)
+}
+
+fn native_ingress_app_from_chain_for_test(
+    chain: &iroha_core::sumeragi::test_chain::CertifiedTestChain,
+    validator: KeyPair,
+) -> SharedAppState {
     let mut app = mk_app_state_for_tests();
     let unique = Arc::get_mut(&mut app).unwrap();
     unique.chain_id = Arc::new(chain.state().view().chain_id().clone());
@@ -1955,7 +1962,10 @@ fn native_ingress_app_with_config_for_test(
     unique.kura = chain.kura().clone();
     {
         let view = unique.state.view();
-        unique.queue.reconfigure_nexus(view.nexus(), &view, None);
+        unique
+            .queue
+            .reconfigure_nexus(view.nexus(), &view, None)
+            .expect("original State pool admits Queue privacy projection");
     }
     unique.local_peer_id = Some(PeerId::new(validator.public_key().clone()));
     unique.torii_proxy_bridge_signer = validator;
@@ -2195,7 +2205,10 @@ fn native_ingress_with_registered_route_peers_and_chain_for_test(
     unique.local_peer_id = Some(PeerId::new(members[0].1.public_key().clone()));
     unique.torii_proxy_bridge_signer = members[0].1.clone();
     let view = unique.state.view();
-    unique.queue.reconfigure_nexus(view.nexus(), &view, None);
+    unique
+        .queue
+        .reconfigure_nexus(view.nexus(), &view, None)
+        .expect("original State pool admits Queue privacy projection");
     drop(view);
     (app, chain, genesis_key)
 }
@@ -4395,6 +4408,10 @@ async fn ledger_state_endpoints_reject_zero_and_uncommitted_heights() {
     }
 }
 include!("committed_network_proof_support.rs");
+
+#[cfg(feature = "app_api")]
+#[path = "portal_history_http.rs"]
+mod portal_history_http;
 
 #[test]
 fn block_proof_handler_emits_norito() {

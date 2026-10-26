@@ -1400,10 +1400,12 @@ fn projection_layout() -> SegmentLayoutV1 {
 fn projection_provider_post_base_v1(
     statement: &IrohaZkX509StarkP256StatementV1,
 ) -> ZkX509CredentialMainPostBaseChallengesV1 {
-    let consensus_context_digest =
-        ZkX509CredentialPublicBindingV1::from_consensus_context_v1(statement, [0x91; 32])
-            .expect("projection fixture consensus binding")
-            .consensus_context_digest;
+    let consensus_context_digest = ZkX509CredentialPublicBindingV1::from_consensus_context_v1(
+        statement,
+        *statement.context.network_id.as_bytes(),
+    )
+    .expect("projection fixture consensus binding")
+    .consensus_context_digest;
     derive_zk_x509_credential_pre_aux_binding_v1(
         ZkX509CredentialMainPreAuxV1::fixture_for_test_v1(
             consensus_context_digest,

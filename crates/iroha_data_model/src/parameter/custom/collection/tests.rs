@@ -446,3 +446,71 @@ fn borrowed_same_pool_update_shares_json_and_foreign_update_copies_custody() {
     drop(other);
     assert_eq!(foreign.reserved_bytes(), 0);
 }
+
+#[test]
+fn authoring_filter_preserves_sorted_values_and_original_array() {
+    let mut parameters = CustomParameters::try_from_iter([
+        parameter("delta", 4),
+        parameter("alpha", 1),
+        parameter("charlie", 3),
+        parameter("bravo", 2),
+    ])
+    .unwrap();
+    let pointer = parameters.entries.as_ptr();
+    let capacity = parameters.entries.capacity();
+    let mut visited = [false; 4];
+    let mut count = 0;
+    parameters
+        .try_retain_authoring(|value| {
+            let expected = ["alpha", "bravo", "charlie", "delta"][count];
+            assert_eq!(value.id.name().as_ref(), expected);
+            visited[count] = true;
+            count += 1;
+            value.id.name().as_ref() == "bravo" || value.id.name().as_ref() == "delta"
+        })
+        .unwrap();
+    assert_eq!(visited, [true; 4]);
+    assert_eq!(parameters.entries.as_ptr(), pointer);
+    assert_eq!(parameters.entries.capacity(), capacity);
+    assert_eq!(
+        parameters,
+        CustomParameters::try_from_iter([parameter("bravo", 2), parameter("delta", 4),]).unwrap()
+    );
+    parameters.try_retain_authoring(|_| false).unwrap();
+    assert!(parameters.is_empty());
+    assert_eq!(parameters.entries.as_ptr(), pointer);
+    assert_eq!(parameters.entries.capacity(), capacity);
+    let mut called = false;
+    parameters
+        .try_retain_authoring(|_| {
+            called = true;
+            true
+        })
+        .unwrap();
+    assert!(!called);
+}
+
+#[test]
+fn authoring_filter_refuses_retained_owner_before_predicate_and_refunds_on_drop() {
+    let pool = AllocationBudget::new(1 << 20);
+    let mut retained = source().try_retain_in(&pool).unwrap();
+    let original = retained.encode();
+    let pointer = retained.entries.as_ptr();
+    let charge = pool.reserved_bytes();
+    let mut called = false;
+    let result = retained.try_retain_authoring(|_| {
+        called = true;
+        false
+    });
+    assert!(matches!(
+        result,
+        Err(CustomParametersAdmissionError::RetainedMutation)
+    ));
+    assert!(!called);
+    assert_eq!(retained.entries.as_ptr(), pointer);
+    assert_eq!(retained.encode(), original);
+    assert!(retained.belongs_to(&pool));
+    assert_eq!(pool.reserved_bytes(), charge);
+    drop(retained);
+    assert_eq!(pool.reserved_bytes(), 0);
+}

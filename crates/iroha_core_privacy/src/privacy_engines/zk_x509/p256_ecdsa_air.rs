@@ -43,7 +43,6 @@ impl core::fmt::Debug for P256EcdsaWitnessV1 {
 }
 impl P256EcdsaWitnessV1 {
     /// Overwrite the complete private ECDSA input tuple.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     pub(crate) fn zeroize_private_v1(&mut self) {
         super::private_table::zeroize_words_v1(&mut self.public_key_x_be[..]);
         super::private_table::zeroize_words_v1(&mut self.public_key_y_be[..]);
@@ -88,10 +87,8 @@ pub trait P256EcdsaCircuitV1: P256WindowCircuitV1 {
     /// Handle of one canonical P-256 scalar-field value.
     type Scalar: Copy;
     /// Allocate a private base-field value bound to DER/P-256 byte I/O.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     fn base_input_v1(&mut self, value_be: [u8; 32]) -> Result<Self::Value, Self::Error>;
     /// Allocate a private canonical scalar bound to strict DER output.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     fn scalar_input_v1(&mut self, value_be: [u8; 32]) -> Result<Self::Scalar, Self::Error>;
     /// Allocate an inverse and constrain `value * inverse = 1 mod n`.
     fn scalar_inverse_nonzero_v1(
@@ -111,7 +108,6 @@ pub trait P256EcdsaCircuitV1: P256WindowCircuitV1 {
         right: Self::Scalar,
     ) -> Result<(), Self::Error>;
     /// Reduce an exact SHA-256 word with the one-subtraction reduction AIR.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     fn reduce_digest_v1(&mut self, digest_be: [u8; 32]) -> Result<Self::Scalar, Self::Error>;
     /// Reduce an assigned canonical base-field coordinate modulo n.
     fn reduce_base_coordinate_v1(
@@ -140,12 +136,10 @@ pub trait P256EcdsaInputSourceV1<C: P256EcdsaCircuitV1> {
     /// Allocate and constrain the reduced SHA-256 digest.
     fn reduced_digest_v1(&mut self, circuit: &mut C) -> Result<C::Scalar, C::Error>;
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy)]
 struct P256EcdsaWitnessInputSourceV1 {
     witness: P256EcdsaWitnessV1,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<C: P256EcdsaCircuitV1> P256EcdsaInputSourceV1<C> for P256EcdsaWitnessInputSourceV1 {
     fn public_key_v1(&mut self, circuit: &mut C) -> Result<(C::Value, C::Value), C::Error> {
         Ok((
@@ -210,7 +204,6 @@ pub fn constrain_p256_ecdsa_from_source_v1<C: P256EcdsaCircuitV1, I: P256EcdsaIn
     })
 }
 /// Constrain one complete P-256 ECDSA verification equation from native witness bytes.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub fn constrain_p256_ecdsa_v1<C: P256EcdsaCircuitV1>(
     circuit: &mut C,
     generator_table: &[P256ProjectiveValueV1<C::Value>; 16],

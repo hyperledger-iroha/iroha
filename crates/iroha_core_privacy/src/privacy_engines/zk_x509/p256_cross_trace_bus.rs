@@ -31,12 +31,10 @@
 //!
 //! The aggregate adapter registers these source-attached auxiliary columns and
 //! terminal chain in the production verifier.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::p256_external_binding_air::{
     P256ExternalBindingFixedAccessV1, P256ExternalBindingRowV1, P256ExternalBindingTraceV1,
     p256_input_selection_byte_v1,
 };
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::p256_value_bus::{
     P256ValueAccessKindV1, P256ValueBusBaseEndpointTraceV1, P256ValueBusErrorV1,
     P256ValueBusFixedAccessV1, p256_value_bus_base_execution_source_cell_v1,
@@ -61,7 +59,6 @@ use crate::privacy_engines::transparent_stark::PrivacyOuterDigestV1;
 use crate::privacy_engines::transparent_stark::{
     GoldilocksFieldV1 as F, PolynomialAirFieldV1, TransparentStarkErrorV1, TransparentTranscriptV1,
 };
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 use std::sync::Arc;
 use thiserror::Error;
 /// Independent tagged-product lanes.
@@ -314,7 +311,6 @@ pub enum P256CrossTraceBusErrorV1 {
     #[error("zk-X509 P-256 cross-trace topology is invalid")]
     Topology,
     /// A source row is not the verifier-selected committed cell.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error("zk-X509 P-256 cross-trace source is invalid")]
     Source,
     /// A multiplicity is unsupported, missing, duplicated, or inconsistent.
@@ -324,7 +320,6 @@ pub enum P256CrossTraceBusErrorV1 {
     #[error("zk-X509 P-256 cross-trace challenges are invalid")]
     Challenge,
     /// A product, addition chain, boundary, or terminal constraint failed.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error("zk-X509 P-256 cross-trace constraint failed")]
     Constraint,
     /// A bounded allocation or checked index exceeded the release envelope.
@@ -339,7 +334,6 @@ impl From<P256ExternalBindingErrorV1> for P256CrossTraceBusErrorV1 {
         }
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl From<P256ValueBusErrorV1> for P256CrossTraceBusErrorV1 {
     fn from(error: P256ValueBusErrorV1) -> Self {
         match error {
@@ -357,7 +351,6 @@ pub struct P256CrossTraceRegularFixedRowV1 {
     pub(crate) boundary: P256CrossTraceBoundaryFixedV1,
 }
 /// Challenge-dependent row for an ordinary product segment.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct P256CrossTraceRegularAuxRowV1 {
     /// Active-gated copies of actual committed source cells.
@@ -403,7 +396,6 @@ pub fn build_zk_x509_p256_cross_trace_regular_aux_v1(
     Ok(rows)
 }
 /// Build one deterministic ordinary auxiliary row for a streaming consumer.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub fn build_regular_row_v1(
     fixed: P256CrossTraceRegularFixedRowV1,
     source_values: [F; P256_CROSS_TRACE_EVENT_SLOTS_V1],
@@ -555,7 +547,6 @@ pub struct P256CrossTraceSinkFixedV1 {
 }
 impl P256CrossTraceSinkFixedV1 {
     /// Allocated compact verifier schedule payload.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     pub(crate) fn allocated_heap_bytes_v1(&self) -> usize {
         super::allocation_payload::vector_v1(&self.logical)
     }
@@ -669,13 +660,11 @@ impl P256CrossTraceSinkFixedV1 {
         })
     }
     /// Logical non-padding row count.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     pub(crate) fn logical_rows_v1(&self) -> usize {
         self.logical.len()
     }
 }
 /// Compile the compact role-derived sink schedule.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub fn compile_zk_x509_p256_cross_trace_sink_fixed_v1(
     role: P256EcdsaRoleV1,
 ) -> Result<P256CrossTraceSinkFixedV1, P256CrossTraceBusErrorV1> {
@@ -686,7 +675,6 @@ pub fn compile_zk_x509_p256_cross_trace_sink_fixed_v1(
 /// Construction makes one compact logical-row pass to validate local equalities and compute the
 /// terminal. Consumers then pull the exact padded row sequence in a second pass. No million-row
 /// auxiliary or fixed `Vec` is retained.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub struct P256CrossTraceSinkStreamV1<'a> {
     binding: &'a P256ExternalBindingTraceV1,
     fixed: Arc<P256CrossTraceSinkFixedV1>,
@@ -695,13 +683,11 @@ pub struct P256CrossTraceSinkStreamV1<'a> {
     running: [F; P256_CROSS_TRACE_LANES_V1],
     next_row: usize,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl core::fmt::Debug for P256CrossTraceSinkStreamV1<'_> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str("P256CrossTraceSinkStreamV1 { <private stream redacted> }")
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for P256CrossTraceSinkStreamV1<'_> {
     fn drop(&mut self) {
         super::private_table::zeroize_fields_v1(&mut self.running);
@@ -713,7 +699,6 @@ impl Drop for P256CrossTraceSinkStreamV1<'_> {
 }
 
 /// Prepare the binder sink stream from the binder's committed base copies.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub fn build_zk_x509_p256_cross_trace_sink_v1(
     binding: &P256ExternalBindingTraceV1,
     challenges: P256CrossTraceChallengesV1,
@@ -733,7 +718,6 @@ pub fn build_zk_x509_p256_cross_trace_sink_v1(
         next_row: 0,
     })
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn compute_sink_terminal_v1(
     fixed: &P256CrossTraceSinkFixedV1,
     binding: &P256ExternalBindingTraceV1,
@@ -762,7 +746,6 @@ fn compute_sink_terminal_v1(
     }
     Ok(running)
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<'a> P256CrossTraceSinkStreamV1<'a> {
     /// Restart deterministic row replay without recompiling the schedule or
     /// recomputing the terminal.
@@ -848,7 +831,6 @@ pub fn evaluate_zk_x509_p256_cross_trace_sink_row_constraints_v1(
 /// Pure pointwise sink residues over the three committed writer/external
 /// equality pairs. Keeping these separate makes the local binding surface
 /// independently testable without allocating the complete sink product.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub fn evaluate_zk_x509_p256_cross_trace_sink_local_constraints_v1(
     fixed: P256CrossTraceSinkFixedRowV1,
     binding: &P256ExternalBindingRowV1,
@@ -866,7 +848,6 @@ pub fn evaluate_zk_x509_p256_cross_trace_sink_local_constraints_v1(
     }
     residues
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn sink_source_values_v1(
     binding: &P256ExternalBindingRowV1,
 ) -> [F; P256_CROSS_TRACE_EVENT_SLOTS_V1] {
@@ -881,7 +862,6 @@ fn sink_source_values_v1(
 }
 /// Native replay of the same affine source used at F/Fp4 openings. Inactive
 /// neighboring-byte values are zero; no witness-selected event or address exists.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn sink_stream_source_values_v1(
     binding: &P256ExternalBindingTraceV1,
     row: usize,
@@ -900,7 +880,6 @@ fn sink_stream_source_values_v1(
     }
     Ok(sources)
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn sink_binding_row_v1(
     binding: &P256ExternalBindingTraceV1,
     row: usize,
@@ -915,7 +894,6 @@ fn sink_binding_row_v1(
             external_cells: [F::ZERO; P256_EXTERNAL_BINDINGS_PER_ROW_V1],
         })
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn validate_binding_fixed_schedule_v1(
     binding: &P256ExternalBindingTraceV1,
 ) -> Result<(), P256CrossTraceBusErrorV1> {
@@ -972,7 +950,6 @@ pub struct P256CrossTraceWriterAuxRowV1<A = F> {
     /// Source terminal repeated as a degree-zero column.
     pub(crate) terminal: [A; P256_CROSS_TRACE_LANES_V1],
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl zeroize::Zeroize for P256CrossTraceWriterAuxRowV1 {
     fn zeroize(&mut self) {
         zeroize::Zeroize::zeroize(&mut self.event_values);
@@ -984,13 +961,11 @@ impl zeroize::Zeroize for P256CrossTraceWriterAuxRowV1 {
 }
 /// Either an independently compiled oracle schedule or the exact retained
 /// verifier schedule borrowed through the immutable MAIN bound capability.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone)]
 enum P256CrossTraceWriterFixedReplayV1<'a> {
     Compiled(Arc<P256CrossTraceWriterSourceFixedV1>),
     Bound(&'a P256CrossTraceWriterSourceFixedV1),
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256CrossTraceWriterFixedReplayV1<'_> {
     fn source_v1(&self) -> &P256CrossTraceWriterSourceFixedV1 {
         match self {
@@ -1000,7 +975,6 @@ impl P256CrossTraceWriterFixedReplayV1<'_> {
     }
 }
 /// Constant-memory deterministic provider for the `2^19` writer-source auxiliary rows.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub struct P256CrossTraceWriterSourceStreamV1<'a> {
     value_bus: &'a P256ValueBusBaseEndpointTraceV1,
     fixed: P256CrossTraceWriterFixedReplayV1<'a>,
@@ -1009,13 +983,11 @@ pub struct P256CrossTraceWriterSourceStreamV1<'a> {
     running: [F; P256_CROSS_TRACE_LANES_V1],
     next_row: usize,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl core::fmt::Debug for P256CrossTraceWriterSourceStreamV1<'_> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str("P256CrossTraceWriterSourceStreamV1 { <private stream redacted> }")
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for P256CrossTraceWriterSourceStreamV1<'_> {
     fn drop(&mut self) {
         super::private_table::zeroize_fields_v1(&mut self.running);
@@ -1028,7 +1000,6 @@ impl Drop for P256CrossTraceWriterSourceStreamV1<'_> {
 
 impl P256CrossTraceWriterSourceFixedV1 {
     /// Allocated compact verifier schedule payload.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     pub(crate) fn allocated_heap_bytes_v1(&self) -> usize {
         super::allocation_payload::vector_v1(&self.multiplicities)
     }
@@ -1170,7 +1141,6 @@ impl P256CrossTraceWriterSourceFixedV1 {
 /// A first pass validates every selected source and computes the terminal. The
 /// returned provider then regenerates all `2^20` rows sequentially without
 /// retaining the roughly 272 MiB row-major auxiliary trace.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub fn build_zk_x509_p256_cross_trace_writer_source_v1(
     value_bus: &P256ValueBusBaseEndpointTraceV1,
     role: P256EcdsaRoleV1,
@@ -1195,7 +1165,6 @@ pub fn build_zk_x509_p256_cross_trace_writer_source_v1(
         next_row: 0,
     })
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn compute_writer_terminal_v1(
     value_bus: &P256ValueBusBaseEndpointTraceV1,
     fixed: &P256CrossTraceWriterSourceFixedV1,
@@ -1213,7 +1182,6 @@ fn compute_writer_terminal_v1(
     }
     Ok(running)
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<'a> P256CrossTraceWriterSourceStreamV1<'a> {
     /// Borrow the exact schedule and terminal already checked during MAIN bind.
     /// The capability has no public/raw constructor and fixes the endpoint,
@@ -1368,7 +1336,6 @@ pub fn evaluate_zk_x509_p256_cross_trace_writer_row_constraints_v1<A: Polynomial
     }
     residues
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn build_writer_row_v1(
     fixed: P256CrossTraceWriterFixedRowV1,
     source_values: [F; P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1],
@@ -1446,7 +1413,6 @@ fn build_writer_row_v1(
     }
 }
 /// Four final residues equating the fully chained source product to the independent sink product.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub fn evaluate_zk_x509_p256_cross_trace_terminal_constraints_v1(
     final_source: [F; P256_CROSS_TRACE_LANES_V1],
     sink: [F; P256_CROSS_TRACE_LANES_V1],
@@ -1485,7 +1451,6 @@ fn writer_cell_at_execution_ordinal_v1(
     }
     Ok(None)
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn projected_writer_source_values_v1(
     value_bus: &P256ValueBusBaseEndpointTraceV1,
     packed_ordinal: usize,

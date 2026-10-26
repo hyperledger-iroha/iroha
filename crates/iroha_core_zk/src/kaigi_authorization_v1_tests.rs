@@ -21,9 +21,9 @@ fn fixture() -> &'static Fixture {
     FIXTURE.get_or_init(|| {
         let context = KaigiAuthorizationContextV1 {
             network_id: [0x21; 32],
-            call_id: [1, 2, 3, 4, 5, 6],
-            host_id: [11, 12, 13, 14, 15, 16],
-            subject_id: [21, 22, 23, 24, 25, 26],
+            call_id: [1, 2, 3, 4],
+            host_id: [11, 12, 13, 14],
+            subject_id: [21, 22, 23, 24],
             participation_sequence: 1,
             action: KaigiAuthorizationActionV1::Join,
             pre_roster_root: [0x43; 32],
@@ -104,7 +104,7 @@ pub fn valid_envelope(backend: &str) -> (ProofBox, VerifyingKeyBox) {
 }
 
 #[test]
-fn final_kaigi_real_proof_verifies_and_binds_all_31_rows() {
+fn final_kaigi_real_proof_verifies_and_binds_all_public_rows() {
     let fixture = fixture();
     for backend in [ZK_BACKEND_NATIVE_PIPA_R, KAIGI_AUTHORIZATION_BACKEND_V1] {
         let (proof, vk) = valid_envelope(backend);
@@ -137,11 +137,13 @@ fn final_kaigi_rejects_nonexact_instance_dimensions() {
     let mut extra_zero = fixture.instance.to_vec();
     extra_zero.push(kaigi_zk::Scalar::ZERO);
     // A trailing zero may be algebraically invisible to an IPA instance
-    // commitment. The final wire schema still permits exactly 31 rows.
+    // commitment. The final wire schema still permits exactly 25 rows.
     let transposed: Vec<&[kaigi_zk::Scalar]> = fixture.instance.chunks_exact(1).collect();
+    let retired_shape = [kaigi_zk::Scalar::ZERO; 31];
     let shapes = [
         vec![],
-        vec![&fixture.instance[..30]],
+        vec![&fixture.instance[..KAIGI_AUTHORIZATION_INSTANCE_ROWS_V1 - 1]],
+        vec![retired_shape.as_slice()],
         vec![extra_zero.as_slice()],
         vec![&fixture.instance[..], &fixture.instance[..]],
         transposed,

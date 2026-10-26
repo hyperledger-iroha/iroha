@@ -26,17 +26,15 @@ fn parameter(maximum: u32) -> Parameter {
 }
 
 fn state(maximum: u32) -> State {
-    let state = State::new_for_testing(
+    let mut state = State::new_for_testing(
         World::default(),
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     );
-    let mut parameters = state.world.parameters.block();
-    parameters
-        .get_mut()
-        .set_parameter(parameter(maximum))
+    state
+        .world
+        .set_parameter_for_testing(parameter(maximum))
         .expect("valid fixture parameters");
-    parameters.commit();
     state
 }
 
@@ -55,13 +53,16 @@ fn set_parameter(block: &mut StateBlock<'_>, maximum: u32) {
 #[test]
 fn captured_time_count_is_independent_from_network_transaction_limit() {
     let state = state(17);
-    let mut parameters = state.world.parameters.block();
-    parameters
-        .get_mut()
-        .set_parameter(Parameter::Block(BlockParameter::MaxTransactions(
+    let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+        .expect("fund original parameter Cell acquisition");
+    crate::state::set_parameter_cell_for_testing(
+        &mut parameters,
+        Parameter::Block(BlockParameter::MaxTransactions(
             NonZeroU64::new(u64::MAX).unwrap(),
-        )))
-        .expect("valid fixture parameters");
+        )),
+        state.world.sccp_committee_generations.allocation_budget(),
+    )
+    .expect("valid fixture parameters");
     parameters.commit();
     let block = state.block(header());
     assert_eq!(block.time_trigger_invocation_limit().unwrap(), 17);
@@ -133,9 +134,7 @@ fn replacement_limit_comes_from_reverted_world_and_its_own_stage() {
     {
         let mut world = state.world.block();
         world
-            .parameters
-            .get_mut()
-            .set_parameter(parameter(9))
+            .set_parameter_for_testing(parameter(9))
             .expect("valid fixture parameters");
         world.commit();
     }
@@ -245,13 +244,16 @@ fn foreign_source_or_invalid_restored_capacity_cannot_mint_a_plan() {
     drop(block);
     {
         // A malformed restored value cannot become a matching/output capability.
-        let mut parameters = state.world.parameters.block();
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+            .expect("fund original parameter Cell acquisition");
         let mut policy = ExecutionOutputPolicyV1::bootstrap();
         policy.max_outputs = 1;
-        parameters
-            .get_mut()
-            .set_parameter(Parameter::Block(BlockParameter::ExecutionOutput(policy)))
-            .expect("valid fixture parameters");
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            Parameter::Block(BlockParameter::ExecutionOutput(policy)),
+            state.world.sccp_committee_generations.allocation_budget(),
+        )
+        .expect("valid fixture parameters");
         parameters.commit();
     }
     let policy = state.world.parameters.view().get().block();
@@ -357,15 +359,16 @@ fn actual_register_counts_disabled_pipeline_and_time_actions_before_loading() {
     use iroha_primitives::json::Json;
     let state = state(2);
     {
-        let mut parameters = state.world.parameters.block();
-        parameters
-            .get_mut()
-            .set_parameter(
-                crate::sumeragi::test_chain::crypto_fixture_policy()
-                    .into_parameter()
-                    .expect("fixture crypto policy parameter"),
-            )
-            .expect("valid fixture crypto policy");
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+            .expect("fund original fixture parameter cell");
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            crate::sumeragi::test_chain::crypto_fixture_policy()
+                .into_parameter()
+                .expect("fixture crypto policy parameter"),
+            state.world.sccp_committee_generations.allocation_budget(),
+        )
+        .expect("valid fixture crypto policy");
         parameters.commit();
     }
     let mut block = state.block(header());
@@ -439,10 +442,14 @@ fn gas_limit_is_frozen_from_the_actual_world_before_start_effects() {
         ))
     };
     {
-        let mut parameters = state.world.parameters.block();
-        parameters
-            .set_parameter(gas(11))
-            .expect("valid fixture parameters");
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+            .expect("fund original parameter Cell acquisition");
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            gas(11),
+            state.world.sccp_committee_generations.allocation_budget(),
+        )
+        .expect("valid fixture parameters");
         parameters.commit();
     }
     let block = state
@@ -450,9 +457,7 @@ fn gas_limit_is_frozen_from_the_actual_world_before_start_effects() {
             assert_eq!(block.gas_limit_per_block, 11);
             block
                 .world
-                .parameters
-                .get_mut()
-                .set_parameter(gas(22))
+                .set_parameter_for_testing(gas(22))
                 .expect("valid fixture parameters");
             Ok::<(), core::convert::Infallible>(())
         })
@@ -479,18 +484,14 @@ fn replacement_gas_limit_comes_from_the_reverted_world() {
     {
         let mut world = state.world.block();
         world
-            .parameters
-            .get_mut()
-            .set_parameter(gas(11))
+            .set_parameter_for_testing(gas(11))
             .expect("valid fixture parameters");
         world.commit();
     }
     let mut tip = state.block(header());
     assert_eq!(tip.gas_limit_per_block, 11);
     tip.world
-        .parameters
-        .get_mut()
-        .set_parameter(gas(22))
+        .set_parameter_for_testing(gas(22))
         .expect("valid fixture parameters");
     tip.commit_world_overlay_for_testing().unwrap();
     assert_eq!(state.block(header()).gas_limit_per_block, 22);
@@ -571,19 +572,15 @@ fn same_genesis_parameter_writes_cannot_replace_either_frozen_profile() {
                 let mut transaction = block.transaction();
                 transaction
                     .world
-                    .parameters
-                    .get_mut()
-                    .set_parameter(Parameter::Block(BlockParameter::ExecutionOutput(
+                    .set_parameter_for_testing(Parameter::Block(BlockParameter::ExecutionOutput(
                         changed_output,
                     )))
                     .expect("valid fixture parameters");
                 transaction
                     .world
-                    .parameters
-                    .get_mut()
-                    .set_parameter(Parameter::Block(BlockParameter::MaxTimeTriggerInvocations(
-                        nonzero!(1_u32),
-                    )))
+                    .set_parameter_for_testing(Parameter::Block(
+                        BlockParameter::MaxTimeTriggerInvocations(nonzero!(1_u32)),
+                    ))
                     .expect("valid fixture parameters");
                 transaction.apply();
                 Ok::<(), String>(())

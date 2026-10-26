@@ -1,6 +1,6 @@
 //! Core bond-kernel validation and transition tests (`specs/finance/bond_ops.md`).
 use core::num::NonZeroU64;
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, sync::Arc};
 
 use iroha_crypto::{Algorithm, Hash, KeyPair};
 use iroha_data_model::{
@@ -43,9 +43,7 @@ use iroha_primitives::{json::Json, numeric::NumericSpec};
 
 use super::*;
 use crate::{
-    kura::Kura,
     prelude::World,
-    query::store::LiveQueryStore,
     state::{State, StateReadOnly},
 };
 
@@ -133,7 +131,7 @@ fn terms(ids: &[AccountId; ACCOUNTS]) -> BondTerms {
 }
 
 struct Harness {
-    state: State,
+    state: Arc<State>,
     height: u64,
     ids: [AccountId; ACCOUNTS],
     bond: AssetDefinitionId,
@@ -227,24 +225,14 @@ impl Harness {
             assets,
             [],
         );
-        // Component vault registration owns its policy before the first snapshot.
-        let mut parameters = world.parameters.block();
-        parameters
-            .set_parameter(
-                crate::sumeragi::test_chain::crypto_fixture_policy()
-                    .into_parameter()
-                    .expect("canonical fixture crypto policy"),
-            )
-            .expect("install original fixture crypto policy");
-        parameters.commit();
-        let state = State::new(
-            world,
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
-        );
+        let chain = crate::sumeragi::test_chain::CertifiedTestChain::start(
+            crate::sumeragi::test_chain::TestChainConfig::new(world, 0),
+        )
+        .expect("original signed bond fixture genesis");
+        let state = Arc::clone(chain.state());
         Self {
+            height: chain.height(),
             state,
-            height: 0,
             ids,
             bond,
             eur,
@@ -252,7 +240,8 @@ impl Harness {
         }
     }
 
-    /// Execute `f` in its own block at `time_ms`; the transaction is applied only on success.
+    /// Execute a component overlay after original genesis; apply its transaction only on success.
+    /// These overlays retain their real parent but do not claim new certified chain history.
     fn run<R>(
         &mut self,
         time_ms: u64,
@@ -261,7 +250,7 @@ impl Harness {
         self.height += 1;
         let header = BlockHeader::new(
             NonZeroU64::new(self.height).expect("height"),
-            None,
+            self.state.view().latest_block_hash(),
             None,
             time_ms,
             0,
@@ -2496,4 +2485,45 @@ fn entitlement_keys_group_one_cash_flow() {
     }
     let first_flow: Vec<_> = keys.iter().take(ids.len()).map(|key| key.index).collect();
     assert!(first_flow.iter().all(|index| *index == 0));
+}
+
+#[test]
+fn bond_fixture_authenticates_genesis_before_funding_component_custody() {
+    let mut harness = Harness::new();
+    let parent = harness
+        .state
+        .view()
+        .latest_block_hash()
+        .expect("original signed parent");
+    assert_eq!(harness.state.committed_height(), 1);
+    assert_eq!(harness.state.kura().blocks_count(), 1);
+    assert_eq!(
+        harness
+            .state
+            .view()
+            .world()
+            .parameters()
+            .require_crypto_policy()
+            .unwrap(),
+        &crate::sumeragi::test_chain::crypto_fixture_policy(),
+    );
+    assert!(
+        harness
+            .state
+            .view()
+            .world()
+            .parameters()
+            .staking_policy()
+            .is_some()
+    );
+    harness.register();
+    harness.record_fund_cashflow(0, COUPON_0 - DAY);
+    assert!(harness.vault_eur() > Quantity::zero());
+    assert_eq!(harness.state.view().latest_block_hash(), Some(parent));
+    assert_eq!(
+        harness.state.committed_height(),
+        1,
+        "component overlays do not fabricate finality"
+    );
+    assert_eq!(harness.state.kura().blocks_count(), 1);
 }

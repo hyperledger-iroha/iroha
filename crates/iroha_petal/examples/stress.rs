@@ -3,9 +3,14 @@
 //! Every row changes one thing about the camera model of `sim.rs` (veiling light, glare, an
 //! over-exposing auto-exposure, an uneven light field, hand shake) or about the light itself
 //! (banding from display PWM or exposure beating, applied in linear light after capture) and
-//! counts, over random poses, the frames in which each lane decodes.
+//! counts, over random poses of a phone held upright (the card turned 90° or 270°, ± 15°, so the
+//! katakana bands are in view), the frames in which each lane decodes.
 //!
-//! `cargo run --release -p iroha_petal --example stress -- [trials] [filter]`
+//! `cargo run --release -p iroha_petal --example stress -- [trials] [filter] [--threads N]`
+//!
+//! Columns: frames with any lane, frames with lane `D`, field lanes read (of four per frame), turn
+//! lanes read (of four per frame), kana lanes read (of four per frame), payload bytes per frame and
+//! of them the bytes from the katakana bands.
 #[path = "support/count.rs"]
 mod count;
 #[path = "support/floor.rs"]
@@ -22,9 +27,12 @@ use trial::next_trial;
 
 use iroha_petal::decode::{DecodeOptions, decode};
 use iroha_petal::image::Luma;
+use iroha_petal::kana::{KanaLane, read_kana};
+use iroha_petal::layout::SQUARE_TOP;
 use iroha_petal::render::{RenderOptions, render};
 use iroha_petal::sim::{CaptureConfig, capture, fit_to_frame};
 use iroha_petal::stream::StreamEncoder;
+use iroha_petal::turns::read_turns;
 
 struct Rng(u64);
 impl Rng {
@@ -143,7 +151,21 @@ fn band(image: &mut Luma, depth: f64, period: f64, rng: &mut Rng) {
 }
 
 fn main() {
+    let mut threads = std::thread::available_parallelism().map_or(4, usize::from);
+    let mut positional = Vec::new();
     let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        if arg == "--threads" {
+            threads = args
+                .next()
+                .and_then(|v| v.parse().ok())
+                .filter(|n: &usize| *n > 0)
+                .expect("--threads needs a positive count");
+        } else {
+            positional.push(arg);
+        }
+    }
+    let mut args = positional.into_iter();
     let trials: usize = args.next().and_then(|a| a.parse().ok()).unwrap_or(30);
     let filter = args.next();
     let payload: Vec<u8> = (0..900u32)
@@ -155,10 +177,9 @@ fn main() {
         ("legacy 720p", CaptureConfig::legacy(), 15.0),
         ("worst 480p", CaptureConfig::worst(), 22.0),
     ];
-    let threads = std::thread::available_parallelism().map_or(4, usize::from);
     println!(
-        "{:<26} {:<12} {:>5} {:>5} {:>5} {:>5}",
-        "condition", "camera", "any%", "P%", "K%", "D%"
+        "{:<26} {:<12} {:>5} {:>5} {:>5} {:>5} {:>5} {:>5} {:>5}",
+        "condition", "camera", "any%", "D%", "F%", "T%", "K%", "B/frm", "kanaB"
     );
     for (name, stress) in stress_rows() {
         if filter.as_ref().is_some_and(|f| !name.contains(f.as_str())) {
@@ -166,7 +187,7 @@ fn main() {
         }
         for (camera, base, tilt) in &cameras {
             let next = AtomicUsize::new(0);
-            let tally = std::sync::Mutex::new([0usize; 4]);
+            let tally = std::sync::Mutex::new([0usize; 7]);
             std::thread::scope(|scope| {
                 for _ in 0..threads {
                     scope.spawn(|| {
@@ -187,9 +208,12 @@ fn main() {
                             let corner = trial % 4;
                             if let Stress::Corner(value) = stress {
                                 let (cx, cy) = iroha_petal::layout::FINDER_CENTERS[corner];
-                                let (cx, cy) = (f64::from(cx) * 0.75, f64::from(cy) * 0.75);
+                                let (cx, cy) = (
+                                    f64::from(cx) * 0.75,
+                                    (f64::from(cy) + f64::from(SQUARE_TOP)) * 0.75,
+                                );
                                 let radius = if value == 0 { 60.0 } else { 71.0 };
-                                for y in 0..768 {
+                                for y in 0..source.height {
                                     for x in 0..768 {
                                         let (dx, dy) = (
                                             count_as_f64(x) + 0.5 - cx,
@@ -207,7 +231,8 @@ fn main() {
                                 .expect("trial fits u64")
                                 .checked_add(1)
                                 .expect("camera seed fits u64");
-                            config.rotation_deg = rng.range(0.0, 360.0);
+                            let quarter = if rng.next() < 0.5 { 90.0 } else { 270.0 };
+                            config.rotation_deg = quarter + rng.range(-15.0, 15.0);
                             config.tilt_x_deg = rng.range(-tilt, *tilt);
                             config.tilt_y_deg = rng.range(-tilt, *tilt);
                             config.shift = (rng.range(-0.04, 0.04), rng.range(-0.04, 0.04));
@@ -253,12 +278,37 @@ fn main() {
                                 band(&mut image, depth, period, &mut rng);
                             }
                             if let Ok(f) = decode(&image, &DecodeOptions::default()) {
-                                let (p, k, d) = (f.p.is_some(), f.k.is_some(), f.d.is_some());
+                                let fields = f.fields.iter().filter(|l| l.is_some()).count();
+                                let turns = read_turns(&image, &f, [false; 4])
+                                    .iter()
+                                    .filter(|t| t.is_some())
+                                    .count();
+                                let d = f.d.is_some();
+                                let (mut kana, mut kana_bytes) = (0, 0);
+                                if let Some(header) = f
+                                    .atom_packets()
+                                    .first()
+                                    .map(|p| p.header)
+                                    .or_else(|| f.beacon().map(|b| b.header))
+                                {
+                                    let read = read_kana(&image, &f, header, [false; 2]);
+                                    for (lane, result) in
+                                        KanaLane::ALL.into_iter().zip(read.iter().flatten())
+                                    {
+                                        if result.is_some() {
+                                            kana += 1;
+                                            kana_bytes += 16 * lane.atoms();
+                                        }
+                                    }
+                                }
                                 let mut t = tally.lock().expect("tally");
-                                t[0] += usize::from(p || k || d);
-                                t[1] += usize::from(p);
-                                t[2] += usize::from(k);
-                                t[3] += usize::from(d);
+                                t[0] += usize::from(d || fields > 0);
+                                t[1] += usize::from(d);
+                                t[2] += fields;
+                                t[3] += 80 * fields + 64 * turns + 12 * usize::from(d) + kana_bytes;
+                                t[4] += turns;
+                                t[5] += kana;
+                                t[6] += kana_bytes;
                             }
                         }
                     });
@@ -267,13 +317,16 @@ fn main() {
             let t = tally.into_inner().expect("tally");
             let pct = |n: usize| 100.0 * count_as_f64(n) / count_as_f64(trials);
             println!(
-                "{:<26} {:<12} {:>5.0} {:>5.0} {:>5.0} {:>5.0}",
+                "{:<26} {:<12} {:>5.0} {:>5.0} {:>5.0} {:>5.0} {:>5.0} {:>5.0} {:>5.0}",
                 name,
                 camera,
                 pct(t[0]),
                 pct(t[1]),
-                pct(t[2]),
-                pct(t[3])
+                pct(t[2]) / 4.0,
+                pct(t[4]) / 4.0,
+                pct(t[5]) / 4.0,
+                count_as_f64(t[3]) / count_as_f64(trials),
+                count_as_f64(t[6]) / count_as_f64(trials)
             );
         }
     }

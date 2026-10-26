@@ -175,7 +175,8 @@ pub async fn handler_account_onboarding_current_state(
         &uri,
         body.as_ref(),
         "account_onboarding_current_state",
-    )?;
+    )
+    .await?;
     if !super::torii_public_dataspace_ids(app.as_ref()).contains(&alias.label.dataspace) {
         let Some(caller) = visibility.caller() else {
             return Err(Error::AppUnauthorized {

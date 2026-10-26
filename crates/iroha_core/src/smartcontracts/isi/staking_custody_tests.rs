@@ -5,7 +5,18 @@ fn register_custody_fixture(
     lane: LaneId,
     amount: u64,
 ) -> (AccountId, AccountId, AssetId) {
-    let (validator, delegator, escrow, definition) = prepare_accounts(stx);
+    let (delegator, _) = gen_account_in("nexus");
+    register_custody_fixture_with_delegator(stx, lane, amount, delegator)
+}
+
+fn register_custody_fixture_with_delegator(
+    stx: &mut StateTransaction<'_, '_>,
+    lane: LaneId,
+    amount: u64,
+    delegator: AccountId,
+) -> (AccountId, AccountId, AssetId) {
+    let (validator, delegator, escrow, definition) =
+        prepare_accounts_with_delegator(stx, delegator);
     RegisterPublicLaneValidator {
         monetary_plan: fixture_registration_plan(stx, lane, &validator, Quantity::from(amount)),
         lane_id: lane,
@@ -171,9 +182,10 @@ fn staking_same_account_bond_cannot_reuse_held_custody() {
     let validator_key = KeyPair::from_seed(vec![0xD9; 32], Algorithm::Ed25519);
     let validator = AccountId::new(validator_key.public_key().clone());
     let lane = LaneId::SINGLE;
-    let mut nexus = iroha_config::parameters::actual::Nexus::default();
-    nexus.staking.stake_escrow_account_id = validator.to_string();
-    let definition: AssetDefinitionId = nexus.staking.stake_asset_id.parse().unwrap();
+    let nexus = iroha_config::parameters::actual::Nexus::default();
+    let mut staking = committed_staking_fixture_policy();
+    staking.stake_escrow_account_id = validator.clone();
+    let definition = staking.stake_asset_id.clone();
     let asset = AssetId::new(definition.clone(), validator.clone());
     let world = World::with_assets(
         [Domain::new(DomainId::try_new("nexus", "universal").unwrap()).build(&ALICE_ID)],
@@ -198,6 +210,11 @@ fn staking_same_account_bond_cannot_reuse_held_custody() {
     validators.sort_by_key(|key| PeerId::new(key.public_key().clone()));
     let peer = PeerId::new(validators[0].public_key().clone());
     let mut config = TestChainConfig::new(world, 0);
+    let staking_id = PublicLaneStakingPolicy::parameter_id();
+    let authored = config.genesis_parameters.iter_mut().find(|parameter| {
+        matches!(parameter, Parameter::Custom(custom) if custom.id() == &staking_id)
+    }).expect("fixture constructor authors exactly one original staking policy");
+    *authored = Parameter::Custom(staking.into_custom_parameter().unwrap());
     config.validator_keys = Some(validators);
     config.consensus_mode = SumeragiConsensusMode::Npos;
     config.nexus = Some(nexus.clone());
@@ -346,12 +363,16 @@ fn staking_same_account_bond_cannot_reuse_held_custody() {
 
 #[test]
 fn staking_failed_slash_restores_exact_custody_preimages() {
-    let state = setup_state();
+    let (receiver, _) = gen_account_in("nexus");
+    let mut policy = committed_staking_fixture_policy();
+    policy.slash_sink_account_id = receiver.clone();
+    let state = setup_state_with_staking_policy(policy);
     let block = new_block();
     let mut state_block = state.block(block.as_ref().header());
     let mut stx = state_block.transaction_for_fastpq_testing(Hash::prehashed([0xC1; Hash::LENGTH]));
     let lane = LaneId::new(17);
-    let (validator, sink, asset) = register_custody_fixture(&mut stx, lane, 1_000);
+    let (validator, sink, asset) =
+        register_custody_fixture_with_delegator(&mut stx, lane, 1_000, receiver);
     RegisterPublicLaneValidator {
         monetary_plan: fixture_registration_plan(&stx, lane, &sink, Quantity::from(500_u64)),
         lane_id: lane,
@@ -363,8 +384,7 @@ fn staking_failed_slash_restores_exact_custody_preimages() {
     }
     .execute(&sink, &mut stx)
     .expect("second validator shares the same exact escrow asset");
-    stx.nexus.staking.slash_sink_account_id = sink.to_string();
-    stx.nexus.staking.max_slash_bps = 10_000;
+
     let key = (lane, validator.clone());
     let share_key = stake_key(lane, &validator, &validator);
     let validator_before = stx.world.public_lane_validators.get(&key).unwrap().clone();
@@ -540,8 +560,8 @@ fn staking_failed_mature_unbond_restores_exact_custody_preimages() {
 }
 
 #[test]
-fn staking_unbond_uses_original_custody_after_configuration_and_alias_changes() {
-    for unresolved_aliases in [false, true] {
+fn staking_unbond_uses_original_custody_after_committed_and_pending_policy_changes() {
+    for pending_policy_change in [false, true] {
         let mut state = setup_state();
         set_epoch_length(&mut state, 3);
         let lane = LaneId::new(17);
@@ -581,12 +601,24 @@ fn staking_unbond_uses_original_custody_after_configuration_and_alias_changes() 
                 nexus,
             )
         };
+        // A published successor redirects only future deposits. Existing custody
+        // remains bound to its original exact asset and account.
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+            .expect("funded parameter fixture block");
+        let mut successor = parameters.require_staking_policy().unwrap().clone();
+        successor.stake_escrow_account_id = replacement.clone();
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            Parameter::Custom(successor.into_custom_parameter().unwrap()),
+            state.world.sccp_committee_generations.allocation_budget(),
+        )
+        .unwrap();
+        parameters.commit();
         let block = new_block_with_height_and_time(release_height, release_at_ms);
         let mut state_block = state.block(block.as_ref().header());
         let mut stx =
             state_block.transaction_for_fastpq_testing(Hash::prehashed([0xC3; Hash::LENGTH]));
         stx.nexus = nexus;
-        stx.nexus.staking.stake_escrow_account_id = replacement.to_string();
         let key = (lane, validator.clone());
         let custody_before = stx.world.public_lane_stake_custody.get(&key).cloned();
         let error = BondPublicLaneStake {
@@ -604,9 +636,18 @@ fn staking_unbond_uses_original_custody_after_configuration_and_alias_changes() 
             stx.world.public_lane_stake_custody.get(&key).cloned(),
             custody_before
         );
-        if unresolved_aliases {
-            stx.nexus.staking.stake_escrow_account_id = "retired@nexus".to_owned();
-            stx.nexus.staking.stake_asset_id = "retired#nexus".to_owned();
+        if pending_policy_change {
+            let mut pending = stx.staking_monetary_policy().unwrap().clone();
+            pending.stake_escrow_account_id = ALICE_ID.clone();
+            pending.stake_asset_id = AssetDefinitionId::derive_from_components(
+                DomainId::try_new("nexus", "universal").unwrap(),
+                "future-stake".parse().unwrap(),
+            );
+            stx.world
+                .set_parameter_for_testing(Parameter::Custom(
+                    pending.into_custom_parameter().unwrap(),
+                ))
+                .unwrap();
         }
         FinalizePublicLaneUnbond {
             monetary_plan: fixture_unbond_plan(&stx, lane, &validator, &validator, request_id),

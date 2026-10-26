@@ -67,14 +67,18 @@ fn fixture_with_bob_balance(
     fees.per_instruction_fee = Quantity::zero();
     fees.per_gas_unit_fee = Quantity::zero();
     {
-        let mut parameters = state.world.parameters.block();
-        parameters
-            .set_parameter(iroha_data_model::parameter::Parameter::Custom(
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+            .expect("funded original parameter-only fixture block");
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            iroha_data_model::parameter::Parameter::Custom(
                 fees.clone()
                     .into_custom_parameter()
                     .expect("explicit fixture policy"),
-            ))
-            .expect("valid fixture monetary projection");
+            ),
+            state.world.sccp_committee_generations.allocation_budget(),
+        )
+        .expect("valid fixture monetary projection");
         parameters.commit();
     }
 

@@ -462,9 +462,9 @@ def _x509_extensions(tbs: list[DerValue], start: int, version: int) -> dict[str,
             name = oid(fields[0])
             critical = False
             if len(fields) == 3:
-                require(primitive(fields[1], 1) == b"\xff",
-                        "invalid X.509 extension critical flag")
-                critical = True
+                # KeyMint certificates can explicitly encode the default FALSE.
+                # Preserve the signed bytes and require a strict primitive BOOLEAN.
+                critical = der_boolean(fields[1])
             require(name not in extensions, "duplicate X.509 extension")
             extensions[name] = (critical, primitive(fields[-1], 4))
     return extensions

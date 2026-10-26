@@ -1,11 +1,10 @@
 //! Trust-gossip capability gating integration tests.
 #![allow(unexpected_cfgs)]
 use super::next_port;
-use iroha_config::parameters::actual::Network as Config;
-use iroha_config::parameters::defaults::network::TRUST_GOSSIP;
-use iroha_data_model::prelude::Peer;
+use iroha_config::parameters::{actual::Network as Config, defaults::network::TRUST_GOSSIP};
 use iroha_futures::supervisor::ShutdownSignal;
 use iroha_logger::test_logger;
+use iroha_model_base::peer::Peer;
 use iroha_p2p::{
     NetworkHandle,
     network::message::{ClassifyTopic, Post, Priority, Topic, UpdatePeers, UpdateTopology},

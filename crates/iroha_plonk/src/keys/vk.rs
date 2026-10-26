@@ -262,7 +262,10 @@ impl<C: PastaCurve> VerifyingKey<C> {
             })?;
             fields.extend([x, y]);
         }
-        Ok(hash_with_domain(u64::from_le_bytes(*b"kgwvkey1"), &fields))
+        Ok(hash_with_domain(
+            u64::from_le_bytes(crate::contract::VK_WORD_DOMAIN),
+            &fields,
+        ))
     }
 
     /// Assembles a key from its parts (key generation).

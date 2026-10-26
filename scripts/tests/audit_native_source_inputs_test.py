@@ -19,8 +19,7 @@ def selected(tmp_path, monkeypatch):
     root.mkdir()
     (root / 'Cargo.lock').write_text('')
     monkeypatch.setattr(audit, 'ROOT', root)
-    for name, relative in [('BUILD_RS', 'crates/iroha_plonk/build.rs'),
-                           ('HELPER', 'crates/iroha_plonk/build_support/source_identity.rs'),
+    for name, relative in [('HELPER', 'crates/iroha_plonk/build_support/source_identity.rs'),
                            ('GENERATED', 'crates/iroha_plonk/src/keys/keygen/builtin/generated.rs'),
                            ('DRIVER', 'scripts/native_source_snapshot.rs')]:
         path = root / relative
@@ -30,34 +29,21 @@ def selected(tmp_path, monkeypatch):
     source = root / 'crates/example/src/lib.rs'
     source.parent.mkdir(parents=True)
     source.write_text('pub fn example() {}')
-    watched = {audit.BUILD_RS, audit.HELPER, audit.GENERATED, audit.DRIVER, source}
-    out = root / 'target/release/build/iroha_plonk-1234/out'
-    out.mkdir(parents=True)
+    watched = {audit.HELPER, audit.GENERATED, audit.DRIVER, source}
     digest = 'ab' * 32
-    identity = out / 'native_source_identity.rs'
-    identity.write_text('NATIVE_SOURCE_CLOSURE_COMPLETE: bool = true;\n'
-                        'BUILTIN_TARGET_SUPPORTED: bool = true;\n'
-                        'NATIVE_SOURCE_TARGET: &str = "aarch64-apple-darwin";\n'
-                        'CURRENT_NATIVE_SOURCE_DIGEST: [u8; 32] = ['
-                        + ', '.join(['171'] * 32) + '];\n')
-    watcher = out / 'native-source-rescan-required'
-    output = out.parent / 'output'
-    output.write_text(''.join('cargo:rerun-if-changed=' + str(p) + '\n'
-                              for p in sorted(watched | {watcher})))
     depfile = tmp_path / 'selected.d'
     depfile.write_text('artifact: ' + ' '.join(str(p) for p in
-                      [source, audit.GENERATED, identity, watcher]) + '\n')
+                      [source, audit.GENERATED]) + '\n')
     tool = tmp_path / 'source-snapshot'
     tool.write_text('unused mocked tool')
     tool.with_name('source-snapshot-build.json').write_text('{}')
     monkeypatch.setattr(audit, 'actual_snapshot', lambda _: (digest, watched))
     args = SimpleNamespace(output=tmp_path / 'audit.json')
     def run(events=None):
-        return audit.audit(args, events or [], {depfile}, {out}, [], tool,
+        return audit.audit(args, events or [], {depfile}, [], tool,
                            digest, digest, watched)
-    return SimpleNamespace(root=root, source=source, watched=watched, out=out,
-                           digest=digest, identity=identity, watcher=watcher,
-                           build_output=output, depfile=depfile, args=args, run=run)
+    return SimpleNamespace(root=root, source=source, watched=watched,
+                           digest=digest, depfile=depfile, args=args, run=run)
 
 
 def test_selected_inputs_and_exact_generated_exceptions_pass(selected):
@@ -67,7 +53,8 @@ def test_selected_inputs_and_exact_generated_exceptions_pass(selected):
     assert result['sourceDigest'] == selected.digest
     assert result['canonicalInputs'] == [str(selected.source)]
     assert {x['path'] for x in result['generatedExceptions']} == {
-        str(selected.identity), str(audit.GENERATED)}
+        str(audit.GENERATED)}
+    assert result['registryDataSha256'] == audit.sha(audit.GENERATED)
 
 
 @pytest.mark.parametrize('relative', ['python/unrelated/input.json',
@@ -84,27 +71,19 @@ def test_omitted_canonical_or_unknown_generated_input_fails(selected, relative):
     assert result['omittedCanonicalInputs'] == [str(missing)]
 
 
-@pytest.mark.parametrize('old,new,message', [
-    ('171', '172', 'Compiled digest mismatch'),
-    ('NATIVE_SOURCE_CLOSURE_COMPLETE: bool = true;',
-     'NATIVE_SOURCE_CLOSURE_COMPLETE: bool = false;', 'incomplete source closure'),
-])
-def test_compiled_identity_must_match_complete_current_census(selected, old, new, message):
-    selected.identity.write_text(selected.identity.read_text().replace(old, new))
-    with pytest.raises(ValueError, match=message):
+@pytest.mark.parametrize('name', ['HELPER', 'DRIVER', 'GENERATED'])
+def test_provenance_census_requires_its_maintained_inputs(selected, name):
+    selected.watched.remove(getattr(audit, name))
+    with pytest.raises(ValueError, match='provenance omits'):
         selected.run()
 
 
-def test_build_script_census_must_equal_actual_current_census(selected):
-    selected.build_output.write_text(selected.build_output.read_text().replace(
-        'cargo:rerun-if-changed=' + str(selected.source) + '\n', ''))
-    with pytest.raises(ValueError, match='census.*differ'):
-        selected.run()
-
-
-def test_rescan_marker_must_remain_absent(selected):
-    selected.watcher.touch()
-    with pytest.raises(ValueError, match='absent rescan watcher exists'):
+def test_registry_data_changes_are_detected_independently_of_source_digest(selected, monkeypatch):
+    def snapshot(_):
+        audit.GENERATED.write_text('changed registry data')
+        return selected.digest, selected.watched
+    monkeypatch.setattr(audit, 'actual_snapshot', snapshot)
+    with pytest.raises(ValueError, match='registry DATA changed'):
         selected.run()
 
 
@@ -122,7 +101,7 @@ def test_excluded_owner_symlink_cannot_become_external_dependency(selected, tmp_
 def test_regular_lexical_parent_alias_and_generated_paths_are_preserved(selected):
     alias = selected.source.parent / '../src/lib.rs'
     assert audit.resolved(alias) == selected.source
-    assert audit.resolved(selected.identity) == selected.identity
+    assert audit.resolved(audit.GENERATED) == audit.GENERATED
 
 
 def test_parent_segment_cannot_hide_a_symlink_escape(selected, tmp_path):
@@ -200,9 +179,117 @@ def test_snapshot_uses_explicit_root_and_current_pins(tmp_path, monkeypatch):
     assert audit.actual_snapshot(tool) == ('ab' * 32, {helper})
 
 
-def test_evaluator_cannot_guess_a_host_dependency(tmp_path):
-    with pytest.raises(ValueError, match='exact selected host plonk'):
+def test_evaluator_without_selected_host_dependency_uses_standalone_acquisition(tmp_path, monkeypatch):
+    def acquire():
+        raise ValueError('exact standalone dependency acquisition')
+    monkeypatch.setattr(audit, 'standalone_host_sha2', acquire)
+    with pytest.raises(ValueError, match='exact standalone dependency acquisition'):
         audit.build_snapshot_tool(tmp_path, [])
+
+
+@pytest.mark.parametrize('kind', ['custom-build', 'proc-macro'])
+def test_evaluator_uses_selected_host_dependency_without_plonk_build_script(tmp_path, monkeypatch, kind):
+    profile = tmp_path / 'target/release'
+    host = profile / ('build/ordinary-1234/build-script-build' if kind == 'custom-build'
+                      else 'deps/libordinary_macro.dylib')
+    sha2 = profile / 'deps/libsha2-host.rlib'
+    target_sha2 = tmp_path / 'target/aarch64-linux-android/release/deps/libsha2-target.rlib'
+    helper, driver = tmp_path / 'helper.rs', tmp_path / 'driver.rs'
+    for path in (host, sha2, target_sha2, helper, driver):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(path.name)
+    monkeypatch.setattr(audit, 'HELPER', helper)
+    monkeypatch.setattr(audit, 'DRIVER', driver)
+    monkeypatch.delenv('RUSTC', raising=False)
+    events = [{'reason': 'compiler-artifact', 'package_id': 'ordinary',
+               'target': {'kind': [kind]}, 'filenames': [str(host)]}]
+    for path in (target_sha2, sha2):
+        events.append({'reason': 'compiler-artifact',
+                       'package_id': 'registry+https://github.com/rust-lang/crates.io-index#sha2@0.10.9',
+                       'target': {'name': 'sha2', 'kind': ['lib']},
+                       'filenames': [str(path)], 'features': ['std']})
+    calls = []
+    def compile_tool(command, **_kwargs):
+        calls.append(command)
+        Path(command[-1]).write_bytes(b'standalone source evaluator')
+    monkeypatch.setattr(audit.subprocess, 'run', compile_tool)
+    tool = audit.build_snapshot_tool(tmp_path, events)
+    assert len(calls) == 1
+    assert calls[0][0] == 'rustc'
+    assert 'sha2=' + str(sha2) in calls[0]
+    assert 'sha2=' + str(target_sha2) not in calls[0]
+    record = json.loads(tool.with_name('source-snapshot-build.json').read_text())
+    assert record['sha2Path'] == str(sha2)
+    assert record['sha2Sha256'] == audit.sha(sha2)
+
+
+@pytest.mark.parametrize('defect', [None, 'foreign_artifact', 'unfinished', 'changed_lock',
+                                  'missing_family', 'wrong_family'])
+def test_cross_build_with_only_target_sha2_uses_locked_standalone_host_lane(tmp_path, monkeypatch, defect):
+    monkeypatch.setattr(audit, 'ROOT', tmp_path)
+    monkeypatch.delenv('RUSTC', raising=False)
+    monkeypatch.setenv('CARGO_BUILD_TARGET', 'aarch64-linux-android')
+    monkeypatch.setenv('RUSTFLAGS', '-C target-feature=+device-only')
+    host = 'aarch64-apple-darwin'
+    manifest = tmp_path / 'scripts/native-source-snapshot/Cargo.toml'
+    lock = manifest.with_name('Cargo.lock')
+    helper, driver = tmp_path / 'helper.rs', tmp_path / 'driver.rs'
+    macro = tmp_path / 'target/release/deps/libordinary_macro.dylib'
+    target_sha2 = tmp_path / 'target/aarch64-linux-android/release/deps/libsha2-target.rlib'
+    host_sha2 = tmp_path / f'target/native-source-snapshot/{host}/debug/deps/libsha2-host.rlib'
+    cargo_sha2 = host_sha2.parent.parent / 'libsha2.rlib'
+    for path in (manifest, lock, helper, driver, macro, target_sha2):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(path.name)
+    monkeypatch.setattr(audit, 'HELPER', helper)
+    monkeypatch.setattr(audit, 'DRIVER', driver)
+    events = [{'reason': 'compiler-artifact', 'package_id': 'ordinary',
+               'target': {'kind': ['proc-macro']}, 'filenames': [str(macro)]},
+              {'reason': 'compiler-artifact',
+               'package_id': 'registry+https://github.com/rust-lang/crates.io-index#sha2@0.10.9',
+               'target': {'name': 'sha2', 'kind': ['lib']},
+               'filenames': [str(target_sha2)], 'features': ['std']}]
+    calls = []
+    def execute(command, **kwargs):
+        calls.append(command)
+        if command == ['rustc', '-vV']:
+            return subprocess.CompletedProcess(command, 0, f'rustc fixture\nhost: {host}\n', '')
+        if command[0] == 'cargo':
+            assert command == ['cargo', 'build', '--offline', '--locked', '--manifest-path', str(manifest),
+                '--package', 'sha2@0.10.9', '--target', host,
+                '--target-dir', str(tmp_path / 'target/native-source-snapshot'), '--message-format=json']
+            assert kwargs['env']['CARGO_ENCODED_RUSTFLAGS'] == ''
+            host_sha2.parent.mkdir(parents=True)
+            host_sha2.write_bytes(b'locked host dependency')
+            cargo_sha2.write_bytes(b'locked host dependency')
+            host_sha2.with_suffix('.rmeta').write_bytes(b'compiler metadata')
+            output = dict(events[-1])
+            output['filenames'] = [str(target_sha2 if defect == 'foreign_artifact' else cargo_sha2)]
+            if defect != 'missing_family':
+                output['filenames'].append(str(host_sha2.with_suffix('.rmeta')))
+            if defect == 'wrong_family':
+                host_sha2.write_bytes(b'different stale library')
+            lines = [json.dumps(output)]
+            if defect != 'unfinished':
+                lines.append(json.dumps({'reason': 'build-finished', 'success': True}))
+            if defect == 'changed_lock':
+                lock.write_text('changed during compilation')
+            return subprocess.CompletedProcess(command, 0, '\n'.join(lines), '')
+        assert command[0] == 'rustc'
+        assert 'sha2=' + str(host_sha2) in command
+        Path(command[-1]).write_bytes(b'evaluator')
+        return subprocess.CompletedProcess(command, 0, '', '')
+    monkeypatch.setattr(audit.subprocess, 'run', execute)
+    if defect:
+        with pytest.raises(ValueError):
+            audit.build_snapshot_tool(tmp_path, events)
+        assert len(calls) == 2
+    else:
+        tool = audit.build_snapshot_tool(tmp_path, events)
+        assert len(calls) == 3
+        record = json.loads(tool.with_name('source-snapshot-build.json').read_text())
+        assert record['sha2Path'] == str(host_sha2)
+        assert record['sha2Sha256'] == audit.sha(host_sha2)
 
 
 @pytest.fixture
@@ -382,7 +469,7 @@ def test_native_mapping_failure_prevents_a_passing_audit_output(selected, monkey
         raise ValueError('Native outputs changed during audit')
     monkeypatch.setattr(audit, 'native_artifact_depfiles', changed)
     with pytest.raises(ValueError, match='outputs changed'):
-        audit.audit(selected.args, [], {selected.depfile}, {selected.out}, [],
+        audit.audit(selected.args, [], {selected.depfile}, [],
                     selected.args.output.parent / 'source-snapshot',
                     selected.digest, selected.digest, selected.watched, [{'event': {}}])
     assert not selected.args.output.exists()
@@ -416,8 +503,6 @@ def kotodama_generator(selected):
          'target': {'kind': ['custom-build'], 'src_path': str(root / 'build.rs')},
          'manifest_path': str(root / 'Cargo.toml'), 'features': [], 'filenames': []},
     ]
-    selected.build_output.write_text(''.join('cargo:rerun-if-changed=' + str(p) + '\n'
-        for p in sorted(selected.watched | {selected.watcher})))
     selected.depfile.write_text(selected.depfile.read_text().rstrip() + ' '
                                + ' '.join(map(str, outputs)) + '\n')
     return SimpleNamespace(root=root, originals=originals, out=out,

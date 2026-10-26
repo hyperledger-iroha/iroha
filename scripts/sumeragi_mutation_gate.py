@@ -1930,8 +1930,8 @@ CORE_MUTATIONS = [
       causes=(ExpectedFailure("the final incoming opening caller must acknowledge cancellation without dropping independent historical recovery", "crates/iroha_core/src/sumeragi/lanes/registry/isolation_tests.rs"),)),
 
     m("HC443", "Lane sweeps let later registrations consume original cleanup or retirement membership",
-      ['sumeragi::lanes::registry::tests::proposal_reads::cancelled_original_sweep_does_not_wait_for_new_disjoint_opening', 'sumeragi::lanes::registry::tests::proposal_reads::original_sweep_preserves_a_later_same_key_native_owner'],
-      causes=(ExpectedFailure('original cancelled lane cleanup cannot wait for an unrelated newly registered opening', 'crates/iroha_core/src/sumeragi/lanes/registry/proposal_reads.rs'),
+      ['sumeragi::lanes::registry::tests::proposal_reads::original_lane_sweep_does_not_wait_for_new_disjoint_opening', 'sumeragi::lanes::registry::tests::proposal_reads::original_sweep_preserves_a_later_same_key_native_owner'],
+      causes=(ExpectedFailure('an original lane sweep cannot wait for an unrelated newly registered opening', 'crates/iroha_core/src/sumeragi/lanes/registry/proposal_reads.rs'),
           ExpectedFailure('an original lane sweep cannot retire a later same-key registration', 'crates/iroha_core/src/sumeragi/lanes/registry/proposal_reads.rs'),)),
 
     m("HC455", "Change capture encodes untouched cell values",

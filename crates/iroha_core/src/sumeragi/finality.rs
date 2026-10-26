@@ -6,6 +6,7 @@ pub(crate) use cursor::NativeGenesisExecutionV1;
 mod interval;
 mod interval_budget;
 mod proof_destination;
+mod retained;
 pub use compact_source::{
     NativeCommitCertificateDataV1, NativeCommitCertificateReadErrorV1, read_commit_certificate,
 };
@@ -21,6 +22,11 @@ pub use interval::{
 pub(crate) use interval_budget::FinalityDecodeWorkspace;
 pub use interval_budget::NativeFinalityProofBudget;
 pub use proof_destination::ProofDestinationError;
+pub(crate) use retained::RetainedAttestation;
+pub use retained::{
+    RetainedAttestationProducer, RetainedAttestationProducerAttached,
+    retained_attestation_releasable,
+};
 
 use iroha_crypto::{Algorithm, Hash, KeyPair, SignatureOf};
 use iroha_data_model::{
@@ -480,8 +486,36 @@ fn attestation_proofs(
     let tip = if height == 1 {
         genesis.clone()
     } else if height > 2 && !norito::core::decode_limits_active() {
-        current_execution_proof(&proof_chain, height, genesis_decision)
+        if view
+            .kura()
+            .retained_attestation()
+            .admit(view, height, &genesis_decision)
             .map_err(Error::FinalityProof)?
+        {
+            // The retained authority's producer authenticated every frame below the
+            // target (see `retained`). Verify the exact target quorum and signed
+            // availability through its parent only.
+            let target = usize::try_from(height)
+                .ok()
+                .and_then(std::num::NonZeroUsize::new)
+                .ok_or_else(|| Error::FinalityProof(ChainReadError::NotInView { height }.into()))?;
+            let certified = proof_chain
+                .certified_from_execution(target, |_, _| Ok(()))
+                .map_err(|error| {
+                    Error::FinalityProof(match error {
+                        crate::execution_attempt::ExecutionAttemptError::Rejected(error) => {
+                            ProofError::NativeExecution(error)
+                        }
+                        crate::execution_attempt::ExecutionAttemptError::Deferred(local) => {
+                            ProofError::Deferred(local)
+                        }
+                    })
+                })?;
+            proof_from_certified(certified, height).map_err(Error::FinalityProof)?
+        } else {
+            current_execution_proof(&proof_chain, height, genesis_decision)
+                .map_err(Error::FinalityProof)?
+        }
     } else {
         proof_from_chain(&proof_chain, height).map_err(Error::FinalityProof)?
     };
@@ -490,7 +524,7 @@ fn attestation_proofs(
 
 // Coordinates of the exact native receipt projected into the returned genesis proof.
 // A signed genesis proposal alone never authenticates its attached execution R.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct GenesisDecision {
     block_hash: iroha_crypto::HashOf<iroha_data_model::block::BlockHeader>,
     core_hash: iroha_sumeragi::types::Hash32,
@@ -621,6 +655,11 @@ fn finish_attestation(
     };
     body.validate_consistency(chain.root_scope().into())
         .map_err(attestation_body_read_error)?;
+    // A retained authority must still cover this exact view when the body is signed.
+    view.kura()
+        .retained_attestation()
+        .recheck(view, proofs.committed)
+        .map_err(Error::FinalityProof)?;
     let signature = SignatureOf::try_from_hash(signer.private_key(), body.signing_hash())
         .map_err(|error| Error::Signing(error.to_string()))?;
     let attestation = SumeragiFinalityAttestation { body, signature };

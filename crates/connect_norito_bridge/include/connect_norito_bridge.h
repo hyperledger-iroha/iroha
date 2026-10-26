@@ -562,6 +562,28 @@ int32_t iroha_privacy_validate_exact12_fixture_bundle_v1(
 
 void iroha_privacy_free_buffer(uint8_t* ptr);
 
+// ---------------- X.509 public ownership-signing preparation ----------------
+// Input is canonical Norito PrivacyStatementV1 with the X.509 variant, <=262144 bytes.
+// Success returns the exact public message and its 32-byte SHA-256 digest. Message
+// signers hash the message once; prehash signers use the digest. Normalize the
+// resulting P-256 signature to low-s fixed 64-byte r || s for witness construction.
+// No subject key enters this API. This does not authenticate State, prove, pair
+// a host, submit a transaction, or establish network readiness.
+// Free BOTH output buffers with iroha_privacy_free_buffer. Every failure sets
+// both outputs to null/zero. Output destinations must be writable and disjoint.
+// Status: 0 success; -1 null pointer; -2 empty; -3 oversized; -4 noncanonical,
+// malformed or wrong-schema frame; -5 wrong protocol; -6 preparation failure;
+// -10 allocation failure; -100 internal failure.
+#define IROHA_ZK_X509_SIGNING_STATEMENT_MAX_BYTES_V1 262144UL
+int32_t connect_norito_zk_x509_prepare_ownership_signing_v1(
+    const uint8_t* statement_ptr,
+    unsigned long statement_len,
+    uint8_t** out_message,
+    unsigned long* out_message_len,
+    uint8_t** out_digest,
+    unsigned long* out_digest_len);
+
+
 // ---------------- Envelope helpers ----------------
 int32_t connect_norito_encode_envelope_sign_request_tx(
     uint64_t seq,
@@ -1878,8 +1900,22 @@ typedef struct {
        110 unavailable custody data (unspecified kind), 111 enrollment intent,
        112 enrollment phase, 113 committed enrollment marker,
        114 abandoned-slot custody conflict, 120 unexpected custody entry.
+       For -1: 200 ledger activation unconfirmed, 201 invalid Load request,
+       202 changed Load amount, 203 inactive Load lifecycle, 204 G1 validation,
+       205 archive encoding, 206 index object/value size, 207 poisoned provider handle,
+       208 no monetary head, 209 collected witness;
+       220 archive manifest size, 221 archive head not released,
+       222 stale archive checkpoint, 223 immutable archive record conflict,
+       224 failed archive call, 225 marker archive checkpoint,
+       226 marker generation, 227 marker state, 228 marker phase,
+       229 marker frame, 230 marker selected generation, 231 marker completion digest,
+       232 marker slot, 233 marker anchor kind, 234 marker superseded,
+       235 marker retired generation, 236 atomic no-replace publication unsupported,
+       237 archive slot, 238 missing archive call, 239 pending archive records,
+       240 archive record/envelope size, 241 current source,
+       242 incoming lineage verdict (Receive admission: the fold would burn this Payment).
        -1 means no more specific cause. Diagnostic only: no recovery permission,
-       actor/key data, or change to the refusal. platform_code stays zero for -7. */
+       actor/key data, or change to the refusal. platform_code stays zero for -1/-7. */
     int32_t reason;
     int32_t platform_code;
     uint64_t sequence_low;
@@ -2113,7 +2149,7 @@ int32_t connect_norito_kagemusha_wallet_setup_v1(uint64_t handle, const connect_
 // Selector3 exact prepared Load request: KWLPV1\0\0 frame <=65756 bytes, or exactly
 // KWLNV1\0\0 (8 bytes) for absent selected plan only. Selectors1..3 use nonzero32.
 // Selector4 fold metrics (empty identity): UTF-8 JSON <=131072 bytes with schema
-// iroha.kagemusha.fold-metrics.v2. In-memory public counts/timings only, no custody
+// iroha.kagemusha.fold-metrics.v3. In-memory public counts/timings only, no custody
 // acquisition, fold cancellation or authority; unknown/closing handles fail closed.
 // startedNativeMicros/endedNativeMicros and sampledNativeMicros share a process-local
 // monotonic origin. They are observation-only, not wall time or completion authority.

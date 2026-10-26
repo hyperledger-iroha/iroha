@@ -262,8 +262,15 @@ fn builtin_profile_binds_network_source_policy_and_complete_ordered_inventory() 
             10 => changed.terminals.push(0),
             _ => changed.native_profile[0] ^= 1,
         }
+        let actual = super::builtin::profile_bytes(&changed, &scheme);
+        if change == 11 {
+            // A same-shape inventory under a different native semantic contract
+            // must fail before it can select any compiled member.
+            assert_eq!(actual, Err(Error::Inventory));
+            continue;
+        }
         // Structurally invalid graphs fail before registry lookup.
-        if let Ok(bytes) = super::builtin::profile_bytes(&changed, &scheme) {
+        if let Ok(bytes) = actual {
             assert_ne!(bytes, expected, "mutation {change}");
         }
     }

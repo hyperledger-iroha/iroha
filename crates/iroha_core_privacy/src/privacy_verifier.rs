@@ -2078,10 +2078,6 @@ pub struct PrivacyZkX509StateFailureV1 {
     pub code: PrivacyZkX509StateFailureCodeV1,
 }
 #[derive(Debug, Error)]
-#[cfg_attr(
-    not(any(test, feature = "privacy-release-evidence")),
-    derive(Clone, Copy)
-)]
 #[error("native X.509 verification failed: {source}")]
 pub struct PrivacyZkX509VerificationFailureV1 {
     source: ZkX509EngineErrorV1,

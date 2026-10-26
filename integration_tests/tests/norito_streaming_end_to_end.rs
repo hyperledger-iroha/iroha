@@ -5,7 +5,7 @@ use crate::streaming::{
 };
 use eyre::{Result as EyreResult, eyre};
 use iroha_core::streaming::StreamingProcessError;
-use iroha_data_model::peer::Peer;
+use iroha_model_base::peer::Peer;
 use iroha_p2p::streaming::{StreamingClient, StreamingServer, quic::TransportConfigSettings};
 use norito::streaming::{
     CapabilityReport, CapabilityRole, ChunkAcknowledgeFrame, ControlFrame, TransportCapabilities,

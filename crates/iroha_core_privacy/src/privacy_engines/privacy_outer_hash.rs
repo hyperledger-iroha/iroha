@@ -35,7 +35,6 @@ impl PrivacyOuterDigestV1 {
         self.0
     }
     /// Overwrite a transient digest tile before its allocation is released.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     pub(crate) fn zeroize_v1(&mut self) {
         self.0.zeroize();
     }
@@ -110,7 +109,6 @@ impl WipingSha3V1 {
         self.core.finalize_fixed_core(&mut self.buffer, &mut output);
         PrivacyOuterDigestV1::from_bytes(output.into())
     }
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     fn finish_in_place_v1(&mut self) -> PrivacyOuterDigestV1 {
         let mut output = Output::<Sha3_384Core>::default();
         self.core.finalize_fixed_core(&mut self.buffer, &mut output);
@@ -249,7 +247,6 @@ impl PrivacyOuterDomainPrefixV1 {
     }
     /// Start an exact final field while reusing only the checked public prefix.
     /// Coordinates and every field length remain freshly bound after the clone.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     pub(crate) fn last_field_stream_at_with_counter(
         &self,
         index: u64,
@@ -310,7 +307,6 @@ impl PrivacyOuterDomainPrefixV1 {
 }
 
 /// An exact final-field stream must neither overrun nor finalize prematurely.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PrivacyOuterLastFieldStreamErrorV1 {
     /// A label, count, length, or total exceeds its exact framing width.
@@ -329,12 +325,10 @@ pub enum PrivacyOuterLastFieldStreamErrorV1 {
     },
 }
 /// Incremental final-field owner with bounded declared input and wiping state.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub struct PrivacyOuterLastFieldStreamV1 {
     state: WipingSha3V1,
     remaining: usize,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl PrivacyOuterLastFieldStreamV1 {
     /// Scalar byte oracle for the prefix path; no parallel legacy production owner.
     #[cfg(test)]

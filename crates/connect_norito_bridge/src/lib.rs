@@ -169,6 +169,8 @@ use connect_approval_ffi::{
 };
 mod confidential_note_ffi;
 mod confidential_prover_ffi;
+mod zk_x509_holder_ffi;
+pub use zk_x509_holder_ffi::connect_norito_zk_x509_prepare_ownership_signing_v1;
 #[cfg(not(unix))]
 compile_error!(
     "Native KAGEMUSHA wallet storage is not implemented for non-Unix targets; \

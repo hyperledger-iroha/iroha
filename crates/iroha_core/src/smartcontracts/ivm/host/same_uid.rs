@@ -45,7 +45,7 @@ impl QueryStateRef<'_, '_, '_> {
         }
     }
 }
-impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
+impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     pub(super) fn execute_same_uid(
         &mut self,
         vm: &mut IVM,
@@ -141,7 +141,8 @@ mod tests {
         let mut tx = block.transaction();
         f.install(&mut tx);
         for (destination, expected) in [(&f.destination, true), (&f.foreign, false)] {
-            let mut host: CoreHostImpl<QueryStateSlot<_>> = CoreHostImpl::new(f.owner.clone());
+            let mut host: CoreHostImpl<'_, '_, QueryStateSlot<_>> =
+                CoreHostImpl::new(f.owner.clone());
             host.set_query_state(&tx);
             host.set_contract_runtime_context(Some(f.context.clone()));
             let mut vm = arguments(&f, destination, 50_000_000);
@@ -186,7 +187,8 @@ mod tests {
         let mut tx = block.transaction();
         f.install(&mut tx);
         for defect in 0..5 {
-            let mut host: CoreHostImpl<QueryStateSlot<_>> = CoreHostImpl::new(f.owner.clone());
+            let mut host: CoreHostImpl<'_, '_, QueryStateSlot<_>> =
+                CoreHostImpl::new(f.owner.clone());
             host.set_query_state(&tx);
             let mut context = f.context.clone();
             if defect == 1 {
@@ -254,7 +256,7 @@ mod tests {
         }
     }";
     struct Probe<QS: Default + QueryStateAccess> {
-        inner: CoreHostImpl<QS>,
+        inner: CoreHostImpl<'static, 'static, QS>,
         before: std::cell::Cell<Option<u64>>,
         reserve: Option<u64>,
         actual: Option<u64>,
@@ -331,7 +333,7 @@ mod tests {
         let prepared =
             ivm::prepare_argument_record_with_gas_limit(schema, Arc::from(canonical), gas_limit)
                 .unwrap();
-        let mut inner: CoreHostImpl<QueryStateSlot<_>> = CoreHostImpl::new(f.owner.clone());
+        let mut inner: CoreHostImpl<'_, '_, QueryStateSlot<_>> = CoreHostImpl::new(f.owner.clone());
         inner.set_query_state(&tx);
         inner.set_contract_runtime_context(Some(f.context.clone()));
         inner.set_entrypoint_argument_record(Some(prepared.clone()));

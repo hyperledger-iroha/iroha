@@ -9,6 +9,11 @@ use super::*;
 #[cfg(test)]
 mod account_history_multisig_tests;
 
+mod account_aliases;
+#[cfg(test)]
+mod account_aliases_tests;
+use account_aliases::AccountAliasJoin;
+
 use crate::collections::{self, CollectionError, CollectionSpec, Limits, RowPage, specs};
 use iroha_torii_shared::list_query::ListQuery;
 
@@ -29,6 +34,8 @@ pub enum CollectionTarget {
     AccountAssets(String),
     /// `/v1/assets/{definition_id}/holders` (path literal: id or alias)
     AssetHolders(String),
+    /// `/v1/assets/{definition_id}/movements` (path literal: id or alias)
+    AssetMovements(String),
     /// `/v1/accounts/{account_id}/transactions` (path literal: I105 id or alias)
     AccountTransactions(String),
     /// `/v1/accounts/{account_id}/history`
@@ -66,6 +73,7 @@ impl CollectionTarget {
             Self::Rwas => &specs::RWAS,
             Self::AccountAssets(_) => &specs::ACCOUNT_ASSETS,
             Self::AssetHolders(_) => &specs::ASSET_HOLDERS,
+            Self::AssetMovements(_) => &specs::ASSET_MOVEMENTS,
             Self::AccountTransactions(_) => &specs::ACCOUNT_TRANSACTIONS,
             Self::AccountHistory(_) => &specs::ACCOUNT_HISTORY,
             Self::Transactions => &specs::TRANSACTIONS,
@@ -87,6 +95,7 @@ impl CollectionTarget {
         match self {
             Self::AccountAssets(literal)
             | Self::AssetHolders(literal)
+            | Self::AssetMovements(literal)
             | Self::AccountTransactions(literal)
             | Self::AccountHistory(literal)
             | Self::AccountPermissions(literal)
@@ -117,6 +126,7 @@ impl CollectionTarget {
             Self::Rwas => ENDPOINT_RWAS_QUERY,
             Self::AccountAssets(_) => ENDPOINT_ACCOUNTS_ASSETS_QUERY,
             Self::AssetHolders(_) => ENDPOINT_ASSET_HOLDERS_QUERY,
+            Self::AssetMovements(_) => super::asset_movements::ENDPOINT,
             Self::AccountTransactions(_) => ENDPOINT_ACCOUNTS_TRANSACTIONS_QUERY,
             Self::AccountHistory(_) => ENDPOINT_ACCOUNTS_HISTORY,
             Self::Transactions => ENDPOINT_TRANSACTIONS_QUERY,
@@ -433,6 +443,15 @@ fn execute_prepared_collection_local(
     let mut runtime_limits = *limits;
     runtime_limits.bytes = prepared.runtime_bytes();
     let limits = &runtime_limits;
+    let history_budget = matches!(
+        target,
+        CollectionTarget::AccountTransactions(_)
+            | CollectionTarget::Transactions
+            | CollectionTarget::AccountHistory(_)
+            | CollectionTarget::ContractActivity
+    )
+    .then(|| collection_history_read_budget(app.is_none(), limits.bytes))
+    .transpose()?;
     let page = match target {
         // Identity-ordered reads seek in storage order from the cursor; exact
         // `id` (and alias) constraints become direct lookups. The engine still
@@ -489,6 +508,7 @@ fn execute_prepared_collection_local(
         }
         CollectionTarget::Accounts => {
             let world = state.world_view();
+            let aliases = AccountAliasJoin::for_query(state, query, visibility, limits);
             let scan = prepared.ordered_scan();
             let after = cursor_key(scan.and_then(|scan| scan.after), |id| {
                 AccountId::parse_encoded(id).ok()
@@ -510,6 +530,11 @@ fn execute_prepared_collection_local(
                     visibility
                         .allows_account(&world, id)
                         .then(|| {
+                            let scopes = aliases
+                                .as_ref()
+                                .filter(|_| query.filter.is_some())
+                                .map(|join| join.scope_fields(&world, id, limits.bytes))
+                                .transpose()?;
                             source_filtered_row(
                                 prepared,
                                 || {
@@ -518,13 +543,27 @@ fn execute_prepared_collection_local(
                                         .as_ref()
                                         .map(|uaid| limits.bytes.display(uaid))
                                         .transpose()?;
-                                    limits.bytes.row_fields([
+                                    let mut prefix = limits.bytes.row_fields([
                                         ("id", id),
                                         ("label", &None::<&str>),
                                         ("uaid", &uaid),
-                                    ])
+                                    ])?;
+                                    if let Some(scopes) = scopes {
+                                        prefix.extend(scopes);
+                                    }
+                                    Ok(prefix)
                                 },
-                                || account_row(id, value.as_ref(), limits.bytes),
+                                || {
+                                    let mut row = account_row(id, value.as_ref(), limits.bytes)?;
+                                    if let Some(join) = &aliases {
+                                        row.extend(join.fields(
+                                            &world,
+                                            (id, value.as_ref()),
+                                            limits.bytes,
+                                        )?);
+                                    }
+                                    Ok(row)
+                                },
                             )
                         })
                         .transpose()?,
@@ -760,6 +799,26 @@ fn execute_prepared_collection_local(
                 prepared.execute_entries(rows.map(|(_, row)| row), limits)
             }
         }
+        CollectionTarget::AssetMovements(definition_literal) => {
+            // Movements come from the node-local index, which the route brought up to
+            // the committed tip before this worker started.
+            let now_ms = asset_alias_observation_time_ms(state);
+            let definition = {
+                let world = state.world_view();
+                let definition =
+                    resolve_asset_definition_selector(&world, definition_literal, now_ms)?;
+                if !visibility.allows_asset_definition(&world, &definition) {
+                    return Err(explorer_not_found());
+                }
+                definition
+            };
+            return super::asset_movements::collection_page(
+                state,
+                prepared,
+                &definition,
+                visibility,
+            );
+        }
         CollectionTarget::AccountTransactions(account_literal) => {
             let (account, _) = parse_account_path_segment_with_state(
                 state.as_ref(),
@@ -778,6 +837,9 @@ fn execute_prepared_collection_local(
                 .flatten();
             return transaction_page(
                 state,
+                history_budget
+                    .as_ref()
+                    .expect("history target has source custody"),
                 prepared,
                 Some(&account),
                 allowed.as_ref(),
@@ -792,6 +854,9 @@ fn execute_prepared_collection_local(
                 .flatten();
             return transaction_page(
                 state,
+                history_budget
+                    .as_ref()
+                    .expect("history target has source custody"),
                 prepared,
                 None,
                 allowed.as_ref(),
@@ -960,6 +1025,9 @@ fn execute_prepared_collection_local(
                 .flatten();
             return account_subrow_page(
                 state,
+                history_budget
+                    .as_ref()
+                    .expect("history target has source custody"),
                 prepared,
                 &account,
                 allowed.as_ref(),
@@ -970,6 +1038,9 @@ fn execute_prepared_collection_local(
         CollectionTarget::ContractActivity => {
             return transaction_page(
                 state,
+                history_budget
+                    .as_ref()
+                    .expect("history target has source custody"),
                 prepared,
                 None,
                 None,
@@ -1084,6 +1155,40 @@ fn execute_prepared_collection_local(
     Ok(page?)
 }
 
+/// Retain the admitted query's source/decoder custody, or fund the explicitly standalone
+/// engine from its finite collection phases. Never borrow State's execution pool.
+fn collection_history_read_budget(
+    standalone: bool,
+    bytes: collections::memory::BytePolicy,
+) -> Result<iroha_core::state::CanonicalHistoryReadBudget> {
+    if let Some(owner) = crate::history_producer::HistoryProducerOwner::current_if_admitted()? {
+        return Ok(owner.canonical_history_budget());
+    }
+    if !standalone {
+        return Err(collections::memory::capacity("history owner").into());
+    }
+    let total = [
+        bytes.source_frame_bytes,
+        bytes.row_bytes,
+        bytes.retained_bytes,
+        bytes.scratch_bytes,
+        bytes.response_bytes,
+    ]
+    .into_iter()
+    .try_fold(0usize, usize::checked_add)
+    .ok_or_else(|| collections::memory::capacity("standalone history phases"))?;
+    Ok(iroha_core::state::CanonicalHistoryReadBudget::new(
+        iroha_allocation::AllocationBudget::new(bytes.source_frame_bytes),
+        norito::core::DecodeBudgetContext::new(norito::DecodeLimits::new(
+            bytes.row_bytes,
+            bytes.source_frame_bytes,
+            total,
+            total,
+            norito::core::MAX_VALUE_NESTING_DEPTH,
+        )),
+    ))
+}
+
 /// Page movements inside authenticated transactions without indexing the full chain.
 /// Borrow the input/result from each authenticated carrier: display rows do not
 /// need the proof-bearing query DTO, its per-row encoding, or cloned instructions.
@@ -1093,6 +1198,7 @@ fn execute_prepared_collection_local(
 /// sparse/hidden stretches remain reachable without exposing their row positions.
 fn account_subrow_page(
     state: &Arc<CoreState>,
+    read_budget: &iroha_core::state::CanonicalHistoryReadBudget,
     prepared: &collections::Prepared<'_>,
     account: &AccountId,
     allowed_definition: Option<&AssetDefinitionId>,
@@ -1164,6 +1270,7 @@ fn account_subrow_page(
         MultisigHistoryBudget::new(work, transaction_history_byte_limit(work));
     let end = visit_borrowed_committed_transaction_page(
         &view,
+        read_budget,
         resume,
         work,
         transaction_history_byte_limit(work),
@@ -1248,7 +1355,7 @@ fn account_subrow_page(
             std::ops::ControlFlow::Continue(())
         },
     )
-    .map_err(|error| Error::Query(iroha_data_model::ValidationFail::QueryFailed(error)))?;
+    .map_err(crate::canonical_history::history_page_error)?;
     drop(view);
     if let Some((height, hash)) = anchor {
         require_history_anchor(state, height, hash)?;
@@ -1320,6 +1427,7 @@ pub fn account_history_rows_between(
     ));
     let filter = FilterExpr::And(conjuncts);
     let limits = collection_limits();
+    let read_budget = collection_history_read_budget(true, limits.bytes)?;
     let scope = account.to_string();
     let mut rows = Vec::new();
     let mut cursor = None;
@@ -1333,6 +1441,7 @@ pub fn account_history_rows_between(
         let prepared = collections::prepare(&specs::ACCOUNT_HISTORY, &scope, &query, &limits)?;
         let page = account_subrow_page(
             state,
+            &read_budget,
             &prepared,
             account,
             allowed_definition,
@@ -1489,6 +1598,7 @@ fn contract_emission_page(
 /// the budget pays for at most a checkpoint interval of extra blocks.
 fn transaction_page(
     state: &Arc<CoreState>,
+    read_budget: &iroha_core::state::CanonicalHistoryReadBudget,
     prepared: &collections::Prepared<'_>,
     subject: Option<&AccountId>,
     allowed_definition: Option<&AssetDefinitionId>,
@@ -1544,6 +1654,7 @@ fn transaction_page(
     let work = app_query_limits().max_fetch_size;
     let end = visit_committed_transaction_page(
         &view,
+        read_budget,
         resume,
         work,
         transaction_history_byte_limit(work),
@@ -1578,7 +1689,7 @@ fn transaction_page(
             std::ops::ControlFlow::Continue(())
         },
     )
-    .map_err(|error| Error::Query(iroha_data_model::ValidationFail::QueryFailed(error)))?;
+    .map_err(crate::canonical_history::history_page_error)?;
     drop(view);
     if let Some((height, hash)) = anchor {
         require_history_anchor(state, height, hash)?;

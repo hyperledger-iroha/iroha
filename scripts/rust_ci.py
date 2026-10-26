@@ -963,8 +963,9 @@ def run_checks(
     root: Path = ROOT,
     dry_run: bool = False,
     workspace: bool = False,
+    local: bool = False,
 ) -> None:
-    """Execute locked Cargo checks for a deterministic package set."""
+    """Execute locked checks, optionally reusing the local incremental build lane."""
 
     inventory = workspace_check_features(root)
     if workspace:
@@ -976,6 +977,11 @@ def run_checks(
         print("No affected Rust packages; Cargo validation is not required.")
         return
     for command in commands:
+        if local:
+            command = [
+                str(root / "scripts" / "cargo_fast.sh"),
+                "--stable-local-metadata", "--incremental", "--", *command[1:],
+            ]
         print("+", " ".join(command), flush=True)
         if not dry_run:
             _run(command, cwd=root, capture_output=False)
@@ -1172,6 +1178,10 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument(
         "--dry-run", action="store_true", help="print commands without executing them"
     )
+    run.add_argument(
+        "--local", action="store_true",
+        help="use cargo_fast with stable development metadata and incremental reuse",
+    )
     binaries = subparsers.add_parser(
         "build-binaries", help="build selected binaries with their declared feature isolation"
     )
@@ -1214,6 +1224,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 _parse_checks(args.checks),
                 dry_run=args.dry_run,
                 workspace=args.workspace,
+                local=args.local,
             )
         elif args.command == "build-binaries":
             build_binaries(_parse_packages(args.binaries), args.output_dir)

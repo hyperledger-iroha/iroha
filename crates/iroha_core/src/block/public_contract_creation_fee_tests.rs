@@ -54,7 +54,7 @@ mod public_contract_creation_fees {
                 pipeline.parallel_apply = parallel_apply;
                 pipeline.workers = 2;
                 state.set_pipeline(pipeline);
-                let mut fees = state.nexus_snapshot().fees;
+                let mut fees = iroha_config::parameters::defaults::nexus::fees::genesis_policy();
                 fees.base_fee = Quantity::from(1_u32);
                 fees.per_byte_fee = Quantity::zero();
                 fees.per_instruction_fee = Quantity::zero();
@@ -62,14 +62,19 @@ mod public_contract_creation_fees {
                 fees.fee_asset_id = fee_id.clone();
                 fees.fee_sink_account_id = sink.clone();
                 {
-                    let mut parameters = state.world.parameters.block();
-                    parameters
-                        .set_parameter(iroha_data_model::parameter::Parameter::Custom(
+                    let mut parameters =
+                        crate::state::parameter_cell_block_for_testing(&state.world)
+                            .expect("funded original parameter-only fixture block");
+                    crate::state::set_parameter_cell_for_testing(
+                        &mut parameters,
+                        iroha_data_model::parameter::Parameter::Custom(
                             fees.clone()
                                 .into_custom_parameter()
                                 .expect("explicit fixture policy"),
-                        ))
-                        .expect("valid fixture monetary projection");
+                        ),
+                        state.world.sccp_committee_generations.allocation_budget(),
+                    )
+                    .expect("valid fixture monetary projection");
                     parameters.commit();
                 }
 
@@ -151,7 +156,7 @@ mod public_contract_creation_fees {
                 assert_eq!(
                     crate::block::resolve_network_xor_asset_definition(
                         &state_block.world,
-                        &state_block.nexus.fees.fee_asset_id.canonical_address(),
+                        &fees.fee_asset_id.canonical_address(),
                         20,
                     )
                     .expect("completed pin read"),

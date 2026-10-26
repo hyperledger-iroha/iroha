@@ -4,7 +4,8 @@
 //! fixture. This exercises public `StateBlock::commit`, not a test commit surrogate.
 
 use super::fixture;
-use crate::state::{State, StateParameters, storage_transactions};
+use crate::pipeline_gas_policy::RetainedStateParameters;
+use crate::state::{State, storage_transactions};
 use iroha_allocation::release::DeferredRelease;
 use mv::{PublicationCleanup, PublicationPreparationError};
 use std::{
@@ -34,7 +35,8 @@ struct PhysicalObservations {
 }
 
 struct OriginalProbe {
-    parameters: Option<mv::cell::Detached<StateParameters, ()>>,
+    parameters:
+        Option<mv::cell::Detached<RetainedStateParameters, (), iroha_allocation::AllocationCharge>>,
     world_cleanup: Option<PublicationCleanup<()>>,
     fence_cleanup: [Option<DeferredRelease>; 2],
     observed: PhysicalObservations,
@@ -177,10 +179,8 @@ fn check_commit_retirement(case: CommitCase, source: NotificationSource) {
         crate::unit_test_support::release_registration(&state.ivm_execution_budget());
     let before = crate::snapshot::canonical_state_snapshot_hash(&state).unwrap();
     let before_height = state.transactions.latest_height();
-    let parameters = state
-        .world
-        .parameters
-        .block()
+    let parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+        .expect("funded original parameter-only fixture block")
         .try_detach(|_| Ok::<_, ()>(()))
         .unwrap();
     let membership = original_membership_probe(&state);

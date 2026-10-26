@@ -4336,14 +4336,16 @@ mod tests {
     /// Author admission policy only for component fixtures before their first block.
     /// Shared constructors stay pristine for the authenticated-genesis query fixture.
     fn seed_component_crypto_policy(state: &State) {
-        let mut parameters = state.world.parameters.block();
-        parameters
-            .set_parameter(
-                crate::sumeragi::test_chain::crypto_fixture_policy()
-                    .into_parameter()
-                    .expect("canonical fixture crypto policy"),
-            )
-            .expect("install original fixture crypto policy");
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+            .expect("funded component parameter fixture");
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            crate::sumeragi::test_chain::crypto_fixture_policy()
+                .into_parameter()
+                .expect("canonical fixture crypto policy"),
+            state.world.sccp_committee_generations.allocation_budget(),
+        )
+        .expect("install original fixture crypto policy");
         parameters.commit();
     }
     pub(super) fn state_with_accounts(keypairs: &[&KeyPair]) -> State {

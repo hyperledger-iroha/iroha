@@ -29,7 +29,6 @@ import org.bouncycastle.asn1.x500.X500Name
 import org.bouncycastle.asn1.x509.AlgorithmIdentifier
 import org.bouncycastle.asn1.x509.BasicConstraints
 import org.bouncycastle.asn1.x509.Extension
-import org.bouncycastle.asn1.x509.Extensions
 import org.bouncycastle.asn1.x509.KeyUsage
 import org.bouncycastle.asn1.x509.SubjectPublicKeyInfo
 import org.bouncycastle.asn1.x9.X9ObjectIdentifiers
@@ -122,6 +121,7 @@ class AndroidAttestationE1V1Test {
     private fun certificate(
         subject: KeyPair, issuer: KeyPair, subjectName: String, issuerName: String, ca: Boolean, serial: Long,
         extra: List<Extension> = emptyList(), rsa: Boolean = false,
+        rawExtra: List<ASN1Encodable> = emptyList(),
     ): ByteArray {
         val algorithm = if (rsa) AlgorithmIdentifier(PKCSObjectIdentifiers.sha256WithRSAEncryption, DERNull.INSTANCE)
             else AlgorithmIdentifier(X9ObjectIdentifiers.ecdsa_with_SHA256)
@@ -132,7 +132,7 @@ class AndroidAttestationE1V1Test {
         val tbs = DERSequence(arrayOf<ASN1Encodable>(DERTaggedObject(true, 0, ASN1Integer(2)), ASN1Integer(serial), algorithm,
             X500Name(issuerName), DERSequence(arrayOf<ASN1Encodable>(ASN1UTCTime("250101000000Z"), ASN1UTCTime("300101000000Z"))),
             X500Name(subjectName), SubjectPublicKeyInfo.getInstance(subject.public.encoded),
-            DERTaggedObject(true, 3, Extensions(extensions.toTypedArray()))))
+            DERTaggedObject(true, 3, DERSequence((extensions + rawExtra).toTypedArray()))))
         val signature = Signature.getInstance(if (rsa) "SHA256withRSA" else "SHA256withECDSA").run {
             initSign(issuer.private); update(tbs.encoded); sign()
         }
@@ -279,6 +279,35 @@ class AndroidAttestationE1V1Test {
     @Test fun `an RSA-rooted chain verifies with NULL signature parameters`() {
         val rsa = KeyPairGenerator.getInstance("RSA").apply { initialize(2048) }.generateKeyPair()
         assertIs<AndroidAttestationE1ResultV1.Eligible>(evaluate(chain(rootKey = rsa, rsaRoot = true), policy(rootKey = rsa)))
+    }
+
+    @Test fun `explicit false extension critical flags stay noncritical and malformed booleans are refused`() {
+        fun withFlag(flag: ASN1Encodable): List<ByteArray> = chain().toMutableList().also {
+            // Keep the explicit BOOLEAN in the original signed TBS; Extension(false) omits it.
+            val extension = DERSequence(arrayOf<ASN1Encodable>(keyDescriptionOid, flag,
+                DEROctetString(Description().encoded())))
+            it[0] = certificate(leaf, intermediate, "CN=Android Keystore Key", "CN=Intermediate", false, 1,
+                rawExtra = listOf(extension))
+        }
+        val explicitFalse = withFlag(ASN1Boolean.FALSE)
+        assertIs<AndroidAttestationE1ResultV1.Eligible>(evaluate(explicitFalse))
+        // A genuinely critical KeyDescription is still outside the permitted critical profile.
+        assertEquals(Refusal.UNTRUSTED_ATTESTATION_ROOT, refusal(withFlag(ASN1Boolean.TRUE)))
+        assertEquals(Refusal.EVIDENCE_INVALID, refusal(withFlag(ASN1Integer(0))))
+
+        val invalidBoolean = explicitFalse.toMutableList()
+        val encodedOid = keyDescriptionOid.encoded
+        val leafOriginal = invalidBoolean[0].copyOf()
+        val oidOffset = (0..leafOriginal.size - encodedOid.size).first { offset ->
+            encodedOid.indices.all { leafOriginal[offset + it] == encodedOid[it] }
+        }
+        val flagOffset = oidOffset + encodedOid.size
+        assertEquals(1.toByte(), leafOriginal[flagOffset])
+        assertEquals(1.toByte(), leafOriginal[flagOffset + 1])
+        assertEquals(0.toByte(), leafOriginal[flagOffset + 2])
+        leafOriginal[flagOffset + 2] = 1 // Noncanonical BOOLEAN true; rejected before path validation.
+        invalidBoolean[0] = leafOriginal
+        assertEquals(Refusal.EVIDENCE_INVALID, refusal(invalidBoolean))
     }
 
     @Test fun `key description placement and provisioning adjacency follow the google profile`() {

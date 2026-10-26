@@ -724,9 +724,12 @@ mod tests {
         }
         config.genesis_block_cadence_ms = std::num::NonZeroU64::new(1_000).unwrap();
         let mut nexus = iroha_config::parameters::actual::Nexus::default();
-        nexus.staking.unbonding_delay =
-            std::time::Duration::from_millis(super::super::test_support::SCCP_UNBONDING_DELAY_MS);
-        nexus.staking.max_slash_bps = 10_000;
+        let mut staking = crate::sumeragi::test_chain::staking_fixture_policy(
+            SumeragiNposParameters::default().xor_asset_definition_id,
+        );
+        staking.unbonding_delay_ms = super::super::test_support::SCCP_UNBONDING_DELAY_MS;
+        staking.max_slash_bps = 10_000;
+        super::super::forgery::tests::replace_original_staking_parameter(&mut config, &staking);
         if scope == iroha_data_model::block::consensus::SumeragiRootScope::Global {
             use iroha_data_model::{
                 Registrable,
@@ -741,8 +744,8 @@ mod tests {
             // G1 captures genuine original staking records. Fund the normal genesis
             // registration plan before the sole SCCP initializer executes.
             let owner = AccountId::new(config.genesis_key.public_key().clone());
-            let definition: AssetDefinitionId = nexus.staking.stake_asset_id.parse().unwrap();
-            let escrow = AccountId::parse_encoded(&nexus.staking.stake_escrow_account_id).unwrap();
+            let definition: AssetDefinitionId = staking.stake_asset_id;
+            let escrow = staking.stake_escrow_account_id.clone();
             let amount = Quantity::from(1_000_u32);
             let validators = crate::sumeragi::test_chain::fixture_validators();
             let accounts = validators
@@ -811,7 +814,6 @@ mod tests {
                 iroha_model_base::domain::DomainId::try_new("sccp", "sccp-private").unwrap();
             let asset =
                 AssetDefinitionId::derive_from_components(domain.clone(), "fee".parse().unwrap());
-            nexus.fees.fee_asset_id = asset.clone();
             nexus.lane_catalog = LaneCatalog::new(
                 1_u32.try_into().unwrap(),
                 vec![LaneConfig {
@@ -865,11 +867,22 @@ mod tests {
 
     #[test]
     fn genuine_global_genesis_installs_original_generation_and_sealed_active_header() {
-        use crate::sumeragi::test_chain::CertifiedTestChain;
+        use crate::{state::WorldReadOnly as _, sumeragi::test_chain::CertifiedTestChain};
         use iroha_data_model::block::consensus::SumeragiRootScope;
         let chain = CertifiedTestChain::start(native_init_config(SumeragiRootScope::Global))
             .expect("genuine Global genesis");
         let view = chain.state().view();
+        let mut expected_staking = crate::sumeragi::test_chain::staking_fixture_policy(
+            iroha_data_model::parameter::system::SumeragiNposParameters::default()
+                .xor_asset_definition_id,
+        );
+        expected_staking.unbonding_delay_ms = super::super::test_support::SCCP_UNBONDING_DELAY_MS;
+        expected_staking.max_slash_bps = 10_000;
+        assert_eq!(
+            view.world().parameters().staking_policy(),
+            Some(&expected_staking)
+        );
+
         let generation = store::committee_generations::get(view.world(), &1).expect("original G1");
         assert_eq!(
             generation.cause,

@@ -1,34 +1,38 @@
 # Copyright 2026 Hyperledger Iroha Contributors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The sixteen katakana of lane ``K``.
+"""The sixteen katakana of the band tiles.
 
-A tile's glyph is a four-bit symbol. The alphabet is the subset of the Iroha
-ordering ``イロハニホヘト...ス`` whose members stay most distinguishable after
-camera blur: イ ロ ハ ニ ヘ ト ワ カ レ ム ノ ケ ア ヒ ス ン. Symbol ``0`` is
+A band tile's glyph is a four-bit symbol. The alphabet is the subset of the
+Iroha ordering ``イロハニホヘト...ス`` whose members stay most distinguishable
+after camera blur: イ ロ ハ ニ ヘ ト ワ カ レ ム ノ ケ ア ヒ ス ン. Symbol ``0`` is
 ``イ`` and symbol ``15`` is ``ン``.
 
-Glyphs are defined as stroke polylines on a 32x32 grid (``y`` grows downward)
-drawn with round caps and joins. The strokes are the rendering definition;
-:data:`TEMPLATES` is the derived, byte-exact matching table that every decoder
-embeds, so classification never depends on a rasteriser.
+Glyphs are defined as stroke polylines on a 32 x 32 grid (``y`` grows downward)
+drawn with round caps and joins of width :data:`STROKE_WIDTH`. A point is inked
+when it lies within half a stroke width of a stroke segment (:func:`is_inked`);
+renderers and the band reader's templates both follow that definition, so
+classification never depends on a rasteriser.
+
+:func:`inked_flags` classifies a whole row of points at once, exactly as
+:func:`is_inked` would one by one: it is what the renderer and the reader's
+template rasters use.
 """
 
 from __future__ import annotations
 
 import math
-from typing import Sequence, Tuple
+from bisect import bisect_left, bisect_right
+from typing import List, Optional, Sequence, Tuple
 
 __all__ = [
     "GLYPH_COUNT",
     "GLYPH_GRID",
     "STROKE_WIDTH",
-    "TEMPLATE_N",
     "GLYPH_CHARS",
     "STROKES",
-    "TEMPLATES",
     "is_inked",
-    "generate_templates",
+    "inked_flags",
 ]
 
 #: Number of glyphs (symbols) in the alphabet.
@@ -37,16 +41,13 @@ GLYPH_COUNT = 16
 GLYPH_GRID = 32.0
 #: Stroke width on the design grid.
 STROKE_WIDTH = 6.5
-#: Side of the matching template grid.
-TEMPLATE_N = 8
 
 #: The sixteen characters in symbol order.
 GLYPH_CHARS = "イロハニヘトワカレムノケアヒスン"
 
-Point = Tuple[float, float]
-
-#: Stroke polylines for every glyph, in symbol order, on the 32x32 design grid.
-STROKES: Tuple[Tuple[Tuple[Point, ...], ...], ...] = (
+#: Stroke definitions for every glyph, in symbol order: each glyph is a tuple of strokes and
+#: each stroke a polyline of ``(x, y)`` points on the design grid.
+STROKES: Tuple[Tuple[Tuple[Tuple[float, float], ...], ...], ...] = (
     # イ
     (((22.0, 4.0), (8.0, 18.0)), ((19.0, 10.0), (19.0, 29.0))),
     # ロ
@@ -86,255 +87,149 @@ STROKES: Tuple[Tuple[Tuple[Point, ...], ...], ...] = (
     # ヒ
     (((10.0, 5.0), (10.0, 26.0), (26.0, 26.0)), ((10.0, 14.0), (25.0, 14.0))),
     # ス
-    (
-        ((6.0, 5.0), (24.0, 5.0), (17.0, 15.0), (6.0, 27.0)),
-        ((13.0, 15.0), (28.0, 28.0)),
-    ),
+    (((6.0, 5.0), (24.0, 5.0), (17.0, 15.0), (6.0, 27.0)), ((13.0, 15.0), (28.0, 28.0))),
     # ン
     (((6.0, 7.0), (12.0, 13.0)), ((6.0, 25.0), (14.0, 27.0), (27.0, 9.0))),
 )
 
-#: Area-coverage templates (``0..=255``) of the glyph alphabet, row-major 8x8.
-#: Generated from :data:`STROKES` by :func:`generate_templates`; the tests
-#: regenerate and compare this table.
-TEMPLATES: Tuple[Tuple[int, ...], ...] = (
-    # イ
-    (
-          0,   0,   0,   0,  55, 195,  37,   0,
-          0,   0,   0,  55, 240, 240,  37,   0,
-          0,   0,  55, 240, 255, 142,   0,   0,
-          0,  55, 240, 245, 255, 143,   0,   0,
-          0, 195, 240,  71, 255, 143,   0,   0,
-          0,  37,  37,  16, 255, 143,   0,   0,
-          0,   0,   0,  16, 255, 143,   0,   0,
-          0,   0,   0,   8, 238, 119,   0,   0,
-    ),
-    # ロ
-    (
-          3,  74,  80,  80,  80,  80,  74,   3,
-         74, 255, 255, 255, 255, 255, 255,  74,
-         80, 255, 134,  80,  80, 134, 255,  80,
-         80, 255,  80,   0,   0,  80, 255,  80,
-         80, 255,  80,   0,   0,  80, 255,  80,
-         80, 255, 134,  80,  80, 134, 255,  80,
-         74, 255, 255, 255, 255, 255, 255,  74,
-          3,  74,  80,  80,  80,  80,  74,   3,
-    ),
-    # ハ
-    (
-          0,   0,   3,  68,   3,   0,   0,   0,
-          0,   0,  94, 255, 123,   3,   0,   0,
-          0,   0, 191, 255, 255, 108,   0,   0,
-          0,  35, 254, 161, 221, 230,  12,   0,
-          0, 130, 255,  58,  93, 255, 123,   0,
-          2, 225, 215,   0,   2, 210, 239,  18,
-         63, 255, 119,   0,   0,  78, 255, 124,
-         17, 131,  17,   0,   0,   0, 119,  47,
-    ),
-    # ニ
-    (
-          0,   0,   0,   0,   0,   0,   0,   0,
-          0,  37,  80,  80,  80,  80,  37,   0,
-          0, 195, 255, 255, 255, 255, 195,   0,
-          0,  37,  80,  80,  80,  80,  37,   0,
-          0,   0,   0,   0,   0,   0,   0,   0,
-        134, 207, 207, 207, 207, 207, 207, 134,
-        134, 207, 207, 207, 207, 207, 207, 134,
-          0,   0,   0,   0,   0,   0,   0,   0,
-    ),
-    # ヘ
-    (
-          0,   0,   0,   0,   0,   0,   0,   0,
-          0,   0,  37,  37,   0,   0,   0,   0,
-          0,  55, 240, 244,  82,   0,   0,   0,
-         55, 240, 240, 225, 254, 126,   1,   0,
-        239, 240,  55,  22, 194, 255, 169,  10,
-        119,  51,   0,   0,   6, 155, 255, 204,
-          0,   0,   0,   0,   0,   0, 110, 182,
-          0,   0,   0,   0,   0,   0,   0,   0,
-    ),
-    # ト
-    (
-          0,   8, 238, 119,   0,   0,   0,   0,
-          0,  16, 255, 143,   0,   0,   0,   0,
-          0,  16, 255, 156,   0,   0,   0,   0,
-          0,  16, 255, 255, 188,  53,   0,   0,
-          0,  16, 255, 224, 249, 254, 171,  17,
-          0,  16, 255, 143,  33, 162, 251,  57,
-          0,  16, 255, 143,   0,   0,   8,   0,
-          0,   8, 238, 119,   0,   0,   0,   0,
-    ),
-    # ワ
-    (
-          0,   0,   0,   0,   0,   0,   0,   0,
-          4, 182, 207, 207, 207, 207, 182,   4,
-         16, 255, 234, 207, 207, 243, 247,   4,
-         16, 255, 143,   0,   0, 216, 204,   0,
-         16, 255, 143,   0,  81, 252, 158,   0,
-          8, 238, 123, 138, 254, 226,  48,   0,
-          0,  25, 193, 255, 185,  20,   0,   0,
-          0,  57, 251, 128,   3,   0,   0,   0,
-    ),
-    # カ
-    (
-          0,   0,  57, 251,  57,   0,   0,   0,
-          0,   0,  80, 255,  80,   0,   0,   0,
-        134, 207, 222, 255, 222, 207, 182,   4,
-        134, 207, 224, 255, 222, 234, 255,  16,
-          0,   0, 167, 253,  40, 143, 255,  16,
-          0,  42, 253, 167,   0, 172, 255,  16,
-          0, 165, 253,  42,  90, 255, 174,   0,
-          0, 134, 136,   0,  83, 182,  13,   0,
-    ),
-    # レ
-    (
-          0,  83, 182,   4,   0,   0,   0,   0,
-          0, 143, 255,  16,   0,  19, 183,  83,
-          0, 143, 255,  16,  15, 200, 254,  87,
-          0, 143, 255,  26, 190, 255, 115,   0,
-          0, 143, 255, 193, 255, 128,   0,   0,
-          0, 143, 255, 255, 140,   0,   0,   0,
-          0, 143, 255, 152,   1,   0,   0,   0,
-          0,  47, 120,   3,   0,   0,   0,   0,
-    ),
-    # ム
-    (
-          0,   0,   0,  85, 182,   4,   0,   0,
-          0,   0,   9, 229, 225,   4,   0,   0,
-          0,   0, 117, 255,  96,   0,   0,   0,
-          0,  16, 235, 213,  87, 183,  15,   0,
-          0, 129, 255,  83,  90, 255, 182,   3,
-          8, 243, 255, 249, 237, 252, 255, 101,
-          0, 119, 153, 165, 177, 191, 205,  83,
-          0,   0,   0,   0,   0,   0,   0,   0,
-    ),
-    # ノ
-    (
-          0,   0,   0,   0,  38, 195,  37,   0,
-          0,   0,   0,   0, 150, 255,  43,   0,
-          0,   0,   0,  14, 242, 192,   0,   0,
-          0,   0,   0, 113, 255,  87,   0,   0,
-          0,   0,  30, 241, 218,   5,   0,   0,
-          0,   1, 185, 253,  61,   0,   0,   0,
-          0,  95, 255, 143,   0,   0,   0,   0,
-          0,  83, 182,  10,   0,   0,   0,   0,
-    ),
-    # ケ
-    (
-          0,   0, 142, 238,   8,   0,   0,   0,
-          0,  70, 254, 182,   0,   0,   0,   0,
-         18, 228, 255, 222, 207, 207, 207,  83,
-         57, 251, 206, 225, 255, 223, 207,  83,
-          0,   8,   0, 140, 255,  38,   0,   0,
-          0,   0,  55, 240, 216,   0,   0,   0,
-          0,  51, 240, 240,  55,   0,   0,   0,
-          0, 119, 239,  55,   0,   0,   0,   0,
-    ),
-    # ア
-    (
-          0,   0,   0,   0,   0,   0,   0,   0,
-         17,  80,  80,  80,  80,  80,  74,   3,
-        131, 255, 255, 255, 255, 255, 255,  71,
-         17,  80,  91, 255, 178, 161, 255,  50,
-          0,   0,  16, 255, 164, 211, 253,  17,
-          0,   0, 139, 255, 255, 254, 105,   0,
-          0, 106, 255, 183, 182, 101,   0,   0,
-          0, 182, 205,  13,   0,   0,   0,   0,
-    ),
-    # ヒ
-    (
-          0,  17, 131,  17,   0,   0,   0,   0,
-          0,  80, 255,  80,   0,   0,   0,   0,
-          0,  80, 255, 134,  80,  80,  57,   0,
-          0,  80, 255, 255, 255, 255, 251,   8,
-          0,  80, 255, 134,  80,  80,  57,   0,
-          0,  80, 255, 134,  80,  80,  74,   3,
-          0,  74, 255, 255, 255, 255, 255,  68,
-          0,   3,  74,  80,  80,  80,  74,   3,
-    ),
-    # ス
-    (
-         17, 137, 143, 143, 143, 143,  83,   0,
-         57, 253, 255, 255, 255, 255, 185,   0,
-          0,  12,  16,  32, 220, 245,  40,   0,
-          0,   0, 119, 253, 255, 107,   0,   0,
-          0,   0, 156, 255, 254,  98,   0,   0,
-          0, 116, 255, 189, 215, 255, 130,   1,
-         57, 254, 200,  11,  17, 192, 255, 145,
-         17, 131,  21,   0,   0,   6, 152, 134,
-    ),
-    # ン
-    (
-          0,   8,   0,   0,   0,   0,   0,   0,
-         57, 251, 105,   0,   0,   1, 119,  47,
-         17, 210, 254, 101,   0, 111, 255, 121,
-          0,  21, 209, 182,  47, 248, 209,   8,
-          0,   0,   4,  14, 214, 246,  42,   0,
-         17, 133,  88, 158, 255, 104,   0,   0,
-         57, 253, 255, 255, 174,   0,   0,   0,
-          0,  24,  88, 133,  18,   0,   0,   0,
-    ),
-)  # fmt: skip
+assert len(STROKES) == GLYPH_COUNT and len(GLYPH_CHARS) == GLYPH_COUNT
+
+#: Half the stroke width: a point within this distance of a segment is inked.
+_RADIUS = STROKE_WIDTH / 2.0
+
+#: Every glyph's segments as ``(ax, ay, bx, by, dx, dy, length_sq)``, in stroke order.
+_SEGMENTS = tuple(
+    tuple(
+        (ax, ay, bx, by, bx - ax, by - ay, (bx - ax) * (bx - ax) + (by - ay) * (by - ay))
+        for stroke in strokes
+        for (ax, ay), (bx, by) in zip(stroke, stroke[1:])
+    )
+    for strokes in STROKES
+)
 
 
-def segment_distance(px: float, py: float, a: Point, b: Point) -> float:
-    """Distance from point ``(px, py)`` to the segment ``a``-``b``."""
-    ax, ay = a
-    bx, by = b
-    dx = bx - ax
-    dy = by - ay
-    length_sq = dx * dx + dy * dy
-    if length_sq == 0.0:
-        t = 0.0
-    else:
-        t = ((px - ax) * dx + (py - ay) * dy) / length_sq
-        if t < 0.0:
+def _check_glyph(glyph: int) -> int:
+    if not 0 <= glyph < GLYPH_COUNT:
+        raise IndexError("glyph index out of range")
+    return glyph
+
+
+def _inked(segments: Sequence[Tuple[float, ...]], px: float, py: float) -> bool:
+    """The reference's test, segment by segment: the distance from ``(px, py)`` to a
+    segment is ``|p - (a + t (b - a))|`` with ``t`` the clamped projection."""
+    radius = _RADIUS
+    for ax, ay, _bx, _by, dx, dy, length_sq in segments:
+        if length_sq == 0.0:
             t = 0.0
-        elif t > 1.0:
-            t = 1.0
-    ex = px - (ax + t * dx)
-    ey = py - (ay + t * dy)
-    return math.sqrt(ex * ex + ey * ey)
-
-
-def _segments(glyph: int) -> Sequence[Tuple[Point, Point]]:
-    return [(stroke[i], stroke[i + 1]) for stroke in STROKES[glyph] for i in range(len(stroke) - 1)]
-
-
-def is_inked(glyph: int, x: float, y: float) -> bool:
-    """Return whether design-grid point ``(x, y)`` is inked in ``glyph``."""
-    radius = STROKE_WIDTH / 2.0
-    for a, b in _segments(glyph):
-        if segment_distance(x, y, a, b) <= radius:
+        else:
+            t = ((px - ax) * dx + (py - ay) * dy) / length_sq
+            if t < 0.0:
+                t = 0.0
+            elif t > 1.0:
+                t = 1.0
+        ex = px - (ax + t * dx)
+        ey = py - (ay + t * dy)
+        if math.sqrt(ex * ex + ey * ey) <= radius:
             return True
     return False
 
 
-def generate_templates() -> Tuple[Tuple[int, ...], ...]:
-    """Derive the matching templates from the stroke definitions.
+def is_inked(glyph: int, x: float, y: float) -> bool:
+    """Return whether design-grid point ``(x, y)`` is inked in ``glyph``: whether it lies
+    within half a stroke width of one of its stroke segments."""
+    return _inked(_SEGMENTS[_check_glyph(glyph)], x, y)
 
-    Each of the 8x8 cells holds the inked fraction of its 4x4 design cells,
-    sampled on a 16x16 grid and scaled to ``0..=255``.
+
+#: The tolerance, in design units, by which :func:`inked_flags` widens and narrows the stroke
+#: radius and its spans before it trusts them; far above the rounding of either.
+_SLACK = 1e-6
+
+
+def _capsule_span(
+    ax: float, ay: float, bx: float, by: float, y: float, radius: float
+) -> Optional[Tuple[float, float]]:
+    """Approximately the ``x`` interval of the horizontal line at ``y`` that lies within
+    ``radius`` of the segment ``a``-``b``: the union of the discs around its ends and the
+    strip along it (a convex set meets a line in one interval), or ``None``."""
+    lo = math.inf
+    hi = -math.inf
+    r2 = radius * radius
+    e = y - ay
+    f = y - by
+    q = r2 - e * e
+    if q >= 0.0:
+        h = math.sqrt(q)
+        lo = min(lo, ax - h)
+        hi = max(hi, ax + h)
+    q = r2 - f * f
+    if q >= 0.0:
+        h = math.sqrt(q)
+        lo = min(lo, bx - h)
+        hi = max(hi, bx + h)
+    dx = bx - ax
+    dy = by - ay
+    if dy == 0.0:
+        if abs(e) <= radius:
+            lo = min(lo, ax, bx)
+            hi = max(hi, ax, bx)
+    else:
+        length_sq = dx * dx + dy * dy
+        # within the strip: |(x - ax) dy - e dx| <= radius |b - a|
+        centre = ax + e * dx / dy
+        half = radius * math.sqrt(length_sq) / abs(dy)
+        start = centre - half
+        end = centre + half
+        # and projecting inside the segment: 0 <= ((x - ax) dx + e dy) / |b - a|^2 <= 1
+        if dx != 0.0:
+            x0 = ax - e * dy / dx
+            x1 = ax + (length_sq - e * dy) / dx
+            start = max(start, min(x0, x1))
+            end = min(end, max(x0, x1))
+        elif not 0.0 <= e * dy / length_sq <= 1.0:
+            start, end = math.inf, -math.inf
+        if start <= end:
+            lo = min(lo, start)
+            hi = max(hi, end)
+    return (lo, hi) if lo <= hi else None
+
+
+def inked_flags(glyph: int, y: float, xs: Sequence[float]) -> bytearray:
+    """One flag per point ``(xs[i], y)`` of the design grid (``xs`` ascending): ``1`` when
+    :func:`is_inked` holds for it, ``0`` when not.
+
+    Each segment's span along the row is computed twice, for a stroke radius a hair
+    narrower and a hair wider than the real one: points well inside a narrow span are
+    inked, points outside every wide span are not, and the few between are decided by
+    :func:`is_inked` itself, so the flags are exactly the reference's.
     """
-    supersample = 16
-    cell = GLYPH_GRID / TEMPLATE_N
-    radius = STROKE_WIDTH / 2.0
-    out = []
-    for glyph in range(GLYPH_COUNT):
-        segments = _segments(glyph)
-        table = []
-        for v in range(TEMPLATE_N):
-            for u in range(TEMPLATE_N):
-                inked = 0
-                for sy in range(supersample):
-                    y = (v + (sy + 0.5) / supersample) * cell
-                    for sx in range(supersample):
-                        x = (u + (sx + 0.5) / supersample) * cell
-                        for a, b in segments:
-                            if segment_distance(x, y, a, b) <= radius:
-                                inked += 1
-                                break
-                coverage = inked / (supersample * supersample)
-                table.append(int(math.floor(coverage * 255.0 + 0.5)))
-        out.append(tuple(table))
-    return tuple(out)
+    segments = _SEGMENTS[_check_glyph(glyph)]
+    count = len(xs)
+    flags = bytearray(count)
+    borderline: List[Tuple[int, int]] = []
+    for ax, ay, bx, by, _dx, _dy, _length_sq in segments:
+        outer = _capsule_span(ax, ay, bx, by, y, _RADIUS + _SLACK)
+        if outer is None:
+            continue
+        first = bisect_left(xs, outer[0] - _SLACK)
+        last = bisect_right(xs, outer[1] + _SLACK)
+        if first >= last:
+            continue
+        inner = _capsule_span(ax, ay, bx, by, y, _RADIUS - _SLACK)
+        if inner is None:
+            borderline.append((first, last))
+            continue
+        start = max(bisect_left(xs, inner[0] + _SLACK), first)
+        end = min(bisect_right(xs, inner[1] - _SLACK), last)
+        if start >= end:
+            borderline.append((first, last))
+            continue
+        flags[start:end] = b"\x01" * (end - start)
+        if first < start:
+            borderline.append((first, start))
+        if end < last:
+            borderline.append((end, last))
+    for first, last in borderline:
+        for i in range(first, last):
+            if not flags[i] and _inked(segments, xs[i], y):
+                flags[i] = 1
+    return flags

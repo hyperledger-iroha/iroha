@@ -76,20 +76,29 @@ fn fixture(first: u32, second: u32) -> (Fixture, State) {
         [],
     );
     {
-        let mut parameters = world.parameters.block();
-        // Component custody registration owns its policy before the first snapshot.
-        parameters
-            .set_parameter(
-                crate::sumeragi::test_chain::crypto_fixture_policy()
-                    .into_parameter()
-                    .expect("canonical fixture crypto policy"),
-            )
-            .expect("install original fixture crypto policy");
-        parameters
-            .set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
+            .expect("funded parameter fixture block");
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            crate::sumeragi::lanes::routing::test_support::metadata(
                 iroha_data_model::block::consensus::SumeragiRootScope::Global,
-            ))
-            .unwrap();
+            ),
+            world.sccp_committee_generations.allocation_budget(),
+        )
+        .unwrap();
+        // Component custody/rekey tests require an explicit predecessor policy;
+        // this World-only fixture does not create a signed genesis or certified tip.
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                Algorithm::Ed25519,
+            ])
+            .unwrap()
+            .into_parameter()
+            .unwrap(),
+            world.sccp_committee_generations.allocation_budget(),
+        )
+        .expect("explicit component account crypto policy");
         parameters.commit();
     }
     let state = State::new_for_testing(

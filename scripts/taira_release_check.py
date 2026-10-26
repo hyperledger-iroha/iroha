@@ -2314,7 +2314,7 @@ CORE_NATIVE_CONNECTION_STAGES = (
         'sumeragi::lanes::store::refund_tests::batch_read_cancellation_after_cleanup_observation_cannot_be_lost',
         'sumeragi::lanes::registry::tests::isolation_tests::final_inflight_incoming_opening_cleans_cancelled_request_but_keeps_historical_recovery',
         'sumeragi::lanes::registry::tests::proposal_reads::cancelled_incoming_read_retires_request_only_opening_and_preserves_historical_join',
-        'sumeragi::lanes::registry::tests::proposal_reads::cancelled_original_sweep_does_not_wait_for_new_disjoint_opening',
+        'sumeragi::lanes::registry::tests::proposal_reads::original_lane_sweep_does_not_wait_for_new_disjoint_opening',
         'sumeragi::lanes::registry::tests::proposal_reads::original_sweep_preserves_a_later_same_key_native_owner',
         'sumeragi::lanes::registry::tests::proposal_reads::exhausted_registration_identity_refuses_before_new_native_custody',
         'sumeragi::executor::proposal_read_tests::successful_parent_commit_cancels_proposal_read_only_after_original_publication',

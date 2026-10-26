@@ -10,14 +10,14 @@ final class IrohaPeerWalletStructuralFixtureV1Tests: XCTestCase {
             kind: .request, frameBytes: KagemushaWalletWireV1.messageMaximumBytes)
         let payment = irohaPeerWalletExchangeEnvelopeV1(
             kind: .payment, frameBytes: KagemushaWalletWireV1.messageMaximumBytes)
-        XCTAssertEqual(request.count, 10_000)
-        XCTAssertEqual(payment.count, 10_000)
+        XCTAssertEqual(request.count, 10_034)
+        XCTAssertEqual(payment.count, 10_034)
         try KagemushaWalletWireV1.requireExchangeBinding(request: request, payment: payment)
         let companion = Data(repeating: 0xcd, count: IrohaPeerWalletPaymentV1.maximumCompanionBytes)
         let wrapped = try IrohaPeerKagemushaWalletAdapterV1.wrap(
             payment, payerCompanion: companion)
         XCTAssertEqual(wrapped.encoded.count, IrohaPeerNfcV1.maximumPaymentMessageBytes)
-        XCTAssertEqual(wrapped.encoded.count, 84 + 12_064)
+        XCTAssertEqual(wrapped.encoded.count, 84 + 12_098)
         XCTAssertThrowsError(try IrohaPeerWireMessageV1(
             profile: .kagemushaWalletV1, kind: .payment, schemaVersion: 1,
             canonicalPayload: payment)) {

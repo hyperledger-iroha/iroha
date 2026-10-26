@@ -18116,6 +18116,79 @@ test("resolveMultisigProposal resolves by exact occurrence ID", async () => {
   assert.deepEqual(result, responsePayload);
 });
 
+test("multisig proposal reads return approval times only when asked", async () => {
+  const sent = [];
+  const entry = (approvals) => ({
+    proposal_id: "a".repeat(64),
+    instructions_hash: "b".repeat(64),
+    operation_type: "ASSET_TRANSFER",
+    intent: null,
+    proposal: { approvals: [FIXTURE_ALICE_ID, FIXTURE_BOB_ID], proposed_at_ms: 46 },
+    ...(approvals === undefined ? {} : { approvals }),
+    status: "FINALIZED",
+    terminal_at_ms: 90,
+  });
+  const clientFor = (proposalEntry) =>
+    new ToriiClient(BASE_URL, {
+      fetchImpl: async (url, init) => {
+        sent.push(JSON.parse(init.body));
+        return createResponse({
+          status: 200,
+          jsonData: url.endsWith("/resolve")
+            ? { resolved_multisig_account_id: FIXTURE_ALICE_ID, ...proposalEntry }
+            : { resolved_multisig_account_id: FIXTURE_ALICE_ID, proposals: [proposalEntry], next_cursor: null },
+          headers: { "content-type": "application/json" },
+        });
+      },
+    });
+  const timed = [
+    { approver: FIXTURE_BOB_ID, approved_at_ms: 46, block_height: 3 },
+    { approver: FIXTURE_ALICE_ID, approved_at_ms: null, block_height: null },
+  ];
+  const listed = await clientFor(entry(timed)).queryMultisigProposals(
+    { multisigAccountId: FIXTURE_ALICE_ID, includeApprovals: true },
+    canonicalReadOptions(),
+  );
+  assert.deepEqual(sent.at(-1), { multisig_account_id: FIXTURE_ALICE_ID, include_approvals: true });
+  assert.deepEqual(listed.proposals[0].approvals, timed);
+  const resolved = await clientFor(entry(timed)).resolveMultisigProposal(
+    { multisigAccountId: FIXTURE_ALICE_ID, proposalId: "a".repeat(64), includeApprovals: true },
+    canonicalReadOptions(),
+  );
+  assert.equal(sent.at(-1).include_approvals, true);
+  assert.deepEqual(resolved.approvals, timed);
+
+  // A read that does not ask sends its original body and gets no approvals key back.
+  const plain = await clientFor(entry(undefined)).queryMultisigProposals(
+    { multisigAccountId: FIXTURE_ALICE_ID, includeApprovals: false },
+    canonicalReadOptions(),
+  );
+  assert.deepEqual(sent.at(-1), { multisig_account_id: FIXTURE_ALICE_ID });
+  assert.equal(Object.hasOwn(plain.proposals[0], "approvals"), false);
+  await assert.rejects(
+    () => clientFor(entry(undefined)).queryMultisigProposals(
+      { multisigAccountId: FIXTURE_ALICE_ID, includeApprovals: "yes" },
+      canonicalReadOptions(),
+    ),
+    /include_approvals must be a boolean/,
+  );
+
+  const query = (approvals) => clientFor(entry(approvals)).queryMultisigProposals(
+    { multisigAccountId: FIXTURE_ALICE_ID, includeApprovals: true },
+    canonicalReadOptions(),
+  );
+  await assert.rejects(() => query({}), /proposals\[0\]\.approvals must be an array/);
+  await assert.rejects(
+    () => query([{ ...timed[0], block_height: null }]),
+    /approvals\[0\] must give its time and block height together/,
+  );
+  await assert.rejects(() => query([timed[0], { ...timed[0], block_height: 4 }]), /repeats approver/);
+  await assert.rejects(
+    () => query([{ ...timed[0], signed_at: 46 }]),
+    /approvals\[0\] must contain exactly: approver, approved_at_ms, block_height/,
+  );
+});
+
 test("queryMultisigProposals rejects unsupported request and response statuses", async () => {
   const noFetchClient = new ToriiClient(BASE_URL, {
     fetchImpl: async () => {

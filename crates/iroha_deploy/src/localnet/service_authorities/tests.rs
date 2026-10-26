@@ -488,6 +488,26 @@ fn managed_authority_genesis_registers_grants_funds_and_keeps_services_disabled(
         )
         .unwrap()
     );
+    let original_fees = iroha_genesis::signed_genesis_root_fee_policy(&block).unwrap();
+    let mut local_fee_drift = config.clone();
+    local_fee_drift.nexus.fees.per_byte_fee = 777_u32.into();
+    local_fee_drift
+        .nexus
+        .fees
+        .successful_claim_fee_exempt_authorities
+        .clear();
+    assert_eq!(
+        configured_execution_policy(&local_fee_drift, &original_fees).unwrap(),
+        policy,
+        "retained service authority reads the exact signed fee policy, not a local recipe"
+    );
+    let mut changed_original = original_fees;
+    changed_original.per_byte_fee = 888_u32.into();
+    assert_ne!(
+        configured_execution_policy(&config, &changed_original).unwrap(),
+        policy,
+        "a different original fee parameter changes service execution authority"
+    );
     let mut external_compliance = config;
     external_compliance.nexus.compliance.enabled = true;
     assert!(

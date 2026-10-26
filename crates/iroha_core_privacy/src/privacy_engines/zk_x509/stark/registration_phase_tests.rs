@@ -214,6 +214,7 @@ fn deterministic_projection_proof_roundtrips_and_has_a_protocol_kat() {
         .map(|query| query.index)
         .collect::<BTreeSet<_>>();
     assert_eq!(indices.len(), QUERY_COUNT);
+    // The canonical 32-byte native BLAKE3 catalog binds every transcript frame.
     let digest: [u8; 32] = Sha256::digest(proof).into();
     eprintln!(
         "zk-x509-native-projection-proof-sha256={}",
@@ -221,7 +222,7 @@ fn deterministic_projection_proof_roundtrips_and_has_a_protocol_kat() {
     );
     assert_eq!(
         hex::encode(digest),
-        "0dd4a27570de1f36d102a887c61929bb8f94776afeba6568720e7758ca49aa2a",
+        "6f42a655b97ec22fbd4bab70cf04c401bb17d6d30d6897f4c885ba68897b4cac",
         "update only when the canonical projection proof protocol intentionally changes"
     );
 }
@@ -276,11 +277,12 @@ fn deterministic_proof_roundtrips_and_has_unique_post_grinding_queries() {
         .map(|query| query.index)
         .collect::<BTreeSet<_>>();
     assert_eq!(indices.len(), QUERY_COUNT);
+    // The canonical 32-byte native BLAKE3 catalog binds every transcript frame.
     let digest: [u8; 32] = Sha256::digest(proof).into();
     eprintln!("zk-x509-native-io-proof-sha256={}", hex::encode(digest));
     assert_eq!(
         hex::encode(digest),
-        "165791adcb5b95e31ec00387bc9ea82577977ff7c96e26ed7829fe7a784b1f94",
+        "672c2f231ed044de2ffc6aee74c686777dadaabdbec2a58a464afda6581af69f",
         "update only when the canonical proof protocol intentionally changes"
     );
 }

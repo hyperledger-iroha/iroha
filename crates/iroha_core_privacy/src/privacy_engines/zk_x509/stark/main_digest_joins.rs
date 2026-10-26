@@ -161,14 +161,12 @@ impl MainDigestJoinPlanV1 {
         })
     }
 
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     pub(super) fn source_v1(&self, signature: usize) -> Result<ColumnV1, ZkX509StarkErrorV1> {
         self.blocks
             .get(signature)
             .map(|b| b.source)
             .ok_or(ZkX509StarkErrorV1::ProfileMismatch)
     }
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     pub(super) fn target_v1(&self, signature: usize) -> Result<ColumnV1, ZkX509StarkErrorV1> {
         self.blocks
             .get(signature)
@@ -266,7 +264,6 @@ impl MainDigestJoinPlanV1 {
     }
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl MainDigestJoinPlanV1 {
     fn weighted_coefficients_v1(
         &self,

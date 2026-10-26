@@ -402,42 +402,42 @@ impl PreparedTransactionArtifact {
     }
 }
 
-/// Closed, non-secret failure codes for transaction signature verification.
+/// Closed signature failure codes, stored without a string pointer and length.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SignatureFailureCode {
-    /// The authority requires unsupported multisig signing.
+    /// The authority uses an unsupported multisignature form.
     UnsupportedMultisigAuthority,
-    /// Configuration does not permit the signature algorithm.
+    /// The signature algorithm is not allowed.
     AlgorithmNotPermitted,
-    /// The signing key does not control the payload authority.
+    /// The signature key does not match the authority.
     AuthorityKeyMismatch,
-    /// The cryptographic signature relation failed verification.
+    /// The cryptographic verifier rejected the signature.
     CryptographicVerificationFailed,
     /// The transaction contains no signatures.
     NoSignatures,
-    /// The multisig authority has no signature bundle.
+    /// Required multisignature proofs are missing.
     MissingMultisigSignatures,
-    /// A single-controller transaction carries a multisig proof.
+    /// Unexpected multisignature proofs were supplied.
     UnexpectedMultisigSignatures,
-    /// A multisig signature comes from a non-member.
+    /// A multisignature signer is not authorized.
     UnknownMultisigSigner,
-    /// Multisig signatures are duplicated or incorrectly ordered.
+    /// Multisignature proofs are not canonical.
     NonCanonicalMultisigSignatures,
-    /// The signature-bound fee intent is invalid.
+    /// The fee payment intent is invalid.
     InvalidFeePaymentIntent,
-    /// The signature-bound transaction lifetime is missing.
+    /// The transaction has no required lifetime.
     MissingTimeToLive,
-    /// An ordinary transaction uses the genesis-only domain.
+    /// The genesis domain is not allowed here.
     GenesisDomainNotAllowed,
-    /// A genesis transaction uses an ordinary network domain.
+    /// The genesis domain is required here.
     GenesisDomainRequired,
-    /// The multisig signatures do not meet the required weight.
+    /// The multisignature weight is below the threshold.
     InsufficientMultisigWeight,
 }
 
 impl SignatureFailureCode {
-    /// Stable MCP-facing failure code.
-    const fn as_str(self) -> &'static str {
+    /// Stable MCP reason code; never includes cryptographic diagnostics.
+    pub const fn as_str(self) -> &'static str {
         match self {
             Self::UnsupportedMultisigAuthority => "unsupported_multisig_authority",
             Self::AlgorithmNotPermitted => "algorithm_not_permitted",
@@ -1130,4 +1130,70 @@ fn unavailable_signature_inspection_is_neither_valid_nor_invalid() {
             code: SignatureFailureCode::CryptographicVerificationFailed
         }
     );
+}
+
+#[cfg(test)]
+#[test]
+fn signature_failure_codes_preserve_closed_wire_names() {
+    for (code, expected) in [
+        (
+            SignatureFailureCode::UnsupportedMultisigAuthority,
+            "unsupported_multisig_authority",
+        ),
+        (
+            SignatureFailureCode::AlgorithmNotPermitted,
+            "algorithm_not_permitted",
+        ),
+        (
+            SignatureFailureCode::AuthorityKeyMismatch,
+            "authority_key_mismatch",
+        ),
+        (
+            SignatureFailureCode::CryptographicVerificationFailed,
+            "cryptographic_verification_failed",
+        ),
+        (SignatureFailureCode::NoSignatures, "no_signatures"),
+        (
+            SignatureFailureCode::MissingMultisigSignatures,
+            "missing_multisig_signatures",
+        ),
+        (
+            SignatureFailureCode::UnexpectedMultisigSignatures,
+            "unexpected_multisig_signatures",
+        ),
+        (
+            SignatureFailureCode::UnknownMultisigSigner,
+            "unknown_multisig_signer",
+        ),
+        (
+            SignatureFailureCode::NonCanonicalMultisigSignatures,
+            "noncanonical_multisig_signatures",
+        ),
+        (
+            SignatureFailureCode::InvalidFeePaymentIntent,
+            "invalid_fee_payment_intent",
+        ),
+        (
+            SignatureFailureCode::MissingTimeToLive,
+            "missing_time_to_live",
+        ),
+        (
+            SignatureFailureCode::GenesisDomainNotAllowed,
+            "genesis_domain_not_allowed",
+        ),
+        (
+            SignatureFailureCode::GenesisDomainRequired,
+            "genesis_domain_required",
+        ),
+        (
+            SignatureFailureCode::InsufficientMultisigWeight,
+            "insufficient_multisig_weight",
+        ),
+    ] {
+        assert_eq!(code.as_str(), expected);
+        assert_eq!(
+            SignatureVerification::Invalid { code }.to_mcp_value()["failure_code"],
+            Value::String(expected.into())
+        );
+    }
 }

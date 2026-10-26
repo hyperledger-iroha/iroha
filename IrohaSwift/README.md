@@ -16,7 +16,7 @@ Features:
 - Collection queries for every Torii collection: typed filter builder with canonical text and JSON forms, cursor pages and on-demand iteration, typed `{code, message, details}` errors
 - Torii HTTP client (balances, transactions, explorer instructions/transactions/RWAs, subscriptions, VPN quote/session/receipt flows, pipeline recovery, time service, ZK attachments, contracts)
 - KAGEMUSHA wallet V1 wire helpers (`KagemushaWalletWireV1`) and the iPhone platform adapter of the Rust wallet Advance provider (`KagemushaWalletApplePlatformV1`)
-- Petal Stream animated optical transport: stream encoder/assembler, camera-frame decoder, software and vector renderers, SwiftUI player and AVFoundation camera analyzer
+- Petal Stream animated optical transport (format 5): stream encoder/assembler, camera-frame decoder, turn and katakana band readers, software and vector renderers, SwiftUI player and AVFoundation camera analyzer
 - Health & metrics helpers (fetch `/v1/health` text probe and `/v1/metrics` Prometheus/JSON payloads)
 - Norito envelope encoder (header + CRC64-XZ)
 - Required Native NoritoBridge integration (`dist/NoritoBridge.xcframework`) powering transfer/mint/burn builders and JSON inspection helpers
@@ -401,6 +401,14 @@ bounded by twelve attempts and the operation deadline. The card retains one
 context-bound durability worker across APDU timeouts; replays await that same work.
 Cancellation or session retirement prevents late results from entering another
 session and retains the shared worker lease until the callback actually returns.
+
+The reader restarts polling immediately after recoverable contact loss and keeps
+the contact open for redetection for up to thirty seconds, within its whole-operation
+deadline. Returning contact resumes the saved checkpoint immediately; cancellation
+ends the wait. `durableResponseTimeoutMilliseconds` can extend only `BEGIN_PAYMENT`
+and `COMMIT` responses (up to 35 seconds) for receiver persistence and proof work.
+Discovery, connection, reads, writes and final acknowledgement retain the shorter
+`platformCallTimeoutMilliseconds` deadline.
 
 An established card session that reaches Apple's duration limit reports
 `.failed(.sessionDurationReached)` before `.ended`; other failures and explicit
@@ -874,20 +882,28 @@ decoding and signature verification.
 
 ### Petal Stream optical transport
 
-Petal Stream is the animated "streaming QR" in the Sakura-storm look: four
-sakura-blossom finders, a `天`-shaped field of 256 katakana tiles and three
-dotted rings. Each frame carries three independent lanes (tile polarity `P`,
-katakana `K`, ring dots `D`), each one whitened Reed–Solomon codeword of
-fountain-coded 16-byte atoms; every fourth frame repeats the stream beacon in
-lane `D`, so a receiver can join at any frame and any single readable lane is
-useful. `Sources/IrohaSwift/Petal/` is a function-by-function port of the
-normative Rust crate `crates/iroha_petal` (decoder included) and passes the
-shared fixtures `fixtures/petal/petal_stream_v1.json` and
-`fixtures/petal/petal_captures_v1.json`.
+Petal Stream is the animated "streaming QR" in the Sakura-storm look (format
+5). A frame is a portrait card: a square of four sakura-blossom finders, a
+storm of 3,376 petals on 34 concentric bands (light inside a faint `天`, pink
+outside) and three dotted rings, with a band of 306 katakana tiles above and
+below it. The square carries five independent lanes (ring dots `D` and the
+four quarter-turn sectors `0`–`3` of the petal field), each one whitened
+Reed–Solomon codeword of fountain-coded 16-byte atoms, and a turn lane on top
+of every field lane: once a field lane is read, the first 360 of its lit petals
+each show two more bits by being turned 0°, 45°, 90° or 135° about their
+centres. Each band carries two kana lanes: its 298 data tiles show one bit in
+their polarity (a light tile with its katakana in ink, or a dark one with it in
+pink: lanes `P0`, `P1`) and four in their katakana (one of イロハニヘトワカレムノケアヒスン:
+lanes `K0`, `K1`). Every fourth frame repeats the stream beacon in lane `D`, so
+a receiver can join at any frame and any single readable lane is useful.
+`Sources/IrohaSwift/Petal/` is a function-by-function port of the normative
+Rust crate `crates/iroha_petal` (decoder, turn and band readers included) and
+passes the shared fixtures `fixtures/petal/petal_stream_v5.json` and
+`fixtures/petal/petal_captures_v5.json`.
 
 ```swift
-// Sender: play an IPM1 message at 8 fps. Payloads may be up to 16 MiB - 1;
-// receivers accept 64 KiB by default. `kind` is application-defined.
+// Sender: play an IPM1 message at the default 12 fps. Payloads may be up to
+// 16 MiB - 1; receivers accept 64 KiB by default. `kind` is application-defined.
 let encoder = try PetalStreamEncoder(payload: message.encoded, kind: 1)
 PetalStreamView(encoder: encoder)                    // IrohaSwiftTransferUI
 
@@ -901,18 +917,59 @@ analyzer.attach(to: videoDataOutput)
 - `PetalStreamEncoder` / `PetalStreamAssembler` are the sender and receiver
   stream codecs; `PetalDecoder.decode(_:)` reads one `PetalLuma` frame (any
   rotation, optionally mirrored) and `PetalScanSession` combines decoding,
-  reassembly and idle/absolute timeouts. The tile lanes `P` and `K` are first
-  read against the light and dark levels of the finders; a lane that stays
-  unreadable is read again with every patch normalised by its own contrast, so
-  over-exposure, veiling light, glare and shadows cancel out.
+  reassembly and idle/absolute timeouts. The field lanes are first read against
+  the light and dark levels of the finders; a lane that stays unreadable is read
+  again with every petal rescaled by its neighbourhood, so over-exposure,
+  veiling light, glare and shadows cancel out, and the pose (`PetalPose`) is
+  searched for lens distortion when the plain pose misses the outer petals.
 - `PetalScanSession` averages up to four captures of each of the last six
-  shown frames to recover tile lanes lost to noise or display banding.
+  shown frames to recover field lanes lost to noise or display banding.
   Independently decoded lane headers identify each group; unkeyed or torn
   captures are excluded, and recovered lanes must name the same shown frame.
   `PetalScanOutcome.merged` reports recovered lanes separately from the lanes
-  read in one capture; `PetalScanStats.merges`, `.mergedP` and `.mergedK` count
-  the attempts and recoveries. `PetalDecoder.tileEvidence(_:frame:)` and
-  `.mergeTiles(_:)` expose the same averaging for custom camera pipelines.
+  read in one capture; `PetalScanStats.merges` and `.mergedLanes` count the
+  attempts and recoveries (`.laneD` and `.fieldLanes` the single-capture reads).
+  `PetalDecoder.fieldEvidence(_:frame:)` and `.mergeFields(_:skip:)` expose the
+  same averaging for custom camera pipelines.
+- `PetalTurns` holds the turn lanes: the carrier order, the codec (each turn
+  lane is one RS(90, 68) codeword of four repair atoms and a CRC-32C check
+  bound to the header of the field lane it rides on) and the reader.
+  `PetalTurns.readTurns(_:frame:skip:)` samples every carrier petal of a
+  decoded capture in its own frame along a smooth correction of the pose, fits
+  the camera's blur, and gives each carrier the turn whose template matches
+  best once its lit neighbours are subtracted; a sharp 720p camera reads the
+  turn lanes (in the reference simulator a 12 KB Payment arrives in 1.65 s at
+  12 fps, against 2.98 s with format 2), a blurrier one the rest of the
+  frame. `PetalScanSession` tries each turn lane once per shown frame, backs
+  off after tries that read nothing (a camera too soft or too shaky for the
+  turns), and reports what it read in `PetalScanOutcome.turned` and
+  `PetalScanStats.turnTries`/`turnLanes`;
+  `PetalTurns.observedTurns(_:frame:)` exposes every carrier's decision for
+  diagnostics. The reader builds its tables once and reuses its working memory
+  across captures.
+- `PetalKana` holds the kana lanes: the codec (`P0`/`P1` one RS(37, 20)
+  codeword of one repair atom, `K0`/`K1` one RS(149, 116) codeword of seven,
+  each closed by a CRC-32C over the stream tag, the frame and the lane) and the
+  band reader. `PetalKana.readKana(_:frame:header:skip:)` places every tile of
+  a decoded capture by the square's pose, finds each band's eight pilot tiles,
+  fits an affine correction, the camera's blur and the light and dark levels to
+  them, and gives each data tile the polarity its level shows and the katakana
+  whose template correlates best; the check also accepts the frames before and
+  after the square's, which a rolling shutter can show. `PetalScanSession`
+  reads each band once per shown frame, with its own back-off, and the bands go
+  first: a capture whose bands read a lane tries the turn lanes too only when
+  its work and the session's last turn try fit a 30 fps camera's frame time
+  (`PetalScanSession.captureBudgetMilliseconds`), and otherwise leaves them to
+  the shown frame's next capture, because both on one capture overran a 12 fps
+  frame on a slow phone core. The session times its work on the monotonic
+  clock; `init(limits:workCost:)` takes a model's costs in their place, and
+  `PetalScanStats.spareTurns` counts the captures that had the time.
+  `PetalScanOutcome.kana` and
+  `PetalScanStats.kanaTries`/`kanaLanes` report the reads, and
+  `PetalKana.observeBand(_:frame:band:)` exposes every tile's decision. In the
+  reference simulator a 12 KB Payment shown upright at 12 fps arrives in about
+  1.2 s with a sharp 720p camera (1.65 s with format 3) and 1.75 s with a soft
+  one (2.98 s).
 - When a thumb, a glare or the edge of the frame hides one corner blossom,
   three blossoms that form a corner still locate the code: the fourth corner is
   inferred, refined against the dotted rings and reported as
@@ -921,10 +978,15 @@ analyzer.attach(to: videoDataOutput)
   the next frames with `PetalDecoder.track(_:previous:)`, which follows the
   blossoms from the last pose (at most 500 ms old) instead of searching the
   whole image; `PetalScanStats.tracked` and `.inferred` count both.
-- `PetalRenderer` is the pixel-exact reference software renderer;
-  `PetalDrawList` describes a frame for vector backends and
+- `PetalRenderer` is the pixel-exact reference software renderer of the card
+  (`PetalRenderer.cardHeightPixels(_:)` tall for a given width);
+  `PetalDrawList` describes a frame for vector backends (finders, the faint
+  `天`, lit petals as notched ellipses along their turned axes, lit dots, and
+  the katakana tiles with their glyph strokes, `kanaGlyphStrokes(_:)`) and
   `PetalCoreGraphicsRenderer` / `PetalFrameView` / `PetalStreamView`
-  (`IrohaSwiftTransferUI`) draw it with CoreGraphics and SwiftUI.
+  (`IrohaSwiftTransferUI`) draw the portrait card with CoreGraphics and
+  SwiftUI, antialiased and with every petal's notch, which tells the turn
+  reader a petal from one turned by half a turn.
 - `PetalCameraAnalyzer` (`IrohaSwiftMobileTransports`) is an
   `AVCaptureVideoDataOutput` delegate that reads the Y plane of bi-planar YUV
   frames (or converts BGRA), reports `PetalScanOutcome` values through a
@@ -932,14 +994,16 @@ analyzer.attach(to: videoDataOutput)
   Scanner setup: use the 1280×720 session preset
   (`AVCaptureSession.Preset.hd1280x720`) where the device sustains about five
   decoded frames per second and fall back to 640×480 only when it cannot.
-  Lane `K` is harder to read at 480p; averaging repeated captures of a shown
-  frame can recover it. Automatic exposure over-exposes a mostly black screen, so set
+  The field lanes are harder to read at 480p; averaging repeated captures of a
+  shown frame can recover them. The turn lanes need a camera that resolves the
+  petals' shapes. Keep the whole card in view, so the bands are read too.
+  Automatic exposure over-exposes a mostly black screen, so set
   the exposure target bias to about −1 EV
   (`AVCaptureDevice.setExposureTargetBias`) or lock the exposure once the code
-  has been seen (`specs/petal_stream.md` section 8, "Scanner guidance").
+  has been seen (`specs/petal_stream.md` section 8).
 
-Run the Petal suites (codec, fixture conformance, golden captures, renderer,
-SwiftUI and camera glue) with:
+Run the Petal suites (codec, fixture conformance, golden captures, turn and
+kana lanes, renderer, SwiftUI and camera glue) with:
 
 ```bash
 swift test --package-path IrohaSwift --disable-automatic-resolution --filter Petal
@@ -1701,6 +1765,16 @@ four-byte `noritoDiscriminant`, `canonicalTypedVariantLabel`,
 `expectedProofSystem`, and `expectedEngine`; the proof-system and native-engine
 tags remain distinct Swift types even where their current numeric ordinals
 coincide. Unknown tags and legacy variant labels fail closed.
+`ZkX509SigningPreparationV1.prepareOwnershipSigningV1(statementNorito:)` accepts
+one canonical Norito `PrivacyStatementV1` archive carrying the X.509 variant.
+The current native holder implementation returns its canonical `message` and
+32-byte SHA-256 `digest` together. A P-256 message-signing API hashes `message`
+exactly once; a prehash API signs `digest` directly. Keep the subject key in the
+external signer and normalize its signature to low-s, fixed 64-byte `r || s`
+before building a witness. This preparation neither authenticates current
+State nor proves a credential, pairs a device, or establishes network readiness.
+Missing native support and noncanonical or wrong-protocol input fail explicitly.
+
 The confidential-v2 Swift wallet helpers expose
 `ConfidentialNoteOpening`, `ConfidentialNoteCommitment.deriveFromOpening`,
 `ConfidentialNoteNullifier`, `ConfidentialOwnerTag`,

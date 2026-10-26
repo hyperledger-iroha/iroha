@@ -314,7 +314,6 @@ pub(super) fn residues<A: PolynomialAirFieldV1>(
     output
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn span(
     node: &ZkX509Rfc5280NodeProvenanceV1,
     spec: SourceSpec,
@@ -331,7 +330,6 @@ fn span(
     Ok((start, length))
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(super) fn nodes(
     trace: &ZkX509Rfc5280TraceV1,
 ) -> Result<[Option<&ZkX509Rfc5280NodeProvenanceV1>; 9], ZkX509Rfc5280StarkErrorV1> {
@@ -378,7 +376,6 @@ pub(super) fn nodes(
     Ok(output)
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(super) fn populate_row(
     row: &mut ZkX509Rfc5280StarkBaseRowV1,
     trace: &ZkX509Rfc5280TraceV1,
@@ -455,7 +452,6 @@ pub(super) fn populate_row(
     Ok(())
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(super) fn byte_multiplicity(
     nodes: &[Option<&ZkX509Rfc5280NodeProvenanceV1>; 9],
     document: usize,
@@ -479,7 +475,6 @@ pub(super) fn byte_multiplicity(
         .count()
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(super) fn node_multiplicity(
     nodes: &[Option<&ZkX509Rfc5280NodeProvenanceV1>; 9],
     document: usize,

@@ -48,14 +48,15 @@ fn fee_enabled_single_transfer_uses_canonical_output_owner() {
         ],
         [],
     );
-    let mut nexus = iroha_config::parameters::actual::Nexus::default();
-    nexus.fees.base_fee = Quantity::from(1_u32);
-    nexus.fees.per_byte_fee = Quantity::zero();
-    nexus.fees.per_instruction_fee = Quantity::zero();
-    nexus.fees.per_gas_unit_fee = Quantity::zero();
-    nexus.fees.fee_asset_id = fee_asset_definition_id.clone();
-    nexus.fees.fee_sink_account_id = sink_id.clone();
-    let state = configured_component_state(world, chain_id.clone(), nexus);
+    let nexus = iroha_config::parameters::actual::Nexus::default();
+    let mut fees = iroha_config::parameters::defaults::nexus::fees::genesis_policy();
+    fees.base_fee = Quantity::from(1_u32);
+    fees.per_byte_fee = Quantity::zero();
+    fees.per_instruction_fee = Quantity::zero();
+    fees.per_gas_unit_fee = Quantity::zero();
+    fees.fee_asset_id = fee_asset_definition_id.clone();
+    fees.fee_sink_account_id = sink_id.clone();
+    let state = configured_component_state(world, chain_id.clone(), nexus, fees);
     let (max_clock_drift, tx_limits) = {
         let state_view = state.world.view();
         let params = state_view.parameters();
@@ -173,14 +174,15 @@ fn fee_enabled_account_metadata_uses_canonical_output_owner() {
         [Asset::new(payer_fee_asset.clone(), Quantity::from(10_u32))],
         [],
     );
-    let mut nexus = iroha_config::parameters::actual::Nexus::default();
-    nexus.fees.base_fee = Quantity::from(1_u32);
-    nexus.fees.per_byte_fee = Quantity::zero();
-    nexus.fees.per_instruction_fee = Quantity::zero();
-    nexus.fees.per_gas_unit_fee = Quantity::zero();
-    nexus.fees.fee_asset_id = fee_asset_definition_id.clone();
-    nexus.fees.fee_sink_account_id = sink_id.clone();
-    let state = configured_component_state(world, chain_id.clone(), nexus);
+    let nexus = iroha_config::parameters::actual::Nexus::default();
+    let mut fees = iroha_config::parameters::defaults::nexus::fees::genesis_policy();
+    fees.base_fee = Quantity::from(1_u32);
+    fees.per_byte_fee = Quantity::zero();
+    fees.per_instruction_fee = Quantity::zero();
+    fees.per_gas_unit_fee = Quantity::zero();
+    fees.fee_asset_id = fee_asset_definition_id.clone();
+    fees.fee_sink_account_id = sink_id.clone();
+    let state = configured_component_state(world, chain_id.clone(), nexus, fees);
     let (max_clock_drift, tx_limits) = {
         let state_view = state.world.view();
         let params = state_view.parameters();
@@ -310,14 +312,15 @@ fn fee_enabled_single_transfer_rejects_without_partial_state_when_fee_missing() 
         ],
         [],
     );
-    let mut nexus = iroha_config::parameters::actual::Nexus::default();
-    nexus.fees.base_fee = Quantity::from(1_u32);
-    nexus.fees.per_byte_fee = Quantity::zero();
-    nexus.fees.per_instruction_fee = Quantity::zero();
-    nexus.fees.per_gas_unit_fee = Quantity::zero();
-    nexus.fees.fee_asset_id = fee_asset_definition_id.clone();
-    nexus.fees.fee_sink_account_id = sink_id.clone();
-    let state = configured_component_state(world, chain_id.clone(), nexus);
+    let nexus = iroha_config::parameters::actual::Nexus::default();
+    let mut fees = iroha_config::parameters::defaults::nexus::fees::genesis_policy();
+    fees.base_fee = Quantity::from(1_u32);
+    fees.per_byte_fee = Quantity::zero();
+    fees.per_instruction_fee = Quantity::zero();
+    fees.per_gas_unit_fee = Quantity::zero();
+    fees.fee_asset_id = fee_asset_definition_id.clone();
+    fees.fee_sink_account_id = sink_id.clone();
+    let state = configured_component_state(world, chain_id.clone(), nexus, fees);
     let (max_clock_drift, tx_limits) = {
         let state_view = state.world.view();
         let params = state_view.parameters();
@@ -473,14 +476,15 @@ fn fee_enabled_single_transfer_with_active_data_trigger_retains_callback_outputs
         ],
         [],
     );
-    let mut nexus = iroha_config::parameters::actual::Nexus::default();
-    nexus.fees.base_fee = Quantity::from(1_u32);
-    nexus.fees.per_byte_fee = Quantity::zero();
-    nexus.fees.per_instruction_fee = Quantity::zero();
-    nexus.fees.per_gas_unit_fee = Quantity::zero();
-    nexus.fees.fee_asset_id = fee_asset_definition_id.clone();
-    nexus.fees.fee_sink_account_id = sink_id.clone();
-    let state = configured_component_state(world, chain_id.clone(), nexus);
+    let nexus = iroha_config::parameters::actual::Nexus::default();
+    let mut fees = iroha_config::parameters::defaults::nexus::fees::genesis_policy();
+    fees.base_fee = Quantity::from(1_u32);
+    fees.per_byte_fee = Quantity::zero();
+    fees.per_instruction_fee = Quantity::zero();
+    fees.per_gas_unit_fee = Quantity::zero();
+    fees.fee_asset_id = fee_asset_definition_id.clone();
+    fees.fee_sink_account_id = sink_id.clone();
+    let state = configured_component_state(world, chain_id.clone(), nexus, fees);
     let native_chain = component_chain(state);
     let state = native_chain.state();
     let trigger_marker_key: Name = "fee_trigger_marker".parse().expect("metadata key");
@@ -969,14 +973,15 @@ fn fee_enabled_single_transfer_rejects_without_partial_state_when_fee_asset_miss
         ],
         [],
     );
-    let mut nexus = iroha_config::parameters::actual::Nexus::default();
-    nexus.fees.base_fee = Quantity::from(1_u32);
-    nexus.fees.per_byte_fee = Quantity::zero();
-    nexus.fees.per_instruction_fee = Quantity::zero();
-    nexus.fees.per_gas_unit_fee = Quantity::zero();
-    nexus.fees.fee_asset_id = fee_asset_definition_id.clone();
-    nexus.fees.fee_sink_account_id = sink_id.clone();
-    let state = configured_component_state(world, chain_id.clone(), nexus);
+    let nexus = iroha_config::parameters::actual::Nexus::default();
+    let mut fees = iroha_config::parameters::defaults::nexus::fees::genesis_policy();
+    fees.base_fee = Quantity::from(1_u32);
+    fees.per_byte_fee = Quantity::zero();
+    fees.per_instruction_fee = Quantity::zero();
+    fees.per_gas_unit_fee = Quantity::zero();
+    fees.fee_asset_id = fee_asset_definition_id.clone();
+    fees.fee_sink_account_id = sink_id.clone();
+    let state = configured_component_state(world, chain_id.clone(), nexus, fees);
     let (max_clock_drift, tx_limits) = {
         let state_view = state.world.view();
         let params = state_view.parameters();
@@ -1114,14 +1119,15 @@ fn fee_enabled_transfer_fee_same_asset_rolls_back_business_and_settles_actual_wo
         ],
         [],
     );
-    let mut nexus = iroha_config::parameters::actual::Nexus::default();
-    nexus.fees.base_fee = Quantity::from(1_u32);
-    nexus.fees.per_byte_fee = Quantity::zero();
-    nexus.fees.per_instruction_fee = Quantity::zero();
-    nexus.fees.per_gas_unit_fee = Quantity::zero();
-    nexus.fees.fee_asset_id = asset_definition_id.clone();
-    nexus.fees.fee_sink_account_id = sink_id.clone();
-    let state = configured_component_state(world, chain_id.clone(), nexus);
+    let nexus = iroha_config::parameters::actual::Nexus::default();
+    let mut fees = iroha_config::parameters::defaults::nexus::fees::genesis_policy();
+    fees.base_fee = Quantity::from(1_u32);
+    fees.per_byte_fee = Quantity::zero();
+    fees.per_instruction_fee = Quantity::zero();
+    fees.per_gas_unit_fee = Quantity::zero();
+    fees.fee_asset_id = asset_definition_id.clone();
+    fees.fee_sink_account_id = sink_id.clone();
+    let state = configured_component_state(world, chain_id.clone(), nexus, fees);
     let (max_clock_drift, tx_limits) = {
         let state_view = state.world.view();
         let params = state_view.parameters();
@@ -1252,14 +1258,15 @@ fn fee_enabled_shared_fee_balance_rejects_later_transfer_without_rolling_back_pr
         ],
         [],
     );
-    let mut nexus = iroha_config::parameters::actual::Nexus::default();
-    nexus.fees.base_fee = Quantity::from(1_u32);
-    nexus.fees.per_byte_fee = Quantity::zero();
-    nexus.fees.per_instruction_fee = Quantity::zero();
-    nexus.fees.per_gas_unit_fee = Quantity::zero();
-    nexus.fees.fee_asset_id = fee_asset_definition_id.clone();
-    nexus.fees.fee_sink_account_id = sink_id.clone();
-    let state = configured_component_state(world, chain_id.clone(), nexus);
+    let nexus = iroha_config::parameters::actual::Nexus::default();
+    let mut fees = iroha_config::parameters::defaults::nexus::fees::genesis_policy();
+    fees.base_fee = Quantity::from(1_u32);
+    fees.per_byte_fee = Quantity::zero();
+    fees.per_instruction_fee = Quantity::zero();
+    fees.per_gas_unit_fee = Quantity::zero();
+    fees.fee_asset_id = fee_asset_definition_id.clone();
+    fees.fee_sink_account_id = sink_id.clone();
+    let state = configured_component_state(world, chain_id.clone(), nexus, fees);
     let (max_clock_drift, tx_limits) = {
         let state_view = state.world.view();
         let params = state_view.parameters();
@@ -1442,14 +1449,15 @@ fn fee_enabled_transfer_then_failing_instruction_rolls_back_business_effects() {
         ],
         [],
     );
-    let mut nexus = iroha_config::parameters::actual::Nexus::default();
-    nexus.fees.base_fee = Quantity::from(1_u32);
-    nexus.fees.per_byte_fee = Quantity::zero();
-    nexus.fees.per_instruction_fee = Quantity::zero();
-    nexus.fees.per_gas_unit_fee = Quantity::zero();
-    nexus.fees.fee_asset_id = fee_asset_definition_id.clone();
-    nexus.fees.fee_sink_account_id = sink_id.clone();
-    let state = configured_component_state(world, chain_id.clone(), nexus);
+    let nexus = iroha_config::parameters::actual::Nexus::default();
+    let mut fees = iroha_config::parameters::defaults::nexus::fees::genesis_policy();
+    fees.base_fee = Quantity::from(1_u32);
+    fees.per_byte_fee = Quantity::zero();
+    fees.per_instruction_fee = Quantity::zero();
+    fees.per_gas_unit_fee = Quantity::zero();
+    fees.fee_asset_id = fee_asset_definition_id.clone();
+    fees.fee_sink_account_id = sink_id.clone();
+    let state = configured_component_state(world, chain_id.clone(), nexus, fees);
     let (max_clock_drift, tx_limits) = {
         let state_view = state.world.view();
         let params = state_view.parameters();
@@ -1614,20 +1622,26 @@ fn fee_enabled_non_increasing_sequence_rejects_before_transfer_or_fee() {
         ],
         [],
     );
-    let mut params = iroha_data_model::parameter::system::Parameters::default();
-    params.transaction = params.transaction.with_ingress_enforcement(false, true);
-    world.parameters = mv::cell::Cell::new(
-        crate::state::StateParameters::try_from(params).expect("valid fixture parameters"),
-    );
+    for parameter in [
+        iroha_data_model::parameter::system::TransactionParameter::RequireHeightTtl(false),
+        iroha_data_model::parameter::system::TransactionParameter::RequireSequence(true),
+    ] {
+        world
+            .set_parameter_for_testing(iroha_data_model::parameter::Parameter::Transaction(
+                parameter,
+            ))
+            .expect("valid fixture parameters");
+    }
     world.tx_sequences.insert(payer_id.clone(), 5);
-    let mut nexus = iroha_config::parameters::actual::Nexus::default();
-    nexus.fees.base_fee = Quantity::from(1_u32);
-    nexus.fees.per_byte_fee = Quantity::zero();
-    nexus.fees.per_instruction_fee = Quantity::zero();
-    nexus.fees.per_gas_unit_fee = Quantity::zero();
-    nexus.fees.fee_asset_id = fee_asset_definition_id.clone();
-    nexus.fees.fee_sink_account_id = sink_id.clone();
-    let state = configured_component_state(world, chain_id.clone(), nexus);
+    let nexus = iroha_config::parameters::actual::Nexus::default();
+    let mut fees = iroha_config::parameters::defaults::nexus::fees::genesis_policy();
+    fees.base_fee = Quantity::from(1_u32);
+    fees.per_byte_fee = Quantity::zero();
+    fees.per_instruction_fee = Quantity::zero();
+    fees.per_gas_unit_fee = Quantity::zero();
+    fees.fee_asset_id = fee_asset_definition_id.clone();
+    fees.fee_sink_account_id = sink_id.clone();
+    let state = configured_component_state(world, chain_id.clone(), nexus, fees);
     let native_chain = component_chain_with_genesis_parameters(
         state,
         vec![iroha_data_model::parameter::Parameter::Transaction(
@@ -1926,14 +1940,15 @@ fn legacy_fee_sponsor_metadata_rejects_when_nexus_fees_are_configured() {
         ],
         [],
     );
-    let mut nexus = iroha_config::parameters::actual::Nexus::default();
-    nexus.fees.base_fee = Quantity::from(1_u32);
-    nexus.fees.per_byte_fee = Quantity::zero();
-    nexus.fees.per_instruction_fee = Quantity::zero();
-    nexus.fees.per_gas_unit_fee = Quantity::zero();
-    nexus.fees.fee_asset_id = fee_asset_definition_id.clone();
-    nexus.fees.fee_sink_account_id = sink_id.clone();
-    let state = configured_component_state(world, chain_id.clone(), nexus);
+    let nexus = iroha_config::parameters::actual::Nexus::default();
+    let mut fees = iroha_config::parameters::defaults::nexus::fees::genesis_policy();
+    fees.base_fee = Quantity::from(1_u32);
+    fees.per_byte_fee = Quantity::zero();
+    fees.per_instruction_fee = Quantity::zero();
+    fees.per_gas_unit_fee = Quantity::zero();
+    fees.fee_asset_id = fee_asset_definition_id.clone();
+    fees.fee_sink_account_id = sink_id.clone();
+    let state = configured_component_state(world, chain_id.clone(), nexus, fees);
     let mut metadata = Metadata::default();
     metadata.insert(
         Name::from_str("fee_sponsor").expect("metadata key"),
@@ -1988,7 +2003,7 @@ fn legacy_fee_sponsor_metadata_rejects_when_nexus_fees_are_configured() {
     );
 }
 #[test]
-fn local_fee_cache_cannot_mutate_committed_policy_or_balances() {
+fn local_configuration_cannot_mutate_committed_fee_policy_or_balances() {
     let _guard = crate::status::operator_status_test_guard();
     crate::status::reset_nexus_economics_for_tests();
     let chain_id = ChainId::from("fee-detached-invalid-fee-asset-test");
@@ -2012,7 +2027,7 @@ fn local_fee_cache_cannot_mutate_committed_policy_or_balances() {
     let payer_transfer_asset = AssetId::of(transfer_asset_definition_id.clone(), payer_id.clone());
     let recipient_transfer_asset =
         AssetId::of(transfer_asset_definition_id.clone(), recipient_id.clone());
-    let world = World::with_assets(
+    let mut world = World::with_assets(
         [domain],
         [payer, recipient, sink],
         [transfer_asset_definition],
@@ -2024,39 +2039,89 @@ fn local_fee_cache_cannot_mutate_committed_policy_or_balances() {
     );
     let kura = Arc::new(Kura::blank_kura_for_testing());
     let query_handle = LiveQueryStore::start_test();
-    let mut nexus = iroha_config::parameters::actual::Nexus::default();
-    nexus.fees.base_fee = Quantity::from(1_u32);
-    nexus.fees.per_byte_fee = Quantity::zero();
-    nexus.fees.per_instruction_fee = Quantity::zero();
-    nexus.fees.per_gas_unit_fee = Quantity::zero();
-    nexus.fees.fee_asset_id = AssetDefinitionId::derive_from_components(
+    let mut fees = iroha_config::parameters::defaults::nexus::fees::genesis_policy();
+    fees.base_fee = Quantity::from(1_u32);
+    fees.per_byte_fee = Quantity::zero();
+    fees.per_instruction_fee = Quantity::zero();
+    fees.per_gas_unit_fee = Quantity::zero();
+    fees.fee_asset_id = AssetDefinitionId::derive_from_components(
         DomainId::try_new("wrong_fee", "universal").unwrap(),
         "xor".parse().unwrap(),
     );
-    nexus.fees.fee_sink_account_id = sink_id.clone();
+    fees.fee_sink_account_id = sink_id.clone();
+    fees.sponsor_vault_custody_account_id = recipient_id.clone();
+    fees.successful_claim_fee_exempt_authorities
+        .try_insert(payer_id.clone())
+        .unwrap();
+    world
+        .set_parameter_for_testing(iroha_data_model::parameter::Parameter::Custom(
+            fees.clone()
+                .into_custom_parameter()
+                .expect("explicit complete fee policy"),
+        ))
+        .expect("admit the original fixture fee policy");
+    // The committed fee policy and SNS policies must describe the same currency
+    // before a local configuration change can test monetary-state preservation.
+    crate::sns::seed_default_namespace_policies_for_payment_asset(
+        &mut world,
+        &fees.fee_asset_id.canonical_address(),
+    );
+    crate::sns::ensure_default_namespace_policies_match_configured(
+        &world.view(),
+        &fees.fee_asset_id.canonical_address(),
+    )
+    .expect("fixture namespaces agree with the original committed currency");
     let mut state = State::new_with_chain(world, Arc::clone(&kura), query_handle, chain_id);
-    let original_config = state.nexus_snapshot();
+    let original_policy = state
+        .world
+        .parameters
+        .view()
+        .get()
+        .root_fees()
+        .unwrap()
+        .clone();
+    assert_eq!(original_policy, fees);
     let original_world = norito::json::to_json(&state.world).unwrap();
+    let mut nexus = state.nexus_snapshot();
+    let original_maximum = nexus.staking.max_validators;
+    nexus.staking.max_validators =
+        std::num::NonZeroU32::new(if original_maximum.get() == 7 { 4 } else { 7 }).unwrap();
+    let changed_maximum = nexus.staking.max_validators;
     state
         .set_nexus_from_config(nexus)
-        .expect("local cache fields do not replace committed monetary authority");
+        .expect("local validator settings do not replace committed monetary authority");
+    assert_ne!(original_maximum, changed_maximum);
+    assert_eq!(
+        state.nexus_snapshot().staking.max_validators,
+        changed_maximum
+    );
     assert_eq!(norito::json::to_json(&state.world).unwrap(), original_world);
-    let retained = state.nexus_snapshot().fees;
-    assert_eq!(retained.fee_asset_id, original_config.fees.fee_asset_id);
+    let parameters = state.world.parameters.view();
+    let retained = parameters
+        .get()
+        .root_fees()
+        .expect("original committed fee policy");
+    assert_eq!(retained, &original_policy);
+    assert_eq!(
+        retained.sponsor_vault_custody_account_id,
+        original_policy.sponsor_vault_custody_account_id
+    );
+    assert_eq!(
+        retained.successful_claim_fee_exempt_authorities,
+        original_policy.successful_claim_fee_exempt_authorities
+    );
+    assert_eq!(retained.fee_asset_id, original_policy.fee_asset_id);
     assert_eq!(
         retained.fee_sink_account_id,
-        original_config.fees.fee_sink_account_id
+        original_policy.fee_sink_account_id
     );
-    assert_eq!(retained.base_fee, original_config.fees.base_fee);
-    assert_eq!(retained.per_byte_fee, original_config.fees.per_byte_fee);
+    assert_eq!(retained.base_fee, original_policy.base_fee);
+    assert_eq!(retained.per_byte_fee, original_policy.per_byte_fee);
     assert_eq!(
         retained.per_instruction_fee,
-        original_config.fees.per_instruction_fee
+        original_policy.per_instruction_fee
     );
-    assert_eq!(
-        retained.per_gas_unit_fee,
-        original_config.fees.per_gas_unit_fee
-    );
+    assert_eq!(retained.per_gas_unit_fee, original_policy.per_gas_unit_fee);
     assert_eq!(state.kura().blocks_count(), 0);
     let view = state.view();
     assert_eq!(
@@ -2112,19 +2177,19 @@ fn rejected_data_trigger_execution_still_charges_nexus_fee() {
     );
     let _kura = Arc::new(Kura::blank_kura_for_testing());
     let _query_handle = LiveQueryStore::start_test();
-    let mut nexus = iroha_config::parameters::actual::Nexus::default();
-    nexus.fees.base_fee = Quantity::from(1_u32);
-    nexus.fees.per_byte_fee = Quantity::zero();
-    nexus.fees.per_instruction_fee = Quantity::zero();
-    nexus.fees.per_gas_unit_fee = Quantity::zero();
-    nexus.fees.fee_asset_id = asset_definition_id.clone();
-    nexus.fees.fee_sink_account_id = sink_id.clone();
-    let state = configured_component_state(world, chain_id.clone(), nexus);
+    let nexus = iroha_config::parameters::actual::Nexus::default();
+    let mut fees = iroha_config::parameters::defaults::nexus::fees::genesis_policy();
+    fees.base_fee = Quantity::from(1_u32);
+    fees.per_byte_fee = Quantity::zero();
+    fees.per_instruction_fee = Quantity::zero();
+    fees.per_gas_unit_fee = Quantity::zero();
+    fees.fee_asset_id = asset_definition_id.clone();
+    fees.fee_sink_account_id = sink_id.clone();
+    let state = configured_component_state(world, chain_id.clone(), nexus, fees);
     {
         let mut world = state.world.block();
         world
-            .parameters
-            .set_parameter(iroha_data_model::parameter::Parameter::SmartContract(
+            .set_parameter_for_testing(iroha_data_model::parameter::Parameter::SmartContract(
                 iroha_data_model::parameter::SmartContractParameter::ExecutionDepth(0),
             ))
             .expect("valid fixture parameters");

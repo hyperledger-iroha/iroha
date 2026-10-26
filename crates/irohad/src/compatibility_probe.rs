@@ -12,7 +12,8 @@
 
 use crate::authenticated_genesis::AuthenticatedGenesis;
 use crate::{
-    Config, GenesisBlock, MainError, build_consensus_config_caps, consensus_caps_from_genesis,
+    Config, GenesisBlock, MainError, build_consensus_config_caps,
+    build_signed_genesis_consensus_config_caps, consensus_caps_from_genesis,
     freeze_lane_compliance_for_startup_replay, freeze_lane_manifests_for_startup_replay,
     snapshot_mode_allows_restore,
 };
@@ -95,8 +96,9 @@ pub struct ConfigCompatibilityV1 {
     pub protocol_version: u16,
     /// Hash of the compiled consensus and block wire schema plus the IVM ABI.
     pub wire_schema_hash: String,
-    /// Digest of the configured Nexus consensus policy, including lane manifest and compliance
-    /// policy digests (handshake-bound).
+    /// Digest of the configured Nexus consensus policy and loaded manifest/compliance identities.
+    /// Ready reports bind authenticated signed-genesis fees as the handshake does;
+    /// pending reports encode actual absence of a signed monetary authority.
     pub nexus_policy_digest: String,
     /// Digest of this build's IVM gas schedule (handshake-bound).
     pub gas_schedule_hash: String,
@@ -167,13 +169,21 @@ pub fn config_compatibility_v1(
         .attach("lane manifest registry is not ready")?;
     let compliance = freeze_lane_compliance_for_startup_replay(&config.nexus)
         .change_context(MainError::Config)?;
-    let caps = build_consensus_config_caps(
-        &config.nexus,
-        compliance
-            .as_ref()
-            .map(|engine| engine.consensus_policy_digest()),
-        Some(lane_manifests.baseline_consensus_policy_digest()),
-    )
+    let compliance_digest = compliance
+        .as_ref()
+        .map(|engine| engine.consensus_policy_digest());
+    let manifest_digest = Some(lane_manifests.baseline_consensus_policy_digest());
+    let caps = match genesis {
+        Some((block, _)) => build_signed_genesis_consensus_config_caps(
+            &config.nexus,
+            &block.0,
+            compliance_digest,
+            manifest_digest,
+        ),
+        None => {
+            build_consensus_config_caps(&config.nexus, None, compliance_digest, manifest_digest)
+        }
+    }
     .change_context(MainError::Config)?;
     let (status, config_fingerprint, execution_policy_hash, nexus_amx_context_hash, node_identity) =
         match genesis {

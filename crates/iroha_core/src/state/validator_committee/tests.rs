@@ -339,13 +339,15 @@ fn committee_bls_consent_and_beacon_readiness_reject_network_generation_replay()
     let fixture = fixture(4);
     let key = KeyPair::from_seed(vec![1; 32], Algorithm::BlsNormal);
     let owner = iroha_test_samples::ALICE_ID.clone();
-    let asset: iroha_data_model::asset::AssetDefinitionId =
-        iroha_config::parameters::actual::NexusStaking::default()
-            .stake_asset_id
-            .parse()
-            .unwrap();
+    // This signature-only component uses an explicit monetary author; it never reads node settings.
+    let monetary = iroha_genesis::default_staking_policy(
+        SumeragiNposParameters::default().xor_asset_definition_id,
+        iroha_test_samples::BOB_ID.clone(),
+        iroha_test_samples::BOB_ID.clone(),
+    );
+    let asset = monetary.stake_asset_id.clone();
     let source = iroha_data_model::asset::AssetId::new(asset.clone(), owner.clone());
-    let escrow = iroha_data_model::asset::AssetId::new(asset, iroha_test_samples::BOB_ID.clone());
+    let escrow = iroha_data_model::asset::AssetId::new(asset, monetary.stake_escrow_account_id);
     let registration = RegisterPublicLaneValidator::new(
         LaneId::SINGLE,
         owner.clone(),
@@ -581,17 +583,21 @@ fn committee_retention_extends_exit_and_pending_unbond_liability() {
             )]),
         },
     );
-    let mut parameters = fixture.world.parameters.block();
-    parameters
-        .set_parameter(Parameter::Custom(
+    let mut parameters = crate::state::parameter_cell_block_for_testing(&fixture.world)
+        .expect("funded original parameter-only fixture block");
+    crate::state::set_parameter_cell_for_testing(
+        &mut parameters,
+        Parameter::Custom(
             SumeragiNposParameters {
                 evidence_horizon_blocks: 2,
                 slashing_delay_blocks: 1,
                 ..SumeragiNposParameters::default()
             }
             .into_custom_parameter(),
-        ))
-        .expect("valid fixture parameters");
+        ),
+        fixture.world.sccp_committee_generations.allocation_budget(),
+    )
+    .expect("valid fixture parameters");
     parameters.commit();
     // This component fixture exercises the native boundary reducer with the exact original
     // credentials. It does not claim a certified chain or executed transition.

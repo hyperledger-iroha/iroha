@@ -298,7 +298,7 @@ async fn solo_heavy_read_waits_for_a_bounded_permit_instead_of_immediate_429() {
 }
 #[tokio::test]
 async fn openapi_enforces_token_policy() {
-    let mut app = mk_app_state_for_tests();
+    let mut app = mk_native_app_state_for_tests();
     {
         let state = Arc::get_mut(&mut app).expect("unique app state");
         state.require_api_token = true;
@@ -989,7 +989,7 @@ async fn soracloud_runtime_status_sections_report_unavailable_without_runtime() 
 #[tokio::test]
 #[cfg(feature = "app_api")]
 async fn proof_rate_limit_sets_retry_after_header() {
-    let mut app = mk_app_state_for_tests();
+    let mut app = mk_native_app_state_for_tests();
     {
         let state = Arc::get_mut(&mut app).expect("unique app state");
         state.proof_rate_limiter = limits::RateLimiter::new(Some(1), Some(1));
@@ -1063,7 +1063,7 @@ async fn policy_rate_limit_keys_transport_remote_when_internal_header_missing() 
 #[cfg(feature = "profiling")]
 #[tokio::test]
 async fn profiling_enforces_token_policy() {
-    let mut app = mk_app_state_for_tests();
+    let mut app = mk_native_app_state_for_tests();
     {
         let state = Arc::get_mut(&mut app).expect("unique app state");
         state.require_api_token = true;
@@ -1100,7 +1100,7 @@ async fn profiling_enforces_token_policy() {
 #[cfg(feature = "schema")]
 #[tokio::test]
 async fn schema_handler_ok() {
-    let app = mk_app_state_for_tests();
+    let app = mk_native_app_state_for_tests();
     let headers = HeaderMap::new();
     let resp = super::handler_schema(
         State(app),
@@ -1115,7 +1115,7 @@ async fn schema_handler_ok() {
 #[cfg(feature = "telemetry")]
 #[tokio::test]
 async fn telemetry_handlers_ok() {
-    let app = mk_app_state_for_tests();
+    let app = mk_native_app_state_for_tests();
     let headers = HeaderMap::new();
     // Status root
     let resp = super::handler_status_root(
@@ -1225,7 +1225,7 @@ async fn telemetry_handlers_ok() {
 #[cfg(feature = "telemetry")]
 #[tokio::test]
 async fn telemetry_params_and_bls_keys_ok() {
-    let app = mk_app_state_for_tests();
+    let app = mk_native_app_state_for_tests();
     let headers = HeaderMap::new();
     let resp = super::handler_sumeragi_params(
         State(app.clone()),
@@ -1246,7 +1246,7 @@ async fn telemetry_params_and_bls_keys_ok() {
 #[tokio::test]
 #[cfg(feature = "app_api")]
 async fn app_api_vk_and_proofs_lists_ok() {
-    let app = mk_app_state_for_tests();
+    let app = mk_native_app_state_for_tests();
     let headers = HeaderMap::new();
     // List VKs
     let resp = super::handler_list_vk(
@@ -1530,8 +1530,7 @@ async fn node_capabilities_http_bootstraps_without_registered_account() {
     .expect("explicit public capability fixture policy");
     let mut block = world.block();
     block
-        .parameters
-        .set_parameter(policy.into_parameter().expect("canonical fixture policy"))
+        .set_parameter_for_testing(policy.into_parameter().expect("canonical fixture policy"))
         .expect("author policy before State construction");
     block.commit();
     let kura = Kura::blank_kura_for_testing();
@@ -2261,7 +2260,8 @@ async fn contract_compute_routes_bind_authenticated_authority_before_work() {
     let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
     let key = checked_torii_test_ed25519_keypair(0xb4, "contract view caller fixture");
     let caller = AccountId::new(key.public_key().clone());
-    let app = mk_app_state_for_tests_with_world(world_with_account(&caller));
+    let app = mk_native_app_state_for_tests_with_world(world_with_account(&caller));
+    let network = *app.state.network_id_ref();
     let router = axum::Router::new()
         .route(
             "/v1/contracts/view",
@@ -2301,7 +2301,8 @@ async fn contract_compute_routes_bind_authenticated_authority_before_work() {
             };
             let body = norito::json::to_vec(&body).expect("request JSON");
             let uri = path.parse().expect("request URI");
-            let headers = signed_app_headers(&caller, &key, &Method::POST, &uri, &body);
+            let headers =
+                signed_network_app_headers(&network, &caller, &key, &Method::POST, &uri, &body);
             let mut request = Request::builder()
                 .method(Method::POST)
                 .uri(uri)

@@ -1,4 +1,6 @@
 //! Conversion provenance and protected runtime fixture tests.
+#[path = "genesis_policy_tests.rs"]
+mod genesis_policy_tests;
 #[path = "permission_guard_tests.rs"]
 mod permission_guard_tests;
 #[path = "registry_refusal_tests.rs"]
@@ -264,7 +266,8 @@ fn payout_permissions_require_dedicated_instance_roles() {
     assert_eq!(dedicated_payout_permission(&duplicate, selector), None);
 }
 
-pub fn validation_fee_payout_world(deployer: &AccountId) -> crate::state::World {
+/// Ledger identities and definitions before any original signed monetary policy exists.
+pub(crate) fn validation_fee_payout_world(deployer: &AccountId) -> crate::state::World {
     use iroha_data_model::prelude::{Account, AssetDefinition, Domain};
     let contract_domain =
         Domain::new(DomainId::try_new("contracts", "universal").expect("contract domain id"))
@@ -297,22 +300,42 @@ pub fn validation_fee_payout_world(deployer: &AccountId) -> crate::state::World 
         None,
     )
     .build(deployer);
-    let world = crate::state::World::with(
+    crate::state::World::with(
         [contract_domain, fee_domain],
         accounts,
         [fee_definition, successor_fee_definition, xor_definition],
+    )
+}
+
+/// Explicit authoring inputs for the payout fixture's signed epoch and network XOR policy.
+fn validation_fee_payout_genesis_parameters() -> [iroha_data_model::parameter::Parameter; 2] {
+    use iroha_data_model::parameter::{
+        Parameter,
+        system::{SumeragiNposParameters, SumeragiParameter},
+    };
+    let policy = SumeragiNposParameters::default();
+    [
+        Parameter::Sumeragi(SumeragiParameter::EpochLengthBlocks(
+            policy.epoch_length_blocks,
+        )),
+        Parameter::Custom(policy.into_custom_parameter()),
+    ]
+}
+
+/// Author explicit NPoS payout genesis; the supplied World retains no pre-genesis policy.
+pub(crate) fn validation_fee_payout_config(
+    deployer: &AccountId,
+    genesis_time_ms: u64,
+) -> crate::sumeragi::test_chain::TestChainConfig {
+    let mut config = crate::sumeragi::test_chain::TestChainConfig::new(
+        validation_fee_payout_world(deployer),
+        genesis_time_ms,
     );
-    {
-        let mut parameters = world.parameters.block();
-        parameters
-            .set_parameter(iroha_data_model::parameter::Parameter::Custom(
-                iroha_data_model::parameter::system::SumeragiNposParameters::default()
-                    .into_custom_parameter(),
-            ))
-            .expect("valid fixture parameters");
-        parameters.commit();
-    }
-    world
+    config.consensus_mode = iroha_data_model::parameter::system::SumeragiConsensusMode::Npos;
+    config
+        .genesis_parameters
+        .extend(validation_fee_payout_genesis_parameters());
+    config
 }
 
 pub fn register_bound_payout_time_trigger(
@@ -1071,9 +1094,7 @@ pub fn install_policy_registry_fixture(
     }
     state_tx
         .world
-        .parameters
-        .get_mut()
-        .set_parameter(Parameter::Custom(
+        .set_parameter_for_testing(Parameter::Custom(
             registry
                 .clone()
                 .into_custom_parameter()
@@ -1108,10 +1129,7 @@ pub fn with_retail_native_capacity_state(
     test: impl FnOnce(&crate::state::State, &AccountId, &[u8], Hash),
 ) {
     let deployer = AccountId::new(key_pair(55).public_key().clone());
-    let mut config = crate::sumeragi::test_chain::TestChainConfig::new(
-        validation_fee_payout_world(&deployer),
-        1_000,
-    );
+    let mut config = validation_fee_payout_config(&deployer, 1_000);
     let mut source = iroha_data_model::parameter::FastpqSourcePolicyV1::bootstrap();
     assert!(native_entries <= source.max_native_maintenance_invocations);
     source.max_native_maintenance_invocations = native_entries;

@@ -55,8 +55,8 @@ impl Domain {
     #[must_use]
     pub const fn tag(self) -> [u8; 8] {
         match self {
-            Self::Proof => *b"pipa-rb1",
-            Self::Fold => *b"pipa-as1",
+            Self::Proof => iroha_plonk::contract::PIPA_R_PROOF_DOMAIN,
+            Self::Fold => iroha_plonk::contract::PIPA_AS_FOLD_DOMAIN,
         }
     }
 }

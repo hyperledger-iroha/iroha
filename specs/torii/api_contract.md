@@ -503,18 +503,29 @@ requires null. The payload carries positive `requested_height`, `applied_height`
 and `status_height` values which are not all equal, plus the exact challenge,
 configured `node_id`, and genesis-derived `network_id`.
 
-HTTP `409` reports `TipChanged` or `ConflictingState`. General finality callers
-may retry only `TipChanged` after validating every selector against their
-independently retained request, node and network, within the existing deadline.
-Genesis scaling treats `TipChanged` as non-retryable conflict. HTTP `503` reports
+HTTP `409` reports `ConflictingState`. HTTP `503` reports `TipChanged`,
 `ConsensusUninitialized`, `GenesisUncommitted`, `RestartRequired`, or
-`FinalityUnavailable`; only the first two permit bounded startup retries. HTTP
+`FinalityUnavailable`. General finality callers may retry `TipChanged` after
+validating every selector against their independently retained request, node and
+network, within the existing deadline. Genesis scaling still treats `TipChanged`
+as non-retryable conflict; only `ConsensusUninitialized` and `GenesisUncommitted`
+permit its bounded startup retries. The HTTP availability status does not grant
+retry authority or convert contradictory state into a missing responder. HTTP
 `500` reports `InternalFailure`. Missing/corrupt proofs and identity, signature,
 subject or CommitQC failures never grant retryable progress. Generic HTTP errors,
 malformed payloads, and mismatched reason/status/payload combinations are errors.
 These unsigned observations never authenticate readiness or finality. Every
 response is `no-store`, carries `X-Content-Type-Options: nosniff`, and varies by
 `X-Iroha-Finality-Challenge, Accept`.
+
+A quorum reader that treats HTTP `503` as a missing responder may retain an
+otherwise valid quorum at height H despite another node reporting `TipChanged`
+at H+1. This is an availability policy, not a claim that no node has advanced.
+Such readers must still independently verify the required quorum's identities,
+proof agreement and freshness. Readers whose policy discards an observation on
+any reported movement must decode the bounded typed failure before generic
+availability handling. Neither policy permits suppressing `ConflictingState`
+or accepting a malformed successful proof.
 
 For current-tip attestations past H2, the ordinary State-backed producer joins the
 current certificate and H2's genesis execution anchor through every original native

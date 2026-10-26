@@ -271,9 +271,9 @@ public enum PetalLocator {
         return (0..<4).map { quad[(start + $0) % 4] }
     }
 
-    /// The finders of the largest size class: lit tiles and merged dots form
-    /// blob candidates too, but the corner finders are the biggest isolated
-    /// round blobs in view.
+    /// The finders of the largest size class: clusters of lit petals and
+    /// merged dots form blob candidates too, but the corner finders are the
+    /// biggest isolated round blobs in view.
     static func strongFinders(_ finders: [PetalFinder]) -> [PetalFinder] {
         var largest = 0.0
         for finder in finders { largest = Double.maximum(largest, finder.size) }
@@ -294,7 +294,7 @@ public enum PetalLocator {
 
     /// Chooses four finders that look like the corners of one code.
     ///
-    /// Tile glyphs such as `ロ` form tile-sized blobs too, so the largest size
+    /// Clusters of lit petals form smaller blobs too, so the largest size
     /// class is tried first: the corner finders are always the biggest
     /// isolated blossoms in view. Within a class the ten largest candidates
     /// are combined. Returns the four corners clockwise from the top-left.

@@ -833,7 +833,7 @@ impl crate::state::StateTransaction<'_, '_> {
     /// registry defects retain their existing validation diagnostic.
     pub(crate) fn hydrate_zk_snapshots_for_execution<QS>(
         &mut self,
-        host: &mut crate::smartcontracts::ivm::host::CoreHostImpl<QS>,
+        host: &mut crate::smartcontracts::ivm::host::CoreHostImpl<'_, '_, QS>,
     ) -> Result<(), ValidationFail>
     where
         QS: Default + crate::smartcontracts::ivm::host::QueryStateAccess,

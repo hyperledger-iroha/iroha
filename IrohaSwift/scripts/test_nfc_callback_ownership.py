@@ -73,9 +73,12 @@ final class ReaderCut {
     var completed = false
     let session = Session()
     var operationGate = IrohaPeerNfcReaderOperationGateV1()
-    var retryGate: IrohaPeerNfcRetryGateV1? = .init(.init(maximumContactAttempts: 3))
+    var retryGate: IrohaPeerNfcRetryGateV1? = .init(.default)
     var platformCallGate: IrohaPeerNfcReaderPlatformCallGateV1? = .init()
     var retryTimeoutTask: Task<Void, Never>?
+    var retryPollingGate: IrohaPeerNfcReaderPlatformCallGateV1?
+    var recoveryWait: UInt64?
+    var exchangeTask: Task<Void, Never>?
     var operationTimeoutTask: Task<Void, Never>?
     var progressReporter: Reporter? = Reporter()
 
@@ -110,6 +113,7 @@ for mode in ["current", "stale-session", "completed", "inactive-epoch"] {
     let operation = Task<Void, Never> {}
     reader.retryTimeoutTask = retry
     reader.operationTimeoutTask = operation
+    reader.recoveryWait = 7
     let supplied = mode == "stale-session" ? Session() : reader.session
     reader.invalidDetection(supplied)
     let current = mode == "current"
@@ -118,11 +122,10 @@ for mode in ["current", "stale-session", "completed", "inactive-epoch"] {
     require(reader.operationTimeoutTask != nil, mode + ": operation deadline retained")
     require(!operation.isCancelled, mode + ": operation deadline not cancelled")
     require(reader.progressReporter!.count == (current ? 1 : 0), mode + ": progress ownership")
+    require((reader.recoveryWait == nil) == current, mode + ": recovery wait ownership")
+    // Recovery is an elapsed-time window, not a count: unrelated tags cannot exhaust it early.
     let dispositions = (0..<3).map { _ in reader.retryGate!.recordInvalidDetection() }
-    require(
-        dispositions == (current ? [.retry, .exhausted, .exhausted] : [.retry, .retry, .exhausted]),
-        mode + ": shared retry budget"
-    )
+    require(dispositions == [.retry, .retry, .retry], mode + ": invalid tags spend time, not attempts")
     let unlocked = reader.lock.try()
     require(unlocked, mode + ": lock released")
     if unlocked {

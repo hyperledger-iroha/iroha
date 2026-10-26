@@ -169,6 +169,30 @@ fn sccp_hook_receives_scheduled_height_inputs_on_the_sumeragi_core_path() {
     }
     let _ = observed::take();
     let mut config = TestChainConfig::new(world, 10_000);
+    // The original signed staking policy must retain SCCP evidence through the
+    // complete committee-validity and forgery-evidence window.
+    let parameters = iroha_data_model::sccp::params::SccpParametersV1::taira_default();
+    let staking = config
+        .genesis_parameters
+        .iter_mut()
+        .find_map(|parameter| match parameter {
+            iroha_data_model::parameter::Parameter::Custom(custom)
+                if custom.id()
+                    == &iroha_data_model::block::consensus::PublicLaneStakingPolicy::parameter_id() =>
+            {
+                Some(custom)
+            }
+            _ => None,
+        })
+        .expect("constructor explicitly authors the sole staking policy");
+    let mut policy =
+        iroha_data_model::block::consensus::PublicLaneStakingPolicy::from_custom_parameter(staking)
+            .unwrap();
+    policy.unbonding_delay_ms = parameters
+        .committee_validity_ms
+        .checked_add(parameters.forgery_evidence_grace_ms)
+        .unwrap();
+    *staking = policy.into_custom_parameter().unwrap();
     config.genesis_block_cadence_ms = std::num::NonZeroU64::new(1_000).unwrap();
     let prepared =
         CertifiedTestChain::prepare(config).expect("the original signed genesis is prepared");

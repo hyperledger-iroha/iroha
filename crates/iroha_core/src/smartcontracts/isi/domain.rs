@@ -1,6 +1,8 @@
 //! This module contains [`Domain`] structure and related implementations and trait implementations.
 use super::super::isi::prelude::*;
 use eyre::Result;
+#[cfg(test)]
+pub(crate) mod monetary_test_support;
 use iroha_data_model::{account::rekey::AccountRekeyRecord, prelude::*, query::error::FindError};
 use iroha_telemetry::metrics;
 /// ISI module contains all instructions related to domains:
@@ -291,10 +293,13 @@ mod tests {
     };
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     use nonzero_ext::nonzero;
+    include!("domain/monetary_policy_tests.rs");
+
     fn test_state() -> State {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
-        let state = State::new_for_testing(World::default(), kura, query);
+        let mut state = State::new_for_testing(World::default(), kura, query);
+        super::monetary_test_support::install(&mut state.world);
         set_controller_fixture_policy(&state, Algorithm::ALL.to_vec());
         state
     }
@@ -302,11 +307,13 @@ mod tests {
         let policy =
             iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(algorithms)
                 .unwrap();
-        let mut parameters = state.world.parameters.block();
-        parameters
-            .get_mut()
-            .set_parameter(policy.into_parameter().unwrap())
-            .unwrap();
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world).unwrap();
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            policy.into_parameter().unwrap(),
+            state.world.sccp_committee_generations.allocation_budget(),
+        )
+        .unwrap();
         parameters.commit();
     }
     #[test]
@@ -4009,12 +4016,16 @@ mod tests {
     }
     #[test]
     fn register_account_rejects_missing_original_crypto_policy() {
-        let mut state = test_state();
+        // A fresh original fixture deliberately has no committed crypto policy.
+        // Construct it before domain seeding instead of clearing a populated owner.
+        let mut state = State::new_for_testing(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
         let domain_id: DomainId = DomainId::try_new("restricted", "curves").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
-        // Structural malformed-restore fixture: do not use a production removal API.
-        state.world.parameters = mv::cell::Cell::new(crate::state::StateParameters::default());
         let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let new_account = Account::new(account_id.clone());
@@ -4051,9 +4062,7 @@ mod tests {
                     ])
                     .unwrap();
                 tx.world
-                    .parameters
-                    .get_mut()
-                    .set_parameter(next.into_parameter().unwrap())
+                    .set_parameter_for_testing(next.into_parameter().unwrap())
                     .unwrap();
                 let error = Register::account(Account::new(account_id.clone()))
                     .execute(&ALICE_ID, &mut tx)
@@ -4256,10 +4265,7 @@ mod tests {
             owned_by: account_id.clone(),
         };
         let (nft_id, nft_value) = nft.into_key_value();
-        tx.world.insert_nft_entry(&(nft_id.clone()), nft_value);
-        tx.nexus.fees.fee_sink_account_id = authority.clone();
-        tx.nexus.staking.stake_escrow_account_id = authority.to_string();
-        tx.nexus.staking.slash_sink_account_id = authority.to_string();
+        tx.world.insert_nft_entry(&nft_id, nft_value);
         Unregister::account(account_id.clone())
             .execute(&authority, &mut tx)
             .expect("unregister account");
@@ -4912,19 +4918,21 @@ mod tests {
     }
     #[test]
     fn unregister_account_rejects_when_account_is_nexus_fee_sink_account() {
-        assert_account_unregister_guard(
-            |tx, _domain_id, authority, account_id| {
-                let helper_account_id = AccountId::new(checked_keypair().public_key().clone());
-                Register::account(NewAccount::new(helper_account_id.clone()))
-                    .execute(authority, tx)
-                    .expect("register helper account");
-                tx.nexus.fees.fee_sink_account_id = account_id.clone();
-                tx.nexus.staking.stake_escrow_account_id = helper_account_id.to_string();
-                tx.nexus.staking.slash_sink_account_id = helper_account_id.to_string();
+        assert_account_unregister_guard_with_policy(
+            |state, account_id| {
+                let mut policy = super::monetary_test_support::fees();
+                policy.fee_sink_account_id = account_id.clone();
+                state
+                    .world
+                    .set_parameter_for_testing(iroha_data_model::parameter::Parameter::Custom(
+                        policy.into_custom_parameter().unwrap(),
+                    ))
+                    .expect("retain explicit original monetary policy");
             },
-            "committed root fee sink account must not be unregistered",
-            "committed root fee sink; commit a replacement root fee policy first",
-            "error should explain nexus fee-sink conflict",
+            |_, _, _, _| {},
+            "committed monetary reference must remain registered",
+            "committed root fee sink",
+            "error must identify the original monetary reference",
         );
     }
     #[test]
@@ -4936,22 +4944,35 @@ mod tests {
         seed_domain(&mut state, &sink_domain, &authority);
         seed_domain(&mut state, &remove_domain, &authority);
         let account_id = AccountId::new(checked_keypair().public_key().clone());
+        let mut fees = super::monetary_test_support::fees();
+        fees.fee_sink_account_id = account_id.clone();
+        state
+            .world
+            .set_parameter_for_testing(iroha_data_model::parameter::Parameter::Custom(
+                fees.into_custom_parameter().unwrap(),
+            ))
+            .unwrap();
+        let mut staking = super::monetary_test_support::staking();
+        staking.stake_escrow_account_id = account_id.clone();
+        staking.slash_sink_account_id = account_id.clone();
+        state
+            .world
+            .set_parameter_for_testing(iroha_data_model::parameter::Parameter::Custom(
+                staking.into_custom_parameter().unwrap(),
+            ))
+            .unwrap();
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         Register::account(NewAccount::new(account_id.clone()))
             .execute(&authority, &mut tx)
             .expect("register configured account");
-        tx.nexus.fees.fee_sink_account_id = account_id.clone();
-        tx.nexus.staking.stake_escrow_account_id = account_id.to_string();
-        tx.nexus.staking.slash_sink_account_id = account_id.to_string();
         let err = Unregister::account(account_id.clone())
             .execute(&authority, &mut tx)
             .expect_err("configured account must remain protected");
         let err_string = err.to_string();
         assert!(
-            err_string
-                .contains("committed root fee sink; commit a replacement root fee policy first"),
+            err_string.contains("committed root fee sink in the original parameter cut"),
             "error should explain nexus fee-sink conflict: {err_string}"
         );
         assert!(
@@ -4969,6 +4990,14 @@ mod tests {
         seed_domain(&mut state, &sink_domain, &authority);
         let remove_account_id = AccountId::new(checked_keypair().public_key().clone());
         let sink_account_id = AccountId::new(checked_keypair().public_key().clone());
+        let mut fees = super::monetary_test_support::fees();
+        fees.fee_sink_account_id = sink_account_id.clone();
+        state
+            .world
+            .set_parameter_for_testing(iroha_data_model::parameter::Parameter::Custom(
+                fees.into_custom_parameter().unwrap(),
+            ))
+            .unwrap();
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -4978,7 +5007,6 @@ mod tests {
         Register::account(NewAccount::new(remove_account_id.clone()))
             .execute(&authority, &mut tx)
             .expect("register removal candidate account");
-        tx.nexus.fees.fee_sink_account_id = sink_account_id.clone();
         Unregister::account(remove_account_id.clone())
             .execute(&authority, &mut tx)
             .expect("unrelated account should not be blocked by the configured sink account");
@@ -4993,36 +5021,40 @@ mod tests {
     }
     #[test]
     fn unregister_account_rejects_when_account_is_nexus_staking_escrow_account() {
-        assert_account_unregister_guard(
-            |tx, _domain_id, authority, account_id| {
-                let helper_account_id = AccountId::new(checked_keypair().public_key().clone());
-                Register::account(NewAccount::new(helper_account_id.clone()))
-                    .execute(authority, tx)
-                    .expect("register helper account");
-                tx.nexus.fees.fee_sink_account_id = helper_account_id.clone();
-                tx.nexus.staking.stake_escrow_account_id = account_id.to_string();
-                tx.nexus.staking.slash_sink_account_id = helper_account_id.to_string();
+        assert_account_unregister_guard_with_policy(
+            |state, account_id| {
+                let mut policy = super::monetary_test_support::staking();
+                policy.stake_escrow_account_id = account_id.clone();
+                state
+                    .world
+                    .set_parameter_for_testing(iroha_data_model::parameter::Parameter::Custom(
+                        policy.into_custom_parameter().unwrap(),
+                    ))
+                    .expect("retain explicit original monetary policy");
             },
-            "nexus staking escrow account must not be unregistered",
-            "nexus staking escrow account",
-            "error should explain nexus staking-escrow conflict",
+            |_, _, _, _| {},
+            "committed monetary reference must remain registered",
+            "committed staking escrow account",
+            "error must identify the original monetary reference",
         );
     }
     #[test]
     fn unregister_account_rejects_when_account_is_nexus_staking_slash_sink_account() {
-        assert_account_unregister_guard(
-            |tx, _domain_id, authority, account_id| {
-                let helper_account_id = AccountId::new(checked_keypair().public_key().clone());
-                Register::account(NewAccount::new(helper_account_id.clone()))
-                    .execute(authority, tx)
-                    .expect("register helper account");
-                tx.nexus.fees.fee_sink_account_id = helper_account_id.clone();
-                tx.nexus.staking.stake_escrow_account_id = helper_account_id.to_string();
-                tx.nexus.staking.slash_sink_account_id = account_id.to_string();
+        assert_account_unregister_guard_with_policy(
+            |state, account_id| {
+                let mut policy = super::monetary_test_support::staking();
+                policy.slash_sink_account_id = account_id.clone();
+                state
+                    .world
+                    .set_parameter_for_testing(iroha_data_model::parameter::Parameter::Custom(
+                        policy.into_custom_parameter().unwrap(),
+                    ))
+                    .expect("retain explicit original monetary policy");
             },
-            "nexus staking slash sink account must not be unregistered",
-            "nexus staking slash sink account",
-            "error should explain nexus staking slash-sink conflict",
+            |_, _, _, _| {},
+            "committed monetary reference must remain registered",
+            "committed staking slash sink account",
+            "error must identify the original monetary reference",
         );
     }
     #[test]
@@ -5105,7 +5137,13 @@ mod tests {
     #[test]
     fn unregister_account_preserves_pinned_staking_custody_after_config_change() {
         with_registered_account_unregistration_candidate(|authority, domain_id, account_id, tx| {
-            tx.nexus.staking.stake_escrow_account_id = authority.to_string();
+            let mut policy = super::monetary_test_support::staking();
+            policy.stake_escrow_account_id = authority.clone();
+            tx.world
+                .set_parameter_for_testing(iroha_data_model::parameter::Parameter::Custom(
+                    policy.into_custom_parameter().unwrap(),
+                ))
+                .unwrap();
             let asset = AssetId::new(
                 AssetDefinitionId::derive_from_components(domain_id, "stake".parse().unwrap()),
                 account_id.clone(),
@@ -7830,9 +7868,18 @@ mod tests {
     }
     #[test]
     fn unregister_asset_definition_rejects_when_definition_is_nexus_fee_asset() {
-        with_registered_asset_definition_unregistration_candidate(
+        with_registered_asset_definition_unregistration_candidate_with_policy(
+            |state, definition| {
+                let mut policy = super::monetary_test_support::fees();
+                policy.fee_asset_id = definition.clone();
+                state
+                    .world
+                    .set_parameter_for_testing(iroha_data_model::parameter::Parameter::Custom(
+                        policy.into_custom_parameter().unwrap(),
+                    ))
+                    .unwrap();
+            },
             |authority, asset_definition_id, tx| {
-                tx.nexus.fees.fee_asset_id = asset_definition_id.clone();
                 let err = Unregister::asset_definition(asset_definition_id.clone())
                     .execute(&authority, tx)
                     .expect_err("nexus fee asset definition must not be unregistered");
@@ -7855,11 +7902,16 @@ mod tests {
     fn unregister_asset_definition_preserves_pinned_staking_custody_after_config_change() {
         with_registered_asset_definition_unregistration_candidate(
             |authority, asset_definition_id, tx| {
-                tx.nexus.staking.stake_asset_id = AssetDefinitionId::derive_from_components(
+                let mut policy = super::monetary_test_support::staking();
+                policy.stake_asset_id = AssetDefinitionId::derive_from_components(
                     DomainId::try_new("replacement", "universal").unwrap(),
                     "stake".parse().unwrap(),
-                )
-                .to_string();
+                );
+                tx.world
+                    .set_parameter_for_testing(iroha_data_model::parameter::Parameter::Custom(
+                        policy.into_custom_parameter().unwrap(),
+                    ))
+                    .unwrap();
                 let asset = AssetId::new(asset_definition_id.clone(), authority.clone());
                 let key = (LaneId::SINGLE, authority.clone());
                 tx.world
@@ -7908,15 +7960,24 @@ mod tests {
     }
     #[test]
     fn unregister_asset_definition_rejects_when_definition_is_nexus_staking_asset() {
-        with_registered_asset_definition_unregistration_candidate(
+        with_registered_asset_definition_unregistration_candidate_with_policy(
+            |state, definition| {
+                let mut policy = super::monetary_test_support::staking();
+                policy.stake_asset_id = definition.clone();
+                state
+                    .world
+                    .set_parameter_for_testing(iroha_data_model::parameter::Parameter::Custom(
+                        policy.into_custom_parameter().unwrap(),
+                    ))
+                    .unwrap();
+            },
             |authority, asset_definition_id, tx| {
-                tx.nexus.staking.stake_asset_id = asset_definition_id.to_string();
                 let err = Unregister::asset_definition(asset_definition_id.clone())
                     .execute(&authority, tx)
                     .expect_err("nexus staking asset definition must not be unregistered");
                 let err_string = err.to_string();
                 assert!(
-                    err_string.contains("nexus staking asset definition"),
+                    err_string.contains("committed staking asset definition"),
                     "error should explain nexus staking-asset conflict: {err_string}"
                 );
                 assert!(

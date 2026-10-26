@@ -41,8 +41,7 @@ fn test_state(world: World) -> State {
     .expect("explicit implicit-receive fixture policy");
     let mut block = world.block();
     block
-        .parameters
-        .set_parameter(selected.into_parameter().expect("canonical fixture policy"))
+        .set_parameter_for_testing(selected.into_parameter().expect("canonical fixture policy"))
         .expect("author original policy before State construction");
     block.commit();
     let kura = Kura::blank_kura_for_testing();

@@ -33,7 +33,6 @@ pub(super) struct MainShaUnionPlanV1 {
 
 impl MainShaUnionPlanV1 {
     /// Conservative simultaneous public plan, alpha and temporary-copy charge.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     pub(super) const fn public_owner_charge_v1() -> usize {
         3 * core::mem::size_of::<Self>()
             + core::mem::size_of::<Vec<E>>()
@@ -229,7 +228,6 @@ impl MainShaUnionPlanV1 {
     }
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl MainShaUnionPlanV1 {
     const QUOTIENT_LOG_V1: u8 = 22;
     const QUOTIENT_ROWS_V1: usize = 1 << Self::QUOTIENT_LOG_V1;
@@ -492,14 +490,12 @@ impl MainShaUnionPlanV1 {
 
 /// One public N-row table serves all five endpoint denominators on a stripe.
 /// Prefix multiplication and reverse reconstruction require no second vector.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(super) struct ShaUnionEndpointDenominatorsV1 {
     inverses: Vec<F>,
     endpoint_rows: [usize; 5],
     endpoint_inverses: [F; 5],
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ShaUnionEndpointDenominatorsV1 {
     pub(super) const fn payload_charge_v1() -> usize {
         core::mem::size_of::<Self>() + NATIVE_ROWS_V1 * core::mem::size_of::<F>()

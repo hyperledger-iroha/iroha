@@ -66,7 +66,7 @@ fn all_endpoints_loopback(table: &Table) -> bool {
     if peers.is_empty()
         || !peers.iter().all(|peer| {
             peer.as_str()
-                .and_then(|peer| peer.parse::<iroha_data_model::peer::Peer>().ok())
+                .and_then(|peer| peer.parse::<iroha_model_base::peer::Peer>().ok())
                 .is_some_and(|peer| {
                     peer.address().port() != 0
                         && peer

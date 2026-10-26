@@ -429,8 +429,13 @@ fn initial_executor_runs_multisig_flow() {
                 if instructions.iter().eq(core::iter::once(&instruction)))
         })
         .expect("original singleton multisig registration input");
+    let original_wire = source.canonical_wire().expect("original signed carrier");
     let original = crate::block::authenticate_genesis_block_intents(source, &signer1_id)
         .expect("authenticate original multisig genesis policies");
+    let expected_crypto = original
+        .initial_crypto_policy(source)
+        .expect("select original signed crypto policy")
+        .inspect(Clone::clone);
     let mut policies = Some(
         original
             .initial_policies(source)
@@ -458,6 +463,13 @@ fn initial_executor_runs_multisig_flow() {
     block
         .require_original_execution_recorder()
         .expect("original recorder owns installed genesis policies");
+    assert!(policies.is_none());
+    assert_eq!(
+        block
+            .crypto_admission_policy()
+            .expect("authenticated overlay policy"),
+        &expected_crypto,
+    );
     let mut state_transaction = block
         .transaction_for_original_genesis_testing(source, index, &signer1_id, &instruction)
         .expect("authenticate original multisig bootstrap instruction");
@@ -517,4 +529,111 @@ fn initial_executor_runs_multisig_flow() {
         .expect("original recorder retained through multisig assertions");
     drop(block);
     drop(recording);
+    assert_eq!(prepared.state.committed_height(), 0);
+    assert!(
+        prepared
+            .state
+            .view()
+            .world()
+            .parameters()
+            .require_crypto_policy()
+            .is_err(),
+        "the unpublished overlay must not initialize its original State"
+    );
+    assert_eq!(
+        source
+            .canonical_wire()
+            .expect("unchanged signed carrier")
+            .as_framed(),
+        original_wire.as_framed()
+    );
+}
+
+/// Explicit ordinary component input; this does not authenticate genesis or grant publication.
+fn component_world_for_multisig(mut world: World) -> World {
+    world
+        .set_parameter_for_testing(
+            crate::sumeragi::test_chain::crypto_fixture_policy()
+                .into_parameter()
+                .expect("canonical multisig component crypto policy"),
+        )
+        .expect("retain the multisig component's selected crypto policy");
+    world
+}
+
+#[test]
+fn multisig_component_fixture_authors_crypto_without_claiming_genesis() {
+    let authority = new_account_id(&checked_keypair());
+    let world = World::with([], [Account::new(authority.clone()).build(&authority)], []);
+    let original_max_tx_bytes = world.parameters.view().transaction().max_tx_bytes;
+    assert!(world.parameters.view().require_crypto_policy().is_err());
+    let state = State::new_with_chain(
+        component_world_for_multisig(world),
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+        ChainId::from("multisig-explicit-component-policy"),
+    );
+    assert_eq!(
+        state.chain_id_ref(),
+        &ChainId::from("multisig-explicit-component-policy")
+    );
+    assert_eq!(state.committed_height(), 0);
+    assert!(state.view().latest_block_hash().is_none());
+    assert!(state.view().world().account(&authority).is_ok());
+    assert_eq!(
+        state.view().world().parameters().transaction().max_tx_bytes,
+        original_max_tx_bytes
+    );
+    assert_eq!(
+        state
+            .view()
+            .world()
+            .parameters()
+            .require_crypto_policy()
+            .unwrap(),
+        &crate::sumeragi::test_chain::crypto_fixture_policy()
+    );
+}
+
+#[test]
+fn multisig_component_account_admission_requires_explicit_crypto_policy() {
+    let authority = new_account_id(&checked_keypair());
+    let destination = new_account_id(&checked_keypair());
+    let instruction = Register::account(Account::new(destination.clone()));
+    for authored in [false, true] {
+        let world = World::with([], [Account::new(authority.clone()).build(&authority)], []);
+        let world = if authored {
+            component_world_for_multisig(world)
+        } else {
+            world
+        };
+        let state = State::new_with_chain(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+            ChainId::from("multisig-component-policy-retry"),
+        );
+        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
+        let mut transaction = block.transaction();
+        let result = instruction.clone().execute(&authority, &mut transaction);
+        if authored {
+            result.expect("the same account instruction accepts the selected component policy");
+            assert!(transaction.world.account(&destination).is_ok());
+        } else {
+            assert!(matches!(
+                result,
+                Err(iroha_data_model::isi::error::InstructionExecutionError::InvariantViolation(ref reason))
+                    if reason.as_ref() == "ordinary crypto policy has not been initialized by authenticated genesis"
+            ));
+            assert!(transaction.world.account(&destination).is_err());
+            assert!(
+                transaction
+                    .world
+                    .parameters()
+                    .require_crypto_policy()
+                    .is_err()
+            );
+        }
+        assert_eq!(state.committed_height(), 0);
+    }
 }

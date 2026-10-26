@@ -31,14 +31,13 @@ use iroha_data_model::{
         EventBox,
         data::{DataEvent, prelude as data_events},
     },
-    peer::Peer,
     soranet::ticket::TicketCommitmentError,
 };
 use iroha_logger::warn;
-use iroha_model_base::domain::DomainId;
 #[cfg(test)]
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::peer::PeerId;
+use iroha_model_base::{domain::DomainId, peer::Peer};
 #[cfg(feature = "quic")]
 use iroha_p2p::streaming::{CapabilityNegotiation, StreamingConnection};
 use iroha_p2p::{Post, Priority};

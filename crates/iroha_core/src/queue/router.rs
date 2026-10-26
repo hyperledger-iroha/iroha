@@ -16434,9 +16434,7 @@ mod tests {
         registry.upsert(corridor);
         let mut world = state.world.block();
         world
-            .parameters
-            .get_mut()
-            .set_parameter(iroha_data_model::parameter::Parameter::Custom(
+            .set_parameter_for_testing(iroha_data_model::parameter::Parameter::Custom(
                 registry.into_custom_parameter(),
             ))
             .expect("valid fixture parameters");
@@ -18784,9 +18782,7 @@ mod tests {
         {
             let mut world = state.world.block();
             world
-                .parameters
-                .get_mut()
-                .set_parameter(iroha_data_model::parameter::Parameter::Custom(
+                .set_parameter_for_testing(iroha_data_model::parameter::Parameter::Custom(
                     registry.into_custom_parameter(),
                 ))
                 .expect("valid fixture parameters");

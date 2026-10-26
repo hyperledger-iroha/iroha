@@ -76,9 +76,7 @@ fn npos_diagnostics_distinguishes_absence_from_malformed_original_policy() {
     let mut block = chain.state().block(proposal.header());
     let mut tx = block.transaction();
     tx.world
-        .parameters_mut_for_testing()
-        .get_mut()
-        .set_parameter(Parameter::Custom(CustomParameter::new(
+        .set_parameter_for_testing(Parameter::Custom(CustomParameter::new(
             SumeragiNposParameters::parameter_id(),
             iroha_primitives::json::Json::new(norito::json!({"unexpected": "shape"})),
         )))

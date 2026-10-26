@@ -753,22 +753,34 @@ newly signed Load transaction with that identity is rejected.
 
 Petal Stream (`org.hyperledger.iroha.sdk.offline.petal`) is the animated
 "streaming QR" used to hand an offline payload such as an `IPM1` peer message
-from one screen to a phone camera. Each square frame shows four sakura-blossom
-finders, a `天`-shaped field of 256 tiles (light/dark polarity, lane `P`;
-katakana glyph, lane `K`) and three dotted rings (lane `D`). Every lane is one
-whitened GF(256) Reed–Solomon codeword carrying fountain-coded 16-byte atoms,
-and every fourth frame's lane `D` carries the stream beacon, so any readable
-lane of any frame helps and lost frames only cost time. The Kotlin port is
-pure JVM in `core-jvm` and follows the normative Rust crate
-`crates/iroha_petal`; encoding is bit-identical to it.
+from one screen to a phone camera. Each frame (format 5) is a portrait card of
+1024 × 1668 design units: a square with a band of 306 katakana tiles above and
+below it. The square shows four sakura-blossom finders, a field of 3,376 petals
+on 34 concentric bands cut into four sectors (field lanes `F0`–`F3`, one bit per
+petal; petals inside the SORA `天` are drawn light over a faint `天`, the others
+pink) and three dotted rings (lane `D`). On top of each field lane, the first
+360 of its lit petals (in a fixed shuffled order) are turned by 0°, 45°, 90° or
+135° about their centres: two more bits each, one turn lane per sector
+(`T0`–`T3`) carrying four atoms whose check binds them to their field lane's
+header. Eight tiles of each band are pilots; each of the other 298 shows one bit
+in its polarity (a light tile with its katakana in ink, or a dark one with it in
+pink: lanes `P0`, `P1`, one atom each) and four in its katakana (one of
+イロハニヘトワカレムノケアヒスン: lanes `K0`, `K1`, seven atoms each), bound by a
+CRC-32C to the stream tag, the frame and the lane: up to 53 atoms a frame. Every
+lane is one whitened GF(256) Reed–Solomon codeword carrying fountain-coded
+16-byte atoms, and every fourth frame's lane `D` carries the stream beacon
+(version `0x50`; formats 3, 2 and 1 are refused), so any readable lane of any
+frame helps and lost frames only cost time. The Kotlin port is pure JVM in
+`core-jvm` and follows the normative Rust crate `crates/iroha_petal`; encoding
+and rendering are bit-identical to it.
 
 ```kotlin
 // Sender: frame n of the endless stream, drawn natively or in software.
 val encoder = PetalStreamEncoder(payload, kind)
-petalStreamView.setStream(encoder)           // client-android View, 8 fps by default
+petalStreamView.setStream(encoder)           // client-android View, 12 fps by default
 petalStreamView.start()
 val list = PetalDrawList.of(encoder.cells(n)) // vector shapes for other canvases
-val rgb = PetalRenderer.render(encoder.cells(n), PetalRenderOptions(1024, 3))
+val rgb = PetalRenderer.render(encoder.cells(n), PetalRenderOptions(1024, 3)) // the card, 1668 px tall
 
 // Receiver: camera luma planes into one session; the payload arrives once.
 val session = PetalScanSession()
@@ -777,46 +789,97 @@ session.push(luma, SystemClock.elapsedRealtime()).completed?.let { deliver(it.pa
 ```
 
 `PetalDecoder.decode` locates the finders, tries four rotations and mirrored
-front-camera previews ranked by the ring gates plus the `天` silhouette, reads
-lane `D` first and turns low-confidence cells into Reed–Solomon erasures; a lane
-is only reported when its codeword checks out. When a thumb, a glare or the
-frame edge hides one corner blossom, three blossoms forming a corner still
-locate the code: the fourth corner is inferred, moved to where the dotted rings
-line up, and reported as `PetalDecodedFrame.inferredCorner` (canonical index).
-`PetalScanSession` reads the frames after a decoded one by `PetalDecoder.track`,
-which follows the last pose (at most 500 ms old) instead of searching the whole
-image, and counts both in `stats().tracked` and `stats().inferred`.
-When a capture loses a tile lane, the session holds up to four captures of each
-of six shown frames. It averages patches under their decoded canonical poses,
-first using each capture's finder levels, then the normalised mean raw patches
-for any lane still missing. Only captures whose decoded lane headers agree on
-the stream tag and frame counter share evidence; a recovered lane must name that
-same shown frame. `outcome.merged` names newly recovered tile lanes, while
-`stats().merges`, `stats().mergedP` and `stats().mergedK` count averaging and its
-recoveries. A frame only gains missing lanes. Reset and accepted stream metadata
-replacement drop held evidence; learning the first beacon preserves pre-beacon
-captures.
-The tile lanes `P` and `K` are read in two ways: the *level read* judges every
-8×8 tile patch against the light and dark levels measured at the finders, and a
-lane it cannot decode is retried with the *normalised read*, which rescales each
-patch and each template by its own contrast and erases tiles that lost it, so
-over-exposure, veiling light, glare and shadows cancel out (it only runs when a
-tile lane is missing). Scanners should still ask for about 1280×720 analysis
-frames, set exposure compensation to about −1 EV and fall back to 640×480 (lane
-`K` unreadable) only when the device cannot sustain 5 decoded frames per second;
-see `PetalLumaAdapter` and `specs/petal_stream.md` §8.
+front-camera previews ranked by the ring gates, reads lane `D` first and turns
+low-confidence bytes into Reed–Solomon erasures; a lane is only reported when
+its codeword checks out. Each petal is judged by its brightness against a
+two-means threshold of its sector and colour. A sector the finder levels leave
+unread is read again from *local levels* (every petal rescaled by the darkest
+and brightest petals within 32 units), so shadows, glare, banding and veiling
+light cancel, and while a field lane stays unread the pose is searched for
+radial lens distortion (`PetalDecodedFrame.pose.distortion`). When a thumb, a
+glare or the frame edge hides one corner blossom, three blossoms forming a
+corner still locate the code: the fourth corner is inferred, moved to where the
+dotted rings line up, and reported as `PetalDecodedFrame.inferredCorner`
+(canonical index). `PetalScanSession` reads the frames after a decoded one by
+`PetalDecoder.track`, which follows the last pose and its distortion (at most
+500 ms old) instead of searching the whole image, and counts both in
+`stats().tracked` and `stats().inferred`.
+When a capture loses a field lane, the session holds the petal levels of up to
+four captures of each of six shown frames and reads the missing lanes from
+their mean. Only captures whose decoded lane headers agree on the stream tag and
+frame counter share evidence; a recovered lane must name that same shown frame.
+`outcome.merged` names newly recovered field lanes, while `stats().merges` and
+`stats().mergedLanes` count averaging and its recoveries (`stats().laneD` and
+`stats().fieldLanes` count single-capture reads). A frame only gains missing
+lanes. Reset and accepted stream metadata replacement drop held evidence;
+learning the first beacon preserves pre-beacon captures.
+Every field lane a capture decodes on its own also lets the session read the
+turn lane on top of it (`PetalTurns.readTurns`): each carrier petal is sampled
+in its own outward frame along a cubic correction of the pose fitted to the
+carriers' centroids, the reader fits the blur that best explains the carriers
+and their lit neighbours (and stops when the camera is too soft to show turns),
+and every carrier takes the turn whose template matches best once its
+neighbours, at their own turns, are subtracted. A turn lane is tried once per
+shown frame: the session remembers the last 24 it tried, and after tries that
+read nothing (a camera too soft or too shaky for the turns) it passes over up
+to eight captures before it tries again, because reading turns costs a slow
+phone core several times a frame's decode. `outcome.turned` names the turn
+lanes of a capture by the digits of their field lanes, and `stats().turnTries`
+and `stats().turnLanes` count the tries and the lanes read. `PetalTurns.observedTurns` reports the fitted
+blur and every carrier's decided turn for diagnostics, and
+`PetalFrameCells.turn`, `withTurns` and `turnWord` expose the turns of a frame.
+The bands are read from every capture whose square decoded
+(`PetalKana.readKana`): the square's pose, extended beyond the square, places
+every tile; each band's pilots are found by a small search around their places,
+an affine correction fitted to their offsets moves every tile, and the pilots
+pick the blur of the glyph templates and the levels that tell light tiles from
+dark ones. Each data tile then takes the polarity its level shows and the
+katakana whose template correlates best, and a lane passes when its check
+matches the square's frame or the frame before or after it (a rolling shutter
+can show a band of a neighbouring frame). The session reads each band once per
+shown frame, with its own back-off, and the bands go first: a capture whose
+bands read a kana lane tries the turn lanes too only when its work and the
+session's last turn try fit a 30 fps camera's frame time
+(`PetalScanSession.CAPTURE_BUDGET_MILLIS`); otherwise that shown frame's turn
+lanes wait for its next capture. The session times its work on the monotonic
+clock, and a `PetalWorkCost` given to its constructor puts a model's costs in
+place of the measured times (tests do). `outcome.kana` names the kana lanes of
+a capture (`P0K0P1K1` for all four), `stats().kanaTries` and
+`stats().kanaLanes` count the tries and the lanes read, `stats().spareTurns`
+the captures that had time for the turn lanes too, and `PetalKana.observeBand`
+reports every tile's decision. `PetalFrameCells.kanaGlyph`, `isKanaLight` and
+`withKana` expose the tiles of a frame.
+On a Pixel 6 held to its four Cortex-A55 cores, decoding simulated 720p
+captures, a tracked capture costs about 14 ms, the turn lanes about 75 ms and
+both bands about 36 ms. Read on one capture, turns and bands together took
+longer than a frame is shown at 12 fps, and the session decoded only six camera
+frames a second; with the bands first (no capture there has time to spare
+for the turns as well) it decodes 14–19, and a 12 KB Payment
+shown upright at 12 fps arrives in 1.7–1.9 s on a sharp camera (format 3:
+1.8 s), 1.9–2.1 s on an older one (2.5 s) and 1.8–1.9 s on one too soft for the
+turns (3.1 s). In the reference simulation it takes 1.2, 1.3 and 1.75 s where
+the decoder keeps up with every camera frame, and a fast decoder whose camera
+gives it only 15 frames a second still reads both on one capture (1.2 s on the
+sharp camera, against 1.6 s with the turns always left to a later capture); see
+`specs/petal_stream.md` §8.
 `PetalStreamAssembler` and `PetalScanSession` bound pending atoms, payload
 size (64 KiB by default) and stream lifetime (30 s idle, 180 s absolute), and
 deliver a payload only after its CRC-32C matches the beacon. `client-android`
-adds `PetalStreamView`, `PetalCanvasRenderer` and the dependency-free
-`PetalLumaAdapter` (CameraX `ImageAnalysis`, Camera2 `ImageReader` and Camera1
-NV21 previews); they use API 19 or older platform calls.
+adds `PetalStreamView` (the portrait card, as large as the view allows),
+`PetalCanvasRenderer` (one path per colour, every lit petal antialiased, turned
+and notched: the notch tells a petal from one turned by half a turn; the tiles
+rounded and their katakana stroked with round caps) and the dependency-free
+`PetalLumaAdapter` (CameraX
+`ImageAnalysis`, Camera2 `ImageReader` and Camera1 NV21 previews); they use
+API 19 or older platform calls.
 
-The tests check every section of `../fixtures/petal/petal_stream_v1.json`,
-decode the golden camera captures of `../fixtures/petal/petal_captures_v1.json`
-with exactly the lanes and inferred corners the reference reads, and track its
-golden frame pairs, recover the missing lanes of its noisy and banded merge
-sets, and refuse lanes from mixed-frame captures:
+The tests check every section of `../fixtures/petal/petal_stream_v5.json`
+(carrier orders, the katakana tiles and glyphs, turn and kana whitening, atom
+ids and both readers' template probes included), decode the golden camera
+captures of `../fixtures/petal/petal_captures_v5.json` with exactly the lanes,
+turn lanes, kana lanes, inferred corners, poses and Reed–Solomon corrections the
+reference reads, track its golden frame pairs, recover the missing lanes of its
+noisy merge set, and refuse lanes from mixed-frame captures:
 
 ```bash
 ./gradlew :core-jvm:test --tests '*Petal*' --console=plain
@@ -1555,3 +1618,14 @@ handle only releases ownership. The marker frame is published before an immutabl
 selection, and nothing is returned until both are durable; a missing selected original is
 refused. Recovery may complete a missing selection for a present valid original. This local
 mechanism does not establish protection against complete filesystem rollback.
+
+### X.509 ownership signing
+
+`ZkX509SigningPreparationV1.prepareOwnershipSigningV1` delegates canonical
+Norito X.509 statement preparation to the existing native privacy bridge. Its
+`message` is for a P-256 `SHA256withECDSA` signer; `digest` is for a prehash signer.
+The application keeps its certificate subject key and normalizes the returned
+signature to low-s fixed 64-byte `r || s` before witness construction. Java callers
+use the same static Kotlin factory and defensive `getMessage()`/`getDigest()`
+accessors. Native unavailability is an explicit error. This API does not acquire
+authoritative State, prove credentials, pair hosts, submit, or establish readiness.

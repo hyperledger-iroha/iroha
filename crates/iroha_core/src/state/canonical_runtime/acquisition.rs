@@ -78,6 +78,7 @@ macro_rules! runtime_cells {
             pub(in crate::state) transactions: TransactionsBlock<'state>,
             $(pub(in crate::state) $field: CellBlock<'state, $value, $charge>,)+
             pub(in crate::state) projection: CanonicalRuntimeProjection,
+            pub(in crate::state) privacy: LanePrivacyRegistry,
             pub(in crate::state) block_hashes: BlockHashesBlock<'state>,
             #[cfg(any(test, feature = "iroha-core-tests", feature = "bench"))]
             pub(in crate::state) da_rewind_releases: Option<da_hydration::DaRewindReleases<'state>>,
@@ -95,6 +96,7 @@ macro_rules! runtime_cells {
             pub(super) fn finish(
                 &mut self,
                 projection: &mut Option<CanonicalRuntimeProjection>,
+                privacy: LanePrivacyRegistry,
             ) -> AcquiredRuntimeBlock<'state> {
                 // Borrow the caller's pending owner and metadata. A by-value
                 // receiver adds another complete World temporary to the native
@@ -122,6 +124,7 @@ macro_rules! runtime_cells {
                             transactions: original.transactions.take().expect("original State membership"),
                             $($field: cells.$field.take().expect("original State Cell"),)+
                             projection: projection.take().expect("original prepared runtime projection"),
+                            privacy,
                             block_hashes: original.block_hashes.take().expect("original funded hash successor"),
                             #[cfg(any(test, feature = "iroha-core-tests", feature = "bench"))]
                             da_rewind_releases: None,

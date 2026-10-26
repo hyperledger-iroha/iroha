@@ -16,7 +16,11 @@ billing amounts, or attestation of an encrypted media log.
 
 The circuit uses the same deterministic Pasta Poseidon construction on every
 host. Its canonical identity adapter hashes complete canonical Norito identities
-with the shared six-lane Goldilocks construction. It includes every multisig
+with the shared native BLAKE3-256 canonical frame owner and frozen
+`native.commitment.blake3-256.frame-v1` semantic profile. The identity type
+retains exactly 32 raw bytes as four full u64 words, without field reduction
+or a ledger Hash marker. The Kaigi protocol and distinct account/call roles are
+explicit frame fields. It includes every multisig
 member, weight and threshold; display prefixes, aliases, low-word projections
 and field reduction are not identity adapters.
 
@@ -39,19 +43,19 @@ marker bit. JSON uses exact 32-byte arrays. The removed alias and issuance-time
 fields are rejected, including empty or zero-valued instances.
 
 The authorization circuit ID is `pipa-r/pasta/kaigi-authorization-v1`, with
-schema `kaigi-authorization-v1`, domain size `k = 13`, and exactly one instance
-column containing these 31 rows:
+schema `kaigi-authorization-v1`, domain size `k = 12`, and exactly one instance
+column containing these 25 rows:
 
 | Rows | Meaning |
 | --- | --- |
 | 0–3 | Genesis-derived network bytes as four little-endian u64 limbs |
-| 4–9 | All six canonical call-identity Goldilocks limbs |
-| 10–15 | All six original host-identity Goldilocks limbs |
-| 16–21 | All six original subject-identity Goldilocks limbs |
-| 22 | Ledger-owned participation sequence |
-| 23 | Closed action: host create 0, join 1, leave 2, host end 3 |
-| 24–27 | Authenticated pre-roster root as four little-endian u64 limbs |
-| 28–30 | Commitment C, action nullifier N, authorization A |
+| 4–7 | Complete native call identity as four u64 words |
+| 8–11 | Complete native original host identity as four u64 words |
+| 12–15 | Complete native original subject identity as four u64 words |
+| 16 | Ledger-owned participation sequence |
+| 17 | Closed action: host create 0, join 1, leave 2, host end 3 |
+| 18–21 | Authenticated pre-roster root as four little-endian u64 words |
+| 22–24 | Commitment C, action nullifier N, authorization A |
 
 Host actions require subject = original host and sequence zero. Join and leave
 require a different subject and a positive sequence. C binds network, call,
@@ -59,13 +63,13 @@ host, subject, sequence and private blinding. N binds the same identities and se
 action, without a blinding or caller-selected nullifier seed. A binds the entire context,
 including action and pre-root, to C, N and the same blinding. The framed sponge
 constrains domain, length, terminator, padding and persistent capacity state.
-All integer limbs are range checked; identity limbs are strictly below the
-Goldilocks modulus.
+All integer words are range checked to their complete u64 range. Each native
+digest bit is retained by the injective u64-to-Pasta representation.
 
 The usage circuit ID is `pipa-r/pasta/kaigi-usage-v1`, with schema
-`kaigi-usage-v1`, domain size `k = 12`, and one 25-row column: network 0–3, call
-4–9, original host 10–15, pre-root 16–19, ledger segment 20, positive duration
-21, billed gas 22, stored host C 23 and usage commitment U 24. Segment is u32;
+`kaigi-usage-v1`, domain size `k = 12`, and one 21-row column: network 0–3, call
+4–7, original host 8–11, pre-root 12–15, ledger segment 16, positive duration
+17, billed gas 18, stored host C 19 and usage commitment U 20. Segment is u32;
 other integer limbs are u64. It proves the same host C opening established by
 host create. U binds this complete context and private opening. Core compares
 every row against trusted state and the signed usage instruction.

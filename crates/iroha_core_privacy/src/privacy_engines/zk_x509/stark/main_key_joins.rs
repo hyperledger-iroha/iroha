@@ -448,7 +448,6 @@ impl MainKeyJoinPlanV1 {
     }
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl MainKeyJoinPlanV1 {
     // RFC, IO, the cached SHA segment and streamed P256 coefficients coexist.
     // Three log19 columns bound that sum. Digest packing also holds one log16

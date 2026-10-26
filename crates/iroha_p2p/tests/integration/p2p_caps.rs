@@ -3,8 +3,8 @@ use iroha_config::parameters::actual::{
     Network as Config, SoranetHandshake as ActualSoranetHandshake,
 };
 use iroha_config::parameters::defaults::network::TRUST_GOSSIP;
-use iroha_data_model::prelude::Peer;
 use iroha_futures::supervisor::ShutdownSignal;
+use iroha_model_base::peer::Peer;
 use iroha_p2p::{
     NetworkHandle,
     network::{NetworkActorAdmissionError, NetworkActorAdmissionRejection, message::*},

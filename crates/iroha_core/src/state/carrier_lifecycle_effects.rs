@@ -9,7 +9,7 @@ use super::*;
 /// Exact immutable manifest/privacy and reset projections, with no State borrow.
 pub(super) struct PreparedLaneLifecycleEffects {
     manifests: LaneManifestRegistryHandle,
-    privacy: LanePrivacyRegistryHandle,
+    privacy: LanePrivacyRegistry,
     lanes_to_reset: BTreeSet<LaneId>,
     active_reset_lanes: BTreeSet<LaneId>,
     lane_config: iroha_config::parameters::actual::LaneConfig,
@@ -33,6 +33,11 @@ pub(super) struct LaneLifecyclePostPublication {
 }
 
 impl PreparedLaneLifecycleEffects {
+    #[cfg(test)]
+    pub(super) fn privacy_is_for_test(&self, original: &LanePrivacyRegistry) -> bool {
+        LanePrivacyRegistry::ptr_eq(&self.privacy, original)
+    }
+
     /// Capture once under the caller's existing admission, without reading State
     /// or creating an alternative capacity policy. The retained manifest owner
     /// remains the source of the privacy projection throughout publication.
@@ -44,9 +49,7 @@ impl PreparedLaneLifecycleEffects {
         let _ = nexus;
         Self {
             manifests: Arc::clone(&pending.updated_lane_manifests),
-            privacy: Arc::new(LanePrivacyRegistry::from_manifest_registry(
-                &pending.updated_lane_manifests,
-            )),
+            privacy: pending.updated_lane_privacy.clone(),
             lanes_to_reset: pending.catalog_update.lanes_to_reset.clone(),
             active_reset_lanes: State::active_reset_lanes(
                 &pending.catalog_update.lanes_to_reset,

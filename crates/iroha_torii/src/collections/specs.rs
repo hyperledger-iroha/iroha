@@ -221,7 +221,14 @@ pub static DOMAINS: CollectionSpec = CollectionSpec {
 pub static ACCOUNTS: CollectionSpec = CollectionSpec {
     id: "accounts",
     tag: 2,
-    fields: &[account("id"), text("label"), text("uaid")],
+    fields: &[
+        account("id"),
+        text("label"),
+        text("uaid"),
+        // Joined only for queries that mention them (`routing::collection_sources`).
+        text_list("alias_scopes"),
+        json("aliases"),
+    ],
     metadata: true,
     default_sort: &[("id", Order::Asc)],
     identity: &["id"],
@@ -616,8 +623,36 @@ pub static BOND_ENTITLEMENTS: CollectionSpec = CollectionSpec {
     ordered: true,
 };
 
+/// `/v1/assets/{definition_id}/movements`: every committed movement of one asset
+/// definition, newest first, from the node-local movement index. One row per movement;
+/// a failed transaction's attempted movements carry `result_ok: false`.
+pub static ASSET_MOVEMENTS: CollectionSpec = CollectionSpec {
+    id: "asset_movements",
+    tag: 20,
+    fields: &[
+        text("id"),
+        text("kind"),
+        number("timestamp_ms"),
+        account("from_account_id"),
+        account("to_account_id"),
+        text("asset_definition_id"),
+        number("amount"),
+        text("tx_hash"),
+        account("authority"),
+        number("block_height"),
+        number("block_index"),
+        number("movement_index"),
+        boolean("result_ok"),
+    ],
+    metadata: false,
+    default_sort: &[],
+    identity: &["block_height", "block_index", "movement_index"],
+    positioned: 3,
+    ordered: false,
+};
+
 /// Every collection, in cursor-tag order.
-pub const ALL: [&CollectionSpec; 19] = [
+pub const ALL: [&CollectionSpec; 20] = [
     &DOMAINS,
     &ACCOUNTS,
     &ASSET_DEFINITIONS,
@@ -637,6 +672,7 @@ pub const ALL: [&CollectionSpec; 19] = [
     &CONTRACT_EVENTS,
     &BONDS,
     &BOND_ENTITLEMENTS,
+    &ASSET_MOVEMENTS,
 ];
 
 #[cfg(test)]
@@ -701,6 +737,18 @@ mod tests {
         assert_eq!(field.ty, FieldType::String);
         assert!(field.sortable);
         assert!(!field.account);
+    }
+
+    #[test]
+    fn account_alias_fields_are_a_filterable_list_and_a_selectable_value() {
+        let scopes = ACCOUNTS.field("alias_scopes").expect("alias scopes");
+        assert_eq!(scopes.ty, FieldType::String);
+        assert!(scopes.list && !scopes.sortable && !scopes.account);
+        let aliases = ACCOUNTS.field("aliases").expect("aliases");
+        assert_eq!(aliases.ty, FieldType::Json);
+        assert!(!aliases.list && !aliases.sortable);
+        assert!(ACCOUNTS.field("aliases.alias").is_none());
+        assert!(DOMAINS.field("aliases").is_none());
     }
 
     #[test]

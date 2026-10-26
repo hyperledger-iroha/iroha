@@ -5,14 +5,15 @@ import XCTest
 final class NativeFinalityCheckpointV1Tests: XCTestCase {
     func testInvalidSelectionRefusesBeforeNativeDispatch() throws {
         let network = try NetworkId(bytes: Data(repeating: 1, count: 32))
-        for (checkpoint, chain, sha, height, context) in [
+        let invalidSelections: [(Data, String, Data, UInt64, Data)] = [
             (Data(), "chain", Data(repeating: 1, count: 32), UInt64(2), Data(repeating: 3, count: 32)),
             (Data([1]), "", Data(repeating: 1, count: 32), UInt64(2), Data(repeating: 3, count: 32)),
             (Data([1]), "chain", Data(repeating: 1, count: 31), UInt64(2), Data(repeating: 3, count: 32)),
             (Data([1]), "chain", Data(repeating: 1, count: 32), UInt64(0), Data(repeating: 3, count: 32)),
             (Data([1]), "chain", Data(repeating: 1, count: 32), UInt64.max, Data(repeating: 3, count: 32)),
             (Data([1]), "chain", Data(repeating: 1, count: 32), UInt64(2), Data(repeating: 0, count: 32))
-        ] {
+        ]
+        for (checkpoint, chain, sha, height, context) in invalidSelections {
             XCTAssertThrowsError(try NativeFinalityCheckpointV1.verifyFiCheckpointSelectionV1(
                 checkpointBytes: checkpoint, networkId: network, expectedChain: chain,
                 expectedSHA256: sha, expectedHeight: height, expectedContextID: context)) {

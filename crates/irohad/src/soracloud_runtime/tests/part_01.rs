@@ -1495,19 +1495,17 @@ async fn queued_runtime_submission_requires_the_committed_crypto_policy() -> Res
     let mut context = SumeragiGenesisContextParameters::recommended();
     context.root_scope = SumeragiRootScope::Global;
     let mut block = world.block();
-    block
-        .parameters
-        .set_parameter(Parameter::Custom(CustomParameter::new(
-            consensus_metadata::handshake_meta_id(),
-            Json::new(ConsensusHandshakeMetadata {
-                mode: SumeragiConsensusMode::Permissioned,
-                block_cadence_ms: NonZeroU64::new(1_000).unwrap(),
-                wire_protocol_version: u32::from(iroha_data_model::sumeragi::PROTOCOL_VERSION),
-                consensus_fingerprint: ConsensusFingerprint::new([0x5C; 32]),
-                sumeragi_context: context,
-            }),
-        )))?;
-    block.parameters.set_parameter(Parameter::Custom(
+    block.set_parameter_for_testing(Parameter::Custom(CustomParameter::new(
+        consensus_metadata::handshake_meta_id(),
+        Json::new(ConsensusHandshakeMetadata {
+            mode: SumeragiConsensusMode::Permissioned,
+            block_cadence_ms: NonZeroU64::new(1_000).unwrap(),
+            wire_protocol_version: u32::from(iroha_data_model::sumeragi::PROTOCOL_VERSION),
+            consensus_fingerprint: ConsensusFingerprint::new([0x5C; 32]),
+            sumeragi_context: context,
+        }),
+    )))?;
+    block.set_parameter_for_testing(Parameter::Custom(
         iroha_config::parameters::defaults::nexus::fees::genesis_policy()
             .into_custom_parameter()?,
     ))?;
@@ -1582,10 +1580,9 @@ async fn queued_runtime_submission_requires_the_committed_crypto_policy() -> Res
             0,
             0,
         ));
-        block
-            .world
-            .parameters
-            .set_parameter(CryptoAdmissionPolicyV1::new(vec![algorithm])?.into_parameter()?)?;
+        block.world.set_parameter_for_testing(
+            CryptoAdmissionPolicyV1::new(vec![algorithm])?.into_parameter()?,
+        )?;
         block.commit_world_overlay_for_testing()?;
         let error = submit();
         if algorithm == Algorithm::Secp256k1 {

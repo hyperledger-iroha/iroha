@@ -229,6 +229,73 @@ mod tests {
         assert!(AssertAssetFiTransferReceiptV1::decode_from_slice(&trailing).is_err());
     }
     #[test]
+    fn fi_assertions_preserve_raw_array_fields_under_both_length_layouts() {
+        fn check<T>(value: T, raw_fields: &[(usize, [u8; 32])])
+        where
+            T: norito::core::SerializePayload + PartialEq + core::fmt::Debug,
+            for<'a> T: DecodeFromSlice<'a>,
+        {
+            for flags in [0, norito::core::header_flags::COMPACT_LEN] {
+                let _flags = norito::core::DecodeFlagsGuard::enter(flags);
+                let mut bytes = Vec::new();
+                norito::core::serialize_to_buffer(&value, &mut bytes).unwrap();
+                let (decoded, used) = T::decode_from_slice(&bytes).unwrap();
+                assert_eq!(decoded, value);
+                assert_eq!(used, bytes.len());
+                let mut offset = 0;
+                let mut field_index = 0;
+                let mut checked = 0;
+                while offset < bytes.len() {
+                    let start = offset;
+                    let field = crate::isi::read_aos_field(&bytes, &mut offset, flags).unwrap();
+                    if let Some((_, expected)) =
+                        raw_fields.iter().find(|(index, _)| *index == field_index)
+                    {
+                        assert_eq!(field, expected);
+                        checked += 1;
+                        for width in [31_u64, 33] {
+                            let mut malformed = bytes[..start].to_vec();
+                            norito::core::write_len_to_vec_with_flags(&mut malformed, width, flags);
+                            malformed.extend_from_slice(&field[..field.len().min(width as usize)]);
+                            if width == 33 {
+                                malformed.push(0);
+                            }
+                            malformed.extend_from_slice(&bytes[offset..]);
+                            assert!(matches!(
+                                T::decode_from_slice(&malformed),
+                                Err(norito::core::Error::LengthMismatch)
+                            ));
+                        }
+                    }
+                    field_index += 1;
+                }
+                assert_eq!(checked, raw_fields.len());
+                let mut trailing = bytes.clone();
+                trailing.push(0);
+                assert!(T::decode_from_slice(&trailing).is_err());
+                assert!(T::decode_from_slice(&bytes[..bytes.len() - 1]).is_err());
+            }
+        }
+        for transfer in [false, true] {
+            let value = test_values::current(transfer);
+            let raw_fields = [
+                (2, value.expected_uid),
+                (4, value.request_sha256),
+                (5, value.challenge),
+                (7, value.minimum_block_hash),
+            ];
+            check(value, &raw_fields);
+        }
+        let value = test_values::historical();
+        let raw_fields = [
+            (6, value.request_sha256),
+            (7, value.challenge),
+            (9, value.minimum_block_hash),
+        ];
+        check(value, &raw_fields);
+    }
+
+    #[test]
     fn fi_public_hashes_commit_typed_selectors_revisions_and_explicit_absence() {
         let value = test_values::current(true);
         let target_hash = asset_fi_context_target_hash_v1(&value.target).unwrap();

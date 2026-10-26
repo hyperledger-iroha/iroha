@@ -3384,10 +3384,19 @@ impl<'s> Worker<'s> {
                         ))
                     }
                 })?;
-            if let Err(error) = self
-                .context
-                .native_context_archive
-                .publish_fastpq_source(self.state.kura(), &pending.native_contexts)
+            // Startup replay re-derives already certified history: its optional proof transport
+            // was captured, or refused, by forward execution. Only an isolated FASTPQ replay
+            // exists to produce that transport.
+            let transport = pending.telemetry_origin != CommitTelemetryOrigin::HistoricalReplay
+                || self
+                    .context
+                    .native_context_archive
+                    .retains_isolated_fastpq_source();
+            if transport
+                && let Err(error) = self
+                    .context
+                    .native_context_archive
+                    .publish_fastpq_source(self.state.kura(), &pending.native_contexts)
             {
                 if self
                     .context

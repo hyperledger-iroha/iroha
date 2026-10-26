@@ -588,8 +588,8 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
         },
         streaming::StreamingKeyMaterial,
     };
-    use iroha_data_model::peer::Peer;
     use iroha_logger::Level;
+    use iroha_model_base::peer::Peer;
     use iroha_primitives::addr::socket_addr;
     let torii_data_dir = crate::data_dir::base_dir();
     let da_ingest = A::DaIngest {
@@ -1731,8 +1731,7 @@ pub(crate) fn bind_fixture_root(
     metadata.validate().unwrap();
     let mut block = world.block();
     block
-        .parameters
-        .set_parameter(Parameter::Custom(CustomParameter::new(
+        .set_parameter_for_testing(Parameter::Custom(CustomParameter::new(
             consensus_metadata::handshake_meta_id(),
             iroha_primitives::json::Json::new(metadata),
         )))
@@ -1820,8 +1819,7 @@ pub(crate) fn author_ready_fixture_crypto_policy(world: &mut iroha_core::state::
         .expect("explicit Torii fixture signing policy");
     let mut block = world.block();
     block
-        .parameters
-        .set_parameter(policy.into_parameter().expect("canonical fixture policy"))
+        .set_parameter_for_testing(policy.into_parameter().expect("canonical fixture policy"))
         .expect("initialize fixture policy projection");
     block.commit();
 }

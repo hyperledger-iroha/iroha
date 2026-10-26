@@ -73,29 +73,27 @@ fn fixture_with_effects_in_root(
     // The maintained signed-genesis owner establishes the original native root.
     // Callback fixtures are registered only after genesis, so their exact once
     // actions belong to this successor rather than the bootstrap carrier.
-    let state = State::new_for_testing(
+    let mut state = State::new_for_testing(
         World::new(),
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     );
     {
-        let mut parameters = state.world.parameters.block();
         let mut policy = ExecutionOutputPolicyV1::bootstrap();
         policy.max_output_bytes = 65_536;
         policy.max_pipeline_triggers = 1;
         policy.max_time_invocations = 1;
         policy.validate().unwrap();
-        parameters
-            .get_mut()
-            .set_parameter(Parameter::Block(BlockParameter::ExecutionOutput(policy)))
+        state
+            .world
+            .set_parameter_for_testing(Parameter::Block(BlockParameter::ExecutionOutput(policy)))
             .expect("valid fixture parameters");
-        parameters
-            .get_mut()
-            .set_parameter(Parameter::Block(BlockParameter::MaxTimeTriggerInvocations(
+        state
+            .world
+            .set_parameter_for_testing(Parameter::Block(BlockParameter::MaxTimeTriggerInvocations(
                 NonZeroU32::MIN,
             )))
             .expect("valid fixture parameters");
-        parameters.commit();
     }
     let domain = DomainId::try_new("owned-inventory", "universal").unwrap();
     let asset = if fee_and_protocol || private_dataspace.is_some() {
@@ -109,21 +107,20 @@ fn fixture_with_effects_in_root(
     };
     let mut fee_parameters = Vec::new();
     if fee_and_protocol {
-        let mut fees = state.nexus_snapshot().fees;
+        let mut fees = iroha_config::parameters::defaults::nexus::fees::genesis_policy();
         fees.base_fee = Quantity::zero();
         fees.per_byte_fee = Quantity::zero();
         fees.per_instruction_fee = Quantity::zero();
         fees.per_gas_unit_fee = Quantity::zero();
         {
-            let mut parameters = state.world.parameters.block();
-            parameters
-                .set_parameter(iroha_data_model::parameter::Parameter::Custom(
+            state
+                .world
+                .set_parameter_for_testing(iroha_data_model::parameter::Parameter::Custom(
                     fees.clone()
                         .into_custom_parameter()
                         .expect("explicit fixture policy"),
                 ))
                 .expect("valid fixture monetary projection");
-            parameters.commit();
         }
 
         // Nexus admission retains the canonical XOR identity even when its fee
@@ -143,6 +140,14 @@ fn fixture_with_effects_in_root(
         fee_parameters.extend(crate::pipeline_gas_policy::parameters_for_testing(gas));
     }
     let nexus = state.nexus_snapshot();
+    let fees = state
+        .world
+        .parameters
+        .view()
+        .get()
+        .root_fees()
+        .cloned()
+        .unwrap_or_else(iroha_config::parameters::defaults::nexus::fees::genesis_policy);
     let genesis_parameters = {
         let parameters = state.world.parameters.view();
         vec![
@@ -155,6 +160,13 @@ fn fixture_with_effects_in_root(
         ]
     };
     let mut config = crate::sumeragi::test_chain::TestChainConfig::new(state.world, 0);
+    // The private root below authors its own complete policy exactly once.
+    if private_dataspace.is_none() {
+        config.genesis_parameters.push(Parameter::Custom(
+            fees.into_custom_parameter()
+                .expect("explicit signed inventory fee policy"),
+        ));
+    }
     config.chain_id = state.chain_id;
     config.pipeline = state.pipeline;
     config.governance = Some(state.gov);
@@ -197,13 +209,7 @@ fn fixture_with_effects_in_root(
         .unwrap();
         nexus.configured_dataspace_catalog = nexus.dataspace_catalog.clone();
         nexus.routing_policy.default_dataspace = dataspace;
-        nexus.fees.fee_asset_id = asset.clone();
-        nexus.fees.base_fee = Quantity::zero();
-        nexus.fees.per_byte_fee = Quantity::zero();
-        nexus.fees.per_instruction_fee = Quantity::zero();
-        nexus.fees.per_gas_unit_fee = Quantity::zero();
         let genesis_authority = AccountId::new(config.genesis_key.public_key().clone());
-        nexus.fees.fee_sink_account_id = genesis_authority.clone();
         let gas = iroha_config::parameters::actual::Gas {
             tech_account_id: genesis_authority.to_string(),
             accepted_assets: vec![asset.canonical_address()],

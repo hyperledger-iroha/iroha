@@ -61,10 +61,14 @@ fn incumbent_authority_requires_authenticated_history_even_with_local_metadata()
     for with_metadata in [false, true] {
         let world = World::new();
         if with_metadata {
-            let mut parameters = world.parameters.block();
-            parameters
-                .set_parameter(handshake_metadata())
-                .expect("valid fixture parameters");
+            let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
+                .expect("funded original parameter-only fixture block");
+            crate::state::set_parameter_cell_for_testing(
+                &mut parameters,
+                handshake_metadata(),
+                world.sccp_committee_generations.allocation_budget(),
+            )
+            .expect("valid fixture parameters");
             parameters.commit();
         }
         let state = state_on(network_id_of(b"uncertified-metadata"), world);

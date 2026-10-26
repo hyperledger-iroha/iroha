@@ -51,27 +51,36 @@ fn lower_limits(action: u32, block: u32) -> PrivacyConsensusLimitsV1 {
 }
 
 fn set_caps(world: &World, transaction: u64, block: u32) {
-    let mut parameters = world.parameters.block();
-    parameters
-        .set_parameter(Parameter::Transaction(TransactionParameter::MaxTxBytes(
+    let mut parameters = crate::state::parameter_cell_block_for_testing(&world).unwrap();
+    crate::state::set_parameter_cell_for_testing(
+        &mut parameters,
+        Parameter::Transaction(TransactionParameter::MaxTxBytes(
             NonZeroU64::new(transaction).unwrap(),
-        )))
-        .unwrap();
-    parameters
-        .set_parameter(Parameter::Sumeragi(SumeragiParameter::MaxBlockBytes(
+        )),
+        world.sccp_committee_generations.allocation_budget(),
+    )
+    .unwrap();
+    crate::state::set_parameter_cell_for_testing(
+        &mut parameters,
+        Parameter::Sumeragi(SumeragiParameter::MaxBlockBytes(
             NonZeroU32::new(block).unwrap(),
-        )))
-        .unwrap();
+        )),
+        world.sccp_committee_generations.allocation_budget(),
+    )
+    .unwrap();
     parameters.commit();
 }
 
 fn set_signatures(world: &World, signatures: u64) {
-    let mut parameters = world.parameters.block();
-    parameters
-        .set_parameter(Parameter::Transaction(TransactionParameter::MaxSignatures(
+    let mut parameters = crate::state::parameter_cell_block_for_testing(&world).unwrap();
+    crate::state::set_parameter_cell_for_testing(
+        &mut parameters,
+        Parameter::Transaction(TransactionParameter::MaxSignatures(
             NonZeroU64::new(signatures).unwrap(),
-        )))
-        .unwrap();
+        )),
+        world.sccp_committee_generations.allocation_budget(),
+    )
+    .unwrap();
     parameters.commit();
 }
 

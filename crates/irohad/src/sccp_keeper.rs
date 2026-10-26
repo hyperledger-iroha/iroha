@@ -94,7 +94,6 @@ use iroha_core::{
         store,
     },
     state::{State, StateReadOnly, WorldReadOnly},
-    tx::AcceptedTransaction,
 };
 use iroha_crypto::KeyPair;
 use iroha_data_model::{
@@ -617,21 +616,11 @@ fn submit_transaction_at(
         .wrap_err("rebuild quoted SCCP transaction")?
         .try_sign(key.private_key())
         .map_err(|error| eyre::eyre!("sign SCCP transaction: {error:?}"))?;
-    let parameters = state.transaction_admission_parameters();
-    let admission_policy = parameters.require_crypto_policy().map_err(|_| {
-        iroha_core::execution_attempt::ExecutionDeferred::from(
-            ivm::error::ExecutionDeferral::CryptoAdmissionPolicyUnavailable,
-        )
-    })?;
-    let accepted = AcceptedTransaction::accept(
-        transaction,
-        state.network_id_ref(),
-        parameters.sumeragi().max_clock_drift(),
-        parameters.transaction(),
-        admission_policy,
-    )
+    let accepted = {
+        let parameters = state.transaction_admission_parameters();
+        crate::accept_internal_transaction(transaction, state.network_id_ref(), &parameters)
+    }
     .wrap_err("accept SCCP transaction")?;
-    drop(parameters);
     queue
         .push_with_lane_with_state(accepted, state)
         .map(|_| ())
@@ -1759,15 +1748,13 @@ mod tests {
         {
             let mut block = world.block();
             block
-                .parameters
-                .set_parameter(Parameter::Custom(CustomParameter::new(
+                .set_parameter_for_testing(Parameter::Custom(CustomParameter::new(
                     consensus_metadata::handshake_meta_id(),
                     iroha_primitives::json::Json::new(metadata),
                 )))
                 .expect("install the signed SCCP handshake fixture");
             block
-                .parameters
-                .set_parameter(Parameter::Custom(
+                .set_parameter_for_testing(Parameter::Custom(
                     iroha_config::parameters::defaults::nexus::fees::genesis_policy()
                         .into_custom_parameter()
                         .expect("canonical root fee fixture"),
@@ -1820,8 +1807,7 @@ mod tests {
             let mut block = state.block(header);
             block
                 .world
-                .parameters
-                .set_parameter(
+                .set_parameter_for_testing(
                     iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
                         algorithm,
                     ])

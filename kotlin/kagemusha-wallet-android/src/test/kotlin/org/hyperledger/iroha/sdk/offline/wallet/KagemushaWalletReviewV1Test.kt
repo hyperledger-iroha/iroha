@@ -65,6 +65,18 @@ class KagemushaWalletReviewV1Test {
         try { failure.review(Any(),KagemushaWalletReviewProjectionV1.Kind.SEND); fail() } catch(e:KagemushaWalletExceptionV1){assertEquals(-4,e.status)}
         rejects { reply(status=-4).review(Any(),KagemushaWalletReviewProjectionV1.Kind.SEND) }
     }
+    @Test fun unloadReviewPreservesFoldRequiredWithoutAReviewCapability() {
+        val failure = KagemushaWalletReviewReplyV1(-8, -1, 0, 0, 0, 0, byteArrayOf())
+        val error = assertThrows(KagemushaWalletExceptionV1::class.java) {
+            failure.review(Any(), KagemushaWalletReviewProjectionV1.Kind.UNLOAD)
+        }
+        assertEquals(KagemushaWalletExceptionV1.FOLD_REQUIRED, error.status)
+        assertNull(failure.cleanupToken())
+        val malformed = assertThrows(KagemushaWalletExceptionV1::class.java) {
+            reply(bytes = data(false), status = -8).review(Any(), KagemushaWalletReviewProjectionV1.Kind.UNLOAD)
+        }
+        assertEquals(KagemushaWalletExceptionV1.INVALID_NATIVE_OUTPUT, malformed.status)
+    }
     @Test fun foreignOwnerCannotConsumeAndOriginCanConsumeOnlyOnce() {
         val owner=Any(); val review=reply().review(owner,KagemushaWalletReviewProjectionV1.Kind.SEND)
         rejects { review.consume(Any()) }; assertEquals(8L,review.consume(owner)); rejects { review.consume(owner) }

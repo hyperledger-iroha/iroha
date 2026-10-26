@@ -5,6 +5,9 @@ use super::*;
 #[path = "intake_tests.rs"]
 mod intake;
 
+#[path = "receive_retry_tests.rs"]
+mod receive_retry;
+
 use crate::kagemusha_wallet_advance_v1::kagemusha_wallet_archive_object_digest_v1 as object_digest;
 
 /// Which mock derivation a proof consumed.
@@ -64,6 +67,25 @@ impl NativePreparation for TestProofs {
         }
         if let Some(archive) = request.archive_request().filter(|_| self.archive_plans) {
             let plan = archive::encode(&archive_step(source, archive)?)?;
+            let prepared = TestPreparedV1 {
+                plan: object_digest(&plan),
+                origin: TestOriginV1::Plan,
+            };
+            return Ok((plan, prepared));
+        }
+        if let Some(OperationActionV1::Receive { .. }) =
+            request.user_request().map(|request| &request.action)
+            && self.refuse_receive_admission
+        {
+            return Err(Error::Invalid(
+                crate::kagemusha_wallet_state_v1::native_worker::RECEIVE_ADMISSION_REFUSAL,
+            ));
+        }
+        if let Some(action @ OperationActionV1::Receive { .. }) =
+            request.user_request().map(|request| &request.action)
+            && self.receive_plans
+        {
+            let plan = archive::encode(&receive_retry::receive_step(source, action)?)?;
             let prepared = TestPreparedV1 {
                 plan: object_digest(&plan),
                 origin: TestOriginV1::Plan,
@@ -132,6 +154,11 @@ impl NativePreparation for TestProofs {
         } else {
             request.user_request().map(|request| &request.action)
                 == Some(&OperationActionV1::Retire)
+                || self.receive_plans
+                    && matches!(
+                        request.user_request().map(|request| &request.action),
+                        Some(OperationActionV1::Receive { .. })
+                    )
         };
         if !planned
             || prepared.capsule.body().predecessor_capsule_digest

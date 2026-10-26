@@ -10,10 +10,7 @@ use iroha_crypto::{Hash, PublicKey};
 use iroha_data_model::{
     NetworkId,
     account::address::ChainDiscriminantGuard,
-    block::{
-        SignedBlock,
-        consensus::{MAX_VALIDATORS_PER_HEIGHT, is_valid_committee_size},
-    },
+    block::SignedBlock,
     isi::SetParameter,
     parameter::{
         Parameter,
@@ -27,6 +24,7 @@ use iroha_genesis::{
     ValidatedGenesisBundle,
 };
 use iroha_model_base::chain::ChainId;
+use iroha_model_base::topology::{MAX_VALIDATORS_PER_HEIGHT, is_valid_committee_size};
 use iroha_swarm::{
     PeerOverride, PreparedGenesisArtifacts, PreparedRuntimeFile, PreparedSecretFile,
     PreparedValidator,
@@ -1019,6 +1017,7 @@ fn validate_runtime_projection_policy(
     source: &actual::Root,
     projected: &actual::Root,
     metadata: &ConsensusHandshakeMetadata,
+    original_fees: &iroha_data_model::block::consensus::RootFeePolicy,
 ) -> color_eyre::Result<()> {
     ensure!(
         matches!(source.sumeragi.role, actual::NodeRole::Validator)
@@ -1074,10 +1073,20 @@ fn validate_runtime_projection_policy(
         execution_policy_projection(source) == execution_policy_projection(projected),
         "container runtime projection changed deterministic execution policy"
     );
-    let source_nexus =
-        actual::sumeragi_nexus_amx_context_hash(&source.nexus, &source.pipeline, &[], &[]);
-    let projected_nexus =
-        actual::sumeragi_nexus_amx_context_hash(&projected.nexus, &projected.pipeline, &[], &[]);
+    let source_nexus = actual::sumeragi_nexus_amx_context_hash(
+        &source.nexus,
+        Some(original_fees),
+        &source.pipeline,
+        &[],
+        &[],
+    );
+    let projected_nexus = actual::sumeragi_nexus_amx_context_hash(
+        &projected.nexus,
+        Some(original_fees),
+        &projected.pipeline,
+        &[],
+        &[],
+    );
     ensure!(
         source_nexus == projected_nexus,
         "container runtime projection changed Nexus/AMX consensus policy"
@@ -1747,6 +1756,7 @@ fn project_prepared_runtime_config(
     mut table: crate::secret_toml::Table,
     source: &actual::Root,
     metadata: &ConsensusHandshakeMetadata,
+    original_fees: &iroha_data_model::block::consensus::RootFeePolicy,
     peers: &[PreparedRuntimePeer],
 ) -> color_eyre::Result<PreparedRuntimeProjection> {
     const RANS_TABLE_MAX_BYTES: u64 = 4 * 1024 * 1024;
@@ -2391,7 +2401,7 @@ fn project_prepared_runtime_config(
         source_requires_sora == requires_sora_profile,
         "container runtime projection changed Sora profile requirements"
     );
-    validate_runtime_projection_policy(source, &projected_effective, metadata)?;
+    validate_runtime_projection_policy(source, &projected_effective, metadata, original_fees)?;
     let mut content = Zeroizing::new(
         toml::to_string_pretty(&*table)
             .wrap_err("serialize container-safe prepared runtime projection")?,
@@ -2442,6 +2452,7 @@ fn load_prepared_bundle(
         expected_hash_record.as_bytes(),
     )?;
     let signed_metadata = signed_genesis_consensus_metadata(validated.block())?;
+    let signed_fees = iroha_genesis::signed_genesis_root_fee_policy(validated.block())?;
     let config_paths = prepared_peer_config_paths(config_dir, count)?;
     let mut chain = None;
     let mut admitted = Vec::with_capacity(config_paths.len());
@@ -2644,6 +2655,7 @@ fn load_prepared_bundle(
             admitted.table,
             &admitted.config,
             &signed_metadata,
+            &signed_fees,
             &runtime_peers,
         )?;
         let execution_projection = execution_policy_projection(&effective_config);
@@ -2657,6 +2669,7 @@ fn load_prepared_bundle(
         }
         let nexus_projection = actual::sumeragi_nexus_amx_context_hash(
             &effective_config.nexus,
+            Some(&signed_fees),
             &effective_config.pipeline,
             &[],
             &[],
@@ -3790,12 +3803,28 @@ mod tests {
             .expect("prepared fixture has consensus metadata");
         let parsed = parse_prepared_peer_config(&config_dir.join("peer0.toml"))
             .expect("parse prepared peer0 fixture");
-        validate_runtime_projection_policy(&parsed.actual, &parsed.actual, &metadata)
-            .expect("unchanged validator configuration preserves projection policy");
+        let original_fees =
+            iroha_genesis::signed_genesis_root_fee_policy(validated.block()).unwrap();
+        validate_runtime_projection_policy(
+            &parsed.actual,
+            &parsed.actual,
+            &metadata,
+            &original_fees,
+        )
+        .expect("unchanged validator configuration preserves projection policy");
+        let mut local_fee_recipe = parsed.actual.clone();
+        local_fee_recipe.nexus.fees.per_byte_fee = 1001_u32.into();
+        validate_runtime_projection_policy(
+            &parsed.actual,
+            &local_fee_recipe,
+            &metadata,
+            &original_fees,
+        )
+        .expect("signed original fee policy is authoritative across local recipe drift");
         let mut drifted = parsed.actual.clone();
         drifted.sumeragi.local.t_base = Some(std::time::Duration::from_millis(987));
         let projection_error =
-            validate_runtime_projection_policy(&parsed.actual, &drifted, &metadata)
+            validate_runtime_projection_policy(&parsed.actual, &drifted, &metadata, &original_fees)
                 .expect_err("Sumeragi policy drift must reject a runtime projection");
         assert!(
             projection_error

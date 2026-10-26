@@ -4,7 +4,6 @@
 //! is required at one native point, never between independently masked entire
 //! polynomials. No terminal value enters the public proof or transcript.
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::super::super::private_table::{PrivateTableV1, zeroize_fields_v1};
 use super::*;
 
@@ -33,7 +32,6 @@ pub(super) struct MainTerminalLinkPlanV1 {
 
 impl MainTerminalLinkPlanV1 {
     /// Conservative public stack/heap charge retained during all MAIN device phases.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     pub(super) const fn public_owner_charge_v1() -> usize {
         3 * core::mem::size_of::<Self>()
             + 64
@@ -376,7 +374,6 @@ impl MainTerminalLinkPlanV1 {
 
     /// Accumulate the same masked linear quotients with four native-domain transforms.
     /// Original masks and the transcript are unchanged; no entropy is sampled here.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     pub(super) fn accumulate_v1(
         &self,
         layout: &AggregateProofLayoutV1,
@@ -480,7 +477,6 @@ impl MainTerminalLinkPlanV1 {
     }
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 mod weighted_replay {
     include!("main_terminal_weighted.rs");
 }

@@ -695,14 +695,16 @@ fn state(accounts: &[&KeyPair], manager: &AccountId) -> State {
 }
 fn component_moderation_state(world: World) -> State {
     // Component account registration owns its policy; authenticated fixtures use signed genesis.
-    let mut parameters = world.parameters.block();
-    parameters
-        .set_parameter(
-            crate::sumeragi::test_chain::crypto_fixture_policy()
-                .into_parameter()
-                .expect("canonical fixture crypto policy"),
-        )
-        .expect("install original fixture crypto policy");
+    let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
+        .expect("funded component parameter fixture");
+    crate::state::set_parameter_cell_for_testing(
+        &mut parameters,
+        crate::sumeragi::test_chain::crypto_fixture_policy()
+            .into_parameter()
+            .expect("canonical fixture crypto policy"),
+        world.sccp_committee_generations.allocation_budget(),
+    )
+    .expect("install original fixture crypto policy");
     parameters.commit();
     State::new_for_testing(
         world,

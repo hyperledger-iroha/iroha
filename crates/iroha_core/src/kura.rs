@@ -282,6 +282,9 @@ pub struct Kura {
     /// Authenticated native identities of checkpoint heights for off-chain
     /// history reads; node-local and never consensus authority.
     history_checkpoints: history_checkpoints::HistoryCheckpoints,
+    /// Retained current-attestation authority over this store's frames; empty
+    /// and detached until its node-local producer attaches.
+    retained_attestation: crate::sumeragi::finality::RetainedAttestation,
     /// Channel for waking the writer thread when sidecars need flushing or shutdown is signalled.
     block_notify_tx: mpsc::SyncSender<BlockNotify>,
     block_notify_rx: Mutex<Option<mpsc::Receiver<BlockNotify>>>,
@@ -442,6 +445,10 @@ impl Kura {
     /// Node-local checkpoints that let off-chain history reads start below the tip.
     pub(crate) fn history_checkpoints(&self) -> &history_checkpoints::HistoryCheckpoints {
         &self.history_checkpoints
+    }
+    /// Retained authority current attestations may rely on while its producer runs.
+    pub(crate) fn retained_attestation(&self) -> &crate::sumeragi::finality::RetainedAttestation {
+        &self.retained_attestation
     }
     fn notify_block_writer_sender(
         sender: &mpsc::SyncSender<BlockNotify>,
@@ -1510,6 +1517,7 @@ impl Kura {
             history_checkpoints: history_checkpoints::HistoryCheckpoints::new(
                 config.history_checkpoint_cache_capacity.get(),
             ),
+            retained_attestation: crate::sumeragi::finality::RetainedAttestation::default(),
             block_notify_tx,
             block_notify_rx: Mutex::new(Some(block_notify_rx)),
             block_plain_text_path: Mutex::new(block_plain_text_path),
@@ -1731,6 +1739,7 @@ impl Kura {
                 &resource_inventory,
             ),
             history_checkpoints: history_checkpoints::HistoryCheckpoints::default(),
+            retained_attestation: crate::sumeragi::finality::RetainedAttestation::default(),
             block_notify_tx,
             block_notify_rx: Mutex::new(Some(block_notify_rx)),
             block_plain_text_path: Mutex::new(None),

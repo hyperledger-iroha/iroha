@@ -1336,6 +1336,135 @@ fn retained_intake_and_preparation_refusals_map_to_resource_without_reclassifica
 }
 
 #[test]
+fn invalid_state_reasons_report_closed_causes_without_changing_the_refusal() {
+    for (error, reason) in [
+        (state::Error::Invalid("ledger activation unconfirmed"), 200),
+        (state::Error::Invalid("ledger Load request"), 201),
+        (state::Error::Invalid("ledger Load request identity"), 201),
+        (state::Error::Invalid("changed ledger Load request"), 202),
+        (state::Error::Invalid("ledger Load lifecycle"), 203),
+        (state::Error::Invalid("G1 validation"), 204),
+        (state::Error::Invalid("archive encoding"), 205),
+        (state::Error::Invalid("private archive encoding"), 205),
+        (state::Error::Invalid("index object size"), 206),
+        (state::Error::Invalid("index value size"), 206),
+        (state::Error::Invalid("provider handle poisoned"), 207),
+        (state::Error::NoHead, 208),
+        (state::Error::Collected, 209),
+        (state::Error::Invalid("incoming lineage verdict"), 242),
+        (state::Error::Invalid("unlisted private diagnostic"), -1),
+    ] {
+        let failure = Failure::from(error);
+        assert_eq!(
+            failure,
+            Failure {
+                status: INVALID,
+                reason,
+                platform_code: 0
+            }
+        );
+        // The public C projection preserves the closed reason without a diagnostic payload.
+        let mut out = WalletResult::default();
+        let returned = unsafe { exports::output(&mut out, || Err(failure)) };
+        assert_eq!(
+            (returned, out.status, out.reason, out.platform_code),
+            (INVALID, INVALID, reason, 0)
+        );
+        assert_eq!(out.length, 0);
+        assert!(out.bytes.is_null());
+    }
+}
+
+#[test]
+fn invalid_provider_reasons_survive_state_and_enrollment_wrapping() {
+    use advance::KagemushaWalletProviderErrorV1 as E;
+    for (field, reason) in [
+        ("provider handle poisoned", 207),
+        ("archive.manifest_size", 220),
+        ("archive.head_not_released", 221),
+        ("archive.stale_checkpoint", 222),
+        ("archive.immutable_record", 223),
+        ("archive.call_failed", 224),
+        ("marker.archive_checkpoint", 225),
+        ("marker.generation", 226),
+        ("marker.state", 227),
+        ("marker.phase", 228),
+        ("marker.frame", 229),
+        ("marker.selected_generation", 230),
+        ("marker.completion_digest", 231),
+        ("marker.slot", 232),
+        ("marker.anchor_kind", 233),
+        ("marker.superseded", 234),
+        ("marker.retired_generation", 235),
+        ("archive.slot", 237),
+        ("archive.call", 238),
+        ("archive.pending_records", 239),
+        ("archive.record_size", 240),
+        ("archive size", 240),
+        ("current source", 241),
+        ("marker.unlisted private diagnostic", -1),
+        ("archive.unlisted private diagnostic", -1),
+    ] {
+        let error = E::Invalid { field };
+        let expected = Failure {
+            status: INVALID,
+            reason,
+            platform_code: 0,
+        };
+        assert_eq!(Failure::from(error), expected);
+        assert_eq!(Failure::from(state::Error::Provider(error)), expected);
+        assert_eq!(
+            Failure::from(iroha_core_zk::kagemusha_wallet_enrollment_v1::Error::Provider(error)),
+            expected
+        );
+    }
+    let expected = Failure {
+        status: INVALID,
+        reason: 236,
+        platform_code: 0,
+    };
+    assert_eq!(Failure::from(E::NoReplaceUnsupported), expected);
+    assert_eq!(
+        Failure::from(state::Error::Provider(E::NoReplaceUnsupported)),
+        expected
+    );
+    assert_eq!(
+        Failure::from(
+            iroha_core_zk::kagemusha_wallet_enrollment_v1::Error::Provider(E::NoReplaceUnsupported)
+        ),
+        expected
+    );
+}
+
+#[test]
+fn invalid_reason_diagnostics_preserve_every_platform_unavailability_cause() {
+    use advance::{KagemushaWalletProviderErrorV1 as E, KagemushaWalletUnavailableV1 as U};
+    for (cause, reason, platform_code) in [
+        (U::Locked, 0, 0),
+        (U::BeforeFirstUnlock, 1, 0),
+        (U::Busy, 2, 0),
+        (U::Io(17), 3, 17),
+        (U::Platform(-27), 4, -27),
+        (U::KeyUnusable, 5, 0),
+        (U::PermanentlyInvalidated, 6, 0),
+    ] {
+        for (error, status) in [
+            (E::Unavailable(cause), UNAVAILABLE),
+            (E::Uncertain(cause), UNCERTAIN),
+        ] {
+            assert_eq!(
+                Failure::from(error),
+                Failure {
+                    status,
+                    reason,
+                    platform_code
+                }
+            );
+        }
+    }
+}
+
+#[test]
 fn custody_failure_reasons_report_only_the_existing_closed_cause() {
     use advance::{KagemushaWalletLostCustodyV1 as L, KagemushaWalletProviderErrorV1 as E};
     for (error, reason) in [
@@ -1414,7 +1543,6 @@ fn custody_failure_reasons_preserve_other_failure_contracts() {
     }
     for (error, status) in [
         (E::NoSpace, NOT_ENOUGH_STORAGE),
-        (E::NoReplaceUnsupported, INVALID),
         (E::Invalid { field: "unchanged" }, INVALID),
         (E::KeyLost, TERMINAL),
         (E::Terminal, TERMINAL),

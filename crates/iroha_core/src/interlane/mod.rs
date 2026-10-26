@@ -2,90 +2,14 @@
 //!
 //! This module wires the NX-10 domain-separated Merkle descriptors into a deterministic registry so
 //! admission/compliance logic can look up the commitments advertised by each lane.
-use crate::governance::manifest::{LaneManifestRegistry, LaneManifestStatus};
-use iroha_crypto::privacy::{
-    LaneCommitmentId, LanePrivacyCommitment, PrivacyError, PrivacyWitness,
-};
+use iroha_crypto::privacy::{LaneCommitmentId, PrivacyError, PrivacyWitness};
 use iroha_data_model::nexus::LanePrivacyProof;
-use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    sync::Arc,
-};
+use iroha_model_base::topology::LaneId;
+use std::collections::BTreeSet;
 use thiserror::Error;
-/// Registry of per-lane privacy commitments derived from governance manifests.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct LanePrivacyRegistry {
-    entries: BTreeMap<LaneId, LanePrivacyLane>,
-}
-/// Shared handle to a [`LanePrivacyRegistry`].
-pub type LanePrivacyRegistryHandle = Arc<LanePrivacyRegistry>;
-impl LanePrivacyRegistry {
-    /// Construct an empty registry.
-    #[must_use]
-    pub fn empty() -> Self {
-        Self::default()
-    }
-    /// Whether the registry has no recorded entries.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
-    }
-    /// Build the registry by snapshotting the provided manifest statuses.
-    #[must_use]
-    pub fn from_statuses(statuses: &[LaneManifestStatus]) -> Self {
-        let mut entries = BTreeMap::new();
-        for status in statuses {
-            if status.privacy_commitments.is_empty() {
-                continue;
-            }
-            entries.insert(status.lane, LanePrivacyLane::from_status(status));
-        }
-        Self { entries }
-    }
-    /// Build the registry directly from the manifest registry helper.
-    #[must_use]
-    pub fn from_manifest_registry(registry: &LaneManifestRegistry) -> Self {
-        let statuses = registry.statuses();
-        Self::from_statuses(&statuses)
-    }
-    /// Borrow the entry recorded for `lane_id`, if any.
-    pub fn lane(&self, lane_id: LaneId) -> Option<&LanePrivacyLane> {
-        self.entries.get(&lane_id)
-    }
-    /// Verify the provided witness against the registered commitment.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`LanePrivacyRegistryError::LaneMissing`] when the lane does not advertise
-    /// commitments, [`LanePrivacyRegistryError::UnknownCommitment`] when the identifier is not
-    /// registered, or propagates cryptographic verification failures via
-    /// [`LanePrivacyRegistryError::Verification`].
-    pub fn verify(
-        &self,
-        lane_id: LaneId,
-        commitment_id: LaneCommitmentId,
-        witness: PrivacyWitness,
-    ) -> Result<(), LanePrivacyRegistryError> {
-        let entry = self
-            .entries
-            .get(&lane_id)
-            .ok_or(LanePrivacyRegistryError::LaneMissing { lane_id })?;
-        let commitment = entry.commitments.get(&commitment_id).copied().ok_or(
-            LanePrivacyRegistryError::UnknownCommitment {
-                lane_id,
-                commitment_id,
-            },
-        )?;
-        commitment
-            .verify(witness)
-            .map_err(|source| LanePrivacyRegistryError::Verification {
-                lane_id,
-                commitment_id,
-                source,
-            })
-    }
-}
+mod registry;
+pub use registry::{LanePrivacyLane, LanePrivacyRegistry};
+
 /// Verify the supplied privacy proofs against the lane registry, returning the
 /// set of commitment identifiers proven for `lane_id`.
 ///
@@ -103,51 +27,6 @@ pub fn verify_lane_privacy_proofs(
         verified.insert(proof.commitment_id());
     }
     Ok(verified)
-}
-/// Per-lane commitment snapshot derived from manifests.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LanePrivacyLane {
-    lane_id: LaneId,
-    dataspace_id: DataSpaceId,
-    commitments: BTreeMap<LaneCommitmentId, LanePrivacyCommitment>,
-}
-impl LanePrivacyLane {
-    fn from_status(status: &LaneManifestStatus) -> Self {
-        let commitments = status
-            .privacy_commitments
-            .iter()
-            .copied()
-            .map(|commitment| (commitment.id(), commitment))
-            .collect();
-        Self {
-            lane_id: status.lane,
-            dataspace_id: status.dataspace,
-            commitments,
-        }
-    }
-    /// Lane identifier associated with this entry.
-    #[must_use]
-    pub const fn lane_id(&self) -> LaneId {
-        self.lane_id
-    }
-    /// Dataspace identifier advertised by the manifest.
-    #[must_use]
-    pub const fn dataspace_id(&self) -> DataSpaceId {
-        self.dataspace_id
-    }
-    /// Iterator over the registered commitments.
-    pub fn commitments(&self) -> impl Iterator<Item = LanePrivacyCommitment> + '_ {
-        self.commitments.values().copied()
-    }
-    /// Retrieve a specific commitment by identifier.
-    pub fn get(&self, id: LaneCommitmentId) -> Option<LanePrivacyCommitment> {
-        self.commitments.get(&id).copied()
-    }
-    /// Whether the lane recorded any privacy commitments.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.commitments.is_empty()
-    }
 }
 /// Errors surfaced when querying or verifying lane commitments.
 #[derive(Debug, Error, PartialEq, Eq, Clone, Copy)]
@@ -181,6 +60,8 @@ pub enum LanePrivacyRegistryError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::governance::manifest::{LaneManifestRegistry, LaneManifestStatus};
+    use iroha_allocation::AllocationBudget;
     use iroha_crypto::{
         MerkleProof,
         privacy::{
@@ -193,7 +74,7 @@ mod tests {
         LaneVisibility,
     };
     use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
-    fn status_with_commitments(
+    pub(super) fn status_with_commitments(
         lane: LaneId,
         dataspace: DataSpaceId,
         commitments: Vec<LanePrivacyCommitment>,
@@ -210,7 +91,7 @@ mod tests {
             privacy_commitments: commitments,
         }
     }
-    fn merkle_status_with_witness(
+    pub(super) fn merkle_status_with_witness(
         lane: LaneId,
         dataspace: DataSpaceId,
         id: LaneCommitmentId,
@@ -234,6 +115,7 @@ mod tests {
     }
     #[test]
     fn registry_tracks_entries_from_statuses() {
+        let pool = AllocationBudget::new(1024 * 1024);
         let commitment_id = LaneCommitmentId::new(1);
         let (status, _) =
             merkle_status_with_witness(LaneId::new(7), DataSpaceId::new(99), commitment_id);
@@ -241,7 +123,7 @@ mod tests {
             status.clone(),
             status_with_commitments(LaneId::new(8), DataSpaceId::new(100), Vec::new()),
         ];
-        let registry = LanePrivacyRegistry::from_statuses(&statuses);
+        let registry = LanePrivacyRegistry::try_from_statuses(&statuses, &pool).unwrap();
         let entry = registry.lane(status.lane).expect("lane entry");
         assert_eq!(entry.lane_id(), status.lane);
         assert_eq!(entry.dataspace_id(), status.dataspace);
@@ -253,11 +135,12 @@ mod tests {
     }
     #[test]
     fn registry_verifies_merkle_commitments() {
+        let pool = AllocationBudget::new(1024 * 1024);
         let commitment_id = LaneCommitmentId::new(5);
         let (status, witness) =
             merkle_status_with_witness(LaneId::new(7), DataSpaceId::new(99), commitment_id);
         let statuses = vec![status];
-        let registry = LanePrivacyRegistry::from_statuses(&statuses);
+        let registry = LanePrivacyRegistry::try_from_statuses(&statuses, &pool).unwrap();
         registry
             .verify(
                 LaneId::new(7),
@@ -296,11 +179,12 @@ mod tests {
     }
     #[test]
     fn verify_lane_privacy_proofs_accepts_merkle_attachment() {
+        let pool = AllocationBudget::new(1024 * 1024);
         let commitment_id = LaneCommitmentId::new(11);
         let lane_id = LaneId::new(3);
         let (status, witness) =
             merkle_status_with_witness(lane_id, DataSpaceId::new(99), commitment_id);
-        let registry = LanePrivacyRegistry::from_statuses(&[status]);
+        let registry = LanePrivacyRegistry::try_from_statuses(&[status], &pool).unwrap();
         let proof = LanePrivacyProof {
             commitment_id,
             witness: LanePrivacyWitness::Merkle(LanePrivacyMerkleWitness {
@@ -315,11 +199,12 @@ mod tests {
     }
     #[test]
     fn verify_lane_privacy_proofs_rejects_malformed_attachment() {
+        let pool = AllocationBudget::new(1024 * 1024);
         let commitment_id = LaneCommitmentId::new(12);
         let lane_id = LaneId::new(4);
         let (status, witness) =
             merkle_status_with_witness(lane_id, DataSpaceId::new(77), commitment_id);
-        let registry = LanePrivacyRegistry::from_statuses(&[status]);
+        let registry = LanePrivacyRegistry::try_from_statuses(&[status], &pool).unwrap();
         let proof = LanePrivacyProof {
             commitment_id,
             witness: LanePrivacyWitness::Merkle(LanePrivacyMerkleWitness {
@@ -336,5 +221,110 @@ mod tests {
                 ..
             } if cid == commitment_id
         ));
+    }
+
+    #[test]
+    fn manifest_privacy_projection_borrows_original_statuses_without_empty_graph_allocations() {
+        let pool = AllocationBudget::new(1024 * 1024);
+        let source = LaneManifestRegistry::from_statuses(
+            [
+                status_with_commitments(LaneId::new(9), DataSpaceId::new(90), Vec::new()),
+                status_with_commitments(LaneId::new(3), DataSpaceId::new(30), Vec::new()),
+            ]
+            .into_iter()
+            .map(|status| (status.lane, status))
+            .collect(),
+        );
+        let mut borrowed = [std::ptr::null(); 2];
+        let mut count = 0;
+        let allocations = crate::test_allocations::allocations_during(|| {
+            for status in source.iter_statuses() {
+                borrowed[count] = std::ptr::from_ref(status);
+                count += 1;
+            }
+        });
+        assert_eq!(allocations, 0);
+        assert_eq!(count, 2);
+        assert_eq!(
+            borrowed[0],
+            std::ptr::from_ref(source.status(LaneId::new(3)).unwrap())
+        );
+        assert_eq!(
+            borrowed[1],
+            std::ptr::from_ref(source.status(LaneId::new(9)).unwrap())
+        );
+
+        let mut projected = None;
+        let allocations = crate::test_allocations::allocations_during(|| {
+            projected =
+                Some(LanePrivacyRegistry::try_from_manifest_registry(&source, &pool).unwrap());
+        });
+        assert_eq!(
+            allocations, 0,
+            "empty privacy projection must not copy manifest metadata"
+        );
+        assert!(projected.unwrap().is_empty());
+        assert!(source.status(LaneId::new(3)).is_some());
+        assert!(source.status(LaneId::new(9)).is_some());
+    }
+
+    #[test]
+    fn manifest_privacy_projection_matches_snapshot_with_fewer_allocations() {
+        let pool = AllocationBudget::new(1024 * 1024);
+        let lane = LaneId::new(7);
+        let commitment = LaneCommitmentId::new(17);
+        let (mut populated, witness) =
+            merkle_status_with_witness(lane, DataSpaceId::new(99), commitment);
+        populated.alias = "original-manifest-metadata-".repeat(64);
+        let empty = status_with_commitments(LaneId::new(8), DataSpaceId::new(100), Vec::new());
+        let source = LaneManifestRegistry::from_statuses(
+            [(populated.lane, populated), (empty.lane, empty)]
+                .into_iter()
+                .collect(),
+        );
+        let original = std::ptr::from_ref(source.status(lane).unwrap());
+        let mut snapshot_projection = None;
+        let snapshot_allocations = crate::test_allocations::allocations_during(|| {
+            let snapshot = source.statuses();
+            snapshot_projection =
+                Some(LanePrivacyRegistry::try_from_statuses(&snapshot, &pool).unwrap());
+        });
+        let mut borrowed_projection = None;
+        let borrowed_allocations = crate::test_allocations::allocations_during(|| {
+            borrowed_projection =
+                Some(LanePrivacyRegistry::try_from_manifest_registry(&source, &pool).unwrap());
+        });
+        let borrowed_projection = borrowed_projection.unwrap();
+        assert_eq!(borrowed_projection, snapshot_projection.unwrap());
+        assert!(borrowed_allocations < snapshot_allocations);
+        assert_eq!(std::ptr::from_ref(source.status(lane).unwrap()), original);
+        assert!(borrowed_projection.lane(LaneId::new(8)).is_none());
+        assert_eq!(
+            borrowed_projection.lane(lane).unwrap().dataspace_id(),
+            DataSpaceId::new(99)
+        );
+        borrowed_projection
+            .verify(lane, commitment, PrivacyWitness::Merkle(witness))
+            .expect("borrowed projection retains the original valid commitment");
+    }
+
+    #[test]
+    fn borrowed_privacy_statuses_keep_last_nonempty_lane_and_commitment() {
+        let pool = AllocationBudget::new(1024 * 1024);
+        let lane = LaneId::new(7);
+        let id = LaneCommitmentId::new(19);
+        let first =
+            LanePrivacyCommitment::merkle(id, MerkleCommitment::from_root_bytes([1; 32], 8));
+        let last = LanePrivacyCommitment::merkle(id, MerkleCommitment::from_root_bytes([2; 32], 8));
+        let statuses = [
+            status_with_commitments(lane, DataSpaceId::new(98), vec![first]),
+            status_with_commitments(lane, DataSpaceId::new(99), vec![first, last]),
+            status_with_commitments(lane, DataSpaceId::new(100), Vec::new()),
+        ];
+        let registry = LanePrivacyRegistry::try_from_statuses(statuses.iter(), &pool).unwrap();
+        let entry = registry.lane(lane).unwrap();
+        assert_eq!(entry.dataspace_id(), DataSpaceId::new(99));
+        assert_eq!(entry.get(id), Some(last));
+        assert_eq!(entry.commitments().count(), 1);
     }
 }

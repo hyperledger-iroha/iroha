@@ -11,7 +11,6 @@
 //! does not establish knowledge of the witness-bearing row. Callers of this substrate must commit
 //! and query every masked witness column, bind composition quotients to those same openings, and
 //! perform the complete FRI terminal-degree check.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::privacy_outer_hash::PrivacyOuterLastFieldStreamErrorV1;
 #[cfg(test)]
 use super::privacy_outer_hash::PrivacyOuterLastFieldStreamV1;
@@ -285,7 +284,6 @@ impl GoldilocksFieldV1 {
     /// or reject noncanonical inputs before entering this constructor helper.
     /// The field operations and their compiled callers still need independent
     /// side-channel review; this helper is not a whole-prover timing guarantee.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     pub(crate) fn inverse_or_zero_canonical_v1(self) -> Self {
         fn square<const N: usize>(mut value: GoldilocksFieldV1) -> GoldilocksFieldV1 {
             for _ in 0..N {
@@ -862,7 +860,6 @@ pub fn goldilocks_fft_v1(
 }
 /// In-place FFT for a column whose bounded batch already owns parallelism.
 /// Validation and arithmetic use the same kernel as the single-column route.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub fn goldilocks_fft_coarse_v1(
     values: &mut [GoldilocksFieldV1],
     root: GoldilocksFieldV1,
@@ -879,7 +876,6 @@ pub struct GoldilocksFftPowersV1 {
     root: GoldilocksFieldV1,
     size: usize,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl GoldilocksFftPowersV1 {
     /// Minimum public payload, including the inline owner, before allocation.
     pub(crate) fn required_payload_bytes_v1(size: usize) -> Result<usize, TransparentStarkErrorV1> {
@@ -936,7 +932,6 @@ impl GoldilocksFftPowersV1 {
 }
 
 /// Coarse FFT using an admitted public power table and the original shared kernel.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub fn goldilocks_fft_coarse_with_powers_v1(
     values: &mut [GoldilocksFieldV1],
     root: GoldilocksFieldV1,
@@ -947,7 +942,6 @@ pub fn goldilocks_fft_coarse_with_powers_v1(
 
 /// Coarse inverse FFT using a table constructed from the inverse public root.
 /// Original root validation, inversion, domain checks and scaling retain their order.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub fn goldilocks_ifft_coarse_with_powers_v1(
     values: &mut [GoldilocksFieldV1],
     root: GoldilocksFieldV1,
@@ -1036,7 +1030,6 @@ pub fn goldilocks_ifft_v1(
     goldilocks_ifft_with_inner_parallelism_v1::<true>(values, root)
 }
 /// In-place inverse FFT for a column in an already parallel bounded batch.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub fn goldilocks_ifft_coarse_v1(
     values: &mut [GoldilocksFieldV1],
     root: GoldilocksFieldV1,
@@ -1560,7 +1553,6 @@ pub fn privacy_outer_last_field_stream_v1(
 }
 
 /// Map a canonical digest-stream failure without exposing an alternate hash path.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub const fn map_digest_stream_error_v1(
     error: PrivacyOuterLastFieldStreamErrorV1,
 ) -> TransparentStarkErrorV1 {
@@ -1629,7 +1621,6 @@ impl PrivacyOuterMerkleTreeV1 {
     }
     /// Exact allocated tree storage, including all retained vector capacities.
     /// Callers can charge this public commitment owner alongside private LDEs.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     pub(crate) fn allocated_payload_bytes_v1(&self) -> Result<usize, TransparentStarkErrorV1> {
         let lists = self
             .levels
@@ -3791,7 +3782,7 @@ mod tests {
         }
         assert_eq!(
             hex::encode(digest.to_bytes()),
-            "31634e1993f3ade92bf2f8cb3343b7807de1b15a3871c651e444282efbcc475138991e40d6aee681dc6e3a92594300cd",
+            "f505216aaefec2d72cbeabc4e808c8433262d6c07a3fa6f7e9304367df5e161dd1ee9043a3e4ad19fd9ef25a2419f8d2",
             "independent SHA3 byte-frame reference"
         );
     }

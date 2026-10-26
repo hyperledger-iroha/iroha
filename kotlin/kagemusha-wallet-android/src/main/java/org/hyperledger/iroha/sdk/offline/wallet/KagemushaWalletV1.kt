@@ -11,9 +11,21 @@ class KagemushaWalletExceptionV1(
     @JvmField val reason: Int = -1,
     @JvmField val platformCode: Int = 0,
 ) : IllegalStateException("KAGEMUSHA native status $status (reason $reason, platform $platformCode)") {
+    /** Closed support cause, when this status/reason pair is recognized; raw fields are retained. */
+    @JvmField val invalidReason: KagemushaWalletInvalidReasonV1? =
+        KagemushaWalletInvalidReasonV1.fromNative(status, reason)
+
     companion object {
+        /** Invalid input/state or malformed callback result; not a completion or retry decision. */
+        const val INVALID = -1
         /** There is deliberately no structural verifier or software-key fallback. */
         const val ARTIFACTS_UNAVAILABLE = -4
+        /**
+         * The current wallet head still needs its local lineage fold before this operation.
+         * A Send or Unload review has not approved or debited value; retry after Native reports
+         * a folded head. This status does not replace Native's checks on the next review.
+         */
+        const val FOLD_REQUIRED = -8
         /**
          * Design §5.3 runtime capacity refusal: free custody storage does not cover the operation.
          * Refused before commit; nothing debited or credited. Retry after freeing storage.
@@ -47,6 +59,10 @@ class KagemushaWalletCallV1 internal constructor(
     @JvmField val detail: Int,
     bytes: ByteArray,
 ) {
+    /** Closed support cause, when this status/reason pair is recognized; raw fields are retained. */
+    @JvmField val invalidReason: KagemushaWalletInvalidReasonV1? =
+        KagemushaWalletInvalidReasonV1.fromNative(status, reason)
+
     init {
         val carriesBytes = status == EPOCH_PROGRESS || status == DELETION_REVIEW || status == DELETED || status == CREDIT_PROJECTION || status == UNLOAD_CLAIM || status == COMPLETE || status == CREDIT_STATUS || status == SETUP || status == TIME_CHALLENGE || status == ACCOUNT_CHALLENGE || status == ACTIVATION || status == CLOSE_LOADS || status == 31 || status == 33 || status == 36 || status == LEDGER_INSTRUCTION || status == ENROLLMENT_LEDGER_INSTRUCTION || status == LEDGER_CONFIRMED || status == LEDGER_AWAITING || status == LEDGER_REJECTED || status in listOf(18, 19, 23, 24, 25, 27, 28, 37, 38)
         if (status in listOf(41, 42, 43, 44, 45, 49) || (status >= 0 && status !in UNKNOWN..LEDGER_CONFIRMED) || bytes.size > when (status) { EPOCH_PROGRESS -> 16; DELETION_REVIEW -> 254; DELETED -> 32; DELETION_REVIEW_DISCARDED, NOT_DELETED -> 0; CREDIT_PROJECTION -> 10_126; ACTIVATION, ENROLLMENT_DISPATCH, CLOSE_LOADS, 36, UNLOAD_CLAIM -> 16_384; LEDGER_INSTRUCTION, ENROLLMENT_LEDGER_INSTRUCTION -> 65_536; 24 -> KagemushaWalletEnrollmentV1.REQUEST_MAX_BYTES; 25 -> 262_144; 28 -> 1024; 37 -> 1028; 38 -> 73_740; 31 -> 21_092; 33, LEDGER_CONFIRMED, LEDGER_AWAITING, LEDGER_REJECTED -> 32; LEDGER_EPOCH_REQUIRED -> 0; else -> 10_034 } ||

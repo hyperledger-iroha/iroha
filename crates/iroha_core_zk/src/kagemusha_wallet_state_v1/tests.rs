@@ -885,6 +885,11 @@ pub(super) struct TestProofs {
     fail_preparation_validation: bool,
     // Mock ArchiveSent plans for deferred-Archive dispatch; otherwise Archive planning is refused.
     archive_plans: bool,
+    // Mock Receive plans exercise coordinator recovery, never native proof validity.
+    receive_plans: bool,
+    // Mock Receive admission (design §3.2): native planning refuses a Receive whose fold
+    // would burn the Payment, as the native owner does before any plan exists.
+    refuse_receive_admission: bool,
     fail_commit_derivation: bool,
     preparation_payload: Vec<u8>,
     advance_checks: Arc<AtomicUsize>,
@@ -1070,7 +1075,7 @@ impl NativeProofs for TestProofs {
         witness: &ReleasedStep,
         predecessor: Option<&KagemushaWalletFoldRecordV1>,
         checkpoints: Vec<PrivateArchiveBytes>,
-        _custody: Option<&mut FoldCustodyV1<'_>>,
+        custody: Option<&mut FoldCustodyV1<'_>>,
         retained: Option<FoldRetentionV1>,
         cancellation: &Cancellation,
     ) -> Result<Box<dyn NativeFoldJobV1>, Error> {
@@ -1083,7 +1088,20 @@ impl NativeProofs for TestProofs {
             .expect("retention log")
             .handed
             .push(handed);
+        // Multi-receive recovery tests use the real source-owned persistent credit tree.
+        // Only the mock lineage proof is synthesized; the final publication checks this root.
+        let credit_root = if self.receive_plans
+            && witness.frozen.capsule.body().kind == KagemushaWalletOperationKindV1::Receive
+            && checkpoints.len() == usize::from(self.checkpoint_stages.max(1))
+        {
+            let custody = custody.ok_or(Error::WitnessLost("test Receive fold custody"))?;
+            custody.credit_record(self.burn)?;
+            Some(custody.credit_root())
+        } else {
+            None
+        };
         Ok(Box::new(TestFoldJob {
+            credit_root,
             proofs: self.clone(),
             witness: witness.clone(),
             predecessor: predecessor.cloned(),
@@ -1094,6 +1112,7 @@ impl NativeProofs for TestProofs {
 
 /// Explicit mock proof work of one prepared sub-proof; it holds no custody handle.
 struct TestFoldJob {
+    credit_root: Option<[u8; 32]>,
     proofs: TestProofs,
     witness: ReleasedStep,
     predecessor: Option<KagemushaWalletFoldRecordV1>,
@@ -1105,6 +1124,7 @@ impl NativeFoldJobV1 for TestFoldJob {
         cancellation: &Cancellation,
     ) -> Result<(FoldProgress, Option<FoldRetentionV1>), Error> {
         let Self {
+            credit_root,
             proofs,
             witness,
             predecessor,
@@ -1167,7 +1187,7 @@ impl NativeFoldJobV1 for TestFoldJob {
             c.body().statement.effect,
             KagemushaWalletEffectV1::Receive { .. }
         ) {
-            tree.root()
+            credit_root.unwrap_or_else(|| tree.root())
         } else {
             predecessor.map_or_else(
                 || tree.root(),

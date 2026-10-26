@@ -434,6 +434,7 @@ fn cleanup_fixture(state: &State, reset: LaneId) -> PendingAutoscaleLaneLifecycl
             replaced_lane_ids: BTreeSet::new(),
         },
         updated_lane_manifests: state.lane_manifests.read().clone(),
+        updated_lane_privacy: state.lane_privacy_registry.read().clone(),
         plan: iroha_data_model::nexus::LaneLifecyclePlan::default(),
         transition: PendingAutoscaleTransition::Manual,
         transition_height: 1,

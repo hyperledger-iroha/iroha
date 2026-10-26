@@ -380,8 +380,8 @@ async fn subscription_resume_route_returns_exact_unsigned_draft_without_mutating
     let harness = build_subscription_harness(SubscriptionStatus::Paused);
     let subscription_id = harness.subscription_id.to_string();
     let body = json_object(vec![
-        json_entry("authority", BOB_ID.to_string()),
-        json_entry("charge_at_ms", 5_000_u64),
+        json_entry("authority", &BOB_ID.to_string()),
+        json_entry("charge_at_ms", &5_000_u64),
     ]);
     let body = norito::json::to_json(&body).expect("serialize resume request");
     let resume_resp = call_app(
@@ -470,9 +470,9 @@ async fn subscription_action_route_rejects_legacy_private_key_payload() {
     let harness = build_subscription_harness(SubscriptionStatus::Paused);
     let subscription_id = harness.subscription_id.to_string();
     let body = norito::json::to_json(&json_object(vec![
-        json_entry("authority", BOB_ID.to_string()),
+        json_entry("authority", &BOB_ID.to_string()),
         json_entry("private_key", "forbidden"),
-        json_entry("charge_at_ms", 5_000_u64),
+        json_entry("charge_at_ms", &5_000_u64),
     ]))
     .expect("serialize legacy request");
     let response = call_app(
@@ -494,7 +494,7 @@ async fn subscription_cancel_route_requires_exact_tagged_mode() {
     let subscription_id = harness.subscription_id.to_string();
     let uri = format!("/v1/subscriptions/{subscription_id}/cancel");
     let legacy_body = norito::json::to_json(&json_object(vec![
-        json_entry("authority", BOB_ID.to_string()),
+        json_entry("authority", &BOB_ID.to_string()),
         json_entry("cancel_mode", "immediate"),
     ]))
     .expect("serialize legacy cancel request");
@@ -509,7 +509,7 @@ async fn subscription_cancel_route_requires_exact_tagged_mode() {
         ("value".to_owned(), norito::json::Value::Null),
     ]);
     let body = norito::json::to_json(&json_object(vec![
-        json_entry("authority", BOB_ID.to_string()),
+        json_entry("authority", &BOB_ID.to_string()),
         ("cancel_mode".to_owned(), cancel_mode),
     ]))
     .expect("serialize exact cancel request");

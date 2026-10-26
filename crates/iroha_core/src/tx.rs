@@ -3249,7 +3249,15 @@ impl StateBlock<'_> {
             dataspace_id: physical.dataspace_id,
             dataspace_catalog: &state_transaction.nexus.dataspace_catalog,
         };
-        enforce_lane_policies(tx, state_transaction, &lane_assignment)?;
+        match enforce_lane_policies(tx, state_transaction, &lane_assignment) {
+            Ok(()) => {}
+            Err(ExecutionAttemptError::Rejected(error)) => return Err(error),
+            Err(ExecutionAttemptError::Deferred(original)) => {
+                return Err(TransactionRejectionReason::Validation(
+                    state_transaction.defer_execution(original),
+                ));
+            }
+        }
         if genesis.is_none() {
             enforce_fraud_policy(
                 &state_transaction.fraud_monitoring,
@@ -4473,12 +4481,12 @@ fn enforce_lane_policies(
     tx: &SignedTransaction,
     state_transaction: &StateTransaction<'_, '_>,
     lane_assignment: &LaneAssignment<'_>,
-) -> Result<(), TransactionRejectionReason> {
+) -> Result<(), ExecutionAttemptError<TransactionRejectionReason>> {
     let lane_id = lane_assignment.lane_id;
     let dataspace_id = lane_assignment.dataspace_id;
     let manifest_registry: &LaneManifestRegistryHandle = &state_transaction.lane_manifests;
     if let Err(err) = manifest_registry.ensure_lane_ready(lane_id) {
-        return Err(reject_not_permitted(err.message()));
+        return Err(reject_not_permitted(err.message()).into());
     }
     let manifest_status = manifest_registry.status(lane_id).cloned();
     let lane_alias = manifest_status.as_ref().map_or_else(
@@ -4504,7 +4512,8 @@ fn enforce_lane_policies(
         return Err(reject_lane_policy(
             &lane_alias,
             "lane is not active in the routed dataspace at the current block height".to_string(),
-        ));
+        )
+        .into());
     }
     // Validators, account-to-peer bindings, and quorum are dataspace authority. Hooks and
     // protected namespaces remain sourced from the exact target-lane rules below.
@@ -4536,7 +4545,8 @@ fn enforce_lane_policies(
                     return Err(reject_lane_policy(
                         &lane_alias,
                         "authority not part of lane validator set".to_string(),
-                    ));
+                    )
+                    .into());
                 }
             }
             if !allows_multisig_envelope_authority
@@ -4573,7 +4583,11 @@ fn enforce_lane_policies(
     // The manifest snapshot is the consensus input. Rebuild the privacy
     // projection here so an old or locally corrupted cache cannot choose a
     // different proof-verification or compliance result on another peer.
-    let lane_privacy_registry = LanePrivacyRegistry::from_manifest_registry(manifest_registry);
+    let lane_privacy_registry = LanePrivacyRegistry::try_from_manifest_registry(
+        manifest_registry,
+        &state_transaction.execution_budget(),
+    )
+    .map_err(ExecutionAttemptError::Deferred)?;
     let privacy_proofs = collect_lane_privacy_proofs(tx);
     let verified_privacy_commitments = if privacy_proofs.is_empty() {
         BTreeSet::new()
@@ -4585,7 +4599,7 @@ fn enforce_lane_policies(
     let lane_privacy_registry = if lane_privacy_registry.is_empty() {
         None
     } else {
-        Some(Arc::new(lane_privacy_registry))
+        Some(lane_privacy_registry)
     };
     let publishes_space_directory_manifest = publishes_only_space_directory_manifests(tx);
     let lane_identity = if publishes_space_directory_manifest {
@@ -4625,7 +4639,8 @@ fn enforce_lane_policies(
                     return Err(reject_lane_policy(
                         &lane_alias,
                         "no exact lane compliance policy is configured".to_string(),
-                    ));
+                    )
+                    .into());
                 }
             }
             LaneComplianceEvaluation::Allowed(record) => {
@@ -4638,7 +4653,7 @@ fn enforce_lane_policies(
                         .reason
                         .clone()
                         .unwrap_or_else(|| "lane compliance policy denied".to_string());
-                    return Err(reject_lane_policy(&lane_alias, reason));
+                    return Err(reject_lane_policy(&lane_alias, reason).into());
                 }
             }
         }
@@ -5735,12 +5750,16 @@ pub mod tests {
         .sign(keypair.private_key())
     }
 
-    fn assert_not_permitted_contains(
-        result: Result<(), TransactionRejectionReason>,
+    fn assert_not_permitted_contains<E: Into<ExecutionAttemptError<TransactionRejectionReason>>>(
+        result: Result<(), E>,
         expected: &str,
     ) {
+        let result: Result<(), ExecutionAttemptError<TransactionRejectionReason>> =
+            result.map_err(Into::into);
         match result {
-            Err(TransactionRejectionReason::Validation(ValidationFail::NotPermitted(message))) => {
+            Err(ExecutionAttemptError::Rejected(TransactionRejectionReason::Validation(
+                ValidationFail::NotPermitted(message),
+            ))) => {
                 assert!(
                     message.contains(expected),
                     "expected rejection containing `{expected}`, got `{message}`"
@@ -10073,12 +10092,17 @@ pub mod tests {
     impl IvmAdmissionFixture {
         fn new() -> Self {
             let (world, authority_id, keypair) = world_with_authority("wonderland");
-            let mut parameters = world.parameters.block();
-            parameters
-                .set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
+            let budget = world.sccp_committee_generations.allocation_budget();
+            let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
+                .expect("admitted parameter-only fixture block");
+            crate::state::set_parameter_cell_for_testing(
+                &mut parameters,
+                crate::sumeragi::lanes::routing::test_support::metadata(
                     iroha_data_model::block::consensus::SumeragiRootScope::Global,
-                ))
-                .expect("valid fixture parameters");
+                ),
+                budget,
+            )
+            .expect("valid fixture parameters");
             parameters.commit();
             let state = State::new_with_chain(
                 world,
@@ -10233,9 +10257,7 @@ pub mod tests {
         // Seed synthetic Global scope in this component World/height overlay;
         // the fixture does not authenticate committed genesis or Network finality.
         tx1.world
-            .parameters
-            .get_mut()
-            .set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
+            .set_parameter_for_testing(crate::sumeragi::lanes::routing::test_support::metadata(
                 iroha_data_model::block::consensus::SumeragiRootScope::Global,
             ))
             .expect("valid fixture parameters");
@@ -10505,9 +10527,7 @@ pub mod tests {
         // Seed synthetic Global scope in this component World/height overlay;
         // the fixture does not authenticate committed genesis or Network finality.
         tx1.world
-            .parameters
-            .get_mut()
-            .set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
+            .set_parameter_for_testing(crate::sumeragi::lanes::routing::test_support::metadata(
                 iroha_data_model::block::consensus::SumeragiRootScope::Global,
             ))
             .expect("valid fixture parameters");
@@ -10752,9 +10772,7 @@ pub mod tests {
         // Seed synthetic Global scope in this component World/height overlay;
         // the fixture does not authenticate committed genesis or Network finality.
         tx1.world
-            .parameters
-            .get_mut()
-            .set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
+            .set_parameter_for_testing(crate::sumeragi::lanes::routing::test_support::metadata(
                 iroha_data_model::block::consensus::SumeragiRootScope::Global,
             ))
             .expect("valid fixture parameters");
@@ -12740,9 +12758,7 @@ pub mod tests {
             |block| {
                 block
                     .world
-                    .parameters
-                    .get_mut()
-                    .set_parameter(Parameter::Custom(custom))
+                    .set_parameter_for_testing(Parameter::Custom(custom))
                     .expect("valid fixture parameters");
             },
         );
@@ -12788,9 +12804,7 @@ pub mod tests {
         let custom = CustomParameter::new(id, Json::new(1_u64));
         block
             .world
-            .parameters
-            .get_mut()
-            .set_parameter(Parameter::Custom(custom))
+            .set_parameter_for_testing(Parameter::Custom(custom))
             .expect("valid fixture parameters");
         // Build program with max_cycles = 2000, below the bound
         let prog = minimal_ivm_program_with_max_cycles(1, 2_000);
@@ -13952,7 +13966,9 @@ pub mod tests {
         let err = super::enforce_lane_policies(&tx, &stx, &assignment)
             .expect_err("compliance denial should reject");
         match err {
-            TransactionRejectionReason::Validation(ValidationFail::NotPermitted(msg)) => {
+            ExecutionAttemptError::Rejected(TransactionRejectionReason::Validation(
+                ValidationFail::NotPermitted(msg),
+            )) => {
                 assert!(
                     msg.contains("denied account") || msg.contains("lane compliance"),
                     "expected compliance rejection, got {msg}"
@@ -15056,7 +15072,7 @@ pub mod tests {
                 telemetry: crate::telemetry::StateTelemetry::default(),
             }
             .into_state_from_json(snapshot),
-            Err(crate::state::deserialize::StateRestoreError::NativeExecutionReplayRequired)
+            Err(crate::state::deserialize::StateRestoreError::SuccessorRequired { .. })
         ));
         let mut replay = original_chain();
         assert_eq!(replay.network_id(), chain.network_id());

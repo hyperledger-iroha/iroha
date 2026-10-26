@@ -211,6 +211,32 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
         Ok(Some(batch))
     }
 
+    /// Assert the actual fresh-intake boundary without mutating the authenticated state.
+    #[cfg(test)]
+    pub(in crate::kagemusha_wallet_state_v1) fn require_intake_batch_only_test_original(
+        &mut self,
+        request: &OperationRequestV1,
+    ) -> Result<(), Error> {
+        let request = NativeIntentV1::user(request.clone());
+        let (_, manifest) = self.manifest()?;
+        let entry = self
+            .preparation_entry(&manifest, &request.request_id())?
+            .ok_or(Error::WitnessLost("test intake entry"))?;
+        let batch = self
+            .read_intake_batch(request.request_id(), &entry)?
+            .ok_or(Error::WitnessLost("test intake batch"))?;
+        if entry.request.is_some()
+            || entry.plan.is_some()
+            || entry.capsule.is_some()
+            || entry.capsule_commitment.is_some()
+            || entry.operation.is_some()
+            || batch.original.as_slice() != archive::encode(&request)?.as_slice()
+        {
+            return Err(Error::WitnessLost("test sole intake original boundary"));
+        }
+        Ok(())
+    }
+
     /// Model the real pre-publication state where the batch is the sole original owner.
     #[cfg(test)]
     pub(in crate::kagemusha_wallet_state_v1) fn retain_intake_batch_only_test_original(
@@ -266,23 +292,22 @@ impl<C: Custody, A: ArchiveStore, N: NativePreparation> Coordinator<C, A, N> {
         let source_digest = source.released().frozen.capsule.custody_digest();
         let mut planned = None;
         let recovered = match self.read_intake_batch(request.request_id(), entry)? {
-            // A stale Archive batch can be replaced only before a plan/capsule was selected.
+            // A stale Receive/Archive batch can be replaced only before a plan/capsule was selected.
             // Its immutable key cannot be overwritten. First retain its exact original under
             // the authenticated Entry, then retire the old copies before staging a new batch.
             Some(batch)
-                if batch.plan.source != source_digest
-                    && request.kind() == KagemushaWalletOperationKindV1::ArchiveSent =>
+                if batch.plan.source != source_digest && can_replan_unselected(request.kind()) =>
             {
                 entry.require_binding()?;
                 if entry.plan.is_some() || entry.capsule.is_some() || entry.operation.is_some() {
-                    return Err(Error::WitnessLost("stale Archive batch already planned"));
+                    return Err(Error::WitnessLost("stale intake batch already planned"));
                 }
                 if batch.original.as_slice() != original {
                     return Err(Error::WitnessLost("retained intake original changed"));
                 }
                 let request_object = self.archive.write_object(original, REQUEST_MAX_BYTES)?;
                 if request_object != batch.plan.request_object {
-                    return Err(Error::WitnessLost("stale Archive original digest"));
+                    return Err(Error::WitnessLost("stale intake original digest"));
                 }
                 entry.request = Some(request_object);
                 self.publish_preparation(selected, manifest, request.request_id(), entry)?;
@@ -293,7 +318,7 @@ impl<C: Custody, A: ArchiveStore, N: NativePreparation> Coordinator<C, A, N> {
                         .read_object(&request_object, REQUEST_MAX_BYTES)?,
                 );
                 if retained.as_slice() != original {
-                    return Err(Error::WitnessLost("stale Archive retained original"));
+                    return Err(Error::WitnessLost("stale intake retained original"));
                 }
                 self.archive.remove(key)?;
                 None

@@ -3946,8 +3946,8 @@ mod run {
     };
     use crate::Priority;
     use crate::network::message::{ClassifyTopic, Topic};
-    use iroha_data_model::peer::Peer;
     use iroha_logger::prelude::*;
+    use iroha_model_base::peer::Peer;
     use norito::codec::Decode;
     use tokio::time::Instant;
     fn frame_plaintext_cap_for<E: Enc>(max_frame_bytes: usize) -> usize {
@@ -4769,7 +4769,7 @@ mod run {
         use super::*;
         use crate::Priority;
         use iroha_crypto::encryption::ChaCha20Poly1305;
-        use iroha_data_model::peer::Peer;
+        use iroha_model_base::peer::Peer;
         use norito::codec::{Decode, Encode};
         use std::{sync::Arc, time::Duration};
         #[test]
@@ -5903,7 +5903,7 @@ mod state {
     //! Module for peer stages.
     use super::{cryptographer::Cryptographer, *};
     use iroha_crypto::{KeyPair, PublicKey, Signature};
-    use iroha_data_model::peer::Peer;
+    use iroha_model_base::peer::Peer;
     use iroha_primitives::addr::SocketAddr;
     #[derive(Clone, Debug, Encode, Decode)]
     #[norito(decode_from_slice)]
@@ -7590,7 +7590,7 @@ pub(crate) use run::{checked_data_message_wire_len, data_message_wire_len_from_p
 pub mod message {
     //! Module for peer messages
     use super::*;
-    use iroha_data_model::peer::Peer;
+    use iroha_model_base::peer::Peer;
     /// Connection-local count of reliable deliveries which crossed a peer
     /// dispatch worker but have not yet left their final local consumer.
     ///

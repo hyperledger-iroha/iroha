@@ -493,6 +493,7 @@ fn expected_read_operation(method: &str, path: &str) -> bool {
                     | "/v1/accounts/inspect"
                     | "/v1/accounts/{account_id}/assets/query"
                     | "/v1/assets/{definition_id}/holders/query"
+                    | "/v1/assets/{definition_id}/movements/query"
                     | "/v1/transactions/query"
                     | "/v1/accounts/{account_id}/transactions/query"
                     | "/v1/repo/agreements/query"
@@ -2520,14 +2521,18 @@ fn incoming_static_openapi_contracts_remain_bound_to_runtime_routes() {
             .collect::<BTreeSet<_>>(),
         BTreeSet::from(["classical-rom", "pq-qrom"])
     );
-    let catalog_schema = &schemas["PrivacyExact12CatalogCommitmentV1"];
+    let catalog_commitment_schema = &schemas["PrivacyExact12CatalogCommitmentV1"];
+    let catalog_commitment_width =
+        u64::try_from(iroha_data_model::privacy::PrivacyExact12CatalogCommitmentV1::BYTES)
+            .expect("catalog commitment width fits u64");
     for bound in ["minItems", "maxItems"] {
         assert_eq!(
-            catalog_schema[bound].as_u64(),
-            Some(iroha_data_model::privacy::PrivacyExact12CatalogCommitmentV1::BYTES as u64)
+            catalog_commitment_schema[bound].as_u64(),
+            Some(catalog_commitment_width),
+            "Exact12 catalog commitment {bound} must match its native owner"
         );
     }
-    let catalog_commitment = catalog_schema["const"]
+    let catalog_commitment = catalog_commitment_schema["const"]
         .as_array()
         .expect("pinned Exact12 catalog commitment")
         .iter()
@@ -2540,7 +2545,7 @@ fn incoming_static_openapi_contracts_remain_bound_to_runtime_routes() {
         catalog_commitment,
         iroha_data_model::privacy::PrivacyExact12CatalogCommitmentV1::canonical()
             .as_bytes()
-            .to_vec()
+            .as_slice()
     );
     let details = openapi_operation(&document, "/v1/pipeline/transactions/details", "post");
     assert_eq!(
@@ -3147,6 +3152,119 @@ mod privacy_release_qualification;
 #[path = "tests/validator_committee_contract.rs"]
 mod validator_committee_contract;
 
+#[test]
+fn asset_movement_feed_documents_rows_kinds_and_freshness() {
+    let document = canonical_document();
+    for (path, method) in [
+        ("/v1/assets/{definition_id}/movements", "get"),
+        ("/v1/assets/{definition_id}/movements/query", "post"),
+    ] {
+        let operation = openapi_operation(&document, path, method);
+        assert_eq!(
+            operation_response_schema_ref(operation, "200", path),
+            "#/components/schemas/AssetMovementPage",
+            "{method} {path}"
+        );
+        for status in ["400", "503"] {
+            assert_eq!(
+                operation_response_schema_ref(operation, status, path),
+                "#/components/schemas/ErrorEnvelope",
+                "{method} {path} {status}"
+            );
+        }
+        assert!(
+            operation["responses"]["503"]["headers"]
+                .get("Retry-After")
+                .is_some(),
+            "{method} {path} names its retry delay"
+        );
+    }
+    let schemas = component_schemas(&document);
+    let row = &schemas["AssetMovementRow"];
+    assert_eq!(row["additionalProperties"].as_bool(), Some(false));
+    let properties = row["properties"].as_object().unwrap();
+    assert_eq!(
+        properties
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([
+            "id",
+            "kind",
+            "timestamp_ms",
+            "from_account_id",
+            "to_account_id",
+            "asset_definition_id",
+            "amount",
+            "tx_hash",
+            "authority",
+            "block_height",
+            "block_index",
+            "movement_index",
+            "result_ok",
+        ])
+    );
+    let kinds: Vec<&str> = properties["kind"]["enum"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|kind| kind.as_str().unwrap())
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            "TRANSFER",
+            "MINT",
+            "BURN",
+            "OFFLINE_LOAD",
+            "OFFLINE_UNLOAD",
+            "OFFLINE_FEE",
+            "OFFLINE_CHARGE"
+        ]
+    );
+    assert_eq!(properties["result_ok"]["type"].as_str(), Some("boolean"));
+}
+
+#[test]
+fn multisig_proposal_reads_return_approval_times_only_when_asked() {
+    let schemas = openapi_schemas();
+    for name in [
+        "MultisigProposalsQueryRequest",
+        "MultisigProposalsResolveRequest",
+    ] {
+        let flag = &schemas[name]["properties"]["include_approvals"];
+        assert_eq!(flag["type"].as_str(), Some("boolean"), "{name}");
+        assert_eq!(flag["default"].as_bool(), Some(false), "{name}");
+    }
+    for name in ["MultisigProposalEntry", "MultisigProposalResolveResponse"] {
+        let schema = &schemas[name];
+        assert!(
+            !schema["required"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v.as_str() == Some("approvals")),
+            "{name}.approvals stays optional for readers that do not ask"
+        );
+        assert_eq!(
+            schema["properties"]["approvals"]["items"]["$ref"].as_str(),
+            Some("#/components/schemas/MultisigProposalApproval"),
+            "{name}"
+        );
+    }
+    let approval = &schemas["MultisigProposalApproval"];
+    assert_eq!(approval["additionalProperties"].as_bool(), Some(false));
+    for field in ["approver", "approved_at_ms", "block_height"] {
+        assert!(
+            approval["required"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v.as_str() == Some(field)),
+            "MultisigProposalApproval.{field}"
+        );
+    }
+}
 #[test]
 fn multisig_occurrence_contract_separates_identity_from_content() {
     let schemas = openapi_schemas();

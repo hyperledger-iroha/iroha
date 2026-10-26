@@ -12,12 +12,10 @@
 //! transcript-challenged permutation binds sparse source tokens to each compact SHA message. A
 //! separate four-lane copy product binds every repeated byte occurrence. Padding rows and unused
 //! hash slots are algebraically zero.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::private_table::{
     PrivateTableV1, zeroize_field_rows_v1, zeroize_fields_v1, zeroize_words_v1,
 };
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::io_air::{
     ZkX509IoChannelDeclarationV1, ZkX509IoChannelWitnessV1, ZkX509IoEndpointV1,
     ZkX509IoSegmentRoleV1,
@@ -146,7 +144,6 @@ const FIX_FIRST_ROW: usize = 22;
 const FIX_LAST_ROW: usize = 23;
 const FIX_USED_MONOTONE_TRANSITION: usize = 24;
 /// Wallet-local projection witness extracted by the constrained DER segment.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, PartialEq, Eq)]
 pub struct ZkX509ProjectionWitnessV1 {
     /// Exact leaf-to-root SPKI DER values.
@@ -158,13 +155,11 @@ pub struct ZkX509ProjectionWitnessV1 {
     /// Private salts for disclosures in statement order.
     pub(crate) attribute_salts: Vec<[u8; ZK_X509_ATTRIBUTE_SALT_BYTES_V1]>,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl core::fmt::Debug for ZkX509ProjectionWitnessV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str("ZkX509ProjectionWitnessV1 { <private material redacted> }")
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for ZkX509ProjectionWitnessV1 {
     fn drop(&mut self) {
         for value in self
@@ -382,26 +377,22 @@ pub struct ZkX509ProjectionFixedTraceV1 {
     pub(crate) copy_sigma: Vec<F>,
 }
 /// Witness-bearing projection base trace.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ZkX509ProjectionBaseTraceV1 {
     /// Exact base rows.
     pub(crate) rows: Vec<[F; ZK_X509_PROJECTION_BASE_WIDTH_V1]>,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for ZkX509ProjectionBaseTraceV1 {
     fn drop(&mut self) {
         zeroize_field_rows_v1(&mut self.rows);
     }
 }
 /// Challenge-dependent copy and compaction products.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ZkX509ProjectionAuxTraceV1 {
     /// Exact auxiliary rows.
     pub(crate) rows: Vec<[F; ZK_X509_PROJECTION_AUX_WIDTH_V1]>,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for ZkX509ProjectionAuxTraceV1 {
     fn drop(&mut self) {
         zeroize_field_rows_v1(&mut self.rows);
@@ -438,7 +429,6 @@ pub struct ZkX509ProjectionChallengesV1 {
     pub(crate) compaction: [ZkX509ProjectionCompactionChallengesV1; COPY_LANES],
 }
 /// One prover-internal I/O channel emitted by projection.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ZkX509ProjectionIoChannelV1 {
     /// Semantic producer endpoint.
@@ -450,7 +440,6 @@ pub struct ZkX509ProjectionIoChannelV1 {
     /// Verifier-fixed public value, when a public-input consumer exists.
     pub(crate) public_value: Option<Vec<u8>>,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ZkX509ProjectionIoChannelV1 {
     fn zeroize_private_v1(&mut self) {
         zeroize_words_v1(&mut self.value);
@@ -496,14 +485,12 @@ impl ZkX509ProjectionIoChannelV1 {
         Ok(witness)
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for ZkX509ProjectionIoChannelV1 {
     fn drop(&mut self) {
         self.zeroize_private_v1();
     }
 }
 /// Complete projection witness material.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, PartialEq, Eq)]
 pub struct ZkX509ProjectionTraceV1 {
     /// Verifier-derived fixed trace.
@@ -513,22 +500,18 @@ pub struct ZkX509ProjectionTraceV1 {
     /// Prover-internal cross-segment channel values.
     pub(crate) io_channels: Vec<ZkX509ProjectionIoChannelV1>,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl core::fmt::Debug for ZkX509ProjectionTraceV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str("ZkX509ProjectionTraceV1 { <private material redacted> }")
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for ZkX509ProjectionTraceV1 {
     fn drop(&mut self) {
         self.zeroize_private_v1();
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ZkX509ProjectionTraceV1 {
     /// Overwrite every witness-bearing projection row and private channel.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     pub(crate) fn zeroize_private_v1(&mut self) {
         for row in &mut self.base.rows {
             zeroize_fields_v1(row);
@@ -552,7 +535,6 @@ pub enum ZkX509ProjectionAirErrorV1 {
     #[error("zk-X509 projection shape is invalid")]
     Shape,
     /// A public projection does not equal the constrained private relation.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error("zk-X509 projection output mismatch")]
     ProjectionMismatch,
     /// Canonical statement or hash framing failed.
@@ -568,7 +550,6 @@ pub enum ZkX509ProjectionAirErrorV1 {
     #[error("zk-X509 projection challenge set is invalid")]
     Challenge,
     /// One or more algebraic constraint residues are non-zero.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error("zk-X509 projection algebraic constraint failed")]
     Constraint,
     /// Fixed resource arithmetic or allocation failed.
@@ -589,7 +570,6 @@ struct InvocationSpecV1 {
     active: bool,
     tokens: Vec<SourceTokenV1>,
     expected_digest: [u8; 32],
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     public_digest: bool,
 }
 #[derive(Clone)]
@@ -597,7 +577,6 @@ struct FixedRowSpecV1 {
     row: ZkX509ProjectionFixedRowV1,
     key: CopyKeyV1,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn endpoint(role: ZkX509IoSegmentRoleV1, instance: u16) -> ZkX509IoEndpointV1 {
     ZkX509IoEndpointV1 { role, instance }
 }
@@ -756,7 +735,6 @@ fn compile_invocations_v1(
         active: true,
         tokens: frame_tokens_v1(ZK_X509_SCOPED_KEY_DOMAIN_V1, scoped_fields)?,
         expected_digest: *statement.subject_public_key_digest.as_bytes(),
-        #[cfg(any(test, feature = "privacy-release-evidence"))]
         public_digest: true,
     };
     let nullifier = InvocationSpecV1 {
@@ -773,7 +751,6 @@ fn compile_invocations_v1(
             ],
         )?,
         expected_digest: *statement.certificate_nullifier.as_bytes(),
-        #[cfg(any(test, feature = "privacy-release-evidence"))]
         public_digest: true,
     };
     let mut invocations = Vec::with_capacity(ZK_X509_PROJECTION_HASH_SLOTS_V1);
@@ -799,7 +776,6 @@ fn compile_invocations_v1(
                     ],
                 )?,
                 expected_digest: *disclosed.attribute_digest.as_bytes(),
-                #[cfg(any(test, feature = "privacy-release-evidence"))]
                 public_digest: true,
             });
         } else {
@@ -808,7 +784,6 @@ fn compile_invocations_v1(
                 active: false,
                 tokens: Vec::new(),
                 expected_digest: [0; 32],
-                #[cfg(any(test, feature = "privacy-release-evidence"))]
                 public_digest: false,
             });
         }
@@ -848,7 +823,6 @@ fn compile_invocations_v1(
             ],
         )?,
         expected_digest: ownership_digest,
-        #[cfg(any(test, feature = "privacy-release-evidence"))]
         public_digest: false,
     });
     if invocations.len() != ZK_X509_PROJECTION_HASH_SLOTS_V1
@@ -1128,7 +1102,6 @@ fn validate_public_shape_v1(
     }
     Ok(())
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn validate_witness_shape_v1(
     statement: &IrohaZkX509StarkP256StatementV1,
     witness: &ZkX509ProjectionWitnessV1,
@@ -1156,11 +1129,9 @@ fn validate_witness_shape_v1(
     }
     Ok(())
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn empty_base_row_v1() -> [F; ZK_X509_PROJECTION_BASE_WIDTH_V1] {
     [F::ZERO; ZK_X509_PROJECTION_BASE_WIDTH_V1]
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn chain_spki_byte_v1(
     witness: &ZkX509ProjectionWitnessV1,
     certificate: usize,
@@ -1178,27 +1149,23 @@ fn chain_spki_byte_v1(
                 .ok_or(ZkX509ProjectionAirErrorV1::Shape)
         })
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn set_byte_v1(row: &mut [F; ZK_X509_PROJECTION_BASE_WIDTH_V1], value: u8) {
     row[VALUE] = F(u64::from(value));
     for bit in 0..8 {
         row[VALUE_BITS + bit] = F(u64::from((value >> bit) & 1));
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn f_usize_v1(value: usize) -> Result<F, ZkX509ProjectionAirErrorV1> {
     Ok(F(
         u64::try_from(value).map_err(|_| ZkX509ProjectionAirErrorV1::Resource)?
     ))
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn length_accumulators_v1(bytes: [u8; 8], byte: usize) -> (u64, u64) {
     let before = bytes[..byte].iter().fold(0_u64, |accumulator, value| {
         accumulator * 256 + u64::from(*value)
     });
     (before, before * 256 + u64::from(bytes[byte]))
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn input_length_v1(
     input: u8,
     witness: &ZkX509ProjectionWitnessV1,
@@ -1213,7 +1180,6 @@ fn input_length_v1(
         _ => Err(ZkX509ProjectionAirErrorV1::Topology),
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn input_value_v1(
     input: u8,
     offset: usize,
@@ -1229,7 +1195,6 @@ fn input_value_v1(
         _ => Err(ZkX509ProjectionAirErrorV1::Topology),
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn fill_length_row_v1(
     row: &mut [F; ZK_X509_PROJECTION_BASE_WIDTH_V1],
     length: usize,
@@ -1245,7 +1210,6 @@ fn fill_length_row_v1(
     row[LENGTH_ACC_AFTER] = F(after);
     Ok(())
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn fill_variable_row_v1(
     row: &mut [F; ZK_X509_PROJECTION_BASE_WIDTH_V1],
     value: u8,
@@ -1260,7 +1224,6 @@ fn fill_variable_row_v1(
     row[REGION_AFTER] = f_usize_v1((offset + 1).min(length))?;
     Ok(())
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn fill_input_row_v1(
     fixed: ZkX509ProjectionFixedRowV1,
     witness: &ZkX509ProjectionWitnessV1,
@@ -1313,10 +1276,8 @@ fn fill_input_row_v1(
     }
     Ok(row)
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 type ProjectionSourceMaterialV1 = (u8, bool, Option<(usize, usize, usize)>);
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn source_token_material_v1(
     token: ZkX509ProjectionSourceTokenV1,
     witness: &ZkX509ProjectionWitnessV1,
@@ -1390,14 +1351,12 @@ fn source_token_material_v1(
         ZkX509ProjectionSourceTokenV1::Unused => Ok((0, false, None)),
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 type ProjectionBaseMaterialV1 = (
     ZkX509ProjectionBaseTraceV1,
     PrivateTableV1<Vec<u8>>,
     PrivateTableV1<[u8; 32]>,
 );
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn build_base_trace_v1(
     fixed: &ZkX509ProjectionFixedTraceV1,
     invocations: &[InvocationSpecV1],
@@ -1549,7 +1508,6 @@ fn build_base_trace_v1(
         digests,
     ))
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn padded_v1(value: &[u8], length: usize) -> Result<Vec<u8>, ZkX509ProjectionAirErrorV1> {
     if value.len() > length {
         return Err(ZkX509ProjectionAirErrorV1::Resource);
@@ -1562,7 +1520,6 @@ fn padded_v1(value: &[u8], length: usize) -> Result<Vec<u8>, ZkX509ProjectionAir
     padded.resize(length, 0);
     Ok(padded)
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn push_io_channel_v1(
     channels: &mut Vec<ZkX509ProjectionIoChannelV1>,
     producer: ZkX509IoEndpointV1,
@@ -1578,7 +1535,6 @@ fn push_io_channel_v1(
         value,
     });
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn build_io_channels_v1(
     statement: &IrohaZkX509StarkP256StatementV1,
     witness: &ZkX509ProjectionWitnessV1,
@@ -1857,7 +1813,6 @@ pub fn compile_zk_x509_projection_stark_fixed_rows_v1(
 /// # Errors
 ///
 /// Returns a strict shape, projection, encoding, topology, or resource error.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub fn build_zk_x509_projection_trace_v1(
     statement: &IrohaZkX509StarkP256StatementV1,
     witness: &ZkX509ProjectionWitnessV1,
@@ -1879,7 +1834,6 @@ pub fn build_zk_x509_projection_trace_v1(
 /// # Errors
 ///
 /// Returns a resource error on channel-id or length overflow.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub fn projection_io_witnesses_v1(
     channels: Vec<ZkX509ProjectionIoChannelV1>,
     first_channel: u32,
@@ -1928,7 +1882,6 @@ impl ZkX509ProjectionChallengesV1 {
         Ok(())
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn compaction_term_v1(
     challenge: ZkX509ProjectionCompactionChallengesV1,
     row: &[F; ZK_X509_PROJECTION_BASE_WIDTH_V1],
@@ -1942,7 +1895,6 @@ fn compaction_term_v1(
         .add(challenge.value.mul(row[VALUE]));
     challenge.gamma.add(used.mul(tuple))
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn fixed_compaction_role_v1(row: ZkX509ProjectionFixedRowV1) -> Option<(bool, u8)> {
     match row {
         ZkX509ProjectionFixedRowV1::Source { invocation, .. } => Some((true, invocation)),
@@ -1956,7 +1908,6 @@ fn fixed_compaction_role_v1(row: ZkX509ProjectionFixedRowV1) -> Option<(bool, u8
 ///
 /// Returns a shape, challenge, non-canonical-field, or algebraic error if the
 /// committed base/fixed traces cannot satisfy the products.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub fn build_zk_x509_projection_aux_trace_v1(
     base: &ZkX509ProjectionBaseTraceV1,
     fixed: &ZkX509ProjectionFixedTraceV1,

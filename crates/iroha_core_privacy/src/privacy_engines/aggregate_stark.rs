@@ -7,18 +7,13 @@
 //! minimal batched Merkle multiproofs, shared binary FRI, and opened-query
 //! verification. It deliberately contains no X.509, private-note, or PQ-MASP
 //! policy.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[path = "aggregate_stark/joined_trace.rs"]
 pub mod joined_trace;
 use super::privacy_outer_hash::PRIVACY_OUTER_DIGEST_BYTES_V1;
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::privacy_outer_hash::{PrivacyOuterDomainPrefixV1, PrivacyOuterLastFieldStreamV1};
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub mod retained_commitment;
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[path = "aggregate_stark/streaming_commitment.rs"]
 mod streaming_commitment;
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::transparent_stark::map_digest_stream_error_v1;
 use super::transparent_stark::{
     ExactProofReaderV1, GOLDILOCKS_GENERATOR_V1, GoldilocksFieldV1 as F, GoldilocksFp4V1 as E,
@@ -1805,7 +1800,6 @@ pub fn row_tree_v1(
     )
 }
 /// Root and canonical minimal frontier produced without retaining a Merkle tree.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StreamingMerkleCommitmentV1 {
     /// Root of the complete power-of-two leaf stream.
@@ -1819,7 +1813,6 @@ pub struct StreamingMerkleCommitmentV1 {
 /// one pending subtree per level and only those sibling hashes required by the
 /// requested canonical multiproof. Its memory is therefore
 /// `O(log(leaf_count) + frontier_len)` rather than `O(leaf_count)`.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub struct StreamingMerkleAccumulatorV1 {
     node_prefixes: Vec<PrivacyOuterDomainPrefixV1>,
     leaf_count: usize,
@@ -1828,7 +1821,6 @@ pub struct StreamingMerkleAccumulatorV1 {
     frontier_positions: BTreeMap<(usize, usize), usize>,
     frontier: Vec<Option<PrivacyOuterDigestV1>>,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl StreamingMerkleAccumulatorV1 {
     /// Create an accumulator for an exact leaf count and sorted unique opening set.
     ///
@@ -2029,7 +2021,6 @@ impl StreamingMerkleAccumulatorV1 {
         Ok(StreamingMerkleCommitmentV1 { root, frontier })
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for StreamingMerkleAccumulatorV1 {
     fn drop(&mut self) {
         for node in self.pending.iter_mut().chain(&mut self.frontier).flatten() {
@@ -2038,7 +2029,6 @@ impl Drop for StreamingMerkleAccumulatorV1 {
     }
 }
 /// Commit an exact leaf iterator with logarithmic tree memory.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub fn streaming_merkle_commitment_v1<I>(
     context: TransparentStarkDigestContextV1,
     node_role: &'static [u8],
@@ -2056,12 +2046,10 @@ where
 }
 /// Fixed finalization scratch, including named worker temporaries and prefixes.
 /// The row-state allocation itself remains charged separately by its caller.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub fn streaming_row_finalization_payload_bound_v1() -> Result<usize, AggregateStarkErrorV1> {
     streaming_commitment::payload_bound_v1()
 }
 /// Result of one column-streamed vector-row commitment pass.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StreamingRowCommitmentResultV1 {
     /// Root and canonical frontier of the committed vector rows.
@@ -2077,7 +2065,6 @@ pub struct StreamingRowCommitmentResultV1 {
 /// [`StreamingMerkleAccumulatorV1`], so neither leaves nor tree levels are
 /// retained. A second deterministic pass after Fiat–Shamir query derivation
 /// supplies the canonical frontier and the small set of opened rows.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub struct StreamingRowCommitmentV1 {
     rows: usize,
     width: usize,
@@ -2089,7 +2076,6 @@ pub struct StreamingRowCommitmentV1 {
     opening_indices: Vec<usize>,
     opened_rows: BTreeMap<usize, Vec<F>>,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl StreamingRowCommitmentV1 {
     /// Start an exact row commitment pass.
     pub(crate) fn new(
@@ -2325,7 +2311,6 @@ impl StreamingRowCommitmentV1 {
         })
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for StreamingRowCommitmentV1 {
     fn drop(&mut self) {
         // Failed/incomplete passes have not released these rows as proof data.
@@ -2347,9 +2332,7 @@ pub struct StreamingTraceMaskSetV1 {
 }
 /// Owner of one secret-bearing field column that overwrites every cell on
 /// every return path.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub struct ZeroizingFieldColumnV1(Vec<F>);
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ZeroizingFieldColumnV1 {
     /// Transfer an already allocated private column into its clearing owner.
     pub(crate) fn from_vec_v1(values: Vec<F>) -> Self {
@@ -2360,20 +2343,17 @@ impl ZeroizingFieldColumnV1 {
         zeroize_field_column_v1(&mut self.0);
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl core::ops::Deref for ZeroizingFieldColumnV1 {
     type Target = [F];
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl AsRef<[F]> for ZeroizingFieldColumnV1 {
     fn as_ref(&self) -> &[F] {
         &self.0
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for ZeroizingFieldColumnV1 {
     fn drop(&mut self) {
         self.zeroize_v1();
@@ -2941,7 +2921,6 @@ pub fn composition_tree_v1(
     )
 }
 /// Commit one aggregate composition lane without retaining a Merkle tree.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub fn streaming_composition_commitment_v1(
     domains: &AggregateStarkDomainsV1,
     lane: usize,
@@ -3752,7 +3731,6 @@ pub fn fri_tree_v1(
     )
 }
 /// Commit one FRI layer without retaining a Merkle tree.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub fn streaming_fri_commitment_v1(
     domains: &AggregateStarkDomainsV1,
     commitment_layout: AggregateFriCommitmentLayoutV1,
@@ -5293,7 +5271,6 @@ pub fn build_fri_lane_v1(
     })
 }
 /// Bounded-memory transcript material for one FRI lane.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AggregateStreamingFriLaneMaterialV1 {
     /// Layer roots, including the terminal layer.
@@ -5304,7 +5281,6 @@ pub struct AggregateStreamingFriLaneMaterialV1 {
     pub(crate) terminal_values: Vec<E>,
 }
 /// Post-query openings and frontiers for one streamed FRI lane.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AggregateStreamingFriLaneOpeningsV1 {
     /// Openings in the caller's canonical transcript-query order.
@@ -5314,7 +5290,6 @@ pub struct AggregateStreamingFriLaneOpeningsV1 {
 }
 /// Commit and transcript-bind a complete FRI lane while retaining only one
 /// current layer and one half-sized successor layer.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub fn build_streaming_fri_lane_v1(
     parameters: AggregateStarkParametersV1,
     domains: &AggregateStarkDomainsV1,
@@ -5398,7 +5373,6 @@ pub fn build_streaming_fri_lane_v1(
 }
 /// Replay a committed FRI lane after transcript queries are fixed, retaining
 /// only the exact opened pairs and canonical minimal frontiers.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub fn open_streaming_fri_lane_v1(
     parameters: AggregateStarkParametersV1,
     domains: &AggregateStarkDomainsV1,

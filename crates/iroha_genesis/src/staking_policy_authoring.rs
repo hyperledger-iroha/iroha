@@ -1,7 +1,33 @@
 //! Explicit staking monetary policy authoring in the single signed parameter snapshot.
 
 use super::*;
-use iroha_data_model::block::consensus::PublicLaneStakingPolicy;
+use iroha_data_model::{
+    account::AccountId, asset::AssetDefinitionId, block::consensus::PublicLaneStakingPolicy,
+};
+
+/// Construct a genesis author's default bounds for its explicitly selected asset and custody.
+///
+/// Callers resolve network and liability-profile choices before signing. This function does
+/// not inspect node configuration, decode account addresses, or fill an absent runtime policy.
+#[must_use]
+pub fn default_staking_policy(
+    stake_asset_id: AssetDefinitionId,
+    stake_escrow_account_id: AccountId,
+    slash_sink_account_id: AccountId,
+) -> PublicLaneStakingPolicy {
+    PublicLaneStakingPolicy {
+        min_validator_stake: 1_u64.into(),
+        max_stake_shares_per_validator: core::num::NonZeroU32::new(256)
+            .expect("fixed author share cap"),
+        max_pending_unbonds_per_share: core::num::NonZeroU32::new(8)
+            .expect("fixed author unbond cap"),
+        unbonding_delay_ms: 0,
+        max_slash_bps: 10_000,
+        stake_asset_id,
+        stake_escrow_account_id,
+        slash_sink_account_id,
+    }
+}
 
 impl GenesisBuilder {
     /// Author the root's exact staking asset, custody accounts, minimum and resource bounds.
@@ -20,25 +46,16 @@ impl GenesisBuilder {
 
 #[cfg(test)]
 pub(super) fn fixture_policy() -> PublicLaneStakingPolicy {
-    use std::num::NonZeroU32;
     // A producer chooses this fixed fixture profile before any State exists.
     // It is never read by runtime policy admission or execution.
-    PublicLaneStakingPolicy {
-        min_validator_stake: 1_u64.into(),
-        max_stake_shares_per_validator: NonZeroU32::new(256).unwrap(),
-        max_pending_unbonds_per_share: NonZeroU32::new(8).unwrap(),
-        unbonding_delay_ms: 0,
-        max_slash_bps: 10_000,
-        stake_asset_id: iroha_config::parameters::defaults::nexus::fees::fee_asset_id()
+    let custody = iroha_config::parameters::defaults::governance::bond_escrow_account_id();
+    default_staking_policy(
+        iroha_config::parameters::defaults::nexus::fees::fee_asset_id()
             .parse()
             .expect("fixed fixture stake currency"),
-        // Both fixed protocol custody identities share the known governance key.
-        // Construct the identity, without decoding a network-specific address.
-        stake_escrow_account_id:
-            iroha_config::parameters::defaults::governance::bond_escrow_account_id(),
-        slash_sink_account_id:
-            iroha_config::parameters::defaults::governance::bond_escrow_account_id(),
-    }
+        custody.clone(),
+        custody,
+    )
 }
 
 #[cfg(test)]
@@ -230,5 +247,77 @@ mod tests {
         let mut policy = fixture_policy();
         policy.max_slash_bps = 10_001;
         assert!(builder().with_staking_policy(policy).is_err());
+    }
+}
+
+#[cfg(test)]
+mod producer_default_tests {
+    use super::*;
+    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_data_model::account::address::{ChainDiscriminantGuard, chain_discriminant};
+    use iroha_model_base::domain::DomainId;
+
+    #[test]
+    fn explicit_author_identities_are_preserved_across_network_contexts() {
+        let _caller = ChainDiscriminantGuard::enter(753);
+        let asset = AssetDefinitionId::derive_from_components(
+            DomainId::parse_fully_qualified("staking.example").unwrap(),
+            "bond".parse().unwrap(),
+        );
+        let escrow = AccountId::new(
+            KeyPair::from_seed(vec![0x63; 32], Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+        );
+        let sink = AccountId::new(
+            KeyPair::from_seed(vec![0x64; 32], Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+        );
+        let policy = default_staking_policy(asset.clone(), escrow.clone(), sink.clone());
+        {
+            let _author = ChainDiscriminantGuard::enter(369);
+            assert_eq!(
+                default_staking_policy(asset.clone(), escrow.clone(), sink.clone()),
+                policy
+            );
+            let original = policy.clone().into_custom_parameter().unwrap();
+            assert_eq!(
+                PublicLaneStakingPolicy::from_custom_parameter(&original).unwrap(),
+                policy
+            );
+        }
+        assert_eq!(chain_discriminant(), 753);
+        assert_eq!(policy.stake_asset_id, asset);
+        assert_eq!(policy.stake_escrow_account_id, escrow);
+        assert_eq!(policy.slash_sink_account_id, sink);
+        assert_ne!(policy.stake_escrow_account_id, policy.slash_sink_account_id);
+    }
+
+    #[test]
+    fn producer_bounds_are_explicit_and_can_select_a_liability_profile() {
+        let account = iroha_config::parameters::defaults::governance::bond_escrow_account_id();
+        let asset = iroha_config::parameters::defaults::nexus::fees::fee_asset_id()
+            .parse()
+            .unwrap();
+        let mut policy = default_staking_policy(asset, account.clone(), account);
+        assert_eq!(policy.min_validator_stake, 1_u64.into());
+        assert_eq!(
+            policy.max_stake_shares_per_validator,
+            core::num::NonZeroU32::new(256).unwrap()
+        );
+        assert_eq!(
+            policy.max_pending_unbonds_per_share,
+            core::num::NonZeroU32::new(8).unwrap()
+        );
+        assert_eq!(policy.unbonding_delay_ms, 0);
+        assert_eq!(policy.max_slash_bps, 10_000);
+        policy.unbonding_delay_ms = 21 * 86_400_000;
+        policy.max_slash_bps = 10_000;
+        let encoded = policy.clone().into_custom_parameter().unwrap();
+        assert_eq!(
+            PublicLaneStakingPolicy::from_custom_parameter(&encoded).unwrap(),
+            policy
+        );
     }
 }

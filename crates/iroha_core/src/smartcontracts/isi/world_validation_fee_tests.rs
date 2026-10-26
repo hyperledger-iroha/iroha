@@ -1108,7 +1108,7 @@ fn assert_initial_genesis_fee_sponsor_lifecycle(authored_custody: bool) {
     );
     let mut block = state.block(header);
     let mut stx = block.transaction();
-    let mut authored_policy = stx.nexus.fees.clone();
+    let mut authored_policy = iroha_config::parameters::defaults::nexus::fees::genesis_policy();
     authored_policy.sponsor_vault_custody_account_id = custody.clone();
     if authored_custody {
         assert_ne!(custody, bootstrap_custody);
@@ -1340,19 +1340,30 @@ fn prospective_fee_sponsor_enrollment_funds_only_exact_self_bootstrap() {
     let (state, program_id, vault_key) = staged_fee_sponsor_activation_fixture();
     let mut nexus = state.nexus_snapshot();
     nexus.dataspace_fee_sponsor_program_ids.clear();
-    nexus.fees.fee_asset_id = vault_key.asset_definition_id.clone();
-    nexus.fees.base_fee = Quantity::zero();
-    nexus.fees.per_byte_fee = Quantity::zero();
-    nexus.fees.per_instruction_fee = "0.001".parse().unwrap();
-    nexus.fees.per_gas_unit_fee = "0.00005".parse().unwrap();
+    let mut authored_fees = state
+        .world
+        .parameters
+        .view()
+        .root_fees()
+        .expect("original fixture fee policy")
+        .clone();
+    authored_fees.fee_asset_id = vault_key.asset_definition_id.clone();
+    authored_fees.base_fee = Quantity::zero();
+    authored_fees.per_byte_fee = Quantity::zero();
+    authored_fees.per_instruction_fee = "0.001".parse().unwrap();
+    authored_fees.per_gas_unit_fee = "0.00005".parse().unwrap();
     // Quote the exact stored monetary policy. Local configuration cannot supply
     // the predecessor's fee schedule for this ordinary-height component fixture.
-    let mut parameters = state.world.parameters.block();
-    parameters
-        .set_parameter(iroha_data_model::parameter::Parameter::Custom(
-            nexus.fees.clone().into_custom_parameter().unwrap(),
-        ))
-        .expect("author the component fee policy");
+    let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+        .expect("funded parameter fixture block");
+    crate::state::set_parameter_cell_for_testing(
+        &mut parameters,
+        iroha_data_model::parameter::Parameter::Custom(
+            authored_fees.clone().into_custom_parameter().unwrap(),
+        ),
+        state.world.sccp_committee_generations.allocation_budget(),
+    )
+    .expect("author the component fee policy");
     parameters.commit();
     let header =
         iroha_data_model::block::BlockHeader::new(NonZeroU64::new(146).unwrap(), None, None, 0, 0);
@@ -1410,7 +1421,7 @@ fn prospective_fee_sponsor_enrollment_funds_only_exact_self_bootstrap() {
     assert_eq!(
         crate::block::resolve_network_xor_asset_definition(
             &stx.world,
-            &nexus.fees.fee_asset_id.canonical_address(),
+            &authored_fees.fee_asset_id.canonical_address(),
             0
         )
         .expect("completed pin read"),
@@ -1645,12 +1656,16 @@ fn staged_fee_sponsor_activation_fixture() -> (
     );
     // This admission component fixture requires explicit Global root metadata.
     // It does not execute signed genesis or authenticate a native history.
-    let mut parameters = world.parameters.block();
-    parameters
-        .set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
+    let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
+        .expect("funded parameter fixture block");
+    crate::state::set_parameter_cell_for_testing(
+        &mut parameters,
+        crate::sumeragi::lanes::routing::test_support::metadata(
             iroha_data_model::block::consensus::SumeragiRootScope::Global,
-        ))
-        .expect("valid fixture parameters");
+        ),
+        world.sccp_committee_generations.allocation_budget(),
+    )
+    .expect("valid fixture parameters");
     parameters.commit();
     (
         State::new_for_testing(
@@ -1878,7 +1893,11 @@ fn post_genesis_fund_mismatch_preserves_balances_vault_and_transcripts() {
     );
     let mut block = state.block(header);
     let mut stx = block.transaction();
-    let custody = stx.nexus.fees.sponsor_vault_custody_account_id.clone();
+    let custody = stx
+        .root_fee_policy()
+        .expect("original fixture fee policy")
+        .sponsor_vault_custody_account_id
+        .clone();
     for account in [ALICE_ID.clone(), BOB_ID.clone(), custody.clone()] {
         if stx.world.account(&account).is_err() {
             Register::account(Account::new(account))
@@ -2029,7 +2048,11 @@ fn fee_sponsor_withdrawal_is_owner_only_and_pays_registered_account() {
     );
     let mut block = state.block(header);
     let mut stx = block.transaction_for_fastpq_protocol_testing();
-    let custody = stx.nexus.fees.sponsor_vault_custody_account_id.clone();
+    let custody = stx
+        .root_fee_policy()
+        .expect("original fixture fee policy")
+        .sponsor_vault_custody_account_id
+        .clone();
     for account in [ALICE_ID.clone(), BOB_ID.clone(), custody.clone()] {
         if stx.world.account(&account).is_err() {
             Register::account(Account::new(account))
@@ -3258,5 +3281,223 @@ fn signed_payout_scope_refusal_cannot_publish_a_parliament_terminal_outcome() {
             .attempt()
             .status,
         GovernanceAttemptStatusV1::Enacted
+    );
+}
+
+#[test]
+fn due_payout_graph_refusal_discards_permission_events_and_retries_original_certificate() {
+    use crate::execution_attempt::ExecutionAttemptError;
+    use crate::pipeline_gas_policy::RetainedStateParameters;
+    use crate::test_allocations::refuse_one_layout_during;
+    use iroha_data_model::governance::types::ValidationFeePayoutLifecycleProposal;
+
+    const FEBRUARY_1970_MS: u64 = 2_678_400_000;
+    const DUE_TIME_MS: u64 = FEBRUARY_1970_MS + 60_000;
+    let (mut chain, binding) =
+        crate::validation_fee::tests::signed_payout_lifecycle_registry_fixture();
+    while chain.height() < PARLIAMENT_DUE_CERTIFICATE_HEIGHT - 1 {
+        chain.commit_at(FEBRUARY_1970_MS + (chain.height() + 1) * 1_000, Vec::new());
+    }
+    let original_state = crate::snapshot::canonical_state_snapshot_bytes(chain.state());
+    let original_height = chain.height();
+    let original_tip = chain.state().view().latest_block_hash();
+    let proposal = chain.proposal(Some(DUE_TIME_MS), Vec::new());
+    let state = std::sync::Arc::clone(chain.state());
+    {
+        let mut block = state.block(proposal.header());
+        let fixture = {
+            let mut setup = block.transaction();
+            crate::validation_fee::tests::register_bound_payout_time_trigger(
+                &mut setup,
+                &binding,
+                Hash::prehashed(binding.code_hash),
+                "late_graph_refusal_payout_tick",
+            );
+            super::validate_validation_fee_payout_lifecycle_runtime_before_effect_install(
+                &binding, &setup,
+            )
+            .unwrap();
+            let fixture = seed_due_parliament_certificate(
+                &mut setup,
+                ProposalKind::ValidationFeePayoutLifecycle(ValidationFeePayoutLifecycleProposal {
+                    proposal_operator: ALICE_ID.clone(),
+                    payout_binding: binding.clone(),
+                }),
+            );
+            setup.world.internal_event_buf.clear();
+            setup.apply();
+            fixture
+        };
+        let staged = crate::snapshot::canonical_staged_state_snapshot_bytes(&block);
+        let staged_events = block.world.pending_external_events().to_vec();
+        let original = block.world.parameters.get().clone();
+        let predecessor = block.world.parameters.get_before_block().clone();
+        let pool = block
+            .world
+            .sccp_committee_generations
+            .allocation_budget()
+            .clone();
+        let held = pool.reserved_bytes();
+        let layout = RetainedStateParameters::graph_allocation_layout_for_testing();
+        {
+            let mut attempt = block.transaction();
+            let permissions = super::validation_fee_runtime_permissions(
+                &attempt,
+                &binding,
+                &binding.pool_contract_address,
+            )
+            .unwrap();
+            assert!(!permissions.is_empty());
+            assert!(attempt.world.internal_event_buf.is_empty());
+            let (result, observed) = refuse_one_layout_during(layout, || {
+                super::execute_due_parliament_certificate_v1(
+                    fixture.governance_attempt_id,
+                    &mut attempt,
+                )
+            });
+            assert!(
+                observed,
+                "the actual payout successor must allocate its graph shell"
+            );
+            let Err(ExecutionAttemptError::Deferred(refused)) = result else {
+                panic!("local graph refusal must not become a terminal EffectFailed outcome");
+            };
+            assert!(matches!(
+                refused.allocator_refusal().unwrap().shared_error(),
+                Some(iroha_allocation::PrepaidSharedError::Allocator { requested_bytes })
+                    if *requested_bytes == layout.size()
+            ));
+            assert!(refused.decode_refusal().is_none());
+            assert!(refused.allocation_refusal().is_none());
+            let transported = crate::execution_attempt::ExecutionDeferred::try_from_vm_error(
+                refused.into_vm_error(),
+            )
+            .unwrap();
+            assert!(matches!(
+                transported.allocator_refusal().unwrap().shared_error(),
+                Some(iroha_allocation::PrepaidSharedError::Allocator { requested_bytes })
+                    if *requested_bytes == layout.size()
+            ));
+            assert!(original.same_version(attempt.world.parameters.get()));
+            assert!(predecessor.same_version(attempt.world.parameters.get_before_block()));
+            // These writes precede graph preparation in the real lifecycle branch.
+            // Observing them proves this is the late failure, not an acquisition
+            // or permission-allocation failure that never reached publication.
+            assert_eq!(attempt.world.internal_event_buf.len(), permissions.len());
+            for (permission, holder, _) in &permissions {
+                assert!(
+                    attempt
+                        .world
+                        .account_contains_inherent_permission(holder, permission)
+                );
+                assert!(
+                    attempt
+                        .world
+                        .internal_event_buf
+                        .iter()
+                        .any(|event| matches!(
+                            event.as_ref(),
+                            iroha_data_model::events::data::DataEvent::Account(
+                                AccountEvent::PermissionAdded(added)
+                            ) if &added.account == holder && &added.permission == permission
+                        ))
+                );
+            }
+            assert_eq!(
+                attempt
+                    .world
+                    .governance_proposals
+                    .get(&fixture.proposal_id)
+                    .unwrap()
+                    .status,
+                crate::state::GovernanceProposalStatus::Proposed,
+            );
+            assert_eq!(
+                attempt
+                    .world
+                    .parliament_attempts
+                    .get(&fixture.governance_attempt_id)
+                    .unwrap()
+                    .attempt()
+                    .status,
+                GovernanceAttemptStatusV1::Certified,
+            );
+            // The production caller discards this failed child, including every
+            // staged permission/event owner, before any terminal outcome can publish.
+        }
+        assert_eq!(pool.reserved_bytes(), held);
+        assert_eq!(
+            crate::snapshot::canonical_staged_state_snapshot_bytes(&block),
+            staged
+        );
+        assert_eq!(
+            block.world.pending_external_events(),
+            staged_events.as_slice()
+        );
+        assert!(original.same_version(block.world.parameters.get()));
+        {
+            let mut retry = block.transaction();
+            assert!(matches!(
+                super::execute_due_parliament_certificate_v1(
+                    fixture.governance_attempt_id,
+                    &mut retry,
+                )
+                .unwrap(),
+                super::DueParliamentCertificateExecutionV1::Applied,
+            ));
+            assert!(!retry.is_execution_deferred());
+            assert_eq!(
+                retry
+                    .world
+                    .governance_proposals
+                    .get(&fixture.proposal_id)
+                    .unwrap()
+                    .status,
+                crate::state::GovernanceProposalStatus::Enacted,
+            );
+            assert_eq!(
+                retry
+                    .world
+                    .parliament_attempts
+                    .get(&fixture.governance_attempt_id)
+                    .unwrap()
+                    .attempt()
+                    .status,
+                GovernanceAttemptStatusV1::Enacted,
+            );
+            let registry = super::validation_fee_policy_registry(&retry)
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                registry.payout_policies.head().unwrap().payout_binding,
+                binding
+            );
+            assert_eq!(
+                retry
+                    .world
+                    .internal_event_buf
+                    .iter()
+                    .filter(|event| matches!(
+                        event.as_ref(),
+                        iroha_data_model::events::data::DataEvent::Configuration(_)
+                    ))
+                    .count(),
+                1
+            );
+            assert!(predecessor.same_version(retry.world.parameters.get_before_block()));
+            retry.apply();
+        }
+        assert!(!original.same_version(block.world.parameters.get()));
+        assert!(predecessor.same_version(block.world.parameters.get_before_block()));
+    }
+    assert_eq!(
+        crate::snapshot::canonical_state_snapshot_bytes(chain.state()),
+        original_state
+    );
+    assert_eq!(chain.height(), original_height);
+    assert_eq!(chain.state().view().latest_block_hash(), original_tip);
+    assert_eq!(
+        chain.kura().blocks_count(),
+        usize::try_from(original_height).unwrap()
     );
 }

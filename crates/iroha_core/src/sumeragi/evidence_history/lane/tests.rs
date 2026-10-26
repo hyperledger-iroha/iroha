@@ -1245,7 +1245,7 @@ fn fund_original_validator_in_signed_genesis(
     use iroha_data_model::{Registrable, domain::Domain};
     use iroha_data_model::{
         account::{Account, AccountId},
-        asset::{Asset, AssetBalancePolicy, AssetDefinition, AssetDefinitionId, AssetId},
+        asset::{Asset, AssetBalancePolicy, AssetDefinition, AssetId},
         isi::RegisterPublicLaneValidator,
         nexus::PublicLaneMonetaryPlanV1,
     };
@@ -1274,21 +1274,31 @@ fn fund_original_validator_in_signed_genesis(
     )
     .unwrap();
     nexus.configured_lane_catalog = nexus.lane_catalog.clone();
-    nexus.staking.max_slash_bps = 1_000;
     let sink = AccountId::new(
         KeyPair::from_seed(vec![0xE3; 32], Algorithm::Ed25519)
             .public_key()
             .clone(),
     );
-    nexus.staking.slash_sink_account_id = sink.to_string();
-    let staking = &nexus.staking;
-    let definition: AssetDefinitionId = staking.stake_asset_id.parse().unwrap();
+    let definition = iroha_data_model::parameter::system::SumeragiNposParameters::default()
+        .xor_asset_definition_id;
+    let mut staking = crate::sumeragi::test_chain::staking_fixture_policy(definition.clone());
+    staking.max_slash_bps = 1_000;
+    staking.slash_sink_account_id = sink.clone();
+    let escrow = staking.stake_escrow_account_id.clone();
+    let selected = config.genesis_parameters.iter_mut().filter(|parameter| matches!(parameter,
+        iroha_data_model::parameter::Parameter::Custom(custom)
+            if custom.id() == &iroha_data_model::block::consensus::PublicLaneStakingPolicy::parameter_id()
+    )).collect::<Vec<_>>();
     assert_eq!(
-        definition,
-        iroha_data_model::parameter::system::SumeragiNposParameters::default()
-            .xor_asset_definition_id
+        selected.len(),
+        1,
+        "the original fixture has exactly one author policy"
     );
-    let escrow = AccountId::parse_encoded(&staking.stake_escrow_account_id).unwrap();
+    *selected.into_iter().next().unwrap() = iroha_data_model::parameter::Parameter::Custom(
+        staking
+            .into_custom_parameter()
+            .expect("complete original signed staking author input"),
+    );
     assert_ne!(escrow, sink, "a slash must physically leave stake escrow");
     let source_asset = AssetId::new(definition.clone(), validator.clone());
     let escrow_asset = AssetId::new(definition.clone(), escrow.clone());
@@ -1422,7 +1432,22 @@ fn funded_original_lane_slashing_scenario(complete_replacement: bool) {
             .get(&stake_key)
             .unwrap()
             .0;
-        let sink = AccountId::parse_encoded(&view.nexus().staking.slash_sink_account_id).unwrap();
+        let committed_policy = view.world().parameters().staking_policy().unwrap();
+        assert_eq!(
+            committed_policy.max_slash_bps, 1_000,
+            "the signed original genesis authors the actual slash fraction"
+        );
+        assert_eq!(
+            &committed_policy.stake_asset_id,
+            escrow.definition(),
+            "retained original liability keeps its exact authored asset"
+        );
+        assert_eq!(
+            &committed_policy.stake_escrow_account_id,
+            escrow.account(),
+            "retained original liability keeps its exact authored custody"
+        );
+        let sink = committed_policy.slash_sink_account_id.clone();
         (
             escrow.clone(),
             AssetId::with_scope(escrow.definition().clone(), sink, *escrow.scope()),
@@ -1586,12 +1611,16 @@ fn funded_original_lane_slashing_scenario(complete_replacement: bool) {
             .expect("authenticated next carrier schedule")
             .params
             .block_time_ms;
-        let delay_ms = u64::try_from(view.nexus().staking.unbonding_delay.as_millis())
-            .expect("configured unbonding delay fits the fixture clock");
+        let delay_ms = view
+            .world()
+            .parameters()
+            .staking_policy()
+            .unwrap()
+            .unbonding_delay_ms;
         schedule_created_at_ms
             .checked_add(cadence_ms)
             .and_then(|time| time.checked_add(delay_ms))
-            .expect("exact configured unbond release time")
+            .expect("exact committed unbond release time")
     };
     let schedule = sign_paid(
         &chain,

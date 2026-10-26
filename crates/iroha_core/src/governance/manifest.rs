@@ -39,6 +39,58 @@ use std::{
     str::{self, FromStr},
     sync::Arc,
 };
+/// Owned failure while parsing or deriving a runtime lane manifest.
+///
+/// Local codec failures keep their original scope identity. Semantic and fixed
+/// protocol-bound failures remain invalid input; they do not create admission
+/// refusals. Consumers must observe the actual operation before its codec scopes.
+#[derive(Debug, thiserror::Error)]
+pub enum LaneManifestError {
+    /// Invalid manifest semantics or a fixed first-release source bound.
+    #[error("invalid lane manifest: {0}")]
+    Invalid(String),
+    /// Original native JSON parser or writer error.
+    #[error("lane manifest JSON: {0}")]
+    Json(#[source] json::Error),
+    /// Original native decoder error returned by an enclosing consumer.
+    #[error("lane manifest codec: {0}")]
+    Codec(#[source] norito::Error),
+}
+
+impl From<String> for LaneManifestError {
+    fn from(reason: String) -> Self {
+        Self::Invalid(reason)
+    }
+}
+
+impl From<&str> for LaneManifestError {
+    fn from(reason: &str) -> Self {
+        Self::Invalid(reason.to_owned())
+    }
+}
+
+impl LaneManifestError {
+    /// Move an original codec cause into the caller's existing admission observer.
+    ///
+    /// This neither observes an operation nor reconstructs provenance. Malformed
+    /// JSON and semantic input errors remain owned by this error without formatting.
+    ///
+    /// # Errors
+    /// Returns this unchanged error when it is not an original native decoder
+    /// cause or JSON resource report. No allocation occurs during the transfer.
+    pub fn into_decode_error(self) -> Result<norito::Error, Self> {
+        match self {
+            Self::Json(
+                original @ (json::Error::ScopedDecodeResource(_)
+                | json::Error::DecodeResource(_)
+                | json::Error::AllocationFailed),
+            ) => Ok(original.into_core_error()),
+            Self::Codec(original) => Ok(original),
+            original => Err(original),
+        }
+    }
+}
+
 /// First-release byte ceiling for one active lane manifest source.
 const LANE_MANIFEST_MAX_BYTES_V1: usize = 256 * 1024;
 /// First-release byte ceiling for the optional governance catalog overlay.
@@ -529,12 +581,13 @@ impl RuntimeUpgradeHook {
     }
 }
 impl GovernanceRules {
-    fn from_manifest(alias: &str, manifest: &NativeLaneManifestV1) -> Result<Self, String> {
+    fn from_manifest(
+        alias: &str,
+        manifest: &NativeLaneManifestV1,
+    ) -> Result<Self, LaneManifestError> {
         let version = manifest.version.unwrap_or(NativeLaneManifestV1::VERSION);
         if version != NativeLaneManifestV1::VERSION {
-            return Err(format!(
-                "manifest version {version} is not supported (expected 1)"
-            ));
+            return Err(format!("manifest version {version} is not supported (expected 1)").into());
         }
         let mut validators = Vec::new();
         let mut validator_bindings = Vec::new();
@@ -550,12 +603,14 @@ impl GovernanceRules {
                 if validator_trimmed.is_empty() {
                     return Err("validator entry cannot be blank".into());
                 }
-                let account = AccountId::parse_encoded(validator_trimmed)
-                    .map_err(|err| format!("invalid validator id `{validator_trimmed}`: {err}"))?;
+                let account =
+                    <AccountId as json::JsonObjectKeyOwned>::from_json_key_text(validator_trimmed)
+                        .map_err(LaneManifestError::Json)?;
                 if !seen_validators.insert(account.clone()) {
                     return Err(format!(
                         "duplicate validator id `{validator_trimmed}` in lane `{alias}`"
-                    ));
+                    )
+                    .into());
                 }
                 let peer_raw = entry
                     .peer_id
@@ -565,12 +620,14 @@ impl GovernanceRules {
                 if peer_trimmed.is_empty() {
                     return Err("validator peer_id cannot be blank".into());
                 }
-                let peer_id = PeerId::from_str(peer_trimmed)
-                    .map_err(|err| format!("invalid validator peer_id `{peer_trimmed}`: {err}"))?;
+                let peer_id =
+                    <PeerId as json::JsonObjectKeyOwned>::from_json_key_text(peer_trimmed)
+                        .map_err(LaneManifestError::Json)?;
                 if !seen_peer_ids.insert(peer_id.clone()) {
                     return Err(format!(
                         "duplicate validator peer_id `{peer_trimmed}` in lane `{alias}`"
-                    ));
+                    )
+                    .into());
                 }
                 let torii_url = entry
                     .torii_url
@@ -630,7 +687,8 @@ impl GovernanceRules {
                 return Err(format!(
                     "validator quorum {q} exceeds validator set size {} for lane `{alias}`",
                     validators.len()
-                ));
+                )
+                .into());
             }
         }
         let mut protected_namespaces = BTreeSet::new();
@@ -645,7 +703,8 @@ impl GovernanceRules {
                 if !protected_namespaces.insert(name) {
                     return Err(format!(
                         "duplicate protected namespace `{trimmed}` in lane `{alias}`"
-                    ));
+                    )
+                    .into());
                 }
             }
         }
@@ -1106,7 +1165,13 @@ impl LaneManifestRegistry {
         let parsed = match Self::parse_bounded_manifest_json(&raw, budget) {
             Ok(parsed) => parsed,
             Err(err) => {
-                return Self::invalid_manifest_source_with_digest(path, err, raw_digest);
+                // TODO: startup's infallible frozen-source cache retains only a
+                // diagnostic. It cannot transport runtime admission ownership.
+                return Self::invalid_manifest_source_with_digest(
+                    path,
+                    err.to_string(),
+                    raw_digest,
+                );
             }
         };
         // Do not retain raw and canonical copies at the same time.
@@ -1261,12 +1326,12 @@ impl LaneManifestRegistry {
     fn parse_bounded_manifest_json(
         raw: &[u8],
         budget: &mut ManifestSourceLoadBudget,
-    ) -> Result<NativeLaneManifestV1, String> {
+    ) -> Result<NativeLaneManifestV1, LaneManifestError> {
         let raw = str::from_utf8(raw)
             .map_err(|err| format!("manifest source is not valid UTF-8: {err}"))?;
         let footprint = Self::preflight_manifest_json(raw.as_bytes(), MANIFEST_JSON_LIMITS_V1)?;
         budget.charge_json(footprint)?;
-        json::from_json(raw).map_err(|err| format!("manifest JSON parse error: {err}"))
+        json::from_json(raw).map_err(LaneManifestError::Json)
     }
     fn parse_bounded_governance_overlay_json(
         raw: &[u8],
@@ -1676,20 +1741,54 @@ impl LaneManifestRegistry {
         let source_snapshot = Arc::new(LaneManifestSourceSnapshot::load(registry_cfg));
         source_snapshot.bind(lane_catalog, governance_catalog)
     }
-    /// Bind a frozen parsed source snapshot to an active lane catalog.
+    /// Bind frozen sources to a catalog, retaining invalid-source status diagnostics.
+    ///
+    /// Invalid sources remain missing statuses. Native runtime transitions use the
+    /// fallible binding owner so original parser/resource failures cannot become
+    /// a missing-source verdict.
     #[must_use]
-    #[allow(clippy::too_many_lines)]
     pub fn from_source_snapshot(
         source_snapshot: Arc<LaneManifestSourceSnapshot>,
         lane_catalog: &LaneCatalog,
         governance_catalog: &GovernanceCatalog,
     ) -> Self {
+        match Self::bind_source_snapshot(
+            source_snapshot,
+            lane_catalog,
+            governance_catalog,
+            &mut |_| Ok::<(), core::convert::Infallible>(()),
+        ) {
+            Ok(registry) => registry,
+            Err(never) => match never {},
+        }
+    }
+
+    fn try_from_source_snapshot(
+        source_snapshot: Arc<LaneManifestSourceSnapshot>,
+        lane_catalog: &LaneCatalog,
+        governance_catalog: &GovernanceCatalog,
+    ) -> Result<Self, LaneManifestError> {
+        Self::bind_source_snapshot(source_snapshot, lane_catalog, governance_catalog, &mut Err)
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn bind_source_snapshot<E>(
+        source_snapshot: Arc<LaneManifestSourceSnapshot>,
+        lane_catalog: &LaneCatalog,
+        governance_catalog: &GovernanceCatalog,
+        on_invalid: &mut impl FnMut(LaneManifestError) -> Result<(), E>,
+    ) -> Result<Self, E> {
         if let Some(registry_cfg) = source_snapshot.pending_registry.as_ref() {
             let materialized = Arc::new(LaneManifestSourceSnapshot::load_for_catalog(
                 registry_cfg,
                 lane_catalog,
             ));
-            return Self::from_source_snapshot(materialized, lane_catalog, governance_catalog);
+            return Self::bind_source_snapshot(
+                materialized,
+                lane_catalog,
+                governance_catalog,
+                on_invalid,
+            );
         }
         // An empty source authority also acquires its immutable catalog identity
         // on the first bind, without materializing any filesystem locations.
@@ -1720,21 +1819,19 @@ impl LaneManifestRegistry {
             let visibility = lane.visibility;
             let storage = lane.storage;
             let manifest_source = source_snapshot.manifests_by_alias.get(&alias);
-            let status = manifest_source.map_or_else(
-                || {
-                    LaneManifestStatus::missing(
-                        lane.id,
-                        alias.clone(),
-                        dataspace,
-                        visibility,
-                        storage,
-                        governance.clone(),
-                    )
-                },
-                |source| match source
+            let status = match manifest_source {
+                None => LaneManifestStatus::missing(
+                    lane.id,
+                    alias.clone(),
+                    dataspace,
+                    visibility,
+                    storage,
+                    governance.clone(),
+                ),
+                Some(source) => match source
                     .parsed
                     .as_ref()
-                    .map_err(Clone::clone)
+                    .map_err(|error| LaneManifestError::Invalid(error.clone()))
                     .and_then(|parsed| {
                         Self::validate_parsed_manifest(
                             parsed,
@@ -1774,6 +1871,7 @@ impl LaneManifestRegistry {
                     }),
                     Err(msg) => {
                         warn!(lane = %alias, reason = %msg, "invalid lane manifest");
+                        on_invalid(msg)?;
                         LaneManifestStatus::missing(
                             lane.id,
                             alias.clone(),
@@ -1784,7 +1882,7 @@ impl LaneManifestRegistry {
                         )
                     }
                 },
-            );
+            };
             statuses.insert(lane.id, status);
         }
         // Log governance modules lacking manifest declarations.
@@ -1805,7 +1903,7 @@ impl LaneManifestRegistry {
                 );
             }
         }
-        Self {
+        Ok(Self {
             statuses,
             manifest_source_aliases,
             consensus_policy_digest,
@@ -1814,7 +1912,7 @@ impl LaneManifestRegistry {
             bound_catalog_hash: Some(
                 iroha_data_model::nexus::LaneLifecycleParameterV1::catalog_hash(lane_catalog),
             ),
-        }
+        })
     }
     fn collect_manifest_sources(
         manifest_dir: Option<&Path>,
@@ -2083,6 +2181,7 @@ impl LaneManifestRegistry {
         let source = Self::freeze_manifest_source(path.to_path_buf(), &mut budget);
         let parsed = source.parsed?;
         Self::validate_parsed_manifest(&parsed, lane_id, alias, lane_governance, catalog)
+            .map_err(|error| error.to_string())
     }
     fn validate_parsed_manifest(
         parsed: &NativeLaneManifestV1,
@@ -2090,13 +2189,14 @@ impl LaneManifestRegistry {
         alias: &str,
         lane_governance: Option<&str>,
         catalog: &GovernanceCatalog,
-    ) -> Result<ManifestArtifacts, String> {
+    ) -> Result<ManifestArtifacts, LaneManifestError> {
         if let Some(manifest_lane) = parsed.lane.as_deref()
             && manifest_lane != alias
         {
             return Err(format!(
                 "manifest targets lane \"{manifest_lane}\" but is located at alias \"{alias}\""
-            ));
+            )
+            .into());
         }
         let manifest_governance = parsed.governance.as_deref();
         if let Some(expected) = lane_governance {
@@ -2105,12 +2205,13 @@ impl LaneManifestRegistry {
                     if manifest_module != expected {
                         return Err(format!(
                             "manifest governance module {manifest_module} does not match lane configuration {expected}"
-                        ));
+                        ).into());
                     }
                     if !catalog.modules.contains_key(expected) {
                         return Err(format!(
                             "lane references governance module `{expected}` not present in catalog"
-                        ));
+                        )
+                        .into());
                     }
                 }
                 None => return Err("manifest missing governance module identifier".into()),
@@ -2429,6 +2530,13 @@ impl LaneManifestRegistry {
     /// Retrieve the quorum declared for `lane_id`, if present.
     pub fn lane_quorum(&self, lane_id: LaneId) -> Option<u32> {
         self.lane_rules(lane_id).and_then(|rules| rules.quorum)
+    }
+    /// Borrow the original manifest statuses in ascending lane order.
+    ///
+    /// Runtime projections can inspect the installed statuses without copying
+    /// their unrelated source paths, governance rules or validator bindings.
+    pub(crate) fn iter_statuses(&self) -> impl Iterator<Item = &LaneManifestStatus> + Clone {
+        self.statuses.values()
     }
     /// Snapshot the current manifest statuses for all lanes.
     #[must_use]

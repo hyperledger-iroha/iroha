@@ -13,7 +13,13 @@ std::thread_local! {
 
 /// Snapshot syntax is distinct from a local refusal by the original State pool.
 #[derive(Debug, thiserror::Error)]
-pub enum StateRestoreError {
+pub(crate) enum StateRestoreError {
+    /// Original complete parameter graph/control custody refused restoration.
+    #[error(transparent)]
+    Parameters(parameter_cell::ParameterCellRestoreError),
+    /// Original empty World initialization failed before replay.
+    #[error(transparent)]
+    WorldInitialization(#[from] WorldConstructionError),
     /// World authority must come from original signed-genesis and certified-history replay.
     #[error(
         "native World restoration requires fresh-State signed-genesis and certified-history replay"
@@ -52,6 +58,27 @@ pub enum StateRestoreError {
     /// Original execution resources refused this local restore attempt.
     #[error("snapshot State execution deferred: {0}")]
     ExecutionDeferred(#[source] crate::execution_attempt::ExecutionDeferred),
+    /// Kura holds no certified successor of the snapshot tip; only that successor's
+    /// certified parent World state root binds the World published at the tip.
+    #[error("snapshot World at height {height} has no certified successor block in Kura")]
+    SuccessorRequired {
+        /// Height of the snapshot tip.
+        height: u64,
+    },
+    /// A cold capture of the decoded World differs from the parent World state root its
+    /// certified successor block binds.
+    #[error(
+        "restored World state root {captured} differs from the certified successor's parent World state root {certified}"
+    )]
+    WorldMismatch {
+        /// Root of the decoded World.
+        captured: Hash,
+        /// Parent World state root certified by the successor block.
+        certified: Hash,
+    },
+    /// The decoded World could not be encoded, or its accumulator Cell differs from it.
+    #[error(transparent)]
+    WorldVerification(WorldStateVerificationError),
 }
 impl From<native_execution_tip::TipRestoreError> for StateRestoreError {
     fn from(error: native_execution_tip::TipRestoreError) -> Self {
@@ -59,9 +86,18 @@ impl From<native_execution_tip::TipRestoreError> for StateRestoreError {
             native_execution_tip::TipRestoreError::GenesisReplayRequired => {
                 Self::NativeExecutionReplayRequired
             }
+            native_execution_tip::TipRestoreError::SuccessorRequired { height } => {
+                Self::SuccessorRequired { height }
+            }
             native_execution_tip::TipRestoreError::History(message) => {
                 Self::Serialization(json::Error::InvalidField {
                     field: "native_execution_tip".into(),
+                    message,
+                })
+            }
+            native_execution_tip::TipRestoreError::Field { field, message } => {
+                Self::Serialization(json::Error::InvalidField {
+                    field: field.into(),
                     message,
                 })
             }
@@ -71,6 +107,38 @@ impl From<native_execution_tip::TipRestoreError> for StateRestoreError {
             native_execution_tip::TipRestoreError::Deferred(original) => {
                 Self::ExecutionDeferred(original)
             }
+        }
+    }
+}
+
+const CURRENT_COMMITTEE: &str = "world.validator_committee";
+const PREVIOUS_COMMITTEE: &str = "world.validator_committee.revert";
+
+/// Feed one block of the shared certified walk to the committee cut that contains it.
+fn observe_committee<W: WorldReadOnly>(
+    progress: &mut Option<validator_committee::CommittedProgress<'_, W>>,
+    field: &'static str,
+    certified: &crate::sumeragi::certified_chain::CertifiedBlock,
+) -> Result<(), native_execution_tip::TipRestoreError> {
+    match progress {
+        Some(progress) if certified.height() <= progress.height() => progress
+            .observe(certified)
+            .map_err(|error| committee_refusal(field, error)),
+        _ => Ok(()),
+    }
+}
+
+/// A committee-progress refusal names the snapshot field whose cut it checks.
+fn committee_refusal(
+    field: &'static str,
+    error: ExecutionAttemptError<String>,
+) -> native_execution_tip::TipRestoreError {
+    match error {
+        ExecutionAttemptError::Deferred(original) => {
+            native_execution_tip::TipRestoreError::Deferred(original)
+        }
+        ExecutionAttemptError::Rejected(message) => {
+            native_execution_tip::TipRestoreError::Field { field, message }
         }
     }
 }
@@ -102,40 +170,25 @@ fn validate_resource_policy_versions(
     Ok(())
 }
 
-/// Apply L1 to each complete original World cut under explicitly supplied replay policy.
-/// Snapshot fields are structural claims; neither defaults nor a current-only check can
-/// authenticate the genesis staking policy or an undo generation's liability window.
+/// Apply L1 to the committed monetary policy of each complete original World cut.
+/// Current and undo generations each retain their own policy; replay configuration
+/// is not monetary authority and cannot substitute for a missing committed owner.
 fn validate_sccp_policy_versions(
     world: &World,
-    replay_nexus: Option<&iroha_config::parameters::actual::Nexus>,
     execution_budget: &iroha_allocation::AllocationBudget,
 ) -> Result<(), StateRestoreError> {
-    fn validate(
-        cut: &(impl WorldReadOnly + ?Sized),
-        replay_nexus: Option<&iroha_config::parameters::actual::Nexus>,
-        field: &str,
-    ) -> Result<(), StateRestoreError> {
-        use crate::smartcontracts::isi::sccp::params;
-        let Some(parameters) = params::parameters(cut) else {
-            return Ok(());
-        };
-        // TODO: authenticate genesis-pinned staking custody in the native replay owner.
-        // Refuse config-free SCCP restore instead of substituting process defaults.
-        let policy = replay_nexus.ok_or_else(|| json::Error::InvalidField {
-            field: field.to_owned(),
-            message: "SCCP restore requires explicit original replay staking policy".to_owned(),
-        })?;
-        params::validate_staking_policy(cut, &parameters, &policy.staking).map_err(|error| {
-            json::Error::InvalidField {
+    fn validate(cut: &(impl WorldReadOnly + ?Sized), field: &str) -> Result<(), StateRestoreError> {
+        crate::smartcontracts::isi::sccp::params::validate_committed_staking_policy(cut).map_err(
+            |error| json::Error::InvalidField {
                 field: field.to_owned(),
                 message: error.to_string(),
-            }
-        })?;
+            },
+        )?;
         Ok(())
     }
-    validate(&world.view(), replay_nexus, "state.sccp.staking_policy")?;
+    validate(&world.view(), "state.sccp.staking_policy")?;
     let previous = world.try_block_and_revert(execution_budget)?;
-    validate(&previous, replay_nexus, "state.sccp.staking_policy.revert")
+    validate(&previous, "state.sccp.staking_policy.revert")
 }
 
 #[cfg(test)]
@@ -841,20 +894,29 @@ mod state_snapshot_decode_error_tests {
         };
         use std::num::{NonZeroU32, NonZeroU64};
         let mut overlay = world.block();
-        let parameters = overlay.parameters.get_mut();
-        parameters.replace(Parameters::default()).unwrap();
+        // This caller owns a pristine component fixture. Build the same complete
+        // canonical value before funding and publishing its immutable successor.
+        let mut authored = Parameters::default();
         if lower_caps {
-            parameters
-                .set_parameter(Parameter::Transaction(TransactionParameter::MaxTxBytes(
-                    NonZeroU64::new(3 * 1024 * 1024).unwrap(),
-                )))
-                .unwrap();
-            parameters
-                .set_parameter(Parameter::Sumeragi(SumeragiParameter::MaxBlockBytes(
-                    NonZeroU32::new(4 * 1024 * 1024).unwrap(),
-                )))
-                .unwrap();
+            authored.set_parameter(Parameter::Transaction(TransactionParameter::MaxTxBytes(
+                NonZeroU64::new(3 * 1024 * 1024).unwrap(),
+            )));
+            authored.set_parameter(Parameter::Sumeragi(SumeragiParameter::MaxBlockBytes(
+                NonZeroU32::new(4 * 1024 * 1024).unwrap(),
+            )));
         }
+        let authored = crate::pipeline_gas_policy::StateParameters::try_from(authored).unwrap();
+        let pool = world.sccp_committee_generations.allocation_budget();
+        let prepared = overlay
+            .parameters
+            .get()
+            .prepare_replace(&authored, pool)
+            .unwrap();
+        let successor = prepared
+            .into_successor(overlay.parameters.get(), pool)
+            .map_err(|(_prepared, original)| original)
+            .unwrap();
+        *overlay.parameters.get_mut() = successor;
         let mut limits = PrivacyConsensusLimitsV1::taira_default();
         if lower_privacy {
             limits.max_proof_bytes_per_action = 2 * 1024 * 1024;
@@ -973,8 +1035,12 @@ mod state_snapshot_decode_error_tests {
     fn canonical_parameters_cell_restores_validated_fee_projection() {
         let receiver = iroha_test_samples::ALICE_ID.to_string();
         let canonical = fee_parameters_snapshot(&receiver);
-        let restored = take_parameters_cell(&mut parameters_map(&canonical), "parameters")
-            .expect("canonical original Parameters cell restores its derived fee projection");
+        let restored = take_parameters_cell(
+            &mut parameters_map(&canonical),
+            "parameters",
+            &scalar_cell_custody::default_budget(),
+        )
+        .expect("canonical original Parameters cell restores its derived fee projection");
         assert_eq!(restored.view().gas().tech_account_id, receiver);
         assert_eq!(json::to_json(&restored).unwrap(), canonical);
     }
@@ -985,20 +1051,35 @@ mod state_snapshot_decode_error_tests {
         let mut map = parameters_map(&canonical);
         let limits = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX);
         let error = norito::with_decode_limits_scope(limits, || {
-            take_parameters_cell(&mut map, "parameters")
-                .err()
-                .expect("original decode budget refuses restore")
+            take_parameters_cell(
+                &mut map,
+                "parameters",
+                &scalar_cell_custody::default_budget(),
+            )
+            .err()
+            .expect("original decode budget refuses restore")
         });
         assert!(matches!(error, StateRestoreError::ExecutionDeferred(_)));
-        assert!(take_parameters_cell(&mut parameters_map(&canonical), "parameters").is_ok());
+        assert!(
+            take_parameters_cell(
+                &mut parameters_map(&canonical),
+                "parameters",
+                &scalar_cell_custody::default_budget()
+            )
+            .is_ok()
+        );
     }
 
     #[test]
     fn parameters_cell_restore_rejects_malformed_fee_as_serialization() {
         let malformed = fee_parameters_snapshot("alias@domain");
-        let error = take_parameters_cell(&mut parameters_map(&malformed), "parameters")
-            .err()
-            .expect("malformed committed receiver cannot create a StateParameters owner");
+        let error = take_parameters_cell(
+            &mut parameters_map(&malformed),
+            "parameters",
+            &scalar_cell_custody::default_budget(),
+        )
+        .err()
+        .expect("malformed committed receiver cannot create a StateParameters owner");
         assert!(matches!(
             error,
             StateRestoreError::Serialization(json::Error::InvalidField { ref field, .. })
@@ -1354,28 +1435,68 @@ impl KuraSeed {
         let chain_id: ChainId = take_required(&mut map, "chain_id")?;
         let network_id: NetworkId = take_required(&mut map, "network_id")?;
         let block_hashes: Vec<HashOf<BlockHeader>> = take_required(&mut map, "block_hashes")?;
+        let committed_height =
+            u64::try_from(block_hashes.hash_count()).map_err(|_| json::Error::InvalidField {
+                field: "state.block_hashes".to_owned(),
+                message: "committed height does not fit u64".to_owned(),
+            })?;
+        // Committee progress of this World and of its predecessor is checked against the
+        // same certified walk as the native tip. Revert the original World rather than
+        // reconstructing H-1 from the current lane policy. A no-op Cell legitimately has no
+        // undo; its original value is still the predecessor and must pass the predecessor
+        // height constraints. Heights 0 and 1 never walk: an empty history has nothing to
+        // certify, and H1 restarts from signed genesis before any cut is acquired.
+        let walked = committed_height >= 2;
+        let current_world = world.view();
+        let previous_world = if walked {
+            Some(world.try_block_and_revert(&self.execution_budget)?)
+        } else {
+            None
+        };
+        let mut current_progress = if walked {
+            Some(
+                validator_committee::CommittedProgress::start(
+                    &current_world,
+                    network_id,
+                    committed_height,
+                )
+                .map_err(|error| committee_refusal(CURRENT_COMMITTEE, error))?,
+            )
+        } else {
+            None
+        };
+        let mut previous_progress = match &previous_world {
+            Some(previous) => Some(
+                validator_committee::CommittedProgress::start(
+                    previous,
+                    network_id,
+                    committed_height - 1,
+                )
+                .map_err(|error| committee_refusal(PREVIOUS_COMMITTEE, error))?,
+            ),
+            None => None,
+        };
         // A decoded World is unauthenticated until its cold-captured state root matches the
-        // certified parent World state root of its successor block. TODO(S9): admit accelerated
-        // restore only with that check and the State-level fields' own provenance.
-        if !block_hashes.is_empty() {
-            return Err(StateRestoreError::NativeExecutionReplayRequired);
-        }
+        // certified parent World state root of its successor block, which the native tip
+        // restore authenticates from signed genesis (checked once the State is built below).
         let native_tip_claim: native_execution_tip::NativeExecutionTipSnapshot =
             take_required(&mut map, "native_execution_tip")?;
-        let native_execution_tip = native_tip_claim
+        let native_execution_tip::RestoredNativeTip {
+            cell: native_execution_tip,
+            world_root: certified_world_root,
+        } = native_tip_claim
             .restore(
                 &self.execution_budget,
                 &chain_id,
                 &network_id,
                 &block_hashes,
                 &self.kura,
+                &mut |certified| {
+                    observe_committee(&mut current_progress, CURRENT_COMMITTEE, certified)?;
+                    observe_committee(&mut previous_progress, PREVIOUS_COMMITTEE, certified)
+                },
             )
             .map_err(StateRestoreError::from)?;
-        let committed_height =
-            u64::try_from(block_hashes.hash_count()).map_err(|_| json::Error::InvalidField {
-                field: "state.block_hashes".to_owned(),
-                message: "committed height does not fit u64".to_owned(),
-            })?;
         validate_sumeragi_lane_state(
             network_id,
             committed_height,
@@ -1394,57 +1515,33 @@ impl KuraSeed {
         }
         validate_replication_order_completion_anchors(&world, &block_hashes)?;
         validate_musubi_resolver_checkpoint_anchors(&world, &block_hashes)?;
-        validator_committee::validate_committed_progress(
-            &world.view(),
-            &chain_id,
-            network_id,
-            &block_hashes,
-            &self.kura,
-            &self.execution_budget,
-        )
-        .map_err(|error| match error {
-            ExecutionAttemptError::Deferred(original) => {
-                StateRestoreError::ExecutionDeferred(original)
-            }
-            ExecutionAttemptError::Rejected(message) => json::Error::InvalidField {
-                field: "world.validator_committee".to_owned(),
-                message,
-            }
-            .into(),
-        })?;
-        if !block_hashes.is_empty() {
-            let previous_world = world.try_block_and_revert(&self.execution_budget)?;
-            // Revert the original World rather than reconstructing H-1 from the current
-            // lane policy. A no-op Cell legitimately has no undo; its original value is
-            // still the predecessor and must pass the predecessor height constraints.
+        if committed_height == 0 {
+            validator_committee::validate_empty_progress(&current_world)
+                .map_err(|error| committee_refusal(CURRENT_COMMITTEE, error))?;
+        }
+        if let Some(progress) = current_progress {
+            progress
+                .finish()
+                .map_err(|error| committee_refusal(CURRENT_COMMITTEE, error))?;
+        }
+        if let Some(previous) = &previous_world {
             validate_sumeragi_lane_state(
                 network_id,
                 committed_height - 1,
-                previous_world.sumeragi_lanes(),
+                previous.sumeragi_lanes(),
             )
             .map_err(|message| json::Error::InvalidField {
                 field: "world.sumeragi_lanes.revert".to_owned(),
                 message,
             })?;
-            validator_committee::validate_committed_progress(
-                &previous_world,
-                &chain_id,
-                network_id,
-                &block_hashes[..block_hashes.len() - 1],
-                &self.kura,
-                &self.execution_budget,
-            )
-            .map_err(|error| match error {
-                ExecutionAttemptError::Deferred(original) => {
-                    StateRestoreError::ExecutionDeferred(original)
-                }
-                ExecutionAttemptError::Rejected(message) => json::Error::InvalidField {
-                    field: "world.validator_committee.revert".to_owned(),
-                    message,
-                }
-                .into(),
-            })?;
         }
+        if let Some(progress) = previous_progress {
+            progress
+                .finish()
+                .map_err(|error| committee_refusal(PREVIOUS_COMMITTEE, error))?;
+        }
+        drop(previous_world);
+        drop(current_world);
         world
             .privacy_consensus_policy
             .view()
@@ -1455,7 +1552,7 @@ impl KuraSeed {
                 message: error.to_string(),
             })?;
         validate_resource_policy_versions(&world, committed_height, &self.execution_budget)?;
-        validate_sccp_policy_versions(&world, replay_nexus, &self.execution_budget)?;
+        validate_sccp_policy_versions(&world, &self.execution_budget)?;
         crate::privacy_state::validate_privacy_activations_at_committed_height_v1(
             &world.privacy_activations.view(),
             committed_height,
@@ -1604,6 +1701,11 @@ impl KuraSeed {
                     message,
                 })
             })?;
+        // The World is final here; authenticate it before State construction loads or
+        // recovers any durable journal on its behalf.
+        if let Some(certified) = certified_world_root {
+            authenticate_restored_world(&world, &self.execution_budget, certified)?;
+        }
         let state = build_state(
             BuildStateInputs {
                 execution_budget: self.execution_budget,
@@ -1637,6 +1739,33 @@ impl KuraSeed {
         .map_err(durable_state_restore_error)?;
         Ok(state)
     }
+}
+/// A decoded positive-height World is a claim until a cold capture of it equals the parent
+/// World state root its certified successor binds (`specs/sumeragi.md` E51, E56). The same
+/// capture checks the decoded accumulator Cell that the first replayed block chains from.
+fn authenticate_restored_world(
+    world: &World,
+    execution_budget: &iroha_allocation::AllocationBudget,
+    certified: Hash,
+) -> Result<(), StateRestoreError> {
+    // A local acquisition refusal is no verdict on the snapshot: it keeps its typed admission
+    // owner instead of authorizing a fallback replay.
+    let classify = |error: WorldStateVerificationError| match error {
+        WorldStateVerificationError::Acquisition(error) => StateRestoreError::Admission(
+            StateAdmissionError::Storage(StateStorageAdmissionError::World(error)),
+        ),
+        error => StateRestoreError::WorldVerification(error),
+    };
+    let captured = world
+        .verify_state_accumulator(execution_budget)
+        .map_err(classify)?;
+    if captured != certified {
+        return Err(StateRestoreError::WorldMismatch {
+            captured,
+            certified,
+        });
+    }
+    Ok(())
 }
 /// Exercise exact durable Fast boundary admission without constructing native State.
 #[cfg(test)]
@@ -2768,18 +2897,45 @@ fn take_ram_lfe_program_policies(
 fn take_parameters_cell(
     map: &mut SnapshotJsonMap<'_>,
     key: &str,
-) -> Result<Cell<StateParameters>, StateRestoreError> {
+    execution_budget: &iroha_allocation::AllocationBudget,
+) -> Result<Cell<RetainedStateParameters, iroha_allocation::AllocationCharge>, StateRestoreError> {
     let source = map
         .remove(key)
         .ok_or_else(|| json::Error::missing_field(key))?;
-    source.decode_canonical_value().map_err(|error| {
-        crate::execution_attempt::json_decode_attempt_error(error, |error| {
-            json::Error::InvalidField {
+    let result = match source {
+        SnapshotJsonField::Borrowed { raw } => parameter_cell::restore(raw, execution_budget),
+        #[cfg(test)]
+        SnapshotJsonField::Owned(value) => {
+            // Authored test Value has no authenticated original byte order. Its
+            // rendering belongs to fixture construction, never production ingress.
+            let authored = json::to_json(&value)?;
+            parameter_cell::restore_authored_fixture(&authored, execution_budget)
+        }
+    };
+    result.map_err(|error| {
+        use crate::pipeline_gas_policy::{ParameterIngressAttemptError, ParameterIngressError};
+        use parameter_cell::ParameterCellRestoreError;
+        let invalid = |reason: String| {
+            StateRestoreError::Serialization(json::Error::InvalidField {
                 field: key.to_owned(),
-                message: error.to_string(),
+                message: reason,
+            })
+        };
+        match error {
+            ParameterCellRestoreError::Ingress(ParameterIngressAttemptError::Codec(original)) => {
+                match original.into_local_refusal() {
+                    Ok(refusal) => StateRestoreError::ExecutionDeferred(refusal.into()),
+                    Err(invalid_source) => invalid(invalid_source.to_string()),
+                }
             }
-        })
-        .into()
+            ParameterCellRestoreError::Ingress(ParameterIngressAttemptError::Original(
+                error @ (ParameterIngressError::Pipeline(_)
+                | ParameterIngressError::Fraud(_)
+                | ParameterIngressError::Zk(_)
+                | ParameterIngressError::Staking(_)),
+            )) => invalid(error.to_string()),
+            original => StateRestoreError::Parameters(original),
+        }
     })
 }
 fn take_topology_cell(

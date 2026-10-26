@@ -930,11 +930,12 @@ fn der_statement_digest_and_x5p1_envelope_are_exact_and_fail_closed() {
     let shape = ZkX509DerStarkShapeV1;
     let digest = der_public_digest_v1(shape).expect("DER public digest");
     // Independent SHA3-384 of the exact catalog/protocol/profile frame and
-    // ordered DER descriptors plus the constant public registration label.
+    // ordered DER descriptors plus the constant public registration label, using
+    // the canonical 32-byte native BLAKE3 catalog commitment.
     // The MAIN profile label includes family 1 and public nonce [0x5a; 32].
     assert_eq!(
         hex::encode(digest.to_bytes()),
-        "156c6dd358a46edb4840d5e4b66c529ff7f0a21af94e6eb267d76b94316b1bc5942bbf024b414971be062659f1b4bcb9"
+        "3e6c7479e5095dd5ccf078478f4d75b9de0b098ffa3248e9f163e9495a96c320b0152f6afa652cd521704f2d4af99a0e"
     );
     let claims = ZkX509DerStarkTerminalClaimsV1 {
         input_byte: [F(3), F(5), F(7), F(11)],

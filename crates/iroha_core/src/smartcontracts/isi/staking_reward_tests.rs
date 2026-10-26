@@ -8,13 +8,17 @@ fn staking_instructions_change_only_future_reward_exposure() {
 
     use crate::validation_fee_rewards::reward_exposure_before_block_for_testing;
 
-    let mut state = setup_state();
+    let (receiver, _) = gen_account_in("nexus");
+    let mut policy = committed_staking_fixture_policy();
+    policy.slash_sink_account_id = receiver.clone();
+    let mut state = setup_state_with_staking_policy(policy);
     set_epoch_length(&mut state, 100);
     let lane = LaneId::new(13);
     let first = new_block_with_height_and_time(2, 1_000);
     let mut first_block = state.block(first.as_ref().header());
     let mut stx = first_block.transaction_for_callback_testing();
-    let (validator, nominator, escrow, definition) = prepare_accounts(&mut stx);
+    let (validator, nominator, escrow, definition) =
+        prepare_accounts_with_delegator(&mut stx, receiver);
     RegisterPublicLaneValidator {
         monetary_plan: fixture_registration_plan(&stx, lane, &validator, Quantity::from(1_000_u64)),
         lane_id: lane,
@@ -89,10 +93,9 @@ fn staking_instructions_change_only_future_reward_exposure() {
         }],
     };
     let mut stx = second_block.transaction_for_callback_testing();
-    stx.nexus.staking.stake_asset_id = definition.to_string();
+
     set_fixture_xor_identity(&mut stx, &definition);
-    stx.nexus.staking.stake_escrow_account_id = escrow.to_string();
-    stx.nexus.staking.slash_sink_account_id = nominator.to_string();
+
     BondPublicLaneStake {
         monetary_plan: fixture_bond_plan(
             &stx,
@@ -117,7 +120,7 @@ fn staking_instructions_change_only_future_reward_exposure() {
         request_id,
         amount: Quantity::from(200_u64),
         release_at_ms: stx.block_unix_timestamp_ms()
-            + duration_millis(stx.nexus.staking.unbonding_delay),
+            + stx.staking_monetary_policy().unwrap().unbonding_delay_ms,
     }
     .execute(&nominator, &mut stx)
     .expect("schedule unbond while retaining slashable custody");

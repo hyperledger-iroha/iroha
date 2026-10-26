@@ -1647,7 +1647,7 @@ impl MainTraceReplaySourcesV1<'_, '_> {
                         .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?;
                     match kind {
                         MainTraceColumnKindV1::Base => source
-                            .replay_base_columns_v1(segment, local, &mut targets)
+                            .replay_base_columns_v1(&log19.sha_fixed, segment, local, &mut targets)
                             .map_err(map_main_sha_source_error_v1)?,
                         MainTraceColumnKindV1::Aux => {
                             source

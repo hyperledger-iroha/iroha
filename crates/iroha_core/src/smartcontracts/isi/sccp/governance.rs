@@ -1111,23 +1111,49 @@ mod tests {
         assert!(error.to_string().contains("NetworkId"), "{error}");
     }
 
+    fn staking_policy(
+        delay_ms: u64,
+    ) -> iroha_data_model::block::consensus::PublicLaneStakingPolicy {
+        let mut policy = crate::sumeragi::test_chain::staking_fixture_policy(
+            iroha_data_model::parameter::system::SumeragiNposParameters::default()
+                .xor_asset_definition_id,
+        );
+        policy.unbonding_delay_ms = delay_ms;
+        policy.max_slash_bps = 1;
+        policy
+    }
+
+    fn monetary_state(delay_ms: u64) -> crate::state::State {
+        let mut state =
+            super::super::test_support::blank_state_with_staking(Some(staking_policy(delay_ms)));
+        let mut consensus = state.world.parameters.view().get().sumeragi().clone();
+        consensus.epoch_length_blocks = std::num::NonZeroU64::new(3_600).expect("epoch");
+        consensus.block_cadence_ms = std::num::NonZeroU64::new(1_000).expect("cadence");
+        state.world.set_sumeragi_for_testing(consensus).unwrap();
+        state
+    }
+
+    fn stage_staking(stx: &mut StateTransaction<'_, '_>, delay_ms: u64) {
+        stx.world
+            .set_parameter_for_testing(iroha_data_model::parameter::Parameter::Custom(
+                staking_policy(delay_ms).into_custom_parameter().unwrap(),
+            ))
+            .unwrap();
+    }
+
     #[test]
     fn set_parameters_validates_the_full_pinned_policy_before_writing() {
-        let state = blank_state();
+        let delay = super::super::test_support::SCCP_UNBONDING_DELAY_MS;
+        let state = monetary_state(delay);
         let mut block = state.block(header(5));
         let mut stx = block.transaction();
         setup(&mut stx);
-        stx.nexus.staking.unbonding_delay = std::time::Duration::from_secs(21 * 86_400);
-        stx.nexus.staking.max_slash_bps = 1;
-        let mut consensus = stx.world.parameters.get().sumeragi().clone();
-        consensus.epoch_length_blocks = std::num::NonZeroU64::new(3_600).expect("epoch");
-        consensus.block_cadence_ms = std::num::NonZeroU64::new(1_000).expect("cadence");
-        stx.world.parameters.get_mut().set_sumeragi(consensus);
         let original = *store::parameters::get(&*stx.world);
         let mut next = original.expect("original parameters");
         next.enabled = false;
         let action = SccpGovernanceActionV1::SetParameters(SccpSetParametersActionV1 { next });
-        stx.nexus.staking.unbonding_delay -= std::time::Duration::from_millis(1);
+        stage_staking(&mut stx, delay - 1);
+        let events_before = stx.world.internal_event_buf.clone();
         let error = apply_action(
             &mut stx,
             &action,
@@ -1135,10 +1161,23 @@ mod tests {
             controls::ControlCauseV1::for_test([0x43; 32], [0x45; 32]),
             S0,
         )
-        .expect_err("short delay");
+        .expect_err("short pending delay");
         assert!(error.to_string().contains("unbonding_delay"), "{error}");
         assert_eq!(*store::parameters::get(&*stx.world), original);
-        stx.nexus.staking.unbonding_delay += std::time::Duration::from_millis(1);
+        assert_eq!(stx.world.internal_event_buf, events_before);
+        assert_eq!(
+            stx.staking_monetary_policy().unwrap().unbonding_delay_ms,
+            delay
+        );
+        assert_eq!(
+            stx.world
+                .parameters()
+                .require_staking_policy()
+                .unwrap()
+                .unbonding_delay_ms,
+            delay - 1
+        );
+        stage_staking(&mut stx, delay);
         apply_action(
             &mut stx,
             &action,
@@ -1148,6 +1187,109 @@ mod tests {
         )
         .expect("valid complete parameters");
         assert_eq!(*store::parameters::get(&*stx.world), Some(next));
+    }
+
+    #[test]
+    fn pending_staking_cannot_repair_missing_original_liability_authority() {
+        let delay = super::super::test_support::SCCP_UNBONDING_DELAY_MS;
+        for original in [None, Some(delay - 1)] {
+            let state = original.map_or_else(blank_state, monetary_state);
+            let mut block = state.block(header(5));
+            let mut stx = block.transaction();
+            setup(&mut stx);
+            stage_staking(&mut stx, delay);
+            let before = *store::parameters::get(&*stx.world);
+            let mut next = before.unwrap();
+            next.enabled = false;
+            let action = SccpGovernanceActionV1::SetParameters(SccpSetParametersActionV1 { next });
+            let events_before = stx.world.internal_event_buf.clone();
+            let error = apply_action(
+                &mut stx,
+                &action,
+                [7; 32],
+                controls::ControlCauseV1::for_test([0x43; 32], [0x45; 32]),
+                S0,
+            )
+            .expect_err("pending policy cannot replace original authority");
+            let expected = if original.is_some() {
+                "unbonding_delay"
+            } else {
+                "staking"
+            };
+            assert!(error.to_string().contains(expected), "{error}");
+            assert_eq!(*store::parameters::get(&*stx.world), before);
+            assert_eq!(stx.world.internal_event_buf, events_before);
+        }
+    }
+
+    #[test]
+    fn staking_and_sccp_successors_validate_the_joint_pair_in_both_orders() {
+        const DAY: u64 = 86_400_000;
+        let delay = super::super::test_support::SCCP_UNBONDING_DELAY_MS;
+        for staking_first in [true, false] {
+            let state = monetary_state(delay + DAY);
+            let mut block = state.block(header(5));
+            let mut stx = block.transaction();
+            setup(&mut stx);
+            let original = *store::parameters::get(&*stx.world);
+            let mut longer = original.unwrap();
+            longer.enabled = false; // Disabling value movement must not erase liabilities.
+            longer.committee_validity_ms += DAY;
+            let action =
+                SccpGovernanceActionV1::SetParameters(SccpSetParametersActionV1 { next: longer });
+            if staking_first {
+                super::super::params::validate_staking_successor(
+                    &*stx.world,
+                    &staking_policy(delay),
+                )
+                .unwrap();
+                stage_staking(&mut stx, delay);
+                let events_before = stx.world.internal_event_buf.clone();
+                let error = apply_action(
+                    &mut stx,
+                    &action,
+                    [7; 32],
+                    controls::ControlCauseV1::for_test([0x43; 32], [0x45; 32]),
+                    S0,
+                )
+                .expect_err("later SCCP period cannot invalidate the current monetary successor");
+                assert!(error.to_string().contains("unbonding_delay"), "{error}");
+                assert_eq!(*store::parameters::get(&*stx.world), original);
+                assert_eq!(stx.world.internal_event_buf, events_before);
+                assert_eq!(
+                    stx.world
+                        .parameters()
+                        .require_staking_policy()
+                        .unwrap()
+                        .unbonding_delay_ms,
+                    delay
+                );
+            } else {
+                apply_action(
+                    &mut stx,
+                    &action,
+                    [7; 32],
+                    controls::ControlCauseV1::for_test([0x43; 32], [0x45; 32]),
+                    S0,
+                )
+                .expect("longer original policy covers this SCCP update");
+                let error = super::super::params::validate_staking_successor(
+                    &*stx.world,
+                    &staking_policy(delay),
+                )
+                .expect_err("later monetary candidate cannot shrink current SCCP liabilities");
+                assert!(error.to_string().contains("unbonding_delay"), "{error}");
+                assert_eq!(*store::parameters::get(&*stx.world), Some(longer));
+                assert_eq!(
+                    stx.world
+                        .parameters()
+                        .require_staking_policy()
+                        .unwrap()
+                        .unbonding_delay_ms,
+                    delay + DAY
+                );
+            }
+        }
     }
 
     #[test]

@@ -27,7 +27,6 @@ use super::der_stark::{
 };
 #[cfg(test)]
 use super::fixed_algebraic::ZK_X509_FIXED_ALGEBRAIC_MAX_QUERIES_V1;
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::main_assembly::{ZkX509MainIoBaseMaterialV1, ZkX509MainTraceAssemblyV1};
 #[cfg(test)]
 use super::p256_aggregate_adapter::{
@@ -37,14 +36,11 @@ use super::p256_aggregate_adapter::{
     evaluate_p256_bus_terminal_claim_equalities_v1,
     evaluate_p256_cross_trace_terminal_claim_equalities_v1,
 };
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::p256_aggregate_adapter::{P256MainBaseSourceV1, P256MainBoundSourceV1};
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::private_table::{PrivateTableV1, zeroize_field_rows_v1};
 #[cfg(test)]
 use super::proof_instance::TEST_PROOF_INSTANCE_V1;
 use super::proof_instance::ZkX509ProofInstanceV1;
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::sha_call_bus_stark::evaluate_zk_x509_sha_batch_local_residues_over_field_v1;
 use super::{
     accumulator_air::{
@@ -168,7 +164,6 @@ use super::{
         ZkX509ShaCallPublicShapeV1,
     },
 };
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::{
     accumulator_stark::ca_accumulator_stark_public_v1,
     der_stark::{
@@ -229,7 +224,6 @@ use super::{
     },
     sha_call_bus_stark::ZK_X509_SHA_MAX_ENCODED_PROOF_BYTES_V1,
 };
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 use crate::privacy_engines::transparent_stark::GOLDILOCKS_GENERATOR_V1;
 #[cfg(test)]
 use crate::privacy_engines::transparent_stark::goldilocks_batch_invert_v1;
@@ -239,7 +233,6 @@ use crate::privacy_engines::transparent_stark::goldilocks_evaluate_coset_v1;
 use crate::privacy_engines::transparent_stark::{
     PrivacyOuterMerkleTreeV1, append_u64_v1, masked_trace_lde_column_v1,
 };
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 use crate::privacy_engines::transparent_stark::{
     goldilocks_fp4_evaluate_coset_v1, goldilocks_fp4_ifft_v1, goldilocks_ifft_v1, grind_nonce_v1,
 };
@@ -255,9 +248,7 @@ use crate::privacy_engines::{
 #[cfg(test)]
 use iroha_data_model::privacy::PrivacyStatementV1;
 use iroha_data_model::privacy::{IrohaZkX509StarkP256StatementV1, PrivacyProtocolIdV1};
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub use main_aggregate::commit_zk_x509_main_base_phase_v1_with_rng;
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub use main_aggregate::main_joint::finish_joint_main_ca_v1;
 pub use main_aggregate::main_joint::{
     MainJointVerifierOraclesV1, main_joint_auxiliary_from_proofs_v1,
@@ -272,9 +263,7 @@ use main_aggregate::{
 };
 #[cfg(test)]
 pub use main_aggregate::{ZkX509MainAwaitingCredentialBindingV1, ZkX509MainCompositionPhaseV1};
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 use main_aggregate::{p256_opened_residues_v1, p256_scalar_opened_residues_v1};
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 use rand::TryRngCore;
 use std::collections::BTreeMap;
 use thiserror::Error;
@@ -555,7 +544,6 @@ pub enum ZkX509StarkErrorV1 {
     #[error("zk-X509 STARK public statement is invalid")]
     InvalidStatement,
     /// Witness declarations do not exactly equal the verifier statement.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error("zk-X509 STARK witness topology does not match the statement")]
     WitnessStatementMismatch,
     /// Native byte-memory witness construction or validation failed.
@@ -608,7 +596,6 @@ pub enum ZkX509StarkErrorV1 {
     AllocationFailure,
     /// Device work has uncertain completion and still owns private staging.
     /// A new proof cannot hide that retained payload by switching to CPU.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error("zk-X509 prover device completion is uncertain; restart before proving again")]
     AcceleratorCompletionUncertain,
     /// An invariant in the compiled prover implementation failed.
@@ -645,9 +632,7 @@ impl From<P256AggregateAdapterErrorV1> for ZkX509StarkErrorV1 {
     fn from(error: P256AggregateAdapterErrorV1) -> Self {
         match error {
             P256AggregateAdapterErrorV1::Resource => Self::AllocationFailure,
-            #[cfg(any(test, feature = "privacy-release-evidence"))]
             P256AggregateAdapterErrorV1::Phase => Self::TranscriptMismatch,
-            #[cfg(any(test, feature = "privacy-release-evidence"))]
             P256AggregateAdapterErrorV1::Source => Self::P256Witness,
             P256AggregateAdapterErrorV1::Topology
             | P256AggregateAdapterErrorV1::Challenge
@@ -664,12 +649,10 @@ pub struct ZkX509MainProofEnvelopeV1<'a> {
     pub(crate) aggregate_proof: &'a [u8],
 }
 /// Compute one MAIN frame length without allocation.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub const fn zk_x509_main_proof_envelope_encoded_len_v1(aggregate_bytes: usize) -> Option<usize> {
     ZK_X509_MAIN_PROOF_ENVELOPE_FIXED_BYTES_V1.checked_add(aggregate_bytes)
 }
 /// Encode the sole canonical MAIN frame.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub fn encode_zk_x509_main_proof_envelope_v1(
     key_openings: &[E; MAIN_KEY_OPENING_COUNT_V1],
     aggregate_proof: &[u8],
@@ -1862,7 +1845,6 @@ impl AggregateProofLayoutV1 {
         }
         Ok(registration)
     }
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     fn common_lde_size(&self) -> usize {
         1_usize << self.common_lde_log2
     }
@@ -2196,7 +2178,6 @@ pub fn validate_zk_x509_main_verifier_profile_v1(
     }
     Ok(())
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 /// Reject a full MAIN proof whose fixed opening schedule exceeds its X5S1 budget.
 ///
 /// Registration and fixed-polynomial diagnostics remain independently usable.
@@ -2456,7 +2437,6 @@ impl ZkX509MainBaseCommitmentSessionV1 {
         self.root = Some(root);
         Ok(())
     }
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     fn accept_streaming_base_commitment_v1(
         &mut self,
         commitment: &aggregate::StreamingRowCommitmentResultV1,
@@ -2661,7 +2641,6 @@ impl core::ops::DerefMut for ZkX509SegmentedStarkProofV1 {
     }
 }
 type TraceGroupProofV1 = aggregate::AggregateTraceGroupProofV1;
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 type FriLaneProofV1 = aggregate::AggregateFriLaneProofV1;
 #[cfg(test)]
 type FriLaneMaterialV1 = aggregate::AggregateFriLaneMaterialV1;
@@ -2696,7 +2675,6 @@ fn io_active_rows_v1(
         .ok_or(ZkX509StarkErrorV1::InvalidStatement)
     })
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn access_base_fields_v1(access: IoAccessV1, row: &mut [F], offset: usize, bits: usize) {
     row[offset] = access.channel;
     row[offset + 1] = access.offset;
@@ -2746,7 +2724,6 @@ impl MainIoAccessTopologyV1 {
         row[offset + 3] = self.role;
         row[offset + 4] = self.instance;
     }
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     fn matches_access_v1(self, access: IoAccessV1) -> bool {
         self.channel == access.channel
             && self.offset == access.offset
@@ -2890,7 +2867,6 @@ impl MainIoFixedScheduleV1 {
         fixed[FIX_TRANSITION] = transition;
         Ok(fixed)
     }
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     fn fixed_columns_v1(&self) -> Result<Vec<Vec<F>>, ZkX509StarkErrorV1> {
         let mut fixed_columns =
             allocate_column_matrix_v1(IO_FIXED_WIDTH, self.layout.trace_size())?;
@@ -2899,7 +2875,6 @@ impl MainIoFixedScheduleV1 {
         }
         Ok(fixed_columns)
     }
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     fn validate_witness_topology_v1(
         &self,
         execution: &[IoAccessV1],
@@ -2940,7 +2915,6 @@ fn transpose_array_rows_v1<const WIDTH: usize>(
     }
     Ok(columns)
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn allocate_column_matrix_v1(width: usize, rows: usize) -> Result<Vec<Vec<F>>, ZkX509StarkErrorV1> {
     let mut columns = Vec::new();
     columns
@@ -2955,7 +2929,6 @@ fn allocate_column_matrix_v1(width: usize, rows: usize) -> Result<Vec<Vec<F>>, Z
     }
     Ok(columns)
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn push_row_to_columns_v1(columns: &mut [Vec<F>], row: &[F]) -> Result<(), ZkX509StarkErrorV1> {
     if columns.len() != row.len() {
         return Err(ZkX509StarkErrorV1::InternalInvariant);
@@ -2977,7 +2950,6 @@ fn row_at_v1(columns: &[Vec<F>], index: usize) -> Result<Vec<F>, ZkX509StarkErro
         })
         .collect()
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn copy_row_at_v1(
     columns: &[Vec<F>],
     index: usize,
@@ -3085,7 +3057,6 @@ fn io_fixed_selector_fields_v1(
         F(u64::from(index + 1 < trace_size)),
     ])
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 type IoColumnsAndAccessesV1 = (
     PrivateTableV1<Vec<F>>,
     Vec<Vec<F>>,
@@ -3103,7 +3074,6 @@ fn build_io_base_and_fixed_columns_for_layout_v1(
     let fixed_schedule = MainIoFixedScheduleV1::compile_v1(layout, statement, logical_active_rows)?;
     build_io_base_and_fixed_columns_from_schedule_v1(statement, witnesses, &fixed_schedule)
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn build_io_base_and_fixed_columns_from_schedule_v1(
     statement: &ZkX509IoStarkStatementV1,
     witnesses: &[ZkX509IoChannelWitnessV1],
@@ -3169,7 +3139,6 @@ fn build_io_base_and_fixed_columns_v1(
         )?;
     Ok((layout, base_columns, fixed_columns, execution, sorted))
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn build_io_aux_columns_v1(
     statement: &ZkX509IoStarkStatementV1,
     witnesses: &[ZkX509IoChannelWitnessV1],
@@ -3238,7 +3207,6 @@ fn build_io_aux_columns_v1(
     }
     Ok(aux_columns)
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn validate_io_base_phase_shape_v1(
     layout: SegmentLayoutV1,
     logical_active_rows: usize,
@@ -3286,7 +3254,6 @@ fn validate_io_base_phase_shape_v1(
     }
     Ok(())
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn validate_io_bound_material_shape_v1(
     layout: SegmentLayoutV1,
     logical_active_rows: usize,
@@ -3670,7 +3637,6 @@ fn io_constraint_residues_v1<A: crate::privacy_engines::transparent_stark::Polyn
     }
     Ok(residues)
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn validate_io_bound_constraints_v1(
     layout: SegmentLayoutV1,
     logical_active_rows: usize,
@@ -3997,7 +3963,6 @@ fn der_fixed_row_at_point_for_shape_v1(
     row[FIX_PARSER_CONTINUE] = parser_continue;
     Ok(row)
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct RegisteredRetainedProverPlanV1 {
     quotient_coset_log2: u8,
@@ -4005,7 +3970,6 @@ struct RegisteredRetainedProverPlanV1 {
     quotient_next_stride: usize,
     maximum_quotient_degree: usize,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn registered_retained_prover_plan_v1(
     segment: SegmentLayoutV1,
     common_lde_log2: u8,
@@ -4097,22 +4061,18 @@ fn der_retained_prover_allocation_plan_v1(
     }
     Ok(plan)
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 struct ZeroizingBaseColumnsV1(Vec<Vec<F>>);
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl core::ops::Deref for ZeroizingBaseColumnsV1 {
     type Target = [Vec<F>];
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for ZeroizingBaseColumnsV1 {
     fn drop(&mut self) {
         zeroize::Zeroize::zeroize(self);
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl zeroize::Zeroize for ZeroizingBaseColumnsV1 {
     fn zeroize(&mut self) {
         for column in &mut self.0 {
@@ -4122,55 +4082,44 @@ impl zeroize::Zeroize for ZeroizingBaseColumnsV1 {
         }
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 struct ZeroizingExtensionColumnV1(Vec<E>);
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl core::ops::Deref for ZeroizingExtensionColumnV1 {
     type Target = [E];
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for ZeroizingExtensionColumnV1 {
     fn drop(&mut self) {
         zeroize::Zeroize::zeroize(self);
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl zeroize::Zeroize for ZeroizingExtensionColumnV1 {
     fn zeroize(&mut self) {
         super::private_table::zeroize_words_v1(&mut self.0);
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 type ZeroizingExtensionChunksV1 = super::private_table::PrivateTableV1<Vec<E>>;
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 type ZeroizingExtensionLanesV1 = super::private_table::PrivateTableV1<Vec<Vec<E>>>;
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn zeroize_extension_chunks_v1(columns: &mut [Vec<E>]) {
     for column in columns {
         super::private_table::zeroize_words_v1(column);
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn zeroize_extension_lanes_v1(lanes: &mut [Vec<Vec<E>>]) {
     for lane in lanes {
         zeroize_extension_chunks_v1(lane);
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 struct RetainedCompositionMaterialV1 {
     evaluations: Vec<Vec<Vec<E>>>,
     coefficient_chunks: Vec<Vec<Vec<E>>>,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for RetainedCompositionMaterialV1 {
     fn drop(&mut self) {
         zeroize::Zeroize::zeroize(self);
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl zeroize::Zeroize for RetainedCompositionMaterialV1 {
     fn zeroize(&mut self) {
         for lane in &mut self.evaluations {
@@ -4189,7 +4138,6 @@ impl zeroize::Zeroize for RetainedCompositionMaterialV1 {
         }
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn fp4_coset_coefficients_v1(
     evaluations: &[E],
     coset_log2: u8,
@@ -4262,7 +4210,6 @@ fn der_fixed_columns_on_coset_v1(
     }
     Ok(columns)
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn composition_coefficient_chunks_v1(
     quotient_coefficients: &[E],
     maximum_quotient_degree: usize,
@@ -4482,7 +4429,6 @@ fn accumulate_base_deep_quotient_v1(
     }
     Ok(())
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn accumulate_extension_deep_quotient_v1(
     coefficients: &[E],
     point: E,
@@ -4516,7 +4462,6 @@ fn accumulate_extension_deep_quotient_v1(
     }
     Ok(())
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn evaluate_retained_composition_coefficients_at_deep_v1(
     coefficient_chunks: &[Vec<Vec<E>>],
     point: E,
@@ -5311,7 +5256,6 @@ fn aggregate_deep_lane_mixes_v1(
     .map_err(map_aggregate_error_v1)?;
     Ok(lane_mixes)
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn canonical_deep_values_v1(
     deep: &aggregate::AggregateDeepProofV1,
     layout: &AggregateProofLayoutV1,
@@ -5330,7 +5274,6 @@ fn canonical_deep_values_v1(
         .collect::<Result<Vec<_>, _>>()?;
     Ok((trace_groups, composition_values))
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn fp4_values_to_wire_v1(values: Vec<E>) -> Vec<[u64; 4]> {
     values
         .into_iter()
@@ -5885,7 +5828,6 @@ fn verify_canonical_multiproof_v1(
     )
     .map_err(|_| ())
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn encode_zk_x509_segmented_stark_proof_v1(
     proof: &ZkX509SegmentedStarkProofV1,
     layout: &AggregateProofLayoutV1,
@@ -6854,7 +6796,6 @@ fn registered_opened_rows_v1<'a>(
 ///
 /// The verifier-owned registration is passed into every operation. Providers never supply adapter
 /// identities, instances, ranges, widths, or native logarithms themselves.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 trait MainTraceGroupSourceV1 {
     fn native_base_column_v1(
         &self,
@@ -6869,9 +6810,7 @@ trait MainTraceGroupSourceV1 {
 }
 /// A copied witness column which is overwritten before its allocation is released.
 #[derive(Debug, PartialEq, Eq)]
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 struct ZeroizingMainTraceColumnV1(Vec<F>);
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ZeroizingMainTraceColumnV1 {
     fn into_vec_v1(mut self) -> Vec<F> {
         core::mem::take(&mut self.0)
@@ -6881,26 +6820,22 @@ impl ZeroizingMainTraceColumnV1 {
         self.0.clear();
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl core::ops::Deref for ZeroizingMainTraceColumnV1 {
     type Target = [F];
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl core::ops::DerefMut for ZeroizingMainTraceColumnV1 {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl PartialEq<Vec<F>> for ZeroizingMainTraceColumnV1 {
     fn eq(&self, other: &Vec<F>) -> bool {
         self.0.as_slice() == other.as_slice()
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for ZeroizingMainTraceColumnV1 {
     fn drop(&mut self) {
         self.zeroize_private_v1();
@@ -7053,7 +6988,6 @@ fn canonical_p256_main_log5_bindings_v1(
     }
     Ok(log5)
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 const P256_MAIN_LOG16_REGISTRATION_COUNT_V1: usize = 10;
 const P256_MAIN_LOG16_BASE_WIDTH_V1: usize =
     P256_SIGNATURE_COUNT_V1 * (P256_WINDOW_BASE_WIDTH_V1 + P256_BINDING_SINK_BASE_WIDTH_V1);
@@ -7070,7 +7004,6 @@ const _: () = assert!(
     P256_MAIN_LOG16_NEXT_STRIDE_V1
         == 1 << (ZK_X509_MAIN_COMMON_LDE_LOG2_V1 - P256_WINDOW_AGGREGATE_TRACE_LOG2_V1)
 );
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 /// The sole native-log-sixteen P-256 registration order: all five vertical
 /// window batches followed by all five external-binding sinks.
 ///
@@ -7347,7 +7280,6 @@ fn p256_aggregate_challenges_from_post_base_v1(
     Ok(challenges)
 }
 #[derive(Clone, Copy)]
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 enum MainP256Log5TracePhaseV1<'a> {
     Base(&'a P256MainBaseSourceV1),
     Bound(&'a P256MainBoundSourceV1),
@@ -7357,12 +7289,10 @@ enum MainP256Log5TracePhaseV1<'a> {
 /// The central five-signature source remains uniquely owned by the caller and
 /// can therefore be reused by the other native-log P-256 views without
 /// recompiling or duplicating any private trace material.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 struct MainP256Log5TraceGroupSourceV1<'a> {
     bindings: Vec<MainP256RegistrationBindingV1>,
     phase: MainP256Log5TracePhaseV1<'a>,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<'a> MainP256Log5TraceGroupSourceV1<'a> {
     fn for_base_v1(
         layout: &AggregateProofLayoutV1,
@@ -7403,7 +7333,6 @@ impl<'a> MainP256Log5TraceGroupSourceV1<'a> {
         Ok(binding)
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl MainTraceGroupSourceV1 for MainP256Log5TraceGroupSourceV1<'_> {
     fn native_base_column_v1(
         &self,
@@ -7470,13 +7399,11 @@ fn zeroize_p256_terminal_registration_v1(registration: &mut P256TerminalRegistra
 }
 /// Fixed-polynomial streaming and composition evaluation for the log-five
 /// prover, borrowing the one already-bound central P-256 capability.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 struct MainP256Log5ProverConstraintSourceV1<'a> {
     source: &'a P256MainBoundSourceV1,
     bindings: Vec<MainP256RegistrationBindingV1>,
     challenges: P256AggregateChallengesV1,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<'a> MainP256Log5ProverConstraintSourceV1<'a> {
     fn for_main_v1(
         layout: &AggregateProofLayoutV1,
@@ -7803,19 +7730,16 @@ impl<'a> MainP256Log5VerifierConstraintSourceV1<'a> {
     }
 }
 #[derive(Clone, Copy)]
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 enum MainP256Log16TracePhaseV1<'a> {
     Base(&'a P256MainBaseSourceV1),
     Bound(&'a P256MainBoundSourceV1),
 }
 /// Borrowed trace replay for MAIN's five window batches and five binding
 /// sinks. The central P-256 source remains the sole owner of private rows.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 struct MainP256Log16TraceGroupSourceV1<'a> {
     bindings: Vec<MainP256RegistrationBindingV1>,
     phase: MainP256Log16TracePhaseV1<'a>,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<'a> MainP256Log16TraceGroupSourceV1<'a> {
     fn for_base_v1(
         layout: &AggregateProofLayoutV1,
@@ -7856,7 +7780,6 @@ impl<'a> MainP256Log16TraceGroupSourceV1<'a> {
         Ok(binding)
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl MainTraceGroupSourceV1 for MainP256Log16TraceGroupSourceV1<'_> {
     fn native_base_column_v1(
         &self,
@@ -7902,13 +7825,11 @@ impl MainTraceGroupSourceV1 for MainP256Log16TraceGroupSourceV1<'_> {
     }
 }
 /// Fixed-polynomial streaming and opened-row composition for the bound log-sixteen prover.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 struct MainP256Log16ProverConstraintSourceV1<'a> {
     source: &'a P256MainBoundSourceV1,
     bindings: Vec<MainP256RegistrationBindingV1>,
     challenges: P256AggregateChallengesV1,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<'a> MainP256Log16ProverConstraintSourceV1<'a> {
     fn for_main_v1(
         layout: &AggregateProofLayoutV1,
@@ -8228,7 +8149,6 @@ impl<'a> MainP256Log16VerifierConstraintSourceV1<'a> {
             .map(BTreeMap::len)
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn map_main_sha_source_error_v1(
     error: super::sha_call_bus_stark::ZkX509ShaCallBusStarkErrorV1,
 ) -> ZkX509StarkErrorV1 {
@@ -8246,7 +8166,6 @@ fn map_main_sha_source_error_v1(
         Error::Event => ZkX509StarkErrorV1::AccumulatorWitness,
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn map_main_rfc_source_error_v1(
     error: super::rfc5280_stark::ZkX509Rfc5280StarkErrorV1,
 ) -> ZkX509StarkErrorV1 {
@@ -8262,7 +8181,6 @@ fn map_main_rfc_source_error_v1(
         | Error::TerminalClaim => ZkX509StarkErrorV1::DerWitness,
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn main_log19_sha_base_sources_v1<'a>(
     schedule: &'a ZkX509ShaCallScheduleV1,
     witnesses: &'a [ZkX509ShaCallWitnessV1; super::sha_call_bus_stark::ZK_X509_SHA_CALL_COUNT_V1],
@@ -8290,7 +8208,6 @@ fn main_log19_sha_base_sources_v1<'a>(
 /// registrations are routed from the verifier-owned registration.  The type
 /// deliberately has no auxiliary-column implementation: a successful X5B1
 /// transition consumes it and returns [`MainLog19BoundTraceGroupSourceV1`].
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 struct MainLog19BaseTraceGroupSourceV1<'assembly, 'source> {
     registrations: Vec<RegisteredSegmentLayoutV1>,
     p256_bindings: Vec<MainP256RegistrationBindingV1>,
@@ -8299,7 +8216,6 @@ struct MainLog19BaseTraceGroupSourceV1<'assembly, 'source> {
     sha: &'source [ZkX509ShaBatchSegmentBaseSourceV1<'assembly>; ZK_X509_SHA_SEGMENT_COUNT_V1],
     p256: &'source P256MainBaseSourceV1,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<'assembly, 'source> MainLog19BaseTraceGroupSourceV1<'assembly, 'source> {
     /// This wrapper owns registration metadata; all native trace sources are borrowed.
     fn allocated_payload_bytes_v1(&self) -> usize {
@@ -8360,7 +8276,6 @@ impl<'assembly, 'source> MainLog19BaseTraceGroupSourceV1<'assembly, 'source> {
         Ok(binding)
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl MainTraceGroupSourceV1 for MainLog19BaseTraceGroupSourceV1<'_, '_> {
     fn native_base_column_v1(
         &self,
@@ -8404,23 +8319,19 @@ impl MainTraceGroupSourceV1 for MainLog19BaseTraceGroupSourceV1<'_, '_> {
         Err(ZkX509StarkErrorV1::TranscriptMismatch)
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn zeroize_main_der_trace_cells_v1(trace: &mut ZkX509DerStarkTraceV1) {
     trace.base.zeroize_private_cells_v1();
     for value in trace.aux_rows.iter_mut().flatten() {
         value.zeroize_v1();
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn zeroize_main_der_trace_v1(trace: &mut ZkX509DerStarkTraceV1) {
     zeroize_main_der_trace_cells_v1(trace);
     trace.base.private_shape.document_lengths.clear();
     trace.base.rows.clear();
     trace.aux_rows.clear();
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 struct ZeroizingMainDerTraceGuardV1(Option<ZkX509DerStarkTraceV1>);
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ZeroizingMainDerTraceGuardV1 {
     fn new_v1(trace: ZkX509DerStarkTraceV1) -> Self {
         Self(Some(trace))
@@ -8429,7 +8340,6 @@ impl ZeroizingMainDerTraceGuardV1 {
         self.0.take().ok_or(ZkX509StarkErrorV1::InternalInvariant)
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for ZeroizingMainDerTraceGuardV1 {
     fn drop(&mut self) {
         if let Some(trace) = self.0.as_mut() {
@@ -8442,7 +8352,6 @@ impl Drop for ZeroizingMainDerTraceGuardV1 {
 ///
 /// Construction consumes the pre-X5B1 owner and requires both the outer
 /// credential binding and the P-256 capability bound by that same token.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 struct MainLog19BoundTraceGroupSourceV1<'a> {
     registrations: Vec<RegisteredSegmentLayoutV1>,
     p256_bindings: Vec<MainP256RegistrationBindingV1>,
@@ -8454,7 +8363,6 @@ struct MainLog19BoundTraceGroupSourceV1<'a> {
     p256: P256MainBoundSourceV1,
     post_base: ZkX509CredentialMainPostBaseChallengesV1,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<'a> MainLog19BoundTraceGroupSourceV1<'a> {
     /// Capacity of the bound DER/P-256 owners plus independently retained fixed schedules.
     /// The borrowed assembly and RFC/SHA witness storage are charged by their owner.
@@ -8636,13 +8544,11 @@ impl<'a> MainLog19BoundTraceGroupSourceV1<'a> {
         Ok(ZeroizingMainTraceColumnV1(column))
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for MainLog19BoundTraceGroupSourceV1<'_> {
     fn drop(&mut self) {
         self.zeroize_private_v1();
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl MainTraceGroupSourceV1 for MainLog19BoundTraceGroupSourceV1<'_> {
     fn native_base_column_v1(
         &self,
@@ -8664,7 +8570,7 @@ impl MainTraceGroupSourceV1 for MainLog19BoundTraceGroupSourceV1<'_> {
                 let segment = registration_index - 2;
                 let mut column = zeroed_main_trace_column_v1(registration.segment.trace_size())?;
                 self.sha_aux[segment]
-                    .replay_base_column_v1(segment, local_column, &mut column)
+                    .replay_base_column_v1(&self.sha_fixed, segment, local_column, &mut column)
                     .map_err(map_main_sha_source_error_v1)?;
                 return Ok(column);
             }
@@ -8717,13 +8623,11 @@ impl MainTraceGroupSourceV1 for MainLog19BoundTraceGroupSourceV1<'_> {
 ///
 /// The source borrows the already-bound trace owner, so it is impossible to
 /// evaluate a challenge-dependent residue against a pre-X5B1 trace.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 struct MainLog19ProverConstraintSourceV1<'a, 'source> {
     source: &'source MainLog19BoundTraceGroupSourceV1<'a>,
     der_public: ZkX509DerStarkPublicTerminalsV1,
     p256_challenges: P256AggregateChallengesV1,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<'a, 'source> MainLog19ProverConstraintSourceV1<'a, 'source> {
     fn for_main_v1(
         layout: &AggregateProofLayoutV1,
@@ -9750,7 +9654,6 @@ fn validate_main_projection_registration_v1(
     }
     Ok(())
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn copied_array_column_v1<const WIDTH: usize>(
     rows: &[[F; WIDTH]],
     local_column: usize,
@@ -9765,7 +9668,6 @@ fn copied_array_column_v1<const WIDTH: usize>(
     column.extend(rows.iter().map(|row| row[local_column]));
     Ok(ZeroizingMainTraceColumnV1(column))
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn copied_matrix_column_v1(
     columns: &[Vec<F>],
     expected_width: usize,
@@ -9788,7 +9690,6 @@ fn copied_matrix_column_v1(
     column.extend_from_slice(source);
     Ok(ZeroizingMainTraceColumnV1(column))
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn main_p256_scalar_registrations_v1(
     layout: &AggregateProofLayoutV1,
 ) -> Result<[MainP256RegistrationBindingV1; P256_SIGNATURE_COUNT_V1], ZkX509StarkErrorV1> {
@@ -9835,7 +9736,6 @@ fn main_p256_scalar_registrations_v1(
         .try_into()
         .map_err(|_: Vec<MainP256RegistrationBindingV1>| ZkX509StarkErrorV1::InternalInvariant)
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn main_p256_scalar_registration_v1(
     registrations: &[MainP256RegistrationBindingV1; P256_SIGNATURE_COUNT_V1],
     registration: RegisteredSegmentLayoutV1,
@@ -9901,7 +9801,6 @@ fn main_p256_terminal_registrations_v1(
         .try_into()
         .map_err(|_: Vec<P256TerminalRegistrationV1>| ZkX509StarkErrorV1::InternalInvariant)
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn zeroed_main_trace_column_v1(
     rows: usize,
 ) -> Result<ZeroizingMainTraceColumnV1, ZkX509StarkErrorV1> {
@@ -9919,17 +9818,14 @@ fn zeroed_main_trace_column_v1(
 /// the central provider consumes the opaque post-base token, callers drop that
 /// view and construct a bound view over the resulting capability.
 #[derive(Clone, Copy)]
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 enum MainP256ScalarTraceViewV1<'a> {
     Base(&'a P256MainBaseSourceV1),
     Bound(&'a P256MainBoundSourceV1),
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 struct MainP256ScalarTraceGroupSourceV1<'a> {
     registrations: [MainP256RegistrationBindingV1; P256_SIGNATURE_COUNT_V1],
     view: MainP256ScalarTraceViewV1<'a>,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<'a> MainP256ScalarTraceGroupSourceV1<'a> {
     fn for_base_v1(
         layout: &AggregateProofLayoutV1,
@@ -9974,7 +9870,6 @@ impl<'a> MainP256ScalarTraceGroupSourceV1<'a> {
         Ok(main_p256_scalar_registration_v1(&self.registrations, registration)?.p256)
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl MainTraceGroupSourceV1 for MainP256ScalarTraceGroupSourceV1<'_> {
     fn native_base_column_v1(
         &self,
@@ -10020,13 +9915,11 @@ impl MainTraceGroupSourceV1 for MainP256ScalarTraceGroupSourceV1<'_> {
     }
 }
 /// Fixed-polynomial and opened-row source for the five log-8 scalar buses on the prover side.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 struct MainP256ScalarProverConstraintSourceV1<'a> {
     registrations: [MainP256RegistrationBindingV1; P256_SIGNATURE_COUNT_V1],
     source: &'a P256MainBoundSourceV1,
     challenges: P256ScalarBitBusChallengesV1,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<'a> MainP256ScalarProverConstraintSourceV1<'a> {
     fn for_main_v1(
         layout: &AggregateProofLayoutV1,
@@ -10306,7 +10199,6 @@ fn compile_main_io_fixed_schedule_v1(
         MainIoFixedScheduleV1::compile_v1(layout, &io_statement, logical_active_rows)?;
     Ok((io_statement, fixed_schedule))
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn compile_main_io_statement_from_source_v1(
     statement: &IrohaZkX509StarkP256StatementV1,
     source: &ZkX509MainIoBaseMaterialV1,
@@ -10341,7 +10233,6 @@ fn compile_main_io_statement_from_source_v1(
 /// Construction validates and materializes only challenge-independent columns.
 /// Auxiliary columns remain unavailable until the opaque joint post-base token
 /// is bound. No API accepts raw I/O challenges.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 struct MainIoTraceGroupSourceV1<'a> {
     registration: RegisteredSegmentLayoutV1,
     statement: ZkX509IoStarkStatementV1,
@@ -10352,7 +10243,6 @@ struct MainIoTraceGroupSourceV1<'a> {
     post_base: Option<ZkX509CredentialMainPostBaseChallengesV1>,
     bind_attempted: bool,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<'a> MainIoTraceGroupSourceV1<'a> {
     /// Capacity of retained native columns and cloned declaration topology.
     fn allocated_payload_bytes_v1(&self) -> usize {
@@ -10486,13 +10376,11 @@ impl<'a> MainIoTraceGroupSourceV1<'a> {
         self.post_base = None;
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for MainIoTraceGroupSourceV1<'_> {
     fn drop(&mut self) {
         self.zeroize_private_buffers_v1();
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl MainTraceGroupSourceV1 for MainIoTraceGroupSourceV1<'_> {
     fn native_base_column_v1(
         &self,
@@ -10534,13 +10422,11 @@ impl MainTraceGroupSourceV1 for MainIoTraceGroupSourceV1<'_> {
 /// It uses the same statement-only fixed compiler as the verifier and independently revalidates the
 /// prover's witness topology against that schedule. `MainIoTraceGroupSourceV1` performs the same
 /// check before any base column can enter the MAIN commitment session.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 struct MainIoProverConstraintSourceV1 {
     registration: RegisteredSegmentLayoutV1,
     challenges: ZkX509IoChallengesV1,
     fixed_schedule: MainIoFixedScheduleV1,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl MainIoProverConstraintSourceV1 {
     fn for_main_v1(
         layout: &AggregateProofLayoutV1,
@@ -10796,13 +10682,11 @@ impl MainIoVerifierConstraintSourceV1 {
 ///
 /// Base columns are available immediately. Auxiliary columns remain
 /// inaccessible until the transcript-derived challenges are bound.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 struct MainProjectionTraceGroupSourceV1<'a> {
     registration: RegisteredSegmentLayoutV1,
     trace: &'a ZkX509ProjectionTraceV1,
     aux: Option<ZkX509ProjectionAuxTraceV1>,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<'a> MainProjectionTraceGroupSourceV1<'a> {
     /// Capacity of the owned auxiliary trace; base/fixed rows belong to the assembly.
     fn allocated_payload_bytes_v1(&self) -> usize {
@@ -10868,13 +10752,11 @@ impl<'a> MainProjectionTraceGroupSourceV1<'a> {
         self.aux = None;
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for MainProjectionTraceGroupSourceV1<'_> {
     fn drop(&mut self) {
         self.zeroize_private_buffers_v1();
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl MainTraceGroupSourceV1 for MainProjectionTraceGroupSourceV1<'_> {
     fn native_base_column_v1(
         &self,
@@ -10906,13 +10788,11 @@ impl MainTraceGroupSourceV1 for MainProjectionTraceGroupSourceV1<'_> {
 /// Fixed columns are interpolated one at a time and handed to the caller through a scoped zeroizing
 /// buffer. This is deliberately separate from the bounded sampled-opening verifier below: a full
 /// prover traversal cannot consume, or exhaust, the verifier's 272-opening cache.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 struct MainProjectionProverConstraintSourceV1 {
     registration: RegisteredSegmentLayoutV1,
     challenges: ZkX509ProjectionChallengesV1,
     fixed_rows: Vec<[F; ZK_X509_PROJECTION_STARK_FIXED_WIDTH_V1]>,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl MainProjectionProverConstraintSourceV1 {
     fn for_main_v1(
         layout: &AggregateProofLayoutV1,

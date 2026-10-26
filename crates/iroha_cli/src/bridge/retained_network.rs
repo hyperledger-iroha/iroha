@@ -819,7 +819,7 @@ mod tests {
     fn genesis_discriminant_must_match_the_independent_request() {
         let _author = iroha_data_model::account::address::ChainDiscriminantGuard::enter(369);
         let fees = iroha_config::parameters::defaults::nexus::fees::genesis_policy();
-        let staking = iroha_deploy::genesis::default_staking_policy(
+        let staking = iroha_genesis::default_staking_policy(
             fees.fee_asset_id,
             fees.fee_sink_account_id.clone(),
             fees.fee_sink_account_id,

@@ -189,7 +189,7 @@ mod tests {
     use iroha_data_model::{
         NetworkId,
         account::address::ChainDiscriminantGuard,
-        asset::{AssetDefinitionId, AssetId},
+        asset::AssetId,
         nexus::{
             PublicLaneMonetaryPlanV1, PublicLaneMonetaryPreconditionV1, PublicLaneMonetaryScopeV1,
             PublicLaneMonetarySlashV1,
@@ -207,24 +207,17 @@ mod tests {
         )
     }
 
+    // These are explicit structural fixture inputs, independent of node configuration.
     fn staking_asset(owner: AccountId) -> AssetId {
         AssetId::of(
-            AssetDefinitionId::parse_address_literal(
-                &iroha_config::parameters::defaults::nexus::staking::stake_asset_id(),
-            )
-            .expect("configured stake asset"),
+            iroha_data_model::parameter::system::SumeragiNposParameters::default()
+                .xor_asset_definition_id,
             owner,
         )
     }
 
     fn escrow_account() -> AccountId {
-        iroha_data_model::account::address::AccountAddress::from_i105_for_discriminant(
-            &iroha_config::parameters::defaults::nexus::staking::stake_escrow_account_id(),
-            Some(iroha_config::parameters::defaults::common::chain_discriminant()),
-        )
-        .expect("configured staking escrow")
-        .to_account_id()
-        .expect("escrow account")
+        account(0xF1)
     }
 
     fn instructions(peers: &[finality::PeerV1]) -> Vec<InstructionBox> {

@@ -29,10 +29,8 @@ pub mod zk_ace;
 #[doc(hidden)]
 pub mod zk_ace_stark;
 pub mod zk_ams;
-// The native prover and its RFC 5280 reference machinery are consumed by the
-// internal test harness and the opt-in release-evidence runner; their roots are
-// gated to those builds so normal node builds compile only the verifier.
-#[doc(hidden)]
+/// Complete native X.509 credential proving and verification, including the holder API.
+/// Release fixtures and process diagnostics remain confined to test/evidence builds.
 pub mod zk_x509;
 use self::fcmp_plus_plus::{FcmpNativeErrorV1, FcmpOutputTupleV1};
 use self::proof_managed_accumulator::{
@@ -236,7 +234,7 @@ mod tests {
         );
         assert_eq!(
             validate_zk_x509_credential_proof_container_v1(&statement, [0xA6; 32], &proof),
-            Err(ZkX509CredentialProofContainerErrorV1::PublicBindingMismatch)
+            Err(ZkX509CredentialProofContainerErrorV1::InvalidStatement)
         );
         for length in 0..proof.len() {
             assert_eq!(

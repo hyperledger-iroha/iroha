@@ -2298,6 +2298,88 @@ impl PrivacyZkX509AuthoritativeStateV1 {
         self.ca_membership_root
     }
 }
+/// Exact retained-allocation refusal for one already joined X.509 State value.
+#[derive(Debug, Error)]
+pub enum PrivacyZkX509StateRetentionErrorV1 {
+    /// Original finite pool or backing allocator refused the retained policy fields.
+    #[error("X.509 retained State backing: {0}")]
+    Buffer(#[from] iroha_allocation::ChargedBufferError),
+    /// An original retained allocation belongs to a different pool.
+    #[error("X.509 retained State custody: {0}")]
+    Custody(#[from] iroha_allocation::RetainedPayloadError),
+}
+
+impl PrivacyZkX509AuthoritativeStateV1 {
+    /// Move this joined State into immutable custody funded by the caller's pool.
+    ///
+    /// The two certificate-policy lists are its only heap fields. Their replacement
+    /// backing and exact charge ledger are admitted before allocation; every scalar
+    /// field moves unchanged. Existing loader/index scratch is a separate obligation.
+    /// The returned owner has no clone, extraction, or mutation API. A caller that
+    /// clones a borrowed record owns that independent allocation obligation.
+    ///
+    /// # Errors
+    /// Preserves original allocation/custody refusal. Failure drops the consumed
+    /// input and any new backing before its original charges are refunded.
+    #[allow(unsafe_code)]
+    pub fn try_into_retained_v1(
+        self,
+        budget: &iroha_allocation::AllocationBudget,
+    ) -> Result<iroha_allocation::RetainedPayload<Self>, PrivacyZkX509StateRetentionErrorV1> {
+        use iroha_allocation::{AllocationCharge, ChargedBuffer, RetainedPayload};
+        // Declare the ledger first: the payload and all partial buffers must drop
+        // before it on every error/unwind path, including before final custody.
+        let mut ledger = ChargedBuffer::<AllocationCharge>::new(2, budget)?;
+        let mut payload = self;
+        let mut extended = ChargedBuffer::new(
+            payload
+                .certificate_policy
+                .required_extended_key_usages
+                .len(),
+            budget,
+        )?;
+        let mut disclosed = ChargedBuffer::new(
+            payload
+                .certificate_policy
+                .required_disclosed_attribute_indices
+                .len(),
+            budget,
+        )?;
+        for value in &payload.certificate_policy.required_extended_key_usages {
+            extended.push_reserved(*value);
+        }
+        for value in &payload
+            .certificate_policy
+            .required_disclosed_attribute_indices
+        {
+            disclosed.push_reserved(*value);
+        }
+        // SAFETY: these exact fixed-capacity Vec allocations immediately move into
+        // the immutable canonical fields; the ledger is already fully allocated.
+        // No fallible work or arbitrary caller code intervenes. Both element types
+        // are Copy, have no nested allocations and cannot unwind during destruction.
+        let (extended, charge) = unsafe { extended.into_allocation_parts() };
+        ledger.push_reserved(charge);
+        payload.certificate_policy.required_extended_key_usages = extended;
+        let (disclosed, charge) = unsafe { disclosed.into_allocation_parts() };
+        ledger.push_reserved(charge);
+        payload
+            .certificate_policy
+            .required_disclosed_attribute_indices = disclosed;
+        // SAFETY: every heap field above owns exactly its charged backing; all
+        // other fields are fixed-size. RetainedPayload permits borrowing only and
+        // destroys payload before ledger, including conservative unwind handling.
+        match unsafe { RetainedPayload::try_new(payload, ledger, budget) } {
+            Ok(owner) => Ok(owner),
+            Err((payload, ledger, error)) => {
+                drop(payload);
+                drop(ledger);
+                Err(error.into())
+            }
+        }
+    }
+}
+
 fn validate_current_zk_x509_ca_root_binding_v1(
     head: &PrivacyRootHeadRecordV1,
     trust_anchor: PrivacyZkX509TrustAnchorRecordV1,

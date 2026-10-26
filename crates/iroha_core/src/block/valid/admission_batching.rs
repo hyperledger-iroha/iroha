@@ -51,10 +51,14 @@ fn install_fixture_policy(state: &State, algorithms: Vec<Algorithm>) {
     let policy =
         iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(algorithms)
             .expect("explicit batching fixture policy is canonical");
-    let mut parameters = state.world.parameters.block();
-    parameters
-        .set_parameter(policy.into_parameter().expect("canonical fixture policy"))
-        .expect("publish fixture policy");
+    let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+        .expect("funded original parameter-only fixture block");
+    crate::state::set_parameter_cell_for_testing(
+        &mut parameters,
+        policy.into_parameter().expect("canonical fixture policy"),
+        state.world.sccp_committee_generations.allocation_budget(),
+    )
+    .expect("publish fixture policy");
     parameters.commit();
 }
 fn checked_random_keypair() -> KeyPair {

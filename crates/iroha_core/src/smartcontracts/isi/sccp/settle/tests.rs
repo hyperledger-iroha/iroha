@@ -251,9 +251,37 @@ fn retired_account(stx: &mut StateTransaction<'_, '_>, seed: u8) -> AccountId {
     account
 }
 
-/// Select a real sink identity; `None` selects a permanently unregistered fixture account.
+/// Author the original sink before this component opens its block.
+fn set_original_fee_sink(state: &State, sink: &AccountId) {
+    let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+        .expect("original funded fee fixture block");
+    let mut fees = parameters
+        .root_fees()
+        .expect("explicit fixture fees")
+        .clone();
+    fees.fee_sink_account_id = sink.clone();
+    crate::state::set_parameter_cell_for_testing(
+        &mut parameters,
+        iroha_data_model::parameter::Parameter::Custom(fees.into_custom_parameter().unwrap()),
+        state.world.sccp_committee_generations.allocation_budget(),
+    )
+    .expect("author original settlement fee policy");
+    parameters.commit();
+}
+
+/// Mutate only the pending policy: settlement must still use the original sink.
+/// `None` selects a permanently unregistered pending fixture account.
 fn set_fee_sink(stx: &mut StateTransaction<'_, '_>, sink: Option<&AccountId>) {
-    stx.nexus.fees.fee_sink_account_id = sink.cloned().unwrap_or_else(|| authority(253));
+    let mut fees = stx
+        .root_fee_policy()
+        .expect("original settlement fees")
+        .clone();
+    fees.fee_sink_account_id = sink.cloned().unwrap_or_else(|| authority(253));
+    stx.world
+        .set_parameter_for_testing(iroha_data_model::parameter::Parameter::Custom(
+            fees.into_custom_parameter().unwrap(),
+        ))
+        .expect("author pending settlement fee policy");
 }
 
 /// Record an outbound message of `amount_xor` XOR from `sender` through `RecordSccpMessage`.
@@ -595,6 +623,7 @@ fn maximal_codec3_multisig_recipient_releases_without_decoder_deferral() {
 #[test]
 fn a_release_with_a_self_claim_fee_pays_the_fee_sink() {
     let state = state();
+    set_original_fee_sink(&state, &authority(30));
     let mut block = state.block(header(5));
     let mut stx = block.transaction_for_fastpq_testing(Hash::new(b"release-with-fee"));
     install(&mut stx);
@@ -639,8 +668,127 @@ fn a_release_with_a_self_claim_fee_pays_the_fee_sink() {
 }
 
 #[test]
+fn pending_and_applied_fee_policy_cannot_redirect_original_settlement_sink() {
+    let state = state();
+    let original = authority(30);
+    let pending_sink = authority(31);
+    set_original_fee_sink(&state, &original);
+    let mut block = state.block(header(5));
+    {
+        let mut stx = block.transaction_for_fastpq_testing(Hash::new(b"original-sink-setup"));
+        install(&mut stx);
+        fund(&mut stx, ETH, 1, 10 * ONE_XOR);
+        recipients::ensure_registered(&mut stx, &original).unwrap();
+        recipients::ensure_registered(&mut stx, &pending_sink).unwrap();
+        stx.apply();
+    }
+    {
+        let mut dropped = block.transaction();
+        set_fee_sink(&mut dropped, Some(&pending_sink));
+        assert_eq!(
+            dropped.root_fee_policy().unwrap().fee_sink_account_id,
+            original
+        );
+    }
+    {
+        let mut applied = block.transaction();
+        assert_eq!(
+            applied
+                .world
+                .parameters
+                .root_fees()
+                .unwrap()
+                .fee_sink_account_id,
+            original
+        );
+        set_fee_sink(&mut applied, Some(&pending_sink));
+        applied.apply();
+    }
+    let mut stx = block.transaction_for_fastpq_testing(Hash::new(b"original-sink-release"));
+    assert_eq!(
+        stx.world
+            .parameters
+            .root_fees()
+            .unwrap()
+            .fee_sink_account_id,
+        pending_sink
+    );
+    assert_eq!(stx.root_fee_policy().unwrap().fee_sink_account_id, original);
+    let recipient = authority(32);
+    let id = prove(&mut stx, 0, ONE_XOR, address_bytes(&recipient), FEE);
+    assert!(matches!(
+        inbound_status(&stx, &id),
+        SccpInboundStatusV1::Released(_)
+    ));
+    assert_eq!(xor_balance(&*stx.world, &original), FEE);
+    assert_eq!(xor_balance(&*stx.world, &pending_sink), 0);
+    assert_eq!(xor_balance(&*stx.world, &recipient), ONE_XOR - FEE);
+    assert_escrow_invariant(
+        &*stx.world,
+        "original sink after pending and applied policies",
+    );
+    assert_pending_counts(&stx, "original sink after pending and applied policies");
+}
+
+#[test]
+fn missing_original_fee_policy_refuses_before_release_effects() {
+    let state = state();
+    {
+        let mut cell = crate::state::parameter_cell_block_for_testing(&state.world).unwrap();
+        let mut authored = cell.get().get().clone();
+        assert!(
+            authored
+                .remove_custom_parameter(
+                    &iroha_data_model::block::consensus::RootFeePolicy::parameter_id(),
+                )
+                .unwrap()
+                .is_some()
+        );
+        let retained = crate::pipeline_gas_policy::RetainedStateParameters::try_copy_for_testing(
+            &authored,
+            state.world.sccp_committee_generations.allocation_budget(),
+        )
+        .expect("funded absent original fee fixture");
+        *cell.get_mut() = retained;
+        cell.commit();
+    }
+    let mut block = state.block(header(5));
+    let mut stx = block.transaction_for_fastpq_testing(Hash::new(b"missing-original-sink"));
+    install(&mut stx);
+    fund(&mut stx, ETH, 1, 10 * ONE_XOR);
+    set_enabled(&mut stx, false);
+    let recipient = authority(32);
+    let id = prove(&mut stx, 0, ONE_XOR, address_bytes(&recipient), FEE);
+    set_enabled(&mut stx, true);
+    let before_record = store::inbound_messages::get(&*stx.world, &id)
+        .unwrap()
+        .clone();
+    let before_liability = liability(&stx, ETH, 1);
+    let before_pending = store::pending_count(&*stx.world, &(ETH, 1));
+    let before_events = sccp_events(&stx);
+    let escrow = escrow_of(&stx, ETH);
+    let before_escrow = xor_balance(&*stx.world, &escrow);
+    let error = execute_settle(SettleSccpV1::inbound(id), &holder(), &mut stx).unwrap_err();
+    assert!(matches!(error, Error::InvariantViolation(ref message)
+        if message.as_ref() == "SCCP settlement: original committed root fee policy is absent"));
+    assert_eq!(
+        store::inbound_messages::get(&*stx.world, &id).unwrap(),
+        &before_record
+    );
+    assert_eq!(liability(&stx, ETH, 1), before_liability);
+    assert_eq!(store::pending_count(&*stx.world, &(ETH, 1)), before_pending);
+    assert_eq!(sccp_events(&stx), before_events);
+    assert_eq!(xor_balance(&*stx.world, &escrow), before_escrow);
+    assert!(stx.world.account(&recipient).is_err());
+    assert_eq!(xor_balance(&*stx.world, &recipient), 0);
+    assert_escrow_invariant(&*stx.world, "missing original fee policy");
+    assert_pending_counts(&stx, "missing original fee policy");
+}
+
+#[test]
 fn every_hold_reason_keeps_the_proof_and_is_retried_by_settle() {
     let state = state();
+    set_original_fee_sink(&state, &authority(26));
     let mut block = state.block(header(5));
     let mut stx = block.transaction_for_fastpq_testing(Hash::new(b"hold-reasons"));
     install(&mut stx);
@@ -719,6 +867,18 @@ fn every_hold_reason_keeps_the_proof_and_is_retried_by_settle() {
         "an unregistered sink"
     );
     set_fee_sink(&mut stx, None);
+    assert_eq!(
+        stx.root_fee_policy().unwrap().fee_sink_account_id,
+        unknown_sink
+    );
+    assert_eq!(
+        stx.world
+            .parameters
+            .root_fees()
+            .unwrap()
+            .fee_sink_account_id,
+        authority(253)
+    );
     settle(&mut stx, id).expect_err("another absent sink is the same hold");
     let sink = refusing_account(&mut stx, 26);
     set_fee_sink(&mut stx, Some(&sink));
@@ -764,11 +924,14 @@ fn recipients_that_can_never_be_credited_bounce() {
         Algorithm::Ed25519,
     ])
     .unwrap();
-    let mut parameters = state.world.parameters.block();
-    parameters
-        .get_mut()
-        .set_parameter(policy.into_parameter().unwrap())
-        .unwrap();
+    let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+        .expect("funded parameter fixture block");
+    crate::state::set_parameter_cell_for_testing(
+        &mut parameters,
+        policy.into_parameter().unwrap(),
+        state.world.sccp_committee_generations.allocation_budget(),
+    )
+    .unwrap();
     parameters.commit();
     let mut block = state.block(header(5));
     let mut stx = block.transaction_for_fastpq_testing(Hash::new(b"bounces"));
@@ -1483,9 +1646,11 @@ impl Outcomes {
 
 /// Run `steps` pseudo-random value operations from `seed`, each in its own transaction that
 /// applies only when it succeeds, checking the escrow invariant and the pending counts after
-/// every step, and return the final outcomes.
+/// every step, and return the final outcomes. Pending fee-sink policy toggles
+/// are adversarial writes only: the original block custody remains fixed.
 fn run_operation_sequence(seed: u64, steps: u64) -> Outcomes {
     let state = state();
+    set_original_fee_sink(&state, &authority(60));
     let mut block = state.block(header(5));
     let accounts = {
         let mut stx = block.transaction_for_fastpq_testing(Hash::new(format!("seq/{seed}")));
@@ -1506,7 +1671,13 @@ fn run_operation_sequence(seed: u64, steps: u64) -> Outcomes {
     let (mut inbound_nonce, mut sink_resolves) = (0_u64, true);
     for step in 0..steps {
         let mut stx = block.transaction_for_fastpq_testing(Hash::new(format!("seq/{seed}/{step}")));
+        // Governance attempts in this block never redirect its original fees.
+        // The standalone hold test covers an actually unavailable original sink.
         set_fee_sink(&mut stx, sink_resolves.then_some(&accounts.sink));
+        assert_eq!(
+            stx.root_fee_policy().unwrap().fee_sink_account_id,
+            accounts.sink
+        );
         let (operation, result) = random_operation(
             &mut stx,
             &mut rng,

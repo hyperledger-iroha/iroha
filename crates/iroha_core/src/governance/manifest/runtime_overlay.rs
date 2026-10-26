@@ -64,12 +64,13 @@ impl LaneManifestRegistry {
     /// Rejects mismatched lane/dataspace bindings, malformed or oversized sources,
     /// invalid governance rules or privacy commitments, and any roster/quorum that
     /// differs from the physical dataspace's exact `3f+1`/`2f+1` requirement.
+    /// Original codec failures retain their owner in [`LaneManifestError`].
     pub fn validate_runtime_manifest(
         addition: &RuntimeLaneManifestV1,
         lane: &LaneConfig,
         dataspace: &DataSpaceMetadata,
         governance: &GovernanceCatalog,
-    ) -> Result<(), String> {
+    ) -> Result<(), LaneManifestError> {
         Self::prepare_runtime_manifest(
             addition,
             lane,
@@ -86,12 +87,18 @@ impl LaneManifestRegistry {
         dataspace: &DataSpaceMetadata,
         governance: &GovernanceCatalog,
         budget: &mut ManifestSourceLoadBudget,
-    ) -> Result<FrozenLaneManifestSource, String> {
+    ) -> Result<FrozenLaneManifestSource, LaneManifestError> {
         if addition.lane_id != lane.id {
-            return Err("runtime manifest must bind its exact effective lane id".to_owned());
+            return Err("runtime manifest must bind its exact effective lane id"
+                .to_owned()
+                .into());
         }
         if lane.dataspace_id != dataspace.id {
-            return Err("runtime manifest lane must bind its exact physical dataspace".to_owned());
+            return Err(
+                "runtime manifest lane must bind its exact physical dataspace"
+                    .to_owned()
+                    .into(),
+            );
         }
         let committee_size = dataspace
             .fault_tolerance
@@ -109,13 +116,19 @@ impl LaneManifestRegistry {
             .ok_or_else(|| "runtime manifest dataspace quorum overflowed".to_owned())?;
         let raw = addition.manifest.get().as_bytes();
         if raw.is_empty() || raw.len() > LANE_MANIFEST_MAX_BYTES_V1 {
-            return Err("runtime manifest source exceeds the native per-source bound".to_owned());
+            return Err(
+                "runtime manifest source exceeds the native per-source bound"
+                    .to_owned()
+                    .into(),
+            );
         }
         budget.charge_bytes(raw.len())?;
         let parsed = Self::parse_bounded_manifest_json(raw, budget)?;
         Self::validate_manifest_source_bounds(&parsed)?;
         if parsed.lane.as_deref() != Some(lane.alias.as_str()) {
-            return Err("runtime manifest must name its exact effective lane alias".to_owned());
+            return Err("runtime manifest must name its exact effective lane alias"
+                .to_owned()
+                .into());
         }
         let artifacts = Self::validate_parsed_manifest(
             &parsed,
@@ -129,18 +142,25 @@ impl LaneManifestRegistry {
             || artifacts.rules.quorum != Some(quorum)
         {
             return Err(
-                "runtime manifest requires exact 3f+1 validators and 2f+1 quorum".to_owned(),
+                "runtime manifest requires exact 3f+1 validators and 2f+1 quorum"
+                    .to_owned()
+                    .into(),
             );
         }
         if lane.storage == LaneStorageProfile::CommitmentOnly
             && artifacts.privacy_commitments.is_empty()
         {
-            return Err("runtime commitment-only manifest requires privacy commitments".to_owned());
+            return Err(
+                "runtime commitment-only manifest requires privacy commitments"
+                    .to_owned()
+                    .into(),
+            );
         }
-        let canonical = json::to_json(&parsed)
-            .map_err(|error| format!("runtime manifest canonical encoding failed: {error}"))?;
+        let canonical = json::to_json(&parsed).map_err(LaneManifestError::Json)?;
         if canonical.len() > LANE_MANIFEST_MAX_CANONICAL_BYTES_V1 {
-            return Err("runtime manifest canonical source exceeds the native bound".to_owned());
+            return Err("runtime manifest canonical source exceeds the native bound"
+                .to_owned()
+                .into());
         }
         Ok(FrozenLaneManifestSource {
             path: None,
@@ -165,27 +185,37 @@ impl LaneManifestRegistry {
     /// Rejects an unmaterialized baseline, a takeover of any original lane or alias,
     /// malformed or oversized sources, duplicate bindings, or a committee/quorum
     /// differing from the new lane's physical dataspace fault tolerance.
+    /// Original codec failures retain their owner in [`LaneManifestError`];
+    /// consumers must observe this operation before classifying admission.
     pub fn with_runtime_additions(
         &self,
         additions: &[RuntimeLaneManifestV1],
         effective_catalog: &LaneCatalog,
         dataspaces: &DataSpaceCatalog,
         governance: &GovernanceCatalog,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, LaneManifestError> {
         let baseline = self
             .baseline_source_snapshot
             .as_ref()
             .or(self.source_snapshot.as_ref())
             .ok_or_else(|| "runtime manifests require a frozen startup source".to_owned())?;
         if baseline.pending_registry.is_some() {
-            return Err("runtime manifests cannot materialize filesystem sources".to_owned());
+            return Err("runtime manifests cannot materialize filesystem sources"
+                .to_owned()
+                .into());
         }
         if additions.is_empty() {
-            return Ok(baseline.bind(effective_catalog, governance));
+            return Self::try_from_source_snapshot(
+                Arc::clone(baseline),
+                effective_catalog,
+                governance,
+            );
         }
         if baseline.bound_lanes.is_empty() {
             return Err(
-                "runtime manifests require an authenticated startup catalog binding".to_owned(),
+                "runtime manifests require an authenticated startup catalog binding"
+                    .to_owned()
+                    .into(),
             );
         }
         if additions.len() > effective_catalog.lanes().len()
@@ -194,7 +224,9 @@ impl LaneManifestRegistry {
                 .any(|pair| pair[0].lane_id >= pair[1].lane_id)
         {
             return Err(
-                "runtime manifests require bounded, strictly ordered unique lane ids".to_owned(),
+                "runtime manifests require bounded, strictly ordered unique lane ids"
+                    .to_owned()
+                    .into(),
             );
         }
         let baseline_aliases: BTreeSet<_> = baseline
@@ -208,8 +240,7 @@ impl LaneManifestRegistry {
         // transitions cannot evade the aggregate source budget. No path is reopened.
         for source in baseline.manifests_by_alias.values() {
             let parsed = source.parsed.as_ref().map_err(Clone::clone)?;
-            let raw = json::to_json(parsed)
-                .map_err(|error| format!("baseline manifest canonical encoding failed: {error}"))?;
+            let raw = json::to_json(parsed).map_err(LaneManifestError::Json)?;
             budget.charge_bytes(raw.len())?;
             budget.charge_json(Self::preflight_manifest_json(
                 raw.as_bytes(),
@@ -218,9 +249,7 @@ impl LaneManifestRegistry {
         }
         if let Some(source) = &baseline.governance_overlay {
             let parsed = source.parsed.as_ref().map_err(Clone::clone)?;
-            let raw = json::to_json(parsed).map_err(|error| {
-                format!("baseline governance canonical encoding failed: {error}")
-            })?;
+            let raw = json::to_json(parsed).map_err(LaneManifestError::Json)?;
             budget.charge_bytes(raw.len())?;
             budget.charge_json(Self::preflight_manifest_json(
                 raw.as_bytes(),
@@ -245,7 +274,9 @@ impl LaneManifestRegistry {
                     .contains_key(&lane.alias)
             {
                 return Err(
-                    "runtime manifest cannot replace an existing lane or source alias".to_owned(),
+                    "runtime manifest cannot replace an existing lane or source alias"
+                        .to_owned()
+                        .into(),
                 );
             }
             let dataspace = dataspaces
@@ -264,7 +295,11 @@ impl LaneManifestRegistry {
         }
         effective_sources.consensus_policy_digest =
             effective_sources.compute_consensus_policy_digest();
-        let mut effective = Arc::new(effective_sources).bind(effective_catalog, governance);
+        let mut effective = Self::try_from_source_snapshot(
+            Arc::new(effective_sources),
+            effective_catalog,
+            governance,
+        )?;
         effective.baseline_source_snapshot = Some(Arc::clone(baseline));
         effective
             .validate_active_coverage_for_catalog(effective_catalog)
